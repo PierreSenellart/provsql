@@ -35,28 +35,26 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass,
-                                          _col varchar DEFAULT 'prov')
+CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
-  EXECUTE format('ALTER TABLE %s ADD COLUMN %I provenance_token UNIQUE DEFAULT uuid_generate_v4()', _tbl, _col);
-  EXECUTE format('INSERT INTO provenance_circuit_gate SELECT %I, ''input'' FROM %s',_col,_tbl);
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql provenance_token UNIQUE DEFAULT uuid_generate_v4()', _tbl);
+  EXECUTE format('INSERT INTO provenance_circuit_gate SELECT provsql, ''input'' FROM %s',_tbl);
   EXECUTE format('CREATE TRIGGER add_provenance_circuit_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE add_provenance_circuit_gate_trigger()',_tbl);
 END
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION provenance_or(state provenance_token, tokens uuid[])
+CREATE FUNCTION provenance_and(VARIADIC tokens uuid[])
   RETURNS provenance_token AS
 $$
 DECLARE
   and_token provenance_token;
-  or_token provenance_token;
   token provenance_token;
 BEGIN
   CASE array_length(tokens,1)
     WHEN 0 THEN
-      RETURN state;
+      and_token:=NULL;
     WHEN 1 THEN
       and_token:=tokens[1];
     ELSE
@@ -66,6 +64,19 @@ BEGIN
         INSERT INTO provenance_circuit_wire VALUES(and_token,token);
       END LOOP;
   END CASE;
+  RETURN and_token;
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION provenance_or(state provenance_token, token provenance_token)
+  RETURNS provenance_token AS
+$$
+DECLARE
+  or_token provenance_token;
+BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
 
   IF state IS NULL THEN
     or_token:=uuid_generate_v4();
@@ -73,13 +84,13 @@ BEGIN
   ELSE
     or_token:=state;
   END IF;
-  INSERT INTO provenance_circuit_wire VALUES(or_token,and_token);
+  INSERT INTO provenance_circuit_wire VALUES(or_token,token);
 
   RETURN or_token;
 END
 $$ LANGUAGE plpgsql;
 
-CREATE AGGREGATE provenance(VARIADIC tokens uuid[]) (
+CREATE AGGREGATE provenance_agg(token provenance_token) (
   SFUNC = provenance_or,
   STYPE = provenance_token
 );
