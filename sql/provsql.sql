@@ -29,7 +29,7 @@ BEGIN
     FROM pg_attribute JOIN pg_type ON pg_type.oid=pg_attribute.atttypid
     WHERE typname='provenance_token' AND attrelid=TG_TABLE_NAME::regclass
   LOOP  
-    EXECUTE format('INSERT INTO provenance_circuit_gate VALUES (%s, ''input'')',quote_literal(hstore(NEW)->attribute.attname));
+    EXECUTE format('INSERT INTO provenance_circuit_gate VALUES (%L, ''input'')',hstore(NEW)->attribute.attname);
   END LOOP;
   RETURN NEW;
 END
@@ -39,9 +39,9 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
-  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql provenance_token UNIQUE DEFAULT uuid_generate_v4()', _tbl);
-  EXECUTE format('INSERT INTO provenance_circuit_gate SELECT provsql, ''input'' FROM %s',_tbl);
-  EXECUTE format('CREATE TRIGGER add_provenance_circuit_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE add_provenance_circuit_gate_trigger()',_tbl);
+  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql provenance_token UNIQUE DEFAULT uuid_generate_v4()', _tbl);
+  EXECUTE format('INSERT INTO provenance_circuit_gate SELECT provsql, ''input'' FROM %I',_tbl);
+  EXECUTE format('CREATE TRIGGER add_provenance_circuit_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE add_provenance_circuit_gate_trigger()',_tbl);
 END
 $$ LANGUAGE plpgsql;
 
@@ -143,30 +143,10 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION provenance_formula(token provenance_token)
-  RETURNS varchar AS
-$$
-DECLARE
-  rec record;
-  result varchar;
-BEGIN
-  SELECT gate_type INTO STRICT rec FROM provenance_circuit_gate WHERE gate = token;
-  CASE rec.gate_type
-  WHEN 'input' THEN
-    result:=token::text;
-  WHEN 'or' THEN
-    SELECT string_agg(concat('(',provenance_formula(t),')'),' ∨ ')  INTO result FROM provenance_circuit_wire WHERE f=token;
-  WHEN 'and' THEN
-    SELECT string_agg(concat('(',provenance_formula(t),')'),' ∧ ')  INTO result FROM provenance_circuit_wire WHERE f=token;
-  END CASE;
-  RETURN result;
-END
-$$ LANGUAGE plpgsql;
-
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token provenance_token,
-  token2value hstore[],
-  default_value anyelement,
+  token2value regclass,
+  element_one anyelement,
   value_type regtype,
   or_function regproc,
   and_function regproc)
@@ -176,23 +156,44 @@ DECLARE
   rec record;
   result ALIAS FOR $0;
 BEGIN
-  SELECT gate_type INTO STRICT rec
-  FROM provenance_circuit_gate
-  WHERE gate = token;
+  IF token IS NULL THEN
+    RETURN element_one;
+  END IF;
+
+  SELECT gate_type INTO rec FROM provenance_circuit_gate WHERE gate = token;
   
-  IF rec.gate_type='input' THEN
-    SELECT x->'value' INTO result
-    FROM unnest(token2value) AS x
-    WHERE (x->'token')::provenance_token=token;
+  IF rec IS NULL THEN
+    RETURN NULL;
+  ELSIF rec.gate_type='input' THEN
+    EXECUTE format('SELECT col1 FROM (SELECT * FROM %I WHERE provenance()=%L) tmp (col1)',token2value,token) INTO result;
+    IF result IS NULL THEN
+      result:=element_one;
+    END IF;
   ELSIF rec.gate_type='or' THEN
-    EXECUTE format('SELECT %I(array_agg(provenance_evaluate(t,%s,%s::%I,%s,%s,%s))) FROM provenance_circuit_wire WHERE f=%s',
-      or_function,quote_literal(token2value),quote_literal(default_value),value_type,quote_literal(value_type),quote_literal(or_function),quote_literal(and_function),quote_literal(token))
+    EXECUTE format('SELECT %I(provenance_evaluate(t,%L,%L::%I,%L,%L,%L)) FROM provenance_circuit_wire WHERE f=%L',
+      or_function,token2value,element_one,value_type,value_type,or_function,and_function,token)
     INTO result;
   ELSIF rec.gate_type='and' THEN
-    EXECUTE format('SELECT %I(array_agg(provenance_evaluate(t,%s,%s::%I,%s,%s,%s))) FROM provenance_circuit_wire WHERE f=%s',
-      and_function,quote_literal(token2value),quote_literal(default_value),value_type,quote_literal(value_type),quote_literal(or_function),quote_literal(and_function),quote_literal(token))
+    EXECUTE format('SELECT %I(provenance_evaluate(t,%L,%L::%I,%L,%L,%L)) FROM provenance_circuit_wire WHERE f=%L',
+      and_function,token2value,element_one,value_type,value_type,or_function,and_function,token)
     INTO result;
   END IF;
   RETURN result;
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION provenance_evaluate(
+  token provenance_token,
+  token2value regclass,
+  element_one anyelement,
+  or_function regproc,
+  and_function regproc)
+  RETURNS anyelement AS
+  'provsql','provenance_evaluate' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
+$$
+BEGIN
+  RAISE EXCEPTION USING MESSAGE='provenance() called on a table without provenance';
 END
 $$ LANGUAGE plpgsql;

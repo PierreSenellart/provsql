@@ -19,31 +19,42 @@ INSERT INTO personal (name,position,city,classification) VALUES
 
 SELECT add_provenance('personal');
 
-SELECT p1.name AS n1, p2.name AS n2, provenance(p1.prov,p2.prov)
-FROM personal p1 JOIN personal p2 ON p1.city=p2.city
-WHERE p1.id<p2.id
-GROUP BY p1.name,p2.name;
-
-CREATE OR REPLACE FUNCTION security_min(levels classification_level[])
+CREATE OR REPLACE FUNCTION security_min_state(state classification_level, level classification_level)
   RETURNS classification_level AS
 $$
-  SELECT min(x) FROM unnest(levels) AS x;   
-$$ LANGUAGE SQL;
+  SELECT CASE WHEN state IS NULL THEN level WHEN state<level THEN state ELSE level END
+$$ LANGUAGE SQL IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION security_max(levels classification_level[])
+CREATE OR REPLACE FUNCTION security_max_state(state classification_level, level classification_level)
   RETURNS classification_level AS
 $$
-  SELECT max(x) FROM unnest(levels) AS x;   
-$$ LANGUAGE SQL;
+  SELECT CASE WHEN state IS NULL THEN level WHEN state<level THEN level ELSE state END
+$$ LANGUAGE SQL IMMUTABLE;
 
-SELECT p1.city,
-       provenance_evaluate(
-         provenance(p1.prov,p2.prov),
-         array(select hstore(ARRAY['token','value'],ARRAY[prov::text,classification::text]) FROM personal),
-         'unclassified'::classification_level,
-         'classification_level',
-         'security_min',
-         'security_max') AS prov
-FROM personal p1 JOIN personal p2 ON p1.city=p2.city
-WHERE p1.id <> p2.id
+CREATE OR REPLACE AGGREGATE security_min(classification_level)
+(
+  sfunc = security_min_state,
+  stype = classification_level,
+  initcond = 'top_secret'
+);
+
+CREATE OR REPLACE AGGREGATE security_max(classification_level)
+(
+  sfunc = security_max_state,
+  stype = classification_level,
+  initcond = 'unclassified'
+);
+
+CREATE VIEW personal_level as SELECT classification AS value FROM personal;
+
+SELECT 
+  p1.city,
+  provenance_evaluate(
+    provenance(),
+    'personal_level',
+    'unclassified'::classification_level,
+    'security_min',
+    'security_max')
+FROM personal p1, personal p2
+WHERE p1.city = p2.city AND p1.id < p2.id
 GROUP BY p1.city;
