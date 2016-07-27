@@ -13,8 +13,8 @@ CREATE TABLE provenance_circuit_gate(
   gate_type provenance_gate NOT NULL);
 
 CREATE TABLE provenance_circuit_wire(
-  f provenance_token,
-  t provenance_token);
+  f provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE,
+  t provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE);
 
 CREATE INDEX ON provenance_circuit_wire (f);
 CREATE INDEX ON provenance_circuit_wire (t);
@@ -28,7 +28,7 @@ BEGIN
   INSERT INTO provenance_circuit_gate VALUES (NEW.provsql, 'input');
   RETURN NEW;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
@@ -37,8 +37,32 @@ BEGIN
   EXECUTE format('ALTER TABLE %I ADD COLUMN provsql provsql.provenance_token UNIQUE DEFAULT uuid_generate_v4()', _tbl);
   EXECUTE format('INSERT INTO provsql.provenance_circuit_gate SELECT provsql, ''input'' FROM %I',_tbl);
   EXECUTE format('CREATE TRIGGER add_provenance_circuit_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_provenance_circuit_gate_trigger()',_tbl);
+  EXECUTE format('ALTER TABLE %I ADD CONSTRAINT provsqlfk FOREIGN KEY (provsql) REFERENCES provsql.provenance_circuit_gate(gate)', _tbl);
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE FUNCTION uuid_ns_provsql() RETURNS uuid AS
+$$
+ -- uuid_generate_v5(uuid_ns_url(),'http://pierre.senellart.com/software/provsql/')
+ SELECT '920d4f02-8718-5319-9532-d4ab83a64489'::uuid
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE FUNCTION uuid_provsql_concat(state provenance_token, token provenance_token)
+  RETURNS provenance_token AS
+$$
+  SELECT
+    CASE
+    WHEN state IS NULL THEN
+      token
+    ELSE
+      uuid_generate_v5(uuid_ns_provsql(),concat(state,token))::provenance_token
+    END;
+$$ LANGUAGE SQL IMMUTABLE SET search_path=provsql,public;
+
+CREATE AGGREGATE uuid_provsql_agg(provenance_token) (
+  SFUNC = uuid_provsql_concat,
+  STYPE = provenance_token
+);
 
 CREATE FUNCTION provenance_and(VARIADIC tokens uuid[])
   RETURNS provenance_token AS
@@ -53,15 +77,18 @@ BEGIN
     WHEN 1 THEN
       and_token:=tokens[1];
     ELSE
-      and_token:=uuid_generate_v4();
-      INSERT INTO provenance_circuit_gate VALUES(and_token,'and');
-      FOREACH token IN ARRAY tokens LOOP
-        INSERT INTO provenance_circuit_wire VALUES(and_token,token);
-      END LOOP;
+      SELECT uuid_generate_v5(uuid_ns_provsql(),concat('and',uuid_provsql_agg(t)))
+      INTO and_token
+      FROM unnest(tokens) t;
+
+      IF NOT EXISTS (SELECT 1 FROM provenance_circuit_gate WHERE gate=and_token) THEN
+        INSERT INTO provenance_circuit_gate VALUES(and_token,'and');
+        INSERT INTO provenance_circuit_wire SELECT and_token,t FROM unnest(tokens) t;
+      END IF;
   END CASE;
   RETURN and_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION provenance_or(state provenance_token, token provenance_token)
   RETURNS provenance_token AS
@@ -83,11 +110,43 @@ BEGIN
 
   RETURN or_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION provenance_or_make_deterministic(state provenance_token)
+  RETURNS provenance_token AS
+$$
+DECLARE
+  c INTEGER;
+  or_token provenance_token;
+BEGIN
+  SELECT COUNT(*) INTO c FROM provenance_circuit_wire WHERE f=state;
+
+  IF c = 1 THEN
+    SELECT t INTO or_token FROM provenance_circuit_wire WHERE f=state;
+    DELETE FROM provenance_circuit_wire WHERE f=state;
+  ELSE
+    SELECT uuid_generate_v5(uuid_ns_provsql(),concat('or',uuid_provsql_agg(t)))
+    INTO or_token
+    FROM provenance_circuit_wire
+    WHERE f=state;
+
+    IF NOT EXISTS (SELECT 1 FROM provenance_circuit_gate WHERE gate=or_token) THEN
+      INSERT INTO provenance_circuit_gate VALUES(or_token,'or');
+      UPDATE provenance_circuit_wire SET f=or_token WHERE f=state;
+    ELSE
+      DELETE FROM provenance_circuit_wire WHERE f=state;
+    END IF;
+  END IF;
+  DELETE FROM provenance_circuit_gate WHERE gate=state;
+
+  RETURN or_token;
+END
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE AGGREGATE provenance_agg(token provenance_token) (
   SFUNC = provenance_or,
-  STYPE = provenance_token
+  STYPE = provenance_token,
+  FINALFUNC = provenance_or_make_deterministic
 );
 
 CREATE OR REPLACE FUNCTION trim_circuit()
@@ -111,12 +170,18 @@ BEGIN
     statement:=concat(statement,format('SELECT %I FROM %I',attribute.attname,attribute.relname));
   END LOOP;
   IF statement IS NOT NULL THEN
-    EXECUTE concat('DELETE FROM provsql.provenance_circuit_gate WHERE gate NOT IN (',statement,') AND gate_type=''input''');
-    WITH RECURSIVE reachable(gate) AS (
-      SELECT gate from provsql.provenance_circuit_gate
-    UNION
+    EXECUTE concat(
+$concat$
+      WITH RECURSIVE reachable(gate) AS (
+$concat$,
+      statement,
+$concat$      
+      UNION
       SELECT t AS gate from provsql.provenance_circuit_wire JOIN reachable ON f=gate)
-    DELETE FROM provsql.provenance_circuit_wire WHERE f NOT IN (SELECT * FROM reachable);
+    DELETE FROM provsql.provenance_circuit_gate WHERE gate NOT IN (SELECT * FROM reachable)
+$concat$);
+  ELSE
+    TRUNCATE provsql.provenance_circuit_gate, provsql.provenance_circuit_wire;
   END IF;
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -177,7 +242,7 @@ END
 $$ LANGUAGE plpgsql;
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
-GRANT INSERT, SELECT ON provenance_circuit_gate TO PUBLIC;
+GRANT SELECT ON provenance_circuit_gate TO PUBLIC;
 GRANT SELECT ON provenance_circuit_wire TO PUBLIC;
 
 SET search_path TO public;
