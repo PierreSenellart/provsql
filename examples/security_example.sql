@@ -2,7 +2,7 @@ SET search_path TO public, provsql;
 
 /* Cleaning up past sessions */
 DROP VIEW IF EXISTS personal_level;
-DROP VIEW IF EXISTS personal_id;
+DROP VIEW IF EXISTS personal_name;
 DROP TABLE IF EXISTS personal;
 SELECT trim_circuit();
 
