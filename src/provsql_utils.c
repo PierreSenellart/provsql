@@ -1,13 +1,14 @@
 #include "postgres.h"
 #include "catalog/namespace.h"
 #include "nodes/value.h"
+#include "utils/syscache.h"
 
 #include "provsql_utils.h"
 
 static Oid GetFuncOid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make1(makeString(s)),-1,NIL,false,false,false);
+      list_make2(makeString("provsql"),makeString(s)),-1,NIL,false,false,false);
   if(fcl)
     return fcl->oid;    
   else
@@ -16,10 +17,14 @@ static Oid GetFuncOid(char *s)
 
 void initialize_constants(constants_t *constants)
 {
-  constants->PROVENANCE_TOKEN_OID = TypenameGetTypid("provenance_token");
-  constants->UUID_OID = TypenameGetTypid("uuid");
-  constants->UUID_ARRAY_OID = TypenameGetTypid("_uuid");
-  constants->PROVENANCE_AND_OID = GetFuncOid("provenance_and");
-  constants->PROVENANCE_AGG_OID = GetFuncOid("provenance_agg");
-  constants->PROVENANCE_OID = GetFuncOid("provenance");
+  constants->OID_SCHEMA_PROVSQL = get_namespace_oid("provsql", true);
+  if(constants->OID_SCHEMA_PROVSQL==InvalidOid)
+    return false;
+
+  constants->OID_TYPE_PROVENANCE_TOKEN = GetSysCacheOid2(TYPENAMENSP,CStringGetDatum("provenance_token"),ObjectIdGetDatum(constants->OID_SCHEMA_PROVSQL));
+  constants->OID_TYPE_UUID = TypenameGetTypid("uuid");
+  constants->OID_TYPE_UUID_ARRAY = TypenameGetTypid("_uuid");
+  constants->OID_FUNCTION_PROVENANCE_AND = GetFuncOid("provenance_and");
+  constants->OID_FUNCTION_PROVENANCE_AGG = GetFuncOid("provenance_agg");
+  constants->OID_FUNCTION_PROVENANCE = GetFuncOid("provenance");
 }

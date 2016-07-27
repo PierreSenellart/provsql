@@ -26,13 +26,13 @@ static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, Att
   Var *v=makeNode(Var);
   v->varno=v->varnoold=relid;
   v->varattno=v->varoattno=attid;
-  v->vartype=constants->PROVENANCE_TOKEN_OID;
+  v->vartype=constants->OID_TYPE_PROVENANCE_TOKEN;
   v->varcollid=InvalidOid;
   v->vartypmod=-1;
   v->location=-1;
 
   re->arg=(Expr*)v;
-  re->resulttype=constants->UUID_OID;
+  re->resulttype=constants->OID_TYPE_UUID;
   re->resulttypmod=-1;
   re->resultcollid=InvalidOid;
   re->relabelformat=COERCION_EXPLICIT;
@@ -58,7 +58,7 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
         Value *v = (Value *) lfirst(lc);
 
         if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
-            get_atttype(r->relid,attid)==constants->PROVENANCE_TOKEN_OID) {
+            get_atttype(r->relid,attid)==constants->OID_TYPE_PROVENANCE_TOKEN) {
           prov_atts=lappend(prov_atts,make_provenance_attribute(r,relid,attid,constants));
         }
 
@@ -93,8 +93,8 @@ static void remove_provenance_attributes_select(Query *q, const constants_t *con
     if(rt->expr->type==T_Var) {
       Var *v =(Var *) rt->expr;
 
-      if(!strcmp(rt->resname,PROVSQL_COLUMN_NAME) &&
-          v->vartype==constants->PROVENANCE_TOKEN_OID) {
+      if(rt->resname && !strcmp(rt->resname,PROVSQL_COLUMN_NAME) &&
+          v->vartype==constants->OID_TYPE_PROVENANCE_TOKEN) {
         q->targetList=list_delete_cell(q->targetList, cell, prev);
 
         removed=true;
@@ -125,13 +125,13 @@ static Expr *addProvenanceToSelect(Query *q, List *prov_atts, const constants_t 
   FuncExpr *expr=makeNode(FuncExpr);
   TargetEntry *te=makeNode(TargetEntry);
 
-  array->array_typeid=constants->UUID_ARRAY_OID;
-  array->element_typeid=constants->UUID_OID;
+  array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
+  array->element_typeid=constants->OID_TYPE_UUID;
   array->elements=prov_atts;
   array->location=-1;
 
-  expr->funcid=constants->PROVENANCE_AND_OID;
-  expr->funcresulttype=constants->PROVENANCE_TOKEN_OID;
+  expr->funcid=constants->OID_FUNCTION_PROVENANCE_AND;
+  expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
   expr->funcvariadic=true;
   expr->args=list_make1(array);
   expr->location=-1;
@@ -146,8 +146,8 @@ static Expr *addProvenanceToSelect(Query *q, List *prov_atts, const constants_t 
     te_inner->resno=1;
     te_inner->expr=(Expr*)expr;
 
-    agg->aggfnoid=constants->PROVENANCE_AGG_OID;
-    agg->aggtype=constants->PROVENANCE_TOKEN_OID;
+    agg->aggfnoid=constants->OID_FUNCTION_PROVENANCE_AGG;
+    agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
     agg->args=list_make1(te_inner);
     agg->aggkind=AGGKIND_NORMAL;
     agg->location=-1;
@@ -175,7 +175,7 @@ static Node *provenance_mutator(Node *node, provenance_mutator_context *context)
   if(IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *) node;
 
-    if(f->funcid == context->constants->PROVENANCE_OID) {
+    if(f->funcid == context->constants->OID_FUNCTION_PROVENANCE) {
       return copyObject(context->provsql);
     }
   }
@@ -230,8 +230,8 @@ static PlannedStmt *provsql_planner(
 {
   if(q->commandType==CMD_SELECT) {
     constants_t constants;
-    initialize_constants(&constants);
-    process_query(q, &constants, false);
+    if(initialize_constants(&constants))
+      process_query(q, &constants, false);
   }
 
   if(prev_planner)

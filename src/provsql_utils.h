@@ -4,13 +4,14 @@
 #include "postgres_ext.h"
 
 typedef struct constants_t {
-  Oid PROVENANCE_TOKEN_OID;
-  Oid UUID_OID;
-  Oid UUID_ARRAY_OID;
-  Oid PROVENANCE_AND_OID;
-  Oid PROVENANCE_AGG_OID;
-  Oid PROVENANCE_OID;
+  Oid OID_SCHEMA_PROVSQL;
+  Oid OID_TYPE_PROVENANCE_TOKEN;
+  Oid OID_TYPE_UUID;
+  Oid OID_TYPE_UUID_ARRAY;
+  Oid OID_FUNCTION_PROVENANCE_AND;
+  Oid OID_FUNCTION_PROVENANCE_AGG;
+  Oid OID_FUNCTION_PROVENANCE;
 } constants_t;
 
-void initialize_constants(constants_t *constants);
+bool initialize_constants(constants_t *constants);
 #endif /* PROVSQL_UTILS_H */

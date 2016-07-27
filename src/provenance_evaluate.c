@@ -30,9 +30,11 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     PG_RETURN_DATUM(element_one);
 
-  initialize_constants(&constants);
+  if(!initialize_constants(&constants)) {
+    elog(ERROR, "Cannot find provsql schema");
+  }
 
-  argtypes[0]=constants.PROVENANCE_TOKEN_OID;
+  argtypes[0]=constants.OID_TYPE_PROVENANCE_TOKEN;
   argtypes[1]=REGCLASSOID;
   argtypes[2]=element_type;
   argtypes[3]=REGTYPEOID;
@@ -42,7 +44,7 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   SPI_connect();
 
   if(SPI_execute_with_args(
-        "SELECT provenance_evaluate($1,$2,$3,$4,$5,$6)",
+        "SELECT provsql.provenance_evaluate($1,$2,$3,$4,$5,$6)",
         6,
         argtypes,
         arguments,
