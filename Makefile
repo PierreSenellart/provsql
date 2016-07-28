@@ -9,6 +9,10 @@ DOCS = $(wildcard doc/*.md)
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
 EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql
 
+TESTS = $(wildcard test/sql/*.sql)
+REGRESS = $(patsubst test/sql/%.sql,%,$(TESTS))
+REGRESS_OPTS = --inputdir=test --load-language=plpgsql --outputdir=$(shell mktemp -d --tmpdir tmp.provsqlXXXX)
+
 all: $(DATA) $(MODULE_big).so
 
 $(OBJS): $(wildcard src/*.h)
