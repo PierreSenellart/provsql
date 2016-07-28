@@ -15,7 +15,7 @@ static Oid GetFuncOid(char *s)
     return 0;
 }
 
-void initialize_constants(constants_t *constants)
+bool initialize_constants(constants_t *constants)
 {
   constants->OID_SCHEMA_PROVSQL = get_namespace_oid("provsql", true);
   if(constants->OID_SCHEMA_PROVSQL==InvalidOid)
@@ -27,4 +27,6 @@ void initialize_constants(constants_t *constants)
   constants->OID_FUNCTION_PROVENANCE_AND = GetFuncOid("provenance_and");
   constants->OID_FUNCTION_PROVENANCE_AGG = GetFuncOid("provenance_agg");
   constants->OID_FUNCTION_PROVENANCE = GetFuncOid("provenance");
+
+  return true;
 }
