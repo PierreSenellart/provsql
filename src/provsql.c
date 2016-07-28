@@ -152,42 +152,54 @@ static void remove_provenance_attributes_select(Query *q, const constants_t *con
   }
 }
 
-static Expr *addProvenanceToSelect(Query *q, List *prov_atts, const constants_t *constants, bool aggregation_needed)
+static Expr *add_provenance_to_select(
+    Query *q, 
+    List *prov_atts, 
+    const constants_t *constants, 
+    bool aggregation_needed,
+    bool union_required)
 {
-  ArrayExpr *array=makeNode(ArrayExpr);
-  FuncExpr *expr=makeNode(FuncExpr);
+  ArrayExpr *array;
+  FuncExpr *expr;
   TargetEntry *te=makeNode(TargetEntry);
-
-  array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
-  array->element_typeid=constants->OID_TYPE_UUID;
-  array->elements=prov_atts;
-  array->location=-1;
-
-  expr->funcid=constants->OID_FUNCTION_PROVENANCE_AND;
-  expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-  expr->funcvariadic=true;
-  expr->args=list_make1(array);
-  expr->location=-1;
 
   te->resno=list_length(q->targetList)+1;
   te->resname=(char *)PROVSQL_COLUMN_NAME;
 
-  if(aggregation_needed) {
-    Aggref *agg = makeNode(Aggref);
-    TargetEntry *te_inner = makeNode(TargetEntry);
-
-    te_inner->resno=1;
-    te_inner->expr=(Expr*)expr;
-
-    agg->aggfnoid=constants->OID_FUNCTION_PROVENANCE_AGG;
-    agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    agg->args=list_make1(te_inner);
-    agg->aggkind=AGGKIND_NORMAL;
-    agg->location=-1;
-
-    te->expr=(Expr*)agg;
+  if(union_required) {
+    RelabelType *re=(RelabelType *) linitial(prov_atts);
+    te->expr=re->arg;
   } else {
-    te->expr=(Expr*)expr;
+    array=makeNode(ArrayExpr);
+    array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
+    array->element_typeid=constants->OID_TYPE_UUID;
+    array->elements=prov_atts;
+    array->location=-1;
+
+    expr=makeNode(FuncExpr);
+    expr->funcid=constants->OID_FUNCTION_PROVENANCE_AND;
+    expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+    expr->funcvariadic=true;
+    expr->args=list_make1(array);
+    expr->location=-1;
+
+    if(aggregation_needed) {
+      Aggref *agg = makeNode(Aggref);
+      TargetEntry *te_inner = makeNode(TargetEntry);
+
+      te_inner->resno=1;
+      te_inner->expr=(Expr*)expr;
+
+      agg->aggfnoid=constants->OID_FUNCTION_PROVENANCE_AGG;
+      agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      agg->args=list_make1(te_inner);
+      agg->aggkind=AGGKIND_NORMAL;
+      agg->location=-1;
+
+      te->expr=(Expr*)agg;
+    } else {
+      te->expr=(Expr*)expr;
+    }
   }
     
   q->targetList=lappend(q->targetList,te);
@@ -218,7 +230,7 @@ static Node *provenance_mutator(Node *node, provenance_mutator_context *context)
 
 static void replace_provenance_function_by_expression(Query *q, Expr *provsql, const constants_t *constants)
 {
-  provenance_mutator_context context = {(constants_t *) constants,provsql};
+  provenance_mutator_context context = {(constants_t *) constants, provsql};
 
   query_tree_mutator(q, provenance_mutator, &context, QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 }
@@ -230,6 +242,8 @@ static bool process_query(
 {
   List *prov_atts=get_provenance_attributes(q, constants);
   Expr *provsql;
+  bool has_union = false;
+  bool supported=true;
 
   if(prov_atts==NIL)
     return false;
@@ -238,6 +252,7 @@ static bool process_query(
 
   if(q->hasAggs) {
     ereport(ERROR, (errmsg("Aggregation not supported on tables with provenance")));
+    supported=false;
   }
 
   if(!subquery)
@@ -247,9 +262,32 @@ static bool process_query(
     q->hasAggs=true;
   }
 
-  provsql = addProvenanceToSelect(q, prov_atts, constants, q->groupClause != NIL);
+  if(q->setOperations) {
+    SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
 
-  replace_provenance_function_by_expression(q, provsql, constants);
+    if(stmt->op == SETOP_UNION && stmt->all) {
+      stmt->colTypes=lappend_oid(stmt->colTypes,
+          constants->OID_TYPE_PROVENANCE_TOKEN);
+      stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
+      stmt->colCollations=lappend_int(stmt->colCollations, 0);
+
+      has_union = true;
+    } else {
+      ereport(WARNING, (errmsg("Set operations other than UNION ALL not supported by provsql")));
+      supported=false;
+    }
+  }
+  
+  if(supported) {
+    provsql = add_provenance_to_select(
+        q,
+        prov_atts,
+        constants,
+        q->groupClause != NIL,
+        has_union);
+  
+    replace_provenance_function_by_expression(q, provsql, constants);
+  }
 
 //  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
