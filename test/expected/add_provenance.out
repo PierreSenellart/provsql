@@ -1,0 +1,23 @@
+\set ECHO none
+ add_provenance 
+----------------
+ 
+(1 row)
+
+                                    Table "public.personal"
+     Column     |         Type         |                       Modifiers                       
+----------------+----------------------+-------------------------------------------------------
+ id             | integer              | not null default nextval('personal_id_seq'::regclass)
+ name           | character varying    | 
+ position       | character varying    | 
+ city           | character varying    | 
+ classification | classification_level | 
+ provsql        | provenance_token     | default uuid_generate_v4()
+Indexes:
+    "personal_pkey" PRIMARY KEY, btree (id)
+    "personal_provsql_key" UNIQUE CONSTRAINT, btree (provsql)
+Foreign-key constraints:
+    "provsqlfk" FOREIGN KEY (provsql) REFERENCES provenance_circuit_gate(gate)
+Triggers:
+    add_provenance_circuit_gate BEFORE INSERT ON personal FOR EACH ROW EXECUTE PROCEDURE add_provenance_circuit_gate_trigger()
+

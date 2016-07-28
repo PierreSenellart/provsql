@@ -1,0 +1,13 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   city   |    level     
+----------+--------------
+ Berlin   | secret
+ New York | restricted
+ Paris    | confidential
+(3 rows)
+
