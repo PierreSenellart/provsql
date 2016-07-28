@@ -263,8 +263,6 @@ static void transform_distinct_into_group_by(Query *q, const constants_t *consta
   }
 
   q->distinctClause = NULL;
-
-  ereport(NOTICE, (errmsg("%s",nodeToString(q))));
 }
       
 static void remove_provenance_attribute_groupref(Query *q, const constants_t *constants, const Bitmapset *removed_sortgrouprefs)
