@@ -41,6 +41,19 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
+CREATE OR REPLACE FUNCTION remove_provenance(_tbl regclass)
+  RETURNS void AS
+$$
+DECLARE
+BEGIN
+  EXECUTE format('ALTER TABLE %I DROP COLUMN provsql', _tbl);
+  BEGIN
+    EXECUTE format('DROP TRIGGER add_provenance_circuit_gate on %I', _tbl);
+  EXCEPTION WHEN undefined_object THEN
+  END;
+END
+$$ LANGUAGE plpgsql;
+
 CREATE FUNCTION uuid_ns_provsql() RETURNS uuid AS
 $$
  -- uuid_generate_v5(uuid_ns_url(),'http://pierre.senellart.com/software/provsql/')
@@ -81,10 +94,11 @@ BEGIN
       INTO and_token
       FROM unnest(tokens) t;
 
-      IF NOT EXISTS (SELECT 1 FROM provenance_circuit_gate WHERE gate=and_token) THEN
+      BEGIN
         INSERT INTO provenance_circuit_gate VALUES(and_token,'and');
         INSERT INTO provenance_circuit_wire SELECT and_token,t FROM unnest(tokens) t;
-      END IF;
+      EXCEPTION WHEN unique_violation THEN
+      END;
   END CASE;
   RETURN and_token;
 END
@@ -130,12 +144,12 @@ BEGIN
     FROM provenance_circuit_wire
     WHERE f=state;
 
-    IF NOT EXISTS (SELECT 1 FROM provenance_circuit_gate WHERE gate=or_token) THEN
+    BEGIN
       INSERT INTO provenance_circuit_gate VALUES(or_token,'or');
       UPDATE provenance_circuit_wire SET f=or_token WHERE f=state;
-    ELSE
+    EXCEPTION WHEN unique_violation THEN
       DELETE FROM provenance_circuit_wire WHERE f=state;
-    END IF;
+    END;
   END IF;
   DELETE FROM provenance_circuit_gate WHERE gate=state;
 
