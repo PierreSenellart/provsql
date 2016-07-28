@@ -3,6 +3,7 @@
 #include "catalog/pg_aggregate.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/planner.h"
+#include "parser/parse_oper.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 
@@ -17,7 +18,7 @@ extern void _PG_fini(void);
 
 static planner_hook_type prev_planner = NULL;
 
-static bool process_query(
+static Query *process_query(
     Query *q,
     const constants_t *constants,
     bool subquery);
@@ -67,7 +68,9 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
         ++attid;
       }
     } else if(r->rtekind == RTE_SUBQUERY) {
-      if(process_query(r->subquery, constants, true)) {
+      Query *new_subquery = process_query(r->subquery, constants, true);
+      if(new_subquery != NULL) {
+        r->subquery = new_subquery;
         r->eref->colnames = lappend(r->eref->colnames, makeString("provsql"));
         prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,r->eref->colnames->length,constants));
       }
@@ -290,22 +293,75 @@ static void remove_provenance_attribute_groupref(Query *q, const constants_t *co
     }
   }
 }
+      
+static Query *rewrite_all_into_external_group_by(Query *q)
+{
+  Query *new_query = makeNode(Query);
+  RangeTblEntry *rte = makeNode(RangeTblEntry);
+  FromExpr *jointree = makeNode(FromExpr);
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  
+  SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
 
-static bool process_query(
+  ListCell *lc;
+  int sortgroupref = 0;
+
+  stmt->all=true;
+
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery=q;
+  rte->eref=copyObject(((RangeTblEntry*)linitial(q->rtable))->eref);
+  rte->requiredPerms=ACL_SELECT;
+  rte->inFromCl=true;
+
+  rtr->rtindex=1;
+  jointree->fromlist=list_make1(rtr);
+
+  new_query->commandType=CMD_SELECT;
+  new_query->canSetTag=true;
+  new_query->rtable=list_make1(rte);
+  new_query->jointree=jointree;
+  new_query->targetList=copyObject(q->targetList);
+
+  foreach(lc,new_query->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    SortGroupClause *sgc = makeNode(SortGroupClause);
+
+    sgc->tleSortGroupRef=te->ressortgroupref=++sortgroupref;
+
+    get_sort_group_operators(exprType((Node*) te->expr),false,true,false,&sgc->sortop,&sgc->eqop,NULL,&sgc->hashable);
+
+    new_query->groupClause = lappend(new_query->groupClause, sgc);
+  }
+
+  return new_query;
+}
+
+static Query *process_query(
     Query *q,
     const constants_t *constants,
     bool subquery)
 {
-  List *prov_atts=get_provenance_attributes(q, constants);
+  List *prov_atts;
   Expr *provsql;
   bool has_union = false;
   bool supported=true;
 
-  if(prov_atts==NIL)
-    return false;
-
 //  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
+  if(q->setOperations) {
+    SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
+    if(!stmt->all) {
+      q = rewrite_all_into_external_group_by(q);
+      return process_query(q, constants, subquery);
+    }
+  }
+    
+  prov_atts=get_provenance_attributes(q, constants);
+  
+  if(prov_atts==NIL)
+    return q;
+  
   if(q->hasAggs) {
     ereport(ERROR, (errmsg("Aggregation not supported on tables with provenance")));
     supported=false;
@@ -333,7 +389,7 @@ static bool process_query(
   if(supported && q->setOperations) {
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
 
-    if(stmt->op == SETOP_UNION && stmt->all) {
+    if(stmt->op == SETOP_UNION) {
       stmt->colTypes=lappend_oid(stmt->colTypes,
           constants->OID_TYPE_PROVENANCE_TOKEN);
       stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
@@ -341,7 +397,7 @@ static bool process_query(
 
       has_union = true;
     } else {
-      ereport(WARNING, (errmsg("Set operations other than UNION ALL not supported by provsql")));
+      ereport(WARNING, (errmsg("Set operations other than UNION not supported by provsql")));
       supported=false;
     }
   }
@@ -359,7 +415,7 @@ static bool process_query(
 
 //  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
-  return true;
+  return q;
 }
 
 static PlannedStmt *provsql_planner(
@@ -369,8 +425,11 @@ static PlannedStmt *provsql_planner(
 {
   if(q->commandType==CMD_SELECT) {
     constants_t constants;
-    if(initialize_constants(&constants))
-      process_query(q, &constants, false);
+    if(initialize_constants(&constants)) {
+      Query *new_query = process_query(q, &constants, false);
+      if(new_query != NULL)
+        q = new_query;
+    }
   }
 
   if(prev_planner)
