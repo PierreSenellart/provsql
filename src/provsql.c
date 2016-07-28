@@ -112,10 +112,13 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
   return prov_atts;
 }
 
-static void remove_provenance_attributes_select(Query *q, const constants_t *constants)
+static Bitmapset *remove_provenance_attributes_select(
+    Query *q,
+    const constants_t *constants)
 {
   int nbRemoved=0;
   int i=0;
+  Bitmapset *ressortgrouprefs = NULL;
 
   for(ListCell *cell=list_head(q->targetList), *prev=NULL;
       cell!=NULL
@@ -132,8 +135,11 @@ static void remove_provenance_attributes_select(Query *q, const constants_t *con
 
         removed=true;
         ++nbRemoved;
+        
+        if(rt->ressortgroupref > 0)
+          ressortgrouprefs = bms_add_member(ressortgrouprefs, rt->ressortgroupref);
       }
-    
+
       ++i;
     }
 
@@ -150,6 +156,8 @@ static void remove_provenance_attributes_select(Query *q, const constants_t *con
       cell=lnext(cell);
     }
   }
+
+  return ressortgrouprefs;
 }
 
 static Expr *add_provenance_to_select(
@@ -235,6 +243,56 @@ static void replace_provenance_function_by_expression(Query *q, Expr *provsql, c
   query_tree_mutator(q, provenance_mutator, &context, QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 }
 
+static void transform_distinct_into_group_by(Query *q, const constants_t *constants)
+{
+  // First check which are already in the group by clause
+  // Should be either none or all as "SELECT DISTINCT a, b ... GROUP BY a" 
+  // is invalid
+  Bitmapset *already_in_group_by=NULL;
+  ListCell *lc;
+  foreach(lc, q->groupClause) {
+    SortGroupClause *sgc = (SortGroupClause *) lfirst(lc);
+    already_in_group_by = bms_add_member(already_in_group_by, sgc->tleSortGroupRef);
+  }
+
+  foreach(lc, q->distinctClause) {
+    SortGroupClause *sgc = (SortGroupClause *) lfirst(lc);
+    if(!bms_is_member(sgc->tleSortGroupRef, already_in_group_by)) {
+      q->groupClause = lappend(q->groupClause, sgc);
+    }
+  }
+
+  q->distinctClause = NULL;
+
+  ereport(NOTICE, (errmsg("%s",nodeToString(q))));
+}
+      
+static void remove_provenance_attribute_groupref(Query *q, const constants_t *constants, const Bitmapset *removed_sortgrouprefs)
+{
+  List **lists[3]={&q->groupClause,&q->distinctClause,&q->sortClause};
+
+  for(int i=0;i<3;++i) {
+    for(ListCell *cell=list_head(*lists[i]), *prev=NULL;
+        cell!=NULL
+        ;) {
+      SortGroupClause *sgc = (SortGroupClause *) lfirst(cell);
+      if(bms_is_member(sgc->tleSortGroupRef,removed_sortgrouprefs)) {
+        *lists[i] = list_delete_cell(*lists[i], cell, prev);
+
+        if(prev) {
+          cell=lnext(prev);
+        }
+        else {
+          cell=list_head(*lists[i]);
+        }
+      } else {
+        prev=cell;
+        cell=lnext(cell);
+      }
+    }
+  }
+}
+
 static bool process_query(
     Query *q,
     const constants_t *constants,
@@ -255,14 +313,26 @@ static bool process_query(
     supported=false;
   }
 
-  if(!subquery)
-    remove_provenance_attributes_select(q, constants);
+  if(!subquery) {
+    Bitmapset *removed_sortgrouprefs = NULL;
+    removed_sortgrouprefs=remove_provenance_attributes_select(q, constants);
+    if(removed_sortgrouprefs != NULL)
+      remove_provenance_attribute_groupref(q, constants, removed_sortgrouprefs);
+  }
 
-  if(q->groupClause) {
+  if(supported && q->distinctClause) {
+    if(list_length(q->distinctClause) < list_length(q->targetList)) {
+      ereport(WARNING, (errmsg("DISTINCT ON not supported by provsql")));
+      supported=false;
+    } else 
+      transform_distinct_into_group_by(q, constants);
+  }
+
+  if(supported && q->groupClause) {
     q->hasAggs=true;
   }
 
-  if(q->setOperations) {
+  if(supported && q->setOperations) {
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
 
     if(stmt->op == SETOP_UNION && stmt->all) {
