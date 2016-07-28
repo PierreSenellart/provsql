@@ -1,5 +1,4 @@
 \set ECHO none
-SET client_min_messages = 'ERROR'; -- temporary as I remove warnings
 SET search_path TO public, provsql;
 
 CREATE TYPE classification_level AS ENUM ('unclassified','restricted','confidential','secret','top_secret');

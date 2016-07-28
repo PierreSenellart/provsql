@@ -3,6 +3,7 @@
 #include "catalog/pg_aggregate.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/planner.h"
+#include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 
 #include "provsql_utils.h"
@@ -46,20 +47,21 @@ static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, Att
 static List *get_provenance_attributes(Query *q, const constants_t *constants) {
   List *prov_atts=NIL;
   ListCell *l;
-  Index relid=1;
+  Index rteid=1;
 
   foreach(l, q->rtable) {
     RangeTblEntry *r = (RangeTblEntry *) lfirst(l);
-    ListCell *lc;
-    AttrNumber attid=1;
 
     if(r->rtekind == RTE_RELATION) {
+      ListCell *lc;
+      AttrNumber attid=1;
+
       foreach(lc,r->eref->colnames) {
         Value *v = (Value *) lfirst(lc);
 
         if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
             get_atttype(r->relid,attid)==constants->OID_TYPE_PROVENANCE_TOKEN) {
-          prov_atts=lappend(prov_atts,make_provenance_attribute(r,relid,attid,constants));
+          prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,attid,constants));
         }
 
         ++attid;
@@ -67,13 +69,44 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
     } else if(r->rtekind == RTE_SUBQUERY) {
       if(process_query(r->subquery, constants, true)) {
         r->eref->colnames = lappend(r->eref->colnames, makeString("provsql"));
-        prov_atts=lappend(prov_atts,make_provenance_attribute(r,relid,r->eref->colnames->length,constants));
+        prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,r->eref->colnames->length,constants));
+      }
+    } else if(r->rtekind == RTE_JOIN) {
+      if(r->jointype == JOIN_INNER ||
+         r->jointype == JOIN_LEFT ||
+         r->jointype == JOIN_FULL ||
+         r->jointype == JOIN_RIGHT) {
+        // Nothing to do, there will also be RTE entries for the tables
+        // that are part of the join, from which we will extract the
+        // provenance information
+      } else { // Semijoin (should be feasible, but check whether the second provenance information is available)
+               // Antijoin (feasible with negation)
+       ereport(WARNING, (errmsg("JOIN type not supported by provsql")));
+      }
+    } else if(r->rtekind == RTE_FUNCTION) {
+      ListCell *lc;
+      AttrNumber attid=1;
+
+      foreach(lc,r->functions) {
+        RangeTblFunction *func = (RangeTblFunction *) lfirst(lc);
+        
+        if(func->funccolcount==1) {
+          FuncExpr *expr = (FuncExpr *) func->funcexpr;
+          if(expr->funcresulttype == constants->OID_TYPE_PROVENANCE_TOKEN
+              && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
+            prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,attid,constants));
+          }
+        } else {
+          ereport(WARNING, (errmsg("FROM function with multiple output attributes are not supported by provsql")));
+        }
+
+        attid+=func->funccolcount;
       }
     } else {
       ereport(WARNING, (errmsg("FROM clause unsupported by provsql")));
     }
 
-    ++relid;
+    ++rteid;
   }
 
   return prov_atts;
