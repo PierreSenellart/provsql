@@ -11,6 +11,8 @@ EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql
 
 all: $(DATA) $(MODULE_big).so
 
+$(OBJS): $(wildcard src/*.h)
+
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
