@@ -1,0 +1,13 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+ ?column? 
+----------
+ t
+ t
+ t
+(3 rows)
+
