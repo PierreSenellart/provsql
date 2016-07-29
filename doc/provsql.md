@@ -76,3 +76,16 @@ provenance of each tuple as a UUID.
 You can then use this provenance to run computation in various semirings.
 See [security.sql](test/sql/security.sql) and
 [formula.sql](test/sql/formula.sql) for two examples.
+
+## License
+
+ProvSQL is provided as open-source software under the MIT License. See [LICENSE](LICENSE).
+
+## Contact
+
+https://github.com/PierreSenellart/provsql
+
+Pierre Senellart <pierre@senellart.com>
+
+Bug reports and feature requests are
+preferably sent through the *Issues* feature of Github.
