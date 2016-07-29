@@ -45,7 +45,7 @@ are all *monotone* queries.
 
 2. Install it in the PostgreSQL extensions directory with `make install`
    (run as a user with rights to write the PostgreSQL installation
-   directories)
+   directories).
 
 3. Add the line 
    ```
@@ -53,7 +53,7 @@ are all *monotone* queries.
    ```
    to the postgresql.conf configuration file (required because the
    extension include *hooks*) and restart the PostgreSQL server (e.g.,
-   with service postgresql restart on systemd-based distributions)
+   with service postgresql restart on systemd-based distributions).
 
 ## Testing your installation
 
