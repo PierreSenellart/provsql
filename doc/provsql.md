@@ -1,12 +1,12 @@
-# provsql
+# ProvSQL
 
-The goal of the provsql project is to add support for semiring provenance
+The goal of the ProvSQL project is to add support for semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
 PostgreSQL extension/module/plugin. It is work in progress at the moment.
 
 ## Features
 
-The provsql system currently support proper management of provenance
+The ProvSQL system currently support proper management of provenance
 attached to SQL queries, in the form of a provenance circuit, suitable
 both for regular Boolean provenance and arbitrary semiring provenance (in
 the universal semiring, or specialized to any semiring of choice). It
@@ -60,9 +60,9 @@ are all *monotone* queries.
 You can test your installation by running `make installcheck` as the
 PostgreSQL administrator user.
 
-## Using provsql
+## Using ProvSQL
 
-You can use provsql from any PostgreSQL extension by loading the
+You can use ProvSQL from any PostgreSQL extension by loading the
 `provsql` extension. See the file [setup.sql](test/sql/setup.sql)
 for an example on how to do this.
 
