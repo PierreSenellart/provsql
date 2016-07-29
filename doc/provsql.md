@@ -48,9 +48,9 @@ are all *monotone* queries.
    directories)
 
 3. Add the line 
-```
-shared_preload_libraries = 'provsql'
-```
+   ```
+   shared_preload_libraries = 'provsql'
+   ```
    to the postgresql.conf configuration file (required because the
    extension include *hooks*) and restart the PostgreSQL server (e.g.,
    with service postgresql restart on systemd-based distributions)
@@ -63,14 +63,16 @@ PostgreSQL administrator user.
 ## Using provsql
 
 You can use provsql from any PostgreSQL extension by loading the
-`provsql` extension. See the file [test/sql/setup.sql] for an example on
-how to do this.
+`provsql` extension. See the file [setup.sql](test/sql/setup.sql)
+for an example on how to do this.
 
 You then need to add provenance to an existing table using the
-[provsql.add_provenance] method. See [test/sql/add_provenance.sql] for an
-example. The table will have an extra `provsql` column added. This column
+[provsql.add_provenance] method.
+See [add_provenance.sql](test/sql/add_provenance.sql) for an example.
+The table will have an extra `provsql` column added. This column
 is handled in a special way and always represent, in query results, the
 provenance of each tuple as a UUID.
 
 You can then use this provenance to run computation in various semirings.
-See [test/sql/security.sql] and [test/sql/formula.sql] for two examples.
+See [security.sql](test/sql/security.sql) and
+[formula.sql](test/sql/formula.sql) for two examples.
