@@ -34,7 +34,7 @@ are all *monotone* queries.
    C compiler (both can be obtained on Debian-based Linux distributions
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
-   `postgresql-server-dev-9.5̀  package).
+   `postgresql-server-dev-9.5`  package).
 
 3. Finally, the `uuid-ossp` extension for PostgreSQL. On Debian-based
    systems, it is found in the `postgresql-contrib-9.5` package.
