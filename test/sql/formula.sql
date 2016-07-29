@@ -57,16 +57,24 @@ CREATE AGGREGATE formula_and(text)
   finalfunc = formula_state2formula
 );
 
+CREATE FUNCTION formula(token provenance_token, token2value regclass)
+  RETURNS text AS
+$$
+BEGIN
+  RETURN provenance_evaluate(
+    token,
+    token2value,
+    '⊤'::text,
+    'formula_or',
+    'formula_and');
+END
+$$ LANGUAGE plpgsql;
+
 /* Example of provenance evaluation */
 CREATE VIEW personal_name as SELECT name AS value FROM personal;
 CREATE TABLE result_formula AS SELECT 
   p1.city,
-  provenance_evaluate(
-    provenance(),
-    'personal_name',
-    '⊤'::text,
-    'formula_or',
-    'formula_and') AS formula
+  formula(provenance(), 'personal_name')
 FROM personal p1, personal p2
 WHERE p1.city = p2.city AND p1.id < p2.id
 GROUP BY p1.city
@@ -75,5 +83,4 @@ ORDER BY p1.city;
 SELECT remove_provenance('result_formula');
 SELECT * FROM result_formula;
 
-DROP VIEW personal_name;
 DROP TABLE result_formula;

@@ -4,7 +4,7 @@
  
 (1 row)
 
-   city   |    level     
+   city   |   security   
 ----------+--------------
  Berlin   | secret
  New York | restricted

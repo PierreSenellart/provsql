@@ -28,16 +28,24 @@ CREATE AGGREGATE security_max(classification_level)
   initcond = 'unclassified'
 );
 
+CREATE FUNCTION security(token provenance_token, token2value regclass)
+  RETURNS classification_level AS
+$$
+BEGIN
+  RETURN provenance_evaluate(
+    token,
+    token2value,
+    'unclassified'::classification_level,
+    'security_min',
+    'security_max');
+END
+$$ LANGUAGE plpgsql;
+
 /* Example of provenance evaluation */
 CREATE VIEW personal_level as SELECT classification AS value FROM personal;
 CREATE TABLE result_security AS SELECT 
   p1.city,
-  provenance_evaluate(
-    provenance(),
-    'personal_level',
-    'unclassified'::classification_level,
-    'security_min',
-    'security_max') AS level
+  security(provenance(),'personal_level')
 FROM personal p1, personal p2
 WHERE p1.city = p2.city AND p1.id < p2.id
 GROUP BY p1.city
@@ -46,5 +54,4 @@ ORDER BY p1.city;
 SELECT remove_provenance('result_security');
 SELECT * FROM result_security;
 
-DROP VIEW personal_level;
 DROP TABLE result_security;
