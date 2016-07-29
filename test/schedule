@@ -1,5 +1,11 @@
+# Setting up the database
 test: setup
 
+# Adding a provenance table
 test: add_provenance
 
+# Introducing a few semirings
 test: security formula
+
+# Test of various ProvSQL features and SQL language capabilities
+test: deterministic union_all union distinct
