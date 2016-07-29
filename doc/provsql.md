@@ -1,12 +1,12 @@
-# provsql
+# ProvSQL
 
-The goal of the provsql project is to add support for semiring provenance
+The goal of the ProvSQL project is to add support for semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
 PostgreSQL extension/module/plugin. It is work in progress at the moment.
 
 ## Features
 
-The provsql system currently support proper management of provenance
+The ProvSQL system currently support proper management of provenance
 attached to SQL queries, in the form of a provenance circuit, suitable
 both for regular Boolean provenance and arbitrary semiring provenance (in
 the universal semiring, or specialized to any semiring of choice). It
@@ -34,7 +34,7 @@ are all *monotone* queries.
    C compiler (both can be obtained on Debian-based Linux distributions
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
-   `postgresql-server-dev-9.5̀  package).
+   `postgresql-server-dev-9.5`  package).
 
 3. Finally, the `uuid-ossp` extension for PostgreSQL. On Debian-based
    systems, it is found in the `postgresql-contrib-9.5` package.
@@ -43,34 +43,49 @@ are all *monotone* queries.
 
 1. Compile the code with `make`.
 
-2. Install it in the PostgreSQL extensions directory with ̀`make install`
+2. Install it in the PostgreSQL extensions directory with `make install`
    (run as a user with rights to write the PostgreSQL installation
-   directories)
+   directories).
 
 3. Add the line 
-```
-shared_preload_libraries = 'provsql'
-```
+   ```
+   shared_preload_libraries = 'provsql'
+   ```
    to the postgresql.conf configuration file (required because the
    extension include *hooks*) and restart the PostgreSQL server (e.g.,
-   with service postgresql restart on systemd-based distributions)
+   with `service postgresql restart` on systemd-based distributions).
 
 ## Testing your installation
 
 You can test your installation by running `make installcheck` as the
 PostgreSQL administrator user.
 
-## Using provsql
+## Using ProvSQL
 
-You can use provsql from any PostgreSQL extension by loading the
-`provsql` extension. See the file [test/sql/setup.sql] for an example on
-how to do this.
+You can use ProvSQL from any PostgreSQL extension by loading the
+`provsql` extension. See the file [setup.sql](test/sql/setup.sql)
+for an example on how to do this.
 
 You then need to add provenance to an existing table using the
-[provsql.add_provenance] method. See [test/sql/add_provenance.sql] for an
-example. The table will have an extra `provsql` column added. This column
+`provsql.add_provenance(regclass)` user-defined function.
+See [add_provenance.sql](test/sql/add_provenance.sql) for an example.
+The table will have an extra `provsql` column added. This column
 is handled in a special way and always represent, in query results, the
 provenance of each tuple as a UUID.
 
 You can then use this provenance to run computation in various semirings.
-See [test/sql/security.sql] and [test/sql/formula.sql] for two examples.
+See [security.sql](test/sql/security.sql) and
+[formula.sql](test/sql/formula.sql) for two examples.
+
+## License
+
+ProvSQL is provided as open-source software under the MIT License. See [LICENSE](LICENSE).
+
+## Contact
+
+https://github.com/PierreSenellart/provsql
+
+Pierre Senellart <pierre@senellart.com>
+
+Bug reports and feature requests are
+preferably sent through the *Issues* feature of Github.
