@@ -43,7 +43,7 @@ are all *monotone* queries.
 
 1. Compile the code with `make`.
 
-2. Install it in the PostgreSQL extensions directory with ̀`make install`
+2. Install it in the PostgreSQL extensions directory with `make install`
    (run as a user with rights to write the PostgreSQL installation
    directories)
 
