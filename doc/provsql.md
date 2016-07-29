@@ -67,7 +67,7 @@ You can use provsql from any PostgreSQL extension by loading the
 for an example on how to do this.
 
 You then need to add provenance to an existing table using the
-[provsql.add_provenance] method.
+`provsql.add_provenance` method.
 See [add_provenance.sql](test/sql/add_provenance.sql) for an example.
 The table will have an extra `provsql` column added. This column
 is handled in a special way and always represent, in query results, the
