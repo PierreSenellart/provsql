@@ -132,15 +132,28 @@ static Bitmapset *remove_provenance_attributes_select(
     if(rt->expr->type==T_Var) {
       Var *v =(Var *) rt->expr;
 
-      if(rt->resname && !strcmp(rt->resname,PROVSQL_COLUMN_NAME) &&
-          v->vartype==constants->OID_TYPE_PROVENANCE_TOKEN) {
-        q->targetList=list_delete_cell(q->targetList, cell, prev);
+      if(v->vartype==constants->OID_TYPE_PROVENANCE_TOKEN) {
+        const char *colname;
 
-        removed=true;
-        ++nbRemoved;
-        
-        if(rt->ressortgroupref > 0)
-          ressortgrouprefs = bms_add_member(ressortgrouprefs, rt->ressortgroupref);
+        if(rt->resname)
+          colname=rt->resname;
+        else {
+          /* This case occurs, for example, when grouping by a column
+           * that is projected out */
+          RangeTblEntry *r = (RangeTblEntry *) list_nth(q->rtable, v->varno-1);
+          Value *val = (Value *) list_nth(r->eref->colnames, v->varattno-1);
+          colname = strVal(val);
+        }
+          
+        if(!strcmp(colname,PROVSQL_COLUMN_NAME)) {
+          q->targetList=list_delete_cell(q->targetList, cell, prev);
+
+          removed=true;
+          ++nbRemoved;
+
+          if(rt->ressortgroupref > 0)
+            ressortgrouprefs = bms_add_member(ressortgrouprefs, rt->ressortgroupref);
+        }
       }
 
       ++i;
@@ -347,8 +360,6 @@ static Query *process_query(
   bool has_union = false;
   bool supported=true;
 
-//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
-
   if(q->setOperations) {
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
     if(!stmt->all) {
@@ -362,6 +373,8 @@ static Query *process_query(
   if(prov_atts==NIL)
     return q;
   
+//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+
   if(q->hasAggs) {
     ereport(ERROR, (errmsg("Aggregation not supported on tables with provenance")));
     supported=false;
