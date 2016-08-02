@@ -350,6 +350,35 @@ static Query *rewrite_all_into_external_group_by(Query *q)
   return new_query;
 }
 
+static bool provenance_function_walker(Node *node, constants_t *constants) {
+  if(node==NULL)
+    return false;
+  
+  if(IsA(node, FuncExpr)) {
+    FuncExpr *f = (FuncExpr *) node;
+
+    if(f->funcid == constants->OID_FUNCTION_PROVENANCE)
+      return true;
+  }
+
+  return expression_tree_walker(node, provenance_function_walker, (void*) constants);
+}
+
+static bool provenance_function_in_group_by(
+    Query *q,
+    const constants_t *constants) {
+  ListCell *lc;
+  foreach(lc,q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    if(te->ressortgroupref > 0 &&
+       expression_tree_walker((Node*)te, provenance_function_walker, (constants_t*) constants)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static Query *process_query(
     Query *q,
     const constants_t *constants,
@@ -395,7 +424,9 @@ static Query *process_query(
       transform_distinct_into_group_by(q, constants);
   }
 
-  if(supported && q->groupClause) {
+  if(supported &&
+     q->groupClause &&
+     !provenance_function_in_group_by(q, constants)) {
     q->hasAggs=true;
   }
 
@@ -420,7 +451,7 @@ static Query *process_query(
         q,
         prov_atts,
         constants,
-        q->groupClause != NIL,
+        q->hasAggs,
         has_union);
   
     replace_provenance_function_by_expression(q, provsql, constants);

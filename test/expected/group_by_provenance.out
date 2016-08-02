@@ -1,0 +1,17 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   city   | formula  
+----------+----------
+ Berlin   | Ellen
+ Berlin   | Susan
+ New York | John
+ New York | Paul
+ Paris    | Dave
+ Paris    | Magdalen
+ Paris    | Nancy
+(7 rows)
+
