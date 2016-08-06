@@ -350,7 +350,9 @@ static Query *rewrite_all_into_external_group_by(Query *q)
   return new_query;
 }
 
-static bool provenance_function_walker(Node *node, constants_t *constants) {
+static bool provenance_function_walker(
+    Node *node, 
+    const constants_t *constants) {
   if(node==NULL)
     return false;
   
@@ -371,12 +373,71 @@ static bool provenance_function_in_group_by(
   foreach(lc,q->targetList) {
     TargetEntry *te = (TargetEntry *) lfirst(lc);
     if(te->ressortgroupref > 0 &&
-       expression_tree_walker((Node*)te, provenance_function_walker, (constants_t*) constants)) {
+       expression_tree_walker((Node*)te, provenance_function_walker, (void*) constants)) {
       return true;
     }
   }
 
   return false;
+}
+
+static bool has_provenance_walker(
+    Node *node,
+    const constants_t *constants) {
+  if(node==NULL)
+    return false;
+
+  if (IsA(node, Query)) {
+    Query *q = (Query *) node;
+    ListCell *rc;
+
+    if(query_tree_walker(q, has_provenance_walker, (void*) constants, 0))
+      return true;
+
+    foreach(rc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry*) lfirst(rc);
+      if(r->rtekind == RTE_RELATION) {
+        ListCell *lc;
+        AttrNumber attid=1;
+
+        foreach(lc,r->eref->colnames) {
+          Value *v = (Value *) lfirst(lc);
+
+          if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
+              get_atttype(r->relid,attid)==constants->OID_TYPE_PROVENANCE_TOKEN) {
+            return true;
+          }
+
+        ++attid;
+      }
+      } else if(r->rtekind == RTE_FUNCTION) {
+        ListCell *lc;
+        AttrNumber attid=1;
+
+        foreach(lc,r->functions) {
+          RangeTblFunction *func = (RangeTblFunction *) lfirst(lc);
+
+          if(func->funccolcount==1) {
+            FuncExpr *expr = (FuncExpr *) func->funcexpr;
+            if(expr->funcresulttype == constants->OID_TYPE_PROVENANCE_TOKEN
+                && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
+              return true;
+            }
+          }
+
+          attid+=func->funccolcount;
+        }
+      }
+    }
+  }
+
+  return expression_tree_walker(node, provenance_function_walker, (void*) constants);
+}
+
+static bool has_provenance(
+    Query *q,
+    const constants_t *constants) {
+  return has_provenance_walker((Node *) q, constants);
 }
 
 static Query *process_query(
@@ -388,6 +449,8 @@ static Query *process_query(
   Expr *provsql;
   bool has_union = false;
   bool supported=true;
+
+//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
@@ -402,8 +465,6 @@ static Query *process_query(
   if(prov_atts==NIL)
     return q;
   
-//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
-
   if(q->hasAggs) {
     ereport(ERROR, (errmsg("Aggregation not supported on tables with provenance")));
     supported=false;
@@ -470,9 +531,11 @@ static PlannedStmt *provsql_planner(
   if(q->commandType==CMD_SELECT) {
     constants_t constants;
     if(initialize_constants(&constants)) {
-      Query *new_query = process_query(q, &constants, false);
-      if(new_query != NULL)
-        q = new_query;
+      if(has_provenance(q,&constants)) {
+        Query *new_query = process_query(q, &constants, false);
+        if(new_query != NULL)
+          q = new_query;
+      }
     }
   }
 
