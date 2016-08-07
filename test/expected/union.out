@@ -4,12 +4,12 @@
  
 (1 row)
 
- classification |       formula       
-----------------+---------------------
+ classification |        formula         
+----------------+------------------------
  unclassified   | John
- restricted     | (Nancy∨Paul∨Nancy)
- confidential   | (Dave∨Dave)
- secret         | (Ellen∨Susan)
- top_secret     | (Magdalen∨Magdalen)
+ restricted     | (Nancy ⊕ Paul ⊕ Nancy)
+ confidential   | (Dave ⊕ Dave)
+ secret         | (Ellen ⊕ Susan)
+ top_secret     | (Magdalen ⊕ Magdalen)
 (5 rows)
 

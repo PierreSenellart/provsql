@@ -1,32 +1,32 @@
 \set ECHO none
 SET search_path TO public, provsql;
 
-/* The provenance formula semiring */
+/* The provenance formula m-semiring */
 CREATE TYPE formula_state AS (
   formula text,
   nbargs int
 );
 
-CREATE FUNCTION formula_or_state(state formula_state, value text)
+CREATE FUNCTION formula_plus_state(state formula_state, value text)
   RETURNS formula_state AS
 $$
 BEGIN
   IF state IS NULL OR state.nbargs=0 THEN
     RETURN (value,1);
   ELSE
-    RETURN (concat(state.formula,'∨',value),state.nbargs+1);
+    RETURN (concat(state.formula,' ⊕ ',value),state.nbargs+1);
   END IF;
 END
 $$ LANGUAGE plpgsql IMMUTABLE;
 
-CREATE FUNCTION formula_and_state(state formula_state, value text)
+CREATE FUNCTION formula_times_state(state formula_state, value text)
   RETURNS formula_state AS
 $$
 BEGIN    
   IF state IS NULL OR state.nbargs=0 THEN
     RETURN (value,1);
   ELSE
-    RETURN (concat(state.formula,'∧',value),state.nbargs+1);
+    RETURN (concat(state.formula,' ⊗ ',value),state.nbargs+1);
   END IF;
 END
 $$ LANGUAGE plpgsql IMMUTABLE;
@@ -41,21 +41,26 @@ $$
     END;
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-CREATE AGGREGATE formula_or(text)
+CREATE AGGREGATE formula_plus(text)
 (
-  sfunc = formula_or_state,
+  sfunc = formula_plus_state,
   stype = formula_state,
-  initcond = '(⊥,0)',
+  initcond = '(𝟘,0)',
   finalfunc = formula_state2formula
 );
 
-CREATE AGGREGATE formula_and(text)
+CREATE AGGREGATE formula_times(text)
 (
-  sfunc = formula_and_state,
+  sfunc = formula_times_state,
   stype = formula_state,
-  initcond = '(⊤,0)',
+  initcond = '(𝟙,0)',
   finalfunc = formula_state2formula
 );
+
+CREATE FUNCTION formula_monus(formula1 text, formula2 text) RETURNS text AS
+$$
+  SELECT concat('(',formula1,' ⊖ ',formula2,')')
+$$ LANGUAGE SQL IMMUTABLE STRICT;
 
 CREATE FUNCTION formula(token provenance_token, token2value regclass)
   RETURNS text AS
@@ -64,9 +69,10 @@ BEGIN
   RETURN provenance_evaluate(
     token,
     token2value,
-    '⊤'::text,
-    'formula_or',
-    'formula_and');
+    '𝟙'::text,
+    'formula_plus',
+    'formula_times',
+    'formula_monus');
 END
 $$ LANGUAGE plpgsql;
 

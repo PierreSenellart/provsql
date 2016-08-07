@@ -4,10 +4,10 @@
  
 (1 row)
 
-   city   |                     formula                     
-----------+-------------------------------------------------
- Berlin   | (Ellen∧Susan)
- New York | (John∧Paul)
- Paris    | ((Dave∧Nancy)∨(Dave∧Magdalen)∨(Magdalen∧Nancy))
+   city   |                          formula                          
+----------+-----------------------------------------------------------
+ Berlin   | (Ellen ⊗ Susan)
+ New York | (John ⊗ Paul)
+ Paris    | ((Dave ⊗ Nancy) ⊕ (Dave ⊗ Magdalen) ⊕ (Magdalen ⊗ Nancy))
 (3 rows)
 

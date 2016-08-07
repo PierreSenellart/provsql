@@ -112,8 +112,14 @@ CREATE FUNCTION provenance_monus(token1 provenance_token, token2 provenance_toke
   RETURNS provenance_token AS
 $$
 DECLARE
-  monus_token provenance_token;
+  monus_token uuid;
 BEGIN
+  IF token2 IS NULL THEN
+    -- Special semantics, because of a LEFT OUTER JOIN used by the
+    -- difference operator: token2 NULL means there is no second argument
+    RETURN token1;
+  END IF;
+
   monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
 
   BEGIN
@@ -256,7 +262,7 @@ BEGIN
     IF monus_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
     ELSE
-      EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
+      EXECUTE format('SELECT %I(a[1],a[2]) FROM (SELECT array_agg(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L,%L)) AS a FROM provsql.provenance_circuit_wire WHERE f=%L) t',
         monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
       INTO result;
     END IF;
