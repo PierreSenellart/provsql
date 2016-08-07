@@ -440,6 +440,40 @@ static bool has_provenance(
   return has_provenance_walker((Node *) q, constants);
 }
 
+static void transform_except_into_join(
+    Query *q,
+    const constants_t *constants) {
+  SetOperationStmt *setOps = q->setOperations;
+  RangeTblEntry *rte = makeNode(RangeTblEntry);
+  FromExpr *fe = makeNode(FromExpr);
+  JoinExpr *je = makeNode(JoinExpr);
+
+  // TODO: Make join expression (as a BoolExpr and for all columns...)
+
+  rte->rtekind = RTE_JOIN;
+  rte->jointype = JOIN_LEFT;
+  rte->eref = // TODO ;
+  rte->joinaliasvars = // TODO;
+  
+  q->rtable = lappend(q->rtable, rte);
+
+  je->jointype = RTE_JOIN;
+  // Rewriting has already been done, q->setOps has simple RangeTblRef as
+  // children
+  je->larg = q->setOps->larg;
+  je->rarg = q->setOps->rarg;
+  je->quals = expr;
+  je->rtindex=list_length(q->rtable);
+
+  fe->fromlist = list_make1(je);
+  
+  q->jointree = fe;
+
+  // Add group by in the right-side table
+
+  q->setOperations = NIL;
+}
+
 static Query *process_query(
     Query *q,
     const constants_t *constants,
@@ -450,9 +484,12 @@ static Query *process_query(
   bool has_union = false;
   bool supported=true;
 
-//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
+    // TODO: Nest set operations as subqueries in FROM,
+    // so that we only do set operations on base tables 
+
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
     if(!stmt->all) {
       q = rewrite_all_into_external_group_by(q);
@@ -490,6 +527,24 @@ static Query *process_query(
       transform_distinct_into_group_by(q, constants);
   }
 
+  if(supported && q->setOperations) {
+    SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
+
+    if(stmt->op == SETOP_UNION) {
+      stmt->colTypes=lappend_oid(stmt->colTypes,
+          constants->OID_TYPE_PROVENANCE_TOKEN);
+      stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
+      stmt->colCollations=lappend_int(stmt->colCollations, 0);
+
+      has_union = true;
+    } else if(stmt->op == SETOP_EXCEPT) {
+      transform_except_into_join(q, constants);
+    } else {
+      ereport(ERROR, (errmsg("Set operations other than UNION not supported by provsql")));
+      supported=false;
+    }
+  }
+  
   if(supported &&
      q->groupClause &&
      !provenance_function_in_group_by(q, constants)) {
@@ -508,21 +563,6 @@ static Query *process_query(
     }
   }
 
-  if(supported && q->setOperations) {
-    SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
-
-    if(stmt->op == SETOP_UNION) {
-      stmt->colTypes=lappend_oid(stmt->colTypes,
-          constants->OID_TYPE_PROVENANCE_TOKEN);
-      stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
-      stmt->colCollations=lappend_int(stmt->colCollations, 0);
-
-      has_union = true;
-    } else {
-      ereport(ERROR, (errmsg("Set operations other than UNION not supported by provsql")));
-      supported=false;
-    }
-  }
   
   if(supported) {
     provsql = add_provenance_to_select(
@@ -535,7 +575,7 @@ static Query *process_query(
     replace_provenance_function_by_expression(q, provsql, constants);
   }
 
-//  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
+  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
   return q;
 }
