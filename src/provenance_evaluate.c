@@ -14,21 +14,26 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   Datum token2value = PG_GETARG_DATUM(1);
   Oid element_type = get_fn_expr_argtype(fcinfo->flinfo, 2);
   Datum element_one = PG_ARGISNULL(2)?((Datum) 0):PG_GETARG_DATUM(2);
-  Datum or_function = PG_GETARG_DATUM(3);
-  Datum and_function = PG_GETARG_DATUM(4);
+  Datum plus_function = PG_GETARG_DATUM(3);
+  Datum times_function = PG_GETARG_DATUM(4);
+  Datum monus_function = PG_GETARG_DATUM(5);
 
   constants_t constants;
   bool isnull;
   Datum result;
+  char nulls[7]={' ',' ',' ',' ',' ',' ',' '};
   
-  Datum arguments[6]={token,token2value,element_one,element_type,or_function,and_function};
-  Oid argtypes[6];
+  Datum arguments[7]={token,token2value,element_one,element_type,plus_function,times_function,monus_function};
+  Oid argtypes[7];
+  
+  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
+    PG_RETURN_DATUM(element_one);
   
   if(PG_ARGISNULL(2) || PG_ARGISNULL(3) || PG_ARGISNULL(4))
     PG_RETURN_NULL();
 
-  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
-    PG_RETURN_DATUM(element_one);
+  if(PG_ARGISNULL(5)) // No monus function provided
+    nulls[6]='n';
 
   if(!initialize_constants(&constants)) {
     elog(ERROR, "Cannot find provsql schema");
@@ -40,15 +45,16 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   argtypes[3]=REGTYPEOID;
   argtypes[4]=REGPROCOID;
   argtypes[5]=REGPROCOID;
+  argtypes[6]=REGPROCOID;
 
   SPI_connect();
 
   if(SPI_execute_with_args(
-        "SELECT provsql.provenance_evaluate($1,$2,$3,$4,$5,$6)",
-        6,
+        "SELECT provsql.provenance_evaluate($1,$2,$3,$4,$5,$6,$7)",
+        7,
         argtypes,
         arguments,
-        NULL,
+        nulls,
         true,
         1) != SPI_OK_SELECT) {
     elog(ERROR, "Cannot execute real provenance_evaluate function");

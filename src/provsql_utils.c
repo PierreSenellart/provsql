@@ -24,8 +24,9 @@ bool initialize_constants(constants_t *constants)
   constants->OID_TYPE_PROVENANCE_TOKEN = GetSysCacheOid2(TYPENAMENSP,CStringGetDatum("provenance_token"),ObjectIdGetDatum(constants->OID_SCHEMA_PROVSQL));
   constants->OID_TYPE_UUID = TypenameGetTypid("uuid");
   constants->OID_TYPE_UUID_ARRAY = TypenameGetTypid("_uuid");
-  constants->OID_FUNCTION_PROVENANCE_AND = GetFuncOid("provenance_and");
-  constants->OID_FUNCTION_PROVENANCE_AGG = GetFuncOid("provenance_agg");
+  constants->OID_FUNCTION_PROVENANCE_AGG_PLUS = GetFuncOid("provenance_agg");
+  constants->OID_FUNCTION_PROVENANCE_TIMES = GetFuncOid("provenance_times");
+  constants->OID_FUNCTION_PROVENANCE_MONUS = GetFuncOid("provenance_monus");
   constants->OID_FUNCTION_PROVENANCE = GetFuncOid("provenance");
 
   return true;

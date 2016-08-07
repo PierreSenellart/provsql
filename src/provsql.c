@@ -201,7 +201,7 @@ static Expr *add_provenance_to_select(
     array->location=-1;
 
     expr=makeNode(FuncExpr);
-    expr->funcid=constants->OID_FUNCTION_PROVENANCE_AND;
+    expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
     expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
     expr->funcvariadic=true;
     expr->args=list_make1(array);
@@ -214,7 +214,7 @@ static Expr *add_provenance_to_select(
       te_inner->resno=1;
       te_inner->expr=(Expr*)expr;
 
-      agg->aggfnoid=constants->OID_FUNCTION_PROVENANCE_AGG;
+      agg->aggfnoid=constants->OID_FUNCTION_PROVENANCE_AGG_PLUS;
       agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
       agg->args=list_make1(te_inner);
       agg->aggkind=AGGKIND_NORMAL;

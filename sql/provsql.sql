@@ -4,9 +4,9 @@ CREATE SCHEMA provsql;
 
 SET search_path TO provsql;
 
-CREATE DOMAIN provenance_token AS UUID;
+CREATE DOMAIN provenance_token AS UUID NOT NULL;
 
-CREATE TYPE provenance_gate AS ENUM('and','or','not','input');
+CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','zero','one');
 
 CREATE TABLE provenance_circuit_gate(
   gate provenance_token PRIMARY KEY,
@@ -59,8 +59,13 @@ $$
  -- uuid_generate_v5(uuid_ns_url(),'http://pierre.senellart.com/software/provsql/')
  SELECT '920d4f02-8718-5319-9532-d4ab83a64489'::uuid
 $$ LANGUAGE SQL IMMUTABLE;
+      
+INSERT INTO provenance_circuit_gate
+  VALUES(public.uuid_generate_v5(uuid_ns_provsql(),'zero'),'zero');
+INSERT INTO provenance_circuit_gate
+  VALUES(public.uuid_generate_v5(uuid_ns_provsql(),'one'),'one');
 
-CREATE FUNCTION uuid_provsql_concat(state provenance_token, token provenance_token)
+CREATE FUNCTION uuid_provsql_concat(state uuid, token provenance_token)
   RETURNS provenance_token AS
 $$
   SELECT
@@ -77,90 +82,106 @@ CREATE AGGREGATE uuid_provsql_agg(provenance_token) (
   STYPE = provenance_token
 );
 
-CREATE FUNCTION provenance_and(VARIADIC tokens uuid[])
+CREATE FUNCTION provenance_times(VARIADIC tokens uuid[])
   RETURNS provenance_token AS
 $$
 DECLARE
-  and_token provenance_token;
-  token provenance_token;
+  times_token uuid;
 BEGIN
   CASE array_length(tokens,1)
     WHEN 0 THEN
-      and_token:=NULL;
+      times_token:=uuid_generate_v5(uuid_ns_provsql(),'one');
     WHEN 1 THEN
-      and_token:=tokens[1];
+      times_token:=tokens[1];
     ELSE
-      SELECT uuid_generate_v5(uuid_ns_provsql(),concat('and',uuid_provsql_agg(t)))
-      INTO and_token
+      SELECT uuid_generate_v5(uuid_ns_provsql(),concat('times',uuid_provsql_agg(t)))
+      INTO times_token
       FROM unnest(tokens) t;
 
       BEGIN
-        INSERT INTO provenance_circuit_gate VALUES(and_token,'and');
-        INSERT INTO provenance_circuit_wire SELECT and_token,t FROM unnest(tokens) t;
+        INSERT INTO provenance_circuit_gate VALUES(times_token,'times');
+        INSERT INTO provenance_circuit_wire SELECT times_token, t FROM unnest(tokens) t;
       EXCEPTION WHEN unique_violation THEN
       END;
   END CASE;
-  RETURN and_token;
+  RETURN times_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION provenance_or(state provenance_token, token provenance_token)
+CREATE FUNCTION provenance_monus(token1 provenance_token, token2 provenance_token)
   RETURNS provenance_token AS
 $$
 DECLARE
-  or_token provenance_token;
+  monus_token provenance_token;
 BEGIN
-  IF token IS NULL THEN
-    RETURN NULL;
-  END IF;
+  monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
 
-  IF state IS NULL THEN
-    or_token:=uuid_generate_v4();
-    INSERT INTO provenance_circuit_gate VALUES(or_token,'or');
-  ELSE
-    or_token:=state;
-  END IF;
-  INSERT INTO provenance_circuit_wire VALUES(or_token,token);
-
-  RETURN or_token;
+  BEGIN
+    INSERT INTO provenance_circuit_gate VALUES(monus_token,'monus');
+    INSERT INTO provenance_circuit_wire VALUES(monus_token,token1);
+    INSERT INTO provenance_circuit_wire VALUES(monus_token,token2);
+  EXCEPTION WHEN unique_violation THEN
+  END;
+  RETURN monus_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION provenance_or_make_deterministic(state provenance_token)
+CREATE OR REPLACE FUNCTION provenance_plus
+  (state provenance_token, token provenance_token)
+  RETURNS provenance_token AS
+$$
+DECLARE
+  plus_token uuid;
+BEGIN
+  IF state IS NULL THEN
+    plus_token:=uuid_generate_v4();
+    INSERT INTO provenance_circuit_gate VALUES(plus_token,'plus');
+  ELSE
+    plus_token:=state;
+  END IF;
+  INSERT INTO provenance_circuit_wire VALUES(plus_token,token);
+
+  RETURN plus_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION provenance_plus_make_deterministic(state provenance_token)
   RETURNS provenance_token AS
 $$
 DECLARE
   c INTEGER;
-  or_token provenance_token;
+  plus_token uuid;
 BEGIN
   SELECT COUNT(*) INTO c FROM provenance_circuit_wire WHERE f=state;
 
-  IF c = 1 THEN
-    SELECT t INTO or_token FROM provenance_circuit_wire WHERE f=state;
+  IF c = 0 THEN
+    plus_token := uuid_generate_v5(uuid_ns_provsql(),'zero');
+  ELSIF c = 1 THEN
+    SELECT t INTO STRICT plus_token FROM provenance_circuit_wire WHERE f=state;
     DELETE FROM provenance_circuit_wire WHERE f=state;
   ELSE
-    SELECT uuid_generate_v5(uuid_ns_provsql(),concat('or',uuid_provsql_agg(t)))
-    INTO or_token
+    SELECT uuid_generate_v5(uuid_ns_provsql(),concat('plus',uuid_provsql_agg(t)))
+    INTO plus_token
     FROM provenance_circuit_wire
     WHERE f=state;
 
     BEGIN
-      INSERT INTO provenance_circuit_gate VALUES(or_token,'or');
-      UPDATE provenance_circuit_wire SET f=or_token WHERE f=state;
+      INSERT INTO provenance_circuit_gate VALUES(plus_token,'plus');
+      UPDATE provenance_circuit_wire SET f=plus_token WHERE f=state;
     EXCEPTION WHEN unique_violation THEN
       DELETE FROM provenance_circuit_wire WHERE f=state;
     END;
   END IF;
   DELETE FROM provenance_circuit_gate WHERE gate=state;
 
-  RETURN or_token;
+  RETURN plus_token;
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE AGGREGATE provenance_agg(token provenance_token) (
-  SFUNC = provenance_or,
+  SFUNC = provenance_plus,
   STYPE = provenance_token,
-  FINALFUNC = provenance_or_make_deterministic
+  FINALFUNC = provenance_plus_make_deterministic
 );
 
 CREATE OR REPLACE FUNCTION trim_circuit()
@@ -205,8 +226,9 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
   token2value regclass,
   element_one anyelement,
   value_type regtype,
-  or_function regproc,
-  and_function regproc)
+  plus_function regproc,
+  times_function regproc,
+  monus_function regproc)
   RETURNS anyelement AS
 $$
 DECLARE
@@ -226,14 +248,28 @@ BEGIN
     IF result IS NULL THEN
       result:=element_one;
     END IF;
-  ELSIF rec.gate_type='or' THEN
-    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
-      or_function,token2value,element_one,value_type,value_type,or_function,and_function,token)
+  ELSIF rec.gate_type='plus' THEN
+    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
+      plus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
     INTO result;
-  ELSIF rec.gate_type='and' THEN
-    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
-      and_function,token2value,element_one,value_type,value_type,or_function,and_function,token)
+  ELSIF rec.gate_type='times' THEN
+    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
+      times_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
     INTO result;
+  ELSIF rec.gate_type='monus' THEN
+    IF monus_function IS NULL THEN
+      RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
+    ELSE
+      EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
+        monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
+      INTO result;
+    END IF;
+  ELSIF rec.gate_type='zero' THEN
+    EXECUTE format('SELECT %I(a) FROM (SELECT %L::%I AS a WHERE FALSE) temp',plus_function,element_one,value_type) INTO result;
+  ELSIF rec.gate_type='one' THEN
+    EXECUTE format('SELECT %L::%I',element_one,value_type) INTO result;
+  ELSE
+    RAISE EXCEPTION USING MESSAGE='Unknown gate type';
   END IF;
   RETURN result;
 END
@@ -243,8 +279,9 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
   token provenance_token,
   token2value regclass,
   element_one anyelement,
-  or_function regproc,
-  and_function regproc)
+  plus_function regproc,
+  times_function regproc,
+  monus_function regproc = NULL)
   RETURNS anyelement AS
   'provsql','provenance_evaluate' LANGUAGE C;
 
