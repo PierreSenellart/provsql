@@ -464,11 +464,6 @@ static Query *process_query(
   
   if(prov_atts==NIL)
     return q;
-  
-  if(q->hasAggs) {
-    ereport(ERROR, (errmsg("Aggregation not supported on tables with provenance")));
-    supported=false;
-  }
 
   if(!subquery) {
     Bitmapset *removed_sortgrouprefs = NULL;
@@ -476,9 +471,19 @@ static Query *process_query(
     if(removed_sortgrouprefs != NULL)
       remove_provenance_attribute_groupref(q, constants, removed_sortgrouprefs);
   }
+  
+  if(q->hasAggs) {
+    ereport(WARNING, (errmsg("Aggregation not supported by provsql")));
+    supported=false;
+  }
+
+  if(q->hasSubLinks) {
+    ereport(WARNING, (errmsg("Subqueries in WHERE clause are not supported by provsql")));
+    supported=false;
+  }
 
   if(supported && q->distinctClause) {
-    if(list_length(q->distinctClause) < list_length(q->targetList)) {
+    if(q->hasDistinctOn || list_length(q->distinctClause) < list_length(q->targetList)) {
       ereport(WARNING, (errmsg("DISTINCT ON not supported by provsql")));
       supported=false;
     } else 
