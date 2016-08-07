@@ -26,10 +26,7 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   Datum arguments[7]={token,token2value,element_one,element_type,plus_function,times_function,monus_function};
   Oid argtypes[7];
   
-  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
-    PG_RETURN_DATUM(element_one);
-  
-  if(PG_ARGISNULL(2) || PG_ARGISNULL(3) || PG_ARGISNULL(4))
+  if(PG_ARGISNULL(1) || PG_ARGISNULL(2) || PG_ARGISNULL(3) || PG_ARGISNULL(4))
     PG_RETURN_NULL();
 
   if(PG_ARGISNULL(5)) // No monus function provided

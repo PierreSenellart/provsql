@@ -235,10 +235,6 @@ DECLARE
   rec record;
   result ALIAS FOR $0;
 BEGIN
-  IF token IS NULL THEN
-    RETURN element_one;
-  END IF;
-
   SELECT gate_type INTO rec FROM provsql.provenance_circuit_gate WHERE gate = token;
   
   IF rec IS NULL THEN

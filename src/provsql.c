@@ -486,7 +486,7 @@ static Query *process_query(
   }
 
   if(supported &&
-     q->groupClause &&
+     (q->groupClause || q->groupingSets) &&
      !provenance_function_in_group_by(q, constants)) {
     q->hasAggs=true;
   }
