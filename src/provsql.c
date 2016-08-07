@@ -486,9 +486,21 @@ static Query *process_query(
   }
 
   if(supported &&
-     (q->groupClause || q->groupingSets) &&
+     q->groupClause &&
      !provenance_function_in_group_by(q, constants)) {
     q->hasAggs=true;
+  }
+
+  if(supported && q->groupingSets) {
+    if(q->groupClause || 
+       list_length(q->groupingSets)>1 ||
+       ((GroupingSet *)linitial(q->groupingSets))->kind != GROUPING_SET_EMPTY) {
+      ereport(WARNING, (errmsg("GROUPING SETS, CUBE, and ROLLUP are not supported")));
+      supported=false;
+    } else {
+      // Simple GROUP BY ()
+      q->hasAggs=true;
+    }
   }
 
   if(supported && q->setOperations) {
