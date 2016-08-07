@@ -84,7 +84,7 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
         // provenance information
       } else { // Semijoin (should be feasible, but check whether the second provenance information is available)
                // Antijoin (feasible with negation)
-       ereport(WARNING, (errmsg("JOIN type not supported by provsql")));
+       ereport(ERROR, (errmsg("JOIN type not supported by provsql")));
       }
     } else if(r->rtekind == RTE_FUNCTION) {
       ListCell *lc;
@@ -100,13 +100,13 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
             prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,attid,constants));
           }
         } else {
-          ereport(WARNING, (errmsg("FROM function with multiple output attributes are not supported by provsql")));
+          ereport(ERROR, (errmsg("FROM function with multiple output attributes not supported by provsql")));
         }
 
         attid+=func->funccolcount;
       }
     } else {
-      ereport(WARNING, (errmsg("FROM clause unsupported by provsql")));
+      ereport(ERROR, (errmsg("FROM clause unsupported by provsql")));
     }
 
     ++rteid;
@@ -473,18 +473,18 @@ static Query *process_query(
   }
   
   if(q->hasAggs) {
-    ereport(WARNING, (errmsg("Aggregation not supported by provsql")));
+    ereport(ERROR, (errmsg("Aggregation not supported by provsql")));
     supported=false;
   }
 
   if(q->hasSubLinks) {
-    ereport(WARNING, (errmsg("Subqueries in WHERE clause are not supported by provsql")));
+    ereport(ERROR, (errmsg("Subqueries in WHERE clause not supported by provsql")));
     supported=false;
   }
 
   if(supported && q->distinctClause) {
     if(q->hasDistinctOn || list_length(q->distinctClause) < list_length(q->targetList)) {
-      ereport(WARNING, (errmsg("DISTINCT ON not supported by provsql")));
+      ereport(ERROR, (errmsg("DISTINCT ON not supported by provsql")));
       supported=false;
     } else 
       transform_distinct_into_group_by(q, constants);
@@ -500,7 +500,7 @@ static Query *process_query(
     if(q->groupClause || 
        list_length(q->groupingSets)>1 ||
        ((GroupingSet *)linitial(q->groupingSets))->kind != GROUPING_SET_EMPTY) {
-      ereport(WARNING, (errmsg("GROUPING SETS, CUBE, and ROLLUP are not supported")));
+      ereport(ERROR, (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql")));
       supported=false;
     } else {
       // Simple GROUP BY ()
@@ -519,7 +519,7 @@ static Query *process_query(
 
       has_union = true;
     } else {
-      ereport(WARNING, (errmsg("Set operations other than UNION not supported by provsql")));
+      ereport(ERROR, (errmsg("Set operations other than UNION not supported by provsql")));
       supported=false;
     }
   }
