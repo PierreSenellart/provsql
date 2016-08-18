@@ -41,10 +41,12 @@ are all *monotone* queries.
 
 ## Installation
 
-1. Compile the code with `make`.
+1. Compile the code with `make`. If you have several installed versions
+   of PostgreSQL, you can change the version the module is compiled
+   against by changing the reference to `pg_config` in the Makefile.
 
 2. Install it in the PostgreSQL extensions directory with `make install`
-   (run as a user with rights to write the PostgreSQL installation
+   (run as a user with rights to write to the PostgreSQL installation
    directories).
 
 3. Add the line 
@@ -57,8 +59,10 @@ are all *monotone* queries.
 
 ## Testing your installation
 
-You can test your installation by running `make installcheck` as the
-PostgreSQL administrator user.
+You can test your installation by running `make installcheck` as a
+PostgreSQL administrator user (if you do not want to run this as the
+default administrator user, you can make yourself a PostgreSQL
+administrator with ``ALTER USER your_login WITH SUPERUSER``).
 
 ## Using ProvSQL
 
@@ -76,6 +80,11 @@ provenance of each tuple as a UUID.
 You can then use this provenance to run computation in various semirings.
 See [security.sql](test/sql/security.sql) and
 [formula.sql](test/sql/formula.sql) for two examples.
+
+## Uninstalling
+
+You can uninstall ProvSQL by running `make uninstall` (run as a user with
+rights to write to the PostgreSQL installation directories).
 
 ## License
 
