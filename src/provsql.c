@@ -1,4 +1,6 @@
+#include "fmgr.h"
 #include "postgres.h"
+#include "miscadmin.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
 #include "nodes/nodeFuncs.h"
@@ -6,7 +8,6 @@
 #include "parser/parse_oper.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
-#include "miscadmin.h"
 
 #include "provsql_utils.h"
 
