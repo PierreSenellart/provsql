@@ -6,10 +6,13 @@
 #include "parser/parse_oper.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
+#include "miscadmin.h"
 
 #include "provsql_utils.h"
 
 PG_MODULE_MAGIC;
+
+bool provsql_shared_library_loaded = false;
 
 static const char *PROVSQL_COLUMN_NAME="provsql";
 
@@ -565,7 +568,12 @@ static PlannedStmt *provsql_planner(
 void _PG_init(void)
 {
   prev_planner = planner_hook;
-  planner_hook = provsql_planner;
+
+  if(process_shared_preload_libraries_in_progress) {
+    planner_hook = provsql_planner;
+  
+    provsql_shared_library_loaded=true;
+  }
 }
 
 void _PG_fini(void)

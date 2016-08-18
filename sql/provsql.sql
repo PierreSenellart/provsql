@@ -288,11 +288,7 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
   'provsql','provenance_evaluate' LANGUAGE C;
 
 CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
-$$
-BEGIN
-  RAISE EXCEPTION USING MESSAGE='provenance() called on a table without provenance';
-END
-$$ LANGUAGE plpgsql;
+ 'provsql', 'provenance' LANGUAGE C;
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 GRANT SELECT ON provenance_circuit_gate TO PUBLIC;

@@ -15,4 +15,6 @@ typedef struct constants_t {
 } constants_t;
 
 bool initialize_constants(constants_t *constants);
+
+extern bool provsql_shared_library_loaded;
 #endif /* PROVSQL_UTILS_H */
