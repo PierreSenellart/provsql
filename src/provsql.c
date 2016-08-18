@@ -131,8 +131,9 @@ static Bitmapset *remove_provenance_attributes_select(
   int nbRemoved=0;
   int i=0;
   Bitmapset *ressortgrouprefs = NULL;
+  ListCell *cell, *prev;
 
-  for(ListCell *cell=list_head(q->targetList), *prev=NULL;
+  for(cell=list_head(q->targetList), prev=NULL;
       cell!=NULL
       ;) {
     TargetEntry *rt = (TargetEntry *) lfirst(cell);
@@ -293,9 +294,12 @@ static void transform_distinct_into_group_by(Query *q, const constants_t *consta
 static void remove_provenance_attribute_groupref(Query *q, const constants_t *constants, const Bitmapset *removed_sortgrouprefs)
 {
   List **lists[3]={&q->groupClause,&q->distinctClause,&q->sortClause};
+  int i=0;
 
-  for(int i=0;i<3;++i) {
-    for(ListCell *cell=list_head(*lists[i]), *prev=NULL;
+  for(i=0;i<3;++i) {
+    ListCell *cell, *prev;
+
+    for(cell=list_head(*lists[i]), prev=NULL;
         cell!=NULL
         ;) {
       SortGroupClause *sgc = (SortGroupClause *) lfirst(cell);
