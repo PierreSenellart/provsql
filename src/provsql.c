@@ -1,5 +1,5 @@
-#include "fmgr.h"
 #include "postgres.h"
+#include "fmgr.h"
 #include "miscadmin.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
