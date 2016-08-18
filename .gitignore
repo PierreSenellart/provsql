@@ -2,3 +2,4 @@
 *.so
 src/*.o
 sql/provsql--?.?.sql
+test/schedule
