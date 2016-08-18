@@ -1,6 +1,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "pg_config.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
 #include "nodes/nodeFuncs.h"
@@ -10,6 +11,10 @@
 #include "utils/lsyscache.h"
 
 #include "provsql_utils.h"
+
+#if PG_VERSION_NUM < 90400
+#error "ProvSQL requires PostgreSQL version 9.4 or later"
+#endif
 
 PG_MODULE_MAGIC;
 
@@ -500,6 +505,8 @@ static Query *process_query(
     q->hasAggs=true;
   }
 
+#if PG_VERSION_NUM >= 90500
+  /* GROUPING SETS were introduced in version 9.5 of PostgreSQL */
   if(supported && q->groupingSets) {
     if(q->groupClause || 
        list_length(q->groupingSets)>1 ||
@@ -511,6 +518,7 @@ static Query *process_query(
       q->hasAggs=true;
     }
   }
+#endif
 
   if(supported && q->setOperations) {
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;

@@ -26,18 +26,18 @@ are all *monotone* queries.
 
 ## Prerequisites
 
-1. A running install of PostgreSQL. The extension has currently been
-   tested with version 9.5.3 of PostgreSQL, though it should work with
-   slightly older versions (if it does not, a bug report is appreciated).
+1. An install of PostgreSQL >= 9.4. The extension has currently been
+   tested with versions 9.4 and 9.5 of PostgreSQL (if the extension does
+   not work on a specific version, a bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
    C compiler (both can be obtained on Debian-based Linux distributions
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
-   `postgresql-server-dev-9.5`  package).
+   `postgresql-server-dev-9.x`  package).
 
 3. Finally, the `uuid-ossp` extension for PostgreSQL. On Debian-based
-   systems, it is found in the `postgresql-contrib-9.5` package.
+   systems, it is found in the `postgresql-contrib-9.x` package.
 
 ## Installation
 

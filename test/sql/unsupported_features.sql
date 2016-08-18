@@ -10,6 +10,4 @@ SELECT * FROM personal WHERE city IN (SELECT city FROM personal);
 
 SELECT DISTINCT ON (city) * FROM personal;
 
-SELECT city FROM personal GROUP BY GROUPING SETS ((), (city));
-
 SELECT * FROM personal INTERSECT SELECT * FROM personal;
