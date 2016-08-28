@@ -15,7 +15,7 @@ EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql test/schedule
 # variable with empty value
 EMPTY = 
 REGRESS = $(EMPTY) 
-REGRESS_OPTS = --inputdir=test --load-language=plpgsql --outputdir=$(shell mktemp -d --tmpdir tmp.provsqlXXXX) --schedule test/schedule
+REGRESS_OPTS = --inputdir=test --load-language=plpgsql --outputdir=$(shell mktemp -d /tmp/tmp.provsqlXXXX) --schedule test/schedule
 
 all: $(DATA) $(MODULE_big).so test/schedule
 
