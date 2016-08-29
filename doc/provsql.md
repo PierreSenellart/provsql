@@ -27,17 +27,20 @@ are all *monotone* queries.
 ## Prerequisites
 
 1. An install of PostgreSQL >= 9.4. The extension has currently been
-   tested with versions 9.4 and 9.5 of PostgreSQL (if the extension does
-   not work on a specific version, a bug report is appreciated).
+   tested with versions 9.4 and 9.5 of PostgreSQL, under Linux and
+   Mac OS X (if the extension does not work on a specific version or
+   operating system, a bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
    C compiler (both can be obtained on Debian-based Linux distributions
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
-   `postgresql-server-dev-9.x`  package).
+   `postgresql-server-dev-9.x` package on Debian-based systems, or from
+   the `postgresql` package on the Homebrew package manager for Mac OS X).
 
-3. Finally, the `uuid-ossp` extension for PostgreSQL. On Debian-based
-   systems, it is found in the `postgresql-contrib-9.x` package.
+3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
+   systems, it is found in the `postgresql-contrib-9.x` package; on
+   Homebrew, in the `ossp-uuid` package).
 
 ## Installation
 
