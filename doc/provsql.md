@@ -26,25 +26,30 @@ are all *monotone* queries.
 
 ## Prerequisites
 
-1. A running install of PostgreSQL. The extension has currently been
-   tested with version 9.5.3 of PostgreSQL, though it should work with
-   slightly older versions (if it does not, a bug report is appreciated).
+1. An install of PostgreSQL >= 9.4. The extension has currently been
+   tested with versions 9.4 and 9.5 of PostgreSQL, under Linux and
+   Mac OS X (if the extension does not work on a specific version or
+   operating system, a bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
    C compiler (both can be obtained on Debian-based Linux distributions
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
-   `postgresql-server-dev-9.5`  package).
+   `postgresql-server-dev-9.x` package on Debian-based systems, or from
+   the `postgresql` package on the Homebrew package manager for Mac OS X).
 
-3. Finally, the `uuid-ossp` extension for PostgreSQL. On Debian-based
-   systems, it is found in the `postgresql-contrib-9.5` package.
+3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
+   systems, it is found in the `postgresql-contrib-9.x` package; on
+   Homebrew, in the `ossp-uuid` package).
 
 ## Installation
 
-1. Compile the code with `make`.
+1. Compile the code with `make`. If you have several installed versions
+   of PostgreSQL, you can change the version the module is compiled
+   against by changing the reference to `pg_config` in the Makefile.
 
 2. Install it in the PostgreSQL extensions directory with `make install`
-   (run as a user with rights to write the PostgreSQL installation
+   (run as a user with rights to write to the PostgreSQL installation
    directories).
 
 3. Add the line 
@@ -57,8 +62,10 @@ are all *monotone* queries.
 
 ## Testing your installation
 
-You can test your installation by running `make installcheck` as the
-PostgreSQL administrator user.
+You can test your installation by running `make installcheck` as a
+PostgreSQL administrator user (if you do not want to run this as the
+default administrator user, you can make yourself a PostgreSQL
+administrator with ``ALTER USER your_login WITH SUPERUSER``).
 
 ## Using ProvSQL
 
@@ -76,6 +83,11 @@ provenance of each tuple as a UUID.
 You can then use this provenance to run computation in various semirings.
 See [security.sql](test/sql/security.sql) and
 [formula.sql](test/sql/formula.sql) for two examples.
+
+## Uninstalling
+
+You can uninstall ProvSQL by running `make uninstall` (run as a user with
+rights to write to the PostgreSQL installation directories).
 
 ## License
 

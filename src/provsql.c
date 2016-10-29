@@ -1,4 +1,7 @@
 #include "postgres.h"
+#include "fmgr.h"
+#include "miscadmin.h"
+#include "pg_config.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
 #include "nodes/nodeFuncs.h"
@@ -9,7 +12,13 @@
 
 #include "provsql_utils.h"
 
+#if PG_VERSION_NUM < 90400
+#error "ProvSQL requires PostgreSQL version 9.4 or later"
+#endif
+
 PG_MODULE_MAGIC;
+
+bool provsql_shared_library_loaded = false;
 
 static const char *PROVSQL_COLUMN_NAME="provsql";
 
@@ -122,8 +131,9 @@ static Bitmapset *remove_provenance_attributes_select(
   int nbRemoved=0;
   int i=0;
   Bitmapset *ressortgrouprefs = NULL;
+  ListCell *cell, *prev;
 
-  for(ListCell *cell=list_head(q->targetList), *prev=NULL;
+  for(cell=list_head(q->targetList), prev=NULL;
       cell!=NULL
       ;) {
     TargetEntry *rt = (TargetEntry *) lfirst(cell);
@@ -284,9 +294,12 @@ static void transform_distinct_into_group_by(Query *q, const constants_t *consta
 static void remove_provenance_attribute_groupref(Query *q, const constants_t *constants, const Bitmapset *removed_sortgrouprefs)
 {
   List **lists[3]={&q->groupClause,&q->distinctClause,&q->sortClause};
+  int i=0;
 
-  for(int i=0;i<3;++i) {
-    for(ListCell *cell=list_head(*lists[i]), *prev=NULL;
+  for(i=0;i<3;++i) {
+    ListCell *cell, *prev;
+
+    for(cell=list_head(*lists[i]), prev=NULL;
         cell!=NULL
         ;) {
       SortGroupClause *sgc = (SortGroupClause *) lfirst(cell);
@@ -551,6 +564,8 @@ static Query *process_query(
     q->hasAggs=true;
   }
 
+#if PG_VERSION_NUM >= 90500
+  /* GROUPING SETS were introduced in version 9.5 of PostgreSQL */
   if(supported && q->groupingSets) {
     if(q->groupClause || 
        list_length(q->groupingSets)>1 ||
@@ -562,6 +577,7 @@ static Query *process_query(
       q->hasAggs=true;
     }
   }
+#endif
 
   
   if(supported) {
@@ -605,7 +621,12 @@ static PlannedStmt *provsql_planner(
 void _PG_init(void)
 {
   prev_planner = planner_hook;
-  planner_hook = provsql_planner;
+
+  if(process_shared_preload_libraries_in_progress) {
+    planner_hook = provsql_planner;
+  
+    provsql_shared_library_loaded=true;
+  }
 }
 
 void _PG_fini(void)
