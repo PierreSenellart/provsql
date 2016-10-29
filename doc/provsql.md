@@ -100,4 +100,4 @@ https://github.com/PierreSenellart/provsql
 Pierre Senellart <pierre@senellart.com>
 
 Bug reports and feature requests are
-preferably sent through the *Issues* feature of Github.
+preferably sent through the *Issues* feature of GitHub.
