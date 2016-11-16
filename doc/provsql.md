@@ -57,9 +57,11 @@ s
    ```
    shared_preload_libraries = 'provsql'
    ```
-   to the postgresql.conf configuration file (required because the
-   extension include *hooks*) and restart the PostgreSQL server (e.g.,
-   with `service postgresql restart` on systemd-based distributions).
+   to the `postgresql.conf` configuration file (on Linux systems, it should
+   be in `/etc/postgresql/9.x/main/postgresql.conf`) and restart the 
+   PostgreSQL server (e.g., with `service postgresql restart` on
+   systemd-based distributions). This is required because the extension
+   includes *hooks*.
 
 ## Testing your installation
 
