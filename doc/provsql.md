@@ -6,7 +6,7 @@ PostgreSQL extension/module/plugin. It is work in progress at the moment.
 
 ## Features
 
-The ProvSQL system currently support proper management of provenance
+The ProvSQL system currently supports proper management of provenance
 attached to SQL queries, in the form of a provenance circuit, suitable
 both for regular Boolean provenance and arbitrary semiring provenance (in
 the universal semiring, or specialized to any semiring of choice). It
@@ -14,7 +14,8 @@ also aims at supporting probability computation from the provenance
 circuit, though this is not implemented at the moment.
 
 The following SQL queries are currently supported. At the moment, they
-are all *monotone* queries.
+are all *monotone* queries, but support for non-monotone query is also
+planned.
 * Regular SELECT-FROM-WHERE queries (aka conjunctive queries with
   multiset semantics)
 * JOIN queries (regular joins and outer joins; semijoins and antijoins
@@ -41,7 +42,7 @@ are all *monotone* queries.
 3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
    systems, it is found in the `postgresql-contrib-9.x` package; on
    Homebrew, in the `ossp-uuid` package).
-
+s
 ## Installation
 
 1. Compile the code with `make`. If you have several installed versions
