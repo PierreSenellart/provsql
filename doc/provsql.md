@@ -42,7 +42,7 @@ planned.
 3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
    systems, it is found in the `postgresql-contrib-9.x` package; on
    Homebrew, in the `ossp-uuid` package).
-s
+
 ## Installation
 
 1. Compile the code with `make`. If you have several installed versions
