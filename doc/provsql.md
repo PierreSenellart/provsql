@@ -66,9 +66,12 @@ planned.
 ## Testing your installation
 
 You can test your installation by running `make installcheck` as a
-PostgreSQL administrator user (if you do not want to run this as the
+PostgreSQL administrator user. If you do not want to run this as the
 default administrator user, you can make yourself a PostgreSQL
-administrator with ``ALTER USER your_login WITH SUPERUSER``).
+administrator with ``ALTER USER your_login WITH SUPERUSER``. This assumes that
+``your_login`` is a PostgreSQL user: on Debian-based Linux distributions, you
+can ensure this by running the command ``createuser your_login`` as the
+``postgresql`` user.
 
 ## Using ProvSQL
 
