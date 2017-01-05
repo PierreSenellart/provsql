@@ -522,7 +522,7 @@ static Query *process_query(
       q->hasAggs=true;
     }
   }
-#endif
+#endif /* PG_VERSION_NUM >= 90500 */
 
   if(supported && q->setOperations) {
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
