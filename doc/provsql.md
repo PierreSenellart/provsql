@@ -28,7 +28,7 @@ planned.
 ## Prerequisites
 
 1. An install of PostgreSQL >= 9.4. The extension has currently been
-   tested with versions 9.4 and 9.5 of PostgreSQL, under Linux and
+   tested with versions 9.4, 9.5, and 9.6 of PostgreSQL, under Linux and
    Mac OS X (if the extension does not work on a specific version or
    operating system, a bug report is appreciated).
 
