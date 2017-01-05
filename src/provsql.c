@@ -230,6 +230,11 @@ static Expr *add_provenance_to_select(
       agg->aggkind=AGGKIND_NORMAL;
       agg->location=-1;
 
+#if PG_VERSION_NUM >= 90600
+      /* aggargtypes was added in version 9.6 of PostgreSQL */
+      agg->aggargtypes=list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
+#endif /* PG_VERSION_NUM >= 90600 */
+
       te->expr=(Expr*)agg;
     } else {
       te->expr=(Expr*)expr;
