@@ -83,7 +83,7 @@ You then need to add provenance to an existing table using the
 `provsql.add_provenance(regclass)` user-defined function.
 See [add_provenance.sql](test/sql/add_provenance.sql) for an example.
 The table will have an extra `provsql` column added. This column
-is handled in a special way and always represent, in query results, the
+is handled in a special way and always represents, in query results, the
 provenance of each tuple as a UUID.
 
 You can then use this provenance to run computation in various semirings.
