@@ -461,12 +461,26 @@ static bool has_provenance(
 static void transform_except_into_join(
     Query *q,
     const constants_t *constants) {
-  SetOperationStmt *setOps = q->setOperations;
+  SetOperationStmt *setOps = (SetOperationStmt *) q->setOperations;
   RangeTblEntry *rte = makeNode(RangeTblEntry);
   FromExpr *fe = makeNode(FromExpr);
   JoinExpr *je = makeNode(JoinExpr);
 
-  // TODO: Make join expression (as a BoolExpr and for all columns...)
+  BoolExpr *expr = makeNode(BoolExpr);
+  expr->boolop = AND_EXPR;
+  expr->location = -1;
+  expr->args=NIL;
+  while(// TODO) {
+    OpExpr *oe = makeNode(OpExpr);
+    oe->opno = // TODO;
+    oe->opfuncid = // TODO;
+    oe->opresulttype = //TODO;   
+    oe->opcollid = InvalidOid;
+    oe->inputcollid = InvalidOid;
+    oe->args = // TODO;
+    oe->location = -1;  
+    expr->args = lappend(expr->args, );
+  }
 
   rte->rtekind = RTE_JOIN;
   rte->jointype = JOIN_LEFT;
@@ -476,8 +490,9 @@ static void transform_except_into_join(
   q->rtable = lappend(q->rtable, rte);
 
   je->jointype = RTE_JOIN;
-  // Rewriting has already been done, q->setOps has simple RangeTblRef as
-  // children
+
+  // Rewriting of complex set operations has already been done at
+  // this point, q->setOps has simple RangeTblRef as children
   je->larg = q->setOps->larg;
   je->rarg = q->setOps->rarg;
   je->quals = expr;
