@@ -583,7 +583,6 @@ static Query *process_query(
     }
   }
 #endif /* PG_VERSION_NUM >= 90500 */
-
   
   if(supported) {
     provsql = add_provenance_to_select(
