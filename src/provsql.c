@@ -31,7 +31,7 @@ static Query *process_query(
     Query *q,
     const constants_t *constants,
     bool subquery);
-          
+
 static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, AttrNumber attid, const constants_t *constants) {
   RelabelType *re=makeNode(RelabelType);
   Var *v=makeNode(Var);
@@ -50,7 +50,7 @@ static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, Att
   re->location=-1;
 
   r->selectedCols=bms_add_member(r->selectedCols,attid-FirstLowInvalidHeapAttributeNumber);
-  
+
   return re;
 }
 
@@ -101,7 +101,7 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
 
       foreach(lc,r->functions) {
         RangeTblFunction *func = (RangeTblFunction *) lfirst(lc);
-        
+
         if(func->funccolcount==1) {
           FuncExpr *expr = (FuncExpr *) func->funcexpr;
           if(expr->funcresulttype == constants->OID_TYPE_PROVENANCE_TOKEN
@@ -154,7 +154,7 @@ static Bitmapset *remove_provenance_attributes_select(
           Value *val = (Value *) list_nth(r->eref->colnames, v->varattno-1);
           colname = strVal(val);
         }
-          
+
         if(!strcmp(colname,PROVSQL_COLUMN_NAME)) {
           q->targetList=list_delete_cell(q->targetList, cell, prev);
 
@@ -240,7 +240,7 @@ static Expr *add_provenance_to_select(
       te->expr=(Expr*)expr;
     }
   }
-    
+
   q->targetList=lappend(q->targetList,te);
 
   return te->expr;
@@ -295,7 +295,7 @@ static void transform_distinct_into_group_by(Query *q, const constants_t *consta
 
   q->distinctClause = NULL;
 }
-      
+
 static void remove_provenance_attribute_groupref(Query *q, const constants_t *constants, const Bitmapset *removed_sortgrouprefs)
 {
   List **lists[3]={&q->groupClause,&q->distinctClause,&q->sortClause};
@@ -324,14 +324,14 @@ static void remove_provenance_attribute_groupref(Query *q, const constants_t *co
     }
   }
 }
-      
+
 static Query *rewrite_all_into_external_group_by(Query *q)
 {
   Query *new_query = makeNode(Query);
   RangeTblEntry *rte = makeNode(RangeTblEntry);
   FromExpr *jointree = makeNode(FromExpr);
   RangeTblRef *rtr = makeNode(RangeTblRef);
-  
+
   SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
 
   ListCell *lc;
@@ -373,7 +373,7 @@ static bool provenance_function_walker(
     const constants_t *constants) {
   if(node==NULL)
     return false;
-  
+
   if(IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *) node;
 
@@ -472,7 +472,7 @@ static void transform_except_into_join(
   rte->jointype = JOIN_LEFT;
   rte->eref = // TODO ;
   rte->joinaliasvars = // TODO;
-  
+
   q->rtable = lappend(q->rtable, rte);
 
   je->jointype = RTE_JOIN;
@@ -484,7 +484,7 @@ static void transform_except_into_join(
   je->rtindex=list_length(q->rtable);
 
   fe->fromlist = list_make1(je);
-  
+
   q->jointree = fe;
 
   // Add group by in the right-side table
@@ -514,9 +514,9 @@ static Query *process_query(
       return process_query(q, constants, subquery);
     }
   }
-    
+
   prov_atts=get_provenance_attributes(q, constants);
-  
+
   if(prov_atts==NIL)
     return q;
 
@@ -526,7 +526,7 @@ static Query *process_query(
     if(removed_sortgrouprefs != NULL)
       remove_provenance_attribute_groupref(q, constants, removed_sortgrouprefs);
   }
-  
+
   if(q->hasAggs) {
     ereport(ERROR, (errmsg("Aggregation not supported by provsql")));
     supported=false;
@@ -558,11 +558,11 @@ static Query *process_query(
     } else if(stmt->op == SETOP_EXCEPT) {
       transform_except_into_join(q, constants);
     } else {
-      ereport(ERROR, (errmsg("Set operations other than UNION not supported by provsql")));
+      ereport(ERROR, (errmsg("Set operations other than UNION and EXCEPT not supported by provsql")));
       supported=false;
     }
   }
-  
+
   if(supported &&
      q->groupClause &&
      !provenance_function_in_group_by(q, constants)) {
@@ -583,7 +583,7 @@ static Query *process_query(
     }
   }
 #endif /* PG_VERSION_NUM >= 90500 */
-  
+
   if(supported) {
     provsql = add_provenance_to_select(
         q,
@@ -591,7 +591,7 @@ static Query *process_query(
         constants,
         q->hasAggs,
         has_union);
-  
+
     replace_provenance_function_by_expression(q, provsql, constants);
   }
 
@@ -628,7 +628,7 @@ void _PG_init(void)
 
   if(process_shared_preload_libraries_in_progress) {
     planner_hook = provsql_planner;
-  
+
     provsql_shared_library_loaded=true;
   }
 }
