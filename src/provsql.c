@@ -2,12 +2,15 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pg_config.h"
+#include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_operator.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/planner.h"
 #include "parser/parse_oper.h"
 #include "parser/parsetree.h"
+#include "utils/syscache.h"
 #include "utils/lsyscache.h"
 
 #include "provsql_utils.h"
@@ -186,35 +189,43 @@ static Bitmapset *remove_provenance_attributes_select(
   return ressortgrouprefs;
 }
 
+typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
+
 static Expr *add_provenance_to_select(
     Query *q, 
     List *prov_atts, 
     const constants_t *constants, 
     bool aggregation_needed,
-    bool union_required)
+    semiring_operation op)
 {
-  ArrayExpr *array;
   FuncExpr *expr;
   TargetEntry *te=makeNode(TargetEntry);
 
   te->resno=list_length(q->targetList)+1;
   te->resname=(char *)PROVSQL_COLUMN_NAME;
 
-  if(union_required) {
+  if(op==SR_PLUS) {
     RelabelType *re=(RelabelType *) linitial(prov_atts);
     te->expr=re->arg;
   } else {
-    array=makeNode(ArrayExpr);
-    array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
-    array->element_typeid=constants->OID_TYPE_UUID;
-    array->elements=prov_atts;
-    array->location=-1;
-
     expr=makeNode(FuncExpr);
-    expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
+    if(op==SR_TIMES) {
+      ArrayExpr *array=makeNode(ArrayExpr);
+
+      expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
+      expr->funcvariadic=true;
+      
+      array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
+      array->element_typeid=constants->OID_TYPE_UUID;
+      array->elements=prov_atts;
+      array->location=-1;
+      
+      expr->args=list_make1(array);
+    } else { // SR_MONUS
+      expr->funcid=constants->OID_FUNCTION_PROVENANCE_MONUS;
+      expr->args=prov_atts;
+    }
     expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    expr->funcvariadic=true;
-    expr->args=list_make1(array);
     expr->location=-1;
 
     if(aggregation_needed) {
@@ -458,7 +469,7 @@ static bool has_provenance(
   return has_provenance_walker((Node *) q, constants);
 }
 
-static void transform_except_into_join(
+static bool transform_except_into_join(
     Query *q,
     const constants_t *constants) {
   SetOperationStmt *setOps = (SetOperationStmt *) q->setOperations;
@@ -466,60 +477,79 @@ static void transform_except_into_join(
   FromExpr *fe = makeNode(FromExpr);
   JoinExpr *je = makeNode(JoinExpr);
   BoolExpr *expr = makeNode(BoolExpr);
-  FuncCandidateList clist;
   
+  // Rewriting of complex set operations has already been done at
+  // this point, q->setOps has simple RangeTblRef as children
+//  RangeTblEntry *rteLeft = (RangeTblEntry *) list_nth(q->rtable, ((RangeTblRef *) setOps->larg)->rtindex);
+//  RangeTblEntry *rteRight = (RangeTblEntry *) list_nth(q->rtable, ((RangeTblRef *) setOps->rarg)->rtindex);
+
+  ListCell *lc;
+  int attno=1;
+
   expr->boolop = AND_EXPR;
   expr->location = -1;
   expr->args=NIL;
 
-  clist = OpernameGetCandidates(list_make1(makeString("=")), 'b', false);
+  foreach(lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
 
-  while(// TODO) {
-    OpExpr *oe = makeNode(OpExpr);
-    Oid operOid = binary_oper_exact(opname, ltypeId, rtypeId);
+    Var *v =(Var *) te->expr;
 
-    if(operOid==InvalidOid) {
-      Oid inputOids[2] = {ltypeId,rtypeId};
+    if(v->vartype != constants->OID_TYPE_PROVENANCE_TOKEN) {
+      OpExpr *oe = makeNode(OpExpr);
+      Oid opno = find_equality_operator(v->vartype,v->vartype);
+      Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
+      Form_pg_operator opform = (Form_pg_operator) GETSTRUCT(opInfo);
+      Var *leftArg = makeNode(Var), *rightArg = makeNode(Var);
 
-      oper_select_candidate(2, inputOids, clist, &operOid);
+      oe->opno = opno;
+      oe->opfuncid = opform->oprcode;
+      oe->opresulttype = opform->oprresult;   
+      oe->opcollid = InvalidOid;
+      oe->inputcollid = InvalidOid;
 
-      if(operOid==InvalidOid)
-        ereport(ERROR, (errmsg("Equality operator not found by provsql")));
+      leftArg->varno=leftArg->varnoold=((RangeTblRef *) setOps->larg)->rtindex;
+      rightArg->varno=rightArg->varnoold=((RangeTblRef *) setOps->rarg)->rtindex;
+      leftArg->varattno=rightArg->varattno=attno;
+      leftArg->varoattno=rightArg->varoattno=attno;
+      leftArg->vartype=rightArg->vartype=v->vartype;
+      leftArg->varcollid=rightArg->varcollid=InvalidOid;
+      leftArg->vartypmod=rightArg->vartypmod=-1;
+      leftArg->location=rightArg->location=-1;
+
+      oe->args = list_make2(leftArg,rightArg);
+      oe->location = -1;  
+      expr->args = lappend(expr->args, oe);
+
+      ReleaseSysCache(opInfo);
     }
 
-    oe->opno = // TODO;
-    oe->opfuncid = // TODO;
-    oe->opresulttype = //TODO;   
-    oe->opcollid = InvalidOid;
-    oe->inputcollid = InvalidOid;
-    oe->args = // TODO;
-    oe->location = -1;  
-    expr->args = lappend(expr->args, oe);
+    ++attno;
   }
 
   rte->rtekind = RTE_JOIN;
   rte->jointype = JOIN_LEFT;
-  rte->eref = // TODO ;
-  rte->joinaliasvars = // TODO;
+  // TODO : rte->eref = 
+  // TODO : rte->joinaliasvars 
 
   q->rtable = lappend(q->rtable, rte);
 
   je->jointype = RTE_JOIN;
 
-  // Rewriting of complex set operations has already been done at
-  // this point, q->setOps has simple RangeTblRef as children
-  je->larg = q->setOps->larg;
-  je->rarg = q->setOps->rarg;
-  je->quals = expr;
+  je->larg = setOps->larg;
+  je->rarg = setOps->rarg;
+  je->quals = (Node *) expr;
   je->rtindex=list_length(q->rtable);
 
   fe->fromlist = list_make1(je);
 
   q->jointree = fe;
 
-  // Add group by in the right-side table
+  // TODO: Add group by in the right-side table
 
-  q->setOperations = NIL;
+  q->setOperations = 0;
+
+  return true;
 }
 
 static Query *process_query(
@@ -530,9 +560,10 @@ static Query *process_query(
   List *prov_atts;
   Expr *provsql;
   bool has_union = false;
+  bool has_difference = false;
   bool supported=true;
 
-  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
@@ -586,7 +617,9 @@ static Query *process_query(
 
       has_union = true;
     } else if(stmt->op == SETOP_EXCEPT) {
-      transform_except_into_join(q, constants);
+      if(!transform_except_into_join(q, constants))
+        supported=false;
+      has_difference=true;
     } else {
       ereport(ERROR, (errmsg("Set operations other than UNION and EXCEPT not supported by provsql")));
       supported=false;
@@ -620,12 +653,12 @@ static Query *process_query(
         prov_atts,
         constants,
         q->hasAggs,
-        has_union);
+        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
 
     replace_provenance_function_by_expression(q, provsql, constants);
   }
 
-  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
+//  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
   return q;
 }
