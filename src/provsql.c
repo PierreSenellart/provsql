@@ -465,13 +465,28 @@ static void transform_except_into_join(
   RangeTblEntry *rte = makeNode(RangeTblEntry);
   FromExpr *fe = makeNode(FromExpr);
   JoinExpr *je = makeNode(JoinExpr);
-
   BoolExpr *expr = makeNode(BoolExpr);
+  FuncCandidateList clist;
+  
   expr->boolop = AND_EXPR;
   expr->location = -1;
   expr->args=NIL;
+
+  clist = OpernameGetCandidates(list_make1(makeString("=")), 'b', false);
+
   while(// TODO) {
     OpExpr *oe = makeNode(OpExpr);
+    Oid operOid = binary_oper_exact(opname, ltypeId, rtypeId);
+
+    if(operOid==InvalidOid) {
+      Oid inputOids[2] = {ltypeId,rtypeId};
+
+      oper_select_candidate(2, inputOids, clist, &operOid);
+
+      if(operOid==InvalidOid)
+        ereport(ERROR, (errmsg("Equality operator not found by provsql")));
+    }
+
     oe->opno = // TODO;
     oe->opfuncid = // TODO;
     oe->opresulttype = //TODO;   
@@ -479,7 +494,7 @@ static void transform_except_into_join(
     oe->inputcollid = InvalidOid;
     oe->args = // TODO;
     oe->location = -1;  
-    expr->args = lappend(expr->args, );
+    expr->args = lappend(expr->args, oe);
   }
 
   rte->rtekind = RTE_JOIN;
