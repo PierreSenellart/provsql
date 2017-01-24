@@ -59,11 +59,20 @@ $$
  -- uuid_generate_v5(uuid_ns_url(),'http://pierre.senellart.com/software/provsql/')
  SELECT '920d4f02-8718-5319-9532-d4ab83a64489'::uuid
 $$ LANGUAGE SQL IMMUTABLE;
+
+CREATE FUNCTION gate_zero() RETURNS uuid AS
+$$
+  SELECT public.uuid_generate_v5(uuid_ns_provsql(),'zero');
+$$ LANGUAGE SQL IMMUTABLE;
+CREATE FUNCTION gate_one() RETURNS uuid AS
+$$
+  SELECT public.uuid_generate_v5(uuid_ns_provsql(),'one');
+$$ LANGUAGE SQL IMMUTABLE;
       
 INSERT INTO provenance_circuit_gate
-  VALUES(public.uuid_generate_v5(uuid_ns_provsql(),'zero'),'zero');
+  VALUES(gate_zero(),'zero');
 INSERT INTO provenance_circuit_gate
-  VALUES(public.uuid_generate_v5(uuid_ns_provsql(),'one'),'one');
+  VALUES(gate_one(),'one');
 
 CREATE FUNCTION uuid_provsql_concat(state uuid, token provenance_token)
   RETURNS provenance_token AS
@@ -90,7 +99,7 @@ DECLARE
 BEGIN
   CASE array_length(tokens,1)
     WHEN 0 THEN
-      times_token:=uuid_generate_v5(uuid_ns_provsql(),'one');
+      times_token:=gate_one();
     WHEN 1 THEN
       times_token:=tokens[1];
     ELSE
@@ -120,14 +129,19 @@ BEGIN
     RETURN token1;
   END IF;
 
-  monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
+  IF token1 = token2 THEN
+    -- X-X=0
+    monus_token:=gate_zero();
+  ELSE  
+    monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
+    BEGIN
+      INSERT INTO provenance_circuit_gate VALUES(monus_token,'monus');
+      INSERT INTO provenance_circuit_wire VALUES(monus_token,token1);
+      INSERT INTO provenance_circuit_wire VALUES(monus_token,token2);
+    EXCEPTION WHEN unique_violation THEN
+    END;
+  END IF;  
 
-  BEGIN
-    INSERT INTO provenance_circuit_gate VALUES(monus_token,'monus');
-    INSERT INTO provenance_circuit_wire VALUES(monus_token,token1);
-    INSERT INTO provenance_circuit_wire VALUES(monus_token,token2);
-  EXCEPTION WHEN unique_violation THEN
-  END;
   RETURN monus_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
@@ -139,6 +153,10 @@ $$
 DECLARE
   plus_token uuid;
 BEGIN
+  IF token = gate_zero() THEN
+    return state;
+  END IF;
+
   IF state IS NULL THEN
     plus_token:=uuid_generate_v4();
     INSERT INTO provenance_circuit_gate VALUES(plus_token,'plus');
@@ -161,7 +179,7 @@ BEGIN
   SELECT COUNT(*) INTO c FROM provenance_circuit_wire WHERE f=state;
 
   IF c = 0 THEN
-    plus_token := uuid_generate_v5(uuid_ns_provsql(),'zero');
+    plus_token := gate_zero();
   ELSIF c = 1 THEN
     SELECT t INTO STRICT plus_token FROM provenance_circuit_wire WHERE f=state;
     DELETE FROM provenance_circuit_wire WHERE f=state;
