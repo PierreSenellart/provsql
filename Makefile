@@ -26,6 +26,11 @@ sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
+
+ifdef DEBUG
+PG_CPPFLAGS = -O0 -g
+endif
+
 include $(PGXS)
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
