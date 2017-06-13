@@ -2,12 +2,15 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pg_config.h"
+#include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_operator.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/planner.h"
 #include "parser/parse_oper.h"
 #include "parser/parsetree.h"
+#include "utils/syscache.h"
 #include "utils/lsyscache.h"
 
 #include "provsql_utils.h"
@@ -31,7 +34,7 @@ static Query *process_query(
     Query *q,
     const constants_t *constants,
     bool subquery);
-          
+
 static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, AttrNumber attid, const constants_t *constants) {
   RelabelType *re=makeNode(RelabelType);
   Var *v=makeNode(Var);
@@ -50,7 +53,7 @@ static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, Att
   re->location=-1;
 
   r->selectedCols=bms_add_member(r->selectedCols,attid-FirstLowInvalidHeapAttributeNumber);
-  
+
   return re;
 }
 
@@ -101,7 +104,7 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
 
       foreach(lc,r->functions) {
         RangeTblFunction *func = (RangeTblFunction *) lfirst(lc);
-        
+
         if(func->funccolcount==1) {
           FuncExpr *expr = (FuncExpr *) func->funcexpr;
           if(expr->funcresulttype == constants->OID_TYPE_PROVENANCE_TOKEN
@@ -154,7 +157,7 @@ static Bitmapset *remove_provenance_attributes_select(
           Value *val = (Value *) list_nth(r->eref->colnames, v->varattno-1);
           colname = strVal(val);
         }
-          
+
         if(!strcmp(colname,PROVSQL_COLUMN_NAME)) {
           q->targetList=list_delete_cell(q->targetList, cell, prev);
 
@@ -186,35 +189,43 @@ static Bitmapset *remove_provenance_attributes_select(
   return ressortgrouprefs;
 }
 
+typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
+
 static Expr *add_provenance_to_select(
     Query *q, 
     List *prov_atts, 
     const constants_t *constants, 
     bool aggregation_needed,
-    bool union_required)
+    semiring_operation op)
 {
-  ArrayExpr *array;
   FuncExpr *expr;
   TargetEntry *te=makeNode(TargetEntry);
 
   te->resno=list_length(q->targetList)+1;
   te->resname=(char *)PROVSQL_COLUMN_NAME;
 
-  if(union_required) {
+  if(op==SR_PLUS) {
     RelabelType *re=(RelabelType *) linitial(prov_atts);
     te->expr=re->arg;
   } else {
-    array=makeNode(ArrayExpr);
-    array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
-    array->element_typeid=constants->OID_TYPE_UUID;
-    array->elements=prov_atts;
-    array->location=-1;
-
     expr=makeNode(FuncExpr);
-    expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
+    if(op==SR_TIMES) {
+      ArrayExpr *array=makeNode(ArrayExpr);
+
+      expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
+      expr->funcvariadic=true;
+      
+      array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
+      array->element_typeid=constants->OID_TYPE_UUID;
+      array->elements=prov_atts;
+      array->location=-1;
+      
+      expr->args=list_make1(array);
+    } else { // SR_MONUS
+      expr->funcid=constants->OID_FUNCTION_PROVENANCE_MONUS;
+      expr->args=prov_atts;
+    }
     expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    expr->funcvariadic=true;
-    expr->args=list_make1(array);
     expr->location=-1;
 
     if(aggregation_needed) {
@@ -240,7 +251,7 @@ static Expr *add_provenance_to_select(
       te->expr=(Expr*)expr;
     }
   }
-    
+
   q->targetList=lappend(q->targetList,te);
 
   return te->expr;
@@ -295,7 +306,7 @@ static void transform_distinct_into_group_by(Query *q, const constants_t *consta
 
   q->distinctClause = NULL;
 }
-      
+
 static void remove_provenance_attribute_groupref(Query *q, const constants_t *constants, const Bitmapset *removed_sortgrouprefs)
 {
   List **lists[3]={&q->groupClause,&q->distinctClause,&q->sortClause};
@@ -324,14 +335,14 @@ static void remove_provenance_attribute_groupref(Query *q, const constants_t *co
     }
   }
 }
-      
+
 static Query *rewrite_all_into_external_group_by(Query *q)
 {
   Query *new_query = makeNode(Query);
   RangeTblEntry *rte = makeNode(RangeTblEntry);
   FromExpr *jointree = makeNode(FromExpr);
   RangeTblRef *rtr = makeNode(RangeTblRef);
-  
+
   SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
 
   ListCell *lc;
@@ -373,7 +384,7 @@ static bool provenance_function_walker(
     const constants_t *constants) {
   if(node==NULL)
     return false;
-  
+
   if(IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *) node;
 
@@ -458,6 +469,89 @@ static bool has_provenance(
   return has_provenance_walker((Node *) q, constants);
 }
 
+static bool transform_except_into_join(
+    Query *q,
+    const constants_t *constants) {
+  SetOperationStmt *setOps = (SetOperationStmt *) q->setOperations;
+  RangeTblEntry *rte = makeNode(RangeTblEntry);
+  FromExpr *fe = makeNode(FromExpr);
+  JoinExpr *je = makeNode(JoinExpr);
+  BoolExpr *expr = makeNode(BoolExpr);
+  
+  // Rewriting of complex set operations has already been done at
+  // this point, q->setOps has simple RangeTblRef as children
+//  RangeTblEntry *rteLeft = (RangeTblEntry *) list_nth(q->rtable, ((RangeTblRef *) setOps->larg)->rtindex);
+//  RangeTblEntry *rteRight = (RangeTblEntry *) list_nth(q->rtable, ((RangeTblRef *) setOps->rarg)->rtindex);
+
+  ListCell *lc;
+  int attno=1;
+
+  expr->boolop = AND_EXPR;
+  expr->location = -1;
+  expr->args=NIL;
+
+  foreach(lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+
+    Var *v =(Var *) te->expr;
+
+    if(v->vartype != constants->OID_TYPE_PROVENANCE_TOKEN) {
+      OpExpr *oe = makeNode(OpExpr);
+      Oid opno = find_equality_operator(v->vartype,v->vartype);
+      Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
+      Form_pg_operator opform = (Form_pg_operator) GETSTRUCT(opInfo);
+      Var *leftArg = makeNode(Var), *rightArg = makeNode(Var);
+
+      oe->opno = opno;
+      oe->opfuncid = opform->oprcode;
+      oe->opresulttype = opform->oprresult;   
+      oe->opcollid = InvalidOid;
+      oe->inputcollid = InvalidOid;
+
+      leftArg->varno=leftArg->varnoold=((RangeTblRef *) setOps->larg)->rtindex;
+      rightArg->varno=rightArg->varnoold=((RangeTblRef *) setOps->rarg)->rtindex;
+      leftArg->varattno=rightArg->varattno=attno;
+      leftArg->varoattno=rightArg->varoattno=attno;
+      leftArg->vartype=rightArg->vartype=v->vartype;
+      leftArg->varcollid=rightArg->varcollid=InvalidOid;
+      leftArg->vartypmod=rightArg->vartypmod=-1;
+      leftArg->location=rightArg->location=-1;
+
+      oe->args = list_make2(leftArg,rightArg);
+      oe->location = -1;  
+      expr->args = lappend(expr->args, oe);
+
+      ReleaseSysCache(opInfo);
+    }
+
+    ++attno;
+  }
+
+  rte->rtekind = RTE_JOIN;
+  rte->jointype = JOIN_LEFT;
+  // TODO : rte->eref = 
+  // TODO : rte->joinaliasvars 
+
+  q->rtable = lappend(q->rtable, rte);
+
+  je->jointype = RTE_JOIN;
+
+  je->larg = setOps->larg;
+  je->rarg = setOps->rarg;
+  je->quals = (Node *) expr;
+  je->rtindex=list_length(q->rtable);
+
+  fe->fromlist = list_make1(je);
+
+  q->jointree = fe;
+
+  // TODO: Add group by in the right-side table
+
+  q->setOperations = 0;
+
+  return true;
+}
+
 static Query *process_query(
     Query *q,
     const constants_t *constants,
@@ -466,20 +560,24 @@ static Query *process_query(
   List *prov_atts;
   Expr *provsql;
   bool has_union = false;
+  bool has_difference = false;
   bool supported=true;
 
 //  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
+    // TODO: Nest set operations as subqueries in FROM,
+    // so that we only do set operations on base tables 
+
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
     if(!stmt->all) {
       q = rewrite_all_into_external_group_by(q);
       return process_query(q, constants, subquery);
     }
   }
-    
+
   prov_atts=get_provenance_attributes(q, constants);
-  
+
   if(prov_atts==NIL)
     return q;
 
@@ -489,7 +587,7 @@ static Query *process_query(
     if(removed_sortgrouprefs != NULL)
       remove_provenance_attribute_groupref(q, constants, removed_sortgrouprefs);
   }
-  
+
   if(q->hasAggs) {
     ereport(ERROR, (errmsg("Aggregation not supported by provsql")));
     supported=false;
@@ -506,6 +604,26 @@ static Query *process_query(
       supported=false;
     } else 
       transform_distinct_into_group_by(q, constants);
+  }
+
+  if(supported && q->setOperations) {
+    SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
+
+    if(stmt->op == SETOP_UNION) {
+      stmt->colTypes=lappend_oid(stmt->colTypes,
+          constants->OID_TYPE_PROVENANCE_TOKEN);
+      stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
+      stmt->colCollations=lappend_int(stmt->colCollations, 0);
+
+      has_union = true;
+    } else if(stmt->op == SETOP_EXCEPT) {
+      if(!transform_except_into_join(q, constants))
+        supported=false;
+      has_difference=true;
+    } else {
+      ereport(ERROR, (errmsg("Set operations other than UNION and EXCEPT not supported by provsql")));
+      supported=false;
+    }
   }
 
   if(supported &&
@@ -529,30 +647,14 @@ static Query *process_query(
   }
 #endif /* PG_VERSION_NUM >= 90500 */
 
-  if(supported && q->setOperations) {
-    SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
-
-    if(stmt->op == SETOP_UNION) {
-      stmt->colTypes=lappend_oid(stmt->colTypes,
-          constants->OID_TYPE_PROVENANCE_TOKEN);
-      stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
-      stmt->colCollations=lappend_int(stmt->colCollations, 0);
-
-      has_union = true;
-    } else {
-      ereport(ERROR, (errmsg("Set operations other than UNION not supported by provsql")));
-      supported=false;
-    }
-  }
-  
   if(supported) {
     provsql = add_provenance_to_select(
         q,
         prov_atts,
         constants,
         q->hasAggs,
-        has_union);
-  
+        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
+
     replace_provenance_function_by_expression(q, provsql, constants);
   }
 
@@ -589,7 +691,7 @@ void _PG_init(void)
 
   if(process_shared_preload_libraries_in_progress) {
     planner_hook = provsql_planner;
-  
+
     provsql_shared_library_loaded=true;
   }
 }

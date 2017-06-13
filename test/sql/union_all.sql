@@ -5,7 +5,7 @@ CREATE TABLE union_all_result AS
 SELECT *,formula(provenance(),'personal_name') FROM (
   SELECT classification FROM personal WHERE city='Paris'
   UNION ALL
-  SELECT value FROM personal_level
+  SELECT classification FROM personal
 ) t;
 
 SELECT remove_provenance('union_all_result');

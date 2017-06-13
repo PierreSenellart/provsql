@@ -15,6 +15,7 @@ typedef struct constants_t {
 } constants_t;
 
 bool initialize_constants(constants_t *constants);
+Oid find_equality_operator(Oid ltypeId, Oid rtypeId);
 
 extern bool provsql_shared_library_loaded;
 #endif /* PROVSQL_UTILS_H */

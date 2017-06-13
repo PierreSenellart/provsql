@@ -77,7 +77,7 @@ END
 $$ LANGUAGE plpgsql;
 
 /* Example of provenance evaluation */
-CREATE VIEW personal_name as SELECT name AS value FROM personal;
+SELECT create_provenance_mapping('personal_name', 'personal', 'name');
 CREATE TABLE result_formula AS SELECT 
   p1.city,
   formula(provenance(), 'personal_name')
