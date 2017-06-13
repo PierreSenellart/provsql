@@ -3,7 +3,7 @@ EXTVERSION = $(shell grep default_version $(EXTENSION).control | \
            sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 
 MODULE_big = provsql
-OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c))
+OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard src/*.cpp))
 
 DOCS = $(wildcard doc/*.md)
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
@@ -24,13 +24,17 @@ $(OBJS): $(wildcard src/*.h)
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
-PG_CONFIG = pg_config
-PGXS := $(shell $(PG_CONFIG) --pgxs)
+CXXFLAGS = -Wall -Wpointer-arith -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -fstack-protector-strong -Wformat -Werror=format-security -I/usr/include/mit-krb5 -fPIC -pie -fno-omit-frame-pointer -std=c++14
 
 ifdef DEBUG
 PG_CPPFLAGS = -O0 -g
+CXXFLAGS += -O0
+else
+CXXFLAGS += -O2  
 endif
 
+PG_CONFIG = pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
