@@ -1,0 +1,13 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   city   |                                         formula                                         
+----------+-----------------------------------------------------------------------------------------
+ Paris    | ((Dave ⊕ Magdalen ⊕ Nancy) ⊖ ((Dave ⊗ Nancy) ⊕ (Dave ⊗ Magdalen) ⊕ (Magdalen ⊗ Nancy)))
+ New York | ((John ⊕ Paul) ⊖ (John ⊗ Paul))
+ Berlin   | ((Ellen ⊕ Susan) ⊖ (Ellen ⊗ Susan))
+(3 rows)
+
