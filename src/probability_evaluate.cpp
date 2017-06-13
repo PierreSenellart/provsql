@@ -48,6 +48,18 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
 {
   Datum token = PG_GETARG_DATUM(0);
   Datum token2prob = PG_GETARG_DATUM(1);
+  string method;
+  string args;
+
+  if(!PG_ARGISNULL(2)) {
+    text *t = PG_GETARG_TEXT_P(2);
+    method = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
+  }
+
+  if(!PG_ARGISNULL(3)) {
+    text *t = PG_GETARG_TEXT_P(3);
+    args = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
+  }
   
   if(PG_ARGISNULL(1))
     PG_RETURN_NULL();
@@ -111,5 +123,31 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
 // Display the circuit for debugging:
 // elog(WARNING, "%s", c.toString(c.getGate(UUIDDatum2string(token))).c_str());
 
-  PG_RETURN_FLOAT8(c.monteCarlo(c.getGate(UUIDDatum2string(token)), 10000));
+  double result;
+  unsigned gate = c.getGate(UUIDDatum2string(token));
+
+  if(method=="monte-carlo") {
+    int samples;
+    bool invalid=false;
+
+    try {
+      samples = stoi(args);
+    } catch(invalid_argument) {
+      invalid=true;
+    }
+
+    if(invalid || samples==0 || samples<0)
+      elog(ERROR, "Invalid number of samples: '%s'", args.c_str());
+    
+    result = c.monteCarlo(gate, samples);
+  } else if(method=="possible-worlds") {
+    result = c.possibleWorlds(gate);
+
+    if(!args.empty())
+      elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
+  } else {
+    elog(ERROR, "Wrong method '%s' for pobability evaluation", method.c_str());
+  }
+  
+  PG_RETURN_FLOAT8(result);
 }

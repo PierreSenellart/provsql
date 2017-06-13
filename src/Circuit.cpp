@@ -29,7 +29,7 @@ unsigned Circuit::addGate(gateType type)
   wires.resize(id+1);
   rwires.resize(id+1);
   if(type==IN)
-    inputs.insert(id);
+    inputs.push_back(id);
   return id;
 }
 
@@ -39,7 +39,7 @@ void Circuit::setGate(const uuid &u, gateType type, double p)
   gates[id] = type;
   prob[id] = p;
   if(type==IN)
-    inputs.insert(id);
+    inputs.push_back(id);
 }
 
 void Circuit::addWire(unsigned f, unsigned t)
@@ -131,4 +131,29 @@ double Circuit::monteCarlo(unsigned g, unsigned samples) const
   }
 
   return success*1./samples;
+}
+
+double Circuit::possibleWorlds(unsigned g) const
+{
+  unsigned long nb=(1<<inputs.size());
+  double totalp=0.;
+
+  for(unsigned long i=0; i < nb; ++i) {
+    unordered_set<unsigned> s;
+    double p = 1;
+
+    for(unsigned j=0; j<inputs.size(); ++j) {
+      if(i & (1 << j)) {
+        s.insert(inputs[j]);
+        p*=prob[inputs[j]];
+      } else {
+        p*=1-prob[inputs[j]];
+      }
+    }
+
+    if(evaluate(g, s))
+      totalp+=p;
+  }
+
+  return totalp;
 }
