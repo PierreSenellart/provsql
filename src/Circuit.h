@@ -17,8 +17,10 @@ class Circuit {
  private:
   std::vector<gateType> gates;
   std::vector<std::unordered_set<unsigned>> wires;
+  std::vector<std::unordered_set<unsigned>> rwires;
   std::unordered_map<uuid, unsigned> uuid2id;
   std::vector<double> prob;
+  std::unordered_set<unsigned> inputs;
     
  public:
   bool hasGate(const uuid &u) const;
@@ -26,6 +28,9 @@ class Circuit {
   unsigned addGate(gateType type);
   void setGate(const uuid &u, gateType t, double p = -1);
   void addWire(unsigned f, unsigned t);
+
+  bool evaluate(unsigned g, const std::unordered_set<unsigned> &trues) const;
+  double monteCarlo(unsigned g, unsigned samples) const;
 
   std::string toString(unsigned g) const;
 };

@@ -27,6 +27,9 @@ unsigned Circuit::addGate(gateType type)
   gates.push_back(type);
   prob.push_back(-1);
   wires.resize(id+1);
+  rwires.resize(id+1);
+  if(type==IN)
+    inputs.insert(id);
   return id;
 }
 
@@ -35,11 +38,14 @@ void Circuit::setGate(const uuid &u, gateType type, double p)
   unsigned id = getGate(u);
   gates[id] = type;
   prob[id] = p;
+  if(type==IN)
+    inputs.insert(id);
 }
 
 void Circuit::addWire(unsigned f, unsigned t)
 {
   wires[f].insert(t);
+  rwires[t].insert(f);
 }
 
 std::string Circuit::toString(unsigned g) const
@@ -73,4 +79,56 @@ std::string Circuit::toString(unsigned g) const
   }
 
   return "("+result+")";
+}
+
+bool Circuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
+{
+  bool disjunction=false;
+
+  switch(gates[g]) {
+    case IN:
+      return sampled.find(g)!=sampled.end();
+    case NOT:
+      return !evaluate(*(wires[g].begin()), sampled);
+    case AND:
+      disjunction = false;
+      break;
+    case OR:
+      disjunction = true;
+      break;
+    case UNDETERMINED:
+      return false;
+  }
+
+  for(auto s: wires[g]) {
+    bool e = evaluate(s, sampled);
+    if(disjunction && e)
+      return true;
+    if(!disjunction && !e)
+      return false;
+  }
+
+  if(disjunction)
+    return false;
+  else
+    return true;
+}
+
+double Circuit::monteCarlo(unsigned g, unsigned samples) const
+{
+  unsigned success=0;
+
+  for(unsigned i=0; i<samples; ++i) {
+    unordered_set<unsigned> sampled;
+    for(unsigned in : inputs) {
+      if(rand() *1. / RAND_MAX < prob[in]) {
+        sampled.insert(in);
+      }
+    }
+
+    if(evaluate(g, sampled))
+      ++success;
+  }
+
+  return success*1./samples;
 }

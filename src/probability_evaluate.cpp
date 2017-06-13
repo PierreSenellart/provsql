@@ -89,7 +89,6 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
           if(already_seen.find(id)!=already_seen.end()) {
             unsigned id2 = c.addGate(Circuit::NOT);
             c.addWire(id, id2);
-            elog(WARNING, "Adding wire");
             id=id2;
           } else {
             already_seen.insert(id);
@@ -112,5 +111,5 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
 // Display the circuit for debugging:
 // elog(WARNING, "%s", c.toString(c.getGate(UUIDDatum2string(token))).c_str());
 
-  PG_RETURN_FLOAT8(0.);
+  PG_RETURN_FLOAT8(c.monteCarlo(c.getGate(UUIDDatum2string(token)), 10000));
 }
