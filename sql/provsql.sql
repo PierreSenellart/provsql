@@ -19,7 +19,7 @@ CREATE TABLE provenance_circuit_wire(
 CREATE INDEX ON provenance_circuit_wire (f);
 CREATE INDEX ON provenance_circuit_wire (t);
 
-CREATE OR REPLACE FUNCTION provsql.add_provenance_circuit_gate_trigger()
+CREATE OR REPLACE FUNCTION add_provenance_circuit_gate_trigger()
   RETURNS TRIGGER AS
 $$
 DECLARE
@@ -51,6 +51,17 @@ BEGIN
     EXECUTE format('DROP TRIGGER add_provenance_circuit_gate on %I', _tbl);
   EXCEPTION WHEN undefined_object THEN
   END;
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION create_provenance_mapping(newtbl text, oldtbl regclass, att text)
+  RETURNS void AS
+$$
+DECLARE
+BEGIN
+  EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance() FROM %I', newtbl, att, oldtbl);
+  EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
+  EXECUTE format('SELECT provsql.remove_provenance(%L)', newtbl);
 END
 $$ LANGUAGE plpgsql;
 
@@ -264,23 +275,23 @@ BEGIN
   IF rec IS NULL THEN
     RETURN NULL;
   ELSIF rec.gate_type='input' THEN
-    EXECUTE format('SELECT col1 FROM (SELECT * FROM %I WHERE provsql.provenance()=%L) tmp (col1)',token2value,token) INTO result;
+    EXECUTE format('SELECT * FROM %I WHERE provenance=%L',token2value,token) INTO result;
     IF result IS NULL THEN
       result:=element_one;
     END IF;
   ELSIF rec.gate_type='plus' THEN
-    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
+    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
       plus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
     INTO result;
   ELSIF rec.gate_type='times' THEN
-    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
+    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
       times_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
     INTO result;
   ELSIF rec.gate_type='monus' THEN
     IF monus_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
     ELSE
-      EXECUTE format('SELECT %I(a[1],a[2]) FROM (SELECT array_agg(provsql.provenance_evaluate(t,%L,%L::%I,%L,%L,%L,%L)) AS a FROM provsql.provenance_circuit_wire WHERE f=%L) t',
+      EXECUTE format('SELECT %I(a[1],a[2]) FROM (SELECT array_agg(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L)) AS a FROM provsql.provenance_circuit_wire WHERE f=%L) t',
         monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
       INTO result;
     END IF;

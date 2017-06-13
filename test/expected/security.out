@@ -1,4 +1,9 @@
 \set ECHO none
+ create_provenance_mapping 
+---------------------------
+ 
+(1 row)
+
  remove_provenance 
 -------------------
  

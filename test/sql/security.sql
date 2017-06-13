@@ -42,7 +42,7 @@ END
 $$ LANGUAGE plpgsql;
 
 /* Example of provenance evaluation */
-CREATE VIEW personal_level as SELECT classification AS value FROM personal;
+SELECT create_provenance_mapping('personal_level', 'personal', 'classification');
 CREATE TABLE result_security AS SELECT 
   p1.city,
   security(provenance(),'personal_level')
