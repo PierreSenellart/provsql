@@ -18,4 +18,5 @@ bool initialize_constants(constants_t *constants);
 Oid find_equality_operator(Oid ltypeId, Oid rtypeId);
 
 extern bool provsql_shared_library_loaded;
+extern bool provsql_interrupted;
 #endif /* PROVSQL_UTILS_H */

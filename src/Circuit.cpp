@@ -1,5 +1,9 @@
 #include "Circuit.h"
 
+extern "C" {
+#include "provsql_utils.h"
+}
+
 #include <cassert>
 #include <string>
 
@@ -128,17 +132,23 @@ double Circuit::monteCarlo(unsigned g, unsigned samples) const
 
     if(evaluate(g, sampled))
       ++success;
+    
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted");
   }
 
   return success*1./samples;
 }
 
 double Circuit::possibleWorlds(unsigned g) const
-{
-  unsigned long nb=(1<<inputs.size());
+{ 
+  if(inputs.size()>=8*sizeof(unsigned long long))
+    throw CircuitException("Too many possible worlds to iterate over");
+
+  unsigned long long nb=(1<<inputs.size());
   double totalp=0.;
 
-  for(unsigned long i=0; i < nb; ++i) {
+  for(unsigned long long i=0; i < nb; ++i) {
     unordered_set<unsigned> s;
     double p = 1;
 
@@ -153,6 +163,9 @@ double Circuit::possibleWorlds(unsigned g) const
 
     if(evaluate(g, s))
       totalp+=p;
+
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted");
   }
 
   return totalp;

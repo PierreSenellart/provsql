@@ -37,4 +37,10 @@ class Circuit {
   std::string toString(unsigned g) const;
 };
 
+struct CircuitException
+{
+  std::string message;
+  CircuitException(const std::string &m) : message(m) {}
+};
+
 #endif /* CIRCUIT_H */

@@ -23,6 +23,8 @@ PG_MODULE_MAGIC;
 
 bool provsql_shared_library_loaded = false;
 
+bool provsql_interrupted = false;
+
 static const char *PROVSQL_COLUMN_NAME="provsql";
 
 extern void _PG_init(void);

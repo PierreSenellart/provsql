@@ -18,6 +18,7 @@ extern "C" {
 }
 
 #include "Circuit.h"
+#include <csignal>
 
 using namespace std;
 
@@ -42,6 +43,11 @@ std::string UUIDDatum2string(Datum token)
   }
 
   return result;
+}
+
+void provsql_sigint_handler (int)
+{
+  provsql_interrupted = true;
 }
 
 Datum probability_evaluate(PG_FUNCTION_ARGS)
@@ -126,6 +132,11 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
   double result;
   unsigned gate = c.getGate(UUIDDatum2string(token));
 
+  provsql_interrupted = false;
+
+  void (*prev_sigint_handler)(int);
+  prev_sigint_handler = signal(SIGINT, provsql_sigint_handler);
+
   if(method=="monte-carlo") {
     int samples;
     bool invalid=false;
@@ -139,15 +150,26 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
     if(invalid || samples==0 || samples<0)
       elog(ERROR, "Invalid number of samples: '%s'", args.c_str());
     
-    result = c.monteCarlo(gate, samples);
+    try {
+      result = c.monteCarlo(gate, samples);
+    } catch(CircuitException e) {
+      elog(ERROR, "%s", e.message.c_str());
+    }
   } else if(method=="possible-worlds") {
-    result = c.possibleWorlds(gate);
+    try {
+      result = c.possibleWorlds(gate);
+    } catch(CircuitException e) {
+      elog(ERROR, "%s", e.message.c_str());
+    }
 
     if(!args.empty())
       elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
   } else {
     elog(ERROR, "Wrong method '%s' for pobability evaluation", method.c_str());
   }
+
+  provsql_interrupted = false;
+  signal (SIGINT, prev_sigint_handler);
   
   PG_RETURN_FLOAT8(result);
 }
