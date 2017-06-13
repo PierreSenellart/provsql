@@ -156,14 +156,14 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
       elog(ERROR, "%s", e.message.c_str());
     }
   } else if(method=="possible-worlds") {
+    if(!args.empty())
+      elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
+
     try {
       result = c.possibleWorlds(gate);
     } catch(CircuitException e) {
       elog(ERROR, "%s", e.message.c_str());
     }
-
-    if(!args.empty())
-      elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
   } else {
     elog(ERROR, "Wrong method '%s' for pobability evaluation", method.c_str());
   }
