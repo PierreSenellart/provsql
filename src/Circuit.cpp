@@ -134,7 +134,7 @@ double Circuit::monteCarlo(unsigned g, unsigned samples) const
       ++success;
     
     if(provsql_interrupted)
-      throw CircuitException("Interrupted");
+      throw CircuitException("Interrupted after "+to_string(i+1)+" samples");
   }
 
   return success*1./samples;
