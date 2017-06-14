@@ -1,0 +1,11 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+ city  | round 
+-------+-------
+ Paris |   0.4
+(1 row)
+
