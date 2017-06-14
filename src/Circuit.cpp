@@ -215,7 +215,7 @@ double Circuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-double Circuit::CNFCompilation(unsigned g) const {
+double Circuit::compilation(unsigned g, string compiler) const {
   vector<vector<int>> clauses;
 
   // Tseytin transformation
@@ -274,10 +274,21 @@ double Circuit::CNFCompilation(unsigned g) const {
 
   ofs.close();
 
-  if(system("d4 /tmp/test -out=/tmp/test.out"))
-    throw CircuitException("Error executing d4");
+  int retvalue;
+  if(compiler=="d4") {
+    retvalue=system("d4 /tmp/test -out=/tmp/test.nnf");
+  } else if(compiler=="c2d") {
+    retvalue=system("c2d -in /tmp/test -silent");
+  } else if(compiler=="dsharp") {
+    retvalue=system("dsharp -q -Fnnf /tmp/test.nnf /tmp/test");
+  } else {
+    throw CircuitException("Unknown compiler '"+compiler+"'");
+  }
+
+  if(retvalue)    
+    throw CircuitException("Error executing "+compiler);
   
-  ifstream ifs("/tmp/test.out");
+  ifstream ifs("/tmp/test.nnf");
 
   string nnf;
   getline(ifs, nnf, ' ');

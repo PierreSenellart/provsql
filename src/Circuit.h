@@ -33,7 +33,7 @@ class Circuit {
   void addWire(unsigned f, unsigned t);
 
   double possibleWorlds(unsigned g) const;
-  double CNFCompilation(unsigned g) const;
+  double compilation(unsigned g, std::string compiler) const;
   double monteCarlo(unsigned g, unsigned samples) const;
 
   double dDNNFEvaluation(unsigned g) const;
