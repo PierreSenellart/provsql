@@ -105,7 +105,7 @@ You can then use this provenance to run computation in various semirings.
 See [security.sql](test/sql/security.sql) and
 [formula.sql](test/sql/formula.sql) for two examples.
 
-See the other examples in [test/sql] for other use cases.
+See the other examples in [test/sql](test/sql) for other use cases.
 
 ## Uninstalling
 
