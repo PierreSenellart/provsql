@@ -33,6 +33,12 @@ bool initialize_constants(constants_t *constants)
 
   constants->OID_TYPE_UUID_ARRAY = TypenameGetTypid("_uuid");
   CheckOid(OID_TYPE_UUID_ARRAY);
+  
+  constants->OID_TYPE_INT = TypenameGetTypid("int4");
+  CheckOid(OID_TYPE_INT);
+
+  constants->OID_TYPE_INT_ARRAY = TypenameGetTypid("_int4");
+  CheckOid(OID_TYPE_INT_ARRAY);
 
   constants->OID_FUNCTION_PROVENANCE_AGG_PLUS = GetFuncOid("provenance_agg");
   CheckOid(OID_FUNCTION_PROVENANCE_AGG_PLUS);
@@ -42,6 +48,9 @@ bool initialize_constants(constants_t *constants)
 
   constants->OID_FUNCTION_PROVENANCE_MONUS = GetFuncOid("provenance_monus");
   CheckOid(OID_FUNCTION_PROVENANCE_MONUS);
+  
+  constants->OID_FUNCTION_PROVENANCE_PROJECT = GetFuncOid("provenance_project");
+  CheckOid(OID_FUNCTION_PROVENANCE_PROJECT);
 
   constants->OID_FUNCTION_PROVENANCE = GetFuncOid("provenance");
   CheckOid(OID_FUNCTION_PROVENANCE);

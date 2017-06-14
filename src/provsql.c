@@ -6,6 +6,7 @@
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_operator.h"
+#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/planner.h"
 #include "parser/parse_oper.h"
@@ -198,10 +199,14 @@ static Expr *add_provenance_to_select(
     List *prov_atts, 
     const constants_t *constants, 
     bool aggregation_needed,
-    semiring_operation op)
+    semiring_operation op,
+    bool *exported,
+    int nbcols)
 {
   FuncExpr *expr;
   TargetEntry *te=makeNode(TargetEntry);
+  int i;
+  bool projection=false;
 
   te->resno=list_length(q->targetList)+1;
   te->resname=(char *)PROVSQL_COLUMN_NAME;
@@ -252,6 +257,44 @@ static Expr *add_provenance_to_select(
     } else {
       te->expr=(Expr*)expr;
     }
+  }
+
+  for(i=0;i<nbcols;++i) {
+    if(!exported[i])
+      projection=true;
+  }
+
+  if(projection) {
+    ArrayExpr *array=makeNode(ArrayExpr);
+    FuncExpr *fe=makeNode(FuncExpr);
+
+    fe->funcid=constants->OID_FUNCTION_PROVENANCE_PROJECT;
+    fe->funcvariadic=true;
+    fe->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+    fe->location=-1;
+      
+    array->array_typeid=constants->OID_TYPE_INT_ARRAY;
+    array->element_typeid=constants->OID_TYPE_INT;
+    array->elements=NIL;
+    array->location=-1;
+  
+    for(i=0;i<nbcols;++i) {
+      if(exported[i]) {
+        Const *ce=makeConst(constants->OID_TYPE_INT,
+            -1,
+            InvalidOid,
+            sizeof(int32),
+            Int32GetDatum(i+1),
+            false,
+            true);
+        
+        array->elements=lappend(array->elements, ce);
+      }
+    }
+
+    fe->args=list_make2(te->expr, array);
+
+    te->expr=(Expr *)fe;
   }
 
   q->targetList=lappend(q->targetList,te);
@@ -439,8 +482,8 @@ static bool has_provenance_walker(
             return true;
           }
 
-        ++attid;
-      }
+          ++attid;
+        }
       } else if(r->rtekind == RTE_FUNCTION) {
         ListCell *lc;
         AttrNumber attid=1;
@@ -564,6 +607,8 @@ static Query *process_query(
   bool has_union = false;
   bool has_difference = false;
   bool supported=true;
+  bool *exported=0;
+  int nbcols=0;
 
 //  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
@@ -648,6 +693,56 @@ static Query *process_query(
     }
   }
 #endif /* PG_VERSION_NUM >= 90500 */
+  
+  if(supported) {
+    int *columns[q->rtable->length];
+
+    unsigned i=0;
+    ListCell *l;
+    
+    foreach(l, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *) lfirst(l);
+      ListCell *lc;
+
+      columns[i]=0;
+      if(r->eref) {
+        unsigned j=0;
+
+        columns[i]=(int *) palloc(r->eref->colnames->length*sizeof(int));
+
+        foreach(lc, r->eref->colnames) {
+          Value *v = (Value *) lfirst(lc);
+          if(strcmp(strVal(v),"") && strcmp(strVal(v),PROVSQL_COLUMN_NAME)) { // TODO: More robust test
+            columns[i][j]=++nbcols;
+          } else {
+            columns[i][j]=0;
+          }
+          ++j;
+        }
+      }
+         
+      ++i;
+    }
+
+    exported = (bool*) palloc(nbcols*sizeof(bool));
+    for(i=0;i<nbcols;++i)
+      exported[i]=false;
+
+    foreach(l,q->targetList) {
+      TargetEntry *rt = (TargetEntry *) lfirst(l);
+      if(rt->expr->type==T_Var) {
+        Var *v =(Var *) rt->expr;
+
+        if(columns[v->varno-1] && columns[v->varno-1][v->varattno-1])
+          exported[columns[v->varno-1][v->varattno-1]-1] = true;
+      }
+    }
+
+    for(i=0;i<q->rtable->length;++i) {
+      if(columns[i])
+        pfree(columns[i]);
+    }
+  }
 
   if(supported) {
     provsql = add_provenance_to_select(
@@ -655,7 +750,10 @@ static Query *process_query(
         prov_atts,
         constants,
         q->hasAggs,
-        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
+        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
+        exported,
+        nbcols);
+    pfree(exported);
 
     replace_provenance_function_by_expression(q, provsql, constants);
   }

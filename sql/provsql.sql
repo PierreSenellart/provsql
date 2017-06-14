@@ -6,7 +6,7 @@ SET search_path TO provsql;
 
 CREATE DOMAIN provenance_token AS UUID NOT NULL;
 
-CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','zero','one');
+CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','project','zero','one');
 
 CREATE TABLE provenance_circuit_gate(
   gate provenance_token PRIMARY KEY,
@@ -15,6 +15,13 @@ CREATE TABLE provenance_circuit_gate(
 CREATE TABLE provenance_circuit_wire(
   f provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE,
   t provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE);
+
+CREATE TABLE provenance_circuit_extra(
+  gate provenance_token,
+  info INT
+);
+
+CREATE INDEX ON provenance_circuit_extra (gate);
 
 CREATE INDEX ON provenance_circuit_wire (f);
 CREATE INDEX ON provenance_circuit_wire (t);
@@ -59,9 +66,10 @@ CREATE OR REPLACE FUNCTION create_provenance_mapping(newtbl text, oldtbl regclas
 $$
 DECLARE
 BEGIN
-  EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance() FROM %I', newtbl, att, oldtbl);
+  EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS SELECT *, provsql.provenance() FROM %I', oldtbl);
+  PERFORM provsql.remove_provenance('tmp_provsql');
+  EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
   EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
-  EXECUTE format('SELECT provsql.remove_provenance(%L)', newtbl);
 END
 $$ LANGUAGE plpgsql;
 
@@ -162,6 +170,23 @@ BEGIN
   END IF;  
 
   RETURN monus_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE FUNCTION provenance_project(token provenance_token, VARIADIC positions int[])
+  RETURNS provenance_token AS
+$$
+DECLARE
+  project_token uuid;
+BEGIN
+  project_token:=uuid_generate_v5(uuid_ns_provsql(),concat(token,positions));
+  BEGIN
+    INSERT INTO provenance_circuit_gate VALUES(project_token,'project');
+    INSERT INTO provenance_circuit_wire VALUES(project_token,token);
+    INSERT INTO provenance_circuit_extra SELECT project_token, unnest(positions);
+  EXCEPTION WHEN unique_violation THEN
+  END;
+  RETURN project_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
@@ -307,6 +332,10 @@ BEGIN
     EXECUTE format('SELECT %I(a) FROM (SELECT %L::%I AS a WHERE FALSE) temp',plus_function,element_one,value_type) INTO result;
   ELSIF rec.gate_type='one' THEN
     EXECUTE format('SELECT %L::%I',element_one,value_type) INTO result;
+  ELSIF rec.gate_type='project' THEN
+    EXECUTE format('SELECT provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L) FROM provsql.provenance_circuit_wire WHERE f=%L',
+      token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
+    INTO result;
   ELSE
     RAISE EXCEPTION USING MESSAGE='Unknown gate type';
   END IF;
@@ -327,9 +356,9 @@ BEGIN
           UNION ALL
         SELECT p2.* FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f
       ) SELECT f::uuid, t::uuid, gate_type, NULL AS prob FROM transitive_closure JOIN provsql.provenance_circuit_gate ON gate=f
-        UNION ALL
+        UNION
         SELECT p2.provenance, NULL, ''input'', p2.value AS prob FROM transitive_closure p1 JOIN ' || token2prob ||' AS p2 ON provenance=t
-        UNION ALL
+        UNION
         SELECT provenance, NULL, ''input'', value AS prob FROM ' || token2prob || ' WHERE provenance=$1'
   USING token LOOP;
   RETURN;
