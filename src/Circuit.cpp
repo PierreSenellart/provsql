@@ -1,6 +1,7 @@
 #include "Circuit.h"
 
 extern "C" {
+#include "postgres.h"
 #include "provsql_utils.h"
 }
 
@@ -20,22 +21,20 @@ unsigned Circuit::getGate(const uuid &u)
 {
   auto it=uuid2id.find(u);
   if(it==uuid2id.end()) {
-    unsigned id=addGate(UNDETERMINED);
+    unsigned id=addGate();
     uuid2id[u]=id;
     return id;
   } else 
     return it->second;
 }
 
-unsigned Circuit::addGate(gateType type)
+unsigned Circuit::addGate()
 {
   unsigned id=gates.size();
-  gates.push_back(type);
+  gates.push_back(UNDETERMINED);
   prob.push_back(1);
   wires.resize(id+1);
   rwires.resize(id+1);
-  if(type==IN)
-    inputs.push_back(id);
   return id;
 }
 
@@ -45,7 +44,7 @@ void Circuit::setGate(const uuid &u, gateType type, double p)
   gates[id] = type;
   prob[id] = p;
   if(type==IN)
-    inputs.push_back(id);
+    inputs.insert(id);
 }
 
 void Circuit::addWire(unsigned f, unsigned t)
@@ -61,7 +60,13 @@ std::string Circuit::toString(unsigned g) const
 
   switch(gates[g]) {
     case IN:
-      return to_string(g)+"["+to_string(prob[g])+"]";
+      if(prob[g]==0.) {
+        return "⊥";
+      } else if(prob[g]==1.) {
+        return "⊤";
+      } else {
+        return to_string(g)+"["+to_string(prob[g])+"]";
+      }
     case NOT:
       op="¬";
       break;
@@ -189,18 +194,20 @@ double Circuit::possibleWorlds(unsigned g) const
     unordered_set<unsigned> s;
     double p = 1;
 
-    for(unsigned j=0; j<inputs.size(); ++j) {
+    unsigned j=0;
+    for(unsigned in : inputs) {
       if(i & (1 << j)) {
-        s.insert(inputs[j]);
-        p*=prob[inputs[j]];
+        s.insert(in);
+        p*=prob[in];
       } else {
-        p*=1-prob[inputs[j]];
+        p*=1-prob[in];
       }
+      ++j;
     }
 
     if(evaluate(g, s))
       totalp+=p;
-
+   
     if(provsql_interrupted)
       throw CircuitException("Interrupted");
   }
@@ -318,18 +325,21 @@ double Circuit::CNFCompilation(unsigned g) const {
     } else if(c=='L') {
       int leaf;
       ss >> leaf;
-      if(leaf<0) {
-        dnnf.setGate(to_string(i), IN, 1-prob[-leaf-1]);
-      } else {
-        dnnf.setGate(to_string(i), IN, prob[leaf-1]);
-      }
+      if(gates[abs(leaf)-1]==IN) {
+        if(leaf<0) {
+          dnnf.setGate(to_string(i), IN, 1-prob[-leaf-1]);
+        } else {
+          dnnf.setGate(to_string(i), IN, prob[leaf-1]);
+        }
+      } else
+        dnnf.setGate(to_string(i), IN, 1.);
     } else 
       throw CircuitException(string("Unreadable d-DNNF (unknown node type: ")+c+")");
 
     ++i;
   }
 
-  //throw CircuitException(toString(g) + "\n" + dnnf.toString(dnnf.getGate(to_string(i-1))));
+//  throw CircuitException(toString(g) + "\n" + dnnf.toString(dnnf.getGate(to_string(i-1))));
 
   return dnnf.dDNNFEvaluation(dnnf.getGate(to_string(i-1)));
 }

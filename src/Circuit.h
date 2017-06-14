@@ -7,6 +7,7 @@ extern "C" {
 
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 #include <vector>
 
 class Circuit {
@@ -20,15 +21,15 @@ class Circuit {
   std::vector<std::unordered_set<unsigned>> rwires;
   std::unordered_map<uuid, unsigned> uuid2id;
   std::vector<double> prob;
-  std::vector<unsigned> inputs;
+  std::set<unsigned> inputs;
   
+  unsigned addGate();
   bool evaluate(unsigned g, const std::unordered_set<unsigned> &trues) const;
     
  public:
   bool hasGate(const uuid &u) const;
   unsigned getGate(const uuid &u);
-  unsigned addGate(gateType type);
-  void setGate(const uuid &u, gateType t, double p = 1);
+  void setGate(const uuid &u, gateType t, double p = -1);
   void addWire(unsigned f, unsigned t);
 
   double possibleWorlds(unsigned g) const;

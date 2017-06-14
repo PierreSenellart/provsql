@@ -6,7 +6,7 @@ SET search_path TO provsql;
 
 CREATE DOMAIN provenance_token AS UUID NOT NULL;
 
-CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','zero','one');
+CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','zero','one');
 
 CREATE TABLE provenance_circuit_gate(
   gate provenance_token PRIMARY KEY,
@@ -133,6 +133,8 @@ CREATE FUNCTION provenance_monus(token1 provenance_token, token2 provenance_toke
 $$
 DECLARE
   monus_token uuid;
+  monusl_token uuid;
+  monusr_token uuid;
 BEGIN
   IF token2 IS NULL THEN
     -- Special semantics, because of a LEFT OUTER JOIN used by the
@@ -145,10 +147,16 @@ BEGIN
     monus_token:=gate_zero();
   ELSE  
     monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
+    monusl_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monusl',token1,token2));
+    monusr_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monusr',token1,token2));
     BEGIN
       INSERT INTO provenance_circuit_gate VALUES(monus_token,'monus');
-      INSERT INTO provenance_circuit_wire VALUES(monus_token,token1);
-      INSERT INTO provenance_circuit_wire VALUES(monus_token,token2);
+      INSERT INTO provenance_circuit_gate VALUES(monusl_token,'monusl');
+      INSERT INTO provenance_circuit_gate VALUES(monusr_token,'monusr');
+      INSERT INTO provenance_circuit_wire VALUES(monus_token,monusl_token);
+      INSERT INTO provenance_circuit_wire VALUES(monus_token,monusr_token);
+      INSERT INTO provenance_circuit_wire VALUES(monusl_token,token1);
+      INSERT INTO provenance_circuit_wire VALUES(monusr_token,token2);
     EXCEPTION WHEN unique_violation THEN
     END;
   END IF;  
@@ -291,8 +299,8 @@ BEGIN
     IF monus_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
     ELSE
-      EXECUTE format('SELECT %I(a[1],a[2]) FROM (SELECT array_agg(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L)) AS a FROM provsql.provenance_circuit_wire WHERE f=%L) t',
-        monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
+      EXECUTE format('SELECT %I(a[1],a[2]) FROM (SELECT array_agg(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L)) AS a FROM (SELECT w2.t FROM provsql.provenance_circuit_wire w1, provsql.provenance_circuit_wire w2, provenance_circuit_gate g WHERE w1.f=%L AND w1.t=w2.f AND w1.t=g.gate and g.gate_type=''monusl'' UNION ALL SELECT w2.t FROM provsql.provenance_circuit_wire w1, provsql.provenance_circuit_wire w2, provenance_circuit_gate g WHERE w1.f=%L AND w1.t=w2.f AND w1.t=g.gate and g.gate_type=''monusr'') t1) t2',
+        monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token,token)
       INTO result;
     END IF;
   ELSIF rec.gate_type='zero' THEN

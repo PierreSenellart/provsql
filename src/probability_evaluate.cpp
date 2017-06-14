@@ -90,8 +90,6 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
     SPITupleTable *tuptable = SPI_tuptable;
 
-    unordered_set<unsigned> already_seen;
-
     for (int i = 0; i < proc; i++)
     {
       HeapTuple tuple = tuptable->vals[i];
@@ -103,19 +101,12 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
       } else {
         unsigned id=c.getGate(f);
 
-        if(type == "monus") {
-          if(already_seen.find(id)!=already_seen.end()) {
-            unsigned id2 = c.addGate(Circuit::NOT);
-            c.addWire(id, id2);
-            id=id2;
-          } else {
-            already_seen.insert(id);
-            c.setGate(f, Circuit::AND);
-          }
+        if(type == "monus" || type == "monusl" || type == "times") {
+          c.setGate(f, Circuit::AND);
         } else if(type == "plus") {
           c.setGate(f, Circuit::OR);
-        } else if(type == "times") {
-          c.setGate(f, Circuit::AND);
+        } else if(type == "monusr") {
+          c.setGate(f, Circuit::NOT);
         } else {
           elog(ERROR, "Wrong type of gate in circuit");
         }
