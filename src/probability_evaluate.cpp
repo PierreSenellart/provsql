@@ -24,7 +24,7 @@ using namespace std;
 
 /* copied with small changes from uuid.c */
 
-std::string UUIDDatum2string(Datum token)
+static std::string UUIDDatum2string(Datum token)
 {
   pg_uuid_t *uuid = DatumGetUUIDP(token);
   static const char hex_chars[] = "0123456789abcdef";
@@ -45,31 +45,14 @@ std::string UUIDDatum2string(Datum token)
   return result;
 }
 
-void provsql_sigint_handler (int)
+static void provsql_sigint_handler (int)
 {
   provsql_interrupted = true;
 }
 
-Datum probability_evaluate(PG_FUNCTION_ARGS)
+static Datum probability_evaluate_internal
+  (Datum token, Datum token2prob, const string &method, const string &args)
 {
-  Datum token = PG_GETARG_DATUM(0);
-  Datum token2prob = PG_GETARG_DATUM(1);
-  string method;
-  string args;
-
-  if(!PG_ARGISNULL(2)) {
-    text *t = PG_GETARG_TEXT_P(2);
-    method = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
-  }
-
-  if(!PG_ARGISNULL(3)) {
-    text *t = PG_GETARG_TEXT_P(3);
-    args = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
-  }
-  
-  if(PG_ARGISNULL(1))
-    PG_RETURN_NULL();
-  
   constants_t constants;
   if(!initialize_constants(&constants)) {
     elog(ERROR, "Cannot find provsql schema");
@@ -144,7 +127,7 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
     try {
       result = c.monteCarlo(gate, samples);
     } catch(CircuitException e) {
-      elog(ERROR, "%s", e.message.c_str());
+      elog(ERROR, "%s", e.what());
     }
   } else if(method=="possible-worlds") {
     if(!args.empty())
@@ -153,13 +136,13 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
     try {
       result = c.possibleWorlds(gate);
     } catch(CircuitException e) {
-      elog(ERROR, "%s", e.message.c_str());
+      elog(ERROR, "%s", e.what());
     }
   } else if(method=="compilation") {
     try {
       result = c.compilation(gate, args);
     } catch(CircuitException e) {
-      elog(ERROR, "%s", e.message.c_str());
+      elog(ERROR, "%s", e.what());
     }
   } else {
     elog(ERROR, "Wrong method '%s' for pobability evaluation", method.c_str());
@@ -169,4 +152,35 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
   signal (SIGINT, prev_sigint_handler);
   
   PG_RETURN_FLOAT8(result);
+}
+
+Datum probability_evaluate(PG_FUNCTION_ARGS)
+{
+  try {
+    Datum token = PG_GETARG_DATUM(0);
+    Datum token2prob = PG_GETARG_DATUM(1);
+    string method;
+    string args;
+
+    if(!PG_ARGISNULL(2)) {
+      text *t = PG_GETARG_TEXT_P(2);
+      method = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
+    }
+
+    if(!PG_ARGISNULL(3)) {
+      text *t = PG_GETARG_TEXT_P(3);
+      args = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
+    }
+
+    if(PG_ARGISNULL(1))
+      PG_RETURN_NULL();
+
+    return probability_evaluate_internal(token, token2prob, method, args);
+  } catch(const std::exception &e) {
+    elog(ERROR, "probability_evaluate: %s", e.what());
+  } catch(...) {
+    elog(ERROR, "probability_evaluate: Unknown exception");
+  }
+
+  PG_RETURN_NULL();
 }

@@ -41,10 +41,13 @@ class Circuit {
   std::string toString(unsigned g) const;
 };
 
-struct CircuitException
+class CircuitException : public std::exception
 {
   std::string message;
+
+ public: 
   CircuitException(const std::string &m) : message(m) {}
+  virtual char const * what() const noexcept { return message.c_str(); }
 };
 
 #endif /* CIRCUIT_H */
