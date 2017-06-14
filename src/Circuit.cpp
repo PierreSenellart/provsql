@@ -1,14 +1,15 @@
 #include "Circuit.h"
 
 extern "C" {
-#include "postgres.h"
 #include "provsql_utils.h"
+#include <unistd.h>
 }
 
 #include <cassert>
 #include <string>
 #include <fstream>
 #include <sstream>
+#include <cstdlib>
 
 using namespace std;
 
@@ -261,7 +262,13 @@ double Circuit::compilation(unsigned g, string compiler) const {
   }
   clauses.push_back({(int)g+1});
 
-  ofstream ofs("/tmp/test");
+  int fd;
+  char cfilename[] = "/tmp/provsqlXXXXXX";
+  fd = mkstemp(cfilename);
+  close(fd);
+  string filename=cfilename, outfilename=filename+".nnf";
+
+  ofstream ofs(filename.c_str());
 
   ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
 
@@ -274,21 +281,27 @@ double Circuit::compilation(unsigned g, string compiler) const {
 
   ofs.close();
 
-  int retvalue;
+  string cmdline=compiler+" ";
   if(compiler=="d4") {
-    retvalue=system("d4 /tmp/test -out=/tmp/test.nnf");
+    cmdline+=filename+" -out="+outfilename;
   } else if(compiler=="c2d") {
-    retvalue=system("c2d -in /tmp/test -silent");
+    cmdline+="-in "+filename+" -silent";
   } else if(compiler=="dsharp") {
-    retvalue=system("dsharp -q -Fnnf /tmp/test.nnf /tmp/test");
+    cmdline+="-q -Fnnf "+outfilename+" "+filename;
   } else {
     throw CircuitException("Unknown compiler '"+compiler+"'");
+  }
+
+  int retvalue=system(cmdline.c_str());
+
+  if(unlink(filename.c_str())) {
+    throw CircuitException("Error removing "+filename);
   }
 
   if(retvalue)    
     throw CircuitException("Error executing "+compiler);
   
-  ifstream ifs("/tmp/test.nnf");
+  ifstream ifs(outfilename.c_str());
 
   string nnf;
   getline(ifs, nnf, ' ');
@@ -348,6 +361,11 @@ double Circuit::compilation(unsigned g, string compiler) const {
       throw CircuitException(string("Unreadable d-DNNF (unknown node type: ")+c+")");
 
     ++i;
+  }
+
+  ifs.close();
+  if(unlink(outfilename.c_str())) {
+    throw CircuitException("Error removing "+outfilename);
   }
 
 //  throw CircuitException(toString(g) + "\n" + dnnf.toString(dnnf.getGate(to_string(i-1))));
