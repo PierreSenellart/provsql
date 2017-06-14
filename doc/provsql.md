@@ -1,6 +1,6 @@
 # ProvSQL
 
-The goal of the ProvSQL project is to add support for semiring provenance
+The goal of the ProvSQL project is to add support for (m-)semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
 PostgreSQL extension/module/plugin. It is work in progress at the moment.
 
@@ -8,14 +8,12 @@ PostgreSQL extension/module/plugin. It is work in progress at the moment.
 
 The ProvSQL system currently supports proper management of provenance
 attached to SQL queries, in the form of a provenance circuit, suitable
-both for regular Boolean provenance and arbitrary semiring provenance (in
-the universal semiring, or specialized to any semiring of choice). It
-also aims at supporting probability computation from the provenance
-circuit, though this is not implemented at the moment.
+both for regular Boolean provenance, arbitrary semiring provenance, with
+or without monus (m-semiring), in the free m-semiring, or specialized 
+to any m-semiring of choice. It also supports probability computation
+from the provenance, through a variety of methods.
 
-The following SQL queries are currently supported. At the moment, they
-are all *monotone* queries, but support for non-monotone query is also
-planned.
+The following SQL queries are currently supported.
 * Regular SELECT-FROM-WHERE queries (aka conjunctive queries with
   multiset semantics)
 * JOIN queries (regular joins and outer joins; semijoins and antijoins
@@ -24,6 +22,7 @@ planned.
 * GROUP BY queries (without aggregation)
 * SELECT DISTINCT queries (i.e., set semantics)
 * UNION's or UNION ALL's of SELECT queries
+* EXCEPT of SELECT queries
 
 ## Prerequisites
 
@@ -42,6 +41,19 @@ planned.
 3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
    systems, it is found in the `postgresql-contrib-9.x` package; on
    Homebrew, in the `ossp-uuid` package).
+
+4. Optionally, for probability computation, any or all of the following
+   software:
+
+   * `c2d`, from http://reasoning.cs.ucla.edu/c2d/download.php
+
+   * `d4`, from http://www.cril.univ-artois.fr/KC/d4.html
+
+   * `dsharp`, from https://bitbucket.org/haz/dsharp
+
+   To be used, an executable with the name of this software must be
+   available in the PATH of the PostgreSQL server user (e.g., in
+   `/usr/local/bin/`).
 
 ## Installation
 
@@ -73,6 +85,9 @@ administrator with ``ALTER USER your_login WITH SUPERUSER``. This assumes that
 can ensure this by running the command ``createuser your_login`` as the
 ``postgresql`` user.
 
+Note that the tests depending of external software (`c2d`, `d4`, or
+`dsharp`) will fail if no executable of that name can be found.
+
 ## Using ProvSQL
 
 You can use ProvSQL from any PostgreSQL extension by loading the
@@ -89,6 +104,8 @@ provenance of each tuple as a UUID.
 You can then use this provenance to run computation in various semirings.
 See [security.sql](test/sql/security.sql) and
 [formula.sql](test/sql/formula.sql) for two examples.
+
+See the other examples in [test/sql] for other use cases.
 
 ## Uninstalling
 
