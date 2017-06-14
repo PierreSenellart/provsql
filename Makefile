@@ -41,7 +41,7 @@ VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
 PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
 PGVER_MINOR = $(shell echo $(VERSION) | awk -F. '{ print ($$2 + 0) }')
 
-test/schedule:
+test/schedule: test/schedule.common test/schedule.9.5
 	cat test/schedule.common > test/schedule
 	if [ $(PGVER_MAJOR) -eq 9 -a $(PGVER_MINOR) -ge 5 ] ; then \
 	  cat test/schedule.9.5 >> test/schedule; \
