@@ -328,9 +328,9 @@ BEGIN
         SELECT p2.* FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f
       ) SELECT f::uuid, t::uuid, gate_type, NULL AS prob FROM transitive_closure JOIN provsql.provenance_circuit_gate ON gate=f
         UNION ALL
-        SELECT p2.provenance, NULL, ''input'', p2.prob FROM transitive_closure p1 JOIN ' || token2prob ||' AS p2 ON provenance=t
+        SELECT p2.provenance, NULL, ''input'', p2.value AS prob FROM transitive_closure p1 JOIN ' || token2prob ||' AS p2 ON provenance=t
         UNION ALL
-        SELECT provenance, NULL, ''input'', prob FROM ' || token2prob || ' WHERE provenance=$1'
+        SELECT provenance, NULL, ''input'', value AS prob FROM ' || token2prob || ' WHERE provenance=$1'
   USING token LOOP;
   RETURN;
 END  
