@@ -164,6 +164,15 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
     } catch(CircuitException e) {
       elog(ERROR, "%s", e.message.c_str());
     }
+  } else if(method=="cnf-compilation") {
+    if(!args.empty())
+      elog(WARNING, "Argument '%s' ignored for method cnf-compilation", args.c_str());
+
+    try {
+      result = c.CNFCompilation(gate);
+    } catch(CircuitException e) {
+      elog(ERROR, "%s", e.message.c_str());
+    }
   } else {
     elog(ERROR, "Wrong method '%s' for pobability evaluation", method.c_str());
   }

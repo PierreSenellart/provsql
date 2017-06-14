@@ -6,6 +6,8 @@ extern "C" {
 
 #include <cassert>
 #include <string>
+#include <fstream>
+#include <sstream>
 
 using namespace std;
 
@@ -29,7 +31,7 @@ unsigned Circuit::addGate(gateType type)
 {
   unsigned id=gates.size();
   gates.push_back(type);
-  prob.push_back(-1);
+  prob.push_back(1);
   wires.resize(id+1);
   rwires.resize(id+1);
   if(type==IN)
@@ -74,6 +76,14 @@ std::string Circuit::toString(unsigned g) const
       break;
   }
 
+  if(wires[g].empty()) {
+    if(gates[g]==AND)
+      return "⊤";
+    else if(gates[g]==OR)
+      return "⊥";
+    else return op;
+  }
+
   for(auto s: wires[g]) {
     if(gates[g]==NOT)
       result = op;
@@ -83,6 +93,33 @@ std::string Circuit::toString(unsigned g) const
   }
 
   return "("+result+")";
+}
+
+double Circuit::dDNNFEvaluation(unsigned g) const
+{
+  switch(gates[g]) {
+    case IN:
+      return prob[g];
+    case NOT:
+      return 1-prob[g];
+    case AND:
+      break;
+    case OR:
+      break;
+    case UNDETERMINED:
+      throw CircuitException("Incorrect gate type");
+  }
+
+  double result=(gates[g]==AND?1:0);
+  for(auto s: wires[g]) {
+    double d = dDNNFEvaluation(s);
+    if(gates[g]==AND)
+      result*=d;
+    else
+      result+=d;
+  }
+
+  return result;
 }
 
 bool Circuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
@@ -101,7 +138,7 @@ bool Circuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
       disjunction = true;
       break;
     case UNDETERMINED:
-      return false;
+      throw CircuitException("Incorrect gate type");
   }
 
   for(auto s: wires[g]) {
@@ -169,4 +206,130 @@ double Circuit::possibleWorlds(unsigned g) const
   }
 
   return totalp;
+}
+
+double Circuit::CNFCompilation(unsigned g) const {
+  vector<vector<int>> clauses;
+
+  // Tseytin transformation
+  for(unsigned i=0; i<gates.size(); ++i) {
+    switch(gates[i]) {
+      case AND:
+        {
+          int id=i+1;
+          vector<int> c = {id};
+          for(int s: wires[i]) {
+            clauses.push_back({-id, s+1});
+            c.push_back(-s-1);
+          }
+          clauses.push_back(c);
+          break;
+        }
+
+      case OR:
+        {
+          int id=i+1;
+          vector<int> c = {-id};
+          for(int s: wires[i]) {
+            clauses.push_back({id, -s-1});
+            c.push_back(s+1);
+          }
+          clauses.push_back(c);
+        }
+        break;
+
+      case NOT:
+        {
+          int id=i+1;
+          int s=*wires[i].begin();
+          clauses.push_back({-id,-s-1});
+          clauses.push_back({id,s+1});
+          break;
+        }
+
+      case IN:
+      case UNDETERMINED:
+        ;
+    }
+  }
+  clauses.push_back({(int)g+1});
+
+  ofstream ofs("/tmp/test");
+
+  ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
+
+  for(unsigned i=0;i<clauses.size();++i) {
+    for(int x : clauses[i]) {
+      ofs << x << " ";
+    }
+    ofs << "0\n";
+  }
+
+  ofs.close();
+
+  if(system("d4 /tmp/test -out=/tmp/test.out"))
+    throw CircuitException("Error executing d4");
+  
+  ifstream ifs("/tmp/test.out");
+
+  string nnf;
+  getline(ifs, nnf, ' ');
+
+  if(nnf!="nnf") // unsatisfiable formula
+    return 0.;
+
+  unsigned nb_nodes, foobar, nb_variables;
+  ifs >> nb_nodes >> foobar >> nb_variables;
+
+  Circuit dnnf;
+
+  if(nb_variables!=gates.size())
+    throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + to_string(nb_variables) +" vs " + to_string(gates.size()) + ")");
+
+  std::string line;
+  getline(ifs,line);
+  unsigned i=0;
+  while(getline(ifs,line)) {
+    stringstream ss(line);
+    
+    char c;
+    ss >> c;
+
+    if(c=='O') {
+      int var, args;
+      ss >> var >> args;
+      unsigned id=dnnf.getGate(to_string(i));
+      dnnf.setGate(to_string(i), OR);
+      int g;
+      while(ss >> g) {
+        unsigned id2=dnnf.getGate(to_string(g));
+        dnnf.addWire(id,id2);
+      }
+    } else if(c=='A') {
+      int args;
+      ss >> args;
+      unsigned id=dnnf.getGate(to_string(i));
+      dnnf.setGate(to_string(i), AND);
+      int g;
+      while(ss >> g) {
+        unsigned id2=dnnf.getGate(to_string(g));
+        dnnf.addWire(id,id2);
+      }
+    } else if(c=='L') {
+      int leaf;
+      ss >> leaf;
+      if(leaf<0) {
+        dnnf.setGate(to_string(i), IN, 1-prob[-leaf-1]);
+      } else {
+        dnnf.setGate(to_string(i), IN, prob[leaf-1]);
+      }
+    } else 
+      throw CircuitException(string("Unreadable d-DNNF (unknown node type: ")+c+")");
+
+    ++i;
+  }
+
+  //throw CircuitException(toString(g) + "\n" + dnnf.toString(dnnf.getGate(to_string(i-1))));
+
+  return dnnf.dDNNFEvaluation(dnnf.getGate(to_string(i-1)));
 }

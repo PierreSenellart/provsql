@@ -28,11 +28,14 @@ class Circuit {
   bool hasGate(const uuid &u) const;
   unsigned getGate(const uuid &u);
   unsigned addGate(gateType type);
-  void setGate(const uuid &u, gateType t, double p = -1);
+  void setGate(const uuid &u, gateType t, double p = 1);
   void addWire(unsigned f, unsigned t);
 
   double possibleWorlds(unsigned g) const;
+  double CNFCompilation(unsigned g) const;
   double monteCarlo(unsigned g, unsigned samples) const;
+
+  double dDNNFEvaluation(unsigned g) const;
 
   std::string toString(unsigned g) const;
 };
