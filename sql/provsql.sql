@@ -351,11 +351,11 @@ CREATE OR REPLACE FUNCTION sub_circuit_with_prob(
 $$
 BEGIN
   RETURN QUERY EXECUTE
-      'WITH RECURSIVE transitive_closure(f,t) AS (
-        SELECT * FROM provsql.provenance_circuit_wire WHERE f=$1
+      'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
+        SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
           UNION ALL
-        SELECT p2.* FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f
-      ) SELECT f::uuid, t::uuid, gate_type, NULL AS prob FROM transitive_closure JOIN provsql.provenance_circuit_gate ON gate=f
+        SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
+      ) SELECT f::uuid, t::uuid, gate_type, NULL FROM transitive_closure
         UNION
         SELECT p2.provenance, NULL, ''input'', p2.value AS prob FROM transitive_closure p1 JOIN ' || token2prob ||' AS p2 ON provenance=t
         UNION
