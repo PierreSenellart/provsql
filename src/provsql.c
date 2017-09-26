@@ -316,7 +316,7 @@ static Node *provenance_mutator(Node *node, provenance_mutator_context *context)
     FuncExpr *f = (FuncExpr *) node;
 
     if(f->funcid == context->constants->OID_FUNCTION_PROVENANCE) {
-      return copyObject(context->provsql);
+      return (Node*) copyObject(context->provsql);
     }
   }
 

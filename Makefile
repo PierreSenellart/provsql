@@ -33,6 +33,8 @@ else
 CXXFLAGS += -O2  
 endif
 
+LDFLAGS_SL = -lstdc++
+
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
@@ -43,6 +45,6 @@ PGVER_MINOR = $(shell echo $(VERSION) | awk -F. '{ print ($$2 + 0) }')
 
 test/schedule: test/schedule.common test/schedule.9.5
 	cat test/schedule.common > test/schedule
-	if [ $(PGVER_MAJOR) -eq 9 -a $(PGVER_MINOR) -ge 5 ] ; then \
+	if [ $(PGVER_MAJOR) -eq 9 -a $(PGVER_MINOR) -ge 5 -o $(PGVER_MAJOR) -eq 10 ] ; then \
 	  cat test/schedule.9.5 >> test/schedule; \
 	fi

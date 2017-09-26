@@ -6,8 +6,8 @@
 
    city   |                                         formula                                         
 ----------+-----------------------------------------------------------------------------------------
- Paris    | ((Dave ⊕ Magdalen ⊕ Nancy) ⊖ ((Dave ⊗ Nancy) ⊕ (Dave ⊗ Magdalen) ⊕ (Magdalen ⊗ Nancy)))
- New York | ((John ⊕ Paul) ⊖ (John ⊗ Paul))
  Berlin   | ((Ellen ⊕ Susan) ⊖ (Ellen ⊗ Susan))
+ New York | ((John ⊕ Paul) ⊖ (John ⊗ Paul))
+ Paris    | ((Dave ⊕ Magdalen ⊕ Nancy) ⊖ ((Dave ⊗ Nancy) ⊕ (Dave ⊗ Magdalen) ⊕ (Magdalen ⊗ Nancy)))
 (3 rows)
 
