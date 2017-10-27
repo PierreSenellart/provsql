@@ -623,6 +623,8 @@ static Query *process_query(
     }
   }
 
+  // get_provenance_attributes will also recursively process subqueries
+  // by calling process_query
   prov_atts=get_provenance_attributes(q, constants);
 
   if(prov_atts==NIL)
