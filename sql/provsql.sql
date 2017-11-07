@@ -345,6 +345,10 @@ BEGIN
         monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token,token)
       INTO result;
     END IF;
+  ELSIF rec.gate_type='eq' THEN
+    EXECUTE format('SELECT provsql.provenance_evaluate(t,%L::%s,%L,%L,%L,%L,%L) FROM provsql.provenance_circuit_wire WHERE f=%L',
+      token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
+    INTO result;
   ELSIF rec.gate_type='zero' THEN
     EXECUTE format('SELECT %I(a) FROM (SELECT %L::%I AS a WHERE FALSE) temp',plus_function,element_one,value_type) INTO result;
   ELSIF rec.gate_type='one' THEN
