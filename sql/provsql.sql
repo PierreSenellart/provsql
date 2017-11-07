@@ -6,7 +6,7 @@ SET search_path TO provsql;
 
 CREATE DOMAIN provenance_token AS UUID NOT NULL;
 
-CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','project','zero','one');
+CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','project','zero','one','eq');
 
 CREATE TABLE provenance_circuit_gate(
   gate provenance_token PRIMARY KEY,
@@ -18,8 +18,8 @@ CREATE TABLE provenance_circuit_wire(
 
 CREATE TABLE provenance_circuit_extra(
   gate provenance_token,
-  info INT
-);
+  info INT,
+  info_eq INT);
 
 CREATE INDEX ON provenance_circuit_extra (gate);
 
@@ -189,6 +189,23 @@ BEGIN
   RETURN project_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE FUNCTION provenance_eq(token provenance_token, pos1 int, pos2 int)
+  RETURNS provenance_token AS
+$$
+DECLARE
+  eq_token uuid;
+BEGIN
+  eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat(token,pos1,pos2));
+  BEGIN
+    INSERT INTO provenance_circuit_gate VALUES(eq_token,'eq');
+    INSERT INTO provenance_circuit_wire VALUES(eq_token, token);
+    INSERT INTO provenance_circuit_extra SELECT eq_token, pos1, pos2;
+  EXCEPTION WHEN unique_violation THEN
+  END;
+  RETURN eq_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER; 
 
 CREATE OR REPLACE FUNCTION provenance_plus
   (state provenance_token, token provenance_token)
