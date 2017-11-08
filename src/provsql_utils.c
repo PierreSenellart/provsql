@@ -52,6 +52,9 @@ bool initialize_constants(constants_t *constants)
   constants->OID_FUNCTION_PROVENANCE_PROJECT = GetFuncOid("provenance_project");
   CheckOid(OID_FUNCTION_PROVENANCE_PROJECT);
 
+  constants->OID_FUNCTION_PROVENANCE_EQ = GetFuncOid("provenance_eq");
+  CheckOid(OID_FUNCTION_PROVENANCE_EQ);
+
   constants->OID_FUNCTION_PROVENANCE = GetFuncOid("provenance");
   CheckOid(OID_FUNCTION_PROVENANCE);
 
