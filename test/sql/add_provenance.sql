@@ -21,4 +21,9 @@ INSERT INTO personal (name,position,city,classification) VALUES
   ('Susan','Analyst','Berlin','secret');
 
 SELECT add_provenance('personal');
-\d personal
+
+SELECT attname
+FROM pg_attribute
+WHERE attrelid ='personal'::regclass AND attnum>1
+ORDER BY attname;
+

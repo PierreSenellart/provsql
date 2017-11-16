@@ -10,7 +10,8 @@ CREATE TABLE result_formula AS SELECT
      WHERE p1.city = p2.city AND p1.id < p2.id
      GROUP BY p1.city
      ORDER BY p1.city)
-  ) t;
+  ) t
+ORDER BY city;
 
 SELECT remove_provenance('result_formula');
 SELECT * FROM result_formula;

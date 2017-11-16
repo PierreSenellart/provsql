@@ -27,9 +27,9 @@ The following SQL queries are currently supported.
 ## Prerequisites
 
 1. An install of PostgreSQL >= 9.4. The extension has currently been
-   tested with versions 9.4, 9.5, and 9.6 of PostgreSQL, under Linux and
-   Mac OS X (if the extension does not work on a specific version or
-   operating system, a bug report is appreciated).
+   tested with versions 9.4, 9.5, 9.6, and 10.0 of PostgreSQL, under
+   Linux and Mac OS X (if the extension does not work on a specific
+   version or operating system, a bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
    C compiler (both can be obtained on Debian-based Linux distributions
@@ -39,7 +39,8 @@ The following SQL queries are currently supported.
    the `postgresql` package on the Homebrew package manager for Mac OS X).
 
 3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
-   systems, it is found in the `postgresql-contrib-9.x` package; on
+   systems, it is found in the `postgresql-contrib-9.x` package for PostgreSQL
+   version 9.x, and is installed automatically for PostgreSQL version 10; on
    Homebrew, in the `ossp-uuid` package).
 
 4. Optionally, for probability computation, any or all of the following
@@ -70,7 +71,7 @@ The following SQL queries are currently supported.
    shared_preload_libraries = 'provsql'
    ```
    to the `postgresql.conf` configuration file (on Linux systems, it should
-   be in `/etc/postgresql/9.x/main/postgresql.conf`) and restart the 
+   be in `/etc/postgresql/VERSION/main/postgresql.conf`) and restart the 
    PostgreSQL server (e.g., with `service postgresql restart` on
    systemd-based distributions). This is required because the extension
    includes *hooks*.
@@ -85,7 +86,7 @@ administrator with ``ALTER USER your_login WITH SUPERUSER``. This assumes that
 can ensure this by running the command ``createuser your_login`` as the
 ``postgresql`` user.
 
-Note that the tests depending of external software (`c2d`, `d4`, or
+Note that the tests that depend on external software (`c2d`, `d4`, or
 `dsharp`) will fail if no executable of that name can be found.
 
 ## Using ProvSQL

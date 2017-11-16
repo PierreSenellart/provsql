@@ -11,7 +11,8 @@ EXCEPT
   FROM personal p1,personal p2
   WHERE p1.id<p2.id AND p1.city=p2.city
   GROUP BY p1.city
-) t;
+) t
+ORDER BY city;
 
 SELECT remove_provenance('dsharp_result');
 

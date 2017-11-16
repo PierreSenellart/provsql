@@ -6,8 +6,8 @@
 
    city   | prob 
 ----------+------
- Paris    | 0.41
- New York | 0.26
  Berlin   | 0.54
+ New York | 0.26
+ Paris    | 0.41
 (3 rows)
 
