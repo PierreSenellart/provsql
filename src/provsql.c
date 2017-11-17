@@ -297,6 +297,29 @@ static Expr *add_provenance_to_select(
     te->expr=(Expr *)fe;
   }
 
+  /* Part to handle eq gates used for where-provenance */
+  if(q->jointree) {
+    FromExpr *fe = makeNode(FromExpr);
+    fe = q->jointree;
+    ListCell *lc;
+    foreach(lc, q->jointree->fromlist) {
+      JoinExpr *je = (JoinExpr *) lfirst(lc);
+      OpExpr *oe = (OpExpr *) je->quals;
+      Var *v1 = linitial(oe->args);  
+      Var *v2 = lsecond(oe->args);
+
+      FuncExpr *fc = makeNode(FuncExpr);
+      
+      fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
+      fc->funcvariadic=true;
+      fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      fc->location=-1;
+
+      fc->args=list_make3(te->expr, v1->varattno, v2->varattno);
+      te->expr = (Expr *)fc;
+    }
+  }
+
   q->targetList=lappend(q->targetList,te);
 
   return te->expr;
@@ -610,7 +633,7 @@ static Query *process_query(
   bool *exported=0;
   int nbcols=0;
 
-//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
@@ -758,7 +781,7 @@ static Query *process_query(
     replace_provenance_function_by_expression(q, provsql, constants);
   }
 
-//  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
+  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
   return q;
 }
