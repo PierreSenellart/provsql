@@ -299,24 +299,41 @@ static Expr *add_provenance_to_select(
 
   /* Part to handle eq gates used for where-provenance */
   if(q->jointree) {
-    FromExpr *fe = makeNode(FromExpr);
-    fe = q->jointree;
     ListCell *lc;
     foreach(lc, q->jointree->fromlist) {
-      JoinExpr *je = (JoinExpr *) lfirst(lc);
-      OpExpr *oe = (OpExpr *) je->quals;
-      Var *v1 = linitial(oe->args);  
-      Var *v2 = lsecond(oe->args);
+      if(IsA(lc, JoinExpr)) {
+        JoinExpr *je = (JoinExpr *) lfirst(lc);
+        OpExpr *oe = (OpExpr *) je->quals;
+        Var *v1 = linitial(oe->args);  
+        Var *v2 = lsecond(oe->args);
 
-      FuncExpr *fc = makeNode(FuncExpr);
+        FuncExpr *fc = makeNode(FuncExpr);
+        fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
+        fc->funcvariadic=true;
+        fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+        fc->location=-1;
+
+        Const *c1=makeConst(constants->OID_TYPE_INT,
+            -1,
+            InvalidOid,
+            sizeof(int16),
+            Int16GetDatum(v1->varattno),
+            false,
+            true);
+
+        Const *c2=makeConst(constants->OID_TYPE_INT,
+            -1,
+            InvalidOid,
+            sizeof(int16),
+            Int16GetDatum(v2->varattno),
+            false,
+            true);     
+
+        fc->args=list_make3(te->expr, c1, c2);
+        te->expr = (Expr *)fc;
+      }
+//ereport(NOTICE, (errmsg("Test2")));
       
-      fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
-      fc->funcvariadic=true;
-      fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-      fc->location=-1;
-
-      fc->args=list_make3(te->expr, v1->varattno, v2->varattno);
-      te->expr = (Expr *)fc;
     }
   }
 
@@ -633,7 +650,7 @@ static Query *process_query(
   bool *exported=0;
   int nbcols=0;
 
-  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+//ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
@@ -781,7 +798,7 @@ static Query *process_query(
     replace_provenance_function_by_expression(q, provsql, constants);
   }
 
-  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
+//ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
   return q;
 }
