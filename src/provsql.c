@@ -332,16 +332,9 @@ static Expr *add_provenance_to_select(
 
           fc->args=list_make3(te->expr, c1, c2);
           te->expr = (Expr *)fc;
-
-ereport(NOTICE, (errmsg("Test2")));
         }
       }
-
-ereport(NOTICE, (errmsg("Test3")));
-      
     }
-ereport(NOTICE, (errmsg("Test4")));
-      
   }
 
   q->targetList=lappend(q->targetList,te);
@@ -657,7 +650,7 @@ static Query *process_query(
   bool *exported=0;
   int nbcols=0;
 
-ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+//ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
@@ -805,7 +798,7 @@ ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
     replace_provenance_function_by_expression(q, provsql, constants);
   }
 
-ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
+//ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
   return q;
 }
