@@ -297,16 +297,33 @@ static Expr *add_provenance_to_select(
     te->expr=(Expr *)fe;
   }
 
-  /* Part to handle eq gates used for where-provenance */
+//ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
+
+  /* Part to handle eq gates used for where-provenance */ 
   if(q->jointree) {
     ListCell *lc;
     foreach(lc, q->jointree->fromlist) {
       if(IsA(lfirst(lc), JoinExpr)) {
         JoinExpr *je = (JoinExpr *) lfirst(lc);
         OpExpr *oe = (OpExpr *) je->quals;
-        Var *v1 = linitial(oe->args);  
+        Var *v1;
+        if(IsA(linitial(oe->args), Var)) {
+          v1 = linitial(oe->args);  
+        } else {
+          RelabelType *rt1 = linitial(oe->args); 
+          v1 = rt1->arg;  
+        }
+        Datum first_arg = Int16GetDatum(v1->varattno);
+ 
         if(lnext(list_head(oe->args))) {
-          Var *v2 = lsecond(oe->args);
+          Var *v2;
+          if(IsA(lsecond(oe->args), Var)) {  
+            v2 = lsecond(oe->args);  
+          } else { 
+            RelabelType *rt2 = lsecond(oe->args); 
+            v2 = rt2->arg;  
+          }
+          Datum second_arg = Int16GetDatum(v2->varattno);
 
           FuncExpr *fc = makeNode(FuncExpr);
           fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
@@ -318,7 +335,7 @@ static Expr *add_provenance_to_select(
               -1,
               InvalidOid,
               sizeof(int16),
-              Int16GetDatum(v1->varattno),
+              first_arg,
               false,
               true);
 
@@ -326,16 +343,18 @@ static Expr *add_provenance_to_select(
               -1,
               InvalidOid,
               sizeof(int16),
-              Int16GetDatum(v2->varattno),
+              second_arg,
               false,
               true);     
 
           fc->args=list_make3(te->expr, c1, c2);
           te->expr = (Expr *)fc;
-        }
+        }       
       }
     }
   }
+
+//ereport(NOTICE,errmsg(nodetring("After: %s",q->jointree)));
 
   q->targetList=lappend(q->targetList,te);
 
