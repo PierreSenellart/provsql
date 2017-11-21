@@ -3,6 +3,7 @@
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
 #include "executor/spi.h"
+#include "access/htup_details.h"
 
 #include "provsql_utils.h"
 
@@ -22,6 +23,8 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   bool isnull;
   Datum result;
   char nulls[7]={' ',' ',' ',' ',' ',' ',' '};
+
+  HeapTuple tuple;
   
   Datum arguments[7]={token,token2value,element_one,element_type,plus_function,times_function,monus_function};
   Oid argtypes[7];
@@ -57,8 +60,9 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
     elog(ERROR, "Cannot execute real provenance_evaluate function");
   }
   
-  result = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull);
-  
+  tuple = SPI_copytuple(SPI_tuptable->vals[0]);
+  result = heap_getattr(tuple, 1, SPI_tuptable->tupdesc, &isnull);
+
   SPI_finish();
 
   if(isnull)
