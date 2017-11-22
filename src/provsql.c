@@ -273,7 +273,9 @@ static Expr *add_provenance_to_select(
 
 //ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
 
-  /* Part to handle eq gates used for where-provenance */ 
+  /* Part to handle eq gates used for where-provenance 
+   * Placed before projection gates because they need
+   * to be deeper in the provenance tree */
   if(q->jointree) {
     ListCell *lc;
     foreach(lc, q->jointree->fromlist) {
@@ -289,7 +291,7 @@ static Expr *add_provenance_to_select(
           oe = (OpExpr *) linitial(be->args);
 //ereport(NOTICE,(errmsg("Test2")));
         }
-        
+//ereport(WARNING,(errmsg("OpExpr: %s", nodeToString(oe))));        
         /* Sometimes Var is nested within a RelabelType */
         if(IsA(linitial(oe->args), Var)) {
           v1 = linitial(oe->args);  
@@ -337,8 +339,6 @@ static Expr *add_provenance_to_select(
       }
     }
   }
-  /* Placed before projection gates because they need to be deeper
-   * in the provenance tree */
 
   if(projection) {
     ArrayExpr *array=makeNode(ArrayExpr);

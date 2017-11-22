@@ -346,7 +346,7 @@ BEGIN
       INTO result;
     END IF;
   ELSIF rec.gate_type='eq' THEN
-    EXECUTE format('SELECT provsql.provenance_evaluate(t,%L::%s,%L,%L,%L,%L,%L) FROM provsql.provenance_circuit_wire WHERE f=%L',
+    EXECUTE format('SELECT provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L) FROM provsql.provenance_circuit_wire WHERE f=%L',
       token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token)
     INTO result;
   ELSIF rec.gate_type='zero' THEN
