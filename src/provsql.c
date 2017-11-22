@@ -273,9 +273,9 @@ static Expr *add_provenance_to_select(
 
 //ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
 
-  /* Part to handle eq gates used for where-provenance 
+  /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
-   * to be deeper in the provenance tree */
+   * to be deeper in the provenance tree. */
   if(q->jointree) {
     ListCell *lc;
     foreach(lc, q->jointree->fromlist) {
@@ -283,26 +283,23 @@ static Expr *add_provenance_to_select(
         JoinExpr *je = (JoinExpr *) lfirst(lc);
         OpExpr *oe;
         /* Sometimes OpExpr is nested within a BoolExpr */
-//ereport(NOTICE,(errmsg("Test1")));
         if(IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
 	} else {
           BoolExpr *be = (BoolExpr *) je->quals; 
           oe = (OpExpr *) linitial(be->args);
-//ereport(NOTICE,(errmsg("Test2")));
         }
-//ereport(WARNING,(errmsg("OpExpr: %s", nodeToString(oe))));        
-        /* Sometimes Var is nested within a RelabelType */
-        if(IsA(linitial(oe->args), Var)) {
-          v1 = linitial(oe->args);  
-        } else {
-          RelabelType *rt1 = linitial(oe->args); 
-          v1 = (Var *) rt1->arg;  
-        }
-        first_arg = Int16GetDatum(v1->varattno);
  
         if(lnext(list_head(oe->args))) {
           /* Sometimes Var is nested within a RelabelType */
+          if(IsA(linitial(oe->args), Var)) {
+            v1 = linitial(oe->args);  
+          } else {
+            RelabelType *rt1 = linitial(oe->args); 
+            v1 = (Var *) rt1->arg;  
+          }
+          first_arg = Int16GetDatum(v1->varattno);
+
           if(IsA(lsecond(oe->args), Var)) {  
             v2 = lsecond(oe->args);  
           } else { 
