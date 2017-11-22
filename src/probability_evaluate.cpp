@@ -87,7 +87,7 @@ static Datum probability_evaluate_internal
       } else {
         unsigned id=c.getGate(f);
 
-        if(type == "monus" || type == "monusl" || type == "times" || type=="project") {
+        if(type == "monus" || type == "monusl" || type == "times" || type=="project" || type=="eq") {
           c.setGate(f, Circuit::AND);
         } else if(type == "plus") {
           c.setGate(f, Circuit::OR);
