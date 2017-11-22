@@ -207,6 +207,13 @@ static Expr *add_provenance_to_select(
   TargetEntry *te=makeNode(TargetEntry);
   int i;
   bool projection=false;
+  Datum first_arg;
+  Datum second_arg;
+  FuncExpr *fc;
+  Const *c1;
+  Const *c2;
+  Var *v1;
+  Var *v2;
 
   te->resno=list_length(q->targetList)+1;
   te->resname=(char *)PROVSQL_COLUMN_NAME;
@@ -264,6 +271,73 @@ static Expr *add_provenance_to_select(
       projection=true;
   }
 
+//ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
+
+  /* Part to handle eq gates used for where-provenance */ 
+  if(q->jointree) {
+    ListCell *lc;
+    foreach(lc, q->jointree->fromlist) {
+      if(IsA(lfirst(lc), JoinExpr)) {
+        JoinExpr *je = (JoinExpr *) lfirst(lc);
+        OpExpr *oe;
+        /* Sometimes OpExpr is nested within a BoolExpr */
+        if(IsA(je->quals, OpExpr)) {
+          oe = (OpExpr *) je->quals;
+	} else {
+          BoolExpr *be = (BoolExpr *) lfirst(lc); 
+          oe = (OpExpr *) linitial(be->args);
+        }
+        
+        /* Sometimes Var is nested within a RelabelType */
+        if(IsA(linitial(oe->args), Var)) {
+          v1 = linitial(oe->args);  
+        } else {
+          RelabelType *rt1 = linitial(oe->args); 
+          v1 = (Var *) rt1->arg;  
+        }
+        first_arg = Int16GetDatum(v1->varattno);
+ 
+        if(lnext(list_head(oe->args))) {
+          /* Sometimes Var is nested within a RelabelType */
+          if(IsA(lsecond(oe->args), Var)) {  
+            v2 = lsecond(oe->args);  
+          } else { 
+            RelabelType *rt2 = lsecond(oe->args); 
+            v2 = (Var*) rt2->arg;  
+          }
+          second_arg = Int16GetDatum(v2->varattno);
+
+          fc = makeNode(FuncExpr);
+          fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
+          fc->funcvariadic=false;
+          fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+          fc->location=-1;
+
+          c1=makeConst(constants->OID_TYPE_INT,
+              -1,
+              InvalidOid,
+              sizeof(int16),
+              first_arg,
+              false,
+              true);
+
+          c2=makeConst(constants->OID_TYPE_INT,
+              -1,
+              InvalidOid,
+              sizeof(int16),
+              second_arg,
+              false,
+              true);     
+
+          fc->args=list_make3(te->expr, c1, c2);
+          te->expr = (Expr *)fc;
+        }       
+      }
+    }
+  }
+  /* Placed before projection gates because they need to be deeper
+   * in the provenance tree */
+
   if(projection) {
     ArrayExpr *array=makeNode(ArrayExpr);
     FuncExpr *fe=makeNode(FuncExpr);
@@ -296,65 +370,6 @@ static Expr *add_provenance_to_select(
 
     te->expr=(Expr *)fe;
   }
-
-//ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
-
-  /* Part to handle eq gates used for where-provenance */ 
-  if(q->jointree) {
-    ListCell *lc;
-    foreach(lc, q->jointree->fromlist) {
-      if(IsA(lfirst(lc), JoinExpr)) {
-        JoinExpr *je = (JoinExpr *) lfirst(lc);
-        OpExpr *oe = (OpExpr *) je->quals;
-        Var *v1;
-        if(IsA(linitial(oe->args), Var)) {
-          v1 = linitial(oe->args);  
-        } else {
-          RelabelType *rt1 = linitial(oe->args); 
-          v1 = rt1->arg;  
-        }
-        Datum first_arg = Int16GetDatum(v1->varattno);
- 
-        if(lnext(list_head(oe->args))) {
-          Var *v2;
-          if(IsA(lsecond(oe->args), Var)) {  
-            v2 = lsecond(oe->args);  
-          } else { 
-            RelabelType *rt2 = lsecond(oe->args); 
-            v2 = rt2->arg;  
-          }
-          Datum second_arg = Int16GetDatum(v2->varattno);
-
-          FuncExpr *fc = makeNode(FuncExpr);
-          fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
-          fc->funcvariadic=false;
-          fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-          fc->location=-1;
-
-          Const *c1=makeConst(constants->OID_TYPE_INT,
-              -1,
-              InvalidOid,
-              sizeof(int16),
-              first_arg,
-              false,
-              true);
-
-          Const *c2=makeConst(constants->OID_TYPE_INT,
-              -1,
-              InvalidOid,
-              sizeof(int16),
-              second_arg,
-              false,
-              true);     
-
-          fc->args=list_make3(te->expr, c1, c2);
-          te->expr = (Expr *)fc;
-        }       
-      }
-    }
-  }
-
-//ereport(NOTICE,errmsg(nodetring("After: %s",q->jointree)));
 
   q->targetList=lappend(q->targetList,te);
 
