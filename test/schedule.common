@@ -11,6 +11,7 @@ test: where
 test: security formula counting
 
 # Test of various ProvSQL features and SQL language capabilities
+test: except
 test: deterministic union_all union distinct group_by_provenance except unsupported_features
 
 # Adding probabilities

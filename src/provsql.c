@@ -281,11 +281,13 @@ static Expr *add_provenance_to_select(
         JoinExpr *je = (JoinExpr *) lfirst(lc);
         OpExpr *oe;
         /* Sometimes OpExpr is nested within a BoolExpr */
+//ereport(NOTICE,(errmsg("Test1")));
         if(IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
 	} else {
-          BoolExpr *be = (BoolExpr *) lfirst(lc); 
+          BoolExpr *be = (BoolExpr *) je->quals; 
           oe = (OpExpr *) linitial(be->args);
+//ereport(NOTICE,(errmsg("Test2")));
         }
         
         /* Sometimes Var is nested within a RelabelType */
