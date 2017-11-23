@@ -194,6 +194,65 @@ static Bitmapset *remove_provenance_attributes_select(
 
 typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 
+static void add_eq_from_OpExpr_to_Expr(
+    OpExpr *fromOpExpr,
+    Expr *toExpr,
+    const constants_t *constants)
+{
+  Datum first_arg;
+  Datum second_arg;
+  FuncExpr *fc;
+  Const *c1;
+  Const *c2;
+  Var *v1;
+  Var *v2;
+
+  if(lnext(list_head(fromOpExpr->args))) {
+    /* Sometimes Var is nested within a RelabelType */
+    if(IsA(linitial(fromOpExpr->args), Var)) {
+      v1 = linitial(fromOpExpr->args);  
+    } else {
+      RelabelType *rt1 = linitial(fromOpExpr->args); 
+        v1 = (Var *) rt1->arg;  
+    }
+    first_arg = Int16GetDatum(v1->varattno);
+
+    if(IsA(lsecond(fromOpExpr->args), Var)) {  
+      v2 = lsecond(fromOpExpr->args);  
+    } else { 
+      RelabelType *rt2 = lsecond(fromOpExpr->args); 
+      v2 = (Var*) rt2->arg;  
+    }
+    second_arg = Int16GetDatum(v2->varattno);
+
+    fc = makeNode(FuncExpr);
+          fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
+          fc->funcvariadic=false;
+          fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+          fc->location=-1;
+
+    c1=makeConst(constants->OID_TYPE_INT,
+        -1,
+        InvalidOid,
+        sizeof(int16),
+        first_arg,
+        false,
+        true);
+
+    c2=makeConst(constants->OID_TYPE_INT,
+        -1,
+        InvalidOid,
+        sizeof(int16),
+        second_arg,
+        false,
+        true);     
+
+    fc->args=list_make3(toExpr, c1, c2);
+ 
+    toExpr = (Expr *)fc;
+  }
+}
+
 static Expr *add_provenance_to_select(
     Query *q, 
     List *prov_atts, 
@@ -207,13 +266,6 @@ static Expr *add_provenance_to_select(
   TargetEntry *te=makeNode(TargetEntry);
   int i;
   bool projection=false;
-  Datum first_arg;
-  Datum second_arg;
-  FuncExpr *fc;
-  Const *c1;
-  Const *c2;
-  Var *v1;
-  Var *v2;
 
   te->resno=list_length(q->targetList)+1;
   te->resname=(char *)PROVSQL_COLUMN_NAME;
@@ -292,49 +344,7 @@ static Expr *add_provenance_to_select(
           continue;
         }
  
-        if(lnext(list_head(oe->args))) {
-          /* Sometimes Var is nested within a RelabelType */
-          if(IsA(linitial(oe->args), Var)) {
-            v1 = linitial(oe->args);  
-          } else {
-            RelabelType *rt1 = linitial(oe->args); 
-            v1 = (Var *) rt1->arg;  
-          }
-          first_arg = Int16GetDatum(v1->varattno);
-
-          if(IsA(lsecond(oe->args), Var)) {  
-            v2 = lsecond(oe->args);  
-          } else { 
-            RelabelType *rt2 = lsecond(oe->args); 
-            v2 = (Var*) rt2->arg;  
-          }
-          second_arg = Int16GetDatum(v2->varattno);
-
-          fc = makeNode(FuncExpr);
-          fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
-          fc->funcvariadic=false;
-          fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-          fc->location=-1;
-
-          c1=makeConst(constants->OID_TYPE_INT,
-              -1,
-              InvalidOid,
-              sizeof(int16),
-              first_arg,
-              false,
-              true);
-
-          c2=makeConst(constants->OID_TYPE_INT,
-              -1,
-              InvalidOid,
-              sizeof(int16),
-              second_arg,
-              false,
-              true);     
-
-          fc->args=list_make3(te->expr, c1, c2);
-          te->expr = (Expr *)fc;
-        }       
+        add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
       }
     }
   }
