@@ -247,9 +247,11 @@ static void add_eq_from_OpExpr_to_Expr(
         false,
         true);     
 
-    fc->args=list_make3(toExpr, c1, c2);
- 
+    fc->args=list_make3(toExpr, c1, c2); 
+ereport(WARNING,(errmsg("inside toExpr %s",nodeToString(toExpr))));
+ereport(WARNING,(errmsg("inside fc %s",nodeToString(fc))));
     toExpr = (Expr *)fc;
+ereport(WARNING,(errmsg("inside toExpr %s",nodeToString(toExpr))));
   }
 }
 
@@ -323,7 +325,7 @@ static Expr *add_provenance_to_select(
       projection=true;
   }
 
-//ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
+ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
 
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
@@ -334,17 +336,20 @@ static Expr *add_provenance_to_select(
       if(IsA(lfirst(lc), JoinExpr)) {
         JoinExpr *je = (JoinExpr *) lfirst(lc);
         OpExpr *oe;
-        /* Sometimes OpExpr is nested within a BoolExpr */
         if(je->quals && IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
-	} else if (je->quals) {
-          BoolExpr *be = (BoolExpr *) je->quals; 
-          oe = (OpExpr *) linitial(be->args);
-        } else { /* Handle case of CROSS JOIN with no eqop */
-          continue;
-        }
- 
-        add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+          add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+	} /* Sometimes OpExpr is nested within a BoolExpr */
+        else if (je->quals) {
+          BoolExpr *be = (BoolExpr *) je->quals;
+          //test type of boolexpr
+          ListCell *lc2; 
+          foreach(lc2,be->args) {
+            oe = (OpExpr *) lfirst(lc2);
+            add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+          }
+        } /* Handle case of CROSS JOIN with no eqop */
+        else { }
       }
     }
   }
