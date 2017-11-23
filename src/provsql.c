@@ -194,6 +194,10 @@ static Bitmapset *remove_provenance_attributes_select(
 
 typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 
+/* An OpExpr leads directly to an eq gate.
+ * toExpr is the former expression for the provenance.
+ * The function returns the new expression with toExpr
+ * nested inside the call of the eq function. */
 static Expr *add_eq_from_OpExpr_to_Expr(
     OpExpr *fromOpExpr,
     Expr *toExpr,
@@ -333,6 +337,9 @@ static Expr *add_provenance_to_select(
     foreach(lc, q->jointree->fromlist) {
       if(IsA(lfirst(lc), JoinExpr)) {
         JoinExpr *je = (JoinExpr *) lfirst(lc);
+        //TODO 1) verif if natural join and check what to do with provsql column
+        //TODO 2) verif if there is a subjoin in larg or in rarg
+        //TODO 3) handle the case of outer join and null values for prov
         OpExpr *oe;
         if(je->quals && IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
