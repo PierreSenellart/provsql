@@ -340,11 +340,15 @@ static Expr *add_provenance_to_select(
 	} /* Sometimes OpExpr is nested within a BoolExpr */
         else if (je->quals) {
           BoolExpr *be = (BoolExpr *) je->quals;
-          //test type of boolexpr
-          ListCell *lc2; 
-          foreach(lc2,be->args) {
-            oe = (OpExpr *) lfirst(lc2);
-            te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+          /* In some cases, there can be an OR or a not specified with ON clause */
+          if(be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
+            ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on clause is not supported by provsql")));
+          } else {
+            ListCell *lc2; 
+            foreach(lc2,be->args) {
+              oe = (OpExpr *) lfirst(lc2);
+              te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+            }
           }
         } /* Handle case of CROSS JOIN with no eqop */
         else { }
