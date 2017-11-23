@@ -194,7 +194,7 @@ static Bitmapset *remove_provenance_attributes_select(
 
 typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 
-static void add_eq_from_OpExpr_to_Expr(
+static Expr *add_eq_from_OpExpr_to_Expr(
     OpExpr *fromOpExpr,
     Expr *toExpr,
     const constants_t *constants)
@@ -248,11 +248,9 @@ static void add_eq_from_OpExpr_to_Expr(
         true);     
 
     fc->args=list_make3(toExpr, c1, c2); 
-ereport(WARNING,(errmsg("inside toExpr %s",nodeToString(toExpr))));
-ereport(WARNING,(errmsg("inside fc %s",nodeToString(fc))));
-    toExpr = (Expr *)fc;
-ereport(WARNING,(errmsg("inside toExpr %s",nodeToString(toExpr))));
+    return (Expr *)fc;
   }
+  return toExpr;
 }
 
 static Expr *add_provenance_to_select(
@@ -325,7 +323,7 @@ static Expr *add_provenance_to_select(
       projection=true;
   }
 
-ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
+//ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
 
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
@@ -338,7 +336,7 @@ ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
         OpExpr *oe;
         if(je->quals && IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
-          add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+          te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
 	} /* Sometimes OpExpr is nested within a BoolExpr */
         else if (je->quals) {
           BoolExpr *be = (BoolExpr *) je->quals;
@@ -346,7 +344,7 @@ ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
           ListCell *lc2; 
           foreach(lc2,be->args) {
             oe = (OpExpr *) lfirst(lc2);
-            add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+            te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
           }
         } /* Handle case of CROSS JOIN with no eqop */
         else { }
