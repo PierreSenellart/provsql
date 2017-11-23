@@ -283,11 +283,13 @@ static Expr *add_provenance_to_select(
         JoinExpr *je = (JoinExpr *) lfirst(lc);
         OpExpr *oe;
         /* Sometimes OpExpr is nested within a BoolExpr */
-        if(IsA(je->quals, OpExpr)) {
+        if(je->quals && IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
-	} else {
+	} else if (je->quals) {
           BoolExpr *be = (BoolExpr *) je->quals; 
           oe = (OpExpr *) linitial(be->args);
+        } else { /* Handle case of CROSS JOIN with no eqop */
+          continue;
         }
  
         if(lnext(list_head(oe->args))) {
