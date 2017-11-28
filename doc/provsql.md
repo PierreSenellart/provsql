@@ -16,7 +16,7 @@ from the provenance, through a variety of methods.
 The following SQL queries are currently supported.
 * Regular SELECT-FROM-WHERE queries (aka conjunctive queries with
   multiset semantics)
-* JOIN queries (regular joins and outer joins; semijoins and antijoins
+* JOIN queries (regular joins only; outer, semijoins, and antijoins
   are not currently supported)
 * SELECT queries with nested SELECT subqueries in the FROM clause
 * GROUP BY queries (without aggregation)
