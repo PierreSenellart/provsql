@@ -66,8 +66,8 @@ CREATE OR REPLACE FUNCTION create_provenance_mapping(newtbl text, oldtbl regclas
 $$
 DECLARE
 BEGIN
-  EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS SELECT *, provsql.provenance() FROM %I', oldtbl);
-  PERFORM provsql.remove_provenance('tmp_provsql');
+  EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %I', oldtbl);
+  ALTER TABLE tmp_provsql RENAME provsql TO provenance;
   EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
   EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
 END
