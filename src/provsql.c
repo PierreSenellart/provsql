@@ -194,8 +194,7 @@ static Bitmapset *remove_provenance_attributes_select(
 
 typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 
-static Expr *add_provenance_to_select(
-    Query *q, 
+static Expr *make_provenance_expression(
     List *prov_atts, 
     const constants_t *constants, 
     bool aggregation_needed,
@@ -203,17 +202,14 @@ static Expr *add_provenance_to_select(
     bool *exported,
     int nbcols)
 {
+  Expr *result;
   FuncExpr *expr;
-  TargetEntry *te=makeNode(TargetEntry);
   int i;
   bool projection=false;
 
-  te->resno=list_length(q->targetList)+1;
-  te->resname=(char *)PROVSQL_COLUMN_NAME;
-
   if(op==SR_PLUS) {
     RelabelType *re=(RelabelType *) linitial(prov_atts);
-    te->expr=re->arg;
+    result=re->arg;
   } else {
     expr=makeNode(FuncExpr);
     if(op==SR_TIMES) {
@@ -253,9 +249,9 @@ static Expr *add_provenance_to_select(
       agg->aggargtypes=list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
 #endif /* PG_VERSION_NUM >= 90600 */
 
-      te->expr=(Expr*)agg;
+      result=(Expr*)agg;
     } else {
-      te->expr=(Expr*)expr;
+      result=(Expr*)expr;
     }
   }
 
@@ -292,14 +288,23 @@ static Expr *add_provenance_to_select(
       }
     }
 
-    fe->args=list_make2(te->expr, array);
+    fe->args=list_make2(result, array);
 
-    te->expr=(Expr *)fe;
+    result=(Expr *)fe;
   }
 
-  q->targetList=lappend(q->targetList,te);
+  return result;
+}
 
-  return te->expr;
+static void add_to_select(
+    Query *q, 
+    Expr *provenance)
+{
+  TargetEntry *te=makeNode(TargetEntry);
+  te->expr=provenance;
+  te->resno=list_length(q->targetList)+1;
+  te->resname=(char *)PROVSQL_COLUMN_NAME;
+  q->targetList=lappend(q->targetList,te);
 }
 
 typedef struct provenance_mutator_context {
@@ -603,7 +608,6 @@ static Query *process_query(
     bool subquery)
 {
   List *prov_atts;
-  Expr *provsql;
   bool has_union = false;
   bool has_difference = false;
   bool supported=true;
@@ -747,8 +751,7 @@ static Query *process_query(
   }
 
   if(supported) {
-    provsql = add_provenance_to_select(
-        q,
+    Expr *provenance = make_provenance_expression(
         prov_atts,
         constants,
         q->hasAggs,
@@ -757,7 +760,8 @@ static Query *process_query(
         nbcols);
     pfree(exported);
 
-    replace_provenance_function_by_expression(q, provsql, constants);
+    add_to_select(q,provenance);
+    replace_provenance_function_by_expression(q, provenance, constants);
   }
 
 //  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
