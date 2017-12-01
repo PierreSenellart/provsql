@@ -367,6 +367,8 @@ static Expr *add_provenance_to_select(
     if(!exported[i])
       projection=true;
   }*/ projection=true;
+  
+  //TODO add eq between columns of RTE join result and RTE join entries
 
   if(projection) {
     ArrayExpr *array=makeNode(ArrayExpr);
@@ -381,8 +383,7 @@ static Expr *add_provenance_to_select(
     array->element_typeid=constants->OID_TYPE_INT;
     array->elements=NIL;
     array->location=-1;
-    
-    /* new version
+  
     for(i=0;i<nbcols;++i) {
       if(exported[i]) {
         Const *ce=makeConst(constants->OID_TYPE_INT,
@@ -396,40 +397,6 @@ static Expr *add_provenance_to_select(
 ereport(NOTICE, (errmsg("PROJECT(%d)",i+1)));
 
         array->elements=lappend(array->elements, ce);
-      }
-    }*/
-    ListCell *lc_v;
-    foreach(lc_v, q->targetList) {
-      TargetEntry *te_v = (TargetEntry *) lfirst(lc_v); 
-      if(IsA(te_v->expr, Var)) {
-        Var *vte_v = (Var *) te_v->expr; 
-        /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
-        RangeTblEntry *rte_v = (RangeTblEntry *) lfirst(list_nth_cell(q->rtable, vte_v->varno-1));
-//ereport(WARNING, (errmsg("rte_v /!\\ %s",nodeToString(rte_v))));
-        int value_v;
-        if(rte_v->rtekind != RTE_JOIN) {
-//ereport(WARNING, (errmsg("vte_v /!\\ %s",nodeToString(vte_v))));
-          value_v = columns[vte_v->varno-1][vte_v->varattno-1];
-        } else { // is a relation
-          Var *jav_v = (Var *) lfirst(list_nth_cell(rte_v->joinaliasvars, vte_v->varattno-1));
-//ereport(WARNING, (errmsg("jav_v /!\\ %s",nodeToString(jav_v))));
-        /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
-          value_v = columns[jav_v->varno-1][jav_v->varattno-1];
-        }
-        /* why check 0 */
-        if(value_v != 0) {
-          Const *ce=makeConst(constants->OID_TYPE_INT,
-               -1,
-               InvalidOid,
-               sizeof(int32),
-               Int32GetDatum(value_v),
-               false,
-               true);
-        
-ereport(NOTICE, (errmsg("PROJECT(%d)",value_v)));
-
-          array->elements=lappend(array->elements, ce);
-        }
       }
     }
 
@@ -753,7 +720,7 @@ static Query *process_query(
   int *columns[q->rtable->length];
   unsigned i=0;
 
-//ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
@@ -901,7 +868,7 @@ ereport(NOTICE, (errmsg("Nb of valid cols %d",nbcols)));
     }
   }
 
-//ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
+ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
   return q;
 }
