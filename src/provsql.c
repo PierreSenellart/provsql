@@ -386,7 +386,7 @@ static void remove_provenance_attribute_groupref(Query *q, const constants_t *co
   }
 }
 
-static Query *rewrite_all_into_external_group_by(Query *q)
+static Query *rewrite_non_all_into_external_group_by(Query *q)
 {
   Query *new_query = makeNode(Query);
   RangeTblEntry *rte = makeNode(RangeTblEntry);
@@ -614,7 +614,7 @@ static Query *process_query(
   bool *exported=0;
   int nbcols=0;
 
-//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
@@ -622,7 +622,7 @@ static Query *process_query(
 
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
     if(!stmt->all) {
-      q = rewrite_all_into_external_group_by(q);
+      q = rewrite_non_all_into_external_group_by(q);
       return process_query(q, constants, subquery);
     }
   }
