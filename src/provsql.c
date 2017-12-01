@@ -836,6 +836,7 @@ static Query *process_query(
         foreach(lc, r->eref->colnames) {
           Value *v = (Value *) lfirst(lc);
           if(strcmp(strVal(v),"") && strcmp(strVal(v),PROVSQL_COLUMN_NAME) && r->rtekind != RTE_JOIN) { // TODO: More robust test
+                                                                              // join RTE columns ignored
             columns[i][j]=++nbcols;
           } else {
             columns[i][j]=0;
