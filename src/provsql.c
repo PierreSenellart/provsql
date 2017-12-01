@@ -201,8 +201,7 @@ typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 static Expr *add_eq_from_OpExpr_to_Expr(
     OpExpr *fromOpExpr,
     Expr *toExpr,
-    const constants_t *constants,
-    int **columns)
+    const constants_t *constants)
 {
   Datum first_arg;
   Datum second_arg;
@@ -220,7 +219,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
       RelabelType *rt1 = linitial(fromOpExpr->args); 
         v1 = (Var *) rt1->arg;  
     }
-    first_arg = Int16GetDatum(columns[v1->varno-1][v1->varattno-1]);
+    first_arg = Int16GetDatum(v1->varattno);
 
     if(IsA(lsecond(fromOpExpr->args), Var)) {  
       v2 = lsecond(fromOpExpr->args);  
@@ -228,9 +227,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
       RelabelType *rt2 = lsecond(fromOpExpr->args); 
       v2 = (Var*) rt2->arg;  
     }
-    second_arg = Int16GetDatum(columns[v2->varno-1][v2->varattno-1]);
-
-ereport(NOTICE, (errmsg("EQ(%d,%d)", columns[v1->varno-1][v1->varattno-1], columns[v2->varno-1][v2->varattno-1])));
+    second_arg = Int16GetDatum(v2->varattno);
 
     fc = makeNode(FuncExpr);
           fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
@@ -267,7 +264,6 @@ static Expr *add_provenance_to_select(
     bool aggregation_needed,
     semiring_operation op,
     bool *exported,
-    int **columns,
     int nbcols)
 {
   FuncExpr *expr;
@@ -326,6 +322,11 @@ static Expr *add_provenance_to_select(
     }
   }
 
+  for(i=0;i<nbcols;++i) {
+    if(!exported[i])
+      projection=true;
+  }
+
 //ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
 
   /* Part to handle eq gates used for where-provenance. 
@@ -342,7 +343,7 @@ static Expr *add_provenance_to_select(
         OpExpr *oe;
         if(je->quals && IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
-          te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants,columns);
+          te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
 	} /* Sometimes OpExpr is nested within a BoolExpr */
         else if (je->quals) {
           BoolExpr *be = (BoolExpr *) je->quals;
@@ -353,7 +354,7 @@ static Expr *add_provenance_to_select(
             ListCell *lc2; 
             foreach(lc2,be->args) {
               oe = (OpExpr *) lfirst(lc2);
-              te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants,columns);
+              te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
             }
           }
         } /* Handle case of CROSS JOIN with no eqop */
@@ -361,14 +362,6 @@ static Expr *add_provenance_to_select(
       }
     }
   }
-
-  /* Why no projection when all columns are exported ?
-  for(i=0;i<nbcols;++i) {
-    if(!exported[i])
-      projection=true;
-  }*/ projection=true;
-  
-  //TODO add eq between columns of RTE join result and RTE join entries
 
   if(projection) {
     ArrayExpr *array=makeNode(ArrayExpr);
@@ -394,8 +387,6 @@ static Expr *add_provenance_to_select(
             false,
             true);
         
-ereport(NOTICE, (errmsg("PROJECT(%d)",i+1)));
-
         array->elements=lappend(array->elements, ce);
       }
     }
@@ -717,10 +708,8 @@ static Query *process_query(
   bool supported=true;
   bool *exported=0;
   int nbcols=0;
-  int *columns[q->rtable->length];
-  unsigned i=0;
 
-ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+//ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
@@ -795,7 +784,7 @@ ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
     if(q->groupClause || 
        list_length(q->groupingSets)>1 ||
        ((GroupingSet *)linitial(q->groupingSets))->kind != GROUPING_SET_EMPTY) {
-ereport(ERROR, (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql")));
+      ereport(ERROR, (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql")));
       supported=false;
     } else {
       // Simple GROUP BY ()
@@ -805,8 +794,11 @@ ereport(ERROR, (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql
 #endif /* PG_VERSION_NUM >= 90500 */
   
   if(supported) {
-    ListCell *l;    
-ereport(NOTICE, (errmsg("%d RTEs:", q->rtable->length)));
+    int *columns[q->rtable->length];
+
+    unsigned i=0;
+    ListCell *l;
+    
     foreach(l, q->rtable) {
       RangeTblEntry *r = (RangeTblEntry *) lfirst(l);
       ListCell *lc;
@@ -816,23 +808,21 @@ ereport(NOTICE, (errmsg("%d RTEs:", q->rtable->length)));
         unsigned j=0;
 
         columns[i]=(int *) palloc(r->eref->colnames->length*sizeof(int));
-ereport(NOTICE, (errmsg(" RTE no'%d with %d cols", i+1, r->eref->colnames->length)));
 
         foreach(lc, r->eref->colnames) {
           Value *v = (Value *) lfirst(lc);
           if(strcmp(strVal(v),"") && strcmp(strVal(v),PROVSQL_COLUMN_NAME)) { // TODO: More robust test
             columns[i][j]=++nbcols;
-ereport(NOTICE, (errmsg("  %s	%d",strVal(v),nbcols)));
           } else {
             columns[i][j]=0;
-ereport(NOTICE, (errmsg("  %s",strVal(v))));
           }
           ++j;
         }
-      }        
+      }
+         
       ++i;
     }
-ereport(NOTICE, (errmsg("Nb of valid cols %d",nbcols)));
+
     exported = (bool*) palloc(nbcols*sizeof(bool));
     for(i=0;i<nbcols;++i)
       exported[i]=false;
@@ -846,6 +836,11 @@ ereport(NOTICE, (errmsg("Nb of valid cols %d",nbcols)));
           exported[columns[v->varno-1][v->varattno-1]-1] = true;
       }
     }
+
+    for(i=0;i<q->rtable->length;++i) {
+      if(columns[i])
+        pfree(columns[i]);
+    }
   }
 
   if(supported) {
@@ -856,19 +851,13 @@ ereport(NOTICE, (errmsg("Nb of valid cols %d",nbcols)));
         q->hasAggs,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
         exported,
-        columns,
         nbcols);
     pfree(exported);
 
     replace_provenance_function_by_expression(q, provsql, constants);
-
-    for(i=0;i<q->rtable->length;++i) {
-      if(columns[i])
-        pfree(columns[i]);
-    }
   }
 
-ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
+//ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
   return q;
 }
