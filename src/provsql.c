@@ -614,7 +614,7 @@ static Query *process_query(
   bool *exported=0;
   int nbcols=0;
 
-  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
