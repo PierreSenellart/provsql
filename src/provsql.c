@@ -382,17 +382,16 @@ static Expr *add_provenance_to_select(
       TargetEntry *te_v = (TargetEntry *) lfirst(lc_v); 
       if(IsA(te_v->expr, Var)) {
         Var *vte_v = (Var *) te_v->expr; 
-        /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
         RangeTblEntry *rte_v = (RangeTblEntry *) lfirst(list_nth_cell(q->rtable, vte_v->varno-1));
         int value_v;
+        /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
         if(rte_v->rtekind != RTE_JOIN) {
           value_v = columns[vte_v->varno-1][vte_v->varattno-1];
-        } else { // is a relation
+        } else { // is a join
           Var *jav_v = (Var *) lfirst(list_nth_cell(rte_v->joinaliasvars, vte_v->varattno-1));
-        /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
           value_v = columns[jav_v->varno-1][jav_v->varattno-1];
         }
-        /* why check 0 */
+        /* If this is a valid column */
         if(value_v != 0) {
           Const *ce=makeConst(constants->OID_TYPE_INT,
                -1,
@@ -836,7 +835,7 @@ static Query *process_query(
 
         foreach(lc, r->eref->colnames) {
           Value *v = (Value *) lfirst(lc);
-          if(strcmp(strVal(v),"") && strcmp(strVal(v),PROVSQL_COLUMN_NAME)) { // TODO: More robust test
+          if(strcmp(strVal(v),"") && strcmp(strVal(v),PROVSQL_COLUMN_NAME) && r->rtekind != RTE_JOIN) { // TODO: More robust test
             columns[i][j]=++nbcols;
           } else {
             columns[i][j]=0;
