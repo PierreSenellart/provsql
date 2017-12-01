@@ -405,11 +405,14 @@ ereport(NOTICE, (errmsg("PROJECT(%d)",i+1)));
         Var *vte_v = (Var *) te_v->expr; 
         /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
         RangeTblEntry *rte_v = (RangeTblEntry *) lfirst(list_nth_cell(q->rtable, vte_v->varno-1));
+//ereport(WARNING, (errmsg("rte_v /!\\ %s",nodeToString(rte_v))));
         int value_v;
         if(rte_v->rtekind != RTE_JOIN) {
+//ereport(WARNING, (errmsg("vte_v /!\\ %s",nodeToString(vte_v))));
           value_v = columns[vte_v->varno-1][vte_v->varattno-1];
         } else { // is a relation
           Var *jav_v = (Var *) lfirst(list_nth_cell(rte_v->joinaliasvars, vte_v->varattno-1));
+//ereport(WARNING, (errmsg("jav_v /!\\ %s",nodeToString(jav_v))));
         /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
           value_v = columns[jav_v->varno-1][jav_v->varattno-1];
         }
@@ -427,19 +430,6 @@ ereport(NOTICE, (errmsg("PROJECT(%d)",value_v)));
 
           array->elements=lappend(array->elements, ce);
         }
-      } else { // we have a function in target
-        Const *ce=makeConst(constants->OID_TYPE_INT,
-               -1,
-               InvalidOid,
-               sizeof(int32),
-               Int32GetDatum(0),
-               false,
-               true);
-        
-ereport(NOTICE, (errmsg("PROJECT(%d)",0t )));
-
-          array->elements=lappend(array->elements, ce);
-
       }
     }
 
