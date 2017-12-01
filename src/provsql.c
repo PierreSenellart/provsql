@@ -264,6 +264,7 @@ static Expr *add_provenance_to_select(
     bool aggregation_needed,
     semiring_operation op,
     bool *exported,
+    int **columns,
     int nbcols)
 {
   FuncExpr *expr;
@@ -377,7 +378,7 @@ static Expr *add_provenance_to_select(
     array->elements=NIL;
     array->location=-1;
   
-    for(i=0;i<nbcols;++i) {
+    /*for(i=0;i<nbcols;++i) {
       if(exported[i]) {
         Const *ce=makeConst(constants->OID_TYPE_INT,
             -1,
@@ -389,7 +390,52 @@ static Expr *add_provenance_to_select(
         
         array->elements=lappend(array->elements, ce);
       }
-    }
+    }*/
+
+    ListCell *lc_v;
+    foreach(lc_v, q->targetList) {
+      TargetEntry *te_v = (TargetEntry *) lfirst(lc_v); 
+      if(IsA(te_v->expr, Var)) {
+        Var *vte_v = (Var *) te_v->expr; 
+        /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
+        RangeTblEntry *rte_v = (RangeTblEntry *) lfirst(list_nth_cell(q->rtable, vte_v->varno-1));
+        int value_v;
+        if(rte_v->rtekind != RTE_JOIN) {
+          value_v = columns[vte_v->varno-1][vte_v->varattno-1];
+        } else { // is a relation
+          Var *jav_v = (Var *) lfirst(list_nth_cell(rte_v->joinaliasvars, vte_v->varattno-1));
+        /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
+          value_v = columns[jav_v->varno-1][jav_v->varattno-1];
+        }
+        /* why check 0 */
+        if(value_v != 0) {
+          Const *ce=makeConst(constants->OID_TYPE_INT,
+               -1,
+               InvalidOid,
+               sizeof(int32),
+               Int32GetDatum(value_v),
+               false,
+               true);
+        
+//ereport(NOTICE, (errmsg("PROJECT(%d)",value_v)));
+
+          array->elements=lappend(array->elements, ce);
+        }
+      } else { // we have a function in target
+        Const *ce=makeConst(constants->OID_TYPE_INT,
+               -1,
+               InvalidOid,
+               sizeof(int32),
+               Int32GetDatum(0),
+               false,
+               true);
+        
+//ereport(NOTICE, (errmsg("PROJECT(%d)",0 )));
+
+          array->elements=lappend(array->elements, ce);
+
+      }
+    }    
 
     fe->args=list_make2(te->expr, array);
 
@@ -793,10 +839,9 @@ static Query *process_query(
   }
 #endif /* PG_VERSION_NUM >= 90500 */
   
+  int *columns[q->rtable->length];
+  unsigned i=0;
   if(supported) {
-    int *columns[q->rtable->length];
-
-    unsigned i=0;
     ListCell *l;
     
     foreach(l, q->rtable) {
@@ -836,11 +881,6 @@ static Query *process_query(
           exported[columns[v->varno-1][v->varattno-1]-1] = true;
       }
     }
-
-    for(i=0;i<q->rtable->length;++i) {
-      if(columns[i])
-        pfree(columns[i]);
-    }
   }
 
   if(supported) {
@@ -851,10 +891,16 @@ static Query *process_query(
         q->hasAggs,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
         exported,
+        columns,
         nbcols);
     pfree(exported);
 
     replace_provenance_function_by_expression(q, provsql, constants);
+  }
+
+  for(i=0;i<q->rtable->length;++i) {
+    if(columns[i])
+      pfree(columns[i]);
   }
 
 //ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
