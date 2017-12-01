@@ -201,6 +201,7 @@ typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 static Expr *add_eq_from_OpExpr_to_Expr(
     OpExpr *fromOpExpr,
     Expr *toExpr,
+    int **columns,
     const constants_t *constants)
 {
   Datum first_arg;
@@ -219,7 +220,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
       RelabelType *rt1 = linitial(fromOpExpr->args); 
         v1 = (Var *) rt1->arg;  
     }
-    first_arg = Int16GetDatum(v1->varattno);
+    first_arg = Int16GetDatum(columns[v1->varno-1][v1->varattno-1]);
 
     if(IsA(lsecond(fromOpExpr->args), Var)) {  
       v2 = lsecond(fromOpExpr->args);  
@@ -227,7 +228,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
       RelabelType *rt2 = lsecond(fromOpExpr->args); 
       v2 = (Var*) rt2->arg;  
     }
-    second_arg = Int16GetDatum(v2->varattno);
+    second_arg = Int16GetDatum(columns[v2->varno-1][v2->varattno-1]);
 
     fc = makeNode(FuncExpr);
           fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
@@ -338,13 +339,11 @@ static Expr *add_provenance_to_select(
     foreach(lc, q->jointree->fromlist) {
       if(IsA(lfirst(lc), JoinExpr)) {
         JoinExpr *je = (JoinExpr *) lfirst(lc);
-        //TODO 1) verif if natural join and check what to do with provsql column
-        //TODO 2) verif if there is a subjoin in larg or in rarg
-        //TODO 3) handle the case of outer join and null values for prov
+        //TODO handle subjoin in larg or in rarg
         OpExpr *oe;
         if(je->quals && IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
-          te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+          te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,columns,constants);
 	} /* Sometimes OpExpr is nested within a BoolExpr */
         else if (je->quals) {
           BoolExpr *be = (BoolExpr *) je->quals;
@@ -355,7 +354,7 @@ static Expr *add_provenance_to_select(
             ListCell *lc2; 
             foreach(lc2,be->args) {
               oe = (OpExpr *) lfirst(lc2);
-              te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,constants);
+              te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,columns,constants);
             }
           }
         } /* Handle case of CROSS JOIN with no eqop */
@@ -378,20 +377,6 @@ static Expr *add_provenance_to_select(
     array->elements=NIL;
     array->location=-1;
   
-    /*for(i=0;i<nbcols;++i) {
-      if(exported[i]) {
-        Const *ce=makeConst(constants->OID_TYPE_INT,
-            -1,
-            InvalidOid,
-            sizeof(int32),
-            Int32GetDatum(i+1),
-            false,
-            true);
-        
-        array->elements=lappend(array->elements, ce);
-      }
-    }*/
-
     ListCell *lc_v;
     foreach(lc_v, q->targetList) {
       TargetEntry *te_v = (TargetEntry *) lfirst(lc_v); 
@@ -416,8 +401,6 @@ static Expr *add_provenance_to_select(
                Int32GetDatum(value_v),
                false,
                true);
-        
-//ereport(NOTICE, (errmsg("PROJECT(%d)",value_v)));
 
           array->elements=lappend(array->elements, ce);
         }
@@ -429,11 +412,8 @@ static Expr *add_provenance_to_select(
                Int32GetDatum(0),
                false,
                true);
-        
-//ereport(NOTICE, (errmsg("PROJECT(%d)",0 )));
 
-          array->elements=lappend(array->elements, ce);
-
+        array->elements=lappend(array->elements, ce);
       }
     }    
 
