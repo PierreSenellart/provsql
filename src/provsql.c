@@ -272,6 +272,7 @@ static Expr *add_provenance_to_select(
   TargetEntry *te=makeNode(TargetEntry);
   int i;
   bool projection=false;
+  ListCell *lc_v;
 
   te->resno=list_length(q->targetList)+1;
   te->resname=(char *)PROVSQL_COLUMN_NAME;
@@ -377,7 +378,6 @@ static Expr *add_provenance_to_select(
     array->elements=NIL;
     array->location=-1;
   
-    ListCell *lc_v;
     foreach(lc_v, q->targetList) {
       TargetEntry *te_v = (TargetEntry *) lfirst(lc_v); 
       if(IsA(te_v->expr, Var)) {
@@ -733,6 +733,8 @@ static Query *process_query(
   bool supported=true;
   bool *exported=0;
   int nbcols=0;
+  int *columns[q->rtable->length];
+  unsigned i=0;
 
 //ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
@@ -818,8 +820,6 @@ static Query *process_query(
   }
 #endif /* PG_VERSION_NUM >= 90500 */
   
-  int *columns[q->rtable->length];
-  unsigned i=0;
   if(supported) {
     ListCell *l;
     
