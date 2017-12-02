@@ -183,7 +183,12 @@ BEGIN
   BEGIN
     INSERT INTO provenance_circuit_gate VALUES(project_token,'project');
     INSERT INTO provenance_circuit_wire VALUES(project_token,token);
-    INSERT INTO provenance_circuit_extra SELECT project_token, unnest(positions);
+    --INSERT INTO provenance_circuit_extra SELECT project_token, unnest(positions);
+    INSERT INTO provenance_circuit_extra 
+      SELECT gate, case when info=0 then null else info end, row_number() over()
+      FROM (
+             SELECT project_token gate, unnest(positions) info
+           )t; 
   EXCEPTION WHEN unique_violation THEN
   END;
   RETURN project_token;
