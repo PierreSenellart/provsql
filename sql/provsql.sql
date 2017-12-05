@@ -412,28 +412,36 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
 CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
  'provsql', 'provenance' LANGUAGE C;
 
--- CREATE OR REPLACE FUNCTION identify_token(
---   token provenance_token, OUT table_name regclass, OUT nb_columns integer) AS
--- $$
--- DECLARE
---   t RECORD;
--- BEGIN
---   FOR t IN
---     SELECT relname, 
---       (SELECT count(*) FROM pg_attribute a2 WHERE a2.attrelid=a1.attrelid AND attnum>0)-1 c
---     FROM pg_attribute a1 JOIN pg_type ON atttypid=pg_type.oid
---                         JOIN pg_namespace ns1 ON typnamespace=ns1.oid
---                         JOIN pg_class ON attrelid=pg_class.oid
---                         JOIN pg_namespace ns2 ON relnamespace=ns2.oid
---     WHERE typname='provenance_token' AND relkind='r' 
---                                      AND ns1.nspname='provsql' 
---                                      AND ns2.nspname<>'provsql' 
---                                      AND attname='provsql'
---   LOOP
---     EXECUTE format('SELECT * FROM %I WHERE provenance()=$L',t.relname,token);
---   END LOOP;    
--- END
--- $$ LANGUAGE plpgsql;
+CREATE OR REPLACE FUNCTION identify_token(
+  token provenance_token, OUT table_name regclass, OUT nb_columns integer) AS
+$$
+DECLARE
+  t RECORD;
+  result RECORD;
+BEGIN
+  table_name:=NULL;
+  nb_columns:=-1;
+  FOR t IN
+    SELECT relname, 
+      (SELECT count(*) FROM pg_attribute a2 WHERE a2.attrelid=a1.attrelid AND attnum>0)-1 c
+    FROM pg_attribute a1 JOIN pg_type ON atttypid=pg_type.oid
+                        JOIN pg_namespace ns1 ON typnamespace=ns1.oid
+                        JOIN pg_class ON attrelid=pg_class.oid
+                        JOIN pg_namespace ns2 ON relnamespace=ns2.oid
+    WHERE typname='provenance_token' AND relkind='r' 
+                                     AND ns1.nspname='provsql' 
+                                     AND ns2.nspname<>'provsql' 
+                                     AND attname='provsql'
+  LOOP
+    EXECUTE format('SELECT * FROM %I WHERE provenance()=%L',t.relname,token) INTO result;
+    IF result IS NOT NULL THEN
+      table_name:=t.relname;
+      nb_columns:=t.c;
+      EXIT;
+    END IF;
+  END LOOP;    
+END
+$$ LANGUAGE plpgsql STRICT;
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 GRANT SELECT ON provenance_circuit_gate TO PUBLIC;
