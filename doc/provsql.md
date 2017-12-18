@@ -84,7 +84,7 @@ default administrator user, you can make yourself a PostgreSQL
 administrator with ``ALTER USER your_login WITH SUPERUSER``. This assumes that
 ``your_login`` is a PostgreSQL user: on Debian-based Linux distributions, you
 can ensure this by running the command ``createuser your_login`` as the
-``postgresql`` user.
+``postgres`` user.
 
 Note that the tests that depend on external software (`c2d`, `d4`, or
 `dsharp`) will fail if no executable of that name can be found.
