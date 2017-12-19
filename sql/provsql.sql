@@ -377,12 +377,11 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
-CREATE TYPE circuit_with_prob AS (f UUID, t UUID, gate_type provenance_gate, prob DOUBLE PRECISION);
+CREATE TYPE gate_with_prob AS (f UUID, t UUID, gate_type provenance_gate, prob DOUBLE PRECISION);
 
--- TODO: Find a way to add an advisory lock to this function
 CREATE OR REPLACE FUNCTION sub_circuit_with_prob(
   token provenance_token,
-  token2prob regclass) RETURNS SETOF circuit_with_prob AS
+  token2prob regclass) RETURNS SETOF gate_with_prob AS
 $$
 BEGIN
   RETURN QUERY EXECUTE
@@ -396,30 +395,8 @@ BEGIN
         UNION
         SELECT provenance, NULL, ''input'', value AS prob FROM ' || token2prob || ' WHERE provenance=$1'
   USING token;
-  RETURN;
 END  
 $$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION provenance_evaluate(
-  token provenance_token,
-  token2value regclass,
-  element_one anyelement,
-  plus_function regproc,
-  times_function regproc,
-  monus_function regproc = NULL)
-  RETURNS anyelement AS
-  'provsql','provenance_evaluate' LANGUAGE C;
-
-CREATE OR REPLACE FUNCTION probability_evaluate(
-  token provenance_token,
-  token2probability regclass,
-  method text,
-  arguments text = NULL)
-  RETURNS DOUBLE PRECISION AS
-  'provsql','probability_evaluate' LANGUAGE C;
-
-CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
- 'provsql', 'provenance' LANGUAGE C;
 
 CREATE OR REPLACE FUNCTION identify_token(
   token provenance_token, OUT table_name regclass, OUT nb_columns integer) AS
@@ -451,6 +428,42 @@ BEGIN
   END LOOP;    
 END
 $$ LANGUAGE plpgsql STRICT;
+
+CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
+  RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER) AS
+$$
+    WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
+      SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
+        UNION ALL
+      SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
+    ) SELECT f, t::uuid, gate_type, NULL, NULL FROM transitive_closure
+    UNION
+      SELECT t, NULL, 'input', (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
+    UNION
+      SELECT $1, NULL, 'input', (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
+$$
+LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION provenance_evaluate(
+  token provenance_token,
+  token2value regclass,
+  element_one anyelement,
+  plus_function regproc,
+  times_function regproc,
+  monus_function regproc = NULL)
+  RETURNS anyelement AS
+  'provsql','provenance_evaluate' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION probability_evaluate(
+  token provenance_token,
+  token2probability regclass,
+  method text,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS
+  'provsql','probability_evaluate' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
+ 'provsql', 'provenance' LANGUAGE C;
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 GRANT SELECT ON provenance_circuit_gate TO PUBLIC;
