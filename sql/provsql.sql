@@ -194,7 +194,6 @@ BEGIN
     PERFORM pg_advisory_lock(0);
     INSERT INTO provenance_circuit_gate VALUES(project_token,'project');
     INSERT INTO provenance_circuit_wire VALUES(project_token,token);
-    --INSERT INTO provenance_circuit_extra SELECT project_token, unnest(positions);
     INSERT INTO provenance_circuit_extra 
       SELECT gate, case when info=0 then null else info end, row_number() over()
       FROM (
@@ -202,7 +201,7 @@ BEGIN
            )t; 
   EXCEPTION WHEN unique_violation THEN
   END;
-    PERFORM pg_advisory_unlock(0);
+  PERFORM pg_advisory_unlock(0);
   RETURN project_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
