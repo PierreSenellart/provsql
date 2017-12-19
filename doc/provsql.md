@@ -16,7 +16,7 @@ from the provenance, through a variety of methods.
 The following SQL queries are currently supported.
 * Regular SELECT-FROM-WHERE queries (aka conjunctive queries with
   multiset semantics)
-* JOIN queries (regular joins and outer joins; semijoins and antijoins
+* JOIN queries (regular joins only; outer, semijoins, and antijoins
   are not currently supported)
 * SELECT queries with nested SELECT subqueries in the FROM clause
 * GROUP BY queries (without aggregation)
@@ -27,7 +27,7 @@ The following SQL queries are currently supported.
 ## Prerequisites
 
 1. An install of PostgreSQL >= 9.4. The extension has currently been
-   tested with versions 9.4, 9.5, 9.6, and 10.0 of PostgreSQL, under
+   tested with versions from 9.4 to 10.1 (inclusive) of PostgreSQL, under
    Linux and Mac OS X (if the extension does not work on a specific
    version or operating system, a bug report is appreciated).
 
@@ -84,7 +84,7 @@ default administrator user, you can make yourself a PostgreSQL
 administrator with ``ALTER USER your_login WITH SUPERUSER``. This assumes that
 ``your_login`` is a PostgreSQL user: on Debian-based Linux distributions, you
 can ensure this by running the command ``createuser your_login`` as the
-``postgresql`` user.
+``postgres`` user.
 
 Note that the tests that depend on external software (`c2d`, `d4`, or
 `dsharp`) will fail if no executable of that name can be found.

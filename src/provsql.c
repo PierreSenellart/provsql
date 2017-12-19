@@ -258,8 +258,8 @@ static Expr *add_eq_from_OpExpr_to_Expr(
   return toExpr;
 }
 
-static Expr *add_provenance_to_select(
-    Query *q, 
+static Expr *make_provenance_expression(
+    Query *q,
     List *prov_atts, 
     const constants_t *constants, 
     bool aggregation_needed,
@@ -268,18 +268,15 @@ static Expr *add_provenance_to_select(
     int **columns,
     int nbcols)
 {
+  Expr *result;
   FuncExpr *expr;
-  TargetEntry *te=makeNode(TargetEntry);
   int i;
   bool projection=false;
   ListCell *lc_v;
 
-  te->resno=list_length(q->targetList)+1;
-  te->resname=(char *)PROVSQL_COLUMN_NAME;
-
   if(op==SR_PLUS) {
     RelabelType *re=(RelabelType *) linitial(prov_atts);
-    te->expr=re->arg;
+    result=re->arg;
   } else {
     expr=makeNode(FuncExpr);
     if(op==SR_TIMES) {
@@ -319,9 +316,9 @@ static Expr *add_provenance_to_select(
       agg->aggargtypes=list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
 #endif /* PG_VERSION_NUM >= 90600 */
 
-      te->expr=(Expr*)agg;
+      result=(Expr*)agg;
     } else {
-      te->expr=(Expr*)expr;
+      result=(Expr*)expr;
     }
   }
 
@@ -344,7 +341,7 @@ static Expr *add_provenance_to_select(
         OpExpr *oe;
         if(je->quals && IsA(je->quals, OpExpr)) {
           oe = (OpExpr *) je->quals;
-          te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,columns,constants);
+          result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
 	} /* Sometimes OpExpr is nested within a BoolExpr */
         else if (je->quals) {
           BoolExpr *be = (BoolExpr *) je->quals;
@@ -355,7 +352,7 @@ static Expr *add_provenance_to_select(
             ListCell *lc2; 
             foreach(lc2,be->args) {
               oe = (OpExpr *) lfirst(lc2);
-              te->expr = add_eq_from_OpExpr_to_Expr(oe,te->expr,columns,constants);
+              result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
             }
           }
         } /* Handle case of CROSS JOIN with no eqop */
@@ -416,14 +413,23 @@ static Expr *add_provenance_to_select(
       }
     }    
 
-    fe->args=list_make2(te->expr, array);
+    fe->args=list_make2(result, array);
 
-    te->expr=(Expr *)fe;
+    result=(Expr *)fe;
   }
 
-  q->targetList=lappend(q->targetList,te);
+  return result;
+}
 
-  return te->expr;
+static void add_to_select(
+    Query *q, 
+    Expr *provenance)
+{
+  TargetEntry *te=makeNode(TargetEntry);
+  te->expr=provenance;
+  te->resno=list_length(q->targetList)+1;
+  te->resname=(char *)PROVSQL_COLUMN_NAME;
+  q->targetList=lappend(q->targetList,te);
 }
 
 typedef struct provenance_mutator_context {
@@ -505,7 +511,7 @@ static void remove_provenance_attribute_groupref(Query *q, const constants_t *co
   }
 }
 
-static Query *rewrite_all_into_external_group_by(Query *q)
+static Query *rewrite_non_all_into_external_group_by(Query *q)
 {
   Query *new_query = makeNode(Query);
   RangeTblEntry *rte = makeNode(RangeTblEntry);
@@ -727,7 +733,6 @@ static Query *process_query(
     bool subquery)
 {
   List *prov_atts;
-  Expr *provsql;
   bool has_union = false;
   bool has_difference = false;
   bool supported=true;
@@ -744,11 +749,13 @@ static Query *process_query(
 
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
     if(!stmt->all) {
-      q = rewrite_all_into_external_group_by(q);
+      q = rewrite_non_all_into_external_group_by(q);
       return process_query(q, constants, subquery);
     }
   }
 
+  // get_provenance_attributes will also recursively process subqueries
+  // by calling process_query
   prov_atts=get_provenance_attributes(q, constants);
 
   if(prov_atts==NIL)
@@ -864,7 +871,7 @@ static Query *process_query(
   }
 
   if(supported) {
-    provsql = add_provenance_to_select(
+    Expr *provenance = make_provenance_expression(
         q,
         prov_atts,
         constants,
@@ -875,7 +882,8 @@ static Query *process_query(
         nbcols);
     pfree(exported);
 
-    replace_provenance_function_by_expression(q, provsql, constants);
+    add_to_select(q,provenance);
+    replace_provenance_function_by_expression(q, provenance, constants);
   }
 
   for(i=0;i<q->rtable->length;++i) {
