@@ -465,6 +465,10 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
 CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
  'provsql', 'provenance' LANGUAGE C;
 
+CREATE OR REPLACE FUNCTION where_provenance(token provenance_token)
+  RETURNS text AS
+  'provsql','where_provenance' LANGUAGE C;
+
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 GRANT SELECT ON provenance_circuit_gate TO PUBLIC;
 GRANT SELECT ON provenance_circuit_wire TO PUBLIC;
