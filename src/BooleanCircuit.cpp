@@ -1,4 +1,4 @@
-#include "Circuit.h"
+#include "BooleanCircuit.h"
 
 extern "C" {
 #include "provsql_utils.h"
@@ -13,12 +13,12 @@ extern "C" {
 
 using namespace std;
 
-bool Circuit::hasGate(const uuid &u) const
+bool BooleanCircuit::hasGate(const uuid &u) const
 {
   return uuid2id.find(u)!=uuid2id.end();
 }
 
-unsigned Circuit::getGate(const uuid &u)
+unsigned BooleanCircuit::getGate(const uuid &u)
 {
   auto it=uuid2id.find(u);
   if(it==uuid2id.end()) {
@@ -29,7 +29,7 @@ unsigned Circuit::getGate(const uuid &u)
     return it->second;
 }
 
-unsigned Circuit::addGate()
+unsigned BooleanCircuit::addGate()
 {
   unsigned id=gates.size();
   gates.push_back(UNDETERMINED);
@@ -39,7 +39,7 @@ unsigned Circuit::addGate()
   return id;
 }
 
-void Circuit::setGate(const uuid &u, gateType type, double p)
+void BooleanCircuit::setGate(const uuid &u, gateType type, double p)
 {
   unsigned id = getGate(u);
   gates[id] = type;
@@ -48,13 +48,13 @@ void Circuit::setGate(const uuid &u, gateType type, double p)
     inputs.insert(id);
 }
 
-void Circuit::addWire(unsigned f, unsigned t)
+void BooleanCircuit::addWire(unsigned f, unsigned t)
 {
   wires[f].insert(t);
   rwires[t].insert(f);
 }
 
-std::string Circuit::toString(unsigned g) const
+std::string BooleanCircuit::toString(unsigned g) const
 {
   std::string op;
   string result;
@@ -101,7 +101,7 @@ std::string Circuit::toString(unsigned g) const
   return "("+result+")";
 }
 
-double Circuit::dDNNFEvaluation(unsigned g) const
+double BooleanCircuit::dDNNFEvaluation(unsigned g) const
 {
   switch(gates[g]) {
     case IN:
@@ -128,7 +128,7 @@ double Circuit::dDNNFEvaluation(unsigned g) const
   return result;
 }
 
-bool Circuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
+bool BooleanCircuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
 {
   bool disjunction=false;
 
@@ -161,7 +161,7 @@ bool Circuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
     return true;
 }
 
-double Circuit::monteCarlo(unsigned g, unsigned samples) const
+double BooleanCircuit::monteCarlo(unsigned g, unsigned samples) const
 {
   unsigned success=0;
 
@@ -183,7 +183,7 @@ double Circuit::monteCarlo(unsigned g, unsigned samples) const
   return success*1./samples;
 }
 
-double Circuit::possibleWorlds(unsigned g) const
+double BooleanCircuit::possibleWorlds(unsigned g) const
 { 
   if(inputs.size()>=8*sizeof(unsigned long long))
     throw CircuitException("Too many possible worlds to iterate over");
@@ -216,7 +216,7 @@ double Circuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-double Circuit::compilation(unsigned g, string compiler) const {
+double BooleanCircuit::compilation(unsigned g, string compiler) const {
   vector<vector<int>> clauses;
 
   // Tseytin transformation
@@ -312,7 +312,7 @@ double Circuit::compilation(unsigned g, string compiler) const {
   unsigned nb_nodes, foobar, nb_variables;
   ifs >> nb_nodes >> foobar >> nb_variables;
 
-  Circuit dnnf;
+  BooleanCircuit dnnf;
 
   if(nb_variables!=gates.size())
     throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + to_string(nb_variables) +" vs " + to_string(gates.size()) + ")");

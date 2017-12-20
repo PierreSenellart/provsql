@@ -20,7 +20,7 @@ extern "C" {
 #endif /* PG_VERSION_NUM */
 }
 
-#include "Circuit.h"
+#include "BooleanCircuit.h"
 #include <csignal>
 
 using namespace std;
@@ -67,7 +67,7 @@ static Datum probability_evaluate_internal
   
   SPI_connect();
 
-  Circuit c;
+  BooleanCircuit c;
 
   if(SPI_execute_with_args(
       "SELECT * FROM provsql.sub_circuit_with_prob($1,$2)", 2, argtypes, arguments, nulls, true, 0)
@@ -83,16 +83,16 @@ static Datum probability_evaluate_internal
       string f = SPI_getvalue(tuple, tupdesc, 1);
       string type = SPI_getvalue(tuple, tupdesc, 3);
       if(type == "input") {
-        c.setGate(f, Circuit::IN, stod(SPI_getvalue(tuple, tupdesc, 4)));
+        c.setGate(f, BooleanCircuit::IN, stod(SPI_getvalue(tuple, tupdesc, 4)));
       } else {
         unsigned id=c.getGate(f);
 
         if(type == "monus" || type == "monusl" || type == "times" || type=="project" || type=="eq") {
-          c.setGate(f, Circuit::AND);
+          c.setGate(f, BooleanCircuit::AND);
         } else if(type == "plus") {
-          c.setGate(f, Circuit::OR);
+          c.setGate(f, BooleanCircuit::OR);
         } else if(type == "monusr") {
-          c.setGate(f, Circuit::NOT);
+          c.setGate(f, BooleanCircuit::NOT);
         } else {
           elog(ERROR, "Wrong type of gate in circuit");
         }

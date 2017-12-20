@@ -10,7 +10,7 @@ extern "C" {
 #include <set>
 #include <vector>
 
-class Circuit {
+class BooleanCircuit {
  public:
   enum gateType { UNDETERMINED, AND, OR, NOT, IN };
   typedef std::string uuid;
