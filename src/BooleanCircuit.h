@@ -1,53 +1,33 @@
-#ifndef CIRCUIT_H
-#define CIRCUIT_H
-
-extern "C" {
-#include "utils/uuid.h"
-}  
+#ifndef BOOLEAN_CIRCUIT_H
+#define BOOLEAN_CIRCUIT_H
 
 #include <unordered_map>
 #include <unordered_set>
 #include <set>
 #include <vector>
 
-class BooleanCircuit {
- public:
-  enum gateType { UNDETERMINED, AND, OR, NOT, IN };
-  typedef std::string uuid;
+#include "Circuit.hpp"
 
+enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN };
+
+class BooleanCircuit : public Circuit<BooleanGate> {
  private:
-  std::vector<gateType> gates;
-  std::vector<std::unordered_set<unsigned>> wires;
-  std::vector<std::unordered_set<unsigned>> rwires;
-  std::unordered_map<uuid, unsigned> uuid2id;
-  std::vector<double> prob;
   std::set<unsigned> inputs;
+  std::vector<double> prob;
+  bool evaluate(unsigned g, const std::unordered_set<unsigned> &sampled) const;
   
-  unsigned addGate();
-  bool evaluate(unsigned g, const std::unordered_set<unsigned> &trues) const;
-    
  public:
-  bool hasGate(const uuid &u) const;
-  unsigned getGate(const uuid &u);
-  void setGate(const uuid &u, gateType t, double p = -1);
-  void addWire(unsigned f, unsigned t);
+  unsigned addGate() override;
+  unsigned setGate(const uuid &u, BooleanGate t) override;
+  unsigned setGate(const uuid &u, BooleanGate t, double p);
 
   double possibleWorlds(unsigned g) const;
   double compilation(unsigned g, std::string compiler) const;
   double monteCarlo(unsigned g, unsigned samples) const;
 
   double dDNNFEvaluation(unsigned g) const;
-
-  std::string toString(unsigned g) const;
+  
+  virtual std::string toString(unsigned g) const;
 };
 
-class CircuitException : public std::exception
-{
-  std::string message;
-
- public: 
-  CircuitException(const std::string &m) : message(m) {}
-  virtual char const * what() const noexcept { return message.c_str(); }
-};
-
-#endif /* CIRCUIT_H */
+#endif /* BOOLEAN_CIRCUIT_H */
