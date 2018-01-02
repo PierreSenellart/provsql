@@ -383,6 +383,15 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C;
 
+CREATE OR REPLACE FUNCTION view_circuit(
+  token provenance_token,
+  token2probability regclass,
+  method text,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS
+  'provsql','view_circuit' LANGUAGE C;
+ 
+
 CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
  'provsql', 'provenance' LANGUAGE C;
 

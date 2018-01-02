@@ -39,6 +39,13 @@ unsigned Circuit::addGate()
   return id;
 }
 
+Circuit::uuid Circuit::findGateUuid(const unsigned g) const
+{
+  for(auto it:uuid2id)
+    if(it.second==g) return it.first;
+  return "";
+}
+
 void Circuit::setGate(const uuid &u, gateType type, double p)
 {
   unsigned id = getGate(u);
@@ -53,6 +60,56 @@ void Circuit::addWire(unsigned f, unsigned t)
   wires[f].insert(t);
   rwires[t].insert(f);
 }
+
+//Outputs the gate in Graphviz dot format
+std::string Circuit::toDot() const
+{
+  std::string op;
+  string result="graph circuit{\n";
+
+  //looping through the gates
+  unsigned i=0;
+  for(unsigned g:gates){
+    result += to_string(i)+" [label=";
+    switch(g) {
+      case IN:
+        if(prob[g]==0.) {
+          result+="\"0\"";
+        } else if(prob[g]==1.) {
+          result+="\"1\"";
+        } else {
+          //result+="\""+to_string(i)+"\",shape=box"; //TODO add description
+          result+="\""+findGateUuid(i)+"\",shape=box";
+        }
+        break;
+      case NOT:
+        result+="\"-\"";
+        break;
+      case UNDETERMINED:
+        result+="\"?\"";
+        break;
+      case AND:
+        result+="\"X\"";
+        break;
+      case OR:
+        result+="\"+\"";
+        break;
+    }
+    result+="];\n";
+    i++;
+  }
+
+  //looping through the gates and their wires
+  i=0;
+  for(unsigned g:gates){
+    for(auto s: wires[i])
+      result += to_string(i)+" -- "+to_string(s)+";\n";
+    i++;
+  }
+  return result+"}";
+}
+
+
 
 std::string Circuit::toString(unsigned g) const
 {
@@ -214,6 +271,31 @@ double Circuit::possibleWorlds(unsigned g) const
   }
 
   return totalp;
+}
+
+int Circuit::dotRenderer() const {
+  //Writing dot to a temporary file
+  int fd;
+  char cfilename[] = "/tmp/provsqlXXXXXX";
+  fd = mkstemp(cfilename);
+  close(fd);
+  string filename=cfilename, outfilename=filename+".pdf";
+
+  ofstream ofs(filename.c_str());
+  ofs << toDot();
+  ofs.close();
+
+  //Executing the Graphviz dot renderer
+  string cmdline="dot -Tpdf "+filename+" -o "+outfilename;
+
+  int retvalue=system(cmdline.c_str());
+
+  if(retvalue)    
+    throw CircuitException("Error executing Graphviz dot"); 
+
+  //TODO vizualization via external program
+  
+  return 0;
 }
 
 double Circuit::compilation(unsigned g, string compiler) const {

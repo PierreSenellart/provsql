@@ -25,10 +25,13 @@ class Circuit {
   
   unsigned addGate();
   bool evaluate(unsigned g, const std::unordered_set<unsigned> &trues) const;
+
+  std::string processGate(unsigned g);
     
  public:
   bool hasGate(const uuid &u) const;
   unsigned getGate(const uuid &u);
+  Circuit::uuid findGateUuid(const unsigned g) const;
   void setGate(const uuid &u, gateType t, double p = -1);
   void addWire(unsigned f, unsigned t);
 
@@ -38,7 +41,10 @@ class Circuit {
 
   double dDNNFEvaluation(unsigned g) const;
 
+  int dotRenderer() const; 
+
   std::string toString(unsigned g) const;
+  std::string toDot() const;
 };
 
 class CircuitException : public std::exception
