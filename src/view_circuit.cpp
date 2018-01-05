@@ -53,8 +53,7 @@ static void provsql_sigint_handler (int)
   provsql_interrupted = true;
 }
 
-static Datum view_circuit_internal
-  (Datum token, Datum token2prob, const string &method, const string &args)
+static Datum view_circuit_internal(Datum token, Datum token2prob)
 {
   constants_t constants;
   if(!initialize_constants(&constants)) {
@@ -73,12 +72,13 @@ static Datum view_circuit_internal
   //gates
   //Possible input <Relation.id>
   if(SPI_execute_with_args(
-      "SELECT * FROM provsql.sub_circuit_with_prob($1,$2)", 2, argtypes, arguments, nulls, true, 0)
+      "SELECT * FROM provsql.sub_circuit_with_desc($1,$2)", 2, argtypes, arguments, nulls, true, 0)
       == SPI_OK_SELECT) {
     int proc = SPI_processed;
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
     SPITupleTable *tuptable = SPI_tuptable;
 
+    elog(WARNING, "Query executed successfully");
     for (int i = 0; i < proc; i++)
     {
       HeapTuple tuple = tuptable->vals[i];
@@ -86,7 +86,8 @@ static Datum view_circuit_internal
       string f = SPI_getvalue(tuple, tupdesc, 1);
       string type = SPI_getvalue(tuple, tupdesc, 3);
       if(type == "input") {
-        c.setGate(f, Circuit::IN, stod(SPI_getvalue(tuple, tupdesc, 4)));
+        elog(WARNING, "Found an input gate");
+        c.setGateWithDesc(f, Circuit::IN, SPI_getvalue(tuple, tupdesc, 4));
       } else {
         unsigned id=c.getGate(f);
 
@@ -106,17 +107,11 @@ static Datum view_circuit_internal
 
   SPI_finish();
 
-// Display the circuit for debugging:
-// TODO add the DOT output
- elog(WARNING, "Formula: %s\n", c.toString(c.getGate(UUIDDatum2string(token))).c_str());
- elog(WARNING, "Dot:\n %s", c.toDot().c_str());
+  // Display the circuit for debugging:
+  elog(WARNING, "Dot:\n %s", c.toDot().c_str());
 
-//Calling the dot renderer
+  //Calling the dot renderer
   int result = c.dotRenderer();
-
-
-
-  unsigned gate = c.getGate(UUIDDatum2string(token));
 
   provsql_interrupted = false;
 
@@ -134,23 +129,11 @@ Datum view_circuit(PG_FUNCTION_ARGS)
   try {
     Datum token = PG_GETARG_DATUM(0);
     Datum token2prob = PG_GETARG_DATUM(1);
-    string method;
-    string args;
-
-    if(!PG_ARGISNULL(2)) {
-      text *t = PG_GETARG_TEXT_P(2);
-      method = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
-    }
-
-    if(!PG_ARGISNULL(3)) {
-      text *t = PG_GETARG_TEXT_P(3);
-      args = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
-    }
 
     if(PG_ARGISNULL(1))
       PG_RETURN_NULL();
 
-    return view_circuit_internal(token, token2prob, method, args);
+    return view_circuit_internal(token, token2prob);
   } catch(const std::exception &e) {
     elog(ERROR, "view_circuit: %s", e.what());
   } catch(...) {

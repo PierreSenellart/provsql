@@ -34,6 +34,7 @@ unsigned Circuit::addGate()
   unsigned id=gates.size();
   gates.push_back(UNDETERMINED);
   prob.push_back(1);
+  desc.push_back("");
   wires.resize(id+1);
   rwires.resize(id+1);
   return id;
@@ -54,6 +55,16 @@ void Circuit::setGate(const uuid &u, gateType type, double p)
   if(type==IN)
     inputs.insert(id);
 }
+
+void Circuit::setGateWithDesc(const uuid &u, gateType type, std::string d)
+{
+  unsigned id = getGate(u);
+  gates[id] = type;
+  desc[id] = d;
+  if(type==IN)
+    inputs.insert(id);
+}
+
 
 void Circuit::addWire(unsigned f, unsigned t)
 {
@@ -79,7 +90,7 @@ std::string Circuit::toDot() const
           result+="\"1\"";
         } else {
           //result+="\""+to_string(i)+"\",shape=box"; //TODO add description
-          result+="\""+findGateUuid(i)+"\",shape=box";
+          result+="\""+desc[i]+"\",shape=box";
         }
         break;
       case NOT:
@@ -293,7 +304,16 @@ int Circuit::dotRenderer() const {
   if(retvalue)    
     throw CircuitException("Error executing Graphviz dot"); 
 
-  //TODO vizualization via external program
+  //Opening the PDF viewer
+  retvalue = 0;
+
+#ifdef __linux__
+  //assuming evince on linux
+  cmdline="evince "+outfilename;
+  retvalue=system(cmdline.c_str());
+#else
+  throw CircuitException("Unsupported operating system for viewing");
+#endif
   
   return 0;
 }

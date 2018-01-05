@@ -21,6 +21,7 @@ class Circuit {
   std::vector<std::unordered_set<unsigned>> rwires;
   std::unordered_map<uuid, unsigned> uuid2id;
   std::vector<double> prob;
+  std::vector<std::string> desc;
   std::set<unsigned> inputs;
   
   unsigned addGate();
@@ -33,6 +34,7 @@ class Circuit {
   unsigned getGate(const uuid &u);
   Circuit::uuid findGateUuid(const unsigned g) const;
   void setGate(const uuid &u, gateType t, double p = -1);
+  void setGateWithDesc(const uuid &u, gateType type, std::string d="N/A");
   void addWire(unsigned f, unsigned t);
 
   double possibleWorlds(unsigned g) const;
