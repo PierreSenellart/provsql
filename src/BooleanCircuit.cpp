@@ -198,7 +198,7 @@ double BooleanCircuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-ouble BooleanCircuit::compilation(unsigned g, string compiler) const {
+double BooleanCircuit::compilation(unsigned g, string compiler) const {
   vector<vector<int>> clauses;
 
   // Tseytin transformation
