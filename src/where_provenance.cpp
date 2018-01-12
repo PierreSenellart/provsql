@@ -1,9 +1,12 @@
 extern "C" {
+
 #include "postgres.h"
 #include "fmgr.h"
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
 #include "executor/spi.h"
+#include "utils/builtins.h"
+
 #include "provsql_utils.h"
   
   PG_FUNCTION_INFO_V1(where_provenance);
@@ -17,7 +20,7 @@ using namespace std;
 
 /* copied with small changes from uuid.c */
 
-static Datum where_provenance_internal
+static string where_provenance_internal
   (Datum token)
 {
   constants_t constants;
@@ -41,7 +44,7 @@ static Datum where_provenance_internal
 
   // TODO
 
-  return (Datum) 0;
+  return "";
 }
 
 Datum where_provenance(PG_FUNCTION_ARGS)
@@ -49,12 +52,10 @@ Datum where_provenance(PG_FUNCTION_ARGS)
   try {
     Datum token = PG_GETARG_DATUM(0);
 
-    return where_provenance_internal(token);
+    PG_RETURN_TEXT_P(cstring_to_text(where_provenance_internal(token).c_str()));
   } catch(const std::exception &e) {
-    elog(ERROR, "probability_evaluate: %s", e.what());
+    elog(ERROR, "where_provenance: %s", e.what());
   } catch(...) {
-    elog(ERROR, "probability_evaluate: Unknown exception");
+    elog(ERROR, "where_provenance: Unknown exception");
   }
-
-  PG_RETURN_NULL();
 }
