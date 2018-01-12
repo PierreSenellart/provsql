@@ -36,7 +36,7 @@ unsigned BooleanCircuit::addGate()
   return id;
 }
 
-td::string BooleanCircuit::toString(unsigned g) const
+std::string BooleanCircuit::toString(unsigned g) const
 {
   std::string op;
   string result;

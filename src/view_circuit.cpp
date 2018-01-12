@@ -8,19 +8,9 @@ extern "C" {
   
   PG_FUNCTION_INFO_V1(view_circuit);
 
-#if PG_VERSION_NUM < 100000
-/* In versions of PostgreSQL < 10, pg_uuid_t is declared to be an opaque
- * struct pg_uuid_t in uuid.h, so we have to give the definition of
- * struct pg_uuid_t; this problem is resolved in PostgreSQL 10 */
-#define UUID_LEN 16
-  struct pg_uuid_t
-  {
-    unsigned char data[UUID_LEN];
-  };
-#endif /* PG_VERSION_NUM */
 }
 
-#include "Circuit.h"
+#include "DotCircuit.h"
 #include <csignal>
 
 using namespace std;
@@ -66,11 +56,8 @@ static Datum view_circuit_internal(Datum token, Datum token2prob)
   
   SPI_connect();
 
-  Circuit c;
+  DotCircuit c;
 
-  //TODO: this part needs to be changed with the proper semantics of the input
-  //gates
-  //Possible input <Relation.id>
   if(SPI_execute_with_args(
       "SELECT * FROM provsql.sub_circuit_with_desc($1,$2)", 2, argtypes, arguments, nulls, true, 0)
       == SPI_OK_SELECT) {
@@ -87,16 +74,16 @@ static Datum view_circuit_internal(Datum token, Datum token2prob)
       string type = SPI_getvalue(tuple, tupdesc, 3);
       if(type == "input") {
         elog(WARNING, "Found an input gate");
-        c.setGateWithDesc(f, Circuit::IN, SPI_getvalue(tuple, tupdesc, 4));
+        c.setGate(f, DotGate::IN, SPI_getvalue(tuple, tupdesc, 4));
       } else {
         unsigned id=c.getGate(f);
 
         if(type == "monus" || type == "monusl" || type == "times" || type=="project") {
-          c.setGate(f, Circuit::AND);
+          c.setGate(f, DotGate::OTIMES);
         } else if(type == "plus") {
-          c.setGate(f, Circuit::OR);
+          c.setGate(f, DotGate::OPLUS);
         } else if(type == "monusr") {
-          c.setGate(f, Circuit::NOT);
+          c.setGate(f, DotGate::OMINUS);
         } else {
           elog(ERROR, "Wrong type of gate in circuit");
         }
@@ -108,10 +95,10 @@ static Datum view_circuit_internal(Datum token, Datum token2prob)
   SPI_finish();
 
   // Display the circuit for debugging:
-  elog(WARNING, "Dot:\n %s", c.toDot().c_str());
+  elog(WARNING, "Dot:\n %s", c.toString(0).c_str());
 
   //Calling the dot renderer
-  int result = c.dotRenderer();
+  int result = c.render();
 
   provsql_interrupted = false;
 
