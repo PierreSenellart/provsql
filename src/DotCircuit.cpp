@@ -50,16 +50,22 @@ std::string DotCircuit::toString(unsigned ) const
         result+="\""+desc[i]+"\",shape=box";
         break;
       case DotGate::OMINUS:
-        result+="\"-\"";
+        result+="\"⊖\"";
         break;
       case DotGate::UNDETERMINED:
         result+="\"?\"";
         break;
       case DotGate::OTIMES:
-        result+="\"X\"";
+        result+="\"⊗\"";
         break;
       case DotGate::OPLUS:
-        result+="\"+\"";
+        result+="\"⊕\"";
+        break;
+      case DotGate::EQ:
+        result+="\"⋈\"";
+        break;
+      case DotGate::PROJECT:
+        result+="\"π\"";
         break;
     }
     result+="];\n";

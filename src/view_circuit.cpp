@@ -65,7 +65,6 @@ static Datum view_circuit_internal(Datum token, Datum token2prob)
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
     SPITupleTable *tuptable = SPI_tuptable;
 
-    elog(WARNING, "Query executed successfully");
     for (int i = 0; i < proc; i++)
     {
       HeapTuple tuple = tuptable->vals[i];
@@ -73,17 +72,22 @@ static Datum view_circuit_internal(Datum token, Datum token2prob)
       string f = SPI_getvalue(tuple, tupdesc, 1);
       string type = SPI_getvalue(tuple, tupdesc, 3);
       if(type == "input") {
-        elog(WARNING, "Found an input gate");
         c.setGate(f, DotGate::IN, SPI_getvalue(tuple, tupdesc, 4));
       } else {
         unsigned id=c.getGate(f);
 
-        if(type == "monus" || type == "monusl" || type == "times" || type=="project"|| type=="eq") {
+        if(type == "times") {
           c.setGate(f, DotGate::OTIMES);
         } else if(type == "plus") {
           c.setGate(f, DotGate::OPLUS);
-        } else if(type == "monusr") {
+        } else if(type == "monusr" || type== "monusl" || type == "monus") {
           c.setGate(f, DotGate::OMINUS);
+        } else if(type == "eq") {
+          //TODO query for retrieving the condition
+          c.setGate(f, DotGate::EQ);
+        } else if(type == "project") {
+          //TODO query for retrieving the fields
+          c.setGate(f, DotGate::PROJECT);
         } else {
           elog(ERROR, "Wrong type of gate in circuit");
         }
