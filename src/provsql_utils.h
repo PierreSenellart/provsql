@@ -2,6 +2,7 @@
 #define PROVSQL_UTILS_H
 
 #include "postgres_ext.h"
+#include "nodes/pg_list.h"
 
 typedef struct constants_t {
   Oid OID_SCHEMA_PROVSQL;
@@ -23,4 +24,10 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId);
 
 extern bool provsql_shared_library_loaded;
 extern bool provsql_interrupted;
+
+#if PG_VERSION_NUM < 90500
+/* Backport list_nth_cell function */
+ListCell *list_nth_cell(const List *list, int n);
+#endif
+
 #endif /* PROVSQL_UTILS_H */
