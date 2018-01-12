@@ -38,6 +38,8 @@ static string where_provenance_internal
       "SELECT * FROM provsql.sub_circuit_for_where($1)", 2, argtypes, arguments, nulls, true, 0)
       == SPI_OK_SELECT) {
     // TODO
+  } else {
+    elog(ERROR, "SPI_execute_with_args failed on provsql.sub_circuit_for_where");
   }
 
   SPI_finish();
