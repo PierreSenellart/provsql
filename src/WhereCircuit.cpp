@@ -33,3 +33,8 @@ unsigned WhereCircuit::addGate()
   unsigned id=Circuit::addGate();
   return id;
 }
+  
+std::string WhereCircuit::toString(unsigned g) const
+{
+  return "";
+}
