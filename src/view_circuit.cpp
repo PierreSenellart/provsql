@@ -78,7 +78,7 @@ static Datum view_circuit_internal(Datum token, Datum token2prob)
       } else {
         unsigned id=c.getGate(f);
 
-        if(type == "monus" || type == "monusl" || type == "times" || type=="project") {
+        if(type == "monus" || type == "monusl" || type == "times" || type=="project"|| type=="eq") {
           c.setGate(f, DotGate::OTIMES);
         } else if(type == "plus") {
           c.setGate(f, DotGate::OPLUS);
