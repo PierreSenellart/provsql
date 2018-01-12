@@ -3,50 +3,44 @@
 
 extern "C" {
 #include "utils/uuid.h"
+
+#if PG_VERSION_NUM < 100000
+/* In versions of PostgreSQL < 10, pg_uuid_t is declared to be an opaque
+ * struct pg_uuid_t in uuid.h, so we have to give the definition of
+ * struct pg_uuid_t; this problem is resolved in PostgreSQL 10 */
+#define UUID_LEN 16
+  struct pg_uuid_t
+  {
+    unsigned char data[UUID_LEN];
+  };
+#endif /* PG_VERSION_NUM */
 }  
 
 #include <unordered_map>
 #include <unordered_set>
-#include <set>
 #include <vector>
 
+template<class gateType>
 class Circuit {
  public:
-  enum gateType { UNDETERMINED, AND, OR, NOT, IN };
-  typedef std::string uuid;
+  using uuid = std::string;
 
  private:
+  std::unordered_map<uuid, unsigned> uuid2id;
+  
+ protected:
   std::vector<gateType> gates;
   std::vector<std::unordered_set<unsigned>> wires;
   std::vector<std::unordered_set<unsigned>> rwires;
-  std::unordered_map<uuid, unsigned> uuid2id;
-  std::vector<double> prob;
-  std::vector<std::string> desc;
-  std::set<unsigned> inputs;
-  
-  unsigned addGate();
-  bool evaluate(unsigned g, const std::unordered_set<unsigned> &trues) const;
-
-  std::string processGate(unsigned g);
     
  public:
+  virtual unsigned addGate();
+  virtual unsigned setGate(const uuid &u, gateType t);
   bool hasGate(const uuid &u) const;
   unsigned getGate(const uuid &u);
-  Circuit::uuid findGateUuid(const unsigned g) const;
-  void setGate(const uuid &u, gateType t, double p = -1);
-  void setGateWithDesc(const uuid &u, gateType type, std::string d="N/A");
   void addWire(unsigned f, unsigned t);
 
-  double possibleWorlds(unsigned g) const;
-  double compilation(unsigned g, std::string compiler) const;
-  double monteCarlo(unsigned g, unsigned samples) const;
-
-  double dDNNFEvaluation(unsigned g) const;
-
-  int dotRenderer() const; 
-
-  std::string toString(unsigned g) const;
-  std::string toDot() const;
+  virtual std::string toString(unsigned g) const = 0;
 };
 
 class CircuitException : public std::exception

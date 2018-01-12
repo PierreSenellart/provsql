@@ -194,26 +194,89 @@ static Bitmapset *remove_provenance_attributes_select(
 
 typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 
-static Expr *add_provenance_to_select(
-    Query *q, 
+/* An OpExpr leads directly to an eq gate.
+ * toExpr is the former expression for the provenance.
+ * The function returns the new expression with toExpr
+ * nested inside the call of the eq function. */
+static Expr *add_eq_from_OpExpr_to_Expr(
+    OpExpr *fromOpExpr,
+    Expr *toExpr,
+    int **columns,
+    const constants_t *constants)
+{
+  Datum first_arg;
+  Datum second_arg;
+  FuncExpr *fc;
+  Const *c1;
+  Const *c2;
+  Var *v1;
+  Var *v2;
+
+  if(lnext(list_head(fromOpExpr->args))) {
+    /* Sometimes Var is nested within a RelabelType */
+    if(IsA(linitial(fromOpExpr->args), Var)) {
+      v1 = linitial(fromOpExpr->args);  
+    } else {
+      RelabelType *rt1 = linitial(fromOpExpr->args); 
+        v1 = (Var *) rt1->arg;  
+    }
+    first_arg = Int16GetDatum(columns[v1->varno-1][v1->varattno-1]);
+
+    if(IsA(lsecond(fromOpExpr->args), Var)) {  
+      v2 = lsecond(fromOpExpr->args);  
+    } else { 
+      RelabelType *rt2 = lsecond(fromOpExpr->args); 
+      v2 = (Var*) rt2->arg;  
+    }
+    second_arg = Int16GetDatum(columns[v2->varno-1][v2->varattno-1]);
+
+    fc = makeNode(FuncExpr);
+          fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
+          fc->funcvariadic=false;
+          fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+          fc->location=-1;
+
+    c1=makeConst(constants->OID_TYPE_INT,
+        -1,
+        InvalidOid,
+        sizeof(int16),
+        first_arg,
+        false,
+        true);
+
+    c2=makeConst(constants->OID_TYPE_INT,
+        -1,
+        InvalidOid,
+        sizeof(int16),
+        second_arg,
+        false,
+        true);     
+
+    fc->args=list_make3(toExpr, c1, c2); 
+    return (Expr *)fc;
+  }
+  return toExpr;
+}
+
+static Expr *make_provenance_expression(
+    Query *q,
     List *prov_atts, 
     const constants_t *constants, 
     bool aggregation_needed,
     semiring_operation op,
     bool *exported,
+    int **columns,
     int nbcols)
 {
+  Expr *result;
   FuncExpr *expr;
-  TargetEntry *te=makeNode(TargetEntry);
   int i;
   bool projection=false;
-
-  te->resno=list_length(q->targetList)+1;
-  te->resname=(char *)PROVSQL_COLUMN_NAME;
+  ListCell *lc_v;
 
   if(op==SR_PLUS) {
     RelabelType *re=(RelabelType *) linitial(prov_atts);
-    te->expr=re->arg;
+    result=re->arg;
   } else {
     expr=makeNode(FuncExpr);
     if(op==SR_TIMES) {
@@ -253,15 +316,49 @@ static Expr *add_provenance_to_select(
       agg->aggargtypes=list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
 #endif /* PG_VERSION_NUM >= 90600 */
 
-      te->expr=(Expr*)agg;
+      result=(Expr*)agg;
     } else {
-      te->expr=(Expr*)expr;
+      result=(Expr*)expr;
     }
   }
 
   for(i=0;i<nbcols;++i) {
     if(!exported[i])
       projection=true;
+  }
+
+//ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
+
+  /* Part to handle eq gates used for where-provenance. 
+   * Placed before projection gates because they need
+   * to be deeper in the provenance tree. */
+  if(q->jointree) {
+    ListCell *lc;
+    foreach(lc, q->jointree->fromlist) {
+      if(IsA(lfirst(lc), JoinExpr)) {
+        JoinExpr *je = (JoinExpr *) lfirst(lc);
+        //TODO handle subjoin in larg or in rarg
+        OpExpr *oe;
+        if(je->quals && IsA(je->quals, OpExpr)) {
+          oe = (OpExpr *) je->quals;
+          result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+	} /* Sometimes OpExpr is nested within a BoolExpr */
+        else if (je->quals) {
+          BoolExpr *be = (BoolExpr *) je->quals;
+          /* In some cases, there can be an OR or a not specified with ON clause */
+          if(be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
+            ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on clause are not supported by provsql")));
+          } else {
+            ListCell *lc2; 
+            foreach(lc2,be->args) {
+              oe = (OpExpr *) lfirst(lc2);
+              result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+            }
+          }
+        } /* Handle case of CROSS JOIN with no eqop */
+        else { }
+      }
+    }
   }
 
   if(projection) {
@@ -278,28 +375,61 @@ static Expr *add_provenance_to_select(
     array->elements=NIL;
     array->location=-1;
   
-    for(i=0;i<nbcols;++i) {
-      if(exported[i]) {
+    foreach(lc_v, q->targetList) {
+      TargetEntry *te_v = (TargetEntry *) lfirst(lc_v); 
+      if(IsA(te_v->expr, Var)) {
+        Var *vte_v = (Var *) te_v->expr; 
+        RangeTblEntry *rte_v = (RangeTblEntry *) lfirst(list_nth_cell(q->rtable, vte_v->varno-1));
+        int value_v;
+        /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
+        if(rte_v->rtekind != RTE_JOIN) {
+          value_v = columns[vte_v->varno-1][vte_v->varattno-1];
+        } else { // is a join
+          Var *jav_v = (Var *) lfirst(list_nth_cell(rte_v->joinaliasvars, vte_v->varattno-1));
+          value_v = columns[jav_v->varno-1][jav_v->varattno-1];
+        }
+        /* If this is a valid column */
+        if(value_v != 0) {
+          Const *ce=makeConst(constants->OID_TYPE_INT,
+               -1,
+               InvalidOid,
+               sizeof(int32),
+               Int32GetDatum(value_v),
+               false,
+               true);
+
+          array->elements=lappend(array->elements, ce);
+        }
+      } else { // we have a function in target
         Const *ce=makeConst(constants->OID_TYPE_INT,
-            -1,
-            InvalidOid,
-            sizeof(int32),
-            Int32GetDatum(i+1),
-            false,
-            true);
-        
+               -1,
+               InvalidOid,
+               sizeof(int32),
+               Int32GetDatum(0),
+               false,
+               true);
+
         array->elements=lappend(array->elements, ce);
       }
-    }
+    }    
 
-    fe->args=list_make2(te->expr, array);
+    fe->args=list_make2(result, array);
 
-    te->expr=(Expr *)fe;
+    result=(Expr *)fe;
   }
 
-  q->targetList=lappend(q->targetList,te);
+  return result;
+}
 
-  return te->expr;
+static void add_to_select(
+    Query *q, 
+    Expr *provenance)
+{
+  TargetEntry *te=makeNode(TargetEntry);
+  te->expr=provenance;
+  te->resno=list_length(q->targetList)+1;
+  te->resname=(char *)PROVSQL_COLUMN_NAME;
+  q->targetList=lappend(q->targetList,te);
 }
 
 typedef struct provenance_mutator_context {
@@ -381,7 +511,7 @@ static void remove_provenance_attribute_groupref(Query *q, const constants_t *co
   }
 }
 
-static Query *rewrite_all_into_external_group_by(Query *q)
+static Query *rewrite_non_all_into_external_group_by(Query *q)
 {
   Query *new_query = makeNode(Query);
   RangeTblEntry *rte = makeNode(RangeTblEntry);
@@ -603,14 +733,15 @@ static Query *process_query(
     bool subquery)
 {
   List *prov_atts;
-  Expr *provsql;
   bool has_union = false;
   bool has_difference = false;
   bool supported=true;
   bool *exported=0;
   int nbcols=0;
+  int *columns[q->rtable->length];
+  unsigned i=0;
 
-//  ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+//ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if(q->setOperations) {
     // TODO: Nest set operations as subqueries in FROM,
@@ -618,7 +749,7 @@ static Query *process_query(
 
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
     if(!stmt->all) {
-      q = rewrite_all_into_external_group_by(q);
+      q = rewrite_non_all_into_external_group_by(q);
       return process_query(q, constants, subquery);
     }
   }
@@ -697,9 +828,6 @@ static Query *process_query(
 #endif /* PG_VERSION_NUM >= 90500 */
   
   if(supported) {
-    int *columns[q->rtable->length];
-
-    unsigned i=0;
     ListCell *l;
     
     foreach(l, q->rtable) {
@@ -714,7 +842,8 @@ static Query *process_query(
 
         foreach(lc, r->eref->colnames) {
           Value *v = (Value *) lfirst(lc);
-          if(strcmp(strVal(v),"") && strcmp(strVal(v),PROVSQL_COLUMN_NAME)) { // TODO: More robust test
+          if(strcmp(strVal(v),"") && strcmp(strVal(v),PROVSQL_COLUMN_NAME) && r->rtekind != RTE_JOIN) { // TODO: More robust test
+                                                                              // join RTE columns ignored
             columns[i][j]=++nbcols;
           } else {
             columns[i][j]=0;
@@ -739,28 +868,30 @@ static Query *process_query(
           exported[columns[v->varno-1][v->varattno-1]-1] = true;
       }
     }
-
-    for(i=0;i<q->rtable->length;++i) {
-      if(columns[i])
-        pfree(columns[i]);
-    }
   }
 
   if(supported) {
-    provsql = add_provenance_to_select(
+    Expr *provenance = make_provenance_expression(
         q,
         prov_atts,
         constants,
         q->hasAggs,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
         exported,
+        columns,
         nbcols);
     pfree(exported);
 
-    replace_provenance_function_by_expression(q, provsql, constants);
+    add_to_select(q,provenance);
+    replace_provenance_function_by_expression(q, provenance, constants);
   }
 
-//  ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
+  for(i=0;i<q->rtable->length;++i) {
+    if(columns[i])
+      pfree(columns[i]);
+  }
+
+//ereport(NOTICE, (errmsg("After: %s",nodeToString(q))));
 
   return q;
 }

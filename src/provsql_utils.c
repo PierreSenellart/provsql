@@ -52,6 +52,9 @@ bool initialize_constants(constants_t *constants)
   constants->OID_FUNCTION_PROVENANCE_PROJECT = GetFuncOid("provenance_project");
   CheckOid(OID_FUNCTION_PROVENANCE_PROJECT);
 
+  constants->OID_FUNCTION_PROVENANCE_EQ = GetFuncOid("provenance_eq");
+  CheckOid(OID_FUNCTION_PROVENANCE_EQ);
+
   constants->OID_FUNCTION_PROVENANCE = GetFuncOid("provenance");
   CheckOid(OID_FUNCTION_PROVENANCE);
 
@@ -130,3 +133,28 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
     return InvalidOid;
 }
 
+#if PG_VERSION_NUM < 90500
+/* Backport list_nth_cell function */
+ /*
+  * Locate the n'th cell (counting from 0) of the list.  It is an assertion
+  * failure if there is no such cell.
+  */
+ ListCell *
+ list_nth_cell(const List *list, int n)
+ {
+     ListCell   *match;
+ 
+     Assert(list != NIL);
+     Assert(n >= 0);
+     Assert(n < list->length);
+ 
+     /* Does the caller actually mean to fetch the tail? */
+     if (n == list->length - 1)
+         return list->tail;
+ 
+     for (match = list->head; n-- > 0; match = match->next)
+         ;
+ 
+     return match;
+ }
+#endif

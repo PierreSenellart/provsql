@@ -1,4 +1,4 @@
-#include "Circuit.h"
+#include "BooleanCircuit.h"
 
 extern "C" {
 #include "provsql_utils.h"
@@ -13,122 +13,36 @@ extern "C" {
 
 using namespace std;
 
-bool Circuit::hasGate(const uuid &u) const
+// Has to be redefined because of name hiding
+unsigned BooleanCircuit::setGate(const uuid &u, BooleanGate type)
 {
-  return uuid2id.find(u)!=uuid2id.end();
-}
-
-unsigned Circuit::getGate(const uuid &u)
-{
-  auto it=uuid2id.find(u);
-  if(it==uuid2id.end()) {
-    unsigned id=addGate();
-    uuid2id[u]=id;
-    return id;
-  } else 
-    return it->second;
-}
-
-unsigned Circuit::addGate()
-{
-  unsigned id=gates.size();
-  gates.push_back(UNDETERMINED);
-  prob.push_back(1);
-  desc.push_back("");
-  wires.resize(id+1);
-  rwires.resize(id+1);
+ unsigned id = Circuit::setGate(u, type);
+  if(type == BooleanGate::IN)
+    inputs.insert(id);
   return id;
 }
 
-Circuit::uuid Circuit::findGateUuid(const unsigned g) const
+unsigned BooleanCircuit::setGate(const uuid &u, BooleanGate type, double p)
 {
-  for(auto it:uuid2id)
-    if(it.second==g) return it.first;
-  return "";
-}
-
-void Circuit::setGate(const uuid &u, gateType type, double p)
-{
-  unsigned id = getGate(u);
-  gates[id] = type;
+  unsigned id = setGate(u, type);
   prob[id] = p;
-  if(type==IN)
-    inputs.insert(id);
+  return id;
 }
 
-void Circuit::setGateWithDesc(const uuid &u, gateType type, std::string d)
+unsigned BooleanCircuit::addGate()
 {
-  unsigned id = getGate(u);
-  gates[id] = type;
-  desc[id] = d;
-  if(type==IN)
-    inputs.insert(id);
+  unsigned id=Circuit::addGate();
+  prob.push_back(1);
+  return id;
 }
 
-
-void Circuit::addWire(unsigned f, unsigned t)
-{
-  wires[f].insert(t);
-  rwires[t].insert(f);
-}
-
-//Outputs the gate in Graphviz dot format
-std::string Circuit::toDot() const
-{
-  std::string op;
-  string result="graph circuit{\n";
-
-  //looping through the gates
-  unsigned i=0;
-  for(unsigned g:gates){
-    result += to_string(i)+" [label=";
-    switch(g) {
-      case IN:
-        if(prob[g]==0.) {
-          result+="\"0\"";
-        } else if(prob[g]==1.) {
-          result+="\"1\"";
-        } else {
-          //result+="\""+to_string(i)+"\",shape=box"; //TODO add description
-          result+="\""+desc[i]+"\",shape=box";
-        }
-        break;
-      case NOT:
-        result+="\"-\"";
-        break;
-      case UNDETERMINED:
-        result+="\"?\"";
-        break;
-      case AND:
-        result+="\"X\"";
-        break;
-      case OR:
-        result+="\"+\"";
-        break;
-    }
-    result+="];\n";
-    i++;
-  }
-
-  //looping through the gates and their wires
-  i=0;
-  for(unsigned g:gates){
-    for(auto s: wires[i])
-      result += to_string(i)+" -- "+to_string(s)+";\n";
-    i++;
-  }
-  return result+"}";
-}
-
-
-
-std::string Circuit::toString(unsigned g) const
+td::string BooleanCircuit::toString(unsigned g) const
 {
   std::string op;
   string result;
 
   switch(gates[g]) {
-    case IN:
+    case BooleanGate::IN:
       if(prob[g]==0.) {
         return "⊥";
       } else if(prob[g]==1.) {
@@ -136,30 +50,30 @@ std::string Circuit::toString(unsigned g) const
       } else {
         return to_string(g)+"["+to_string(prob[g])+"]";
       }
-    case NOT:
+    case BooleanGate::NOT:
       op="¬";
       break;
-    case UNDETERMINED:
+    case BooleanGate::UNDETERMINED:
       op="?";
       break;
-    case AND:
+    case BooleanGate::AND:
       op="∧";
       break;
-    case OR:
+    case BooleanGate::OR:
       op="∨";
       break;
   }
 
   if(wires[g].empty()) {
-    if(gates[g]==AND)
+    if(gates[g]==BooleanGate::AND)
       return "⊤";
-    else if(gates[g]==OR)
+    else if(gates[g]==BooleanGate::OR)
       return "⊥";
     else return op;
   }
 
   for(auto s: wires[g]) {
-    if(gates[g]==NOT)
+    if(gates[g]==BooleanGate::NOT)
       result = op;
     else if(!result.empty())
       result+=" "+op+" ";
@@ -169,25 +83,25 @@ std::string Circuit::toString(unsigned g) const
   return "("+result+")";
 }
 
-double Circuit::dDNNFEvaluation(unsigned g) const
+double BooleanCircuit::dDNNFEvaluation(unsigned g) const
 {
   switch(gates[g]) {
-    case IN:
+    case BooleanGate::IN:
       return prob[g];
-    case NOT:
+    case BooleanGate::NOT:
       return 1-prob[g];
-    case AND:
+    case BooleanGate::AND:
       break;
-    case OR:
+    case BooleanGate::OR:
       break;
-    case UNDETERMINED:
+    case BooleanGate::UNDETERMINED:
       throw CircuitException("Incorrect gate type");
   }
 
-  double result=(gates[g]==AND?1:0);
+  double result=(gates[g]==BooleanGate::AND?1:0);
   for(auto s: wires[g]) {
     double d = dDNNFEvaluation(s);
-    if(gates[g]==AND)
+    if(gates[g]==BooleanGate::AND)
       result*=d;
     else
       result+=d;
@@ -196,22 +110,22 @@ double Circuit::dDNNFEvaluation(unsigned g) const
   return result;
 }
 
-bool Circuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
+bool BooleanCircuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
 {
   bool disjunction=false;
 
   switch(gates[g]) {
-    case IN:
+    case BooleanGate::IN:
       return sampled.find(g)!=sampled.end();
-    case NOT:
+    case BooleanGate::NOT:
       return !evaluate(*(wires[g].begin()), sampled);
-    case AND:
+    case BooleanGate::AND:
       disjunction = false;
       break;
-    case OR:
+    case BooleanGate::OR:
       disjunction = true;
       break;
-    case UNDETERMINED:
+    case BooleanGate::UNDETERMINED:
       throw CircuitException("Incorrect gate type");
   }
 
@@ -229,7 +143,7 @@ bool Circuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
     return true;
 }
 
-double Circuit::monteCarlo(unsigned g, unsigned samples) const
+double BooleanCircuit::monteCarlo(unsigned g, unsigned samples) const
 {
   unsigned success=0;
 
@@ -251,7 +165,7 @@ double Circuit::monteCarlo(unsigned g, unsigned samples) const
   return success*1./samples;
 }
 
-double Circuit::possibleWorlds(unsigned g) const
+double BooleanCircuit::possibleWorlds(unsigned g) const
 { 
   if(inputs.size()>=8*sizeof(unsigned long long))
     throw CircuitException("Too many possible worlds to iterate over");
@@ -284,47 +198,13 @@ double Circuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-int Circuit::dotRenderer() const {
-  //Writing dot to a temporary file
-  int fd;
-  char cfilename[] = "/tmp/provsqlXXXXXX";
-  fd = mkstemp(cfilename);
-  close(fd);
-  string filename=cfilename, outfilename=filename+".pdf";
-
-  ofstream ofs(filename.c_str());
-  ofs << toDot();
-  ofs.close();
-
-  //Executing the Graphviz dot renderer
-  string cmdline="dot -Tpdf "+filename+" -o "+outfilename;
-
-  int retvalue=system(cmdline.c_str());
-
-  if(retvalue)    
-    throw CircuitException("Error executing Graphviz dot"); 
-
-  //Opening the PDF viewer
-  retvalue = 0;
-
-#ifdef __linux__
-  //assuming evince on linux
-  cmdline="export DISPLAY=':0'; xhost +; evince "+outfilename + " &";
-  retvalue=system(cmdline.c_str());
-#else
-  throw CircuitException("Unsupported operating system for viewing");
-#endif
-  
-  return 0;
-}
-
-double Circuit::compilation(unsigned g, string compiler) const {
+ouble BooleanCircuit::compilation(unsigned g, string compiler) const {
   vector<vector<int>> clauses;
 
   // Tseytin transformation
   for(unsigned i=0; i<gates.size(); ++i) {
     switch(gates[i]) {
-      case AND:
+      case BooleanGate::AND:
         {
           int id=i+1;
           vector<int> c = {id};
@@ -336,7 +216,7 @@ double Circuit::compilation(unsigned g, string compiler) const {
           break;
         }
 
-      case OR:
+      case BooleanGate::OR:
         {
           int id=i+1;
           vector<int> c = {-id};
@@ -348,7 +228,7 @@ double Circuit::compilation(unsigned g, string compiler) const {
         }
         break;
 
-      case NOT:
+      case BooleanGate::NOT:
         {
           int id=i+1;
           int s=*wires[i].begin();
@@ -357,8 +237,8 @@ double Circuit::compilation(unsigned g, string compiler) const {
           break;
         }
 
-      case IN:
-      case UNDETERMINED:
+      case BooleanGate::IN:
+      case BooleanGate::UNDETERMINED:
         ;
     }
   }
@@ -414,7 +294,7 @@ double Circuit::compilation(unsigned g, string compiler) const {
   unsigned nb_nodes, foobar, nb_variables;
   ifs >> nb_nodes >> foobar >> nb_variables;
 
-  Circuit dnnf;
+  BooleanCircuit dnnf;
 
   if(nb_variables!=gates.size())
     throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + to_string(nb_variables) +" vs " + to_string(gates.size()) + ")");
@@ -432,7 +312,7 @@ double Circuit::compilation(unsigned g, string compiler) const {
       int var, args;
       ss >> var >> args;
       unsigned id=dnnf.getGate(to_string(i));
-      dnnf.setGate(to_string(i), OR);
+      dnnf.setGate(to_string(i), BooleanGate::OR);
       int g;
       while(ss >> g) {
         unsigned id2=dnnf.getGate(to_string(g));
@@ -442,7 +322,7 @@ double Circuit::compilation(unsigned g, string compiler) const {
       int args;
       ss >> args;
       unsigned id=dnnf.getGate(to_string(i));
-      dnnf.setGate(to_string(i), AND);
+      dnnf.setGate(to_string(i), BooleanGate::AND);
       int g;
       while(ss >> g) {
         unsigned id2=dnnf.getGate(to_string(g));
@@ -451,14 +331,14 @@ double Circuit::compilation(unsigned g, string compiler) const {
     } else if(c=='L') {
       int leaf;
       ss >> leaf;
-      if(gates[abs(leaf)-1]==IN) {
+      if(gates[abs(leaf)-1]==BooleanGate::IN) {
         if(leaf<0) {
-          dnnf.setGate(to_string(i), IN, 1-prob[-leaf-1]);
+          dnnf.setGate(to_string(i), BooleanGate::IN, 1-prob[-leaf-1]);
         } else {
-          dnnf.setGate(to_string(i), IN, prob[leaf-1]);
+          dnnf.setGate(to_string(i), BooleanGate::IN, prob[leaf-1]);
         }
       } else
-        dnnf.setGate(to_string(i), IN, 1.);
+        dnnf.setGate(to_string(i), BooleanGate::IN, 1.);
     } else 
       throw CircuitException(string("Unreadable d-DNNF (unknown node type: ")+c+")");
 

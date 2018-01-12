@@ -7,20 +7,9 @@ extern "C" {
 #include "provsql_utils.h"
   
   PG_FUNCTION_INFO_V1(probability_evaluate);
-
-#if PG_VERSION_NUM < 100000
-/* In versions of PostgreSQL < 10, pg_uuid_t is declared to be an opaque
- * struct pg_uuid_t in uuid.h, so we have to give the definition of
- * struct pg_uuid_t; this problem is resolved in PostgreSQL 10 */
-#define UUID_LEN 16
-  struct pg_uuid_t
-  {
-    unsigned char data[UUID_LEN];
-  };
-#endif /* PG_VERSION_NUM */
 }
 
-#include "Circuit.h"
+#include "BooleanCircuit.h"
 #include <csignal>
 
 using namespace std;
@@ -67,7 +56,7 @@ static Datum probability_evaluate_internal
   
   SPI_connect();
 
-  Circuit c;
+  BooleanCircuit c;
 
   if(SPI_execute_with_args(
       "SELECT * FROM provsql.sub_circuit_with_prob($1,$2)", 2, argtypes, arguments, nulls, true, 0)
@@ -83,16 +72,16 @@ static Datum probability_evaluate_internal
       string f = SPI_getvalue(tuple, tupdesc, 1);
       string type = SPI_getvalue(tuple, tupdesc, 3);
       if(type == "input") {
-        c.setGate(f, Circuit::IN, stod(SPI_getvalue(tuple, tupdesc, 4)));
+        c.setGate(f, BooleanGate::IN, stod(SPI_getvalue(tuple, tupdesc, 4)));
       } else {
         unsigned id=c.getGate(f);
 
-        if(type == "monus" || type == "monusl" || type == "times" || type=="project") {
-          c.setGate(f, Circuit::AND);
+        if(type == "monus" || type == "monusl" || type == "times" || type=="project" || type=="eq") {
+          c.setGate(f, BooleanGate::AND);
         } else if(type == "plus") {
-          c.setGate(f, Circuit::OR);
+          c.setGate(f, BooleanGate::OR);
         } else if(type == "monusr") {
-          c.setGate(f, Circuit::NOT);
+          c.setGate(f, BooleanGate::NOT);
         } else {
           elog(ERROR, "Wrong type of gate in circuit");
         }
