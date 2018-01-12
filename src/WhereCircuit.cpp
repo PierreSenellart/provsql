@@ -13,7 +13,6 @@ extern "C" {
 
 using namespace std;
 
-// Has to be redefined because of name hiding
 unsigned WhereCircuit::setGate(const uuid &u, WhereGate type)
 {
   unsigned id = Circuit::setGate(u, type);
@@ -22,18 +21,20 @@ unsigned WhereCircuit::setGate(const uuid &u, WhereGate type)
   return id;
 }
 
-unsigned WhereCircuit::setGate(const uuid &u, WhereGate type, int info1, int info2)
+unsigned WhereCircuit::setGateProjection(const uuid &u, vector<int> &&infos)
 {
-  unsigned id = setGate(u, type);
-  return id;
-}
-
-unsigned WhereCircuit::addGate()
-{
-  unsigned id=Circuit::addGate();
+  unsigned id = setGate(u, WhereGate::PROJECT);
+  projection_info[id]=infos;
   return id;
 }
   
+unsigned WhereCircuit::setGateEquality(const uuid &u, int pos1, int pos2)
+{
+  unsigned id = setGate(u, WhereGate::EQ);
+  equality_info[id]=make_pair(pos1,pos2);
+  return id;
+}
+
 std::string WhereCircuit::toString(unsigned g) const
 {
   return "";
