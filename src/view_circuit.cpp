@@ -43,7 +43,7 @@ static void provsql_sigint_handler (int)
   provsql_interrupted = true;
 }
 
-static Datum view_circuit_internal(Datum token, Datum token2prob)
+static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
 {
   constants_t constants;
   if(!initialize_constants(&constants)) {
@@ -84,7 +84,21 @@ static Datum view_circuit_internal(Datum token, Datum token2prob)
           c.setGate(f, DotGate::OMINUS);
         } else if(type == "eq") {
           //TODO query for retrieving the condition
-          c.setGate(f, DotGate::EQ);
+          std::string cond = "";
+          Datum arg[1] = {UUIDPGetDatum(f.c_str())};
+          Oid argt[1] = {constants.OID_TYPE_PROVENANCE_TOKEN};
+          char nll[1] = {' '};
+          if(SPI_execute_with_args("SELECT info, info_eq FROM provsql.provenance_circuit_extra WHERE gate=$1", 1, argt, arg, nll, true, 0) == SPI_OK_SELECT) {
+            if(SPI_processed >= 1){
+              TupleDesc td = SPI_tuptable->tupdesc;
+              SPITupleTable *tt = SPI_tuptable;
+              HeapTuple tpl = tt->vals[0];
+              cond += std::string("[")+SPI_getvalue(tpl,td,1)+std::string("=")+\
+                      SPI_getvalue(tpl,td,2)+std::string("]");
+            }
+          }
+          //elog(WARNING, "Condition gate %s is %s", f.c_str(), cond.c_str());
+          c.setGate(f, DotGate::EQ, cond);
         } else if(type == "project") {
           //TODO query for retrieving the fields
           c.setGate(f, DotGate::PROJECT);
@@ -99,7 +113,9 @@ static Datum view_circuit_internal(Datum token, Datum token2prob)
   SPI_finish();
 
   // Display the circuit for debugging:
-  elog(WARNING, "Dot:\n %s", c.toString(0).c_str());
+  int display = DatumGetInt64(is_debug);
+  if(display)
+    elog(WARNING, "%s", c.toString(0).c_str());
 
   //Calling the dot renderer
   int result = c.render();
@@ -120,11 +136,12 @@ Datum view_circuit(PG_FUNCTION_ARGS)
   try {
     Datum token = PG_GETARG_DATUM(0);
     Datum token2prob = PG_GETARG_DATUM(1);
+    Datum is_debug = PG_GETARG_DATUM(2);
 
     if(PG_ARGISNULL(1))
       PG_RETURN_NULL();
 
-    return view_circuit_internal(token, token2prob);
+    return view_circuit_internal(token, token2prob, is_debug);
   } catch(const std::exception &e) {
     elog(ERROR, "view_circuit: %s", e.what());
   } catch(...) {

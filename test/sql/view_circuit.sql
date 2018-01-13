@@ -1,7 +1,7 @@
 SET search_path TO public, provsql;
 
 CREATE TABLE vc_result AS
-SELECT city, view_circuit(provenance(),'d') AS prob
+SELECT city, view_circuit(provenance(),'d',1) AS prob
 FROM (
   SELECT DISTINCT city
   FROM personal

@@ -39,7 +39,8 @@ unsigned DotCircuit::addGate()
 std::string DotCircuit::toString(unsigned ) const
 {
   std::string op;
-  std::string result="graph circuit{\n";
+  std::string result="graph circuit{\n node [shape=plaintext];\n";
+  
 
   //looping through the gates
   unsigned i=0;
@@ -47,7 +48,7 @@ std::string DotCircuit::toString(unsigned ) const
     result += std::to_string(i)+" [label=";
     switch(g) {
       case DotGate::IN:
-        result+="\""+desc[i]+"\",shape=box";
+        result+="\""+desc[i]+"\"";
         break;
       case DotGate::OMINUS:
         result+="\"⊖\"";

@@ -485,7 +485,8 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
 
 CREATE OR REPLACE FUNCTION view_circuit(
   token provenance_token,
-  token2desc regclass)
+  token2desc regclass,
+  dbg int = 0)
   RETURNS DOUBLE PRECISION AS
   'provsql','view_circuit' LANGUAGE C;
  
