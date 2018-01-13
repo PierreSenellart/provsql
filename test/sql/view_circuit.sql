@@ -1,7 +1,8 @@
+\set ECHO none
 SET search_path TO public, provsql;
 
 CREATE TABLE vc_result AS
-SELECT city, view_circuit(provenance(),'d',1) AS prob
+SELECT city, view_circuit(provenance(),'d') AS res
 FROM (
   SELECT DISTINCT city
   FROM personal
@@ -12,4 +13,6 @@ EXCEPT
   GROUP BY p1.city
 ) t;
 
-select * from vc_result;
+SELECT remove_provenance('vc_result');
+
+SELECT city, res FROM vc_result ORDER BY city;

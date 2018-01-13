@@ -1,0 +1,17 @@
+\set ECHO none
+ create_provenance_mapping 
+---------------------------
+ 
+(1 row)
+
+       value       
+-------------------
+ personal.Dave
+ personal.Ellen
+ personal.John
+ personal.Magdalen
+ personal.Nancy
+ personal.Paul
+ personal.Susan
+(7 rows)
+

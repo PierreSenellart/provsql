@@ -1,7 +1,7 @@
 \set ECHO none
 SET search_path TO public, provsql;
 
-/* Add some probabilities to the personal table */
+/* Add descriptions to the personal table */
 ALTER TABLE personal ADD COLUMN desc_str VARCHAR(255);
 UPDATE personal SET desc_str='personal.'||name;
 
