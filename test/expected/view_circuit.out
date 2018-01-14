@@ -4,10 +4,10 @@
  
 (1 row)
 
-   city   | res 
-----------+-----
- Berlin   |   0
- New York |   0
- Paris    |   0
+   city   | gates 
+----------+-------
+ Berlin   |    14
+ New York |    14
+ Paris    |    23
 (3 rows)
 

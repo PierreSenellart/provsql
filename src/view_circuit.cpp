@@ -58,10 +58,12 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
 
   DotCircuit c;
 
+  int proc = 0;
+
   if(SPI_execute_with_args(
       "SELECT * FROM provsql.sub_circuit_with_desc($1,$2)", 2, argtypes, arguments, nulls, true, 0)
       == SPI_OK_SELECT) {
-    int proc = SPI_processed;
+    proc = SPI_processed;
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
     SPITupleTable *tuptable = SPI_tuptable;
 
@@ -73,6 +75,7 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
       string type = SPI_getvalue(tuple, tupdesc, 3);
       if(type == "input") {
         c.setGate(f, DotGate::IN, SPI_getvalue(tuple, tupdesc, 4));
+        
       } else {
         unsigned id=c.getGate(f);
 
@@ -128,7 +131,7 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
   provsql_interrupted = false;
   signal (SIGINT, prev_sigint_handler);
   
-  PG_RETURN_FLOAT8(result);
+  PG_RETURN_FLOAT8(proc);
 }
 
 Datum view_circuit(PG_FUNCTION_ARGS)

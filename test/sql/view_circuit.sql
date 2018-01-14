@@ -2,7 +2,7 @@
 SET search_path TO public, provsql;
 
 CREATE TABLE vc_result AS
-SELECT city, view_circuit(provenance(),'d') AS res
+SELECT city, view_circuit(provenance(),'d') AS gates
 FROM (
   SELECT DISTINCT city
   FROM personal
@@ -15,4 +15,5 @@ EXCEPT
 
 SELECT remove_provenance('vc_result');
 
-SELECT city, res FROM vc_result ORDER BY city;
+SELECT city, gates FROM vc_result ORDER BY city;
+DROP TABLE vc_result;
