@@ -93,7 +93,7 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
     elog(WARNING, "%s", c.toString(0).c_str());
 
   //Calling the dot renderer
-  int result = c.render();
+  c.render();
 
   PG_RETURN_FLOAT8(proc);
 }

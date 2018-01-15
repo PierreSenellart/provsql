@@ -73,14 +73,14 @@ std::string DotCircuit::toString(unsigned ) const
   }
 
   //looping through the gates and their wires
-  for(int i=0;i<wires.size();++i){
+  for(size_t i=0;i<wires.size();++i){
     for(auto s: wires[i])
       result += std::to_string(i)+" -- "+std::to_string(s)+";\n";
   }
   return result+"}";
 }
 
-unsigned DotCircuit::render() const {
+void DotCircuit::render() const {
   //Writing dot to a temporary file
   int fd;
   char cfilename[] = "/tmp/provsqlXXXXXX";
@@ -101,8 +101,6 @@ unsigned DotCircuit::render() const {
     throw CircuitException("Error executing Graphviz dot"); 
 
   //Opening the PDF viewer
-  retvalue = 0;
-
 #ifdef __linux__
   //assuming evince on linux
   cmdline="export DISPLAY=':0'; xhost +; evince "+outfilename + " &";
@@ -110,6 +108,4 @@ unsigned DotCircuit::render() const {
 #else
   throw CircuitException("Unsupported operating system for viewing");
 #endif
-  
-  return 0;
 }
