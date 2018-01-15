@@ -9,33 +9,12 @@ extern "C" {
   PG_FUNCTION_INFO_V1(probability_evaluate);
 }
 
-#include "BooleanCircuit.h"
 #include <csignal>
 
+#include "BooleanCircuit.h"
+#include "provsql_utils_cpp.h"
+
 using namespace std;
-
-/* copied with small changes from uuid.c */
-
-static std::string UUIDDatum2string(Datum token)
-{
-  pg_uuid_t *uuid = DatumGetUUIDP(token);
-  static const char hex_chars[] = "0123456789abcdef";
-  string result;
-
-  for (int i = 0; i < UUID_LEN; i++)
-  {
-    if (i == 4 || i == 6 || i == 8 || i == 10)
-      result += '-';
-
-    int hi = uuid->data[i] >> 4;
-    int lo = uuid->data[i] & 0x0F;
-
-    result+=hex_chars[hi];
-    result+=hex_chars[lo];
-  }
-
-  return result;
-}
 
 static void provsql_sigint_handler (int)
 {

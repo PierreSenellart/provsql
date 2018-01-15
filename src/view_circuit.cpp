@@ -63,7 +63,7 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
           Datum arg[1] = {UUIDPGetDatum(f.c_str())};
           Oid argt[1] = {constants.OID_TYPE_PROVENANCE_TOKEN};
           char nll[1] = {' '};
-          if(SPI_execute_with_args("SELECT info, info_eq FROM provsql.provenance_circuit_extra WHERE gate=$1", 1, argt, arg, nll, true, 0) == SPI_OK_SELECT) {
+          if(SPI_execute_with_args("SELECT info1, info2 FROM provsql.provenance_circuit_extra WHERE gate=$1", 1, argt, arg, nll, true, 0) == SPI_OK_SELECT) {
             if(SPI_processed >= 1){
               TupleDesc td = SPI_tuptable->tupdesc;
               SPITupleTable *tt = SPI_tuptable;

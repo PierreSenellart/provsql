@@ -18,8 +18,8 @@ CREATE TABLE provenance_circuit_wire(
 
 CREATE TABLE provenance_circuit_extra(
   gate provenance_token,
-  info INT,
-  info_eq INT);
+  info1 INT,
+  info2 INT);
 
 CREATE INDEX ON provenance_circuit_extra (gate);
 
@@ -451,17 +451,21 @@ END
 $$ LANGUAGE plpgsql STRICT;
 
 CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
-  RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER) AS
+  RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[]) AS
 $$
     WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
       SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
         UNION ALL
       SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
-    ) SELECT f, t::uuid, gate_type, NULL, NULL FROM transitive_closure
-    UNION
-      SELECT t, NULL, 'input', (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
-    UNION
-      SELECT $1, NULL, 'input', (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
+    ) SELECT t1.*, infos FROM (
+      SELECT f, t::uuid, gate_type, NULL, NULL FROM transitive_closure
+      UNION
+        SELECT t, NULL, 'input', (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
+      UNION
+        SELECT $1, NULL, 'input', (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
+      ) t1 LEFT OUTER JOIN (
+      SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provenance_circuit_extra GROUP BY gate
+    ) t2 on t1.f=t2.gate;
 $$
 LANGUAGE sql;
 
@@ -489,7 +493,6 @@ CREATE OR REPLACE FUNCTION view_circuit(
   dbg int = 0)
   RETURNS DOUBLE PRECISION AS
   'provsql','view_circuit' LANGUAGE C;
- 
 
 CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
  'provsql', 'provenance' LANGUAGE C;
