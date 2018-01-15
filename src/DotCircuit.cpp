@@ -41,7 +41,6 @@ std::string DotCircuit::toString(unsigned ) const
   std::string op;
   std::string result="graph circuit{\n node [shape=plaintext];\n";
   
-
   //looping through the gates
   unsigned i=0;
   for(auto g:gates){
@@ -63,10 +62,10 @@ std::string DotCircuit::toString(unsigned ) const
         result+="\"⊕\"";
         break;
       case DotGate::EQ:
-        result+="\"⋈\"";
+        result+="\"=\"";
         break;
       case DotGate::PROJECT:
-        result+="\"π\"";
+        result+="\"Π\"";
         break;
     }
     result+="];\n";
@@ -74,11 +73,9 @@ std::string DotCircuit::toString(unsigned ) const
   }
 
   //looping through the gates and their wires
-  i=0;
-  for(auto g:gates){
+  for(int i=0;i<wires.size();++i){
     for(auto s: wires[i])
       result += std::to_string(i)+" -- "+std::to_string(s)+";\n";
-    i++;
   }
   return result+"}";
 }

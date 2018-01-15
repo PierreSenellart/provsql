@@ -15,34 +15,6 @@ extern "C" {
 
 using namespace std;
 
-/* copied with small changes from uuid.c */
-
-static std::string UUIDDatum2string(Datum token)
-{
-  pg_uuid_t *uuid = DatumGetUUIDP(token);
-  static const char hex_chars[] = "0123456789abcdef";
-  string result;
-
-  for (int i = 0; i < UUID_LEN; i++)
-  {
-    if (i == 4 || i == 6 || i == 8 || i == 10)
-      result += '-';
-
-    int hi = uuid->data[i] >> 4;
-    int lo = uuid->data[i] & 0x0F;
-
-    result+=hex_chars[hi];
-    result+=hex_chars[lo];
-  }
-
-  return result;
-}
-
-static void provsql_sigint_handler (int)
-{
-  provsql_interrupted = true;
-}
-
 static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
 {
   constants_t constants;
@@ -123,14 +95,6 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
   //Calling the dot renderer
   int result = c.render();
 
-  provsql_interrupted = false;
-
-  void (*prev_sigint_handler)(int);
-  prev_sigint_handler = signal(SIGINT, provsql_sigint_handler);
-
-  provsql_interrupted = false;
-  signal (SIGINT, prev_sigint_handler);
-  
   PG_RETURN_FLOAT8(proc);
 }
 
