@@ -2,7 +2,6 @@
 #define PROVSQL_UTILS_H
 
 #include "postgres_ext.h"
-#include "../../internal/c.h"
 #include "nodes/pg_list.h"
 
 typedef struct constants_t {
