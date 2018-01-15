@@ -1,33 +1,33 @@
 SET search_path TO public, provsql;
-select * from personal;
-select add_provenance('personal');
-select * from personal;
+select * from personnel;
+select add_provenance('personnel');
+select * from personnel;
 select * from provenance_circuit_gate;
 select * from provenance_circuit_wire;
-select distinct position from personal;
-select create_provenance_mapping('personal','name','personal_name');
-select *,formula(provenance(),'personal_name') from (select distinct position from personal) t;
-select distinct p1.city from personal p1, personal p2 where p1.city=p2.city and p1.id<p2.id;
-select *,formula(provenance(),'personal_name') from (select distinct p1.city from personal p1, personal p2 where p1.city=p2.city and p1.id<p2.id) t;
-select * from personal;
-select create_provenance_mapping('personal_level','personal','classification');
-select *,security(provenance(),'personal_level') from (select distinct p1.city from personal p1, personal p2 where p1.city=p2.city and p1.id<p2.id) t;
+select distinct position from personnel;
+select create_provenance_mapping('personnel','name','personnel_name');
+select *,formula(provenance(),'personnel_name') from (select distinct position from personnel) t;
+select distinct p1.city from personnel p1, personnel p2 where p1.city=p2.city and p1.id<p2.id;
+select *,formula(provenance(),'personnel_name') from (select distinct p1.city from personnel p1, personnel p2 where p1.city=p2.city and p1.id<p2.id) t;
+select * from personnel;
+select create_provenance_mapping('personnel_level','personnel','classification');
+select *,security(provenance(),'personnel_level') from (select distinct p1.city from personnel p1, personnel p2 where p1.city=p2.city and p1.id<p2.id) t;
 
 SELECT
-  *, formula(provenance(),'personal_name') FROM (
-    (SELECT DISTINCT city FROM personal)
+  *, formula(provenance(),'personnel_name') FROM (
+    (SELECT DISTINCT city FROM personnel)
   EXCEPT
     (SELECT p1.city                               
-     FROM personal p1, personal p2
+     FROM personnel p1, personnel p2
      WHERE p1.city = p2.city AND p1.id < p2.id
      GROUP BY p1.city 
      ORDER BY p1.city)
   ) t;
 
 
-ALTER TABLE personal ADD COLUMN probability DOUBLE PRECISION;
-UPDATE personal SET probability=id*1./10;
-SELECT create_provenance_mapping('p', 'personal', 'probability');
+ALTER TABLE personnel ADD COLUMN probability DOUBLE PRECISION;
+UPDATE personnel SET probability=id*1./10;
+SELECT create_provenance_mapping('p', 'personnel', 'probability');
 
 SELECT create_provenance_mapping('pr', 'r', 'prob');
 SELECT pr1.x,pr2.y,probability_evaluate(provenance(),'pr','compilation','dsharp')

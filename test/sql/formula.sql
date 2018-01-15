@@ -77,11 +77,11 @@ END
 $$ LANGUAGE plpgsql;
 
 /* Example of provenance evaluation */
-SELECT create_provenance_mapping('personal_name', 'personal', 'name');
+SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
 CREATE TABLE result_formula AS SELECT 
   p1.city,
-  formula(provenance(), 'personal_name')
-FROM personal p1, personal p2
+  formula(provenance(), 'personnel_name')
+FROM personnel p1, personnel p2
 WHERE p1.city = p2.city AND p1.id < p2.id
 GROUP BY p1.city
 ORDER BY p1.city;

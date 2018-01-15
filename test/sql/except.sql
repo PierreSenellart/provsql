@@ -2,11 +2,11 @@
 SET search_path TO public, provsql;
 
 CREATE TABLE result_formula AS SELECT
-  *, formula(provenance(),'personal_name') FROM (
-    (SELECT DISTINCT city FROM personal)
+  *, formula(provenance(),'personnel_name') FROM (
+    (SELECT DISTINCT city FROM personnel)
   EXCEPT
     (SELECT p1.city                               
-     FROM personal p1, personal p2
+     FROM personnel p1, personnel p2
      WHERE p1.city = p2.city AND p1.id < p2.id
      GROUP BY p1.city
      ORDER BY p1.city)

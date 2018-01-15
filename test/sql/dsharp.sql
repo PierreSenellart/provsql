@@ -5,10 +5,10 @@ CREATE TABLE dsharp_result AS
 SELECT city, probability_evaluate(provenance(),'p','compilation','dsharp') AS prob
 FROM (
   SELECT DISTINCT city
-  FROM personal
+  FROM personnel
 EXCEPT 
   SELECT p1.city
-  FROM personal p1,personal p2
+  FROM personnel p1,personnel p2
   WHERE p1.id<p2.id AND p1.city=p2.city
   GROUP BY p1.city
 ) t

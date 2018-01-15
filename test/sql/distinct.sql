@@ -2,9 +2,9 @@
 SET search_path TO public,provsql;
 
 CREATE TABLE distinct_result AS
-  SELECT *, formula(provenance(),'personal_name')
+  SELECT *, formula(provenance(),'personnel_name')
   FROM (
-    SELECT DISTINCT classification FROM personal
+    SELECT DISTINCT classification FROM personnel
   ) t;
 
 SELECT remove_provenance('distinct_result');

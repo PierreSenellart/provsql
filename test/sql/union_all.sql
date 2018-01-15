@@ -2,10 +2,10 @@
 SET search_path TO public,provsql;
 
 CREATE TABLE union_all_result AS
-SELECT *,formula(provenance(),'personal_name') FROM (
-  SELECT classification FROM personal WHERE city='Paris'
+SELECT *,formula(provenance(),'personnel_name') FROM (
+  SELECT classification FROM personnel WHERE city='Paris'
   UNION ALL
-  SELECT classification FROM personal
+  SELECT classification FROM personnel
 ) t;
 
 SELECT remove_provenance('union_all_result');

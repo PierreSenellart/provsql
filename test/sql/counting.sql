@@ -49,11 +49,11 @@ END
 $$ LANGUAGE plpgsql;
 
 /* Example of provenance evaluation */
-SELECT create_provenance_mapping('personal_count', 'personal', '1');
+SELECT create_provenance_mapping('personnel_count', 'personnel', '1');
 CREATE TABLE result_counting AS SELECT 
   p1.city,
-  counting(provenance(),'personal_count')
-FROM personal p1, personal p2
+  counting(provenance(),'personnel_count')
+FROM personnel p1, personnel p2
 WHERE p1.city = p2.city AND p1.id < p2.id
 GROUP BY p1.city
 ORDER BY p1.city;

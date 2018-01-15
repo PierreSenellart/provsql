@@ -1,13 +1,13 @@
 \set ECHO none
 
-SELECT * FROM (VALUES (1)) t, personal;
+SELECT * FROM (VALUES (1)) t, personnel;
 
-WITH Q(a) AS (SELECT 1) SELECT * FROM Q, personal;
+WITH Q(a) AS (SELECT 1) SELECT * FROM Q, personnel;
 
-SELECT COUNT(*) FROM personal;
+SELECT COUNT(*) FROM personnel;
 
-SELECT * FROM personal WHERE city IN (SELECT city FROM personal);
+SELECT * FROM personnel WHERE city IN (SELECT city FROM personnel);
 
-SELECT DISTINCT ON (city) * FROM personal;
+SELECT DISTINCT ON (city) * FROM personnel;
 
-SELECT * FROM personal INTERSECT SELECT * FROM personal;
+SELECT * FROM personnel INTERSECT SELECT * FROM personnel;

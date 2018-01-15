@@ -5,7 +5,7 @@ SET search_path TO public, provsql;
 
 CREATE TYPE classification_level AS ENUM ('unclassified','restricted','confidential','secret','top_secret');
 
-CREATE TABLE personal(
+CREATE TABLE personnel(
   id SERIAL PRIMARY KEY,
   name varchar,
   position varchar,
@@ -13,7 +13,7 @@ CREATE TABLE personal(
   classification classification_level
 );
 
-INSERT INTO personal (name,position,city,classification) VALUES
+INSERT INTO personnel (name,position,city,classification) VALUES
   ('John','Director','New York','unclassified'),
   ('Paul','Janitor','New York','restricted'),
   ('Dave','Analyst','Paris','confidential'),

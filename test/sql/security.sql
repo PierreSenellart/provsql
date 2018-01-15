@@ -42,11 +42,11 @@ END
 $$ LANGUAGE plpgsql;
 
 /* Example of provenance evaluation */
-SELECT create_provenance_mapping('personal_level', 'personal', 'classification');
+SELECT create_provenance_mapping('personnel_level', 'personnel', 'classification');
 CREATE TABLE result_security AS SELECT 
   p1.city,
-  security(provenance(),'personal_level')
-FROM personal p1, personal p2
+  security(provenance(),'personnel_level')
+FROM personnel p1, personnel p2
 WHERE p1.city = p2.city AND p1.id < p2.id
 GROUP BY p1.city
 ORDER BY p1.city;
