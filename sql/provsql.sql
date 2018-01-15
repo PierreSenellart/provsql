@@ -451,18 +451,18 @@ END
 $$ LANGUAGE plpgsql STRICT;
 
 CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
-  RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[]) AS
+  RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
 $$
     WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
       SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
         UNION ALL
       SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
-    ) SELECT t1.*, infos FROM (
+    ) SELECT t1.*, infos, row_number() over() FROM (
       SELECT f, t::uuid, gate_type, NULL, NULL FROM transitive_closure
-      UNION
-        SELECT t, NULL, 'input', (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
-      UNION
-        SELECT $1, NULL, 'input', (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
+      UNION ALL
+        SELECT DISTINCT t, NULL::uuid, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
+      UNION ALL
+        SELECT DISTINCT $1, NULL::uuid, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
       ) t1 LEFT OUTER JOIN (
       SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provenance_circuit_extra GROUP BY gate
     ) t2 on t1.f=t2.gate;

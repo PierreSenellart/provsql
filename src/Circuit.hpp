@@ -24,7 +24,6 @@ unsigned Circuit<gateType>::addGate()
   unsigned id=gates.size();
   gates.push_back(gateType());
   wires.resize(id+1);
-  rwires.resize(id+1);
   return id;
 }
 
@@ -40,5 +39,4 @@ template<class gateType>
 void Circuit<gateType>::addWire(unsigned f, unsigned t)
 {
   wires[f].insert(t);
-  rwires[t].insert(f);
 }
