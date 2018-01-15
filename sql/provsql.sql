@@ -378,6 +378,7 @@ END
 $$ LANGUAGE plpgsql;
 
 CREATE TYPE gate_with_prob AS (f UUID, t UUID, gate_type provenance_gate, prob DOUBLE PRECISION);
+CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING);
 
 CREATE OR REPLACE FUNCTION sub_circuit_with_prob(
   token provenance_token,
@@ -395,6 +396,26 @@ BEGIN
         UNION
         SELECT provenance, NULL, ''input'', value AS prob FROM ' || token2prob || ' WHERE provenance=$1'
   USING token;
+END  
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION sub_circuit_with_desc(
+  token provenance_token,
+  token2desc regclass) RETURNS SETOF gate_with_desc AS
+$$
+BEGIN
+  RETURN QUERY EXECUTE
+      'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
+        SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
+          UNION ALL
+        SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
+      ) SELECT f::uuid, t::uuid, gate_type, NULL FROM transitive_closure
+        UNION
+        SELECT p2.provenance, NULL, ''input'', p2.value AS d FROM transitive_closure p1 JOIN ' || token2desc ||' AS p2 ON provenance=t
+        UNION
+        SELECT provenance, NULL, ''input'', value AS d FROM ' || token2desc || ' WHERE provenance=$1'
+  USING token LOOP;
+  RETURN;
 END  
 $$ LANGUAGE plpgsql;
 
@@ -461,6 +482,14 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION view_circuit(
+  token provenance_token,
+  token2desc regclass,
+  dbg int = 0)
+  RETURNS DOUBLE PRECISION AS
+  'provsql','view_circuit' LANGUAGE C;
+ 
 
 CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
  'provsql', 'provenance' LANGUAGE C;

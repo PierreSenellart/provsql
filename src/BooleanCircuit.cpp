@@ -16,7 +16,7 @@ using namespace std;
 // Has to be redefined because of name hiding
 unsigned BooleanCircuit::setGate(const uuid &u, BooleanGate type)
 {
-  unsigned id = Circuit::setGate(u, type);
+ unsigned id = Circuit::setGate(u, type);
   if(type == BooleanGate::IN)
     inputs.insert(id);
   return id;

@@ -1,0 +1,13 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   city   | gates 
+----------+-------
+ Berlin   |    14
+ New York |    14
+ Paris    |    23
+(3 rows)
+
