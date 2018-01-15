@@ -9,9 +9,10 @@ PostgreSQL extension/module/plugin. It is work in progress at the moment.
 The ProvSQL system currently supports proper management of provenance
 attached to SQL queries, in the form of a provenance circuit, suitable
 both for regular Boolean provenance, arbitrary semiring provenance, with
-or without monus (m-semiring), in the free m-semiring, or specialized 
-to any m-semiring of choice. It also supports probability computation
-from the provenance, through a variety of methods.
+or without monus (m-semiring), in the free m-semiring, or specialized to
+any m-semiring of choice. It also supports where-provenance and
+probability computation from the provenance, through a variety of
+methods.
 
 The following SQL queries are currently supported.
 * Regular SELECT-FROM-WHERE queries (aka conjunctive queries with
@@ -107,6 +108,12 @@ See [security.sql](test/sql/security.sql) and
 [formula.sql](test/sql/formula.sql) for two examples.
 
 See the other examples in [test/sql](test/sql) for other use cases.
+
+A demonstration of the ProvSQL system is available as a video, on
+https://youtu.be/iqzSNfGHbEE?vq=hd1080
+
+An unpublished article describing this demonstration is available at
+http://pierre.senellart.com/publications/senellart2008provsql.pdf
 
 ## Uninstalling
 
