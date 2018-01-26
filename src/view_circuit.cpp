@@ -12,8 +12,36 @@ extern "C" {
 
 #include "DotCircuit.h"
 #include <csignal>
+#include <utility>
+#include <regex>
 
 using namespace std;
+
+static vector<pair<int,int>> parse_array(string s)
+{
+  s=s.substr(1,s.size()-2); // Remove initial '{' and final '}'
+
+  vector<pair<int,int>> result;
+  regex reg("},?");
+
+  sregex_token_iterator iter(s.begin(), s.end(), reg, -1);
+  sregex_token_iterator end;
+
+  for(sregex_token_iterator iter(s.begin(), s.end(), reg, -1), end; iter!=end; ++iter) {
+    string p = *iter;
+    int k=p.find(",",1);
+    string s1=p.substr(1,k-1);
+    int i1;
+    if(s1=="NULL")
+      i1=0;
+    else
+      i1=stoi(p.substr(1,k-1));
+    int i2=stoi(p.substr(k+1,p.size()-k));
+    result.push_back(make_pair(i1,i2));
+  }
+
+  return result;
+}
 
 static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
 {
@@ -58,25 +86,23 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
         } else if(type == "monusr" || type== "monusl" || type == "monus") {
           c.setGate(f, DotGate::OMINUS);
         } else if(type == "eq") {
-          //TODO query for retrieving the condition
-          std::string cond = "";
-          Datum arg[1] = {UUIDPGetDatum(f.c_str())};
-          Oid argt[1] = {constants.OID_TYPE_PROVENANCE_TOKEN};
-          char nll[1] = {' '};
-          if(SPI_execute_with_args("SELECT info1, info2 FROM provsql.provenance_circuit_extra WHERE gate=$1", 1, argt, arg, nll, true, 0) == SPI_OK_SELECT) {
-            if(SPI_processed >= 1){
-              TupleDesc td = SPI_tuptable->tupdesc;
-              SPITupleTable *tt = SPI_tuptable;
-              HeapTuple tpl = tt->vals[0];
-              cond += std::string("[")+SPI_getvalue(tpl,td,1)+std::string("=")+\
-                      SPI_getvalue(tpl,td,2)+std::string("]");
-            }
-          }
-          //elog(WARNING, "Condition gate %s is %s", f.c_str(), cond.c_str());
+          vector<pair<int,int>> v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
+          if(v.size()!=1) elog(ERROR, "Incorrect extra information on eq gate");
+          std::string cond = std::to_string(v[0].first)+std::string("=")+std::to_string(v[0].second);
+          //elog(WARNING, "EQ cond: %s",cond.c_str());
           c.setGate(f, DotGate::EQ, cond);
         } else if(type == "project") {
-          //TODO query for retrieving the fields
-          c.setGate(f, DotGate::PROJECT);
+          vector<pair<int,int>> v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
+          sort(v.begin(), v.end(), [](auto &left, auto &right) {
+            return left.second < right.second;
+          });
+          std::string cond("(");
+          for(auto p:v){
+            cond += std::to_string(p.first)+",";
+          }
+          std::string cond_final(cond.substr(0,cond.size()-1)+")");
+          //elog(WARNING, "PROJECT cond: %s", cond_final.c_str());
+          c.setGate(f, DotGate::PROJECT, cond_final);
         } else {
           elog(ERROR, "Wrong type of gate in circuit");
         }

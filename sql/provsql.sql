@@ -378,7 +378,7 @@ END
 $$ LANGUAGE plpgsql;
 
 CREATE TYPE gate_with_prob AS (f UUID, t UUID, gate_type provenance_gate, prob DOUBLE PRECISION);
-CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING);
+CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[]);
 
 CREATE OR REPLACE FUNCTION sub_circuit_with_prob(
   token provenance_token,
@@ -405,15 +405,22 @@ CREATE OR REPLACE FUNCTION sub_circuit_with_desc(
 $$
 BEGIN
   RETURN QUERY EXECUTE
-      'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
-        SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
-          UNION ALL
-        SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
-      ) SELECT f::uuid, t::uuid, gate_type, NULL FROM transitive_closure
-        UNION
-        SELECT p2.provenance, NULL, ''input'', p2.value AS d FROM transitive_closure p1 JOIN ' || token2desc ||' AS p2 ON provenance=t
-        UNION
-        SELECT provenance, NULL, ''input'', value AS d FROM ' || token2desc || ' WHERE provenance=$1'
+    'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
+      SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
+      UNION ALL
+      SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f
+      JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f )
+    SELECT t1.*, infos FROM (
+      SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
+      UNION
+      SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', p2.value as ' || token2desc || '  FROM transitive_closure p1 JOIN d AS p2 
+        ON p2.provenance=t
+      UNION
+      SELECT provenance::uuid as f, NULL::uuid, ''input'', value as d FROM ' || token2desc || ' WHERE provenance=$1 
+    ) t1
+    LEFT JOIN (
+      SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provsql.provenance_circuit_extra GROUP BY gate
+    ) t2 on t1.f=t2.gate'
   USING token LOOP;
   RETURN;
 END  
@@ -449,6 +456,7 @@ BEGIN
   END LOOP;    
 END
 $$ LANGUAGE plpgsql STRICT;
+
 
 CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
   RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS

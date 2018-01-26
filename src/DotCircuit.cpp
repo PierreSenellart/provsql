@@ -62,10 +62,10 @@ std::string DotCircuit::toString(unsigned ) const
         result+="\"⊕\"";
         break;
       case DotGate::EQ:
-        result+="\"=\"";
+        result+="\""+desc[i]+"\"";
         break;
       case DotGate::PROJECT:
-        result+="\"Π\"";
+        result+="\"Π"+desc[i]+"\"";
         break;
     }
     result+="];\n";
