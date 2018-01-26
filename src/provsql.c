@@ -197,7 +197,12 @@ typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 /* An OpExpr leads directly to an eq gate.
  * toExpr is the former expression for the provenance.
  * The function returns the new expression with toExpr
- * nested inside the call of the eq function. */
+ * nested inside the call of the eq function. 
+ * 
+ * Note: this function can also be used to handle an OpExpr
+ * coming from a WHERE expression. So we need to perform
+ * more tests because not all OpExpr are used to express
+ * a join in this case */
 static Expr *add_eq_from_OpExpr_to_Expr(
     OpExpr *fromOpExpr,
     Expr *toExpr,
@@ -216,18 +221,24 @@ static Expr *add_eq_from_OpExpr_to_Expr(
     /* Sometimes Var is nested within a RelabelType */
     if(IsA(linitial(fromOpExpr->args), Var)) {
       v1 = linitial(fromOpExpr->args);  
-    } else {
+    } else if (IsA(linitial(fromOpExpr->args), RelabelType)) {
+      /* In the WHERE case it can be a Const */
       RelabelType *rt1 = linitial(fromOpExpr->args); 
-        v1 = (Var *) rt1->arg;  
-    }
+      if(IsA(rt1->arg, Var)) { /* Can be Param in the WHERE case */
+        v1 = (Var *) rt1->arg;
+      } else return toExpr;	
+    } else return toExpr;
     first_arg = Int16GetDatum(columns[v1->varno-1][v1->varattno-1]);
 
     if(IsA(lsecond(fromOpExpr->args), Var)) {  
       v2 = lsecond(fromOpExpr->args);  
-    } else { 
+    } else if (IsA(lsecond(fromOpExpr->args), RelabelType)) {
+      /* In the WHERE case it can be a Const */ 
       RelabelType *rt2 = lsecond(fromOpExpr->args); 
-      v2 = (Var*) rt2->arg;  
-    }
+      if(IsA(rt2->arg, Var)) { /* Can be Param in the WHERE case */
+        v2 = (Var *) rt2->arg;
+      }	else return toExpr;
+    } else return toExpr;
     second_arg = Int16GetDatum(columns[v2->varno-1][v2->varattno-1]);
 
     fc = makeNode(FuncExpr);
@@ -327,7 +338,8 @@ static Expr *make_provenance_expression(
       projection=true;
   }
 
-//ereport(NOTICE,(errmsg("Before: %s",nodeToString(q->jointree))));
+//ereport(WARNING,(errmsg("Before: %s",nodeToString(q))));
+//ereport(ERROR,(errmsg("test")));
 
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
@@ -345,7 +357,7 @@ static Expr *make_provenance_expression(
 	} /* Sometimes OpExpr is nested within a BoolExpr */
         else if (je->quals) {
           BoolExpr *be = (BoolExpr *) je->quals;
-          /* In some cases, there can be an OR or a not specified with ON clause */
+          /* In some cases, there can be an OR or a NOT specified with ON clause */
           if(be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
             ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on clause are not supported by provsql")));
           } else {
@@ -359,6 +371,30 @@ static Expr *make_provenance_expression(
         else { }
       }
     }
+    //ereport(WARNING,(errmsg("%s",nodeToString(q->jointree))));
+    //TODO factorize code to handle a qual expression
+    /* Study equalities coming from WHERE clause */
+    OpExpr *oe;
+    if(q->jointree->quals && IsA(q->jointree->quals, OpExpr)) {
+      oe = (OpExpr *) q->jointree->quals;
+      result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+    } /* Sometimes OpExpr is nested within a BoolExpr */ 
+    else if (q->jointree->quals) {
+      BoolExpr *be = (BoolExpr *) q->jointree->quals;
+      /* In some cases, there can be an OR or a NOT specified with ON clause */
+      if(be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
+        ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on clause are not supported by provsql")));
+      } else {
+        ListCell *lc2; 
+        foreach(lc2,be->args) {
+          if(IsA(lfirst(lc2), OpExpr)) {
+            oe = (OpExpr *) lfirst(lc2);
+            result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+	  }
+        }
+      }
+    } /* Handle case of CROSS JOIN with no eqop */
+    else { }
   }
 
   if(projection) {
