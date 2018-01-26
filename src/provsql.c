@@ -267,6 +267,40 @@ static Expr *add_eq_from_OpExpr_to_Expr(
     return (Expr *)fc;
   }
   return toExpr;
+
+}
+
+/* This function handles a Quals node.
+ *
+ * Two cases are possible, one coming from JoinExpr and the other 
+ * directly from FromExpr. 
+ * */
+static Expr *add_eq_from_Quals_to_Expr(
+    Node *quals,
+    Expr *result,
+    int **columns,
+    const constants_t *constants)
+{
+  OpExpr *oe;
+  if(quals && IsA(quals, OpExpr)) {
+    oe = (OpExpr *) quals;
+    result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+  } /* Sometimes OpExpr is nested within a BoolExpr */
+  else if (quals) {
+    BoolExpr *be = (BoolExpr *) quals;
+    /* In some cases, there can be an OR or a NOT specified with ON clause */
+    if(be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
+      ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on clause are not supported by provsql")));
+    } else {
+      ListCell *lc2; 
+      foreach(lc2,be->args) {
+        oe = (OpExpr *) lfirst(lc2);
+        result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+      }
+    }
+  } /* Handle case of CROSS JOIN with no eqop */
+  else { }
+  return result;
 }
 
 static Expr *make_provenance_expression(
@@ -349,52 +383,12 @@ static Expr *make_provenance_expression(
     foreach(lc, q->jointree->fromlist) {
       if(IsA(lfirst(lc), JoinExpr)) {
         JoinExpr *je = (JoinExpr *) lfirst(lc);
-        //TODO handle subjoin in larg or in rarg
-        OpExpr *oe;
-        if(je->quals && IsA(je->quals, OpExpr)) {
-          oe = (OpExpr *) je->quals;
-          result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
-	} /* Sometimes OpExpr is nested within a BoolExpr */
-        else if (je->quals) {
-          BoolExpr *be = (BoolExpr *) je->quals;
-          /* In some cases, there can be an OR or a NOT specified with ON clause */
-          if(be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
-            ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on clause are not supported by provsql")));
-          } else {
-            ListCell *lc2; 
-            foreach(lc2,be->args) {
-              oe = (OpExpr *) lfirst(lc2);
-              result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
-            }
-          }
-        } /* Handle case of CROSS JOIN with no eqop */
-        else { }
+	/* Study equalities coming from From clause */
+	result = add_eq_from_Quals_to_Expr(je->quals, result, columns, constants);
       }
     }
-    //ereport(WARNING,(errmsg("%s",nodeToString(q->jointree))));
-    //TODO factorize code to handle a qual expression
     /* Study equalities coming from WHERE clause */
-    OpExpr *oe;
-    if(q->jointree->quals && IsA(q->jointree->quals, OpExpr)) {
-      oe = (OpExpr *) q->jointree->quals;
-      result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
-    } /* Sometimes OpExpr is nested within a BoolExpr */ 
-    else if (q->jointree->quals) {
-      BoolExpr *be = (BoolExpr *) q->jointree->quals;
-      /* In some cases, there can be an OR or a NOT specified with ON clause */
-      if(be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
-        ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on clause are not supported by provsql")));
-      } else {
-        ListCell *lc2; 
-        foreach(lc2,be->args) {
-          if(IsA(lfirst(lc2), OpExpr)) {
-            oe = (OpExpr *) lfirst(lc2);
-            result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
-	  }
-        }
-      }
-    } /* Handle case of CROSS JOIN with no eqop */
-    else { }
+    result = add_eq_from_Quals_to_Expr(q->jointree->quals, result, columns, constants);
   }
 
   if(projection) {
