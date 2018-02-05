@@ -42,40 +42,57 @@ std::string DotCircuit::toString(unsigned ) const
   std::string result="graph circuit{\n node [shape=plaintext];\n";
   
   //looping through the gates
+  //eliminating the minusr and minusl gates
   unsigned i=0;
   for(auto g:gates){
-    result += std::to_string(i)+" [label=";
-    switch(g) {
-      case DotGate::IN:
-        result+="\""+desc[i]+"\"";
-        break;
-      case DotGate::OMINUS:
-        result+="\"⊖\"";
-        break;
-      case DotGate::UNDETERMINED:
-        result+="\"?\"";
-        break;
-      case DotGate::OTIMES:
-        result+="\"⊗\"";
-        break;
-      case DotGate::OPLUS:
-        result+="\"⊕\"";
-        break;
-      case DotGate::EQ:
-        result+="\""+desc[i]+"\"";
-        break;
-      case DotGate::PROJECT:
-        result+="\"Π"+desc[i]+"\"";
-        break;
+    if(g != DotGate::OMINUSR && g != DotGate::OMINUSL){
+      result += std::to_string(i)+" [label=";
+      switch(g) {
+        case DotGate::IN:
+          result+="\""+desc[i]+"\"";
+          break;
+        case DotGate::OMINUS:
+          result+="\"⊖\"";
+          break;
+        case DotGate::UNDETERMINED:
+          result+="\"?\"";
+          break;
+        case DotGate::OTIMES:
+          result+="\"⊗\"";
+          break;
+        case DotGate::OPLUS:
+          result+="\"⊕\"";
+          break;
+        case DotGate::EQ:
+          result+="\""+desc[i]+"\"";
+          break;
+        case DotGate::PROJECT:
+          result+="\"Π"+desc[i]+"\"";
+          break;
+        case DotGate::OMINUSR:
+        case DotGate::OMINUSL:
+          break;
+      }
+      result+="];\n";
     }
-    result+="];\n";
     i++;
   }
 
   //looping through the gates and their wires
   for(size_t i=0;i<wires.size();++i){
-    for(auto s: wires[i])
-      result += std::to_string(i)+" -- "+std::to_string(s)+";\n";
+    if(gates[i] != DotGate::OMINUSR && gates[i] != DotGate::OMINUSL){
+      for(auto s: wires[i])
+      {
+        if(gates[s] == DotGate::OMINUSR || gates[s] == DotGate::OMINUSL) {
+          for(auto t: wires[s]) {
+            result += std::to_string(i)+" -- "+std::to_string(t)+";\n";
+          }
+        }
+        else {
+          result += std::to_string(i)+" -- "+std::to_string(s)+";\n";
+        }
+      }
+    }
   }
   return result+"}";
 }

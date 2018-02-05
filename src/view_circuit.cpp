@@ -83,13 +83,16 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
           c.setGate(f, DotGate::OTIMES);
         } else if(type == "plus") {
           c.setGate(f, DotGate::OPLUS);
-        } else if(type == "monusr" || type== "monusl" || type == "monus") {
+        } else if(type == "monus") {
           c.setGate(f, DotGate::OMINUS);
+        } else if(type == "monusr") {
+          c.setGate(f, DotGate::OMINUSR);
+        } else if(type == "monusl") {
+          c.setGate(f, DotGate::OMINUSL); 
         } else if(type == "eq") {
           vector<pair<int,int>> v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
           if(v.size()!=1) elog(ERROR, "Incorrect extra information on eq gate");
           std::string cond = std::to_string(v[0].first)+std::string("=")+std::to_string(v[0].second);
-          //elog(WARNING, "EQ cond: %s",cond.c_str());
           c.setGate(f, DotGate::EQ, cond);
         } else if(type == "project") {
           vector<pair<int,int>> v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
