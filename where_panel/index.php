@@ -1,7 +1,9 @@
 <?php
+error_reporting(E_ALL); 
+ini_set('display_errors', 1);
 function getdb() {
   # Method 'trust' avoid to use password. Config in /etc/postgresql/9.6/main/pg_hba.conf
-  $db = pg_connect("host=127.0.0.1 user=postgres") or die('connection failed');
+  $db = pg_connect("host=127.0.0.1 user=postgres dbname=demo") or die('connection failed');
   return $db;
 }
 
