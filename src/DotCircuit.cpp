@@ -85,7 +85,11 @@ std::string DotCircuit::toString(unsigned ) const
       {
         if(gates[s] == DotGate::OMINUSR || gates[s] == DotGate::OMINUSL) {
           for(auto t: wires[s]) {
-            result += std::to_string(i)+" -- "+std::to_string(t)+";\n";
+            result += std::to_string(i)+" -- "+std::to_string(t);
+            if(gates[s] == DotGate::OMINUSR)
+              result += " [label=\"R\"];\n";
+            else
+              result += " [label=\"L\"];\n";
           }
         }
         else {
