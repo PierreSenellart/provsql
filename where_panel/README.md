@@ -25,7 +25,7 @@ Put the files of the Where Panel in the appropriate directory of your Web
 Server: for example `/var/www/html` with `LAMP`. 
 
 Enter proper information in the config file and, if needed, check if your 
-PostgreSQL server is correctly configured in `/etc/postgresql/X.X/main/pg\_hba.conf`.
+PostgreSQL server is correctly configured in `/etc/postgresql/X.X/main/pg_hba.conf`.
 Where X.X is the version of the server currently running.
 
 ## Testing your installation
@@ -35,7 +35,13 @@ Connect to this database and choose predefined queries or test with your own.
 
 ## Using the Panel
 
+The left panel displays all relations tagged with provenance indication.
+Type your query in the right part and observe the result. When your mouse is 
+on a cell, all cells used to compute the result are highlighted. 
+
 ## Uninstalling
+
+Delete files from your Web Server.
 
 ## License
 
