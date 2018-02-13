@@ -23,34 +23,29 @@ $db = getdb();
 
     <!-- Bootstrap CSS -->
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
-    
-    <style>
-      #conteneur {
-        display: flex;
-      }
-    </style>
+
     <script>
-       function mouseOver(str) {
-         var dec = str.split(" ");
-	 var wpc = dec[1].substring(1,dec[1].length-1).split(",");
-	 var ids = wpc[dec[0]-1].substring(1,wpc[dec[0]-1].length-1).split(";");
-	 for(var i = 0; i < ids.length; i++) {
-           document.getElementById(ids[i]).style.color = "red";
-	 }
-       }
+      function mouseOver(str) {
+        var dec = str.split(" ");
+        var wpc = dec[1].substring(1,dec[1].length-1).split(",");
+        var ids = wpc[dec[0]-1].substring(1,wpc[dec[0]-1].length-1).split(";");
+        for(var i = 0; i < ids.length; i++) {
+          document.getElementById(ids[i]).style.color = "red";
+        }
+      }
 
-       function mouseOut(str) {
-         var dec = str.split(" ");
-	 var wpc = dec[1].substring(1,dec[1].length-1).split(",");
-	 var ids = wpc[dec[0]-1].substring(1,wpc[dec[0]-1].length-1).split(";");
-	 for(var i = 0; i < ids.length; i++) {
-           document.getElementById(ids[i]).style.color = "";
-	 }
-       }
+      function mouseOut(str) {
+        var dec = str.split(" ");
+        var wpc = dec[1].substring(1,dec[1].length-1).split(",");
+        var ids = wpc[dec[0]-1].substring(1,wpc[dec[0]-1].length-1).split(";");
+        for(var i = 0; i < ids.length; i++) {
+          document.getElementById(ids[i]).style.color = "";
+        }
+      }
 
-       function exemple(str) {
-         document.getElementById('request').value = str;
-       }
+      function exemple(str) {
+        document.getElementById('request').value = str;
+      }
      </script>
   </head>
   <body>
@@ -148,7 +143,7 @@ $db = getdb();
           <p class="lead">Type your SQL query (without ending semicolon)</p>
         </div>
 	<form method="post" action="index.php">
-          <label for="but1">Query examples: </label>
+          <label for="but1">Example queries: </label>
           <button id="but1" type="button" class="btn btn-primary" onClick="exemple('SELECT * FROM personnel')">All</button>
           <button id="but2" type="button" class="btn btn-primary" onClick="exemple('SELECT distinct city FROM personnel')">Distinct</button>
           <button id="but3" type="button" class="btn btn-primary" onClick="exemple('SELECT city FROM personnel UNION SELECT \'5\' FROM personnel')">Union</button>
