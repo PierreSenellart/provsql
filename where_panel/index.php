@@ -1,9 +1,11 @@
 <?php
+# Enable display of all errors
 error_reporting(E_ALL); 
 ini_set('display_errors', 1);
+
 function getdb() {
-  # Method 'trust' avoid to use password. Config in /etc/postgresql/9.6/main/pg_hba.conf
-  $db = pg_connect("host=127.0.0.1 user=postgres dbname=demo") or die('connection failed');
+  # Method 'trust' avoid to use password. Config in /etc/postgresql/10.6/main/pg_hba.conf
+  $db = pg_connect("host=127.0.0.1 user=postgres") or die('connection failed');
   return $db;
 }
 
@@ -95,9 +97,10 @@ $db = getdb();
       <div id="right-panel">
         <p> SQL query (without ending semicolon): </p>
         <form method="post" action="index.php">
-	  <textarea name="request" rows=2 cols=150>   
-SELECT distinct city from personnel
-	  </textarea>
+	  <textarea name="request" rows=2 cols=150><?php
+              if($_POST) echo $_POST['request'];
+              else echo 'SELECT distinct city from personnel'; 
+            ?></textarea>
           <input type="submit" name="button" value=" Send request ">
         </form>
         <?php
