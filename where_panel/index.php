@@ -44,7 +44,7 @@ $db = getdb();
 	 var wpc = dec[1].substring(1,dec[1].length-1).split(",");
 	 var ids = wpc[dec[0]-1].substring(1,wpc[dec[0]-1].length-1).split(";");
 	 for(var i = 0; i < ids.length; i++) {
-           document.getElementById(ids[i]).style.color = "black";
+           document.getElementById(ids[i]).style.color = "";
 	 }
        }
 
