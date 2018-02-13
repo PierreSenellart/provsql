@@ -86,7 +86,7 @@ $db = getdb();
       <div class="bg-light mr-md-3 pt-3 px-3 pt-md-5 px-md-5 text-center text-black overflow-hidden col-md-5">
 
       <div class="my-3 py-3">
-        <h2 class="display-5">My Database</h2>
+        <h2 class="display-5">Your Database</h2>
         <p class="lead">Overview of provenance-tagged relations</p>
       </div>
 
@@ -155,13 +155,11 @@ $db = getdb();
           <br/> <p> </p>
 	  <textarea id="request" name="request" rows=2 class="form-control"><?php
               if($_POST) echo $_POST['request'];
-              else echo 'SELECT distinct city from personnel'; 
+              else echo 'SELECT distinct city FROM personnel'; 
             ?></textarea>
           <input type="submit" name="button" value=" Send query " class="form-control">
         </form>
         
-        <hr>
-
         <?php
           # AFFICHAGE: résultats de la requête et where en surbrillance
           if($_POST) { 
@@ -169,6 +167,7 @@ $db = getdb();
             $requ = "select *, provsql.where_provenance(provsql.provenance()) from (".$_POST['request'].") t";
 	    $ru = pg_exec($db, $requ);
 	    if($ru) {
+              echo '<hr>';
 	      echo "<h2 class='text-center'> query result</h2><table class='table table-bordered table-striped table-condensed text-center'>";
               $l3=pg_fetch_array($ru,0);
 	      echo "<tr>";
