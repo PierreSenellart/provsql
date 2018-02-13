@@ -47,6 +47,10 @@ $db = getdb();
            document.getElementById(ids[i]).style.color = "black";
 	 }
        }
+
+       function exemple(str) {
+         document.getElementById('request').value = str;
+       }
      </script>
   </head>
   <body>
@@ -145,14 +149,15 @@ $db = getdb();
         </div>
 	<form method="post" action="index.php">
           <label for="but1">Query examples: </label>
-          <button id="but1" type="button" class="btn btn-primary">All</button>
-          <button id="but2" type="button" class="btn btn-primary">Distinct</button>
+          <button id="but1" type="button" class="btn btn-primary" onClick="exemple('SELECT * FROM personnel')">All</button>
+          <button id="but2" type="button" class="btn btn-primary" onClick="exemple('SELECT distinct city FROM personnel')">Distinct</button>
+          <button id="but3" type="button" class="btn btn-primary" onClick="exemple('SELECT city FROM personnel UNION SELECT \'5\' FROM personnel')">Union</button>
           <br/> <p> </p>
-	  <textarea name="request" rows=2 class="form-control"><?php
+	  <textarea id="request" name="request" rows=2 class="form-control"><?php
               if($_POST) echo $_POST['request'];
               else echo 'SELECT distinct city from personnel'; 
             ?></textarea>
-          <input type="submit" name="button" value=" Send request " class="form-control">
+          <input type="submit" name="button" value=" Send query " class="form-control">
         </form>
         
         <hr>
@@ -163,24 +168,26 @@ $db = getdb();
             $nil = pg_exec($db, "SET search_path to public,provsql");
             $requ = "select *, provsql.where_provenance(provsql.provenance()) from (".$_POST['request'].") t";
 	    $ru = pg_exec($db, $requ);
-	    echo "<h2 class='text-center'> query result</h2><table class='table table-bordered table-striped table-condensed'>";
-            $l3=pg_fetch_array($ru,0);
-	    echo "<tr>";
-	    for ($j=0; $j<sizeof($l3)/2-2; $j++) {
-	      echo "<th>".array_keys($l3)[2*$j+1]."</th>";
-	    }
-	    echo "</tr>";
-
-	    for ($i3=0; $i3<pg_numrows($ru); $i3++) {
-              $l3=pg_fetch_array($ru,$i3);
-	      echo '<tr title="'.$l3[sizeof($l3)/2-1].'">';
-	      #echo "<tr>";
-              for ($j=0; $j<sizeof($l3)/2-2; $j++) {
-	        echo '<td id="'.($j+1).' '.$l3[sizeof($l3)/2-2].'" onmouseover="mouseOver(this.id)" onmouseout="mouseOut(this.id)" >'.$l3[$j].'</td>';
-              }
+	    if($ru) {
+	      echo "<h2 class='text-center'> query result</h2><table class='table table-bordered table-striped table-condensed text-center'>";
+              $l3=pg_fetch_array($ru,0);
+	      echo "<tr>";
+	      for ($j=0; $j<sizeof($l3)/2-2; $j++) {
+	        echo "<th>".array_keys($l3)[2*$j+1]."</th>";
+	      }
 	      echo "</tr>";
-            }
-	    echo "</table>";
+
+	      for ($i3=0; $i3<pg_numrows($ru); $i3++) {
+                $l3=pg_fetch_array($ru,$i3);
+	        echo '<tr title="'.$l3[sizeof($l3)/2-1].'">';
+	        #echo "<tr>";
+                for ($j=0; $j<sizeof($l3)/2-2; $j++) {
+	          echo '<td id="'.($j+1).' '.$l3[sizeof($l3)/2-2].'" onmouseover="mouseOver(this.id)" onmouseout="mouseOut(this.id)" >'.$l3[$j].'</td>';
+                }
+	        echo "</tr>";
+              }
+	      echo "</table>";
+	    }
 	  }
         ?>
       </div>
