@@ -81,8 +81,19 @@ std::string DotCircuit::toString(unsigned ) const
   //looping through the gates and their wires
   for(size_t i=0;i<wires.size();++i){
     if(gates[i] != DotGate::OMINUSR && gates[i] != DotGate::OMINUSL){
-      for(auto s: wires[i])
+      std::unordered_map<unsigned, unsigned> number_gates;
+      for(auto s: wires[i]){
+        if(number_gates.find(s)!=number_gates.end()){
+          number_gates[s] = number_gates[s]+1;
+        }
+        else {
+          number_gates[s] = 1;
+        }
+      }
+      for(auto el: number_gates)
       {
+        unsigned s = el.first;
+        unsigned n = el.second;
         if(gates[s] == DotGate::OMINUSR || gates[s] == DotGate::OMINUSL) {
           for(auto t: wires[s]) {
             result += std::to_string(i)+" -- "+std::to_string(t);
@@ -93,7 +104,13 @@ std::string DotCircuit::toString(unsigned ) const
           }
         }
         else {
-          result += std::to_string(i)+" -- "+std::to_string(s)+";\n";
+          result += std::to_string(i)+" -- "+std::to_string(s);
+          if(n==1) {
+            result += ";\n";
+          }
+          else {
+            result += " [label=\""+std::to_string(n)+"\"];\n";
+          }
         }
       }
     }
