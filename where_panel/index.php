@@ -3,13 +3,21 @@
 error_reporting(E_ALL); 
 ini_set('display_errors', 1);
 
-function getdb() {
+$fconfig = 'config';
+$config = "host=localhost user=postgres";
+if((file_exists($fconfig)) && (is_readable($fconfig))) {
+  $config = file_get_contents($fconfig);  
+} else {
+  echo 'File '.$fconfig.' doesn\'t exist.';
+}
+
+function getdb($c) {
   # Method 'trust' avoid to use password. Config in /etc/postgresql/10.6/main/pg_hba.conf
-  $db = pg_connect("host=127.0.0.1 user=postgres") or die('connection failed');
+  $db = pg_connect($c) or die('connection failed');
   return $db;
 }
 
-$db = getdb();
+$db = getdb($config);
 ?>
 
 <!doctype html>
