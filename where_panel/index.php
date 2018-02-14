@@ -69,7 +69,7 @@ $db = getdb($config);
             <a class="nav-link" href="#">Home <span class="sr-only">(current)</span></a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" href="#">Config</a>
+            <a class="nav-link" href="config">Config</a>
           </li>
         </ul>
       </div>
@@ -79,7 +79,7 @@ $db = getdb($config);
       <div class="container">
         <h1 class="display-3">Where Provenance</h1>
         <p>Query easily your PostgreSQL database and check the provenance of your result.</p>
-        <p><a class="btn btn-primary btn-lg" href="#" role="button">Edit config file &raquo;</a></p>
+        <p><a class="btn btn-primary btn-lg" href="config" role="button">Edit config file &raquo;</a></p>
       </div>
     </div>
 
