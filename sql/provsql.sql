@@ -412,13 +412,13 @@ BEGIN
       JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f )
     SELECT t1.*, infos FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
-      UNION
+      UNION ALL
       SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', p2.value as ' || token2desc || '  FROM transitive_closure p1 JOIN d AS p2 
         ON p2.provenance=t
-      UNION
+      UNION ALL
       SELECT provenance::uuid as f, NULL::uuid, ''input'', value as d FROM ' || token2desc || ' WHERE provenance=$1 
     ) t1
-    LEFT JOIN (
+    LEFT OUTER JOIN (
       SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provsql.provenance_circuit_extra GROUP BY gate
     ) t2 on t1.f=t2.gate'
   USING token LOOP;

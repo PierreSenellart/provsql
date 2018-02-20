@@ -109,6 +109,7 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
         } else {
           elog(ERROR, "Wrong type of gate in circuit");
         }
+        //elog(WARNING, "%d -- %d", id, c.getGate(SPI_getvalue(tuple, tupdesc, 2)));
         c.addWire(id, c.getGate(SPI_getvalue(tuple, tupdesc, 2)));
       }
     }

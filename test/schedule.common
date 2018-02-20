@@ -27,3 +27,4 @@ test: c2d d4 dsharp
 
 # Viewing circuit
 test: view_circuit
+test: view_cicuit_multiple
