@@ -216,8 +216,8 @@ static Expr *add_eq_from_OpExpr_to_Expr(
   Const *c2;
   Var *v1;
   Var *v2;
-
-  if(lnext(list_head(fromOpExpr->args)) && !IsA(linital(fromOpExpr->args), FuncExpr)) {
+  
+  if(lnext(list_head(fromOpExpr->args))) {
     /* Sometimes Var is nested within a RelabelType */
     if(IsA(linitial(fromOpExpr->args), Var)) {
       v1 = linitial(fromOpExpr->args);  
@@ -294,8 +294,10 @@ static Expr *add_eq_from_Quals_to_Expr(
     } else {
       ListCell *lc2; 
       foreach(lc2,be->args) {
-        oe = (OpExpr *) lfirst(lc2);
-        result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+        if(IsA(lfirst(lc2),OpExpr)) {
+          oe = (OpExpr *) lfirst(lc2);
+          result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+        }
       }
     }
   } /* Handle case of CROSS JOIN with no eqop */
