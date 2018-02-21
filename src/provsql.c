@@ -217,7 +217,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
   Var *v1;
   Var *v2;
 
-  if(lnext(list_head(fromOpExpr->args)) && !IsA(linital(fromOpExpr->args), FuncExpr)) {
+  if(lnext(list_head(fromOpExpr->args))) {
     /* Sometimes Var is nested within a RelabelType */
     if(IsA(linitial(fromOpExpr->args), Var)) {
       v1 = linitial(fromOpExpr->args);  
