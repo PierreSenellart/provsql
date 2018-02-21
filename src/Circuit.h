@@ -1,6 +1,9 @@
 #ifndef CIRCUIT_H
 #define CIRCUIT_H
 
+#include "pg_config.h" // for PG_VERSION_NUM
+#include "c.h" // for PG_VERSION_NUM
+
 extern "C" {
 #include "utils/uuid.h"
 
