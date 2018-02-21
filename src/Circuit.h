@@ -2,7 +2,7 @@
 #define CIRCUIT_H
 
 #include "pg_config.h" // for PG_VERSION_NUM
-#include "c.h" // for PG_VERSION_NUM
+#include "c.h" // for int16
 
 extern "C" {
 #include "utils/uuid.h"
