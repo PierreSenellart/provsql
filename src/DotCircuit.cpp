@@ -42,40 +42,78 @@ std::string DotCircuit::toString(unsigned ) const
   std::string result="graph circuit{\n node [shape=plaintext];\n";
   
   //looping through the gates
+  //eliminating the minusr and minusl gates
   unsigned i=0;
   for(auto g:gates){
-    result += std::to_string(i)+" [label=";
-    switch(g) {
-      case DotGate::IN:
-        result+="\""+desc[i]+"\"";
-        break;
-      case DotGate::OMINUS:
-        result+="\"⊖\"";
-        break;
-      case DotGate::UNDETERMINED:
-        result+="\"?\"";
-        break;
-      case DotGate::OTIMES:
-        result+="\"⊗\"";
-        break;
-      case DotGate::OPLUS:
-        result+="\"⊕\"";
-        break;
-      case DotGate::EQ:
-        result+="\"=\"";
-        break;
-      case DotGate::PROJECT:
-        result+="\"Π\"";
-        break;
+    if(g != DotGate::OMINUSR && g != DotGate::OMINUSL){
+      result += std::to_string(i)+" [label=";
+      switch(g) {
+        case DotGate::IN:
+          result+="\""+desc[i]+"\"";
+          break;
+        case DotGate::OMINUS:
+          result+="\"⊖\"";
+          break;
+        case DotGate::UNDETERMINED:
+          result+="\"?\"";
+          break;
+        case DotGate::OTIMES:
+          result+="\"⊗\"";
+          break;
+        case DotGate::OPLUS:
+          result+="\"⊕\"";
+          break;
+        case DotGate::EQ:
+          result+="\""+desc[i]+"\"";
+          break;
+        case DotGate::PROJECT:
+          result+="\"Π"+desc[i]+"\"";
+          break;
+        case DotGate::OMINUSR:
+        case DotGate::OMINUSL:
+          break;
+      }
+      result+="];\n";
     }
-    result+="];\n";
     i++;
   }
 
   //looping through the gates and their wires
   for(size_t i=0;i<wires.size();++i){
-    for(auto s: wires[i])
-      result += std::to_string(i)+" -- "+std::to_string(s)+";\n";
+    if(gates[i] != DotGate::OMINUSR && gates[i] != DotGate::OMINUSL){
+      std::unordered_map<unsigned, unsigned> number_gates;
+      for(auto s: wires[i]){
+        if(number_gates.find(s)!=number_gates.end()){
+          number_gates[s] = number_gates[s]+1;
+        }
+        else {
+          number_gates[s] = 1;
+        }
+      }
+      for(auto el: number_gates)
+      {
+        unsigned s = el.first;
+        unsigned n = el.second;
+        if(gates[s] == DotGate::OMINUSR || gates[s] == DotGate::OMINUSL) {
+          for(auto t: wires[s]) {
+            result += std::to_string(i)+" -- "+std::to_string(t);
+            if(gates[s] == DotGate::OMINUSR)
+              result += " [label=\"R\"];\n";
+            else
+              result += " [label=\"L\"];\n";
+          }
+        }
+        else {
+          result += std::to_string(i)+" -- "+std::to_string(s);
+          if(n==1) {
+            result += ";\n";
+          }
+          else {
+            result += " [label=\""+std::to_string(n)+"\"];\n";
+          }
+        }
+      }
+    }
   }
   return result+"}";
 }

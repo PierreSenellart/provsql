@@ -6,8 +6,6 @@
 
    city   | gates 
 ----------+-------
- Berlin   |    16
- New York |    16
- Paris    |    29
-(3 rows)
+ New York |     5
+(1 row)
 
