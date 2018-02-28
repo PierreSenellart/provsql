@@ -11,8 +11,8 @@ env:
   - POSTGRESQL_VERSION=9.6  
   - POSTGRESQL_VERSION=10
 before_install:
-  sudo apt-get install -y postgresql-server-dev-$POSTGRESQL_VERSION
-  for i in /etc/postgresql/*/main/postgresql.conf; do echo "shared_preload_libraries = 'provsql'" >> $i; done
-  sudo service postgresql stop && sudo service postgresql start $POSTGRESQL_VERSION  
+  - sudo apt-get install -y postgresql-server-dev-$POSTGRESQL_VERSION
+  - for i in /etc/postgresql/*/main/postgresql.conf; do echo "shared_preload_libraries = 'provsql'" >> $i; done
+  - sudo service postgresql stop && sudo service postgresql start $POSTGRESQL_VERSION  
 install: make && sudo make install  
 script: make installcheck
