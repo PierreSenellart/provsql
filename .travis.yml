@@ -2,19 +2,24 @@ language: cpp
 os: linux
 dist: trusty
 sudo: enabled
-compiler:
-  - gcc
-  - clang
+addons:
+  apt:
+    sources:
+      - ubuntu-toolchain-r-test
+    packages:
+      - g++-4.9    
 env:
   - POSTGRESQL_VERSION=9.4
   - POSTGRESQL_VERSION=9.5
   - POSTGRESQL_VERSION=9.6  
   - POSTGRESQL_VERSION=10
 before_install:
+  - export CC=gcc-4.9
+  - export CXX=g++-4.9
   - sudo service postgresql stop
   - sudo apt-get install -y postgresql-$POSTGRESQL_VERSION postgresql-server-dev-$POSTGRESQL_VERSION
 install: make && sudo make install  
 before_script:
-  - sudo bash -c 'echo "shared_preload_libraries = \"provsql\""' >> /etc/postgresql/$POSTGRESQL_VERSION/main/postgresql.conf
+  - sudo bash -c 'echo "shared_preload_libraries = \"provsql\"" >> /etc/postgresql/'$POSTGRESQL_VERSION/main/postgresql.conf
   - sudo service postgresql stop && sudo service postgresql start $POSTGRESQL_VERSION  
 script: make installcheck
