@@ -8,6 +8,9 @@ addons:
       - ubuntu-toolchain-r-test
     packages:
       - g++-4.9    
+      - graphviz
+      - evince
+      - x11-xserver-utils
 env:
   - POSTGRESQL_VERSION=9.4
   - POSTGRESQL_VERSION=9.5
@@ -24,3 +27,5 @@ before_script:
 
   - sudo service postgresql stop && sudo service postgresql start $POSTGRESQL_VERSION  
 script: make installcheck
+after_script:
+  - cat /tmp/tmp.provsql*/regression.diffs  
