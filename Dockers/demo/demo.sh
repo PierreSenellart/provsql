@@ -41,6 +41,6 @@ echo ""
 
 #su - postgres psql -c "ALTER USER \"test\" WITH PASSWORD 'test';"
 while true ; do
-    sleep 3600 ;
-    echo "Heartbeat" # todo remove
+    tail -f /messages | sed -u "s_ /_ http://${IP}/_";
+    sleep 1 ;
 done ;
