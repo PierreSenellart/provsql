@@ -11,6 +11,7 @@ addons:
       - graphviz
       - evince
       - x11-xserver-utils
+      - libc:i386
 env:
   - POSTGRESQL_VERSION=9.4
   - POSTGRESQL_VERSION=9.5
