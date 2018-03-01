@@ -2,7 +2,7 @@
 SET search_path TO public, provsql;
 
 CREATE TABLE vc_result AS
-SELECT city, view_circuit(provenance(),'d') AS gates
+SELECT city, view_circuit(provenance(),'d') AS ok
 FROM ( 
   SELECT DISTINCT p1.city FROM
     personnel p1, personnel p2
@@ -13,5 +13,5 @@ FROM (
 
 SELECT remove_provenance('vc_result');
 
-SELECT city, gates FROM vc_result ORDER BY city;
+SELECT city, ok FROM vc_result ORDER BY city;
 DROP TABLE vc_result;

@@ -43,7 +43,7 @@ static vector<pair<int,int>> parse_array(string s)
   return result;
 }
 
-static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
+static void view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
 {
   constants_t constants;
   if(!initialize_constants(&constants)) {
@@ -124,8 +124,6 @@ static Datum view_circuit_internal(Datum token, Datum token2prob, Datum is_debug
 
   //Calling the dot renderer
   c.render();
-
-  PG_RETURN_FLOAT8(proc);
 }
 
 Datum view_circuit(PG_FUNCTION_ARGS)
@@ -138,7 +136,8 @@ Datum view_circuit(PG_FUNCTION_ARGS)
     if(PG_ARGISNULL(1))
       PG_RETURN_NULL();
 
-    return view_circuit_internal(token, token2prob, is_debug);
+    view_circuit_internal(token, token2prob, is_debug);
+    PG_RETURN_BOOL(true);
   } catch(const std::exception &e) {
     elog(ERROR, "view_circuit: %s", e.what());
   } catch(...) {

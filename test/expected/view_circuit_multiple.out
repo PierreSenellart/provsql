@@ -4,8 +4,8 @@
  
 (1 row)
 
-   city   | gates 
-----------+-------
- New York |     5
+   city   | ok 
+----------+----
+ New York | t
 (1 row)
 
