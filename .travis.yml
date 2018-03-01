@@ -2,6 +2,7 @@ language: cpp
 os: linux
 dist: trusty
 sudo: enabled
+
 addons:
   apt:
     sources:
@@ -12,11 +13,13 @@ addons:
       - evince
       - x11-xserver-utils
       - libc6:i386
+
 env:
   - POSTGRESQL_VERSION=9.4
   - POSTGRESQL_VERSION=9.5
   - POSTGRESQL_VERSION=9.6  
   - POSTGRESQL_VERSION=10
+
 before_install:
   - export CC=gcc-4.9
   - export CXX=g++-4.9
@@ -26,16 +29,14 @@ before_install:
   - sudo curl http://www.cril.univ-artois.fr/KC/ressources/d4 -o /usr/local/bin/d4
   - hg clone https://bitbucket.org/haz/dsharp && cd dsharp && mv Makefile_gmp Makefile && make && sudo mv dsharp /usr/local/bin && cd ..
   - sudo chmod a+x /usr/local/bin/c2d /usr/local/bin/dsharp /usr/local/bin/d4
-  - md5sum /usr/local/bin/c2d
-  - echo "p cnf 3 3\n1 2 3 0\n-1 -2 0\n-2 -3 0" > test.cnf
-  - c2d -in test.cnf
-  - cat test.cnf.nnf
 
 install: make && sudo make install  
+
 before_script:
   - sudo bash -c 'echo "shared_preload_libraries = '"'"'provsql'"'"'" >> /etc/postgresql/'$POSTGRESQL_VERSION/main/postgresql.conf
-
   - sudo service postgresql stop && sudo service postgresql start $POSTGRESQL_VERSION  
+
 script: make installcheck
+
 after_script:
   - cat /tmp/tmp.provsql*/regression.diffs  
