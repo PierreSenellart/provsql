@@ -457,6 +457,11 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT;
 
+CREATE AGGREGATE array_stack(INTEGER [])
+(
+  sfunc=array_cat,
+  stype=INTEGER[]
+);
 
 CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
   RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
@@ -472,7 +477,7 @@ $$
       UNION ALL
         SELECT DISTINCT $1, NULL::uuid, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
       ) t1 LEFT OUTER JOIN (
-      SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provenance_circuit_extra GROUP BY gate
+      SELECT gate, array_stack(ARRAY[info1,info2]) infos FROM provenance_circuit_extra GROUP BY gate
     ) t2 on t1.f=t2.gate;
 $$
 LANGUAGE sql;
