@@ -40,4 +40,4 @@ before_script:
 script: sudo -u postgres make installcheck
 
 after_script:
-  - sudo -u postgres bash "cat /tmp/tmp.provsql*/regression.diffs"
+  - sudo -u postgres bash -c "cat /tmp/tmp.provsql*/regression.diffs"
