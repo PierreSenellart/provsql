@@ -30,7 +30,7 @@ The following SQL queries are currently supported.
 ## Prerequisites
 
 1. An install of PostgreSQL >= 9.5. The extension has currently been
-   tested with versions from 9.5 to 10.1 (inclusive) of PostgreSQL, under
+   tested with versions from 9.5 to 10 (inclusive) of PostgreSQL, under
    Linux and Mac OS X (if the extension does not work on a specific
    version or operating system, a bug report is appreciated).
 
@@ -58,6 +58,14 @@ The following SQL queries are currently supported.
    To be used, an executable with the name of this software must be
    available in the PATH of the PostgreSQL server user (e.g., in
    `/usr/local/bin/`).
+
+5. Optionally, for circuit visualization, the following software:
+
+   * `graphviz`, for production of PDF circuits (`dot` executable)
+   
+   * `evince`, for visualization of PDF files
+   
+   Both can be obtained as packages in common Linux distributions.
 
 ## Installation
 
@@ -89,8 +97,12 @@ administrator with ``ALTER USER your_login WITH SUPERUSER``. This assumes that
 can ensure this by running the command ``createuser your_login`` as the
 ``postgres`` user.
 
-Note that the tests that depend on external software (`c2d`, `d4`, or
-`dsharp`) will fail if no executable of that name can be found.
+Note that the tests that depend on external software (`c2d`, `d4`, 
+`dsharp`, `dot`) will fail if no executable of that name can be found.
+
+For circuit visualization, the database server will attempt to launch `evince`
+on a local X window server (`:0`). You can authorize the display of such windows
+with `xhost +`.
 
 ## Using ProvSQL
 
