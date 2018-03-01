@@ -22,7 +22,7 @@ before_install:
   - sudo service postgresql stop
   - while ! ping -c 1 8.8.8.8 ; do sleep 5; done # Check network is available
   - sudo apt-get install -y postgresql-$POSTGRESQL_VERSION postgresql-server-dev-$POSTGRESQL_VERSION
-  - curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' -H 'Content-Type: application/x-www-form-urlencoded' --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart&e=pierre%40senellart.com&o=ENS' -o c2d && unzip c2d && sudo mv c2d_linux /usr/local/bin
+  - "curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' -H 'Content-Type\: application/x-www-form-urlencoded' --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart&e=pierre%40senellart.com&o=ENS' -o c2d && unzip c2d && sudo mv c2d_linux /usr/local/bin"
   - sudo curl http://www.cril.univ-artois.fr/KC/ressources/d4 -o /usr/local/bin/d4
   - hg clone https://bitbucket.org/haz/dsharp && cd dsharp && Makefile_gmp Makefile && make && sudo mv dsharp /usr/local/bin
   - sudo chmod a+x /usr/local/bin/c2d /usr/local/bin/dsharp /usr/local/bin/d4
