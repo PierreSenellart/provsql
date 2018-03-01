@@ -27,7 +27,20 @@ The following SQL queries are currently supported.
 * UNION's or UNION ALL's of SELECT queries
 * EXCEPT of SELECT queries
 
-## Prerequisites
+## Docker container
+
+As an alternative to a ProvSQL installation (see below), you can try
+a demonstration version of ProvSQL (full-featured, except for circuit
+visualization) as a Docker container. To deploy it, once Docker CE is
+installed, simply run:
+```
+docker run inriavalda/provsqldemo
+```
+By following the instructions, you will be able to connect to the
+PostgreSQL server within the container using a PostgreSQL client,
+and to use a Web interface for simple visualization of where-provenance.
+
+## Prerequisites for installation
 
 1. An install of PostgreSQL >= 9.5. The extension has currently been
    tested with versions from 9.5 to 10 (inclusive) of PostgreSQL, under
@@ -106,7 +119,7 @@ with `xhost +`.
 
 ## Using ProvSQL
 
-You can use ProvSQL from any PostgreSQL extension by loading the
+You can use ProvSQL in any PostgreSQL database by loading the
 `provsql` extension. See the file [setup.sql](test/sql/setup.sql)
 for an example on how to do this.
 
