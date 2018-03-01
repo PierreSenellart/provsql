@@ -23,7 +23,7 @@ env:
 before_install:
   - export CC=gcc-4.9
   - export CXX=g++-4.9
-  - sudo apt-get purge postgresql-common
+  - sudo apt-get purge postgresql-common postgresql-client-common
   - sudo apt-get install -y postgresql-$POSTGRESQL_VERSION postgresql-server-dev-$POSTGRESQL_VERSION
   - "curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' -H 'Content-Type: application/x-www-form-urlencoded' --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart&e=pierre%40senellart.com&o=ENS' -o c2d && unzip c2d && sudo mv c2d_linux /usr/local/bin/c2d"
   - sudo curl http://www.cril.univ-artois.fr/KC/ressources/d4 -o /usr/local/bin/d4
@@ -36,7 +36,7 @@ before_script:
   - sudo bash -c 'echo "shared_preload_libraries = '"'"'provsql'"'"'" >> /etc/postgresql/'$POSTGRESQL_VERSION/main/postgresql.conf
   - sudo service postgresql stop && sudo service postgresql start $POSTGRESQL_VERSION  
 
-script: make installcheck
+script: sudo -u postgres make installcheck
 
 after_script:
   - cat /tmp/tmp.provsql*/regression.diffs  
