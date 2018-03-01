@@ -25,6 +25,11 @@ before_install:
   - sudo curl http://www.cril.univ-artois.fr/KC/ressources/d4 -o /usr/local/bin/d4
   - hg clone https://bitbucket.org/haz/dsharp && cd dsharp && mv Makefile_gmp Makefile && make && sudo mv dsharp /usr/local/bin && cd ..
   - sudo chmod a+x /usr/local/bin/c2d /usr/local/bin/dsharp /usr/local/bin/d4
+  - md5sum /usr/local/bin/c2d
+  - echo "p cnf 3 3\n1 2 3 0\n-1 -2 0\n-2 -3 0" > test.cnf
+  - c2d -in test.cnf
+  - cat test.cnf.nnf
+
 install: make && sudo make install  
 before_script:
   - sudo bash -c 'echo "shared_preload_libraries = '"'"'provsql'"'"'" >> /etc/postgresql/'$POSTGRESQL_VERSION/main/postgresql.conf
