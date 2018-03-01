@@ -80,22 +80,23 @@ EXPOSE 5432
 RUN cd /opt/provsql ; make install
 
 USER postgres
-#create a db provsql
+#create a db test
 RUN /etc/init.d/postgresql start &&\
-    createuser -s provsql &&\
-    createdb provsql &&\
-    psql -f /opt/provsql/test/sql/setup.sql provsql provsql  &&\
-    psql -f /opt/provsql/test/sql/add_provenance.sql provsql provsql &&\
-    psql -f /opt/provsql/test/sql/formula.sql provsql provsql  &&\
-    psql -f /opt/provsql/test/sql/security.sql provsql provsql 
-     
+    createuser -s test &&\
+    createdb test &&\
+    psql -f /opt/provsql/test/sql/setup.sql test test  &&\
+    psql -f /opt/provsql/test/sql/add_provenance.sql test test &&\
+    psql -f /opt/provsql/test/sql/formula.sql test test  &&\
+    psql -f /opt/provsql/test/sql/security.sql test test &&\
+    psql -c "ALTER ROLE test SET search_path TO public, provsql";     
     
 
 ############################## FINISHING THE DOCKER  ##############################   
 
 #allow access
 RUN echo "listen_addresses = '*'"  >> /etc/postgresql/${PSQL_VERSION}/main/postgresql.conf
-RUN echo "host provsql all 0.0.0.0/0 trust" >> /etc/postgresql/${PSQL_VERSION}/main/pg_hba.conf  
+RUN echo "host all all 0.0.0.0/0 trust" >> /etc/postgresql/${PSQL_VERSION}/main/pg_hba.conf  
+RUN echo "host all all ::/0 trust" >> /etc/postgresql/${PSQL_VERSION}/main/pg_hba.conf  
 
 USER postgres
 CMD /usr/bin/pg_ctlcluster $PSQL_VERSION main start --foreground

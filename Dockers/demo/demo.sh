@@ -2,11 +2,45 @@
 
 rm -f /var/www/html/*
 cp /opt/provsql/where_panel/* /var/www/html/
-sed -i 's/demo/provsql/g' /var/www/html/config
-/etc/init.d/apache2 start
-/etc/init.d/postgresql start
+sed -i 's/demo/test/g' /var/www/html/config
+sed -i 's/localhost/127.0.0.1/g' /var/www/html/config
 
-su - postgres psql -c "ALTER USER \"provsql\" WITH PASSWORD 'provsql';"
+IP=$(ip addr |grep -v 127.0.0 | sed -n 's_^.*inet \(.*\)/.* brd.*$_\1_p')
+
+echo "CONTAINER IP: ${IP}"
+echo ""
+echo ""
+echo " =====  Starting Postgres ... "
+/etc/init.d/postgresql start
+echo ""
+echo ""
+echo " =====  Starting Apache Web Server... "
+/etc/init.d/apache2 start
+echo ""
+echo ""
+
+echo -n "Waiting for PostgreSQL (this can take a few minutes)..." ;
+while [[ $( psql -c "SELECT md5('Hello');" test test 2>/dev/null| grep -c '8b1a9953c4611296a827abf8c47804d7') -ne 1 ]] ;
+do
+    echo -n ".";
+    sleep 1 ;
+done ;
+echo ""
+echo ""
+echo ""
+echo "The where_panel web interface is running and is available  "
+echo "at the address           http://${IP} "
+echo ""
+echo "If you ran 'docker run  -p 8080:80 inriavalda/provsqldemo'"
+echo "it is also at            http://localhost:8080 "
+echo ""
+echo ""
+echo "The psql shell should now be available with the command "
+echo "                         psql -h ${IP} -p 5432 test test"
+echo ""
+
+#su - postgres psql -c "ALTER USER \"test\" WITH PASSWORD 'test';"
 while true ; do
-    sleep 100
+    sleep 3600 ;
+    echo "Heartbeat" # todo remove
 done ;
