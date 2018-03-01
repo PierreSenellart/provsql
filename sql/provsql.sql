@@ -432,11 +432,6 @@ $$
 DECLARE
   t RECORD;
   result RECORD;
-  token provenance_token, OUT table_name regclass, OUT nb_columns integer) AS
-$$
-DECLARE
-  t RECORD;
-  result RECORD;
 BEGIN
   table_name:=NULL;
   nb_columns:=-1;
