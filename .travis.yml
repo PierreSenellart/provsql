@@ -11,7 +11,6 @@ addons:
       - g++-4.9    
       - graphviz
       - evince
-      - x11-xserver-utils
       - libc6:i386
 
 env:

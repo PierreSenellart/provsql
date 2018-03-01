@@ -141,7 +141,7 @@ void DotCircuit::render() const {
   //Opening the PDF viewer
 #ifdef __linux__
   //assuming evince on linux
-  cmdline="export DISPLAY=':0'; xhost +; evince "+outfilename + " &";
+  cmdline="export DISPLAY=':0'; evince "+outfilename + " &";
   retvalue=system(cmdline.c_str());
 #else
   throw CircuitException("Unsupported operating system for viewing");
