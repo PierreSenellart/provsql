@@ -1,13 +1,10 @@
-# Use testing to have a compatible version of OCaml
 FROM debian:latest
-LABEL maintainer louis.jachiet@inria.fr
+LABEL maintainer pierre@senellart.com
 
 # needed to build provsql the tools + libc6-i386 for running c2d
 RUN apt-get update &&\
     apt-get -y install git build-essential curl\
                libc6-i386 unzip mercurial libgmp-dev
-
-
 
 # Specify which version we are building against
 ARG PSQL_VERSION=9.6
@@ -31,7 +28,7 @@ RUN mkdir /tmp/tools/
 # TOOL c2d
 RUN curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' \
          -H 'Content-Type: application/x-www-form-urlencoded'\
-         --data 'os=Linux+i386&type=&s=&n=Louis+Jachiet+DOCKER&e=firstname@lastname.com&o=ENS'\
+         --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart+DOCKER&e=pierre@senellart.com&o=ENS'\
          -o /tmp/c2d.zip &&\
          unzip /tmp/c2d.zip -d /tmp/ &&\
          rm /tmp/c2d.zip &&\
@@ -56,7 +53,6 @@ RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 
 ##############################   GETTING  PROVSQL  ##############################   
 
-
 # Add a folder for ProvSQL
 WORKDIR /opt/provsql
 
@@ -64,11 +60,9 @@ WORKDIR /opt/provsql
 RUN chown postgres:postgres /opt/provsql
 USER postgres
 
-
 # Getting and building
 RUN git clone https://github.com/PierreSenellart/provsql.git /opt/provsql
 RUN cd /opt/provsql && make
-
 
 # install provsql
 USER root
@@ -89,7 +83,6 @@ RUN /etc/init.d/postgresql start &&\
     psql -f /opt/provsql/test/sql/formula.sql test test  &&\
     psql -f /opt/provsql/test/sql/security.sql test test &&\
     psql -c "ALTER ROLE test SET search_path TO public, provsql";     
-    
 
 ############################## FINISHING THE DOCKER  ##############################   
 
@@ -101,4 +94,15 @@ RUN echo "host all all ::/0 trust" >> /etc/postgresql/${PSQL_VERSION}/main/pg_hb
 USER postgres
 CMD /usr/bin/pg_ctlcluster $PSQL_VERSION main start --foreground
 
+USER root
+RUN apt-get update &&\
+    apt-get -y install apache2 libapache2-mod-php7.0 php7.0-pgsql graphviz
 
+RUN cp /opt/provsql/Docker/view /usr/local/bin/evince  &&\
+    chmod a+rx /usr/local/bin/evince &&\
+    touch /messages &&\
+    mkdir -p /var/www/html/pdf &&\
+    chmod a+rwX /var/www/html/pdf &&\
+    chmod a+rw /messages
+CMD /bin/bash /opt/provsql/Docker/demo.sh
+EXPOSE 80

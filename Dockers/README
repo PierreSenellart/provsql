@@ -1,9 +1,0 @@
-To create the image with the tag "inriavalda/provsql" : 
-
-   docker build . -t inriavalda/provsql
-
-To run the  docker (so that the db will be accessible with
-   psql -h localhost -p 5454) :
-
-   run -it -u root  -p 5454:5432 inriavalda/provsql
-
