@@ -1,6 +1,6 @@
 #!/bin/bash
 
-rm -f /var/www/html/*
+rm -rf /var/www/html/*
 cp /opt/provsql/where_panel/* /var/www/html/
 sed -i 's/demo/test/g' /var/www/html/config
 sed -i 's/localhost/127.0.0.1/g' /var/www/html/config
