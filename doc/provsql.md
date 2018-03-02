@@ -140,7 +140,7 @@ A demonstration of the ProvSQL system is available as a video, on
 https://youtu.be/iqzSNfGHbEE?vq=hd1080
 
 An unpublished article describing this demonstration is available at
-http://pierre.senellart.com/publications/senellart2008provsql.pdf
+http://pierre.senellart.com/publications/senellart2018provsql.pdf
 
 ## Uninstalling
 
