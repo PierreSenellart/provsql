@@ -54,7 +54,7 @@ $db = getdb($config);
       function exemple(str) {
         document.getElementById('request').value = str;
       }
-     </script>
+    </script>
   </head>
   <body>
     <nav class="navbar navbar-expand navbar-dark bg-dark">
@@ -171,25 +171,35 @@ $db = getdb($config);
 	    $ru = pg_exec($db, $requ);
 	    if($ru) {
               echo '<hr>';
-	      echo "<h2 class='text-center'> query result</h2><table class='table table-bordered table-striped table-condensed text-center'>";
-              $l3=pg_fetch_array($ru,0);
-	      //var_dump($l3);
+	      echo "<h2 class='text-center'> query result</h2>\n<table class='table table-bordered table-striped table-condensed text-center'>\n";
+	      $nfs = pg_num_fields($ru);
+	      echo "  <tr>\n";
+	      for ($fn = 0; $fn < $nfs-2; $fn++) {
+	        echo "    <th>";
+	        $fieldname = pg_field_name($ru, $fn);
+	        echo $fieldname;
+	        echo "</th>\n";
+	      }
+	      echo "  </tr>\n";
+              /*$l3=pg_fetch_result($ru,0);
+	      var_dump($l3);
 	      echo "<tr>";
 	      for ($j=0; $j<sizeof($l3)/2-2; $j++) {
 	        echo "<th>".array_keys($l3)[2*$j+1]."</th>";
 	      }
-	      echo "</tr>";
+	      echo "</tr>";*/
 
 	      for ($i3=0; $i3<pg_numrows($ru); $i3++) {
-                $l3=pg_fetch_array($ru,$i3);
-	        echo '<tr title="'.$l3[sizeof($l3)/2-1].'">';
-	        #echo "<tr>";
-                for ($j=0; $j<sizeof($l3)/2-2; $j++) {
-	          echo '<td id="'.($j+1).' '.$l3[sizeof($l3)/2-2].'" onmouseover="mouseOver(this.id)" onmouseout="mouseOut(this.id)" >'.$l3[$j].'</td>';
+                $l3=pg_fetch_row($ru,$i3);
+	        echo '  <tr title="'.$l3[sizeof($l3)-1].'">';
+	        echo "\n";
+                for ($j=0; $j<sizeof($l3)-2; $j++) {
+		  echo '    <td id="'.($j+1).' '.$l3[sizeof($l3)-2].'" onmouseover="mouseOver(this.id)" onmouseout="mouseOut(this.id)" >'.$l3[$j].'</td>';
+                  echo "\n";
                 }
-	        echo "</tr>";
+	        echo "  </tr>\n";
               }
-	      echo "</table>";
+	      echo "</table>\n";
 	    }
 	  }
         ?>
