@@ -58,12 +58,12 @@ $db = getdb($config);
   </head>
   <body>
     <nav class="navbar navbar-expand navbar-dark bg-dark">
-      <a class="navbar-brand" href="#">Where Panel</a>
+      <a class="navbar-brand" href="#">Where Provenance</a>
       <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarsExample02" aria-controls="navbarsExample02" aria-expanded="false" aria-label="Toggle navigation">
         <span class="navbar-toggler-icon"></span>
       </button>
 
-      <div class="collapse navbar-collapse" id="navbarsExample02">
+      <!-- <div class="collapse navbar-collapse" id="navbarsExample02">
         <ul class="navbar-nav mr-auto">
           <li class="nav-item active">
             <a class="nav-link" href="#">Home <span class="sr-only">(current)</span></a>
@@ -72,16 +72,16 @@ $db = getdb($config);
             <a class="nav-link" href="config">Config</a>
           </li>
         </ul>
-      </div>
+      </div> -->
     </nav>
 
-    <div class="jumbotron">
+    <!-- <div class="jumbotron">
       <div class="container">
         <h1 class="display-3">Where Provenance</h1>
         <p>Query easily your PostgreSQL database and check the provenance of your result.</p>
         <p><a class="btn btn-primary btn-lg" href="config" role="button">Edit config file &raquo;</a></p>
       </div>
-    </div>
+    </div> -->
 
     <!--<div id="conteneur">
       <div id="left-panel">-->
@@ -173,6 +173,7 @@ $db = getdb($config);
               echo '<hr>';
 	      echo "<h2 class='text-center'> query result</h2><table class='table table-bordered table-striped table-condensed text-center'>";
               $l3=pg_fetch_array($ru,0);
+	      //var_dump($l3);
 	      echo "<tr>";
 	      for ($j=0; $j<sizeof($l3)/2-2; $j++) {
 	        echo "<th>".array_keys($l3)[2*$j+1]."</th>";
