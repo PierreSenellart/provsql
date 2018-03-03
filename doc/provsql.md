@@ -1,5 +1,7 @@
 # ProvSQL
 
+[![Build Status](https://travis-ci.org/PierreSenellart/provsql.svg?branch=master)](https://travis-ci.org/PierreSenellart/provsql)
+
 The goal of the ProvSQL project is to add support for (m-)semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
 PostgreSQL extension/module/plugin. It is work in progress at the moment.
@@ -25,10 +27,23 @@ The following SQL queries are currently supported.
 * UNION's or UNION ALL's of SELECT queries
 * EXCEPT of SELECT queries
 
-## Prerequisites
+## Docker container
+
+As an alternative to a ProvSQL installation (see below), you can try
+a demonstration version of ProvSQL (full-featured, except for circuit
+visualization) as a Docker container. To deploy it, once Docker CE is
+installed, simply run:
+```
+docker run inriavalda/provsqldemo
+```
+By following the instructions, you will be able to connect to the
+PostgreSQL server within the container using a PostgreSQL client,
+and to use a Web interface for simple visualization of where-provenance.
+
+## Prerequisites for installation
 
 1. An install of PostgreSQL >= 9.5. The extension has currently been
-   tested with versions from 9.5 to 10.1 (inclusive) of PostgreSQL, under
+   tested with versions from 9.5 to 10 (inclusive) of PostgreSQL, under
    Linux and Mac OS X (if the extension does not work on a specific
    version or operating system, a bug report is appreciated).
 
@@ -56,6 +71,14 @@ The following SQL queries are currently supported.
    To be used, an executable with the name of this software must be
    available in the PATH of the PostgreSQL server user (e.g., in
    `/usr/local/bin/`).
+
+5. Optionally, for circuit visualization, the following software:
+
+   * `graphviz`, for production of PDF circuits (`dot` executable)
+   
+   * `evince`, for visualization of PDF files
+   
+   Both can be obtained as packages in common Linux distributions.
 
 ## Installation
 
@@ -87,12 +110,16 @@ administrator with ``ALTER USER your_login WITH SUPERUSER``. This assumes that
 can ensure this by running the command ``createuser your_login`` as the
 ``postgres`` user.
 
-Note that the tests that depend on external software (`c2d`, `d4`, or
-`dsharp`) will fail if no executable of that name can be found.
+Note that the tests that depend on external software (`c2d`, `d4`, 
+`dsharp`, `dot`) will fail if no executable of that name can be found.
+
+For circuit visualization, the database server will attempt to launch `evince`
+on a local X window server (`:0`). You can authorize the display of such windows
+with `xhost +`.
 
 ## Using ProvSQL
 
-You can use ProvSQL from any PostgreSQL extension by loading the
+You can use ProvSQL in any PostgreSQL database by loading the
 `provsql` extension. See the file [setup.sql](test/sql/setup.sql)
 for an example on how to do this.
 
@@ -113,7 +140,7 @@ A demonstration of the ProvSQL system is available as a video, on
 https://youtu.be/iqzSNfGHbEE?vq=hd1080
 
 An unpublished article describing this demonstration is available at
-http://pierre.senellart.com/publications/senellart2008provsql.pdf
+http://pierre.senellart.com/publications/senellart2018provsql.pdf
 
 ## Uninstalling
 
