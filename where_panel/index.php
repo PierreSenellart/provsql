@@ -167,6 +167,7 @@ $db = getdb($config);
           # AFFICHAGE: résultats de la requête et where en surbrillance
           if($_POST) { 
             $nil = pg_exec($db, "SET search_path to public,provsql");
+	    $_POST['request'] = str_replace(';', '', $_POST['request']);
             $requ = "select *, provsql.where_provenance(provsql.provenance()) from (".$_POST['request'].") t";
 	    $ru = pg_exec($db, $requ);
 	    if($ru) {
