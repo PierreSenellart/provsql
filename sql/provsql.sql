@@ -413,10 +413,10 @@ BEGIN
     SELECT t1.*, infos FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
       UNION ALL
-      SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', p2.value as ' || token2desc || '  FROM transitive_closure p1 JOIN d AS p2 
+      SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', p2.value FROM transitive_closure p1 JOIN ' || token2desc || ' AS p2 
         ON p2.provenance=t
       UNION ALL
-      SELECT provenance::uuid as f, NULL::uuid, ''input'', value as d FROM ' || token2desc || ' WHERE provenance=$1 
+      SELECT provenance::uuid as f, NULL::uuid, ''input'', value FROM ' || token2desc || ' WHERE provenance=$1 
     ) t1
     LEFT OUTER JOIN (
       SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provsql.provenance_circuit_extra GROUP BY gate
@@ -447,7 +447,7 @@ BEGIN
                                      AND ns2.nspname<>'provsql' 
                                      AND attname='provsql'
   LOOP
-    EXECUTE format('SELECT * FROM %I WHERE provenance()=%L',t.relname,token) INTO result;
+    EXECUTE format('SELECT * FROM %I WHERE provsql=%L',t.relname,token) INTO result;
     IF result IS NOT NULL THEN
       table_name:=t.relname;
       nb_columns:=t.c;
@@ -475,6 +475,23 @@ $$
     ) t2 on t1.f=t2.gate;
 $$
 LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION sub_circuit(token provenance_token)
+  RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate) AS
+$$
+    WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
+      SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
+        UNION ALL
+      SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
+    ) 
+      SELECT f, t::uuid, gate_type FROM transitive_closure
+      UNION ALL
+        SELECT DISTINCT t, NULL::uuid, 'input'::provenance_gate FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)
+      UNION ALL
+        SELECT DISTINCT $1, NULL::uuid, 'input'::provenance_gate
+$$
+LANGUAGE sql;
+
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token provenance_token,
