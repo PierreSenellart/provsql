@@ -1,4 +1,7 @@
 \set ECHO none
+SET search_path TO public, provsql;
+
+SELECT provenance();
 
 SELECT * FROM (VALUES (1)) t, personnel;
 
