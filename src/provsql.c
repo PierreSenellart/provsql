@@ -933,7 +933,7 @@ static PlannedStmt *provsql_planner(
     int cursorOptions,
     ParamListInfo boundParams)
 {
-  if(q->commandType==CMD_SELECT) {
+  if(q->commandType==CMD_SELECT && q->rtable) {
     constants_t constants;
     if(initialize_constants(&constants)) {
       if(has_provenance(q,&constants)) {
