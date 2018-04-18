@@ -326,25 +326,29 @@ static Expr *make_provenance_expression(
     RelabelType *re=(RelabelType *) linitial(prov_atts);
     result=re->arg;
   } else {
-    expr=makeNode(FuncExpr);
-    if(op==SR_TIMES) {
-      ArrayExpr *array=makeNode(ArrayExpr);
-
-      expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
-      expr->funcvariadic=true;
-      
-      array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
-      array->element_typeid=constants->OID_TYPE_UUID;
-      array->elements=prov_atts;
-      array->location=-1;
-      
-      expr->args=list_make1(array);
-    } else { // SR_MONUS
-      expr->funcid=constants->OID_FUNCTION_PROVENANCE_MONUS;
-      expr->args=prov_atts;
+    if(lnext(list_head(prov_atts))==NULL) {
+      expr=linitial(prov_atts);
+    } else {
+      expr=makeNode(FuncExpr);
+      if(op==SR_TIMES) {
+        ArrayExpr *array=makeNode(ArrayExpr);
+  
+        expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
+        expr->funcvariadic=true;
+        
+        array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
+        array->element_typeid=constants->OID_TYPE_UUID;
+        array->elements=prov_atts;
+        array->location=-1;
+        
+        expr->args=list_make1(array);
+      } else { // SR_MONUS
+        expr->funcid=constants->OID_FUNCTION_PROVENANCE_MONUS;
+        expr->args=prov_atts;
+      }
+      expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      expr->location=-1;
     }
-    expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    expr->location=-1;
 
     if(aggregation_needed) {
       Aggref *agg = makeNode(Aggref);
