@@ -13,6 +13,7 @@
 #include "parser/parsetree.h"
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
+#include "utils/guc.h"
 
 #include "provsql_utils.h"
 
@@ -23,8 +24,8 @@
 PG_MODULE_MAGIC;
 
 bool provsql_shared_library_loaded = false;
-
 bool provsql_interrupted = false;
+bool provsql_where_provenance = false;
 
 static const char *PROVSQL_COLUMN_NAME="provsql";
 
@@ -380,7 +381,7 @@ static Expr *make_provenance_expression(
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
    * to be deeper in the provenance tree. */
-  if(q->jointree) {
+  if(provsql_where_provenance && q->jointree) {
     ListCell *lc;
     foreach(lc, q->jointree->fromlist) {
       if(IsA(lfirst(lc), JoinExpr)) {
@@ -393,7 +394,7 @@ static Expr *make_provenance_expression(
     result = add_eq_from_Quals_to_Expr(q->jointree->quals, result, columns, constants);
   }
 
-  if(projection) {
+  if(provsql_where_provenance && projection) {
     ArrayExpr *array=makeNode(ArrayExpr);
     FuncExpr *fe=makeNode(FuncExpr);
 
@@ -952,6 +953,17 @@ static PlannedStmt *provsql_planner(
 
 void _PG_init(void)
 {
+  DefineCustomBoolVariable("provsql.where_provenance",
+                          "Should ProvSQL track where-provenance?",
+                          "1 turns where-provenance on, 0 off.",
+                          &provsql_where_provenance,
+                          true,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL); 
+
   prev_planner = planner_hook;
 
   if(process_shared_preload_libraries_in_progress) {

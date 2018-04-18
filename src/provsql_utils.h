@@ -24,6 +24,7 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId);
 
 extern bool provsql_shared_library_loaded;
 extern bool provsql_interrupted;
+extern bool provsql_where_provenance;
 
 #if PG_VERSION_NUM < 90500
 /* Backport list_nth_cell function */
