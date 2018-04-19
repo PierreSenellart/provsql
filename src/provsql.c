@@ -133,18 +133,20 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
 
 static Bitmapset *remove_provenance_attributes_select(
     Query *q,
-    const constants_t *constants)
+    const constants_t *constants,
+    bool **removed)
 {
   int nbRemoved=0;
   int i=0;
   Bitmapset *ressortgrouprefs = NULL;
   ListCell *cell, *prev;
+  *removed=(bool*) palloc(q->targetList->length*sizeof(bool));
 
   for(cell=list_head(q->targetList), prev=NULL;
       cell!=NULL
       ;) {
     TargetEntry *rt = (TargetEntry *) lfirst(cell);
-    bool removed=false;
+    (*removed)[i]=false;
 
     if(rt->expr->type==T_Var) {
       Var *v =(Var *) rt->expr;
@@ -165,18 +167,16 @@ static Bitmapset *remove_provenance_attributes_select(
         if(!strcmp(colname,PROVSQL_COLUMN_NAME)) {
           q->targetList=list_delete_cell(q->targetList, cell, prev);
 
-          removed=true;
+          (*removed)[i]=true;
           ++nbRemoved;
 
           if(rt->ressortgroupref > 0)
             ressortgrouprefs = bms_add_member(ressortgrouprefs, rt->ressortgroupref);
         }
       }
-
-      ++i;
     }
 
-    if(removed) {
+    if((*removed)[i]) {
       if(prev) {
         cell=lnext(prev);
       }
@@ -188,6 +188,8 @@ static Bitmapset *remove_provenance_attributes_select(
       prev=cell;
       cell=lnext(cell);
     }
+      
+    ++i;
   }
 
   return ressortgrouprefs;
@@ -380,7 +382,6 @@ static Expr *make_provenance_expression(
   }
 
 //ereport(WARNING,(errmsg("Before: %s",nodeToString(q))));
-//ereport(ERROR,(errmsg("test")));
 
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
@@ -519,7 +520,7 @@ static void transform_distinct_into_group_by(Query *q, const constants_t *consta
   q->distinctClause = NULL;
 }
 
-static void remove_provenance_attribute_groupref(Query *q, const constants_t *constants, const Bitmapset *removed_sortgrouprefs)
+static void remove_provenance_attribute_groupref(Query *q, const Bitmapset *removed_sortgrouprefs)
 {
   List **lists[3]={&q->groupClause,&q->distinctClause,&q->sortClause};
   int i=0;
@@ -533,6 +534,36 @@ static void remove_provenance_attribute_groupref(Query *q, const constants_t *co
       SortGroupClause *sgc = (SortGroupClause *) lfirst(cell);
       if(bms_is_member(sgc->tleSortGroupRef,removed_sortgrouprefs)) {
         *lists[i] = list_delete_cell(*lists[i], cell, prev);
+
+        if(prev) {
+          cell=lnext(prev);
+        }
+        else {
+          cell=list_head(*lists[i]);
+        }
+      } else {
+        prev=cell;
+        cell=lnext(cell);
+      }
+    }
+  }
+}
+
+static void remove_provenance_attribute_setoperations(Query *q, bool *removed)
+{
+  SetOperationStmt *so=(SetOperationStmt*) q->setOperations;
+  List **lists[3]={&so->colTypes,&so->colTypmods,&so->colCollations};
+  int i=0;
+
+  for(i=0;i<3;++i) {
+    ListCell *cell, *prev;
+    int j;
+
+    for(cell=list_head(*lists[i]), prev=NULL, j=0;
+        cell!=NULL;
+        ++j) {
+      if(removed[j]) {
+        *lists[i]=list_delete_cell(*lists[i], cell, prev);
 
         if(prev) {
           cell=lnext(prev);
@@ -800,9 +831,13 @@ static Query *process_query(
 
   if(!subquery) {
     Bitmapset *removed_sortgrouprefs = NULL;
-    removed_sortgrouprefs=remove_provenance_attributes_select(q, constants);
+    bool *removed;
+
+    removed_sortgrouprefs=remove_provenance_attributes_select(q, constants, &removed);
     if(removed_sortgrouprefs != NULL)
-      remove_provenance_attribute_groupref(q, constants, removed_sortgrouprefs);
+      remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
+    if(q->setOperations)
+      remove_provenance_attribute_setoperations(q, removed);
   }
 
   if(q->hasAggs) {
