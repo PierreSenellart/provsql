@@ -13,6 +13,7 @@
 #include "parser/parsetree.h"
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
+#include "utils/guc.h"
 
 #include "provsql_utils.h"
 
@@ -23,8 +24,8 @@
 PG_MODULE_MAGIC;
 
 bool provsql_shared_library_loaded = false;
-
 bool provsql_interrupted = false;
+bool provsql_where_provenance = false;
 
 static const char *PROVSQL_COLUMN_NAME="provsql";
 
@@ -86,7 +87,7 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
       Query *new_subquery = process_query(r->subquery, constants, true);
       if(new_subquery != NULL) {
         r->subquery = new_subquery;
-        r->eref->colnames = lappend(r->eref->colnames, makeString("provsql"));
+        r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
         prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,r->eref->colnames->length,constants));
       }
     } else if(r->rtekind == RTE_JOIN) {
@@ -132,18 +133,20 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
 
 static Bitmapset *remove_provenance_attributes_select(
     Query *q,
-    const constants_t *constants)
+    const constants_t *constants,
+    bool **removed)
 {
   int nbRemoved=0;
   int i=0;
   Bitmapset *ressortgrouprefs = NULL;
   ListCell *cell, *prev;
+  *removed=(bool*) palloc(q->targetList->length*sizeof(bool));
 
   for(cell=list_head(q->targetList), prev=NULL;
       cell!=NULL
       ;) {
     TargetEntry *rt = (TargetEntry *) lfirst(cell);
-    bool removed=false;
+    (*removed)[i]=false;
 
     if(rt->expr->type==T_Var) {
       Var *v =(Var *) rt->expr;
@@ -164,18 +167,16 @@ static Bitmapset *remove_provenance_attributes_select(
         if(!strcmp(colname,PROVSQL_COLUMN_NAME)) {
           q->targetList=list_delete_cell(q->targetList, cell, prev);
 
-          removed=true;
+          (*removed)[i]=true;
           ++nbRemoved;
 
           if(rt->ressortgroupref > 0)
             ressortgrouprefs = bms_add_member(ressortgrouprefs, rt->ressortgroupref);
         }
       }
-
-      ++i;
     }
 
-    if(removed) {
+    if((*removed)[i]) {
       if(prev) {
         cell=lnext(prev);
       }
@@ -187,6 +188,8 @@ static Bitmapset *remove_provenance_attributes_select(
       prev=cell;
       cell=lnext(cell);
     }
+      
+    ++i;
   }
 
   return ressortgrouprefs;
@@ -325,25 +328,29 @@ static Expr *make_provenance_expression(
     RelabelType *re=(RelabelType *) linitial(prov_atts);
     result=re->arg;
   } else {
-    expr=makeNode(FuncExpr);
-    if(op==SR_TIMES) {
-      ArrayExpr *array=makeNode(ArrayExpr);
-
-      expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
-      expr->funcvariadic=true;
-      
-      array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
-      array->element_typeid=constants->OID_TYPE_UUID;
-      array->elements=prov_atts;
-      array->location=-1;
-      
-      expr->args=list_make1(array);
-    } else { // SR_MONUS
-      expr->funcid=constants->OID_FUNCTION_PROVENANCE_MONUS;
-      expr->args=prov_atts;
+    if(lnext(list_head(prov_atts))==NULL) {
+      expr=linitial(prov_atts);
+    } else {
+      expr=makeNode(FuncExpr);
+      if(op==SR_TIMES) {
+        ArrayExpr *array=makeNode(ArrayExpr);
+  
+        expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
+        expr->funcvariadic=true;
+        
+        array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
+        array->element_typeid=constants->OID_TYPE_UUID;
+        array->elements=prov_atts;
+        array->location=-1;
+        
+        expr->args=list_make1(array);
+      } else { // SR_MONUS
+        expr->funcid=constants->OID_FUNCTION_PROVENANCE_MONUS;
+        expr->args=prov_atts;
+      }
+      expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      expr->location=-1;
     }
-    expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    expr->location=-1;
 
     if(aggregation_needed) {
       Aggref *agg = makeNode(Aggref);
@@ -375,12 +382,11 @@ static Expr *make_provenance_expression(
   }
 
 //ereport(WARNING,(errmsg("Before: %s",nodeToString(q))));
-//ereport(ERROR,(errmsg("test")));
 
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
    * to be deeper in the provenance tree. */
-  if(q->jointree) {
+  if(provsql_where_provenance && q->jointree) {
     ListCell *lc;
     foreach(lc, q->jointree->fromlist) {
       if(IsA(lfirst(lc), JoinExpr)) {
@@ -393,7 +399,7 @@ static Expr *make_provenance_expression(
     result = add_eq_from_Quals_to_Expr(q->jointree->quals, result, columns, constants);
   }
 
-  if(projection) {
+  if(provsql_where_provenance && projection) {
     ArrayExpr *array=makeNode(ArrayExpr);
     FuncExpr *fe=makeNode(FuncExpr);
 
@@ -514,7 +520,7 @@ static void transform_distinct_into_group_by(Query *q, const constants_t *consta
   q->distinctClause = NULL;
 }
 
-static void remove_provenance_attribute_groupref(Query *q, const constants_t *constants, const Bitmapset *removed_sortgrouprefs)
+static void remove_provenance_attribute_groupref(Query *q, const Bitmapset *removed_sortgrouprefs)
 {
   List **lists[3]={&q->groupClause,&q->distinctClause,&q->sortClause};
   int i=0;
@@ -528,6 +534,36 @@ static void remove_provenance_attribute_groupref(Query *q, const constants_t *co
       SortGroupClause *sgc = (SortGroupClause *) lfirst(cell);
       if(bms_is_member(sgc->tleSortGroupRef,removed_sortgrouprefs)) {
         *lists[i] = list_delete_cell(*lists[i], cell, prev);
+
+        if(prev) {
+          cell=lnext(prev);
+        }
+        else {
+          cell=list_head(*lists[i]);
+        }
+      } else {
+        prev=cell;
+        cell=lnext(cell);
+      }
+    }
+  }
+}
+
+static void remove_provenance_attribute_setoperations(Query *q, bool *removed)
+{
+  SetOperationStmt *so=(SetOperationStmt*) q->setOperations;
+  List **lists[3]={&so->colTypes,&so->colTypmods,&so->colCollations};
+  int i=0;
+
+  for(i=0;i<3;++i) {
+    ListCell *cell, *prev;
+    int j;
+
+    for(cell=list_head(*lists[i]), prev=NULL, j=0;
+        cell!=NULL;
+        ++j) {
+      if(removed[j]) {
+        *lists[i]=list_delete_cell(*lists[i], cell, prev);
 
         if(prev) {
           cell=lnext(prev);
@@ -795,9 +831,13 @@ static Query *process_query(
 
   if(!subquery) {
     Bitmapset *removed_sortgrouprefs = NULL;
-    removed_sortgrouprefs=remove_provenance_attributes_select(q, constants);
+    bool *removed;
+
+    removed_sortgrouprefs=remove_provenance_attributes_select(q, constants, &removed);
     if(removed_sortgrouprefs != NULL)
-      remove_provenance_attribute_groupref(q, constants, removed_sortgrouprefs);
+      remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
+    if(q->setOperations)
+      remove_provenance_attribute_setoperations(q, removed);
   }
 
   if(q->hasAggs) {
@@ -933,7 +973,7 @@ static PlannedStmt *provsql_planner(
     int cursorOptions,
     ParamListInfo boundParams)
 {
-  if(q->commandType==CMD_SELECT) {
+  if(q->commandType==CMD_SELECT && q->rtable) {
     constants_t constants;
     if(initialize_constants(&constants)) {
       if(has_provenance(q,&constants)) {
@@ -952,6 +992,17 @@ static PlannedStmt *provsql_planner(
 
 void _PG_init(void)
 {
+  DefineCustomBoolVariable("provsql.where_provenance",
+                          "Should ProvSQL track where-provenance?",
+                          "1 turns where-provenance on, 0 off.",
+                          &provsql_where_provenance,
+                          true,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL); 
+
   prev_planner = planner_hook;
 
   if(process_shared_preload_libraries_in_progress) {

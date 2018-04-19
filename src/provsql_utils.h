@@ -24,5 +24,6 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId);
 
 extern bool provsql_shared_library_loaded;
 extern bool provsql_interrupted;
+extern bool provsql_where_provenance;
 
 #endif /* PROVSQL_UTILS_H */

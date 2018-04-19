@@ -1,4 +1,5 @@
 \set ECHO none
+ERROR:  provenance() called on a table without provenance
 ERROR:  FROM clause unsupported by provsql
 ERROR:  FROM clause unsupported by provsql
 ERROR:  Aggregation not supported by provsql

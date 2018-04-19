@@ -18,3 +18,26 @@
  top_secret     | Magdalen
 (10 rows)
 
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+ id |   name   |   position   |   city   | classification 
+----+----------+--------------+----------+----------------
+  1 | John     | Director     | New York | unclassified
+  1 | John     | Director     | New York | unclassified
+  2 | Paul     | Janitor      | New York | restricted
+  2 | Paul     | Janitor      | New York | restricted
+  3 | Dave     | Analyst      | Paris    | confidential
+  3 | Dave     | Analyst      | Paris    | confidential
+  4 | Ellen    | Field agent  | Berlin   | secret
+  4 | Ellen    | Field agent  | Berlin   | secret
+  5 | Magdalen | Double agent | Paris    | top_secret
+  5 | Magdalen | Double agent | Paris    | top_secret
+  6 | Nancy    | HR           | Paris    | restricted
+  6 | Nancy    | HR           | Paris    | restricted
+  7 | Susan    | Analyst      | Berlin   | secret
+  7 | Susan    | Analyst      | Berlin   | secret
+(14 rows)
+
