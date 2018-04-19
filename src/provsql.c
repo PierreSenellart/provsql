@@ -87,7 +87,7 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
       Query *new_subquery = process_query(r->subquery, constants, true);
       if(new_subquery != NULL) {
         r->subquery = new_subquery;
-        r->eref->colnames = lappend(r->eref->colnames, makeString("provsql"));
+        r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
         prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,r->eref->colnames->length,constants));
       }
     } else if(r->rtekind == RTE_JOIN) {
