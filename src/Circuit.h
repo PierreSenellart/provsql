@@ -33,7 +33,7 @@ class Circuit {
   
  protected:
   std::vector<gateType> gates;
-  std::vector<std::unordered_multiset<unsigned>> wires;
+  std::vector<std::vector<unsigned>> wires;
     
  public:
   virtual unsigned addGate();

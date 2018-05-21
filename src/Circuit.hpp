@@ -38,5 +38,5 @@ unsigned Circuit<gateType>::setGate(const uuid &u, gateType type)
 template<class gateType>
 void Circuit<gateType>::addWire(unsigned f, unsigned t)
 {
-  wires[f].insert(t);
+  wires[f].push_back(t);
 }

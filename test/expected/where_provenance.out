@@ -11,3 +11,15 @@
  Paris    | Paris    | {[personnel::4;personnel::4;personnel::4],[personnel::4;personnel::4;personnel::4],[]}
 (3 rows)
 
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   city   |               regexp_replace               
+----------+--------------------------------------------
+ Berlin   | {[personnel::4;personnel::4]}
+ New York | {[personnel::4;personnel::4]}
+ Paris    | {[personnel::4;personnel::4;personnel::4]}
+(3 rows)
+
