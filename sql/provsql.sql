@@ -14,7 +14,8 @@ CREATE TABLE provenance_circuit_gate(
 
 CREATE TABLE provenance_circuit_wire(
   f provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE,
-  t provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE);
+  t provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE,
+  idx INT);
 
 CREATE TABLE provenance_circuit_extra(
   gate provenance_token,
@@ -131,7 +132,8 @@ BEGIN
       LOCK TABLE provenance_circuit_gate;
       BEGIN
         INSERT INTO provenance_circuit_gate VALUES(times_token,'times');
-        INSERT INTO provenance_circuit_wire SELECT times_token, t FROM unnest(tokens) t;
+        INSERT INTO provenance_circuit_wire SELECT times_token, t, row_number() OVER ()
+          FROM unnest(tokens) t;
       EXCEPTION WHEN unique_violation THEN
       END;
   END CASE;
@@ -389,7 +391,7 @@ BEGIN
       'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
         SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
           UNION ALL
-        SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
+        SELECT p2.f,p2.t,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
       ) SELECT f::uuid, t::uuid, gate_type, NULL FROM transitive_closure
         UNION
         SELECT p2.provenance, NULL, ''input'', p2.value AS prob FROM transitive_closure p1 JOIN ' || token2prob ||' AS p2 ON provenance=t
@@ -408,7 +410,7 @@ BEGIN
     'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
       SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
       UNION ALL
-      SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f
+      SELECT p2.f,p2.t,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f
       JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f )
     SELECT t1.*, infos FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
@@ -460,19 +462,19 @@ $$ LANGUAGE plpgsql STRICT;
 CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
   RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
 $$
-    WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
-      SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
+    WITH RECURSIVE transitive_closure(f,t,idx,gate_type) AS (
+      SELECT f,t,idx,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
         UNION ALL
       SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
-    ) SELECT t1.*, infos, row_number() over() FROM (
-      SELECT f, t::uuid, gate_type, NULL, NULL FROM transitive_closure
+    ) SELECT t1.f, t1.t, t1.gate_type, table_name, nb_columns, infos, row_number() over() FROM (
+      SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
       UNION ALL
-        SELECT DISTINCT t, NULL::uuid, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
+        SELECT DISTINCT t, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
       UNION ALL
-        SELECT DISTINCT $1, NULL::uuid, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
+        SELECT DISTINCT $1, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
       ) t1 LEFT OUTER JOIN (
       SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provenance_circuit_extra GROUP BY gate
-    ) t2 on t1.f=t2.gate;
+    ) t2 ON t1.f=t2.gate ORDER BY f,idx
 $$
 LANGUAGE sql;
 
@@ -482,7 +484,7 @@ $$
     WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
       SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
         UNION ALL
-      SELECT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
+      SELECT p2.f, p2.t, p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
     ) 
       SELECT f, t::uuid, gate_type FROM transitive_closure
       UNION ALL

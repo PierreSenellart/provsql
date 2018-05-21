@@ -1,0 +1,13 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+    c1    |    c2    |                                     regexp_replace                                     
+----------+----------+----------------------------------------------------------------------------------------
+ Berlin   | Berlin   | {[personnel::4;personnel::4],[personnel::4;personnel::4],[]}
+ New York | New York | {[personnel::4;personnel::4],[personnel::4;personnel::4],[]}
+ Paris    | Paris    | {[personnel::4;personnel::4;personnel::4],[personnel::4;personnel::4;personnel::4],[]}
+(3 rows)
+
