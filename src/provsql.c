@@ -314,14 +314,11 @@ static Expr *make_provenance_expression(
     const constants_t *constants, 
     bool aggregation_needed,
     semiring_operation op,
-    bool *exported,
     int **columns,
     int nbcols)
 {
   Expr *result;
   FuncExpr *expr;
-  int i;
-  bool projection=false;
   ListCell *lc_v;
 
   if(op==SR_PLUS) {
@@ -376,11 +373,6 @@ static Expr *make_provenance_expression(
     }
   }
 
-  for(i=0;i<nbcols;++i) {
-    if(!exported[i])
-      projection=true;
-  }
-
 //ereport(WARNING,(errmsg("Before: %s",nodeToString(q))));
 
   /* Part to handle eq gates used for where-provenance. 
@@ -399,9 +391,11 @@ static Expr *make_provenance_expression(
     result = add_eq_from_Quals_to_Expr(q->jointree->quals, result, columns, constants);
   }
 
-  if(provsql_where_provenance && projection) {
+  if(provsql_where_provenance) {
     ArrayExpr *array=makeNode(ArrayExpr);
     FuncExpr *fe=makeNode(FuncExpr);
+    bool projection=false;
+    int nb_column=0;
 
     fe->funcid=constants->OID_FUNCTION_PROVENANCE_PROJECT;
     fe->funcvariadic=true;
@@ -437,7 +431,11 @@ static Expr *make_provenance_expression(
                true);
 
           array->elements=lappend(array->elements, ce);
-        }
+
+          if(value_v!=++nb_column)
+            projection=true;
+        } else
+          projection=true;
       } else { // we have a function in target
         Const *ce=makeConst(constants->OID_TYPE_INT,
                -1,
@@ -448,12 +446,17 @@ static Expr *make_provenance_expression(
                true);
 
         array->elements=lappend(array->elements, ce);
+        projection=true;
       }
     }    
 
-    fe->args=list_make2(result, array);
-
-    result=(Expr *)fe;
+    if(projection) {
+      fe->args=list_make2(result, array);
+      result=(Expr *)fe;
+    } else {
+      pfree(array);
+      pfree(fe);
+    }
   }
 
   return result;
@@ -804,7 +807,6 @@ static Query *process_query(
   bool has_union = false;
   bool has_difference = false;
   bool supported=true;
-  bool *exported=0;
   int nbcols=0;
   int *columns[q->rtable->length];
   unsigned i=0;
@@ -926,20 +928,6 @@ static Query *process_query(
          
       ++i;
     }
-
-    exported = (bool*) palloc(nbcols*sizeof(bool));
-    for(i=0;i<nbcols;++i)
-      exported[i]=false;
-
-    foreach(l,q->targetList) {
-      TargetEntry *rt = (TargetEntry *) lfirst(l);
-      if(rt->expr->type==T_Var) {
-        Var *v =(Var *) rt->expr;
-
-        if(columns[v->varno-1] && columns[v->varno-1][v->varattno-1])
-          exported[columns[v->varno-1][v->varattno-1]-1] = true;
-      }
-    }
   }
 
   if(supported) {
@@ -949,10 +937,8 @@ static Query *process_query(
         constants,
         q->hasAggs,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
-        exported,
         columns,
         nbcols);
-    pfree(exported);
 
     add_to_select(q,provenance);
     replace_provenance_function_by_expression(q, provenance, constants);

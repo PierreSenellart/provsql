@@ -27,3 +27,17 @@ CREATE TABLE result_where AS
 SELECT remove_provenance('result_where');
 SELECT * FROM result_where;
 DROP TABLE result_where;
+
+CREATE TABLE result_where AS
+  SELECT 1,
+  city,
+  regexp_replace(where_provenance(provenance()),':[0-9a-f-]*:','::','g')
+  FROM (
+    SELECT city
+    FROM personnel
+  ) t
+  ORDER BY city;
+
+SELECT remove_provenance('result_where');
+SELECT * FROM result_where;
+DROP TABLE result_where;
