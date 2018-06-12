@@ -4,9 +4,6 @@ test: setup
 # Adding a provenance table
 test: add_provenance
 
-# Test for where provenance 
-#test: where
-
 # Introducing a few semirings
 test: security formula counting
 
