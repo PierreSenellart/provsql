@@ -421,7 +421,7 @@ static Expr *make_provenance_expression(
           value_v = columns[jav_v->varno-1][jav_v->varattno-1];
         }
         /* If this is a valid column */
-        if(value_v != 0) {
+        if(value_v > 0) {
           Const *ce=makeConst(constants->OID_TYPE_INT,
                -1,
                InvalidOid,
@@ -434,8 +434,10 @@ static Expr *make_provenance_expression(
 
           if(value_v!=++nb_column)
             projection=true;
-        } else
-          projection=true;
+        } else {
+          if(value_v!=-1)
+            projection=true;
+        }
       } else { // we have a function in target
         Const *ce=makeConst(constants->OID_TYPE_INT,
                -1,
@@ -448,7 +450,10 @@ static Expr *make_provenance_expression(
         array->elements=lappend(array->elements, ce);
         projection=true;
       }
-    }    
+    }
+
+    if(nb_column!=nbcols)
+      projection=true;
 
     if(projection) {
       fe->args=list_make2(result, array);
@@ -916,9 +921,13 @@ static Query *process_query(
 
         foreach(lc, r->eref->colnames) {
           Value *v = (Value *) lfirst(lc);
-          if(strcmp(strVal(v),"") && strcmp(strVal(v),PROVSQL_COLUMN_NAME) && r->rtekind != RTE_JOIN) { // TODO: More robust test
+
+          if(strcmp(strVal(v),"") && r->rtekind != RTE_JOIN) { // TODO: More robust test
                                                                               // join RTE columns ignored
-            columns[i][j]=++nbcols;
+            if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME))
+              columns[i][j]=-1;              
+            else
+              columns[i][j]=++nbcols;
           } else {
             columns[i][j]=0;
           }
