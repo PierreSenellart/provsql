@@ -599,7 +599,11 @@ static Query *rewrite_non_all_into_external_group_by(Query *q)
   ListCell *lc;
   int sortgroupref = 0;
 
-  stmt->all=true;
+  stmt->all = true ;
+  // we might leave sub nodes of the SetOperationsStmt tree with all = false
+  // but only for recursive trees of operators and only union can be recursive
+  // https://doxygen.postgresql.org/prepunion_8c_source.html#l00479
+  // we will set therefore set them later in process_set_operation_union
 
   rte->rtekind = RTE_SUBQUERY;
   rte->subquery=q;
@@ -803,6 +807,33 @@ static bool transform_except_into_join(
   return true;
 }
 
+
+// This function explores the tree of SetOperationStmt of an union to
+// add the provenance information and to set the union mode to "all"
+// on all nodes (terms have been previously treated by
+// rewrite_non_all_into_external_group_by)
+static void process_set_operation_union(
+    SetOperationStmt * stmt,
+    const constants_t *constants,
+    bool * supported)
+{
+  if(stmt->op != SETOP_UNION) {
+    supported = false ;
+    ereport(ERROR, (errmsg("Unsupported mixed set operations")));
+  }
+  if(IsA(stmt->larg,SetOperationStmt)) {
+    process_set_operation_union((SetOperationStmt*)(stmt->larg), constants, supported);
+  }
+  if(IsA(stmt->rarg,SetOperationStmt)) {
+    process_set_operation_union((SetOperationStmt*)(stmt->rarg), constants, supported);
+  }
+  stmt->colTypes=lappend_oid(stmt->colTypes,
+                             constants->OID_TYPE_PROVENANCE_TOKEN);
+  stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
+  stmt->colCollations=lappend_int(stmt->colCollations, 0);
+  stmt->all = true ;
+}
+
 static Query *process_query(
     Query *q,
     const constants_t *constants,
@@ -869,11 +900,7 @@ static Query *process_query(
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
 
     if(stmt->op == SETOP_UNION) {
-      stmt->colTypes=lappend_oid(stmt->colTypes,
-          constants->OID_TYPE_PROVENANCE_TOKEN);
-      stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
-      stmt->colCollations=lappend_int(stmt->colCollations, 0);
-
+      process_set_operation_union(stmt, constants,&supported);
       has_union = true;
     } else if(stmt->op == SETOP_EXCEPT) {
       if(!transform_except_into_join(q, constants))
