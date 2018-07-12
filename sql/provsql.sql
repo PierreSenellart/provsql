@@ -356,7 +356,7 @@ BEGIN
     IF monus_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
     ELSE
-      EXECUTE format('SELECT %I(a[1],a[2]) FROM (SELECT array_agg(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L)) AS a FROM (SELECT w2.t FROM provsql.provenance_circuit_wire w1, provsql.provenance_circuit_wire w2, provenance_circuit_gate g WHERE w1.f=%L AND w1.t=w2.f AND w1.t=g.gate and g.gate_type=''monusl'' UNION ALL SELECT w2.t FROM provsql.provenance_circuit_wire w1, provsql.provenance_circuit_wire w2, provenance_circuit_gate g WHERE w1.f=%L AND w1.t=w2.f AND w1.t=g.gate and g.gate_type=''monusr'') t1) t2',
+      EXECUTE format('SELECT %I(a[1],a[2]) FROM (SELECT array_agg(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L)) AS a FROM (SELECT w2.t FROM provsql.provenance_circuit_wire w1, provsql.provenance_circuit_wire w2, provsql.provenance_circuit_gate g WHERE w1.f=%L AND w1.t=w2.f AND w1.t=g.gate and g.gate_type=''monusl'' UNION ALL SELECT w2.t FROM provsql.provenance_circuit_wire w1, provsql.provenance_circuit_wire w2, provsql.provenance_circuit_gate g WHERE w1.f=%L AND w1.t=w2.f AND w1.t=g.gate and g.gate_type=''monusr'') t1) t2',
         monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,token,token)
       INTO result;
     END IF;
