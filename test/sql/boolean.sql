@@ -26,14 +26,14 @@ BEGIN
 END
 $$ LANGUAGE plpgsql IMMUTABLE;
 
-CREATE AGGREGATE boolean_plus(text)
+CREATE AGGREGATE boolean_plus(BOOLEAN)
 (
   sfunc = boolean_plus_state,
   stype = BOOLEAN,
   initcond = FALSE
 );
 
-CREATE AGGREGATE boolean_times(text)
+CREATE AGGREGATE boolean_times(BOOLEAN)
 (
   sfunc = boolean_times_state,
   stype = BOOLEAN,
