@@ -1,7 +1,14 @@
 #!/bin/bash
 
 rm -rf /var/www/html/*
-cp /opt/provsql/where_panel/* /var/www/html/
+cp -r /opt/provsql/where_panel/* /var/www/html/
+cp /opt/provsql/docker/view /usr/local/bin/evince
+chmod a+rx /usr/local/bin/evince
+touch /messages
+mkdir -p /var/www/html/pdf
+chmod a+rwX /var/www/html/pdf
+chmod a+rw /messages
+
 sed -i 's/demo/test/g' /var/www/html/config
 sed -i 's/localhost/127.0.0.1/g' /var/www/html/config
 
@@ -25,6 +32,7 @@ do
     echo -n ".";
     sleep 1 ;
 done ;
+
 echo ""
 echo ""
 echo ""
@@ -39,6 +47,8 @@ echo "The psql shell should now be available with the command "
 echo "                         psql -h ${IP} -p 5432 test test"
 echo ""
 
+echo "Docker fully started" >> /messages
+sleep 3 ;
 #su - postgres psql -c "ALTER USER \"test\" WITH PASSWORD 'test';"
 while true ; do
     tail -f /messages | sed -u "s_ /_ http://${IP}/_";
