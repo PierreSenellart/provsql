@@ -43,21 +43,21 @@ and to use a Web interface for simple visualization of where-provenance.
 ## Prerequisites for installation
 
 1. An install of PostgreSQL >= 9.5. The extension has currently been
-   tested with versions from 9.5 to 10 (inclusive) of PostgreSQL, under
-   Linux and Mac OS X (if the extension does not work on a specific
-   version or operating system, a bug report is appreciated).
+   tested with versions from 9.5 to 11.1 (inclusive) of PostgreSQL, under
+   Linux and Mac OS X (if the extension does not work on a specific version
+   or operating system, a bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
    C compiler (both can be obtained on Debian-based Linux distributions
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
-   `postgresql-server-dev-9.x` package on Debian-based systems, or from
+   `postgresql-server-dev-xx` package on Debian-based systems, or from
    the `postgresql` package on the Homebrew package manager for Mac OS X).
 
 3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
-   systems, it is found in the `postgresql-contrib-9.x` package for PostgreSQL
-   version 9.x, and is installed automatically for PostgreSQL version 10; on
-   Homebrew, in the `ossp-uuid` package).
+   systems, it is found in the `postgresql-contrib-9.x` package for
+   PostgreSQL version 9.x, and is installed automatically for PostgreSQL
+   version >= 10; on Homebrew, in the `ossp-uuid` package).
 
 4. Optionally, for probability computation, any or all of the following
    software:
