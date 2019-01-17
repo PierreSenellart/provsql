@@ -24,20 +24,21 @@ $(OBJS): $(wildcard src/*.h)
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
-CXXFLAGS = -Wall -Wpointer-arith -Wendif-labels -Wmissing-format-attribute -Wformat-security -fno-strict-aliasing -fwrapv -fstack-protector-strong -Wformat -Werror=format-security -I/usr/include/mit-krb5 -fPIC -pie -fno-omit-frame-pointer -std=c++14
+LDFLAGS_SL = -lstdc++
 
 ifdef DEBUG
-PG_CPPFLAGS = -O0 -g
-CXXFLAGS += -O0
-else
-CXXFLAGS += -O2  
+PG_CPPFLAGS += -O0 -g
 endif
-
-LDFLAGS_SL = -lstdc++
 
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
+
+%.o : %.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+%.o : %.cpp
+	$(CXX) -std=c++14 -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
 PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
@@ -45,6 +46,13 @@ PGVER_MINOR = $(shell echo $(VERSION) | awk -F. '{ print ($$2 + 0) }')
 
 test/schedule: test/schedule.common test/schedule.9.5
 	cat test/schedule.common > test/schedule
-	if [ $(PGVER_MAJOR) -eq 9 -a $(PGVER_MINOR) -ge 5 -o $(PGVER_MAJOR) -eq 10 ] ; then \
+	if [ $(PGVER_MAJOR) -eq 9 -a $(PGVER_MINOR) -ge 5 -o $(PGVER_MAJOR) -ge 10 ] ; then \
 	  cat test/schedule.9.5 >> test/schedule; \
 	fi
+
+# Temporary fix for PostgreSQL compilation chain / llvm bug, see 
+# https://github.com/rdkit/rdkit/issues/2192
+COMPILE.cxx.bc = $(CLANG) -xc++ -Wno-ignored-attributes $(BITCODE_CPPFLAGS) $(CPPFLAGS) -emit-llvm -c
+%.bc : %.cpp
+	$(COMPILE.cxx.bc) -o $@ $<
+	$(LLVM_BINPATH)/opt -module-summary -f $@ -o $@
