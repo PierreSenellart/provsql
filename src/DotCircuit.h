@@ -23,7 +23,7 @@ class DotCircuit : public Circuit<DotGate> {
 
   void render() const;
   
-  virtual std::string toString(unsigned g) const;
+  virtual std::string toString(unsigned g) const override;
 };
 
 #endif /* DOT_CIRCUIT_H */

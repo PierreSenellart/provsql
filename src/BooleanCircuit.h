@@ -27,7 +27,7 @@ class BooleanCircuit : public Circuit<BooleanGate> {
 
   double dDNNFEvaluation(unsigned g) const;
   
-  virtual std::string toString(unsigned g) const;
+  virtual std::string toString(unsigned g) const override;
 };
 
 #endif /* BOOLEAN_CIRCUIT_H */
