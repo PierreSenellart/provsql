@@ -1,6 +1,6 @@
 language: cpp
 os: linux
-dist: trusty
+dist: xenial
 sudo: enabled
 
 addons:
@@ -17,6 +17,7 @@ env:
   - POSTGRESQL_VERSION=9.5
   - POSTGRESQL_VERSION=9.6  
   - POSTGRESQL_VERSION=10
+  - POSTGRESQL_VERSION=11
 
 before_install:
   - export CC=gcc-4.9
