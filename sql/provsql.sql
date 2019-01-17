@@ -71,7 +71,7 @@ DECLARE
 BEGIN
   EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %I', oldtbl);
   ALTER TABLE tmp_provsql RENAME provsql TO provenance;
-  EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
+  EXECUTE format('CREATE TABLE %I AS SELECT (CAST %s AS varchar) AS value, provenance FROM tmp_provsql', newtbl, att);
   EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
 END
 $$ LANGUAGE plpgsql;
