@@ -139,7 +139,8 @@ See the other examples in [test/sql](test/sql) for other use cases.
 A demonstration of the ProvSQL system is available as a video, on
 https://youtu.be/iqzSNfGHbEE?vq=hd1080
 
-An unpublished article describing this demonstration is available at
+An article describing this demonstration, presented at the VLDB 2018
+conference, is available at
 http://pierre.senellart.com/publications/senellart2018provsql.pdf
 
 ## Uninstalling
