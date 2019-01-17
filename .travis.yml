@@ -25,7 +25,7 @@ before_install:
   - sudo apt-get purge postgresql-common postgresql-client-common
   - sudo rm -rf /etc/postgresql /var/lib/postgresql
   - sudo apt-get install -y postgresql-$POSTGRESQL_VERSION postgresql-server-dev-$POSTGRESQL_VERSION
-  - if [ $POSTGRESQL_VERSION == "9.5" || $POSTGRESQL_VERSION == "9.6" ]; then
+  - if [[ $POSTGRESQL_VERSION == "9.5" || $POSTGRESQL_VERSION == "9.6" ]]; then
       sudo apt-get install -y postgresql-contrib-$POSTGRESQL_VERSION;
     fi
   - "curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' -H 'Content-Type: application/x-www-form-urlencoded' --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart&e=pierre%40senellart.com&o=ENS' -o c2d && unzip c2d && sudo mv c2d_linux /usr/local/bin/c2d"
