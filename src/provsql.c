@@ -53,7 +53,7 @@ static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, Att
   re->resulttype=constants->OID_TYPE_UUID;
   re->resulttypmod=-1;
   re->resultcollid=InvalidOid;
-  re->relabelformat=COERCION_EXPLICIT;
+  re->relabelformat=COERCE_IMPLICIT_CAST;
   re->location=-1;
 
   r->selectedCols=bms_add_member(r->selectedCols,attid-FirstLowInvalidHeapAttributeNumber);
@@ -789,7 +789,7 @@ static bool transform_except_into_join(
 
   q->rtable = lappend(q->rtable, rte);
 
-  je->jointype = RTE_JOIN;
+  je->jointype = JOIN_FULL;
 
   je->larg = setOps->larg;
   je->rarg = setOps->rarg;
