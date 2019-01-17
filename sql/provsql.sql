@@ -71,7 +71,7 @@ DECLARE
 BEGIN
   EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %I', oldtbl);
   ALTER TABLE tmp_provsql RENAME provsql TO provenance;
-  EXECUTE format('CREATE TABLE %I AS SELECT (CAST %s AS varchar) AS value, provenance FROM tmp_provsql', newtbl, att);
+  EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
   EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
 END
 $$ LANGUAGE plpgsql;
@@ -415,10 +415,10 @@ BEGIN
     SELECT t1.*, infos FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
       UNION ALL
-      SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', p2.value FROM transitive_closure p1 JOIN ' || token2desc || ' AS p2 
+      SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', CAST (p2.value AS varchar) FROM transitive_closure p1 JOIN ' || token2desc || ' AS p2 
         ON p2.provenance=t
       UNION ALL
-      SELECT provenance::uuid as f, NULL::uuid, ''input'', value FROM ' || token2desc || ' WHERE provenance=$1 
+      SELECT provenance::uuid as f, NULL::uuid, ''input'', CAST (value AS varchar) FROM ' || token2desc || ' WHERE provenance=$1 
     ) t1
     LEFT OUTER JOIN (
       SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provsql.provenance_circuit_extra GROUP BY gate
