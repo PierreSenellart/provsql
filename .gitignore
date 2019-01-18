@@ -1,5 +1,6 @@
 !*.out
 *.so
 src/*.o
+src/*.bc
 sql/provsql--*.sql
 test/schedule
