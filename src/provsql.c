@@ -889,11 +889,15 @@ static Query *process_query(
   }
 
   if(supported && q->distinctClause) {
-    if(q->hasDistinctOn || list_length(q->distinctClause) < list_length(q->targetList)) {
+    if(q->hasDistinctOn) {
       ereport(ERROR, (errmsg("DISTINCT ON not supported by provsql")));
       supported=false;
-    } else 
+    } else if(list_length(q->distinctClause) < list_length(q->targetList)) {
+      ereport(ERROR, (errmsg("Inconsistent DISTINCT and GROUP BY clauses not supported by provsql")));
+      supported=false;
+    } else {
       transform_distinct_into_group_by(q, constants);
+    }
   }
 
   if(supported && q->setOperations) {

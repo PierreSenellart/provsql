@@ -13,4 +13,6 @@ SELECT * FROM personnel WHERE city IN (SELECT city FROM personnel);
 
 SELECT DISTINCT ON (city) * FROM personnel;
 
+SELECT DISTINCT 1 FROM personnel GROUP BY city;
+
 SELECT * FROM personnel INTERSECT SELECT * FROM personnel;
