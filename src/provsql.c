@@ -285,11 +285,15 @@ static Expr *add_eq_from_Quals_to_Expr(
     const constants_t *constants)
 {
   OpExpr *oe;
-  if(quals && IsA(quals, OpExpr)) {
+
+  if(!quals)
+    return result;
+
+  if(IsA(quals, OpExpr)) {
     oe = (OpExpr *) quals;
     result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
   } /* Sometimes OpExpr is nested within a BoolExpr */
-  else if (quals) {
+  else if (IsA(quals,BoolExpr)) {
     BoolExpr *be = (BoolExpr *) quals;
     /* In some cases, there can be an OR or a NOT specified with ON clause */
     if(be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
@@ -303,8 +307,9 @@ static Expr *add_eq_from_Quals_to_Expr(
         }
       }
     }
-  } /* Handle case of CROSS JOIN with no eqop */
-  else { }
+  } else { /* Handle other cases */
+
+  } 
   return result;
 }
 
