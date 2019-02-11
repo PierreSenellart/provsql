@@ -8,7 +8,15 @@ test: add_provenance
 test: security formula counting
 
 # Test of various ProvSQL features and SQL language capabilities
-test: deterministic union_all union union_nary distinct group_by_provenance except unsupported_features null
+test: deterministic 
+test: union_all 
+test: union 
+test: union_nary 
+test: distinct 
+test: group_by_provenance 
+test: except 
+test: null
+test: unsupported_features 
 
 # Adding probabilities
 test: probability_setup
