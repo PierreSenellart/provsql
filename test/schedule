@@ -28,3 +28,6 @@ test: view_circuit_multiple
 
 # Where-provenance
 test: where_provenance
+
+# PostgreSQL 9.5 features
+test: group_by_empty grouping_sets
