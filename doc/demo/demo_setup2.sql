@@ -153,7 +153,7 @@ CREATE TABLE stops (
 CREATE TABLE trips (
     route_id character varying(20),
     service_id character(5),
-    trip_id character(17) NOT NULL,
+    trip_id character(18) NOT NULL,
     trip_headsign text,
     trip_shortname text,
     direction_id integer,
@@ -164,7 +164,7 @@ CREATE TABLE trips (
     shape_id integer
 );
 CREATE TABLE stop_times (
-    trip_id character(17) NOT NULL,
+    trip_id character(18) NOT NULL,
     arrival_time character(8),
     departure_time character(8),
     stop_id character varying(30),
