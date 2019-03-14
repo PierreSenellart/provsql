@@ -36,8 +36,7 @@ static planner_hook_type prev_planner = NULL;
 
 static Query *process_query(
     Query *q,
-    const constants_t *constants,
-    bool subquery);
+    const constants_t *constants);
 
 static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, AttrNumber attid, const constants_t *constants) {
   RelabelType *re=makeNode(RelabelType);
@@ -84,7 +83,7 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
         ++attid;
       }
     } else if(r->rtekind == RTE_SUBQUERY) {
-      Query *new_subquery = process_query(r->subquery, constants, true);
+      Query *new_subquery = process_query(r->subquery, constants);
       if(new_subquery != NULL) {
         r->subquery = new_subquery;
         r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
@@ -841,8 +840,7 @@ static void process_set_operation_union(
 
 static Query *process_query(
     Query *q,
-    const constants_t *constants,
-    bool subquery)
+    const constants_t *constants)
 {
   List *prov_atts;
   bool has_union = false;
@@ -861,7 +859,7 @@ static Query *process_query(
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
     if(!stmt->all) {
       q = rewrite_non_all_into_external_group_by(q);
-      return process_query(q, constants, subquery);
+      return process_query(q, constants);
     }
   }
 
@@ -872,7 +870,7 @@ static Query *process_query(
   if(prov_atts==NIL)
     return q;
 
-  if(!subquery) {
+  {
     Bitmapset *removed_sortgrouprefs = NULL;
     bool *removed;
 
@@ -1008,7 +1006,7 @@ static PlannedStmt *provsql_planner(
     constants_t constants;
     if(initialize_constants(&constants)) {
       if(has_provenance(q,&constants)) {
-        Query *new_query = process_query(q, &constants, false);
+        Query *new_query = process_query(q, &constants);
         if(new_query != NULL)
           q = new_query;
       }
