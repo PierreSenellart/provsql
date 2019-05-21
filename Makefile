@@ -7,7 +7,7 @@ OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard s
 
 DOCS = $(wildcard doc/*.md)
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
-EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql test/schedule
+EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql
 
 # We want REGRESS to be empty, since we are going to provide a schedule
 # of tests. But we want REGRESS to be defined, otherwise installcheck
