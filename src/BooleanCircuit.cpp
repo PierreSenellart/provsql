@@ -198,9 +198,9 @@ double BooleanCircuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-double BooleanCircuit::compilation(unsigned g, string compiler) const {
+const char* BooleanCircuit::Tseytin(unsigned g) const {
   vector<vector<int>> clauses;
-
+  
   // Tseytin transformation
   for(unsigned i=0; i<gates.size(); ++i) {
     switch(gates[i]) {
@@ -248,8 +248,8 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
   char cfilename[] = "/tmp/provsqlXXXXXX";
   fd = mkstemp(cfilename);
   close(fd);
-  string filename=cfilename, outfilename=filename+".nnf";
 
+  string filename=cfilename;
   ofstream ofs(filename.c_str());
 
   ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
@@ -263,7 +263,14 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
 
   ofs.close();
 
-  string cmdline=compiler+" ";
+  return filename.c_str();
+}
+
+double BooleanCircuit::compilation(unsigned g, string compiler) const {
+  string filename=BooleanCircuit::Tseytin(g);
+  string outfilename=filename+"nnf";
+
+    string cmdline=compiler+" ";
   if(compiler=="d4") {
     cmdline+=filename+" -out="+outfilename;
   } else if(compiler=="c2d") {
@@ -353,4 +360,12 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
 //  throw CircuitException(toString(g) + "\n" + dnnf.toString(dnnf.getGate(to_string(i-1))));
 
   return dnnf.dDNNFEvaluation(dnnf.getGate(to_string(i-1)));
+}
+
+double BooleanCircuit::WeightMC(unsigned g, string opt) const {
+  string filename=BooleanCircuit::Tseytin(g);
+
+  string cmdline="";
+
+  return (double)0;
 }

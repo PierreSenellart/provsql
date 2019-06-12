@@ -88,7 +88,7 @@ static Datum probability_evaluate_internal
 
     try {
       samples = stoi(args);
-    } catch(invalid_argument) {
+    } catch(std::invalid_argument &e) {
       invalid=true;
     }
 
@@ -97,7 +97,7 @@ static Datum probability_evaluate_internal
     
     try {
       result = c.monteCarlo(gate, samples);
-    } catch(CircuitException e) {
+    } catch(CircuitException &e) {
       elog(ERROR, "%s", e.what());
     }
   } else if(method=="possible-worlds") {
@@ -106,17 +106,23 @@ static Datum probability_evaluate_internal
 
     try {
       result = c.possibleWorlds(gate);
-    } catch(CircuitException e) {
+    } catch(CircuitException &e) {
       elog(ERROR, "%s", e.what());
     }
   } else if(method=="compilation") {
     try {
       result = c.compilation(gate, args);
-    } catch(CircuitException e) {
+    } catch(CircuitException &e) {
       elog(ERROR, "%s", e.what());
     }
+  } else if(method=="weightmc") {
+    try {
+	    result = c.WeightMC(gate, args);
+    } catch(CircuitException &e) {
+	    elog(ERROR, "%s", e.what());
+    }
   } else {
-    elog(ERROR, "Wrong method '%s' for pobability evaluation", method.c_str());
+    elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());
   }
 
   provsql_interrupted = false;
