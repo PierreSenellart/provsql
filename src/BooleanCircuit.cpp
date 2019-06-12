@@ -198,7 +198,7 @@ double BooleanCircuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-const char* BooleanCircuit::Tseytin(unsigned g) const {
+std::string BooleanCircuit::Tseytin(unsigned g) const {
   vector<vector<int>> clauses;
   
   // Tseytin transformation
@@ -263,12 +263,14 @@ const char* BooleanCircuit::Tseytin(unsigned g) const {
 
   ofs.close();
 
-  return filename.c_str();
+  return filename;
 }
 
 double BooleanCircuit::compilation(unsigned g, string compiler) const {
   string filename=BooleanCircuit::Tseytin(g);
   string outfilename=filename+"nnf";
+
+//elog(WARNING, "%s", filename.c_str());
 
     string cmdline=compiler+" ";
   if(compiler=="d4") {
