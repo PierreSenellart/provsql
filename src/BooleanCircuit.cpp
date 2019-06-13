@@ -270,7 +270,7 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
   string filename=BooleanCircuit::Tseytin(g);
   string outfilename=filename+"nnf";
 
-//elog(WARNING, "%s", filename.c_str());
+//  throw CircuitException("filename: "+filename);
 
     string cmdline=compiler+" ";
   if(compiler=="d4") {
@@ -366,8 +366,33 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
 
 double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   string filename=BooleanCircuit::Tseytin(g);
+  string cmdline="weightmc "+filename+" > "+filename+".out";
 
-  string cmdline="";
+  int retvalue=system(cmdline.c_str());
+  if(retvalue) {
+    throw CircuitException("Error executing weightmc");
+  }
+
+  ifstream ifs((filename+".out").c_str());
+  string line, prev_line;
+  while(getline(ifs,line))
+    prev_line=line;
+
+  stringstream ss(prev_line);
+  string result;
+  ss >> result >> result >> result >> result >> result;
+  
+  //TODO cast result into double
+  //throw CircuitException(result);
+  //
+
+  if(unlink(filename.c_str())) {
+    throw CircuitException("Error removing "+filename);
+  }
+
+  if(unlink((filename+".out").c_str())) {
+    throw CircuitException("Error removing "+filename+".out");
+  }
 
   return (double)0;
 }
