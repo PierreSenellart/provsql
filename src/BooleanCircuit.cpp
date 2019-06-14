@@ -374,6 +374,7 @@ double BooleanCircuit::WeightMC(unsigned g, string opt) const {
     throw CircuitException("Error executing weightmc");
   }
 
+  //parsing
   ifstream ifs((filename+".out").c_str());
   string line, prev_line;
   while(getline(ifs,line))
@@ -383,7 +384,6 @@ double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   string result;
   ss >> result >> result >> result >> result >> result;
   
-  //TODO cast result into double
   istringstream iss(result);
   string val, exp;
   getline(iss, val, 'x');
