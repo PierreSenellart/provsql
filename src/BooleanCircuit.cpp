@@ -3,6 +3,7 @@
 extern "C" {
 #include "provsql_utils.h"
 #include <unistd.h>
+#include <math.h>
 }
 
 #include <cassert>
@@ -383,8 +384,15 @@ double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   ss >> result >> result >> result >> result >> result;
   
   //TODO cast result into double
-  //throw CircuitException(result);
-  //
+  istringstream iss(result);
+  string val, exp;
+  getline(iss, val, 'x');
+  getline(iss, exp);
+  double value=stod(val);
+  exp=exp.substr(2);
+  double exponent=stod(exp);
+  double ret=value*(pow(2.0,exponent));
+//  throw CircuitException(to_string(ret));
 
   if(unlink(filename.c_str())) {
     throw CircuitException("Error removing "+filename);
@@ -394,5 +402,5 @@ double BooleanCircuit::WeightMC(unsigned g, string opt) const {
     throw CircuitException("Error removing "+filename+".out");
   }
 
-  return (double)0;
+  return ret;
 }
