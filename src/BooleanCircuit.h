@@ -15,7 +15,7 @@ class BooleanCircuit : public Circuit<BooleanGate> {
   std::set<unsigned> inputs;
   std::vector<double> prob;
   bool evaluate(unsigned g, const std::unordered_set<unsigned> &sampled) const;
-  std::string Tseytin(unsigned g) const;
+  std::string Tseytin(unsigned g, bool display_prob) const;
 
  public:
   unsigned addGate() override;

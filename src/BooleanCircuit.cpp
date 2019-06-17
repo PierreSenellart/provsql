@@ -11,6 +11,7 @@ extern "C" {
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
+#include <iostream>
 
 using namespace std;
 
@@ -199,7 +200,7 @@ double BooleanCircuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-std::string BooleanCircuit::Tseytin(unsigned g) const {
+std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
   vector<vector<int>> clauses;
   
   // Tseytin transformation
@@ -260,6 +261,12 @@ std::string BooleanCircuit::Tseytin(unsigned g) const {
       ofs << x << " ";
     }
     ofs << "0\n";
+  }
+  if(display_prob) {
+    for(unsigned in : inputs) {
+      ofs << "w " << (in+1) << " " << to_string(prob[in]) << "\n";
+      ofs << "w -" << (in+1) << " " << to_string(1. - prob[in]) << "\n";
+    }
   }
 
   ofs.close();
@@ -366,9 +373,10 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
 }
 
 double BooleanCircuit::WeightMC(unsigned g, string opt) const {
-  string filename=BooleanCircuit::Tseytin(g);
+  string filename=BooleanCircuit::Tseytin(g, true);
   string cmdline="weightmc "+filename+" > "+filename+".out";
 
+  cerr << "WeightMC: " << cmdline << endl;
   int retvalue=system(cmdline.c_str());
   if(retvalue) {
     throw CircuitException("Error executing weightmc");
