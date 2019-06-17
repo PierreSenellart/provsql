@@ -374,7 +374,7 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
 
 double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   string filename=BooleanCircuit::Tseytin(g, true);
-  string cmdline="weightmc "+filename+" > "+filename+".out";
+  string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 "+filename+" > "+filename+".out";
 
   cerr << "WeightMC: " << cmdline << endl;
   int retvalue=system(cmdline.c_str());
