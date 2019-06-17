@@ -374,9 +374,33 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
 
 double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   string filename=BooleanCircuit::Tseytin(g, true);
+
+  //opt of the form 'delta;epsilon'
+  stringstream ssopt(opt); 
+  string delta_s, epsilon_s;
+  getline(ssopt, delta_s, ';');
+  getline(ssopt, epsilon_s, ';');
+
+  double delta = 0;
+  try { 
+    delta=stod(delta_s); 
+  } catch (invalid_argument &e) {
+    delta=0;
+  }
+  double epsilon = 0;
+  try {
+    epsilon=stod(epsilon_s);
+  } catch (invalid_argument &e) {
+    epsilon=0;
+  }
+  if(delta == 0) delta=0.2;
+  if(epsilon == 0) epsilon=0.8;
+
+  //TODO calcul numIteration
+  //TODO calcul pivotAC
+
   string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 "+filename+" > "+filename+".out";
 
-  cerr << "WeightMC: " << cmdline << endl;
   int retvalue=system(cmdline.c_str());
   if(retvalue) {
     throw CircuitException("Error executing weightmc");
