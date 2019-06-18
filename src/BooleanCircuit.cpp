@@ -397,9 +397,9 @@ double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   if(epsilon == 0) epsilon=0.8;
 
   //TODO calcul numIteration
-  //TODO calcul pivotAC
+  double pivotAC=2*ceil(4.4817*(1+1/epsilon)*(1+1/epsilon));
 
-  string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 "+filename+" > "+filename+".out";
+  string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+to_string(pivotAC)+" "+filename+" > "+filename+".out";
 
   int retvalue=system(cmdline.c_str());
   if(retvalue) {
