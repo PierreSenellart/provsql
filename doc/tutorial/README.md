@@ -136,14 +136,14 @@ Solving the murder
      of a query answer, we can use the `probability_evaluate` function, which
      takes the following parameters:
 
-   *   the provenance token, obtained in ProvSQL by `provenance()`
-   *   the name of the provenance mapping to probabilities   
-   *   the probability computation method: it can be set to `'monte-carlo'`
-       (for Monte Carlo approximation), to `'possible-worlds'` (for
-       exhaustive enumeration of possible worlds), or to
-      `'compilation'` (for compilation of the provenance circuit to a
-       d-DNNF)
-   *   an optional fourth argument: for Monte Carlo sampling, it is the
-       number of samples; for enumeration of possible worlds, it does not
-       need to be set; for knowledge compilation, it is the name of the
-       knowledge compilation tool used (one of `'c2d'`, `'d4'`, or `'dsharp'`)
+     *   the provenance token, obtained in ProvSQL by `provenance()`
+     *   the name of the provenance mapping to probabilities   
+     *   the probability computation method: it can be set to `'monte-carlo'`
+         (for Monte Carlo approximation), to `'possible-worlds'` (for
+         exhaustive enumeration of possible worlds), or to
+        `'compilation'` (for compilation of the provenance circuit to a
+         d-DNNF)
+     *   an optional fourth argument: for Monte Carlo sampling, it is the
+         number of samples; for enumeration of possible worlds, it does not
+         need to be set; for knowledge compilation, it is the name of the
+         knowledge compilation tool used (one of `'c2d'`, `'d4'`, or `'dsharp'`)
