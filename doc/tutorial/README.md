@@ -30,7 +30,7 @@ Setup
 -----
 
 This tutorial assumes you have access to a working installation of
-ProvSQL. See [the documentation](../../README.md) for installation
+ProvSQL. See [the documentation](../../) for installation
 instructions.
 
 Load the [setup.sql](setup.sql) SQL script within a fresh PostgreSQL
