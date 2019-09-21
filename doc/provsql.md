@@ -59,8 +59,8 @@ and to use a Web interface for simple visualization of where-provenance.
    PostgreSQL version 9.x, and is installed automatically for PostgreSQL
    version >= 10; on Homebrew, in the `ossp-uuid` package).
 
-4. Optionally, for probability computation, any or all of the following
-   software:
+4. Optionally, for probability computation through knowledge compilation,
+   any or all of the following software:
 
    * `c2d`, from http://reasoning.cs.ucla.edu/c2d/download.php
 
@@ -139,9 +139,7 @@ See the other examples in [test/sql](test/sql) for other use cases.
 A demonstration of the ProvSQL system is available as a video, on
 https://youtu.be/iqzSNfGHbEE?vq=hd1080
 The SQL commands used in this demonstration can be found in the [doc/demo/](doc/demo/)
-directory.
-
-An article describing this demonstration, presented at the VLDB 2018.
+directory. An article describing this demonstration, presented at the VLDB 2018.
 conference, is available at
 http://pierre.senellart.com/publications/senellart2018provsql.pdf
 
@@ -151,7 +149,8 @@ It can be found in the [doc/tutorial/](doc/tutorial/) directory.
 ## Uninstalling
 
 You can uninstall ProvSQL by running `make uninstall` (run as a user with
-rights to write to the PostgreSQL installation directories).
+rights to write to the PostgreSQL installation directories), and by removing the
+reference to `provsql` in the `postgresql.conf` configuration file.
 
 ## License
 
