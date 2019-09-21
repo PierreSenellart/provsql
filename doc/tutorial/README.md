@@ -103,7 +103,9 @@ Solving the murder
      inconsistent (i.e., which have been identified as contradictions by
      the previous query). Create such a table with a SQL query, and
      display its content along with the provenance formula for each
-     tuple.
+     tuple. Attention: at the moment, ProvSQL does not support the `NOT IN`
+     SQL keyword; the only way to express negation at the moment is through
+     the `EXCEPT` keyword.
 
 1.   Create a `suspects` table containing all distinct persons that were
      sighted (in a consistent sighting) during the time the murder was committed in
