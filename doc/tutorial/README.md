@@ -88,7 +88,7 @@ Solving the murder
      as you can check.
 
 1.   Right now, there are contradictions in the sightings, because
-     witnesses cannot be fully trusted: two different persons may be
+     witnesses cannot be fully trusted: the same person may be
      sighted at the same time in different rooms, which of course cannot
      be correct. Run a query that identifies all such contradictions.
 
