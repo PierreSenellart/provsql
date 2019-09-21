@@ -50,29 +50,29 @@ Solving the murder
 
 1.   In order to be able to call all ProvSQL functions without prefixing
      them with the `provsql.` prefix, type the following command:
-```sql
-SET search_path TO public, provsql;
-```
-   This should be done at the start of every new session of the
+     ```sql
+     SET search_path TO public, provsql;
+     ```
+     This should be done at the start of every new session of the
      PostgreSQL client.
 
 1.   Design a query that retrieves for every sighting: the time of the
      sighting, the name of the person seen, the name of the witness, the
-     name of the room. Store the content in a table `s (with `CREATE
+     name of the room. Store the content in a table `s` (with `CREATE
      TABLE s AS ...`).
 
 1.   We will now activate the support of provenance for this table `s`;
      by default, ProvSQL does not do anything unless a table has
      provenance enabled. To do this, simply type:
-```sql
-SELECT add_provenance('s');
-```
-   Display the content of the table `s`; the `provsql` column has been
+     ```sql
+     SELECT add_provenance('s');
+     ```
+     Display the content of the table `s`; the `provsql` column has been
      added and contains a provenance token, that references a gate in a
      provenance circuit. Feel free to run some basic queries on the table
      `s`: query results will have provenance annotations (for now, they
      appear as a unique identifier). It is not possible to directly refer
-     to the `provsql` column, which acts in a `magical` way. But it is
+     to the `provsql` column, which acts in a “magical” way. But it is
      possible to obtain the provenance token in a query by using the
      `provenance()` user-defined function.
 
@@ -80,10 +80,10 @@ SELECT add_provenance('s');
      tokens to actual values in a semiring. The first such mapping we
      will create use the name of the witness as a value for the
      provenance token. The provenance mapping is created with:
-```sql
-SELECT create_provenance_mapping('witness_mapping','s','witness');
-```
-   assuming the column `witness` of the table `s` contains the name of
+     ```sql
+     SELECT create_provenance_mapping('witness_mapping','s','witness');
+     ```
+     assuming the column `witness` of the table `s` contains the name of
      the witness. A mapping is stored in the database as a simple table,
      as you can check.
 
