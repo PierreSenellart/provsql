@@ -30,8 +30,9 @@ Setup
 -----
 
 This tutorial assumes you have access to a working installation of
-ProvSQL. See [the documentation](../../) for installation
-instructions.
+ProvSQL. See [the
+documentation](https://github.com/PierreSenellart/provsql/) for
+installation instructions.
 
 Load the [setup.sql](setup.sql) SQL script within a fresh PostgreSQL
 database to set it up with all the data required; see, for instance, the
