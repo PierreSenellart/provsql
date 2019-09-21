@@ -146,6 +146,6 @@ Solving the murder
         `'compilation'` (for compilation of the provenance circuit to a
          d-DNNF)
      *   an optional fourth argument: for Monte Carlo sampling, it is the
-         number of samples; for enumeration of possible worlds, it does not
+         number of samples (as a character string); for enumeration of possible worlds, it does not
          need to be set; for knowledge compilation, it is the name of the
          knowledge compilation tool used (one of `'c2d'`, `'d4'`, or `'dsharp'`)
