@@ -158,6 +158,12 @@ BEGIN
   IF token1 = token2 THEN
     -- X-X=0
     monus_token:=gate_zero();
+  ELSIF token1 = gate_zero() THEN
+    -- 0-X=0
+    monus_token:=gate_zero();
+  ELSIF token2 = gate_zero() THEN
+    -- X-0=X
+    monus_token:=token1;
   ELSE  
     monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
     monusl_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monusl',token1,token2));
