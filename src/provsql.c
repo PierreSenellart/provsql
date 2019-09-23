@@ -736,14 +736,12 @@ static bool transform_except_into_join(
   FromExpr *fe = makeNode(FromExpr);
   JoinExpr *je = makeNode(JoinExpr);
   BoolExpr *expr = makeNode(BoolExpr);
-  
-  // Rewriting of complex set operations has already been done at
-  // this point, q->setOps has simple RangeTblRef as children
-//  RangeTblEntry *rteLeft = (RangeTblEntry *) list_nth(q->rtable, ((RangeTblRef *) setOps->larg)->rtindex);
-//  RangeTblEntry *rteRight = (RangeTblEntry *) list_nth(q->rtable, ((RangeTblRef *) setOps->rarg)->rtindex);
-
   ListCell *lc;
   int attno=1;
+
+  if(!IsA(setOps->larg, RangeTblRef) || !IsA(setOps->rarg, RangeTblRef)) {
+    ereport(ERROR, (errmsg("Unsupported chain of EXCEPT operations")));
+  }
 
   expr->boolop = AND_EXPR;
   expr->location = -1;
