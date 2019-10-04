@@ -152,8 +152,7 @@ CREATE TABLE public.sightings (
     "time" time without time zone NOT NULL,
     person integer NOT NULL,
     room integer NOT NULL,
-    witness integer,
-    count integer
+    witness integer
 );
 
 COPY public.person (id, name, date_of_birth, height) FROM stdin;
