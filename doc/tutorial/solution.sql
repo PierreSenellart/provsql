@@ -37,7 +37,7 @@ SELECT *,formula(provenance(),'witness_mapping') FROM consistent_s;
 -- Q8
 CREATE TABLE suspects AS
   SELECT DISTINCT person FROM consistent_s
-  WHERE room LIKE '% bedroom' AND time BETWEEN '01:00:00' AND '08:00:00';
+  WHERE room LIKE '% bedroom' AND time BETWEEN '00:00:00' AND '08:00:00';
 
 SELECT *,formula(provenance(),'witness_mapping') FROM suspects;
 
