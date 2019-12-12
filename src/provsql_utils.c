@@ -58,6 +58,9 @@ bool initialize_constants(constants_t *constants)
   constants->OID_FUNCTION_PROVENANCE = GetFuncOid("provenance");
   CheckOid(OID_FUNCTION_PROVENANCE);
 
+  constants->OID_FUNCTION_PROVENANCE_DELTA = GetFuncOid("provenance_delta");
+  CheckOid(OID_FUNCTION_PROVENANCE_DELTA);
+
   return true;
 }
 

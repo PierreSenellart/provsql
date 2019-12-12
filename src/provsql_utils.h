@@ -17,6 +17,7 @@ typedef struct constants_t {
   Oid OID_FUNCTION_PROVENANCE_PROJECT;
   Oid OID_FUNCTION_PROVENANCE_EQ;
   Oid OID_FUNCTION_PROVENANCE;
+  Oid OID_FUNCTION_PROVENANCE_DELTA;
 } constants_t;
 
 bool initialize_constants(constants_t *constants);
