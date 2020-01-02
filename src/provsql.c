@@ -372,6 +372,69 @@ static Expr *add_eq_from_Quals_to_Expr(
   return result;
 }
 
+static Expr *make_aggregation_expression(
+    Query *q,
+    List *prov_atts,
+    const constants_t *constants,
+    semiring_operation op,
+    int **columns,
+    int nbcols)
+{
+  FuncExpr *expr;
+  Aggref *agg;
+  TargetEntry *te_inner;
+
+  //same as the provenance expression
+  if (lnext(list_head(prov_atts)) == NULL)
+  {
+    expr = linitial(prov_atts);
+  }
+  else
+  {
+    expr = makeNode(FuncExpr);
+    if (op == SR_TIMES)
+    {
+      ArrayExpr *array = makeNode(ArrayExpr);
+
+      expr->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
+      expr->funcvariadic = true;
+
+      array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+      array->element_typeid = constants->OID_TYPE_UUID;
+      array->elements = prov_atts;
+      array->location = -1;
+
+      expr->args = list_make1(array);
+    }
+    else
+    { // SR_MONUS
+      expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
+      expr->args = prov_atts;
+    }
+    expr->funcresulttype = constants->OID_TYPE_PROVENANCE_TOKEN;
+    expr->location = -1;
+  }
+
+  agg = makeNode(Aggref);
+  te_inner = makeNode(TargetEntry);
+
+  te_inner->resno = 1;
+  te_inner->expr = (Expr *)expr;
+
+  agg->aggfnoid = constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
+  agg->aggtype = constants->OID_TYPE_PROVENANCE_TOKEN;
+  agg->args = list_make1(te_inner);
+  agg->aggkind = AGGKIND_NORMAL;
+  agg->location = -1;
+
+#if PG_VERSION_NUM >= 90600
+  /* aggargtypes was added in version 9.6 of PostgreSQL */
+  agg->aggargtypes = list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
+#endif /* PG_VERSION_NUM >= 90600 */
+
+  return (Expr *)agg;
+}
+
 static Expr *make_provenance_expression(
     Query *q,
     List *prov_atts,
@@ -463,7 +526,7 @@ static Expr *make_provenance_expression(
     }
   }
 
-  //ereport(WARNING,(errmsg("Before: %s",nodeToString(q))));
+  ereport(WARNING,(errmsg("Before: %s",nodeToString(q))));
 
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
@@ -572,6 +635,23 @@ static Expr *make_provenance_expression(
   }
 
   return result;
+}
+
+static void replace_aggregations_in_select(
+    Query *q,
+    Expr *provenance
+)
+{
+  ListCell *lc_v;
+  //replace each Aggref with Aggref of the 
+  foreach(lc_v, q->targetList)
+  {
+    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
+    if (IsA(te_v->expr, Aggref))
+    {
+      te_v->expr = provenance;
+    }
+  }
 }
 
 static void add_to_select(
@@ -1147,7 +1227,20 @@ static Query *process_query(
 
   if (supported)
   {
-    Expr *provenance = make_provenance_expression(
+    Expr *agg_provenance;
+    Expr *provenance;
+    //transform targetList to change AGGREF into 
+    if(q->hasAggs) {
+      agg_provenance = make_aggregation_expression(
+        q,
+        prov_atts,
+        constants,
+        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
+        columns,
+        nbcols);
+      replace_aggregations_in_select(q, agg_provenance);
+    }
+    provenance = make_provenance_expression(
         q,
         prov_atts,
         constants,

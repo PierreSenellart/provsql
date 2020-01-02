@@ -61,6 +61,12 @@ bool initialize_constants(constants_t *constants)
   constants->OID_FUNCTION_PROVENANCE_DELTA = GetFuncOid("provenance_delta");
   CheckOid(OID_FUNCTION_PROVENANCE_DELTA);
 
+  constants->OID_FUNCTION_PROVENANCE_AGGREGATE = GetFuncOid("provenance_aggregate");
+  CheckOid(OID_FUNCTION_PROVENANCE_AGGREGATE);
+
+  constants->OID_FUNCTION_PROVENANCE_SEMIMOD = GetFuncOid("provenance_semimod");
+  CheckOid(OID_FUNCTION_PROVENANCE_SEMIMOD);
+
   return true;
 }
 

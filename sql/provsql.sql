@@ -536,6 +536,103 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
+CREATE OR REPLACE FUNCTION provenance_plus_agg
+  (state provenance_token, token provenance_token)
+  RETURNS provenance_token AS
+$$
+DECLARE
+  agg_token uuid;
+BEGIN
+  IF token = gate_zero() THEN
+    return state;
+  END IF;
+
+  LOCK TABLE provenance_circuit_gate;
+  IF state IS NULL THEN
+    agg_token:=uuid_generate_v4();
+    INSERT INTO provenance_circuit_gate VALUES(agg_token,'agg');
+  ELSE
+    agg_token:=state;
+  END IF;
+  INSERT INTO provenance_circuit_wire VALUES(agg_token,token);
+
+  RETURN agg_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION provenance_agg_make_deterministic(state provenance_token)
+  RETURNS provenance_token AS
+$$
+DECLARE
+  c INTEGER;
+  agg_token uuid;
+BEGIN
+  LOCK TABLE provenance_circuit_gate;
+  SELECT COUNT(*) INTO c FROM provenance_circuit_wire WHERE f=state;
+
+  IF c = 0 THEN
+    agg_token := gate_zero();
+  ELSIF c = 1 THEN
+    SELECT t INTO STRICT agg_token FROM provenance_circuit_wire WHERE f=state;
+    DELETE FROM provenance_circuit_wire WHERE f=state;
+  ELSE
+    SELECT uuid_generate_v5(uuid_ns_provsql(),concat('agg',uuid_provsql_agg(t)))
+    INTO agg_token
+    FROM provenance_circuit_wire
+    WHERE f=state;
+
+    BEGIN
+      INSERT INTO provenance_circuit_gate VALUES(agg_token,'agg');
+      UPDATE provenance_circuit_wire SET f=agg_token WHERE f=state;
+    EXCEPTION WHEN unique_violation THEN
+      DELETE FROM provenance_circuit_wire WHERE f=state;
+    END;
+  END IF;
+  DELETE FROM provenance_circuit_gate WHERE gate=state;
+
+  RETURN agg_token;
+END
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE AGGREGATE provenance_aggregate(token provenance_token) (
+  SFUNC = provenance_plus_agg,
+  STYPE = provenance_token,
+  FINALFUNC = provenance_agg_make_deterministic
+);
+
+CREATE FUNCTION provenance_semimod(VARIADIC tokens uuid[])
+  RETURNS provenance_token AS
+$$
+DECLARE
+  times_token uuid;
+  semimod_token uuid;
+BEGIN
+  CASE array_length(tokens,1)
+    WHEN 0 THEN
+      times_token:=gate_one();
+    WHEN 1 THEN
+      times_token:=tokens[1];
+    ELSE
+      SELECT uuid_generate_v5(uuid_ns_provsql(),concat('times',uuid_provsql_agg(t)))
+      INTO times_token
+      FROM unnest(tokens) t;
+
+      LOCK TABLE provenance_circuit_gate;
+      BEGIN
+        INSERT INTO provenance_circuit_gate VALUES(times_token,'times');
+        INSERT INTO provenance_circuit_wire SELECT times_token, t, row_number() OVER ()
+          FROM unnest(tokens) t;
+      EXCEPTION WHEN unique_violation THEN
+      END;
+  END CASE;
+  semimod_token:=uuid_generate_v4();
+  INSERT INTO provenance_circuit_gate VALUES(semimod_token,'semimod');
+  --TODO: link with values (PROVENANCE_CIRCUIT_EXTRA?)
+  INSERT INTO provenance_circuit_wire VALUES(semimod_token,times_token);
+  RETURN semimod_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
 --external functions
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(

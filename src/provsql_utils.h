@@ -18,6 +18,8 @@ typedef struct constants_t {
   Oid OID_FUNCTION_PROVENANCE_EQ;
   Oid OID_FUNCTION_PROVENANCE;
   Oid OID_FUNCTION_PROVENANCE_DELTA;
+  Oid OID_FUNCTION_PROVENANCE_AGGREGATE;
+  Oid OID_FUNCTION_PROVENANCE_SEMIMOD;
 } constants_t;
 
 bool initialize_constants(constants_t *constants);
