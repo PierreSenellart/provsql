@@ -22,6 +22,13 @@ CREATE TABLE provenance_circuit_extra(
   info1 INT,
   info2 INT);
 
+CREATE TABLE aggregation_circuit_extra(
+  gate provenance_token,
+  aggfnoid INT,
+  resorigtbl INT,
+  resorigcol INT
+);
+
 CREATE INDEX ON provenance_circuit_extra (gate);
 
 CREATE INDEX ON provenance_circuit_wire (f);
