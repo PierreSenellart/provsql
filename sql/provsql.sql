@@ -30,6 +30,7 @@ CREATE TABLE aggregation_circuit_extra(
 );
 
 CREATE INDEX ON provenance_circuit_extra (gate);
+CREATE INDEX ON aggregation_circuit_extra (gate);
 
 CREATE INDEX ON provenance_circuit_wire (f);
 CREATE INDEX ON provenance_circuit_wire (t);
@@ -425,7 +426,7 @@ END
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION sub_circuit_with_desc(
-  token provenance_token,
+  token provenance_token, 
   token2desc regclass) RETURNS SETOF gate_with_desc AS
 $$
 BEGIN
@@ -544,7 +545,8 @@ END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION provenance_plus_agg
-  (state provenance_token, token provenance_token)
+  (state provenance_token, token provenance_token, aggfnoid integer,
+   resorigtbl integer, resorigcol integer)
   RETURNS provenance_token AS
 $$
 DECLARE
@@ -558,10 +560,12 @@ BEGIN
   IF state IS NULL THEN
     agg_token:=uuid_generate_v4();
     INSERT INTO provenance_circuit_gate VALUES(agg_token,'agg');
+    LOCK TABLE aggregation_circuit_extra;
+    INSERT INTO aggregation_circuit_extra VALUES(agg_token, aggfnoid, resorigtbl, resorigcol);
   ELSE
     agg_token:=state;
   END IF;
-  INSERT INTO provenance_circuit_wire VALUES(agg_token,token);
+  INSERT INTO provenance_circuit_wire VALUES(agg_token,token);                   
 
   RETURN agg_token;
 END
@@ -591,6 +595,7 @@ BEGIN
     BEGIN
       INSERT INTO provenance_circuit_gate VALUES(agg_token,'agg');
       UPDATE provenance_circuit_wire SET f=agg_token WHERE f=state;
+      UPDATE aggregation_circuit_extra SET gate=agg_token WHERE gate=state;
     EXCEPTION WHEN unique_violation THEN
       DELETE FROM provenance_circuit_wire WHERE f=state;
     END;
@@ -601,8 +606,8 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE AGGREGATE provenance_aggregate(token provenance_token) (
-  SFUNC = provenance_plus_agg,
+CREATE AGGREGATE provenance_aggregate(provenance_token, integer, integer, integer) (
+  SFUNC = provenance_plus_agg(provenance_token, provenance_token, integer, integer, integer),
   STYPE = provenance_token,
   FINALFUNC = provenance_agg_make_deterministic
 );

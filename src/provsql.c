@@ -377,12 +377,13 @@ static Expr *make_aggregation_expression(
     List *prov_atts,
     const constants_t *constants,
     semiring_operation op,
-    int **columns,
-    int nbcols)
+    Oid aggfnoid,
+    Oid resorigtbl,
+    AttrNumber resorigcol)
 {
   FuncExpr *expr;
   Aggref *agg;
-  TargetEntry *te_inner;
+  TargetEntry *te_agg, *te_fn, *te_tbl, *te_col;
 
   //same as the provenance expression
   if (lnext(list_head(prov_atts)) == NULL)
@@ -416,14 +417,44 @@ static Expr *make_aggregation_expression(
   }
 
   agg = makeNode(Aggref);
-  te_inner = makeNode(TargetEntry);
 
-  te_inner->resno = 1;
-  te_inner->expr = (Expr *)expr;
+  te_agg = makeNode(TargetEntry);
+  te_agg->resno = 1;
+  te_agg->expr = (Expr *)expr;
+
+  te_fn = makeNode(TargetEntry);
+  te_fn->resno = 2;
+  te_fn->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+                                    -1,
+                                    InvalidOid,
+                                    sizeof(int32),
+                                    Int32GetDatum(aggfnoid),
+                                    false,
+                                    true);
+
+  te_tbl = makeNode(TargetEntry);
+  te_tbl->resno = 3;
+  te_tbl->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+                                    -1,
+                                    InvalidOid,
+                                    sizeof(int32),
+                                    Int32GetDatum(resorigtbl),
+                                    false,
+                                    true);
+
+  te_col = makeNode(TargetEntry);
+  te_col->resno = 4;
+  te_col->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+                                    -1,
+                                    InvalidOid,
+                                    sizeof(int32),
+                                    Int32GetDatum(resorigcol),
+                                    false,
+                                    true);
 
   agg->aggfnoid = constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
   agg->aggtype = constants->OID_TYPE_PROVENANCE_TOKEN;
-  agg->args = list_make1(te_inner);
+  agg->args = list_make4(te_agg, te_fn, te_tbl, te_col);
   agg->aggkind = AGGKIND_NORMAL;
   agg->location = -1;
 
@@ -526,7 +557,7 @@ static Expr *make_provenance_expression(
     }
   }
 
-  ereport(WARNING,(errmsg("Before: %s",nodeToString(q))));
+  //ereport(WARNING, (errmsg("Before: %s", nodeToString(q))));
 
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
@@ -639,17 +670,25 @@ static Expr *make_provenance_expression(
 
 static void replace_aggregations_in_select(
     Query *q,
-    Expr *provenance
-)
+    List *prov_atts,
+    const constants_t *constants,
+    semiring_operation op)
 {
   ListCell *lc_v;
-  //replace each Aggref with Aggref of the 
-  foreach(lc_v, q->targetList)
+  //replace each Aggref with Aggref of the
+  foreach (lc_v, q->targetList)
   {
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
     if (IsA(te_v->expr, Aggref))
     {
-      te_v->expr = provenance;
+      Aggref *ar_v = (Aggref *)te_v->expr;
+      te_v->expr = make_aggregation_expression(q,
+                                               prov_atts,
+                                               constants,
+                                               op,
+                                               ar_v->aggfnoid,
+                                               te_v->resorigtbl,
+                                               te_v->resorigcol);
     }
   }
 }
@@ -1227,18 +1266,12 @@ static Query *process_query(
 
   if (supported)
   {
-    Expr *agg_provenance;
     Expr *provenance;
-    //transform targetList to change AGGREF into 
-    if(q->hasAggs) {
-      agg_provenance = make_aggregation_expression(
-        q,
-        prov_atts,
-        constants,
-        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
-        columns,
-        nbcols);
-      replace_aggregations_in_select(q, agg_provenance);
+    //transform targetList to change AGGREF into
+    if (q->hasAggs)
+    {
+      replace_aggregations_in_select(q, prov_atts, constants,
+                                     has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES) );
     }
     provenance = make_provenance_expression(
         q,
