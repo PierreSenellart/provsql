@@ -460,7 +460,8 @@ static Expr *make_aggregation_expression(
 
 #if PG_VERSION_NUM >= 90600
   /* aggargtypes was added in version 9.6 of PostgreSQL */
-  agg->aggargtypes = list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
+  agg->aggargtypes = list_make4_oid(constants->OID_TYPE_PROVENANCE_TOKEN, constants->OID_TYPE_INT,
+                                constants->OID_TYPE_INT, constants->OID_TYPE_INT);
 #endif /* PG_VERSION_NUM >= 90600 */
 
   return (Expr *)agg;

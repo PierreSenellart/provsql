@@ -14,6 +14,12 @@ CREATE FUNCTION public.formula_monus(formula1 text, formula2 text) RETURNS text
   SELECT concat('(',formula1,' ⊖ ',formula2,')')
 $$;
 
+CREATE FUNCTION public.formula_semimod(formula1 text, formula2 text) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT
+    AS $$
+  SELECT concat('(',formula1,' * ',formula2,')')
+$$;
+
 
 CREATE FUNCTION public.formula_delta(formula text) RETURNS text
     LANGUAGE sql IMMUTABLE STRICT
@@ -29,6 +35,18 @@ BEGIN
     RETURN (value,1);
   ELSE
     RETURN (concat(state.formula,' ⊕ ',value),state.nbargs+1);
+  END IF;
+END
+$$;
+
+CREATE FUNCTION public.formula_agg_state(state public.formula_state, value text) RETURNS public.formula_state
+    LANGUAGE plpgsql IMMUTABLE
+    AS $$
+BEGIN
+  IF state IS NULL OR state.nbargs=0 THEN
+    RETURN (value,1);
+  ELSE
+    RETURN (concat(state.formula,' + ',value),state.nbargs+1);
   END IF;
 END
 $$;
@@ -55,7 +73,6 @@ BEGIN
 END
 $$;
 
-
 CREATE AGGREGATE public.formula_plus(text) (
     SFUNC = public.formula_plus_state,
     STYPE = public.formula_state,
@@ -67,6 +84,13 @@ CREATE AGGREGATE public.formula_times(text) (
     SFUNC = public.formula_times_state,
     STYPE = public.formula_state,
     INITCOND = '(𝟙,0)',
+    FINALFUNC = public.formula_state2formula
+);
+
+CREATE AGGREGATE public.formula_agg(text) (
+    SFUNC = public.formula_agg_state,
+    STYPE = public.formula_state,
+    INITCOND = '(1,0)',
     FINALFUNC = public.formula_state2formula
 );
 
@@ -85,6 +109,22 @@ BEGIN
 END
 $$;
 
+CREATE FUNCTION public.aggregation_formula(token provsql.provenance_token, token2value regclass) RETURNS text
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  RETURN aggregation_evaluate(
+    token,
+    token2value,
+    'formula_agg',
+    'formula_semimod',
+    '𝟙'::text,
+    'formula_plus',
+    'formula_times',
+    'formula_monus',
+		'formula_delta');
+END
+$$;
 -- Counting semiring
 
 CREATE FUNCTION public.counting_monus(counting1 integer, counting2 integer) RETURNS integer

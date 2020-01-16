@@ -403,6 +403,43 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION aggregation_evaluate(
+  token provenance_token,
+  token2value regclass,
+  agg_function regproc,
+  semimod_function regproc,
+  element_one anyelement,
+  value_type regtype,
+  plus_function regproc,
+  times_function regproc,
+  monus_function regproc,
+  delta_function regproc)
+  RETURNS anyelement AS
+$$
+DECLARE
+  rec record;
+  result ALIAS FOR $0;
+BEGIN
+  SELECT gate_type INTO rec FROM provsql.provenance_circuit_gate WHERE gate = token;
+  
+  IF rec IS NULL THEN
+    RETURN NULL;
+  ELSIF rec.gate_type='agg' THEN
+    EXECUTE format('SELECT %I(provsql.aggregation_evaluate(t,%L,%L,%L,%L::%s,%L,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
+      agg_function,token2value,agg_function,semimod_function,element_one,value_type,value_type,plus_function,times_function,
+      monus_function,delta_function,token)
+    INTO result;
+  ELSIF rec.gate_type='semimod' THEN
+    EXECUTE format('SELECT %I(%L,provsql.provenance_evaluate(%L,%L,%L::%s,%L,%L,%L,%L,%L))',
+      semimod, token, token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
+    INTO result;
+  ELSE
+    RAISE EXCEPTION USING MESSAGE='Unknown gate type';
+  END IF;
+  RETURN result;
+END
+$$ LANGUAGE plpgsql;
+
 CREATE TYPE gate_with_prob AS (f UUID, t UUID, gate_type provenance_gate, prob DOUBLE PRECISION);
 CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[]);
 
