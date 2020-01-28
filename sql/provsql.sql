@@ -34,8 +34,8 @@ DECLARE
   attribute RECORD;
 BEGIN
   LOCK TABLE provenance_circuit_gate;
-  INSERT INTO provenance_circuit_gate VALUES (NEW.provsql, 'input');
-  RETURN NEW;
+  INSERT INTO provenance_circuit_gate VALUES (NEW.provsql, 'input'); 
+  RETURN NEW; 
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
@@ -118,7 +118,10 @@ CREATE FUNCTION provenance_times(VARIADIC tokens uuid[])
 $$
 DECLARE
   times_token uuid;
+--  ts timestamptz;
 BEGIN
+--  ts := clock_timestamp();
+
   CASE array_length(tokens,1)
     WHEN 0 THEN
       times_token:=gate_one();
@@ -137,6 +140,8 @@ BEGIN
       EXCEPTION WHEN unique_violation THEN
       END;
   END CASE;
+  
+--  raise notice 'times time spent=%', clock_timestamp() - ts;
   RETURN times_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
@@ -226,67 +231,63 @@ END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER; 
 
 CREATE OR REPLACE FUNCTION provenance_plus
-  (state provenance_token, token provenance_token)
-  RETURNS provenance_token AS
+  (state uuid[], token provenance_token)
+  RETURNS uuid[] AS
 $$
 DECLARE
   plus_token uuid;
+--  ts timestamptz;
 BEGIN
+--  ts := clock_timestamp();
+
   IF token = gate_zero() THEN
     return state;
   END IF;
 
-  LOCK TABLE provenance_circuit_gate;
-  IF state IS NULL THEN
-    plus_token:=uuid_generate_v4();
-    INSERT INTO provenance_circuit_gate VALUES(plus_token,'plus');
-  ELSE
-    plus_token:=state;
-  END IF;
-  INSERT INTO provenance_circuit_wire VALUES(plus_token,token);
+--  raise notice 'plus time spent=%', clock_timestamp() - ts;
 
-  RETURN plus_token;
+  RETURN array_append(state, token::uuid);
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION provenance_plus_make_deterministic(state provenance_token)
+CREATE OR REPLACE FUNCTION provenance_plus_final(state uuid[])
   RETURNS provenance_token AS
 $$
 DECLARE
   c INTEGER;
   plus_token uuid;
+  ts timestamptz;
 BEGIN
+--  ts := clock_timestamp();
   LOCK TABLE provenance_circuit_gate;
-  SELECT COUNT(*) INTO c FROM provenance_circuit_wire WHERE f=state;
+  c:=array_length(state, 1);
 
   IF c = 0 THEN
     plus_token := gate_zero();
   ELSIF c = 1 THEN
-    SELECT t INTO STRICT plus_token FROM provenance_circuit_wire WHERE f=state;
-    DELETE FROM provenance_circuit_wire WHERE f=state;
+    plus_token := state[1];
   ELSE
-    SELECT uuid_generate_v5(uuid_ns_provsql(),concat('plus',uuid_provsql_agg(t)))
-    INTO plus_token
-    FROM provenance_circuit_wire
-    WHERE f=state;
+    plus_token := uuid_generate_v5(
+      uuid_ns_provsql(),
+      concat('plus',array_to_string(state, ',')));
 
     BEGIN
       INSERT INTO provenance_circuit_gate VALUES(plus_token,'plus');
-      UPDATE provenance_circuit_wire SET f=plus_token WHERE f=state;
+      INSERT INTO provenance_circuit_wire SELECT plus_token, * FROM unnest(state);
     EXCEPTION WHEN unique_violation THEN
-      DELETE FROM provenance_circuit_wire WHERE f=state;
     END;
   END IF;
-  DELETE FROM provenance_circuit_gate WHERE gate=state;
 
+--  raise notice 'plus_make_deterministic time spent=%', clock_timestamp() - ts;
   RETURN plus_token;
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE AGGREGATE provenance_agg(token provenance_token) (
   SFUNC = provenance_plus,
-  STYPE = provenance_token,
-  FINALFUNC = provenance_plus_make_deterministic
+  STYPE = uuid[],
+  INITCOND = '{}',
+  FINALFUNC = provenance_plus_final
 );
 
 CREATE OR REPLACE FUNCTION trim_circuit()
