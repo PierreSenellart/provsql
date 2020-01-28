@@ -2,6 +2,7 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pg_config.h"
+#include <time.h>
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
@@ -1004,9 +1005,16 @@ static PlannedStmt *provsql_planner(
     constants_t constants;
     if(initialize_constants(&constants)) {
       if(has_provenance(q,&constants)) {
+//        clock_t begin = clock(), end;
+//        double time_spent;
+
         Query *new_query = process_query(q, &constants);
         if(new_query != NULL)
           q = new_query;
+      
+//        end = clock();
+//        time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+//        ereport(NOTICE, (errmsg("planner time spent=%f",time_spent)));
       }
     }
   }
