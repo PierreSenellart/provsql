@@ -356,12 +356,13 @@ static Expr *make_provenance_expression(
 
     if(aggregation_needed) {
       Aggref *agg = makeNode(Aggref);
+      FuncExpr *plus = makeNode(FuncExpr);
       TargetEntry *te_inner = makeNode(TargetEntry);
 
       te_inner->resno=1;
       te_inner->expr=(Expr*)expr;
 
-      agg->aggfnoid=constants->OID_FUNCTION_PROVENANCE_AGG_PLUS;
+      agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
       agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
       agg->args=list_make1(te_inner);
       agg->aggkind=AGGKIND_NORMAL;
@@ -372,7 +373,12 @@ static Expr *make_provenance_expression(
       agg->aggargtypes=list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
 #endif /* PG_VERSION_NUM >= 90600 */
 
-      result=(Expr*)agg;
+      plus->funcid=constants->OID_FUNCTION_PROVENANCE_PLUS;
+      plus->args=list_make1(agg);      
+      plus->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      plus->location=-1;
+
+      result=(Expr*)plus;
     } else {
       result=(Expr*)expr;
     }
@@ -1016,7 +1022,7 @@ static PlannedStmt *provsql_planner(
 //        time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
 //        ereport(NOTICE, (errmsg("planner time spent=%f",time_spent)));
       }
-    }
+    } 
   }
 
   if(prev_planner)

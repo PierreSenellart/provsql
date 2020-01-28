@@ -8,16 +8,16 @@ CREATE DOMAIN provenance_token AS UUID NOT NULL;
 
 CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','project','zero','one','eq');
 
-CREATE TABLE provenance_circuit_gate(
+CREATE UNLOGGED TABLE provenance_circuit_gate(
   gate provenance_token PRIMARY KEY,
   gate_type provenance_gate NOT NULL);
 
-CREATE TABLE provenance_circuit_wire(
-  f provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE,
-  t provenance_token REFERENCES provenance_circuit_gate(gate) ON DELETE CASCADE,
+CREATE UNLOGGED TABLE provenance_circuit_wire(
+  f provenance_token, -- No REFERENCES for performance reasons
+  t provenance_token, -- No REFERENCES for performance reasons
   idx INT);
 
-CREATE TABLE provenance_circuit_extra(
+CREATE UNLOGGED TABLE provenance_circuit_extra(
   gate provenance_token,
   info1 INT,
   info2 INT);
@@ -47,7 +47,7 @@ BEGIN
   LOCK TABLE provenance_circuit_gate;
   EXECUTE format('INSERT INTO provsql.provenance_circuit_gate SELECT provsql, ''input'' FROM %I',_tbl);
   EXECUTE format('CREATE TRIGGER add_provenance_circuit_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_provenance_circuit_gate_trigger()',_tbl);
-  EXECUTE format('ALTER TABLE %I ADD CONSTRAINT provsqlfk FOREIGN KEY (provsql) REFERENCES provsql.provenance_circuit_gate(gate)', _tbl);
+--  EXECUTE format('ALTER TABLE %I ADD CONSTRAINT provsqlfk FOREIGN KEY (provsql) REFERENCES provsql.provenance_circuit_gate(gate)', _tbl);
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
@@ -230,27 +230,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER; 
 
-CREATE OR REPLACE FUNCTION provenance_plus
-  (state uuid[], token provenance_token)
-  RETURNS uuid[] AS
-$$
-DECLARE
-  plus_token uuid;
---  ts timestamptz;
-BEGIN
---  ts := clock_timestamp();
-
-  IF token = gate_zero() THEN
-    return state;
-  END IF;
-
---  raise notice 'plus time spent=%', clock_timestamp() - ts;
-
-  RETURN array_append(state, token::uuid);
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
-
-CREATE OR REPLACE FUNCTION provenance_plus_final(state uuid[])
+CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
   RETURNS provenance_token AS
 $$
 DECLARE
@@ -258,37 +238,33 @@ DECLARE
   plus_token uuid;
   ts timestamptz;
 BEGIN
---  ts := clock_timestamp();
-  LOCK TABLE provenance_circuit_gate;
-  c:=array_length(state, 1);
+  ts := clock_timestamp();
+  c:=array_length(tokens, 1);
 
   IF c = 0 THEN
     plus_token := gate_zero();
   ELSIF c = 1 THEN
-    plus_token := state[1];
+    plus_token := tokens[1];
   ELSE
     plus_token := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('plus',array_to_string(state, ',')));
+      concat('plus',array_to_string(tokens, ',')));
 
+    LOCK TABLE provenance_circuit_gate;
     BEGIN
       INSERT INTO provenance_circuit_gate VALUES(plus_token,'plus');
-      INSERT INTO provenance_circuit_wire SELECT plus_token, * FROM unnest(state);
+      INSERT INTO provenance_circuit_wire
+        SELECT plus_token, t 
+        FROM unnest(tokens) AS t
+        WHERE t != gate_zero();
     EXCEPTION WHEN unique_violation THEN
     END;
   END IF;
 
---  raise notice 'plus_make_deterministic time spent=%', clock_timestamp() - ts;
+  raise notice 'plus time spent=%', clock_timestamp() - ts;
   RETURN plus_token;
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
-
-CREATE AGGREGATE provenance_agg(token provenance_token) (
-  SFUNC = provenance_plus,
-  STYPE = uuid[],
-  INITCOND = '{}',
-  FINALFUNC = provenance_plus_final
-);
 
 CREATE OR REPLACE FUNCTION trim_circuit()
   RETURNS void AS
