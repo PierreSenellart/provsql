@@ -500,7 +500,7 @@ CREATE OR REPLACE FUNCTION view_circuit(
   token provenance_token,
   token2desc regclass,
   dbg int = 0)
-  RETURNS BOOLEAN AS
+  RETURNS TEXT AS
   'provsql','view_circuit' LANGUAGE C;
 
 CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS

@@ -39,7 +39,7 @@ unsigned DotCircuit::addGate()
 std::string DotCircuit::toString(unsigned ) const
 {
   std::string op;
-  std::string result="graph circuit{\n node [shape=plaintext];\n";
+  std::string result="digraph circuit{\n graph [rankdir=UD] ;\n";
   
   //looping through the gates
   //eliminating the minusr and minusl gates
@@ -73,6 +73,8 @@ std::string DotCircuit::toString(unsigned ) const
         case DotGate::OMINUSL:
           break;
       }
+      if(i==0)
+        result+=",shape=\"double\"";
       result+="];\n";
     }
     i++;
@@ -96,7 +98,7 @@ std::string DotCircuit::toString(unsigned ) const
         unsigned n = el.second;
         if(gates[s] == DotGate::OMINUSR || gates[s] == DotGate::OMINUSL) {
           for(auto t: wires[s]) {
-            result += std::to_string(i)+" -- "+std::to_string(t);
+            result += std::to_string(i)+" -> "+std::to_string(t);
             if(gates[s] == DotGate::OMINUSR)
               result += " [label=\"R\"];\n";
             else
@@ -104,7 +106,7 @@ std::string DotCircuit::toString(unsigned ) const
           }
         }
         else {
-          result += std::to_string(i)+" -- "+std::to_string(s);
+          result += std::to_string(i)+" -> "+std::to_string(s);
           if(n==1) {
             result += ";\n";
           }
@@ -118,32 +120,30 @@ std::string DotCircuit::toString(unsigned ) const
   return result+"}";
 }
 
-void DotCircuit::render() const {
+std::string DotCircuit::render() const {
   //Writing dot to a temporary file
   int fd;
   char cfilename[] = "/tmp/provsqlXXXXXX";
   fd = mkstemp(cfilename);
   close(fd);
-  std::string filename=cfilename, outfilename=filename+".pdf";
+  std::string filename=cfilename, outfilename=filename+".out";
 
   std::ofstream ofs(filename.c_str());
   ofs << toString(0);
   ofs.close();
 
-  //Executing the Graphviz dot renderer
-  std::string cmdline="dot -Tpdf "+filename+" -o "+outfilename;
+  //Executing the Graphviz dot renderer through graph-easy for ASCII
+  //output
+  std::string cmdline="graph-easy --as=boxart --output="+outfilename+" "+filename;
 
   int retvalue=system(cmdline.c_str());
 
   if(retvalue)    
-    throw CircuitException("Error executing Graphviz dot"); 
+    throw CircuitException("Error executing graph-easy"); 
 
-  //Opening the PDF viewer
-#ifdef __linux__
-  //assuming evince on linux
-  cmdline="export DISPLAY=':0'; evince "+outfilename + " &";
-  retvalue=system(cmdline.c_str());
-#else
-  throw CircuitException("Unsupported operating system for viewing");
-#endif
+  std::ifstream ifs(outfilename.c_str());
+  std::string str((std::istreambuf_iterator<char>(ifs)),
+                  std::istreambuf_iterator<char>());
+
+  return str;
 }
