@@ -32,7 +32,6 @@ test: possible_worlds monte_carlo
 test: c2d d4 dsharp
 
 # Viewing circuit
-test: view_circuit
 test: view_circuit_multiple
 
 # Where-provenance
