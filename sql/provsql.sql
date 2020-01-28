@@ -236,9 +236,9 @@ $$
 DECLARE
   c INTEGER;
   plus_token uuid;
-  ts timestamptz;
+--  ts timestamptz;
 BEGIN
-  ts := clock_timestamp();
+--  ts := clock_timestamp();
   c:=array_length(tokens, 1);
 
   IF c = 0 THEN
@@ -261,7 +261,7 @@ BEGIN
     END;
   END IF;
 
-  raise notice 'plus time spent=%', clock_timestamp() - ts;
+--  raise notice 'plus time spent=%', clock_timestamp() - ts;
   RETURN plus_token;
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
