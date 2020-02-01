@@ -429,14 +429,13 @@ BEGIN
       agg_function,token2value,agg_function,semimod_function,element_one,value_type,value_type,plus_function,times_function,
       monus_function,delta_function,token)
     INTO result;
-  ELSIF rec.gate_type='semimod' THEN
-    EXECUTE format('SELECT %I(%L,provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
-      semimod_function,token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
-    INTO result;
-  ELSE -- this should call the provenance function
+  ELSE
+  --ELSIF rec.gate_type='semimod' THEN
     EXECUTE format('SELECT %I(%L,provsql.provenance_evaluate(%L,%L,%L::%s,%L,%L,%L,%L,%L))',
-      semimod_function,token,token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
+      semimod_function, token, token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
     INTO result;
+  --ELSE
+  --  RAISE EXCEPTION USING MESSAGE='Unknown gate type';
   END IF;
   RETURN result;
 END
