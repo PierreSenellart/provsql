@@ -2,6 +2,7 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pg_config.h"
+#include <time.h>
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
@@ -521,30 +522,34 @@ static Expr *make_provenance_expression(
     if (group_by_rewrite || aggregation)
     {
       Aggref *agg = makeNode(Aggref);
+      FuncExpr *plus = makeNode(FuncExpr);
       TargetEntry *te_inner = makeNode(TargetEntry);
 
       te_inner->resno = 1;
       te_inner->expr = (Expr *)expr;
 
-      agg->aggfnoid = constants->OID_FUNCTION_PROVENANCE_AGG_PLUS;
-      agg->aggtype = constants->OID_TYPE_PROVENANCE_TOKEN;
-      agg->args = list_make1(te_inner);
-      agg->aggkind = AGGKIND_NORMAL;
-      agg->location = -1;
+      agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
+      agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      agg->args=list_make1(te_inner);
+      agg->aggkind=AGGKIND_NORMAL;
+      agg->location=-1;
 
 #if PG_VERSION_NUM >= 90600
       /* aggargtypes was added in version 9.6 of PostgreSQL */
       agg->aggargtypes = list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
 #endif /* PG_VERSION_NUM >= 90600 */
 
-      result = (Expr *)agg;
-    }
-    else
-    {
-      result = (Expr *)expr;
+      plus->funcid=constants->OID_FUNCTION_PROVENANCE_PLUS;
+      plus->args=list_make1(agg);      
+      plus->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      plus->location=-1;
+
+      result=(Expr*)plus;
+    } else {
+      result=(Expr*)expr;
     }
 
-    if (aggregation)
+  if (aggregation)
     { //aggregation
       FuncExpr *deltaExpr = makeNode(FuncExpr);
 
@@ -555,7 +560,9 @@ static Expr *make_provenance_expression(
       deltaExpr->location = -1;
 
       result = (Expr *)deltaExpr;
+
     }
+
   }
 
   //ereport(WARNING, (errmsg("Before: %s", nodeToString(q))));
@@ -1307,15 +1314,20 @@ static PlannedStmt *provsql_planner(
   if (q->commandType == CMD_SELECT && q->rtable)
   {
     constants_t constants;
-    if (initialize_constants(&constants))
-    {
-      if (has_provenance(q, &constants))
-      {
+    if(initialize_constants(&constants)) {
+      if(has_provenance(q,&constants)) {
+//        clock_t begin = clock(), end;
+//        double time_spent;
+
         Query *new_query = process_query(q, &constants);
         if (new_query != NULL)
           q = new_query;
+      
+//        end = clock();
+//        time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+//        ereport(NOTICE, (errmsg("planner time spent=%f",time_spent)));
       }
-    }
+    } 
   }
 
   if (prev_planner)

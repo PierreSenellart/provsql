@@ -11,6 +11,16 @@
 static Oid GetFuncOid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
+      list_make1(makeString(s)),-1,NIL,false,false,false);
+  if(fcl)
+    return fcl->oid;    
+  else
+    return 0;
+}
+
+static Oid GetProvSQLFuncOid(char *s)
+{
+  FuncCandidateList fcl=FuncnameGetCandidates(
       list_make2(makeString("provsql"),makeString(s)),-1,NIL,false,false,false);
   if(fcl)
     return fcl->oid;    
@@ -39,23 +49,26 @@ bool initialize_constants(constants_t *constants)
 
   constants->OID_TYPE_INT_ARRAY = TypenameGetTypid("_int4");
   CheckOid(OID_TYPE_INT_ARRAY);
+  
+  constants->OID_FUNCTION_ARRAY_AGG = GetFuncOid("array_agg");
+  CheckOid(OID_FUNCTION_ARRAY_AGG);
 
-  constants->OID_FUNCTION_PROVENANCE_AGG_PLUS = GetFuncOid("provenance_agg");
-  CheckOid(OID_FUNCTION_PROVENANCE_AGG_PLUS);
+  constants->OID_FUNCTION_PROVENANCE_PLUS = GetProvSQLFuncOid("provenance_plus");
+  CheckOid(OID_FUNCTION_PROVENANCE_PLUS);
 
-  constants->OID_FUNCTION_PROVENANCE_TIMES = GetFuncOid("provenance_times");
+  constants->OID_FUNCTION_PROVENANCE_TIMES = GetProvSQLFuncOid("provenance_times");
   CheckOid(OID_FUNCTION_PROVENANCE_TIMES);
 
-  constants->OID_FUNCTION_PROVENANCE_MONUS = GetFuncOid("provenance_monus");
+  constants->OID_FUNCTION_PROVENANCE_MONUS = GetProvSQLFuncOid("provenance_monus");
   CheckOid(OID_FUNCTION_PROVENANCE_MONUS);
   
-  constants->OID_FUNCTION_PROVENANCE_PROJECT = GetFuncOid("provenance_project");
+  constants->OID_FUNCTION_PROVENANCE_PROJECT = GetProvSQLFuncOid("provenance_project");
   CheckOid(OID_FUNCTION_PROVENANCE_PROJECT);
 
-  constants->OID_FUNCTION_PROVENANCE_EQ = GetFuncOid("provenance_eq");
+  constants->OID_FUNCTION_PROVENANCE_EQ = GetProvSQLFuncOid("provenance_eq");
   CheckOid(OID_FUNCTION_PROVENANCE_EQ);
 
-  constants->OID_FUNCTION_PROVENANCE = GetFuncOid("provenance");
+  constants->OID_FUNCTION_PROVENANCE = GetProvSQLFuncOid("provenance");
   CheckOid(OID_FUNCTION_PROVENANCE);
 
   constants->OID_FUNCTION_PROVENANCE_DELTA = GetFuncOid("provenance_delta");

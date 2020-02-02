@@ -33,8 +33,8 @@ public:
   unsigned setGate(const uuid &u, DotGate t) override;
   unsigned setGate(const uuid &u, DotGate t, std::string d);
 
-  void render() const;
-
+  std::string render() const;
+  
   virtual std::string toString(unsigned g) const override;
 };
 

@@ -72,13 +72,10 @@ and to use a Web interface for simple visualization of where-provenance.
    available in the PATH of the PostgreSQL server user (e.g., in
    `/usr/local/bin/`).
 
-5. Optionally, for circuit visualization, the following software:
-
-   * `graphviz`, for production of PDF circuits (`dot` executable)
-   
-   * `evince`, for visualization of PDF files
-   
-   Both can be obtained as packages in common Linux distributions.
+5. Optionally, for circuit visualization, the `graph-easy` executable
+   from the Graph::Easy Perl library (that can be obtained from the
+   `libgraph-easy-perl` package on Debian-based Linux distributions) or
+   from CPAN.
 
 ## Installation
 
