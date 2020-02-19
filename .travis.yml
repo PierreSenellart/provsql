@@ -1,7 +1,6 @@
 language: cpp
 os: linux
 dist: xenial
-sudo: enabled
 
 addons:
   apt:
