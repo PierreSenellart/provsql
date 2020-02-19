@@ -276,7 +276,7 @@ std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
 
 double BooleanCircuit::compilation(unsigned g, string compiler) const {
   string filename=BooleanCircuit::Tseytin(g);
-  string outfilename=filename+"nnf";
+  string outfilename=filename+".nnf";
 
 //  throw CircuitException("filename: "+filename);
 
