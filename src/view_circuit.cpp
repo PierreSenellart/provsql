@@ -43,7 +43,7 @@ static vector<pair<int,int>> parse_array(string s)
   return result;
 }
 
-static void view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
+static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
 {
   constants_t constants;
   if(!initialize_constants(&constants)) {
@@ -123,7 +123,7 @@ static void view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
     elog(WARNING, "%s", c.toString(0).c_str());
 
   //Calling the dot renderer
-  c.render();
+  return c.render();
 }
 
 Datum view_circuit(PG_FUNCTION_ARGS)
@@ -136,8 +136,15 @@ Datum view_circuit(PG_FUNCTION_ARGS)
     if(PG_ARGISNULL(1))
       PG_RETURN_NULL();
 
-    view_circuit_internal(token, token2prob, is_debug);
-    PG_RETURN_BOOL(true);
+    std::string s = view_circuit_internal(token, token2prob, is_debug);
+
+    text *result = (text *) palloc(VARHDRSZ + s.size() + 1);
+    SET_VARSIZE(result, VARHDRSZ + s.size());
+
+    memcpy((void *) VARDATA(result),
+           s.c_str(),
+           s.size());
+    PG_RETURN_TEXT_P(result);
   } catch(const std::exception &e) {
     elog(ERROR, "view_circuit: %s", e.what());
   } catch(...) {

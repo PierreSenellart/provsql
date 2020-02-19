@@ -59,8 +59,8 @@ and to use a Web interface for simple visualization of where-provenance.
    PostgreSQL version 9.x, and is installed automatically for PostgreSQL
    version >= 10; on Homebrew, in the `ossp-uuid` package).
 
-4. Optionally, for probability computation, any or all of the following
-   software:
+4. Optionally, for probability computation through knowledge compilation,
+   any or all of the following software:
 
    * `c2d`, from http://reasoning.cs.ucla.edu/c2d/download.php
 
@@ -72,13 +72,10 @@ and to use a Web interface for simple visualization of where-provenance.
    available in the PATH of the PostgreSQL server user (e.g., in
    `/usr/local/bin/`).
 
-5. Optionally, for circuit visualization, the following software:
-
-   * `graphviz`, for production of PDF circuits (`dot` executable)
-   
-   * `evince`, for visualization of PDF files
-   
-   Both can be obtained as packages in common Linux distributions.
+5. Optionally, for circuit visualization, the `graph-easy` executable
+   from the Graph::Easy Perl library (that can be obtained from the
+   `libgraph-easy-perl` package on Debian-based Linux distributions) or
+   from CPAN.
 
 ## Installation
 
@@ -111,11 +108,7 @@ can ensure this by running the command ``createuser your_login`` as the
 ``postgres`` user.
 
 Note that the tests that depend on external software (`c2d`, `d4`, 
-`dsharp`, `dot`) will fail if no executable of that name can be found.
-
-For circuit visualization, the database server will attempt to launch `evince`
-on a local X window server (`:0`). You can authorize the display of such windows
-with `xhost +`.
+`dsharp`, `graph-easy`) will fail if no executable of that name can be found.
 
 ## Using ProvSQL
 
@@ -138,15 +131,19 @@ See the other examples in [test/sql](test/sql) for other use cases.
 
 A demonstration of the ProvSQL system is available as a video, on
 https://youtu.be/iqzSNfGHbEE?vq=hd1080
-
-An article describing this demonstration, presented at the VLDB 2018
+The SQL commands used in this demonstration can be found in the [doc/demo/](doc/demo/)
+directory. An article describing this demonstration, presented at the VLDB 2018.
 conference, is available at
 http://pierre.senellart.com/publications/senellart2018provsql.pdf
+
+Finally, a ProvSQL tutorial is provided, in the form of a crime mystery.
+It can be found in the [doc/tutorial/](doc/tutorial/) directory.
 
 ## Uninstalling
 
 You can uninstall ProvSQL by running `make uninstall` (run as a user with
-rights to write to the PostgreSQL installation directories).
+rights to write to the PostgreSQL installation directories), and by removing the
+reference to `provsql` in the `postgresql.conf` configuration file.
 
 ## License
 

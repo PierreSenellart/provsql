@@ -16,3 +16,5 @@ SELECT DISTINCT ON (city) * FROM personnel;
 SELECT DISTINCT 1 FROM personnel GROUP BY city;
 
 SELECT * FROM personnel INTERSECT SELECT * FROM personnel;
+
+SELECT * FROM personnel EXCEPT SELECT * FROM personnel EXCEPT SELECT * FROM personnel;
