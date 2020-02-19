@@ -68,6 +68,8 @@ and to use a Web interface for simple visualization of where-provenance.
 
    * `dsharp`, from https://bitbucket.org/haz/dsharp
 
+   * `weightmc`, from https://bitbucket.org/kuldeepmeel/weightmc/src/master/
+
    To be used, an executable with the name of this software must be
    available in the PATH of the PostgreSQL server user (e.g., in
    `/usr/local/bin/`).
@@ -108,7 +110,8 @@ can ensure this by running the command ``createuser your_login`` as the
 ``postgres`` user.
 
 Note that the tests that depend on external software (`c2d`, `d4`, 
-`dsharp`, `graph-easy`) will fail if no executable of that name can be found.
+`dsharp`, `weightmc`, `graph-easy`) will fail if no executable of
+that name can be found.
 
 ## Using ProvSQL
 
