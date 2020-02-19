@@ -108,11 +108,7 @@ can ensure this by running the command ``createuser your_login`` as the
 ``postgres`` user.
 
 Note that the tests that depend on external software (`c2d`, `d4`, 
-`dsharp`, `dot`) will fail if no executable of that name can be found.
-
-For circuit visualization, the database server will attempt to launch `evince`
-on a local X window server (`:0`). You can authorize the display of such windows
-with `xhost +`.
+`dsharp`, `graph-easy`) will fail if no executable of that name can be found.
 
 ## Using ProvSQL
 
