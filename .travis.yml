@@ -10,7 +10,6 @@ addons:
     packages:
       - g++-4.9    
       - libgraph-easy-perl
-      - evince
       - libc6:i386
 
 env:
