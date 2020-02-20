@@ -7,6 +7,7 @@
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_collation.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/planner.h"
@@ -770,7 +771,7 @@ static bool transform_except_into_join(
       oe->opfuncid = opform->oprcode;
       oe->opresulttype = opform->oprresult;   
       oe->opcollid = InvalidOid;
-      oe->inputcollid = InvalidOid;
+      oe->inputcollid = DEFAULT_COLLATION_OID;
 
       leftArg->varno=leftArg->varnoold=((RangeTblRef *) setOps->larg)->rtindex;
       rightArg->varno=rightArg->varnoold=((RangeTblRef *) setOps->rarg)->rtindex;
@@ -852,7 +853,7 @@ static Query *process_query(
   bool has_difference = false;
   bool supported=true;
   int nbcols=0;
-  int *columns[q->rtable->length];
+  int **columns=(int **) palloc(q->rtable->length*sizeof(int*));
   unsigned i=0;
 
 //ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));

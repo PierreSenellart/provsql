@@ -35,7 +35,14 @@ bool initialize_constants(constants_t *constants)
   constants->OID_SCHEMA_PROVSQL = get_namespace_oid("provsql", true);
   CheckOid(OID_SCHEMA_PROVSQL);
 
-  constants->OID_TYPE_PROVENANCE_TOKEN = GetSysCacheOid2(TYPENAMENSP,CStringGetDatum("provenance_token"),ObjectIdGetDatum(constants->OID_SCHEMA_PROVSQL));
+  constants->OID_TYPE_PROVENANCE_TOKEN = GetSysCacheOid2(
+      TYPENAMENSP,
+#if PG_VERSION_NUM >= 120000
+      Anum_pg_type_oid,
+#endif
+      CStringGetDatum("provenance_token"),
+      ObjectIdGetDatum(constants->OID_SCHEMA_PROVSQL)
+  );
   CheckOid(OID_TYPE_PROVENANCE_TOKEN);
 
   constants->OID_TYPE_UUID = TypenameGetTypid("uuid");
