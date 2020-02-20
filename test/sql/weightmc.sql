@@ -16,5 +16,5 @@ ORDER BY CITY;
 
 SELECT remove_provenance('weightmc_result');
 
-SELECT * FROM weightmc_result;
+SELECT city, ROUND(prob::numeric,2) AS prob FROM weightmc_result;
 DROP TABLE weightmc_result;

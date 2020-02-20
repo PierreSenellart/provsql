@@ -16,5 +16,5 @@ ORDER BY city;
 
 SELECT remove_provenance('dsharp_result');
 
-SELECT * FROM dsharp_result;
+SELECT city, ROUND(prob::numeric,2) AS prob FROM dsharp_result;
 DROP TABLE dsharp_result;

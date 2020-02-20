@@ -16,5 +16,5 @@ ORDER BY CITY;
 
 SELECT remove_provenance('c2d_result');
 
-SELECT * FROM c2d_result;
+SELECT city, ROUND(prob::numeric,2) AS prob FROM c2d_result;
 DROP TABLE c2d_result;
