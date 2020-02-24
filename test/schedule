@@ -37,5 +37,8 @@ test: view_circuit_multiple
 # Where-provenance
 test: where_provenance
 
+# Full example from tutorial
+test: tutorial
+
 # PostgreSQL 9.5 features
 test: group_by_empty grouping_sets
