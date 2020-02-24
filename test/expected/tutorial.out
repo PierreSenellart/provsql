@@ -46,8 +46,8 @@
  
 (1 row)
 
- person  |     formula      | probability_evaluate 
----------+------------------+----------------------
- Karleen | (Bart ⊕ Santina) |   0.9929044513077043
+ person  |     formula      |  round  
+---------+------------------+---------
+ Karleen | (Santina ⊕ Bart) | 0.99290
 (1 row)
 

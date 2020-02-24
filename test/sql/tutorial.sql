@@ -351,7 +351,7 @@ SET reliability=(SELECT score
 SELECT create_provenance_mapping('reliability_mapping','s','reliability');
 CREATE TABLE results AS 
 SELECT *,formula(provenance(),'witness_mapping'),
-         probability_evaluate(provenance(),'reliability_mapping','possible-worlds')
+         ROUND(probability_evaluate(provenance(),'reliability_mapping','possible-worlds')::NUMERIC,5)
 FROM suspects
 WHERE probability_evaluate(provenance(),'reliability_mapping','possible-worlds')>0.99 AND
       person<>'Daphine';
