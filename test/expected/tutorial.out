@@ -46,8 +46,8 @@
  
 (1 row)
 
- person  |     formula      |  round  
----------+------------------+---------
- Karleen | (Santina ⊕ Bart) | 0.99290
+ person  |  round  
+---------+---------
+ Karleen | 0.99290
 (1 row)
 
