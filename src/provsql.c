@@ -374,7 +374,7 @@ static Expr *add_eq_from_Quals_to_Expr(
 }
 
 static Expr *make_aggregation_expression(
-    Query *q,
+    Aggref *agg_ref,
     List *prov_atts,
     const constants_t *constants,
     semiring_operation op,
@@ -382,50 +382,88 @@ static Expr *make_aggregation_expression(
     Oid resorigtbl,
     AttrNumber resorigcol)
 {
-  FuncExpr *expr;
-  Aggref *agg;
-  TargetEntry *te_agg, *te_fn, *te_tbl, *te_col;
+  Expr *result;
+  FuncExpr *expr, *expr_s;
+  Aggref *agg = makeNode(Aggref);
+  FuncExpr *plus = makeNode(FuncExpr);
+  TargetEntry *te_inner = makeNode(TargetEntry);
+  TargetEntry *te_fn = makeNode(TargetEntry);
+  TargetEntry *te_tbl = makeNode(TargetEntry);
+  TargetEntry *te_col = makeNode(TargetEntry);
+  TargetEntry *te_agg = makeNode(TargetEntry);
+  TargetEntry *te_val = makeNode(TargetEntry);
+  TargetEntry *te_prov = makeNode(TargetEntry);
 
-  //same as the provenance expression
-  if (lnext(list_head(prov_atts)) == NULL)
+  if (op == SR_PLUS)
   {
-    expr = linitial(prov_atts);
+    RelabelType *re = (RelabelType *)linitial(prov_atts);
+    result = re->arg;
   }
   else
   {
-    expr = makeNode(FuncExpr);
-    if (op == SR_TIMES)
+    if (lnext(list_head(prov_atts)) == NULL)
     {
-      ArrayExpr *array = makeNode(ArrayExpr);
-
-      expr->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
-      expr->funcvariadic = true;
-
-      array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-      array->element_typeid = constants->OID_TYPE_UUID;
-      array->elements = prov_atts;
-      array->location = -1;
-
-      expr->args = list_make1(array);
+      expr = linitial(prov_atts);
     }
     else
-    { // SR_MONUS
-      expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
-      expr->args = prov_atts;
+    {
+      expr = makeNode(FuncExpr);
+      if (op == SR_TIMES)
+      {
+        ArrayExpr *array = makeNode(ArrayExpr);
+
+        expr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+        expr->funcvariadic = true;
+
+        array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+        array->element_typeid = constants->OID_TYPE_UUID;
+        array->elements = prov_atts;
+        array->location = -1;
+
+        expr->args = list_make1(array);
+      }
+      else
+      { // SR_MONUS
+        expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
+        expr->args = prov_atts;
+      }
+      expr->funcresulttype = constants->OID_TYPE_PROVENANCE_TOKEN;
+      expr->location = -1;
     }
-    expr->funcresulttype = constants->OID_TYPE_PROVENANCE_TOKEN;
-    expr->location = -1;
-  }
 
-  agg = makeNode(Aggref);
+    //semimodule function
+    expr_s = makeNode(FuncExpr);
+    expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
+    expr_s->funcresulttype = constants->OID_TYPE_PROVENANCE_TOKEN;
+    
+    te_val->resno = 1;
+    te_val->expr = (Expr*) linitial(agg_ref->args);
 
-  te_agg = makeNode(TargetEntry);
-  te_agg->resno = 1;
-  te_agg->expr = (Expr *)expr;
+    te_prov->resno = 2;
+    te_prov->expr = (Expr *)expr;
+    
+    expr_s->args = list_make2(te_val, te_prov);
+    expr_s->location=-1;
+    
+    //aggregating all semirings in an array
+    te_inner->resno = 1;
+    te_inner->expr = (Expr *)expr_s;
+    agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
+    agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
+    agg->args=list_make1(te_inner);
+    agg->aggkind=AGGKIND_NORMAL;
+    agg->location=-1;
 
-  te_fn = makeNode(TargetEntry);
-  te_fn->resno = 2;
-  te_fn->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+#if PG_VERSION_NUM >= 90600
+    /* aggargtypes was added in version 9.6 of PostgreSQL */
+    agg->aggargtypes = list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
+#endif /* PG_VERSION_NUM >= 90600 */
+
+    //final aggregation function3
+    plus->funcid=constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
+
+    te_fn->resno = 1;
+    te_fn->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
                                     -1,
                                     InvalidOid,
                                     sizeof(int32),
@@ -433,9 +471,8 @@ static Expr *make_aggregation_expression(
                                     false,
                                     true);
 
-  te_tbl = makeNode(TargetEntry);
-  te_tbl->resno = 3;
-  te_tbl->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+    te_tbl->resno = 2;
+    te_tbl->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
                                     -1,
                                     InvalidOid,
                                     sizeof(int32),
@@ -443,9 +480,8 @@ static Expr *make_aggregation_expression(
                                     false,
                                     true);
 
-  te_col = makeNode(TargetEntry);
-  te_col->resno = 4;
-  te_col->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+    te_col->resno = 3;
+    te_col->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
                                     -1,
                                     InvalidOid,
                                     sizeof(int32),
@@ -453,20 +489,20 @@ static Expr *make_aggregation_expression(
                                     false,
                                     true);
 
-  agg->aggfnoid = constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
-  agg->aggtype = constants->OID_TYPE_PROVENANCE_TOKEN;
-  agg->args = list_make4(te_agg, te_fn, te_tbl, te_col);
-  agg->aggkind = AGGKIND_NORMAL;
-  agg->location = -1;
+    te_agg->resno = 4;
+    te_agg->expr = (Expr *)agg;                                    
+   
+    plus->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+    plus->args = list_make4(te_fn, te_tbl, te_col, te_agg);
+    plus->location=-1;
 
-#if PG_VERSION_NUM >= 90600
-  /* aggargtypes was added in version 9.6 of PostgreSQL */
-  agg->aggargtypes = list_make4_oid(constants->OID_TYPE_PROVENANCE_TOKEN, constants->OID_TYPE_INT,
-                                constants->OID_TYPE_INT, constants->OID_TYPE_INT);
-#endif /* PG_VERSION_NUM >= 90600 */
+    result=(Expr*)plus;
+  }
 
-  return (Expr *)agg;
+  return result;
+
 }
+
 
 static Expr *make_provenance_expression(
     Query *q,
@@ -690,7 +726,7 @@ static void replace_aggregations_in_select(
     if (IsA(te_v->expr, Aggref))
     {
       Aggref *ar_v = (Aggref *)te_v->expr;
-      te_v->expr = make_aggregation_expression(q,
+      te_v->expr = make_aggregation_expression(ar_v,
                                                prov_atts,
                                                constants,
                                                op,

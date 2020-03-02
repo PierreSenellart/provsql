@@ -71,13 +71,13 @@ bool initialize_constants(constants_t *constants)
   constants->OID_FUNCTION_PROVENANCE = GetProvSQLFuncOid("provenance");
   CheckOid(OID_FUNCTION_PROVENANCE);
 
-  constants->OID_FUNCTION_PROVENANCE_DELTA = GetFuncOid("provenance_delta");
+  constants->OID_FUNCTION_PROVENANCE_DELTA = GetProvSQLFuncOid("provenance_delta");
   CheckOid(OID_FUNCTION_PROVENANCE_DELTA);
 
-  constants->OID_FUNCTION_PROVENANCE_AGGREGATE = GetFuncOid("provenance_aggregate");
+  constants->OID_FUNCTION_PROVENANCE_AGGREGATE = GetProvSQLFuncOid("provenance_aggregate");
   CheckOid(OID_FUNCTION_PROVENANCE_AGGREGATE);
 
-  constants->OID_FUNCTION_PROVENANCE_SEMIMOD = GetFuncOid("provenance_semimod");
+  constants->OID_FUNCTION_PROVENANCE_SEMIMOD = GetProvSQLFuncOid("provenance_semimod");
   CheckOid(OID_FUNCTION_PROVENANCE_SEMIMOD);
 
   return true;
