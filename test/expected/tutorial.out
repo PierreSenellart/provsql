@@ -1,0 +1,53 @@
+\set ECHO none
+ add_provenance 
+----------------
+ 
+(1 row)
+
+ create_provenance_mapping 
+---------------------------
+ 
+(1 row)
+
+ create_provenance_mapping 
+---------------------------
+ 
+(1 row)
+
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+  person   | c 
+-----------+---
+ Daisey    | 0
+ Audrey    | 1
+ Jack      | 1
+ Kyra      | 1
+ Bart      | 2
+ Demetra   | 2
+ Ginny     | 2
+ Harriette | 2
+ Karleen   | 2
+ Roman     | 2
+ Theodora  | 2
+ Titus     | 2
+ Daphine   | 4
+(13 rows)
+
+ create_provenance_mapping 
+---------------------------
+ 
+(1 row)
+
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+ person  |  round  
+---------+---------
+ Karleen | 0.99290
+(1 row)
+

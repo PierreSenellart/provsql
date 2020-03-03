@@ -16,5 +16,5 @@ ORDER BY city;
 
 SELECT remove_provenance('pw_result');
 
-SELECT * FROM pw_result;
+SELECT city, ROUND(prob::numeric,2) AS prob FROM pw_result;
 DROP TABLE pw_result;

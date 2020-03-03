@@ -1,7 +1,7 @@
 \set ECHO none
 SET search_path TO public, provsql;
 
-CREATE TABLE c2d_result AS
+CREATE TABLE minic2d_result AS
 SELECT city, probability_evaluate(provenance(),'p','compilation','c2d') AS prob
 FROM (
   SELECT DISTINCT city
@@ -14,7 +14,7 @@ EXCEPT
 ) t
 ORDER BY CITY;
 
-SELECT remove_provenance('c2d_result');
+SELECT remove_provenance('minic2d_result');
 
-SELECT city, ROUND(prob::numeric,2) AS prob FROM c2d_result;
-DROP TABLE c2d_result;
+SELECT city, ROUND(prob::numeric,2) AS prob FROM minic2d_result;
+DROP TABLE minic2d_result;

@@ -3,6 +3,7 @@
 extern "C" {
 #include "provsql_utils.h"
 #include <unistd.h>
+#include <math.h>
 }
 
 #include <cassert>
@@ -10,6 +11,7 @@ extern "C" {
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
+#include <iostream>
 
 using namespace std;
 
@@ -198,9 +200,9 @@ double BooleanCircuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-double BooleanCircuit::compilation(unsigned g, string compiler) const {
+std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
   vector<vector<int>> clauses;
-
+  
   // Tseytin transformation
   for(unsigned i=0; i<gates.size(); ++i) {
     switch(gates[i]) {
@@ -248,8 +250,8 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
   char cfilename[] = "/tmp/provsqlXXXXXX";
   fd = mkstemp(cfilename);
   close(fd);
-  string filename=cfilename, outfilename=filename+".nnf";
 
+  string filename=cfilename;
   ofstream ofs(filename.c_str());
 
   ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
@@ -260,14 +262,31 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
     }
     ofs << "0\n";
   }
+  if(display_prob) {
+    for(unsigned in : inputs) {
+      ofs << "w " << (in+1) << " " << to_string(prob[in]) << "\n";
+      ofs << "w -" << (in+1) << " " << to_string(1. - prob[in]) << "\n";
+    }
+  }
 
   ofs.close();
+
+  return filename;
+}
+
+double BooleanCircuit::compilation(unsigned g, string compiler) const {
+  string filename=BooleanCircuit::Tseytin(g);
+  string outfilename=filename+".nnf";
+
+//  throw CircuitException("filename: "+filename);
 
   string cmdline=compiler+" ";
   if(compiler=="d4") {
     cmdline+=filename+" -out="+outfilename;
   } else if(compiler=="c2d") {
     cmdline+="-in "+filename+" -silent";
+  } else if(compiler=="minic2d") {
+    cmdline+="-in "+filename;
   } else if(compiler=="dsharp") {
     cmdline+="-q -Fnnf "+outfilename+" "+filename;
   } else {
@@ -353,4 +372,72 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
 //  throw CircuitException(toString(g) + "\n" + dnnf.toString(dnnf.getGate(to_string(i-1))));
 
   return dnnf.dDNNFEvaluation(dnnf.getGate(to_string(i-1)));
+}
+
+double BooleanCircuit::WeightMC(unsigned g, string opt) const {
+  string filename=BooleanCircuit::Tseytin(g, true);
+
+  //opt of the form 'delta;epsilon'
+  stringstream ssopt(opt); 
+  string delta_s, epsilon_s;
+  getline(ssopt, delta_s, ';');
+  getline(ssopt, epsilon_s, ';');
+
+  double delta = 0;
+  try { 
+    delta=stod(delta_s); 
+  } catch (invalid_argument &e) {
+    delta=0;
+  }
+  double epsilon = 0;
+  try {
+    epsilon=stod(epsilon_s);
+  } catch (invalid_argument &e) {
+    epsilon=0;
+  }
+  if(delta == 0) delta=0.2;
+  if(epsilon == 0) epsilon=0.8;
+
+  //TODO calcul numIterations
+
+  //calcul pivotAC
+  const double pivotAC=2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
+
+  string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+to_string(pivotAC)+ " "+filename+" > "+filename+".out";
+
+  int retvalue=system(cmdline.c_str());
+  if(retvalue) {
+    throw CircuitException("Error executing weightmc");
+  }
+
+  //parsing
+  ifstream ifs((filename+".out").c_str());
+  string line, prev_line;
+  while(getline(ifs,line))
+    prev_line=line;
+
+  stringstream ss(prev_line);
+  string result;
+  ss >> result >> result >> result >> result >> result;
+  
+  istringstream iss(result);
+  string val, exp;
+  getline(iss, val, 'x');
+  getline(iss, exp);
+  double value=stod(val);
+  exp=exp.substr(2);
+  double exponent=stod(exp);
+  double ret=value*(pow(2.0,exponent));
+//  throw CircuitException(to_string(ret));
+
+
+//  if(unlink(filename.c_str())) {
+//    throw CircuitException("Error removing "+filename);
+//  }
+
+  if(unlink((filename+".out").c_str())) {
+    throw CircuitException("Error removing "+filename+".out");
+  }
+
+  return ret;
 }

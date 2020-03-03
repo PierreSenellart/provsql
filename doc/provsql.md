@@ -43,7 +43,7 @@ and to use a Web interface for simple visualization of where-provenance.
 ## Prerequisites for installation
 
 1. An install of PostgreSQL >= 9.5. The extension has currently been
-   tested with versions from 9.5 to 11.1 (inclusive) of PostgreSQL, under
+   tested with versions from 9.5 to 12.2 (inclusive) of PostgreSQL, under
    Linux and Mac OS X (if the extension does not work on a specific version
    or operating system, a bug report is appreciated).
 
@@ -68,9 +68,15 @@ and to use a Web interface for simple visualization of where-provenance.
 
    * `dsharp`, from https://bitbucket.org/haz/dsharp
 
+   * `minic2d`, from http://reasoning.cs.ucla.edu/minic2d/
+
+   * `weightmc`, from https://bitbucket.org/kuldeepmeel/weightmc/src/master/
+
    To be used, an executable with the name of this software must be
    available in the PATH of the PostgreSQL server user (e.g., in
    `/usr/local/bin/`).
+   Using `minic2d` also requires the
+   `hgr2htree` executable (it is provided with `minic2d`).
 
 5. Optionally, for circuit visualization, the `graph-easy` executable
    from the Graph::Easy Perl library (that can be obtained from the
@@ -108,11 +114,8 @@ can ensure this by running the command ``createuser your_login`` as the
 ``postgres`` user.
 
 Note that the tests that depend on external software (`c2d`, `d4`, 
-`dsharp`, `dot`) will fail if no executable of that name can be found.
-
-For circuit visualization, the database server will attempt to launch `evince`
-on a local X window server (`:0`). You can authorize the display of such windows
-with `xhost +`.
+`dsharp`, `minic2d`, `weightmc`, `graph-easy`) will fail if no executable of
+that name can be found.
 
 ## Using ProvSQL
 

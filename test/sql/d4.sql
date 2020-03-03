@@ -16,5 +16,5 @@ ORDER BY CITY;
 
 SELECT remove_provenance('d4_result');
 
-SELECT * FROM d4_result;
+SELECT city, ROUND(prob::numeric,2) AS prob FROM d4_result;
 DROP TABLE d4_result;

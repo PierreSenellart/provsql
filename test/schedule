@@ -29,13 +29,16 @@ test: viewing_setup
 test: possible_worlds monte_carlo
 
 # Probability computation using external software
-test: c2d d4 dsharp
+test: c2d d4 dsharp weightmc minic2d
 
 # Viewing circuit
 test: view_circuit_multiple
 
 # Where-provenance
 test: where_provenance
+
+# Full example from tutorial
+test: tutorial
 
 # PostgreSQL 9.5 features
 test: group_by_empty grouping_sets
