@@ -280,11 +280,13 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
 
 //  throw CircuitException("filename: "+filename);
 
-    string cmdline=compiler+" ";
+  string cmdline=compiler+" ";
   if(compiler=="d4") {
     cmdline+=filename+" -out="+outfilename;
   } else if(compiler=="c2d") {
     cmdline+="-in "+filename+" -silent";
+  } else if(compiler=="minic2d") {
+    cmdline+="-in "+filename;
   } else if(compiler=="dsharp") {
     cmdline+="-q -Fnnf "+outfilename+" "+filename;
   } else {
@@ -428,9 +430,10 @@ double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   double ret=value*(pow(2.0,exponent));
 //  throw CircuitException(to_string(ret));
 
-  if(unlink(filename.c_str())) {
-    throw CircuitException("Error removing "+filename);
-  }
+
+//  if(unlink(filename.c_str())) {
+//    throw CircuitException("Error removing "+filename);
+//  }
 
   if(unlink((filename+".out").c_str())) {
     throw CircuitException("Error removing "+filename+".out");
