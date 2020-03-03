@@ -719,22 +719,32 @@ static void replace_aggregations_in_select(
     semiring_operation op)
 {
   ListCell *lc_v;
-  //replace each Aggref with Aggref of the
+  List* lst_v = NIL;
+  //replace each Aggref with a TargetEntry calling the agg function
   foreach (lc_v, q->targetList)
   {
+    
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
     if (IsA(te_v->expr, Aggref))
     {
       Aggref *ar_v = (Aggref *)te_v->expr;
-      te_v->expr = make_aggregation_expression(ar_v,
-                                               prov_atts,
-                                               constants,
-                                               op,
-                                               ar_v->aggfnoid,
-                                               te_v->resorigtbl,
-                                               te_v->resorigcol);
+      TargetEntry *te_new = makeNode(TargetEntry);
+      te_new->expr = make_aggregation_expression(ar_v,
+                                                 prov_atts,
+                                                 constants,
+                                                 op,
+                                                 ar_v->aggfnoid,
+                                                 te_v->resorigtbl,
+                                                 te_v->resorigcol);
+      te_new->resno = te_v->resno;
+      te_new->resname = te_v->resname;
+      lst_v = lappend(lst_v, te_new);
+    }
+    else {
+      lst_v = lappend(lst_v, te_v);
     }
   }
+  q->targetList = lst_v;
 }
 
 static void add_to_select(

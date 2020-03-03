@@ -632,7 +632,7 @@ BEGIN
   END CASE;
 
   --create value gates
-  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR))
+  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR)))
     INTO value_token;
   LOCK TABLE provenance_circuit_gate;
   BEGIN
