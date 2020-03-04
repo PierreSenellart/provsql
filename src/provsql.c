@@ -745,7 +745,7 @@ static void replace_aggregations_in_select(
       lst_v = lappend(lst_v, te_v);
     }
   }
-  q->targetList = lst_v;
+  if(lst_v!=NIL) q->targetList = lst_v;
 }
 
 static void add_to_select(
@@ -775,6 +775,11 @@ static Node *provenance_mutator(Node *node, provenance_mutator_context *context)
     FuncExpr *f = (FuncExpr *)node;
 
     if (f->funcid == context->constants->OID_FUNCTION_PROVENANCE)
+    {
+      return (Node *)copyObject(context->provsql);
+    }
+    //TODO this not seems to be correct (but at least it doesn't sent SIGSEGV)
+    else if (f->funcid == context->constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
     {
       return (Node *)copyObject(context->provsql);
     }
