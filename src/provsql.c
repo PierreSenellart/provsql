@@ -387,13 +387,9 @@ static Expr *make_aggregation_expression(
   FuncExpr *expr, *expr_s;
   Aggref *agg = makeNode(Aggref);
   FuncExpr *plus = makeNode(FuncExpr);
-  TargetEntry *te_inner = makeNode(TargetEntry);
-  TargetEntry *te_fn = makeNode(TargetEntry);
-  TargetEntry *te_tbl = makeNode(TargetEntry);
-  TargetEntry *te_col = makeNode(TargetEntry);
-  TargetEntry *te_agg = makeNode(TargetEntry);
-  TargetEntry *te_val = makeNode(TargetEntry);
-  TargetEntry *te_prov = makeNode(TargetEntry);
+  Const *fn = makeNode(Const);
+  Const *tbl = makeNode(Const);
+  Const *col = makeNode(Const);
 
   if (op == SR_PLUS)
   {
@@ -437,21 +433,13 @@ static Expr *make_aggregation_expression(
     expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
     expr_s->funcresulttype = constants->OID_TYPE_PROVENANCE_TOKEN;
     
-    te_val->resno = 1;
-    te_val->expr = (Expr*) linitial(agg_ref->args);
-
-    te_prov->resno = 2;
-    te_prov->expr = (Expr *)expr;
-    
-    expr_s->args = list_make2(te_val, te_prov);
+    expr_s->args = list_make2(linitial(agg_ref->args), expr);
     expr_s->location=-1;
     
     //aggregating all semirings in an array
-    te_inner->resno = 1;
-    te_inner->expr = (Expr *)expr_s;
     agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
     agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    agg->args=list_make1(te_inner);
+    agg->args=list_make1(expr_s);
     agg->aggkind=AGGKIND_NORMAL;
     agg->location=-1;
 
@@ -463,8 +451,7 @@ static Expr *make_aggregation_expression(
     //final aggregation function3
     plus->funcid=constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
 
-    te_fn->resno = 1;
-    te_fn->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+    fn = makeConst(constants->OID_TYPE_INT,
                                     -1,
                                     InvalidOid,
                                     sizeof(int32),
@@ -472,8 +459,7 @@ static Expr *make_aggregation_expression(
                                     false,
                                     true);
 
-    te_tbl->resno = 2;
-    te_tbl->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+    tbl = makeConst(constants->OID_TYPE_INT,
                                     -1,
                                     InvalidOid,
                                     sizeof(int32),
@@ -481,8 +467,7 @@ static Expr *make_aggregation_expression(
                                     false,
                                     true);
 
-    te_col->resno = 3;
-    te_col->expr = (Expr *) makeConst(constants->OID_TYPE_INT,
+    col = makeConst(constants->OID_TYPE_INT,
                                     -1,
                                     InvalidOid,
                                     sizeof(int32),
@@ -490,11 +475,8 @@ static Expr *make_aggregation_expression(
                                     false,
                                     true);
 
-    te_agg->resno = 4;
-    te_agg->expr = (Expr *)agg;                                    
-   
     plus->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    plus->args = list_make4(te_fn, te_tbl, te_col, te_agg);
+    plus->args = list_make4(fn, tbl, col, agg);
     plus->location=-1;
 
     result=(Expr*)plus;
@@ -560,14 +542,10 @@ static Expr *make_provenance_expression(
     {
       Aggref *agg = makeNode(Aggref);
       FuncExpr *plus = makeNode(FuncExpr);
-      TargetEntry *te_inner = makeNode(TargetEntry);
-
-      te_inner->resno = 1;
-      te_inner->expr = (Expr *)expr;
 
       agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
       agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
-      agg->args=list_make1(te_inner);
+      agg->args=list_make1(expr);
       agg->aggkind=AGGKIND_NORMAL;
       agg->location=-1;
 
@@ -775,11 +753,6 @@ static Node *provenance_mutator(Node *node, provenance_mutator_context *context)
     FuncExpr *f = (FuncExpr *)node;
 
     if (f->funcid == context->constants->OID_FUNCTION_PROVENANCE)
-    {
-      return (Node *)copyObject(context->provsql);
-    }
-    //TODO this not seems to be correct (but at least it doesn't sent SIGSEGV)
-    else if (f->funcid == context->constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
     {
       return (Node *)copyObject(context->provsql);
     }
