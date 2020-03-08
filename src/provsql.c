@@ -433,7 +433,7 @@ static Expr *make_aggregation_expression(
     expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
     expr_s->funcresulttype = constants->OID_TYPE_PROVENANCE_TOKEN;
     
-    expr_s->args = list_make2(linitial(agg_ref->args), expr);
+    expr_s->args = list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
     expr_s->location=-1;
     
     //aggregating all semirings in an array
