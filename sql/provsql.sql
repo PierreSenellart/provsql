@@ -604,49 +604,31 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_semimod(val anyelement, VARIADIC tokens uuid[])
+CREATE FUNCTION provenance_semimod(val anyelement, token provenance_token)
   RETURNS provenance_token AS
 $$
 DECLARE
-  times_token uuid;
   semimod_token uuid;
   value_token uuid;
 BEGIN
-  CASE array_length(tokens,1)
-    WHEN 0 THEN
-      times_token:=gate_one();
-    WHEN 1 THEN
-      times_token:=tokens[1];
-    ELSE
-      SELECT uuid_generate_v5(uuid_ns_provsql(),concat('times',uuid_provsql_agg(t)))
-      INTO times_token
-      FROM unnest(tokens) t;
+  LOCK TABLE provenance_circuit_gate;
 
-      LOCK TABLE provenance_circuit_gate;
-      BEGIN
-        INSERT INTO provenance_circuit_gate VALUES(times_token,'times');
-        INSERT INTO provenance_circuit_wire SELECT times_token, t, row_number() OVER ()
-          FROM unnest(tokens) t;
-      EXCEPTION WHEN unique_violation THEN
-      END;
-  END CASE;
-
-  --create value gates
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR)))
     INTO value_token;
-  LOCK TABLE provenance_circuit_gate;
+  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
+    INTO semimod_token;
+
   BEGIN
+    --create value gates
     INSERT INTO provenance_circuit_gate VALUES(value_token,'value');
     INSERT INTO aggregation_values VALUES(value_token,CAST(val AS VARCHAR));
+
+    --create semimod gate
+    INSERT INTO provenance_circuit_gate VALUES(semimod_token,'semimod');
+    INSERT INTO provenance_circuit_wire VALUES(semimod_token,token);
+    INSERT INTO provenance_circuit_wire VALUES(semimod_token,value_token);
   EXCEPTION WHEN unique_violation THEN
   END;
-
-  --create semimod gate
-  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,times_token))
-    INTO value_token;
-  INSERT INTO provenance_circuit_gate VALUES(semimod_token,'semimod');
-  INSERT INTO provenance_circuit_wire VALUES(semimod_token,times_token);
-  INSERT INTO provenance_circuit_wire VALUES(semimod_token,value_token);
 
   RETURN semimod_token;
 END
