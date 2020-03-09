@@ -547,6 +547,8 @@ static Expr *make_provenance_expression(
       FuncExpr *plus = makeNode(FuncExpr);
       TargetEntry *te_inner = makeNode(TargetEntry);
 
+      q->hasAggs = true;
+
       te_inner->resno = 1;
       te_inner->expr = (Expr *)expr;
 
@@ -584,7 +586,6 @@ static Expr *make_provenance_expression(
       result = (Expr *)deltaExpr;
 
     }
-
   }
 
   //ereport(WARNING, (errmsg("Before: %s", nodeToString(q))));
