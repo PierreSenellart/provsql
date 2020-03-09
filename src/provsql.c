@@ -378,10 +378,7 @@ static Expr *make_aggregation_expression(
     Aggref *agg_ref,
     List *prov_atts,
     const constants_t *constants,
-    semiring_operation op,
-    Oid aggfnoid,
-    Oid resorigtbl,
-    AttrNumber resorigcol)
+    semiring_operation op)
 {
   Expr *result;
   FuncExpr *expr, *expr_s;
@@ -389,8 +386,7 @@ static Expr *make_aggregation_expression(
   FuncExpr *plus = makeNode(FuncExpr);
   TargetEntry *te_inner = makeNode(TargetEntry);
   Const *fn = makeNode(Const);
-  Const *tbl = makeNode(Const);
-  Const *col = makeNode(Const);
+  Const *typ = makeNode(Const);
 
   if (op == SR_PLUS)
   {
@@ -451,35 +447,27 @@ static Expr *make_aggregation_expression(
     agg->aggargtypes = list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
 #endif /* PG_VERSION_NUM >= 90600 */
 
-    //final aggregation function3
+    //final aggregation function
     plus->funcid=constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
 
     fn = makeConst(constants->OID_TYPE_INT,
                                     -1,
                                     InvalidOid,
                                     sizeof(int32),
-                                    Int32GetDatum(aggfnoid),
+                                    Int32GetDatum(agg_ref->aggfnoid),
                                     false,
                                     true);
 
-    tbl = makeConst(constants->OID_TYPE_INT,
+    typ = makeConst(constants->OID_TYPE_INT,
                                     -1,
                                     InvalidOid,
                                     sizeof(int32),
-                                    Int32GetDatum(resorigtbl),
-                                    false,
-                                    true);
-
-    col = makeConst(constants->OID_TYPE_INT,
-                                    -1,
-                                    InvalidOid,
-                                    sizeof(int32),
-                                    Int32GetDatum(resorigcol),
+                                    Int32GetDatum(agg_ref->aggtype),
                                     false,
                                     true);
 
     plus->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    plus->args = list_make4(fn, tbl, col, agg);
+    plus->args = list_make3(fn, typ, agg);
     plus->location=-1;
 
     result=(Expr*)plus;
@@ -719,10 +707,7 @@ static void replace_aggregations_in_select(
       te_new->expr = make_aggregation_expression(ar_v,
                                                  prov_atts,
                                                  constants,
-                                                 op,
-                                                 ar_v->aggfnoid,
-                                                 te_v->resorigtbl,
-                                                 te_v->resorigcol);
+                                                 op);
       te_new->resno = te_v->resno;
       te_new->resname = te_v->resname;
       lst_v = lappend(lst_v, te_new);
@@ -1154,7 +1139,7 @@ static Query *process_query(
   int **columns=(int **) palloc(q->rtable->length*sizeof(int*));
   unsigned i=0;
 
-//  ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
+  ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
 
   if (q->setOperations)
   {
@@ -1334,7 +1319,7 @@ static Query *process_query(
       pfree(columns[i]);
   }
 
-//  ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
+  ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
 
   return q;
 }

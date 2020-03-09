@@ -25,8 +25,7 @@ CREATE UNLOGGED TABLE provenance_circuit_extra(
 CREATE UNLOGGED TABLE aggregation_circuit_extra(
   gate provenance_token,
   aggfnoid INT,
-  resorigtbl INT,
-  resorigcol INT
+  aggtype INT
 );
 
 CREATE UNLOGGED TABLE aggregation_values(
@@ -414,8 +413,8 @@ BEGIN
     INTO result;
   ELSE
   --ELSIF rec.gate_type='semimod' THEN
-    EXECUTE format('SELECT %I(%L,provsql.provenance_evaluate(%L,%L,%L::%s,%L,%L,%L,%L,%L))',
-      semimod_function, token, token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
+    EXECUTE format('SELECT %I(val,provsql.provenance_evaluate(w1.t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire w, provsql.aggregation_values av, provsql.provenance_circuit_wire w1 WHERE w.f=%L AND w.idx=1 AND w.t=gate AND w1.f=%L AND w1.idx=0',
+      semimod_function, token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token,token)
     INTO result;
   --ELSE
   --  RAISE EXCEPTION USING MESSAGE='Unknown gate type';
@@ -555,11 +554,15 @@ BEGIN
   IF token = gate_one() THEN
     return token;
   END IF;
+  
+  delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
 
-  LOCK TABLE provenance_circuit_gate;
-  delta_token:=uuid_generate_v4();
-  INSERT INTO provenance_circuit_gate VALUES(delta_token,'delta');
-  INSERT INTO provenance_circuit_wire VALUES(delta_token,token);
+  BEGIN
+    LOCK TABLE provenance_circuit_gate;
+    INSERT INTO provenance_circuit_gate VALUES(delta_token,'delta');
+    INSERT INTO provenance_circuit_wire VALUES(delta_token,token);
+  EXCEPTION WHEN unique_violation THEN
+  END;
 
   RETURN delta_token;
 END
@@ -567,7 +570,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
-    resorigtbl integer, resorigcol integer,
+    aggtype integer,
     tokens uuid[])
   RETURNS provenance_token AS
 $$
@@ -587,15 +590,14 @@ BEGIN
     agg_token := uuid_generate_v5(
       uuid_ns_provsql(),
       concat('agg',array_to_string(tokens, ',')));
-
-    LOCK TABLE provenance_circuit_gate;
     BEGIN
+      LOCK TABLE provenance_circuit_gate;
       INSERT INTO provenance_circuit_gate VALUES(agg_token,'agg');
       INSERT INTO provenance_circuit_wire
         SELECT agg_token, t 
         FROM unnest(tokens) AS t
         WHERE t != gate_zero();
-      INSERT INTO aggregation_circuit_extra VALUES(agg_token, aggfnoid, resorigtbl, resorigcol);
+      INSERT INTO aggregation_circuit_extra VALUES(agg_token, aggfnoid, aggtype);
     EXCEPTION WHEN unique_violation THEN
     END;
   END IF;
@@ -625,8 +627,8 @@ BEGIN
 
     --create semimod gate
     INSERT INTO provenance_circuit_gate VALUES(semimod_token,'semimod');
-    INSERT INTO provenance_circuit_wire VALUES(semimod_token,token);
-    INSERT INTO provenance_circuit_wire VALUES(semimod_token,value_token);
+    INSERT INTO provenance_circuit_wire VALUES(semimod_token,token,0);
+    INSERT INTO provenance_circuit_wire VALUES(semimod_token,value_token,1);
   EXCEPTION WHEN unique_violation THEN
   END;
 
