@@ -387,6 +387,7 @@ static Expr *make_aggregation_expression(
   FuncExpr *expr, *expr_s;
   Aggref *agg = makeNode(Aggref);
   FuncExpr *plus = makeNode(FuncExpr);
+  TargetEntry *te_inner = makeNode(TargetEntry);
   Const *fn = makeNode(Const);
   Const *tbl = makeNode(Const);
   Const *col = makeNode(Const);
@@ -437,9 +438,11 @@ static Expr *make_aggregation_expression(
     expr_s->location=-1;
     
     //aggregating all semirings in an array
+    te_inner->resno = 1;
+    te_inner->expr = (Expr *)expr_s;
     agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
     agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    agg->args=list_make1(expr_s);
+    agg->args=list_make1(te_inner);
     agg->aggkind=AGGKIND_NORMAL;
     agg->location=-1;
 
@@ -542,10 +545,14 @@ static Expr *make_provenance_expression(
     {
       Aggref *agg = makeNode(Aggref);
       FuncExpr *plus = makeNode(FuncExpr);
+      TargetEntry *te_inner = makeNode(TargetEntry);
+
+      te_inner->resno = 1;
+      te_inner->expr = (Expr *)expr;
 
       agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
       agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
-      agg->args=list_make1(expr);
+      agg->args=list_make1(te_inner);
       agg->aggkind=AGGKIND_NORMAL;
       agg->location=-1;
 
@@ -1146,7 +1153,7 @@ static Query *process_query(
   int **columns=(int **) palloc(q->rtable->length*sizeof(int*));
   unsigned i=0;
 
-  ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
+//  ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
 
   if (q->setOperations)
   {
@@ -1326,7 +1333,7 @@ static Query *process_query(
       pfree(columns[i]);
   }
 
-  ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
+//  ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
 
   return q;
 }
