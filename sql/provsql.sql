@@ -624,7 +624,11 @@ BEGIN
     --create value gates
     INSERT INTO provenance_circuit_gate VALUES(value_token,'value');
     INSERT INTO aggregation_values VALUES(value_token,CAST(val AS VARCHAR));
+  EXCEPTION WHEN unique_violation THEN
+  END;
+  -- the unique violation should be different!!
 
+  BEGIN
     --create semimod gate
     INSERT INTO provenance_circuit_gate VALUES(semimod_token,'semimod');
     INSERT INTO provenance_circuit_wire VALUES(semimod_token,token,0);
