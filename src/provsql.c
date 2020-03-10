@@ -430,7 +430,23 @@ static Expr *make_aggregation_expression(
     expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
     expr_s->funcresulttype = constants->OID_TYPE_PROVENANCE_TOKEN;
     
-    expr_s->args = list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
+    //check whether args list exist (e.g., count(*))
+    if(list_length(agg_ref->args)>0)
+    {
+      expr_s->args = list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
+    }
+    else
+    {
+      Const *one = makeConst(constants->OID_TYPE_INT,
+                                    -1,
+                                    InvalidOid,
+                                    sizeof(int32),
+                                    Int32GetDatum(1),
+                                    false,
+                                    true);
+      expr_s->args = list_make2(one, expr);
+
+    }
     expr_s->location=-1;
     
     //aggregating all semirings in an array
