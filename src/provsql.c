@@ -483,7 +483,7 @@ static Expr *make_aggregation_expression(
                                     true);
 
     plus->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
-    plus->args = list_make3(fn, typ, agg);
+    plus->args = list_make4(fn, typ, agg_ref, agg);
     plus->location=-1;
 
     result=(Expr*)plus;

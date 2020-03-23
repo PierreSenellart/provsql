@@ -25,7 +25,8 @@ CREATE UNLOGGED TABLE provenance_circuit_extra(
 CREATE UNLOGGED TABLE aggregation_circuit_extra(
   gate provenance_token,
   aggfnoid INT,
-  aggtype INT
+  aggtype INT,
+  val VARCHAR
 );
 
 CREATE UNLOGGED TABLE aggregation_values(
@@ -571,6 +572,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
     aggtype integer,
+    val anyelement,
     tokens uuid[])
   RETURNS provenance_token AS
 $$
@@ -597,7 +599,7 @@ BEGIN
         SELECT agg_token, t 
         FROM unnest(tokens) AS t
         WHERE t != gate_zero();
-      INSERT INTO aggregation_circuit_extra VALUES(agg_token, aggfnoid, aggtype);
+      INSERT INTO aggregation_circuit_extra VALUES(agg_token, aggfnoid, aggtype, CAST(val as VARCHAR));
     EXCEPTION WHEN unique_violation THEN
     END;
   END IF;
