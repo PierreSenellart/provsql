@@ -6,6 +6,25 @@ SET search_path TO provsql;
 
 CREATE DOMAIN provenance_token AS UUID NOT NULL;
 
+-- Create agg_token type for aggregation display
+
+CREATE TYPE agg_token;
+
+CREATE FUNCTION agg_token_in(cstring)
+  RETURNS agg_token
+  AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION agg_token_out(agg_token)
+  RETURNS cstring
+  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT;
+
+CREATE TYPE agg_token (
+  --internallength = 16,
+  input = agg_token_in,
+  output = agg_token_out
+  --alignment = uuid
+);
+
 CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','project','zero','one','eq', 'agg', 'semimod', 'cmp', 'delta', 'value');
 
 CREATE UNLOGGED TABLE provenance_circuit_gate(
@@ -574,37 +593,37 @@ CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggtype integer,
     val anyelement,
     tokens uuid[])
-  RETURNS provenance_token AS
+  RETURNS VARCHAR AS
 $$
 DECLARE
   c INTEGER;
-  agg_token uuid;
+  agg_tok uuid;
 --  ts timestamptz;
 BEGIN
 --  ts := clock_timestamp();
   c:=array_length(tokens, 1);
 
   IF c = 0 THEN
-    agg_token := gate_zero();
+    agg_tok := gate_zero();
   ELSIF c = 1 THEN
-    agg_token := tokens[1];
+    agg_tok := tokens[1];
   ELSE
-    agg_token := uuid_generate_v5(
+    agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
       concat('agg',array_to_string(tokens, ',')));
     BEGIN
       LOCK TABLE provenance_circuit_gate;
-      INSERT INTO provenance_circuit_gate VALUES(agg_token,'agg');
+      INSERT INTO provenance_circuit_gate VALUES(agg_tok,'agg');
       INSERT INTO provenance_circuit_wire
-        SELECT agg_token, t 
+        SELECT agg_tok, t 
         FROM unnest(tokens) AS t
         WHERE t != gate_zero();
-      INSERT INTO aggregation_circuit_extra VALUES(agg_token, aggfnoid, aggtype, CAST(val as VARCHAR));
+      INSERT INTO aggregation_circuit_extra VALUES(agg_tok, aggfnoid, aggtype, CAST(val as VARCHAR));
     EXCEPTION WHEN unique_violation THEN
     END;
   END IF;
 --  raise notice 'agg time spent=%', clock_timestamp() - ts;
-  RETURN agg_token;
+  RETURN agg_tok::varchar;
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 

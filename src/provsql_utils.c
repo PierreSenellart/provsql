@@ -45,6 +45,16 @@ bool initialize_constants(constants_t *constants)
   );
   CheckOid(OID_TYPE_PROVENANCE_TOKEN);
 
+  constants->OID_TYPE_AGG_TOKEN = GetSysCacheOid2(
+      TYPENAMENSP,
+#if PG_VERSION_NUM >= 120000
+      Anum_pg_type_oid,
+#endif
+      CStringGetDatum("agg_token"),
+      ObjectIdGetDatum(constants->OID_SCHEMA_PROVSQL)
+  );
+  CheckOid(OID_TYPE_AGG_TOKEN);
+
   constants->OID_TYPE_UUID = TypenameGetTypid("uuid");
   CheckOid(OID_TYPE_UUID);
 
@@ -53,6 +63,9 @@ bool initialize_constants(constants_t *constants)
   
   constants->OID_TYPE_INT = TypenameGetTypid("int4");
   CheckOid(OID_TYPE_INT);
+
+  constants->OID_TYPE_VARCHAR = TypenameGetTypid("varchar");
+  CheckOid(OID_TYPE_VARCHAR);
 
   constants->OID_TYPE_INT_ARRAY = TypenameGetTypid("_int4");
   CheckOid(OID_TYPE_INT_ARRAY);
