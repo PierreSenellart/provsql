@@ -603,7 +603,6 @@ $$
 DECLARE
   c INTEGER;
   agg_tok uuid;
-  test varchar;
 --  ts timestamptz;
 BEGIN
 --  ts := clock_timestamp();
@@ -625,9 +624,6 @@ BEGIN
         FROM unnest(tokens) AS t
         WHERE t != gate_zero();
       INSERT INTO aggregation_circuit_extra VALUES(agg_tok, aggfnoid, aggtype, CAST(val as VARCHAR));
-      SELECT aggregation_circuit_extra.val into test from aggregation_circuit_extra WHERE gate = agg_tok;
-      RAISE NOTICE 'val = %', test;
-      COMMIT;
     EXCEPTION WHEN unique_violation THEN
     END;
   END IF;
