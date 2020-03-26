@@ -490,9 +490,7 @@ static Expr *make_aggregation_expression(
   }
 
   return result;
-
 }
-
 
 static Expr *make_provenance_expression(
     Query *q,

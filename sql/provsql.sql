@@ -19,11 +19,16 @@ CREATE FUNCTION agg_token_out(agg_token)
   AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT;
 
 CREATE TYPE agg_token (
-  --internallength = 16,
+  internallength = 16,
   input = agg_token_in,
-  output = agg_token_out
-  --alignment = uuid
+  output = agg_token_out,
+  alignment = char
 );
+
+CREATE CAST (uuid AS agg_token)
+    WITHOUT FUNCTION;
+CREATE CAST (agg_token AS uuid)
+    WITHOUT FUNCTION;
 
 CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','project','zero','one','eq', 'agg', 'semimod', 'cmp', 'delta', 'value');
 
@@ -593,11 +598,12 @@ CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggtype integer,
     val anyelement,
     tokens uuid[])
-  RETURNS VARCHAR AS
+  RETURNS agg_token AS
 $$
 DECLARE
   c INTEGER;
   agg_tok uuid;
+  test varchar;
 --  ts timestamptz;
 BEGIN
 --  ts := clock_timestamp();
@@ -605,8 +611,8 @@ BEGIN
 
   IF c = 0 THEN
     agg_tok := gate_zero();
-  ELSIF c = 1 THEN
-    agg_tok := tokens[1];
+/*  ELSIF c = 1 THEN
+    agg_tok := tokens[1]; */
   ELSE
     agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
@@ -619,11 +625,14 @@ BEGIN
         FROM unnest(tokens) AS t
         WHERE t != gate_zero();
       INSERT INTO aggregation_circuit_extra VALUES(agg_tok, aggfnoid, aggtype, CAST(val as VARCHAR));
+      SELECT aggregation_circuit_extra.val into test from aggregation_circuit_extra WHERE gate = agg_tok;
+      RAISE NOTICE 'val = %', test;
+      COMMIT;
     EXCEPTION WHEN unique_violation THEN
     END;
   END IF;
 --  raise notice 'agg time spent=%', clock_timestamp() - ts;
-  RETURN agg_tok::varchar;
+  RETURN agg_tok::agg_token;
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 

@@ -64,7 +64,7 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
         1) != SPI_OK_SELECT) {
     elog(ERROR, "Cannot execute real provenance_evaluate function");
   }
-  
+    
   tuple = SPI_copytuple(SPI_tuptable->vals[0]);
   result = heap_getattr(tuple, 1, SPI_tuptable->tupdesc, &isnull);
 
