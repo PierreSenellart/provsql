@@ -14,6 +14,9 @@
   };
 #endif /* PG_VERSION_NUM */
 
-typedef pg_uuid_t agg_token;
+typedef struct agg_token{
+  unsigned char tok[2*UUID_LEN+5];
+  unsigned char val[80];
+} agg_token;
 
 #endif /* AGG_TOKEN_H */

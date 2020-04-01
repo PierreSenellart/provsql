@@ -18,17 +18,27 @@ CREATE FUNCTION agg_token_out(agg_token)
   RETURNS cstring
   AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT;
 
+CREATE FUNCTION agg_token_cast(agg_token)
+  RETURNS text
+  AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT;
+
 CREATE TYPE agg_token (
-  internallength = 16,
+  internallength = 117,
   input = agg_token_in,
   output = agg_token_out,
   alignment = char
 );
 
-CREATE CAST (uuid AS agg_token)
-    WITHOUT FUNCTION;
-CREATE CAST (agg_token AS uuid)
-    WITHOUT FUNCTION;
+CREATE OR REPLACE FUNCTION agg_token_uuid(aggtok agg_token)
+  RETURNS uuid AS
+$$
+BEGIN
+  RETURN agg_token_cast(aggtok)::uuid;
+END
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+--CREATE CAST (agg_token AS VARCHAR) WITH FUNCTION agg_token_cast(agg_token);
+CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
 CREATE TYPE provenance_gate AS ENUM('input','plus','times','monus','monusl','monusr','project','zero','one','eq', 'agg', 'semimod', 'cmp', 'delta', 'value');
 
@@ -603,10 +613,14 @@ $$
 DECLARE
   c INTEGER;
   agg_tok uuid;
+  agg_val varchar;
+  agg_tok_tuple agg_token;
 --  ts timestamptz;
 BEGIN
 --  ts := clock_timestamp();
   c:=array_length(tokens, 1);
+
+  agg_val = CAST(val as VARCHAR);
 
   IF c = 0 THEN
     agg_tok := gate_zero();
@@ -623,12 +637,15 @@ BEGIN
         SELECT agg_tok, t 
         FROM unnest(tokens) AS t
         WHERE t != gate_zero();
-      INSERT INTO aggregation_circuit_extra VALUES(agg_tok, aggfnoid, aggtype, CAST(val as VARCHAR));
+      INSERT INTO aggregation_circuit_extra VALUES(agg_tok, aggfnoid, aggtype, agg_val);
     EXCEPTION WHEN unique_violation THEN
     END;
   END IF;
 --  raise notice 'agg time spent=%', clock_timestamp() - ts;
-  RETURN agg_tok::agg_token;
+  --agg_tok_tuple.tok := agg_tok;
+  --agg_tok_tuple.val := agg_val;
+  
+  RETURN '( '||agg_tok||' , '||agg_val||' )';
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
