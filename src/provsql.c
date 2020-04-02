@@ -430,12 +430,8 @@ static Expr *make_aggregation_expression(
     expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
     expr_s->funcresulttype = constants->OID_TYPE_PROVENANCE_TOKEN;
     
-    //check whether args list exist (e.g., count(*))
-    if(list_length(agg_ref->args)>0)
-    {
-      expr_s->args = list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
-    }
-    else
+    //check the particular case of count
+    if(agg_ref->aggfnoid==2803||agg_ref->aggfnoid==2147) //count(*) or count(arg)
     {
       Const *one = makeConst(constants->OID_TYPE_INT,
                                     -1,
@@ -445,8 +441,12 @@ static Expr *make_aggregation_expression(
                                     false,
                                     true);
       expr_s->args = list_make2(one, expr);
-
     }
+    else
+    {
+      expr_s->args = list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
+    }
+    
     expr_s->location=-1;
     
     //aggregating all semirings in an array
@@ -1153,7 +1153,7 @@ static Query *process_query(
   int **columns=(int **) palloc(q->rtable->length*sizeof(int*));
   unsigned i=0;
 
-  ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
+  //ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
 
   if (q->setOperations)
   {
@@ -1333,7 +1333,7 @@ static Query *process_query(
       pfree(columns[i]);
   }
 
-  ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
+  //ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
 
   return q;
 }
@@ -1376,7 +1376,7 @@ void _PG_init(void)
                            &provsql_where_provenance,
                            false,
                            PGC_USERSET,
-                           0,
+                           1,
                            NULL,
                            NULL,
                            NULL);
