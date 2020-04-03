@@ -46,12 +46,22 @@ BEGIN
   IF state IS NULL OR state.nbargs=0 THEN
     RETURN (value,1);
   ELSE
-    RETURN (concat(state.formula,' + ',value),state.nbargs+1);
+    RETURN (concat(state.formula,' , ',value),state.nbargs+1);
   END IF;
 END
 $$;
 
 CREATE FUNCTION public.formula_state2formula(state public.formula_state) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT
+    AS $$
+  SELECT
+    CASE
+      WHEN state.nbargs<2 THEN state.formula
+      ELSE concat('(',state.formula,')')
+    END;
+$$;
+
+CREATE FUNCTION public.agg_state2formula(state public.formula_state) RETURNS text
     LANGUAGE sql IMMUTABLE STRICT
     AS $$
   SELECT
@@ -90,9 +100,16 @@ CREATE AGGREGATE public.formula_times(text) (
 CREATE AGGREGATE public.formula_agg(text) (
     SFUNC = public.formula_agg_state,
     STYPE = public.formula_state,
-    INITCOND = '(1,0)',
-    FINALFUNC = public.formula_state2formula
+    INITCOND = '(1,0)'
+    --FINALFUNC = public.formula_state2formula
 );
+
+CREATE FUNCTION public.formula_agg_final(state public.formula_state, fname varchar) RETURNS text
+  LANGUAGE sql IMMUTABLE STRICT
+  AS
+  $$
+    SELECT concat(fname,'{ ',state.formula,' }');
+  $$;
 
 CREATE FUNCTION public.formula(token provsql.provenance_token, token2value regclass) RETURNS text
     LANGUAGE plpgsql
@@ -116,6 +133,7 @@ BEGIN
   RETURN aggregation_evaluate(
     token,
     token2value,
+    'formula_agg_final',
     'formula_agg',
     'formula_semimod',
     '𝟙'::text,

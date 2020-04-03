@@ -423,6 +423,7 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token provenance_token,
   token2value regclass,
+  agg_function_final regproc,
   agg_function regproc,
   semimod_function regproc,
   element_one anyelement,
@@ -442,9 +443,12 @@ BEGIN
   IF rec IS NULL THEN
     RETURN NULL;
   ELSIF rec.gate_type='agg' THEN
-    EXECUTE format('SELECT %I(provsql.aggregation_evaluate(t,%L,%L,%L,%L::%s,%L,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire WHERE f=%L',
-      agg_function,token2value,agg_function,semimod_function,element_one,value_type,value_type,plus_function,times_function,
-      monus_function,delta_function,token)
+    EXECUTE format('SELECT %I(%I(provsql.aggregation_evaluate(pcw.t,%L,%L,%L,%L,%L::%s,%L,%L,%L,%L,%L)),pp.proname::varchar) FROM 
+                    provsql.provenance_circuit_wire pcw, provsql.aggregation_circuit_extra ace, pg_proc pp 
+                    WHERE pcw.f=%L AND ace.gate=%L AND pp.oid=ace.aggfnoid
+                    GROUP BY pp.proname',
+      agg_function_final, agg_function, token2value,agg_function_final,agg_function,semimod_function,element_one,value_type,value_type,plus_function,times_function,
+      monus_function,delta_function,token,token)
     INTO result;
   ELSE
   --ELSIF rec.gate_type='semimod' THEN
@@ -699,6 +703,7 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token provenance_token,
   token2value regclass,
+  agg_function_final regproc,
   agg_function regproc,
   semimod_function regproc,
   element_one anyelement,
