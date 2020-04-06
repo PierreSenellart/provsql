@@ -1,4 +1,6 @@
 SET search_path TO public, provsql;
+SET provsql.where_provenance = on;
+
 SELECT * FROM personnel;
 SELECT add_provenance('personnel');
 SELECT * FROM personnel;
