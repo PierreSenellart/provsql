@@ -10,6 +10,7 @@
 #include "catalog/pg_collation.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/print.h"
 #include "optimizer/planner.h"
 #include "parser/analyze.h"
 #include "parser/parse_oper.h"
@@ -1155,7 +1156,7 @@ static Query *process_query(
   unsigned i=0;
 
   if(provsql_debug)
-    ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
+    elog_node_display(NOTICE, "Before ProvSQL query rewriting", q, true);
 
   if (q->setOperations)
   {
@@ -1336,7 +1337,7 @@ static Query *process_query(
   }
 
   if(provsql_debug)
-    ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
+    elog_node_display(NOTICE, "After ProvSQL query rewriting", q, true);
 
   return q;
 }
