@@ -29,6 +29,7 @@ PG_MODULE_MAGIC;
 bool provsql_shared_library_loaded = false;
 bool provsql_interrupted = false;
 bool provsql_where_provenance = false;
+bool provsql_debug = false;
 
 static const char *PROVSQL_COLUMN_NAME = "provsql";
 
@@ -592,8 +593,6 @@ static Expr *make_provenance_expression(
     }
   }
 
-  //ereport(WARNING, (errmsg("Before: %s", nodeToString(q))));
-
   /* Part to handle eq gates used for where-provenance. 
    * Placed before projection gates because they need
    * to be deeper in the provenance tree. */
@@ -1155,7 +1154,8 @@ static Query *process_query(
   int **columns=(int **) palloc(q->rtable->length*sizeof(int*));
   unsigned i=0;
 
-  //ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
+  if(provsql_debug)
+    ereport(NOTICE, (errmsg("Before: %s", nodeToString(q))));
 
   if (q->setOperations)
   {
@@ -1335,7 +1335,8 @@ static Query *process_query(
       pfree(columns[i]);
   }
 
-  //ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
+  if(provsql_debug)
+    ereport(NOTICE, (errmsg("After: %s", nodeToString(q))));
 
   return q;
 }
@@ -1393,6 +1394,16 @@ void _PG_init(void)
                            "Should ProvSQL track where-provenance?",
                            "1 turns where-provenance on, 0 off.",
                            &provsql_where_provenance,
+                           false,
+                           PGC_USERSET,
+                           1,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.debug",
+                           "Should ProvSQL debug messages be track where-provenance?",
+                           "1 turns ProvSQL debug messages on, 0 off.",
+                           &provsql_debug,
                            false,
                            PGC_USERSET,
                            1,

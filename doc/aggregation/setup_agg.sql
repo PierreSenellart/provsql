@@ -126,12 +126,12 @@ BEGIN
 END
 $$;
 
-CREATE FUNCTION public.aggregation_formula(token provsql.provenance_token, token2value regclass) RETURNS text
+CREATE FUNCTION public.aggregation_formula(token anyelement, token2value regclass) RETURNS text
     LANGUAGE plpgsql
     AS $$
 BEGIN
   RETURN aggregation_evaluate(
-    token,
+    token::provsql.provenance_token,
     token2value,
     'formula_agg_final',
     'formula_agg',
@@ -140,7 +140,7 @@ BEGIN
     'formula_plus',
     'formula_times',
     'formula_monus',
-		'formula_delta');
+    'formula_delta');
 END
 $$;
 -- Counting semiring
