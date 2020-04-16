@@ -1,0 +1,40 @@
+Rewrite count(distinct):
+
+agg=# select * from p;
+ id |   name    | age | job_id | foo 
+----+-----------+-----+--------+-----
+  0 | Titus     |  50 |      5 | t
+  1 | Norah     |  37 |      3 | f
+  2 | Ginny     |  30 |      2 | f
+  3 | Demetra   |  62 |      3 | t
+  4 | Sheri     |  69 |      0 | t
+  5 | Karleen   |  15 |      0 | t
+  6 | Daisey    |  17 |      0 | f
+  7 | Audrey    |  10 |      0 | t
+  8 | Alaine    |  63 |      3 | t
+  9 | Edwin     |  31 |      1 | f
+ 10 | Shelli    |  34 |      4 | f
+ 12 | Bart      |  29 |      3 | f
+ 13 | Harriette |  65 |      4 | f
+ 14 | Jody      |  57 |      6 | f
+ 15 | Theodora  |  22 |      3 | t
+ 16 | Roman     |  55 |      4 | t
+ 17 | Jack      |  42 |      3 | t
+ 18 | Daphine   |  21 |      1 | t
+ 19 | Kyra      |  53 |      3 | t
+ 11 | Santina   |  17 |      1 | t
+(20 rows)
+
+agg=# select count(distinct job_id), count(distinct age), foo from p group by foo;
+ count | count | foo 
+-------+-------+-----
+     6 |     8 | f
+     5 |    12 | t
+(2 rows)
+
+agg=# select u.count,w.count,u.foo from (select count(job_id), foo from (select job_id, foo from p group by job_id, foo) t group by foo) u join (select count(age), foo from (select age, foo from p group by age, foo) v group by foo) w on u.foo=w.foo;
+ count | count | foo 
+-------+-------+-----
+     6 |     8 | f
+     5 |    12 | t
+(2 rows)
