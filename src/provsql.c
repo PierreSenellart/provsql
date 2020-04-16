@@ -430,8 +430,8 @@ static Expr *add_eq_from_Quals_to_Expr(
 static Expr *make_aggregation_expression(
     Aggref *agg_ref,
     List *prov_atts,
-    const constants_t *constants,
-    semiring_operation op)
+    semiring_operation op,
+    const constants_t *constants)
 {
   Expr *result;
   FuncExpr *expr, *expr_s;
@@ -752,36 +752,40 @@ static Expr *make_provenance_expression(
   return result;
 }
 
+typedef struct aggregation_mutator_context
+{
+  List *prov_atts;
+  semiring_operation op;
+  constants_t *constants;
+} aggregation_mutator_context;
+
+static Node *aggregation_mutator(Node *node, aggregation_mutator_context *context)
+{
+  if (node == NULL)
+    return NULL;
+
+  if (IsA(node, Aggref))
+  {
+    Aggref *ar_v = (Aggref *) node;
+    return (Node *) make_aggregation_expression(
+        ar_v,
+        context->prov_atts,
+        context->op,
+        context->constants);
+  }
+    
+  return expression_tree_mutator(node, aggregation_mutator, (void *)context);
+}
+
 static void replace_aggregations_in_select(
     Query *q,
     List *prov_atts,
-    const constants_t *constants,
-    semiring_operation op)
+    semiring_operation op,
+    const constants_t *constants)
 {
-  ListCell *lc_v;
-  List* lst_v = NIL;
-  //replace each Aggref with a TargetEntry calling the agg function
-  foreach (lc_v, q->targetList)
-  {
-    
-    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
-    if (IsA(te_v->expr, Aggref))
-    {
-      Aggref *ar_v = (Aggref *)te_v->expr;
-      TargetEntry *te_new = makeNode(TargetEntry);
-      te_new->expr = make_aggregation_expression(ar_v,
-                                                 prov_atts,
-                                                 constants,
-                                                 op);
-      te_new->resno = te_v->resno;
-      te_new->resname = te_v->resname;
-      lst_v = lappend(lst_v, te_new);
-    }
-    else {
-      lst_v = lappend(lst_v, te_v);
-    }
-  }
-  if(lst_v!=NIL) q->targetList = lst_v;
+  aggregation_mutator_context context = {prov_atts, op, (constants_t *)constants};
+
+  query_tree_mutator(q, aggregation_mutator, &context, QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 }
 
 static void add_to_select(
@@ -1356,8 +1360,8 @@ static Query *process_query(
     //transform targetList to change AGGREF into
     if (q->hasAggs)
     {
-      replace_aggregations_in_select(q, prov_atts, constants,
-                                     has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES) );
+      replace_aggregations_in_select(q, prov_atts,
+                                     has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), constants);
     }
     provenance = make_provenance_expression(
         q,

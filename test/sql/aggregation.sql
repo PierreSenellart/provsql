@@ -64,13 +64,22 @@ SELECT position, aggregation_formula(count,'personnel_name') FROM agg_result ORD
 
 CREATE TABLE agg_result2 AS 
   SELECT position, aggregation_formula(count,'personnel_name') FROM (
-    SELECT position, count(*), formula(provenance(),'personnel_name')
+    SELECT position, count(*)
     FROM personnel
     GROUP BY position
   ) subquery;
 SELECT remove_provenance('agg_result2'); 
 
-SElECT * FROM agg_result2 ORDER BY position;  
+SElECT * FROM agg_result2 WHERE position <> 'Analyst' ORDER BY position;  
+
+CREATE TABLE agg_result3 AS 
+  SELECT position, aggregation_formula(count(*),'personnel_name')
+  FROM personnel
+  GROUP BY position;
+SELECT remove_provenance('agg_result3');
+
+SElECT * FROM agg_result3 WHERE position <> 'Analyst' ORDER BY position;  
 
 DROP TABLE agg_result;
 DROP TABLE agg_result2;
+DROP TABLE agg_result3;
