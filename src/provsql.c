@@ -67,6 +67,53 @@ static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, Att
   return re;
 }
 
+typedef struct aggregation_type_mutator_context
+{
+  constants_t *constants;
+  Index varno;
+  Index varattno;
+} aggregation_type_mutator_context;
+
+static Node *aggregation_type_mutator(Node *node, aggregation_type_mutator_context *context)
+{
+  if (node == NULL)
+    return NULL;
+
+  if (IsA(node, Var))
+  {
+    Var *v = (Var *)node;
+
+    if (v->varno == context->varno && v->varattno == context->varattno)
+    {
+      v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+    }
+  }
+
+  return expression_tree_mutator(node, aggregation_type_mutator, (void *)context);
+}
+
+static void fix_type_of_aggregation_result(Query *q, Index rteid, List *targetList, const constants_t *constants)
+{
+  ListCell *lc;
+  aggregation_type_mutator_context context = {(constants_t *) constants, 0, 0};
+  Index attno = 1;
+
+  foreach (lc, targetList)
+  {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if(IsA(te->expr, FuncExpr)) {
+      FuncExpr *f = (FuncExpr *) te->expr;
+
+      if(f->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+        context.varno = rteid;
+        context.varattno = attno;
+        query_tree_mutator(q, aggregation_type_mutator, &context, QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
+      }
+    }
+    ++attno;
+  }
+}
+
 static List *get_provenance_attributes(Query *q, const constants_t *constants)
 {
   List *prov_atts = NIL;
@@ -103,6 +150,8 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants)
         r->subquery = new_subquery;
         r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
         prov_atts = lappend(prov_atts, make_provenance_attribute(r, rteid, new_subquery->targetList->length, constants));
+
+        fix_type_of_aggregation_result(q, rteid, r->subquery->targetList, constants);
       }
     }
     else if (r->rtekind == RTE_JOIN)
@@ -1188,12 +1237,6 @@ static Query *process_query(
     if (q->setOperations)
       remove_provenance_attribute_setoperations(q, removed);
   }
-  /*
-  if(q->hasAggs) {
-    ereport(ERROR, (errmsg("Aggregation not supported by provsql")));
-    supported=false;
-  }
-  */
 
   if (q->hasSubLinks)
   {

@@ -34,12 +34,12 @@ CREATE FUNCTION public.formula_agg_final(state public.formula_state, fname varch
     SELECT concat(fname,'{ ',state.formula,' }');
   $$;
 
-CREATE FUNCTION public.aggregation_formula(token provsql.provenance_token, token2value regclass) RETURNS text
+CREATE FUNCTION public.aggregation_formula(token anyelement, token2value regclass) RETURNS text
     LANGUAGE plpgsql
     AS $$
 BEGIN
-  RETURN aggregation_evaluate(
-    token,
+  RETURN provsql.aggregation_evaluate(
+    token::provsql.provenance_token,
     token2value,
     'formula_agg_final',
     'formula_agg',
@@ -62,4 +62,15 @@ SELECT * FROM agg_result ORDER BY position;
 
 SELECT position, aggregation_formula(count,'personnel_name') FROM agg_result ORDER BY position;
 
+CREATE TABLE agg_result2 AS 
+  SELECT position, aggregation_formula(count,'personnel_name') FROM (
+    SELECT position, count(*), formula(provenance(),'personnel_name')
+    FROM personnel
+    GROUP BY position
+  ) subquery;
+SELECT remove_provenance('agg_result2'); 
+
+SElECT * FROM agg_result2 ORDER BY position;  
+
 DROP TABLE agg_result;
+DROP TABLE agg_result2;

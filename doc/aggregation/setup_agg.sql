@@ -130,7 +130,7 @@ CREATE FUNCTION public.aggregation_formula(token anyelement, token2value regclas
     LANGUAGE plpgsql
     AS $$
 BEGIN
-  RETURN aggregation_evaluate(
+  RETURN provsql.aggregation_evaluate(
     token::provsql.provenance_token,
     token2value,
     'formula_agg_final',

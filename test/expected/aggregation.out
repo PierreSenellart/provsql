@@ -24,3 +24,18 @@
  Janitor      | count{ (1 * Paul) }
 (6 rows)
 
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   position   |        aggregation_formula        
+--------------+-----------------------------------
+ Analyst      | count{ (1 * Susan) , (1 * Dave) }
+ Director     | count{ (1 * John) }
+ Double agent | count{ (1 * Magdalen) }
+ Field agent  | count{ (1 * Ellen) }
+ HR           | count{ (1 * Nancy) }
+ Janitor      | count{ (1 * Paul) }
+(6 rows)
+
