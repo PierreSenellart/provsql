@@ -11,8 +11,7 @@ ARG PSQL_VERSION=9.6
 ENV PSQL_VERSION=$PSQL_VERSION
 
 RUN apt-get update &&\
-    apt-get -y install  postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION} postgresql-contrib-${PSQL_VERSION}
-
+    apt-get -y install zlib1g-dev postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION} postgresql-contrib-${PSQL_VERSION}
 
 # Ensure a sane environment
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive
@@ -41,12 +40,21 @@ RUN curl http://www.cril.univ-artois.fr/KC/ressources/d4 -o /tmp/tools/d4 &&\
 
 # TOOL dsharp
 RUN cd /tmp/ &&\
-    hg clone https://bitbucket.org/haz/dsharp &&\
+    git clone https://github.com/QuMuLab/dsharp.git &&\ 
     cd dsharp &&\
     mv Makefile_gmp Makefile &&\
     make &&\
     mv dsharp /tmp/tools/ &&\
     chmod a+x /tmp/tools/dsharp
+
+# TOOL weightmc
+RUN cd /tmp &&\
+    git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc &&\
+    cd weightmc/wmc-src &&\
+    ./configure &&\
+    make &&\
+    mv weightmc /tmp/tools &&\
+    chmod a+x /tmp/tools/weightmc
     
 # mv the additional tools
 RUN bash -c "mv /tmp/tools/* /usr/local/bin"
@@ -96,7 +104,7 @@ CMD /usr/bin/pg_ctlcluster $PSQL_VERSION main start --foreground
 
 USER root
 RUN apt-get update &&\
-    apt-get -y install apache2 libapache2-mod-php7.0 php7.0-pgsql graphviz
+    apt-get -y install apache2 libapache2-mod-php7.0 php7.0-pgsql graphviz libgraph-easy-perl
 
 CMD /bin/bash /opt/provsql/docker/demo.sh
 EXPOSE 80
