@@ -2,7 +2,6 @@
 
 rm -rf /var/www/html/*
 cp -r /opt/provsql/where_panel/* /var/www/html/
-cp /opt/provsql/docker/view /usr/local/bin/evince
 chmod a+rx /usr/local/bin/evince
 touch /messages
 mkdir -p /var/www/html/pdf
