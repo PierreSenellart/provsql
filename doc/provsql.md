@@ -66,7 +66,7 @@ and to use a Web interface for simple visualization of where-provenance.
 
    * `d4`, from http://www.cril.univ-artois.fr/KC/d4.html
 
-   * `dsharp`, from https://bitbucket.org/haz/dsharp
+   * `dsharp`, from https://github.com/QuMuLab/dsharp
 
    * `minic2d`, from http://reasoning.cs.ucla.edu/minic2d/
 
