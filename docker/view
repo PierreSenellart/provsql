@@ -1,6 +1,0 @@
-#!/bin/bash
-
-mv "$1" /var/www/html/pdf/ ;
-cd /var/www/html/pdf/ ;
-chmod a+r *.pdf
-echo "A circuit PDF available at /pdf/$(basename $1)" >> /messages
