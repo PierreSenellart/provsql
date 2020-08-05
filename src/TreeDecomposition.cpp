@@ -44,19 +44,6 @@ void TreeDecomposition<W>::makeFriendly(unsigned long v)
   addGateToBag(v, new_root);
   reroot(new_root);
 
-  // Transform leaves into paths that introduce gates one at a time
-  for(unsigned i=0, nb_bags=bags.size(); i<nb_bags; ++i) {
-    if(!leaves[i])
-      continue;
-
-    unsigned long p = i;
-    for(unsigned j = 1; j < bags[i].nb_gates; ++j) {
-      p = addEmptyBag(p);
-      for(unsigned k = 0; k < bags[i].nb_gates - j; ++k)
-        addGateToBag(bags[i].gates[k], p);
-    }
-  }
-
   // Construct for each bag the union of gates in its children
   std::vector<std::set<unsigned long>> gates_in_children(bags.size());
   std::vector<unsigned> nb_children(bags.size());
@@ -68,53 +55,61 @@ void TreeDecomposition<W>::makeFriendly(unsigned long v)
     }
   }
 
-  // For every gate that is in an internal bag but not in the union of
+  // Process leaves and internal bags:
+  // - Transform leaves into paths that introduce gates one at a time
+  // - For every gate that is in an internal bag but not in the union of
   // its children, construct a subtree introducing these gates one at a
   // time
   for(unsigned i=0, nb_bags=bags.size(); i<nb_bags; ++i) {
-    if(leaves[i])
-      continue;
-
-    unsigned nb_gates=0;
-    unsigned long intersection[W];
-    std::vector<unsigned long> extra_gates;
-    for(unsigned j=0; j<bags[i].nb_gates;++j) {
-      auto g = bags[i].gates[j];
-      if(gates_in_children[i].find(g)==gates_in_children[i].end())
-        extra_gates.push_back(g);
-      else {
-        intersection[nb_gates]=g;
-        ++nb_gates;
+    if(leaves[i]) {
+      unsigned long p = i;
+      for(unsigned j = 1; j < bags[i].nb_gates; ++j) {
+        p = addEmptyBag(p);
+        for(unsigned k = 0; k < bags[i].nb_gates - j; ++k)
+          addGateToBag(bags[i].gates[k], p);
       }
-    }
-
-    if(!extra_gates.empty()) {
-      for(unsigned j=0;j<nb_gates;++j)
-        bags[i].gates[j]=intersection[j];
-      bags[i].nb_gates=nb_gates;
-
-      if(nb_children[i]==1 && nb_gates==gates_in_children[i].size()) {
-        // We can skip one level, to avoid creating a node identical to
-        // the single child
-      
-        bags[i].gates[nb_gates]=extra_gates.back();
-        ++bags[i].nb_gates;
-        ++nb_gates;
-        extra_gates.pop_back();
+    } else {
+      unsigned nb_gates=0;
+      unsigned long intersection[W];
+      std::vector<unsigned long> extra_gates;
+      for(unsigned j=0; j<bags[i].nb_gates;++j) {
+        auto g = bags[i].gates[j];
+        if(gates_in_children[i].find(g)==gates_in_children[i].end())
+          extra_gates.push_back(g);
+        else {
+          intersection[nb_gates]=g;
+          ++nb_gates;
+        }
       }
 
-      unsigned long b = i;
-      for(auto g: extra_gates) {
-        unsigned long id = addEmptyBag(parent[i], {b});
-        for(unsigned long j=0; j < nb_gates; ++j)
-          addGateToBag(bags[i].gates[j], id);
-        addGateToBag(g, id);
+      if(!extra_gates.empty()) {
+        for(unsigned j=0;j<nb_gates;++j)
+          bags[i].gates[j]=intersection[j];
+        bags[i].nb_gates=nb_gates;
 
-        unsigned long single_gate_bag = addEmptyBag(id);
-        addGateToBag(g, single_gate_bag);
+        if(nb_children[i]==1 && nb_gates==gates_in_children[i].size()) {
+          // We can skip one level, to avoid creating a node identical to
+          // the single child
         
-        gates_in_children[i].insert(g);
-        b = id;
+          bags[i].gates[nb_gates]=extra_gates.back();
+          ++bags[i].nb_gates;
+          ++nb_gates;
+          extra_gates.pop_back();
+        }
+
+        unsigned long b = i;
+        for(auto g: extra_gates) {
+          unsigned long id = addEmptyBag(parent[i], {b});
+          for(unsigned long j=0; j < nb_gates; ++j)
+            addGateToBag(bags[i].gates[j], id);
+          addGateToBag(g, id);
+
+          unsigned long single_gate_bag = addEmptyBag(id);
+          addGateToBag(g, single_gate_bag);
+          
+          gates_in_children[i].insert(g);
+          b = id;
+        }
       }
     }
   }
@@ -122,7 +117,7 @@ void TreeDecomposition<W>::makeFriendly(unsigned long v)
 
 template<unsigned W>
 unsigned long TreeDecomposition<W>::addEmptyBag(unsigned long p, 
-                                             const std::vector<unsigned long> &children)
+                                                const std::vector<unsigned long> &children)
 {
   unsigned long id = bags.size();
   bags.push_back(Bag());
