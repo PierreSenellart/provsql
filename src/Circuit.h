@@ -16,9 +16,12 @@ class Circuit {
  protected:
   std::vector<gateType> gates;
   std::vector<std::vector<unsigned>> wires;
+
+ protected:
+  virtual unsigned addGate();
     
  public:
-  virtual unsigned addGate();
+  virtual unsigned setGate(gateType t);
   virtual unsigned setGate(const uuid &u, gateType t);
   bool hasGate(const uuid &u) const;
   unsigned getGate(const uuid &u);

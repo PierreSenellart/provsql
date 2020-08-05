@@ -10,16 +10,22 @@
 
 enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN };
 
+class dDNNF;
+
 class BooleanCircuit : public Circuit<BooleanGate> {
  private:
-  std::set<unsigned> inputs;
-  std::vector<double> prob;
   bool evaluate(unsigned g, const std::unordered_set<unsigned> &sampled) const;
   std::string Tseytin(unsigned g, bool display_prob) const;
 
+ protected:
+  std::set<unsigned> inputs;
+  std::vector<double> prob;
+
  public:
   unsigned addGate() override;
+  unsigned setGate(BooleanGate t) override;
   unsigned setGate(const uuid &u, BooleanGate t) override;
+  unsigned setGate(BooleanGate t, double p);
   unsigned setGate(const uuid &u, BooleanGate t, double p);
 
   double possibleWorlds(unsigned g) const;
@@ -27,9 +33,11 @@ class BooleanCircuit : public Circuit<BooleanGate> {
   double monteCarlo(unsigned g, unsigned samples) const;
   double WeightMC(unsigned g, std::string opt) const;
 
-  double dDNNFEvaluation(unsigned g) const;
-  
   virtual std::string toString(unsigned g) const override;
+
+  // We make dDNNF a friend of BooleanCircuit, since its constructor
+  // needs to manipulate the internals of a BooleanCircuit
+  friend class dDNNF;
 };
 
 #endif /* BOOLEAN_CIRCUIT_H */

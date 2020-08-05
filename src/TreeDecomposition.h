@@ -5,17 +5,20 @@
 #include <string>
 #include <vector>
 
+#include "dDNNF.h"
+
 template<unsigned W>
 class TreeDecomposition {
- private:
+ public:
   struct Bag {
     unsigned long gates[W];
     unsigned nb_gates;
   };
  
+ private:
   std::vector<Bag> bags;
-  std::vector<bool> leaves;
   std::vector<unsigned long> parent;
+  std::vector<std::vector<unsigned long>> children;
   unsigned long root;
   unsigned long treewidth;
 
@@ -37,6 +40,8 @@ class TreeDecomposition {
   
   template<unsigned X>
   friend std::istream& operator>>(std::istream& in, TreeDecomposition<X> &td);
+
+  friend class dDNNF;
 };
 
 template<unsigned W>

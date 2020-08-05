@@ -28,6 +28,14 @@ unsigned Circuit<gateType>::addGate()
 }
 
 template<class gateType>
+unsigned Circuit<gateType>::setGate(gateType type)
+{
+  unsigned id = addGate();
+  gates[id] = type;
+  return id;
+}
+
+template<class gateType>
 unsigned Circuit<gateType>::setGate(const uuid &u, gateType type)
 {
   unsigned id = getGate(u);

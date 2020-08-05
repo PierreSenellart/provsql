@@ -1,7 +1,6 @@
 #include "BooleanCircuit.h"
 
 extern "C" {
-#include "provsql_utils.h"
 #include <unistd.h>
 #include <math.h>
 }
@@ -13,20 +12,44 @@ extern "C" {
 #include <cstdlib>
 #include <iostream>
 
+#include "dDNNF.h"
+
 using namespace std;
 
-// Has to be redefined because of name hiding
+// TODO: Remove the next line and replace with an #include
+// "provsql_utils.h"
+bool provsql_interrupted = false;
+
+unsigned BooleanCircuit::setGate(BooleanGate type)
+{
+ unsigned id = Circuit::setGate(type);
+  if(type == BooleanGate::IN) {
+    prob[id] = 1.;
+    inputs.insert(id);
+  }
+  return id;
+}
+
 unsigned BooleanCircuit::setGate(const uuid &u, BooleanGate type)
 {
  unsigned id = Circuit::setGate(u, type);
-  if(type == BooleanGate::IN)
+  if(type == BooleanGate::IN) {
+    prob[id] = 1.;
     inputs.insert(id);
+  }
   return id;
 }
 
 unsigned BooleanCircuit::setGate(const uuid &u, BooleanGate type, double p)
 {
   unsigned id = setGate(u, type);
+  prob[id] = p;
+  return id;
+}
+
+unsigned BooleanCircuit::setGate(BooleanGate type, double p)
+{
+  unsigned id = setGate(type);
   prob[id] = p;
   return id;
 }
@@ -83,33 +106,6 @@ std::string BooleanCircuit::toString(unsigned g) const
   }
 
   return "("+result+")";
-}
-
-double BooleanCircuit::dDNNFEvaluation(unsigned g) const
-{
-  switch(gates[g]) {
-    case BooleanGate::IN:
-      return prob[g];
-    case BooleanGate::NOT:
-      return 1-prob[g];
-    case BooleanGate::AND:
-      break;
-    case BooleanGate::OR:
-      break;
-    case BooleanGate::UNDETERMINED:
-      throw CircuitException("Incorrect gate type");
-  }
-
-  double result=(gates[g]==BooleanGate::AND?1:0);
-  for(auto s: wires[g]) {
-    double d = dDNNFEvaluation(s);
-    if(gates[g]==BooleanGate::AND)
-      result*=d;
-    else
-      result+=d;
-  }
-
-  return result;
 }
 
 bool BooleanCircuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
@@ -313,7 +309,7 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
   unsigned nb_nodes, foobar, nb_variables;
   ifs >> nb_nodes >> foobar >> nb_variables;
 
-  BooleanCircuit dnnf;
+  dDNNF dnnf;
 
   if(nb_variables!=gates.size())
     throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + to_string(nb_variables) +" vs " + to_string(gates.size()) + ")");
