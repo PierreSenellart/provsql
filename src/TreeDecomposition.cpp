@@ -247,7 +247,6 @@ static double get_timestamp ()
 {
   struct timeval now;
   gettimeofday (&now, NULL);
-  std::cerr << now.tv_usec << " " << now.tv_sec << std::endl;
   return now.tv_usec * 1e-6 + now.tv_sec;
 }
 
