@@ -26,16 +26,9 @@ dDNNF::dDNNF(const BooleanCircuit &c, const uuid &root, TreeDecomposition<W> &td
       responsible_bag[b.gates[0]] = i;
   }
 
-  // Contrarily to what is stated in https://arxiv.org/pdf/1811.02944
-  // a friendly tree decomposition does not necessarily have leaf bags
-  // for every variable node; so we add the ones that are missing
-  for(auto g: c.inputs)
-    if(responsible_bag.find(g)==responsible_bag.end()) {
-      unsigned bag = td.findGateConnection(g);
-      unsigned new_bag = td.addEmptyBag(bag);
-      td.addGateToBag(g, new_bag);
-      responsible_bag[g] = new_bag;
-    }
+  // A friendly tree decomposition has leaf bags for every variable
+  // nodes. Let's just check that to be safe.
+  assert(responsible_bag.size()==c.inputs.size());
 
   // Create the input and negated input gates
   std::unordered_map<unsigned,unsigned long> input_gate, negated_input_gate;
