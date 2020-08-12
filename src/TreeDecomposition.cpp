@@ -127,7 +127,7 @@ template<unsigned W> void TreeDecomposition<W>::makeFriendly(unsigned
 
           unsigned long single_gate_bag = addEmptyBag(id);
           addGateToBag(g, single_gate_bag);
-          
+
           b = id;
         }
       }
@@ -297,7 +297,7 @@ int main(int argc, char **argv) {
   for(unsigned i=0; i<nbGates;++i) {
     std::getline(g, line);
     if(line=="IN")
-      c.setGate(std::to_string(i), BooleanGate::IN, 0.5);
+      c.setGate(std::to_string(i), BooleanGate::IN, 0.001);
     else
       c.setGate(std::to_string(i), line=="OR"?BooleanGate::OR:BooleanGate::AND);
   }
