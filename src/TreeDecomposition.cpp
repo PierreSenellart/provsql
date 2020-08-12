@@ -21,11 +21,11 @@ TreeDecomposition<W>::TreeDecomposition(std::istream &in)
 template<unsigned W>
 unsigned long TreeDecomposition<W>::findGateConnection(unsigned long v) const
 {
-  for(auto b: bags)
-    for(unsigned i=0;i<b.nb_gates;++i) {
-      auto g=b.gates[i];
+  for(unsigned i=0; i<bags.size(); ++i)
+    for(unsigned k=0;k<bags[i].nb_gates;++k) {
+      auto g=bags[i].gates[k];
       if(g == v)
-        return v;
+        return i;
     }
 
   return root;
@@ -54,8 +54,8 @@ template<unsigned W> void TreeDecomposition<W>::makeFriendly(unsigned
 
     unsigned long current = i;
     auto copy_children=children[i];
-    for(unsigned j=2; j<copy_children.size(); ++j) {
-      current = addEmptyBag(parent[current], { current, children[i][j] } );
+    for(int j=copy_children.size()-3; j>=0; --j) {
+      current = addEmptyBag(parent[current], { current, copy_children[j] } );
       for(unsigned k=0; k<bags[i].nb_gates; ++k)
         addGateToBag(bags[i].gates[k], current);
     }
