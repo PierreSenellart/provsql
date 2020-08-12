@@ -2,6 +2,7 @@
 #define CIRCUIT_H
 
 #include <unordered_map>
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -17,6 +18,8 @@ class Circuit {
   std::vector<gateType> gates;
   std::vector<std::vector<unsigned>> wires;
 
+  std::set<std::pair<unsigned, unsigned>> wiresSet;
+
  protected:
   virtual unsigned addGate();
     
@@ -24,6 +27,7 @@ class Circuit {
   virtual unsigned setGate(gateType t);
   virtual unsigned setGate(const uuid &u, gateType t);
   bool hasGate(const uuid &u) const;
+  bool hasWire(unsigned u, unsigned v) const;
   unsigned getGate(const uuid &u);
   void addWire(unsigned f, unsigned t);
 

@@ -138,8 +138,7 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
       if(!isStrong(c.gates[p1.first],p2.second))
         continue;
 
-      if(std::find(c.wires[p1.first].begin(),c.wires[p1.first].end(),p2.first)!=
-          c.wires[p1.first].end()) {
+      if(c.hasWire(p1.first,p2.first)) {
         switch(c.gates[p1.first]) {
           case BooleanGate::AND:
           case BooleanGate::OR:
@@ -189,8 +188,7 @@ dDNNFTreeDecompositionBuilder::getSuspicious(
       if(g==p.first)
         continue;
 
-      if(std::find(c.wires[p.first].begin(),c.wires[p.first].end(),g)!=
-          c.wires[p.first].end()) {
+      if(c.hasWire(p.first,g)) {
         bool value = valuation.find(g)->second;
         if(isStrong(c.gates[p.first],value)) {
           susp=false;

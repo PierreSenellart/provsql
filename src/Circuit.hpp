@@ -47,4 +47,11 @@ template<class gateType>
 void Circuit<gateType>::addWire(unsigned f, unsigned t)
 {
   wires[f].push_back(t);
+  wiresSet.emplace(f,t);
+}
+
+template<class gateType>
+bool Circuit<gateType>::hasWire(unsigned f, unsigned t) const
+{
+  return wiresSet.find(std::make_pair(f,t))!=wiresSet.end();
 }
