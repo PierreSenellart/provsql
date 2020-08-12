@@ -54,7 +54,7 @@ dDNNF::dDNNF(const BooleanCircuit &c, const uuid &root, TreeDecomposition<W> &td
   }
 }
 
-bool isStrong(BooleanGate type, bool value)
+constexpr bool isStrong(BooleanGate type, bool value)
 {
   switch(type) {
     case BooleanGate::OR:
