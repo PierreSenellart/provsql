@@ -61,6 +61,8 @@ bool isStrong(BooleanGate type, bool value)
       return value;
     case BooleanGate::AND:
       return !value;
+    case BooleanGate::IN:
+      return false;
     default:
       return true;
   }
