@@ -15,7 +15,7 @@ double dDNNF::dDNNFEvaluation(unsigned g) const
   if(gates[g]==BooleanGate::IN)
     result = prob[g];
   else if(gates[g]==BooleanGate::NOT)
-    result = 1-prob[wires[g][0]];
+    result = 1-prob[*wires[g].begin()];
   else {
     result=(gates[g]==BooleanGate::AND?1:0);
     for(auto s: wires[g]) {
