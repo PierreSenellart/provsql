@@ -16,8 +16,28 @@ class dDNNF : public BooleanCircuit {
     unsigned long id;
     std::map<unsigned,bool> valuation;
     std::set<unsigned> suspicious;
+
+    dDNNFGate(unsigned long i, std::map<unsigned, bool> v, std::set<unsigned> s) :
+      id{i}, valuation{std::move(v)}, suspicious{std::move(s)} {}
   };
 
+
+  template<unsigned W>
+    std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
+    collectGatesToOr(
+        const std::vector<dDNNFGate> &gates1,
+        const std::vector<dDNNFGate> &gates2,
+        const BooleanCircuit &c, 
+        unsigned long root,
+        const TreeDecomposition<W> &td);
+  template<unsigned W> 
+  std::vector<dDNNF::dDNNFGate> builddDNNFLeaf(
+      const BooleanCircuit &c, 
+      unsigned root,
+      const TreeDecomposition<W> &td,
+      const std::unordered_map<unsigned, unsigned long> &responsible_bag,
+      const std::unordered_map<unsigned, unsigned long> &input_gate,
+      const std::unordered_map<unsigned, unsigned long> &negated_input_gate);
   template<unsigned W> 
     std::vector<dDNNFGate> builddDNNF(
         const BooleanCircuit &c, 
@@ -26,6 +46,17 @@ class dDNNF : public BooleanCircuit {
         const std::unordered_map<unsigned, unsigned long> &responsible_bag,
         const std::unordered_map<unsigned, unsigned long> &input_gate,
         const std::unordered_map<unsigned, unsigned long> &negated_input_gate);
+
+  static bool isAlmostValuation(
+    const std::map<unsigned,bool> &valuation,
+    const BooleanCircuit &c);
+  template<unsigned W>
+  static std::set<unsigned> getSuspicious(
+    const std::map<unsigned, bool> &valuation,
+    const BooleanCircuit &c,
+    unsigned root,
+    const TreeDecomposition<W> &td,
+    const std::set<unsigned> &partial_innocent);
 
  public:
   dDNNF() = default;

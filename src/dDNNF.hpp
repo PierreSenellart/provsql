@@ -88,6 +88,243 @@ static bool isConnectible(const std::set<unsigned> &suspicious,
 }
 
 template<unsigned W>
+std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNFLeaf(
+    const BooleanCircuit &c, 
+    unsigned root,
+    const TreeDecomposition<W> &td,
+    const std::unordered_map<unsigned, unsigned long> &responsible_bag,
+    const std::unordered_map<unsigned, unsigned long> &input_gate,
+    const std::unordered_map<unsigned, unsigned long> &negated_input_gate)
+{
+  // If the bag is empty, it behaves as if it was not there
+  if(td.bags[root].nb_gates==0) 
+    return {};
+
+  // Otherwise, since we have a friendly decomposition, we have a
+  // single gate
+  unsigned single_gate = td.bags[root].gates[0];
+
+  // We check if this bag is responsible for an input variable
+  if(c.gates[single_gate]==BooleanGate::IN &&
+      responsible_bag.find(single_gate)->second==root)
+  {
+    // No need to create an extra gate, just point to the variable and
+    // negated variable gate; no suspicious gate.
+    dDNNFGate pos = { input_gate.find(single_gate)->second,
+      {std::make_pair(single_gate,true)},
+      {}
+    };
+    dDNNFGate neg = { negated_input_gate.find(single_gate)->second,
+      {std::make_pair(single_gate,false)}, 
+      {} 
+    };
+    return { std::move(pos), std::move(neg) };
+  } else {
+    std::vector<dDNNFGate> result_gates;
+
+    // We create two TRUE gates (AND gates with no inputs)
+    for(auto v: {true, false}) {
+      std::set<unsigned> suspicious;
+
+      if(isStrong(c.gates[single_gate], v))
+        suspicious.insert(single_gate);
+
+      result_gates.emplace_back(
+          setGate(BooleanGate::AND),
+          std::map<unsigned,bool>{std::make_pair(single_gate, v)},
+          std::move(suspicious)
+      );
+    }
+
+    return result_gates;
+  }
+}
+
+bool dDNNF::isAlmostValuation(
+    const std::map<unsigned,bool> &valuation,
+    const BooleanCircuit &c)
+{
+  for(const auto &p1: valuation) {
+    for(const auto &p2: valuation) {
+      if(p1.first==p2.first)
+        continue;
+      if(!isStrong(c.gates[p1.first],p2.second))
+        continue;
+
+      if(std::find(c.wires[p1.first].begin(),c.wires[p1.first].end(),p2.first)!=
+          c.wires[p1.first].end()) {
+        switch(c.gates[p1.first]) {
+          case BooleanGate::AND:
+          case BooleanGate::OR:
+            if(p1.second!=p2.second)
+              return false;
+            break;
+          case BooleanGate::NOT:
+            if(p1.second==p2.second)
+              return false;
+          default:
+            ;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+template<unsigned W>
+std::set<unsigned>
+dDNNF::getSuspicious(
+    const std::map<unsigned, bool> &valuation,
+    const BooleanCircuit &c,
+    unsigned root,
+    const TreeDecomposition<W> &td,
+    const std::set<unsigned> &innocent)
+{
+  std::set<unsigned> suspicious;
+
+  for(const auto &p: valuation) {
+    // We first check if this gate was innocent because it was
+    // innocent in a child
+    if(innocent.find(p.first)!=innocent.end())
+      continue;
+    
+    // Otherwise, we check if it is strong
+    bool strong=isStrong(c.gates[p.first],p.second);
+
+    if(!strong)
+      continue;
+
+    // We have a strong gate not innocented by the children bags,
+    // it is suspicious unless we also have in the bag an input to
+    // that gate which is strong for that gate
+    bool susp=true;
+
+    for(unsigned k=0; k<td.bags[root].nb_gates; ++k) {
+      auto g=td.bags[root].gates[k];
+      if(g==p.first)
+        continue;
+
+      if(std::find(c.wires[p.first].begin(),c.wires[p.first].end(),g)!=
+          c.wires[p.first].end()) {
+        bool value = valuation.find(g)->second;
+        if(isStrong(c.gates[p.first],value)) {
+          susp=false;
+          break;
+        }
+      }
+    }
+      
+    if(susp)
+      suspicious.insert(p.first);
+  }
+
+  return suspicious;
+}
+
+template<unsigned W>
+std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
+dDNNF::collectGatesToOr(
+    const std::vector<dDNNFGate> &gates1,
+    const std::vector<dDNNFGate> &gates2,
+    const BooleanCircuit &c, 
+    unsigned long root,
+    const TreeDecomposition<W> &td) {
+  std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
+    gates_to_or;
+
+  for(auto g1: gates1) {
+    std::map<unsigned,bool> partial_valuation;
+    std::set<unsigned> partial_innocent;
+
+    for(const auto &p: g1.valuation)
+      for(unsigned k=0; k<td.bags[root].nb_gates; ++k)
+        if(p.first==td.bags[root].gates[k]) {
+          partial_valuation.insert(p);
+          if(g1.suspicious.find(p.first)==g1.suspicious.end()) {
+            partial_innocent.insert(p.first);
+          }
+        }
+    
+    // We check all suspicious gates are in the bag of the parent
+    if(!isConnectible<W>(g1.suspicious,td.bags[root]))
+      continue;
+
+    for(auto g2: gates2) {
+      auto valuation = partial_valuation;
+      auto innocent = partial_innocent;
+      
+      // Check if these two almost-evaluations mutually agree and if so
+      // build the valuation of the root
+      bool agree=true;
+
+      for(const auto &p: g2.valuation) {
+        bool found=false;
+        auto it=g1.valuation.find(p.first);
+        if(it!=g1.valuation.end()) {
+          found=true;
+          agree=(it->second==p.second);
+        }
+        
+        if(!agree)
+          break;
+
+        for(unsigned k=0; k<td.bags[root].nb_gates; ++k)
+          if(p.first==td.bags[root].gates[k]) {
+            if(!found)
+              valuation.insert(p);
+            if(g2.suspicious.find(p.first)==g2.suspicious.end()) {
+              innocent.insert(p.first);
+            }
+        }
+      }
+
+      if(!agree)
+        continue;
+    
+      // We check all suspicious gates are in the bag of the parent
+      if(!isConnectible<W>(g2.suspicious,td.bags[root]))
+        continue;
+
+      // We check valuation is still an almost-valuation
+      if(!isAlmostValuation(valuation, c))
+        continue;
+
+      auto suspicious = getSuspicious(valuation, c, root, td, innocent);
+
+      unsigned long and_gate;
+      
+      // We optimize a bit by avoiding creating an AND gate if there
+      // is only one child, or if a second child is a TRUE gate
+      std::vector<unsigned long> gates_children;
+
+      if(!(gates[g1.id]==BooleanGate::AND &&
+            wires[g1.id].empty())) 
+        gates_children.push_back(g1.id);
+
+      if(td.children[root].size()==2)
+        if(!(gates[g2.id]==BooleanGate::AND &&
+            wires[g2.id].empty())) 
+          gates_children.push_back(g2.id);
+
+      assert(gates_children.size()!=0);
+
+      if(gates_children.size()==1) {
+        and_gate = gates_children[0];
+      } else {
+        and_gate = setGate(BooleanGate::AND);
+        for(auto x: gates_children)
+          addWire(and_gate, x);
+      }
+
+      gates_to_or[make_pair(valuation,suspicious)].push_back(and_gate);
+    }
+  }
+
+  return gates_to_or;
+}
+
+template<unsigned W>
 std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNF(
     const BooleanCircuit &c, 
     unsigned root,
@@ -96,226 +333,34 @@ std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNF(
     const std::unordered_map<unsigned, unsigned long> &input_gate,
     const std::unordered_map<unsigned, unsigned long> &negated_input_gate)
 {
+  if(td.children[root].empty())
+    return builddDNNFLeaf(c,root,td,responsible_bag,input_gate,negated_input_gate);
+
+  auto gates1 = builddDNNF(c, td.children[root][0], td,
+                                    responsible_bag, input_gate, negated_input_gate);
+  auto gates2 = std::vector<dDNNFGate>{};
+
+  if(td.children[root].size()==2)
+    gates2 = builddDNNF(c, td.children[root][1], td,
+                            responsible_bag, input_gate, negated_input_gate);
+  else
+    gates2 = {{ 0, {}, {} }};
+
+  auto gates_to_or = collectGatesToOr(gates1, gates2, c, root, td);
+
   std::vector<dDNNFGate> result_gates;
-
-  if(td.children[root].empty()) {
-    // If the bag is empty, it behaves as if it was not there
-    if(td.bags[root].nb_gates!=0) {
-      // Otherwise, since we have a friendly decomposition, we have a
-      // single gate
-      unsigned single_gate = td.bags[root].gates[0];
-
-      // We check if this bag is responsible for an input variable
-      if(c.gates[single_gate]==BooleanGate::IN &&
-        responsible_bag.find(single_gate)->second==root)
-      {
-        // No need to create an extra gate, just point to the variable and
-        // negated variable gate; no suspicious gate.
-        dDNNFGate pos = { input_gate.find(single_gate)->second,
-                          {std::make_pair(single_gate,true)},
-                          {}
-                        };
-        dDNNFGate neg = { negated_input_gate.find(single_gate)->second,
-                          {std::make_pair(single_gate,false)}, 
-                          {} 
-                        };
-        result_gates = { pos, neg };
-      } else {
-        // We create two TRUE gates (AND gates with no inputs)
-        for(auto v: {true, false}) {
-          std::set<unsigned> suspicious;
-
-          if(isStrong(c.gates[single_gate], v))
-            suspicious.insert(single_gate);
-
-          result_gates.push_back({
-              setGate(BooleanGate::AND),
-              {std::make_pair(single_gate, v)},
-              suspicious
-              });
-        }
-      }
-    }
-  } else {
-    std::vector<dDNNFGate> gates1 = builddDNNF(c, td.children[root][0], td,
-                                      responsible_bag, input_gate, negated_input_gate);
-    std::vector<dDNNFGate> gates2;
-
-    if(td.children[root].size()==2)
-      gates2 = builddDNNF(c, td.children[root][1], td,
-                             responsible_bag, input_gate, negated_input_gate);
-    else
-      gates2 = {{ 0, {}, {} }};
-  
-    std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
-      gates_to_or;
-
-    for(auto g1: gates1) {
-      std::map<unsigned,bool> partial_valuation;
-      std::set<unsigned> partial_innocent;
-
-      for(const auto &p: g1.valuation)
-        for(unsigned k=0; k<td.bags[root].nb_gates; ++k)
-          if(p.first==td.bags[root].gates[k]) {
-            partial_valuation.insert(p);
-            if(g1.suspicious.find(p.first)==g1.suspicious.end()) {
-              partial_innocent.insert(p.first);
-            }
-          }
-      
-      // We check all suspicious gates are in the bag of the parent
-      if(!isConnectible<W>(g1.suspicious,td.bags[root]))
-        continue;
-
-      for(auto g2: gates2) {
-        auto valuation = partial_valuation;
-        auto innocent = partial_innocent;
-        
-        // Check if these two almost-evaluations mutually agree and if so
-        // build the valuation of the root
-        bool agree=true;
-
-        for(const auto &p: g2.valuation) {
-          bool found=false;
-          auto it=g1.valuation.find(p.first);
-          if(it!=g1.valuation.end()) {
-            found=true;
-            agree=(it->second==p.second);
-          }
-          
-          if(!agree)
-            break;
-
-          for(unsigned k=0; k<td.bags[root].nb_gates; ++k)
-            if(p.first==td.bags[root].gates[k]) {
-              if(!found)
-                valuation.insert(p);
-              if(g2.suspicious.find(p.first)==g2.suspicious.end()) {
-                innocent.insert(p.first);
-              }
-          }
-        }
-
-        if(!agree)
-          continue;
-      
-        // We check all suspicious gates are in the bag of the parent
-        if(!isConnectible<W>(g2.suspicious,td.bags[root]))
-          continue;
-
-        // We check valuation is still an almost-valuation
-        bool almostvaluation = true;
-        for(const auto &p1: valuation) {
-          for(const auto &p2: valuation) {
-            if(p1.first==p2.first)
-              continue;
-            if(!isStrong(c.gates[p1.first],p2.second))
-              continue;
-
-            if(std::find(c.wires[p1.first].begin(),c.wires[p1.first].end(),p2.first)!=
-               c.wires[p1.first].end()) {
-              switch(c.gates[p1.first]) {
-                case BooleanGate::AND:
-                case BooleanGate::OR:
-                  almostvaluation = (p1.second==p2.second);
-                  break;
-                case BooleanGate::NOT:
-                  almostvaluation = (p1.second!=p2.second);
-                  break;
-                default:
-                  ;
-              }
-
-              if(!almostvaluation)
-                break;
-            }
-          }
-          if(!almostvaluation)
-            break;
-        }
-
-        if(!almostvaluation)
-          continue;
-
-        std::set<unsigned> suspicious;
-        for(const auto &p: valuation) {
-          // We first check if this gate was innocent because it was
-          // innocent in a child
-          if(innocent.find(p.first)!=innocent.end())
-            continue;
-          
-          // Otherwise, we check if it is strong
-          bool strong=isStrong(c.gates[p.first],p.second);
-
-          if(!strong)
-            continue;
-
-          // We have a strong gate not innocented by the children bags,
-          // it is suspicious unless we also have in the bag an input to
-          // that gate which is strong for that gate
-          bool susp=true;
-
-          for(unsigned k=0; k<td.bags[root].nb_gates; ++k) {
-            auto g=td.bags[root].gates[k];
-            if(g==p.first)
-              continue;
-
-            if(std::find(c.wires[p.first].begin(),c.wires[p.first].end(),g)!=
-               c.wires[p.first].end()) {
-              bool value = valuation[g];
-              if(isStrong(c.gates[p.first],value)) {
-                susp=false;
-                break;
-              }
-            }
-          }
-           
-          if(susp)
-            suspicious.insert(p.first);
-        }
-
-        unsigned long and_gate;
-       
-        // We optimize a bit by avoiding creating an AND gate if there
-        // is only one child, or if a second child is a TRUE gate
-        std::vector<unsigned long> gates_children;
-
-        if(!(gates[g1.id]==BooleanGate::AND &&
-             wires[g1.id].empty())) 
-          gates_children.push_back(g1.id);
-
-        if(td.children[root].size()==2)
-          if(!(gates[g2.id]==BooleanGate::AND &&
-              wires[g2.id].empty())) 
-            gates_children.push_back(g2.id);
-
-        assert(gates_children.size()!=0);
-
-        if(gates_children.size()==1) {
-          and_gate = gates_children[0];
-        } else {
-          and_gate = setGate(BooleanGate::AND);
-          for(auto x: gates_children)
-            addWire(and_gate, x);
-        }
-
-        gates_to_or[make_pair(valuation,suspicious)].push_back(and_gate);
-      }
+  for(auto &p: gates_to_or) {
+    unsigned long result_gate;
+    
+    if(p.second.size()==1)
+      result_gate = p.second[0];
+    else {
+      result_gate = setGate(BooleanGate::OR);
+      for(auto &g: p.second)
+        addWire(result_gate, g);
     }
 
-    for(const auto &p: gates_to_or) {
-      unsigned long result_gate;
-     
-      if(p.second.size()==1)
-        result_gate = p.second[0];
-      else {
-        result_gate = setGate(BooleanGate::OR);
-        for(auto &g: p.second)
-          addWire(result_gate, g);
-      }
-
-      result_gates.push_back({result_gate, p.first.first, p.first.second});
-    }
+    result_gates.emplace_back(result_gate, std::move(p.first.first), std::move(p.first.second));
   }
 
   return result_gates;
