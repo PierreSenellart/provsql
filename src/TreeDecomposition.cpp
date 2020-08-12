@@ -2,6 +2,7 @@
 #include <fstream>
 #include <set>
 #include <algorithm>
+#include <string>
 
 #include "TreeDecomposition.h"
 #include "BooleanCircuit.h"
@@ -276,29 +277,35 @@ static double get_timestamp ()
 
 
 int main(int argc, char **argv) {
-  if(argc != 2) {
-    std::cerr << "Usage: " << argv[0] << " tree_dec" << std::endl;
+  if(argc != 3) {
+    std::cerr << "Usage: " << argv[0] << " circuit tree_dec" << std::endl;
     exit(1);
   }
 
-  std::ifstream f(argv[1]);
-
+  std::ifstream f(argv[2]);
   TreeDecomposition<MAX_TREEWIDTH + 1> td(f);
+  f.close();
 
+  std::ifstream g(argv[1]);
   BooleanCircuit c;
-  c.setGate("0", BooleanGate::OR);
-  c.setGate("1", BooleanGate::AND);
-  c.setGate("2", BooleanGate::IN, 0.25);
-  c.setGate("3", BooleanGate::IN, 0.25);
-  c.setGate("4", BooleanGate::IN, 0.25);
-  c.setGate("5", BooleanGate::IN, 0.25);
-  c.setGate("6", BooleanGate::IN, 0.25);
-  c.addWire(0,1);
-  c.addWire(0,2);
-  c.addWire(1,3);
-  c.addWire(1,4);
-  c.addWire(1,5);
-  c.addWire(1,6);
+  unsigned nbGates;
+
+  g >> nbGates;
+  std::string line;
+  std::getline(g,line);
+
+  for(unsigned i=0; i<nbGates;++i) {
+    std::getline(g, line);
+    if(line=="IN")
+      c.setGate(std::to_string(i), BooleanGate::IN, 0.5);
+    else
+      c.setGate(std::to_string(i), line=="OR"?BooleanGate::OR:BooleanGate::AND);
+  }
+
+  unsigned u,v;
+  while(g >> u >> v)
+    c.addWire(u,v);
+  g.close();
 
   double t0, t1;
   t0 = get_timestamp();
@@ -306,7 +313,7 @@ int main(int argc, char **argv) {
   t1 = get_timestamp();
   std::cerr << "Took " << (t1-t0) << "s" << std::endl;
 
-  std::cerr << dnnf.toString(dnnf.getGate("root")) << std::endl;
+//  std::cerr << dnnf.toString(dnnf.getGate("root")) << std::endl;
   std::cerr << dnnf.dDNNFEvaluation(dnnf.getGate("root")) << std::endl;
 
   return 0;
