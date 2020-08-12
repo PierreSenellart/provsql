@@ -37,7 +37,7 @@ class BooleanCircuit : public Circuit<BooleanGate> {
 
   // We make dDNNF a friend of BooleanCircuit, since its constructor
   // needs to manipulate the internals of a BooleanCircuit
-  friend class dDNNF;
+  friend class dDNNFTreeDecompositionBuilder;
 };
 
 #endif /* BOOLEAN_CIRCUIT_H */

@@ -5,13 +5,15 @@
 #include <string>
 #include <vector>
 
-#include "dDNNF.h"
+// Forward declaration for friend
+class dDNNFTreeDecompositionBuilder;
 
-template<unsigned W>
 class TreeDecomposition {
  public:
+  static constexpr int MAX_TREEWIDTH = 10;
+
   struct Bag {
-    unsigned long gates[W];
+    unsigned long gates[MAX_TREEWIDTH+1];
     unsigned nb_gates;
   };
  
@@ -38,13 +40,10 @@ class TreeDecomposition {
 
   std::string toDot() const;
   
-  template<unsigned X>
-  friend std::istream& operator>>(std::istream& in, TreeDecomposition<X> &td);
-
-  friend class dDNNF;
+  friend std::istream& operator>>(std::istream& in, TreeDecomposition &td);
+  friend class dDNNFTreeDecompositionBuilder;
 };
 
-template<unsigned W>
-std::istream& operator>>(std::istream& in, TreeDecomposition<W> &td);
+std::istream& operator>>(std::istream& in, TreeDecomposition &td);
 
 #endif /* TREE_DECOMPOSITION_H */

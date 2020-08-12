@@ -7,20 +7,16 @@
 #include "TreeDecomposition.h"
 #include "BooleanCircuit.h"
 
-#include "dDNNF.hpp"
+#include "dDNNFTreeDecompositionBuilder.h"
 
-#define MAX_TREEWIDTH 5
-
-template<unsigned W>
-TreeDecomposition<W>::TreeDecomposition(std::istream &in)
+TreeDecomposition::TreeDecomposition(std::istream &in)
 {
   in >> *this;
 }
 
 // This utility function looks for an existing bag to attach a new bag
 // that contains a single gate v
-template<unsigned W>
-unsigned long TreeDecomposition<W>::findGateConnection(unsigned long v) const
+unsigned long TreeDecomposition::findGateConnection(unsigned long v) const
 {
   for(unsigned i=0; i<bags.size(); ++i)
     for(unsigned k=0;k<bags[i].nb_gates;++k) {
@@ -38,7 +34,7 @@ unsigned long TreeDecomposition<W>::findGateConnection(unsigned long v) const
 // described in Lemma 2.2 of that paper. The only difference is that we
 // do not enforce the tree to be full, as this is not required for
 // correctness.
-template<unsigned W> void TreeDecomposition<W>::makeFriendly(unsigned
+void TreeDecomposition::makeFriendly(unsigned
     long v) {
   // Look for a bag root_connection to attach to the new root
   unsigned long root_connection = findGateConnection(v);
@@ -89,7 +85,7 @@ template<unsigned W> void TreeDecomposition<W>::makeFriendly(unsigned
   for(unsigned i=0, nb_bags=bags.size(); i<nb_bags; ++i) {
     if(!children[i].empty()) {
       unsigned nb_gates=0;
-      unsigned long intersection[W];
+      unsigned long intersection[MAX_TREEWIDTH+1];
       std::vector<unsigned long> extra_gates;
       for(unsigned j=0; j<bags[i].nb_gates;++j) {
         auto g = bags[i].gates[j];
@@ -135,9 +131,8 @@ template<unsigned W> void TreeDecomposition<W>::makeFriendly(unsigned
   }
 }
 
-template<unsigned W>
-unsigned long TreeDecomposition<W>::addEmptyBag(unsigned long p, 
-                                                const std::vector<unsigned long> &ch)
+unsigned long TreeDecomposition::addEmptyBag(unsigned long p, 
+                                             const std::vector<unsigned long> &ch)
 {
   unsigned long id = bags.size();
   bags.push_back(Bag());
@@ -156,15 +151,13 @@ unsigned long TreeDecomposition<W>::addEmptyBag(unsigned long p,
   return id;
 }
 
-template<unsigned W>
-void TreeDecomposition<W>::addGateToBag(unsigned long g, unsigned long b)
+void TreeDecomposition::addGateToBag(unsigned long g, unsigned long b)
 {
   bags[b].gates[bags[b].nb_gates]=g;
   ++bags[b].nb_gates;
 }
 
-template<unsigned W>
-void TreeDecomposition<W>::reroot(unsigned long bag)
+void TreeDecomposition::reroot(unsigned long bag)
 {
   if(bag == root)
     return;
@@ -186,8 +179,7 @@ void TreeDecomposition<W>::reroot(unsigned long bag)
   root = bag;
 }
 
-template<unsigned W>
-std::string TreeDecomposition<W>::toDot() const
+std::string TreeDecomposition::toDot() const
 {
   std::string result="digraph circuit{\n graph [rankdir=UD] ;\n";
 
@@ -214,11 +206,10 @@ std::string TreeDecomposition<W>::toDot() const
   return result;
 }
 
-template<unsigned W>
-std::istream& operator>>(std::istream& in, TreeDecomposition<W> &td)
+std::istream& operator>>(std::istream& in, TreeDecomposition &td)
 {
   in >> td.treewidth;
-  assert(td.treewidth <= MAX_TREEWIDTH);
+  assert(td.treewidth <= TreeDecomposition::MAX_TREEWIDTH);
 
   unsigned long nb_bags;
   in >> nb_bags;
@@ -283,7 +274,7 @@ int main(int argc, char **argv) {
   }
 
   std::ifstream f(argv[2]);
-  TreeDecomposition<MAX_TREEWIDTH + 1> td(f);
+  TreeDecomposition td(f);
   f.close();
 
   std::ifstream g(argv[1]);
@@ -309,7 +300,9 @@ int main(int argc, char **argv) {
 
   double t0, t1, t2;
   t0 = get_timestamp();
-  dDNNF dnnf(c, "0", td);
+
+  dDNNFTreeDecompositionBuilder builder{c, "0", td};
+  dDNNF dnnf = builder.build();
   t1 = get_timestamp();
   std::cerr << "Took " << (t1-t0) << "s" << std::endl;
 

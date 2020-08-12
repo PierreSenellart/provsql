@@ -1,26 +1,20 @@
-#include "dDNNF.h"
-
-#include <unordered_map>
 #include <algorithm>
-#include <cassert>
 
-/* Turn a bounded-treewidth circuit c for which a tree decomposition td is
- * provided into a dNNF rooted at root, following the construction in
+#include "dDNNFTreeDecompositionBuilder.h"
+
+/* Turn a bounded-treewidth circuit c for which a tree decomposition td
+ * is provided into a dNNF rooted at root, following the construction in
  * Section 5.1 of https://arxiv.org/pdf/1811.02944 */
-template<unsigned W>
-dDNNF::dDNNF(const BooleanCircuit &c, const uuid &root, TreeDecomposition<W> &td)
-{
+dDNNF dDNNFTreeDecompositionBuilder::build() {
   // Theoretically, the BooleanCircuit could be modified by getGate, but
-  // only if root is not a gate of the circuit, so we check that it is a
-  // gate.
-  assert(c.hasGate(root));
+  // since we know root is a gate of the circuit (assert in constructor),
+  // it is impossible.
   unsigned root_id = const_cast<BooleanCircuit &>(c).getGate(root);
 
   // We make the tree decomposition friendly
   td.makeFriendly(root_id);
 
   // We look for bags responsible for each variable
-  std::unordered_map<unsigned, unsigned long> responsible_bag;
   for(unsigned i=0; i<td.bags.size(); ++i) {
     const auto &b = td.bags[i];
     if(td.children[i].empty() && b.nb_gates == 1 && c.gates[b.gates[0]] == BooleanGate::IN)
@@ -32,26 +26,27 @@ dDNNF::dDNNF(const BooleanCircuit &c, const uuid &root, TreeDecomposition<W> &td
   assert(responsible_bag.size()==c.inputs.size());
 
   // Create the input and negated input gates
-  std::unordered_map<unsigned,unsigned long> input_gate, negated_input_gate;
   for(auto g: c.inputs) {
-    unsigned gate = setGate(BooleanGate::IN, c.prob[g]);
-    unsigned not_gate = setGate(BooleanGate::NOT);
-    addWire(not_gate, gate);
+    unsigned gate = d.setGate(BooleanGate::IN, c.prob[g]);
+    unsigned not_gate = d.setGate(BooleanGate::NOT);
+    d.addWire(not_gate, gate);
     input_gate[g]=gate;
     negated_input_gate[g]=not_gate;
   }
 
   std::vector<dDNNFGate> result_gates = 
-    builddDNNF(c, td.root, td, responsible_bag, input_gate, negated_input_gate);
+    builddDNNF(td.root);
 
-  unsigned long result_id = setGate("root", BooleanGate::OR);
+  unsigned long result_id = d.setGate("root", BooleanGate::OR);
 
   for(const auto &p: result_gates) {
     if(p.suspicious.empty() && p.valuation.find(root_id)->second) {
-      addWire(result_id, p.id);
-      return;
+      d.addWire(result_id, p.id);
+      break;
     }
   }
+
+  return d;
 }
 
 constexpr bool isStrong(BooleanGate type, bool value)
@@ -68,9 +63,8 @@ constexpr bool isStrong(BooleanGate type, bool value)
   }
 }
 
-template<unsigned W>
 static bool isConnectible(const std::set<unsigned> &suspicious,
-                          const typename TreeDecomposition<W>::Bag &b)
+                          const TreeDecomposition::Bag &b)
 {
   for(const auto &g: suspicious) {
     bool found=false;
@@ -87,14 +81,8 @@ static bool isConnectible(const std::set<unsigned> &suspicious,
   return true;
 }
 
-template<unsigned W>
-std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNFLeaf(
-    const BooleanCircuit &c, 
-    unsigned root,
-    const TreeDecomposition<W> &td,
-    const std::unordered_map<unsigned, unsigned long> &responsible_bag,
-    const std::unordered_map<unsigned, unsigned long> &input_gate,
-    const std::unordered_map<unsigned, unsigned long> &negated_input_gate)
+std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNFLeaf(
+    unsigned root)
 {
   // If the bag is empty, it behaves as if it was not there
   if(td.bags[root].nb_gates==0) 
@@ -130,7 +118,7 @@ std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNFLeaf(
         suspicious.insert(single_gate);
 
       result_gates.emplace_back(
-          setGate(BooleanGate::AND),
+          d.setGate(BooleanGate::AND),
           std::map<unsigned,bool>{std::make_pair(single_gate, v)},
           std::move(suspicious)
       );
@@ -140,9 +128,8 @@ std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNFLeaf(
   }
 }
 
-bool dDNNF::isAlmostValuation(
-    const std::map<unsigned,bool> &valuation,
-    const BooleanCircuit &c)
+bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
+    const std::map<unsigned,bool> &valuation) const
 {
   for(const auto &p1: valuation) {
     for(const auto &p2: valuation) {
@@ -172,14 +159,11 @@ bool dDNNF::isAlmostValuation(
   return true;
 }
 
-template<unsigned W>
 std::set<unsigned>
-dDNNF::getSuspicious(
+dDNNFTreeDecompositionBuilder::getSuspicious(
     const std::map<unsigned, bool> &valuation,
-    const BooleanCircuit &c,
-    unsigned root,
-    const TreeDecomposition<W> &td,
-    const std::set<unsigned> &innocent)
+    unsigned long root,
+    const std::set<unsigned> &innocent) const
 {
   std::set<unsigned> suspicious;
 
@@ -222,14 +206,12 @@ dDNNF::getSuspicious(
   return suspicious;
 }
 
-template<unsigned W>
 std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
-dDNNF::collectGatesToOr(
+dDNNFTreeDecompositionBuilder::collectGatesToOr(
     const std::vector<dDNNFGate> &gates1,
     const std::vector<dDNNFGate> &gates2,
-    const BooleanCircuit &c, 
-    unsigned long root,
-    const TreeDecomposition<W> &td) {
+    unsigned long root)
+{
   std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
     gates_to_or;
 
@@ -247,7 +229,7 @@ dDNNF::collectGatesToOr(
         }
     
     // We check all suspicious gates are in the bag of the parent
-    if(!isConnectible<W>(g1.suspicious,td.bags[root]))
+    if(!isConnectible(g1.suspicious,td.bags[root]))
       continue;
 
     for(auto g2: gates2) {
@@ -283,14 +265,14 @@ dDNNF::collectGatesToOr(
         continue;
     
       // We check all suspicious gates are in the bag of the parent
-      if(!isConnectible<W>(g2.suspicious,td.bags[root]))
+      if(!isConnectible(g2.suspicious,td.bags[root]))
         continue;
 
       // We check valuation is still an almost-valuation
-      if(!isAlmostValuation(valuation, c))
+      if(!isAlmostValuation(valuation))
         continue;
 
-      auto suspicious = getSuspicious(valuation, c, root, td, innocent);
+      auto suspicious = getSuspicious(valuation, root, innocent);
 
       unsigned long and_gate;
       
@@ -298,13 +280,13 @@ dDNNF::collectGatesToOr(
       // is only one child, or if a second child is a TRUE gate
       std::vector<unsigned long> gates_children;
 
-      if(!(gates[g1.id]==BooleanGate::AND &&
-            wires[g1.id].empty())) 
+      if(!(d.gates[g1.id]==BooleanGate::AND &&
+            d.wires[g1.id].empty())) 
         gates_children.push_back(g1.id);
 
       if(td.children[root].size()==2)
-        if(!(gates[g2.id]==BooleanGate::AND &&
-            wires[g2.id].empty())) 
+        if(!(d.gates[g2.id]==BooleanGate::AND &&
+            d.wires[g2.id].empty())) 
           gates_children.push_back(g2.id);
 
       assert(gates_children.size()!=0);
@@ -312,9 +294,9 @@ dDNNF::collectGatesToOr(
       if(gates_children.size()==1) {
         and_gate = gates_children[0];
       } else {
-        and_gate = setGate(BooleanGate::AND);
+        and_gate = d.setGate(BooleanGate::AND);
         for(auto x: gates_children)
-          addWire(and_gate, x);
+          d.addWire(and_gate, x);
       }
 
       gates_to_or[make_pair(valuation,suspicious)].push_back(and_gate);
@@ -324,29 +306,21 @@ dDNNF::collectGatesToOr(
   return gates_to_or;
 }
 
-template<unsigned W>
-std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNF(
-    const BooleanCircuit &c, 
-    unsigned root,
-    const TreeDecomposition<W> &td,
-    const std::unordered_map<unsigned, unsigned long> &responsible_bag,
-    const std::unordered_map<unsigned, unsigned long> &input_gate,
-    const std::unordered_map<unsigned, unsigned long> &negated_input_gate)
+std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF(
+    unsigned root)
 {
   if(td.children[root].empty())
-    return builddDNNFLeaf(c,root,td,responsible_bag,input_gate,negated_input_gate);
+    return builddDNNFLeaf(root);
 
-  auto gates1 = builddDNNF(c, td.children[root][0], td,
-                                    responsible_bag, input_gate, negated_input_gate);
+  auto gates1 = builddDNNF(td.children[root][0]);
   auto gates2 = std::vector<dDNNFGate>{};
 
   if(td.children[root].size()==2)
-    gates2 = builddDNNF(c, td.children[root][1], td,
-                            responsible_bag, input_gate, negated_input_gate);
+    gates2 = builddDNNF(td.children[root][1]);
   else
     gates2 = {{ 0, {}, {} }};
 
-  auto gates_to_or = collectGatesToOr(gates1, gates2, c, root, td);
+  auto gates_to_or = collectGatesToOr(gates1, gates2, root);
 
   std::vector<dDNNFGate> result_gates;
   for(auto &p: gates_to_or) {
@@ -355,9 +329,9 @@ std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNF(
     if(p.second.size()==1)
       result_gate = p.second[0];
     else {
-      result_gate = setGate(BooleanGate::OR);
+      result_gate = d.setGate(BooleanGate::OR);
       for(auto &g: p.second)
-        addWire(result_gate, g);
+        d.addWire(result_gate, g);
     }
 
     result_gates.emplace_back(result_gate, std::move(p.first.first), std::move(p.first.second));
@@ -366,36 +340,7 @@ std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNF(
   return result_gates;
 }
 
-double dDNNF::dDNNFEvaluation(unsigned g) const
-{
-  static std::unordered_map<unsigned, double> cache;
-
-  auto it = cache.find(g);
-  if(it!=cache.end())
-    return it->second;
-
-  double result;
-
-  if(gates[g]==BooleanGate::IN)
-    result = prob[g];
-  else if(gates[g]==BooleanGate::NOT)
-    result = 1-prob[wires[g][0]];
-  else {
-    result=(gates[g]==BooleanGate::AND?1:0);
-    for(auto s: wires[g]) {
-      double d = dDNNFEvaluation(s);
-      if(gates[g]==BooleanGate::AND)
-        result*=d;
-      else
-        result+=d;
-    }
-  }
-
-  cache[g]=result;
-  return result;
-}
-
-std::ostream &operator<<(std::ostream &o, const dDNNF::dDNNFGate &g)
+std::ostream &operator<<(std::ostream &o, const dDNNFTreeDecompositionBuilder::dDNNFGate &g)
 {
   o << g.id << "; {";
   bool first=true;
