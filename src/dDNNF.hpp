@@ -1,6 +1,7 @@
 #include "dDNNF.h"
 
 #include <unordered_map>
+#include <algorithm>
 #include <cassert>
 
 /* Turn a bounded-treewidth circuit c for which a tree decomposition td is
