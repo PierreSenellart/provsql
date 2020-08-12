@@ -119,15 +119,15 @@ template<unsigned W> void TreeDecomposition<W>::makeFriendly(unsigned
 
         unsigned long b = i;
         for(auto g: extra_gates) {
-          unsigned long id = addEmptyBag(parent[i], {b});
+          unsigned long id = addEmptyBag(parent[b], {b});
           for(unsigned long j=0; j < nb_gates; ++j)
-            addGateToBag(bags[i].gates[j], id);
+            addGateToBag(bags[b].gates[j], id);
+          ++nb_gates;
           addGateToBag(g, id);
 
           unsigned long single_gate_bag = addEmptyBag(id);
           addGateToBag(g, single_gate_bag);
           
-          gates_in_children[i].insert(g);
           b = id;
         }
       }
