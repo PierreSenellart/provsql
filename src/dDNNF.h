@@ -3,6 +3,7 @@
 
 #include "BooleanCircuit.h"
 
+#include <iostream>
 #include <map>
 
 // Forward definition of TreeDecomposition, as TreeDecomposition also
