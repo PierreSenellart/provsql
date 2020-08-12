@@ -289,6 +289,8 @@ std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNF(
               wires[g2.id].empty())) 
             gates_children.push_back(g2.id);
 
+        assert(gates_children.size()!=0);
+
         if(gates_children.size()==1) {
           and_gate = gates_children[0];
         } else {
@@ -315,7 +317,7 @@ std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNF(
       result_gates.push_back({result_gate, p.first.first, p.first.second});
     }
   }
-    
+
   return result_gates;
 }
 
@@ -331,8 +333,8 @@ double dDNNF::dDNNFEvaluation(unsigned g) const
 
   if(gates[g]==BooleanGate::IN)
     result = prob[g];
-  else if(gates[g]==BooleanGate::IN)
-    result = 1-dDNNFEvaluation(wires[g][0]);
+  else if(gates[g]==BooleanGate::NOT)
+    result = 1-prob[wires[g][0]];
   else {
     result=(gates[g]==BooleanGate::AND?1:0);
     for(auto s: wires[g]) {
