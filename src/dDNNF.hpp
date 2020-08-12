@@ -319,28 +319,30 @@ std::vector<dDNNF::dDNNFGate> dDNNF::builddDNNF(
 
 double dDNNF::dDNNFEvaluation(unsigned g) const
 {
-  switch(gates[g]) {
-    case BooleanGate::IN:
-      return prob[g];
-    case BooleanGate::NOT:
-      return 1-dDNNFEvaluation(wires[g][0]);
-    case BooleanGate::AND:
-      break;
-    case BooleanGate::OR:
-      break;
-    case BooleanGate::UNDETERMINED:
-      throw CircuitException("Incorrect gate type");
+  static std::unordered_map<unsigned, double> cache;
+
+  auto it = cache.find(g);
+  if(it!=cache.end())
+    return it->second;
+
+  double result;
+
+  if(gates[g]==BooleanGate::IN)
+    result = prob[g];
+  else if(gates[g]==BooleanGate::IN)
+    result = 1-dDNNFEvaluation(wires[g][0]);
+  else {
+    result=(gates[g]==BooleanGate::AND?1:0);
+    for(auto s: wires[g]) {
+      double d = dDNNFEvaluation(s);
+      if(gates[g]==BooleanGate::AND)
+        result*=d;
+      else
+        result+=d;
+    }
   }
 
-  double result=(gates[g]==BooleanGate::AND?1:0);
-  for(auto s: wires[g]) {
-    double d = dDNNFEvaluation(s);
-    if(gates[g]==BooleanGate::AND)
-      result*=d;
-    else
-      result+=d;
-  }
-
+  cache[g]=result;
   return result;
 }
 
