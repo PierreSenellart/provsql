@@ -7,11 +7,11 @@ bool Circuit<gateType>::hasGate(const uuid &u) const
 }
 
 template<class gateType>
-unsigned Circuit<gateType>::getGate(const uuid &u)
+gate_t Circuit<gateType>::getGate(const uuid &u)
 {
   auto it=uuid2id.find(u);
   if(it==uuid2id.end()) {
-    unsigned id=addGate();
+    gate_t id=addGate();
     uuid2id[u]=id;
     return id;
   } else 
@@ -19,39 +19,32 @@ unsigned Circuit<gateType>::getGate(const uuid &u)
 }
 
 template<class gateType>
-unsigned Circuit<gateType>::addGate()
+gate_t Circuit<gateType>::addGate()
 {
-  unsigned id=gates.size();
+  gate_t id{gates.size()};
   gates.push_back(gateType());
-  wires.resize(id+1);
+  wires.push_back({});
   return id;
 }
 
 template<class gateType>
-unsigned Circuit<gateType>::setGate(gateType type)
+gate_t Circuit<gateType>::setGate(gateType type)
 {
-  unsigned id = addGate();
-  gates[id] = type;
+  gate_t id = addGate();
+  gates[static_cast<std::underlying_type<gate_t>::type>(id)] = type;
   return id;
 }
 
 template<class gateType>
-unsigned Circuit<gateType>::setGate(const uuid &u, gateType type)
+gate_t Circuit<gateType>::setGate(const uuid &u, gateType type)
 {
-  unsigned id = getGate(u);
-  gates[id] = type;
+  gate_t id = getGate(u);
+  gates[static_cast<std::underlying_type<gate_t>::type>(id)] = type;
   return id;
 }
 
 template<class gateType>
-void Circuit<gateType>::addWire(unsigned f, unsigned t)
+void Circuit<gateType>::addWire(gate_t f, gate_t t)
 {
-  wires[f].push_back(t);
-  wiresSet.emplace(f,t);
-}
-
-template<class gateType>
-bool Circuit<gateType>::hasWire(unsigned f, unsigned t) const
-{
-  return wiresSet.find(std::make_pair(f,t))!=wiresSet.end();
+  getWires(f).push_back(t);
 }

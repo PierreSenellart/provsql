@@ -16,7 +16,7 @@ TreeDecomposition::TreeDecomposition(std::istream &in)
 
 // This utility function looks for an existing bag to attach a new bag
 // that contains a single gate v
-unsigned long TreeDecomposition::findGateConnection(unsigned long v) const
+unsigned long TreeDecomposition::findGateConnection(gate_t v) const
 {
   for(unsigned i=0; i<bags.size(); ++i)
     for(unsigned k=0;k<bags[i].nb_gates;++k) {
@@ -34,8 +34,7 @@ unsigned long TreeDecomposition::findGateConnection(unsigned long v) const
 // described in Lemma 2.2 of that paper. The only difference is that we
 // do not enforce the tree to be full, as this is not required for
 // correctness.
-void TreeDecomposition::makeFriendly(unsigned
-    long v) {
+void TreeDecomposition::makeFriendly(gate_t v) {
   // Look for a bag root_connection to attach to the new root
   unsigned long root_connection = findGateConnection(v);
 
@@ -71,7 +70,7 @@ void TreeDecomposition::makeFriendly(unsigned
   }
   
   // Construct for each bag the union of gates in its children
-  std::vector<std::set<unsigned long>> gates_in_children(bags.size());
+  std::vector<std::set<gate_t>> gates_in_children(bags.size());
   for(unsigned i=0; i<bags.size(); ++i) {
     if(i!=root) {
       for(unsigned j=0;j<bags[i].nb_gates;++j)
@@ -85,8 +84,8 @@ void TreeDecomposition::makeFriendly(unsigned
   for(unsigned i=0, nb_bags=bags.size(); i<nb_bags; ++i) {
     if(!children[i].empty()) {
       unsigned nb_gates=0;
-      unsigned long intersection[MAX_TREEWIDTH+1];
-      std::vector<unsigned long> extra_gates;
+      gate_t intersection[MAX_TREEWIDTH+1];
+      std::vector<gate_t> extra_gates;
       for(unsigned j=0; j<bags[i].nb_gates;++j) {
         auto g = bags[i].gates[j];
         if(gates_in_children[i].find(g)==gates_in_children[i].end())
@@ -106,8 +105,8 @@ void TreeDecomposition::makeFriendly(unsigned
           // We can skip one level, to avoid creating a node identical to
           // the single child
         
-          unsigned long new_bag = addEmptyBag(i);
-          unsigned gate = extra_gates.back();
+          auto new_bag = addEmptyBag(i);
+          auto gate = extra_gates.back();
           addGateToBag(gate, new_bag);
           addGateToBag(gate, i);
           extra_gates.pop_back();
@@ -151,7 +150,7 @@ unsigned long TreeDecomposition::addEmptyBag(unsigned long p,
   return id;
 }
 
-void TreeDecomposition::addGateToBag(unsigned long g, unsigned long b)
+void TreeDecomposition::addGateToBag(gate_t g, unsigned long b)
 {
   bags[b].gates[bags[b].nb_gates]=g;
   ++bags[b].nb_gates;
@@ -193,7 +192,7 @@ std::string TreeDecomposition::toDot() const
         result+=",";
       else
         first=false;
-      result += std::to_string(gate);
+      result += to_string(gate);
     }
     result += "}\"];\n";
 
@@ -229,7 +228,7 @@ std::istream& operator>>(std::istream& in, TreeDecomposition &td)
     assert(td.bags[i].nb_gates <= td.treewidth+1);
 
     for(unsigned long j=0; j<td.bags[i].nb_gates; ++j) {
-      unsigned long g;
+      gate_t g;
       in >> g;
 
       td.bags[i].gates[j] = g;
@@ -293,7 +292,7 @@ int main(int argc, char **argv) {
       c.setGate(std::to_string(i), line=="OR"?BooleanGate::OR:BooleanGate::AND);
   }
 
-  unsigned u,v;
+  gate_t u,v;
   while(g >> u >> v)
     c.addWire(u,v);
   g.close();
@@ -301,8 +300,7 @@ int main(int argc, char **argv) {
   double t0, t1, t2;
   t0 = get_timestamp();
 
-  dDNNFTreeDecompositionBuilder builder{c, "0", td};
-  dDNNF dnnf = builder.build();
+  auto dnnf{dDNNFTreeDecompositionBuilder{c, "0", td}.build()};
   t1 = get_timestamp();
   std::cerr << "Took " << (t1-t0) << "s" << std::endl;
 

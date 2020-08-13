@@ -14,29 +14,29 @@ class dDNNF;
 
 class BooleanCircuit : public Circuit<BooleanGate> {
  private:
-  bool evaluate(unsigned g, const std::unordered_set<unsigned> &sampled) const;
-  std::string Tseytin(unsigned g, bool display_prob) const;
+  bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
+  std::string Tseytin(gate_t g, bool display_prob) const;
 
  protected:
-  std::set<unsigned> inputs;
+  std::set<gate_t> inputs;
   std::vector<double> prob;
 
  public:
-  unsigned addGate() override;
-  unsigned setGate(BooleanGate t) override;
-  unsigned setGate(const uuid &u, BooleanGate t) override;
-  unsigned setGate(BooleanGate t, double p);
-  unsigned setGate(const uuid &u, BooleanGate t, double p);
+  gate_t addGate() override;
+  gate_t setGate(BooleanGate t) override;
+  gate_t setGate(const uuid &u, BooleanGate t) override;
+  gate_t setGate(BooleanGate t, double p);
+  gate_t setGate(const uuid &u, BooleanGate t, double p);
+  void setProb(gate_t g, double p) { prob[static_cast<std::underlying_type<gate_t>::type>(g)]=p; }
+  double getProb(gate_t g) const { return prob[static_cast<std::underlying_type<gate_t>::type>(g)]; }
 
-  double possibleWorlds(unsigned g) const;
-  double compilation(unsigned g, std::string compiler) const;
-  double monteCarlo(unsigned g, unsigned samples) const;
-  double WeightMC(unsigned g, std::string opt) const;
+  double possibleWorlds(gate_t g) const;
+  double compilation(gate_t g, std::string compiler) const;
+  double monteCarlo(gate_t g, unsigned samples) const;
+  double WeightMC(gate_t g, std::string opt) const;
 
-  virtual std::string toString(unsigned g) const override;
+  virtual std::string toString(gate_t g) const override;
 
-  // We make dDNNF a friend of BooleanCircuit, since its constructor
-  // needs to manipulate the internals of a BooleanCircuit
   friend class dDNNFTreeDecompositionBuilder;
 };
 

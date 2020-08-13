@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "BooleanCircuit.h"
+
 // Forward declaration for friend
 class dDNNFTreeDecompositionBuilder;
 
@@ -13,7 +15,7 @@ class TreeDecomposition {
   static constexpr int MAX_TREEWIDTH = 10;
 
   struct Bag {
-    unsigned long gates[MAX_TREEWIDTH+1];
+    gate_t gates[MAX_TREEWIDTH+1];
     unsigned nb_gates;
   };
  
@@ -26,17 +28,17 @@ class TreeDecomposition {
 
   TreeDecomposition() = default;
   
-  unsigned long findGateConnection(unsigned long v) const;
+  unsigned long findGateConnection(gate_t v) const;
   void reroot(unsigned long bag);
   unsigned long addEmptyBag(unsigned long parent, const std::vector<unsigned long> &children = std::vector<unsigned long>());
-  void addGateToBag(unsigned long g, unsigned long b);
+  void addGateToBag(gate_t g, unsigned long b);
 
  public:
   TreeDecomposition(std::istream &in);
   TreeDecomposition(const TreeDecomposition &td);
   TreeDecomposition &operator=(const TreeDecomposition &td);
 
-  void makeFriendly(unsigned long root);
+  void makeFriendly(gate_t root);
 
   std::string toDot() const;
   

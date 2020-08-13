@@ -14,10 +14,10 @@ class dDNNF : public BooleanCircuit {
   dDNNF() = default;
 
  public:
-  double dDNNFEvaluation(unsigned g) const;
+  double dDNNFEvaluation(gate_t g) const;
     
   friend dDNNFTreeDecompositionBuilder;
-  friend double BooleanCircuit::compilation(unsigned g, std::string compiler) const;
+  friend double BooleanCircuit::compilation(gate_t g, std::string compiler) const;
 };
     
 #endif /* DDNNF_H */

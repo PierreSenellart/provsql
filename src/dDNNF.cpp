@@ -2,9 +2,9 @@
 
 #include <unordered_map>
 
-double dDNNF::dDNNFEvaluation(unsigned g) const
+double dDNNF::dDNNFEvaluation(gate_t g) const
 {
-  static std::unordered_map<unsigned, double> cache;
+  static std::unordered_map<gate_t, double> cache;
 
   auto it = cache.find(g);
   if(it!=cache.end())
@@ -12,15 +12,15 @@ double dDNNF::dDNNFEvaluation(unsigned g) const
 
   double result;
 
-  if(gates[g]==BooleanGate::IN)
-    result = prob[g];
-  else if(gates[g]==BooleanGate::NOT)
-    result = 1-prob[*wires[g].begin()];
+  if(getGateType(g)==BooleanGate::IN)
+    result = getProb(g);
+  else if(getGateType(g)==BooleanGate::NOT)
+    result = 1-getProb(*getWires(g).begin());
   else {
-    result=(gates[g]==BooleanGate::AND?1:0);
-    for(auto s: wires[g]) {
+    result=(getGateType(g)==BooleanGate::AND?1:0);
+    for(auto s: getWires(g)) {
       double d = dDNNFEvaluation(s);
-      if(gates[g]==BooleanGate::AND)
+      if(getGateType(g)==BooleanGate::AND)
         result*=d;
       else
         result+=d;
@@ -30,4 +30,3 @@ double dDNNF::dDNNFEvaluation(unsigned g) const
   cache[g]=result;
   return result;
 }
-

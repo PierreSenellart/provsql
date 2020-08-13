@@ -15,42 +15,49 @@ private:
   BooleanCircuit::uuid root;
   TreeDecomposition &td;
   dDNNF d;
-  std::unordered_map<unsigned, unsigned long> responsible_bag;
-  std::unordered_map<unsigned, unsigned long> input_gate;
-  std::unordered_map<unsigned, unsigned long> negated_input_gate;
+  std::unordered_map<gate_t, unsigned long> responsible_bag;
+  std::unordered_map<gate_t, gate_t> input_gate;
+  std::unordered_map<gate_t, gate_t> negated_input_gate;
+  std::set<std::pair<gate_t, gate_t>> wiresSet;
   
   struct dDNNFGate {
-    unsigned long id;
-    std::map<unsigned,bool> valuation;
-    std::set<unsigned> suspicious;
+    gate_t id;
+    std::map<gate_t,bool> valuation;
+    std::set<gate_t> suspicious;
 
-    dDNNFGate(unsigned long i, std::map<unsigned, bool> v, std::set<unsigned> s) :
+    dDNNFGate(gate_t i, std::map<gate_t, bool> v, std::set<gate_t> s) :
       id{i}, valuation{std::move(v)}, suspicious{std::move(s)} {}
   };
 
-  std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
+  std::map<std::pair<std::map<gate_t,bool>,std::set<gate_t>>,std::vector<gate_t>>
     collectGatesToOr(
         const std::vector<dDNNFGate> &gates1,
         const std::vector<dDNNFGate> &gates2,
-        unsigned long gate);
-  std::vector<dDNNFGate> builddDNNFLeaf(unsigned gate);
-  std::vector<dDNNFGate> builddDNNF(unsigned gate);
+        unsigned long bag);
+  std::vector<dDNNFGate> builddDNNFLeaf(unsigned long bag);
+  std::vector<dDNNFGate> builddDNNF(unsigned long bag);
+  bool circuitHasWire(gate_t u, gate_t v) const;
 
   bool isAlmostValuation(
-    const std::map<unsigned,bool> &valuation) const;
-  std::set<unsigned> getSuspicious(
-    const std::map<unsigned, bool> &valuation,
-    unsigned long gate,
-    const std::set<unsigned> &ial_innocent) const;
+    const std::map<gate_t,bool> &valuation) const;
+  std::set<gate_t> getSuspicious(
+    const std::map<gate_t, bool> &valuation,
+    unsigned long bag,
+    const std::set<gate_t> &ial_innocent) const;
 
 public:
   dDNNFTreeDecompositionBuilder(
       const BooleanCircuit &circuit,
       BooleanCircuit::uuid r,
-      TreeDecomposition &tree_decomposition) : c{circuit}, root{std::move(r)}, td{tree_decomposition} {
+      TreeDecomposition &tree_decomposition) : c{circuit}, root{std::move(r)}, td{tree_decomposition}  
+  {
     assert(c.hasGate(root));
+    for(gate_t i{0}; i<c.getNbGates(); ++i)
+      for(auto g: c.getWires(i))
+        wiresSet.emplace(i,g);
   };
-  dDNNF build();
+
+  dDNNF&& build() &&;
   
   friend std::ostream &operator<<(std::ostream &o, const dDNNFGate &g);
 };

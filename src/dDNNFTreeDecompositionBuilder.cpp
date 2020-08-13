@@ -5,11 +5,11 @@
 /* Turn a bounded-treewidth circuit c for which a tree decomposition td
  * is provided into a dNNF rooted at root, following the construction in
  * Section 5.1 of https://arxiv.org/pdf/1811.02944 */
-dDNNF dDNNFTreeDecompositionBuilder::build() {
+dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
   // Theoretically, the BooleanCircuit could be modified by getGate, but
   // since we know root is a gate of the circuit (assert in constructor),
   // it is impossible.
-  unsigned root_id = const_cast<BooleanCircuit &>(c).getGate(root);
+  auto root_id = const_cast<BooleanCircuit &>(c).getGate(root);
 
   // We make the tree decomposition friendly
   td.makeFriendly(root_id);
@@ -17,7 +17,7 @@ dDNNF dDNNFTreeDecompositionBuilder::build() {
   // We look for bags responsible for each variable
   for(unsigned i=0; i<td.bags.size(); ++i) {
     const auto &b = td.bags[i];
-    if(td.children[i].empty() && b.nb_gates == 1 && c.gates[b.gates[0]] == BooleanGate::IN)
+    if(td.children[i].empty() && b.nb_gates == 1 && c.getGateType(b.gates[0]) == BooleanGate::IN)
       responsible_bag[b.gates[0]] = i;
   }
 
@@ -27,8 +27,8 @@ dDNNF dDNNFTreeDecompositionBuilder::build() {
 
   // Create the input and negated input gates
   for(auto g: c.inputs) {
-    unsigned gate = d.setGate(BooleanGate::IN, c.prob[g]);
-    unsigned not_gate = d.setGate(BooleanGate::NOT);
+    auto gate = d.setGate(BooleanGate::IN, c.getProb(g));
+    auto not_gate = d.setGate(BooleanGate::NOT);
     d.addWire(not_gate, gate);
     input_gate[g]=gate;
     negated_input_gate[g]=not_gate;
@@ -37,7 +37,7 @@ dDNNF dDNNFTreeDecompositionBuilder::build() {
   std::vector<dDNNFGate> result_gates = 
     builddDNNF(td.root);
 
-  unsigned long result_id = d.setGate("root", BooleanGate::OR);
+  auto result_id = d.setGate("root", BooleanGate::OR);
 
   for(const auto &p: result_gates) {
     if(p.suspicious.empty() && p.valuation.find(root_id)->second) {
@@ -46,7 +46,7 @@ dDNNF dDNNFTreeDecompositionBuilder::build() {
     }
   }
 
-  return d;
+  return std::move(d);
 }
 
 constexpr bool isStrong(BooleanGate type, bool value)
@@ -63,7 +63,7 @@ constexpr bool isStrong(BooleanGate type, bool value)
   }
 }
 
-static bool isConnectible(const std::set<unsigned> &suspicious,
+static bool isConnectible(const std::set<gate_t> &suspicious,
                           const TreeDecomposition::Bag &b)
 {
   for(const auto &g: suspicious) {
@@ -82,7 +82,7 @@ static bool isConnectible(const std::set<unsigned> &suspicious,
 }
 
 std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNFLeaf(
-    unsigned root)
+    unsigned long root)
 {
   // If the bag is empty, it behaves as if it was not there
   if(td.bags[root].nb_gates==0) 
@@ -90,10 +90,10 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
 
   // Otherwise, since we have a friendly decomposition, we have a
   // single gate
-  unsigned single_gate = td.bags[root].gates[0];
+  auto single_gate = td.bags[root].gates[0];
 
   // We check if this bag is responsible for an input variable
-  if(c.gates[single_gate]==BooleanGate::IN &&
+  if(c.getGateType(single_gate)==BooleanGate::IN &&
       responsible_bag.find(single_gate)->second==root)
   {
     // No need to create an extra gate, just point to the variable and
@@ -112,14 +112,14 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
 
     // We create two TRUE gates (AND gates with no inputs)
     for(auto v: {true, false}) {
-      std::set<unsigned> suspicious;
+      std::set<gate_t> suspicious;
 
-      if(isStrong(c.gates[single_gate], v))
+      if(isStrong(c.getGateType(single_gate), v))
         suspicious.insert(single_gate);
 
       result_gates.emplace_back(
           d.setGate(BooleanGate::AND),
-          std::map<unsigned,bool>{std::make_pair(single_gate, v)},
+          std::map<gate_t,bool>{std::make_pair(single_gate, v)},
           std::move(suspicious)
       );
     }
@@ -129,17 +129,17 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
 }
 
 bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
-    const std::map<unsigned,bool> &valuation) const
+    const std::map<gate_t,bool> &valuation) const
 {
   for(const auto &p1: valuation) {
     for(const auto &p2: valuation) {
       if(p1.first==p2.first)
         continue;
-      if(!isStrong(c.gates[p1.first],p2.second))
+      if(!isStrong(c.getGateType(p1.first),p2.second))
         continue;
 
-      if(c.hasWire(p1.first,p2.first)) {
-        switch(c.gates[p1.first]) {
+      if(circuitHasWire(p1.first,p2.first)) {
+        switch(c.getGateType(p1.first)) {
           case BooleanGate::AND:
           case BooleanGate::OR:
             if(p1.second!=p2.second)
@@ -158,13 +158,13 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
   return true;
 }
 
-std::set<unsigned>
+std::set<gate_t>
 dDNNFTreeDecompositionBuilder::getSuspicious(
-    const std::map<unsigned, bool> &valuation,
+    const std::map<gate_t, bool> &valuation,
     unsigned long root,
-    const std::set<unsigned> &innocent) const
+    const std::set<gate_t> &innocent) const
 {
-  std::set<unsigned> suspicious;
+  std::set<gate_t> suspicious;
 
   for(const auto &p: valuation) {
     // We first check if this gate was innocent because it was
@@ -173,7 +173,7 @@ dDNNFTreeDecompositionBuilder::getSuspicious(
       continue;
     
     // Otherwise, we check if it is strong
-    bool strong=isStrong(c.gates[p.first],p.second);
+    bool strong=isStrong(c.getGateType(p.first),p.second);
 
     if(!strong)
       continue;
@@ -188,9 +188,9 @@ dDNNFTreeDecompositionBuilder::getSuspicious(
       if(g==p.first)
         continue;
 
-      if(c.hasWire(p.first,g)) {
+      if(circuitHasWire(p.first,g)) {
         bool value = valuation.find(g)->second;
-        if(isStrong(c.gates[p.first],value)) {
+        if(isStrong(c.getGateType(p.first),value)) {
           susp=false;
           break;
         }
@@ -204,18 +204,18 @@ dDNNFTreeDecompositionBuilder::getSuspicious(
   return suspicious;
 }
 
-std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
+std::map<std::pair<std::map<gate_t,bool>,std::set<gate_t>>,std::vector<gate_t>>
 dDNNFTreeDecompositionBuilder::collectGatesToOr(
     const std::vector<dDNNFGate> &gates1,
     const std::vector<dDNNFGate> &gates2,
     unsigned long root)
 {
-  std::map<std::pair<std::map<unsigned,bool>,std::set<unsigned>>,std::vector<unsigned>>
+  std::map<std::pair<std::map<gate_t,bool>,std::set<gate_t>>,std::vector<gate_t>>
     gates_to_or;
 
   for(auto g1: gates1) {
-    std::map<unsigned,bool> partial_valuation;
-    std::set<unsigned> partial_innocent;
+    std::map<gate_t,bool> partial_valuation;
+    std::set<gate_t> partial_innocent;
 
     for(const auto &p: g1.valuation)
       for(unsigned k=0; k<td.bags[root].nb_gates; ++k)
@@ -272,19 +272,19 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
 
       auto suspicious = getSuspicious(valuation, root, innocent);
 
-      unsigned long and_gate;
+      gate_t and_gate;
       
       // We optimize a bit by avoiding creating an AND gate if there
       // is only one child, or if a second child is a TRUE gate
-      std::vector<unsigned long> gates_children;
+      std::vector<gate_t> gates_children;
 
-      if(!(d.gates[g1.id]==BooleanGate::AND &&
-            d.wires[g1.id].empty())) 
+      if(!(d.getGateType(g1.id)==BooleanGate::AND &&
+            d.getWires(g1.id).empty())) 
         gates_children.push_back(g1.id);
 
       if(td.children[root].size()==2)
-        if(!(d.gates[g2.id]==BooleanGate::AND &&
-            d.wires[g2.id].empty())) 
+        if(!(d.getGateType(g2.id)==BooleanGate::AND &&
+            d.getWires(g2.id).empty())) 
           gates_children.push_back(g2.id);
 
       assert(gates_children.size()!=0);
@@ -305,7 +305,7 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
 }
 
 std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF(
-    unsigned root)
+    unsigned long root)
 {
   if(td.children[root].empty())
     return builddDNNFLeaf(root);
@@ -316,13 +316,13 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
   if(td.children[root].size()==2)
     gates2 = builddDNNF(td.children[root][1]);
   else
-    gates2 = {{ 0, {}, {} }};
+    gates2 = {{ gate_t{0}, {}, {} }};
 
   auto gates_to_or = collectGatesToOr(gates1, gates2, root);
 
   std::vector<dDNNFGate> result_gates;
   for(auto &p: gates_to_or) {
-    unsigned long result_gate;
+    gate_t result_gate;
     
     if(p.second.size()==1)
       result_gate = p.second[0];
@@ -359,4 +359,9 @@ std::ostream &operator<<(std::ostream &o, const dDNNFTreeDecompositionBuilder::d
   o << "}";
 
   return o;
+}
+
+bool dDNNFTreeDecompositionBuilder::circuitHasWire(gate_t f, gate_t t) const
+{
+  return wiresSet.find(std::make_pair(f,t))!=wiresSet.end();
 }
