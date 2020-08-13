@@ -64,7 +64,7 @@ constexpr bool isStrong(BooleanGate type, bool value)
   }
 }
 
-static bool isConnectible(const std::set<gate_t> &suspicious,
+static bool isConnectible(const dDNNFTreeDecompositionBuilder::suspicious_t &suspicious,
                           const TreeDecomposition::Bag &b)
 {
   for(const auto &g: suspicious) {
@@ -106,14 +106,14 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
 
     // We create two TRUE gates (AND gates with no inputs)
     for(auto v: {true, false}) {
-      std::set<gate_t> suspicious;
+      suspicious_t suspicious;
 
       if(isStrong(c.getGateType(single_gate), v))
         suspicious.insert(single_gate);
 
       result_gates.emplace_back(
           d.setGate(BooleanGate::AND),
-          std::map<gate_t,bool>{std::make_pair(single_gate, v)},
+          valuation_t{std::make_pair(single_gate, v)},
           std::move(suspicious)
       );
     }
@@ -123,7 +123,7 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
 }
 
 bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
-    const std::map<gate_t,bool> &valuation) const
+    const valuation_t &valuation) const
 {
   for(const auto &p1: valuation) {
     for(const auto &p2: valuation) {
@@ -152,13 +152,13 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
   return true;
 }
 
-std::set<gate_t>
+dDNNFTreeDecompositionBuilder::suspicious_t
 dDNNFTreeDecompositionBuilder::getSuspicious(
-    const std::map<gate_t, bool> &valuation,
+    const valuation_t &valuation,
     bag_t bag,
-    const std::set<gate_t> &innocent) const
+    const suspicious_t &innocent) const
 {
-  std::set<gate_t> suspicious;
+  suspicious_t suspicious;
 
   for(const auto &p: valuation) {
     // We first check if this gate was innocent because it was
@@ -197,18 +197,18 @@ dDNNFTreeDecompositionBuilder::getSuspicious(
   return suspicious;
 }
 
-std::map<std::pair<std::map<gate_t,bool>,std::set<gate_t>>,std::vector<gate_t>>
+std::map<std::pair<dDNNFTreeDecompositionBuilder::valuation_t, dDNNFTreeDecompositionBuilder::suspicious_t>, std::vector<gate_t>>
 dDNNFTreeDecompositionBuilder::collectGatesToOr(
     const std::vector<dDNNFGate> &gates1,
     const std::vector<dDNNFGate> &gates2,
     bag_t bag)
 {
-  std::map<std::pair<std::map<gate_t,bool>,std::set<gate_t>>,std::vector<gate_t>>
+  std::map<std::pair<valuation_t,suspicious_t>, std::vector<gate_t>>
     gates_to_or;
 
   for(auto g1: gates1) {
-    std::map<gate_t,bool> partial_valuation;
-    std::set<gate_t> partial_innocent;
+    valuation_t partial_valuation;
+    suspicious_t partial_innocent;
 
     for(const auto &p: g1.valuation)
       for(auto g: td.getBag(bag))
@@ -290,7 +290,7 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
           d.addWire(and_gate, x);
       }
 
-      gates_to_or[make_pair(valuation,suspicious)].push_back(and_gate);
+      gates_to_or[std::make_pair(valuation,suspicious)].push_back(and_gate);
     }
   }
 

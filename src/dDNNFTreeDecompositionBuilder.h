@@ -4,13 +4,21 @@
 #include <cassert>
 #include <map>
 
+#include "flat_map.hpp"
+#include "flat_set.hpp"
 #include "TreeDecomposition.h"
 #include "dDNNF.h"
 #include "BooleanCircuit.h"
 
 class dDNNFTreeDecompositionBuilder
 {
-private:
+ public:
+  template<class T>
+    using small_vector = boost::container::static_vector<T, TreeDecomposition::MAX_TREEWIDTH+1>;
+  using valuation_t = flat_map<gate_t, bool, small_vector>;
+  using suspicious_t = flat_set<gate_t, small_vector>;
+
+ private:
   const BooleanCircuit &c;
   BooleanCircuit::uuid root;
   TreeDecomposition &td;
@@ -22,14 +30,14 @@ private:
   
   struct dDNNFGate {
     gate_t id;
-    std::map<gate_t,bool> valuation;
-    std::set<gate_t> suspicious;
+    valuation_t valuation;
+    suspicious_t suspicious;
 
-    dDNNFGate(gate_t i, std::map<gate_t, bool> v, std::set<gate_t> s) :
+    dDNNFGate(gate_t i, valuation_t v, suspicious_t s) :
       id{i}, valuation{std::move(v)}, suspicious{std::move(s)} {}
   };
 
-  std::map<std::pair<std::map<gate_t,bool>,std::set<gate_t>>,std::vector<gate_t>>
+  std::map<std::pair<valuation_t, suspicious_t>, std::vector<gate_t>>
     collectGatesToOr(
         const std::vector<dDNNFGate> &gates1,
         const std::vector<dDNNFGate> &gates2,
@@ -39,11 +47,11 @@ private:
   bool circuitHasWire(gate_t u, gate_t v) const;
 
   bool isAlmostValuation(
-    const std::map<gate_t,bool> &valuation) const;
-  std::set<gate_t> getSuspicious(
-    const std::map<gate_t, bool> &valuation,
+    const valuation_t &valuation) const;
+  suspicious_t getSuspicious(
+    const valuation_t &valuation,
     bag_t bag,
-    const std::set<gate_t> &ial_innocent) const;
+    const suspicious_t &innocent) const;
 
 public:
   dDNNFTreeDecompositionBuilder(

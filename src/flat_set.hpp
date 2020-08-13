@@ -1,3 +1,6 @@
+#ifndef FLAT_SET_H
+#define FLAT_SET_H
+
 // Heavily inspired from https://stackoverflow.com/a/30938947, credits to
 // Yakk - Adam Nevraum @ StackOverflow
 
@@ -64,10 +67,23 @@ public:
     return storage.erase(it);
   }
   template<class K, class=std::enable_if_t<std::is_convertible<K,T>{}>>
+  void insert( const K& value )
+  {
+    auto it = find(value);
+    if (it == end())
+      storage.emplace_back( value );
+  }
+  template<class K, class=std::enable_if_t<std::is_convertible<K,T>{}>>
   void insert( K&& value )
   {
     auto it = find(value);
     if (it == end())
       storage.emplace_back( std::forward<T>(value) );
   }
+
+  bool operator<(const flat_set &rhs) const
+  {
+    return storage < rhs.storage;
+  }
 };
+#endif /* FLAT_SET_H */

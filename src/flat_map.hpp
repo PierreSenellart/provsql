@@ -1,8 +1,12 @@
+#ifndef FLAT_MAP_H
+#define FLAT_MAP_H
+
 // Heavily inspired from https://stackoverflow.com/a/30938947, credits to
 // Yakk - Adam Nevraum @ StackOverflow
 
 #include <vector>
 #include <utility>
+#include <algorithm>
 
 template<class Key, class Value, template<class...>class Storage=std::vector>
 struct flat_map {
@@ -11,6 +15,10 @@ struct flat_map {
 
   using iterator=decltype(begin(std::declval<storage_t&>()));
   using const_iterator=decltype(begin(std::declval<const storage_t&>()));
+
+  // Constructor
+  flat_map() = default;
+  flat_map(std::initializer_list<std::pair<Key,Value>> init) : storage(std::move(init)) { }
 
   // boilerplate:
   iterator begin() {
@@ -51,7 +59,7 @@ struct flat_map {
     return storage.capacity();
   }
   // map-like interface:
-  template<class K, class=std::enable_if_t<std::is_convertible<K, Key>>>
+  template<class K, class=std::enable_if_t<std::is_convertible<K, Key>{}>>
   Value& operator[](K&& k){
     auto it = find(k);
     if (it != end()) return it->v;
@@ -59,22 +67,37 @@ struct flat_map {
     return storage.back().v;
   }
 private:
-  template<class K, class=std::enable_if_t<std::is_convertible<K, Key>>>
+  template<class K, class=std::enable_if_t<std::is_convertible<K, Key>{}>>
   auto key_match( K& k ) {
-    return [&k](kv const& kv){
-      return kv.k == k;
+    return [&k](const std::pair<Key, Value>& kv){
+      return kv.first == k;
     };
   }
 public:
-  template<class K, class=std::enable_if_t<std::is_convertible<K, Key>>>
+  template<class K, class=std::enable_if_t<std::is_convertible<K, Key>{}>>
   iterator find(K&& k) {
     return std::find_if( begin(), end(), key_match(k) );
   }
-  template<class K, class=std::enable_if_t<std::is_convertible<K, Key>>>
+  template<class K, class=std::enable_if_t<std::is_convertible<K, Key>{}>>
   const_iterator find(K&& k) const {
     return const_cast<flat_map*>(this)->find(k);
   }
   iterator erase(const_iterator it) {
     return storage.erase(it);
   }
+  template<class P, class=std::enable_if_t<std::is_convertible<P,std::pair<Key, Value>>{}>>
+  void insert( P&& value )
+  {
+    auto it = find(value.first);
+    if (it == end())
+      storage.emplace_back( std::forward<P>(value) );
+    else
+      it->second = value.second;
+  }
+
+  bool operator<(const flat_map &rhs) const
+  {
+    return storage < rhs.storage;
+  }
 };
+#endif /* FLAT_MAP_H */
