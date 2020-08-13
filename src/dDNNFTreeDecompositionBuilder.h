@@ -15,7 +15,7 @@ private:
   BooleanCircuit::uuid root;
   TreeDecomposition &td;
   dDNNF d;
-  std::unordered_map<gate_t, unsigned long> responsible_bag;
+  std::unordered_map<gate_t, bag_t> responsible_bag;
   std::unordered_map<gate_t, gate_t> input_gate;
   std::unordered_map<gate_t, gate_t> negated_input_gate;
   std::set<std::pair<gate_t, gate_t>> wiresSet;
@@ -33,16 +33,16 @@ private:
     collectGatesToOr(
         const std::vector<dDNNFGate> &gates1,
         const std::vector<dDNNFGate> &gates2,
-        unsigned long bag);
-  std::vector<dDNNFGate> builddDNNFLeaf(unsigned long bag);
-  std::vector<dDNNFGate> builddDNNF(unsigned long bag);
+        bag_t bag);
+  std::vector<dDNNFGate> builddDNNFLeaf(bag_t bag);
+  std::vector<dDNNFGate> builddDNNF(bag_t bag);
   bool circuitHasWire(gate_t u, gate_t v) const;
 
   bool isAlmostValuation(
     const std::map<gate_t,bool> &valuation) const;
   std::set<gate_t> getSuspicious(
     const std::map<gate_t, bool> &valuation,
-    unsigned long bag,
+    bag_t bag,
     const std::set<gate_t> &ial_innocent) const;
 
 public:

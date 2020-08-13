@@ -16,11 +16,11 @@ TreeDecomposition::TreeDecomposition(std::istream &in)
 
 // This utility function looks for an existing bag to attach a new bag
 // that contains a single gate v
-unsigned long TreeDecomposition::findGateConnection(gate_t v) const
+bag_t TreeDecomposition::findGateConnection(gate_t v) const
 {
-  for(unsigned i=0; i<bags.size(); ++i)
-    for(unsigned k=0;k<bags[i].nb_gates;++k) {
-      auto g=bags[i].gates[k];
+  for(bag_t i{0}; i<bags.size(); ++i)
+    for(unsigned k=0;k<getBag(i).nb_gates;++k) {
+      auto g=getBag(i).gates[k];
       if(g == v)
         return i;
     }
@@ -36,59 +36,66 @@ unsigned long TreeDecomposition::findGateConnection(gate_t v) const
 // correctness.
 void TreeDecomposition::makeFriendly(gate_t v) {
   // Look for a bag root_connection to attach to the new root
-  unsigned long root_connection = findGateConnection(v);
+  auto root_connection = findGateConnection(v);
 
   // Create the new root and attach it to this root_connection
-  unsigned long new_root = addEmptyBag(root_connection);
+  auto new_root = addEmptyBag(root_connection);
   addGateToBag(v, new_root);
   reroot(new_root);
 
   // Make the tree binary
-  for(unsigned i=0, nb_bags=bags.size(); i<nb_bags; ++i) {
-    if(children[i].size()<=2)
+  auto nb_bags = bags.size();
+  for(bag_t i{0}; i<nb_bags; ++i) {
+    if(getChildren(i).size()<=2)
       continue;
 
-    unsigned long current = i;
-    auto copy_children=children[i];
+    auto current = i;
+    auto copy_children=getChildren(i);
     for(int j=copy_children.size()-3; j>=0; --j) {
-      current = addEmptyBag(parent[current], { current, copy_children[j] } );
-      for(unsigned k=0; k<bags[i].nb_gates; ++k)
-        addGateToBag(bags[i].gates[k], current);
+      current = addEmptyBag(getParent(current), { current, copy_children[j] } );
+      for(unsigned k=0; k<getBag(i).nb_gates; ++k)
+        addGateToBag(getBag(i).gates[k], current);
     }
   }
 
   // Transform leaves into paths that introduce gates one at a time
-  for(unsigned i=0, nb_bags=bags.size(); i<nb_bags; ++i) {
-    if(children[i].empty()) {
-      unsigned long p = i;
-      for(unsigned j = 1; j < bags[i].nb_gates; ++j) {
+  nb_bags = bags.size();
+  for(bag_t i{0}; i<nb_bags; ++i) {
+    if(getChildren(i).empty()) {
+      auto p = i;
+      for(unsigned j = 1; j < getBag(i).nb_gates; ++j) {
         p = addEmptyBag(p);
-        for(unsigned k = 0; k < bags[i].nb_gates - j; ++k)
-          addGateToBag(bags[i].gates[k], p);
+        for(unsigned k = 0; k < getBag(i).nb_gates - j; ++k)
+          addGateToBag(getBag(i).gates[k], p);
       }
     }
   }
   
   // Construct for each bag the union of gates in its children
   std::vector<std::set<gate_t>> gates_in_children(bags.size());
-  for(unsigned i=0; i<bags.size(); ++i) {
+  auto getChildrenGates = [&gates_in_children](bag_t i) -> auto& {
+    return gates_in_children[static_cast<std::underlying_type<bag_t>::type>(i)];
+  };
+
+  for(bag_t i{0}; i<bags.size(); ++i) {
     if(i!=root) {
-      for(unsigned j=0;j<bags[i].nb_gates;++j)
-        gates_in_children[parent[i]].insert(bags[i].gates[j]);
+      for(unsigned j=0;j<getBag(i).nb_gates;++j)
+        getChildrenGates(getParent(i)).insert(getBag(i).gates[j]);
     }
   }
 
   // For every gate that is in an internal bag but not in the union of
   // its children, construct a subtree introducing these gates one at a
   // time
-  for(unsigned i=0, nb_bags=bags.size(); i<nb_bags; ++i) {
-    if(!children[i].empty()) {
+  nb_bags = bags.size();
+  for(bag_t i{0}; i<nb_bags; ++i) {
+    if(!getChildren(i).empty()) {
       unsigned nb_gates=0;
       gate_t intersection[MAX_TREEWIDTH+1];
       std::vector<gate_t> extra_gates;
-      for(unsigned j=0; j<bags[i].nb_gates;++j) {
-        auto g = bags[i].gates[j];
-        if(gates_in_children[i].find(g)==gates_in_children[i].end())
+      for(unsigned j=0; j<getBag(i).nb_gates;++j) {
+        auto g = getBag(i).gates[j];
+        if(getChildrenGates(i).find(g) == getChildrenGates(i).end())
           extra_gates.push_back(g);
         else {
           intersection[nb_gates]=g;
@@ -98,10 +105,10 @@ void TreeDecomposition::makeFriendly(gate_t v) {
 
       if(!extra_gates.empty()) {
         for(unsigned j=0;j<nb_gates;++j)
-          bags[i].gates[j]=intersection[j];
-        bags[i].nb_gates=nb_gates;
+          getBag(i).gates[j]=intersection[j];
+        getBag(i).nb_gates=nb_gates;
 
-        if(children[i].size()==1 && nb_gates==gates_in_children[i].size()) {
+        if(getChildren(i).size()==1 && nb_gates==getChildrenGates(i).size()) {
           // We can skip one level, to avoid creating a node identical to
           // the single child
         
@@ -112,15 +119,15 @@ void TreeDecomposition::makeFriendly(gate_t v) {
           extra_gates.pop_back();
         }
 
-        unsigned long b = i;
+        auto b = i;
         for(auto g: extra_gates) {
-          unsigned long id = addEmptyBag(parent[b], {b});
+          auto id = addEmptyBag(getParent(b), {b});
           for(unsigned long j=0; j < nb_gates; ++j)
-            addGateToBag(bags[b].gates[j], id);
+            addGateToBag(getBag(b).gates[j], id);
           ++nb_gates;
           addGateToBag(g, id);
 
-          unsigned long single_gate_bag = addEmptyBag(id);
+          auto single_gate_bag = addEmptyBag(id);
           addGateToBag(g, single_gate_bag);
 
           b = id;
@@ -130,51 +137,51 @@ void TreeDecomposition::makeFriendly(gate_t v) {
   }
 }
 
-unsigned long TreeDecomposition::addEmptyBag(unsigned long p, 
-                                             const std::vector<unsigned long> &ch)
+bag_t TreeDecomposition::addEmptyBag(bag_t p, 
+                                     const std::vector<bag_t> &ch)
 {
-  unsigned long id = bags.size();
+  bag_t id {bags.size()};
   bags.push_back(Bag());
   parent.push_back(p);
-  children[p].push_back(id);
+  getChildren(p).push_back(id);
   children.push_back(ch);
 
   for(auto c: ch) {
     if(c!=root)
-      children[parent[c]].erase(std::find(children[parent[c]].begin(),
-                                          children[parent[c]].end(),
-                                          c));
-    parent[c] = id;
+      getChildren(getParent(c)).erase(std::find(getChildren(getParent(c)).begin(),
+                                                getChildren(getParent(c)).end(),
+                                                c));
+    setParent(c,id);
   }
 
   return id;
 }
 
-void TreeDecomposition::addGateToBag(gate_t g, unsigned long b)
+void TreeDecomposition::addGateToBag(gate_t g, bag_t b)
 {
-  bags[b].gates[bags[b].nb_gates]=g;
-  ++bags[b].nb_gates;
+  getBag(b).gates[getBag(b).nb_gates]=g;
+  ++getBag(b).nb_gates;
 }
 
-void TreeDecomposition::reroot(unsigned long bag)
+void TreeDecomposition::reroot(bag_t bag)
 {
   if(bag == root)
     return;
 
-  for(unsigned long b = bag, p = parent[b], gp; b != root; b = p, p = gp) {
-    gp = parent[p];
-    parent[p] = b;
+  for(bag_t b = bag, p = getParent(b), gp; b != root; b = p, p = gp) {
+    gp = getParent(p);
+    setParent(p, b);
     if(p!=root)
-      children[gp].erase(std::find(children[gp].begin(),
-                                  children[gp].end(),
-                                  p));
-    children[b].push_back(p);
+      getChildren(gp).erase(std::find(getChildren(gp).begin(),
+                                      getChildren(gp).end(),
+                                      p));
+    getChildren(b).push_back(p);
   }
 
-  children[parent[bag]].erase(std::find(children[parent[bag]].begin(),
-                                        children[parent[bag]].end(),
-                                        bag));
-  parent[bag] = bag;
+  getChildren(getParent(bag)).erase(std::find(getChildren(getParent(bag)).begin(),
+                                              getChildren(getParent(bag)).end(),
+                                              bag));
+  setParent(bag, bag);
   root = bag;
 }
 
@@ -182,12 +189,12 @@ std::string TreeDecomposition::toDot() const
 {
   std::string result="digraph circuit{\n graph [rankdir=UD] ;\n";
 
-  for(unsigned long i=0; i < bags.size(); ++i)
+  for(bag_t i{0}; i < bags.size(); ++i)
   {
-    result += " " + std::to_string(i) + " [label=\"{";
+    result += " " + to_string(i) + " [label=\"{";
     bool first=true;
-    for(unsigned j=0; j<bags[i].nb_gates; ++j) {
-      auto gate = bags[i].gates[j];
+    for(unsigned j=0; j<getBag(i).nb_gates; ++j) {
+      auto gate = getBag(i).gates[j];
       if(!first)
         result+=",";
       else
@@ -197,7 +204,7 @@ std::string TreeDecomposition::toDot() const
     result += "}\"];\n";
 
     if(i!=root)
-      result+=" " + std::to_string(parent[i]) + " -> " + std::to_string(i) + ";\n";
+      result+=" " + to_string(getParent(i)) + " -> " + to_string(i) + ";\n";
   }
 
   result += "}\n";
@@ -217,30 +224,30 @@ std::istream& operator>>(std::istream& in, TreeDecomposition &td)
   td.parent.resize(nb_bags);
   td.children.resize(nb_bags);
 
-  for(unsigned long i=0; i<nb_bags; ++i) {
-    unsigned long id_bag;
+  for(bag_t i{0}; i<nb_bags; ++i) {
+    bag_t id_bag;
     in >> id_bag;
 
     assert(i==id_bag);
 
-    in >> td.bags[i].nb_gates;
+    in >> td.getBag(i).nb_gates;
 
-    assert(td.bags[i].nb_gates <= td.treewidth+1);
+    assert(td.getBag(i).nb_gates <= td.treewidth+1);
 
-    for(unsigned long j=0; j<td.bags[i].nb_gates; ++j) {
+    for(unsigned long j=0; j<td.getBag(i).nb_gates; ++j) {
       gate_t g;
       in >> g;
 
-      td.bags[i].gates[j] = g;
+      td.getBag(i).gates[j] = g;
     }
     
-    unsigned long parent;
+    bag_t parent;
     in >> parent;
-    td.parent[i] = parent;
+    td.setParent(i, parent);
     if(parent == i)
       td.root = i;
     else
-      td.children[parent].push_back(i);
+      td.getChildren(parent).push_back(i);
 
     unsigned long nb_children;
     in >> nb_children;

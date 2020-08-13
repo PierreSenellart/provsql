@@ -15,9 +15,9 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
   td.makeFriendly(root_id);
 
   // We look for bags responsible for each variable
-  for(unsigned i=0; i<td.bags.size(); ++i) {
-    const auto &b = td.bags[i];
-    if(td.children[i].empty() && b.nb_gates == 1 && c.getGateType(b.gates[0]) == BooleanGate::IN)
+  for(bag_t i{0}; i<td.bags.size(); ++i) {
+    const auto &b = td.getBag(i);
+    if(td.getChildren(i).empty() && b.nb_gates == 1 && c.getGateType(b.gates[0]) == BooleanGate::IN)
       responsible_bag[b.gates[0]] = i;
   }
 
@@ -34,8 +34,7 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
     negated_input_gate[g]=not_gate;
   }
 
-  std::vector<dDNNFGate> result_gates = 
-    builddDNNF(td.root);
+  std::vector<dDNNFGate> result_gates = builddDNNF(td.root);
 
   auto result_id = d.setGate("root", BooleanGate::OR);
 
@@ -82,15 +81,15 @@ static bool isConnectible(const std::set<gate_t> &suspicious,
 }
 
 std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNFLeaf(
-    unsigned long root)
+    bag_t root)
 {
   // If the bag is empty, it behaves as if it was not there
-  if(td.bags[root].nb_gates==0) 
+  if(td.getBag(root).nb_gates==0) 
     return {};
 
   // Otherwise, since we have a friendly decomposition, we have a
   // single gate
-  auto single_gate = td.bags[root].gates[0];
+  auto single_gate = td.getBag(root).gates[0];
 
   // We check if this bag is responsible for an input variable
   if(c.getGateType(single_gate)==BooleanGate::IN &&
@@ -161,7 +160,7 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
 std::set<gate_t>
 dDNNFTreeDecompositionBuilder::getSuspicious(
     const std::map<gate_t, bool> &valuation,
-    unsigned long root,
+    bag_t root,
     const std::set<gate_t> &innocent) const
 {
   std::set<gate_t> suspicious;
@@ -183,8 +182,8 @@ dDNNFTreeDecompositionBuilder::getSuspicious(
     // that gate which is strong for that gate
     bool susp=true;
 
-    for(unsigned k=0; k<td.bags[root].nb_gates; ++k) {
-      auto g=td.bags[root].gates[k];
+    for(unsigned k=0; k<td.getBag(root).nb_gates; ++k) {
+      auto g=td.getBag(root).gates[k];
       if(g==p.first)
         continue;
 
@@ -208,7 +207,7 @@ std::map<std::pair<std::map<gate_t,bool>,std::set<gate_t>>,std::vector<gate_t>>
 dDNNFTreeDecompositionBuilder::collectGatesToOr(
     const std::vector<dDNNFGate> &gates1,
     const std::vector<dDNNFGate> &gates2,
-    unsigned long root)
+    bag_t root)
 {
   std::map<std::pair<std::map<gate_t,bool>,std::set<gate_t>>,std::vector<gate_t>>
     gates_to_or;
@@ -218,8 +217,8 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
     std::set<gate_t> partial_innocent;
 
     for(const auto &p: g1.valuation)
-      for(unsigned k=0; k<td.bags[root].nb_gates; ++k)
-        if(p.first==td.bags[root].gates[k]) {
+      for(unsigned k=0; k<td.getBag(root).nb_gates; ++k)
+        if(p.first==td.getBag(root).gates[k]) {
           partial_valuation.insert(p);
           if(g1.suspicious.find(p.first)==g1.suspicious.end()) {
             partial_innocent.insert(p.first);
@@ -227,7 +226,7 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
         }
     
     // We check all suspicious gates are in the bag of the parent
-    if(!isConnectible(g1.suspicious,td.bags[root]))
+    if(!isConnectible(g1.suspicious,td.getBag(root)))
       continue;
 
     for(auto g2: gates2) {
@@ -249,8 +248,8 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
         if(!agree)
           break;
 
-        for(unsigned k=0; k<td.bags[root].nb_gates; ++k)
-          if(p.first==td.bags[root].gates[k]) {
+        for(unsigned k=0; k<td.getBag(root).nb_gates; ++k)
+          if(p.first==td.getBag(root).gates[k]) {
             if(!found)
               valuation.insert(p);
             if(g2.suspicious.find(p.first)==g2.suspicious.end()) {
@@ -263,7 +262,7 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
         continue;
     
       // We check all suspicious gates are in the bag of the parent
-      if(!isConnectible(g2.suspicious,td.bags[root]))
+      if(!isConnectible(g2.suspicious,td.getBag(root)))
         continue;
 
       // We check valuation is still an almost-valuation
@@ -282,7 +281,7 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
             d.getWires(g1.id).empty())) 
         gates_children.push_back(g1.id);
 
-      if(td.children[root].size()==2)
+      if(td.getChildren(root).size()==2)
         if(!(d.getGateType(g2.id)==BooleanGate::AND &&
             d.getWires(g2.id).empty())) 
           gates_children.push_back(g2.id);
@@ -305,16 +304,16 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
 }
 
 std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF(
-    unsigned long root)
+    bag_t root)
 {
-  if(td.children[root].empty())
+  if(td.getChildren(root).empty())
     return builddDNNFLeaf(root);
 
-  auto gates1 = builddDNNF(td.children[root][0]);
+  auto gates1 = builddDNNF(td.getChildren(root)[0]);
   auto gates2 = std::vector<dDNNFGate>{};
 
-  if(td.children[root].size()==2)
-    gates2 = builddDNNF(td.children[root][1]);
+  if(td.getChildren(root).size()==2)
+    gates2 = builddDNNF(td.getChildren(root)[1]);
   else
     gates2 = {{ gate_t{0}, {}, {} }};
 

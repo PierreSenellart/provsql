@@ -3,12 +3,15 @@
 
 #include <iostream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "BooleanCircuit.h"
 
 // Forward declaration for friend
 class dDNNFTreeDecompositionBuilder;
+
+enum class bag_t : size_t {};
 
 class TreeDecomposition {
  public:
@@ -21,17 +24,30 @@ class TreeDecomposition {
  
  private:
   std::vector<Bag> bags;
-  std::vector<unsigned long> parent;
-  std::vector<std::vector<unsigned long>> children;
-  unsigned long root;
-  unsigned long treewidth;
+  std::vector<bag_t> parent;
+  std::vector<std::vector<bag_t>> children;
+  bag_t root;
+  unsigned treewidth;
 
   TreeDecomposition() = default;
   
-  unsigned long findGateConnection(gate_t v) const;
-  void reroot(unsigned long bag);
-  unsigned long addEmptyBag(unsigned long parent, const std::vector<unsigned long> &children = std::vector<unsigned long>());
-  void addGateToBag(gate_t g, unsigned long b);
+  bag_t findGateConnection(gate_t v) const;
+  void reroot(bag_t bag);
+  bag_t addEmptyBag(bag_t parent, const std::vector<bag_t> &children = std::vector<bag_t>());
+  void addGateToBag(gate_t g, bag_t b);
+
+  Bag &getBag(bag_t b) 
+    { return bags[static_cast<std::underlying_type<bag_t>::type>(b)]; }
+  const Bag &getBag(bag_t b) const
+    { return bags[static_cast<std::underlying_type<bag_t>::type>(b)]; }
+  std::vector<bag_t> &getChildren(bag_t b) 
+    { return children[static_cast<std::underlying_type<bag_t>::type>(b)]; }
+  const std::vector<bag_t> &getChildren(bag_t b) const
+    { return children[static_cast<std::underlying_type<bag_t>::type>(b)]; }
+  bag_t getParent(bag_t b) const
+    { return parent[static_cast<std::underlying_type<bag_t>::type>(b)]; }
+  void setParent(bag_t b, bag_t p)
+    { parent[static_cast<std::underlying_type<bag_t>::type>(b)]=p; }
 
  public:
   TreeDecomposition(std::istream &in);
@@ -47,5 +63,26 @@ class TreeDecomposition {
 };
 
 std::istream& operator>>(std::istream& in, TreeDecomposition &td);
+
+inline bag_t &operator++(bag_t &b) {
+  return b=bag_t{static_cast<std::underlying_type<bag_t>::type>(b)+1};
+}
+
+inline bool operator<(bag_t t, std::vector<bag_t>::size_type u)
+{
+  return static_cast<std::underlying_type<bag_t>::type>(t)<u;
+}
+
+inline std::string to_string(bag_t b) {
+  return std::to_string(static_cast<std::underlying_type<bag_t>::type>(b));
+}
+
+inline std::istream &operator>>(std::istream &i, bag_t &b)
+{
+  std::underlying_type<bag_t>::type u;
+  i >> u;
+  b=bag_t{u};
+  return i;
+}
 
 #endif /* TREE_DECOMPOSITION_H */
