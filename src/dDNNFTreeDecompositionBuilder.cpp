@@ -19,8 +19,8 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
   // We look for bags responsible for each variable
   for(bag_t i{0}; i<td.bags.size(); ++i) {
     const auto &b = td.getBag(i);
-    if(td.getChildren(i).empty() && b.nb_gates == 1 && c.getGateType(b.gates[0]) == BooleanGate::IN)
-      responsible_bag[b.gates[0]] = i;
+    if(td.getChildren(i).empty() && b.size()==1 && c.getGateType(*b.begin()) == BooleanGate::IN)
+      responsible_bag[*b.begin()] = i;
   }
 
   // A friendly tree decomposition has leaf bags for every variable
@@ -68,14 +68,7 @@ static bool isConnectible(const std::set<gate_t> &suspicious,
                           const TreeDecomposition::Bag &b)
 {
   for(const auto &g: suspicious) {
-    bool found=false;
-    for(unsigned k=0; k<b.nb_gates; ++k)
-      if(g==b.gates[k]) {
-        found=true;
-        break;
-      }
-
-    if(!found)
+    if(b.find(g)==b.end())
       return false;
   }
 
@@ -86,12 +79,12 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
     bag_t bag)
 {
   // If the bag is empty, it behaves as if it was not there
-  if(td.getBag(bag).nb_gates==0) 
+  if(td.getBag(bag).size()==0) 
     return {};
 
   // Otherwise, since we have a friendly decomposition, we have a
   // single gate
-  auto single_gate = td.getBag(bag).gates[0];
+  auto single_gate = *td.getBag(bag).begin();
 
   // We check if this bag is responsible for an input variable
   if(c.getGateType(single_gate)==BooleanGate::IN &&
@@ -184,8 +177,7 @@ dDNNFTreeDecompositionBuilder::getSuspicious(
     // that gate which is strong for that gate
     bool susp=true;
 
-    for(unsigned k=0; k<td.getBag(bag).nb_gates; ++k) {
-      auto g=td.getBag(bag).gates[k];
+    for(auto g: td.getBag(bag)) {
       if(g==p.first)
         continue;
 
@@ -219,8 +211,8 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
     std::set<gate_t> partial_innocent;
 
     for(const auto &p: g1.valuation)
-      for(unsigned k=0; k<td.getBag(bag).nb_gates; ++k)
-        if(p.first==td.getBag(bag).gates[k]) {
+      for(auto g: td.getBag(bag))
+        if(p.first==g) {
           partial_valuation.insert(p);
           if(g1.suspicious.find(p.first)==g1.suspicious.end()) {
             partial_innocent.insert(p.first);
@@ -250,8 +242,8 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
         if(!agree)
           break;
 
-        for(unsigned k=0; k<td.getBag(bag).nb_gates; ++k)
-          if(p.first==td.getBag(bag).gates[k]) {
+        for(auto g: td.getBag(bag))
+          if(p.first==g) {
             if(!found)
               valuation.insert(p);
             if(g2.suspicious.find(p.first)==g2.suspicious.end()) {

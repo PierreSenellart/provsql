@@ -5,7 +5,9 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+#include <boost/container/static_vector.hpp>
 
+#include "flat_set.hpp"
 #include "BooleanCircuit.h"
 
 // Forward declaration for friend
@@ -17,10 +19,10 @@ class TreeDecomposition {
  public:
   static constexpr int MAX_TREEWIDTH = 10;
 
-  struct Bag {
-    gate_t gates[MAX_TREEWIDTH+1];
-    unsigned nb_gates;
-  };
+  template<class T>
+    using small_vector = boost::container::static_vector<T, MAX_TREEWIDTH+1>;
+
+  using Bag = flat_set<gate_t, small_vector>;
  
  private:
   std::vector<Bag> bags;
