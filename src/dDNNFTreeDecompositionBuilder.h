@@ -35,7 +35,7 @@ private:
         const std::vector<dDNNFGate> &gates2,
         bag_t bag);
   std::vector<dDNNFGate> builddDNNFLeaf(bag_t bag);
-  std::vector<dDNNFGate> builddDNNF(bag_t bag);
+  std::vector<dDNNFGate> builddDNNF();
   bool circuitHasWire(gate_t u, gate_t v) const;
 
   bool isAlmostValuation(
