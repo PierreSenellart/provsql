@@ -269,20 +269,21 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
       
       // We optimize a bit by avoiding creating an AND gate if there
       // is only one child, or if a second child is a TRUE gate
-      std::vector<gate_t> gates_children;
+      gate_t gates_children[2];
+      unsigned nb = 0;
 
       if(!(d.getGateType(g1.id)==BooleanGate::AND &&
-            d.getWires(g1.id).empty())) 
-        gates_children.push_back(g1.id);
+            d.getWires(g1.id).empty()))
+        gates_children[nb++]=g1.id;
 
       if(td.getChildren(bag).size()==2)
         if(!(d.getGateType(g2.id)==BooleanGate::AND &&
             d.getWires(g2.id).empty())) 
-          gates_children.push_back(g2.id);
+          gates_children[nb++]=g2.id;
 
-      assert(gates_children.size()!=0);
+      assert(nb!=0);
 
-      if(gates_children.size()==1) {
+      if(nb==1) {
         and_gate = gates_children[0];
       } else {
         and_gate = d.setGate(BooleanGate::AND);
@@ -366,7 +367,7 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
           gate_t result_gate;
           
           if(p.second.size()==1)
-            result_gate = p.second[0];
+            result_gate = *p.second.begin();
           else {
             result_gate = d.setGate(BooleanGate::OR);
             for(auto &g: p.second)
