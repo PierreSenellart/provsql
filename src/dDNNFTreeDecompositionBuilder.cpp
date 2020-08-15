@@ -282,9 +282,17 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
             d.getWires(g2.id).empty())) 
           gates_children[nb++]=g2.id;
 
-      assert(nb!=0);
-
-      if(nb==1) {
+      if(nb==0) {
+        // We have one (or two) TRUE gates; we just reuse it -- even
+        // though we reuse a child gate, connections will still make
+        // sense as the valuation and suspicious set been correctly
+        // computed
+        and_gate = g1.id;
+      } else if(nb==1) {
+        // Only one non-TRUE gate; we reuse it. Similarly as in the
+        // previous case, even though we reuse this gate, the connections
+        // made from it will still take into account the valuation and
+        // suspicious set
         and_gate = gates_children[0];
       } else {
         and_gate = d.setGate(BooleanGate::AND);
