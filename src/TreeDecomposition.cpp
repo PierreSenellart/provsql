@@ -309,8 +309,9 @@ int main(int argc, char **argv) {
   t1 = get_timestamp();
   std::cerr << "Took " << (t1-t0) << "s" << std::endl;
 
-  t2 = get_timestamp();
+//  std::cerr << dnnf.toString(dnnf.getGate("root")) <<std::endl;
   std::cerr << "Using dDNNF: " << dnnf.dDNNFEvaluation(dnnf.getGate("root")) << std::endl;
+  t2 = get_timestamp();
   std::cerr << "Took " << (t2-t1) << "s" << std::endl;
 
   return 0;
