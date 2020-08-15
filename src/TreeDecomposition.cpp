@@ -3,6 +3,7 @@
 #include <set>
 #include <algorithm>
 #include <string>
+#include <type_traits>
 
 #include "TreeDecomposition.h"
 #include "BooleanCircuit.h"
