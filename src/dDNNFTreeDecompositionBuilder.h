@@ -50,7 +50,6 @@ class dDNNFTreeDecompositionBuilder
     const valuation_t &valuation) const;
   suspicious_t getSuspicious(
     const valuation_t &valuation,
-    bag_t bag,
     const suspicious_t &innocent) const;
 
 public:

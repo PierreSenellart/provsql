@@ -155,7 +155,6 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
 dDNNFTreeDecompositionBuilder::suspicious_t
 dDNNFTreeDecompositionBuilder::getSuspicious(
     const valuation_t &valuation,
-    bag_t bag,
     const suspicious_t &innocent) const
 {
   suspicious_t suspicious;
@@ -177,7 +176,9 @@ dDNNFTreeDecompositionBuilder::getSuspicious(
     // that gate which is strong for that gate
     bool susp=true;
 
-    for(auto g: td.getBag(bag)) {
+    for(const auto &p2: valuation) {
+      auto g=p2.first;
+
       if(g==p.first)
         continue;
 
@@ -263,7 +264,7 @@ dDNNFTreeDecompositionBuilder::collectGatesToOr(
       if(!isAlmostValuation(valuation))
         continue;
 
-      auto suspicious = getSuspicious(valuation, bag, innocent);
+      auto suspicious = getSuspicious(valuation, innocent);
 
       gate_t and_gate;
       
