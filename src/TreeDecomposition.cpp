@@ -287,8 +287,14 @@ int main(int argc, char **argv) {
     std::getline(g, line);
     if(line=="IN")
       c.setGate(std::to_string(i), BooleanGate::IN, 0.001);
-    else
-      c.setGate(std::to_string(i), line=="OR"?BooleanGate::OR:BooleanGate::AND);
+    else if(line=="OR")
+      c.setGate(std::to_string(i), BooleanGate::OR);
+    else if(line=="AND")
+      c.setGate(std::to_string(i), BooleanGate::AND);
+    else {
+      std::cerr << "Wrong line type: " << line << std::endl;
+      exit(1);
+    }
   }
 
   gate_t u,v;
