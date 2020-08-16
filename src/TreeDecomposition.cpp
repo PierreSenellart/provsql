@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <string>
 #include <type_traits>
+#include <iomanip>
 
 #include "TreeDecomposition.h"
 #include "BooleanCircuit.h"
@@ -309,8 +310,8 @@ int main(int argc, char **argv) {
   t1 = get_timestamp();
   std::cerr << "Took " << (t1-t0) << "s" << std::endl;
 
-//  std::cerr << dnnf.toString(dnnf.getGate("root")) <<std::endl;
-  std::cerr << "Using dDNNF: " << dnnf.dDNNFEvaluation(dnnf.getGate("root")) << std::endl;
+// std::cerr << dnnf.toString(dnnf.getGate("root")) <<std::endl;
+  std::cerr << "Using dDNNF: " << std::setprecision (15) << dnnf.dDNNFEvaluation(dnnf.getGate("root")) << std::endl;
   t2 = get_timestamp();
   std::cerr << "Took " << (t2-t1) << "s" << std::endl;
 
