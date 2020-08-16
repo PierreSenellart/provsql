@@ -8,11 +8,6 @@
  * is provided into a dNNF rooted at root, following the construction in
  * Section 5.1 of https://arxiv.org/pdf/1811.02944 */
 dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
-  // Theoretically, the BooleanCircuit could be modified by getGate, but
-  // since we know root is a gate of the circuit (assert in constructor),
-  // it is impossible.
-  auto root_id = const_cast<BooleanCircuit &>(c).getGate(root);
-
   // We make the tree decomposition friendly
   td.makeFriendly(root_id);
 
@@ -106,8 +101,12 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
 
     // We create two TRUE gates (AND gates with no inputs)
     for(auto v: {true, false}) {
-      suspicious_t suspicious;
+      // Optimization: we know the root is set to True, so no need to
+      // construct valuations incompatible with this
+      if(single_gate==root_id && !v)
+        continue;
 
+      suspicious_t suspicious;
       if(isStrong(c.getGateType(single_gate), v))
         suspicious.insert(single_gate);
 

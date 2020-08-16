@@ -17,10 +17,12 @@ class dDNNFTreeDecompositionBuilder
     using small_vector = boost::container::static_vector<T, TreeDecomposition::MAX_TREEWIDTH+1>;
   using valuation_t = flat_map<gate_t, bool, small_vector>;
   using suspicious_t = flat_set<gate_t, small_vector>;
+  using gates_to_or_t =
+    std::map<valuation_t, std::map<suspicious_t, std::vector<gate_t>>>;
 
  private:
   const BooleanCircuit &c;
-  BooleanCircuit::uuid root;
+  gate_t root_id;
   TreeDecomposition &td;
   dDNNF d;
   std::unordered_map<gate_t, bag_t> responsible_bag;
