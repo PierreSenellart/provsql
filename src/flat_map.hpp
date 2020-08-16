@@ -62,9 +62,9 @@ struct flat_map {
   template<class K, class=std::enable_if_t<std::is_convertible<K, Key>{}>>
   Value& operator[](K&& k){
     auto it = find(k);
-    if (it != end()) return it->v;
+    if (it != end()) return it->second;
     storage.emplace_back( std::forward<K>(k), Value{} );
-    return storage.back().v;
+    return storage.back().second;
   }
 private:
   template<class K, class=std::enable_if_t<std::is_convertible<K, Key>{}>>
