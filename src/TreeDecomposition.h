@@ -18,6 +18,7 @@ enum class bag_t : size_t {};
 class TreeDecomposition {
  public:
   static constexpr int MAX_TREEWIDTH = 10;
+  static constexpr int OPTIMAL_ARITY = 5;
 
   template<class T>
     using small_vector = boost::container::static_vector<T, MAX_TREEWIDTH+1>;

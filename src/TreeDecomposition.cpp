@@ -34,7 +34,8 @@ bag_t TreeDecomposition::findGateConnection(gate_t v) const
 // https://arxiv.org/pdf/1811.02944 ; the transformation implemented is
 // described in Lemma 2.2 of that paper. The only difference is that we
 // do not enforce the tree to be full, as this is not required for
-// correctness.
+// correctness; and we do not make it binary but n-ary for a small n, as
+// it is more efficient.
 void TreeDecomposition::makeFriendly(gate_t v) {
   // Look for a bag root_connection to attach to the new root
   auto root_connection = findGateConnection(v);
@@ -44,15 +45,15 @@ void TreeDecomposition::makeFriendly(gate_t v) {
   addGateToBag(v, new_root);
   reroot(new_root);
 
-  // Make the tree binary
+  // Make the tree n-ary for a small n
   auto nb_bags = bags.size();
   for(bag_t i{0}; i<nb_bags; ++i) {
-    if(getChildren(i).size()<=2)
+    if(getChildren(i).size()<=OPTIMAL_ARITY)
       continue;
 
     auto current = i;
     auto copy_children=getChildren(i);
-    for(int j=copy_children.size()-3; j>=0; --j) {
+    for(int j=copy_children.size()-OPTIMAL_ARITY-1; j>=0; --j) {
       current = addEmptyBag(getParent(current), { current, copy_children[j] } );
       for(auto g: getBag(i))
         addGateToBag(g, current);

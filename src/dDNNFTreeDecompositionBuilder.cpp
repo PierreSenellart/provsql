@@ -31,7 +31,7 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
     negated_input_gate[g]=not_gate;
   }
 
-  std::vector<dDNNFGate> result_gates = builddDNNF();
+  small_gate_vector_t<dDNNFGate> result_gates = builddDNNF();
 
   auto result_id = d.setGate("root", BooleanGate::OR);
 
@@ -70,7 +70,7 @@ static bool isConnectible(const dDNNFTreeDecompositionBuilder::suspicious_t &sus
   return true;
 }
 
-std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNFLeaf(
+dDNNFTreeDecompositionBuilder::small_gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNFLeaf(
     bag_t bag)
 {
   // If the bag is empty, it behaves as if it was not there
@@ -97,7 +97,7 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
     };
     return { std::move(pos), std::move(neg) };
   } else {
-    std::vector<dDNNFGate> result_gates;
+    small_gate_vector_t<dDNNFGate> result_gates;
 
     // We create two TRUE gates (AND gates with no inputs)
     for(auto v: {true, false}) {
@@ -152,186 +152,208 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
 }
 
 dDNNFTreeDecompositionBuilder::suspicious_t
-dDNNFTreeDecompositionBuilder::getSuspicious(
+dDNNFTreeDecompositionBuilder::getInnocent(
     const valuation_t &valuation,
     const suspicious_t &innocent) const
 {
-  suspicious_t suspicious;
+  suspicious_t result = innocent;
 
-  for(const auto &p: valuation) {
-    // We first check if this gate was innocent because it was
-    // innocent in a child
-    if(innocent.find(p.first)!=innocent.end())
+  for(const auto &[g1,val]: valuation) {
+    if(innocent.find(g1)!=innocent.end())
       continue;
-    
-    // Otherwise, we check if it is strong
-    bool strong=isStrong(c.getGateType(p.first),p.second);
 
-    if(!strong)
+    // We check if it is strong, if not it is innocent
+    if(!isStrong(c.getGateType(g1), valuation.find(g1)->second)) {
+      result.insert(g1);
       continue;
+    }
 
     // We have a strong gate not innocented by the children bags,
-    // it is suspicious unless we also have in the bag an input to
+    // it is only innocent if we also have in the bag an input to
     // that gate which is strong for that gate
-    bool susp=true;
-
-    for(const auto &p2: valuation) {
-      auto g=p2.first;
-
-      if(g==p.first)
+    for(const auto &[g2, value]: valuation) {
+      if(g2==g1)
         continue;
 
-      if(circuitHasWire(p.first,g)) {
-        bool value = valuation.find(g)->second;
-        if(isStrong(c.getGateType(p.first),value)) {
-          susp=false;
+      if(circuitHasWire(g1,g2)) {
+        if(isStrong(c.getGateType(g1), value)) {
+          result.insert(g1);
           break;
         }
       }
     }
-      
-    if(susp)
-      suspicious.insert(p.first);
   }
 
-  return suspicious;
+  return result;
 }
 
-std::map<std::pair<dDNNFTreeDecompositionBuilder::valuation_t, dDNNFTreeDecompositionBuilder::suspicious_t>, std::vector<gate_t>>
-dDNNFTreeDecompositionBuilder::collectGatesToOr(
-    const std::vector<dDNNFGate> &gates1,
-    const std::vector<dDNNFGate> &gates2,
-    bag_t bag)
+std::ostream &operator<<(std::ostream &o, const dDNNFTreeDecompositionBuilder::gates_to_or_t &gates_to_or)
 {
-  std::map<std::pair<valuation_t,suspicious_t>, std::vector<gate_t>>
-    gates_to_or;
+  for(auto &[valuation, m]: gates_to_or) {
+    o << "{";
+    bool first=true;
+    for(auto &[var, val]: valuation) {
+      if(!first)
+        o << ",";
+      o << "(" << var << "," << val << ")";
+      first=false;
+    }
+    o << "}: ";
 
-  for(auto g1: gates1) {
-    valuation_t partial_valuation;
-    suspicious_t partial_innocent;
-
-    for(const auto &p: g1.valuation)
-      for(auto g: td.getBag(bag))
-        if(p.first==g) {
-          partial_valuation.insert(p);
-          if(g1.suspicious.find(p.first)==g1.suspicious.end()) {
-            partial_innocent.insert(p.first);
-          }
-        }
+    for(auto &[innocent, gates]: m) {
+      o << "{";
+      bool first=true;
+      for(auto &x: innocent) {
+        if(!first)
+          o << ",";
+        o << x;
+        first=false;
+      }
+      o << "} ";
+      o << "[";
+      first=true;
+      for(auto &x: gates) {
+        if(!first)
+          o << ",";
+        o << x;
+        first=false;
+      }
+      o << "] ";
+    }
     
+    o << "\n";
+  }
+
+  return o;
+}
+
+dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::collectGatesToOr(
+    bag_t bag,
+    const small_gate_vector_t<dDNNFGate> &children_gates,
+    const gates_to_or_t &partial)
+{
+  gates_to_or_t gates_to_or;
+
+  for(auto g: children_gates) {
     // We check all suspicious gates are in the bag of the parent
-    if(!isConnectible(g1.suspicious,td.getBag(bag)))
+    if(!isConnectible(g.suspicious,td.getBag(bag)))
       continue;
 
-    for(auto g2: gates2) {
-      auto valuation = partial_valuation;
-      auto innocent = partial_innocent;
-      
-      // Check if these two almost-evaluations mutually agree and if so
-      // build the valuation of the bag
-      bool agree=true;
+    // Find all valuations in partial that are compatible with this partial
+    // valuation, if it exists
+    auto compatibleValuation = [&g](const auto &p) {
+                                 for(const auto &[var, val]: p.first) {
+                                   auto it = g.valuation.find(var);
+                                   if(it != g.valuation.end() && it->second != val)
+                                     return false;
+                                 }
+                                 return true;
+                               };
 
-      for(const auto &p: g2.valuation) {
-        bool found=false;
-        auto it=g1.valuation.find(p.first);
-        if(it!=g1.valuation.end()) {
-          found=true;
-          agree=(it->second==p.second);
-        }
-        
-        if(!agree)
-          break;
+    for (auto it = std::find_if(partial.begin(), partial.end(), compatibleValuation);
+         it != partial.end();
+         it = std::find_if(std::next(it), partial.end(), compatibleValuation)) {
+      auto &[matching_valuation, m] = *it;
 
-        for(auto g: td.getBag(bag))
-          if(p.first==g) {
-            if(!found)
-              valuation.insert(p);
-            if(g2.suspicious.find(p.first)==g2.suspicious.end()) {
-              innocent.insert(p.first);
-            }
+      valuation_t valuation = matching_valuation;
+      suspicious_t extra_innocent{};
+      for(auto &[var, val]: g.valuation) {
+         if(td.getBag(bag).find(var)!=td.getBag(bag).end()) {
+           if(matching_valuation.find(var)==matching_valuation.end())
+             valuation[var]=val;
+
+           if(g.suspicious.find(var)==g.suspicious.end()) {
+             extra_innocent.insert(var);
+          }
         }
       }
-
-      if(!agree)
-        continue;
-    
-      // We check all suspicious gates are in the bag of the parent
-      if(!isConnectible(g2.suspicious,td.getBag(bag)))
-        continue;
-
+          
       // We check valuation is still an almost-valuation
       if(!isAlmostValuation(valuation))
         continue;
 
-      auto suspicious = getSuspicious(valuation, innocent);
+      for(auto &[innocent, gates]: m) {
+        suspicious_t new_innocent = std::move(extra_innocent);
 
-      gate_t and_gate;
-      
-      // We optimize a bit by avoiding creating an AND gate if there
-      // is only one child, or if a second child is a TRUE gate
-      gate_t gates_children[2];
-      unsigned nb = 0;
+        for(auto s: innocent)
+          new_innocent.insert(s);
+            
+        new_innocent = getInnocent(valuation, new_innocent);
 
-      if(!(d.getGateType(g1.id)==BooleanGate::AND &&
-            d.getWires(g1.id).empty()))
-        gates_children[nb++]=g1.id;
+        if(gates.empty())
+          gates_to_or[valuation][new_innocent].push_back(g.id);
+        else {
+          for(auto g2: gates) {
+            gate_t and_gate;
 
-      if(td.getChildren(bag).size()==2)
-        if(!(d.getGateType(g2.id)==BooleanGate::AND &&
-            d.getWires(g2.id).empty())) 
-          gates_children[nb++]=g2.id;
+            // We optimize a bit by avoiding creating an AND gate if there
+            // is only one child, or if a second child is a TRUE gate
+            gate_t gates_children[2];
+            unsigned nb = 0;
 
-      if(nb==0) {
-        // We have one (or two) TRUE gates; we just reuse it -- even
-        // though we reuse a child gate, connections will still make
-        // sense as the valuation and suspicious set been correctly
-        // computed
-        and_gate = g1.id;
-      } else if(nb==1) {
-        // Only one non-TRUE gate; we reuse it. Similarly as in the
-        // previous case, even though we reuse this gate, the connections
-        // made from it will still take into account the valuation and
-        // suspicious set
-        and_gate = gates_children[0];
-      } else {
-        and_gate = d.setGate(BooleanGate::AND);
-        for(auto x: gates_children)
-          d.addWire(and_gate, x);
+            if(!(d.getGateType(g.id)==BooleanGate::AND &&
+                  d.getWires(g.id).empty()))
+              gates_children[nb++]=g.id;
+
+            if(!(d.getGateType(g2)==BooleanGate::AND &&
+                  d.getWires(g2).empty())) 
+              gates_children[nb++]=g2;
+
+            if(nb==0) {
+              // We have one (or two) TRUE gates; we just reuse it -- even
+              // though we reuse a child gate, connections will still make
+              // sense as the valuation and suspicious set been correctly
+              // computed
+              and_gate = g.id;
+            } else if(nb==1) {
+              // Only one non-TRUE gate; we reuse it. Similarly as in the
+              // previous case, even though we reuse this gate, the connections
+              // made from it will still take into account the valuation and
+              // suspicious set
+              and_gate = gates_children[0];
+            } else {
+              and_gate = d.setGate(BooleanGate::AND);
+              for(auto x: gates_children) {
+                d.addWire(and_gate, x);
+              }
+            }
+
+            gates_to_or[valuation][new_innocent].push_back(and_gate);
+          }
+        }
       }
-
-      gates_to_or[std::make_pair(valuation,suspicious)].push_back(and_gate);
     }
   }
 
   return gates_to_or;
 }
 
-std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF()
+dDNNFTreeDecompositionBuilder::small_gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF()
 {
   // Unfortunately, tree decompositions can be quite deep so we need to
   // simulate recursion with a heap-based stack, to avoid exhausting the
   // actual memory stack
-
-  enum class Recursion {
-    START,
-    AFTER_FIRST_RECURSIVE_CALL,
-    AFTER_SECOND_RECURSIVE_CALL
-  };
-
   struct RecursionParams
   {
-    Recursion location;
     bag_t bag;
-    std::vector<dDNNFGate> gates1;
+    size_t children_processed;
+    gates_to_or_t gates_to_or;
 
-    RecursionParams(Recursion l, bag_t b, std::vector<dDNNFGate> g = std::vector<dDNNFGate>()) :
-      location(l), bag(b), gates1(std::move(g)) {}
+    RecursionParams(bag_t b, size_t c, gates_to_or_t g) :
+      bag(b), children_processed(c), gates_to_or(std::move(g)) {}
+
+    RecursionParams(bag_t b) :
+      bag(b), children_processed(0) {
+        gates_to_or_t::mapped_type m;
+        m[suspicious_t{}] = {};
+        gates_to_or[valuation_t{}] = std::move(m);
+      }
   };
 
-  using RecursionResult = std::vector<dDNNFGate>;
+  using RecursionResult = small_gate_vector_t<dDNNFGate>;
 
   std::stack<std::variant<RecursionParams,RecursionResult>> stack;
-  stack.emplace(RecursionParams{Recursion::START, td.root});
+  stack.emplace(RecursionParams{td.root});
 
   while(!stack.empty()) {
     RecursionResult result;
@@ -343,50 +365,49 @@ std::vector<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuil
         return result;
     }
 
-    auto [location, bag, gates1] = std::move(std::get<0>(stack.top()));
+    auto [bag, children_processed, gates_to_or] = std::move(std::get<0>(stack.top()));
     stack.pop();
 
-    switch(location) {
-      case Recursion::START:
-        if(td.getChildren(bag).empty())
-          stack.emplace(builddDNNFLeaf(bag));
-        else {
-          stack.emplace(RecursionParams{Recursion::AFTER_FIRST_RECURSIVE_CALL, bag});
-          stack.emplace(RecursionParams{Recursion::START, td.getChildren(bag)[0]});
-        }
-        break;
+    if(td.getChildren(bag).empty()) {
+      auto x = builddDNNFLeaf(bag);
+      stack.emplace(x);
+    } else {
+      if(children_processed>0) {
+        gates_to_or = collectGatesToOr(bag, result, gates_to_or);
+      }
 
-      case Recursion::AFTER_FIRST_RECURSIVE_CALL:
-        stack.emplace(RecursionParams{Recursion::AFTER_SECOND_RECURSIVE_CALL, bag, result});
+      if(children_processed==td.getChildren(bag).size()) {
+        small_gate_vector_t<dDNNFGate> result_gates;
 
-        if(td.getChildren(bag).size()==2)
-          stack.emplace(RecursionParams{Recursion::START, td.getChildren(bag)[1]});
-        else
-          stack.emplace(RecursionResult{{ gate_t{0}, {}, {} }});
-        break;
+        for(auto &[valuation, m]: gates_to_or) {
+          for(auto &[innocent, gates]: m) {
+            gate_t result_gate;
+            
+            assert(gates.size()!=0);
 
-      case Recursion::AFTER_SECOND_RECURSIVE_CALL:
-        const auto &gates2 = result;
+            suspicious_t suspicious;
+            for(auto &[var, val]: valuation)
+              if(innocent.find(var)==innocent.end())
+                suspicious.insert(var);
 
-        auto gates_to_or = collectGatesToOr(gates1, gates2, bag);
+            if(gates.size()==1)
+              result_gate = *gates.begin();
+            else {
+              result_gate = d.setGate(BooleanGate::OR);
+              for(auto &g: gates) {
+                d.addWire(result_gate, g);
+              }
+            }
 
-        std::vector<dDNNFGate> result_gates;
-        for(auto &p: gates_to_or) {
-          gate_t result_gate;
-          
-          if(p.second.size()==1)
-            result_gate = *p.second.begin();
-          else {
-            result_gate = d.setGate(BooleanGate::OR);
-            for(auto &g: p.second)
-              d.addWire(result_gate, g);
+            result_gates.emplace_back(result_gate, std::move(valuation), std::move(suspicious));
           }
-
-          result_gates.emplace_back(result_gate, std::move(p.first.first), std::move(p.first.second));
         }
 
         stack.emplace(std::move(result_gates));
-        break;
+      } else {
+        stack.emplace(RecursionParams{bag, children_processed+1, std::move(gates_to_or)});
+        stack.emplace(RecursionParams{td.getChildren(bag)[children_processed]});
+      }
     }
   }
 
