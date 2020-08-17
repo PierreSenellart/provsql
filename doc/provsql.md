@@ -30,8 +30,8 @@ The following SQL queries are currently supported.
 ## Docker container
 
 As an alternative to a ProvSQL installation (see below), you can try
-a demonstration version of ProvSQL (full-featured, except for circuit
-visualization) as a Docker container. To deploy it, once Docker CE is
+a demonstration version of ProvSQL (full-featured, except for `minic2d`
+support) as a Docker container. To deploy it, once Docker CE is
 installed, simply run:
 ```
 docker run inriavalda/provsqldemo
@@ -66,7 +66,7 @@ and to use a Web interface for simple visualization of where-provenance.
 
    * `d4`, from http://www.cril.univ-artois.fr/KC/d4.html
 
-   * `dsharp`, from https://bitbucket.org/haz/dsharp
+   * `dsharp`, from https://github.com/QuMuLab/dsharp
 
    * `minic2d`, from http://reasoning.cs.ucla.edu/minic2d/
 
