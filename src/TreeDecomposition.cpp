@@ -53,8 +53,12 @@ void TreeDecomposition::makeFriendly(gate_t v) {
 
     auto current = i;
     auto copy_children=getChildren(i);
-    for(int j=copy_children.size()-OPTIMAL_ARITY-1; j>=0; --j) {
-      current = addEmptyBag(getParent(current), { current, copy_children[j] } );
+    for(int j=copy_children.size()-OPTIMAL_ARITY-1; j>=0; j-=OPTIMAL_ARITY-1) {
+      decltype(copy_children) new_children;
+      new_children.push_back(current);
+      for(auto k{j}; k>=0 && k>j-OPTIMAL_ARITY; --k)
+        new_children.push_back(copy_children[k]);
+      current = addEmptyBag(getParent(current), new_children);
       for(auto g: getBag(i))
         addGateToBag(g, current);
     }
