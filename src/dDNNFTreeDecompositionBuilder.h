@@ -20,9 +20,9 @@ class dDNNFTreeDecompositionBuilder
   using valuation_t = flat_map<gate_t, bool, small_vector>;
   using suspicious_t = flat_set<gate_t, small_vector>;
   template<class T>
-    using small_gate_vector_t = std::vector<T>;
+    using gate_vector_t = std::vector<T>;
   using gates_to_or_t =
-    std::map<valuation_t, std::map<suspicious_t, small_gate_vector_t<gate_t>>>;
+    std::map<valuation_t, std::map<suspicious_t, gate_vector_t<gate_t>>>;
 
  private:
   const BooleanCircuit &c;
@@ -45,10 +45,10 @@ class dDNNFTreeDecompositionBuilder
 
   [[nodiscard]] gates_to_or_t collectGatesToOr(
       bag_t bag,
-      const small_gate_vector_t<dDNNFGate> &gates,
+      const gate_vector_t<dDNNFGate> &gates,
       const gates_to_or_t &partial);
-  [[nodiscard]] small_gate_vector_t<dDNNFGate> builddDNNFLeaf(bag_t bag);
-  [[nodiscard]] small_gate_vector_t<dDNNFGate> builddDNNF();
+  [[nodiscard]] gate_vector_t<dDNNFGate> builddDNNFLeaf(bag_t bag);
+  [[nodiscard]] gate_vector_t<dDNNFGate> builddDNNF();
   [[nodiscard]] bool circuitHasWire(gate_t u, gate_t v) const;
 
   [[nodiscard]] bool isAlmostValuation(

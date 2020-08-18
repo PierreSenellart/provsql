@@ -31,7 +31,7 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
     negated_input_gate[g]=not_gate;
   }
 
-  small_gate_vector_t<dDNNFGate> result_gates = builddDNNF();
+  gate_vector_t<dDNNFGate> result_gates = builddDNNF();
 
   auto result_id = d.setGate("root", BooleanGate::OR);
 
@@ -70,7 +70,7 @@ static bool isConnectible(const dDNNFTreeDecompositionBuilder::suspicious_t &sus
   return true;
 }
 
-dDNNFTreeDecompositionBuilder::small_gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNFLeaf(
+dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNFLeaf(
     bag_t bag)
 {
   // If the bag is empty, it behaves as if it was not there
@@ -97,7 +97,7 @@ dDNNFTreeDecompositionBuilder::small_gate_vector_t<dDNNFTreeDecompositionBuilder
     };
     return { std::move(pos), std::move(neg) };
   } else {
-    small_gate_vector_t<dDNNFGate> result_gates;
+    gate_vector_t<dDNNFGate> result_gates;
 
     // We create two TRUE gates (AND gates with no inputs)
     for(auto v: {true, false}) {
@@ -229,7 +229,7 @@ std::ostream &operator<<(std::ostream &o, const dDNNFTreeDecompositionBuilder::g
 
 dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::collectGatesToOr(
     bag_t bag,
-    const small_gate_vector_t<dDNNFGate> &children_gates,
+    const gate_vector_t<dDNNFGate> &children_gates,
     const gates_to_or_t &partial)
 {
   gates_to_or_t gates_to_or;
@@ -328,7 +328,7 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
   return gates_to_or;
 }
 
-dDNNFTreeDecompositionBuilder::small_gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF()
+dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF()
 {
   // Unfortunately, tree decompositions can be quite deep so we need to
   // simulate recursion with a heap-based stack, to avoid exhausting the
@@ -350,7 +350,7 @@ dDNNFTreeDecompositionBuilder::small_gate_vector_t<dDNNFTreeDecompositionBuilder
       }
   };
 
-  using RecursionResult = small_gate_vector_t<dDNNFGate>;
+  using RecursionResult = gate_vector_t<dDNNFGate>;
 
   std::stack<std::variant<RecursionParams,RecursionResult>> stack;
   stack.emplace(RecursionParams{td.root});
@@ -377,7 +377,7 @@ dDNNFTreeDecompositionBuilder::small_gate_vector_t<dDNNFTreeDecompositionBuilder
       }
 
       if(children_processed==td.getChildren(bag).size()) {
-        small_gate_vector_t<dDNNFGate> result_gates;
+        gate_vector_t<dDNNFGate> result_gates;
 
         for(auto &[valuation, m]: gates_to_or) {
           for(auto &[innocent, gates]: m) {
