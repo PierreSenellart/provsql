@@ -752,6 +752,42 @@ static Expr *make_provenance_expression(
   return result;
 }
 
+static Query *check_for_agg_distinct(Query *q){
+  ListCell *lc_v;
+  List* lst_v = NIL;
+  Query* new_q = copyObject(q);
+  unsigned char found = 0;
+
+  //replace each Aggref with a TargetEntry calling the agg function
+  //-- only in the top-level of the query
+  foreach (lc_v, new_q->targetList)
+  {
+
+    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
+    if (IsA(te_v->expr, Aggref))
+    {
+      Aggref *ar_v = (Aggref *)te_v->expr;
+      if (list_length(ar_v->aggdistinct)>0) {
+        found = 1;
+        //the agg distinct clause is added to the GROUP BY clause
+        new_q->groupClause = lappend(new_q->groupClause, ar_v->aggdistinct);
+        //remove aggref and replace by its arguments
+        lst_v = lappend(lst_v, ar_v->args);
+      }
+      else
+      {
+        lst_v = lappend(lst_v, ar_v);
+      }      
+    }
+    else { //keep the current TE
+      lst_v = lappend(lst_v, te_v);
+    }
+  }
+  if(lst_v!=NIL) new_q->targetList = lst_v;
+  if(!found) return NULL;
+  else return new_q;
+}
+
 typedef struct aggregation_mutator_context
 {
   List *prov_atts;
@@ -783,6 +819,7 @@ static void replace_aggregations_in_select(
     semiring_operation op,
     const constants_t *constants)
 {
+
   aggregation_mutator_context context = {prov_atts, op, (constants_t *)constants};
 
   query_tree_mutator(q, aggregation_mutator, &context, QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
@@ -1360,6 +1397,11 @@ static Query *process_query(
     //transform targetList to change AGGREF into
     if (q->hasAggs)
     {
+      Query *subq = check_for_agg_distinct(q);
+      if(subq) // agg distinct detected, create a subquery
+      {
+        elog_node_display(NOTICE, "Rewritted sub-query", subq, true);
+      }
       replace_aggregations_in_select(q, prov_atts,
                                      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), constants);
     }
