@@ -762,28 +762,28 @@ static Query *check_for_agg_distinct(Query *q){
   //-- only in the top-level of the query
   foreach (lc_v, new_q->targetList)
   {
-
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
     if (IsA(te_v->expr, Aggref))
     {
       Aggref *ar_v = (Aggref *)te_v->expr;
       if (list_length(ar_v->aggdistinct)>0) {
         TargetEntry *te_new = NULL;
+        SortGroupClause *sgc = (SortGroupClause*) linitial(ar_v->aggdistinct);
+
         found = 1;
         //the agg distinct clause is added to the GROUP BY clause
-        new_q->groupClause = lappend(new_q->groupClause, ar_v->aggdistinct);
         //remove aggref and replace by its arguments
-        te_new = (TargetEntry *)ar_v->args;
+        te_new = (TargetEntry *)linitial(ar_v->args);
+        sgc->tleSortGroupRef = te_v -> resno;
+        new_q->groupClause = lappend(new_q->groupClause, sgc);
         te_new->resno = te_v->resno;
         te_new->resname = te_v->resname;
         lst_v = lappend(lst_v, te_new);
       }
-      else
-      {
+      else {
         lst_v = lappend(lst_v, ar_v);
       }      
-    }
-    else { //keep the current TE
+    } else { //keep the current TE
       lst_v = lappend(lst_v, te_v);
     }
   }
