@@ -95,9 +95,54 @@ public:
       it->second = value.second;
   }
 
+  bool operator==(const flat_map &rhs) const
+  {
+    if(size()!=rhs.size())
+      return false;
+    for(const auto &[k, v]: rhs) {
+      auto it = find(k);
+      if(it==end())
+        return false;
+      else if(it->second != v)
+        return false;
+    }
+
+    return true;
+  }
+  
   bool operator<(const flat_map &rhs) const
   {
-    return storage < rhs.storage;
+    if(size()<rhs.size())
+      return true;
+    else if(size()>rhs.size())
+      return false;
+    storage_t x1{storage}, x2{rhs.storage};
+    std::sort(x1.begin(), x1.end());
+    std::sort(x2.begin(), x2.end());
+
+    for(auto it1 = x1.begin(), it2 = x2.begin();
+        it1!=x1.end();
+        ++it1, ++it2) {
+      if(*it1<*it2)
+        return true;
+      else if(*it1>*it2)
+        return false;
+    }
+
+    return false;
   }
 };
+
+namespace std {
+  template<class K, class V, template<class...> class Storage>
+  struct hash<flat_map<K, V, Storage>> {
+    size_t operator()(const flat_map<K, V, Storage> &key) const
+    {
+      size_t result = 0xDEADBEEF;
+      for(const auto &[k,v]: key)
+        result ^= std::hash<K>()(k) ^ std::hash<V>()(v);
+      return result;
+    }
+  };
+}
 #endif /* FLAT_MAP_H */
