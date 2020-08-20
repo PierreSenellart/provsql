@@ -2,9 +2,10 @@
 #define dDNNF_TREE_DECOMPOSITION_BUILDER_H
 
 #include <cassert>
+#include <unordered_map>
 #include <map>
 
-#include <boost/container/small_vector.hpp>
+#include <boost/container/static_vector.hpp>
 
 #include "flat_map.hpp"
 #include "flat_set.hpp"
@@ -22,7 +23,7 @@ class dDNNFTreeDecompositionBuilder
   template<class T>
     using gate_vector_t = std::vector<T>;
   using gates_to_or_t =
-    std::map<valuation_t, std::map<suspicious_t, gate_vector_t<gate_t>>>;
+    std::unordered_map<valuation_t, std::map<suspicious_t, gate_vector_t<gate_t>>>;
 
  private:
   const BooleanCircuit &c;
