@@ -281,6 +281,8 @@ int main(int argc, char **argv) {
   TreeDecomposition td(f);
   f.close();
 
+  std::cerr << "Treewidth: " << td.getTreewidth() << std::endl;
+
   std::ifstream g(argv[1]);
   BooleanCircuit c;
   unsigned nbGates;
@@ -297,6 +299,8 @@ int main(int argc, char **argv) {
       c.setGate(std::to_string(i), BooleanGate::OR);
     else if(line=="AND")
       c.setGate(std::to_string(i), BooleanGate::AND);
+    else if(line=="NOT")
+      c.setGate(std::to_string(i), BooleanGate::NOT);
     else {
       std::cerr << "Wrong line type: " << line << std::endl;
       exit(1);

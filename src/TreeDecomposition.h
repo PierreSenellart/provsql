@@ -17,7 +17,7 @@ enum class bag_t : size_t {};
 
 class TreeDecomposition {
  public:
-  static constexpr int MAX_TREEWIDTH = 10;
+  static constexpr int MAX_TREEWIDTH = 20;
   static constexpr int OPTIMAL_ARITY = 2;
 
   template<class T>
@@ -57,6 +57,7 @@ class TreeDecomposition {
   TreeDecomposition(const TreeDecomposition &td);
   TreeDecomposition &operator=(const TreeDecomposition &td);
 
+  unsigned getTreewidth() const { return treewidth; }
   void makeFriendly(gate_t root);
 
   std::string toDot() const;
@@ -87,5 +88,17 @@ inline std::istream &operator>>(std::istream &i, bag_t &b)
   b=bag_t{u};
   return i;
 }
+
+namespace std {
+  template<>
+  struct hash<gate_t>
+  {
+    size_t operator()(gate_t g) const
+    {
+      return hash<typename std::underlying_type<gate_t>::type>()(
+          static_cast<typename std::underlying_type<gate_t>::type>(g));
+    }
+  };
+};
 
 #endif /* TREE_DECOMPOSITION_H */
