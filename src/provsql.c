@@ -768,11 +768,15 @@ static Query *check_for_agg_distinct(Query *q){
     {
       Aggref *ar_v = (Aggref *)te_v->expr;
       if (list_length(ar_v->aggdistinct)>0) {
+        TargetEntry *te_new = NULL;
         found = 1;
         //the agg distinct clause is added to the GROUP BY clause
         new_q->groupClause = lappend(new_q->groupClause, ar_v->aggdistinct);
         //remove aggref and replace by its arguments
-        lst_v = lappend(lst_v, ar_v->args);
+        te_new = (TargetEntry *)ar_v->args;
+        te_new->resno = te_v->resno;
+        te_new->resname = te_v->resname;
+        lst_v = lappend(lst_v, te_new);
       }
       else
       {
@@ -1400,7 +1404,7 @@ static Query *process_query(
       Query *subq = check_for_agg_distinct(q);
       if(subq) // agg distinct detected, create a subquery
       {
-        elog_node_display(NOTICE, "Rewritted sub-query", subq, true);
+        elog_node_display(NOTICE, "Rewritten sub-query", subq, true);
       }
       replace_aggregations_in_select(q, prov_atts,
                                      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), constants);
