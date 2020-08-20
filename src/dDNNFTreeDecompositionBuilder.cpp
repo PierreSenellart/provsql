@@ -89,11 +89,11 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
     // negated variable gate; no suspicious gate.
     dDNNFGate pos = { input_gate.find(single_gate)->second,
       {std::make_pair(single_gate,true)},
-      {}
+      suspicious_t{}
     };
     dDNNFGate neg = { negated_input_gate.find(single_gate)->second,
       {std::make_pair(single_gate,false)}, 
-      {} 
+      suspicious_t{} 
     };
     return { std::move(pos), std::move(neg) };
   } else {
