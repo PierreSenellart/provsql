@@ -13,6 +13,7 @@ extern "C" {
 
 #include "BooleanCircuit.h"
 #include "provsql_utils_cpp.h"
+#include "dDNNFTreeDecompositionBuilder.h"
 
 using namespace std;
 
@@ -117,9 +118,24 @@ static Datum probability_evaluate_internal
     }
   } else if(method=="weightmc") {
     try {
-	    result = c.WeightMC(gate, args);
+      result = c.WeightMC(gate, args);
     } catch(CircuitException &e) {
-	    elog(ERROR, "%s", e.what());
+      elog(ERROR, "%s", e.what());
+    }
+  } else if(method=="tree-decomposition") {
+    try {
+      TreeDecomposition td(c);
+      auto dnnf{
+        dDNNFTreeDecompositionBuilder{
+          c,
+          UUIDDatum2string(token),
+          td}.build()
+      };
+      result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
+    } catch(TreeDecompositionException &) {
+      elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
+    } catch(CircuitException &e) {
+      elog(ERROR, "%s", e.what());
     }
   } else {
     elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());

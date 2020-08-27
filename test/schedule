@@ -31,6 +31,9 @@ test: possible_worlds monte_carlo
 # Probability computation using external software
 test: c2d d4 dsharp weightmc minic2d
 
+# Probability computation using tree decompositions
+test: treedec 
+
 # Viewing circuit
 test: view_circuit_multiple
 
