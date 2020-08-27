@@ -25,7 +25,6 @@ before_install:
       sudo apt-get install -y postgresql-contrib-$POSTGRESQL_VERSION;
     fi
   - "curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' -H 'Content-Type: application/x-www-form-urlencoded' --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart&e=pierre%40senellart.com&o=ENS' -o c2d && unzip c2d && sudo mv c2d_linux /usr/local/bin/c2d"
-  - "curl 'http://reasoning.cs.ucla.edu/minic2d/fetchme.php' -H 'Content-Type: application/x-www-form-urlencoded' --data 'os=Linux+%28x64%29&type=&s=&n=Pierre+Senellart&e=pierre%40senellart.com&o=ENS' -o minic2d.tgz && tar zxf minic2d.tgz && cd miniC2D-1.0.0 && make && sudo mv bin/linux/miniC2D /usr/local/bin/minic2d && sudo mv bin/linux/hgr2htree /usr/local/bin && cd .."
   - sudo curl http://www.cril.univ-artois.fr/KC/ressources/d4 -o /usr/local/bin/d4
   - git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && sudo mv dsharp /usr/local/bin && cd ..
   - git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && sudo mv weightmc /usr/local/bin && cd ../..

@@ -29,7 +29,7 @@ test: viewing_setup
 test: possible_worlds monte_carlo
 
 # Probability computation using external software
-test: c2d d4 dsharp weightmc minic2d
+test: c2d d4 dsharp weightmc 
 
 # Probability computation using tree decompositions
 test: treedec 
