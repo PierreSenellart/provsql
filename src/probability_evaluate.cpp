@@ -53,7 +53,7 @@ static Datum probability_evaluate_internal
       if(type == "input") {
         c.setGate(f, BooleanGate::IN, stod(SPI_getvalue(tuple, tupdesc, 4)));
       } else {
-        unsigned id=c.getGate(f);
+        auto id=c.getGate(f);
 
         if(type == "monus" || type == "monusl" || type == "times" || type=="project" || type=="eq") {
           c.setGate(f, BooleanGate::AND);
@@ -75,7 +75,7 @@ static Datum probability_evaluate_internal
 // elog(WARNING, "%s", c.toString(c.getGate(UUIDDatum2string(token))).c_str());
 
   double result;
-  unsigned gate = c.getGate(UUIDDatum2string(token));
+  auto gate = c.getGate(UUIDDatum2string(token));
 
   provsql_interrupted = false;
 

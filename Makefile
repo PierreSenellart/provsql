@@ -38,7 +38,7 @@ include $(PGXS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
 %.o : %.cpp
-	$(CXX) -std=c++17 -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+	$(CXX) -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
 PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
@@ -46,10 +46,10 @@ PGVER_MINOR = $(shell echo $(VERSION) | awk -F. '{ print ($$2 + 0) }')
 
 # Temporary fix for PostgreSQL compilation chain / llvm bug, see 
 # https://github.com/rdkit/rdkit/issues/2192
-COMPILE.cxx.bc = $(CLANG) -xc++ -Wno-ignored-attributes $(BITCODE_CPPFLAGS) $(CPPFLAGS) -emit-llvm -c
+COMPILE.cxx.bc = $(CLANG) -Wno-register -xc++ -std=c++17 -Wno-ignored-attributes $(BITCODE_CPPFLAGS) $(CPPFLAGS) -emit-llvm -c
 %.bc : %.cpp
 	$(COMPILE.cxx.bc) -o $@ $<
 	$(LLVM_BINPATH)/opt -module-summary -f $@ -o $@
 
 tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/Circuit.hpp src/dDNNF.h src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.h src/dDNNFTreeDecompositionBuilder.cpp src/Circuit.h src/Graph.h src/PermutationStrategy.h src/TreeDecompositionKnowledgeCompiler.cpp
-	$(CXX) -W -Wall -std=c++17 $(CXXFLAGS) $(CPPFLAGS) -o tkdc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp
+	$(CXX) -DTDKC -W -Wall -std=c++17 $(CXXFLAGS) $(CPPFLAGS) -o tkdc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp

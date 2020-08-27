@@ -16,9 +16,12 @@ extern "C" {
 
 using namespace std;
 
-// TODO: Remove the next line and replace with an #include
 // "provsql_utils.h"
+#ifdef TDKC
 bool provsql_interrupted = false;
+#else
+#include "provsql_utils.h"
+#endif
 
 gate_t BooleanCircuit::setGate(BooleanGate type)
 {
