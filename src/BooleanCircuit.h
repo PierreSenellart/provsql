@@ -10,8 +10,6 @@
 
 enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN };
 
-class dDNNF;
-
 class BooleanCircuit : public Circuit<BooleanGate> {
  private:
   bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
