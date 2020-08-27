@@ -753,13 +753,14 @@ static Expr *make_provenance_expression(
 }
 
 static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
-  //here are the variables
+  //variables
   Alias *alias = makeNode(Alias);
   Alias *eref = makeNode(Alias);
   FromExpr *jointree = makeNode(FromExpr);
   RangeTblEntry *rte = makeNode(RangeTblEntry);
   RangeTblRef *rtr = makeNode(RangeTblRef);
   ListCell *lc_v;
+  int groupRef = 1;
   //rewrite the rtable to contain only one relation, the alias
   alias->aliasname = "a";
   eref->aliasname = "a";
@@ -776,7 +777,8 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
   rte->subquery = subq;
 
   q->rtable = list_make1(rte);
-  //correct var indexes
+  q->groupClause = NIL;
+  //correct var indexes and group by references
   foreach(lc_v, q->targetList)
   {
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v); 
@@ -799,26 +801,26 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
       var_v->varno = 1;
       var_v->varattno = te_v->resno;
     }
-    else if (IsA(te_v->expr, FuncExpr))
-    {
-      FuncExpr *fe_v = (FuncExpr *)te_v->expr;
-      var->vartype = fe_v->funcresulttype;
-      te_v->expr = (Expr*) var; 
-    }
-    else if (IsA(te_v->expr, OpExpr))
-    {
-      OpExpr *oe_v = (OpExpr *)te_v->expr;
-      var->vartype = oe_v->opresulttype;
+    else {
+      var->vartype = exprType((Node *)te_v->expr);
       te_v->expr = (Expr*) var;
     }
-    else
-      ereport(ERROR, (errmsg("Subquery of DISTINCT aggregate uses an unsupported target expression")));
+    //add to GROUP BY list
+    if (!IsA(te_v->expr, Aggref))
+    {
+      SortGroupClause *sgc = makeNode(SortGroupClause);
+      sgc->tleSortGroupRef = groupRef;
+      te_v->ressortgroupref = groupRef;
+      sgc->nulls_first = false;
+      get_sort_group_operators(exprType((Node *)te_v->expr), true, true, false, &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+      q->groupClause = lappend(q->groupClause,sgc); 
+      groupRef++;
+    }
   }
   //rewrite the jointree to contain only one relation
   rtr->rtindex = 1;
   jointree->fromlist = list_make1(rtr);
   q->jointree = jointree;
-  //TODO rewrite the group clauses
   return q;
 }
 
@@ -844,10 +846,11 @@ static Query *check_for_agg_distinct(Query *q){
         //the agg distinct clause is added to the GROUP BY clause
         //remove aggref and replace by its arguments
         te_new = (TargetEntry *)linitial(ar_v->args);
-        sgc->tleSortGroupRef = te_v -> resno;
+        sgc->tleSortGroupRef = te_v->resno;
         new_q->groupClause = lappend(new_q->groupClause, sgc);
         te_new->resno = te_v->resno;
         te_new->resname = te_v->resname;
+        te_new->ressortgroupref = te_v->resno;
         lst_v = lappend(lst_v, te_new);
       }
       else {
@@ -1339,9 +1342,7 @@ static Query *process_query(
     Query *subq = check_for_agg_distinct(q);
     if(subq) // agg distinct detected, create a subquery
     {
-      elog_node_display(NOTICE, "Rewritten sub-query", subq, true);
       q = rewrite_for_agg_distinct(q,subq);
-      elog_node_display(NOTICE, "Rewritten full query", q, true);
       return process_query(q, constants);
     }
   }
