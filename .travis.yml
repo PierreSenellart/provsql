@@ -6,6 +6,7 @@ addons:
   apt:
     packages:
       - libgraph-easy-perl
+      - libboost-dev
       - libc6:i386
 
 env:
@@ -31,7 +32,7 @@ before_install:
 
   - sudo chmod a+x /usr/local/bin/c2d /usr/local/bin/dsharp /usr/local/bin/d4
 
-install: make && sudo make install  
+install: make && make tdkc && sudo make install  
 
 before_script:
   - sudo bash -c 'echo "shared_preload_libraries = '"'"'provsql'"'"'" >> /etc/postgresql/'$POSTGRESQL_VERSION/main/postgresql.conf
