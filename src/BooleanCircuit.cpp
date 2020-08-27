@@ -14,8 +14,6 @@ extern "C" {
 
 #include "dDNNF.h"
 
-using namespace std;
-
 // "provsql_utils.h"
 #ifdef TDKC
 bool provsql_interrupted = false;
@@ -67,7 +65,7 @@ gate_t BooleanCircuit::addGate()
 std::string BooleanCircuit::toString(gate_t g) const
 {
   std::string op;
-  string result;
+  std::string result;
 
   switch(getGateType(g)) {
     case BooleanGate::IN:
@@ -76,7 +74,7 @@ std::string BooleanCircuit::toString(gate_t g) const
       } else if(getProb(g)==1.) {
         return "⊤";
       } else {
-        return to_string(g)+"["+to_string(getProb(g))+"]";
+        return to_string(g)+"["+std::to_string(getProb(g))+"]";
       }
     case BooleanGate::NOT:
       op="¬";
@@ -111,7 +109,7 @@ std::string BooleanCircuit::toString(gate_t g) const
   return "("+result+")";
 }
 
-bool BooleanCircuit::evaluate(gate_t g, const unordered_set<gate_t> &sampled) const
+bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const
 {
   bool disjunction=false;
 
@@ -149,7 +147,7 @@ double BooleanCircuit::monteCarlo(gate_t g, unsigned samples) const
   auto success{0u};
 
   for(unsigned i=0; i<samples; ++i) {
-    unordered_set<gate_t> sampled;
+    std::unordered_set<gate_t> sampled;
     for(auto in: inputs) {
       if(rand() *1. / RAND_MAX < getProb(in)) {
         sampled.insert(in);
@@ -160,7 +158,7 @@ double BooleanCircuit::monteCarlo(gate_t g, unsigned samples) const
       ++success;
     
     if(provsql_interrupted)
-      throw CircuitException("Interrupted after "+to_string(i+1)+" samples");
+      throw CircuitException("Interrupted after "+std::to_string(i+1)+" samples");
   }
 
   return success*1./samples;
@@ -175,7 +173,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
   double totalp=0.;
 
   for(unsigned long long i=0; i < nb; ++i) {
-    unordered_set<gate_t> s;
+    std::unordered_set<gate_t> s;
     double p = 1;
 
     unsigned j=0;
@@ -200,7 +198,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
 }
 
 std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
-  vector<vector<int>> clauses;
+  std::vector<std::vector<int>> clauses;
   
   // Tseytin transformation
   for(gate_t i{0}; i<gates.size(); ++i) {
@@ -208,7 +206,7 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
       case BooleanGate::AND:
         {
           int id{static_cast<int>(i)+1};
-          vector<int> c = {id};
+          std::vector<int> c = {id};
           for(auto s: getWires(i)) {
             clauses.push_back({-id, static_cast<int>(s)+1});
             c.push_back(-static_cast<int>(s)-1);
@@ -220,7 +218,7 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
       case BooleanGate::OR:
         {
           int id{static_cast<int>(i)+1};
-          vector<int> c = {-id};
+          std::vector<int> c = {-id};
           for(auto s: getWires(i)) {
             clauses.push_back({id, -static_cast<int>(s)-1});
             c.push_back(static_cast<int>(s)+1);
@@ -250,8 +248,8 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   fd = mkstemp(cfilename);
   close(fd);
 
-  string filename=cfilename;
-  ofstream ofs(filename.c_str());
+  std::string filename=cfilename;
+  std::ofstream ofs(filename.c_str());
 
   ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
 
@@ -263,8 +261,8 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   }
   if(display_prob) {
     for(gate_t in: inputs) {
-      ofs << "w " << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << to_string(getProb(in)) << "\n";
-      ofs << "w -" << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << to_string(1. - getProb(in)) << "\n";
+      ofs << "w " << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << getProb(in) << "\n";
+      ofs << "w -" << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << (1. - getProb(in)) << "\n";
     }
   }
 
@@ -273,13 +271,11 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   return filename;
 }
 
-double BooleanCircuit::compilation(gate_t g, string compiler) const {
-  string filename=BooleanCircuit::Tseytin(g);
-  string outfilename=filename+".nnf";
+double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
+  std::string filename=BooleanCircuit::Tseytin(g);
+  std::string outfilename=filename+".nnf";
 
-//  throw CircuitException("filename: "+filename);
-
-  string cmdline=compiler+" ";
+  std::string cmdline=compiler+" ";
   if(compiler=="d4") {
     cmdline+=filename+" -out="+outfilename;
   } else if(compiler=="c2d") {
@@ -301,9 +297,9 @@ double BooleanCircuit::compilation(gate_t g, string compiler) const {
   if(retvalue)    
     throw CircuitException("Error executing "+compiler);
   
-  ifstream ifs(outfilename.c_str());
+  std::ifstream ifs(outfilename.c_str());
 
-  string nnf;
+  std::string nnf;
   getline(ifs, nnf, ' ');
 
   if(nnf!="nnf") // unsatisfiable formula
@@ -315,13 +311,13 @@ double BooleanCircuit::compilation(gate_t g, string compiler) const {
   dDNNF dnnf;
 
   if(nb_variables!=gates.size())
-    throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + to_string(nb_variables) +" vs " + to_string(gates.size()) + ")");
+    throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + std::to_string(nb_variables) +" vs " + std::to_string(gates.size()) + ")");
 
   std::string line;
   getline(ifs,line);
   unsigned i=0;
   while(getline(ifs,line)) {
-    stringstream ss(line);
+    std::stringstream ss(line);
     
     char c;
     ss >> c;
@@ -329,21 +325,21 @@ double BooleanCircuit::compilation(gate_t g, string compiler) const {
     if(c=='O') {
       int var, args;
       ss >> var >> args;
-      auto id=dnnf.getGate(to_string(i));
-      dnnf.setGate(to_string(i), BooleanGate::OR);
+      auto id=dnnf.getGate(std::to_string(i));
+      dnnf.setGate(std::to_string(i), BooleanGate::OR);
       int g;
       while(ss >> g) {
-        auto id2=dnnf.getGate(to_string(g));
+        auto id2=dnnf.getGate(std::to_string(g));
         dnnf.addWire(id,id2);
       }
     } else if(c=='A') {
       int args;
       ss >> args;
-      auto id=dnnf.getGate(to_string(i));
-      dnnf.setGate(to_string(i), BooleanGate::AND);
+      auto id=dnnf.getGate(std::to_string(i));
+      dnnf.setGate(std::to_string(i), BooleanGate::AND);
       int g;
       while(ss >> g) {
-        auto id2=dnnf.getGate(to_string(g));
+        auto id2=dnnf.getGate(std::to_string(g));
         dnnf.addWire(id,id2);
       }
     } else if(c=='L') {
@@ -351,14 +347,14 @@ double BooleanCircuit::compilation(gate_t g, string compiler) const {
       ss >> leaf;
       if(gates[abs(leaf)-1]==BooleanGate::IN) {
         if(leaf<0) {
-          dnnf.setGate(to_string(i), BooleanGate::IN, 1-prob[-leaf-1]);
+          dnnf.setGate(std::to_string(i), BooleanGate::IN, 1-prob[-leaf-1]);
         } else {
-          dnnf.setGate(to_string(i), BooleanGate::IN, prob[leaf-1]);
+          dnnf.setGate(std::to_string(i), BooleanGate::IN, prob[leaf-1]);
         }
       } else
-        dnnf.setGate(to_string(i), BooleanGate::IN, 1.);
+        dnnf.setGate(std::to_string(i), BooleanGate::IN, 1.);
     } else 
-      throw CircuitException(string("Unreadable d-DNNF (unknown node type: ")+c+")");
+      throw CircuitException(std::string("Unreadable d-DNNF (unknown node type: ")+c+")");
 
     ++i;
   }
@@ -368,28 +364,28 @@ double BooleanCircuit::compilation(gate_t g, string compiler) const {
     throw CircuitException("Error removing "+outfilename);
   }
 
-  return dnnf.dDNNFEvaluation(dnnf.getGate(to_string(static_cast<std::underlying_type<gate_t>::type>(i)-1)));
+  return dnnf.dDNNFEvaluation(dnnf.getGate(std::to_string(i-1)));
 }
 
-double BooleanCircuit::WeightMC(gate_t g, string opt) const {
-  string filename=BooleanCircuit::Tseytin(g, true);
+double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
+  std::string filename=BooleanCircuit::Tseytin(g, true);
 
   //opt of the form 'delta;epsilon'
-  stringstream ssopt(opt); 
-  string delta_s, epsilon_s;
+  std::stringstream ssopt(opt); 
+  std::string delta_s, epsilon_s;
   getline(ssopt, delta_s, ';');
   getline(ssopt, epsilon_s, ';');
 
   double delta = 0;
   try { 
     delta=stod(delta_s); 
-  } catch (invalid_argument &e) {
+  } catch (std::invalid_argument &e) {
     delta=0;
   }
   double epsilon = 0;
   try {
     epsilon=stod(epsilon_s);
-  } catch (invalid_argument &e) {
+  } catch (std::invalid_argument &e) {
     epsilon=0;
   }
   if(delta == 0) delta=0.2;
@@ -400,7 +396,7 @@ double BooleanCircuit::WeightMC(gate_t g, string opt) const {
   //calcul pivotAC
   const double pivotAC=2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
 
-  string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+to_string(pivotAC)+ " "+filename+" > "+filename+".out";
+  std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+filename+".out";
 
   int retvalue=system(cmdline.c_str());
   if(retvalue) {
@@ -408,17 +404,17 @@ double BooleanCircuit::WeightMC(gate_t g, string opt) const {
   }
 
   //parsing
-  ifstream ifs((filename+".out").c_str());
-  string line, prev_line;
+  std::ifstream ifs((filename+".out").c_str());
+  std::string line, prev_line;
   while(getline(ifs,line))
     prev_line=line;
 
-  stringstream ss(prev_line);
-  string result;
+  std::stringstream ss(prev_line);
+  std::string result;
   ss >> result >> result >> result >> result >> result;
   
-  istringstream iss(result);
-  string val, exp;
+  std::istringstream iss(result);
+  std::string val, exp;
   getline(iss, val, 'x');
   getline(iss, exp);
   double value=stod(val);
