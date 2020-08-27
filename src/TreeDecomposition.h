@@ -53,6 +53,7 @@ class TreeDecomposition {
     { parent[static_cast<std::underlying_type<bag_t>::type>(b)]=p; }
 
  public:
+  TreeDecomposition(const BooleanCircuit &bc);
   TreeDecomposition(std::istream &in);
   TreeDecomposition(const TreeDecomposition &td);
   TreeDecomposition &operator=(const TreeDecomposition &td);
@@ -70,6 +71,11 @@ std::istream& operator>>(std::istream& in, TreeDecomposition &td);
 
 inline bag_t &operator++(bag_t &b) {
   return b=bag_t{static_cast<std::underlying_type<bag_t>::type>(b)+1};
+}
+inline bag_t operator++(bag_t &b, int) {
+  auto temp{b};
+  b=bag_t{static_cast<std::underlying_type<bag_t>::type>(b)+1};
+  return temp;
 }
 
 inline bool operator<(bag_t t, std::vector<bag_t>::size_type u)
@@ -100,5 +106,7 @@ namespace std {
     }
   };
 };
+
+class TreeDecompositionException : public std::exception {};
 
 #endif /* TREE_DECOMPOSITION_H */
