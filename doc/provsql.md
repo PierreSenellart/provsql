@@ -48,11 +48,11 @@ and to use a Web interface for simple visualization of where-provenance.
    or operating system, a bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
-   C compiler (both can be obtained on Debian-based Linux distributions
+   C/C++ compiler (both can be obtained on Debian-based Linux distributions
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
    `postgresql-server-dev-xx` package on Debian-based systems, or from
-   the `postgresql` package on the Homebrew package manager for Mac OS X).
+   the `postgresql` package on the Homebrew package manager for Mac OS X). The C++ compiler should support C++ 2017.
 
 3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
    systems, it is found in the `postgresql-contrib-9.x` package for
