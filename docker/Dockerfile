@@ -4,7 +4,7 @@ LABEL maintainer pierre@senellart.com
 # needed to build provsql the tools + libc6-i386 for running c2d
 RUN apt-get update &&\
     apt-get -y install git build-essential curl\
-               libc6-i386 unzip mercurial libgmp-dev
+               libc6-i386 unzip mercurial libgmp-dev libboost-dev
 
 # Specify which version we are building against
 ARG PSQL_VERSION=9.6
