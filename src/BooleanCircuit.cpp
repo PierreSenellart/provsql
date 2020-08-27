@@ -364,9 +364,9 @@ double BooleanCircuit::compilation(gate_t g, string compiler) const {
   }
 
   ifs.close();
-  if(unlink(outfilename.c_str())) {
-    throw CircuitException("Error removing "+outfilename);
-  }
+//  if(unlink(outfilename.c_str())) {
+//    throw CircuitException("Error removing "+outfilename);
+//  }
 
   return dnnf.dDNNFEvaluation(dnnf.getGate(to_string(static_cast<std::underlying_type<gate_t>::type>(i)-1)));
 }
