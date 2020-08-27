@@ -1,14 +1,12 @@
 #include <cassert>
-#include <fstream>
 #include <set>
 #include <algorithm>
 #include <string>
 #include <type_traits>
-#include <iomanip>
 
 #include "TreeDecomposition.h"
 #include "BooleanCircuit.h"
-
+#include "PermutationStrategy.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 
 TreeDecomposition::TreeDecomposition(std::istream &in)
@@ -261,68 +259,77 @@ std::istream& operator>>(std::istream& in, TreeDecomposition &td)
   return in;
 }
 
-#include <sys/time.h>
-
-static double get_timestamp ()
+// Taken and adapted from https://github.com/smaniu/treewidth
+TreeDecomposition::TreeDecomposition(const BooleanCircuit &bc)
 {
-  struct timeval now;
-  gettimeofday (&now, NULL);
-  return now.tv_usec * 1e-6 + now.tv_sec;
-}
+  Graph graph(bc);
+      
+  PermutationStrategy strategy;
 
+  strategy.init_permutation(graph);
 
-int main(int argc, char **argv) {
-  if(argc != 3) {
-    std::cerr << "Usage: " << argv[0] << " circuit tree_dec" << std::endl;
-    exit(1);
-  }
+  // Upper bound on size of the bags vector to avoid redimensioning
+  bags.reserve(graph.number_nodes());
 
-  std::ifstream f(argv[2]);
-  TreeDecomposition td(f);
-  f.close();
+  unsigned max_width{0};
+  std::unordered_map<gate_t, bag_t> bag_ids;
+  bag_t bag_id{0};
 
-  std::cerr << "Treewidth: " << td.getTreewidth() << std::endl;
+  //looping greedily through the permutation
+  //we stop when the maximum bag has the same width as the remaining graph
+  //or when we achive the partial decomposition condition
+  while(max_width<graph.number_nodes() && !strategy.empty()){
+    //getting the next node
+    unsigned long node = strategy.get_next();
+    //removing the node from the graph and getting its neighbours
+    std::unordered_set<unsigned long> neigh = graph.remove_node(node);
+    max_width = std::max<unsigned>(neigh.size(), max_width);
+    //we stop as soon as we find bag that is 
+    if(max_width>MAX_TREEWIDTH)
+      throw TreeDecompositionException();
 
-  std::ifstream g(argv[1]);
-  BooleanCircuit c;
-  unsigned nbGates;
+    //filling missing edges between the neighbours and recomputing statistics
+    //  for relevant nodes in the graph (the neighbours, most of the time)
+    graph.fill(neigh);
+    strategy.recompute(neigh, graph);
 
-  g >> nbGates;
-  std::string line;
-  std::getline(g,line);
-
-  for(unsigned i=0; i<nbGates;++i) {
-    std::getline(g, line);
-    if(line=="IN")
-      c.setGate(std::to_string(i), BooleanGate::IN, 0.001);
-    else if(line=="OR")
-      c.setGate(std::to_string(i), BooleanGate::OR);
-    else if(line=="AND")
-      c.setGate(std::to_string(i), BooleanGate::AND);
-    else if(line=="NOT")
-      c.setGate(std::to_string(i), BooleanGate::NOT);
-    else {
-      std::cerr << "Wrong line type: " << line << std::endl;
-      exit(1);
+    Bag bag;
+    for(auto n: neigh) {
+      bag.insert(gate_t{n});
     }
+    bag.insert(gate_t{node});
+      
+    bag_ids[gate_t{node}] = bag_id++;
+
+    bags.push_back(bag);
+  }
+ 
+  if(graph.get_nodes().size()>MAX_TREEWIDTH)
+    throw TreeDecompositionException();
+
+  Bag remaining_bag; 
+  for(auto n: graph.get_nodes()) {
+    remaining_bag.insert(gate_t{n});
+  }
+  bags.push_back(remaining_bag);
+
+  parent.resize(bags.size());
+  children.resize(bags.size());
+
+  treewidth = std::max<unsigned>(max_width,graph.number_nodes()-1);
+    
+  for(bag_t i{0};i<bags.size()-1;++i){
+    bag_t min_bag{bags.size()-1};
+    for(auto n: getBag(i)) {
+      auto it = bag_ids.find(n);
+      if(it!=bag_ids.end() && it->second!=i)
+        min_bag = std::min(it->second, min_bag);
+    }
+    setParent(i, min_bag);
+    getChildren(min_bag).push_back(i);
   }
 
-  gate_t u,v;
-  while(g >> u >> v)
-    c.addWire(u,v);
-  g.close();
-
-  double t0, t1, t2;
-  t0 = get_timestamp();
-
-  auto dnnf{dDNNFTreeDecompositionBuilder{c, "0", td}.build()};
-  t1 = get_timestamp();
-  std::cerr << "Took " << (t1-t0) << "s" << std::endl;
-
-// std::cerr << dnnf.toString(dnnf.getGate("root")) <<std::endl;
-  std::cerr << "Using dDNNF: " << std::setprecision (15) << dnnf.dDNNFEvaluation(dnnf.getGate("root")) << std::endl;
-  t2 = get_timestamp();
-  std::cerr << "Took " << (t2-t1) << "s" << std::endl;
-
-  return 0;
+  // Special semantics: a node is its own parent if it is the root
+  root = bag_t{bags.size()-1};
+  setParent(root,root);
 }
