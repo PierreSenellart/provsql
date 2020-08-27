@@ -364,9 +364,9 @@ double BooleanCircuit::compilation(gate_t g, string compiler) const {
   }
 
   ifs.close();
-//  if(unlink(outfilename.c_str())) {
-//    throw CircuitException("Error removing "+outfilename);
-//  }
+  if(unlink(outfilename.c_str())) {
+    throw CircuitException("Error removing "+outfilename);
+  }
 
   return dnnf.dDNNFEvaluation(dnnf.getGate(to_string(static_cast<std::underlying_type<gate_t>::type>(i)-1)));
 }
@@ -425,8 +425,6 @@ double BooleanCircuit::WeightMC(gate_t g, string opt) const {
   exp=exp.substr(2);
   double exponent=stod(exp);
   double ret=value*(pow(2.0,exponent));
-//  throw CircuitException(to_string(ret));
-
 
   if(unlink(filename.c_str())) {
     throw CircuitException("Error removing "+filename);
