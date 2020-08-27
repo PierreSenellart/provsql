@@ -768,11 +768,13 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
   {
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
     eref->colnames = lappend(eref->colnames,makeString(pstrdup(te_v->resname)));
+    rte->selectedCols = bms_add_member(rte->selectedCols, te_v->resno - FirstLowInvalidHeapAttributeNumber);
   }
   rte->alias = alias;
   rte->eref = eref;
   rte->rtekind = RTE_SUBQUERY;
   rte->subquery = subq;
+
   q->rtable = list_make1(rte);
   //correct var indexes
   foreach(lc_v, q->targetList)
@@ -785,10 +787,11 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
     {
       Aggref *ar_v = (Aggref *)te_v->expr; 
       TargetEntry *te_new = makeNode(TargetEntry);
-      var->vartype = ar_v->aggtype;
+      var->vartype = linitial_oid(ar_v->aggargtypes);
       te_new->resno = 1;
-      te_new->expr = var;
+      te_new->expr = (Expr*) var;
       ar_v->args = list_make1(te_new);
+      ar_v->aggdistinct = NIL;
     }
     else if (IsA(te_v->expr, Var))
     {
@@ -800,16 +803,16 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
     {
       FuncExpr *fe_v = (FuncExpr *)te_v->expr;
       var->vartype = fe_v->funcresulttype;
-      te_v->expr = var; 
+      te_v->expr = (Expr*) var; 
     }
     else if (IsA(te_v->expr, OpExpr))
     {
       OpExpr *oe_v = (OpExpr *)te_v->expr;
       var->vartype = oe_v->opresulttype;
-      te_v->expr = var;
+      te_v->expr = (Expr*) var;
     }
     else
-      te_v->expr = var;
+      ereport(ERROR, (errmsg("Subquery of DISTINCT aggregate uses an unsupported target expression")));
   }
   //rewrite the jointree to contain only one relation
   rtr->rtindex = 1;
@@ -1331,6 +1334,17 @@ static Query *process_query(
       return process_query(q, constants);
     }
   }
+  
+  if (q->hasAggs) {  
+    Query *subq = check_for_agg_distinct(q);
+    if(subq) // agg distinct detected, create a subquery
+    {
+      elog_node_display(NOTICE, "Rewritten sub-query", subq, true);
+      q = rewrite_for_agg_distinct(q,subq);
+      elog_node_display(NOTICE, "Rewritten full query", q, true);
+      return process_query(q, constants);
+    }
+  }
 
   // get_provenance_attributes will also recursively process subqueries
   // by calling process_query
@@ -1468,13 +1482,6 @@ static Query *process_query(
     //transform targetList to change AGGREF into
     if (q->hasAggs)
     {
-      Query *subq = check_for_agg_distinct(q);
-      if(subq) // agg distinct detected, create a subquery
-      {
-        elog_node_display(NOTICE, "Rewritten sub-query", subq, true);
-        q = rewrite_for_agg_distinct(q,subq);
-        elog_node_display(NOTICE, "Rewritten full query", q, true);
-      }
       replace_aggregations_in_select(q, prov_atts,
                                      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
                                      constants);
