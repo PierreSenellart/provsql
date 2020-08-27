@@ -752,6 +752,73 @@ static Expr *make_provenance_expression(
   return result;
 }
 
+static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
+  //here are the variables
+  Alias *alias = makeNode(Alias);
+  Alias *eref = makeNode(Alias);
+  FromExpr *jointree = makeNode(FromExpr);
+  RangeTblEntry *rte = makeNode(RangeTblEntry);
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  ListCell *lc_v;
+  //rewrite the rtable to contain only one relation, the alias
+  alias->aliasname = "a";
+  eref->aliasname = "a";
+  eref->colnames = NIL;
+  foreach(lc_v, q->targetList)
+  {
+    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
+    eref->colnames = lappend(eref->colnames,makeString(pstrdup(te_v->resname)));
+  }
+  rte->alias = alias;
+  rte->eref = eref;
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = subq;
+  q->rtable = list_make1(rte);
+  //correct var indexes
+  foreach(lc_v, q->targetList)
+  {
+    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v); 
+    Var *var = makeNode(Var);
+    var->varno = 1;
+    var->varattno = te_v->resno;
+    if (IsA(te_v->expr, Aggref))
+    {
+      Aggref *ar_v = (Aggref *)te_v->expr; 
+      TargetEntry *te_new = makeNode(TargetEntry);
+      var->vartype = ar_v->aggtype;
+      te_new->resno = 1;
+      te_new->expr = var;
+      ar_v->args = list_make1(te_new);
+    }
+    else if (IsA(te_v->expr, Var))
+    {
+      Var *var_v = (Var *)te_v->expr;
+      var_v->varno = 1;
+      var_v->varattno = te_v->resno;
+    }
+    else if (IsA(te_v->expr, FuncExpr))
+    {
+      FuncExpr *fe_v = (FuncExpr *)te_v->expr;
+      var->vartype = fe_v->funcresulttype;
+      te_v->expr = var; 
+    }
+    else if (IsA(te_v->expr, OpExpr))
+    {
+      OpExpr *oe_v = (OpExpr *)te_v->expr;
+      var->vartype = oe_v->opresulttype;
+      te_v->expr = var;
+    }
+    else
+      te_v->expr = var;
+  }
+  //rewrite the jointree to contain only one relation
+  rtr->rtindex = 1;
+  jointree->fromlist = list_make1(rtr);
+  q->jointree = jointree;
+  //TODO rewrite the group clauses
+  return q;
+}
+
 static Query *check_for_agg_distinct(Query *q){
   ListCell *lc_v;
   List* lst_v = NIL;
@@ -1405,9 +1472,12 @@ static Query *process_query(
       if(subq) // agg distinct detected, create a subquery
       {
         elog_node_display(NOTICE, "Rewritten sub-query", subq, true);
+        q = rewrite_for_agg_distinct(q,subq);
+        elog_node_display(NOTICE, "Rewritten full query", q, true);
       }
       replace_aggregations_in_select(q, prov_atts,
-                                     has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), constants);
+                                     has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
+                                     constants);
     }
     provenance = make_provenance_expression(
         q,
