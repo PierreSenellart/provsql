@@ -5,3 +5,4 @@ src/*.bc
 sql/provsql--*.sql
 test/schedule
 .clangd
+compile_commands.json
