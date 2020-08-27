@@ -13,6 +13,9 @@ class dDNNF : public BooleanCircuit {
  private:
   dDNNF() = default;
 
+  // To memoize results
+  mutable std::unordered_map<gate_t, double> cache;
+
  public:
   double dDNNFEvaluation(gate_t g) const;
     

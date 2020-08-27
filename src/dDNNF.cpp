@@ -7,9 +7,6 @@
 
 double dDNNF::dDNNFEvaluation(gate_t root) const
 {
-  // We memoize results
-  static std::unordered_map<gate_t, double> cache;
-
   // Unfortunately, dDNNFs can be quite deep so we need to simulate
   // recursion with a heap-based stack, to avoid exhausting the actual
   // memory stack
