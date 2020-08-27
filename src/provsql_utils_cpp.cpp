@@ -1,4 +1,5 @@
 #include "utils/uuid.h"
+#include "provsql_utils.h"
 #include "provsql_utils_cpp.h"
 #include "Circuit.h"
 
