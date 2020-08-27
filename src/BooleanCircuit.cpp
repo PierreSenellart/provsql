@@ -428,9 +428,9 @@ double BooleanCircuit::WeightMC(gate_t g, string opt) const {
 //  throw CircuitException(to_string(ret));
 
 
-//  if(unlink(filename.c_str())) {
-//    throw CircuitException("Error removing "+filename);
-//  }
+  if(unlink(filename.c_str())) {
+    throw CircuitException("Error removing "+filename);
+  }
 
   if(unlink((filename+".out").c_str())) {
     throw CircuitException("Error removing "+filename+".out");
