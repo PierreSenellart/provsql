@@ -48,18 +48,21 @@ and to use a Web interface for simple visualization of where-provenance.
    or operating system, a bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
-   C compiler (both can be obtained on Debian-based Linux distributions
+   C/C++ compiler (both can be obtained on Debian-based Linux distributions
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
    `postgresql-server-dev-xx` package on Debian-based systems, or from
-   the `postgresql` package on the Homebrew package manager for Mac OS X).
+   the `postgresql` package on the Homebrew package manager for Mac OS X). The C++ compiler should support C++ 2017.
 
-3. Finally, the `uuid-ossp` extension for PostgreSQL (on Debian-based
+3. The `uuid-ossp` extension for PostgreSQL (on Debian-based
    systems, it is found in the `postgresql-contrib-9.x` package for
    PostgreSQL version 9.x, and is installed automatically for PostgreSQL
    version >= 10; on Homebrew, in the `ossp-uuid` package).
 
-4. Optionally, for probability computation through knowledge compilation,
+4. The Boost container library (on Debian-based systems, it is found in
+   the `libboost-dev` package).
+
+5. Optionally, for probability computation through knowledge compilation,
    any or all of the following software:
 
    * `c2d`, from http://reasoning.cs.ucla.edu/c2d/download.php
@@ -78,7 +81,7 @@ and to use a Web interface for simple visualization of where-provenance.
    Using `minic2d` also requires the
    `hgr2htree` executable (it is provided with `minic2d`).
 
-5. Optionally, for circuit visualization, the `graph-easy` executable
+6. Optionally, for circuit visualization, the `graph-easy` executable
    from the Graph::Easy Perl library (that can be obtained from the
    `libgraph-easy-perl` package on Debian-based Linux distributions) or
    from CPAN.
