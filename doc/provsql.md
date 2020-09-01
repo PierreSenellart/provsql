@@ -34,7 +34,7 @@ a demonstration version of ProvSQL (full-featured, except for `minic2d`
 support) as a Docker container. To deploy it, once Docker CE is
 installed, simply run:
 ```
-docker run inriavalda/provsqldemo
+docker run inriavalda/provsql
 ```
 By following the instructions, you will be able to connect to the
 PostgreSQL server within the container using a PostgreSQL client,
