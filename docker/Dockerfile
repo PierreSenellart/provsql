@@ -62,11 +62,11 @@ RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 ##############################   GETTING  PROVSQL  ##############################   
 
 # Provsql will be built & run as user postgres
-RUN chown -R postgres:postgres .
+RUN cd $GITHUB_WORKSPACE; chown -R postgres:postgres .
 USER postgres
 
 # Building
-RUN cd $GITHUB_WORKSPACE; make
+RUN make
 
 # install provsql
 USER root
