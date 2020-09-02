@@ -3,6 +3,7 @@ LABEL maintainer pierre@senellart.com
 
 # Copy the source into /opt/provsql
 COPY . /opt/provsql
+WORKDIR /opt/provsql
 
 # needed to build provsql the tools + libc6-i386 for running c2d
 RUN apt-get update &&\
@@ -65,7 +66,7 @@ RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 ##############################   GETTING  PROVSQL  ##############################   
 
 # Provsql will be built & run as user postgres
-RUN cd /opt/provsql; chown -R postgres:postgres .
+RUN chown -R postgres:postgres /opt/provsql
 USER postgres
 
 # Building
@@ -78,7 +79,7 @@ RUN echo "local all all trust" > /etc/postgresql/${PSQL_VERSION}/main/pg_hba.con
 
 EXPOSE 5432
 
-RUN cd /opt/provsql; make install
+RUN make install
 
 USER postgres
 #create a db test
