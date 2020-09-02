@@ -83,8 +83,8 @@ and to use a Web interface for simple visualization of where-provenance.
 
 6. Optionally, for circuit visualization, the `graph-easy` executable
    from the Graph::Easy Perl library (that can be obtained from the
-   `libgraph-easy-perl` package on Debian-based Linux distributions) or
-   from CPAN.
+   `libgraph-easy-perl` package on Debian-based Linux distributions, or
+   from CPAN).
 
 ## Installation
 
