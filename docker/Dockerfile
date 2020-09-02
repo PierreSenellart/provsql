@@ -1,6 +1,9 @@
 FROM debian:buster
 LABEL maintainer pierre@senellart.com
 
+# Copy the source into /opt/provsql
+COPY . /opt/provsql
+
 # needed to build provsql the tools + libc6-i386 for running c2d
 RUN apt-get update &&\
     apt-get -y install git build-essential curl\
@@ -62,7 +65,7 @@ RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 ##############################   GETTING  PROVSQL  ##############################   
 
 # Provsql will be built & run as user postgres
-RUN cd $GITHUB_WORKSPACE; chown -R postgres:postgres .
+RUN cd /opt/provsql; chown -R postgres:postgres .
 USER postgres
 
 # Building
@@ -75,17 +78,17 @@ RUN echo "local all all trust" > /etc/postgresql/${PSQL_VERSION}/main/pg_hba.con
 
 EXPOSE 5432
 
-RUN cd $GITHUB_WORKSPACE; make install
+RUN cd /opt/provsql; make install
 
 USER postgres
 #create a db test
 RUN /etc/init.d/postgresql start &&\
     createuser -s test &&\
     createdb test &&\
-    psql -f $GITHUB_WORKSPACE/test/sql/setup.sql test test  &&\
-    psql -f $GITHUB_WORKSPACE/test/sql/add_provenance.sql test test &&\
-    psql -f $GITHUB_WORKSPACE/test/sql/formula.sql test test  &&\
-    psql -f $GITHUB_WORKSPACE/test/sql/security.sql test test &&\
+    psql -f /opt/provsql/test/sql/setup.sql test test  &&\
+    psql -f /opt/provsql/test/sql/add_provenance.sql test test &&\
+    psql -f /opt/provsql/test/sql/formula.sql test test  &&\
+    psql -f /opt/provsql/test/sql/security.sql test test &&\
     psql -c "ALTER ROLE test SET search_path TO public, provsql";     
 
 ############################## FINISHING THE DOCKER  ##############################   
@@ -102,5 +105,5 @@ USER root
 RUN apt-get update &&\
     apt-get -y install apache2 libapache2-mod-php php-pgsql graphviz libgraph-easy-perl
 
-CMD /bin/bash $GITHUB_WORKSPACE/docker/demo.sh
+CMD /bin/bash /opt/provsql/docker/demo.sh
 EXPOSE 80
