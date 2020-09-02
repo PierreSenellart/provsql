@@ -1,4 +1,4 @@
-FROM debian:latest
+FROM debian:buster
 LABEL maintainer pierre@senellart.com
 
 # needed to build provsql the tools + libc6-i386 for running c2d
@@ -7,11 +7,11 @@ RUN apt-get update &&\
                libc6-i386 unzip mercurial libgmp-dev libboost-dev
 
 # Specify which version we are building against
-ARG PSQL_VERSION=9.6
+ARG PSQL_VERSION=11
 ENV PSQL_VERSION=$PSQL_VERSION
 
 RUN apt-get update &&\
-    apt-get -y install zlib1g-dev postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION} postgresql-contrib-${PSQL_VERSION}
+    apt-get -y install zlib1g-dev postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION}
 
 # Ensure a sane environment
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive
@@ -61,16 +61,12 @@ RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 
 ##############################   GETTING  PROVSQL  ##############################   
 
-# Add a folder for ProvSQL
-WORKDIR /opt/provsql
-
 # Provsql will be built & run as user postgres
-RUN chown postgres:postgres /opt/provsql
+RUN chown -R postgres:postgres .
 USER postgres
 
-# Getting and building
-RUN git clone https://github.com/PierreSenellart/provsql.git /opt/provsql
-RUN cd /opt/provsql && make
+# Building
+RUN cd $GITHUB_WORKSPACE; make
 
 # install provsql
 USER root
@@ -79,17 +75,17 @@ RUN echo "local all all trust" > /etc/postgresql/${PSQL_VERSION}/main/pg_hba.con
 
 EXPOSE 5432
 
-RUN cd /opt/provsql ; make install
+RUN cd $GITHUB_WORKSPACE; make install
 
 USER postgres
 #create a db test
 RUN /etc/init.d/postgresql start &&\
     createuser -s test &&\
     createdb test &&\
-    psql -f /opt/provsql/test/sql/setup.sql test test  &&\
-    psql -f /opt/provsql/test/sql/add_provenance.sql test test &&\
-    psql -f /opt/provsql/test/sql/formula.sql test test  &&\
-    psql -f /opt/provsql/test/sql/security.sql test test &&\
+    psql -f $GITHUB_WORKSPACE/test/sql/setup.sql test test  &&\
+    psql -f $GITHUB_WORKSPACE/test/sql/add_provenance.sql test test &&\
+    psql -f $GITHUB_WORKSPACE/test/sql/formula.sql test test  &&\
+    psql -f $GITHUB_WORKSPACE/test/sql/security.sql test test &&\
     psql -c "ALTER ROLE test SET search_path TO public, provsql";     
 
 ############################## FINISHING THE DOCKER  ##############################   
@@ -104,7 +100,7 @@ CMD /usr/bin/pg_ctlcluster $PSQL_VERSION main start --foreground
 
 USER root
 RUN apt-get update &&\
-    apt-get -y install apache2 libapache2-mod-php7.0 php7.0-pgsql graphviz libgraph-easy-perl
+    apt-get -y install apache2 libapache2-mod-php php-pgsql graphviz libgraph-easy-perl
 
-CMD /bin/bash /opt/provsql/docker/demo.sh
+CMD /bin/bash $GITHUB_WORKSPACE/docker/demo.sh
 EXPOSE 80
