@@ -432,3 +432,46 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
 
   return ret;
 }
+
+double BooleanCircuit::independentEvaluationInternal(
+    gate_t g, std::set<gate_t> &seen) const
+{
+  double result=1.;
+
+  switch(getGateType(g)) {
+    case BooleanGate::AND:
+      for(const auto &c: getWires(g)) {
+        result*=independentEvaluationInternal(c, seen);
+      }
+      break;
+
+    case BooleanGate::OR:
+      for(const auto &c: getWires(g)) {
+        result*=1-independentEvaluationInternal(c, seen);
+      }
+      result=1-result;
+      break;
+
+    case BooleanGate::NOT:
+      result=1-independentEvaluationInternal(*getWires(g).begin(), seen);
+      break;
+
+    case BooleanGate::IN:
+      if(seen.find(g)!=seen.end())
+        throw CircuitException("Not an independent circuit");
+      seen.insert(g);
+      result=getProb(g);
+      break;
+
+    case BooleanGate::UNDETERMINED:
+      throw CircuitException("Bad gate");
+  }
+
+  return result;
+}
+
+double BooleanCircuit::independentEvaluation(gate_t g) const
+{
+  std::set<gate_t> seen;
+  return independentEvaluationInternal(g, seen);
+}
