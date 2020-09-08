@@ -1,0 +1,53 @@
+EXTENSION = provsql
+EXTVERSION = $(shell grep default_version $(EXTENSION).control | \
+           sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
+
+MODULE_big = provsql
+OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard src/*.cpp))
+
+DOCS = $(wildcard doc/*.md)
+DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
+EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql
+
+# We want REGRESS to be empty, since we are going to provide a schedule
+# of tests. But we want REGRESS to be defined, otherwise installcheck
+# does nothing. So we use the following Makefile trick to have a defined
+# variable with empty value
+EMPTY = 
+REGRESS = $(EMPTY) 
+REGRESS_OPTS = --inputdir=test --load-language=plpgsql --outputdir=$(shell mktemp -d /tmp/tmp.provsqlXXXX) --schedule test/schedule
+
+all: $(DATA) $(MODULE_big).so test/schedule
+
+$(OBJS): $(wildcard src/*.h)
+
+sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
+	cp $< $@
+
+LDFLAGS_SL = -lstdc++
+
+ifdef DEBUG
+PG_CPPFLAGS += -O0 -g
+endif
+
+# Disable JIT code generation, due to various bugs, see in particular
+# https://bugs.llvm.org/show_bug.cgi?id=41863
+# https://github.com/PierreSenellart/provsql/issues/9
+with_llvm = no
+
+PG_CONFIG = pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
+include $(PGXS)
+
+%.o : %.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+%.o : %.cpp
+	$(CXX) -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
+PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
+PGVER_MINOR = $(shell echo $(VERSION) | awk -F. '{ print ($$2 + 0) }')
+
+tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/Circuit.hpp src/dDNNF.h src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.h src/dDNNFTreeDecompositionBuilder.cpp src/Circuit.h src/Graph.h src/PermutationStrategy.h src/TreeDecompositionKnowledgeCompiler.cpp
+	$(LD) -DTDKC -W -Wall -o tkdc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp
