@@ -120,6 +120,25 @@ static Datum probability_evaluate_internal
       }
     } else if(method=="independent") {
       result = c.independentEvaluation(gate);
+    } else if(method=="") {
+      // Default evaluation, use independent, tree-decomposition, and
+      // compilation in order until one works
+      try {
+       result = c.independentEvaluation(gate);
+      } catch(CircuitException &) {
+        try {
+          TreeDecomposition td(c);
+          auto dnnf{
+            dDNNFTreeDecompositionBuilder{
+              c,
+                UUIDDatum2string(token),
+                td}.build()
+          };
+          result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
+        } catch(TreeDecompositionException &) {
+          result = c.compilation(gate, "d4");
+        }
+      }
     } else {
       elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());
     }

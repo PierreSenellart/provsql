@@ -491,7 +491,7 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
 CREATE OR REPLACE FUNCTION probability_evaluate(
   token provenance_token,
   token2probability regclass,
-  method text,
+  method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C;

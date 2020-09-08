@@ -31,11 +31,9 @@ test: possible_worlds monte_carlo
 # Probability computation using external software
 test: c2d d4 dsharp weightmc
 
-# Probability computation using tree decompositions
-test: treedec 
-
-# Independent probability computation
-test: independent
+# Probability computation using tree decompositions, independent
+# probability computation, and default computation
+test: treedec default_probability_evaluate independent
 
 # Viewing circuit
 test: view_circuit_multiple
