@@ -855,8 +855,15 @@ static Query *process_query(
   bool has_difference = false;
   bool supported=true;
   int nbcols=0;
-  int **columns=(int **) palloc(q->rtable->length*sizeof(int*));
+  int **columns;
   unsigned i=0;
+
+  if(q->rtable == NULL) {
+    // No FROM clause, we can skip this query
+    return NULL;
+  }
+
+  columns=(int **) palloc(q->rtable->length*sizeof(int*));
 
 //ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
