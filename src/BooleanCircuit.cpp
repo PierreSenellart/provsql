@@ -16,7 +16,7 @@ extern "C" {
 
 // "provsql_utils.h"
 #ifdef TDKC
-bool provsql_interrupted = false;
+constexpr bool provsql_interrupted = false;
 #else
 #include "provsql_utils.h"
 #endif
