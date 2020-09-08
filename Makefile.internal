@@ -27,7 +27,7 @@ sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 LDFLAGS_SL = -lstdc++
 
 ifdef DEBUG
-PG_CPPFLAGS += -O0 -g
+PG_CPPFLAGS += -Og -g
 endif
 
 # Disable JIT code generation, due to various bugs, see in particular
