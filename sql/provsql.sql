@@ -64,6 +64,42 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION repair_key(_tbl regclass, key_att text, probability_mapping text)
+  RETURNS void AS
+$$
+DECLARE
+  key RECORD;
+  prefix_token uuid;
+  inner_token uuid;
+  times_token uuid;
+  record RECORD;
+  nb_rows INTEGER;
+BEGIN
+  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql_temp provsql.provenance_token UNIQUE DEFAULT uuid_generate_v4()', _tbl);
+  EXECUTE format('CREATE TABLE %I (value DOUBLE PRECISION, provenance provsql.provenance_token)', probability_mapping);
+  LOCK TABLE provenance_circuit_gate;
+  FOR key IN
+    EXECUTE format('SELECT %s AS key FROM %I GROUP BY %s', key_att, _tbl, key_att)
+  LOOP
+    prefix_token = gate_one();
+    EXECUTE format('SELECT COUNT(*) FROM %I WHERE %s = %L', _tbl, key_att, key.key) INTO nb_rows;
+    FOR record IN
+      EXECUTE format('SELECT provsql_temp FROM %I WHERE %s = %L', _tbl, key_att, key.key)
+    LOOP
+      inner_token := uuid_generate_v4();
+      times_token := provenance_times(prefix_token, inner_token);
+      INSERT INTO provsql.provenance_circuit_gate VALUES(inner_token, 'input');
+      EXECUTE format('INSERT INTO %I VALUES(%L, %L)', probability_mapping, 1./nb_rows, times_token);
+      EXECUTE format('UPDATE %I SET provsql_temp = %L WHERE provsql_temp = %L', _tbl, times_token, record.provsql_temp);
+      prefix_token := provenance_monus(prefix_token, inner_token);
+    END LOOP;  
+  END LOOP; 
+  EXECUTE format('ALTER TABLE %I RENAME COLUMN provsql_temp TO provsql', _tbl);
+  EXECUTE format('CREATE TRIGGER add_provenance_circuit_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_provenance_circuit_gate_trigger()',_tbl);
+--  EXECUTE format('ALTER TABLE %I ADD CONSTRAINT provsqlfk FOREIGN KEY (provsql) REFERENCES provsql.provenance_circuit_gate(gate)', _tbl);
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
 CREATE OR REPLACE FUNCTION create_provenance_mapping(newtbl text, oldtbl regclass, att text)
   RETURNS void AS
 $$
