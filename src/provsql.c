@@ -25,7 +25,6 @@
 
 PG_MODULE_MAGIC;
 
-bool provsql_shared_library_loaded = false;
 bool provsql_interrupted = false;
 bool provsql_where_provenance = false;
 
@@ -1041,6 +1040,9 @@ static PlannedStmt *provsql_planner(
 
 void _PG_init(void)
 {
+  if(!process_shared_preload_libraries_in_progress)
+    elog(ERROR, "provsql needs to be added to the shared_preload_libraries configuration variable");
+
   DefineCustomBoolVariable("provsql.where_provenance",
                           "Should ProvSQL track where-provenance?",
                           "1 turns where-provenance on, 0 off.",
@@ -1053,12 +1055,7 @@ void _PG_init(void)
                           NULL); 
 
   prev_planner = planner_hook;
-
-  if(process_shared_preload_libraries_in_progress) {
-    planner_hook = provsql_planner;
-
-    provsql_shared_library_loaded=true;
-  }
+  planner_hook = provsql_planner;
 }
 
 void _PG_fini(void)
