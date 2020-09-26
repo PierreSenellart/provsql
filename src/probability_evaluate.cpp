@@ -4,6 +4,7 @@ extern "C" {
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
 #include "executor/spi.h"
+#include "provsql_shmem.h"
 #include "provsql_utils.h"
   
   PG_FUNCTION_INFO_V1(probability_evaluate);
@@ -25,13 +26,8 @@ static void provsql_sigint_handler (int)
 static Datum probability_evaluate_internal
   (Datum token, Datum token2prob, const string &method, const string &args)
 {
-  constants_t constants;
-  if(!initialize_constants(&constants)) {
-    elog(ERROR, "Cannot find provsql schema");
-  }
-
   Datum arguments[2]={token,token2prob};
-  Oid argtypes[2]={constants.OID_TYPE_PROVENANCE_TOKEN,REGCLASSOID};
+  Oid argtypes[2]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN,REGCLASSOID};
   char nulls[2] = {' ',' '};
   
   SPI_connect();

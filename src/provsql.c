@@ -13,11 +13,14 @@
 #include "optimizer/planner.h"
 #include "parser/parse_oper.h"
 #include "parser/parsetree.h"
+#include "storage/lwlock.h"
+#include "storage/shmem.h"
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
 #include "utils/guc.h"
 
 #include "provsql_utils.h"
+#include "provsql_shmem.h"
 
 #if PG_VERSION_NUM < 90400
 #error "ProvSQL requires PostgreSQL version 9.4 or later"
@@ -36,21 +39,20 @@ extern void _PG_fini(void);
 static planner_hook_type prev_planner = NULL;
 
 static Query *process_query(
-    Query *q,
-    const constants_t *constants);
+    Query *q);
 
-static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, AttrNumber attid, const constants_t *constants) {
+static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, AttrNumber attid) {
   RelabelType *re=makeNode(RelabelType);
   Var *v=makeNode(Var);
   v->varno=v->varnoold=relid;
   v->varattno=v->varoattno=attid;
-  v->vartype=constants->OID_TYPE_PROVENANCE_TOKEN;
+  v->vartype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
   v->varcollid=InvalidOid;
   v->vartypmod=-1;
   v->location=-1;
 
   re->arg=(Expr*)v;
-  re->resulttype=constants->OID_TYPE_UUID;
+  re->resulttype=provsql_shared_state->constants.OID_TYPE_UUID;
   re->resulttypmod=-1;
   re->resultcollid=InvalidOid;
   re->relabelformat=COERCE_IMPLICIT_CAST;
@@ -61,7 +63,7 @@ static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, Att
   return re;
 }
 
-static List *get_provenance_attributes(Query *q, const constants_t *constants) {
+static List *get_provenance_attributes(Query *q) {
   List *prov_atts=NIL;
   ListCell *l;
   Index rteid=1;
@@ -77,18 +79,18 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
         Value *v = (Value *) lfirst(lc);
 
         if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
-            get_atttype(r->relid,attid)==constants->OID_TYPE_PROVENANCE_TOKEN) {
-          prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,attid,constants));
+            get_atttype(r->relid,attid)==provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN) {
+          prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,attid));
         }
 
         ++attid;
       }
     } else if(r->rtekind == RTE_SUBQUERY) {
-      Query *new_subquery = process_query(r->subquery, constants);
+      Query *new_subquery = process_query(r->subquery);
       if(new_subquery != NULL) {
         r->subquery = new_subquery;
         r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
-        prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,new_subquery->targetList->length,constants));
+        prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,new_subquery->targetList->length));
       }
     } else if(r->rtekind == RTE_JOIN) {
       if(r->jointype == JOIN_INNER ||
@@ -111,9 +113,9 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
 
         if(func->funccolcount==1) {
           FuncExpr *expr = (FuncExpr *) func->funcexpr;
-          if(expr->funcresulttype == constants->OID_TYPE_PROVENANCE_TOKEN
+          if(expr->funcresulttype == provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN
               && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
-            prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,attid,constants));
+            prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,attid));
           }
         } else {
           ereport(ERROR, (errmsg("FROM function with multiple output attributes not supported by provsql")));
@@ -133,7 +135,6 @@ static List *get_provenance_attributes(Query *q, const constants_t *constants) {
 
 static Bitmapset *remove_provenance_attributes_select(
     Query *q,
-    const constants_t *constants,
     bool **removed)
 {
   int nbRemoved=0;
@@ -151,7 +152,7 @@ static Bitmapset *remove_provenance_attributes_select(
     if(rt->expr->type==T_Var) {
       Var *v =(Var *) rt->expr;
 
-      if(v->vartype==constants->OID_TYPE_PROVENANCE_TOKEN) {
+      if(v->vartype==provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN) {
         const char *colname;
 
         if(rt->resname)
@@ -209,8 +210,7 @@ typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 static Expr *add_eq_from_OpExpr_to_Expr(
     OpExpr *fromOpExpr,
     Expr *toExpr,
-    int **columns,
-    const constants_t *constants)
+    int **columns)
 {
   Datum first_arg;
   Datum second_arg;
@@ -245,12 +245,12 @@ static Expr *add_eq_from_OpExpr_to_Expr(
     second_arg = Int16GetDatum(columns[v2->varno-1][v2->varattno-1]);
 
     fc = makeNode(FuncExpr);
-          fc->funcid=constants->OID_FUNCTION_PROVENANCE_EQ;
+          fc->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_EQ;
           fc->funcvariadic=false;
-          fc->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+          fc->funcresulttype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
           fc->location=-1;
 
-    c1=makeConst(constants->OID_TYPE_INT,
+    c1=makeConst(provsql_shared_state->constants.OID_TYPE_INT,
         -1,
         InvalidOid,
         sizeof(int16),
@@ -258,7 +258,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
         false,
         true);
 
-    c2=makeConst(constants->OID_TYPE_INT,
+    c2=makeConst(provsql_shared_state->constants.OID_TYPE_INT,
         -1,
         InvalidOid,
         sizeof(int16),
@@ -281,8 +281,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
 static Expr *add_eq_from_Quals_to_Expr(
     Node *quals,
     Expr *result,
-    int **columns,
-    const constants_t *constants)
+    int **columns)
 {
   OpExpr *oe;
 
@@ -291,7 +290,7 @@ static Expr *add_eq_from_Quals_to_Expr(
 
   if(IsA(quals, OpExpr)) {
     oe = (OpExpr *) quals;
-    result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+    result = add_eq_from_OpExpr_to_Expr(oe,result,columns);
   } /* Sometimes OpExpr is nested within a BoolExpr */
   else if (IsA(quals,BoolExpr)) {
     BoolExpr *be = (BoolExpr *) quals;
@@ -303,7 +302,7 @@ static Expr *add_eq_from_Quals_to_Expr(
       foreach(lc2,be->args) {
         if(IsA(lfirst(lc2),OpExpr)) {
           oe = (OpExpr *) lfirst(lc2);
-          result = add_eq_from_OpExpr_to_Expr(oe,result,columns,constants);
+          result = add_eq_from_OpExpr_to_Expr(oe,result,columns);
         }
       }
     }
@@ -316,7 +315,6 @@ static Expr *add_eq_from_Quals_to_Expr(
 static Expr *make_provenance_expression(
     Query *q,
     List *prov_atts, 
-    const constants_t *constants, 
     bool aggregation_needed,
     semiring_operation op,
     int **columns,
@@ -337,20 +335,20 @@ static Expr *make_provenance_expression(
       if(op==SR_TIMES) {
         ArrayExpr *array=makeNode(ArrayExpr);
   
-        expr->funcid=constants->OID_FUNCTION_PROVENANCE_TIMES;
+        expr->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_TIMES;
         expr->funcvariadic=true;
         
-        array->array_typeid=constants->OID_TYPE_UUID_ARRAY;
-        array->element_typeid=constants->OID_TYPE_UUID;
+        array->array_typeid=provsql_shared_state->constants.OID_TYPE_UUID_ARRAY;
+        array->element_typeid=provsql_shared_state->constants.OID_TYPE_UUID;
         array->elements=prov_atts;
         array->location=-1;
         
         expr->args=list_make1(array);
       } else { // SR_MONUS
-        expr->funcid=constants->OID_FUNCTION_PROVENANCE_MONUS;
+        expr->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_MONUS;
         expr->args=prov_atts;
       }
-      expr->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      expr->funcresulttype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
       expr->location=-1;
     }
 
@@ -362,20 +360,20 @@ static Expr *make_provenance_expression(
       te_inner->resno=1;
       te_inner->expr=(Expr*)expr;
 
-      agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
-      agg->aggtype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      agg->aggfnoid=provsql_shared_state->constants.OID_FUNCTION_ARRAY_AGG;
+      agg->aggtype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
       agg->args=list_make1(te_inner);
       agg->aggkind=AGGKIND_NORMAL;
       agg->location=-1;
 
 #if PG_VERSION_NUM >= 90600
       /* aggargtypes was added in version 9.6 of PostgreSQL */
-      agg->aggargtypes=list_make1_oid(constants->OID_TYPE_PROVENANCE_TOKEN);
+      agg->aggargtypes=list_make1_oid(provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN);
 #endif /* PG_VERSION_NUM >= 90600 */
 
-      plus->funcid=constants->OID_FUNCTION_PROVENANCE_PLUS;
+      plus->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_PLUS;
       plus->args=list_make1(agg);      
-      plus->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+      plus->funcresulttype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
       plus->location=-1;
 
       result=(Expr*)plus;
@@ -395,11 +393,11 @@ static Expr *make_provenance_expression(
       if(IsA(lfirst(lc), JoinExpr)) {
         JoinExpr *je = (JoinExpr *) lfirst(lc);
 	/* Study equalities coming from From clause */
-	result = add_eq_from_Quals_to_Expr(je->quals, result, columns, constants);
+	result = add_eq_from_Quals_to_Expr(je->quals, result, columns);
       }
     }
     /* Study equalities coming from WHERE clause */
-    result = add_eq_from_Quals_to_Expr(q->jointree->quals, result, columns, constants);
+    result = add_eq_from_Quals_to_Expr(q->jointree->quals, result, columns);
   }
 
   if(provsql_where_provenance) {
@@ -408,13 +406,13 @@ static Expr *make_provenance_expression(
     bool projection=false;
     int nb_column=0;
 
-    fe->funcid=constants->OID_FUNCTION_PROVENANCE_PROJECT;
+    fe->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_PROJECT;
     fe->funcvariadic=true;
-    fe->funcresulttype=constants->OID_TYPE_PROVENANCE_TOKEN;
+    fe->funcresulttype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
     fe->location=-1;
       
-    array->array_typeid=constants->OID_TYPE_INT_ARRAY;
-    array->element_typeid=constants->OID_TYPE_INT;
+    array->array_typeid=provsql_shared_state->constants.OID_TYPE_INT_ARRAY;
+    array->element_typeid=provsql_shared_state->constants.OID_TYPE_INT;
     array->elements=NIL;
     array->location=-1;
   
@@ -433,7 +431,7 @@ static Expr *make_provenance_expression(
         }
         /* If this is a valid column */
         if(value_v > 0) {
-          Const *ce=makeConst(constants->OID_TYPE_INT,
+          Const *ce=makeConst(provsql_shared_state->constants.OID_TYPE_INT,
                -1,
                InvalidOid,
                sizeof(int32),
@@ -450,7 +448,7 @@ static Expr *make_provenance_expression(
             projection=true;
         }
       } else { // we have a function in target
-        Const *ce=makeConst(constants->OID_TYPE_INT,
+        Const *ce=makeConst(provsql_shared_state->constants.OID_TYPE_INT,
                -1,
                InvalidOid,
                sizeof(int32),
@@ -490,7 +488,6 @@ static void add_to_select(
 }
 
 typedef struct provenance_mutator_context {
-  constants_t *constants;
   Expr *provsql;
 } provenance_mutator_context;
 
@@ -502,7 +499,7 @@ static Node *provenance_mutator(Node *node, provenance_mutator_context *context)
   if(IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *) node;
 
-    if(f->funcid == context->constants->OID_FUNCTION_PROVENANCE) {
+    if(f->funcid == provsql_shared_state->constants.OID_FUNCTION_PROVENANCE) {
       return (Node*) copyObject(context->provsql);
     }
   }
@@ -510,14 +507,14 @@ static Node *provenance_mutator(Node *node, provenance_mutator_context *context)
   return expression_tree_mutator(node, provenance_mutator, (void *) context);
 }
 
-static void replace_provenance_function_by_expression(Query *q, Expr *provsql, const constants_t *constants)
+static void replace_provenance_function_by_expression(Query *q, Expr *provsql)
 {
-  provenance_mutator_context context = {(constants_t *) constants, provsql};
+  provenance_mutator_context context = {provsql};
 
   query_tree_mutator(q, provenance_mutator, &context, QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 }
 
-static void transform_distinct_into_group_by(Query *q, const constants_t *constants)
+static void transform_distinct_into_group_by(Query *q)
 {
   // First check which are already in the group by clause
   // Should be either none or all as "SELECT DISTINCT a, b ... GROUP BY a" 
@@ -646,29 +643,27 @@ static Query *rewrite_non_all_into_external_group_by(Query *q)
 }
 
 static bool provenance_function_walker(
-    Node *node, 
-    const constants_t *constants) {
+    Node *node, void *data) {
   if(node==NULL)
     return false;
 
   if(IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *) node;
 
-    if(f->funcid == constants->OID_FUNCTION_PROVENANCE)
+    if(f->funcid == provsql_shared_state->constants.OID_FUNCTION_PROVENANCE)
       return true;
   }
 
-  return expression_tree_walker(node, provenance_function_walker, (void*) constants);
+  return expression_tree_walker(node, provenance_function_walker, (void*) NULL);
 }
 
 static bool provenance_function_in_group_by(
-    Query *q,
-    const constants_t *constants) {
+    Query *q) {
   ListCell *lc;
   foreach(lc,q->targetList) {
     TargetEntry *te = (TargetEntry *) lfirst(lc);
     if(te->ressortgroupref > 0 &&
-       expression_tree_walker((Node*)te, provenance_function_walker, (void*) constants)) {
+       expression_tree_walker((Node*)te, provenance_function_walker, (void*) NULL)) {
       return true;
     }
   }
@@ -678,7 +673,7 @@ static bool provenance_function_in_group_by(
 
 static bool has_provenance_walker(
     Node *node,
-    const constants_t *constants) {
+    void *data) {
   if(node==NULL)
     return false;
 
@@ -686,7 +681,7 @@ static bool has_provenance_walker(
     Query *q = (Query *) node;
     ListCell *rc;
 
-    if(query_tree_walker(q, has_provenance_walker, (void*) constants, 0))
+    if(query_tree_walker(q, has_provenance_walker, (void*) NULL, 0))
       return true;
 
     foreach(rc, q->rtable) {
@@ -699,7 +694,7 @@ static bool has_provenance_walker(
           Value *v = (Value *) lfirst(lc);
 
           if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
-              get_atttype(r->relid,attid)==constants->OID_TYPE_PROVENANCE_TOKEN) {
+              get_atttype(r->relid,attid)==provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN) {
             return true;
           }
 
@@ -714,7 +709,7 @@ static bool has_provenance_walker(
 
           if(func->funccolcount==1) {
             FuncExpr *expr = (FuncExpr *) func->funcexpr;
-            if(expr->funcresulttype == constants->OID_TYPE_PROVENANCE_TOKEN
+            if(expr->funcresulttype == provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN
                 && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
               return true;
             }
@@ -726,18 +721,16 @@ static bool has_provenance_walker(
     }
   }
 
-  return expression_tree_walker(node, provenance_function_walker, (void*) constants);
+  return expression_tree_walker(node, provenance_function_walker, (void*) NULL);
 }
 
 static bool has_provenance(
-    Query *q,
-    const constants_t *constants) {
-  return has_provenance_walker((Node *) q, constants);
+    Query *q) {
+  return has_provenance_walker((Node *) q, NULL);
 }
 
 static bool transform_except_into_join(
-    Query *q,
-    const constants_t *constants) {
+    Query *q) {
   SetOperationStmt *setOps = (SetOperationStmt *) q->setOperations;
   RangeTblEntry *rte = makeNode(RangeTblEntry);
   FromExpr *fe = makeNode(FromExpr);
@@ -759,7 +752,7 @@ static bool transform_except_into_join(
 
     Var *v =(Var *) te->expr;
 
-    if(v->vartype != constants->OID_TYPE_PROVENANCE_TOKEN) {
+    if(v->vartype != provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN) {
       OpExpr *oe = makeNode(OpExpr);
       Oid opno = find_equality_operator(v->vartype,v->vartype);
       Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
@@ -823,7 +816,6 @@ static bool transform_except_into_join(
 // rewrite_non_all_into_external_group_by)
 static void process_set_operation_union(
     SetOperationStmt * stmt,
-    const constants_t *constants,
     bool * supported)
 {
   if(stmt->op != SETOP_UNION) {
@@ -831,21 +823,20 @@ static void process_set_operation_union(
     ereport(ERROR, (errmsg("Unsupported mixed set operations")));
   }
   if(IsA(stmt->larg,SetOperationStmt)) {
-    process_set_operation_union((SetOperationStmt*)(stmt->larg), constants, supported);
+    process_set_operation_union((SetOperationStmt*)(stmt->larg), supported);
   }
   if(IsA(stmt->rarg,SetOperationStmt)) {
-    process_set_operation_union((SetOperationStmt*)(stmt->rarg), constants, supported);
+    process_set_operation_union((SetOperationStmt*)(stmt->rarg), supported);
   }
   stmt->colTypes=lappend_oid(stmt->colTypes,
-                             constants->OID_TYPE_PROVENANCE_TOKEN);
+                             provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN);
   stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
   stmt->colCollations=lappend_int(stmt->colCollations, 0);
   stmt->all = true ;
 }
 
 static Query *process_query(
-    Query *q,
-    const constants_t *constants)
+    Query *q)
 {
   List *prov_atts;
   bool has_union = false;
@@ -871,13 +862,13 @@ static Query *process_query(
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
     if(!stmt->all) {
       q = rewrite_non_all_into_external_group_by(q);
-      return process_query(q, constants);
+      return process_query(q);
     }
   }
 
   // get_provenance_attributes will also recursively process subqueries
   // by calling process_query
-  prov_atts=get_provenance_attributes(q, constants);
+  prov_atts=get_provenance_attributes(q);
 
   if(prov_atts==NIL)
     return q;
@@ -886,7 +877,7 @@ static Query *process_query(
     Bitmapset *removed_sortgrouprefs = NULL;
     bool *removed;
 
-    removed_sortgrouprefs=remove_provenance_attributes_select(q, constants, &removed);
+    removed_sortgrouprefs=remove_provenance_attributes_select(q, &removed);
     if(removed_sortgrouprefs != NULL)
       remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
     if(q->setOperations)
@@ -911,7 +902,7 @@ static Query *process_query(
       ereport(ERROR, (errmsg("Inconsistent DISTINCT and GROUP BY clauses not supported by provsql")));
       supported=false;
     } else {
-      transform_distinct_into_group_by(q, constants);
+      transform_distinct_into_group_by(q);
     }
   }
 
@@ -919,10 +910,10 @@ static Query *process_query(
     SetOperationStmt *stmt = (SetOperationStmt *) q->setOperations;
 
     if(stmt->op == SETOP_UNION) {
-      process_set_operation_union(stmt, constants,&supported);
+      process_set_operation_union(stmt, &supported);
       has_union = true;
     } else if(stmt->op == SETOP_EXCEPT) {
-      if(!transform_except_into_join(q, constants))
+      if(!transform_except_into_join(q))
         supported=false;
       has_difference=true;
     } else {
@@ -933,7 +924,7 @@ static Query *process_query(
 
   if(supported &&
      q->groupClause &&
-     !provenance_function_in_group_by(q, constants)) {
+     !provenance_function_in_group_by(q)) {
     q->hasAggs=true;
   }
 
@@ -989,14 +980,13 @@ static Query *process_query(
     Expr *provenance = make_provenance_expression(
         q,
         prov_atts,
-        constants,
         q->hasAggs,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
         columns,
         nbcols);
 
     add_to_select(q,provenance);
-    replace_provenance_function_by_expression(q, provenance, constants);
+    replace_provenance_function_by_expression(q, provenance);
   }
 
   for(i=0;i<q->rtable->length;++i) {
@@ -1015,21 +1005,18 @@ static PlannedStmt *provsql_planner(
     ParamListInfo boundParams)
 {
   if(q->commandType==CMD_SELECT && q->rtable) {
-    constants_t constants;
-    if(initialize_constants(&constants)) {
-      if(has_provenance(q,&constants)) {
+    if(has_provenance(q)) {
 //        clock_t begin = clock(), end;
 //        double time_spent;
 
-        Query *new_query = process_query(q, &constants);
-        if(new_query != NULL)
-          q = new_query;
-      
+      Query *new_query = process_query(q);
+      if(new_query != NULL)
+        q = new_query;
+    
 //        end = clock();
 //        time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
 //        ereport(NOTICE, (errmsg("planner time spent=%f",time_spent)));
-      }
-    } 
+    }
   }
 
   if(prev_planner)
@@ -1054,11 +1041,59 @@ void _PG_init(void)
                           NULL,
                           NULL); 
 
+  DefineCustomIntVariable("provsql.max_nb_gates",
+                          "Maximum number of gates kept in memory",
+                          NULL,
+                          &provsql_max_nb_gates,
+                          10000000,
+                          1000,
+                          INT_MAX,
+                          PGC_POSTMASTER,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
+  DefineCustomIntVariable("provsql.init_nb_gates",
+                          "Initial number of gates kept in memory",
+                          NULL,
+                          &provsql_init_nb_gates,
+                          1000,
+                          1000,
+                          INT_MAX,
+                          PGC_POSTMASTER,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
+  DefineCustomIntVariable("provsql.avg_nb_wires",
+                          "Average number of wires per gate kept in memory",
+                          NULL,
+                          &provsql_avg_nb_wires,
+                          2,
+                          1,
+                          1000,
+                          PGC_POSTMASTER,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
+
+  // Emit warnings for undeclared provsql.* configuration parameters
+  EmitWarningsOnPlaceholders("provsql");
+
+  // Request shared resources
+  RequestAddinShmemSpace(provsql_memsize());
+  RequestNamedLWLockTranche("provsql", 1);
+
   prev_planner = planner_hook;
+  prev_shmem_startup = shmem_startup_hook;
+
   planner_hook = provsql_planner;
+  shmem_startup_hook = provsql_shmem_startup;
 }
 
 void _PG_fini(void)
 {
   planner_hook = prev_planner;
+  shmem_startup_hook = prev_shmem_startup;
 }

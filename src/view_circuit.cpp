@@ -4,6 +4,7 @@ extern "C" {
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
 #include "executor/spi.h"
+#include "provsql_shmem.h"
 #include "provsql_utils.h"
   
   PG_FUNCTION_INFO_V1(view_circuit);
@@ -45,13 +46,8 @@ static vector<pair<int,int>> parse_array(string s)
 
 static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
 {
-  constants_t constants;
-  if(!initialize_constants(&constants)) {
-    elog(ERROR, "Cannot find provsql schema");
-  }
-
   Datum arguments[2]={token,token2prob};
-  Oid argtypes[2]={constants.OID_TYPE_PROVENANCE_TOKEN,REGCLASSOID};
+  Oid argtypes[2]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN,REGCLASSOID};
   char nulls[2] = {' ',' '};
   
   SPI_connect();

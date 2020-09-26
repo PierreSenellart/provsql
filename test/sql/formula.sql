@@ -7,14 +7,14 @@ CREATE TYPE formula_state AS (
   nbargs int
 );
 
-CREATE FUNCTION formula_plus_state(state formula_state, value text)
-  RETURNS formula_state AS
+CREATE FUNCTION formula_plus_state(state text[], value text)
+  RETURNS text[] AS
 $$
 BEGIN
-  IF state IS NULL OR state.nbargs=0 THEN
-    RETURN (value,1);
+  IF state IS NULL OR array_length(state, 1)=0 THEN
+    RETURN ARRAY[value];
   ELSE
-    RETURN (concat(state.formula,' ⊕ ',value),state.nbargs+1);
+    RETURN array_append(state, value);
   END IF;
 END
 $$ LANGUAGE plpgsql IMMUTABLE;
@@ -31,22 +31,40 @@ BEGIN
 END
 $$ LANGUAGE plpgsql IMMUTABLE;
 
+CREATE FUNCTION formula_array2formula(state text[])
+  RETURNS text AS
+$$
+  BEGIN
+    IF array_length(state,1) < 2 THEN
+      RETURN state;
+    ELSE
+      RETURN concat(
+        '(',
+        array_to_string(ARRAY(SELECT unnest(state) t ORDER BY t), ' ⊕ '),
+        ')'
+      );
+    END IF;
+  END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT;
+
 CREATE FUNCTION formula_state2formula(state formula_state)
   RETURNS text AS
 $$
-  SELECT
-    CASE
-      WHEN state.nbargs<2 THEN state.formula
-      ELSE concat('(',state.formula,')')
-    END;
-$$ LANGUAGE SQL IMMUTABLE STRICT;
+  BEGIN
+    IF state.nbargs<2 THEN
+      RETURN state.formula;
+    ELSE
+      RETURN concat('(',state.formula,')');
+    END IF;
+  END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT;
 
 CREATE AGGREGATE formula_plus(text)
 (
   sfunc = formula_plus_state,
-  stype = formula_state,
-  initcond = '(𝟘,0)',
-  finalfunc = formula_state2formula
+  stype = text[],
+  initcond = '{}',
+  finalfunc = formula_array2formula
 );
 
 CREATE AGGREGATE formula_times(text)

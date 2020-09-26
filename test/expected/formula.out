@@ -13,6 +13,6 @@
 ----------+-----------------------------------------------------------
  Berlin   | (Ellen ⊗ Susan)
  New York | (John ⊗ Paul)
- Paris    | ((Dave ⊗ Nancy) ⊕ (Dave ⊗ Magdalen) ⊕ (Magdalen ⊗ Nancy))
+ Paris    | ((Dave ⊗ Magdalen) ⊕ (Dave ⊗ Nancy) ⊕ (Magdalen ⊗ Nancy))
 (3 rows)
 

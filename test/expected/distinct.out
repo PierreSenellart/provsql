@@ -7,7 +7,7 @@
  classification |     formula     
 ----------------+-----------------
  unclassified   | John
- restricted     | (Paul ⊕ Nancy)
+ restricted     | (Nancy ⊕ Paul)
  confidential   | Dave
  secret         | (Ellen ⊕ Susan)
  top_secret     | Magdalen
