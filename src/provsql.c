@@ -11,7 +11,6 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/planner.h"
-#include "parser/analyze.h"
 #include "parser/parse_oper.h"
 #include "parser/parsetree.h"
 #include "utils/syscache.h"
@@ -36,7 +35,6 @@ extern void _PG_init(void);
 extern void _PG_fini(void);
 
 static planner_hook_type prev_planner = NULL;
-static post_parse_analyze_hook_type prev_post_parse_analyze = NULL;
 
 static Query *process_query(
     Query *q,
@@ -1041,23 +1039,6 @@ static PlannedStmt *provsql_planner(
     return standard_planner(q, cursorOptions, boundParams);
 }
 
-static void provsql_post_parse_analyze(
-    ParseState *pstate,
-    Query *q)
-{
-  if(q->commandType==CMD_SELECT && q->rtable) {
-    constants_t constants;
-    if(initialize_constants(&constants)) {
-      if(has_provenance(q,&constants)) {
-        // TODO
-      }
-    }
-  }
-
-  if(prev_post_parse_analyze)
-    prev_post_parse_analyze(pstate, q);
-}
-
 void _PG_init(void)
 {
   DefineCustomBoolVariable("provsql.where_provenance",
@@ -1072,11 +1053,9 @@ void _PG_init(void)
                           NULL); 
 
   prev_planner = planner_hook;
-  prev_post_parse_analyze = post_parse_analyze_hook;
 
   if(process_shared_preload_libraries_in_progress) {
     planner_hook = provsql_planner;
-    post_parse_analyze_hook = provsql_post_parse_analyze;
 
     provsql_shared_library_loaded=true;
   }
@@ -1085,5 +1064,4 @@ void _PG_init(void)
 void _PG_fini(void)
 {
   planner_hook = prev_planner;
-  post_parse_analyze_hook = prev_post_parse_analyze;
 }
