@@ -22,17 +22,8 @@ int provsql_avg_nb_wires;
 
 static void provsql_shmem_shutdown(int code, Datum arg);
 
-typedef struct provsqlHashEntry
-{
-  pg_uuid_t key;
-  gate_type type;
-  unsigned nb_children;
-  unsigned children_idx;
-  double prob;
-} provsqlHashEntry;
-
 provsqlSharedState *provsql_shared_state = NULL;
-static HTAB *provsql_hash = NULL;
+HTAB *provsql_hash = NULL;
 
 void provsql_shmem_startup(void)
 {

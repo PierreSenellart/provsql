@@ -78,9 +78,10 @@ CREATE OR REPLACE FUNCTION repair_key(_tbl regclass, key_att text)
 $$
 DECLARE
   key RECORD;
-  prefix_token uuid;
+  past_tokens uuid[];
   inner_token uuid;
-  times_token uuid;
+  monus_token uuid;
+  plus_token uuid;
   record RECORD;
   nb_rows INTEGER;
   ind INTEGER;
@@ -110,22 +111,30 @@ BEGIN
 
     remaining_prob := 1;
     ind := 0;
-    prefix_token = provsql.gate_one();
+    past_tokens = ARRAY[]::uuid[];
     FOR record IN
       EXECUTE format('SELECT provsql_temp FROM %I %s', _tbl, where_condition)
     LOOP
       IF ind < nb_rows - 1 THEN
         inner_token := uuid_generate_v4();
-        PERFORM create_gate(inner_token, 'input');
-        SELECT set_prob(inner_token, 1./nb_rows / remaining_prob);
-        times_token := provsql.provenance_times(prefix_token, inner_token);
+        PERFORM provsql.create_gate(inner_token, 'input');
+        PERFORM provsql.set_prob(inner_token, 1./nb_rows / remaining_prob);
+
+        if ind > 0 THEN
+          plus_token := provsql.provenance_plus(VARIADIC past_tokens);
+          monus_token := provsql.provenance_monus(inner_token, plus_token);
+        ELSE
+          monus_token := inner_token;
+        END IF;
+
         remaining_prob = remaining_prob - 1./nb_rows;
         ind := ind + 1;
-        prefix_token := provsql.provenance_monus(prefix_token, inner_token);
+        past_tokens := array_append(past_tokens, inner_token);
       ELSE
-        times_token := prefix_token;  
+        plus_token := provsql.provenance_plus(VARIADIC past_tokens);
+        monus_token := provsql.provenance_monus(provsql.gate_one(), plus_token); 
       END IF;
-      EXECUTE format('UPDATE %I SET provsql_temp = %L WHERE provsql_temp = %L', _tbl, times_token, record.provsql_temp);
+      EXECUTE format('UPDATE %I SET provsql_temp = %L WHERE provsql_temp = %L', _tbl, monus_token, record.provsql_temp);
     END LOOP;  
   END LOOP; 
   EXECUTE format('ALTER TABLE %I RENAME COLUMN provsql_temp TO provsql', _tbl);
@@ -443,7 +452,6 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
 
 CREATE OR REPLACE FUNCTION probability_evaluate(
   token provenance_token,
-  token2probability regclass,
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
@@ -467,6 +475,8 @@ CREATE OR REPLACE FUNCTION initialize_constants() RETURNS void AS
   'provsql','initialize_constants' LANGUAGE C;
 
 SELECT initialize_constants();
+SELECT create_gate(gate_zero(), 'zero');
+SELECT create_gate(gate_one(), 'one');
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 GRANT SELECT ON provenance_circuit_extra TO PUBLIC;

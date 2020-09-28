@@ -4,6 +4,7 @@
 #include "postgres.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
+#include "utils/hsearch.h"
 
 #include "provsql_utils.h"
 
@@ -23,5 +24,15 @@ typedef struct provsqlSharedState
   pg_uuid_t wires[FLEXIBLE_ARRAY_MEMBER];
 } provsqlSharedState;
 extern provsqlSharedState *provsql_shared_state;
+
+typedef struct provsqlHashEntry
+{
+  pg_uuid_t key;
+  gate_type type;
+  unsigned nb_children;
+  unsigned children_idx;
+  double prob;
+} provsqlHashEntry;
+extern HTAB *provsql_hash;
 
 #endif /* ifndef PROVSQL_SHMEM_H */
