@@ -78,10 +78,9 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
       if (type == "input")
       {
         c.setGate(f, DotGate::IN, SPI_getvalue(tuple, tupdesc, 4));
-      }
-      else
-      {
-        unsigned id = c.getGate(f);
+        
+      } else {
+        auto id=c.getGate(f);
 
         if (type == "times")
         {
@@ -144,8 +143,8 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
 
   // Display the circuit for debugging:
   int display = DatumGetInt64(is_debug);
-  if (display)
-    elog(WARNING, "%s", c.toString(0).c_str());
+  if(display)
+    elog(WARNING, "%s", c.toString(gate_t{0}).c_str());
 
   //Calling the dot renderer
   return c.render();

@@ -83,7 +83,7 @@ static string where_provenance_internal
 
         c.setGateInput(f, table, nb_columns);
       } else {
-        unsigned id=c.getGate(f);
+        auto id=c.getGate(f);
 
         if(type == "times") {
           c.setGate(f, WhereGate::TIMES);
@@ -119,7 +119,7 @@ static string where_provenance_internal
 
   SPI_finish();
   
-  unsigned gate = c.getGate(UUIDDatum2string(token));
+  auto gate = c.getGate(UUIDDatum2string(token));
 
   vector<set<WhereCircuit::Locator>> v = c.evaluate(gate);
 

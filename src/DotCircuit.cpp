@@ -1,4 +1,5 @@
 #include "DotCircuit.h"
+#include <type_traits>
 
 extern "C"
 {
@@ -13,30 +14,30 @@ extern "C"
 #include <cstdlib>
 
 // Has to be redefined because of name hiding
-unsigned DotCircuit::setGate(const uuid &u, DotGate type)
+gate_t DotCircuit::setGate(const uuid &u, DotGate type)
 {
-  unsigned id = Circuit::setGate(u, type);
-  if (type == DotGate::IN)
+ auto id = Circuit::setGate(u, type);
+  if(type == DotGate::IN)
     inputs.insert(id);
   return id;
 }
 
-unsigned DotCircuit::setGate(const uuid &u, DotGate type, std::string d)
+gate_t DotCircuit::setGate(const uuid &u, DotGate type, std::string d)
 {
-  unsigned id = setGate(u, type);
-  desc[id] = d;
+  auto id = setGate(u, type);
+  desc[static_cast<std::underlying_type<gate_t>::type>(id)] = d;
   return id;
 }
 
-unsigned DotCircuit::addGate()
+gate_t DotCircuit::addGate()
 {
-  unsigned id = Circuit::addGate();
+  auto id=Circuit::addGate();
   desc.push_back("");
   return id;
 }
 
 //Outputs the gate in Graphviz dot format
-std::string DotCircuit::toString(unsigned) const
+std::string DotCircuit::toString(gate_t) const
 {
   std::string op;
   std::string result="digraph circuit{\n graph [rankdir=UD] ;\n";
@@ -87,37 +88,31 @@ std::string DotCircuit::toString(unsigned) const
   }
 
   //looping through the gates and their wires
-  for (size_t i = 0; i < wires.size(); ++i)
-  {
-    if (gates[i] != DotGate::OMINUSR && gates[i] != DotGate::OMINUSL)
-    {
-      std::unordered_map<unsigned, unsigned> number_gates;
-      for (auto s : wires[i])
-      {
-        if (number_gates.find(s) != number_gates.end())
-        {
-          number_gates[s] = number_gates[s] + 1;
+  for(size_t i=0;i<wires.size();++i){
+    if(gates[i] != DotGate::OMINUSR && gates[i] != DotGate::OMINUSL){
+      std::unordered_map<gate_t, unsigned> number_gates;
+      for(auto s: wires[i]){
+        if(number_gates.find(s)!=number_gates.end()){
+          number_gates[s] = number_gates[s]+1;
         }
         else
         {
           number_gates[s] = 1;
         }
       }
-      for (auto el : number_gates)
+      for(auto [s,n]: number_gates)
       {
-        unsigned s = el.first;
-        unsigned n = el.second;
-        if(gates[s] == DotGate::OMINUSR || gates[s] == DotGate::OMINUSL) {
-          for(auto t: wires[s]) {
-            result += std::to_string(i)+" -> "+std::to_string(t);
-            if(gates[s] == DotGate::OMINUSR)
+        if(getGateType(s) == DotGate::OMINUSR || getGateType(s) == DotGate::OMINUSL) {
+          for(auto t: getWires(s)) {
+            result += std::to_string(i)+" -> "+to_string(t);
+            if(getGateType(s) == DotGate::OMINUSR)
               result += " [label=\"R\"];\n";
             else
               result += " [label=\"L\"];\n";
           }
         }
         else {
-          result += std::to_string(i)+" -> "+std::to_string(s);
+          result += std::to_string(i)+" -> "+to_string(s);
           if(n==1) {
             result += ";\n";
           }
@@ -141,7 +136,7 @@ std::string DotCircuit::render() const {
   std::string filename=cfilename, outfilename=filename+".out";
 
   std::ofstream ofs(filename.c_str());
-  ofs << toString(0);
+  ofs << toString(gate_t{0});
   ofs.close();
 
   //Executing the Graphviz dot renderer through graph-easy for ASCII

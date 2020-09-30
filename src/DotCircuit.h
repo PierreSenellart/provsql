@@ -22,20 +22,19 @@ enum class DotGate
   DELTA
 };
 
-class DotCircuit : public Circuit<DotGate>
-{
-private:
-  std::set<unsigned> inputs;
+class DotCircuit : public Circuit<DotGate> {
+ private:
+  std::set<gate_t> inputs;
   std::vector<std::string> desc;
-
-public:
-  unsigned addGate() override;
-  unsigned setGate(const uuid &u, DotGate t) override;
-  unsigned setGate(const uuid &u, DotGate t, std::string d);
+  
+ public:
+  gate_t addGate() override;
+  gate_t setGate(const uuid &u, DotGate t) override;
+  gate_t setGate(const uuid &u, DotGate t, std::string d);
 
   std::string render() const;
   
-  virtual std::string toString(unsigned g) const override;
+  virtual std::string toString(gate_t g) const override;
 };
 
 #endif /* DOT_CIRCUIT_H */

@@ -1,7 +1,6 @@
 #include "BooleanCircuit.h"
 
 extern "C" {
-#include "provsql_utils.h"
 #include <unistd.h>
 #include <math.h>
 }
@@ -13,44 +12,69 @@ extern "C" {
 #include <cstdlib>
 #include <iostream>
 
-using namespace std;
+#include "dDNNF.h"
 
-// Has to be redefined because of name hiding
-unsigned BooleanCircuit::setGate(const uuid &u, BooleanGate type)
+// "provsql_utils.h"
+#ifdef TDKC
+constexpr bool provsql_interrupted = false;
+#else
+#include "provsql_utils.h"
+#endif
+
+gate_t BooleanCircuit::setGate(BooleanGate type)
 {
- unsigned id = Circuit::setGate(u, type);
-  if(type == BooleanGate::IN)
+ auto id = Circuit::setGate(type);
+  if(type == BooleanGate::IN) {
+    setProb(id,1.);
     inputs.insert(id);
+  }
   return id;
 }
 
-unsigned BooleanCircuit::setGate(const uuid &u, BooleanGate type, double p)
+gate_t BooleanCircuit::setGate(const uuid &u, BooleanGate type)
 {
-  unsigned id = setGate(u, type);
-  prob[id] = p;
+ auto id = Circuit::setGate(u, type);
+  if(type == BooleanGate::IN) {
+    setProb(id,1.);
+    inputs.insert(id);
+  }
   return id;
 }
 
-unsigned BooleanCircuit::addGate()
+gate_t BooleanCircuit::setGate(const uuid &u, BooleanGate type, double p)
 {
-  unsigned id=Circuit::addGate();
+  auto id = setGate(u, type);
+  setProb(id,p);
+  return id;
+}
+
+gate_t BooleanCircuit::setGate(BooleanGate type, double p)
+{
+  auto id = setGate(type);
+  setProb(id,p);
+  return id;
+}
+
+gate_t BooleanCircuit::addGate()
+{
+  auto id=Circuit::addGate();
   prob.push_back(1);
   return id;
 }
 
-std::string BooleanCircuit::toString(unsigned g) const
+std::string BooleanCircuit::toString(gate_t g) const
 {
   std::string op;
-  string result;
+  std::string result;
 
-  switch(gates[g]) {
+  switch(getGateType(g)) {
     case BooleanGate::IN:
-      if(prob[g]==0.) {
+      if(getProb(g)==0.) {
         return "⊥";
-      } else if(prob[g]==1.) {
+      } else if(getProb(g)==1.) {
         return "⊤";
       } else {
-        return to_string(g)+"["+to_string(prob[g])+"]";
+        return to_string(g)+"["+std::to_string(getProb(g))+"]";
       }
     case BooleanGate::NOT:
       op="¬";
@@ -66,16 +90,16 @@ std::string BooleanCircuit::toString(unsigned g) const
       break;
   }
 
-  if(wires[g].empty()) {
-    if(gates[g]==BooleanGate::AND)
+  if(getWires(g).empty()) {
+    if(getGateType(g)==BooleanGate::AND)
       return "⊤";
-    else if(gates[g]==BooleanGate::OR)
+    else if(getGateType(g)==BooleanGate::OR)
       return "⊥";
     else return op;
   }
 
-  for(auto s: wires[g]) {
-    if(gates[g]==BooleanGate::NOT)
+  for(auto s: getWires(g)) {
+    if(getGateType(g)==BooleanGate::NOT)
       result = op;
     else if(!result.empty())
       result+=" "+op+" ";
@@ -85,42 +109,15 @@ std::string BooleanCircuit::toString(unsigned g) const
   return "("+result+")";
 }
 
-double BooleanCircuit::dDNNFEvaluation(unsigned g) const
-{
-  switch(gates[g]) {
-    case BooleanGate::IN:
-      return prob[g];
-    case BooleanGate::NOT:
-      return 1-prob[g];
-    case BooleanGate::AND:
-      break;
-    case BooleanGate::OR:
-      break;
-    case BooleanGate::UNDETERMINED:
-      throw CircuitException("Incorrect gate type");
-  }
-
-  double result=(gates[g]==BooleanGate::AND?1:0);
-  for(auto s: wires[g]) {
-    double d = dDNNFEvaluation(s);
-    if(gates[g]==BooleanGate::AND)
-      result*=d;
-    else
-      result+=d;
-  }
-
-  return result;
-}
-
-bool BooleanCircuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled) const
+bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const
 {
   bool disjunction=false;
 
-  switch(gates[g]) {
+  switch(getGateType(g)) {
     case BooleanGate::IN:
       return sampled.find(g)!=sampled.end();
     case BooleanGate::NOT:
-      return !evaluate(*(wires[g].begin()), sampled);
+      return !evaluate(*(getWires(g).begin()), sampled);
     case BooleanGate::AND:
       disjunction = false;
       break;
@@ -131,7 +128,7 @@ bool BooleanCircuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled
       throw CircuitException("Incorrect gate type");
   }
 
-  for(auto s: wires[g]) {
+  for(auto s: getWires(g)) {
     bool e = evaluate(s, sampled);
     if(disjunction && e)
       return true;
@@ -145,14 +142,14 @@ bool BooleanCircuit::evaluate(unsigned g, const unordered_set<unsigned> &sampled
     return true;
 }
 
-double BooleanCircuit::monteCarlo(unsigned g, unsigned samples) const
+double BooleanCircuit::monteCarlo(gate_t g, unsigned samples) const
 {
-  unsigned success=0;
+  auto success{0u};
 
   for(unsigned i=0; i<samples; ++i) {
-    unordered_set<unsigned> sampled;
-    for(unsigned in : inputs) {
-      if(rand() *1. / RAND_MAX < prob[in]) {
+    std::unordered_set<gate_t> sampled;
+    for(auto in: inputs) {
+      if(rand() *1. / RAND_MAX < getProb(in)) {
         sampled.insert(in);
       }
     }
@@ -161,13 +158,13 @@ double BooleanCircuit::monteCarlo(unsigned g, unsigned samples) const
       ++success;
     
     if(provsql_interrupted)
-      throw CircuitException("Interrupted after "+to_string(i+1)+" samples");
+      throw CircuitException("Interrupted after "+std::to_string(i+1)+" samples");
   }
 
   return success*1./samples;
 }
 
-double BooleanCircuit::possibleWorlds(unsigned g) const
+double BooleanCircuit::possibleWorlds(gate_t g) const
 { 
   if(inputs.size()>=8*sizeof(unsigned long long))
     throw CircuitException("Too many possible worlds to iterate over");
@@ -176,16 +173,16 @@ double BooleanCircuit::possibleWorlds(unsigned g) const
   double totalp=0.;
 
   for(unsigned long long i=0; i < nb; ++i) {
-    unordered_set<unsigned> s;
+    std::unordered_set<gate_t> s;
     double p = 1;
 
     unsigned j=0;
-    for(unsigned in : inputs) {
+    for(gate_t in : inputs) {
       if(i & (1 << j)) {
         s.insert(in);
-        p*=prob[in];
+        p*=getProb(in);
       } else {
-        p*=1-prob[in];
+        p*=1-getProb(in);
       }
       ++j;
     }
@@ -200,19 +197,19 @@ double BooleanCircuit::possibleWorlds(unsigned g) const
   return totalp;
 }
 
-std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
-  vector<vector<int>> clauses;
+std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
+  std::vector<std::vector<int>> clauses;
   
   // Tseytin transformation
-  for(unsigned i=0; i<gates.size(); ++i) {
-    switch(gates[i]) {
+  for(gate_t i{0}; i<gates.size(); ++i) {
+    switch(getGateType(i)) {
       case BooleanGate::AND:
         {
-          int id=i+1;
-          vector<int> c = {id};
-          for(int s: wires[i]) {
-            clauses.push_back({-id, s+1});
-            c.push_back(-s-1);
+          int id{static_cast<int>(i)+1};
+          std::vector<int> c = {id};
+          for(auto s: getWires(i)) {
+            clauses.push_back({-id, static_cast<int>(s)+1});
+            c.push_back(-static_cast<int>(s)-1);
           }
           clauses.push_back(c);
           break;
@@ -220,11 +217,11 @@ std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
 
       case BooleanGate::OR:
         {
-          int id=i+1;
-          vector<int> c = {-id};
-          for(int s: wires[i]) {
-            clauses.push_back({id, -s-1});
-            c.push_back(s+1);
+          int id{static_cast<int>(i)+1};
+          std::vector<int> c = {-id};
+          for(auto s: getWires(i)) {
+            clauses.push_back({id, -static_cast<int>(s)-1});
+            c.push_back(static_cast<int>(s)+1);
           }
           clauses.push_back(c);
         }
@@ -232,10 +229,10 @@ std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
 
       case BooleanGate::NOT:
         {
-          int id=i+1;
-          int s=*wires[i].begin();
-          clauses.push_back({-id,-s-1});
-          clauses.push_back({id,s+1});
+          int id=static_cast<int>(i)+1;
+          auto s=*getWires(i).begin();
+          clauses.push_back({-id,-static_cast<int>(s)-1});
+          clauses.push_back({id,static_cast<int>(s)+1});
           break;
         }
 
@@ -251,8 +248,8 @@ std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
   fd = mkstemp(cfilename);
   close(fd);
 
-  string filename=cfilename;
-  ofstream ofs(filename.c_str());
+  std::string filename=cfilename;
+  std::ofstream ofs(filename.c_str());
 
   ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
 
@@ -263,9 +260,9 @@ std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
     ofs << "0\n";
   }
   if(display_prob) {
-    for(unsigned in : inputs) {
-      ofs << "w " << (in+1) << " " << to_string(prob[in]) << "\n";
-      ofs << "w -" << (in+1) << " " << to_string(1. - prob[in]) << "\n";
+    for(gate_t in: inputs) {
+      ofs << "w " << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << getProb(in) << "\n";
+      ofs << "w -" << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << (1. - getProb(in)) << "\n";
     }
   }
 
@@ -274,13 +271,11 @@ std::string BooleanCircuit::Tseytin(unsigned g, bool display_prob=false) const {
   return filename;
 }
 
-double BooleanCircuit::compilation(unsigned g, string compiler) const {
-  string filename=BooleanCircuit::Tseytin(g);
-  string outfilename=filename+".nnf";
+double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
+  std::string filename=BooleanCircuit::Tseytin(g);
+  std::string outfilename=filename+".nnf";
 
-//  throw CircuitException("filename: "+filename);
-
-  string cmdline=compiler+" ";
+  std::string cmdline=compiler+" ";
   if(compiler=="d4") {
     cmdline+=filename+" -out="+outfilename;
   } else if(compiler=="c2d") {
@@ -302,9 +297,9 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
   if(retvalue)    
     throw CircuitException("Error executing "+compiler);
   
-  ifstream ifs(outfilename.c_str());
+  std::ifstream ifs(outfilename.c_str());
 
-  string nnf;
+  std::string nnf;
   getline(ifs, nnf, ' ');
 
   if(nnf!="nnf") // unsatisfiable formula
@@ -313,16 +308,16 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
   unsigned nb_nodes, foobar, nb_variables;
   ifs >> nb_nodes >> foobar >> nb_variables;
 
-  BooleanCircuit dnnf;
+  dDNNF dnnf;
 
   if(nb_variables!=gates.size())
-    throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + to_string(nb_variables) +" vs " + to_string(gates.size()) + ")");
+    throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + std::to_string(nb_variables) +" vs " + std::to_string(gates.size()) + ")");
 
   std::string line;
   getline(ifs,line);
   unsigned i=0;
   while(getline(ifs,line)) {
-    stringstream ss(line);
+    std::stringstream ss(line);
     
     char c;
     ss >> c;
@@ -330,21 +325,21 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
     if(c=='O') {
       int var, args;
       ss >> var >> args;
-      unsigned id=dnnf.getGate(to_string(i));
-      dnnf.setGate(to_string(i), BooleanGate::OR);
+      auto id=dnnf.getGate(std::to_string(i));
+      dnnf.setGate(std::to_string(i), BooleanGate::OR);
       int g;
       while(ss >> g) {
-        unsigned id2=dnnf.getGate(to_string(g));
+        auto id2=dnnf.getGate(std::to_string(g));
         dnnf.addWire(id,id2);
       }
     } else if(c=='A') {
       int args;
       ss >> args;
-      unsigned id=dnnf.getGate(to_string(i));
-      dnnf.setGate(to_string(i), BooleanGate::AND);
+      auto id=dnnf.getGate(std::to_string(i));
+      dnnf.setGate(std::to_string(i), BooleanGate::AND);
       int g;
       while(ss >> g) {
-        unsigned id2=dnnf.getGate(to_string(g));
+        auto id2=dnnf.getGate(std::to_string(g));
         dnnf.addWire(id,id2);
       }
     } else if(c=='L') {
@@ -352,14 +347,14 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
       ss >> leaf;
       if(gates[abs(leaf)-1]==BooleanGate::IN) {
         if(leaf<0) {
-          dnnf.setGate(to_string(i), BooleanGate::IN, 1-prob[-leaf-1]);
+          dnnf.setGate(std::to_string(i), BooleanGate::IN, 1-prob[-leaf-1]);
         } else {
-          dnnf.setGate(to_string(i), BooleanGate::IN, prob[leaf-1]);
+          dnnf.setGate(std::to_string(i), BooleanGate::IN, prob[leaf-1]);
         }
       } else
-        dnnf.setGate(to_string(i), BooleanGate::IN, 1.);
+        dnnf.setGate(std::to_string(i), BooleanGate::IN, 1.);
     } else 
-      throw CircuitException(string("Unreadable d-DNNF (unknown node type: ")+c+")");
+      throw CircuitException(std::string("Unreadable d-DNNF (unknown node type: ")+c+")");
 
     ++i;
   }
@@ -369,30 +364,28 @@ double BooleanCircuit::compilation(unsigned g, string compiler) const {
     throw CircuitException("Error removing "+outfilename);
   }
 
-//  throw CircuitException(toString(g) + "\n" + dnnf.toString(dnnf.getGate(to_string(i-1))));
-
-  return dnnf.dDNNFEvaluation(dnnf.getGate(to_string(i-1)));
+  return dnnf.dDNNFEvaluation(dnnf.getGate(std::to_string(i-1)));
 }
 
-double BooleanCircuit::WeightMC(unsigned g, string opt) const {
-  string filename=BooleanCircuit::Tseytin(g, true);
+double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
+  std::string filename=BooleanCircuit::Tseytin(g, true);
 
   //opt of the form 'delta;epsilon'
-  stringstream ssopt(opt); 
-  string delta_s, epsilon_s;
+  std::stringstream ssopt(opt); 
+  std::string delta_s, epsilon_s;
   getline(ssopt, delta_s, ';');
   getline(ssopt, epsilon_s, ';');
 
   double delta = 0;
   try { 
     delta=stod(delta_s); 
-  } catch (invalid_argument &e) {
+  } catch (std::invalid_argument &e) {
     delta=0;
   }
   double epsilon = 0;
   try {
     epsilon=stod(epsilon_s);
-  } catch (invalid_argument &e) {
+  } catch (std::invalid_argument &e) {
     epsilon=0;
   }
   if(delta == 0) delta=0.2;
@@ -403,7 +396,7 @@ double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   //calcul pivotAC
   const double pivotAC=2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
 
-  string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+to_string(pivotAC)+ " "+filename+" > "+filename+".out";
+  std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+filename+".out";
 
   int retvalue=system(cmdline.c_str());
   if(retvalue) {
@@ -411,33 +404,74 @@ double BooleanCircuit::WeightMC(unsigned g, string opt) const {
   }
 
   //parsing
-  ifstream ifs((filename+".out").c_str());
-  string line, prev_line;
+  std::ifstream ifs((filename+".out").c_str());
+  std::string line, prev_line;
   while(getline(ifs,line))
     prev_line=line;
 
-  stringstream ss(prev_line);
-  string result;
+  std::stringstream ss(prev_line);
+  std::string result;
   ss >> result >> result >> result >> result >> result;
   
-  istringstream iss(result);
-  string val, exp;
+  std::istringstream iss(result);
+  std::string val, exp;
   getline(iss, val, 'x');
   getline(iss, exp);
   double value=stod(val);
   exp=exp.substr(2);
   double exponent=stod(exp);
   double ret=value*(pow(2.0,exponent));
-//  throw CircuitException(to_string(ret));
 
-
-//  if(unlink(filename.c_str())) {
-//    throw CircuitException("Error removing "+filename);
-//  }
+  if(unlink(filename.c_str())) {
+    throw CircuitException("Error removing "+filename);
+  }
 
   if(unlink((filename+".out").c_str())) {
     throw CircuitException("Error removing "+filename+".out");
   }
 
   return ret;
+}
+
+double BooleanCircuit::independentEvaluationInternal(
+    gate_t g, std::set<gate_t> &seen) const
+{
+  double result=1.;
+
+  switch(getGateType(g)) {
+    case BooleanGate::AND:
+      for(const auto &c: getWires(g)) {
+        result*=independentEvaluationInternal(c, seen);
+      }
+      break;
+
+    case BooleanGate::OR:
+      for(const auto &c: getWires(g)) {
+        result*=1-independentEvaluationInternal(c, seen);
+      }
+      result=1-result;
+      break;
+
+    case BooleanGate::NOT:
+      result=1-independentEvaluationInternal(*getWires(g).begin(), seen);
+      break;
+
+    case BooleanGate::IN:
+      if(seen.find(g)!=seen.end())
+        throw CircuitException("Not an independent circuit");
+      seen.insert(g);
+      result=getProb(g);
+      break;
+
+    case BooleanGate::UNDETERMINED:
+      throw CircuitException("Bad gate");
+  }
+
+  return result;
+}
+
+double BooleanCircuit::independentEvaluation(gate_t g) const
+{
+  std::set<gate_t> seen;
+  return independentEvaluationInternal(g, seen);
 }

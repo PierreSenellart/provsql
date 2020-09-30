@@ -13,6 +13,7 @@ extern "C" {
 
 #include "BooleanCircuit.h"
 #include "provsql_utils_cpp.h"
+#include "dDNNFTreeDecompositionBuilder.h"
 
 using namespace std;
 
@@ -53,7 +54,7 @@ static Datum probability_evaluate_internal
       if(type == "input") {
         c.setGate(f, BooleanGate::IN, stod(SPI_getvalue(tuple, tupdesc, 4)));
       } else {
-        unsigned id=c.getGate(f);
+        auto id=c.getGate(f);
 
         if(type == "monus" || type == "monusl" || type == "times" || type=="project" || type=="eq") {
           c.setGate(f, BooleanGate::AND);
@@ -75,54 +76,74 @@ static Datum probability_evaluate_internal
 // elog(WARNING, "%s", c.toString(c.getGate(UUIDDatum2string(token))).c_str());
 
   double result;
-  unsigned gate = c.getGate(UUIDDatum2string(token));
+  auto gate = c.getGate(UUIDDatum2string(token));
 
   provsql_interrupted = false;
 
   void (*prev_sigint_handler)(int);
   prev_sigint_handler = signal(SIGINT, provsql_sigint_handler);
 
-  if(method=="monte-carlo") {
-    int samples;
-    bool invalid=false;
+  try {
+    if(method=="monte-carlo") {
+      int samples=0;
 
-    try {
-      samples = stoi(args);
-    } catch(std::invalid_argument &e) {
-      invalid=true;
-    }
+      try {
+        samples = stoi(args);
+      } catch(std::invalid_argument &e) {
+      }
 
-    if(invalid || samples==0 || samples<0)
-      elog(ERROR, "Invalid number of samples: '%s'", args.c_str());
-    
-    try {
+      if(samples<=0)
+        elog(ERROR, "Invalid number of samples: '%s'", args.c_str());
+      
       result = c.monteCarlo(gate, samples);
-    } catch(CircuitException &e) {
-      elog(ERROR, "%s", e.what());
-    }
-  } else if(method=="possible-worlds") {
-    if(!args.empty())
-      elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
+    } else if(method=="possible-worlds") {
+      if(!args.empty())
+        elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
 
-    try {
       result = c.possibleWorlds(gate);
-    } catch(CircuitException &e) {
-      elog(ERROR, "%s", e.what());
-    }
-  } else if(method=="compilation") {
-    try {
+    } else if(method=="compilation") {
       result = c.compilation(gate, args);
-    } catch(CircuitException &e) {
-      elog(ERROR, "%s", e.what());
+    } else if(method=="weightmc") {
+      result = c.WeightMC(gate, args);
+    } else if(method=="tree-decomposition") {
+      try {
+        TreeDecomposition td(c);
+        auto dnnf{
+          dDNNFTreeDecompositionBuilder{
+            c,
+            UUIDDatum2string(token),
+            td}.build()
+        };
+        result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
+      } catch(TreeDecompositionException &) {
+        elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
+      }
+    } else if(method=="independent") {
+      result = c.independentEvaluation(gate);
+    } else if(method=="") {
+      // Default evaluation, use independent, tree-decomposition, and
+      // compilation in order until one works
+      try {
+       result = c.independentEvaluation(gate);
+      } catch(CircuitException &) {
+        try {
+          TreeDecomposition td(c);
+          auto dnnf{
+            dDNNFTreeDecompositionBuilder{
+              c,
+                UUIDDatum2string(token),
+                td}.build()
+          };
+          result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
+        } catch(TreeDecompositionException &) {
+          result = c.compilation(gate, "d4");
+        }
+      }
+    } else {
+      elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());
     }
-  } else if(method=="weightmc") {
-    try {
-	    result = c.WeightMC(gate, args);
-    } catch(CircuitException &e) {
-	    elog(ERROR, "%s", e.what());
-    }
-  } else {
-    elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());
+  } catch(CircuitException &e) {
+    elog(ERROR, "%s", e.what());
   }
 
   provsql_interrupted = false;

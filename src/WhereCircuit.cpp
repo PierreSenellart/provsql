@@ -13,39 +13,39 @@ extern "C" {
 
 using namespace std;
 
-unsigned WhereCircuit::setGate(const uuid &u, WhereGate type)
+gate_t WhereCircuit::setGate(const uuid &u, WhereGate type)
 {
   return Circuit::setGate(u, type);
 }
 
-unsigned WhereCircuit::setGateProjection(const uuid &u, vector<int> &&infos)
+gate_t WhereCircuit::setGateProjection(const uuid &u, vector<int> &&infos)
 {
-  unsigned id = setGate(u, WhereGate::PROJECT);
+  auto id = setGate(u, WhereGate::PROJECT);
   projection_info[id]=infos;
   return id;
 }
   
-unsigned WhereCircuit::setGateEquality(const uuid &u, int pos1, int pos2)
+gate_t WhereCircuit::setGateEquality(const uuid &u, int pos1, int pos2)
 {
-  unsigned id = setGate(u, WhereGate::EQ);
+  auto id = setGate(u, WhereGate::EQ);
   equality_info[id]=make_pair(pos1,pos2);
   return id;
 }
 
-unsigned WhereCircuit::setGateInput(const uuid &u, string table, int nb_columns)
+gate_t WhereCircuit::setGateInput(const uuid &u, string table, int nb_columns)
 {
-  unsigned id = setGate(u, WhereGate::IN);
+  auto id = setGate(u, WhereGate::IN);
   input_token[id]=u;
   input_info[id]=make_pair(table, nb_columns);
   return id;
 }
 
-string WhereCircuit::toString(unsigned g) const
+string WhereCircuit::toString(gate_t g) const
 {
   std::string op;
   string result;
 
-  switch(gates[g]) {
+  switch(getGateType(g)) {
     case WhereGate::IN:
       return input_info.find(g)->second.first+":"+to_string(input_info.find(g)->second.second)+":"+input_token.find(g)->second;
     case WhereGate::UNDETERMINED:
@@ -74,8 +74,8 @@ string WhereCircuit::toString(unsigned g) const
       op="=["+to_string(equality_info.find(g)->second.first)+","+to_string(equality_info.find(g)->second.second)+"]";  
   }
 
-  for(auto s: wires[g]) {
-    if(gates[g]==WhereGate::PROJECT || gates[g]==WhereGate::EQ)
+  for(auto s: getWires(g)) {
+    if(getGateType(g)==WhereGate::PROJECT || getGateType(g)==WhereGate::EQ)
       result = op;
     else if(!result.empty())
       result+=" "+op+" ";
@@ -85,11 +85,11 @@ string WhereCircuit::toString(unsigned g) const
   return "("+result+")";
 }
   
-vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(unsigned g) const
+vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(gate_t g) const
 {
   vector<set<Locator>> v;
 
-  switch(gates[g]) {
+  switch(getGateType(g)) {
     case WhereGate::IN:
       {
         string table=input_info.find(g)->second.first;
@@ -104,10 +104,10 @@ vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(unsigned g) const
       break;
 
     case WhereGate::TIMES:
-      if(wires[g].empty())
+      if(getWires(g).empty())
         throw CircuitException("No wire connected to ⊗ gate");
 
-      for(auto g2 : wires[g]) {
+      for(auto g2 : getWires(g)) {
         if(v.empty())
           v=evaluate(g2);
         else {
@@ -118,10 +118,10 @@ vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(unsigned g) const
       break;
 
     case WhereGate::PLUS:
-      if(wires[g].empty())
+      if(getWires(g).empty())
         throw CircuitException("No wire connected to ⊕ gate");
 
-      for(auto g2 : wires[g]) {
+      for(auto g2 : getWires(g)) {
         if(v.empty())
           v=evaluate(g2);
         else {
@@ -137,11 +137,11 @@ vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(unsigned g) const
       break;
 
     case WhereGate::PROJECT:
-      if(wires[g].size()!=1)
+      if(getWires(g).size()!=1)
         throw CircuitException("Not exactly one wire connected to Π gate");
 
       {
-        vector<set<Locator>> w=evaluate(*wires[g].begin());
+        vector<set<Locator>> w=evaluate(*getWires(g).begin());
         vector<int> positions=projection_info.find(g)->second;
         for(auto i : positions) {
           if(i==0)
@@ -153,10 +153,10 @@ vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(unsigned g) const
       break;
 
     case WhereGate::EQ:
-      if(wires[g].size()!=1)
+      if(getWires(g).size()!=1)
         throw CircuitException("Not exactly one wire connected to = gate");
 
-      v=evaluate(*wires[g].begin());
+      v=evaluate(*getWires(g).begin());
       {
         pair<int,int> positions=equality_info.find(g)->second;
         v[positions.first-1].insert(v[positions.second-1].begin(), v[positions.second-1].end());

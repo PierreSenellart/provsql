@@ -11,18 +11,18 @@ enum class WhereGate { UNDETERMINED, TIMES, PLUS, EQ, PROJECT, IN };
 
 class WhereCircuit : public Circuit<WhereGate> {
  private:
-  std::unordered_map<unsigned, uuid> input_token;
-  std::unordered_map<unsigned, std::pair<std::string,int>> input_info;
-  std::unordered_map<unsigned, std::vector<int>> projection_info;
-  std::unordered_map<unsigned, std::pair<int,int>> equality_info;
+  std::unordered_map<gate_t, uuid> input_token;
+  std::unordered_map<gate_t, std::pair<std::string,int>> input_info;
+  std::unordered_map<gate_t, std::vector<int>> projection_info;
+  std::unordered_map<gate_t, std::pair<int,int>> equality_info;
   
  public:
-  unsigned setGate(const uuid &u, WhereGate t) override;
-  unsigned setGateInput(const uuid &u, std::string table, int nb_columns);
-  unsigned setGateProjection(const uuid &u, std::vector<int> &&infos);
-  unsigned setGateEquality(const uuid &u, int pos1, int pos2);
+  gate_t setGate(const uuid &u, WhereGate t) override;
+  gate_t setGateInput(const uuid &u, std::string table, int nb_columns);
+  gate_t setGateProjection(const uuid &u, std::vector<int> &&infos);
+  gate_t setGateEquality(const uuid &u, int pos1, int pos2);
 
-  std::string toString(unsigned g) const override;
+  std::string toString(gate_t g) const override;
 
   struct Locator {
     std::string table;
@@ -34,7 +34,7 @@ class WhereCircuit : public Circuit<WhereGate> {
     std::string toString() const;
   };
 
-  std::vector<std::set<Locator>> evaluate(unsigned g) const;
+  std::vector<std::set<Locator>> evaluate(gate_t g) const;
 };
 
 #endif /* WHERE_CIRCUIT_H */

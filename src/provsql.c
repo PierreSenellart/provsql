@@ -12,7 +12,6 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
 #include "optimizer/planner.h"
-#include "parser/analyze.h"
 #include "parser/parse_oper.h"
 #include "parser/parsetree.h"
 #include "utils/syscache.h"
@@ -27,7 +26,6 @@
 
 PG_MODULE_MAGIC;
 
-bool provsql_shared_library_loaded = false;
 bool provsql_interrupted = false;
 bool provsql_where_provenance = false;
 bool provsql_debug = false;
@@ -38,7 +36,6 @@ extern void _PG_init(void);
 extern void _PG_fini(void);
 
 static planner_hook_type prev_planner = NULL;
-static post_parse_analyze_hook_type prev_post_parse_analyze = NULL;
 
 static Query *process_query(
     Query *q,
@@ -1319,11 +1316,20 @@ static Query *process_query(
   bool supported=true;
   bool group_by_rewrite = false;
   int nbcols=0;
-  int **columns=(int **) palloc(q->rtable->length*sizeof(int*));
+  int **columns;
   unsigned i=0;
 
   if(provsql_debug)
     elog_node_display(NOTICE, "Before ProvSQL query rewriting", q, true);
+    
+  if(q->rtable == NULL) {
+    // No FROM clause, we can skip this query
+    return NULL;
+  }
+
+  columns=(int **) palloc(q->rtable->length*sizeof(int*));
+
+//ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
   if (q->setOperations)
   {
@@ -1543,25 +1549,11 @@ static PlannedStmt *provsql_planner(
     return standard_planner(q, cursorOptions, boundParams);
 }
 
-static void provsql_post_parse_analyze(
-    ParseState *pstate,
-    Query *q)
-{
-  if(q->commandType==CMD_SELECT && q->rtable) {
-    constants_t constants;
-    if(initialize_constants(&constants)) {
-      if(has_provenance(q,&constants)) {
-        // TODO
-      }
-    }
-  }
-
-  if(prev_post_parse_analyze)
-    prev_post_parse_analyze(pstate, q);
-}
-
 void _PG_init(void)
 {
+  if(!process_shared_preload_libraries_in_progress)
+    elog(ERROR, "provsql needs to be added to the shared_preload_libraries configuration variable");
+
   DefineCustomBoolVariable("provsql.where_provenance",
                            "Should ProvSQL track where-provenance?",
                            "1 turns where-provenance on, 0 off.",
@@ -1584,19 +1576,10 @@ void _PG_init(void)
                            NULL);
 
   prev_planner = planner_hook;
-  prev_post_parse_analyze = post_parse_analyze_hook;
-
-  if (process_shared_preload_libraries_in_progress)
-  {
-    planner_hook = provsql_planner;
-    post_parse_analyze_hook = provsql_post_parse_analyze;
-
-    provsql_shared_library_loaded = true;
-  }
+  planner_hook = provsql_planner;
 }
 
 void _PG_fini(void)
 {
   planner_hook = prev_planner;
-  post_parse_analyze_hook = prev_post_parse_analyze;
 }
