@@ -786,7 +786,12 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
     {
       Aggref *ar_v = (Aggref *)te_v->expr; 
       TargetEntry *te_new = makeNode(TargetEntry);
+#if PG_VERSION_NUM >= 90600
+    /* aggargtypes was added in version 9.6 of PostgreSQL */
       var->vartype = linitial_oid(ar_v->aggargtypes);
+#else
+      var->vartype = exprType((Node*) ((TargetEntry*)linitial(ar_v->args))->expr);
+#endif
       te_new->resno = 1;
       te_new->expr = (Expr*) var;
       ar_v->args = list_make1(te_new);
