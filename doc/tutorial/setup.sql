@@ -51,6 +51,28 @@ BEGIN
 END
 $$;
 
+CREATE FUNCTION public.formula_delta(formula text) RETURNS text
+    LANGUAGE plpgsql IMMUTABLE
+    AS $$
+BEGIN    
+  SELECT concat('δ(',formula,')');
+END
+$$;
+
+CREATE AGGREGATE public.formula_plus(text) (
+    SFUNC = public.formula_plus_state,
+    STYPE = public.formula_state,
+    INITCOND = '(𝟘,0)',
+    FINALFUNC = public.formula_state2formula
+);
+
+CREATE AGGREGATE public.formula_times(text) (
+    SFUNC = public.formula_times_state,
+    STYPE = public.formula_state,
+    INITCOND = '(𝟙,0)',
+    FINALFUNC = public.formula_state2formula
+);
+
 CREATE FUNCTION public.formula(token provsql.provenance_token, token2value regclass) RETURNS text
     LANGUAGE plpgsql
     AS $$
@@ -61,7 +83,8 @@ BEGIN
     '𝟙'::text,
     'formula_plus',
     'formula_times',
-    'formula_monus');
+    'formula_monus',
+    'formula_delta');
 END
 $$;
 
@@ -79,7 +102,8 @@ BEGIN
     1,
     'counting_plus',
     'counting_times',
-    'counting_monus');
+    'counting_monus',
+    'counting_delta');
 END
 $$;
 
@@ -113,19 +137,12 @@ CREATE AGGREGATE public.counting_times(integer) (
     INITCOND = '1'
 );
 
-CREATE AGGREGATE public.formula_plus(text) (
-    SFUNC = public.formula_plus_state,
-    STYPE = public.formula_state,
-    INITCOND = '(𝟘,0)',
-    FINALFUNC = public.formula_state2formula
-);
+CREATE FUNCTION public.counting_delta(counting integer) RETURNS integer
+    LANGUAGE sql IMMUTABLE STRICT
+    AS $$
+  SELECT CASE WHEN counting > 0 THEN 1 ELSE 1 END
+$$;
 
-CREATE AGGREGATE public.formula_times(text) (
-    SFUNC = public.formula_times_state,
-    STYPE = public.formula_state,
-    INITCOND = '(𝟙,0)',
-    FINALFUNC = public.formula_state2formula
-);
 
 
 -- Example tables

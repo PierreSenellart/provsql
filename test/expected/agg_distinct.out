@@ -1,0 +1,20 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   city   | count 
+----------+-------
+ Berlin   | 1 (*)
+ New York | 2 (*)
+ Paris    | 3 (*)
+(3 rows)
+
+   city   |                     aggregation_formula                     
+----------+-------------------------------------------------------------
+ Berlin   | count{ (1 * δ((Ellen ⊕ Susan))) }
+ New York | count{ (1 * δ(John)) , (1 * δ(Paul)) }
+ Paris    | count{ (1 * δ(Nancy)) , (1 * δ(Dave)) , (1 * δ(Magdalen)) }
+(3 rows)
+
