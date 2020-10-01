@@ -12,20 +12,21 @@ The ProvSQL system currently supports proper management of provenance
 attached to SQL queries, in the form of a provenance circuit, suitable
 both for regular Boolean provenance, arbitrary semiring provenance, with
 or without monus (m-semiring), in the free m-semiring, or specialized to
-any m-semiring of choice. It also supports where-provenance and
-probability computation from the provenance, through a variety of
-methods.
+any m-semiring of choice. It also supports aggregation using semimodule
+provenance aggregation, where-provenance, and probability computation from
+the provenance, through a variety of methods.
 
-The following SQL queries are currently supported.
+The following SQL features are currently supported.
 * Regular SELECT-FROM-WHERE queries (aka conjunctive queries with
   multiset semantics)
 * JOIN queries (regular joins only; outer, semijoins, and antijoins
   are not currently supported)
 * SELECT queries with nested SELECT subqueries in the FROM clause
-* GROUP BY queries (without aggregation)
+* GROUP BY queries
 * SELECT DISTINCT queries (i.e., set semantics)
 * UNION's or UNION ALL's of SELECT queries
 * EXCEPT of SELECT queries
+* aggregation on the final query
 
 ## Docker container
 
@@ -139,7 +140,7 @@ See [security.sql](test/sql/security.sql) and
 
 See the other examples in [test/sql](test/sql) for other use cases.
 
-A demonstration of the ProvSQL system is available as a video, on
+A demonstration of an early version of the ProvSQL system is available as a video, on
 https://youtu.be/iqzSNfGHbEE?vq=hd1080
 The SQL commands used in this demonstration can be found in the [doc/demo/](doc/demo/)
 directory. An article describing this demonstration, presented at the VLDB 2018.
