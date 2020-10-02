@@ -21,17 +21,19 @@ struct pg_uuid_t
 #include "nodes/pg_list.h"
 
 typedef enum gate_type {
-  gate_input, gate_plus, gate_times, gate_monus, gate_project, gate_zero, gate_one, gate_eq, nb_gate_types
+  gate_input, gate_plus, gate_times, gate_monus, gate_project, gate_zero, gate_one, gate_eq, gate_agg, gate_semimod, gate_cmp, gate_delta, gate_value, nb_gate_types
 } gate_type;
 
 typedef struct constants_t {
   Oid OID_SCHEMA_PROVSQL;
   Oid OID_TYPE_PROVENANCE_TOKEN;
   Oid OID_TYPE_GATE_TYPE;
+  Oid OID_TYPE_AGG_TOKEN;
   Oid OID_TYPE_UUID;
   Oid OID_TYPE_UUID_ARRAY;
   Oid OID_TYPE_INT;
   Oid OID_TYPE_INT_ARRAY;
+  Oid OID_TYPE_VARCHAR;
   Oid OID_FUNCTION_ARRAY_AGG;
   Oid OID_FUNCTION_PROVENANCE_PLUS;
   Oid OID_FUNCTION_PROVENANCE_TIMES;
@@ -40,6 +42,9 @@ typedef struct constants_t {
   Oid OID_FUNCTION_PROVENANCE_EQ;
   Oid OID_FUNCTION_PROVENANCE;
   Oid GATE_TYPE_TO_OID[nb_gate_types];
+  Oid OID_FUNCTION_PROVENANCE_DELTA;
+  Oid OID_FUNCTION_PROVENANCE_AGGREGATE;
+  Oid OID_FUNCTION_PROVENANCE_SEMIMOD;
 } constants_t;
 
 Oid find_equality_operator(Oid ltypeId, Oid rtypeId);

@@ -1,6 +1,8 @@
 \set ECHO none
 SET search_path TO public, provsql;
 
+SET provsql.where_provenance = on;
+
 CREATE TABLE vc_result AS
 SELECT city, view_circuit(provenance(),'d') AS ok
 FROM ( 

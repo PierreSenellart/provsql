@@ -18,6 +18,7 @@ function getdb($c) {
 }
 
 $db = getdb($config);
+pg_exec($db , "SET provsql.where_provenance = on"); 
 ?>
 
 <!doctype html>

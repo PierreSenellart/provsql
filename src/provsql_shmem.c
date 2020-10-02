@@ -355,6 +355,16 @@ Datum initialize_constants(PG_FUNCTION_ARGS)
       ObjectIdGetDatum(provsql_shared_state->constants.OID_SCHEMA_PROVSQL)
   );
   CheckOid(OID_TYPE_GATE_TYPE);
+  
+  provsql_shared_state->constants.OID_TYPE_AGG_TOKEN = GetSysCacheOid2(
+      TYPENAMENSP,
+#if PG_VERSION_NUM >= 120000
+      Anum_pg_type_oid,
+#endif
+      CStringGetDatum("agg_token"),
+      ObjectIdGetDatum(provsql_shared_state->constants.OID_SCHEMA_PROVSQL)
+  );
+  CheckOid(OID_TYPE_AGG_TOKEN);
 
   provsql_shared_state->constants.OID_TYPE_UUID = TypenameGetTypid("uuid");
   CheckOid(OID_TYPE_UUID);
@@ -388,6 +398,15 @@ Datum initialize_constants(PG_FUNCTION_ARGS)
 
   provsql_shared_state->constants.OID_FUNCTION_PROVENANCE = get_provsql_func_oid("provenance");
   CheckOid(OID_FUNCTION_PROVENANCE);
+  
+  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_DELTA = get_provsql_func_oid("provenance_delta");
+  CheckOid(OID_FUNCTION_PROVENANCE_DELTA);
+
+  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_AGGREGATE = get_provsql_func_oid("provenance_aggregate");
+  CheckOid(OID_FUNCTION_PROVENANCE_AGGREGATE);
+
+  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_SEMIMOD = get_provsql_func_oid("provenance_semimod");
+  CheckOid(OID_FUNCTION_PROVENANCE_SEMIMOD);
 
   #define GET_GATE_TYPE_OID(x) { \
   provsql_shared_state->constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
@@ -404,6 +423,11 @@ Datum initialize_constants(PG_FUNCTION_ARGS)
   GET_GATE_TYPE_OID(zero);
   GET_GATE_TYPE_OID(one);
   GET_GATE_TYPE_OID(eq);
+  GET_GATE_TYPE_OID(agg);
+  GET_GATE_TYPE_OID(semimod);
+  GET_GATE_TYPE_OID(cmp);
+  GET_GATE_TYPE_OID(delta);
+  GET_GATE_TYPE_OID(value);
 
   PG_RETURN_VOID();
 }

@@ -75,6 +75,12 @@ CREATE AGGREGATE formula_times(text)
   finalfunc = formula_state2formula
 );
 
+CREATE FUNCTION public.formula_delta(formula text) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT
+    AS $$   
+  SELECT concat('δ(',formula,')')
+$$;
+
 CREATE FUNCTION formula_monus(formula1 text, formula2 text) RETURNS text AS
 $$
   SELECT concat('(',formula1,' ⊖ ',formula2,')')
@@ -90,7 +96,8 @@ BEGIN
     '𝟙'::text,
     'formula_plus',
     'formula_times',
-    'formula_monus');
+    'formula_monus',
+    'formula_delta');
 END
 $$ LANGUAGE plpgsql;
 

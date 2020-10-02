@@ -1,7 +1,8 @@
 #include "DotCircuit.h"
 #include <type_traits>
 
-extern "C" {
+extern "C"
+{
 #include "provsql_utils.h"
 #include <unistd.h>
 }
@@ -11,7 +12,6 @@ extern "C" {
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
-
 
 // Has to be redefined because of name hiding
 gate_t DotCircuit::setGate(const uuid &u, DotGate type)
@@ -44,35 +44,41 @@ std::string DotCircuit::toString(gate_t) const
   
   //looping through the gates
   //eliminating the minusr and minusl gates
-  unsigned i=0;
-  for(auto g:gates){
-    if(g != DotGate::OMINUSR && g != DotGate::OMINUSL){
-      result += std::to_string(i)+" [label=";
-      switch(g) {
-        case DotGate::IN:
-          result+="\""+desc[i]+"\"";
-          break;
-        case DotGate::OMINUS:
-          result+="\"⊖\"";
-          break;
-        case DotGate::UNDETERMINED:
-          result+="\"?\"";
-          break;
-        case DotGate::OTIMES:
-          result+="\"⊗\"";
-          break;
-        case DotGate::OPLUS:
-          result+="\"⊕\"";
-          break;
-        case DotGate::EQ:
-          result+="\""+desc[i]+"\"";
-          break;
-        case DotGate::PROJECT:
-          result+="\"Π"+desc[i]+"\"";
-          break;
-        case DotGate::OMINUSR:
-        case DotGate::OMINUSL:
-          break;
+  unsigned i = 0;
+  for (auto g : gates)
+  {
+    if (g != DotGate::OMINUSR && g != DotGate::OMINUSL)
+    {
+      result += std::to_string(i) + " [label=";
+      switch (g)
+      {
+      case DotGate::IN:
+        result += "\"" + desc[i] + "\"";
+        break;
+      case DotGate::OMINUS:
+        result += "\"⊖\"";
+        break;
+      case DotGate::UNDETERMINED:
+        result += "\"?\"";
+        break;
+      case DotGate::OTIMES:
+        result += "\"⊗\"";
+        break;
+      case DotGate::OPLUS:
+        result += "\"⊕\"";
+        break;
+      case DotGate::DELTA:
+        result += "\"δ\"";
+        break;
+      case DotGate::EQ:
+        result += "\"" + desc[i] + "\"";
+        break;
+      case DotGate::PROJECT:
+        result += "\"Π" + desc[i] + "\"";
+        break;
+      case DotGate::OMINUSR:
+      case DotGate::OMINUSL:
+        break;
       }
       if(i==0)
         result+=",shape=\"double\"";
@@ -89,7 +95,8 @@ std::string DotCircuit::toString(gate_t) const
         if(number_gates.find(s)!=number_gates.end()){
           number_gates[s] = number_gates[s]+1;
         }
-        else {
+        else
+        {
           number_gates[s] = 1;
         }
       }
@@ -109,14 +116,15 @@ std::string DotCircuit::toString(gate_t) const
           if(n==1) {
             result += ";\n";
           }
-          else {
-            result += " [label=\""+std::to_string(n)+"\"];\n";
+          else
+          {
+            result += " [label=\"" + std::to_string(n) + "\"];\n";
           }
         }
       }
     }
   }
-  return result+"}";
+  return result + "}";
 }
 
 std::string DotCircuit::render() const {
@@ -135,7 +143,7 @@ std::string DotCircuit::render() const {
   //output
   std::string cmdline="graph-easy --as=boxart --output="+outfilename+" "+filename;
 
-  int retvalue=system(cmdline.c_str());
+  int retvalue = system(cmdline.c_str());
 
   if(retvalue)    
     throw CircuitException("Error executing graph-easy"); 

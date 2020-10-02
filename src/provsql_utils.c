@@ -8,11 +8,11 @@
 #include "provsql_utils.h"
 
 /* Copied over from parse_oper.c as defined static there */
-  static Oid
+static Oid
 binary_oper_exact(List *opname, Oid arg1, Oid arg2)
 {
-  Oid			result;
-  bool		was_unknown = false;
+  Oid result;
+  bool was_unknown = false;
 
   /* Unspecified type for one of the arguments? then use the other */
   if ((arg1 == UNKNOWNOID) && (arg2 != InvalidOid))
@@ -33,7 +33,7 @@ binary_oper_exact(List *opname, Oid arg1, Oid arg2)
   if (was_unknown)
   {
     /* arg1 and arg2 are the same here, need only look at arg1 */
-    Oid			basetype = getBaseType(arg1);
+    Oid basetype = getBaseType(arg1);
 
     if (basetype != arg1)
     {
@@ -46,7 +46,7 @@ binary_oper_exact(List *opname, Oid arg1, Oid arg2)
   return InvalidOid;
 }
 
-/* Similar mechanism as in parse_oper.ci, in particular
+/* Similar mechanism as in parse_oper.c, in particular
  * in the static function oper_select_candidate */
 Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
 {

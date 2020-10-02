@@ -8,8 +8,19 @@
 
 #include "Circuit.hpp"
 
-enum class DotGate { UNDETERMINED, OTIMES, OPLUS, OMINUS, \
-  OMINUSR, OMINUSL, PROJECT, EQ, IN };
+enum class DotGate
+{
+  UNDETERMINED,
+  OTIMES,
+  OPLUS,
+  OMINUS,
+  OMINUSR,
+  OMINUSL,
+  PROJECT,
+  EQ,
+  IN,
+  DELTA
+};
 
 class DotCircuit : public Circuit<DotGate> {
  private:

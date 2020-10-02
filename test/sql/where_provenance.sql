@@ -1,6 +1,8 @@
 \set ECHO none
 SET search_path TO public, provsql;
 
+SET provsql.where_provenance = on;
+
 /* Example of where-provenance */
 CREATE TABLE result_where AS
   SELECT p1.city AS c1, p2.city AS c2,
