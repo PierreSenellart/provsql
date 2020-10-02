@@ -32,6 +32,8 @@ typedef struct provsqlHashEntry
   unsigned nb_children;
   unsigned children_idx;
   double prob;
+  unsigned info1;
+  unsigned info2;
 } provsqlHashEntry;
 extern HTAB *provsql_hash;
 

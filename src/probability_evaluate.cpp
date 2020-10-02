@@ -48,63 +48,75 @@ static Datum probability_evaluate_internal
     bool found;
     provsqlHashEntry *entry = (provsqlHashEntry *) hash_search(provsql_hash, &uuid, HASH_FIND, &found);
 
-    if(!found) {
-      LWLockRelease(provsql_shared_state->lock);
-      ereport(ERROR, (errmsg("Unknown provenance token: %s",f.c_str())));
-    }
-
     gate_t id;
-    switch(entry->type) {
-     case gate_input:
-      if(isnan(entry->prob)) { 
-        LWLockRelease(provsql_shared_state->lock);
-        elog(ERROR, "Missing probability for input token");
-      }
-      id = c.setGate(f, BooleanGate::IN, entry->prob);
-      break;
 
-     case gate_times:
-     case gate_project:
-     case gate_eq:
-     case gate_monus:
-     case gate_one:
-      id = c.setGate(f, BooleanGate::AND);
-      break;
+    if(!found)
+      id = c.setGate(f, BooleanGate::MULVAR);
+    else {
+      switch(entry->type) {
+        case gate_input:
+          if(isnan(entry->prob)) { 
+            LWLockRelease(provsql_shared_state->lock);
+            elog(ERROR, "Missing probability for input token");
+          }
+          id = c.setGate(f, BooleanGate::IN, entry->prob);
+          break;
 
-     case gate_plus:
-     case gate_zero:
-      id = c.setGate(f, BooleanGate::OR);
-      break;
-
-     default:
-        elog(ERROR, "Wrong type of gate in circuit");
-     } 
-
-    if(entry->nb_children > 0) {
-      if(entry->type == gate_monus) {
-        auto id_not = c.setGate(BooleanGate::NOT);
-        auto child1 = provsql_shared_state->wires[entry->children_idx];
-        auto child2 = provsql_shared_state->wires[entry->children_idx+1];
-        c.addWire(
-            id,
-            c.getGate(uuid2string(child1)));
-        c.addWire(id, id_not);
-        c.addWire(
-            id_not,
-            c.getGate(uuid2string(child2)));
-        if(processed.find(child1)==processed.end())
-          to_process.insert(child1);
-        if(processed.find(child2)==processed.end())
-          to_process.insert(child2);
-      } else {
-        for(unsigned i=0;i<entry->nb_children;++i) {
-          auto child = provsql_shared_state->wires[entry->children_idx+i];
-
+        case gate_mulinput:
+          if(isnan(entry->prob)) {
+            LWLockRelease(provsql_shared_state->lock);
+            elog(ERROR, "Missing probability for input token");
+          }
+          id = c.setGate(f, BooleanGate::MULIN, entry->prob);
           c.addWire(
               id, 
-              c.getGate(uuid2string(child)));
-          if(processed.find(child)==processed.end())
-            to_process.insert(child);
+              c.getGate(uuid2string(provsql_shared_state->wires[entry->children_idx])));
+          c.setInfo(id, entry->info1);
+          break;
+
+        case gate_times:
+        case gate_project:
+        case gate_eq:
+        case gate_monus:
+        case gate_one:
+          id = c.setGate(f, BooleanGate::AND);
+          break;
+
+        case gate_plus:
+        case gate_zero:
+          id = c.setGate(f, BooleanGate::OR);
+          break;
+
+        default:
+            elog(ERROR, "Wrong type of gate in circuit");
+        } 
+
+      if(entry->nb_children > 0) {
+        if(entry->type == gate_monus) {
+          auto id_not = c.setGate(BooleanGate::NOT);
+          auto child1 = provsql_shared_state->wires[entry->children_idx];
+          auto child2 = provsql_shared_state->wires[entry->children_idx+1];
+          c.addWire(
+              id,
+              c.getGate(uuid2string(child1)));
+          c.addWire(id, id_not);
+          c.addWire(
+              id_not,
+              c.getGate(uuid2string(child2)));
+          if(processed.find(child1)==processed.end())
+            to_process.insert(child1);
+          if(processed.find(child2)==processed.end())
+            to_process.insert(child2);
+        } else {
+          for(unsigned i=0;i<entry->nb_children;++i) {
+            auto child = provsql_shared_state->wires[entry->children_idx+i];
+
+            c.addWire(
+                id, 
+                c.getGate(uuid2string(child)));
+            if(processed.find(child)==processed.end())
+              to_process.insert(child);
+          }
         }
       }
     }

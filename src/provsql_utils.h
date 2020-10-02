@@ -21,7 +21,7 @@ struct pg_uuid_t
 #include "nodes/pg_list.h"
 
 typedef enum gate_type {
-  gate_input, gate_plus, gate_times, gate_monus, gate_project, gate_zero, gate_one, gate_eq, gate_agg, gate_semimod, gate_cmp, gate_delta, gate_value, nb_gate_types
+  gate_input, gate_plus, gate_times, gate_monus, gate_project, gate_zero, gate_one, gate_eq, gate_agg, gate_semimod, gate_cmp, gate_delta, gate_value, gate_mulinput, nb_gate_types
 } gate_type;
 
 typedef struct constants_t {

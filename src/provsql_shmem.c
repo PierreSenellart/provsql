@@ -2,6 +2,7 @@
 
 #include "postgres.h"
 #include "fmgr.h"
+#include "funcapi.h"
 #include "miscadmin.h"
 #include "catalog/pg_enum.h"
 #include "catalog/pg_type.h"
@@ -159,6 +160,8 @@ Datum create_gate(PG_FUNCTION_ARGS)
       entry->prob = 1.;
     else
       entry->prob = NAN;
+
+    entry->info1 = entry->info2 = 0;
   }
 
   LWLockRelease(provsql_shared_state->lock);
@@ -181,10 +184,39 @@ Datum set_prob(PG_FUNCTION_ARGS)
 
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
 
-  if(entry->type != gate_input) {
+  if(!found) {
+    hash_search(provsql_hash, token, HASH_REMOVE, &found);
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Unknown gate");
+  }
+  
+  if(entry->type != gate_input && entry->type != gate_mulinput) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Probability can only be assigned to input token");
   }
+
+  entry->prob = prob;
+
+  LWLockRelease(provsql_shared_state->lock);
+  
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(set_infos);
+Datum set_infos(PG_FUNCTION_ARGS)
+{
+  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  unsigned info1 = PG_GETARG_INT32(1);
+  unsigned info2 = PG_GETARG_INT32(2);
+  provsqlHashEntry *entry;
+  bool found;
+
+  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
+    elog(ERROR, "Invalid NULL value passed to set_infos");
+
+  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+
+  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
 
   if(!found) {
     hash_search(provsql_hash, token, HASH_REMOVE, &found);
@@ -192,7 +224,19 @@ Datum set_prob(PG_FUNCTION_ARGS)
     elog(ERROR, "Unknown gate");
   }
 
-  entry->prob = prob;
+  if(entry->type == gate_eq && PG_ARGISNULL(2)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Invalid NULL value passed to set_infos");
+  }
+
+  if(entry->type != gate_eq && entry->type != gate_mulinput) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Infos cannot be assigned to this gate type");
+  }
+
+  entry->info1 = info1;
+  if(entry->type == gate_eq)
+    entry->info2 = info2;
 
   LWLockRelease(provsql_shared_state->lock);
   
@@ -284,6 +328,49 @@ Datum get_prob(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
   else
     PG_RETURN_FLOAT8(result);
+}
+
+PG_FUNCTION_INFO_V1(get_infos);
+Datum get_infos(PG_FUNCTION_ARGS)
+{
+  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  provsqlHashEntry *entry;
+  bool found;
+  unsigned info1 =0, info2 = 0;
+
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+
+  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
+  if(found) {
+    info1 = entry->info1;
+    info2 = entry->info2;
+  }
+  
+  LWLockRelease(provsql_shared_state->lock);
+
+  if(info1 == 0)
+    PG_RETURN_NULL();
+  else {
+    TupleDesc tupdesc;
+    Datum values[2];
+    bool nulls[2];
+
+    get_call_result_type(fcinfo,NULL,&tupdesc);
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    nulls[0] = false;
+    values[0] = Int32GetDatum(info1);
+    if(entry->type == gate_eq) {
+      nulls[1] = false;
+      values[1] = Int32GetDatum(info2);
+    } else
+      nulls[1] = (entry->type != gate_eq);
+
+    PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+  }
 }
 
 static Oid get_func_oid(char *s)
@@ -428,6 +515,7 @@ Datum initialize_constants(PG_FUNCTION_ARGS)
   GET_GATE_TYPE_OID(cmp);
   GET_GATE_TYPE_OID(delta);
   GET_GATE_TYPE_OID(value);
+  GET_GATE_TYPE_OID(mulinput);
 
   PG_RETURN_VOID();
 }

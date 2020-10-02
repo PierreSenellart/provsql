@@ -76,6 +76,8 @@ std::string BooleanCircuit::toString(gate_t g) const
       } else {
         return to_string(g)+"["+std::to_string(getProb(g))+"]";
       }
+    case BooleanGate::MULIN:
+      return "{" + to_string(*getWires(g).begin()) + "=" + std::to_string(getInfo(g)) + "}[" + std::to_string(getProb(g)) + "]";
     case BooleanGate::NOT:
       op="¬";
       break;
@@ -88,6 +90,8 @@ std::string BooleanCircuit::toString(gate_t g) const
     case BooleanGate::OR:
       op="∨";
       break;
+    case BooleanGate::MULVAR:
+      ; // already dealt with in MULIN
   }
 
   if(getWires(g).empty()) {
@@ -116,6 +120,9 @@ bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sample
   switch(getGateType(g)) {
     case BooleanGate::IN:
       return sampled.find(g)!=sampled.end();
+    case BooleanGate::MULIN:
+    case BooleanGate::MULVAR:
+      throw CircuitException("Monte-Carlo sampling not implemented on multivalued inputs");
     case BooleanGate::NOT:
       return !evaluate(*(getWires(g).begin()), sampled);
     case BooleanGate::AND:
@@ -236,6 +243,9 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
           break;
         }
 
+      case BooleanGate::MULIN:
+      case BooleanGate::MULVAR:
+        throw CircuitException("Tseytin transform not implemented on multivalued inputs");  
       case BooleanGate::IN:
       case BooleanGate::UNDETERMINED:
         ;
@@ -446,10 +456,36 @@ double BooleanCircuit::independentEvaluationInternal(
       break;
 
     case BooleanGate::OR:
-      for(const auto &c: getWires(g)) {
-        result*=1-independentEvaluationInternal(c, seen);
+      {
+        // We collect probability among each group of children, where we
+        // group MULIN gates with the same key var together
+        std::map<gate_t, double> groups;
+        std::set<gate_t> local_mulins;
+        std::set<std::pair<gate_t, unsigned>> mulin_seen;
+
+        for(const auto &c: getWires(g)) {
+          auto group = c;
+          if(getGateType(c) == BooleanGate::MULIN) {
+            group = *getWires(c).begin();
+            if(local_mulins.find(g)==local_mulins.end()) {
+              if(seen.find(g)!=seen.end())
+                throw CircuitException("Not an independent circuit");
+              else
+                seen.insert(g);
+            }
+            auto p = std::make_pair(group, getInfo(c));
+            if(mulin_seen.find(p)==mulin_seen.end()) {
+              groups[group] += getProb(c);
+              mulin_seen.insert(p);
+            }
+          } else 
+            groups[group] = independentEvaluationInternal(c, seen);
+        }
+
+        for(const auto [k, v]: groups)
+          result *= 1-v;
+        result = 1-result;
       }
-      result=1-result;
       break;
 
     case BooleanGate::NOT:
@@ -462,8 +498,19 @@ double BooleanCircuit::independentEvaluationInternal(
       seen.insert(g);
       result=getProb(g);
       break;
+    
+    case BooleanGate::MULIN:
+      { 
+        auto child = *getWires(g).begin();
+        if(seen.find(child)!=seen.end())
+          throw CircuitException("Not an independent circuit");
+        seen.insert(child);
+        result=getProb(g);
+      }
+      break;
 
     case BooleanGate::UNDETERMINED:
+    case BooleanGate::MULVAR:
       throw CircuitException("Bad gate");
   }
 
@@ -474,4 +521,19 @@ double BooleanCircuit::independentEvaluation(gate_t g) const
 {
   std::set<gate_t> seen;
   return independentEvaluationInternal(g, seen);
+}
+
+void BooleanCircuit::setInfo(gate_t g, unsigned int i)
+{
+  info[g] = i;
+}
+
+unsigned BooleanCircuit::getInfo(gate_t g) const
+{
+  auto it = info.find(g);
+
+  if(it==info.end())
+    return 0;
+  else
+    return it->second;
 }

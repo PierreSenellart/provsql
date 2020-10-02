@@ -4,11 +4,12 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <set>
+#include <map>
 #include <vector>
 
 #include "Circuit.hpp"
 
-enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN };
+enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN, MULIN, MULVAR };
 
 class BooleanCircuit : public Circuit<BooleanGate> {
  private:
@@ -19,6 +20,7 @@ class BooleanCircuit : public Circuit<BooleanGate> {
  protected:
   std::set<gate_t> inputs;
   std::vector<double> prob;
+  std::map<gate_t, unsigned> info;
 
  public:
   gate_t addGate() override;
@@ -28,6 +30,8 @@ class BooleanCircuit : public Circuit<BooleanGate> {
   gate_t setGate(const uuid &u, BooleanGate t, double p);
   void setProb(gate_t g, double p) { prob[static_cast<std::underlying_type<gate_t>::type>(g)]=p; }
   double getProb(gate_t g) const { return prob[static_cast<std::underlying_type<gate_t>::type>(g)]; }
+  void setInfo(gate_t g, unsigned info);
+  unsigned getInfo(gate_t g) const;
 
   double possibleWorlds(gate_t g) const;
   double compilation(gate_t g, std::string compiler) const;

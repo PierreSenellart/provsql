@@ -39,7 +39,7 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
 CREATE TYPE provenance_gate AS
-  ENUM('input','plus','times','monus','project','zero','one','eq','agg','semimod','cmp','delta','value');
+  ENUM('input','plus','times','monus','project','zero','one','eq','agg','semimod','cmp','delta','value','mulinput');
 
 CREATE OR REPLACE FUNCTION create_gate(
   token provenance_token,
@@ -63,6 +63,14 @@ CREATE OR REPLACE FUNCTION get_prob(
   token provenance_token)
   RETURNS DOUBLE PRECISION AS
   'provsql','get_prob' LANGUAGE C;
+CREATE OR REPLACE FUNCTION set_infos(
+  token provenance_token, info1 INT, info2 INT DEFAULT NULL)
+  RETURNS void AS
+  'provsql','set_infos' LANGUAGE C;
+CREATE OR REPLACE FUNCTION get_infos(
+  token provenance_token, OUT info1 INT, OUT info2 INT)
+  RETURNS record AS
+  'provsql','get_infos' LANGUAGE C;
 
 CREATE UNLOGGED TABLE provenance_circuit_extra(
   gate provenance_token,
@@ -124,14 +132,11 @@ CREATE OR REPLACE FUNCTION repair_key(_tbl regclass, key_att text)
 $$
 DECLARE
   key RECORD;
-  past_tokens uuid[];
-  inner_token uuid;
-  monus_token uuid;
-  plus_token uuid;
+  key_token uuid;
+  token uuid;
   record RECORD;
   nb_rows INTEGER;
   ind INTEGER;
-  remaining_prob DOUBLE PRECISION;
   select_key_att TEXT;
   where_condition TEXT;
 BEGIN
@@ -155,32 +160,16 @@ BEGIN
 
     EXECUTE format('SELECT COUNT(*) FROM %I %s', _tbl, where_condition) INTO nb_rows;
 
-    remaining_prob := 1;
-    ind := 0;
-    past_tokens = ARRAY[]::uuid[];
+    key_token := uuid_generate_v4();
+    ind := 1;
     FOR record IN
       EXECUTE format('SELECT provsql_temp FROM %I %s', _tbl, where_condition)
     LOOP
-      IF ind < nb_rows - 1 THEN
-        inner_token := uuid_generate_v4();
-        PERFORM provsql.create_gate(inner_token, 'input');
-        PERFORM provsql.set_prob(inner_token, 1./nb_rows / remaining_prob);
-
-        if ind > 0 THEN
-          plus_token := provsql.provenance_plus(VARIADIC past_tokens);
-          monus_token := provsql.provenance_monus(inner_token, plus_token);
-        ELSE
-          monus_token := inner_token;
-        END IF;
-
-        remaining_prob = remaining_prob - 1./nb_rows;
-        ind := ind + 1;
-        past_tokens := array_append(past_tokens, inner_token);
-      ELSE
-        plus_token := provsql.provenance_plus(VARIADIC past_tokens);
-        monus_token := provsql.provenance_monus(provsql.gate_one(), plus_token); 
-      END IF;
-      EXECUTE format('UPDATE %I SET provsql_temp = %L WHERE provsql_temp = %L', _tbl, monus_token, record.provsql_temp);
+      token:=record.provsql_temp;
+      PERFORM provsql.create_gate(token, 'mulinput', ARRAY[key_token]);
+      PERFORM provsql.set_prob(token, 1./nb_rows);
+      PERFORM provsql.set_infos(token, ind);
+      ind := ind + 1;
     END LOOP;  
   END LOOP; 
   EXECUTE format('ALTER TABLE %I RENAME COLUMN provsql_temp TO provsql', _tbl);
@@ -317,12 +306,8 @@ DECLARE
   eq_token uuid;
 BEGIN
   eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat(token,pos1,pos2));
-  LOCK TABLE provenance_circuit_extra;
-  BEGIN
-    PERFORM create_gate(eq_token, 'eq', ARRAY[token]);
-    INSERT INTO provenance_circuit_extra SELECT eq_token, pos1, pos2;
-  EXCEPTION WHEN unique_violation THEN
-  END;
+  PERFORM create_gate(eq_token, 'eq', ARRAY[token]);
+  PERFORM set_infos(eq_token, pos1, pos2);
   RETURN eq_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER; 
@@ -382,6 +367,8 @@ BEGIN
     IF result IS NULL THEN
       result:=element_one;
     END IF;
+  ELSIF gate_type='mulinput' THEN
+    SELECT concat('{',(get_children(token))[1]::text,'=',(get_infos(token)).info1,'}') INTO result;
   ELSIF gate_type='plus' THEN
     EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
       plus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
