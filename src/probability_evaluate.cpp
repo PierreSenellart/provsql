@@ -135,48 +135,60 @@ static Datum probability_evaluate_internal
   prev_sigint_handler = signal(SIGINT, provsql_sigint_handler);
 
   try {
-    if(method=="monte-carlo") {
-      int samples=0;
+    bool processed=false;
 
-      try {
-        samples = stoi(args);
-      } catch(std::invalid_argument &e) {
-      }
-
-      if(samples<=0)
-        elog(ERROR, "Invalid number of samples: '%s'", args.c_str());
-      
-      result = c.monteCarlo(gate, samples);
-    } else if(method=="possible-worlds") {
-      if(!args.empty())
-        elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
-
-      result = c.possibleWorlds(gate);
-    } else if(method=="compilation") {
-      result = c.compilation(gate, args);
-    } else if(method=="weightmc") {
-      result = c.WeightMC(gate, args);
-    } else if(method=="tree-decomposition") {
-      try {
-        TreeDecomposition td(c);
-        auto dnnf{
-          dDNNFTreeDecompositionBuilder{
-            c,
-            uuid2string(token),
-            td}.build()
-        };
-        result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
-      } catch(TreeDecompositionException &) {
-        elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
-      }
-    } else if(method=="independent") {
+    if(method=="independent") {
       result = c.independentEvaluation(gate);
+      processed = true;
     } else if(method=="") {
       // Default evaluation, use independent, tree-decomposition, and
       // compilation in order until one works
       try {
        result = c.independentEvaluation(gate);
-      } catch(CircuitException &) {
+       processed = true;
+      } catch(CircuitException &) {}
+    }
+
+    if(!processed) {
+      // Other methods do not deal with multivalued input gates, they
+      // need to be rewritten
+      c.rewriteMultivaluedGates();
+
+      if(method=="monte-carlo") {
+        int samples=0;
+
+        try {
+          samples = stoi(args);
+        } catch(std::invalid_argument &e) {
+        }
+
+        if(samples<=0)
+          elog(ERROR, "Invalid number of samples: '%s'", args.c_str());
+        
+        result = c.monteCarlo(gate, samples);
+      } else if(method=="possible-worlds") {
+        if(!args.empty())
+          elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
+
+        result = c.possibleWorlds(gate);
+      } else if(method=="compilation") {
+        result = c.compilation(gate, args);
+      } else if(method=="weightmc") {
+        result = c.WeightMC(gate, args);
+      } else if(method=="tree-decomposition") {
+        try {
+          TreeDecomposition td(c);
+          auto dnnf{
+            dDNNFTreeDecompositionBuilder{
+              c,
+              uuid2string(token),
+              td}.build()
+          };
+          result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
+        } catch(TreeDecompositionException &) {
+          elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
+        }
+      } else if(method=="") {
         try {
           TreeDecomposition td(c);
           auto dnnf{
@@ -189,9 +201,9 @@ static Datum probability_evaluate_internal
         } catch(TreeDecompositionException &) {
           result = c.compilation(gate, "d4");
         }
+      } else {
+        elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());
       }
-    } else {
-      elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());
     }
   } catch(CircuitException &e) {
     elog(ERROR, "%s", e.what());

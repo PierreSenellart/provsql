@@ -20,6 +20,11 @@ public:
   Graph(const BooleanCircuit &bc)
   {
     for(gate_t g1{0}; g1<bc.getNbGates(); ++g1) {
+      // We do not take into account these gates, which have no purpose
+      // in the circuit
+      if(bc.getGateType(g1) == BooleanGate::UNDETERMINED || bc.getGateType(g1) == BooleanGate::MULVAR)
+        continue;
+
       add_node(static_cast<unsigned long>(g1));
       for(auto g2: bc.getWires(g1))
         add_edge(static_cast<unsigned long>(g1), static_cast<unsigned long>(g2), true);

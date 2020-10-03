@@ -1,4 +1,5 @@
 #include "BooleanCircuit.h"
+#include <type_traits>
 
 extern "C" {
 #include <unistd.h>
@@ -11,6 +12,7 @@ extern "C" {
 #include <sstream>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 #include "dDNNF.h"
 
@@ -23,10 +25,12 @@ constexpr bool provsql_interrupted = false;
 
 gate_t BooleanCircuit::setGate(BooleanGate type)
 {
- auto id = Circuit::setGate(type);
+  auto id = Circuit::setGate(type);
   if(type == BooleanGate::IN) {
     setProb(id,1.);
     inputs.insert(id);
+  } else if(type == BooleanGate::MULIN) {
+    mulinputs.insert(id);
   }
   return id;
 }
@@ -37,6 +41,8 @@ gate_t BooleanCircuit::setGate(const uuid &u, BooleanGate type)
   if(type == BooleanGate::IN) {
     setProb(id,1.);
     inputs.insert(id);
+  } else if(type == BooleanGate::MULIN) {
+    mulinputs.insert(id);
   }
   return id;
 }
@@ -244,8 +250,8 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
         }
 
       case BooleanGate::MULIN:
+        throw CircuitException("Multivalued inputs should have been removed by then.");  
       case BooleanGate::MULVAR:
-        throw CircuitException("Tseytin transform not implemented on multivalued inputs");  
       case BooleanGate::IN:
       case BooleanGate::UNDETERMINED:
         ;
@@ -536,4 +542,70 @@ unsigned BooleanCircuit::getInfo(gate_t g) const
     return 0;
   else
     return it->second;
+}
+
+void BooleanCircuit::rewriteMultivaluedGatesRec(
+    const std::vector<gate_t> &muls,
+    const std::vector<double> &cumulated_probs,
+    unsigned start,
+    unsigned end,
+    std::vector<gate_t> &prefix)
+{
+  if(start==end) {
+    getWires(muls[start]) = prefix;
+    return;
+  }
+
+  unsigned mid = (start+end)/2;
+  auto g = setGate(
+      BooleanGate::IN,
+      (cumulated_probs[mid+1] - cumulated_probs[start]) / 
+      (cumulated_probs[end] - cumulated_probs[start]));
+  auto not_g = setGate(BooleanGate::NOT);
+  getWires(not_g).push_back(g);
+
+  prefix.push_back(g);
+  rewriteMultivaluedGatesRec(muls, cumulated_probs, start, mid, prefix);
+  prefix.pop_back();
+  prefix.push_back(not_g);
+  rewriteMultivaluedGatesRec(muls, cumulated_probs, mid+1, end, prefix);
+  prefix.pop_back();
+}
+
+static constexpr bool almost_equals(double a, double b)
+{
+  double diff = a - b;
+  constexpr double epsilon = std::numeric_limits<double>::epsilon() * 10;
+
+  return (diff < epsilon && diff > -epsilon);
+}
+
+void BooleanCircuit::rewriteMultivaluedGates()
+{
+  std::map<gate_t,std::vector<gate_t>> var2mulinput;
+  for(auto mul: mulinputs) {
+    var2mulinput[*getWires(mul).begin()].push_back(mul);
+  }
+  mulinputs.clear();
+
+  for(const auto &[var, muls]: var2mulinput)
+  {
+    const unsigned n = muls.size();
+    std::vector<double> cumulated_probs(n);
+    double cumulated_prob=0.;
+    
+    for(unsigned i=0; i<n; ++i) {
+      cumulated_prob += getProb(muls[i]);
+      cumulated_probs[i] = cumulated_prob;
+      gates[static_cast<std::underlying_type<gate_t>::type>(muls[i])] = BooleanGate::AND;
+      getWires(muls[i]).clear();
+    }
+      
+    std::vector<gate_t> prefix;
+    prefix.reserve(static_cast<unsigned>(log(n)/log(2)+2));
+    if(!almost_equals(cumulated_probs[n-1],1.)) {
+      prefix.push_back(setGate(BooleanGate::IN, cumulated_probs[n-1]));
+    }
+    rewriteMultivaluedGatesRec(muls, cumulated_probs, 0, n-1, prefix);
+  }
 }

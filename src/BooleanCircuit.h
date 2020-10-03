@@ -16,9 +16,16 @@ class BooleanCircuit : public Circuit<BooleanGate> {
   bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
   std::string Tseytin(gate_t g, bool display_prob) const;
   double independentEvaluationInternal(gate_t g, std::set<gate_t> &seen) const;
+  void rewriteMultivaluedGatesRec(
+    const std::vector<gate_t> &muls,
+    const std::vector<double> &cumulated_probs,
+    unsigned start,
+    unsigned end,
+    std::vector<gate_t> &prefix);
 
  protected:
   std::set<gate_t> inputs;
+  std::set<gate_t> mulinputs;
   std::vector<double> prob;
   std::map<gate_t, unsigned> info;
 
@@ -38,6 +45,7 @@ class BooleanCircuit : public Circuit<BooleanGate> {
   double monteCarlo(gate_t g, unsigned samples) const;
   double WeightMC(gate_t g, std::string opt) const;
   double independentEvaluation(gate_t g) const;
+  void rewriteMultivaluedGates();
 
   virtual std::string toString(gate_t g) const override;
 
