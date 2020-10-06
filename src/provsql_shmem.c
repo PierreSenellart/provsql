@@ -47,7 +47,12 @@ void provsql_shmem_startup(void)
       &found);
 
   if(!found) {
+#if PG_VERSION_NUM >= 90600
+    /* Named lock tranches were added in version 9.6 of PostgreSQL */
     provsql_shared_state->lock =&(GetNamedLWLockTranche("provsql"))->lock;
+#else
+    provsql_shared_state->lock =LWLockAssign();
+#endif /* PG_VERSION_NUM >= 90600 */
     provsql_shared_state->nb_wires=0;
   }
 

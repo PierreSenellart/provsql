@@ -1553,7 +1553,13 @@ void _PG_init(void)
 
   // Request shared resources
   RequestAddinShmemSpace(provsql_memsize());
+  
+#if PG_VERSION_NUM >= 90600
+  /* Named lock tranches were added in version 9.6 of PostgreSQL */
   RequestNamedLWLockTranche("provsql", 1);
+#else
+  RequestAddinLWLocks(1);
+#endif /* PG_VERSION_NUM >= 90600 */
 
   prev_planner = planner_hook;
   prev_shmem_startup = shmem_startup_hook;
