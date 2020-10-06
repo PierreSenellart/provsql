@@ -60,7 +60,7 @@ SELECT remove_provenance('agg_result');
 
 SELECT * FROM agg_result ORDER BY position;
 
-SELECT position, aggregation_formula(count,'personnel_name') FROM agg_result ORDER BY position;
+SELECT position, regexp_replace(aggregation_formula(count,'personnel_name'),'\(1 \* Dave\) , \(1 \* Susan\)','(1 * Susan) , (1 * Dave)') AS aggregation_formula FROM agg_result ORDER BY position;
 
 CREATE TABLE agg_result2 AS 
   SELECT position, aggregation_formula(count,'personnel_name') FROM (
