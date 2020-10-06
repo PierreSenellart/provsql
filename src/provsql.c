@@ -1496,7 +1496,7 @@ void _PG_init(void)
                            NULL,
                            NULL);
   DefineCustomBoolVariable("provsql.debug",
-                           "Should ProvSQL debug messages be track where-provenance?",
+                           "Should ProvSQL debug messages be displayed?",
                            "1 turns ProvSQL debug messages on, 0 off.",
                            &provsql_debug,
                            false,
