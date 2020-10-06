@@ -3,7 +3,7 @@ SET search_path TO public, provsql;
 
 -- Will fail because this is not independent
 CREATE TABLE independent_result AS
-SELECT city, probability_evaluate(provenance(),'p','independent') AS prob
+SELECT city, probability_evaluate(provenance(),'independent') AS prob
 FROM (
   SELECT DISTINCT city
   FROM personnel
@@ -16,7 +16,7 @@ EXCEPT
 ORDER BY CITY;
 
 CREATE TABLE independent_result AS
-SELECT city, probability_evaluate(provenance(),'p','independent') AS prob
+SELECT city, probability_evaluate(provenance(),'independent') AS prob
 FROM personnel
 GROUP BY city
 ORDER BY city;

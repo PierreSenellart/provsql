@@ -2,7 +2,7 @@
 SET search_path TO public, provsql;
 
 CREATE TABLE minic2d_result AS
-SELECT city, probability_evaluate(provenance(),'p','compilation','minic2d') AS prob
+SELECT city, probability_evaluate(provenance(),'compilation','minic2d') AS prob
 FROM (
   SELECT DISTINCT city
   FROM personnel

@@ -2,7 +2,7 @@
 SET search_path TO public, provsql;
 
 CREATE TABLE d4_result AS
-SELECT city, probability_evaluate(provenance(),'p','compilation','d4') AS prob
+SELECT city, probability_evaluate(provenance(),'compilation','d4') AS prob
 FROM (
   SELECT DISTINCT city
   FROM personnel
