@@ -59,11 +59,11 @@ SET reliability=(SELECT score
                  FROM reliability JOIN person ON reliability.person=person.id 
                  WHERE person.name=s.witness);
 
-SELECT create_provenance_mapping('reliability_mapping','s','reliability');
+SELECT set_prob(provenance(),reliability) FROM s;
 
 -- Q11
 SELECT *,formula(provenance(),'witness_mapping'),
-         probability_evaluate(provenance(),'reliability_mapping','possible-worlds')
+         probability_evaluate(provenance(),'possible-worlds')
 FROM suspects
-WHERE probability_evaluate(provenance(),'reliability_mapping','possible-worlds')>0.99 AND
+WHERE probability_evaluate(provenance(),'possible-worlds')>0.99 AND
       person<>'Daphine';
