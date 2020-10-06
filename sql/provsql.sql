@@ -44,7 +44,7 @@ CREATE TYPE provenance_gate AS
 CREATE OR REPLACE FUNCTION create_gate(
   token provenance_token,
   type provenance_gate,
-  children provenance_token[] DEFAULT NULL)
+  children uuid[] DEFAULT NULL)
   RETURNS void AS
   'provsql','create_gate' LANGUAGE C;
 CREATE OR REPLACE FUNCTION get_gate_type(
@@ -53,7 +53,7 @@ CREATE OR REPLACE FUNCTION get_gate_type(
   'provsql','get_gate_type' LANGUAGE C;
 CREATE OR REPLACE FUNCTION get_children(
   token provenance_token)
-  RETURNS provenance_token[] AS
+  RETURNS uuid[] AS
   'provsql','get_children' LANGUAGE C;
 CREATE OR REPLACE FUNCTION set_prob(
   token provenance_token, p DOUBLE PRECISION)
@@ -269,7 +269,7 @@ BEGIN
     monus_token:=token1;
   ELSE  
     monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
-    PERFORM create_gate(monus_token, 'monus', ARRAY[token1, token2]);
+    PERFORM create_gate(monus_token, 'monus', ARRAY[token1::uuid, token2::uuid]);
   END IF;  
 
   RETURN monus_token;
@@ -288,7 +288,7 @@ BEGIN
   LOCK TABLE provenance_circuit_extra;
   SELECT 1 FROM provenance_circuit_extra WHERE gate = project_token INTO rec;
   IF rec IS NULL THEN
-    PERFORM create_gate(project_token, 'project', ARRAY[token]);
+    PERFORM create_gate(project_token, 'project', ARRAY[token::uuid]);
     INSERT INTO provenance_circuit_extra 
       SELECT gate, case when info=0 then null else info end, row_number() over()
       FROM (
@@ -312,7 +312,7 @@ BEGIN
   LOCK TABLE provenance_circuit_extra;
   SELECT 1 FROM provenance_circuit_extra WHERE gate = eq_token INTO rec;
   IF rec IS NULL THEN
-    PERFORM create_gate(eq_token, 'eq', ARRAY[token]);
+    PERFORM create_gate(eq_token, 'eq', ARRAY[token::uuid]);
     PERFORM set_infos(eq_token, pos1, pos2);
     INSERT INTO provenance_circuit_extra VALUES(eq_token, pos1, pos2);
   END IF;
@@ -469,9 +469,9 @@ $$
 BEGIN
   RETURN QUERY EXECUTE
     'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
-      SELECT $1,t,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
+      SELECT $1,t::provenance_token,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
         UNION ALL
-      SELECT p1.t,u,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)
+      SELECT p1.t,u::provenance_token,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)
     SELECT t1.*, infos FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
         UNION ALL
@@ -523,9 +523,9 @@ CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
   RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
 $$
     WITH RECURSIVE transitive_closure(f,t,idx,gate_type) AS (
-      SELECT $1,t,row_number() over(),provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
+      SELECT $1,t::provenance_token,row_number() over(),provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
         UNION ALL
-      SELECT p1.t,u,row_number() over(PARTITION BY p1.t),provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u
+      SELECT p1.t,u::provenance_token,row_number() over(PARTITION BY p1.t),provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u
     ) SELECT t1.f, t1.t, t1.gate_type, table_name, nb_columns, infos, row_number() over() FROM (
       SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
       UNION ALL
@@ -556,7 +556,7 @@ BEGIN
   
   delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
 
-  PERFORM create_gate(delta_token,'delta',ARRAY[token]);
+  PERFORM create_gate(delta_token,'delta',ARRAY[token::uuid]);
 
   RETURN delta_token;
 END
@@ -621,7 +621,7 @@ BEGIN
   END;  
 
   --create semimod gate
-  PERFORM create_gate(semimod_token,'semimod',ARRAY[token,value_token]);
+  PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
 
   RETURN semimod_token;
 END
