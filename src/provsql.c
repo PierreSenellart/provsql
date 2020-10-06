@@ -1510,7 +1510,7 @@ void _PG_init(void)
                           "Maximum number of gates kept in memory",
                           NULL,
                           &provsql_max_nb_gates,
-                          100000000,
+                          10000000,
                           1000,
                           INT_MAX,
                           PGC_POSTMASTER,
