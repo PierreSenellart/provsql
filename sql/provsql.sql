@@ -44,7 +44,7 @@ CREATE TYPE provenance_gate AS
 CREATE OR REPLACE FUNCTION create_gate(
   token provenance_token,
   type provenance_gate,
-  children provenance_token[] DEFAULT NULL)
+  children uuid[] DEFAULT NULL)
   RETURNS void AS
   'provsql','create_gate' LANGUAGE C;
 CREATE OR REPLACE FUNCTION get_gate_type(
@@ -53,7 +53,7 @@ CREATE OR REPLACE FUNCTION get_gate_type(
   'provsql','get_gate_type' LANGUAGE C;
 CREATE OR REPLACE FUNCTION get_children(
   token provenance_token)
-  RETURNS provenance_token[] AS
+  RETURNS uuid[] AS
   'provsql','get_children' LANGUAGE C;
 CREATE OR REPLACE FUNCTION set_prob(
   token provenance_token, p DOUBLE PRECISION)
@@ -78,20 +78,18 @@ CREATE UNLOGGED TABLE provenance_circuit_extra(
   info2 INT);
 
 CREATE UNLOGGED TABLE aggregation_circuit_extra(
-  gate provenance_token,
+  gate provenance_token PRIMARY KEY,
   aggfnoid INT,
   aggtype INT,
   val VARCHAR
 );
 
 CREATE UNLOGGED TABLE aggregation_values(
-  gate provenance_token,
+  gate provenance_token PRIMARY KEY,
   val VARCHAR
 );
 
 CREATE INDEX ON provenance_circuit_extra (gate);
-CREATE INDEX ON aggregation_circuit_extra (gate);
-CREATE INDEX ON aggregation_values (gate);
 
 CREATE OR REPLACE FUNCTION add_gate_trigger()
   RETURNS TRIGGER AS
@@ -271,7 +269,7 @@ BEGIN
     monus_token:=token1;
   ELSE  
     monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
-    PERFORM create_gate(monus_token, 'monus', ARRAY[token1, token2]);
+    PERFORM create_gate(monus_token, 'monus', ARRAY[token1::uuid, token2::uuid]);
   END IF;  
 
   RETURN monus_token;
@@ -283,18 +281,21 @@ CREATE FUNCTION provenance_project(token provenance_token, VARIADIC positions in
 $$
 DECLARE
   project_token uuid;
+  rec record;
 BEGIN
   project_token:=uuid_generate_v5(uuid_ns_provsql(),concat(token,positions));
-  BEGIN
-    LOCK TABLE provenance_circuit_extra;
-    PERFORM create_gate(project_token, 'project', ARRAY[token]);
+  
+  LOCK TABLE provenance_circuit_extra;
+  SELECT 1 FROM provenance_circuit_extra WHERE gate = project_token INTO rec;
+  IF rec IS NULL THEN
+    PERFORM create_gate(project_token, 'project', ARRAY[token::uuid]);
     INSERT INTO provenance_circuit_extra 
       SELECT gate, case when info=0 then null else info end, row_number() over()
       FROM (
-             SELECT project_token gate, unnest(positions) info
-           ) t; 
-  EXCEPTION WHEN unique_violation THEN
-  END;
+              SELECT project_token gate, unnest(positions) info
+            ) t; 
+  END IF;
+
   RETURN project_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
@@ -304,10 +305,17 @@ CREATE FUNCTION provenance_eq(token provenance_token, pos1 int, pos2 int)
 $$
 DECLARE
   eq_token uuid;
+  rec record;
 BEGIN
   eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat(token,pos1,pos2));
-  PERFORM create_gate(eq_token, 'eq', ARRAY[token]);
-  PERFORM set_infos(eq_token, pos1, pos2);
+
+  LOCK TABLE provenance_circuit_extra;
+  SELECT 1 FROM provenance_circuit_extra WHERE gate = eq_token INTO rec;
+  IF rec IS NULL THEN
+    PERFORM create_gate(eq_token, 'eq', ARRAY[token::uuid]);
+    PERFORM set_infos(eq_token, pos1, pos2);
+    INSERT INTO provenance_circuit_extra VALUES(eq_token, pos1, pos2);
+  END IF;
   RETURN eq_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER; 
@@ -389,7 +397,7 @@ BEGIN
     EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
       token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
     INTO result;
-  ELSIF rec.gate_type='delta' THEN
+  ELSIF gate_type='delta' THEN
     IF delta_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with aggregation evaluated over a semiring without delta function';
     ELSE
@@ -412,7 +420,6 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
-/*
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token provenance_token,
   token2value regclass,
@@ -428,54 +435,32 @@ CREATE OR REPLACE FUNCTION aggregation_evaluate(
   RETURNS anyelement AS
 $$
 DECLARE
-  rec record;
+  gt provenance_gate;
   result ALIAS FOR $0;
 BEGIN
-  SELECT gate_type INTO rec FROM provsql.provenance_circuit_gate WHERE gate = token;
+  SELECT get_gate_type(token) INTO gt;
   
-  IF rec IS NULL THEN
+  IF gt IS NULL THEN
     RETURN NULL;
-  ELSIF rec.gate_type='agg' THEN
-    EXECUTE format('SELECT %I(%I(provsql.aggregation_evaluate(pcw.t,%L,%L,%L,%L,%L::%s,%L,%L,%L,%L,%L)),pp.proname::varchar) FROM 
-                    provsql.provenance_circuit_wire pcw, provsql.aggregation_circuit_extra ace, pg_proc pp 
-                    WHERE pcw.f=%L AND ace.gate=%L AND pp.oid=ace.aggfnoid
+  ELSIF gt='agg' THEN
+    EXECUTE format('SELECT %I(%I(provsql.aggregation_evaluate(t,%L,%L,%L,%L,%L::%s,%L,%L,%L,%L,%L)),pp.proname::varchar) FROM 
+                    unnest(get_children(%L)) AS t, provsql.aggregation_circuit_extra ace, pg_proc pp 
+                    WHERE ace.gate=%L AND pp.oid=ace.aggfnoid
                     GROUP BY pp.proname',
-      agg_function_final, agg_function, token2value,agg_function_final,agg_function,semimod_function,element_one,value_type,value_type,plus_function,times_function,
+      agg_function_final, agg_function,token2value,agg_function_final,agg_function,semimod_function,element_one,value_type,value_type,plus_function,times_function,
       monus_function,delta_function,token,token)
     INTO result;
   ELSE
-  --ELSIF rec.gate_type='semimod' THEN
-    EXECUTE format('SELECT %I(val,provsql.provenance_evaluate(w1.t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM provsql.provenance_circuit_wire w, provsql.aggregation_values av, provsql.provenance_circuit_wire w1 WHERE w.f=%L AND w.idx=1 AND w.t=gate AND w1.f=%L AND w1.idx=0',
-      semimod_function, token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token,token)
+    -- gt='semimod'
+    EXECUTE format('SELECT %I(val,provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)) FROM provsql.aggregation_values av WHERE gate=(get_children(%L))[2]',
+      semimod_function,token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
     INTO result;
-  --ELSE
-  --  RAISE EXCEPTION USING MESSAGE='Unknown gate type';
   END IF;
   RETURN result;
 END
 $$ LANGUAGE plpgsql;
 
-CREATE TYPE gate_with_prob AS (f UUID, t UUID, gate_type provenance_gate, prob DOUBLE PRECISION);
 CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[]);
-
-CREATE OR REPLACE FUNCTION sub_circuit_with_prob(
-  token provenance_token,
-  token2prob regclass) RETURNS SETOF gate_with_prob AS
-$$
-BEGIN
-  RETURN QUERY EXECUTE
-      'WITH RECURSIVE transitive_closure(f,t) AS (
-        SELECT f,t FROM provsql.provenance_circuit_wire WHERE f=$1
-          UNION ALL
-        SELECT p2.f,p2.t FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f
-      ) SELECT f::uuid, t::uuid, gate_type, NULL FROM transitive_closure JOIN provsql.provenance_circuit_gate ON f = gate
-        UNION ALL
-        SELECT p2.provenance, NULL, ''input'', p2.value AS prob FROM transitive_closure p1 JOIN ' || token2prob ||' AS p2 ON provenance=t
-        UNION ALL
-        SELECT provenance, NULL, ''input'', value AS prob FROM ' || token2prob || ' WHERE provenance=$1'
-  USING token;
-END  
-$$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION sub_circuit_with_desc(
   token provenance_token, 
@@ -484,16 +469,15 @@ $$
 BEGIN
   RETURN QUERY EXECUTE
     'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
-      SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
-      UNION ALL
-      SELECT DISTINCT p2.f,p2.t,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f
-      JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f )
+      SELECT $1,t::provenance_token,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
+        UNION ALL
+      SELECT p1.t,u::provenance_token,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)
     SELECT t1.*, infos FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
-      UNION ALL
+        UNION ALL
       SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', CAST (p2.value AS varchar) FROM transitive_closure p1 JOIN ' || token2desc || ' AS p2 
         ON p2.provenance=t
-      UNION ALL
+        UNION ALL
       SELECT provenance::uuid as f, NULL::uuid, ''input'', CAST (value AS varchar) FROM ' || token2desc || ' WHERE provenance=$1 
     ) t1
     LEFT OUTER JOIN (
@@ -539,9 +523,9 @@ CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
   RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
 $$
     WITH RECURSIVE transitive_closure(f,t,idx,gate_type) AS (
-      SELECT f,t,idx,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
+      SELECT $1,t::provenance_token,row_number() over(),provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
         UNION ALL
-      SELECT DISTINCT p2.*,p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
+      SELECT p1.t,u::provenance_token,row_number() over(PARTITION BY p1.t),provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u
     ) SELECT t1.f, t1.t, t1.gate_type, table_name, nb_columns, infos, row_number() over() FROM (
       SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
       UNION ALL
@@ -553,23 +537,6 @@ $$
     ) t2 ON t1.f=t2.gate ORDER BY f,idx
 $$
 LANGUAGE sql;
-
-CREATE OR REPLACE FUNCTION sub_circuit(token provenance_token)
-  RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate) AS
-$$
-    WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
-      SELECT f,t,gate_type FROM provsql.provenance_circuit_wire JOIN provsql.provenance_circuit_gate ON gate=f WHERE f=$1
-        UNION ALL
-      SELECT DISTINCT p2.f, p2.t, p3.gate_type FROM transitive_closure p1 JOIN provsql.provenance_circuit_wire p2 ON p1.t=p2.f JOIN provsql.provenance_circuit_gate p3 ON gate=p2.f
-    ) 
-      SELECT f, t::uuid, gate_type FROM transitive_closure
-      UNION ALL
-        SELECT DISTINCT t, NULL::uuid, 'input'::provenance_gate FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)
-      UNION ALL
-        SELECT DISTINCT $1, NULL::uuid, 'input'::provenance_gate
-$$
-LANGUAGE sql;
-*/
 
 --functions and aggregates for aggregate evaluation
 CREATE OR REPLACE FUNCTION provenance_delta
@@ -589,12 +556,7 @@ BEGIN
   
   delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
 
-  BEGIN
-    LOCK TABLE provenance_circuit_gate;
-    INSERT INTO provenance_circuit_gate VALUES(delta_token,'delta');
-    INSERT INTO provenance_circuit_wire VALUES(delta_token,token);
-  EXCEPTION WHEN unique_violation THEN
-  END;
+  PERFORM create_gate(delta_token,'delta',ARRAY[token::uuid]);
 
   RETURN delta_token;
 END
@@ -623,16 +585,14 @@ BEGIN
     agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
       concat('agg',array_to_string(tokens, ',')));
+    LOCK TABLE aggregation_circuit_extra;
+    PERFORM create_gate(agg_tok, 'agg', array_agg(t))
+      FROM unnest(tokens) AS t
+      WHERE t != gate_zero();
     BEGIN
-      LOCK TABLE provenance_circuit_gate;
-      INSERT INTO provenance_circuit_gate VALUES(agg_tok,'agg');
-      INSERT INTO provenance_circuit_wire
-        SELECT agg_tok, t 
-        FROM unnest(tokens) AS t
-        WHERE t != gate_zero();
       INSERT INTO aggregation_circuit_extra VALUES(agg_tok, aggfnoid, aggtype, agg_val);
     EXCEPTION WHEN unique_violation THEN
-    END;
+    END;  
   END IF;
   
   RETURN '( '||agg_tok||' , '||agg_val||' )';
@@ -646,28 +606,22 @@ DECLARE
   semimod_token uuid;
   value_token uuid;
 BEGIN
-  LOCK TABLE provenance_circuit_gate;
+  LOCK TABLE aggregation_values;
 
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR)))
     INTO value_token;
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
     INTO semimod_token;
 
+  --create value gates
+  PERFORM create_gate(value_token,'value');
   BEGIN
-    --create value gates
-    INSERT INTO provenance_circuit_gate VALUES(value_token,'value');
     INSERT INTO aggregation_values VALUES(value_token,CAST(val AS VARCHAR));
   EXCEPTION WHEN unique_violation THEN
-  END;
-  -- the unique violation should be different!!
+  END;  
 
-  BEGIN
-    --create semimod gate
-    INSERT INTO provenance_circuit_gate VALUES(semimod_token,'semimod');
-    INSERT INTO provenance_circuit_wire VALUES(semimod_token,token,0);
-    INSERT INTO provenance_circuit_wire VALUES(semimod_token,value_token,1);
-  EXCEPTION WHEN unique_violation THEN
-  END;
+  --create semimod gate
+  PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
 
   RETURN semimod_token;
 END

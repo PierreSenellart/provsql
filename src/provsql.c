@@ -751,7 +751,12 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
     {
       Aggref *ar_v = (Aggref *)te_v->expr; 
       TargetEntry *te_new = makeNode(TargetEntry);
+#if PG_VERSION_NUM >= 90600
+    /* aggargtypes was added in version 9.6 of PostgreSQL */
       var->vartype = linitial_oid(ar_v->aggargtypes);
+#else
+      var->vartype = exprType((Node*) ((TargetEntry*)linitial(ar_v->args))->expr);
+#endif
       te_new->resno = 1;
       te_new->expr = (Expr*) var;
       ar_v->args = list_make1(te_new);
@@ -1512,7 +1517,7 @@ void _PG_init(void)
                           "Maximum number of gates kept in memory",
                           NULL,
                           &provsql_max_nb_gates,
-                          100000000,
+                          10000000,
                           1000,
                           INT_MAX,
                           PGC_POSTMASTER,
@@ -1550,7 +1555,13 @@ void _PG_init(void)
 
   // Request shared resources
   RequestAddinShmemSpace(provsql_memsize());
+  
+#if PG_VERSION_NUM >= 90600
+  /* Named lock tranches were added in version 9.6 of PostgreSQL */
   RequestNamedLWLockTranche("provsql", 1);
+#else
+  RequestAddinLWLocks(1);
+#endif /* PG_VERSION_NUM >= 90600 */
 
   prev_planner = planner_hook;
   prev_shmem_startup = shmem_startup_hook;

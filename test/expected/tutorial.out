@@ -36,11 +36,6 @@
  Daphine   | 4
 (13 rows)
 
- create_provenance_mapping 
----------------------------
- 
-(1 row)
-
  remove_provenance 
 -------------------
  

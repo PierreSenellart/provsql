@@ -348,12 +348,14 @@ UPDATE s
 SET reliability=(SELECT score 
                  FROM reliability JOIN person ON reliability.person=person.id 
                  WHERE person.name=s.witness);
-SELECT create_provenance_mapping('reliability_mapping','s','reliability');
+DO $$ BEGIN
+PERFORM set_prob(provenance(),reliability) FROM s;
+END $$;
 CREATE TABLE results AS 
 SELECT *,
-         ROUND(probability_evaluate(provenance(),'reliability_mapping','possible-worlds')::NUMERIC,5)
+         ROUND(probability_evaluate(provenance(),'possible-worlds')::NUMERIC,5)
 FROM suspects
-WHERE probability_evaluate(provenance(),'reliability_mapping','possible-worlds')>0.99 AND
+WHERE probability_evaluate(provenance(),'possible-worlds')>0.99 AND
       person<>'Daphine';
 SELECT remove_provenance('results');
 SELECT * FROM results;
