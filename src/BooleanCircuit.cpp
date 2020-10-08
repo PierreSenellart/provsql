@@ -4,6 +4,9 @@
 extern "C" {
 #include <unistd.h>
 #include <math.h>
+
+#include "c.h"
+#include "utils/elog.h"
 }
 
 #include <cassert>
@@ -19,6 +22,8 @@ extern "C" {
 // "provsql_utils.h"
 #ifdef TDKC
 constexpr bool provsql_interrupted = false;
+constexpr int provsql_verbose = 0;
+#define elog(level, ...) ;
 #else
 #include "provsql_utils.h"
 #endif
@@ -291,6 +296,10 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
 
+  if(provsql_verbose>=20) {
+    elog(NOTICE, "Tseytin circuit in %s", filename.c_str());
+  }
+
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
     cmdline+=filename+" -out="+outfilename;
@@ -306,8 +315,10 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   int retvalue=system(cmdline.c_str());
 
-  if(unlink(filename.c_str())) {
-    throw CircuitException("Error removing "+filename);
+  if(provsql_verbose<20) {
+    if(unlink(filename.c_str())) {
+      throw CircuitException("Error removing "+filename);
+    }
   }
 
   if(retvalue)    
@@ -376,9 +387,13 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   }
 
   ifs.close();
-  if(unlink(outfilename.c_str())) {
-    throw CircuitException("Error removing "+outfilename);
-  }
+
+  if(provsql_verbose<20) {
+    if(unlink(outfilename.c_str())) {
+      throw CircuitException("Error removing "+outfilename);
+    }
+  } else
+    elog(NOTICE, "Compiled d-DNNF in %s", outfilename.c_str());
 
   return dnnf.dDNNFEvaluation(dnnf.getGate(std::to_string(i-1)));
 }

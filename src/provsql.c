@@ -1269,7 +1269,7 @@ static Query *process_query(
   int **columns;
   unsigned i=0;
 
-  if(provsql_verbose>=10)
+  if(provsql_verbose>=50)
     elog_node_display(NOTICE, "Before ProvSQL query rewriting", q, true);
     
   if(q->rtable == NULL) {
@@ -1453,7 +1453,7 @@ static Query *process_query(
       pfree(columns[i]);
   }
 
-  if(provsql_verbose>=10)
+  if(provsql_verbose>=50)
     elog_node_display(NOTICE, "After ProvSQL query rewriting", q, true);
 
   return q;
@@ -1500,7 +1500,7 @@ void _PG_init(void)
                            NULL,
                            NULL,
                            NULL);
-  DefineCustomIntVariable("provsql.verbose",
+  DefineCustomIntVariable("provsql.verbose_level",
                            "Level of verbosity for ProvSQL informational and debug messages",
                            "0 for quiet (default), 1-9 for informational messages, 10-100 for debug information.",
                            &provsql_verbose,
