@@ -4,9 +4,6 @@
 extern "C" {
 #include <unistd.h>
 #include <math.h>
-
-#include "c.h"
-#include "utils/elog.h"
 }
 
 #include <cassert>
@@ -23,9 +20,10 @@ extern "C" {
 #ifdef TDKC
 constexpr bool provsql_interrupted = false;
 constexpr int provsql_verbose = 0;
-#define elog(level, ...) ;
+#define elog(level, ...) {;}
 #else
 #include "provsql_utils.h"
+#include "utils/elog.h"
 #endif
 
 gate_t BooleanCircuit::setGate(BooleanGate type)
