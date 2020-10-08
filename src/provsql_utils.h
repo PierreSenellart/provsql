@@ -51,5 +51,6 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId);
 
 extern bool provsql_interrupted;
 extern bool provsql_where_provenance;
+extern int provsql_verbose;
 
 #endif /* PROVSQL_UTILS_H */

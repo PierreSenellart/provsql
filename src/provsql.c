@@ -31,7 +31,7 @@ PG_MODULE_MAGIC;
 
 bool provsql_interrupted = false;
 bool provsql_where_provenance = false;
-bool provsql_debug = false;
+int provsql_verbose = 0;
 
 static const char *PROVSQL_COLUMN_NAME = "provsql";
 
@@ -1264,7 +1264,7 @@ static Query *process_query(
   int **columns;
   unsigned i=0;
 
-  if(provsql_debug)
+  if(provsql_verbose>=10)
     elog_node_display(NOTICE, "Before ProvSQL query rewriting", q, true);
     
   if(q->rtable == NULL) {
@@ -1448,7 +1448,7 @@ static Query *process_query(
       pfree(columns[i]);
   }
 
-  if(provsql_debug)
+  if(provsql_verbose>=10)
     elog_node_display(NOTICE, "After ProvSQL query rewriting", q, true);
 
   return q;
@@ -1491,15 +1491,17 @@ void _PG_init(void)
                            &provsql_where_provenance,
                            false,
                            PGC_USERSET,
-                           1,
+                           0,
                            NULL,
                            NULL,
                            NULL);
-  DefineCustomBoolVariable("provsql.debug",
-                           "Should ProvSQL debug messages be track where-provenance?",
-                           "1 turns ProvSQL debug messages on, 0 off.",
-                           &provsql_debug,
-                           false,
+  DefineCustomIntVariable("provsql.verbose",
+                           "Level of verbosity for ProvSQL informational and debug messages",
+                           "0 for quiet (default), 1-9 for informational messages, 10-100 for debug information.",
+                           &provsql_verbose,
+                           0,
+                           10,
+                           100,
                            PGC_USERSET,
                            1,
                            NULL,
