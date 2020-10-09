@@ -23,7 +23,9 @@ constexpr int provsql_verbose = 0;
 #define elog(level, ...) {;}
 #else
 #include "provsql_utils.h"
+extern "C" {
 #include "utils/elog.h"
+}
 #endif
 
 gate_t BooleanCircuit::setGate(BooleanGate type)
