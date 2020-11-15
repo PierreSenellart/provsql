@@ -27,6 +27,8 @@
 #error "ProvSQL requires PostgreSQL version 9.4 or later"
 #endif
 
+#include "compatibility.h"
+
 PG_MODULE_MAGIC;
 
 bool provsql_interrupted = false;
@@ -46,8 +48,18 @@ static Query *process_query(
 static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, AttrNumber attid) {
   RelabelType *re = makeNode(RelabelType);
   Var *v = makeNode(Var);
-  v->varno = v->varnoold = relid;
-  v->varattno = v->varoattno = attid;
+
+  v->varno = relid;
+  v->varattno = attid;
+
+#if PG_VERSION_NUM >= 130000
+  v->varnosyn = 0;
+  v->varattnosyn = 0;
+#else
+  v->varnoold = relid;
+  v->varoattno = attid;
+#endif
+
   v->vartype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
   v->varcollid = InvalidOid;
   v->vartypmod = -1;
@@ -233,7 +245,7 @@ static Bitmapset *remove_provenance_attributes_select(
 
         if (!strcmp(colname, PROVSQL_COLUMN_NAME))
         {
-          q->targetList = list_delete_cell(q->targetList, cell, prev);
+          q->targetList = my_list_delete_cell(q->targetList, cell, prev);
 
           (*removed)[i] = true;
           ++nbRemoved;
@@ -248,7 +260,7 @@ static Bitmapset *remove_provenance_attributes_select(
     {
       if (prev)
       {
-        cell = lnext(prev);
+        cell = my_lnext(q->targetList, prev);
       }
       else
       {
@@ -259,7 +271,7 @@ static Bitmapset *remove_provenance_attributes_select(
     {
       rt->resno -= nbRemoved;
       prev = cell;
-      cell = lnext(cell);
+      cell = my_lnext(q->targetList, cell);
     }
 
     ++i;
@@ -297,7 +309,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
   Var *v1;
   Var *v2;
 
-  if (lnext(list_head(fromOpExpr->args)))
+  if (my_lnext(fromOpExpr->args, list_head(fromOpExpr->args)))
   {
     /* Sometimes Var is nested within a RelabelType */
     if (IsA(linitial(fromOpExpr->args), Var))
@@ -430,7 +442,7 @@ static Expr *make_aggregation_expression(
   }
   else
   {
-    if (lnext(list_head(prov_atts)) == NULL)
+    if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
     {
       expr = linitial(prov_atts);
     }
@@ -544,7 +556,7 @@ static Expr *make_provenance_expression(
     RelabelType *re=(RelabelType *) linitial(prov_atts);
     result=re->arg;
   } else {
-    if(lnext(list_head(prov_atts))==NULL) {
+    if(lnext(prov_atts, list_head(prov_atts))==NULL) {
       expr=linitial(prov_atts);
     } else {
       expr=makeNode(FuncExpr);
@@ -946,11 +958,11 @@ static void remove_provenance_attribute_groupref(Query *q, const Bitmapset *remo
       SortGroupClause *sgc = (SortGroupClause *)lfirst(cell);
       if (bms_is_member(sgc->tleSortGroupRef, removed_sortgrouprefs))
       {
-        *lists[i] = list_delete_cell(*lists[i], cell, prev);
+        *lists[i] = my_list_delete_cell(*lists[i], cell, prev);
 
         if (prev)
         {
-          cell = lnext(prev);
+          cell = my_lnext(*lists[i], prev);
         }
         else
         {
@@ -960,7 +972,7 @@ static void remove_provenance_attribute_groupref(Query *q, const Bitmapset *remo
       else
       {
         prev = cell;
-        cell = lnext(cell);
+        cell = my_lnext(*lists[i], cell);
       }
     }
   }
@@ -983,11 +995,11 @@ static void remove_provenance_attribute_setoperations(Query *q, bool *removed)
     {
       if (removed[j])
       {
-        *lists[i] = list_delete_cell(*lists[i], cell, prev);
+        *lists[i] = my_list_delete_cell(*lists[i], cell, prev);
 
         if (prev)
         {
-          cell = lnext(prev);
+          cell = my_lnext(*lists[i], prev);
         }
         else
         {
@@ -997,7 +1009,7 @@ static void remove_provenance_attribute_setoperations(Query *q, bool *removed)
       else
       {
         prev = cell;
-        cell = lnext(cell);
+        cell = my_lnext(*lists[i], cell);
       }
     }
   }
@@ -1187,10 +1199,19 @@ static bool transform_except_into_join(
       oe->opcollid = InvalidOid;
       oe->inputcollid = DEFAULT_COLLATION_OID;
 
-      leftArg->varno = leftArg->varnoold = ((RangeTblRef *)setOps->larg)->rtindex;
-      rightArg->varno = rightArg->varnoold = ((RangeTblRef *)setOps->rarg)->rtindex;
+      leftArg->varno = ((RangeTblRef *)setOps->larg)->rtindex;
+      rightArg->varno = ((RangeTblRef *)setOps->rarg)->rtindex;
       leftArg->varattno = rightArg->varattno = attno;
+
+#if PG_VERSION_NUM >= 130000
+      leftArg->varnosyn = rightArg->varnosyn = 0;
+      leftArg->varattnosyn = rightArg->varattnosyn = 0;
+#else
+      leftArg->varnoold = leftArg->varno;
+      rightArg->varnoold = rightArg->varno;
       leftArg->varoattno = rightArg->varoattno = attno;
+#endif
+
       leftArg->vartype = rightArg->vartype = v->vartype;
       leftArg->varcollid = rightArg->varcollid = InvalidOid;
       leftArg->vartypmod = rightArg->vartypmod = -1;
@@ -1461,6 +1482,9 @@ static Query *process_query(
 
 static PlannedStmt *provsql_planner(
     Query *q,
+#if PG_VERSION_NUM >= 130000
+    const char *query_string,
+#endif
     int cursorOptions,
     ParamListInfo boundParams)
 {
@@ -1480,9 +1504,21 @@ static PlannedStmt *provsql_planner(
   }
 
   if (prev_planner)
-    return prev_planner(q, cursorOptions, boundParams);
+    return prev_planner(
+        q,
+#if PG_VERSION_NUM >= 130000
+        query_string,
+#endif
+        cursorOptions,
+        boundParams);
   else
-    return standard_planner(q, cursorOptions, boundParams);
+    return standard_planner(
+        q,
+#if PG_VERSION_NUM >= 130000
+        query_string,
+#endif
+        cursorOptions,
+        boundParams);
 }
 
 void _PG_init(void)
