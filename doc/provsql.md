@@ -91,7 +91,8 @@ and to use a Web interface for simple visualization of where-provenance.
 
 1. Compile the code with `make`. If you have several installed versions
    of PostgreSQL, you can change the version the module is compiled
-   against by changing the reference to `pg_config` in the Makefile.
+   against by changing the reference to `pg_config` in the
+   `Makefile.internal` file.
 
 2. Install it in the PostgreSQL extensions directory with `make install`
    (run as a user with rights to write to the PostgreSQL installation
