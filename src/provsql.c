@@ -23,8 +23,8 @@
 #include "provsql_utils.h"
 #include "provsql_shmem.h"
 
-#if PG_VERSION_NUM < 90400
-#error "ProvSQL requires PostgreSQL version 9.4 or later"
+#if PG_VERSION_NUM < 90500
+#error "ProvSQL requires PostgreSQL version 9.5 or later"
 #endif
 
 #include "compatibility.h"
