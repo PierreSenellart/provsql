@@ -556,7 +556,7 @@ static Expr *make_provenance_expression(
     RelabelType *re=(RelabelType *) linitial(prov_atts);
     result=re->arg;
   } else {
-    if(lnext(prov_atts, list_head(prov_atts))==NULL) {
+    if(my_lnext(prov_atts, list_head(prov_atts))==NULL) {
       expr=linitial(prov_atts);
     } else {
       expr=makeNode(FuncExpr);
