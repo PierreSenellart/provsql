@@ -113,10 +113,13 @@ and to use a Web interface for simple visualization of where-provenance.
 You can test your installation by running `make installcheck` as a
 PostgreSQL administrator user. If you do not want to run this as the
 default administrator user, you can make yourself a PostgreSQL
-administrator with ``ALTER USER your_login WITH SUPERUSER``. This assumes that
-``your_login`` is a PostgreSQL user: on Debian-based Linux distributions, you
-can ensure this by running the command ``createuser your_login`` as the
-``postgres`` user.
+administrator with `ALTER USER your_login WITH SUPERUSER`. This assumes that
+`your_login` is a PostgreSQL user: on Debian-based Linux distributions, you
+can ensure this by running the command `createuser your_login` as the
+`postgres` user. If your installation of PostgreSQL does not listen on
+the default (5432) port, you can add ` --port=xxxx` to the
+`REGRESS_OPTS` line of `Makefile.internal`, where `xxxx` is the port
+number.
 
 Note that the tests that depend on external software (`c2d`, `d4`, 
 `dsharp`, `minic2d`, `weightmc`, `graph-easy`) will fail if no executable of
