@@ -44,7 +44,7 @@ and to use a Web interface for simple visualization of where-provenance.
 ## Prerequisites for installation
 
 1. An install of PostgreSQL >= 9.5. The extension has currently been
-   tested with versions from 9.5 to 12.2 (inclusive) of PostgreSQL, under
+   tested with versions from 9.5 to 13 (inclusive) of PostgreSQL, under
    Linux and Mac OS X (if the extension does not work on a specific version
    or operating system, a bug report is appreciated).
 
