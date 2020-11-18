@@ -1,0 +1,12 @@
+\set ECHO none
+ add_provenance 
+----------------
+ 
+(1 row)
+
+                      Table "public.u"
+ Column  |       Type       | Collation | Nullable | Default 
+---------+------------------+-----------+----------+---------
+ n       | integer          |           |          | 
+ provsql | provenance_token |           |          | 
+

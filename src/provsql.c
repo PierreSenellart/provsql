@@ -549,35 +549,44 @@ static Expr *make_provenance_expression(
     int nbcols)
 {
   Expr *result;
-  FuncExpr *expr;
   ListCell *lc_v;
 
-  if(op==SR_PLUS) {
-    RelabelType *re=(RelabelType *) linitial(prov_atts);
-    result=re->arg;
+  if (op == SR_PLUS) {
+    RelabelType *re = (RelabelType *)linitial(prov_atts);
+    result = re->arg;
   } else {
-    if(my_lnext(prov_atts, list_head(prov_atts))==NULL) {
-      expr=linitial(prov_atts);
-    } else {
-      expr=makeNode(FuncExpr);
-      if(op==SR_TIMES) {
-        ArrayExpr *array=makeNode(ArrayExpr);
-  
-        expr->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_TIMES;
-        expr->funcvariadic=true;
-        
-        array->array_typeid=provsql_shared_state->constants.OID_TYPE_UUID_ARRAY;
-        array->element_typeid=provsql_shared_state->constants.OID_TYPE_UUID;
-        array->elements=prov_atts;
-        array->location=-1;
-        
-        expr->args=list_make1(array);
-      } else { // SR_MONUS
-        expr->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_MONUS;
-        expr->args=prov_atts;
+    if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
+    {
+      result = linitial(prov_atts);
+      if(result->type == T_RelabelType) {
+        // Change type uuid to proper type provenance_token (see #19)
+        ((RelabelType*) result)->resulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
       }
-      expr->funcresulttype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
-      expr->location=-1;
+    } else {
+      FuncExpr *expr = makeNode(FuncExpr);
+      if (op == SR_TIMES)
+      {
+        ArrayExpr *array = makeNode(ArrayExpr);
+
+        expr->funcid = provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_TIMES;
+        expr->funcvariadic = true;
+
+        array->array_typeid = provsql_shared_state->constants.OID_TYPE_UUID_ARRAY;
+        array->element_typeid = provsql_shared_state->constants.OID_TYPE_UUID;
+        array->elements = prov_atts;
+        array->location = -1;
+
+        expr->args = list_make1(array);
+      }
+      else
+      { // SR_MONUS
+        expr->funcid = provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_MONUS;
+        expr->args = prov_atts;
+      }
+      expr->funcresulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+      expr->location = -1;
+      
+      result = (Expr*) expr;
     }
 
     if (group_by_rewrite || aggregation)
@@ -589,7 +598,7 @@ static Expr *make_provenance_expression(
       q->hasAggs = true;
 
       te_inner->resno = 1;
-      te_inner->expr = (Expr *)expr;
+      te_inner->expr = (Expr *)result;
 
       agg->aggfnoid=provsql_shared_state->constants.OID_FUNCTION_ARRAY_AGG;
       agg->aggtype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
@@ -608,22 +617,18 @@ static Expr *make_provenance_expression(
       plus->location=-1;
 
       result=(Expr*)plus;
-    } else {
-      result=(Expr*)expr;
     }
 
-  if (aggregation)
-    { //aggregation
-      FuncExpr *deltaExpr = makeNode(FuncExpr);
+    if (aggregation) {
+        FuncExpr *deltaExpr = makeNode(FuncExpr);
 
-      //adding the delta gate to the provenance circuit
-      deltaExpr->funcid = provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_DELTA;
-      deltaExpr->args = list_make1(result);
-      deltaExpr->funcresulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
-      deltaExpr->location = -1;
+        //adding the delta gate to the provenance circuit
+        deltaExpr->funcid = provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_DELTA;
+        deltaExpr->args = list_make1(result);
+        deltaExpr->funcresulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+        deltaExpr->location = -1;
 
-      result = (Expr *)deltaExpr;
-
+        result = (Expr *)deltaExpr;
     }
   }
 

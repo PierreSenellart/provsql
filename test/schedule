@@ -20,6 +20,7 @@ test: agg_distinct
 test: except 
 test: null
 test: unsupported_features 
+test: create_as
 
 # Adding probabilities
 test: probability_setup
