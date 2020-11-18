@@ -4,9 +4,9 @@
  
 (1 row)
 
-                      Table "public.u"
- Column  |       Type       | Collation | Nullable | Default 
----------+------------------+-----------+----------+---------
- n       | integer          |           |          | 
- provsql | provenance_token |           |          | 
+ attname |     typname      
+---------+------------------
+ n       | int4
+ provsql | provenance_token
+(2 rows)
 
