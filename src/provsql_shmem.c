@@ -6,10 +6,9 @@
 #include "miscadmin.h"
 #include "access/htup_details.h"
 #include "catalog/pg_enum.h"
-#include "catalog/pg_namespace_d.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
-#include "access/htup_details.h"
 #include "parser/parse_func.h"
 #include "storage/shmem.h"
 #include "utils/array.h"
@@ -422,7 +421,11 @@ static void OperatorGet(
   if (HeapTupleIsValid(tup))
   {
     Form_pg_operator oprform = (Form_pg_operator) GETSTRUCT(tup);
+#if PG_VERSION_NUM >= 120000
     *operatorObjectId = oprform->oid;
+#else
+    *operatorObjectId = HeapTupleGetOid(tup);
+#endif
     *functionObjectId = oprform->oprcode;
     defined = RegProcedureIsValid(oprform->oprcode);
     ReleaseSysCache(tup);
