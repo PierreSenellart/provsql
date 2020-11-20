@@ -1,5 +1,8 @@
 #include "postgres.h"
+#include "access/htup_details.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_namespace_d.h"
+#include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "nodes/value.h"
 #include "parser/parse_func.h"
@@ -26,6 +29,44 @@ static Oid GetProvSQLFuncOid(char *s)
     return fcl->oid;    
   else
     return 0;
+}
+
+// Copied over from pg_operator.c as defined static there, with
+// various modifications
+static void OperatorGet(
+    const char *operatorName,
+    Oid operatorNamespace,
+    Oid leftObjectId,
+    Oid rightObjectId,
+    Oid *operatorObjectId,
+    Oid *functionObjectId)
+{
+  HeapTuple tup;
+  bool defined;
+
+  tup = SearchSysCache4(OPERNAMENSP,
+      PointerGetDatum(operatorName),
+      ObjectIdGetDatum(leftObjectId),
+      ObjectIdGetDatum(rightObjectId),
+      ObjectIdGetDatum(operatorNamespace));
+  if (HeapTupleIsValid(tup))
+  {
+    Form_pg_operator oprform = (Form_pg_operator) GETSTRUCT(tup);
+    *operatorObjectId = oprform->oid;
+    *functionObjectId = oprform->oprcode;
+    defined = RegProcedureIsValid(oprform->oprcode);
+    ReleaseSysCache(tup);
+  }
+  else
+  {
+    operatorObjectId = InvalidOid;
+    defined = false;
+  }
+
+  if(!defined) {
+    *operatorObjectId = 0;
+    *functionObjectId = 0;
+  }
 }
 
 bool initialize_constants(constants_t *constants)
@@ -99,6 +140,13 @@ bool initialize_constants(constants_t *constants)
 
   constants->OID_FUNCTION_PROVENANCE_SEMIMOD = GetProvSQLFuncOid("provenance_semimod");
   CheckOid(OID_FUNCTION_PROVENANCE_SEMIMOD);
+
+  constants->OID_FUNCTION_GATE_ZERO = GetProvSQLFuncOid("gate_zero");
+  CheckOid(OID_FUNCTION_GATE_ZERO);
+
+  OperatorGet("<>", PG_CATALOG_NAMESPACE, constants->OID_TYPE_UUID, constants->OID_TYPE_UUID, &constants->OID_OPERATOR_NOT_EQUAL_UUID, &constants->OID_FUNCTION_NOT_EQUAL_UUID);
+  CheckOid(OID_OPERATOR_NOT_EQUAL_UUID);
+  CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
 
   return true;
 }

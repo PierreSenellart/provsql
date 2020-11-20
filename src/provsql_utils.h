@@ -39,6 +39,9 @@ typedef struct constants_t {
   Oid OID_FUNCTION_PROVENANCE_DELTA;
   Oid OID_FUNCTION_PROVENANCE_AGGREGATE;
   Oid OID_FUNCTION_PROVENANCE_SEMIMOD;
+  Oid OID_FUNCTION_GATE_ZERO;
+  Oid OID_OPERATOR_NOT_EQUAL_UUID;
+  Oid OID_FUNCTION_NOT_EQUAL_UUID;
 } constants_t;
 
 bool initialize_constants(constants_t *constants);

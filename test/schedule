@@ -21,6 +21,7 @@ test: except
 test: null
 test: unsupported_features 
 test: create_as
+test: no_zero_gate
 
 # Adding probabilities
 test: probability_setup
