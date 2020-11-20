@@ -49,19 +49,14 @@ static void OperatorGet(
       ObjectIdGetDatum(leftObjectId),
       ObjectIdGetDatum(rightObjectId),
       ObjectIdGetDatum(operatorNamespace));
-  if (HeapTupleIsValid(tup))
-  {
+  if (HeapTupleIsValid(tup)) {
     Form_pg_operator oprform = (Form_pg_operator) GETSTRUCT(tup);
     *operatorObjectId = oprform->oid;
     *functionObjectId = oprform->oprcode;
     defined = RegProcedureIsValid(oprform->oprcode);
     ReleaseSysCache(tup);
-  }
-  else
-  {
-    operatorObjectId = InvalidOid;
+  } else
     defined = false;
-  }
 
   if(!defined) {
     *operatorObjectId = 0;
