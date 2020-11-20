@@ -8,6 +8,7 @@
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_type_d.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
@@ -1283,6 +1284,35 @@ static void process_set_operation_union(
   stmt->all = true ;
 }
 
+static void add_select_non_zero(
+    Query *q,
+    Expr *provsql)
+{
+  FuncExpr *gate_zero = makeNode(FuncExpr);
+  OpExpr *oe = makeNode(OpExpr);
+
+  gate_zero->funcid = provsql_shared_state->constants.OID_FUNCTION_GATE_ZERO;
+  gate_zero->funcresulttype = provsql_shared_state->constants.OID_TYPE_UUID;
+
+  oe->opno = provsql_shared_state->constants.OID_OPERATOR_NOT_EQUAL_UUID;
+  oe->opfuncid = provsql_shared_state->constants.OID_FUNCTION_NOT_EQUAL_UUID;
+  oe->opresulttype = BOOLOID;
+  oe->args = list_make2(provsql, gate_zero);
+  oe->location = -1;
+
+  if(q->jointree->quals != NULL)
+  {
+    BoolExpr *be = makeNode(BoolExpr);
+
+    be->boolop = AND_EXPR;
+    be->args = list_make2(oe, q->jointree->quals);
+    be->location = -1;
+
+    q->jointree->quals = (Node*) be;
+  } else
+    q->jointree->quals = (Node*) oe;
+}
+
 static Query *process_query(
     Query *q)
 {
@@ -1471,6 +1501,9 @@ static Query *process_query(
 
     add_to_select(q,provenance);
     replace_provenance_function_by_expression(q, provenance);
+
+    if(has_difference)
+      add_select_non_zero(q, provenance);
   }
 
   for (i = 0; i < q->rtable->length; ++i)

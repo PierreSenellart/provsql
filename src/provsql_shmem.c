@@ -4,7 +4,10 @@
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "access/htup_details.h"
 #include "catalog/pg_enum.h"
+#include "catalog/pg_namespace_d.h"
+#include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "access/htup_details.h"
 #include "parser/parse_func.h"
@@ -398,6 +401,43 @@ static Oid get_provsql_func_oid(char *s)
     return 0;
 }
 
+// Copied over from pg_operator.c as defined static there, with
+// various modifications
+static void OperatorGet(
+    const char *operatorName,
+    Oid operatorNamespace,
+    Oid leftObjectId,
+    Oid rightObjectId,
+    Oid *operatorObjectId,
+    Oid *functionObjectId)
+{
+  HeapTuple tup;
+  bool defined;
+
+  tup = SearchSysCache4(OPERNAMENSP,
+      PointerGetDatum(operatorName),
+      ObjectIdGetDatum(leftObjectId),
+      ObjectIdGetDatum(rightObjectId),
+      ObjectIdGetDatum(operatorNamespace));
+  if (HeapTupleIsValid(tup))
+  {
+    Form_pg_operator oprform = (Form_pg_operator) GETSTRUCT(tup);
+    *operatorObjectId = oprform->oid;
+    *functionObjectId = oprform->oprcode;
+    defined = RegProcedureIsValid(oprform->oprcode);
+    ReleaseSysCache(tup);
+  }
+  else
+  {
+    defined = false;
+  }
+
+  if(!defined) {
+    *operatorObjectId = 0;
+    *functionObjectId = 0;
+  }
+}
+
 static Oid get_enum_oid(Oid enumtypoid, const char *label)
 {
   HeapTuple   tup;
@@ -499,6 +539,13 @@ Datum initialize_constants(PG_FUNCTION_ARGS)
 
   provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_SEMIMOD = get_provsql_func_oid("provenance_semimod");
   CheckOid(OID_FUNCTION_PROVENANCE_SEMIMOD);
+
+  provsql_shared_state->constants.OID_FUNCTION_GATE_ZERO = get_provsql_func_oid("gate_zero");
+  CheckOid(OID_FUNCTION_GATE_ZERO);
+
+  OperatorGet("<>", PG_CATALOG_NAMESPACE, provsql_shared_state->constants.OID_TYPE_UUID, provsql_shared_state->constants.OID_TYPE_UUID, &provsql_shared_state->constants.OID_OPERATOR_NOT_EQUAL_UUID, &provsql_shared_state->constants.OID_FUNCTION_NOT_EQUAL_UUID);
+  CheckOid(OID_OPERATOR_NOT_EQUAL_UUID);
+  CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
 
   #define GET_GATE_TYPE_OID(x) { \
   provsql_shared_state->constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
