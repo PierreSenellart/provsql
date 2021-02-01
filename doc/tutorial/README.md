@@ -109,7 +109,7 @@ Solving the murder
 
 1.   Create a `suspects` table containing all distinct persons that were
      sighted (in a consistent sighting) during the time the murder was committed in
-     one of the room the murder may have been committed. Display the
+     one of the rooms the murder may have been committed. Display the
      content of the `suspects` table along with the provenance formula
      for each tuple.
 
@@ -130,7 +130,7 @@ Solving the murder
      the murderer. Similarly as in the previous question, add to the `s`
      table a `reliability` column to store floating-point reliability
      scores; set the reliability score of each sighting to that of the
-     witness of the sighting. Create a provenance mapping mapping
+     witness of the sighting. Create a provenance mapping that maps
      provenance tokens to this reliability score.
 
 1.   Let us know find the murderer! The police needs a confidence of at
