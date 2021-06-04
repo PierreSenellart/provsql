@@ -40,6 +40,10 @@ docker run inriavalda/provsql
 By following the instructions, you will be able to connect to the
 PostgreSQL server within the container using a PostgreSQL client,
 and to use a Web interface for simple visualization of where-provenance.
+The Docker container can also be built locally, using:
+```
+make docker-build
+```
 
 ## Prerequisites for installation
 
