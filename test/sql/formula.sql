@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 /* The provenance formula m-semiring */
 CREATE TYPE formula_state AS (
@@ -75,7 +75,7 @@ CREATE AGGREGATE formula_times(text)
   finalfunc = formula_state2formula
 );
 
-CREATE FUNCTION public.formula_delta(formula text) RETURNS text
+CREATE FUNCTION formula_delta(formula text) RETURNS text
     LANGUAGE sql IMMUTABLE STRICT
     AS $$   
   SELECT concat('δ(',formula,')')

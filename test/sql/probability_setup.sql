@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 /* We use PERFORM in anonymous code block instead of SELECT to avoid the
  * display of provenance tokens */

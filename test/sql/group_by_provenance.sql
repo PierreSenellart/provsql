@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public,provsql;
+SET search_path TO provsql_test, provsql;
 
 CREATE TABLE group_by_provenance_result AS
   SELECT city, formula(provenance(),'personnel_name')

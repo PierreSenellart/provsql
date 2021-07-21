@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 /* The security semiring */
 CREATE FUNCTION security_min_state(state classification_level, level classification_level)

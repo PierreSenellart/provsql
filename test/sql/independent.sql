@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 -- Will fail because this is not independent
 CREATE TABLE independent_result AS

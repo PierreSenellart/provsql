@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 /* The BOOLEAN m-semiring */
 CREATE FUNCTION boolean_plus_state(state BOOLEAN, value BOOLEAN)

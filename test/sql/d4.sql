@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 CREATE TABLE d4_result AS
 SELECT city, probability_evaluate(provenance(),'compilation','d4') AS prob
