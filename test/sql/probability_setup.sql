@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 /* Add some probabilities to the personnel table */
 ALTER TABLE personnel ADD COLUMN probability DOUBLE PRECISION;

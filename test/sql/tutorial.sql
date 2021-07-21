@@ -1,32 +1,32 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
-CREATE TABLE public.person (
+CREATE TABLE person (
     id integer NOT NULL,
     name text NOT NULL,
     date_of_birth date,
     height smallint
 );
 
-CREATE TABLE public.reliability (
+CREATE TABLE reliability (
     person integer NOT NULL,
     score double precision NOT NULL
 );
 
-CREATE TABLE public.room (
+CREATE TABLE room (
     id integer NOT NULL,
     name text NOT NULL,
     area smallint
 );
 
-CREATE TABLE public.sightings (
+CREATE TABLE sightings (
     "time" time without time zone NOT NULL,
     person integer NOT NULL,
     room integer NOT NULL,
     witness integer
 );
 
-COPY public.person (id, name, date_of_birth, height) FROM stdin;
+COPY person (id, name, date_of_birth, height) FROM stdin;
 0	Titus	1969-04-03	163
 1	Norah	1983-10-15	194
 2	Ginny	1989-10-23	169
@@ -49,7 +49,7 @@ COPY public.person (id, name, date_of_birth, height) FROM stdin;
 19	Kyra	1966-05-04	202
 \.
 
-COPY public.reliability (person, score) FROM stdin;
+COPY reliability (person, score) FROM stdin;
 0	0.23828493492944236
 1	0.657319818187148019
 2	0.745325911826738019
@@ -71,7 +71,7 @@ COPY public.reliability (person, score) FROM stdin;
 19	0.681836780693319988
 \.
 
-COPY public.room (id, name, area) FROM stdin;
+COPY room (id, name, area) FROM stdin;
 0	Dining room	23
 1	Blue bedroom	20
 2	Red bedroom	31
@@ -84,7 +84,7 @@ COPY public.room (id, name, area) FROM stdin;
 9	Library	27
 \.
 
-COPY public.sightings ("time", person, room, witness) FROM stdin;
+COPY sightings ("time", person, room, witness) FROM stdin;
 02:30:00	19	8	0
 05:00:00	11	9	0
 03:00:00	19	2	0
@@ -295,26 +295,26 @@ COPY public.sightings ("time", person, room, witness) FROM stdin;
 15:30:00	5	5	19
 \.
 
-ALTER TABLE ONLY public.person
+ALTER TABLE ONLY person
     ADD CONSTRAINT person_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.reliability
+ALTER TABLE ONLY reliability
     ADD CONSTRAINT reliability_pkey PRIMARY KEY (person);
 
-ALTER TABLE ONLY public.room
+ALTER TABLE ONLY room
     ADD CONSTRAINT room_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.reliability
-    ADD CONSTRAINT reliability_person_fkey FOREIGN KEY (person) REFERENCES public.person(id);
+ALTER TABLE ONLY reliability
+    ADD CONSTRAINT reliability_person_fkey FOREIGN KEY (person) REFERENCES person(id);
 
-ALTER TABLE ONLY public.sightings
-    ADD CONSTRAINT sightings_person_fkey FOREIGN KEY (person) REFERENCES public.person(id);
+ALTER TABLE ONLY sightings
+    ADD CONSTRAINT sightings_person_fkey FOREIGN KEY (person) REFERENCES person(id);
 
-ALTER TABLE ONLY public.sightings
-    ADD CONSTRAINT sightings_room_fkey FOREIGN KEY (room) REFERENCES public.room(id);
+ALTER TABLE ONLY sightings
+    ADD CONSTRAINT sightings_room_fkey FOREIGN KEY (room) REFERENCES room(id);
 
-ALTER TABLE ONLY public.sightings
-    ADD CONSTRAINT sightings_witness_fkey FOREIGN KEY (witness) REFERENCES public.person(id);
+ALTER TABLE ONLY sightings
+    ADD CONSTRAINT sightings_witness_fkey FOREIGN KEY (witness) REFERENCES person(id);
 
 CREATE TABLE s AS 
   SELECT time, person.name AS person, p2.name AS witness, room.name AS room

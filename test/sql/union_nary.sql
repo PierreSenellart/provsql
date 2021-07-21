@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public,provsql;
+SET search_path TO provsql_test, provsql;
 
 CREATE TABLE nested_union_result AS
 SELECT *,formula(provenance(),'personnel_name') FROM (

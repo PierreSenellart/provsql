@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 CREATE TABLE a(f int);
 CREATE TABLE b(f int);

@@ -1,15 +1,15 @@
 \set ECHO none
-SET search_path TO public,provsql;
+SET search_path TO provsql_test, provsql;
 
 --aggregation formula
 
-CREATE FUNCTION public.formula_semimod(formula1 text, formula2 text) RETURNS text
+CREATE FUNCTION formula_semimod(formula1 text, formula2 text) RETURNS text
     LANGUAGE sql IMMUTABLE STRICT
     AS $$
   SELECT concat('(',formula1,' * ',formula2,')')
 $$;
 
-CREATE FUNCTION public.formula_agg_state(state public.formula_state, value text) RETURNS public.formula_state
+CREATE FUNCTION formula_agg_state(state formula_state, value text) RETURNS formula_state
     LANGUAGE plpgsql IMMUTABLE
     AS $$
 BEGIN
@@ -21,20 +21,20 @@ BEGIN
 END
 $$;
 
-CREATE AGGREGATE public.formula_agg(text) (
-    SFUNC = public.formula_agg_state,
-    STYPE = public.formula_state,
+CREATE AGGREGATE formula_agg(text) (
+    SFUNC = formula_agg_state,
+    STYPE = formula_state,
     INITCOND = '(1,0)'
 );
 
-CREATE FUNCTION public.formula_agg_final(state public.formula_state, fname varchar) RETURNS text
+CREATE FUNCTION formula_agg_final(state formula_state, fname varchar) RETURNS text
   LANGUAGE sql IMMUTABLE STRICT
   AS
   $$
     SELECT concat(fname,'{ ',state.formula,' }');
   $$;
 
-CREATE FUNCTION public.aggregation_formula(token anyelement, token2value regclass) RETURNS text
+CREATE FUNCTION aggregation_formula(token anyelement, token2value regclass) RETURNS text
     LANGUAGE plpgsql
     AS $$
 BEGIN

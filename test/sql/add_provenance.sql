@@ -1,5 +1,5 @@
 \set ECHO none
-SET search_path TO public, provsql;
+SET search_path TO provsql_test,provsql;
 
 CREATE TYPE classification_level AS ENUM ('unclassified','restricted','confidential','secret','top_secret');
 
