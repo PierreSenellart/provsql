@@ -9,13 +9,12 @@ jobs:
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
     steps:
-      - run: apt install -y libgraph-easy-perl libboost-dev libc6-i386
       - run: "curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' -H 'Content-Type: application/x-www-form-urlencoded' --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart&e=pierre%40senellart.com&o=ENS' -o c2d && unzip c2d && mv c2d_linux /usr/local/bin/c2d"
       - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
       - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
       - run: git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && mv weightmc /usr/local/bin && cd ../..
       - run: chmod a+x /usr/local/bin/c2d /usr/local/bin/dsharp  
-      - run: pg-start ${{ matrix.pg }}
+      - run: pg-start ${{ matrix.pg }} libgraph-easy-perl libboost-dev libc6:i386
       - uses: actions/checkout@v2
       - run: make && make tdkc && make install
       - run: bash -c 'echo "shared_preload_libraries = '"'"'provsql'"'"'" >> /etc/postgresql/'${{ matrix.pg }}/main/postgresql.conf
