@@ -1,6 +1,6 @@
 # ProvSQL
 
-[![Build Status](https://travis-ci.com/PierreSenellart/provsql.svg?branch=master)](https://travis-ci.com/PierreSenellart/provsql)
+[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml/badge.svg?branch=master))](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml)
 
 The goal of the ProvSQL project is to add support for (m-)semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
