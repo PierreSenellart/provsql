@@ -39,8 +39,11 @@ RUN curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' \
          chmod a+x /tmp/tools/c2d
 
 # TOOL d4
-RUN curl http://www.cril.univ-artois.fr/KC/ressources/d4 -o /tmp/tools/d4 &&\
-    chmod a+x /tmp/tools/d4
+RUN cd /tmp/ &&\
+    git clone https://github.com/crillab/d4.git &&\
+    cd d4 &&\
+    make &&\
+    mv d4 /tmp/tools
 
 # TOOL dsharp
 RUN cd /tmp/ &&\

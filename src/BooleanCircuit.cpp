@@ -302,7 +302,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
-    cmdline+=filename+" -out="+outfilename;
+    cmdline+="-dDNNF "+filename+" -out="+outfilename;
   } else if(compiler=="c2d") {
     cmdline+="-in "+filename+" -silent";
   } else if(compiler=="minic2d") {
@@ -326,30 +326,39 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   
   std::ifstream ifs(outfilename.c_str());
 
-  std::string nnf;
-  getline(ifs, nnf, ' ');
+  std::string line;
+  getline(ifs,line);
 
-  if(nnf!="nnf") // unsatisfiable formula
-    return 0.;
+  if(line.rfind("nnf", 0) != 0) {
+    // d4 does not include this magic line
 
-  unsigned nb_nodes, foobar, nb_variables;
-  ifs >> nb_nodes >> foobar >> nb_variables;
+    if(compiler != "d4") {
+      // unsatisfiable formula
+      return 0.;
+    }
+  } else {
+    std::string nnf;
+    unsigned nb_nodes, nb_edges, nb_variables;
+
+    std::stringstream ss(line);
+    ss >> nnf >> nb_nodes >> nb_edges >> nb_variables;
+  
+    if(nb_variables!=gates.size())
+      throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + std::to_string(nb_variables) +" vs " + std::to_string(gates.size()) + ")");
+  
+    getline(ifs,line);
+  }
 
   dDNNF dnnf;
 
-  if(nb_variables!=gates.size())
-    throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + std::to_string(nb_variables) +" vs " + std::to_string(gates.size()) + ")");
-
-  std::string line;
-  getline(ifs,line);
   unsigned i=0;
-  while(getline(ifs,line)) {
+  do {
     std::stringstream ss(line);
     
-    char c;
+    std::string c;
     ss >> c;
 
-    if(c=='O') {
+    if(c=="O") {
       int var, args;
       ss >> var >> args;
       auto id=dnnf.getGate(std::to_string(i));
@@ -359,7 +368,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
         auto id2=dnnf.getGate(std::to_string(g));
         dnnf.addWire(id,id2);
       }
-    } else if(c=='A') {
+    } else if(c=="A") {
       int args;
       ss >> args;
       auto id=dnnf.getGate(std::to_string(i));
@@ -369,7 +378,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
         auto id2=dnnf.getGate(std::to_string(g));
         dnnf.addWire(id,id2);
       }
-    } else if(c=='L') {
+    } else if(c=="L") {
       int leaf;
       ss >> leaf;
       if(gates[abs(leaf)-1]==BooleanGate::IN) {
@@ -380,11 +389,54 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
         }
       } else
         dnnf.setGate(std::to_string(i), BooleanGate::IN, 1.);
-    } else 
+    } else if(c=="f" || c=="o") {
+      // d4 extended format
+      // A FALSE gate is an OR gate without wires
+      int var;
+      ss >> var;
+      dnnf.setGate(std::to_string(var), BooleanGate::OR);
+    } else if(c=="t" || c=="a") {
+      // d4 extended format
+      // A TRUE gate is an AND gate without wires
+      int var;
+      ss >> var;
+      dnnf.setGate(std::to_string(var), BooleanGate::AND);
+    } else if(dnnf.hasGate(c)) {
+      // d4 extended format
+      int var;
+      ss >> var;
+      auto id2=dnnf.getGate(std::to_string(var));
+
+      std::vector<int> decisions;
+      int decision;
+      while(ss >> decision) {
+        if(decision==0)
+          break;
+        if(gates[abs(decision)-1]==BooleanGate::IN)
+          decisions.push_back(decision);
+      }
+
+      if(decisions.empty()) {
+        dnnf.addWire(dnnf.getGate(c), id2);
+      } else {
+        auto and_gate = dnnf.setGate(BooleanGate::AND);
+        dnnf.addWire(dnnf.getGate(c), and_gate);
+        dnnf.addWire(and_gate, id2);
+        for(auto leaf : decisions) {
+           gate_t leaf_gate;
+          if(leaf<0) {
+            leaf_gate = dnnf.setGate("i"+std::to_string(leaf), BooleanGate::IN, 1-prob[-leaf-1]);
+          } else {
+            leaf_gate = dnnf.setGate("i"+std::to_string(leaf), BooleanGate::IN, prob[leaf-1]);
+          }
+          dnnf.addWire(and_gate, leaf_gate);
+        }
+      }
+    } else
       throw CircuitException(std::string("Unreadable d-DNNF (unknown node type: ")+c+")");
 
     ++i;
-  }
+  } while(getline(ifs, line));
 
   ifs.close();
 
@@ -395,7 +447,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   } else
     elog(NOTICE, "Compiled d-DNNF in %s", outfilename.c_str());
 
-  return dnnf.dDNNFEvaluation(dnnf.getGate(std::to_string(i-1)));
+  return dnnf.dDNNFEvaluation(dnnf.getGate(compiler=="d4"?"1":std::to_string(i-1)));
 }
 
 double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
