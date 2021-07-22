@@ -1,0 +1,17 @@
+name: Build and Test ProvSQL
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      matrix:
+        pg: [9.5, 9.6, 10, 11, 12, 13]
+    name: 🐘 PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      - uses: actions/checkout@v2
+      - run: make && make tdkc && make install
+      - run: bash -c 'echo "shared_preload_libraries = '"'"'provsql'"'"'" >> /etc/postgresql/'${{ matrix.pg }}/main/postgresql.conf
+      - run: pg-start ${{ matrix.pg }}
+      - run: make tdkc
+      - run: pg-build-test
