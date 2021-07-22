@@ -1480,7 +1480,6 @@ static Query *process_query(
     group_by_rewrite = true;
   }
 
-#if PG_VERSION_NUM >= 90500
   /* GROUPING SETS were introduced in version 9.5 of PostgreSQL */
   if (supported && q->groupingSets)
   {
@@ -1497,7 +1496,6 @@ static Query *process_query(
       group_by_rewrite = true;
     }
   }
-#endif /* PG_VERSION_NUM >= 90500 */
 
   if (supported)
   {
