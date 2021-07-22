@@ -72,7 +72,7 @@ make docker-build
 
    * `c2d`, from http://reasoning.cs.ucla.edu/c2d/download.php
 
-   * `d4`, from http://www.cril.univ-artois.fr/KC/d4.html
+   * `d4`, from https://github.com/crillab/d4
 
    * `dsharp`, from https://github.com/QuMuLab/dsharp
 
