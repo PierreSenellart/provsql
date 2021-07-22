@@ -17,7 +17,7 @@ jobs:
       - run: chmod a+x /usr/local/bin/c2d /usr/local/bin/dsharp  
       - uses: actions/checkout@v2
       - run: make && make tdkc && make install
-      - run: bash -c 'echo "shared_preload_libraries = '"'"'provsql'"'"'" >> /etc/postgresql/'${{ matrix.pg }}/main/postgresql.conf
+      - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/main/postgresql.conf
       - run: service postgresql restart
       - run: make tdkc
       - run: make installcheck || (cat /tmp/tmp.provsql*/regression.diffs && false)
