@@ -300,9 +300,11 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     elog(NOTICE, "Tseytin circuit in %s", filename.c_str());
   }
 
+  bool new_d4 {false};
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
     cmdline+="-dDNNF "+filename+" -out="+outfilename;
+    new_d4 = true;
   } else if(compiler=="c2d") {
     cmdline+="-in "+filename+" -silent";
   } else if(compiler=="minic2d") {
@@ -315,14 +317,20 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   int retvalue=system(cmdline.c_str());
 
+  if(retvalue && compiler=="d4") {
+    // Temporary support for older version of d4
+    new_d4 = false;
+    cmdline = "d4 "+filename+" -out="+outfilename;
+    retvalue=system(cmdline.c_str());
+  }
+
+  if(retvalue)
+    throw CircuitException("Error executing "+compiler);
+  
   if(provsql_verbose<20) {
     if(unlink(filename.c_str())) {
       throw CircuitException("Error removing "+filename);
     }
-  }
-
-  if(retvalue)    
-    throw CircuitException("Error executing "+compiler);
   
   std::ifstream ifs(outfilename.c_str());
 
@@ -330,7 +338,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   getline(ifs,line);
 
   if(line.rfind("nnf", 0) != 0) {
-    // d4 does not include this magic line
+    // New d4 does not include this magic line
 
     if(compiler != "d4") {
       // unsatisfiable formula
@@ -447,7 +455,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   } else
     elog(NOTICE, "Compiled d-DNNF in %s", outfilename.c_str());
 
-  return dnnf.dDNNFEvaluation(dnnf.getGate(compiler=="d4"?"1":std::to_string(i-1)));
+  return dnnf.dDNNFEvaluation(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
 }
 
 double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
