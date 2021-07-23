@@ -331,6 +331,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     if(unlink(filename.c_str())) {
       throw CircuitException("Error removing "+filename);
     }
+  }
   
   std::ifstream ifs(outfilename.c_str());
 
