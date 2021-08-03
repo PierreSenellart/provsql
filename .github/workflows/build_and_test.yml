@@ -3,10 +3,10 @@ name: Build and Test ProvSQL
 on:
   push:
     paths-ignore:
-      - 'docs/**'
+      - 'doc/**'
   pull_request:
     paths-ignore:
-      - 'docs/**'
+      - 'doc/**'
 
 jobs:
   test:
