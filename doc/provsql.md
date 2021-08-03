@@ -151,7 +151,7 @@ See the other examples in [test/sql](test/sql) for other use cases.
 A demonstration of an early version of the ProvSQL system is available as a video, on
 https://youtu.be/iqzSNfGHbEE?vq=hd1080
 The SQL commands used in this demonstration can be found in the [doc/demo/](doc/demo/)
-directory. An article describing this demonstration, presented at the VLDB 2018.
+directory. An article describing this demonstration, presented at the VLDB 2018
 conference, is available at
 http://pierre.senellart.com/publications/senellart2018provsql.pdf
 
