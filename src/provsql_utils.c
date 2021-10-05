@@ -14,7 +14,15 @@
 static Oid GetFuncOid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make1(makeString(s)),-1,NIL,false,false,false);
+      list_make1(makeString(s)),
+      -1,
+      NIL,
+      false,
+      false,
+#if PG_VERSION_NUM >= 140000
+      false,
+#endif
+      false);
   if(fcl)
     return fcl->oid;    
   else
@@ -24,7 +32,15 @@ static Oid GetFuncOid(char *s)
 static Oid GetProvSQLFuncOid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make2(makeString("provsql"),makeString(s)),-1,NIL,false,false,false);
+      list_make2(makeString("provsql"),makeString(s)),
+      -1,
+      NIL,
+      false,
+      false,
+#if PG_VERSION_NUM >= 140000
+      false,
+#endif
+      false);
   if(fcl)
     return fcl->oid;    
   else
