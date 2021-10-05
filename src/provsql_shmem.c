@@ -383,7 +383,15 @@ Datum get_infos(PG_FUNCTION_ARGS)
 static Oid get_func_oid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make1(makeString(s)),-1,NIL,false,false,false);
+      list_make1(makeString(s)),
+      -1,
+      NIL,
+      false,
+      false,
+#if PG_VERSION_NUM >= 120000
+      false,
+#endif      
+      false);
   if(fcl)
     return fcl->oid;    
   else
@@ -393,7 +401,15 @@ static Oid get_func_oid(char *s)
 static Oid get_provsql_func_oid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make2(makeString("provsql"),makeString(s)),-1,NIL,false,false,false);
+      list_make2(makeString("provsql"),makeString(s)),
+      -1,
+      NIL,
+      false,
+      false,
+#if PG_VERSION_NUM >= 120000
+      false,
+#endif      
+      false);
   if(fcl)
     return fcl->oid;    
   else
