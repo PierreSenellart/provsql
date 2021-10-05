@@ -388,7 +388,7 @@ static Oid get_func_oid(char *s)
       NIL,
       false,
       false,
-#if PG_VERSION_NUM >= 120000
+#if PG_VERSION_NUM >= 140000
       false,
 #endif      
       false);
@@ -406,7 +406,7 @@ static Oid get_provsql_func_oid(char *s)
       NIL,
       false,
       false,
-#if PG_VERSION_NUM >= 120000
+#if PG_VERSION_NUM >= 140000
       false,
 #endif      
       false);
