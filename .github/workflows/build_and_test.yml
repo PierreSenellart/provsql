@@ -12,7 +12,7 @@ jobs:
   test:
     strategy:
       matrix:
-        pg: [9.5, 9.6, 10, 11, 12, 13]
+        pg: [9.5, 9.6, 10, 11, 12, 13, 14]
     name: 🐘 PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
