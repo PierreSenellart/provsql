@@ -7,6 +7,9 @@ on:
   pull_request:
     paths-ignore:
       - 'doc/**'
+  workflow_dispatch:
+    paths-ignore:
+      - 'doc/**'
 
 jobs:
   test:
