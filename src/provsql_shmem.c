@@ -11,12 +11,15 @@
 #include "catalog/pg_type.h"
 #include "parser/parse_func.h"
 #include "storage/shmem.h"
+#include "storage/fd.h"
 #include "utils/array.h"
 #include "utils/hsearch.h"
 #include "utils/syscache.h"
 #include "utils/uuid.h"
 
 #include "provsql_shmem.h"
+
+#define PROVSQL_DUMP_FILE "provsql/test_dump_provsql"
 
 shmem_startup_hook_type prev_shmem_startup = NULL;
 int provsql_init_nb_gates;
@@ -27,11 +30,14 @@ static void provsql_shmem_shutdown(int code, Datum arg);
 
 provsqlSharedState *provsql_shared_state = NULL;
 HTAB *provsql_hash = NULL;
+provsqlHashEntry *entry;
 
 void provsql_shmem_startup(void)
 {
   bool found;
   HASHCTL info;
+  FILE *file;
+  //int32 num;
 
   if(prev_shmem_startup)
     prev_shmem_startup();
@@ -40,12 +46,13 @@ void provsql_shmem_startup(void)
   provsql_shared_state = NULL;
   provsql_hash = NULL;
 
+
   LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
   provsql_shared_state = ShmemInitStruct(
       "provsql",
       add_size(offsetof(provsqlSharedState, wires),
-        mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires)),
+      mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires)),
       &found);
 
   if(!found) {
@@ -81,11 +88,137 @@ void provsql_shmem_startup(void)
     return;
 
   // TODO: Read circuit from file
+
+
+
+  file = AllocateFile("provsql.tmp", PG_BINARY_R);
+  if (file == NULL)
+  {
+    // TODO error
+    return;
+  }
+
+//  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+
+/*
+  if (!fread(&num, sizeof(int32),1,file))
+  {
+    return;
+  }
+
+  for (int i = 0; i < num; i++)
+  {
+    provsqlHashEntry tmp;
+    if (!fread(&tmp,sizeof(provsqlHashEntry),1,file))
+    {
+      return;
+    }
+    
+  }
+  */
+
+  if(! fread(&provsql_shared_state->constants, sizeof(constants_t), 1, file))
+  {
+    return;
+  }
+
+  if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
+  {
+    return;
+  }
+
+  if (! fread(&provsql_shared_state->wires, sizeof(pg_uuid_t),(unsigned long int) &provsql_shared_state->nb_wires, file))
+  {
+    return;
+  }
+  
+
+  if (FreeFile(file))
+  {
+    file = NULL;
+    /* TODO error */
+  }
+  
+  
+
 }
 
 static void provsql_shmem_shutdown(int code, Datum arg)
 {
   // TODO: Write circuit to file
+
+  FILE *file;
+  int32 num_entries;
+  provsqlHashEntry *entry;
+  HASH_SEQ_STATUS hash_seq;
+  
+
+  file = AllocateFile("provsql.tmp", PG_BINARY_W);
+  if (file == NULL)
+  {    /* TODO error */
+    elog(ERROR, "error while allocating the file");
+    return;
+  }
+
+
+  #if PG_VERSION_NUM >= 90600
+    /* Named lock tranches were added in version 9.6 of PostgreSQL */
+    provsql_shared_state->lock =&(GetNamedLWLockTranche("provsql"))->lock;
+  #else
+    provsql_shared_state->lock =LWLockAssign();
+  #endif /* PG_VERSION_NUM >= 90600 */
+
+  num_entries = hash_get_num_entries(provsql_hash);
+  /*
+  if (! fwrite(&num_entries, sizeof(int32), 1, file ) )
+  {
+    return;
+    // TODO error handling on each fwrite 
+  }
+  hash_seq_init(&hash_seq,provsql_hash);
+  while ( (entry = hash_seq_search(&hash_seq)) != NULL   )
+  {
+    if (! fwrite(&entry, sizeof(provsqlHashEntry), 1, file))
+    {
+      // hashseqterm(&hash_seq);
+      return;
+    }
+    
+  }
+  
+  */
+
+  if( !fwrite(&provsql_shared_state->constants, sizeof(char), sizeof(constants_t), file) )
+  {
+    elog(ERROR, "error while dumping provsql's shared state to file");
+    return;
+  }
+
+  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(char), sizeof(unsigned), file ))
+  {
+    return;
+  }
+
+  if (!fwrite(&provsql_shared_state->wires, sizeof(char), sizeof(pg_uuid_t)*  (unsigned long int)(&provsql_shared_state->nb_wires), file))
+  {
+    return;
+  } 
+
+
+
+  if (FreeFile(file))
+  {
+    file = NULL;
+    /* TODO error */
+  }
+
+  LWLockRelease(provsql_shared_state->lock);
+  // LWLockRelease(AddinShmemInitLock);
+
+
+
+  // (void) durable_rename(PROVSQL_DUMP_FILE ".tmp", PROVSQL_DUMP_FILE, LOG);
+
 }
 
 Size provsql_memsize(void)
