@@ -68,6 +68,29 @@ char* print_shared_state_constants(constants_t &constants, char* buffer){
 }
 
 
+char* print_hash_entry(provsqlHashEntry* hash, char* buffer){
+  sprintf(buffer, "Hash :\n"
+  "Key = %.16u \n"
+  "Type = %d \n"
+  "nb_children = %d \n"
+  "children_idx = %d \n"
+  "prob = %f\n"
+  "info1 = %d\n"
+  "info2 = %d\n"
+  ,
+  hash->key,
+  hash->type,
+  hash->nb_children,
+  hash->children_idx,
+  hash->prob,
+  hash->info1,
+  hash->info2
+  );
+
+  return buffer;
+}
+
+
 Datum dump_data(PG_FUNCTION_ARGS)
 {
   char buffer[1024];
@@ -100,6 +123,8 @@ Datum dump_data(PG_FUNCTION_ARGS)
       elog(ERROR, "error while writing hash entries");
       PG_RETURN_NULL();
     }
+
+    elog(INFO,"%s", print_hash_entry(entry,buffer));
     
   }
 
@@ -151,7 +176,9 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
   char buffer[1024];
   unsigned nb_wires_buffer;
   int32 num;
-  provsqlHashEntry *tmp;
+  provsqlHashEntry tmp;
+  provsqlHashEntry *entry;
+  bool found;
 
   file = AllocateFile("provsql.tmp", PG_BINARY_R);
 
@@ -161,17 +188,32 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
     PG_RETURN_NULL();
   }
 
-  for (int i = 0; i < num; i++)
+for (int i = 0; i < num; i++)
   {
-    if (!fread(tmp, sizeof(provsqlHashEntry), 1, file ))
+    if (!fread(&tmp, sizeof(provsqlHashEntry), 1, file))
     {
-      elog(ERROR, "error while reading hash entries");
       PG_RETURN_NULL();
     }
+    entry = (provsqlHashEntry *) hash_search(provsql_hash, &(tmp.key), HASH_ENTER, &found);
+
+    if (!found)
+    {
+      *entry = tmp;
+      // entry->key = tmp.key;
+      // entry->type = tmp.type;
+      // entry->nb_children = tmp.nb_children;
+      // entry->children_idx = tmp.children_idx;
+      // entry->prob = tmp.prob;
+      // entry->info1 = tmp.info1;
+      // entry->info2 = tmp.info2;
+
+      elog(INFO,"%s", print_hash_entry(entry,buffer));
+
+
+    }
+
     
   }
-  
-  
 
   if(! fread(&constants_buffer, sizeof(constants_t), 1, file)){
     PG_RETURN_NULL();

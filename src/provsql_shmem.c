@@ -37,7 +37,8 @@ void provsql_shmem_startup(void)
   bool found;
   HASHCTL info;
   FILE *file;
-  //int32 num;
+  int32 num;
+  provsqlHashEntry tmp;
 
   if(prev_shmem_startup)
     prev_shmem_startup();
@@ -90,7 +91,6 @@ void provsql_shmem_startup(void)
   // TODO: Read circuit from file
 
 
-
   file = AllocateFile("provsql.tmp", PG_BINARY_R);
   if (file == NULL)
   {
@@ -98,9 +98,7 @@ void provsql_shmem_startup(void)
     return;
   }
 
-//  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
 
-/*
   if (!fread(&num, sizeof(int32),1,file))
   {
     return;
@@ -108,14 +106,19 @@ void provsql_shmem_startup(void)
 
   for (int i = 0; i < num; i++)
   {
-    provsqlHashEntry tmp;
-    if (!fread(&tmp,sizeof(provsqlHashEntry),1,file))
+    if (!fread(&tmp, sizeof(provsqlHashEntry), 1, file))
     {
       return;
     }
+    entry = (provsqlHashEntry *) hash_search(provsql_hash, &(tmp.key), HASH_ENTER, &found);
+
+    if (!found)
+    {
+      *entry = tmp;
+    }
+    
     
   }
-  */
 
   if(! fread(&provsql_shared_state->constants, sizeof(constants_t), 1, file))
   {
@@ -169,24 +172,24 @@ static void provsql_shmem_shutdown(int code, Datum arg)
   #endif /* PG_VERSION_NUM >= 90600 */
 
   num_entries = hash_get_num_entries(provsql_hash);
-  /*
-  if (! fwrite(&num_entries, sizeof(int32), 1, file ) )
-  {
+  hash_seq_init(&hash_seq, provsql_hash);
+
+  
+  if(! fwrite(&num_entries, sizeof(int32), 1, file)){
+    //TODO error handling on each fwrite
     return;
-    // TODO error handling on each fwrite 
   }
-  hash_seq_init(&hash_seq,provsql_hash);
-  while ( (entry = hash_seq_search(&hash_seq)) != NULL   )
+
+  while ( (entry = (provsqlHashEntry*)hash_seq_search(&hash_seq) )  != NULL )
   {
-    if (! fwrite(&entry, sizeof(provsqlHashEntry), 1, file))
+    if (!fwrite(&entry, sizeof(provsqlHashEntry), 1, file))
     {
-      // hashseqterm(&hash_seq);
+      //TODO if error
       return;
     }
     
   }
-  
-  */
+
 
   if( !fwrite(&provsql_shared_state->constants, sizeof(char), sizeof(constants_t), file) )
   {
@@ -213,13 +216,14 @@ static void provsql_shmem_shutdown(int code, Datum arg)
   }
 
   LWLockRelease(provsql_shared_state->lock);
-  // LWLockRelease(AddinShmemInitLock);
 
 
-
-  // (void) durable_rename(PROVSQL_DUMP_FILE ".tmp", PROVSQL_DUMP_FILE, LOG);
+  // TODO (void) durable_rename(PROVSQL_DUMP_FILE ".tmp", PROVSQL_DUMP_FILE, LOG);
 
 }
+
+
+
 
 Size provsql_memsize(void)
 {
