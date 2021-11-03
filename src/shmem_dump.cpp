@@ -76,9 +76,6 @@ Datum dump_data(PG_FUNCTION_ARGS)
   provsqlHashEntry *entry;
   HASH_SEQ_STATUS hash_seq;
 
-
-
-  
   file = AllocateFile("provsql.tmp", PG_BINARY_W);
   if (file == NULL)
   {    /* TODO error */
@@ -89,6 +86,7 @@ Datum dump_data(PG_FUNCTION_ARGS)
   }
 
   num_entries = hash_get_num_entries(provsql_hash);
+  hash_seq_init(&hash_seq, provsql_hash);
 
   if(! fwrite(&num_entries, sizeof(int32), 1, file)){
     elog(ERROR, "error while writing num entries");
