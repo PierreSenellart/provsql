@@ -182,7 +182,7 @@ static void provsql_shmem_shutdown(int code, Datum arg)
 
   while ( (entry = (provsqlHashEntry*)hash_seq_search(&hash_seq) )  != NULL )
   {
-    if (!fwrite(&entry, sizeof(provsqlHashEntry), 1, file))
+    if (!fwrite(entry, sizeof(provsqlHashEntry), 1, file))
     {
       //TODO if error
       return;
@@ -191,18 +191,18 @@ static void provsql_shmem_shutdown(int code, Datum arg)
   }
 
 
-  if( !fwrite(&provsql_shared_state->constants, sizeof(char), sizeof(constants_t), file) )
+  if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
   {
     elog(ERROR, "error while dumping provsql's shared state to file");
     return;
   }
 
-  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(char), sizeof(unsigned), file ))
+  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
   {
     return;
   }
 
-  if (!fwrite(&provsql_shared_state->wires, sizeof(char), sizeof(pg_uuid_t)*  (unsigned long int)(&provsql_shared_state->nb_wires), file))
+  if (!fwrite(&provsql_shared_state->wires, sizeof(pg_uuid_t)*  (unsigned long int)(&provsql_shared_state->nb_wires), 1, file))
   {
     return;
   } 

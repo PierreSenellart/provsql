@@ -70,21 +70,21 @@ char* print_shared_state_constants(constants_t &constants, char* buffer){
 
 char* print_hash_entry(provsqlHashEntry* hash, char* buffer){
   sprintf(buffer, "Hash :\n"
-  "Key = %.16u \n"
+  "Key = %16u \n"
   "Type = %d \n"
-  "nb_children = %d \n"
-  "children_idx = %d \n"
+  "nb_children = %u \n"
+  "children_idx = %u \n"
   "prob = %f\n"
-  "info1 = %d\n"
-  "info2 = %d\n"
+  "info1 = %u\n"
+  "info2 = %u\n"
   ,
-  hash->key,
-  hash->type,
-  hash->nb_children,
-  hash->children_idx,
-  hash->prob,
-  hash->info1,
-  hash->info2
+  &hash->key,
+  *&hash->type,
+  *&hash->nb_children,
+  *&hash->children_idx,
+  *&hash->prob,
+  *&hash->info1,
+  *&hash->info2
   );
 
   return buffer;
@@ -118,7 +118,7 @@ Datum dump_data(PG_FUNCTION_ARGS)
 
   while ( (entry = (provsqlHashEntry*)hash_seq_search(&hash_seq) )  != NULL )
   {
-    if (!fwrite(&entry, sizeof(provsqlHashEntry), 1, file))
+    if (!fwrite(entry, sizeof(provsqlHashEntry), 1, file))
     {
       elog(ERROR, "error while writing hash entries");
       PG_RETURN_NULL();
@@ -134,8 +134,8 @@ Datum dump_data(PG_FUNCTION_ARGS)
     elog(ERROR, "error while writing shared state to file");
     PG_RETURN_NULL();
   }
-  elog(INFO,"Shared state constants : ");
-  elog(INFO,"%s", print_shared_state_constants(provsql_shared_state->constants, buffer));
+  //elog(INFO,"Shared state constants : ");
+  //elog(INFO,"%s", print_shared_state_constants(provsql_shared_state->constants, buffer));
 
   if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(char), sizeof(unsigned), file )){
     PG_RETURN_NULL();
@@ -195,6 +195,7 @@ for (int i = 0; i < num; i++)
       PG_RETURN_NULL();
     }
     entry = (provsqlHashEntry *) hash_search(provsql_hash, &(tmp.key), HASH_ENTER, &found);
+    elog(INFO,"%s", print_hash_entry(entry,buffer));
 
     if (!found)
     {
@@ -218,8 +219,8 @@ for (int i = 0; i < num; i++)
   if(! fread(&constants_buffer, sizeof(constants_t), 1, file)){
     PG_RETURN_NULL();
   }
-  elog(INFO,"After Reading : \n");
-  elog(INFO,"%s",print_shared_state_constants(constants_buffer, buffer));
+  //elog(INFO,"After Reading : \n");
+  //elog(INFO,"%s",print_shared_state_constants(constants_buffer, buffer));
 
 
   if (! fread(&nb_wires_buffer, sizeof(unsigned), 1, file ))
@@ -227,7 +228,7 @@ for (int i = 0; i < num; i++)
     PG_RETURN_NULL();
   }
   
-  elog(INFO,"NB_wires : %u",nb_wires_buffer);
+  //elog(INFO,"NB_wires : %u",nb_wires_buffer);
 
 
   if (FreeFile(file))
