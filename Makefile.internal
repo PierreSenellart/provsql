@@ -17,6 +17,10 @@ EMPTY =
 REGRESS = $(EMPTY) 
 REGRESS_OPTS = --load-extension=plpgsql --inputdir=test --outputdir=$(shell mktemp -d /tmp/tmp.provsqlXXXX) --schedule test/schedule
 
+# Additional options for pg_regress can be specified below, e.g., a port
+# number with EXTRA_REGRESS_OPTS = --port=5434
+EXTRA_REGRESS_OPTS =
+
 all: $(DATA) $(MODULE_big).so test/schedule
 
 $(OBJS): $(wildcard src/*.h)
@@ -35,6 +39,8 @@ endif
 # https://github.com/PierreSenellart/provsql/issues/9
 with_llvm = no
 
+# A different pg_config can be specified below, e.g., when different
+# PostgreSQL are installed on the same machine
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
