@@ -7,6 +7,7 @@ extern "C"
 #include "executor/spi.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
+#include "storage/fd.h"
 
   PG_FUNCTION_INFO_V1(dump_data);
 }
