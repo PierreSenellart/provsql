@@ -1,6 +1,8 @@
 \set ECHO none
 SET search_path TO provsql_test,provsql;
 
+SET provsql.verbose_level = 100;
+
 CREATE TABLE treedec_result AS
 SELECT city, probability_evaluate(provenance(),'tree-decomposition') AS prob
 FROM (
