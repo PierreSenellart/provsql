@@ -17,6 +17,8 @@
 #include "utils/syscache.h"
 #include "utils/uuid.h"
 
+#include "unistd.h"
+
 #include "provsql_shmem.h"
 
 #define PROVSQL_DUMP_FILE "provsql.tmp"
@@ -86,23 +88,22 @@ void provsql_shmem_startup(void)
     return;
 
 
-
-  switch (provsql_deserialize("provsql.tmp"))
-  {
-  case 1:
-    //elog(ERROR, "Error while opening the file during deserialization");
-    break;
-  
-  case 2:
-    //elog(ERROR, "Error while reading the file during deserialization");
-    break;
-  
-  case 3:
-    elog(ERROR, "Error while closing the file during deserialization");
-    break;
-  }
-  
-  
+  if( access( "provsql.tmp", F_OK ) == 0 ) {
+    switch (provsql_deserialize("provsql.tmp"))
+    {
+    case 1:
+      //elog(ERROR, "Error while opening the file during deserialization");
+      break;
+    
+    case 2:
+      //elog(ERROR, "Error while reading the file during deserialization");
+      break;
+    
+    case 3:
+      elog(ERROR, "Error while closing the file during deserialization");
+      break;
+    }
+  } 
 
 }
 
