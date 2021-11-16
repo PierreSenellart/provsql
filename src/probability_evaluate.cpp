@@ -193,7 +193,7 @@ static Datum probability_evaluate_internal
               elog(WARNING, "%d", j);
           }
 
-          elog(WARNING, "%d %d %d %s", c.getNbGates(), td.getTreewidth(), dnnf.getNbGates(), td.toDot().c_str());
+          elog(WARNING, "%d %d %d %s %d %s", c.getNbGates(), td.getTreewidth(), dnnf.getNbGates(), uuid2string(token).c_str(), c.getGate(uuid2string(token)), td.toDot().c_str());
           result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
           // Display the dnnf for debugging:
           elog(WARNING, "%s", dnnf.toString(dnnf.getGate("root")).c_str());
