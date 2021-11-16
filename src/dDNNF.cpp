@@ -1,5 +1,9 @@
 #include "dDNNF.h"
 
+extern "C" {
+#include "postgres.h"
+}
+
 #include <unordered_map>
 #include <stack>
 #include <variant>
@@ -70,6 +74,7 @@ double dDNNF::dDNNFEvaluation(gate_t root) const
       } else {
         result = partial_value;
         cache[g]=result;
+        elog(WARNING, "%d %f", g, result);
         
         if(stack.empty())
           return result;

@@ -18,6 +18,8 @@ extern "C" {
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 
+#include <sstream>
+
 using namespace std;
 
 static void provsql_sigint_handler (int)
@@ -185,6 +187,7 @@ static Datum probability_evaluate_internal
               td}.build()
           };
           result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
+          elog(WARNING, "%d", dnnf.getGate("root"));
         } catch(TreeDecompositionException &) {
           elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
         }
