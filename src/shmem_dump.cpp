@@ -13,7 +13,8 @@ extern "C"
 
 
 
-char* print_shared_state_constants(constants_t &constants, char* buffer){
+char* print_shared_state_constants(constants_t &constants, char* buffer)
+{
   sprintf(buffer, "Constants :\n OID_SCHEMA_PROVSQL = %d \n"
   "OID_TYPE_PROVENANCE_TOKEN = %d\n"
   "OID_TYPE_GATE_TYPE = %d\n"
@@ -68,9 +69,10 @@ char* print_shared_state_constants(constants_t &constants, char* buffer){
 }
 
 
-char* print_hash_entry(provsqlHashEntry* hash, char* buffer){
+char* print_hash_entry(provsqlHashEntry* hash, char* buffer)
+{
   sprintf(buffer, "Hash :\n"
-  "Key = %16u \n"
+  //"Key = %16u \n"
   "Type = %d \n"
   "nb_children = %u \n"
   "children_idx = %u \n"
@@ -78,7 +80,7 @@ char* print_hash_entry(provsqlHashEntry* hash, char* buffer){
   "info1 = %u\n"
   "info2 = %u\n"
   ,
-  &hash->key,
+  //&hash->key,
   *&hash->type,
   *&hash->nb_children,
   *&hash->children_idx,
@@ -91,72 +93,186 @@ char* print_hash_entry(provsqlHashEntry* hash, char* buffer){
 }
 
 
-Datum dump_data(PG_FUNCTION_ARGS)
+int provsql_serialize(const char* filename)
 {
-  char buffer[1024];
   FILE *file;
   int32 num_entries;
   provsqlHashEntry *entry;
   HASH_SEQ_STATUS hash_seq;
 
-  file = AllocateFile("provsql.tmp", PG_BINARY_W);
+  file = AllocateFile(filename, PG_BINARY_W);
   if (file == NULL)
-  {    /* TODO error */
-
-    elog(ERROR, "error while allocating the file");
-    PG_RETURN_NULL();
-
+  {
+    return 1;
   }
 
   num_entries = hash_get_num_entries(provsql_hash);
-  hash_seq_init(&hash_seq, provsql_hash);
+  hash_seq_init(&hash_seq, provsql_hash);  
+
 
   if(! fwrite(&num_entries, sizeof(int32), 1, file)){
-    elog(ERROR, "error while writing num entries");
-    PG_RETURN_NULL();
+    return 2;
   }
 
   while ( (entry = (provsqlHashEntry*)hash_seq_search(&hash_seq) )  != NULL )
   {
     if (!fwrite(entry, sizeof(provsqlHashEntry), 1, file))
     {
-      elog(ERROR, "error while writing hash entries");
-      PG_RETURN_NULL();
+      return 2;
     }
-
-    elog(INFO,"%s", print_hash_entry(entry,buffer));
     
   }
 
 
-
-  if( !fwrite(&provsql_shared_state->constants, sizeof(char), sizeof(constants_t), file) ){
-    elog(ERROR, "error while writing shared state to file");
-    PG_RETURN_NULL();
+  if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
+  {
+    return 2;
   }
-  //elog(INFO,"Shared state constants : ");
-  //elog(INFO,"%s", print_shared_state_constants(provsql_shared_state->constants, buffer));
 
-  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(char), sizeof(unsigned), file )){
-    PG_RETURN_NULL();
+  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
+  {
+    return 2;
   }
-  elog(INFO,"Nb_Wires : ");
-  elog(INFO,"%u",provsql_shared_state->nb_wires);
 
-
-
-  if (!fwrite(&provsql_shared_state->wires, sizeof(char), sizeof(pg_uuid_t)*provsql_shared_state->nb_wires, file)){
-    PG_RETURN_NULL();
+  if (!fwrite(&provsql_shared_state->wires, sizeof(pg_uuid_t)*  (unsigned long int)(&provsql_shared_state->nb_wires), 1, file))
+  {
+    return 2;
   } 
+
 
 
   if (FreeFile(file))
   {
     file = NULL;
-    /* TODO error */
+    return 3;
+  }if(! fwrite(&num_entries, sizeof(int32), 1, file)){
+    return 2;
   }
 
-  elog(INFO,"serializing complete");
+  while ( (entry = (provsqlHashEntry*)hash_seq_search(&hash_seq) )  != NULL )
+  {
+    if (!fwrite(entry, sizeof(provsqlHashEntry), 1, file))
+    {
+      return 2;
+    }
+    
+  }
+
+
+  if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
+  {
+    elog(ERROR, "error while dumping provsql's shared state to file");
+    return 2;
+  }
+
+  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
+  {
+    return 2;
+  }
+
+  if (!fwrite(&provsql_shared_state->wires, sizeof(pg_uuid_t)*  (unsigned long int)(&provsql_shared_state->nb_wires), 1, file))
+  {
+    return 2;
+  } 
+
+
+
+  if (FreeFile(file))
+  {
+    file = NULL;
+    return 3;
+  }
+
+  //TODO locks
+
+  return 0;
+
+}
+
+
+int provsql_deserialize(const char* filename)
+{
+  FILE *file;
+  int32 num;
+  provsqlHashEntry tmp;
+  provsqlHashEntry *entry;
+  bool found;
+
+  file = AllocateFile(filename, PG_BINARY_R);
+  if (file == NULL)
+  {
+    return 1;
+  }
+
+
+  if (!fread(&num, sizeof(int32),1,file))
+  {
+    return 2;
+  }
+
+  for (int i = 0; i < num; i++)
+  {
+    if (!fread(&tmp, sizeof(provsqlHashEntry), 1, file))
+    {
+      return 2;
+    }
+    entry = (provsqlHashEntry *) hash_search(provsql_hash, &(tmp.key), HASH_ENTER, &found);
+
+    if (!found)
+    {
+      *entry = tmp;
+    }
+    
+    
+  }
+
+  if(! fread(&provsql_shared_state->constants, sizeof(constants_t), 1, file))
+  {
+    return 2;
+  }
+
+  if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
+  {
+    return 2;
+  }
+
+  if (! fread(&provsql_shared_state->wires, sizeof(pg_uuid_t),(unsigned long int) &provsql_shared_state->nb_wires, file))
+  {
+    return 2;
+  }
+  
+
+  if (FreeFile(file))
+  {
+    file = NULL;
+    return 3;
+  }
+
+  return 0;
+
+}
+
+Datum dump_data(PG_FUNCTION_ARGS)
+{
+
+  int error = provsql_serialize("provsql.tmp");
+
+  if (error == 1)
+  {
+    elog(ERROR, "Error while oppening the file during serialization");
+  }
+  else if (error == 2)
+  {
+    elog(ERROR, "Error while writing to file during serialization");
+  }
+  else if (error == 3)
+  {
+    elog(ERROR, "Error while closing the file during serialization");
+  }
+  else 
+  {
+   elog(INFO,"serializing complete");
+  }
   PG_RETURN_NULL();
 }
 
@@ -200,13 +316,6 @@ for (int i = 0; i < num; i++)
     if (!found)
     {
       *entry = tmp;
-      // entry->key = tmp.key;
-      // entry->type = tmp.type;
-      // entry->nb_children = tmp.nb_children;
-      // entry->children_idx = tmp.children_idx;
-      // entry->prob = tmp.prob;
-      // entry->info1 = tmp.info1;
-      // entry->info2 = tmp.info2;
 
       elog(INFO,"%s", print_hash_entry(entry,buffer));
 

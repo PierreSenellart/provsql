@@ -19,7 +19,7 @@
 
 #include "provsql_shmem.h"
 
-#define PROVSQL_DUMP_FILE "provsql/test_dump_provsql"
+#define PROVSQL_DUMP_FILE "provsql.tmp"
 
 shmem_startup_hook_type prev_shmem_startup = NULL;
 int provsql_init_nb_gates;
@@ -36,9 +36,6 @@ void provsql_shmem_startup(void)
 {
   bool found;
   HASHCTL info;
-  FILE *file;
-  int32 num;
-  provsqlHashEntry tmp;
 
   if(prev_shmem_startup)
     prev_shmem_startup();
@@ -88,58 +85,21 @@ void provsql_shmem_startup(void)
   if(found)
     return;
 
-  // TODO: Read circuit from file
 
 
-  file = AllocateFile("provsql.tmp", PG_BINARY_R);
-  if (file == NULL)
+  switch (provsql_deserialize("provsql.tmp"))
   {
-    // TODO error
-    return;
-  }
-
-
-  if (!fread(&num, sizeof(int32),1,file))
-  {
-    return;
-  }
-
-  for (int i = 0; i < num; i++)
-  {
-    if (!fread(&tmp, sizeof(provsqlHashEntry), 1, file))
-    {
-      return;
-    }
-    entry = (provsqlHashEntry *) hash_search(provsql_hash, &(tmp.key), HASH_ENTER, &found);
-
-    if (!found)
-    {
-      *entry = tmp;
-    }
-    
-    
-  }
-
-  if(! fread(&provsql_shared_state->constants, sizeof(constants_t), 1, file))
-  {
-    return;
-  }
-
-  if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
-  {
-    return;
-  }
-
-  if (! fread(&provsql_shared_state->wires, sizeof(pg_uuid_t),(unsigned long int) &provsql_shared_state->nb_wires, file))
-  {
-    return;
-  }
+  case 1:
+    elog(ERROR, "Error while oppening the file during deserialization");
+    break;
   
-
-  if (FreeFile(file))
-  {
-    file = NULL;
-    /* TODO error */
+  case 2:
+    elog(ERROR, "Error while reading the file during deserialization");
+    break;
+  
+  case 3:
+    elog(ERROR, "Error while closing the file during deserialization");
+    break;
   }
   
   
@@ -148,71 +108,27 @@ void provsql_shmem_startup(void)
 
 static void provsql_shmem_shutdown(int code, Datum arg)
 {
-  // TODO: Write circuit to file
-
-  FILE *file;
-  int32 num_entries;
-  provsqlHashEntry *entry;
-  HASH_SEQ_STATUS hash_seq;
-  
-
-  file = AllocateFile("provsql.tmp", PG_BINARY_W);
-  if (file == NULL)
-  {    /* TODO error */
-    elog(ERROR, "error while allocating the file");
-    return;
-  }
-
 
   #if PG_VERSION_NUM >= 90600
-    /* Named lock tranches were added in version 9.6 of PostgreSQL */
+    // Named lock tranches were added in version 9.6 of PostgreSQL
     provsql_shared_state->lock =&(GetNamedLWLockTranche("provsql"))->lock;
   #else
     provsql_shared_state->lock =LWLockAssign();
-  #endif /* PG_VERSION_NUM >= 90600 */
+  #endif // PG_VERSION_NUM >= 90600
 
-  num_entries = hash_get_num_entries(provsql_hash);
-  hash_seq_init(&hash_seq, provsql_hash);
-
+  switch (provsql_serialize("provsql.tmp"))
+  {
+  case 1:
+    elog(ERROR, "Error while oppening the file during serialization");
+    break;
   
-  if(! fwrite(&num_entries, sizeof(int32), 1, file)){
-    //TODO error handling on each fwrite
-    return;
-  }
-
-  while ( (entry = (provsqlHashEntry*)hash_seq_search(&hash_seq) )  != NULL )
-  {
-    if (!fwrite(entry, sizeof(provsqlHashEntry), 1, file))
-    {
-      //TODO if error
-      return;
-    }
-    
-  }
-
-
-  if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
-  {
-    elog(ERROR, "error while dumping provsql's shared state to file");
-    return;
-  }
-
-  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
-  {
-    return;
-  }
-
-  if (!fwrite(&provsql_shared_state->wires, sizeof(pg_uuid_t)*  (unsigned long int)(&provsql_shared_state->nb_wires), 1, file))
-  {
-    return;
-  } 
-
-
-
-  if (FreeFile(file))
-  {
-    file = NULL;
-    /* TODO error */
+  case 2:
+    elog(ERROR, "Error while writing to file during serialization");
+    break;
+  
+  case 3:
+    elog(ERROR, "Error while closing the file during serialization");
+    break;
   }
 
   LWLockRelease(provsql_shared_state->lock);
