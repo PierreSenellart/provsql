@@ -186,6 +186,13 @@ static Datum probability_evaluate_internal
               uuid2string(token),
               td}.build()
           };
+          std::stringstream ss;
+          for(gate_t i{0}; i<c.getNbGates(); ++i) {
+            elog(WARNING, "%d: ", i);
+            for(auto j: c.getWires(i))
+              elog(WARNING, "%d", j);
+          }
+
           elog(WARNING, "%d %d %d %s", c.getNbGates(), td.getTreewidth(), dnnf.getNbGates(), td.toDot().c_str());
           result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
           elog(WARNING, "%d", dnnf.getGate("root"));
