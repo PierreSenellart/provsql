@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
   for(unsigned i=0; i<nbGates;++i) {
     std::getline(g, line);
     if(line=="IN")
-      c.setGate(std::to_string(i), BooleanGate::IN, 0.001);
+      c.setGate(std::to_string(i), BooleanGate::IN, i==4?0.3:(i==5?0.5:0.6));
     else if(line=="OR")
       c.setGate(std::to_string(i), BooleanGate::OR);
     else if(line=="AND")
@@ -61,6 +61,8 @@ int main(int argc, char **argv) {
     t1 = get_timestamp();
     std::cerr << "Computing dDNNF took " << (t1-t0) << "s" << std::endl;
     t0 = t1;
+
+    std::cerr << "dDNNF size: " << dnnf.getNbGates() << std::endl;
 
     std::cerr << "Probability: " << std::setprecision (15) << dnnf.dDNNFEvaluation(dnnf.getGate("root")) << std::endl;
     t1 = get_timestamp();
