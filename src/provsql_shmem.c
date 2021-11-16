@@ -90,11 +90,11 @@ void provsql_shmem_startup(void)
   switch (provsql_deserialize("provsql.tmp"))
   {
   case 1:
-    elog(ERROR, "Error while oppening the file during deserialization");
+    //elog(ERROR, "Error while opening the file during deserialization");
     break;
   
   case 2:
-    elog(ERROR, "Error while reading the file during deserialization");
+    //elog(ERROR, "Error while reading the file during deserialization");
     break;
   
   case 3:
