@@ -186,6 +186,7 @@ static Datum probability_evaluate_internal
               uuid2string(token),
               td}.build()
           };
+          elog(WARNING, "%d %d %d %s", c.getNbGates(), td.getTreewidth(), dnnf.getNbGates(), td.toDot().c_str());
           result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
           elog(WARNING, "%d", dnnf.getGate("root"));
         } catch(TreeDecompositionException &) {
