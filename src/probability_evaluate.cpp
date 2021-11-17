@@ -18,8 +18,6 @@ extern "C" {
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 
-#include <sstream>
-
 using namespace std;
 
 static void provsql_sigint_handler (int)
@@ -129,7 +127,7 @@ static Datum probability_evaluate_internal
   auto gate = c.getGate(uuid2string(token));
 
   // Display the circuit for debugging:
-  elog(WARNING, "%s", c.toString(gate).c_str());
+  // elog(WARNING, "%s", c.toString(gate).c_str());
 
   provsql_interrupted = false;
 
@@ -186,17 +184,7 @@ static Datum probability_evaluate_internal
               uuid2string(token),
               td}.build()
           };
-          std::stringstream ss;
-          for(gate_t i{0}; i<c.getNbGates(); ++i) {
-            elog(WARNING, "%d: ", i);
-            for(auto j: c.getWires(i))
-              elog(WARNING, "%d", j);
-          }
-
-          elog(WARNING, "%d %d %d %s %d %s", c.getNbGates(), td.getTreewidth(), dnnf.getNbGates(), uuid2string(token).c_str(), c.getGate(uuid2string(token)), td.toDot().c_str());
           result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
-          // Display the dnnf for debugging:
-          elog(WARNING, "%s", dnnf.toString(dnnf.getGate("root")).c_str());
         } catch(TreeDecompositionException &) {
           elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
         }

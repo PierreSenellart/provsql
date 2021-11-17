@@ -1,11 +1,5 @@
 #include "dDNNF.h"
 
-#ifndef TDKC
-extern "C" {
-#include "postgres.h"
-}
-#endif
-
 #include <unordered_map>
 #include <stack>
 #include <variant>
@@ -76,9 +70,6 @@ double dDNNF::dDNNFEvaluation(gate_t root) const
       } else {
         result = partial_value;
         cache[g]=result;
-#ifndef TDKC
-        elog(WARNING, "%d %f", g, result);
-#endif
         
         if(stack.empty())
           return result;
