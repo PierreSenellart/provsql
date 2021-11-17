@@ -297,7 +297,7 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
 #endif
 
       for(auto &[innocent, gates]: m) {
-        suspicious_t new_innocent = std::move(extra_innocent);
+        suspicious_t new_innocent = extra_innocent;
 
         for(auto s: innocent)
           new_innocent.insert(s);
