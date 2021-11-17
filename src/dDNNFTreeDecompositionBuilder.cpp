@@ -4,6 +4,12 @@
 
 #include "dDNNFTreeDecompositionBuilder.h"
 
+#ifndef TDKC
+extern "C" {
+#include "postgres.h"
+}
+#endif
+
 /* Turn a bounded-treewidth circuit c for which a tree decomposition td
  * is provided into a dNNF rooted at root, following the construction in
  * Section 5.1 of https://arxiv.org/pdf/1811.02944 */
@@ -328,6 +334,7 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
   return gates_to_or;
 }
 
+#include <sstream>
 dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF()
 {
   // Unfortunately, tree decompositions can be quite deep so we need to
@@ -367,6 +374,13 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
 
     auto [bag, children_processed, gates_to_or] = std::move(std::get<0>(stack.top()));
     stack.pop();
+
+#ifndef TDKC
+    std::stringstream ss;
+    ss << static_cast<int>(bag) << " ; " << children_processed << " ; " << gates_to_or;
+
+  elog(WARNING, "Recursion builddDNNF: %s", ss.str().c_str());
+#endif
 
     if(td.getChildren(bag).empty()) {
       auto x = builddDNNFLeaf(bag);
