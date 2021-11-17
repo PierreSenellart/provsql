@@ -377,9 +377,19 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
 
 #ifndef TDKC
     std::stringstream ss;
-    ss << static_cast<int>(bag) << " ; " << children_processed << " ; " << gates_to_or;
+    ss << "Params : " << static_cast<int>(bag) << " ; " << children_processed << " ; " << gates_to_or;
+    ss << "Result: ";
+    bool first = true;
+    for(auto r: result)
+    {
+      if(!first)
+        ss << " / ";
+      else
+        first=false;
+      ss << r;
+    }
 
-  elog(WARNING, "Recursion builddDNNF: %s", ss.str().c_str());
+  elog(WARNING, "%s", ss.str().c_str());
 #endif
 
     if(td.getChildren(bag).empty()) {
