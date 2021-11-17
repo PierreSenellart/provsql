@@ -10,6 +10,8 @@ extern "C" {
 }
 #endif
 
+#include <sstream>
+
 /* Turn a bounded-treewidth circuit c for which a tree decomposition td
  * is provided into a dNNF rooted at root, following the construction in
  * Section 5.1 of https://arxiv.org/pdf/1811.02944 */
@@ -138,6 +140,9 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
         continue;
 
       if(circuitHasWire(p1.first,p2.first)) {
+#ifndef TDKC
+      elog(WARNING, "Testing %d %d %d %d", p1.first, p1.second, p2.first, p2.second);
+#endif
         switch(c.getGateType(p1.first)) {
           case BooleanGate::AND:
           case BooleanGate::OR:
@@ -274,9 +279,22 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
         }
       }
           
+#ifndef TDKC
+    std::stringstream ss;
+    for(auto &[a,b]: valuation)
+    {
+      ss << "(" << a << "," << b << ") ";
+    }
+    ss << "?";
+  elog(WARNING, "%s", ss.str().c_str());
+#endif
+
       // We check valuation is still an almost-valuation
       if(!isAlmostValuation(valuation))
         continue;
+#ifndef TDKC
+      elog(WARNING, "Ok!");
+#endif
 
       for(auto &[innocent, gates]: m) {
         suspicious_t new_innocent = std::move(extra_innocent);
@@ -334,7 +352,6 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
   return gates_to_or;
 }
 
-#include <sstream>
 dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNF()
 {
   // Unfortunately, tree decompositions can be quite deep so we need to
