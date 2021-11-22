@@ -1,0 +1,13 @@
+\set ECHO none
+INFO:  serializing completed without error
+ dump_data 
+-----------
+ 
+(1 row)
+
+INFO:  deserialization completed without error
+ read_data_dump 
+----------------
+ 
+(1 row)
+
