@@ -134,7 +134,7 @@ int provsql_serialize(const char* filename)
     
   }
 
-
+  
   if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
   {
     if (FreeFile(file))
@@ -145,7 +145,7 @@ int provsql_serialize(const char* filename)
     return 2;
   }
 
-  if ( !fwrite( &provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
+  if ( !fwrite( &(provsql_shared_state->nb_wires), sizeof(unsigned int), 1, file ))
   {
     if (FreeFile(file))
     {
@@ -157,7 +157,7 @@ int provsql_serialize(const char* filename)
   if (provsql_shared_state->nb_wires  > 0)
   {
     
-    if (!fwrite(&provsql_shared_state->wires, sizeof(pg_uuid_t)*  (unsigned long int)(provsql_shared_state->nb_wires), 1, file))
+    if (!fwrite( &(provsql_shared_state->wires), sizeof(pg_uuid_t)*  (unsigned long int)(provsql_shared_state->nb_wires), 1, file))
     {
      if (FreeFile(file))
      {
@@ -208,6 +208,9 @@ int provsql_deserialize(const char* filename)
     {
       return 2;
     }
+
+    // Deleting the entry if it already exists is important, otherwhise the HASH_ENTER will just ignore it and we will be stuck with the curent value, even if the serialized one was different.
+    hash_search(provsql_hash, &(tmp.key), HASH_REMOVE, &found);
     entry = (provsqlHashEntry *) hash_search(provsql_hash, &(tmp.key), HASH_ENTER, &found);
 
     if (!found)
@@ -223,14 +226,16 @@ int provsql_deserialize(const char* filename)
     return 2;
   }
 
-  if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
+  if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned int), 1, file ))
   {
     return 2;
   }
 
-  if (! fread(&provsql_shared_state->wires, sizeof(pg_uuid_t),(unsigned long int) &provsql_shared_state->nb_wires, file))
-  {
-    return 2;
+  if (provsql_shared_state->nb_wires  > 0) {
+    if (! fread(&provsql_shared_state->wires, sizeof(pg_uuid_t),(unsigned long int) (provsql_shared_state->nb_wires), file))
+    {
+      return 2;
+    }
   }
   
 
