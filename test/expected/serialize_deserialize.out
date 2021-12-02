@@ -1,0 +1,29 @@
+\set ECHO none
+ add_provenance 
+----------------
+ 
+(1 row)
+
+INFO:  serializing completed without error
+ dump_data 
+-----------
+ 
+(1 row)
+
+INFO:  deserialization completed without error
+ read_data_dump 
+----------------
+ 
+(1 row)
+
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+ get_prob 
+----------
+      0.2
+      0.3
+(2 rows)
+

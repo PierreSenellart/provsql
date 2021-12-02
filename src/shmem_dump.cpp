@@ -112,6 +112,11 @@ int provsql_serialize(const char* filename)
 
 
   if(! fwrite(&num_entries, sizeof(int32), 1, file)){
+    if (FreeFile(file))
+    {
+      file = NULL;
+      return 4;
+    }
     return 2;
   }
 
@@ -119,64 +124,50 @@ int provsql_serialize(const char* filename)
   {
     if (!fwrite(entry, sizeof(provsqlHashEntry), 1, file))
     {
+      if (FreeFile(file))
+      {
+       file = NULL;
+       return 4;
+      }
       return 2;
     }
     
   }
 
-
+  
   if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
   {
-    return 2;
-  }
-
-  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
-  {
-    return 2;
-  }
-
-  if (!fwrite(&provsql_shared_state->wires, sizeof(pg_uuid_t)*  (unsigned long int)(&provsql_shared_state->nb_wires), 1, file))
-  {
-    return 2;
-  } 
-
-
-
-  if (FreeFile(file))
-  {
-    file = NULL;
-    return 3;
-  }if(! fwrite(&num_entries, sizeof(int32), 1, file)){
-    return 2;
-  }
-
-  while ( (entry = (provsqlHashEntry*)hash_seq_search(&hash_seq) )  != NULL )
-  {
-    if (!fwrite(entry, sizeof(provsqlHashEntry), 1, file))
+    if (FreeFile(file))
     {
-      return 2;
+      file = NULL;
+      return 4;
     }
+    return 2;
+  }
+
+  if ( !fwrite( &(provsql_shared_state->nb_wires), sizeof(unsigned int), 1, file ))
+  {
+    if (FreeFile(file))
+    {
+      file = NULL;
+      return 4;
+    }
+    return 1;
+  }
+  if (provsql_shared_state->nb_wires  > 0)
+  {
     
+    if (!fwrite( &(provsql_shared_state->wires), sizeof(pg_uuid_t)*  (unsigned long int)(provsql_shared_state->nb_wires), 1, file))
+    {
+     if (FreeFile(file))
+     {
+       file = NULL;
+       return 4;
+     }
+     return 2;
+    } 
+
   }
-
-
-  if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
-  {
-    elog(ERROR, "error while dumping provsql's shared state to file");
-    return 2;
-  }
-
-  if ( !fwrite(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
-  {
-    return 2;
-  }
-
-  if (!fwrite(&provsql_shared_state->wires, sizeof(pg_uuid_t)*  (unsigned long int)(&provsql_shared_state->nb_wires), 1, file))
-  {
-    return 2;
-  } 
-
-
 
   if (FreeFile(file))
   {
@@ -217,6 +208,9 @@ int provsql_deserialize(const char* filename)
     {
       return 2;
     }
+
+    // Deleting the entry if it already exists is important, otherwhise the HASH_ENTER will just ignore it and we will be stuck with the curent value, even if the serialized one was different.
+    hash_search(provsql_hash, &(tmp.key), HASH_REMOVE, &found);
     entry = (provsqlHashEntry *) hash_search(provsql_hash, &(tmp.key), HASH_ENTER, &found);
 
     if (!found)
@@ -232,14 +226,16 @@ int provsql_deserialize(const char* filename)
     return 2;
   }
 
-  if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned), 1, file ))
+  if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned int), 1, file ))
   {
     return 2;
   }
 
-  if (! fread(&provsql_shared_state->wires, sizeof(pg_uuid_t),(unsigned long int) &provsql_shared_state->nb_wires, file))
-  {
-    return 2;
+  if (provsql_shared_state->nb_wires  > 0) {
+    if (! fread(&provsql_shared_state->wires, sizeof(pg_uuid_t),(unsigned long int) (provsql_shared_state->nb_wires), file))
+    {
+      return 2;
+    }
   }
   
 
@@ -256,28 +252,34 @@ int provsql_deserialize(const char* filename)
 Datum dump_data(PG_FUNCTION_ARGS)
 {
 
-  int error = provsql_serialize("provsql.tmp");
 
-  if (error == 1)
+  switch (provsql_serialize("provsql_test.tmp"))
   {
-    elog(ERROR, "Error while oppening the file during serialization");
+  case 0:
+    elog(INFO,"serializing completed without error");
+    break;
+
+  case 1:
+    elog(INFO, "Error while opening the file during serialization");
+    break;
+  
+  case 2:
+    elog(INFO, "Error while writing to the file during serialization");
+    break;
+  
+  case 3:
+    elog(INFO, "Error while closing the file during serialization");
+    break;
+
+  case 4:
+    elog(INFO, "Error while closing the file when a writing error happened");
+    break;
+
   }
-  else if (error == 2)
-  {
-    elog(ERROR, "Error while writing to file during serialization");
-  }
-  else if (error == 3)
-  {
-    elog(ERROR, "Error while closing the file during serialization");
-  }
-  else 
-  {
-   elog(INFO,"serializing complete");
-  }
+
+
   PG_RETURN_NULL();
 }
-
-
 
 
 
@@ -288,63 +290,24 @@ extern "C"
 
 Datum read_data_dump(PG_FUNCTION_ARGS){
 
-  FILE *file;
-  constants_t constants_buffer;
-  char buffer[1024];
-  unsigned nb_wires_buffer;
-  int32 num;
-  provsqlHashEntry tmp;
-  provsqlHashEntry *entry;
-  bool found;
-
-  file = AllocateFile("provsql.tmp", PG_BINARY_R);
-
-
-  if (!fread(&num, sizeof(int32), 1, file))
+  switch(provsql_deserialize("provsql_test.tmp"))
   {
-    PG_RETURN_NULL();
-  }
+    case 0:
+    elog(INFO,"deserialization completed without error");
+    break;
 
-for (int i = 0; i < num; i++)
-  {
-    if (!fread(&tmp, sizeof(provsqlHashEntry), 1, file))
-    {
-      PG_RETURN_NULL();
-    }
-    entry = (provsqlHashEntry *) hash_search(provsql_hash, &(tmp.key), HASH_ENTER, &found);
-    elog(INFO,"%s", print_hash_entry(entry,buffer));
-
-    if (!found)
-    {
-      *entry = tmp;
-
-      elog(INFO,"%s", print_hash_entry(entry,buffer));
-
-
-    }
-
-    
-  }
-
-  if(! fread(&constants_buffer, sizeof(constants_t), 1, file)){
-    PG_RETURN_NULL();
-  }
-  //elog(INFO,"After Reading : \n");
-  //elog(INFO,"%s",print_shared_state_constants(constants_buffer, buffer));
-
-
-  if (! fread(&nb_wires_buffer, sizeof(unsigned), 1, file ))
-  {
-    PG_RETURN_NULL();
-  }
+  case 1:
+    elog(INFO, "Error while opening the file during deserialization");
+    break;
   
-  //elog(INFO,"NB_wires : %u",nb_wires_buffer);
+  case 2:
+    elog(INFO, "Error while reading the file during deserialization");
+    break;
+  
+  case 3:
+    elog(INFO, "Error while closing the file during deserialization");
+    break;
 
-
-  if (FreeFile(file))
-  {
-    file = NULL;
-    /* TODO error */
   }
 
   PG_RETURN_NULL();
