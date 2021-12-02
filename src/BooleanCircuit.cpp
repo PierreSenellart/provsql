@@ -2,6 +2,8 @@
 #include <type_traits>
 #include "d4/src/methods/MethodManager.hpp"
 #include "d4/src/methods/DpllStyleMethod.hpp"
+#include <boost/program_options.hpp>
+
 
 extern "C" {
 #include <unistd.h>
@@ -306,10 +308,25 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   bool new_d4 {false};
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
-    boost::program_options::variables_map vm;
-    //cmdline+="-dDNNF "+filename+" -out="+outfilename;
 
-    //d4::MethodManager *d4compiler = d4::MethodManager::makeMethodManager();
+    //cmdline+="-dDNNF "+filename+" -out="+outfilename;
+    namespace po = boost::program_options;
+
+    po::options_description desc{"Options"};
+ /*   desc.add_options()
+#include "../d4/src/option.dsc"
+        ;
+    boost::program_options::variables_map vm;
+    char **fake = NULL;
+    boost::program_options::store(parse_command_line(0, fake, desc), vm);
+
+    d4::MethodManager *d4compiler = d4::MethodManager::makeMethodManager(vm, std::cout);
+    d4compiler->run(vm);
+    delete d4compiler;
+*/
+    
+
+
 
     cmdline+= "-i "+filename+" -m ddnnf-compiler --dump-ddnnf "+outfilename;
     new_d4 = true;
