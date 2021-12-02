@@ -8,12 +8,17 @@ INSERT INTO test(id,v) VALUES
 	('hi',8);
 
 SELECT add_provenance('test');
-SELECT set_prob(provenance(), 0.2) from test where id = 'hello' \g ;
-SELECT set_prob(provenance(), 0.3) from test where id = 'hi' \g ;
+
+do $$begin
+PERFORM set_prob(provenance(), 0.2) from test where id = 'hello';
+PERFORM set_prob(provenance(), 0.3) from test where id = 'hi';
+end $$;
 
 
 SELECT dump_data();
-SELECT set_prob(provenance(), 0.4) from test where id = 'hello' \g ;
+do $$ begin
+PERFORM set_prob(provenance(), 0.4) from test where id = 'hello';
+end $$;
 
 
 SELECT read_data_dump();
