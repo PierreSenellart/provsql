@@ -2,7 +2,7 @@
 SET search_path TO provsql_test,provsql;
 
 CREATE TABLE weightmc_result AS
-SELECT city, probability_evaluate(provenance(),'p','weightmc','0.2;0.8') AS prob
+SELECT city, probability_evaluate(provenance(),'weightmc','0.2;0.8') AS prob
 FROM (
   SELECT DISTINCT city
   FROM personnel

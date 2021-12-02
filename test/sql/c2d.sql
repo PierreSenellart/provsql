@@ -2,7 +2,7 @@
 SET search_path TO provsql_test,provsql;
 
 CREATE TABLE c2d_result AS
-SELECT city, probability_evaluate(provenance(),'p','compilation','c2d') AS prob
+SELECT city, probability_evaluate(provenance(),'compilation','c2d') AS prob
 FROM (
   SELECT DISTINCT city
   FROM personnel

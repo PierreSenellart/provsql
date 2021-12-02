@@ -2,7 +2,7 @@
 SET search_path TO provsql_test,provsql;
 
 CREATE TABLE treedec_result AS
-SELECT city, probability_evaluate(provenance(),'p','tree-decomposition') AS prob
+SELECT city, probability_evaluate(provenance(),'tree-decomposition') AS prob
 FROM (
   SELECT DISTINCT city
   FROM personnel

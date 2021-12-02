@@ -1,10 +1,15 @@
 \set ECHO none
 SET search_path TO provsql_test,provsql;
 
-/* Add some probabilities to the personnel table */
-ALTER TABLE personnel ADD COLUMN probability DOUBLE PRECISION;
-UPDATE personnel SET probability=id*1./10;
+/* We use PERFORM in anonymous code block instead of SELECT to avoid the
+ * display of provenance tokens */
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), id*1./10) FROM personnel;
+END $$;  
 
-SELECT create_provenance_mapping('p', 'personnel', 'probability');
+CREATE TABLE probs AS
+SELECT get_prob(provenance()) AS value FROM personnel;
 
-SELECT value FROM p ORDER BY value;
+SELECT remove_provenance('probs');
+
+SELECT * FROM probs ORDER BY value;

@@ -7,6 +7,7 @@ extern "C" {
 #include "executor/spi.h"
 #include "utils/builtins.h"
 
+#include "provsql_shmem.h"
 #include "provsql_utils.h"
   
   PG_FUNCTION_INFO_V1(where_provenance);
@@ -51,13 +52,8 @@ static vector<pair<int,int>> parse_array(string s)
 static string where_provenance_internal
   (Datum token)
 {
-  constants_t constants;
-  if(!initialize_constants(&constants)) {
-    elog(ERROR, "Cannot find provsql schema");
-  }
-
   Datum arguments[1]={token};
-  Oid argtypes[1]={constants.OID_TYPE_PROVENANCE_TOKEN};
+  Oid argtypes[1]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};
   
   SPI_connect();

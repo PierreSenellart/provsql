@@ -1,4 +1,5 @@
 #include "BooleanCircuit.h"
+#include <type_traits>
 
 extern "C" {
 #include <unistd.h>
@@ -11,22 +12,30 @@ extern "C" {
 #include <sstream>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 #include "dDNNF.h"
 
 // "provsql_utils.h"
 #ifdef TDKC
 constexpr bool provsql_interrupted = false;
+constexpr int provsql_verbose = 0;
+#define elog(level, ...) {;}
 #else
 #include "provsql_utils.h"
+extern "C" {
+#include "utils/elog.h"
+}
 #endif
 
 gate_t BooleanCircuit::setGate(BooleanGate type)
 {
- auto id = Circuit::setGate(type);
+  auto id = Circuit::setGate(type);
   if(type == BooleanGate::IN) {
     setProb(id,1.);
     inputs.insert(id);
+  } else if(type == BooleanGate::MULIN) {
+    mulinputs.insert(id);
   }
   return id;
 }
@@ -37,6 +46,8 @@ gate_t BooleanCircuit::setGate(const uuid &u, BooleanGate type)
   if(type == BooleanGate::IN) {
     setProb(id,1.);
     inputs.insert(id);
+  } else if(type == BooleanGate::MULIN) {
+    mulinputs.insert(id);
   }
   return id;
 }
@@ -76,6 +87,8 @@ std::string BooleanCircuit::toString(gate_t g) const
       } else {
         return to_string(g)+"["+std::to_string(getProb(g))+"]";
       }
+    case BooleanGate::MULIN:
+      return "{" + to_string(*getWires(g).begin()) + "=" + std::to_string(getInfo(g)) + "}[" + std::to_string(getProb(g)) + "]";
     case BooleanGate::NOT:
       op="¬";
       break;
@@ -88,6 +101,8 @@ std::string BooleanCircuit::toString(gate_t g) const
     case BooleanGate::OR:
       op="∨";
       break;
+    case BooleanGate::MULVAR:
+      ; // already dealt with in MULIN
   }
 
   if(getWires(g).empty()) {
@@ -116,6 +131,9 @@ bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sample
   switch(getGateType(g)) {
     case BooleanGate::IN:
       return sampled.find(g)!=sampled.end();
+    case BooleanGate::MULIN:
+    case BooleanGate::MULVAR:
+      throw CircuitException("Monte-Carlo sampling not implemented on multivalued inputs");
     case BooleanGate::NOT:
       return !evaluate(*(getWires(g).begin()), sampled);
     case BooleanGate::AND:
@@ -236,6 +254,9 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
           break;
         }
 
+      case BooleanGate::MULIN:
+        throw CircuitException("Multivalued inputs should have been removed by then.");  
+      case BooleanGate::MULVAR:
       case BooleanGate::IN:
       case BooleanGate::UNDETERMINED:
         ;
@@ -275,6 +296,10 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
 
+  if(provsql_verbose>=20) {
+    elog(NOTICE, "Tseytin circuit in %s", filename.c_str());
+  }
+
   bool new_d4 {false};
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
@@ -302,8 +327,10 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   if(retvalue)
     throw CircuitException("Error executing "+compiler);
   
-  if(unlink(filename.c_str())) {
-    throw CircuitException("Error removing "+filename);
+  if(provsql_verbose<20) {
+    if(unlink(filename.c_str())) {
+      throw CircuitException("Error removing "+filename);
+    }
   }
   
   std::ifstream ifs(outfilename.c_str());
@@ -421,9 +448,13 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   } while(getline(ifs, line));
 
   ifs.close();
-  if(unlink(outfilename.c_str())) {
-    throw CircuitException("Error removing "+outfilename);
-  }
+
+  if(provsql_verbose<20) {
+    if(unlink(outfilename.c_str())) {
+      throw CircuitException("Error removing "+outfilename);
+    }
+  } else
+    elog(NOTICE, "Compiled d-DNNF in %s", outfilename.c_str());
 
   return dnnf.dDNNFEvaluation(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
 }
@@ -507,10 +538,36 @@ double BooleanCircuit::independentEvaluationInternal(
       break;
 
     case BooleanGate::OR:
-      for(const auto &c: getWires(g)) {
-        result*=1-independentEvaluationInternal(c, seen);
+      {
+        // We collect probability among each group of children, where we
+        // group MULIN gates with the same key var together
+        std::map<gate_t, double> groups;
+        std::set<gate_t> local_mulins;
+        std::set<std::pair<gate_t, unsigned>> mulin_seen;
+
+        for(const auto &c: getWires(g)) {
+          auto group = c;
+          if(getGateType(c) == BooleanGate::MULIN) {
+            group = *getWires(c).begin();
+            if(local_mulins.find(g)==local_mulins.end()) {
+              if(seen.find(g)!=seen.end())
+                throw CircuitException("Not an independent circuit");
+              else
+                seen.insert(g);
+            }
+            auto p = std::make_pair(group, getInfo(c));
+            if(mulin_seen.find(p)==mulin_seen.end()) {
+              groups[group] += getProb(c);
+              mulin_seen.insert(p);
+            }
+          } else 
+            groups[group] = independentEvaluationInternal(c, seen);
+        }
+
+        for(const auto [k, v]: groups)
+          result *= 1-v;
+        result = 1-result;
       }
-      result=1-result;
       break;
 
     case BooleanGate::NOT:
@@ -523,8 +580,19 @@ double BooleanCircuit::independentEvaluationInternal(
       seen.insert(g);
       result=getProb(g);
       break;
+    
+    case BooleanGate::MULIN:
+      { 
+        auto child = *getWires(g).begin();
+        if(seen.find(child)!=seen.end())
+          throw CircuitException("Not an independent circuit");
+        seen.insert(child);
+        result=getProb(g);
+      }
+      break;
 
     case BooleanGate::UNDETERMINED:
+    case BooleanGate::MULVAR:
       throw CircuitException("Bad gate");
   }
 
@@ -535,4 +603,85 @@ double BooleanCircuit::independentEvaluation(gate_t g) const
 {
   std::set<gate_t> seen;
   return independentEvaluationInternal(g, seen);
+}
+
+void BooleanCircuit::setInfo(gate_t g, unsigned int i)
+{
+  info[g] = i;
+}
+
+unsigned BooleanCircuit::getInfo(gate_t g) const
+{
+  auto it = info.find(g);
+
+  if(it==info.end())
+    return 0;
+  else
+    return it->second;
+}
+
+void BooleanCircuit::rewriteMultivaluedGatesRec(
+    const std::vector<gate_t> &muls,
+    const std::vector<double> &cumulated_probs,
+    unsigned start,
+    unsigned end,
+    std::vector<gate_t> &prefix)
+{
+  if(start==end) {
+    getWires(muls[start]) = prefix;
+    return;
+  }
+
+  unsigned mid = (start+end)/2;
+  auto g = setGate(
+      BooleanGate::IN,
+      (cumulated_probs[mid+1] - cumulated_probs[start]) / 
+      (cumulated_probs[end] - cumulated_probs[start]));
+  auto not_g = setGate(BooleanGate::NOT);
+  getWires(not_g).push_back(g);
+
+  prefix.push_back(g);
+  rewriteMultivaluedGatesRec(muls, cumulated_probs, start, mid, prefix);
+  prefix.pop_back();
+  prefix.push_back(not_g);
+  rewriteMultivaluedGatesRec(muls, cumulated_probs, mid+1, end, prefix);
+  prefix.pop_back();
+}
+
+static constexpr bool almost_equals(double a, double b)
+{
+  double diff = a - b;
+  constexpr double epsilon = std::numeric_limits<double>::epsilon() * 10;
+
+  return (diff < epsilon && diff > -epsilon);
+}
+
+void BooleanCircuit::rewriteMultivaluedGates()
+{
+  std::map<gate_t,std::vector<gate_t>> var2mulinput;
+  for(auto mul: mulinputs) {
+    var2mulinput[*getWires(mul).begin()].push_back(mul);
+  }
+  mulinputs.clear();
+
+  for(const auto &[var, muls]: var2mulinput)
+  {
+    const unsigned n = muls.size();
+    std::vector<double> cumulated_probs(n);
+    double cumulated_prob=0.;
+    
+    for(unsigned i=0; i<n; ++i) {
+      cumulated_prob += getProb(muls[i]);
+      cumulated_probs[i] = cumulated_prob;
+      gates[static_cast<std::underlying_type<gate_t>::type>(muls[i])] = BooleanGate::AND;
+      getWires(muls[i]).clear();
+    }
+      
+    std::vector<gate_t> prefix;
+    prefix.reserve(static_cast<unsigned>(log(n)/log(2)+2));
+    if(!almost_equals(cumulated_probs[n-1],1.)) {
+      prefix.push_back(setGate(BooleanGate::IN, cumulated_probs[n-1]));
+    }
+    rewriteMultivaluedGatesRec(muls, cumulated_probs, 0, n-1, prefix);
+  }
 }

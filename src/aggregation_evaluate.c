@@ -6,6 +6,7 @@
 #include "access/htup_details.h"
 
 #include "provsql_utils.h"
+#include "provsql_shmem.h"
 
 PG_FUNCTION_INFO_V1(aggregation_evaluate);
 
@@ -23,7 +24,6 @@ Datum aggregation_evaluate(PG_FUNCTION_ARGS)
   Datum monus_function = PG_GETARG_DATUM(8);
   Datum delta_function = PG_GETARG_DATUM(9);
 
-  constants_t constants;
   bool isnull;
   Datum result;
   char nulls[11]={' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};
@@ -44,11 +44,7 @@ Datum aggregation_evaluate(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(9)) // No delta function provided
     nulls[10]='n';
 
-  if(!initialize_constants(&constants)) {
-    elog(ERROR, "Cannot find provsql schema");
-  }
-
-  argtypes[0]=constants.OID_TYPE_PROVENANCE_TOKEN;
+  argtypes[0]=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
   argtypes[1]=REGCLASSOID;
   argtypes[2]=REGPROCOID;
   argtypes[3]=REGPROCOID; 

@@ -2,7 +2,7 @@
 SET search_path TO provsql_test,provsql;
 
 CREATE TABLE dsharp_result AS
-SELECT city, probability_evaluate(provenance(),'p','compilation','dsharp') AS prob
+SELECT city, probability_evaluate(provenance(),'compilation','dsharp') AS prob
 FROM (
   SELECT DISTINCT city
   FROM personnel

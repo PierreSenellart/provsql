@@ -7,3 +7,4 @@ test/schedule
 .clangd
 compile_commands.json
 tdkc
+test.log

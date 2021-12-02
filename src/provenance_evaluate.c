@@ -5,6 +5,7 @@
 #include "executor/spi.h"
 #include "access/htup_details.h"
 
+#include "provsql_shmem.h"
 #include "provsql_utils.h"
 
 PG_FUNCTION_INFO_V1(provenance_evaluate);
@@ -20,7 +21,6 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   Datum monus_function = PG_GETARG_DATUM(5);
   Datum delta_function = PG_GETARG_DATUM(6);
 
-  constants_t constants;
   bool isnull;
   Datum result;
   char nulls[8]={' ',' ',' ',' ',' ',' ',' ',' '};
@@ -39,11 +39,7 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(6)) // No delta function provided
     nulls[7]='n';
 
-  if(!initialize_constants(&constants)) {
-    elog(ERROR, "Cannot find provsql schema");
-  }
-
-  argtypes[0]=constants.OID_TYPE_PROVENANCE_TOKEN;
+  argtypes[0]=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
   argtypes[1]=REGCLASSOID;
   argtypes[2]=element_type;
   argtypes[3]=REGTYPEOID;

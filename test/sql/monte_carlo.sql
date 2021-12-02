@@ -2,7 +2,7 @@
 SET search_path TO provsql_test,provsql;
 
 CREATE TABLE mc_result AS
-SELECT city, probability_evaluate(provenance(),'p','monte-carlo','10000') AS prob
+SELECT city, probability_evaluate(provenance(),'monte-carlo','10000') AS prob
 FROM (
   SELECT DISTINCT city
   FROM personnel

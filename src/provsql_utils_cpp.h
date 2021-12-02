@@ -3,10 +3,12 @@
 
 extern "C" {
 #include "postgres.h"
+#include "provsql_utils.h"
 }
 
 #include <string>
 
 std::string UUIDDatum2string(Datum token);
+std::string uuid2string(pg_uuid_t uuid);
 
 #endif
