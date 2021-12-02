@@ -1,6 +1,6 @@
 # ProvSQL
 
-[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml/badge.svg?branch=shmem)](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml)
+[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml)
 
 The goal of the ProvSQL project is to add support for (m-)semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
@@ -40,6 +40,10 @@ docker run inriavalda/provsql
 By following the instructions, you will be able to connect to the
 PostgreSQL server within the container using a PostgreSQL client,
 and to use a Web interface for simple visualization of where-provenance.
+The Docker container can also be built locally, using:
+```
+make docker-build
+```
 
 ## Prerequisites for installation
 
@@ -122,7 +126,7 @@ on Debian-based Linux distributions, you can ensure this by running the
 command `createuser your_login` as the `postgres` user. 
 
 If your installation of PostgreSQL does not listen on the default (5432)
-port, you can add ` --port=xxxx` to the `REGRESS_OPTS` line of
+port, you can add ` --port=xxxx` to the `EXTRA_REGRESS_OPTS` line of
 `Makefile.internal`, where `xxxx` is the port number.
 
 Note that the tests that depend on external software (`c2d`, `d4`,
@@ -151,7 +155,7 @@ See the other examples in [test/sql](test/sql) for other use cases.
 A demonstration of an early version of the ProvSQL system is available as a video, on
 https://youtu.be/iqzSNfGHbEE?vq=hd1080
 The SQL commands used in this demonstration can be found in the [doc/demo/](doc/demo/)
-directory. An article describing this demonstration, presented at the VLDB 2018.
+directory. An article describing this demonstration, presented at the VLDB 2018
 conference, is available at
 http://pierre.senellart.com/publications/senellart2018provsql.pdf
 

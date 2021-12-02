@@ -109,7 +109,7 @@ Solving the murder
 
 1.   Create a `suspects` table containing all distinct persons that were
      sighted (in a consistent sighting) during the time the murder was committed in
-     one of the room the murder may have been committed. Display the
+     one of the rooms the murder may have been committed. Display the
      content of the `suspects` table along with the provenance formula
      for each tuple.
 

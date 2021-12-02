@@ -30,6 +30,7 @@ sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 
 LDFLAGS_SL = -lstdc++
 
+PG_CPPFLAGS += -Id4
 ifdef DEBUG
 PG_CPPFLAGS += -Og -g
 endif

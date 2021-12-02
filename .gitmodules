@@ -1,0 +1,3 @@
+[submodule "d4"]
+	path = d4
+	url = https://gitlab.univ-artois.fr/jmarie.lagniez/d4.git

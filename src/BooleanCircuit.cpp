@@ -1,5 +1,7 @@
 #include "BooleanCircuit.h"
 #include <type_traits>
+#include "d4/src/methods/MethodManager.hpp"
+#include "d4/src/methods/DpllStyleMethod.hpp"
 
 extern "C" {
 #include <unistd.h>
@@ -295,6 +297,7 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
+// ./build/d4 -i instancesTest/cnf10.cnf -m ddnnf-compiler --dump-ddnnf test.out
 
   if(provsql_verbose>=20) {
     elog(NOTICE, "Tseytin circuit in %s", filename.c_str());
@@ -303,7 +306,12 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   bool new_d4 {false};
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
-    cmdline+="-dDNNF "+filename+" -out="+outfilename;
+    boost::program_options::variables_map vm;
+    //cmdline+="-dDNNF "+filename+" -out="+outfilename;
+
+    //d4::MethodManager *d4compiler = d4::MethodManager::makeMethodManager();
+
+    cmdline+= "-i "+filename+" -m ddnnf-compiler --dump-ddnnf "+outfilename;
     new_d4 = true;
   } else if(compiler=="c2d") {
     cmdline+="-in "+filename+" -silent";

@@ -53,7 +53,7 @@ END
 $$;
 
 CREATE TABLE agg_result AS
-    SELECT position, count(*), formula(provenance(),'personnel_name') FROM personnel
+    SELECT position, count(*), regexp_replace(formula(provenance(),'personnel_name'),'Susan ⊕ Dave','Dave ⊕ Susan') AS formula FROM personnel
     GROUP BY position;
 
 SELECT remove_provenance('agg_result');
