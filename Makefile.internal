@@ -23,12 +23,21 @@ EXTRA_REGRESS_OPTS =
 
 all: $(DATA) $(MODULE_big).so test/schedule
 
-$(OBJS): $(wildcard src/*.h)
+$(OBJS): $(wildcard src/*.h) d4/build.sh
 
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
-LDFLAGS_SL = -lstdc++
+PG_LDFLAGS = -lstdc++ -Ld4
+PG_LIBS = -ld4
+
+$(MODULE_big).so: d4/libd4.a
+
+d4/build.sh:
+	git submodule update --init
+
+d4/libd4.a: d4/build.sh
+	cd d4 && ./build.sh -l
 
 PG_CPPFLAGS += -Id4
 ifdef DEBUG
