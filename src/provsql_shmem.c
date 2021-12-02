@@ -120,7 +120,7 @@ static void provsql_shmem_shutdown(int code, Datum arg)
   switch (provsql_serialize("provsql.tmp"))
   {
   case 1:
-    elog(INFO, "Error while oppening the file during serialization");
+    elog(INFO, "Error while opening the file during serialization");
     break;
   
   case 2:
