@@ -28,8 +28,7 @@ $(OBJS): $(wildcard src/*.h) d4/build.sh
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
-PG_LDFLAGS = -Ld4/build
-PG_LIBS = -lstdc++ -lboost_program_options -ld4
+PG_LDFLAGS = -Ld4/build -lstdc++ -lboost_program_options -ld4
 
 $(MODULE_big).so: d4/build/libd4.a
 
