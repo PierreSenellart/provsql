@@ -144,6 +144,12 @@ std::string DotCircuit::render() const {
   std::string cmdline="graph-easy --as=boxart --output="+outfilename+" "+filename;
 
   int retvalue = system(cmdline.c_str());
+  
+  if(provsql_verbose<20) {
+    if(unlink(filename.c_str())) {
+      throw CircuitException("Error removing "+filename);
+    }
+  }
 
   if(retvalue)    
     throw CircuitException("Error executing graph-easy"); 
@@ -151,6 +157,12 @@ std::string DotCircuit::render() const {
   std::ifstream ifs(outfilename.c_str());
   std::string str((std::istreambuf_iterator<char>(ifs)),
                   std::istreambuf_iterator<char>());
-
+  
+  if(provsql_verbose<20) {
+    if(unlink(outfilename.c_str())) {
+      throw CircuitException("Error removing "+outfilename);
+    }
+  }
+  
   return str;
 }

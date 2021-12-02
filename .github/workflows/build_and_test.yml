@@ -19,4 +19,4 @@ jobs:
       - run: make && make tdkc && make install
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
-      - run: make installcheck PGUSER=postgres || (cat /tmp/tmp.provsql*/regression.diffs && false)
+      - run: make installcheck PGUSER=postgres || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"

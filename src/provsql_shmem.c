@@ -11,12 +11,17 @@
 #include "catalog/pg_type.h"
 #include "parser/parse_func.h"
 #include "storage/shmem.h"
+#include "storage/fd.h"
 #include "utils/array.h"
 #include "utils/hsearch.h"
 #include "utils/syscache.h"
 #include "utils/uuid.h"
 
+#include "unistd.h"
+
 #include "provsql_shmem.h"
+
+#define PROVSQL_DUMP_FILE "provsql.tmp"
 
 shmem_startup_hook_type prev_shmem_startup = NULL;
 int provsql_init_nb_gates;
@@ -27,6 +32,7 @@ static void provsql_shmem_shutdown(int code, Datum arg);
 
 provsqlSharedState *provsql_shared_state = NULL;
 HTAB *provsql_hash = NULL;
+provsqlHashEntry *entry;
 
 void provsql_shmem_startup(void)
 {
@@ -40,12 +46,13 @@ void provsql_shmem_startup(void)
   provsql_shared_state = NULL;
   provsql_hash = NULL;
 
+
   LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
   provsql_shared_state = ShmemInitStruct(
       "provsql",
       add_size(offsetof(provsqlSharedState, wires),
-        mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires)),
+      mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires)),
       &found);
 
   if(!found) {
@@ -80,13 +87,60 @@ void provsql_shmem_startup(void)
   if(found)
     return;
 
-  // TODO: Read circuit from file
+
+  if( access( "provsql.tmp", F_OK ) == 0 ) {
+    switch (provsql_deserialize("provsql.tmp"))
+    {
+    case 1:
+      //elog(ERROR, "Error while opening the file during deserialization");
+      break;
+    
+    case 2:
+      //elog(ERROR, "Error while reading the file during deserialization");
+      break;
+    
+    case 3:
+      elog(ERROR, "Error while closing the file during deserialization");
+      break;
+    }
+  } 
+
 }
 
 static void provsql_shmem_shutdown(int code, Datum arg)
 {
-  // TODO: Write circuit to file
+
+  #if PG_VERSION_NUM >= 90600
+    // Named lock tranches were added in version 9.6 of PostgreSQL
+    provsql_shared_state->lock =&(GetNamedLWLockTranche("provsql"))->lock;
+  #else
+    provsql_shared_state->lock =LWLockAssign();
+  #endif // PG_VERSION_NUM >= 90600
+
+  switch (provsql_serialize("provsql.tmp"))
+  {
+  case 1:
+    elog(INFO, "Error while opening the file during serialization");
+    break;
+  
+  case 2:
+    elog(INFO, "Error while writing to file during serialization");
+    break;
+  
+  case 3:
+    elog(INFO, "Error while closing the file during serialization");
+    break;
+  }
+
+  LWLockRelease(provsql_shared_state->lock);
+
+
+  // TODO (void) durable_rename(PROVSQL_DUMP_FILE ".tmp", PROVSQL_DUMP_FILE, LOG);
+
 }
+
+
+
 
 Size provsql_memsize(void)
 {

@@ -123,11 +123,11 @@ static Datum probability_evaluate_internal
   }
   LWLockRelease(provsql_shared_state->lock);
 
-// Display the circuit for debugging:
-// elog(WARNING, "%s", c.toString(c.getGate(UUIDDatum2string(token))).c_str());
-
   double result;
   auto gate = c.getGate(uuid2string(token));
+
+  // Display the circuit for debugging:
+  // elog(WARNING, "%s", c.toString(gate).c_str());
 
   provsql_interrupted = false;
 

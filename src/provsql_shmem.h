@@ -37,4 +37,7 @@ typedef struct provsqlHashEntry
 } provsqlHashEntry;
 extern HTAB *provsql_hash;
 
+int provsql_serialize(const char*);
+int provsql_deserialize(const char*);
+
 #endif /* ifndef PROVSQL_SHMEM_H */

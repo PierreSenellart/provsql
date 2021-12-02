@@ -1,5 +1,5 @@
 # provsql extension
-comment = 'Semiring provenacne for PostgreSQL databases'
+comment = 'Semiring provenance for PostgreSQL databases'
 default_version = '1.0.0-dev'
 requires = 'uuid-ossp'
 relocatable = false

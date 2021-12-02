@@ -34,7 +34,7 @@ PG_MODULE_MAGIC;
 
 bool provsql_interrupted = false;
 bool provsql_where_provenance = false;
-int provsql_verbose = 0;
+int provsql_verbose = 100;
 
 static const char *PROVSQL_COLUMN_NAME = "provsql";
 
