@@ -12,6 +12,7 @@ extern "C" {
 
 #include <cassert>
 #include <string>
+#include <sstream>
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
@@ -296,6 +297,9 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   return filename;
 }
 
+
+
+
 double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
@@ -313,17 +317,90 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     namespace po = boost::program_options;
 
     po::options_description desc{"Options"};
- /*   desc.add_options()
+    desc.add_options()
 #include "../d4/src/option.dsc"
         ;
     boost::program_options::variables_map vm;
     char **fake = NULL;
     boost::program_options::store(parse_command_line(0, fake, desc), vm);
 
-    d4::MethodManager *d4compiler = d4::MethodManager::makeMethodManager(vm, std::cout);
-    d4compiler->run(vm);
-    delete d4compiler;
-*/
+    d4::ProblemManagerCnf problem;
+
+    std::string line, word;
+    std::ifstream cnfFile;
+    cnfFile.open(filename);
+    //TODO comments and errors handling of cnf files
+
+    unsigned nb_var, nb_clauses;
+    getline(cnfFile,line);
+    std::istringstream iss(line);
+    for (int i = 0; i < 3; i++)
+    {
+      iss >> word;
+    }
+    nb_var = std::stoi(word);
+    iss >> word;
+    nb_clauses = std::stoul(word);
+
+    problem.setNbVar(nb_var);
+    std::vector<double> &weightLit = problem.getWeightLit();
+    std::vector<double> &weightVar = problem.getWeightVar();
+
+    weightLit.resize((nb_var + 1) << 1, 1);
+    weightVar.resize(nb_var + 1, 2);
+    std::vector<std::vector<d4::Lit>> &clauses = problem.getClauses();
+
+    while (getline(cnfFile,line))
+    {
+      std::istringstream iss(line);
+      std::vector<d4::Lit> current_clause;
+
+      iss >> word;
+      while ( word != "0") 
+      {
+        iss >> word;
+        if (std::stoi(word) < 0)
+        {
+          current_clause.push_back( d4::Lit::makeLitFalse(abs(std::stoi(word))));
+        }
+        else {
+          current_clause.push_back( d4::Lit::makeLitTrue(std::stoi(word)));
+        }
+      }
+      clauses.push_back(current_clause);
+    }
+
+    d4::LastBreathPreproc lastBreath;
+    d4::PreprocManager *preproc = d4::PreprocManager::makePreprocManager(vm,std::cerr);
+    d4::ProblemManager *preprocProblem = preproc->run(problem,lastBreath);
+
+    boost::multiprecision::mpf_float::default_precision(50);
+    d4::Counter<boost::multiprecision::mpf_float> *method =
+      d4::Counter<boost::multiprecision::mpf_float>::makeCounter(vm, preprocProblem, "counting",
+                                               true, 50, std::cerr, lastBreath);
+
+    std::vector<d4::Var> setOfVar;
+    for (unsigned i = 1; i <= nb_var; i++)
+    setOfVar.push_back(i);
+
+    boost::multiprecision::mpf_float v = method->count(setOfVar, std::cerr);
+    std::cout << "s " << v << "\n";
+    delete method;
+    
+
+
+    
+
+
+    
+
+
+
+
+
+
+
+
     
 
 
