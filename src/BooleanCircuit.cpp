@@ -303,7 +303,6 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
-// ./build/d4 -i instancesTest/cnf10.cnf -m ddnnf-compiler --dump-ddnnf test.out
 
   if(provsql_verbose>=20) {
     elog(NOTICE, "Tseytin circuit in %s", filename.c_str());
@@ -313,7 +312,6 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
 
-    //cmdline+="-dDNNF "+filename+" -out="+outfilename;
     namespace po = boost::program_options;
 
     po::options_description desc{"Options"};
@@ -329,7 +327,9 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     std::string line, word;
     std::ifstream cnfFile;
     cnfFile.open(filename);
-    //TODO comments and errors handling of cnf files
+
+
+    //TODO comments and errors handling of cnf files 
 
     unsigned nb_var, nb_clauses;
     getline(cnfFile,line);
@@ -375,35 +375,17 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     d4::ProblemManager *preprocProblem = preproc->run(problem,lastBreath);
 
     boost::multiprecision::mpf_float::default_precision(50);
-    d4::Counter<boost::multiprecision::mpf_float> *method =
-      d4::Counter<boost::multiprecision::mpf_float>::makeCounter(vm, preprocProblem, "counting",
-                                               true, 50, std::cerr, lastBreath);
+    std::string meth = "counting";
+    d4::DpllStyleMethod<boost::multiprecision::mpf_float, boost::multiprecision::mpf_float> *method = new d4::DpllStyleMethod<boost::multiprecision::mpf_float, boost::multiprecision::mpf_float>(
+        vm, meth, true, preprocProblem, std::cerr, lastBreath);
 
     std::vector<d4::Var> setOfVar;
     for (unsigned i = 1; i <= nb_var; i++)
     setOfVar.push_back(i);
 
     boost::multiprecision::mpf_float v = method->count(setOfVar, std::cerr);
-    std::cout << "s " << v << "\n";
     delete method;
-    
-
-
-    
-
-
-    
-
-
-
-
-
-
-
-
-    
-
-
+    return v.convert_to<double>();
 
     cmdline+= "-i "+filename+" -m ddnnf-compiler --dump-ddnnf "+outfilename;
     new_d4 = true;
