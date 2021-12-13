@@ -301,8 +301,7 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 
 
 double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
-  // TODO, Using tseytin(g, true) induces a crash
-  std::string filename=BooleanCircuit::Tseytin(g,true);
+  std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
 
   if(provsql_verbose>=20) {
@@ -349,7 +348,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     std::vector<double> &weightVar = problem.getWeightVar();
 
     weightLit.resize((nb_var + 1) << 1, 1);
-    weightVar.resize(nb_var + 1, 1);
+    weightVar.resize(nb_var + 1, 2);
 
     elog(NOTICE,"nb var = %ul",weightVar.size());
 
@@ -357,7 +356,9 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     int i = 0;
     for (gate_t var : inputs)
     {
-      weightVar[i] = getProb(var);
+      weightLit[2*(i+1)] = getProb(var);
+      weightLit[2*(i+1)+1] = 1-getProb(var);
+      weightVar[i] = 1;
       elog(NOTICE,"i = %d, var = %f", i, getProb(var) );
       i++;
     }
@@ -371,43 +372,19 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       std::vector<d4::Lit> current_clause;
       elog(NOTICE,"line : %s", line.c_str());
 
-      if (line.at(0) == 'w')
+      iss >> word;
+      while ( word != "0") 
       {
-
-          iss >> word;
-          iss >> word;
-          int tmp_var = std::stoi(word);
-          iss >> word;
-          double tmp_prob = std::stod(word);
-          if (tmp_var > 0)
-          {
-            elog(NOTICE, "Should insert %f at index %i", tmp_prob, tmp_var);
-            weightVar[tmp_var] = tmp_prob;
-          }
-          
-          
-
-        
-      }
-
-
-      else {
         iss >> word;
-        while ( word != "0") 
+        if (std::stoi(word) < 0)
         {
-          iss >> word;
-          if (std::stoi(word) < 0)
-          {
-            current_clause.push_back( d4::Lit::makeLitFalse(abs(std::stoi(word))));
-          }
-          else {
-            current_clause.push_back( d4::Lit::makeLitTrue(std::stoi(word)));
-          }
+          current_clause.push_back( d4::Lit::makeLitFalse(abs(std::stoi(word))));
         }
-        clauses.push_back(current_clause);
+        else {
+          current_clause.push_back( d4::Lit::makeLitTrue(std::stoi(word)));
+        }
       }
-      
-
+      clauses.push_back(current_clause);
     }
 
 
