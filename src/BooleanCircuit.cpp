@@ -301,7 +301,8 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 
 
 double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
-  std::string filename=BooleanCircuit::Tseytin(g);
+  // TODO, Using tseytin(g, true) induces a crash
+  std::string filename=BooleanCircuit::Tseytin(g,true);
   std::string outfilename=filename+".nnf";
 
   if(provsql_verbose>=20) {
@@ -329,9 +330,10 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     cnfFile.open(filename);
 
 
-    //TODO comments and errors handling of cnf files 
+    //TODO comments and errors handling of cnf files parsing
 
-    unsigned nb_var, nb_clauses;
+    unsigned nb_var; 
+    //unsigned nb_clauses;
     getline(cnfFile,line);
     std::istringstream iss(line);
     for (int i = 0; i < 3; i++)
@@ -340,35 +342,76 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     }
     nb_var = std::stoi(word);
     iss >> word;
-    nb_clauses = std::stoul(word);
+    //nb_clauses = std::stoul(word);
 
     problem.setNbVar(nb_var);
     std::vector<double> &weightLit = problem.getWeightLit();
     std::vector<double> &weightVar = problem.getWeightVar();
 
     weightLit.resize((nb_var + 1) << 1, 1);
-    weightVar.resize(nb_var + 1, 2);
+    weightVar.resize(nb_var + 1, 1);
+
+    elog(NOTICE,"nb var = %ul",weightVar.size());
+
+
+    int i = 0;
+    for (gate_t var : inputs)
+    {
+      weightVar[i] = getProb(var);
+      elog(NOTICE,"i = %d, var = %f", i, getProb(var) );
+      i++;
+    }
+    
+
     std::vector<std::vector<d4::Lit>> &clauses = problem.getClauses();
 
     while (getline(cnfFile,line))
     {
       std::istringstream iss(line);
       std::vector<d4::Lit> current_clause;
+      elog(NOTICE,"line : %s", line.c_str());
 
-      iss >> word;
-      while ( word != "0") 
+      if (line.at(0) == 'w')
       {
-        iss >> word;
-        if (std::stoi(word) < 0)
-        {
-          current_clause.push_back( d4::Lit::makeLitFalse(abs(std::stoi(word))));
-        }
-        else {
-          current_clause.push_back( d4::Lit::makeLitTrue(std::stoi(word)));
-        }
+
+          iss >> word;
+          iss >> word;
+          int tmp_var = std::stoi(word);
+          iss >> word;
+          double tmp_prob = std::stod(word);
+          if (tmp_var > 0)
+          {
+            elog(NOTICE, "Should insert %f at index %i", tmp_prob, tmp_var);
+            weightVar[tmp_var] = tmp_prob;
+          }
+          
+          
+
+        
       }
-      clauses.push_back(current_clause);
+
+
+      else {
+        iss >> word;
+        while ( word != "0") 
+        {
+          iss >> word;
+          if (std::stoi(word) < 0)
+          {
+            current_clause.push_back( d4::Lit::makeLitFalse(abs(std::stoi(word))));
+          }
+          else {
+            current_clause.push_back( d4::Lit::makeLitTrue(std::stoi(word)));
+          }
+        }
+        clauses.push_back(current_clause);
+      }
+      
+
     }
+
+
+    d4::ProblemManagerCnf *cnfProblem = new d4::ProblemManagerCnf(filename);
 
     d4::LastBreathPreproc lastBreath;
     d4::PreprocManager *preproc = d4::PreprocManager::makePreprocManager(vm,std::cerr);
@@ -382,8 +425,8 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     std::vector<d4::Var> setOfVar;
     for (unsigned i = 1; i <= nb_var; i++)
     setOfVar.push_back(i);
-
-    boost::multiprecision::mpf_float v = method->count(setOfVar, std::cerr);
+    std::vector<d4::Lit> assumption;
+    boost::multiprecision::mpf_float v = method->count(setOfVar,assumption, std::cerr);
     delete method;
     return v.convert_to<double>();
 
