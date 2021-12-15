@@ -1,7 +1,7 @@
 #include "BooleanCircuit.h"
 #include <type_traits>
-#include "d4/src/methods/MethodManager.hpp"
-#include "d4/src/methods/DpllStyleMethod.hpp"
+#include "src/methods/MethodManager.hpp"
+#include "src/methods/DpllStyleMethod.hpp"
 #include <boost/program_options.hpp>
 
 
@@ -350,19 +350,13 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     weightLit.resize((nb_var + 1) << 1, 1);
     weightVar.resize(nb_var + 1, 2);
 
-    elog(NOTICE,"nb var = %ul",weightVar.size());
-
-
-    int i = 0;
     for (gate_t var : inputs)
     {
+      int i = static_cast<int>(var);
       weightLit[2*(i+1)] = getProb(var);
       weightLit[2*(i+1)+1] = 1-getProb(var);
-      weightVar[i] = 1;
-      elog(NOTICE,"i = %d, var = %f", i, getProb(var) );
-      i++;
+      weightVar[i+1] = 1;
     }
-    
 
     std::vector<std::vector<d4::Lit>> &clauses = problem.getClauses();
 
@@ -370,18 +364,16 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     {
       std::istringstream iss(line);
       std::vector<d4::Lit> current_clause;
-      elog(NOTICE,"line : %s", line.c_str());
 
-      iss >> word;
-      while ( word != "0") 
+      int variable;
+      while (iss >> variable && variable) 
       {
-        iss >> word;
-        if (std::stoi(word) < 0)
+        if (variable < 0)
         {
-          current_clause.push_back( d4::Lit::makeLitFalse(abs(std::stoi(word))));
+          current_clause.push_back( d4::Lit::makeLitFalse(abs(variable)));
         }
         else {
-          current_clause.push_back( d4::Lit::makeLitTrue(std::stoi(word)));
+          current_clause.push_back( d4::Lit::makeLitTrue(variable));
         }
       }
       clauses.push_back(current_clause);
