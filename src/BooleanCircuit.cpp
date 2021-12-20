@@ -3,6 +3,7 @@
 #include "d4/src/methods/MethodManager.hpp"
 #include "d4/src/methods/DpllStyleMethod.hpp"
 #include <boost/program_options.hpp>
+#include <chrono>
 
 
 extern "C" {
@@ -221,6 +222,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
 }
 
 std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
+  auto tseytin_start = std::chrono::high_resolution_clock::now();
   std::vector<std::vector<int>> clauses;
   
   // Tseytin transformation
@@ -294,6 +296,11 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 
   ofs.close();
 
+  auto tseytin_stop = std::chrono::high_resolution_clock::now();
+  auto tseytin_duration = std::chrono::duration_cast<std::chrono::microseconds>(tseytin_stop - tseytin_start);
+
+  elog(NOTICE, "execution time of the tseytin transformation : %f ms",tseytin_duration );
+
   return filename;
 }
 
@@ -350,7 +357,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     weightLit.resize((nb_var + 1) << 1, 1);
     weightVar.resize(nb_var + 1, 2);
 
-    elog(NOTICE,"nb var = %ul",weightVar.size());
+   // elog(NOTICE,"nb var = %ul",weightVar.size());
 
 
     int i = 0;
@@ -358,8 +365,8 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     {
       weightLit[2*(i+1)] = getProb(var);
       weightLit[2*(i+1)+1] = 1-getProb(var);
-      weightVar[i] = 1;
-      elog(NOTICE,"i = %d, var = %f", i, getProb(var) );
+      weightVar[i+1] = 1;
+      //elog(NOTICE,"i = %d, var = %f", i, getProb(var) );
       i++;
     }
     
@@ -386,6 +393,19 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       }
       clauses.push_back(current_clause);
     }
+
+    for (long unsigned int i = 0 ; i < weightVar.size() ; i++)
+    {
+      elog(NOTICE,"var %lu : p = %f", i, weightVar[i] );
+    }
+
+    elog(NOTICE,"--------------");
+
+    for (long unsigned int i = 0 ; i < weightLit.size() ; i++)
+    {
+      elog(NOTICE,"lit %lu : p = %f", i, weightLit[i] );
+    }
+    
 
 
     d4::ProblemManagerCnf *cnfProblem = new d4::ProblemManagerCnf(filename);

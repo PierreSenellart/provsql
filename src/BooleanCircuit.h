@@ -35,8 +35,11 @@ class BooleanCircuit : public Circuit<BooleanGate> {
   gate_t setGate(const uuid &u, BooleanGate t) override;
   gate_t setGate(BooleanGate t, double p);
   gate_t setGate(const uuid &u, BooleanGate t, double p);
+
   void setProb(gate_t g, double p) { prob[static_cast<std::underlying_type<gate_t>::type>(g)]=p; }
+
   double getProb(gate_t g) const { return prob[static_cast<std::underlying_type<gate_t>::type>(g)]; }
+
   void setInfo(gate_t g, unsigned info);
   unsigned getInfo(gate_t g) const;
 
@@ -46,6 +49,8 @@ class BooleanCircuit : public Circuit<BooleanGate> {
   double WeightMC(gate_t g, std::string opt) const;
   double independentEvaluation(gate_t g) const;
   void rewriteMultivaluedGates();
+
+  void writeNonCnfFile(const char* filename);
 
   virtual std::string toString(gate_t g) const override;
 
