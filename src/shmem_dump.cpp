@@ -9,10 +9,13 @@ extern "C"
 #include "provsql_utils.h"
 #include "storage/fd.h"
 
+
   PG_FUNCTION_INFO_V1(dump_data);
 }
-
-
+#include <string>
+#include <map>
+#include <tuple>
+#include <vector>
 
 char* print_shared_state_constants(constants_t &constants, char* buffer)
 {
@@ -312,3 +315,187 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
 
   PG_RETURN_NULL();
 }
+
+
+//TODO The file is curently written in /var/lib/postgresql/12/main/noncnfFromCircuit.noncnf, which is slightly annoying to fetch. 
+//     It would be nice if the file was created directly in the current directory or in a specified path and/or file  
+int circuit_to_noncnf_internal(Datum token, Datum token2prob){
+  Datum arguments[2]= {token,token2prob};
+  Oid argtypes[2]= {provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN, REGCLASSOID};
+  char nulls[2] = {' ',' '};
+
+  int keyNumbers = 1;
+
+  SPI_connect();
+
+  int proc = 0;
+
+  if (SPI_execute_with_args(
+          "SELECT * FROM provsql.sub_circuit_with_desc($1,$2)", //TODO create a function sub_circuit without desc that does not take the second arg
+          2,argtypes,arguments,nulls, true, 0
+  ) == SPI_OK_SELECT)
+  {
+    FILE *file;
+    file = AllocateFile("noncnfFromCircuit.noncnf", PG_BINARY_W);
+    if (file == NULL)
+    {
+      return 1;
+    }
+
+    //this map is defined as follows :
+    // the key is an UID
+    // the value linked to the key is a tuple constitued of :
+    // - an Integer, used to represent the variable this UID is linked to in the cnf
+    // - a String, that receives the gate type of the current UID (with "input" being considered a gate type)
+    // - A vector that contains the UID of the inputs of the current gate. Possibly empty. Those UIDs can be used as Keys for this map
+    std::map<std::string, std::tuple<int, std::string, std::vector<std::string>> > m;
+    std::string noncnf = "";
+    proc = SPI_processed;
+    TupleDesc tupdesc = SPI_tuptable->tupdesc;
+    SPITupleTable *tuptable = SPI_tuptable;
+
+    for (int i = 0; i < proc; i++) 
+    {
+      HeapTuple tuple = tuptable->vals[i];
+      std::string to;
+      std::string from;
+      std::string type;
+      if (SPI_getvalue(tuple,tupdesc,1) != NULL)
+      {
+        to = SPI_getvalue(tuple,tupdesc,1);
+      }
+
+      if (SPI_getvalue(tuple,tupdesc,2) != NULL)
+      {
+        from = SPI_getvalue(tuple,tupdesc,2);
+      }
+
+      if (SPI_getvalue(tuple,tupdesc,3) != NULL)
+      {
+        type = SPI_getvalue(tuple,tupdesc,3);
+      }
+
+      if (from !="")
+      {
+        if( (m.find(from) == m.end()) )
+        {
+         std::vector<std::string> v;
+         m.insert(std::pair(  from, std::make_tuple(keyNumbers,type,v))  );
+         keyNumbers++;
+        }
+        if ( (to != "") && (m.find(to) == m.end()) )
+        {
+          std::vector<std::string> v;
+          m.insert(std::pair(  to, std::make_tuple(keyNumbers,type,v))  );
+          keyNumbers++;      
+        }
+      }
+      
+
+    
+
+      auto it = m.find(to);
+      if (it != m.end() && from != "" )
+      {
+        std::get<2>(it->second).push_back(from);
+      }
+      
+
+      // elog(NOTICE, "value from : %s to : %s", from.c_str(), to.c_str());
+      // elog(NOTICE, "type : %s", type.c_str());
+    }
+
+    noncnf+= "p noncnf ";
+    noncnf+= std::to_string(keyNumbers-1);
+    
+    for (auto iter = m.begin(); iter != m.end(); ++iter)
+    {
+      std::string s = std::get<1>(iter->second);
+      if (std::get<2>(iter->second).size())
+      {
+
+        
+        if (s == "plus")
+        {
+          noncnf+= "\n4 -1 ";
+
+        }
+        else if (s == "monus") {
+          noncnf+="\n3 -1";
+          for (auto a : std::get<2>(iter->second) )
+          {
+            noncnf+= a + " ";
+          }
+        }
+        else if (s == "times"){
+          noncnf+="\n6 -1";
+          for (auto a : std::get<2>(iter->second) )
+          {
+            noncnf+= a + " ";
+          }
+        }
+
+        noncnf += std::to_string( std::get<0>(iter->second) ) + " "; //write the gate variable
+        for (auto a :  std::get<2>(iter->second) )
+        {
+          noncnf+= std::to_string(std::get<0>(m.find(a)->second))  + " "; //write the gate's input variables
+        }
+        noncnf += "0";
+
+      }
+    }
+    
+    elog(NOTICE, "noncnf :\n%s",noncnf.c_str());
+
+    SPI_finish();
+
+    if (!fwrite(noncnf.c_str(),noncnf.size(), 1, file ))
+    {
+      if (FreeFile(file))
+      {
+       file = NULL;
+       return 4;
+      }
+      return 1;
+    }
+    
+
+    if (FreeFile(file))
+    {
+     file = NULL;
+     return 3;
+    }
+
+  
+
+  }
+  
+  return 0;
+
+
+}
+
+extern "C"
+{
+  PG_FUNCTION_INFO_V1(circuit_to_noncnf);
+}
+Datum circuit_to_noncnf(PG_FUNCTION_ARGS){
+  try
+  {
+    Datum token = PG_GETARG_DATUM(0);
+    Datum token2prob = PG_GETARG_DATUM(1);
+
+    circuit_to_noncnf_internal(token,token2prob);
+
+  }
+  catch(const std::exception& e)
+  {
+    elog(ERROR, "circuit_to_noncnf : %s" , e.what());
+  }
+
+  PG_RETURN_NULL();
+  
+
+}
+
+

@@ -682,6 +682,12 @@ CREATE OR REPLACE FUNCTION dump_data() RETURNS TEXT AS
 
 CREATE OR REPLACE FUNCTION read_data_dump() RETURNS TEXT AS
   'provsql', 'read_data_dump' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION circuit_to_noncnf(
+  token provenance_token,
+  token2desc regclass) 
+  RETURNS TEXT AS
+  'provsql', 'circuit_to_noncnf' LANGUAGE C;
  
 
 SELECT initialize_constants();

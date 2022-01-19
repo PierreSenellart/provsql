@@ -297,9 +297,9 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   ofs.close();
 
   auto tseytin_stop = std::chrono::high_resolution_clock::now();
-  auto tseytin_duration = std::chrono::duration_cast<std::chrono::microseconds>(tseytin_stop - tseytin_start);
+  double tseytin_duration = std::chrono::duration<double>(tseytin_stop - tseytin_start).count();
 
-  elog(NOTICE, "execution time of the tseytin transformation : %f ms",tseytin_duration );
+  elog(NOTICE, "\nexecution time of the tseytin transformation : %f ms",tseytin_duration );
 
   return filename;
 }
@@ -308,6 +308,8 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 
 
 double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
+  auto compilation_start = std::chrono::high_resolution_clock::now();
+
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
 
@@ -318,6 +320,8 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   bool new_d4 {false};
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
+    auto d4_start = std::chrono::high_resolution_clock::now();
+
 
     namespace po = boost::program_options;
 
@@ -364,6 +368,11 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       weightLit[2*(i+1)+1] = 1-getProb(var);
       weightVar[i+1] = 1;
     }
+    // ICI var/lit weight set
+    auto varLitWeight_done = std::chrono::high_resolution_clock::now();
+    double varLitWeight_duration = std::chrono::duration<double>(varLitWeight_done - compilation_start).count();
+    elog(NOTICE, "time used to set lit and var weight : %f ms",varLitWeight_duration );
+
 
     std::vector<std::vector<d4::Lit>> &clauses = problem.getClauses();
 
@@ -386,37 +395,57 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       clauses.push_back(current_clause);
     }
 
-    for (long unsigned int i = 0 ; i < weightVar.size() ; i++)
-    {
-      elog(NOTICE,"var %lu : p = %f", i, weightVar[i] );
-    }
-
-    elog(NOTICE,"--------------");
-
-    for (long unsigned int i = 0 ; i < weightLit.size() ; i++)
-    {
-      elog(NOTICE,"lit %lu : p = %f", i, weightLit[i] );
-    }
+    // ICI Clauses set
+    auto clauses_done = std::chrono::high_resolution_clock::now();
+    double clauses_duration = std::chrono::duration<double>(clauses_done - varLitWeight_done).count();
+    elog(NOTICE, "time used to set clauses : %f ms",clauses_duration );
     
 
 
-    d4::ProblemManagerCnf *cnfProblem = new d4::ProblemManagerCnf(filename);
+
+    //d4::ProblemManagerCnf *cnfProblem = new d4::ProblemManagerCnf(filename);
 
     d4::LastBreathPreproc lastBreath;
     d4::PreprocManager *preproc = d4::PreprocManager::makePreprocManager(vm,std::cerr);
-    d4::ProblemManager *preprocProblem = preproc->run(problem,lastBreath);
+    d4::ProblemManager *preprocProblem = preproc->run(&problem,lastBreath);
+
+    // ICI preprocessor work done
+    //TODO set on provsql verbose
+    auto preproc_done = std::chrono::high_resolution_clock::now();
+    double preproc_duration = std::chrono::duration<double>(preproc_done - clauses_done).count();
+    elog(NOTICE, "time used by lastBreath preprocessor : %f ms",preproc_duration );
+
 
     boost::multiprecision::mpf_float::default_precision(50);
     std::string meth = "counting";
     d4::DpllStyleMethod<boost::multiprecision::mpf_float, boost::multiprecision::mpf_float> *method = new d4::DpllStyleMethod<boost::multiprecision::mpf_float, boost::multiprecision::mpf_float>(
         vm, meth, true, preprocProblem, std::cerr, lastBreath);
 
+    //ICI DpllStyleMethod Created
+    auto dpllstylemethod_created = std::chrono::high_resolution_clock::now();
+    double dpllstylemethod_duration = std::chrono::duration<double>(dpllstylemethod_created - preproc_done).count();
+    elog(NOTICE, "time used to create DpllStyleMethod : %f ms",dpllstylemethod_duration );
+
     std::vector<d4::Var> setOfVar;
     for (unsigned i = 1; i <= nb_var; i++)
     setOfVar.push_back(i);
     std::vector<d4::Lit> assumption;
     boost::multiprecision::mpf_float v = method->count(setOfVar,assumption, std::cerr);
+    // Delete takes a long time but is necessary to avoid memory leaks for now 
     delete method;
+
+    //ICI Counting done
+    auto counting_done = std::chrono::high_resolution_clock::now();
+    double counting_duration = std::chrono::duration<double>(counting_done - dpllstylemethod_created ).count();
+    elog(NOTICE, "time used to set setOfVar and count : %f ms",counting_duration );
+
+    double total_d4_duration = std::chrono::duration<double>(counting_done - d4_start).count();
+    elog(NOTICE, "total time used by d4 : %f ms ", total_d4_duration);
+
+    double total_duration = std::chrono::duration<double>(counting_done - compilation_start).count();
+    elog(NOTICE, "total time used by the compilation method : %f ms \n", total_duration);
+
+
     return v.convert_to<double>();
 
     cmdline+= "-i "+filename+" -m ddnnf-compiler --dump-ddnnf "+outfilename;
