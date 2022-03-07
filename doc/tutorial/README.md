@@ -150,8 +150,9 @@ Solving the murder
          `'tree-decomposition'` (for a method based on computing a tree
          decomposition of the Boolean circuit) or to
         `'compilation'` (for compilation of the provenance circuit to a
-         d-DNNF)
-     *   an optional fourth argument: for Monte Carlo sampling, it is the
+         d-DNNF); if ommitted, a default strategy based on a combination
+         of techniques is applied
+     *   an optional third argument: for Monte Carlo sampling, it is the
          number of samples (as a character string); 
          for knowledge compilation, it is the name of the
          knowledge compilation tool used (one of `'c2d'`, `'d4'`, or `'dsharp'`)
