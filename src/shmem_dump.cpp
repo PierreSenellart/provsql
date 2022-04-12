@@ -17,7 +17,6 @@ extern "C"
 char* print_shared_state_constants(constants_t &constants, char* buffer)
 {
   sprintf(buffer, "Constants :\n OID_SCHEMA_PROVSQL = %d \n"
-  "OID_TYPE_PROVENANCE_TOKEN = %d\n"
   "OID_TYPE_GATE_TYPE = %d\n"
   "OID_TYPE_AGG_TOKEN = %d\n"
   "OID_TYPE_UUID = %d\n"
@@ -41,7 +40,6 @@ char* print_shared_state_constants(constants_t &constants, char* buffer)
   "OID_FUNCTION_NOT_EQUAL_UUID = %d"
   ,
   constants.OID_SCHEMA_PROVSQL,
-  constants.OID_TYPE_PROVENANCE_TOKEN,
   constants.OID_TYPE_GATE_TYPE,
   constants.OID_TYPE_AGG_TOKEN,
   constants.OID_TYPE_UUID,

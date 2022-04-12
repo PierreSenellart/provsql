@@ -351,7 +351,7 @@ Datum get_children(PG_FUNCTION_ARGS)
     result = construct_array(
         children_ptr,
         entry->nb_children,
-        provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN,
+        provsql_shared_state->constants.OID_TYPE_UUID,
         16,
         false,
         'c');
@@ -541,16 +541,6 @@ Datum initialize_constants(PG_FUNCTION_ARGS)
   provsql_shared_state->constants.OID_SCHEMA_PROVSQL = get_namespace_oid("provsql", true);
   CheckOid(OID_SCHEMA_PROVSQL);
 
-  provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN = GetSysCacheOid2(
-      TYPENAMENSP,
-#if PG_VERSION_NUM >= 120000
-      Anum_pg_type_oid,
-#endif
-      CStringGetDatum("provenance_token"),
-      ObjectIdGetDatum(provsql_shared_state->constants.OID_SCHEMA_PROVSQL)
-  );
-  CheckOid(OID_TYPE_PROVENANCE_TOKEN);
-  
   provsql_shared_state->constants.OID_TYPE_GATE_TYPE = GetSysCacheOid2(
       TYPENAMENSP,
 #if PG_VERSION_NUM >= 120000

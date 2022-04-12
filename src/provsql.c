@@ -61,7 +61,7 @@ static RelabelType *make_provenance_attribute(RangeTblEntry *r, Index relid, Att
   v->varoattno = attid;
 #endif
 
-  v->vartype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+  v->vartype = provsql_shared_state->constants.OID_TYPE_UUID;
   v->varcollid = InvalidOid;
   v->vartypmod = -1;
   v->location = -1;
@@ -144,7 +144,7 @@ static List *get_provenance_attributes(Query *q)
         Value *v = (Value *)lfirst(lc);
 
         if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
-            get_atttype(r->relid,attid)==provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN) {
+            get_atttype(r->relid,attid)==provsql_shared_state->constants.OID_TYPE_UUID) {
           prov_atts = lappend(prov_atts, make_provenance_attribute(r, rteid, attid));
         }
 
@@ -186,7 +186,7 @@ static List *get_provenance_attributes(Query *q)
 
         if(func->funccolcount==1) {
           FuncExpr *expr = (FuncExpr *) func->funcexpr;
-          if(expr->funcresulttype == provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN
+          if(expr->funcresulttype == provsql_shared_state->constants.OID_TYPE_UUID
               && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
             prov_atts=lappend(prov_atts,make_provenance_attribute(r,rteid,attid));
           }
@@ -230,7 +230,7 @@ static Bitmapset *remove_provenance_attributes_select(
     {
       Var *v = (Var *)rt->expr;
 
-      if(v->vartype==provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN) {
+      if(v->vartype==provsql_shared_state->constants.OID_TYPE_UUID) {
         const char *colname;
 
         if (rt->resname)
@@ -354,7 +354,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
     fc = makeNode(FuncExpr);
     fc->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_EQ;
     fc->funcvariadic=false;
-    fc->funcresulttype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+    fc->funcresulttype=provsql_shared_state->constants.OID_TYPE_UUID;
     fc->location=-1;
 
     c1=makeConst(
@@ -469,14 +469,14 @@ static Expr *make_aggregation_expression(
         expr->funcid = provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_MONUS;
         expr->args = prov_atts;
       }
-      expr->funcresulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+      expr->funcresulttype = provsql_shared_state->constants.OID_TYPE_UUID;
       expr->location = -1;
     }
 
     //semimodule function
     expr_s = makeNode(FuncExpr);
     expr_s->funcid = provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_SEMIMOD;
-    expr_s->funcresulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+    expr_s->funcresulttype = provsql_shared_state->constants.OID_TYPE_UUID;
     
     //check the particular case of count
     if(agg_ref->aggfnoid==2803||agg_ref->aggfnoid==2147) //count(*) or count(arg)
@@ -501,14 +501,14 @@ static Expr *make_aggregation_expression(
     te_inner->resno = 1;
     te_inner->expr = (Expr *)expr_s;
     agg->aggfnoid=provsql_shared_state->constants.OID_FUNCTION_ARRAY_AGG;
-    agg->aggtype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+    agg->aggtype=provsql_shared_state->constants.OID_TYPE_UUID;
     agg->args=list_make1(te_inner);
     agg->aggkind=AGGKIND_NORMAL;
     agg->location=-1;
 
 #if PG_VERSION_NUM >= 90600
     /* aggargtypes was added in version 9.6 of PostgreSQL */
-    agg->aggargtypes = list_make1_oid(provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN);
+    agg->aggargtypes = list_make1_oid(provsql_shared_state->constants.OID_TYPE_UUID);
 #endif /* PG_VERSION_NUM >= 90600 */
 
     //final aggregation function
@@ -559,10 +559,6 @@ static Expr *make_provenance_expression(
     if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
     {
       result = linitial(prov_atts);
-      if(result->type == T_RelabelType) {
-        // Change type uuid to proper type provenance_token (see #19)
-        ((RelabelType*) result)->resulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
-      }
     } else {
       FuncExpr *expr = makeNode(FuncExpr);
       if (op == SR_TIMES)
@@ -584,7 +580,7 @@ static Expr *make_provenance_expression(
         expr->funcid = provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_MONUS;
         expr->args = prov_atts;
       }
-      expr->funcresulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+      expr->funcresulttype = provsql_shared_state->constants.OID_TYPE_UUID;
       expr->location = -1;
       
       result = (Expr*) expr;
@@ -602,19 +598,19 @@ static Expr *make_provenance_expression(
       te_inner->expr = (Expr *)result;
 
       agg->aggfnoid=provsql_shared_state->constants.OID_FUNCTION_ARRAY_AGG;
-      agg->aggtype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+      agg->aggtype=provsql_shared_state->constants.OID_TYPE_UUID;
       agg->args=list_make1(te_inner);
       agg->aggkind=AGGKIND_NORMAL;
       agg->location=-1;
 
 #if PG_VERSION_NUM >= 90600
       /* aggargtypes was added in version 9.6 of PostgreSQL */
-      agg->aggargtypes=list_make1_oid(provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN);
+      agg->aggargtypes=list_make1_oid(provsql_shared_state->constants.OID_TYPE_UUID);
 #endif /* PG_VERSION_NUM >= 90600 */
 
       plus->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_PLUS;
       plus->args=list_make1(agg);      
-      plus->funcresulttype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+      plus->funcresulttype=provsql_shared_state->constants.OID_TYPE_UUID;
       plus->location=-1;
 
       result=(Expr*)plus;
@@ -626,7 +622,7 @@ static Expr *make_provenance_expression(
         //adding the delta gate to the provenance circuit
         deltaExpr->funcid = provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_DELTA;
         deltaExpr->args = list_make1(result);
-        deltaExpr->funcresulttype = provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+        deltaExpr->funcresulttype = provsql_shared_state->constants.OID_TYPE_UUID;
         deltaExpr->location = -1;
 
         result = (Expr *)deltaExpr;
@@ -658,7 +654,7 @@ static Expr *make_provenance_expression(
 
     fe->funcid=provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_PROJECT;
     fe->funcvariadic=true;
-    fe->funcresulttype=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+    fe->funcresulttype=provsql_shared_state->constants.OID_TYPE_UUID;
     fe->location=-1;
       
     array->array_typeid=provsql_shared_state->constants.OID_TYPE_INT_ARRAY;
@@ -1129,7 +1125,7 @@ static bool has_provenance_walker(
           Value *v = (Value *)lfirst(lc);
 
           if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
-              get_atttype(r->relid,attid)==provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN) {
+              get_atttype(r->relid,attid)==provsql_shared_state->constants.OID_TYPE_UUID) {
             return true;
           }
 
@@ -1147,7 +1143,7 @@ static bool has_provenance_walker(
 
           if(func->funccolcount==1) {
             FuncExpr *expr = (FuncExpr *) func->funcexpr;
-            if(expr->funcresulttype == provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN
+            if(expr->funcresulttype == provsql_shared_state->constants.OID_TYPE_UUID
                 && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
               return true;
             }
@@ -1192,7 +1188,7 @@ static bool transform_except_into_join(
 
     Var *v = (Var *)te->expr;
 
-    if(v->vartype != provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN) {
+    if(v->vartype != provsql_shared_state->constants.OID_TYPE_UUID) {
       OpExpr *oe = makeNode(OpExpr);
       Oid opno = find_equality_operator(v->vartype, v->vartype);
       Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
@@ -1278,7 +1274,7 @@ static void process_set_operation_union(
     process_set_operation_union((SetOperationStmt*)(stmt->rarg), supported);
   }
   stmt->colTypes=lappend_oid(stmt->colTypes,
-                             provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN);
+                             provsql_shared_state->constants.OID_TYPE_UUID);
   stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
   stmt->colCollations=lappend_int(stmt->colCollations, 0);
   stmt->all = true ;
@@ -1577,7 +1573,7 @@ void _PG_init(void)
                            "0 for quiet (default), 1-9 for informational messages, 10-100 for debug information.",
                            &provsql_verbose,
                            0,
-                           10,
+                           0,
                            100,
                            PGC_USERSET,
                            1,

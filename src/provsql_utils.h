@@ -26,7 +26,6 @@ typedef enum gate_type {
 
 typedef struct constants_t {
   Oid OID_SCHEMA_PROVSQL;
-  Oid OID_TYPE_PROVENANCE_TOKEN;
   Oid OID_TYPE_GATE_TYPE;
   Oid OID_TYPE_AGG_TOKEN;
   Oid OID_TYPE_UUID;

@@ -111,7 +111,7 @@ CREATE FUNCTION public.formula_agg_final(state public.formula_state, fname varch
     SELECT concat(fname,'{ ',state.formula,' }');
   $$;
 
-CREATE FUNCTION public.formula(token provsql.provenance_token, token2value regclass) RETURNS text
+CREATE FUNCTION public.formula(token UUID, token2value regclass) RETURNS text
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -131,7 +131,7 @@ CREATE FUNCTION public.aggregation_formula(token anyelement, token2value regclas
     AS $$
 BEGIN
   RETURN provsql.aggregation_evaluate(
-    token::provsql.provenance_token,
+    token,
     token2value,
     'formula_agg_final',
     'formula_agg',
@@ -181,7 +181,7 @@ CREATE AGGREGATE public.counting_times(integer) (
     INITCOND = '1'
 );
 
-CREATE FUNCTION public.counting(token provsql.provenance_token, token2value regclass) RETURNS integer
+CREATE FUNCTION public.counting(token UUID, token2value regclass) RETURNS integer
     LANGUAGE plpgsql
     AS $$
 BEGIN

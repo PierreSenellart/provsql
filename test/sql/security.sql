@@ -28,7 +28,7 @@ CREATE AGGREGATE security_max(classification_level)
   initcond = 'unclassified'
 );
 
-CREATE FUNCTION security(token provenance_token, token2value regclass)
+CREATE FUNCTION security(token UUID, token2value regclass)
   RETURNS classification_level AS
 $$
 BEGIN

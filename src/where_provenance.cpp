@@ -53,7 +53,7 @@ static string where_provenance_internal
   (Datum token)
 {
   Datum arguments[1]={token};
-  Oid argtypes[1]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
+  Oid argtypes[1]={provsql_shared_state->constants.OID_TYPE_UUID};
   char nulls[1] = {' '};
   
   SPI_connect();
@@ -61,7 +61,7 @@ static string where_provenance_internal
   WhereCircuit c;
 
   if(SPI_execute_with_args(
-      "SELECT * FROM provsql.sub_circuit_for_where($1)", 2, argtypes, arguments, nulls, true, 0)
+      "SELECT * FROM provsql.sub_circuit_for_where($1)", 1, argtypes, arguments, nulls, true, 0)
       == SPI_OK_SELECT) {
     int proc = SPI_processed;
     TupleDesc tupdesc = SPI_tuptable->tupdesc;

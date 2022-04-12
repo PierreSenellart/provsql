@@ -4,9 +4,9 @@
  
 (1 row)
 
- attname |     typname      
----------+------------------
+ attname | typname 
+---------+---------
  n       | int4
- provsql | provenance_token
+ provsql | uuid
 (2 rows)
 

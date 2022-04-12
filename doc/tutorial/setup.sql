@@ -73,7 +73,7 @@ CREATE AGGREGATE public.formula_times(text) (
     FINALFUNC = public.formula_state2formula
 );
 
-CREATE FUNCTION public.formula(token provsql.provenance_token, token2value regclass) RETURNS text
+CREATE FUNCTION public.formula(token UUID, token2value regclass) RETURNS text
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -92,7 +92,7 @@ $$;
 
 -- Counting semiring
 
-CREATE FUNCTION public.counting(token provsql.provenance_token, token2value regclass) RETURNS integer
+CREATE FUNCTION public.counting(token UUID, token2value regclass) RETURNS integer
     LANGUAGE plpgsql
     AS $$
 BEGIN

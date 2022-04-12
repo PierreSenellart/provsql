@@ -34,7 +34,7 @@ $$
   SELECT CASE WHEN counting1 < counting2 THEN 0 ELSE counting1 - counting2 END
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-CREATE FUNCTION counting(token provenance_token, token2value regclass)
+CREATE FUNCTION counting(token UUID, token2value regclass)
   RETURNS INTEGER AS
 $$
 BEGIN

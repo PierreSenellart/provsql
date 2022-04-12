@@ -44,7 +44,7 @@ Datum aggregation_evaluate(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(9)) // No delta function provided
     nulls[10]='n';
 
-  argtypes[0]=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+  argtypes[0]=provsql_shared_state->constants.OID_TYPE_UUID;
   argtypes[1]=REGCLASSOID;
   argtypes[2]=REGPROCOID;
   argtypes[3]=REGPROCOID; 

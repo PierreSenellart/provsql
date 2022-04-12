@@ -86,7 +86,7 @@ $$
   SELECT concat('(',formula1,' ⊖ ',formula2,')')
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-CREATE FUNCTION formula(token provenance_token, token2value regclass)
+CREATE FUNCTION formula(token UUID, token2value regclass)
   RETURNS text AS
 $$
 BEGIN

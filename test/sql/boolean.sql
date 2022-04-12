@@ -45,7 +45,7 @@ $$
   SELECT b1 AND NOT b2
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-CREATE FUNCTION boolean_sr(token provenance_token, token2value regclass)
+CREATE FUNCTION boolean_sr(token UUID, token2value regclass)
   RETURNS BOOLEAN AS
 $$
 BEGIN

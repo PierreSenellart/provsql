@@ -17,7 +17,7 @@ enum class bag_t : size_t {};
 
 class TreeDecomposition {
  public:
-  static constexpr int MAX_TREEWIDTH = 20;
+  static constexpr int MAX_TREEWIDTH = 10;
   static constexpr int OPTIMAL_ARITY = 2;
 
   template<class T>

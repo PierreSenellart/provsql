@@ -105,7 +105,7 @@ pg_exec($db , "SET provsql.where_provenance = on");
                            	JOIN pg_namespace ns1 	ON typnamespace=ns1.oid
                            	JOIN pg_class 		ON attrelid=pg_class.oid
                            	JOIN pg_namespace ns2 	ON relnamespace=ns2.oid
-      WHERE typname='provenance_token' 
+      WHERE typname='uuid' 
         AND relkind='r' 
         AND ns1.nspname='provsql' 
         AND ns2.nspname<>'provsql' 

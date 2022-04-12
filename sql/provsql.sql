@@ -4,8 +4,6 @@ CREATE SCHEMA provsql;
 
 SET search_path TO provsql;
 
-CREATE DOMAIN provenance_token AS UUID NOT NULL;
-
 -- Create agg_token type for aggregation display
 CREATE TYPE agg_token;
 
@@ -42,50 +40,50 @@ CREATE TYPE provenance_gate AS
   ENUM('input','plus','times','monus','project','zero','one','eq','agg','semimod','cmp','delta','value','mulinput');
 
 CREATE OR REPLACE FUNCTION create_gate(
-  token provenance_token,
+  token UUID,
   type provenance_gate,
   children uuid[] DEFAULT NULL)
   RETURNS void AS
   'provsql','create_gate' LANGUAGE C;
 CREATE OR REPLACE FUNCTION get_gate_type(
-  token provenance_token)
+  token UUID)
   RETURNS provenance_gate AS
   'provsql','get_gate_type' LANGUAGE C;
 CREATE OR REPLACE FUNCTION get_children(
-  token provenance_token)
+  token UUID)
   RETURNS uuid[] AS
   'provsql','get_children' LANGUAGE C;
 CREATE OR REPLACE FUNCTION set_prob(
-  token provenance_token, p DOUBLE PRECISION)
+  token UUID, p DOUBLE PRECISION)
   RETURNS void AS
   'provsql','set_prob' LANGUAGE C;
 CREATE OR REPLACE FUNCTION get_prob(
-  token provenance_token)
+  token UUID)
   RETURNS DOUBLE PRECISION AS
   'provsql','get_prob' LANGUAGE C;
 CREATE OR REPLACE FUNCTION set_infos(
-  token provenance_token, info1 INT, info2 INT DEFAULT NULL)
+  token UUID, info1 INT, info2 INT DEFAULT NULL)
   RETURNS void AS
   'provsql','set_infos' LANGUAGE C;
 CREATE OR REPLACE FUNCTION get_infos(
-  token provenance_token, OUT info1 INT, OUT info2 INT)
+  token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
   'provsql','get_infos' LANGUAGE C;
 
 CREATE UNLOGGED TABLE provenance_circuit_extra(
-  gate provenance_token,
+  gate UUID,
   info1 INT,
   info2 INT);
 
 CREATE UNLOGGED TABLE aggregation_circuit_extra(
-  gate provenance_token PRIMARY KEY,
+  gate UUID PRIMARY KEY,
   aggfnoid INT,
   aggtype INT,
   val VARCHAR
 );
 
 CREATE UNLOGGED TABLE aggregation_values(
-  gate provenance_token PRIMARY KEY,
+  gate UUID PRIMARY KEY,
   val VARCHAR
 );
 
@@ -106,7 +104,7 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
-  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql provsql.provenance_token UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
   EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
   EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 END
@@ -145,7 +143,7 @@ BEGIN
     select_key_att := key_att;
   END IF;
 
-  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql_temp provsql.provenance_token UNIQUE DEFAULT uuid_generate_v4()', _tbl);
+  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql_temp UUID UNIQUE DEFAULT uuid_generate_v4()', _tbl);
 
   FOR key IN
     EXECUTE format('SELECT %s AS key FROM %I GROUP BY %s', select_key_att, _tbl, key_att)
@@ -203,25 +201,25 @@ $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'one');
 $$ LANGUAGE SQL IMMUTABLE;
       
-CREATE FUNCTION uuid_provsql_concat(state uuid, token provenance_token)
-  RETURNS provenance_token AS
+CREATE FUNCTION uuid_provsql_concat(state uuid, token UUID)
+  RETURNS UUID AS
 $$
   SELECT
     CASE
     WHEN state IS NULL THEN
       token
     ELSE
-      uuid_generate_v5(uuid_ns_provsql(),concat(state,token))::provenance_token
+      uuid_generate_v5(uuid_ns_provsql(),concat(state,token))
     END;
 $$ LANGUAGE SQL IMMUTABLE SET search_path=provsql,public;
 
-CREATE AGGREGATE uuid_provsql_agg(provenance_token) (
+CREATE AGGREGATE uuid_provsql_agg(UUID) (
   SFUNC = uuid_provsql_concat,
-  STYPE = provenance_token
+  STYPE = UUID
 );
 
 CREATE FUNCTION provenance_times(VARIADIC tokens uuid[])
-  RETURNS provenance_token AS
+  RETURNS UUID AS
 $$
 DECLARE
   times_token uuid;
@@ -246,8 +244,8 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_monus(token1 provenance_token, token2 provenance_token)
-  RETURNS provenance_token AS
+CREATE FUNCTION provenance_monus(token1 UUID, token2 UUID)
+  RETURNS UUID AS
 $$
 DECLARE
   monus_token uuid;
@@ -276,8 +274,8 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_project(token provenance_token, VARIADIC positions int[])
-  RETURNS provenance_token AS
+CREATE FUNCTION provenance_project(token UUID, VARIADIC positions int[])
+  RETURNS UUID AS
 $$
 DECLARE
   project_token uuid;
@@ -300,8 +298,8 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_eq(token provenance_token, pos1 int, pos2 int)
-  RETURNS provenance_token AS
+CREATE FUNCTION provenance_eq(token UUID, pos1 int, pos2 int)
+  RETURNS UUID AS
 $$
 DECLARE
   eq_token uuid;
@@ -321,7 +319,7 @@ END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER; 
 
 CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
-  RETURNS provenance_token AS
+  RETURNS UUID AS
 $$
 DECLARE
   c INTEGER;
@@ -352,7 +350,7 @@ END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
-  token provenance_token,
+  token UUID,
   token2value regclass,
   element_one anyelement,
   value_type regtype,
@@ -421,7 +419,7 @@ END
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
-  token provenance_token,
+  token UUID,
   token2value regclass,
   agg_function_final regproc,
   agg_function regproc,
@@ -463,15 +461,15 @@ $$ LANGUAGE plpgsql;
 CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[]);
 
 CREATE OR REPLACE FUNCTION sub_circuit_with_desc(
-  token provenance_token, 
+  token UUID, 
   token2desc regclass) RETURNS SETOF gate_with_desc AS
 $$
 BEGIN
   RETURN QUERY EXECUTE
     'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
-      SELECT $1,t::provenance_token,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
+      SELECT $1,t,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
         UNION ALL
-      SELECT p1.t,u::provenance_token,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)
+      SELECT p1.t,u,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)
     SELECT t1.*, infos FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
         UNION ALL
@@ -489,7 +487,7 @@ END
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION identify_token(
-  token provenance_token, OUT table_name regclass, OUT nb_columns integer) AS
+  token UUID, OUT table_name regclass, OUT nb_columns integer) AS
 $$
 DECLARE
   t RECORD;
@@ -501,12 +499,10 @@ BEGIN
     SELECT relname, 
       (SELECT count(*) FROM pg_attribute a2 WHERE a2.attrelid=a1.attrelid AND attnum>0)-1 c
     FROM pg_attribute a1 JOIN pg_type ON atttypid=pg_type.oid
-                        JOIN pg_namespace ns1 ON typnamespace=ns1.oid
                         JOIN pg_class ON attrelid=pg_class.oid
-                        JOIN pg_namespace ns2 ON relnamespace=ns2.oid
-    WHERE typname='provenance_token' AND relkind='r' 
-                                     AND ns1.nspname='provsql' 
-                                     AND ns2.nspname<>'provsql' 
+                        JOIN pg_namespace ON relnamespace=pg_namespace.oid
+    WHERE typname='uuid' AND relkind='r' 
+                                     AND nspname<>'provsql' 
                                      AND attname='provsql'
   LOOP
     EXECUTE format('SELECT * FROM %I WHERE provsql=%L',t.relname,token) INTO result;
@@ -519,13 +515,13 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT;
 
-CREATE OR REPLACE FUNCTION sub_circuit_for_where(token provenance_token)
-  RETURNS TABLE(f provenance_token, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
+CREATE OR REPLACE FUNCTION sub_circuit_for_where(token UUID)
+  RETURNS TABLE(f UUID, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
 $$
     WITH RECURSIVE transitive_closure(f,t,idx,gate_type) AS (
-      SELECT $1,t::provenance_token,row_number() over(),provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
+      SELECT $1,t,row_number() over(),provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
         UNION ALL
-      SELECT p1.t,u::provenance_token,row_number() over(PARTITION BY p1.t),provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u
+      SELECT p1.t,u,row_number() over(PARTITION BY p1.t),provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u
     ) SELECT t1.f, t1.t, t1.gate_type, table_name, nb_columns, infos, row_number() over() FROM (
       SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
       UNION ALL
@@ -540,8 +536,8 @@ LANGUAGE sql;
 
 --functions and aggregates for aggregate evaluation
 CREATE OR REPLACE FUNCTION provenance_delta
-  (token provenance_token)
-  RETURNS provenance_token AS
+  (token UUID)
+  RETURNS UUID AS
 $$
 DECLARE
   delta_token uuid;
@@ -599,8 +595,8 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_semimod(val anyelement, token provenance_token)
-  RETURNS provenance_token AS
+CREATE FUNCTION provenance_semimod(val anyelement, token UUID)
+  RETURNS UUID AS
 $$
 DECLARE
   semimod_token uuid;
@@ -628,7 +624,7 @@ END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
-  token provenance_token,
+  token UUID,
   token2value regclass,
   element_one anyelement,
   plus_function regproc,
@@ -639,7 +635,7 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
   'provsql','provenance_evaluate' LANGUAGE C;
 
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
-  token provenance_token,
+  token UUID,
   token2value regclass,
   agg_function_final regproc,
   agg_function regproc,
@@ -653,23 +649,23 @@ CREATE OR REPLACE FUNCTION aggregation_evaluate(
   'provsql','aggregation_evaluate' LANGUAGE C;
 
 CREATE OR REPLACE FUNCTION probability_evaluate(
-  token provenance_token,
+  token UUID,
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C;
 
 CREATE OR REPLACE FUNCTION view_circuit(
-  token provenance_token,
+  token UUID,
   token2desc regclass,
   dbg int = 0)
   RETURNS TEXT AS
   'provsql','view_circuit' LANGUAGE C;
 
-CREATE OR REPLACE FUNCTION provenance() RETURNS provenance_token AS
+CREATE OR REPLACE FUNCTION provenance() RETURNS UUID AS
  'provsql', 'provenance' LANGUAGE C;
 
-CREATE OR REPLACE FUNCTION where_provenance(token provenance_token)
+CREATE OR REPLACE FUNCTION where_provenance(token UUID)
   RETURNS text AS
   'provsql','where_provenance' LANGUAGE C;
 

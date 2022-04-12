@@ -83,7 +83,7 @@ $$
   SELECT concat('(',formula1,' ⊖ ',formula2,')')
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-CREATE FUNCTION formula(token provenance_token, token2value regclass)
+CREATE FUNCTION formula(token UUID, token2value regclass)
   RETURNS text AS
 $$
 BEGIN
@@ -130,7 +130,7 @@ $$
   SELECT CASE WHEN counting1 < counting2 THEN 0 ELSE counting1 - counting2 END
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
-CREATE FUNCTION counting(token provenance_token, token2value regclass)
+CREATE FUNCTION counting(token UUID, token2value regclass)
   RETURNS INTEGER AS
 $$
 BEGIN
@@ -171,7 +171,7 @@ CREATE AGGREGATE security_max(classification_level)
   initcond = 'unclassified'
 );
 
-CREATE FUNCTION security(token provenance_token, token2value regclass)
+CREATE FUNCTION security(token UUID, token2value regclass)
   RETURNS classification_level AS
 $$
 BEGIN

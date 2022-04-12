@@ -39,7 +39,7 @@ CREATE FUNCTION aggregation_formula(token anyelement, token2value regclass) RETU
     AS $$
 BEGIN
   RETURN provsql.aggregation_evaluate(
-    token::provsql.provenance_token,
+    token,
     token2value,
     'formula_agg_final',
     'formula_agg',
