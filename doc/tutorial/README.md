@@ -138,7 +138,7 @@ Solving the murder
      SELECT set_prob(provenance(),reliability) FROM s;
      ```
 
-1.   Let us know find the murderer! The police needs a confidence of at
+1.   Let us now find the murderer! The police needs a confidence of at
      least 0.99 before arresting the suspect. To compute the probability
      of a query answer, we can use the `probability_evaluate` function, which
      takes the following parameters:
