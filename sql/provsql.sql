@@ -472,6 +472,7 @@ BEGIN
       SELECT $1,t::provenance_token,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
         UNION ALL
       SELECT p1.t,u::provenance_token,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)
+
     SELECT t1.*, infos FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
         UNION ALL
@@ -487,6 +488,41 @@ BEGIN
   RETURN;
 END  
 $$ LANGUAGE plpgsql;
+
+
+CREATE TYPE gate_without_desc AS (f UUID, t UUID, gate_type provenance_gate, infos INTEGER[]);
+
+CREATE OR REPLACE FUNCTION sub_circuit_without_desc(
+  token provenance_token,
+  token2desc regclass
+  ) RETURNS SETOF gate_without_desc AS
+  $$
+  BEGIN
+  RETURN QUERY EXECUTE
+    'WITH RECURSIVE transitive_closure(f,t,gate_type) AS (
+      SELECT $1, t::provenance_token, provsql.get_gate_type($1) FROM unnest (provsql.get_children($1)) AS t
+        UNION ALL
+      Select p1.t, u::provenance_token, provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)  
+      
+      SELECT t1.*, infos FROM (
+      SELECT f::uuid,t::uuid,gate_type FROM transitive_closure
+        UNION ALL
+      SELECT t::uuid, NULL, ''input'' FROM transitive_closure WHERE t NOT IN (
+        SELECT f FROM transitive_closure
+      )
+
+    ) t1
+
+    LEFT OUTER JOIN (
+      SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provsql.provenance_circuit_extra GROUP BY gate
+    ) t2 on t1.f=t2.gate
+    '
+    USING token LOOP;
+    RETURN;
+  END
+  $$ LANGUAGE plpgsql;
+
+
 
 CREATE OR REPLACE FUNCTION identify_token(
   token provenance_token, OUT table_name regclass, OUT nb_columns integer) AS

@@ -317,7 +317,7 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
 }
 
 
-//TODO The file is curently written in /var/lib/postgresql/12/main/noncnfFromCircuit.noncnf, which is slightly annoying to fetch. 
+//TODO The file is curently written in /var/lib/postgresql/12/main/noncnfFromCircuit.noncnf, which requires some permissions in order to fetch. 
 //     It would be nice if the file was created directly in the current directory or in a specified path and/or file  
 int circuit_to_noncnf_internal(Datum token, Datum token2prob){
   Datum arguments[2]= {token,token2prob};
@@ -331,7 +331,7 @@ int circuit_to_noncnf_internal(Datum token, Datum token2prob){
   int proc = 0;
 
   if (SPI_execute_with_args(
-          "SELECT * FROM provsql.sub_circuit_with_desc($1,$2)", //TODO create a function sub_circuit without desc that does not take the second arg
+          "SELECT * FROM provsql.sub_circuit_without_desc($1,$2)", //TODO create a function sub_circuit without desc that does not take the second arg
           2,argtypes,arguments,nulls, true, 0
   ) == SPI_OK_SELECT)
   {
