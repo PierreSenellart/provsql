@@ -8,6 +8,7 @@ extern "C"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
 #include "storage/fd.h"
+#include "math.h"
 
 
   PG_FUNCTION_INFO_V1(dump_data);
@@ -16,6 +17,7 @@ extern "C"
 #include <map>
 #include <tuple>
 #include <vector>
+#include "provsql_utils_cpp.h"
 
 char* print_shared_state_constants(constants_t &constants, char* buffer)
 {
@@ -331,7 +333,7 @@ int circuit_to_noncnf_internal(Datum token, Datum token2prob){
   int proc = 0;
 
   if (SPI_execute_with_args(
-          "SELECT * FROM provsql.sub_circuit_without_desc($1,$2)", //TODO create a function sub_circuit without desc that does not take the second arg
+          "SELECT * FROM provsql.sub_circuit_without_desc($1,$2)", 
           2,argtypes,arguments,nulls, true, 0
   ) == SPI_OK_SELECT)
   {
@@ -401,13 +403,15 @@ int circuit_to_noncnf_internal(Datum token, Datum token2prob){
       }
       
 
-      // elog(NOTICE, "value from : %s to : %s", from.c_str(), to.c_str());
-      // elog(NOTICE, "type : %s", type.c_str());
+      //elog(NOTICE, "value from : %s to : %s", from.c_str(), to.c_str());
+      //elog(NOTICE, "type : %s!", type.c_str());
+      
     }
 
     noncnf+= "p noncnf ";
     noncnf+= std::to_string(keyNumbers-1);
-    
+
+    std::vector<bool> written(keyNumbers,false);
     for (auto iter = m.begin(); iter != m.end(); ++iter)
     {
       std::string s = std::get<1>(iter->second);
@@ -441,6 +445,32 @@ int circuit_to_noncnf_internal(Datum token, Datum token2prob){
           noncnf+= std::to_string(std::get<0>(m.find(a)->second))  + " "; //write the gate's input variables
         }
         noncnf += "0";
+
+        for (auto a : std::get<2>(iter->second))
+        {// writes the weight of the inputs
+
+          double prob = NAN;
+          bool found;
+          LWLockAcquire(provsql_shared_state->lock, LW_SHARED); 
+          pg_uuid_t token;
+          token = string2uuid(a);
+          provsqlHashEntry* entry = (provsqlHashEntry *) hash_search(provsql_hash, &token, HASH_FIND, &found);
+          if(found){
+            prob = entry->prob;
+          }
+          LWLockRelease(provsql_shared_state->lock);
+          if (!isnan(prob))
+          {
+            if (!written[std::get<0>(m.find(a)->second)] )
+            {
+            
+            noncnf +="\nc p weight "+ std::to_string(std::get<0>(m.find(a)->second))+ " ";
+            noncnf+= std::to_string(prob);
+            written[std::get<0>(m.find(a)->second)] = true;
+            }
+          }
+        }
+        
 
       }
     }
