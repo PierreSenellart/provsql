@@ -327,6 +327,7 @@ int circuit_to_noncnf_internal(Datum token){
   Oid argtypes[1]= {provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};
 
+  // Not sure keyNumbers is really needed
   int keyNumbers = 1;
 
   SPI_connect();
@@ -356,9 +357,11 @@ int circuit_to_noncnf_internal(Datum token){
     // - a String, that receives the gate type of the current UID (with "input" being considered a gate type)
     // - A vector that contains the UID of the inputs of the current gate. Possibly empty. Those UIDs can be used as Keys for this map
     //std::map            <std::string, std::tuple<int, std::string, std::vector<std::string>> > m;
+    //TODO: the first item of the value doesn't seem to be useful
     std::unordered_map  <int,   std::tuple<int, std::string, std::vector<int>> > compactm;
 
     //this map maps integers to pg_uuid_t because pg_uuid_t are too big, which leads to Out of Memory issues when compiling big circuits.
+    //TODO: this should really be a vector
     std::unordered_map<int,pg_uuid_t> mapOfUUID;
     int current_pg_uuid_id = 0;
 
@@ -407,6 +410,7 @@ int circuit_to_noncnf_internal(Datum token){
         {
           mapOfUUID.insert( std::pair(current_pg_uuid_id++, string2uuid(from)) );          
           std::vector<int> compactv;
+          // TODO: shouldn't be numbers
           from_var = keyNumbers;
           compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(keyNumbers++, type,compactv) ));
         }
@@ -415,6 +419,8 @@ int circuit_to_noncnf_internal(Datum token){
         if (to != "")
         {
           uuid_found = false;
+          // TODO: inefficient, have a map in the other direction (you
+          // might need a hash function)
           for (auto i = mapOfUUID.begin(); i!= mapOfUUID.end() && !uuid_found; i++)
           {
             if (uuid2string(i->second) == to)
@@ -425,9 +431,13 @@ int circuit_to_noncnf_internal(Datum token){
 
           if (!uuid_found)
           {
+            // TODO: from should be to
             mapOfUUID.insert( std::pair(current_pg_uuid_id++, string2uuid(from)) );          
             std::vector<int> compactv;
+            // Shouldn't be keyNumbers
             to_var = keyNumbers;
+            // TODO: type is incorrect, it should be fixed when this gate is
+            // found as from
             compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(keyNumbers++, type,compactv) ));
           }        
         }
