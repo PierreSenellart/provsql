@@ -493,8 +493,7 @@ $$ LANGUAGE plpgsql;
 CREATE TYPE gate_without_desc AS (f UUID, t UUID, gate_type provenance_gate, infos INTEGER[]);
 
 CREATE OR REPLACE FUNCTION sub_circuit_without_desc(
-  token provenance_token,
-  token2desc regclass
+  token provenance_token
   ) RETURNS SETOF gate_without_desc AS
   $$
   BEGIN
@@ -720,8 +719,7 @@ CREATE OR REPLACE FUNCTION read_data_dump() RETURNS TEXT AS
   'provsql', 'read_data_dump' LANGUAGE C;
 
 CREATE OR REPLACE FUNCTION circuit_to_noncnf(
-  token provenance_token,
-  token2desc regclass) 
+  token provenance_token) 
   RETURNS TEXT AS
   'provsql', 'circuit_to_noncnf' LANGUAGE C;
  
