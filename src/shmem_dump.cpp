@@ -327,13 +327,8 @@ int circuit_to_noncnf_internal(Datum token){
   Oid argtypes[1]= {provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};
 
-  // Not sure keyNumbers is really needed
-  int keyNumbers = 1;
-
   SPI_connect();
-
   int proc = 0;
-
   if (SPI_execute_with_args(
           "SELECT * FROM provsql.sub_circuit_without_desc($1)", 
           2,argtypes,arguments,nulls, true, 0
@@ -346,7 +341,6 @@ int circuit_to_noncnf_internal(Datum token){
       return 1;
     }
 
-
     //todo change the type in order to reduce the memory used : replace uuid in string form to pgu_uuid_t form;
     // maybe replace the input type string to a more compact form. There are less than 16 different type, so an int8 would already be more than enough. Maybe an Enum for clarity
 
@@ -356,15 +350,14 @@ int circuit_to_noncnf_internal(Datum token){
     // - an Integer, used to represent the variable this UID is linked to in the cnf
     // - a String, that receives the gate type of the current UID (with "input" being considered a gate type)
     // - A vector that contains the UID of the inputs of the current gate. Possibly empty. Those UIDs can be used as Keys for this map
-    //std::map            <std::string, std::tuple<int, std::string, std::vector<std::string>> > m;
     //TODO: the first item of the value doesn't seem to be useful
-    std::unordered_map  <int,   std::tuple<int, std::string, std::vector<int>> > compactm;
 
+    std::unordered_map  <int,   std::tuple<int, std::string, std::vector<int>> > compactm;
     //this map maps integers to pg_uuid_t because pg_uuid_t are too big, which leads to Out of Memory issues when compiling big circuits.
     //TODO: this should really be a vector
-    std::unordered_map<int,pg_uuid_t> mapOfUUID;
-    int current_pg_uuid_id = 0;
-
+    std::unordered_map<int,std::string> mapOfUUID;
+    std::unordered_map<std::string, int> mapOfUUID2;
+    int current_pg_uuid_id = 1;
 
     std::string noncnf = "";
     proc = SPI_processed;
@@ -397,92 +390,69 @@ int circuit_to_noncnf_internal(Datum token){
       int32_t to_id = -1;
       if (from !="")
       {
-
-        bool uuid_found = false;
-        for (auto i = mapOfUUID.begin(); i!= mapOfUUID.end() && !uuid_found; i++)
+        auto it = mapOfUUID2.find(from);
+        if (it == mapOfUUID2.end())
         {
-          if ( uuid2string(i->second) == from)
-          {
-            uuid_found = true;
-          }       
-        }
-        if (!uuid_found)
-        {
-          mapOfUUID.insert( std::pair(current_pg_uuid_id++, string2uuid(from)) );          
+          mapOfUUID.insert(std::pair(current_pg_uuid_id, from));
+          mapOfUUID2.insert( std::pair(from,current_pg_uuid_id++));    
           std::vector<int> compactv;
           // TODO: shouldn't be numbers
-          from_var = keyNumbers;
-          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(keyNumbers++, type,compactv) ));
+          from_var = current_pg_uuid_id-1;
+          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(current_pg_uuid_id-1, type,compactv) ));
         }
-
-
-        if (to != "")
-        {
-          uuid_found = false;
-          // TODO: inefficient, have a map in the other direction (you
-          // might need a hash function)
-          for (auto i = mapOfUUID.begin(); i!= mapOfUUID.end() && !uuid_found; i++)
-          {
-            if (uuid2string(i->second) == to)
-            {
-              uuid_found = true;
-            }
-          }
-
-          if (!uuid_found)
-          {
-            // TODO: from should be to
-            mapOfUUID.insert( std::pair(current_pg_uuid_id++, string2uuid(from)) );          
-            std::vector<int> compactv;
-            // Shouldn't be keyNumbers
-            to_var = keyNumbers;
-            // TODO: type is incorrect, it should be fixed when this gate is
-            // found as from
-            compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(keyNumbers++, type,compactv) ));
-          }        
-        }
-
-   
       }
-      
 
-      if (to_var != -1)
+      if (to != "")
       {
+        auto it = mapOfUUID2.find(to);
+        if (it == mapOfUUID2.end()){
+          mapOfUUID.insert(std::pair(current_pg_uuid_id,to));
+          mapOfUUID2.insert( std::pair(to, current_pg_uuid_id++));     
+          std::vector<int> compactv;
+          to_var = current_pg_uuid_id-1;
+          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(current_pg_uuid_id-1, type, compactv) ));
+
+        }
+      } 
+      if (from_var != -1)
+      {
+        if (to_var == -1)
+        {
+          to_var = mapOfUUID2.find(to)->second;
+        }
         std::get<2>(compactm.find(to_var)->second).push_back(from_var);
       } 
 
       
 
-      elog(NOTICE, "value from : %s to : %s", from.c_str(), to.c_str());
-      elog(NOTICE, "type : %s", type.c_str());
+     // elog(NOTICE, "value from : %s to : %s", from.c_str(), to.c_str());
+     // elog(NOTICE, "type : %s", type.c_str());
       
     }
 
     noncnf+= "p noncnf ";
-    noncnf+= std::to_string(keyNumbers-1);
+    noncnf+= std::to_string(current_pg_uuid_id-1) + "\n";
 
-    std::vector<bool> written(keyNumbers,false);
+    std::vector<bool> written(current_pg_uuid_id,false);
     for (auto iter = compactm.begin(); iter != compactm.end(); ++iter)
     {
       std::string s = std::get<1>(iter->second);
       if (std::get<2>(iter->second).size())
       {
-
-        
         if (s == "plus")
         {
-          noncnf+= "\n4 -1 ";
+          noncnf+= "4 -1 ";
 
         }
         else if (s == "monus") {
-          noncnf+="\n3 -1";
+          noncnf+="3 -1";
           for (auto a : std::get<2>(iter->second) )
           {
             noncnf+= a + " ";
           }
         }
         else if (s == "times"){
-          noncnf+="\n6 -1";
+          noncnf+="6 -1";
           for (auto a : std::get<2>(iter->second) )
           {
             noncnf+= a + " ";
@@ -494,16 +464,15 @@ int circuit_to_noncnf_internal(Datum token){
         {
           noncnf+= std::to_string(std::get<0>(compactm.find(a)->second))  + " "; //write the gate's input variables
         }
-        noncnf += "0";
-
+        noncnf += "0\n";
         for (auto a : std::get<2>(iter->second))
         {// writes the weight of the inputs
 
           double prob = NAN;
           bool found;
           LWLockAcquire(provsql_shared_state->lock, LW_SHARED); 
-          pg_uuid_t token;
-          token = mapOfUUID.find(a)->second;
+          auto tmp = mapOfUUID.find(a)->second;
+          pg_uuid_t token = string2uuid(tmp);
           provsqlHashEntry* entry = (provsqlHashEntry *) hash_search(provsql_hash, &token, HASH_FIND, &found);
           if(found){
             prob = entry->prob;
@@ -513,15 +482,12 @@ int circuit_to_noncnf_internal(Datum token){
           {
             if (!written[std::get<0>(compactm.find(a)->second)] )
             {
-            
-            noncnf +="\nc p weight "+ std::to_string(std::get<0>(compactm.find(a)->second))+ " ";
-            noncnf+= std::to_string(prob);
+            noncnf +="c p weight "+ std::to_string(std::get<0>(compactm.find(a)->second))+ " ";
+            noncnf+= std::to_string(prob) +"\n";
             written[std::get<0>(compactm.find(a)->second)] = true;
             }
           }
         }
-        
-
       }
     }
     
