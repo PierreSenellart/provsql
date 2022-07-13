@@ -184,14 +184,14 @@ Datum create_gate(PG_FUNCTION_ARGS)
     elog(ERROR, "Too many gates in in-memory circuit");
   }
 
-  if(nb_children && provsql_shared_state->nb_wires + nb_children > provsql_max_nb_gates * provsql_avg_nb_wires) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Too many wires in in-memory circuit");
-  }
-
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
 
   if(!found) {
+    if(nb_children && provsql_shared_state->nb_wires + nb_children > provsql_max_nb_gates * provsql_avg_nb_wires) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Too many wires in in-memory circuit");
+    }
+
     entry->type = -1;
     for(int i=0; i<nb_gate_types; ++i) {
       if(provsql_shared_state->constants.GATE_TYPE_TO_OID[i]==type) {
