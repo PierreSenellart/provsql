@@ -41,28 +41,47 @@ CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLI
 CREATE TYPE provenance_gate AS
   ENUM('input','plus','times','monus','project','zero','one','eq','agg','semimod','cmp','delta','value','mulinput');
 
-CREATE OR REPLACE FUNCTION create_gate(
+
+
+CREATE UNLOGGED TABLE provenance_circuit_gate(
+  gate provenance_token PRIMARY KEY,
+  gate_type provenance_gate NOT NULL,
+  prob FLOAT DEFAULT 'NaN' NOT NULL);
+
+CREATE UNLOGGED TABLE provenance_circuit_wire(
+  f provenance_token, -- No REFERENCES for performance reasons
+  t provenance_token, -- No REFERENCES for performance reasons
+  idx INT);
+
+
+
+
+-- TODO check if used
+CREATE INDEX ON provenance_circuit_wire (f);
+CREATE INDEX ON provenance_circuit_wire (t);
+
+CREATE OR REPLACE FUNCTION create_gate_shmem(
   token provenance_token,
   type provenance_gate,
   children uuid[] DEFAULT NULL)
   RETURNS void AS
-  'provsql','create_gate' LANGUAGE C;
-CREATE OR REPLACE FUNCTION get_gate_type(
+  'provsql','create_gate_shmem' LANGUAGE C;
+CREATE OR REPLACE FUNCTION get_gate_type_shmem(
   token provenance_token)
   RETURNS provenance_gate AS
-  'provsql','get_gate_type' LANGUAGE C;
-CREATE OR REPLACE FUNCTION get_children(
+  'provsql','get_gate_type_shmem' LANGUAGE C;
+CREATE OR REPLACE FUNCTION get_children_shmem(
   token provenance_token)
   RETURNS uuid[] AS
-  'provsql','get_children' LANGUAGE C;
-CREATE OR REPLACE FUNCTION set_prob(
+  'provsql','get_children_shmem' LANGUAGE C;
+CREATE OR REPLACE FUNCTION set_prob_shmem(
   token provenance_token, p DOUBLE PRECISION)
   RETURNS void AS
-  'provsql','set_prob' LANGUAGE C;
-CREATE OR REPLACE FUNCTION get_prob(
+  'provsql','set_prob_shmem' LANGUAGE C;
+CREATE OR REPLACE FUNCTION get_prob_shmem(
   token provenance_token)
   RETURNS DOUBLE PRECISION AS
-  'provsql','get_prob' LANGUAGE C;
+  'provsql','get_prob_shmem' LANGUAGE C;
 CREATE OR REPLACE FUNCTION set_infos(
   token provenance_token, info1 INT, info2 INT DEFAULT NULL)
   RETURNS void AS
@@ -723,6 +742,92 @@ CREATE OR REPLACE FUNCTION circuit_to_noncnf(
   RETURNS TEXT AS
   'provsql', 'circuit_to_noncnf' LANGUAGE C;
  
+/*CREATE OR REPLACE FUNCTION provsql_memory_used() RETURNS TEXT AS
+  'provsql', 'provsql_memory_used' LANGUAGE C;*/
+
+
+/* Maybe check for concurent access*/
+CREATE OR REPLACE FUNCTION create_gate_disk(
+  token provenance_token,
+  type provenance_gate,
+  children uuid[] DEFAULT NULL) RETURNS void AS
+  $$
+  DECLARE
+    BEGIN
+      BEGIN 
+        INSERT INTO provenance_circuit_gate VALUES (token, type, CASE WHEN type = 'zero' THEN 0. WHEN type = 'one' THEN 1. ELSE 'NaN' END);
+        INSERT INTO provenance_circuit_wire SELECT token, c, row_number() over() 
+                                          FROM unnest(children) AS c ;
+      EXCEPTION WHEN unique_violation THEN 
+      END;
+  END
+  $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION set_prob_disk(
+
+  token provenance_token, p DOUBLE PRECISION) RETURNS void AS
+  $$
+  DECLARE
+    BEGIN
+      UPDATE provenance_circuit_gate SET prob = p WHERE gate = token; 
+    END
+  $$ LANGUAGE plpgsql;
+
+
+  CREATE OR REPLACE FUNCTION get_prob_disk(
+  token provenance_token)
+  RETURNS FLOAT AS
+  $$
+  SELECT prob FROM provenance_circuit_gate WHERE gate = token;
+  $$ LANGUAGE sql;
+
+
+/* TODO 
+CREATE OR REPLACE FUNCTION set_infos_disk
+CREATE OR REPLACE FUNCTION get_infos_disk
+*/
+
+CREATE OR REPLACE FUNCTION get_children_disk(
+  token provenance_token) RETURNS uuid[] AS
+  $$
+  SELECT array_agg(t::UUID) FROM provenance_circuit_wire WHERE f = token
+  $$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION get_gate_type_disk(
+  token provenance_token) RETURNS provenance_gate AS
+  $$
+  SELECT gate_type from provenance_circuit_gate where gate = token;
+  $$ LANGUAGE sql;
+
+
+
+CREATE OR REPLACE FUNCTION create_gate(
+  token provenance_token, 
+  type provenance_gate,
+  children uuid[] DEFAULT NULL) 
+  RETURNS void AS
+  'provsql','create_gate' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION get_gate_type(
+  token provenance_token)
+  RETURNS provenance_gate AS
+  'provsql','get_gate_type' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION get_children(
+  token provenance_token)
+  RETURNS uuid[] AS
+  'provsql','get_children' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION get_prob(
+  token provenance_token)
+  RETURNS DOUBLE PRECISION AS
+  'provsql','get_prob' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION set_prob(
+  token provenance_token,
+  prob FLOAT)
+  RETURNS void AS
+  'provsql','set_prob' LANGUAGE C;
 
 SELECT initialize_constants();
 SELECT create_gate(gate_zero(), 'zero');
@@ -732,3 +837,4 @@ GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 GRANT SELECT ON provenance_circuit_extra TO PUBLIC;
 
 SET search_path TO public;
+

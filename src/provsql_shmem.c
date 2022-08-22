@@ -13,9 +13,12 @@
 #include "storage/shmem.h"
 #include "storage/fd.h"
 #include "utils/array.h"
+#include "utils/datum.h"
 #include "utils/hsearch.h"
 #include "utils/syscache.h"
 #include "utils/uuid.h"
+#include "executor/spi.h"
+
 
 #include "unistd.h"
 
@@ -32,7 +35,6 @@ static void provsql_shmem_shutdown(int code, Datum arg);
 
 provsqlSharedState *provsql_shared_state = NULL;
 HTAB *provsql_hash = NULL;
-provsqlHashEntry *entry;
 
 void provsql_shmem_startup(void)
 {
@@ -157,8 +159,8 @@ Size provsql_memsize(void)
   return size;
 }
 
-PG_FUNCTION_INFO_V1(create_gate);
-Datum create_gate(PG_FUNCTION_ARGS)
+PG_FUNCTION_INFO_V1(create_gate_shmem);
+Datum create_gate_shmem(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   gate_type type = (gate_type) PG_GETARG_INT32(1);
@@ -182,6 +184,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
   if(hash_get_num_entries(provsql_hash) == provsql_max_nb_gates) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Too many gates in in-memory circuit");
+    //TODO instead, call a function to save it on disk.
   }
 
   if(nb_children && provsql_shared_state->nb_wires + nb_children > provsql_max_nb_gates * provsql_avg_nb_wires) {
@@ -230,8 +233,8 @@ Datum create_gate(PG_FUNCTION_ARGS)
   PG_RETURN_VOID();
 }
 
-PG_FUNCTION_INFO_V1(set_prob);
-Datum set_prob(PG_FUNCTION_ARGS)
+PG_FUNCTION_INFO_V1(set_prob_shmem);
+Datum set_prob_shmem(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   double prob = PG_GETARG_FLOAT8(1);
@@ -239,7 +242,7 @@ Datum set_prob(PG_FUNCTION_ARGS)
   bool found;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
-    elog(ERROR, "Invalid NULL value passed to set_prob");
+    elog(ERROR, "Invalid NULL value passed to set_prob_shmem");
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
@@ -304,8 +307,8 @@ Datum set_infos(PG_FUNCTION_ARGS)
   PG_RETURN_VOID();
 }
 
-PG_FUNCTION_INFO_V1(get_gate_type);
-Datum get_gate_type(PG_FUNCTION_ARGS)
+PG_FUNCTION_INFO_V1(get_gate_type_shmem);
+Datum get_gate_type_shmem(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   provsqlHashEntry *entry;
@@ -329,8 +332,8 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
     PG_RETURN_INT32(provsql_shared_state->constants.GATE_TYPE_TO_OID[result]);
 }
 
-PG_FUNCTION_INFO_V1(get_children);
-Datum get_children(PG_FUNCTION_ARGS)
+PG_FUNCTION_INFO_V1(get_children_shmem);
+Datum get_children_shmem(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   provsqlHashEntry *entry;
@@ -348,7 +351,7 @@ Datum get_children(PG_FUNCTION_ARGS)
     for(int i=0;i<entry->nb_children;++i) {
       children_ptr[i] = UUIDPGetDatum(&provsql_shared_state->wires[entry->children_idx + i]);
     }
-    result = construct_array(
+    result = construct_array( //TODO UTiliser cette façon de faire dans la version disque
         children_ptr,
         entry->nb_children,
         provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN,
@@ -366,8 +369,8 @@ Datum get_children(PG_FUNCTION_ARGS)
     PG_RETURN_ARRAYTYPE_P(result);
 }
 
-PG_FUNCTION_INFO_V1(get_prob);
-Datum get_prob(PG_FUNCTION_ARGS)
+PG_FUNCTION_INFO_V1(get_prob_shmem);
+Datum get_prob_shmem(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   provsqlHashEntry *entry;
@@ -580,6 +583,9 @@ Datum initialize_constants(PG_FUNCTION_ARGS)
   provsql_shared_state->constants.OID_TYPE_INT = TypenameGetTypid("int4");
   CheckOid(OID_TYPE_INT);
 
+  provsql_shared_state->constants.OID_TYPE_FLOAT = TypenameGetTypid("float8");
+  CheckOid(OID_TYPE_FLOAT);  
+
   provsql_shared_state->constants.OID_TYPE_INT_ARRAY = TypenameGetTypid("_int4");
   CheckOid(OID_TYPE_INT_ARRAY);
   
@@ -642,5 +648,231 @@ Datum initialize_constants(PG_FUNCTION_ARGS)
   GET_GATE_TYPE_OID(value);
   GET_GATE_TYPE_OID(mulinput);
 
+
   PG_RETURN_VOID();
 }
+
+PG_FUNCTION_INFO_V1(create_gate);
+Datum create_gate(PG_FUNCTION_ARGS){
+
+  /*
+  HeapTuple entry;
+  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  gate_type type = (gate_type) PG_GETARG_INT32(1);
+  ArrayType *children = PG_ARGISNULL(2)?NULL:PG_GETARG_ARRAYTYPE_P(2);
+  */
+
+  Datum arguments[3]={datumCopy(PG_GETARG_DATUM(0), false, 16), PG_GETARG_DATUM(1), PG_ARGISNULL(2)?0:datumCopy(PG_GETARG_DATUM(2), false, -1)};
+  Oid argtypes[3]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN,
+    provsql_shared_state->constants.OID_TYPE_GATE_TYPE, 
+    provsql_shared_state->constants.OID_TYPE_UUID_ARRAY};
+  char nulls[3] = {' ',' ',PG_ARGISNULL(2)?'n':' '};
+
+
+  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
+    elog(ERROR, "Invalid NULL value passed to create_gate");
+/*
+  if(children) {
+   if(ARR_NDIM(children) > 1)
+     elog(ERROR, "Invalid multi-dimensional array passed to create_gate");
+   else if(ARR_NDIM(children) == 1)
+     nb_children = *ARR_DIMS(children);
+  }
+*/
+
+
+  SPI_connect();
+  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+    if (SPI_execute_with_args(
+            "SELECT provsql.create_gate_disk ($1,$2,$3) ", 
+            3,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+      elog(ERROR, "Something wrong happened while trying to create the gate");
+    }
+  }
+  else {
+    if (SPI_execute_with_args(
+            "SELECT provsql.create_gate_shmem ($1,$2,$3) ", 
+            3,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+      elog(ERROR, "Something wrong happened while trying to create the gate");
+    }
+  }
+
+  SPI_finish(); 
+  PG_RETURN_VOID();
+}
+
+
+PG_FUNCTION_INFO_V1(get_gate_type);
+Datum get_gate_type(PG_FUNCTION_ARGS){
+  //pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  HeapTuple entry;
+  bool isnull;
+  Datum result = -1;
+
+  Datum arguments[1]={datumCopy(PG_GETARG_DATUM(0),false,16)};
+  Oid argtypes[1]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
+  char nulls[1] = {' '};
+
+
+  SPI_connect();
+  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+    if (SPI_execute_with_args(
+            "SELECT provsql.get_gate_type_disk ($1) ", 
+            1,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+      elog(ERROR, "Something wrong happened while trying to retrieve the gate");
+    }
+  }
+  else {
+    if (SPI_execute_with_args(
+            "SELECT provsql.get_gate_type_shmem ($1) ", 
+            1,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+      elog(ERROR, "Something wrong happened while trying to retrieve the gate");
+    }
+  }
+  entry = SPI_copytuple(SPI_tuptable->vals[0]);
+  result = heap_getattr(entry, 1, SPI_tuptable->tupdesc, &isnull);
+  SPI_finish();
+  if (!isnull)
+  {
+    PG_RETURN_DATUM(result);
+  }
+  else {
+    PG_RETURN_VOID();
+  }
+}
+
+PG_FUNCTION_INFO_V1(set_prob);
+  Datum set_prob(PG_FUNCTION_ARGS){
+ // HeapTuple entry;
+//  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+ // double prob = PG_GETARG_FLOAT8(1);
+
+  Datum arguments[2]={datumCopy(PG_GETARG_DATUM(0), false, 16), PG_GETARG_DATUM(1)};
+  Oid argtypes[2]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN, provsql_shared_state->constants.OID_TYPE_FLOAT };
+  char nulls[2] = {' ',' '};
+
+  SPI_connect();
+  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
+  elog(ERROR, "Invalid NULL value passed to set_prob");
+  //TODO Fix the bug before then remove the "true" in the condition
+  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+
+    if (SPI_execute_with_args(
+            "SELECT provsql.set_prob_disk ($1, $2) ", 
+            2,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+      elog(ERROR, "Something wrong happened while trying to retrieve the gate");
+    }
+  }
+  else {
+    if (SPI_execute_with_args(
+            "SELECT provsql.set_prob_shmem ($1, $2) ", 
+            2,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+      elog(ERROR, "Something wrong happened while trying to retrieve the gate");
+    }
+  }
+  SPI_finish();
+
+
+  PG_RETURN_VOID();
+}
+
+
+
+
+PG_FUNCTION_INFO_V1(get_prob);
+  Datum get_prob(PG_FUNCTION_ARGS){
+  HeapTuple entry;
+  
+  //pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  bool isnull; 
+  Datum result;
+  Datum arguments[1]={datumCopy(PG_GETARG_DATUM(0), false, 16)};
+  Oid argtypes[1]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
+  char nulls[1] = {' '};
+
+  SPI_connect();
+  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+    if (SPI_execute_with_args(
+      "SELECT provsql.get_prob_disk($1) ", 
+      1,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+    elog(ERROR, "Something wrong happened while retrieving the probability");
+    }
+  }
+  else {
+    if (SPI_execute_with_args(
+      "SELECT provsql.get_prob_shmem($1) ", 
+      1,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+    elog(ERROR, "Something wrong happened while retrieving the probability");
+    }
+  }
+  entry = SPI_copytuple(SPI_tuptable->vals[0]);
+  result = heap_getattr(entry, 1, SPI_tuptable->tupdesc, &isnull);
+  SPI_finish();
+  if (!isnull)
+  {
+    PG_RETURN_DATUM(result);
+  }
+  else {
+    PG_RETURN_VOID();
+  }
+
+}
+
+
+
+PG_FUNCTION_INFO_V1(get_children);
+  Datum get_children(PG_FUNCTION_ARGS){
+  bool isnull;
+  HeapTuple entry;
+  Datum result;
+  Datum arguments[1]={datumCopy(PG_GETARG_DATUM(0), false, 16)};
+  Oid argtypes[1]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
+  char nulls[1] = {' '};
+
+
+  SPI_connect();
+
+  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+
+    if (SPI_execute_with_args(
+      "SELECT provsql.get_children_disk($1) ", 
+      1,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+    elog(ERROR, "Something wrong happened while retrieving the probability");
+    }
+  }
+  else {
+     if (SPI_execute_with_args(
+      "SELECT provsql.get_children_shmem($1) ", 
+      1,argtypes,arguments,nulls, false, 0
+    ) != SPI_OK_SELECT){
+    elog(ERROR, "Something wrong happened while retrieving the probability");
+    }   
+  }
+
+
+  entry = SPI_copytuple(SPI_tuptable->vals[0]);
+  result = heap_getattr(entry, 1, SPI_tuptable->tupdesc, &isnull);
+
+
+  SPI_finish();
+  if (!isnull)
+  {
+    ArrayType* array = DatumGetArrayTypePCopy(result);
+    PG_RETURN_ARRAYTYPE_P(array);
+  }
+  else {
+    PG_RETURN_VOID();
+  }
+
+
+
+  }

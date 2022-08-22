@@ -299,7 +299,7 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   auto tseytin_stop = std::chrono::high_resolution_clock::now();
   double tseytin_duration = std::chrono::duration<double>(tseytin_stop - tseytin_start).count();
 
-  elog(NOTICE, "\nexecution time of the tseytin transformation : %f ms",tseytin_duration );
+  //elog(NOTICE, "\nexecution time of the tseytin transformation : %f ms",tseytin_duration );
 
   return filename;
 }

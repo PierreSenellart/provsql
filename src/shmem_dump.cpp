@@ -259,7 +259,7 @@ Datum dump_data(PG_FUNCTION_ARGS)
 {
 
 
-  switch (provsql_serialize("provsql_test.tmp"))
+  switch (provsql_serialize("provsql_test.tmp")) //TODO Find a better name for the file
   {
   case 0:
     elog(INFO,"serializing completed without error");
@@ -320,22 +320,23 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
 }
 
 
-//TODO The file is curently written in /var/lib/postgresql/12/main/noncnfFromCircuit.noncnf, which requires some permissions in order to fetch. 
+//TODO The files are curently written in /var/lib/postgresql/12/main/noncnfFromCircuit.noncnf, which requires some permissions in order to fetch. 
 //     It would be nice if the file was created directly in the current directory or in a specified path and/or file  
 int circuit_to_noncnf_internal(Datum token){
+  static int file_id = 0;
   Datum arguments[1]= {token};
   Oid argtypes[1]= {provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};
-
-  SPI_connect();
   int proc = 0;
+  SPI_connect();
   if (SPI_execute_with_args(
           "SELECT * FROM provsql.sub_circuit_without_desc($1)", 
           2,argtypes,arguments,nulls, true, 0
   ) == SPI_OK_SELECT)
   {
     FILE *file;
-    file = AllocateFile("noncnfFromCircuit.noncnf", PG_BINARY_W);
+    std::string filename = "./noncnfFromCircuit" + std::to_string(file_id++)+".noncnf";
+    file = fopen(filename.c_str(), "w");
     if (file == NULL)
     {
       return 1;
@@ -351,9 +352,9 @@ int circuit_to_noncnf_internal(Datum token){
     // - a String, that receives the gate type of the current UID (with "input" being considered a gate type)
     // - A vector that contains the UID of the inputs of the current gate. Possibly empty. Those UIDs can be used as Keys for this map
     //TODO: the first item of the value doesn't seem to be useful
+    std::unordered_map  <int,   std::tuple<std::string, std::vector<int>> > compactm;
 
-    std::unordered_map  <int,   std::tuple<int, std::string, std::vector<int>> > compactm;
-    //this map maps integers to pg_uuid_t because pg_uuid_t are too big, which leads to Out of Memory issues when compiling big circuits.
+    //thess maps are mapping map integers to pg_uuid_t because pg_uuid_t are too big, which leads to Out of Memory issues when compiling big circuits.
     //TODO: this should really be a vector
     std::unordered_map<int,std::string> mapOfUUID;
     std::unordered_map<std::string, int> mapOfUUID2;
@@ -398,7 +399,7 @@ int circuit_to_noncnf_internal(Datum token){
           std::vector<int> compactv;
           // TODO: shouldn't be numbers
           from_var = current_pg_uuid_id-1;
-          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(current_pg_uuid_id-1, type,compactv) ));
+          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(type,compactv) ));
         }
       }
 
@@ -410,7 +411,7 @@ int circuit_to_noncnf_internal(Datum token){
           mapOfUUID2.insert( std::pair(to, current_pg_uuid_id++));     
           std::vector<int> compactv;
           to_var = current_pg_uuid_id-1;
-          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(current_pg_uuid_id-1, type, compactv) ));
+          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(type, compactv) ));
 
         }
       } 
@@ -420,7 +421,7 @@ int circuit_to_noncnf_internal(Datum token){
         {
           to_var = mapOfUUID2.find(to)->second;
         }
-        std::get<2>(compactm.find(to_var)->second).push_back(from_var);
+        std::get<1>(compactm.find(to_var)->second).push_back(from_var);
       } 
 
       
@@ -436,8 +437,8 @@ int circuit_to_noncnf_internal(Datum token){
     std::vector<bool> written(current_pg_uuid_id,false);
     for (auto iter = compactm.begin(); iter != compactm.end(); ++iter)
     {
-      std::string s = std::get<1>(iter->second);
-      if (std::get<2>(iter->second).size())
+      std::string s = std::get<0>(iter->second);
+      if (std::get<1>(iter->second).size())
       {
         if (s == "plus")
         {
@@ -445,27 +446,27 @@ int circuit_to_noncnf_internal(Datum token){
 
         }
         else if (s == "monus") {
-          noncnf+="3 -1";
-          for (auto a : std::get<2>(iter->second) )
+          noncnf+="3 -1 ";
+          for (auto a : std::get<1>(iter->second) )
           {
             noncnf+= a + " ";
           }
         }
         else if (s == "times"){
-          noncnf+="6 -1";
-          for (auto a : std::get<2>(iter->second) )
+          noncnf+="6 -1 ";
+          for (auto a : std::get<1>(iter->second) )
           {
             noncnf+= a + " ";
           }
         }
 
-        noncnf += std::to_string( std::get<0>(iter->second) ) + " "; //write the gate variable
-        for (auto a :  std::get<2>(iter->second) )
+        noncnf += std::to_string(iter->first) + " "; //write the gate variable
+        for (auto a :  std::get<1>(iter->second) )
         {
-          noncnf+= std::to_string(std::get<0>(compactm.find(a)->second))  + " "; //write the gate's input variables
+          noncnf+= std::to_string(compactm.find(a)->first)  + " "; //write the gate's input variables
         }
         noncnf += "0\n";
-        for (auto a : std::get<2>(iter->second))
+        for (auto a : std::get<1>(iter->second))
         {// writes the weight of the inputs
 
           double prob = NAN;
@@ -480,11 +481,11 @@ int circuit_to_noncnf_internal(Datum token){
           LWLockRelease(provsql_shared_state->lock);
           if (!isnan(prob))
           {
-            if (!written[std::get<0>(compactm.find(a)->second)] )
+            if (!written[compactm.find(a)->first] )
             {
-            noncnf +="c p weight "+ std::to_string(std::get<0>(compactm.find(a)->second))+ " ";
+            noncnf +="c p weight "+ std::to_string(compactm.find(a)->first)+ " ";
             noncnf+= std::to_string(prob) +"\n";
-            written[std::get<0>(compactm.find(a)->second)] = true;
+            written[compactm.find(a)->first] = true;
             }
           }
         }
@@ -497,7 +498,7 @@ int circuit_to_noncnf_internal(Datum token){
 
     if (!fwrite(noncnf.c_str(),noncnf.size(), 1, file ))
     {
-      if (FreeFile(file))
+      if (fclose(file))
       {
        file = NULL;
        return 4;
@@ -506,7 +507,7 @@ int circuit_to_noncnf_internal(Datum token){
     }
     
 
-    if (FreeFile(file))
+    if (fclose(file))
     {
      file = NULL;
      return 3;
@@ -541,5 +542,11 @@ Datum circuit_to_noncnf(PG_FUNCTION_ARGS){
   
 
 }
-
-
+/*
+extern "C"
+{
+  PG_FUNCTION_INFO_V1(provsql_memory_used);
+}
+DATUM provsql_memory_used(PG_FUNCTION_ARGS){
+  PG_RETURN_NULL();
+}*/

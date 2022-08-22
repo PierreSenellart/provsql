@@ -46,7 +46,7 @@ static Datum probability_evaluate_internal
     std::string f{uuid2string(uuid)};
 
     bool found;
-    provsqlHashEntry *entry = (provsqlHashEntry *) hash_search(provsql_hash, &uuid, HASH_FIND, &found);
+    provsqlHashEntry *entry = (provsqlHashEntry *) hash_search(provsql_hash, &uuid, HASH_FIND, &found); //TODO Access from either Shmem or Disk
 
     gate_t id;
 
