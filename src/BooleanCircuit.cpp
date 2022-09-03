@@ -407,7 +407,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
     d4::LastBreathPreproc lastBreath;
     d4::PreprocManager *preproc = d4::PreprocManager::makePreprocManager(vm,std::cerr);
-    d4::ProblemManager *preprocProblem = preproc->run(&problem,lastBreath);
+    d4::ProblemManager *preprocProblem = preproc->run(&problem,lastBreath,-1); //TODO: Ask Jean-Marie if setting the timeout argument to -1 means no limit.
 
     // ICI preprocessor work done
     //TODO set on provsql verbose

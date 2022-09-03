@@ -181,7 +181,7 @@ Datum create_gate_shmem(PG_FUNCTION_ARGS)
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(hash_get_num_entries(provsql_hash) == provsql_max_nb_gates) {
+  if(false && hash_get_num_entries(provsql_hash) == provsql_max_nb_gates) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Too many gates in in-memory circuit");
     //TODO instead, call a function to save it on disk.
@@ -682,7 +682,7 @@ Datum create_gate(PG_FUNCTION_ARGS){
 
 
   SPI_connect();
-  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+  if (false && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
     if (SPI_execute_with_args(
             "SELECT provsql.create_gate_disk ($1,$2,$3) ", 
             3,argtypes,arguments,nulls, false, 0
@@ -717,7 +717,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS){
 
 
   SPI_connect();
-  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+  if (false && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
     if (SPI_execute_with_args(
             "SELECT provsql.get_gate_type_disk ($1) ", 
             1,argtypes,arguments,nulls, false, 0
@@ -759,7 +759,7 @@ PG_FUNCTION_INFO_V1(set_prob);
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
   elog(ERROR, "Invalid NULL value passed to set_prob");
   //TODO Fix the bug before then remove the "true" in the condition
-  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+  if (false && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
 
     if (SPI_execute_with_args(
             "SELECT provsql.set_prob_disk ($1, $2) ", 
@@ -797,7 +797,7 @@ PG_FUNCTION_INFO_V1(get_prob);
   char nulls[1] = {' '};
 
   SPI_connect();
-  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+  if (false && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
     if (SPI_execute_with_args(
       "SELECT provsql.get_prob_disk($1) ", 
       1,argtypes,arguments,nulls, false, 0
@@ -840,7 +840,7 @@ PG_FUNCTION_INFO_V1(get_children);
 
   SPI_connect();
 
-  if (true && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
+  if (false && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
 
     if (SPI_execute_with_args(
       "SELECT provsql.get_children_disk($1) ", 
@@ -876,3 +876,11 @@ PG_FUNCTION_INFO_V1(get_children);
 
 
   }
+
+/*
+PG_FUNCTION_INFO_V1(current_memory_usage);
+  Datum current_memory_usage(PG_FUNCTION_ARGS){
+    provsql_max_nb_gates - hash_get_num_entries 
+    PG_RETURN_CSTRING();
+  }
+*/

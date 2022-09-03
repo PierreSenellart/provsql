@@ -38,9 +38,9 @@ d4/build.sh:
 d4/build/libd4.a: d4/build.sh
 	cd d4 && ./build.sh -l
 
-PG_CPPFLAGS += -Id4
+PG_CPPFLAGS += -Id4 -fPIC
 ifdef DEBUG
-PG_CPPFLAGS += -Og -g
+PG_CPPFLAGS += -Og -g -fPIC
 endif
 
 # Disable JIT code generation, due to various bugs, see in particular

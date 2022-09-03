@@ -342,7 +342,7 @@ int circuit_to_noncnf_internal(Datum token){
       return 1;
     }
 
-    //todo change the type in order to reduce the memory used : replace uuid in string form to pgu_uuid_t form;
+    //TODO: change the type in order to reduce the memory used : replace uuid in string form to pgu_uuid_t form;
     // maybe replace the input type string to a more compact form. There are less than 16 different type, so an int8 would already be more than enough. Maybe an Enum for clarity
 
     //this map is defined as follows :
@@ -354,7 +354,7 @@ int circuit_to_noncnf_internal(Datum token){
     //TODO: the first item of the value doesn't seem to be useful
     std::unordered_map  <int,   std::tuple<std::string, std::vector<int>> > compactm;
 
-    //thess maps are mapping map integers to pg_uuid_t because pg_uuid_t are too big, which leads to Out of Memory issues when compiling big circuits.
+    //these maps are mapping integers to pg_uuid_t because pg_uuid_t are too big, which leads to Out of Memory issues when compiling big circuits.
     //TODO: this should really be a vector
     std::unordered_map<int,std::string> mapOfUUID;
     std::unordered_map<std::string, int> mapOfUUID2;

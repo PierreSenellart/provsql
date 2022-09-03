@@ -829,6 +829,10 @@ CREATE OR REPLACE FUNCTION set_prob(
   RETURNS void AS
   'provsql','set_prob' LANGUAGE C;
 
+-- CREATE OR REPLACE FUNCTION current_memory_usage()
+-- RETURNS TEXT AS
+-- 'provsql', 'current_memory_usage' LANGUAGE C;
+
 SELECT initialize_constants();
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
