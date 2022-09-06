@@ -662,10 +662,11 @@ Datum create_gate(PG_FUNCTION_ARGS){
   ArrayType *children = PG_ARGISNULL(2)?NULL:PG_GETARG_ARRAYTYPE_P(2);
   */
 
-  Datum arguments[3]={datumCopy(PG_GETARG_DATUM(0), false, 16), PG_GETARG_DATUM(1), PG_ARGISNULL(2)?0:datumCopy(PG_GETARG_DATUM(2), false, -1)};
-  Oid argtypes[3]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN,
-    provsql_shared_state->constants.OID_TYPE_GATE_TYPE, 
-    provsql_shared_state->constants.OID_TYPE_UUID_ARRAY};
+  Datum arguments[3]={datumCopy(PG_GETARG_DATUM(0), false, UUID_LEN), PG_GETARG_DATUM(1), PG_ARGISNULL(2)?0:datumCopy(PG_GETARG_DATUM(2), false, -1)};
+  Oid argtypes[3]={ provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN,
+                    provsql_shared_state->constants.OID_TYPE_GATE_TYPE,
+                    provsql_shared_state->constants.OID_TYPE_UUID_ARRAY
+                  };
   char nulls[3] = {' ',' ',PG_ARGISNULL(2)?'n':' '};
 
 

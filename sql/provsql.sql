@@ -48,17 +48,20 @@ CREATE UNLOGGED TABLE provenance_circuit_gate(
   gate_type provenance_gate NOT NULL,
   prob FLOAT DEFAULT 'NaN' NOT NULL);
 
+
 CREATE UNLOGGED TABLE provenance_circuit_wire(
   f provenance_token, -- No REFERENCES for performance reasons
   t provenance_token, -- No REFERENCES for performance reasons
   idx INT);
 
 
-
+/*
 
 -- TODO check if used
 CREATE INDEX ON provenance_circuit_wire (f);
 CREATE INDEX ON provenance_circuit_wire (t);
+
+*/
 
 CREATE OR REPLACE FUNCTION create_gate_shmem(
   token provenance_token,
