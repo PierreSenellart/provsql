@@ -857,9 +857,10 @@ typedef struct aggregation_mutator_context
 {
   List *prov_atts;
   semiring_operation op;
+  const constants_t* constants; 
 } aggregation_mutator_context;
 
-static Node *aggregation_mutator(const constants_t* constants, Node *node, aggregation_mutator_context *context)
+static Node *aggregation_mutator(Node *node, aggregation_mutator_context *context)
 {
   if (node == NULL)
     return NULL;
@@ -868,7 +869,7 @@ static Node *aggregation_mutator(const constants_t* constants, Node *node, aggre
   {
     Aggref *ar_v = (Aggref *) node;
     return (Node *) make_aggregation_expression(
-        constants,
+        context->constants,
         ar_v,
         context->prov_atts,
         context->op);
@@ -878,12 +879,13 @@ static Node *aggregation_mutator(const constants_t* constants, Node *node, aggre
 }
 
 static void replace_aggregations_in_select(
+    const constants_t *constants,
     Query *q,
     List *prov_atts,
     semiring_operation op)
 {
 
-  aggregation_mutator_context context = {prov_atts, op};
+  aggregation_mutator_context context = {prov_atts, op, constants};
 
   query_tree_mutator(q, aggregation_mutator, &context, QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 }
@@ -1089,7 +1091,7 @@ static bool provenance_function_walker(
       return true;
   }
 
-  return expression_tree_walker(node, provenance_function_walker, (void*) NULL);
+  return expression_tree_walker(node, provenance_function_walker, data);
 }
 
 static bool provenance_function_in_group_by(
@@ -1110,9 +1112,9 @@ static bool provenance_function_in_group_by(
 }
 
 static bool has_provenance_walker(
-    const constants_t *constants,
     Node *node,
     void *data) {
+  const constants_t *constants=(const constants_t *) data;
   if(node==NULL)
     return false;
 
@@ -1121,7 +1123,7 @@ static bool has_provenance_walker(
     Query *q = (Query *)node;
     ListCell *rc;
 
-    if(query_tree_walker(q, has_provenance_walker, (void*) NULL, 0))
+    if(query_tree_walker(q, has_provenance_walker, data, 0))
       return true;
 
     foreach (rc, q->rtable)
@@ -1167,13 +1169,13 @@ static bool has_provenance_walker(
     }
   }
 
-  return expression_tree_walker(node, provenance_function_walker, (void*) NULL);
+  return expression_tree_walker(node, provenance_function_walker, data);
 }
 
 static bool has_provenance(
     const constants_t *constants,
     Query *q) {
-  return has_provenance_walker(constants, (Node *) q, NULL);
+  return has_provenance_walker((Node *) q, (void*) constants);
 }
 
 static bool transform_except_into_join(
@@ -1498,7 +1500,7 @@ static Query *process_query(
     //transform targetList to change AGGREF into
     if (q->hasAggs)
     {
-      replace_aggregations_in_select(q, prov_atts,
+      replace_aggregations_in_select(constants, q, prov_atts,
                                      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
     }
     provenance = make_provenance_expression(
