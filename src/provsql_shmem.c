@@ -181,7 +181,7 @@ Datum create_gate_shmem(PG_FUNCTION_ARGS)
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(false && hash_get_num_entries(provsql_hash) == provsql_max_nb_gates) {
+  if(hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Too many gates in in-memory circuit");
     //TODO instead, call a function to save it on disk.
@@ -351,7 +351,7 @@ Datum get_children_shmem(PG_FUNCTION_ARGS)
     for(int i=0;i<entry->nb_children;++i) {
       children_ptr[i] = UUIDPGetDatum(&provsql_shared_state->wires[entry->children_idx + i]);
     }
-    result = construct_array( //TODO UTiliser cette façon de faire dans la version disque
+    result = construct_array( //TODO Utiliser cette façon de faire dans la version disque
         children_ptr,
         entry->nb_children,
         provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN,
@@ -759,7 +759,7 @@ PG_FUNCTION_INFO_V1(set_prob);
   SPI_connect();
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
   elog(ERROR, "Invalid NULL value passed to set_prob");
-  //TODO Fix the bug before then remove the "true" in the condition
+  //TODO Fix the bug before then remove the "false" in the condition
   if (false && hash_get_num_entries(provsql_hash) >= provsql_max_nb_gates){
 
     if (SPI_execute_with_args(

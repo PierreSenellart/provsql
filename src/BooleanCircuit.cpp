@@ -226,11 +226,11 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   
   if (provsql_verbose >= 80)
     tseytin_start = std::chrono::high_resolution_clock::now();
-  
-  
+
   std::vector<std::vector<int>> clauses;
   // Tseytin transformation
   for(gate_t i{0}; i<gates.size(); ++i) {
+
     switch(getGateType(i)) {
       case BooleanGate::AND:
         {
@@ -307,7 +307,6 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
     elog(NOTICE, "\nexecution time of the tseytin transformation : %f ms",tseytin_duration );
   }
 
-
   return filename;
 }
 
@@ -321,7 +320,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::chrono::_V2::system_clock::time_point clauses_done;
   std::chrono::_V2::system_clock::time_point preproc_done;
   std::chrono::_V2::system_clock::time_point dpllstylemethod_created;
-    std::chrono::_V2::system_clock::time_point counting_done;
+  std::chrono::_V2::system_clock::time_point counting_done;
 
   if (provsql_verbose >= 80)  
     compilation_start = std::chrono::high_resolution_clock::now();
@@ -456,7 +455,6 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     boost::multiprecision::mpf_float v = method->count(setOfVar,assumption, std::cerr);
     // Delete takes a long time but is necessary to avoid memory leaks for now 
     delete method;
-
     //ICI Counting done
     if (provsql_verbose >= 80)
     {
@@ -470,11 +468,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       double total_duration = std::chrono::duration<double>(counting_done - compilation_start).count();
       elog(NOTICE, "total time used by the compilation method : %f ms \n", total_duration);
     }
-
-
-
     return v.convert_to<double>();
-
     cmdline+= "-i "+filename+" -m ddnnf-compiler --dump-ddnnf "+outfilename;
     new_d4 = true;
   } else if(compiler=="c2d") {
@@ -506,7 +500,6 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   }
   
   std::ifstream ifs(outfilename.c_str());
-
   std::string line;
   getline(ifs,line);
 
@@ -520,13 +513,12 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   } else {
     std::string nnf;
     unsigned nb_nodes, nb_edges, nb_variables;
-
     std::stringstream ss(line);
     ss >> nnf >> nb_nodes >> nb_edges >> nb_variables;
-  
+
     if(nb_variables!=gates.size())
       throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + std::to_string(nb_variables) +" vs " + std::to_string(gates.size()) + ")");
-  
+ 
     getline(ifs,line);
   }
 
@@ -535,7 +527,6 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   unsigned i=0;
   do {
     std::stringstream ss(line);
-    
     std::string c;
     ss >> c;
 
@@ -587,7 +578,6 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       int var;
       ss >> var;
       auto id2=dnnf.getGate(std::to_string(var));
-
       std::vector<int> decisions;
       int decision;
       while(ss >> decision) {
@@ -596,7 +586,6 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
         if(gates[abs(decision)-1]==BooleanGate::IN)
           decisions.push_back(decision);
       }
-
       if(decisions.empty()) {
         dnnf.addWire(dnnf.getGate(c), id2);
       } else {
@@ -620,7 +609,6 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   } while(getline(ifs, line));
 
   ifs.close();
-
   if(provsql_verbose<20) {
     if(unlink(outfilename.c_str())) {
       throw CircuitException("Error removing "+outfilename);
@@ -639,7 +627,6 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   std::string delta_s, epsilon_s;
   getline(ssopt, delta_s, ';');
   getline(ssopt, epsilon_s, ';');
-
   double delta = 0;
   try { 
     delta=stod(delta_s); 
@@ -659,9 +646,7 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
 
   //calcul pivotAC
   const double pivotAC=2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
-
   std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+filename+".out";
-
   int retvalue=system(cmdline.c_str());
   if(retvalue) {
     throw CircuitException("Error executing weightmc");
@@ -676,7 +661,6 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   std::stringstream ss(prev_line);
   std::string result;
   ss >> result >> result >> result >> result >> result;
-  
   std::istringstream iss(result);
   std::string val, exp;
   getline(iss, val, 'x');
@@ -701,7 +685,6 @@ double BooleanCircuit::independentEvaluationInternal(
     gate_t g, std::set<gate_t> &seen) const
 {
   double result=1.;
-
   switch(getGateType(g)) {
     case BooleanGate::AND:
       for(const auto &c: getWires(g)) {
@@ -811,7 +794,6 @@ void BooleanCircuit::rewriteMultivaluedGatesRec(
       (cumulated_probs[end] - cumulated_probs[start]));
   auto not_g = setGate(BooleanGate::NOT);
   getWires(not_g).push_back(g);
-
   prefix.push_back(g);
   rewriteMultivaluedGatesRec(muls, cumulated_probs, start, mid, prefix);
   prefix.pop_back();
@@ -824,7 +806,6 @@ static constexpr bool almost_equals(double a, double b)
 {
   double diff = a - b;
   constexpr double epsilon = std::numeric_limits<double>::epsilon() * 10;
-
   return (diff < epsilon && diff > -epsilon);
 }
 
