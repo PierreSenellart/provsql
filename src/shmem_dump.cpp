@@ -141,16 +141,6 @@ int provsql_serialize(const char* filename)
   }
 
   
-  if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
-  {
-    if (FreeFile(file))
-    {
-      file = NULL;
-      return 4;
-    }
-    return 2;
-  }
-
   if ( !fwrite( &(provsql_shared_state->nb_wires), sizeof(unsigned int), 1, file ))
   {
     if (FreeFile(file))
@@ -225,11 +215,6 @@ int provsql_deserialize(const char* filename)
     }
     
     
-  }
-
-  if(! fread(&provsql_shared_state->constants, sizeof(constants_t), 1, file))
-  {
-    return 2;
   }
 
   if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned int), 1, file ))
@@ -325,7 +310,8 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
 int circuit_to_noncnf_internal(Datum token){
   static int file_id = 0;
   Datum arguments[1]= {token};
-  Oid argtypes[1]= {provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
+  const constants_t constants = initialize_constants();
+  Oid argtypes[1]= {constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};
   int proc = 0;
   SPI_connect();
