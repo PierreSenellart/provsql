@@ -57,4 +57,6 @@ extern bool provsql_interrupted;
 extern bool provsql_where_provenance;
 extern int provsql_verbose;
 
+constants_t initialize_constants(void);
+
 #endif /* PROVSQL_UTILS_H */

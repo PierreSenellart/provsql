@@ -20,6 +20,7 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   Datum times_function = PG_GETARG_DATUM(4);
   Datum monus_function = PG_GETARG_DATUM(5);
   Datum delta_function = PG_GETARG_DATUM(6);
+  constants_t constants = initialize_constants();
 
   bool isnull;
   Datum result;
@@ -39,7 +40,7 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(6)) // No delta function provided
     nulls[7]='n';
 
-  argtypes[0]=provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN;
+  argtypes[0]=constants.OID_TYPE_PROVENANCE_TOKEN;
   argtypes[1]=REGCLASSOID;
   argtypes[2]=element_type;
   argtypes[3]=REGTYPEOID;

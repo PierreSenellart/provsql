@@ -730,10 +730,6 @@ CREATE OR REPLACE FUNCTION where_provenance(token provenance_token)
   RETURNS text AS
   'provsql','where_provenance' LANGUAGE C;
 
-CREATE OR REPLACE FUNCTION initialize_constants() RETURNS void AS
-  'provsql','initialize_constants' LANGUAGE C;
-
-
 CREATE OR REPLACE FUNCTION dump_data() RETURNS TEXT AS 
   'provsql', 'dump_data' LANGUAGE C;
 
@@ -836,7 +832,6 @@ CREATE OR REPLACE FUNCTION set_prob(
 -- RETURNS TEXT AS
 -- 'provsql', 'current_memory_usage' LANGUAGE C;
 
-SELECT initialize_constants();
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
 
