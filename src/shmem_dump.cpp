@@ -133,16 +133,6 @@ int provsql_serialize(const char* filename)
   }
 
   
-  if( !fwrite(&provsql_shared_state->constants, sizeof(constants_t), 1, file) )
-  {
-    if (FreeFile(file))
-    {
-      file = NULL;
-      return 4;
-    }
-    return 2;
-  }
-
   if ( !fwrite( &(provsql_shared_state->nb_wires), sizeof(unsigned int), 1, file ))
   {
     if (FreeFile(file))
@@ -217,11 +207,6 @@ int provsql_deserialize(const char* filename)
     }
     
     
-  }
-
-  if(! fread(&provsql_shared_state->constants, sizeof(constants_t), 1, file))
-  {
-    return 2;
   }
 
   if (! fread(&provsql_shared_state->nb_wires, sizeof(unsigned int), 1, file ))
@@ -309,4 +294,4 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
   }
 
   PG_RETURN_NULL();
-}
+
