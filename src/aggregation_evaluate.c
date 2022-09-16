@@ -23,6 +23,7 @@ Datum aggregation_evaluate(PG_FUNCTION_ARGS)
   Datum times_function = PG_GETARG_DATUM(7);
   Datum monus_function = PG_GETARG_DATUM(8);
   Datum delta_function = PG_GETARG_DATUM(9);
+  const constants_t constants = initialize_constants();
 
   bool isnull;
   Datum result;
@@ -44,7 +45,7 @@ Datum aggregation_evaluate(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(9)) // No delta function provided
     nulls[10]='n';
 
-  argtypes[0]=provsql_shared_state->constants.OID_TYPE_UUID;
+  argtypes[0]=constants.OID_TYPE_UUID;
   argtypes[1]=REGCLASSOID;
   argtypes[2]=REGPROCOID;
   argtypes[3]=REGPROCOID; 

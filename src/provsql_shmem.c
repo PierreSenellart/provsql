@@ -4,17 +4,11 @@
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
-#include "access/htup_details.h"
-#include "catalog/pg_enum.h"
-#include "catalog/pg_namespace.h"
-#include "catalog/pg_operator.h"
-#include "catalog/pg_type.h"
 #include "parser/parse_func.h"
 #include "storage/shmem.h"
 #include "storage/fd.h"
 #include "utils/array.h"
 #include "utils/hsearch.h"
-#include "utils/syscache.h"
 #include "utils/uuid.h"
 
 #include "unistd.h"
@@ -187,6 +181,8 @@ Datum create_gate(PG_FUNCTION_ARGS)
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
 
   if(!found) {
+    constants_t constants=initialize_constants();
+
     if(nb_children && provsql_shared_state->nb_wires + nb_children > provsql_max_nb_gates * provsql_avg_nb_wires) {
       LWLockRelease(provsql_shared_state->lock);
       elog(ERROR, "Too many wires in in-memory circuit");
@@ -194,7 +190,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
 
     entry->type = -1;
     for(int i=0; i<nb_gate_types; ++i) {
-      if(provsql_shared_state->constants.GATE_TYPE_TO_OID[i]==type) {
+      if(constants.GATE_TYPE_TO_OID[i]==type) {
         entry->type = i;
         break;
       }
@@ -325,8 +321,10 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
 
   if(!found)
     PG_RETURN_NULL();
-  else
-    PG_RETURN_INT32(provsql_shared_state->constants.GATE_TYPE_TO_OID[result]);
+  else {
+    constants_t constants=initialize_constants();
+    PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[result]);
+  }
 }
 
 PG_FUNCTION_INFO_V1(get_children);
@@ -345,13 +343,14 @@ Datum get_children(PG_FUNCTION_ARGS)
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
   if(found) {
     Datum *children_ptr = palloc(entry->nb_children * sizeof(Datum));
+    constants_t constants=initialize_constants();
     for(int i=0;i<entry->nb_children;++i) {
       children_ptr[i] = UUIDPGetDatum(&provsql_shared_state->wires[entry->children_idx + i]);
     }
     result = construct_array(
         children_ptr,
         entry->nb_children,
-        provsql_shared_state->constants.OID_TYPE_UUID,
+        constants.OID_TYPE_UUID,
         16,
         false,
         'c');
@@ -432,205 +431,4 @@ Datum get_infos(PG_FUNCTION_ARGS)
 
     PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
   }
-}
-
-static Oid get_func_oid(char *s)
-{
-  FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make1(makeString(s)),
-      -1,
-      NIL,
-      false,
-      false,
-#if PG_VERSION_NUM >= 140000
-      false,
-#endif      
-      false);
-  if(fcl)
-    return fcl->oid;    
-  else
-    return 0;
-}
-
-static Oid get_provsql_func_oid(char *s)
-{
-  FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make2(makeString("provsql"),makeString(s)),
-      -1,
-      NIL,
-      false,
-      false,
-#if PG_VERSION_NUM >= 140000
-      false,
-#endif      
-      false);
-  if(fcl)
-    return fcl->oid;    
-  else
-    return 0;
-}
-
-// Copied over from pg_operator.c as defined static there, with
-// various modifications
-static void OperatorGet(
-    const char *operatorName,
-    Oid operatorNamespace,
-    Oid leftObjectId,
-    Oid rightObjectId,
-    Oid *operatorObjectId,
-    Oid *functionObjectId)
-{
-  HeapTuple tup;
-  bool defined;
-
-  tup = SearchSysCache4(OPERNAMENSP,
-      PointerGetDatum(operatorName),
-      ObjectIdGetDatum(leftObjectId),
-      ObjectIdGetDatum(rightObjectId),
-      ObjectIdGetDatum(operatorNamespace));
-  if (HeapTupleIsValid(tup))
-  {
-    Form_pg_operator oprform = (Form_pg_operator) GETSTRUCT(tup);
-#if PG_VERSION_NUM >= 120000
-    *operatorObjectId = oprform->oid;
-#else
-    *operatorObjectId = HeapTupleGetOid(tup);
-#endif
-    *functionObjectId = oprform->oprcode;
-    defined = RegProcedureIsValid(oprform->oprcode);
-    ReleaseSysCache(tup);
-  }
-  else
-  {
-    defined = false;
-  }
-
-  if(!defined) {
-    *operatorObjectId = 0;
-    *functionObjectId = 0;
-  }
-}
-
-static Oid get_enum_oid(Oid enumtypoid, const char *label)
-{
-  HeapTuple   tup;
-  Oid         ret;
-  
-  tup = SearchSysCache2(ENUMTYPOIDNAME,
-                        ObjectIdGetDatum(enumtypoid),
-                        CStringGetDatum(label));
-  Assert(HeapTupleIsValid(tup));
-  
-#if PG_VERSION_NUM >= 120000
-  ret = ((Form_pg_enum) GETSTRUCT(tup))->oid;
-#else
-  ret = HeapTupleGetOid(tup);
-#endif
-  
-  ReleaseSysCache(tup);
-  
-  return ret;
-}
-
-PG_FUNCTION_INFO_V1(initialize_constants);
-Datum initialize_constants(PG_FUNCTION_ARGS)
-{
-  #define CheckOid(o) if(provsql_shared_state->constants.o==InvalidOid) \
-    elog(ERROR, "Could not initialize provsql constants");
-
-  provsql_shared_state->constants.OID_SCHEMA_PROVSQL = get_namespace_oid("provsql", true);
-  CheckOid(OID_SCHEMA_PROVSQL);
-
-  provsql_shared_state->constants.OID_TYPE_GATE_TYPE = GetSysCacheOid2(
-      TYPENAMENSP,
-#if PG_VERSION_NUM >= 120000
-      Anum_pg_type_oid,
-#endif
-      CStringGetDatum("provenance_gate"),
-      ObjectIdGetDatum(provsql_shared_state->constants.OID_SCHEMA_PROVSQL)
-  );
-  CheckOid(OID_TYPE_GATE_TYPE);
-  
-  provsql_shared_state->constants.OID_TYPE_AGG_TOKEN = GetSysCacheOid2(
-      TYPENAMENSP,
-#if PG_VERSION_NUM >= 120000
-      Anum_pg_type_oid,
-#endif
-      CStringGetDatum("agg_token"),
-      ObjectIdGetDatum(provsql_shared_state->constants.OID_SCHEMA_PROVSQL)
-  );
-  CheckOid(OID_TYPE_AGG_TOKEN);
-
-  provsql_shared_state->constants.OID_TYPE_UUID = TypenameGetTypid("uuid");
-  CheckOid(OID_TYPE_UUID);
-
-  provsql_shared_state->constants.OID_TYPE_UUID_ARRAY = TypenameGetTypid("_uuid");
-  CheckOid(OID_TYPE_UUID_ARRAY);
-  
-  provsql_shared_state->constants.OID_TYPE_INT = TypenameGetTypid("int4");
-  CheckOid(OID_TYPE_INT);
-
-  provsql_shared_state->constants.OID_TYPE_INT_ARRAY = TypenameGetTypid("_int4");
-  CheckOid(OID_TYPE_INT_ARRAY);
-  
-  provsql_shared_state->constants.OID_FUNCTION_ARRAY_AGG = get_func_oid("array_agg");
-  CheckOid(OID_FUNCTION_ARRAY_AGG);
-
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_PLUS = get_provsql_func_oid("provenance_plus");
-  CheckOid(OID_FUNCTION_PROVENANCE_PLUS);
-
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_TIMES = get_provsql_func_oid("provenance_times");
-  CheckOid(OID_FUNCTION_PROVENANCE_TIMES);
-
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_MONUS = get_provsql_func_oid("provenance_monus");
-  CheckOid(OID_FUNCTION_PROVENANCE_MONUS);
-  
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_PROJECT = get_provsql_func_oid("provenance_project");
-  CheckOid(OID_FUNCTION_PROVENANCE_PROJECT);
-
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_EQ = get_provsql_func_oid("provenance_eq");
-  CheckOid(OID_FUNCTION_PROVENANCE_EQ);
-
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE = get_provsql_func_oid("provenance");
-  CheckOid(OID_FUNCTION_PROVENANCE);
-  
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_DELTA = get_provsql_func_oid("provenance_delta");
-  CheckOid(OID_FUNCTION_PROVENANCE_DELTA);
-
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_AGGREGATE = get_provsql_func_oid("provenance_aggregate");
-  CheckOid(OID_FUNCTION_PROVENANCE_AGGREGATE);
-
-  provsql_shared_state->constants.OID_FUNCTION_PROVENANCE_SEMIMOD = get_provsql_func_oid("provenance_semimod");
-  CheckOid(OID_FUNCTION_PROVENANCE_SEMIMOD);
-
-  provsql_shared_state->constants.OID_FUNCTION_GATE_ZERO = get_provsql_func_oid("gate_zero");
-  CheckOid(OID_FUNCTION_GATE_ZERO);
-
-  OperatorGet("<>", PG_CATALOG_NAMESPACE, provsql_shared_state->constants.OID_TYPE_UUID, provsql_shared_state->constants.OID_TYPE_UUID, &provsql_shared_state->constants.OID_OPERATOR_NOT_EQUAL_UUID, &provsql_shared_state->constants.OID_FUNCTION_NOT_EQUAL_UUID);
-  CheckOid(OID_OPERATOR_NOT_EQUAL_UUID);
-  CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
-
-  #define GET_GATE_TYPE_OID(x) { \
-  provsql_shared_state->constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
-      provsql_shared_state->constants.OID_TYPE_GATE_TYPE, \
-      #x);\
-  if(provsql_shared_state->constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
-    elog(ERROR, "Could not initialize provsql gate type " #x); }
-
-  GET_GATE_TYPE_OID(input);
-  GET_GATE_TYPE_OID(plus);
-  GET_GATE_TYPE_OID(times);
-  GET_GATE_TYPE_OID(monus);
-  GET_GATE_TYPE_OID(project);
-  GET_GATE_TYPE_OID(zero);
-  GET_GATE_TYPE_OID(one);
-  GET_GATE_TYPE_OID(eq);
-  GET_GATE_TYPE_OID(agg);
-  GET_GATE_TYPE_OID(semimod);
-  GET_GATE_TYPE_OID(cmp);
-  GET_GATE_TYPE_OID(delta);
-  GET_GATE_TYPE_OID(value);
-  GET_GATE_TYPE_OID(mulinput);
-
-  PG_RETURN_VOID();
 }
