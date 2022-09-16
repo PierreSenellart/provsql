@@ -53,7 +53,8 @@ static string where_provenance_internal
   (Datum token)
 {
   Datum arguments[1]={token};
-  Oid argtypes[1]={provsql_shared_state->constants.OID_TYPE_PROVENANCE_TOKEN};
+  const constants_t constants = initialize_constants();
+  Oid argtypes[1]={constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};
   
   SPI_connect();

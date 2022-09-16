@@ -19,7 +19,6 @@ Size provsql_memsize(void);
 typedef struct provsqlSharedState
 {
   LWLock *lock; // protect access to the shared data
-  constants_t constants;
   unsigned nb_wires;
   pg_uuid_t wires[FLEXIBLE_ARRAY_MEMBER];
 } provsqlSharedState;
