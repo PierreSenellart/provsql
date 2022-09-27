@@ -23,7 +23,7 @@ Datum aggregation_evaluate(PG_FUNCTION_ARGS)
   Datum times_function = PG_GETARG_DATUM(7);
   Datum monus_function = PG_GETARG_DATUM(8);
   Datum delta_function = PG_GETARG_DATUM(9);
-  const constants_t constants = initialize_constants();
+  const constants_t constants = initialize_constants(true);
 
   bool isnull;
   Datum result;

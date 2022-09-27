@@ -181,7 +181,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
 
   if(!found) {
-    constants_t constants=initialize_constants();
+    constants_t constants=initialize_constants(true);
 
     if(nb_children && provsql_shared_state->nb_wires + nb_children > provsql_max_nb_gates * provsql_avg_nb_wires) {
       LWLockRelease(provsql_shared_state->lock);
@@ -322,7 +322,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
   if(!found)
     PG_RETURN_NULL();
   else {
-    constants_t constants=initialize_constants();
+    constants_t constants=initialize_constants(true);
     PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[result]);
   }
 }
@@ -343,7 +343,7 @@ Datum get_children(PG_FUNCTION_ARGS)
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
   if(found) {
     Datum *children_ptr = palloc(entry->nb_children * sizeof(Datum));
-    constants_t constants=initialize_constants();
+    constants_t constants=initialize_constants(true);
     for(int i=0;i<entry->nb_children;++i) {
       children_ptr[i] = UUIDPGetDatum(&provsql_shared_state->wires[entry->children_idx + i]);
     }

@@ -184,12 +184,16 @@ static Oid get_enum_oid(Oid enumtypoid, const char *label)
 }
 
 
-constants_t initialize_constants(void)
+constants_t initialize_constants(bool failure_if_not_possible)
 {
   constants_t constants;
+  constants.ok = false;
 
-  #define CheckOid(o) if(constants.o==InvalidOid) \
-    elog(ERROR, "Could not initialize provsql constants");
+  #define CheckOid(o) if(constants.o==InvalidOid) { \
+    if(failure_if_not_possible) \
+      elog(ERROR, "Could not initialize provsql constants"); \
+    else \
+      return constants; }
 
   constants.OID_SCHEMA_PROVSQL = get_namespace_oid("provsql", true);
   CheckOid(OID_SCHEMA_PROVSQL);
@@ -297,6 +301,8 @@ constants_t initialize_constants(void)
   GET_GATE_TYPE_OID(delta);
   GET_GATE_TYPE_OID(value);
   GET_GATE_TYPE_OID(mulinput);
+
+  constants.ok=true;
 
   return constants;
 }

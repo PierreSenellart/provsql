@@ -294,4 +294,4 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
   }
 
   PG_RETURN_NULL();
-
+}
