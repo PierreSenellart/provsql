@@ -49,6 +49,7 @@ typedef struct constants_t {
   Oid OID_FUNCTION_GATE_ZERO;
   Oid OID_OPERATOR_NOT_EQUAL_UUID;
   Oid OID_FUNCTION_NOT_EQUAL_UUID;
+  bool ok;
 } constants_t;
 
 Oid find_equality_operator(Oid ltypeId, Oid rtypeId);
@@ -57,6 +58,6 @@ extern bool provsql_interrupted;
 extern bool provsql_where_provenance;
 extern int provsql_verbose;
 
-constants_t initialize_constants(void);
+constants_t initialize_constants(bool failure_if_not_possible);
 
 #endif /* PROVSQL_UTILS_H */

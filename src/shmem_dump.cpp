@@ -310,7 +310,7 @@ Datum read_data_dump(PG_FUNCTION_ARGS){
 int circuit_to_noncnf_internal(Datum token){
   static int file_id = 0;
   Datum arguments[1]= {token};
-  const constants_t constants = initialize_constants();
+  const constants_t constants = initialize_constants(true);
   Oid argtypes[1]= {constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};
   int proc = 0;
@@ -374,7 +374,7 @@ int circuit_to_noncnf_internal(Datum token){
         type = SPI_getvalue(tuple,tupdesc,3);
       }
 
-      int32_t to_id = -1;
+//      int32_t to_id = -1;
       if (from !="")
       {
         auto it = mapOfUUID2.find(from);
