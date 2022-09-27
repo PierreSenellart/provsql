@@ -53,7 +53,7 @@ static string where_provenance_internal
   (Datum token)
 {
   Datum arguments[1]={token};
-  const constants_t constants = initialize_constants();
+  const constants_t constants = initialize_constants(true);
   Oid argtypes[1]={constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};
   

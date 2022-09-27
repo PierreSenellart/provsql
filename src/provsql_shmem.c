@@ -189,7 +189,7 @@ Datum create_gate_shmem(PG_FUNCTION_ARGS)
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
 
   if(!found) {
-    constants_t constants=initialize_constants();
+    constants_t constants=initialize_constants(true);
 
     entry->type = -1;
     for(int i=0; i<nb_gate_types; ++i) {
@@ -325,7 +325,7 @@ Datum get_gate_type_shmem(PG_FUNCTION_ARGS)
   if(!found)
     PG_RETURN_NULL();
   else {
-    constants_t constants=initialize_constants();
+    constants_t constants=initialize_constants(true);
     PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[result]);
   }
 }
@@ -346,7 +346,7 @@ Datum get_children_shmem(PG_FUNCTION_ARGS)
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
   if(found) {
     Datum *children_ptr = palloc(entry->nb_children * sizeof(Datum));
-    constants_t constants=initialize_constants();
+    constants_t constants=initialize_constants(true);
     for(int i=0;i<entry->nb_children;++i) {
       children_ptr[i] = UUIDPGetDatum(&provsql_shared_state->wires[entry->children_idx + i]);
     }
@@ -438,7 +438,7 @@ Datum get_infos(PG_FUNCTION_ARGS)
 
 PG_FUNCTION_INFO_V1(create_gate);
 Datum create_gate(PG_FUNCTION_ARGS){
-  constants_t constants = initialize_constants();
+  constants_t constants = initialize_constants(true);
 
   /*
   HeapTuple entry;
@@ -496,7 +496,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS){
   HeapTuple entry;
   bool isnull;
   Datum result = -1;
-  constants_t constants = initialize_constants();
+  constants_t constants = initialize_constants(true);
 
   Datum arguments[1]={datumCopy(PG_GETARG_DATUM(0),false,16)};
   Oid argtypes[1]={constants.OID_TYPE_PROVENANCE_TOKEN};
@@ -537,7 +537,7 @@ PG_FUNCTION_INFO_V1(set_prob);
  // HeapTuple entry;
 //  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
  // double prob = PG_GETARG_FLOAT8(1);
-  constants_t constants = initialize_constants();
+  constants_t constants = initialize_constants(true);
 
   Datum arguments[2]={datumCopy(PG_GETARG_DATUM(0), false, 16), PG_GETARG_DATUM(1)};
   Oid argtypes[2]={constants.OID_TYPE_PROVENANCE_TOKEN, constants.OID_TYPE_FLOAT };
@@ -576,7 +576,7 @@ PG_FUNCTION_INFO_V1(set_prob);
 PG_FUNCTION_INFO_V1(get_prob);
   Datum get_prob(PG_FUNCTION_ARGS){
   HeapTuple entry;
-  constants_t constants = initialize_constants();
+  constants_t constants = initialize_constants(true);
   
   //pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   bool isnull; 
@@ -622,7 +622,7 @@ PG_FUNCTION_INFO_V1(get_children);
   bool isnull;
   HeapTuple entry;
   Datum result;
-  constants_t constants = initialize_constants();
+  constants_t constants = initialize_constants(true);
   Datum arguments[1]={datumCopy(PG_GETARG_DATUM(0), false, 16)};
   Oid argtypes[1]={constants.OID_TYPE_PROVENANCE_TOKEN};
   char nulls[1] = {' '};

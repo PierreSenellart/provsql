@@ -20,7 +20,7 @@ Datum provenance_evaluate(PG_FUNCTION_ARGS)
   Datum times_function = PG_GETARG_DATUM(4);
   Datum monus_function = PG_GETARG_DATUM(5);
   Datum delta_function = PG_GETARG_DATUM(6);
-  constants_t constants = initialize_constants();
+  constants_t constants = initialize_constants(true);
 
   bool isnull;
   Datum result;
