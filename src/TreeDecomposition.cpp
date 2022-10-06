@@ -307,16 +307,21 @@ TreeDecomposition::TreeDecomposition(const BooleanCircuit &bc)
   if(graph.get_nodes().size()>MAX_TREEWIDTH)
     throw TreeDecompositionException();
 
-  Bag remaining_bag; 
-  for(auto n: graph.get_nodes()) {
-    remaining_bag.insert(gate_t{n});
+  if(graph.number_nodes()>0) {
+    Bag remaining_bag; 
+    for(auto n: graph.get_nodes()) {
+      remaining_bag.insert(gate_t{n});
+    }
+    bags.push_back(remaining_bag);
   }
-  bags.push_back(remaining_bag);
 
   parent.resize(bags.size());
   children.resize(bags.size());
 
-  treewidth = std::max<unsigned>(max_width,graph.number_nodes()-1);
+  if(graph.number_nodes()==0)
+    treewidth=max_width;
+  else
+    treewidth = std::max<unsigned>(max_width,graph.number_nodes()-1);
     
   for(bag_t i{0};i<bags.size()-1;++i){
     bag_t min_bag{bags.size()-1};
