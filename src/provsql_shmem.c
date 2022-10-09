@@ -4,6 +4,7 @@
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "access/htup_details.h"
 #include "parser/parse_func.h"
 #include "storage/shmem.h"
 #include "storage/fd.h"
