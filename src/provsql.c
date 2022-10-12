@@ -294,8 +294,8 @@ typedef enum
 /* An OpExpr leads directly to an eq gate.
  * toExpr is the former expression for the provenance.
  * The function returns the new expression with toExpr
- * nested inside the call of the eq function. 
- * 
+ * nested inside the call of the eq function.
+ *
  * Note: this function can also be used to handle an OpExpr
  * coming from a WHERE expression. So we need to perform
  * more tests because not all OpExpr are used to express
@@ -377,9 +377,9 @@ static Expr *add_eq_from_OpExpr_to_Expr(
         sizeof(int16),
         second_arg,
         false,
-        true);     
+        true);
 
-    fc->args=list_make3(toExpr, c1, c2); 
+    fc->args=list_make3(toExpr, c1, c2);
     return (Expr *)fc;
   }
   return toExpr;
@@ -387,8 +387,8 @@ static Expr *add_eq_from_OpExpr_to_Expr(
 
 /* This function handles a Quals node.
  *
- * Two cases are possible, one coming from JoinExpr and the other 
- * directly from FromExpr. 
+ * Two cases are possible, one coming from JoinExpr and the other
+ * directly from FromExpr.
  * */
 static Expr *add_eq_from_Quals_to_Expr(
     const constants_t *constants,
@@ -413,7 +413,7 @@ static Expr *add_eq_from_Quals_to_Expr(
     {
       ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on clause are not supported by provsql")));
     } else {
-      ListCell *lc2; 
+      ListCell *lc2;
       foreach(lc2,be->args) {
         if(IsA(lfirst(lc2),OpExpr)) {
           oe = (OpExpr *) lfirst(lc2);
@@ -483,7 +483,7 @@ static Expr *make_aggregation_expression(
     expr_s = makeNode(FuncExpr);
     expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
     expr_s->funcresulttype = constants->OID_TYPE_UUID;
-    
+
     //check the particular case of count
     if(agg_ref->aggfnoid==2803||agg_ref->aggfnoid==2147) //count(*) or count(arg)
     {
@@ -500,9 +500,9 @@ static Expr *make_aggregation_expression(
     {
       expr_s->args = list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
     }
-    
+
     expr_s->location=-1;
-    
+
     //aggregating all semirings in an array
     te_inner->resno = 1;
     te_inner->expr = (Expr *)expr_s;
@@ -549,7 +549,7 @@ static Expr *make_aggregation_expression(
 static Expr *make_provenance_expression(
     const constants_t *constants,
     Query *q,
-    List *prov_atts, 
+    List *prov_atts,
     bool aggregation,
     bool group_by_rewrite,
     semiring_operation op,
@@ -589,7 +589,7 @@ static Expr *make_provenance_expression(
       }
       expr->funcresulttype = constants->OID_TYPE_UUID;
       expr->location = -1;
-      
+
       result = (Expr*) expr;
     }
 
@@ -616,7 +616,7 @@ static Expr *make_provenance_expression(
 #endif /* PG_VERSION_NUM >= 90600 */
 
       plus->funcid=constants->OID_FUNCTION_PROVENANCE_PLUS;
-      plus->args=list_make1(agg);      
+      plus->args=list_make1(agg);
       plus->funcresulttype=constants->OID_TYPE_UUID;
       plus->location=-1;
 
@@ -636,7 +636,7 @@ static Expr *make_provenance_expression(
     }
   }
 
-  /* Part to handle eq gates used for where-provenance. 
+  /* Part to handle eq gates used for where-provenance.
    * Placed before projection gates because they need
    * to be deeper in the provenance tree. */
   if (provsql_where_provenance && q->jointree)
@@ -645,8 +645,8 @@ static Expr *make_provenance_expression(
     foreach(lc, q->jointree->fromlist) {
       if(IsA(lfirst(lc), JoinExpr)) {
         JoinExpr *je = (JoinExpr *) lfirst(lc);
-	/* Study equalities coming from From clause */
-	result = add_eq_from_Quals_to_Expr(constants, je->quals, result, columns);
+        /* Study equalities coming from From clause */
+        result = add_eq_from_Quals_to_Expr(constants, je->quals, result, columns);
       }
     }
     /* Study equalities coming from WHERE clause */
@@ -663,16 +663,16 @@ static Expr *make_provenance_expression(
     fe->funcvariadic=true;
     fe->funcresulttype=constants->OID_TYPE_UUID;
     fe->location=-1;
-      
+
     array->array_typeid=constants->OID_TYPE_INT_ARRAY;
     array->element_typeid=constants->OID_TYPE_INT;
     array->elements=NIL;
     array->location=-1;
-  
+
     foreach(lc_v, q->targetList) {
-      TargetEntry *te_v = (TargetEntry *) lfirst(lc_v); 
+      TargetEntry *te_v = (TargetEntry *) lfirst(lc_v);
       if(IsA(te_v->expr, Var)) {
-        Var *vte_v = (Var *) te_v->expr; 
+        Var *vte_v = (Var *) te_v->expr;
         RangeTblEntry *rte_v = (RangeTblEntry *) lfirst(list_nth_cell(q->rtable, vte_v->varno-1));
         int value_v;
         /* Check if this targetEntry references a column in a RTE of type RTE_JOIN */
@@ -764,13 +764,13 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
   //correct var indexes and group by references
   foreach(lc_v, q->targetList)
   {
-    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v); 
+    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
     Var *var = makeNode(Var);
     var->varno = 1;
     var->varattno = te_v->resno;
     if (IsA(te_v->expr, Aggref))
     {
-      Aggref *ar_v = (Aggref *)te_v->expr; 
+      Aggref *ar_v = (Aggref *)te_v->expr;
       TargetEntry *te_new = makeNode(TargetEntry);
 #if PG_VERSION_NUM >= 90600
     /* aggargtypes was added in version 9.6 of PostgreSQL */
@@ -801,7 +801,7 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
       te_v->ressortgroupref = groupRef;
       sgc->nulls_first = false;
       get_sort_group_operators(exprType((Node *)te_v->expr), true, true, false, &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
-      q->groupClause = lappend(q->groupClause,sgc); 
+      q->groupClause = lappend(q->groupClause,sgc);
       groupRef++;
     }
   }
@@ -843,7 +843,7 @@ static Query *check_for_agg_distinct(Query *q){
       }
       else {
         lst_v = lappend(lst_v, ar_v);
-      }      
+      }
     } else { //keep the current TE
       lst_v = lappend(lst_v, te_v);
     }
@@ -857,7 +857,7 @@ typedef struct aggregation_mutator_context
 {
   List *prov_atts;
   semiring_operation op;
-  const constants_t* constants; 
+  const constants_t* constants;
 } aggregation_mutator_context;
 
 static Node *aggregation_mutator(Node *node, aggregation_mutator_context *context)
@@ -874,7 +874,7 @@ static Node *aggregation_mutator(Node *node, aggregation_mutator_context *contex
         context->prov_atts,
         context->op);
   }
-    
+
   return expression_tree_mutator(node, aggregation_mutator, (void *)context);
 }
 
@@ -1342,12 +1342,12 @@ static Query *process_query(
 
   if(provsql_verbose>=50)
     elog_node_display(NOTICE, "Before ProvSQL query rewriting", q, true);
-    
+
   if(q->rtable == NULL) {
     // No FROM clause, we can skip this query
     return NULL;
   }
-  
+
   columns=(int **) palloc(q->rtable->length*sizeof(int*));
 
 //ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
@@ -1364,8 +1364,8 @@ static Query *process_query(
       return process_query(constants, q);
     }
   }
-  
-  if (q->hasAggs) {  
+
+  if (q->hasAggs) {
     Query *subq = check_for_agg_distinct(q);
     if(subq) // agg distinct detected, create a subquery
     {
@@ -1550,7 +1550,7 @@ static PlannedStmt *provsql_planner(
       Query *new_query = process_query(&constants, q);
       if(new_query != NULL)
         q = new_query;
-    
+
 //        end = clock();
 //        time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
 //        ereport(NOTICE, (errmsg("planner time spent=%f",time_spent)));
@@ -1645,7 +1645,7 @@ void _PG_init(void)
 
   // Request shared resources
   RequestAddinShmemSpace(provsql_memsize());
-  
+
 #if PG_VERSION_NUM >= 90600
   /* Named lock tranches were added in version 9.6 of PostgreSQL */
   RequestNamedLWLockTranche("provsql", 1);
