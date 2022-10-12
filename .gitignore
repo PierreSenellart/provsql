@@ -8,3 +8,4 @@ test/schedule
 compile_commands.json
 tdkc
 test.log
+.ccls-cache/
