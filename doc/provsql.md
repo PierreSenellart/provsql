@@ -17,6 +17,7 @@ provenance aggregation, where-provenance, and probability computation from
 the provenance, through a variety of methods.
 
 The following SQL features are currently supported.
+
 * Regular SELECT-FROM-WHERE queries (aka conjunctive queries with
   multiset semantics)
 * JOIN queries (regular joins only; outer, semijoins, and antijoins
@@ -34,13 +35,16 @@ As an alternative to a ProvSQL installation (see below), you can try
 a demonstration version of ProvSQL (full-featured, except for `minic2d`
 support) as a Docker container. To deploy it, once Docker CE is
 installed, simply run:
+
 ```
 docker run inriavalda/provsql
 ```
+
 By following the instructions, you will be able to connect to the
 PostgreSQL server within the container using a PostgreSQL client,
 and to use a Web interface for simple visualization of where-provenance.
 The Docker container can also be built locally, using:
+
 ```
 make docker-build
 ```
@@ -57,7 +61,8 @@ make docker-build
    from the virtual `build-essential` package), and the headers for your
    PostgreSQL version (as can be obtained for instance from the
    `postgresql-server-dev-xx` package on Debian-based systems, or from
-   the `postgresql` package on the Homebrew package manager for Mac OS X). The C++ compiler should support C++ 2017.
+   the `postgresql` package on the Homebrew package manager for Mac OS X).
+   The C++ compiler should support C++ 2017.
 
 3. The `uuid-ossp` extension for PostgreSQL (on Debian-based
    systems, it is found in the `postgresql-contrib-9.x` package for
@@ -69,16 +74,11 @@ make docker-build
 
 5. Optionally, for probability computation through knowledge compilation,
    any or all of the following software:
-
-   * `c2d`, from http://reasoning.cs.ucla.edu/c2d/download.php
-
-   * `d4`, from https://github.com/crillab/d4
-
-   * `dsharp`, from https://github.com/QuMuLab/dsharp
-
-   * `minic2d`, from http://reasoning.cs.ucla.edu/minic2d/
-
-   * `weightmc`, from https://bitbucket.org/kuldeepmeel/weightmc/src/master/
+  * `c2d`, from <http://reasoning.cs.ucla.edu/c2d/download.php>
+  * `d4`, from <https://github.com/crillab/d4>
+  * `dsharp`, from <https://github.com/QuMuLab/dsharp>
+  * `minic2d`, from <http://reasoning.cs.ucla.edu/minic2d/>
+  * `weightmc`, from <https://bitbucket.org/kuldeepmeel/weightmc/src/master/>
 
    To be used, an executable with the name of this software must be
    available in the PATH of the PostgreSQL server user (e.g., in
@@ -102,12 +102,14 @@ make docker-build
    (run as a user with rights to write to the PostgreSQL installation
    directories).
 
-3. Add the line 
+3. Add the line
+
    ```
    shared_preload_libraries = 'provsql'
    ```
+
    to the `postgresql.conf` configuration file (on Linux systems, it should
-   be in `/etc/postgresql/VERSION/main/postgresql.conf`) and restart the 
+   be in `/etc/postgresql/VERSION/main/postgresql.conf`) and restart the
    PostgreSQL server (e.g., with `service postgresql restart` on
    systemd-based distributions). This is required because the extension
    includes *hooks*.
@@ -123,10 +125,10 @@ If you do not want to run this as the default administrator user, you can
 make yourself a PostgreSQL administrator with `ALTER USER your_login
 WITH SUPERUSER`. This assumes that `your_login` is a PostgreSQL user:
 on Debian-based Linux distributions, you can ensure this by running the
-command `createuser your_login` as the `postgres` user. 
+command `createuser your_login` as the `postgres` user.
 
 If your installation of PostgreSQL does not listen on the default (5432)
-port, you can add ` --port=xxxx` to the `EXTRA_REGRESS_OPTS` line of
+port, you can add `--port=xxxx` to the `EXTRA_REGRESS_OPTS` line of
 `Makefile.internal`, where `xxxx` is the port number.
 
 Note that the tests that depend on external software (`c2d`, `d4`,
@@ -152,12 +154,12 @@ See [security.sql](test/sql/security.sql) and
 
 See the other examples in [test/sql](test/sql) for other use cases.
 
-A demonstration of an early version of the ProvSQL system is available as a video, on
-https://youtu.be/iqzSNfGHbEE?vq=hd1080
+A demonstration of an early version of the ProvSQL system is available as
+a video, on <https://youtu.be/iqzSNfGHbEE?vq=hd1080>
 The SQL commands used in this demonstration can be found in the [doc/demo/](doc/demo/)
 directory. An article describing this demonstration, presented at the VLDB 2018
 conference, is available at
-http://pierre.senellart.com/publications/senellart2018provsql.pdf
+<http://pierre.senellart.com/publications/senellart2018provsql.pdf>
 
 Finally, a ProvSQL tutorial is provided, in the form of a crime mystery.
 It can be found in the [doc/tutorial/](doc/tutorial/) directory.
@@ -174,7 +176,7 @@ ProvSQL is provided as open-source software under the MIT License. See [LICENSE]
 
 ## Contact
 
-https://github.com/PierreSenellart/provsql
+<https://github.com/PierreSenellart/provsql>
 
 Pierre Senellart <pierre@senellart.com>
 
