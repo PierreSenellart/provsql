@@ -212,6 +212,12 @@ static Datum probability_evaluate_internal
   provsql_interrupted = false;
   signal (SIGINT, prev_sigint_handler);
   
+  // Avoid rounding errors that make probability outside of [0,1]
+  if(result>1.)
+    result=1.;
+  else if(result<0.)
+    result=0.;
+
   PG_RETURN_FLOAT8(result);
 }
 
