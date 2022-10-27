@@ -224,7 +224,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
 std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   std::chrono::_V2::system_clock::time_point tseytin_start;
   
-  if (provsql_verbose >= 80)
+  if (provsql_verbose >= 0)
     tseytin_start = std::chrono::high_resolution_clock::now();
 
   std::vector<std::vector<int>> clauses;
@@ -300,11 +300,11 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 
   ofs.close();
 
-  if (provsql_verbose >=80)
+  if (provsql_verbose >=0)
   {
     auto tseytin_stop = std::chrono::high_resolution_clock::now();
     double tseytin_duration = std::chrono::duration<double>(tseytin_stop - tseytin_start).count();
-    elog(NOTICE, "\nexecution time of the tseytin transformation : %f ms",tseytin_duration );
+    elog(NOTICE, "\nexecution time of the tseytin transformation : %f s",tseytin_duration );
   }
 
   return filename;
@@ -314,6 +314,7 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 
 
 double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
+  const int timers_verbose_level = 0;
   std::chrono::_V2::system_clock::time_point compilation_start;
   std::chrono::_V2::system_clock::time_point d4_start;
   std::chrono::_V2::system_clock::time_point varLitWeight_done;
@@ -322,13 +323,13 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::chrono::_V2::system_clock::time_point dpllstylemethod_created;
   std::chrono::_V2::system_clock::time_point counting_done;
 
-  if (provsql_verbose >= 80)  
+  if (provsql_verbose >= timers_verbose_level)  
     compilation_start = std::chrono::high_resolution_clock::now();
 
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
 
-  if(provsql_verbose>=20) {
+  if(provsql_verbose>=timers_verbose_level) {
     elog(NOTICE, "Tseytin circuit in %s", filename.c_str());
   }
 
@@ -336,7 +337,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
 
-    if (provsql_verbose >= 80)
+    if (provsql_verbose >= timers_verbose_level)
       d4_start = std::chrono::high_resolution_clock::now();      
     
     namespace po = boost::program_options;
@@ -378,11 +379,11 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       weightVar[i+1] = 1;
     }
     // ICI var/lit weight set
-    if (provsql_verbose >= 80)
+    if (provsql_verbose >= timers_verbose_level)
     {
       varLitWeight_done = std::chrono::high_resolution_clock::now();
       double varLitWeight_duration = std::chrono::duration<double>(varLitWeight_done - compilation_start).count();
-      elog(NOTICE, "time used to set lit and var weight : %f ms",varLitWeight_duration );
+      elog(NOTICE, "time used to set lit and var weight : %f s",varLitWeight_duration );
     }
 
 
@@ -407,11 +408,11 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     }
 
     // ICI Clauses set
-    if (provsql_verbose >= 80)
+    if (provsql_verbose >= timers_verbose_level)
     {
       clauses_done = std::chrono::high_resolution_clock::now();
       double clauses_duration = std::chrono::duration<double>(clauses_done - varLitWeight_done).count();
-      elog(NOTICE, "time used to set clauses : %f ms",clauses_duration );
+      elog(NOTICE, "time used to set clauses : %f s",clauses_duration );
     }
 
 
@@ -425,11 +426,11 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
     // ICI preprocessor work done
     //TODO set on provsql verbose
-    if (provsql_verbose >= 80)
+    if (provsql_verbose >= timers_verbose_level)
     {
       preproc_done = std::chrono::high_resolution_clock::now();
       double preproc_duration = std::chrono::duration<double>(preproc_done - clauses_done).count();
-      elog(NOTICE, "time used by lastBreath preprocessor : %f ms",preproc_duration );
+      elog(NOTICE, "time used by lastBreath preprocessor : %f s",preproc_duration );
     }
 
 
@@ -440,11 +441,11 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
         vm, meth, true, preprocProblem, std::cerr, lastBreath);
 
     //ICI DpllStyleMethod Created
-    if (provsql_verbose >= 80)
+    if (provsql_verbose >= timers_verbose_level)
     {
       dpllstylemethod_created = std::chrono::high_resolution_clock::now();
       double dpllstylemethod_duration = std::chrono::duration<double>(dpllstylemethod_created - preproc_done).count();
-      elog(NOTICE, "time used to create DpllStyleMethod : %f ms",dpllstylemethod_duration );
+      elog(NOTICE, "time used to create DpllStyleMethod : %f s",dpllstylemethod_duration );
     }
 
 
@@ -456,17 +457,17 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     // Delete takes a long time but is necessary to avoid memory leaks for now 
     delete method;
     //ICI Counting done
-    if (provsql_verbose >= 80)
+    if (provsql_verbose >= timers_verbose_level)
     {
       counting_done = std::chrono::high_resolution_clock::now();
       double counting_duration = std::chrono::duration<double>(counting_done - dpllstylemethod_created ).count();
-      elog(NOTICE, "time used to set setOfVar and count : %f ms",counting_duration );
+      elog(NOTICE, "time used to set setOfVar and count : %f s",counting_duration );
 
       double total_d4_duration = std::chrono::duration<double>(counting_done - d4_start).count();
-      elog(NOTICE, "total time used by d4 : %f ms ", total_d4_duration);
+      elog(NOTICE, "total time used by d4 : %f s ", total_d4_duration);
 
       double total_duration = std::chrono::duration<double>(counting_done - compilation_start).count();
-      elog(NOTICE, "total time used by the compilation method : %f ms \n", total_duration);
+      elog(NOTICE, "total time used by the compilation method : %f s \n", total_duration);
     }
     return v.convert_to<double>();
     cmdline+= "-i "+filename+" -m ddnnf-compiler --dump-ddnnf "+outfilename;

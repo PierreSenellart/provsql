@@ -178,6 +178,7 @@ static Datum probability_evaluate_internal
       } else if(method=="tree-decomposition") {
         try {
           TreeDecomposition td(c);
+          elog(NOTICE,"Treewidth : %u",td.getTreewidth());
           auto dnnf{
             dDNNFTreeDecompositionBuilder{
               c,
