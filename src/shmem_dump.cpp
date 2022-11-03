@@ -379,10 +379,15 @@ int circuit_to_noncnf_internal(Datum token){
           mapOfUUID[current_pg_uuid_id]=gates[k];
           mapOfUUID2[gates[k]]=current_pg_uuid_id;
 
-          compactm[current_pg_uuid_id]=std::make_tuple(type,std::vector<int>());
+          if(k==0)
+            compactm[current_pg_uuid_id]=std::make_tuple(type,std::vector<int>());
+          else
+            compactm[current_pg_uuid_id]=std::make_tuple("",std::vector<int>());
           current_pg_uuid_id++;
         } else {
           gates_var[k] = it->second;
+          if(k==0)
+            std::get<0>(compactm[it->second])=type;
         }
       }
 
