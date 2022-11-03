@@ -374,18 +374,21 @@ int circuit_to_noncnf_internal(Datum token){
         type = SPI_getvalue(tuple,tupdesc,3);
       }
 
-//      int32_t to_id = -1;
-      if (from !="")
+      if (from !="") //If from is not in the map, create an entry and remember its mapping value inside from_var
       {
         auto it = mapOfUUID2.find(from);
         if (it == mapOfUUID2.end())
         {
           mapOfUUID.insert(std::pair(current_pg_uuid_id, from));
-          mapOfUUID2.insert( std::pair(from,current_pg_uuid_id++));    
+          mapOfUUID2.insert( std::pair(from,current_pg_uuid_id));    
           std::vector<int> compactv;
           // TODO: shouldn't be numbers
-          from_var = current_pg_uuid_id-1;
-          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(type,compactv) ));
+          from_var = current_pg_uuid_id;
+          compactm.insert(std::pair(current_pg_uuid_id, std::make_tuple(type,compactv) ));
+          current_pg_uuid_id++;
+        }
+        else {
+          from_var = mapOfUUID2.find(from)->second;
         }
       }
 
@@ -394,19 +397,21 @@ int circuit_to_noncnf_internal(Datum token){
         auto it = mapOfUUID2.find(to);
         if (it == mapOfUUID2.end()){
           mapOfUUID.insert(std::pair(current_pg_uuid_id,to));
-          mapOfUUID2.insert( std::pair(to, current_pg_uuid_id++));     
+          mapOfUUID2.insert( std::pair(to, current_pg_uuid_id));     
           std::vector<int> compactv;
-          to_var = current_pg_uuid_id-1;
-          compactm.insert(std::pair(current_pg_uuid_id-1, std::make_tuple(type, compactv) ));
+          to_var = current_pg_uuid_id;
+          compactm.insert(std::pair(current_pg_uuid_id, std::make_tuple(type, compactv) ));
+          current_pg_uuid_id++;
 
+        }
+        else {
+          to_var = mapOfUUID2.find(to)->second;
         }
       } 
       if (from_var != -1)
       {
         if (to_var == -1)
-        {
           to_var = mapOfUUID2.find(to)->second;
-        }
         std::get<1>(compactm.find(to_var)->second).push_back(from_var);
       } 
 
@@ -428,7 +433,7 @@ int circuit_to_noncnf_internal(Datum token){
       {
         if (s == "plus")
         {
-          noncnf+= "4 -1 ";
+          noncnf+= "6 -1 ";
 
         }
         else if (s == "monus") {
@@ -439,7 +444,7 @@ int circuit_to_noncnf_internal(Datum token){
           }
         }
         else if (s == "times"){
-          noncnf+="6 -1 ";
+          noncnf+="4 -1 ";
           for (auto a : std::get<1>(iter->second) )
           {
             noncnf+= a + " ";
@@ -476,6 +481,11 @@ int circuit_to_noncnf_internal(Datum token){
           }
         }
       }
+      else{
+        elog(NOTICE,"weird gate found : %s", s.c_str());
+      }
+
+
     }
     
     elog(NOTICE, "noncnf :\n%s",noncnf.c_str());
