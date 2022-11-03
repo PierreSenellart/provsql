@@ -386,7 +386,8 @@ int circuit_to_noncnf_internal(Datum token){
         }
       }
 
-      std::get<1>(compactm.find(gates_var[0])->second).push_back(gates_var[1]);
+      if(gates_var[1] != -1)
+        std::get<1>(compactm.find(gates_var[0])->second).push_back(gates_var[1]);
     }
 
     of << "p noncnf ";
