@@ -19,6 +19,9 @@
 #define PROVSQL_DUMP_FILE "provsql.tmp"
 
 shmem_startup_hook_type prev_shmem_startup = NULL;
+#if (PG_VERSION_NUM >= 150000)
+shmem_request_hook_type prev_shmem_request = NULL;
+#endif
 int provsql_init_nb_gates;
 int provsql_max_nb_gates;
 int provsql_avg_nb_wires;
@@ -28,6 +31,12 @@ static void provsql_shmem_shutdown(int code, Datum arg);
 provsqlSharedState *provsql_shared_state = NULL;
 HTAB *provsql_hash = NULL;
 provsqlHashEntry *entry;
+
+static Size provsql_struct_size(void)
+{
+  return add_size(offsetof(provsqlSharedState, wires),
+                  mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires));
+}
 
 void provsql_shmem_startup(void)
 {
@@ -45,10 +54,9 @@ void provsql_shmem_startup(void)
   LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
   provsql_shared_state = ShmemInitStruct(
-      "provsql",
-      add_size(offsetof(provsqlSharedState, wires),
-      mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires)),
-      &found);
+    "provsql",
+    provsql_struct_size(),
+    &found);
 
   if(!found) {
 #if PG_VERSION_NUM >= 90600
@@ -65,12 +73,12 @@ void provsql_shmem_startup(void)
   info.entrysize = sizeof(provsqlHashEntry);
 
   provsql_hash = ShmemInitHash(
-      "provsql hash",
-      provsql_init_nb_gates,
-      provsql_max_nb_gates,
-      &info,
-      HASH_ELEM | HASH_BLOBS
-  );
+    "provsql hash",
+    provsql_init_nb_gates,
+    provsql_max_nb_gates,
+    &info,
+    HASH_ELEM | HASH_BLOBS
+    );
 
   LWLockRelease(AddinShmemInitLock);
 
@@ -89,16 +97,16 @@ void provsql_shmem_startup(void)
     case 1:
       //elog(ERROR, "Error while opening the file during deserialization");
       break;
-    
+
     case 2:
       //elog(ERROR, "Error while reading the file during deserialization");
       break;
-    
+
     case 3:
       elog(ERROR, "Error while closing the file during deserialization");
       break;
     }
-  } 
+  }
 
 }
 
@@ -106,10 +114,10 @@ static void provsql_shmem_shutdown(int code, Datum arg)
 {
 
   #if PG_VERSION_NUM >= 90600
-    // Named lock tranches were added in version 9.6 of PostgreSQL
-    provsql_shared_state->lock =&(GetNamedLWLockTranche("provsql"))->lock;
+  // Named lock tranches were added in version 9.6 of PostgreSQL
+  provsql_shared_state->lock =&(GetNamedLWLockTranche("provsql"))->lock;
   #else
-    provsql_shared_state->lock =LWLockAssign();
+  provsql_shared_state->lock =LWLockAssign();
   #endif // PG_VERSION_NUM >= 90600
 
   switch (provsql_serialize("provsql.tmp"))
@@ -117,11 +125,11 @@ static void provsql_shmem_shutdown(int code, Datum arg)
   case 1:
     elog(INFO, "Error while opening the file during serialization");
     break;
-  
+
   case 2:
     elog(INFO, "Error while writing to file during serialization");
     break;
-  
+
   case 3:
     elog(INFO, "Error while closing the file during serialization");
     break;
@@ -134,19 +142,12 @@ static void provsql_shmem_shutdown(int code, Datum arg)
 
 }
 
-
-
-
 Size provsql_memsize(void)
 {
-  Size size = 0;
-
   // Size of the shared state structure
-  size = add_size(size, offsetof(provsqlSharedState, wires));
+  Size size = MAXALIGN(provsql_struct_size());
   // Size of the array of wire ends
-  size = add_size(size, mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires));
-  // Size of the hashtable of gates
-  size = add_size(size, 
+  size = add_size(size,
                   hash_estimate_size(provsql_max_nb_gates, sizeof(provsqlHashEntry)));
 
   return size;
@@ -166,10 +167,10 @@ Datum create_gate(PG_FUNCTION_ARGS)
     elog(ERROR, "Invalid NULL value passed to create_gate");
 
   if(children) {
-   if(ARR_NDIM(children) > 1)
-     elog(ERROR, "Invalid multi-dimensional array passed to create_gate");
-   else if(ARR_NDIM(children) == 1)
-     nb_children = *ARR_DIMS(children);
+    if(ARR_NDIM(children) > 1)
+      elog(ERROR, "Invalid multi-dimensional array passed to create_gate");
+    else if(ARR_NDIM(children) == 1)
+      nb_children = *ARR_DIMS(children);
   }
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
@@ -201,7 +202,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
 
     entry->nb_children = nb_children;
     entry->children_idx = provsql_shared_state->nb_wires;
-    
+
     if(nb_children) {
       pg_uuid_t *data = (pg_uuid_t*) ARR_DATA_PTR(children);
 
@@ -223,7 +224,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
   }
 
   LWLockRelease(provsql_shared_state->lock);
-  
+
   PG_RETURN_VOID();
 }
 
@@ -247,7 +248,7 @@ Datum set_prob(PG_FUNCTION_ARGS)
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Unknown gate");
   }
-  
+
   if(entry->type != gate_input && entry->type != gate_mulinput) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Probability can only be assigned to input token");
@@ -256,7 +257,7 @@ Datum set_prob(PG_FUNCTION_ARGS)
   entry->prob = prob;
 
   LWLockRelease(provsql_shared_state->lock);
-  
+
   PG_RETURN_VOID();
 }
 
@@ -297,7 +298,7 @@ Datum set_infos(PG_FUNCTION_ARGS)
     entry->info2 = info2;
 
   LWLockRelease(provsql_shared_state->lock);
-  
+
   PG_RETURN_VOID();
 }
 
@@ -317,7 +318,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
   if(found)
     result = entry->type;
-  
+
   LWLockRelease(provsql_shared_state->lock);
 
   if(!found)
@@ -345,19 +346,19 @@ Datum get_children(PG_FUNCTION_ARGS)
   if(found) {
     Datum *children_ptr = palloc(entry->nb_children * sizeof(Datum));
     constants_t constants=initialize_constants(true);
-    for(int i=0;i<entry->nb_children;++i) {
+    for(int i=0; i<entry->nb_children; ++i) {
       children_ptr[i] = UUIDPGetDatum(&provsql_shared_state->wires[entry->children_idx + i]);
     }
     result = construct_array(
-        children_ptr,
-        entry->nb_children,
-        constants.OID_TYPE_UUID,
-        16,
-        false,
-        'c');
+      children_ptr,
+      entry->nb_children,
+      constants.OID_TYPE_UUID,
+      16,
+      false,
+      'c');
     pfree(children_ptr);
   }
-  
+
   LWLockRelease(provsql_shared_state->lock);
 
   if(!found)
@@ -382,7 +383,7 @@ Datum get_prob(PG_FUNCTION_ARGS)
   entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
   if(found)
     result = entry->prob;
-  
+
   LWLockRelease(provsql_shared_state->lock);
 
   if(isnan(result))
@@ -409,7 +410,7 @@ Datum get_infos(PG_FUNCTION_ARGS)
     info1 = entry->info1;
     info2 = entry->info2;
   }
-  
+
   LWLockRelease(provsql_shared_state->lock);
 
   if(info1 == 0)
@@ -432,4 +433,20 @@ Datum get_infos(PG_FUNCTION_ARGS)
 
     PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
   }
+}
+void provsql_shmem_request(void)
+{
+#if (PG_VERSION_NUM >= 150000)
+  if (prev_shmem_request)
+    prev_shmem_request();
+#endif
+
+  RequestAddinShmemSpace(provsql_memsize());
+
+#if PG_VERSION_NUM >= 90600
+  /* Named lock tranches were added in version 9.6 of PostgreSQL */
+  RequestNamedLWLockTranche("provsql", 1);
+#else
+  RequestAddinLWLocks(1);
+#endif /* PG_VERSION_NUM >= 90600 */
 }

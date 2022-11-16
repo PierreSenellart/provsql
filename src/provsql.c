@@ -143,9 +143,9 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
 
       foreach (lc, r->eref->colnames)
       {
-        Value *v = (Value *)lfirst(lc);
+        const char *v = strVal(lfirst(lc));
 
-        if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
+        if(!strcmp(v,PROVSQL_COLUMN_NAME) &&
            get_atttype(r->relid,attid)==constants->OID_TYPE_UUID) {
           prov_atts = lappend(prov_atts, make_provenance_attribute(constants, r, rteid, attid));
         }
@@ -243,8 +243,7 @@ static Bitmapset *remove_provenance_attributes_select(
           /* This case occurs, for example, when grouping by a column
            * that is projected out */
           RangeTblEntry *r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
-          Value *val = (Value *)list_nth(r->eref->colnames, v->varattno - 1);
-          colname = strVal(val);
+          colname = strVal(list_nth(r->eref->colnames, v->varattno - 1));
         }
 
         if (!strcmp(colname, PROVSQL_COLUMN_NAME))
@@ -1139,9 +1138,9 @@ static bool has_provenance_walker(
 
         foreach (lc, r->eref->colnames)
         {
-          Value *v = (Value *)lfirst(lc);
+          const char *v = strVal(lfirst(lc));
 
-          if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
+          if(!strcmp(v,PROVSQL_COLUMN_NAME) &&
              get_atttype(r->relid,attid)==constants->OID_TYPE_UUID) {
             return true;
           }
@@ -1475,12 +1474,12 @@ static Query *process_query(
 
         foreach (lc, r->eref->colnames)
         {
-          Value *v = (Value *)lfirst(lc);
+          const char *v=strVal(lfirst(lc));
 
-          if (strcmp(strVal(v), "") && r->rtekind != RTE_JOIN)
+          if (strcmp(v, "") && r->rtekind != RTE_JOIN)
           { // TODO: More robust test
             // join RTE columns ignored
-            if (!strcmp(strVal(v), PROVSQL_COLUMN_NAME))
+            if (!strcmp(v, PROVSQL_COLUMN_NAME))
               columns[i][j] = -1;
             else
               columns[i][j] = ++nbcols;
@@ -1646,18 +1645,14 @@ void _PG_init(void)
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");
 
-  // Request shared resources
-  RequestAddinShmemSpace(provsql_memsize());
-
-#if PG_VERSION_NUM >= 90600
-  /* Named lock tranches were added in version 9.6 of PostgreSQL */
-  RequestNamedLWLockTranche("provsql", 1);
-#else
-  RequestAddinLWLocks(1);
-#endif /* PG_VERSION_NUM >= 90600 */
-
   prev_planner = planner_hook;
   prev_shmem_startup = shmem_startup_hook;
+#if (PG_VERSION_NUM >= 150000)
+  prev_shmem_request = shmem_request_hook;
+  shmem_request_hook = provsql_shmem_request;
+#else
+  provsql_shmem_request();
+#endif
 
   planner_hook = provsql_planner;
   shmem_startup_hook = provsql_shmem_startup;
