@@ -4,22 +4,25 @@ test: setup
 # Adding a provenance table
 test: add_provenance
 
+# Basic checks
+test: provenance_in_from
+
 # Introducing a few semirings
 test: security formula counting
 
 # Test of various ProvSQL features and SQL language capabilities
-test: deterministic 
-test: union_all 
-test: union 
-test: nested_union 
-test: union_nary 
-test: distinct 
-test: group_by_provenance 
+test: deterministic
+test: union_all
+test: union
+test: nested_union
+test: union_nary
+test: distinct
+test: group_by_provenance
 test: aggregation
 test: agg_distinct
-test: except 
+test: except
 test: null
-test: unsupported_features 
+test: unsupported_features
 test: create_as
 test: no_zero_gate
 

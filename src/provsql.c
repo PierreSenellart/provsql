@@ -44,8 +44,8 @@ extern void _PG_fini(void);
 static planner_hook_type prev_planner = NULL;
 
 static Query *process_query(
-    const constants_t *constants,
-    Query *q);
+  const constants_t *constants,
+  Query *q);
 
 static RelabelType *make_provenance_attribute(const constants_t *constants, RangeTblEntry *r, Index relid, AttrNumber attid) {
   RelabelType *re = makeNode(RelabelType);
@@ -146,7 +146,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
         Value *v = (Value *)lfirst(lc);
 
         if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
-            get_atttype(r->relid,attid)==constants->OID_TYPE_UUID) {
+           get_atttype(r->relid,attid)==constants->OID_TYPE_UUID) {
           prov_atts = lappend(prov_atts, make_provenance_attribute(constants, r, rteid, attid));
         }
 
@@ -189,7 +189,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
         if(func->funccolcount==1) {
           FuncExpr *expr = (FuncExpr *) func->funcexpr;
           if(expr->funcresulttype == constants->OID_TYPE_UUID
-              && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
+             && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
             prov_atts=lappend(prov_atts,make_provenance_attribute(constants,r,rteid,attid));
           }
         }
@@ -213,9 +213,9 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
 }
 
 static Bitmapset *remove_provenance_attributes_select(
-    const constants_t *constants,
-    Query *q,
-    bool **removed)
+  const constants_t *constants,
+  Query *q,
+  bool **removed)
 {
   int nbRemoved = 0;
   int i = 0;
@@ -301,10 +301,10 @@ typedef enum
  * more tests because not all OpExpr are used to express
  * a join in this case */
 static Expr *add_eq_from_OpExpr_to_Expr(
-    const constants_t *constants,
-    OpExpr *fromOpExpr,
-    Expr *toExpr,
-    int **columns)
+  const constants_t *constants,
+  OpExpr *fromOpExpr,
+  Expr *toExpr,
+  int **columns)
 {
   Datum first_arg;
   Datum second_arg;
@@ -362,22 +362,22 @@ static Expr *add_eq_from_OpExpr_to_Expr(
     fc->location=-1;
 
     c1=makeConst(
-        constants->OID_TYPE_INT,
-        -1,
-        InvalidOid,
-        sizeof(int16),
-        first_arg,
-        false,
-        true);
+      constants->OID_TYPE_INT,
+      -1,
+      InvalidOid,
+      sizeof(int16),
+      first_arg,
+      false,
+      true);
 
     c2=makeConst(
-        constants->OID_TYPE_INT,
-        -1,
-        InvalidOid,
-        sizeof(int16),
-        second_arg,
-        false,
-        true);
+      constants->OID_TYPE_INT,
+      -1,
+      InvalidOid,
+      sizeof(int16),
+      second_arg,
+      false,
+      true);
 
     fc->args=list_make3(toExpr, c1, c2);
     return (Expr *)fc;
@@ -391,10 +391,10 @@ static Expr *add_eq_from_OpExpr_to_Expr(
  * directly from FromExpr.
  * */
 static Expr *add_eq_from_Quals_to_Expr(
-    const constants_t *constants,
-    Node *quals,
-    Expr *result,
-    int **columns)
+  const constants_t *constants,
+  Node *quals,
+  Expr *result,
+  int **columns)
 {
   OpExpr *oe;
 
@@ -429,10 +429,10 @@ static Expr *add_eq_from_Quals_to_Expr(
 }
 
 static Expr *make_aggregation_expression(
-    const constants_t *constants,
-    Aggref *agg_ref,
-    List *prov_atts,
-    semiring_operation op)
+  const constants_t *constants,
+  Aggref *agg_ref,
+  List *prov_atts,
+  semiring_operation op)
 {
   Expr *result;
   FuncExpr *expr, *expr_s;
@@ -488,12 +488,12 @@ static Expr *make_aggregation_expression(
     if(agg_ref->aggfnoid==2803||agg_ref->aggfnoid==2147) //count(*) or count(arg)
     {
       Const *one = makeConst(constants->OID_TYPE_INT,
-                                    -1,
-                                    InvalidOid,
-                                    sizeof(int32),
-                                    Int32GetDatum(1),
-                                    false,
-                                    true);
+                             -1,
+                             InvalidOid,
+                             sizeof(int32),
+                             Int32GetDatum(1),
+                             false,
+                             true);
       expr_s->args = list_make2(one, expr);
     }
     else
@@ -521,20 +521,20 @@ static Expr *make_aggregation_expression(
     plus->funcid=constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
 
     fn = makeConst(constants->OID_TYPE_INT,
-                                    -1,
-                                    InvalidOid,
-                                    sizeof(int32),
-                                    Int32GetDatum(agg_ref->aggfnoid),
-                                    false,
-                                    true);
+                   -1,
+                   InvalidOid,
+                   sizeof(int32),
+                   Int32GetDatum(agg_ref->aggfnoid),
+                   false,
+                   true);
 
     typ = makeConst(constants->OID_TYPE_INT,
-                                    -1,
-                                    InvalidOid,
-                                    sizeof(int32),
-                                    Int32GetDatum(agg_ref->aggtype),
-                                    false,
-                                    true);
+                    -1,
+                    InvalidOid,
+                    sizeof(int32),
+                    Int32GetDatum(agg_ref->aggtype),
+                    false,
+                    true);
 
     plus->funcresulttype=constants->OID_TYPE_AGG_TOKEN;
     plus->args = list_make4(fn, typ, agg_ref, agg);
@@ -547,14 +547,14 @@ static Expr *make_aggregation_expression(
 }
 
 static Expr *make_provenance_expression(
-    const constants_t *constants,
-    Query *q,
-    List *prov_atts,
-    bool aggregation,
-    bool group_by_rewrite,
-    semiring_operation op,
-    int **columns,
-    int nbcols)
+  const constants_t *constants,
+  Query *q,
+  List *prov_atts,
+  bool aggregation,
+  bool group_by_rewrite,
+  semiring_operation op,
+  int **columns,
+  int nbcols)
 {
   Expr *result;
   ListCell *lc_v;
@@ -624,15 +624,15 @@ static Expr *make_provenance_expression(
     }
 
     if (aggregation) {
-        FuncExpr *deltaExpr = makeNode(FuncExpr);
+      FuncExpr *deltaExpr = makeNode(FuncExpr);
 
-        //adding the delta gate to the provenance circuit
-        deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
-        deltaExpr->args = list_make1(result);
-        deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
-        deltaExpr->location = -1;
+      //adding the delta gate to the provenance circuit
+      deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+      deltaExpr->args = list_make1(result);
+      deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
+      deltaExpr->location = -1;
 
-        result = (Expr *)deltaExpr;
+      result = (Expr *)deltaExpr;
     }
   }
 
@@ -688,12 +688,12 @@ static Expr *make_provenance_expression(
         /* If this is a valid column */
         if(value_v > 0) {
           Const *ce=makeConst(constants->OID_TYPE_INT,
-               -1,
-               InvalidOid,
-               sizeof(int32),
-               Int32GetDatum(value_v),
-               false,
-               true);
+                              -1,
+                              InvalidOid,
+                              sizeof(int32),
+                              Int32GetDatum(value_v),
+                              false,
+                              true);
 
           array->elements=lappend(array->elements, ce);
 
@@ -705,12 +705,12 @@ static Expr *make_provenance_expression(
         }
       } else { // we have a function in target
         Const *ce=makeConst(constants->OID_TYPE_INT,
-               -1,
-               InvalidOid,
-               sizeof(int32),
-               Int32GetDatum(0),
-               false,
-               true);
+                            -1,
+                            InvalidOid,
+                            sizeof(int32),
+                            Int32GetDatum(0),
+                            false,
+                            true);
 
         array->elements=lappend(array->elements, ce);
         projection=true;
@@ -773,7 +773,7 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
       Aggref *ar_v = (Aggref *)te_v->expr;
       TargetEntry *te_new = makeNode(TargetEntry);
 #if PG_VERSION_NUM >= 90600
-    /* aggargtypes was added in version 9.6 of PostgreSQL */
+      /* aggargtypes was added in version 9.6 of PostgreSQL */
       var->vartype = linitial_oid(ar_v->aggargtypes);
 #else
       var->vartype = exprType((Node*) ((TargetEntry*)linitial(ar_v->args))->expr);
@@ -869,20 +869,20 @@ static Node *aggregation_mutator(Node *node, aggregation_mutator_context *contex
   {
     Aggref *ar_v = (Aggref *) node;
     return (Node *) make_aggregation_expression(
-        context->constants,
-        ar_v,
-        context->prov_atts,
-        context->op);
+      context->constants,
+      ar_v,
+      context->prov_atts,
+      context->op);
   }
 
   return expression_tree_mutator(node, aggregation_mutator, (void *)context);
 }
 
 static void replace_aggregations_in_select(
-    const constants_t *constants,
-    Query *q,
-    List *prov_atts,
-    semiring_operation op)
+  const constants_t *constants,
+  Query *q,
+  List *prov_atts,
+  semiring_operation op)
 {
 
   aggregation_mutator_context context = {prov_atts, op, constants};
@@ -891,8 +891,8 @@ static void replace_aggregations_in_select(
 }
 
 static void add_to_select(
-    Query *q,
-    Expr *provenance)
+  Query *q,
+  Expr *provenance)
 {
   TargetEntry *te = makeNode(TargetEntry);
   te->expr = provenance;
@@ -912,13 +912,16 @@ static Node *provenance_mutator(Node *node, provenance_mutator_context *context)
   if (node == NULL)
     return NULL;
 
-  if (IsA(node, FuncExpr))
-  {
+  if (IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *)node;
 
     if(f->funcid == context->constants->OID_FUNCTION_PROVENANCE) {
       return (Node*) copyObject(context->provsql);
     }
+  } else if(IsA(node, RangeTblEntry) || IsA(node, RangeTblFunction)) {
+    // A provenance() expression in a From (not within a subquery) is
+    // non-sensical
+    return node;
   }
 
   return expression_tree_mutator(node, provenance_mutator, (void *)context);
@@ -1077,7 +1080,7 @@ static Query *rewrite_non_all_into_external_group_by(Query *q)
 }
 
 static bool provenance_function_walker(
-    Node *node, void *data)
+  Node *node, void *data)
 {
   const constants_t *constants = (const constants_t*) data;
   if (node == NULL)
@@ -1095,15 +1098,15 @@ static bool provenance_function_walker(
 }
 
 static bool provenance_function_in_group_by(
-    const constants_t *constants,
-    Query *q)
+  const constants_t *constants,
+  Query *q)
 {
   ListCell *lc;
   foreach (lc, q->targetList)
   {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     if (te->ressortgroupref > 0 &&
-       expression_tree_walker((Node*)te, provenance_function_walker, (void*) constants)) {
+        expression_tree_walker((Node*)te, provenance_function_walker, (void*) constants)) {
       return true;
     }
   }
@@ -1112,8 +1115,8 @@ static bool provenance_function_in_group_by(
 }
 
 static bool has_provenance_walker(
-    Node *node,
-    void *data) {
+  Node *node,
+  void *data) {
   const constants_t *constants=(const constants_t *) data;
   if(node==NULL)
     return false;
@@ -1139,7 +1142,7 @@ static bool has_provenance_walker(
           Value *v = (Value *)lfirst(lc);
 
           if(!strcmp(strVal(v),PROVSQL_COLUMN_NAME) &&
-              get_atttype(r->relid,attid)==constants->OID_TYPE_UUID) {
+             get_atttype(r->relid,attid)==constants->OID_TYPE_UUID) {
             return true;
           }
 
@@ -1158,7 +1161,7 @@ static bool has_provenance_walker(
           if(func->funccolcount==1) {
             FuncExpr *expr = (FuncExpr *) func->funcexpr;
             if(expr->funcresulttype == constants->OID_TYPE_UUID
-                && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
+               && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
               return true;
             }
           }
@@ -1173,14 +1176,14 @@ static bool has_provenance_walker(
 }
 
 static bool has_provenance(
-    const constants_t *constants,
-    Query *q) {
+  const constants_t *constants,
+  Query *q) {
   return has_provenance_walker((Node *) q, (void*) constants);
 }
 
 static bool transform_except_into_join(
-    const constants_t *constants,
-    Query *q) {
+  const constants_t *constants,
+  Query *q) {
   SetOperationStmt *setOps = (SetOperationStmt *) q->setOperations;
   RangeTblEntry *rte = makeNode(RangeTblEntry);
   FromExpr *fe = makeNode(FromExpr);
@@ -1275,9 +1278,9 @@ static bool transform_except_into_join(
 // on all nodes (terms have been previously treated by
 // rewrite_non_all_into_external_group_by)
 static void process_set_operation_union(
-    const constants_t *constants,
-    SetOperationStmt * stmt,
-    bool * supported)
+  const constants_t *constants,
+  SetOperationStmt * stmt,
+  bool * supported)
 {
   if (stmt->op != SETOP_UNION)
   {
@@ -1294,13 +1297,13 @@ static void process_set_operation_union(
                              constants->OID_TYPE_UUID);
   stmt->colTypmods=lappend_int(stmt->colTypmods, -1);
   stmt->colCollations=lappend_int(stmt->colCollations, 0);
-  stmt->all = true ;
+  stmt->all = true;
 }
 
 static void add_select_non_zero(
-    const constants_t *constants,
-    Query *q,
-    Expr *provsql)
+  const constants_t *constants,
+  Query *q,
+  Expr *provsql)
 {
   FuncExpr *gate_zero = makeNode(FuncExpr);
   OpExpr *oe = makeNode(OpExpr);
@@ -1328,8 +1331,8 @@ static void add_select_non_zero(
 }
 
 static Query *process_query(
-    const constants_t *constants,
-    Query *q)
+  const constants_t *constants,
+  Query *q)
 {
   List *prov_atts;
   bool has_union = false;
@@ -1504,14 +1507,14 @@ static Query *process_query(
                                      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
     }
     provenance = make_provenance_expression(
-        constants,
-        q,
-        prov_atts,
-        q->hasAggs,
-        group_by_rewrite,
-        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
-        columns,
-        nbcols);
+      constants,
+      q,
+      prov_atts,
+      q->hasAggs,
+      group_by_rewrite,
+      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
+      columns,
+      nbcols);
 
     add_to_select(q,provenance);
     replace_provenance_function_by_expression(constants, q, provenance);
@@ -1533,12 +1536,12 @@ static Query *process_query(
 }
 
 static PlannedStmt *provsql_planner(
-    Query *q,
+  Query *q,
 #if PG_VERSION_NUM >= 130000
-    const char *query_string,
+  const char *query_string,
 #endif
-    int cursorOptions,
-    ParamListInfo boundParams)
+  int cursorOptions,
+  ParamListInfo boundParams)
 {
   if(q->commandType==CMD_SELECT && q->rtable) {
     const constants_t constants = initialize_constants(false);
@@ -1559,20 +1562,20 @@ static PlannedStmt *provsql_planner(
 
   if (prev_planner)
     return prev_planner(
-        q,
+      q,
 #if PG_VERSION_NUM >= 130000
-        query_string,
+      query_string,
 #endif
-        cursorOptions,
-        boundParams);
+      cursorOptions,
+      boundParams);
   else
     return standard_planner(
-        q,
+      q,
 #if PG_VERSION_NUM >= 130000
-        query_string,
+      query_string,
 #endif
-        cursorOptions,
-        boundParams);
+      cursorOptions,
+      boundParams);
 }
 
 void _PG_init(void)
@@ -1591,17 +1594,17 @@ void _PG_init(void)
                            NULL,
                            NULL);
   DefineCustomIntVariable("provsql.verbose_level",
-                           "Level of verbosity for ProvSQL informational and debug messages",
-                           "0 for quiet (default), 1-9 for informational messages, 10-100 for debug information.",
-                           &provsql_verbose,
-                           0,
-                           0,
-                           100,
-                           PGC_USERSET,
-                           1,
-                           NULL,
-                           NULL,
-                           NULL);
+                          "Level of verbosity for ProvSQL informational and debug messages",
+                          "0 for quiet (default), 1-9 for informational messages, 10-100 for debug information.",
+                          &provsql_verbose,
+                          0,
+                          0,
+                          100,
+                          PGC_USERSET,
+                          1,
+                          NULL,
+                          NULL,
+                          NULL);
 
   DefineCustomIntVariable("provsql.max_nb_gates",
                           "Maximum number of gates kept in memory",
