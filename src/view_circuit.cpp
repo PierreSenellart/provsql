@@ -8,29 +8,31 @@ extern "C"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
 
-  PG_FUNCTION_INFO_V1(view_circuit);
+PG_FUNCTION_INFO_V1(view_circuit);
 }
 
 #include "DotCircuit.h"
 #include <csignal>
 #include <utility>
-#include <regex>
+#include <sstream>
+#include <algorithm>
 
 using namespace std;
 
-static vector<pair<int, int>> parse_array(string s)
+static vector<pair<int, int> > parse_array(string s)
 {
   s = s.substr(1, s.size() - 2); // Remove initial '{' and final '}'
 
-  vector<pair<int, int>> result;
-  regex reg("},?");
+  vector<pair<int, int> > result;
 
-  sregex_token_iterator iter(s.begin(), s.end(), reg, -1);
-  sregex_token_iterator end;
+  istringstream iss(s);
+  string p;
 
-  for (sregex_token_iterator iter(s.begin(), s.end(), reg, -1), end; iter != end; ++iter)
+  while(getline(iss, p, '}'))
   {
-    string p = *iter;
+    if(!p.empty() && p[0]==',')
+      p=p.substr(1);
+
     int k = p.find(",", 1);
     string s1 = p.substr(1, k - 1);
     int i1;
@@ -51,7 +53,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
   constants_t constants=initialize_constants(true);
   Oid argtypes[2]={constants.OID_TYPE_UUID,REGCLASSOID};
   char nulls[2] = {' ',' '};
-  
+
   SPI_connect();
 
   DotCircuit c;
@@ -59,7 +61,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
   int proc = 0;
 
   if (SPI_execute_with_args(
-          "SELECT * FROM provsql.sub_circuit_with_desc($1,$2)", 2, argtypes, arguments, nulls, true, 0) == SPI_OK_SELECT)
+        "SELECT * FROM provsql.sub_circuit_with_desc($1,$2)", 2, argtypes, arguments, nulls, true, 0) == SPI_OK_SELECT)
   {
     proc = SPI_processed;
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
@@ -74,7 +76,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
       if (type == "input")
       {
         c.setGate(f, DotGate::IN, SPI_getvalue(tuple, tupdesc, 4));
-        
+
       } else {
         auto id=c.getGate(f);
 
@@ -104,7 +106,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
         }
         else if (type == "eq")
         {
-          vector<pair<int, int>> v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
+          vector<pair<int, int> > v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
           if (v.size() != 1)
             elog(ERROR, "Incorrect extra information on eq gate");
           std::string cond = std::to_string(v[0].first) + std::string("=") + std::to_string(v[0].second);
@@ -112,7 +114,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
         }
         else if (type == "project")
         {
-          vector<pair<int, int>> v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
+          vector<pair<int, int> > v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
           sort(v.begin(), v.end(), [](auto &left, auto &right) {
             return left.second < right.second;
           });
