@@ -67,7 +67,9 @@ make docker-build
 3. The `uuid-ossp` extension for PostgreSQL (on Debian-based
    systems, it is found in the `postgresql-contrib-9.x` package for
    PostgreSQL version 9.x, and is installed automatically for PostgreSQL
-   version >= 10; on Homebrew, in the `ossp-uuid` package).
+   version >= 10; on Homebrew, in the `ossp-uuid` package; if you compile
+   PostgreSQL from source, make sure to also compile and install the
+   additional modules in the `contrib` directory).
 
 4. The Boost container library (on Debian-based systems, it is found in
    the `libboost-dev` package).
