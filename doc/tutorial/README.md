@@ -78,7 +78,7 @@ Solving the murder
 
      We will also create a *provenance mapping*: a mapping maps provenance
      tokens to actual values in a semiring. The first such mapping we
-     will create use the name of the witness as a value for the
+     will create uses the name of the witness as a value for the
      provenance token. The provenance mapping is created with:
      ```sql
      SELECT create_provenance_mapping('witness_mapping','s','witness');
@@ -104,7 +104,7 @@ Solving the murder
      the previous query). Create such a table with a SQL query, and
      display its content along with the provenance formula for each
      tuple. Attention: at the moment, ProvSQL does not support the `NOT IN`
-     SQL keyword; the only way to express negation at the moment is through
+     SQL keyword; the only way to express negation is through
      the `EXCEPT` keyword.
 
 1.   Create a `suspects` table containing all distinct persons that were
@@ -131,7 +131,7 @@ Solving the murder
      table a `reliability` column to store floating-point reliability
      scores; set the reliability score of each sighting to that of the
      witness of the sighting.
-     
+
      To assign these reliability scores as the probability of the
      provenance token of each tuple in `s`, simply do:
      ```sql
@@ -150,9 +150,9 @@ Solving the murder
          `'tree-decomposition'` (for a method based on computing a tree
          decomposition of the Boolean circuit) or to
         `'compilation'` (for compilation of the provenance circuit to a
-         d-DNNF); if ommitted, a default strategy based on a combination
+         d-DNNF); if omitted, a default strategy based on a combination
          of techniques is applied
      *   an optional third argument: for Monte Carlo sampling, it is the
-         number of samples (as a character string); 
+         number of samples (as a character string);
          for knowledge compilation, it is the name of the
          knowledge compilation tool used (one of `'c2d'`, `'d4'`, or `'dsharp'`)
