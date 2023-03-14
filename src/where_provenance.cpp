@@ -9,13 +9,12 @@ extern "C" {
 
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
-  
-  PG_FUNCTION_INFO_V1(where_provenance);
+
+PG_FUNCTION_INFO_V1(where_provenance);
 }
 
 #include <algorithm>
 #include <utility>
-#include <regex>
 #include <sstream>
 
 #include "WhereCircuit.h"
@@ -23,18 +22,19 @@ extern "C" {
 
 using namespace std;
 
-static vector<pair<int,int>> parse_array(string s)
+static vector<pair<int,int> > parse_array(string s)
 {
   s=s.substr(1,s.size()-2); // Remove initial '{' and final '}'
 
-  vector<pair<int,int>> result;
-  regex reg("},?");
+  vector<pair<int,int> > result;
+  istringstream iss(s);
+  string p;
 
-  sregex_token_iterator iter(s.begin(), s.end(), reg, -1);
-  sregex_token_iterator end;
+  while(getline(iss, p, '}'))
+  {
+    if(!p.empty() && p[0]==',')
+      p=p.substr(1);
 
-  for(sregex_token_iterator iter(s.begin(), s.end(), reg, -1), end; iter!=end; ++iter) {
-    string p = *iter;
     int k=p.find(",",1);
     string s1=p.substr(1,k-1);
     int i1;
@@ -56,14 +56,14 @@ static string where_provenance_internal
   const constants_t constants = initialize_constants(true);
   Oid argtypes[1]={constants.OID_TYPE_UUID};
   char nulls[1] = {' '};
-  
+
   SPI_connect();
 
   WhereCircuit c;
 
   if(SPI_execute_with_args(
-      "SELECT * FROM provsql.sub_circuit_for_where($1)", 1, argtypes, arguments, nulls, true, 0)
-      == SPI_OK_SELECT) {
+       "SELECT * FROM provsql.sub_circuit_for_where($1)", 1, argtypes, arguments, nulls, true, 0)
+     == SPI_OK_SELECT) {
     int proc = SPI_processed;
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
     SPITupleTable *tuptable = SPI_tuptable;
@@ -87,15 +87,15 @@ static string where_provenance_internal
         } else if(type == "plus") {
           c.setGate(f, WhereGate::PLUS);
         } else if(type == "project" || type == "eq") {
-          vector<pair<int,int>> v = parse_array(SPI_getvalue(tuple, tupdesc, 6));
+          vector<pair<int,int> > v = parse_array(SPI_getvalue(tuple, tupdesc, 6));
           if(type=="eq") {
             if(v.size()!=1)
               elog(ERROR, "Incorrect extra information on eq gate");
             c.setGateEquality(f, v[0].first, v[0].second);
           } else {
             sort(v.begin(), v.end(), [](auto &left, auto &right) {
-                return left.second < right.second;
-                });
+              return left.second < right.second;
+            });
             vector<int> infos;
             for(auto p : v) {
               infos.push_back(p.first);
@@ -115,10 +115,10 @@ static string where_provenance_internal
   }
 
   SPI_finish();
-  
+
   auto gate = c.getGate(UUIDDatum2string(token));
 
-  vector<set<WhereCircuit::Locator>> v = c.evaluate(gate);
+  vector<set<WhereCircuit::Locator> > v = c.evaluate(gate);
 
   ostringstream os;
   os << "{";
