@@ -506,7 +506,7 @@ static Expr *make_aggregation_expression(
     te_inner->resno = 1;
     te_inner->expr = (Expr *)expr_s;
     agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
-    agg->aggtype=constants->OID_TYPE_UUID;
+    agg->aggtype=constants->OID_TYPE_UUID_ARRAY;
     agg->args=list_make1(te_inner);
     agg->aggkind=AGGKIND_NORMAL;
     agg->location=-1;
@@ -604,7 +604,7 @@ static Expr *make_provenance_expression(
       te_inner->expr = (Expr *)result;
 
       agg->aggfnoid=constants->OID_FUNCTION_ARRAY_AGG;
-      agg->aggtype=constants->OID_TYPE_UUID;
+      agg->aggtype=constants->OID_TYPE_UUID_ARRAY;
       agg->args=list_make1(te_inner);
       agg->aggkind=AGGKIND_NORMAL;
       agg->location=-1;
@@ -1477,8 +1477,8 @@ static Query *process_query(
           const char *v=strVal(lfirst(lc));
 
           if (strcmp(v, "") && r->rtekind != RTE_JOIN)
-          { // TODO: More robust test
-            // join RTE columns ignored
+          {   // TODO: More robust test
+              // join RTE columns ignored
             if (!strcmp(v, PROVSQL_COLUMN_NAME))
               columns[i][j] = -1;
             else
