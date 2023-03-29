@@ -13,8 +13,8 @@ EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql
 # of tests. But we want REGRESS to be defined, otherwise installcheck
 # does nothing. So we use the following Makefile trick to have a defined
 # variable with empty value
-EMPTY = 
-REGRESS = $(EMPTY) 
+EMPTY =
+REGRESS = $(EMPTY)
 REGRESS_OPTS = --load-extension=plpgsql --inputdir=test --outputdir=$(shell mktemp -d /tmp/tmp.provsqlXXXX) --schedule test/schedule
 
 # Additional options for pg_regress can be specified below, e.g., a port
@@ -28,7 +28,7 @@ $(OBJS): $(wildcard src/*.h)
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
-LDFLAGS_SL = -lstdc++
+LDFLAGS_SL = -lstdc++ -Wno-lto-type-mismatch
 
 ifdef DEBUG
 PG_CPPFLAGS += -Og -g
