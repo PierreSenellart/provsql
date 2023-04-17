@@ -38,6 +38,11 @@ static Size provsql_struct_size(void)
                   mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires));
 }
 
+uint32 provsql_hash_uuid(const void *key, Size)
+{
+  return *(uint32*)key;
+}
+
 void provsql_shmem_startup(void)
 {
   bool found;
@@ -71,13 +76,14 @@ void provsql_shmem_startup(void)
   memset(&info, 0, sizeof(info));
   info.keysize = sizeof(pg_uuid_t);
   info.entrysize = sizeof(provsqlHashEntry);
+  info.hash = provsql_hash_uuid;
 
   provsql_hash = ShmemInitHash(
     "provsql hash",
     provsql_init_nb_gates,
     provsql_max_nb_gates,
     &info,
-    HASH_ELEM | HASH_BLOBS
+    HASH_ELEM | HASH_FUNCTION
     );
 
   LWLockRelease(AddinShmemInitLock);
@@ -180,7 +186,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
     elog(ERROR, "Too many gates in in-memory circuit");
   }
 
-  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
+  entry = (provsqlHashEntry *) hash_search_with_hash_value(provsql_hash, token, *(uint32*)token, HASH_ENTER, &found);
 
   if(!found) {
     constants_t constants=initialize_constants(true);
