@@ -24,8 +24,8 @@
 #include "provsql_utils.h"
 #include "provsql_shmem.h"
 
-#if PG_VERSION_NUM < 90500
-#error "ProvSQL requires PostgreSQL version 9.5 or later"
+#if PG_VERSION_NUM < 90600
+#error "ProvSQL requires PostgreSQL version 9.6 or later"
 #endif
 
 #include "compatibility.h"
@@ -511,10 +511,7 @@ static Expr *make_aggregation_expression(
     agg->aggkind=AGGKIND_NORMAL;
     agg->location=-1;
 
-#if PG_VERSION_NUM >= 90600
-    /* aggargtypes was added in version 9.6 of PostgreSQL */
     agg->aggargtypes = list_make1_oid(constants->OID_TYPE_UUID);
-#endif /* PG_VERSION_NUM >= 90600 */
 
     //final aggregation function
     plus->funcid=constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
@@ -609,10 +606,7 @@ static Expr *make_provenance_expression(
       agg->aggkind=AGGKIND_NORMAL;
       agg->location=-1;
 
-#if PG_VERSION_NUM >= 90600
-      /* aggargtypes was added in version 9.6 of PostgreSQL */
       agg->aggargtypes=list_make1_oid(constants->OID_TYPE_UUID);
-#endif /* PG_VERSION_NUM >= 90600 */
 
       plus->funcid=constants->OID_FUNCTION_PROVENANCE_PLUS;
       plus->args=list_make1(agg);
@@ -771,12 +765,7 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
     {
       Aggref *ar_v = (Aggref *)te_v->expr;
       TargetEntry *te_new = makeNode(TargetEntry);
-#if PG_VERSION_NUM >= 90600
-      /* aggargtypes was added in version 9.6 of PostgreSQL */
       var->vartype = linitial_oid(ar_v->aggargtypes);
-#else
-      var->vartype = exprType((Node*) ((TargetEntry*)linitial(ar_v->args))->expr);
-#endif
       te_new->resno = 1;
       te_new->expr = (Expr*) var;
       ar_v->args = list_make1(te_new);
@@ -1439,7 +1428,6 @@ static Query *process_query(
     group_by_rewrite = true;
   }
 
-  /* GROUPING SETS were introduced in version 9.5 of PostgreSQL */
   if (supported && q->groupingSets)
   {
     if (q->groupClause ||

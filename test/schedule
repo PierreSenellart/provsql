@@ -54,5 +54,5 @@ test: tutorial
 # Serializing and Deserializing functions
 test: serialize_deserialize
 
-# PostgreSQL 9.5 features
+# Grouping
 test: group_by_empty grouping_sets
