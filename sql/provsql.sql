@@ -288,9 +288,9 @@ BEGIN
   IF rec IS NULL THEN
     PERFORM create_gate(project_token, 'project', ARRAY[token::uuid]);
     INSERT INTO provenance_circuit_extra
-      SELECT gate, case when info=0 then null else info end, row_number() over()
+      SELECT gate, case when info=0 then null else info end, idx
       FROM (
-              SELECT project_token gate, unnest(positions) info
+              SELECT project_token gate, info, idx FROM unnest(positions) WITH ORDINALITY AS a(info, idx)
             ) t;
   END IF;
 
@@ -519,9 +519,9 @@ CREATE OR REPLACE FUNCTION sub_circuit_for_where(token UUID)
   RETURNS TABLE(f UUID, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
 $$
     WITH RECURSIVE transitive_closure(f,t,idx,gate_type) AS (
-      SELECT $1,t,row_number() over(),provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
+      SELECT $1,t,id,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) WITH ORDINALITY AS a(t,id)
         UNION ALL
-      SELECT p1.t,u,row_number() over(PARTITION BY p1.t),provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u
+      SELECT p1.t,u,id,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) WITH ORDINALITY AS a(u, id)
     ) SELECT t1.f, t1.t, t1.gate_type, table_name, nb_columns, infos, row_number() over() FROM (
       SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
       UNION ALL
