@@ -51,8 +51,8 @@ make docker-build
 
 ## Prerequisites for installation
 
-1. An install of PostgreSQL >= 9.5. The extension has currently been
-   tested with versions from 9.5 to 15 (inclusive) of PostgreSQL, under
+1. An install of PostgreSQL >= 9.6. The extension has currently been
+   tested with versions from 9.6 to 15 (inclusive) of PostgreSQL, under
    Linux, Mac OS X, and
    [https://learn.microsoft.com/en-us/windows/wsl/about](Windows Subsystem for Linux)
    (if the extension does not work on a specific version

@@ -15,14 +15,13 @@ jobs:
   test:
     strategy:
       matrix:
-        pg: [15, 14, 13, 12, 11, 10, 9.6, 9.5]
+        pg: [15, 14, 13, 12, 11, 10, 9.6]
     name: 🐘 PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
     steps:
       - run: pg-start ${{ matrix.pg }} libgraph-easy-perl libboost-dev unzip zlib1g-dev libgmp-dev
       - run: pg_dropcluster ${{ matrix.pg }} main
-      - run: "curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' -H 'Content-Type: application/x-www-form-urlencoded' --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart&e=pierre%40senellart.com&o=ENS' -o c2d && unzip c2d && mv c2d_linux /usr/local/bin/c2d && chmod a+x /usr/local/bin/c2d"
       - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
       - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
       - run: git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && mv weightmc /usr/local/bin && cd ../..

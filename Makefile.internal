@@ -13,9 +13,13 @@ EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql
 # of tests. But we want REGRESS to be defined, otherwise installcheck
 # does nothing. So we use the following Makefile trick to have a defined
 # variable with empty value
-EMPTY = 
-REGRESS = $(EMPTY) 
+EMPTY =
+REGRESS = $(EMPTY)
 REGRESS_OPTS = --load-extension=plpgsql --inputdir=test --outputdir=$(shell mktemp -d /tmp/tmp.provsqlXXXX) --schedule test/schedule
+
+OS := $(shell uname)
+ARCH := $(shell uname -m)
+
 
 # Additional options for pg_regress can be specified below, e.g., a port
 # number with EXTRA_REGRESS_OPTS = --port=5434
@@ -28,7 +32,7 @@ $(OBJS): $(wildcard src/*.h)
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
-LDFLAGS_SL = -lstdc++
+LDFLAGS_SL = -lstdc++ -Wno-lto-type-mismatch
 
 ifdef DEBUG
 PG_CPPFLAGS += -Og -g
@@ -45,11 +49,24 @@ PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
+
+
 %.o : %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
 %.o : %.cpp
+ifeq ($(OS), Darwin)
+ifeq ($(ARCH), arm64)
+	$(CXX) -I/opt/homebrew/Cellar/boost/$(shell cd /opt/homebrew/Cellar/boost/;ls -Art | tail -n 1;)/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+endif
+ifeq ($(ARCH), x86_64)
+	$(CXX) -I/usr/local/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+endif
+endif
+ifeq ($(OS), Linux)
 	$(CXX) -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+endif
+
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
 PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
