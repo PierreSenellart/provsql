@@ -136,7 +136,7 @@ port, you can add `--port=xxxx` to the `EXTRA_REGRESS_OPTS` line of
 `Makefile.internal`, where `xxxx` is the port number.
 
 Note that the tests that depend on external software (`c2d`, `d4`,
-`dsharp`, `weightmc`, `graph-easy`) will fail if no executable of that
+`dsharp`, `minic2d`, `weightmc`, `graph-easy`) will fail if no executable of that
 name can be found.
 
 ## Using ProvSQL
