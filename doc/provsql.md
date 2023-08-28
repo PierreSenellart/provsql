@@ -53,7 +53,9 @@ make docker-build
 
 1. An install of PostgreSQL >= 9.5. The extension has currently been
    tested with versions from 9.5 to 15 (inclusive) of PostgreSQL, under
-   Linux and Mac OS X (if the extension does not work on a specific version
+   Linux, Mac OS X, and
+   [https://learn.microsoft.com/en-us/windows/wsl/about](Windows Subsystem for Linux)
+   (if the extension does not work on a specific version
    or operating system, a bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
