@@ -4,6 +4,7 @@
 #include "pg_config.h" // for PG_VERSION_NUM
 #include "c.h" // for int16
 
+#include "postgres.h"
 #include "utils/uuid.h"
 
 #if PG_VERSION_NUM < 100000
