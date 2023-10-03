@@ -47,7 +47,7 @@ static Query *process_query(
   const constants_t *constants,
   Query *q);
 
-static RelabelType *make_provenance_attribute(const constants_t *constants, RangeTblEntry *r, Index relid, AttrNumber attid) {
+static RelabelType *make_provenance_attribute(const constants_t *constants, Query *q, RangeTblEntry *r, Index relid, AttrNumber attid) {
   RelabelType *re = makeNode(RelabelType);
   Var *v = makeNode(Var);
 
@@ -74,7 +74,15 @@ static RelabelType *make_provenance_attribute(const constants_t *constants, Rang
   re->relabelformat = COERCE_IMPLICIT_CAST;
   re->location = -1;
 
+#if PG_VERSION_NUM >= 160000
+  if(r->perminfoindex != 0) {
+    RTEPermissionInfo *rpi = list_nth_node(RTEPermissionInfo, q->rteperminfos, r->perminfoindex - 1);
+    rpi->selectedCols = bms_add_member(rpi->selectedCols,
+                                       attid - FirstLowInvalidHeapAttributeNumber);
+  }
+#else
   r->selectedCols = bms_add_member(r->selectedCols, attid - FirstLowInvalidHeapAttributeNumber);
+#endif
 
   return re;
 }
@@ -147,7 +155,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
 
         if(!strcmp(v,PROVSQL_COLUMN_NAME) &&
            get_atttype(r->relid,attid)==constants->OID_TYPE_UUID) {
-          prov_atts = lappend(prov_atts, make_provenance_attribute(constants, r, rteid, attid));
+          prov_atts = lappend(prov_atts, make_provenance_attribute(constants, q, r, rteid, attid));
         }
 
         ++attid;
@@ -157,7 +165,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
       if(new_subquery != NULL) {
         r->subquery = new_subquery;
         r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
-        prov_atts=lappend(prov_atts,make_provenance_attribute(constants,r,rteid,new_subquery->targetList->length));
+        prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, new_subquery->targetList->length));
         fix_type_of_aggregation_result(constants, q, rteid, r->subquery->targetList);
       }
     }
@@ -173,8 +181,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
         // provenance information
       }
       else
-      { // Semijoin (should be feasible, but check whether the second provenance information is available)
-        // Antijoin (feasible with negation)
+      {   // Semijoin (should be feasible, but check whether the second provenance information is available)
+          // Antijoin (feasible with negation)
         ereport(ERROR, (errmsg("JOIN type not supported by provsql")));
       }
     }
@@ -190,7 +198,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
           FuncExpr *expr = (FuncExpr *) func->funcexpr;
           if(expr->funcresulttype == constants->OID_TYPE_UUID
              && !strcmp(get_rte_attribute_name(r,attid),PROVSQL_COLUMN_NAME)) {
-            prov_atts=lappend(prov_atts,make_provenance_attribute(constants,r,rteid,attid));
+            prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, attid));
           }
         }
         else
@@ -325,7 +333,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
       /* In the WHERE case it can be a Const */
       RelabelType *rt1 = linitial(fromOpExpr->args);
       if (IsA(rt1->arg, Var))
-      { /* Can be Param in the WHERE case */
+      {   /* Can be Param in the WHERE case */
         v1 = (Var *)rt1->arg;
       }
       else
@@ -344,7 +352,7 @@ static Expr *add_eq_from_OpExpr_to_Expr(
       /* In the WHERE case it can be a Const */
       RelabelType *rt2 = lsecond(fromOpExpr->args);
       if (IsA(rt2->arg, Var))
-      { /* Can be Param in the WHERE case */
+      {   /* Can be Param in the WHERE case */
         v2 = (Var *)rt2->arg;
       }
       else
@@ -403,7 +411,7 @@ static Expr *add_eq_from_Quals_to_Expr(
   if(IsA(quals, OpExpr)) {
     oe = (OpExpr *) quals;
     result = add_eq_from_OpExpr_to_Expr(constants,oe,result,columns);
-  } /* Sometimes OpExpr is nested within a BoolExpr */
+  }   /* Sometimes OpExpr is nested within a BoolExpr */
   else if (IsA(quals, BoolExpr))
   {
     BoolExpr *be = (BoolExpr *)quals;
@@ -422,7 +430,7 @@ static Expr *add_eq_from_Quals_to_Expr(
     }
   }
   else
-  { /* Handle other cases */
+  {   /* Handle other cases */
   }
   return result;
 }
@@ -470,7 +478,7 @@ static Expr *make_aggregation_expression(
         expr->args = list_make1(array);
       }
       else
-      { // SR_MONUS
+      {   // SR_MONUS
         expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
         expr->args = prov_atts;
       }
@@ -484,7 +492,7 @@ static Expr *make_aggregation_expression(
     expr_s->funcresulttype = constants->OID_TYPE_UUID;
 
     //check the particular case of count
-    if(agg_ref->aggfnoid==2803||agg_ref->aggfnoid==2147) //count(*) or count(arg)
+    if(agg_ref->aggfnoid==2803||agg_ref->aggfnoid==2147)   //count(*) or count(arg)
     {
       Const *one = makeConst(constants->OID_TYPE_INT,
                              -1,
@@ -579,7 +587,7 @@ static Expr *make_provenance_expression(
         expr->args = list_make1(array);
       }
       else
-      { // SR_MONUS
+      {   // SR_MONUS
         expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
         expr->args = prov_atts;
       }
@@ -674,7 +682,7 @@ static Expr *make_provenance_expression(
           value_v = columns[vte_v->varno - 1][vte_v->varattno - 1];
         }
         else
-        { // is a join
+        {   // is a join
           Var *jav_v = (Var *)lfirst(list_nth_cell(rte_v->joinaliasvars, vte_v->varattno - 1));
           value_v = columns[jav_v->varno - 1][jav_v->varattno - 1];
         }
@@ -696,7 +704,7 @@ static Expr *make_provenance_expression(
           if(value_v!=-1)
             projection=true;
         }
-      } else { // we have a function in target
+      } else {   // we have a function in target
         Const *ce=makeConst(constants->OID_TYPE_INT,
                             -1,
                             InvalidOid,
@@ -745,7 +753,11 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
   {
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
     eref->colnames = lappend(eref->colnames,makeString(pstrdup(te_v->resname)));
+#if PG_VERSION_NUM < 160000
+    // For PG_VERSION_NUM >= 160000, rte->perminfoindex==0 so no need to
+    // care about permissions
     rte->selectedCols = bms_add_member(rte->selectedCols, te_v->resno - FirstLowInvalidHeapAttributeNumber);
+#endif
   }
   rte->alias = alias;
   rte->eref = eref;
@@ -832,7 +844,7 @@ static Query *check_for_agg_distinct(Query *q){
       else {
         lst_v = lappend(lst_v, ar_v);
       }
-    } else { //keep the current TE
+    } else {   //keep the current TE
       lst_v = lappend(lst_v, te_v);
     }
   }
@@ -1040,8 +1052,12 @@ static Query *rewrite_non_all_into_external_group_by(Query *q)
   rte->rtekind = RTE_SUBQUERY;
   rte->subquery = q;
   rte->eref = copyObject(((RangeTblEntry *)linitial(q->rtable))->eref);
-  rte->requiredPerms = ACL_SELECT;
   rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  // For PG_VERSION_NUM >= 160000, rte->perminfoindex==0 so no need to
+  // care about permissions
+  rte->requiredPerms = ACL_SELECT;
+#endif
 
   rtr->rtindex = 1;
   jointree->fromlist = list_make1(rtr);
@@ -1358,7 +1374,7 @@ static Query *process_query(
 
   if (q->hasAggs) {
     Query *subq = check_for_agg_distinct(q);
-    if(subq) // agg distinct detected, create a subquery
+    if(subq)   // agg distinct detected, create a subquery
     {
       q = rewrite_for_agg_distinct(q,subq);
       return process_query(constants, q);
