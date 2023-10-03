@@ -1,7 +1,10 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+
+extern "C" {
 #include <sys/time.h>
+}
 
 #include "dDNNFTreeDecompositionBuilder.h"
 
@@ -26,7 +29,7 @@ int main(int argc, char **argv) {
   std::string line;
   std::getline(g,line);
 
-  for(unsigned i=0; i<nbGates;++i) {
+  for(unsigned i=0; i<nbGates; ++i) {
     std::getline(g, line);
     if(line=="IN")
       c.setGate(std::to_string(i), BooleanGate::IN, 0.001);
@@ -46,11 +49,11 @@ int main(int argc, char **argv) {
   while(g >> u >> v)
     c.addWire(u,v);
   g.close();
-  
+
   try {
     double t0, t1;
     t0 = get_timestamp();
-    
+
     TreeDecomposition td(c);
     std::cerr << "Treewidth: " << td.getTreewidth() << std::endl;
     t1 = get_timestamp();

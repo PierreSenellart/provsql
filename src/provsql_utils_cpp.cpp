@@ -1,6 +1,9 @@
+extern "C" {
 #include "postgres.h"
 #include "utils/uuid.h"
 #include "provsql_utils.h"
+}
+
 #include "provsql_utils_cpp.h"
 #include "Circuit.h"
 
@@ -31,7 +34,7 @@ pg_uuid_t string2uuid(const string &source)
 {
   const char *src = source.c_str();
   pg_uuid_t uuid;
-  bool  braces = false;
+  bool braces = false;
   int i;
 
   if (src[0] == '{')
@@ -72,9 +75,9 @@ pg_uuid_t string2uuid(const string &source)
 
 syntax_error:
   ereport(ERROR,
-      (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-       errmsg("invalid input syntax for type %s: \"%s\"",
-         "uuid", src)));
+          (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+           errmsg("invalid input syntax for type %s: \"%s\"",
+                  "uuid", src)));
 }
 
 string UUIDDatum2string(Datum token)
