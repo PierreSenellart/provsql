@@ -202,7 +202,7 @@ std::ostream &operator<<(std::ostream &o, const dDNNFTreeDecompositionBuilder::g
 
     for(auto &[innocent, gates]: m) {
       o << "{";
-      bool first=true;
+      first=true;
       for(auto &x: innocent) {
         if(!first)
           o << ",";

@@ -16,7 +16,7 @@ extern "C"
 // Has to be redefined because of name hiding
 gate_t DotCircuit::setGate(const uuid &u, DotGate type)
 {
- auto id = Circuit::setGate(u, type);
+  auto id = Circuit::setGate(u, type);
   if(type == DotGate::IN)
     inputs.insert(id);
   return id;
@@ -41,7 +41,7 @@ std::string DotCircuit::toString(gate_t) const
 {
   std::string op;
   std::string result="digraph circuit{\n graph [rankdir=UD] ;\n";
-  
+
   //looping through the gates
   //eliminating the minusr and minusl gates
   unsigned i = 0;
@@ -88,11 +88,11 @@ std::string DotCircuit::toString(gate_t) const
   }
 
   //looping through the gates and their wires
-  for(size_t i=0;i<wires.size();++i){
-    if(gates[i] != DotGate::OMINUSR && gates[i] != DotGate::OMINUSL){
+  for(i=0; i<wires.size(); ++i) {
+    if(gates[i] != DotGate::OMINUSR && gates[i] != DotGate::OMINUSL) {
       std::unordered_map<gate_t, unsigned> number_gates;
-      for(auto s: wires[i]){
-        if(number_gates.find(s)!=number_gates.end()){
+      for(auto s: wires[i]) {
+        if(number_gates.find(s)!=number_gates.end()) {
           number_gates[s] = number_gates[s]+1;
         }
         else
@@ -144,25 +144,25 @@ std::string DotCircuit::render() const {
   std::string cmdline="graph-easy --as=boxart --output="+outfilename+" "+filename;
 
   int retvalue = system(cmdline.c_str());
-  
+
   if(provsql_verbose<20) {
     if(unlink(filename.c_str())) {
       throw CircuitException("Error removing "+filename);
     }
   }
 
-  if(retvalue)    
-    throw CircuitException("Error executing graph-easy"); 
+  if(retvalue)
+    throw CircuitException("Error executing graph-easy");
 
   std::ifstream ifs(outfilename.c_str());
   std::string str((std::istreambuf_iterator<char>(ifs)),
                   std::istreambuf_iterator<char>());
-  
+
   if(provsql_verbose<20) {
     if(unlink(outfilename.c_str())) {
       throw CircuitException("Error removing "+outfilename);
     }
   }
-  
+
   return str;
 }
