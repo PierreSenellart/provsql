@@ -22,8 +22,8 @@ constexpr bool provsql_interrupted = false;
 constexpr int provsql_verbose = 0;
 #define elog(level, ...) {;}
 #else
-#include "provsql_utils.h"
 extern "C" {
+#include "provsql_utils.h"
 #include "utils/elog.h"
 }
 #endif
