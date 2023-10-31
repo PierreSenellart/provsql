@@ -628,6 +628,12 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C;
 
+CREATE OR REPLACE FUNCTION shapley(
+  token UUID,
+  variable UUID)
+  RETURNS DOUBLE PRECISION AS
+  'provsql','shapley' LANGUAGE C;
+
 CREATE OR REPLACE FUNCTION view_circuit(
   token UUID,
   token2desc regclass,
