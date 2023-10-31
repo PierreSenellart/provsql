@@ -38,8 +38,9 @@ static Size provsql_struct_size(void)
                   mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires));
 }
 
-uint32 provsql_hash_uuid(const void *key, Size)
+uint32 provsql_hash_uuid(const void *key, Size s)
 {
+  (void)s; // Do not use size, only use first word of key
   return *(uint32*)key;
 }
 
