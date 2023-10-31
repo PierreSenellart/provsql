@@ -8,9 +8,10 @@
 #include <utility>
 #include <algorithm>
 
-template<class T, template<class...>class Storage=std::vector>
+template<class T, template<class ...>class Storage=std::vector, class hash=std::hash<T> >
 struct flat_set {
   using storage_t = Storage<T>;
+  using hash_t = hash;
   storage_t storage;
 
   using iterator=decltype(std::begin(std::declval<storage_t&>()));
@@ -55,25 +56,25 @@ struct flat_set {
     return storage.capacity();
   }
 public:
-  template<class K, class=std::enable_if_t<std::is_convertible<K, T>{}>>
+  template<class K, class=std::enable_if_t<std::is_convertible<K, T>{}> >
   iterator find(K&& k) {
     return std::find( begin(), end(), k );
   }
-  template<class K, class=std::enable_if_t<std::is_convertible<K, T>{}>>
+  template<class K, class=std::enable_if_t<std::is_convertible<K, T>{}> >
   const_iterator find(K&& k) const {
     return const_cast<flat_set*>(this)->find(k);
   }
   iterator erase(const_iterator it) {
     return storage.erase(it);
   }
-  template<class K, class=std::enable_if_t<std::is_convertible<K,T>{}>>
+  template<class K, class=std::enable_if_t<std::is_convertible<K,T>{}> >
   void insert( const K& value )
   {
     auto it = find(value);
     if (it == end())
       storage.emplace_back( value );
   }
-  template<class K, class=std::enable_if_t<std::is_convertible<K,T>{}>>
+  template<class K, class=std::enable_if_t<std::is_convertible<K,T>{}> >
   void insert( K&& value )
   {
     auto it = find(value);
@@ -129,15 +130,15 @@ public:
 };
 
 namespace std {
-  template<class T, template<class...> class Storage>
-  struct hash<flat_set<T, Storage>> {
-    size_t operator()(const flat_set<T, Storage> &key) const
-    {
-      size_t result = 0xDEADBEEF;
-      for(const auto &i: key)
-        result ^= std::hash<T>()(i);
-      return result;
-    }
-  };
+template<class T, template<class ...> class Storage, class h>
+struct hash<flat_set<T, Storage, h> > {
+  size_t operator()(const flat_set<T, Storage> &key) const
+  {
+    size_t result = 0xDEADBEEF;
+    for(const auto &i: key)
+      result ^= h()(i);
+    return result;
+  }
+};
 }
 #endif /* FLAT_SET_H */
