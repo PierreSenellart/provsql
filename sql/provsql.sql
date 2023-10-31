@@ -7,15 +7,15 @@ SET search_path TO provsql;
 -- Create agg_token type for aggregation display
 CREATE TYPE agg_token;
 
-CREATE FUNCTION agg_token_in(cstring)
+CREATE OR REPLACE FUNCTION agg_token_in(cstring)
   RETURNS agg_token
   AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT;
 
-CREATE FUNCTION agg_token_out(agg_token)
+CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
   RETURNS cstring
   AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT;
 
-CREATE FUNCTION agg_token_cast(agg_token)
+CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
   RETURNS text
   AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT;
 
@@ -185,66 +185,44 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
-CREATE FUNCTION uuid_ns_provsql() RETURNS uuid AS
+CREATE OR REPLACE FUNCTION uuid_ns_provsql() RETURNS uuid AS
 $$
  -- uuid_generate_v5(uuid_ns_url(),'http://pierre.senellart.com/software/provsql/')
  SELECT '920d4f02-8718-5319-9532-d4ab83a64489'::uuid
-$$ LANGUAGE SQL IMMUTABLE;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE FUNCTION gate_zero() RETURNS uuid AS
+CREATE OR REPLACE FUNCTION gate_zero() RETURNS uuid AS
 $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'zero');
-$$ LANGUAGE SQL IMMUTABLE;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE FUNCTION gate_one() RETURNS uuid AS
+CREATE OR REPLACE FUNCTION gate_one() RETURNS uuid AS
 $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'one');
-$$ LANGUAGE SQL IMMUTABLE;
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE FUNCTION uuid_provsql_concat(state uuid, token UUID)
-  RETURNS UUID AS
-$$
-  SELECT
-    CASE
-    WHEN state IS NULL THEN
-      token
-    ELSE
-      uuid_generate_v5(uuid_ns_provsql(),concat(state,token))
-    END;
-$$ LANGUAGE SQL IMMUTABLE SET search_path=provsql,public;
-
-CREATE AGGREGATE uuid_provsql_agg(UUID) (
-  SFUNC = uuid_provsql_concat,
-  STYPE = UUID
-);
-
-CREATE FUNCTION provenance_times(VARIADIC tokens uuid[])
+CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
   RETURNS UUID AS
 $$
 DECLARE
   times_token uuid;
-  filtered_tokens uuid[];
 BEGIN
-  SELECT array_agg(t) FROM unnest(tokens) t WHERE t <> gate_one() INTO filtered_tokens;
-
-  CASE array_length(filtered_tokens,1)
+  CASE array_length(tokens, 1)
     WHEN 0 THEN
       times_token:=gate_one();
     WHEN 1 THEN
-      times_token:=filtered_tokens[1];
+      times_token:=tokens[1];
     ELSE
-      SELECT uuid_generate_v5(uuid_ns_provsql(),concat('times',uuid_provsql_agg(t)))
-      INTO times_token
-      FROM unnest(filtered_tokens) t;
+      times_token := uuid_generate_v5(uuid_ns_provsql(),concat('times',tokens));
 
-      PERFORM create_gate(times_token, 'times', filtered_tokens);
+      PERFORM create_gate(times_token, 'times', tokens);
   END CASE;
 
   RETURN times_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_monus(token1 UUID, token2 UUID)
+CREATE OR REPLACE FUNCTION provenance_monus(token1 UUID, token2 UUID)
   RETURNS UUID AS
 $$
 DECLARE
@@ -274,7 +252,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_project(token UUID, VARIADIC positions int[])
+CREATE OR REPLACE FUNCTION provenance_project(token UUID, VARIADIC positions int[])
   RETURNS UUID AS
 $$
 DECLARE
@@ -298,7 +276,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_eq(token UUID, pos1 int, pos2 int)
+CREATE OR REPLACE FUNCTION provenance_eq(token UUID, pos1 int, pos2 int)
   RETURNS UUID AS
 $$
 DECLARE
@@ -333,16 +311,11 @@ BEGIN
   ELSIF c = 1 THEN
     plus_token := tokens[1];
   ELSE
-    SELECT array_agg(t)
-    FROM (SELECT t from unnest(tokens) t ORDER BY t) tmp
-    WHERE t <> gate_zero()
-    INTO filtered_tokens;
-
     plus_token := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('plus',array_to_string(filtered_tokens, ',')));
+      concat('plus', tokens));
 
-    PERFORM create_gate(plus_token, 'plus', filtered_tokens);
+    PERFORM create_gate(plus_token, 'plus', tokens);
   END IF;
 
   RETURN plus_token;
@@ -595,7 +568,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE FUNCTION provenance_semimod(val anyelement, token UUID)
+CREATE OR REPLACE FUNCTION provenance_semimod(val anyelement, token UUID)
   RETURNS UUID AS
 $$
 DECLARE

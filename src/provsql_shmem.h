@@ -17,6 +17,7 @@ extern int provsql_init_nb_gates;
 extern int provsql_max_nb_gates;
 extern int provsql_avg_nb_wires;
 
+uint32 provsql_hash_uuid(const void *key, Size);
 void provsql_shmem_startup(void);
 Size provsql_memsize(void);
 void provsql_shmem_request(void);
