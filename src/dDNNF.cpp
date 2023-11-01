@@ -182,7 +182,6 @@ double dDNNF::dDNNFProbabilityEvaluation(gate_t root) const
 
 std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta(gate_t root) const {
   std::unordered_map<gate_t, std::vector<double> > result;
-
   // Stack to simulate recursion: contains a pair (node, b) where b
   // indicates whether this is the beginning (false) or ending (true) of
   // the processing of a node
@@ -211,7 +210,8 @@ std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta(gate_t roo
           result[node] = {1};
         else {
           stack.push(std::make_pair(node, true));
-          stack.push(std::make_pair(getWires(node)[0], false));
+          for(auto c: getWires(node))
+            stack.push(std::make_pair(c, false));
         }
       } else {
         result[node] = result[getWires(node)[0]];
@@ -235,9 +235,9 @@ std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta(gate_t roo
           assert(getWires(node).size()==2); // AND has been made binary
           const auto &r1 = result[getWires(node)[0]];
           const auto &r2 = result[getWires(node)[1]];
-          const auto n1=r1.size();
-          const auto n2=r2.size();
-          for(size_t k=0; k<n1+n2; ++k) {
+          const auto n1=r1.size()-1;
+          const auto n2=r2.size()-1;
+          for(size_t k=0; k<=n1+n2; ++k) {
             double r = 0.;
             for(size_t k1=std::max(size_t{0},k-n2); k1<=std::min(k,n1); ++k1) {
               r+=r1[k1]*r2[k-k1];
@@ -293,7 +293,7 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
       } else {
         result[node] = result[getWires(node)[0]];
         for(unsigned k=0; k<result[node].size(); ++k)
-          for(unsigned l=0; l<result[node].size(); ++l) {
+          for(unsigned l=0; l<=k; ++l) {
             result[node][k][l] *= -1;
             result[node][k][l] += comb(k,l)*delta[node][k];
           }
@@ -336,14 +336,17 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
           assert(getWires(node).size()==2); // AND has been made binary
           const auto &r1 = result[getWires(node)[0]];
           const auto &r2 = result[getWires(node)[1]];
-          const auto n1=r1.size();
-          const auto n2=r2.size();
-          for(size_t k=0; k<n1+n2; ++k)
+          const auto n1=r1.size()-1;
+          const auto n2=r2.size()-1;
+          result[node].resize(n1+n2+1);
+          for(size_t k=0; k<=n1+n2; ++k) {
+            result[node][k].resize(k+1);
             for(size_t l=0; l<=k; ++l) {
               for(size_t k1=std::max(size_t{0},k-n2); k1<=std::min(k,n1); ++k1)
                 for(size_t l1=std::max(size_t{0},l-k+k1); l1<=std::min(k1,l); ++l1)
                   result[node][k][l] += r1[k1][l1] * r2[k-k1][l-l1];
             }
+          }
         }
       }
       break;

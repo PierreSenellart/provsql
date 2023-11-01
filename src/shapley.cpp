@@ -21,7 +21,8 @@ static double shapley_internal
 {
   BooleanCircuit c(token);
 
-  double result=0.;
+  if(c.getGateType(c.getGate(uuid2string(variable))) != BooleanGate::IN)
+    return 0.;
 
   dDNNF dnnf;
 
@@ -34,10 +35,13 @@ static double shapley_internal
     return 0.;
   }
 
-  auto root=dnnf.getGate("root");
   dnnf.makeSmooth();
   dnnf.makeAndGatesBinary();
-  result = dnnf.shapley(root, dnnf.getGate(uuid2string(variable)));
+
+  auto root=dnnf.getGate("root");
+  auto var_gate=dnnf.getGate(uuid2string(variable));
+
+  double result = dnnf.shapley(root, var_gate);
 
   // Avoid rounding errors that make expected Shapley value outside of [-1,1]
   if(result>1.)
