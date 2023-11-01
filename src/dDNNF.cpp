@@ -6,18 +6,7 @@
 #include <cassert>
 #include <algorithm>
 
-long long comb(unsigned n, unsigned k)
-{
-  assert(k<=n);
-
-  if(k == 0)
-    return 1;
-  else if(k > n/2)
-    return comb(n,n-k);
-  else return n * comb(n-1,k-1) / k;
-}
-
-std::unordered_set<gate_t> dDNNF::vars(gate_t root)
+std::unordered_set<gate_t> dDNNF::vars(gate_t root) const
 {
   // No recursion, so using a stack to handle all children; order of
   // calls is here irrelevant
@@ -314,7 +303,7 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
     case BooleanGate::OR:
       if(!b) {
         if(getWires(node).size()==0) // Has to be an OR False gate
-          result[node] = {{0}};
+          result[node] = {{0.}};
         else {
           stack.push(std::make_pair(node, true));
           for(auto c: getWires(node))
@@ -332,7 +321,32 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
       break;
 
     case BooleanGate::AND:
-    // TODO
+      if(!b) {
+        if(getWires(node).size()==0) // Has to be an AND True gate
+          result[node] = {{1.}};
+        else {
+          stack.push(std::make_pair(node, true));
+          for(auto c: getWires(node))
+            stack.push(std::make_pair(c, false));
+        }
+      } else {
+        if(getWires(node).size()==1)
+          result[node] = result[getWires(node)[0]];
+        else {
+          assert(getWires(node).size()==2); // AND has been made binary
+          const auto &r1 = result[getWires(node)[0]];
+          const auto &r2 = result[getWires(node)[1]];
+          const auto n1=r1.size();
+          const auto n2=r2.size();
+          for(size_t k=0; k<n1+n2; ++k)
+            for(size_t l=0; l<=k; ++l) {
+              for(size_t k1=std::max(size_t{0},k-n2); k1<=std::min(k,n1); ++k1)
+                for(size_t l1=std::max(size_t{0},l-k+k1); l1<=std::min(k1,l); ++l1)
+                  result[node][k][l] += r1[k1][l1] * r2[k-k1][l-l1];
+            }
+        }
+      }
+      break;
 
     case BooleanGate::MULIN:
     case BooleanGate::MULVAR:
@@ -345,9 +359,25 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
   return result[root];
 }
 
-double dDNNF::shapley(gate_t g, gate_t var) const {
-  // TODO
-  return 0.;
+double dDNNF::shapley(gate_t root, gate_t var) const {
+  auto cond_pos = condition(var, true);
+  auto cond_neg = condition(var, false);
+
+  auto alpha_pos=cond_pos.shapley_alpha(root);
+  auto alpha_neg=cond_neg.shapley_alpha(root);
+
+  double result=0.;
+
+  for(size_t k=0; k<std::max(alpha_pos.size(),alpha_neg.size()); ++k)
+    for(size_t l=0; l<=k; ++l) {
+      double pos = k>=alpha_pos.size()?0.:alpha_pos[k][l];
+      double neg = k>=alpha_neg.size()?0.:alpha_neg[k][l];
+      result += (pos-neg)/comb(k,l)/(k+1);
+    }
+
+  result *= getProb(var);
+
+  return result;
 }
 
 dDNNF dDNNF::condition(gate_t var, bool value) const {

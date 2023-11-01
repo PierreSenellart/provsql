@@ -5,9 +5,21 @@ extern "C" {
 }
 
 #include "provsql_utils_cpp.h"
+#include <cassert>
 #include "Circuit.h"
 
 using namespace std;
+
+long long comb(unsigned n, unsigned k)
+{
+  assert(k<=n);
+
+  if(k == 0)
+    return 1;
+  else if(k > n/2)
+    return comb(n,n-k);
+  else return n * comb(n-1,k-1) / k;
+}
 
 string uuid2string(pg_uuid_t uuid) {
 /* copied with small changes from uuid.c */

@@ -26,7 +26,7 @@ std::unordered_map<gate_t, std::vector<double> > shapley_delta(gate_t root) cons
 std::vector<std::vector<double> > shapley_alpha(gate_t root) const;
 
 public:
-std::unordered_set<gate_t> vars(gate_t root);
+std::unordered_set<gate_t> vars(gate_t root) const;
 void makeSmooth();
 void makeAndGatesBinary();
 dDNNF condition(gate_t var, bool value) const;

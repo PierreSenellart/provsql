@@ -11,5 +11,6 @@ extern "C" {
 std::string UUIDDatum2string(Datum token);
 std::string uuid2string(pg_uuid_t uuid);
 pg_uuid_t string2uuid(const std::string &source);
+long long comb(unsigned n, unsigned k);
 
 #endif
