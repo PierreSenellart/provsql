@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
     std::cerr << "Computing dDNNF took " << (t1-t0) << "s" << std::endl;
     t0 = t1;
 
-    std::cerr << "Probability: " << std::setprecision (15) << dnnf.dDNNFEvaluation(dnnf.getGate("root")) << std::endl;
+    std::cerr << "Probability: " << std::setprecision (15) << dnnf.dDNNFProbabilityEvaluation(dnnf.getGate("root")) << std::endl;
     t1 = get_timestamp();
     std::cerr << "Evaluating dDNNF took " << (t1-t0) << "s" << std::endl;
   } catch(TreeDecompositionException&) {

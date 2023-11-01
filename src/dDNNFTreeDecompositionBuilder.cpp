@@ -24,7 +24,7 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
 
   // Create the input and negated input gates
   for(auto g: c.inputs) {
-    auto gate = d.setGate(BooleanGate::IN, c.getProb(g));
+    auto gate = d.setGate(c.getUUID(g), BooleanGate::IN, c.getProb(g));
     auto not_gate = d.setGate(BooleanGate::NOT);
     d.addWire(not_gate, gate);
     input_gate[g]=gate;
@@ -48,14 +48,14 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
 constexpr bool isStrong(BooleanGate type, bool value)
 {
   switch(type) {
-    case BooleanGate::OR:
-      return value;
-    case BooleanGate::AND:
-      return !value;
-    case BooleanGate::IN:
-      return false;
-    default:
-      return true;
+  case BooleanGate::OR:
+    return value;
+  case BooleanGate::AND:
+    return !value;
+  case BooleanGate::IN:
+    return false;
+  default:
+    return true;
   }
 }
 
@@ -71,10 +71,10 @@ static bool isConnectible(const dDNNFTreeDecompositionBuilder::suspicious_t &sus
 }
 
 dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNNFGate> dDNNFTreeDecompositionBuilder::builddDNNFLeaf(
-    bag_t bag)
+  bag_t bag)
 {
   // If the bag is empty, it behaves as if it was not there
-  if(td.getBag(bag).size()==0) 
+  if(td.getBag(bag).size()==0)
     return {};
 
   // Otherwise, since we have a friendly decomposition, we have a
@@ -83,17 +83,17 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
 
   // We check if this bag is responsible for an input variable
   if(c.getGateType(single_gate)==BooleanGate::IN &&
-      responsible_bag.find(single_gate)->second==bag)
+     responsible_bag.find(single_gate)->second==bag)
   {
     // No need to create an extra gate, just point to the variable and
     // negated variable gate; no suspicious gate.
     dDNNFGate pos = { input_gate.find(single_gate)->second,
-      {std::make_pair(single_gate,true)},
-      suspicious_t{}
+                      {std::make_pair(single_gate,true)},
+                      suspicious_t{}
     };
     dDNNFGate neg = { negated_input_gate.find(single_gate)->second,
-      {std::make_pair(single_gate,false)}, 
-      suspicious_t{} 
+                      {std::make_pair(single_gate,false)},
+                      suspicious_t{}
     };
     return { std::move(pos), std::move(neg) };
   } else {
@@ -111,10 +111,10 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
         suspicious.insert(single_gate);
 
       result_gates.emplace_back(
-          d.setGate(BooleanGate::AND),
-          valuation_t{std::make_pair(single_gate, v)},
-          std::move(suspicious)
-      );
+        d.setGate(BooleanGate::AND),
+        valuation_t{std::make_pair(single_gate, v)},
+        std::move(suspicious)
+        );
     }
 
     return result_gates;
@@ -122,7 +122,7 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
 }
 
 bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
-    const valuation_t &valuation) const
+  const valuation_t &valuation) const
 {
   for(const auto &p1: valuation) {
     for(const auto &p2: valuation) {
@@ -133,16 +133,16 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
 
       if(circuitHasWire(p1.first,p2.first)) {
         switch(c.getGateType(p1.first)) {
-          case BooleanGate::AND:
-          case BooleanGate::OR:
-            if(p1.second!=p2.second)
-              return false;
-            break;
-          case BooleanGate::NOT:
-            if(p1.second==p2.second)
-              return false;
-          default:
-            ;
+        case BooleanGate::AND:
+        case BooleanGate::OR:
+          if(p1.second!=p2.second)
+            return false;
+          break;
+        case BooleanGate::NOT:
+          if(p1.second==p2.second)
+            return false;
+        default:
+          ;
         }
       }
     }
@@ -153,8 +153,8 @@ bool dDNNFTreeDecompositionBuilder::isAlmostValuation(
 
 dDNNFTreeDecompositionBuilder::suspicious_t
 dDNNFTreeDecompositionBuilder::getInnocent(
-    const valuation_t &valuation,
-    const suspicious_t &innocent) const
+  const valuation_t &valuation,
+  const suspicious_t &innocent) const
 {
   suspicious_t result = innocent;
 
@@ -220,7 +220,7 @@ std::ostream &operator<<(std::ostream &o, const dDNNFTreeDecompositionBuilder::g
       }
       o << "] ";
     }
-    
+
     o << "\n";
   }
 
@@ -228,9 +228,9 @@ std::ostream &operator<<(std::ostream &o, const dDNNFTreeDecompositionBuilder::g
 }
 
 dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::collectGatesToOr(
-    bag_t bag,
-    const gate_vector_t<dDNNFGate> &children_gates,
-    const gates_to_or_t &partial)
+  bag_t bag,
+  const gate_vector_t<dDNNFGate> &children_gates,
+  const gates_to_or_t &partial)
 {
   gates_to_or_t gates_to_or;
 
@@ -258,16 +258,16 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
       valuation_t valuation = matching_valuation;
       suspicious_t extra_innocent{};
       for(auto &[var, val]: g.valuation) {
-         if(td.getBag(bag).find(var)!=td.getBag(bag).end()) {
-           if(matching_valuation.find(var)==matching_valuation.end())
-             valuation[var]=val;
+        if(td.getBag(bag).find(var)!=td.getBag(bag).end()) {
+          if(matching_valuation.find(var)==matching_valuation.end())
+            valuation[var]=val;
 
-           if(g.suspicious.find(var)==g.suspicious.end()) {
-             extra_innocent.insert(var);
+          if(g.suspicious.find(var)==g.suspicious.end()) {
+            extra_innocent.insert(var);
           }
         }
       }
-          
+
       // We check valuation is still an almost-valuation
       if(!isAlmostValuation(valuation))
         continue;
@@ -277,7 +277,7 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
 
         for(auto s: innocent)
           new_innocent.insert(s);
-            
+
         new_innocent = getInnocent(valuation, new_innocent);
 
         if(gates.empty())
@@ -292,11 +292,11 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
             unsigned nb = 0;
 
             if(!(d.getGateType(g.id)==BooleanGate::AND &&
-                  d.getWires(g.id).empty()))
+                 d.getWires(g.id).empty()))
               gates_children[nb++]=g.id;
 
             if(!(d.getGateType(g2)==BooleanGate::AND &&
-                  d.getWires(g2).empty())) 
+                 d.getWires(g2).empty()))
               gates_children[nb++]=g2;
 
             if(nb==0) {
@@ -340,19 +340,20 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
     gates_to_or_t gates_to_or;
 
     RecursionParams(bag_t b, size_t c, gates_to_or_t g) :
-      bag(b), children_processed(c), gates_to_or(std::move(g)) {}
+      bag(b), children_processed(c), gates_to_or(std::move(g)) {
+    }
 
     RecursionParams(bag_t b) :
       bag(b), children_processed(0) {
-        gates_to_or_t::mapped_type m;
-        m[suspicious_t{}] = {};
-        gates_to_or[valuation_t{}] = std::move(m);
-      }
+      gates_to_or_t::mapped_type m;
+      m[suspicious_t{}] = {};
+      gates_to_or[valuation_t{}] = std::move(m);
+    }
   };
 
   using RecursionResult = gate_vector_t<dDNNFGate>;
 
-  std::stack<std::variant<RecursionParams,RecursionResult>> stack;
+  std::stack<std::variant<RecursionParams,RecursionResult> > stack;
   stack.emplace(RecursionParams{td.root});
 
   while(!stack.empty()) {
@@ -382,7 +383,7 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
         for(auto &[valuation, m]: gates_to_or) {
           for(auto &[innocent, gates]: m) {
             gate_t result_gate;
-            
+
             assert(gates.size()!=0);
 
             suspicious_t suspicious;

@@ -457,7 +457,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   } else
     elog(NOTICE, "Compiled d-DNNF in %s", outfilename.c_str());
 
-  return dnnf.dDNNFEvaluation(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
+  return dnnf.dDNNFProbabilityEvaluation(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
 }
 
 double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
@@ -687,12 +687,15 @@ void BooleanCircuit::rewriteMultivaluedGates()
   }
 }
 
+bool operator<(const pg_uuid_t a, const pg_uuid_t b)
+{
+  return memcmp(&a, &b, sizeof(pg_uuid_t))<0;
+}
+
 BooleanCircuit::BooleanCircuit(pg_uuid_t token)
 {
   std::set<pg_uuid_t> to_process, processed;
   to_process.insert(token);
-
-  BooleanCircuit c;
 
   LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
   while(!to_process.empty()) {
@@ -705,7 +708,7 @@ BooleanCircuit::BooleanCircuit(pg_uuid_t token)
     provsqlHashEntry *entry = reinterpret_cast<provsqlHashEntry *>(hash_search(provsql_hash, &uuid, HASH_FIND, &found));
 
     if(!found)
-      c.setGate(f, BooleanGate::MULVAR);
+      setGate(f, BooleanGate::MULVAR);
     else {
       gate_t id;
 
@@ -715,7 +718,7 @@ BooleanCircuit::BooleanCircuit(pg_uuid_t token)
           LWLockRelease(provsql_shared_state->lock);
           elog(ERROR, "Missing probability for input token");
         }
-        id = c.setGate(f, BooleanGate::IN, entry->prob);
+        id = setGate(f, BooleanGate::IN, entry->prob);
         break;
 
       case gate_mulinput:
@@ -723,11 +726,11 @@ BooleanCircuit::BooleanCircuit(pg_uuid_t token)
           LWLockRelease(provsql_shared_state->lock);
           elog(ERROR, "Missing probability for input token");
         }
-        id = c.setGate(f, BooleanGate::MULIN, entry->prob);
-        c.addWire(
+        id = setGate(f, BooleanGate::MULIN, entry->prob);
+        addWire(
           id,
-          c.getGate(uuid2string(provsql_shared_state->wires[entry->children_idx])));
-        c.setInfo(id, entry->info1);
+          getGate(uuid2string(provsql_shared_state->wires[entry->children_idx])));
+        setInfo(id, entry->info1);
         break;
 
       case gate_times:
@@ -735,12 +738,12 @@ BooleanCircuit::BooleanCircuit(pg_uuid_t token)
       case gate_eq:
       case gate_monus:
       case gate_one:
-        id = c.setGate(f, BooleanGate::AND);
+        id = setGate(f, BooleanGate::AND);
         break;
 
       case gate_plus:
       case gate_zero:
-        id = c.setGate(f, BooleanGate::OR);
+        id = setGate(f, BooleanGate::OR);
         break;
 
       default:
@@ -749,16 +752,16 @@ BooleanCircuit::BooleanCircuit(pg_uuid_t token)
 
       if(entry->nb_children > 0) {
         if(entry->type == gate_monus) {
-          auto id_not = c.setGate(BooleanGate::NOT);
+          auto id_not = setGate(BooleanGate::NOT);
           auto child1 = provsql_shared_state->wires[entry->children_idx];
           auto child2 = provsql_shared_state->wires[entry->children_idx+1];
-          c.addWire(
+          addWire(
             id,
-            c.getGate(uuid2string(child1)));
-          c.addWire(id, id_not);
-          c.addWire(
+            getGate(uuid2string(child1)));
+          addWire(id, id_not);
+          addWire(
             id_not,
-            c.getGate(uuid2string(child2)));
+            getGate(uuid2string(child2)));
           if(processed.find(child1)==processed.end())
             to_process.insert(child1);
           if(processed.find(child2)==processed.end())
@@ -767,9 +770,9 @@ BooleanCircuit::BooleanCircuit(pg_uuid_t token)
           for(unsigned i=0; i<entry->nb_children; ++i) {
             auto child = provsql_shared_state->wires[entry->children_idx+i];
 
-            c.addWire(
+            addWire(
               id,
-              c.getGate(uuid2string(child)));
+              getGate(uuid2string(child)));
             if(processed.find(child)==processed.end())
               to_process.insert(child);
           }

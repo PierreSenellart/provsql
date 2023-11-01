@@ -2,6 +2,7 @@
 #define DDNNF_H
 
 #include <string>
+#include <unordered_set>
 
 #include "BooleanCircuit.h"
 
@@ -19,13 +20,18 @@ struct hash_gate_t
 
 class dDNNF : public BooleanCircuit {
 private:
-dDNNF() = default;
-
-// To memoize results
-mutable std::unordered_map<gate_t, double, hash_gate_t> cache;
+// To memoize probability evaluation results
+mutable std::unordered_map<gate_t, double, hash_gate_t> probability_cache;
+std::unordered_map<gate_t, std::vector<double> > shapley_delta(gate_t root) const;
+std::vector<std::vector<double> > shapley_alpha(gate_t root) const;
 
 public:
-double dDNNFEvaluation(gate_t g) const;
+std::unordered_set<gate_t> vars(gate_t root);
+void makeSmooth();
+void makeAndGatesBinary();
+dDNNF condition(gate_t var, bool value) const;
+double dDNNFProbabilityEvaluation(gate_t root) const;
+double shapley(gate_t g, gate_t var) const;
 
 friend dDNNFTreeDecompositionBuilder;
 friend double BooleanCircuit::compilation(gate_t g, std::string compiler) const;

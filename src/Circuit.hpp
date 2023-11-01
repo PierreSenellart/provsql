@@ -13,8 +13,19 @@ gate_t Circuit<gateType>::getGate(const uuid &u)
   if(it==uuid2id.end()) {
     gate_t id=addGate();
     uuid2id[u]=id;
+    id2uuid[id]=u;
     return id;
-  } else 
+  } else
+    return it->second;
+}
+
+template<class gateType>
+typename Circuit<gateType>::uuid Circuit<gateType>::getUUID(gate_t g) const
+{
+  auto it = id2uuid.find(g);
+  if(it==id2uuid.end())
+    return "";
+  else
     return it->second;
 }
 

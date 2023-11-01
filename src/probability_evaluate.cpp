@@ -25,11 +25,6 @@ static void provsql_sigint_handler (int)
   provsql_interrupted = true;
 }
 
-bool operator<(const pg_uuid_t a, const pg_uuid_t b)
-{
-  return memcmp(&a, &b, sizeof(pg_uuid_t))<0;
-}
-
 static Datum probability_evaluate_internal
   (pg_uuid_t token, const string &method, const string &args)
 {
@@ -96,7 +91,7 @@ static Datum probability_evaluate_internal
               uuid2string(token),
               td}.build()
           };
-          result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
+          result = dnnf.dDNNFProbabilityEvaluation(dnnf.getGate("root"));
         } catch(TreeDecompositionException &) {
           elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
         }
@@ -109,7 +104,7 @@ static Datum probability_evaluate_internal
               uuid2string(token),
               td}.build()
           };
-          result = dnnf.dDNNFEvaluation(dnnf.getGate("root"));
+          result = dnnf.dDNNFProbabilityEvaluation(dnnf.getGate("root"));
         } catch(TreeDecompositionException &) {
           result = c.compilation(gate, "d4");
         }
