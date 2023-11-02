@@ -144,6 +144,8 @@ std::string BooleanCircuit::exportCircuit(gate_t root) const
     if(processed.find(g)!=processed.end())
       continue;
 
+    ss << g << " ";
+
     switch(getGateType(g)) {
     case BooleanGate::IN:
       ss << "IN " << getProb(g);
