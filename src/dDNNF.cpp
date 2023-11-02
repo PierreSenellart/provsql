@@ -239,7 +239,7 @@ std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta(gate_t roo
           const auto n2=r2.size()-1;
           for(size_t k=0; k<=n1+n2; ++k) {
             double r = 0.;
-            for(size_t k1=std::max(size_t{0},k-n2); k1<=std::min(k,n1); ++k1) {
+            for(size_t k1=std::max(0,static_cast<int>(k-n2)); k1<=std::min(k,n1); ++k1) {
               r+=r1[k1]*r2[k-k1];
             }
             result[node].push_back(r);
@@ -259,6 +259,17 @@ std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta(gate_t roo
   }
 
   return result;
+}
+
+static long long comb(unsigned n, unsigned k)
+{
+  assert(k<=n);
+
+  if(k == 0)
+    return 1;
+  else if(k > n/2)
+    return comb(n,n-k);
+  else return n * comb(n-1,k-1) / k;
 }
 
 std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
@@ -311,7 +322,7 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
         }
       } else {
         result[node] = result[getWires(node)[0]];
-        for(size_t i=0; i<getWires(node).size(); ++i) {
+        for(size_t i=1; i<getWires(node).size(); ++i) {
           const auto &r = result[getWires(node)[i]];
           for(unsigned k=0; k<r.size(); ++k)
             for(unsigned l=0; l<r[k].size(); ++l)
@@ -342,8 +353,8 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
           for(size_t k=0; k<=n1+n2; ++k) {
             result[node][k].resize(k+1);
             for(size_t l=0; l<=k; ++l) {
-              for(size_t k1=std::max(size_t{0},k-n2); k1<=std::min(k,n1); ++k1)
-                for(size_t l1=std::max(size_t{0},l-k+k1); l1<=std::min(k1,l); ++l1)
+              for(size_t k1=std::max(0,static_cast<int>(k-n2)); k1<=std::min(k,n1); ++k1)
+                for(size_t l1=std::max(0,static_cast<int>(l-k+k1)); l1<=std::min(k1,l); ++l1)
                   result[node][k][l] += r1[k1][l1] * r2[k-k1][l-l1];
             }
           }
@@ -365,10 +376,7 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
 double dDNNF::shapley(gate_t root, gate_t var) const {
   auto cond_pos = condition(var, true);
   auto cond_neg = condition(var, false);
-  cond_pos.makeSmooth();
-  cond_neg.makeSmooth();
 
-  // Do we need to ensure cond_pos and cond_neg are smooth?
   auto alpha_pos=cond_pos.shapley_alpha(root);
   auto alpha_neg=cond_neg.shapley_alpha(root);
 
@@ -387,6 +395,17 @@ double dDNNF::shapley(gate_t root, gate_t var) const {
 }
 
 dDNNF dDNNF::condition(gate_t var, bool value) const {
+  assert(getGateType(var)==BooleanGate::IN);
+
+  dDNNF result=*this;
+
+  result.setGateType(var, value ? BooleanGate::AND : BooleanGate::OR);
+  result.probability_cache[var] = value?1.:0.;
+
+  return result;
+}
+
+dDNNF dDNNF::conditionAndSimplify(gate_t var, bool value) const {
   assert(getGateType(var)==BooleanGate::IN);
 
   std::vector<std::vector<gate_t> > reversedWires(gates.size());

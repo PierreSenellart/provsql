@@ -4,7 +4,9 @@
 extern "C" {
 #include <unistd.h>
 #include <math.h>
+#ifndef TDKC
 #include "provsql_shmem.h"
+#endif
 }
 
 #include <cassert>
@@ -123,6 +125,49 @@ std::string BooleanCircuit::toString(gate_t g) const
   }
 
   return "("+result+")";
+}
+
+std::string BooleanCircuit::exportCircuit(gate_t g) const
+{
+  std::string result = to_string(g) + " ";
+
+  switch(getGateType(g)) {
+  case BooleanGate::IN:
+    result += "IN "+ std::to_string(getProb(g));
+    break;
+
+  case BooleanGate::NOT:
+    result += "NOT ";
+    result += to_string(getWires(g)[0]);
+    break;
+
+  case BooleanGate::AND:
+    result+="AND";
+
+    for(auto s:getWires(g))
+      result+=" "+to_string(s);
+    break;
+
+  case BooleanGate::OR:
+    result+="OR";
+
+    for(auto s:getWires(g))
+      result+=" "+to_string(s);
+    break;
+
+  case BooleanGate::MULVAR:
+  case BooleanGate::MULIN:
+  case BooleanGate::UNDETERMINED:
+    assert(false);     // not done
+  }
+
+  result+="\n";
+
+  for(auto s: getWires(g)) {
+    result+=exportCircuit(s);
+  }
+
+  return result;
 }
 
 bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const
@@ -687,6 +732,7 @@ void BooleanCircuit::rewriteMultivaluedGates()
   }
 }
 
+#ifndef TDKC
 bool operator<(const pg_uuid_t a, const pg_uuid_t b)
 {
   return memcmp(&a, &b, sizeof(pg_uuid_t))<0;
@@ -782,3 +828,4 @@ BooleanCircuit::BooleanCircuit(pg_uuid_t token)
   }
   LWLockRelease(provsql_shared_state->lock);
 }
+#endif

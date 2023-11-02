@@ -13,6 +13,7 @@ PG_FUNCTION_INFO_V1(shapley);
 #include "BooleanCircuit.h"
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
+#include <fstream>
 
 using namespace std;
 
@@ -41,14 +42,21 @@ static double shapley_internal
   auto root=dnnf.getGate("root");
   auto var_gate=dnnf.getGate(uuid2string(variable));
 
+/*
+   std::string filename("/tmp/export.dd");
+   std::ofstream o(filename.c_str());
+   o << dnnf.exportCircuit(root);
+   o.close();
+ */
+
   double result = dnnf.shapley(root, var_gate);
 
   // Avoid rounding errors that make expected Shapley value outside of [-1,1]
-/*  if(result>1.)
+  if(result>1.)
     result=1.;
-   else if(result<-1.)
+  else if(result<-1.)
     result=-1.;
- */
+
   return result;
 }
 

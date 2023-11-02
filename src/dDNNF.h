@@ -29,6 +29,7 @@ public:
 std::unordered_set<gate_t> vars(gate_t root) const;
 void makeSmooth();
 void makeAndGatesBinary();
+dDNNF conditionAndSimplify(gate_t var, bool value) const;
 dDNNF condition(gate_t var, bool value) const;
 double dDNNFProbabilityEvaluation(gate_t root) const;
 double shapley(gate_t g, gate_t var) const;
