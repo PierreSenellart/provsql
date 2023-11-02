@@ -33,7 +33,7 @@ gate_t getRoot() const {
 }
 std::unordered_set<gate_t> vars(gate_t root) const;
 void makeSmooth();
-void makeAndGatesBinary();
+void makeGatesBinary(BooleanGate type);
 void simplify();
 dDNNF conditionAndSimplify(gate_t var, bool value) const;
 dDNNF condition(gate_t var, bool value) const;

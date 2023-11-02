@@ -81,25 +81,36 @@ void dDNNF::makeSmooth()
   }
 }
 
-void dDNNF::makeAndGatesBinary()
+void dDNNF::makeGatesBinary(BooleanGate type)
 {
   for(gate_t g{0}; g<gates.size(); ++g) {
-    if(getGateType(g)!=BooleanGate::AND || getWires(g).size()<=2)
+    if(getGateType(g)!=type || getWires(g).size()<=2)
       continue;
 
-    auto &w = getWires(g);
-    const auto k = w.size();
+    if(getWires(g).size()==3) {
+      const gate_t child = setGate(type);
+      auto &w = getWires(g);
+      for(size_t i=1; i<3; ++i) {
+        addWire(child, w[i]);
+      }
+      w.resize(1);
+      addWire(g, child);
+    } else {
+      const gate_t child1 = setGate(type);
+      const gate_t child2 = setGate(type);
 
-    const gate_t and1 = setGate(BooleanGate::AND);
-    const gate_t and2 = setGate(BooleanGate::AND);
-    for(unsigned i=0; i<k; ++i)
-      if(k<k/2)
-        addWire(and1, w[i]);
-      else
-        addWire(and2, w[i]);
-    w.clear();
-    addWire(g, and1);
-    addWire(g, and2);
+      auto &w = getWires(g);
+      const auto k = w.size();
+
+      for(unsigned i=0; i<k; ++i)
+        if(i<k/2)
+          addWire(child1, w[i]);
+        else
+          addWire(child2, w[i]);
+      w.clear();
+      addWire(g, child1);
+      addWire(g, child2);
+    }
   }
 }
 
@@ -294,7 +305,7 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
 
     switch(getGateType(node)) {
     case BooleanGate::IN:
-      result[node] = {{0},{0,1}};
+      result[node] = {{0},{0,getProb(node)}};
       break;
 
     case BooleanGate::NOT:
@@ -445,13 +456,6 @@ void dDNNF::simplify() {
 
     switch(getGateType(node)) {
     case BooleanGate::IN:
-      if(getProb(node)==1.) {
-        setGateType(node, BooleanGate::AND);
-        probability_cache[node]=1.;
-      } else if(getProb(node)==0.) {
-        setGateType(node, BooleanGate::OR);
-        probability_cache[node]=0.;
-      }
       break;
 
     case BooleanGate::AND:
@@ -468,12 +472,11 @@ void dDNNF::simplify() {
         w.clear();
       } else {
         for(auto c=w.begin(); c!=w.end();) {
-          auto it=probability_cache.find(*c);
-          if(it!=probability_cache.end() && it->second==(getGateType(node)==BooleanGate::AND?1.:0.))
+          if(getGateType(*c)==getGateType(node) && getWires(*c).size()==0)
             c = w.erase(c);
-          else if(it!=probability_cache.end() && it->second==(getGateType(node)==BooleanGate::AND?0.:1.)) {
-            setGateType(node, it->second==0.?BooleanGate::OR:BooleanGate::AND);
-            probability_cache[node] = 1.-it->second;
+          else if(getGateType(*c)==(getGateType(node)==BooleanGate::AND?BooleanGate::OR:BooleanGate::AND) && getWires(*c).size()==0) {
+            setGateType(node, getGateType(*c));
+            probability_cache[node] = getGateType(*c)==BooleanGate::AND?1.:0.;
             w.clear();
             break;
           } else
@@ -483,21 +486,16 @@ void dDNNF::simplify() {
       break;
 
     case BooleanGate::NOT:
-    {
-      auto it=probability_cache.find(w[0]);
-      if(it!=probability_cache.end()) {
-        if(it->second==1.) {
-          setGateType(node, BooleanGate::OR);
-          probability_cache[node]=0.;
-          w.clear();
-        } else if(it->second==0.) {
-          setGateType(node, BooleanGate::AND);
-          probability_cache[node]=1.;
-          w.clear();
-        }
+      if(getGateType(w[0])==BooleanGate::AND && getWires(w[0]).size()==0) {
+        setGateType(node, BooleanGate::OR);
+        probability_cache[node]=0.;
+        w.clear();
+      } else if(getGateType(w[0])==BooleanGate::OR && getWires(w[0]).size()==0) {
+        setGateType(node, BooleanGate::AND);
+        probability_cache[node]=1.;
+        w.clear();
       }
       break;
-    }
 
     case BooleanGate::MULIN:
     case BooleanGate::MULVAR:

@@ -37,7 +37,7 @@ static double shapley_internal
   }
 
   dnnf.makeSmooth();
-  dnnf.makeAndGatesBinary();
+  dnnf.makeGatesBinary(BooleanGate::AND);
 
   auto root=dnnf.getRoot();
   auto var_gate=dnnf.getGate(uuid2string(variable));
@@ -48,7 +48,6 @@ static double shapley_internal
    o << dnnf.exportCircuit(root);
    o.close();
  */
-
 
   double result = dnnf.shapley(root, var_gate);
 
