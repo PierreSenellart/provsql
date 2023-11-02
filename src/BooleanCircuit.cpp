@@ -16,6 +16,8 @@ extern "C" {
 #include <cstdlib>
 #include <iostream>
 #include <vector>
+#include <sstream>
+#include <stack>
 
 #include "dDNNF.h"
 
@@ -127,47 +129,61 @@ std::string BooleanCircuit::toString(gate_t g) const
   return "("+result+")";
 }
 
-std::string BooleanCircuit::exportCircuit(gate_t g) const
+std::string BooleanCircuit::exportCircuit(gate_t root) const
 {
-  std::string result = to_string(g) + " ";
+  std::stringstream ss;
 
-  switch(getGateType(g)) {
-  case BooleanGate::IN:
-    result += "IN "+ std::to_string(getProb(g));
-    break;
+  std::unordered_set<gate_t> processed;
+  std::stack<gate_t> to_process;
+  to_process.push(root);
 
-  case BooleanGate::NOT:
-    result += "NOT ";
-    result += to_string(getWires(g)[0]);
-    break;
+  while(!to_process.empty()) {
+    auto g=to_process.top();
+    to_process.pop();
 
-  case BooleanGate::AND:
-    result+="AND";
+    if(processed.find(g)!=processed.end())
+      continue;
 
-    for(auto s:getWires(g))
-      result+=" "+to_string(s);
-    break;
+    switch(getGateType(g)) {
+    case BooleanGate::IN:
+      ss << "IN " << getProb(g);
+      break;
 
-  case BooleanGate::OR:
-    result+="OR";
+    case BooleanGate::NOT:
+      ss << "NOT " << getWires(g)[0];
+      break;
 
-    for(auto s:getWires(g))
-      result+=" "+to_string(s);
-    break;
+    case BooleanGate::AND:
+      ss << "AND";
 
-  case BooleanGate::MULVAR:
-  case BooleanGate::MULIN:
-  case BooleanGate::UNDETERMINED:
-    assert(false);     // not done
+      for(auto s:getWires(g))
+        ss << " " << s;
+      break;
+
+    case BooleanGate::OR:
+      ss << "OR";
+
+      for(auto s:getWires(g))
+        ss << " " << s;
+      break;
+
+    case BooleanGate::MULVAR:
+    case BooleanGate::MULIN:
+    case BooleanGate::UNDETERMINED:
+      assert(false);   // not done
+    }
+
+    ss << "\n";
+
+    for(auto s: getWires(g)) {
+      if(processed.find(s)==processed.end())
+        to_process.push(s);
+    }
+
+    processed.insert(g);
   }
 
-  result+="\n";
-
-  for(auto s: getWires(g)) {
-    result+=exportCircuit(s);
-  }
-
-  return result;
+  return ss.str();
 }
 
 bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const
