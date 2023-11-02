@@ -91,7 +91,7 @@ static Datum probability_evaluate_internal
               uuid2string(token),
               td}.build()
           };
-          result = dnnf.dDNNFProbabilityEvaluation(dnnf.getGate("root"));
+          result = dnnf.dDNNFProbabilityEvaluation(dnnf.getRoot());
         } catch(TreeDecompositionException &) {
           elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
         }
@@ -104,7 +104,7 @@ static Datum probability_evaluate_internal
               uuid2string(token),
               td}.build()
           };
-          result = dnnf.dDNNFProbabilityEvaluation(dnnf.getGate("root"));
+          result = dnnf.dDNNFProbabilityEvaluation(dnnf.getRoot());
         } catch(TreeDecompositionException &) {
           result = c.compilation(gate, "d4");
         }

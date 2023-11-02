@@ -24,11 +24,17 @@ private:
 mutable std::unordered_map<gate_t, double, hash_gate_t> probability_cache;
 std::unordered_map<gate_t, std::vector<double> > shapley_delta(gate_t root) const;
 std::vector<std::vector<double> > shapley_alpha(gate_t root) const;
+std::vector<gate_t> topological_order(const std::vector<std::vector<gate_t> > &reversedWires) const;
+gate_t root;
 
 public:
+gate_t getRoot() const {
+  return root;
+}
 std::unordered_set<gate_t> vars(gate_t root) const;
 void makeSmooth();
 void makeAndGatesBinary();
+void simplify();
 dDNNF conditionAndSimplify(gate_t var, bool value) const;
 dDNNF condition(gate_t var, bool value) const;
 double dDNNFProbabilityEvaluation(gate_t root) const;

@@ -401,88 +401,103 @@ dDNNF dDNNF::condition(gate_t var, bool value) const {
 
   result.setGateType(var, value ? BooleanGate::AND : BooleanGate::OR);
   result.probability_cache[var] = value?1.:0.;
+  result.inputs.erase(var);
+  auto it = id2uuid.find(var);
+  if(it!=id2uuid.end()) {
+    result.uuid2id.erase(it->second);
+    result.id2uuid.erase(var);
+  }
 
   return result;
 }
 
-dDNNF dDNNF::conditionAndSimplify(gate_t var, bool value) const {
-  assert(getGateType(var)==BooleanGate::IN);
+std::vector<gate_t> dDNNF::topological_order(const std::vector<std::vector<gate_t> > &reversedWires) const
+{
+  std::vector<gate_t> result;
 
+  std::stack<gate_t> nodesToProcess;
+  std::vector<size_t> inDegree(wires.size());
+
+  for(size_t g=0; g<wires.size(); ++g)
+    if(!(inDegree[g] = wires[g].size()))
+      nodesToProcess.push(gate_t{g});
+
+  while(!nodesToProcess.empty()) {
+    auto g = nodesToProcess.top();
+    nodesToProcess.pop();
+    result.push_back(g);
+    for(auto p: reversedWires[static_cast<size_t>(g)])
+      if(!(--inDegree[static_cast<size_t>(p)]))
+        nodesToProcess.push(p);
+  }
+
+  return result;
+}
+
+void dDNNF::simplify() {
   std::vector<std::vector<gate_t> > reversedWires(gates.size());
   for(size_t i=0; i<wires.size(); ++i)
     for(auto g: wires[i])
       reversedWires[static_cast<size_t>(g)].push_back(gate_t{i});
 
-  dDNNF result = *this;
+  for(auto node: topological_order(reversedWires)) {
+    auto &w = wires[static_cast<size_t>(node)];
 
-  std::stack<std::pair<gate_t,bool> > to_process;
-  to_process.emplace(std::make_pair(var,value));
-
-  while(!to_process.empty()) {
-    auto [node, val]=to_process.top();
-    to_process.pop();
-
-    bool propagate = false;
-
-    auto &w = result.wires[static_cast<size_t>(node)];
-
-    switch(result.getGateType(node)) {
+    switch(getGateType(node)) {
     case BooleanGate::IN:
-      result.setGateType(node, val?BooleanGate::AND:BooleanGate::OR);
-      result.probability_cache[node] = val?1.:0.;
-      propagate = true;
+      if(getProb(node)==1.) {
+        setGateType(node, BooleanGate::AND);
+        probability_cache[node]=1.;
+      } else if(getProb(node)==0.) {
+        setGateType(node, BooleanGate::OR);
+        probability_cache[node]=0.;
+      }
       break;
 
     case BooleanGate::AND:
-    {
-      bool remove_all = !val;
-      if(remove_all) {
-        w.clear();
-        result.setGateType(node, BooleanGate::OR);
-        result.probability_cache[node] = 0.;
-        propagate=true;
-      } else {
-        for(auto c=w.begin(); c!=w.end();) {
-          auto it=result.probability_cache.find(*c);
-          if(it!=result.probability_cache.end() && it->second==1.)
-            c = w.erase(c);
-          else
-            ++c;
-        }
-        if(w.size()==0)
-          propagate=true;
-      }
-      break;
-    }
-
     case BooleanGate::OR:
-    {
-      bool remove_all = val;
-      if(remove_all) {
+      if(w.size()==0)
+        probability_cache[node]=(getGateType(node)==BooleanGate::AND?1.:0.);
+      else if(w.size()==1) {
+        if(node==getRoot()) {
+          root=w[0];
+        } else {
+          for(auto p: reversedWires[static_cast<size_t>(node)])
+            std::replace(wires[static_cast<size_t>(p)].begin(), wires[static_cast<size_t>(p)].end(), node, w[0]);
+        }
         w.clear();
-        result.setGateType(node, BooleanGate::AND);
-        result.probability_cache[node] = 1.;
-        propagate=true;
       } else {
         for(auto c=w.begin(); c!=w.end();) {
-          auto it=result.probability_cache.find(*c);
-          if(it!=result.probability_cache.end() && it->second==0.)
+          auto it=probability_cache.find(*c);
+          if(it!=probability_cache.end() && it->second==(getGateType(node)==BooleanGate::AND?1.:0.))
             c = w.erase(c);
-          else
+          else if(it!=probability_cache.end() && it->second==(getGateType(node)==BooleanGate::AND?0.:1.)) {
+            setGateType(node, it->second==0.?BooleanGate::OR:BooleanGate::AND);
+            probability_cache[node] = 1.-it->second;
+            w.clear();
+            break;
+          } else
             ++c;
         }
-        if(w.size()==0)
-          propagate=true;
       }
       break;
-    }
 
     case BooleanGate::NOT:
-      result.setGateType(node, val?BooleanGate::OR:BooleanGate::AND);
-      w.clear();
-      result.probability_cache[node] = val?0.:1.;
-      propagate=true;
+    {
+      auto it=probability_cache.find(w[0]);
+      if(it!=probability_cache.end()) {
+        if(it->second==1.) {
+          setGateType(node, BooleanGate::OR);
+          probability_cache[node]=0.;
+          w.clear();
+        } else if(it->second==0.) {
+          setGateType(node, BooleanGate::AND);
+          probability_cache[node]=1.;
+          w.clear();
+        }
+      }
       break;
+    }
 
     case BooleanGate::MULIN:
     case BooleanGate::MULVAR:
@@ -490,11 +505,73 @@ dDNNF dDNNF::conditionAndSimplify(gate_t var, bool value) const {
       throw CircuitException("Incorrect gate type");
       break;
     }
-
-    if(propagate)
-      for(auto g: reversedWires[static_cast<size_t>(node)])
-        to_process.emplace(std::make_pair(g, val));
   }
 
-  return result;
+  std::vector<bool> used(gates.size());
+  std::stack<gate_t> to_process;
+  to_process.push(root);
+
+  while(!to_process.empty()) {
+    auto g = to_process.top();
+    to_process.pop();
+    used[static_cast<size_t>(g)]=true;
+    for(auto c: wires[static_cast<size_t>(g)])
+      to_process.push(c);
+  }
+
+  size_t newi = 0;
+  std::vector<gate_t> relabel(gates.size());
+  for(size_t i=0; i<=gates.size(); ++i)
+  {
+    if(!used[i]) {
+      inputs.erase(gate_t{i});
+      probability_cache.erase(gate_t{i});
+      auto it = id2uuid.find(gate_t{i});
+      if(it!=id2uuid.end()) {
+        uuid2id.erase(it->second);
+        id2uuid.erase(it);
+      }
+      continue;
+    }
+
+    relabel[i]=gate_t{newi};
+
+    if(i!=newi) {
+      gates[newi] = gates[i];
+      wires[newi] = wires[i];
+      prob[newi]=prob[i];
+
+      auto it1 = probability_cache.find(gate_t{i});
+      if(it1!=probability_cache.end()) {
+        probability_cache[gate_t{newi}] = it1->second;
+        probability_cache.erase(it1);
+      }
+
+      auto it2 = id2uuid.find(gate_t{i});
+      if(it2!=id2uuid.end()) {
+        id2uuid[gate_t{newi}] = it2->second;
+        uuid2id[it2->second] = gate_t{newi};
+        id2uuid.erase(it2);
+      }
+
+      if(root==gate_t{i})
+        root=gate_t{newi};
+
+      auto it3 = inputs.find(gate_t{i});
+      if(it3!=inputs.end()) {
+        inputs.insert(gate_t{newi});
+        inputs.erase(it3);
+      }
+    }
+
+    ++newi;
+  }
+
+  gates.resize(newi);
+  wires.resize(newi);
+  prob.resize(newi);
+
+  for(auto &w: wires)
+    for(size_t i=0; i<w.size(); ++i)
+      w[i]=relabel[static_cast<size_t>(w[i])];
 }

@@ -33,14 +33,16 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
 
   gate_vector_t<dDNNFGate> result_gates = builddDNNF();
 
-  auto result_id = d.setGate("root", BooleanGate::OR);
+  d.root = d.setGate(BooleanGate::OR);
 
   for(const auto &p: result_gates) {
     if(p.suspicious.empty() && p.valuation.find(root_id)->second) {
-      d.addWire(result_id, p.id);
+      d.addWire(d.root, p.id);
       break;
     }
   }
+
+  d.simplify();
 
   return std::move(d);
 }
