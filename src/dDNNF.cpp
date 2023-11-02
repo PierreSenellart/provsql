@@ -365,7 +365,10 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
 double dDNNF::shapley(gate_t root, gate_t var) const {
   auto cond_pos = condition(var, true);
   auto cond_neg = condition(var, false);
+  cond_pos.makeSmooth();
+  cond_neg.makeSmooth();
 
+  // Do we need to ensure cond_pos and cond_neg are smooth?
   auto alpha_pos=cond_pos.shapley_alpha(root);
   auto alpha_neg=cond_neg.shapley_alpha(root);
 

@@ -44,11 +44,11 @@ static double shapley_internal
   double result = dnnf.shapley(root, var_gate);
 
   // Avoid rounding errors that make expected Shapley value outside of [-1,1]
-  if(result>1.)
+/*  if(result>1.)
     result=1.;
-  else if(result<-1.)
+   else if(result<-1.)
     result=-1.;
-
+ */
   return result;
 }
 
