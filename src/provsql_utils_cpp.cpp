@@ -5,6 +5,7 @@ extern "C" {
 }
 
 #include "provsql_utils_cpp.h"
+#include <cassert>
 #include "Circuit.h"
 
 using namespace std;
