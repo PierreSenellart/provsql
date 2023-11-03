@@ -35,7 +35,7 @@ provsqlHashEntry *entry;
 static Size provsql_struct_size(void)
 {
   return add_size(offsetof(provsqlSharedState, wires),
-                  mul_size(sizeof(pg_uuid_t), provsql_max_nb_gates * provsql_avg_nb_wires));
+                  mul_size(sizeof(pg_uuid_t), ((Size) provsql_max_nb_gates) * provsql_avg_nb_wires));
 }
 
 uint32 provsql_hash_uuid(const void *key, Size s)
