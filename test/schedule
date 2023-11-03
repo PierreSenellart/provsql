@@ -42,6 +42,9 @@ test: d4 dsharp weightmc
 # probability computation, and default computation
 test: treedec_simple treedec default_probability_evaluate independent
 
+# Expected Shapley value computation
+test: shapley
+
 # Viewing circuit
 test: view_circuit_multiple
 
