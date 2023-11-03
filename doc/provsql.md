@@ -4,17 +4,31 @@
 
 The goal of the ProvSQL project is to add support for (m-)semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
-PostgreSQL extension/module/plugin. It is work in progress at the moment.
+PostgreSQL extension/module/plugin. It is work in progress.
 
 ## Features
 
-The ProvSQL system currently supports proper management of provenance
-attached to SQL queries, in the form of a provenance circuit, suitable
-both for regular Boolean provenance, arbitrary semiring provenance, with
-or without monus (m-semiring), in the free m-semiring, or specialized to
-any m-semiring of choice. It also supports aggregation using semimodule
-provenance aggregation, where-provenance, and probability computation from
-the provenance, through a variety of methods.
+The ProvSQL system supports:
+* computation of provenance of SQL queries, in the form of a provenance
+  circuit, for the following forms of provenance:
+  * Boolean provenance
+  * semiring provenance in arbitrary semirings
+  * m-semiring provenance in arbitrary semirings with monus
+  * semimodule provenance of aggregate queries
+  * where-provenance
+* probability computation from the Boolean provenance for query
+  evaluation over probabilistic databases, through the
+  following methods:
+  * naïve evaluation
+  * Monte-Carlo sampling
+  * building a d-DNNF representation of the provenance from a tree
+    decomposition of the Boolean circuit
+  * compilation to a d-DNNF using an external tool (`d4`, `c2d`,
+    `minic2d` or `dsharp`)
+  * approximate weighted model counting using an external tool
+    (`weightmc`)
+* Shapley value computation
+* expected Shapley value computation over probabilistic data
 
 The following SQL features are currently supported.
 
