@@ -3,9 +3,14 @@ name: "CodeQL"
 on:
   push:
     branches: [ "master" ]
+    paths:
+      - 'src/*'
+      - '.github/workflows/codeql.yml'
   pull_request:
-    # The branches below must be a subset of the branches above
     branches: [ "master" ]
+    paths:
+      - 'src/*'
+      - '.github/workflows/codeql.yml'
   schedule:
     - cron: '15 2 * * 1'
 
@@ -33,6 +38,8 @@ jobs:
       uses: github/codeql-action/init@v2
       with:
         languages: ${{ matrix.language }}
+
+    - run: pg-start 16 libboost-dev
 
     - name: Autobuild
       uses: github/codeql-action/autobuild@v2
