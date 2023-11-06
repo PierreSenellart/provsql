@@ -1,5 +1,12 @@
 INTERNAL = Makefile.internal
 ARGS = with_llvm=no
+UNAME := $(shell uname)
+
+ifeq ($(UNAME), Darwin)
+	PAGER ?= less
+else
+	PAGER ?= pager
+endif
 
 default:
 	$(MAKE) -f $(INTERNAL) $(ARGS)
@@ -8,7 +15,7 @@ default:
 	$(MAKE) -f $(INTERNAL) $@ $(ARGS)
 
 test:
-	bash -c "set -o pipefail && make installcheck | tee test.log" || pager `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
+	bash -c "set -o pipefail && make installcheck | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
 
 .PHONY: default test
 
