@@ -13,6 +13,7 @@ PG_FUNCTION_INFO_V1(shapley);
 #include "BooleanCircuit.h"
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
+#include "CircuitFromShMem.h"
 #include <fstream>
 
 using namespace std;
@@ -20,7 +21,7 @@ using namespace std;
 static double shapley_internal
   (pg_uuid_t token, pg_uuid_t variable)
 {
-  BooleanCircuit c(token);
+  BooleanCircuit c = createBooleanCircuit(token);
 
   if(c.getGateType(c.getGate(uuid2string(variable))) != BooleanGate::IN)
     return 0.;

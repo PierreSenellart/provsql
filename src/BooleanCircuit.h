@@ -9,10 +9,6 @@
 
 #include "Circuit.hpp"
 
-#ifndef TDKC
-#include "provsql_utils_cpp.h"
-#endif
-
 enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN, MULIN, MULVAR };
 
 class BooleanCircuit : public Circuit<BooleanGate> {
@@ -36,9 +32,6 @@ std::map<gate_t, unsigned> info;
 public:
 BooleanCircuit() {
 }
-#ifndef TDKC
-explicit BooleanCircuit(pg_uuid_t token);
-#endif
 gate_t addGate() override;
 gate_t setGate(BooleanGate t) override;
 gate_t setGate(const uuid &u, BooleanGate t) override;
