@@ -23,18 +23,19 @@ enum class DotGate
 };
 
 class DotCircuit : public Circuit<DotGate> {
- private:
-  std::set<gate_t> inputs;
-  std::vector<std::string> desc;
-  
- public:
-  gate_t addGate() override;
-  gate_t setGate(const uuid &u, DotGate t) override;
-  gate_t setGate(const uuid &u, DotGate t, std::string d);
+private:
+std::set<gate_t> inputs;
+std::vector<std::string> desc;
 
-  std::string render() const;
-  
-  virtual std::string toString(gate_t g) const override;
+public:
+gate_t addGate() override;
+using Circuit::setGate;
+gate_t setGate(const uuid &u, DotGate t) override;
+gate_t setGate(const uuid &u, DotGate t, std::string d);
+
+std::string render() const;
+
+virtual std::string toString(gate_t g) const override;
 };
 
 #endif /* DOT_CIRCUIT_H */
