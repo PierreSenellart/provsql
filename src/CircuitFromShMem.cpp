@@ -37,8 +37,7 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
       switch(entry->type) {
       case gate_input:
         if(std::isnan(entry->prob)) {
-          LWLockRelease(provsql_shared_state->lock);
-          elog(ERROR, "Missing probability for input token");
+          entry->prob=1.;
         }
         id = result.setGate(f, BooleanGate::IN, entry->prob);
         break;
@@ -46,7 +45,7 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
       case gate_mulinput:
         if(std::isnan(entry->prob)) {
           LWLockRelease(provsql_shared_state->lock);
-          elog(ERROR, "Missing probability for input token");
+          elog(ERROR, "Missing probability for mulinput token");
         }
         id = result.setGate(f, BooleanGate::MULIN, entry->prob);
         result.addWire(
