@@ -16,7 +16,7 @@ extern "C" {
 #include <sstream>
 #include <stack>
 
-#include "dDNNF.h"
+#include "dDNNFTreeDecompositionBuilder.h"
 
 // "provsql_utils.h"
 #ifdef TDKC
@@ -353,7 +353,7 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   return filename;
 }
 
-double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
+dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
 
@@ -404,7 +404,7 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
     if(compiler != "d4") {
       // unsatisfiable formula
-      return 0.;
+      return dDNNF();
     }
   } else {
     std::string nnf;
@@ -517,7 +517,9 @@ double BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   } else
     elog(NOTICE, "Compiled d-DNNF in %s", outfilename.c_str());
 
-  return dnnf.dDNNFProbabilityEvaluation(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
+  dnnf.setRoot(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
+
+  return dnnf;
 }
 
 double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
@@ -745,4 +747,85 @@ void BooleanCircuit::rewriteMultivaluedGates()
     }
     rewriteMultivaluedGatesRec(muls, cumulated_probs, 0, n-1, prefix);
   }
+}
+
+gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const {
+  gate_t dg{0};
+
+  switch(getGateType(g)) {
+  case BooleanGate::AND:
+  {
+    dg = dd.setGate(BooleanGate::AND);
+    for(const auto &c: getWires(g)) {
+      auto dc = interpretAsDDInternal(c, seen, dd);
+      dd.addWire(dg, dc);
+    }
+  }
+  break;
+
+  case BooleanGate::OR:
+  {
+    dg = dd.setGate(BooleanGate::NOT);
+    auto dng = dd.setGate(BooleanGate::AND);
+    dd.addWire(dg, dng);
+    for(const auto &c: getWires(g)) {
+      auto dc = interpretAsDDInternal(c, seen, dd);
+      auto dnc = dd.setGate(BooleanGate::NOT);
+      dd.addWire(dnc, dc);
+      dd.addWire(dng, dnc);
+    }
+  }
+  break;
+
+  case BooleanGate::NOT:
+  {
+    dg = dd.setGate(BooleanGate::NOT);
+    auto dc = interpretAsDDInternal(getWires(g)[0], seen, dd);
+    dd.addWire(dg, dc);
+  }
+  break;
+
+  case BooleanGate::IN:
+    if(seen.find(g)!=seen.end())
+      throw CircuitException("Not an independent circuit");
+    seen.insert(g);
+    dg = dd.setGate(getUUID(g), BooleanGate::IN, getProb(g));
+    break;
+
+  case BooleanGate::MULIN:
+  case BooleanGate::MULVAR:
+  case BooleanGate::UNDETERMINED:
+    throw CircuitException("Unsupported gate in interpretAsDD");
+  }
+
+  return dg;
+}
+
+dDNNF BooleanCircuit::interpretAsDD(gate_t g) const
+{
+  dDNNF dd;
+  std::set<gate_t> seen;
+
+  dd.setRoot(interpretAsDDInternal(g, seen, dd));
+
+  return dd;
+}
+
+dDNNF BooleanCircuit::makeDD(gate_t g) const
+{
+  dDNNF dd;
+
+  try {
+    dd = interpretAsDD(g);
+  } catch(CircuitException &) {
+    try {
+      TreeDecomposition td(*this);
+      dd = dDNNFTreeDecompositionBuilder{
+        *this, id2uuid.find(g)->second, td}.build();
+    } catch(TreeDecompositionException &) {
+      dd = compilation(g, "d4");
+    }
+  }
+
+  return dd;
 }

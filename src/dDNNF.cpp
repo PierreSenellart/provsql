@@ -114,8 +114,11 @@ void dDNNF::makeGatesBinary(BooleanGate type)
   }
 }
 
-double dDNNF::dDNNFProbabilityEvaluation(gate_t root) const
+double dDNNF::probabilityEvaluation() const
 {
+  if (gates.size() == 0)
+    return 0.;
+
   // Unfortunately, dDNNFs can be quite deep so we need to simulate
   // recursion with a heap-based stack, to avoid exhausting the actual
   // memory stack
@@ -384,7 +387,7 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
   return result[root];
 }
 
-double dDNNF::shapley(gate_t root, gate_t var) const {
+double dDNNF::shapley(gate_t var) const {
   auto cond_pos = condition(var, true);
   auto cond_neg = condition(var, false);
 

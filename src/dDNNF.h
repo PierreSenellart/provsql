@@ -31,17 +31,20 @@ public:
 gate_t getRoot() const {
   return root;
 }
+void setRoot(gate_t g) {
+  root=g;
+}
 std::unordered_set<gate_t> vars(gate_t root) const;
 void makeSmooth();
 void makeGatesBinary(BooleanGate type);
 void simplify();
 dDNNF conditionAndSimplify(gate_t var, bool value) const;
 dDNNF condition(gate_t var, bool value) const;
-double dDNNFProbabilityEvaluation(gate_t root) const;
-double shapley(gate_t g, gate_t var) const;
+double probabilityEvaluation() const;
+double shapley(gate_t var) const;
 
 friend dDNNFTreeDecompositionBuilder;
-friend double BooleanCircuit::compilation(gate_t g, std::string compiler) const;
+friend dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const;
 };
 
 #endif /* DDNNF_H */

@@ -26,31 +26,21 @@ static double shapley_internal
   if(c.getGateType(c.getGate(uuid2string(variable))) != BooleanGate::IN)
     return 0.;
 
-  dDNNF dnnf;
+  dDNNF dd = c.makeDD(c.getGate(uuid2string(token)));
 
-  try {
-    TreeDecomposition td(c);
-    dnnf = dDNNFTreeDecompositionBuilder{
-      c, uuid2string(token), td}.build();
-  } catch(TreeDecompositionException &) {
-    elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
-    return 0.;
-  }
+  dd.makeSmooth();
+  dd.makeGatesBinary(BooleanGate::AND);
 
-  dnnf.makeSmooth();
-  dnnf.makeGatesBinary(BooleanGate::AND);
-
-  auto root=dnnf.getRoot();
-  auto var_gate=dnnf.getGate(uuid2string(variable));
+  auto var_gate=dd.getGate(uuid2string(variable));
 
 /*
    std::string filename("/tmp/export.dd");
    std::ofstream o(filename.c_str());
-   o << dnnf.exportCircuit(root);
+   o << dd.exportCircuit(root);
    o.close();
  */
 
-  double result = dnnf.shapley(root, var_gate);
+  double result = dd.shapley(var_gate);
 
   // Avoid rounding errors that make expected Shapley value outside of [-1,1]
   if(result>1.)

@@ -80,7 +80,8 @@ static Datum probability_evaluate_internal
 
         result = c.possibleWorlds(gate);
       } else if(method=="compilation") {
-        result = c.compilation(gate, args);
+        auto dd = c.compilation(gate, args);
+        result = dd.probabilityEvaluation();
       } else if(method=="weightmc") {
         result = c.WeightMC(gate, args);
       } else if(method=="tree-decomposition") {
@@ -92,23 +93,13 @@ static Datum probability_evaluate_internal
               uuid2string(token),
               td}.build()
           };
-          result = dnnf.dDNNFProbabilityEvaluation(dnnf.getRoot());
+          result = dnnf.probabilityEvaluation();
         } catch(TreeDecompositionException &) {
           elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
         }
       } else if(method=="") {
-        try {
-          TreeDecomposition td(c);
-          auto dnnf{
-            dDNNFTreeDecompositionBuilder{
-              c,
-              uuid2string(token),
-              td}.build()
-          };
-          result = dnnf.dDNNFProbabilityEvaluation(dnnf.getRoot());
-        } catch(TreeDecompositionException &) {
-          result = c.compilation(gate, "d4");
-        }
+        auto dd = c.makeDD(gate);
+        result = dd.probabilityEvaluation();
       } else {
         elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());
       }

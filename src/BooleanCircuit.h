@@ -10,11 +10,13 @@
 #include "Circuit.hpp"
 
 enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN, MULIN, MULVAR };
+class dDNNF;
 
 class BooleanCircuit : public Circuit<BooleanGate> {
 private:
 bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
 std::string Tseytin(gate_t g, bool display_prob) const;
+gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const;
 double independentEvaluationInternal(gate_t g, std::set<gate_t> &seen) const;
 void rewriteMultivaluedGatesRec(
   const std::vector<gate_t> &muls,
@@ -47,11 +49,13 @@ void setInfo(gate_t g, unsigned info);
 unsigned getInfo(gate_t g) const;
 
 double possibleWorlds(gate_t g) const;
-double compilation(gate_t g, std::string compiler) const;
+dDNNF compilation(gate_t g, std::string compiler) const;
 double monteCarlo(gate_t g, unsigned samples) const;
 double WeightMC(gate_t g, std::string opt) const;
 double independentEvaluation(gate_t g) const;
 void rewriteMultivaluedGates();
+dDNNF interpretAsDD(gate_t g) const;
+dDNNF makeDD(gate_t g) const;
 
 virtual std::string toString(gate_t g) const override;
 std::string exportCircuit(gate_t g) const;
