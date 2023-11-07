@@ -61,7 +61,7 @@ double WeightMC(gate_t g, std::string opt) const;
 double independentEvaluation(gate_t g) const;
 void rewriteMultivaluedGates();
 dDNNF interpretAsDD(gate_t g) const;
-dDNNF makeDD(gate_t g) const;
+dDNNF makeDD(gate_t g, const std::string &method, const std::string &args) const;
 
 virtual std::string toString(gate_t g) const override;
 std::string exportCircuit(gate_t g) const;

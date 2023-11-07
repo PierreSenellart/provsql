@@ -79,26 +79,10 @@ static Datum probability_evaluate_internal
           elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
 
         result = c.possibleWorlds(gate);
-      } else if(method=="compilation") {
-        auto dd = c.compilation(gate, args);
-        result = dd.probabilityEvaluation();
       } else if(method=="weightmc") {
         result = c.WeightMC(gate, args);
-      } else if(method=="tree-decomposition") {
-        try {
-          TreeDecomposition td(c);
-          auto dnnf{
-            dDNNFTreeDecompositionBuilder{
-              c,
-              uuid2string(token),
-              td}.build()
-          };
-          result = dnnf.probabilityEvaluation();
-        } catch(TreeDecompositionException &) {
-          elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
-        }
-      } else if(method=="") {
-        auto dd = c.makeDD(gate);
+      } else if(method=="compilation" || method=="tree-decomposition" || method=="") {
+        auto dd = c.makeDD(gate, method, args);
         result = dd.probabilityEvaluation();
       } else {
         elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());

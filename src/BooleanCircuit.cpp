@@ -455,14 +455,19 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     } else if(c=="L") {
       int leaf;
       ss >> leaf;
+      auto and_gate=dnnf.setGate(std::to_string(i), BooleanGate::AND);
       if(gates[abs(leaf)-1]==BooleanGate::IN) {
         if(leaf<0) {
-          dnnf.setGate(std::to_string(i), BooleanGate::IN, 1-prob[-leaf-1]);
+          auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(-leaf-1)), BooleanGate::IN, prob[-leaf-1]);
+          auto not_gate = dnnf.setGate(BooleanGate::NOT);
+          dnnf.addWire(not_gate, leaf_gate);
+          dnnf.addWire(and_gate, not_gate);
         } else {
-          dnnf.setGate(std::to_string(i), BooleanGate::IN, prob[leaf-1]);
+          auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(leaf-1)), BooleanGate::IN, prob[leaf-1]);
+          dnnf.addWire(and_gate, leaf_gate);
         }
       } else
-        dnnf.setGate(std::to_string(i), BooleanGate::IN, 1.);
+        ; // Do nothing, TRUE gate
     } else if(c=="f" || c=="o") {
       // d4 extended format
       // A FALSE gate is an OR gate without wires
@@ -497,13 +502,15 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
         dnnf.addWire(dnnf.getGate(c), and_gate);
         dnnf.addWire(and_gate, id2);
         for(auto leaf : decisions) {
-          gate_t leaf_gate;
           if(leaf<0) {
-            leaf_gate = dnnf.setGate("i"+std::to_string(leaf), BooleanGate::IN, 1-prob[-leaf-1]);
+            auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(-leaf-1)), BooleanGate::IN, prob[-leaf-1]);
+            auto not_gate = dnnf.setGate(BooleanGate::NOT);
+            dnnf.addWire(not_gate, leaf_gate);
+            dnnf.addWire(and_gate, not_gate);
           } else {
-            leaf_gate = dnnf.setGate("i"+std::to_string(leaf), BooleanGate::IN, prob[leaf-1]);
+            auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(leaf-1)), BooleanGate::IN, prob[leaf-1]);
+            dnnf.addWire(and_gate, leaf_gate);
           }
-          dnnf.addWire(and_gate, leaf_gate);
         }
       }
     } else
@@ -815,27 +822,38 @@ dDNNF BooleanCircuit::interpretAsDD(gate_t g) const
   return dd;
 }
 
-dDNNF BooleanCircuit::makeDD(gate_t g) const
+dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::string &args) const
 {
-  dDNNF dd;
-
-  try {
-    dd = interpretAsDD(g);
-    if(provsql_verbose>=20)
-      elog(NOTICE, "Circuit interpreted as dD, %ld gates", dd.getNbGates());
-  } catch(CircuitException &) {
+  if(method=="compilation") {
+    return compilation(g, args);
+  } else if(method=="tree-decomposition") {
     try {
       TreeDecomposition td(*this);
-      dd = dDNNFTreeDecompositionBuilder{
+      return dDNNFTreeDecompositionBuilder{
         *this, id2uuid.find(g)->second, td}.build();
-      if(provsql_verbose>=20)
-        elog(NOTICE, "dD obtained by tree decomposition, %ld gates", dd.getNbGates());
     } catch(TreeDecompositionException &) {
-      dd = compilation(g, "d4");
-      if(provsql_verbose>=20)
-        elog(NOTICE, "dD obtained by compilation using d4, %ld gates", dd.getNbGates());
+      elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
     }
-  }
+  } else {
+    dDNNF dd;
+    try {
+      dd = interpretAsDD(g);
+      if(provsql_verbose>=20)
+        elog(NOTICE, "Circuit interpreted as dD, %ld gates", dd.getNbGates());
+    } catch(CircuitException &) {
+      try {
+        TreeDecomposition td(*this);
+        dd = dDNNFTreeDecompositionBuilder{
+          *this, id2uuid.find(g)->second, td}.build();
+        if(provsql_verbose>=20)
+          elog(NOTICE, "dD obtained by tree decomposition, %ld gates", dd.getNbGates());
+      } catch(TreeDecompositionException &) {
+        dd = compilation(g, "d4");
+        if(provsql_verbose>=20)
+          elog(NOTICE, "dD obtained by compilation using d4, %ld gates", dd.getNbGates());
+      }
+    }
 
-  return dd;
+    return dd;
+  }
 }

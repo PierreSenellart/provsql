@@ -630,7 +630,9 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
 
 CREATE OR REPLACE FUNCTION shapley(
   token UUID,
-  variable UUID)
+  variable UUID,
+  method text = NULL,
+  arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
   'provsql','shapley' LANGUAGE C;
 
