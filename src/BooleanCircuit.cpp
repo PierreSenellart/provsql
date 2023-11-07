@@ -538,13 +538,13 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   double delta = 0;
   try {
     delta=stod(delta_s);
-  } catch (std::invalid_argument &e) {
+  } catch (std::invalid_argument &) {
     delta=0;
   }
   double epsilon = 0;
   try {
     epsilon=stod(epsilon_s);
-  } catch (std::invalid_argument &e) {
+  } catch (std::invalid_argument &) {
     epsilon=0;
   }
   if(delta == 0) delta=0.2;
@@ -821,13 +821,19 @@ dDNNF BooleanCircuit::makeDD(gate_t g) const
 
   try {
     dd = interpretAsDD(g);
+    if(provsql_verbose>=20)
+      elog(NOTICE, "Circuit interpreted as dD, %ld gates", dd.getNbGates());
   } catch(CircuitException &) {
     try {
       TreeDecomposition td(*this);
       dd = dDNNFTreeDecompositionBuilder{
         *this, id2uuid.find(g)->second, td}.build();
+      if(provsql_verbose>=20)
+        elog(NOTICE, "dD obtained by tree decomposition, %ld gates", dd.getNbGates());
     } catch(TreeDecompositionException &) {
       dd = compilation(g, "d4");
+      if(provsql_verbose>=20)
+        elog(NOTICE, "dD obtained by compilation using d4, %ld gates", dd.getNbGates());
     }
   }
 
