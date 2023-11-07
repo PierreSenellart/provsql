@@ -57,6 +57,8 @@ gate_t BooleanCircuit::setGate(const uuid &u, BooleanGate type)
 gate_t BooleanCircuit::setGate(const uuid &u, BooleanGate type, double p)
 {
   auto id = setGate(u, type);
+  if(std::isnan(p))
+    p=1.;
   setProb(id,p);
   return id;
 }
@@ -64,6 +66,8 @@ gate_t BooleanCircuit::setGate(const uuid &u, BooleanGate type, double p)
 gate_t BooleanCircuit::setGate(BooleanGate type, double p)
 {
   auto id = setGate(type);
+  if(std::isnan(p))
+    p=1.;
   setProb(id,p);
   return id;
 }

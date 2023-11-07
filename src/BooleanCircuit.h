@@ -30,6 +30,7 @@ std::set<gate_t> inputs;
 std::set<gate_t> mulinputs;
 std::vector<double> prob;
 std::map<gate_t, unsigned> info;
+bool probabilistic=false;
 
 public:
 BooleanCircuit() {
@@ -40,10 +41,15 @@ gate_t setGate(const uuid &u, BooleanGate t) override;
 gate_t setGate(BooleanGate t, double p);
 gate_t setGate(const uuid &u, BooleanGate t, double p);
 void setProb(gate_t g, double p) {
+  if(!probabilistic && p!=1.)
+    probabilistic=true;
   prob[static_cast<std::underlying_type<gate_t>::type>(g)]=p;
 }
 double getProb(gate_t g) const {
   return prob[static_cast<std::underlying_type<gate_t>::type>(g)];
+}
+bool isProbabilistic() const {
+  return probabilistic;
 }
 void setInfo(gate_t g, unsigned info);
 unsigned getInfo(gate_t g) const;

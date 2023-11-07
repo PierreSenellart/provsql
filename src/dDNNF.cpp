@@ -196,6 +196,10 @@ double dDNNF::probabilityEvaluation() const
 
 std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta(gate_t root) const {
   std::unordered_map<gate_t, std::vector<double> > result;
+
+  if(!isProbabilistic())
+    return result;
+
   // Stack to simulate recursion: contains a pair (node, b) where b
   // indicates whether this is the beginning (false) or ending (true) of
   // the processing of a node
@@ -317,10 +321,11 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
         stack.push(std::make_pair(getWires(node)[0], false));
       } else {
         result[node] = result[getWires(node)[0]];
-        for(unsigned k=0; k<result[node].size(); ++k)
+        auto k0=isProbabilistic()?0:result[node].size()-1;
+        for(unsigned k=k0; k<result[node].size(); ++k)
           for(unsigned l=0; l<=k; ++l) {
             result[node][k][l] *= -1;
-            result[node][k][l] += comb(k,l)*delta[node][k];
+            result[node][k][l] += comb(k,l)*(isProbabilistic()?delta[node][k]:1);
           }
       }
       break;
@@ -338,7 +343,8 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
         result[node] = result[getWires(node)[0]];
         for(size_t i=1; i<getWires(node).size(); ++i) {
           const auto &r = result[getWires(node)[i]];
-          for(unsigned k=0; k<r.size(); ++k)
+          auto k0=isProbabilistic()?0:r.size()-1;
+          for(unsigned k=k0; k<r.size(); ++k)
             for(unsigned l=0; l<r[k].size(); ++l)
               result[node][k][l]+=r[k][l];
         }
@@ -364,7 +370,8 @@ std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
           const auto n1=r1.size()-1;
           const auto n2=r2.size()-1;
           result[node].resize(n1+n2+1);
-          for(size_t k=0; k<=n1+n2; ++k) {
+          auto k0=isProbabilistic()?0:n1+n2;
+          for(size_t k=k0; k<=n1+n2; ++k) {
             result[node][k].resize(k+1);
             for(size_t l=0; l<=k; ++l) {
               for(size_t k1=std::max(0,static_cast<int>(k-n2)); k1<=std::min(k,n1); ++k1)
@@ -396,10 +403,11 @@ double dDNNF::shapley(gate_t var) const {
 
   double result=0.;
 
-  for(size_t k=0; k<std::max(alpha_pos.size(),alpha_neg.size()); ++k)
+  double k0=isProbabilistic()?0:alpha_pos.size()-1;
+  for(size_t k=k0; k<alpha_pos.size(); ++k)
     for(size_t l=0; l<=k; ++l) {
-      double pos = k>=alpha_pos.size()?0.:alpha_pos[k][l];
-      double neg = k>=alpha_neg.size()?0.:alpha_neg[k][l];
+      double pos = alpha_pos[k][l];
+      double neg = alpha_neg[k][l];
       result += (pos-neg)/comb(k,l)/(k+1);
     }
 
