@@ -36,7 +36,7 @@ test: viewing_setup
 test: possible_worlds monte_carlo
 
 # Probability computation using external software
-test: d4 dsharp weightmc
+test: d4 dsharp weightmc c2d
 
 # Probability computation using tree decompositions, independent
 # probability computation, and default computation

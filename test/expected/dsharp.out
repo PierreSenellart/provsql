@@ -11,3 +11,19 @@
  Paris    | 0.41
 (3 rows)
 
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   name   |   city   | shapley 
+----------+----------+---------
+ Ellen    | Berlin   |   0.093
+ Susan    | Berlin   |   0.264
+ John     | New York |   0.037
+ Paul     | New York |   0.080
+ Dave     | Paris    |   0.056
+ Magdalen | Paris    |   0.113
+ Nancy    | Paris    |   0.156
+(7 rows)
+
