@@ -336,6 +336,16 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
   }
 }
 
+PG_FUNCTION_INFO_V1(get_nb_gates);
+Datum get_nb_gates(PG_FUNCTION_ARGS)
+{
+  long nb;
+
+  nb = hash_get_num_entries(provsql_hash);
+
+  PG_RETURN_INT64(nb);
+}
+
 PG_FUNCTION_INFO_V1(get_children);
 Datum get_children(PG_FUNCTION_ARGS)
 {

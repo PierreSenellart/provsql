@@ -20,10 +20,15 @@ INSERT INTO personnel (name,position,city,classification) VALUES
   ('Nancy','HR','Paris','restricted'),
   ('Susan','Analyst','Berlin','secret');
 
+CREATE TABLE nb_gates (x INT);
+INSERT INTO nb_gates SELECT get_nb_gates();
+
 SELECT add_provenance('personnel');
+
+SELECT get_nb_gates()-x AS nb FROM nb_gates;
+DROP TABLE nb_gates;
 
 SELECT attname
 FROM pg_attribute
 WHERE attrelid ='personnel'::regclass AND attnum>1
 ORDER BY attname;
-

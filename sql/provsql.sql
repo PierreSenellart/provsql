@@ -69,6 +69,8 @@ CREATE OR REPLACE FUNCTION get_infos(
   token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
   'provsql','get_infos' LANGUAGE C;
+CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
+  'provsql', 'get_nb_gates' LANGUAGE C;
 
 CREATE UNLOGGED TABLE provenance_circuit_extra(
   gate UUID,
