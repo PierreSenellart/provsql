@@ -69,6 +69,8 @@ SELECT remove_provenance('shapley_result1');
 CREATE TABLE shapley_result2 AS
   SELECT * FROM shapley_result1, shapley_all_vars(provenance);
 
-SELECT city, ROUND(shapley::numeric,3) FROM shapley_result2;
+SELECT city, ROUND(shapley::numeric,3) AS shapley FROM shapley_result2
+ORDER BY city, shapley;
+
 DROP TABLE shapley_result1;
 DROP TABLE shapley_result2;
