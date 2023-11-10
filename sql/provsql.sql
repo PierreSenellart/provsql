@@ -607,7 +607,7 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
   monus_function regproc = NULL,
   delta_function regproc = NULL)
   RETURNS anyelement AS
-  'provsql','provenance_evaluate' LANGUAGE C;
+  'provsql','provenance_evaluate' LANGUAGE C STABLE;
 
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token UUID,
@@ -621,14 +621,14 @@ CREATE OR REPLACE FUNCTION aggregation_evaluate(
   monus_function regproc = NULL,
   delta_function regproc = NULL)
   RETURNS anyelement AS
-  'provsql','aggregation_evaluate' LANGUAGE C;
+  'provsql','aggregation_evaluate' LANGUAGE C STABLE;
 
 CREATE OR REPLACE FUNCTION probability_evaluate(
   token UUID,
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
-  'provsql','probability_evaluate' LANGUAGE C;
+  'provsql','probability_evaluate' LANGUAGE C STABLE;
 
 CREATE OR REPLACE FUNCTION shapley(
   token UUID,
@@ -636,7 +636,17 @@ CREATE OR REPLACE FUNCTION shapley(
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
-  'provsql','shapley' LANGUAGE C;
+  'provsql','shapley' LANGUAGE C STABLE;
+
+CREATE OR REPLACE FUNCTION shapley_all_vars(
+  IN token UUID,
+  IN method text = NULL,
+  IN arguments text = NULL,
+  OUT variable UUID,
+  OUT shapley DOUBLE PRECISION)
+  RETURNS SETOF record AS
+  'provsql', 'shapley_all_vars'
+  LANGUAGE C STABLE;
 
 CREATE OR REPLACE FUNCTION view_circuit(
   token UUID,

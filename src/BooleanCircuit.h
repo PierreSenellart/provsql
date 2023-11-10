@@ -40,6 +40,9 @@ gate_t setGate(BooleanGate t) override;
 gate_t setGate(const uuid &u, BooleanGate t) override;
 gate_t setGate(BooleanGate t, double p);
 gate_t setGate(const uuid &u, BooleanGate t, double p);
+const std::set<gate_t> &getInputs() const {
+  return inputs;
+}
 void setProb(gate_t g, double p) {
   if(!probabilistic && p!=1.)
     probabilistic=true;

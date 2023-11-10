@@ -413,6 +413,12 @@ double dDNNF::shapley(gate_t var) const {
 
   result *= getProb(var);
 
+  // Avoid rounding errors that make expected Shapley value outside of [-1,1]
+  if(result>1.)
+    result=1.;
+  else if(result<-1.)
+    result=-1.;
+
   return result;
 }
 

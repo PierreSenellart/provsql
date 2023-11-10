@@ -8,6 +8,7 @@ extern "C" {
 #include "provsql_utils.h"
 
 PG_FUNCTION_INFO_V1(shapley);
+PG_FUNCTION_INFO_V1(shapley_all_vars);
 }
 
 #include "BooleanCircuit.h"
@@ -33,20 +34,7 @@ static double shapley_internal
 
   auto var_gate=dd.getGate(uuid2string(variable));
 
-/*
-   std::string filename("/tmp/export.dd");
-   std::ofstream o(filename.c_str());
-   o << dd.exportCircuit(root);
-   o.close();
- */
-
   double result = dd.shapley(var_gate);
-
-  // Avoid rounding errors that make expected Shapley value outside of [-1,1]
-  if(result>1.)
-    result=1.;
-  else if(result<-1.)
-    result=-1.;
 
   return result;
 }
@@ -78,6 +66,63 @@ Datum shapley(PG_FUNCTION_ARGS)
   } catch(...) {
     elog(ERROR, "shapley: Unknown exception");
   }
+
+  PG_RETURN_NULL();
+}
+
+Datum shapley_all_vars(PG_FUNCTION_ARGS)
+{
+  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+  MemoryContext oldcontext    = MemoryContextSwitchTo(per_query_ctx);
+
+  TupleDesc tupdesc = rsinfo->expectedDesc;
+  Tuplestorestate *tupstore     = tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random, false, work_mem);
+
+  rsinfo->returnMode = SFRM_Materialize;
+  rsinfo->setResult = tupstore;
+
+  if(!PG_ARGISNULL(0)) {
+    pg_uuid_t token = *DatumGetUUIDP(PG_GETARG_DATUM(0));
+
+    std::string method;
+    if(!PG_ARGISNULL(1)) {
+      text *t = PG_GETARG_TEXT_P(1);
+      method = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
+    }
+
+    std::string args;
+    if(!PG_ARGISNULL(2)) {
+      text *t = PG_GETARG_TEXT_P(2);
+      args = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
+    }
+
+    BooleanCircuit c = createBooleanCircuit(token);
+
+    dDNNF dd = c.makeDD(c.getGate(uuid2string(token)), method, args);
+    dd.makeSmooth();
+    dd.makeGatesBinary(BooleanGate::AND);
+
+    for(auto &v_circuit_gate: c.getInputs()) {
+      auto var_uuid_string = c.getUUID(v_circuit_gate);
+      auto var_gate=dd.getGate(var_uuid_string);
+      pg_uuid_t *uuidp = reinterpret_cast<pg_uuid_t*>(palloc(UUID_LEN));
+      *uuidp = string2uuid(var_uuid_string);
+
+      double result = dd.shapley(var_gate);
+
+      Datum values[2] = {
+        UUIDPGetDatum(uuidp), Float8GetDatum(result)
+      };
+      bool nulls[sizeof(values)] = {0, 0};
+
+      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+  }
+
+  tuplestore_donestoring(tupstore);
+  MemoryContextSwitchTo(oldcontext);
 
   PG_RETURN_NULL();
 }
