@@ -531,12 +531,13 @@ void dDNNF::simplify() {
     to_process.pop();
     used[static_cast<size_t>(g)]=true;
     for(auto c: wires[static_cast<size_t>(g)])
-      to_process.push(c);
+      if(!used[static_cast<size_t>(c)])
+        to_process.push(c);
   }
 
   size_t newi = 0;
   std::vector<gate_t> relabel(gates.size());
-  for(size_t i=0; i<=gates.size(); ++i)
+  for(size_t i=0; i<gates.size(); ++i)
   {
     if(!used[i]) {
       inputs.erase(gate_t{i});
