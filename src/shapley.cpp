@@ -20,7 +20,7 @@ PG_FUNCTION_INFO_V1(shapley_all_vars);
 using namespace std;
 
 static double shapley_internal
-  (pg_uuid_t token, pg_uuid_t variable, const std::string &method, const std::string &args)
+  (pg_uuid_t token, pg_uuid_t variable, const std::string &method, const std::string &args, bool banzhaf)
 {
   BooleanCircuit c = createBooleanCircuit(token);
 
@@ -30,11 +30,17 @@ static double shapley_internal
   dDNNF dd = c.makeDD(c.getGate(uuid2string(token)), method, args);
 
   dd.makeSmooth();
-  dd.makeGatesBinary(BooleanGate::AND);
+  if(!banzhaf)
+    dd.makeGatesBinary(BooleanGate::AND);
 
   auto var_gate=dd.getGate(uuid2string(variable));
 
-  double result = dd.shapley(var_gate);
+  double result;
+
+  if(!banzhaf)
+    result = dd.shapley(var_gate);
+  else
+    result = dd.banzhaf(var_gate);
 
   return result;
 }
@@ -60,7 +66,12 @@ Datum shapley(PG_FUNCTION_ARGS)
       args = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
     }
 
-    PG_RETURN_FLOAT8(shapley_internal(*DatumGetUUIDP(token), *DatumGetUUIDP(variable), method, args));
+    bool banzhaf = false;
+    if(!PG_ARGISNULL(4)) {
+      banzhaf = PG_GETARG_BOOL(4);
+    }
+
+    PG_RETURN_FLOAT8(shapley_internal(*DatumGetUUIDP(token), *DatumGetUUIDP(variable), method, args, banzhaf));
   } catch(const std::exception &e) {
     elog(ERROR, "shapley: %s", e.what());
   } catch(...) {
@@ -98,11 +109,17 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
       args = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
     }
 
+    bool banzhaf = false;
+    if(!PG_ARGISNULL(3)) {
+      banzhaf = PG_GETARG_BOOL(3);
+    }
+
     BooleanCircuit c = createBooleanCircuit(token);
 
     dDNNF dd = c.makeDD(c.getGate(uuid2string(token)), method, args);
     dd.makeSmooth();
-    dd.makeGatesBinary(BooleanGate::AND);
+    if(!banzhaf)
+      dd.makeGatesBinary(BooleanGate::AND);
 
     for(auto &v_circuit_gate: c.getInputs()) {
       auto var_uuid_string = c.getUUID(v_circuit_gate);
@@ -110,7 +127,12 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
       pg_uuid_t *uuidp = reinterpret_cast<pg_uuid_t*>(palloc(UUID_LEN));
       *uuidp = string2uuid(var_uuid_string);
 
-      double result = dd.shapley(var_gate);
+      double result;
+
+      if(!banzhaf)
+        result = dd.shapley(var_gate);
+      else
+        result = dd.banzhaf(var_gate);
 
       Datum values[2] = {
         UUIDPGetDatum(uuidp), Float8GetDatum(result)

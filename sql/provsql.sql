@@ -634,7 +634,8 @@ CREATE OR REPLACE FUNCTION shapley(
   token UUID,
   variable UUID,
   method text = NULL,
-  arguments text = NULL)
+  arguments text = NULL,
+  banzhaf BOOLEAN = 'f')
   RETURNS DOUBLE PRECISION AS
   'provsql','shapley' LANGUAGE C STABLE;
 
@@ -642,11 +643,31 @@ CREATE OR REPLACE FUNCTION shapley_all_vars(
   IN token UUID,
   IN method text = NULL,
   IN arguments text = NULL,
+  IN banzhaf BOOLEAN = 'f',
   OUT variable UUID,
-  OUT shapley DOUBLE PRECISION)
+  OUT value DOUBLE PRECISION)
   RETURNS SETOF record AS
   'provsql', 'shapley_all_vars'
   LANGUAGE C STABLE;
+
+CREATE OR REPLACE FUNCTION banzhaf(
+  token UUID,
+  variable UUID,
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS
+  $$ SELECT shapley(token, variable, method, arguments, 't') $$
+  LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION banzhaf_all_vars(
+  IN token UUID,
+  IN method text = NULL,
+  IN arguments text = NULL,
+  OUT variable UUID,
+  OUT value DOUBLE PRECISION)
+  RETURNS SETOF record AS
+  $$ SELECT * FROM shapley_all_vars(token, method, arguments, 't') $$
+  LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION view_circuit(
   token UUID,

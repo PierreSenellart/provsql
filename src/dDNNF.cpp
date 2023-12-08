@@ -5,6 +5,7 @@
 #include <variant>
 #include <cassert>
 #include <algorithm>
+#include <numeric>
 
 std::unordered_set<gate_t> dDNNF::vars(gate_t root) const
 {
@@ -194,7 +195,99 @@ double dDNNF::probabilityEvaluation() const
   assert(false);
 }
 
-std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta(gate_t root) const {
+double dDNNF::banzhaf_internal() const {
+  std::unordered_map<gate_t, double> result;
+  std::unordered_map<gate_t, double> prod_one_plus_p;
+
+  // Stack to simulate recursion: contains a pair (node, b) where b
+  // indicates whether this is the beginning (false) or ending (true) of
+  // the processing of a node
+  std::stack<std::pair<gate_t, bool> > stack;
+  stack.emplace(std::make_pair(root, false));
+
+  while(!stack.empty())
+  {
+    auto [node, b] = stack.top();
+    stack.pop();
+
+    if(result.find(node)!=result.end()) {
+      // Already processed, skip
+      continue;
+    }
+
+    switch(getGateType(node)) {
+    case BooleanGate::IN:
+      result[node] = getProb(node);
+      prod_one_plus_p[node] = 1+getProb(node);
+      break;
+
+    case BooleanGate::NOT:
+      if(!b) {
+        stack.push(std::make_pair(node, true));
+        stack.push(std::make_pair(getWires(node)[0], false));
+      } else {
+        auto child = getWires(node)[0];
+        result[node] = prod_one_plus_p[child] - result[child];
+        prod_one_plus_p[node] = prod_one_plus_p[child];
+      }
+      break;
+
+    case BooleanGate::OR:
+      if(!b) {
+        if(getWires(node).size()==0) { // Has to be an OR False gate
+          result[node] = 0.;
+          prod_one_plus_p[node] = 1.;
+        } else {
+          stack.push(std::make_pair(node, true));
+          for(auto c: getWires(node))
+            stack.push(std::make_pair(c, false));
+        }
+      } else {
+        result[node] =
+          std::accumulate(getWires(node).begin(), getWires(node).end(), 0.,
+                          [&](auto r, auto g) {
+          return r + result[g];
+        });
+        prod_one_plus_p[node] = prod_one_plus_p[getWires(node)[0]];
+      }
+      break;
+
+    case BooleanGate::AND:
+      if(!b) {
+        if(getWires(node).size()==0) { // Has to be an AND True gate
+          result[node] = 1.;
+          prod_one_plus_p[node] = 1.;
+        } else {
+          stack.push(std::make_pair(node, true));
+          for(auto c: getWires(node))
+            stack.push(std::make_pair(c, false));
+        }
+      } else {
+        result[node] =
+          std::accumulate(getWires(node).begin(), getWires(node).end(), 1.,
+                          [&](auto r, auto g) {
+          return r * result[g];
+        });
+        prod_one_plus_p[node] =
+          std::accumulate(getWires(node).begin(), getWires(node).end(), 1.,
+                          [&](auto r, auto g) {
+          return r * prod_one_plus_p[g];
+        });
+      }
+      break;
+
+    case BooleanGate::MULIN:
+    case BooleanGate::MULVAR:
+    case BooleanGate::UNDETERMINED:
+      throw CircuitException("Incorrect gate type");
+      break;
+    }
+  }
+
+  return result[root];
+}
+
+std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta() const {
   std::unordered_map<gate_t, std::vector<double> > result;
 
   if(!isProbabilistic())
@@ -290,8 +383,8 @@ static long long comb(unsigned n, unsigned k)
   else return n * comb(n-1,k-1) / k;
 }
 
-std::vector<std::vector<double> > dDNNF::shapley_alpha(gate_t root) const {
-  std::unordered_map<gate_t, std::vector<double> > delta {shapley_delta(root)};
+std::vector<std::vector<double> > dDNNF::shapley_alpha() const {
+  std::unordered_map<gate_t, std::vector<double> > delta {shapley_delta()};
   std::unordered_map<gate_t, std::vector<std::vector<double> > > result;
 
   // Stack to simulate recursion: contains a pair (node, b) where b
@@ -398,8 +491,8 @@ double dDNNF::shapley(gate_t var) const {
   auto cond_pos = condition(var, true);
   auto cond_neg = condition(var, false);
 
-  auto alpha_pos=cond_pos.shapley_alpha(root);
-  auto alpha_neg=cond_neg.shapley_alpha(root);
+  auto alpha_pos=cond_pos.shapley_alpha();
+  auto alpha_neg=cond_neg.shapley_alpha();
 
   double result=0.;
 
@@ -420,6 +513,16 @@ double dDNNF::shapley(gate_t var) const {
     result=-1.;
 
   return result;
+}
+
+double dDNNF::banzhaf(gate_t var) const {
+  auto cond_pos = condition(var, true);
+  auto cond_neg = condition(var, false);
+
+  auto env_pos=cond_pos.banzhaf_internal();
+  auto env_neg=cond_neg.banzhaf_internal();
+
+  return getProb(var) * (env_pos-env_neg);
 }
 
 dDNNF dDNNF::condition(gate_t var, bool value) const {

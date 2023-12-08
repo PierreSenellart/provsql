@@ -42,8 +42,9 @@ test: d4 dsharp weightmc c2d
 # probability computation, and default computation
 test: treedec_simple treedec default_probability_evaluate independent
 
-# Expected Shapley value computation
+# Expected Shapley and Banzhaf value computation
 test: shapley
+test: banzhaf
 
 # Viewing circuit
 test: view_circuit_multiple

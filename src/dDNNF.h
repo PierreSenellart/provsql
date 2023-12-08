@@ -22,8 +22,9 @@ class dDNNF : public BooleanCircuit {
 private:
 // To memoize probability evaluation results
 mutable std::unordered_map<gate_t, double, hash_gate_t> probability_cache;
-std::unordered_map<gate_t, std::vector<double> > shapley_delta(gate_t root) const;
-std::vector<std::vector<double> > shapley_alpha(gate_t root) const;
+std::unordered_map<gate_t, std::vector<double> > shapley_delta() const;
+std::vector<std::vector<double> > shapley_alpha() const;
+double banzhaf_internal() const;
 std::vector<gate_t> topological_order(const std::vector<std::vector<gate_t> > &reversedWires) const;
 gate_t root{0};
 
@@ -42,6 +43,7 @@ dDNNF conditionAndSimplify(gate_t var, bool value) const;
 dDNNF condition(gate_t var, bool value) const;
 double probabilityEvaluation() const;
 double shapley(gate_t var) const;
+double banzhaf(gate_t var) const;
 
 friend dDNNFTreeDecompositionBuilder;
 friend dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const;

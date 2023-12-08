@@ -1,0 +1,49 @@
+\set ECHO none
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   name   |   city   | banzhaf 
+----------+----------+---------
+ Ellen    | Berlin   |   0.211
+ Susan    | Berlin   |   0.737
+ John     | New York |   0.176
+ Paul     | New York |   0.396
+ Dave     | Paris    |  -0.039
+ Magdalen | Paris    |   0.065
+ Nancy    | Paris    |   0.157
+(7 rows)
+
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   name   |   city   | banzhaf 
+----------+----------+---------
+ Ellen    | Berlin   |   0.000
+ Susan    | Berlin   |   0.000
+ John     | New York |   0.000
+ Paul     | New York |   0.000
+ Dave     | Paris    |  -4.000
+ Magdalen | Paris    |  -4.000
+ Nancy    | Paris    |  -4.000
+(7 rows)
+
+ remove_provenance 
+-------------------
+ 
+(1 row)
+
+   city   | banzhaf 
+----------+---------
+ Berlin   |   0.120
+ Berlin   |   0.420
+ New York |   0.080
+ New York |   0.180
+ Paris    |  -0.030
+ Paris    |   0.050
+ Paris    |   0.120
+(7 rows)
+
