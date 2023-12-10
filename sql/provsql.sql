@@ -656,7 +656,7 @@ CREATE OR REPLACE FUNCTION banzhaf(
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
-  $$ SELECT shapley(token, variable, method, arguments, 't') $$
+  $$ SELECT provsql.shapley(token, variable, method, arguments, 't') $$
   LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION banzhaf_all_vars(
@@ -666,7 +666,7 @@ CREATE OR REPLACE FUNCTION banzhaf_all_vars(
   OUT variable UUID,
   OUT value DOUBLE PRECISION)
   RETURNS SETOF record AS
-  $$ SELECT * FROM shapley_all_vars(token, method, arguments, 't') $$
+  $$ SELECT * FROM provsql.shapley_all_vars(token, method, arguments, 't') $$
   LANGUAGE SQL;
 
 CREATE OR REPLACE FUNCTION view_circuit(
