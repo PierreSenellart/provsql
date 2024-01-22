@@ -145,7 +145,7 @@ BEGIN
     select_key_att := key_att;
   END IF;
 
-  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql_temp UUID UNIQUE DEFAULT uuid_generate_v4()', _tbl);
+  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql_temp UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
 
   FOR key IN
     EXECUTE format('SELECT %s AS key FROM %I GROUP BY %s', select_key_att, _tbl, key_att)
@@ -158,7 +158,7 @@ BEGIN
 
     EXECUTE format('SELECT COUNT(*) FROM %I %s', _tbl, where_condition) INTO nb_rows;
 
-    key_token := uuid_generate_v4();
+    key_token := public.uuid_generate_v4();
     ind := 1;
     FOR record IN
       EXECUTE format('SELECT provsql_temp FROM %I %s', _tbl, where_condition)

@@ -40,7 +40,7 @@ test: d4 dsharp weightmc c2d
 
 # Probability computation using tree decompositions, independent
 # probability computation, and default computation
-test: treedec_simple treedec default_probability_evaluate independent
+test: treedec_simple treedec default_probability_evaluate independent repair_key
 
 # Expected Shapley and Banzhaf value computation
 test: shapley

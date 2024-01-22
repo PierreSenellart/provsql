@@ -623,11 +623,12 @@ double BooleanCircuit::independentEvaluationInternal(
       auto group = c;
       if(getGateType(c) == BooleanGate::MULIN) {
         group = *getWires(c).begin();
-        if(local_mulins.find(g)==local_mulins.end()) {
-          if(seen.find(g)!=seen.end())
+        if(local_mulins.find(group)==local_mulins.end()) {
+          if(seen.find(group)!=seen.end())
             throw CircuitException("Not an independent circuit");
           else
-            seen.insert(g);
+            seen.insert(group);
+          local_mulins.insert(group);
         }
         auto p = std::make_pair(group, getInfo(c));
         if(mulin_seen.find(p)==mulin_seen.end()) {
