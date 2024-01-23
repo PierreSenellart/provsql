@@ -71,3 +71,11 @@ endif
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
 PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
 PGVER_MINOR = $(shell echo $(VERSION) | awk -F. '{ print ($$2 + 0) }')
+
+test/schedule: $(wildcard test/schedule.*)
+	cat test/schedule.common > test/schedule
+	if [ $(PGVER_MAJOR) -ge 14 ]; then \
+		cat test/schedule.14 >> test/schedule; \
+	fi
+
+installcheck: test/schedule
