@@ -23,6 +23,7 @@
 
 #include "provsql_utils.h"
 #include "provsql_shmem.h"
+#include "provsql_mmap.h"
 
 #if PG_VERSION_NUM < 90600
 #error "ProvSQL requires PostgreSQL version 9.6 or later"
@@ -1660,6 +1661,8 @@ void _PG_init(void)
 
   planner_hook = provsql_planner;
   shmem_startup_hook = provsql_shmem_startup;
+
+  RegisterProvSQLMMapWorker();
 }
 
 void _PG_fini(void)
