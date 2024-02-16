@@ -20,7 +20,9 @@ void RegisterProvSQLMMapWorker(void)
   BackgroundWorker worker;
 
   snprintf(worker.bgw_name, BGW_MAXLEN, "ProvSQL MMap Worker");
+#if PG_VERSION_NUM >= 110000
   snprintf(worker.bgw_type, BGW_MAXLEN, "ProvSQL MMap");
+#endif
 
   worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
   worker.bgw_start_time = BgWorkerStart_PostmasterStart;
