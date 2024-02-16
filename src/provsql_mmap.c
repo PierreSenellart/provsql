@@ -30,8 +30,11 @@ void RegisterProvSQLMMapWorker(void)
 
   snprintf(worker.bgw_library_name, BGW_MAXLEN, "provsql");
   snprintf(worker.bgw_function_name, BGW_MAXLEN, "provsql_mmap_worker");
+#if PG_VERSION_NUM < 100000
+  worker.bgw_main = NULL;
+#endif
 
-  worker.bgw_main_arg = 0;
+  worker.bgw_main_arg = (Datum) 0;
   worker.bgw_notify_pid = 0;
 
   RegisterBackgroundWorker(&worker);

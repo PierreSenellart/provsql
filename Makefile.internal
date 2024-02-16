@@ -45,7 +45,7 @@ with_llvm = no
 
 # A different pg_config can be specified below, e.g., when different
 # PostgreSQL are installed on the same machine
-PG_CONFIG = pg_config
+PG_CONFIG = /opt/postgresql-9.6.20/bin/pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
