@@ -35,7 +35,7 @@ sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 LDFLAGS_SL = -lstdc++ -Wno-lto-type-mismatch
 
 ifdef DEBUG
-PG_CPPFLAGS += -Og -g
+PG_CPPFLAGS += -O0 -g
 endif
 
 # Disable JIT code generation, due to various bugs, see in particular

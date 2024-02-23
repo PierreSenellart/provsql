@@ -1,5 +1,8 @@
 INTERNAL = Makefile.internal
 ARGS = with_llvm=no
+ifdef DEBUG
+	ARGS+=DEBUG=1
+endif
 UNAME := $(shell uname)
 
 ifeq ($(UNAME), Darwin)

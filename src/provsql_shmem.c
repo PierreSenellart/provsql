@@ -56,7 +56,6 @@ void provsql_shmem_startup(void)
   provsql_shared_state = NULL;
   provsql_hash = NULL;
 
-
   LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
   provsql_shared_state = ShmemInitStruct(
@@ -71,6 +70,7 @@ void provsql_shmem_startup(void)
 #else
     provsql_shared_state->lock =LWLockAssign();
 #endif /* PG_VERSION_NUM >= 90600 */
+    provsql_shared_state->mmap_initialized=false;
     provsql_shared_state->nb_wires=0;
   }
 
