@@ -8,6 +8,7 @@
 #include "postgres.h"
 #include "postmaster/bgworker.h"
 
+__attribute__((visibility("default")))
 void provsql_mmap_worker(Datum ignored)
 {
   BackgroundWorkerUnblockSignals();
