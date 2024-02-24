@@ -125,14 +125,6 @@ void provsql_shmem_startup(void)
 
 static void provsql_shmem_shutdown(int code, Datum arg)
 {
-
-  #if PG_VERSION_NUM >= 90600
-  // Named lock tranches were added in version 9.6 of PostgreSQL
-  provsql_shared_state->lock =&(GetNamedLWLockTranche("provsql"))->lock;
-  #else
-  provsql_shared_state->lock =LWLockAssign();
-  #endif // PG_VERSION_NUM >= 90600
-
   switch (provsql_serialize("provsql.tmp"))
   {
   case 1:
@@ -147,12 +139,6 @@ static void provsql_shmem_shutdown(int code, Datum arg)
     elog(INFO, "Error while closing the file during serialization");
     break;
   }
-
-  LWLockRelease(provsql_shared_state->lock);
-
-
-  // TODO (void) durable_rename(PROVSQL_DUMP_FILE ".tmp", PROVSQL_DUMP_FILE, LOG);
-
 }
 
 Size provsql_memsize(void)
