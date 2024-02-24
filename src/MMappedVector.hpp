@@ -16,9 +16,9 @@
 #include <sys/mman.h>
 
 template <typename T>
-MMappedVector<T>::MMappedVector(const char *filename)
+MMappedVector<T>::MMappedVector(const char *filename, bool read_only)
 {
-  fd=open(filename, O_CREAT|O_RDWR, 0600); // flawfinder: ignore
+  fd=open(filename, O_CREAT|(read_only?O_RDONLY:O_RDWR), 0600); // flawfinder: ignore
   if(fd==-1)
     throw std::runtime_error(strerror(errno));
 
@@ -34,7 +34,7 @@ MMappedVector<T>::MMappedVector(const char *filename)
       throw std::runtime_error(strerror(errno));
   }
 
-  mmap(length);
+  mmap(length, read_only);
 
   if(empty) {
     data->capacity = STARTING_CAPACITY;
@@ -43,12 +43,12 @@ MMappedVector<T>::MMappedVector(const char *filename)
 }
 
 template <typename T>
-void MMappedVector<T>::mmap(size_t length)
+void MMappedVector<T>::mmap(size_t length, bool read_only)
 {
   data = reinterpret_cast<data_t *>(::mmap(
                                       NULL,
                                       length,
-                                      PROT_READ|PROT_WRITE,
+                                      PROT_READ|(read_only?0:PROT_WRITE),
                                       MAP_SHARED_VALIDATE,
                                       fd,
                                       0));
@@ -65,7 +65,7 @@ void MMappedVector<T>::grow()
   auto new_length = offsetof(data_t,d)+sizeof(T)*new_capacity;
   if(ftruncate(fd, new_length))
     throw std::runtime_error(strerror(errno));
-  mmap(new_length);
+  mmap(new_length, false);
 
   data->capacity = new_capacity;
 }

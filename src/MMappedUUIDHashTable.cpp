@@ -12,9 +12,9 @@
 
 #include <sys/mman.h>
 
-MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename)
+MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename, bool read_only)
 {
-  fd=open(filename, O_CREAT|O_RDWR, 0600); // flawfinder: ignore
+  fd=open(filename, O_CREAT|(read_only?O_RDONLY:O_RDWR), 0600); // flawfinder: ignore
   if(fd==-1)
     throw std::runtime_error(strerror(errno));
 
@@ -30,7 +30,7 @@ MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename)
       throw std::runtime_error(strerror(errno));
   }
 
-  mmap(size);
+  mmap(size, read_only);
 
   if(empty) {
     table->log_size = table_t::logSizeForSize(size);
@@ -42,12 +42,12 @@ MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename)
   }
 }
 
-void MMappedUUIDHashTable::mmap(size_t length)
+void MMappedUUIDHashTable::mmap(size_t length, bool read_only)
 {
   table = reinterpret_cast<table_t *>(::mmap(
                                         NULL,
                                         length,
-                                        PROT_READ|PROT_WRITE,
+                                        PROT_READ|(read_only?0:PROT_WRITE),
                                         MAP_SHARED_VALIDATE,
                                         fd,
                                         0));
@@ -70,7 +70,7 @@ void MMappedUUIDHashTable::grow()
   auto new_size = table_t::sizeForLogSize(new_log_size);
   if(ftruncate(fd, new_size))
     throw std::runtime_error(strerror(errno));
-  mmap(new_size);
+  mmap(new_size, false);
 
   table->log_size = new_log_size;
   for(unsigned i=0; i<table->capacity(); ++i) {

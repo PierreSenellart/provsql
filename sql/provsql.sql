@@ -683,13 +683,6 @@ CREATE OR REPLACE FUNCTION where_provenance(token UUID)
   RETURNS text AS
   'provsql','where_provenance' LANGUAGE C;
 
-CREATE OR REPLACE FUNCTION dump_data() RETURNS TEXT AS
-  'provsql', 'dump_data' LANGUAGE C;
-
-CREATE OR REPLACE FUNCTION read_data_dump() RETURNS TEXT AS
-  'provsql', 'read_data_dump' LANGUAGE C;
-
-
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
 

@@ -24,28 +24,9 @@ void provsql_shmem_request(void);
 
 typedef struct provsqlSharedState
 {
-  LWLock *lock; // protect access to the shared data
-  bool mmap_initialized;
-  long pipew;
-  long piper;
-  unsigned nb_wires;
-  pg_uuid_t wires[FLEXIBLE_ARRAY_MEMBER];
+  LWLock *lock; // only send one message at a time
+  long pipebmr, pipebmw, pipembr, pipembw;
 } provsqlSharedState;
 extern provsqlSharedState *provsql_shared_state;
-
-typedef struct provsqlHashEntry
-{
-  pg_uuid_t key;
-  gate_type type;
-  unsigned nb_children;
-  unsigned children_idx;
-  double prob;
-  unsigned info1;
-  unsigned info2;
-} provsqlHashEntry;
-extern HTAB *provsql_hash;
-
-int provsql_serialize(const char*);
-int provsql_deserialize(const char*);
 
 #endif /* ifndef PROVSQL_SHMEM_H */

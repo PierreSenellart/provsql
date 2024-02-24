@@ -33,8 +33,10 @@ static constexpr const char *WIRES_FILENAME="provsql_wires.mmap";
 static constexpr const char *MAPPING_FILENAME="provsql_mapping.mmap";
 
 public:
-explicit MMappedCircuit() :
-  mapping(MAPPING_FILENAME), gates(GATES_FILENAME), wires(WIRES_FILENAME) {
+explicit MMappedCircuit(bool read_only = false) :
+  mapping(MAPPING_FILENAME, read_only),
+  gates(GATES_FILENAME, read_only),
+  wires(WIRES_FILENAME, read_only) {
 }
 
 /* Non-const public methods, to be used in MMap Worker */

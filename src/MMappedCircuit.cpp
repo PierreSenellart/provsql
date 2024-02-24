@@ -1,4 +1,5 @@
 #include <cerrno>
+#include <cmath>
 
 #include "MMappedCircuit.h"
 
@@ -7,7 +8,7 @@ extern "C" {
 #include "provsql_shmem.h"
 }
 
-static MMappedCircuit *circuit;
+static MMappedCircuit *circuit = NULL;
 
 void initialize_provsql_mmap()
 {
@@ -65,7 +66,7 @@ double MMappedCircuit::getProb(pg_uuid_t token) const
 {
   auto idx = mapping[token];
   if(idx == MMappedUUIDHashTable::NOTHING)
-    return -1;
+    return NAN;
   else
     return gates[idx].prob;
 }
@@ -90,46 +91,90 @@ std::pair<unsigned, unsigned> MMappedCircuit::getInfos(pg_uuid_t token) const
   }
 }
 
-#define READ(var, type) !(read(provsql_shared_state->piper, &var, sizeof(type))-sizeof(type)<0) // flawfinder: ignore
-
 void provsql_mmap_main_loop()
 {
   char c;
 
-  while(READ(c, char)) {
+  while(READM(c, char)) {
     if(c=='C') {
       pg_uuid_t token;
       gate_type type;
       unsigned nb_children;
 
-      if(!READ(token, pg_uuid_t) || !READ(type, gate_type) || !READ(nb_children, unsigned))
+      if(!READM(token, pg_uuid_t) || !READM(type, gate_type) || !READM(nb_children, unsigned))
         elog(ERROR, "Cannot read from pipe (message type C)"); ;
 
       std::vector<pg_uuid_t> children(nb_children);
       for(unsigned i=0; i<nb_children; ++i)
-        if(!READ(children[i], pg_uuid_t))
+        if(!READM(children[i], pg_uuid_t))
           elog(ERROR, "Cannot read from pipe (message type C)");
 
-//      elog(LOG, "Adding gate to circuit with %d children", nb_children);
       circuit->createGate(token, type, children);
     } else if(c=='P') {
       pg_uuid_t token;
       double prob;
 
-      if(!READ(token, pg_uuid_t) || !READ(prob, double))
+      if(!READM(token, pg_uuid_t) || !READM(prob, double))
         elog(ERROR, "Cannot read from pipe (message type P)");
 
-//      elog(LOG, "Setting probability to %g", prob);
       circuit->setProb(token, prob);
     } else if(c=='I') {
       pg_uuid_t token;
       int info1, info2;
 
-      if(!READ(token, pg_uuid_t) || !READ(info1, int) || !READ(info2, int))
+      if(!READM(token, pg_uuid_t) || !READM(info1, int) || !READM(info2, int))
         elog(ERROR, "Cannot read from pipe (message type I)");
 
-//      elog(LOG, "Setting infos to %d %d", info1, info2);
       circuit->setInfos(token, info1, info2);
+    } else if(c=='t') {
+      pg_uuid_t token;
+
+      if(!READM(token, pg_uuid_t))
+        elog(ERROR, "Cannot read from pipe (message type t)");
+
+      gate_type type = circuit->getGateType(token);
+
+      if(!WRITEB(&type, gate_type))
+        elog(ERROR, "Cannot write response to pipe (message type t)");
+    } else if(c=='n') {
+      unsigned nb = circuit->getNbGates();
+
+      if(!WRITEB(&nb, unsigned))
+        elog(ERROR, "Cannot write response to pipe (message type n)");
+    } else if(c=='c') {
+      pg_uuid_t token;
+
+      if(!READM(token, pg_uuid_t))
+        elog(ERROR, "Cannot read from pipe (message type c)");
+
+      auto children = circuit->getChildren(token);
+      unsigned nb_children = children.size();
+      if(!WRITEB(&nb_children, unsigned))
+        elog(ERROR, "Cannot write response to pipe (message type c)");
+
+      for(unsigned i=0; i<nb_children; ++i)
+        if(!WRITEB(&children[i], pg_uuid_t))
+          elog(ERROR, "Cannot write response to pipe (message type c)");
+    } else if(c=='p') {
+      pg_uuid_t token;
+
+      if(!READM(token, pg_uuid_t))
+        elog(ERROR, "Cannot read from pipe (message type p)");
+
+      double prob = circuit->getProb(token);
+
+      if(!WRITEB(&prob, double))
+        elog(ERROR, "Cannot write response to pipe (message type p)");
+    } else if(c=='i') {
+      pg_uuid_t token;
+
+      if(!READM(token, pg_uuid_t))
+        elog(ERROR, "Cannot read from pipe (message type i)");
+
+      auto infos = circuit->getInfos(token);
+
+      if(!WRITEB(&infos.first, int) || !WRITEB(&infos.second, int))
+        elog(ERROR, "Cannot write response to pipe (message type i)");
     } else {
       elog(ERROR, "Wrong message type: %c", c);
     }

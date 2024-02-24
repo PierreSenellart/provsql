@@ -24,12 +24,12 @@ data_t *data;
 
 static constexpr unsigned STARTING_CAPACITY=(1u << 16);
 
-void mmap(size_t length);
+void mmap(size_t length, bool read_only);
 void grow();
 void set(pg_uuid_t u, unsigned i);
 
 public:
-explicit MMappedVector(const char *filename);
+MMappedVector(const char *filename, bool read_only);
 ~MMappedVector();
 
 const T &operator[](unsigned k) const;

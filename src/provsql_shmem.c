@@ -15,6 +15,7 @@
 #include "unistd.h"
 
 #include "provsql_shmem.h"
+#include "provsql_mmap.h"
 
 #define PROVSQL_DUMP_FILE "provsql.tmp"
 
@@ -26,141 +27,60 @@ int provsql_init_nb_gates;
 int provsql_max_nb_gates;
 int provsql_avg_nb_wires;
 
-static void provsql_shmem_shutdown(int code, Datum arg);
-
 provsqlSharedState *provsql_shared_state = NULL;
-HTAB *provsql_hash = NULL;
-provsqlHashEntry *entry;
-
-static Size provsql_struct_size(void)
-{
-  return add_size(offsetof(provsqlSharedState, wires),
-                  mul_size(sizeof(pg_uuid_t), ((Size) provsql_max_nb_gates) * provsql_avg_nb_wires));
-}
-
-uint32 provsql_hash_uuid(const void *key, Size s)
-{
-  (void)s; // Do not use size, only use first word of key
-  return *(uint32*)key;
-}
 
 void provsql_shmem_startup(void)
 {
   bool found;
-  HASHCTL info;
-  int pipes[2];
+  int pipes_b_to_m[2];
+  int pipes_m_to_b[2];
 
   if(prev_shmem_startup)
     prev_shmem_startup();
 
   // Reset in case of restart
   provsql_shared_state = NULL;
-  provsql_hash = NULL;
 
   LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
   provsql_shared_state = ShmemInitStruct(
     "provsql",
-    provsql_struct_size(),
+    sizeof(provsql_shared_state),
     &found);
 
   if(!found) {
-#if PG_VERSION_NUM >= 90600
-    /* Named lock tranches were added in version 9.6 of PostgreSQL */
     provsql_shared_state->lock =&(GetNamedLWLockTranche("provsql"))->lock;
-#else
-    provsql_shared_state->lock =LWLockAssign();
-#endif /* PG_VERSION_NUM >= 90600 */
-    provsql_shared_state->mmap_initialized=false;
-    provsql_shared_state->nb_wires=0;
   }
 
-  memset(&info, 0, sizeof(info));
-  info.keysize = sizeof(pg_uuid_t);
-  info.entrysize = sizeof(provsqlHashEntry);
-  info.hash = provsql_hash_uuid;
-
-  provsql_hash = ShmemInitHash(
-    "provsql hash",
-    provsql_init_nb_gates,
-    provsql_max_nb_gates,
-    &info,
-    HASH_ELEM | HASH_FUNCTION
-    );
-
   LWLockRelease(AddinShmemInitLock);
-
-  // If we are in the main process, we set up a shutdown hook
-  if(!IsUnderPostmaster)
-    on_shmem_exit(provsql_shmem_shutdown, (Datum) 0);
 
   // Already initialized
   if(found)
     return;
 
-  if(pipe(pipes))
+  if(pipe(pipes_b_to_m) || pipe(pipes_m_to_b))
     elog(ERROR, "Cannot create pipe to communicate with MMap worker");
 
-  provsql_shared_state->piper=pipes[0];
-  provsql_shared_state->pipew=pipes[1];
-
-  if( access( "provsql.tmp", F_OK ) == 0 ) {
-    switch (provsql_deserialize("provsql.tmp"))
-    {
-    case 1:
-      //elog(ERROR, "Error while opening the file during deserialization");
-      break;
-
-    case 2:
-      //elog(ERROR, "Error while reading the file during deserialization");
-      break;
-
-    case 3:
-      elog(ERROR, "Error while closing the file during deserialization");
-      break;
-    }
-  }
-
-}
-
-static void provsql_shmem_shutdown(int code, Datum arg)
-{
-  switch (provsql_serialize("provsql.tmp"))
-  {
-  case 1:
-    elog(INFO, "Error while opening the file during serialization");
-    break;
-
-  case 2:
-    elog(INFO, "Error while writing to file during serialization");
-    break;
-
-  case 3:
-    elog(INFO, "Error while closing the file during serialization");
-    break;
-  }
+  provsql_shared_state->pipebmr=pipes_b_to_m[0];
+  provsql_shared_state->pipebmw=pipes_b_to_m[1];
+  provsql_shared_state->pipembr=pipes_m_to_b[0];
+  provsql_shared_state->pipembw=pipes_m_to_b[1];
 }
 
 Size provsql_memsize(void)
 {
-  // Size of the shared state structure
-  Size size = MAXALIGN(provsql_struct_size());
-  // Size of the array of wire ends
-  size = add_size(size,
-                  hash_estimate_size(provsql_max_nb_gates, sizeof(provsqlHashEntry)));
-
-  return size;
+  return MAXALIGN(sizeof(provsqlSharedState));
 }
 
 PG_FUNCTION_INFO_V1(create_gate);
 Datum create_gate(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  gate_type type = (gate_type) PG_GETARG_INT32(1);
+  Oid oid_type = PG_GETARG_INT32(1);
   ArrayType *children = PG_ARGISNULL(2)?NULL:PG_GETARG_ARRAYTYPE_P(2);
   unsigned nb_children = 0;
-  provsqlHashEntry *entry;
-  bool found;
+  gate_type type = gate_invalid;
+  constants_t constants;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     elog(ERROR, "Invalid NULL value passed to create_gate");
@@ -174,67 +94,36 @@ Datum create_gate(PG_FUNCTION_ARGS)
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(hash_get_num_entries(provsql_hash) == provsql_max_nb_gates) {
+  constants=initialize_constants(true);
+
+  for(int i=0; i<nb_gate_types; ++i) {
+    if(constants.GATE_TYPE_TO_OID[i]==oid_type) {
+      type = i;
+      break;
+    }
+  }
+  if(type == gate_invalid) {
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Too many gates in in-memory circuit");
+    elog(ERROR, "Invalid gate type");
   }
 
-  if(write(provsql_shared_state->pipew, "C", 1)==-1
-     || write(provsql_shared_state->pipew, token, sizeof(pg_uuid_t))==-1
-     || write(provsql_shared_state->pipew, &type, sizeof(gate_type))==-1
-     || write(provsql_shared_state->pipew, &nb_children, sizeof(unsigned))==-1)
-    elog(ERROR, "Error writing to pipe");
+  if(!WRITEM("C", char)
+     || !WRITEM(token, pg_uuid_t)
+     || !WRITEM(&type, gate_type)
+     || !WRITEM(&nb_children, unsigned)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot write to pipe");
+  }
 
   if(nb_children) {
     pg_uuid_t *data = (pg_uuid_t*) ARR_DATA_PTR(children);
 
     for(int i=0; i<nb_children; ++i) {
-      if(write(provsql_shared_state->pipew, &data[i], sizeof(pg_uuid_t))==-1)
-        elog(ERROR, "Error writing to pipe");
-    }
-  }
-
-  entry = (provsqlHashEntry *) hash_search_with_hash_value(provsql_hash, token, *(uint32*)token, HASH_ENTER, &found);
-
-  if(!found) {
-    constants_t constants=initialize_constants(true);
-
-    if(nb_children && provsql_shared_state->nb_wires + nb_children > provsql_max_nb_gates * provsql_avg_nb_wires) {
-      LWLockRelease(provsql_shared_state->lock);
-      elog(ERROR, "Too many wires in in-memory circuit");
-    }
-
-    entry->type = -1;
-    for(int i=0; i<nb_gate_types; ++i) {
-      if(constants.GATE_TYPE_TO_OID[i]==type) {
-        entry->type = i;
-        break;
+      if(!WRITEM(&data[i], pg_uuid_t)) {
+        elog(ERROR, "Cannot write to pipe");
+        LWLockRelease(provsql_shared_state->lock);
       }
     }
-    if(entry->type == -1)
-      elog(ERROR, "Invalid gate type");
-
-    entry->nb_children = nb_children;
-    entry->children_idx = provsql_shared_state->nb_wires;
-
-    if(nb_children) {
-      pg_uuid_t *data = (pg_uuid_t*) ARR_DATA_PTR(children);
-
-      for(int i=0; i<nb_children; ++i) {
-        provsql_shared_state->wires[entry->children_idx + i] = data[i];
-      }
-
-      provsql_shared_state->nb_wires += nb_children;
-    }
-
-    if(entry->type == gate_zero)
-      entry->prob = 0.;
-    else if(entry->type == gate_one)
-      entry->prob = 1.;
-    else
-      entry->prob = NAN;
-
-    entry->info1 = entry->info2 = 0;
   }
 
   LWLockRelease(provsql_shared_state->lock);
@@ -247,33 +136,18 @@ Datum set_prob(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   double prob = PG_GETARG_FLOAT8(1);
-  provsqlHashEntry *entry;
-  bool found;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     elog(ERROR, "Invalid NULL value passed to set_prob");
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
-
-  if(!found) {
-    hash_search(provsql_hash, token, HASH_REMOVE, &found);
+  if(!WRITEM("P", char)
+     || !WRITEM(token, pg_uuid_t)
+     || !WRITEM(&prob, double)) {
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Unknown gate");
+    elog(ERROR, "Cannot write to pipe");
   }
-
-  if(entry->type != gate_input && entry->type != gate_mulinput) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Probability can only be assigned to input token");
-  }
-
-  entry->prob = prob;
-
-  if(write(provsql_shared_state->pipew, "P", 1)==-1
-     || write(provsql_shared_state->pipew, token, sizeof(pg_uuid_t))==-1
-     || write(provsql_shared_state->pipew, &prob, sizeof(double))==-1)
-    elog(ERROR, "Error writing to pipe");
 
   LWLockRelease(provsql_shared_state->lock);
 
@@ -286,138 +160,118 @@ Datum set_infos(PG_FUNCTION_ARGS)
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   unsigned info1 = PG_GETARG_INT32(1);
   unsigned info2 = PG_GETARG_INT32(2);
-  provsqlHashEntry *entry;
-  bool found;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     elog(ERROR, "Invalid NULL value passed to set_infos");
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_ENTER, &found);
-
-  if(!found) {
-    hash_search(provsql_hash, token, HASH_REMOVE, &found);
+  if(!WRITEM("I", char)
+     || !WRITEM(token, pg_uuid_t)
+     || !WRITEM(&info1, int)
+     || !WRITEM(&info2, int)) {
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Unknown gate");
+    elog(ERROR, "Cannot write to pipe (message type I)");
   }
-
-  if(entry->type == gate_eq && PG_ARGISNULL(2)) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Invalid NULL value passed to set_infos");
-  }
-
-  if(entry->type != gate_eq && entry->type != gate_mulinput) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Infos cannot be assigned to this gate type");
-  }
-
-  entry->info1 = info1;
-  if(entry->type == gate_eq)
-    entry->info2 = info2;
-
-  if(write(provsql_shared_state->pipew, "P", 1)==-1
-     || write(provsql_shared_state->pipew, token, sizeof(pg_uuid_t))==-1
-     || write(provsql_shared_state->pipew, &info1, sizeof(int))==-1
-     || write(provsql_shared_state->pipew, &info2, sizeof(int))==-1)
-    elog(ERROR, "Error writing to pipe");
 
   LWLockRelease(provsql_shared_state->lock);
 
   PG_RETURN_VOID();
 }
 
-PG_FUNCTION_INFO_V1(get_gate_type);
-Datum get_gate_type(PG_FUNCTION_ARGS)
-{
-  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  provsqlHashEntry *entry;
-  bool found;
-  gate_type result = -1;
-
-  if(PG_ARGISNULL(0))
-    PG_RETURN_NULL();
-
-  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
-
-  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
-  if(found)
-    result = entry->type;
-
-  LWLockRelease(provsql_shared_state->lock);
-
-  if(!found)
-    PG_RETURN_NULL();
-  else {
-    constants_t constants=initialize_constants(true);
-    PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[result]);
-  }
-}
-
 PG_FUNCTION_INFO_V1(get_nb_gates);
 Datum get_nb_gates(PG_FUNCTION_ARGS)
 {
-  long nb;
+  unsigned nb;
 
-  nb = hash_get_num_entries(provsql_hash);
+  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  PG_RETURN_INT64(nb);
+  if(!WRITEM("n", char)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot write to pipe (message type n)");
+  }
+
+  if(!READB(nb, unsigned)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot read response from pipe (message type n)");
+  }
+
+  LWLockRelease(provsql_shared_state->lock);
+
+  PG_RETURN_INT64((long) nb);
 }
 
 PG_FUNCTION_INFO_V1(get_children);
 Datum get_children(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  provsqlHashEntry *entry;
-  bool found;
   ArrayType *result = NULL;
+  unsigned nb_children;
+  pg_uuid_t *children;
+  Datum *children_ptr;
+  constants_t constants;
 
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
-  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
-  if(found) {
-    Datum *children_ptr = palloc(entry->nb_children * sizeof(Datum));
-    constants_t constants=initialize_constants(true);
-    for(int i=0; i<entry->nb_children; ++i) {
-      children_ptr[i] = UUIDPGetDatum(&provsql_shared_state->wires[entry->children_idx + i]);
+  if(!WRITEM("c", char) || !WRITEM(token, pg_uuid_t)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot write to pipe (message type c)");
+  }
+
+  if(!READB(nb_children, unsigned)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot read response from pipe (message type c)");
+  }
+
+  children_ptr = palloc(nb_children * sizeof(Datum));
+  constants=initialize_constants(true);
+  children=calloc(nb_children, sizeof(pg_uuid_t));
+  for(unsigned i=0; i<nb_children; ++i) {
+    if(!READB(children[i], pg_uuid_t)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot read response from pipe (message type c)");
     }
-    result = construct_array(
-      children_ptr,
-      entry->nb_children,
-      constants.OID_TYPE_UUID,
-      16,
-      false,
-      'c');
-    pfree(children_ptr);
+    children_ptr[i] = UUIDPGetDatum(&children[i]);
   }
 
   LWLockRelease(provsql_shared_state->lock);
 
-  if(!found)
-    PG_RETURN_NULL();
-  else
-    PG_RETURN_ARRAYTYPE_P(result);
+  result = construct_array(
+    children_ptr,
+    nb_children,
+    constants.OID_TYPE_UUID,
+    16,
+    false,
+    'c');
+  pfree(children_ptr);
+  free(children);
+
+  PG_RETURN_ARRAYTYPE_P(result);
 }
 
 PG_FUNCTION_INFO_V1(get_prob);
 Datum get_prob(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  provsqlHashEntry *entry;
-  bool found;
-  double result = NAN;
+  double result;
 
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
-  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
-  if(found)
-    result = entry->prob;
+  if(!WRITEM("p", char) || !WRITEM(token, pg_uuid_t)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot write to pipe (message type p)");
+  }
+
+  if(!READB(result, double)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot read response from pipe (message type p)");
+  }
 
   LWLockRelease(provsql_shared_state->lock);
 
@@ -431,19 +285,21 @@ PG_FUNCTION_INFO_V1(get_infos);
 Datum get_infos(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  provsqlHashEntry *entry;
-  bool found;
   unsigned info1 =0, info2 = 0;
 
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
-  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  entry = (provsqlHashEntry *) hash_search(provsql_hash, token, HASH_FIND, &found);
-  if(found) {
-    info1 = entry->info1;
-    info2 = entry->info2;
+  if(!WRITEM("i", char) || !WRITEM(token, pg_uuid_t)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot write to pipe (message type i)");
+  }
+
+  if(!READB(info1, int) || !READB(info2, int)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot read response from pipe (message type i)");
   }
 
   LWLockRelease(provsql_shared_state->lock);
@@ -453,22 +309,18 @@ Datum get_infos(PG_FUNCTION_ARGS)
   else {
     TupleDesc tupdesc;
     Datum values[2];
-    bool nulls[2];
+    bool nulls[2] = {false, false};
 
     get_call_result_type(fcinfo,NULL,&tupdesc);
     tupdesc = BlessTupleDesc(tupdesc);
 
-    nulls[0] = false;
     values[0] = Int32GetDatum(info1);
-    if(entry->type == gate_eq) {
-      nulls[1] = false;
-      values[1] = Int32GetDatum(info2);
-    } else
-      nulls[1] = (entry->type != gate_eq);
+    values[1] = Int32GetDatum(info2);
 
     PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
   }
 }
+
 void provsql_shmem_request(void)
 {
 #if (PG_VERSION_NUM >= 150000)
@@ -478,10 +330,5 @@ void provsql_shmem_request(void)
 
   RequestAddinShmemSpace(provsql_memsize());
 
-#if PG_VERSION_NUM >= 90600
-  /* Named lock tranches were added in version 9.6 of PostgreSQL */
   RequestNamedLWLockTranche("provsql", 1);
-#else
-  RequestAddinLWLocks(1);
-#endif /* PG_VERSION_NUM >= 90600 */
 }

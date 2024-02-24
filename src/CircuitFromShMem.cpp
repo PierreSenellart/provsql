@@ -5,6 +5,7 @@
 
 extern "C" {
 #include "provsql_shmem.h"
+#include "provsql_mmap.h"
 }
 
 bool operator<(const pg_uuid_t a, const pg_uuid_t b)
@@ -19,88 +20,130 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
 
   BooleanCircuit result;
 
-  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+
   while(!to_process.empty()) {
     pg_uuid_t uuid = *to_process.begin();
     to_process.erase(to_process.begin());
     processed.insert(uuid);
     std::string f{uuid2string(uuid)};
 
-    bool found;
-    provsqlHashEntry *entry = reinterpret_cast<provsqlHashEntry *>(hash_search(provsql_hash, &uuid, HASH_FIND, &found));
+    gate_t id;
 
-    if(!found)
-      result.setGate(f, BooleanGate::MULVAR);
-    else {
-      gate_t id;
+    gate_type type;
+    double prob;
+    int info1, info2;
+    unsigned nb_children;
+    std::vector<pg_uuid_t> children;
 
-      switch(entry->type) {
-      case gate_input:
-        if(std::isnan(entry->prob)) {
-          entry->prob=1.;
-        }
-        id = result.setGate(f, BooleanGate::IN, entry->prob);
-        break;
+    if(!WRITEM("t", char) || !WRITEM(&uuid, pg_uuid_t)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot write to pipe (message type t)");
+    }
+    if(!READB(type, gate_type)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot read response from pipe (message type t)");
+    }
 
-      case gate_mulinput:
-        if(std::isnan(entry->prob)) {
-          LWLockRelease(provsql_shared_state->lock);
-          elog(ERROR, "Missing probability for mulinput token");
-        }
-        id = result.setGate(f, BooleanGate::MULIN, entry->prob);
+    if(!WRITEM("p", char) || !WRITEM(&uuid, pg_uuid_t)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot write to pipe (message type p)");
+    }
+    if(!READB(prob, double)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot read response from pipe (message type p)");
+    }
+
+    if(!WRITEM("i", char) || !WRITEM(&uuid, pg_uuid_t)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot write to pipe (message type i)");
+    }
+    if(!READB(info1, int) || !READB(info2, int)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot read response from pipe (message type i)");
+    }
+
+    if(!WRITEM("c", char) || !WRITEM(&uuid, pg_uuid_t)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot write to pipe (message type c)");
+    }
+    if(!READB(nb_children, unsigned)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot read response from pipe (message type c)");
+    }
+    for(unsigned i=0; i<nb_children; ++i) {
+      pg_uuid_t child;
+      if(!READB(child, pg_uuid_t)) {
+        LWLockRelease(provsql_shared_state->lock);
+        elog(ERROR, "Cannot read response from pipe (message type c)");
+      }
+      children.push_back(child);
+    }
+
+    switch(type) {
+    case gate_input:
+      if(std::isnan(prob)) {
+        prob=1.;
+      }
+      id = result.setGate(f, BooleanGate::IN, prob);
+      break;
+
+    case gate_mulinput:
+      if(std::isnan(prob)) {
+        LWLockRelease(provsql_shared_state->lock);
+        elog(ERROR, "Missing probability for mulinput token");
+      }
+      id = result.setGate(f, BooleanGate::MULIN, prob);
+      result.addWire(
+        id,
+        result.getGate(uuid2string(children[0])));
+      result.setInfo(id, info1);
+      break;
+
+    case gate_times:
+    case gate_project:
+    case gate_eq:
+    case gate_monus:
+    case gate_one:
+      id = result.setGate(f, BooleanGate::AND);
+      break;
+
+    case gate_plus:
+    case gate_zero:
+      id = result.setGate(f, BooleanGate::OR);
+      break;
+
+    default:
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Wrong type of gate in circuit");
+    }
+
+    if(nb_children > 0 && type != gate_mulinput) {
+      if(type == gate_monus) {
+        auto id_not = result.setGate(BooleanGate::NOT);
         result.addWire(
           id,
-          result.getGate(uuid2string(provsql_shared_state->wires[entry->children_idx])));
-        result.setInfo(id, entry->info1);
-        break;
-
-      case gate_times:
-      case gate_project:
-      case gate_eq:
-      case gate_monus:
-      case gate_one:
-        id = result.setGate(f, BooleanGate::AND);
-        break;
-
-      case gate_plus:
-      case gate_zero:
-        id = result.setGate(f, BooleanGate::OR);
-        break;
-
-      default:
-        elog(ERROR, "Wrong type of gate in circuit");
-      }
-
-      if(entry->nb_children > 0) {
-        if(entry->type == gate_monus) {
-          auto id_not = result.setGate(BooleanGate::NOT);
-          auto child1 = provsql_shared_state->wires[entry->children_idx];
-          auto child2 = provsql_shared_state->wires[entry->children_idx+1];
+          result.getGate(uuid2string(children[0])));
+        result.addWire(id, id_not);
+        result.addWire(
+          id_not,
+          result.getGate(uuid2string(children[1])));
+        if(processed.find(children[0])==processed.end())
+          to_process.insert(children[0]);
+        if(processed.find(children[1])==processed.end())
+          to_process.insert(children[1]);
+      } else {
+        for(unsigned i=0; i<nb_children; ++i) {
           result.addWire(
             id,
-            result.getGate(uuid2string(child1)));
-          result.addWire(id, id_not);
-          result.addWire(
-            id_not,
-            result.getGate(uuid2string(child2)));
-          if(processed.find(child1)==processed.end())
-            to_process.insert(child1);
-          if(processed.find(child2)==processed.end())
-            to_process.insert(child2);
-        } else {
-          for(unsigned i=0; i<entry->nb_children; ++i) {
-            auto child = provsql_shared_state->wires[entry->children_idx+i];
-
-            result.addWire(
-              id,
-              result.getGate(uuid2string(child)));
-            if(processed.find(child)==processed.end())
-              to_process.insert(child);
-          }
+            result.getGate(uuid2string(children[i])));
+          if(processed.find(children[i])==processed.end())
+            to_process.insert(children[i]);
         }
       }
     }
   }
+
   LWLockRelease(provsql_shared_state->lock);
 
   return result;

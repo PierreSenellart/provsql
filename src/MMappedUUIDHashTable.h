@@ -56,13 +56,13 @@ inline unsigned hash(pg_uuid_t u) const {
 };
 
 unsigned find(pg_uuid_t u) const;
-void mmap(size_t length);
+void mmap(size_t length, bool read_only);
 void grow();
 void set(pg_uuid_t u, unsigned i);
 
 public:
 static constexpr unsigned NOTHING=static_cast<unsigned>(-1);
-explicit MMappedUUIDHashTable(const char *filename);
+MMappedUUIDHashTable(const char *filename, bool read_only);
 ~MMappedUUIDHashTable();
 
 unsigned operator[](pg_uuid_t u) const;
