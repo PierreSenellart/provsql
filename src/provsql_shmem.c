@@ -284,6 +284,11 @@ Datum set_prob(PG_FUNCTION_ARGS)
 
   entry->prob = prob;
 
+  if(write(provsql_shared_state->pipew, "P", 1)==-1
+     || write(provsql_shared_state->pipew, token, sizeof(pg_uuid_t))==-1
+     || write(provsql_shared_state->pipew, &prob, sizeof(double))==-1)
+    elog(ERROR, "Error writing to pipe");
+
   LWLockRelease(provsql_shared_state->lock);
 
   PG_RETURN_VOID();
@@ -324,6 +329,12 @@ Datum set_infos(PG_FUNCTION_ARGS)
   entry->info1 = info1;
   if(entry->type == gate_eq)
     entry->info2 = info2;
+
+  if(write(provsql_shared_state->pipew, "P", 1)==-1
+     || write(provsql_shared_state->pipew, token, sizeof(pg_uuid_t))==-1
+     || write(provsql_shared_state->pipew, &info1, sizeof(int))==-1
+     || write(provsql_shared_state->pipew, &info2, sizeof(int))==-1)
+    elog(ERROR, "Error writing to pipe");
 
   LWLockRelease(provsql_shared_state->lock);
 

@@ -90,36 +90,51 @@ std::pair<unsigned, unsigned> MMappedCircuit::getInfos(pg_uuid_t token) const
   }
 }
 
+#define READ(var, type) !(read(provsql_shared_state->piper, &var, sizeof(type))-sizeof(type)<0) // flawfinder: ignore
+
 void provsql_mmap_main_loop()
 {
   char c;
-  ssize_t ret;
 
-  while((ret=read(provsql_shared_state->piper, &c, 1))>0)     // flawfinder: ignore
+  while(READ(c, char)) {
     if(c=='C') {
       pg_uuid_t token;
       gate_type type;
       unsigned nb_children;
 
-      if(read(provsql_shared_state->piper, &token, sizeof(pg_uuid_t))<sizeof(pg_uuid_t)
-         || read(provsql_shared_state->piper, &type, sizeof(gate_type))<sizeof(gate_type)
-         || read(provsql_shared_state->piper, &nb_children, sizeof(unsigned))<sizeof(unsigned))
-        elog(ERROR, "Cannot read from pipe"); ;
+      if(!READ(token, pg_uuid_t) || !READ(type, gate_type) || !READ(nb_children, unsigned))
+        elog(ERROR, "Cannot read from pipe (message type C)"); ;
 
       std::vector<pg_uuid_t> children(nb_children);
       for(unsigned i=0; i<nb_children; ++i)
-        if(read(provsql_shared_state->piper, &children[i], sizeof(pg_uuid_t))<sizeof(pg_uuid_t))
-          elog(ERROR, "Cannot read from pipe");
+        if(!READ(children[i], pg_uuid_t))
+          elog(ERROR, "Cannot read from pipe (message type C)");
 
-      elog(LOG, "Adding gate to circuit with %d children", nb_children);
+//      elog(LOG, "Adding gate to circuit with %d children", nb_children);
       circuit->createGate(token, type, children);
+    } else if(c=='P') {
+      pg_uuid_t token;
+      double prob;
+
+      if(!READ(token, pg_uuid_t) || !READ(prob, double))
+        elog(ERROR, "Cannot read from pipe (message type P)");
+
+//      elog(LOG, "Setting probability to %g", prob);
+      circuit->setProb(token, prob);
+    } else if(c=='I') {
+      pg_uuid_t token;
+      int info1, info2;
+
+      if(!READ(token, pg_uuid_t) || !READ(info1, int) || !READ(info2, int))
+        elog(ERROR, "Cannot read from pipe (message type I)");
+
+//      elog(LOG, "Setting infos to %d %d", info1, info2);
+      circuit->setInfos(token, info1, info2);
     } else {
       elog(ERROR, "Wrong message type: %c", c);
     }
-  elog(LOG, "Read from pipe: %c", c);
-
-  if(ret<0) {
-    int e = errno;
-    elog(ERROR, "Reading from pipe: %s", strerror(e));
   }
+
+  int e = errno;
+  elog(ERROR, "Reading from pipe: %s", strerror(e));
 }

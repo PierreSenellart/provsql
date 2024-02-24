@@ -37,12 +37,15 @@ explicit MMappedCircuit() :
   mapping(MAPPING_FILENAME), gates(GATES_FILENAME), wires(WIRES_FILENAME) {
 }
 
+/* Non-const public methods, to be used in MMap Worker */
 void createGate(pg_uuid_t token, gate_type type, const std::vector<pg_uuid_t> &children);
+void setInfos(pg_uuid_t token, unsigned info1, unsigned info2);
+void setProb(pg_uuid_t token, double prob);
+
+/* Const public methods, can be directly used in regular backends */
 gate_type getGateType(pg_uuid_t token) const;
 std::vector<pg_uuid_t> getChildren(pg_uuid_t token) const;
-void setProb(pg_uuid_t token, double prob);
 double getProb(pg_uuid_t token) const;
-void setInfos(pg_uuid_t token, unsigned info1, unsigned info2);
 std::pair<unsigned, unsigned> getInfos(pg_uuid_t token) const;
 inline unsigned getNbGates() const {
   return gates.nbElements();
