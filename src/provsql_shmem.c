@@ -48,6 +48,7 @@ void provsql_shmem_startup(void)
 {
   bool found;
   HASHCTL info;
+  int pipes[2];
 
   if(prev_shmem_startup)
     prev_shmem_startup();
@@ -97,6 +98,11 @@ void provsql_shmem_startup(void)
   if(found)
     return;
 
+  if(pipe(pipes))
+    elog(ERROR, "Cannot create pipe to communicate with MMap worker");
+
+  provsql_shared_state->piper=pipes[0];
+  provsql_shared_state->pipew=pipes[1];
 
   if( access( "provsql.tmp", F_OK ) == 0 ) {
     switch (provsql_deserialize("provsql.tmp"))
@@ -166,7 +172,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   gate_type type = (gate_type) PG_GETARG_INT32(1);
   ArrayType *children = PG_ARGISNULL(2)?NULL:PG_GETARG_ARRAYTYPE_P(2);
-  int nb_children = 0;
+  unsigned nb_children = 0;
   provsqlHashEntry *entry;
   bool found;
 
@@ -185,6 +191,21 @@ Datum create_gate(PG_FUNCTION_ARGS)
   if(hash_get_num_entries(provsql_hash) == provsql_max_nb_gates) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Too many gates in in-memory circuit");
+  }
+
+  if(write(provsql_shared_state->pipew, "C", 1)==-1
+     || write(provsql_shared_state->pipew, token, sizeof(pg_uuid_t))==-1
+     || write(provsql_shared_state->pipew, &type, sizeof(gate_type))==-1
+     || write(provsql_shared_state->pipew, &nb_children, sizeof(unsigned))==-1)
+    elog(ERROR, "Error writing to pipe");
+
+  if(nb_children) {
+    pg_uuid_t *data = (pg_uuid_t*) ARR_DATA_PTR(children);
+
+    for(int i=0; i<nb_children; ++i) {
+      if(write(provsql_shared_state->pipew, &data[i], sizeof(pg_uuid_t))==-1)
+        elog(ERROR, "Error writing to pipe");
+    }
   }
 
   entry = (provsqlHashEntry *) hash_search_with_hash_value(provsql_hash, token, *(uint32*)token, HASH_ENTER, &found);

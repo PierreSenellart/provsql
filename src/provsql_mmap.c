@@ -1,7 +1,10 @@
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 
+#include <errno.h>
 #include <unistd.h>
+#include <poll.h>
+
 #include "postgres.h"
 #include "postmaster/bgworker.h"
 
@@ -9,13 +12,12 @@ void provsql_mmap_worker(Datum ignored)
 {
   BackgroundWorkerUnblockSignals();
   initialize_provsql_mmap();
+  close(provsql_shared_state->pipew);
   elog(LOG, "%s initialized", MyBgworkerEntry->bgw_name);
 
   provsql_shared_state->mmap_initialized=true;
 
-  while(!sleep(1))
-  {
-  }
+  provsql_mmap_main_loop();
 
   destroy_provsql_mmap();
 }

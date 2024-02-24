@@ -3,7 +3,10 @@
 
 #include <cstddef>
 #include <utility>
+
+extern "C" {
 #include "provsql_utils.h"
+}
 
 /*
  * Open-addressing hash table meant to map UUIDs to integers, stored in

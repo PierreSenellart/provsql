@@ -2,7 +2,10 @@
 #define MMAPPED_VECTOR_H
 
 #include <cstddef>
+
+extern "C" {
 #include "provsql_utils.h"
+}
 
 /*
  * Vector template, stored in an mmaped file; can only grow, impossible
