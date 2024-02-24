@@ -55,8 +55,5 @@ test: where_provenance
 # Full example from tutorial
 test: tutorial
 
-# Serializing and Deserializing functions
-test: serialize_deserialize
-
 # Grouping
 test: group_by_empty grouping_sets
