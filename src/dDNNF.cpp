@@ -49,8 +49,8 @@ void dDNNF::makeSmooth()
     std::vector<std::unordered_set<gate_t> > varss;
 
     std::for_each(getWires(g).begin(), getWires(g).end(),
-                  [&](gate_t g) {
-      varss.push_back(vars(g));
+                  [&](gate_t x) {
+      varss.push_back(vars(x));
     });
     std::for_each(varss.begin(), varss.end(),
                   [&](const auto &s) {
