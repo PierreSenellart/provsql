@@ -8,7 +8,6 @@
 void provsql_mmap_worker(Datum ignored)
 {
   BackgroundWorkerUnblockSignals();
-  elog(LOG, "%s initializing", MyBgworkerEntry->bgw_name);
   initialize_provsql_mmap();
   elog(LOG, "%s initialized", MyBgworkerEntry->bgw_name);
 
