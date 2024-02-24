@@ -78,13 +78,19 @@ MMappedVector<T>::~MMappedVector()
 }
 
 template <typename T>
-T MMappedVector<T>::get(unsigned k) const
+inline const T &MMappedVector<T>::operator[](unsigned k) const
 {
   return data->d[k];
 }
 
 template <typename T>
-void MMappedVector<T>::add(T value)
+inline T &MMappedVector<T>::operator[](unsigned k)
+{
+  return data->d[k];
+}
+
+template <typename T>
+void MMappedVector<T>::add(const T &value)
 {
   if(data->nb_elements == data->capacity)
     grow();

@@ -29,8 +29,9 @@ public:
 explicit MMappedVector(const char *filename);
 ~MMappedVector();
 
-T get(unsigned k) const;
-void add(T value);
+const T &operator[](unsigned k) const;
+T &operator[](unsigned k);
+void add(const T& value);
 inline unsigned nbElements() const {
   return data->nb_elements;
 }

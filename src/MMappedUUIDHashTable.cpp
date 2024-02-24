@@ -97,14 +97,14 @@ unsigned MMappedUUIDHashTable::find(pg_uuid_t u) const
   return k;
 }
 
-unsigned MMappedUUIDHashTable::get(pg_uuid_t u) const
+unsigned MMappedUUIDHashTable::operator[](pg_uuid_t u) const
 {
   unsigned k = find(u);
 
   return table->t[k].value;
 }
 
-unsigned MMappedUUIDHashTable::get(pg_uuid_t u)
+std::pair<unsigned,bool> MMappedUUIDHashTable::add(pg_uuid_t u)
 {
   unsigned k = find(u);
 
@@ -115,9 +115,9 @@ unsigned MMappedUUIDHashTable::get(pg_uuid_t u)
     k = find(u);
     ++table->nb_elements;
     table->t[k].uuid = u;
-    return table->t[k].value = table->next_value++;
+    return std::make_pair(table->t[k].value = table->next_value++, true);
   } else
-    return table->t[k].value;
+    return std::make_pair(table->t[k].value, false);
 }
 
 // Only used when growing the table, so no need to check/update nb_elements

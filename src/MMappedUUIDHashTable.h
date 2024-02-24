@@ -2,6 +2,7 @@
 #define MMAPPED_UUID_HASH_TABLE_H
 
 #include <cstddef>
+#include <utility>
 #include "provsql_utils.h"
 
 /*
@@ -46,7 +47,6 @@ table_t *table;
 
 static constexpr unsigned STARTING_LOG_SIZE=16;
 static constexpr double MAXIMUM_LOAD_FACTOR=.5;
-static constexpr unsigned NOTHING=static_cast<unsigned>(-1);
 
 inline unsigned hash(pg_uuid_t u) const {
   return *reinterpret_cast<unsigned*>(&u) % (1 << table->log_size);
@@ -58,11 +58,12 @@ void grow();
 void set(pg_uuid_t u, unsigned i);
 
 public:
+static constexpr unsigned NOTHING=static_cast<unsigned>(-1);
 explicit MMappedUUIDHashTable(const char *filename);
 ~MMappedUUIDHashTable();
 
-unsigned get(pg_uuid_t u) const;
-unsigned get(pg_uuid_t u);
+unsigned operator[](pg_uuid_t u) const;
+std::pair<unsigned,bool> add(pg_uuid_t u);
 inline unsigned nbElements() const {
   return table->nb_elements;
 }
