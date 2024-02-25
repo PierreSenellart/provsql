@@ -86,6 +86,9 @@ SELECT * FROM r;
 SELECT add_provenance('r');
 SELECT set_prob(provenance(), prob) FROM r;
 \timing
+SELECT DISTINCT 1
+FROM r AS pr1, r AS pr2
+WHERE pr2.x=pr1.y AND pr1.x>90;
 SELECT pr1.x,pr2.y,probability_evaluate(provenance(),'possible-worlds')
 FROM r AS pr1, r AS pr2
 WHERE pr2.x=pr1.y AND pr1.x>90 AND pr2.x>90 AND pr2.y>90
