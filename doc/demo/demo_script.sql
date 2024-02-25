@@ -81,16 +81,16 @@ SELECT *, probability_evaluate(provenance(),'compilation','c2d') FROM (
     WHERE P1.city = P2.city AND P1.id < P2.id
 ) t;
 
+SET provsql.where_provenance = off;
 SELECT * FROM r;
 SELECT add_provenance('r');
-SELECT set_prob(provenance(), prob) from r;
+SELECT set_prob(provenance(), prob) FROM r;
 \timing
 SELECT pr1.x,pr2.y,probability_evaluate(provenance(),'possible-worlds')
 FROM r AS pr1, r AS pr2
 WHERE pr2.x=pr1.y AND pr1.x>90 AND pr2.x>90 AND pr2.y>90
 GROUP BY pr1.x,pr2.y
 ORDER BY x,y;
-/* CTRL+C */
 /* Roughly 1% additive error with 95% probability */
 SELECT pr1.x,pr2.y,probability_evaluate(provenance(),'monte-carlo','9604')
 FROM r AS pr1, r AS pr2
