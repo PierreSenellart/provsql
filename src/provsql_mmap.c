@@ -14,6 +14,9 @@
 #include "utils/array.h"
 #include "access/htup_details.h"
 
+char buffer[PIPE_BUF]={}; // flawfinder: ignore
+unsigned bufferpos=0;
+
 __attribute__((visibility("default")))
 void provsql_mmap_worker(Datum ignored)
 {
@@ -62,16 +65,15 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
+  STARTWRITEM();
+  ADDWRITEM("t", char);
+  ADDWRITEM(token, pg_uuid_t);
+
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(!WRITEM("t", char) || !WRITEM(token, pg_uuid_t)) {
+  if(!SENDWRITEM() || !READB(type, gate_type)) {
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot write to pipe (message type t)");
-  }
-
-  if(!READB(type, gate_type)) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot read response from pipe (message type t)");
+    elog(ERROR, "Cannot communicate on pipe (message type t)");
   }
 
   LWLockRelease(provsql_shared_state->lock);
@@ -93,6 +95,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
   unsigned nb_children = 0;
   gate_type type = gate_invalid;
   constants_t constants;
+  pg_uuid_t *children_data;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     elog(ERROR, "Invalid NULL value passed to create_gate");
@@ -104,8 +107,6 @@ Datum create_gate(PG_FUNCTION_ARGS)
       nb_children = *ARR_DIMS(children);
   }
 
-  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
-
   constants=initialize_constants(true);
 
   for(int i=0; i<nb_gate_types; ++i) {
@@ -115,30 +116,60 @@ Datum create_gate(PG_FUNCTION_ARGS)
     }
   }
   if(type == gate_invalid) {
-    LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Invalid gate type");
   }
 
-  if(!WRITEM("C", char)
-     || !WRITEM(token, pg_uuid_t)
-     || !WRITEM(&type, gate_type)
-     || !WRITEM(&nb_children, unsigned)) {
+  if(nb_children>0)
+    children_data = (pg_uuid_t*) ARR_DATA_PTR(children);
+  else
+    children_data = NULL;
+
+  STARTWRITEM();
+  ADDWRITEM("C", char);
+  ADDWRITEM(token, pg_uuid_t);
+  ADDWRITEM(&type, gate_type);
+  ADDWRITEM(&nb_children, unsigned);
+
+  if(PIPE_BUF-bufferpos>nb_children*sizeof(pg_uuid_t)) {
+    // Enough space in the buffer for an atomic write, no need of
+    // exclusive locks
+
+    for(int i=0; i<nb_children; ++i)
+      ADDWRITEM(&children_data[i], pg_uuid_t);
+
+    LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+    if(!SENDWRITEM()) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot write to pipe (message type C)");
+    }
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot write to pipe");
-  }
+  } else {
+    // Not enough space in buffer, pipe write won't be atomic, we need to
+    // make several writes and use locks
+    unsigned children_per_batch = PIPE_BUF/sizeof(pg_uuid_t);
 
-  if(nb_children) {
-    pg_uuid_t *data = (pg_uuid_t*) ARR_DATA_PTR(children);
+    LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-    for(int i=0; i<nb_children; ++i) {
-      if(!WRITEM(&data[i], pg_uuid_t)) {
-        elog(ERROR, "Cannot write to pipe");
+    if(!SENDWRITEM()) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot write to pipe (message type C)");
+    }
+
+    for(unsigned j=0; j<1+(nb_children-1)/children_per_batch; ++j) {
+      STARTWRITEM();
+
+      for(unsigned i=j*children_per_batch; i<(j+1)*children_per_batch && i<nb_children; ++i) {
+        ADDWRITEM(&children_data[i], pg_uuid_t);
+      }
+
+      if(!SENDWRITEM()) {
         LWLockRelease(provsql_shared_state->lock);
+        elog(ERROR, "Cannot write to pipe (message type C)");
       }
     }
-  }
 
-  LWLockRelease(provsql_shared_state->lock);
+    LWLockRelease(provsql_shared_state->lock);
+  }
 
   PG_RETURN_VOID();
 }
@@ -152,15 +183,16 @@ Datum set_prob(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     elog(ERROR, "Invalid NULL value passed to set_prob");
 
-  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+  STARTWRITEM();
+  ADDWRITEM("P", char);
+  ADDWRITEM(token, pg_uuid_t);
+  ADDWRITEM(&prob, double);
 
-  if(!WRITEM("P", char)
-     || !WRITEM(token, pg_uuid_t)
-     || !WRITEM(&prob, double)) {
+  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+  if(!SENDWRITEM()) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Cannot write to pipe");
   }
-
   LWLockRelease(provsql_shared_state->lock);
 
   PG_RETURN_VOID();
@@ -176,16 +208,17 @@ Datum set_infos(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     elog(ERROR, "Invalid NULL value passed to set_infos");
 
-  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+  STARTWRITEM();
+  ADDWRITEM("I", char);
+  ADDWRITEM(token, pg_uuid_t);
+  ADDWRITEM(&info1, int);
+  ADDWRITEM(&info2, int);
 
-  if(!WRITEM("I", char)
-     || !WRITEM(token, pg_uuid_t)
-     || !WRITEM(&info1, int)
-     || !WRITEM(&info2, int)) {
+  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+  if(!SENDWRITEM()) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Cannot write to pipe (message type I)");
   }
-
   LWLockRelease(provsql_shared_state->lock);
 
   PG_RETURN_VOID();
@@ -198,14 +231,9 @@ Datum get_nb_gates(PG_FUNCTION_ARGS)
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(!WRITEM("n", char)) {
+  if(!WRITEM("n", char) || !READB(nb, unsigned)) {
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot write to pipe (message type n)");
-  }
-
-  if(!READB(nb, unsigned)) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot read response from pipe (message type n)");
+    elog(ERROR, "Cannot communicate with pipe (message type n)");
   }
 
   LWLockRelease(provsql_shared_state->lock);
@@ -226,9 +254,13 @@ Datum get_children(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
+  STARTWRITEM();
+  ADDWRITEM("c", char);
+  ADDWRITEM(token, pg_uuid_t);
+
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(!WRITEM("c", char) || !WRITEM(token, pg_uuid_t)) {
+  if(!SENDWRITEM()) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Cannot write to pipe (message type c)");
   }
@@ -273,16 +305,15 @@ Datum get_prob(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
+  STARTWRITEM();
+  ADDWRITEM("p", char);
+  ADDWRITEM(token, pg_uuid_t);
+
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(!WRITEM("p", char) || !WRITEM(token, pg_uuid_t)) {
+  if(!SENDWRITEM() || !READB(result, double)) {
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot write to pipe (message type p)");
-  }
-
-  if(!READB(result, double)) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot read response from pipe (message type p)");
+    elog(ERROR, "Cannot communicate with pipe (message type p)");
   }
 
   LWLockRelease(provsql_shared_state->lock);
@@ -302,16 +333,15 @@ Datum get_infos(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
+  STARTWRITEM();
+  ADDWRITEM("i", char);
+  ADDWRITEM(token, pg_uuid_t);
+
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(!WRITEM("i", char) || !WRITEM(token, pg_uuid_t)) {
+  if(!SENDWRITEM() || !READB(info1, int) || !READB(info2, int)) {
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot write to pipe (message type i)");
-  }
-
-  if(!READB(info1, int) || !READB(info2, int)) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot read response from pipe (message type i)");
+    elog(ERROR, "Cannot communicate with pipe (message type i)");
   }
 
   LWLockRelease(provsql_shared_state->lock);

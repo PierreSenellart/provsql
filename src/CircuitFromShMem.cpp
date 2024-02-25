@@ -20,8 +20,6 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
 
   BooleanCircuit result;
 
-  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
-
   while(!to_process.empty()) {
     pg_uuid_t uuid = *to_process.begin();
     to_process.erase(to_process.begin());
@@ -36,6 +34,7 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
     unsigned nb_children;
     std::vector<pg_uuid_t> children;
 
+    LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
     if(!WRITEM("t", char) || !WRITEM(&uuid, pg_uuid_t)) {
       LWLockRelease(provsql_shared_state->lock);
       elog(ERROR, "Cannot write to pipe (message type t)");
@@ -79,6 +78,7 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
       }
       children.push_back(child);
     }
+    LWLockRelease(provsql_shared_state->lock);
 
     switch(type) {
     case gate_input:
@@ -90,7 +90,6 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
 
     case gate_mulinput:
       if(std::isnan(prob)) {
-        LWLockRelease(provsql_shared_state->lock);
         elog(ERROR, "Missing probability for mulinput token");
       }
       id = result.setGate(f, BooleanGate::MULIN, prob);
@@ -114,7 +113,6 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
       break;
 
     default:
-      LWLockRelease(provsql_shared_state->lock);
       elog(ERROR, "Wrong type of gate in circuit");
     }
 
@@ -143,8 +141,6 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
       }
     }
   }
-
-  LWLockRelease(provsql_shared_state->lock);
 
   return result;
 }
