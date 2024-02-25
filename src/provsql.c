@@ -1610,43 +1610,6 @@ void _PG_init(void)
                           NULL,
                           NULL);
 
-  DefineCustomIntVariable("provsql.max_nb_gates",
-                          "Maximum number of gates kept in memory",
-                          NULL,
-                          &provsql_max_nb_gates,
-                          10000000,
-                          1000,
-                          INT_MAX,
-                          PGC_POSTMASTER,
-                          0,
-                          NULL,
-                          NULL,
-                          NULL);
-  DefineCustomIntVariable("provsql.init_nb_gates",
-                          "Initial number of gates kept in memory",
-                          NULL,
-                          &provsql_init_nb_gates,
-                          1000,
-                          1000,
-                          INT_MAX,
-                          PGC_POSTMASTER,
-                          0,
-                          NULL,
-                          NULL,
-                          NULL);
-  DefineCustomIntVariable("provsql.avg_nb_wires",
-                          "Average number of wires per gate kept in memory",
-                          NULL,
-                          &provsql_avg_nb_wires,
-                          10,
-                          1,
-                          1000,
-                          PGC_POSTMASTER,
-                          0,
-                          NULL,
-                          NULL,
-                          NULL);
-
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");
 
