@@ -32,7 +32,7 @@ $(OBJS): $(wildcard src/*.h)
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
-LDFLAGS_SL = -lstdc++ -Wno-lto-type-mismatch
+LDFLAGS_SL = -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
 
 ifdef DEBUG
 PG_CPPFLAGS += -O0 -g

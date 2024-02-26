@@ -3,6 +3,7 @@
 
 #include "MMappedUUIDHashTable.h"
 #include "MMappedVector.hpp"
+#include "BooleanCircuit.h"
 
 extern "C" {
 #include "provsql_utils.h"
@@ -55,5 +56,7 @@ inline unsigned getNbGates() const {
   return gates.nbElements();
 }
 };
+
+BooleanCircuit createBooleanCircuit(pg_uuid_t token);
 
 #endif /* MMAPPED_CIRCUIT_H */

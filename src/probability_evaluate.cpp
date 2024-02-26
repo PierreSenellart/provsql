@@ -15,9 +15,10 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include <csignal>
 
 #include "BooleanCircuit.h"
+#include "BooleanCircuitFromMMap.h"
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
-#include "CircuitFromShMem.h"
+#include "provsql_mmap.h"
 
 using namespace std;
 
@@ -29,7 +30,7 @@ static void provsql_sigint_handler (int)
 static Datum probability_evaluate_internal
   (pg_uuid_t token, const string &method, const string &args)
 {
-  BooleanCircuit c = createBooleanCircuit(token);
+  BooleanCircuit c = getBooleanCircuit(token);
 
   double result;
   auto gate = c.getGate(uuid2string(token));

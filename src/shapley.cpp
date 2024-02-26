@@ -14,7 +14,7 @@ PG_FUNCTION_INFO_V1(shapley_all_vars);
 #include "BooleanCircuit.h"
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
-#include "CircuitFromShMem.h"
+#include "BooleanCircuitFromMMap.h"
 #include <fstream>
 
 using namespace std;
@@ -22,7 +22,7 @@ using namespace std;
 static double shapley_internal
   (pg_uuid_t token, pg_uuid_t variable, const std::string &method, const std::string &args, bool banzhaf)
 {
-  BooleanCircuit c = createBooleanCircuit(token);
+  BooleanCircuit c = getBooleanCircuit(token);
 
   if(c.getGateType(c.getGate(uuid2string(variable))) != BooleanGate::IN)
     return 0.;
@@ -114,7 +114,7 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
       banzhaf = PG_GETARG_BOOL(3);
     }
 
-    BooleanCircuit c = createBooleanCircuit(token);
+    BooleanCircuit c = getBooleanCircuit(token);
 
     dDNNF dd = c.makeDD(c.getGate(uuid2string(token)), method, args);
     dd.makeSmooth();

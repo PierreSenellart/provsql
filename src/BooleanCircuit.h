@@ -7,6 +7,12 @@
 #include <map>
 #include <vector>
 
+#include <boost/archive/text_oarchive.hpp>
+#include <boost/serialization/unordered_map.hpp>
+#include <boost/serialization/map.hpp>
+#include <boost/serialization/set.hpp>
+#include <boost/serialization/vector.hpp>
+
 #include "Circuit.hpp"
 
 enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN, MULIN, MULVAR };
@@ -69,7 +75,22 @@ dDNNF makeDD(gate_t g, const std::string &method, const std::string &args) const
 virtual std::string toString(gate_t g) const override;
 std::string exportCircuit(gate_t g) const;
 
+template<class Archive>
+void serialize (Archive & ar, const unsigned int version)
+{
+  ar & uuid2id;
+  ar & id2uuid;
+  ar & gates;
+  ar & wires;
+  ar & inputs;
+  ar & mulinputs;
+  ar & prob;
+  ar & info;
+  ar & probabilistic;
+}
+
 friend class dDNNFTreeDecompositionBuilder;
+friend class boost::serialization::access;
 };
 
 #endif /* BOOLEAN_CIRCUIT_H */

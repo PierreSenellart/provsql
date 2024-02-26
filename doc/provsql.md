@@ -87,8 +87,9 @@ make docker-build
    PostgreSQL from source, make sure to also compile and install the
    additional modules in the `contrib` directory).
 
-4. The Boost container library (on Debian-based systems, it is found in
-   the `libboost-dev` package).
+4. The Boost container library and the Boost serializer library
+  (on Debian-based systems, they are found in the `libboost-dev` and
+  `libboost-serialization-dev` packages).
 
 5. Optionally, for probability computation through knowledge compilation,
    any or all of the following software:
