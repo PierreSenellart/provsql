@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
     steps:
-      - run: pg-start ${{ matrix.pg }} libgraph-easy-perl libboost-dev unzip zlib1g-dev libgmp-dev
+      - run: pg-start ${{ matrix.pg }} libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev
       - run: pg_dropcluster ${{ matrix.pg }} main
       - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
       - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
