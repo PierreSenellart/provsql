@@ -183,3 +183,10 @@ void provsql_mmap_main_loop()
   int e = errno;
   elog(ERROR, "Reading from pipe: %s", strerror(e));
 }
+
+void MMappedCircuit::sync()
+{
+  gates.sync();
+  wires.sync();
+  mapping.sync();
+}

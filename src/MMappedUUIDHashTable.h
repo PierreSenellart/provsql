@@ -70,6 +70,7 @@ std::pair<unsigned,bool> add(pg_uuid_t u);
 inline unsigned nbElements() const {
   return table->nb_elements;
 }
+void sync();
 };
 
  #endif /* MMAPPED_UUID_HASH_TABLE_H */

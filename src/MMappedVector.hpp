@@ -59,6 +59,7 @@ void MMappedVector<T>::mmap(size_t length, bool read_only)
 template <typename T>
 void MMappedVector<T>::grow()
 {
+  sync();
   auto new_capacity = data->capacity*2;
   munmap(data, offsetof(data_t,d)+sizeof(T)*data->capacity);
 
@@ -96,6 +97,12 @@ void MMappedVector<T>::add(const T &value)
     grow();
 
   data->d[data->nb_elements++] = value;
+}
+
+template <typename T>
+void MMappedVector<T>::sync()
+{
+  msync(data, offsetof(data_t,d)+sizeof(T)*data->capacity, MS_SYNC);
 }
 
 #endif /* MMAPPED_VECTOR_HPP */

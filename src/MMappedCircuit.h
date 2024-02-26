@@ -38,13 +38,15 @@ explicit MMappedCircuit(bool read_only = false) :
   gates(GATES_FILENAME, read_only),
   wires(WIRES_FILENAME, read_only) {
 }
+~MMappedCircuit() {
+  sync();
+}
 
-/* Non-const public methods, to be used in MMap Worker */
 void createGate(pg_uuid_t token, gate_type type, const std::vector<pg_uuid_t> &children);
 void setInfos(pg_uuid_t token, unsigned info1, unsigned info2);
 void setProb(pg_uuid_t token, double prob);
+void sync();
 
-/* Const public methods, can be directly used in regular backends */
 gate_type getGateType(pg_uuid_t token) const;
 std::vector<pg_uuid_t> getChildren(pg_uuid_t token) const;
 double getProb(pg_uuid_t token) const;

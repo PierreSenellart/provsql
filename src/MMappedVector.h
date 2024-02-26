@@ -38,6 +38,7 @@ void add(const T& value);
 inline unsigned nbElements() const {
   return data->nb_elements;
 }
+void sync();
 };
 
  #endif /* MMAPPED_VECTOR_H */

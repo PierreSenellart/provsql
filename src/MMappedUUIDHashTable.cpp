@@ -57,6 +57,8 @@ void MMappedUUIDHashTable::mmap(size_t length, bool read_only)
 
 void MMappedUUIDHashTable::grow()
 {
+  sync();
+
   std::vector<value_t> elements;
   elements.reserve(table->nb_elements);
   for(unsigned i=0; i<table->capacity(); ++i)
@@ -124,4 +126,9 @@ std::pair<unsigned,bool> MMappedUUIDHashTable::add(pg_uuid_t u)
 void MMappedUUIDHashTable::set(pg_uuid_t u, unsigned i)
 {
   table->t[find(u)] = {u, i};
+}
+
+void MMappedUUIDHashTable::sync()
+{
+  msync(table, table_t::sizeForLogSize(table->log_size), MS_SYNC);
 }
