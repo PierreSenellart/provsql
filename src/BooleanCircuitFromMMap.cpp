@@ -1,6 +1,8 @@
 #include <cmath>
 
-#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/iostreams/device/array.hpp>
+#include <boost/iostreams/stream.hpp>
 
 #include "BooleanCircuit.h"
 #include "provsql_utils_cpp.h"
@@ -16,25 +18,21 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token)
   if(!WRITEM("g", char) || !WRITEM(&token, pg_uuid_t))
     elog(ERROR, "Cannot write to pipe (message type G)");
 
-  const unsigned BUFFER_SIZE=1024;
-  char buf[BUFFER_SIZE]; // flawfinder: ignore
-  std::stringstream ss;
-  unsigned nb_read;
-  while((nb_read=read(provsql_shared_state->pipembr, buf, BUFFER_SIZE))>0) { // flawfinder: ignore
-    bool finished = false;
-    if(buf[nb_read-1] == '\0') {
-      finished=true;
-      nb_read--;
-    }
-    ss << std::string(buf, nb_read);
-    if(finished)
-      break;
-  }
+  unsigned size;
+  if(!READB(size, unsigned))
+    elog(ERROR, "Cannot read from pipe (message type G)");
+
+  char *buf = new char[size];
+  if(read(provsql_shared_state->pipembr, buf, size)<size)
+    elog(ERROR, "Cannot read from pipe (message type G)");
   LWLockRelease(provsql_shared_state->lock);
 
-  boost::archive::text_iarchive ia(ss);
+  boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
+  boost::archive::binary_iarchive ia(stream);
   BooleanCircuit bc;
   ia >> bc;
+
+  delete [] buf;
 
   return bc;
 }

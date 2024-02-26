@@ -7,7 +7,7 @@
 #include <map>
 #include <vector>
 
-#include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/unordered_map.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/set.hpp>

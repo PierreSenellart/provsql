@@ -1,5 +1,6 @@
 #include <cerrno>
 #include <cmath>
+#include <sstream>
 
 #include "MMappedCircuit.h"
 #include "BooleanCircuit.h"
@@ -218,11 +219,14 @@ void provsql_mmap_main_loop()
         elog(ERROR, "Cannot read from pipe (message type g)");
 
       std::stringstream ss;
-      boost::archive::text_oarchive oa(ss);
+      boost::archive::binary_oarchive oa(ss);
       oa << createBooleanCircuit(token);
 
-      // +1 as we also transmit the final '\0' delimiter character
-      if(write(provsql_shared_state->pipembw, ss.str().c_str(), ss.str().size()+1)==-1)
+      ss.seekg(0, std::ios::end);
+      unsigned size = ss.tellg();
+      ss.seekg(0, std::ios::beg);
+
+      if(!WRITEB(&size, unsigned) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
         elog(ERROR, "Cannot write to pipe (message type g)");
       break;
     }
