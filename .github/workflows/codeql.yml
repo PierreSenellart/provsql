@@ -39,7 +39,7 @@ jobs:
       with:
         languages: ${{ matrix.language }}
 
-    - run: pg-start 16 libboost-dev
+    - run: pg-start 16 libboost-dev libboost-serialization-dev
 
     - name: Autobuild
       uses: github/codeql-action/autobuild@v3
