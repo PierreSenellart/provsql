@@ -55,10 +55,13 @@ include $(PGXS)
 LDFLAGS_SL =
 
 ifeq ($(OS), Darwin)
-LDFLAGS_SL += -L/opt/homebrew/lib
+HOMEBREW_PREFIX = $(shell brew --prefix)
+BOOST_VERSION = $(shell cd $(HOMEBREW_PREFIX)/boost && ls -rt | tail -n -1)
+
+LDFLAGS_SL += -L$(HOMEBREW_PREFIX)/boost/$(BOOST_VERSION)/lib -L$(HOMEBREW_PREFIX)/lib
 ifeq ($(ARCH), arm64)
 %.o : %.cpp
-	$(CXX) -I/opt/homebrew/Cellar/boost/$(shell cd /opt/homebrew/Cellar/boost/;ls -Art | tail -n 1;)/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+	$(CXX) -I$(HOMEBREW_PREFIX)/boost/$(BOOST_VERSION)/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 endif
 ifeq ($(ARCH), x86_64)
 %.o : %.cpp
