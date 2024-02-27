@@ -1,3 +1,19 @@
+name: Mac OS
+
+on:
+  push:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+  workflow_dispatch:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+
 jobs:
   build:
     rund-on: macos-latest
