@@ -31,6 +31,8 @@ protected:
 virtual gate_t addGate();
 
 public:
+virtual ~Circuit() {
+}
 
 std::vector<gate_t>::size_type getNbGates() const {
   return gates.size();

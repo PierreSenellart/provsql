@@ -41,6 +41,8 @@ bool probabilistic=false;
 public:
 BooleanCircuit() {
 }
+virtual ~BooleanCircuit() {
+}
 gate_t addGate() override;
 gate_t setGate(BooleanGate t) override;
 gate_t setGate(const uuid &u, BooleanGate t) override;
