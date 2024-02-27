@@ -1,4 +1,4 @@
-name: Mac OS
+name: Windows Subsystem for Linux
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: Vampire/setup-wsl@w3
+      - uses: Vampire/setup-wsl@v3.0.0
       - run: apt install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev
       - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
       - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
