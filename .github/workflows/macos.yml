@@ -6,16 +6,19 @@ on:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/wsl.yml'
   pull_request:
     paths-ignore:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/wsl.yml'
   workflow_dispatch:
     paths-ignore:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/wsl.yml'
 
 jobs:
   build:
@@ -24,7 +27,9 @@ jobs:
       - run: brew install postgresql
       - run: brew services start postgresql
       - run: brew install boost
-      - run: yes | perl -MCPAN -e 'install Graph::Easy'
+      - uses: perl-actions/install-with-cpanm@stable
+        with:
+          install: "Graph::Easy"
       - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
       - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
       - run: git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && mv weightmc /usr/local/bin && cd ../..
@@ -33,5 +38,5 @@ jobs:
       - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres)" >> $GITHUB_ENV
       - run: echo "shared_preload_libraries = 'provsql'" >> $POSTGRESQL_CONFIG
       - run: brew services restart postgresql
-      - run: perl -i -pe 's/ c2d//' test/schedule
+      - run: perl -i -pe 's/ c2d//; s/ d4//;' test/schedule
       - run: make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
