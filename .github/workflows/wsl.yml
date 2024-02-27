@@ -39,5 +39,4 @@ jobs:
       - run: service postgresql restart
       - run: perl -i -pe 's/ c2d//' test/schedule
       - run: cat /etc/postgresql/*/*/*hba*
-      - run: createuser -s root
-      - run: make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
+      - run: sudo -u postgres make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
