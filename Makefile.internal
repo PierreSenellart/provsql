@@ -56,12 +56,12 @@ LDFLAGS_SL =
 
 ifeq ($(OS), Darwin)
 HOMEBREW_PREFIX = $(shell brew --prefix)
-BOOST_VERSION = $(shell cd $(HOMEBREW_PREFIX)/boost && ls -rt | tail -n -1)
+BOOST_INSTALL_PATH = $(shell brew --prefix boost)
 
-LDFLAGS_SL += -L$(HOMEBREW_PREFIX)/boost/$(BOOST_VERSION)/lib -L$(HOMEBREW_PREFIX)/lib
+LDFLAGS_SL += -L$(BOOST_INSTALL_PATH)/lib -L$(HOMEBREW_PREFIX)/lib
 ifeq ($(ARCH), arm64)
 %.o : %.cpp
-	$(CXX) -I$(HOMEBREW_PREFIX)/boost/$(BOOST_VERSION)/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+	$(CXX) -I$(BOOST_INSTALL_PATH)/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 endif
 ifeq ($(ARCH), x86_64)
 %.o : %.cpp
