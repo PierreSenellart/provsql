@@ -22,10 +22,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - run: brew install postgresql
-      - run: echo "POSTGRESQL_CONFIG=$(sudo -u postgres psql -t -c 'SHOW config_file')" >> $GITHUB_ENV
+      - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file')" >> $GITHUB_ENV
       - run: brew install boost
       - uses: actions/checkout@v4
       - run: make && make tdkc && make install
-      - run: echo "shared_preload_libraries = 'provsql'" >> $GITHUB_ENV
+      - run: echo "shared_preload_libraries = 'provsql'" >> $POSTGRESQL_CONFIG
       - run: brew services restart postgresql
       - run: make installcheck
