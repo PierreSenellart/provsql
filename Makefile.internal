@@ -32,8 +32,6 @@ $(OBJS): $(wildcard src/*.h)
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
-LDFLAGS_SL = -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
-
 ifdef DEBUG
 PG_CPPFLAGS += -O0 -g
 endif
@@ -54,18 +52,25 @@ include $(PGXS)
 %.o : %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-%.o : %.cpp
+LDFLAGS_SL =
+
 ifeq ($(OS), Darwin)
+LDFLAGS_SL += -L/opt/homebrew/lib
 ifeq ($(ARCH), arm64)
+%.o : %.cpp
 	$(CXX) -I/opt/homebrew/Cellar/boost/$(shell cd /opt/homebrew/Cellar/boost/;ls -Art | tail -n 1;)/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 endif
 ifeq ($(ARCH), x86_64)
+%.o : %.cpp
 	$(CXX) -I/usr/local/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 endif
 endif
 ifeq ($(OS), Linux)
+%.o : %.cpp
 	$(CXX) -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 endif
+
+LDFLAGS_SL += -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
 
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
