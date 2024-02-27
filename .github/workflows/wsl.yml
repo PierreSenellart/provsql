@@ -6,19 +6,19 @@ on:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/build_and_test.yml'
-      - '.github/workflows/wsl.yml'
+      - '.github/workflows/macos.yml'
   pull_request:
     paths-ignore:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/build_and_test.yml'
-      - '.github/workflows/wsl.yml'
+      - '.github/workflows/macos.yml'
   workflow_dispatch:
     paths-ignore:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/build_and_test.yml'
-      - '.github/workflows/wsl.yml'
+      - '.github/workflows/macos.yml'
 
 jobs:
   build:
