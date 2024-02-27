@@ -1,4 +1,4 @@
-name: Build and Test ProvSQL
+name: Linux
 
 on:
   push:

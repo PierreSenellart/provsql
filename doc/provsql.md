@@ -1,6 +1,8 @@
 # ProvSQL
 
 [![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml)
+[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml)
+[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml)
 
 The goal of the ProvSQL project is to add support for (m-)semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
@@ -67,13 +69,10 @@ make docker-build
 
 1. An install of PostgreSQL >= 9.6. The extension has currently been
    tested with versions from 9.6 to 16 (inclusive) of PostgreSQL, under
-   Linux
-[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml) , Mac OS X
-[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml), and
-   [Windows Subsystem for Linux](https://learn.microsoft.com/en-us/windows/wsl/about)
-[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml)
-   (if the extension does not work on a specific version
-   or operating system, a bug report is appreciated).
+   Linux , and [Windows Subsystem for
+   Linux](https://learn.microsoft.com/en-us/windows/wsl/about) (if the
+   extension does not work on a specific version or operating system, a
+   bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
    C/C++ compiler (both can be obtained on Debian-based Linux distributions
