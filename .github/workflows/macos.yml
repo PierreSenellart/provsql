@@ -1,0 +1,11 @@
+jobs:
+  build:
+    rund-on: macos-latest
+    steps:
+      - brew install postgresql
+      - brew install boost
+      - uses: actions/checkout@v4
+      - run: make && make tdkc && make install
+      - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/*/*/postgresql.conf
+      - run: brew services restart postgresql
+      - run: make installcheck
