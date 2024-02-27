@@ -1,6 +1,7 @@
 \set ECHO none
 remove_provenance
 
+(1 row)
 value
 0.1
 0.2
@@ -9,3 +10,4 @@ value
 0.5
 0.6
 0.7
+(7 rows)

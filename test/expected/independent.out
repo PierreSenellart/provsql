@@ -2,7 +2,9 @@
 ERROR:  Not an independent circuit
 remove_provenance
 
-city,prob
-Berlin,0.82
-New York,0.28
-Paris,0.86
+(1 row)
+city|prob
+Berlin|0.82
+New York|0.28
+Paris|0.86
+(3 rows)

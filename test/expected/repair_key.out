@@ -1,8 +1,11 @@
 \set ECHO none
 repair_key
 
+(1 row)
 remove_provenance
 
-ground,round
-dry,0.550
-wet,0.450
+(1 row)
+ground|round
+dry|0.550
+wet|0.450
+(2 rows)

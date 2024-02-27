@@ -1,7 +1,9 @@
 \set ECHO none
 remove_provenance
 
-city,formula
-Berlin,(Ellen ⊕ Ellen ⊕ Ellen ⊕ Ellen ⊕ Susan ⊕ Susan ⊕ Susan)
-New York,(John ⊕ John ⊕ Paul)
-Paris,(Dave ⊕ Dave ⊕ Magdalen ⊕ Magdalen ⊕ Magdalen ⊕ Magdalen ⊕ Nancy ⊕ Nancy)
+(1 row)
+city|formula
+Berlin|(Ellen ⊕ Ellen ⊕ Ellen ⊕ Ellen ⊕ Susan ⊕ Susan ⊕ Susan)
+New York|(John ⊕ John ⊕ Paul)
+Paris|(Dave ⊕ Dave ⊕ Magdalen ⊕ Magdalen ⊕ Magdalen ⊕ Magdalen ⊕ Nancy ⊕ Nancy)
+(3 rows)

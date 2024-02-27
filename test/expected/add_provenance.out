@@ -1,11 +1,14 @@
 \set ECHO none
 add_provenance
 
+(1 row)
 nb
 7
+(1 row)
 attname
 city
 classification
 name
 position
 provsql
+(5 rows)

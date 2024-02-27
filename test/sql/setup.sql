@@ -1,5 +1,5 @@
 \set ECHO none
-\pset format csv
+\pset format unaligned
 
 CREATE EXTENSION "uuid-ossp";
 CREATE EXTENSION provsql;

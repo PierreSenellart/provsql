@@ -1,5 +1,5 @@
 \set ECHO none
-\pset format csv
+\pset format unaligned
 SET search_path to provsql_test;
 
 SELECT * FROM personnel EXCEPT SELECT * FROM personnel;

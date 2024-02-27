@@ -1,5 +1,5 @@
 \set ECHO none
-\pset format csv
+\pset format unaligned
 SET search_path TO provsql_test,provsql;
 
 -- Will fail because this is not independent

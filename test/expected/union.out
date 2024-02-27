@@ -1,9 +1,11 @@
 \set ECHO none
 remove_provenance
 
-classification,formula
-unclassified,John
-restricted,(Nancy ⊕ Nancy ⊕ Paul)
-confidential,(Dave ⊕ Dave)
-secret,(Ellen ⊕ Susan)
-top_secret,(Magdalen ⊕ Magdalen)
+(1 row)
+classification|formula
+unclassified|John
+restricted|(Nancy ⊕ Nancy ⊕ Paul)
+confidential|(Dave ⊕ Dave)
+secret|(Ellen ⊕ Susan)
+top_secret|(Magdalen ⊕ Magdalen)
+(5 rows)

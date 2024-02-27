@@ -1,6 +1,7 @@
 \set ECHO none
 create_provenance_mapping
 
+(1 row)
 value
 Dave
 Ellen
@@ -9,3 +10,4 @@ Magdalen
 Nancy
 Paul
 Susan
+(7 rows)
