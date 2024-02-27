@@ -30,6 +30,7 @@ jobs:
       - uses: perl-actions/install-with-cpanm@stable
         with:
           install: "Graph::Easy"
+      - run: brew install zlib-devel
       - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
       - run: git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && mv weightmc /usr/local/bin && cd ../..
       - uses: actions/checkout@v4
