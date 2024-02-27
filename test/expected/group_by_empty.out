@@ -1,11 +1,7 @@
 \set ECHO none
- remove_provenance 
--------------------
- 
-(1 row)
+remove_provenance
 
-   security   
---------------
- unclassified
 (1 row)
-
+security
+unclassified
+(1 row)

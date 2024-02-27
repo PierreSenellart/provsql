@@ -1,18 +1,12 @@
 \set ECHO none
- create_provenance_mapping 
----------------------------
- 
-(1 row)
+create_provenance_mapping
 
- remove_provenance 
--------------------
- 
 (1 row)
+remove_provenance
 
-   city   |                          formula                          
-----------+-----------------------------------------------------------
- Berlin   | (Ellen ⊗ Susan)
- New York | (John ⊗ Paul)
- Paris    | ((Dave ⊗ Magdalen) ⊕ (Dave ⊗ Nancy) ⊕ (Magdalen ⊗ Nancy))
+(1 row)
+city|formula
+Berlin|(Ellen ⊗ Susan)
+New York|(John ⊗ Paul)
+Paris|((Dave ⊗ Magdalen) ⊕ (Dave ⊗ Nancy) ⊕ (Magdalen ⊗ Nancy))
 (3 rows)
-

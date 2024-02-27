@@ -1,4 +1,5 @@
 \set ECHO none
+\pset format unaligned
 SET search_path TO provsql_test, provsql;
 
 CREATE TABLE agg_result AS

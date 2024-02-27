@@ -1,6 +1,8 @@
 # ProvSQL
 
 [![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml)
+[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml)
+[![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml)
 
 The goal of the ProvSQL project is to add support for (m-)semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
@@ -67,10 +69,10 @@ make docker-build
 
 1. An install of PostgreSQL >= 9.6. The extension has currently been
    tested with versions from 9.6 to 16 (inclusive) of PostgreSQL, under
-   Linux, Mac OS X, and
-   [Windows Subsystem for Linux](https://learn.microsoft.com/en-us/windows/wsl/about)
-   (if the extension does not work on a specific version
-   or operating system, a bug report is appreciated).
+   Linux, Mac OS (both x86-64 and ARM architectures), and [Windows Subsystem for
+   Linux](https://learn.microsoft.com/en-us/windows/wsl/about) (if the
+   extension does not work on a specific version or operating system, a
+   bug report is appreciated).
 
 2. A compilation environment for PostgreSQL, including the `make` tool, a
    C/C++ compiler (both can be obtained on Debian-based Linux distributions
@@ -92,7 +94,8 @@ make docker-build
   `libboost-serialization-dev` packages).
 
 5. Optionally, for probability computation through knowledge compilation,
-   any or all of the following software:
+   any or all of the following software (note that some of them are not
+   available under other OSs than Linux):
   * `c2d`, from <http://reasoning.cs.ucla.edu/c2d/download.php>
   * `d4`, from <https://github.com/crillab/d4>
   * `dsharp`, from <https://github.com/QuMuLab/dsharp>

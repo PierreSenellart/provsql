@@ -1,18 +1,24 @@
-name: Build and Test ProvSQL
+name: Linux
 
 on:
   push:
     paths-ignore:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
+      - '.github/workflows/macos.yml'
+      - '.github/workflows/wsl.yml'
   pull_request:
     paths-ignore:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
+      - '.github/workflows/macos.yml'
+      - '.github/workflows/wsl.yml'
   workflow_dispatch:
     paths-ignore:
       - 'doc/**'
       - '.github/workflows/codeql.yml'
+      - '.github/workflows/macos.yml'
+      - '.github/workflows/wsl.yml'
 
 jobs:
   test:

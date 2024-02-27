@@ -1,0 +1,42 @@
+name: Windows Subsystem for Linux
+
+on:
+  push:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/macos.yml'
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/macos.yml'
+  workflow_dispatch:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/macos.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: wsl-bash {0}
+    steps:
+      - uses: Vampire/setup-wsl@v3.0.0
+      - run: apt update
+      - run: apt -y install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all
+      - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
+      - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
+      - run: git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && mv weightmc /usr/local/bin && cd ../..
+      - uses: actions/checkout@v4
+      - run: make && make tdkc && make install
+      - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/*/*/postgresql.conf
+      - run: service postgresql restart
+      - run: perl -i -pe 's/ c2d//' test/schedule
+      - run: perl -i -pe 's/\r//g unless /\\set ECHO none/' test/expected/*.out
+      - run: sudo -u postgres make installcheck || bash -c 'cat /tmp/tmp.provsql*/regression.diffs; false'

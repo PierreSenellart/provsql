@@ -1,41 +1,29 @@
 \set ECHO none
- remove_provenance 
--------------------
- 
-(1 row)
+remove_provenance
 
-    c1    |    c2    |                                     regexp_replace                                     
-----------+----------+----------------------------------------------------------------------------------------
- Berlin   | Berlin   | {[personnel::4;personnel::4],[personnel::4;personnel::4],[]}
- New York | New York | {[personnel::4;personnel::4],[personnel::4;personnel::4],[]}
- Paris    | Paris    | {[personnel::4;personnel::4;personnel::4],[personnel::4;personnel::4;personnel::4],[]}
+(1 row)
+c1|c2|regexp_replace
+Berlin|Berlin|{[personnel::4;personnel::4],[personnel::4;personnel::4],[]}
+New York|New York|{[personnel::4;personnel::4],[personnel::4;personnel::4],[]}
+Paris|Paris|{[personnel::4;personnel::4;personnel::4],[personnel::4;personnel::4;personnel::4],[]}
 (3 rows)
+remove_provenance
 
- remove_provenance 
--------------------
- 
 (1 row)
-
-   city   |                regexp_replace                 
-----------+-----------------------------------------------
- Berlin   | {[personnel::4;personnel::4],[]}
- New York | {[personnel::4;personnel::4],[]}
- Paris    | {[personnel::4;personnel::4;personnel::4],[]}
+city|regexp_replace
+Berlin|{[personnel::4;personnel::4],[]}
+New York|{[personnel::4;personnel::4],[]}
+Paris|{[personnel::4;personnel::4;personnel::4],[]}
 (3 rows)
+remove_provenance
 
- remove_provenance 
--------------------
- 
 (1 row)
-
- ?column? |   city   |     regexp_replace     
-----------+----------+------------------------
-        1 | Berlin   | {[],[personnel::4],[]}
-        1 | Berlin   | {[],[personnel::4],[]}
-        1 | New York | {[],[personnel::4],[]}
-        1 | New York | {[],[personnel::4],[]}
-        1 | Paris    | {[],[personnel::4],[]}
-        1 | Paris    | {[],[personnel::4],[]}
-        1 | Paris    | {[],[personnel::4],[]}
+?column?|city|regexp_replace
+1|Berlin|{[],[personnel::4],[]}
+1|Berlin|{[],[personnel::4],[]}
+1|New York|{[],[personnel::4],[]}
+1|New York|{[],[personnel::4],[]}
+1|Paris|{[],[personnel::4],[]}
+1|Paris|{[],[personnel::4],[]}
+1|Paris|{[],[personnel::4],[]}
 (7 rows)
-

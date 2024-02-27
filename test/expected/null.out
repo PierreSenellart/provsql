@@ -1,16 +1,10 @@
 \set ECHO none
- add_provenance 
-----------------
- 
-(1 row)
+add_provenance
 
- remove_provenance 
--------------------
- 
 (1 row)
+remove_provenance
 
- x 
----
-  
 (1 row)
+x
 
+(1 row)

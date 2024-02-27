@@ -1,0 +1,36 @@
+name: Mac OS
+
+on:
+  push:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/wsl.yml'
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/wsl.yml'
+  workflow_dispatch:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/wsl.yml'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - run: brew install postgresql
+      - run: brew services start postgresql
+      - run: brew install boost
+      - uses: actions/checkout@v4
+      - run: make && make tdkc && make install
+      - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres)" >> $GITHUB_ENV
+      - run: echo "shared_preload_libraries = 'provsql'" >> $POSTGRESQL_CONFIG
+      - run: brew services restart postgresql
+      - run: "perl -i -pe 's/ c2d//; s/ d4//; s/ weightmc//; s/ dsharp//; s/ view_circuit_multiple//; s/test: *$//' test/schedule"
+      - run: make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"

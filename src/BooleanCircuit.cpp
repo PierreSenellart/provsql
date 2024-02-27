@@ -25,7 +25,8 @@ extern "C" {
 #ifdef TDKC
 constexpr bool provsql_interrupted = false;
 constexpr int provsql_verbose = 0;
-#define elog(level, ...) {;}
+enum levels {ERROR, NOTICE};
+#define elog(level, ...) {fprintf(stderr, __VA_ARGS__); if(level==ERROR) exit(EXIT_FAILURE);}
 #else
 extern "C" {
 #include "provsql_utils.h"
@@ -469,8 +470,9 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
           auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(leaf-1)), BooleanGate::IN, prob[leaf-1]);
           dnnf.addWire(and_gate, leaf_gate);
         }
-      } else
+      } else {
         ; // Do nothing, TRUE gate
+      }
     } else if(c=="f" || c=="o") {
       // d4 extended format
       // A FALSE gate is an OR gate without wires

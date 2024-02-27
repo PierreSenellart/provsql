@@ -1,18 +1,12 @@
 \set ECHO none
- create_provenance_mapping 
----------------------------
- 
-(1 row)
+create_provenance_mapping
 
- remove_provenance 
--------------------
- 
 (1 row)
+remove_provenance
 
-   city   |   security   
-----------+--------------
- Berlin   | secret
- New York | restricted
- Paris    | confidential
+(1 row)
+city|security
+Berlin|secret
+New York|restricted
+Paris|confidential
 (3 rows)
-
