@@ -23,6 +23,9 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: wsl-bash {0}
     steps:
       - uses: Vampire/setup-wsl@v3.0.0
       - run: apt install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev
