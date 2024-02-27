@@ -56,7 +56,7 @@ ifeq ($(OS), Darwin)
 HOMEBREW_PREFIX = $(shell brew --prefix)
 BOOST_INSTALL_PATH = $(shell brew --prefix boost)
 
-CFLAGS_SL_MODULE += -L$(BOOST_INSTALL_PATH)/lib -L$(HOMEBREW_PREFIX)/lib
+LINKER_FLAGS += -L$(BOOST_INSTALL_PATH)/lib -L$(HOMEBREW_PREFIX)/lib
 ifeq ($(ARCH), arm64)
 %.o : %.cpp
 	$(CXX) -I$(BOOST_INSTALL_PATH)/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
@@ -71,12 +71,17 @@ ifeq ($(OS), Linux)
 	$(CXX) -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 endif
 
-CFLAGS_SL_MODULE += -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
-
+LINKER_FLAGS += -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
 PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
-PGVER_MINOR = $(shell echo $(VERSION) | awk -F. '{ print ($$2 + 0) }')
+
+# Ways to pass linker flags have changed in PostgreSQL 16
+ifeq ($(shell [ $(PGVER_MAJOR) -ge 16 ]; echo $$?), 0)
+CFLAGS_SL_MODULE += $(LINKER_FLAGS)
+else
+LDFLAGS_SL += $(LINKER_FLAGS)
+endif
 
 test/schedule: $(wildcard test/schedule.*)
 	cat test/schedule.common > test/schedule
