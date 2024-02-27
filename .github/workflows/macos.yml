@@ -30,14 +30,11 @@ jobs:
       - uses: perl-actions/install-with-cpanm@stable
         with:
           install: "Graph::Easy"
-      - run: xcode-select --install
-      - run: brew install zlib-devel
       - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
-      - run: git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && mv weightmc /usr/local/bin && cd ../..
       - uses: actions/checkout@v4
       - run: make && make tdkc && make install
       - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres)" >> $GITHUB_ENV
       - run: echo "shared_preload_libraries = 'provsql'" >> $POSTGRESQL_CONFIG
       - run: brew services restart postgresql
-      - run: perl -i -pe 's/ c2d//; s/ d4//;' test/schedule
+      - run: perl -i -pe 's/ c2d//; s/ d4//; s/ weightmc//;' test/schedule
       - run: make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
