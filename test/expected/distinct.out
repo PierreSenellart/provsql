@@ -1,15 +1,9 @@
 \set ECHO none
- remove_provenance 
--------------------
- 
-(1 row)
+remove_provenance
 
- classification |     formula     
-----------------+-----------------
- unclassified   | John
- restricted     | (Nancy ⊕ Paul)
- confidential   | Dave
- secret         | (Ellen ⊕ Susan)
- top_secret     | Magdalen
-(5 rows)
-
+classification,formula
+unclassified,John
+restricted,(Nancy ⊕ Paul)
+confidential,Dave
+secret,(Ellen ⊕ Susan)
+top_secret,Magdalen

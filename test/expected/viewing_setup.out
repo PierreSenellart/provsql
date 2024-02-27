@@ -1,17 +1,11 @@
 \set ECHO none
- create_provenance_mapping 
----------------------------
- 
-(1 row)
+create_provenance_mapping
 
-  value   
-----------
- Dave
- Ellen
- John
- Magdalen
- Nancy
- Paul
- Susan
-(7 rows)
-
+value
+Dave
+Ellen
+John
+Magdalen
+Nancy
+Paul
+Susan

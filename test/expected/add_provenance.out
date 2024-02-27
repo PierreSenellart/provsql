@@ -1,20 +1,11 @@
 \set ECHO none
- add_provenance 
-----------------
- 
-(1 row)
+add_provenance
 
- nb 
-----
-  7
-(1 row)
-
-    attname     
-----------------
- city
- classification
- name
- position
- provsql
-(5 rows)
-
+nb
+7
+attname
+city
+classification
+name
+position
+provsql

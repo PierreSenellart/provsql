@@ -1,4 +1,5 @@
 \set ECHO none
+\pset format csv
 set search_path to provsql_test, provsql;
 
 CREATE TABLE deterministic_result AS

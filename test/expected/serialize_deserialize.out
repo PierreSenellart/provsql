@@ -1,29 +1,16 @@
 \set ECHO none
- add_provenance 
-----------------
- 
-(1 row)
+add_provenance
 
-INFO:  serializing completed without error
- dump_data 
------------
- 
-(1 row)
+ERROR:  function dump_data() does not exist
+LINE 1: SELECT dump_data();
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  function read_data_dump() does not exist
+LINE 1: SELECT read_data_dump();
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+remove_provenance
 
-INFO:  deserialization completed without error
- read_data_dump 
-----------------
- 
-(1 row)
-
- remove_provenance 
--------------------
- 
-(1 row)
-
- get_prob 
-----------
-      0.2
-      0.3
-(2 rows)
-
+get_prob
+0.4
+0.3

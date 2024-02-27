@@ -1,9 +1,3 @@
 \set ECHO none
- id | name | position | city | classification | provsql 
-----+------+----------+------+----------------+---------
-(0 rows)
-
- id | name | position | city | classification | provsql 
-----+------+----------+------+----------------+---------
-(0 rows)
-
+id,name,position,city,classification,provsql
+id,name,position,city,classification,provsql

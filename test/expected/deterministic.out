@@ -1,13 +1,7 @@
 \set ECHO none
- remove_provenance 
--------------------
- 
-(1 row)
+remove_provenance
 
- ?column? 
-----------
- t
- t
- t
-(3 rows)
-
+?column?
+t
+t
+t

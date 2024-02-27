@@ -1,18 +1,9 @@
 \set ECHO none
- create_provenance_mapping 
----------------------------
- 
-(1 row)
+create_provenance_mapping
 
- remove_provenance 
--------------------
- 
-(1 row)
+remove_provenance
 
-   city   | counting 
-----------+----------
- Berlin   |        1
- New York |        1
- Paris    |        3
-(3 rows)
-
+city,counting
+Berlin,1
+New York,1
+Paris,3

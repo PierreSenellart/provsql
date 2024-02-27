@@ -1,54 +1,33 @@
 \set ECHO none
- remove_provenance 
--------------------
- 
-(1 row)
+remove_provenance
 
-   position   | count |      formula      
---------------+-------+-------------------
- Analyst      | 2 (*) | δ((Dave ⊕ Susan))
- Director     | 1 (*) | δ(John)
- Double agent | 1 (*) | δ(Magdalen)
- Field agent  | 1 (*) | δ(Ellen)
- HR           | 1 (*) | δ(Nancy)
- Janitor      | 1 (*) | δ(Paul)
-(6 rows)
+position,count,formula
+Analyst,2 (*),δ((Dave ⊕ Susan))
+Director,1 (*),δ(John)
+Double agent,1 (*),δ(Magdalen)
+Field agent,1 (*),δ(Ellen)
+HR,1 (*),δ(Nancy)
+Janitor,1 (*),δ(Paul)
+position,aggregation_formula
+Analyst,"count{ (1 * Susan) , (1 * Dave) }"
+Director,count{ (1 * John) }
+Double agent,count{ (1 * Magdalen) }
+Field agent,count{ (1 * Ellen) }
+HR,count{ (1 * Nancy) }
+Janitor,count{ (1 * Paul) }
+remove_provenance
 
-   position   |        aggregation_formula        
---------------+-----------------------------------
- Analyst      | count{ (1 * Susan) , (1 * Dave) }
- Director     | count{ (1 * John) }
- Double agent | count{ (1 * Magdalen) }
- Field agent  | count{ (1 * Ellen) }
- HR           | count{ (1 * Nancy) }
- Janitor      | count{ (1 * Paul) }
-(6 rows)
+position,aggregation_formula
+Director,count{ (1 * John) }
+Double agent,count{ (1 * Magdalen) }
+Field agent,count{ (1 * Ellen) }
+HR,count{ (1 * Nancy) }
+Janitor,count{ (1 * Paul) }
+remove_provenance
 
- remove_provenance 
--------------------
- 
-(1 row)
-
-   position   |   aggregation_formula   
---------------+-------------------------
- Director     | count{ (1 * John) }
- Double agent | count{ (1 * Magdalen) }
- Field agent  | count{ (1 * Ellen) }
- HR           | count{ (1 * Nancy) }
- Janitor      | count{ (1 * Paul) }
-(5 rows)
-
- remove_provenance 
--------------------
- 
-(1 row)
-
-   position   |   aggregation_formula   
---------------+-------------------------
- Director     | count{ (1 * John) }
- Double agent | count{ (1 * Magdalen) }
- Field agent  | count{ (1 * Ellen) }
- HR           | count{ (1 * Nancy) }
- Janitor      | count{ (1 * Paul) }
-(5 rows)
-
+position,aggregation_formula
+Director,count{ (1 * John) }
+Double agent,count{ (1 * Magdalen) }
+Field agent,count{ (1 * Ellen) }
+HR,count{ (1 * Nancy) }
+Janitor,count{ (1 * Paul) }

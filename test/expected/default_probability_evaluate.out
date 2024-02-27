@@ -1,13 +1,7 @@
 \set ECHO none
- remove_provenance 
--------------------
- 
-(1 row)
+remove_provenance
 
-   city   | prob 
-----------+------
- Berlin   | 0.54
- New York | 0.26
- Paris    | 0.41
-(3 rows)
-
+city,prob
+Berlin,0.54
+New York,0.26
+Paris,0.41

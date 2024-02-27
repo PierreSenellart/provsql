@@ -1,49 +1,31 @@
 \set ECHO none
- remove_provenance 
--------------------
- 
-(1 row)
+remove_provenance
 
-   name   |   city   | shapley 
-----------+----------+---------
- Ellen    | Berlin   |   0.093
- Susan    | Berlin   |   0.264
- John     | New York |   0.037
- Paul     | New York |   0.080
- Dave     | Paris    |   0.056
- Magdalen | Paris    |   0.113
- Nancy    | Paris    |   0.156
-(7 rows)
+name,city,shapley
+Ellen,Berlin,0.093
+Susan,Berlin,0.264
+John,New York,0.037
+Paul,New York,0.080
+Dave,Paris,0.056
+Magdalen,Paris,0.113
+Nancy,Paris,0.156
+remove_provenance
 
- remove_provenance 
--------------------
- 
-(1 row)
+name,city,shapley
+Ellen,Berlin,-0.036
+Susan,Berlin,-0.036
+John,New York,-0.036
+Paul,New York,-0.036
+Dave,Paris,0.048
+Magdalen,Paris,0.048
+Nancy,Paris,0.048
+remove_provenance
 
-   name   |   city   | shapley 
-----------+----------+---------
- Ellen    | Berlin   |  -0.036
- Susan    | Berlin   |  -0.036
- John     | New York |  -0.036
- Paul     | New York |  -0.036
- Dave     | Paris    |   0.048
- Magdalen | Paris    |   0.048
- Nancy    | Paris    |   0.048
-(7 rows)
-
- remove_provenance 
--------------------
- 
-(1 row)
-
-   city   | shapley 
-----------+---------
- Berlin   |   0.120
- Berlin   |   0.420
- New York |   0.080
- New York |   0.180
- Paris    |   0.060
- Paris    |   0.140
- Paris    |   0.210
-(7 rows)
-
+city,shapley
+Berlin,0.120
+Berlin,0.420
+New York,0.080
+New York,0.180
+Paris,0.060
+Paris,0.140
+Paris,0.210

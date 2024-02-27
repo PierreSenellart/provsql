@@ -1,12 +1,6 @@
 \set ECHO none
- add_provenance 
-----------------
- 
-(1 row)
+add_provenance
 
- attname | typname 
----------+---------
- n       | int4
- provsql | uuid
-(2 rows)
-
+attname,typname
+n,int4
+provsql,uuid

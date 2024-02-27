@@ -1,4 +1,5 @@
 \set ECHO none
+\pset format csv
 SET search_path TO provsql_test, provsql;
 
 CREATE TABLE union_all_result AS
