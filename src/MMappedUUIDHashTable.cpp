@@ -48,7 +48,7 @@ void MMappedUUIDHashTable::mmap(size_t length, bool read_only)
                                         NULL,
                                         length,
                                         PROT_READ|(read_only?0:PROT_WRITE),
-                                        MAP_SHARED_VALIDATE,
+                                        MAP_SHARED,
                                         fd,
                                         0));
   if(table == MAP_FAILED)
