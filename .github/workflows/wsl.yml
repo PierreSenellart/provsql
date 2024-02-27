@@ -39,4 +39,5 @@ jobs:
       - run: service postgresql restart
       - run: perl -i -pe 's/ c2d//' test/schedule
       - run: perl -i -pe 's/\r//g unless /\\set ECHO none/' test/expected/*.out
+      - run: pg_isready -t 30
       - run: sudo -u postgres make installcheck || bash -c 'cat /tmp/tmp.provsql*/regression.diffs; false'

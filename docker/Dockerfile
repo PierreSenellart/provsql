@@ -88,6 +88,7 @@ RUN make install
 USER postgres
 #create a db test
 RUN /etc/init.d/postgresql start &&\
+    pg_isready -t 30 &&\
     createuser -s test &&\
     createdb test &&\
     psql -f /opt/provsql/test/sql/setup.sql test test  &&\
