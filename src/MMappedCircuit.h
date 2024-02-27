@@ -1,9 +1,9 @@
 #ifndef MMAPPED_CIRCUIT_H
 #define MMAPPED_CIRCUIT_H
 
+#include "BooleanCircuit.h"
 #include "MMappedUUIDHashTable.h"
 #include "MMappedVector.hpp"
-#include "BooleanCircuit.h"
 
 extern "C" {
 #include "provsql_utils.h"
