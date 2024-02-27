@@ -8,6 +8,17 @@ The goal of the ProvSQL project is to add support for (m-)semiring provenance
 and uncertainty management to PostgreSQL databases, in the form of a
 PostgreSQL extension/module/plugin. It is work in progress.
 
+**Table of contents**
+- [Features](#features)
+- [Docker container](#docker-container)
+- [Prerequisites for installation](#prerequisites-for-installation)
+- [Installation](#installation)
+- [Testing your installation](#testing-your-installation)
+- [Using ProvSQL](#using-provsql)
+- [Uninstalling](#uninstalling)
+- [License](#license)
+- [Contact](#contact)
+
 ## Features
 
 The ProvSQL system supports:
