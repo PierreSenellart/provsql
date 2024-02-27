@@ -69,7 +69,7 @@ make docker-build
 
 1. An install of PostgreSQL >= 9.6. The extension has currently been
    tested with versions from 9.6 to 16 (inclusive) of PostgreSQL, under
-   Linux , and [Windows Subsystem for
+   Linux, Mac OS (both x86-64 and ARM architectures), and [Windows Subsystem for
    Linux](https://learn.microsoft.com/en-us/windows/wsl/about) (if the
    extension does not work on a specific version or operating system, a
    bug report is appreciated).
@@ -93,7 +93,8 @@ make docker-build
    the `libboost-dev` package).
 
 5. Optionally, for probability computation through knowledge compilation,
-   any or all of the following software:
+   any or all of the following software (note that some of them are not
+   available under other OSs than Linux):
   * `c2d`, from <http://reasoning.cs.ucla.edu/c2d/download.php>
   * `d4`, from <https://github.com/crillab/d4>
   * `dsharp`, from <https://github.com/QuMuLab/dsharp>
