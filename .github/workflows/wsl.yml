@@ -38,4 +38,4 @@ jobs:
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/*/*/postgresql.conf
       - run: service postgresql restart
       - run: perl -i -pe 's/ c2d//' test/schedule
-      - run: sudo -u postgres make installcheck || bash -c 'cat /tmp/tmp.provsql*/regression.diffs | perl -pe "s/\\r/R/;s/\\n/N\n/"; false'
+      - run: sudo -u postgres make installcheck || bash -c 'cat /tmp/tmp.provsql*/regression.diffs | perl -pe "s/\\r/R/g;s/\\n/N\n/g"; false'
