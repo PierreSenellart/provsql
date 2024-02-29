@@ -18,7 +18,7 @@ default:
 	$(MAKE) -f $(INTERNAL) $@ $(ARGS)
 
 test:
-	bash -c "set -o pipefail && make installcheck | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
+	bash -c "set -o pipefail && make installcheck 2>&1 | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
 
 .PHONY: default test
 
