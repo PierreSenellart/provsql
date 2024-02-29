@@ -9,15 +9,15 @@ CREATE TYPE agg_token;
 
 CREATE OR REPLACE FUNCTION agg_token_in(cstring)
   RETURNS agg_token
-  AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT;
+  AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
   RETURNS cstring
-  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT;
+  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
   RETURNS text
-  AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT;
+  AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 CREATE TYPE agg_token (
   internallength = 117,
@@ -32,7 +32,7 @@ $$
 BEGIN
   RETURN agg_token_cast(aggtok)::uuid;
 END
-$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE PARALLEL SAFE;
 
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
@@ -44,33 +44,33 @@ CREATE OR REPLACE FUNCTION create_gate(
   type provenance_gate,
   children uuid[] DEFAULT NULL)
   RETURNS void AS
-  'provsql','create_gate' LANGUAGE C;
+  'provsql','create_gate' LANGUAGE C PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION get_gate_type(
   token UUID)
   RETURNS provenance_gate AS
-  'provsql','get_gate_type' LANGUAGE C;
+  'provsql','get_gate_type' LANGUAGE C IMMUTABLE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION get_children(
   token UUID)
   RETURNS uuid[] AS
-  'provsql','get_children' LANGUAGE C;
+  'provsql','get_children' LANGUAGE C IMMUTABLE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION set_prob(
   token UUID, p DOUBLE PRECISION)
   RETURNS void AS
-  'provsql','set_prob' LANGUAGE C;
+  'provsql','set_prob' LANGUAGE C PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION get_prob(
   token UUID)
   RETURNS DOUBLE PRECISION AS
-  'provsql','get_prob' LANGUAGE C;
+  'provsql','get_prob' LANGUAGE C STABLE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION set_infos(
   token UUID, info1 INT, info2 INT DEFAULT NULL)
   RETURNS void AS
-  'provsql','set_infos' LANGUAGE C;
+  'provsql','set_infos' LANGUAGE C PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION get_infos(
   token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
-  'provsql','get_infos' LANGUAGE C;
+  'provsql','get_infos' LANGUAGE C STABLE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
-  'provsql', 'get_nb_gates' LANGUAGE C;
+  'provsql', 'get_nb_gates' LANGUAGE C PARALLEL SAFE;
 
 CREATE UNLOGGED TABLE provenance_circuit_extra(
   gate UUID,
@@ -222,7 +222,7 @@ BEGIN
 
   RETURN times_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION provenance_monus(token1 UUID, token2 UUID)
   RETURNS UUID AS
@@ -252,7 +252,7 @@ BEGIN
 
   RETURN monus_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION provenance_project(token UUID, VARIADIC positions int[])
   RETURNS UUID AS
@@ -322,7 +322,7 @@ BEGIN
 
   RETURN plus_token;
 END
-$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,
@@ -531,7 +531,7 @@ BEGIN
 
   RETURN delta_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
