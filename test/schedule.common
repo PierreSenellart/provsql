@@ -19,7 +19,7 @@ test: union_nary
 test: distinct
 test: group_by_provenance
 test: aggregation
-test: agg_distinct
+test: agg_distinct agg_order_by
 test: except
 test: null
 test: unsupported_features

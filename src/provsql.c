@@ -1504,12 +1504,33 @@ static Query *process_query(
   if (supported)
   {
     Expr *provenance;
-    //transform targetList to change AGGREF into
+
     if (q->hasAggs)
     {
+      ListCell *lc_sort;
+
+      // Compute aggregation expressions
       replace_aggregations_in_select(constants, q, prov_atts,
                                      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
+
+      // If there are any sort clauses on something whose type is now
+      // aggregate token, we throw an error: sorting aggregation values
+      // when provenance is captured is ill-defined
+      foreach (lc_sort, q->sortClause) {
+        SortGroupClause *sort = (SortGroupClause*) lfirst(lc_sort);
+        ListCell *lc_te;
+        foreach(lc_te, q->targetList) {
+          TargetEntry *te = (TargetEntry*) lfirst(lc_te);
+          if(sort->tleSortGroupRef==te->ressortgroupref) {
+            if(exprType((Node*) te->expr) == constants->OID_TYPE_AGG_TOKEN)
+              elog(ERROR, "ORDER BY on the result of an aggregate function is not supported by ProvSQL");
+            break;
+          }
+        }
+      }
     }
+
+
     provenance = make_provenance_expression(
       constants,
       q,

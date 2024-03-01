@@ -1,0 +1,10 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+city|count
+Berlin|2 (*)
+New York|2 (*)
+Paris|3 (*)
+(3 rows)
+ERROR:  ORDER BY on the result of an aggregate function is not supported by ProvSQL
