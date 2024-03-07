@@ -22,7 +22,22 @@ struct pg_uuid_t
 #include "nodes/pg_list.h"
 
 typedef enum gate_type {
-  gate_input, gate_plus, gate_times, gate_monus, gate_project, gate_zero, gate_one, gate_eq, gate_agg, gate_semimod, gate_cmp, gate_delta, gate_value, gate_mulinput, gate_invalid, nb_gate_types
+  gate_input,    // Input (variable) gate of the circuit
+  gate_plus,     // Semiring plus
+  gate_times,    // Semiring times
+  gate_monus,    // M-Semiring monus
+  gate_project,  // Project gate (for where provenance)
+  gate_zero,     // Semiring zero
+  gate_one,      // Semiring one
+  gate_eq,       // Equijoin gate (for where provenance)
+  gate_agg,      // Aggregation operator (for aggregate provenance)
+  gate_semimod,  // Semimodule scalar multiplication (for aggregate provenance)
+  gate_cmp,      // Currently unused, meant for comparison of aggregate values
+  gate_delta,    // δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
+  gate_value,    // Scalar value (for aggregate provenance)
+  gate_mulinput, // Multivalued input (for Boolean provenance)
+  gate_invalid,  // Invalid gate type
+  nb_gate_types
 } gate_type;
 
 typedef struct constants_t {

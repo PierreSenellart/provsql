@@ -37,7 +37,22 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
 CREATE TYPE provenance_gate AS
-  ENUM('input','plus','times','monus','project','zero','one','eq','agg','semimod','cmp','delta','value','mulinput');
+  ENUM(
+    'input',   -- Input (variable) gate of the circuit
+    'plus',    -- Semiring plus
+    'times',   -- Semiring times
+    'monus',   -- M-Semiring monus
+    'project', -- Project gate (for where provenance)
+    'zero',    -- Semiring zero
+    'one',     -- Semiring one
+    'eq',      -- Equijoin gate (for where provenance)
+    'agg',     -- Aggregation operator (for aggregate provenance)
+    'semimod', -- Semimodule scalar multiplication (for aggregate provenance)
+    'cmp',     -- Currently unused, meant for comparison of aggregate values
+    'delta',   -- δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
+    'value',   -- Scalar value (for aggregate provenance)
+    'mulinput' -- Multivalued input (for Boolean provenance)
+    );
 
 CREATE OR REPLACE FUNCTION create_gate(
   token UUID,
@@ -61,6 +76,20 @@ CREATE OR REPLACE FUNCTION get_prob(
   token UUID)
   RETURNS DOUBLE PRECISION AS
   'provsql','get_prob' LANGUAGE C STABLE PARALLEL SAFE;
+
+-- Extra information associated to gate, used in different ways by
+---different gate types:
+-- - for mulinput, info1 indicates the value of this multivalued variable
+-- - for eq, info1 and info2 indicate the attribute index of the
+-- equijoin in, respectively, the first and second columns
+-- - for project, info1 is the attribute original index (if any) and
+-- info2 is the  projected index
+-- - for agg, internal information not meant to be directly
+-- used about the storage of extra information (oid of the aggregate
+-- function, oid of the aggregate result type, string representation of
+-- the plain value of the aggregate)
+-- - for value, internal information not meant to be directly used about
+-- the storage of extra information (string representation of the value)
 CREATE OR REPLACE FUNCTION set_infos(
   token UUID, info1 INT, info2 INT DEFAULT NULL)
   RETURNS void AS
@@ -69,6 +98,7 @@ CREATE OR REPLACE FUNCTION get_infos(
   token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
   'provsql','get_infos' LANGUAGE C STABLE PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
   'provsql', 'get_nb_gates' LANGUAGE C PARALLEL SAFE;
 
