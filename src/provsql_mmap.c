@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <poll.h>
 #include <math.h>
+#include <assert.h>
 
 #include "postgres.h"
 #include "postmaster/bgworker.h"
@@ -13,6 +14,7 @@
 #include "funcapi.h"
 #include "utils/array.h"
 #include "access/htup_details.h"
+#include "utils/builtins.h"
 
 char buffer[PIPE_BUF]={}; // flawfinder: ignore
 unsigned bufferpos=0;
@@ -205,8 +207,11 @@ Datum set_infos(PG_FUNCTION_ARGS)
   unsigned info1 = PG_GETARG_INT32(1);
   unsigned info2 = PG_GETARG_INT32(2);
 
-  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
-    elog(ERROR, "Invalid NULL value passed to set_infos");
+
+  if(PG_ARGISNULL(1))
+    info1=0;
+  if(PG_ARGISNULL(2))
+    info2=0;
 
   STARTWRITEM();
   ADDWRITEM("I", char);
@@ -222,6 +227,67 @@ Datum set_infos(PG_FUNCTION_ARGS)
   LWLockRelease(provsql_shared_state->lock);
 
   PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(set_extra);
+Datum set_extra(PG_FUNCTION_ARGS)
+{
+  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  text *data = PG_GETARG_TEXT_P(1);
+  char *str=text_to_cstring(data);
+  unsigned len=strlen(str);
+
+  STARTWRITEM();
+  ADDWRITEM("E", char);
+  ADDWRITEM(token, pg_uuid_t);
+  ADDWRITEM(&len, unsigned);
+
+  assert(PIPE_BUF-bufferpos>len);
+  memcpy(buffer+bufferpos, str, len), bufferpos+=len;
+  pfree(str);
+
+  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+  if(!SENDWRITEM()) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot write to pipe (message type E)");
+  }
+  LWLockRelease(provsql_shared_state->lock);
+
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(get_extra);
+Datum get_extra(PG_FUNCTION_ARGS)
+{
+  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  text *result;
+  unsigned len;
+
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  STARTWRITEM();
+  ADDWRITEM("e", char);
+  ADDWRITEM(token, pg_uuid_t);
+
+  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+
+  if(!SENDWRITEM() || !READB(len, unsigned)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot communicate with pipe (message type e)");
+  }
+
+  result = palloc(len + VARHDRSZ);
+  SET_VARSIZE(result, VARHDRSZ + len);
+
+  if(read(provsql_shared_state->pipembr, VARDATA(result), len)<len) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot communicate with pipe (message type e)");
+  }
+
+  LWLockRelease(provsql_shared_state->lock);
+
+  PG_RETURN_TEXT_P(result);
 }
 
 PG_FUNCTION_INFO_V1(get_nb_gates);
@@ -346,7 +412,7 @@ Datum get_infos(PG_FUNCTION_ARGS)
 
   LWLockRelease(provsql_shared_state->lock);
 
-  if(info1 == 0)
+  if(info1 == 0 && info2 == 0)
     PG_RETURN_NULL();
   else {
     TupleDesc tupdesc;

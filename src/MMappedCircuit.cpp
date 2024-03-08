@@ -83,6 +83,17 @@ void MMappedCircuit::setInfos(pg_uuid_t token, unsigned info1, unsigned info2)
   }
 }
 
+void MMappedCircuit::setExtra(pg_uuid_t token, const std::string &s)
+{
+  auto idx = mapping[token];
+  if(idx != MMappedUUIDHashTable::NOTHING) {
+    gates[idx].extra_idx=extra.nbElements();
+    for(auto c: s)
+      extra.add(c);
+    gates[idx].extra_len=s.size();
+  }
+}
+
 std::pair<unsigned, unsigned> MMappedCircuit::getInfos(pg_uuid_t token) const
 {
   auto idx = mapping[token];
@@ -92,6 +103,19 @@ std::pair<unsigned, unsigned> MMappedCircuit::getInfos(pg_uuid_t token) const
     const GateInformation &gi = gates[idx];
     return std::make_pair(gi.info1, gi.info2);
   }
+}
+
+std::string MMappedCircuit::getExtra(pg_uuid_t token) const
+{
+  std::string result;
+
+  auto idx = mapping[token];
+  if(idx != MMappedUUIDHashTable::NOTHING) {
+    for(unsigned start=gates[idx].extra_idx, k=start, end=start+gates[idx].extra_len; k<end; ++k)
+      result+=extra[k];
+  }
+
+  return result;
 }
 
 void provsql_mmap_main_loop()
@@ -139,6 +163,25 @@ void provsql_mmap_main_loop()
         elog(ERROR, "Cannot read from pipe (message type I)");
 
       circuit->setInfos(token, info1, info2);
+      break;
+    }
+
+    case 'E':
+    {
+      pg_uuid_t token;
+      unsigned len;
+
+      if(!READM(token, pg_uuid_t) || !READM(len, unsigned))
+        elog(ERROR, "Cannot read from pipe (message type E)");
+
+      if(len>0) {
+        char *data = new char[len];
+        if(read(provsql_shared_state->pipebmr, data, len)<len)
+          elog(ERROR, "Cannot read from pipe (message type E)");
+
+        circuit->setExtra(token, std::string(data, len));
+      }
+
       break;
     }
 
@@ -208,6 +251,21 @@ void provsql_mmap_main_loop()
 
       if(!WRITEB(&infos.first, int) || !WRITEB(&infos.second, int))
         elog(ERROR, "Cannot write response to pipe (message type i)");
+      break;
+    }
+
+    case 'e':
+    {
+      pg_uuid_t token;
+
+      if(!READM(token, pg_uuid_t))
+        elog(ERROR, "Cannot read from pipe (message type e)");
+
+      auto str = circuit->getExtra(token);
+      unsigned len = str.size();
+
+      if(!WRITEB(&len, unsigned) || write(provsql_shared_state->pipembw, str.data(), len)==-1)
+        elog(ERROR, "Cannot write response to pipe (message type e)");
       break;
     }
 

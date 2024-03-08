@@ -77,19 +77,13 @@ CREATE OR REPLACE FUNCTION get_prob(
   RETURNS DOUBLE PRECISION AS
   'provsql','get_prob' LANGUAGE C STABLE PARALLEL SAFE;
 
--- Extra information associated to gate, used in different ways by
----different gate types:
--- - for mulinput, info1 indicates the value of this multivalued variable
--- - for eq, info1 and info2 indicate the attribute index of the
--- equijoin in, respectively, the first and second columns
--- - for project, info1 is the attribute original index (if any) and
--- info2 is the  projected index
--- - for agg, internal information not meant to be directly
--- used about the storage of extra information (oid of the aggregate
--- function, oid of the aggregate result type, string representation of
--- the plain value of the aggregate)
--- - for value, internal information not meant to be directly used about
--- the storage of extra information (string representation of the value)
+-- Two integer values associated to gate, used in different ways by
+-- different gate types:
+-- * for mulinput, info1 indicates the value of this multivalued variable
+-- * for eq, info1 and info2 indicate the attribute index of the
+--   equijoin in, respectively, the first and second columns
+-- * for agg, info1 is the oid of the aggregate function and info2 the
+--   oid of the aggregate result type
 CREATE OR REPLACE FUNCTION set_infos(
   token UUID, info1 INT, info2 INT DEFAULT NULL)
   RETURNS void AS
@@ -99,13 +93,23 @@ CREATE OR REPLACE FUNCTION get_infos(
   RETURNS record AS
   'provsql','get_infos' LANGUAGE C STABLE PARALLEL SAFE;
 
+-- Extra arbitrary text-encoded information associated to gate, used in
+-- different ways by different gate types:
+-- * for project, it is a text-encoded ARRAY of two-element ARRAYs that
+--   indicate mappings between input attribute (first element) and output
+--   attribute (second element)
+-- * for value and agg, it is the text-encoded (base for value, computed
+--   for agg) scalar value
+CREATE OR REPLACE FUNCTION set_extra(
+  token UUID, data TEXT)
+  RETURNS void AS
+  'provsql','set_extra' LANGUAGE C PARALLEL SAFE STRICT;
+CREATE OR REPLACE FUNCTION get_extra(token UUID)
+  RETURNS TEXT AS
+  'provsql','get_extra' LANGUAGE C STABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT;
+
 CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
   'provsql', 'get_nb_gates' LANGUAGE C PARALLEL SAFE;
-
-CREATE UNLOGGED TABLE provenance_circuit_extra(
-  gate UUID,
-  info1 INT,
-  info2 INT);
 
 CREATE UNLOGGED TABLE aggregation_circuit_extra(
   gate UUID PRIMARY KEY,
@@ -118,8 +122,6 @@ CREATE UNLOGGED TABLE aggregation_values(
   gate UUID PRIMARY KEY,
   val VARCHAR
 );
-
-CREATE INDEX ON provenance_circuit_extra (gate);
 
 CREATE OR REPLACE FUNCTION add_gate_trigger()
   RETURNS TRIGGER AS
@@ -291,18 +293,14 @@ DECLARE
   project_token uuid;
   rec record;
 BEGIN
-  project_token:=uuid_generate_v5(uuid_ns_provsql(),concat(token,positions));
-
-  LOCK TABLE provenance_circuit_extra;
-  SELECT 1 FROM provenance_circuit_extra WHERE gate = project_token INTO rec;
-  IF rec IS NULL THEN
-    PERFORM create_gate(project_token, 'project', ARRAY[token::uuid]);
-    INSERT INTO provenance_circuit_extra
-      SELECT gate, case when info=0 then null else info end, idx
-      FROM (
-              SELECT project_token gate, info, idx FROM unnest(positions) WITH ORDINALITY AS a(info, idx)
-            ) t;
-  END IF;
+  project_token:=uuid_generate_v5(uuid_ns_provsql(),concat('project', token, positions));
+  PERFORM create_gate(project_token, 'project', ARRAY[token]);
+  PERFORM set_extra(project_token, ARRAY_AGG(pair)::text)
+  FROM (
+    SELECT ARRAY[(CASE WHEN info=0 THEN NULL ELSE info END), idx] AS pair
+    FROM unnest(positions) WITH ORDINALITY AS a(info, idx)
+    ORDER BY idx
+  ) t;
 
   RETURN project_token;
 END
@@ -315,15 +313,10 @@ DECLARE
   eq_token uuid;
   rec record;
 BEGIN
-  eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat(token,pos1,pos2));
+  eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat('project',token,pos1,',',pos2));
 
-  LOCK TABLE provenance_circuit_extra;
-  SELECT 1 FROM provenance_circuit_extra WHERE gate = eq_token INTO rec;
-  IF rec IS NULL THEN
-    PERFORM create_gate(eq_token, 'eq', ARRAY[token::uuid]);
-    PERFORM set_infos(eq_token, pos1, pos2);
-    INSERT INTO provenance_circuit_extra VALUES(eq_token, pos1, pos2);
-  END IF;
+  PERFORM create_gate(eq_token, 'eq', ARRAY[token::uuid]);
+  PERFORM set_infos(eq_token, pos1, pos2);
   RETURN eq_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
@@ -463,7 +456,9 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
-CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[]);
+CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[], extra TEXT);
+
+CREATE TYPE infos_result AS (info1 INT, info2 INT);
 
 CREATE OR REPLACE FUNCTION sub_circuit_with_desc(
   token UUID,
@@ -475,17 +470,14 @@ BEGIN
       SELECT $1,t,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
         UNION ALL
       SELECT p1.t,u,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)
-    SELECT t1.*, infos FROM (
+    SELECT *, ARRAY[(get_infos(f)::text::infos_result).info1, (get_infos(f)::text::infos_result).info2], get_extra(f) FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
         UNION ALL
       SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', CAST (p2.value AS varchar) FROM transitive_closure p1 JOIN ' || token2desc || ' AS p2
         ON p2.provenance=t
         UNION ALL
       SELECT provenance::uuid as f, NULL::uuid, ''input'', CAST (value AS varchar) FROM ' || token2desc || ' WHERE provenance=$1
-    ) t1
-    LEFT OUTER JOIN (
-      SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provsql.provenance_circuit_extra GROUP BY gate
-    ) t2 on t1.f=t2.gate'
+    ) t'
   USING token LOOP;
   RETURN;
 END
@@ -521,21 +513,19 @@ END
 $$ LANGUAGE plpgsql STRICT;
 
 CREATE OR REPLACE FUNCTION sub_circuit_for_where(token UUID)
-  RETURNS TABLE(f UUID, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], tuple_no BIGINT) AS
+  RETURNS TABLE(f UUID, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], extra TEXT) AS
 $$
     WITH RECURSIVE transitive_closure(f,t,idx,gate_type) AS (
       SELECT $1,t,id,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) WITH ORDINALITY AS a(t,id)
         UNION ALL
       SELECT p1.t,u,id,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) WITH ORDINALITY AS a(u, id)
-    ) SELECT t1.f, t1.t, t1.gate_type, table_name, nb_columns, infos, row_number() over() FROM (
+    ) SELECT f, t, gate_type, table_name, nb_columns, ARRAY[(get_infos(f)::text::infos_result).info1, (get_infos(f)::text::infos_result).info2], get_extra(f) FROM (
       SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
       UNION ALL
         SELECT DISTINCT t, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
       UNION ALL
         SELECT DISTINCT $1, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
-      ) t1 LEFT OUTER JOIN (
-      SELECT gate, ARRAY_AGG(ARRAY[info1,info2]) infos FROM provenance_circuit_extra GROUP BY gate
-    ) t2 ON t1.f=t2.gate ORDER BY f,idx
+      ) t
 $$
 LANGUAGE sql;
 
@@ -717,6 +707,5 @@ SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
-GRANT SELECT ON provenance_circuit_extra TO PUBLIC;
 
 SET search_path TO public;

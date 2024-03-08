@@ -2,6 +2,7 @@
 #define MMAPPED_VECTOR_H
 
 #include <cstddef>
+#include <vector>
 
 extern "C" {
 #include "provsql_utils.h"

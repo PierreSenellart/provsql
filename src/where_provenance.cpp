@@ -86,22 +86,21 @@ static string where_provenance_internal
           c.setGate(f, WhereGate::TIMES);
         } else if(type == "plus") {
           c.setGate(f, WhereGate::PLUS);
-        } else if(type == "project" || type == "eq") {
-          vector<pair<int,int> > v = parse_array(SPI_getvalue(tuple, tupdesc, 6));
-          if(type=="eq") {
-            if(v.size()!=1)
-              elog(ERROR, "Incorrect extra information on eq gate");
-            c.setGateEquality(f, v[0].first, v[0].second);
-          } else {
-            sort(v.begin(), v.end(), [](auto &left, auto &right) {
-              return left.second < right.second;
-            });
-            vector<int> infos;
-            for(auto p : v) {
-              infos.push_back(p.first);
-            }
-            c.setGateProjection(f, move(infos));
+        } else if(type == "project") {
+          vector<pair<int,int> > v = parse_array(SPI_getvalue(tuple, tupdesc, 7));
+          sort(v.begin(), v.end(), [](auto &left, auto &right) {
+            return left.second < right.second;
+          });
+          vector<int> infos;
+          for(auto p : v) {
+            infos.push_back(p.first);
           }
+          c.setGateProjection(f, move(infos));
+        } else if(type == "eq") {
+          vector<pair<int,int> > v = parse_array(std::string("{")+SPI_getvalue(tuple, tupdesc, 6)+"}");
+          if(v.size()!=1)
+            elog(ERROR, "Incorrect extra information on eq gate");
+          c.setGateEquality(f, v[0].first, v[0].second);
         } else if(type == "monusr" || type == "monusl" || type == "monus") {
           elog(ERROR, "Where-provenance of non-monotone query not supported");
         } else {

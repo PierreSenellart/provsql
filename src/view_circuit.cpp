@@ -36,7 +36,7 @@ static vector<pair<int, int> > parse_array(string s)
     int k = p.find(",", 1);
     string s1 = p.substr(1, k - 1);
     int i1;
-    if (s1 == "NULL")
+    if (s1 == "NULL" || s1 == "")
       i1 = 0;
     else
       i1 = stoi(p.substr(1, k - 1));
@@ -106,7 +106,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
         }
         else if (type == "eq")
         {
-          vector<pair<int, int> > v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
+          vector<pair<int, int> > v = parse_array(std::string("{")+SPI_getvalue(tuple, tupdesc, 5)+"}");
           if (v.size() != 1)
             elog(ERROR, "Incorrect extra information on eq gate");
           std::string cond = std::to_string(v[0].first) + std::string("=") + std::to_string(v[0].second);
@@ -114,7 +114,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
         }
         else if (type == "project")
         {
-          vector<pair<int, int> > v = parse_array(SPI_getvalue(tuple, tupdesc, 5));
+          vector<pair<int, int> > v = parse_array(SPI_getvalue(tuple, tupdesc, 6));
           sort(v.begin(), v.end(), [](auto &left, auto &right) {
             return left.second < right.second;
           });
