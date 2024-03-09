@@ -52,8 +52,14 @@ binary_oper_exact(List *opname, Oid arg1, Oid arg2)
   return InvalidOid;
 }
 
-/* Similar mechanism as in parse_oper.c, in particular
- * in the static function oper_select_candidate */
+/** Return the OID of an equality operator. This is adapted from existing
+ * PostgreSQL code that is not exported (see in particular parse_oper.c,
+ * and the static function oper_select_candidate therein).
+ *
+ * \param ltypeId the OID of the type of the first operand
+ * \param rtypeId the OID of the type of the second operand
+ * \return the OID of the equality operator for these two operands
+ * */
 Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
 {
   List * const equals=list_make1(makeString("="));
@@ -70,7 +76,7 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
   clist = OpernameGetCandidates(equals, 'b', false);
 
   ncandidates = func_match_argtypes(2, inputOids,
-      clist, &clist);
+                                    clist, &clist);
 
   if (ncandidates == 0)
     return InvalidOid;
@@ -88,17 +94,17 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
 static Oid get_func_oid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make1(makeString(s)),
-      -1,
-      NIL,
-      false,
-      false,
+    list_make1(makeString(s)),
+    -1,
+    NIL,
+    false,
+    false,
 #if PG_VERSION_NUM >= 140000
-      false,
-#endif      
-      false);
+    false,
+#endif
+    false);
   if(fcl)
-    return fcl->oid;    
+    return fcl->oid;
   else
     return 0;
 }
@@ -106,17 +112,17 @@ static Oid get_func_oid(char *s)
 static Oid get_provsql_func_oid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
-      list_make2(makeString("provsql"),makeString(s)),
-      -1,
-      NIL,
-      false,
-      false,
+    list_make2(makeString("provsql"),makeString(s)),
+    -1,
+    NIL,
+    false,
+    false,
 #if PG_VERSION_NUM >= 140000
-      false,
-#endif      
-      false);
+    false,
+#endif
+    false);
   if(fcl)
-    return fcl->oid;    
+    return fcl->oid;
   else
     return 0;
 }
@@ -124,21 +130,21 @@ static Oid get_provsql_func_oid(char *s)
 // Copied over from pg_operator.c as defined static there, with
 // various modifications
 static void OperatorGet(
-    const char *operatorName,
-    Oid operatorNamespace,
-    Oid leftObjectId,
-    Oid rightObjectId,
-    Oid *operatorObjectId,
-    Oid *functionObjectId)
+  const char *operatorName,
+  Oid operatorNamespace,
+  Oid leftObjectId,
+  Oid rightObjectId,
+  Oid *operatorObjectId,
+  Oid *functionObjectId)
 {
   HeapTuple tup;
   bool defined;
 
   tup = SearchSysCache4(OPERNAMENSP,
-      PointerGetDatum(operatorName),
-      ObjectIdGetDatum(leftObjectId),
-      ObjectIdGetDatum(rightObjectId),
-      ObjectIdGetDatum(operatorNamespace));
+                        PointerGetDatum(operatorName),
+                        ObjectIdGetDatum(leftObjectId),
+                        ObjectIdGetDatum(rightObjectId),
+                        ObjectIdGetDatum(operatorNamespace));
   if (HeapTupleIsValid(tup))
   {
     Form_pg_operator oprform = (Form_pg_operator) GETSTRUCT(tup);
@@ -164,61 +170,68 @@ static void OperatorGet(
 
 static Oid get_enum_oid(Oid enumtypoid, const char *label)
 {
-  HeapTuple   tup;
-  Oid         ret;
-  
+  HeapTuple tup;
+  Oid ret;
+
   tup = SearchSysCache2(ENUMTYPOIDNAME,
                         ObjectIdGetDatum(enumtypoid),
                         CStringGetDatum(label));
   Assert(HeapTupleIsValid(tup));
-  
+
 #if PG_VERSION_NUM >= 120000
   ret = ((Form_pg_enum) GETSTRUCT(tup))->oid;
 #else
   ret = HeapTupleGetOid(tup);
 #endif
-  
+
   ReleaseSysCache(tup);
-  
+
   return ret;
 }
 
-
+/** Returns an initialized constants_t structure by querying the database
+ * for all OIDs.
+ *
+ * \param failure_if_not_possible indicates whether a failure should
+ * result in an error (at the PostgreSQL level) or should be silently
+ * ignored
+ * \return the initialized structure
+ */
 constants_t initialize_constants(bool failure_if_not_possible)
 {
   constants_t constants;
   constants.ok = false;
 
   #define CheckOid(o) if(constants.o==InvalidOid) { \
-    if(failure_if_not_possible) \
-      elog(ERROR, "Could not initialize provsql constants"); \
-    else \
-      return constants; }
+            if(failure_if_not_possible) \
+            elog(ERROR, "Could not initialize provsql constants"); \
+            else \
+            return constants; }
 
   constants.OID_SCHEMA_PROVSQL = get_namespace_oid("provsql", true);
   CheckOid(OID_SCHEMA_PROVSQL);
 
   constants.OID_TYPE_UUID = TypenameGetTypid("uuid");
   CheckOid(OID_TYPE_UUID);
-  
+
   constants.OID_TYPE_GATE_TYPE = GetSysCacheOid2(
-      TYPENAMENSP,
+    TYPENAMENSP,
 #if PG_VERSION_NUM >= 120000
-      Anum_pg_type_oid,
+    Anum_pg_type_oid,
 #endif
-      CStringGetDatum("provenance_gate"),
-      ObjectIdGetDatum(constants.OID_SCHEMA_PROVSQL)
-  );
+    CStringGetDatum("provenance_gate"),
+    ObjectIdGetDatum(constants.OID_SCHEMA_PROVSQL)
+    );
   CheckOid(OID_TYPE_GATE_TYPE);
-  
+
   constants.OID_TYPE_AGG_TOKEN = GetSysCacheOid2(
-      TYPENAMENSP,
+    TYPENAMENSP,
 #if PG_VERSION_NUM >= 120000
-      Anum_pg_type_oid,
+    Anum_pg_type_oid,
 #endif
-      CStringGetDatum("agg_token"),
-      ObjectIdGetDatum(constants.OID_SCHEMA_PROVSQL)
-  );
+    CStringGetDatum("agg_token"),
+    ObjectIdGetDatum(constants.OID_SCHEMA_PROVSQL)
+    );
   CheckOid(OID_TYPE_AGG_TOKEN);
 
   constants.OID_TYPE_UUID = TypenameGetTypid("uuid");
@@ -226,16 +239,16 @@ constants_t initialize_constants(bool failure_if_not_possible)
 
   constants.OID_TYPE_UUID_ARRAY = TypenameGetTypid("_uuid");
   CheckOid(OID_TYPE_UUID_ARRAY);
-  
+
   constants.OID_TYPE_INT = TypenameGetTypid("int4");
   CheckOid(OID_TYPE_INT);
 
   constants.OID_TYPE_FLOAT = TypenameGetTypid("float8");
-  CheckOid(OID_TYPE_FLOAT);  
+  CheckOid(OID_TYPE_FLOAT);
 
   constants.OID_TYPE_INT_ARRAY = TypenameGetTypid("_int4");
   CheckOid(OID_TYPE_INT_ARRAY);
-  
+
   constants.OID_FUNCTION_ARRAY_AGG = get_func_oid("array_agg");
   CheckOid(OID_FUNCTION_ARRAY_AGG);
 
@@ -247,7 +260,7 @@ constants_t initialize_constants(bool failure_if_not_possible)
 
   constants.OID_FUNCTION_PROVENANCE_MONUS = get_provsql_func_oid("provenance_monus");
   CheckOid(OID_FUNCTION_PROVENANCE_MONUS);
-  
+
   constants.OID_FUNCTION_PROVENANCE_PROJECT = get_provsql_func_oid("provenance_project");
   CheckOid(OID_FUNCTION_PROVENANCE_PROJECT);
 
@@ -256,7 +269,7 @@ constants_t initialize_constants(bool failure_if_not_possible)
 
   constants.OID_FUNCTION_PROVENANCE = get_provsql_func_oid("provenance");
   CheckOid(OID_FUNCTION_PROVENANCE);
-  
+
   constants.OID_FUNCTION_PROVENANCE_DELTA = get_provsql_func_oid("provenance_delta");
   CheckOid(OID_FUNCTION_PROVENANCE_DELTA);
 
@@ -274,11 +287,11 @@ constants_t initialize_constants(bool failure_if_not_possible)
   CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
 
   #define GET_GATE_TYPE_OID(x) { \
-  constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
-      constants.OID_TYPE_GATE_TYPE, \
-      #x);\
-  if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
-    elog(ERROR, "Could not initialize provsql gate type " #x); }
+            constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
+              constants.OID_TYPE_GATE_TYPE, \
+              #x); \
+            if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
+            elog(ERROR, "Could not initialize provsql gate type " #x); }
 
   GET_GATE_TYPE_OID(input);
   GET_GATE_TYPE_OID(plus);
@@ -299,4 +312,3 @@ constants_t initialize_constants(bool failure_if_not_possible)
 
   return constants;
 }
-
