@@ -5,7 +5,7 @@ test: setup
 test: add_provenance
 
 # Basic checks
-test: provenance_in_from
+test: provenance_in_from identify_token
 
 # Introducing a few semirings
 test: security formula counting

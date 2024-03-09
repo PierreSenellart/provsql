@@ -1,0 +1,13 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+identify_token
+(personnel,5)
+(personnel,5)
+(personnel,5)
+(personnel,5)
+(personnel,5)
+(personnel,5)
+(personnel,5)
+(7 rows)
