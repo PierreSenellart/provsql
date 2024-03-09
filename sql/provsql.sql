@@ -111,18 +111,6 @@ CREATE OR REPLACE FUNCTION get_extra(token UUID)
 CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
   'provsql', 'get_nb_gates' LANGUAGE C PARALLEL SAFE;
 
-CREATE UNLOGGED TABLE aggregation_circuit_extra(
-  gate UUID PRIMARY KEY,
-  aggfnoid INT,
-  aggtype INT,
-  val VARCHAR
-);
-
-CREATE UNLOGGED TABLE aggregation_values(
-  gate UUID PRIMARY KEY,
-  val VARCHAR
-);
-
 CREATE OR REPLACE FUNCTION add_gate_trigger()
   RETURNS TRIGGER AS
 $$
@@ -440,16 +428,16 @@ BEGIN
     RETURN NULL;
   ELSIF gt='agg' THEN
     EXECUTE format('SELECT %I(%I(provsql.aggregation_evaluate(t,%L,%L,%L,%L,%L::%s,%L,%L,%L,%L,%L)),pp.proname::varchar) FROM
-                    unnest(get_children(%L)) AS t, provsql.aggregation_circuit_extra ace, pg_proc pp
-                    WHERE ace.gate=%L AND pp.oid=ace.aggfnoid
+                    unnest(get_children(%L)) AS t, pg_proc pp
+                    WHERE pp.oid=(get_infos(%L)).info1
                     GROUP BY pp.proname',
       agg_function_final, agg_function,token2value,agg_function_final,agg_function,semimod_function,element_one,value_type,value_type,plus_function,times_function,
       monus_function,delta_function,token,token)
     INTO result;
   ELSE
     -- gt='semimod'
-    EXECUTE format('SELECT %I(val,provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)) FROM provsql.aggregation_values av WHERE gate=(get_children(%L))[2]',
-      semimod_function,token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
+    EXECUTE format('SELECT %I(get_extra((get_children(%L))[2]),provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L))',
+      semimod_function,token,token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
     INTO result;
   END IF;
   RETURN result;
@@ -457,8 +445,6 @@ END
 $$ LANGUAGE plpgsql;
 
 CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[], extra TEXT);
-
-CREATE TYPE infos_result AS (info1 INT, info2 INT);
 
 CREATE OR REPLACE FUNCTION sub_circuit_with_desc(
   token UUID,
@@ -470,7 +456,7 @@ BEGIN
       SELECT $1,t,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) AS t
         UNION ALL
       SELECT p1.t,u,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) AS u)
-    SELECT *, ARRAY[(get_infos(f)::text::infos_result).info1, (get_infos(f)::text::infos_result).info2], get_extra(f) FROM (
+    SELECT *, ARRAY[(get_infos(f)).info1, (get_infos(f)).info2], get_extra(f) FROM (
       SELECT f::uuid,t::uuid,gate_type,NULL FROM transitive_closure
         UNION ALL
       SELECT p2.provenance::uuid as f, NULL::uuid, ''input'', CAST (p2.value AS varchar) FROM transitive_closure p1 JOIN ' || token2desc || ' AS p2
@@ -519,7 +505,7 @@ $$
       SELECT $1,t,id,provsql.get_gate_type($1) FROM unnest(provsql.get_children($1)) WITH ORDINALITY AS a(t,id)
         UNION ALL
       SELECT p1.t,u,id,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) WITH ORDINALITY AS a(u, id)
-    ) SELECT f, t, gate_type, table_name, nb_columns, ARRAY[(get_infos(f)::text::infos_result).info1, (get_infos(f)::text::infos_result).info2], get_extra(f) FROM (
+    ) SELECT f, t, gate_type, table_name, nb_columns, ARRAY[(get_infos(f)).info1, (get_infos(f)).info2], get_extra(f) FROM (
       SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
       UNION ALL
         SELECT DISTINCT t, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
@@ -575,15 +561,12 @@ BEGIN
   ELSE
     agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('agg',array_to_string(tokens, ',')));
-    LOCK TABLE aggregation_circuit_extra;
+      concat('agg',ARRAY[tokens]));
     PERFORM create_gate(agg_tok, 'agg', array_agg(t))
       FROM unnest(tokens) AS t
       WHERE t != gate_zero();
-    BEGIN
-      INSERT INTO aggregation_circuit_extra VALUES(agg_tok, aggfnoid, aggtype, agg_val);
-    EXCEPTION WHEN unique_violation THEN
-    END;
+    PERFORM set_infos(agg_tok, aggfnoid, aggtype);
+    PERFORM set_extra(agg_tok, agg_val);
   END IF;
 
   RETURN '( '||agg_tok||' , '||agg_val||' )';
@@ -597,8 +580,6 @@ DECLARE
   semimod_token uuid;
   value_token uuid;
 BEGIN
-  LOCK TABLE aggregation_values;
-
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR)))
     INTO value_token;
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
@@ -606,10 +587,7 @@ BEGIN
 
   --create value gates
   PERFORM create_gate(value_token,'value');
-  BEGIN
-    INSERT INTO aggregation_values VALUES(value_token,CAST(val AS VARCHAR));
-  EXCEPTION WHEN unique_violation THEN
-  END;
+  PERFORM set_extra(value_token, CAST(val AS VARCHAR));
 
   --create semimod gate
   PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
