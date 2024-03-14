@@ -317,7 +317,7 @@ ALTER TABLE ONLY sightings
 ALTER TABLE ONLY sightings
     ADD CONSTRAINT sightings_witness_fkey FOREIGN KEY (witness) REFERENCES person(id);
 
-CREATE TABLE s AS 
+CREATE TABLE s AS
   SELECT time, person.name AS person, p2.name AS witness, room.name AS room
   FROM sightings JOIN person ON person=id JOIN person AS p2 ON witness=p2.id JOIN room ON room=room.id;
 
@@ -346,13 +346,13 @@ DROP TABLE results;
 
 ALTER table s ADD COLUMN reliability float;
 UPDATE s
-SET reliability=(SELECT score 
-                 FROM reliability JOIN person ON reliability.person=person.id 
-                 WHERE person.name=s.witness);
+SET reliability=score
+FROM reliability, person
+WHERE reliability.person=person.id AND person.name=s.witness;
 DO $$ BEGIN
 PERFORM set_prob(provenance(),reliability) FROM s;
 END $$;
-CREATE TABLE results AS 
+CREATE TABLE results AS
 SELECT *,
          ROUND(probability_evaluate(provenance(),'possible-worlds')::NUMERIC,5)
 FROM suspects
