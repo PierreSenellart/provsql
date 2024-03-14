@@ -166,7 +166,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
       if(new_subquery != NULL) {
         r->subquery = new_subquery;
         r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
-        prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, new_subquery->targetList->length));
+        prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, list_length(new_subquery->targetList)));
         fix_type_of_aggregation_result(constants, q, rteid, r->subquery->targetList);
       }
     }
@@ -1393,11 +1393,13 @@ static Query *process_query(
     Bitmapset *removed_sortgrouprefs = NULL;
     bool *removed;
 
-    removed_sortgrouprefs=remove_provenance_attributes_select(constants, q, &removed);
-    if(removed_sortgrouprefs != NULL)
-      remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
-    if (q->setOperations)
-      remove_provenance_attribute_setoperations(q, removed);
+    if(q->targetList) {
+      removed_sortgrouprefs=remove_provenance_attributes_select(constants, q, &removed);
+      if(removed_sortgrouprefs != NULL)
+        remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
+      if (q->setOperations)
+        remove_provenance_attribute_setoperations(q, removed);
+    }
   }
 
   if (q->hasSubLinks)
