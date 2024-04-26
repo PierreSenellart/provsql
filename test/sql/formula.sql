@@ -23,7 +23,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 CREATE FUNCTION formula_times_state(state formula_state, value text)
   RETURNS formula_state AS
 $$
-BEGIN    
+BEGIN
   IF state IS NULL OR state.nbargs=0 THEN
     RETURN (value,1);
   ELSE
@@ -78,7 +78,7 @@ CREATE AGGREGATE formula_times(text)
 
 CREATE FUNCTION formula_delta(formula text) RETURNS text
     LANGUAGE sql IMMUTABLE STRICT
-    AS $$   
+    AS $$
   SELECT concat('δ(',formula,')')
 $$;
 
@@ -100,11 +100,11 @@ BEGIN
     'formula_monus',
     'formula_delta');
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql PARALLEL SAFE;
 
 /* Example of provenance evaluation */
 SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
-CREATE TABLE result_formula AS SELECT 
+CREATE TABLE result_formula AS SELECT
   p1.city,
   formula(provenance(), 'personnel_name')
 FROM personnel p1, personnel p2

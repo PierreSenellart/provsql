@@ -40,11 +40,11 @@ BEGIN
     'security_min',
     'security_max');
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql PARALLEL SAFE;
 
 /* Example of provenance evaluation */
 SELECT create_provenance_mapping('personnel_level', 'personnel', 'classification');
-CREATE TABLE result_security AS SELECT 
+CREATE TABLE result_security AS SELECT
   p1.city,
   security(provenance(),'personnel_level')
 FROM personnel p1, personnel p2

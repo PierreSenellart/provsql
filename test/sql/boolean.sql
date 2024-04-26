@@ -18,7 +18,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 CREATE FUNCTION boolean_times_state(state BOOLEAN, value BOOLEAN)
   RETURNS BOOLEAN AS
 $$
-BEGIN    
+BEGIN
   IF state IS NULL THEN
     RETURN value;
   ELSE
@@ -58,4 +58,4 @@ BEGIN
     'boolean_times',
     'boolean_monus');
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql PARALLEL SAFE;

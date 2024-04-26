@@ -402,7 +402,7 @@ BEGIN
   END IF;
   RETURN result;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token UUID,
@@ -467,7 +467,7 @@ BEGIN
   USING token LOOP;
   RETURN;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION identify_token(
   token UUID, OUT table_name regclass, OUT nb_columns integer) AS

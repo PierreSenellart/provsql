@@ -67,7 +67,7 @@ BEGIN
     'union_intervals_times',
     'union_intervals_monus');
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql PARALLEL SAFE;
 
 SELECT add_provenance('personnel_intervals');
 

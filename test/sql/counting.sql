@@ -47,11 +47,11 @@ BEGIN
     'counting_times',
     'counting_monus');
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql PARALLEL SAFE;
 
 /* Example of provenance evaluation */
 SELECT create_provenance_mapping('personnel_count', 'personnel', '1');
-CREATE TABLE result_counting AS SELECT 
+CREATE TABLE result_counting AS SELECT
   p1.city,
   counting(provenance(),'personnel_count')
 FROM personnel p1, personnel p2
