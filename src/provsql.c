@@ -1571,7 +1571,7 @@ static PlannedStmt *provsql_planner(
   ParamListInfo boundParams)
 {
   if(q->commandType==CMD_SELECT && q->rtable) {
-    const constants_t constants = initialize_constants(false);
+    const constants_t constants = get_constants(false);
 
     if(constants.ok && has_provenance(&constants, q)) {
 //        clock_t begin = clock(), end;

@@ -73,6 +73,13 @@ typedef struct constants_t {
   bool ok; ///< true if constants were loaded
 } constants_t;
 
+typedef struct database_constants_t {
+  Oid database;
+  constants_t constants;
+} database_constants_t;
+
+constants_t get_constants(bool failure_if_not_possible);
+
 Oid find_equality_operator(Oid ltypeId, Oid rtypeId);
 
 /** Global variable that becomes true if this particular backend received
@@ -87,7 +94,5 @@ extern bool provsql_where_provenance;
 /** Global variable that indicates the verbosity level set by the
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
-
-constants_t initialize_constants(bool failure_if_not_possible);
 
 #endif /* PROVSQL_UTILS_H */

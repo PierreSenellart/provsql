@@ -50,7 +50,7 @@ static vector<pair<int, int> > parse_array(string s)
 static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
 {
   Datum arguments[2]={token,token2prob};
-  constants_t constants=initialize_constants(true);
+  constants_t constants=get_constants(true);
   Oid argtypes[2]={constants.OID_TYPE_UUID,REGCLASSOID};
   char nulls[2] = {' ',' '};
 

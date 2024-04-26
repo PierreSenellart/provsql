@@ -83,7 +83,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
   if(type==gate_invalid)
     PG_RETURN_NULL();
   else {
-    constants_t constants=initialize_constants(true);
+    constants_t constants=get_constants(true);
     PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]);
   }
 }
@@ -109,7 +109,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
       nb_children = *ARR_DIMS(children);
   }
 
-  constants=initialize_constants(true);
+  constants=get_constants(true);
 
   for(int i=0; i<nb_gate_types; ++i) {
     if(constants.GATE_TYPE_TO_OID[i]==oid_type) {
@@ -337,7 +337,7 @@ Datum get_children(PG_FUNCTION_ARGS)
   }
 
   children_ptr = palloc(nb_children * sizeof(Datum));
-  constants=initialize_constants(true);
+  constants=get_constants(true);
   children=calloc(nb_children, sizeof(pg_uuid_t));
   for(unsigned i=0; i<nb_children; ++i) {
     if(!READB(children[i], pg_uuid_t)) {

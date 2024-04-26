@@ -1,5 +1,6 @@
 #include "postgres.h"
 #include "access/htup_details.h"
+#include "miscadmin.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_enum.h"
@@ -197,7 +198,7 @@ static Oid get_enum_oid(Oid enumtypoid, const char *label)
  * ignored
  * \return the initialized structure
  */
-constants_t initialize_constants(bool failure_if_not_possible)
+static constants_t initialize_constants(bool failure_if_not_possible)
 {
   constants_t constants;
   constants.ok = false;
@@ -287,11 +288,11 @@ constants_t initialize_constants(bool failure_if_not_possible)
   CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
 
   #define GET_GATE_TYPE_OID(x) { \
-            constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
-              constants.OID_TYPE_GATE_TYPE, \
-              #x); \
-            if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
-            elog(ERROR, "Could not initialize provsql gate type " #x); }
+    constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
+      constants.OID_TYPE_GATE_TYPE, \
+      #x); \
+    if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
+    elog(ERROR, "Could not initialize provsql gate type " #x); }
 
   GET_GATE_TYPE_OID(input);
   GET_GATE_TYPE_OID(plus);
@@ -311,4 +312,38 @@ constants_t initialize_constants(bool failure_if_not_possible)
   constants.ok=true;
 
   return constants;
+}
+
+database_constants_t *constants_cache;
+unsigned constants_cache_len=0;
+
+constants_t get_constants(bool failure_if_not_possible)
+{
+  int start=0, end=constants_cache_len-1;
+  database_constants_t *constants_cache2;
+
+  while(end>=start) {
+    unsigned mid=(start+end)/2;
+    if(constants_cache[mid].database<MyDatabaseId)
+      start=mid+1;
+    else if(constants_cache[mid].database>MyDatabaseId)
+      end=mid-1;
+    else
+      return constants_cache[mid].constants;
+  }
+
+  constants_cache2=calloc(constants_cache_len+1, sizeof(database_constants_t));
+  for(unsigned i=0; i<start; ++i)
+    constants_cache2[i]=constants_cache[i];
+
+  constants_cache2[start].database=MyDatabaseId;
+  constants_cache2[start].constants=initialize_constants(failure_if_not_possible);
+
+  for(unsigned i=start; i<constants_cache_len; ++i)
+    constants_cache2[i+1]=constants_cache[i];
+  free(constants_cache);
+  constants_cache=constants_cache2;
+  ++constants_cache_len;
+
+  return constants_cache[start].constants;
 }
