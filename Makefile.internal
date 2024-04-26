@@ -7,7 +7,7 @@ OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard s
 
 DOCS = $(wildcard doc/*.md)
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
-EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql
+EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql tdkc
 
 # We want REGRESS to be empty, since we are going to provide a schedule
 # of tests. But we want REGRESS to be defined, otherwise installcheck
@@ -57,19 +57,18 @@ HOMEBREW_PREFIX = $(shell brew --prefix)
 BOOST_INSTALL_PATH = $(shell brew --prefix boost)
 
 LINKER_FLAGS += -L$(BOOST_INSTALL_PATH)/lib -L$(HOMEBREW_PREFIX)/lib
+endif
+
 ifeq ($(ARCH), arm64)
-%.o : %.cpp
-	$(CXX) -I$(BOOST_INSTALL_PATH)/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+PRECXXFLAGS=-I$(BOOST_INSTALL_PATH)/include
 endif
 ifeq ($(ARCH), x86_64)
+PRECXXFLAGS=-I/usr/local/include
+endif
+PRECXXFLAGS+=-std=c++17 -Wno-register -fPIC
+
 %.o : %.cpp
-	$(CXX) -I/usr/local/include -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
-endif
-endif
-ifeq ($(OS), Linux)
-%.o : %.cpp
-	$(CXX) -std=c++17 -Wno-register -fPIC $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
-endif
+	$(CXX) $(PRECXXFLAGS) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 
 LINKER_FLAGS += -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
 
@@ -90,3 +89,6 @@ test/schedule: $(wildcard test/schedule.*)
 	fi
 
 installcheck: test/schedule
+
+tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/Circuit.hpp src/dDNNF.h src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.h src/dDNNFTreeDecompositionBuilder.cpp src/Circuit.h src/Graph.h src/PermutationStrategy.h src/TreeDecompositionKnowledgeCompiler.cpp
+	$(CXX) -std=c++17 -DTDKC -W -Wall -o tdkc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp
