@@ -272,7 +272,7 @@ BEGIN
 
   RETURN monus_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION provenance_project(token UUID, VARIADIC positions int[])
   RETURNS UUID AS
@@ -292,7 +292,7 @@ BEGIN
 
   RETURN project_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION provenance_eq(token UUID, pos1 int, pos2 int)
   RETURNS UUID AS
@@ -307,7 +307,7 @@ BEGIN
   PERFORM set_infos(eq_token, pos1, pos2);
   RETURN eq_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
   RETURNS UUID AS
@@ -333,7 +333,7 @@ BEGIN
 
   RETURN plus_token;
 END
-$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,
@@ -402,7 +402,7 @@ BEGIN
   END IF;
   RETURN result;
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE;
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token UUID,
@@ -442,7 +442,7 @@ BEGIN
   END IF;
   RETURN result;
 END
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[], extra TEXT);
 
