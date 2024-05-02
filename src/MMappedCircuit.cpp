@@ -220,9 +220,8 @@ void provsql_mmap_main_loop()
       if(!WRITEB(&nb_children, unsigned))
         elog(ERROR, "Cannot write response to pipe (message type c)");
 
-      for(unsigned i=0; i<nb_children; ++i)
-        if(!WRITEB(&children[i], pg_uuid_t))
-          elog(ERROR, "Cannot write response to pipe (message type c)");
+      if(write(provsql_shared_state->pipembw, &children[0], nb_children*sizeof(pg_uuid_t))==-1)
+        elog(ERROR, "Cannot write response to pipe (message type c)");
       break;
     }
 

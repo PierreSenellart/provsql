@@ -337,18 +337,17 @@ Datum get_children(PG_FUNCTION_ARGS)
   }
 
   children_ptr = palloc(nb_children * sizeof(Datum));
-  constants=get_constants(true);
   children=calloc(nb_children, sizeof(pg_uuid_t));
-  for(unsigned i=0; i<nb_children; ++i) {
-    if(!READB(children[i], pg_uuid_t)) {
-      LWLockRelease(provsql_shared_state->lock);
-      elog(ERROR, "Cannot read response from pipe (message type c)");
-    }
-    children_ptr[i] = UUIDPGetDatum(&children[i]);
+  if(read(provsql_shared_state->pipembr, children, nb_children*sizeof(pg_uuid_t))<nb_children*sizeof(pg_uuid_t)) {
+    LWLockRelease(provsql_shared_state->lock);
+    elog(ERROR, "Cannot read response from pipe (message type c)");
   }
-
   LWLockRelease(provsql_shared_state->lock);
 
+  for(unsigned i=0; i<nb_children; ++i)
+    children_ptr[i] = UUIDPGetDatum(&children[i]);
+
+  constants=get_constants(true);
   result = construct_array(
     children_ptr,
     nb_children,
