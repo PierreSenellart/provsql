@@ -46,7 +46,8 @@ static planner_hook_type prev_planner = NULL;
 
 static Query *process_query(
   const constants_t *constants,
-  Query *q);
+  Query *q,
+  bool **removed);
 
 static RelabelType *make_provenance_attribute(const constants_t *constants, Query *q, RangeTblEntry *r, Index relid, AttrNumber attid) {
   RelabelType *re = makeNode(RelabelType);
@@ -86,6 +87,40 @@ static RelabelType *make_provenance_attribute(const constants_t *constants, Quer
 #endif
 
   return re;
+}
+
+typedef struct reduce_varattno_mutator_context
+{
+  Index varno;
+  int *offset;
+} reduce_varattno_mutator_context;
+
+static Node *reduce_varattno_mutator(Node *node, reduce_varattno_mutator_context *context)
+{
+  if(node==NULL)
+    return NULL;
+
+  if(IsA(node, Var)) {
+    Var *v= (Var *)node;
+
+    if(v->varno == context->varno) {
+      v->varattno += context->offset[v->varattno-1];
+    }
+  }
+
+  return expression_tree_mutator(node, reduce_varattno_mutator, (void*) context);
+}
+
+static void reduce_varattno_by_offset(List *targetList, Index varno, int *offset)
+{
+  ListCell *lc;
+  reduce_varattno_mutator_context context = {varno, offset};
+
+  foreach (lc, targetList)
+  {
+    Node *te = lfirst(lc);
+    expression_tree_mutator(te, reduce_varattno_mutator, (void*) &context);
+  }
 }
 
 typedef struct aggregation_type_mutator_context
@@ -162,9 +197,38 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
         ++attid;
       }
     } else if(r->rtekind == RTE_SUBQUERY) {
-      Query *new_subquery = process_query(constants, r->subquery);
+      bool *inner_removed = NULL;
+      int old_targetlist_length=r->subquery->targetList->length;
+      Query *new_subquery = process_query(constants, r->subquery, &inner_removed);
       if(new_subquery != NULL) {
+        int i=0;
+        int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
+
         r->subquery = new_subquery;
+
+        if(inner_removed != NULL) {
+          for (ListCell *cell = list_head(r->eref->colnames), *prev = NULL;
+               cell != NULL;)
+          {
+            if(inner_removed[i]) {
+              r->eref->colnames = my_list_delete_cell(r->eref->colnames, cell, prev);
+              if (prev)
+                cell = my_lnext(r->eref->colnames, prev);
+              else
+                cell = list_head(r->eref->colnames);
+            } else {
+              prev = cell;
+              cell = my_lnext(r->eref->colnames, cell);
+            }
+            ++i;
+          }
+          for(i=0; i<old_targetlist_length; ++i) {
+            offset[i] = (i==0?0:offset[i-1]) - (inner_removed[i]?1:0);
+          }
+
+          reduce_varattno_by_offset(q->targetList, rteid, offset);
+        }
+
         r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
         prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, list_length(new_subquery->targetList)));
         fix_type_of_aggregation_result(constants, q, rteid, r->subquery->targetList);
@@ -1337,7 +1401,8 @@ static void add_select_non_zero(
 
 static Query *process_query(
   const constants_t *constants,
-  Query *q)
+  Query *q,
+  bool **removed)
 {
   List *prov_atts;
   bool has_union = false;
@@ -1369,7 +1434,7 @@ static Query *process_query(
     if (!stmt->all)
     {
       q = rewrite_non_all_into_external_group_by(q);
-      return process_query(constants, q);
+      return process_query(constants, q, removed);
     }
   }
 
@@ -1378,7 +1443,7 @@ static Query *process_query(
     if(subq)   // agg distinct detected, create a subquery
     {
       q = rewrite_for_agg_distinct(q,subq);
-      return process_query(constants, q);
+      return process_query(constants, q, removed);
     }
   }
 
@@ -1391,14 +1456,13 @@ static Query *process_query(
 
   {
     Bitmapset *removed_sortgrouprefs = NULL;
-    bool *removed;
 
     if(q->targetList) {
-      removed_sortgrouprefs=remove_provenance_attributes_select(constants, q, &removed);
+      removed_sortgrouprefs=remove_provenance_attributes_select(constants, q, removed);
       if(removed_sortgrouprefs != NULL)
         remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
       if (q->setOperations)
-        remove_provenance_attribute_setoperations(q, removed);
+        remove_provenance_attribute_setoperations(q, *removed);
     }
   }
 
@@ -1577,7 +1641,8 @@ static PlannedStmt *provsql_planner(
 //        clock_t begin = clock(), end;
 //        double time_spent;
 
-      Query *new_query = process_query(&constants, q);
+      bool *removed = NULL;
+      Query *new_query = process_query(&constants, q, &removed);
       if(new_query != NULL)
         q = new_query;
 
