@@ -1,0 +1,16 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+name1|name2
+Dave|Magdalen
+Dave|Nancy
+Ellen|Susan
+John|Paul
+Magdalen|Dave
+Magdalen|Nancy
+Nancy|Dave
+Nancy|Magdalen
+Paul|John
+Susan|Ellen
+(10 rows)
