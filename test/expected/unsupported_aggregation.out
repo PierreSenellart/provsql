@@ -1,0 +1,2 @@
+\set ECHO none
+ERROR:  Non-terminal aggregates not supported by ProvSQL
