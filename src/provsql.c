@@ -1439,7 +1439,13 @@ static Query *process_query(
   }
 
   if (q->hasAggs) {
-    Query *subq = check_for_agg_distinct(q);
+    Query *subq;
+
+    if (q->havingQual) {
+      elog(ERROR, "Non-terminal aggregates not supported by ProvSQL");
+    }
+
+    subq = check_for_agg_distinct(q);
     if(subq)   // agg distinct detected, create a subquery
     {
       q = rewrite_for_agg_distinct(q,subq);

@@ -46,5 +46,8 @@ test: where_provenance
 # Full example from tutorial
 test: tutorial
 
+# Unsupported non-terminal aggregation (on tutorial database)
+test: unsupported_aggregation
+
 # Grouping
 test: group_by_empty grouping_sets
