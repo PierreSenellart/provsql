@@ -373,8 +373,8 @@ BEGIN
     IF monus_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
     ELSE
-      EXECUTE format('SELECT %I(a[1],a[2]) FROM (SELECT array_agg(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) AS a FROM unnest(get_children(%L)) AS t) tmp',
-        monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
+      EXECUTE format('SELECT %I(a1,a2) FROM (SELECT provsql.provenance_evaluate(c[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a1, provsql.provenance_evaluate(c[2],%L,%L::%s,%L,%L,%L,%L,%L) AS a2 FROM get_children(%L) c) tmp',
+        monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
       INTO result;
     END IF;
   ELSIF gate_type='eq' THEN
