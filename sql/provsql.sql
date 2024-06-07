@@ -195,15 +195,24 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION create_provenance_mapping(newtbl text, oldtbl regclass, att text)
-  RETURNS void AS
+CREATE OR REPLACE FUNCTION create_provenance_mapping(
+  newtbl text,
+  oldtbl regclass,
+  att text,
+  preserve_case bool DEFAULT 'f'
+) RETURNS void AS
 $$
 DECLARE
 BEGIN
   EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %I', oldtbl);
   ALTER TABLE tmp_provsql RENAME provsql TO provenance;
-  EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
-  EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
+  IF preserve_case THEN
+    EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
+    EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
+  ELSE
+    EXECUTE format('CREATE TABLE %s AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
+    EXECUTE format('CREATE INDEX ON %s(provenance)', newtbl);
+  END IF;
 END
 $$ LANGUAGE plpgsql;
 
