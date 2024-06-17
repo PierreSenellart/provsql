@@ -53,7 +53,7 @@ jobs:
         with:
           username: inriavalda
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v6
         with:
           file: docker/Dockerfile
           push: true
