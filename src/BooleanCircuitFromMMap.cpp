@@ -16,15 +16,22 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token)
 {
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
   if(!WRITEM("g", char) || !WRITEM(&token, pg_uuid_t))
-    elog(ERROR, "Cannot write to pipe (message type G)");
+    elog(ERROR, "Cannot write to pipe (message type g)");
 
   unsigned size;
   if(!READB(size, unsigned))
-    elog(ERROR, "Cannot read from pipe (message type G)");
+    elog(ERROR, "Cannot read from pipe (message type g)");
 
-  char *buf = new char[size];
-  if(read(provsql_shared_state->pipembr, buf, size)<size)
-    elog(ERROR, "Cannot read from pipe (message type G)");
+  char *buf = new char[size], *p = buf;
+  ssize_t actual_read, remaining_size=size;
+  while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
+    if(actual_read<=0)
+      elog(ERROR, "Cannot read from pipe (message type g)");
+    else {
+      remaining_size-=actual_read;
+      p+=actual_read;
+    }
+  }
   LWLockRelease(provsql_shared_state->lock);
 
   boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
