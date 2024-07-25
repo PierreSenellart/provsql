@@ -10,3 +10,4 @@ tdkc
 test.log
 .ccls-cache/
 doc/doxygen/
+.cache/

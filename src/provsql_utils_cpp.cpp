@@ -86,3 +86,17 @@ string UUIDDatum2string(Datum token)
   pg_uuid_t *uuid = DatumGetUUIDP(token);
   return uuid2string(*uuid);
 }
+
+std::size_t hash_value(const pg_uuid_t &u)
+{
+  return *reinterpret_cast<const std::size_t*>(&u);
+}
+
+bool operator==(const pg_uuid_t &u, const pg_uuid_t &v)
+{
+  for(int i=0; i<UUID_LEN; ++i)
+    if(u.data[i]!=v.data[i])
+      return false;
+
+  return true;
+}
