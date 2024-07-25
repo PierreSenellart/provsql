@@ -1,5 +1,5 @@
-#ifndef CIRCUIT_CACHE_HPP
-#define CIRCUIT_CACHE_HPP
+#ifndef CIRCUIT_CACHE_H
+#define CIRCUIT_CACHE_H
 
 #include "provsql_utils_cpp.h"
 
@@ -10,8 +10,6 @@
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/member.hpp>
 #include <boost/multi_index/sequenced_index.hpp>
-
-constexpr unsigned MAX_CIRCUIT_CACHE_SIZE = 1 << 20;
 
 using namespace boost::multi_index;
 
@@ -45,20 +43,8 @@ typedef typename item_list::iterator iterator;
 CircuitCache() : current_size(0) {
 }
 
-void insert(const CircuitCacheInfos& infos)
-{
-  std::pair<iterator,bool> p=il.push_front(infos);
-
-  if(!p.second) {
-    il.relocate(il.begin(),p.first);
-  } else {
-    current_size+=infos.size();
-  }
-  while(current_size>MAX_CIRCUIT_CACHE_SIZE) {
-    current_size -= (*il.end()).size();
-    il.pop_back();
-  }
-}
+void insert(const CircuitCacheInfos& infos);
+CircuitCacheInfos get(pg_uuid_t token) const;
 
 inline iterator begin(){
   return il.begin();
@@ -68,4 +54,4 @@ inline iterator end(){
 }
 };
 
-#endif /* CIRCUIT_CACHE_HPP */
+#endif /* CIRCUIT_CACHE_H */
