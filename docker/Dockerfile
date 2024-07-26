@@ -5,7 +5,7 @@ LABEL maintainer pierre@senellart.com
 COPY . /opt/provsql
 WORKDIR /opt/provsql
 
-# needed to build provsql the tools + libc6-i386 for running c2d
+# needed to build provsql the tools
 RUN apt-get update &&\
     apt-get -y install git build-essential curl\
                libc6-i386 unzip mercurial libgmp-dev libboost-dev\
@@ -28,16 +28,6 @@ ENV SHELL=/bin/bash
 ############################## GETTING ADD-ON TOOLS ##############################
 
 RUN mkdir /tmp/tools/
-
-# TOOL c2d
-RUN curl 'http://reasoning.cs.ucla.edu/c2d/fetchme.php' \
-         -H 'Content-Type: application/x-www-form-urlencoded'\
-         --data 'os=Linux+i386&type=&s=&n=Pierre+Senellart+DOCKER&e=pierre@senellart.com&o=ENS'\
-         -o /tmp/c2d.zip &&\
-         unzip /tmp/c2d.zip -d /tmp/ &&\
-         rm /tmp/c2d.zip &&\
-         mv /tmp/c2d_linux /tmp/tools/c2d &&\
-         chmod a+x /tmp/tools/c2d
 
 # TOOL d4
 RUN cd /tmp/ &&\

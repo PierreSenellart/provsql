@@ -59,8 +59,8 @@ The following SQL features are currently supported.
 ## Docker container
 
 As an alternative to a ProvSQL installation (see below), you can try
-a demonstration version of ProvSQL (full-featured, except for `minic2d`
-support) as a Docker container. To deploy it, once Docker CE is
+a demonstration version of ProvSQL (full-featured, except for `c2d` and
+`minic2d` support) as a Docker container. To deploy it, once Docker CE is
 installed, simply run:
 
 ```
