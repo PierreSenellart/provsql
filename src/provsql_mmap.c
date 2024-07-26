@@ -16,6 +16,8 @@
 #include "access/htup_details.h"
 #include "utils/builtins.h"
 
+#include "circuit_cache.h"
+
 char buffer[PIPE_BUF]={}; // flawfinder: ignore
 unsigned bufferpos=0;
 
@@ -62,10 +64,15 @@ PG_FUNCTION_INFO_V1(get_gate_type);
 Datum get_gate_type(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  gate_type type = gate_invalid;
+  gate_type type;
+  constants_t constants=get_constants(true);
 
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
+
+  type = circuit_cache_get_type(*token);
+  if(type!=gate_invalid)
+    PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]); ;
 
   STARTWRITEM();
   ADDWRITEM("t", char);
@@ -83,7 +90,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
   if(type==gate_invalid)
     PG_RETURN_NULL();
   else {
-    constants_t constants=get_constants(true);
+    circuit_cache_create_gate(*token, type, 0, NULL);
     PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]);
   }
 }
@@ -125,6 +132,9 @@ Datum create_gate(PG_FUNCTION_ARGS)
     children_data = (pg_uuid_t*) ARR_DATA_PTR(children);
   else
     children_data = NULL;
+
+  if(circuit_cache_create_gate(*token, type, nb_children, children_data))
+    PG_RETURN_VOID();
 
   STARTWRITEM();
   ADDWRITEM("C", char);
@@ -320,30 +330,36 @@ Datum get_children(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
 
-  STARTWRITEM();
-  ADDWRITEM("c", char);
-  ADDWRITEM(token, pg_uuid_t);
+  nb_children = circuit_cache_get_children(*token, &children);
 
-  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+  if(!children) {
+    STARTWRITEM();
+    ADDWRITEM("c", char);
+    ADDWRITEM(token, pg_uuid_t);
 
-  if(!SENDWRITEM()) {
+    LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+
+    if(!SENDWRITEM()) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot write to pipe (message type c)");
+    }
+
+    if(!READB(nb_children, unsigned)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot read response from pipe (message type c)");
+    }
+
+    children=calloc(nb_children, sizeof(pg_uuid_t));
+    if(read(provsql_shared_state->pipembr, children, nb_children*sizeof(pg_uuid_t))<nb_children*sizeof(pg_uuid_t)) {
+      LWLockRelease(provsql_shared_state->lock);
+      elog(ERROR, "Cannot read response from pipe (message type c)");
+    }
     LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot write to pipe (message type c)");
-  }
 
-  if(!READB(nb_children, unsigned)) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot read response from pipe (message type c)");
+    circuit_cache_create_gate(*token, gate_invalid, nb_children, children);
   }
 
   children_ptr = palloc(nb_children * sizeof(Datum));
-  children=calloc(nb_children, sizeof(pg_uuid_t));
-  if(read(provsql_shared_state->pipembr, children, nb_children*sizeof(pg_uuid_t))<nb_children*sizeof(pg_uuid_t)) {
-    LWLockRelease(provsql_shared_state->lock);
-    elog(ERROR, "Cannot read response from pipe (message type c)");
-  }
-  LWLockRelease(provsql_shared_state->lock);
-
   for(unsigned i=0; i<nb_children; ++i)
     children_ptr[i] = UUIDPGetDatum(&children[i]);
 

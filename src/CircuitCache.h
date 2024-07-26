@@ -1,8 +1,9 @@
-#ifndef CIRCUIT_CACHE_H
-#define CIRCUIT_CACHE_H
+#ifndef CIRCUIT_CACHE_CPP_H
+#define CIRCUIT_CACHE_CPP_H
 
 #include "provsql_utils_cpp.h"
 
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -16,11 +17,11 @@ using namespace boost::multi_index;
 struct CircuitCacheInfos
 {
   pg_uuid_t token;
-  unsigned nb_children;
+  gate_type type;
   std::vector<pg_uuid_t> children;
 
   inline unsigned size() const {
-    return sizeof(CircuitCacheInfos)+children.capacity()*sizeof(pg_uuid_t);
+    return sizeof(CircuitCacheInfos)+children.size()*sizeof(pg_uuid_t);
   }
 };
 
@@ -43,8 +44,8 @@ typedef typename item_list::iterator iterator;
 CircuitCache() : current_size(0) {
 }
 
-void insert(const CircuitCacheInfos& infos);
-CircuitCacheInfos get(pg_uuid_t token) const;
+bool insert(const CircuitCacheInfos& infos);
+std::optional<CircuitCacheInfos> get(pg_uuid_t token) const;
 
 inline iterator begin(){
   return il.begin();
@@ -54,4 +55,4 @@ inline iterator end(){
 }
 };
 
-#endif /* CIRCUIT_CACHE_H */
+#endif /* CIRCUIT_CACHE_CPP_H */
