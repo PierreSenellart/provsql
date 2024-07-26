@@ -203,6 +203,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
       if(new_subquery != NULL) {
         int i=0;
         int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
+        unsigned varattnoprovsql;
 
         r->subquery = new_subquery;
 
@@ -229,8 +230,16 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
           reduce_varattno_by_offset(q->targetList, rteid, offset);
         }
 
+        varattnoprovsql=0;
+        for(ListCell *cell = list_head(new_subquery->targetList); cell!=NULL; cell=my_lnext(new_subquery->targetList, cell)) {
+          TargetEntry *te = (TargetEntry*) lfirst(cell);
+          ++varattnoprovsql;
+          if(!strcmp(te->resname,PROVSQL_COLUMN_NAME))
+            break;
+        }
+
         r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
-        prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, list_length(new_subquery->targetList)));
+        prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, varattnoprovsql));
         fix_type_of_aggregation_result(constants, q, rteid, r->subquery->targetList);
       }
     }
@@ -583,6 +592,7 @@ static Expr *make_aggregation_expression(
     agg->args=list_make1(te_inner);
     agg->aggkind=AGGKIND_NORMAL;
     agg->location=-1;
+    agg->aggno=agg->aggtransno=-1;
 
     agg->aggargtypes = list_make1_oid(constants->OID_TYPE_UUID);
 
@@ -959,11 +969,40 @@ static void add_to_select(
   Query *q,
   Expr *provenance)
 {
-  TargetEntry *te = makeNode(TargetEntry);
-  te->expr = provenance;
-  te->resno = list_length(q->targetList) + 1;
-  te->resname = (char *)PROVSQL_COLUMN_NAME;
-  q->targetList = lappend(q->targetList, te);
+  TargetEntry *newte = makeNode(TargetEntry);
+  bool inserted=false;
+  unsigned resno=0;
+
+  newte->expr = provenance;
+  newte->resname = (char *)PROVSQL_COLUMN_NAME;
+
+  /* Make sure to insert before all resjunk Target Entry */
+  for (ListCell *cell = list_head(q->targetList); cell != NULL;)
+  {
+    TargetEntry *te = (TargetEntry*) lfirst(cell);
+
+    if(!inserted)
+      ++resno;
+
+    if(te->resjunk) {
+      if(!inserted) {
+        newte->resno=resno;
+        q->targetList = list_insert_nth(q->targetList, resno-1, newte);
+        cell=list_nth_cell(q->targetList, resno);
+        te = (TargetEntry*) lfirst(cell);
+        inserted=true;
+      }
+
+      ++te->resno;
+    }
+
+    cell = my_lnext(q->targetList, cell);
+  }
+
+  if(!inserted) {
+    newte->resno = resno+1;
+    q->targetList = lappend(q->targetList, newte);
+  }
 }
 
 typedef struct provenance_mutator_context
