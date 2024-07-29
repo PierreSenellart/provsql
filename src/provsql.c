@@ -592,7 +592,9 @@ static Expr *make_aggregation_expression(
     agg->args=list_make1(te_inner);
     agg->aggkind=AGGKIND_NORMAL;
     agg->location=-1;
+#if PG_VERSION_NUM >= 140000
     agg->aggno=agg->aggtransno=-1;
+#endif
 
     agg->aggargtypes = list_make1_oid(constants->OID_TYPE_UUID);
 
@@ -688,6 +690,9 @@ static Expr *make_provenance_expression(
       agg->args=list_make1(te_inner);
       agg->aggkind=AGGKIND_NORMAL;
       agg->location=-1;
+#if PG_VERSION_NUM >= 140000
+      agg->aggno=agg->aggtransno=-1;
+#endif
 
       agg->aggargtypes=list_make1_oid(constants->OID_TYPE_UUID);
 
