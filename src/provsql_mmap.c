@@ -226,8 +226,8 @@ Datum set_infos(PG_FUNCTION_ARGS)
   STARTWRITEM();
   ADDWRITEM("I", char);
   ADDWRITEM(token, pg_uuid_t);
-  ADDWRITEM(&info1, int);
-  ADDWRITEM(&info2, int);
+  ADDWRITEM(&info1, unsigned);
+  ADDWRITEM(&info2, unsigned);
 
   LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
   if(!SENDWRITEM()) {
@@ -303,11 +303,11 @@ Datum get_extra(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(get_nb_gates);
 Datum get_nb_gates(PG_FUNCTION_ARGS)
 {
-  unsigned nb;
+  unsigned long nb;
 
   LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
 
-  if(!WRITEM("n", char) || !READB(nb, unsigned)) {
+  if(!WRITEM("n", char) || !READB(nb, unsigned long)) {
     LWLockRelease(provsql_shared_state->lock);
     elog(ERROR, "Cannot communicate with pipe (message type n)");
   }

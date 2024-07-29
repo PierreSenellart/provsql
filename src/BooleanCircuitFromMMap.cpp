@@ -18,8 +18,8 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token)
   if(!WRITEM("g", char) || !WRITEM(&token, pg_uuid_t))
     elog(ERROR, "Cannot write to pipe (message type g)");
 
-  unsigned size;
-  if(!READB(size, unsigned))
+  unsigned long size;
+  if(!READB(size, unsigned long))
     elog(ERROR, "Cannot read from pipe (message type g)");
 
   char *buf = new char[size], *p = buf;

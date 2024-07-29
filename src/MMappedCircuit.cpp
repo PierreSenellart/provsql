@@ -52,7 +52,7 @@ std::vector<pg_uuid_t> MMappedCircuit::getChildren(pg_uuid_t token) const
   auto idx = mapping[token];
   if(idx != MMappedUUIDHashTable::NOTHING) {
     const GateInformation &gi = gates[idx];
-    for(unsigned k=gi.children_idx; k<gi.children_idx+gi.nb_children; ++k)
+    for(unsigned long k=gi.children_idx; k<gi.children_idx+gi.nb_children; ++k)
       result.push_back(wires[k]);
   }
   return result;
@@ -111,7 +111,7 @@ std::string MMappedCircuit::getExtra(pg_uuid_t token) const
 
   auto idx = mapping[token];
   if(idx != MMappedUUIDHashTable::NOTHING) {
-    for(unsigned start=gates[idx].extra_idx, k=start, end=start+gates[idx].extra_len; k<end; ++k)
+    for(unsigned long start=gates[idx].extra_idx, k=start, end=start+gates[idx].extra_len; k<end; ++k)
       result+=extra[k];
   }
 
@@ -157,9 +157,9 @@ void provsql_mmap_main_loop()
     case 'I':
     {
       pg_uuid_t token;
-      int info1, info2;
+      unsigned info1, info2;
 
-      if(!READM(token, pg_uuid_t) || !READM(info1, int) || !READM(info2, int))
+      if(!READM(token, pg_uuid_t) || !READM(info1, unsigned) || !READM(info2, unsigned))
         elog(ERROR, "Cannot read from pipe (message type I)");
 
       circuit->setInfos(token, info1, info2);
@@ -201,9 +201,9 @@ void provsql_mmap_main_loop()
 
     case 'n':
     {
-      unsigned nb = circuit->getNbGates();
+      unsigned long nb = circuit->getNbGates();
 
-      if(!WRITEB(&nb, unsigned))
+      if(!WRITEB(&nb, unsigned long))
         elog(ERROR, "Cannot write response to pipe (message type n)");
       break;
     }
@@ -248,7 +248,7 @@ void provsql_mmap_main_loop()
 
       auto infos = circuit->getInfos(token);
 
-      if(!WRITEB(&infos.first, int) || !WRITEB(&infos.second, int))
+      if(!WRITEB(&infos.first, unsigned) || !WRITEB(&infos.second, unsigned))
         elog(ERROR, "Cannot write response to pipe (message type i)");
       break;
     }
@@ -280,10 +280,10 @@ void provsql_mmap_main_loop()
       oa << createBooleanCircuit(token);
 
       ss.seekg(0, std::ios::end);
-      unsigned size = ss.tellg();
+      unsigned long size = ss.tellg();
       ss.seekg(0, std::ios::beg);
 
-      if(!WRITEB(&size, unsigned) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
+      if(!WRITEB(&size, unsigned long) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
         elog(ERROR, "Cannot write to pipe (message type g)");
       break;
     }

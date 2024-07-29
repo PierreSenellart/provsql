@@ -15,8 +15,8 @@ extern "C" {
 template <typename T>
 class MMappedVector {
 struct data_t {
-  unsigned nb_elements;
-  unsigned capacity;
+  unsigned long nb_elements;
+  unsigned long capacity;
   T d[];
 };
 
@@ -27,16 +27,16 @@ static constexpr unsigned STARTING_CAPACITY=(1u << 16);
 
 void mmap(size_t length, bool read_only);
 void grow();
-void set(pg_uuid_t u, unsigned i);
+void set(pg_uuid_t u, unsigned long i);
 
 public:
 MMappedVector(const char *filename, bool read_only);
 ~MMappedVector();
 
-const T &operator[](unsigned k) const;
-T &operator[](unsigned k);
+const T &operator[](unsigned long k) const;
+T &operator[](unsigned long k);
 void add(const T& value);
-inline unsigned nbElements() const {
+inline unsigned long nbElements() const {
   return data->nb_elements;
 }
 void sync();

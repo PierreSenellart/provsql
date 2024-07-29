@@ -17,7 +17,7 @@ class MMappedUUIDHashTable
 {
 struct value_t {
   pg_uuid_t uuid;
-  unsigned value;
+  unsigned long value;
 };
 
 struct table_t {
@@ -35,13 +35,13 @@ struct table_t {
     }
     return log_size;
   }
-  constexpr unsigned capacity() {
+  constexpr unsigned long capacity() {
     return 1u << log_size;
   }
 
   unsigned log_size;
-  unsigned nb_elements;
-  unsigned next_value;
+  unsigned long nb_elements;
+  unsigned long next_value;
   value_t t[];
 };
 
@@ -51,23 +51,23 @@ table_t *table;
 static constexpr unsigned STARTING_LOG_SIZE=16;
 static constexpr double MAXIMUM_LOAD_FACTOR=.5;
 
-inline unsigned hash(pg_uuid_t u) const {
-  return *reinterpret_cast<unsigned*>(&u) % (1 << table->log_size);
+inline unsigned long hash(pg_uuid_t u) const {
+  return *reinterpret_cast<unsigned long*>(&u) % (1 << table->log_size);
 };
 
-unsigned find(pg_uuid_t u) const;
+unsigned long find(pg_uuid_t u) const;
 void mmap(size_t length, bool read_only);
 void grow();
-void set(pg_uuid_t u, unsigned i);
+void set(pg_uuid_t u, unsigned long i);
 
 public:
-static constexpr unsigned NOTHING=static_cast<unsigned>(-1);
+static constexpr unsigned long NOTHING=static_cast<unsigned long>(-1);
 MMappedUUIDHashTable(const char *filename, bool read_only);
 ~MMappedUUIDHashTable();
 
-unsigned operator[](pg_uuid_t u) const;
-std::pair<unsigned,bool> add(pg_uuid_t u);
-inline unsigned nbElements() const {
+unsigned long operator[](pg_uuid_t u) const;
+std::pair<unsigned long,bool> add(pg_uuid_t u);
+inline unsigned long nbElements() const {
   return table->nb_elements;
 }
 void sync();

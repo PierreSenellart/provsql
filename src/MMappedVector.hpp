@@ -79,13 +79,13 @@ MMappedVector<T>::~MMappedVector()
 }
 
 template <typename T>
-inline const T &MMappedVector<T>::operator[](unsigned k) const
+inline const T &MMappedVector<T>::operator[](unsigned long k) const
 {
   return data->d[k];
 }
 
 template <typename T>
-inline T &MMappedVector<T>::operator[](unsigned k)
+inline T &MMappedVector<T>::operator[](unsigned long k)
 {
   return data->d[k];
 }

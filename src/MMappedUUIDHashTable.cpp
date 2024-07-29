@@ -36,7 +36,7 @@ MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename, bool read_only)
     table->log_size = table_t::logSizeForSize(size);
     table->nb_elements = 0;
     table->next_value = 0;
-    for(unsigned i=0; i<table->capacity(); ++i) {
+    for(unsigned long i=0; i<table->capacity(); ++i) {
       table->t[i].value = NOTHING;
     }
   }
@@ -61,12 +61,11 @@ void MMappedUUIDHashTable::grow()
 
   std::vector<value_t> elements;
   elements.reserve(table->nb_elements);
-  for(unsigned i=0; i<table->capacity(); ++i)
+  for(unsigned long i=0; i<table->capacity(); ++i)
     if(table->t[i].value != NOTHING)
       elements.push_back(table->t[i]);
 
   auto new_log_size = table->log_size+1;
-  assert(new_log_size<sizeof(unsigned)*8);
   munmap(table, table_t::sizeForLogSize(table->log_size));
 
   auto new_size = table_t::sizeForLogSize(new_log_size);
@@ -75,7 +74,7 @@ void MMappedUUIDHashTable::grow()
   mmap(new_size, false);
 
   table->log_size = new_log_size;
-  for(unsigned i=0; i<table->capacity(); ++i) {
+  for(unsigned long i=0; i<table->capacity(); ++i) {
     table->t[i].value = NOTHING;
   }
   for(const auto &u: elements)
@@ -88,9 +87,9 @@ MMappedUUIDHashTable::~MMappedUUIDHashTable()
   close(fd);
 }
 
-unsigned MMappedUUIDHashTable::find(pg_uuid_t u) const
+unsigned long MMappedUUIDHashTable::find(pg_uuid_t u) const
 {
-  unsigned k = hash(u);
+  auto k = hash(u);
   while(table->t[k].value != NOTHING &&
         std::memcmp(&table->t[k].uuid, &u, sizeof(pg_uuid_t))) {
     k = (k+1) % table->capacity();
@@ -99,16 +98,16 @@ unsigned MMappedUUIDHashTable::find(pg_uuid_t u) const
   return k;
 }
 
-unsigned MMappedUUIDHashTable::operator[](pg_uuid_t u) const
+unsigned long MMappedUUIDHashTable::operator[](pg_uuid_t u) const
 {
-  unsigned k = find(u);
+  auto k = find(u);
 
   return table->t[k].value;
 }
 
-std::pair<unsigned,bool> MMappedUUIDHashTable::add(pg_uuid_t u)
+std::pair<unsigned long,bool> MMappedUUIDHashTable::add(pg_uuid_t u)
 {
-  unsigned k = find(u);
+  auto k = find(u);
 
   if(table->t[k].value == NOTHING) {
     if(table->nb_elements >= MAXIMUM_LOAD_FACTOR * table->capacity()) {
@@ -123,7 +122,7 @@ std::pair<unsigned,bool> MMappedUUIDHashTable::add(pg_uuid_t u)
 }
 
 // Only used when growing the table, so no need to check/update nb_elements
-void MMappedUUIDHashTable::set(pg_uuid_t u, unsigned i)
+void MMappedUUIDHashTable::set(pg_uuid_t u, unsigned long i)
 {
   table->t[find(u)] = {u, i};
 }

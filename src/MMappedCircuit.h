@@ -13,14 +13,14 @@ typedef struct GateInformation
 {
   gate_type type;
   unsigned nb_children;
-  unsigned children_idx;
+  unsigned long children_idx;
   double prob;
   unsigned info1;
   unsigned info2;
-  unsigned extra_idx;
+  unsigned long extra_idx;
   unsigned extra_len;
 
-  GateInformation(gate_type t, unsigned n, unsigned i) :
+  GateInformation(gate_type t, unsigned n, unsigned long i) :
     type(t), nb_children(n), children_idx(i), prob(-1.), info1(0), info2(0), extra_idx(0), extra_len(0) {
   }
 } GateInformation;
@@ -59,7 +59,7 @@ std::vector<pg_uuid_t> getChildren(pg_uuid_t token) const;
 double getProb(pg_uuid_t token) const;
 std::pair<unsigned, unsigned> getInfos(pg_uuid_t token) const;
 std::string getExtra(pg_uuid_t token) const;
-inline unsigned getNbGates() const {
+inline unsigned long getNbGates() const {
   return gates.nbElements();
 }
 };
