@@ -1,0 +1,13 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+column1|id|name|position|city|classification|formula
+1|1|John|Director|New York|unclassified|John
+1|2|Paul|Janitor|New York|restricted|Paul
+1|3|Dave|Analyst|Paris|confidential|Dave
+1|4|Ellen|Field agent|Berlin|secret|Ellen
+1|5|Magdalen|Double agent|Paris|top_secret|Magdalen
+1|6|Nancy|HR|Paris|restricted|Nancy
+1|7|Susan|Analyst|Berlin|secret|Susan
+(7 rows)
