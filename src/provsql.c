@@ -49,16 +49,15 @@ static Query *process_query(
   Query *q,
   bool **removed);
 
-static RelabelType *make_provenance_attribute(const constants_t *constants, Query *q, RangeTblEntry *r, Index relid, AttrNumber attid) {
-  RelabelType *re = makeNode(RelabelType);
+static Var *make_provenance_attribute(const constants_t *constants, Query *q, RangeTblEntry *r, Index relid, AttrNumber attid) {
   Var *v = makeNode(Var);
 
   v->varno = relid;
   v->varattno = attid;
 
 #if PG_VERSION_NUM >= 130000
-  v->varnosyn = 0;
-  v->varattnosyn = 0;
+  v->varnosyn = relid;
+  v->varattnosyn = attid;
 #else
   v->varnoold = relid;
   v->varoattno = attid;
@@ -68,13 +67,6 @@ static RelabelType *make_provenance_attribute(const constants_t *constants, Quer
   v->varcollid = InvalidOid;
   v->vartypmod = -1;
   v->location = -1;
-
-  re->arg = (Expr *)v;
-  re->resulttype = constants->OID_TYPE_UUID;
-  re->resulttypmod = -1;
-  re->resultcollid = InvalidOid;
-  re->relabelformat = COERCE_IMPLICIT_CAST;
-  re->location = -1;
 
 #if PG_VERSION_NUM >= 160000
   if(r->perminfoindex != 0) {
@@ -86,7 +78,7 @@ static RelabelType *make_provenance_attribute(const constants_t *constants, Quer
   r->selectedCols = bms_add_member(r->selectedCols, attid - FirstLowInvalidHeapAttributeNumber);
 #endif
 
-  return re;
+  return v;
 }
 
 typedef struct reduce_varattno_mutator_context
@@ -527,8 +519,7 @@ static Expr *make_aggregation_expression(
 
   if (op == SR_PLUS)
   {
-    RelabelType *re = (RelabelType *)linitial(prov_atts);
-    result = re->arg;
+    result = linitial(prov_atts);
   }
   else
   {
@@ -643,8 +634,7 @@ static Expr *make_provenance_expression(
   ListCell *lc_v;
 
   if (op == SR_PLUS) {
-    RelabelType *re = (RelabelType *)linitial(prov_atts);
-    result = re->arg;
+    result = linitial(prov_atts);
   } else {
     if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
     {
@@ -982,6 +972,12 @@ static void add_to_select(
 
   newte->expr = provenance;
   newte->resname = (char *)PROVSQL_COLUMN_NAME;
+
+  if (IsA(provenance, Var)) {
+    RangeTblEntry *rte = list_nth(q->rtable, ((Var*) provenance)->varno - 1);
+    newte->resorigtbl = rte->relid;
+    newte->resorigcol = ((Var*) provenance)->varattno;;
+  }
 
   /* Make sure to insert before all resjunk Target Entry */
   for (ListCell *cell = list_head(q->targetList); cell != NULL;)
