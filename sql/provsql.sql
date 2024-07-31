@@ -246,7 +246,7 @@ BEGIN
     ELSE
       times_token := uuid_generate_v5(uuid_ns_provsql(),concat('times',tokens));
 
-      PERFORM create_gate(times_token, 'times', tokens);
+      PERFORM create_gate(times_token, 'times', ARRAY_AGG(t)) FROM UNNEST(tokens) AS t WHERE t IS NOT NULL;
   END CASE;
 
   RETURN times_token;
