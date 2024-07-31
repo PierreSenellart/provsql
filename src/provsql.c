@@ -204,11 +204,12 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
         int i=0;
         int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
         unsigned varattnoprovsql;
+        ListCell *cell, *prev;
 
         r->subquery = new_subquery;
 
         if(inner_removed != NULL) {
-          for (ListCell *cell = list_head(r->eref->colnames), *prev = NULL;
+          for (cell = list_head(r->eref->colnames), prev = NULL;
                cell != NULL;)
           {
             if(inner_removed[i]) {
@@ -231,15 +232,17 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
         }
 
         varattnoprovsql=0;
-        for(ListCell *cell = list_head(new_subquery->targetList); cell!=NULL; cell=my_lnext(new_subquery->targetList, cell)) {
+        for(cell = list_head(new_subquery->targetList); cell!=NULL; cell=my_lnext(new_subquery->targetList, cell)) {
           TargetEntry *te = (TargetEntry*) lfirst(cell);
           ++varattnoprovsql;
           if(!strcmp(te->resname,PROVSQL_COLUMN_NAME))
             break;
         }
 
-        r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
-        prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, varattnoprovsql));
+        if(cell!=NULL) {
+          r->eref->colnames = lappend(r->eref->colnames, makeString(pstrdup(PROVSQL_COLUMN_NAME)));
+          prov_atts=lappend(prov_atts,make_provenance_attribute(constants, q, r, rteid, varattnoprovsql));
+        }
         fix_type_of_aggregation_result(constants, q, rteid, r->subquery->targetList);
       }
     }
@@ -259,8 +262,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
           // Antijoin (feasible with negation)
         ereport(ERROR, (errmsg("JOIN type not supported by provsql")));
       }
-    }
-    else if (r->rtekind == RTE_FUNCTION)
+    } else if (r->rtekind == RTE_FUNCTION)
     {
       ListCell *lc;
       AttrNumber attid=1;
@@ -282,9 +284,9 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
 
         attid += func->funccolcount;
       }
-    }
-    else
-    {
+    } else if (r->rtekind == RTE_VALUES) {
+      // Nothing to do, no provenance attribute in literal values
+    } else {
       ereport(ERROR, (errmsg("FROM clause unsupported by provsql")));
     }
 

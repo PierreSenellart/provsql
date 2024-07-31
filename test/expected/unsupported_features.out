@@ -1,7 +1,6 @@
 \set ECHO none
 ERROR:  provenance() called on a table without provenance
 ERROR:  FROM clause unsupported by provsql
-ERROR:  FROM clause unsupported by provsql
 ERROR:  Subqueries in WHERE clause not supported by provsql
 ERROR:  DISTINCT ON not supported by provsql
 ERROR:  Inconsistent DISTINCT and GROUP BY clauses not supported by provsql

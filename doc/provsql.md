@@ -54,6 +54,7 @@ The following SQL features are currently supported.
 * SELECT DISTINCT queries (i.e., set semantics)
 * UNION's or UNION ALL's of SELECT queries
 * EXCEPT of SELECT queries
+* VALUES() literal tables (assumed to have no provenance)
 * aggregation on the final query
 
 ## Docker container

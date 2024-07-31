@@ -11,7 +11,7 @@ test: provenance_in_from identify_token subquery create_provenance_mapping
 test: security formula counting
 
 # Test of various ProvSQL features and SQL language capabilities
-test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk
+test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk values
 test: aggregation
 test: agg_distinct agg_order_by
 test: create_as
