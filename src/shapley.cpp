@@ -11,6 +11,7 @@ PG_FUNCTION_INFO_V1(shapley);
 PG_FUNCTION_INFO_V1(shapley_all_vars);
 }
 
+#include "c_cpp_compatibility.h"
 #include "BooleanCircuit.h"
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"

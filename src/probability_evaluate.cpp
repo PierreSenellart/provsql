@@ -10,6 +10,7 @@ extern "C" {
 PG_FUNCTION_INFO_V1(probability_evaluate);
 }
 
+#include "c_cpp_compatibility.h"
 #include <set>
 #include <cmath>
 #include <csignal>
