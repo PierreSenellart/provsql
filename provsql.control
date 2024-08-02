@@ -4,3 +4,4 @@ default_version = '1.0.0-dev'
 requires = 'uuid-ossp'
 relocatable = false
 module_pathname = '$libdir/provsql'
+trusted = true
