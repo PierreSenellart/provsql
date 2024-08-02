@@ -4,6 +4,7 @@ src/*.o
 src/*.bc
 sql/provsql--*.sql
 test/schedule
+provsql.control
 .clangd
 compile_commands.json
 tdkc
