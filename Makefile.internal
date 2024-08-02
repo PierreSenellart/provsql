@@ -1,5 +1,5 @@
 EXTENSION = provsql
-EXTVERSION = $(shell grep default_version $(EXTENSION).control | \
+EXTVERSION = $(shell grep default_version $(EXTENSION).common.control | \
            sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 
 MODULE_big = provsql
@@ -7,7 +7,7 @@ OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard s
 
 DOCS = $(wildcard doc/*.md)
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
-EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql tdkc
+EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql tdkc test/schedule $(EXTENSION).control
 
 # We want REGRESS to be empty, since we are going to provide a schedule
 # of tests. But we want REGRESS to be defined, otherwise installcheck
@@ -86,6 +86,13 @@ test/schedule: $(wildcard test/schedule.*)
 	cat test/schedule.common > test/schedule
 	if [ $(PGVER_MAJOR) -ge 14 ]; then \
 		cat test/schedule.14 >> test/schedule; \
+	fi
+
+$(EXTENSION).control: $(EXTENSION).common.control
+	if [ $(PGVER_MAJOR) -lt 13 ]; then \
+		grep -v trusted $< > $@; \
+	else \
+		cp $< $@; \
 	fi
 
 installcheck: test/schedule
