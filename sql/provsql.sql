@@ -690,6 +690,12 @@ CREATE OR REPLACE FUNCTION where_provenance(token UUID)
   RETURNS text AS
   'provsql','where_provenance' LANGUAGE C;
 
+CREATE OR REPLACE FUNCTION reset_constants_cache()
+  RETURNS void AS
+  'provsql', 'reset_constants_cache' LANGUAGE C;
+
+SELECT reset_constants_cache();
+
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
 

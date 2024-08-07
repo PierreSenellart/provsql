@@ -288,11 +288,11 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
 
   #define GET_GATE_TYPE_OID(x) { \
-    constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
-      constants.OID_TYPE_GATE_TYPE, \
-      #x); \
-    if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
-    elog(ERROR, "Could not initialize provsql gate type " #x); }
+            constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
+              constants.OID_TYPE_GATE_TYPE, \
+              #x); \
+            if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
+            elog(ERROR, "Could not initialize provsql gate type " #x); }
 
   GET_GATE_TYPE_OID(input);
   GET_GATE_TYPE_OID(plus);
@@ -346,4 +346,24 @@ constants_t get_constants(bool failure_if_not_possible)
   ++constants_cache_len;
 
   return constants_cache[start].constants;
+}
+
+PG_FUNCTION_INFO_V1(reset_constants_cache);
+Datum reset_constants_cache(PG_FUNCTION_ARGS)
+{
+  int start=0, end=constants_cache_len-1;
+
+  while(end>=start) {
+    unsigned mid=(start+end)/2;
+    if(constants_cache[mid].database<MyDatabaseId)
+      start=mid+1;
+    else if(constants_cache[mid].database>MyDatabaseId)
+      end=mid-1;
+    else {
+      constants_cache[mid].constants = initialize_constants(true);
+      break;
+    }
+  }
+
+  PG_RETURN_VOID();
 }

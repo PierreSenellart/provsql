@@ -1,6 +1,9 @@
 \set ECHO none
 \pset format unaligned
+CREATE EXTENSION provsql CASCADE;
 
-CREATE EXTENSION "uuid-ossp";
+DROP EXTENSION provsql;
+
 CREATE EXTENSION provsql;
+
 CREATE SCHEMA provsql_test;
