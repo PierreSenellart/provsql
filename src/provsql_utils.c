@@ -7,6 +7,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
+#include "fmgr.h"
 #include "nodes/value.h"
 #include "parser/parse_func.h"
 #include "utils/syscache.h"
