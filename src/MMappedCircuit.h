@@ -21,7 +21,7 @@ typedef struct GateInformation
   unsigned extra_len;
 
   GateInformation(gate_type t, unsigned n, unsigned long i) :
-    type(t), nb_children(n), children_idx(i), prob(-1.), info1(0), info2(0), extra_idx(0), extra_len(0) {
+    type(t), nb_children(n), children_idx(i), prob(1.), info1(0), info2(0), extra_idx(0), extra_len(0) {
   }
 } GateInformation;
 
