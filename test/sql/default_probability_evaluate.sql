@@ -17,5 +17,15 @@ ORDER BY CITY;
 
 SELECT remove_provenance('default_result');
 
-SELECT city, ROUND(prob::numeric,2) AS prob FROM default_result;
+SELECT city, ROUND(prob::numeric,2) AS prob FROM default_result ORDER BY city;
+DROP TABLE default_result;
+
+CREATE TABLE default_result AS
+SELECT city, COUNT(*), probability_evaluate(provenance()) AS prob
+FROM personnel
+GROUP BY city;
+
+SELECT remove_provenance('default_result');
+
+SELECT city, ROUND(prob::numeric,2) AS prob FROM default_result ORDER BY city;
 DROP TABLE default_result;

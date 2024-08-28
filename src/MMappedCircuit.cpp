@@ -353,6 +353,7 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
     case gate_eq:
     case gate_monus:
     case gate_one:
+    case gate_delta:
       id = result.setGate(f, BooleanGate::AND);
       break;
 

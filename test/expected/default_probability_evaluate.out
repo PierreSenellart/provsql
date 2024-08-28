@@ -7,3 +7,11 @@ Berlin|0.54
 New York|0.26
 Paris|0.41
 (3 rows)
+remove_provenance
+
+(1 row)
+city|prob
+Berlin|0.82
+New York|0.28
+Paris|0.86
+(3 rows)
