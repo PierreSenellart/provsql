@@ -532,12 +532,12 @@ $$
 DECLARE
   delta_token uuid;
 BEGIN
-  IF token = gate_zero() THEN
+  IF token = gate_zero() OR token = gate_one() THEN
     return token;
   END IF;
 
-  IF token = gate_one() THEN
-    return token;
+  IF token IS NULL THEN
+    return gate_one();
   END IF;
 
   delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
