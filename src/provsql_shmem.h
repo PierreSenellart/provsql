@@ -22,4 +22,8 @@ typedef struct provsqlSharedState
 } provsqlSharedState;
 extern provsqlSharedState *provsql_shared_state;
 
+void provsql_shmem_lock_exclusive(void);
+void provsql_shmem_lock_shared(void);
+void provsql_shmem_unlock(void);
+
 #endif /* ifndef PROVSQL_SHMEM_H */

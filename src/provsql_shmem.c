@@ -67,3 +67,18 @@ void provsql_shmem_request(void)
 
   RequestNamedLWLockTranche("provsql", 1);
 }
+
+void provsql_shmem_lock_exclusive(void)
+{
+  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+}
+
+void provsql_shmem_lock_shared(void)
+{
+  LWLockAcquire(provsql_shared_state->lock, LW_SHARED);
+}
+
+void provsql_shmem_unlock(void)
+{
+  LWLockRelease(provsql_shared_state->lock);
+}

@@ -14,7 +14,7 @@ extern "C" {
 
 BooleanCircuit getBooleanCircuit(pg_uuid_t token)
 {
-  LWLockAcquire(provsql_shared_state->lock, LW_EXCLUSIVE);
+  provsql_shmem_lock_exclusive();
   if(!WRITEM("g", char) || !WRITEM(&token, pg_uuid_t))
     elog(ERROR, "Cannot write to pipe (message type g)");
 
@@ -32,7 +32,7 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token)
       p+=actual_read;
     }
   }
-  LWLockRelease(provsql_shared_state->lock);
+  provsql_shmem_unlock();
 
   boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
   boost::archive::binary_iarchive ia(stream);
