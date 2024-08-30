@@ -17,6 +17,7 @@
 #include "parser/parsetree.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
+#include "utils/fmgroids.h"
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
 #include "utils/guc.h"
@@ -559,7 +560,7 @@ static Expr *make_aggregation_expression(
     expr_s->funcresulttype = constants->OID_TYPE_UUID;
 
     //check the particular case of count
-    if(agg_ref->aggfnoid==2803||agg_ref->aggfnoid==2147)   //count(*) or count(arg)
+    if(agg_ref->aggfnoid==F_COUNT_||agg_ref->aggfnoid==F_COUNT_ANY)   //count(*) or count(arg)
     {
       Const *one = makeConst(constants->OID_TYPE_INT,
                              -1,
