@@ -28,4 +28,11 @@ static inline ListCell *my_lnext(const List *l, const ListCell *c)
 List *list_insert_nth(List *list, int pos, void *datum);
 #endif
 
+#if PG_VERSION_NUM < 140000
+// Macros for the OID of predefined functions were not defined until
+// PostgreSQL 14. The OIDs have remained the same throughout, though.
+#define F_COUNT_ANY 2147
+#define F_COUNT_ 2803
+#endif
+
 #endif /* COMPATIBILITY_H */
