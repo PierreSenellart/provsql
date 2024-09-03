@@ -637,6 +637,33 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C STABLE;
 
+CREATE OR REPLACE FUNCTION expected(
+  input ANYELEMENT,
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  aggregation_function VARCHAR;
+  token agg_token;
+  result DOUBLE PRECISION;
+BEGIN
+  token := input::agg_token;
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF get_gate_type(token) <> 'agg' THEN
+    RAISE EXCEPTION USING MESSAGE='Wrong gate type for expected value computation';
+  END IF;
+  SELECT pp.proname::varchar FROM pg_proc pp WHERE oid=(get_infos(token)).info1 INTO aggregation_function;
+  IF aggregation_function <> 'sum' THEN
+    RAISE EXCEPTION USING MESSAGE='Cannot compute expected value for aggregation function ' || aggregation_function;
+  END IF;
+  SELECT SUM(probability_evaluate((get_children(c))[1], method, arguments) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION))
+  FROM UNNEST(get_children(token)) AS c INTO result;
+  RETURN result;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION shapley(
   token UUID,
   variable UUID,

@@ -11,30 +11,30 @@ HR|1 (*)|δ(Nancy)
 Janitor|1 (*)|δ(Paul)
 (6 rows)
 position|aggregation_formula
-Analyst|count{ (1 * Susan) , (1 * Dave) }
-Director|count{ (1 * John) }
-Double agent|count{ (1 * Magdalen) }
-Field agent|count{ (1 * Ellen) }
-HR|count{ (1 * Nancy) }
-Janitor|count{ (1 * Paul) }
+Analyst|sum{ (1 * Susan) , (1 * Dave) }
+Director|sum{ (1 * John) }
+Double agent|sum{ (1 * Magdalen) }
+Field agent|sum{ (1 * Ellen) }
+HR|sum{ (1 * Nancy) }
+Janitor|sum{ (1 * Paul) }
 (6 rows)
 remove_provenance
 
 (1 row)
 position|aggregation_formula
-Director|count{ (1 * John) }
-Double agent|count{ (1 * Magdalen) }
-Field agent|count{ (1 * Ellen) }
-HR|count{ (1 * Nancy) }
-Janitor|count{ (1 * Paul) }
+Director|sum{ (1 * John) }
+Double agent|sum{ (1 * Magdalen) }
+Field agent|sum{ (1 * Ellen) }
+HR|sum{ (1 * Nancy) }
+Janitor|sum{ (1 * Paul) }
 (5 rows)
 remove_provenance
 
 (1 row)
 position|aggregation_formula
-Director|count{ (1 * John) }
-Double agent|count{ (1 * Magdalen) }
-Field agent|count{ (1 * Ellen) }
-HR|count{ (1 * Nancy) }
-Janitor|count{ (1 * Paul) }
+Director|sum{ (1 * John) }
+Double agent|sum{ (1 * Magdalen) }
+Field agent|sum{ (1 * Ellen) }
+HR|sum{ (1 * Nancy) }
+Janitor|sum{ (1 * Paul) }
 (5 rows)

@@ -33,6 +33,7 @@ List *list_insert_nth(List *list, int pos, void *datum);
 // PostgreSQL 14. The OIDs have remained the same throughout, though.
 #define F_COUNT_ANY 2147
 #define F_COUNT_ 2803
+#define F_SUM_INT4 2108
 #endif
 
 #endif /* COMPATIBILITY_H */

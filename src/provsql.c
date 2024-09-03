@@ -524,10 +524,10 @@ static Expr *make_aggregation_expression(
   }
   else
   {
+    Oid aggregation_function=agg_ref->aggfnoid;
+
     if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
-    {
       expr = linitial(prov_atts);
-    }
     else
     {
       expr = makeNode(FuncExpr);
@@ -560,7 +560,7 @@ static Expr *make_aggregation_expression(
     expr_s->funcresulttype = constants->OID_TYPE_UUID;
 
     //check the particular case of count
-    if(agg_ref->aggfnoid==F_COUNT_||agg_ref->aggfnoid==F_COUNT_ANY)   //count(*) or count(arg)
+    if(aggregation_function==F_COUNT_||aggregation_function==F_COUNT_ANY)   //count(*) or count(arg)
     {
       Const *one = makeConst(constants->OID_TYPE_INT,
                              -1,
@@ -570,6 +570,7 @@ static Expr *make_aggregation_expression(
                              false,
                              true);
       expr_s->args = list_make2(one, expr);
+      aggregation_function=F_SUM_INT4;
     }
     else
     {
@@ -599,7 +600,7 @@ static Expr *make_aggregation_expression(
                    -1,
                    InvalidOid,
                    sizeof(int32),
-                   Int32GetDatum(agg_ref->aggfnoid),
+                   Int32GetDatum(aggregation_function),
                    false,
                    true);
 

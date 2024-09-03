@@ -32,6 +32,7 @@ test: d4 dsharp weightmc c2d
 # Probability computation using tree decompositions, independent
 # probability computation, and default computation
 test: treedec_simple treedec default_probability_evaluate independent repair_key
+test: expected
 test: large_circuit
 
 # Expected Shapley and Banzhaf value computation

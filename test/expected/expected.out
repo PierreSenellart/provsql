@@ -1,0 +1,15 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+city|c1|c2|s
+Berlin|1.10|1.10|6.50
+New York|0.30|0.30|0.50
+Paris|1.40|1.40|7.00
+(3 rows)
+ERROR:  invalid input syntax for agg_token: "toto"
+CONTEXT:  PL/pgSQL function expected(anyelement,text,text) line 7 at assignment
+ERROR:  Cannot compute expected value for aggregation function max
+CONTEXT:  PL/pgSQL function expected(anyelement,text,text) line 16 at RAISE
+ERROR:  Cannot compute expected value for aggregation function avg
+CONTEXT:  PL/pgSQL function expected(anyelement,text,text) line 16 at RAISE
