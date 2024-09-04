@@ -683,7 +683,7 @@ BEGIN
         (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * SUM(p*v) FROM
           (SELECT t1.v AS v, probability_evaluate(provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),provenance_plus(ARRAY_AGG(t2.tok))), method, arguments) AS p
           FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
-          GROUP BY t1.v) INTO result;
+          GROUP BY t1.v) t INTO result;
       END IF;
   ELSE
     RAISE EXCEPTION USING MESSAGE='Cannot compute expected value for aggregation function ' || aggregation_function;
