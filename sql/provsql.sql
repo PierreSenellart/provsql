@@ -691,7 +691,7 @@ BEGIN
   IF prov <> gate_one() AND result <> 0. THEN
     result := result/probability_evaluate(prov, method, arguments);
   END IF;
-  RETURN result;
+  RETURN CAST(result AS DOUBLE PRECISION);
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
