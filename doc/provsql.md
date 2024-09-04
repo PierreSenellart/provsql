@@ -40,6 +40,8 @@ The ProvSQL system supports:
     `minic2d` or `dsharp`)
   * approximate weighted model counting using an external tool
     (`weightmc`)
+* expected value computation for COUNT/SUM/MIN/MAX aggregate queries over
+  probabilistic databases
 * Shapley value computation
 * expected Shapley value computation over probabilistic data
 

@@ -232,6 +232,11 @@ $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'one');
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION epsilon() RETURNS DOUBLE PRECISION AS
+$$
+  SELECT 0.001
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
   RETURNS UUID AS
 $$
@@ -637,8 +642,10 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C STABLE;
 
+-- Compute E[input | prov]
 CREATE OR REPLACE FUNCTION expected(
   input ANYELEMENT,
+  prov UUID = gate_one(),
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS $$
@@ -646,6 +653,7 @@ DECLARE
   aggregation_function VARCHAR;
   token agg_token;
   result DOUBLE PRECISION;
+  total_probability DOUBLE PRECISION;
 BEGIN
   token := input::agg_token;
   IF token IS NULL THEN
@@ -655,12 +663,36 @@ BEGIN
     RAISE EXCEPTION USING MESSAGE='Wrong gate type for expected value computation';
   END IF;
   SELECT pp.proname::varchar FROM pg_proc pp WHERE oid=(get_infos(token)).info1 INTO aggregation_function;
-  IF aggregation_function <> 'sum' THEN
+  IF aggregation_function = 'sum' THEN
+    -- Expected value and summation operators commute
+    SELECT SUM(probability_evaluate((get_children(c))[1], method, arguments) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION))
+    FROM UNNEST(get_children(token)) AS c INTO result;
+  ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+    -- The entire distribution is of linear size, can be easily computed
+    WITH tok_value AS (
+      SELECT (get_children(c))[1] AS tok, (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
+      FROM UNNEST(get_children(token)) AS c
+    ) SELECT probability_evaluate(provenance_monus(prov, provenance_plus(ARRAY_AGG(tok)))) FROM tok_value INTO total_probability;
+      IF total_probability > epsilon() THEN
+        result := (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST('Infinity' AS DOUBLE PRECISION);
+      ELSE
+        WITH tok_value AS (
+          SELECT (get_children(c))[1] AS tok, (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
+          FROM UNNEST(get_children(token)) AS c
+        ) SELECT
+        (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * SUM(p*v) FROM
+          (SELECT t1.v AS v, probability_evaluate(provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),provenance_plus(ARRAY_AGG(t2.tok))), method, arguments) AS p
+          FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
+          GROUP BY t1.v) INTO result;
+      END IF;
+  ELSE
     RAISE EXCEPTION USING MESSAGE='Cannot compute expected value for aggregation function ' || aggregation_function;
   END IF;
-  SELECT SUM(probability_evaluate((get_children(c))[1], method, arguments) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION))
-  FROM UNNEST(get_children(token)) AS c INTO result;
-  RETURN result;
+  IF prov = gate_one() OR result = 0. THEN
+    RETURN result;
+  ELSE
+    RETURN result/probability_evaluate(prov, method, arguments);
+  END IF;
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
