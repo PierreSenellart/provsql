@@ -688,11 +688,10 @@ BEGIN
   ELSE
     RAISE EXCEPTION USING MESSAGE='Cannot compute expected value for aggregation function ' || aggregation_function;
   END IF;
-  IF prov = gate_one() OR result = 0. THEN
-    RETURN result;
-  ELSE
-    RETURN result/probability_evaluate(prov, method, arguments);
+  IF prov <> gate_one() AND result <> 0. THEN
+    result := result/probability_evaluate(prov, method, arguments);
   END IF;
+  RETURN result;
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
