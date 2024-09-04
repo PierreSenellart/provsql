@@ -10,7 +10,7 @@ GROUP BY CITY;
 
 SELECT remove_provenance('expected_result');
 
-SELECT city, ROUND(c1::numeric,2) AS c1, ROUND(c2::numeric,2) AS c2, ROUND(s::numeric,2) AS s, ROUND(min::numeric,2) AS min, ROUND(max::numeric,2) AS max
+SELECT city, ROUND(c1::numeric,2) AS c1, ROUND(c2::numeric,2) AS c2, ROUND(s::numeric,2) AS s, min, max
 FROM expected_result
 ORDER BY city;
 

@@ -234,7 +234,7 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION epsilon() RETURNS DOUBLE PRECISION AS
 $$
-  SELECT 0.001
+  SELECT CAST(0.001 AS DOUBLE PRECISION)
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
@@ -688,10 +688,10 @@ BEGIN
   ELSE
     RAISE EXCEPTION USING MESSAGE='Cannot compute expected value for aggregation function ' || aggregation_function;
   END IF;
-  IF prov <> gate_one() AND result <> 0. THEN
+  IF prov <> gate_one() AND result <> 0. AND result <> 'Infinity' AND result <> '-Infinity' THEN
     result := result/probability_evaluate(prov, method, arguments);
   END IF;
-  RETURN CAST(result AS DOUBLE PRECISION);
+  RETURN result;
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
