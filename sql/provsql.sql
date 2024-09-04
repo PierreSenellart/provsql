@@ -564,7 +564,6 @@ DECLARE
   c INTEGER;
   agg_tok uuid;
   agg_val varchar;
-  agg_tok_tuple agg_token;
 BEGIN
   c:=array_length(tokens, 1);
 
@@ -575,17 +574,15 @@ BEGIN
   ELSE
     agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('agg',ARRAY[tokens]));
-    PERFORM create_gate(agg_tok, 'agg', array_agg(t))
-      FROM unnest(tokens) AS t
-      WHERE t != gate_zero();
+      concat('agg',tokens));
+    PERFORM create_gate(agg_tok, 'agg', tokens);
     PERFORM set_infos(agg_tok, aggfnoid, aggtype);
     PERFORM set_extra(agg_tok, agg_val);
   END IF;
 
   RETURN '( '||agg_tok||' , '||agg_val||' )';
 END
-$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql PARALLEL SAFE STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION provenance_semimod(val anyelement, token UUID)
   RETURNS UUID AS
@@ -608,7 +605,7 @@ BEGIN
 
   RETURN semimod_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,
