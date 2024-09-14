@@ -690,7 +690,7 @@ BEGIN
   END IF;
   RETURN result;
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE;
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;;
 
 CREATE OR REPLACE FUNCTION shapley(
   token UUID,
