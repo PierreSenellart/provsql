@@ -1368,7 +1368,7 @@ static bool transform_except_into_join(
 
   q->rtable = lappend(q->rtable, rte);
 
-  je->jointype = JOIN_FULL;
+  je->jointype = JOIN_LEFT;
 
   je->larg = setOps->larg;
   je->rarg = setOps->rarg;

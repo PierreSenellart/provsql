@@ -7,3 +7,8 @@ Berlin|((Ellen ⊕ Susan) ⊖ (Ellen ⊗ Susan))
 New York|((John ⊕ Paul) ⊖ (John ⊗ Paul))
 Paris|((Dave ⊕ Magdalen ⊕ Nancy) ⊖ ((Dave ⊗ Magdalen) ⊕ (Dave ⊗ Nancy) ⊕ (Magdalen ⊗ Nancy)))
 (3 rows)
+remove_provenance
+
+(1 row)
+city|formula
+(0 rows)
