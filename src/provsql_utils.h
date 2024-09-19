@@ -73,9 +73,11 @@ typedef struct constants_t {
   bool ok; ///< true if constants were loaded
 } constants_t;
 
+/** Structure to store the value of various constants for a specific
+ * database. */ 
 typedef struct database_constants_t {
-  Oid database;
-  constants_t constants;
+  Oid database; //< OID of the database
+  constants_t constants; //< Constants for this database
 } database_constants_t;
 
 constants_t get_constants(bool failure_if_not_possible);
