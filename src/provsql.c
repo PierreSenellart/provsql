@@ -191,7 +191,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q)
       }
     } else if(r->rtekind == RTE_SUBQUERY) {
       bool *inner_removed = NULL;
-      int old_targetlist_length=r->subquery->targetList->length;
+      int old_targetlist_length=r->subquery->targetList?r->subquery->targetList->length:0;
       Query *new_subquery = process_query(constants, r->subquery, &inner_removed);
       if(new_subquery != NULL) {
         int i=0;
@@ -1177,16 +1177,24 @@ static Query *rewrite_non_all_into_external_group_by(Query *q)
   new_query->jointree = jointree;
   new_query->targetList = copyObject(q->targetList);
 
-  foreach (lc, new_query->targetList)
-  {
-    TargetEntry *te = (TargetEntry *)lfirst(lc);
-    SortGroupClause *sgc = makeNode(SortGroupClause);
+  if(new_query->targetList) {
+    foreach (lc, new_query->targetList)
+    {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      SortGroupClause *sgc = makeNode(SortGroupClause);
 
-    sgc->tleSortGroupRef = te->ressortgroupref = ++sortgroupref;
+      sgc->tleSortGroupRef = te->ressortgroupref = ++sortgroupref;
 
-    get_sort_group_operators(exprType((Node *)te->expr), false, true, false, &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+      get_sort_group_operators(exprType((Node *)te->expr), false, true, false, &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
 
-    new_query->groupClause = lappend(new_query->groupClause, sgc);
+      new_query->groupClause = lappend(new_query->groupClause, sgc);
+    }
+  } else {
+    GroupingSet *gs = makeNode(GroupingSet);
+    gs->kind=GROUPING_SET_EMPTY;
+    gs->content=0;
+    gs->location=-1;
+    new_query->groupingSets = list_make1(gs);
   }
 
   return new_query;
