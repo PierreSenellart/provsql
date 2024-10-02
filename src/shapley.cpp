@@ -144,7 +144,6 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
     }
   }
 
-  tuplestore_donestoring(tupstore);
   MemoryContextSwitchTo(oldcontext);
 
   PG_RETURN_NULL();
