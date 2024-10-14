@@ -25,9 +25,10 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token)
   char *buf = new char[size], *p = buf;
   ssize_t actual_read, remaining_size=size;
   while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
-    if(actual_read<=0)
+    if(actual_read<=0) {
+      provsql_shmem_unlock();
       elog(ERROR, "Cannot read from pipe (message type g)");
-    else {
+    } else {
       remaining_size-=actual_read;
       p+=actual_read;
     }
