@@ -350,9 +350,19 @@ Datum get_children(PG_FUNCTION_ARGS)
     }
 
     children=calloc(nb_children, sizeof(pg_uuid_t));
-    if(read(provsql_shared_state->pipembr, children, nb_children*sizeof(pg_uuid_t))<nb_children*sizeof(pg_uuid_t)) {
-      provsql_shmem_unlock();
-      elog(ERROR, "Cannot read response from pipe (message type c)");
+
+    {
+      char *p = (char*)children;
+      ssize_t actual_read, remaining_size=nb_children*sizeof(pg_uuid_t);
+      while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
+        if(actual_read<=0) {
+          provsql_shmem_unlock();
+          elog(ERROR, "Cannot read from pipe (message type g)");
+        } else {
+          remaining_size-=actual_read;
+          p+=actual_read;
+        }
+      }
     }
     provsql_shmem_unlock();
 
