@@ -122,6 +122,41 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
+CREATE OR REPLACE FUNCTION delete_row_trigger()
+  RETURNS TRIGGER AS
+$$
+DECLARE
+  old_token UUID;
+  new_token UUID;
+  delete_token UUID;
+  r RECORD;
+  children UUID[];
+BEGIN
+  delete_token := public.uuid_generate_v4();
+
+  PERFORM create_gate(delete_token, 'input');
+
+  INSERT INTO delete_provencance (delete_token, table_name, deleted_by, deleted_at)
+  VALUES (delete_token, TG_TABLE_NAME, current_user, CURRENT_TIMESTAMP);
+
+  FOR r IN 
+    SELECT * FROM OLD_TABLE
+  LOOP
+    old_token := r.provsql;
+    new_token := public.uuid_generate_v4();
+
+    children := ARRAY[old_token, delete_token];
+
+    PERFORM create_gate(new_token, 'monus', children);
+
+    EXECUTE format('UPDATE %I SET provsql = $1 WHERE provsql = $2', TG_TABLE_NAME)
+    USING new_token, old_token;
+  END LOOP
+  
+  RETURN NULL;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
+
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
@@ -129,6 +164,7 @@ BEGIN
   EXECUTE format('ALTER TABLE %I ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
   EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
   EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
+  EXECUTE format('CREATE TRIGGER delete_row BEFORE DELETE ON %I FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_row_trigger($1)', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -753,6 +789,15 @@ SELECT reset_constants_cache();
 
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
+SELECT create_gate(gate_delete(), 'delete');
+
+CREATE TABLE delete_provencance (
+  delete_token UUID,
+  table_name TEXT,
+  deleted_by TEXT,
+  deleted_at TIMESTAMP DEFAULT current_timestamp
+);
+
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
