@@ -164,7 +164,7 @@ BEGIN
   EXECUTE format('ALTER TABLE %I ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
   EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
   EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
-  EXECUTE format('CREATE TRIGGER delete_row BEFORE DELETE ON %I FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger($1)', _tbl);
+  EXECUTE format('CREATE TRIGGER delete_row BEFORE DELETE ON %I FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
