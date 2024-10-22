@@ -129,7 +129,7 @@ DECLARE
   delete_token UUID;
   query_text TEXT;
 BEGIN
-  delete_token := CAST(TG_ARGV[0] AS UUID);
+  delete_token := public.uuid_generate_v4();
 
   PERFORM create_gate(delete_token, 'input');
 
@@ -149,13 +149,18 @@ CREATE OR REPLACE FUNCTION delete_row_trigger()
   RETURNS TRIGGER AS
 $$
 DECLARE
-  delete_token UUID;
+  delete_token_uuid UUID;
   old_token UUID;
   new_token UUID;
 BEGIN
-  delete_token := CAST(TG_ARGV[0] AS UUID);
+  SELECT delete_token
+  INTO delete_token_uuid
+  FROM delete_provenance
+  ORDER BY deleted_at DESC
+  LIMIT 1;
+
   old_token := OLD.provsql;
-  new_token := provenance_monus(old_token, delete_token);
+  new_token := provenance_monus(old_token, delete_token_uuid);
   
   EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2', TG_TABLE_SCHEMA, TG_TABLE_NAME)
   USING new_token, old_token;
@@ -174,9 +179,8 @@ BEGIN
   EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
   EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 
-  delete_token := public.uuid_generate_v4();
-  EXECUTE format('CREATE TRIGGER delete_statement BEFORE DELETE ON %I FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger(%L)', _tbl, delete_token);
-  EXECUTE format('CREATE TRIGGER delete_row BEFORE DELETE ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.delete_row_trigger(%L)', _tbl, delete_token);
+  EXECUTE format('CREATE TRIGGER delete_statement BEFORE DELETE ON %I FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER delete_row BEFORE DELETE ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.delete_row_trigger()', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
