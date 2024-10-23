@@ -1,0 +1,53 @@
+Output format is unaligned.
+SET
+CREATE TABLE
+INSERT 0 5
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+1
+(1 row)
+DELETE 1
+DROP TABLE
+DELETE 1
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+0
+(1 row)
+DROP TABLE
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+0
+(1 row)
+DELETE 1
+DROP TABLE
+DELETE 3
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+0
+(1 row)
+count
+7
+(1 row)
