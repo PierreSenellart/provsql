@@ -14,7 +14,6 @@ SELECT create_provenance_mapping('t_id', 't', 'id');
 SELECT COUNT(*) FROM t_id;
 SELECT probability_evaluate(provenance) FROM t_id WHERE value = 1;
 
-DELETE FROM t WHERE id = 1;
 DROP TABLE t_id;
 DELETE FROM t WHERE id = 1;
 SELECT create_provenance_mapping('t_id', 't', 'id');
@@ -27,7 +26,6 @@ SELECT create_provenance_mapping('t_id', 't', 'id');
 SELECT COUNT(*) FROM t_id;
 SELECT probability_evaluate(provenance) FROM t_id WHERE value = 1;
 
-DELETE FROM t WHERE id = 1;
 DROP TABLE t_id;
 DELETE FROM t WHERE id >= 2 AND id <= 4;
 SELECT create_provenance_mapping('t_id', 't', 'id');

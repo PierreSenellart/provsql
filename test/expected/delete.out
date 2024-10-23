@@ -1,7 +1,4 @@
-Output format is unaligned.
-SET
-CREATE TABLE
-INSERT 0 5
+\set ECHO none
 add_provenance
 
 (1 row)
@@ -14,9 +11,6 @@ count
 probability_evaluate
 1
 (1 row)
-DELETE 1
-DROP TABLE
-DELETE 1
 create_provenance_mapping
 
 (1 row)
@@ -26,7 +20,6 @@ count
 probability_evaluate
 0
 (1 row)
-DROP TABLE
 create_provenance_mapping
 
 (1 row)
@@ -36,9 +29,6 @@ count
 probability_evaluate
 0
 (1 row)
-DELETE 1
-DROP TABLE
-DELETE 3
 create_provenance_mapping
 
 (1 row)
@@ -49,5 +39,5 @@ probability_evaluate
 0
 (1 row)
 count
-7
+2
 (1 row)
