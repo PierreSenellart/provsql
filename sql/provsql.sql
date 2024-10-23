@@ -126,8 +126,11 @@ CREATE OR REPLACE FUNCTION delete_statement_trigger()
   RETURNS TRIGGER AS
 $$
 DECLARE
-  delete_token UUID;
   query_text TEXT;
+  delete_token UUID;
+  old_token UUID;
+  new_token UUID;
+  r RECORD;
 BEGIN
   delete_token := public.uuid_generate_v4();
 
@@ -141,46 +144,29 @@ BEGIN
   INSERT INTO delete_provenance (delete_token, query, deleted_by, deleted_at)
   VALUES (delete_token, query_text, current_user, CURRENT_TIMESTAMP);
 
+  EXECUTE format('INSERT INTO %I.%I SELECT * FROM OLD_TABLE;', TG_TABLE_SCHEMA, TG_TABLE_NAME);
+
+  FOR r IN (SELECT * FROM OLD_TABLE) LOOP
+    old_token := r.provsql;
+    new_token := provenance_monus(old_token, delete_token);
+
+    EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
+    USING new_token, old_token;
+  END LOOP;
+
   RETURN NULL; 
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
-
-CREATE OR REPLACE FUNCTION delete_row_trigger()
-  RETURNS TRIGGER AS
-$$
-DECLARE
-  delete_token_uuid UUID;
-  old_token UUID;
-  new_token UUID;
-BEGIN
-  SELECT delete_token
-  INTO delete_token_uuid
-  FROM delete_provenance
-  ORDER BY deleted_at DESC
-  LIMIT 1;
-
-  old_token := OLD.provsql;
-  new_token := provenance_monus(old_token, delete_token_uuid);
-  
-  EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2', TG_TABLE_SCHEMA, TG_TABLE_NAME)
-  USING new_token, old_token;
-
-  RETURN NULL;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
-DECLARE
-  delete_token UUID;
 BEGIN
   EXECUTE format('ALTER TABLE %I ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
   EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
   EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 
-  EXECUTE format('CREATE TRIGGER delete_statement BEFORE DELETE ON %I FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
-  EXECUTE format('CREATE TRIGGER delete_row BEFORE DELETE ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.delete_row_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %I REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
