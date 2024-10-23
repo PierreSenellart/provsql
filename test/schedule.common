@@ -54,5 +54,4 @@ test: unsupported_aggregation
 # Grouping
 test: group_by_empty grouping_sets
 
-# Delete provenance
 test: delete
