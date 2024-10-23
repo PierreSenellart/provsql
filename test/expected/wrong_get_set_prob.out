@@ -1,0 +1,10 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+get_prob
+
+
+
+(3 rows)
+ERROR:  set_prob called on non-input gate

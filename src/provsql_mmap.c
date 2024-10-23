@@ -191,6 +191,7 @@ Datum set_prob(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   double prob = PG_GETARG_FLOAT8(1);
+  char result;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     elog(ERROR, "Invalid NULL value passed to set_prob");
@@ -201,11 +202,14 @@ Datum set_prob(PG_FUNCTION_ARGS)
   ADDWRITEM(&prob, double);
 
   provsql_shmem_lock_shared();
-  if(!SENDWRITEM()) {
+  if(!SENDWRITEM() || !READB(result, char)) {
     provsql_shmem_unlock();
     elog(ERROR, "Cannot write to pipe");
   }
   provsql_shmem_unlock();
+
+  if(!result)
+    elog(ERROR, "set_prob called on non-input gate");
 
   PG_RETURN_VOID();
 }

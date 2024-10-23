@@ -51,7 +51,7 @@ explicit MMappedCircuit(bool read_only = false) :
 void createGate(pg_uuid_t token, gate_type type, const std::vector<pg_uuid_t> &children);
 void setInfos(pg_uuid_t token, unsigned info1, unsigned info2);
 void setExtra(pg_uuid_t token, const std::string &s);
-void setProb(pg_uuid_t token, double prob);
+bool setProb(pg_uuid_t token, double prob);
 void sync();
 
 gate_type getGateType(pg_uuid_t token) const;

@@ -58,17 +58,22 @@ std::vector<pg_uuid_t> MMappedCircuit::getChildren(pg_uuid_t token) const
   return result;
 }
 
-void MMappedCircuit::setProb(pg_uuid_t token, double prob)
+bool MMappedCircuit::setProb(pg_uuid_t token, double prob)
 {
   auto idx = mapping[token];
-  if(idx != MMappedUUIDHashTable::NOTHING)
+  if(idx != MMappedUUIDHashTable::NOTHING &&
+     (gates[idx].type == gate_input || gates[idx].type == gate_mulinput)) {
     gates[idx].prob=prob;
+    return true;
+  } else
+    return false;
 }
 
 double MMappedCircuit::getProb(pg_uuid_t token) const
 {
   auto idx = mapping[token];
-  if(idx == MMappedUUIDHashTable::NOTHING)
+  if(idx == MMappedUUIDHashTable::NOTHING ||
+     (gates[idx].type != gate_input && gates[idx].type != gate_mulinput))
     return NAN;
   else
     return gates[idx].prob;
@@ -150,7 +155,11 @@ void provsql_mmap_main_loop()
       if(!READM(token, pg_uuid_t) || !READM(prob, double))
         elog(ERROR, "Cannot read from pipe (message type P)");
 
-      circuit->setProb(token, prob);
+      bool ok = circuit->setProb(token, prob);
+      char return_value = ok?static_cast<char>(1):0;
+
+      if(!WRITEB(&return_value, char))
+        elog(ERROR, "Cannot write response to pipe (message type P)");
       break;
     }
 
