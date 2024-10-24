@@ -42,7 +42,7 @@ $$;
 CREATE FUNCTION public.formula_times_state(state public.formula_state, value text) RETURNS public.formula_state
     LANGUAGE plpgsql IMMUTABLE
     AS $$
-BEGIN    
+BEGIN
   IF state IS NULL OR state.nbargs=0 THEN
     RETURN (value,1);
   ELSE
@@ -52,11 +52,9 @@ END
 $$;
 
 CREATE FUNCTION public.formula_delta(formula text) RETURNS text
-    LANGUAGE plpgsql IMMUTABLE
+    LANGUAGE sql IMMUTABLE STRICT
     AS $$
-BEGIN    
-  RETURN(SELECT concat('δ(',formula,')'));
-END
+  SELECT concat('δ(',formula,')')
 $$;
 
 CREATE AGGREGATE public.formula_plus(text) (
