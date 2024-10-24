@@ -35,9 +35,15 @@ create_provenance_mapping
 count
 5
 (1 row)
-probability_evaluate
-0
-(1 row)
-count
-2
-(1 row)
+value|probability_evaluate
+1|0
+2|0
+3|0
+4|0
+5|1
+(5 rows)
+query
+DELETE FROM delete_test WHERE id = 1;
+DELETE FROM delete_test WHERE id = 1;
+DELETE FROM delete_test WHERE id >= 2 AND id <= 4;
+(3 rows)
