@@ -1,0 +1,43 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+1
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+0
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+0
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+0
+(1 row)
+count
+2
+(1 row)

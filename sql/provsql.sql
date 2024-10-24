@@ -122,6 +122,42 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
+CREATE OR REPLACE FUNCTION delete_statement_trigger()
+  RETURNS TRIGGER AS
+$$
+DECLARE
+  query_text TEXT;
+  delete_token UUID;
+  old_token UUID;
+  new_token UUID;
+  r RECORD;
+BEGIN
+  delete_token := public.uuid_generate_v4();
+
+  PERFORM create_gate(delete_token, 'input');
+
+  SELECT query
+  INTO query_text
+  FROM pg_stat_activity
+  WHERE pid = pg_backend_pid();
+
+  INSERT INTO delete_provenance (delete_token, query, deleted_by, deleted_at)
+  VALUES (delete_token, query_text, current_user, CURRENT_TIMESTAMP);
+
+  EXECUTE format('INSERT INTO %I.%I SELECT * FROM OLD_TABLE;', TG_TABLE_SCHEMA, TG_TABLE_NAME);
+
+  FOR r IN (SELECT * FROM OLD_TABLE) LOOP
+    old_token := r.provsql;
+    new_token := provenance_monus(old_token, delete_token);
+
+    EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
+    USING new_token, old_token;
+  END LOOP;
+
+  RETURN NULL; 
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
+
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
@@ -129,6 +165,8 @@ BEGIN
   EXECUTE format('ALTER TABLE %I ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
   EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
   EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
+
+  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %I REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -753,6 +791,14 @@ SELECT reset_constants_cache();
 
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
+
+CREATE TABLE delete_provenance (
+  delete_token UUID,
+  query TEXT,
+  deleted_by TEXT,
+  deleted_at TIMESTAMP DEFAULT current_timestamp
+);
+
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
