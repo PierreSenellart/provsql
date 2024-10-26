@@ -141,14 +141,56 @@ BEGIN
   FROM pg_stat_activity
   WHERE pid = pg_backend_pid();
 
-  INSERT INTO delete_provenance (delete_token, query, deleted_by, deleted_at)
-  VALUES (delete_token, query_text, current_user, CURRENT_TIMESTAMP);
+  INSERT INTO query_provenance (provenance, query, query_type, deleted_by, deleted_at)
+  VALUES (delete_token, query_text, 'DELETE', current_user, CURRENT_TIMESTAMP);
 
+  PERFORM set_config('setting.disable_insert_trigger', 'on', false);
   EXECUTE format('INSERT INTO %I.%I SELECT * FROM OLD_TABLE;', TG_TABLE_SCHEMA, TG_TABLE_NAME);
+  PERFORM set_config('setting.disable_insert_trigger', '', false);
 
   FOR r IN (SELECT * FROM OLD_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_monus(old_token, delete_token);
+
+    EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
+    USING new_token, old_token;
+  END LOOP;
+
+  RETURN NULL; 
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION insert_statement_trigger()
+  RETURNS TRIGGER AS
+$$
+DECLARE
+  query_text TEXT;
+  insert_token UUID;
+  old_token UUID;
+  new_token UUID;
+  r RECORD;
+  disable_trigger TEXT;
+BEGIN
+  disable_trigger := current_setting('setting.disable_insert_trigger', true);
+  IF disable_trigger = 'on' THEN
+    RETURN NULL;
+  END IF;
+
+  insert_token := public.uuid_generate_v4();
+
+  PERFORM create_gate(insert_token, 'input');
+
+  SELECT query
+  INTO query_text
+  FROM pg_stat_activity
+  WHERE pid = pg_backend_pid();
+
+  INSERT INTO query_provenance (provenance, query, query_type, deleted_by, deleted_at)
+  VALUES (insert_token, query_text, 'INSERT', current_user, CURRENT_TIMESTAMP);
+
+  FOR r IN (SELECT * FROM NEW_TABLE) LOOP
+    old_token := r.provsql;
+    new_token := provenance_times(old_token, insert_token);
 
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
@@ -166,6 +208,7 @@ BEGIN
   EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
   EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 
+  EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %I REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.insert_statement_trigger()', _tbl);
   EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %I REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -792,13 +835,15 @@ SELECT reset_constants_cache();
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
 
-CREATE TABLE delete_provenance (
-  delete_token UUID,
+CREATE TYPE query_type_enum AS ENUM ('INSERT', 'DELETE', 'UPDATE');
+
+CREATE TABLE query_provenance (
+  provenance UUID,
   query TEXT,
+  query_type query_type_enum,
   deleted_by TEXT,
   deleted_at TIMESTAMP DEFAULT current_timestamp
 );
-
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
