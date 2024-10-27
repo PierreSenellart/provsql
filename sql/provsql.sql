@@ -141,7 +141,7 @@ BEGIN
   FROM pg_stat_activity
   WHERE pid = pg_backend_pid();
 
-  INSERT INTO query_provenance (provenance, query, query_type, deleted_by, deleted_at)
+  INSERT INTO query_provenance (provenance, query, query_type, username, ts)
   VALUES (delete_token, query_text, 'DELETE', current_user, CURRENT_TIMESTAMP);
 
   PERFORM set_config('setting.disable_insert_trigger', 'on', false);
@@ -187,7 +187,7 @@ BEGIN
   FROM pg_stat_activity
   WHERE pid = pg_backend_pid();
 
-  INSERT INTO query_provenance (provenance, query, query_type, deleted_by, deleted_at)
+  INSERT INTO query_provenance (provenance, query, query_type, username, ts)
   VALUES (insert_token, query_text, 'INSERT', current_user, CURRENT_TIMESTAMP);
 
   FOR r IN (SELECT * FROM NEW_TABLE) LOOP
@@ -227,7 +227,7 @@ BEGIN
   FROM pg_stat_activity
   WHERE pid = pg_backend_pid();
 
-  INSERT INTO query_provenance (provenance, query, query_type, deleted_by, deleted_at)
+  INSERT INTO query_provenance (provenance, query, query_type, username, ts)
   VALUES (update_token, query_text, 'UPDATE', current_user, CURRENT_TIMESTAMP);
 
   FOR r IN (SELECT * FROM NEW_TABLE) LOOP
@@ -901,8 +901,8 @@ CREATE TABLE query_provenance (
   provenance UUID,
   query TEXT,
   query_type query_type_enum,
-  deleted_by TEXT,
-  deleted_at TIMESTAMP DEFAULT current_timestamp
+  username TEXT,
+  ts TIMESTAMP DEFAULT current_timestamp
 );
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
