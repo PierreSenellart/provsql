@@ -152,8 +152,10 @@ BEGIN
     old_token := r.provsql;
     new_token := provenance_monus(old_token, delete_token);
 
+    PERFORM set_config('setting.disable_update_trigger', 'on', false);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
+    PERFORM set_config('setting.disable_update_trigger', '', false);
   END LOOP;
 
   RETURN NULL; 
@@ -191,9 +193,65 @@ BEGIN
   FOR r IN (SELECT * FROM NEW_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_times(old_token, insert_token);
-
+    PERFORM set_config('setting.disable_update_trigger', 'on', false);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
+    PERFORM set_config('setting.disable_update_trigger', '', false);
+  END LOOP;
+
+  RETURN NULL; 
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION update_statement_trigger()
+  RETURNS TRIGGER AS
+$$
+DECLARE
+  query_text TEXT;
+  update_token UUID;
+  old_token UUID;
+  new_token UUID;
+  r RECORD;
+  disable_trigger TEXT;
+BEGIN
+  disable_trigger := current_setting('setting.disable_update_trigger', true);
+  IF disable_trigger = 'on' THEN
+    RETURN NULL;
+  END IF;
+  update_token := public.uuid_generate_v4();
+
+  PERFORM create_gate(update_token, 'input');
+
+  SELECT query
+  INTO query_text
+  FROM pg_stat_activity
+  WHERE pid = pg_backend_pid();
+
+  INSERT INTO query_provenance (provenance, query, query_type, deleted_by, deleted_at)
+  VALUES (update_token, query_text, 'UPDATE', current_user, CURRENT_TIMESTAMP);
+
+  FOR r IN (SELECT * FROM NEW_TABLE) LOOP
+    old_token := r.provsql;
+    new_token := provenance_times(old_token, update_token);
+
+    PERFORM set_config('setting.disable_update_trigger', 'on', false);
+    EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
+    USING new_token, old_token;
+    PERFORM set_config('setting.disable_update_trigger', '', false);
+  END LOOP;
+
+  PERFORM set_config('setting.disable_insert_trigger', 'on', false);
+  EXECUTE format('INSERT INTO %I.%I SELECT * FROM OLD_TABLE;', TG_TABLE_SCHEMA, TG_TABLE_NAME);
+  PERFORM set_config('setting.disable_insert_trigger', '', false);
+
+  FOR r IN (SELECT * FROM OLD_TABLE) LOOP
+    old_token := r.provsql;
+    new_token := provenance_monus(old_token, update_token);
+
+    PERFORM set_config('setting.disable_update_trigger', 'on', false);
+    EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
+    USING new_token, old_token;
+    PERFORM set_config('setting.disable_update_trigger', '', false);
   END LOOP;
 
   RETURN NULL; 
@@ -210,6 +268,8 @@ BEGIN
 
   EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %I REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.insert_statement_trigger()', _tbl);
   EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %I REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %I REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.update_statement_trigger()', _tbl);
+
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
