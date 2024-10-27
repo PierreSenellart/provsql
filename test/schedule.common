@@ -54,4 +54,4 @@ test: unsupported_aggregation
 # Grouping
 test: group_by_empty grouping_sets
 
-test: query_provenance_delete
+test: query_provenance_delete query_provenance_insert
