@@ -27,10 +27,12 @@ DROP TABLE insert_test_id;
 INSERT INTO insert_test VALUES (7), (8), (9);
 SELECT create_provenance_mapping('insert_test_id', 'insert_test', 'id');
 SELECT COUNT(*) FROM insert_test_id;
-SELECT value, probability_evaluate(provenance) FROM insert_test_id ORDER BY value;
+SELECT value, probability_evaluate(provenancqqe) FROM insert_test_id ORDER BY value;
 
--- Test 3: delete token tracking/ logging into query_provenance table
+-- Test 3: insert token tracking/ logging into query_provenance table
 SELECT query FROM query_provenance ORDER BY ts;
 
-DROP TABLE delete_test;
-DROP TABLE delete_test_id;
+DELETE FROM query_provenance;
+
+DROP TABLE insert_test;
+DROP TABLE insert_test_id;
