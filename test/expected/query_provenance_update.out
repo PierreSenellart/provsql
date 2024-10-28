@@ -15,7 +15,7 @@ create_provenance_mapping
 
 (1 row)
 count
-5
+6
 (1 row)
 probability_evaluate
 0
@@ -27,7 +27,7 @@ create_provenance_mapping
 
 (1 row)
 count
-5
+8
 (1 row)
 probability_evaluate
 0
@@ -45,7 +45,7 @@ create_provenance_mapping
 
 (1 row)
 count
-5
+11
 (1 row)
 value|probability_evaluate
 1|0
@@ -61,8 +61,8 @@ value|probability_evaluate
 14|1
 (11 rows)
 query
-UPDATE FROM update_test SET id = 6 WHERE id = 1;
-UPDATE FROM update_test SET id = 7 WHERE id = 1;
-UPDATE FROM update_test SET id = 8 WHERE id = 6;
-UPDATE FROM update_test SET id = id + 10 WHERE id >= 2 AND id <= 4;
+UPDATE update_test SET id = 6 WHERE id = 1;
+UPDATE update_test SET id = 7 WHERE id = 1;
+UPDATE update_test SET id = 8 WHERE id = 6;
+UPDATE update_test SET id = id + 10 WHERE id >= 2 AND id <= 4;
 (4 rows)
