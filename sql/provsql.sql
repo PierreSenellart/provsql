@@ -51,7 +51,8 @@ CREATE TYPE provenance_gate AS
     'cmp',     -- Currently unused, meant for comparison of aggregate values
     'delta',   -- δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
     'value',   -- Scalar value (for aggregate provenance)
-    'mulinput' -- Multivalued input (for Boolean provenance)
+    'mulinput',-- Multivalued input (for Boolean provenance)
+    'update'   -- Update operation
     );
 
 CREATE OR REPLACE FUNCTION create_gate(
