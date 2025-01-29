@@ -1,0 +1,43 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+1
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+6
+(1 row)
+probability_evaluate
+1
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+9
+(1 row)
+value|probability_evaluate
+1|1
+2|1
+3|1
+4|1
+5|1
+6|1
+7|1
+8|1
+9|1
+(9 rows)
+query
+INSERT INTO insert_test VALUES (6);
+INSERT INTO insert_test VALUES (7), (8), (9);
+(2 rows)
