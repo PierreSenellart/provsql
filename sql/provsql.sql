@@ -408,7 +408,7 @@ BEGIN
   IF gate_type IS NULL THEN
     RETURN NULL;
   ELSIF gate_type='input' THEN
-    EXECUTE format('SELECT * FROM %I WHERE provenance=%L',token2value,token) INTO result;
+    EXECUTE format('SELECT value FROM %I WHERE provenance=%L',token2value,token) INTO result;
     IF result IS NULL THEN
       result:=element_one;
     END IF;
