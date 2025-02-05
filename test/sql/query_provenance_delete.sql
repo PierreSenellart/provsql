@@ -9,6 +9,8 @@ VALUES (1), (2), (3), (4), (5);
 
 SELECT add_provenance('delete_test');
 
+DELETE FROM query_provenance;
+
 -- Test 1: single row deletion
 SELECT create_provenance_mapping('delete_test_id', 'delete_test', 'id');
 SELECT COUNT(*) FROM delete_test_id;
@@ -20,21 +22,24 @@ SELECT create_provenance_mapping('delete_test_id', 'delete_test', 'id');
 SELECT COUNT(*) FROM delete_test_id;
 SELECT probability_evaluate(provenance) FROM delete_test_id WHERE value = 1;
 
--- Test 2: multiple rows deletion
+-- Test 2: deletion of deleted row
 DROP TABLE delete_test_id;
 DELETE FROM delete_test WHERE id = 1;
 SELECT create_provenance_mapping('delete_test_id', 'delete_test', 'id');
 SELECT COUNT(*) FROM delete_test_id;
 SELECT probability_evaluate(provenance) FROM delete_test_id WHERE value = 1;
 
+-- Test 3: multiple rows deletion
 DROP TABLE delete_test_id;
 DELETE FROM delete_test WHERE id >= 2 AND id <= 4;
 SELECT create_provenance_mapping('delete_test_id', 'delete_test', 'id');
 SELECT COUNT(*) FROM delete_test_id;
 SELECT value, probability_evaluate(provenance) FROM delete_test_id ORDER BY value;
 
--- Test 3: delete token tracking/ logging into delete_provenance table
-SELECT query FROM delete_provenance ORDER BY deleted_at;
+-- Test 4: delete token tracking/ logging into query_provenance table
+SELECT query FROM query_provenance ORDER BY ts;
+
+DELETE FROM query_provenance;
 
 DROP TABLE delete_test;
 DROP TABLE delete_test_id;
