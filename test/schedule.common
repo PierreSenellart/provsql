@@ -55,3 +55,10 @@ test: unsupported_aggregation
 test: group_by_empty grouping_sets
 
 test: delete
+
+# Query Provenance
+test: update_query_provenance_delete 
+
+test: update_query_provenance_insert
+
+test: update_query_provenance_update
