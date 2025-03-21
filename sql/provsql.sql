@@ -986,7 +986,7 @@ LANGUAGE plpgsql
 AS
 $$
 BEGIN
-  EXECUTE format('DROP VIEW IF EXISTS %I CASCADE', newview);
+  EXECUTE format('DROP VIEW IF EXISTS %I CASCADE', newview); -- may raise notice if the view does not exist
 
   IF preserve_case THEN
     EXECUTE format(
@@ -1006,9 +1006,9 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION timetravel(
+-- TO ASK: this function has a side effect of dropping this view
+CREATE OR REPLACE FUNCTION timetravel( 
   tablename text,
-  provenance_mapping_viewname text,
   at_time timestamptz
 )
 RETURNS SETOF record
@@ -1017,13 +1017,8 @@ AS
 $$
 BEGIN
     EXECUTE format(
-      'DROP VIEW IF EXISTS %I CASCADE', 
-      provenance_mapping_viewname
-    );
-
-    EXECUTE format(
       'SELECT create_provenance_mapping_view(%L, %L, %L)',
-      provenance_mapping_viewname,          
+      'time_validity_view',          
       'query_provenance',                  
       'valid_time'                          
     );
@@ -1032,14 +1027,14 @@ BEGIN
         '
           SELECT
             %1$I.*,
-            union_tstzintervals(provenance(), ''%2$I'') AS validity
+            union_tstzintervals(provenance(), ''%2$I'') 
           FROM
             %1$I
           WHERE
             union_tstzintervals(provenance(), ''%2$I'') @> %3$L::timestamptz
         ',
         tablename,
-        provenance_mapping_viewname,
+        'time_validity_view',
         at_time::text
     );
 END;
@@ -1047,7 +1042,6 @@ $$;
 
 CREATE OR REPLACE FUNCTION timeslice(
   tablename text,
-  provenance_mapping_viewname text,
   from_time timestamptz,
   to_time timestamptz
 )
@@ -1057,13 +1051,8 @@ AS
 $$
 BEGIN
   EXECUTE format(
-    'DROP VIEW IF EXISTS %I CASCADE',
-    provenance_mapping_viewname
-  );
-
-  EXECUTE format(
     'SELECT create_provenance_mapping_view(%L, %L, %L)',
-    provenance_mapping_viewname,
+    'time_validity_view',
     'query_provenance',
     'valid_time'
   );
@@ -1072,7 +1061,7 @@ BEGIN
     '
       SELECT
         %1$I.*,
-        union_tstzintervals(provenance(), ''%2$I'') AS validity
+        union_tstzintervals(provenance(), ''%2$I'') 
       FROM
         %1$I
       WHERE
@@ -1080,7 +1069,7 @@ BEGIN
         && tstzrange(%3$L::timestamptz, %4$L::timestamptz)
     ',
     tablename,
-    provenance_mapping_viewname,
+    'time_validity_view',
     from_time::text,
     to_time::text
   );
@@ -1089,7 +1078,6 @@ $$;
 
 CREATE OR REPLACE FUNCTION history(
   tablename text,
-  provenance_mapping_viewname text,
   col_names text[],
   col_values text[]
 )
@@ -1117,13 +1105,8 @@ BEGIN
     END LOOP;
 
     EXECUTE format(
-      'DROP VIEW IF EXISTS %I CASCADE',
-      provenance_mapping_viewname
-    );
-
-    EXECUTE format(
       'SELECT create_provenance_mapping_view(%L, %L, %L)',
-      provenance_mapping_viewname,
+      'time_validity_view',
       'query_provenance',
       'valid_time'
     );
@@ -1132,17 +1115,48 @@ BEGIN
       '
         SELECT
           %I.*,
-          union_tstzintervals(provenance(), ''%I'') AS validity
+          union_tstzintervals(provenance(), ''%I'') 
         FROM
           %I
         WHERE
           %s
       ',
       tablename,
-      provenance_mapping_viewname,
+      'time_validity_view',
       tablename,
       condition
     );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION get_valid_time(
+  token uuid,
+  tablename text
+)
+RETURNS tstzmultirange
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  result tstzmultirange;
+BEGIN
+  PERFORM create_provenance_mapping_view('time_validity_view', 'query_provenance', 'valid_time');
+  
+  EXECUTE format(
+    '
+      SELECT
+        union_tstzintervals(provenance(), %L)
+      FROM
+        %I
+      WHERE
+        provsql = %L
+    ',
+    'time_validity_view',
+    tablename,
+    token
+  )
+  INTO result;
+  
+  RETURN result;
 END;
 $$;
 
