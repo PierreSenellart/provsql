@@ -3,6 +3,7 @@
 src/*.o
 src/*.bc
 sql/provsql--*.sql
+sql/provsql.sql
 test/schedule
 provsql.control
 .clangd

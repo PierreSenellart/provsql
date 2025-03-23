@@ -52,13 +52,6 @@ test: tutorial
 test: unsupported_aggregation
 
 # Grouping
-test: group_by_empty 
+test: group_by_empty
 
 test: grouping_sets
-
-# Query Provenance
-test: update_query_provenance_delete 
-
-test: update_query_provenance_insert
-
-test: update_query_provenance_update

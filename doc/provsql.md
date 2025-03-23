@@ -44,6 +44,9 @@ The ProvSQL system supports:
   probabilistic databases
 * Shapley value computation
 * expected Shapley value computation over probabilistic data
+* provenance tracking of updates (requires PostgreSQL ≥ 14)
+* applications of provenance to temporal database support (requires
+  PostgreSQL ≥ 14)
 
 The following SQL features are currently supported.
 
@@ -81,7 +84,7 @@ make docker-build
 
 ## Prerequisites for installation
 
-1. An install of PostgreSQL >= 10. The extension has currently been
+1. An install of PostgreSQL ≥ 10. The extension has currently been
    tested with versions from 10 to 17 (inclusive) of PostgreSQL, under
    Linux, Mac OS (both x86-64 and ARM architectures), and [Windows Subsystem for
    Linux](https://learn.microsoft.com/en-us/windows/wsl/about) (if the

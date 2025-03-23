@@ -1,2 +1,7 @@
 # Union of intervals semiring
 test: union_of_intervals
+
+# Query Provenance
+test: update_delete
+test: update_insert
+test: update_update
