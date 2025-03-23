@@ -115,8 +115,15 @@ Solving the murder
 
 1.   We now want to know how many sightings confirmed that a person was a
      suspect. To do that, we will use the counting m-semiring. First, add a
-     column to the table `s` that contains an integer. Set this integer
-     to `1` for all tuples, and create a provenance mapping
+     column to the table `s` that contains an integer.
+     Set this integer
+     to `1` for all tuples; this most likely requires an `UPDATE`
+     operation; since in ProvSQL, the provenance of `UPDATE` operation is
+     also tracked, this needs to be temporarily disabled with
+     ```sql
+     SELECT set_config ('setting.disable_update_trigger', 'on', false);
+     ```
+     Then create a provenance mapping
      `count_mapping` that references this column: this is just so that
      each tuple of the `s` table counts for one individual sighting when
      collecting the counts. Now, using the `counting` function instead of

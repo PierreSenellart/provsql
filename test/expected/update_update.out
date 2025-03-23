@@ -60,6 +60,9 @@ value|probability_evaluate
 13|1
 14|1
 (11 rows)
+remove_provenance
+
+(1 row)
 query
 UPDATE update_test SET id = 6 WHERE id = 1;
 UPDATE update_test SET id = 7 WHERE id = 1;

@@ -5,6 +5,9 @@ add_provenance
 create_provenance_mapping
 
 (1 row)
+set_config
+on
+(1 row)
 create_provenance_mapping
 
 (1 row)

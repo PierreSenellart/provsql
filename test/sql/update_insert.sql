@@ -30,7 +30,11 @@ SELECT COUNT(*) FROM insert_test_id;
 SELECT value, probability_evaluate(provenance) FROM insert_test_id ORDER BY value;
 
 -- Test 3: insert token tracking/ logging into query_provenance table
+CREATE TABLE query_provenance_result AS
 SELECT query FROM query_provenance ORDER BY ts;
+SELECT remove_provenance('query_provenance_result');
+SELECT * FROM query_provenance_result;
+DROP TABLE query_provenance_result;
 
 DELETE FROM query_provenance;
 
