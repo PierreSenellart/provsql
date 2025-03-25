@@ -51,7 +51,8 @@ CREATE TYPE provenance_gate AS
     'cmp',     -- Currently unused, meant for comparison of aggregate values
     'delta',   -- δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
     'value',   -- Scalar value (for aggregate provenance)
-    'mulinput' -- Multivalued input (for Boolean provenance)
+    'mulinput',-- Multivalued input (for Boolean provenance)
+    'update'   -- Update operation
     );
 
 CREATE OR REPLACE FUNCTION create_gate(
@@ -407,7 +408,7 @@ BEGIN
   IF gate_type IS NULL THEN
     RETURN NULL;
   ELSIF gate_type='input' THEN
-    EXECUTE format('SELECT * FROM %I WHERE provenance=%L',token2value,token) INTO result;
+    EXECUTE format('SELECT value FROM %I WHERE provenance=%L',token2value,token) INTO result;
     IF result IS NULL THEN
       result:=element_one;
     END IF;

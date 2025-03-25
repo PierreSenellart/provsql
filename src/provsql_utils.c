@@ -309,6 +309,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID(delta);
   GET_GATE_TYPE_OID(value);
   GET_GATE_TYPE_OID(mulinput);
+  GET_GATE_TYPE_OID(update);
 
   constants.ok=true;
 

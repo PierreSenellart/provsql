@@ -39,6 +39,7 @@ typedef enum gate_type {
   gate_delta,    ///< δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
   gate_value,    ///< Scalar value (for aggregate provenance)
   gate_mulinput, ///< Multivalued input (for Boolean provenance)
+  gate_update,   ///< Update operation
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
@@ -74,7 +75,7 @@ typedef struct constants_t {
 } constants_t;
 
 /** Structure to store the value of various constants for a specific
- * database. */ 
+ * database. */
 typedef struct database_constants_t {
   Oid database; //< OID of the database
   constants_t constants; //< Constants for this database
