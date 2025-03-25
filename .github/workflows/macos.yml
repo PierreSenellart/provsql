@@ -24,6 +24,7 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
+      - run: brew update
       - run: brew install postgresql
       - run: brew install boost
       - run: brew services start postgresql
