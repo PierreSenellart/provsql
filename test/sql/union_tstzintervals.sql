@@ -24,8 +24,8 @@ SET valid_time = CASE
 END
 WHERE query_type IN ('INSERT', 'DELETE', 'UPDATE');
 
-SELECT create_provenance_mapping_view('time_validity', 'query_provenance', 'valid_time');
-CREATE TABLE union_tstzintervals_result AS SELECT *, union_tstzintervals(provenance(),'time_validity') FROM test;
+SELECT create_provenance_mapping_view('time_validity_view', 'query_provenance', 'valid_time');
+CREATE TABLE union_tstzintervals_result AS SELECT *, union_tstzintervals(provenance(),'time_validity_view') FROM test;
 SELECT remove_provenance('union_tstzintervals_result');
 SELECT * FROM union_tstzintervals_result;
 DROP TABLE union_tstzintervals_result;
@@ -39,8 +39,8 @@ UPDATE query_provenance
 SET valid_time = tstzmultirange(tstzrange('1970-01-01 00:00:03+00', NULL))
 WHERE query_type = 'UNDO';
 
-SELECT create_provenance_mapping_view('time_validity', 'query_provenance', 'valid_time');
-CREATE TABLE union_tstzintervals_result AS SELECT *, union_tstzintervals(provenance(),'time_validity') FROM test;
+SELECT create_provenance_mapping_view('time_validity_view', 'query_provenance', 'valid_time');
+CREATE TABLE union_tstzintervals_result AS SELECT *, union_tstzintervals(provenance(),'time_validity_view') FROM test;
 SELECT remove_provenance('union_tstzintervals_result');
 SELECT * FROM union_tstzintervals_result;
 DROP TABLE union_tstzintervals_result;
