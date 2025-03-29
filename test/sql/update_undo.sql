@@ -68,7 +68,7 @@ SELECT create_provenance_mapping('undo_test_id', 'undo_test', 'id');
 SELECT COUNT(*) FROM undo_test_id;
 SELECT probability_evaluate(provenance) FROM undo_test_id WHERE value = 5;
 
--- Test 5: insert token tracking/ logging into query_provenance table
+-- Test 5: update queries and undo token tracking/ logging into query_provenance table
 CREATE TABLE query_provenance_result AS
 SELECT query FROM query_provenance ORDER BY ts;
 SELECT remove_provenance('query_provenance_result');
