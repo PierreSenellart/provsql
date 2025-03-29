@@ -236,7 +236,8 @@ LANGUAGE plpgsql
 AS
 $$
 BEGIN
-  EXECUTE format('DROP VIEW IF EXISTS %I CASCADE', newview); -- may raise notice if the view does not exist
+  -- note: this line will raise notice if the view does not exist
+  EXECUTE format('DROP VIEW IF EXISTS %I CASCADE', newview); 
 
   IF preserve_case THEN
     EXECUTE format(
@@ -256,7 +257,6 @@ BEGIN
 END;
 $$;
 
--- TO ASK: this function has a side effect of dropping this view
 CREATE OR REPLACE FUNCTION timetravel(
   tablename text,
   at_time timestamptz
@@ -413,7 +413,7 @@ $$;
 CREATE OR REPLACE FUNCTION undo(
   c uuid
 )
-RETURNS void
+RETURNS uuid
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -432,7 +432,7 @@ BEGIN
 
   IF undone_query IS NULL THEN
     RAISE NOTICE 'Unable to find % in query_provenance', c;
-    RETURN;
+    RETURN c;
   END IF;
 
   SELECT query
@@ -483,6 +483,8 @@ BEGIN
   END LOOP;
 
   PERFORM set_config('setting.disable_update_trigger', '', false);
+
+  RETURN undo_token;
 END;
 $$;
 
