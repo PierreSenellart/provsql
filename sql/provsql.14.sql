@@ -236,19 +236,16 @@ LANGUAGE plpgsql
 AS
 $$
 BEGIN
-  -- note: this line will raise notice if the view does not exist
-  EXECUTE format('DROP VIEW IF EXISTS %I CASCADE', newview); 
-
   IF preserve_case THEN
     EXECUTE format(
-      'CREATE VIEW %I AS SELECT %s AS value, provsql AS provenance FROM %I',
+      'CREATE OR REPLACE VIEW %I AS SELECT %s AS value, provsql AS provenance FROM %I',
       newview,
       att,
       oldtbl
     );
   ELSE
     EXECUTE format(
-      'CREATE VIEW %s AS SELECT %s AS value, provsql AS provenance FROM %I',
+      'CREATE OR REPLACE VIEW %s AS SELECT %s AS value, provsql AS provenance FROM %I',
       newview,
       att,
       oldtbl
