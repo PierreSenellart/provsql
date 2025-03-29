@@ -2,10 +2,11 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
+SET TIME ZONE 'UTC';
+SET datestyle = 'iso';
+
 DELETE FROM query_provenance;
-
 CREATE TABLE test(id INT PRIMARY KEY);
-
 SELECT add_provenance('test');
 
 -- Test 1: test tuple valid time after insert, delete, update operations
@@ -23,6 +24,7 @@ SET valid_time = CASE
 END
 WHERE query_type IN ('INSERT', 'DELETE', 'UPDATE');
 
+DROP TABLE IF EXISTS time_validity;
 SELECT create_provenance_mapping('time_validity', 'query_provenance', 'valid_time');
 CREATE TABLE union_tstzintervals_result AS SELECT *, union_tstzintervals(provenance(),'time_validity') FROM test;
 SELECT remove_provenance('union_tstzintervals_result');
@@ -38,6 +40,7 @@ UPDATE query_provenance
 SET valid_time = tstzmultirange(tstzrange('1970-01-01 00:00:03+00', NULL))
 WHERE query_type = 'UNDO';
 
+DROP TABLE IF EXISTS time_validity;
 SELECT create_provenance_mapping('time_validity', 'query_provenance', 'valid_time');
 CREATE TABLE union_tstzintervals_result AS SELECT *, union_tstzintervals(provenance(),'time_validity') FROM test;
 SELECT remove_provenance('union_tstzintervals_result');
