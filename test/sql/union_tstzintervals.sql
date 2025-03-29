@@ -53,5 +53,4 @@ SELECT * FROM query_provenance_result;
 DROP TABLE query_provenance_result;
 
 DELETE FROM query_provenance;
-
 DROP TABLE test;
