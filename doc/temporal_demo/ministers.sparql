@@ -1,0 +1,36 @@
+SELECT DISTINCT ?person ?genderLabel ?personLabel ?ministerLabel ?startISO ?endISO ?birthISO ?deathISO ?partyLabel {
+  ?person p:P39 ?statement.
+  ?person wdt:P21 ?gender.
+  ?statement ps:P39 ?minister.
+
+  ?statement pq:P580 ?start.
+  OPTIONAL { ?statement pq:P582 ?end }
+
+  OPTIONAL {
+    ?person p:P39 [ ps:P39 ?minister; pq:P1001 ?jurisdiction ].
+    ?jurisdiction wdt:P17 ?country2
+  }
+
+  ?minister wdt:P31?/(wdt:P279*) wd:Q83307.
+
+  OPTIONAL {
+    ?minister wdt:P17 ?countryMinister
+  }
+
+  ?person wdt:P27 wd:Q334.
+
+  OPTIONAL { ?person wdt:P570 ?death }
+  OPTIONAL { ?person wdt:P569 ?birth }
+
+  FILTER (!BOUND(?country2) || ?country2 = wd:Q334)
+  FILTER (!BOUND(?countryMinister) || ?countryMinister = wd:Q334)
+
+  OPTIONAL { ?person wdt:P102 ?party }
+
+  BIND(STR(?start) AS ?startISO)
+  BIND(STR(?end) AS ?endISO)
+  BIND(STR(?birth) AS ?birthISO)
+  BIND(STR(?death) AS ?deathISO)
+
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "mul,en,fr". }
+}
