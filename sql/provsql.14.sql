@@ -236,18 +236,16 @@ LANGUAGE plpgsql
 AS
 $$
 BEGIN
-  EXECUTE format('DROP VIEW IF EXISTS %I CASCADE', newview); -- may raise notice if the view does not exist
-
   IF preserve_case THEN
     EXECUTE format(
-      'CREATE VIEW %I AS SELECT %s AS value, provsql AS provenance FROM %I',
+      'CREATE OR REPLACE VIEW %I AS SELECT %s AS value, provsql AS provenance FROM %I',
       newview,
       att,
       oldtbl
     );
   ELSE
     EXECUTE format(
-      'CREATE VIEW %s AS SELECT %s AS value, provsql AS provenance FROM %I',
+      'CREATE OR REPLACE VIEW %s AS SELECT %s AS value, provsql AS provenance FROM %I',
       newview,
       att,
       oldtbl
@@ -256,7 +254,6 @@ BEGIN
 END;
 $$;
 
--- TO ASK: this function has a side effect of dropping this view
 CREATE OR REPLACE FUNCTION timetravel(
   tablename text,
   at_time timestamptz
@@ -413,7 +410,7 @@ $$;
 CREATE OR REPLACE FUNCTION undo(
   c uuid
 )
-RETURNS void
+RETURNS uuid
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -432,7 +429,7 @@ BEGIN
 
   IF undone_query IS NULL THEN
     RAISE NOTICE 'Unable to find % in query_provenance', c;
-    RETURN;
+    RETURN c;
   END IF;
 
   SELECT query
@@ -483,6 +480,8 @@ BEGIN
   END LOOP;
 
   PERFORM set_config('setting.disable_update_trigger', '', false);
+
+  RETURN undo_token;
 END;
 $$;
 

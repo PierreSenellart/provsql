@@ -1,0 +1,85 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+0
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+5
+(1 row)
+probability_evaluate
+1
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+6
+(1 row)
+probability_evaluate
+1
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+6
+(1 row)
+probability_evaluate
+0
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+7
+(1 row)
+probability_evaluate
+0
+(1 row)
+probability_evaluate
+1
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+7
+(1 row)
+probability_evaluate
+1
+(1 row)
+probability_evaluate
+0
+(1 row)
+create_provenance_mapping
+
+(1 row)
+count
+7
+(1 row)
+probability_evaluate
+0
+(1 row)
+remove_provenance
+
+(1 row)
+query
+DELETE FROM undo_test WHERE id = 5;
+CREATE TABLE undo_result AS SELECT undo(provsql) FROM query_provenance WHERE query = 'DELETE FROM undo_test WHERE id = 5;';
+INSERT INTO undo_test (id) VALUES (6);
+CREATE TABLE undo_result AS SELECT undo(provsql) FROM query_provenance WHERE query = 'INSERT INTO undo_test (id) VALUES (6);';
+UPDATE undo_test SET id = 7 WHERE id = 1;
+CREATE TABLE undo_result AS SELECT undo(provsql) FROM query_provenance WHERE query = 'UPDATE undo_test SET id = 7 WHERE id = 1;';
+CREATE TABLE undo_result AS SELECT undo(provsql) FROM query_provenance WHERE query = 'CREATE TABLE undo_result AS SELECT undo(provsql) FROM query_provenance WHERE query = ''DELETE FROM undo_test WHERE id = 5;'';';
+(7 rows)

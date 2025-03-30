@@ -1,0 +1,37 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping_view
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|union_tstzintervals
+1|{["1970-01-01 00:00:00+00",)}
+2|{["1970-01-01 00:00:00+00","1970-01-01 00:00:01+00")}
+4|{["1970-01-01 00:00:02+00",)}
+3|{["1970-01-01 00:00:00+00","1970-01-01 00:00:02+00")}
+(4 rows)
+create_provenance_mapping_view
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|union_tstzintervals
+1|{["1970-01-01 00:00:00+00",)}
+2|{["1970-01-01 00:00:00+00","1970-01-01 00:00:01+00"),["1970-01-01 00:00:03+00",)}
+4|{["1970-01-01 00:00:02+00",)}
+3|{["1970-01-01 00:00:00+00","1970-01-01 00:00:02+00")}
+(4 rows)
+remove_provenance
+
+(1 row)
+query
+INSERT INTO test (id) VALUES (1), (2), (3);
+DELETE FROM test WHERE id = 2;
+UPDATE test SET id = 4 WHERE id = 3;
+CREATE TABLE undo_result AS SELECT undo(provsql) FROM query_provenance WHERE query = 'DELETE FROM test WHERE id = 2;';
+(4 rows)
