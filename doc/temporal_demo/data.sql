@@ -30,9 +30,12 @@ CREATE TABLE party (
 
 ALTER TABLE person ADD COLUMN validity tstzmultirange;
 ALTER TABLE holds ADD COLUMN validity tstzmultirange;
-G
+
 UPDATE person SET validity=tstzmultirange(tstzrange(birth,death));
 UPDATE holds SET validity=tstzmultirange(tstzrange(start,until));
+
+ALTER TABLE holds DROP COLUMN start;
+ALTER TABLE holds DROP COLUMN until;
 
 CREATE EXTENSION provsql CASCADE;
 
@@ -52,21 +55,61 @@ UNION ALL
 
 SET SEARCH_PATH TO public, provsql;
 
--- Example queries
+CREATE VIEW person_position AS
+SELECT DISTINCT name, position FROM person JOIN holds ON person.id=holds.id
+AND country='FR';
+
+--- EXAMPLE QUERIES ---
+
+-- What were the positions of François Bayrou over time?
 SELECT position, union_tstzintervals(provenance(),'time_validity_view') valid
 FROM person JOIN holds ON person.id=holds.id
 WHERE name='François Bayrou' order by valid;
 
-CREATE VIEW person_position AS
-SELECT DISTINCT name, position FROM person JOIN holds ON person.id=holds.id
-WHERE holds.start>'1945-01-01'
-AND country='FR';
+-- What were the ministers during Emmanuel Macron's presidential terms?
+SELECT name, validity FROM
+  timeslice('person_position', '2017-05-16', NOW())
+  AS (name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
+  ORDER BY validity;
 
+-- Who were the Ministers of Justice over time?
 SELECT name, validity FROM
   history('person_position', ARRAY['position'], ARRAY['Minister of Justice'])
   AS (name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
   ORDER BY validity;
 
+-- What was the government like on 19 June 1981?
 SELECT name, position FROM timetravel('person_position', '1981-06-19')
+  AS tt(name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
+ORDER BY position;
+
+-- Fire François Bayrou and replace him with Pierre Senellart
+DELETE FROM holds WHERE position='Prime Minister of France' AND id IN
+  (SELECT id FROM person WHERE name='François Bayrou');
+INSERT INTO person(id, name, gender) VALUES(100000, 'Pierre Senellart', 'male');
+INSERT INTO holds(id, position, country) VALUES(100000, 'Prime Minister of France', 'FR');
+
+-- What were the positions of François Bayrou over time, now he has been
+-- fired?
+SELECT position, union_tstzintervals(provenance(),'time_validity_view') valid
+FROM person JOIN holds ON person.id=holds.id
+WHERE name='François Bayrou' order by valid;
+
+-- What is the current government composition?
+SELECT name, position FROM timetravel('person_position', NOW())
+  AS tt(name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
+ORDER BY position;
+
+-- Undo the changes: Pierre Senellart is out, François Bayrou is in
+SELECT undo(provenance()) FROM query_provenance;
+
+-- What were the positions of François Bayrou over time, now he has been
+-- fired and then reinstated?
+SELECT position, union_tstzintervals(provenance(),'time_validity_view') valid
+FROM person JOIN holds ON person.id=holds.id
+WHERE name='François Bayrou' order by valid;
+
+-- What is the current government composition?
+SELECT name, position FROM timetravel('person_position', NOW())
   AS tt(name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
 ORDER BY position;
