@@ -263,13 +263,6 @@ LANGUAGE plpgsql
 AS
 $$
 BEGIN
-    EXECUTE format(
-      'SELECT create_provenance_mapping_view(%L, %L, %L)',
-      'time_validity_view',
-      'query_provenance',
-      'valid_time'
-    );
-
     RETURN QUERY EXECUTE format(
         '
           SELECT
@@ -297,13 +290,6 @@ LANGUAGE plpgsql
 AS
 $$
 BEGIN
-  EXECUTE format(
-    'SELECT create_provenance_mapping_view(%L, %L, %L)',
-    'time_validity_view',
-    'query_provenance',
-    'valid_time'
-  );
-
   RETURN QUERY EXECUTE format(
     '
       SELECT
@@ -351,13 +337,6 @@ BEGIN
         condition := condition || format('%I = %L', col_names[i], col_values[i]);
     END LOOP;
 
-    EXECUTE format(
-      'SELECT create_provenance_mapping_view(%L, %L, %L)',
-      'time_validity_view',
-      'query_provenance',
-      'valid_time'
-    );
-
     RETURN QUERY EXECUTE format(
       '
         SELECT
@@ -386,8 +365,6 @@ AS $$
 DECLARE
   result tstzmultirange;
 BEGIN
-  PERFORM create_provenance_mapping_view('time_validity_view', 'query_provenance', 'valid_time');
-
   EXECUTE format(
     '
       SELECT
@@ -519,6 +496,9 @@ BEGIN
   END IF;
 END;
 $$;
+
+SELECT create_provenance_mapping_view('time_validity_view', 'query_provenance', 'valid_time');
+
 
 SET search_path TO public;
 ----------------------------------
