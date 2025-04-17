@@ -15,7 +15,7 @@ PG_FUNCTION_INFO_V1(shapley_all_vars);
 #include "BooleanCircuit.h"
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
-#include "BooleanCircuitFromMMap.h"
+#include "CircuitFromMMap.h"
 #include <fstream>
 
 using namespace std;

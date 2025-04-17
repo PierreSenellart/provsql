@@ -155,7 +155,7 @@ BEGIN
     USING new_token, old_token;
   END LOOP;
 
-  RETURN NULL; 
+  RETURN NULL;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
@@ -387,6 +387,15 @@ BEGIN
   RETURN plus_token;
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_evaluate_compiled(
+  token UUID,
+  token2value regclass,
+  semiring TEXT,
+  element_one anyelement,
+  value_type regtype)
+RETURNS anyelement AS
+  'provsql', 'provenance_evaluate_compiled' LANGUAGE C STRICT PARALLEL SAFE STABLE;
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,

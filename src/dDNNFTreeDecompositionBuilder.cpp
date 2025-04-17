@@ -3,6 +3,7 @@
 #include <variant>
 
 #include "dDNNFTreeDecompositionBuilder.h"
+#include "Circuit.hpp"
 
 /* Turn a bounded-treewidth circuit c for which a tree decomposition td
  * is provided into a dNNF rooted at root, following the construction in
