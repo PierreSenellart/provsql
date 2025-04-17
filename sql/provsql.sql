@@ -392,8 +392,7 @@ CREATE OR REPLACE FUNCTION provenance_evaluate_compiled(
   token UUID,
   token2value regclass,
   semiring TEXT,
-  element_one anyelement,
-  value_type regtype)
+  element_one anyelement)
 RETURNS anyelement AS
   'provsql', 'provenance_evaluate_compiled' LANGUAGE C STRICT PARALLEL SAFE STABLE;
 

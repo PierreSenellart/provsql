@@ -3,7 +3,7 @@ EXTVERSION = $(shell grep default_version $(EXTENSION).common.control | \
            sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 
 MODULE_big = provsql
-OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard src/*.cpp))
+OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp))
 
 DOCS = $(wildcard doc/*.md)
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
