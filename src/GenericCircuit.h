@@ -51,7 +51,7 @@ friend class dDNNFTreeDecompositionBuilder;
 friend class boost::serialization::access;
 
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> = 0>
-typename S::value_type evaluate(gate_t g, std::unordered_map<uuid, typename S::value_type> &provenance_mapping) const;
+typename S::value_type evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping) const;
 };
 
 #endif /* GENERIC_CIRCUIT_H */
