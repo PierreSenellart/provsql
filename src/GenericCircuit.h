@@ -22,6 +22,7 @@ class GenericCircuit : public Circuit<gate_type>
 private:
 std::map<gate_t, std::pair<unsigned,unsigned> > infos;
 std::map<gate_t, std::string> extra;
+std::set<gate_t> inputs;
 
 public:
 virtual std::string toString(gate_t g) const override {
@@ -34,6 +35,11 @@ void setInfos(gate_t g, unsigned info1, unsigned info2)
 void setExtra(gate_t g, const std::string &ex)
 {
   extra[g]=ex;
+}
+gate_t setGate(gate_type type) override;
+gate_t setGate(const uuid &u, gate_type type) override;
+const std::set<gate_t> &getInputs() const {
+  return inputs;
 }
 
 template<class Archive>

@@ -251,6 +251,9 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_TYPE_INT_ARRAY = TypenameGetTypid("_int4");
   CheckOid(OID_TYPE_INT_ARRAY);
 
+  constants.OID_TYPE_VARCHAR = TypenameGetTypid("varchar");
+  CheckOid(OID_TYPE_VARCHAR);
+
   constants.OID_FUNCTION_ARRAY_AGG = get_func_oid("array_agg");
   CheckOid(OID_FUNCTION_ARRAY_AGG);
 
