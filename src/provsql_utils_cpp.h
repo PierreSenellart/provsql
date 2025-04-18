@@ -1,3 +1,8 @@
+/**
+ * Utility functions
+ *
+ * This header declares some C++ utility functions to manipulate UUIDs
+ */
 #ifndef PROVSQL_UTILS_CPP_H
 #define PROVSQL_UTILS_CPP_H
 
