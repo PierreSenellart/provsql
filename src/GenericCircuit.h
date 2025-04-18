@@ -51,6 +51,7 @@ void serialize (Archive & ar, const unsigned int version)
   ar & wires;
   ar & infos;
   ar & extra;
+  ar & inputs;
 }
 
 friend class dDNNFTreeDecompositionBuilder;

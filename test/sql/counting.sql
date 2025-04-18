@@ -50,7 +50,6 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
 /* Example of provenance evaluation */
-SELECT create_provenance_mapping('personnel_count', 'personnel', '1');
 CREATE TABLE result_counting AS SELECT
   p1.city,
   counting(provenance(),'personnel_count')

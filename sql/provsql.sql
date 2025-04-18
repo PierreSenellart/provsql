@@ -808,6 +808,34 @@ CREATE TABLE delete_provenance (
   deleted_at TIMESTAMP DEFAULT current_timestamp
 );
 
+-- Semirings
+
+CREATE FUNCTION sr_formula(token UUID, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provenance_evaluate_compiled(
+    token,
+    token2value,
+    'formula',
+    '𝟙'::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+CREATE FUNCTION sr_counting(token UUID, token2value regclass)
+  RETURNS INT AS
+$$
+BEGIN
+  RETURN provenance_evaluate_compiled(
+    token,
+    token2value,
+    'counting',
+    1
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 

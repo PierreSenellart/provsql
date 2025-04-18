@@ -3,7 +3,7 @@
 SET search_path TO provsql_test,provsql;
 
 CREATE TABLE result_formula AS SELECT
-  *, formula(provenance(),'personnel_name') FROM (
+  *, sr_formula(provenance(),'personnel_name') AS formula FROM (
     (SELECT DISTINCT city FROM personnel)
   EXCEPT
     (SELECT p1.city
@@ -14,12 +14,12 @@ CREATE TABLE result_formula AS SELECT
 ORDER BY city;
 
 SELECT remove_provenance('result_formula');
-SELECT * FROM result_formula;
+SELECT city, replace(formula,'(Dave ⊗ Nancy) ⊕ (Dave ⊗ Magdalen)','(Dave ⊗ Magdalen) ⊕ (Dave ⊗ Nancy)') AS formula FROM result_formula;
 
 DROP TABLE result_formula;
 
 CREATE TABLE result_formula AS SELECT
-  *, formula(provenance(),'personnel_name') FROM (
+  *, sr_formula(provenance(),'personnel_name') AS formula FROM (
     (SELECT city
      FROM personnel
      WHERE FALSE)

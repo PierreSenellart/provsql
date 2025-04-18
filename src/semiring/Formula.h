@@ -41,7 +41,7 @@ virtual value_type plus(const std::vector<value_type> &v) const {
   else if(v.size()==1)
     return v[0];
   else
-    return "("+join(v, "⊕")+")";
+    return "("+join(v, " ⊕ ")+")";
 }
 virtual value_type times(const std::vector<value_type> &v) const {
   if(v.size()==0)
@@ -49,11 +49,11 @@ virtual value_type times(const std::vector<value_type> &v) const {
   else if(v.size()==1)
     return v[0];
   else
-    return "("+join(v, "⊗")+")";
+    return "("+join(v, " ⊗ ")+")";
 }
 virtual value_type monus(value_type x, value_type y) const
 {
-  return "("+x+"⊖"+y+")";
+  return "("+x+" ⊖ "+y+")";
 }
 virtual value_type delta(value_type x) const
 {

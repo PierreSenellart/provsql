@@ -3,11 +3,11 @@
 SET search_path TO provsql_test, provsql;
 
 CREATE TABLE distinct_result AS
-  SELECT *, formula(provenance(),'personnel_name')
+  SELECT *, sr_formula(provenance(),'personnel_name') AS formula
   FROM (
     SELECT DISTINCT classification FROM personnel
   ) t;
 
 SELECT remove_provenance('distinct_result');
-SELECT * FROM distinct_result ORDER BY classification;
+SELECT classification,replace(formula,'(Paul ⊕ Nancy)','(Nancy ⊕ Paul)') AS formula FROM distinct_result ORDER BY classification;
 DROP TABLE distinct_result;

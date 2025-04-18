@@ -27,7 +27,7 @@ EXTRA_REGRESS_OPTS =
 
 all: $(DATA) $(MODULE_big).so test/schedule
 
-$(OBJS): $(wildcard src/*.h)
+$(OBJS): $(wildcard src/*.h src/semiring/*.h src/*.hpp)
 
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
