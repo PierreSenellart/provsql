@@ -8,6 +8,7 @@ test: add_provenance
 test: provenance_in_from identify_token subquery create_provenance_mapping
 
 # Introducing a few semirings
+test: sr_formula sr_counting
 test: security formula counting
 
 # Test of various ProvSQL features and SQL language capabilities
