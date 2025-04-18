@@ -37,8 +37,7 @@ static Datum pec_varchar(
     HeapTuple tuple = SPI_tuptable->vals[i];
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
 
-    if (SPI_gettypeid(tupdesc, 1) != constants.OID_TYPE_VARCHAR ||
-        SPI_gettypeid(tupdesc, 2) != constants.OID_TYPE_UUID) {
+    if (SPI_gettypeid(tupdesc, 2) != constants.OID_TYPE_UUID) {
       SPI_finish();
       throw CircuitException("Invalid type for provenance mapping attribute");
       continue;
@@ -81,8 +80,7 @@ static Datum pec_int(
     HeapTuple tuple = SPI_tuptable->vals[i];
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
 
-    if (SPI_gettypeid(tupdesc, 1) != constants.OID_TYPE_INT ||
-        SPI_gettypeid(tupdesc, 2) != constants.OID_TYPE_UUID) {
+    if (SPI_gettypeid(tupdesc, 2) != constants.OID_TYPE_UUID) {
       SPI_finish();
       throw CircuitException("Invalid type for provenance mapping attribute");
       continue;
