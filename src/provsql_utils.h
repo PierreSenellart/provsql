@@ -62,17 +62,22 @@ typedef struct constants_t {
   Oid OID_FUNCTION_PROVENANCE_TIMES; ///< OID of the provenance_times FUNCTION
   Oid OID_FUNCTION_PROVENANCE_MONUS; ///< OID of the provenance_monus FUNCTION
   Oid OID_FUNCTION_PROVENANCE_PROJECT; ///< OID of the provenance_project FUNCTION
-  Oid OID_FUNCTION_PROVENANCE_EQ; ///< OID of the provenance_eq FUNCTION
+  Oid OID_FUNCTION_PROVENANCE_EQ;///< OID of the provenance_eq FUNCTION
+  Oid OID_FUNCTION_PROVENANCE_CMP; ///< OID of the provenance_cmp FUNCTION
   Oid OID_FUNCTION_PROVENANCE; ///< OID of the provenance FUNCTION
   Oid GATE_TYPE_TO_OID[nb_gate_types]; ///< Array of the OID of each provenance_gate ENUM value
   Oid OID_FUNCTION_PROVENANCE_DELTA; ///< OID of the provenance_delta FUNCTION
   Oid OID_FUNCTION_PROVENANCE_AGGREGATE; ///< OID of the provenance_aggregate FUNCTION
   Oid OID_FUNCTION_PROVENANCE_SEMIMOD; ///< OID of the provenance_semimod FUNCTION
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
+  Oid OID_FUNCTION_GATE_ONE; 
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION
   Oid OID_FUNCTION_NOT_EQUAL_UUID; ///< OID of the = operator on UUIDs FUNCTION
   bool ok; ///< true if constants were loaded
 } constants_t;
+
+
+
 
 /** Structure to store the value of various constants for a specific
  * database. */
