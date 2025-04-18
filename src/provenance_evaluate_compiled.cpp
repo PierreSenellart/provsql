@@ -19,6 +19,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "Circuit.hpp"
 #include "GenericCircuit.hpp"
 
+#include "semiring/Boolean.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
 
@@ -78,6 +79,26 @@ static Datum pec_varchar(
            s.c_str(),
            s.size());
     PG_RETURN_TEXT_P(result);
+  } else
+    throw CircuitException("Unknown semiring for type varchar: "+semiring);
+}
+
+static Datum pec_bool(
+  const constants_t &constants,
+  GenericCircuit &c,
+  gate_t g,
+  const std::set<gate_t> &inputs,
+  const std::string &semiring,
+  bool drop_table)
+{
+  std::unordered_map<gate_t, bool> provenance_mapping;
+  initialize_provenance_mapping<bool>(constants, c, provenance_mapping, [](const char *v) {
+    return *v=='t';
+  }, drop_table);
+
+  if(semiring=="boolean") {
+    auto val = c.evaluate<semiring::Boolean>(g, provenance_mapping);
+    PG_RETURN_BOOL(val);
   } else
     throw CircuitException("Unknown semiring for type varchar: "+semiring);
 }
@@ -194,6 +215,8 @@ static Datum provenance_evaluate_compiled_internal
     return pec_varchar(constants, c, g, inputs, semiring, drop_table);
   else if(type==constants.OID_TYPE_INT)
     return pec_int(constants, c, g, inputs, semiring, drop_table);
+  else if(type==constants.OID_TYPE_BOOL)
+    return pec_bool(constants, c, g, inputs, semiring, drop_table);
   else
     throw CircuitException("Unknown element type for provenance_evaluate_compiled");
 }

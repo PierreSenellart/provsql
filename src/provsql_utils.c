@@ -245,6 +245,9 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_TYPE_INT = TypenameGetTypid("int4");
   CheckOid(OID_TYPE_INT);
 
+  constants.OID_TYPE_BOOL = TypenameGetTypid("bool");
+  CheckOid(OID_TYPE_BOOL);
+
   constants.OID_TYPE_FLOAT = TypenameGetTypid("float8");
   CheckOid(OID_TYPE_FLOAT);
 

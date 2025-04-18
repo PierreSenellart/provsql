@@ -836,6 +836,19 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+CREATE FUNCTION sr_boolean(token UUID, token2value regclass)
+  RETURNS BOOLEAN AS
+$$
+BEGIN
+  RETURN provenance_evaluate_compiled(
+    token,
+    token2value,
+    'boolean',
+    TRUE
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
