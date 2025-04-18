@@ -7,7 +7,7 @@ SELECT * FROM personnel;
 
 SELECT DISTINCT position FROM personnel;
 SELECT create_provenance_mapping('name','personnel','name');
-SELECT *,formula(provenance(),'name') FROM (
+SELECT *,sr_formula(provenance(),'name') FROM (
   SELECT distinct position FROM personnel
 ) t;
 
@@ -32,7 +32,7 @@ EXCEPT
   FROM Personnel P1 JOIN Personnel P2
   ON P1.city = P2.city
   WHERE P1.city = P2.city AND P1.id < P2.id;
-SELECT *, formula(provenance(),'name') FROM (
+SELECT *, sr_formula(provenance(),'name') FROM (
     SELECT DISTINCT city FROM Personnel
   EXCEPT
     SELECT DISTINCT P1.city

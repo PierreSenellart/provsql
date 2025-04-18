@@ -155,7 +155,7 @@ BEGIN
     USING new_token, old_token;
   END LOOP;
 
-  RETURN NULL; 
+  RETURN NULL;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
@@ -389,7 +389,6 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
-
 --this is to be done provenance_cmp
 CREATE OR REPLACE FUNCTION provenance_cmp(
   left_token  UUID,
@@ -485,6 +484,15 @@ $$ LANGUAGE plpgsql
 --   RETURN result;
 -- END
 -- $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+CREATE OR REPLACE FUNCTION provenance_evaluate_compiled(
+  token UUID,
+  token2value regclass,
+  semiring TEXT,
+  element_one anyelement)
+RETURNS anyelement AS
+  'provsql', 'provenance_evaluate_compiled' LANGUAGE C STRICT PARALLEL SAFE STABLE;
+
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,
@@ -938,6 +946,47 @@ CREATE TABLE delete_provenance (
   deleted_by TEXT,
   deleted_at TIMESTAMP DEFAULT current_timestamp
 );
+
+-- Semirings
+
+CREATE FUNCTION sr_formula(token UUID, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provenance_evaluate_compiled(
+    token,
+    token2value,
+    'formula',
+    '𝟙'::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+CREATE FUNCTION sr_counting(token UUID, token2value regclass)
+  RETURNS INT AS
+$$
+BEGIN
+  RETURN provenance_evaluate_compiled(
+    token,
+    token2value,
+    'counting',
+    1
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+CREATE FUNCTION sr_boolean(token UUID, token2value regclass)
+  RETURNS BOOLEAN AS
+$$
+BEGIN
+  RETURN provenance_evaluate_compiled(
+    token,
+    token2value,
+    'boolean',
+    TRUE
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;

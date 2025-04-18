@@ -3,7 +3,7 @@ remove_provenance
 
 (1 row)
 position|count|formula
-Analyst|2 (*)|δ((Dave ⊕ Susan))
+Analyst|2 (*)|δ(Dave ⊕ Susan)
 Director|1 (*)|δ(John)
 Double agent|1 (*)|δ(Magdalen)
 Field agent|1 (*)|δ(Ellen)

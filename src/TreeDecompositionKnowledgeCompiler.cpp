@@ -7,6 +7,7 @@ extern "C" {
 }
 
 #include "dDNNFTreeDecompositionBuilder.h"
+#include "Circuit.hpp"
 
 static double get_timestamp ()
 {

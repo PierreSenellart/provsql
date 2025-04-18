@@ -3,7 +3,7 @@
 SET search_path TO provsql_test, provsql;
 
 CREATE TABLE nested_union_result AS
-SELECT *,formula(provenance(),'personnel_name') FROM (
+SELECT *,formula(provenance(),'personnel_name') AS formula FROM (
   SELECT city FROM personnel WHERE classification != 'unclassified'
   UNION
   SELECT city FROM personnel WHERE position != 'Janitor'

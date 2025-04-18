@@ -1,4 +1,5 @@
 #include "BooleanCircuit.h"
+#include "Circuit.hpp"
 #include <type_traits>
 
 extern "C" {

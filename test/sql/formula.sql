@@ -103,7 +103,6 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
 /* Example of provenance evaluation */
-SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
 CREATE TABLE result_formula AS SELECT
   p1.city,
   formula(provenance(), 'personnel_name')

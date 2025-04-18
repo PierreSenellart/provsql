@@ -12,3 +12,6 @@ name
 position
 provsql
 (5 rows)
+create_provenance_mapping
+
+(1 row)

@@ -16,7 +16,8 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include <csignal>
 
 #include "BooleanCircuit.h"
-#include "BooleanCircuitFromMMap.h"
+#include "Circuit.hpp"
+#include "CircuitFromMMap.h"
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "provsql_mmap.h"
