@@ -11,6 +11,7 @@ Welcome to ProvSQL's documentation!
    :caption: Contents:
 
    c/index
+   sql/index
 
 Indices and tables
 ==================

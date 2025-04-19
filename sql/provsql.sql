@@ -1,5 +1,19 @@
--- Requires extensions "uuid-ossp"
+/**
+ * @file
+ * @brief ProvSQL PL/pgSQL extension code
+ *
+ * This file contains the PL/pgSQL code of the ProvSQL extension. This
+ * extension requires the standard uuid-ossp extension.
+ */
 
+/**
+  * @brief provsql schema
+  *
+  * All types and functions introduced by ProvSQL are defined in the
+  * provsql schema, requiring prefixing them by <tt>provsql.</tt> or
+  * using PostgreSQL's <tt>search_path</tt> variable with a command such
+  * as \code{.sql}SET search_path TO public, provsql;\endcode
+  */
 CREATE SCHEMA provsql;
 
 SET search_path TO provsql;
@@ -78,29 +92,45 @@ CREATE OR REPLACE FUNCTION get_prob(
   RETURNS DOUBLE PRECISION AS
   'provsql','get_prob' LANGUAGE C STABLE PARALLEL SAFE;
 
--- Two integer values associated to gate, used in different ways by
--- different gate types:
--- * for mulinput, info1 indicates the value of this multivalued variable
--- * for eq, info1 and info2 indicate the attribute index of the
---   equijoin in, respectively, the first and second columns
--- * for agg, info1 is the oid of the aggregate function and info2 the
---   oid of the aggregate result type
+/**
+ * @brief Set additional integer values on provenance circuit gate
+ *
+ * This function sets two integer values associated to a circuit gate, used in
+ * different ways by different gate types:
+ *   - for mulinput, info1 indicates the value of this multivalued variable
+ *   - for eq, info1 and info2 indicate the attribute index of the
+       equijoin in, respectively, the first and second columns
+ *   - for agg, info1 is the oid of the aggregate function and info2 the
+       oid of the aggregate result type
+ *
+ * @param token UUID of the circuit gate
+ * @param info1 first integer value
+ * @param info2 second integer value
+ */
 CREATE OR REPLACE FUNCTION set_infos(
   token UUID, info1 INT, info2 INT DEFAULT NULL)
   RETURNS void AS
   'provsql','set_infos' LANGUAGE C PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION get_infos(
   token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
   'provsql','get_infos' LANGUAGE C STABLE PARALLEL SAFE;
 
--- Extra arbitrary text-encoded information associated to gate, used in
--- different ways by different gate types:
--- * for project, it is a text-encoded ARRAY of two-element ARRAYs that
---   indicate mappings between input attribute (first element) and output
---   attribute (second element)
--- * for value and agg, it is the text-encoded (base for value, computed
---   for agg) scalar value
+/**
+ * @brief Set extra text information on provenance circuit gate
+ *
+ * This function sets text-encoded data associated to a circuit gate, used in
+ * different ways by different gate types:
+ *   - for project, it is a text-encoded ARRAY of two-element ARRAYs that
+ *     indicate mappings between input attribute (first element) and output
+ *     attribute (second element)
+ *   - for value and agg, it is the text-encoded (base for value, computed
+ *     for agg) scalar value
+ *
+ * @param token UUID of the circuit gate
+ * @param data text-encoded information
+ */
 CREATE OR REPLACE FUNCTION set_extra(
   token UUID, data TEXT)
   RETURNS void AS

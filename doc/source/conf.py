@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.append(str(PROJECT_ROOT))
 
-DOXYGEN_XML_DIR = "../doxygen/xml"
+DOXYGEN_XML_DIR = "../doxygen-c/xml"
 
 project = 'ProvSQL'
 copyright = '2025, Pierre Senellart'
@@ -16,20 +16,19 @@ extensions = ['sphinx.ext.todo', 'breathe', 'sphinx.ext.graphviz']
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
-breathe_projects = {"ProvSQL": DOXYGEN_XML_DIR}
-breathe_default_project = "ProvSQL"
+breathe_projects = {"C++": DOXYGEN_XML_DIR, "SQL": "../doxygen-sql/xml"}
 
 html_theme = 'sphinxdoc'
-html_theme_options = { 'sidebarwidth': '25em' }
+html_theme_options = {'sidebarwidth': '25em'}
 html_static_path = ['_static']
 
 entries = {
-#    "class": {"dir": "classes", "directive": "doxygenclass"},
-#    "struct": {"dir": "structs", "directive": "doxygenstruct"},
     "file": {"dir": "files", "directive": "doxygenfile"},
 }
 
 # Helper to write an rst file
+
+
 def write_rst(output_dir, name, title, directive_type, qualified_name):
     os.makedirs(output_dir, exist_ok=True)
     filepath = os.path.join(output_dir, f"{name}.rst")
@@ -41,9 +40,9 @@ def write_rst(output_dir, name, title, directive_type, qualified_name):
 """)
         f.write(f"""
 .. {directive_type}:: {qualified_name}
-   :project: {project}
+   :project: C++
    :allow-dot-graphs:\n""")
-        if directive_type=="doxygenclass" or directive_type=="doxygenstruct":
+        if directive_type == "doxygenclass" or directive_type == "doxygenstruct":
             f.write("   :members:\n")
             f.write("   :protected-members:\n")
             f.write("   :undoc-members:\n")
