@@ -1,0 +1,32 @@
+name: Documentation
+
+on:
+  push:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/macos.yml'
+      - '.github/workflows/wsl.yml'
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/macos.yml'
+      - '.github/workflows/wsl.yml'
+  workflow_dispatch:
+    paths-ignore:
+      - 'doc/**'
+      - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/macos.yml'
+      - '.github/workflows/wsl.yml'
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      - uses: actions/checkout@v4
+      - run: make docs

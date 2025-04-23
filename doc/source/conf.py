@@ -67,6 +67,8 @@ for kind, meta in entries.items():
         compounddef = root.find("compounddef")
         if compounddef is None or compounddef.get("kind") != kind:
             continue
+        if compounddef.get('language') != 'C++':
+            continue
 
         compoundname = compounddef.find("compoundname").text
         short_name = compoundname.split("::")[-1].replace("/", "_")
