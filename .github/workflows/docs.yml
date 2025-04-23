@@ -29,4 +29,6 @@ jobs:
     container: pgxn/pgxn-tools
     steps:
       - uses: actions/checkout@v4
+      - run: apt update
+      - run: apt -y install doxygen python3-breathe
       - run: make docs
