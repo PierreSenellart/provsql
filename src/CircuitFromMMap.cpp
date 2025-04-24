@@ -28,6 +28,7 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
   while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
     if(actual_read<=0) {
       provsql_shmem_unlock();
+      delete [] buf;
       elog(ERROR, "Cannot read from pipe (message type %c)", message_char);
     } else {
       remaining_size-=actual_read;
