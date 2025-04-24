@@ -7,7 +7,7 @@
  */
 
 /**
-  * @brief provsql schema
+  * @brief <tt>provsql</tt> schema
   *
   * All types and functions introduced by ProvSQL are defined in the
   * provsql schema, requiring prefixing them by <tt>provsql.</tt> or

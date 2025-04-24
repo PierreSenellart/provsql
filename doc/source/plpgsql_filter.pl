@@ -12,6 +12,7 @@ s{
   (\w+)\s*
   \((.*?)\)\s+
   RETURNS\s+(.*?)\s+AS
+  ([^;]*LANGUAGE\s+C[^;]*;)?
 }{
     my ( $function_name, $args, $return ) = ( $1, $2, $3 );
 
@@ -25,7 +26,7 @@ s{
         $a =~ s/DEFAULT /= /;
     }
 
-    "$return $function_name(" . join( ', ', @args ) . ")"
+    "$return $function_name(" . join( ', ', @args ) . ");"
 }sigxe;
 
 # Start namespace
@@ -44,12 +45,12 @@ s{
 
 # Ignore other search_path changes
 s{
-  SET\s+search_path\s+.*?;
+  ^\s*SET\s+search_path\s+.*?;
 }{
 }sigx;
 
 s{
-  \$\$.*?\$\$
+  \$\$.*?\$\$\s+LANGUAGE.*?;
 }{
 }sigx;
 
