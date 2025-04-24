@@ -838,7 +838,10 @@ CREATE TABLE delete_provenance (
   deleted_at TIMESTAMP DEFAULT current_timestamp
 );
 
--- Semirings
+/** @name Compiled semirings
+ *  Definitions of compiled semirings
+ *  @{
+ */
 
 CREATE FUNCTION sr_formula(token UUID, token2value regclass)
   RETURNS VARCHAR AS
@@ -879,6 +882,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @} */
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
