@@ -11,11 +11,13 @@ s{
   FUNCTION\s+
   (\w+)\s*
   \((.*?)\)\s+
-  RETURNS\s+(.*?)\s+AS
+  (?:RETURNS\s+(.*?)\s+)?
+  AS
   ([^;]*LANGUAGE\s+C[^;]*;)?
 }{
     my ( $function_name, $args, $return ) = ( $1, $2, $3 );
 
+    $args =~ s/\bOUT\s+/&/g;
     $args =~ s/^\s+|\s+$//g;
     $args =~ s/\s+/ /gs;
 
@@ -25,6 +27,8 @@ s{
         $a =~ s/(.+?) ([^\s]*)((?: .*)?)/$2 $1$3/;
         $a =~ s/DEFAULT /= /;
     }
+
+    $return=~s/TABLE\(.*?\)/TABLE/g;
 
     "$return $function_name(" . join( ', ', @args ) . ");"
 }sigxe;
@@ -45,7 +49,7 @@ s{
 
 # Ignore other search_path changes
 s{
-  ^\s*SET\s+search_path\s+.*?;
+  \bSET\s+search_path\s+.*?;
 }{
 }sigx;
 
@@ -90,5 +94,30 @@ s{
 
     "struct $type_name \{ " . join( '; ', @fields ) . " \};"
 }sigxe;
+
+s{
+  CREATE\s+TYPE\s+([^\s]+)\s*;
+}{
+  struct $1;
+}sigx;
+
+s{
+  CREATE\s+TYPE\s+([^\s]+)\s*
+  \(([^)]*)\);
+}{
+  my ($type, $members) = ($1, $2);
+  $members =~ s/,/;/g;
+  "struct $type \{ $members; \};";
+}sigxe;
+
+s{
+  \bGRANT\s+[^;]*;
+}{}sigx;
+
+s{
+  SETOF\s+([^\s]+)
+}{
+  SETOF<$1>
+}sigx;
 
 print;
