@@ -92,7 +92,7 @@ s{
         $a = "$type $name";
     }
 
-    "struct $type_name \{ " . join( '; ', @fields ) . " \};"
+    "struct $type_name \{ " . join( '; ', @fields ) . "; \};"
 }sigxe;
 
 s{
