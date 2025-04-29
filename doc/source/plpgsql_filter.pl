@@ -49,7 +49,7 @@ s{
 
 # Ignore other search_path changes
 s{
-  \bSET\s+search_path\s+.*?;
+  \nSET\s+search_path\s+.*?;
 }{
 }sigx;
 
