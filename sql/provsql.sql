@@ -18,38 +18,6 @@ CREATE SCHEMA provsql;
 
 SET search_path TO provsql;
 
--- Create agg_token type for aggregation display
-CREATE TYPE agg_token;
-
-CREATE OR REPLACE FUNCTION agg_token_in(cstring)
-  RETURNS agg_token
-  AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
-  RETURNS cstring
-  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
-  RETURNS text
-  AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE TYPE agg_token (
-  internallength = 117,
-  input = agg_token_in,
-  output = agg_token_out,
-  alignment = char
-);
-
-CREATE OR REPLACE FUNCTION agg_token_uuid(aggtok agg_token)
-  RETURNS uuid AS
-$$
-BEGIN
-  RETURN agg_token_cast(aggtok)::uuid;
-END
-$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE PARALLEL SAFE;
-
-CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
-
 CREATE TYPE provenance_gate AS
   ENUM(
     'input',   -- Input (variable) gate of the circuit
@@ -629,6 +597,52 @@ BEGIN
   RETURN delta_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+
+/** @name Type for the result of aggregate queries
+ *
+ *  Custom type <tt>agg_token</tt> for a provenance semimodule value, to
+ *  be used in attributes that are computed as a result of aggregation.
+ *  As for provenance tokens, this is simply a UUID, but this UUID is
+ *  displayed in a specific way (as the result of the aggregation
+ *  followed by a "(*)") to help with readability.
+ *
+ *  @{
+ */
+
+CREATE TYPE agg_token;
+
+CREATE OR REPLACE FUNCTION agg_token_in(cstring)
+  RETURNS agg_token
+  AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
+  RETURNS cstring
+  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
+  RETURNS text
+  AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE agg_token (
+  internallength = 117,
+  input = agg_token_in,
+  output = agg_token_out,
+  alignment = char
+);
+
+CREATE OR REPLACE FUNCTION agg_token_uuid(aggtok agg_token)
+  RETURNS uuid AS
+$$
+BEGIN
+  RETURN agg_token_cast(aggtok)::uuid;
+END
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE PARALLEL SAFE;
+
+CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
+
+/** @} */
+
 
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
