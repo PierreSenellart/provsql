@@ -415,76 +415,6 @@ $$ LANGUAGE plpgsql
 
 
 
-
--- CREATE OR REPLACE FUNCTION provenance_evaluate(
---   token UUID,
---   token2value regclass,
---   element_one anyelement,
---   value_type regtype,
---   plus_function regproc,
---   times_function regproc,
---   monus_function regproc,
---   delta_function regproc)
---   RETURNS anyelement AS
--- $$
--- DECLARE
---   gate_type provenance_gate;
---   result ALIAS FOR $0;
--- BEGIN
---   SELECT get_gate_type(token) INTO gate_type;
-
---   IF gate_type IS NULL THEN
---     RETURN NULL;
---   ELSIF gate_type='input' THEN
---     EXECUTE format('SELECT value FROM %I WHERE provenance=%L',token2value,token) INTO result;
---     IF result IS NULL THEN
---       result:=element_one;
---     END IF;
---   ELSIF gate_type='mulinput' THEN
---     SELECT concat('{',(get_children(token))[1]::text,'=',(get_infos(token)).info1,'}') INTO result;
---   ELSIF gate_type='plus' THEN
---     EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
---       plus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
---     INTO result;
---   ELSIF gate_type='times' THEN
---     EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
---       times_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
---     INTO result;
---   ELSIF gate_type='monus' THEN
---     IF monus_function IS NULL THEN
---       RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
---     ELSE
---       EXECUTE format('SELECT %I(a1,a2) FROM (SELECT provsql.provenance_evaluate(c[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a1, provsql.provenance_evaluate(c[2],%L,%L::%s,%L,%L,%L,%L,%L) AS a2 FROM get_children(%L) c) tmp',
---         monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
---       INTO result;
---     END IF;
---   ELSIF gate_type='eq' THEN
---     EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
---       token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
---     INTO result;
---   ELSIF gate_type='delta' THEN
---     IF delta_function IS NULL THEN
---       RAISE EXCEPTION USING MESSAGE='Provenance with aggregation evaluated over a semiring without delta function';
---     ELSE
---       EXECUTE format('SELECT %I(a) FROM (SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a) tmp',
---         delta_function,token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
---       INTO result;
---     END IF;
---   ELSIF gate_type='zero' THEN
---     EXECUTE format('SELECT %I(a) FROM (SELECT %L::%I AS a WHERE FALSE) temp',plus_function,element_one,value_type) INTO result;
---   ELSIF gate_type='one' THEN
---     EXECUTE format('SELECT %L::%I',element_one,value_type) INTO result;
---   ELSIF gate_type='project' THEN
---     EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
---       token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
---     INTO result;
---   ELSE
---     RAISE EXCEPTION USING MESSAGE='Unknown gate type';
---   END IF;
---   RETURN result;
--- END
--- $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
-
 CREATE OR REPLACE FUNCTION provenance_evaluate_compiled(
   token UUID,
   token2value regclass,
@@ -971,6 +901,19 @@ BEGIN
     token2value,
     'counting',
     1
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+CREATE FUNCTION sr_why(token UUID, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provenance_evaluate_compiled(
+    token,
+    token2value,
+    'why',
+    '{}'::VARCHAR
   );
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;

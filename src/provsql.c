@@ -50,7 +50,6 @@ static Query *process_query(
   Query *q,
   bool **removed);
 
-
 static Var *make_provenance_attribute(const constants_t *constants, Query *q, RangeTblEntry *r, Index relid, AttrNumber attid) {
   Var *v = makeNode(Var);
 
@@ -138,6 +137,7 @@ static Node *aggregation_type_mutator(Node *node, aggregation_type_mutator_conte
       v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
     }
   }
+
   return expression_tree_mutator(node, aggregation_type_mutator, (void *)context);
 }
 
@@ -622,59 +622,19 @@ static Expr *make_aggregation_expression(
   return result;
 }
 
-static Const *
-extract_having_literal(Node *node)
-{
-    if (node == NULL) return NULL;
-
-    if (IsA(node, Const))
-        return (Const *) copyObject(node);
-
-    if (IsA(node, RelabelType))
-        return extract_having_literal(((RelabelType *)node)->arg);
-
-    if (IsA(node, OpExpr))
-    {
-        OpExpr *op = (OpExpr *) node;
-        ListCell *lc;
-        foreach(lc, op->args)
-        {
-            Const *c = extract_having_literal((Node *) lfirst(lc));
-            if (c) return c;
-        }
-    }
-
-    if (IsA(node, BoolExpr))
-    {
-        BoolExpr *be = (BoolExpr *) node;
-        ListCell *lc;
-        foreach(lc, be->args)
-        {
-            Const *c = extract_having_literal((Node *) lfirst(lc));
-            if (c) return c;
-        }
-    }
-
-    return NULL;
-}
-
 static Expr *make_provenance_expression(
   const constants_t *constants,
   Query *q,
   List *prov_atts,
   bool aggregation,
-  bool having,
   bool group_by_rewrite,
   semiring_operation op,
   int **columns,
   int nbcols)
 {
   Expr *result;
-  Expr *result_agg = NULL;
-  Expr *result_delta = NULL;
-  Expr *deltaExpr  = NULL;
   ListCell *lc_v;
-  
+
   if (op == SR_PLUS) {
     result = linitial(prov_atts);
   } else {
@@ -736,7 +696,6 @@ static Expr *make_provenance_expression(
       plus->location=-1;
 
       result=(Expr*)plus;
-      result_agg=(Expr*)plus;
     }
 
     if (aggregation) {
@@ -749,71 +708,7 @@ static Expr *make_provenance_expression(
       deltaExpr->location = -1;
 
       result = (Expr *)deltaExpr;
-      result_delta = result;
     }
-    if (aggregation && result_agg == NULL)
-  elog(ERROR, "missing result_agg");
-
-if (aggregation && result_delta == NULL)
-  elog(ERROR, "missing deltaExpr");
-    if (having)
-  {
-  //  // Extract constant from HAVING clause
-  //  OpExpr *havingOp = castNode(OpExpr, q->havingQual);
-  //  Expr   *arg1 = linitial(havingOp->args);
-  //  Expr   *arg2 = lsecond(havingOp->args);
-   
-  //  Const *literal;
-  //  if (IsA(arg1, Const)) {
-  //    literal = (Const *) copyObject(arg1);
-  //  } else if (IsA(arg2, Const)) {
-  //    literal = (Const *) copyObject(arg2);
-  //  } else {
-  //    elog(ERROR, "HAVING clause must compare to constant");
-  //  }
- /* Extract the constant, no matter how deeply it’s wrapped */
-  Const *literal = extract_having_literal(q->havingQual);
-   if (!literal)
-    elog(ERROR, "ProvSQL: could not find a constant in HAVING clause");
-   // gate_one() expression
-   FuncExpr *oneExpr = makeNode(FuncExpr);
-   oneExpr->funcid = constants->OID_FUNCTION_GATE_ONE;
-   oneExpr->funcresulttype = constants->OID_TYPE_UUID;
-   oneExpr->args = NIL;
-   oneExpr->location = -1;
-
-   // provenance_semimod(literal, gate_one())
-   FuncExpr *semimodExpr = makeNode(FuncExpr);
-   semimodExpr->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
-   semimodExpr->funcresulttype = constants->OID_TYPE_UUID;
-   semimodExpr->args = list_make2((Expr *)literal, (Expr *)oneExpr);
-   semimodExpr->location = -1;
-
-   // provenance_cmp(result_agg, semimod_expr)
-   FuncExpr *cmpExpr = makeNode(FuncExpr);
-   cmpExpr->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
-   cmpExpr->funcresulttype = constants->OID_TYPE_UUID;
-   cmpExpr->args = list_make2(result_agg, (Expr *)semimodExpr);
-   cmpExpr->location = -1;
-
-   // ARRAY[deltaExpr, cmpExpr]
-   ArrayExpr *arr = makeNode(ArrayExpr);
-   arr->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-   arr->element_typeid = constants->OID_TYPE_UUID;
-   arr->elements = list_make2((Node*)result_delta, (Node *)cmpExpr);
-   arr->location = -1;
-
-   // provenance_times(...)
-   FuncExpr *timesExpr = makeNode(FuncExpr);
-   timesExpr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-   timesExpr->funcvariadic = true;
-   timesExpr->funcresulttype = constants->OID_TYPE_UUID;
-   timesExpr->args = list_make1((Expr *)arr);
-   timesExpr->location = -1;
-
-   // Final result = times(delta, cmp)
-   result = (Expr *)timesExpr;
-   }
   }
 
   /* Part to handle eq gates used for where-provenance.
@@ -915,7 +810,6 @@ if (aggregation && result_delta == NULL)
   return result;
 }
 
-
 static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
   //variables
   Alias *alias = makeNode(Alias);
@@ -991,13 +885,6 @@ static Query* rewrite_for_agg_distinct(Query *q, Query *subq){
   q->jointree = jointree;
   return q;
 }
-
-
-
-
-
-
-
 
 static Query *check_for_agg_distinct(Query *q){
   ListCell *lc_v;
@@ -1602,15 +1489,12 @@ static Query *process_query(
       return process_query(constants, q, removed);
     }
   }
-  
+
   if (q->hasAggs) {
     Query *subq;
 
     if (q->havingQual) {
-      
-      q->havingQual= NULL;
-
-
+      elog(ERROR, "Non-terminal aggregates not supported by ProvSQL");
     }
 
     subq = check_for_agg_distinct(q);
@@ -1776,7 +1660,6 @@ static Query *process_query(
       q,
       prov_atts,
       q->hasAggs,
-      q->havingQual,
       group_by_rewrite,
       has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES),
       columns,
@@ -1896,5 +1779,3 @@ void _PG_fini(void)
   planner_hook = prev_planner;
   shmem_startup_hook = prev_shmem_startup;
 }
-
-

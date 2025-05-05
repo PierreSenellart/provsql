@@ -22,6 +22,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Boolean.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
+#include "semiring/Why.h" 
 
 static const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
@@ -57,6 +58,121 @@ static void initialize_provenance_mapping(
   SPI_finish();
 }
 
+
+//Why hash version
+// static Datum pec_why(
+//   const constants_t &constants,
+//   GenericCircuit &c,
+//   gate_t g,
+//   const std::set<gate_t> &inputs,
+//   const std::string &semiring,
+//   bool drop_table)
+// {
+//   // Map each input gate to a why_provenance_t (set of label_sets)
+//   std::unordered_map<gate_t, semiring::why_provenance_t> provenance_mapping;
+//   initialize_provenance_mapping<semiring::why_provenance_t>(
+//       constants,
+//       c,
+//       provenance_mapping,
+//       /* parser: char* -> why_provenance_t */
+//       [](const char *v) {
+//           semiring::why_provenance_t result;
+//           // Wrap raw UUID/token string into a single-element label_set
+//           semiring::label_set single;
+//           single.insert(std::string(v));
+//           // Insert that label_set as the only justification
+//           result.insert(std::move(single));
+//           return result;
+//       },
+//       drop_table
+//   );
+
+//   if (semiring == "why") {
+//       // Evaluate the circuit using the Why semiring
+//       auto prov = c.evaluate<semiring::Why>(g, provenance_mapping);
+
+//       // Serialize the nested unordered_set into a string like "{{a,b},{c}}"
+//       std::ostringstream oss;
+//       oss << "{";
+//       bool firstOuter = true;
+//       for (auto const &inner : prov) {
+//           if (!firstOuter) oss << ",";
+//           firstOuter = false;
+//           oss << "{";
+//           bool firstInner = true;
+//           for (auto const &lbl : inner) {
+//               if (!firstInner) oss << ",";
+//               firstInner = false;
+//               oss << lbl;
+//           }
+//           oss << "}";
+//       }
+//       oss << "}";
+
+//       std::string out = oss.str();
+//       text *result = (text *) palloc(VARHDRSZ + out.size() + 1);
+//       SET_VARSIZE(result, VARHDRSZ + out.size());
+//       memcpy(VARDATA(result), out.c_str(), out.size());
+//       PG_RETURN_TEXT_P(result);
+//   } else {
+//       throw CircuitException("Unknown semiring for type varchar: " + semiring);
+//   }
+// }
+
+static Datum pec_why(
+  const constants_t &constants,
+  GenericCircuit &c,
+  gate_t g,
+  const std::set<gate_t> &inputs,
+  const std::string &semiring,
+  bool drop_table)
+{
+std::unordered_map<gate_t, semiring::why_provenance_t> provenance_mapping;
+
+initialize_provenance_mapping<semiring::why_provenance_t>(
+  constants,
+  c,
+  provenance_mapping,
+  [](const char *v) {
+    semiring::why_provenance_t result;
+    semiring::label_set single;
+    single.insert(std::string(v));  
+    result.insert(std::move(single));
+    return result;
+  },
+  drop_table
+);
+
+if (semiring == "why") {
+  auto prov = c.evaluate<semiring::Why>(g, provenance_mapping);
+
+  // Serialize nested set structure: {{x},{y}}
+  std::ostringstream oss;
+  oss << "{";
+  bool firstOuter = true;
+  for (const auto& inner : prov) {
+    if (!firstOuter) oss << ",";
+    firstOuter = false;
+    oss << "{";
+    bool firstInner = true;
+    for (const auto& label : inner) {
+      if (!firstInner) oss << ",";
+      firstInner = false;
+      oss << label;
+    }
+    oss << "}";
+  }
+  oss << "}";
+
+  std::string out = oss.str();
+  text *result = (text *) palloc(VARHDRSZ + out.size());
+  SET_VARSIZE(result, VARHDRSZ + out.size());
+  memcpy(VARDATA(result), out.c_str(), out.size());
+  PG_RETURN_TEXT_P(result);
+} else {
+  throw CircuitException("Unknown semiring for type varchar: " + semiring);
+}
+}
 static Datum pec_varchar(
   const constants_t &constants,
   GenericCircuit &c,
@@ -211,8 +327,13 @@ static Datum provenance_evaluate_compiled_internal
 
   constants_t constants = get_constants(true);
 
-  if(type==constants.OID_TYPE_VARCHAR)
-    return pec_varchar(constants, c, g, inputs, semiring, drop_table);
+  if (type == constants.OID_TYPE_VARCHAR) 
+  {
+    if (semiring == "why")
+      return pec_why(constants, c, g, inputs, semiring, drop_table);
+    else
+      return pec_varchar(constants, c, g, inputs, semiring, drop_table);
+  }
   else if(type==constants.OID_TYPE_INT)
     return pec_int(constants, c, g, inputs, semiring, drop_table);
   else if(type==constants.OID_TYPE_BOOL)
