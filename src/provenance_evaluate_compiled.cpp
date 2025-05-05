@@ -75,9 +75,9 @@ static Datum pec_why(
     [](const char *v) {
     semiring::why_provenance_t result;
     semiring::label_set single;
-    if(strchr(v, c))
-      elog(ERROR, "Complex Why-semiring values for input tuples not currently supported.")
-      single.insert(std::string(v));
+    if(strchr(v, '{'))
+      elog(ERROR, "Complex Why-semiring values for input tuples not currently supported.");
+    single.insert(std::string(v));
     result.insert(std::move(single));
     return result;
   },
