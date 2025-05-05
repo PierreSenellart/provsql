@@ -10,5 +10,5 @@ compile_commands.json
 tdkc
 test.log
 .ccls-cache/
-doc/doxygen/
+doc/doxygen-*/
 .cache/

@@ -1,40 +1,22 @@
--- Requires extensions "uuid-ossp"
+/**
+ * @file
+ * @brief ProvSQL PL/pgSQL extension code
+ *
+ * This file contains the PL/pgSQL code of the ProvSQL extension. This
+ * extension requires the standard uuid-ossp extension.
+ */
 
+/**
+  * @brief <tt>provsql</tt> schema
+  *
+  * All types and functions introduced by ProvSQL are defined in the
+  * provsql schema, requiring prefixing them by <tt>provsql.</tt> or
+  * using PostgreSQL's <tt>search_path</tt> variable with a command such
+  * as \code{.sql}SET search_path TO public, provsql;\endcode
+  */
 CREATE SCHEMA provsql;
 
 SET search_path TO provsql;
-
--- Create agg_token type for aggregation display
-CREATE TYPE agg_token;
-
-CREATE OR REPLACE FUNCTION agg_token_in(cstring)
-  RETURNS agg_token
-  AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
-  RETURNS cstring
-  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
-  RETURNS text
-  AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE TYPE agg_token (
-  internallength = 117,
-  input = agg_token_in,
-  output = agg_token_out,
-  alignment = char
-);
-
-CREATE OR REPLACE FUNCTION agg_token_uuid(aggtok agg_token)
-  RETURNS uuid AS
-$$
-BEGIN
-  RETURN agg_token_cast(aggtok)::uuid;
-END
-$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE PARALLEL SAFE;
-
-CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
 CREATE TYPE provenance_gate AS
   ENUM(
@@ -78,29 +60,45 @@ CREATE OR REPLACE FUNCTION get_prob(
   RETURNS DOUBLE PRECISION AS
   'provsql','get_prob' LANGUAGE C STABLE PARALLEL SAFE;
 
--- Two integer values associated to gate, used in different ways by
--- different gate types:
--- * for mulinput, info1 indicates the value of this multivalued variable
--- * for eq, info1 and info2 indicate the attribute index of the
---   equijoin in, respectively, the first and second columns
--- * for agg, info1 is the oid of the aggregate function and info2 the
---   oid of the aggregate result type
+/**
+ * @brief Set additional integer values on provenance circuit gate
+ *
+ * This function sets two integer values associated to a circuit gate, used in
+ * different ways by different gate types:
+ *   - for mulinput, info1 indicates the value of this multivalued variable
+ *   - for eq, info1 and info2 indicate the attribute index of the
+       equijoin in, respectively, the first and second columns
+ *   - for agg, info1 is the oid of the aggregate function and info2 the
+       oid of the aggregate result type
+ *
+ * @param token UUID of the circuit gate
+ * @param info1 first integer value
+ * @param info2 second integer value
+ */
 CREATE OR REPLACE FUNCTION set_infos(
   token UUID, info1 INT, info2 INT DEFAULT NULL)
   RETURNS void AS
   'provsql','set_infos' LANGUAGE C PARALLEL SAFE;
+
 CREATE OR REPLACE FUNCTION get_infos(
   token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
   'provsql','get_infos' LANGUAGE C STABLE PARALLEL SAFE;
 
--- Extra arbitrary text-encoded information associated to gate, used in
--- different ways by different gate types:
--- * for project, it is a text-encoded ARRAY of two-element ARRAYs that
---   indicate mappings between input attribute (first element) and output
---   attribute (second element)
--- * for value and agg, it is the text-encoded (base for value, computed
---   for agg) scalar value
+/**
+ * @brief Set extra text information on provenance circuit gate
+ *
+ * This function sets text-encoded data associated to a circuit gate, used in
+ * different ways by different gate types:
+ *   - for project, it is a text-encoded ARRAY of two-element ARRAYs that
+ *     indicate mappings between input attribute (first element) and output
+ *     attribute (second element)
+ *   - for value and agg, it is the text-encoded (base for value, computed
+ *     for agg) scalar value
+ *
+ * @param token UUID of the circuit gate
+ * @param data text-encoded information
+ */
 CREATE OR REPLACE FUNCTION set_extra(
   token UUID, data TEXT)
   RETURNS void AS
@@ -669,6 +667,52 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
 
+
+/** @name Type for the result of aggregate queries
+ *
+ *  Custom type <tt>agg_token</tt> for a provenance semimodule value, to
+ *  be used in attributes that are computed as a result of aggregation.
+ *  As for provenance tokens, this is simply a UUID, but this UUID is
+ *  displayed in a specific way (as the result of the aggregation
+ *  followed by a "(*)") to help with readability.
+ *
+ *  @{
+ */
+
+CREATE TYPE agg_token;
+
+CREATE OR REPLACE FUNCTION agg_token_in(cstring)
+  RETURNS agg_token
+  AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
+  RETURNS cstring
+  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
+  RETURNS text
+  AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE agg_token (
+  internallength = 117,
+  input = agg_token_in,
+  output = agg_token_out,
+  alignment = char
+);
+
+CREATE OR REPLACE FUNCTION agg_token_uuid(aggtok agg_token)
+  RETURNS uuid AS
+$$
+BEGIN
+  RETURN agg_token_cast(aggtok)::uuid;
+END
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE PARALLEL SAFE;
+
+CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
+
+/** @} */
+
+
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
     aggtype integer,
@@ -877,7 +921,10 @@ CREATE TABLE delete_provenance (
   deleted_at TIMESTAMP DEFAULT current_timestamp
 );
 
--- Semirings
+/** @name Compiled semirings
+ *  Definitions of compiled semirings
+ *  @{
+ */
 
 CREATE FUNCTION sr_formula(token UUID, token2value regclass)
   RETURNS VARCHAR AS
@@ -931,6 +978,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @} */
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
