@@ -70,6 +70,7 @@ CREATE OR REPLACE FUNCTION get_prob(
        equijoin in, respectively, the first and second columns
  *   - for agg, info1 is the oid of the aggregate function and info2 the
        oid of the aggregate result type
+ *   - for cmp, info1 is the oid of the comparison operator
  *
  * @param token UUID of the circuit gate
  * @param info1 first integer value
@@ -387,9 +388,9 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
---this is to be done provenance_cmp
 CREATE OR REPLACE FUNCTION provenance_cmp(
   left_token  UUID,
+  comparison_op OID,
   right_token UUID
 )
 RETURNS UUID AS
@@ -398,12 +399,13 @@ DECLARE
   cmp_token UUID;
 BEGIN
   -- deterministic v5 namespace id
-  cmp_token := uuid_generate_v5(
+  cmp_token := public.uuid_generate_v5(
     uuid_ns_provsql(),
-    concat('cmp', left_token::text, right_token::text)
+    concat('cmp', left_token::text, comparison_op::text, right_token::text)
   );
   -- wire it up in the circuit
   PERFORM create_gate(cmp_token, 'cmp', ARRAY[left_token, right_token]);
+  PERFORM set_infos(cmp_token, comparison_op::integer);
   RETURN cmp_token;
 END
 $$ LANGUAGE plpgsql
@@ -926,11 +928,11 @@ CREATE TABLE delete_provenance (
  *  @{
  */
 
-CREATE FUNCTION sr_formula(token UUID, token2value regclass)
+CREATE FUNCTION sr_formula(token ANYELEMENT, token2value regclass)
   RETURNS VARCHAR AS
 $$
 BEGIN
-  RETURN provenance_evaluate_compiled(
+  RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
     'formula',
@@ -939,11 +941,11 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
-CREATE FUNCTION sr_counting(token UUID, token2value regclass)
+CREATE FUNCTION sr_counting(token ANYELEMENT, token2value regclass)
   RETURNS INT AS
 $$
 BEGIN
-  RETURN provenance_evaluate_compiled(
+  RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
     'counting',
@@ -952,11 +954,11 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
-CREATE FUNCTION sr_why(token UUID, token2value regclass)
+CREATE FUNCTION sr_why(token ANYELEMENT, token2value regclass)
   RETURNS VARCHAR AS
 $$
 BEGIN
-  RETURN provenance_evaluate_compiled(
+  RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
     'why',
@@ -965,11 +967,11 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
-CREATE FUNCTION sr_boolean(token UUID, token2value regclass)
+CREATE FUNCTION sr_boolean(token ANYELEMENT, token2value regclass)
   RETURNS BOOLEAN AS
 $$
 BEGIN
-  RETURN provenance_evaluate_compiled(
+  RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
     'boolean',

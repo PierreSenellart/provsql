@@ -754,42 +754,63 @@ static Expr *make_provenance_expression(
     if (aggregation && result_agg == NULL)
       elog(ERROR, "missing result_agg");
 
-
-    if (having)
+    if (q->havingQual)
     {
-      Const *literal = extract_having_literal(q->havingQual);
+      OpExpr *opExpr;
+      FuncExpr *oneExpr, *semimodExpr, *cmpExpr, *timesExpr;
+      ArrayExpr *arr;
+      Const *literal, *oid;
+
+      // First check that the havingQual is a simple HAVING expression
+      // that we know how to handle, i.e., an OpExpr and not a more
+      // complex BoolExpr
+
+      if(q->havingQual->type != T_OpExpr) {
+        elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+      }
+
+      opExpr=(OpExpr *) q->havingQual;
+
+      literal = extract_having_literal(q->havingQual);
       if (!literal)
         elog(ERROR, "ProvSQL: could not find a constant in HAVING clause");
       // gate_one() expression
-      FuncExpr *oneExpr = makeNode(FuncExpr);
+      oneExpr = makeNode(FuncExpr);
       oneExpr->funcid = constants->OID_FUNCTION_GATE_ONE;
       oneExpr->funcresulttype = constants->OID_TYPE_UUID;
       oneExpr->args = NIL;
       oneExpr->location = -1;
 
       // provenance_semimod(literal, gate_one())
-      FuncExpr *semimodExpr = makeNode(FuncExpr);
+      semimodExpr = makeNode(FuncExpr);
       semimodExpr->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
       semimodExpr->funcresulttype = constants->OID_TYPE_UUID;
       semimodExpr->args = list_make2((Expr *)literal, (Expr *)oneExpr);
       semimodExpr->location = -1;
 
+      oid = makeConst(constants->OID_TYPE_INT,
+                      -1,
+                      InvalidOid,
+                      sizeof(int32),
+                      Int32GetDatum(opExpr->opno),
+                      false,
+                      true);
 
-      FuncExpr *cmpExpr = makeNode(FuncExpr);
+      cmpExpr = makeNode(FuncExpr);
       cmpExpr->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
       cmpExpr->funcresulttype = constants->OID_TYPE_UUID;
-      cmpExpr->args = list_make2(result_agg, (Expr *)semimodExpr);
+      cmpExpr->args = list_make3(result_agg, oid, (Expr *)semimodExpr);
       cmpExpr->location = -1;
 
       // ARRAY[deltaExpr, cmpExpr]
-      ArrayExpr *arr = makeNode(ArrayExpr);
+      arr = makeNode(ArrayExpr);
       arr->array_typeid = constants->OID_TYPE_UUID_ARRAY;
       arr->element_typeid = constants->OID_TYPE_UUID;
       arr->elements = list_make2((Node*)result_delta, (Node *)cmpExpr);
       arr->location = -1;
 
       // provenance_times(...)
-      FuncExpr *timesExpr = makeNode(FuncExpr);
+      timesExpr = makeNode(FuncExpr);
       timesExpr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
       timesExpr->funcvariadic = true;
       timesExpr->funcresulttype = constants->OID_TYPE_UUID;
