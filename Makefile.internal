@@ -56,21 +56,21 @@ ifeq ($(OS), Darwin)
 HOMEBREW_PREFIX = $(shell brew --prefix)
 BOOST_INSTALL_PATH = $(shell brew --prefix boost)
 
-LINKER_FLAGS += -L$(BOOST_INSTALL_PATH)/lib -L$(HOMEBREW_PREFIX)/lib 
+LINKER_FLAGS += -L$(BOOST_INSTALL_PATH)/lib -L$(HOMEBREW_PREFIX)/lib
 endif
 
 ifeq ($(ARCH), arm64)
 PRECXXFLAGS=-I$(BOOST_INSTALL_PATH)/include
 endif
 ifeq ($(ARCH), x86_64)
-PRECXXFLAGS=-I/usr/local/include 
+PRECXXFLAGS=-I/usr/local/include
 endif
 PRECXXFLAGS+=-std=c++17 -Wno-register -fPIC
 
 %.o : %.cpp
 	$(CXX) $(PRECXXFLAGS) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-LINKER_FLAGS += -lstdc++ -lboost_serialization -Wno-lto-type-mismatch 
+LINKER_FLAGS += -lstdc++ -lboost_serialization -Wno-lto-type-mismatch
 
 VERSION     = $(shell $(PG_CONFIG) --version | awk '{print $$2}')
 PGVER_MAJOR = $(shell echo $(VERSION) | awk -F. '{ print ($$1 + 0) }')
