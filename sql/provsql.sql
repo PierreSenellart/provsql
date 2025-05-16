@@ -398,6 +398,7 @@ $$
 DECLARE
   cmp_token UUID;
 BEGIN
+  -- RAISE EXCEPTION 'provenance_cmp called with left_token = %', left_token;
   -- deterministic v5 namespace id
   cmp_token := public.uuid_generate_v5(
     uuid_ns_provsql(),
@@ -405,7 +406,7 @@ BEGIN
   );
   -- wire it up in the circuit
   PERFORM create_gate(cmp_token, 'cmp', ARRAY[left_token, right_token]);
-  PERFORM set_infos(cmp_token, comparison_op::integer);
+  PERFORM set_infos(cmp_token, comparison_op::integer, 0);
   RETURN cmp_token;
 END
 $$ LANGUAGE plpgsql
@@ -720,7 +721,7 @@ CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggtype integer,
     val anyelement,
     tokens uuid[])
-  RETURNS agg_token AS
+  RETURNS UUID AS
 $$
 DECLARE
   c INTEGER;
@@ -742,7 +743,8 @@ BEGIN
     PERFORM set_extra(agg_tok, agg_val);
   END IF;
 
-  RETURN '( '||agg_tok||' , '||agg_val||' )';
+  -- RETURN '( '||agg_tok||' , '||agg_val||' )';
+  RETURN agg_tok; --return plain uuid. disrupts, agg display. but circuit works.
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
