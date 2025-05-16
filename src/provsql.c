@@ -25,7 +25,6 @@
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
-
 #if PG_VERSION_NUM < 100000
 #error "ProvSQL requires PostgreSQL version 10 or later"
 #endif
@@ -72,9 +71,9 @@ static Var *make_provenance_attribute(const constants_t *constants, Query *q,
 #if PG_VERSION_NUM >= 160000
   if (r->perminfoindex != 0) {
     RTEPermissionInfo *rpi =
-      list_nth_node(RTEPermissionInfo, q->rteperminfos, r->perminfoindex - 1);
+        list_nth_node(RTEPermissionInfo, q->rteperminfos, r->perminfoindex - 1);
     rpi->selectedCols = bms_add_member(
-      rpi->selectedCols, attid - FirstLowInvalidHeapAttributeNumber);
+        rpi->selectedCols, attid - FirstLowInvalidHeapAttributeNumber);
   }
 #else
   r->selectedCols = bms_add_member(r->selectedCols,
@@ -181,8 +180,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
         if (!strcmp(v, PROVSQL_COLUMN_NAME) &&
             get_atttype(r->relid, attid) == constants->OID_TYPE_UUID) {
           prov_atts =
-            lappend(prov_atts,
-                    make_provenance_attribute(constants, q, r, rteid, attid));
+              lappend(prov_atts,
+                      make_provenance_attribute(constants, q, r, rteid, attid));
         }
 
         ++attid;
@@ -190,9 +189,9 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
     } else if (r->rtekind == RTE_SUBQUERY) {
       bool *inner_removed = NULL;
       int old_targetlist_length =
-        r->subquery->targetList ? r->subquery->targetList->length : 0;
+          r->subquery->targetList ? r->subquery->targetList->length : 0;
       Query *new_subquery =
-        process_query(constants, r->subquery, &inner_removed);
+          process_query(constants, r->subquery, &inner_removed);
       if (new_subquery != NULL) {
         int i = 0;
         int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
@@ -206,7 +205,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
                cell != NULL;) {
             if (inner_removed[i]) {
               r->eref->colnames =
-                my_list_delete_cell(r->eref->colnames, cell, prev);
+                  my_list_delete_cell(r->eref->colnames, cell, prev);
               if (prev)
                 cell = my_lnext(r->eref->colnames, prev);
               else
@@ -219,7 +218,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
           }
           for (i = 0; i < old_targetlist_length; ++i) {
             offset[i] =
-              (i == 0 ? 0 : offset[i - 1]) - (inner_removed[i] ? 1 : 0);
+                (i == 0 ? 0 : offset[i - 1]) - (inner_removed[i] ? 1 : 0);
           }
 
           reduce_varattno_by_offset(q->targetList, rteid, offset);
@@ -238,8 +237,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
           r->eref->colnames = lappend(r->eref->colnames,
                                       makeString(pstrdup(PROVSQL_COLUMN_NAME)));
           prov_atts =
-            lappend(prov_atts, make_provenance_attribute(
-                      constants, q, r, rteid, varattnoprovsql));
+              lappend(prov_atts, make_provenance_attribute(
+                                     constants, q, r, rteid, varattnoprovsql));
         }
         fix_type_of_aggregation_result(constants, q, rteid,
                                        r->subquery->targetList);
@@ -267,7 +266,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
           if (expr->funcresulttype == constants->OID_TYPE_UUID &&
               !strcmp(get_rte_attribute_name(r, attid), PROVSQL_COLUMN_NAME)) {
             prov_atts = lappend(prov_atts, make_provenance_attribute(
-                                  constants, q, r, rteid, attid));
+                                               constants, q, r, rteid, attid));
           }
         } else {
           ereport(ERROR, (errmsg("FROM function with multiple output "
@@ -324,7 +323,7 @@ remove_provenance_attributes_select(const constants_t *constants, Query *q,
 
           if (rt->ressortgroupref > 0)
             ressortgrouprefs =
-              bms_add_member(ressortgrouprefs, rt->ressortgroupref);
+                bms_add_member(ressortgrouprefs, rt->ressortgroupref);
         }
       }
     }
@@ -507,7 +506,7 @@ static Expr *make_aggregation_expression(const constants_t *constants,
       aggregation_function = F_SUM_INT4;
     } else {
       expr_s->args =
-        list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
+          list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
     }
 
     expr_s->location = -1;
@@ -636,23 +635,27 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       // that we know how to handle, i.e., an OpExpr and not a more
       // complex BoolExpr
 
-      if (q->havingQual->type != T_OpExpr || ((OpExpr*)q->havingQual)->args->length != 2) {
+      if (q->havingQual->type != T_OpExpr ||
+          ((OpExpr *)q->havingQual)->args->length != 2) {
         elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
       }
 
       opExpr = (OpExpr *)q->havingQual;
 
-      for(unsigned i=0; i<2; ++i) {
-        Node *node = (Node*) lfirst(list_nth_cell(opExpr->args, i));
-        if(IsA(node, FuncExpr)) {
-          FuncExpr *fe=(FuncExpr *) node;
-          if(fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
-            arguments[i]=(Node *) fe;
-          } else {
+      for (unsigned i = 0; i < 2; ++i) {
+        Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
+        if (IsA(node, FuncExpr)) {
+          FuncExpr *fe = (FuncExpr *)node;
+          if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) 
+          { 
+            fe->funcresulttype = constants->OID_TYPE_UUID;
+            arguments[i] = (Node *)fe;
+          } 
+          else {
             elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
           }
-        } else if(IsA(node, Const)) {
-          Const *literal = (Const *) node;
+        } else if (IsA(node, Const)) {
+          Const *literal = (Const *)node;
           FuncExpr *oneExpr, *semimodExpr;
 
           // gate_one() expression
@@ -669,7 +672,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           semimodExpr->args = list_make2((Expr *)literal, (Expr *)oneExpr);
           semimodExpr->location = -1;
 
-          arguments[i]=(Node *) semimodExpr;
+          arguments[i] = (Node *)semimodExpr;
         } else {
           elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
         }
@@ -714,7 +717,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
         JoinExpr *je = (JoinExpr *)lfirst(lc);
         /* Study equalities coming from From clause */
         result =
-          add_eq_from_Quals_to_Expr(constants, je->quals, result, columns);
+            add_eq_from_Quals_to_Expr(constants, je->quals, result, columns);
       }
     }
     /* Study equalities coming from WHERE clause */
@@ -743,7 +746,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       if (IsA(te_v->expr, Var)) {
         Var *vte_v = (Var *)te_v->expr;
         RangeTblEntry *rte_v =
-          (RangeTblEntry *)lfirst(list_nth_cell(q->rtable, vte_v->varno - 1));
+            (RangeTblEntry *)lfirst(list_nth_cell(q->rtable, vte_v->varno - 1));
         int value_v;
         /* Check if this targetEntry references a column in a RTE of type
          * RTE_JOIN */
@@ -751,14 +754,14 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           value_v = columns[vte_v->varno - 1][vte_v->varattno - 1];
         } else { // is a join
           Var *jav_v = (Var *)lfirst(
-            list_nth_cell(rte_v->joinaliasvars, vte_v->varattno - 1));
+              list_nth_cell(rte_v->joinaliasvars, vte_v->varattno - 1));
           value_v = columns[jav_v->varno - 1][jav_v->varattno - 1];
         }
         /* If this is a valid column */
         if (value_v > 0) {
           Const *ce =
-            makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
-                      Int32GetDatum(value_v), false, true);
+              makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+                        Int32GetDatum(value_v), false, true);
 
           array->elements = lappend(array->elements, ce);
 
@@ -808,12 +811,12 @@ static Query *rewrite_for_agg_distinct(Query *q, Query *subq) {
   foreach (lc_v, q->targetList) {
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
     eref->colnames =
-      lappend(eref->colnames, makeString(pstrdup(te_v->resname)));
+        lappend(eref->colnames, makeString(pstrdup(te_v->resname)));
 #if PG_VERSION_NUM < 160000
     // For PG_VERSION_NUM >= 160000, rte->perminfoindex==0 so no need to
     // care about permissions
     rte->selectedCols = bms_add_member(
-      rte->selectedCols, te_v->resno - FirstLowInvalidHeapAttributeNumber);
+        rte->selectedCols, te_v->resno - FirstLowInvalidHeapAttributeNumber);
 #endif
   }
   rte->alias = alias;
@@ -1022,7 +1025,7 @@ static void transform_distinct_into_group_by(Query *q) {
   foreach (lc, q->groupClause) {
     SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
     already_in_group_by =
-      bms_add_member(already_in_group_by, sgc->tleSortGroupRef);
+        bms_add_member(already_in_group_by, sgc->tleSortGroupRef);
   }
 
   foreach (lc, q->distinctClause) {
@@ -1429,7 +1432,7 @@ static Query *process_query(const constants_t *constants, Query *q,
 
     if (q->targetList) {
       removed_sortgrouprefs =
-        remove_provenance_attributes_select(constants, q, removed);
+          remove_provenance_attributes_select(constants, q, removed);
       if (removed_sortgrouprefs != NULL)
         remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
       if (q->setOperations)
@@ -1481,10 +1484,10 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (supported && q->groupingSets) {
     if (q->groupClause || list_length(q->groupingSets) > 1 ||
         ((GroupingSet *)linitial(q->groupingSets))->kind !=
-        GROUPING_SET_EMPTY) {
+            GROUPING_SET_EMPTY) {
       ereport(
-        ERROR,
-        (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql")));
+          ERROR,
+          (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql")));
       supported = false;
     } else {
       // Simple GROUP BY ()
@@ -1534,8 +1537,8 @@ static Query *process_query(const constants_t *constants, Query *q,
 
       // Compute aggregation expressions
       replace_aggregations_by_provenance_aggregate(
-        constants, q, prov_atts,
-        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
+          constants, q, prov_atts,
+          has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
 
       // If there are any sort clauses on something whose type is now
       // aggregate token, we throw an error: sorting aggregation values
@@ -1548,7 +1551,7 @@ static Query *process_query(const constants_t *constants, Query *q,
           if (sort->tleSortGroupRef == te->ressortgroupref) {
             if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
               elog(ERROR, "ORDER BY on the result of an aggregate function is "
-                   "not supported by ProvSQL");
+                          "not supported by ProvSQL");
             break;
           }
         }
@@ -1556,9 +1559,9 @@ static Query *process_query(const constants_t *constants, Query *q,
     }
 
     provenance = make_provenance_expression(
-      constants, q, prov_atts, q->hasAggs, q->havingQual, group_by_rewrite,
-      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
-      nbcols);
+        constants, q, prov_atts, q->hasAggs, q->havingQual, group_by_rewrite,
+        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
+        nbcols);
 
     if (q->havingQual) {
 
@@ -1623,18 +1626,18 @@ static PlannedStmt *provsql_planner(Query *q,
 void _PG_init(void) {
   if (!process_shared_preload_libraries_in_progress)
     elog(ERROR, "provsql needs to be added to the shared_preload_libraries "
-         "configuration variable");
+                "configuration variable");
 
   DefineCustomBoolVariable(
-    "provsql.where_provenance", "Should ProvSQL track where-provenance?",
-    "1 turns where-provenance on, 0 off.", &provsql_where_provenance, false,
-    PGC_USERSET, 0, NULL, NULL, NULL);
+      "provsql.where_provenance", "Should ProvSQL track where-provenance?",
+      "1 turns where-provenance on, 0 off.", &provsql_where_provenance, false,
+      PGC_USERSET, 0, NULL, NULL, NULL);
   DefineCustomIntVariable(
-    "provsql.verbose_level",
-    "Level of verbosity for ProvSQL informational and debug messages",
-    "0 for quiet (default), 1-9 for informational messages, 10-100 for debug "
-    "information.",
-    &provsql_verbose, 0, 0, 100, PGC_USERSET, 1, NULL, NULL, NULL);
+      "provsql.verbose_level",
+      "Level of verbosity for ProvSQL informational and debug messages",
+      "0 for quiet (default), 1-9 for informational messages, 10-100 for debug "
+      "information.",
+      &provsql_verbose, 0, 0, 100, PGC_USERSET, 1, NULL, NULL, NULL);
 
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");
