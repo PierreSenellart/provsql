@@ -648,7 +648,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           FuncExpr *fe = (FuncExpr *)node;
           if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) 
           { 
-            fe->funcresulttype = constants->OID_TYPE_UUID;
+            
             arguments[i] = (Node *)fe;
           } 
           else {
