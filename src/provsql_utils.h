@@ -71,9 +71,10 @@ typedef struct constants_t {
   Oid OID_FUNCTION_PROVENANCE_AGGREGATE; ///< OID of the provenance_aggregate FUNCTION
   Oid OID_FUNCTION_PROVENANCE_SEMIMOD; ///< OID of the provenance_semimod FUNCTION
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
-  Oid OID_FUNCTION_GATE_ONE; 
+  Oid OID_FUNCTION_GATE_ONE;
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION
   Oid OID_FUNCTION_NOT_EQUAL_UUID; ///< OID of the = operator on UUIDs FUNCTION
+  Oid OID_FUNCTION_AGG_TOKEN_UUID;
   bool ok; ///< true if constants were loaded
 } constants_t;
 
