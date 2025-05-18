@@ -99,9 +99,6 @@ FROM
   suspects;
 
 -- Q9
-SELECT
-  set_config ('setting.disable_update_trigger', 'on', false);
-
 ALTER table s
 ADD COLUMN count int;
 

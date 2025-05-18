@@ -336,8 +336,6 @@ CREATE TABLE suspects AS
   SELECT DISTINCT person FROM consistent_s
   WHERE room LIKE '% bedroom' AND time BETWEEN '00:00:00' AND '08:00:00';
 
-SELECT set_config('setting.disable_update_trigger', 'on', false);
-
 ALTER table s ADD COLUMN count int;
 UPDATE s SET count=1;
 SELECT create_provenance_mapping('count_mapping','s','count');

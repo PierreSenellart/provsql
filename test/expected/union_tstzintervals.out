@@ -33,5 +33,5 @@ query
 INSERT INTO test (id) VALUES (1), (2), (3);
 DELETE FROM test WHERE id = 2;
 UPDATE test SET id = 4 WHERE id = 3;
-CREATE TABLE undo_result AS SELECT undo(provsql) FROM query_provenance WHERE query = 'DELETE FROM test WHERE id = 2;';
+CREATE TABLE undo_result AS SELECT undo(provsql) FROM update_provenance WHERE query = 'DELETE FROM test WHERE id = 2;';
 (4 rows)

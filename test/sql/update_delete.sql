@@ -2,6 +2,8 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
+SET provsql.update_provenance = on;
+
 CREATE TABLE delete_test(id INT PRIMARY KEY);
 
 INSERT INTO delete_test (id)
@@ -9,7 +11,7 @@ VALUES (1), (2), (3), (4), (5);
 
 SELECT add_provenance('delete_test');
 
-DELETE FROM query_provenance;
+DELETE FROM update_provenance;
 
 -- Test 1: single row deletion
 SELECT create_provenance_mapping('delete_test_id', 'delete_test', 'id');
@@ -36,14 +38,16 @@ SELECT create_provenance_mapping('delete_test_id', 'delete_test', 'id');
 SELECT COUNT(*) FROM delete_test_id;
 SELECT value, probability_evaluate(provenance) FROM delete_test_id ORDER BY value;
 
--- Test 4: delete token tracking/ logging into query_provenance table
-CREATE TABLE query_provenance_result AS
-SELECT query FROM query_provenance ORDER BY ts;
-SELECT remove_provenance('query_provenance_result');
-SELECT * FROM query_provenance_result;
-DROP TABLE query_provenance_result;
+-- Test 4: delete token tracking/ logging into update_provenance table
+CREATE TABLE update_provenance_result AS
+SELECT query FROM update_provenance ORDER BY ts;
+SELECT remove_provenance('update_provenance_result');
+SELECT * FROM update_provenance_result;
+DROP TABLE update_provenance_result;
 
-DELETE FROM query_provenance;
+DELETE FROM update_provenance;
 
 DROP TABLE delete_test;
 DROP TABLE delete_test_id;
+
+SET provsql.update_provenance = off;

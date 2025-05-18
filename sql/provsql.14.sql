@@ -1,6 +1,6 @@
 SET search_path TO provsql;
 
-CREATE TABLE query_provenance (
+CREATE TABLE update_provenance (
   provsql uuid,
   query text,
   query_type query_type_enum,
@@ -33,7 +33,12 @@ DECLARE
   old_token UUID;
   new_token UUID;
   r RECORD;
+  enable_trigger BOOL;
 BEGIN
+  enable_trigger := current_setting('provsql.update_provenance', true);
+  IF enable_trigger = 'f' THEN
+    RETURN NULL;
+  END IF;
   delete_token := public.uuid_generate_v4();
 
   PERFORM create_gate(delete_token, 'update');
@@ -43,21 +48,21 @@ BEGIN
   FROM pg_stat_activity
   WHERE pid = pg_backend_pid();
 
-  INSERT INTO query_provenance (provsql, query, query_type, username, ts, valid_time)
+  INSERT INTO update_provenance (provsql, query, query_type, username, ts, valid_time)
   VALUES (delete_token, query_text, 'DELETE', current_user, CURRENT_TIMESTAMP, tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL)));
 
-  PERFORM set_config('setting.disable_insert_trigger', 'on', false);
+  PERFORM set_config('provsql.update_provenance', 'off', false);
   EXECUTE format('INSERT INTO %I.%I SELECT * FROM OLD_TABLE;', TG_TABLE_SCHEMA, TG_TABLE_NAME);
-  PERFORM set_config('setting.disable_insert_trigger', '', false);
+  PERFORM set_config('provsql.update_provenance', 'on', false);
 
   FOR r IN (SELECT * FROM OLD_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_monus(old_token, delete_token);
 
-    PERFORM set_config('setting.disable_update_trigger', 'on', false);
+    PERFORM set_config('provsql.update_provenance', 'off', false);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
-    PERFORM set_config('setting.disable_update_trigger', '', false);
+    PERFORM set_config('provsql.update_provenance', 'on', false);
   END LOOP;
 
   RETURN NULL;
@@ -73,10 +78,10 @@ DECLARE
   old_token UUID;
   new_token UUID;
   r RECORD;
-  disable_trigger TEXT;
+  enable_trigger BOOL;
 BEGIN
-  disable_trigger := current_setting('setting.disable_insert_trigger', true);
-  IF disable_trigger = 'on' THEN
+  enable_trigger := current_setting('provsql.update_provenance', true);
+  IF enable_trigger = 'f' THEN
     RETURN NULL;
   END IF;
 
@@ -89,16 +94,16 @@ BEGIN
   FROM pg_stat_activity
   WHERE pid = pg_backend_pid();
 
-  INSERT INTO query_provenance (provsql, query, query_type, username, ts, valid_time)
+  INSERT INTO update_provenance (provsql, query, query_type, username, ts, valid_time)
   VALUES (insert_token, query_text, 'INSERT', current_user, CURRENT_TIMESTAMP, tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL)));
 
   FOR r IN (SELECT * FROM NEW_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_times(old_token, insert_token);
-    PERFORM set_config('setting.disable_update_trigger', 'on', false);
+    PERFORM set_config('provsql.update_provenance', 'off', false);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
-    PERFORM set_config('setting.disable_update_trigger', '', false);
+    PERFORM set_config('provsql.update_provenance', 'on', false);
   END LOOP;
 
   RETURN NULL;
@@ -114,10 +119,10 @@ DECLARE
   old_token UUID;
   new_token UUID;
   r RECORD;
-  disable_trigger TEXT;
+  enable_trigger BOOL;
 BEGIN
-  disable_trigger := current_setting('setting.disable_update_trigger', true);
-  IF disable_trigger = 'on' THEN
+  enable_trigger := current_setting('provsql.update_provenance', true);
+  IF enable_trigger = 'f' THEN
     RETURN NULL;
   END IF;
   update_token := public.uuid_generate_v4();
@@ -129,31 +134,31 @@ BEGIN
   FROM pg_stat_activity
   WHERE pid = pg_backend_pid();
 
-  INSERT INTO query_provenance (provsql, query, query_type, username, ts, valid_time)
+  INSERT INTO update_provenance (provsql, query, query_type, username, ts, valid_time)
   VALUES (update_token, query_text, 'UPDATE', current_user, CURRENT_TIMESTAMP, tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL)));
 
   FOR r IN (SELECT * FROM NEW_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_times(old_token, update_token);
 
-    PERFORM set_config('setting.disable_update_trigger', 'on', false);
+    PERFORM set_config('provsql.update_provenance', 'off', false);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
-    PERFORM set_config('setting.disable_update_trigger', '', false);
+    PERFORM set_config('provsql.update_provenance', 'on', false);
   END LOOP;
 
-  PERFORM set_config('setting.disable_insert_trigger', 'on', false);
+  PERFORM set_config('provsql.update_provenance', 'off', false);
   EXECUTE format('INSERT INTO %I.%I SELECT * FROM OLD_TABLE;', TG_TABLE_SCHEMA, TG_TABLE_NAME);
-  PERFORM set_config('setting.disable_insert_trigger', '', false);
+  PERFORM set_config('provsql.update_provenance', 'on', false);
 
   FOR r IN (SELECT * FROM OLD_TABLE) LOOP
     old_token := r.provsql;
     new_token := provenance_monus(old_token, update_token);
 
-    PERFORM set_config('setting.disable_update_trigger', 'on', false);
+    PERFORM set_config('provsql.update_provenance', 'off', false);
     EXECUTE format('UPDATE %I.%I SET provsql = $1 WHERE provsql = $2;', TG_TABLE_SCHEMA, TG_TABLE_NAME)
     USING new_token, old_token;
-    PERFORM set_config('setting.disable_update_trigger', '', false);
+    PERFORM set_config('provsql.update_provenance', 'on', false);
   END LOOP;
 
   RETURN NULL;
@@ -400,12 +405,12 @@ DECLARE
   new_x uuid;
 BEGIN
   SELECT query INTO undone_query
-  FROM query_provenance
+  FROM update_provenance
   WHERE provsql = c
   LIMIT 1;
 
   IF undone_query IS NULL THEN
-    RAISE NOTICE 'Unable to find % in query_provenance', c;
+    RAISE NOTICE 'Unable to find % in update_provenance', c;
     RETURN c;
   END IF;
 
@@ -416,7 +421,7 @@ BEGIN
 
   undo_token := public.uuid_generate_v4();
   PERFORM create_gate(undo_token, 'update');
-  INSERT INTO query_provenance(provsql, query, query_type, username, ts, valid_time)
+  INSERT INTO update_provenance(provsql, query, query_type, username, ts, valid_time)
   VALUES (
     undo_token,
     undo_query,
@@ -426,7 +431,7 @@ BEGIN
     tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL))
   );
 
-  PERFORM set_config('setting.disable_update_trigger', 'on', false);
+  PERFORM set_config('provsql.update_provenance', 'off', false);
 
   FOR schema_rec IN
     SELECT nspname
@@ -441,7 +446,7 @@ BEGIN
         FROM information_schema.columns
         WHERE table_schema = schema_rec.nspname
           AND table_name = table_rec.tname
-          AND table_name <> 'query_provenance'
+          AND table_name <> 'update_provenance'
           AND column_name = 'provsql'
       ) THEN
         FOR row_rec IN
@@ -456,7 +461,7 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  PERFORM set_config('setting.disable_update_trigger', '', false);
+  PERFORM set_config('provsql.update_provenance', 'on', false);
 
   RETURN undo_token;
 END;
@@ -497,7 +502,7 @@ BEGIN
 END;
 $$;
 
-SELECT create_provenance_mapping_view('time_validity_view', 'query_provenance', 'valid_time');
+SELECT create_provenance_mapping_view('time_validity_view', 'update_provenance', 'valid_time');
 
 
 SET search_path TO public;

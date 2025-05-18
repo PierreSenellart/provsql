@@ -4,6 +4,7 @@ SET search_path TO provsql_test,provsql;
 
 SET TIME ZONE 'UTC';
 SET datestyle = 'iso';
+SET provsql.update_provenance='on';
 
 CREATE TABLE test (id INT, value INT);
 SELECT add_provenance('test');
@@ -13,7 +14,7 @@ DELETE FROM test WHERE id = 2;
 UPDATE test SET value = 4 WHERE id = 3;
 
 -- set fixed tstzmultirange values for predictable result
-UPDATE query_provenance
+UPDATE update_provenance
 SET valid_time = CASE
   WHEN query_type = 'INSERT' THEN tstzmultirange(tstzrange('1970-01-01 00:00:00+00', NULL))
   WHEN query_type = 'DELETE' THEN tstzmultirange(tstzrange('1970-01-01 00:00:01+00', NULL))
@@ -52,4 +53,5 @@ SELECT * FROM history_result;
 DROP TABLE history_result;
 
 DROP TABLE test;
-DELETE FROM query_provenance;
+DELETE FROM update_provenance;
+SET provsql.update_provenance='off';

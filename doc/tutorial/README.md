@@ -118,11 +118,8 @@ Solving the murder
      column to the table `s` that contains an integer.
      Set this integer
      to `1` for all tuples; this most likely requires an `UPDATE`
-     operation; since in ProvSQL, the provenance of `UPDATE` operation is
-     also tracked, this needs to be temporarily disabled with
-     ```sql
-     SELECT set_config ('setting.disable_update_trigger', 'on', false);
-     ```
+     operation.
+
      Then create a provenance mapping
      `count_mapping` that references this column: this is just so that
      each tuple of the `s` table counts for one individual sighting when
