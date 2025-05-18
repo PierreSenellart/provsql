@@ -28,7 +28,7 @@ The ProvSQL system supports:
   * semiring provenance in arbitrary semirings
   * m-semiring provenance in arbitrary semirings with monus
   * semimodule provenance of aggregate queries
-  * where-provenance
+  * where-provenance (if the option `provsql.where_provenance` is set)
 * probability computation from the Boolean provenance for query
   evaluation over probabilistic databases, through the
   following methods:
@@ -61,6 +61,7 @@ The following SQL features are currently supported.
 * EXCEPT of SELECT queries
 * VALUES() literal tables (assumed to have no provenance)
 * aggregation on the final query
+* simple update operations (INSERT, DELETE, UPDATE), if the option `provsql.update_provenance` is set
 
 ## Docker container
 
