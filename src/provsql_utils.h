@@ -53,6 +53,7 @@ typedef struct constants_t {
   Oid OID_TYPE_AGG_TOKEN; ///< OID of the agg_token TYPE
   Oid OID_TYPE_UUID; ///< OID of the uuid TYPE
   Oid OID_TYPE_UUID_ARRAY; ///< OID of the uuid[] TYPE
+  Oid OID_TYPE_BOOL; ///< OID of the BOOL TYPE
   Oid OID_TYPE_INT; ///< OID of the INT TYPE
   Oid OID_TYPE_INT_ARRAY; ///< OID of the INT[] TYPE
   Oid OID_TYPE_FLOAT; ///< OID of the FLOAT TYPE

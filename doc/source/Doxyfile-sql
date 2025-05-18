@@ -1,0 +1,19 @@
+# Input file/folder
+INPUT = ../../sql/provsql.sql
+
+# Output directory
+OUTPUT_DIRECTORY = ../doxygen-sql
+
+# Make Doxygen parse .sql as C-style
+FILE_PATTERNS = *.sql
+EXTENSION_MAPPING = sql=C
+OPTIMIZE_OUTPUT_FOR_C = YES
+FILTER_PATTERNS = *.sql=./plpgsql_filter.pl
+
+# Extract documentation even without @file tags
+EXTRACT_ALL = YES
+
+# Recursively scan input directory (if you want subfolders)
+RECURSIVE = YES
+
+GENERATE_XML = YES

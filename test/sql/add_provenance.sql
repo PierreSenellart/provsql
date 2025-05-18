@@ -33,3 +33,5 @@ SELECT attname
 FROM pg_attribute
 WHERE attrelid ='personnel'::regclass AND attnum>1
 ORDER BY attname;
+
+SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');

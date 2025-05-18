@@ -361,7 +361,7 @@ Datum get_children(PG_FUNCTION_ARGS)
       while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
         if(actual_read<=0) {
           provsql_shmem_unlock();
-          elog(ERROR, "Cannot read from pipe (message type g)");
+          elog(ERROR, "Cannot read from pipe (message type c)");
         } else {
           remaining_size-=actual_read;
           p+=actual_read;

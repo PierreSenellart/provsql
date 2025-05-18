@@ -4,7 +4,7 @@
 #include <boost/iostreams/device/array.hpp>
 #include <boost/iostreams/stream.hpp>
 
-#include "BooleanCircuit.h"
+#include "CircuitFromMMap.h"
 #include "provsql_utils_cpp.h"
 
 extern "C" {
@@ -12,22 +12,24 @@ extern "C" {
 #include "provsql_mmap.h"
 }
 
-BooleanCircuit getBooleanCircuit(pg_uuid_t token)
+template<typename C>
+static C getCircuitFromMMap(pg_uuid_t token, char message_char)
 {
   provsql_shmem_lock_exclusive();
-  if(!WRITEM("g", char) || !WRITEM(&token, pg_uuid_t))
-    elog(ERROR, "Cannot write to pipe (message type g)");
+  if(!WRITEM(&message_char, char) || !WRITEM(&token, pg_uuid_t))
+    elog(ERROR, "Cannot write to pipe (message type %c)", message_char);
 
   unsigned long size;
   if(!READB(size, unsigned long))
-    elog(ERROR, "Cannot read from pipe (message type g)");
+    elog(ERROR, "Cannot read from pipe (message type %c)", message_char);
 
   char *buf = new char[size], *p = buf;
   ssize_t actual_read, remaining_size=size;
   while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
     if(actual_read<=0) {
       provsql_shmem_unlock();
-      elog(ERROR, "Cannot read from pipe (message type g)");
+      delete [] buf;
+      elog(ERROR, "Cannot read from pipe (message type %c)", message_char);
     } else {
       remaining_size-=actual_read;
       p+=actual_read;
@@ -37,10 +39,19 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token)
 
   boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
   boost::archive::binary_iarchive ia(stream);
-  BooleanCircuit bc;
-  ia >> bc;
+  C c;
+  ia >> c;
 
   delete [] buf;
 
-  return bc;
+  return c;
+}
+
+BooleanCircuit getBooleanCircuit(pg_uuid_t token)
+{
+  return getCircuitFromMMap<BooleanCircuit>(token, 'b');
+}
+GenericCircuit getGenericCircuit(pg_uuid_t token)
+{
+  return getCircuitFromMMap<GenericCircuit>(token, 'g');
 }

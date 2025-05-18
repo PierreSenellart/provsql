@@ -3,11 +3,11 @@ EXTVERSION = $(shell grep default_version $(EXTENSION).common.control | \
            sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 
 MODULE_big = provsql
-OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard src/*.cpp))
+OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp))
 
 DOCS = $(wildcard doc/*.md)
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
-EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql sql/$(EXTENSION).sql tdkc test/schedule $(EXTENSION).control
+EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql sql/$(EXTENSION).sql tdkc test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files
 
 # We want REGRESS to be empty, since we are going to provide a schedule
 # of tests. But we want REGRESS to be defined, otherwise installcheck
@@ -27,7 +27,7 @@ EXTRA_REGRESS_OPTS =
 
 all: $(DATA) $(MODULE_big).so test/schedule
 
-$(OBJS): $(wildcard src/*.h)
+$(OBJS): $(wildcard src/*.h src/semiring/*.h src/*.hpp)
 
 sql/provsql.sql: sql/provsql.*.sql
 	cat sql/provsql.common.sql > sql/provsql.sql

@@ -1,4 +1,5 @@
 #include "dDNNF.h"
+#include "Circuit.hpp"
 
 #include <unordered_map>
 #include <stack>

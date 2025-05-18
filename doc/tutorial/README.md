@@ -93,7 +93,7 @@ Solving the murder
      be correct. Run a query that identifies all such contradictions.
 
 1.   Add in the `SELECT` clause of the previous query a term
-     `formula(provenance(),'witness_mapping')`. This has for effect to
+     `sr_formula(provenance(),'witness_mapping')`. This has for effect to
      evaluate the provenance annotation of each tuple in a semiring that
      displays a formula for the provenance, using `witness_mapping` to
      map initial provenance tokens to actual names.
@@ -126,8 +126,8 @@ Solving the murder
      Then create a provenance mapping
      `count_mapping` that references this column: this is just so that
      each tuple of the `s` table counts for one individual sighting when
-     collecting the counts. Now, using the `counting` function instead of
-     the `formula` function, and `count_mapping` instead of
+     collecting the counts. Now, using the `sr_counting` function instead of
+     the `sr_formula` function, and `count_mapping` instead of
      `witness_mapping`, display the number of sightings confirming that a
      person was a suspect. This number may be 0 in case of inconsistent
      sightings! Who had the most sightings?

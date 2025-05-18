@@ -341,7 +341,7 @@ SELECT set_config('setting.disable_update_trigger', 'on', false);
 ALTER table s ADD COLUMN count int;
 UPDATE s SET count=1;
 SELECT create_provenance_mapping('count_mapping','s','count');
-CREATE TABLE results AS SELECT *,counting(provenance(),'count_mapping') AS c FROM suspects ORDER BY c, person;
+CREATE TABLE results AS SELECT *,sr_counting(provenance(),'count_mapping') AS c FROM suspects ORDER BY c, person;
 SELECT remove_provenance('results');
 SELECT * FROM results;
 DROP TABLE results;

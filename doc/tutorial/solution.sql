@@ -46,7 +46,7 @@ SELECT
   s1.time,
   s1.person,
   s1.room,
-  formula (provenance (), 'witness_mapping')
+  sr_formula (provenance (), 'witness_mapping')
 FROM
   s AS s1,
   s AS s2
@@ -78,7 +78,7 @@ WHERE
 
 SELECT
   *,
-  formula (provenance (), 'witness_mapping')
+  sr_formula (provenance (), 'witness_mapping')
 FROM
   consistent_s;
 
@@ -94,7 +94,7 @@ WHERE
 
 SELECT
   *,
-  formula (provenance (), 'witness_mapping')
+  sr_formula (provenance (), 'witness_mapping')
 FROM
   suspects;
 
@@ -114,7 +114,7 @@ SELECT
 
 SELECT
   *,
-  counting (provenance (), 'count_mapping') AS c
+  sr_counting (provenance (), 'count_mapping') AS c
 FROM
   suspects
 ORDER BY
@@ -142,7 +142,7 @@ FROM
 -- Q11
 SELECT
   *,
-  formula (provenance (), 'witness_mapping'),
+  sr_formula (provenance (), 'witness_mapping'),
   probability_evaluate (provenance (), 'possible-worlds')
 FROM
   suspects

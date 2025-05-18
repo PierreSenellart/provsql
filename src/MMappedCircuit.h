@@ -2,6 +2,7 @@
 #define MMAPPED_CIRCUIT_H
 
 #include "BooleanCircuit.h"
+#include "GenericCircuit.h"
 #include "MMappedUUIDHashTable.h"
 #include "MMappedVector.hpp"
 
@@ -65,5 +66,6 @@ inline unsigned long getNbGates() const {
 };
 
 BooleanCircuit createBooleanCircuit(pg_uuid_t token);
+GenericCircuit createGenericCircuit(pg_uuid_t token);
 
 #endif /* MMAPPED_CIRCUIT_H */

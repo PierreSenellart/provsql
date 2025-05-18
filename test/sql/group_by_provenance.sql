@@ -3,7 +3,7 @@
 SET search_path TO provsql_test, provsql;
 
 CREATE TABLE group_by_provenance_result AS
-  SELECT city, formula(provenance(),'personnel_name')
+  SELECT city, sr_formula(provenance(),'personnel_name') AS formula
   FROM personnel
   GROUP BY city, provenance();
 

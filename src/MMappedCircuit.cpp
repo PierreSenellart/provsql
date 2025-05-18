@@ -4,6 +4,8 @@
 
 #include "MMappedCircuit.h"
 #include "BooleanCircuit.h"
+#include "GenericCircuit.h"
+#include "Circuit.hpp"
 #include "provsql_utils_cpp.h"
 
 extern "C" {
@@ -277,6 +279,26 @@ void provsql_mmap_main_loop()
       break;
     }
 
+    case 'b':
+    {
+      pg_uuid_t token;
+
+      if(!READM(token, pg_uuid_t))
+        elog(ERROR, "Cannot read from pipe (message type b)");
+
+      std::stringstream ss;
+      boost::archive::binary_oarchive oa(ss);
+      oa << createBooleanCircuit(token);
+
+      ss.seekg(0, std::ios::end);
+      unsigned long size = ss.tellg();
+      ss.seekg(0, std::ios::beg);
+
+      if(!WRITEB(&size, unsigned long) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
+        elog(ERROR, "Cannot write to pipe (message type b)");
+      break;
+    }
+
     case 'g':
     {
       pg_uuid_t token;
@@ -286,7 +308,7 @@ void provsql_mmap_main_loop()
 
       std::stringstream ss;
       boost::archive::binary_oarchive oa(ss);
-      oa << createBooleanCircuit(token);
+      oa << createGenericCircuit(token);
 
       ss.seekg(0, std::ios::end);
       unsigned long size = ss.tellg();
@@ -399,6 +421,45 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
             to_process.insert(children[i]);
         }
       }
+    }
+  }
+
+  return result;
+}
+
+GenericCircuit createGenericCircuit(pg_uuid_t token)
+{
+  std::set<pg_uuid_t> to_process, processed;
+  to_process.insert(token);
+
+  GenericCircuit result;
+
+  while(!to_process.empty()) {
+    pg_uuid_t uuid = *to_process.begin();
+    to_process.erase(to_process.begin());
+    processed.insert(uuid);
+    std::string f{uuid2string(uuid)};
+
+    gate_type type = circuit->getGateType(uuid);
+    gate_t id = result.setGate(f, type);
+
+    std::vector<pg_uuid_t> children = circuit->getChildren(uuid);
+    for(unsigned i=0; i<children.size(); ++i) {
+      result.addWire(
+        id,
+        result.getGate(uuid2string(children[i])));
+      if(processed.find(children[i])==processed.end())
+        to_process.insert(children[i]);
+    }
+
+    if(type==gate_mulinput || type==gate_eq || type==gate_agg || type==gate_cmp) {
+      auto [info1, info2] = circuit->getInfos(uuid);
+      result.setInfos(id, info1, info2);
+    }
+
+    if(type==gate_project || type==gate_value || type==gate_agg) {
+      auto extra = circuit->getExtra(uuid);
+      result.setExtra(id, extra);
     }
   }
 
