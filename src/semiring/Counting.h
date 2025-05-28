@@ -33,7 +33,7 @@ virtual value_type delta(value_type x) const
 
 virtual value_type semimod(value_type x, value_type y) const override 
 {
-    return y;
+    return x * y;
 }
 
 virtual value_type cmp(value_type x, ComparisonOperator op, value_type y) const override {
