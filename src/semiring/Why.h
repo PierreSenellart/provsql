@@ -66,6 +66,30 @@ virtual value_type monus(value_type x, value_type y) const {
 value_type delta(value_type x) const {
   return x.empty() ? zero() : x;
 }
+
+
+  // ignore  literal, return x
+  value_type semimod(value_type x, value_type) const override {
+    return x;
+  }
+
+  // literals control validity
+  value_type cmp(value_type x, ComparisonOperator, value_type y) const override {
+    return y.empty() ? zero() : x;
+  }
+
+  // union all values from children
+  value_type agg(AggregationOperator, const std::vector<value_type> &v) override {
+    return times(v);
+  }
+
+  // return singleton set of the value
+  value_type value(const std::string &s) const override {
+    return { {s} };
+  }
+
+
+
 };
 
 }
