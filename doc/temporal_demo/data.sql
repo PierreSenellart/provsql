@@ -38,6 +38,7 @@ ALTER TABLE holds DROP COLUMN start;
 ALTER TABLE holds DROP COLUMN until;
 
 CREATE EXTENSION provsql CASCADE;
+SET provsql.update_provenance = on;
 
 SELECT provsql.add_provenance('person');
 SELECT provsql.add_provenance('holds');
@@ -101,7 +102,7 @@ SELECT name, position FROM timetravel('person_position', NOW())
 ORDER BY position;
 
 -- Undo the changes: Pierre Senellart is out, François Bayrou is in
-SELECT undo(provenance()) FROM query_provenance;
+SELECT undo(provenance()) FROM update_provenance;
 
 -- What were the positions of François Bayrou over time, now he has been
 -- fired and then reinstated?
