@@ -191,7 +191,7 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
     throw CircuitException("Invalid OID: no such table");
   }
 
-  constexpr size_t nb_max_uuid_value = 1000;
+  constexpr size_t nb_max_uuid_value = 10000000;
 
   StringInfoData join_query;
   initStringInfo(&join_query);
