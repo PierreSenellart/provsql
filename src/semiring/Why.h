@@ -80,7 +80,7 @@ value_type delta(value_type x) const {
 
   // union all values from children
   value_type agg(AggregationOperator, const std::vector<value_type> &v) override {
-    return times(v);
+    return plus(v);
   }
 
   // return singleton set of the value
