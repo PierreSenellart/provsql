@@ -30,7 +30,7 @@ jobs:
       run:
         shell: wsl-bash {0}
     steps:
-      - uses: Vampire/setup-wsl@v5.0.1
+      - uses: Vampire/setup-wsl@v6.0.0
       - run: apt update
       - run: apt -y install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all
       - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
