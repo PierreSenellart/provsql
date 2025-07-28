@@ -290,6 +290,15 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_GATE_ZERO = get_provsql_func_oid("gate_zero");
   CheckOid(OID_FUNCTION_GATE_ZERO);
 
+  constants.OID_FUNCTION_GATE_ONE = get_provsql_func_oid("gate_one");
+  CheckOid(OID_FUNCTION_GATE_ONE);
+
+  constants.OID_FUNCTION_PROVENANCE_CMP = get_provsql_func_oid("provenance_cmp");
+  CheckOid(OID_FUNCTION_PROVENANCE_CMP);
+
+  constants.OID_FUNCTION_AGG_TOKEN_UUID = get_provsql_func_oid("agg_token_uuid");
+  CheckOid(OID_FUNCTION_AGG_TOKEN_UUID);
+
   OperatorGet("<>", PG_CATALOG_NAMESPACE, constants.OID_TYPE_UUID, constants.OID_TYPE_UUID, &constants.OID_OPERATOR_NOT_EQUAL_UUID, &constants.OID_FUNCTION_NOT_EQUAL_UUID);
   CheckOid(OID_OPERATOR_NOT_EQUAL_UUID);
   CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
@@ -329,6 +338,7 @@ constants_t get_constants(bool failure_if_not_possible)
 {
   int start=0, end=constants_cache_len-1;
   database_constants_t *constants_cache2;
+
 
   while(end>=start) {
     unsigned mid=(start+end)/2;

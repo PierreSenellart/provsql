@@ -70,6 +70,7 @@ CREATE OR REPLACE FUNCTION get_prob(
        equijoin in, respectively, the first and second columns
  *   - for agg, info1 is the oid of the aggregate function and info2 the
        oid of the aggregate result type
+ *   - for cmp, info1 is the oid of the comparison operator
  *
  * @param token UUID of the circuit gate
  * @param info1 first integer value
@@ -156,6 +157,7 @@ BEGIN
   RETURN NULL;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
+
 
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
@@ -384,6 +386,33 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
+CREATE OR REPLACE FUNCTION provenance_cmp(
+  left_token  UUID,
+  comparison_op OID,
+  right_token UUID
+)
+RETURNS UUID AS
+$$
+DECLARE
+  cmp_token UUID;
+BEGIN
+  -- deterministic v5 namespace id
+  cmp_token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('cmp', left_token::text, comparison_op::text, right_token::text)
+  );
+  -- wire it up in the circuit
+  PERFORM create_gate(cmp_token, 'cmp', ARRAY[left_token, right_token]);
+  PERFORM set_infos(cmp_token, comparison_op::integer);
+  RETURN cmp_token;
+END
+$$ LANGUAGE plpgsql
+  IMMUTABLE
+  PARALLEL SAFE
+  STRICT;
+
+
+
 CREATE OR REPLACE FUNCTION provenance_evaluate_compiled(
   token UUID,
   token2value regclass,
@@ -391,6 +420,7 @@ CREATE OR REPLACE FUNCTION provenance_evaluate_compiled(
   element_one anyelement)
 RETURNS anyelement AS
   'provsql', 'provenance_evaluate_compiled' LANGUAGE C STRICT PARALLEL SAFE STABLE;
+
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,
@@ -406,65 +436,104 @@ $$
 DECLARE
   gate_type provenance_gate;
   result ALIAS FOR $0;
+  children UUID[];
+--  cmp_value anyelement;
+--  temp_result anyelement;
+  value_text TEXT;
 BEGIN
   SELECT get_gate_type(token) INTO gate_type;
 
   IF gate_type IS NULL THEN
     RETURN NULL;
-  ELSIF gate_type='input' THEN
-    EXECUTE format('SELECT value FROM %I WHERE provenance=%L',token2value,token) INTO result;
+
+  ELSIF gate_type = 'input' THEN
+    EXECUTE format('SELECT value FROM %I WHERE provenance=%L', token2value, token)
+      INTO result;
     IF result IS NULL THEN
-      result:=element_one;
+      result := element_one;
     END IF;
+  ELSIF gate_type = 'mulinput' THEN
+    SELECT concat('{',(get_children(token))[1]::text,'=',(get_infos(token)).info1,'}')
+      INTO result;
   ELSIF gate_type='update' THEN
     EXECUTE format('SELECT value FROM %I WHERE provenance=%L',token2value,token) INTO result;
     IF result IS NULL THEN
       result:=element_one;
     END IF;
-  ELSIF gate_type='mulinput' THEN
-    SELECT concat('{',(get_children(token))[1]::text,'=',(get_infos(token)).info1,'}') INTO result;
-  ELSIF gate_type='plus' THEN
+  ELSIF gate_type = 'plus' THEN
     EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
-      plus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
-    INTO result;
-  ELSIF gate_type='times' THEN
+      plus_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
+      INTO result;
+
+  ELSIF gate_type = 'times' THEN
     EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
-      times_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
-    INTO result;
-  ELSIF gate_type='monus' THEN
+      times_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
+      INTO result;
+
+  ELSIF gate_type = 'monus' THEN
     IF monus_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
     ELSE
-      EXECUTE format('SELECT %I(a1,a2) FROM (SELECT provsql.provenance_evaluate(c[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a1, provsql.provenance_evaluate(c[2],%L,%L::%s,%L,%L,%L,%L,%L) AS a2 FROM get_children(%L) c) tmp',
-        monus_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function,token)
+      EXECUTE format('SELECT %I(a1,a2) FROM (SELECT provsql.provenance_evaluate(c[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a1, ' ||
+                     'provsql.provenance_evaluate(c[2],%L,%L::%s,%L,%L,%L,%L,%L) AS a2 FROM get_children(%L) c) tmp',
+        monus_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function,
+        token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
       INTO result;
     END IF;
-  ELSIF gate_type='eq' THEN
+
+  ELSIF gate_type = 'eq' THEN
     EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
-      token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
-    INTO result;
-  ELSIF gate_type='delta' THEN
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO result;
+
+/*  elsif gate_type = 'cmp' then
+
+    EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO temp_result;
+
+    EXECUTE format('SELECT get_extra((get_children(%L))[2])', token)
+      INTO cmp_value;
+
+    IF temp_result::text = cmp_value::text THEN
+      SELECT concat('{',temp_result::text,'=',cmp_value::text,'}')
+      INTO result;
+    ELSE
+      RETURN gate_zero()
+      */
+
+
+
+  ELSIF gate_type = 'delta' THEN
     IF delta_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with aggregation evaluated over a semiring without delta function';
     ELSE
       EXECUTE format('SELECT %I(a) FROM (SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a) tmp',
-        delta_function,token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
+        delta_function, token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
       INTO result;
     END IF;
-  ELSIF gate_type='zero' THEN
-    EXECUTE format('SELECT %I(a) FROM (SELECT %L::%I AS a WHERE FALSE) temp',plus_function,element_one,value_type) INTO result;
-  ELSIF gate_type='one' THEN
-    EXECUTE format('SELECT %L::%I',element_one,value_type) INTO result;
-  ELSIF gate_type='project' THEN
+
+  ELSIF gate_type = 'zero' THEN
+    EXECUTE format('SELECT %I(a) FROM (SELECT %L::%I AS a WHERE FALSE) temp', plus_function, element_one, value_type)
+      INTO result;
+
+  ELSIF gate_type = 'one' THEN
+    EXECUTE format('SELECT %L::%I', element_one, value_type)
+      INTO result;
+
+  ELSIF gate_type = 'project' THEN
     EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
-      token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
-    INTO result;
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO result;
+
   ELSE
     RAISE EXCEPTION USING MESSAGE='Unknown gate type';
   END IF;
+
   RETURN result;
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
 
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token UUID,
@@ -856,11 +925,11 @@ CREATE TYPE query_type_enum AS ENUM ('INSERT', 'DELETE', 'UPDATE', 'UNDO');
  *  @{
  */
 
-CREATE FUNCTION sr_formula(token UUID, token2value regclass)
+CREATE FUNCTION sr_formula(token ANYELEMENT, token2value regclass)
   RETURNS VARCHAR AS
 $$
 BEGIN
-  RETURN provenance_evaluate_compiled(
+  RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
     'formula',
@@ -869,11 +938,11 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
-CREATE FUNCTION sr_counting(token UUID, token2value regclass)
+CREATE FUNCTION sr_counting(token ANYELEMENT, token2value regclass)
   RETURNS INT AS
 $$
 BEGIN
-  RETURN provenance_evaluate_compiled(
+  RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
     'counting',
@@ -882,11 +951,24 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
-CREATE FUNCTION sr_boolean(token UUID, token2value regclass)
+CREATE FUNCTION sr_why(token ANYELEMENT, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'why',
+    '{}'::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+CREATE FUNCTION sr_boolean(token ANYELEMENT, token2value regclass)
   RETURNS BOOLEAN AS
 $$
 BEGIN
-  RETURN provenance_evaluate_compiled(
+  RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
     'boolean',

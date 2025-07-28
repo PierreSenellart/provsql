@@ -47,7 +47,7 @@ jobs:
 
   docker:
     needs: test
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' && github.repository == 'PierreSenellart/provsql'
     environment: master_branch
     runs-on: ubuntu-latest
     steps:

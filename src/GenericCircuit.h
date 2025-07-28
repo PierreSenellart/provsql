@@ -32,9 +32,24 @@ void setInfos(gate_t g, unsigned info1, unsigned info2)
 {
   infos[g]=std::make_pair(info1, info2);
 }
+std::pair<unsigned,unsigned> getInfos(gate_t g) const
+{
+  auto it = infos.find(g);
+  if(it==infos.end())
+    return std::make_pair(-1, -1);
+  return it->second;
+}
 void setExtra(gate_t g, const std::string &ex)
 {
   extra[g]=ex;
+}
+std::string getExtra(gate_t g) const
+{
+  auto it = extra.find(g);
+  if(it==extra.end())
+    return "";
+  else
+    return it->second;
 }
 gate_t setGate(gate_type type) override;
 gate_t setGate(const uuid &u, gate_type type) override;
