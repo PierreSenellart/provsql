@@ -36,6 +36,7 @@ PG_MODULE_MAGIC;
 
 bool provsql_interrupted = false;
 bool provsql_where_provenance = false;
+bool provsql_update_provenance = false;
 int provsql_verbose = 100;
 
 static const char *PROVSQL_COLUMN_NAME = "provsql";
@@ -1632,16 +1633,38 @@ void _PG_init(void) {
     elog(ERROR, "provsql needs to be added to the shared_preload_libraries "
          "configuration variable");
 
-  DefineCustomBoolVariable(
-    "provsql.where_provenance", "Should ProvSQL track where-provenance?",
-    "1 turns where-provenance on, 0 off.", &provsql_where_provenance, false,
-    PGC_USERSET, 0, NULL, NULL, NULL);
-  DefineCustomIntVariable(
-    "provsql.verbose_level",
-    "Level of verbosity for ProvSQL informational and debug messages",
-    "0 for quiet (default), 1-9 for informational messages, 10-100 for debug "
-    "information.",
-    &provsql_verbose, 0, 0, 100, PGC_USERSET, 1, NULL, NULL, NULL);
+  DefineCustomBoolVariable("provsql.where_provenance",
+                           "Should ProvSQL track where-provenance?",
+                           "1 turns where-provenance on, 0 off.",
+                           &provsql_where_provenance,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.update_provenance",
+                           "Should ProvSQL track update provenance?",
+                           "1 turns update provenance on, 0 off.",
+                           &provsql_update_provenance,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomIntVariable("provsql.verbose_level",
+                          "Level of verbosity for ProvSQL informational and debug messages",
+                          "0 for quiet (default), 1-9 for informational messages, 10-100 for debug information.",
+                          &provsql_verbose,
+                          0,
+                          0,
+                          100,
+                          PGC_USERSET,
+                          1,
+                          NULL,
+                          NULL,
+                          NULL);
 
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");

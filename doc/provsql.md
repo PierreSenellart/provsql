@@ -28,7 +28,7 @@ The ProvSQL system supports:
   * semiring provenance in arbitrary semirings
   * m-semiring provenance in arbitrary semirings with monus
   * semimodule provenance of aggregate queries
-  * where-provenance
+  * where-provenance (if the option `provsql.where_provenance` is set)
 * probability computation from the Boolean provenance for query
   evaluation over probabilistic databases, through the
   following methods:
@@ -44,6 +44,9 @@ The ProvSQL system supports:
   probabilistic databases
 * Shapley value computation
 * expected Shapley value computation over probabilistic data
+* provenance tracking of updates (requires PostgreSQL ≥ 14)
+* applications of provenance to temporal database support (requires
+  PostgreSQL ≥ 14)
 
 The following SQL features are currently supported.
 
@@ -58,6 +61,7 @@ The following SQL features are currently supported.
 * EXCEPT of SELECT queries
 * VALUES() literal tables (assumed to have no provenance)
 * aggregation on the final query
+* simple update operations (INSERT, DELETE, UPDATE), if the option `provsql.update_provenance` is set
 
 ## Docker container
 
@@ -81,7 +85,7 @@ make docker-build
 
 ## Prerequisites for installation
 
-1. An install of PostgreSQL >= 10. The extension has currently been
+1. An install of PostgreSQL ≥ 10. The extension has currently been
    tested with versions from 10 to 17 (inclusive) of PostgreSQL, under
    Linux, Mac OS (both x86-64 and ARM architectures), and [Windows Subsystem for
    Linux](https://learn.microsoft.com/en-us/windows/wsl/about) (if the

@@ -166,8 +166,6 @@ BEGIN
   EXECUTE format('ALTER TABLE %I ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
   EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
   EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
-
-  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %I REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -454,11 +452,14 @@ BEGIN
     IF result IS NULL THEN
       result := element_one;
     END IF;
-
   ELSIF gate_type = 'mulinput' THEN
     SELECT concat('{',(get_children(token))[1]::text,'=',(get_infos(token)).info1,'}')
       INTO result;
-
+  ELSIF gate_type='update' THEN
+    EXECUTE format('SELECT value FROM %I WHERE provenance=%L',token2value,token) INTO result;
+    IF result IS NULL THEN
+      result:=element_one;
+    END IF;
   ELSIF gate_type = 'plus' THEN
     EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
       plus_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
@@ -916,12 +917,8 @@ SELECT reset_constants_cache();
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
 
-CREATE TABLE delete_provenance (
-  delete_token UUID,
-  query TEXT,
-  deleted_by TEXT,
-  deleted_at TIMESTAMP DEFAULT current_timestamp
-);
+
+CREATE TYPE query_type_enum AS ENUM ('INSERT', 'DELETE', 'UPDATE', 'UNDO');
 
 /** @name Compiled semirings
  *  Definitions of compiled semirings

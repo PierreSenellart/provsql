@@ -64,7 +64,7 @@ bool MMappedCircuit::setProb(pg_uuid_t token, double prob)
 {
   auto idx = mapping[token];
   if(idx != MMappedUUIDHashTable::NOTHING &&
-     (gates[idx].type == gate_input || gates[idx].type == gate_mulinput)) {
+     (gates[idx].type == gate_input || gates[idx].type==gate_update || gates[idx].type == gate_mulinput)) {
     gates[idx].prob=prob;
     return true;
   } else
@@ -75,7 +75,7 @@ double MMappedCircuit::getProb(pg_uuid_t token) const
 {
   auto idx = mapping[token];
   if(idx == MMappedUUIDHashTable::NOTHING ||
-     (gates[idx].type != gate_input && gates[idx].type != gate_mulinput))
+     (gates[idx].type != gate_input && gates[idx].type != gate_update && gates[idx].type != gate_mulinput))
     return NAN;
   else
     return gates[idx].prob;
@@ -362,6 +362,7 @@ BooleanCircuit createBooleanCircuit(pg_uuid_t token)
 
     switch(type) {
     case gate_input:
+    case gate_update:
       if(std::isnan(prob)) {
         prob=1.;
       }

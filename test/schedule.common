@@ -53,6 +53,6 @@ test: tutorial
 test: unsupported_aggregation
 
 # Grouping
-test: group_by_empty grouping_sets
+test: group_by_empty
 
-test: delete
+test: grouping_sets
