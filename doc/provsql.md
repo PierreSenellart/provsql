@@ -60,7 +60,8 @@ The following SQL features are currently supported.
 * UNION's or UNION ALL's of SELECT queries
 * EXCEPT of SELECT queries
 * VALUES() literal tables (assumed to have no provenance)
-* aggregation on the final query
+* aggregation
+* HAVING queries (for simple cases)
 * simple update operations (INSERT, DELETE, UPDATE), if the option `provsql.update_provenance` is set
 
 ## Docker container
