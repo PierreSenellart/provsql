@@ -205,6 +205,13 @@ conference, is available at
 Finally, a ProvSQL tutorial is provided, in the form of a crime mystery.
 It can be found in the [doc/tutorial/](doc/tutorial/) directory.
 
+## Design of ProvSQL
+
+The design of ProvSQL is described in a
+[preprint](https://arxiv.org/pdf/2504.12058). The semantics implemented
+by ProvSQL is also partly [formally described (and proved) in
+Lean4](https://github.com/PierreSenellart/provenance-lean/).
+
 ## Uninstalling
 
 You can uninstall ProvSQL by running `make uninstall` (run as a user with
