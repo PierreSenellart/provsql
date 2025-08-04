@@ -1339,19 +1339,15 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 // on all nodes (terms have been previously treated by
 // rewrite_non_all_into_external_group_by)
 static void process_set_operation_union(const constants_t *constants,
-                                        SetOperationStmt *stmt,
-                                        bool *supported) {
+                                        SetOperationStmt *stmt) {
   if (stmt->op != SETOP_UNION) {
-    supported = false;
     ereport(ERROR, (errmsg("Unsupported mixed set operations")));
   }
   if (IsA(stmt->larg, SetOperationStmt)) {
-    process_set_operation_union(constants, (SetOperationStmt *)(stmt->larg),
-                                supported);
+    process_set_operation_union(constants, (SetOperationStmt *)(stmt->larg));
   }
   if (IsA(stmt->rarg, SetOperationStmt)) {
-    process_set_operation_union(constants, (SetOperationStmt *)(stmt->rarg),
-                                supported);
+    process_set_operation_union(constants, (SetOperationStmt *)(stmt->rarg));
   }
   stmt->colTypes = lappend_oid(stmt->colTypes, constants->OID_TYPE_UUID);
   stmt->colTypmods = lappend_int(stmt->colTypmods, -1);
@@ -1472,7 +1468,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
 
     if (stmt->op == SETOP_UNION) {
-      process_set_operation_union(constants, stmt, &supported);
+      process_set_operation_union(constants, stmt);
       has_union = true;
     } else if (stmt->op == SETOP_EXCEPT) {
       if (!transform_except_into_join(constants, q))
