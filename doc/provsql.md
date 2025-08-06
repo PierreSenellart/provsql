@@ -102,15 +102,14 @@ make docker-build
    The C++ compiler should support C++ 2017.
 
 3. The `uuid-ossp` extension for PostgreSQL (on Debian-based
-   systems, it is found in the `postgresql-contrib-9.x` package for
-   PostgreSQL version 9.x, and is installed automatically for PostgreSQL
-   version >= 10; on Homebrew, in the `ossp-uuid` package; if you compile
+   systems, it is installed automatically with PostgreSQL; on Homebrew,
+   it is found in the `ossp-uuid` package; if you compile
    PostgreSQL from source, make sure to also compile and install the
    additional modules in the `contrib` directory).
 
 4. The Boost container library and the Boost serializer library
-  (on Debian-based systems, they are found in the `libboost-dev` and
-  `libboost-serialization-dev` packages).
+   (on Debian-based systems, they are found in the `libboost-dev` and
+   `libboost-serialization-dev` packages).
 
 5. Optionally, for probability computation through knowledge compilation,
    any or all of the following software (note that some of them are not
@@ -121,11 +120,11 @@ make docker-build
   * `minic2d`, from <http://reasoning.cs.ucla.edu/minic2d/>
   * `weightmc`, from <https://bitbucket.org/kuldeepmeel/weightmc/src/master/>
 
-   To be used, an executable with the name of this software must be
-   available in the PATH of the PostgreSQL server user (e.g., in
-   `/usr/local/bin/`).
-   Using `minic2d` also requires the
-   `hgr2htree` executable (it is provided with `minic2d`).
+    To be used, an executable with the name of this software must be
+    available in the PATH of the PostgreSQL server user (e.g., in
+    `/usr/local/bin/`).
+    Using `minic2d` also requires the
+    `hgr2htree` executable (it is provided with `minic2d`).
 
 6. Optionally, for circuit visualization, the `graph-easy` executable
    from the Graph::Easy Perl library (that can be obtained from the
