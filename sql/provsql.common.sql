@@ -163,9 +163,9 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
-  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
-  EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
-  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %s', _tbl);
+  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -174,9 +174,9 @@ CREATE OR REPLACE FUNCTION remove_provenance(_tbl regclass)
 $$
 DECLARE
 BEGIN
-  EXECUTE format('ALTER TABLE %I DROP COLUMN provsql', _tbl);
+  EXECUTE format('ALTER TABLE %s DROP COLUMN provsql', _tbl);
   BEGIN
-    EXECUTE format('DROP TRIGGER add_gate on %I', _tbl);
+    EXECUTE format('DROP TRIGGER add_gate on %s', _tbl);
   EXCEPTION WHEN undefined_object THEN
   END;
 END
@@ -202,10 +202,10 @@ BEGIN
     select_key_att := key_att;
   END IF;
 
-  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql_temp UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
 
   FOR key IN
-    EXECUTE format('SELECT %s AS key FROM %I GROUP BY %s', select_key_att, _tbl, key_att)
+    EXECUTE format('SELECT %s AS key FROM %s GROUP BY %s', select_key_att, _tbl, key_att)
   LOOP
     IF key_att = '()' THEN
       where_condition := '';
@@ -213,12 +213,12 @@ BEGIN
       where_condition := format('WHERE %s = %L', key_att, key.key);
     END IF;
 
-    EXECUTE format('SELECT COUNT(*) FROM %I %s', _tbl, where_condition) INTO nb_rows;
+    EXECUTE format('SELECT COUNT(*) FROM %s %s', _tbl, where_condition) INTO nb_rows;
 
     key_token := public.uuid_generate_v4();
     ind := 1;
     FOR record IN
-      EXECUTE format('SELECT provsql_temp FROM %I %s', _tbl, where_condition)
+      EXECUTE format('SELECT provsql_temp FROM %s %s', _tbl, where_condition)
     LOOP
       token:=record.provsql_temp;
       PERFORM provsql.create_gate(token, 'mulinput', ARRAY[key_token]);
@@ -227,8 +227,8 @@ BEGIN
       ind := ind + 1;
     END LOOP;
   END LOOP;
-  EXECUTE format('ALTER TABLE %I RENAME COLUMN provsql_temp TO provsql', _tbl);
-  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
+  EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
+  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 END
 $$ LANGUAGE plpgsql;
 
@@ -241,7 +241,7 @@ CREATE OR REPLACE FUNCTION create_provenance_mapping(
 $$
 DECLARE
 BEGIN
-  EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %I', oldtbl);
+  EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %s', oldtbl);
   ALTER TABLE tmp_provsql RENAME provsql TO provenance;
   IF preserve_case THEN
     EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
@@ -447,7 +447,7 @@ BEGIN
     RETURN NULL;
 
   ELSIF gate_type = 'input' THEN
-    EXECUTE format('SELECT value FROM %I WHERE provenance=%L', token2value, token)
+    EXECUTE format('SELECT value FROM %s WHERE provenance=%L', token2value, token)
       INTO result;
     IF result IS NULL THEN
       result := element_one;
@@ -456,17 +456,17 @@ BEGIN
     SELECT concat('{',(get_children(token))[1]::text,'=',(get_infos(token)).info1,'}')
       INTO result;
   ELSIF gate_type='update' THEN
-    EXECUTE format('SELECT value FROM %I WHERE provenance=%L',token2value,token) INTO result;
+    EXECUTE format('SELECT value FROM %s WHERE provenance=%L',token2value,token) INTO result;
     IF result IS NULL THEN
       result:=element_one;
     END IF;
   ELSIF gate_type = 'plus' THEN
-    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
+    EXECUTE format('SELECT %s(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
       plus_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
       INTO result;
 
   ELSIF gate_type = 'times' THEN
-    EXECUTE format('SELECT %I(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
+    EXECUTE format('SELECT %s(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
       times_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
       INTO result;
 
@@ -474,7 +474,7 @@ BEGIN
     IF monus_function IS NULL THEN
       RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
     ELSE
-      EXECUTE format('SELECT %I(a1,a2) FROM (SELECT provsql.provenance_evaluate(c[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a1, ' ||
+      EXECUTE format('SELECT %s(a1,a2) FROM (SELECT provsql.provenance_evaluate(c[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a1, ' ||
                      'provsql.provenance_evaluate(c[2],%L,%L::%s,%L,%L,%L,%L,%L) AS a2 FROM get_children(%L) c) tmp',
         monus_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function,
         token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)

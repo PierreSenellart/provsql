@@ -43,6 +43,9 @@ test: banzhaf
 # Viewing circuit
 test: view_circuit_multiple
 
+# Tables with keywords as name
+test: keyword_table
+
 # Where-provenance
 test: where_provenance
 
