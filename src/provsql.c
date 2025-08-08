@@ -236,8 +236,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
         }
 
         if (cell != NULL) {
-          r->eref->colnames = lappend(r->eref->colnames,
-                                      makeString(pstrdup(PROVSQL_COLUMN_NAME)));
+          r->eref->colnames = list_insert_nth(r->eref->colnames, varattnoprovsql-1,
+                                              makeString(pstrdup(PROVSQL_COLUMN_NAME)));
           prov_atts =
             lappend(prov_atts, make_provenance_attribute(
                       constants, q, r, rteid, varattnoprovsql));
@@ -817,10 +817,11 @@ static Query *rewrite_for_agg_distinct(Query *q, Query *subq) {
   alias->aliasname = "a";
   eref->aliasname = "a";
   eref->colnames = NIL;
+
   foreach (lc_v, q->targetList) {
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
     eref->colnames =
-      lappend(eref->colnames, makeString(pstrdup(te_v->resname)));
+      lappend(eref->colnames, te_v->resname?makeString(pstrdup(te_v->resname)):NULL);
 #if PG_VERSION_NUM < 160000
     // For PG_VERSION_NUM >= 160000, rte->perminfoindex==0 so no need to
     // care about permissions
@@ -834,7 +835,7 @@ static Query *rewrite_for_agg_distinct(Query *q, Query *subq) {
   rte->subquery = subq;
 
   q->rtable = list_make1(rte);
-  q->groupClause = NIL;
+
   // correct var indexes and group by references
   foreach (lc_v, q->targetList) {
     TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
@@ -906,6 +907,12 @@ static Query *check_for_agg_distinct(Query *q) {
         lst_v = lappend(lst_v, ar_v);
       }
     } else { // keep the current TE
+      // If the TE is a discarded out column used for groupping,
+      // we want to keep it to preserve the groupping
+      if(te_v->resjunk && !te_v->resname) {
+        te_v->resjunk=false;
+        te_v->resname="temp";
+      }
       lst_v = lappend(lst_v, te_v);
     }
   }
@@ -1514,18 +1521,23 @@ static Query *process_query(const constants_t *constants, Query *q,
         columns[i] = (int *)palloc(r->eref->colnames->length * sizeof(int));
 
         foreach (lc, r->eref->colnames) {
-          const char *v = strVal(lfirst(lc));
-
-          if (strcmp(v, "") &&
-              r->rtekind != RTE_JOIN) { // TODO: More robust test
-                                        // join RTE columns ignored
-            if (!strcmp(v, PROVSQL_COLUMN_NAME))
-              columns[i][j] = -1;
-            else
-              columns[i][j] = ++nbcols;
+          if(!lfirst(lc)) {
+            // Column without names are used for instance when grouping
+            // by a discarded column
+            columns[i][j] = ++nbcols;
           } else {
-            columns[i][j] = 0;
+            const char *v = strVal(lfirst(lc));
+
+            if (strcmp(v, "") && r->rtekind != RTE_JOIN) { // join RTE columns ignored
+              if (!strcmp(v, PROVSQL_COLUMN_NAME))
+                columns[i][j] = -1;
+              else
+                columns[i][j] = ++nbcols;
+            } else {
+              columns[i][j] = 0;
+            }
           }
+
           ++j;
         }
       }
