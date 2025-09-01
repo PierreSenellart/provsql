@@ -197,11 +197,16 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
   initStringInfo(&join_query);
   bool drop_table = false;
 
-  // Two different mechanisms to implement the join: if there are less
-  // than nb_max_uuid_value UUIDs, we do a join with a VALUES() list;
+  // Two different mechanisms to implement the join (unless there are no
+  // UUIDs):
+  // if there are less than nb_max_uuid_value UUIDs, we do a join
+  // with a VALUES() list;
   // otherwise we create a temporary table where we dump the inserts
   // and join with it.
-  if(uuids.size() <= nb_max_uuid_value) {
+  if(uuids.size() == 0) {
+    appendStringInfo(&join_query,
+                     "SELECT value, provenance FROM \"%s\" WHERE 'f'", table_name);
+  } else if(uuids.size() <= nb_max_uuid_value) {
     appendStringInfo(&join_query,
                      "SELECT value, provenance FROM \"%s\" t JOIN (VALUES", table_name);
     bool first=true;

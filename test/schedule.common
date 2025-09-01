@@ -18,6 +18,8 @@ test: agg_distinct agg_order_by
 test: create_as
 test: no_zero_gate
 test: having_on_aggregation
+test: empty_count
+
 # Adding probabilities
 test: probability_setup
 
