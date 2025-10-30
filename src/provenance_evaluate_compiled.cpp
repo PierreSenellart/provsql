@@ -4,7 +4,6 @@ extern "C" {
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
 #include "utils/lsyscache.h"
-#include "executor/spi.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
 
@@ -13,50 +12,14 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 
 #include <string>
 
-#include "provsql_utils_cpp.h"
-
-#include "CircuitFromMMap.h"
-#include "Circuit.hpp"
-#include "GenericCircuit.hpp"
+#include "provenance_evaluate_compiled.hpp"
 
 #include "semiring/Boolean.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
 
-static const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
-
-template<typename T>
-static void initialize_provenance_mapping(
-  const constants_t &constants,
-  GenericCircuit &c,
-  std::unordered_map<gate_t, T> &provenance_mapping,
-  const std::function<T(const char *)> &charp_to_value,
-  bool drop_table
-  )
-{
-  for (uint64 i = 0; i < SPI_processed; i++) {
-    HeapTuple tuple = SPI_tuptable->vals[i];
-    TupleDesc tupdesc = SPI_tuptable->tupdesc;
-
-    if (SPI_gettypeid(tupdesc, 2) != constants.OID_TYPE_UUID) {
-      SPI_finish();
-      throw CircuitException("Invalid type for provenance mapping attribute");
-      continue;
-    }
-
-    char *value = SPI_getvalue(tuple, tupdesc, 1);
-    char *uuid = SPI_getvalue(tuple, tupdesc, 2);
-
-    provenance_mapping[c.getGate(uuid)]=charp_to_value(value);
-
-    pfree(value);
-    pfree(uuid);
-  }
-  if(drop_table)
-    SPI_exec(drop_temp_table, 0);
-  SPI_finish();
-}
+const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
 static Datum pec_why(
   const constants_t &constants,

@@ -44,6 +44,9 @@ typedef enum gate_type {
   nb_gate_types  ///< Total number of gate types
 } gate_type;
 
+/** Names of gate types */
+extern const char *gate_type_name[];
+
 /** Structure to store the value of various constants. This is needed to
  * uniquely identify types, functions, etc., in PostgreSQL through their
  * Object Identifier Types (OIDs). */

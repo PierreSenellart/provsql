@@ -15,6 +15,25 @@
 
 #include "provsql_utils.h"
 
+const char *gate_type_name[] = {
+  "input",
+  "plus",
+  "times",
+  "monus",
+  "project",
+  "zero",
+  "one",
+  "eq",
+  "agg",
+  "semimod",
+  "cmp",
+  "delta",
+  "value",
+  "mulinput",
+  "update",
+  "invalid"
+};
+
 /* Copied over from parse_oper.c as defined static there */
 static Oid
 binary_oper_exact(List *opname, Oid arg1, Oid arg2)
