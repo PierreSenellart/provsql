@@ -30,13 +30,14 @@ jobs:
       run:
         shell: wsl-bash {0}
     steps:
-      - uses: Vampire/setup-wsl@v5.0.1
+      - uses: Vampire/setup-wsl@v6.0.0
+      - run: sed -i '/bullseye-backports/d' /etc/apt/sources.list # Temporary fix for https://github.com/Vampire/setup-wsl/issues/76
       - run: apt update
       - run: apt -y install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all
       - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
       - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
       - run: git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && mv weightmc /usr/local/bin && cd ../..
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: make && make tdkc && make install
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/*/*/postgresql.conf
       - run: service postgresql restart

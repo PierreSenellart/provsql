@@ -1,2 +1,2 @@
 \set ECHO none
-ERROR:  Non-terminal aggregates not supported by ProvSQL
+ERROR:  ProvSQL cannot handle complex HAVING expressions

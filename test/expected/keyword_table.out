@@ -1,0 +1,33 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+formula
+(1 ⊕ 1 ⊕ 2 ⊕ 3)
+(1 row)
+remove_provenance
+
+(1 row)
+sr_formula
+(1 ⊕ 1 ⊕ 2 ⊕ 3)
+(1 row)
+remove_provenance
+
+(1 row)
+repair_key
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|probability_evaluate
+1|0.5
+2|0.4
+3|0.6
+(3 rows)

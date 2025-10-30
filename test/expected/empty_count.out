@@ -1,0 +1,15 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+id|sr_formula|provsql
+(0 rows)
+remove_provenance
+
+(1 row)
+count|sr_formula
+|𝟙
+(1 row)

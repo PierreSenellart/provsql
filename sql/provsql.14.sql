@@ -13,13 +13,13 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
-  EXECUTE format('ALTER TABLE %I ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
-  EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %I', _tbl);
-  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %I FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %s', _tbl);
+  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 
-  EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %I REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.insert_statement_trigger()', _tbl);
-  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %I REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
-  EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %I REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.update_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %s REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.insert_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %s REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %s REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.update_statement_trigger()', _tbl);
 
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -243,14 +243,14 @@ $$
 BEGIN
   IF preserve_case THEN
     EXECUTE format(
-      'CREATE OR REPLACE VIEW %I AS SELECT %s AS value, provsql AS provenance FROM %I',
+      'CREATE OR REPLACE VIEW %I AS SELECT %s AS value, provsql AS provenance FROM %s',
       newview,
       att,
       oldtbl
     );
   ELSE
     EXECUTE format(
-      'CREATE OR REPLACE VIEW %s AS SELECT %s AS value, provsql AS provenance FROM %I',
+      'CREATE OR REPLACE VIEW %s AS SELECT %s AS value, provsql AS provenance FROM %s',
       newview,
       att,
       oldtbl

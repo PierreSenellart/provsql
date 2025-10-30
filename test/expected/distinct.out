@@ -9,3 +9,11 @@ confidential|Dave
 secret|(Ellen ⊕ Susan)
 top_secret|Magdalen
 (5 rows)
+remove_provenance
+
+(1 row)
+count
+2 (*)
+2 (*)
+3 (*)
+(3 rows)

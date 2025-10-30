@@ -8,7 +8,7 @@ test: add_provenance
 test: provenance_in_from identify_token subquery create_provenance_mapping
 
 # Introducing a few semirings
-test: sr_formula sr_counting sr_boolean
+test: sr_formula sr_counting sr_boolean sr_why
 test: security formula counting boolean
 
 # Test of various ProvSQL features and SQL language capabilities
@@ -17,6 +17,8 @@ test: aggregation
 test: agg_distinct agg_order_by
 test: create_as
 test: no_zero_gate
+test: having_on_aggregation
+test: empty_count
 
 # Adding probabilities
 test: probability_setup
@@ -42,6 +44,9 @@ test: banzhaf
 
 # Viewing circuit
 test: view_circuit_multiple
+
+# Tables with keywords as name
+test: keyword_table
 
 # Where-provenance
 test: where_provenance

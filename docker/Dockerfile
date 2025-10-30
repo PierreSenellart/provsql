@@ -1,5 +1,5 @@
-FROM debian:buster
-LABEL maintainer pierre@senellart.com
+FROM debian:bookworm
+LABEL maintainer=pierre@senellart.com
 
 # Copy the source into /opt/provsql
 COPY . /opt/provsql
@@ -12,7 +12,7 @@ RUN apt-get update &&\
                libboost-serialization-dev
 
 # Specify which version we are building against
-ARG PSQL_VERSION=11
+ARG PSQL_VERSION=15
 ENV PSQL_VERSION=$PSQL_VERSION
 
 RUN apt-get update &&\
@@ -95,11 +95,11 @@ RUN echo "host all all 0.0.0.0/0 trust" >> /etc/postgresql/${PSQL_VERSION}/main/
 RUN echo "host all all ::/0 trust" >> /etc/postgresql/${PSQL_VERSION}/main/pg_hba.conf
 
 USER postgres
-CMD /usr/bin/pg_ctlcluster $PSQL_VERSION main start --foreground
+RUN /usr/bin/pg_ctlcluster $PSQL_VERSION main start
 
 USER root
 RUN apt-get update &&\
     apt-get -y install apache2 libapache2-mod-php php-pgsql graphviz libgraph-easy-perl
 
-CMD /bin/bash /opt/provsql/docker/demo.sh
+CMD ["/bin/bash", "/opt/provsql/docker/demo.sh"]
 EXPOSE 80

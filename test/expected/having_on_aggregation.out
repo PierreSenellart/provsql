@@ -1,0 +1,17 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+city|formula|counting
+Berlin|(δ(Ellen ⊕ Susan) ⊗ [Ellen*1+Susan*1 > 𝟙*2])|0
+New York|(δ(John ⊕ Paul) ⊗ [John*1+Paul*1 > 𝟙*2])|0
+Paris|(δ(Dave ⊕ Magdalen ⊕ Nancy) ⊗ [Dave*1+Magdalen*1+Nancy*1 > 𝟙*2])|1
+(3 rows)
+remove_provenance
+
+(1 row)
+city|formula|counting
+Berlin|(δ(Ellen ⊕ Susan) ⊗ [Ellen*4+Susan*7 > 𝟙*2])|1
+New York|(δ(John ⊕ Paul) ⊗ [John*1+Paul*2 > 𝟙*2])|1
+Paris|(δ(Dave ⊕ Magdalen ⊕ Nancy) ⊗ [Dave*3+Magdalen*5+Nancy*6 > 𝟙*2])|1
+(3 rows)

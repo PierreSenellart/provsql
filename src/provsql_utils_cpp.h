@@ -19,4 +19,20 @@ pg_uuid_t string2uuid(const std::string &source);
 std::size_t hash_value(const pg_uuid_t &u);
 bool operator==(const pg_uuid_t &u, const pg_uuid_t &v);
 
+enum class ComparisonOperator {
+  EQUAL,
+  NE,
+  LE,
+  LT,
+  GE,
+  GT
+};
+
+enum class AggregationOperator {
+  SUM,
+  MIN,
+  MAX,
+  PROD
+};
+
 #endif

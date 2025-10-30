@@ -22,6 +22,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Boolean.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
+#include "semiring/Why.h"
 
 static const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
@@ -55,6 +56,63 @@ static void initialize_provenance_mapping(
   if(drop_table)
     SPI_exec(drop_temp_table, 0);
   SPI_finish();
+}
+
+static Datum pec_why(
+  const constants_t &constants,
+  GenericCircuit &c,
+  gate_t g,
+  const std::set<gate_t> &inputs,
+  const std::string &semiring,
+  bool drop_table)
+{
+  std::unordered_map<gate_t, semiring::why_provenance_t> provenance_mapping;
+
+  initialize_provenance_mapping<semiring::why_provenance_t>(
+    constants,
+    c,
+    provenance_mapping,
+    [](const char *v) {
+    semiring::why_provenance_t result;
+    semiring::label_set single;
+    if(strchr(v, '{'))
+      elog(ERROR, "Complex Why-semiring values for input tuples not currently supported.");
+    single.insert(std::string(v));
+    result.insert(std::move(single));
+    return result;
+  },
+    drop_table
+    );
+
+  if (semiring == "why") {
+    auto prov = c.evaluate<semiring::Why>(g, provenance_mapping);
+
+    // Serialize nested set structure: {{x},{y}}
+    std::ostringstream oss;
+    oss << "{";
+    bool firstOuter = true;
+    for (const auto& inner : prov) {
+      if (!firstOuter) oss << ",";
+      firstOuter = false;
+      oss << "{";
+      bool firstInner = true;
+      for (const auto& label : inner) {
+        if (!firstInner) oss << ",";
+        firstInner = false;
+        oss << label;
+      }
+      oss << "}";
+    }
+    oss << "}";
+
+    std::string out = oss.str();
+    text *result = (text *) palloc(VARHDRSZ + out.size());
+    SET_VARSIZE(result, VARHDRSZ + out.size());
+    memcpy(VARDATA(result), out.c_str(), out.size());
+    PG_RETURN_TEXT_P(result);
+  } else {
+    throw CircuitException("Unknown semiring for type varchar: " + semiring);
+  }
 }
 
 static Datum pec_varchar(
@@ -133,17 +191,22 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
     throw CircuitException("Invalid OID: no such table");
   }
 
-  constexpr size_t nb_max_uuid_value = 1000;
+  constexpr size_t nb_max_uuid_value = 10000000;
 
   StringInfoData join_query;
   initStringInfo(&join_query);
   bool drop_table = false;
 
-  // Two different mechanisms to implement the join: if there are less
-  // than nb_max_uuid_value UUIDs, we do a join with a VALUES() list;
+  // Two different mechanisms to implement the join (unless there are no
+  // UUIDs):
+  // if there are less than nb_max_uuid_value UUIDs, we do a join
+  // with a VALUES() list;
   // otherwise we create a temporary table where we dump the inserts
   // and join with it.
-  if(uuids.size() <= nb_max_uuid_value) {
+  if(uuids.size() == 0) {
+    appendStringInfo(&join_query,
+                     "SELECT value, provenance FROM \"%s\" WHERE 'f'", table_name);
+  } else if(uuids.size() <= nb_max_uuid_value) {
     appendStringInfo(&join_query,
                      "SELECT value, provenance FROM \"%s\" t JOIN (VALUES", table_name);
     bool first=true;
@@ -211,8 +274,13 @@ static Datum provenance_evaluate_compiled_internal
 
   constants_t constants = get_constants(true);
 
-  if(type==constants.OID_TYPE_VARCHAR)
-    return pec_varchar(constants, c, g, inputs, semiring, drop_table);
+  if (type == constants.OID_TYPE_VARCHAR)
+  {
+    if (semiring == "why")
+      return pec_why(constants, c, g, inputs, semiring, drop_table);
+    else
+      return pec_varchar(constants, c, g, inputs, semiring, drop_table);
+  }
   else if(type==constants.OID_TYPE_INT)
     return pec_int(constants, c, g, inputs, semiring, drop_table);
   else if(type==constants.OID_TYPE_BOOL)
