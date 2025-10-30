@@ -68,6 +68,7 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
 
   while(!to_process.empty()) {
     auto g = *to_process.begin();
+    to_process.erase(to_process.begin());
     auto uuid = c.getUUID(g);
     gate_type type = c.getGateType(g);
     processed.insert(g);
@@ -79,14 +80,24 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
     }
     ss << "  </prov:entity>\n";
 
+    bool first=true;
     for(auto h: c.getWires(g)) {
       ss << "  <prov:wasDerivedFrom>\n";
-      ss << "    <prov:generatedEntity prov:ref='provsql:" + uuid + "' />";
-      ss << "    <prov:usedEntity prov:ref='provsql:" + c.getUUID(h) + "' />";
+      ss << "    <prov:generatedEntity prov:ref='provsql:" + uuid + "' />\n";
+      ss << "    <prov:usedEntity prov:ref='provsql:" + c.getUUID(h) + "' />\n";
+      if(type == gate_monus) {
+        if(first)
+          ss << "    <prov:label>left</prov:label>\n";
+        else
+          ss << "    <prov:label>right</prov:label>\n";
+      }
+
       ss << "  </prov:wasDerivedFrom>\n";
 
       if(processed.find(h) == processed.end())
         to_process.insert(h);
+
+      first=false;
     }
   }
 
