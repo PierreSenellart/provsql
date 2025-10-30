@@ -42,8 +42,8 @@ The ProvSQL system supports:
     (`weightmc`)
 * expected value computation for COUNT/SUM/MIN/MAX aggregate queries over
   probabilistic databases
-* Shapley value computation
-* expected Shapley value computation over probabilistic data
+* Shapley/Banzhaf value computation
+* expected Shapley/Banzhaf value computation over probabilistic data
 * provenance tracking of updates (requires PostgreSQL ≥ 14)
 * applications of provenance to temporal database support (requires
   PostgreSQL ≥ 14)
