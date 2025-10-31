@@ -1,0 +1,376 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+city|provxml
+Berlin|<?xml version='1.0' encoding='UTF-8'?>
+<prov:document xmlns:prov='http://www.w3.org/ns/prov#' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xmlns:xsd='http://www.w3.org/2001/XMLSchema' xmlns:provsql='https://provsql.org/'>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:monus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>left</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>right</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:plus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+    <prov:value>Ellen</prov:value>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+    <prov:value>Susan</prov:value>
+  </prov:entity>
+</prov:document>
+
+New York|<?xml version='1.0' encoding='UTF-8'?>
+<prov:document xmlns:prov='http://www.w3.org/ns/prov#' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xmlns:xsd='http://www.w3.org/2001/XMLSchema' xmlns:provsql='https://provsql.org/'>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:monus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>left</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>right</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:plus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+    <prov:value>John</prov:value>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+    <prov:value>Paul</prov:value>
+  </prov:entity>
+</prov:document>
+
+Paris|<?xml version='1.0' encoding='UTF-8'?>
+<prov:document xmlns:prov='http://www.w3.org/ns/prov#' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xmlns:xsd='http://www.w3.org/2001/XMLSchema' xmlns:provsql='https://provsql.org/'>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:monus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>left</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>right</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:plus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:plus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+    <prov:value>Dave</prov:value>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+    <prov:value>Magdalen</prov:value>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+    <prov:value>Nancy</prov:value>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+</prov:document>
+
+(3 rows)
+remove_provenance
+
+(1 row)
+city|provxml
+Berlin|<?xml version='1.0' encoding='UTF-8'?>
+<prov:document xmlns:prov='http://www.w3.org/ns/prov#' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xmlns:xsd='http://www.w3.org/2001/XMLSchema' xmlns:provsql='https://provsql.org/'>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:monus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>left</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>right</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:plus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+  </prov:entity>
+</prov:document>
+
+New York|<?xml version='1.0' encoding='UTF-8'?>
+<prov:document xmlns:prov='http://www.w3.org/ns/prov#' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xmlns:xsd='http://www.w3.org/2001/XMLSchema' xmlns:provsql='https://provsql.org/'>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:monus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>left</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>right</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:plus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+  </prov:entity>
+</prov:document>
+
+Paris|<?xml version='1.0' encoding='UTF-8'?>
+<prov:document xmlns:prov='http://www.w3.org/ns/prov#' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xmlns:xsd='http://www.w3.org/2001/XMLSchema' xmlns:provsql='https://provsql.org/'>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:monus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>left</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+    <prov:label>right</prov:label>
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:plus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:plus</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:input</prov:type>
+  </prov:entity>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:entity prov:id='provsql:UUID'>
+    <prov:type xsi:type='xsd:QName'>provsql:times</prov:type>
+  </prov:entity>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+  <prov:wasDerivedFrom>
+    <prov:generatedEntity prov:ref='provsql:UUID' />
+    <prov:usedEntity prov:ref='provsql:UUID' />
+  </prov:wasDerivedFrom>
+</prov:document>
+
+(3 rows)

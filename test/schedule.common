@@ -61,3 +61,6 @@ test: unsupported_aggregation
 test: group_by_empty
 
 test: grouping_sets
+
+# PROV export
+test: to_provxml

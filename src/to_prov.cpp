@@ -14,6 +14,7 @@ PG_FUNCTION_INFO_V1(to_provxml);
 #include <csignal>
 #include <utility>
 #include <sstream>
+#include <list>
 #include <algorithm>
 
 #include "provenance_evaluate_compiled.hpp"
@@ -63,15 +64,14 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
     }, drop_table);
   }
 
-  std::set<gate_t> to_process { root };
-  std::set<gate_t> processed;
+  std::list<gate_t> to_process { root };
+  std::set<gate_t> seen;
 
   while(!to_process.empty()) {
-    auto g = *to_process.begin();
-    to_process.erase(to_process.begin());
+    auto g = to_process.front();
+    to_process.pop_front();
     auto uuid = c.getUUID(g);
     gate_type type = c.getGateType(g);
-    processed.insert(g);
 
     ss << "  <prov:entity prov:id='provsql:" + uuid + "'>\n";
     ss << "    <prov:type xsi:type='xsd:QName'>provsql:" + std::string(gate_type_name[type]) + "</prov:type>\n";
@@ -94,8 +94,10 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
 
       ss << "  </prov:wasDerivedFrom>\n";
 
-      if(processed.find(h) == processed.end())
-        to_process.insert(h);
+      if(seen.find(h) == seen.end()) {
+        to_process.push_back(h);
+        seen.insert(h);
+      }
 
       first=false;
     }
