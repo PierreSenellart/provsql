@@ -279,6 +279,11 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       }
     } else if (r->rtekind == RTE_VALUES) {
       // Nothing to do, no provenance attribute in literal values
+#if PG_VERSION_NUM >= 180000
+    } else if (r->rtekind == RTE_GROUP) {
+      // Introduced in PostgreSQL 18, we already handle group by from
+      // groupClause
+#endif
     } else {
       ereport(ERROR, (errmsg("FROM clause unsupported by provsql")));
     }
@@ -757,15 +762,29 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
         RangeTblEntry *rte_v =
           (RangeTblEntry *)lfirst(list_nth_cell(q->rtable, vte_v->varno - 1));
         int value_v;
-        /* Check if this targetEntry references a column in a RTE of type
-         * RTE_JOIN */
-        if (rte_v->rtekind != RTE_JOIN) {
+#if PG_VERSION_NUM >= 180000
+        if (rte_v->rtekind == RTE_GROUP) {
+          Expr *ge = lfirst(list_nth_cell(rte_v->groupexprs, vte_v->varattno - 1));
+          if(IsA(ge, Var)) {
+            Var *v = (Var *) ge;
+            value_v = columns[v->varno - 1][v->varattno - 1];
+          } else {
+            Const *ce = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                sizeof(int32), Int32GetDatum(0), false, true);
+
+            array->elements = lappend(array->elements, ce);
+            value_v = 0;
+          }
+        } else
+#endif
+        if (rte_v->rtekind != RTE_JOIN) { // Normal RTE
           value_v = columns[vte_v->varno - 1][vte_v->varattno - 1];
-        } else { // is a join
+        } else { // Join RTE
           Var *jav_v = (Var *)lfirst(
             list_nth_cell(rte_v->joinaliasvars, vte_v->varattno - 1));
           value_v = columns[jav_v->varno - 1][jav_v->varattno - 1];
         }
+
         /* If this is a valid column */
         if (value_v > 0) {
           Const *ce =
@@ -1186,10 +1205,25 @@ static bool provenance_function_in_group_by(const constants_t *constants,
   ListCell *lc;
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
-    if (te->ressortgroupref > 0 &&
-        expression_tree_walker((Node *)te, provenance_function_walker,
-                               (void *)constants)) {
+    if (te->ressortgroupref > 0) {
+      if(expression_tree_walker((Node *)te, provenance_function_walker,
+                                (void *)constants)) {
       return true;
+      }
+
+#if PG_VERSION_NUM >= 180000
+      // Starting from PostgreSQL 18, the content of the GROUP BY is not
+      // in the groupClause but in an associated RTE_GROUP RangeTblEntry
+      if IsA(te->expr, Var) {
+        Var *v = (Var *) te->expr;
+        RangeTblEntry *r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
+        if(r->rtekind == RTE_GROUP)
+          if(expression_tree_walker((Node *) r->groupexprs, provenance_function_walker,
+                                    (void *)constants)) {
+            return true;
+          }
+      }
+#endif
     }
   }
 
