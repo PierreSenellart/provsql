@@ -43,6 +43,7 @@ The ProvSQL system supports:
 * expected value computation for COUNT/SUM/MIN/MAX aggregate queries over
   probabilistic databases
 * Shapley/Banzhaf value computation
+* [PROV-XML](https://www.w3.org/TR/prov-xml/) export of provenance
 * expected Shapley/Banzhaf value computation over probabilistic data
 * provenance tracking of updates (requires PostgreSQL ≥ 14)
 * applications of provenance to temporal database support (requires
