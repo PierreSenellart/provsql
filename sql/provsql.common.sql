@@ -901,6 +901,12 @@ CREATE OR REPLACE FUNCTION view_circuit(
   RETURNS TEXT AS
   'provsql','view_circuit' LANGUAGE C;
 
+CREATE OR REPLACE FUNCTION to_provxml(
+  token UUID,
+  token2desc regclass = NULL)
+  RETURNS TEXT AS
+  'provsql','to_provxml' LANGUAGE C;
+
 CREATE OR REPLACE FUNCTION provenance() RETURNS UUID AS
  'provsql', 'provenance' LANGUAGE C;
 
