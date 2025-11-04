@@ -179,8 +179,10 @@ name can be found.
 ## Using ProvSQL
 
 You can use ProvSQL in any PostgreSQL database by loading the
-`provsql` extension. See the file [setup.sql](test/sql/setup.sql)
-for an example on how to do this.
+`provsql` extension, using:
+```sql
+CREATE EXTENSION provsql CASCADE;
+```
 
 You then need to add provenance to an existing table using the
 `provsql.add_provenance(regclass)` user-defined function.
@@ -190,8 +192,8 @@ is handled in a special way and always represents, in query results, the
 provenance of each tuple as a UUID.
 
 You can then use this provenance to run computation in various semirings.
-See [security.sql](test/sql/security.sql) and
-[formula.sql](test/sql/formula.sql) for two examples.
+See [security.sql](test/sql/sr_security.sql) and
+[formula.sql](test/sql/sr_formula.sql) for two examples.
 
 See the other examples in [test/sql](test/sql) for other use cases.
 
