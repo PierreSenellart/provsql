@@ -192,8 +192,8 @@ is handled in a special way and always represents, in query results, the
 provenance of each tuple as a UUID.
 
 You can then use this provenance to run computation in various semirings.
-See [security.sql](test/sql/sr_security.sql) and
-[formula.sql](test/sql/sr_formula.sql) for two examples.
+See [sr_security.sql](test/sql/sr_security.sql) and
+[sr_formula.sql](test/sql/sr_formula.sql) for two examples.
 
 See the other examples in [test/sql](test/sql) for other use cases.
 
