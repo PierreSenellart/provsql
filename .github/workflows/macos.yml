@@ -31,7 +31,7 @@ jobs:
       - run: brew install postgresql
       - run: brew install boost
       - run: brew services start postgresql
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - run: make && make tdkc && make install
       - run: pg_isready -t 60 || (cat /usr/local/var/log/potgres*.log; false)
       - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres)" >> $GITHUB_ENV

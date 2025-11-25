@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - run: apt update
       - run: apt -y install doxygen python3-breathe python3-sphinx-rtd-theme
       - run: make docs
