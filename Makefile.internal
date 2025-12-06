@@ -25,7 +25,11 @@ ARCH := $(shell uname -m)
 # number with EXTRA_REGRESS_OPTS = --port=5434
 EXTRA_REGRESS_OPTS =
 
+ifeq ($(OS), Darwin)
+all: $(DATA) $(MODULE_big).dylib test/schedule
+else
 all: $(DATA) $(MODULE_big).so test/schedule
+endif
 
 $(OBJS): $(wildcard src/*.h src/semiring/*.h src/*.hpp)
 
