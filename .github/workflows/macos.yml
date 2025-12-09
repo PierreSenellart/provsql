@@ -32,11 +32,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - run: brew update
-      - run: echo $PATH
       - run: brew install postgresql@${{ matrix.pg }}
-      - run: ls ${HOMEBREW_PREFIX}/bin
       - run: brew link --force postgresql@${{ matrix.pg }}
-      - run: ls ${HOMEBREW_PREFIX}/bin
       - run: brew install boost
       - run: brew services start postgresql@${{ matrix.pg }}
       - uses: actions/checkout@v6
