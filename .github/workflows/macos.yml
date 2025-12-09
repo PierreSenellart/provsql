@@ -32,7 +32,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - run: brew update
-      - run: brew install postgresql@${{ matrix.pg }} libpq@${{ matrix.pg }}
+      - run: brew install postgresql@${{ matrix.pg }}
+      - run: if ${{ matrix.pg >= 16 }}; then brew install libpq@${{ matrix.pg }}; fi
       - run: brew install boost
       - run: brew services start postgresql@${{ matrix.pg }}
       - uses: actions/checkout@v6
