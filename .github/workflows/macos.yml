@@ -33,6 +33,7 @@ jobs:
     steps:
       - run: brew update
       - run: brew install postgresql@${{ matrix.pg }}
+      - run: echo ${HOMEBREW_PREFIX}/opt/libpq/bin/ >> $GITHUB_PATH
       - run: if ${{ matrix.pg >= 16 }}; then brew install libpq@${{ matrix.pg }}; fi
       - run: brew install boost
       - run: brew services start postgresql@${{ matrix.pg }}
