@@ -36,7 +36,7 @@ jobs:
       - run: brew install postgresql@${{ matrix.pg }}
       - run: ls ${HOMEBREW_PREFIX}/bin
       - run: brew link --force postgresql@${{ matrix.pg }}
-      - run: if ${{matrix.pg >= 16}}; brew link --force libpq@${{ matrix.pg }}; fi
+      - run: if ${{matrix.pg >= 16}}; then brew link --force libpq@${{ matrix.pg }}; fi
       - run: ls ${HOMEBREW_PREFIX}/bin
       - run: brew install boost
       - run: brew services start postgresql@${{ matrix.pg }}
