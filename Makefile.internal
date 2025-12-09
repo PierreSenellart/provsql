@@ -25,19 +25,6 @@ ARCH := $(shell uname -m)
 # number with EXTRA_REGRESS_OPTS = --port=5434
 EXTRA_REGRESS_OPTS =
 
-all: $(DATA) $(MODULE_big).so test/schedule
-
-$(OBJS): $(wildcard src/*.h src/semiring/*.h src/*.hpp)
-
-sql/provsql.sql: sql/provsql.*.sql
-	cat sql/provsql.common.sql > sql/provsql.sql
-	if [ $(PGVER_MAJOR) -ge 14 ]; then \
-		cat sql/provsql.14.sql >> sql/provsql.sql; \
-	fi
-
-sql/provsql--$(EXTVERSION).sql: sql/provsql.sql
-	cp $< $@
-
 ifdef DEBUG
 PG_CPPFLAGS += -O0 -g
 endif
@@ -53,6 +40,18 @@ PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
+all: $(DATA) $(MODULE_big)$(DLSUFFIX) test/schedule
+
+$(OBJS): $(wildcard src/*.h src/semiring/*.h src/*.hpp)
+
+sql/provsql.sql: sql/provsql.*.sql
+	cat sql/provsql.common.sql > sql/provsql.sql
+	if [ $(PGVER_MAJOR) -ge 14 ]; then \
+		cat sql/provsql.14.sql >> sql/provsql.sql; \
+	fi
+
+sql/provsql--$(EXTVERSION).sql: sql/provsql.sql
+	cp $< $@
 
 
 %.o : %.c
