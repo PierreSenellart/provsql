@@ -32,8 +32,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - run: brew update
-      - run: echo ${HOMEBREW_PREFIX}/bin >> $GITHUB_PATH
+      - run: echo $PATH
       - run: brew install postgresql@${{ matrix.pg }}
+      - run: ls ${HOMEBREW_PREFIX}/bin
+      - run: if ${{ matrix.pg >= 16 }}; then brew link libpq@${{ matrix.pg }}; fi
+      - run: ls ${HOMEBREW_PREFIX}/bin
       - run: brew install boost
       - run: brew services start postgresql@${{ matrix.pg }}
       - uses: actions/checkout@v6
