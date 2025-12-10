@@ -713,6 +713,30 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
+CREATE OR REPLACE FUNCTION agg_token_numeric(agg_token)
+  RETURNS numeric
+  AS 'provsql','agg_token_numeric' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE CAST (agg_token AS numeric) WITH FUNCTION agg_token_numeric(agg_token) AS IMPLICIT;
+
+CREATE OR REPLACE FUNCTION agg_token_float8(agg_token)
+  RETURNS double precision
+  AS 'provsql','agg_token_float8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_float8(agg_token) AS IMPLICIT;
+
+CREATE OR REPLACE FUNCTION agg_token_int4(agg_token)
+  RETURNS int4
+  AS 'provsql','agg_token_int4' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE CAST (agg_token AS int4) WITH FUNCTION agg_token_int4(agg_token) AS IMPLICIT;
+
+CREATE OR REPLACE FUNCTION agg_token_int8(agg_token)
+  RETURNS int8
+  AS 'provsql','agg_token_int8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE CAST (agg_token AS int8) WITH FUNCTION agg_token_int8(agg_token) AS IMPLICIT;
+
 /** @} */
 
 

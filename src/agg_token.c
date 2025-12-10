@@ -4,6 +4,7 @@
 #include "utils/uuid.h"
 #include "executor/spi.h"
 #include "access/htup_details.h"
+#include "utils/builtins.h"
 
 #include "provsql_utils.h"
 #include "agg_token.h"
@@ -56,4 +57,46 @@ agg_token_cast(PG_FUNCTION_ARGS)
   memcpy(VARDATA(txt_result), result, len);
 
   PG_RETURN_TEXT_P(txt_result);
+}
+
+PG_FUNCTION_INFO_V1(agg_token_numeric);
+Datum
+agg_token_numeric(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  
+  return DirectFunctionCall3(numeric_in,
+                             CStringGetDatum((char *) aggtok->val),
+                             ObjectIdGetDatum(InvalidOid),
+                             Int32GetDatum(-1));
+}
+
+PG_FUNCTION_INFO_V1(agg_token_float8);
+Datum
+agg_token_float8(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  
+  return DirectFunctionCall1(float8in,
+                             CStringGetDatum((char *) aggtok->val));
+}
+
+PG_FUNCTION_INFO_V1(agg_token_int4);
+Datum
+agg_token_int4(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  
+  return DirectFunctionCall1(int4in,
+                             CStringGetDatum((char *) aggtok->val));
+}
+
+PG_FUNCTION_INFO_V1(agg_token_int8);
+Datum
+agg_token_int8(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  
+  return DirectFunctionCall1(int8in,
+                             CStringGetDatum((char *) aggtok->val));
 }
