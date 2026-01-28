@@ -303,7 +303,7 @@ static Datum pec_varchar(
       case ComparisonOp::LT: return ComparisonOp::GT;
       case ComparisonOp::LE: return ComparisonOp::GE;    
       case ComparisonOp::GT: return ComparisonOp::LT;    
-      case ComparisonOp::GT: return ComparisonOp::LE;
+      case ComparisonOp::GE: return ComparisonOp::LE;
       case ComparisonOp::EQ: return ComparisonOp::EQ;
       case ComparisonOp::NEQ: return ComparisonOp::NEQ;    
     }
@@ -424,7 +424,7 @@ static Datum pec_varchar(
 
             if (extract_tuples_from_agg(R, labels , values))
             {
-             std::vector<uint64_t> worlds = enumerate_valid_worlds(values, C, op);
+             std::vector<uint64_t> worlds = enumerate_valid_worlds(values, C, flip_op(op));
              
              if (worlds.empty()){
                std::string out = "𝟘";
