@@ -1,4 +1,4 @@
- \set ECHO none
+\set ECHO none
 remove_provenance
 
 (1 row)
