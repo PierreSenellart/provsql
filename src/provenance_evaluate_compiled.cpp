@@ -97,49 +97,52 @@ static Datum pec_why(
     throw CircuitException("Unknown semiring for type varchar: " + semiring);
   }
 }
-static Datum pec_varchar(
+ static Datum pec_varchar(
   const constants_t &constants,
   GenericCircuit &c,
-  gate_t g,                       // gate corresponding to the particular row (output tuple) in output
-  const std::set<gate_t> &inputs,//base tupe annotations
+  gate_t g,
+  const std::set<gate_t> &inputs,
   const std::string &semiring,
   bool drop_table)
 {
-//will try to document from here on :"
+ 
+  std::unordered_map<gate_t, std::string> formula_mapping;
 
-/*create mapping from input gates( provenance uuids) to formula semiring labels(strings)
- * SPI query that was called before this method produced rows like (value, uuid)
- * where: value= label to show for the inout tuple annotations
- *        uuid= uuid identifying the input gate in the circuit given by generiuc circuit
- *so, formula_mapping[input_gate]=label
- */
-  std::unordered_map<gate_t, std::string> formula_mapping;//gate to formula semiring label mapping
-  //loop over all SPI  result rows produced by join_with_temp_uuids 
-  for (uint64 i = 0; i < SPI_processed; i++) //SPI_provessed = no of rows returned by the SPI query
-  {
-    HeapTuple tuple = SPI_tuptable->vals[i];//get ith row from SPI result
-    TupleDesc tupdesc = SPI_tuptable->tupdesc;// get schema
-    char *val  = SPI_getvalue(tuple, tupdesc, 1);//column 1 is "value" of the uuid ,i.e. a formula semiring string label
-    char *uuid = SPI_getvalue(tuple, tupdesc, 2);//column 2 is uuid
-    gate_t gate = c.getGate(uuid);//uuid to gate id
-    formula_mapping[gate] = std::string(val);//gate to formula semiring value
+  for (uint64 i = 0; i < SPI_processed; i++) {
+    HeapTuple tuple = SPI_tuptable->vals[i];
+    TupleDesc tupdesc = SPI_tuptable->tupdesc;
+
+    char *val  = SPI_getvalue(tuple, tupdesc, 1);
+    char *uuid = SPI_getvalue(tuple, tupdesc, 2);
+
+    gate_t gate = c.getGate(uuid);
+    formula_mapping[gate] = std::string(val);
+
     pfree(val);
     pfree(uuid);
   }
-//if join_with_temp_uuids created tmp_uuids ill drop i//if join_with_temp_uuids created tmp_uuids ill drop it//if join_with_temp_uuids created tmp_uuids ill drop it, basically handling the many uuids case
+
+  // If join_with_temp_uuids created tmp_uuids, drop it now.
   if (drop_table)
     SPI_exec(drop_temp_table, 0);
+
   SPI_finish();
 
   if (semiring != "formula")
-    throw CircuitException("Unknown semiring fot type varchar: " + semiring);
+    throw CircuitException("Unknown semiring for type varchar: " + semiring);
 
-  //helper_1: integer parsing from strings
-  //"1"=ok "1.0" =not ok "1 "=not okay and so on
-  //this would parse numeric constants stored as strings in getExtra(gate)
+  // Helper: allocate a PG text Datum from a std::string
+  auto return_text = [&](const std::string &out) -> Datum {
+    text *result = (text *) palloc(VARHDRSZ + out.size());
+    SET_VARSIZE(result, VARHDRSZ + out.size());
+    memcpy(VARDATA(result), out.c_str(), out.size());
+    PG_RETURN_TEXT_P(result);
+  };
+
+  // Helper: strict int parse (only accepts strings that are integers)
   auto parse_int_strict = [&](const std::string &s, bool &ok) -> int {
     ok = false;
-    if (s.empty()) return 0;//empty string is not a valid integer
+    if (s.empty()) return 0;
     size_t idx = 0;
     try {
       int v = std::stoi(s, &idx);
@@ -150,8 +153,8 @@ static Datum pec_varchar(
       return 0;
     }
   };
-//helper_2: repeatedly strip gate_project and gate_eq by replacing it with its first cjild
 
+  // Helper: strip gates that don't matter 
   auto unwrap_ignored = [&](gate_t x) -> gate_t {
     while (true) {
       gate_type t = c.getGateType(x);
@@ -165,14 +168,18 @@ static Datum pec_varchar(
     }
     return x;
   };
-//helper_3: convert operator in gate_cmp to enum ComparisonOp
+
+  // Helper: map Postgres operator from cmp gate to ComparisonOp
   auto map_cmp_op = [&](gate_t cmp_gate, bool &ok) -> ComparisonOp {
     ok = false;
+
     auto infos = c.getInfos(cmp_gate);
-    char *opname = get_opname(infos.first);//OID of postgres operator like >,>=,<,<=....
+    char *opname = get_opname(infos.first); 
     if (!opname) return ComparisonOp::EQ;
 
     std::string s(opname);
+    pfree(opname);
+
     ok = true;
     if (s == "=")  return ComparisonOp::EQ;
     if (s == "<>") return ComparisonOp::NEQ;
@@ -185,9 +192,23 @@ static Datum pec_varchar(
     return ComparisonOp::EQ;
   };
 
-  //helper_4: This  tries to interpret a semimod gate as (Monoid value, K semiring anotation)
-  // regardless of wire order.
-  auto semimod_extract_M_and_K = [&](gate_t semimod_gate, int &m_out, gate_t &k_gate_out) -> bool {
+  // Helper: C op agg  <=>  agg flip(op) C
+  auto flip_op = [&](ComparisonOp op) -> ComparisonOp {
+    switch (op) {
+      case ComparisonOp::LT:  return ComparisonOp::GT;
+      case ComparisonOp::LE:  return ComparisonOp::GE;
+      case ComparisonOp::GT:  return ComparisonOp::LT;
+      case ComparisonOp::GE:  return ComparisonOp::LE;
+      case ComparisonOp::EQ:  return ComparisonOp::EQ;
+      case ComparisonOp::NEQ: return ComparisonOp::NEQ;
+    }
+    return op; // unreachable
+  };
+
+  // Helper: interpret semimod gate as (M-value, K-value) in either wire order
+  auto semimod_extract_M_and_K =
+    [&](gate_t semimod_gate, int &m_out, gate_t &k_gate_out) -> bool
+  {
     semimod_gate = unwrap_ignored(semimod_gate);
     if (c.getGateType(semimod_gate) != gate_semimod) return false;
 
@@ -197,7 +218,6 @@ static Datum pec_varchar(
     gate_t a = unwrap_ignored(w[0]);
     gate_t b = unwrap_ignored(w[1]);
 
-    // case 1: a is numeric value
     if (c.getGateType(a) == gate_value) {
       bool ok = false;
       int v = parse_int_strict(c.getExtra(a), ok);
@@ -207,7 +227,6 @@ static Datum pec_varchar(
       return true;
     }
 
-    // case 2: b is numeric value
     if (c.getGateType(b) == gate_value) {
       bool ok = false;
       int v = parse_int_strict(c.getExtra(b), ok);
@@ -220,10 +239,10 @@ static Datum pec_varchar(
     return false;
   };
 
-  //helper_5: Accept both constant encodings:
+  // Helper: extract constant C from:
   // - gate_value("C")
   // - gate_semimod(C, gate_one)
-  // - gate_semimod(gate_one, C)   
+  // - gate_semimod(gate_one, C)
   auto extract_constant_C = [&](gate_t x, int &C_out) -> bool {
     x = unwrap_ignored(x);
 
@@ -242,7 +261,6 @@ static Datum pec_varchar(
       gate_t a = unwrap_ignored(w[0]);
       gate_t b = unwrap_ignored(w[1]);
 
-      // (value, one)
       if (c.getGateType(a) == gate_value && c.getGateType(b) == gate_one) {
         bool ok = false;
         int v = parse_int_strict(c.getExtra(a), ok);
@@ -251,7 +269,6 @@ static Datum pec_varchar(
         return true;
       }
 
-      // (one, value)  
       if (c.getGateType(a) == gate_one && c.getGateType(b) == gate_value) {
         bool ok = false;
         int v = parse_int_strict(c.getExtra(b), ok);
@@ -264,10 +281,9 @@ static Datum pec_varchar(
     return false;
   };
 
-  //helper_6: to extract tuples (K annotation, M value int) from an agg gate whose children are semimod(...)
-  auto extract_tuples_from_agg = [&](gate_t agg_gate,
-                                    std::vector<std::string> &labels_out,
-                                    std::vector<int> &values_out) -> bool
+  // Helper: extract tuples 
+  auto extract_tuples_from_agg =
+    [&](gate_t agg_gate, std::vector<std::string> &labels_out, std::vector<int> &values_out) -> bool
   {
     agg_gate = unwrap_ignored(agg_gate);
     if (c.getGateType(agg_gate) != gate_agg) return false;
@@ -283,38 +299,22 @@ static Datum pec_varchar(
       ch = unwrap_ignored(ch);
       if (c.getGateType(ch) != gate_semimod) return false;
 
-      int m = 0;//monoid value 
-      gate_t k_gate{};//provenance expression 
+      int m = 0;
+      gate_t k_gate{};
       if (!semimod_extract_M_and_K(ch, m, k_gate)) return false;
 
-      //instantiate the K gate on formula semiring to get formula semiring expression 
+      // Evaluate the label gate in the Formula semiring (so we get the label string)
       std::string k_str = c.evaluate<semiring::Formula>(k_gate, formula_mapping);
 
-      labels_out.push_back(std::move(k_str));//store label string
-      values_out.push_back(m);//store numeric value
+      labels_out.push_back(std::move(k_str));
+      values_out.push_back(m);
     }
 
     return true;
   };
 
-  //helper_7 for flipping comparison operator to support agg op cmp and cmp op agg both.
-  auto flip_op =[&](ComparisonOp op)-> ComparisonOp {
-    switch (op) {
-      case ComparisonOp::LT: return ComparisonOp::GT;
-      case ComparisonOp::LE: return ComparisonOp::GE;    
-      case ComparisonOp::GT: return ComparisonOp::LT;    
-      case ComparisonOp::GE: return ComparisonOp::LE;
-      case ComparisonOp::EQ: return ComparisonOp::EQ;
-      case ComparisonOp::NEQ: return ComparisonOp::NEQ;    
-    }
-    return op;
-  };
-
-
-
-  // find the HAVING rewrite pattern: times(delta(.), cmp(....)) possibly wrapped
+ 
   gate_t root = unwrap_ignored(g);
-
   gate_t cmp_gate{};
   bool found = false;
 
@@ -332,6 +332,7 @@ static Datum pec_varchar(
     }
   }
 
+  
   if (found) {
     const auto &cw = c.getWires(cmp_gate);
     if (cw.size() == 2) {
@@ -342,162 +343,82 @@ static Datum pec_varchar(
       ComparisonOp op = map_cmp_op(cmp_gate, okop);
 
       if (okop) {
-       //case1: agg op cmp 
-        if (c.getGateType(L) == gate_agg) {
+        semiring::Formula S;
+
+        auto build_from = [&](gate_t agg_side, gate_t const_side, ComparisonOp effective_op) -> std::optional<std::string> {
           int C = 0;
-          if (extract_constant_C(R, C)) {
-            std::vector<std::string> labels;
-            std::vector<int> values;
-            if (extract_tuples_from_agg(L, labels, values))
-            {
-              std::vector<uint64_t> worlds = enumerate_valid_worlds(values, C, op);
+          if (!extract_constant_C(const_side, C)) return std::nullopt;
 
-              // build formula with ⊕ ⊗ ⊖ here
-              if (worlds.empty()) {
-                std::string out = "𝟘";
-                text *result = (text *) palloc(VARHDRSZ + out.size());
-                SET_VARSIZE(result, VARHDRSZ + out.size());
-                memcpy(VARDATA(result), out.c_str(), out.size());
-                PG_RETURN_TEXT_P(result);
-              }
+          std::vector<std::string> labels;
+          std::vector<int> values;
+          if (!extract_tuples_from_agg(agg_side, labels, values)) return std::nullopt;
 
-              std::vector<std::string> disjuncts;//store each world W
-              disjuncts.reserve(worlds.size());//reserve no. of worlds
+          
+          std::vector<uint64_t> worlds = enumerate_valid_worlds(values, C, effective_op);
 
-              auto join = [&](const std::vector<std::string> &v, const char *sep) -> std::string {
-                if (v.empty()) return "";
-                std::ostringstream oss;
-                oss << v[0];
-                for (size_t i = 1; i < v.size(); ++i) oss << sep << v[i];
-                return oss.str();
-              };
+          if (worlds.empty())
+            return S.zero();
 
-              const size_t n = labels.size();
-              for (uint64_t mask : worlds) {
-                std::vector<std::string> present;
-                std::vector<std::string> missing;
-                present.reserve(n);
-                missing.reserve(n);
+          std::vector<std::string> disjuncts;
+          disjuncts.reserve(worlds.size());
 
-                for (size_t i = 0; i < n; ++i) {
-                  if (mask & (1ULL << i)) present.push_back(labels[i]);
-                  else                    missing.push_back(labels[i]);
-                }
+          const size_t n = labels.size();
 
-                std::string present_expr;
-                if (present.empty()) present_expr = "𝟙";
-                else if (present.size() == 1) present_expr = present[0];
-                else present_expr = "(" + join(present, " ⊗ ") + ")";
+          for (uint64_t mask : worlds) {
+            std::vector<std::string> present;
+            std::vector<std::string> missing;
+            present.reserve(n);
+            missing.reserve(n);
 
-                std::string term;
-                if (!missing.empty()) {
-                  std::string missing_expr;
-                  if (missing.size() == 1) missing_expr = missing[0];
-                  else missing_expr = "(" + join(missing, " ⊕ ") + ")";
-
-                  term = "(" + present_expr + " ⊗ (𝟙 ⊖ " + missing_expr + "))";
-                } else {
-                  term = present_expr;
-                }
-
-                disjuncts.push_back(std::move(term));
-              }
-
-              std::string out;
-              if (disjuncts.size() == 1) out = disjuncts[0];
-              else out = "(" + join(disjuncts, " ⊕ ") + ")";
-
-              text *result = (text *) palloc(VARHDRSZ + out.size());
-              SET_VARSIZE(result, VARHDRSZ + out.size());
-              memcpy(VARDATA(result), out.c_str(), out.size());
-              PG_RETURN_TEXT_P(result);
+            for (size_t i = 0; i < n; ++i) {
+              if (mask & (1ULL << i)) present.push_back(labels[i]);
+              else                    missing.push_back(labels[i]);
             }
+
+            // present_prod = ⊗_{x in W} x   (times([]) returns 𝟙 automatically)
+            std::string present_prod = S.times(present);
+
+            // If nothing is missing, term is just the product
+            if (missing.empty()) {
+              disjuncts.push_back(std::move(present_prod));
+              continue;
+            }
+
+            // missing_sum = ⊕_{x not in W} x
+            std::string missing_sum = S.plus(missing);
+
+            // monus_factor = (𝟙 ⊖ missing_sum)
+            std::string monus_factor = S.monus(S.one(), missing_sum);
+
+            // term = present_prod ⊗ monus_factor
+            std::string term = S.times(std::vector<std::string>{present_prod, monus_factor});
+
+            disjuncts.push_back(std::move(term));
+          }
+
+          return S.plus(disjuncts);
+        };
+
+        // Case A: agg op const
+        if (c.getGateType(L) == gate_agg) {
+          if (auto out = build_from(L, R, op)) {
+            return return_text(*out);
           }
         }
-        //case2: cmp op agg
 
+        // Case B: const op agg  
         if (c.getGateType(R) == gate_agg) {
-          int C = 0;
-          if (extract_constant_C(L,C)){
-            std::vector<std::string> labels;
-            std::vector<int> values;
-
-            if (extract_tuples_from_agg(R, labels , values))
-            {
-             std::vector<uint64_t> worlds = enumerate_valid_worlds(values, C, flip_op(op));
-             
-             if (worlds.empty()){
-               std::string out = "𝟘";
-                text *result = (text *) palloc(VARHDRSZ + out.size());
-                SET_VARSIZE(result, VARHDRSZ + out.size());
-                memcpy(VARDATA(result), out.c_str(), out.size());
-                PG_RETURN_TEXT_P(result);
-
-             }
-             std::vector<std::string> disjuncts;
-             disjuncts.reserve(worlds.size());
-
-             auto join = [&](const std::vector<std::string> &v, const char *sep) -> std::string {
-                if (v.empty()) return "";
-                std::ostringstream oss;
-                oss << v[0];
-                for (size_t i = 1; i < v.size(); ++i) oss << sep << v[i];
-                return oss.str();
-              }; 
-
-              const size_t n = labels.size();
-              for (uint64_t mask : worlds) {
-                std::vector<std::string> present;
-                std::vector<std::string> missing;
-                present.reserve(n);
-                missing.reserve(n);
-
-                for (size_t i = 0; i < n; ++i) {
-                  if (mask & (1ULL << i)) present.push_back(labels[i]);
-                  else                    missing.push_back(labels[i]);
-                }
-
-                std::string present_expr;
-                if (present.empty()) present_expr = "𝟙";
-                else if (present.size() == 1) present_expr = present[0];
-                else present_expr = "(" + join(present, " ⊗ ") + ")";
-
-                std::string term;
-                if (!missing.empty()) {
-                  std::string missing_expr;
-                  if (missing.size() == 1) missing_expr = missing[0];
-                  else missing_expr = "(" + join(missing, " ⊕ ") + ")";
-
-                  term = "(" + present_expr + " ⊗ (𝟙 ⊖ " + missing_expr + "))";
-                } else {
-                  term = present_expr;
-                }
-
-                disjuncts.push_back(std::move(term));
-              }
-
-              std::string out;
-              if (disjuncts.size() == 1) out = disjuncts[0];
-              else out ="("+join(disjuncts, " ⊕ ") + ")";
-
-              text *result = (text *) palloc(VARHDRSZ) +out.size();
-              SET_VARSIZE(result, VARHDRSZ + out.size());
-              memcpy(VARDATA(result), out.c_str(), out.size());
-              PG_RETURN_TEXT_P(result);
-            }
+          if (auto out = build_from(R, L, flip_op(op))) {
+            return return_text(*out);
           }
         }
       }
     }
   }
 
-  // fallback if there is no HAVING
+  // Fallback
   std::string s = c.evaluate<semiring::Formula>(g, formula_mapping);
-
-  text *result = (text *) palloc(VARHDRSZ + s.size());
-  SET_VARSIZE(result, VARHDRSZ + s.size());
-  memcpy(VARDATA(result), s.c_str(), s.size());
-  PG_RETURN_TEXT_P(result);
+  return return_text(s);
 }
 static Datum pec_int(
   const constants_t &constants,
