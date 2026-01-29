@@ -19,7 +19,8 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
 #include "subset.hpp"
-#include "regex"
+#include <regex>
+#include <optional>
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
 static Datum pec_bool(
