@@ -11,16 +11,19 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 }
 
 #include <string>
+#include <sstream>
+#include <vector>
+#include <unordered_map>
+#include <algorithm>
 
+#include "having_semantics.hpp"
 #include "provenance_evaluate_compiled.hpp"
-
 #include "semiring/Boolean.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
-#include "subset.hpp"
-#include <regex>
-#include <optional>
+
+
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
 static Datum pec_bool(
@@ -36,13 +39,19 @@ static Datum pec_bool(
     return *v=='t';
   }, drop_table);
 
-  if(semiring=="boolean") {
-    auto val = c.evaluate<semiring::Boolean>(g, provenance_mapping);
-    PG_RETURN_BOOL(val);
-  } else
+  if(semiring!="boolean")
     throw CircuitException("Unknown semiring for type varchar: "+semiring);
+
+  bool out = false;
+  if (!provsql_try_having_boolean(c,g,provenance_mapping,out))
+  {
+    out = c.evaluate<semiring::Boolean>(g, provenance_mapping);
+  } 
+
+  PG_RETURN_BOOL(out);
 }
-static Datum pec_why(
+
+  static Datum pec_why(
   const constants_t &constants,
   GenericCircuit &c,
   gate_t g,
@@ -68,37 +77,40 @@ static Datum pec_why(
     drop_table
     );
 
-  if (semiring == "why") {
-    auto prov = c.evaluate<semiring::Why>(g, provenance_mapping);
+  if (semiring != "why")
+      throw CircuitException("Unknown semiring for type varchar: " + semiring);
 
-    // Serialize nested set structure: {{x},{y}}
-    std::ostringstream oss;
+  semiring::why_provenance_t prov;
+  if (!provsql_try_having_why(c, g, provenance_mapping, prov)) {
+    prov = c.evaluate<semiring::Why>(g, provenance_mapping);
+  }
+
+  // Serialize nested set structure: {{x},{y}}
+  std::ostringstream oss;
+  oss << "{";
+  bool firstOuter = true;
+  for (const auto &inner : prov) {
+    if (!firstOuter) oss << ",";
+    firstOuter = false;
     oss << "{";
-    bool firstOuter = true;
-    for (const auto& inner : prov) {
-      if (!firstOuter) oss << ",";
-      firstOuter = false;
-      oss << "{";
-      bool firstInner = true;
-      for (const auto& label : inner) {
-        if (!firstInner) oss << ",";
-        firstInner = false;
-        oss << label;
-      }
-      oss << "}";
+    bool firstInner = true;
+    for (const auto &label : inner) {
+      if (!firstInner) oss << ",";
+      firstInner = false;
+      oss << label;
     }
     oss << "}";
-
-    std::string out = oss.str();
-    text *result = (text *) palloc(VARHDRSZ + out.size());
-    SET_VARSIZE(result, VARHDRSZ + out.size());
-    memcpy(VARDATA(result), out.c_str(), out.size());
-    PG_RETURN_TEXT_P(result);
-  } else {
-    throw CircuitException("Unknown semiring for type varchar: " + semiring);
   }
+  oss << "}";
+
+  std::string out = oss.str();
+  text *result = (text *) palloc(VARHDRSZ + out.size());
+  SET_VARSIZE(result, VARHDRSZ + out.size());
+  memcpy(VARDATA(result), out.c_str(), out.size());
+  PG_RETURN_TEXT_P(result);
+
 }
- static Datum pec_varchar(
+static Datum pec_varchar(
   const constants_t &constants,
   GenericCircuit &c,
   gate_t g,
@@ -106,320 +118,27 @@ static Datum pec_why(
   const std::string &semiring,
   bool drop_table)
 {
- 
-  std::unordered_map<gate_t, std::string> formula_mapping;
+  std::unordered_map<gate_t, std::string> provenance_mapping;
+  initialize_provenance_mapping<std::string>(
+    constants, c, provenance_mapping,
+    [](const char *v) { return std::string(v); },
+    drop_table
+  );
 
-  for (uint64 i = 0; i < SPI_processed; i++) {
-    HeapTuple tuple = SPI_tuptable->vals[i];
-    TupleDesc tupdesc = SPI_tuptable->tupdesc;
+  if (semiring!= "formula")
+    throw CircuitException("Unknown seimring for type varchar: " + semiring);
 
-    char *val  = SPI_getvalue(tuple, tupdesc, 1);
-    char *uuid = SPI_getvalue(tuple, tupdesc, 2);
-
-    gate_t gate = c.getGate(uuid);
-    formula_mapping[gate] = std::string(val);
-
-    pfree(val);
-    pfree(uuid);
+  std::string s;
+   
+  if (!provsql_try_having_formula(c, g, provenance_mapping, s)) {
+    s = c.evaluate<semiring::Formula>(g, provenance_mapping);
   }
 
-  // If join_with_temp_uuids created tmp_uuids, drop it now.
-  if (drop_table)
-    SPI_exec(drop_temp_table, 0);
-
-  SPI_finish();
-
-  if (semiring != "formula")
-    throw CircuitException("Unknown semiring for type varchar: " + semiring);
-
-  // Helper: allocate a PG text Datum from a std::string
-  auto return_text = [&](const std::string &out) -> Datum {
-    text *result = (text *) palloc(VARHDRSZ + out.size());
-    SET_VARSIZE(result, VARHDRSZ + out.size());
-    memcpy(VARDATA(result), out.c_str(), out.size());
-    PG_RETURN_TEXT_P(result);
-  };
-
-  // Helper: strict int parse (only accepts strings that are integers)
-  auto parse_int_strict = [&](const std::string &s, bool &ok) -> int {
-    ok = false;
-    if (s.empty()) return 0;
-    size_t idx = 0;
-    try {
-      int v = std::stoi(s, &idx);
-      if (idx != s.size()) return 0;
-      ok = true;
-      return v;
-    } catch (...) {
-      return 0;
-    }
-  };
-
-  // Helper: strip gates that don't matter 
-  auto unwrap_ignored = [&](gate_t x) -> gate_t {
-    while (true) {
-      gate_type t = c.getGateType(x);
-      if (t == gate_project || t == gate_eq) {
-        const auto &w = c.getWires(x);
-        if (w.empty()) break;
-        x = w[0];
-        continue;
-      }
-      break;
-    }
-    return x;
-  };
-
-  // Helper: map Postgres operator from cmp gate to ComparisonOp
-  auto map_cmp_op = [&](gate_t cmp_gate, bool &ok) -> ComparisonOp {
-    ok = false;
-
-    auto infos = c.getInfos(cmp_gate);
-    char *opname = get_opname(infos.first); 
-    if (!opname) return ComparisonOp::EQ;
-
-    std::string s(opname);
-    pfree(opname);
-
-    ok = true;
-    if (s == "=")  return ComparisonOp::EQ;
-    if (s == "<>") return ComparisonOp::NEQ;
-    if (s == "<")  return ComparisonOp::LT;
-    if (s == "<=") return ComparisonOp::LE;
-    if (s == ">")  return ComparisonOp::GT;
-    if (s == ">=") return ComparisonOp::GE;
-
-    ok = false;
-    return ComparisonOp::EQ;
-  };
-
-  // Helper: C op agg  <=>  agg flip(op) C
-  auto flip_op = [&](ComparisonOp op) -> ComparisonOp {
-    switch (op) {
-      case ComparisonOp::LT:  return ComparisonOp::GT;
-      case ComparisonOp::LE:  return ComparisonOp::GE;
-      case ComparisonOp::GT:  return ComparisonOp::LT;
-      case ComparisonOp::GE:  return ComparisonOp::LE;
-      case ComparisonOp::EQ:  return ComparisonOp::EQ;
-      case ComparisonOp::NEQ: return ComparisonOp::NEQ;
-    }
-    return op; // unreachable
-  };
-
-  // Helper: interpret semimod gate as (M-value, K-value) in either wire order
-  auto semimod_extract_M_and_K =
-    [&](gate_t semimod_gate, int &m_out, gate_t &k_gate_out) -> bool
-  {
-    semimod_gate = unwrap_ignored(semimod_gate);
-    if (c.getGateType(semimod_gate) != gate_semimod) return false;
-
-    const auto &w = c.getWires(semimod_gate);
-    if (w.size() != 2) return false;
-
-    gate_t a = unwrap_ignored(w[0]);
-    gate_t b = unwrap_ignored(w[1]);
-
-    if (c.getGateType(a) == gate_value) {
-      bool ok = false;
-      int v = parse_int_strict(c.getExtra(a), ok);
-      if (!ok) return false;
-      m_out = v;
-      k_gate_out = b;
-      return true;
-    }
-
-    if (c.getGateType(b) == gate_value) {
-      bool ok = false;
-      int v = parse_int_strict(c.getExtra(b), ok);
-      if (!ok) return false;
-      m_out = v;
-      k_gate_out = a;
-      return true;
-    }
-
-    return false;
-  };
-
-  // Helper: extract constant C from:
-  // - gate_value("C")
-  // - gate_semimod(C, gate_one)
-  // - gate_semimod(gate_one, C)
-  auto extract_constant_C = [&](gate_t x, int &C_out) -> bool {
-    x = unwrap_ignored(x);
-
-    if (c.getGateType(x) == gate_value) {
-      bool ok = false;
-      int v = parse_int_strict(c.getExtra(x), ok);
-      if (!ok) return false;
-      C_out = v;
-      return true;
-    }
-
-    if (c.getGateType(x) == gate_semimod) {
-      const auto &w = c.getWires(x);
-      if (w.size() != 2) return false;
-
-      gate_t a = unwrap_ignored(w[0]);
-      gate_t b = unwrap_ignored(w[1]);
-
-      if (c.getGateType(a) == gate_value && c.getGateType(b) == gate_one) {
-        bool ok = false;
-        int v = parse_int_strict(c.getExtra(a), ok);
-        if (!ok) return false;
-        C_out = v;
-        return true;
-      }
-
-      if (c.getGateType(a) == gate_one && c.getGateType(b) == gate_value) {
-        bool ok = false;
-        int v = parse_int_strict(c.getExtra(b), ok);
-        if (!ok) return false;
-        C_out = v;
-        return true;
-      }
-    }
-
-    return false;
-  };
-
-  // Helper: extract tuples 
-  auto extract_tuples_from_agg =
-    [&](gate_t agg_gate, std::vector<std::string> &labels_out, std::vector<int> &values_out) -> bool
-  {
-    agg_gate = unwrap_ignored(agg_gate);
-    if (c.getGateType(agg_gate) != gate_agg) return false;
-
-    const auto &children = c.getWires(agg_gate);
-
-    labels_out.clear();
-    values_out.clear();
-    labels_out.reserve(children.size());
-    values_out.reserve(children.size());
-
-    for (gate_t ch : children) {
-      ch = unwrap_ignored(ch);
-      if (c.getGateType(ch) != gate_semimod) return false;
-
-      int m = 0;
-      gate_t k_gate{};
-      if (!semimod_extract_M_and_K(ch, m, k_gate)) return false;
-
-      // Evaluate the label gate in the Formula semiring (so we get the label string)
-      std::string k_str = c.evaluate<semiring::Formula>(k_gate, formula_mapping);
-
-      labels_out.push_back(std::move(k_str));
-      values_out.push_back(m);
-    }
-
-    return true;
-  };
-
- 
-  gate_t root = unwrap_ignored(g);
-  gate_t cmp_gate{};
-  bool found = false;
-
-  if (c.getGateType(root) == gate_times) {
-    const auto &w = c.getWires(root);
-    if (w.size() == 2) {
-      gate_t a = unwrap_ignored(w[0]);
-      gate_t b = unwrap_ignored(w[1]);
-
-      if (c.getGateType(a) == gate_cmp && c.getGateType(b) == gate_delta) {
-        cmp_gate = a; found = true;
-      } else if (c.getGateType(b) == gate_cmp && c.getGateType(a) == gate_delta) {
-        cmp_gate = b; found = true;
-      }
-    }
-  }
-
+  text *result = (text *) palloc(VARHDRSZ + s.size());
+  SET_VARSIZE(result, VARHDRSZ + s.size());
+  memcpy(VARDATA(result), s.c_str(), s.size());
+  PG_RETURN_TEXT_P(result);
   
-  if (found) {
-    const auto &cw = c.getWires(cmp_gate);
-    if (cw.size() == 2) {
-      gate_t L = unwrap_ignored(cw[0]);
-      gate_t R = unwrap_ignored(cw[1]);
-
-      bool okop = false;
-      ComparisonOp op = map_cmp_op(cmp_gate, okop);
-
-      if (okop) {
-        semiring::Formula S;
-
-        auto build_from = [&](gate_t agg_side, gate_t const_side, ComparisonOp effective_op) -> std::optional<std::string> {
-          int C = 0;
-          if (!extract_constant_C(const_side, C)) return std::nullopt;
-
-          std::vector<std::string> labels;
-          std::vector<int> values;
-          if (!extract_tuples_from_agg(agg_side, labels, values)) return std::nullopt;
-
-          
-          std::vector<uint64_t> worlds = enumerate_valid_worlds(values, C, effective_op);
-
-          if (worlds.empty())
-            return S.zero();
-
-          std::vector<std::string> disjuncts;
-          disjuncts.reserve(worlds.size());
-
-          const size_t n = labels.size();
-
-          for (uint64_t mask : worlds) {
-            std::vector<std::string> present;
-            std::vector<std::string> missing;
-            present.reserve(n);
-            missing.reserve(n);
-
-            for (size_t i = 0; i < n; ++i) {
-              if (mask & (1ULL << i)) present.push_back(labels[i]);
-              else                    missing.push_back(labels[i]);
-            }
-
-            // present_prod = ⊗_{x in W} x   (times([]) returns 𝟙 automatically)
-            std::string present_prod = S.times(present);
-
-            // If nothing is missing, term is just the product
-            if (missing.empty()) {
-              disjuncts.push_back(std::move(present_prod));
-              continue;
-            }
-
-            // missing_sum = ⊕_{x not in W} x
-            std::string missing_sum = S.plus(missing);
-
-            // monus_factor = (𝟙 ⊖ missing_sum)
-            std::string monus_factor = S.monus(S.one(), missing_sum);
-
-            // term = present_prod ⊗ monus_factor
-            std::string term = S.times(std::vector<std::string>{present_prod, monus_factor});
-
-            disjuncts.push_back(std::move(term));
-          }
-
-          return S.plus(disjuncts);
-        };
-
-        // Case A: agg op const
-        if (c.getGateType(L) == gate_agg) {
-          if (auto out = build_from(L, R, op)) {
-            return return_text(*out);
-          }
-        }
-
-        // Case B: const op agg  
-        if (c.getGateType(R) == gate_agg) {
-          if (auto out = build_from(R, L, flip_op(op))) {
-            return return_text(*out);
-          }
-        }
-      }
-    }
-  }
-
-  // Fallback
-  std::string s = c.evaluate<semiring::Formula>(g, formula_mapping);
-  return return_text(s);
 }
 static Datum pec_int(
   const constants_t &constants,
@@ -434,11 +153,15 @@ static Datum pec_int(
     return atoi(v);
   }, drop_table);
 
-  if(semiring=="counting") {
-    auto val = c.evaluate<semiring::Counting>(g, provenance_mapping);
-    PG_RETURN_INT32(val);
-  } else
-    throw CircuitException("Unknown semiring for type int: "+semiring);
+  if(semiring!="counting") 
+      throw CircuitException("Unknown semiring for type int: "+semiring);
+   unsigned out = 0;
+  if (!provsql_try_having_counting(c, g, provenance_mapping, out)) {
+    out = c.evaluate<semiring::Counting>(g, provenance_mapping);
+  }
+
+  PG_RETURN_INT32((int32) out);
+
 }
 
 bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
