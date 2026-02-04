@@ -8,7 +8,7 @@ extern "C" {
 #include "provsql_utils_cpp.h"
 #include "CircuitFromMMap.h"
 #include "Circuit.hpp"
-#include "GenericCircuit.hpp"
+
 
 extern const char *drop_temp_table;
 
