@@ -177,6 +177,9 @@ BEGIN
   EXECUTE format('ALTER TABLE %s DROP COLUMN provsql', _tbl);
   BEGIN
     EXECUTE format('DROP TRIGGER add_gate on %s', _tbl);
+  EXCEPTION WHEN undefined_object THEN
+  END;
+  BEGIN
     EXECUTE format('DROP TRIGGER insert_statement on %s', _tbl);
     EXECUTE format('DROP TRIGGER update_statement on %s', _tbl);
     EXECUTE format('DROP TRIGGER delete_statement on %s', _tbl);
