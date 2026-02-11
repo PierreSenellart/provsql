@@ -179,6 +179,12 @@ BEGIN
     EXECUTE format('DROP TRIGGER add_gate on %s', _tbl);
   EXCEPTION WHEN undefined_object THEN
   END;
+  BEGIN
+    EXECUTE format('DROP TRIGGER insert_statement on %s', _tbl);
+    EXECUTE format('DROP TRIGGER update_statement on %s', _tbl);
+    EXECUTE format('DROP TRIGGER delete_statement on %s', _tbl);
+  EXCEPTION WHEN undefined_object THEN
+  END;
 END
 $$ LANGUAGE plpgsql;
 
@@ -611,7 +617,7 @@ BEGIN
   nb_columns:=-1;
   FOR t IN
     SELECT relname,
-      (SELECT count(*) FROM pg_attribute a2 WHERE a2.attrelid=a1.attrelid AND attnum>0)-1 c
+      (SELECT count(*) FROM pg_attribute a2 WHERE a2.attrelid=a1.attrelid AND attnum>0 AND atttypid<>0)-1 c
     FROM pg_attribute a1 JOIN pg_type ON atttypid=pg_type.oid
                         JOIN pg_class ON attrelid=pg_class.oid
                         JOIN pg_namespace ON relnamespace=pg_namespace.oid

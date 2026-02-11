@@ -3,6 +3,7 @@ test: setup
 
 # Adding a provenance table
 test: add_provenance
+test: remove_add_provenance
 
 # Basic checks
 test: provenance_in_from identify_token subquery create_provenance_mapping
