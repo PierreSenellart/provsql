@@ -42,16 +42,13 @@ static Datum pec_bool(
   if(semiring!="boolean")
     throw CircuitException("Unknown semiring for type varchar: "+semiring);
 
-  bool out = false;
-  if (!provsql_try_having_boolean(c,g,provenance_mapping,out))
-  {
-    out = c.evaluate<semiring::Boolean>(g, provenance_mapping);
-  } 
+  provsql_try_having_boolean(c,g,provenance_mapping);
+  bool out = c.evaluate<semiring::Boolean>(g, provenance_mapping);
 
   PG_RETURN_BOOL(out);
 }
 
-  static Datum pec_why(
+static Datum pec_why(
   const constants_t &constants,
   GenericCircuit &c,
   gate_t g,
@@ -78,12 +75,10 @@ static Datum pec_bool(
     );
 
   if (semiring != "why")
-      throw CircuitException("Unknown semiring for type varchar: " + semiring);
+    throw CircuitException("Unknown semiring for type varchar: " + semiring);
 
-  semiring::why_provenance_t prov;
-  if (!provsql_try_having_why(c, g, provenance_mapping, prov)) {
-    prov = c.evaluate<semiring::Why>(g, provenance_mapping);
-  }
+  provsql_try_having_why(c, g, provenance_mapping);
+  semiring::why_provenance_t prov = c.evaluate<semiring::Why>(g, provenance_mapping);
 
   // Serialize nested set structure: {{x},{y}}
   std::ostringstream oss;
@@ -121,24 +116,23 @@ static Datum pec_varchar(
   std::unordered_map<gate_t, std::string> provenance_mapping;
   initialize_provenance_mapping<std::string>(
     constants, c, provenance_mapping,
-    [](const char *v) { return std::string(v); },
+    [](const char *v) {
+    return std::string(v);
+  },
     drop_table
-  );
+    );
 
   if (semiring!= "formula")
     throw CircuitException("Unknown seimring for type varchar: " + semiring);
 
-  std::string s;
-   
-  if (!provsql_try_having_formula(c, g, provenance_mapping, s)) {
-    s = c.evaluate<semiring::Formula>(g, provenance_mapping);
-  }
+  provsql_try_having_formula(c, g, provenance_mapping);
+  std::string s = c.evaluate<semiring::Formula>(g, provenance_mapping);
 
   text *result = (text *) palloc(VARHDRSZ + s.size());
   SET_VARSIZE(result, VARHDRSZ + s.size());
   memcpy(VARDATA(result), s.c_str(), s.size());
   PG_RETURN_TEXT_P(result);
-  
+
 }
 static Datum pec_int(
   const constants_t &constants,
@@ -153,12 +147,11 @@ static Datum pec_int(
     return atoi(v);
   }, drop_table);
 
-  if(semiring!="counting") 
-      throw CircuitException("Unknown semiring for type int: "+semiring);
-   unsigned out = 0;
-  if (!provsql_try_having_counting(c, g, provenance_mapping, out)) {
-    out = c.evaluate<semiring::Counting>(g, provenance_mapping);
-  }
+  if(semiring!="counting")
+    throw CircuitException("Unknown semiring for type int: "+semiring);
+
+  provsql_try_having_counting(c, g, provenance_mapping);
+  unsigned out = c.evaluate<semiring::Counting>(g, provenance_mapping);
 
   PG_RETURN_INT32((int32) out);
 

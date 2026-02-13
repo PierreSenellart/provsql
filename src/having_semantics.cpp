@@ -15,7 +15,7 @@ extern "C" {
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
 namespace {
-// Parse int from string 
+// Parse int from string
 static int parse_int_strict(const std::string &s, bool &ok) {
   ok = false;
   if (s.empty()) return 0;
@@ -42,11 +42,11 @@ static ComparisonOp map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok) {
   pfree(opname);
 
   ok = true;
-  if (s == "=")  return ComparisonOp::EQ;
+  if (s == "=") return ComparisonOp::EQ;
   if (s == "<>") return ComparisonOp::NEQ;
-  if (s == "<")  return ComparisonOp::LT;
+  if (s == "<") return ComparisonOp::LT;
   if (s == "<=") return ComparisonOp::LE;
-  if (s == ">")  return ComparisonOp::GT;
+  if (s == ">") return ComparisonOp::GT;
   if (s == ">=") return ComparisonOp::GE;
 
   ok = false;
@@ -56,12 +56,12 @@ static ComparisonOp map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok) {
 // Flip operator for “C op agg”  <=>  “agg flip(op) C”
 static ComparisonOp flip_op(ComparisonOp op) {
   switch (op) {
-    case ComparisonOp::LT:  return ComparisonOp::GT;
-    case ComparisonOp::LE:  return ComparisonOp::GE;
-    case ComparisonOp::GT:  return ComparisonOp::LT;
-    case ComparisonOp::GE:  return ComparisonOp::LE;
-    case ComparisonOp::EQ:  return ComparisonOp::EQ;
-    case ComparisonOp::NEQ: return ComparisonOp::NEQ;
+  case ComparisonOp::LT:  return ComparisonOp::GT;
+  case ComparisonOp::LE:  return ComparisonOp::GE;
+  case ComparisonOp::GT:  return ComparisonOp::LT;
+  case ComparisonOp::GE:  return ComparisonOp::LE;
+  case ComparisonOp::EQ:  return ComparisonOp::EQ;
+  case ComparisonOp::NEQ: return ComparisonOp::NEQ;
   }
   return op;
 }
@@ -157,11 +157,10 @@ static void collect_sp_cmp_gates(GenericCircuit &c, gate_t start, std::vector<ga
 // --------------------------------------------------
 
 template <typename SemiringT, typename MapT>
-static bool try_having_impl(
+static void try_having_impl(
   GenericCircuit &c,
   gate_t g,
-  MapT &mapping,
-  typename SemiringT::value_type &out)
+  MapT &mapping)
 {
   SemiringT S;
 
@@ -169,144 +168,135 @@ static bool try_having_impl(
   collect_sp_cmp_gates(c, g, cmp_gates);
 
   if (cmp_gates.empty())
-    return false; // nothing to rewrite
-
+    return; // nothing to rewrite
 
   auto pw_from_cmp_gate = [&](gate_t cmp_gate, typename SemiringT::value_type &pw_out) -> bool {
-    const auto &cw = c.getWires(cmp_gate);
-    if (cw.size() != 2) return false;
+                            const auto &cw = c.getWires(cmp_gate);
+                            if (cw.size() != 2) return false;
 
-    gate_t L = cw[0];
-    gate_t R = cw[1];
+                            gate_t L = cw[0];
+                            gate_t R = cw[1];
 
-    bool okop = false;
-    ComparisonOp op = map_cmp_op(c, cmp_gate, okop);
-    if (!okop) return false;
+                            bool okop = false;
+                            ComparisonOp op = map_cmp_op(c, cmp_gate, okop);
+                            if (!okop) return false;
 
-    auto build_from = [&](gate_t agg_side, gate_t const_side, ComparisonOp effective_op) -> bool {
-      int C = 0;
-      if (!extract_constant_C(c, const_side, C)) return false;
+                            auto build_from = [&](gate_t agg_side, gate_t const_side, ComparisonOp effective_op) -> bool {
+                                                int C = 0;
+                                                if (!extract_constant_C(c, const_side, C)) return false;
 
-      if (c.getGateType(agg_side) != gate_agg) return false;
+                                                if (c.getGateType(agg_side) != gate_agg) return false;
 
-      const auto &children = c.getWires(agg_side);
+                                                const auto &children = c.getWires(agg_side);
 
-      std::vector<int> mvals;
-      mvals.reserve(children.size());
+                                                std::vector<int> mvals;
+                                                mvals.reserve(children.size());
 
-      std::vector<typename SemiringT::value_type> kvals;
-      kvals.reserve(children.size());
+                                                std::vector<typename SemiringT::value_type> kvals;
+                                                kvals.reserve(children.size());
 
-      for (gate_t ch : children) {
-        if (c.getGateType(ch) != gate_semimod) return false;
+                                                for (gate_t ch : children) {
+                                                  if (c.getGateType(ch) != gate_semimod) return false;
 
-        int m = 0;
-        gate_t k_gate{};
-        if (!semimod_extract_M_and_K(c, ch, m, k_gate)) return false;
+                                                  int m = 0;
+                                                  gate_t k_gate{};
+                                                  if (!semimod_extract_M_and_K(c, ch, m, k_gate)) return false;
 
-        auto kval = c.evaluate<SemiringT>(k_gate, mapping);
+                                                  auto kval = c.evaluate<SemiringT>(k_gate, mapping);
 
-        mvals.push_back(m);
-        kvals.push_back(std::move(kval));
-      }
+                                                  mvals.push_back(m);
+                                                  kvals.push_back(std::move(kval));
+                                                }
 
-      std::vector<uint64_t> worlds = enumerate_valid_worlds(mvals, C, effective_op);
+                                                std::vector<uint64_t> worlds = enumerate_valid_worlds(mvals, C, effective_op);
 
-      if (worlds.empty()) {
-        pw_out = S.zero();
-        return true;
-      }
+                                                if (worlds.empty()) {
+                                                  pw_out = S.zero();
+                                                  return true;
+                                                }
 
-      std::vector<typename SemiringT::value_type> disjuncts;
-      disjuncts.reserve(worlds.size());
+                                                std::vector<typename SemiringT::value_type> disjuncts;
+                                                disjuncts.reserve(worlds.size());
 
-      const size_t n = kvals.size();
+                                                const size_t n = kvals.size();
 
-      for (uint64_t mask : worlds) {
-        std::vector<typename SemiringT::value_type> present;
-        std::vector<typename SemiringT::value_type> missing;
-        present.reserve(n);
-        missing.reserve(n);
+                                                for (uint64_t mask : worlds) {
+                                                  std::vector<typename SemiringT::value_type> present;
+                                                  std::vector<typename SemiringT::value_type> missing;
+                                                  present.reserve(n);
+                                                  missing.reserve(n);
 
-        for (size_t i = 0; i < n; ++i) {
-          if (mask & (1ULL << i)) present.push_back(kvals[i]);
-          else                    missing.push_back(kvals[i]);
-        }
+                                                  for (size_t i = 0; i < n; ++i) {
+                                                    if (mask & (1ULL << i)) present.push_back(kvals[i]);
+                                                    else missing.push_back(kvals[i]);
+                                                  }
 
-        auto present_prod = S.times(present);
+                                                  auto present_prod = S.times(present);
 
-        if (missing.empty()) {
-          disjuncts.push_back(std::move(present_prod));
-        } else {
-          auto missing_sum = S.plus(missing);
-          auto monus_factor = S.monus(S.one(), missing_sum);
-          auto term = S.times(std::vector<typename SemiringT::value_type>{present_prod, monus_factor});
-          disjuncts.push_back(std::move(term));
-        }
-      }
+                                                  if (missing.empty()) {
+                                                    disjuncts.push_back(std::move(present_prod));
+                                                  } else {
+                                                    auto missing_sum = S.plus(missing);
+                                                    auto monus_factor = S.monus(S.one(), missing_sum);
+                                                    auto term = S.times(std::vector<typename SemiringT::value_type>{present_prod, monus_factor});
+                                                    disjuncts.push_back(std::move(term));
+                                                  }
+                                                }
 
-      pw_out = S.plus(disjuncts);
-      return true;
-    };
+                                                pw_out = S.plus(disjuncts);
+                                                return true;
+                                              };
 
-    if (c.getGateType(L) == gate_agg)
-      return build_from(L, R, op);
+                            if (c.getGateType(L) == gate_agg)
+                              return build_from(L, R, op);
 
-    if (c.getGateType(R) == gate_agg)
-      return build_from(R, L, flip_op(op));
+                            if (c.getGateType(R) == gate_agg)
+                              return build_from(R, L, flip_op(op));
 
-    return false;
-  };
+                            return false;
+                          };
 
   // evaluate all  cmp gates individually using pw semantics
   for (gate_t cmp_gate : cmp_gates) {
     typename SemiringT::value_type pw;
     if (!pw_from_cmp_gate(cmp_gate, pw))
-      return false;
+      return;
 
     mapping[cmp_gate] = std::move(pw);
   }
-
-  // Now evaluate the complete prov circuit with already evaluated cmp gates
-  out = c.evaluate<SemiringT>(g, mapping);
-  return true;
 }
 
 //-------------------------
 // Public wrappers
-//----------------------------- 
-bool provsql_try_having_formula(
+//-----------------------------
+void provsql_try_having_formula(
   GenericCircuit &c,
   gate_t g,
-  std::unordered_map<gate_t, std::string> &mapping,
-  std::string &out)
+  std::unordered_map<gate_t, std::string> &mapping)
 {
-  return try_having_impl<semiring::Formula>(c, g, mapping, out);
+  try_having_impl<semiring::Formula>(c, g, mapping);
 }
 
-bool provsql_try_having_counting(
+void provsql_try_having_counting(
   GenericCircuit &c,
   gate_t g,
-  std::unordered_map<gate_t, unsigned> &mapping,
-  unsigned &out)
+  std::unordered_map<gate_t, unsigned> &mapping)
 {
-  return try_having_impl<semiring::Counting>(c, g, mapping, out);
+  try_having_impl<semiring::Counting>(c, g, mapping);
 }
 
-bool provsql_try_having_why(
+void provsql_try_having_why(
   GenericCircuit &c,
   gate_t g,
-  std::unordered_map<gate_t, semiring::why_provenance_t> &mapping,
-  semiring::why_provenance_t &out)
+  std::unordered_map<gate_t, semiring::why_provenance_t> &mapping)
 {
-  return try_having_impl<semiring::Why>(c, g, mapping, out);
+  try_having_impl<semiring::Why>(c, g, mapping);
 }
 
- bool provsql_try_having_boolean(
+void provsql_try_having_boolean(
   GenericCircuit &c,
   gate_t g,
-  std::unordered_map<gate_t, bool> &mapping,
-  bool &out)
- {
-  return try_having_impl<semiring::Boolean>(c, g, mapping, out);
- }
+  std::unordered_map<gate_t, bool> &mapping)
+{
+  try_having_impl<semiring::Boolean>(c, g, mapping);
+}
