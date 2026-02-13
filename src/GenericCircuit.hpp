@@ -35,10 +35,18 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       });
     if(t==gate_plus)
       return semiring.plus(childrenResult);
-    else if(t==gate_times)
+    else if(t==gate_times) {
+      for(const auto &c: childrenResult) {
+        if(c==semiring.zero())
+          return semiring.zero();
+      }
       return semiring.times(childrenResult);
-    else /* gate_monus */
-      return semiring.monus(childrenResult[0], childrenResult[1]);
+    } else {
+      if(childrenResult[0]==semiring.zero() || childrenResult[0]==childrenResult[1])
+        return semiring.zero();
+      else
+        return semiring.monus(childrenResult[0], childrenResult[1]);
+    }
   }
 
   case gate_delta:
