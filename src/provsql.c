@@ -557,7 +557,6 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         semiring_operation op, int **columns,
                                         int nbcols) {
   Expr *result;
-  Expr *result_delta = NULL;
   ListCell *lc_v;
 
   if (op == SR_PLUS) {
@@ -628,13 +627,13 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       deltaExpr->location = -1;
 
       result = (Expr *)deltaExpr;
-      result_delta = result;
     }
 
     if (q->havingQual) {
       OpExpr *opExpr;
-      FuncExpr *cmpExpr, *timesExpr;
+      FuncExpr *cmpExpr;
       ArrayExpr *arr;
+      FuncExpr *timesExpr;
       Const *oid;
       Node *arguments[2];
 
@@ -651,6 +650,16 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
 
       for (unsigned i = 0; i < 2; ++i) {
         Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
+
+        if(IsA(node, FuncExpr)) {
+          FuncExpr *fe=(FuncExpr*)node;
+          if (fe->funcformat == COERCE_IMPLICIT_CAST ||
+             fe->funcformat == COERCE_IMPLICIT_CAST) {
+            if(fe->args->length == 1)
+              node = lfirst(list_head(fe->args));
+          }
+        }
+
         if (IsA(node, FuncExpr)) {
           FuncExpr *fe = (FuncExpr *)node;
           if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
@@ -663,6 +672,22 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
             castToUUID->location=-1;
 
             arguments[i] = (Node *)castToUUID;
+          } else {
+            elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+          }
+        } else if(IsA(node, Var)) {
+          Var *v = (Var*) node;
+
+          if(v->vartype == constants->OID_TYPE_AGG_TOKEN) {
+            // We need to add an explicit cast to UUID
+            FuncExpr *castToUUID = makeNode(FuncExpr);
+
+            castToUUID->funcid=constants->OID_FUNCTION_AGG_TOKEN_UUID;
+            castToUUID->funcresulttype=constants->OID_TYPE_UUID;
+            castToUUID->args=list_make1(v);
+            castToUUID->location=-1;
+
+            arguments[i] = (Node*)castToUUID;
           } else {
             elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
           }
@@ -703,7 +728,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       arr = makeNode(ArrayExpr);
       arr->array_typeid = constants->OID_TYPE_UUID_ARRAY;
       arr->element_typeid = constants->OID_TYPE_UUID;
-      arr->elements = list_make2((Node *)result_delta, (Node *)cmpExpr);
+      arr->elements = list_make2((Node *)result, (Node *)cmpExpr);
       arr->location = -1;
 
       // provenance_times(...)
@@ -1287,6 +1312,23 @@ static bool has_provenance(const constants_t *constants, Query *q) {
   return has_provenance_walker((Node *)q, (void *)constants);
 }
 
+static bool aggtoken_walker(Node *node, const constants_t *constants) {
+  if (node == NULL)
+    return false;
+
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if(v->vartype == constants->OID_TYPE_AGG_TOKEN)
+      return true;
+  }
+
+  return expression_tree_walker(node, aggtoken_walker, (void*) constants);
+}
+
+static bool has_aggtoken(Node *node, const constants_t *constants) {
+  return expression_tree_walker(node, aggtoken_walker, (void*) constants);
+}
+
 static bool transform_except_into_join(const constants_t *constants, Query *q) {
   SetOperationStmt *setOps = (SetOperationStmt *)q->setOperations;
   RangeTblEntry *rte = makeNode(RangeTblEntry);
@@ -1420,6 +1462,64 @@ static void add_select_non_zero(const constants_t *constants, Query *q,
     q->jointree->quals = (Node *)be;
   } else
     q->jointree->quals = (Node *)oe;
+}
+
+static Node *add_to_havingQual(Node *havingQual, OpExpr *op)
+{
+  // Check whether the current HAVING expression, if any, is one we
+  // know how to handle
+  if(!havingQual) {
+    havingQual = (Node*) op;
+  } else if(IsA(havingQual, OpExpr)) {
+    BoolExpr *expr = makeNode(BoolExpr);
+    expr->boolop=AND_EXPR;
+    expr->location=-1;
+    expr->args = list_make2(havingQual, op);
+  } else if(IsA(havingQual, BoolExpr) && ((BoolExpr*)havingQual)->boolop==AND_EXPR) {
+    BoolExpr *be = (BoolExpr*)havingQual;
+    be->args = lappend(be->args, op);
+  } else {
+    elog(ERROR, "Combination of selection on aggregation result and complex HAVING expression not supported by ProvSQL");
+  }
+
+  return havingQual;
+}
+
+static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constants)
+{
+  bool ok=true;
+
+  if(op->args->length != 2)
+    return false;
+
+  for(unsigned i=0; i<2; ++i) {
+    Node *arg = lfirst(list_nth_cell(op->args, i));
+
+    // Check both arguments are either an aggtoken or a constant
+    // (possibly after a cast)
+    if((IsA(arg, Var) && ((Var*)arg)->vartype==constants->OID_TYPE_AGG_TOKEN)) {
+    } else if(IsA(arg, Const)) {
+    } else if(IsA(arg, FuncExpr)) {
+      FuncExpr *fe = (FuncExpr*) arg;
+      if(fe->funcformat != COERCE_IMPLICIT_CAST && fe->funcformat != COERCE_IMPLICIT_CAST) {
+        ok=false;
+        break;
+      }
+      if(fe->args->length != 1) {
+        ok=false;
+        break;
+      }
+      if(!IsA(lfirst(list_head(fe->args)), Const)) {
+        ok=false;
+        break;
+      }
+    } else {
+      ok=false;
+      break;
+    }
+  }
+
+  return ok;
 }
 
 static Query *process_query(const constants_t *constants, Query *q,
@@ -1604,6 +1704,57 @@ static Query *process_query(const constants_t *constants, Query *q,
               elog(ERROR, "ORDER BY on the result of an aggregate function is "
                    "not supported by ProvSQL");
             break;
+          }
+        }
+      }
+    }
+
+    // Replace WHERE on aggregate tokens by HAVING clauses
+    if(q->jointree && q->jointree->quals) {
+      // Check whether the WHERE expression contains an aggregate token
+      if(has_aggtoken(q->jointree->quals, constants)) {
+        if(!IsA(q->jointree->quals, OpExpr) &&
+           !(IsA(q->jointree->quals, BoolExpr) && ((BoolExpr*)q->jointree->quals)->boolop == AND_EXPR)) {
+          elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+        }
+
+        if(IsA(q->jointree->quals, OpExpr)) {
+          OpExpr *op = (OpExpr *)q->jointree->quals;
+
+          if(check_selection_on_aggregate(op, constants)) {
+            // Everything ok, remove this qualifier and store in op
+            // the OpExpr to put in the havingQual
+            q->jointree->quals = NULL;
+            q->havingQual = add_to_havingQual(q->havingQual, op);
+          } else
+            elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+        } else { // AND BoolExpr according to previous test
+          BoolExpr *be = (BoolExpr*) q->jointree->quals;
+          ListCell *cell, *prev;
+
+          for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
+            if(has_aggtoken(lfirst(cell), constants)) {
+              if(!IsA(lfirst(cell), OpExpr)) {
+                elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+              } else {
+                OpExpr *op =(OpExpr *) lfirst(cell);
+
+                if(check_selection_on_aggregate(op, constants)) {
+                  my_list_delete_cell(be->args, cell, prev);
+                  if (prev)
+                    cell = my_lnext(be->args, prev);
+                  else
+                    cell = list_head(be->args);
+
+                  q->havingQual = add_to_havingQual(q->havingQual, op);
+                } else {
+                  elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+                }
+              }
+            } else {
+              prev = cell;
+              cell = my_lnext(be->args, cell);
+            }
           }
         }
       }

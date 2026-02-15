@@ -719,6 +719,118 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
+/* Comparison functions and operators (for the parser only,
+   this will be rewritten by ProvSQL) */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
 /** @} */
 
 
