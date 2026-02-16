@@ -33,13 +33,17 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     std::transform(children.begin(), children.end(), std::back_inserter(childrenResult), [&](auto u) {
         return evaluate<S>(u, provenance_mapping);
       });
-    if(t==gate_plus)
+    if(t==gate_plus) {
+      childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.zero()),
+                           childrenResult.end());
       return semiring.plus(childrenResult);
-    else if(t==gate_times) {
+    } else if(t==gate_times) {
       for(const auto &c: childrenResult) {
         if(c==semiring.zero())
           return semiring.zero();
       }
+      childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.one()),
+                           childrenResult.end());
       return semiring.times(childrenResult);
     } else {
       if(childrenResult[0]==semiring.zero() || childrenResult[0]==childrenResult[1])
