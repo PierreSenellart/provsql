@@ -227,8 +227,13 @@ static void try_having_impl(
                                                   missing.reserve(n);
 
                                                   for (size_t i = 0; i < n; ++i) {
-                                                    if (mask & (1ULL << i)) present.push_back(kvals[i]);
-                                                    else missing.push_back(kvals[i]);
+                                                    if (mask & (1ULL << i)) {
+                                                      if(kvals[i]!=S.one())
+                                                        present.push_back(kvals[i]);
+                                                    } else {
+                                                      if(kvals[i]!=S.zero())
+                                                        missing.push_back(kvals[i]);
+                                                    }
                                                   }
 
                                                   auto present_prod = S.times(present);
@@ -238,7 +243,9 @@ static void try_having_impl(
                                                   } else {
                                                     auto missing_sum = S.plus(missing);
                                                     auto monus_factor = S.monus(S.one(), missing_sum);
-                                                    auto term = S.times(std::vector<typename SemiringT::value_type>{present_prod, monus_factor});
+                                                    auto term = monus_factor;
+                                                    if(present_prod!=S.one())
+                                                      term = S.times(std::vector<typename SemiringT::value_type>{present_prod, monus_factor});
                                                     disjuncts.push_back(std::move(term));
                                                   }
                                                 }

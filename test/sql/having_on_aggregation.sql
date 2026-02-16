@@ -107,3 +107,18 @@ SELECT counting
 FROM result_nested_having_count;
 
 DROP TABLE result_nested_having_count;
+
+CREATE TABLE result_complex_having AS
+SELECT city, sr_formula(provenance(), 'personnel_name') AS formula
+FROM (
+  SELECT city, count(*)
+  FROM personnel
+  GROUP BY city
+  HAVING count(*) < 3 AND sum(id)>5
+) AS tmp;
+
+SELECT remove_provenance('result_complex_having');
+SELECT city, formula
+FROM result_complex_having;
+
+DROP TABLE result_complex_having;

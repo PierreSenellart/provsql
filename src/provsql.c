@@ -551,6 +551,135 @@ static Expr *make_aggregation_expression(const constants_t *constants,
   return result;
 }
 
+static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants_t *constants) {
+  FuncExpr *cmpExpr;
+  Node *arguments[2];
+  Const *oid;
+
+  for (unsigned i = 0; i < 2; ++i) {
+    Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
+
+    if(IsA(node, FuncExpr)) {
+      FuncExpr *fe=(FuncExpr*)node;
+      if (fe->funcformat == COERCE_IMPLICIT_CAST ||
+          fe->funcformat == COERCE_IMPLICIT_CAST) {
+        if(fe->args->length == 1)
+          node = lfirst(list_head(fe->args));
+      }
+    }
+
+    if (IsA(node, FuncExpr)) {
+      FuncExpr *fe = (FuncExpr *)node;
+      if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+        // We need to add an explicit cast to UUID
+        FuncExpr *castToUUID = makeNode(FuncExpr);
+
+        castToUUID->funcid=constants->OID_FUNCTION_AGG_TOKEN_UUID;
+        castToUUID->funcresulttype=constants->OID_TYPE_UUID;
+        castToUUID->args=list_make1(fe);
+        castToUUID->location=-1;
+
+        arguments[i] = (Node *)castToUUID;
+      } else {
+        elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+      }
+    } else if(IsA(node, Var)) {
+      Var *v = (Var*) node;
+
+      if(v->vartype == constants->OID_TYPE_AGG_TOKEN) {
+        // We need to add an explicit cast to UUID
+        FuncExpr *castToUUID = makeNode(FuncExpr);
+
+        castToUUID->funcid=constants->OID_FUNCTION_AGG_TOKEN_UUID;
+        castToUUID->funcresulttype=constants->OID_TYPE_UUID;
+        castToUUID->args=list_make1(v);
+        castToUUID->location=-1;
+
+        arguments[i] = (Node*)castToUUID;
+      } else {
+        elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+      }
+    } else if (IsA(node, Const)) {
+      Const *literal = (Const *)node;
+      FuncExpr *oneExpr, *semimodExpr;
+
+      // gate_one() expression
+      oneExpr = makeNode(FuncExpr);
+      oneExpr->funcid = constants->OID_FUNCTION_GATE_ONE;
+      oneExpr->funcresulttype = constants->OID_TYPE_UUID;
+      oneExpr->args = NIL;
+      oneExpr->location = -1;
+
+      // provenance_semimod(literal, gate_one())
+      semimodExpr = makeNode(FuncExpr);
+      semimodExpr->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
+      semimodExpr->funcresulttype = constants->OID_TYPE_UUID;
+      semimodExpr->args = list_make2((Expr *)literal, (Expr *)oneExpr);
+      semimodExpr->location = -1;
+
+      arguments[i] = (Node *)semimodExpr;
+    } else {
+      elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+    }
+  }
+
+  oid = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+      Int32GetDatum(opExpr->opno), false, true);
+
+  cmpExpr = makeNode(FuncExpr);
+  cmpExpr->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
+  cmpExpr->funcresulttype = constants->OID_TYPE_UUID;
+  cmpExpr->args = list_make3(arguments[0], oid, arguments[1]);
+  cmpExpr->location = opExpr->location;
+
+  return cmpExpr;
+}
+
+static FuncExpr *having_BoolExpr_to_provenance(BoolExpr *be, const constants_t *constants) {
+  FuncExpr *result;
+  List *l=NULL;
+  ListCell *lc;
+  ArrayExpr *array = makeNode(ArrayExpr);
+
+  array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+  array->element_typeid = constants->OID_TYPE_UUID;
+  array->location = -1;
+
+  result=makeNode(FuncExpr);
+  result->funcresulttype = constants->OID_TYPE_UUID;
+  result->funcvariadic = true;
+  result->location = be->location;
+  result->args = list_make1(array);
+
+  switch(be->boolop) {
+    case AND_EXPR:
+      result->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+      break;
+    case OR_EXPR:
+      result->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
+      break;
+    default:
+      elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+  }
+
+  foreach (lc, be->args) {
+    Node *a=lfirst(lc);
+    FuncExpr *arg;
+    if(IsA(a, BoolExpr))
+      arg = having_BoolExpr_to_provenance((BoolExpr*) a, constants);
+    else if(IsA(a, OpExpr))
+      arg = having_OpExpr_to_provenance_cmp((OpExpr*) a, constants);
+    else
+      elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+
+    l=lappend(l, arg);
+  }
+
+  array->elements = l;
+
+  return result;
+}
+
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
@@ -630,117 +759,38 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     }
 
     if (q->havingQual) {
-      OpExpr *opExpr;
-      FuncExpr *cmpExpr;
-      ArrayExpr *arr;
-      FuncExpr *timesExpr;
-      Const *oid;
-      Node *arguments[2];
+      FuncExpr *havingExpr;
 
-      // First check that the havingQual is a simple HAVING expression
-      // that we know how to handle, i.e., an OpExpr and not a more
-      // complex BoolExpr
-
-      if (q->havingQual->type != T_OpExpr ||
-          ((OpExpr *)q->havingQual)->args->length != 2) {
+      if(IsA(q->havingQual, OpExpr))
+        havingExpr=having_OpExpr_to_provenance_cmp((OpExpr*)q->havingQual, constants);
+      else if(IsA(q->havingQual, BoolExpr))
+        havingExpr=having_BoolExpr_to_provenance((BoolExpr*)q->havingQual, constants);
+      else
         elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+
+      if(havingExpr->funcid == constants->OID_FUNCTION_PROVENANCE_TIMES) {
+        ArrayExpr *arr = (ArrayExpr*) lfirst(list_head(havingExpr->args));
+        arr->elements = lcons(result, arr->elements);
+        result = (Expr*) havingExpr;
+      } else {
+        FuncExpr *timesExpr;
+        ArrayExpr *arr;
+
+        arr = makeNode(ArrayExpr);
+        arr->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+        arr->element_typeid = constants->OID_TYPE_UUID;
+        arr->location = -1;
+        arr->elements = list_make2((Node *)result, (Node *)havingExpr);
+
+        timesExpr = makeNode(FuncExpr);
+        timesExpr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+        timesExpr->funcvariadic = true;
+        timesExpr->funcresulttype = constants->OID_TYPE_UUID;
+        timesExpr->args = list_make1((Expr *)arr);
+        timesExpr->location = -1;
+
+        result = (Expr *) timesExpr;
       }
-
-      opExpr = (OpExpr *)q->havingQual;
-
-      for (unsigned i = 0; i < 2; ++i) {
-        Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
-
-        if(IsA(node, FuncExpr)) {
-          FuncExpr *fe=(FuncExpr*)node;
-          if (fe->funcformat == COERCE_IMPLICIT_CAST ||
-             fe->funcformat == COERCE_IMPLICIT_CAST) {
-            if(fe->args->length == 1)
-              node = lfirst(list_head(fe->args));
-          }
-        }
-
-        if (IsA(node, FuncExpr)) {
-          FuncExpr *fe = (FuncExpr *)node;
-          if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
-            // We need to add an explicit cast to UUID
-            FuncExpr *castToUUID = makeNode(FuncExpr);
-
-            castToUUID->funcid=constants->OID_FUNCTION_AGG_TOKEN_UUID;
-            castToUUID->funcresulttype=constants->OID_TYPE_UUID;
-            castToUUID->args=list_make1(fe);
-            castToUUID->location=-1;
-
-            arguments[i] = (Node *)castToUUID;
-          } else {
-            elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
-          }
-        } else if(IsA(node, Var)) {
-          Var *v = (Var*) node;
-
-          if(v->vartype == constants->OID_TYPE_AGG_TOKEN) {
-            // We need to add an explicit cast to UUID
-            FuncExpr *castToUUID = makeNode(FuncExpr);
-
-            castToUUID->funcid=constants->OID_FUNCTION_AGG_TOKEN_UUID;
-            castToUUID->funcresulttype=constants->OID_TYPE_UUID;
-            castToUUID->args=list_make1(v);
-            castToUUID->location=-1;
-
-            arguments[i] = (Node*)castToUUID;
-          } else {
-            elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
-          }
-        } else if (IsA(node, Const)) {
-          Const *literal = (Const *)node;
-          FuncExpr *oneExpr, *semimodExpr;
-
-          // gate_one() expression
-          oneExpr = makeNode(FuncExpr);
-          oneExpr->funcid = constants->OID_FUNCTION_GATE_ONE;
-          oneExpr->funcresulttype = constants->OID_TYPE_UUID;
-          oneExpr->args = NIL;
-          oneExpr->location = -1;
-
-          // provenance_semimod(literal, gate_one())
-          semimodExpr = makeNode(FuncExpr);
-          semimodExpr->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
-          semimodExpr->funcresulttype = constants->OID_TYPE_UUID;
-          semimodExpr->args = list_make2((Expr *)literal, (Expr *)oneExpr);
-          semimodExpr->location = -1;
-
-          arguments[i] = (Node *)semimodExpr;
-        } else {
-          elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
-        }
-      }
-
-      oid = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
-                      Int32GetDatum(opExpr->opno), false, true);
-
-      cmpExpr = makeNode(FuncExpr);
-      cmpExpr->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
-      cmpExpr->funcresulttype = constants->OID_TYPE_UUID;
-      cmpExpr->args = list_make3(arguments[0], oid, arguments[1]);
-      cmpExpr->location = -1;
-
-      // ARRAY[deltaExpr, cmpExpr]
-      arr = makeNode(ArrayExpr);
-      arr->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-      arr->element_typeid = constants->OID_TYPE_UUID;
-      arr->elements = list_make2((Node *)result, (Node *)cmpExpr);
-      arr->location = -1;
-
-      // provenance_times(...)
-      timesExpr = makeNode(FuncExpr);
-      timesExpr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-      timesExpr->funcvariadic = true;
-      timesExpr->funcresulttype = constants->OID_TYPE_UUID;
-      timesExpr->args = list_make1((Expr *)arr);
-      timesExpr->location = -1;
-
-      // Final result = times(delta, cmp)
-      result = (Expr *)timesExpr;
 
       q->havingQual = NULL;
     }

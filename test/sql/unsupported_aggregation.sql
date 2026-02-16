@@ -5,4 +5,4 @@ SET search_path TO provsql_test,provsql;
 SELECT time, person, COUNT(room)
 FROM s
 GROUP BY time, person
-HAVING COUNT(room) > 1 AND COUNT(room) < 5;
+HAVING COUNT(room) > 1 AND NOT(COUNT(room) < 5);
