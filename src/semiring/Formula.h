@@ -100,6 +100,8 @@ virtual value_type agg(AggregationOperator op, const std::vector<std::string> &s
       return "-∞";
     case AggregationOperator::PROD:
       return "1";
+    case AggregationOperator::CHOOSE:
+      return "<>";
     }
   }
 
@@ -117,6 +119,9 @@ virtual value_type agg(AggregationOperator op, const std::vector<std::string> &s
       break;
     case AggregationOperator::PROD:
       result+="×";
+      break;
+    case AggregationOperator::CHOOSE:
+      result+=" choose ";
       break;
     }
     result+=s[i];

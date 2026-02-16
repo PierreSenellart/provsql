@@ -32,7 +32,8 @@ enum class AggregationOperator {
   SUM,
   MIN,
   MAX,
-  PROD
+  PROD,
+  CHOOSE
 };
 
 #endif

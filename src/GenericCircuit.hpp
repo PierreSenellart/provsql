@@ -106,6 +106,8 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       op = AggregationOperator::MIN;
     } else if(func_name == "max") {
       op = AggregationOperator::MAX;
+    } else if(func_name == "choose") {
+      op = AggregationOperator::CHOOSE;
     } else {
       throw CircuitException("Aggregation operator " + func_name + " not supported");
     }

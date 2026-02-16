@@ -1103,6 +1103,31 @@ $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
 /** @} */
 
+/** @name choose aggregate
+ *  Choose one value among many, used in particular to code a mutually
+ * exclusive choice as an aggregate.
+ *  @{
+ */
+
+CREATE FUNCTION choose_function(state ANYELEMENT, data ANYELEMENT)
+  RETURNS ANYELEMENT AS
+$$
+BEGIN
+  IF state IS NULL THEN
+    RETURN data;
+  ELSE
+    RETURN state;
+  END IF;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE IMMUTABLE;
+
+CREATE AGGREGATE choose(ANYELEMENT) (
+  SFUNC = choose_function,
+  STYPE = ANYELEMENT
+);
+
+/** @} */
+
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
 SET search_path TO public;
