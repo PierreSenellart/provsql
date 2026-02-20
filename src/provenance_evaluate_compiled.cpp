@@ -22,6 +22,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
+#include "semiring/BoolExpr.h"
 
 
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
@@ -43,9 +44,22 @@ static Datum pec_bool(
     throw CircuitException("Unknown semiring for type varchar: "+semiring);
 
   provsql_try_having_boolean(c,g,provenance_mapping);
-  bool out = c.evaluate<semiring::Boolean>(g, provenance_mapping);
+  bool out = c.evaluate<semiring::Boolean>(g, provenance_mapping, semiring::Boolean());
 
   PG_RETURN_BOOL(out);
+}
+
+static Datum pec_boolexpr(
+  const constants_t &constants,
+  BooleanCircuit &bc,
+  gate_t root)
+{
+  std::string out = bc.toString(root);
+
+  text *result = (text *) palloc(VARHDRSZ + out.size());
+  SET_VARSIZE(result, VARHDRSZ + out.size());
+  memcpy(VARDATA(result), out.c_str(), out.size());
+  PG_RETURN_TEXT_P(result);
 }
 
 static Datum pec_why(
@@ -53,7 +67,6 @@ static Datum pec_why(
   GenericCircuit &c,
   gate_t g,
   const std::set<gate_t> &inputs,
-  const std::string &semiring,
   bool drop_table)
 {
   std::unordered_map<gate_t, semiring::why_provenance_t> provenance_mapping;
@@ -74,11 +87,8 @@ static Datum pec_why(
     drop_table
     );
 
-  if (semiring != "why")
-    throw CircuitException("Unknown semiring for type varchar: " + semiring);
-
   provsql_try_having_why(c, g, provenance_mapping);
-  semiring::why_provenance_t prov = c.evaluate<semiring::Why>(g, provenance_mapping);
+  semiring::why_provenance_t prov = c.evaluate<semiring::Why>(g, provenance_mapping, semiring::Why());
 
   // Serialize nested set structure: {{x},{y}}
   std::ostringstream oss;
@@ -126,7 +136,7 @@ static Datum pec_varchar(
     throw CircuitException("Unknown seimring for type varchar: " + semiring);
 
   provsql_try_having_formula(c, g, provenance_mapping);
-  std::string s = c.evaluate<semiring::Formula>(g, provenance_mapping);
+  std::string s = c.evaluate<semiring::Formula>(g, provenance_mapping, semiring::Formula());
 
   text *result = (text *) palloc(VARHDRSZ + s.size());
   SET_VARSIZE(result, VARHDRSZ + s.size());
@@ -151,7 +161,7 @@ static Datum pec_int(
     throw CircuitException("Unknown semiring for type int: "+semiring);
 
   provsql_try_having_counting(c, g, provenance_mapping);
-  unsigned out = c.evaluate<semiring::Counting>(g, provenance_mapping);
+  unsigned out = c.evaluate<semiring::Counting>(g, provenance_mapping, semiring::Counting());
 
   PG_RETURN_INT32((int32) out);
 
@@ -239,21 +249,28 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
 static Datum provenance_evaluate_compiled_internal
   (pg_uuid_t token, Oid table, const std::string &semiring, Oid type)
 {
+  constants_t constants = get_constants(true);
+
+  if(semiring=="boolexpr") {
+    gate_t root;
+    BooleanCircuit bc = getBooleanCircuit(token, root);
+    return pec_boolexpr(constants, bc, root);
+  }
+
   GenericCircuit c = getGenericCircuit(token);
   auto g = c.getGate(uuid2string(token));
   auto inputs = c.getInputs();
+
   std::vector<std::string> inputs_uuid;
   std::transform(inputs.begin(), inputs.end(), std::back_inserter(inputs_uuid), [&c](auto x) {
     return c.getUUID(x);
   });
   bool drop_table = join_with_temp_uuids(table, inputs_uuid);
 
-  constants_t constants = get_constants(true);
-
   if (type == constants.OID_TYPE_VARCHAR)
   {
     if (semiring == "why")
-      return pec_why(constants, c, g, inputs, semiring, drop_table);
+      return pec_why(constants, c, g, inputs, drop_table);
     else
       return pec_varchar(constants, c, g, inputs, semiring, drop_table);
   }

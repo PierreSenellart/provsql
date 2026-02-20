@@ -24,12 +24,13 @@ using namespace std;
 static double shapley_internal
   (pg_uuid_t token, pg_uuid_t variable, const std::string &method, const std::string &args, bool banzhaf)
 {
-  BooleanCircuit c = getBooleanCircuit(token);
+  gate_t root;
+  BooleanCircuit c = getBooleanCircuit(token, root);
 
   if(c.getGateType(c.getGate(uuid2string(variable))) != BooleanGate::IN)
     return 0.;
 
-  dDNNF dd = c.makeDD(c.getGate(uuid2string(token)), method, args);
+  dDNNF dd = c.makeDD(root, method, args);
 
   dd.makeSmooth();
   if(!banzhaf)
@@ -116,9 +117,11 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
       banzhaf = PG_GETARG_BOOL(3);
     }
 
-    BooleanCircuit c = getBooleanCircuit(token);
 
-    dDNNF dd = c.makeDD(c.getGate(uuid2string(token)), method, args);
+    gate_t root;
+    BooleanCircuit c = getBooleanCircuit(token, root);
+
+    dDNNF dd = c.makeDD(root, method, args);
     dd.makeSmooth();
     if(!banzhaf)
       dd.makeGatesBinary(BooleanGate::AND);

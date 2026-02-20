@@ -5,6 +5,8 @@
 #include <boost/iostreams/stream.hpp>
 
 #include "CircuitFromMMap.h"
+#include "having_semantics.hpp"
+#include "semiring/BoolExpr.h"
 #include "provsql_utils_cpp.h"
 
 extern "C" {
@@ -47,10 +49,32 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
   return c;
 }
 
-BooleanCircuit getBooleanCircuit(pg_uuid_t token)
+BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
 {
-  return getCircuitFromMMap<BooleanCircuit>(token, 'b');
+  GenericCircuit gc = getGenericCircuit(token);
+  auto ggate = gc.getGate(uuid2string(token));
+  BooleanCircuit c;
+  std::unordered_map<gate_t, gate_t> mapping;
+  for(gate_t u: gc.getInputs()) {
+    mapping[u]=c.setGate(gc.getUUID(u), BooleanGate::IN, gc.getProb(u));
+  }
+  for(size_t i=0; i<gc.getNbGates(); ++i) {
+    auto u=static_cast<gate_t>(i);
+    if(gc.getGateType(u)==gate_mulinput) {
+      mapping[u]=c.setGate(gc.getUUID(u), BooleanGate::MULIN, gc.getProb(u));
+      c.setInfo(mapping[u], gc.getInfos(u).first);
+      c.addWire(
+        mapping[u],
+        mapping[gc.getWires(u)[0]]);
+    }
+  }
+  semiring::BoolExpr semiring(c);
+  provsql_try_having_boolexpr(gc, semiring, gc.getGate(uuid2string(token)), mapping);
+  gate=gc.evaluate(ggate, mapping, semiring);
+
+  return c;
 }
+
 GenericCircuit getGenericCircuit(pg_uuid_t token)
 {
   return getCircuitFromMMap<GenericCircuit>(token, 'g');

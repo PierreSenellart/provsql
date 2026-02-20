@@ -3,7 +3,6 @@
 #include <sstream>
 
 #include "MMappedCircuit.h"
-#include "BooleanCircuit.h"
 #include "GenericCircuit.h"
 #include "Circuit.hpp"
 #include "provsql_utils_cpp.h"
@@ -279,26 +278,6 @@ void provsql_mmap_main_loop()
       break;
     }
 
-    case 'b':
-    {
-      pg_uuid_t token;
-
-      if(!READM(token, pg_uuid_t))
-        elog(ERROR, "Cannot read from pipe (message type b)");
-
-      std::stringstream ss;
-      boost::archive::binary_oarchive oa(ss);
-      oa << createBooleanCircuit(token);
-
-      ss.seekg(0, std::ios::end);
-      unsigned long size = ss.tellg();
-      ss.seekg(0, std::ios::beg);
-
-      if(!WRITEB(&size, unsigned long) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
-        elog(ERROR, "Cannot write to pipe (message type b)");
-      break;
-    }
-
     case 'g':
     {
       pg_uuid_t token;
@@ -340,93 +319,6 @@ bool operator<(const pg_uuid_t a, const pg_uuid_t b)
   return memcmp(&a, &b, sizeof(pg_uuid_t))<0;
 }
 
-BooleanCircuit createBooleanCircuit(pg_uuid_t token)
-{
-  std::set<pg_uuid_t> to_process, processed;
-  to_process.insert(token);
-
-  BooleanCircuit result;
-
-  while(!to_process.empty()) {
-    pg_uuid_t uuid = *to_process.begin();
-    to_process.erase(to_process.begin());
-    processed.insert(uuid);
-    std::string f{uuid2string(uuid)};
-
-    gate_t id;
-
-    gate_type type = circuit->getGateType(uuid);
-    double prob = circuit->getProb(uuid);
-    auto [info1, info2] = circuit->getInfos(uuid);
-    std::vector<pg_uuid_t> children = circuit->getChildren(uuid);
-
-    switch(type) {
-    case gate_input:
-    case gate_update:
-      if(std::isnan(prob)) {
-        prob=1.;
-      }
-      id = result.setGate(f, BooleanGate::IN, prob);
-      break;
-
-    case gate_mulinput:
-      if(std::isnan(prob)) {
-        elog(ERROR, "Missing probability for mulinput token");
-      }
-      id = result.setGate(f, BooleanGate::MULIN, prob);
-      result.addWire(
-        id,
-        result.getGate(uuid2string(children[0])));
-      result.setInfo(id, info1);
-      break;
-
-    case gate_times:
-    case gate_project:
-    case gate_eq:
-    case gate_monus:
-    case gate_one:
-    case gate_delta:
-      id = result.setGate(f, BooleanGate::AND);
-      break;
-
-    case gate_plus:
-    case gate_zero:
-      id = result.setGate(f, BooleanGate::OR);
-      break;
-
-    default:
-      elog(ERROR, "Wrong type of gate in circuit");
-    }
-
-    if(children.size() > 0 && type != gate_mulinput) {
-      if(type == gate_monus) {
-        auto id_not = result.setGate(BooleanGate::NOT);
-        result.addWire(
-          id,
-          result.getGate(uuid2string(children[0])));
-        result.addWire(id, id_not);
-        result.addWire(
-          id_not,
-          result.getGate(uuid2string(children[1])));
-        if(processed.find(children[0])==processed.end())
-          to_process.insert(children[0]);
-        if(processed.find(children[1])==processed.end())
-          to_process.insert(children[1]);
-      } else {
-        for(unsigned i=0; i<children.size(); ++i) {
-          result.addWire(
-            id,
-            result.getGate(uuid2string(children[i])));
-          if(processed.find(children[i])==processed.end())
-            to_process.insert(children[i]);
-        }
-      }
-    }
-  }
-
-  return result;
-}
-
 GenericCircuit createGenericCircuit(pg_uuid_t token)
 {
   std::set<pg_uuid_t> to_process, processed;
@@ -442,6 +334,9 @@ GenericCircuit createGenericCircuit(pg_uuid_t token)
 
     gate_type type = circuit->getGateType(uuid);
     gate_t id = result.setGate(f, type);
+    double prob = circuit->getProb(uuid);
+    if(!std::isnan(prob))
+      result.setProb(id, prob);
 
     std::vector<pg_uuid_t> children = circuit->getChildren(uuid);
     for(unsigned i=0; i<children.size(); ++i) {

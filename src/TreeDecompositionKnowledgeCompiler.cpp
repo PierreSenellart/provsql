@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
     std::cerr << "Computing tree decomposition took " << (t1-t0) << "s" << std::endl;
     t0 = t1;
 
-    auto dnnf{dDNNFTreeDecompositionBuilder{c, "0", td}.build()};
+    auto dnnf{dDNNFTreeDecompositionBuilder{c, c.getGate("0"), td}.build()};
     t1 = get_timestamp();
     std::cerr << "Computing dDNNF took " << (t1-t0) << "s" << std::endl;
     t0 = t1;

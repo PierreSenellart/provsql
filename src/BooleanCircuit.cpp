@@ -837,7 +837,7 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
     try {
       TreeDecomposition td(*this);
       return dDNNFTreeDecompositionBuilder{
-        *this, id2uuid.find(g)->second, td}.build();
+        *this, g, td}.build();
     } catch(TreeDecompositionException &) {
       elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
     }
@@ -851,7 +851,7 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
       try {
         TreeDecomposition td(*this);
         dd = dDNNFTreeDecompositionBuilder{
-          *this, id2uuid.find(g)->second, td}.build();
+          *this, g, td}.build();
         if(provsql_verbose>=20)
           elog(NOTICE, "dD obtained by tree decomposition, %ld gates", dd.getNbGates());
       } catch(TreeDecompositionException &) {

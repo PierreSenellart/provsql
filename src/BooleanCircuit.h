@@ -13,7 +13,7 @@
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/vector.hpp>
 
-#include "Circuit.h"
+#include "Circuit.hpp"
 
 enum class BooleanGate { UNDETERMINED, AND, OR, NOT, IN, MULIN, MULVAR };
 class dDNNF;

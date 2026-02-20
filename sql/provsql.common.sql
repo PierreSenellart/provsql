@@ -222,6 +222,7 @@ BEGIN
     EXECUTE format('SELECT COUNT(*) FROM %s %s', _tbl, where_condition) INTO nb_rows;
 
     key_token := public.uuid_generate_v4();
+    PERFORM provsql.create_gate(key_token, 'input');
     ind := 1;
     FOR record IN
       EXECUTE format('SELECT provsql_temp FROM %s %s', _tbl, where_condition)
@@ -425,7 +426,7 @@ CREATE OR REPLACE FUNCTION provenance_evaluate_compiled(
   semiring TEXT,
   element_one anyelement)
 RETURNS anyelement AS
-  'provsql', 'provenance_evaluate_compiled' LANGUAGE C STRICT PARALLEL SAFE STABLE;
+  'provsql', 'provenance_evaluate_compiled' LANGUAGE C PARALLEL SAFE STABLE;
 
 
 CREATE OR REPLACE FUNCTION provenance_evaluate(
@@ -1084,6 +1085,19 @@ BEGIN
     token2value,
     'why',
     '{}'::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+CREATE FUNCTION sr_boolexpr(token ANYELEMENT)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    NULL,
+    'boolexpr',
+    '⊤'::VARCHAR
   );
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;

@@ -17,3 +17,10 @@ gate_t GenericCircuit::setGate(const uuid &u, gate_type type)
   }
   return id;
 }
+
+gate_t GenericCircuit::addGate()
+{
+  auto id=Circuit::addGate();
+  prob.push_back(1);
+  return id;
+}

@@ -1,0 +1,25 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+city|prob
+Berlin|0.54
+New York|0.26
+Paris|0.41
+(3 rows)
+remove_provenance
+
+(1 row)
+city|prob
+Berlin|0.28
+New York|0.02
+Paris|0.45
+(3 rows)
+remove_provenance
+
+(1 row)
+city|prob
+Berlin|0.00
+New York|0.00
+Paris|0.09
+(3 rows)

@@ -1,3 +1,6 @@
+#ifndef CIRCUIT_HPP
+#define CIRCUIT_HPP
+
 #include "Circuit.h"
 
 template<class gateType>
@@ -59,3 +62,5 @@ void Circuit<gateType>::addWire(gate_t f, gate_t t)
 {
   getWires(f).push_back(t);
 }
+
+#endif /* CIRCUIT_HPP */

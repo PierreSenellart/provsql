@@ -5,10 +5,8 @@ extern "C" {
 }
 
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> >
-typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping) const
+typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const
 {
-  S semiring;
-
   const auto it = provenance_mapping.find(g);
   if(it != provenance_mapping.end())
     return it->second;
@@ -19,6 +17,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
   case gate_one:
   case gate_input:
   case gate_update:
+  case gate_mulinput:
     // If not in provenance mapping, return no provenance (one of the semiring)
     return semiring.one();
 
@@ -31,7 +30,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     auto children = getWires(g);
     std::vector<typename S::value_type> childrenResult;
     std::transform(children.begin(), children.end(), std::back_inserter(childrenResult), [&](auto u) {
-        return evaluate<S>(u, provenance_mapping);
+        return evaluate<S>(u, provenance_mapping, semiring);
       });
     if(t==gate_plus) {
       childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.zero()),
@@ -54,12 +53,12 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
   }
 
   case gate_delta:
-    return semiring.delta(evaluate<S>(getWires(g)[0], provenance_mapping));
+    return semiring.delta(evaluate<S>(getWires(g)[0], provenance_mapping, semiring));
 
   case gate_project:
   case gate_eq:
     // Where-provenance gates, ignored
-    return evaluate<S>(getWires(g)[0], provenance_mapping);
+    return evaluate<S>(getWires(g)[0], provenance_mapping, semiring);
 
   case gate_cmp:
   {
@@ -88,11 +87,11 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       throw CircuitException("Comparison operator " + func_name + " not supported");
     }
 
-    return semiring.cmp(evaluate<S>(getWires(g)[0], provenance_mapping), op, evaluate<S>(getWires(g)[1], provenance_mapping));
+    return semiring.cmp(evaluate<S>(getWires(g)[0], provenance_mapping, semiring), op, evaluate<S>(getWires(g)[1], provenance_mapping, semiring));
   }
 
   case gate_semimod:
-    return semiring.semimod(evaluate<S>(getWires(g)[0], provenance_mapping), evaluate<S>(getWires(g)[1], provenance_mapping));
+    return semiring.semimod(evaluate<S>(getWires(g)[0], provenance_mapping, semiring), evaluate<S>(getWires(g)[1], provenance_mapping, semiring));
 
   case gate_agg:
   {
@@ -118,7 +117,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
 
     std::vector<typename S::value_type> vec;
     for(auto it = getWires(g).begin(); it!=getWires(g).end(); ++it)
-      vec.push_back(evaluate<S>(*it, provenance_mapping));
+      vec.push_back(evaluate<S>(*it, provenance_mapping, semiring));
     return semiring.agg(op, vec);
     break;
   }

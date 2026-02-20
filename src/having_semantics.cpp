@@ -11,9 +11,11 @@ extern "C" {
 #include "having_semantics.hpp"
 #include "subset.hpp"
 #include "semiring/Boolean.h"
+#include "semiring/BoolExpr.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
+
 namespace {
 // Parse int from string
 static int parse_int_strict(const std::string &s, bool &ok) {
@@ -160,10 +162,9 @@ template <typename SemiringT, typename MapT>
 static void try_having_impl(
   GenericCircuit &c,
   gate_t g,
-  MapT &mapping)
+  MapT &mapping,
+  SemiringT S)
 {
-  SemiringT S;
-
   std::vector<gate_t> cmp_gates;
   collect_sp_cmp_gates(c, g, cmp_gates);
 
@@ -202,7 +203,7 @@ static void try_having_impl(
                                                   gate_t k_gate{};
                                                   if (!semimod_extract_M_and_K(c, ch, m, k_gate)) return false;
 
-                                                  auto kval = c.evaluate<SemiringT>(k_gate, mapping);
+                                                  auto kval = c.evaluate<SemiringT>(k_gate, mapping, S);
 
                                                   mvals.push_back(m);
                                                   kvals.push_back(std::move(kval));
@@ -281,7 +282,7 @@ void provsql_try_having_formula(
   gate_t g,
   std::unordered_map<gate_t, std::string> &mapping)
 {
-  try_having_impl<semiring::Formula>(c, g, mapping);
+  try_having_impl<semiring::Formula>(c, g, mapping, semiring::Formula());
 }
 
 void provsql_try_having_counting(
@@ -289,7 +290,7 @@ void provsql_try_having_counting(
   gate_t g,
   std::unordered_map<gate_t, unsigned> &mapping)
 {
-  try_having_impl<semiring::Counting>(c, g, mapping);
+  try_having_impl<semiring::Counting>(c, g, mapping, semiring::Counting());
 }
 
 void provsql_try_having_why(
@@ -297,7 +298,16 @@ void provsql_try_having_why(
   gate_t g,
   std::unordered_map<gate_t, semiring::why_provenance_t> &mapping)
 {
-  try_having_impl<semiring::Why>(c, g, mapping);
+  try_having_impl<semiring::Why>(c, g, mapping, semiring::Why());
+}
+
+void provsql_try_having_boolexpr(
+  GenericCircuit &c,
+  semiring::BoolExpr &be,
+  gate_t g,
+  std::unordered_map<gate_t, gate_t> &mapping)
+{
+  try_having_impl<semiring::BoolExpr>(c, g, mapping, be);
 }
 
 void provsql_try_having_boolean(
@@ -305,5 +315,5 @@ void provsql_try_having_boolean(
   gate_t g,
   std::unordered_map<gate_t, bool> &mapping)
 {
-  try_having_impl<semiring::Boolean>(c, g, mapping);
+  try_having_impl<semiring::Boolean>(c, g, mapping, semiring::Boolean());
 }
