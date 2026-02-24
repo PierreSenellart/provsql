@@ -64,7 +64,7 @@ virtual value_type monus(value_type x, value_type y) const {
 
 
 value_type delta(value_type x) const {
-  return x.empty() ? zero() : x;
+  return x.empty() ? zero() : one();
 }
 
 
