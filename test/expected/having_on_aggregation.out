@@ -57,3 +57,9 @@ Berlin|(δ(Ellen ⊕ Susan) ⊗ ((𝟙 ⊖ (Ellen ⊕ Susan)) ⊕ (Ellen ⊗ (�
 New York|𝟘
 Paris|(δ(Dave ⊕ Magdalen ⊕ Nancy) ⊗ ((𝟙 ⊖ (Dave ⊕ Magdalen ⊕ Nancy)) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave))) ⊗ (((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)))
 (3 rows)
+remove_provenance
+
+(1 row)
+formula
+{{},{Dave,Ellen,John,Magdalen,Paul,Susan},{Dave,Ellen,John,Nancy,Paul,Susan},{Dave,Ellen,Magdalen,Nancy,Susan},{Dave,Ellen,Magdalen,Susan},{Dave,Ellen,Nancy,Susan},{Dave,John,Magdalen,Nancy,Paul},{Dave,John,Magdalen,Paul},{Dave,John,Nancy,Paul},{Dave,Magdalen},{Dave,Magdalen,Nancy},{Dave,Nancy},{Ellen,John,Magdalen,Nancy,Paul,Susan},{Ellen,John,Paul,Susan},{Ellen,Magdalen,Nancy,Susan},{Ellen,Susan},{John,Magdalen,Nancy,Paul},{John,Paul},{Magdalen,Nancy}}
+(1 row)
