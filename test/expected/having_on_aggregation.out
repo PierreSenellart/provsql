@@ -19,9 +19,9 @@ remove_provenance
 
 (1 row)
 city|formula
-Berlin|{{Ellen},{Ellen,Susan},{Susan}}
-New York|{{John},{John,Paul},{Paul}}
-Paris|{{Dave},{Dave,Magdalen},{Dave,Magdalen,Nancy},{Dave,Nancy},{Magdalen},{Magdalen,Nancy},{Nancy}}
+Berlin|{{},{Ellen},{Ellen,Susan},{Susan}}
+New York|{{},{John},{John,Paul},{Paul}}
+Paris|{{},{Dave},{Dave,Magdalen},{Dave,Magdalen,Nancy},{Dave,Nancy},{Magdalen},{Magdalen,Nancy},{Nancy}}
 (3 rows)
 remove_provenance
 
@@ -41,7 +41,7 @@ remove_provenance
 
 (1 row)
 formula
-{{Dave},{Dave,Magdalen},{Dave,Magdalen,Nancy},{Dave,Nancy},{Ellen},{Ellen,Susan},{John},{John,Paul},{Magdalen},{Magdalen,Nancy},{Nancy},{Paul},{Susan}}
+{{},{Dave},{Dave,Magdalen},{Dave,Nancy},{Ellen},{Ellen,Susan},{John},{John,Paul},{Magdalen},{Magdalen,Nancy},{Nancy},{Paul},{Susan}}
 (1 row)
 remove_provenance
 
