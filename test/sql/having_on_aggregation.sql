@@ -122,3 +122,21 @@ SELECT city, formula
 FROM result_complex_having;
 
 DROP TABLE result_complex_having;
+
+CREATE TABLE result_join_having_why_count_lt4 AS
+SELECT
+  COUNT(*),
+  sr_why(provenance(), 'personnel_name') AS formula
+FROM (
+  SELECT *
+  FROM personnel p1, personnel p2
+  WHERE p1.city = p2.city AND p1.id < p2.id
+) AS tmp
+HAVING count(*) < 4;
+
+SELECT remove_provenance('result_join_having_why_count_lt4');
+SELECT formula
+FROM result_join_having_why_count_lt4;
+
+DROP TABLE result_join_having_why_count_lt4;
+
