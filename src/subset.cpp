@@ -125,6 +125,71 @@ static std::vector<uint64_t> sum_dp(const std::vector<int> &values, int C, Compa
  return R;
 }
 
+//generate k-subsets form an n-set
+static void combinations(std::size_t start,
+                       std::size_t n,
+                       int k_left,
+                       uint64_t mask,
+                       std::vector<uint64_t> &out)
+{
+  if (k_left == 0) {
+    out.push_back(mask);
+    return;
+  }
+  if (start >= n) return;
+
+  const std::size_t remaining = n - start;
+  if (remaining < static_cast<std::size_t>(k_left)) return;
+
+  // include current index
+  combinations(start + 1, n, k_left - 1, mask | (1ULL << start), out);
+  // exclude current index
+  combinations(start + 1, n, k_left, mask, out);
+}
+
+static std::vector<uint64_t> count_enum(const std::vector<int> &values, int m, ComparisonOp op)
+{
+  const int n = static_cast<int>(values.size());
+  std::vector<uint64_t> out;
+
+  auto add_exact_k = [&](int k) {
+    if (k < 0 || k > n) return;
+    combinations(0, static_cast<std::size_t>(n), k, 0ULL, out);
+  };
+
+  switch (op)
+  {
+    case ComparisonOp::EQ:
+      add_exact_k(m);
+      break;
+
+    case ComparisonOp::GT:
+      for (int k = m + 1; k <= n; ++k) add_exact_k(k);
+      break;
+
+    case ComparisonOp::LT:
+      for (int k = 0; k <= m - 1; ++k) add_exact_k(k);
+      break;
+
+    case ComparisonOp::GE:
+      for (int k = m; k <= n; ++k) add_exact_k(k);
+      break;
+
+
+    case ComparisonOp::LE:
+      for (int k = 0; k <= m; ++k) add_exact_k(k);
+      break;
+
+    case ComparisonOp::NEQ:
+      for (int k = 0; k <= n; ++k)
+      {
+        if (k != m) add_exact_k(k);
+      }
+      break;
+  }
+
+  return out;
+}
 
 }//end namesoace
 
@@ -141,7 +206,9 @@ std::vector<uint64_t> enumerate_valid_worlds(
   if (n >= 63) {
     throw std::runtime_error("n>63 not supported");
   }
+  if (AggKind == AggKind::COUNT){return count_enum(values,constant,op);}
   return sum_dp(values,constant,op);
+  //could implement a similar if elsse if ladder for different aggregates when required
 }
 
 
