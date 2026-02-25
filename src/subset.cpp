@@ -34,26 +34,28 @@ static std::vector<uint64_t> sum_dp(const std::vector<int> &values, int C, Compa
     }
   }
 
-  int J = 0;
 
-  if (op == ComparisonOp::GT || op == ComparisonOp ::GE)
-  {
-    long long T=0;
-    for (int w : values ) T+=w;
-    if (T>std::numeric_limits<int>::max())
+   long long T_ll=0;
+    for (int w : values ) T_ll+=w;
+    if (T_ll>std::numeric_limits<int>::max())
     {
       throw std::runtime_error("DP bound overflowww");
      }
 
-    J= static_cast<int>(T);
+    const int T= static_cast<int>(T_ll);
+  
+   int J=0;
+   if (op == ComparisonOp::GT || op == ComparisonOp ::GE)
+  {
+    J=T;
   }
 
   else if (op == ComparisonOp::LT){
-    J=C-1;
+    J=std::min(C-1,T);
 
   }
   else{
-    J=C;
+    J=std::min(C,T);
   }
  if (J<0){return {};}
 
