@@ -209,7 +209,29 @@ static void try_having_impl(
                                                   kvals.push_back(std::move(kval));
                                                 }
 
-                                                std::vector<uint64_t> worlds = enumerate_valid_worlds(mvals, C, effective_op);
+                                                //preliminary setup to get aggregate kind. 
+                                                //Note: COUNT could be simulated by SUM.
+                                                AggKind agg_kind = AggKind::SUM;
+                          
+                                                auto agg_infos = c.getInfos(agg_side);
+                                                char *agg_fname = get_func_name(agg_infos.first);
+                                                if (agg_fname != nullptr) {
+                                                  std::string func_name(agg_fname);
+                                                  pfree(agg_fname);
+                                                
+                                                  if (func_name == "count") {
+                                                    agg_kind = AggKind::COUNT;
+                                                  } else if (func_name == "sum") {
+                                                    // Fallback: if COUNT(*) is simulated by  SUM of 1s
+                                                    bool all_one_mvals = true;
+                                                    for (int m : mvals) {
+                                                      if (m != 1) { all_one_mvals = false; break; }
+                                                    }
+                                                    agg_kind = all_one_mvals ? AggKind::COUNT : AggKind::SUM;
+                                                  }
+                                                }
+
+                                                std::vector<uint64_t> worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind);
 
                                                 if (worlds.empty()) {
                                                   pw_out = S.zero();

@@ -2,22 +2,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <iostream>
 #include <limits>
 #include <vector>
 #include <stdexcept>
 
 namespace {
-
-// static bool all_ones(const std::vector<int> &values)
-// {
-//   for (int v: values)
-//   {
-//     if (v!=1) return false;
-//   }
-//   return true;
-// }
 
 static void append_range(std::vector<uint64_t> &out,
                          const std::vector<std::vector<uint64_t>> &dp,
@@ -144,7 +133,8 @@ static std::vector<uint64_t> sum_dp(const std::vector<int> &values, int C, Compa
 std::vector<uint64_t> enumerate_valid_worlds(
   const std::vector<int> &values,
   int constant,
-  ComparisonOp op
+  ComparisonOp op,
+  AggKind agg_kind
 ) 
 {
   const std::size_t n = values.size();
