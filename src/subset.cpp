@@ -206,7 +206,7 @@ std::vector<uint64_t> enumerate_valid_worlds(
   if (n >= 63) {
     throw std::runtime_error("n>63 not supported");
   }
-  if (AggKind == AggKind::COUNT){return count_enum(values,constant,op);}
+  if (agg_kind == AggKind::COUNT){return count_enum(values,constant,op);}
   return sum_dp(values,constant,op);
   //could implement a similar if elsse if ladder for different aggregates when required
 }
