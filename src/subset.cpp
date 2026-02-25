@@ -8,6 +8,16 @@
 
 namespace {
 
+static std::vector<uint64_t> all_worlds(const std::vector<int> &values)
+{
+  const size_t n=values.size();
+  const uint64_t total =(1ULL << n);
+  std::vector<uint64_t> worlds;
+
+ for (uint64_t mask = 0; mask < total; ++mask) { worlds.push_back(mask); }
+  return worlds;
+}
+
 static void append_range(std::vector<uint64_t> &out,
                          const std::vector<std::vector<uint64_t>> &dp,
                          int lo,
@@ -43,7 +53,20 @@ static std::vector<uint64_t> sum_dp(const std::vector<int> &values, int C, Compa
      }
 
     const int T= static_cast<int>(T_ll);
-  
+    //no valid worlds case
+    if (op == ComparisonOp::GT && C>=T) return {}; 
+    if (op == ComparisonOp::GE && C>T) return {};
+    if (op == ComparisonOp::LT && C<=0) return {};
+    if (op == ComparisonOp::LE && C<0) return {};
+    if (op == ComparisonOp::EQ && (C>T || C<0)) return {};
+
+    //tautology cases 
+    if (op == ComparisonOp::GT && C<0) return all_worlds(values);
+    if (op == ComparisonOp::GE && C<=0) return all_worlds(values); 
+    if (op == ComparisonOp::LT && C>T) return all_worlds(values); 
+    if (op == ComparisonOp::LE && C>=T) return all_worlds(values); 
+
+
    int J=0;
    if (op == ComparisonOp::GT || op == ComparisonOp ::GE)
   {
