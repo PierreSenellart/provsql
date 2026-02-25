@@ -85,30 +85,37 @@ static std::vector<uint64_t> sum_dp(const std::vector<int> &values, int C, Compa
   std::vector<std::vector<uint64_t>> dp(static_cast<std::size_t>(J) + 1);
   dp[0].push_back(0ULL); // dp[0] <- {emptyset}
 
-  for (std::size_t i = 0; i < n; ++i) {
-    const int w = values[i];
-    const uint64_t bit = (1ULL << i);
+  
+    int pref_sum =0;
 
-    if (w == 0) {
-      for (int j = J; j >= 0; --j) {
+    for (std::size_t i=0;i<n;++i)
+    {
+     const int w=values[i];
+     const uint64_t bit = (1ULL <<i);
+     pref_sum+=w;
+     const int j_max= std::min(J,pref_sum);
+
+     if (w == 0) {
+      for (int j = j_max; j >= 0; --j) {
         const std::size_t sz = dp[j].size();
         for (std::size_t k = 0; k < sz; ++k) {
           dp[j].push_back(dp[j][k] | bit);
         }
       }
       continue;
-    }
-
-    for (int j = J; j >= w; --j) 
-    {
+     }
+         
+     for (int j = j_max; j >= w; --j) 
+     {
       const int p = j - w;
       if (dp[p].empty()) continue;
       const std::size_t sz = dp[p].size();
       for (std::size_t k = 0; k < sz; ++k) {
         dp[j].push_back(dp[p][k] | bit);
       }
+     }
     }
-  }
+ 
 
   std::vector<uint64_t> R;
   switch(op){
