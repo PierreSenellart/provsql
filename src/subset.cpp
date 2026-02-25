@@ -243,47 +243,6 @@ std::vector<uint64_t> enumerate_valid_worlds(
   //could implement a similar if elsse if ladder for different aggregates when required
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // #include "subset.hpp"
 // #include <stdexcept>
 //
