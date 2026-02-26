@@ -209,16 +209,16 @@ static void try_having_impl(
                                                   kvals.push_back(std::move(kval));
                                                 }
 
-                                                //preliminary setup to get aggregate kind. 
+                                                //preliminary setup to get aggregate kind.
                                                 //Note: COUNT could be simulated by SUM.
                                                 AggKind agg_kind = AggKind::SUM;
-                          
+
                                                 auto agg_infos = c.getInfos(agg_side);
                                                 char *agg_fname = get_func_name(agg_infos.first);
                                                 if (agg_fname != nullptr) {
                                                   std::string func_name(agg_fname);
                                                   pfree(agg_fname);
-                                                
+
                                                   if (func_name == "count") {
                                                     agg_kind = AggKind::COUNT;
                                                   } else if (func_name == "sum") {
@@ -231,7 +231,7 @@ static void try_having_impl(
                                                   }
                                                 }
 
-                                                std::vector<uint64_t> worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind);
+                                                auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind, S.absorptive());
 
                                                 if (worlds.empty()) {
                                                   pw_out = S.zero();
@@ -243,17 +243,18 @@ static void try_having_impl(
 
                                                 const size_t n = kvals.size();
 
-                                                for (uint64_t mask : worlds) {
+                                                for (auto mask : worlds) {
                                                   std::vector<typename SemiringT::value_type> present;
                                                   std::vector<typename SemiringT::value_type> missing;
                                                   present.reserve(n);
                                                   missing.reserve(n);
 
                                                   for (size_t i = 0; i < n; ++i) {
-                                                    if (mask & (1ULL << i)) {
+                                                    if (mask[i]) {
                                                       if(kvals[i]!=S.one())
                                                         present.push_back(kvals[i]);
-                                                    } else {
+                                                    } else if(!((op==ComparisonOp::GE || op==ComparisonOp::GT) && S.absorptive() && agg_kind==AggKind::COUNT)) {
+                                                      // The test would also work for other monotonously increasing aggregation functions (e.g., sum of positive, max)
                                                       if(kvals[i]!=S.zero())
                                                         missing.push_back(kvals[i]);
                                                     }

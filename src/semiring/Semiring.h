@@ -44,6 +44,10 @@ virtual value_type value(const std::string &s) const {
 }
 
 virtual ~Semiring() = default;
+
+virtual bool absorptive() const {
+  return false;
+}
 };
 
 

@@ -91,13 +91,13 @@ std::string BooleanCircuit::toString(gate_t g) const
 
   switch(getGateType(g)) {
   case BooleanGate::IN:
-    if(getProb(g)==0.) {
+/*    if(getProb(g)==0.) {
       return "⊥";
     } else if(getProb(g)==1.) {
       return "⊤";
-    } else {
-      return to_string(g)+"["+std::to_string(getProb(g))+"]";
-    }
+    } else { */
+    return "x"+to_string(g);  //+"["+std::to_string(getProb(g))+"]";
+  //}
   case BooleanGate::MULIN:
     return "{" + to_string(*getWires(g).begin()) + "=" + std::to_string(getInfo(g)) + "}[" + std::to_string(getProb(g)) + "]";
   case BooleanGate::NOT:

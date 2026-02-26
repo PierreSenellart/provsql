@@ -16,7 +16,7 @@ BooleanCircuit &c;
 const gate_t ZERO, ONE;
 
 public:
-BoolExpr(BooleanCircuit &bc) : c(bc), ZERO(plus({})), ONE(times({})) {
+BoolExpr(BooleanCircuit &bc) : c(bc), ZERO(c.setGate(BooleanGate::OR)), ONE(c.setGate(BooleanGate::AND)) {
 }
 
 value_type zero() const override {
@@ -28,6 +28,9 @@ value_type one() const override {
 }
 
 value_type plus(const std::vector<value_type> &vec) const override {
+  if(vec.empty())
+    return ZERO;
+
   auto g = c.setGate(BooleanGate::OR);
 
   std::set<gate_t> seen;
@@ -41,6 +44,9 @@ value_type plus(const std::vector<value_type> &vec) const override {
 }
 
 value_type times(const std::vector<value_type> &vec) const override {
+  if(vec.empty())
+    return ONE;
+
   auto g = c.setGate(BooleanGate::AND);
 
   std::set<gate_t> seen;
@@ -69,6 +75,10 @@ virtual value_type monus(value_type x, value_type y) const override {
 
 value_type delta(value_type x) const override {
   return x;
+}
+
+virtual bool absorptive() const override {
+  return true;
 }
 
 };

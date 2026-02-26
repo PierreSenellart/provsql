@@ -3,7 +3,7 @@ remove_provenance
 
 (1 row)
 city|regexp_replace
-Berlin|([0.400000] ∧ [0.700000])
-New York|([0.100000] ∧ [0.200000])
-Paris|(([0.300000] ∧ [0.600000]) ∨ ([0.300000] ∧ [0.500000]) ∨ ([0.500000] ∧ [0.600000]))
+Berlin|(x ∧ x)
+New York|(x ∧ x)
+Paris|((x ∧ x) ∨ (x ∧ x) ∨ (x ∧ x))
 (3 rows)

@@ -12,7 +12,7 @@ GROUP BY p1.city;
 SELECT remove_provenance('result_boolexpr');
 SELECT
   city,
-  regexp_replace(boolexpr, '[0-9]\[', '[', 'g')
+  regexp_replace(boolexpr, 'x[0-9]', 'x', 'g')
 FROM result_boolexpr
 ORDER BY city;
 

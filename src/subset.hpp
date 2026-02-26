@@ -14,11 +14,14 @@ enum class AggKind {
 
 // Return valid worlds as bitmasks over [0..n-1].
 // Bit i = 1 means tuple i is present in world W.
-std::vector<uint64_t> enumerate_valid_worlds(
+using mask_t=std::vector<bool>;
+
+std::vector<mask_t> enumerate_valid_worlds(
   const std::vector<int> &values,
   int constant,
   ComparisonOp op,
-  AggKind agg_kind
-);
+  AggKind agg_kind,
+  bool enumerate
+  );
 
-#endif 
+#endif

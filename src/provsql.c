@@ -746,7 +746,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       result = (Expr *)plus;
     }
 
-    if (aggregation) {
+    if (aggregation && !q->havingQual) {
       FuncExpr *deltaExpr = makeNode(FuncExpr);
 
       // adding the delta gate to the provenance circuit
@@ -768,6 +768,8 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       else
         elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
 
+      result = (Expr*) havingExpr;
+/*
       if(havingExpr->funcid == constants->OID_FUNCTION_PROVENANCE_TIMES) {
         ArrayExpr *arr = (ArrayExpr*) lfirst(list_head(havingExpr->args));
         arr->elements = lcons(result, arr->elements);
@@ -790,7 +792,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
         timesExpr->location = -1;
 
         result = (Expr *) timesExpr;
-      }
+      }*/
 
       q->havingQual = NULL;
     }

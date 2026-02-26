@@ -5,23 +5,23 @@ remove_provenance
 city|formula|counting
 Berlin|𝟘|0
 New York|𝟘|0
-Paris|(δ(Dave ⊕ Magdalen ⊕ Nancy) ⊗ (Dave ⊗ Magdalen ⊗ Nancy))|1
+Paris|(Dave ⊗ Magdalen ⊗ Nancy)|1
 (3 rows)
 remove_provenance
 
 (1 row)
 city|formula|counting
-Berlin|(δ(Ellen ⊕ Susan) ⊗ ((Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ Susan)))|1
-New York|(δ(John ⊕ Paul) ⊗ (John ⊗ Paul))|1
-Paris|(δ(Dave ⊕ Magdalen ⊕ Nancy) ⊗ ((Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)))|1
+Berlin|((Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ Susan))|1
+New York|(John ⊗ Paul)|1
+Paris|((Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy))|1
 (3 rows)
 remove_provenance
 
 (1 row)
 city|formula
-Berlin|{{},{Ellen},{Ellen,Susan},{Susan}}
-New York|{{},{John},{John,Paul},{Paul}}
-Paris|{{},{Dave},{Dave,Magdalen},{Dave,Magdalen,Nancy},{Dave,Nancy},{Magdalen},{Magdalen,Nancy},{Nancy}}
+Berlin|{{Ellen},{Ellen,Susan},{Susan}}
+New York|{{John},{John,Paul},{Paul}}
+Paris|{{Dave},{Dave,Magdalen},{Dave,Magdalen,Nancy},{Dave,Nancy},{Magdalen},{Magdalen,Nancy},{Nancy}}
 (3 rows)
 remove_provenance
 
@@ -35,13 +35,13 @@ remove_provenance
 
 (1 row)
 formula
-((δ(Ellen ⊕ Susan) ⊗ ((𝟙 ⊖ (Ellen ⊕ Susan)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ Susan))) ⊕ (δ(John ⊕ Paul) ⊗ ((𝟙 ⊖ (John ⊕ Paul)) ⊕ (John ⊗ (𝟙 ⊖ Paul)) ⊕ (Paul ⊗ (𝟙 ⊖ John)) ⊕ (John ⊗ Paul))) ⊕ (δ(Dave ⊕ Magdalen ⊕ Nancy) ⊗ ((𝟙 ⊖ (Dave ⊕ Magdalen ⊕ Nancy)) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)))))
+(((Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Ellen ⊗ Susan)) ⊕ ((Paul ⊗ (𝟙 ⊖ John)) ⊕ (John ⊗ (𝟙 ⊖ Paul)) ⊕ (John ⊗ Paul)) ⊕ ((Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy))))
 (1 row)
 remove_provenance
 
 (1 row)
 formula
-{{},{Dave},{Dave,Magdalen},{Dave,Nancy},{Ellen},{Ellen,Susan},{John},{John,Paul},{Magdalen},{Magdalen,Nancy},{Nancy},{Paul},{Susan}}
+{{Dave},{Dave,Magdalen},{Dave,Nancy},{Ellen},{Ellen,Susan},{John},{John,Paul},{Magdalen},{Magdalen,Nancy},{Nancy},{Paul},{Susan}}
 (1 row)
 remove_provenance
 
@@ -53,13 +53,13 @@ remove_provenance
 
 (1 row)
 city|formula
-Berlin|(δ(Ellen ⊕ Susan) ⊗ ((𝟙 ⊖ (Ellen ⊕ Susan)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ Susan)) ⊗ ((Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ Susan)))
+Berlin|(((Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Ellen ⊗ Susan)) ⊗ ((Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ Susan)))
 New York|𝟘
-Paris|(δ(Dave ⊕ Magdalen ⊕ Nancy) ⊗ ((𝟙 ⊖ (Dave ⊕ Magdalen ⊕ Nancy)) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave))) ⊗ ((Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)))
+Paris|(((Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy))) ⊗ ((Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)))
 (3 rows)
 remove_provenance
 
 (1 row)
 formula
-{{},{Dave,Ellen,John,Magdalen,Paul,Susan},{Dave,Ellen,John,Nancy,Paul,Susan},{Dave,Ellen,Magdalen,Nancy,Susan},{Dave,Ellen,Magdalen,Susan},{Dave,Ellen,Nancy,Susan},{Dave,John,Magdalen,Nancy,Paul},{Dave,John,Magdalen,Paul},{Dave,John,Nancy,Paul},{Dave,Magdalen},{Dave,Magdalen,Nancy},{Dave,Nancy},{Ellen,John,Magdalen,Nancy,Paul,Susan},{Ellen,John,Paul,Susan},{Ellen,Magdalen,Nancy,Susan},{Ellen,Susan},{John,Magdalen,Nancy,Paul},{John,Paul},{Magdalen,Nancy}}
+{{Dave,Ellen,John,Magdalen,Paul,Susan},{Dave,Ellen,John,Nancy,Paul,Susan},{Dave,Ellen,Magdalen,Nancy,Susan},{Dave,Ellen,Magdalen,Susan},{Dave,Ellen,Nancy,Susan},{Dave,John,Magdalen,Nancy,Paul},{Dave,John,Magdalen,Paul},{Dave,John,Nancy,Paul},{Dave,Magdalen},{Dave,Magdalen,Nancy},{Dave,Nancy},{Ellen,John,Magdalen,Nancy,Paul,Susan},{Ellen,John,Paul,Susan},{Ellen,Magdalen,Nancy,Susan},{Ellen,Susan},{John,Magdalen,Nancy,Paul},{John,Paul},{Magdalen,Nancy}}
 (1 row)

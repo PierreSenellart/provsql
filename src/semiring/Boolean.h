@@ -34,6 +34,9 @@ virtual value_type delta(value_type x) const
 {
   return x;
 }
+virtual bool absorptive() const override {
+  return true;
+}
 };
 }
 
