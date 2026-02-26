@@ -29,12 +29,19 @@ enum class ComparisonOperator {
 };
 
 enum class AggregationOperator {
+  // INT
   COUNT,
+  // NUMERIC
   SUM,
   MIN,
   MAX,
-  PROD,
-  CHOOSE
+  AVG,
+  // ARBITRARY TYPE
+  CHOOSE,
+  ARRAY_AGG,
+  // BOOLEAN
+  AND,
+  OR
 };
 
 #endif
