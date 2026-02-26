@@ -49,7 +49,7 @@ class DPException : public std::exception {};
 
 #define MIN(x,y) ((x)<(y)?(x):(y))
 
-static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, ComparisonOperator op, bool absorptive)
+static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, ComparisonOperator op, bool absorptive, bool &upset)
 {
   const std::size_t n = values.size();
 
@@ -57,8 +57,8 @@ static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, Compari
 
   // We first deal with NEQ by combining LT and GT
   if(op == ComparisonOperator::NE) {
-    std::vector<mask_t> lt= sum_dp(values, C, ComparisonOperator::LT, absorptive);
-    std::vector<mask_t> gt= sum_dp(values, C, ComparisonOperator::GT, absorptive);
+    std::vector<mask_t> lt= sum_dp(values, C, ComparisonOperator::LT, absorptive, upset);
+    std::vector<mask_t> gt= sum_dp(values, C, ComparisonOperator::GT, absorptive, upset);
     R.reserve(lt.size()+gt.size());
     R.insert(R.end(),lt.begin(),lt.end());
     R.insert(R.end(),gt.begin(),gt.end());
@@ -109,8 +109,10 @@ static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, Compari
     for (int j = j_max; j >= w; --j) {
       const int p = j - w;
       if(absorptive && ((op==ComparisonOperator::GT && p>C) ||
-                        (op==ComparisonOperator::GE && p>=C)))
+                        (op==ComparisonOperator::GE && p>=C))) {
+        upset=true;
         continue;
+      }
       size_t s=dp[p].size();
       for(size_t k=0; k<s; ++k) {
         mask_t m = dp[p][k];
@@ -173,7 +175,7 @@ static void combinations(std::size_t start,
   combinations(start + 1, k_left - 1, mask, out);
 }
 
-static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, ComparisonOperator op, bool absorptive)
+static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, ComparisonOperator op, bool absorptive, bool &upset)
 {
   const int n = static_cast<int>(values.size());
   std::vector<mask_t> out;
@@ -193,9 +195,10 @@ static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, Com
     ++m;
     [[fallthrough]];
   case ComparisonOperator::GE:
-    if(absorptive)
+    if(absorptive) {
+      upset=true;
       add_exact_k(m);
-    else
+    } else
       for (int k = m; k <= n; ++k) add_exact_k(k);
     break;
 
@@ -219,7 +222,8 @@ static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, Com
 
 }
 
-static bool compare_int(int a, ComparisonOperator op, int b) {
+template<typename I, typename J>
+static bool compare(I a, ComparisonOperator op, J b) {
   switch (op) {
   case ComparisonOperator::EQUAL:  return a == b;
   case ComparisonOperator::NE: return a != b;
@@ -231,6 +235,19 @@ static bool compare_int(int a, ComparisonOperator op, int b) {
   return false;
 }
 
+template <class Update>
+bool eval_mask(const std::vector<int>& values,
+               const std::vector<bool>& mask,
+               int constant, ComparisonOperator op,
+               int initial, Update update)
+{
+  int state = initial;
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    if (mask[i]) update(state, values[i]);
+  }
+  return compare(state, op, constant);
+}
+
 static bool evaluate(
   const std::vector<int> values,
   int constant,
@@ -238,35 +255,74 @@ static bool evaluate(
   mask_t mask,
   AggregationOperator agg_kind)
 {
-  if(agg_kind != AggregationOperator::SUM)
-    throw std::runtime_error("Aggregation operator not supported.");
+  switch(agg_kind) {
+  case AggregationOperator::COUNT:
+  case AggregationOperator::SUM:
+    return eval_mask(values, mask, constant, op, 0, [](int& s, int x) {
+      s += x;
+    });
 
-  int sum = 0;
-  for (size_t i = 0; i < values.size(); ++i) {
-    if (mask[i])
-      sum += values[i];
+  case AggregationOperator::MIN:
+    return eval_mask(values, mask, constant, op, std::numeric_limits<int>::max(), [](int& s, int x) {
+      if(x<s) s=x;
+    });
+    break;
+
+  case AggregationOperator::MAX:
+    return eval_mask(values, mask, constant, op, std::numeric_limits<int>::min(), [](int& s, int x) {
+      if(x>s) s=x;
+    });
+    break;
+
+  case AggregationOperator::AVG:
+  {
+    int state = 0;
+    unsigned count = 0;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      if (mask[i]) {
+        state+=values[i];
+        ++count;
+      }
+    }
+    return compare(state*1./count, op, constant);
   }
+  break;
 
-  return compare_int(sum, op, constant);
+  default:
+    throw std::runtime_error("Aggregation operator not supported.");
+  }
 }
 
 std::vector<mask_t> enumerate_exhaustive(
   const std::vector<int> &values,
   int constant,
   ComparisonOperator op,
-  AggregationOperator agg_kind)
+  AggregationOperator agg_kind,
+  bool absorptive,
+  bool &upset)
 {
   const size_t n = values.size();
-
-  if (n >= 63)
-    throw std::runtime_error("enumerate_valid_worlds: n >= 63 not supported (bitmask enumeration)");
 
   std::vector<mask_t> worlds;
   mask_t mask(n);
 
-  while(increment(mask)) { // Skipping possible world
+  bool all_worlds = true;
+
+  while(increment(mask)) { // Skipping empty world
     if(evaluate(values, constant, op, mask, agg_kind))
       worlds.push_back(mask);
+    else
+      all_worlds=false;
+  }
+
+  if(all_worlds && absorptive)
+  {
+    worlds.clear();
+
+    // In that case, the result is equivalent to the upset generated by
+    // the single-tuple possible worlds
+    combinations(0, 1, mask_t(n), worlds);
+    upset=true;
   }
 
   return worlds;
@@ -277,18 +333,19 @@ std::vector<mask_t> enumerate_valid_worlds(
   int constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
-  bool absorptive
+  bool absorptive,
+  bool &upset
   )
 {
   if (agg_kind == AggregationOperator::COUNT)
-    return count_enum(values,constant,op, absorptive);
+    return count_enum(values,constant,op, absorptive, upset);
 
   if(agg_kind == AggregationOperator::SUM)
     try {
-      return sum_dp(values, constant, op, absorptive);
+      return sum_dp(values, constant, op, absorptive, upset);
     } catch(DPException &e) {
       // We will use the default implementation of the enumeration
     }
 
-  return enumerate_exhaustive(values, constant, op, agg_kind);
+  return enumerate_exhaustive(values, constant, op, agg_kind, absorptive, upset);
 }

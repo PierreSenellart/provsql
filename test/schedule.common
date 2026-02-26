@@ -31,7 +31,7 @@ test: viewing_setup
 
 # Probability computation using internal methods
 test: possible_worlds monte_carlo
-test: sr_boolexpr probability_having
+test: sr_boolexpr probability_having probability_having_avg_min_max
 
 # Probability computation using external software
 test: d4 dsharp weightmc c2d

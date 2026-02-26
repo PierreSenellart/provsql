@@ -15,7 +15,8 @@ std::vector<mask_t> enumerate_valid_worlds(
   int constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
-  bool enumerate
+  bool enumerate,
+  bool &upset
   );
 
 #endif
