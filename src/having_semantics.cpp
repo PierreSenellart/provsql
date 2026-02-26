@@ -9,6 +9,7 @@ extern "C" {
 #include <unordered_set>
 
 #include "having_semantics.hpp"
+#include "provsql_utils_cpp.h"
 #include "subset.hpp"
 #include "semiring/Boolean.h"
 #include "semiring/BoolExpr.h"
@@ -209,26 +210,15 @@ static void try_having_impl(
                                                   kvals.push_back(std::move(kval));
                                                 }
 
-                                                //preliminary setup to get aggregate kind.
-                                                //Note: COUNT could be simulated by SUM.
-                                                AggregationOperator agg_kind = AggregationOperator::SUM;
+                                                AggregationOperator agg_kind = getAggregationOperator(c.getInfos(agg_side).first);
 
-                                                auto agg_infos = c.getInfos(agg_side);
-                                                char *agg_fname = get_func_name(agg_infos.first);
-                                                if (agg_fname != nullptr) {
-                                                  std::string func_name(agg_fname);
-                                                  pfree(agg_fname);
-
-                                                  if (func_name == "count") {
-                                                    agg_kind = AggregationOperator::COUNT;
-                                                  } else if (func_name == "sum") {
-                                                    // Fallback: if COUNT(*) is simulated by  SUM of 1s
-                                                    bool all_one_mvals = true;
-                                                    for (int m : mvals) {
-                                                      if (m != 1) { all_one_mvals = false; break; }
-                                                    }
-                                                    agg_kind = all_one_mvals ? AggregationOperator::COUNT : AggregationOperator::SUM;
+                                                if(agg_kind==AggregationOperator::SUM) {
+                                                  // COUNT(*) is simulated by SUM of 1s
+                                                  bool all_one_mvals = true;
+                                                  for (int m : mvals) {
+                                                    if (m != 1) { all_one_mvals = false; break; }
                                                   }
+                                                  agg_kind = all_one_mvals ? AggregationOperator::COUNT : AggregationOperator::SUM;
                                                 }
 
                                                 auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind, S.absorptive());

@@ -1,6 +1,8 @@
 extern "C" {
 #include "postgres.h"
 #include "utils/uuid.h"
+#include "utils/lsyscache.h"
+
 #include "provsql_utils.h"
 }
 
@@ -99,4 +101,41 @@ bool operator==(const pg_uuid_t &u, const pg_uuid_t &v)
       return false;
 
   return true;
+}
+
+AggregationOperator getAggregationOperator(Oid oid)
+{
+  char *fname = get_func_name(oid);
+
+  if(fname == nullptr)
+    elog(ERROR, "Invalid OID for aggregation function: %d", oid);
+
+  std::string func_name {fname};
+  pfree(fname);
+
+  AggregationOperator op;
+
+  if(func_name == "count") {
+    op = AggregationOperator::COUNT;
+  } else if(func_name == "sum") {
+    op = AggregationOperator::SUM;
+  } else if(func_name == "min") {
+    op = AggregationOperator::MIN;
+  } else if(func_name == "max") {
+    op = AggregationOperator::MAX;
+  } else if(func_name == "choose") {
+    op = AggregationOperator::CHOOSE;
+  } else if(func_name == "avg") {
+    op = AggregationOperator::AVG;
+  } else if(func_name == "array_agg") {
+    op = AggregationOperator::ARRAY_AGG;
+  } else if(func_name == "and" || func_name=="every") {
+    op = AggregationOperator::AND;
+  } else if(func_name == "or") {
+    op = AggregationOperator::OR;
+  } else {
+    elog(ERROR, "Aggregation operator %s not supported", func_name.c_str());
+  }
+
+  return op;
 }

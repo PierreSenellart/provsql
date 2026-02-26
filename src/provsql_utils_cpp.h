@@ -44,4 +44,7 @@ enum class AggregationOperator {
   OR
 };
 
+AggregationOperator getAggregationOperator(const char *fname);
+AggregationOperator getAggregationOperator(Oid oid);
+
 #endif

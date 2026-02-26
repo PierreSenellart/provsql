@@ -96,24 +96,8 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
   case gate_agg:
   {
     auto infos = getInfos(g);
-    AggregationOperator op;
 
-    char *fname = get_func_name(infos.first);
-    if(fname == nullptr)
-      elog(ERROR, "Invalid OID for aggregation function: %d", infos.first);
-    std::string func_name {fname};
-
-    if(func_name == "sum") {
-      op = AggregationOperator::SUM;
-    } else if(func_name == "min") {
-      op = AggregationOperator::MIN;
-    } else if(func_name == "max") {
-      op = AggregationOperator::MAX;
-    } else if(func_name == "choose") {
-      op = AggregationOperator::CHOOSE;
-    } else {
-      throw CircuitException("Aggregation operator " + func_name + " not supported");
-    }
+    AggregationOperator op = getAggregationOperator(infos.first);
 
     std::vector<typename S::value_type> vec;
     for(auto it = getWires(g).begin(); it!=getWires(g).end(); ++it)
