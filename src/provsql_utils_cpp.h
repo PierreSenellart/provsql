@@ -29,6 +29,7 @@ enum class ComparisonOperator {
 };
 
 enum class AggregationOperator {
+  COUNT,
   SUM,
   MIN,
   MAX,

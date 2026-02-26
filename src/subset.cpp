@@ -49,16 +49,16 @@ class DPException : public std::exception {};
 
 #define MIN(x,y) ((x)<(y)?(x):(y))
 
-static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, ComparisonOp op, bool absorptive)
+static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, ComparisonOperator op, bool absorptive)
 {
   const std::size_t n = values.size();
 
   std::vector<mask_t> R;
 
   // We first deal with NEQ by combining LT and GT
-  if(op == ComparisonOp::NEQ) {
-    std::vector<mask_t> lt= sum_dp(values, C, ComparisonOp::LT, absorptive);
-    std::vector<mask_t> gt= sum_dp(values, C, ComparisonOp::GT, absorptive);
+  if(op == ComparisonOperator::NE) {
+    std::vector<mask_t> lt= sum_dp(values, C, ComparisonOperator::LT, absorptive);
+    std::vector<mask_t> gt= sum_dp(values, C, ComparisonOperator::GT, absorptive);
     R.reserve(lt.size()+gt.size());
     R.insert(R.end(),lt.begin(),lt.end());
     R.insert(R.end(),gt.begin(),gt.end());
@@ -73,22 +73,22 @@ static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, Compari
   }
 
   //no valid worlds case
-  if (op == ComparisonOp::GT && C>=T) return {};
-  if (op == ComparisonOp::GE && C>T) return {};
-  if (op == ComparisonOp::LT && C<=0) return {};
-  if (op == ComparisonOp::LE && C<0) return {};
-  if (op == ComparisonOp::EQ && (C>T || C<0)) return {};
+  if (op == ComparisonOperator::GT && C>=T) return {};
+  if (op == ComparisonOperator::GE && C>T) return {};
+  if (op == ComparisonOperator::LT && C<=0) return {};
+  if (op == ComparisonOperator::LE && C<0) return {};
+  if (op == ComparisonOperator::EQUAL && (C>T || C<0)) return {};
 
   //tautology cases
-  if (op == ComparisonOp::GT && C<0) return all_worlds(values);
-  if (op == ComparisonOp::GE && C<=0) return all_worlds(values);
-  if (op == ComparisonOp::LT && C>T) return all_worlds(values);
-  if (op == ComparisonOp::LE && C>=T) return all_worlds(values);
+  if (op == ComparisonOperator::GT && C<0) return all_worlds(values);
+  if (op == ComparisonOperator::GE && C<=0) return all_worlds(values);
+  if (op == ComparisonOperator::LT && C>T) return all_worlds(values);
+  if (op == ComparisonOperator::LE && C>=T) return all_worlds(values);
 
   long long J=0;
-  if (op == ComparisonOp::GT || op == ComparisonOp::GE)
+  if (op == ComparisonOperator::GT || op == ComparisonOperator::GE)
     J=T;
-  else if (op==ComparisonOp::LT)
+  else if (op==ComparisonOperator::LT)
     J=MIN(C-1,T);
   else
     J=MIN(C,T);
@@ -108,8 +108,8 @@ static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, Compari
 
     for (int j = j_max; j >= w; --j) {
       const int p = j - w;
-      if(absorptive && ((op==ComparisonOp::GT && p>C) ||
-                        (op==ComparisonOp::GE && p>=C)))
+      if(absorptive && ((op==ComparisonOperator::GT && p>C) ||
+                        (op==ComparisonOperator::GE && p>=C)))
         continue;
       size_t s=dp[p].size();
       for(size_t k=0; k<s; ++k) {
@@ -121,28 +121,28 @@ static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, Compari
   }
 
   switch(op){
-  case ComparisonOp::EQ:
+  case ComparisonOperator::EQUAL:
     append_range(R,dp,C,C);
     break;
 
-  case ComparisonOp::GT:
+  case ComparisonOperator::GT:
     append_range(R,dp,C+1,J);
     break;
 
 
-  case ComparisonOp::LT:
+  case ComparisonOperator::LT:
     append_range(R,dp,1,C-1);
     break;
 
-  case ComparisonOp::GE:
+  case ComparisonOperator::GE:
     append_range(R,dp,C,J);
     break;
 
-  case ComparisonOp::LE:
+  case ComparisonOperator::LE:
     append_range(R,dp,1,C);
     break;
 
-  case ComparisonOp::NEQ: // case already processed
+  case ComparisonOperator::NE: // case already processed
     assert(false);
   }
 
@@ -173,7 +173,7 @@ static void combinations(std::size_t start,
   combinations(start + 1, k_left - 1, mask, out);
 }
 
-static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, ComparisonOp op, bool absorptive)
+static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, ComparisonOperator op, bool absorptive)
 {
   const int n = static_cast<int>(values.size());
   std::vector<mask_t> out;
@@ -185,28 +185,28 @@ static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, Com
 
   switch (op)
   {
-  case ComparisonOp::EQ:
+  case ComparisonOperator::EQUAL:
     if(m!=0) add_exact_k(m);
     break;
 
-  case ComparisonOp::GT:
+  case ComparisonOperator::GT:
     ++m;
     [[fallthrough]];
-  case ComparisonOp::GE:
+  case ComparisonOperator::GE:
     if(absorptive)
       add_exact_k(m);
     else
       for (int k = m; k <= n; ++k) add_exact_k(k);
     break;
 
-  case ComparisonOp::LT:
+  case ComparisonOperator::LT:
     --m;
     [[fallthrough]];
-  case ComparisonOp::LE:
+  case ComparisonOperator::LE:
     for (int k = 1; k <= m; ++k) add_exact_k(k);
     break;
 
-  case ComparisonOp::NEQ:
+  case ComparisonOperator::NE:
     for (int k = 1; k <= n; ++k)
     {
       if (k != m) add_exact_k(k);
@@ -219,14 +219,14 @@ static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, Com
 
 }
 
-static bool compare_int(int a, ComparisonOp op, int b) {
+static bool compare_int(int a, ComparisonOperator op, int b) {
   switch (op) {
-  case ComparisonOp::EQ:  return a == b;
-  case ComparisonOp::NEQ: return a != b;
-  case ComparisonOp::GT:  return a >  b;
-  case ComparisonOp::LT:  return a <  b;
-  case ComparisonOp::GE:  return a >= b;
-  case ComparisonOp::LE:  return a <= b;
+  case ComparisonOperator::EQUAL:  return a == b;
+  case ComparisonOperator::NE: return a != b;
+  case ComparisonOperator::GT:  return a >  b;
+  case ComparisonOperator::LT:  return a <  b;
+  case ComparisonOperator::GE:  return a >= b;
+  case ComparisonOperator::LE:  return a <= b;
   }
   return false;
 }
@@ -234,11 +234,11 @@ static bool compare_int(int a, ComparisonOp op, int b) {
 static bool evaluate(
   const std::vector<int> values,
   int constant,
-  ComparisonOp op,
+  ComparisonOperator op,
   mask_t mask,
-  AggKind agg_kind)
+  AggregationOperator agg_kind)
 {
-  if(agg_kind != AggKind::SUM)
+  if(agg_kind != AggregationOperator::SUM)
     throw std::runtime_error("Aggregation operator not supported.");
 
   int sum = 0;
@@ -253,8 +253,8 @@ static bool evaluate(
 std::vector<mask_t> enumerate_exhaustive(
   const std::vector<int> &values,
   int constant,
-  ComparisonOp op,
-  AggKind agg_kind)
+  ComparisonOperator op,
+  AggregationOperator agg_kind)
 {
   const size_t n = values.size();
 
@@ -275,15 +275,15 @@ std::vector<mask_t> enumerate_exhaustive(
 std::vector<mask_t> enumerate_valid_worlds(
   const std::vector<int> &values,
   int constant,
-  ComparisonOp op,
-  AggKind agg_kind,
+  ComparisonOperator op,
+  AggregationOperator agg_kind,
   bool absorptive
   )
 {
-  if (agg_kind == AggKind::COUNT)
+  if (agg_kind == AggregationOperator::COUNT)
     return count_enum(values,constant,op, absorptive);
 
-  if(agg_kind == AggKind::SUM)
+  if(agg_kind == AggregationOperator::SUM)
     try {
       return sum_dp(values, constant, op, absorptive);
     } catch(DPException &e) {

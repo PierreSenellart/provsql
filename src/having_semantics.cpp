@@ -32,38 +32,38 @@ static int parse_int_strict(const std::string &s, bool &ok) {
   }
 }
 
-// Map a cmp gate’s Postgres operator to subset.cpp’s ComparisonOp
-static ComparisonOp map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok) {
+// Map a cmp gate’s Postgres operator to subset.cpp’s ComparisonOperator
+static ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok) {
   ok = false;
   auto infos = c.getInfos(cmp_gate);
 
   char *opname = get_opname(infos.first); // palloc'd string or NULL
-  if (!opname) return ComparisonOp::EQ;
+  if (!opname) return ComparisonOperator::EQUAL;
 
   std::string s(opname);
   pfree(opname);
 
   ok = true;
-  if (s == "=") return ComparisonOp::EQ;
-  if (s == "<>") return ComparisonOp::NEQ;
-  if (s == "<") return ComparisonOp::LT;
-  if (s == "<=") return ComparisonOp::LE;
-  if (s == ">") return ComparisonOp::GT;
-  if (s == ">=") return ComparisonOp::GE;
+  if (s == "=") return ComparisonOperator::EQUAL;
+  if (s == "<>") return ComparisonOperator::NE;
+  if (s == "<") return ComparisonOperator::LT;
+  if (s == "<=") return ComparisonOperator::LE;
+  if (s == ">") return ComparisonOperator::GT;
+  if (s == ">=") return ComparisonOperator::GE;
 
   ok = false;
-  return ComparisonOp::EQ;
+  return ComparisonOperator::EQUAL;
 }
 
 // Flip operator for “C op agg”  <=>  “agg flip(op) C”
-static ComparisonOp flip_op(ComparisonOp op) {
+static ComparisonOperator flip_op(ComparisonOperator op) {
   switch (op) {
-  case ComparisonOp::LT:  return ComparisonOp::GT;
-  case ComparisonOp::LE:  return ComparisonOp::GE;
-  case ComparisonOp::GT:  return ComparisonOp::LT;
-  case ComparisonOp::GE:  return ComparisonOp::LE;
-  case ComparisonOp::EQ:  return ComparisonOp::EQ;
-  case ComparisonOp::NEQ: return ComparisonOp::NEQ;
+  case ComparisonOperator::LT:  return ComparisonOperator::GT;
+  case ComparisonOperator::LE:  return ComparisonOperator::GE;
+  case ComparisonOperator::GT:  return ComparisonOperator::LT;
+  case ComparisonOperator::GE:  return ComparisonOperator::LE;
+  case ComparisonOperator::EQUAL:  return ComparisonOperator::EQUAL;
+  case ComparisonOperator::NE: return ComparisonOperator::NE;
   }
   return op;
 }
@@ -179,10 +179,10 @@ static void try_having_impl(
                             gate_t R = cw[1];
 
                             bool okop = false;
-                            ComparisonOp op = map_cmp_op(c, cmp_gate, okop);
+                            ComparisonOperator op = map_cmp_op(c, cmp_gate, okop);
                             if (!okop) return false;
 
-                            auto build_from = [&](gate_t agg_side, gate_t const_side, ComparisonOp effective_op) -> bool {
+                            auto build_from = [&](gate_t agg_side, gate_t const_side, ComparisonOperator effective_op) -> bool {
                                                 int C = 0;
                                                 if (!extract_constant_C(c, const_side, C)) return false;
 
@@ -211,7 +211,7 @@ static void try_having_impl(
 
                                                 //preliminary setup to get aggregate kind.
                                                 //Note: COUNT could be simulated by SUM.
-                                                AggKind agg_kind = AggKind::SUM;
+                                                AggregationOperator agg_kind = AggregationOperator::SUM;
 
                                                 auto agg_infos = c.getInfos(agg_side);
                                                 char *agg_fname = get_func_name(agg_infos.first);
@@ -220,14 +220,14 @@ static void try_having_impl(
                                                   pfree(agg_fname);
 
                                                   if (func_name == "count") {
-                                                    agg_kind = AggKind::COUNT;
+                                                    agg_kind = AggregationOperator::COUNT;
                                                   } else if (func_name == "sum") {
                                                     // Fallback: if COUNT(*) is simulated by  SUM of 1s
                                                     bool all_one_mvals = true;
                                                     for (int m : mvals) {
                                                       if (m != 1) { all_one_mvals = false; break; }
                                                     }
-                                                    agg_kind = all_one_mvals ? AggKind::COUNT : AggKind::SUM;
+                                                    agg_kind = all_one_mvals ? AggregationOperator::COUNT : AggregationOperator::SUM;
                                                   }
                                                 }
 
@@ -253,7 +253,7 @@ static void try_having_impl(
                                                     if (mask[i]) {
                                                       if(kvals[i]!=S.one())
                                                         present.push_back(kvals[i]);
-                                                    } else if(!((op==ComparisonOp::GE || op==ComparisonOp::GT) && S.absorptive() && agg_kind==AggKind::COUNT)) {
+                                                    } else if(!((op==ComparisonOperator::GE || op==ComparisonOperator::GT) && S.absorptive() && agg_kind==AggregationOperator::COUNT)) {
                                                       // The test would also work for other monotonously increasing aggregation functions (e.g., sum of positive, max)
                                                       if(kvals[i]!=S.zero())
                                                         missing.push_back(kvals[i]);
