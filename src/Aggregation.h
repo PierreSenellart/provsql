@@ -50,7 +50,7 @@ enum class ValueType {
   NONE
 };
 
-struct Value {
+struct AggValue {
 private:
   ValueType t;
 
@@ -58,23 +58,23 @@ public:
   std::variant<long, double, bool, std::string,
                std::vector<long>, std::vector<double>, std::vector<bool>, std::vector<std::string> > v;
 
-  Value() : t(ValueType::NONE) {
+  AggValue() : t(ValueType::NONE) {
   }
-  Value(long l) : t(ValueType::INT), v(l) {
+  AggValue(long l) : t(ValueType::INT), v(l) {
   }
-  Value(double d) : t(ValueType::FLOAT), v(d) {
+  AggValue(double d) : t(ValueType::FLOAT), v(d) {
   }
-  Value(bool b) : t(ValueType::BOOLEAN), v(b) {
+  AggValue(bool b) : t(ValueType::BOOLEAN), v(b) {
   }
-  Value(std::string s) : t(ValueType::STRING), v(s) {
+  AggValue(std::string s) : t(ValueType::STRING), v(s) {
   }
-  Value(std::vector<long> vec) : t(ValueType::ARRAY_INT), v(vec) {
+  AggValue(std::vector<long> vec) : t(ValueType::ARRAY_INT), v(vec) {
   }
-  Value(std::vector<double> vec) : t(ValueType::ARRAY_FLOAT), v(vec) {
+  AggValue(std::vector<double> vec) : t(ValueType::ARRAY_FLOAT), v(vec) {
   }
-  Value(std::vector<bool> vec) : t(ValueType::ARRAY_BOOLEAN), v(vec) {
+  AggValue(std::vector<bool> vec) : t(ValueType::ARRAY_BOOLEAN), v(vec) {
   }
-  Value(std::vector<std::string> vec) : t(ValueType::ARRAY_STRING), v(vec) {
+  AggValue(std::vector<std::string> vec) : t(ValueType::ARRAY_STRING), v(vec) {
   }
 
   ValueType getType() const {
@@ -84,8 +84,8 @@ public:
 
 struct Aggregator {
   virtual ~Aggregator() = default;
-  virtual void add(const Value& x) = 0;
-  virtual Value finalize() const = 0;
+  virtual void add(const AggValue& x) = 0;
+  virtual AggValue finalize() const = 0;
   virtual AggregationOperator op() const = 0;
   virtual ValueType inputType() const = 0;
   virtual ValueType resultType() const {

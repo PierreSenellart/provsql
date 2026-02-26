@@ -241,7 +241,7 @@ bool evaluate(const std::vector<long>& values,
               std::unique_ptr<Aggregator> aggregator)
 {
   for (std::size_t i = 0; i < values.size(); ++i) {
-    if (mask[i]) aggregator->add(Value {values[i]});
+    if (mask[i]) aggregator->add(AggValue {values[i]});
   }
   auto res = aggregator->finalize();
   switch(aggregator->resultType()) {

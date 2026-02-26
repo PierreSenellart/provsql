@@ -45,10 +45,10 @@ AggregationOperator getAggregationOperator(Oid oid)
 }
 
 struct NoneAgg : Aggregator {
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
   }
-  Value finalize() const override {
-    return Value{};
+  AggValue finalize() const override {
+    return AggValue{};
   }
   AggregationOperator op() const override {
     return AggregationOperator::NONE;
@@ -68,8 +68,8 @@ protected:
   bool has = false;
 
 public:
-  Value finalize() const override {
-    if (has) return Value {value}; else return Value{};
+  AggValue finalize() const override {
+    if (has) return AggValue {value}; else return AggValue{};
   }
   ValueType inputType() const override {
     if constexpr (std::is_same_v<T,long>)
@@ -90,7 +90,7 @@ struct SumAgg : StandardAgg<T> {
   using StandardAgg<T>::value;
   using StandardAgg<T>::has;
 
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
     if (x.getType() == ValueType::NONE) return;
     const T& v = std::get<T>(x.v);
     value += v;
@@ -106,7 +106,7 @@ struct MinAgg : StandardAgg<T> {
   using StandardAgg<T>::value;
   using StandardAgg<T>::has;
 
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
     if (x.getType() == ValueType::NONE) return;
     const T& v = std::get<T>(x.v);
     if(has) {
@@ -126,7 +126,7 @@ struct MaxAgg : StandardAgg<T> {
   using StandardAgg<T>::value;
   using StandardAgg<T>::has;
 
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
     if (x.getType() == ValueType::NONE) return;
     const T& v = std::get<T>(x.v);
     if(has) {
@@ -146,7 +146,7 @@ struct AndAgg : StandardAgg<bool> {
     value=true;
   }
 
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
     if (x.getType() == ValueType::NONE) return;
     auto b = std::get<bool>(x.v);
     value = value && b;
@@ -162,7 +162,7 @@ struct OrAgg : StandardAgg<bool> {
     value=false;
   }
 
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
     if (x.getType() == ValueType::NONE) return;
     auto b = std::get<bool>(x.v);
     value = value || b;
@@ -178,7 +178,7 @@ struct ChooseAgg : StandardAgg<T> {
   using StandardAgg<T>::value;
   using StandardAgg<T>::has;
 
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
     if (x.getType() == ValueType::NONE) return;
     if(!has)
       value = std::get<T>(x.v);
@@ -197,7 +197,7 @@ protected:
   bool has = false;
 
 public:
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
     if (x.getType() == ValueType::NONE) return;
     const T& v = std::get<T>(x.v);
     sum += v;
@@ -207,8 +207,8 @@ public:
   AggregationOperator op() const override {
     return AggregationOperator::AVG;
   }
-  Value finalize() const override {
-    if (has) return Value {sum/count}; else return Value{};
+  AggValue finalize() const override {
+    if (has) return AggValue {sum/count}; else return AggValue{};
   }
   ValueType inputType() const override {
     if constexpr (std::is_same_v<T,long>)
@@ -230,14 +230,14 @@ protected:
   using StandardAgg<T>::has;
 
 public:
-  void add(const Value& x) override {
+  void add(const AggValue& x) override {
     if (x.getType() == ValueType::NONE) return;
     const T& v = std::get<T>(x.v);
     values.push_back(v);
     has = true;
   }
-  Value finalize() const override {
-    if (has) return Value {values}; else return Value{};
+  AggValue finalize() const override {
+    if (has) return AggValue {values}; else return AggValue{};
   }
   AggregationOperator op() const override {
     return AggregationOperator::ARRAY_AGG;
