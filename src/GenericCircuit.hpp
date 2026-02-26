@@ -72,7 +72,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     ComparisonOperator op;
 
     if(func_name == "=") {
-      op = ComparisonOperator::EQUAL;
+      op = ComparisonOperator::EQ;
     } else if(func_name == "<=") {
       op = ComparisonOperator::LE;
     } else if(func_name == "<") {

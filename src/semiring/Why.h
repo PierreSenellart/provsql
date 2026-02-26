@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+
 #include "Semiring.h"
 
 namespace semiring {
@@ -16,17 +17,17 @@ using why_provenance_t = std::set<label_set>;
 class Why : public Semiring<why_provenance_t> {
 public:
 // Additive identity
-value_type zero() const {
+value_type zero() const override {
   return {};
 }
 
 // Multiplicative identity: empty set (⊗(x,{{}}) means "don't change")
-value_type one() const {
+value_type one() const override {
   return { {} };
 }
 
 // Union of all input sets
-value_type plus(const std::vector<value_type> &vec) const {
+value_type plus(const std::vector<value_type> &vec) const override {
   value_type result;
   for (const auto &v : vec) {
     result.insert(v.begin(), v.end());
@@ -35,7 +36,7 @@ value_type plus(const std::vector<value_type> &vec) const {
 }
 
 // Cartesian product: union each inner set with each other
-value_type times(const std::vector<value_type> &vec) const {
+value_type times(const std::vector<value_type> &vec) const override {
   if (vec.empty()) return one();
 
   value_type result = vec[0];
@@ -54,41 +55,16 @@ value_type times(const std::vector<value_type> &vec) const {
 }
 
 
-virtual value_type monus(value_type x, value_type y) const {
+virtual value_type monus(value_type x, value_type y) const override {
   for (auto const &s : y) {
     x.erase(s);
   }
   return x;
 }
 
-
-
-value_type delta(value_type x) const {
+value_type delta(value_type x) const override {
   return x.empty() ? zero() : one();
 }
-
-
-// ignore  literal, return x
-value_type semimod(value_type x, value_type) const override {
-  return x;
-}
-
-// literals control validity
-value_type cmp(value_type x, ComparisonOperator, value_type y) const override {
-  return y.empty() ? zero() : x;
-}
-
-// union all values from children
-value_type agg(AggregationOperator, const std::vector<value_type> &v) override {
-  return plus(v);
-}
-
-// return singleton set of the value
-value_type value(const std::string &s) const override {
-  return { {s} };
-}
-
-
 
 };
 

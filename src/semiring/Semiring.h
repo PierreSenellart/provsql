@@ -3,7 +3,8 @@
 
 #include <vector>
 #include <string>
-#include "../provsql_utils_cpp.h"
+
+#include "../Aggregation.h"
 
 namespace semiring {
 class SemiringException : public std::exception

@@ -77,7 +77,7 @@ static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, Compari
   if (op == ComparisonOperator::GE && C>T) return {};
   if (op == ComparisonOperator::LT && C<=0) return {};
   if (op == ComparisonOperator::LE && C<0) return {};
-  if (op == ComparisonOperator::EQUAL && (C>T || C<0)) return {};
+  if (op == ComparisonOperator::EQ && (C>T || C<0)) return {};
 
   //tautology cases
   if (op == ComparisonOperator::GT && C<0) return all_worlds(values);
@@ -123,7 +123,7 @@ static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, Compari
   }
 
   switch(op){
-  case ComparisonOperator::EQUAL:
+  case ComparisonOperator::EQ:
     append_range(R,dp,C,C);
     break;
 
@@ -187,7 +187,7 @@ static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, Com
 
   switch (op)
   {
-  case ComparisonOperator::EQUAL:
+  case ComparisonOperator::EQ:
     if(m!=0) add_exact_k(m);
     break;
 
@@ -225,7 +225,7 @@ static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, Com
 template<typename I, typename J>
 static bool compare(I a, ComparisonOperator op, J b) {
   switch (op) {
-  case ComparisonOperator::EQUAL:  return a == b;
+  case ComparisonOperator::EQ:  return a == b;
   case ComparisonOperator::NE: return a != b;
   case ComparisonOperator::GT:  return a >  b;
   case ComparisonOperator::LT:  return a <  b;

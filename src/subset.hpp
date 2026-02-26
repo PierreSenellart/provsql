@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "provsql_utils_cpp.h"
+#include "Aggregation.h"
 
 // Return valid worlds as bitmasks over [0..n-1].
 // Bit i = 1 means tuple i is present in world W.
@@ -19,4 +19,4 @@ std::vector<mask_t> enumerate_valid_worlds(
   bool &upset
   );
 
-#endif
+#endif /* SUBSET_HPP */

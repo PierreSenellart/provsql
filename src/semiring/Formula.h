@@ -65,7 +65,7 @@ virtual value_type delta(value_type x) const override
 virtual value_type cmp(value_type s1, ComparisonOperator op, value_type s2) const override {
   std::string result = "["+s1+" ";
   switch(op) {
-  case ComparisonOperator::EQUAL:
+  case ComparisonOperator::EQ:
     result+="=";
     break;
   case ComparisonOperator::NE:

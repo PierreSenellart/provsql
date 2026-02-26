@@ -39,13 +39,13 @@ static ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &o
   auto infos = c.getInfos(cmp_gate);
 
   char *opname = get_opname(infos.first); // palloc'd string or NULL
-  if (!opname) return ComparisonOperator::EQUAL;
+  if (!opname) return ComparisonOperator::EQ;
 
   std::string s(opname);
   pfree(opname);
 
   ok = true;
-  if (s == "=") return ComparisonOperator::EQUAL;
+  if (s == "=") return ComparisonOperator::EQ;
   if (s == "<>") return ComparisonOperator::NE;
   if (s == "<") return ComparisonOperator::LT;
   if (s == "<=") return ComparisonOperator::LE;
@@ -53,7 +53,7 @@ static ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &o
   if (s == ">=") return ComparisonOperator::GE;
 
   ok = false;
-  return ComparisonOperator::EQUAL;
+  return ComparisonOperator::EQ;
 }
 
 // Flip operator for “C op agg”  <=>  “agg flip(op) C”
@@ -63,7 +63,7 @@ static ComparisonOperator flip_op(ComparisonOperator op) {
   case ComparisonOperator::LE:  return ComparisonOperator::GE;
   case ComparisonOperator::GT:  return ComparisonOperator::LT;
   case ComparisonOperator::GE:  return ComparisonOperator::LE;
-  case ComparisonOperator::EQUAL:  return ComparisonOperator::EQUAL;
+  case ComparisonOperator::EQ:  return ComparisonOperator::EQ;
   case ComparisonOperator::NE: return ComparisonOperator::NE;
   }
   return op;
