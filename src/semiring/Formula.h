@@ -90,6 +90,9 @@ virtual value_type semimod(value_type x, value_type s) const override {
   return x + "*" + s;
 }
 virtual value_type agg(AggregationOperator op, const std::vector<std::string> &s) override {
+  if(op==AggregationOperator::NONE)
+    return "<>";
+
   if(s.empty()) {
     switch(op) {
     case AggregationOperator::COUNT:
@@ -108,6 +111,8 @@ virtual value_type agg(AggregationOperator op, const std::vector<std::string> &s
       return "⊥";
     case AggregationOperator::ARRAY_AGG:
       return "[]";
+    case AggregationOperator::NONE:
+      assert(false);
     }
   }
 
@@ -153,6 +158,8 @@ virtual value_type agg(AggregationOperator op, const std::vector<std::string> &s
     case AggregationOperator::AND:
       result+="∧";
       break;
+    case AggregationOperator::NONE:
+      assert(false);
     }
     result+=s[i];
   }

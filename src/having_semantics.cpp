@@ -191,7 +191,7 @@ static void try_having_impl(
 
                                                 const auto &children = c.getWires(agg_side);
 
-                                                std::vector<int> mvals;
+                                                std::vector<long> mvals;
                                                 mvals.reserve(children.size());
 
                                                 std::vector<typename SemiringT::value_type> kvals;

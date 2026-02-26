@@ -19,7 +19,7 @@ static bool increment(mask_t &v)
   return false;
 }
 
-static std::vector<mask_t> all_worlds(const std::vector<int> &values)
+static std::vector<mask_t> all_worlds(const std::vector<long> &values)
 {
   std::vector<mask_t> worlds;
   mask_t mask(values.size());
@@ -49,7 +49,7 @@ class DPException : public std::exception {};
 
 #define MIN(x,y) ((x)<(y)?(x):(y))
 
-static std::vector<mask_t> sum_dp(const std::vector<int> &values, int C, ComparisonOperator op, bool absorptive, bool &upset)
+static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, ComparisonOperator op, bool absorptive, bool &upset)
 {
   const std::size_t n = values.size();
 
@@ -175,7 +175,7 @@ static void combinations(std::size_t start,
   combinations(start + 1, k_left - 1, mask, out);
 }
 
-static std::vector<mask_t> count_enum(const std::vector<int> &values, int m, ComparisonOperator op, bool absorptive, bool &upset)
+static std::vector<mask_t> count_enum(const std::vector<long> &values, int m, ComparisonOperator op, bool absorptive, bool &upset)
 {
   const int n = static_cast<int>(values.size());
   std::vector<mask_t> out;
@@ -226,7 +226,7 @@ template<typename I, typename J>
 static bool compare(I a, ComparisonOperator op, J b) {
   switch (op) {
   case ComparisonOperator::EQ:  return a == b;
-  case ComparisonOperator::NE: return a != b;
+  case ComparisonOperator::NE:  return a != b;
   case ComparisonOperator::GT:  return a >  b;
   case ComparisonOperator::LT:  return a <  b;
   case ComparisonOperator::GE:  return a >= b;
@@ -235,66 +235,29 @@ static bool compare(I a, ComparisonOperator op, J b) {
   return false;
 }
 
-template <class Update>
-bool eval_mask(const std::vector<int>& values,
-               const std::vector<bool>& mask,
-               int constant, ComparisonOperator op,
-               int initial, Update update)
+bool evaluate(const std::vector<long>& values,
+              const std::vector<bool>& mask,
+              int constant, ComparisonOperator op,
+              std::unique_ptr<Aggregator> aggregator)
 {
-  int state = initial;
   for (std::size_t i = 0; i < values.size(); ++i) {
-    if (mask[i]) update(state, values[i]);
+    if (mask[i]) aggregator->add(Value {values[i]});
   }
-  return compare(state, op, constant);
-}
-
-static bool evaluate(
-  const std::vector<int> values,
-  int constant,
-  ComparisonOperator op,
-  mask_t mask,
-  AggregationOperator agg_kind)
-{
-  switch(agg_kind) {
-  case AggregationOperator::COUNT:
-  case AggregationOperator::SUM:
-    return eval_mask(values, mask, constant, op, 0, [](int& s, int x) {
-      s += x;
-    });
-
-  case AggregationOperator::MIN:
-    return eval_mask(values, mask, constant, op, std::numeric_limits<int>::max(), [](int& s, int x) {
-      if(x<s) s=x;
-    });
-    break;
-
-  case AggregationOperator::MAX:
-    return eval_mask(values, mask, constant, op, std::numeric_limits<int>::min(), [](int& s, int x) {
-      if(x>s) s=x;
-    });
-    break;
-
-  case AggregationOperator::AVG:
-  {
-    int state = 0;
-    unsigned count = 0;
-    for (std::size_t i = 0; i < values.size(); ++i) {
-      if (mask[i]) {
-        state+=values[i];
-        ++count;
-      }
-    }
-    return compare(state*1./count, op, constant);
-  }
-  break;
-
+  auto res = aggregator->finalize();
+  switch(aggregator->resultType()) {
+  case ValueType::INT:
+    return compare(std::get<long>(res.v), op, constant);
+  case ValueType::BOOLEAN:
+    return compare(std::get<bool>(res.v), op, constant);
+  case ValueType::FLOAT:
+    return compare(std::get<double>(res.v), op, constant);
   default:
-    throw std::runtime_error("Aggregation operator not supported.");
+    throw std::runtime_error("Cannot compare this kind of value");
   }
 }
 
 std::vector<mask_t> enumerate_exhaustive(
-  const std::vector<int> &values,
+  const std::vector<long> &values,
   int constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
@@ -309,7 +272,9 @@ std::vector<mask_t> enumerate_exhaustive(
   bool all_worlds = true;
 
   while(increment(mask)) { // Skipping empty world
-    if(evaluate(values, constant, op, mask, agg_kind))
+    auto aggregator = makeAggregator(agg_kind, ValueType::INT);
+
+    if(evaluate(values, mask, constant, op, std::move(aggregator)))
       worlds.push_back(mask);
     else
       all_worlds=false;
@@ -329,7 +294,7 @@ std::vector<mask_t> enumerate_exhaustive(
 }
 
 std::vector<mask_t> enumerate_valid_worlds(
-  const std::vector<int> &values,
+  const std::vector<long> &values,
   int constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
