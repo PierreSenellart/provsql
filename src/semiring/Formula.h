@@ -92,40 +92,77 @@ virtual value_type semimod(value_type x, value_type s) const override {
 virtual value_type agg(AggregationOperator op, const std::vector<std::string> &s) override {
   if(s.empty()) {
     switch(op) {
+    case AggregationOperator::COUNT:
     case AggregationOperator::SUM:
       return "0";
     case AggregationOperator::MIN:
       return "+∞";
     case AggregationOperator::MAX:
       return "-∞";
-    case AggregationOperator::PROD:
-      return "1";
     case AggregationOperator::CHOOSE:
+    case AggregationOperator::AVG:
       return "<>";
+    case AggregationOperator::AND:
+      return "⊤";
+    case AggregationOperator::OR:
+      return "⊥";
+    case AggregationOperator::ARRAY_AGG:
+      return "[]";
     }
   }
 
-  std::string result = s[0];
+  std::string result;
+  switch(op) {
+  case AggregationOperator::ARRAY_AGG:
+    result+="[";
+    break;
+  case AggregationOperator::MIN:
+    result+="min(";
+    break;
+  case AggregationOperator::MAX:
+    result+="max(";
+    break;
+  case AggregationOperator::AVG:
+    result+="avg(";
+    break;
+  case AggregationOperator::CHOOSE:
+    result+="choose(";
+    break;
+  default:
+    ;
+  }
+
+  result += s[0];
+
   for(size_t i = 1; i<s.size(); ++i) {
     switch(op) {
+    case AggregationOperator::COUNT:
     case AggregationOperator::SUM:
       result+="+";
       break;
     case AggregationOperator::MIN:
-      result+=" min ";
-      break;
     case AggregationOperator::MAX:
-      result+=" max ";
-      break;
-    case AggregationOperator::PROD:
-      result+="×";
-      break;
+    case AggregationOperator::AVG:
     case AggregationOperator::CHOOSE:
-      result+=" choose ";
+    case AggregationOperator::ARRAY_AGG:
+      result+=",";
+      break;
+    case AggregationOperator::OR:
+      result+="∨";
+      break;
+    case AggregationOperator::AND:
+      result+="∧";
       break;
     }
     result+=s[i];
   }
+  if(op==AggregationOperator::ARRAY_AGG)
+    result+="]";
+  else if(op==AggregationOperator::MIN ||
+          op==AggregationOperator::MAX ||
+          op==AggregationOperator::CHOOSE ||
+          op==AggregationOperator::AVG)
+    result+=")";
   return result;
 }
 virtual value_type value(const std::string &s) const override {

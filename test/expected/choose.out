@@ -3,7 +3,7 @@ remove_provenance
 
 (1 row)
 city|position|formula
-Berlin|Field agent (*)|Ellen*Field agent choose Susan*Analyst
-New York|Director (*)|John*Director choose Paul*Janitor
-Paris|Analyst (*)|Dave*Analyst choose Magdalen*Double agent choose Nancy*HR
+Berlin|Field agent (*)|choose(Ellen*Field agent,Susan*Analyst)
+New York|Director (*)|choose(John*Director,Paul*Janitor)
+Paris|Analyst (*)|choose(Dave*Analyst,Magdalen*Double agent,Nancy*HR)
 (3 rows)

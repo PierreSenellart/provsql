@@ -3,6 +3,7 @@
 
 #include <numeric>
 #include <vector>
+#include <stdexcept>
 
 #include "Semiring.h"
 
@@ -53,24 +54,26 @@ virtual value_type cmp(value_type x, ComparisonOperator op, value_type y) const 
 virtual value_type agg(AggregationOperator op, const std::vector<value_type> &v) override {
   if (v.empty()) {
     switch (op) {
+    case AggregationOperator::COUNT:  return zero();
     case AggregationOperator::SUM:  return zero();
-    case AggregationOperator::PROD: return one();
     case AggregationOperator::MIN:  return std::numeric_limits<value_type>::max();
     case AggregationOperator::MAX:  return std::numeric_limits<value_type>::min();
     case AggregationOperator::CHOOSE: return zero();
+    default: throw std::runtime_error("Aggregation not supported");
     }
   }
   switch (op) {
+  case AggregationOperator::COUNT:
   case AggregationOperator::SUM:
     return plus(v);
-  case AggregationOperator::PROD:
-    return times(v);
   case AggregationOperator::MIN:
     return *std::min_element(v.begin(), v.end());
   case AggregationOperator::MAX:
     return *std::max_element(v.begin(), v.end());
   case AggregationOperator::CHOOSE:
     return v[0];
+  default:
+    throw std::runtime_error("Aggregation not supported");
   }
   return zero();
 }
