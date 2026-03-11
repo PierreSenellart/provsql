@@ -35,6 +35,7 @@
 PG_MODULE_MAGIC;
 
 bool provsql_interrupted = false;
+bool provsql_active = true;
 bool provsql_where_provenance = false;
 bool provsql_update_provenance = false;
 int provsql_verbose = 100;
@@ -1592,38 +1593,40 @@ static Query *process_query(const constants_t *constants, Query *q,
     return NULL;
   }
 
-  columns = (int **)palloc(q->rtable->length * sizeof(int *));
+  if(provsql_active) {
+    columns = (int **)palloc(q->rtable->length * sizeof(int *));
 
-  // ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
+    // ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
 
-  if (q->setOperations) {
-    // TODO: Nest set operations as subqueries in FROM,
-    // so that we only do set operations on base tables
+    if (q->setOperations) {
+      // TODO: Nest set operations as subqueries in FROM,
+      // so that we only do set operations on base tables
 
-    SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
-    if (!stmt->all) {
-      q = rewrite_non_all_into_external_group_by(q);
-      return process_query(constants, q, removed);
+      SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
+      if (!stmt->all) {
+        q = rewrite_non_all_into_external_group_by(q);
+        return process_query(constants, q, removed);
+      }
     }
-  }
 
-  if (q->hasAggs) {
-    Query *subq;
+    if (q->hasAggs) {
+      Query *subq;
 
-    subq = check_for_agg_distinct(q);
-    if (subq) // agg distinct detected, create a subquery
-    {
-      q = rewrite_for_agg_distinct(q, subq);
-      return process_query(constants, q, removed);
+      subq = check_for_agg_distinct(q);
+      if (subq) // agg distinct detected, create a subquery
+      {
+        q = rewrite_for_agg_distinct(q, subq);
+        return process_query(constants, q, removed);
+      }
     }
+
+    // get_provenance_attributes will also recursively process subqueries
+    // by calling process_query
+    prov_atts = get_provenance_attributes(constants, q);
+
+    if (prov_atts == NIL)
+      return q;
   }
-
-  // get_provenance_attributes will also recursively process subqueries
-  // by calling process_query
-  prov_atts = get_provenance_attributes(constants, q);
-
-  if (prov_atts == NIL)
-    return q;
 
   {
     Bitmapset *removed_sortgrouprefs = NULL;
@@ -1638,195 +1641,197 @@ static Query *process_query(const constants_t *constants, Query *q,
     }
   }
 
-  if (q->hasSubLinks) {
-    ereport(ERROR,
-            (errmsg("Subqueries in WHERE clause not supported by provsql")));
-    supported = false;
-  }
-
-  if (supported && q->distinctClause) {
-    if (q->hasDistinctOn) {
-      ereport(ERROR, (errmsg("DISTINCT ON not supported by provsql")));
+  if(provsql_active) {
+    if (q->hasSubLinks) {
+      ereport(ERROR,
+              (errmsg("Subqueries in WHERE clause not supported by provsql")));
       supported = false;
-    } else if (list_length(q->distinctClause) < list_length(q->targetList)) {
-      ereport(ERROR, (errmsg("Inconsistent DISTINCT and GROUP BY clauses not "
-                             "supported by provsql")));
-      supported = false;
-    } else {
-      transform_distinct_into_group_by(q);
     }
-  }
 
-  if (supported && q->setOperations) {
-    SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
-
-    if (stmt->op == SETOP_UNION) {
-      process_set_operation_union(constants, stmt);
-      has_union = true;
-    } else if (stmt->op == SETOP_EXCEPT) {
-      if (!transform_except_into_join(constants, q))
+    if (supported && q->distinctClause) {
+      if (q->hasDistinctOn) {
+        ereport(ERROR, (errmsg("DISTINCT ON not supported by provsql")));
         supported = false;
-      has_difference = true;
-    } else {
-      ereport(ERROR, (errmsg("Set operations other than UNION and EXCEPT not "
-                             "supported by provsql")));
-      supported = false;
+      } else if (list_length(q->distinctClause) < list_length(q->targetList)) {
+        ereport(ERROR, (errmsg("Inconsistent DISTINCT and GROUP BY clauses not "
+                              "supported by provsql")));
+        supported = false;
+      } else {
+        transform_distinct_into_group_by(q);
+      }
     }
-  }
 
-  if (supported && q->groupClause &&
-      !provenance_function_in_group_by(constants, q)) {
-    group_by_rewrite = true;
-  }
+    if (supported && q->setOperations) {
+      SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
 
-  if (supported && q->groupingSets) {
-    if (q->groupClause || list_length(q->groupingSets) > 1 ||
-        ((GroupingSet *)linitial(q->groupingSets))->kind !=
-        GROUPING_SET_EMPTY) {
-      ereport(
-        ERROR,
-        (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql")));
-      supported = false;
-    } else {
-      // Simple GROUP BY ()
+      if (stmt->op == SETOP_UNION) {
+        process_set_operation_union(constants, stmt);
+        has_union = true;
+      } else if (stmt->op == SETOP_EXCEPT) {
+        if (!transform_except_into_join(constants, q))
+          supported = false;
+        has_difference = true;
+      } else {
+        ereport(ERROR, (errmsg("Set operations other than UNION and EXCEPT not "
+                              "supported by provsql")));
+        supported = false;
+      }
+    }
+
+    if (supported && q->groupClause &&
+        !provenance_function_in_group_by(constants, q)) {
       group_by_rewrite = true;
     }
-  }
 
-  if (supported) {
-    ListCell *l;
+    if (supported && q->groupingSets) {
+      if (q->groupClause || list_length(q->groupingSets) > 1 ||
+          ((GroupingSet *)linitial(q->groupingSets))->kind !=
+          GROUPING_SET_EMPTY) {
+        ereport(
+          ERROR,
+          (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql")));
+        supported = false;
+      } else {
+        // Simple GROUP BY ()
+        group_by_rewrite = true;
+      }
+    }
 
-    foreach (l, q->rtable) {
-      RangeTblEntry *r = (RangeTblEntry *)lfirst(l);
-      ListCell *lc;
+    if (supported) {
+      ListCell *l;
 
-      columns[i] = 0;
-      if (r->eref) {
-        unsigned j = 0;
+      foreach (l, q->rtable) {
+        RangeTblEntry *r = (RangeTblEntry *)lfirst(l);
+        ListCell *lc;
 
-        columns[i] = (int *)palloc(r->eref->colnames->length * sizeof(int));
+        columns[i] = 0;
+        if (r->eref) {
+          unsigned j = 0;
 
-        foreach (lc, r->eref->colnames) {
-          if(!lfirst(lc)) {
-            // Column without names are used for instance when grouping
-            // by a discarded column
-            columns[i][j] = ++nbcols;
-          } else {
-            const char *v = strVal(lfirst(lc));
+          columns[i] = (int *)palloc(r->eref->colnames->length * sizeof(int));
 
-            if (strcmp(v, "") && r->rtekind != RTE_JOIN) { // join RTE columns ignored
-              if (!strcmp(v, PROVSQL_COLUMN_NAME))
-                columns[i][j] = -1;
-              else
-                columns[i][j] = ++nbcols;
+          foreach (lc, r->eref->colnames) {
+            if(!lfirst(lc)) {
+              // Column without names are used for instance when grouping
+              // by a discarded column
+              columns[i][j] = ++nbcols;
             } else {
-              columns[i][j] = 0;
-            }
-          }
+              const char *v = strVal(lfirst(lc));
 
-          ++j;
-        }
-      }
-
-      ++i;
-    }
-  }
-
-  if (supported) {
-    Expr *provenance;
-
-    if (q->hasAggs) {
-      ListCell *lc_sort;
-
-      // Compute aggregation expressions
-      replace_aggregations_by_provenance_aggregate(
-        constants, q, prov_atts,
-        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
-
-      // If there are any sort clauses on something whose type is now
-      // aggregate token, we throw an error: sorting aggregation values
-      // when provenance is captured is ill-defined
-      foreach (lc_sort, q->sortClause) {
-        SortGroupClause *sort = (SortGroupClause *)lfirst(lc_sort);
-        ListCell *lc_te;
-        foreach (lc_te, q->targetList) {
-          TargetEntry *te = (TargetEntry *)lfirst(lc_te);
-          if (sort->tleSortGroupRef == te->ressortgroupref) {
-            if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
-              elog(ERROR, "ORDER BY on the result of an aggregate function is "
-                   "not supported by ProvSQL");
-            break;
-          }
-        }
-      }
-    }
-
-    // Replace WHERE on aggregate tokens by HAVING clauses
-    if(q->jointree && q->jointree->quals) {
-      // Check whether the WHERE expression contains an aggregate token
-      if(has_aggtoken(q->jointree->quals, constants)) {
-        if(!IsA(q->jointree->quals, OpExpr) &&
-           !(IsA(q->jointree->quals, BoolExpr) && ((BoolExpr*)q->jointree->quals)->boolop == AND_EXPR)) {
-          elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
-        }
-
-        if(IsA(q->jointree->quals, OpExpr)) {
-          OpExpr *op = (OpExpr *)q->jointree->quals;
-
-          if(check_selection_on_aggregate(op, constants)) {
-            // Everything ok, remove this qualifier and store in op
-            // the OpExpr to put in the havingQual
-            q->jointree->quals = NULL;
-            q->havingQual = add_to_havingQual(q->havingQual, op);
-          } else
-            elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
-        } else { // AND BoolExpr according to previous test
-          BoolExpr *be = (BoolExpr*) q->jointree->quals;
-          ListCell *cell, *prev;
-
-          for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
-            if(has_aggtoken(lfirst(cell), constants)) {
-              if(!IsA(lfirst(cell), OpExpr)) {
-                elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+              if (strcmp(v, "") && r->rtekind != RTE_JOIN) { // join RTE columns ignored
+                if (!strcmp(v, PROVSQL_COLUMN_NAME))
+                  columns[i][j] = -1;
+                else
+                  columns[i][j] = ++nbcols;
               } else {
-                OpExpr *op =(OpExpr *) lfirst(cell);
-
-                if(check_selection_on_aggregate(op, constants)) {
-                  my_list_delete_cell(be->args, cell, prev);
-                  if (prev)
-                    cell = my_lnext(be->args, prev);
-                  else
-                    cell = list_head(be->args);
-
-                  q->havingQual = add_to_havingQual(q->havingQual, op);
-                } else {
-                  elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
-                }
+                columns[i][j] = 0;
               }
-            } else {
-              prev = cell;
-              cell = my_lnext(be->args, cell);
+            }
+
+            ++j;
+          }
+        }
+
+        ++i;
+      }
+    }
+
+    if (supported) {
+      Expr *provenance;
+
+      if (q->hasAggs) {
+        ListCell *lc_sort;
+
+        // Compute aggregation expressions
+        replace_aggregations_by_provenance_aggregate(
+          constants, q, prov_atts,
+          has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
+
+        // If there are any sort clauses on something whose type is now
+        // aggregate token, we throw an error: sorting aggregation values
+        // when provenance is captured is ill-defined
+        foreach (lc_sort, q->sortClause) {
+          SortGroupClause *sort = (SortGroupClause *)lfirst(lc_sort);
+          ListCell *lc_te;
+          foreach (lc_te, q->targetList) {
+            TargetEntry *te = (TargetEntry *)lfirst(lc_te);
+            if (sort->tleSortGroupRef == te->ressortgroupref) {
+              if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
+                elog(ERROR, "ORDER BY on the result of an aggregate function is "
+                    "not supported by ProvSQL");
+              break;
             }
           }
         }
       }
+
+      // Replace WHERE on aggregate tokens by HAVING clauses
+      if(q->jointree && q->jointree->quals) {
+        // Check whether the WHERE expression contains an aggregate token
+        if(has_aggtoken(q->jointree->quals, constants)) {
+          if(!IsA(q->jointree->quals, OpExpr) &&
+            !(IsA(q->jointree->quals, BoolExpr) && ((BoolExpr*)q->jointree->quals)->boolop == AND_EXPR)) {
+            elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+          }
+
+          if(IsA(q->jointree->quals, OpExpr)) {
+            OpExpr *op = (OpExpr *)q->jointree->quals;
+
+            if(check_selection_on_aggregate(op, constants)) {
+              // Everything ok, remove this qualifier and store in op
+              // the OpExpr to put in the havingQual
+              q->jointree->quals = NULL;
+              q->havingQual = add_to_havingQual(q->havingQual, op);
+            } else
+              elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+          } else { // AND BoolExpr according to previous test
+            BoolExpr *be = (BoolExpr*) q->jointree->quals;
+            ListCell *cell, *prev;
+
+            for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
+              if(has_aggtoken(lfirst(cell), constants)) {
+                if(!IsA(lfirst(cell), OpExpr)) {
+                  elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+                } else {
+                  OpExpr *op =(OpExpr *) lfirst(cell);
+
+                  if(check_selection_on_aggregate(op, constants)) {
+                    my_list_delete_cell(be->args, cell, prev);
+                    if (prev)
+                      cell = my_lnext(be->args, prev);
+                    else
+                      cell = list_head(be->args);
+
+                    q->havingQual = add_to_havingQual(q->havingQual, op);
+                  } else {
+                    elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+                  }
+                }
+              } else {
+                prev = cell;
+                cell = my_lnext(be->args, cell);
+              }
+            }
+          }
+        }
+      }
+
+      provenance = make_provenance_expression(
+        constants, q, prov_atts, q->hasAggs, group_by_rewrite,
+        has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
+        nbcols);
+
+      add_to_select(q, provenance);
+      replace_provenance_function_by_expression(constants, q, provenance);
+
+      if (has_difference)
+        add_select_non_zero(constants, q, provenance);
     }
 
-    provenance = make_provenance_expression(
-      constants, q, prov_atts, q->hasAggs, group_by_rewrite,
-      has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
-      nbcols);
-
-    add_to_select(q, provenance);
-    replace_provenance_function_by_expression(constants, q, provenance);
-
-    if (has_difference)
-      add_select_non_zero(constants, q, provenance);
-  }
-
-  for (i = 0; i < q->rtable->length; ++i) {
-    if (columns[i])
-      pfree(columns[i]);
+    for (i = 0; i < q->rtable->length; ++i) {
+      if (columns[i])
+        pfree(columns[i]);
+    }
   }
 
   if (provsql_verbose >= 50)
@@ -1878,6 +1883,16 @@ void _PG_init(void) {
     elog(ERROR, "provsql needs to be added to the shared_preload_libraries "
          "configuration variable");
 
+  DefineCustomBoolVariable("provsql.active",
+                           "Should ProvSQL track provenance?",
+                           "1 is standard ProvSQL behavior, 0 means provsql attributes will be dropped.",
+                           &provsql_active,
+                           true,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
   DefineCustomBoolVariable("provsql.where_provenance",
                            "Should ProvSQL track where-provenance?",
                            "1 turns where-provenance on, 0 off.",
