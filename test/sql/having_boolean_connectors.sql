@@ -4,7 +4,7 @@ SET search_path TO provsql_test,provsql;
 
 CREATE TABLE result_having_boolean_connectors AS SELECT
   city,
-  probability_evaluate(provenance())
+  ROUND(probability_evaluate(provenance())::numeric, 2) AS prob
 FROM personnel
 GROUP BY city
 HAVING COUNT(*) >=1 AND COUNT(*) <= 2;
@@ -16,7 +16,7 @@ ORDER BY city;
 DROP TABLE result_having_boolean_connectors;
 CREATE TABLE result_having_boolean_connectors AS SELECT
   city,
-  probability_evaluate(provenance())
+  ROUND(probability_evaluate(provenance())::numeric, 2) AS prob
 FROM personnel
 GROUP BY city
 HAVING NOT(COUNT(*) = 0 OR COUNT(*) > 2);
