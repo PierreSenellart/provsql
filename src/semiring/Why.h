@@ -63,7 +63,7 @@ virtual value_type monus(value_type x, value_type y) const override {
 }
 
 value_type delta(value_type x) const override {
-  return x.empty() ? zero() : one();
+  return x.empty() ? zero() : x;
 }
 
 };

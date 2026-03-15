@@ -359,7 +359,7 @@ DECLARE
   eq_token uuid;
   rec record;
 BEGIN
-  eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat('project',token,pos1,',',pos2));
+  eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat('eq',token,pos1,',',pos2));
 
   PERFORM create_gate(eq_token, 'eq', ARRAY[token::uuid]);
   PERFORM set_infos(eq_token, pos1, pos2);
