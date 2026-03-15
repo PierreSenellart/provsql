@@ -28,30 +28,51 @@ ORDER BY city;
 DROP TABLE result_having_boolean_connectors;
 CREATE TABLE result_having_boolean_connectors AS SELECT
   city,
-  COUNT(*),
+  COUNT(*) AS c,
   sr_formula(provenance(), 'personnel_name') AS formula,
-  sr_counting(provenance(), 'personnel_count') AS counting
+  sr_counting(provenance(), 'personnel_count') AS counting,
+  probability_evaluate(provenance()) AS prob
 FROM personnel
 GROUP BY city
 HAVING COUNT(*) > 2 OR COUNT(*) = 1;
 
 SELECT remove_provenance('result_having_boolean_connectors');
-SELECT * FROM result_having_boolean_connectors
+SELECT city, c, formula, counting, ROUND(prob::NUMERIC, 2)
+FROM result_having_boolean_connectors
 ORDER BY city;
 
 DROP TABLE result_having_boolean_connectors;
 
 CREATE TABLE result_having_boolean_connectors AS SELECT
   city,
-  COUNT(*),
+  COUNT(*) AS c,
   sr_formula(provenance(), 'personnel_name') AS formula,
-  sr_counting(provenance(), 'personnel_count') AS counting
+  sr_counting(provenance(), 'personnel_count') AS counting,
+  probability_evaluate(provenance()) AS prob
 FROM personnel
 GROUP BY city
 HAVING NOT(NOT(COUNT(*) > 2) AND COUNT(*) <> 1);
 
 SELECT remove_provenance('result_having_boolean_connectors');
-SELECT * FROM result_having_boolean_connectors
+SELECT city, c, formula, counting, ROUND(prob::NUMERIC, 2)
+FROM result_having_boolean_connectors
 ORDER BY city;
 
+DROP TABLE result_having_boolean_connectors;
+
+CREATE TABLE result_having_boolean_connectors AS
+SELECT
+  city,
+  c,
+  sr_formula(provenance(), 'personnel_name') AS formula,
+  sr_counting(provenance(), 'personnel_count') AS counting,
+  probability_evaluate(provenance()) AS prob FROM (
+    SELECT city, COUNT(*) AS c FROM personnel GROUP BY city
+  ) AS t
+WHERE c>2 OR c=1;
+
+SELECT remove_provenance('result_having_boolean_connectors');
+SELECT city, c, formula, counting, ROUND(prob::NUMERIC, 2)
+FROM result_having_boolean_connectors
+ORDER BY city;
 DROP TABLE result_having_boolean_connectors;

@@ -1496,22 +1496,20 @@ static void add_select_non_zero(const constants_t *constants, Query *q,
     q->jointree->quals = (Node *)oe;
 }
 
-static Node *add_to_havingQual(Node *havingQual, OpExpr *op)
+static Node *add_to_havingQual(Node *havingQual, Expr *expr)
 {
-  // Check whether the current HAVING expression, if any, is one we
-  // know how to handle
   if(!havingQual) {
-    havingQual = (Node*) op;
-  } else if(IsA(havingQual, OpExpr)) {
+    havingQual = (Node*) expr;
+  } else if(IsA(havingQual, BoolExpr) && ((BoolExpr*)havingQual)->boolop==AND_EXPR) {
+    BoolExpr *be = (BoolExpr*)havingQual;
+    be->args = lappend(be->args, expr);
+  } else if(IsA(havingQual, OpExpr) || IsA(havingQual, BoolExpr)) {
     BoolExpr *expr = makeNode(BoolExpr);
     expr->boolop=AND_EXPR;
     expr->location=-1;
-    expr->args = list_make2(havingQual, op);
-  } else if(IsA(havingQual, BoolExpr) && ((BoolExpr*)havingQual)->boolop==AND_EXPR) {
-    BoolExpr *be = (BoolExpr*)havingQual;
-    be->args = lappend(be->args, op);
-  } else {
-    elog(ERROR, "Combination of selection on aggregation result and complex HAVING expression not supported by ProvSQL");
+    expr->args = list_make2(havingQual, expr);
+  } else if(IsA(havingQual, BoolExpr)) {
+    elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
   }
 
   return havingQual;
@@ -1520,6 +1518,7 @@ static Node *add_to_havingQual(Node *havingQual, OpExpr *op)
 static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constants)
 {
   bool ok=true;
+  bool found_agg_token=false;
 
   if(op->args->length != 2)
     return false;
@@ -1530,6 +1529,7 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
     // Check both arguments are either an aggtoken or a constant
     // (possibly after a cast)
     if((IsA(arg, Var) && ((Var*)arg)->vartype==constants->OID_TYPE_AGG_TOKEN)) {
+      found_agg_token=true;
     } else if(IsA(arg, Const)) {
     } else if(IsA(arg, FuncExpr)) {
       FuncExpr *fe = (FuncExpr*) arg;
@@ -1551,7 +1551,26 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
     }
   }
 
-  return ok;
+  return ok && found_agg_token;
+}
+
+static bool check_boolexpr_on_aggregate(BoolExpr *op, const constants_t *constants)
+{
+  ListCell *lc;
+
+  foreach (lc, op->args) {
+    Node *n=lfirst(lc);
+    if(IsA(n, OpExpr)) {
+      if(!check_selection_on_aggregate((OpExpr*) n, constants))
+        return false;
+    } else if(IsA(n, BoolExpr)) {
+      if(!check_boolexpr_on_aggregate((BoolExpr*) n, constants))
+        return false;
+    } else
+      return false;
+  }
+
+  return true;
 }
 
 static Query *process_query(const constants_t *constants, Query *q,
@@ -1570,6 +1589,19 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (q->rtable == NULL) {
     // No FROM clause, we can skip this query
     return NULL;
+  }
+
+  {
+    Bitmapset *removed_sortgrouprefs = NULL;
+
+    if (q->targetList) {
+      removed_sortgrouprefs =
+        remove_provenance_attributes_select(constants, q, removed);
+      if (removed_sortgrouprefs != NULL)
+        remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
+      if (q->setOperations)
+        remove_provenance_attribute_setoperations(q, *removed);
+    }
   }
 
   if(provsql_active) {
@@ -1605,22 +1637,7 @@ static Query *process_query(const constants_t *constants, Query *q,
 
     if (prov_atts == NIL)
       return q;
-  }
 
-  {
-    Bitmapset *removed_sortgrouprefs = NULL;
-
-    if (q->targetList) {
-      removed_sortgrouprefs =
-        remove_provenance_attributes_select(constants, q, removed);
-      if (removed_sortgrouprefs != NULL)
-        remove_provenance_attribute_groupref(q, removed_sortgrouprefs);
-      if (q->setOperations)
-        remove_provenance_attribute_setoperations(q, *removed);
-    }
-  }
-
-  if(provsql_active) {
     if (q->hasSubLinks) {
       ereport(ERROR,
               (errmsg("Subqueries in WHERE clause not supported by provsql")));
@@ -1748,30 +1765,53 @@ static Query *process_query(const constants_t *constants, Query *q,
       if(q->jointree && q->jointree->quals) {
         // Check whether the WHERE expression contains an aggregate token
         if(has_aggtoken(q->jointree->quals, constants)) {
-          if(!IsA(q->jointree->quals, OpExpr) &&
-            !(IsA(q->jointree->quals, BoolExpr) && ((BoolExpr*)q->jointree->quals)->boolop == AND_EXPR)) {
-            elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
-          }
+          // We support the following forms for this WHERE clause:
+          // (1) a simple OpExpr
+          // (2) an AND_EXPR BoolExpr where every conjunct that includes an
+          // aggtoken is a simple OpExpr
+          // (3) an arbitrary BoolExpr where every OpExpr involves an
+          // aggtoken
+          // And every OpExpr needs to be of a form we know how to
+          // handle, as indicated by check_selection_on_aggregate
+          // Other forms, such as "WHERE a=1 OR c>3" with a a regular
+          // attribute and c the result of an aggregation, are not supported.
 
           if(IsA(q->jointree->quals, OpExpr)) {
-            OpExpr *op = (OpExpr *)q->jointree->quals;
-
-            if(check_selection_on_aggregate(op, constants)) {
-              // Everything ok, remove this qualifier and store in op
-              // the OpExpr to put in the havingQual
+            // Case (1)
+            if(check_selection_on_aggregate((OpExpr*) q->jointree->quals, constants)) {
+              // Everything ok, remove this qualifier put it in havingQual
+              q->havingQual = add_to_havingQual(q->havingQual, (Expr*) q->jointree->quals);
               q->jointree->quals = NULL;
-              q->havingQual = add_to_havingQual(q->havingQual, op);
             } else
               elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
-          } else { // AND BoolExpr according to previous test
+          } else if(IsA(q->jointree->quals, BoolExpr)) {
+            // We need to distinguish between the two other cases we handle. If
+            // we have an AND_EXPR, we first try the case (2).
             BoolExpr *be = (BoolExpr*) q->jointree->quals;
-            ListCell *cell, *prev;
+            bool flat_and = true; // If true, we are in the case (2)
 
-            for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
-              if(has_aggtoken(lfirst(cell), constants)) {
-                if(!IsA(lfirst(cell), OpExpr)) {
-                  elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
-                } else {
+            if(be->boolop == AND_EXPR) {
+              ListCell *lc;
+
+              foreach (lc, be->args) {
+                Node *n = (Node*) lfirst(lc);
+                if(has_aggtoken(n, constants)) {
+                  if(!IsA(n, OpExpr)) {
+                    flat_and = false;
+                    break;
+                  }
+                }
+              }
+            } else
+              flat_and = false;
+
+            if(flat_and) {
+              // Case (2): we extract from the conjunction the conditions
+              // on aggtoken to put them in havingQual
+              ListCell *cell, *prev;
+              for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
+                if(has_aggtoken(lfirst(cell), constants)) {
+                  // We already checked we had an OpExpr
                   OpExpr *op =(OpExpr *) lfirst(cell);
 
                   if(check_selection_on_aggregate(op, constants)) {
@@ -1781,16 +1821,25 @@ static Query *process_query(const constants_t *constants, Query *q,
                     else
                       cell = list_head(be->args);
 
-                    q->havingQual = add_to_havingQual(q->havingQual, op);
+                    q->havingQual = add_to_havingQual(q->havingQual, (Expr*) op);
                   } else {
                     elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
                   }
+                } else {
+                  prev = cell;
+                  cell = my_lnext(be->args, cell);
                 }
-              } else {
-                prev = cell;
-                cell = my_lnext(be->args, cell);
+              }
+            } else {
+              // Case (3): we check whether the BoolExpr has only
+              // aggtoken inside, if so we proceed as in Case (1)
+              if(check_boolexpr_on_aggregate(be, constants)) {
+                q->havingQual = add_to_havingQual(q->havingQual, (Expr*) q->jointree->quals);
+                q->jointree->quals = NULL;
               }
             }
+          } else {
+            elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
           }
         }
       }
