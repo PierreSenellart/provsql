@@ -31,7 +31,9 @@ test: viewing_setup
 
 # Probability computation using internal methods
 test: possible_worlds monte_carlo
-test: sr_boolexpr probability_having probability_having_avg_min_max
+
+# Complex test relying on probabilities
+test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors
 
 # Probability computation using external software
 test: d4 dsharp weightmc c2d
@@ -57,9 +59,6 @@ test: where_provenance
 
 # Full example from tutorial
 test: tutorial
-
-# Unsupported non-terminal aggregation (on tutorial database)
-test: unsupported_aggregation
 
 # Grouping
 test: group_by_empty

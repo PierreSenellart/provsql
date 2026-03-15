@@ -551,10 +551,13 @@ static Expr *make_aggregation_expression(const constants_t *constants,
   return result;
 }
 
-static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants_t *constants) {
+static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *constants, bool negated);
+
+static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants_t *constants, bool negated) {
   FuncExpr *cmpExpr;
   Node *arguments[2];
   Const *oid;
+  Oid opno = opExpr->opno;
 
   for (unsigned i = 0; i < 2; ++i) {
     Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
@@ -623,8 +626,14 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
     }
   }
 
+  if(negated) {
+    opno = get_negator(opno);
+    if(!opno)
+      elog(ERROR, "ProvSQL: Missing negator");
+  }
+
   oid = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
-      Int32GetDatum(opExpr->opno), false, true);
+      Int32GetDatum(opno), false, true);
 
   cmpExpr = makeNode(FuncExpr);
   cmpExpr->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
@@ -635,49 +644,53 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
   return cmpExpr;
 }
 
-static FuncExpr *having_BoolExpr_to_provenance(BoolExpr *be, const constants_t *constants) {
-  FuncExpr *result;
-  List *l=NULL;
-  ListCell *lc;
-  ArrayExpr *array = makeNode(ArrayExpr);
+static FuncExpr *having_BoolExpr_to_provenance(BoolExpr *be, const constants_t *constants, bool negated) {
+  if(be->boolop == NOT_EXPR) {
+    Expr *expr = (Expr *) lfirst(list_head(be->args));
+    return having_Expr_to_provenance_cmp(expr, constants, !negated);
+  } else {
+    FuncExpr *result;
+    List *l=NULL;
+    ListCell *lc;
+    ArrayExpr *array = makeNode(ArrayExpr);
 
-  array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-  array->element_typeid = constants->OID_TYPE_UUID;
-  array->location = -1;
+    array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+    array->element_typeid = constants->OID_TYPE_UUID;
+    array->location = -1;
 
-  result=makeNode(FuncExpr);
-  result->funcresulttype = constants->OID_TYPE_UUID;
-  result->funcvariadic = true;
-  result->location = be->location;
-  result->args = list_make1(array);
+    result=makeNode(FuncExpr);
+    result->funcresulttype = constants->OID_TYPE_UUID;
+    result->funcvariadic = true;
+    result->location = be->location;
+    result->args = list_make1(array);
 
-  switch(be->boolop) {
-    case AND_EXPR:
+    if((be->boolop == AND_EXPR && !negated) || (be->boolop == OR_EXPR && negated))
       result->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-      break;
-    case OR_EXPR:
+    else if((be->boolop == AND_EXPR && negated) || (be->boolop == OR_EXPR && !negated))
       result->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
-      break;
-    default:
-      elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
-  }
-
-  foreach (lc, be->args) {
-    Node *a=lfirst(lc);
-    FuncExpr *arg;
-    if(IsA(a, BoolExpr))
-      arg = having_BoolExpr_to_provenance((BoolExpr*) a, constants);
-    else if(IsA(a, OpExpr))
-      arg = having_OpExpr_to_provenance_cmp((OpExpr*) a, constants);
     else
-      elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+      elog(ERROR, "ProvSQL: Unknown Boolean operator");
 
-    l=lappend(l, arg);
+    foreach (lc, be->args) {
+      Expr *expr= (Expr *) lfirst(lc);
+      FuncExpr *arg = having_Expr_to_provenance_cmp(expr, constants, negated);
+      l=lappend(l, arg);
+    }
+
+    array->elements = l;
+
+    return result;
   }
+}
 
-  array->elements = l;
-
-  return result;
+static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *constants, bool negated)
+{
+  if(IsA(expr, BoolExpr))
+    return having_BoolExpr_to_provenance((BoolExpr*) expr, constants, negated);
+  else if(IsA(expr, OpExpr))
+    return having_OpExpr_to_provenance_cmp((OpExpr *) expr, constants, negated);
+  else
+    elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
 }
 
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
@@ -759,41 +772,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     }
 
     if (q->havingQual) {
-      FuncExpr *havingExpr;
-
-      if(IsA(q->havingQual, OpExpr))
-        havingExpr=having_OpExpr_to_provenance_cmp((OpExpr*)q->havingQual, constants);
-      else if(IsA(q->havingQual, BoolExpr))
-        havingExpr=having_BoolExpr_to_provenance((BoolExpr*)q->havingQual, constants);
-      else
-        elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
-
-      result = (Expr*) havingExpr;
-/*
-      if(havingExpr->funcid == constants->OID_FUNCTION_PROVENANCE_TIMES) {
-        ArrayExpr *arr = (ArrayExpr*) lfirst(list_head(havingExpr->args));
-        arr->elements = lcons(result, arr->elements);
-        result = (Expr*) havingExpr;
-      } else {
-        FuncExpr *timesExpr;
-        ArrayExpr *arr;
-
-        arr = makeNode(ArrayExpr);
-        arr->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-        arr->element_typeid = constants->OID_TYPE_UUID;
-        arr->location = -1;
-        arr->elements = list_make2((Node *)result, (Node *)havingExpr);
-
-        timesExpr = makeNode(FuncExpr);
-        timesExpr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-        timesExpr->funcvariadic = true;
-        timesExpr->funcresulttype = constants->OID_TYPE_UUID;
-        timesExpr->args = list_make1((Expr *)arr);
-        timesExpr->location = -1;
-
-        result = (Expr *) timesExpr;
-      }*/
-
+      result = (Expr*) having_Expr_to_provenance_cmp((Expr*)q->havingQual, constants, false);
       q->havingQual = NULL;
     }
   }

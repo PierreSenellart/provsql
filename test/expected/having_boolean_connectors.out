@@ -1,0 +1,33 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+city|probability_evaluate
+Berlin|0.82
+New York|0.28
+Paris|0.77
+(3 rows)
+remove_provenance
+
+(1 row)
+city|probability_evaluate
+Berlin|0.82
+New York|0.28
+Paris|0.77
+(3 rows)
+remove_provenance
+
+(1 row)
+city|count|formula|counting
+Berlin|2 (*)|((Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)))|0
+New York|2 (*)|((Paul ⊗ (𝟙 ⊖ John)) ⊕ (John ⊗ (𝟙 ⊖ Paul)))|0
+Paris|3 (*)|((Dave ⊗ Magdalen ⊗ Nancy) ⊕ ((Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy)))))|1
+(3 rows)
+remove_provenance
+
+(1 row)
+city|count|formula|counting
+Berlin|2 (*)|((Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)))|0
+New York|2 (*)|((Paul ⊗ (𝟙 ⊖ John)) ⊕ (John ⊗ (𝟙 ⊖ Paul)))|0
+Paris|3 (*)|((Dave ⊗ Magdalen ⊗ Nancy) ⊕ ((Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy)))))|1
+(3 rows)
