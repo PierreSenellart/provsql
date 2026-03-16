@@ -1555,11 +1555,11 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
   return ok && found_agg_token;
 }
 
-static bool check_boolexpr_on_aggregate(BoolExpr *op, const constants_t *constants)
+static bool check_boolexpr_on_aggregate(BoolExpr *be, const constants_t *constants)
 {
   ListCell *lc;
 
-  foreach (lc, op->args) {
+  foreach (lc, be->args) {
     Node *n=lfirst(lc);
     if(IsA(n, OpExpr)) {
       if(!check_selection_on_aggregate((OpExpr*) n, constants))
@@ -1572,6 +1572,17 @@ static bool check_boolexpr_on_aggregate(BoolExpr *op, const constants_t *constan
   }
 
   return true;
+}
+
+static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
+  switch(expr->type) {
+    case T_BoolExpr:
+      return check_boolexpr_on_aggregate((BoolExpr*) expr, constants);
+    case T_OpExpr:
+      return check_selection_on_aggregate((OpExpr*) expr, constants);
+    default:
+      elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
+  }
 }
 
 static Query *process_query(const constants_t *constants, Query *q,
@@ -1766,63 +1777,36 @@ static Query *process_query(const constants_t *constants, Query *q,
       if(q->jointree && q->jointree->quals) {
         // Check whether the WHERE expression contains an aggregate token
         if(has_aggtoken(q->jointree->quals, constants)) {
-          // We support the following forms for this WHERE clause:
-          // (1) a simple OpExpr
-          // (2) an AND_EXPR BoolExpr where every conjunct that includes an
-          // aggtoken is a simple OpExpr
-          // (3) an arbitrary BoolExpr where every OpExpr involves an
-          // aggtoken
-          // And every OpExpr needs to be of a form we know how to
-          // handle, as indicated by check_selection_on_aggregate
-          // Other forms, such as "WHERE a=1 OR c>3" with a a regular
+          // We support WHERE clause that are (possibly trivial) AND conjunctions of either
+          // - conditions that do not mention aggregates
+          // - arbitrary Boolean combinations of conjunctions that all
+          // refer to aggregates, and that we know how to process (as
+          // indicated by check_selection_on_aggregate).
+          // The former are kept in the WHERE, the latter put in the
+          // HAVING clause for further processing.
+          // Other forms, such as "WHERE x=1 OR c>3" with x a regular
           // attribute and c the result of an aggregation, are not supported.
 
-          if(IsA(q->jointree->quals, OpExpr)) {
-            // Case (1)
-            if(check_selection_on_aggregate((OpExpr*) q->jointree->quals, constants)) {
-              // Everything ok, remove this qualifier put it in havingQual
-              q->havingQual = add_to_havingQual(q->havingQual, (Expr*) q->jointree->quals);
-              q->jointree->quals = NULL;
-            } else
-              elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+          if(check_expr_on_aggregate((Expr*) q->jointree->quals, constants)) {
+            // Everything ok, remove this qualifier put it in havingQual
+            q->havingQual = add_to_havingQual(q->havingQual, (Expr*) q->jointree->quals);
+            q->jointree->quals = NULL;
           } else if(IsA(q->jointree->quals, BoolExpr)) {
-            // We need to distinguish between the two other cases we handle. If
-            // we have an AND_EXPR, we first try the case (2).
             BoolExpr *be = (BoolExpr*) q->jointree->quals;
-            bool flat_and = true; // If true, we are in the case (2)
-
             if(be->boolop == AND_EXPR) {
-              ListCell *lc;
-
-              foreach (lc, be->args) {
-                Node *n = (Node*) lfirst(lc);
-                if(has_aggtoken(n, constants)) {
-                  if(!IsA(n, OpExpr)) {
-                    flat_and = false;
-                    break;
-                  }
-                }
-              }
-            } else
-              flat_and = false;
-
-            if(flat_and) {
-              // Case (2): we extract from the conjunction the conditions
-              // on aggtoken to put them in havingQual
               ListCell *cell, *prev;
               for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
                 if(has_aggtoken(lfirst(cell), constants)) {
-                  // We already checked we had an OpExpr
-                  OpExpr *op =(OpExpr *) lfirst(cell);
+                  Expr *expr =(Expr *) lfirst(cell);
 
-                  if(check_selection_on_aggregate(op, constants)) {
+                  if(check_expr_on_aggregate(expr, constants)) {
                     be->args = my_list_delete_cell(be->args, cell, prev);
                     if (prev)
                       cell = my_lnext(be->args, prev);
                     else
                       cell = list_head(be->args);
 
-                    q->havingQual = add_to_havingQual(q->havingQual, (Expr*) op);
+                    q->havingQual = add_to_havingQual(q->havingQual, (Expr*) expr);
                   } else {
                     elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
                   }
@@ -1832,15 +1816,10 @@ static Query *process_query(const constants_t *constants, Query *q,
                 }
               }
             } else {
-              // Case (3): we check whether the BoolExpr has only
-              // aggtoken inside, if so we proceed as in Case (1)
-              if(check_boolexpr_on_aggregate(be, constants)) {
-                q->havingQual = add_to_havingQual(q->havingQual, (Expr*) q->jointree->quals);
-                q->jointree->quals = NULL;
-              }
+              elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
             }
           } else {
-            elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+            elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
           }
         }
       }
