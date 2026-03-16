@@ -1815,7 +1815,7 @@ static Query *process_query(const constants_t *constants, Query *q,
                   OpExpr *op =(OpExpr *) lfirst(cell);
 
                   if(check_selection_on_aggregate(op, constants)) {
-                    my_list_delete_cell(be->args, cell, prev);
+                    be->args = my_list_delete_cell(be->args, cell, prev);
                     if (prev)
                       cell = my_lnext(be->args, prev);
                     else
