@@ -1504,10 +1504,11 @@ static Node *add_to_havingQual(Node *havingQual, Expr *expr)
     BoolExpr *be = (BoolExpr*)havingQual;
     be->args = lappend(be->args, expr);
   } else if(IsA(havingQual, OpExpr) || IsA(havingQual, BoolExpr)) {
-    BoolExpr *expr = makeNode(BoolExpr);
-    expr->boolop=AND_EXPR;
-    expr->location=-1;
-    expr->args = list_make2(havingQual, expr);
+    BoolExpr *be = makeNode(BoolExpr);
+    be->boolop=AND_EXPR;
+    be->location=-1;
+    be->args = list_make2(havingQual, expr);
+    havingQual = (Node*) be;
   } else if(IsA(havingQual, BoolExpr)) {
     elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
   }
