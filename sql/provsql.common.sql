@@ -286,16 +286,19 @@ CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
 $$
 DECLARE
   times_token uuid;
+  filtered_tokens uuid[];
 BEGIN
+  SELECT array_agg(t) FROM unnest(tokens) t WHERE t IS NOT NULL AND t <> gate_one() INTO filtered_tokens;
+
   CASE array_length(tokens, 1)
     WHEN 0 THEN
       times_token:=gate_one();
     WHEN 1 THEN
-      times_token:=tokens[1];
+      times_token:=filtered_tokens[1];
     ELSE
-      times_token := uuid_generate_v5(uuid_ns_provsql(),concat('times',tokens));
+      times_token := uuid_generate_v5(uuid_ns_provsql(),concat('times',filtered_tokens));
 
-      PERFORM create_gate(times_token, 'times', ARRAY_AGG(t)) FROM UNNEST(tokens) AS t WHERE t IS NOT NULL;
+      PERFORM create_gate(times_token, 'times', ARRAY_AGG(t)) FROM UNNEST(filtered_tokens) AS t WHERE t IS NOT NULL;
   END CASE;
 
   RETURN times_token;
@@ -308,6 +311,10 @@ $$
 DECLARE
   monus_token uuid;
 BEGIN
+  IF token1 IS NULL THEN
+    RAISE EXCEPTION USING MESSAGE='provenance_monus is called with first argument NULL';
+  END IF;
+
   IF token2 IS NULL THEN
     -- Special semantics, because of a LEFT OUTER JOIN used by the
     -- difference operator: token2 NULL means there is no second argument
@@ -375,18 +382,22 @@ DECLARE
   plus_token uuid;
   filtered_tokens uuid[];
 BEGIN
-  c:=array_length(tokens, 1);
+  SELECT array_agg(t) FROM unnest(tokens) t
+  WHERE t IS NOT NULL AND t <> gate_zero()
+  INTO filtered_tokens;
+
+  c:=array_length(filtered_tokens, 1);
 
   IF c = 0 THEN
     plus_token := gate_zero();
   ELSIF c = 1 THEN
-    plus_token := tokens[1];
+    plus_token := filtered_tokens[1];
   ELSE
     plus_token := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('plus', tokens));
+      concat('plus', filtered_tokens));
 
-    PERFORM create_gate(plus_token, 'plus', tokens);
+    PERFORM create_gate(plus_token, 'plus', filtered_tokens);
   END IF;
 
   RETURN plus_token;
