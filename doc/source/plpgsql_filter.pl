@@ -28,6 +28,7 @@ s{
         $a =~ s/DEFAULT /= /;
     }
 
+    $return //= '';
     $return=~s/TABLE\(.*?\)/TABLE/g;
 
     "$return $function_name(" . join( ', ', @args ) . ");"
@@ -56,7 +57,12 @@ s{
 s{
   \$\$.*?\$\$\s+LANGUAGE.*?;
 }{
-}sigx;
+}sigxg;
+
+s{
+  \$\$.*?\$\$;
+}{
+}sigxg;
 
 s{
   CREATE\s+TYPE\s+([^\s]+)\s+AS\s+ENUM\((.*?)\);
@@ -108,6 +114,16 @@ s{
   my ($type, $members) = ($1, $2);
   $members =~ s/,/;/g;
   "struct $type \{ $members; \};";
+}sigxe;
+
+s{
+  CREATE\s+(?:OR\s+REPLACE\s+)?
+  AGGREGATE\s+
+  (\w+)\s*\(([^)]*)\)\s*
+  \([^)]*\);
+}{
+  my ($name, $args) = ($1, $2);
+  "void $name($args);"
 }sigxe;
 
 s{
