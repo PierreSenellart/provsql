@@ -1,3 +1,23 @@
+/**
+ * @file provsql.c
+ * @brief PostgreSQL planner hook for transparent provenance tracking.
+ *
+ * This file installs a @c planner_hook that intercepts every SELECT query
+ * and rewrites it to propagate a provenance circuit token (UUID) alongside
+ * normal result tuples.  The rewriting proceeds in three conceptual phases:
+ *
+ *  -# **Discovery** – scan the range table for relations/subqueries that
+ *     already carry a @c provsql UUID column (@c get_provenance_attributes).
+ *  -# **Expression building** – combine the discovered tokens according
+ *     to the semiring operation that corresponds to the SQL operator in use
+ *     (⊗ for joins, ⊕ for duplicate elimination, ⊖ for EXCEPT) and wrap
+ *     aggregations (@c make_provenance_expression,
+ *     @c make_aggregation_expression).
+ *  -# **Splice** – append the resulting provenance expression to the target
+ *     list and replace any explicit @c provenance() call in the query with
+ *     the computed expression (@c add_to_select,
+ *     @c replace_provenance_function_by_expression).
+ */
 #include "postgres.h"
 #include "fmgr.h"
 #include "miscadmin.h"
@@ -34,6 +54,10 @@
 
 PG_MODULE_MAGIC;
 
+/* -------------------------------------------------------------------------
+ * Global state & forward declarations
+ * ------------------------------------------------------------------------- */
+
 bool provsql_interrupted = false;
 bool provsql_active = true;
 bool provsql_where_provenance = false;
@@ -50,6 +74,24 @@ static planner_hook_type prev_planner = NULL;
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed);
 
+/* -------------------------------------------------------------------------
+ * Provenance attribute construction
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Build a Var node that references the provenance column of a relation.
+ *
+ * Creates a @c Var pointing to attribute @p attid of range-table entry
+ * @p relid, typed as UUID, and marks the column as selected in the
+ * permission bitmap so PostgreSQL grants access correctly.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Owning query (needed to update permission info on PG 16+).
+ * @param r          Range-table entry that owns the provenance column.
+ * @param relid      1-based index of @p r in @p q->rtable.
+ * @param attid      1-based attribute number of the provenance column in @p r.
+ * @return  A freshly allocated @c Var node.
+ */
 static Var *make_provenance_attribute(const constants_t *constants, Query *q,
                                       RangeTblEntry *r, Index relid,
                                       AttrNumber attid) {
@@ -86,6 +128,10 @@ static Var *make_provenance_attribute(const constants_t *constants, Query *q,
   return v;
 }
 
+/* -------------------------------------------------------------------------
+ * Helper mutators: attribute-number fixup and type patching
+ * ------------------------------------------------------------------------- */
+
 typedef struct reduce_varattno_mutator_context {
   Index varno;
   int *offset;
@@ -108,6 +154,18 @@ static Node *reduce_varattno_mutator(Node *node,
                                  (void *)context);
 }
 
+/**
+ * @brief Adjust Var attribute numbers in @p targetList after columns are removed.
+ *
+ * When provenance columns are stripped from a subquery's target list, the
+ * remaining columns shift left.  This function applies a pre-computed
+ * @p offset array (one entry per original column) to correct all @c Var
+ * nodes that reference range-table entry @p varno.
+ *
+ * @param targetList  Target list of the outer query to patch.
+ * @param varno       Range-table entry whose attribute numbers need fixing.
+ * @param offset      Cumulative shift per original attribute (negative or zero).
+ */
 static void reduce_varattno_by_offset(List *targetList, Index varno,
                                       int *offset) {
   ListCell *lc;
@@ -142,6 +200,19 @@ aggregation_type_mutator(Node *node,
                                  (void *)context);
 }
 
+/**
+ * @brief Retypes aggregation-result Vars in @p q from UUID to @c agg_token.
+ *
+ * After a subquery that contains @c provenance_aggregate is processed, its
+ * result type is @c agg_token rather than plain UUID.  This mutator walks
+ * the outer query and updates the type of every @c Var referencing that
+ * result column so that subsequent type-checking passes correctly.
+ *
+ * @param constants   Extension OID cache.
+ * @param q           Outer query to patch.
+ * @param rteid       Range-table index of the subquery in @p q.
+ * @param targetList  Target list of the subquery (to locate provenance_aggregate columns).
+ */
 static void fix_type_of_aggregation_result(const constants_t *constants,
                                            Query *q, Index rteid,
                                            List *targetList) {
@@ -165,6 +236,25 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
   }
 }
 
+/**
+ * @brief Collect all provenance Var nodes reachable from @p q's range table.
+ *
+ * Walks every RTE in @p q->rtable:
+ * - @c RTE_RELATION: looks for a column named @c provsql of type UUID.
+ * - @c RTE_SUBQUERY: recursively calls @c process_query and splices the
+ *   resulting provenance column back into the parent's column list, also
+ *   patching outer Var attribute numbers if inner columns were removed.
+ * - @c RTE_FUNCTION: handled when the function returns a single UUID column
+ *   named @c provsql.
+ * - @c RTE_JOIN / @c RTE_VALUES / @c RTE_GROUP: handled passively (the
+ *   underlying base-table RTEs supply the tokens).
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query whose range table is scanned (subquery RTEs are
+ *                   modified in place by the recursive call).
+ * @return  List of @c Var nodes, one per provenance source; @c NIL if the
+ *          query has no provenance-bearing relation.
+ */
 static List *get_provenance_attributes(const constants_t *constants, Query *q) {
   List *prov_atts = NIL;
   ListCell *l;
@@ -295,6 +385,26 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
   return prov_atts;
 }
 
+/* -------------------------------------------------------------------------
+ * Target-list surgery
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Strip provenance UUID columns from @p q's SELECT list.
+ *
+ * Scans the target list and removes every @c Var entry whose column name is
+ * @c provsql and whose type is UUID.  The remaining entries have their
+ * @c resno values decremented to fill the gaps.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to modify in place.
+ * @param removed    Out-param: allocated boolean array (length =
+ *                   original target list length) where @c true means the
+ *                   corresponding entry was removed.  The caller must
+ *                   @c pfree this array when done.
+ * @return  Bitmapset of @c ressortgroupref values whose entries were
+ *          removed (so the caller can clean up GROUP BY / ORDER BY).
+ */
 static Bitmapset *
 remove_provenance_attributes_select(const constants_t *constants, Query *q,
                                     bool **removed) {
@@ -354,17 +464,37 @@ remove_provenance_attributes_select(const constants_t *constants, Query *q,
   return ressortgrouprefs;
 }
 
+/**
+ * @brief Semiring operation used to combine provenance tokens.
+ *
+ * @c SR_TIMES corresponds to the multiplicative operation (joins, Cartesian
+ * products), @c SR_PLUS to the additive operation (duplicate elimination), and
+ * @c SR_MONUS to the monus / set-difference operation (EXCEPT).
+ */
 typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
 
-/* An OpExpr leads directly to an eq gate.
- * toExpr is the former expression for the provenance.
- * The function returns the new expression with toExpr
- * nested inside the call of the eq function.
+/* -------------------------------------------------------------------------
+ * Semiring expression builders
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Wrap @p toExpr in a @c provenance_eq gate if @p fromOpExpr is an
+ *        equality between two tracked columns.
  *
- * Note: this function can also be used to handle an OpExpr
- * coming from a WHERE expression. So we need to perform
- * more tests because not all OpExpr are used to express
- * a join in this case */
+ * Used for where-provenance: each equijoin condition (and some WHERE
+ * equalities) introduces an @c eq gate that records which attribute positions
+ * were compared.  Because this function is also called for WHERE predicates,
+ * it applies extra guards and silently returns @p toExpr unchanged when the
+ * expression does not match the expected shape (both sides must be @c Var
+ * nodes, possibly wrapped in a @c RelabelType).
+ *
+ * @param constants    Extension OID cache.
+ * @param fromOpExpr   The equality @c OpExpr to inspect.
+ * @param toExpr       Existing provenance expression to wrap.
+ * @param columns      Per-RTE column-numbering array.
+ * @return  @p toExpr wrapped in @c provenance_eq(toExpr, col1, col2), or
+ *          @p toExpr unchanged if the shape is unsupported.
+ */
 static Expr *add_eq_from_OpExpr_to_Expr(const constants_t *constants,
                                         OpExpr *fromOpExpr, Expr *toExpr,
                                         int **columns) {
@@ -422,11 +552,21 @@ static Expr *add_eq_from_OpExpr_to_Expr(const constants_t *constants,
   return toExpr;
 }
 
-/* This function handles a Quals node.
+/**
+ * @brief Walk a join-condition or WHERE quals node and add @c eq gates for
+ *        every equality it contains.
  *
- * Two cases are possible, one coming from JoinExpr and the other
- * directly from FromExpr.
- * */
+ * Dispatches to @c add_eq_from_OpExpr_to_Expr for simple @c OpExpr nodes
+ * and iterates over the arguments of an AND @c BoolExpr.  OR/NOT inside a
+ * join ON clause are rejected with an error.
+ *
+ * @param constants  Extension OID cache.
+ * @param quals      Root of the quals tree (@c OpExpr or @c BoolExpr), or
+ *                   @c NULL (in which case @p result is returned unchanged).
+ * @param result     Provenance expression to wrap.
+ * @param columns    Per-RTE column-numbering array.
+ * @return  Updated provenance expression with zero or more @c eq gates added.
+ */
 static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
                                        Node *quals, Expr *result,
                                        int **columns) {
@@ -459,6 +599,25 @@ static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
   return result;
 }
 
+/**
+ * @brief Build the provenance expression for a single aggregate function.
+ *
+ * For @c SR_PLUS (union context) returns the first provenance attribute
+ * directly.  For @c SR_TIMES or @c SR_MONUS, constructs:
+ * @code
+ *   provenance_aggregate(fn_oid, result_type,
+ *                        original_aggref,
+ *                        array_agg(provenance_semimod(arg, times_or_monus_token)))
+ * @endcode
+ * COUNT(*) and COUNT(expr) are remapped to SUM so that the semimodule
+ * semantics (scalar × token → token) work correctly.
+ *
+ * @param constants  Extension OID cache.
+ * @param agg_ref    The original @c Aggref node from the query.
+ * @param prov_atts  List of provenance @c Var nodes.
+ * @param op         Semiring operation (determines how tokens are combined).
+ * @return  Provenance expression of type @c agg_token.
+ */
 static Expr *make_aggregation_expression(const constants_t *constants,
                                          Aggref *agg_ref, List *prov_atts,
                                          semiring_operation op) {
@@ -552,8 +711,31 @@ static Expr *make_aggregation_expression(const constants_t *constants,
   return result;
 }
 
+/* -------------------------------------------------------------------------
+ * HAVING / WHERE-on-aggregates rewriting
+ * ------------------------------------------------------------------------- */
+
+/* Forward declaration needed because having_BoolExpr_to_provenance and
+ * having_Expr_to_provenance_cmp are mutually recursive. */
 static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *constants, bool negated);
 
+/**
+ * @brief Convert a comparison @c OpExpr on aggregate results into a
+ *        @c provenance_cmp gate expression.
+ *
+ * Each argument of @p opExpr must be one of:
+ * - A @c Var of type @c agg_token (or a @c FuncExpr implicit-cast wrapper
+ *   around one) → cast to UUID via @c agg_token_to_uuid.
+ * - A scalar @c Const → wrapped in @c provenance_semimod(const, gate_one()).
+ *
+ * If @p negated is true the operator OID is replaced by its negator so that
+ * NOT(a < b) becomes a >= b at the provenance level.
+ *
+ * @param opExpr     The comparison expression from the HAVING clause.
+ * @param constants  Extension OID cache.
+ * @param negated    Whether the expression appears under a NOT.
+ * @return  A @c provenance_cmp(lhs, op_oid, rhs) @c FuncExpr.
+ */
 static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants_t *constants, bool negated) {
   FuncExpr *cmpExpr;
   Node *arguments[2];
@@ -563,11 +745,11 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
   for (unsigned i = 0; i < 2; ++i) {
     Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
 
-    if(IsA(node, FuncExpr)) {
-      FuncExpr *fe=(FuncExpr*)node;
+    if (IsA(node, FuncExpr)) {
+      FuncExpr *fe = (FuncExpr *)node;
       if (fe->funcformat == COERCE_IMPLICIT_CAST ||
-          fe->funcformat == COERCE_IMPLICIT_CAST) {
-        if(fe->args->length == 1)
+          fe->funcformat == COERCE_EXPLICIT_CAST) {
+        if (fe->args->length == 1)
           node = lfirst(list_head(fe->args));
       }
     }
@@ -578,28 +760,28 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
         // We need to add an explicit cast to UUID
         FuncExpr *castToUUID = makeNode(FuncExpr);
 
-        castToUUID->funcid=constants->OID_FUNCTION_AGG_TOKEN_UUID;
-        castToUUID->funcresulttype=constants->OID_TYPE_UUID;
-        castToUUID->args=list_make1(fe);
-        castToUUID->location=-1;
+        castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
+        castToUUID->funcresulttype = constants->OID_TYPE_UUID;
+        castToUUID->args = list_make1(fe);
+        castToUUID->location = -1;
 
         arguments[i] = (Node *)castToUUID;
       } else {
         elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
       }
-    } else if(IsA(node, Var)) {
-      Var *v = (Var*) node;
+    } else if (IsA(node, Var)) {
+      Var *v = (Var *)node;
 
-      if(v->vartype == constants->OID_TYPE_AGG_TOKEN) {
+      if (v->vartype == constants->OID_TYPE_AGG_TOKEN) {
         // We need to add an explicit cast to UUID
         FuncExpr *castToUUID = makeNode(FuncExpr);
 
-        castToUUID->funcid=constants->OID_FUNCTION_AGG_TOKEN_UUID;
-        castToUUID->funcresulttype=constants->OID_TYPE_UUID;
-        castToUUID->args=list_make1(v);
-        castToUUID->location=-1;
+        castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
+        castToUUID->funcresulttype = constants->OID_TYPE_UUID;
+        castToUUID->args = list_make1(v);
+        castToUUID->location = -1;
 
-        arguments[i] = (Node*)castToUUID;
+        arguments[i] = (Node *)castToUUID;
       } else {
         elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
       }
@@ -627,14 +809,14 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
     }
   }
 
-  if(negated) {
+  if (negated) {
     opno = get_negator(opno);
-    if(!opno)
+    if (!opno)
       elog(ERROR, "ProvSQL: Missing negator");
   }
 
   oid = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
-      Int32GetDatum(opno), false, true);
+                  Int32GetDatum(opno), false, true);
 
   cmpExpr = makeNode(FuncExpr);
   cmpExpr->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
@@ -645,13 +827,26 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
   return cmpExpr;
 }
 
+/**
+ * @brief Convert a Boolean combination of HAVING comparisons into a
+ *        @c provenance_times / @c provenance_plus gate expression.
+ *
+ * Applies De Morgan duality when @p negated is true: AND becomes
+ * @c provenance_plus (OR) and vice-versa.  NOT is handled by flipping
+ * @p negated and delegating to @c having_Expr_to_provenance_cmp.
+ *
+ * @param be         Boolean expression from the HAVING clause.
+ * @param constants  Extension OID cache.
+ * @param negated    Whether the expression appears under a NOT.
+ * @return  A @c FuncExpr combining the sub-expressions.
+ */
 static FuncExpr *having_BoolExpr_to_provenance(BoolExpr *be, const constants_t *constants, bool negated) {
   if(be->boolop == NOT_EXPR) {
     Expr *expr = (Expr *) lfirst(list_head(be->args));
     return having_Expr_to_provenance_cmp(expr, constants, !negated);
   } else {
     FuncExpr *result;
-    List *l=NULL;
+    List *l = NULL;
     ListCell *lc;
     ArrayExpr *array = makeNode(ArrayExpr);
 
@@ -659,23 +854,23 @@ static FuncExpr *having_BoolExpr_to_provenance(BoolExpr *be, const constants_t *
     array->element_typeid = constants->OID_TYPE_UUID;
     array->location = -1;
 
-    result=makeNode(FuncExpr);
+    result = makeNode(FuncExpr);
     result->funcresulttype = constants->OID_TYPE_UUID;
     result->funcvariadic = true;
     result->location = be->location;
     result->args = list_make1(array);
 
-    if((be->boolop == AND_EXPR && !negated) || (be->boolop == OR_EXPR && negated))
+    if ((be->boolop == AND_EXPR && !negated) || (be->boolop == OR_EXPR && negated))
       result->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-    else if((be->boolop == AND_EXPR && negated) || (be->boolop == OR_EXPR && !negated))
+    else if ((be->boolop == AND_EXPR && negated) || (be->boolop == OR_EXPR && !negated))
       result->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
     else
       elog(ERROR, "ProvSQL: Unknown Boolean operator");
 
     foreach (lc, be->args) {
-      Expr *expr= (Expr *) lfirst(lc);
+      Expr *expr = (Expr *)lfirst(lc);
       FuncExpr *arg = having_Expr_to_provenance_cmp(expr, constants, negated);
-      l=lappend(l, arg);
+      l = lappend(l, arg);
     }
 
     array->elements = l;
@@ -684,16 +879,57 @@ static FuncExpr *having_BoolExpr_to_provenance(BoolExpr *be, const constants_t *
   }
 }
 
+/**
+ * @brief Dispatch a HAVING sub-expression to the appropriate converter.
+ *
+ * Entry point for the mutual recursion between
+ * @c having_BoolExpr_to_provenance and @c having_OpExpr_to_provenance_cmp.
+ *
+ * @param expr       Sub-expression to convert (@c BoolExpr or @c OpExpr).
+ * @param constants  Extension OID cache.
+ * @param negated    Whether the expression appears under a NOT.
+ * @return  Converted @c FuncExpr.
+ */
 static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *constants, bool negated)
 {
-  if(IsA(expr, BoolExpr))
-    return having_BoolExpr_to_provenance((BoolExpr*) expr, constants, negated);
-  else if(IsA(expr, OpExpr))
-    return having_OpExpr_to_provenance_cmp((OpExpr *) expr, constants, negated);
+  if (IsA(expr, BoolExpr))
+    return having_BoolExpr_to_provenance((BoolExpr *)expr, constants, negated);
+  else if (IsA(expr, OpExpr))
+    return having_OpExpr_to_provenance_cmp((OpExpr *)expr, constants, negated);
   else
     elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
 }
 
+/**
+ * @brief Build the combined provenance expression to be added to the SELECT list.
+ *
+ * Combines the tokens in @p prov_atts according to @p op:
+ * - @c SR_PLUS  → use the first token directly (union branch; the outer
+ *                  @c array_agg / @c provenance_plus is added later if needed).
+ * - @c SR_TIMES → wrap all tokens in @c provenance_times(...).
+ * - @c SR_MONUS → wrap all tokens in @c provenance_monus(...).
+ *
+ * When @p aggregation or @p group_by_rewrite is true, wraps the result in
+ * @c array_agg + @c provenance_plus to collapse groups.  A @c provenance_delta
+ * gate is added for plain aggregations without a HAVING clause.
+ *
+ * If a HAVING clause is present it is removed from @p q->havingQual and
+ * converted into a provenance expression via @c having_Expr_to_provenance_cmp.
+ *
+ * If @c provsql_where_provenance is enabled, equality gates (@c provenance_eq)
+ * are prepended for join conditions and WHERE equalities, and a projection gate
+ * is appended if the output columns form a proper subset of the input columns.
+ *
+ * @param constants        Extension OID cache.
+ * @param q                Query being rewritten (HAVING is cleared if present).
+ * @param prov_atts        List of provenance @c Var nodes.
+ * @param aggregation      True if the query contains aggregate functions.
+ * @param group_by_rewrite True if a GROUP BY requires the plus-aggregate wrapper.
+ * @param op               Semiring operation to use for combining tokens.
+ * @param columns          Per-RTE column-numbering array (for where-provenance).
+ * @param nbcols           Total number of non-provenance output columns.
+ * @return  The provenance @c Expr to be appended to the target list.
+ */
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
@@ -880,6 +1116,23 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
   return result;
 }
 
+/* -------------------------------------------------------------------------
+ * Set-operation & DISTINCT rewriting
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Wrap @p subq in a new outer query that groups away the DISTINCT.
+ *
+ * Called when a query contains AGG DISTINCT (e.g., @c COUNT(DISTINCT x)).
+ * @p subq is the version of the query where the DISTINCT has been converted
+ * to a GROUP BY (produced by @c check_for_agg_distinct).  A new outer query
+ * is built that treats @p subq as a subquery RTE and re-applies the original
+ * aggregate function on top.
+ *
+ * @param q    Original query (its structure is reused for the outer query).
+ * @param subq Inner query with DISTINCT converted to GROUP BY.
+ * @return  The rewritten outer query.
+ */
 static Query *rewrite_for_agg_distinct(Query *q, Query *subq) {
   // variables
   Alias *alias = makeNode(Alias);
@@ -953,6 +1206,18 @@ static Query *rewrite_for_agg_distinct(Query *q, Query *subq) {
   return q;
 }
 
+/**
+ * @brief Detect AGG DISTINCT in @p q and rewrite it as a GROUP BY subquery.
+ *
+ * Scans the top-level target list for @c Aggref nodes with a non-empty
+ * @c aggdistinct list.  If found, returns a copy of @p q where each such
+ * aggregate is replaced by its argument (which becomes a GROUP BY key),
+ * enabling @c rewrite_for_agg_distinct to build the outer aggregation on top.
+ *
+ * @param q  Query to inspect.
+ * @return   Modified copy of @p q if AGG DISTINCT was found, or @c NULL if
+ *           no rewriting is needed.
+ */
 static Query *check_for_agg_distinct(Query *q) {
   ListCell *lc_v;
   List *lst_v = NIL;
@@ -1000,6 +1265,10 @@ static Query *check_for_agg_distinct(Query *q) {
     return new_q;
 }
 
+/* -------------------------------------------------------------------------
+ * Aggregation replacement mutator
+ * ------------------------------------------------------------------------- */
+
 typedef struct aggregation_mutator_context {
   List *prov_atts;
   semiring_operation op;
@@ -1020,6 +1289,19 @@ static Node *aggregation_mutator(Node *node,
   return expression_tree_mutator(node, aggregation_mutator, (void *)context);
 }
 
+/**
+ * @brief Replace every @c Aggref in @p q with a provenance-aware aggregate.
+ *
+ * Walks the query tree and substitutes each @c Aggref node with the result
+ * of @c make_aggregation_expression, which wraps the original aggregate in
+ * the semimodule machinery (@c provenance_semimod + @c array_agg +
+ * @c provenance_aggregate).
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to mutate in place.
+ * @param prov_atts  List of provenance @c Var nodes.
+ * @param op         Semiring operation for combining tokens across rows.
+ */
 static void
 replace_aggregations_by_provenance_aggregate(const constants_t *constants,
                                              Query *q, List *prov_atts,
@@ -1031,6 +1313,16 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 }
 
+/**
+ * @brief Append the provenance expression to @p q's target list.
+ *
+ * Inserts a new @c TargetEntry named @c provsql immediately before any
+ * @c resjunk entries (which must remain last) and adjusts the @c resno
+ * of subsequent entries accordingly.
+ *
+ * @param q           Query to modify in place.
+ * @param provenance  Expression to add (becomes the @c provsql output column).
+ */
 static void add_to_select(Query *q, Expr *provenance) {
   TargetEntry *newte = makeNode(TargetEntry);
   bool inserted = false;
@@ -1043,7 +1335,6 @@ static void add_to_select(Query *q, Expr *provenance) {
     RangeTblEntry *rte = list_nth(q->rtable, ((Var *)provenance)->varno - 1);
     newte->resorigtbl = rte->relid;
     newte->resorigcol = ((Var *)provenance)->varattno;
-    ;
   }
 
   /* Make sure to insert before all resjunk Target Entry */
@@ -1074,6 +1365,10 @@ static void add_to_select(Query *q, Expr *provenance) {
   }
 }
 
+/* -------------------------------------------------------------------------
+ * Provenance function replacement
+ * ------------------------------------------------------------------------- */
+
 typedef struct provenance_mutator_context {
   Expr *provsql;
   const constants_t *constants;
@@ -1099,6 +1394,17 @@ static Node *provenance_mutator(Node *node,
   return expression_tree_mutator(node, provenance_mutator, (void *)context);
 }
 
+/**
+ * @brief Replace every explicit @c provenance() call in @p q with @p provsql.
+ *
+ * Users can write @c provenance() in the target list or WHERE to refer to the
+ * provenance token of the current tuple.  This mutator substitutes those calls
+ * with the actual computed provenance expression.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to mutate in place.
+ * @param provsql    Provenance expression to substitute.
+ */
 static void
 replace_provenance_function_by_expression(const constants_t *constants,
                                           Query *q, Expr *provsql) {
@@ -1108,6 +1414,16 @@ replace_provenance_function_by_expression(const constants_t *constants,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 }
 
+/**
+ * @brief Convert a SELECT DISTINCT into an equivalent GROUP BY.
+ *
+ * ProvSQL cannot handle DISTINCT directly (it would collapse provenance
+ * tokens that should remain separate).  This function moves every entry
+ * from @p q->distinctClause into @p q->groupClause (skipping any that are
+ * already there) and clears @p q->distinctClause.
+ *
+ * @param q  Query to modify in place.
+ */
 static void transform_distinct_into_group_by(Query *q) {
   // First check which are already in the group by clause
   // Should be either none or all as "SELECT DISTINCT a, b ... GROUP BY a"
@@ -1130,6 +1446,16 @@ static void transform_distinct_into_group_by(Query *q) {
   q->distinctClause = NULL;
 }
 
+/**
+ * @brief Remove sort/group references that belonged to removed provenance columns.
+ *
+ * After @c remove_provenance_attributes_select strips provenance entries from
+ * the target list, any GROUP BY, ORDER BY, or DISTINCT clause that referenced
+ * them by @c tleSortGroupRef must be cleaned up.
+ *
+ * @param q                      Query to modify in place.
+ * @param removed_sortgrouprefs  Bitmapset of @c ressortgroupref values to remove.
+ */
 static void
 remove_provenance_attribute_groupref(Query *q,
                                      const Bitmapset *removed_sortgrouprefs) {
@@ -1157,6 +1483,17 @@ remove_provenance_attribute_groupref(Query *q,
   }
 }
 
+/**
+ * @brief Strip the provenance column's type info from a set-operation node.
+ *
+ * When a provenance column is removed from a UNION/EXCEPT query's target list,
+ * the matching entries in the @c SetOperationStmt's @c colTypes, @c colTypmods,
+ * and @c colCollations lists must also be removed.
+ *
+ * @param q        Query containing @c setOperations.
+ * @param removed  Boolean array (from @c remove_provenance_attributes_select)
+ *                 indicating which columns were removed.
+ */
 static void remove_provenance_attribute_setoperations(Query *q, bool *removed) {
   SetOperationStmt *so = (SetOperationStmt *)q->setOperations;
   List **lists[3] = {&so->colTypes, &so->colTypmods, &so->colCollations};
@@ -1183,6 +1520,21 @@ static void remove_provenance_attribute_setoperations(Query *q, bool *removed) {
   }
 }
 
+/**
+ * @brief Wrap a non-ALL set operation in an outer GROUP BY query.
+ *
+ * UNION / EXCEPT (without ALL) would deduplicate tuples before ProvSQL can
+ * attach provenance tokens.  To avoid this, the set operation is converted to
+ * UNION ALL / EXCEPT ALL and a new outer query is built that groups the results
+ * by all non-provenance columns, collecting tokens into an array for the
+ * @c provenance_plus evaluation.
+ *
+ * After this rewrite the recursive call to @c process_query handles the
+ * now-ALL inner set operation normally.
+ *
+ * @param q  Query whose @c setOperations is non-ALL (modified to ALL in place).
+ * @return   New outer query that wraps @p q as a subquery RTE.
+ */
 static Query *rewrite_non_all_into_external_group_by(Query *q) {
   Query *new_query = makeNode(Query);
   RangeTblEntry *rte = makeNode(RangeTblEntry);
@@ -1242,6 +1594,16 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
   return new_query;
 }
 
+/* -------------------------------------------------------------------------
+ * Detection walkers
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Tree walker that returns true if any @c provenance() call is found.
+ *
+ * Used to detect whether a query explicitly calls @c provenance(), which
+ * triggers the substitution in @c replace_provenance_function_by_expression.
+ */
 static bool provenance_function_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -1257,6 +1619,16 @@ static bool provenance_function_walker(Node *node, void *data) {
   return expression_tree_walker(node, provenance_function_walker, data);
 }
 
+/**
+ * @brief Check whether a @c provenance() call appears in the GROUP BY list.
+ *
+ * When the user writes @c GROUP BY provenance(), ProvSQL must not add its own
+ * group-by wrapper (the query is already grouping on the token).
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to inspect.
+ * @return  True if any GROUP BY key contains a @c provenance() call.
+ */
 static bool provenance_function_in_group_by(const constants_t *constants,
                                             Query *q) {
   ListCell *lc;
@@ -1340,6 +1712,17 @@ static bool has_provenance_walker(Node *node, void *data) {
   return expression_tree_walker(node, provenance_function_walker, data);
 }
 
+/**
+ * @brief Return true if @p q involves any provenance-bearing relation or
+ *        contains an explicit @c provenance() call.
+ *
+ * This is the gate condition checked by @c provsql_planner before doing any
+ * rewriting: if neither condition holds the query is passed through unchanged.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to inspect.
+ * @return  True if provenance rewriting is needed.
+ */
 static bool has_provenance(const constants_t *constants, Query *q) {
   return has_provenance_walker((Node *)q, (void *)constants);
 }
@@ -1357,10 +1740,39 @@ static bool aggtoken_walker(Node *node, const constants_t *constants) {
   return expression_tree_walker(node, aggtoken_walker, (void*) constants);
 }
 
+/**
+ * @brief Return true if @p node contains a @c Var of type @c agg_token.
+ *
+ * Used to detect whether a WHERE clause references an aggregate result
+ * (which must be moved to HAVING).
+ *
+ * @param node       Expression tree to inspect.
+ * @param constants  Extension OID cache.
+ * @return  True if an @c agg_token @c Var is found anywhere in @p node.
+ */
 static bool has_aggtoken(Node *node, const constants_t *constants) {
   return expression_tree_walker(node, aggtoken_walker, (void*) constants);
 }
 
+/**
+ * @brief Rewrite an EXCEPT query into a LEFT JOIN with monus provenance.
+ *
+ * EXCEPT cannot be handled directly because it deduplicates.  This function
+ * transforms:
+ * @code
+ *   SELECT … FROM A EXCEPT SELECT … FROM B
+ * @endcode
+ * into a LEFT JOIN of A and B on equality of all non-provenance columns,
+ * clears @c setOperations, and leaves the monus token combination to
+ * @c make_provenance_expression (which will see @c SR_MONUS).
+ *
+ * Only simple (non-chained) EXCEPT is supported; chained EXCEPT raises an
+ * error.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to rewrite in place.
+ * @return  Always true (errors out on unsupported cases).
+ */
 static bool transform_except_into_join(const constants_t *constants, Query *q) {
   SetOperationStmt *setOps = (SetOperationStmt *)q->setOperations;
   RangeTblEntry *rte = makeNode(RangeTblEntry);
@@ -1449,10 +1861,18 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
   return true;
 }
 
-// This function explores the tree of SetOperationStmt of an union to
-// add the provenance information and to set the union mode to "all"
-// on all nodes (terms have been previously treated by
-// rewrite_non_all_into_external_group_by)
+/**
+ * @brief Recursively annotate a UNION tree with the provenance UUID type.
+ *
+ * Walks the @c SetOperationStmt tree of a UNION and appends the UUID type
+ * to @c colTypes / @c colTypmods / @c colCollations on every node, and sets
+ * @c all = true so that PostgreSQL does not deduplicate the combined stream.
+ * The non-ALL deduplication has already been moved to an outer GROUP BY by
+ * @c rewrite_non_all_into_external_group_by before this is called.
+ *
+ * @param constants  Extension OID cache.
+ * @param stmt       Root (or subtree) of the UNION @c SetOperationStmt.
+ */
 static void process_set_operation_union(const constants_t *constants,
                                         SetOperationStmt *stmt) {
   if (stmt->op != SETOP_UNION) {
@@ -1470,6 +1890,18 @@ static void process_set_operation_union(const constants_t *constants,
   stmt->all = true;
 }
 
+/**
+ * @brief Add a WHERE condition filtering out zero-provenance tuples.
+ *
+ * For EXCEPT queries, tuples whose provenance evaluates to zero (i.e., the
+ * right-hand side fully subsumes the left-hand side) must be excluded from
+ * the result.  This function appends @c provsql <> gate_zero() to
+ * @p q->jointree->quals, ANDing with any existing WHERE condition.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to modify in place.
+ * @param provsql    Provenance expression that was added to the SELECT list.
+ */
 static void add_select_non_zero(const constants_t *constants, Query *q,
                                 Expr *provsql) {
   FuncExpr *gate_zero = makeNode(FuncExpr);
@@ -1496,6 +1928,17 @@ static void add_select_non_zero(const constants_t *constants, Query *q,
     q->jointree->quals = (Node *)oe;
 }
 
+/**
+ * @brief Append @p expr to @p havingQual with an AND, creating one if needed.
+ *
+ * If @p havingQual is NULL, returns @p expr directly.  If it is already an
+ * AND @c BoolExpr, appends to its argument list.  Otherwise wraps both in a
+ * new AND node.
+ *
+ * @param havingQual  Existing HAVING qualifier, or NULL.
+ * @param expr        Expression to conjoin.
+ * @return  The updated HAVING qualifier.
+ */
 static Node *add_to_havingQual(Node *havingQual, Expr *expr)
 {
   if(!havingQual) {
@@ -1504,18 +1947,31 @@ static Node *add_to_havingQual(Node *havingQual, Expr *expr)
     BoolExpr *be = (BoolExpr*)havingQual;
     be->args = lappend(be->args, expr);
   } else if(IsA(havingQual, OpExpr) || IsA(havingQual, BoolExpr)) {
+    /* BoolExpr that is not an AND (OR/NOT): wrap with a new AND node. */
     BoolExpr *be = makeNode(BoolExpr);
     be->boolop=AND_EXPR;
     be->location=-1;
     be->args = list_make2(havingQual, expr);
     havingQual = (Node*) be;
-  } else if(IsA(havingQual, BoolExpr)) {
+  } else
     elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
-  }
 
   return havingQual;
 }
 
+/**
+ * @brief Check whether @p op is a supported comparison on an aggregate result.
+ *
+ * Returns true iff @p op is a two-argument operator where at least one
+ * argument is a @c Var of type @c agg_token (or an implicit-cast wrapper
+ * thereof) and the other is a @c Const (possibly cast).  This is the set
+ * of WHERE-on-aggregate patterns that ProvSQL can safely move to a HAVING
+ * clause.
+ *
+ * @param op         The @c OpExpr to inspect.
+ * @param constants  Extension OID cache.
+ * @return  True if the pattern is supported, false otherwise.
+ */
 static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constants)
 {
   bool ok=true;
@@ -1555,6 +2011,17 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
   return ok && found_agg_token;
 }
 
+/**
+ * @brief Check whether every leaf of a Boolean expression is a supported
+ *        comparison on an aggregate result.
+ *
+ * Recursively validates @c OpExpr leaves via @c check_selection_on_aggregate
+ * and descends into nested @c BoolExpr nodes.
+ *
+ * @param be         The Boolean expression to validate.
+ * @param constants  Extension OID cache.
+ * @return  True if all leaves are supported, false if any is not.
+ */
 static bool check_boolexpr_on_aggregate(BoolExpr *be, const constants_t *constants)
 {
   ListCell *lc;
@@ -1574,6 +2041,13 @@ static bool check_boolexpr_on_aggregate(BoolExpr *be, const constants_t *constan
   return true;
 }
 
+/**
+ * @brief Top-level dispatcher for supported WHERE-on-aggregate patterns.
+ *
+ * @param expr       Expression to validate (@c OpExpr or @c BoolExpr).
+ * @param constants  Extension OID cache.
+ * @return  True if ProvSQL can handle this expression.
+ */
 static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
   switch(expr->type) {
     case T_BoolExpr:
@@ -1585,6 +2059,157 @@ static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
   }
 }
 
+/* -------------------------------------------------------------------------
+ * Main query transformation
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Build the per-RTE column-numbering map used by where-provenance.
+ *
+ * Assigns a sequential position (1, 2, 3, …) to every non-provenance,
+ * non-join, non-empty column across all RTEs in @p q->rtable.  The
+ * @c provsql column is assigned -1 so callers can detect it.  Join-RTE
+ * columns and empty-named columns (used for anonymous GROUP BY keys) are
+ * assigned 0.
+ *
+ * @param q         Query whose range table is mapped.
+ * @param columns   Pre-allocated array of length @p q->rtable->length.
+ *                  Each element is allocated and filled by this function.
+ * @param nbcols    Out-param: total number of non-provenance output columns.
+ */
+static void build_column_map(Query *q, int **columns, int *nbcols) {
+  unsigned i = 0;
+  ListCell *l;
+
+  *nbcols = 0;
+
+  foreach (l, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(l);
+    ListCell *lc;
+
+    columns[i] = 0;
+    if (r->eref) {
+      unsigned j = 0;
+
+      columns[i] = (int *)palloc(r->eref->colnames->length * sizeof(int));
+
+      foreach (lc, r->eref->colnames) {
+        if (!lfirst(lc)) {
+          /* Column without name — used e.g. when grouping by a discarded column */
+          columns[i][j] = ++(*nbcols);
+        } else {
+          const char *v = strVal(lfirst(lc));
+
+          if (strcmp(v, "") && r->rtekind != RTE_JOIN) { /* join RTE columns ignored */
+            if (!strcmp(v, PROVSQL_COLUMN_NAME))
+              columns[i][j] = -1;
+            else
+              columns[i][j] = ++(*nbcols);
+          } else {
+            columns[i][j] = 0;
+          }
+        }
+
+        ++j;
+      }
+    }
+
+    ++i;
+  }
+}
+
+/**
+ * @brief Move WHERE conditions on aggregate results (@c agg_token) to HAVING.
+ *
+ * Supported patterns (moved to HAVING):
+ * - The entire WHERE is a supported agg comparison.
+ * - The WHERE is a top-level AND where some conjuncts reference aggregates
+ *   (those are extracted individually) and the rest remain in WHERE.
+ *
+ * Unsupported patterns (e.g., "WHERE x=1 OR c>3") raise an error.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to modify in place (@c jointree->quals and
+ *                   @c havingQual may both be updated).
+ */
+static void migrate_aggtoken_quals_to_having(const constants_t *constants,
+                                             Query *q) {
+  if (!q->jointree || !q->jointree->quals)
+    return;
+
+  if (!has_aggtoken(q->jointree->quals, constants))
+    return;
+
+  /*
+   * We support WHERE clauses that are (possibly trivial) AND conjunctions of:
+   * - Conditions that do not mention aggregates (kept in WHERE).
+   * - Arbitrary Boolean combinations that all refer to aggregates and that
+   *   check_expr_on_aggregate accepts (moved to HAVING).
+   * Other forms (e.g., "WHERE x=1 OR c>3") are not supported.
+   */
+  if (check_expr_on_aggregate((Expr *)q->jointree->quals, constants)) {
+    /* Entire WHERE is an agg comparison — move it wholesale to HAVING */
+    q->havingQual =
+      add_to_havingQual(q->havingQual, (Expr *)q->jointree->quals);
+    q->jointree->quals = NULL;
+  } else if (IsA(q->jointree->quals, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *)q->jointree->quals;
+    if (be->boolop == AND_EXPR) {
+      /* Split the AND: move agg conjuncts to HAVING, leave the rest */
+      ListCell *cell, *prev;
+      for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
+        if (has_aggtoken(lfirst(cell), constants)) {
+          Expr *expr = (Expr *)lfirst(cell);
+
+          if (check_expr_on_aggregate(expr, constants)) {
+            be->args = my_list_delete_cell(be->args, cell, prev);
+            if (prev)
+              cell = my_lnext(be->args, prev);
+            else
+              cell = list_head(be->args);
+
+            q->havingQual = add_to_havingQual(q->havingQual, expr);
+          } else {
+            elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+          }
+        } else {
+          prev = cell;
+          cell = my_lnext(be->args, cell);
+        }
+      }
+    } else {
+      elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+    }
+  } else {
+    elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
+  }
+}
+
+/**
+ * @brief Rewrite a single SELECT query to carry provenance.
+ *
+ * This is the recursive entry point for the provenance rewriter.  It is
+ * called from @c provsql_planner for top-level queries and re-entered from
+ * @c get_provenance_attributes for subqueries in FROM.
+ *
+ * High-level steps:
+ *  1. Strip any @c provsql column propagated into this query's target list.
+ *  2. Detect and rewrite structural forms requiring pre-processing:
+ *     non-ALL set operations (wrap in outer GROUP BY), AGG DISTINCT (push
+ *     into a subquery), DISTINCT (convert to GROUP BY).
+ *  3. Collect provenance attributes via @c get_provenance_attributes.
+ *  4. Build a column-numbering map for where-provenance (@c build_column_map).
+ *  5. Handle aggregates, migrate WHERE-on-aggregate to HAVING, and set ops.
+ *  6. Build and splice the combined provenance expression.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to rewrite (modified in place).
+ * @param removed    Out-param: boolean array indicating which original target
+ *                   list entries were provenance columns and were removed.
+ *                   May be @c NULL if the caller does not need this info.
+ * @return  The (possibly restructured) rewritten query, or @c NULL if the
+ *          query has no FROM clause and can be skipped.
+ */
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed) {
   List *prov_atts;
@@ -1705,44 +2330,8 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
     }
 
-    if (supported) {
-      ListCell *l;
-
-      foreach (l, q->rtable) {
-        RangeTblEntry *r = (RangeTblEntry *)lfirst(l);
-        ListCell *lc;
-
-        columns[i] = 0;
-        if (r->eref) {
-          unsigned j = 0;
-
-          columns[i] = (int *)palloc(r->eref->colnames->length * sizeof(int));
-
-          foreach (lc, r->eref->colnames) {
-            if(!lfirst(lc)) {
-              // Column without names are used for instance when grouping
-              // by a discarded column
-              columns[i][j] = ++nbcols;
-            } else {
-              const char *v = strVal(lfirst(lc));
-
-              if (strcmp(v, "") && r->rtekind != RTE_JOIN) { // join RTE columns ignored
-                if (!strcmp(v, PROVSQL_COLUMN_NAME))
-                  columns[i][j] = -1;
-                else
-                  columns[i][j] = ++nbcols;
-              } else {
-                columns[i][j] = 0;
-              }
-            }
-
-            ++j;
-          }
-        }
-
-        ++i;
-      }
-    }
+    if (supported)
+      build_column_map(q, columns, &nbcols);
 
     if (supported) {
       Expr *provenance;
@@ -1773,56 +2362,8 @@ static Query *process_query(const constants_t *constants, Query *q,
         }
       }
 
-      // Replace WHERE on aggregate tokens by HAVING clauses
-      if(q->jointree && q->jointree->quals) {
-        // Check whether the WHERE expression contains an aggregate token
-        if(has_aggtoken(q->jointree->quals, constants)) {
-          // We support WHERE clause that are (possibly trivial) AND conjunctions of either
-          // - conditions that do not mention aggregates
-          // - arbitrary Boolean combinations of conjunctions that all
-          // refer to aggregates, and that we know how to process (as
-          // indicated by check_selection_on_aggregate).
-          // The former are kept in the WHERE, the latter put in the
-          // HAVING clause for further processing.
-          // Other forms, such as "WHERE x=1 OR c>3" with x a regular
-          // attribute and c the result of an aggregation, are not supported.
-
-          if(check_expr_on_aggregate((Expr*) q->jointree->quals, constants)) {
-            // Everything ok, remove this qualifier put it in havingQual
-            q->havingQual = add_to_havingQual(q->havingQual, (Expr*) q->jointree->quals);
-            q->jointree->quals = NULL;
-          } else if(IsA(q->jointree->quals, BoolExpr)) {
-            BoolExpr *be = (BoolExpr*) q->jointree->quals;
-            if(be->boolop == AND_EXPR) {
-              ListCell *cell, *prev;
-              for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
-                if(has_aggtoken(lfirst(cell), constants)) {
-                  Expr *expr =(Expr *) lfirst(cell);
-
-                  if(check_expr_on_aggregate(expr, constants)) {
-                    be->args = my_list_delete_cell(be->args, cell, prev);
-                    if (prev)
-                      cell = my_lnext(be->args, prev);
-                    else
-                      cell = list_head(be->args);
-
-                    q->havingQual = add_to_havingQual(q->havingQual, (Expr*) expr);
-                  } else {
-                    elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
-                  }
-                } else {
-                  prev = cell;
-                  cell = my_lnext(be->args, cell);
-                }
-              }
-            } else {
-              elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
-            }
-          } else {
-            elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
-          }
-        }
-      }
+      /* Move any WHERE comparisons on aggregate results to HAVING */
+      migrate_aggtoken_quals_to_having(constants, q);
 
       provenance = make_provenance_expression(
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
@@ -1848,6 +2389,19 @@ static Query *process_query(const constants_t *constants, Query *q,
   return q;
 }
 
+/* -------------------------------------------------------------------------
+ * Planner hook & extension lifecycle
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief PostgreSQL planner hook — entry point for provenance rewriting.
+ *
+ * Replaces (or chains after) the standard planner.  For every CMD_SELECT
+ * that involves at least one provenance-bearing relation or an explicit
+ * @c provenance() call, rewrites the query via @c process_query before
+ * handing the result to the standard planner.  Non-SELECT commands and
+ * queries without provenance are passed through unchanged.
+ */
 static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000
                                     const char *query_string,
@@ -1858,17 +2412,21 @@ static PlannedStmt *provsql_planner(Query *q,
     const constants_t constants = get_constants(false);
 
     if (constants.ok && has_provenance(&constants, q)) {
-      //        clock_t begin = clock(), end;
-      //        double time_spent;
-
       bool *removed = NULL;
-      Query *new_query = process_query(&constants, q, &removed);
+      Query *new_query;
+      clock_t begin = 0;
+
+      if (provsql_verbose >= 40)
+        begin = clock();
+
+      new_query = process_query(&constants, q, &removed);
+
+      if (provsql_verbose >= 40)
+        ereport(NOTICE, (errmsg("planner time spent=%f",
+                                (double)(clock() - begin) / CLOCKS_PER_SEC)));
+
       if (new_query != NULL)
         q = new_query;
-
-      //        end = clock();
-      //        time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
-      //        ereport(NOTICE, (errmsg("planner time spent=%f",time_spent)));
     }
   }
 
@@ -1886,6 +2444,15 @@ static PlannedStmt *provsql_planner(Query *q,
                             cursorOptions, boundParams);
 }
 
+/**
+ * @brief Extension initialization — called once when the shared library is loaded.
+ *
+ * Registers the four GUC variables (@c provsql.active, @c where_provenance,
+ * @c update_provenance, @c verbose_level), installs the planner hook and
+ * shared-memory hooks, and launches the background MMap worker.
+ *
+ * Must be loaded via @c shared_preload_libraries; raises an error otherwise.
+ */
 void _PG_init(void) {
   if (!process_shared_preload_libraries_in_progress)
     elog(ERROR, "provsql needs to be added to the shared_preload_libraries "
@@ -1952,6 +2519,9 @@ void _PG_init(void) {
   RegisterProvSQLMMapWorker();
 }
 
+/**
+ * @brief Extension teardown — restores the planner and shmem hooks.
+ */
 void _PG_fini(void) {
   planner_hook = prev_planner;
   shmem_startup_hook = prev_shmem_startup;
