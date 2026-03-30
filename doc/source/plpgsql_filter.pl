@@ -18,18 +18,27 @@ s{
     my ( $function_name, $args, $return ) = ( $1, $2, $3 );
 
     $args =~ s/\bOUT\s+/&/g;
+    $args =~ s/\bIN\s+//g;
     $args =~ s/^\s+|\s+$//g;
     $args =~ s/\s+/ /gs;
 
     my @args = split /, */, $args;
 
     foreach my $a (@args) {
-        $a =~ s/(.+?) ([^\s]*)((?: .*)?)/$2 $1$3/;
-        $a =~ s/DEFAULT /= /;
+        # SQL parameter format is "name type [DEFAULT val]".
+        # Extract optional DEFAULT first, then rearrange to C-style "type name".
+        my $default = ($a =~ s/\s+DEFAULT\s+(.+)$//) ? " = $1" : "";
+        $a =~ s/^(\S+)\s+(.*\S)\s*$/$2 $1/;
+        $a .= $default;
     }
 
     $return //= '';
-    $return=~s/TABLE\(.*?\)/TABLE/g;
+    # Strip LANGUAGE clause that leaks in for "LANGUAGE lang AS $$" style functions
+    $return =~ s/\s*\bLANGUAGE\s+\w+.*$//s;
+    $return =~ s/\s+$//;
+    $return =~ s/TABLE\(.*?\)/TABLE/g;
+    # Use void when there is no explicit return type (OUT-parameter-only functions)
+    $return ||= 'void';
 
     "$return $function_name(" . join( ', ', @args ) . ");"
 }sigxe;
@@ -116,11 +125,12 @@ s{
   "struct $type \{ $members; \};";
 }sigxe;
 
+# AGGREGATE: body uses (?:[^)']|'[^']*')* to handle ')' inside string literals
 s{
   CREATE\s+(?:OR\s+REPLACE\s+)?
   AGGREGATE\s+
   (\w+)\s*\(([^)]*)\)\s*
-  \([^)]*\);
+  \((?:[^)']|'[^']*')*\);
 }{
   my ($name, $args) = ($1, $2);
   "void $name($args);"
@@ -129,6 +139,19 @@ s{
 s{
   \bGRANT\s+[^;]*;
 }{}sigx;
+
+# Strip CREATE CAST, CREATE TABLE, and standalone SELECT statements
+s{
+  \bCREATE\s+CAST\s*\([^;]*\);
+}{}sigxg;
+
+s{
+  \bCREATE\s+TABLE\b.*?;
+}{}sigxg;
+
+s{
+  \bSELECT\b[^;]*;
+}{}sigxg;
 
 s{
   SETOF\s+([^\s]+)
