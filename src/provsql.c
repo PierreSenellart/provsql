@@ -1848,10 +1848,12 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
     ++attno;
   }
 
+  rte->alias = NULL;
+  rte->eref = NULL;
+  rte->joinaliasvars = NULL;
+
   rte->rtekind = RTE_JOIN;
   rte->jointype = JOIN_LEFT;
-  // TODO : rte->eref =
-  // TODO : rte->joinaliasvars
 
   q->rtable = lappend(q->rtable, rte);
 
