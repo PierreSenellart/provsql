@@ -1792,15 +1792,27 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Var *v;
 
-    Var *v = (Var *)te->expr;
+    if (!IsA(te->expr, Var))
+      elog(ERROR, "ProvSQL: EXCEPT query format not supported");
+
+    v = (Var *)te->expr;
 
     if (v->vartype != constants->OID_TYPE_UUID) {
       OpExpr *oe = makeNode(OpExpr);
       Oid opno = find_equality_operator(v->vartype, v->vartype);
       Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
-      Form_pg_operator opform = (Form_pg_operator)GETSTRUCT(opInfo);
-      Var *leftArg = makeNode(Var), *rightArg = makeNode(Var);
+      Form_pg_operator opform;
+      Var *leftArg, *rightArg;
+
+      if (!HeapTupleIsValid(opInfo))
+        elog(ERROR, "ProvSQL: could not find operator with OID %u to compare variables of type %u",
+             opno, v->vartype);
+
+      opform = (Form_pg_operator)GETSTRUCT(opInfo);
+      leftArg = makeNode(Var);
+      rightArg = makeNode(Var);
 
       oe->opno = opno;
       oe->opfuncid = opform->oprcode;
