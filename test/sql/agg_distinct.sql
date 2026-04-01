@@ -16,7 +16,7 @@ SELECT city, string_agg(word, '+' ORDER BY word) AS aggregation_formula
 FROM (
   SELECT city, unnest(string_to_array(sr_formula(count,'personnel_name'),'+')) AS word
   FROM agg_result
-)
+) AS temp
 GROUP BY city
 ORDER BY city;
 
