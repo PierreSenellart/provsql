@@ -45,7 +45,7 @@ FROM (
     unnest(string_to_array(sr_formula(count_name,'personnel_name'),'+')) AS word2,
     unnest(string_to_array(sr_formula(count_class,'personnel_name'),'+')) AS word3
   FROM agg_result2
-)
+) AS temp
 GROUP BY city
 ORDER BY city;
 
