@@ -1063,7 +1063,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
             value_v = columns[v->varno - 1][v->varattno - 1];
           } else {
             Const *ce = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
-                sizeof(int32), Int32GetDatum(0), false, true);
+                                  sizeof(int32), Int32GetDatum(0), false, true);
 
             array->elements = lappend(array->elements, ce);
             value_v = 0;
@@ -1637,13 +1637,13 @@ static bool provenance_function_in_group_by(const constants_t *constants,
     if (te->ressortgroupref > 0) {
       if(expression_tree_walker((Node *)te, provenance_function_walker,
                                 (void *)constants)) {
-      return true;
+        return true;
       }
 
 #if PG_VERSION_NUM >= 180000
       // Starting from PostgreSQL 18, the content of the GROUP BY is not
       // in the groupClause but in an associated RTE_GROUP RangeTblEntry
-      if IsA(te->expr, Var) {
+      if(IsA(te->expr, Var)) {
         Var *v = (Var *) te->expr;
         RangeTblEntry *r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
         if(r->rtekind == RTE_GROUP)
@@ -2050,12 +2050,12 @@ static bool check_boolexpr_on_aggregate(BoolExpr *be, const constants_t *constan
  */
 static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
   switch(expr->type) {
-    case T_BoolExpr:
-      return check_boolexpr_on_aggregate((BoolExpr*) expr, constants);
-    case T_OpExpr:
-      return check_selection_on_aggregate((OpExpr*) expr, constants);
-    default:
-      elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
+  case T_BoolExpr:
+    return check_boolexpr_on_aggregate((BoolExpr*) expr, constants);
+  case T_OpExpr:
+    return check_selection_on_aggregate((OpExpr*) expr, constants);
+  default:
+    elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
   }
 }
 
@@ -2287,7 +2287,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         supported = false;
       } else if (list_length(q->distinctClause) < list_length(q->targetList)) {
         ereport(ERROR, (errmsg("Inconsistent DISTINCT and GROUP BY clauses not "
-                              "supported by provsql")));
+                               "supported by provsql")));
         supported = false;
       } else {
         transform_distinct_into_group_by(q);
@@ -2306,7 +2306,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         has_difference = true;
       } else {
         ereport(ERROR, (errmsg("Set operations other than UNION and EXCEPT not "
-                              "supported by provsql")));
+                               "supported by provsql")));
         supported = false;
       }
     }
@@ -2355,7 +2355,7 @@ static Query *process_query(const constants_t *constants, Query *q,
             if (sort->tleSortGroupRef == te->ressortgroupref) {
               if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
                 elog(ERROR, "ORDER BY on the result of an aggregate function is "
-                    "not supported by ProvSQL");
+                     "not supported by ProvSQL");
               break;
             }
           }
