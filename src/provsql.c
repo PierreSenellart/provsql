@@ -1133,11 +1133,18 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
  */
 static Query *build_inner_for_distinct_key(Query *q, Expr *key_expr,
                                            List *groupby_tes) {
-  Query *inner = copyObject(q);
+  Query *inner;
   List *new_tl = NIL;
   List *new_gc = NIL;
   ListCell *lc;
   int resno = 1, sgref = 1;
+
+#if PG_VERSION_NUM >= 180000
+  // TODO: Support RTE_GROUP
+  elog(ERROR, "ProvSQL: Support for AGG/DISTINCT in PostgreSQL 18 temporarily not available");
+#endif
+
+  inner = copyObject(q);
 
   inner->hasAggs    = false;
   inner->sortClause = NIL;
