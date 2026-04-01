@@ -1990,7 +1990,7 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
     } else if(IsA(arg, Const)) {
     } else if(IsA(arg, FuncExpr)) {
       FuncExpr *fe = (FuncExpr*) arg;
-      if(fe->funcformat != COERCE_IMPLICIT_CAST && fe->funcformat != COERCE_IMPLICIT_CAST) {
+      if(fe->funcformat != COERCE_IMPLICIT_CAST && fe->funcformat != COERCE_EXPLICIT_CAST) {
         ok=false;
         break;
       }
