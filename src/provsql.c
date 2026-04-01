@@ -257,11 +257,9 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
  */
 static List *get_provenance_attributes(const constants_t *constants, Query *q) {
   List *prov_atts = NIL;
-  ListCell *l;
-  Index rteid = 1;
 
-  foreach (l, q->rtable) {
-    RangeTblEntry *r = (RangeTblEntry *)lfirst(l);
+  for(Index rteid = 1; rteid <= q->rtable->length; ++rteid) {
+    RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, rteid-1);
 
     if (r->rtekind == RTE_RELATION) {
       ListCell *lc;
@@ -322,7 +320,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
              cell = my_lnext(new_subquery->targetList, cell)) {
           TargetEntry *te = (TargetEntry *)lfirst(cell);
           ++varattnoprovsql;
-          if (!strcmp(te->resname, PROVSQL_COLUMN_NAME))
+          if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME))
             break;
         }
 
@@ -378,8 +376,6 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
     } else {
       ereport(ERROR, (errmsg("FROM clause unsupported by provsql")));
     }
-
-    ++rteid;
   }
 
   return prov_atts;
@@ -1121,148 +1117,371 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
  * ------------------------------------------------------------------------- */
 
 /**
- * @brief Wrap @p subq in a new outer query that groups away the DISTINCT.
+ * @brief Build the inner GROUP-BY subquery for one @c AGG(DISTINCT key).
  *
- * Called when a query contains AGG DISTINCT (e.g., @c COUNT(DISTINCT x)).
- * @p subq is the version of the query where the DISTINCT has been converted
- * to a GROUP BY (produced by @c check_for_agg_distinct).  A new outer query
- * is built that treats @p subq as a subquery RTE and re-applies the original
- * aggregate function on top.
+ * Produces:
+ * @code
+ *   SELECT key_expr, gb_col1, gb_col2, ...
+ *   FROM   <same tables as q>
+ *   GROUP BY key_expr, gb_col1, gb_col2, ...
+ * @endcode
  *
- * @param q    Original query (its structure is reused for the outer query).
- * @param subq Inner query with DISTINCT converted to GROUP BY.
- * @return  The rewritten outer query.
+ * @param q           Original query (supplies FROM / WHERE).
+ * @param key_expr    The DISTINCT argument expression.
+ * @param groupby_tes Non-aggregate target entries that are GROUP BY columns.
+ * @return  Fresh inner @c Query.
  */
-static Query *rewrite_for_agg_distinct(Query *q, Query *subq) {
-  // variables
-  Alias *alias = makeNode(Alias);
-  Alias *eref = makeNode(Alias);
-  FromExpr *jointree = makeNode(FromExpr);
-  RangeTblEntry *rte = makeNode(RangeTblEntry);
-  RangeTblRef *rtr = makeNode(RangeTblRef);
-  ListCell *lc_v;
-  int groupRef = 1;
-  // rewrite the rtable to contain only one relation, the alias
-  alias->aliasname = "a";
-  eref->aliasname = "a";
-  eref->colnames = NIL;
+static Query *build_inner_for_distinct_key(Query *q, Expr *key_expr,
+                                           List *groupby_tes) {
+  Query *inner = copyObject(q);
+  List *new_tl = NIL;
+  List *new_gc = NIL;
+  ListCell *lc;
+  int resno = 1, sgref = 1;
 
-  foreach (lc_v, q->targetList) {
-    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
-    eref->colnames =
-      lappend(eref->colnames, te_v->resname?makeString(pstrdup(te_v->resname)):NULL);
-#if PG_VERSION_NUM < 160000
-    // For PG_VERSION_NUM >= 160000, rte->perminfoindex==0 so no need to
-    // care about permissions
-    rte->selectedCols = bms_add_member(
-      rte->selectedCols, te_v->resno - FirstLowInvalidHeapAttributeNumber);
-#endif
+  inner->hasAggs    = false;
+  inner->sortClause = NIL;
+  inner->limitCount = NULL;
+  inner->limitOffset = NULL;
+  inner->distinctClause = NIL;
+  inner->hasDistinctOn = false;
+
+  /* First column: the DISTINCT key */
+  {
+    TargetEntry *kte = makeNode(TargetEntry);
+    SortGroupClause *sgc = makeNode(SortGroupClause);
+
+    kte->expr   = copyObject(key_expr);
+    kte->resno  = resno++;
+    kte->resname = "key";
+    sgc->tleSortGroupRef = kte->ressortgroupref = sgref++;
+    get_sort_group_operators(exprType((Node *)kte->expr), true, true, false,
+                             &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+    new_gc = list_make1(sgc);
+    new_tl = list_make1(kte);
   }
-  rte->alias = alias;
-  rte->eref = eref;
-  rte->rtekind = RTE_SUBQUERY;
-  rte->subquery = subq;
 
-  q->rtable = list_make1(rte);
+  /* Remaining columns: GROUP BY columns from the original query */
+  foreach (lc, groupby_tes) {
+    TargetEntry *gyte = copyObject((TargetEntry *)lfirst(lc));
+    SortGroupClause *sgc = makeNode(SortGroupClause);
 
-  // correct var indexes and group by references
-  foreach (lc_v, q->targetList) {
-    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
-    Var *var = makeNode(Var);
-    var->varno = 1;
-    var->varattno = te_v->resno;
-    if (IsA(te_v->expr, Aggref)) {
-      Aggref *ar_v = (Aggref *)te_v->expr;
-      TargetEntry *te_new = makeNode(TargetEntry);
-      var->vartype = linitial_oid(ar_v->aggargtypes);
-      te_new->resno = 1;
-      te_new->expr = (Expr *)var;
-      ar_v->args = list_make1(te_new);
-      ar_v->aggdistinct = NIL;
-    } else if (IsA(te_v->expr, Var)) {
-      Var *var_v = (Var *)te_v->expr;
-      var_v->varno = 1;
-      var_v->varattno = te_v->resno;
-    } else {
-      var->vartype = exprType((Node *)te_v->expr);
-      te_v->expr = (Expr *)var;
-    }
-    // add to GROUP BY list
-    if (!IsA(te_v->expr, Aggref)) {
-      SortGroupClause *sgc = makeNode(SortGroupClause);
-      sgc->tleSortGroupRef = groupRef;
-      te_v->ressortgroupref = groupRef;
-      sgc->nulls_first = false;
-      get_sort_group_operators(exprType((Node *)te_v->expr), true, true, false,
-                               &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
-      q->groupClause = lappend(q->groupClause, sgc);
-      groupRef++;
-    }
+    gyte->resno   = resno++;
+    gyte->resjunk = false;
+    sgc->tleSortGroupRef = gyte->ressortgroupref = sgref++;
+    get_sort_group_operators(exprType((Node *)gyte->expr), true, true, false,
+                             &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+    new_gc = lappend(new_gc, sgc);
+    new_tl = lappend(new_tl, gyte);
   }
-  // rewrite the jointree to contain only one relation
-  rtr->rtindex = 1;
-  jointree->fromlist = list_make1(rtr);
-  q->jointree = jointree;
-  return q;
+
+  inner->targetList  = new_tl;
+  inner->groupClause = new_gc;
+  return inner;
 }
 
 /**
- * @brief Detect AGG DISTINCT in @p q and rewrite it as a GROUP BY subquery.
+ * @brief Wrap @p inner in an outer query that applies the original aggregate.
  *
- * Scans the top-level target list for @c Aggref nodes with a non-empty
- * @c aggdistinct list.  If found, returns a copy of @p q where each such
- * aggregate is replaced by its argument (which becomes a GROUP BY key),
- * enabling @c rewrite_for_agg_distinct to build the outer aggregation on top.
+ * Produces:
+ * @code
+ *   SELECT AGG(key_col), gb_col1, gb_col2, ...
+ *   FROM   inner
+ *   GROUP BY gb_col1, gb_col2, ...
+ * @endcode
+ * The DISTINCT flag is cleared; @p inner provides exactly one row per
+ * (key, group-by) combination, so the plain aggregate gives the right count.
  *
- * @param q  Query to inspect.
- * @return   Modified copy of @p q if AGG DISTINCT was found, or @c NULL if
- *           no rewriting is needed.
+ * @param orig_agg_te  Original @c TargetEntry containing @c AGG(DISTINCT key).
+ * @param inner        Inner query from @c build_inner_for_distinct_key.
+ * @param n_gb         Number of GROUP BY columns (trailing entries in @p inner).
+ * @param constants    Extension OID cache.
+ * @return  Fresh outer @c Query.
  */
-static Query *check_for_agg_distinct(Query *q) {
-  ListCell *lc_v;
-  List *lst_v = NIL;
-  Query *new_q = copyObject(q);
-  unsigned char found = 0;
+static Query *build_outer_for_distinct_key(TargetEntry *orig_agg_te,
+                                           Query *inner, int n_gb,
+                                           const constants_t *constants) {
+  Query *outer = makeNode(Query);
+  RangeTblEntry *rte = makeNode(RangeTblEntry);
+  Alias *alias = makeNode(Alias), *eref = makeNode(Alias);
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  FromExpr *jt = makeNode(FromExpr);
+  List *new_tl = NIL, *new_gc = NIL;
+  ListCell *lc;
+  int resno = 1, sgref = 1;
+  int inner_len = list_length(inner->targetList);
+  int attno;
 
-  // replace each Aggref with a TargetEntry calling the agg function
-  //-- only in the top-level of the query
-  foreach (lc_v, new_q->targetList) {
-    TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
-    if (IsA(te_v->expr, Aggref)) {
-      Aggref *ar_v = (Aggref *)te_v->expr;
-      if (list_length(ar_v->aggdistinct) > 0) {
-        TargetEntry *te_new = NULL;
-        SortGroupClause *sgc = (SortGroupClause *)linitial(ar_v->aggdistinct);
+  /* Wrap inner in a subquery RTE */
+  alias->aliasname = eref->aliasname = "d";
+  eref->colnames = NIL;
+  foreach (lc, inner->targetList) {
+    TargetEntry *te = lfirst(lc);
+    eref->colnames = lappend(eref->colnames,
+                             makeString(te->resname ? pstrdup(te->resname) : ""));
+  }
+  rte->alias   = alias;
+  rte->eref    = eref;
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = inner;
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
 
-        found = 1;
-        // the agg distinct clause is added to the GROUP BY clause
-        // remove aggref and replace by its arguments
-        te_new = (TargetEntry *)linitial(ar_v->args);
-        sgc->tleSortGroupRef = te_v->resno;
-        new_q->groupClause = lappend(new_q->groupClause, sgc);
-        te_new->resno = te_v->resno;
-        te_new->resname = te_v->resname;
-        te_new->ressortgroupref = te_v->resno;
-        lst_v = lappend(lst_v, te_new);
-      } else {
-        lst_v = lappend(lst_v, ar_v);
-      }
-    } else { // keep the current TE
-      // If the TE is a discarded out column used for groupping,
-      // we want to keep it to preserve the groupping
-      if(te_v->resjunk && !te_v->resname) {
-        te_v->resjunk=false;
-        te_v->resname="temp";
-      }
-      lst_v = lappend(lst_v, te_v);
+  rtr->rtindex = 1;
+  jt->fromlist = list_make1(rtr);
+
+  outer->commandType = CMD_SELECT;
+  outer->canSetTag   = true;
+  outer->rtable      = list_make1(rte);
+  outer->jointree    = jt;
+  outer->hasAggs     = true;
+
+  /* First output column: the aggregate over the key (col 1 of inner) */
+  {
+    TargetEntry *agg_te = copyObject(orig_agg_te);
+    Aggref *ar = (Aggref *)agg_te->expr;
+    Var *key_var = makeNode(Var);
+    TargetEntry *arg_te = makeNode(TargetEntry);
+
+    key_var->varno      = 1;
+    key_var->varattno   = 1;    /* key is first column of inner */
+    key_var->vartype    = linitial_oid(ar->aggargtypes);
+    key_var->varcollid  = exprCollation((Node *)((TargetEntry *)linitial(ar->args))->expr);
+    key_var->vartypmod  = -1;
+    key_var->location   = -1;
+    arg_te->resno = 1;
+    arg_te->expr  = (Expr *)key_var;
+
+    ar->args        = list_make1(arg_te);
+    ar->aggdistinct = NIL;
+    agg_te->resno   = resno++;
+    new_tl = list_make1(agg_te);
+  }
+
+  /* Remaining output columns: GROUP BY cols (trailing cols of inner) */
+  for (attno = inner_len - n_gb + 1; attno <= inner_len; attno++) {
+    TargetEntry *inner_te = list_nth(inner->targetList, attno - 1);
+    Var *gb_var = makeNode(Var);
+    TargetEntry *gb_te = makeNode(TargetEntry);
+    SortGroupClause *sgc = makeNode(SortGroupClause);
+
+    gb_var->varno      = 1;
+    gb_var->varattno   = attno;
+    gb_var->vartype    = exprType((Node *)inner_te->expr);
+    gb_var->varcollid  = exprCollation((Node *)inner_te->expr);
+    gb_var->vartypmod  = -1;
+    gb_var->location   = -1;
+
+    gb_te->resno   = resno++;
+    gb_te->expr    = (Expr *)gb_var;
+    gb_te->resname = inner_te->resname;
+
+    sgc->tleSortGroupRef = gb_te->ressortgroupref = sgref++;
+    sgc->nulls_first = false;
+    get_sort_group_operators(gb_var->vartype, true, true, false,
+                             &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+    new_gc = lappend(new_gc, sgc);
+    new_tl = lappend(new_tl, gb_te);
+  }
+
+  outer->targetList  = new_tl;
+  outer->groupClause = new_gc;
+  return outer;
+}
+
+/**
+ * @brief Rewrite every @c AGG(DISTINCT key) in @p q using independent subqueries.
+ *
+ * For a single DISTINCT aggregate, produces a subquery:
+ * @code
+ *   SELECT AGG(key), gb...  FROM (SELECT key, gb... FROM t GROUP BY key, gb...) GROUP BY gb...
+ * @endcode
+ * For multiple DISTINCT aggregates with different keys, produces an JOIN
+ * of one such subquery per aggregate, joined on the GROUP BY columns.
+ * Non-DISTINCT aggregates are left untouched.
+ *
+ * @param q            Query to inspect and possibly rewrite.
+ * @param constants    Extension OID cache.
+ * @return   Rewritten query, or @c NULL if no @c AGG(DISTINCT) was found.
+ */
+static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
+  List *distinct_agg_tes = NIL;
+  List *groupby_tes = NIL;
+  ListCell *lc;
+
+  /* Extract AGG(DISTINCT) and GROUP BY targets from the target list.
+   * Regular AGG() aggregations are left untouched. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = lfirst(lc);
+    if (IsA(te->expr, Aggref)) {
+      Aggref *ar = (Aggref *)te->expr;
+      if (list_length(ar->aggdistinct) > 0)
+        distinct_agg_tes = lappend(distinct_agg_tes, te);
+    } else {
+      /* Non-aggregate column — treat as GROUP BY key */
+      TargetEntry *te_copy = copyObject(te);
+      te_copy->resjunk = false;
+      groupby_tes = lappend(groupby_tes, te_copy);
     }
   }
-  if (lst_v != NIL)
-    new_q->targetList = lst_v;
-  if (!found)
+
+  if (distinct_agg_tes == NIL)
     return NULL;
-  else
-    return new_q;
+
+  {
+    int n_aggs = list_length(distinct_agg_tes);
+    int n_gb   = list_length(groupby_tes);
+    List *outer_queries = NIL;
+
+    /* -----------------------------------------------------------------------
+     * For each DISTINCT aggregate, build:
+     *   inner_i: SELECT key_i, gb... FROM original... GROUP BY key_i, gb...
+     *   outer_i: SELECT AGG(key_i) ASS agg_i, gb... FROM inner_i GROUP BY gb...
+     *
+     * Then produce a final query:
+     *   SELECT gb..., agg_0, ..., agg_{N-1}
+     *   FROM original... JOIN outer_0 ON gb... = gb... [JOIN ...]
+     *  keeping the same order for the output columns.
+     *
+     * Column order in the final target list follows q->targetList:
+     *   - DISTINCT agg i  → Var(n+i, 1)   (agg col of outer_i)
+     * ----------------------------------------------------------------------- */
+
+    /* Build one inner + one outer query per DISTINCT aggregate */
+    foreach (lc, distinct_agg_tes) {
+      TargetEntry *agg_te = lfirst(lc);
+      Aggref *ar = (Aggref *)agg_te->expr;
+      if(list_length(ar->args) != 1)
+        elog(ERROR, "ProvSQL: AGG(DISTINCT) with more than one argument is not supported");
+      else {
+        Expr *key_expr = (Expr *)((TargetEntry *)linitial(ar->args))->expr;
+        Query *inner = build_inner_for_distinct_key(q, key_expr, groupby_tes);
+        Query *outer = build_outer_for_distinct_key(agg_te, inner, n_gb, constants);
+        outer_queries = lappend(outer_queries, outer);
+      }
+    }
+
+    {
+      /* One subquery RTE per outer query */
+      int i = 0;
+      foreach (lc, outer_queries) {
+        Query *oq = lfirst(lc);
+        RangeTblEntry *rte = makeNode(RangeTblEntry);
+        Alias *alias = makeNode(Alias), *eref = makeNode(Alias);
+        ListCell *lc2;
+        char buf[16];
+
+        snprintf(buf, sizeof(buf), "d%d", i + 1);
+        alias->aliasname = eref->aliasname = pstrdup(buf);
+        eref->colnames = NIL;
+        foreach (lc2, oq->targetList) {
+          TargetEntry *te = lfirst(lc2);
+          eref->colnames = lappend(eref->colnames,
+                                   makeString(te->resname ? pstrdup(te->resname) : ""));
+        }
+        rte->alias    = alias;
+        rte->eref     = eref;
+        rte->rtekind  = RTE_SUBQUERY;
+        rte->subquery = oq;
+        rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+        rte->requiredPerms = ACL_SELECT;
+#endif
+        q->rtable = lappend(q->rtable, rte);
+        i++;
+      }
+
+      /* Build FROM list and WHERE conditions for the implicit join.
+       * Use a simple FROM original..., outer_i, ... WHERE original.gb_j = outer_i.gb_j */
+      {
+        FromExpr *jt = q->jointree;
+        List *from_list = jt->fromlist;
+        unsigned fll = list_length(from_list);
+        List *where_args = NIL;
+
+        for (i = fll+1; i <= fll+n_aggs; i++) {
+          RangeTblRef *rtr = makeNode(RangeTblRef);
+          ListCell *lc2;
+          unsigned j=0;
+
+          rtr->rtindex = i;
+          from_list = lappend(from_list, rtr);
+
+          /* outer_0.gb_j = outer_i.gb_j for each GROUP BY column j */
+          foreach(lc2, groupby_tes) {
+            TargetEntry *gb_te = lfirst(lc2);
+            int gb_attno = ++j + 1; /* col 1 = agg, cols 2+ = GB */
+            Oid ytype  = exprType((Node *)gb_te->expr);
+            Oid opno   = find_equality_operator(ytype, ytype);
+            Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
+            Form_pg_operator opform;
+            OpExpr *oe = makeNode(OpExpr);
+            Expr *le = copyObject(gb_te->expr);
+            Var *rv = makeNode(Var);
+            Oid collation=exprCollation((Node*) le);
+
+            if (!HeapTupleIsValid(opInfo))
+              elog(ERROR,
+                   "ProvSQL: could not find equality operator for type %u",
+                   ytype);
+            opform = (Form_pg_operator)GETSTRUCT(opInfo);
+
+            oe->opno         = opno;
+            oe->opfuncid     = opform->oprcode;
+            oe->opresulttype = opform->oprresult;
+            oe->opcollid     = InvalidOid;
+            oe->inputcollid  = collation;
+            oe->location     = -1;
+            ReleaseSysCache(opInfo);
+
+            rv->varno = i; rv->varattno = gb_attno;
+            rv->vartype = ytype; rv->varcollid = collation;
+            rv->vartypmod = -1; rv->location = -1;
+
+            oe->args   = list_make2(le, rv);
+            where_args = lappend(where_args, oe);
+          }
+        }
+
+        if (list_length(where_args) == 0) {
+          jt->quals = NULL;
+        } else if (list_length(where_args) == 1) {
+          jt->quals = linitial(where_args);
+        } else {
+          BoolExpr *be = makeNode(BoolExpr);
+          be->boolop   = AND_EXPR;
+          be->args     = where_args;
+          be->location = -1;
+          jt->quals    = (Node *)be;
+        }
+      }
+
+      /* Build final target list in original column order.
+       * DISTINCT agg i → Var(i+1, 1);  GROUP BY col j → Var(1, 2+j). */
+      {
+        int agg_idx   = list_length(q->jointree->fromlist) - n_aggs + 1;
+        ListCell *lc2;
+
+        foreach (lc2, q->targetList) {
+          TargetEntry *te = lfirst(lc2);
+
+          if (IsA(te->expr, Aggref) &&
+              ((Aggref *)te->expr)->aggdistinct != NIL) {
+            Var *v = makeNode(Var);
+            v->varno = agg_idx++; /* outer_{agg_idx} RTE */
+            v->varattno = 1;      /* agg result is col 1 of each outer */
+            v->vartypmod = -1;
+            v->location  = -1;
+            te->expr = (Expr*)v;
+          }
+        }
+      }
+
+      return q;
+    }
+  }
 }
 
 /* -------------------------------------------------------------------------
@@ -2272,14 +2491,9 @@ static Query *process_query(const constants_t *constants, Query *q,
     }
 
     if (q->hasAggs) {
-      Query *subq;
-
-      subq = check_for_agg_distinct(q);
-      if (subq) // agg distinct detected, create a subquery
-      {
-        q = rewrite_for_agg_distinct(q, subq);
-        return process_query(constants, q, removed);
-      }
+      Query *rewritten = rewrite_agg_distinct(q, constants);
+      if (rewritten)
+        return process_query(constants, rewritten, removed);
     }
 
     // get_provenance_attributes will also recursively process subqueries
