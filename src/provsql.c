@@ -2729,9 +2729,11 @@ static PlannedStmt *provsql_planner(Query *q,
       Query *new_query;
       clock_t begin = 0;
 
+#if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
         ereport(NOTICE, (errmsg("Main query before ProvSQL query rewriting:\n%s\n",
                                 pg_get_querydef(q, true))));
+#endif
 
       if (provsql_verbose >= 40)
         begin = clock();
@@ -2742,9 +2744,11 @@ static PlannedStmt *provsql_planner(Query *q,
         ereport(NOTICE, (errmsg("planner time spent=%f",
                                 (double)(clock() - begin) / CLOCKS_PER_SEC)));
 
+#if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
         ereport(NOTICE, (errmsg("Main query after ProvSQL query rewriting:\n%s\n",
                                 pg_get_querydef(q, true))));
+#endif
 
       if (new_query != NULL)
         q = new_query;
