@@ -39,6 +39,7 @@
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
+#include "utils/ruleutils.h"
 #include "utils/syscache.h"
 #include <time.h>
 
@@ -1386,11 +1387,11 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
       foreach (lc2, q->targetList) {
         TargetEntry *te = (TargetEntry *)lfirst(lc2);
         te->expr = (Expr *)resolve_group_rte_vars_mutator(
-            (Node *)te->expr, &grp_ctx);
+          (Node *)te->expr, &grp_ctx);
       }
       if (q->jointree && q->jointree->quals)
         q->jointree->quals = resolve_group_rte_vars_mutator(
-            q->jointree->quals, &grp_ctx);
+          q->jointree->quals, &grp_ctx);
     }
   }
 #endif
@@ -2728,6 +2729,10 @@ static PlannedStmt *provsql_planner(Query *q,
       Query *new_query;
       clock_t begin = 0;
 
+      if (provsql_verbose >= 20)
+        ereport(NOTICE, (errmsg("Main query before ProvSQL query rewriting:\n%s\n",
+                                pg_get_querydef(q, true))));
+
       if (provsql_verbose >= 40)
         begin = clock();
 
@@ -2736,6 +2741,10 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_verbose >= 40)
         ereport(NOTICE, (errmsg("planner time spent=%f",
                                 (double)(clock() - begin) / CLOCKS_PER_SEC)));
+
+      if (provsql_verbose >= 20)
+        ereport(NOTICE, (errmsg("Main query after ProvSQL query rewriting:\n%s\n",
+                                pg_get_querydef(q, true))));
 
       if (new_query != NULL)
         q = new_query;
