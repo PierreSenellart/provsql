@@ -344,7 +344,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       } else { // Semijoin (should be feasible, but check whether the second
                // provenance information is available) Antijoin (feasible with
                // negation)
-        ereport(ERROR, (errmsg("JOIN type not supported by provsql")));
+        provsql_error("JOIN type not supported by provsql");
       }
     } else if (r->rtekind == RTE_FUNCTION) {
       ListCell *lc;
@@ -361,8 +361,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
                                   constants, q, r, rteid, attid));
           }
         } else {
-          ereport(ERROR, (errmsg("FROM function with multiple output "
-                                 "attributes not supported by provsql")));
+          provsql_error("FROM function with multiple output "
+                        "attributes not supported by provsql");
         }
 
         attid += func->funccolcount;
@@ -375,7 +375,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       // groupClause
 #endif
     } else {
-      ereport(ERROR, (errmsg("FROM clause unsupported by provsql")));
+      provsql_error("FROM clause unsupported by provsql");
     }
   }
 
@@ -580,8 +580,8 @@ static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
     BoolExpr *be = (BoolExpr *)quals;
     /* In some cases, there can be an OR or a NOT specified with ON clause */
     if (be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
-      ereport(ERROR, (errmsg("Boolean operators OR and NOT in a join...on "
-                             "clause are not supported by provsql")));
+      provsql_error("Boolean operators OR and NOT in a join...on "
+                    "clause are not supported by provsql");
     } else {
       ListCell *lc2;
       foreach (lc2, be->args) {
@@ -764,7 +764,7 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
 
         arguments[i] = (Node *)castToUUID;
       } else {
-        elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+        provsql_error("cannot handle complex HAVING expressions");
       }
     } else if (IsA(node, Var)) {
       Var *v = (Var *)node;
@@ -780,7 +780,7 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
 
         arguments[i] = (Node *)castToUUID;
       } else {
-        elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+        provsql_error("cannot handle complex HAVING expressions");
       }
     } else if (IsA(node, Const)) {
       Const *literal = (Const *)node;
@@ -802,14 +802,14 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
 
       arguments[i] = (Node *)semimodExpr;
     } else {
-      elog(ERROR, "ProvSQL cannot handle complex HAVING expressions");
+      provsql_error("cannot handle complex HAVING expressions");
     }
   }
 
   if (negated) {
     opno = get_negator(opno);
     if (!opno)
-      elog(ERROR, "ProvSQL: Missing negator");
+      provsql_error("Missing negator");
   }
 
   oid = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
@@ -862,7 +862,7 @@ static FuncExpr *having_BoolExpr_to_provenance(BoolExpr *be, const constants_t *
     else if ((be->boolop == AND_EXPR && negated) || (be->boolop == OR_EXPR && !negated))
       result->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
     else
-      elog(ERROR, "ProvSQL: Unknown Boolean operator");
+      provsql_error("Unknown Boolean operator");
 
     foreach (lc, be->args) {
       Expr *expr = (Expr *)lfirst(lc);
@@ -894,7 +894,7 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
   else if (IsA(expr, OpExpr))
     return having_OpExpr_to_provenance_cmp((OpExpr *)expr, constants, negated);
   else
-    elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
+    provsql_error("Unknown structure within Boolean expression");
 }
 
 /**
@@ -1439,7 +1439,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
       TargetEntry *agg_te = lfirst(lc);
       Aggref *ar = (Aggref *)agg_te->expr;
       if(list_length(ar->args) != 1)
-        elog(ERROR, "ProvSQL: AGG(DISTINCT) with more than one argument is not supported");
+        provsql_error("AGG(DISTINCT) with more than one argument is not supported");
       else {
         Expr *key_expr = (Expr *)((TargetEntry *)linitial(ar->args))->expr;
         Query *inner = build_inner_for_distinct_key(q, key_expr, groupby_tes);
@@ -1508,9 +1508,8 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
             Oid collation=exprCollation((Node*) le);
 
             if (!HeapTupleIsValid(opInfo))
-              elog(ERROR,
-                   "ProvSQL: could not find equality operator for type %u",
-                   ytype);
+              provsql_error("could not find equality operator for type %u",
+                             ytype);
             opform = (Form_pg_operator)GETSTRUCT(opInfo);
 
             oe->opno         = opno;
@@ -2087,7 +2086,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
   int attno = 1;
 
   if (!IsA(setOps->larg, RangeTblRef) || !IsA(setOps->rarg, RangeTblRef)) {
-    ereport(ERROR, (errmsg("Unsupported chain of EXCEPT operations")));
+    provsql_error("Unsupported chain of EXCEPT operations");
   }
 
   expr->boolop = AND_EXPR;
@@ -2099,7 +2098,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
     Var *v;
 
     if (!IsA(te->expr, Var))
-      elog(ERROR, "ProvSQL: EXCEPT query format not supported");
+      provsql_error("EXCEPT query format not supported");
 
     v = (Var *)te->expr;
 
@@ -2111,8 +2110,8 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
       Var *leftArg, *rightArg;
 
       if (!HeapTupleIsValid(opInfo))
-        elog(ERROR, "ProvSQL: could not find operator with OID %u to compare variables of type %u",
-             opno, v->vartype);
+        provsql_error("could not find operator with OID %u to compare variables of type %u",
+                       opno, v->vartype);
 
       opform = (Form_pg_operator)GETSTRUCT(opInfo);
       leftArg = makeNode(Var);
@@ -2194,7 +2193,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 static void process_set_operation_union(const constants_t *constants,
                                         SetOperationStmt *stmt) {
   if (stmt->op != SETOP_UNION) {
-    ereport(ERROR, (errmsg("Unsupported mixed set operations")));
+    provsql_error("Unsupported mixed set operations");
   }
   if (IsA(stmt->larg, SetOperationStmt)) {
     process_set_operation_union(constants, (SetOperationStmt *)(stmt->larg));
@@ -2272,7 +2271,7 @@ static Node *add_to_havingQual(Node *havingQual, Expr *expr)
     be->args = list_make2(havingQual, expr);
     havingQual = (Node*) be;
   } else
-    elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
+    provsql_error("Unknown structure within Boolean expression");
 
   return havingQual;
 }
@@ -2373,7 +2372,7 @@ static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
   case T_OpExpr:
     return check_selection_on_aggregate((OpExpr*) expr, constants);
   default:
-    elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
+    provsql_error("Unknown structure within Boolean expression");
   }
 }
 
@@ -2488,7 +2487,7 @@ static void migrate_aggtoken_quals_to_having(const constants_t *constants,
 
             q->havingQual = add_to_havingQual(q->havingQual, expr);
           } else {
-            elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+            provsql_error("Complex selection on aggregation results not supported");
           }
         } else {
           prev = cell;
@@ -2496,10 +2495,10 @@ static void migrate_aggtoken_quals_to_having(const constants_t *constants,
         }
       }
     } else {
-      elog(ERROR, "Complex selection on aggregation results not supported by ProvSQL");
+      provsql_error("Complex selection on aggregation results not supported");
     }
   } else {
-    elog(ERROR, "ProvSQL: Unknown structure within Boolean expression");
+    provsql_error("Unknown structure within Boolean expression");
   }
 }
 
@@ -2589,18 +2588,17 @@ static Query *process_query(const constants_t *constants, Query *q,
       return q;
 
     if (q->hasSubLinks) {
-      ereport(ERROR,
-              (errmsg("Subqueries in WHERE clause not supported by provsql")));
+      provsql_error("Subqueries in WHERE clause not supported by provsql");
       supported = false;
     }
 
     if (supported && q->distinctClause) {
       if (q->hasDistinctOn) {
-        ereport(ERROR, (errmsg("DISTINCT ON not supported by provsql")));
+        provsql_error("DISTINCT ON not supported by provsql");
         supported = false;
       } else if (list_length(q->distinctClause) < list_length(q->targetList)) {
-        ereport(ERROR, (errmsg("Inconsistent DISTINCT and GROUP BY clauses not "
-                               "supported by provsql")));
+        provsql_error("Inconsistent DISTINCT and GROUP BY clauses not "
+                       "supported by provsql");
         supported = false;
       } else {
         transform_distinct_into_group_by(q);
@@ -2618,8 +2616,8 @@ static Query *process_query(const constants_t *constants, Query *q,
           supported = false;
         has_difference = true;
       } else {
-        ereport(ERROR, (errmsg("Set operations other than UNION and EXCEPT not "
-                               "supported by provsql")));
+        provsql_error("Set operations other than UNION and EXCEPT not "
+                       "supported by provsql");
         supported = false;
       }
     }
@@ -2633,9 +2631,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (q->groupClause || list_length(q->groupingSets) > 1 ||
           ((GroupingSet *)linitial(q->groupingSets))->kind !=
           GROUPING_SET_EMPTY) {
-        ereport(
-          ERROR,
-          (errmsg("GROUPING SETS, CUBE, and ROLLUP not supported by provsql")));
+        provsql_error("GROUPING SETS, CUBE, and ROLLUP not supported by provsql");
         supported = false;
       } else {
         // Simple GROUP BY ()
@@ -2667,8 +2663,8 @@ static Query *process_query(const constants_t *constants, Query *q,
             TargetEntry *te = (TargetEntry *)lfirst(lc_te);
             if (sort->tleSortGroupRef == te->ressortgroupref) {
               if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
-                elog(ERROR, "ORDER BY on the result of an aggregate function is "
-                     "not supported by ProvSQL");
+                provsql_error("ORDER BY on the result of an aggregate function is "
+                               "not supported by ProvSQL");
               break;
             }
           }
@@ -2731,8 +2727,8 @@ static PlannedStmt *provsql_planner(Query *q,
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
-        ereport(NOTICE, (errmsg("Main query before ProvSQL query rewriting:\n%s\n",
-                                pg_get_querydef(q, true))));
+        provsql_notice("Main query before ProvSQL query rewriting:\n%s\n",
+                        pg_get_querydef(q, true));
 #endif
 
       if (provsql_verbose >= 40)
@@ -2741,13 +2737,13 @@ static PlannedStmt *provsql_planner(Query *q,
       new_query = process_query(&constants, q, &removed);
 
       if (provsql_verbose >= 40)
-        ereport(NOTICE, (errmsg("planner time spent=%f",
-                                (double)(clock() - begin) / CLOCKS_PER_SEC)));
+        provsql_notice("planner time spent=%f",
+                        (double)(clock() - begin) / CLOCKS_PER_SEC);
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
-        ereport(NOTICE, (errmsg("Main query after ProvSQL query rewriting:\n%s\n",
-                                pg_get_querydef(q, true))));
+        provsql_notice("Main query after ProvSQL query rewriting:\n%s\n",
+                        pg_get_querydef(q, true));
 #endif
 
       if (new_query != NULL)
@@ -2780,8 +2776,8 @@ static PlannedStmt *provsql_planner(Query *q,
  */
 void _PG_init(void) {
   if (!process_shared_preload_libraries_in_progress)
-    elog(ERROR, "provsql needs to be added to the shared_preload_libraries "
-         "configuration variable");
+    provsql_error("provsql needs to be added to the shared_preload_libraries "
+                   "configuration variable");
 
   DefineCustomBoolVariable("provsql.active",
                            "Should ProvSQL track provenance?",

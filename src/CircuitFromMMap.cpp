@@ -19,11 +19,11 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
 {
   provsql_shmem_lock_exclusive();
   if(!WRITEM(&message_char, char) || !WRITEM(&token, pg_uuid_t))
-    elog(ERROR, "Cannot write to pipe (message type %c)", message_char);
+    provsql_error("Cannot write to pipe (message type %c)", message_char);
 
   unsigned long size;
   if(!READB(size, unsigned long))
-    elog(ERROR, "Cannot read from pipe (message type %c)", message_char);
+    provsql_error("Cannot read from pipe (message type %c)", message_char);
 
   char *buf = new char[size], *p = buf;
   ssize_t actual_read, remaining_size=size;
@@ -31,7 +31,7 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
     if(actual_read<=0) {
       provsql_shmem_unlock();
       delete [] buf;
-      elog(ERROR, "Cannot read from pipe (message type %c)", message_char);
+      provsql_error("Cannot read from pipe (message type %c)", message_char);
     } else {
       remaining_size-=actual_read;
       p+=actual_read;

@@ -79,7 +79,7 @@ static Datum pec_why(
     semiring::why_provenance_t result;
     semiring::label_set single;
     if(strchr(v, '{'))
-      elog(ERROR, "Complex Why-semiring values for input tuples not currently supported.");
+      provsql_error("Complex Why-semiring values for input tuples not currently supported.");
     single.insert(std::string(v));
     result.insert(std::move(single));
     return result;
@@ -296,9 +296,9 @@ Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
 
     return provenance_evaluate_compiled_internal(*DatumGetUUIDP(token), table, semiring, type);
   } catch(const std::exception &e) {
-    elog(ERROR, "provenance_evaluate_compiled: %s", e.what());
+    provsql_error("provenance_evaluate_compiled: %s", e.what());
   } catch(...) {
-    elog(ERROR, "provenance_evaluate_compiled: Unknown exception");
+    provsql_error("provenance_evaluate_compiled: Unknown exception");
   }
 
   PG_RETURN_NULL();

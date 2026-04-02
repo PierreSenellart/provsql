@@ -7,4 +7,4 @@ get_prob
 
 
 (3 rows)
-ERROR:  set_prob called on non-input gate
+ERROR:  ProvSQL: set_prob called on non-input gate

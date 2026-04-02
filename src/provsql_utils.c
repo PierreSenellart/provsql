@@ -225,7 +225,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
 
   #define CheckOid(o) if(constants.o==InvalidOid) { \
             if(failure_if_not_possible) \
-            elog(ERROR, "Could not initialize provsql constants"); \
+            provsql_error("Could not initialize provsql constants"); \
             else \
             return constants; }
 
@@ -327,7 +327,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
               constants.OID_TYPE_GATE_TYPE, \
               #x); \
             if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
-            elog(ERROR, "Could not initialize provsql gate type " #x); }
+            provsql_error("Could not initialize provsql gate type " #x); }
 
   GET_GATE_TYPE_OID(input);
   GET_GATE_TYPE_OID(plus);

@@ -108,7 +108,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
         {
           vector<pair<int, int> > v = parse_array(std::string("{")+SPI_getvalue(tuple, tupdesc, 5)+"}");
           if (v.size() != 1)
-            elog(ERROR, "Incorrect extra information on eq gate");
+            provsql_error("Incorrect extra information on eq gate");
           std::string cond = std::to_string(v[0].first) + std::string("=") + std::to_string(v[0].second);
           c.setGate(f, DotGate::EQ, cond);
         }
@@ -129,7 +129,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
         }
         else
         {
-          elog(ERROR, "Wrong type of gate in circuit");
+          provsql_error("Wrong type of gate in circuit");
         }
         //elog(WARNING, "%d -- %d", id, c.getGate(SPI_getvalue(tuple, tupdesc, 2)));
         c.addWire(id, c.getGate(SPI_getvalue(tuple, tupdesc, 2)));
@@ -142,7 +142,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
   // Display the circuit for debugging:
   int display = DatumGetInt64(is_debug);
   if(display)
-    elog(WARNING, "%s", c.toString(gate_t{0}).c_str());
+    provsql_warning("%s", c.toString(gate_t{0}).c_str());
 
   //Calling the dot renderer
   return c.render();
@@ -169,11 +169,11 @@ Datum view_circuit(PG_FUNCTION_ARGS)
            s.size());
     PG_RETURN_TEXT_P(result);
   } catch(const std::exception &e) {
-    elog(ERROR, "view_circuit: %s", e.what());
+    provsql_error("view_circuit: %s", e.what());
   }
   catch (...)
   {
-    elog(ERROR, "view_circuit: Unknown exception");
+    provsql_error("view_circuit: Unknown exception");
   }
 
   PG_RETURN_NULL();

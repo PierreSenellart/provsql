@@ -99,18 +99,18 @@ static string where_provenance_internal
         } else if(type == "eq") {
           vector<pair<int,int> > v = parse_array(std::string("{")+SPI_getvalue(tuple, tupdesc, 6)+"}");
           if(v.size()!=1)
-            elog(ERROR, "Incorrect extra information on eq gate");
+            provsql_error("Incorrect extra information on eq gate");
           c.setGateEquality(f, v[0].first, v[0].second);
         } else if(type == "monusr" || type == "monusl" || type == "monus") {
-          elog(ERROR, "Where-provenance of non-monotone query not supported");
+          provsql_error("Where-provenance of non-monotone query not supported");
         } else {
-          elog(ERROR, "Wrong type of gate in circuit");
+          provsql_error("Wrong type of gate in circuit");
         }
         c.addWire(id, c.getGate(SPI_getvalue(tuple, tupdesc, 2)));
       }
     }
   } else {
-    elog(ERROR, "SPI_execute_with_args failed on provsql.sub_circuit_for_where");
+    provsql_error("SPI_execute_with_args failed on provsql.sub_circuit_for_where");
   }
 
   SPI_finish();
@@ -148,8 +148,8 @@ Datum where_provenance(PG_FUNCTION_ARGS)
 
     PG_RETURN_TEXT_P(cstring_to_text(where_provenance_internal(token).c_str()));
   } catch(const std::exception &e) {
-    elog(ERROR, "where_provenance: %s", e.what());
+    provsql_error("where_provenance: %s", e.what());
   } catch(...) {
-    elog(ERROR, "where_provenance: Unknown exception");
+    provsql_error("where_provenance: Unknown exception");
   }
 }

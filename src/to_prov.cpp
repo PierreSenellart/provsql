@@ -125,11 +125,11 @@ Datum to_provxml(PG_FUNCTION_ARGS)
            s.size());
     PG_RETURN_TEXT_P(result);
   } catch(const exception &e) {
-    elog(ERROR, "to_provxml: %s", e.what());
+    provsql_error("to_provxml: %s", e.what());
   }
   catch (...)
   {
-    elog(ERROR, "to_provxml: Unknown exception");
+    provsql_error("to_provxml: Unknown exception");
   }
 
   PG_RETURN_NULL();

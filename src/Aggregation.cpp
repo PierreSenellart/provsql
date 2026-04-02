@@ -5,14 +5,17 @@
 
 extern "C" {
 #include "utils/lsyscache.h"
+#include "utils/elog.h"
 }
+
+#include "provsql_error.h"
 
 AggregationOperator getAggregationOperator(Oid oid)
 {
   char *fname = get_func_name(oid);
 
   if(fname == nullptr)
-    elog(ERROR, "Invalid OID for aggregation function: %d", oid);
+    provsql_error("Invalid OID for aggregation function: %d", oid);
 
   std::string func_name {fname};
   pfree(fname);
@@ -38,7 +41,7 @@ AggregationOperator getAggregationOperator(Oid oid)
   } else if(func_name == "or") {
     op = AggregationOperator::OR;
   } else {
-    elog(ERROR, "Aggregation operator %s not supported", func_name.c_str());
+    provsql_error("Aggregation operator %s not supported", func_name.c_str());
   }
 
   return op;

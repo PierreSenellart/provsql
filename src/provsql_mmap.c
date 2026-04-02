@@ -28,7 +28,7 @@ void provsql_mmap_worker(Datum ignored)
   initialize_provsql_mmap();
   close(provsql_shared_state->pipebmw);
   close(provsql_shared_state->pipembr);
-  elog(LOG, "%s initialized", MyBgworkerEntry->bgw_name);
+  provsql_log("%s initialized", MyBgworkerEntry->bgw_name);
 
   provsql_mmap_main_loop();
 
@@ -82,7 +82,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
 
   if(!SENDWRITEM() || !READB(type, gate_type)) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot communicate on pipe (message type t)");
+    provsql_error("Cannot communicate on pipe (message type t)");
   }
 
   provsql_shmem_unlock();
@@ -107,11 +107,11 @@ Datum create_gate(PG_FUNCTION_ARGS)
   pg_uuid_t *children_data;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
-    elog(ERROR, "Invalid NULL value passed to create_gate");
+    provsql_error("Invalid NULL value passed to create_gate");
 
   if(children) {
     if(ARR_NDIM(children) > 1)
-      elog(ERROR, "Invalid multi-dimensional array passed to create_gate");
+      provsql_error("Invalid multi-dimensional array passed to create_gate");
     else if(ARR_NDIM(children) == 1)
       nb_children = *ARR_DIMS(children);
   }
@@ -125,7 +125,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
     }
   }
   if(type == gate_invalid) {
-    elog(ERROR, "Invalid gate type");
+    provsql_error("Invalid gate type");
   }
 
   if(nb_children>0)
@@ -152,7 +152,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
     provsql_shmem_lock_shared();
     if(!SENDWRITEM()) {
       provsql_shmem_unlock();
-      elog(ERROR, "Cannot write to pipe (message type C)");
+      provsql_error("Cannot write to pipe (message type C)");
     }
     provsql_shmem_unlock();
   } else {
@@ -164,7 +164,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
 
     if(!SENDWRITEM()) {
       provsql_shmem_unlock();
-      elog(ERROR, "Cannot write to pipe (message type C)");
+      provsql_error("Cannot write to pipe (message type C)");
     }
 
     for(unsigned j=0; j<1+(nb_children-1)/children_per_batch; ++j) {
@@ -176,7 +176,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
 
       if(!SENDWRITEM()) {
         provsql_shmem_unlock();
-        elog(ERROR, "Cannot write to pipe (message type C)");
+        provsql_error("Cannot write to pipe (message type C)");
       }
     }
 
@@ -194,7 +194,7 @@ Datum set_prob(PG_FUNCTION_ARGS)
   char result;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
-    elog(ERROR, "Invalid NULL value passed to set_prob");
+    provsql_error("Invalid NULL value passed to set_prob");
 
   STARTWRITEM();
   ADDWRITEM("P", char);
@@ -204,12 +204,12 @@ Datum set_prob(PG_FUNCTION_ARGS)
   provsql_shmem_lock_shared();
   if(!SENDWRITEM() || !READB(result, char)) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot write to pipe");
+    provsql_error("Cannot write to pipe");
   }
   provsql_shmem_unlock();
 
   if(!result)
-    elog(ERROR, "set_prob called on non-input gate");
+    provsql_error("set_prob called on non-input gate");
 
   PG_RETURN_VOID();
 }
@@ -236,7 +236,7 @@ Datum set_infos(PG_FUNCTION_ARGS)
   provsql_shmem_lock_shared();
   if(!SENDWRITEM()) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot write to pipe (message type I)");
+    provsql_error("Cannot write to pipe (message type I)");
   }
   provsql_shmem_unlock();
 
@@ -263,7 +263,7 @@ Datum set_extra(PG_FUNCTION_ARGS)
   provsql_shmem_lock_shared();
   if(!SENDWRITEM()) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot write to pipe (message type E)");
+    provsql_error("Cannot write to pipe (message type E)");
   }
   provsql_shmem_unlock();
 
@@ -288,7 +288,7 @@ Datum get_extra(PG_FUNCTION_ARGS)
 
   if(!SENDWRITEM() || !READB(len, unsigned)) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot communicate with pipe (message type e)");
+    provsql_error("Cannot communicate with pipe (message type e)");
   }
 
   result = palloc(len + VARHDRSZ);
@@ -296,7 +296,7 @@ Datum get_extra(PG_FUNCTION_ARGS)
 
   if(read(provsql_shared_state->pipembr, VARDATA(result), len)<len) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot communicate with pipe (message type e)");
+    provsql_error("Cannot communicate with pipe (message type e)");
   }
 
   provsql_shmem_unlock();
@@ -313,7 +313,7 @@ Datum get_nb_gates(PG_FUNCTION_ARGS)
 
   if(!WRITEM("n", char) || !READB(nb, unsigned long)) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot communicate with pipe (message type n)");
+    provsql_error("Cannot communicate with pipe (message type n)");
   }
 
   provsql_shmem_unlock();
@@ -345,12 +345,12 @@ Datum get_children(PG_FUNCTION_ARGS)
 
     if(!SENDWRITEM()) {
       provsql_shmem_unlock();
-      elog(ERROR, "Cannot write to pipe (message type c)");
+      provsql_error("Cannot write to pipe (message type c)");
     }
 
     if(!READB(nb_children, unsigned)) {
       provsql_shmem_unlock();
-      elog(ERROR, "Cannot read response from pipe (message type c)");
+      provsql_error("Cannot read response from pipe (message type c)");
     }
 
     children=calloc(nb_children, sizeof(pg_uuid_t));
@@ -361,7 +361,7 @@ Datum get_children(PG_FUNCTION_ARGS)
       while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
         if(actual_read<=0) {
           provsql_shmem_unlock();
-          elog(ERROR, "Cannot read from pipe (message type c)");
+          provsql_error("Cannot read from pipe (message type c)");
         } else {
           remaining_size-=actual_read;
           p+=actual_read;
@@ -408,7 +408,7 @@ Datum get_prob(PG_FUNCTION_ARGS)
 
   if(!SENDWRITEM() || !READB(result, double)) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot communicate with pipe (message type p)");
+    provsql_error("Cannot communicate with pipe (message type p)");
   }
 
   provsql_shmem_unlock();
@@ -436,7 +436,7 @@ Datum get_infos(PG_FUNCTION_ARGS)
 
   if(!SENDWRITEM() || !READB(info1, int) || !READB(info2, int)) {
     provsql_shmem_unlock();
-    elog(ERROR, "Cannot communicate with pipe (message type i)");
+    provsql_error("Cannot communicate with pipe (message type i)");
   }
 
   provsql_shmem_unlock();

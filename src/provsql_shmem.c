@@ -43,7 +43,7 @@ void provsql_shmem_startup(void)
     return;
 
   if(pipe(pipes_b_to_m) || pipe(pipes_m_to_b))
-    elog(ERROR, "Cannot create pipe to communicate with MMap worker");
+    provsql_error("Cannot create pipe to communicate with MMap worker");
 
   provsql_shared_state->pipebmr=pipes_b_to_m[0];
   provsql_shared_state->pipebmw=pipes_b_to_m[1];

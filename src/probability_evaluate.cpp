@@ -76,12 +76,12 @@ static Datum probability_evaluate_internal
         }
 
         if(samples<=0)
-          elog(ERROR, "Invalid number of samples: '%s'", args.c_str());
+          provsql_error("Invalid number of samples: '%s'", args.c_str());
 
         result = c.monteCarlo(gate, samples);
       } else if(method=="possible-worlds") {
         if(!args.empty())
-          elog(WARNING, "Argument '%s' ignored for method possible-worlds", args.c_str());
+          provsql_warning("Argument '%s' ignored for method possible-worlds", args.c_str());
 
         result = c.possibleWorlds(gate);
       } else if(method=="weightmc") {
@@ -90,11 +90,11 @@ static Datum probability_evaluate_internal
         auto dd = c.makeDD(gate, method, args);
         result = dd.probabilityEvaluation();
       } else {
-        elog(ERROR, "Wrong method '%s' for probability evaluation", method.c_str());
+        provsql_error("Wrong method '%s' for probability evaluation", method.c_str());
       }
     }
   } catch(CircuitException &e) {
-    elog(ERROR, "%s", e.what());
+    provsql_error("%s", e.what());
   }
 
   provsql_interrupted = false;
@@ -131,9 +131,9 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
 
     return probability_evaluate_internal(*DatumGetUUIDP(token), method, args);
   } catch(const std::exception &e) {
-    elog(ERROR, "probability_evaluate: %s", e.what());
+    provsql_error("probability_evaluate: %s", e.what());
   } catch(...) {
-    elog(ERROR, "probability_evaluate: Unknown exception");
+    provsql_error("probability_evaluate: Unknown exception");
   }
 
   PG_RETURN_NULL();

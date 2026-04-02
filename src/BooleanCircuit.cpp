@@ -34,6 +34,7 @@ extern "C" {
 #include "utils/elog.h"
 }
 #endif
+#include "provsql_error.h"
 
 gate_t BooleanCircuit::setGate(BooleanGate type)
 {
@@ -367,7 +368,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string outfilename=filename+".nnf";
 
   if(provsql_verbose>=20) {
-    elog(NOTICE, "Tseytin circuit in %s", filename.c_str());
+    provsql_notice("Tseytin circuit in %s", filename.c_str());
   }
 
   bool new_d4 {false};
@@ -532,7 +533,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       throw CircuitException("Error removing "+outfilename);
     }
   } else
-    elog(NOTICE, "Compiled d-DNNF in %s", outfilename.c_str());
+    provsql_notice("Compiled d-DNNF in %s", outfilename.c_str());
 
   dnnf.setRoot(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
 
@@ -839,25 +840,25 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
       return dDNNFTreeDecompositionBuilder{
         *this, g, td}.build();
     } catch(TreeDecompositionException &) {
-      elog(ERROR, "Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
+      provsql_error("Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
     }
   } else {
     dDNNF dd;
     try {
       dd = interpretAsDD(g);
       if(provsql_verbose>=20)
-        elog(NOTICE, "Circuit interpreted as dD, %ld gates", dd.getNbGates());
+        provsql_notice("Circuit interpreted as dD, %ld gates", dd.getNbGates());
     } catch(CircuitException &) {
       try {
         TreeDecomposition td(*this);
         dd = dDNNFTreeDecompositionBuilder{
           *this, g, td}.build();
         if(provsql_verbose>=20)
-          elog(NOTICE, "dD obtained by tree decomposition, %ld gates", dd.getNbGates());
+          provsql_notice("dD obtained by tree decomposition, %ld gates", dd.getNbGates());
       } catch(TreeDecompositionException &) {
         dd = compilation(g, "d4");
         if(provsql_verbose>=20)
-          elog(NOTICE, "dD obtained by compilation using d4, %ld gates", dd.getNbGates());
+          provsql_notice("dD obtained by compilation using d4, %ld gates", dd.getNbGates());
       }
     }
 

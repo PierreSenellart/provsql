@@ -65,7 +65,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     auto infos = getInfos(g);
     char * opname = get_opname(infos.first);
     if(opname == nullptr)
-      elog(ERROR, "Invalid OID for operator: %d", infos.first);
+      provsql_error("Invalid OID for operator: %d", infos.first);
 
     std::string func_name {opname};
 

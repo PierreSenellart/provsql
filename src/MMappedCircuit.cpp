@@ -137,12 +137,12 @@ void provsql_mmap_main_loop()
       unsigned nb_children;
 
       if(!READM(token, pg_uuid_t) || !READM(type, gate_type) || !READM(nb_children, unsigned))
-        elog(ERROR, "Cannot read from pipe (message type C)"); ;
+        provsql_error("Cannot read from pipe (message type C)"); ;
 
       std::vector<pg_uuid_t> children(nb_children);
       for(unsigned i=0; i<nb_children; ++i)
         if(!READM(children[i], pg_uuid_t))
-          elog(ERROR, "Cannot read from pipe (message type C)");
+          provsql_error("Cannot read from pipe (message type C)");
 
       circuit->createGate(token, type, children);
       break;
@@ -154,13 +154,13 @@ void provsql_mmap_main_loop()
       double prob;
 
       if(!READM(token, pg_uuid_t) || !READM(prob, double))
-        elog(ERROR, "Cannot read from pipe (message type P)");
+        provsql_error("Cannot read from pipe (message type P)");
 
       bool ok = circuit->setProb(token, prob);
       char return_value = ok?static_cast<char>(1):0;
 
       if(!WRITEB(&return_value, char))
-        elog(ERROR, "Cannot write response to pipe (message type P)");
+        provsql_error("Cannot write response to pipe (message type P)");
       break;
     }
 
@@ -170,7 +170,7 @@ void provsql_mmap_main_loop()
       unsigned info1, info2;
 
       if(!READM(token, pg_uuid_t) || !READM(info1, unsigned) || !READM(info2, unsigned))
-        elog(ERROR, "Cannot read from pipe (message type I)");
+        provsql_error("Cannot read from pipe (message type I)");
 
       circuit->setInfos(token, info1, info2);
       break;
@@ -182,12 +182,12 @@ void provsql_mmap_main_loop()
       unsigned len;
 
       if(!READM(token, pg_uuid_t) || !READM(len, unsigned))
-        elog(ERROR, "Cannot read from pipe (message type E)");
+        provsql_error("Cannot read from pipe (message type E)");
 
       if(len>0) {
         char *data = new char[len];
         if(read(provsql_shared_state->pipebmr, data, len)<len)
-          elog(ERROR, "Cannot read from pipe (message type E)");
+          provsql_error("Cannot read from pipe (message type E)");
 
         circuit->setExtra(token, std::string(data, len));
       }
@@ -200,12 +200,12 @@ void provsql_mmap_main_loop()
       pg_uuid_t token;
 
       if(!READM(token, pg_uuid_t))
-        elog(ERROR, "Cannot read from pipe (message type t)");
+        provsql_error("Cannot read from pipe (message type t)");
 
       gate_type type = circuit->getGateType(token);
 
       if(!WRITEB(&type, gate_type))
-        elog(ERROR, "Cannot write response to pipe (message type t)");
+        provsql_error("Cannot write response to pipe (message type t)");
       break;
     }
 
@@ -214,7 +214,7 @@ void provsql_mmap_main_loop()
       unsigned long nb = circuit->getNbGates();
 
       if(!WRITEB(&nb, unsigned long))
-        elog(ERROR, "Cannot write response to pipe (message type n)");
+        provsql_error("Cannot write response to pipe (message type n)");
       break;
     }
 
@@ -223,15 +223,15 @@ void provsql_mmap_main_loop()
       pg_uuid_t token;
 
       if(!READM(token, pg_uuid_t))
-        elog(ERROR, "Cannot read from pipe (message type c)");
+        provsql_error("Cannot read from pipe (message type c)");
 
       auto children = circuit->getChildren(token);
       unsigned nb_children = children.size();
       if(!WRITEB(&nb_children, unsigned))
-        elog(ERROR, "Cannot write response to pipe (message type c)");
+        provsql_error("Cannot write response to pipe (message type c)");
 
       if(write(provsql_shared_state->pipembw, &children[0], nb_children*sizeof(pg_uuid_t))==-1)
-        elog(ERROR, "Cannot write response to pipe (message type c)");
+        provsql_error("Cannot write response to pipe (message type c)");
       break;
     }
 
@@ -240,12 +240,12 @@ void provsql_mmap_main_loop()
       pg_uuid_t token;
 
       if(!READM(token, pg_uuid_t))
-        elog(ERROR, "Cannot read from pipe (message type p)");
+        provsql_error("Cannot read from pipe (message type p)");
 
       double prob = circuit->getProb(token);
 
       if(!WRITEB(&prob, double))
-        elog(ERROR, "Cannot write response to pipe (message type p)");
+        provsql_error("Cannot write response to pipe (message type p)");
       break;
     }
 
@@ -254,12 +254,12 @@ void provsql_mmap_main_loop()
       pg_uuid_t token;
 
       if(!READM(token, pg_uuid_t))
-        elog(ERROR, "Cannot read from pipe (message type i)");
+        provsql_error("Cannot read from pipe (message type i)");
 
       auto infos = circuit->getInfos(token);
 
       if(!WRITEB(&infos.first, unsigned) || !WRITEB(&infos.second, unsigned))
-        elog(ERROR, "Cannot write response to pipe (message type i)");
+        provsql_error("Cannot write response to pipe (message type i)");
       break;
     }
 
@@ -268,13 +268,13 @@ void provsql_mmap_main_loop()
       pg_uuid_t token;
 
       if(!READM(token, pg_uuid_t))
-        elog(ERROR, "Cannot read from pipe (message type e)");
+        provsql_error("Cannot read from pipe (message type e)");
 
       auto str = circuit->getExtra(token);
       unsigned len = str.size();
 
       if(!WRITEB(&len, unsigned) || write(provsql_shared_state->pipembw, str.data(), len)==-1)
-        elog(ERROR, "Cannot write response to pipe (message type e)");
+        provsql_error("Cannot write response to pipe (message type e)");
       break;
     }
 
@@ -283,7 +283,7 @@ void provsql_mmap_main_loop()
       pg_uuid_t token;
 
       if(!READM(token, pg_uuid_t))
-        elog(ERROR, "Cannot read from pipe (message type g)");
+        provsql_error("Cannot read from pipe (message type g)");
 
       std::stringstream ss;
       boost::archive::binary_oarchive oa(ss);
@@ -294,17 +294,17 @@ void provsql_mmap_main_loop()
       ss.seekg(0, std::ios::beg);
 
       if(!WRITEB(&size, unsigned long) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
-        elog(ERROR, "Cannot write to pipe (message type g)");
+        provsql_error("Cannot write to pipe (message type g)");
       break;
     }
 
     default:
-      elog(ERROR, "Wrong message type: %c", c);
+      provsql_error("Wrong message type: %c", c);
     }
   }
 
   int e = errno;
-  elog(ERROR, "Reading from pipe: %s", strerror(e));
+  provsql_error("Reading from pipe: %s", strerror(e));
 }
 
 void MMappedCircuit::sync()

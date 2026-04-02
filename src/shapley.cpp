@@ -76,9 +76,9 @@ Datum shapley(PG_FUNCTION_ARGS)
 
     PG_RETURN_FLOAT8(shapley_internal(*DatumGetUUIDP(token), *DatumGetUUIDP(variable), method, args, banzhaf));
   } catch(const std::exception &e) {
-    elog(ERROR, "shapley: %s", e.what());
+    provsql_error("shapley: %s", e.what());
   } catch(...) {
-    elog(ERROR, "shapley: Unknown exception");
+    provsql_error("shapley: Unknown exception");
   }
 
   PG_RETURN_NULL();

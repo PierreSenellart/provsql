@@ -108,4 +108,6 @@ extern bool provsql_where_provenance;
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
 
+#include "provsql_error.h"
+
 #endif /* PROVSQL_UTILS_H */

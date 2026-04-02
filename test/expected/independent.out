@@ -1,5 +1,5 @@
 \set ECHO none
-ERROR:  Not an independent circuit
+ERROR:  ProvSQL: Not an independent circuit
 remove_provenance
 
 (1 row)
