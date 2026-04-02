@@ -1116,6 +1116,35 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
  * Set-operation & DISTINCT rewriting
  * ------------------------------------------------------------------------- */
 
+#if PG_VERSION_NUM >= 180000
+typedef struct {
+  Index group_rtindex;
+  List *groupexprs;
+} resolve_group_rte_ctx;
+
+static Node *
+resolve_group_rte_vars_mutator(Node *node, resolve_group_rte_ctx *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varno == ctx->group_rtindex) {
+      Node *resolved = copyObject(list_nth(ctx->groupexprs, v->varattno - 1));
+      /* Clear varnullingrels: the group-step nulling bits reference the
+       * group_rtindex RTE which does not exist in the fresh inner query.
+       * Leaving them set causes the planner to access simple_rel_array at
+       * group_rtindex (which has no RelOptInfo), triggering
+       * "unrecognized RTE kind: 9". */
+      if (IsA(resolved, Var))
+        ((Var *)resolved)->varnullingrels = NULL;
+      return resolved;
+    }
+  }
+  return expression_tree_mutator(node, resolve_group_rte_vars_mutator,
+                                 (void *)ctx);
+}
+#endif
+
 /**
  * @brief Build the inner GROUP-BY subquery for one @c AGG(DISTINCT key).
  *
@@ -1139,11 +1168,6 @@ static Query *build_inner_for_distinct_key(Query *q, Expr *key_expr,
   ListCell *lc;
   int resno = 1, sgref = 1;
 
-#if PG_VERSION_NUM >= 180000
-  // TODO: Support RTE_GROUP
-  elog(ERROR, "ProvSQL: Support for AGG/DISTINCT in PostgreSQL 18 temporarily not available");
-#endif
-
   inner = copyObject(q);
 
   inner->hasAggs    = false;
@@ -1152,6 +1176,7 @@ static Query *build_inner_for_distinct_key(Query *q, Expr *key_expr,
   inner->limitOffset = NULL;
   inner->distinctClause = NIL;
   inner->hasDistinctOn = false;
+  inner->havingQual  = NULL;
 
   /* First column: the DISTINCT key */
   {
@@ -1317,6 +1342,58 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
   List *distinct_agg_tes = NIL;
   List *groupby_tes = NIL;
   ListCell *lc;
+
+#if PG_VERSION_NUM >= 180000
+  /* In PostgreSQL 18, parseCheckAggregates() injects a virtual RTE_GROUP
+   * entry at the END of the range table.  GROUP BY column Vars in the
+   * SELECT list point to this entry (varno == group_rtindex) instead of
+   * the underlying base-table RTE.
+   *
+   * Strip that entry now, before we do any index arithmetic (fll, rtr->rtindex,
+   * agg_idx) or copy q->targetList into groupby_tes.  Once removed:
+   *  - q->rtable contains only real RTEs, so appending outer-subquery RTEs
+   *    lands at the correct indices.
+   *  - groupby_tes will carry resolved (base-table) Var expressions, so
+   *    the WHERE equalities and the inner-query target list are correct.
+   * We also resolve the Var(group_rtindex) refs in q's own targetList and
+   * WHERE clause so the final query doesn't reference the stripped entry. */
+  if (q->hasGroupRTE) {
+    resolve_group_rte_ctx grp_ctx;
+    bool found = false;
+    ListCell *lc2;
+    Index idx = 1;
+    int rte_len = 0;
+
+    foreach (lc2, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc2);
+      if (r->rtekind == RTE_GROUP) {
+        grp_ctx.group_rtindex = idx;
+        grp_ctx.groupexprs    = r->groupexprs;
+        found    = true;
+        rte_len  = idx - 1;
+        break;
+      }
+      idx++;
+    }
+
+    if (found) {
+      /* Remove the RTE_GROUP (always last, so truncate is safe) */
+      q->rtable      = list_truncate(q->rtable, rte_len);
+      q->hasGroupRTE = false;
+
+      /* Resolve Var(group_rtindex, i) → underlying base-table expression
+       * throughout the parts of q we will touch below */
+      foreach (lc2, q->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc2);
+        te->expr = (Expr *)resolve_group_rte_vars_mutator(
+            (Node *)te->expr, &grp_ctx);
+      }
+      if (q->jointree && q->jointree->quals)
+        q->jointree->quals = resolve_group_rte_vars_mutator(
+            q->jointree->quals, &grp_ctx);
+    }
+  }
+#endif
 
   /* Extract AGG(DISTINCT) and GROUP BY targets from the target list.
    * Regular AGG() aggregations are left untouched. */
