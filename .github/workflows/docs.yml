@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v6
       - run: apt update
       - run: apt -y install python3-pip python3-sphinx-rtd-theme graphviz wget
-      - run: pip install --break-system-packages --force-reinstall breathe==5.0.0a5
+      - run: pip install --break-system-packages --upgrade breathe==5.0.0a5
       - run: |
           wget -q https://github.com/doxygen/doxygen/releases/download/Release_1_13_2/doxygen-1.13.2.linux.bin.tar.gz
           tar xzf doxygen-1.13.2.linux.bin.tar.gz
