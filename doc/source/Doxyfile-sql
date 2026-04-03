@@ -1,22 +1,23 @@
-PROJECT_NAME = "ProvSQL SQL API"
+PROJECT_NAME           = "ProvSQL SQL API"
+PROJECT_BRIEF          = "Adding support for provenance and uncertainty management to PostgreSQL databases"
 
-# Input file/folder
-INPUT = ../../sql/provsql.sql mainpage-sql.md
+# Input
+INPUT                  = ../../sql/provsql.sql mainpage-sql.md
 USE_MDFILE_AS_MAINPAGE = mainpage-sql.md
+RECURSIVE              = YES
 
-# Output directory
-OUTPUT_DIRECTORY = ../doxygen-sql
+# SQL-as-C parsing
+FILE_PATTERNS          = *.sql
+EXTENSION_MAPPING      = sql=C
+OPTIMIZE_OUTPUT_FOR_C  = YES
+FILTER_PATTERNS        = *.sql=./plpgsql_filter.pl
 
-# Make Doxygen parse .sql as C-style
-FILE_PATTERNS = *.sql
-EXTENSION_MAPPING = sql=C
-OPTIMIZE_OUTPUT_FOR_C = YES
-FILTER_PATTERNS = *.sql=./plpgsql_filter.pl
+# Extraction
+EXTRACT_ALL            = YES
+JAVADOC_AUTOBRIEF      = YES
 
-# Extract documentation even without @file tags
-EXTRACT_ALL = YES
-
-# Recursively scan input directory (if you want subfolders)
-RECURSIVE = YES
-
-GENERATE_XML = YES
+# Output
+OUTPUT_DIRECTORY       = ../doxygen-sql
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+QUIET                  = YES
