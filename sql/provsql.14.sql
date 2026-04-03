@@ -166,9 +166,10 @@ END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 
-----------------------------------
--- Temporal DB Functions ---------
-----------------------------------
+/** @name Temporal DB
+ *  Functions related to temporal database support
+ *  @{
+ */
 
 SET search_path TO provsql;
 CREATE OR REPLACE FUNCTION union_tstzintervals_plus_state(
@@ -504,8 +505,6 @@ $$;
 
 SELECT create_provenance_mapping_view('time_validity_view', 'update_provenance', 'valid_time');
 
+/** @} */
 
 SET search_path TO public;
-----------------------------------
--- End of Temporal DB Functions --
-----------------------------------
