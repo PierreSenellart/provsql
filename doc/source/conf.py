@@ -113,6 +113,9 @@ def create_doxygen_target(self, node):
         return [nodes.reference("", "", refuri=url, reftitle=title)]
     except:
         refid = self.get_refid(node.id)
+        # breathe 5.0+: target_handler is callable; older: has create_target method
+        if callable(self.target_handler):
+            return self.target_handler(self.document, refid)
         return self.target_handler.create_target(refid)
 
 # Monkey patching this method:

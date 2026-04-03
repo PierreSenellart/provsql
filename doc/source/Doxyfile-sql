@@ -1,5 +1,8 @@
+PROJECT_NAME = "ProvSQL SQL API"
+
 # Input file/folder
-INPUT = ../../sql/provsql.sql
+INPUT = ../../sql/provsql.sql mainpage-sql.md
+USE_MDFILE_AS_MAINPAGE = mainpage-sql.md
 
 # Output directory
 OUTPUT_DIRECTORY = ../doxygen-sql
