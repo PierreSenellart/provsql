@@ -2561,8 +2561,6 @@ static Query *process_query(const constants_t *constants, Query *q,
   if(provsql_active) {
     columns = (int **)palloc(q->rtable->length * sizeof(int *));
 
-    // ereport(NOTICE, (errmsg("Before: %s",nodeToString(q))));
-
     if (q->setOperations) {
       // TODO: Nest set operations as subqueries in FROM,
       // so that we only do set operations on base tables

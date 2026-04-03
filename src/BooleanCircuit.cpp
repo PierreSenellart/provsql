@@ -14,7 +14,6 @@ extern "C" {
 #include <cstdlib>
 #include <iostream>
 #include <vector>
-#include <sstream>
 #include <stack>
 
 #include <boost/archive/text_oarchive.hpp>
@@ -92,13 +91,7 @@ std::string BooleanCircuit::toString(gate_t g) const
 
   switch(getGateType(g)) {
   case BooleanGate::IN:
-/*    if(getProb(g)==0.) {
-      return "⊥";
-    } else if(getProb(g)==1.) {
-      return "⊤";
-    } else { */
-    return "x"+to_string(g);  //+"["+std::to_string(getProb(g))+"]";
-  //}
+    return "x"+to_string(g);
   case BooleanGate::MULIN:
     return "{" + to_string(*getWires(g).begin()) + "=" + std::to_string(getInfo(g)) + "}[" + std::to_string(getProb(g)) + "]";
   case BooleanGate::NOT:
