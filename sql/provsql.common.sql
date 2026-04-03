@@ -1421,7 +1421,12 @@ SELECT create_gate(gate_one(), 'one');
 /** @} */
 
 /** @brief Types of update operations tracked for temporal provenance */
-CREATE TYPE query_type_enum AS ENUM ('INSERT', 'DELETE', 'UPDATE', 'UNDO');
+CREATE TYPE query_type_enum AS ENUM (
+    'INSERT',  -- Row was inserted
+    'DELETE',  -- Row was deleted
+    'UPDATE',  -- Row was updated
+    'UNDO'     -- Previous operation was undone
+    );
 
 /** @defgroup compiled_semirings Compiled semirings
  *  Definitions of compiled semirings
