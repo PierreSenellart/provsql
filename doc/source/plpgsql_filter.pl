@@ -19,6 +19,7 @@ s{
 
     $args =~ s/\bOUT\s+/&/g;
     $args =~ s/\bIN\s+//g;
+    $args =~ s/\bVARIADIC\s+//g;
     $args =~ s/^\s+|\s+$//g;
     $args =~ s/\s+/ /gs;
 
@@ -118,16 +119,11 @@ s{
   struct $1;
 }sigx;
 
+# Strip base type definitions (internal PostgreSQL storage attributes, not useful for docs)
 s{
   CREATE\s+TYPE\s+([^\s]+)\s*
   \(([^)]*)\);
-}{
-  my ($type, $members) = ($1, $2);
-  $members =~ s/^\s+|\s+$//g;
-  $members =~ s/\s+/ /gs;
-  $members =~ s/,/;/g;
-  "struct $type \{ $members; \};";
-}sigxe;
+}{}sigx;
 
 # AGGREGATE: body uses (?:[^)']|'[^']*')* to handle ')' inside string literals
 s{
@@ -160,7 +156,14 @@ s{
 s{
   SETOF\s+([^\s]+)
 }{
-  SETOF<$1>
+  SETOF_$1
 }sigx;
+
+# Normalize SQL types for C parser compatibility
+s/\bDOUBLE PRECISION\b/double/gi;
+s/\bCHARACTER VARYING\b/varchar/gi;
+
+# Convert SQL array notation (type[]) to C-compatible names
+s/(\w+)\[\]/${1}_array/g;
 
 print;
