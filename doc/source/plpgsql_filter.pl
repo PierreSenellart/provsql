@@ -27,7 +27,9 @@ s{
     foreach my $a (@args) {
         # SQL parameter format is "name type [DEFAULT val]".
         # Extract optional DEFAULT first, then rearrange to C-style "type name".
-        my $default = ($a =~ s/\s+DEFAULT\s+(.+)$//) ? " = $1" : "";
+        my $default = ($a =~ s/\s+DEFAULT\s+(.+)$//) ? " = $1"
+                : ($a =~ s/\s*=\s*(.+)$//)     ? " = $1"
+                : "";
         $a =~ s/^(\S+)\s+(.*\S)\s*$/$2 $1/;
         $a .= $default;
     }
@@ -64,27 +66,27 @@ s{
 }sigx;
 
 s{
-  \$\$.*?\$\$\s+LANGUAGE.*?;
+  \$\$.*?\$\$\s+LANGUAGE.*?;+
 }{
 }sigxg;
 
 s{
-  \$\$.*?\$\$;
+  \$\$.*?\$\$;+
 }{
 }sigxg;
 
 s{
-  CREATE\s+TYPE\s+([^\s]+)\s+AS\s+ENUM\((.*?)\);
+  CREATE\s+TYPE\s+([^\s]+)\s+AS\s+ENUM\s*\((.*?)\);
 }{
   enum $1 { $2 };
 }sigx;
 
-s{
-  ([^\n])--
-}{$1///<}sigx;
-s{
-  --
-}{///}sigx;
+# Strip pure-dash separator lines (-- followed only by dashes/spaces)
+s{^[ \t]*--[-\s]*$}{}mg;
+# Convert remaining full-line SQL comments, stripping trailing decorative dashes
+s{^(\s*)--\s?(.*?)\s*-*\s*$}{$1///$2}mg;
+# Convert remaining inline SQL comments (-- after code on the same line)
+s{([^\n])--}{$1///<}sigx;
 
 s{
   CREATE\s+TYPE\s+([^\s]+)\s+AS\s+\((.*?)\);
@@ -121,6 +123,8 @@ s{
   \(([^)]*)\);
 }{
   my ($type, $members) = ($1, $2);
+  $members =~ s/^\s+|\s+$//g;
+  $members =~ s/\s+/ /gs;
   $members =~ s/,/;/g;
   "struct $type \{ $members; \};";
 }sigxe;
@@ -142,7 +146,7 @@ s{
 
 # Strip CREATE CAST, CREATE TABLE, and standalone SELECT statements
 s{
-  \bCREATE\s+CAST\s*\([^;]*\);
+  \bCREATE\s+CAST\b[^;]*;
 }{}sigxg;
 
 s{
