@@ -165,9 +165,23 @@ s{
   SETOF_$1
 }sigx;
 
-# Normalize SQL types for C parser compatibility
-s/\bDOUBLE PRECISION\b/double/gi;
-s/\bCHARACTER VARYING\b/varchar/gi;
+# Prepend hidden typedefs so Doxygen's C parser accepts SQL type names.
+# These have no Doxygen comments so they won't appear in the documentation.
+# DOUBLE PRECISION and type[] are not valid C, so we define them as typedefs.
+my $typedefs = "";
+$typedefs .= "typedef double DOUBLE_PRECISION;\n"   if /\bDOUBLE PRECISION\b/i;
+$typedefs .= "typedef char* CHARACTER_VARYING;\n"    if /\bCHARACTER VARYING\b/i;
+while (/\b(\w+)\[\]/g) {
+    $typedefs .= "typedef void* ${1}_array;\n";
+}
+# Deduplicate typedefs
+my %seen;
+$typedefs = join("", grep { !$seen{$_}++ } split(/^/m, $typedefs));
+$_ = $typedefs . $_ if $typedefs;
+
+# Normalize multi-word SQL types to use underscores (matching the typedefs above)
+s/\bDOUBLE PRECISION\b/DOUBLE_PRECISION/gi;
+s/\bCHARACTER VARYING\b/CHARACTER_VARYING/gi;
 
 # Convert SQL array notation (type[]) to C-compatible names
 s/(\w+)\[\]/${1}_array/g;
