@@ -18,6 +18,12 @@ CREATE SCHEMA provsql;
 
 SET search_path TO provsql;
 
+/**
+ * @brief Provenance circuit gate types
+ *
+ * Each gate in the provenance circuit has a type that determines
+ * its semantics during semiring evaluation.
+ */
 CREATE TYPE provenance_gate AS
   ENUM(
     'input',   -- Input (variable) gate of the circuit
@@ -37,24 +43,45 @@ CREATE TYPE provenance_gate AS
     'update'   -- Update operation
     );
 
+/** @name Circuit gate manipulation
+ *  Low-level functions for creating and querying provenance circuit gates.
+ *  @{
+ */
+
+/**
+ * @brief Create a new gate in the provenance circuit
+ *
+ * @param token UUID identifying the new gate
+ * @param type gate type (see provenance_gate)
+ * @param children optional array of child gate UUIDs
+ */
 CREATE OR REPLACE FUNCTION create_gate(
   token UUID,
   type provenance_gate,
   children uuid[] DEFAULT NULL)
   RETURNS void AS
   'provsql','create_gate' LANGUAGE C PARALLEL SAFE;
+/** @brief Return the gate type of a provenance token */
 CREATE OR REPLACE FUNCTION get_gate_type(
   token UUID)
   RETURNS provenance_gate AS
   'provsql','get_gate_type' LANGUAGE C IMMUTABLE PARALLEL SAFE;
+/** @brief Return the children of a provenance gate */
 CREATE OR REPLACE FUNCTION get_children(
   token UUID)
   RETURNS uuid[] AS
   'provsql','get_children' LANGUAGE C IMMUTABLE PARALLEL SAFE;
+/**
+ * @brief Set the probability of an input gate
+ *
+ * @param token UUID of the input gate
+ * @param p probability value in [0,1]
+ */
 CREATE OR REPLACE FUNCTION set_prob(
   token UUID, p DOUBLE PRECISION)
   RETURNS void AS
   'provsql','set_prob' LANGUAGE C PARALLEL SAFE;
+/** @brief Get the probability associated with an input gate */
 CREATE OR REPLACE FUNCTION get_prob(
   token UUID)
   RETURNS DOUBLE PRECISION AS
@@ -81,6 +108,7 @@ CREATE OR REPLACE FUNCTION set_infos(
   RETURNS void AS
   'provsql','set_infos' LANGUAGE C PARALLEL SAFE;
 
+/** @brief Get the integer info values associated with a circuit gate */
 CREATE OR REPLACE FUNCTION get_infos(
   token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
@@ -104,13 +132,24 @@ CREATE OR REPLACE FUNCTION set_extra(
   token UUID, data TEXT)
   RETURNS void AS
   'provsql','set_extra' LANGUAGE C PARALLEL SAFE STRICT;
+/** @brief Get the text-encoded extra data associated with a circuit gate */
 CREATE OR REPLACE FUNCTION get_extra(token UUID)
   RETURNS TEXT AS
   'provsql','get_extra' LANGUAGE C STABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT;
 
+/** @brief Return the total number of gates in the provenance circuit */
 CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
   'provsql', 'get_nb_gates' LANGUAGE C PARALLEL SAFE;
 
+/** @} */
+
+/** @name Provenance table management
+ *  Functions for enabling, disabling, and configuring provenance
+ *  tracking on user tables.
+ *  @{
+ */
+
+/** @brief Trigger function that creates an input gate for each newly inserted row */
 CREATE OR REPLACE FUNCTION add_gate_trigger()
   RETURNS TRIGGER AS
 $$
@@ -122,6 +161,12 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
+/**
+ * @brief Trigger function for DELETE statement provenance tracking
+ *
+ * Records the deletion and applies monus to provenance tokens of
+ * deleted rows. This is the version for PostgreSQL < 14.
+ */
 CREATE OR REPLACE FUNCTION delete_statement_trigger()
   RETURNS TRIGGER AS
 $$
@@ -159,6 +204,14 @@ END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 
+/**
+ * @brief Enable provenance tracking on an existing table
+ *
+ * Adds a <tt>provsql</tt> UUID column to the table, creates input gates
+ * for all existing rows, and installs a trigger to track future inserts.
+ *
+ * @param _tbl the table to add provenance tracking to
+ */
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
@@ -169,6 +222,13 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+/**
+ * @brief Remove provenance tracking from a table
+ *
+ * Drops the <tt>provsql</tt> column and associated triggers.
+ *
+ * @param _tbl the table to remove provenance tracking from
+ */
 CREATE OR REPLACE FUNCTION remove_provenance(_tbl regclass)
   RETURNS void AS
 $$
@@ -188,6 +248,17 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
+/**
+ * @brief Set up provenance for a table with duplicate key values
+ *
+ * When a table has duplicate rows for a given key, this function
+ * replaces simple input gates with multivalued input (mulinput) gates
+ * that model a uniform distribution over duplicates.
+ *
+ * @param _tbl the table to repair
+ * @param key_att the key attribute(s) as a comma-separated string, or
+ *        empty string if the whole table is one group
+ */
 CREATE OR REPLACE FUNCTION repair_key(_tbl regclass, key_att text)
   RETURNS void AS
 $$
@@ -239,6 +310,17 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
+/**
+ * @brief Create a provenance mapping table from an attribute
+ *
+ * Creates a new table mapping provenance tokens to values of a given
+ * attribute, for use with semiring evaluation functions.
+ *
+ * @param newtbl name of the mapping table to create
+ * @param oldtbl source table with provenance tracking
+ * @param att attribute whose values populate the mapping
+ * @param preserve_case if true, quote the table name to preserve case
+ */
 CREATE OR REPLACE FUNCTION create_provenance_mapping(
   newtbl text,
   oldtbl regclass,
@@ -260,27 +342,53 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
+/** @} */
+
+/** @name Internal constants
+ *  UUID namespace and identity element functions used for
+ *  deterministic gate generation.
+ *  @{
+ */
+
+/** @brief Return the ProvSQL UUID namespace (used for deterministic gate UUIDs) */
 CREATE OR REPLACE FUNCTION uuid_ns_provsql() RETURNS uuid AS
 $$
  -- uuid_generate_v5(uuid_ns_url(),'http://pierre.senellart.com/software/provsql/')
  SELECT '920d4f02-8718-5319-9532-d4ab83a64489'::uuid
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+/** @brief Return the UUID of the semiring zero gate */
 CREATE OR REPLACE FUNCTION gate_zero() RETURNS uuid AS
 $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'zero');
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+/** @brief Return the UUID of the semiring one gate */
 CREATE OR REPLACE FUNCTION gate_one() RETURNS uuid AS
 $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'one');
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+/** @brief Return the epsilon threshold used for probability comparisons */
 CREATE OR REPLACE FUNCTION epsilon() RETURNS DOUBLE PRECISION AS
 $$
   SELECT CAST(0.001 AS DOUBLE PRECISION)
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+/** @} */
+
+/** @name Semiring operations
+ *  Functions that build provenance circuit gates for semiring operations.
+ *  These are called internally by the query rewriter.
+ *  @{
+ */
+
+/**
+ * @brief Create a times (product) gate from multiple provenance tokens
+ *
+ * Filters out NULL and one-gates; returns gate_one() if all tokens
+ * are trivial, or a single token if only one remains.
+ */
 CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
   RETURNS UUID AS
 $$
@@ -305,6 +413,12 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
 
+/**
+ * @brief Create a monus (difference) gate from two provenance tokens
+ *
+ * Implements m-semiring monus. Returns token1 if token2 is NULL
+ * (used for LEFT OUTER JOIN semantics in the EXCEPT rewriting).
+ */
 CREATE OR REPLACE FUNCTION provenance_monus(token1 UUID, token2 UUID)
   RETURNS UUID AS
 $$
@@ -339,6 +453,14 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
+/**
+ * @brief Create a project gate for where-provenance tracking
+ *
+ * Records the mapping between input and output attribute positions.
+ *
+ * @param token child provenance token
+ * @param positions array encoding attribute position mappings
+ */
 CREATE OR REPLACE FUNCTION provenance_project(token UUID, VARIADIC positions int[])
   RETURNS UUID AS
 $$
@@ -359,6 +481,13 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
+/**
+ * @brief Create an equijoin gate for where-provenance tracking
+ *
+ * @param token child provenance token
+ * @param pos1 attribute index in the first relation
+ * @param pos2 attribute index in the second relation
+ */
 CREATE OR REPLACE FUNCTION provenance_eq(token UUID, pos1 int, pos2 int)
   RETURNS UUID AS
 $$
@@ -374,6 +503,12 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
+/**
+ * @brief Create a plus (sum) gate from an array of provenance tokens
+ *
+ * Filters out NULL and zero-gates; returns gate_zero() if all tokens
+ * are trivial, or a single token if only one remains.
+ */
 CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
   RETURNS UUID AS
 $$
@@ -404,6 +539,13 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
+/**
+ * @brief Create a comparison gate for HAVING clause provenance
+ *
+ * @param left_token provenance token for the left operand
+ * @param comparison_op OID of the comparison operator
+ * @param right_token provenance token for the right operand
+ */
 CREATE OR REPLACE FUNCTION provenance_cmp(
   left_token  UUID,
   comparison_op OID,
@@ -429,8 +571,25 @@ $$ LANGUAGE plpgsql
   PARALLEL SAFE
   STRICT;
 
+/** @} */
 
+/** @name Semiring evaluation
+ *  Functions for evaluating provenance circuits over semirings,
+ *  both user-defined (via function references) and compiled (built-in).
+ *  @{
+ */
 
+/**
+ * @brief Evaluate provenance using a compiled (built-in) semiring
+ *
+ * This C function handles semiring evaluation entirely in C++ for
+ * better performance. The semiring is specified by name.
+ *
+ * @param token provenance token to evaluate
+ * @param token2value mapping table from tokens to semiring values
+ * @param semiring name of the compiled semiring (e.g., "formula", "counting")
+ * @param element_one identity element of the semiring
+ */
 CREATE OR REPLACE FUNCTION provenance_evaluate_compiled(
   token UUID,
   token2value regclass,
@@ -440,6 +599,22 @@ RETURNS anyelement AS
   'provsql', 'provenance_evaluate_compiled' LANGUAGE C PARALLEL SAFE STABLE;
 
 
+/**
+ * @brief Evaluate provenance over a user-defined semiring (PL/pgSQL version)
+ *
+ * Recursively walks the provenance circuit and evaluates each gate
+ * using the provided semiring operations. This is the generic version
+ * that accepts semiring operations as function references.
+ *
+ * @param token provenance token to evaluate
+ * @param token2value mapping table from tokens to semiring values
+ * @param element_one identity element of the semiring
+ * @param value_type OID of the semiring value type
+ * @param plus_function semiring addition (aggregate)
+ * @param times_function semiring multiplication (aggregate)
+ * @param monus_function semiring monus (binary), or NULL
+ * @param delta_function delta-semiring operator, or NULL
+ */
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,
   token2value regclass,
@@ -553,6 +728,23 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 
+/**
+ * @brief Evaluate aggregate provenance over a user-defined semiring (PL/pgSQL version)
+ *
+ * Handles agg and semimod gates produced by GROUP BY queries.
+ *
+ * @param token provenance token to evaluate
+ * @param token2value mapping table from tokens to semiring values
+ * @param agg_function_final finalization function for the aggregate
+ * @param agg_function aggregate combination function
+ * @param semimod_function semimodule scalar multiplication function
+ * @param element_one identity element of the semiring
+ * @param value_type OID of the semiring value type
+ * @param plus_function semiring addition
+ * @param times_function semiring multiplication
+ * @param monus_function semiring monus, or NULL
+ * @param delta_function delta-semiring operator, or NULL
+ */
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token UUID,
   token2value regclass,
@@ -593,8 +785,67 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
+/**
+ * @brief Evaluate provenance over a user-defined semiring (C version)
+ *
+ * Optimized C implementation of provenance_evaluate. Infers the
+ * value type from element_one. Monus and delta functions are optional.
+ *
+ * @param token provenance token to evaluate
+ * @param token2value mapping table from tokens to semiring values
+ * @param element_one identity element of the semiring
+ * @param plus_function semiring addition (aggregate)
+ * @param times_function semiring multiplication (aggregate)
+ * @param monus_function semiring monus, or NULL if not needed
+ * @param delta_function delta-semiring operator, or NULL if not needed
+ */
+CREATE OR REPLACE FUNCTION provenance_evaluate(
+  token UUID,
+  token2value regclass,
+  element_one anyelement,
+  plus_function regproc,
+  times_function regproc,
+  monus_function regproc = NULL,
+  delta_function regproc = NULL)
+  RETURNS anyelement AS
+  'provsql','provenance_evaluate' LANGUAGE C STABLE;
+
+/** @brief Evaluate aggregate provenance over a user-defined semiring (C version) */
+CREATE OR REPLACE FUNCTION aggregation_evaluate(
+  token UUID,
+  token2value regclass,
+  agg_function_final regproc,
+  agg_function regproc,
+  semimod_function regproc,
+  element_one anyelement,
+  plus_function regproc,
+  times_function regproc,
+  monus_function regproc = NULL,
+  delta_function regproc = NULL)
+  RETURNS anyelement AS
+  'provsql','aggregation_evaluate' LANGUAGE C STABLE;
+
+/** @} */
+
+/** @name Circuit introspection
+ *  Functions for examining the structure of provenance circuits,
+ *  used by visualization and where-provenance features.
+ *  @{
+ */
+
+/** @brief Row type for sub_circuit_with_desc results */
 CREATE TYPE gate_with_desc AS (f UUID, t UUID, gate_type provenance_gate, desc_str CHARACTER VARYING, infos INTEGER[], extra TEXT);
 
+/**
+ * @brief Return the sub-circuit reachable from a token, with descriptions
+ *
+ * Recursively traverses the provenance circuit from the given token and
+ * returns all edges together with input gate descriptions from the
+ * mapping table.
+ *
+ * @param token root provenance token
+ * @param token2desc mapping table providing descriptions for input gates
+ */
 CREATE OR REPLACE FUNCTION sub_circuit_with_desc(
   token UUID,
   token2desc regclass) RETURNS SETOF gate_with_desc AS
@@ -618,6 +869,16 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
+/**
+ * @brief Identify which table and how many columns a provenance token belongs to
+ *
+ * Searches all provenance-tracked tables for a row matching the given
+ * token and returns the table name and column count.
+ *
+ * @param token provenance token to look up
+ * @param table_name (OUT) the table containing this token
+ * @param nb_columns (OUT) number of non-provenance columns in that table
+ */
 CREATE OR REPLACE FUNCTION identify_token(
   token UUID, OUT table_name regclass, OUT nb_columns integer) AS
 $$
@@ -647,6 +908,12 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT;
 
+/**
+ * @brief Return the sub-circuit for where-provenance computation
+ *
+ * Similar to sub_circuit_with_desc but resolves input gates to their
+ * source table and column count for where-provenance evaluation.
+ */
 CREATE OR REPLACE FUNCTION sub_circuit_for_where(token UUID)
   RETURNS TABLE(f UUID, t UUID, gate_type provenance_gate, table_name REGCLASS, nb_columns INTEGER, infos INTEGER[], extra TEXT) AS
 $$
@@ -664,30 +931,7 @@ $$
 $$
 LANGUAGE sql;
 
---functions and aggregates for aggregate evaluation
-CREATE OR REPLACE FUNCTION provenance_delta
-  (token UUID)
-  RETURNS UUID AS
-$$
-DECLARE
-  delta_token uuid;
-BEGIN
-  IF token = gate_zero() OR token = gate_one() THEN
-    return token;
-  END IF;
-
-  IF token IS NULL THEN
-    return gate_one();
-  END IF;
-
-  delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
-
-  PERFORM create_gate(delta_token,'delta',ARRAY[token::uuid]);
-
-  RETURN delta_token;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
-
+/** @} */
 
 /** @name Type for the result of aggregate queries
  *
@@ -702,14 +946,17 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARA
 
 CREATE TYPE agg_token;
 
+/** @brief Input function for the agg_token type (parses text representation) */
 CREATE OR REPLACE FUNCTION agg_token_in(cstring)
   RETURNS agg_token
   AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief Output function for the agg_token type (produces text representation) */
 CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
   RETURNS cstring
   AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief Cast an agg_token to its text representation */
 CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
   RETURNS text
   AS 'provsql','agg_token_cast' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
@@ -721,6 +968,7 @@ CREATE TYPE agg_token (
   alignment = char
 );
 
+/** @brief Extract the UUID from an agg_token (implicit cast to UUID) */
 CREATE OR REPLACE FUNCTION agg_token_uuid(aggtok agg_token)
   RETURNS uuid AS
 $$
@@ -731,8 +979,13 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
-/* Comparison functions and operators (for the parser only,
-   this will be rewritten by ProvSQL) */
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
 CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -845,7 +1098,53 @@ CREATE OPERATOR > (
 
 /** @} */
 
+/** @name Aggregate provenance
+ *  Functions for building and evaluating aggregate (GROUP BY) provenance,
+ *  including the delta-semiring operator and semimodule multiplication.
+ *  @{
+ */
 
+/**
+ * @brief Create a delta-semiring gate wrapping a provenance token
+ *
+ * Used internally for aggregate provenance. Returns the token unchanged
+ * if it is gate_zero() or gate_one(), and gate_one() if the token is NULL.
+ */
+CREATE OR REPLACE FUNCTION provenance_delta
+  (token UUID)
+  RETURNS UUID AS
+$$
+DECLARE
+  delta_token uuid;
+BEGIN
+  IF token = gate_zero() OR token = gate_one() THEN
+    return token;
+  END IF;
+
+  IF token IS NULL THEN
+    return gate_one();
+  END IF;
+
+  delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
+
+  PERFORM create_gate(delta_token,'delta',ARRAY[token::uuid]);
+
+  RETURN delta_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Build an aggregate provenance gate from grouped tokens
+ *
+ * Called internally by the query rewriter for GROUP BY queries.
+ * Creates an agg gate linking all contributing tokens and records
+ * the aggregate function OID and the computed scalar value.
+ *
+ * @param aggfnoid OID of the SQL aggregate function
+ * @param aggtype OID of the aggregate result type
+ * @param val computed aggregate value
+ * @param tokens array of provenance tokens being aggregated
+ */
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
     aggtype integer,
@@ -877,6 +1176,15 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
+/**
+ * @brief Create a semimodule scalar multiplication gate
+ *
+ * Pairs a scalar value with a provenance token, used internally by
+ * the query rewriter for aggregate provenance.
+ *
+ * @param val the scalar value
+ * @param token the provenance token to multiply
+ */
 CREATE OR REPLACE FUNCTION provenance_semimod(val anyelement, token UUID)
   RETURNS UUID AS
 $$
@@ -900,31 +1208,25 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION provenance_evaluate(
-  token UUID,
-  token2value regclass,
-  element_one anyelement,
-  plus_function regproc,
-  times_function regproc,
-  monus_function regproc = NULL,
-  delta_function regproc = NULL)
-  RETURNS anyelement AS
-  'provsql','provenance_evaluate' LANGUAGE C STABLE;
+/** @} */
 
-CREATE OR REPLACE FUNCTION aggregation_evaluate(
-  token UUID,
-  token2value regclass,
-  agg_function_final regproc,
-  agg_function regproc,
-  semimod_function regproc,
-  element_one anyelement,
-  plus_function regproc,
-  times_function regproc,
-  monus_function regproc = NULL,
-  delta_function regproc = NULL)
-  RETURNS anyelement AS
-  'provsql','aggregation_evaluate' LANGUAGE C STABLE;
+/** @name Probability and Shapley values
+ *  Functions for computing probabilities, expected values, and
+ *  game-theoretic contribution measures (Shapley/Banzhaf values)
+ *  from provenance circuits.
+ *  @{
+ */
 
+/**
+ * @brief Compute the probability of a provenance token
+ *
+ * Compiles the provenance circuit to d-DNNF and evaluates the
+ * probability. The compilation method can be selected explicitly.
+ *
+ * @param token provenance token to evaluate
+ * @param method knowledge compilation method (NULL for default)
+ * @param arguments additional arguments for the method
+ */
 CREATE OR REPLACE FUNCTION probability_evaluate(
   token UUID,
   method text = NULL,
@@ -932,7 +1234,18 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C STABLE;
 
--- Compute E[input | prov]
+/**
+ * @brief Compute the expected value of an aggregate expression
+ *
+ * Computes E[input | prov], the expected value of an aggregate result
+ * conditioned on a provenance expression. Supports SUM, MIN, and MAX
+ * aggregation functions.
+ *
+ * @param input aggregate expression (agg_token) to compute the expected value of
+ * @param prov provenance condition (defaults to gate_one(), i.e., unconditional)
+ * @param method knowledge compilation method
+ * @param arguments additional arguments for the method
+ */
 CREATE OR REPLACE FUNCTION expected(
   input ANYELEMENT,
   prov UUID = gate_one(),
@@ -985,6 +1298,18 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;;
 
+/**
+ * @brief Compute the Shapley value of an input variable
+ *
+ * Measures the contribution of a specific input variable to the
+ * truth of a provenance expression, using game-theoretic Shapley values.
+ *
+ * @param token provenance token to evaluate
+ * @param variable UUID of the input variable
+ * @param method knowledge compilation method
+ * @param arguments additional arguments for the method
+ * @param banzhaf if true, compute the Banzhaf value instead
+ */
 CREATE OR REPLACE FUNCTION shapley(
   token UUID,
   variable UUID,
@@ -994,6 +1319,7 @@ CREATE OR REPLACE FUNCTION shapley(
   RETURNS DOUBLE PRECISION AS
   'provsql','shapley' LANGUAGE C STABLE;
 
+/** @brief Compute Shapley values for all input variables at once */
 CREATE OR REPLACE FUNCTION shapley_all_vars(
   IN token UUID,
   IN method text = NULL,
@@ -1005,6 +1331,7 @@ CREATE OR REPLACE FUNCTION shapley_all_vars(
   'provsql', 'shapley_all_vars'
   LANGUAGE C STABLE;
 
+/** @brief Compute the Banzhaf power index of an input variable */
 CREATE OR REPLACE FUNCTION banzhaf(
   token UUID,
   variable UUID,
@@ -1014,6 +1341,7 @@ CREATE OR REPLACE FUNCTION banzhaf(
   $$ SELECT provsql.shapley(token, variable, method, arguments, 't') $$
   LANGUAGE SQL;
 
+/** @brief Compute Banzhaf power indices for all input variables at once */
 CREATE OR REPLACE FUNCTION banzhaf_all_vars(
   IN token UUID,
   IN method text = NULL,
@@ -1024,6 +1352,21 @@ CREATE OR REPLACE FUNCTION banzhaf_all_vars(
   $$ SELECT * FROM provsql.shapley_all_vars(token, method, arguments, 't') $$
   LANGUAGE SQL;
 
+/** @} */
+
+/** @name Provenance output
+ *  Functions for visualizing and exporting provenance circuits
+ *  in various formats.
+ *  @{
+ */
+
+/**
+ * @brief Return a DOT or text visualization of the provenance circuit
+ *
+ * @param token root provenance token
+ * @param token2desc mapping table for gate descriptions
+ * @param dbg debug level (0 = normal)
+ */
 CREATE OR REPLACE FUNCTION view_circuit(
   token UUID,
   token2desc regclass,
@@ -1031,19 +1374,33 @@ CREATE OR REPLACE FUNCTION view_circuit(
   RETURNS TEXT AS
   'provsql','view_circuit' LANGUAGE C;
 
+/**
+ * @brief Return an XML representation of the provenance circuit
+ *
+ * @param token root provenance token
+ * @param token2desc optional mapping table for gate descriptions
+ */
 CREATE OR REPLACE FUNCTION to_provxml(
   token UUID,
   token2desc regclass = NULL)
   RETURNS TEXT AS
   'provsql','to_provxml' LANGUAGE C;
 
+/** @brief Return the provenance token of the current query result tuple */
 CREATE OR REPLACE FUNCTION provenance() RETURNS UUID AS
  'provsql', 'provenance' LANGUAGE C;
 
+/**
+ * @brief Compute where-provenance for a result tuple
+ *
+ * Returns a text representation showing which input columns
+ * contributed to each output column.
+ */
 CREATE OR REPLACE FUNCTION where_provenance(token UUID)
   RETURNS text AS
   'provsql','where_provenance' LANGUAGE C;
 
+/** @brief Reset the internal cache of OID constants used by the query rewriter */
 CREATE OR REPLACE FUNCTION reset_constants_cache()
   RETURNS void AS
   'provsql', 'reset_constants_cache' LANGUAGE C;
@@ -1054,6 +1411,9 @@ SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
 
 
+/** @} */
+
+/** @brief Types of update operations tracked for temporal provenance */
 CREATE TYPE query_type_enum AS ENUM ('INSERT', 'DELETE', 'UPDATE', 'UNDO');
 
 /** @name Compiled semirings
@@ -1061,6 +1421,7 @@ CREATE TYPE query_type_enum AS ENUM ('INSERT', 'DELETE', 'UPDATE', 'UNDO');
  *  @{
  */
 
+/** @brief Evaluate provenance as a symbolic formula */
 CREATE FUNCTION sr_formula(token ANYELEMENT, token2value regclass)
   RETURNS VARCHAR AS
 $$
@@ -1074,6 +1435,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance over the counting semiring */
 CREATE FUNCTION sr_counting(token ANYELEMENT, token2value regclass)
   RETURNS INT AS
 $$
@@ -1087,6 +1449,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance as why-provenance (set of witness sets) */
 CREATE FUNCTION sr_why(token ANYELEMENT, token2value regclass)
   RETURNS VARCHAR AS
 $$
@@ -1100,6 +1463,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance as a Boolean expression */
 CREATE FUNCTION sr_boolexpr(token ANYELEMENT)
   RETURNS VARCHAR AS
 $$
@@ -1113,6 +1477,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance over the Boolean semiring (true/false) */
 CREATE FUNCTION sr_boolean(token ANYELEMENT, token2value regclass)
   RETURNS BOOLEAN AS
 $$
@@ -1134,6 +1499,7 @@ $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
  *  @{
  */
 
+/** @brief Transition function for the choose aggregate (keeps first non-NULL value) */
 CREATE FUNCTION choose_function(state ANYELEMENT, data ANYELEMENT)
   RETURNS ANYELEMENT AS
 $$

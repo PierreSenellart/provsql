@@ -1,5 +1,11 @@
 SET search_path TO provsql;
 
+/** @name Update provenance (PostgreSQL 14+)
+ *  Extended provenance tracking for INSERT, UPDATE, DELETE, and UNDO
+ *  operations, including temporal validity ranges.
+ *  @{
+ */
+
 CREATE TABLE update_provenance (
   provsql uuid,
   query text,
@@ -9,6 +15,14 @@ CREATE TABLE update_provenance (
   valid_time tstzmultirange DEFAULT tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL))
 );
 
+/**
+ * @brief Enable provenance tracking on an existing table (PostgreSQL 14+ version)
+ *
+ * In addition to the base version, this installs statement-level triggers
+ * for INSERT, DELETE, and UPDATE provenance tracking.
+ *
+ * @param _tbl the table to add provenance tracking to
+ */
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
@@ -24,6 +38,12 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+/**
+ * @brief Trigger function for DELETE statement provenance tracking (PostgreSQL 14+)
+ *
+ * Records the deletion in update_provenance and applies monus to
+ * provenance tokens. Respects the <tt>provsql.update_provenance</tt> setting.
+ */
 CREATE OR REPLACE FUNCTION delete_statement_trigger()
   RETURNS TRIGGER AS
 $$
@@ -69,6 +89,12 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
+/**
+ * @brief Trigger function for INSERT statement provenance tracking
+ *
+ * Records the insertion in update_provenance and multiplies provenance
+ * tokens of inserted rows with the insert token.
+ */
 CREATE OR REPLACE FUNCTION insert_statement_trigger()
   RETURNS TRIGGER AS
 $$
@@ -110,6 +136,12 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
+/**
+ * @brief Trigger function for UPDATE statement provenance tracking
+ *
+ * Records the update in update_provenance. Multiplies new-row tokens
+ * with the update token and applies monus to old-row tokens.
+ */
 CREATE OR REPLACE FUNCTION update_statement_trigger()
   RETURNS TRIGGER AS
 $$
@@ -166,11 +198,16 @@ END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 
+/** @} */
+
 /** @name Temporal DB
- *  Functions related to temporal database support
+ *  Functions for temporal database support. These use provenance
+ *  evaluation over the multirange semiring to track temporal validity
+ *  of tuples.
  *  @{
  */
 
+/** @brief Transition function for temporal union (plus): merge multiranges */
 SET search_path TO provsql;
 CREATE OR REPLACE FUNCTION union_tstzintervals_plus_state(
     state tstzmultirange,
@@ -181,6 +218,7 @@ $$
   SELECT CASE WHEN state IS NULL THEN value ELSE state + value END
 $$ LANGUAGE SQL IMMUTABLE;
 
+/** @brief Transition function for temporal intersection (times): intersect multiranges */
 CREATE OR REPLACE FUNCTION union_tstzintervals_times_state(
     state tstzmultirange,
     value tstzmultirange
@@ -190,6 +228,7 @@ $$
   SELECT CASE WHEN state IS NULL THEN value ELSE state * value END
 $$ LANGUAGE SQL IMMUTABLE;
 
+/** @brief Aggregate: union of timestamp multiranges (semiring plus) */
 CREATE OR REPLACE AGGREGATE union_tstzintervals_plus(tstzmultirange)
 (
   sfunc    = union_tstzintervals_plus_state,
@@ -197,6 +236,7 @@ CREATE OR REPLACE AGGREGATE union_tstzintervals_plus(tstzmultirange)
   initcond = '{}'
 );
 
+/** @brief Aggregate: intersection of timestamp multiranges (semiring times) */
 CREATE OR REPLACE AGGREGATE union_tstzintervals_times(tstzmultirange)
 (
   sfunc    = union_tstzintervals_times_state,
@@ -204,6 +244,7 @@ CREATE OR REPLACE AGGREGATE union_tstzintervals_times(tstzmultirange)
   initcond = '{(,)}'
 );
 
+/** @brief Temporal monus: subtract one multirange from another */
 CREATE OR REPLACE FUNCTION union_tstzintervals_monus(
     state tstzmultirange,
     value tstzmultirange
@@ -213,6 +254,15 @@ $$
   SELECT CASE WHEN state <@ value THEN '{}'::tstzmultirange ELSE state - value END
 $$ LANGUAGE SQL IMMUTABLE STRICT;
 
+/**
+ * @brief Evaluate temporal provenance as a timestamp multirange
+ *
+ * Evaluates provenance over the multirange semiring to compute the
+ * valid time intervals of a tuple.
+ *
+ * @param token provenance token to evaluate
+ * @param token2value mapping table from tokens to temporal validity ranges
+ */
 CREATE OR REPLACE FUNCTION union_tstzintervals(
     token UUID,
     token2value regclass
@@ -231,6 +281,17 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
+/**
+ * @brief Create a view mapping provenance tokens to attribute values
+ *
+ * Like create_provenance_mapping but creates a view instead of a table,
+ * so it always reflects the current state of the source table.
+ *
+ * @param newview name of the view to create
+ * @param oldtbl source table with provenance tracking
+ * @param att attribute whose values populate the mapping
+ * @param preserve_case if true, quote the view name to preserve case
+ */
 CREATE OR REPLACE FUNCTION create_provenance_mapping_view(
   newview text,
   oldtbl regclass,
@@ -260,6 +321,14 @@ BEGIN
 END;
 $$;
 
+/**
+ * @brief Query a table as it was at a specific point in time
+ *
+ * Returns all rows whose temporal validity includes the given timestamp.
+ *
+ * @param tablename name of the provenance-tracked table
+ * @param at_time the point in time to query
+ */
 CREATE OR REPLACE FUNCTION timetravel(
   tablename text,
   at_time timestamptz
@@ -286,6 +355,15 @@ BEGIN
 END;
 $$;
 
+/**
+ * @brief Query a table for rows valid during a time interval
+ *
+ * Returns all rows whose temporal validity overlaps the given range.
+ *
+ * @param tablename name of the provenance-tracked table
+ * @param from_time start of the time interval
+ * @param to_time end of the time interval
+ */
 CREATE OR REPLACE FUNCTION timeslice(
   tablename text,
   from_time timestamptz,
@@ -315,6 +393,16 @@ BEGIN
 END;
 $$;
 
+/**
+ * @brief Query the full temporal history of specific rows
+ *
+ * Returns all versions of rows matching the given column values,
+ * with their temporal validity ranges.
+ *
+ * @param tablename name of the provenance-tracked table
+ * @param col_names array of column names to filter on
+ * @param col_values array of corresponding values to match
+ */
 CREATE OR REPLACE FUNCTION history(
   tablename text,
   col_names text[],
@@ -361,6 +449,12 @@ BEGIN
 END;
 $$;
 
+/**
+ * @brief Get the valid time range for a specific tuple
+ *
+ * @param token provenance token of the tuple
+ * @param tablename name of the table containing the tuple
+ */
 CREATE OR REPLACE FUNCTION get_valid_time(
   token uuid,
   tablename text
@@ -390,6 +484,15 @@ BEGIN
 END;
 $$;
 
+/**
+ * @brief Undo a previously recorded update operation
+ *
+ * Traverses all provenance-tracked tables and rewrites their circuits
+ * to apply monus with respect to the given update token, effectively
+ * undoing the operation.
+ *
+ * @param c UUID of the update operation to undo (from update_provenance)
+ */
 CREATE OR REPLACE FUNCTION undo(
   c uuid
 )
@@ -468,6 +571,16 @@ BEGIN
 END;
 $$;
 
+/**
+ * @brief Recursively rewrite a circuit to undo a specific operation
+ *
+ * Helper for undo(). Walks the circuit and replaces occurrences of
+ * the target update gate with its monus.
+ *
+ * @param x provenance token to rewrite
+ * @param c UUID of the update operation to undo
+ * @param u UUID of the undo operation
+ */
 CREATE OR REPLACE FUNCTION replace_the_circuit(
   x uuid,
   c uuid,
