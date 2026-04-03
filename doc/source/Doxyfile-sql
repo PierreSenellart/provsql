@@ -19,5 +19,4 @@ JAVADOC_AUTOBRIEF      = YES
 # Output
 OUTPUT_DIRECTORY       = ../doxygen-sql
 GENERATE_LATEX         = NO
-GENERATE_XML           = YES
 QUIET                  = YES

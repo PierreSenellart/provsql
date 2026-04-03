@@ -22,7 +22,6 @@ STRIP_CODE_COMMENTS    = NO
 # Output
 OUTPUT_DIRECTORY       = ../doxygen-c
 GENERATE_LATEX         = NO
-GENERATE_XML           = YES
 QUIET                  = YES
 
 # Graphs

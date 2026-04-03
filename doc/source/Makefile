@@ -19,4 +19,5 @@ help:
 %: Makefile
 	doxygen Doxyfile-c
 	doxygen Doxyfile-sql
+	python3 postprocess-sql-html.py
 	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
