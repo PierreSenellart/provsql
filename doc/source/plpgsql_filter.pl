@@ -66,13 +66,15 @@ s{
 }{
 }sigx;
 
+# Strip function bodies: use (?:(?!\$\$).)* to prevent matching across
+# multiple $$ delimiters (which would eat comments between functions)
 s{
-  \$\$.*?\$\$\s+LANGUAGE.*?;+
+  \$\$(?:(?!\$\$).)*\$\$\s+LANGUAGE.*?;+
 }{
 }sigxg;
 
 s{
-  \$\$.*?\$\$;+
+  \$\$(?:(?!\$\$).)*\$\$;+
 }{
 }sigxg;
 
@@ -140,9 +142,13 @@ s{
   \bGRANT\s+[^;]*;
 }{}sigx;
 
-# Strip CREATE CAST, CREATE TABLE, and standalone SELECT statements
+# Strip CREATE CAST, CREATE OPERATOR, CREATE TABLE, and standalone SELECT statements
 s{
   \bCREATE\s+CAST\b[^;]*;
+}{}sigxg;
+
+s{
+  \bCREATE\s+OPERATOR\b.*?\);
 }{}sigxg;
 
 s{
