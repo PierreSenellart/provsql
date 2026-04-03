@@ -20,7 +20,7 @@ default:
 test:
 	bash -c "set -o pipefail && make installcheck 2>&1 | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
 
-docs:
+docs: sql/provsql.sql
 	cd doc/source && make html
 
 .PHONY: default test
