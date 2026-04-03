@@ -43,7 +43,7 @@ CREATE TYPE provenance_gate AS
     'update'   -- Update operation
     );
 
-/** @name Circuit gate manipulation
+/** @defgroup gate_manipulation Circuit gate manipulation
  *  Low-level functions for creating and querying provenance circuit gates.
  *  @{
  */
@@ -143,7 +143,7 @@ CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
 
 /** @} */
 
-/** @name Provenance table management
+/** @defgroup table_management Provenance table management
  *  Functions for enabling, disabling, and configuring provenance
  *  tracking on user tables.
  *  @{
@@ -344,7 +344,7 @@ $$ LANGUAGE plpgsql;
 
 /** @} */
 
-/** @name Internal constants
+/** @defgroup internal_constants Internal constants
  *  UUID namespace and identity element functions used for
  *  deterministic gate generation.
  *  @{
@@ -377,7 +377,7 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
 /** @} */
 
-/** @name Semiring operations
+/** @defgroup semiring_operations Semiring operations
  *  Functions that build provenance circuit gates for semiring operations.
  *  These are called internally by the query rewriter.
  *  @{
@@ -573,7 +573,7 @@ $$ LANGUAGE plpgsql
 
 /** @} */
 
-/** @name Semiring evaluation
+/** @defgroup semiring_evaluation Semiring evaluation
  *  Functions for evaluating provenance circuits over semirings,
  *  both user-defined (via function references) and compiled (built-in).
  *  @{
@@ -613,7 +613,7 @@ RETURNS anyelement AS
  * @param plus_function semiring addition (aggregate)
  * @param times_function semiring multiplication (aggregate)
  * @param monus_function semiring monus (binary), or NULL
- * @param delta_function delta-semiring operator, or NULL
+ * @param delta_function δ-semiring operator, or NULL
  */
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,
@@ -743,7 +743,7 @@ $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
  * @param plus_function semiring addition
  * @param times_function semiring multiplication
  * @param monus_function semiring monus, or NULL
- * @param delta_function delta-semiring operator, or NULL
+ * @param delta_function δ-semiring operator, or NULL
  */
 CREATE OR REPLACE FUNCTION aggregation_evaluate(
   token UUID,
@@ -797,7 +797,7 @@ $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
  * @param plus_function semiring addition (aggregate)
  * @param times_function semiring multiplication (aggregate)
  * @param monus_function semiring monus, or NULL if not needed
- * @param delta_function delta-semiring operator, or NULL if not needed
+ * @param delta_function δ-semiring operator, or NULL if not needed
  */
 CREATE OR REPLACE FUNCTION provenance_evaluate(
   token UUID,
@@ -827,7 +827,7 @@ CREATE OR REPLACE FUNCTION aggregation_evaluate(
 
 /** @} */
 
-/** @name Circuit introspection
+/** @defgroup circuit_introspection Circuit introspection
  *  Functions for examining the structure of provenance circuits,
  *  used by visualization and where-provenance features.
  *  @{
@@ -933,7 +933,7 @@ LANGUAGE sql;
 
 /** @} */
 
-/** @name Type for the result of aggregate queries
+/** @defgroup agg_token_type Type for the result of aggregate queries
  *
  *  Custom type <tt>agg_token</tt> for a provenance semimodule value, to
  *  be used in attributes that are computed as a result of aggregation.
@@ -1098,14 +1098,14 @@ CREATE OPERATOR > (
 
 /** @} */
 
-/** @name Aggregate provenance
+/** @defgroup aggregate_provenance Aggregate provenance
  *  Functions for building and evaluating aggregate (GROUP BY) provenance,
- *  including the delta-semiring operator and semimodule multiplication.
+ *  including the δ-semiring operator and semimodule multiplication.
  *  @{
  */
 
 /**
- * @brief Create a delta-semiring gate wrapping a provenance token
+ * @brief Create a δ-semiring gate wrapping a provenance token
  *
  * Used internally for aggregate provenance. Returns the token unchanged
  * if it is gate_zero() or gate_one(), and gate_one() if the token is NULL.
@@ -1210,7 +1210,7 @@ $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURIT
 
 /** @} */
 
-/** @name Probability and Shapley values
+/** @defgroup probability Probability and Shapley values
  *  Functions for computing probabilities, expected values, and
  *  game-theoretic contribution measures (Shapley/Banzhaf values)
  *  from provenance circuits.
@@ -1354,7 +1354,7 @@ CREATE OR REPLACE FUNCTION banzhaf_all_vars(
 
 /** @} */
 
-/** @name Provenance output
+/** @defgroup provenance_output Provenance output
  *  Functions for visualizing and exporting provenance circuits
  *  in various formats.
  *  @{
@@ -1400,6 +1400,14 @@ CREATE OR REPLACE FUNCTION where_provenance(token UUID)
   RETURNS text AS
   'provsql','where_provenance' LANGUAGE C;
 
+/** @} */
+
+/** @defgroup circuit_init Circuit initialization
+ *  Functions and statements executed at extension load time to
+ *  reset internal caches and create the constant zero/one gates.
+ *  @{
+ */
+
 /** @brief Reset the internal cache of OID constants used by the query rewriter */
 CREATE OR REPLACE FUNCTION reset_constants_cache()
   RETURNS void AS
@@ -1410,18 +1418,17 @@ SELECT reset_constants_cache();
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
 
-
 /** @} */
 
 /** @brief Types of update operations tracked for temporal provenance */
 CREATE TYPE query_type_enum AS ENUM ('INSERT', 'DELETE', 'UPDATE', 'UNDO');
 
-/** @name Compiled semirings
+/** @defgroup compiled_semirings Compiled semirings
  *  Definitions of compiled semirings
  *  @{
  */
 
-/** @brief Evaluate provenance as a symbolic formula */
+/** @brief Evaluate provenance as a symbolic formula (e.g., "a ⊗ b ⊕ c") */
 CREATE FUNCTION sr_formula(token ANYELEMENT, token2value regclass)
   RETURNS VARCHAR AS
 $$
@@ -1435,7 +1442,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
-/** @brief Evaluate provenance over the counting semiring */
+/** @brief Evaluate provenance over the counting semiring (ℕ) */
 CREATE FUNCTION sr_counting(token ANYELEMENT, token2value regclass)
   RETURNS INT AS
 $$
@@ -1493,7 +1500,7 @@ $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
 /** @} */
 
-/** @name choose aggregate
+/** @defgroup choose_aggregate choose aggregate
  *  Choose one value among many, used in particular to code a mutually
  * exclusive choice as an aggregate.
  *  @{

@@ -1,6 +1,6 @@
 SET search_path TO provsql;
 
-/** @name Update provenance (PostgreSQL 14+)
+/** @defgroup update_provenance Update provenance (PostgreSQL 14+)
  *  Extended provenance tracking for INSERT, UPDATE, DELETE, and UNDO
  *  operations, including temporal validity ranges.
  *  @{
@@ -200,7 +200,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 /** @} */
 
-/** @name Temporal DB
+/** @defgroup temporal_db Temporal DB
  *  Functions for temporal database support. These use provenance
  *  evaluation over the multirange semiring to track temporal validity
  *  of tuples.
