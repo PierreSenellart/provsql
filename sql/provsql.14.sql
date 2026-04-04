@@ -15,14 +15,9 @@ CREATE TABLE update_provenance (
   valid_time tstzmultirange DEFAULT tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL))
 );
 
-/**
- * @brief Enable provenance tracking on an existing table (PostgreSQL 14+ version)
- *
- * In addition to the base version, this installs statement-level triggers
- * for INSERT, DELETE, and UPDATE provenance tracking.
- *
- * @param _tbl the table to add provenance tracking to
- */
+/** @cond INTERNAL */
+/* Enable provenance tracking on an existing table (PostgreSQL 14+ version).
+ * Overrides the common version; documented via add_provenance in provsql.common.sql. */
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
@@ -37,13 +32,11 @@ BEGIN
 
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+/** @endcond */
 
-/**
- * @brief Trigger function for DELETE statement provenance tracking (PostgreSQL 14+)
- *
- * Records the deletion in update_provenance and applies monus to
- * provenance tokens. Respects the <tt>provsql.update_provenance</tt> setting.
- */
+/** @cond INTERNAL */
+/* Trigger function for DELETE statement provenance tracking (PostgreSQL 14+).
+ * Overrides the common version; documented via delete_statement_trigger in provsql.common.sql. */
 CREATE OR REPLACE FUNCTION delete_statement_trigger()
   RETURNS TRIGGER AS
 $$
@@ -88,6 +81,7 @@ BEGIN
   RETURN NULL;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
+/** @endcond */
 
 /**
  * @brief Trigger function for INSERT statement provenance tracking
