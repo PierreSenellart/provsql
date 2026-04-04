@@ -1,3 +1,17 @@
+/**
+ * @file WhereCircuit.cpp
+ * @brief WhereCircuit method implementations and where-provenance evaluation.
+ *
+ * Implements:
+ * - Gate creation methods: @c setGate(), @c setGateInput(),
+ *   @c setGateProjection(), @c setGateEquality().
+ * - @c toString(): human-readable gate representation for debugging.
+ * - @c evaluate(): recursive DFS that computes the set of @c Locator
+ *   values for each output column position, propagating provenance
+ *   through TIMES (Cartesian product), PLUS (union), PROJECT
+ *   (column selection), and EQ (equijoin merging) gates.
+ * - @c WhereCircuit::Locator::operator<() and @c toString().
+ */
 #include "WhereCircuit.h"
 
 extern "C" {

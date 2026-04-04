@@ -1,3 +1,23 @@
+/**
+ * @file probability_evaluate.cpp
+ * @brief SQL function @c provsql.probability_evaluate() – probabilistic circuit evaluation.
+ *
+ * Implements @c provsql.probability_evaluate(), which computes the
+ * probability that a provenance circuit evaluates to @c true under the
+ * tuple-independent probabilistic-database model.
+ *
+ * The @p method argument selects the computation algorithm:
+ * - @c "possible-worlds": exact enumeration of all 2^n worlds.
+ * - @c "monte-carlo": approximate via random sampling (fast, inexact).
+ * - @c "weightmc": approximate using the @c weightmc model counter.
+ * - @c "tree-decomposition": exact via tree-decomposition-based d-DNNF.
+ * - @c "independent": exact evaluation for disconnected circuits.
+ * - Any external compiler name (@c "d4", @c "c2d", @c "minic2d", @c "dsharp").
+ *
+ * A SIGINT signal sets a process-local flag that causes the evaluation
+ * to abort and return @c NULL (used when the user cancels a long-running
+ * probability computation).
+ */
 extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
@@ -26,11 +46,24 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 
 using namespace std;
 
+/**
+ * @brief SIGINT handler that sets the global interrupted flag.
+ *
+ * The signal number argument is required by the @c signal() API but is
+ * not used.
+ */
 static void provsql_sigint_handler (int)
 {
   provsql_interrupted = true;
 }
 
+/**
+ * @brief Core implementation of probability evaluation for a circuit token.
+ * @param token   UUID of the root provenance gate.
+ * @param method  Evaluation method name (e.g. "independent", "monte-carlo").
+ * @param args    Additional arguments for the chosen method.
+ * @return        Float8 Datum containing the computed probability.
+ */
 static Datum probability_evaluate_internal
   (pg_uuid_t token, const string &method, const string &args)
 {
@@ -109,6 +142,7 @@ static Datum probability_evaluate_internal
   PG_RETURN_FLOAT8(result);
 }
 
+/** @brief PostgreSQL-callable wrapper for probability_evaluate(). */
 Datum probability_evaluate(PG_FUNCTION_ARGS)
 {
   try {

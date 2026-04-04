@@ -1,3 +1,17 @@
+/**
+ * @file provsql_utils_cpp.cpp
+ * @brief C++ UUID utility function implementations.
+ *
+ * Implements the C++ helper functions declared in @c provsql_utils_cpp.h:
+ * - @c uuid2string(): format a @c pg_uuid_t as a 36-char hyphenated hex string.
+ * - @c string2uuid(): parse a UUID string into a @c pg_uuid_t.
+ * - @c UUIDDatum2string(): extract and format a UUID from a PostgreSQL @c Datum.
+ * - @c hash_value(): Boost-compatible hash for @c pg_uuid_t.
+ * - @c operator==(): byte-level equality for @c pg_uuid_t.
+ *
+ * The @c uuid2string and @c string2uuid functions are adapted from
+ * PostgreSQL's own @c uuid.c, which is not exposed as a public API.
+ */
 extern "C" {
 #include "postgres.h"
 #include "utils/uuid.h"
@@ -31,6 +45,11 @@ string uuid2string(pg_uuid_t uuid) {
   return result;
 }
 
+/**
+ * @brief Parse a UUID string into a @c pg_uuid_t.
+ * @param source  UUID string in standard hyphenated hex format.
+ * @return        The parsed @c pg_uuid_t value.
+ */
 pg_uuid_t string2uuid(const string &source)
 /* copied with small changes from uuid.c */
 {

@@ -1,3 +1,23 @@
+/**
+ * @file having_semantics.cpp
+ * @brief HAVING-clause provenance evaluation for all built-in semirings.
+ *
+ * Implements the five @c provsql_try_having_*() functions declared in
+ * @c having_semantics.hpp, one per supported semiring:
+ * - @c provsql_try_having_formula()
+ * - @c provsql_try_having_counting()
+ * - @c provsql_try_having_why()
+ * - @c provsql_try_having_boolexpr()
+ * - @c provsql_try_having_boolean()
+ *
+ * Each function evaluates the sub-circuit rooted at the given
+ * @c gate_agg / @c gate_semimod gate using @c enumerate_valid_worlds()
+ * (for exact predicate testing) and populates the provenance mapping.
+ *
+ * An anonymous-namespace helper @c provsql_try_having_internal() provides
+ * the shared logic; the five public functions are thin wrappers that
+ * instantiate it for the appropriate semiring type.
+ */
 extern "C" {
 #include "postgres.h"
 #include "utils/lsyscache.h"
@@ -159,6 +179,15 @@ static void collect_sp_cmp_gates(GenericCircuit &c, gate_t start, std::vector<ga
 // in src/semiring/
 // --------------------------------------------------
 
+/**
+ * @brief Rewrite HAVING comparison gates in the circuit by enumerating possible worlds.
+ * @tparam SemiringT  The semiring type used for evaluation.
+ * @tparam MapT       The provenance mapping type (gate_t → semiring value).
+ * @param c        Circuit to rewrite.
+ * @param g        Root gate of the sub-circuit to inspect.
+ * @param mapping  Provenance mapping updated in place.
+ * @param S        Semiring instance.
+ */
 template <typename SemiringT, typename MapT>
 static void try_having_impl(
   GenericCircuit &c,

@@ -1,3 +1,15 @@
+/**
+ * @file provenance_evaluate.c
+ * @brief SQL function @c provsql.provenance_evaluate() – semiring evaluation.
+ *
+ * Implements the SQL-callable function that evaluates a provenance circuit
+ * over a user-supplied (m-)semiring.  The semiring is described by six
+ * PostgreSQL function OIDs passed as arguments (plus, times, monus, delta,
+ * element-one, token2value) which are called via SPI to compute the result.
+ *
+ * This is the simpler, non-compiled variant of provenance evaluation.
+ * For the compiled (C++ generic) variant, see @c provenance_evaluate_compiled.cpp.
+ */
 #include "postgres.h"
 #include "fmgr.h"
 #include "catalog/pg_type.h"
@@ -10,6 +22,7 @@
 
 PG_FUNCTION_INFO_V1(provenance_evaluate);
 
+/** @brief PostgreSQL-callable wrapper for provenance_evaluate(). */
 Datum provenance_evaluate(PG_FUNCTION_ARGS)
 {
   Datum token = PG_GETARG_DATUM(0);

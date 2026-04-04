@@ -1,3 +1,25 @@
+/**
+ * @file TreeDecomposition.cpp
+ * @brief Tree decomposition construction, manipulation, and I/O.
+ *
+ * Implements the @c TreeDecomposition class declared in
+ * @c TreeDecomposition.h:
+ *
+ * - @c TreeDecomposition(const BooleanCircuit&): constructs the tree
+ *   decomposition of the circuit's primal graph using the min-fill
+ *   elimination-ordering heuristic (@c PermutationStrategy).  Throws
+ *   @c TreeDecompositionException if the treewidth exceeds @c MAX_TREEWIDTH.
+ * - @c TreeDecomposition(std::istream&): parses a PACE-format
+ *   decomposition from a stream.
+ * - Copy constructor and copy-assignment operator.
+ * - @c makeFriendly(): restructures the tree into the friendly normal
+ *   form expected by @c dDNNFTreeDecompositionBuilder.
+ * - @c toDot(): GraphViz DOT string for visualising the tree.
+ * - @c operator>>(): stream extraction in PACE format.
+ *
+ * The @c reroot() helper and @c addEmptyBag(), @c addGateToBag(),
+ * @c findGateConnection() are private utilities for tree restructuring.
+ */
 #include <cassert>
 #include <set>
 #include <algorithm>

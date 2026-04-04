@@ -1,3 +1,24 @@
+/**
+ * @file MMappedVector.hpp
+ * @brief Template implementation of @c MMappedVector<T>.
+ *
+ * Provides the out-of-line definitions of all @c MMappedVector<T>
+ * methods declared in @c MMappedVector.h.  This file must be included
+ * by any translation unit that instantiates @c MMappedVector<T> for a
+ * specific @c T.
+ *
+ * Implemented methods:
+ * - @c MMappedVector(): open/create the backing file and map it.
+ * - @c ~MMappedVector(): sync and unmap.
+ * - @c operator[](k) const: read element @p k.
+ * - @c operator[](k): write element @p k.
+ * - @c add(): append one element, growing the file if necessary.
+ * - @c sync(): flush dirty pages with @c msync().
+ *
+ * Internal helpers:
+ * - @c mmap(): map (or remap) @p length bytes.
+ * - @c grow(): double the capacity and remap.
+ */
 #ifndef MMAPPED_VECTOR_HPP
 #define MMAPPED_VECTOR_HPP
 

@@ -1,3 +1,23 @@
+/**
+ * @file Circuit.hpp
+ * @brief Out-of-line template method implementations for @c Circuit<gateType>.
+ *
+ * This file provides the definitions of the template methods declared in
+ * @c Circuit.h that cannot be placed in a @c .cpp file (since they must
+ * be instantiated by the compiler in each translation unit that uses them).
+ *
+ * Implemented methods:
+ * - @c hasGate(): UUID membership test.
+ * - @c getGate(): UUID → gate_t lookup, allocating a new gate on miss.
+ * - @c getUUID(): gate_t → UUID string lookup.
+ * - @c addGate(): default gate allocation (extends @c gates and @c wires vectors).
+ * - @c setGate(gateType): allocate a new gate and set its type.
+ * - @c setGate(const uuid&, gateType): create/update a UUID-named gate.
+ * - @c addWire(): append a directed edge.
+ *
+ * Included by subclass headers that need these implementations (e.g.
+ * @c BooleanCircuit.h, @c DotCircuit.h).
+ */
 #ifndef CIRCUIT_HPP
 #define CIRCUIT_HPP
 

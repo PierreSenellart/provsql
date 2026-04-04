@@ -1,3 +1,25 @@
+/**
+ * @file semiring/Why.h
+ * @brief Why-provenance semiring (set of witness sets).
+ *
+ * The **why-provenance** semiring represents provenance as a set of
+ * *witness sets*.  Each witness set is a set of base-tuple labels that
+ * together "witness" one derivation of the query result.  The full
+ * provenance is the collection of all such witness sets.
+ *
+ * Formally, the carrier type is @f$\mathcal{P}(\mathcal{P}(\text{Labels}))@f$,
+ * implemented as @c why_provenance_t = @c std::set<std::set<std::string>>.
+ *
+ * Operations:
+ * - @c zero()   → ∅ (no derivations)
+ * - @c one()    → {∅} (one derivation requiring no witnesses)
+ * - @c plus()   → union of input sets
+ * - @c times()  → pairwise concatenation (Cartesian product of witnesses)
+ * - @c monus()  → remove elements of @f$y@f$ from @f$x@f$
+ * - @c delta()  → identity (returns @f$x@f$ unchanged if non-empty)
+ *
+ * This semiring is absorptive (set union is idempotent).
+ */
 #ifndef WHY_H
 #define WHY_H
 
@@ -10,10 +32,18 @@
 
 namespace semiring {
 
+/** @brief A single label identifying a base tuple. */
 using label_t = std::string;
+/** @brief A witness: a set of labels that collectively justify one derivation. */
 using label_set = std::set<label_t>;
+/** @brief Why-provenance value: the full set of all witnesses. */
 using why_provenance_t = std::set<label_set>;
 
+/**
+ * @brief Why-provenance semiring.
+ *
+ * Each gate evaluates to a @c why_provenance_t (set of witness sets).
+ */
 class Why : public Semiring<why_provenance_t> {
 public:
 // Additive identity

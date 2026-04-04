@@ -1,3 +1,26 @@
+/**
+ * @file dDNNFTreeDecompositionBuilder.cpp
+ * @brief d-DNNF construction from a Boolean circuit and its tree decomposition.
+ *
+ * Implements the @c dDNNFTreeDecompositionBuilder::build() algorithm, which
+ * converts a bounded-treewidth Boolean circuit into a d-DNNF by following
+ * the construction in Section 5.1 of:
+ *
+ * > A. Jha and D. Suciu, "Knowledge Compilation Meets Database Theory:
+ * >  Compiling Queries to d-DNNFs". ICDT 2013. https://arxiv.org/pdf/1811.02944
+ *
+ * The algorithm traverses the tree decomposition bottom-up.  For each bag
+ * it maintains a set of *dDNNFGate* partial results, each carrying a
+ * valuation (truth-value assignment for the gates in the bag) and a
+ * suspicious set (gates not yet confirmed by their responsible bag).
+ *
+ * Private helpers:
+ * - @c builddDNNFLeaf(): generate partial results for a leaf bag.
+ * - @c collectGatesToOr(): group partial results by (valuation, suspicious).
+ * - @c builddDNNF(): main bottom-up recursion.
+ * - @c isAlmostValuation(), @c getInnocent(): utilities for the DP.
+ * - @c circuitHasWire(): O(log n) wire lookup using @c wiresSet.
+ */
 #include <algorithm>
 #include <stack>
 #include <variant>
@@ -48,6 +71,15 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
   return std::move(d);
 }
 
+/**
+ * @brief Return @c true if assigning @p value to a gate of type @p type is a "strong" assignment.
+ *
+ * A strong assignment is one that forces the gate's output to be determined
+ * by a single input (e.g., @c true for OR, @c false for AND).
+ * @param type   Gate type (AND, OR, IN, or other).
+ * @param value  Truth value assigned to the gate.
+ * @return       @c true if the assignment is strong for this gate type.
+ */
 constexpr bool isStrong(BooleanGate type, bool value)
 {
   switch(type) {
@@ -62,6 +94,12 @@ constexpr bool isStrong(BooleanGate type, bool value)
   }
 }
 
+/**
+ * @brief Check whether all suspicious gates in @p suspicious appear in bag @p b.
+ * @param suspicious  Set of gates that must be confirmed in the parent bag.
+ * @param b           Bag to check against.
+ * @return            @c true if every gate in @p suspicious is in @p b.
+ */
 static bool isConnectible(const dDNNFTreeDecompositionBuilder::suspicious_t &suspicious,
                           const TreeDecomposition::Bag &b)
 {
@@ -190,6 +228,12 @@ dDNNFTreeDecompositionBuilder::getInnocent(
   return result;
 }
 
+/**
+ * @brief Write a @c gates_to_or_t DP table to an output stream for debugging.
+ * @param o           Output stream.
+ * @param gates_to_or The DP table to display.
+ * @return            Reference to @p o.
+ */
 std::ostream &operator<<(std::ostream &o, const dDNNFTreeDecompositionBuilder::gates_to_or_t &gates_to_or)
 {
   for(auto &[valuation, m]: gates_to_or) {

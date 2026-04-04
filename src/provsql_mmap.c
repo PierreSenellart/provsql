@@ -1,3 +1,26 @@
+/**
+ * @file provsql_mmap.c
+ * @brief Background worker registration and IPC primitives for mmap-backed storage.
+ *
+ * Implements the PostgreSQL background worker lifecycle functions declared
+ * in @c provsql_mmap.h:
+ * - @c RegisterProvSQLMMapWorker(): registers the worker with the postmaster
+ *   during @c _PG_init().
+ * - @c provsql_mmap_worker(): worker entry point; sets up signal handlers
+ *   and enters @c provsql_mmap_main_loop().
+ *
+ * The IPC between normal backends and the background worker is handled in
+ * @c MMappedCircuit.cpp.  This file provides the PostgreSQL-specific glue
+ * (background worker API, signal handling).
+ *
+ * Also declares the shared write buffer @c buffer[] and position counter
+ * @c bufferpos used by the @c STARTWRITEM / @c ADDWRITEM / @c SENDWRITEM
+ * macros in @c provsql_mmap.h.
+ *
+ * The gate-creation SQL functions (e.g. @c create_gate()) that backends
+ * call are also implemented here; they acquire the IPC lock, write a
+ * message to the background worker, and wait for an acknowledgment.
+ */
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
@@ -21,6 +44,7 @@
 char buffer[PIPE_BUF]={}; // flawfinder: ignore
 unsigned bufferpos=0;
 
+/** @brief Background worker entry point: initialises the mmap circuit store and runs the main loop. */
 __attribute__((visibility("default")))
 void provsql_mmap_worker(Datum ignored)
 {
@@ -61,6 +85,7 @@ void RegisterProvSQLMMapWorker(void)
 }
 
 PG_FUNCTION_INFO_V1(get_gate_type);
+/** @brief PostgreSQL-callable wrapper for get_gate_type(). */
 Datum get_gate_type(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -96,6 +121,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(create_gate);
+/** @brief PostgreSQL-callable wrapper for create_gate(). */
 Datum create_gate(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -187,6 +213,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(set_prob);
+/** @brief PostgreSQL-callable wrapper for set_prob(). */
 Datum set_prob(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -215,6 +242,7 @@ Datum set_prob(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(set_infos);
+/** @brief PostgreSQL-callable wrapper for set_infos(). */
 Datum set_infos(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -244,6 +272,7 @@ Datum set_infos(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(set_extra);
+/** @brief PostgreSQL-callable wrapper for set_extra(). */
 Datum set_extra(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -271,6 +300,7 @@ Datum set_extra(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(get_extra);
+/** @brief PostgreSQL-callable wrapper for get_extra(). */
 Datum get_extra(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -305,6 +335,7 @@ Datum get_extra(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(get_nb_gates);
+/** @brief PostgreSQL-callable wrapper for get_nb_gates(). */
 Datum get_nb_gates(PG_FUNCTION_ARGS)
 {
   unsigned long nb;
@@ -322,6 +353,7 @@ Datum get_nb_gates(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(get_children);
+/** @brief PostgreSQL-callable wrapper for get_children(). */
 Datum get_children(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -392,6 +424,7 @@ Datum get_children(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(get_prob);
+/** @brief PostgreSQL-callable wrapper for get_prob(). */
 Datum get_prob(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
@@ -420,6 +453,7 @@ Datum get_prob(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(get_infos);
+/** @brief PostgreSQL-callable wrapper for get_infos(). */
 Datum get_infos(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));

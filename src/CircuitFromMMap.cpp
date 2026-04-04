@@ -1,3 +1,17 @@
+/**
+ * @file CircuitFromMMap.cpp
+ * @brief Build in-memory circuits from the mmap-backed store.
+ *
+ * Implements the free functions declared in @c CircuitFromMMap.h:
+ * - @c getBooleanCircuit(): reads the mmap store (via the background
+ *   worker IPC channel) and constructs a @c BooleanCircuit.
+ * - @c getGenericCircuit(): same but constructs a @c GenericCircuit.
+ *
+ * The internal @c getCircuitFromMMap<C>() template handles the IPC
+ * protocol: it sends a request through the shared-memory pipe,
+ * receives a Boost-serialised circuit blob from the background worker,
+ * and deserialises it into the appropriate circuit type.
+ */
 #include <cmath>
 
 #include <boost/archive/binary_iarchive.hpp>
@@ -14,6 +28,13 @@ extern "C" {
 #include "provsql_mmap.h"
 }
 
+/**
+ * @brief Read and deserialise a circuit rooted at @p token from the mmap worker.
+ * @tparam C           Circuit type to deserialise (@c BooleanCircuit or @c GenericCircuit).
+ * @param token        UUID of the root gate to retrieve.
+ * @param message_char IPC message-type byte sent to the background worker.
+ * @return             Deserialised circuit of type @c C.
+ */
 template<typename C>
 static C getCircuitFromMMap(pg_uuid_t token, char message_char)
 {

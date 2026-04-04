@@ -1,3 +1,23 @@
+/**
+ * @file shapley.cpp
+ * @brief SQL functions for Shapley and Banzhaf power-index computation.
+ *
+ * Implements two SQL-callable functions:
+ * - @c provsql.shapley(token, variable, method, args): Shapley value of
+ *   a given input gate (tuple) in the provenance circuit rooted at @p token.
+ * - @c provsql.shapley_all_vars(token, method, args): Shapley values for
+ *   all input gates simultaneously (more efficient than calling @c shapley()
+ *   once per variable).
+ *
+ * The @p method argument selects the computation algorithm:
+ * - @c "tree-decomposition": exact, polynomial if treewidth ≤ @c MAX_TREEWIDTH.
+ * - @c "monte-carlo": approximate via random sampling.
+ * - Any external d-DNNF compiler name (@c "d4", @c "c2d", etc.).
+ *
+ * Banzhaf power index computation is exposed via the same internal helper
+ * (@c shapley_internal with @c banzhaf=true), called by the
+ * @c provsql.banzhaf() SQL function defined in the SQL layer.
+ */
 extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
@@ -21,6 +41,15 @@ PG_FUNCTION_INFO_V1(shapley_all_vars);
 
 using namespace std;
 
+/**
+ * @brief Core implementation for Shapley and Banzhaf index computation.
+ * @param token     UUID of the root provenance gate.
+ * @param variable  UUID of the input gate whose index is to be computed.
+ * @param method    d-DNNF compilation method.
+ * @param args      Additional arguments for the compilation method.
+ * @param banzhaf   If @c true, compute the Banzhaf index instead of Shapley.
+ * @return          The Shapley (or Banzhaf) value of @p variable.
+ */
 static double shapley_internal
   (pg_uuid_t token, pg_uuid_t variable, const std::string &method, const std::string &args, bool banzhaf)
 {
@@ -48,6 +77,7 @@ static double shapley_internal
   return result;
 }
 
+/** @brief PostgreSQL-callable wrapper for shapley() and banzhaf(). */
 Datum shapley(PG_FUNCTION_ARGS)
 {
   try {
@@ -84,6 +114,7 @@ Datum shapley(PG_FUNCTION_ARGS)
   PG_RETURN_NULL();
 }
 
+/** @brief PostgreSQL-callable wrapper for shapley_all_vars() set-returning function. */
 Datum shapley_all_vars(PG_FUNCTION_ARGS)
 {
   ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;

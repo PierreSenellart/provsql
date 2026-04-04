@@ -1,3 +1,23 @@
+/**
+ * @file semiring/Boolean.h
+ * @brief Boolean semiring ({false, true}, ∨, ∧, false, true).
+ *
+ * The Boolean semiring is the simplest semiring supported by ProvSQL.
+ * Provenance evaluates to @c true if at least one derivation of the
+ * tuple exists in the current database instance (i.e., the query answer
+ * is "certain"), and @c false otherwise.
+ *
+ * The semiring is absorptive (∨ is idempotent), so the circuit evaluator
+ * can safely deduplicate children of OR gates.
+ *
+ * Operations:
+ * - @c zero()   → @c false
+ * - @c one()    → @c true
+ * - @c plus()   → logical OR (any_of)
+ * - @c times()  → logical AND (all_of)
+ * - @c monus()  → @f$x \;\&\; \lnot y@f$
+ * - @c delta()  → identity
+ */
 #ifndef BOOLEAN_H
 #define BOOLEAN_H
 
@@ -7,6 +27,11 @@
 #include "Semiring.h"
 
 namespace semiring {
+/**
+ * @brief The Boolean semiring over @c bool.
+ *
+ * Provides the standard Boolean interpretation of provenance circuits.
+ */
 class Boolean : public semiring::Semiring<bool>
 {
 public:

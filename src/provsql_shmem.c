@@ -1,3 +1,18 @@
+/**
+ * @file provsql_shmem.c
+ * @brief Shared-memory segment lifecycle and LWLock management.
+ *
+ * Implements the functions declared in @c provsql_shmem.h:
+ * - @c provsql_shmem_startup(): allocates (or attaches to) the
+ *   @c provsqlSharedState segment, initialises the @c LWLock, and
+ *   calls @c pipe(2) to create the two inter-process pipes.  Chains
+ *   to @c prev_shmem_startup if set.
+ * - @c provsql_memsize(): returns the size of the shared segment.
+ * - @c provsql_shmem_request(): requests shared memory on PG ≥ 15.
+ * - @c provsql_shmem_lock_exclusive() / @c provsql_shmem_lock_shared() /
+ *   @c provsql_shmem_unlock(): thin wrappers around
+ *   @c LWLockAcquire() / @c LWLockRelease().
+ */
 #include <unistd.h>
 
 #include "postgres.h"

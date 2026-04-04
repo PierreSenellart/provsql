@@ -1,3 +1,29 @@
+/**
+ * @file TreeDecompositionKnowledgeCompiler.cpp
+ * @brief Standalone @c tdkc tool: tree-decomposition-based knowledge compiler.
+ *
+ * This file contains the @c main() entry point for the standalone
+ * @c tdkc (Tree-Decomposition Knowledge Compiler) binary.  It is built
+ * separately from the PostgreSQL extension (see @c Makefile target @c tdkc).
+ *
+ * Usage:
+ * @code
+ * tdkc <circuit_file>
+ * @endcode
+ *
+ * The circuit file is a text file produced by @c BooleanCircuit::exportCircuit()
+ * listing the number of gates followed by one line per gate describing its
+ * type, probability, and children.
+ *
+ * The tool:
+ * 1. Reads the circuit from the file.
+ * 2. Rewrites multivalued gates.
+ * 3. Computes a tree decomposition.
+ * 4. Builds a d-DNNF via @c dDNNFTreeDecompositionBuilder.
+ * 5. Evaluates the probability and prints it to @c stdout.
+ *
+ * Timing information is printed to @c stderr.
+ */
 #include <iostream>
 #include <fstream>
 #include <iomanip>
@@ -9,6 +35,10 @@ extern "C" {
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "Circuit.hpp"
 
+/**
+ * @brief Return the current time as a floating-point number of seconds.
+ * @return Current time (seconds since the epoch, with microsecond precision).
+ */
 static double get_timestamp ()
 {
   struct timeval now;
@@ -16,6 +46,12 @@ static double get_timestamp ()
   return now.tv_usec * 1e-6 + now.tv_sec;
 }
 
+/**
+ * @brief Entry point for the standalone tree-decomposition knowledge compiler.
+ * @param argc  Argument count; must be 2.
+ * @param argv  Argument vector; @c argv[1] is the path to the circuit file.
+ * @return      0 on success, non-zero on error.
+ */
 int main(int argc, char **argv) {
   if(argc != 2) {
     std::cerr << "Usage: " << argv[0] << " circuit" << std::endl;

@@ -1,3 +1,23 @@
+/**
+ * @file provsql_utils.c
+ * @brief OID lookup, constants cache, and utility functions for ProvSQL.
+ *
+ * Implements the functions declared in @c provsql_utils.h:
+ * - @c get_constants(): retrieves and caches per-database OIDs for all
+ *   ProvSQL types, functions, and operators.
+ * - @c find_equality_operator(): looks up the @c = operator OID for a
+ *   given pair of types.
+ *
+ * The constants cache is a sorted, dynamically-grown array of
+ * @c database_constants_t records (one per PostgreSQL database OID)
+ * stored in process-local memory and searched with binary search.
+ * The @c reset_constants_cache() SQL function forces a cache invalidation
+ * for the current database, which is needed after @c ALTER EXTENSION.
+ *
+ * Several helper functions (@c get_func_oid, @c get_provsql_func_oid,
+ * @c OperatorGet, @c get_enum_oid, @c binary_oper_exact) are adapted
+ * from PostgreSQL source code that is not exported as a public API.
+ */
 #include "postgres.h"
 #include "access/htup_details.h"
 #include "miscadmin.h"
@@ -34,7 +54,17 @@ const char *gate_type_name[] = {
   "invalid"
 };
 
-/* Copied over from parse_oper.c as defined static there */
+/**
+ * @brief Look up an exactly matching binary operator OID.
+ *
+ * Copied and adapted from @c parse_oper.c (PostgreSQL internals, not
+ * exported).  Returns @c InvalidOid if no exact match exists.
+ *
+ * @param opname  Qualified operator name (a @c List of @c String nodes).
+ * @param arg1    OID of the left operand type.
+ * @param arg2    OID of the right operand type.
+ * @return        OID of the matching operator, or @c InvalidOid.
+ */
 static Oid
 binary_oper_exact(List *opname, Oid arg1, Oid arg2)
 {
@@ -73,14 +103,9 @@ binary_oper_exact(List *opname, Oid arg1, Oid arg2)
   return InvalidOid;
 }
 
-/** Return the OID of an equality operator. This is adapted from existing
- * PostgreSQL code that is not exported (see in particular parse_oper.c,
+/* Adapted from PostgreSQL code that is not exported (see parse_oper.c
  * and the static function oper_select_candidate therein).
- *
- * \param ltypeId the OID of the type of the first operand
- * \param rtypeId the OID of the type of the second operand
- * \return the OID of the equality operator for these two operands
- * */
+ */
 Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
 {
   List * const equals=list_make1(makeString("="));
@@ -112,6 +137,15 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
     return InvalidOid;
 }
 
+/**
+ * @brief Return the OID of a globally qualified function named @p s.
+ *
+ * Looks up the function in the default search path.  Returns 0 if no
+ * matching function is found.
+ *
+ * @param s  Function name (unqualified).
+ * @return   OID of the function, or 0 if not found.
+ */
 static Oid get_func_oid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
@@ -130,6 +164,14 @@ static Oid get_func_oid(char *s)
     return 0;
 }
 
+/**
+ * @brief Return the OID of a @c provsql-schema function named @p s.
+ *
+ * Looks up the function in the @c provsql schema.  Returns 0 if not found.
+ *
+ * @param s  Function name (without schema prefix).
+ * @return   OID of the function, or 0 if not found.
+ */
 static Oid get_provsql_func_oid(char *s)
 {
   FuncCandidateList fcl=FuncnameGetCandidates(
@@ -148,8 +190,20 @@ static Oid get_provsql_func_oid(char *s)
     return 0;
 }
 
-// Copied over from pg_operator.c as defined static there, with
-// various modifications
+/**
+ * @brief Retrieve operator and function OIDs for a named operator.
+ *
+ * Copied and adapted from @c pg_operator.c (PostgreSQL internals, not
+ * exported).  Looks up the operator by name, namespace, and operand types
+ * in the system cache.
+ *
+ * @param operatorName      Operator symbol string (e.g. @c "<>").
+ * @param operatorNamespace OID of the schema containing the operator.
+ * @param leftObjectId      OID of the left operand type.
+ * @param rightObjectId     OID of the right operand type.
+ * @param operatorObjectId  Output: OID of the operator, or 0 if not found.
+ * @param functionObjectId  Output: OID of the underlying function, or 0.
+ */
 static void OperatorGet(
   const char *operatorName,
   Oid operatorNamespace,
@@ -189,6 +243,13 @@ static void OperatorGet(
   }
 }
 
+/**
+ * @brief Return the OID of a specific enum label within an enum type.
+ *
+ * @param enumtypoid  OID of the enum type (e.g. @c provenance_gate).
+ * @param label       C-string label of the enum value to look up.
+ * @return            OID of the enum label's @c pg_enum row.
+ */
 static Oid get_enum_oid(Oid enumtypoid, const char *label)
 {
   HeapTuple tup;
@@ -210,19 +271,26 @@ static Oid get_enum_oid(Oid enumtypoid, const char *label)
   return ret;
 }
 
-/** Returns an initialized constants_t structure by querying the database
- * for all OIDs.
+/**
+ * @brief Query the system catalogs to populate a fresh @c constants_t.
  *
- * \param failure_if_not_possible indicates whether a failure should
- * result in an error (at the PostgreSQL level) or should be silently
- * ignored
- * \return the initialized structure
+ * Performs all OID lookups required by ProvSQL in a single pass through
+ * the system caches.  The @c CheckOid() macro aborts (or returns early,
+ * depending on @p failure_if_not_possible) if any OID resolves to
+ * @c InvalidOid.
+ *
+ * @param failure_if_not_possible  If @c true, raise a @c provsql_error when
+ *        any OID cannot be resolved.  If @c false, return a @c constants_t
+ *        with @c ok==false instead.
+ * @return  Fully populated @c constants_t on success, or @c ok==false on
+ *          failure when @p failure_if_not_possible is @c false.
  */
 static constants_t initialize_constants(bool failure_if_not_possible)
 {
   constants_t constants;
   constants.ok = false;
 
+  /** @brief Abort or return early if OID field @p o of @p constants is invalid. */
   #define CheckOid(o) if(constants.o==InvalidOid) { \
             if(failure_if_not_possible) \
             provsql_error("Could not initialize provsql constants"); \
@@ -322,6 +390,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   CheckOid(OID_OPERATOR_NOT_EQUAL_UUID);
   CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
 
+  /** @brief Look up the OID of provenance_gate enum value @p x and store it in constants. */
   #define GET_GATE_TYPE_OID(x) { \
             constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
               constants.OID_TYPE_GATE_TYPE, \
@@ -350,8 +419,8 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   return constants;
 }
 
-database_constants_t *constants_cache;
-unsigned constants_cache_len=0;
+database_constants_t *constants_cache; ///< Per-database OID constants cache (sorted by database OID)
+unsigned constants_cache_len=0;        ///< Number of valid entries in @c constants_cache
 
 constants_t get_constants(bool failure_if_not_possible)
 {
@@ -386,6 +455,14 @@ constants_t get_constants(bool failure_if_not_possible)
 }
 
 PG_FUNCTION_INFO_V1(reset_constants_cache);
+/**
+ * @brief SQL function to invalidate the OID constants cache.
+ *
+ * Forces a fresh OID lookup for the current database on the next call to
+ * @c get_constants().  Must be called after @c ALTER EXTENSION provsql
+ * UPDATE to ensure cached OIDs are refreshed.
+ * @return Void datum.
+ */
 Datum reset_constants_cache(PG_FUNCTION_ARGS)
 {
   int start=0, end=constants_cache_len-1;

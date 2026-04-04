@@ -1,3 +1,23 @@
+/**
+ * @file MMappedCircuit.cpp
+ * @brief Persistent mmap-backed circuit: implementation and background-worker entry points.
+ *
+ * Implements the @c MMappedCircuit methods declared in @c MMappedCircuit.h,
+ * the @c createGenericCircuit() free function, and the background-worker
+ * entry points declared in @c provsql_mmap.h:
+ *
+ * - @c initialize_provsql_mmap(): called by the background worker at
+ *   startup; opens all four mmap files and creates the singleton
+ *   @c MMappedCircuit instance.
+ * - @c destroy_provsql_mmap(): called on shutdown; syncs and deletes the
+ *   singleton.
+ * - @c provsql_mmap_main_loop(): the worker's main loop; receives gate-
+ *   creation messages from backends over the IPC pipe and writes them
+ *   to the mmap store.
+ *
+ * The @c createGenericCircuit() function performs a BFS from a root UUID,
+ * reading gates from the mmap store and building an in-memory @c GenericCircuit.
+ */
 #include <cerrno>
 #include <cmath>
 #include <sstream>
@@ -12,6 +32,7 @@ extern "C" {
 #include "provsql_shmem.h"
 }
 
+/** @brief Singleton pointer to the process-wide mmap-backed provenance circuit. */
 static MMappedCircuit *circuit = NULL;
 
 void initialize_provsql_mmap()
@@ -314,6 +335,12 @@ void MMappedCircuit::sync()
   mapping.sync();
 }
 
+/**
+ * @brief Lexicographic less-than comparison for @c pg_uuid_t.
+ * @param a  Left UUID.
+ * @param b  Right UUID.
+ * @return   @c true if @p a is lexicographically less than @p b.
+ */
 bool operator<(const pg_uuid_t a, const pg_uuid_t b)
 {
   return memcmp(&a, &b, sizeof(pg_uuid_t))<0;

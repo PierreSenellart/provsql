@@ -1,3 +1,21 @@
+/**
+ * @file MMappedUUIDHashTable.cpp
+ * @brief Open-addressing hash table over a memory-mapped file: implementation.
+ *
+ * Implements all methods of @c MMappedUUIDHashTable declared in
+ * @c MMappedUUIDHashTable.h:
+ * - @c MMappedUUIDHashTable(): open/create the backing file and map it.
+ * - @c ~MMappedUUIDHashTable(): sync and unmap.
+ * - @c add(): insert a UUID and assign the next sequential integer.
+ * - @c operator[](): look up an integer by UUID.
+ * - @c sync(): flush dirty pages with @c msync().
+ *
+ * Internal helpers:
+ * - @c mmap(): map (or remap) @p length bytes of the backing file.
+ * - @c grow(): double the table size and rehash.
+ * - @c find(): locate the slot index for a UUID (or @c NOTHING if absent).
+ * - @c set(): write a key-value pair into the table.
+ */
 #include "MMappedUUIDHashTable.h"
 
 #include <cassert>

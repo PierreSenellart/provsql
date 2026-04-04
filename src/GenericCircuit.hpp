@@ -1,3 +1,30 @@
+/**
+ * @file GenericCircuit.hpp
+ * @brief Template implementation of @c GenericCircuit::evaluate().
+ *
+ * Provides the out-of-line definition of the @c evaluate() template method
+ * declared in @c GenericCircuit.h.  This file must be included (directly
+ * or transitively) by any translation unit that instantiates
+ * @c GenericCircuit::evaluate<S>() for a specific semiring type @c S.
+ *
+ * The @c evaluate() method performs a post-order traversal of the sub-circuit
+ * rooted at gate @p g, looking up input-gate values from @p provenance_mapping
+ * and combining them using the semiring operations:
+ *
+ * | Gate type   | Semiring operation             |
+ * |-------------|-------------------------------|
+ * | gate_input  | lookup in @p provenance_mapping|
+ * | gate_plus   | @c semiring.plus(children)     |
+ * | gate_times  | @c semiring.times(children)    |
+ * | gate_monus  | @c semiring.monus(left, right) |
+ * | gate_delta  | @c semiring.delta(child)       |
+ * | gate_cmp    | @c semiring.cmp(left, op, right)|
+ * | gate_semimod| @c semiring.semimod(x, s)      |
+ * | gate_agg    | @c semiring.agg(op, children)  |
+ * | gate_value  | @c semiring.value(string)      |
+ * | gate_one    | @c semiring.one()              |
+ * | gate_zero   | @c semiring.zero()             |
+ */
 #include "GenericCircuit.h"
 
 extern "C" {

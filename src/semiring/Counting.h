@@ -1,3 +1,21 @@
+/**
+ * @file semiring/Counting.h
+ * @brief Counting semiring (ℕ, +, ×, 0, 1).
+ *
+ * The counting semiring (@f$\mathbb{N}@f$, @f$+@f$, @f$\times@f$, 0, 1)
+ * counts the number of distinct derivations (proof witnesses) of each
+ * query result tuple.
+ *
+ * Operations:
+ * - @c zero()   → 0
+ * - @c one()    → 1
+ * - @c plus()   → sum of all operands
+ * - @c times()  → product of all operands
+ * - @c monus()  → truncated subtraction: max(0, x − y)
+ * - @c delta()  → 1 if x ≠ 0, else 0
+ *
+ * This semiring is **not** absorptive.
+ */
 #ifndef COUNTING_H
 #define COUNTING_H
 
@@ -8,6 +26,12 @@
 #include "Semiring.h"
 
 namespace semiring {
+/**
+ * @brief The counting semiring over @c unsigned.
+ *
+ * Each gate evaluates to the number of distinct derivations of the
+ * corresponding sub-formula.
+ */
 class Counting : public semiring::Semiring<unsigned>
 {
 public:

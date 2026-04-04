@@ -1,3 +1,21 @@
+/**
+ * @file dDNNF.cpp
+ * @brief d-DNNF circuit operations and evaluation algorithms.
+ *
+ * Implements all methods of @c dDNNF declared in @c dDNNF.h:
+ * - @c vars(): set of reachable input (IN) gates.
+ * - @c makeSmooth(): smooth the circuit so every OR gate's children
+ *   mention the same variable set.
+ * - @c makeGatesBinary(): binarise n-ary AND/OR gates.
+ * - @c simplify(): constant propagation.
+ * - @c condition() / @c conditionAndSimplify(): fix one variable.
+ * - @c probabilityEvaluation(): exact probability in linear time.
+ * - @c shapley() / @c banzhaf(): power index computation.
+ * - @c topological_order(): DFS topological sort.
+ *
+ * The private helpers @c shapley_delta() and @c shapley_alpha() implement
+ * the polynomial-time Shapley-value algorithm for d-DNNFs.
+ */
 #include "dDNNF.h"
 #include "Circuit.hpp"
 
@@ -373,6 +391,12 @@ std::unordered_map<gate_t, std::vector<double> > dDNNF::shapley_delta() const {
   return result;
 }
 
+/**
+ * @brief Compute the binomial coefficient C(n, k).
+ * @param n  Total number of elements.
+ * @param k  Number of elements to choose; must satisfy k ≤ n.
+ * @return   The binomial coefficient n-choose-k.
+ */
 static long long comb(unsigned n, unsigned k)
 {
   assert(k<=n);

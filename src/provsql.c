@@ -53,24 +53,24 @@
 
 #include "compatibility.h"
 
-PG_MODULE_MAGIC;
+PG_MODULE_MAGIC; ///< Required PostgreSQL extension magic block
 
 /* -------------------------------------------------------------------------
  * Global state & forward declarations
  * ------------------------------------------------------------------------- */
 
 bool provsql_interrupted = false;
-bool provsql_active = true;
+bool provsql_active = true; ///< @c true while ProvSQL query rewriting is enabled
 bool provsql_where_provenance = false;
-bool provsql_update_provenance = false;
-int provsql_verbose = 100;
+bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
+int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
 
-static const char *PROVSQL_COLUMN_NAME = "provsql";
+static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
 extern void _PG_init(void);
 extern void _PG_fini(void);
 
-static planner_hook_type prev_planner = NULL;
+static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed);
@@ -133,11 +133,18 @@ static Var *make_provenance_attribute(const constants_t *constants, Query *q,
  * Helper mutators: attribute-number fixup and type patching
  * ------------------------------------------------------------------------- */
 
+/** @brief Context for the @c reduce_varattno_mutator tree walker. */
 typedef struct reduce_varattno_mutator_context {
-  Index varno;
-  int *offset;
+  Index varno;  ///< Range-table entry whose attribute numbers are being adjusted
+  int *offset;  ///< Per-attribute cumulative shift to apply
 } reduce_varattno_mutator_context;
 
+/**
+ * @brief Tree-mutator callback that adjusts Var attribute numbers.
+ * @param node     Current expression tree node.
+ * @param context  Mutation context carrying varno and offset.
+ * @return         Possibly modified node.
+ */
 static Node *reduce_varattno_mutator(Node *node,
                                      reduce_varattno_mutator_context *context) {
   if (node == NULL)
@@ -178,12 +185,19 @@ static void reduce_varattno_by_offset(List *targetList, Index varno,
   }
 }
 
+/** @brief Context for the @c aggregation_type_mutator tree walker. */
 typedef struct aggregation_type_mutator_context {
-  Index varno;
-  Index varattno;
-  const constants_t *constants;
+  Index varno;                ///< Range-table entry index of the aggregate var
+  Index varattno;             ///< Attribute number of the aggregate column
+  const constants_t *constants; ///< Extension OID cache
 } aggregation_type_mutator_context;
 
+/**
+ * @brief Tree-mutator that retyps a specific Var to @c agg_token.
+ * @param node     Current expression tree node.
+ * @param context  Mutation context with varno, varattno, and constants.
+ * @return         Possibly modified node.
+ */
 static Node *
 aggregation_type_mutator(Node *node,
                          aggregation_type_mutator_context *context) {
@@ -468,7 +482,11 @@ remove_provenance_attributes_select(const constants_t *constants, Query *q,
  * products), @c SR_PLUS to the additive operation (duplicate elimination), and
  * @c SR_MONUS to the monus / set-difference operation (EXCEPT).
  */
-typedef enum { SR_PLUS, SR_MONUS, SR_TIMES } semiring_operation;
+typedef enum {
+  SR_PLUS,  ///< Semiring addition (UNION, SELECT DISTINCT)
+  SR_MONUS, ///< Semiring monus / set difference (EXCEPT)
+  SR_TIMES  ///< Semiring multiplication (JOIN, Cartesian product)
+} semiring_operation;
 
 /* -------------------------------------------------------------------------
  * Semiring expression builders
@@ -1572,12 +1590,19 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
  * Aggregation replacement mutator
  * ------------------------------------------------------------------------- */
 
+/** @brief Context for the @c aggregation_mutator tree walker. */
 typedef struct aggregation_mutator_context {
-  List *prov_atts;
-  semiring_operation op;
-  const constants_t *constants;
+  List *prov_atts;              ///< List of provenance Var nodes
+  semiring_operation op;        ///< Semiring operation for combining tokens
+  const constants_t *constants; ///< Extension OID cache
 } aggregation_mutator_context;
 
+/**
+ * @brief Tree-mutator that replaces Aggrefs with provenance-aware aggregates.
+ * @param node     Current expression tree node.
+ * @param context  Mutation context with prov_atts, op, and constants.
+ * @return         Possibly modified node.
+ */
 static Node *aggregation_mutator(Node *node,
                                  aggregation_mutator_context *context) {
   if (node == NULL)
@@ -1672,11 +1697,18 @@ static void add_to_select(Query *q, Expr *provenance) {
  * Provenance function replacement
  * ------------------------------------------------------------------------- */
 
+/** @brief Context for the @c provenance_mutator tree walker. */
 typedef struct provenance_mutator_context {
-  Expr *provsql;
-  const constants_t *constants;
+  Expr *provsql;                ///< Provenance expression to substitute for provenance() calls
+  const constants_t *constants; ///< Extension OID cache
 } provenance_mutator_context;
 
+/**
+ * @brief Tree-mutator that replaces provenance() calls with the actual provenance expression.
+ * @param node     Current expression tree node.
+ * @param context  Mutation context with the provenance expression and constants.
+ * @return         Possibly modified node.
+ */
 static Node *provenance_mutator(Node *node,
                                 provenance_mutator_context *context) {
   if (node == NULL)
@@ -1906,6 +1938,9 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
  *
  * Used to detect whether a query explicitly calls @c provenance(), which
  * triggers the substitution in @c replace_provenance_function_by_expression.
+ * @param node  Current expression tree node.
+ * @param data  Pointer to @c constants_t (cast from @c void*).
+ * @return      @c true if a @c provenance() call is found anywhere in @p node.
  */
 static bool provenance_function_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
@@ -1962,6 +1997,12 @@ static bool provenance_function_in_group_by(const constants_t *constants,
   return false;
 }
 
+/**
+ * @brief Tree walker that detects any provenance-bearing relation or provenance() call.
+ * @param node  Current expression tree node.
+ * @param data  Pointer to @c constants_t (cast from @c void*).
+ * @return      @c true if provenance rewriting is needed for this node.
+ */
 static bool has_provenance_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -2030,6 +2071,12 @@ static bool has_provenance(const constants_t *constants, Query *q) {
   return has_provenance_walker((Node *)q, (void *)constants);
 }
 
+/**
+ * @brief Tree walker that detects any Var of type agg_token.
+ * @param node      Current expression tree node.
+ * @param constants Extension OID cache.
+ * @return          @c true if an agg_token Var is found in @p node.
+ */
 static bool aggtoken_walker(Node *node, const constants_t *constants) {
   if (node == NULL)
     return false;
@@ -2708,6 +2755,10 @@ static Query *process_query(const constants_t *constants, Query *q,
  * @c provenance() call, rewrites the query via @c process_query before
  * handing the result to the standard planner.  Non-SELECT commands and
  * queries without provenance are passed through unchanged.
+ * @param q              The query to plan.
+ * @param cursorOptions  Cursor options bitmask.
+ * @param boundParams    Pre-bound parameter values.
+ * @return               The planned statement.
  */
 static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000

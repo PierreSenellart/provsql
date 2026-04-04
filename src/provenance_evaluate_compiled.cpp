@@ -1,3 +1,26 @@
+/**
+ * @file provenance_evaluate_compiled.cpp
+ * @brief SQL function @c provsql.provenance_evaluate_compiled() – C++ semiring evaluation.
+ *
+ * Implements the compiled (C++ generic) variant of provenance circuit
+ * evaluation.  Unlike @c provenance_evaluate() (which calls user-supplied
+ * PostgreSQL functions for each semiring operation), this function
+ * evaluates the circuit using one of the built-in C++ semiring
+ * implementations from the @c semiring/ directory.
+ *
+ * Supported semirings (selected by the @p semiring argument):
+ * - @c "boolean"   → @c semiring::Boolean
+ * - @c "counting"  → @c semiring::Counting
+ * - @c "formula"   → @c semiring::Formula (symbolic expression)
+ * - @c "why"       → @c semiring::Why (witness sets)
+ * - @c "boolexpr"  → @c semiring::BoolExpr (Boolean circuit for probability)
+ *
+ * The function first builds a provenance mapping (input-gate UUID → semiring
+ * value) by querying the @c tmp_uuids table via SPI
+ * (using @c initialize_provenance_mapping()), then evaluates the
+ * @c GenericCircuit with @c GenericCircuit::evaluate() and returns the
+ * result as text.
+ */
 extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
@@ -27,6 +50,16 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
+/**
+ * @brief Evaluate the Boolean semiring provenance for a circuit.
+ * @param constants   Extension OID cache.
+ * @param c           Generic circuit to evaluate.
+ * @param g           Root gate of the sub-circuit.
+ * @param inputs      Set of input gate IDs.
+ * @param semiring    Semiring name (must be "boolean").
+ * @param drop_table  Whether the temporary UUID table should be dropped.
+ * @return            Bool datum with the evaluated provenance.
+ */
 static Datum pec_bool(
   const constants_t &constants,
   GenericCircuit &c,
@@ -49,6 +82,13 @@ static Datum pec_bool(
   PG_RETURN_BOOL(out);
 }
 
+/**
+ * @brief Evaluate the Boolean-expression semiring provenance for a circuit.
+ * @param constants  Extension OID cache.
+ * @param bc         Boolean circuit to render as a formula.
+ * @param root       Root gate of the circuit.
+ * @return           Text datum with the formula string.
+ */
 static Datum pec_boolexpr(
   const constants_t &constants,
   BooleanCircuit &bc,
@@ -62,6 +102,15 @@ static Datum pec_boolexpr(
   PG_RETURN_TEXT_P(result);
 }
 
+/**
+ * @brief Evaluate the Why-provenance semiring for a circuit.
+ * @param constants   Extension OID cache.
+ * @param c           Generic circuit to evaluate.
+ * @param g           Root gate.
+ * @param inputs      Set of input gate IDs.
+ * @param drop_table  Whether the temporary UUID table should be dropped.
+ * @return            Varchar datum containing the serialised Why-provenance.
+ */
 static Datum pec_why(
   const constants_t &constants,
   GenericCircuit &c,
@@ -115,6 +164,16 @@ static Datum pec_why(
   PG_RETURN_TEXT_P(result);
 
 }
+/**
+ * @brief Evaluate a varchar semiring provenance for a circuit.
+ * @param constants   Extension OID cache.
+ * @param c           Generic circuit to evaluate.
+ * @param g           Root gate.
+ * @param inputs      Set of input gate IDs.
+ * @param semiring    Semiring name (e.g. "formula").
+ * @param drop_table  Whether the temporary UUID table should be dropped.
+ * @return            Varchar datum containing the serialised provenance.
+ */
 static Datum pec_varchar(
   const constants_t &constants,
   GenericCircuit &c,
@@ -144,6 +203,16 @@ static Datum pec_varchar(
   PG_RETURN_TEXT_P(result);
 
 }
+/**
+ * @brief Evaluate an integer semiring provenance for a circuit.
+ * @param constants   Extension OID cache.
+ * @param c           Generic circuit to evaluate.
+ * @param g           Root gate.
+ * @param inputs      Set of input gate IDs.
+ * @param semiring    Semiring name (e.g. "counting").
+ * @param drop_table  Whether the temporary UUID table should be dropped.
+ * @return            Int32 datum with the evaluated provenance.
+ */
 static Datum pec_int(
   const constants_t &constants,
   GenericCircuit &c,
@@ -167,6 +236,12 @@ static Datum pec_int(
 
 }
 
+/**
+ * @brief Join a provenance mapping table with a set of UUIDs using SPI.
+ * @param table  OID of the provenance mapping relation.
+ * @param uuids  List of UUID strings to join against.
+ * @return       @c true if a temporary table was created (caller must drop it).
+ */
 bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
   if (SPI_connect() != SPI_OK_CONNECT)
     throw CircuitException("SPI_connect failed");
@@ -246,6 +321,14 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
   return drop_table;
 }
 
+/**
+ * @brief Core implementation of compiled provenance evaluation.
+ * @param token    UUID of the root provenance gate.
+ * @param table    OID of the provenance mapping relation.
+ * @param semiring Name of the semiring to evaluate over.
+ * @param type     OID of the result element type.
+ * @return         Datum containing the semiring evaluation result.
+ */
 static Datum provenance_evaluate_compiled_internal
   (pg_uuid_t token, Oid table, const std::string &semiring, Oid type)
 {
@@ -282,6 +365,7 @@ static Datum provenance_evaluate_compiled_internal
     throw CircuitException("Unknown element type for provenance_evaluate_compiled");
 }
 
+/** @brief PostgreSQL-callable wrapper for provenance_evaluate_compiled(). */
 Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
 {
   try {

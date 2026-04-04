@@ -1,3 +1,17 @@
+/**
+ * @file aggregation_evaluate.c
+ * @brief SQL function @c provsql.aggregation_evaluate() – aggregate provenance evaluation.
+ *
+ * Implements the SQL-callable function that evaluates an aggregate
+ * provenance circuit over a user-supplied semiring.  The function is
+ * invoked when the query engine encounters a @c gate_agg / @c gate_semimod
+ * sub-circuit and dispatches to the appropriate SPI-based evaluation helper
+ * in @c Aggregation.cpp.
+ *
+ * All semiring operations (plus, times, monus, delta, agg, semimod) are
+ * passed as PostgreSQL function OIDs so that the semiring is fully
+ * user-defined and extensible from SQL.
+ */
 #include "postgres.h"
 #include "fmgr.h"
 #include "catalog/pg_type.h"
@@ -10,6 +24,7 @@
 
 PG_FUNCTION_INFO_V1(aggregation_evaluate);
 
+/** @brief PostgreSQL-callable wrapper for aggregation_evaluate(). */
 Datum aggregation_evaluate(PG_FUNCTION_ARGS)
 {
   Datum token = PG_GETARG_DATUM(0);

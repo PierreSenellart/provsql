@@ -1,3 +1,17 @@
+/**
+ * @file DotCircuit.cpp
+ * @brief DotCircuit method implementations and GraphViz rendering.
+ *
+ * Implements:
+ * - @c DotCircuit::addGate(): allocate a gate and extend the @c desc vector.
+ * - @c DotCircuit::setGate(const uuid&, DotGate): create a gate by UUID.
+ * - @c DotCircuit::setGate(const uuid&, DotGate, std::string): create a gate
+ *   with a label string stored in @c desc.
+ * - @c DotCircuit::toString(): return the description string for a gate.
+ * - @c DotCircuit::render(): produce a complete GraphViz @c digraph string
+ *   with semiring symbols (⊗, ⊕, ⊖, δ) as node labels and the
+ *   provenance token UUIDs as edge labels for input gates.
+ */
 #include "DotCircuit.h"
 #include <type_traits>
 

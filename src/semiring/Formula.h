@@ -1,3 +1,24 @@
+/**
+ * @file semiring/Formula.h
+ * @brief Symbolic formula semiring producing readable provenance expressions.
+ *
+ * The @c Formula semiring (@c std::string, @f$\oplus@f$, @f$\otimes@f$,
+ * "𝟘", "𝟙") represents provenance as a human-readable symbolic
+ * expression using Unicode semiring symbols.  It is primarily used for
+ * debugging and testing.
+ *
+ * Each gate evaluates to a string:
+ * - @c zero()   → "𝟘"
+ * - @c one()    → "𝟙"
+ * - @c plus()   → "(a ⊕ b ⊕ …)" or just "a" for singletons
+ * - @c times()  → "(a ⊗ b ⊗ …)" or just "a" for singletons
+ * - @c monus()  → "(a ⊖ b)"
+ * - @c delta()  → "δ(a)" or "δa" if @c a starts with @c (
+ * - @c cmp()    → "[s1 op s2]"
+ * - @c semimod()→ "x*s"
+ * - @c agg()    → operator-specific notation (e.g., "min(a,b)")
+ * - @c value()  → the literal string itself
+ */
 #ifndef FORMULA_H
 #define FORMULA_H
 
@@ -9,6 +30,18 @@
 
 #include "Semiring.h"
 
+/**
+ * @brief Concatenate elements of a range with a delimiter.
+ *
+ * Used internally by @c Formula::plus(), @c Formula::times(), and
+ * @c Formula::agg() to build operator-separated strings.
+ *
+ * @tparam Range   Any range type with a @c value_type typedef.
+ * @tparam Value   Element type (defaults to @c Range::value_type).
+ * @param elements  The range to join.
+ * @param delimiter String to insert between adjacent elements.
+ * @return          All elements concatenated with @p delimiter between them.
+ */
 template <typename Range, typename Value = typename Range::value_type>
 static std::string join(Range const& elements, const char *const delimiter) {
   std::ostringstream os;
@@ -26,6 +59,13 @@ static std::string join(Range const& elements, const char *const delimiter) {
 }
 
 namespace semiring {
+/**
+ * @brief Symbolic provenance formula semiring over @c std::string.
+ *
+ * Evaluates circuits to human-readable Unicode provenance formulas.
+ * Supports all optional operations (@c cmp, @c semimod, @c agg,
+ * @c value) in addition to the mandatory ones.
+ */
 class Formula : public semiring::Semiring<std::string>
 {
 public:

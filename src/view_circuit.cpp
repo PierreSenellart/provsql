@@ -1,3 +1,16 @@
+/**
+ * @file view_circuit.cpp
+ * @brief SQL function @c provsql.view_circuit() – GraphViz DOT circuit visualisation.
+ *
+ * Implements @c provsql.view_circuit(), which serialises the provenance
+ * circuit rooted at a given UUID token to a GraphViz DOT string using the
+ * @c DotCircuit class.  The returned string can be rendered to an image
+ * with @c dot(1) or @c graph-easy(1).
+ *
+ * An SPI query retrieves the optional provenance-mapping labels (human-
+ * readable identifiers for input gates) and attaches them to the DOT nodes
+ * before calling @c DotCircuit::render().
+ */
 extern "C"
 {
 #include "postgres.h"
@@ -19,6 +32,11 @@ PG_FUNCTION_INFO_V1(view_circuit);
 
 using namespace std;
 
+/**
+ * @brief Parse a PostgreSQL text representation of an array of integer pairs.
+ * @param s  String in the form @c {{a,b},{c,d},...}.
+ * @return   Vector of (first, second) integer pairs.
+ */
 static vector<pair<int, int> > parse_array(string s)
 {
   s = s.substr(1, s.size() - 2); // Remove initial '{' and final '}'
@@ -47,6 +65,13 @@ static vector<pair<int, int> > parse_array(string s)
   return result;
 }
 
+/**
+ * @brief Build a GraphViz DOT representation of the provenance circuit at @p token.
+ * @param token      Datum containing the root provenance gate UUID.
+ * @param token2prob Datum with the OID of the probability mapping relation.
+ * @param is_debug   Datum boolean; if true, include debug information.
+ * @return           DOT string for the circuit.
+ */
 static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is_debug)
 {
   Datum arguments[2]={token,token2prob};
@@ -148,6 +173,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
   return c.render();
 }
 
+/** @brief PostgreSQL-callable wrapper for view_circuit(). */
 Datum view_circuit(PG_FUNCTION_ARGS)
 {
   try

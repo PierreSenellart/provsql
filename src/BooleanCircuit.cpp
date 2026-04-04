@@ -1,3 +1,23 @@
+/**
+ * @file BooleanCircuit.cpp
+ * @brief Boolean circuit implementation and evaluation algorithms.
+ *
+ * Implements the methods declared in @c BooleanCircuit.h, including:
+ * - Gate management (@c addGate, @c setGate, @c setInfo, @c setProb).
+ * - Probability evaluation algorithms: possible worlds, Monte Carlo,
+ *   WeightMC, independent evaluation.
+ * - Knowledge compilation: @c compilation() (external tools),
+ *   @c interpretAsDD() (direct from circuit structure),
+ *   @c makeDD() (dispatcher).
+ * - @c rewriteMultivaluedGates(): replaces MULVAR/MULIN clusters with
+ *   standard AND/OR/NOT circuits.
+ * - @c Tseytin(): DIMACS/weighted CNF generation for model counters.
+ * - @c exportCircuit(): serialisation in the @c tdkc text format.
+ * - @c toString(): human-readable gate description.
+ *
+ * In the standalone @c tdkc build (when @c TDKC is defined) a lightweight
+ * @c elog() stub replaces the PostgreSQL error-reporting function.
+ */
 #include "BooleanCircuit.h"
 #include "Circuit.hpp"
 #include <type_traits>
@@ -723,6 +743,12 @@ void BooleanCircuit::rewriteMultivaluedGatesRec(
   prefix.pop_back();
 }
 
+/**
+ * @brief Check whether two double values are approximately equal.
+ * @param a  First value.
+ * @param b  Second value.
+ * @return   @c true if @p a and @p b differ by less than 10× machine epsilon.
+ */
 static constexpr bool almost_equals(double a, double b)
 {
   double diff = a - b;

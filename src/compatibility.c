@@ -1,3 +1,14 @@
+/**
+ * @file compatibility.c
+ * @brief Backport implementations for missing PostgreSQL API functions.
+ *
+ * Provides implementations of functions that do not exist in older
+ * PostgreSQL versions but are declared in @c compatibility.h.
+ *
+ * Currently provides:
+ * - @c list_insert_nth() for PostgreSQL < 13, where the linked-list-based
+ *   @c List implementation did not include this helper.
+ */
 #include "compatibility.h"
 
 #if PG_VERSION_NUM < 130000

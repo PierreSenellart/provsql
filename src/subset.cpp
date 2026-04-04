@@ -1,3 +1,25 @@
+/**
+ * @file subset.cpp
+ * @brief Valid-world enumeration for aggregate HAVING predicates.
+ *
+ * Implements @c enumerate_valid_worlds() declared in @c subset.hpp.
+ *
+ * For a list of @f$n@f$ tuples with individual values, the function
+ * iterates over all @f$2^n@f$ possible worlds (bitmasks), computes the
+ * aggregate of the present tuples' values using the requested
+ * @c AggregationOperator, and tests the comparison predicate.  All
+ * valid worlds are collected and returned.
+ *
+ * The @c upset output flag is set to @c true when the set of valid
+ * worlds is upward-closed (every superset of a valid world is also
+ * valid), which is the case for monotone aggregation predicates (e.g.
+ * SUM ≥ k).  This information is used to optimise the evaluation of
+ * monotone HAVING clauses.
+ *
+ * Internal helpers in an anonymous namespace:
+ * - @c increment(): advance a bitmask to the next possible world.
+ * - @c compute_agg(): compute the aggregate value for one bitmask.
+ */
 #include "subset.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -47,6 +69,7 @@ static void append_range(std::vector<mask_t> &out,
 
 class DPException : public std::exception {};
 
+/** @brief Return the minimum of two values. */
 #define MIN(x,y) ((x)<(y)?(x):(y))
 
 static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, ComparisonOperator op, bool absorptive, bool &upset)
@@ -222,6 +245,15 @@ static std::vector<mask_t> count_enum(const std::vector<long> &values, int m, Co
 
 }
 
+/**
+ * @brief Apply a comparison operator to two values.
+ * @tparam I  Type of the left operand.
+ * @tparam J  Type of the right operand.
+ * @param a   Left operand.
+ * @param op  Comparison operator.
+ * @param b   Right operand.
+ * @return    Result of the comparison.
+ */
 template<typename I, typename J>
 static bool compare(I a, ComparisonOperator op, J b) {
   switch (op) {
@@ -235,6 +267,15 @@ static bool compare(I a, ComparisonOperator op, J b) {
   return false;
 }
 
+/**
+ * @brief Evaluate whether the aggregation of @p values masked by @p mask satisfies @p op @p constant.
+ * @param values      Input values to aggregate.
+ * @param mask        Boolean mask selecting which values to include.
+ * @param constant    Right-hand side constant of the comparison.
+ * @param op          Comparison operator.
+ * @param aggregator  Aggregator to apply to the selected values.
+ * @return            @c true if the aggregate result satisfies the comparison.
+ */
 bool evaluate(const std::vector<long>& values,
               const std::vector<bool>& mask,
               int constant, ComparisonOperator op,
@@ -256,6 +297,16 @@ bool evaluate(const std::vector<long>& values,
   }
 }
 
+/**
+ * @brief Enumerate all subsets satisfying a HAVING predicate by exhaustive search.
+ * @param values      Input values.
+ * @param constant    Constant for the comparison.
+ * @param op          Comparison operator.
+ * @param agg_kind    Aggregation function to apply.
+ * @param absorptive  Whether the semiring is absorptive.
+ * @param upset       Set to @c true if the result set forms an upset (monotone).
+ * @return            Vector of satisfying subset masks.
+ */
 std::vector<mask_t> enumerate_exhaustive(
   const std::vector<long> &values,
   int constant,

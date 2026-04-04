@@ -1,3 +1,17 @@
+/**
+ * @file where_provenance.cpp
+ * @brief SQL function @c provsql.where_provenance() – column-level provenance.
+ *
+ * Implements @c provsql.where_provenance(), which evaluates the
+ * where-provenance of a query result tuple.  Where-provenance identifies
+ * the base-relation cells (table, row, column) from which each output
+ * value was copied.
+ *
+ * The function builds a @c WhereCircuit from the mmap-backed circuit store
+ * (using SPI to obtain gate information), evaluates it via
+ * @c WhereCircuit::evaluate(), and returns the result as a PostgreSQL
+ * text-array value containing @c "table.tid.position" locator strings.
+ */
 extern "C" {
 
 #include "postgres.h"
@@ -22,6 +36,11 @@ PG_FUNCTION_INFO_V1(where_provenance);
 
 using namespace std;
 
+/**
+ * @brief Parse a PostgreSQL text representation of an array of integer pairs.
+ * @param s  String in the form @c {{a,b},{c,d},...}.
+ * @return   Vector of (first, second) integer pairs.
+ */
 static vector<pair<int,int> > parse_array(string s)
 {
   s=s.substr(1,s.size()-2); // Remove initial '{' and final '}'
@@ -49,6 +68,11 @@ static vector<pair<int,int> > parse_array(string s)
   return result;
 }
 
+/**
+ * @brief Build a JSON where-provenance description for the circuit rooted at @p token.
+ * @param token  Datum containing the root provenance gate UUID.
+ * @return       JSON string describing the where-provenance.
+ */
 static string where_provenance_internal
   (Datum token)
 {
@@ -141,6 +165,7 @@ static string where_provenance_internal
   return os.str();
 }
 
+/** @brief PostgreSQL-callable wrapper for where_provenance(). */
 Datum where_provenance(PG_FUNCTION_ARGS)
 {
   try {

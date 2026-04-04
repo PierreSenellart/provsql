@@ -1,3 +1,16 @@
+/**
+ * @file to_prov.cpp
+ * @brief SQL function @c provsql.to_provxml() – XML/JSON circuit export.
+ *
+ * Implements @c provsql.to_provxml(), which serialises the provenance
+ * circuit rooted at a given UUID token to an XML string.  The XML
+ * representation can be used for export, interchange, or display.
+ *
+ * The implementation retrieves the circuit from the mmap store via SPI,
+ * traverses it depth-first, and builds the XML document using string
+ * operations.  Special XML characters in node labels are escaped by the
+ * local @c xmlEscape() helper.
+ */
 extern "C"
 {
 #include "postgres.h"
@@ -21,6 +34,11 @@ PG_FUNCTION_INFO_V1(to_provxml);
 
 using namespace std;
 
+/**
+ * @brief Escape special XML characters in @p input.
+ * @param input  String to escape.
+ * @return       Escaped string suitable for embedding in XML.
+ */
 static string xmlEscape(const std::string& input) {
   string output;
   output.reserve(input.size());
@@ -38,6 +56,12 @@ static string xmlEscape(const std::string& input) {
 extern const char *drop_temp_table;
 bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids);
 
+/**
+ * @brief Build an XML provenance representation for a circuit token.
+ * @param tokenDatum  Datum containing the root provenance gate UUID.
+ * @param table       Datum with the OID of the provenance mapping table.
+ * @return            XML string describing the provenance circuit.
+ */
 static string to_provxml_internal(Datum tokenDatum, Datum table)
 {
   pg_uuid_t token = *DatumGetUUIDP(tokenDatum);
@@ -108,6 +132,7 @@ static string to_provxml_internal(Datum tokenDatum, Datum table)
   return ss.str();
 }
 
+/** @brief PostgreSQL-callable wrapper for to_provxml(). */
 Datum to_provxml(PG_FUNCTION_ARGS)
 {
   try

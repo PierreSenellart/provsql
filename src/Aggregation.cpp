@@ -1,3 +1,19 @@
+/**
+ * @file Aggregation.cpp
+ * @brief Aggregation operator and accumulator implementations.
+ *
+ * Implements the two factory functions declared in @c Aggregation.h:
+ * - @c getAggregationOperator(): maps a PostgreSQL aggregate function OID
+ *   (looked up by name via @c get_func_name()) to an @c AggregationOperator
+ *   enum value.
+ * - @c makeAggregator(): constructs a concrete @c Aggregator subclass
+ *   for the given operator/type combination.
+ *
+ * Each aggregation function × value-type combination has its own
+ * @c Aggregator subclass defined locally in this file (e.g.
+ * @c SumAggregator<long>, @c MinAggregator<double>, @c ArrayAggregator<std::string>,
+ * etc.).
+ */
 #include "Aggregation.h"
 
 #include <string>
@@ -47,6 +63,7 @@ AggregationOperator getAggregationOperator(Oid oid)
   return op;
 }
 
+/** @brief Aggregator that ignores all inputs and always returns NULL. */
 struct NoneAgg : Aggregator {
   void add(const AggValue& x) override {
   }
@@ -64,16 +81,23 @@ struct NoneAgg : Aggregator {
 template <class ...>
 struct False : std::bool_constant<false> { };
 
+/**
+ * @brief Base aggregator template for scalar types (int, float, bool, string).
+ *
+ * @tparam T  The C++ type of the accumulated value.
+ */
 template <class T>
 struct StandardAgg : Aggregator {
 protected:
-  T value{};
-  bool has = false;
+  T value{};   ///< Current accumulated value
+  bool has = false; ///< @c true once the first non-NULL input has been seen
 
 public:
+  /** @brief Return the accumulated value, or NULL if no inputs were seen. */
   AggValue finalize() const override {
     if (has) return AggValue {value}; else return AggValue{};
   }
+  /** @brief Return the value type corresponding to @c T. */
   ValueType inputType() const override {
     if constexpr (std::is_same_v<T,long>)
       return ValueType::INT;
@@ -88,6 +112,7 @@ public:
   }
 };
 
+/** @brief Aggregator implementing SUM for integer or float types. */
 template <class T>
 struct SumAgg : StandardAgg<T> {
   using StandardAgg<T>::value;
@@ -104,6 +129,7 @@ struct SumAgg : StandardAgg<T> {
   }
 };
 
+/** @brief Aggregator implementing MIN for integer or float types. */
 template <class T>
 struct MinAgg : StandardAgg<T> {
   using StandardAgg<T>::value;
@@ -124,6 +150,7 @@ struct MinAgg : StandardAgg<T> {
   }
 };
 
+/** @brief Aggregator implementing MAX for integer or float types. */
 template <class T>
 struct MaxAgg : StandardAgg<T> {
   using StandardAgg<T>::value;
@@ -144,6 +171,7 @@ struct MaxAgg : StandardAgg<T> {
   }
 };
 
+/** @brief Aggregator implementing boolean AND (returns false if any input is false). */
 struct AndAgg : StandardAgg<bool> {
   AndAgg() {
     value=true;
@@ -160,6 +188,7 @@ struct AndAgg : StandardAgg<bool> {
   }
 };
 
+/** @brief Aggregator implementing boolean OR (returns true if any input is true). */
 struct OrAgg : StandardAgg<bool> {
   OrAgg() {
     value=false;
@@ -176,6 +205,7 @@ struct OrAgg : StandardAgg<bool> {
   }
 };
 
+/** @brief Aggregator implementing CHOOSE (returns the first non-NULL input). */
 template <class T>
 struct ChooseAgg : StandardAgg<T> {
   using StandardAgg<T>::value;
@@ -192,12 +222,13 @@ struct ChooseAgg : StandardAgg<T> {
   }
 };
 
+/** @brief Aggregator implementing AVG; always returns a float result. */
 template <class T>
 struct AvgAgg : Aggregator {
 protected:
-  double sum = 0;
-  unsigned count = 0;
-  bool has = false;
+  double sum = 0;     ///< Running sum of all non-NULL input values
+  unsigned count = 0; ///< Number of non-NULL inputs seen so far
+  bool has = false;   ///< @c true once the first non-NULL input has been seen
 
 public:
   void add(const AggValue& x) override {
@@ -226,10 +257,11 @@ public:
   }
 };
 
+/** @brief Aggregator implementing ARRAY_AGG; collects all non-NULL inputs into an array. */
 template<class T>
 struct ArrayAgg : StandardAgg<T> {
 protected:
-  std::vector<T> values;
+  std::vector<T> values; ///< Accumulated elements
   using StandardAgg<T>::has;
 
 public:
