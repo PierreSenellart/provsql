@@ -60,7 +60,14 @@ s{
   \}
 }sigx;
 
-# Ignore other search_path changes
+# Re-enter namespace after a close (e.g., provsql.14.sql reopens the schema)
+s{
+  \}\n+SET\s+search_path\s+TO\s+provsql;
+}{
+  \}\nnamespace provsql \{
+}sigx;
+
+# Ignore other search_path changes (redundant SET within open namespace)
 s{
   \nSET\s+search_path\s+.*?;
 }{

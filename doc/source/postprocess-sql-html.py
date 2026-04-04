@@ -52,11 +52,21 @@ REPLACEMENTS = [
     (r"\bquery_type_enum\b", "QUERY_TYPE_ENUM"),
 
     # OUT parameters: "TYPE &amp;" or "TYPE &name" -> "OUT TYPE" / "OUT TYPE name"
-    # In Doxygen HTML, the & and param name may be in separate elements,
-    # so handle both "TYPE &amp;" alone and "TYPE &amp;name" together.
+    # Handle multi-word types like DOUBLE PRECISION & before single-word types
+    (r"(DOUBLE PRECISION)\s+&amp;\s*(\w+)", r"OUT \1 \2"),
+    (r"(DOUBLE PRECISION)\s+&amp;", r"OUT \1"),
     (r"(\b[A-Z_]+)\s+&amp;\s*(\w+)", r"OUT \1 \2"),
     (r"(\b[A-Z_]+)\s+&amp;", r"OUT \1"),
     (r"(\b[A-Z_]+)\s+&(\w+)", r"OUT \1 \2"),
+
+    # C++ terminology -> SQL terminology
+    (r"Data Structure Index", "Type Index"),
+    (r"Data Structures", "Types"),
+    (r"Data Fields", "Attributes"),
+    (r"Namespace Members", "Schema Members"),
+    (r"Namespace Reference", "Schema Reference"),
+    (r"Namespace List", "Schema List"),
+    (r"Namespaces", "Schemas"),
 
     # Fix false positives: restore HTML/MIME types broken by uppercasing
     (r"TEXT/javascript", "text/javascript"),
@@ -66,6 +76,7 @@ REPLACEMENTS = [
     (r"TEXT/plain", "text/plain"),
     (r"TEXT/xhtml", "text/xhtml"),
     (r'"TEXT"', '"text"'),
+    (r"\bTEXT:", "text:"),
 ]
 
 
@@ -92,6 +103,7 @@ def main():
         "group__*.js", "namespace*.js", "struct*.js", "provsql_*.js",
         "topics.js", "navtreedata.js", "navtreeindex*.js",
         "annotated_dup.js", "files_dup.js", "namespaces_dup.js",
+        "menudata.js", "dir_*.js",
         "search/*.js",
     ]
     files = list(html_dir.rglob("*.html"))
