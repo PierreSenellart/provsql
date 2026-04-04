@@ -28,9 +28,18 @@ REPLACEMENTS = [
     # C keywords -> SQL keywords
     (r"\bstruct\b", "TYPE"),
     (r"\benum\b", "ENUM"),
+    # "Struct Reference" page title/heading -> TABLE Reference for tables, TYPE Reference for types
+    (r"\bupdate_provenance\b Struct Reference", "update_provenance TABLE Reference"),
+    (r"Struct Reference", "TYPE Reference"),
+
+    # C-style CAST function names -> SQL CAST syntax
+    # e.g. CAST_agg_token_TO_UUID -> CAST(AGG_TOKEN AS UUID)
+    (r'\bCAST_([a-z_]+)_TO_([A-Za-z_]+)\b',
+     lambda m: f'CAST({m.group(1).upper()} AS {m.group(2).upper()})'),
 
     # Uppercase SQL types (only whole words, case-sensitive for lowercase)
     (r"\bvoid\b", "VOID"),
+    (r"\btimestamp\b", "TIMESTAMP"),
     (r"\bbool\b", "BOOL"),
     (r"\bboolean\b", "BOOLEAN"),
     (r"\bint\b", "INT"),
@@ -57,7 +66,6 @@ REPLACEMENTS = [
     (r"(DOUBLE PRECISION)\s+&amp;", r"OUT \1"),
     (r"(\b[A-Z_]+)\s+&amp;\s*(\w+)", r"OUT \1 \2"),
     (r"(\b[A-Z_]+)\s+&amp;", r"OUT \1"),
-    (r"(\b[A-Z_]+)\s+&(\w+)", r"OUT \1 \2"),
 
     # C++ terminology -> SQL terminology
     (r"Data Structure Index", "Type Index"),
@@ -67,6 +75,11 @@ REPLACEMENTS = [
     (r"Namespace Reference", "Schema Reference"),
     (r"Namespace List", "Schema List"),
     (r"Namespaces", "Schemas"),
+
+    # Remove Doxygen's auto-generated "Definition at line X of file Y." links.
+    # These use filter-output line numbers (not original SQL lines) and are
+    # replaced by our custom @par Source code links with correct line numbers.
+    (r'<p class="definition">Definition at line.*?</p>\n?', ""),
 
     # Fix false positives: restore HTML/MIME types broken by uppercasing
     (r"TEXT/javascript", "text/javascript"),

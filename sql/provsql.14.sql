@@ -6,6 +6,13 @@ SET search_path TO provsql;
  *  @{
  */
 
+/**
+ * @brief Table recording the history of INSERT, UPDATE, DELETE, and UNDO operations
+ *
+ * Each row records one provenance-tracked modification, linking the
+ * operation's provenance token to metadata (query text, type, user,
+ * timestamp) and the temporal validity range of the affected rows.
+ */
 CREATE TABLE update_provenance (
   provsql uuid,
   query text,
@@ -194,7 +201,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 /** @} */
 
-/** @defgroup temporal_db Temporal DB
+/** @defgroup temporal_db Temporal DB (PostgreSQL 14+)
  *  Functions for temporal database support. These use provenance
  *  evaluation over the multirange semiring to track temporal validity
  *  of tuples.

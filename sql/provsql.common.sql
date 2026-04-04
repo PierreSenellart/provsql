@@ -977,6 +977,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE PARALLEL SAFE;
 
+/** @brief Implicit PostgreSQL cast from agg_token to UUID (delegates to agg_token_uuid()) */
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
 /**
@@ -996,6 +997,12 @@ BEGIN
 END;
 $$;
 
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
 CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -1006,6 +1013,7 @@ BEGIN
 END;
 $$;
 
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR < (
   LEFTARG    = agg_token,
   RIGHTARG   = numeric,
@@ -1013,6 +1021,7 @@ CREATE OPERATOR < (
   COMMUTATOR = >,
   NEGATOR    = >=
 );
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR < (
   LEFTARG    = numeric,
   RIGHTARG   = agg_token,
@@ -1021,6 +1030,7 @@ CREATE OPERATOR < (
   NEGATOR    = >=
 );
 
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR <= (
   LEFTARG    = agg_token,
   RIGHTARG   = numeric,
@@ -1028,6 +1038,7 @@ CREATE OPERATOR <= (
   COMMUTATOR = >=,
   NEGATOR    = >
 );
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR <= (
   LEFTARG    = numeric,
   RIGHTARG   = agg_token,
@@ -1036,6 +1047,7 @@ CREATE OPERATOR <= (
   NEGATOR    = >
 );
 
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR = (
   LEFTARG    = agg_token,
   RIGHTARG   = numeric,
@@ -1043,6 +1055,7 @@ CREATE OPERATOR = (
   COMMUTATOR = =,
   NEGATOR    = <>
 );
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR = (
   LEFTARG    = numeric,
   RIGHTARG   = agg_token,
@@ -1051,6 +1064,7 @@ CREATE OPERATOR = (
   NEGATOR    = <>
 );
 
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR <> (
   LEFTARG    = agg_token,
   RIGHTARG   = numeric,
@@ -1058,6 +1072,7 @@ CREATE OPERATOR <> (
   COMMUTATOR = <>,
   NEGATOR    = =
 );
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR <> (
   LEFTARG    = numeric,
   RIGHTARG   = agg_token,
@@ -1066,6 +1081,7 @@ CREATE OPERATOR <> (
   NEGATOR    = =
 );
 
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR >= (
   LEFTARG    = agg_token,
   RIGHTARG   = numeric,
@@ -1073,6 +1089,7 @@ CREATE OPERATOR >= (
   COMMUTATOR = <=,
   NEGATOR    = <
 );
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR >= (
   LEFTARG    = numeric,
   RIGHTARG   = agg_token,
@@ -1081,6 +1098,7 @@ CREATE OPERATOR >= (
   NEGATOR    = <
 );
 
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR > (
   LEFTARG    = agg_token,
   RIGHTARG   = numeric,
@@ -1088,6 +1106,7 @@ CREATE OPERATOR > (
   COMMUTATOR = <,
   NEGATOR    = <=
 );
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
 CREATE OPERATOR > (
   LEFTARG    = numeric,
   RIGHTARG   = agg_token,
@@ -1524,6 +1543,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE IMMUTABLE;
 
+/** @brief Aggregate that returns an arbitrary non-NULL value from a group */
 CREATE AGGREGATE choose(ANYELEMENT) (
   SFUNC = choose_function,
   STYPE = ANYELEMENT

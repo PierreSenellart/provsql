@@ -22,6 +22,7 @@ STRIP_CODE_COMMENTS    = NO
 # Output
 OUTPUT_DIRECTORY       = ../doxygen-c
 GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
 QUIET                  = YES
 
 # Graphs

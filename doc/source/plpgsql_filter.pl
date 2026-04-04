@@ -3,7 +3,44 @@
 use strict;
 use warnings;
 
+my $input_file = $ARGV[0] // '';
 $_ = join '', <>;
+
+# Pre-pass: record the original line number for each named SQL entity.
+# Used later to emit #line directives so Doxygen links back to the real source.
+my %line_of;
+{
+    my $lno = 0;
+    for my $ln (split /\n/, $_) {
+        $lno++;
+        if ($ln =~ /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|AGGREGATE)\s+(\w+)\s*\(/i) {
+            $line_of{lc $1} //= $lno;
+        }
+        if ($ln =~ /CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+(\w+)/i) {
+            $line_of{lc $1} //= $lno;
+        }
+        if ($ln =~ /CREATE\s+TABLE\s+(\w+)\s*\(/i) {
+            $line_of{lc $1} //= $lno;
+        }
+        if ($ln =~ /CREATE\s+CAST\s*\(\s*(\w+)\s+AS\s+(\w+)/i) {
+            $line_of{lc "cast_${1}_to_${2}"} //= $lno;
+        }
+        # Operators: look ahead handled by two-line context below.
+    }
+    # Two-pass for operators: find LEFTARG/RIGHTARG within each CREATE OPERATOR block.
+    my $text = join "\n", split /\n/, $_;
+    while ($text =~ /CREATE\s+OPERATOR\s+([^\s(]+)\s*\(([^;]*?)\)/gsi) {
+        my ($op, $body, $start) = ($1, $2, pos($text) - length($&));
+        my $lno_op = 1 + (() = substr($text, 0, $start) =~ /\n/g);
+        my ($left)  = ($body =~ /LEFTARG\s*=\s*(\w+)/i);
+        my ($right) = ($body =~ /RIGHTARG\s*=\s*(\w+)/i);
+        my %omap = ('<'=>'lt','<='=>'le','='=>'eq','<>'=>'ne','>='=>'ge','>'=>'gt');
+        if ($left && $right) {
+            my $oname = lc "${left}_" . ($omap{$op}//'op') . "_${right}";
+            $line_of{$oname} //= $lno_op;
+        }
+    }
+}
 
 s{
   CREATE\s+
@@ -149,18 +186,57 @@ s{
   \bGRANT\s+[^;]*;
 }{}sigx;
 
-# Strip CREATE CAST, CREATE OPERATOR, CREATE TABLE, and standalone SELECT statements
+# Convert CREATE TABLE to a C struct (stripping DEFAULT/NOT NULL/etc.)
 s{
-  \bCREATE\s+CAST\b[^;]*;
-}{}sigxg;
+  CREATE\s+TABLE\s+(\w+)\s*
+  \(((?:[^()]+|\((?:[^()]+|\([^()]*\))*\))*)\)
+  \s*;
+}{
+  my ($name, $body) = ($1, $2);
+  my @parts;
+  my ($depth, $cur) = (0, '');
+  for my $ch (split //, $body) {
+    if    ($ch eq '(')                { $depth++; $cur .= $ch }
+    elsif ($ch eq ')')                { $depth--; $cur .= $ch }
+    elsif ($ch eq ',' && $depth == 0) { push @parts, $cur; $cur = '' }
+    else                              { $cur .= $ch }
+  }
+  push @parts, $cur if $cur =~ /\S/;
+  my @cols;
+  for my $col (@parts) {
+    $col =~ s/^\s+|\s+$//g;
+    next if $col =~ /^\s*(?:CONSTRAINT|PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE\s*\(|CHECK\s*\()/i;
+    if ($col =~ /^(\w+)\s+(\w+)/) {
+      push @cols, "$2 $1";
+    }
+  }
+  "struct $name \{ " . join('; ', @cols) . "; \};"
+}sigxe;
 
+# Convert CREATE CAST to a C-style function declaration
 s{
-  \bCREATE\s+OPERATOR\b.*?\);
-}{}sigxg;
+  CREATE\s+CAST\s*\(\s*(\w+)\s+AS\s+(\w+)\s*\)
+  \s*WITH\s+FUNCTION\s+\w+\s*\([^)]*\)
+  (?:\s+AS\s+IMPLICIT)?
+  \s*;
+}{
+  my ($from, $to) = ($1, $2);
+  "${to} CAST_${from}_TO_${to}(${from});"
+}sigxe;
 
+# Convert CREATE OPERATOR to a C-style boolean function declaration
+my %op_map = ('<' => 'lt', '<=' => 'le', '=' => 'eq', '<>' => 'ne', '>=' => 'ge', '>' => 'gt');
 s{
-  \bCREATE\s+TABLE\b.*?;
-}{}sigxg;
+  CREATE\s+OPERATOR\s+([^\s(]+)\s*\(\s*((?:[^()]*|\([^()]*\))*)\)\s*;
+}{
+  my ($op, $body) = ($1, $2);
+  my ($left)  = ($body =~ /LEFTARG\s*=\s*(\w+)/i);
+  my ($right) = ($body =~ /RIGHTARG\s*=\s*(\w+)/i);
+  my $op_name = $op_map{$op} // 'op';
+  ($left && $right)
+    ? "boolean ${left}_${op_name}_${right}(${left} left, ${right} right);"
+    : ""
+}sigxe;
 
 s{
   \bSELECT\b[^;]*;
@@ -184,7 +260,7 @@ while (/\b(\w+)\[\]/g) {
 # Deduplicate typedefs
 my %seen;
 $typedefs = join("", grep { !$seen{$_}++ } split(/^/m, $typedefs));
-$_ = $typedefs . $_ if $typedefs;
+$_ = "/** \@cond INTERNAL */\n${typedefs}/** \@endcond */\n" . $_ if $typedefs;
 
 # Normalize multi-word SQL types to use underscores (matching the typedefs above)
 s/\bDOUBLE PRECISION\b/DOUBLE_PRECISION/gi;
@@ -192,5 +268,44 @@ s/\bCHARACTER VARYING\b/CHARACTER_VARYING/gi;
 
 # Convert SQL array notation (type[]) to C-compatible names
 s/(\w+)\[\]/${1}_array/g;
+
+# Inject source links into doc comments, pointing to Doxygen's source browser.
+# The source browser (FILTER_SOURCE_FILES=NO) shows the original SQL at the
+# correct line numbers recorded by the pre-pass above.
+if ($input_file) {
+    # Derive Doxygen's source-browser HTML filename from the input filename.
+    # e.g. "provsql.sql" -> "provsql_8sql_source.html"
+    (my $source_html = ($input_file =~ m{([^/]+)$})[0]) =~ s/\./_8/;
+    $source_html .= '_source.html';
+
+    # Functions, aggregates, operators, casts (declarations with parentheses)
+    s{
+        (/\*\*(?:[^*]|\*(?!/))*\*/)   # doc comment block
+        (\s*\n)                         # separator
+        ([A-Za-z_]\w*(?:\s+\w+)*\s+\w+\s*\([^\n]*\)\s*;)  # declaration
+    }{
+        my ($cmt, $sep, $decl) = ($1, $2, $3);
+        my ($name) = lc(($decl =~ /(\w+)\s*\(/)[0] // '');
+        if (my $lno = $line_of{$name}) {
+            my $anchor = sprintf("l%05d", $lno);
+            $cmt =~ s|\s*\*/|\n * \@par Source code\n * <a href="${source_html}#${anchor}">provsql.sql line $lno</a>\n */|;
+        }
+        "$cmt$sep$decl"
+    }msxge;
+
+    # Structs and enums (type and table declarations)
+    s{
+        (/\*\*(?:[^*]|\*(?!/))*\*/)   # doc comment block
+        (\s*\n)                         # separator
+        ((struct|enum)\s+(\w+)\b[^\n]*;)  # declaration
+    }{
+        my ($cmt, $sep, $decl, $kind, $name) = ($1, $2, $3, $4, lc $5);
+        if (my $lno = $line_of{$name}) {
+            my $anchor = sprintf("l%05d", $lno);
+            $cmt =~ s|\s*\*/|\n * \@par Source code\n * <a href="${source_html}#${anchor}">provsql.sql line $lno</a>\n */|;
+        }
+        "$cmt$sep$decl"
+    }msxge;
+}
 
 print;

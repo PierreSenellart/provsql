@@ -12,6 +12,11 @@ EXTENSION_MAPPING      = sql=C
 OPTIMIZE_OUTPUT_FOR_C  = YES
 FILTER_PATTERNS        = *.sql=./plpgsql_filter.pl
 
+# Source browsing (original SQL, with #line-corrected line numbers from the filter)
+SOURCE_BROWSER         = YES
+FILTER_SOURCE_FILES    = NO
+STRIP_CODE_COMMENTS    = NO
+
 # Extraction
 EXTRACT_ALL            = YES
 JAVADOC_AUTOBRIEF      = YES
@@ -19,4 +24,5 @@ JAVADOC_AUTOBRIEF      = YES
 # Output
 OUTPUT_DIRECTORY       = ../doxygen-sql
 GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
 QUIET                  = YES
