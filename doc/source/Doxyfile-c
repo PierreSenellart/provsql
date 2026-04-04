@@ -25,6 +25,10 @@ GENERATE_LATEX         = NO
 GENERATE_TREEVIEW      = YES
 QUIET                  = YES
 
+# Math rendering (MathJax renders LaTeX formulas in the browser, no LaTeX install needed)
+USE_MATHJAX            = YES
+MATHJAX_VERSION        = MathJax_3
+
 # Graphs
 HAVE_DOT               = YES
 CALL_GRAPH             = YES
