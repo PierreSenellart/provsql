@@ -8,13 +8,27 @@ Welcome to ProvSQL's documentation!
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: User Guide
 
-   c/index
-   sql/index
+   user/introduction
+   user/getting-provsql
+   user/tutorial
+   user/provenance-tables
+   user/querying
+   user/aggregation
+   user/semirings
+   user/probabilities
+   user/shapley
+   user/where-provenance
+   user/data-modification
+   user/temporal
+   user/export
+   user/configuration
+   user/bibliography
 
-Indices and tables
-==================
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference
 
-* :ref:`genindex`
-* :ref:`search`
+   sql/provsql
+   c/provsql

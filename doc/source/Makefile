@@ -1,6 +1,6 @@
 # Minimal makefile for Sphinx documentation
 
-SPHINXOPTS    ?=
+SPHINXOPTS    ?= -E
 SPHINXBUILD   ?= sphinx-build
 SOURCEDIR     = .
 BUILDDIR      = _build

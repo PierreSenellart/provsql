@@ -51,9 +51,14 @@
   font-style: italic;
 }
 
+/* ---- Base font size: match Jekyll site (root 22px → 1.05rem body = 23.1px) ---- */
+html {
+  font-size: 22px;
+}
+
 /* ---- Content area ---- */
 .wy-nav-content-wrap { background-color: #F4F0FA; }
-.wy-nav-content      { background-color: #F4F0FA; }
+.wy-nav-content      { background-color: #F4F0FA; max-width: 1100px; }
 
 /* ---- Headings ---- */
 h1, h2, h3, h4, h5, h6 {
@@ -84,6 +89,21 @@ a:hover     { color: #C4664A; }
 a:visited   { color: #5A3E8C; }
 .wy-breadcrumbs a { color: #6B4FA0; }
 
+/* ---- Visited links on dark sidebar/navbar backgrounds ---- */
+.wy-side-nav-search > a:visited,
+.wy-side-nav-search .wy-dropdown > a:visited {
+  color: #F4F0FA;
+}
+.wy-menu-vertical a:visited {
+  color: rgba(244,240,250,0.82);
+}
+.wy-menu-vertical li.current > a:visited {
+  color: #F4F0FA;
+}
+.wy-nav-top a:visited {
+  color: #F4F0FA;
+}
+
 /* ---- Code / pre ---- */
 code, tt {
   font-family: 'Fira Code', 'Consolas', monospace;
@@ -100,6 +120,20 @@ pre, div.highlight {
 div.highlight pre {
   background-color: transparent;
   color: #2A1850;
+}
+
+/* ---- Tighten paragraph → list spacing ---- */
+.wy-nav-content p:has(+ ul),
+.wy-nav-content p:has(+ ol) {
+  margin-bottom: 0;
+}
+.wy-nav-content p:has(+ dl) {
+  margin-bottom: 12px;
+}
+
+/* ---- Spoiler / collapsible blocks ---- */
+details {
+  margin-bottom: 1.5em;
 }
 
 /* ---- Footer ---- */

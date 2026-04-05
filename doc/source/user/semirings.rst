@@ -1,0 +1,152 @@
+Semiring Evaluation
+====================
+
+ProvSQL represents query provenance as a circuit of gates. A *semiring evaluation* :cite:`DBLP:conf/pods/GreenKT07` maps this circuit
+to a value in a chosen semiring by:
+
+1. Assigning a *leaf value* to each input gate via a provenance mapping.
+2. Propagating these values through ``plus`` and ``times`` gates (and
+   ``monus`` gates for m-semirings :cite:`DBLP:journals/japll/GeertsP10`)
+   according to the semiring operations.
+
+The built-in evaluation functions all follow the same calling convention::
+
+    sr_<name>(provenance(), 'mapping_name')
+
+where ``provenance()`` returns the token for the current output row and
+``mapping_name`` is the name of a provenance mapping table.
+Semirings are also extended with a *monus* operation allowing to
+represent the output of non-monotone queries.
+
+Boolean Semiring
+-----------------
+
+:sqlfunc:`sr_boolean` evaluates the provenance in the Boolean semiring
+``({true, false}, ∨, ∧, false, true)``, answering the question "was this
+result derivable at all, depending on the Boolean mapping of input
+provenance tokens?":
+
+.. code-block:: postgresql
+
+    SELECT name, sr_boolean(provenance(), 'my_mapping')
+    FROM mytable;
+
+Boolean-Expression Semiring
+-----------------------------
+
+:sqlfunc:`sr_boolexpr` evaluates the provenance in the *Boolean-expression*
+semiring, returning a human-readable propositional formula:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_boolexpr(provenance(), 'my_mapping')
+    FROM mytable;
+
+This is used as the basis for probability computation.
+
+
+Formula Semiring
+-----------------
+
+:sqlfunc:`sr_formula` returns the provenance as an algebraic formula using
+a pseudo-semiring using symbols ``⊕`` and ``⊗``:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_formula(provenance(), 'witness_mapping')
+    FROM suspects;
+
+For example, a result supported by tuples labelled ``a`` and ``b`` through
+a join would show as ``a⊗b``; one that could come from either ``a`` or
+``b`` would show as ``a⊕b``.
+
+Counting Semiring (m-semiring)
+-------------------------------
+
+:sqlfunc:`sr_counting` evaluates the provenance in the *counting* m-semiring,
+counting the number of distinct supporting inputs:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_counting(provenance(), 'count_mapping')
+    FROM suspects;
+
+The mapping should assign integer values (typically ``1``) to leaf tokens.
+
+Why-Provenance
+---------------
+
+:sqlfunc:`sr_why` returns the *why-provenance* of a result – the set of
+minimal witnesses (sets of input tuples) that support the result:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_why(provenance(), 'my_mapping')
+    FROM mytable;
+
+Security Semiring
+------------------
+
+The security semiring assigns security-level labels to tuples and
+propagates them through queries according to a lattice. It is implemented
+using :sqlfunc:`provenance_evaluate` with custom aggregates for the
+semiring plus and times operations. For example, given a type
+``classification_level`` (an enum ordered from ``unclassified`` to
+``top_secret``):
+
+.. code-block:: postgresql
+
+    -- Define the semiring operations
+    CREATE FUNCTION security_plus_state(state classification_level,
+                                        level classification_level)
+      RETURNS classification_level LANGUAGE SQL IMMUTABLE AS $$
+        SELECT LEAST(state, level)
+    $$;
+
+    CREATE FUNCTION security_times_state(state classification_level,
+                                         level classification_level)
+      RETURNS classification_level LANGUAGE SQL IMMUTABLE AS $$
+        SELECT GREATEST(state, level)
+    $$;
+
+    CREATE AGGREGATE security_plus(classification_level) (
+      sfunc = security_plus_state, stype = classification_level,
+      initcond = 'top_secret'
+    );
+    CREATE AGGREGATE security_times(classification_level) (
+      sfunc = security_times_state, stype = classification_level,
+      initcond = 'unclassified'
+    );
+
+    -- Evaluate the security level of a query result
+    SELECT create_provenance_mapping('personnel_level', 'personnel', 'classification');
+
+    SELECT city, provenance_evaluate(provenance(), 'personnel_level',
+                                     'unclassified'::classification_level,
+                                     'security_plus', 'security_times')
+    FROM (SELECT DISTINCT city FROM personnel) t;
+
+Custom Semirings
+-----------------
+
+Advanced users can define custom semirings in SQL and pass them to
+:sqlfunc:`provenance_evaluate` directly, as shown in the security semiring
+example above.
+
+Provenance Mappings
+--------------------
+
+All semiring functions take a mapping name as their second argument.
+A mapping is created with :sqlfunc:`create_provenance_mapping`:
+
+.. code-block:: postgresql
+
+    SELECT create_provenance_mapping('mapping_name', 'table_name', 'column_name');
+
+The mapping table has columns ``token`` (uuid) and ``value``. You can
+also populate it manually for custom scenarios:
+
+.. code-block:: sql
+
+    INSERT INTO mapping_name(token, value)
+    SELECT provenance(), my_label FROM mytable;
