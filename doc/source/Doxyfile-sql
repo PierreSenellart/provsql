@@ -26,3 +26,10 @@ OUTPUT_DIRECTORY       = ../doxygen-sql
 GENERATE_LATEX         = NO
 GENERATE_TREEVIEW      = YES
 QUIET                  = YES
+
+# Branding
+PROJECT_LOGO           = ../../branding/logo.png
+HTML_EXTRA_STYLESHEET  = doxygen-custom.css
+HTML_COLORSTYLE        = LIGHT
+HTML_COLORSTYLE_HUE    = 265
+HTML_COLORSTYLE_SAT    = 130

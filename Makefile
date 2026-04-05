@@ -23,7 +23,7 @@ test:
 docs: sql/provsql.sql
 	cd doc/source && make html
 
-.PHONY: default test
+.PHONY: default test docs
 
 docker-build:
 	make clean

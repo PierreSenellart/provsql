@@ -1,0 +1,101 @@
+/* Self-hosted fonts (OFL-1.1) — loaded from canonical branding/fonts-face.css */
+@import url('fonts-face.css');
+
+/* ---- Body & content ---- */
+/* Match Doxygen's exact selector to win the cascade */
+body, table, div, p, dl {
+  font-family: 'EB Garamond', 'Palatino Linotype', serif;
+  font-size: 20px;      /* EB Garamond has small x-height; 20px ≈ visual 14px of Roboto */
+  line-height: 1.75;
+}
+body {
+  color: #2A1850;
+  background-color: #F4F0FA;
+}
+
+/* ---- Headings ---- */
+h1, h2, h3, h4 {
+  font-family: 'EB Garamond', 'Palatino Linotype', serif;
+  font-style: italic;
+  font-weight: 600;
+  color: #2A1850;
+}
+h2.groupheader {
+  border-bottom: 2px solid #E8B84B;
+  color: #6B4FA0;
+}
+
+/* ---- Title / header area ---- */
+#titlearea {
+  background-color: #6B4FA0;
+  border-bottom: 3px solid #E8B84B;
+  padding: 8px 12px;
+}
+#projectname {
+  font-family: 'EB Garamond', serif;
+  font-style: italic;
+  font-weight: 600;
+  color: #F4F0FA;
+}
+#projectbrief {
+  font-family: 'Jost', 'Segoe UI', sans-serif;
+  font-size: 0.85rem;
+  color: rgba(244,240,250,0.82);
+}
+#projectlogo img { max-height: 55px; }
+
+/* ---- Navigation tabs ---- */
+div.tabs, div.tabs2, div.tabs3 {
+  background-color: #6B4FA0;
+  border-bottom: 3px solid #E8B84B;
+}
+.tablist a, .tablist a:visited {
+  font-family: 'Jost', 'Segoe UI', sans-serif;
+  color: rgba(244,240,250,0.82) !important;
+  text-shadow: none;
+}
+.tablist a:hover {
+  background-color: rgba(232,184,75,0.25);
+  color: #F4F0FA !important;
+}
+.tablist li.current a {
+  background-color: rgba(232,184,75,0.2);
+  border-bottom: 2px solid #E8B84B;
+  color: #F4F0FA !important;
+}
+
+/* ---- Links ---- */
+a, a:visited { color: #6B4FA0; }
+a:hover      { color: #C4664A; }
+
+/* ---- Nav tree (left panel) ---- */
+#nav-tree { background-color: #2A1850; }
+#nav-tree .selected { background-color: #6B4FA0; }
+#nav-tree a {
+  color: rgba(244,240,250,0.82);
+  font-family: 'Jost', 'Segoe UI', sans-serif;
+  font-size: 0.875rem;
+}
+#nav-tree a:hover { color: #E8B84B; }
+
+/* ---- Code / pre ---- */
+/* Override all JetBrains Mono usages and size-match to EB Garamond body */
+code, span.code, div.fragment, pre.fragment, div.line,
+.memname, td.paramtype, td.paramname {
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 15px;  /* 15px Fira Code ≈ visual 20px EB Garamond */
+}
+div.fragment, pre.fragment {
+  background-color: #E8E0F8;
+  color: #5A3E8C;
+  border-left: 3px solid #E8B84B;
+}
+
+/* ---- Member tables ---- */
+tr.memitem td  { background-color: #EDE8F7; }
+tr.memdesc td  { background-color: #F4F0FA; font-family: 'EB Garamond', serif; }
+tr.separator td { border-bottom: 1px solid #D6CCF0; }
+
+/* ---- Search ---- */
+#MSearchBox  { border: 1px solid #D6CCF0; }
+#MSearchField { font-family: 'Jost', 'Segoe UI', sans-serif; }
