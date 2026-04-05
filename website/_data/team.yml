@@ -1,0 +1,58 @@
+# Each entry: name, url (optional), affiliation (optional), affiliation_url (optional), location (optional)
+# Pierre Senellart first, then alphabetical by last name
+
+- name: Pierre Senellart
+  url: https://pierre.senellart.com
+  affiliation: DI ENS, ENS-PSL, CNRS, Inria
+  affiliation_url: https://www.di.ens.fr/
+  location: Paris, France
+
+- name: Antoine Amarilli
+  url: https://a3nm.net
+  affiliation: Inria Lille, D-DAL
+  affiliation_url: https://ddal.inria.fr/
+  location: Lille, France
+
+- name: Belkis Djeffal
+  affiliation: Inria Lille, SPIRALS
+  affiliation_url: https://team.inria.fr/spirals/
+  location: Lille, France
+
+- name: Louis Jachiet
+  url: https://louis.jachiet.com
+  affiliation: Télécom Paris, Institut Polytechnique de Paris
+  affiliation_url: https://www.telecom-paris.fr/
+  location: Paris, France
+
+- name: Pratik Karmakar
+  url: https://pratik2358.github.io
+  affiliation: National University of Singapore
+  affiliation_url: https://www.comp.nus.edu.sg/
+  location: Singapore
+
+- name: Baptiste Lafosse
+  url: https://github.com/BaptisteLafosse
+
+- name: Silviu Maniu
+  url: https://silviu.maniu.info
+  affiliation: LIG, Université Grenoble Alpes
+  affiliation_url: https://www.liglab.fr/
+  location: Grenoble, France
+
+- name: Yann Ramusat
+  url: https://yannramusat.github.io
+  affiliation: Devoteam
+  affiliation_url: https://www.devoteam.com/
+  location: Paris, France
+
+- name: Aryak Sen
+  url: https://github.com/Aryak320
+  affiliation: LIG, Université Grenoble Alpes
+  affiliation_url: https://www.liglab.fr/
+  location: Grenoble, France
+
+- name: Albert Ariel Widiaatmaja
+  url: https://github.com/albertarielw
+  affiliation: BlockTech
+  affiliation_url: https://www.blocktech.com/
+  location: Singapore

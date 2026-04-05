@@ -1,0 +1,347 @@
+% ---------------------------------------------------------------------------
+% keyword = {provsql-foundation}  : foundational works on which ProvSQL builds
+% keyword = {provsql-paper}       : papers about ProvSQL itself
+% ---------------------------------------------------------------------------
+
+% ---------------------------------------------------------------------------
+% Foundational Works
+% ---------------------------------------------------------------------------
+
+@inproceedings{DBLP:conf/icdt/BunemanKT01,
+  author       = {Peter Buneman and
+                  Sanjeev Khanna and
+                  Wang Chiew Tan},
+  title        = {Why and Where: {A} Characterization of Data Provenance},
+  booktitle    = {Database Theory - {ICDT} 2001, 8th International Conference, London,
+                  UK, January 4-6, 2001, Proceedings},
+  series       = {Lecture Notes in Computer Science},
+  pages        = {316--330},
+  publisher    = {Springer},
+  year         = {2001},
+  doi          = {10.1007/3-540-44503-X_20},
+  keyword      = {provsql-foundation},
+  annote       = {The paper that introduced the concepts of why-provenance and where-provenance.
+    Why-provenance tracks which source tuples contribute to a result; where-provenance
+    tracks which specific attribute values (locations in the source) a result value
+    was copied from. ProvSQL implements where-provenance via project and eq gates that
+    record the column-level origin of each output value.},
+}
+
+@inproceedings{DBLP:conf/pods/GreenKT07,
+  author       = {Todd J. Green and
+                  Gregory Karvounarakis and
+                  Val Tannen},
+  title        = {Provenance semirings},
+  booktitle    = {Proceedings of the Twenty-Sixth {ACM} {SIGACT-SIGMOD-SIGART} Symposium
+                  on Principles of Database Systems, June 11-13, 2007, Beijing, China},
+  pages        = {31--40},
+  publisher    = {{ACM}},
+  year         = {2007},
+  doi          = {10.1145/1265530.1265535},
+  keyword      = {provsql-foundation},
+  annote       = {The foundational paper introducing provenance semirings. Defines annotated
+    relations over commutative semirings and shows that the standard relational algebra
+    operators correspond to semiring operations, unifying many existing provenance
+    formalisms (why-provenance, lineage, trio, bag semantics) as instances of a single
+    algebraic framework. ProvSQL's core data model is a direct implementation of this
+    theory.},
+}
+
+@inproceedings{DBLP:conf/pods/AmsterdamerDT11,
+  author       = {Yael Amsterdamer and
+                  Daniel Deutch and
+                  Val Tannen},
+  title        = {Provenance for aggregate queries},
+  booktitle    = {Proceedings of the 30th {ACM} {SIGMOD-SIGACT-SIGART} Symposium on
+                  Principles of Database Systems, {PODS} 2011, June 12-16, 2011, Athens,
+                  Greece},
+  pages        = {153--164},
+  publisher    = {{ACM}},
+  year         = {2011},
+  doi          = {10.1145/1989284.1989302},
+  keyword      = {provsql-foundation},
+  annote       = {Extends semiring provenance to SQL aggregate queries (COUNT, SUM, AVG, etc.),
+    which fall outside the positive relational algebra covered by Green et al. Introduces
+    a semimodule structure over semirings to handle aggregation provenance. ProvSQL's
+    support for provenance of GROUP BY queries and aggregation gates is grounded in
+    this work.},
+}
+
+@article{DBLP:journals/japll/GeertsP10,
+  author       = {Floris Geerts and
+                  Antonella Poggi},
+  title        = {On database query languages for {K}-relations},
+  journal      = {J. Appl. Log.},
+  volume       = {8},
+  number       = {2},
+  pages        = {173--185},
+  year         = {2010},
+  doi          = {10.1016/J.JAL.2009.09.001},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces m-semirings (semirings equipped with a monus operator ⊖) to extend
+    the provenance semiring framework to the full relational algebra including set
+    difference and negation. Defines the corresponding notion of K-relations for
+    m-semirings. ProvSQL's handling of EXCEPT queries and its monus gate type are
+    direct implementations of this framework.},
+}
+
+@inproceedings{DBLP:conf/edbtw/GreenT06,
+  author       = {Todd J. Green and
+                  Val Tannen},
+  title        = {Models for Incomplete and Probabilistic Information},
+  booktitle    = {Current Trends in Database Technology - {EDBT} 2006, {EDBT} 2006 Workshops,
+                  Munich, Germany, March 26-31, 2006, Revised Selected Papers},
+  series       = {Lecture Notes in Computer Science},
+  pages        = {278--296},
+  publisher    = {Springer},
+  year         = {2006},
+  doi          = {10.1007/11896548_24},
+  keyword      = {provsql-foundation},
+  annote       = {Proposes a unified model for incomplete and probabilistic databases based on
+    c-tables annotated with provenance expressions over a Boolean semiring. Shows how
+    probabilistic query evaluation reduces to evaluating the provenance expression of a
+    result tuple over a probability distribution. This connection between provenance
+    and probabilistic databases is the theoretical basis for ProvSQL's probability
+    computation features.},
+}
+
+@inproceedings{DBLP:conf/icdt/DeutchMRT14,
+  author       = {Daniel Deutch and
+                  Tova Milo and
+                  Sudeepa Roy and
+                  Val Tannen},
+  title        = {Circuits for Datalog Provenance},
+  booktitle    = {Proc. 17th International Conference on Database Theory ({ICDT}),
+                  Athens, Greece, March 24-28, 2014},
+  pages        = {201--212},
+  publisher    = {OpenProceedings.org},
+  year         = {2014},
+  doi          = {10.5441/002/ICDT.2014.22},
+  keyword      = {provsql-foundation},
+  annote       = {Shows how to represent provenance of Datalog queries compactly as arithmetic
+    circuits rather than as (potentially exponential) polynomials or sets. Establishes
+    circuit-based provenance as a practical representation for recursive queries, with
+    efficient evaluation algorithms. ProvSQL's circuit-based provenance representation
+    for all gate types is directly inspired by this work.},
+}
+
+@inproceedings{DBLP:conf/sigmod/BourhisDM20,
+  author       = {Pierre Bourhis and
+                  Daniel Deutch and
+                  Yuval Moskovitch},
+  title        = {Equivalence-Invariant Algebraic Provenance for Hyperplane Update Queries},
+  booktitle    = {Proceedings of the 2020 International Conference on Management of
+                  Data, {SIGMOD} Conference 2020, online conference [Portland, OR, USA],
+                  June 14-19, 2020},
+  pages        = {415--429},
+  publisher    = {{ACM}},
+  year         = {2020},
+  doi          = {10.1145/3318464.3380578},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces an algebraic provenance framework for hyperplane update queries
+    (INSERT, DELETE, UPDATE via linear constraints), defining a semiring that tracks
+    provenance through data-modification operations in an equivalence-invariant manner.
+    This work provides the theoretical foundation for ProvSQL's update provenance
+    support.},
+}
+
+% ---------------------------------------------------------------------------
+% Papers about ProvSQL
+% ---------------------------------------------------------------------------
+
+@article{DBLP:journals/sigmod/Senellart17,
+  author       = {Pierre Senellart},
+  title        = {Provenance and Probabilities in Relational Databases},
+  journal      = {{SIGMOD} Rec.},
+  volume       = {46},
+  number       = {4},
+  pages        = {5--15},
+  year         = {2017},
+  doi          = {10.1145/3186549.3186551},
+  pdf          = {https://pierre.senellart.com/publications/senellart2017provenance.pdf},
+  keyword      = {provsql-paper},
+  annote       = {An accessible overview of provenance and probabilistic query evaluation in
+    relational databases, covering the semiring framework, knowledge compilation to
+    d-DNNF, and the connection to probabilistic databases. Serves as a concise
+    introduction to the theoretical and practical ideas behind ProvSQL.},
+}
+
+@inproceedings{sen2026provsql,
+  author       = {Aryak Sen and
+                  Silviu Maniu and
+                  Pierre Senellart},
+  title        = {{ProvSQL}: A General System for Keeping Track of the Provenance
+                  and Probability of Data},
+  booktitle    = {Proc. {IEEE} 42nd International Conference on Data Engineering ({ICDE}),
+                  Montr{\'e}al, Canada, May 2026},
+  year         = {2026},
+  note         = {Also arXiv abs/2504.12058},
+  pdf          = {https://pierre.senellart.com/publications/sen2026provsql.pdf},
+  keyword      = {provsql-paper},
+  annote       = {The primary reference for the ProvSQL system. Presents the complete data model
+    (multiset-based relational algebra with semiring provenance), the circuit-based
+    provenance representation stored in memory-mapped files, and the full query
+    evaluation architecture. Includes TPC-H-inspired benchmarks comparing ProvSQL to
+    GProM and MayBMS, demonstrating competitive performance and broader SQL coverage.},
+}
+
+@article{DBLP:journals/pvldb/SenellartJMR18,
+  author       = {Pierre Senellart and
+                  Louis Jachiet and
+                  Silviu Maniu and
+                  Yann Ramusat},
+  title        = {{ProvSQL}: Provenance and Probability Management in {PostgreSQL}},
+  journal      = {Proc. {VLDB} Endow.},
+  volume       = {11},
+  number       = {12},
+  pages        = {2034--2037},
+  year         = {2018},
+  note         = {Demonstration},
+  doi          = {10.14778/3229863.3236253},
+  pdf          = {https://pierre.senellart.com/publications/senellart2018provsql.pdf},
+  poster       = {https://pierre.senellart.com/publications/senellart2018provsql_poster.pdf},
+  video        = {https://www.youtube.com/watch?v=iqzSNfGHbEE},
+  keyword      = {provsql-paper},
+  annote       = {The original demonstration paper introducing ProvSQL. Describes the core design:
+    transparent query rewriting via a PostgreSQL planner hook, the provenance term
+    algebra circuit as a uniform representation for semiring provenance,
+    where-provenance, and m-semiring provenance, and knowledge compilation to d-DNNF
+    for probabilistic query evaluation.},
+}
+
+@inproceedings{DBLP:conf/pw/WidiaatmajaDDS25,
+  author       = {Albert Ariel Widiaatmaja and
+                  Belkis Djeffal and
+                  Ashish Dandekar and
+                  Pierre Senellart},
+  title        = {Demonstration of {ProvSQL} Update Provenance through Temporal Databases},
+  booktitle    = {Proceedings of the Provenance Week 2025, {PW}'25, Berlin, Germany,
+                  June 22-27, 2025},
+  pages        = {71--76},
+  publisher    = {{ACM}},
+  year         = {2025},
+  note         = {Demonstration},
+  doi          = {10.1145/3736229.3736253},
+  pdf          = {https://pierre.senellart.com/publications/widiaatmaja2025demonstration.pdf},
+  poster       = {https://pierre.senellart.com/publications/widiaatmaja2025demonstration_poster.pdf},
+  keyword      = {provsql-paper},
+  annote       = {Extends ProvSQL to track provenance for data modification operations (INSERT,
+    UPDATE, DELETE) by introducing monus gates for deleted tuples and times gates for
+    inserted ones. Demonstrates the utility of update provenance by implementing
+    temporal database features---time travel, history tracking, and undo---using the
+    union-of-intervals m-semiring.},
+}
+
+@inproceedings{DBLP:conf/birthday/Senellart24,
+  author       = {Pierre Senellart},
+  title        = {On the Impact of Provenance Semiring Theory on the Design of a
+                  Provenance-Aware Database System},
+  booktitle    = {The Provenance of Elegance in Computation - Essays Dedicated to Val
+                  Tannen, Tannen's Festschrift, University of Pennsylvania, Philadelphia,
+                  PA, USA, May 24-25, 2024},
+  series       = {OASIcs},
+  pages        = {9:1--9:10},
+  publisher    = {Schloss Dagstuhl - Leibniz-Zentrum f{\"{u}}r Informatik},
+  year         = {2024},
+  doi          = {10.4230/OASICS.TANNEN.9},
+  pdf          = {https://pierre.senellart.com/publications/senellart2024impact.pdf},
+  slides       = {https://pierre.senellart.com/talks/valfest-20240525.pdf},
+  keyword      = {provsql-paper},
+  annote       = {A reflective essay on how the provenance semiring framework of Green,
+    Karvounarakis, and Tannen directly shaped ProvSQL's design. Discusses where theory
+    translates cleanly into implementation (e.g., the universality of the polynomial
+    semiring motivating UUID-based annotations), where SQL's multiset semantics and
+    aggregation required deviations, and where ProvSQL's development still lags behind
+    theory.},
+}
+
+@article{DBLP:journals/mst/AmarilliCMS20,
+  author       = {Antoine Amarilli and
+                  Florent Capelli and
+                  Mika{\"{e}}l Monet and
+                  Pierre Senellart},
+  title        = {Connecting Knowledge Compilation Classes and Width Parameters},
+  journal      = {Theory Comput. Syst.},
+  volume       = {64},
+  number       = {5},
+  pages        = {861--914},
+  year         = {2020},
+  doi          = {10.1007/S00224-019-09930-2},
+  pdf          = {https://pierre.senellart.com/publications/amarilli2019connecting.pdf},
+  keyword      = {provsql-paper},
+  annote       = {Establishes formal connections between knowledge compilation classes (OBDDs,
+    d-DNNFs, SDDs, ...) and graph width parameters (treewidth, pathwidth, cliquewidth).
+    Section 5.1 of this paper provides the algorithm directly implemented in ProvSQL's
+    internal tree-decomposition-based knowledge compiler (tdkc), which converts
+    a provenance circuit into a d-DNNF for tractable probability evaluation.},
+}
+
+@inproceedings{DBLP:conf/rweb/Senellart19,
+  author       = {Pierre Senellart},
+  title        = {Provenance in Databases: Principles and Applications},
+  booktitle    = {Reasoning Web. Explainable Artificial Intelligence - 15th International
+                  Summer School 2019, Bolzano, Italy, September 20-24, 2019, Tutorial
+                  Lectures},
+  series       = {Lecture Notes in Computer Science},
+  pages        = {104--109},
+  publisher    = {Springer},
+  year         = {2019},
+  doi          = {10.1007/978-3-030-31423-1_3},
+  pdf          = {https://pierre.senellart.com/publications/senellart2019provenance.pdf},
+  slides       = {https://pierre.senellart.com/talks/rw-20190920.pdf},
+  keyword      = {provsql-paper},
+  annote       = {A concise tutorial on database provenance covering Boolean provenance, semiring
+    provenance, and key applications including probabilistic databases, view
+    maintenance, and query explanation. Also surveys provenance beyond the relational
+    setting (XML, graph, triple-store databases). Serves as an accessible introduction
+    to the theoretical foundations underlying ProvSQL.},
+}
+
+@inproceedings{DBLP:conf/edbt/YunusKSAB25,
+  author       = {Fajrian Yunus and
+                  Pratik Karmakar and
+                  Pierre Senellart and
+                  Talel Abdessalem and
+                  St{\'{e}}phane Bressan},
+  title        = {Using {A} Probabilistic Database in an Image Retrieval Application},
+  booktitle    = {Proceedings 28th International Conference on Extending Database Technology,
+                  {EDBT} 2025, Barcelona, Spain, March 25-28, 2025},
+  pages        = {1106--1109},
+  publisher    = {OpenProceedings.org},
+  year         = {2025},
+  doi          = {10.48786/EDBT.2025.100},
+  pdf          = {https://pierre.senellart.com/publications/yunus2025using.pdf},
+  video        = {https://www.youtube.com/watch?v=n_aFl0olTG4},
+  keyword      = {provsql-paper},
+  annote       = {Demonstrates ProvSQL as the probabilistic database backend for an image
+    retrieval application. Images are indexed by uncertain feature vectors; queries
+    return ranked results with tuple-independent probabilities computed via ProvSQL's
+    knowledge compilation pipeline. Shows that ProvSQL's provenance-based probability
+    management integrates naturally with a real-world multimedia retrieval use case.},
+}
+
+@article{DBLP:journals/pacmmod/KarmakarMSB24,
+  author       = {Pratik Karmakar and
+                  Mika{\"{e}}l Monet and
+                  Pierre Senellart and
+                  St{\'{e}}phane Bressan},
+  title        = {Expected Shapley-Like Scores of Boolean Functions: Complexity and
+                  Applications to Probabilistic Databases},
+  journal      = {Proc. {ACM} Manag. Data},
+  volume       = {2},
+  number       = {2},
+  pages        = {92},
+  year         = {2024},
+  note         = {Presented at the PODS 2024 conference in Santiago, Chile. Also arXiv abs/2401.06493},
+  doi          = {10.1145/3651593},
+  pdf          = {https://pierre.senellart.com/publications/karmakar2024expected.pdf},
+  poster       = {https://pierre.senellart.com/publications/karmakar2024expected_poster.pdf},
+  slides       = {https://pierre.senellart.com/publications/karmakar2024expected_slides.pdf},
+  keyword      = {provsql-paper},
+  annote       = {Studies the complexity of expected Shapley and Banzhaf values for Boolean
+    functions in probabilistic database settings, showing that their computation is
+    interreducible in polynomial time with probabilistic query evaluation. Designs a
+    polynomial-time algorithm for Boolean functions represented as d-DNNF circuits.
+    Implements and experimentally validates this algorithm within the ProvSQL system,
+    enabling Shapley value computation directly from provenance circuits.},
+}

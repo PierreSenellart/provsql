@@ -1,0 +1,59 @@
+---
+layout: splash
+title: "ProvSQL"
+header_logo: "/assets/images/logo.png"
+header:
+  overlay_color: "#6B4FA0"
+  overlay_filter: 0.0
+  actions:
+    - label: "<i class='fas fa-bolt'></i>&nbsp; Get Started"
+      url: "/docs/user/getting-provsql.html"
+    - label: "<i class='fab fa-github'></i>&nbsp; Source"
+      url: "https://github.com/PierreSenellart/provsql"
+excerpt: >
+  A **PostgreSQL extension** for semiring provenance and uncertainty management.
+  Track how query results depend on base data. Compute probabilities,
+  Shapley values, and semiring evaluations — transparently, with no application changes.
+feature_row:
+  - title: "Transparent Query Rewriting"
+    excerpt: >
+      SQL queries are automatically rewritten to track provenance circuits.
+      No changes to your schema or application code required.
+    url: "/overview/#query-rewriting"
+    btn_label: "Learn more"
+    btn_class: "btn--primary"
+  - title: "Rich Semiring Support"
+    excerpt: >
+      Boolean, counting, why-provenance, where-provenance, bag semirings,
+      and user-defined semirings via a clean extension API.
+    url: "/docs/user/semirings.html"
+    btn_label: "Learn more"
+    btn_class: "btn--primary"
+  - title: "Probability & Shapley"
+    excerpt: >
+      Compute tuple-independent probabilities via knowledge compilation
+      (d-DNNF, tree decomposition). Compute Shapley values of query answers.
+    url: "/docs/user/probabilities.html"
+    btn_label: "Learn more"
+    btn_class: "btn--primary"
+feature_row2:
+  - title: "SQL API"
+    excerpt: "Full SQL-level API for managing provenance tokens and circuit gates."
+    url: "/docs/sql/"
+    btn_label: "SQL API docs"
+    btn_class: "btn--inverse"
+  - title: "C/C++ API"
+    excerpt: "Internal C/C++ API for extending ProvSQL with new semirings and gate types."
+    url: "/docs/c/"
+    btn_label: "C/C++ API docs"
+    btn_class: "btn--inverse"
+  - title: "Publications"
+    excerpt: "Research papers describing the theory and implementation of ProvSQL."
+    url: "/publications/"
+    btn_label: "See publications"
+    btn_class: "btn--inverse"
+---
+
+{% include feature_row %}
+
+{% include feature_row id="feature_row2" %}

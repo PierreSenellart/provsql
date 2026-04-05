@@ -1,0 +1,73 @@
+title: ProvSQL
+subtitle: Provenance for PostgreSQL
+description: >-
+  ProvSQL is a PostgreSQL extension that adds semiring provenance and
+  uncertainty management to PostgreSQL, enabling computation of probabilities,
+  Shapley values, and various semiring evaluations.
+url: "https://provsql.org"
+baseurl: ""
+repository: "PierreSenellart/provsql"
+github_username: PierreSenellart
+
+theme: minimal-mistakes-jekyll
+minimal_mistakes_skin: "provsql"
+logo: "/assets/images/logo.png"
+
+include:
+  - _bibliography
+  - .htaccess
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+  - jekyll-include-cache
+  - jekyll-scholar
+
+# jekyll-scholar configuration
+scholar:
+  style: acm-siggraph
+  bibliography: references.bib
+  bibliography_template: bib
+  sort_by: year, month
+  order: descending
+  group_by: year
+  group_order: descending
+  bibliography_list_tag: ul
+
+# Sass/SCSS
+sass:
+  sass_dir: _sass
+  style: compressed
+  quiet_deps: true
+  silence_deprecations: [import, global-builtin]
+
+# Page defaults
+defaults:
+  - scope:
+      path: ""
+      type: pages
+    values:
+      layout: single
+      author_profile: false
+
+# Site footer links
+footer:
+  links:
+    - label: "Source"
+      icon: "fab fa-fw fa-github"
+      url: "https://github.com/PierreSenellart/provsql"
+
+# Preserve externally-generated docs through Jekyll rebuilds (populated by
+# `make website`; plugin does the initial copy, keep_files prevents deletion)
+keep_files: [docs, doxygen-sql, doxygen-c]
+
+# Exclude from Jekyll processing
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - README.md
+  - vendor/
+  # Pre-built docs copied verbatim by passthrough_docs.rb plugin
+  - docs/
+  - doxygen-sql/
+  - doxygen-c/

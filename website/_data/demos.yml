@@ -1,0 +1,19 @@
+# Each entry: title, url, description, date (YYYY-MM-DD), thumbnail (optional)
+# paper_doi: DOI of the accompanying demonstration paper (optional)
+# paper_pdf: PDF link for the accompanying paper (optional)
+
+- title: "Using a Probabilistic Database in an Image Retrieval Application"
+  url: "https://www.youtube.com/watch?v=n_aFl0olTG4"
+  description: "Demonstration of a system that uses ProvSQL as the probabilistic database backend for content-based image retrieval. Uncertain feature vectors from a deep learning object detector are stored and queried, with result probabilities computed via ProvSQL's knowledge compilation pipeline."
+  date: 2024-12-11
+  thumbnail: "https://i.ytimg.com/vi/n_aFl0olTG4/maxresdefault.jpg"
+  paper_doi: "10.48786/EDBT.2025.100"
+  paper_pdf: "https://pierre.senellart.com/publications/yunus2025using.pdf"
+
+- title: "ProvSQL Demonstration"
+  url: "https://www.youtube.com/watch?v=iqzSNfGHbEE"
+  description: "The original demonstration of the ProvSQL system, accompanying the VLDB 2018 demonstration paper. Shows provenance tracking and probability management in PostgreSQL, including semiring provenance, where-provenance, and probabilistic query evaluation."
+  date: 2018-01-15
+  thumbnail: "https://i.ytimg.com/vi/iqzSNfGHbEE/maxresdefault.jpg"
+  paper_doi: "10.14778/3229863.3236253"
+  paper_pdf: "https://pierre.senellart.com/publications/senellart2018provsql.pdf"

@@ -1,0 +1,11 @@
+{% if entry.pdf contains 'pierre.senellart.com' %}{% assign bib_url = entry.pdf | replace: '.pdf', '.bib' %}{% elsif entry.key contains 'DBLP:' %}{% assign dblp_key = entry.key | remove: 'DBLP:' %}{% assign bib_url = 'https://dblp.org/rec/' | append: dblp_key | append: '.bib' %}{% else %}{% assign bib_url = nil %}{% endif %}
+{{ reference }}
+{% if entry.pdf or entry.doi or bib_url or entry.slides or entry.poster or entry.video %}<span style="margin-left:0.4em">{% if entry.pdf %}<a href="{{ entry.pdf }}" class="btn btn--small btn--inverse">PDF</a>{% endif %}
+{% if entry.slides %}<a href="{{ entry.slides }}" class="btn btn--small btn--inverse">Slides</a>{% endif %}
+{% if entry.poster %}<a href="{{ entry.poster }}" class="btn btn--small btn--inverse">Poster</a>{% endif %}
+{% if entry.video %}<a href="{{ entry.video }}" class="btn btn--small btn--inverse">Video</a>{% endif %}
+{% if entry.doi %}<a href="https://doi.org/{{ entry.doi }}" class="btn btn--small btn--inverse">DOI</a>{% endif %}
+{% if bib_url %}<a href="{{ bib_url }}" class="btn btn--small btn--inverse">BibTeX</a>{% endif %}</span>{% endif %}
+{% if entry.annote %}
+<p class="paper-description">{{ entry.annote }}</p>
+{% endif %}

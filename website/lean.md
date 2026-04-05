@@ -1,0 +1,29 @@
+---
+layout: single
+title: "Lean Formalization"
+permalink: /lean/
+---
+
+Parts of the theory underlying ProvSQL have been formally verified in
+[Lean 4](https://lean-lang.org/), providing a rigorous mathematical foundation
+for the provenance semiring framework on which ProvSQL is built.
+
+The source code is available on GitHub:
+[PierreSenellart/provenance-lean](https://github.com/PierreSenellart/provenance-lean){:target="_blank"}
+
+## What Has Been Formalized
+
+The formalization covers the core algebraic and database-theoretic foundations of provenance:
+
+**Semirings with monus (m-semirings).** The central algebraic structure used by ProvSQL – commutative semirings extended with a monus operator for handling set difference – is formally defined and its properties proved. Concrete instances formalized include Boolean, counting (natural numbers), tropical, Łukasiewicz, min-max, Viterbi, and multivariate polynomial semirings (*How*[*X*]), as well as the lineage-based semirings *Which*[*X*] and *Why*[*X*].
+
+**Database foundations.** Formal definitions of tuples, relations, and databases, together with the standard relational algebra operations (selection, projection, join, union, difference).
+
+**Annotated databases and query semantics.** The lifted semantics of relational algebra over annotated databases – showing how each operator propagates provenance annotations through the m-semiring operations – is formally developed and proved correct.
+
+**Query rewriting.** A query rewriting evaluation strategy on annotated relations, with ongoing correctness proofs connecting it to the direct annotated semantics.
+
+## Lean Documentation
+
+Auto-generated documentation for the Lean library is available at:
+[provsql.org/lean-docs/Provenance.html](/lean-docs/Provenance.html){:target="_blank"}

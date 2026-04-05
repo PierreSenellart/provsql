@@ -1,0 +1,17 @@
+main:
+  - title: "Overview"
+    url: /overview/
+  - title: "Documentation"
+    url: /docs/
+  - title: "Publications"
+    url: /publications/
+  - title: "Contributors"
+    url: /contributors/
+  - title: "Demos"
+    url: /demos/
+  - title: "Lean"
+    url: /lean/
+  - title: "Releases"
+    url: /releases/
+  - title: "Source"
+    url: "https://github.com/PierreSenellart/provsql"

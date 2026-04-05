@@ -1,0 +1,41 @@
+/* ProvSQL skin — Provence design theme (see branding/theme.md) */
+
+$background-color: #F4F0FA !default;
+$text-color: #2A1850 !default;
+$muted-text-color: #8A7A9B !default;
+$primary-color: #6B4FA0 !default;
+$success-color: #6B4FA0 !default;
+$warning-color: #E8B84B !default;
+$danger-color: #C4664A !default;
+$info-color: #6B4FA0 !default;
+$focus-color: $primary-color !default;
+$active-color: mix(#fff, $primary-color, 80%) !default;
+
+$border-color: #D6CCF0 !default;
+$footer-background-color: #EDE8F7 !default;
+$code-background-color: #E8E0F8 !default;
+
+$link-color: #6B4FA0 !default;
+$link-color-hover: mix(#000, #6B4FA0, 25%) !default;
+$link-color-visited: mix(#fff, #6B4FA0, 10%) !default;
+$masthead-link-color: rgba(255, 255, 255, 0.9) !default;
+$masthead-link-color-hover: #E8B84B !default;
+$navicon-link-color-hover: mix(#fff, #6B4FA0, 75%) !default;
+
+/* Syntax highlighting — ProvSQL palette */
+$base00: #F4F0FA !default;
+$base01: #EDE8F7 !default;
+$base02: #D6CCF0 !default;
+$base03: #8A7A9B !default;
+$base04: #8A7A9B !default;
+$base05: #2A1850 !default;
+$base06: #6B4FA0 !default;
+$base07: #F4F0FA !default;
+$base08: #C4664A !default;
+$base09: #E8B84B !default;
+$base0a: #E8B84B !default;
+$base0b: #5A3E8C !default;
+$base0c: #5A3E8C !default;
+$base0d: #6B4FA0 !default;
+$base0e: #C4664A !default;
+$base0f: #5A3E8C !default;

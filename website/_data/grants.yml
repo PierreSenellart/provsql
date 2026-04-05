@@ -1,0 +1,47 @@
+# Each entry: name, agency, number, start, end, url (optional),
+#             logo (optional, relative to /assets/images/grants/),
+#             agency_logos (list of {src, alt}, relative to /assets/images/agencies/)
+
+- name: "PR[AI]RIE 3IA Institute"
+  agency: "Agence Nationale de la Recherche (ANR) — Investissements d'avenir"
+  number: "ANR-19-P3IA-0001"
+  start: 2019
+  end: 2024
+  url: "https://www.prairie-psai.fr"
+  logo: "prairie-3ia.png"
+  agency_logos:
+    - src: "anr.png"
+      alt: "ANR"
+
+- name: "PR[AI]RIE — Paris School of AI (PSAI)"
+  agency: "Agence Nationale de la Recherche (ANR) — France 2030"
+  number: "ANR-23-IACL-0008"
+  start: 2024
+  end: 2029
+  url: "https://www.prairie-psai.fr"
+  logo: "prairie-psai.svg"
+  agency_logos:
+    - src: "anr.png"
+      alt: "ANR"
+
+- name: "DesCartes"
+  agency: "National Research Foundation (NRF), Singapore — Campus for Research Excellence and Technological Enterprise (CREATE)"
+  number: ""
+  start: 2021
+  end: 2026
+  url: "https://descartes.cnrsatcreate.cnrs.fr"
+  logo: "descartes.png"
+  agency_logos:
+    - src: "nrf.jpg"
+      alt: "NRF Singapore"
+
+- name: "DataGEMS"
+  agency: "European Union — Horizon Europe Research and Innovation Programme"
+  number: "101188416"
+  start: 2025
+  end: 2027
+  url: "https://datagems.athenarc.gr"
+  logo: "datagems.jpg"
+  agency_logos:
+    - src: "eu-horizon.jpg"
+      alt: "Funded by the European Union — Horizon Europe"
