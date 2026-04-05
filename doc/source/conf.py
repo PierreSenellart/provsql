@@ -16,3 +16,4 @@ html_static_path = ['_static']
 html_logo    = '_static/logo.png'
 html_favicon = '_static/favicon.ico'
 html_css_files = ['custom.css']
+html_js_files = ['back-to-site.js']

@@ -30,6 +30,7 @@ QUIET                  = YES
 # Branding
 PROJECT_LOGO           = ../../branding/logo.png
 HTML_EXTRA_STYLESHEET  = doxygen-custom.css
+HTML_FOOTER            = doxygen-footer.html
 HTML_COLORSTYLE        = LIGHT
 HTML_COLORSTYLE_HUE    = 265
 HTML_COLORSTYLE_SAT    = 130
