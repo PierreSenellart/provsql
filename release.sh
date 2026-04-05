@@ -28,6 +28,7 @@ git config user.signingkey > /dev/null 2>&1 \
   || die "Must be run from the root of the provsql repository"
 [[ -f website/_data/releases.yml ]] \
   || die "website/_data/releases.yml not found"
+GH_REPO=$(git remote get-url origin | sed 's|git@github.com:||;s|\.git$||')
 
 # 1. Parse & validate version
 
@@ -143,6 +144,7 @@ fi
 read -r -p "Create GitHub Release? [Y/n] " GH_CONFIRM
 if [[ ! "$GH_CONFIRM" =~ ^[Nn]$ ]]; then
   gh release create "$TAG" \
+    --repo "$GH_REPO" \
     --title "ProvSQL $VERSION" \
     --notes "$NOTES" \
     --verify-tag
