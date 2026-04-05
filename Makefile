@@ -39,7 +39,7 @@ website: docs
 	cd website && bundle exec jekyll build
 
 deploy: website
-	rsync -avzP --delete-after website/_site/ provsql:/var/www/provsql/
+	rsync -avzP website/_site/ provsql:/var/www/provsql/
 
 .PHONY: default test docs website deploy
 
