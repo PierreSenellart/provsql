@@ -95,7 +95,7 @@ NOTES=$(sed '/^<!--/d' "$NOTES_FILE" | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;b
 TODAY=$(date +%Y-%m-%d)
 
 sed -i "s/^default_version = .*/default_version = '$VERSION'/" \
-  provsql.control provsql.common.control
+  provsql.common.control
 
 # 5. Update website/_data/releases.yml
 
@@ -119,7 +119,7 @@ mv "$TMP_YAML" "$RELEASES_FILE"
 
 # 6. Commit
 
-git add provsql.control provsql.common.control "$RELEASES_FILE"
+git add provsql.common.control "$RELEASES_FILE"
 git commit -m "Release version $VERSION"
 
 # 7. Signed tag
