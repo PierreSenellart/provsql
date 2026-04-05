@@ -23,7 +23,25 @@ test:
 docs: sql/provsql.sql
 	cd doc/source && make html
 
-.PHONY: default test docs
+website: docs
+	# Copy branding assets into website source
+	cp -r branding/fonts/. website/assets/fonts
+	cp    branding/logo.png    website/assets/images/logo.png
+	cp    branding/favicon.ico website/assets/images/favicon.ico
+	cp    branding/favicon.ico website/favicon.ico
+	# Generate SCSS partial for fonts (adjust path from fonts/ to ../fonts/)
+	sed "s|url('fonts/|url('../fonts/|g" branding/fonts-face.css > website/assets/css/_fonts-face.scss
+	# Copy generated docs into Jekyll source tree so jekyll serve also sees them
+	mkdir -p website/docs website/doxygen-sql/html website/doxygen-c/html
+	cp -r doc/source/_build/html/. website/docs
+	cp -r doc/doxygen-sql/html/.   website/doxygen-sql/html
+	cp -r doc/doxygen-c/html/.     website/doxygen-c/html
+	cd website && bundle exec jekyll build
+
+deploy: website
+	rsync -avzP --delete-after website/_site/ provsql:/var/www/provsql/
+
+.PHONY: default test docs website deploy
 
 docker-build:
 	make clean
