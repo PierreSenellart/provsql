@@ -1,1 +1,10 @@
+- version: "1.0.0"
+  date: 2026-04-05
+  tag: "v1.0.0"
+  notes: |
+    ## What's new in 1.0.0
+    
+    Initial official release of ProvSQL after 10 years of development.
+    ProvSQL is now fully documented and usable in production.
+
 # Each entry: version, date (YYYY-MM-DD), tag (GitHub tag), notes (Markdown block)
