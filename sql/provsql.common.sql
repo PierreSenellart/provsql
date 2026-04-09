@@ -720,7 +720,7 @@ BEGIN
       INTO result;
 
   ELSE
-    RAISE EXCEPTION USING MESSAGE='Unknown gate type';
+    RAISE EXCEPTION USING MESSAGE='provenance_evaluate cannot be called on formulas using ' || gate_type || ' gates; use compiled semirings instead';
   END IF;
 
   RETURN result;

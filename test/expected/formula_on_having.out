@@ -1,0 +1,5 @@
+\set ECHO none
+ERROR:  provenance_evaluate cannot be called on formulas using cmp gates; use compiled semirings instead
+CONTEXT:  PL/pgSQL function provenance_evaluate(uuid,regclass,anyelement,regtype,regproc,regproc,regproc,regproc) line 96 at RAISE
+SQL statement "SELECT provsql.provenance_evaluate($1,$2,$3,$4,$5,$6,$7,$8)"
+PL/pgSQL function formula(uuid,regclass) line 3 at RETURN
