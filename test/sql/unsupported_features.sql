@@ -5,18 +5,6 @@ SET search_path TO provsql_test, provsql;
 SELECT
     provenance ();
 
-WITH Q (
-    a
-) AS (
-    SELECT
-        1
-)
-SELECT
-    *
-FROM
-    Q,
-    personnel;
-
 SELECT
     *
 FROM

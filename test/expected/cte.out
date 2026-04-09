@@ -1,0 +1,30 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+name|counting
+Dave|1
+Magdalen|1
+Nancy|1
+(3 rows)
+remove_provenance
+
+(1 row)
+p_name|b_name|counting
+Dave|Ellen|1
+Dave|Susan|1
+Magdalen|Ellen|1
+Magdalen|Susan|1
+Nancy|Ellen|1
+Nancy|Susan|1
+(6 rows)
+remove_provenance
+
+(1 row)
+name1|name2|counting
+Dave|Magdalen|1
+Dave|Nancy|1
+Ellen|Susan|1
+Magdalen|Nancy|1
+(4 rows)
+ERROR:  ProvSQL: Recursive CTEs not supported by provsql

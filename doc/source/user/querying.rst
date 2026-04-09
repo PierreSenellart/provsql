@@ -30,6 +30,7 @@ The following SQL constructs are supported with full provenance tracking:
 * ``SELECT … FROM … WHERE`` (conjunctive queries, multiset semantics)
 * ``JOIN`` (inner joins, outer joins, natural joins)
 * ``LATERAL`` subqueries
+* Non-recursive CTEs (``WITH`` clauses)
 * Subqueries in the ``FROM`` clause (including deeply nested)
 * ``GROUP BY``
 * ``SELECT DISTINCT`` (set semantics)
@@ -53,8 +54,7 @@ will either raise an error or may cause incorrect provenance tracking:
 
 * **Semi-joins** and **anti-joins** (``EXISTS``, ``NOT EXISTS``,
   ``IN`` subqueries, ``NOT IN``)
-* **CTEs** (``WITH`` clauses) — queries run but provenance is silently
-  lost
+* **Recursive CTEs** (``WITH RECURSIVE``)
 * ``INTERSECT``
 * ``DISTINCT ON``
 * ``GROUPING SETS``, ``CUBE``, ``ROLLUP``

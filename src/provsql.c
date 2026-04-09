@@ -262,6 +262,8 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
  * - @c RTE_SUBQUERY: recursively calls @c process_query and splices the
  *   resulting provenance column back into the parent's column list, also
  *   patching outer Var attribute numbers if inner columns were removed.
+ * - @c RTE_CTE: non-recursive CTEs are inlined as @c RTE_SUBQUERY before
+ *   the main loop, then processed as above.  Recursive CTEs raise an error.
  * - @c RTE_FUNCTION: handled when the function returns a single UUID column
  *   named @c provsql.
  * - @c RTE_JOIN / @c RTE_VALUES / @c RTE_GROUP: handled passively (the
@@ -275,6 +277,33 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
  */
 static List *get_provenance_attributes(const constants_t *constants, Query *q) {
   List *prov_atts = NIL;
+
+  /* Inline non-recursive CTE references as subqueries so we can track
+   * provenance through them.  This converts RTE_CTE entries to
+   * RTE_SUBQUERY in place before the main loop processes them. */
+  {
+    ListCell *lc;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_CTE && r->ctelevelsup == 0) {
+        ListCell *lc2;
+        foreach (lc2, q->cteList) {
+          CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc2);
+          if (strcmp(cte->ctename, r->ctename) == 0) {
+            if (cte->cterecursive) {
+              provsql_error("Recursive CTEs not supported by provsql");
+            } else {
+              r->rtekind = RTE_SUBQUERY;
+              r->subquery = copyObject((Query *)cte->ctequery);
+              r->ctename = NULL;
+            }
+            break;
+          }
+        }
+      }
+    }
+    q->cteList = NIL;
+  }
 
   for(Index rteid = 1; rteid <= q->rtable->length; ++rteid) {
     RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, rteid-1);
@@ -2158,6 +2187,15 @@ static bool has_provenance_walker(Node *node, void *data) {
   if (IsA(node, Query)) {
     Query *q = (Query *)node;
     ListCell *rc;
+
+    /* Walk into CTE subqueries explicitly, because expression_tree_walker
+     * ignores Query nodes so query_tree_walker's walk of cteList does not
+     * recurse into ctequery */
+    foreach (rc, q->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(rc);
+      if (has_provenance_walker((Node *)cte->ctequery, data))
+        return true;
+    }
 
     if (query_tree_walker(q, has_provenance_walker, data, 0))
       return true;
