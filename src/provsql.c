@@ -1167,6 +1167,9 @@ resolve_group_rte_vars_mutator(Node *node, resolve_group_rte_ctx *ctx) {
 }
 #endif
 
+/* Forward declaration — defined later but needed by rewrite_agg_distinct */
+static bool provenance_function_walker(Node *node, void *data);
+
 /**
  * @brief Build the inner GROUP-BY subquery for one @c AGG(DISTINCT key).
  *
@@ -1418,13 +1421,18 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
 #endif
 
   /* Extract AGG(DISTINCT) and GROUP BY targets from the target list.
-   * Regular AGG() aggregations are left untouched. */
+   * Regular AGG() aggregations and expressions containing provenance()
+   * are left untouched. */
   foreach (lc, q->targetList) {
     TargetEntry *te = lfirst(lc);
     if (IsA(te->expr, Aggref)) {
       Aggref *ar = (Aggref *)te->expr;
       if (list_length(ar->aggdistinct) > 0)
         distinct_agg_tes = lappend(distinct_agg_tes, te);
+    } else if (provenance_function_walker((Node *)te->expr,
+                                          (void *)constants)) {
+      /* Expression contains provenance() — skip it, it will be
+       * handled later by the provenance rewriter */
     } else {
       /* Non-aggregate column — treat as GROUP BY key */
       TargetEntry *te_copy = copyObject(te);

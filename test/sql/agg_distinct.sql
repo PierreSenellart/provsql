@@ -50,3 +50,17 @@ GROUP BY city
 ORDER BY city;
 
 DROP TABLE agg_result2;
+
+-- DISTINCT aggregate mixed with provenance() in the same SELECT
+CREATE TABLE agg_result3 AS
+  SELECT city,
+         count(distinct position) AS cnt,
+         sr_counting(provenance(), 'personnel_count') AS counting
+    FROM personnel
+    GROUP BY city ORDER BY city;
+
+SELECT remove_provenance('agg_result3');
+
+SELECT * FROM agg_result3 ORDER BY city;
+
+DROP TABLE agg_result3;
