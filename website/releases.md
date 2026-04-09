@@ -14,6 +14,11 @@ permalink: /releases/
 {% if release.tag %}
 [Download tarball](https://github.com/PierreSenellart/provsql/archive/refs/tags/{{ release.tag }}.tar.gz){:.btn .btn--primary}
 [View on GitHub](https://github.com/PierreSenellart/provsql/releases/tag/{{ release.tag }}){:.btn .btn--inverse}
+
+**Docker:**
+```
+docker pull inriavalda/provsql:{{ release.version }}
+```
 {% endif %}
 
 ---

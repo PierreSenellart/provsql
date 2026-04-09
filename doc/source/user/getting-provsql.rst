@@ -146,6 +146,10 @@ container is available. It is full-featured except for ``c2d`` and
 
     docker run inriavalda/provsql
 
+To use a specific release version::
+
+    docker run inriavalda/provsql:1.0.0
+
 Follow the on-screen instructions to connect to the PostgreSQL server
 inside the container with a PostgreSQL client.
 

@@ -1,5 +1,8 @@
 FROM debian:bookworm
+
+ARG PROVSQL_VERSION=dev
 LABEL maintainer=pierre@senellart.com
+LABEL org.opencontainers.image.version="${PROVSQL_VERSION}"
 
 # Copy the source into /opt/provsql
 COPY . /opt/provsql

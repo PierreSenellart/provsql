@@ -43,6 +43,11 @@ deploy: website
 
 .PHONY: default test docs website deploy
 
+EXTVERSION = $(shell grep default_version provsql.common.control | \
+             sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
+
 docker-build:
 	make clean
-	docker build -f docker/Dockerfile .
+	docker build -f docker/Dockerfile \
+	  --build-arg PROVSQL_VERSION=$(EXTVERSION) \
+	  -t provsql:$(EXTVERSION) .
