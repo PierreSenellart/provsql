@@ -1,3 +1,33 @@
+- version: "1.1.0"
+  date: 2026-04-09
+  tag: "v1.1.0"
+  notes: |
+    ## What's new in 1.1.0
+    
+    **Support for arithmetic on aggregate results**
+    
+    Queries performing arithmetic on aggregate results (e.g., `SELECT
+    COUNT(*)+1` or `SUM(id)*10`) are now supported. Previously, these queries
+    produced incorrect results because the planner hook replaced aggregate
+    references with `agg_token` values without adjusting surrounding operator
+    type expectations. This is handled by adding implicit and assignment
+    casts from `agg_token` to standard SQL types (`numeric`, `double
+    precision`, `integer`, `bigint`, `text`), and by inserting appropriate
+    type casts during query rewriting when aggregate results are used inside
+    operators or functions. A warning is emitted when provenance information
+    is lost during such conversions.
+    
+    **Infrastructure improvements**
+    
+    - Versioned Docker image tagging (images are now tagged with the release
+      version in addition to `latest`)
+    
+    - Improved release process: post-release version bump is now automated,
+      and release tarballs exclude non-essential files (CI workflows, release
+      script, branding, Docker, and website assets)
+    
+    - CI fixes for macOS and documentation builds
+
 - version: "1.0.0"
   date: 2026-04-05
   tag: "v1.0.0"
