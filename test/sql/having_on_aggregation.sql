@@ -140,3 +140,19 @@ FROM result_join_having_why_count_lt4;
 
 DROP TABLE result_join_having_why_count_lt4;
 
+-- HAVING without provsql in search_path (regression test for
+-- missing search_path on provenance_cmp)
+SET search_path TO provsql_test;
+
+CREATE TABLE result_having_no_searchpath AS SELECT
+  city,
+  COUNT(*)
+FROM personnel
+GROUP BY city
+HAVING count(*) > 2;
+
+SELECT provsql.remove_provenance('result_having_no_searchpath');
+SELECT * FROM result_having_no_searchpath ORDER BY city;
+
+DROP TABLE result_having_no_searchpath;
+

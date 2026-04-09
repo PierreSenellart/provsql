@@ -567,6 +567,8 @@ BEGIN
   RETURN cmp_token;
 END
 $$ LANGUAGE plpgsql
+  SET search_path=provsql,pg_temp,public
+  SECURITY DEFINER
   IMMUTABLE
   PARALLEL SAFE
   STRICT;
