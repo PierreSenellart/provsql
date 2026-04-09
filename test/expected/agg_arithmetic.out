@@ -74,6 +74,72 @@ Field agent|5
 HR|7
 Janitor|3
 (6 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+city|cnt_numeric
+Berlin|2
+New York|2
+Paris|3
+(3 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+city|plus_one
+Berlin|3
+New York|3
+Paris|4
+(3 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+city|cnt|total
+Berlin|2 (*)|7
+New York|2 (*)|7
+Paris|3 (*)|7
+(3 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+city|cnt
+Berlin|2
+New York|2
+Paris|3
+(3 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+city|at_least_3
+Berlin|3
+New York|3
+Paris|3
+(3 rows)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+remove_provenance
+
+(1 row)
+city|doubled
+Berlin|11.0000000000000000
+New York|3.0000000000000000
+Paris|9.3333333333333334
+(3 rows)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost

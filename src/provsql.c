@@ -44,6 +44,7 @@
 #include "utils/lsyscache.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
+#include "catalog/pg_cast.h"
 #include <time.h>
 
 #include "provsql_mmap.h"
@@ -196,7 +197,27 @@ typedef struct aggregation_type_mutator_context {
 } aggregation_type_mutator_context;
 
 /**
- * @brief Tree-mutator that retyps a specific Var to @c agg_token.
+ * @brief Check if a Var matches the target aggregate column.
+ */
+static bool is_target_agg_var(Node *node,
+                              aggregation_type_mutator_context *context) {
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    return v->varno == context->varno && v->varattno == context->varattno;
+  }
+  return false;
+}
+
+/**
+ * @brief Tree-mutator that retypes a specific Var to @c agg_token.
+ *
+ * When the target Var is inside a cast FuncExpr, replaces the cast
+ * function with the equivalent agg_token→target cast from pg_cast.
+ * When the Var appears bare (e.g. in a TargetEntry for display), it is
+ * retyped to agg_token directly.  In all other contexts (arithmetic,
+ * window functions, etc.), wraps the Var in an explicit agg_token→original
+ * cast so that parent nodes receive the expected type.
+ *
  * @param node     Current expression tree node.
  * @param context  Mutation context with varno, varattno, and constants.
  * @return         Possibly modified node.
@@ -206,6 +227,33 @@ aggregation_type_mutator(Node *node,
                          aggregation_type_mutator_context *context) {
   if (node == NULL)
     return NULL;
+
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *f = (FuncExpr *)node;
+
+    /* Check if this is a cast wrapping our target Var */
+    if (list_length(f->args) == 1 &&
+        is_target_agg_var(linitial(f->args), context)) {
+      /* Look up the cast from agg_token to the target type */
+      HeapTuple castTuple = SearchSysCache2(CASTSOURCETARGET,
+        ObjectIdGetDatum(context->constants->OID_TYPE_AGG_TOKEN),
+        ObjectIdGetDatum(f->funcresulttype));
+
+      if (HeapTupleIsValid(castTuple)) {
+        Form_pg_cast castForm = (Form_pg_cast) GETSTRUCT(castTuple);
+        if (OidIsValid(castForm->castfunc)) {
+          f->funcid = castForm->castfunc;
+        }
+        ReleaseSysCache(castTuple);
+      }
+
+      /* Retype the Var inside */
+      ((Var *)linitial(f->args))->vartype =
+        context->constants->OID_TYPE_AGG_TOKEN;
+
+      return (Node *)f;
+    }
+  }
 
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
@@ -2759,6 +2807,140 @@ static void migrate_aggtoken_quals_to_having(const constants_t *constants,
   }
 }
 
+/** @brief Context for the @c insert_agg_token_casts_mutator. */
+typedef struct insert_agg_token_casts_context {
+  Query *query;               ///< Outer query (to look up subquery RTEs)
+  const constants_t *constants; ///< Extension OID cache
+} insert_agg_token_casts_context;
+
+/**
+ * @brief Look up the original aggregate return type for an agg_token Var.
+ *
+ * Navigates from the Var's varno/varattno to the subquery's target list,
+ * finds the provenance_aggregate() FuncExpr, and extracts the type OID
+ * from its second argument (aggtype).
+ */
+static Oid get_agg_token_orig_type(Var *v, insert_agg_token_casts_context *ctx) {
+  RangeTblEntry *rte;
+  TargetEntry *te;
+
+  if (v->varno < 1 || v->varno > list_length(ctx->query->rtable))
+    return InvalidOid;
+
+  rte = list_nth_node(RangeTblEntry, ctx->query->rtable, v->varno - 1);
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+    return InvalidOid;
+
+  if (v->varattno < 1 || v->varattno > list_length(rte->subquery->targetList))
+    return InvalidOid;
+
+  te = list_nth_node(TargetEntry, rte->subquery->targetList, v->varattno - 1);
+  if (IsA(te->expr, FuncExpr)) {
+    FuncExpr *f = (FuncExpr *)te->expr;
+    if (f->funcid == ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+      Const *aggtype_const = (Const *)lsecond(f->args);
+      return DatumGetObjectId(aggtype_const->constvalue);
+    }
+  }
+  return InvalidOid;
+}
+
+/**
+ * @brief Wrap an agg_token Var in a cast to its original type, in place.
+ */
+static void cast_agg_token_in_list(ListCell *lc,
+                                   insert_agg_token_casts_context *ctx) {
+  Var *v = (Var *)lfirst(lc);
+  Oid target = get_agg_token_orig_type(v, ctx);
+  HeapTuple castTuple;
+
+  if (!OidIsValid(target))
+    return;
+
+  castTuple = SearchSysCache2(CASTSOURCETARGET,
+    ObjectIdGetDatum(ctx->constants->OID_TYPE_AGG_TOKEN),
+    ObjectIdGetDatum(target));
+  if (HeapTupleIsValid(castTuple)) {
+    Form_pg_cast castForm = (Form_pg_cast)GETSTRUCT(castTuple);
+    if (OidIsValid(castForm->castfunc)) {
+      FuncExpr *fc = makeNode(FuncExpr);
+      fc->funcid = castForm->castfunc;
+      fc->funcresulttype = target;
+      fc->funcretset = false;
+      fc->funcvariadic = false;
+      fc->funcformat = COERCE_IMPLICIT_CAST;
+      fc->funccollid = InvalidOid;
+      fc->inputcollid = InvalidOid;
+      fc->args = list_make1(v);
+      fc->location = -1;
+      lfirst(lc) = fc;
+    }
+    ReleaseSysCache(castTuple);
+  }
+}
+
+/**
+ * @brief Wrap any agg_token Vars in an argument list.
+ */
+static void cast_agg_token_args(List *args,
+                                insert_agg_token_casts_context *ctx) {
+  ListCell *lc;
+  foreach (lc, args) {
+    if (IsA(lfirst(lc), Var) &&
+        ((Var *)lfirst(lc))->vartype == ctx->constants->OID_TYPE_AGG_TOKEN)
+      cast_agg_token_in_list(lc, ctx);
+  }
+}
+
+/**
+ * @brief Insert agg_token casts for Vars used in expressions.
+ *
+ * After the WHERE-to-HAVING migration, agg_token Vars remaining in
+ * expression nodes (OpExpr, WindowFunc, CoalesceExpr, MinMaxExpr, etc.)
+ * need explicit casts to their original type so that operators and
+ * functions receive correct values.  The original type is looked up
+ * from the provenance_aggregate() call in the subquery.
+ */
+static Node *
+insert_agg_token_casts_mutator(Node *node, void *data) {
+  insert_agg_token_casts_context *ctx = (insert_agg_token_casts_context *)data;
+
+  if (node == NULL)
+    return NULL;
+
+  if (IsA(node, OpExpr)) {
+    cast_agg_token_args(((OpExpr *)node)->args, ctx);
+    return (Node *)node;
+  }
+  if (IsA(node, WindowFunc)) {
+    cast_agg_token_args(((WindowFunc *)node)->args, ctx);
+    return (Node *)node;
+  }
+  if (IsA(node, CoalesceExpr)) {
+    cast_agg_token_args(((CoalesceExpr *)node)->args, ctx);
+    return (Node *)node;
+  }
+  if (IsA(node, MinMaxExpr)) {
+    cast_agg_token_args(((MinMaxExpr *)node)->args, ctx);
+    return (Node *)node;
+  }
+  if (IsA(node, NullIfExpr)) {
+    cast_agg_token_args(((NullIfExpr *)node)->args, ctx);
+    return (Node *)node;
+  }
+
+  return expression_tree_mutator(node, insert_agg_token_casts_mutator, data);
+}
+
+/**
+ * @brief Walk query and insert agg_token casts where needed.
+ */
+static void insert_agg_token_casts(const constants_t *constants, Query *q) {
+  insert_agg_token_casts_context ctx = {q, constants};
+  query_tree_mutator(q, insert_agg_token_casts_mutator, &ctx,
+                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
+}
+
 /**
  * @brief Rewrite a single SELECT query to carry provenance.
  *
@@ -2928,6 +3110,10 @@ static Query *process_query(const constants_t *constants, Query *q,
 
       /* Move any WHERE comparisons on aggregate results to HAVING */
       migrate_aggtoken_quals_to_having(constants, q);
+
+      /* Insert casts for agg_token Vars used in arithmetic or window
+       * functions, now that WHERE-to-HAVING migration is done */
+      insert_agg_token_casts(constants, q);
 
       provenance = make_provenance_expression(
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,

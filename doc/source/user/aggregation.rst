@@ -43,13 +43,19 @@ are all supported over provenance-tracked tables.
 Arithmetic on Aggregate Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Arithmetic and other operations on aggregate results are supported:
+Arithmetic, explicit casts, window functions, and other expressions
+(``COALESCE``, ``GREATEST``, etc.) on aggregate results are supported,
+both in the same query and over subquery results:
 
 .. code-block:: postgresql
 
     SELECT dept, COUNT(*) * 10 FROM employees GROUP BY dept;
     SELECT dept, SUM(salary) + 1000 FROM employees GROUP BY dept;
     SELECT dept, string_agg(name, ', ') || ' (team)' FROM employees GROUP BY dept;
+    SELECT cnt::numeric FROM (SELECT COUNT(*) AS cnt FROM employees GROUP BY dept) t;
+    SELECT dept, cnt, SUM(cnt) OVER () FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
+    SELECT dept, COALESCE(cnt, 0) FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
+    SELECT dept, GREATEST(cnt, 3) FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
 
 When such an operation is performed, the aggregate result is cast from
 its internal ``agg_token`` representation back to the original aggregate
