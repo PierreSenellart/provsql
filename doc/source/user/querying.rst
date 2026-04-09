@@ -52,7 +52,7 @@ Unsupported SQL Features
 The following constructs are **not** currently supported; queries using them
 will either raise an error or may cause incorrect provenance tracking:
 
-* **Subqueries outside FROM** — ``EXISTS``, ``NOT EXISTS``,
+* **Subqueries outside FROM:** ``EXISTS``, ``NOT EXISTS``,
   ``IN``/``NOT IN`` subqueries, scalar subqueries in ``SELECT``
 * **Recursive CTEs** (``WITH RECURSIVE``)
 * ``INTERSECT``
