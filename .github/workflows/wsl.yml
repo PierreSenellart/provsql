@@ -4,6 +4,10 @@ on:
   push:
     paths-ignore:
       - 'doc/**'
+      - 'website/**'
+      - 'branding/**'
+      - 'docker/**'
+      - '*.md'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
@@ -11,17 +15,15 @@ on:
   pull_request:
     paths-ignore:
       - 'doc/**'
+      - 'website/**'
+      - 'branding/**'
+      - 'docker/**'
+      - '*.md'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
-    paths-ignore:
-      - 'doc/**'
-      - '.github/workflows/codeql.yml'
-      - '.github/workflows/docs.yml'
-      - '.github/workflows/build_and_test.yml'
-      - '.github/workflows/macos.yml'
 
 jobs:
   build:

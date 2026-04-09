@@ -3,22 +3,23 @@ name: Documentation
 on:
   push:
     paths-ignore:
+      - 'docker/**'
+      - 'website/**'
+      - 'where_panel/**'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/macos.yml'
       - '.github/workflows/wsl.yml'
   pull_request:
     paths-ignore:
+      - 'docker/**'
+      - 'website/**'
+      - 'where_panel/**'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/macos.yml'
       - '.github/workflows/wsl.yml'
   workflow_dispatch:
-    paths-ignore:
-      - '.github/workflows/build_and_test.yml'
-      - '.github/workflows/codeql.yml'
-      - '.github/workflows/macos.yml'
-      - '.github/workflows/wsl.yml'
 
 jobs:
   docs:

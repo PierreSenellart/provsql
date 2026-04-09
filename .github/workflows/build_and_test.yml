@@ -2,8 +2,13 @@ name: Linux
 
 on:
   push:
+    branches: ['**']
+    tags: ['v*']
     paths-ignore:
       - 'doc/**'
+      - 'website/**'
+      - 'branding/**'
+      - '*.md'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/docs.yml'
       - '.github/workflows/macos.yml'
@@ -11,17 +16,14 @@ on:
   pull_request:
     paths-ignore:
       - 'doc/**'
+      - 'website/**'
+      - 'branding/**'
+      - '*.md'
       - '.github/workflows/codeql.yml'
       - '.github/workflows/docs.yml'
       - '.github/workflows/macos.yml'
       - '.github/workflows/wsl.yml'
   workflow_dispatch:
-    paths-ignore:
-      - 'doc/**'
-      - '.github/workflows/codeql.yml'
-      - '.github/workflows/docs.yml'
-      - '.github/workflows/macos.yml'
-      - '.github/workflows/wsl.yml'
 
 jobs:
   test:
@@ -47,10 +49,18 @@ jobs:
 
   docker:
     needs: test
-    if: github.ref == 'refs/heads/master' && github.repository == 'PierreSenellart/provsql'
+    if: (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')) && github.repository == 'PierreSenellart/provsql'
     environment: master_branch
     runs-on: ubuntu-latest
     steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "provsql_version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "provsql_version=dev" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -60,4 +70,11 @@ jobs:
         with:
           file: docker/Dockerfile
           push: true
-          tags: inriavalda/provsql:latest
+          tags: >-
+            inriavalda/provsql:latest${{
+              steps.version.outputs.provsql_version != 'dev'
+              && format(',inriavalda/provsql:{0}', steps.version.outputs.provsql_version)
+              || ''
+            }}
+          build-args: |
+            PROVSQL_VERSION=${{ steps.version.outputs.provsql_version }}
