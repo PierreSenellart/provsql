@@ -151,6 +151,25 @@ if [[ ! "$GH_CONFIRM" =~ ^[Nn]$ ]]; then
   echo "GitHub release created: https://github.com/PierreSenellart/provsql/releases/tag/$TAG"
 fi
 
+# 10. Post-release: bump default_version on master to next -dev
+
+# Default: bump minor, reset patch, append -dev (e.g. 1.0.0 -> 1.1.0-dev).
+# Override by setting NEXT_VERSION in the environment (e.g. NEXT_VERSION=1.0.1-dev).
+BASE_VERSION="${VERSION%%-*}"  # strip any pre-release suffix before computing next
+NEXT_DEV="${NEXT_VERSION:-$(awk -F. '{print $1"."($2+1)".0-dev"}' <<<"$BASE_VERSION")}"
+
+read -r -p "Bump default_version to '$NEXT_DEV' on master? [Y/n] " BUMP_CONFIRM
+if [[ ! "$BUMP_CONFIRM" =~ ^[Nn]$ ]]; then
+  sed -i "s/^default_version = .*/default_version = '$NEXT_DEV'/" \
+    provsql.common.control
+  git add provsql.common.control
+  git commit -m "Post-release: bump default_version to $NEXT_DEV"
+  read -r -p "Push post-release bump to origin? [Y/n] " BUMP_PUSH
+  if [[ ! "$BUMP_PUSH" =~ ^[Nn]$ ]]; then
+    git push origin master
+  fi
+fi
+
 echo ""
 echo "Done. Release $VERSION is complete."
 echo "  Tag:          $TAG"
