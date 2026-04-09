@@ -1214,7 +1214,7 @@ DECLARE
   agg_tok uuid;
   agg_val varchar;
 BEGIN
-  c:=array_length(tokens, 1);
+  c:=COALESCE(array_length(tokens, 1), 0);
 
   agg_val = CAST(val as VARCHAR);
 
@@ -1231,7 +1231,7 @@ BEGIN
 
   RETURN '( '||agg_tok||' , '||agg_val||' )';
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 /**
  * @brief Create a semimodule scalar multiplication gate
