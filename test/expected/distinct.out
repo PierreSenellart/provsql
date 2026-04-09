@@ -12,6 +12,9 @@ top_secret|Magdalen
 remove_provenance
 
 (1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
 count
 2 (*)
 2 (*)

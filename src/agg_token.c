@@ -16,6 +16,8 @@
 #include "fmgr.h"
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
+#include "utils/numeric.h"
+#include "utils/fmgrprotos.h"
 #include "executor/spi.h"
 #include "access/htup_details.h"
 
@@ -107,6 +109,114 @@ agg_token_cast(PG_FUNCTION_ARGS)
 
   SET_VARSIZE(txt_result, len +   ((int32) sizeof(int32)));
   memcpy(VARDATA(txt_result), result, len);
+
+  PG_RETURN_TEXT_P(txt_result);
+}
+
+PG_FUNCTION_INFO_V1(agg_token_to_numeric);
+/**
+ * @brief Cast an @c agg_token to @c numeric, extracting only the value.
+ *
+ * Emits a WARNING that provenance information is lost during the conversion.
+ * @return Numeric datum parsed from the aggregate value string.
+ */
+Datum
+agg_token_to_numeric(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  Datum result;
+
+  provsql_warning("converting agg_token to numeric: provenance information is lost");
+
+  result = DirectFunctionCall3(numeric_in,
+                               CStringGetDatum(aggtok->val),
+                               ObjectIdGetDatum(InvalidOid),
+                               Int32GetDatum(-1));
+  PG_RETURN_DATUM(result);
+}
+
+PG_FUNCTION_INFO_V1(agg_token_to_float8);
+/**
+ * @brief Cast an @c agg_token to @c double precision, extracting only the value.
+ *
+ * Emits a WARNING that provenance information is lost during the conversion.
+ * @return Float8 datum parsed from the aggregate value string.
+ */
+Datum
+agg_token_to_float8(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  Datum result;
+
+  provsql_warning("converting agg_token to double precision: provenance information is lost");
+
+  result = DirectFunctionCall1(float8in,
+                               CStringGetDatum(aggtok->val));
+  PG_RETURN_DATUM(result);
+}
+
+PG_FUNCTION_INFO_V1(agg_token_to_int4);
+/**
+ * @brief Cast an @c agg_token to @c integer, extracting only the value.
+ *
+ * Emits a WARNING that provenance information is lost during the conversion.
+ * @return Int32 datum parsed from the aggregate value string.
+ */
+Datum
+agg_token_to_int4(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  Datum result;
+
+  provsql_warning("converting agg_token to integer: provenance information is lost");
+
+  result = DirectFunctionCall1(int4in,
+                               CStringGetDatum(aggtok->val));
+  PG_RETURN_DATUM(result);
+}
+
+PG_FUNCTION_INFO_V1(agg_token_to_int8);
+/**
+ * @brief Cast an @c agg_token to @c bigint, extracting only the value.
+ *
+ * Emits a WARNING that provenance information is lost during the conversion.
+ * @return Int64 datum parsed from the aggregate value string.
+ */
+Datum
+agg_token_to_int8(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  Datum result;
+
+  provsql_warning("converting agg_token to bigint: provenance information is lost");
+
+  result = DirectFunctionCall1(int8in,
+                               CStringGetDatum(aggtok->val));
+  PG_RETURN_DATUM(result);
+}
+
+PG_FUNCTION_INFO_V1(agg_token_to_text);
+/**
+ * @brief Cast an @c agg_token to @c text, extracting only the value.
+ *
+ * Unlike @c agg_token_cast which returns the UUID part, this returns
+ * the aggregate value as text.
+ * Emits a WARNING that provenance information is lost during the conversion.
+ * @return Text datum containing the aggregate value string.
+ */
+Datum
+agg_token_to_text(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  text *txt_result;
+  int len;
+
+  provsql_warning("converting agg_token to text: provenance information is lost");
+
+  len = strlen(aggtok->val);
+  txt_result = (text *) palloc(len + VARHDRSZ);
+  SET_VARSIZE(txt_result, len + VARHDRSZ);
+  memcpy(VARDATA(txt_result), aggtok->val, len);
 
   PG_RETURN_TEXT_P(txt_result);
 }

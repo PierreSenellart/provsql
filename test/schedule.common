@@ -16,7 +16,7 @@ test: security formula counting boolean
 test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk values
 test: active
 test: aggregation
-test: agg_distinct agg_order_by
+test: agg_distinct agg_order_by agg_arithmetic
 test: create_as
 test: no_zero_gate
 test: having_on_aggregation

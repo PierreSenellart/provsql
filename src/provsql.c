@@ -27,12 +27,15 @@
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
 #include "optimizer/planner.h"
+#include "parser/parse_coerce.h"
 #include "parser/parse_oper.h"
+#include "utils/builtins.h"
 #include "parser/parsetree.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
@@ -1618,6 +1621,124 @@ static Node *aggregation_mutator(Node *node,
 }
 
 /**
+ * @brief Wrap a @c provenance_aggregate FuncExpr with a cast to the
+ *        original aggregate return type.
+ *
+ * @param prov_agg  The provenance_aggregate FuncExpr to wrap.
+ * @param constants Extension OID cache.
+ * @return          Cast FuncExpr wrapping @p prov_agg.
+ */
+static Node *wrap_agg_token_with_cast(FuncExpr *prov_agg,
+                                      const constants_t *constants) {
+  Const *typ_const = (Const *)lsecond(prov_agg->args);
+  Oid target_type = DatumGetObjectId(typ_const->constvalue);
+  CoercionPathType pathtype;
+  Oid castfuncid;
+
+  pathtype = find_coercion_pathway(target_type,
+                                   constants->OID_TYPE_AGG_TOKEN,
+                                   COERCION_EXPLICIT, &castfuncid);
+  if (pathtype == COERCION_PATH_FUNC && OidIsValid(castfuncid)) {
+    FuncExpr *cast = makeNode(FuncExpr);
+    cast->funcid = castfuncid;
+    cast->funcresulttype = target_type;
+    cast->funcretset = false;
+    cast->funcvariadic = false;
+    cast->funcformat = COERCE_IMPLICIT_CAST;
+    cast->args = list_make1(prov_agg);
+    cast->location = -1;
+    return (Node *)cast;
+  }
+
+  provsql_error("no cast from agg_token to %s for arithmetic on aggregate",
+                format_type_be(target_type));
+  return (Node *)prov_agg; /* unreachable */
+}
+
+/**
+ * @brief Cast @c provenance_aggregate arguments of an operator or
+ *        function when the formal parameter type requires it.
+ *
+ * For each argument in @p args that is a @c provenance_aggregate call,
+ * check the corresponding formal parameter type of the parent function
+ * @p parent_funcid.  If the formal type is polymorphic or @c agg_token
+ * itself, the argument is left alone.  Otherwise a cast to the original
+ * aggregate return type is inserted.
+ *
+ * @param args           Argument list to inspect (modified in place).
+ * @param parent_funcid  OID of the parent function / operator implementor.
+ * @param constants      Extension OID cache.
+ */
+static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
+                                      const constants_t *constants) {
+  HeapTuple tp;
+  Form_pg_proc procForm;
+  ListCell *lc;
+  int i;
+
+  tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(parent_funcid));
+  if (!HeapTupleIsValid(tp))
+    return;
+  procForm = (Form_pg_proc) GETSTRUCT(tp);
+
+  i = 0;
+  foreach(lc, args) {
+    Node *arg = lfirst(lc);
+
+    if (i < procForm->pronargs && IsA(arg, FuncExpr) &&
+        ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+      Oid formal_type = procForm->proargtypes.values[i];
+
+      if (formal_type != constants->OID_TYPE_AGG_TOKEN &&
+          !IsPolymorphicType(formal_type)) {
+        lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)arg, constants);
+      }
+    }
+    i++;
+  }
+
+  ReleaseSysCache(tp);
+}
+
+/**
+ * @brief Tree-mutator that casts @c provenance_aggregate results back
+ *        to the original aggregate return type where needed.
+ *
+ * After the aggregation mutator replaces Aggrefs with
+ * @c provenance_aggregate calls (returning @c agg_token), this
+ * post-processing step inserts casts where the surrounding expression
+ * expects a different type (e.g. @c SUM(id)+1).  Arguments to
+ * functions that accept @c agg_token or polymorphic types are left
+ * alone.
+ *
+ * @param node Current expression tree node.
+ * @param ctx  Pointer to the @c constants_t OID cache.
+ * @return     Possibly modified node.
+ */
+static Node *cast_agg_token_mutator(Node *node, void *ctx) {
+  const constants_t *constants = (const constants_t *)ctx;
+  Node *result;
+
+  if (node == NULL)
+    return NULL;
+
+  /* Recurse first, then fix up arguments at this level. */
+  result = expression_tree_mutator(node, cast_agg_token_mutator, ctx);
+
+  if (IsA(result, OpExpr)) {
+    OpExpr *op = (OpExpr *)result;
+    set_opfuncid(op);
+    maybe_cast_agg_token_args(op->args, op->opfuncid, constants);
+  } else if (IsA(result, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)result;
+    if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      maybe_cast_agg_token_args(fe->args, fe->funcid, constants);
+  }
+
+  return result;
+}
+
+/**
  * @brief Replace every @c Aggref in @p q with a provenance-aware aggregate.
  *
  * Walks the query tree and substitutes each @c Aggref node with the result
@@ -1636,9 +1757,27 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
                                              semiring_operation op) {
 
   aggregation_mutator_context context = {prov_atts, op, constants};
+  ListCell *lc;
 
   query_tree_mutator(q, aggregation_mutator, &context,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
+
+  /* Post-processing: for target-list entries where a provenance_aggregate
+   * result is nested inside an outer expression (e.g. SUM(id)+1),
+   * insert a cast from agg_token back to the original aggregate return
+   * type.  Standalone provenance_aggregate entries are left as agg_token
+   * so they display as "value (*)". */
+  foreach(lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->expr == NULL)
+      continue;
+    /* Skip standalone provenance_aggregate calls */
+    if (IsA(te->expr, FuncExpr) &&
+        ((FuncExpr *)te->expr)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      continue;
+    te->expr = (Expr *)cast_agg_token_mutator((Node *)te->expr,
+                                              (void *)constants);
+  }
 }
 
 /**

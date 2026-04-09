@@ -17,5 +17,5 @@ CREATE TABLE distinct_result AS
   FROM personnel
   GROUP BY city;
 SELECT remove_provenance('distinct_result');
-SELECT * FROM distinct_result ORDER BY count::text;
+SELECT * FROM distinct_result ORDER BY count::numeric;
 DROP TABLE distinct_result;

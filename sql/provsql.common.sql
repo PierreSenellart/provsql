@@ -980,6 +980,42 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 /** @brief Implicit PostgreSQL cast from agg_token to UUID (delegates to agg_token_uuid()) */
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
+/** @brief Cast an agg_token to numeric (extracts the aggregate value, loses provenance) */
+CREATE OR REPLACE FUNCTION agg_token_to_numeric(agg_token)
+  RETURNS numeric
+  AS 'provsql','agg_token_to_numeric' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Cast an agg_token to double precision (extracts the aggregate value, loses provenance) */
+CREATE OR REPLACE FUNCTION agg_token_to_float8(agg_token)
+  RETURNS double precision
+  AS 'provsql','agg_token_to_float8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Cast an agg_token to integer (extracts the aggregate value, loses provenance) */
+CREATE OR REPLACE FUNCTION agg_token_to_int4(agg_token)
+  RETURNS integer
+  AS 'provsql','agg_token_to_int4' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Cast an agg_token to bigint (extracts the aggregate value, loses provenance) */
+CREATE OR REPLACE FUNCTION agg_token_to_int8(agg_token)
+  RETURNS bigint
+  AS 'provsql','agg_token_to_int8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Cast an agg_token to text (extracts the aggregate value, loses provenance) */
+CREATE OR REPLACE FUNCTION agg_token_to_text(agg_token)
+  RETURNS text
+  AS 'provsql','agg_token_to_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Implicit PostgreSQL cast from agg_token to numeric (enables arithmetic on aggregates) */
+CREATE CAST (agg_token AS numeric) WITH FUNCTION agg_token_to_numeric(agg_token) AS IMPLICIT;
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
 /**
  * @brief Placeholder comparison of agg_token with numeric
  *

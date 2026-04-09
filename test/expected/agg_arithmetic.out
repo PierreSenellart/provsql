@@ -1,0 +1,87 @@
+\set ECHO none
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+position|scaled_count
+Analyst|20
+Director|10
+Double agent|10
+Field agent|10
+HR|10
+Janitor|10
+(6 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+position|half_count
+Analyst|1.00000000000000000000
+Director|0.50000000000000000000
+Double agent|0.50000000000000000000
+Field agent|0.50000000000000000000
+HR|0.50000000000000000000
+Janitor|0.50000000000000000000
+(6 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+position|offset_count
+Analyst|102
+Director|101
+Double agent|101
+Field agent|101
+HR|101
+Janitor|101
+(6 rows)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+remove_provenance
+
+(1 row)
+doubled_avg
+8.0000000000000000
+(1 row)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+position|sum_plus_one
+Analyst|11
+Director|2
+Double agent|6
+Field agent|5
+HR|7
+Janitor|3
+(6 rows)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+remove_provenance
+
+(1 row)
+city|team
+Berlin|Ellen, Susan (team)
+New York|John, Paul (team)
+Paris|Dave, Magdalen, Nancy (team)
+(3 rows)

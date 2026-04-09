@@ -40,6 +40,24 @@ Aggregate Functions
 The aggregate functions ``COUNT``, ``SUM``, ``MIN``, ``MAX``, and ``AVG``
 are all supported over provenance-tracked tables.
 
+Arithmetic on Aggregate Results
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Arithmetic and other operations on aggregate results are supported:
+
+.. code-block:: postgresql
+
+    SELECT dept, COUNT(*) * 10 FROM employees GROUP BY dept;
+    SELECT dept, SUM(salary) + 1000 FROM employees GROUP BY dept;
+    SELECT dept, string_agg(name, ', ') || ' (team)' FROM employees GROUP BY dept;
+
+When such an operation is performed, the aggregate result is cast from
+its internal ``agg_token`` representation back to the original aggregate
+return type (e.g., ``bigint`` for ``COUNT``, ``numeric`` for ``AVG``).
+A warning is emitted to indicate that the provenance information is lost
+in the conversion. The provenance of the aggregate group itself is still
+tracked in the ``provsql`` column.
+
 HAVING
 ------
 
