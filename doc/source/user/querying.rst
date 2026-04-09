@@ -28,15 +28,22 @@ Supported SQL Features
 The following SQL constructs are supported with full provenance tracking:
 
 * ``SELECT … FROM … WHERE`` (conjunctive queries, multiset semantics)
-* ``JOIN`` (inner joins)
-* Subqueries in the ``FROM`` clause
+* ``JOIN`` (inner joins, outer joins, natural joins)
+* ``LATERAL`` subqueries
+* Subqueries in the ``FROM`` clause (including deeply nested)
 * ``GROUP BY``
 * ``SELECT DISTINCT`` (set semantics)
 * ``UNION`` and ``UNION ALL``
-* ``EXCEPT``
+* ``EXCEPT`` and ``EXCEPT ALL``
 * ``VALUES`` tables (treated as having no provenance)
-* Aggregation (``SUM``, ``COUNT``, ``MIN``, ``MAX``, ``AVG``)
-* ``HAVING``
+* Aggregation (``SUM``, ``COUNT``, ``MIN``, ``MAX``, ``AVG``,
+  ``COUNT(DISTINCT …)``, ``string_agg``, ``array_agg``)
+* ``HAVING`` (non-matching groups receive zero provenance ``𝟘``
+  rather than being filtered out)
+* `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
+  (``ROW_NUMBER``, ``RANK``, ``SUM OVER``, ``LAG``, ``LEAD``, etc.
+  — provenance stays per-row)
+* ``FILTER`` clause on aggregates
 
 Unsupported SQL Features
 -------------------------
@@ -44,13 +51,16 @@ Unsupported SQL Features
 The following constructs are **not** currently supported; queries using them
 will either raise an error or may cause incorrect provenance tracking:
 
-* **Outer joins** (``LEFT JOIN``, ``RIGHT JOIN``, ``FULL OUTER JOIN``)
 * **Semi-joins** and **anti-joins** (``EXISTS``, ``NOT EXISTS``,
   ``IN`` subqueries, ``NOT IN``)
-* `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_ (``OVER …``)
-* `Recursive CTEs <https://www.postgresql.org/docs/current/queries-with.html>`_ (``WITH RECURSIVE``)
+* **CTEs** (``WITH`` clauses) — queries run but provenance is silently
+  lost
+* ``INTERSECT``
+* ``DISTINCT ON``
+* ``GROUPING SETS``, ``CUBE``, ``ROLLUP``
 
 For negation or exclusion, use ``EXCEPT`` rather than ``NOT IN``.
+For correlated subqueries, ``LATERAL`` can be used as a workaround.
 
 Provenance in Nested Queries
 -----------------------------
