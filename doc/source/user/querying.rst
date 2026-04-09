@@ -52,8 +52,8 @@ Unsupported SQL Features
 The following constructs are **not** currently supported; queries using them
 will either raise an error or may cause incorrect provenance tracking:
 
-* **Semi-joins** and **anti-joins** (``EXISTS``, ``NOT EXISTS``,
-  ``IN`` subqueries, ``NOT IN``)
+* **Subqueries outside FROM** — ``EXISTS``, ``NOT EXISTS``,
+  ``IN``/``NOT IN`` subqueries, scalar subqueries in ``SELECT``
 * **Recursive CTEs** (``WITH RECURSIVE``)
 * ``INTERSECT``
 * ``DISTINCT ON``

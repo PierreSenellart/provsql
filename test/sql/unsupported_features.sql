@@ -5,6 +5,7 @@ SET search_path TO provsql_test, provsql;
 SELECT
     provenance ();
 
+-- IN subquery
 SELECT
     *
 FROM
@@ -15,6 +16,38 @@ WHERE
             city
         FROM
             personnel);
+
+-- EXISTS subquery
+SELECT
+    *
+FROM
+    personnel p
+WHERE
+    EXISTS (
+        SELECT 1
+        FROM personnel q
+        WHERE q.city = p.city AND q.id <> p.id);
+
+-- NOT IN subquery
+SELECT
+    *
+FROM
+    personnel
+WHERE
+    name NOT IN (
+        SELECT
+            name
+        FROM
+            personnel
+        WHERE
+            city = 'Paris');
+
+-- Scalar subquery in SELECT
+SELECT
+    name,
+    (SELECT COUNT(*) FROM personnel) AS total
+FROM
+    personnel;
 
 SELECT DISTINCT ON (city)
     *
