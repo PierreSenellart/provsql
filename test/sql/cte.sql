@@ -35,6 +35,18 @@ SELECT remove_provenance('cte_result3');
 SELECT * FROM cte_result3 ORDER BY name1, name2;
 DROP TABLE cte_result3;
 
+-- Nested CTEs (b references a, c references b)
+CREATE TABLE cte_result4 AS
+  WITH a AS (SELECT * FROM personnel WHERE city='Paris'),
+       b AS (SELECT name, id FROM a),
+       c AS (SELECT name FROM b WHERE id > 4)
+  SELECT name, sr_counting(provenance(), 'personnel_count') AS counting
+  FROM c;
+
+SELECT remove_provenance('cte_result4');
+SELECT * FROM cte_result4 ORDER BY name;
+DROP TABLE cte_result4;
+
 -- Recursive CTE should error
 WITH RECURSIVE nums AS (
   SELECT 1 AS n, name FROM personnel WHERE id=1

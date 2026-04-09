@@ -255,6 +255,54 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
 }
 
 /**
+ * @brief Inline CTE references as subqueries within a query.
+ *
+ * Replaces each non-recursive RTE_CTE entry in @p rtable with an
+ * RTE_SUBQUERY containing a copy of the CTE's query, looking up
+ * definitions in @p cteList.  Recurses into newly inlined subqueries
+ * to handle nested CTE references (ctelevelsup > 0).
+ *
+ * @param rtable   Range table to scan for RTE_CTE entries.
+ * @param cteList  CTE definitions to look up names in.
+ */
+static void inline_ctes_in_rtable(List *rtable, List *cteList) {
+  ListCell *lc;
+  foreach (lc, rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind == RTE_CTE) {
+      ListCell *lc2;
+      foreach (lc2, cteList) {
+        CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc2);
+        if (strcmp(cte->ctename, r->ctename) == 0) {
+          if (cte->cterecursive) {
+            provsql_error("Recursive CTEs not supported by provsql");
+          } else {
+            r->rtekind = RTE_SUBQUERY;
+            r->subquery = copyObject((Query *)cte->ctequery);
+            r->ctename = NULL;
+            r->ctelevelsup = 0;
+            /* Recurse: the inlined subquery may reference other CTEs
+             * from the same cteList */
+            inline_ctes_in_rtable(r->subquery->rtable, cteList);
+          }
+          break;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * @brief Inline all CTE references in @p q as subqueries.
+ */
+static void inline_ctes(Query *q) {
+  if (q->cteList == NIL)
+    return;
+  inline_ctes_in_rtable(q->rtable, q->cteList);
+  q->cteList = NIL;
+}
+
+/**
  * @brief Collect all provenance Var nodes reachable from @p q's range table.
  *
  * Walks every RTE in @p q->rtable:
@@ -279,31 +327,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
   List *prov_atts = NIL;
 
   /* Inline non-recursive CTE references as subqueries so we can track
-   * provenance through them.  This converts RTE_CTE entries to
-   * RTE_SUBQUERY in place before the main loop processes them. */
-  {
-    ListCell *lc;
-    foreach (lc, q->rtable) {
-      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-      if (r->rtekind == RTE_CTE && r->ctelevelsup == 0) {
-        ListCell *lc2;
-        foreach (lc2, q->cteList) {
-          CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc2);
-          if (strcmp(cte->ctename, r->ctename) == 0) {
-            if (cte->cterecursive) {
-              provsql_error("Recursive CTEs not supported by provsql");
-            } else {
-              r->rtekind = RTE_SUBQUERY;
-              r->subquery = copyObject((Query *)cte->ctequery);
-              r->ctename = NULL;
-            }
-            break;
-          }
-        }
-      }
-    }
-    q->cteList = NIL;
-  }
+   * provenance through them. */
+  inline_ctes(q);
 
   for(Index rteid = 1; rteid <= q->rtable->length; ++rteid) {
     RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, rteid-1);

@@ -27,4 +27,11 @@ Dave|Nancy|1
 Ellen|Susan|1
 Magdalen|Nancy|1
 (4 rows)
+remove_provenance
+
+(1 row)
+name|counting
+Magdalen|1
+Nancy|1
+(2 rows)
 ERROR:  ProvSQL: Recursive CTEs not supported by provsql
