@@ -10,6 +10,7 @@ on:
       - '.github/workflows/codeql.yml'
       - '.github/workflows/macos.yml'
       - '.github/workflows/wsl.yml'
+      - 'release.sh'
   pull_request:
     paths-ignore:
       - 'docker/**'
@@ -19,6 +20,7 @@ on:
       - '.github/workflows/codeql.yml'
       - '.github/workflows/macos.yml'
       - '.github/workflows/wsl.yml'
+      - 'release.sh'
   workflow_dispatch:
 
 jobs:
