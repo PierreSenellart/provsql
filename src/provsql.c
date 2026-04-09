@@ -2818,7 +2818,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       return q;
 
     if (q->hasSubLinks) {
-      provsql_error("Subqueries in WHERE clause not supported by provsql");
+      provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported by provsql");
       supported = false;
     }
 
