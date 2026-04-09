@@ -146,8 +146,7 @@ if [[ ! "$GH_CONFIRM" =~ ^[Nn]$ ]]; then
   gh release create "$TAG" \
     --repo "$GH_REPO" \
     --title "ProvSQL $VERSION" \
-    --notes "$NOTES" \
-    --verify-tag
+    --notes "$NOTES"
   echo "GitHub release created: https://github.com/PierreSenellart/provsql/releases/tag/$TAG"
 fi
 
