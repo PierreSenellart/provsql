@@ -283,46 +283,6 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
 /**
- * @brief Create a view mapping provenance tokens to attribute values
- *
- * Like create_provenance_mapping but creates a view instead of a table,
- * so it always reflects the current state of the source table.
- *
- * @param newview name of the view to create
- * @param oldtbl source table with provenance tracking
- * @param att attribute whose values populate the mapping
- * @param preserve_case if true, quote the view name to preserve case
- */
-CREATE OR REPLACE FUNCTION create_provenance_mapping_view(
-  newview text,
-  oldtbl regclass,
-  att text,
-  preserve_case bool DEFAULT false
-)
-RETURNS void
-LANGUAGE plpgsql
-AS
-$$
-BEGIN
-  IF preserve_case THEN
-    EXECUTE format(
-      'CREATE OR REPLACE VIEW %I AS SELECT %s AS value, provsql AS provenance FROM %s',
-      newview,
-      att,
-      oldtbl
-    );
-  ELSE
-    EXECUTE format(
-      'CREATE OR REPLACE VIEW %s AS SELECT %s AS value, provsql AS provenance FROM %s',
-      newview,
-      att,
-      oldtbl
-    );
-  END IF;
-END;
-$$;
-
-/**
  * @brief Query a table as it was at a specific point in time
  *
  * Returns all rows whose temporal validity includes the given timestamp.

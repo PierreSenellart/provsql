@@ -109,6 +109,17 @@ The mapping is stored as an ordinary PostgreSQL table called ``my_mapping``
 with two columns: ``token`` (uuid) and ``value`` (text or numeric, depending
 on the source column type).
 
+Alternatively, :sqlfunc:`create_provenance_mapping_view` creates a *view*
+instead of a table.  The view always reflects the current state of the
+source table, which is useful when the table is frequently updated:
+
+.. code-block:: postgresql
+
+    SELECT create_provenance_mapping_view('my_mapping_view', 'mytable', 'column_name');
+
+The view can be used anywhere a table-based mapping is expected (e.g., as
+the second argument to semiring evaluation functions).
+
 Inspecting the Circuit
 -----------------------
 

@@ -52,7 +52,7 @@ _SQL_FUNC_MAP = {
     'remove_provenance':        '/doxygen-sql/html/group__table__management.html#ga91ced31ffd25c227390042e5089cb200',
     'provenance':               '/doxygen-sql/html/group__provenance__output.html#ga93c314c9412aff767f5f5f994da091c9',
     'create_provenance_mapping':'/doxygen-sql/html/group__table__management.html#ga9830f6222200004bceb4b50e0a35cd91',
-    'create_provenance_mapping_view': '/doxygen-sql/html/group__temporal__db.html#gae8beeb7a12893f3c861b26e9552a932b',
+    'create_provenance_mapping_view': '/doxygen-sql/html/group__table__management.html#gae8beeb7a12893f3c861b26e9552a932b',
     'get_gate_type':            '/doxygen-sql/html/group__gate__manipulation.html#ga26773255355efc79f91d3109316bdb8b',
     'get_children':             '/doxygen-sql/html/group__gate__manipulation.html#gad2e6746782ac5b6500ebb8c48f75303b',
     'create_gate':              '/doxygen-sql/html/group__gate__manipulation.html#ga47adb345beee16ad65566b8e2ca96f8a',
