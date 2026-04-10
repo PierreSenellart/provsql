@@ -15,6 +15,8 @@ help:
 # Catch-all target: route all unknown targets to Sphinx using the new
 # "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
 %: Makefile
+	# Check Python dependencies
+	pip install --quiet -r ../requirements.txt
 	# Copy branding assets for Sphinx
 	cp $(BRANDING)/logo.png    _static/logo.png
 	cp $(BRANDING)/favicon.ico _static/favicon.ico

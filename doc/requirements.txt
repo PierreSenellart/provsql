@@ -1,0 +1,4 @@
+sphinx>=8
+sphinx-rtd-theme>=3
+sphinxcontrib-bibtex>=2.4
+pybtex
