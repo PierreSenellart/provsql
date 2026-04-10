@@ -1,10 +1,25 @@
-.. ProvSQL documentation master file, created by
-   sphinx-quickstart on Fri Apr 18 22:11:12 2025.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
 Welcome to ProvSQL's documentation!
 ===================================
+
+ProvSQL is a PostgreSQL extension that adds semiring provenance and
+uncertainty management to SQL queries.  It transparently rewrites
+queries to track which input tuples contribute to each result, then
+evaluates the provenance in any user-chosen semiring -- Boolean
+reachability, counting, probability, Shapley values, and more.
+
+This documentation is organized into three parts:
+
+* The :ref:`user-guide` explains how to install, configure, and use
+  ProvSQL from the SQL level.  Start here if you are new to ProvSQL.
+
+* The :ref:`dev-guide` describes ProvSQL's internal architecture and
+  is aimed at contributors.  It covers the query rewriting pipeline,
+  memory management, the semiring interface, testing, and debugging.
+
+* The :ref:`api-ref` provides auto-generated reference documentation
+  for the SQL and C/C++ APIs (via Doxygen).
+
+.. _user-guide:
 
 .. toctree::
    :maxdepth: 2
@@ -25,6 +40,23 @@ Welcome to ProvSQL's documentation!
    user/export
    user/configuration
    user/bibliography
+
+.. _dev-guide:
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Developer Guide
+
+   dev/introduction
+   dev/architecture
+   dev/query-rewriting
+   dev/memory
+   dev/adding-semiring
+   dev/testing
+   dev/debugging
+   dev/build-system
+
+.. _api-ref:
 
 .. toctree::
    :maxdepth: 2

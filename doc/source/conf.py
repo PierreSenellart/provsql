@@ -37,7 +37,10 @@ html_static_path = ['_static']
 html_logo    = '_static/logo.png'
 html_favicon = '_static/favicon.ico'
 html_css_files = ['custom.css']
-html_js_files = ['back-to-site.js']
+html_js_files = [
+    ('jquery.js', {'priority': 100}),  # sphinx-rtd-theme requires jQuery
+    'back-to-site.js',
+]
 html_show_sphinx = False
 html_show_copyright = False
 html_show_sourcelink = False
@@ -91,6 +94,57 @@ _SQL_FUNC_MAP = {
 }
 
 
+# ---------------------------------------------------------------------------
+# :cfunc:`name` role — renders function name as linked monospace code
+# pointing to the Doxygen C/C++ API reference.
+# ---------------------------------------------------------------------------
+
+_C_FUNC_MAP = {
+    # provsql.c — planner hook and query rewriting
+    '_PG_init':                  '/doxygen-c/html/provsql_8c.html#a29e1a0b0688ac19dbde93824e4ae1a59',
+    '_PG_fini':                  '/doxygen-c/html/provsql_8c.html#a7192e52d759211f57ad66638304ea072',
+    'provsql_planner':           '/doxygen-c/html/provsql_8c.html#aa8f430f67b70c269c4ba8cc5225b8a84',
+    'process_query':             '/doxygen-c/html/provsql_8c.html#a5901d4216b7b5c71ddd9b82956ddb489',
+    'has_provenance':            '/doxygen-c/html/provsql_8c.html#af9a93235f73a9ae63ab01cf094d30372',
+    'get_provenance_attributes': '/doxygen-c/html/provsql_8c.html#a468eafaad0a1eabc3988d6ab0b824abe',
+    'make_provenance_expression':'/doxygen-c/html/provsql_8c.html#ad6c4894f1cd6dac66538064fba556517',
+    'add_to_select':             '/doxygen-c/html/provsql_8c.html#a6fe52ea4c7f2cc8eb924135ebf239d85',
+    'replace_provenance_function_by_expression': '/doxygen-c/html/provsql_8c.html#a3d5fee9c96595db519504978edba8683',
+    'process_insert_select':     '/doxygen-c/html/provsql_8c.html#ac3ee0aa66fe553ba28a2bb2959a440ad',
+    'inline_ctes':               '/doxygen-c/html/provsql_8c.html#a7190c262fb133f2796fddfb02c695c3c',
+    'remove_provenance_attributes_select': '/doxygen-c/html/provsql_8c.html#ab49a6e80331db4c440e34e0b2ec77f14',
+    'rewrite_non_all_into_external_group_by': '/doxygen-c/html/provsql_8c.html#aa6aa776cd1d015ffcc6aa21c8b2d2198',
+    'process_set_operation_union':'/doxygen-c/html/provsql_8c.html#a61a2f1f0094bc8b60010673f568f16e7',
+    'transform_except_into_join':'/doxygen-c/html/provsql_8c.html#a0fdbe2fb23cbd18fb9bcc873dc9e888c',
+    'rewrite_agg_distinct':      '/doxygen-c/html/provsql_8c.html#a94b33c910ea1c3ceac4a2e32e79328f9',
+    'transform_distinct_into_group_by': '/doxygen-c/html/provsql_8c.html#a00905dfe8e8acbfb740bafab0c5f366b',
+    'build_column_map':          '/doxygen-c/html/provsql_8c.html#acf66b583d7d5c92186c17e172ab34edf',
+    'replace_aggregations_by_provenance_aggregate': '/doxygen-c/html/provsql_8c.html#a64dcbec21c99e399191a997b19da111c',
+    'migrate_aggtoken_quals_to_having': '/doxygen-c/html/provsql_8c.html#a52800ea34fc58e9157fe76ecb7dfeac7',
+    'insert_agg_token_casts':    '/doxygen-c/html/provsql_8c.html#a539df516de849eb54876a4f98a748861',
+    'having_Expr_to_provenance_cmp': '/doxygen-c/html/provsql_8c.html#a0cfaf66fa75b9265bf267b446ac6946f',
+    'add_eq_from_Quals_to_Expr': '/doxygen-c/html/provsql_8c.html#aa5f16ef0c73e1c7d651b02311994605d',
+    'add_select_non_zero':       '/doxygen-c/html/provsql_8c.html#af0e331134cb117618a2d8197a5cf7b76',
+    # provsql_utils.h — OID cache
+    'constants_t':               '/doxygen-c/html/structconstants__t.html',
+    'get_constants':             '/doxygen-c/html/provsql__utils_8h.html#a75e7d48321cea0156f8ad4c039c877a0',
+    # provsql_mmap — background worker
+    'RegisterProvSQLMMapWorker': '/doxygen-c/html/provsql__mmap_8c.html#af31c1c517f22a6923f390b75d36506be',
+    'provsql_mmap_worker':       '/doxygen-c/html/provsql__mmap_8h.html#a3f084145f583f08b2532c36a79925697',
+    'initialize_provsql_mmap':   '/doxygen-c/html/MMappedCircuit_8cpp.html#aa0bba27d6f73596ef0972bb0541cc244',
+    'provsql_mmap_main_loop':    '/doxygen-c/html/MMappedCircuit_8cpp.html#a9215628e0312d309db481dbd27c8dabe',
+    'destroy_provsql_mmap':      '/doxygen-c/html/MMappedCircuit_8cpp.html#a77b47980f1cc7b3e38ad65e15bda8118',
+    # provsql_shmem — shared memory
+    'provsql_shmem_request':     '/doxygen-c/html/provsql__shmem_8h.html#a6bd8422002b87f1cab0c60e4aa7a7101',
+    'provsql_shmem_startup':     '/doxygen-c/html/provsql__shmem_8h.html#a7f431fc2ca237114d13ff1c19f7ab692',
+    'provsql_shmem_lock_exclusive': '/doxygen-c/html/provsql__shmem_8h.html#a36adeebed75d77964c2886bf4718d8bc',
+    'provsql_shmem_lock_shared': '/doxygen-c/html/provsql__shmem_8h.html#ae1cfc059b74073f9ee4e12f34793be64',
+    'provsql_shmem_unlock':      '/doxygen-c/html/provsql__shmem_8h.html#a22c7757d55d371f7fe70c542341c0365',
+    # provenance_evaluate_compiled
+    'provenance_evaluate_compiled': '/doxygen-c/html/provenance__evaluate__compiled_8hpp.html#a4bf8b02981ab738526f4fe50799894ec',
+}
+
+
 def setup(app):
     from docutils import nodes
 
@@ -104,5 +158,27 @@ def setup(app):
             return [ref], []
         return [lit], []
 
+    def cfunc_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+        key = text.rstrip('()')
+        url = _C_FUNC_MAP.get(key)
+        lit = nodes.literal(text, text)
+        if url:
+            ref = nodes.reference('', '', internal=False, refuri=url)
+            ref += lit
+            return [ref], []
+        return [lit], []
+
+    def cfile_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+        # Compute Doxygen URL from filename: _ -> __, . -> _8
+        base, ext = text.rsplit('.', 1)
+        doxy_name = base.replace('_', '__') + '_8' + ext + '.html'
+        url = '/doxygen-c/html/' + doxy_name
+        lit = nodes.literal(text, text)
+        ref = nodes.reference('', '', internal=False, refuri=url)
+        ref += lit
+        return [ref], []
+
     app.add_role('sqlfunc', sqlfunc_role)
+    app.add_role('cfunc', cfunc_role)
+    app.add_role('cfile', cfile_role)
     return {'version': '0.1', 'parallel_read_safe': True}

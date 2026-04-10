@@ -36,4 +36,4 @@ help:
 	cp -f $(BRANDING)/logo.png    $(BUILDDIR)/html/_static/logo.png
 	cp -f $(BRANDING)/favicon.ico $(BUILDDIR)/html/_static/favicon.ico
 	# Check :sqlfunc: link coherence
-	python3 check-sqlfunc-links.py
+	python3 check-doc-links.py

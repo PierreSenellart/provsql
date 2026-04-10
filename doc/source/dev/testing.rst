@@ -1,0 +1,153 @@
+Testing
+=======
+
+ProvSQL's test suite uses PostgreSQL's ``pg_regress`` framework.
+All tests are **integration tests** that run SQL against a live
+PostgreSQL instance with the ProvSQL extension loaded.
+
+
+Test Layout
+-----------
+
+::
+
+   test/
+   ├── schedule          # Test ordering and parallel groups
+   ├── sql/              # Input SQL scripts (one per test)
+   │   ├── setup.sql
+   │   ├── add_provenance.sql
+   │   ├── sr_boolean.sql
+   │   └── ...
+   └── expected/         # Expected output (one per test)
+       ├── setup.out
+       ├── add_provenance.out
+       ├── sr_boolean.out
+       └── ...
+
+- ``test/sql/<name>.sql`` -- the SQL statements to execute.
+- ``test/expected/<name>.out`` -- the expected ``psql``-style output.
+  This includes both SQL commands echoed back and their results.
+- ``test/schedule`` -- controls the order in which tests run.
+
+
+The Schedule File
+-----------------
+
+Each line in ``test/schedule`` is either a comment (``#``) or a
+``test:`` directive listing one or more test names:
+
+.. code-block:: text
+
+   # Basic checks
+   test: provenance_in_from identify_token subquery create_provenance_mapping
+
+   # Introducing a few semirings
+   test: sr_formula sr_counting sr_boolean sr_why
+
+Tests on the **same line** run in parallel.  Tests on **different lines**
+run sequentially.  The first test (``setup``) creates the test schema
+and tables; all subsequent tests depend on it.
+
+
+Running Tests
+-------------
+
+.. code-block:: bash
+
+   # Full suite (requires PostgreSQL superuser and extension installed)
+   make test
+   # or equivalently:
+   make installcheck
+
+   # With a specific PostgreSQL port
+   make installcheck EXTRA_REGRESS_OPTS="--port=5434"
+
+The test runner creates a temporary database ``contrib_regression``,
+runs all tests from the schedule, compares actual output to expected,
+and reports differences.
+
+
+Writing a New Test
+------------------
+
+1. **Create the SQL file** ``test/sql/<name>.sql``.  Write the SQL
+   statements that exercise the feature you are testing.  Include
+   ``SET`` commands if needed (e.g., ``SET search_path TO public, provsql;``).
+
+2. **Generate expected output**.  Run the test once and capture the
+   output:
+
+   .. code-block:: bash
+
+      # Run the specific test (after make install and server restart)
+      make installcheck EXTRA_REGRESS_OPTS="--schedule=test/schedule"
+
+   Then copy the actual output to the expected file:
+
+   .. code-block:: bash
+
+      cp /tmp/tmp.provsqlXXXX/results/<name>.out test/expected/<name>.out
+
+   Review the expected output to make sure it is correct.
+
+3. **Add to the schedule**.  Insert a ``test: <name>`` line in
+   ``test/schedule`` at an appropriate position.  Place it after
+   any tests it depends on (e.g., after ``setup`` and
+   ``probability_setup`` if your test uses probabilities).
+
+4. **Run the full suite** to verify nothing is broken:
+
+   .. code-block:: bash
+
+      make test
+
+
+Optional-Tool Skip Pattern
+--------------------------
+
+Some tests depend on external tools that may not be installed (e.g.,
+``c2d``, ``d4``, ``dsharp``, ``minic2d``, ``weightmc``).
+To make these tests pass regardless of whether the tool is present,
+use psql's ``\if`` with a backtick-evaluated shell command:
+
+.. code-block:: text
+
+   \if `which d4 > /dev/null 2>&1 && echo true || echo false`
+   -- test body that requires d4
+   SELECT probability_evaluate(provenance(), 'compilation', 'd4') ...;
+   \else
+   \echo 'SKIPPING: d4 not available'
+   \endif
+
+Then provide two expected-output files:
+
+- ``test/expected/d4.out`` -- the output when ``d4`` **is** available
+  (the normal test results).
+- ``test/expected/d4_1.out`` -- the output when ``d4`` **is not**
+  available (just the skip message).
+
+``pg_regress`` tries all ``_N.out`` alternatives and passes if the
+actual output matches any of them.
+
+
+Reading Test Failures
+---------------------
+
+When a test fails, ``pg_regress`` writes a diff to a temporary file:
+
+::
+
+   /tmp/tmp.provsqlXXXX/regression.diffs
+
+This file shows a unified diff between expected and actual output for
+each failing test.  ``make test`` will display the path to this file
+and open it in a pager.
+
+Common causes of failure:
+
+- **UUID ordering**: UUIDs are random, so tests should not depend on
+  the specific UUID values.  Use ``ORDER BY`` on deterministic columns
+  and project away the provenance column when its exact value is
+  irrelevant.
+- **Floating-point precision**: probability results may differ slightly
+  across platforms.  Use ``ROUND()`` in tests.
