@@ -1,7 +1,12 @@
 name: Mac OS
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
+    branches: ['**']
     paths-ignore:
       - 'doc/**'
       - 'website/**'

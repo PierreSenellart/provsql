@@ -27,8 +27,14 @@ on:
       - '.github/workflows/wsl.yml'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    # Skip tests on tag pushes: the same commit was already tested on master
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     strategy:
       matrix:
         pg: [18, 17, 16, 15, 14, 13, 12, 11, 10]
@@ -51,7 +57,14 @@ jobs:
 
   docker:
     needs: test
-    if: (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')) && github.repository == 'PierreSenellart/provsql'
+    # always() is needed so this condition is evaluated even when
+    # the test job is skipped (tag pushes); see
+    # https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/using-jobs-in-a-workflow
+    if: |
+      always() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')) &&
+      github.repository == 'PierreSenellart/provsql'
     environment: master_branch
     runs-on: ubuntu-latest
     steps:
