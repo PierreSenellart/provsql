@@ -31,7 +31,12 @@ for ref in sorted(refs):
     if ref not in map_entries:
         errors.append(f":sqlfunc:`{ref}` used in docs but missing from _SQL_FUNC_MAP in conf.py")
 
-# 4. Check: every map entry points to an existing Doxygen anchor
+# 4. Check: every map entry is referenced in docs
+for func in sorted(map_entries):
+    if func not in refs:
+        errors.append(f"_SQL_FUNC_MAP['{func}'] is not referenced by any :sqlfunc: in the documentation")
+
+# 5. Check: every map entry points to an existing Doxygen anchor
 for func, url in sorted(map_entries.items()):
     # URL format: /doxygen-sql/html/group__xxx.html#gaXXX
     parts = url.split("#")
@@ -47,7 +52,7 @@ for func, url in sorted(map_entries.items()):
     if f'id="{anchor}"' not in html_text and f'name="{anchor}"' not in html_text:
         errors.append(f"_SQL_FUNC_MAP['{func}']: anchor #{anchor} not found in {html_file.name}")
 
-# 5. Check: every Doxygen SQL function is in the map (or explicitly excluded)
+# 6. Check: every Doxygen SQL function is in the map (or explicitly excluded)
 #    Internal functions that are not user-facing and don't need documentation:
 INTERNAL_FUNCTIONS = {
     # Triggers
@@ -75,8 +80,9 @@ INTERNAL_FUNCTIONS = {
     'reset_constants_cache', 'get_nb_gates',
     # Internal circuit inspection
     'sub_circuit_for_where', 'sub_circuit_with_desc',
-    # Internal gate manipulation (set_* are dangerous for users)
-    'set_extra', 'set_infos',
+    # Internal gate manipulation (set_* are dangerous for users,
+    # create_gate is low-level circuit construction)
+    'set_extra', 'set_infos', 'create_gate',
     # Transition functions for aggregates
     'choose_function',
     'union_tstzintervals_plus', 'union_tstzintervals_plus_state',
