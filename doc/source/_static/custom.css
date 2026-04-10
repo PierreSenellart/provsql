@@ -105,7 +105,8 @@ a:visited   { color: #5A3E8C; }
 }
 
 /* ---- Code / pre ---- */
-code, tt {
+.rst-content tt,
+.rst-content code {
   font-family: 'Fira Code', 'Consolas', monospace;
   background-color: #E8E0F8;
   color: #5A3E8C;
@@ -116,6 +117,12 @@ pre, div.highlight {
   font-family: 'Fira Code', 'Consolas', monospace;
   background-color: #E8E0F8;
   border-left: 3px solid #E8B84B;
+}
+.rst-content pre.literal-block,
+.rst-content div[class^="highlight"] pre,
+.rst-content .linenodiv pre {
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.72rem;
 }
 div.highlight pre {
   background-color: transparent;
