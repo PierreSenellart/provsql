@@ -1,4 +1,5 @@
 \set ECHO none
+\if `perl -MGraph::Easy -e1 2>/dev/null && echo true || echo false`
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
@@ -18,3 +19,6 @@ SELECT remove_provenance('vc_result');
 
 SELECT city, ok FROM vc_result ORDER BY city;
 DROP TABLE vc_result;
+\else
+\echo 'SKIPPING: graph-easy not available'
+\endif

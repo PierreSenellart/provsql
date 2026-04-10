@@ -51,6 +51,5 @@ jobs:
       - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres | xargs)" >> "$GITHUB_ENV"
       - run: echo "shared_preload_libraries = 'provsql'" >> "$POSTGRESQL_CONFIG"
       - run: brew services restart postgresql@${{ matrix.pg }}
-      - run: "perl -i -pe 's/ c2d//; s/ d4//; s/ weightmc//; s/ dsharp//; s/ view_circuit_multiple//; s/test: *$//' test/schedule"
       - run: pg_isready -t 60 || (cat /usr/local/var/log/potgres*.log; false)
       - run: make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"

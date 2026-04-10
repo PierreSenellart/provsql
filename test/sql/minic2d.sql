@@ -1,4 +1,5 @@
 \set ECHO none
+\if `which minic2d > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
@@ -19,3 +20,6 @@ SELECT remove_provenance('minic2d_result');
 
 SELECT city, ROUND(prob::numeric,2) AS prob FROM minic2d_result;
 DROP TABLE minic2d_result;
+\else
+\echo 'SKIPPING: minic2d not available'
+\endif

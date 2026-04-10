@@ -1,4 +1,5 @@
 \set ECHO none
+\if `which dsharp > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
@@ -41,3 +42,6 @@ SELECT name, city, ROUND(shapley::numeric,3) AS shapley FROM dsharp_result
 ORDER BY city, name;
 
 DROP TABLE dsharp_result;
+\else
+\echo 'SKIPPING: dsharp not available'
+\endif

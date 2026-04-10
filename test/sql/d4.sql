@@ -1,4 +1,5 @@
 \set ECHO none
+\if `which d4 > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
@@ -41,3 +42,6 @@ SELECT name, city, ROUND(shapley::numeric,3) AS shapley FROM d4_result
 ORDER BY city, name;
 
 DROP TABLE d4_result;
+\else
+\echo 'SKIPPING: d4 not available'
+\endif

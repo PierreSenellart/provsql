@@ -124,8 +124,8 @@ If your PostgreSQL server does not listen on the default port (5432), add
 ``--port=xxxx`` to the ``EXTRA_REGRESS_OPTS`` line of ``Makefile.internal``.
 
 Tests that depend on optional external tools (``c2d``, ``d4``, ``dsharp``,
-``minic2d``, ``weightmc``, ``graph-easy``) will **fail** if no executable of
-that name can be found.
+``minic2d``, ``weightmc``, ``graph-easy``) are automatically skipped if the
+tool is not found in ``$PATH``.
 
 Uninstalling
 ^^^^^^^^^^^^

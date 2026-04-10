@@ -1,4 +1,5 @@
 \set ECHO none
+\if `which c2d > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
@@ -41,3 +42,6 @@ SELECT name, city, ROUND(shapley::numeric,3) AS shapley FROM c2d_result
 ORDER BY city, name;
 
 DROP TABLE c2d_result;
+\else
+\echo 'SKIPPING: c2d not available'
+\endif

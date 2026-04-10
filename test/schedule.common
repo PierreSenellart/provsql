@@ -40,7 +40,7 @@ test: possible_worlds monte_carlo
 test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors
 
 # Probability computation using external software
-test: d4 dsharp weightmc c2d
+test: d4 dsharp weightmc c2d minic2d
 
 # Probability computation using tree decompositions, independent
 # probability computation, and default computation

@@ -1,4 +1,5 @@
 \set ECHO none
+\if `which weightmc > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
@@ -19,3 +20,6 @@ SELECT remove_provenance('weightmc_result');
 
 SELECT city, ROUND(prob::numeric,2) AS prob FROM weightmc_result;
 DROP TABLE weightmc_result;
+\else
+\echo 'SKIPPING: weightmc not available'
+\endif
