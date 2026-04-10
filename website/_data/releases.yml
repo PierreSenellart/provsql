@@ -1,3 +1,82 @@
+- version: "1.2.0"
+  date: 2026-04-10
+  tag: "v1.2.0"
+  notes: |
+    ## What's new in 1.2.0
+    
+    This release focuses on providing broader and more consistent support for
+    SQL language features within provenance tracking. Systematic testing
+    across a wide range of query patterns led to numerous bug fixes, new
+    feature support, and clearer error messages for unsupported constructs.
+    
+    ## New Features
+    
+    - **CTE support**: Non-recursive `WITH` clauses now fully track
+      provenance. Nested CTEs (CTE referencing another CTE) and CTEs
+      inside `UNION`/`EXCEPT` branches are supported. Recursive CTEs
+      produce a clear error message.
+    
+    - **`INSERT ... SELECT` provenance propagation**: When both source
+      and target tables are provenance-tracked, `INSERT ... SELECT` now
+      propagates source provenance to the inserted rows instead of
+      assigning fresh tokens. A warning is emitted when the target table
+      lacks a `provsql` column.
+    
+    - **Correct arithmetic and expressions on aggregate results from
+      subqueries**: Explicit casts (`cnt::numeric`), arithmetic
+      (`cnt + 1`), window functions (`SUM(cnt) OVER()`), and expressions
+      (`COALESCE`, `GREATEST`, etc.) on aggregate results from
+      subqueries now produce correct values with a warning, using the
+      original aggregate return type from the provenance circuit.
+    
+    - **UNION ALL with aggregate columns**: `UNION ALL` of queries
+      returning aggregate results now works correctly.
+    
+    ## Bug Fixes
+    
+    - Fixed crash when mixing `COUNT(DISTINCT ...)` with
+      `provenance()` or `sr_formula(provenance(), ...)` in the same
+      query.
+    
+    - Fixed `COUNT(*)` returning NULL instead of `0 (*)` on empty
+      results without `GROUP BY`.
+    
+    - Fixed `provenance_cmp` function failing with "function
+      uuid_ns_provsql() does not exist" when `provsql` was not in
+      `search_path`.
+    
+    ## Improved Error Messages
+    
+    - `provenance_evaluate` on unsupported gate types now reports the
+      specific gate type and suggests using compiled semirings.
+    
+    - Subquery errors now read “Subqueries (EXISTS, IN, scalar subquery)
+      not supported” instead of the misleading “Subqueries in WHERE
+      clause”.
+    
+    - Clear error messages for unsupported operations on aggregate
+      results: `DISTINCT` on aggregates, `UNION`/`EXCEPT`
+      (non-ALL) with aggregates, `ORDER BY`/`GROUP BY` on aggregate
+      results from subqueries.
+    
+    - Dropped redundant “by provsql” suffix from all error messages (the
+      ”ProvSQL:” prefix is already present).
+    
+    ## Documentation
+    
+    - Updated supported/unsupported SQL features list with accurate
+      coverage based on systematic testing.
+    
+    - Added documentation for `INSERT ... SELECT` provenance
+      propagation.
+    
+    - Expanded aggregation documentation with examples of casts, window
+      functions, `COALESCE`, and `GREATEST` on aggregate results.
+    
+    - Added workaround guidance for unsupported features (use
+      `LATERAL` for correlated subqueries, explicit cast for
+      comparison on aggregates).
+
 - version: "1.1.0"
   date: 2026-04-09
   tag: "v1.1.0"
