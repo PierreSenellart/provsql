@@ -26,7 +26,7 @@
 #include "semiring/Why.h"
 
 /**
- * @brief Evaluate the HAVING sub-circuit at @p g over the Formula semiring.
+ * @brief Evaluate the HAVING sub-circuit at @p g over the Formula (symbolic representation).
  *
  * @param c        The generic circuit containing gate @p g.
  * @param g        Root gate of the HAVING sub-circuit.

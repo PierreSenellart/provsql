@@ -1,11 +1,11 @@
 /**
  * @file semiring/Formula.h
- * @brief Symbolic formula semiring producing readable provenance expressions.
+ * @brief Symbolic representation of provenance as a human-readable formula.
  *
- * The @c Formula semiring (@c std::string, @f$\oplus@f$, @f$\otimes@f$,
- * "𝟘", "𝟙") represents provenance as a human-readable symbolic
- * expression using Unicode semiring symbols.  It is primarily used for
- * debugging and testing.
+ * The @c Formula pseudo-semiring (@c std::string, @f$\oplus@f$, @f$\otimes@f$,
+ * "𝟘", "𝟙") produces a symbolic representation of provenance using
+ * Unicode semiring symbols.  It is primarily used for debugging and
+ * testing.
  *
  * Each gate evaluates to a string:
  * - @c zero()   → "𝟘"
@@ -60,9 +60,9 @@ static std::string join(Range const& elements, const char *const delimiter) {
 
 namespace semiring {
 /**
- * @brief Symbolic provenance formula semiring over @c std::string.
+ * @brief Symbolic provenance representation over @c std::string.
  *
- * Evaluates circuits to human-readable Unicode provenance formulas.
+ * Evaluates circuits to human-readable Unicode formulas.
  * Supports all optional operations (@c cmp, @c semimod, @c agg,
  * @c value) in addition to the mandatory ones.
  */

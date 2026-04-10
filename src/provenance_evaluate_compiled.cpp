@@ -11,7 +11,7 @@
  * Supported semirings (selected by the @p semiring argument):
  * - @c "boolean"   → @c semiring::Boolean
  * - @c "counting"  → @c semiring::Counting
- * - @c "formula"   → @c semiring::Formula (symbolic expression)
+ * - @c "formula"   → @c semiring::Formula (symbolic representation as a formula)
  * - @c "why"       → @c semiring::Why (witness sets)
  * - @c "boolexpr"  → @c semiring::BoolExpr (Boolean circuit for probability)
  *

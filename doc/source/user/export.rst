@@ -4,13 +4,13 @@ Provenance Export
 ProvSQL can export provenance circuits in standard or visual formats for
 use in external tools or for inspection.
 
-Formula Export
----------------
+Symbolic Representation
+------------------------
 
-:sqlfunc:`sr_formula` returns the provenance of a query result as a
-human-readable algebraic formula. Each leaf token is replaced by its
-mapped value, and the circuit operations are rendered using ``+``
-(disjunction) and ``×`` (conjunction):
+:sqlfunc:`sr_formula` returns a symbolic representation of the provenance
+as a human-readable formula.  Each leaf token is replaced by its
+mapped value, and the circuit operations are rendered using ``⊕``
+and ``⊗``:
 
 .. code-block:: postgresql
 

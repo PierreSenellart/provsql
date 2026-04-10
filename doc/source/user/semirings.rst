@@ -45,11 +45,11 @@ semiring, returning a human-readable propositional formula:
 This is used as the basis for probability computation.
 
 
-Formula Semiring
------------------
+Symbolic Representation (as a Formula)
+----------------------------------------
 
-:sqlfunc:`sr_formula` returns the provenance as an algebraic formula using
-a pseudo-semiring using symbols ``⊕`` and ``⊗``:
+:sqlfunc:`sr_formula` returns a symbolic representation of the provenance
+as a human-readable formula using symbols ``⊕`` and ``⊗``:
 
 .. code-block:: postgresql
 
@@ -152,7 +152,7 @@ delta operations are plain functions.  See the security semiring example
 above for a complete illustration.  Additional examples can be found in
 the test suite: :download:`test/sql/security.sql <../../../test/sql/security.sql>`
 (security semiring) and :download:`test/sql/formula.sql <../../../test/sql/formula.sql>`
-(formula semiring).
+(symbolic representation as a formula).
 
 For queries involving aggregation (``GROUP BY``), use
 :sqlfunc:`aggregation_evaluate` instead, which additionally takes the names

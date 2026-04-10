@@ -2,7 +2,7 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
-/* The provenance formula m-semiring */
+/* Symbolic representation of provenance (as a formula) */
 CREATE TYPE formula_state AS (
   formula text,
   nbargs int
