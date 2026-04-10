@@ -126,12 +126,67 @@ semiring plus and times operations. For example, given a type
                                      'security_plus', 'security_times')
     FROM (SELECT DISTINCT city FROM personnel) t;
 
-Custom Semirings
------------------
+Custom Semirings with ``provenance_evaluate``
+-----------------------------------------------
 
-Advanced users can define custom semirings in SQL and pass them to
-:sqlfunc:`provenance_evaluate` directly, as shown in the security semiring
-example above.
+Advanced users can define custom semirings in SQL and evaluate them
+using ``provenance_evaluate``.  The function takes a provenance token,
+a mapping table, a zero element, and the names of aggregate functions
+implementing the semiring operations:
+
+.. code-block:: postgresql
+
+    provenance_evaluate(
+        token UUID,           -- provenance token to evaluate
+        token2value regclass, -- mapping table (token → value)
+        element_one,          -- identity element (type determines the semiring value type)
+        plus_function,        -- name of the ⊕ aggregate
+        times_function,       -- name of the ⊗ aggregate
+        monus_function,       -- name of the ⊖ function (optional, for m-semirings)
+        delta_function        -- name of the δ function (optional, for δ-semirings)
+    )
+
+The plus and times operations must be defined as PostgreSQL aggregate
+functions with a two-argument state transition function.  The monus and
+delta operations are plain functions.  See the security semiring example
+above for a complete illustration.  Additional examples can be found in
+the test suite: :download:`test/sql/security.sql <../../../test/sql/security.sql>`
+(security semiring) and :download:`test/sql/formula.sql <../../../test/sql/formula.sql>`
+(formula semiring).
+
+For queries involving aggregation (``GROUP BY``), use
+``aggregation_evaluate`` instead, which additionally takes the names
+of an aggregate finalization function and a semimodule operation:
+
+.. code-block:: postgresql
+
+    aggregation_evaluate(
+        token,                -- aggregate result (agg_token)
+        token2value,          -- mapping table
+        agg_final_function,   -- finalization function for the aggregate
+        agg_function,         -- aggregate function for group values
+        semimod_function,     -- semimodule scalar multiplication
+        element_one,          -- identity element
+        plus_function,
+        times_function,
+        monus_function,       -- optional
+        delta_function        -- optional
+    )
+
+See :download:`test/sql/aggregation.sql <../../../test/sql/aggregation.sql>`
+for a complete example of ``aggregation_evaluate`` usage.
+
+.. note::
+
+    ``provenance_evaluate`` and ``aggregation_evaluate`` are PL/pgSQL
+    functions that traverse the provenance circuit recursively.  They
+    do not support ``cmp`` gates introduced by ``HAVING`` clauses;
+    queries with ``HAVING`` will produce an error.  The built-in
+    compiled semirings (``sr_formula``, ``sr_counting``, etc.) are
+    implemented in C, support all gate types including ``HAVING``, and
+    are significantly faster.  Prefer compiled semirings when available;
+    use ``provenance_evaluate`` for semirings not covered by the
+    built-in set.
 
 Provenance Mappings
 --------------------

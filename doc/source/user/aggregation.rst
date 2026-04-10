@@ -80,6 +80,21 @@ Complex ``HAVING`` conditions that involve provenance-tracked aggregates
 (e.g., a ``HAVING`` on the result of a computation over an aggregate)
 are not fully supported and may produce incorrect results or an error.
 
+The ``choose`` Aggregate
+-------------------------
+
+The ``choose`` aggregate picks an arbitrary non-NULL value from a group.
+It is particularly useful for modelling mutually exclusive choices
+in a probabilistic setting: the provenance of the chosen value records
+which input tuple was selected, enabling correct probability computation
+over the choice.
+
+.. code-block:: postgresql
+
+    SELECT city, choose(position) AS sample_position
+    FROM employees
+    GROUP BY city;
+
 Grouping Sets
 --------------
 

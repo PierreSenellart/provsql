@@ -118,19 +118,32 @@ Default strategy (no second argument)
 Expected Values of Aggregates
 -------------------------------
 
-For aggregate queries (only with aggregates ``COUNT``, ``SUM``, ``MIN``, ``MAX``) over a
-probabilistic table, ProvSQL can compute the *expected value* of the
-aggregate:
+For aggregate queries over a probabilistic table, the ``expected``
+function computes the expected value of the aggregate result.  It
+supports ``COUNT``, ``SUM``, ``MIN``, and ``MAX``:
 
 .. code-block:: postgresql
 
     SELECT dept,
-           probability_evaluate(provenance(), 'possible-worlds') AS expected_count
-    FROM (
-        SELECT dept, COUNT(*), provenance()
-        FROM employees
-        GROUP BY dept
-    ) t;
+           expected(COUNT(*)) AS expected_count,
+           expected(SUM(salary)) AS expected_salary
+    FROM employees
+    GROUP BY dept;
+
+An optional second argument specifies a provenance condition for
+computing a *conditional* expectation E[aggregate | condition].  For
+instance, to compute the expected count within each group conditioned
+on the group existing (i.e., its provenance being true):
+
+.. code-block:: postgresql
+
+    SELECT dept,
+           expected(COUNT(*), provenance()) AS conditional_count
+    FROM employees
+    GROUP BY dept;
+
+Without the second argument, the expectation is unconditional.  With
+it, the result is normalized by the probability of the condition.
 
 HAVING with Probabilities
 --------------------------
