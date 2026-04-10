@@ -133,3 +133,14 @@ structure of the provenance circuit:
 
 Gate types include ``input``, ``plus``, ``times``, ``monus``, ``project``,
 ``eq``, ``agg``, ``semimod``, ``zero``, ``one``, and others.
+
+Additional inspection functions:
+
+- :sqlfunc:`identify_token` — given a provenance token, returns the source
+  table and row it originates from.
+- :sqlfunc:`get_infos` — returns the integer metadata attached to a gate
+  (e.g., aggregate function OID, comparison operator OID).
+- :sqlfunc:`get_extra` — returns the text metadata attached to a gate
+  (e.g., aggregate value, column positions for where-provenance).
+- :sqlfunc:`get_nb_gates` — returns the total number of gates in the
+  provenance circuit, useful for diagnosing circuit size and performance.

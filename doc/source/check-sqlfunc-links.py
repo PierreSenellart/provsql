@@ -74,10 +74,9 @@ INTERNAL_FUNCTIONS = {
     'gate_zero', 'gate_one', 'uuid_ns_provsql', 'epsilon',
     'reset_constants_cache', 'get_nb_gates',
     # Internal circuit inspection
-    'identify_token', 'sub_circuit_for_where', 'sub_circuit_with_desc',
-    # Internal gate manipulation (set_extra, get_extra, set_infos, get_infos
-    # are borderline but used in advanced scenarios)
-    'set_extra', 'get_extra', 'set_infos', 'get_infos',
+    'sub_circuit_for_where', 'sub_circuit_with_desc',
+    # Internal gate manipulation (set_* are dangerous for users)
+    'set_extra', 'set_infos',
     # Transition functions for aggregates
     'choose_function',
     'union_tstzintervals_plus', 'union_tstzintervals_plus_state',
