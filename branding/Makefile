@@ -22,15 +22,15 @@ favicon.pdf: favicon.tex
 
 favicon_render.png: favicon.pdf
 	$(PDFTOPPM) -r 600 favicon.pdf favicon_render
-	$(CONVERT) favicon_render-1.ppm -background white -alpha remove $@
+	$(CONVERT) favicon_render-1.ppm -background transparent -alpha set -fuzz 10% -transparent white $@
 	rm -f favicon_render-1.ppm
 
 favicon.ico: favicon_render.png
 	$(CONVERT) favicon_render.png \
-	  \( -clone 0 -resize  64x64  -gravity center -background white -extent  64x64  \) \
-	  \( -clone 0 -resize  48x48  -gravity center -background white -extent  48x48  \) \
-	  \( -clone 0 -resize  32x32  -gravity center -background white -extent  32x32  \) \
-	  \( -clone 0 -resize  16x16  -gravity center -background white -extent  16x16  \) \
+	  \( -clone 0 -resize  64x64  -gravity center -background transparent -extent  64x64  \) \
+	  \( -clone 0 -resize  48x48  -gravity center -background transparent -extent  48x48  \) \
+	  \( -clone 0 -resize  32x32  -gravity center -background transparent -extent  32x32  \) \
+	  \( -clone 0 -resize  16x16  -gravity center -background transparent -extent  16x16  \) \
 	  -delete 0 $@
 	rm -f favicon_render.png
 
