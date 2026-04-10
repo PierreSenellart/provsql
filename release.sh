@@ -84,7 +84,13 @@ cat > "$NOTES_FILE" <<EOF
 -
 EOF
 
-"${EDITOR:-vi}" "$NOTES_FILE"
+TEMPLATE_SUM=$(md5sum "$NOTES_FILE" | cut -d' ' -f1)
+
+"${EDITOR:-vim}" "$NOTES_FILE"
+
+EDITED_SUM=$(md5sum "$NOTES_FILE" | cut -d' ' -f1)
+[[ "$TEMPLATE_SUM" != "$EDITED_SUM" ]] \
+  || die "Release notes are unchanged from template; aborting."
 
 # Strip comment lines and leading/trailing blank lines
 NOTES=$(sed '/^<!--/d' "$NOTES_FILE" | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba}')
