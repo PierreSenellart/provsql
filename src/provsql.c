@@ -2521,6 +2521,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
  *
  * @param constants  Extension OID cache.
  * @param stmt       Root (or subtree) of the UNION @c SetOperationStmt.
+ * @param q          Outer query (to look up subquery RTEs for agg_token type updates).
  */
 static void process_set_operation_union(const constants_t *constants,
                                         SetOperationStmt *stmt,
