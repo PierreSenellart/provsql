@@ -126,11 +126,11 @@ semiring plus and times operations. For example, given a type
                                      'security_plus', 'security_times')
     FROM (SELECT DISTINCT city FROM personnel) t;
 
-Custom Semirings with ``provenance_evaluate``
------------------------------------------------
+Custom Semirings with :sqlfunc:`provenance_evaluate`
+------------------------------------------------------
 
 Advanced users can define custom semirings in SQL and evaluate them
-using ``provenance_evaluate``.  The function takes a provenance token,
+using :sqlfunc:`provenance_evaluate`.  The function takes a provenance token,
 a mapping table, a zero element, and the names of aggregate functions
 implementing the semiring operations:
 
@@ -155,7 +155,7 @@ the test suite: :download:`test/sql/security.sql <../../../test/sql/security.sql
 (formula semiring).
 
 For queries involving aggregation (``GROUP BY``), use
-``aggregation_evaluate`` instead, which additionally takes the names
+:sqlfunc:`aggregation_evaluate` instead, which additionally takes the names
 of an aggregate finalization function and a semimodule operation:
 
 .. code-block:: postgresql
@@ -174,18 +174,19 @@ of an aggregate finalization function and a semimodule operation:
     )
 
 See :download:`test/sql/aggregation.sql <../../../test/sql/aggregation.sql>`
-for a complete example of ``aggregation_evaluate`` usage.
+for a complete example of :sqlfunc:`aggregation_evaluate` usage.
 
 .. note::
 
-    ``provenance_evaluate`` and ``aggregation_evaluate`` are PL/pgSQL
-    functions that traverse the provenance circuit recursively.  They
-    do not support ``cmp`` gates introduced by ``HAVING`` clauses;
-    queries with ``HAVING`` will produce an error.  The built-in
-    compiled semirings (``sr_formula``, ``sr_counting``, etc.) are
-    implemented in C, support all gate types including ``HAVING``, and
-    are significantly faster.  Prefer compiled semirings when available;
-    use ``provenance_evaluate`` for semirings not covered by the
+    :sqlfunc:`provenance_evaluate` and :sqlfunc:`aggregation_evaluate`
+    are PL/pgSQL functions that traverse the provenance circuit
+    recursively.  They do not support ``cmp`` gates introduced by
+    ``HAVING`` clauses; queries with ``HAVING`` will produce an error.
+    The built-in compiled semirings (:sqlfunc:`sr_formula`,
+    :sqlfunc:`sr_counting`, etc.) are implemented in C, support all
+    gate types including ``HAVING``, and are significantly faster.
+    Prefer compiled semirings when available; use
+    :sqlfunc:`provenance_evaluate` for semirings not covered by the
     built-in set.
 
 Provenance Mappings

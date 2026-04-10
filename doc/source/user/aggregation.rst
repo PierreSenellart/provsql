@@ -83,7 +83,7 @@ are not fully supported and may produce incorrect results or an error.
 The ``choose`` Aggregate
 -------------------------
 
-The ``choose`` aggregate picks an arbitrary non-NULL value from a group.
+The :sqlfunc:`choose` aggregate picks an arbitrary non-NULL value from a group.
 It is particularly useful for modelling mutually exclusive choices
 in a probabilistic setting: the provenance of the chosen value records
 which input tuple was selected, enabling correct probability computation

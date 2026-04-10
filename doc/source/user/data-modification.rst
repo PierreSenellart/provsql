@@ -65,7 +65,7 @@ Undoing Updates
 ProvSQL provides an :sqlfunc:`undo` function that rolls back the
 provenance effects of a specific logged modification. Every
 provenance-enabled DML statement is recorded in the ``update_provenance``
-table; pass its ``provsql`` token to ``undo`` to reverse its effect:
+table; pass its ``provsql`` token to :sqlfunc:`undo` to reverse its effect:
 
 .. code-block:: sql
 

@@ -118,7 +118,7 @@ Default strategy (no second argument)
 Expected Values of Aggregates
 -------------------------------
 
-For aggregate queries over a probabilistic table, the ``expected``
+For aggregate queries over a probabilistic table, the :sqlfunc:`expected`
 function computes the expected value of the aggregate result.  It
 supports ``COUNT``, ``SUM``, ``MIN``, and ``MAX``:
 
