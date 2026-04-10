@@ -2548,8 +2548,8 @@ static void process_set_operation_union(const constants_t *constants,
         if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN) {
           lfirst_oid(lc_type) = constants->OID_TYPE_AGG_TOKEN;
         }
-        lc_type = lnext(stmt->colTypes, lc_type);
-        lc_te = lnext(rte->subquery->targetList, lc_te);
+        lc_type = my_lnext(stmt->colTypes, lc_type);
+        lc_te = my_lnext(rte->subquery->targetList, lc_te);
       }
     }
   }
