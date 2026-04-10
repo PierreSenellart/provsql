@@ -33,3 +33,12 @@ id|name|position|city|classification
 7|Susan|Analyst|Berlin|secret
 7|Susan|Analyst|Berlin|secret
 (14 rows)
+remove_provenance
+
+(1 row)
+level|grp|counting
+by_city|Berlin|1
+by_city|New York|1
+by_city|Paris|1
+total|all|1
+(4 rows)

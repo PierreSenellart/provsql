@@ -2496,16 +2496,37 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
  * @param stmt       Root (or subtree) of the UNION @c SetOperationStmt.
  */
 static void process_set_operation_union(const constants_t *constants,
-                                        SetOperationStmt *stmt) {
+                                        SetOperationStmt *stmt,
+                                        Query *q) {
   if (stmt->op != SETOP_UNION) {
     provsql_error("Unsupported mixed set operations");
   }
   if (IsA(stmt->larg, SetOperationStmt)) {
-    process_set_operation_union(constants, (SetOperationStmt *)(stmt->larg));
+    process_set_operation_union(constants, (SetOperationStmt *)(stmt->larg), q);
   }
   if (IsA(stmt->rarg, SetOperationStmt)) {
-    process_set_operation_union(constants, (SetOperationStmt *)(stmt->rarg));
+    process_set_operation_union(constants, (SetOperationStmt *)(stmt->rarg), q);
   }
+
+  /* Update colTypes for columns that became agg_token after rewriting.
+   * Use the left branch's subquery to detect agg_token columns. */
+  if (IsA(stmt->larg, RangeTblRef)) {
+    Index rtindex = ((RangeTblRef *)stmt->larg)->rtindex;
+    RangeTblEntry *rte = list_nth_node(RangeTblEntry, q->rtable, rtindex - 1);
+    if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL) {
+      ListCell *lc_type = list_head(stmt->colTypes);
+      ListCell *lc_te = list_head(rte->subquery->targetList);
+      while (lc_type != NULL && lc_te != NULL) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc_te);
+        if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN) {
+          lfirst_oid(lc_type) = constants->OID_TYPE_AGG_TOKEN;
+        }
+        lc_type = lnext(stmt->colTypes, lc_type);
+        lc_te = lnext(rte->subquery->targetList, lc_te);
+      }
+    }
+  }
+
   stmt->colTypes = lappend_oid(stmt->colTypes, constants->OID_TYPE_UUID);
   stmt->colTypmods = lappend_int(stmt->colTypmods, -1);
   stmt->colCollations = lappend_int(stmt->colCollations, 0);
@@ -3046,7 +3067,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
 
       if (stmt->op == SETOP_UNION) {
-        process_set_operation_union(constants, stmt);
+        process_set_operation_union(constants, stmt, q);
         has_union = true;
       } else if (stmt->op == SETOP_EXCEPT) {
         if (!transform_except_into_join(constants, q))
