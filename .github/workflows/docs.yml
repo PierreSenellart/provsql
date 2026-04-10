@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: apt update
-      - run: apt -y install python3-breathe python3-sphinx-rtd-theme python3-pybtex python3-sphinxcontrib.bibtex graphviz wget
+      - run: apt -y install python3-breathe python3-sphinx-rtd-theme python3-pybtex python3-sphinxcontrib.bibtex graphviz wget libpq-dev
       - run: |
           wget -q https://github.com/doxygen/doxygen/releases/download/Release_1_13_2/doxygen-1.13.2.linux.bin.tar.gz
           tar xzf doxygen-1.13.2.linux.bin.tar.gz
