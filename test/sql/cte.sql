@@ -47,6 +47,20 @@ SELECT remove_provenance('cte_result4');
 SELECT * FROM cte_result4 ORDER BY name;
 DROP TABLE cte_result4;
 
+-- CTE used inside UNION ALL branch
+CREATE TABLE cte_result5 AS
+  WITH eu AS (SELECT name, city FROM personnel WHERE city IN ('Paris','Berlin'))
+  SELECT name, city, sr_counting(provenance(), 'personnel_count') AS counting
+  FROM (
+    SELECT name, city FROM eu
+    UNION ALL
+    SELECT name, city FROM personnel WHERE city = 'New York'
+  ) t;
+
+SELECT remove_provenance('cte_result5');
+SELECT * FROM cte_result5 ORDER BY name;
+DROP TABLE cte_result5;
+
 -- Recursive CTE should error
 WITH RECURSIVE nums AS (
   SELECT 1 AS n, name FROM personnel WHERE id=1

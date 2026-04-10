@@ -363,6 +363,10 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList) {
           break;
         }
       }
+    } else if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL) {
+      /* Recurse into existing subqueries (e.g., UNION branches) to
+       * inline CTE references they may contain */
+      inline_ctes_in_rtable(r->subquery->rtable, cteList);
     }
   }
 }
@@ -400,10 +404,6 @@ static void inline_ctes(Query *q) {
  */
 static List *get_provenance_attributes(const constants_t *constants, Query *q) {
   List *prov_atts = NIL;
-
-  /* Inline non-recursive CTE references as subqueries so we can track
-   * provenance through them. */
-  inline_ctes(q);
 
   for(Index rteid = 1; rteid <= q->rtable->length; ++rteid) {
     RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, rteid-1);
@@ -3031,6 +3031,11 @@ static Query *process_query(const constants_t *constants, Query *q,
     // No FROM clause, we can skip this query
     return NULL;
   }
+
+  /* Inline non-recursive CTE references as subqueries so we can track
+   * provenance through them. Must happen before set operation handling
+   * since UNION/EXCEPT branches may reference CTEs. */
+  inline_ctes(q);
 
   {
     Bitmapset *removed_sortgrouprefs = NULL;

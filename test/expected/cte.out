@@ -34,4 +34,16 @@ name|counting
 Magdalen|1
 Nancy|1
 (2 rows)
+remove_provenance
+
+(1 row)
+name|city|counting
+Dave|Paris|1
+Ellen|Berlin|1
+John|New York|1
+Magdalen|Paris|1
+Nancy|Paris|1
+Paul|New York|1
+Susan|Berlin|1
+(7 rows)
 ERROR:  ProvSQL: Recursive CTEs not supported
