@@ -1,10 +1,14 @@
 \set ECHO none
 ERROR:  ProvSQL: provenance() called on a table without provenance
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported by provsql
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported by provsql
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported by provsql
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported by provsql
-ERROR:  ProvSQL: DISTINCT ON not supported by provsql
-ERROR:  ProvSQL: Inconsistent DISTINCT and GROUP BY clauses not supported by provsql
-ERROR:  ProvSQL: Set operations other than UNION and EXCEPT not supported by provsql
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: DISTINCT ON not supported
+ERROR:  ProvSQL: Inconsistent DISTINCT and GROUP BY clauses not supported
+ERROR:  ProvSQL: Set operations other than UNION and EXCEPT not supported
 ERROR:  ProvSQL: Unsupported chain of EXCEPT operations
+ERROR:  ProvSQL: DISTINCT on aggregate results not supported
+ERROR:  ProvSQL: Non-ALL set operations (UNION, EXCEPT) on aggregate results not supported
+ERROR:  ProvSQL: ORDER BY on aggregate results from a subquery not supported
+ERROR:  ProvSQL: GROUP BY on aggregate results from a subquery not supported

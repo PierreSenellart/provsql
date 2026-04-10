@@ -296,6 +296,33 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
         context.varattno = attno;
         query_tree_mutator(q, aggregation_type_mutator, &context,
                            QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
+
+        /* Check if the retyped column is used in ORDER BY or GROUP BY */
+        {
+          ListCell *lc2;
+          foreach (lc2, q->targetList) {
+            TargetEntry *outer_te = (TargetEntry *)lfirst(lc2);
+            if (IsA(outer_te->expr, Var)) {
+              Var *v = (Var *)outer_te->expr;
+              if (v->varno == rteid && v->varattno == attno &&
+                  outer_te->ressortgroupref > 0) {
+                ListCell *lc3;
+                foreach (lc3, q->sortClause) {
+                  SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
+                  if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
+                    provsql_error("ORDER BY on aggregate results from "
+                                   "a subquery not supported");
+                }
+                foreach (lc3, q->groupClause) {
+                  SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
+                  if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
+                    provsql_error("GROUP BY on aggregate results from "
+                                   "a subquery not supported");
+                }
+              }
+            }
+          }
+        }
       }
     }
     ++attno;
@@ -323,7 +350,7 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList) {
         CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc2);
         if (strcmp(cte->ctename, r->ctename) == 0) {
           if (cte->cterecursive) {
-            provsql_error("Recursive CTEs not supported by provsql");
+            provsql_error("Recursive CTEs not supported");
           } else {
             r->rtekind = RTE_SUBQUERY;
             r->subquery = copyObject((Query *)cte->ctequery);
@@ -463,7 +490,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       } else { // Semijoin (should be feasible, but check whether the second
                // provenance information is available) Antijoin (feasible with
                // negation)
-        provsql_error("JOIN type not supported by provsql");
+        provsql_error("JOIN type not supported");
       }
     } else if (r->rtekind == RTE_FUNCTION) {
       ListCell *lc;
@@ -481,7 +508,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
           }
         } else {
           provsql_error("FROM function with multiple output "
-                        "attributes not supported by provsql");
+                        "attributes not supported");
         }
 
         attid += func->funccolcount;
@@ -494,7 +521,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       // groupClause
 #endif
     } else {
-      provsql_error("FROM clause unsupported by provsql");
+      provsql_error("FROM clause not supported");
     }
   }
 
@@ -704,7 +731,7 @@ static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
     /* In some cases, there can be an OR or a NOT specified with ON clause */
     if (be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
       provsql_error("Boolean operators OR and NOT in a join...on "
-                    "clause are not supported by provsql");
+                    "clause are not supported");
     } else {
       ListCell *lc2;
       foreach (lc2, be->args) {
@@ -3027,6 +3054,17 @@ static Query *process_query(const constants_t *constants, Query *q,
 
       SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
       if (!stmt->all) {
+        /* Check if any branch has aggregates — non-ALL set operations
+         * on aggregate results are not supported because agg_token
+         * lacks comparison operators for deduplication */
+        ListCell *lc_rte;
+        foreach (lc_rte, q->rtable) {
+          RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc_rte);
+          if (rte->rtekind == RTE_SUBQUERY && rte->subquery &&
+              rte->subquery->hasAggs)
+            provsql_error("Non-ALL set operations (UNION, EXCEPT) on "
+                           "aggregate results not supported");
+        }
         q = rewrite_non_all_into_external_group_by(q);
         return process_query(constants, q, removed);
       }
@@ -3046,17 +3084,19 @@ static Query *process_query(const constants_t *constants, Query *q,
       return q;
 
     if (q->hasSubLinks) {
-      provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported by provsql");
+      provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
       supported = false;
     }
 
     if (supported && q->distinctClause) {
       if (q->hasDistinctOn) {
-        provsql_error("DISTINCT ON not supported by provsql");
+        provsql_error("DISTINCT ON not supported");
         supported = false;
+      } else if (q->hasAggs) {
+        provsql_error("DISTINCT on aggregate results not supported");
       } else if (list_length(q->distinctClause) < list_length(q->targetList)) {
         provsql_error("Inconsistent DISTINCT and GROUP BY clauses not "
-                       "supported by provsql");
+                       "supported");
         supported = false;
       } else {
         transform_distinct_into_group_by(q);
@@ -3075,7 +3115,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         has_difference = true;
       } else {
         provsql_error("Set operations other than UNION and EXCEPT not "
-                       "supported by provsql");
+                       "supported");
         supported = false;
       }
     }
@@ -3089,7 +3129,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (q->groupClause || list_length(q->groupingSets) > 1 ||
           ((GroupingSet *)linitial(q->groupingSets))->kind !=
           GROUPING_SET_EMPTY) {
-        provsql_error("GROUPING SETS, CUBE, and ROLLUP not supported by provsql");
+        provsql_error("GROUPING SETS, CUBE, and ROLLUP not supported");
         supported = false;
       } else {
         // Simple GROUP BY ()
@@ -3122,7 +3162,7 @@ static Query *process_query(const constants_t *constants, Query *q,
             if (sort->tleSortGroupRef == te->ressortgroupref) {
               if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
                 provsql_error("ORDER BY on the result of an aggregate function is "
-                               "not supported by ProvSQL");
+                               "not supported");
               break;
             }
           }

@@ -34,4 +34,4 @@ name|counting
 Magdalen|1
 Nancy|1
 (2 rows)
-ERROR:  ProvSQL: Recursive CTEs not supported by provsql
+ERROR:  ProvSQL: Recursive CTEs not supported

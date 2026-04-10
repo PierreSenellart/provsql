@@ -1,2 +1,2 @@
 \set ECHO none
-ERROR:  ProvSQL: GROUPING SETS, CUBE, and ROLLUP not supported by provsql
+ERROR:  ProvSQL: GROUPING SETS, CUBE, and ROLLUP not supported

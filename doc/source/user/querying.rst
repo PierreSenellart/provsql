@@ -58,9 +58,17 @@ will either raise an error or may cause incorrect provenance tracking:
 * ``INTERSECT``
 * ``DISTINCT ON``
 * ``GROUPING SETS``, ``CUBE``, ``ROLLUP``
+* **Operations on aggregate results requiring comparison or duplicate
+  elimination:** ``DISTINCT`` on aggregates, ``UNION``/``EXCEPT``
+  (non-ALL) with aggregates, ``ORDER BY`` or ``GROUP BY`` on aggregate
+  results from a subquery
 
 For negation or exclusion, use ``EXCEPT`` rather than ``NOT IN``.
 For correlated subqueries, ``LATERAL`` can be used as a workaround.
+For comparison or duplicate elimination on aggregate results, explicitly
+cast the aggregate column to its base type (e.g., ``cnt::bigint``),
+which extracts the value but loses the provenance information on that
+column.
 
 Provenance in Nested Queries
 -----------------------------
