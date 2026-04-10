@@ -45,6 +45,8 @@ The following SQL constructs are supported with full provenance tracking:
   (``ROW_NUMBER``, ``RANK``, ``SUM OVER``, ``LAG``, ``LEAD``, etc.
   — provenance stays per-row)
 * ``FILTER`` clause on aggregates
+* ``INSERT … SELECT`` (provenance propagated when target table is
+  provenance-tracked)
 
 Unsupported SQL Features
 -------------------------
@@ -93,6 +95,25 @@ The new table automatically inherits provenance from its source:
 
     CREATE TABLE derived AS
     SELECT name, dept FROM employees WHERE active;
+
+``INSERT … SELECT``
+---------------------
+
+When both the source and target tables are provenance-tracked,
+``INSERT … SELECT`` propagates provenance from the source query to the
+inserted rows:
+
+.. code-block:: sql
+
+    CREATE TABLE archive (name VARCHAR, city VARCHAR);
+    SELECT add_provenance('archive');
+    INSERT INTO archive SELECT name, city FROM employees WHERE dept = 'R&D';
+
+Each inserted row receives the provenance token computed by the source
+``SELECT``, rather than a fresh independent token.
+
+If the target table does not have a ``provsql`` column, a warning is
+emitted indicating that source provenance is lost.
 
 The ``provenance()`` Function
 ------------------------------

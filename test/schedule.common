@@ -19,6 +19,7 @@ test: active
 test: aggregation
 test: agg_distinct agg_order_by agg_arithmetic
 test: create_as
+test: insert_select_provenance
 test: no_zero_gate
 test: having_on_aggregation
 test: formula_on_having

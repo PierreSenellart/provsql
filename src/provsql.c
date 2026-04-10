@@ -3206,6 +3206,116 @@ static Query *process_query(const constants_t *constants, Query *q,
 }
 
 /* -------------------------------------------------------------------------
+ * INSERT ... SELECT provenance propagation
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Propagate provenance through INSERT ... SELECT.
+ *
+ * If the source SELECT involves provenance-tracked tables and the target
+ * table has a provsql column, rewrites the source SELECT to carry
+ * provenance and maps its provsql output to the target's provsql column,
+ * replacing the default uuid_generate_v4().
+ *
+ * If the target has no provsql column, emits a warning instead.
+ */
+static void process_insert_select(const constants_t *constants, Query *q) {
+  ListCell *lc;
+  Index src_rteid = 0;
+  RangeTblEntry *src_rte = NULL;
+  RangeTblEntry *tgt_rte;
+  AttrNumber provsql_attno = 0;
+  TargetEntry *provsql_te = NULL;
+
+  /* Find the source SELECT subquery with provenance */
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    ++src_rteid;
+    if (r->rtekind == RTE_SUBQUERY && r->subquery &&
+        has_provenance(constants, r->subquery)) {
+      src_rte = r;
+      break;
+    }
+  }
+
+  if (src_rte == NULL)
+    return;
+
+  /* Check if the target table has a provsql column */
+  tgt_rte = list_nth_node(RangeTblEntry, q->rtable, q->resultRelation - 1);
+  if (tgt_rte->rtekind == RTE_RELATION) {
+    AttrNumber attid = 1;
+    foreach (lc, tgt_rte->eref->colnames) {
+      if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) &&
+          get_atttype(tgt_rte->relid, attid) == constants->OID_TYPE_UUID)
+        provsql_attno = attid;
+      ++attid;
+    }
+  }
+
+  if (provsql_attno == 0) {
+    provsql_warning("INSERT ... SELECT on provenance-tracked "
+                     "tables: source provenance is not propagated "
+                     "to inserted rows");
+    return;
+  }
+
+  /* Find the provsql target entry and verify it's a UUID default */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resno == provsql_attno &&
+        exprType((Node *)te->expr) == constants->OID_TYPE_UUID) {
+      provsql_te = te;
+      break;
+    }
+  }
+
+  if (provsql_te == NULL)
+    return;
+
+  /* Rewrite the source SELECT to carry provenance */
+  {
+    bool *removed = NULL;
+    Query *new_subquery = process_query(constants, src_rte->subquery, &removed);
+    AttrNumber src_provsql_attno = 0;
+
+    if (new_subquery == NULL)
+      return;
+
+    src_rte->subquery = new_subquery;
+
+    /* Find the provsql column in the rewritten subquery, verify its type */
+    foreach (lc, new_subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME) &&
+          exprType((Node *)te->expr) == constants->OID_TYPE_UUID) {
+        src_provsql_attno = te->resno;
+        break;
+      }
+    }
+
+    if (src_provsql_attno == 0)
+      return;
+
+    /* Replace the target's provsql default with a Var from the source */
+    {
+      Var *v = makeNode(Var);
+      v->varno = src_rteid;
+      v->varattno = src_provsql_attno;
+      v->vartype = constants->OID_TYPE_UUID;
+      v->vartypmod = -1;
+      v->varcollid = InvalidOid;
+      v->location = -1;
+      provsql_te->expr = (Expr *)v;
+    }
+
+    /* Update the subquery RTE's column names to include provsql */
+    src_rte->eref->colnames = lappend(src_rte->eref->colnames,
+      makeString(pstrdup(PROVSQL_COLUMN_NAME)));
+  }
+}
+
+/* -------------------------------------------------------------------------
  * Planner hook & extension lifecycle
  * ------------------------------------------------------------------------- */
 
@@ -3228,7 +3338,11 @@ static PlannedStmt *provsql_planner(Query *q,
 #endif
                                     int cursorOptions,
                                     ParamListInfo boundParams) {
-  if (q->commandType == CMD_SELECT && q->rtable) {
+  if (q->commandType == CMD_INSERT && q->rtable) {
+    const constants_t constants = get_constants(false);
+    if (constants.ok)
+      process_insert_select(&constants, q);
+  } else if (q->commandType == CMD_SELECT && q->rtable) {
     const constants_t constants = get_constants(false);
 
     if (constants.ok && has_provenance(&constants, q)) {

@@ -1,0 +1,24 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+name|city|formula
+Dave|Paris|Dave
+Magdalen|Paris|Magdalen
+Nancy|Paris|Nancy
+(3 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+name1|name2|formula
+Dave|Magdalen|(Dave ⊗ Magdalen)
+Dave|Nancy|(Dave ⊗ Nancy)
+Magdalen|Nancy|(Magdalen ⊗ Nancy)
+(3 rows)
+WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
