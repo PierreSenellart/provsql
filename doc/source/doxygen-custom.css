@@ -99,3 +99,92 @@ tr.separator td { border-bottom: 1px solid #D6CCF0; }
 /* ---- Search ---- */
 #MSearchBox  { border: 1px solid #D6CCF0; }
 #MSearchField { font-family: 'Jost', 'Segoe UI', sans-serif; }
+
+/* ---- Mobile responsiveness ---- */
+@media screen and (max-width: 768px) {
+  /* Hide side nav tree and let content fill the screen */
+  #side-nav { display: none !important; }
+  #doc-content {
+    margin-left: 0 !important;
+    width: 100% !important;
+  }
+
+  /* Scale down body text */
+  body, table, div, p, dl {
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  /* Tighten header */
+  #titlearea { padding: 6px 8px; }
+  #projectlogo img { max-height: 40px; }
+  #projectname { font-size: 1.2rem; }
+  #projectbrief { font-size: 0.75rem; }
+
+  /* Wrap navigation tabs */
+  div.tabs, div.tabs2, div.tabs3 {
+    padding: 0 4px;
+  }
+  .tablist li { display: inline-block; }
+  .tablist a { font-size: 0.8rem; padding: 4px 6px; }
+
+  /* Prevent code blocks from overflowing */
+  div.fragment, pre.fragment {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  code, span.code, div.fragment, pre.fragment, div.line,
+  .memname, td.paramtype, td.paramname {
+    font-size: 13px;
+  }
+
+  /* Member documentation tables */
+  .memberdecls td, .fieldtable td, .fieldtable th {
+    display: block;
+    width: 100% !important;
+    box-sizing: border-box;
+  }
+  .memItemLeft, .memItemRight {
+    display: block;
+    width: auto !important;
+    padding: 2px 8px;
+  }
+  .memItemLeft { padding-bottom: 0; }
+  .memItemRight { padding-top: 0; }
+
+  /* Content area padding */
+  div.contents { padding: 8px; }
+  .textblock { overflow-x: auto; }
+
+  /* Graphs / images */
+  div.center img, div.dynheader img, .dotgraph img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Search box */
+  #MSearchBox { max-width: 150px; }
+
+  /* Footer */
+  #provsql-back-link { font-size: 0.8rem; padding: 0.5em; }
+}
+
+@media screen and (max-width: 480px) {
+  body, table, div, p, dl {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.15rem; }
+  h3 { font-size: 1.05rem; }
+
+  code, span.code, div.fragment, pre.fragment, div.line,
+  .memname, td.paramtype, td.paramname {
+    font-size: 11px;
+  }
+
+  #projectname { font-size: 1rem; }
+  #projectlogo img { max-height: 30px; }
+}
