@@ -123,24 +123,43 @@ the second argument to semiring evaluation functions).
 Inspecting the Circuit
 -----------------------
 
-:sqlfunc:`get_gate_type` and :sqlfunc:`get_children` let you inspect the
-structure of the provenance circuit:
+ProvSQL represents provenance as a *circuit*: a directed acyclic graph
+(DAG) of *gates*.  By default, :sqlfunc:`add_provenance` associates an
+``input`` gate to each existing tuple, and newly inserted tuples
+also receive ``input`` gates.  However, tuples may carry more complex
+provenance -- for instance, rows created by ``INSERT ... SELECT`` or
+``CREATE TABLE AS`` inherit the provenance expression of the source
+query.
+
+As queries combine tuples, internal gates record the semiring
+operations that were applied:
+
+- ``plus`` (⊕): alternative derivations (``UNION``, ``DISTINCT``)
+- ``times`` (⊗): combined use (``JOIN``, cross product)
+- ``monus`` (⊖): difference (``EXCEPT``)
+- ``delta`` (δ): aggregation boundary (``GROUP BY``)
+- ``agg``, ``semimod``: aggregate provenance
+- ``project``, ``eq``: where-provenance (column tracking, equijoin)
+- ``cmp``: ``HAVING`` comparisons
+
+Two constant gates represent the semiring identity elements:
+:sqlfunc:`gate_zero` (additive identity, ``𝟘``) and
+:sqlfunc:`gate_one` (multiplicative identity, ``𝟙``).
+
+The following functions let you navigate and inspect the circuit:
+
+- :sqlfunc:`get_gate_type` -- returns the type of a gate.
+- :sqlfunc:`get_children` -- returns the child tokens of a gate.
+- :sqlfunc:`identify_token` -- given a provenance token, returns the
+  source table and row it originates from.
+- :sqlfunc:`get_infos` -- returns the integer metadata attached to a gate
+  (e.g., aggregate function OID, comparison operator OID).
+- :sqlfunc:`get_extra` -- returns the text metadata attached to a gate
+  (e.g., aggregate value, column positions for where-provenance).
+- :sqlfunc:`get_nb_gates` -- returns the total number of gates in the
+  circuit, useful for diagnosing circuit size and performance.
 
 .. code-block:: postgresql
 
-    SELECT provsql.get_gate_type(token);  -- returns the gate type
-    SELECT provsql.get_children(token);   -- returns the child tokens
-
-Gate types include ``input``, ``plus``, ``times``, ``monus``, ``project``,
-``eq``, ``agg``, ``semimod``, ``zero``, ``one``, and others.
-
-Additional inspection functions:
-
-- :sqlfunc:`identify_token` — given a provenance token, returns the source
-  table and row it originates from.
-- :sqlfunc:`get_infos` — returns the integer metadata attached to a gate
-  (e.g., aggregate function OID, comparison operator OID).
-- :sqlfunc:`get_extra` — returns the text metadata attached to a gate
-  (e.g., aggregate value, column positions for where-provenance).
-- :sqlfunc:`get_nb_gates` — returns the total number of gates in the
-  provenance circuit, useful for diagnosing circuit size and performance.
+    SELECT provsql.get_gate_type(provenance()) FROM mytable;
+    SELECT provsql.get_children(provenance()) FROM mytable;

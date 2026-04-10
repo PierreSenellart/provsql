@@ -59,6 +59,8 @@ _SQL_FUNC_MAP = {
     'get_extra':                '/doxygen-sql/html/group__gate__manipulation.html#ga12ce1bcd1609204d091d18d8912b840b',
     'get_nb_gates':             '/doxygen-sql/html/group__gate__manipulation.html#gad694ac39c8517985d39ac6c5fff72d80',
     'identify_token':           '/doxygen-sql/html/group__circuit__introspection.html#gad53f5ec3f9c5d86714dd6299e5a5185e',
+    'gate_zero':                '/doxygen-sql/html/group__internal__constants.html#ga13455054a9c6a90a9088d8666b105812',
+    'gate_one':                 '/doxygen-sql/html/group__internal__constants.html#ga27aad07a447f5b1f17018ac09ef4ea32',
 
     'set_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#ga17334fe1d3969d969eaa18e32a93b4e0',
     'get_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#gad8d28be45c1fa36422538d51c7624ce5',

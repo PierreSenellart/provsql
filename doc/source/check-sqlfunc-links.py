@@ -76,7 +76,7 @@ INTERNAL_FUNCTIONS = {
     'provenance_delta', 'provenance_semimod', 'provenance_aggregate',
     'provenance_evaluate_compiled',
     # Internal constants and utilities
-    'gate_zero', 'gate_one', 'uuid_ns_provsql', 'epsilon',
+    'uuid_ns_provsql', 'epsilon',
     'reset_constants_cache', 'get_nb_gates',
     # Internal circuit inspection
     'sub_circuit_for_where', 'sub_circuit_with_desc',
