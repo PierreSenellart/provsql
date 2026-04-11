@@ -117,7 +117,7 @@ Some tests depend on external tools that may not be installed (e.g.,
 To make these tests pass regardless of whether the tool is present,
 use psql's ``\if`` with a backtick-evaluated shell command:
 
-.. code-block:: text
+.. code-block:: psql
 
    \if `which d4 > /dev/null 2>&1 && echo true || echo false`
    -- test body that requires d4

@@ -118,6 +118,58 @@ remapping.  Because only the background worker writes, there are no
 concurrency issues within the mmap files themselves.
 
 
+Per-Backend Circuit Cache
+-------------------------
+
+Every access to the persistent circuit -- creating a gate,
+reading a gate type, fetching the children of a gate -- goes
+through the anonymous pipe to the mmap worker.  That pipe trip
+is cheap but not free, and for a query that touches thousands
+of gates the round-trips dominate the wall-clock cost of the
+SQL functions that wrap them.  :cfunc:`CircuitCache` (in
+:cfile:`CircuitCache.cpp`, with a C-linkage shim in
+:cfile:`circuit_cache.h`) is a small in-process cache whose
+sole purpose is to avoid those round-trips for gates that the
+same backend has seen recently.
+
+A cache entry stores a gate's UUID, its :cfunc:`gate_type`, and
+the list of its children.  The cache is backed by a Boost
+``multi_index_container`` with two indices: a sequenced index
+(used as FIFO eviction order) and a hashed-unique index on the
+UUID (for O(1) lookup).  It is bounded by a fixed byte budget;
+when inserting a new entry would exceed the budget,
+:cfunc:`CircuitCache::insert` drops the oldest one.  The cache
+is single-threaded: it lives as a file-scope singleton in
+:cfile:`CircuitCache.cpp`, so each PostgreSQL backend process
+has its own instance and there is no sharing between backends.
+
+The C functions in :cfile:`circuit_cache.h` that
+:cfile:`provsql_mmap.c` actually calls are:
+
+- :cfunc:`circuit_cache_create_gate` -- insert a gate into the
+  cache.  Returns ``true`` if the gate was *already* cached, in
+  which case the caller can skip the IPC write.  This is the
+  fast path for ``create_gate``: if a query allocates the same
+  gate twice in the same backend (easy to trigger with shared
+  sub-circuits), the second call is a hash-table lookup, not a
+  pipe write.
+
+- :cfunc:`circuit_cache_get_type` -- look up a gate's type.
+  Returns ``gate_invalid`` on a miss; the SQL wrapper then
+  falls back to an IPC read and, on success, re-enters the
+  gate into the cache so that subsequent lookups hit.
+
+- :cfunc:`circuit_cache_get_children` -- same pattern for the
+  children list, used by :sqlfunc:`get_children`.
+
+The cache is write-through, not write-back: every gate-creating
+call still reaches the mmap worker in the end (either directly,
+for a cache miss, or because an earlier call in the same
+backend wrote it through), so the persistent store always
+reflects the complete circuit even though each individual
+lookup may resolve locally.
+
+
 Reading Circuits Back
 ---------------------
 

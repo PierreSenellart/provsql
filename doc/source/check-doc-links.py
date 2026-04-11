@@ -19,11 +19,13 @@ conf_text = CONF_PY.read_text()
 # :sqlfunc: checks
 # ============================================================================
 
-# 1. Extract all :sqlfunc: references from .rst files
+# 1. Extract all :sqlfunc: references from .rst files (user + dev docs)
 sql_refs = set()
-for rst in USER_DOCS.glob("*.rst"):
-    for match in re.finditer(r":sqlfunc:`([^`]+)`", rst.read_text()):
-        sql_refs.add(match.group(1).rstrip("()"))
+for doc_dir in [USER_DOCS, DEV_DOCS]:
+    if doc_dir.exists():
+        for rst in doc_dir.glob("*.rst"):
+            for match in re.finditer(r":sqlfunc:`([^`]+)`", rst.read_text()):
+                sql_refs.add(match.group(1).rstrip("()"))
 
 # 2. Extract _SQL_FUNC_MAP keys and URLs from conf.py
 sql_map_block = conf_text.split("_SQL_FUNC_MAP")[1].split("}")[0]
@@ -76,23 +78,22 @@ INTERNAL_FUNCTIONS = {
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',
-    'provenance_delta', 'provenance_semimod', 'provenance_aggregate',
+    'provenance_delta', 'provenance_semimod',
     'provenance_evaluate_compiled',
     # Internal constants and utilities
     'uuid_ns_provsql', 'epsilon',
     'reset_constants_cache', 'get_nb_gates',
     # Internal circuit inspection
     'sub_circuit_for_where', 'sub_circuit_with_desc',
-    # Internal gate manipulation (set_* are dangerous for users,
-    # create_gate is low-level circuit construction)
-    'set_extra', 'set_infos', 'create_gate',
+    # Internal gate manipulation (set_* are dangerous for users)
+    'set_extra', 'set_infos',
     # Transition functions for aggregates
     'choose_function',
     'union_tstzintervals_plus', 'union_tstzintervals_plus_state',
     'union_tstzintervals_times', 'union_tstzintervals_times_state',
     'union_tstzintervals_monus',
     # Temporal internals
-    'replace_the_circuit', 'update_provenance',
+    'update_provenance',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
 }

@@ -128,12 +128,12 @@ and algorithms are in |cpp|.
 
 - :cfile:`Aggregation.h` / :cfile:`Aggregation.cpp` -- aggregate
   operator enum, accumulator interface, and built-in accumulators
-  (see :doc:`adding-aggregate`).
+  (see :doc:`aggregation`).
 
 *Probability, Shapley, knowledge compilation*
 
 - :cfile:`probability_evaluate.cpp` -- probability-method dispatcher
-  (see :doc:`adding-probability-method`).
+  (see :doc:`probability-evaluation`).
 - :cfile:`dDNNF.h` / :cfile:`dDNNF.cpp` -- d-DNNF data structure and
   linear-time probability evaluation.
 - :cfile:`dDNNFTreeDecompositionBuilder.h` /

@@ -166,6 +166,11 @@ After aggregation rewriting:
 - :cfunc:`insert_agg_token_casts` inserts type casts for
   :cfunc:`agg_token` values used in arithmetic or window functions.
 
+See :doc:`aggregation` for the semantics of the ``agg`` /
+``semimod`` / ``value`` gates produced here, and for the exact
+shape of the ``provenance_aggregate`` call that replaces each
+``Aggref``.
+
 Step 9: Expression Building -- ``make_provenance_expression``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -242,7 +247,7 @@ over an extended relational algebra on annotated relations;
 trees, so the mapping below is approximate rather than literal --
 the pipeline phases described earlier on this page interleave the
 rules with PostgreSQL-specific bookkeeping (range-table surgery,
-target-list rewriting, HAVING handling, where-provenance, ...).
+target-list rewriting, ``HAVING`` handling, where-provenance...).
 
 .. list-table::
    :header-rows: 1

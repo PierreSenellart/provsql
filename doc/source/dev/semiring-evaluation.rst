@@ -1,10 +1,11 @@
-Adding a New Semiring
-=====================
+Semiring Evaluation
+===================
 
 ProvSQL evaluates provenance circuits over arbitrary (m-)semirings.
 This page explains the semiring interface, walks through two
-existing implementations, and gives a step-by-step guide for adding
-a new one.
+existing implementations, gives a step-by-step guide for adding a
+new compiled semiring, and discusses the *symbolic representation*
+semirings used by tests and tutorials.
 
 .. note::
 
@@ -67,6 +68,8 @@ does not sensibly implement one of them can throw
 :cfunc:`SemiringException` from its override; evaluation will then
 fail *only* for queries that actually use the corresponding gate,
 and all other queries remain evaluable.
+
+.. _semiring-optional-methods:
 
 Optional Methods
 ^^^^^^^^^^^^^^^^
@@ -244,3 +247,41 @@ function), the call chain is:
 4. The ``pec_*`` helper instantiates the semiring class and calls
    ``GenericCircuit::evaluate<S>(root, mapping)``, which performs a
    post-order DAG traversal applying semiring operations at each gate.
+
+
+Symbolic Representation Semirings
+---------------------------------
+
+Some semirings -- in particular the *formula* semiring exposed by
+:sqlfunc:`sr_formula` -- do not compute a numeric or boolean value
+but rather render the provenance as a *symbolic expression*.  The
+formula semiring's carrier is ``std::string`` and its operations
+are concatenations: ``plus`` joins the children with ⊕, ``times``
+joins them with ⊗, and so on.  The result is a textual rendering
+of the provenance circuit suitable for inclusion in tests, slides,
+or tutorials.
+
+Two practical caveats follow from this:
+
+**Operand ordering is not deterministic.**  When ``plus`` (or any
+other commutative gate) walks its children, the order in which
+they are visited depends on internal traversal order, which can
+change between runs.  Tests that print symbolic representations
+must therefore *normalise* the operand order before comparing --
+typically with a small ``replace`` / ``regexp_replace`` that
+rewrites any of the legal orderings to a canonical one.  See
+``test/sql/union.sql`` and ``test/sql/distinct.sql`` for examples.
+
+**Symbolic semirings are not "real" semirings.**  They render the
+*structure* of the circuit but do not satisfy the semiring axioms
+in the usual sense (e.g. concatenation of strings is associative
+but not commutative, idempotent only in trivial cases, etc.).
+They are meant for human inspection and testing, not for any
+algorithmic use that depends on the algebraic properties of the
+result.  In particular, optional operations like ``cmp`` and
+``agg`` *can* be sensibly implemented on a symbolic semiring -- by
+rendering ``cmp(s1, op, s2)`` as ``"s1 op s2"`` -- which is what
+the formula semiring does, and is the main reason these optional
+operations exist at all in the :cfunc:`Semiring` interface.  See
+:ref:`semiring-optional-methods` above for the full story of why
+real semirings do not need to implement them.

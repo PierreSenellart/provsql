@@ -10,14 +10,24 @@ reachability, counting, probability, Shapley values, and more.
 This documentation is organized into three parts:
 
 * The :ref:`user-guide` explains how to install, configure, and use
-  ProvSQL from the SQL level.  Start here if you are new to ProvSQL.
+  ProvSQL from the SQL level.  Start here if you are new to
+  ProvSQL.
 
-* The :ref:`dev-guide` describes ProvSQL's internal architecture and
-  is aimed at contributors.  It covers the query rewriting pipeline,
-  memory management, the semiring interface, testing, and debugging.
+* The :ref:`dev-guide` describes ProvSQL's internal architecture
+  and is aimed at contributors.  It covers the PostgreSQL
+  extension concepts ProvSQL relies on, the architecture and
+  component map, the query rewriting pipeline, memory management,
+  the where-provenance and data-modification subsystems,
+  aggregation and semiring evaluation, probability computation,
+  coding conventions, testing, debugging, and the build system.
 
 * The :ref:`api-ref` provides auto-generated reference documentation
   for the SQL and C/C++ APIs (via Doxygen).
+
+.. toctree::
+   :hidden:
+
+   ProvSQL’s Documentation <self>
 
 .. _user-guide:
 
@@ -48,12 +58,16 @@ This documentation is organized into three parts:
    :caption: Developer Guide
 
    dev/introduction
+   dev/postgresql-primer
    dev/architecture
    dev/query-rewriting
    dev/memory
-   dev/adding-semiring
-   dev/adding-aggregate
-   dev/adding-probability-method
+   dev/where-provenance
+   dev/data-modification
+   dev/aggregation
+   dev/semiring-evaluation
+   dev/probability-evaluation
+   dev/coding-conventions
    dev/testing
    dev/debugging
    dev/build-system
