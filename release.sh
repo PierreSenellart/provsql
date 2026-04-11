@@ -7,7 +7,7 @@
 # Steps:
 #   1. Validate version is newer than existing tags
 #   2. Prompt for release notes in $EDITOR
-#   3. Update provsql.control, provsql.common.control, website/_data/releases.yml
+#   3. Update provsql.common.control, website/_data/releases.yml, CITATION.cff
 #   4. Commit, create signed tag, push, create GitHub release
 
 set -euo pipefail
@@ -28,6 +28,8 @@ git config user.signingkey > /dev/null 2>&1 \
   || die "Must be run from the root of the provsql repository"
 [[ -f website/_data/releases.yml ]] \
   || die "website/_data/releases.yml not found"
+[[ -f CITATION.cff ]] \
+  || die "CITATION.cff not found"
 GH_REPO=$(git remote get-url origin | sed 's|git@github.com:||;s|\.git$||')
 
 # 1. Parse & validate version
@@ -124,12 +126,18 @@ YAML
 cat "$RELEASES_FILE" >> "$TMP_YAML"
 mv "$TMP_YAML" "$RELEASES_FILE"
 
-# 6. Commit
+# 6. Update CITATION.cff (top-level version and date-released only —
+#    anything under preferred-citation is indented and unaffected)
 
-git add provsql.common.control "$RELEASES_FILE"
+sed -i "s/^version: .*/version: \"$VERSION\"/" CITATION.cff
+sed -i "s/^date-released: .*/date-released: \"$TODAY\"/" CITATION.cff
+
+# 7. Commit
+
+git add provsql.common.control "$RELEASES_FILE" CITATION.cff
 git commit -m "Release version $VERSION"
 
-# 7. Signed tag
+# 8. Signed tag
 
 # Build tag message: first line of notes as subject, full notes as body
 TAG_SUBJECT="ProvSQL $VERSION"
@@ -137,7 +145,7 @@ git tag -s "$TAG" -m "$TAG_SUBJECT"$'\n\n'"$NOTES"
 
 echo "Created signed tag $TAG"
 
-# 8. Push
+# 9. Push
 
 read -r -p "Push commit and tag to origin? [Y/n] " PUSH_CONFIRM
 if [[ ! "$PUSH_CONFIRM" =~ ^[Nn]$ ]]; then
@@ -145,7 +153,7 @@ if [[ ! "$PUSH_CONFIRM" =~ ^[Nn]$ ]]; then
   git push origin "$TAG"
 fi
 
-# 9. GitHub Release
+# 10. GitHub Release
 
 read -r -p "Create GitHub Release? [Y/n] " GH_CONFIRM
 if [[ ! "$GH_CONFIRM" =~ ^[Nn]$ ]]; then
@@ -156,7 +164,7 @@ if [[ ! "$GH_CONFIRM" =~ ^[Nn]$ ]]; then
   echo "GitHub release created: https://github.com/PierreSenellart/provsql/releases/tag/$TAG"
 fi
 
-# 10. Post-release: bump default_version on master to next -dev
+# 11. Post-release: bump default_version on master to next -dev
 
 # Default: bump minor, reset patch, append -dev (e.g. 1.0.0 -> 1.1.0-dev).
 # Override by setting NEXT_VERSION in the environment (e.g. NEXT_VERSION=1.0.1-dev).

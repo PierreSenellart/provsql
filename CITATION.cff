@@ -1,0 +1,85 @@
+cff-version: 1.2.0
+title: "ProvSQL: Semiring Provenance and Probability Management for PostgreSQL"
+message: >-
+  If you use ProvSQL in academic work, please cite the ICDE 2026
+  paper referenced below.
+type: software
+authors:
+  - family-names: Senellart
+    given-names: Pierre
+    orcid: "https://orcid.org/0000-0002-7909-5369"
+    affiliation: "DI ENS, ENS-PSL, CNRS, Inria, Paris, France"
+    website: "https://pierre.senellart.com"
+  - family-names: Amarilli
+    given-names: Antoine
+    orcid: "https://orcid.org/0000-0002-7977-4441"
+    affiliation: "Inria Lille, D-DAL, Lille, France"
+    website: "https://a3nm.net"
+  - family-names: Djeffal
+    given-names: Belkis
+    orcid: "https://orcid.org/0009-0004-4945-7965"
+    affiliation: "Inria Lille, SPIRALS, Lille, France"
+  - family-names: Jachiet
+    given-names: Louis
+    orcid: "https://orcid.org/0000-0002-8277-6552"
+    affiliation: "Télécom Paris, Institut Polytechnique de Paris, Paris, France"
+    website: "https://louis.jachiet.com"
+  - family-names: Karmakar
+    given-names: Pratik
+    orcid: "https://orcid.org/0009-0008-1111-8801"
+    affiliation: "National University of Singapore, Singapore"
+    website: "https://pratik2358.github.io"
+  - family-names: Lafosse
+    given-names: Baptiste
+    website: "https://github.com/BaptisteLafosse"
+  - family-names: Maniu
+    given-names: Silviu
+    orcid: "https://orcid.org/0000-0002-8623-1533"
+    affiliation: "LIG, Université Grenoble Alpes, Grenoble, France"
+    website: "https://silviu.maniu.info"
+  - family-names: Ramusat
+    given-names: Yann
+    orcid: "https://orcid.org/0000-0002-7181-8331"
+    affiliation: "Devoteam, Paris, France"
+    website: "https://yannramusat.github.io"
+  - family-names: Sen
+    given-names: Aryak
+    orcid: "https://orcid.org/0009-0009-2261-682X"
+    affiliation: "LIG, Université Grenoble Alpes, Grenoble, France"
+    website: "https://github.com/Aryak320"
+  - family-names: Widiaatmaja
+    given-names: Albert Ariel
+    orcid: "https://orcid.org/0009-0009-3291-2585"
+    affiliation: "BlockTech, Singapore"
+    website: "https://github.com/albertarielw"
+repository-code: "https://github.com/PierreSenellart/provsql"
+url: "https://provsql.org"
+license: MIT
+version: "1.2.0"
+date-released: "2026-04-10"
+keywords:
+  - provenance
+  - probabilistic databases
+  - PostgreSQL
+  - semiring
+  - knowledge compilation
+  - Shapley values
+preferred-citation:
+  type: conference-paper
+  title: "ProvSQL: A General System for Keeping Track of the Provenance and Probability of Data"
+  authors:
+    - family-names: Sen
+      given-names: Aryak
+      orcid: "https://orcid.org/0009-0009-2261-682X"
+    - family-names: Maniu
+      given-names: Silviu
+      orcid: "https://orcid.org/0000-0002-8623-1533"
+    - family-names: Senellart
+      given-names: Pierre
+      orcid: "https://orcid.org/0000-0002-7909-5369"
+  collection-title: "Proc. 42nd IEEE International Conference on Data Engineering (ICDE)"
+  year: 2026
+  month: 5
+  location:
+    name: "Montréal, Canada"
+  url: "https://arxiv.org/abs/2504.12058"
