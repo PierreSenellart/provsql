@@ -6,6 +6,7 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19512786.svg)](https://doi.org/10.5281/zenodo.19512786)
 [![Archived in Software Heritage](https://archive.softwareheritage.org/badge/origin/https://github.com/PierreSenellart/provsql/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/PierreSenellart/provsql)
+[![Docker Image Version](https://img.shields.io/docker/v/inriavalda/provsql?sort=semver&label=docker)](https://hub.docker.com/r/inriavalda/provsql)
 
 ProvSQL adds (m-)semiring provenance and uncertainty management to PostgreSQL,
 enabling computation of probabilities, Shapley values, and various semiring

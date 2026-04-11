@@ -15,6 +15,12 @@ queries – no changes to the application or schema are required.
 For a full introduction to the concepts and capabilities, see the
 [Introduction](/docs/user/introduction.html) in the user documentation.
 
+A pre-built container is also published on Docker Hub as
+[`inriavalda/provsql`](https://hub.docker.com/r/inriavalda/provsql), for
+a zero-install trial.  See the [Docker
+instructions](/docs/user/getting-provsql.html#docker-container) in the
+installation guide.
+
 ## Query Rewriting {#query-rewriting}
 
 When a table is registered for provenance tracking via
