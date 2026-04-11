@@ -40,6 +40,27 @@ annotated databases, and relational algebra semantics – have been formally
 verified in Lean 4.
 See the [Lean formalization](/lean/) page for details.
 
+## Archival and Citation {#archival}
+
+ProvSQL is continuously archived by
+[Software Heritage](https://www.softwareheritage.org/), the universal
+software preservation infrastructure. You can browse the archived
+source tree at
+[archive.softwareheritage.org](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/PierreSenellart/provsql).
+
+To cite ProvSQL in academic work, click the
+[**Cite this repository**](https://github.com/PierreSenellart/provsql)
+button on the GitHub repository page, or read the
+[`CITATION.cff`](https://github.com/PierreSenellart/provsql/blob/master/CITATION.cff)
+file directly. The canonical reference is:
+
+> Aryak Sen, Silviu Maniu, Pierre Senellart.
+> **ProvSQL: A General System for Keeping Track of the Provenance and
+> Probability of Data.**
+> *Proc. 42nd IEEE International Conference on Data Engineering (ICDE),
+> Montréal, Canada, May 2026.*
+> [arXiv:2504.12058](https://arxiv.org/abs/2504.12058)
+
 ## Architecture and More {#architecture}
 
 - [SQL API reference](/doxygen-sql/html/) – user-facing SQL functions
