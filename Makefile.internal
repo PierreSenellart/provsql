@@ -24,15 +24,19 @@ BASE_INSTALL = sql/$(EXTENSION)--1.0.0.sql
 # file is matched by the existing sql/provsql--*.sql gitignore pattern
 # and is therefore not committed.
 #
-# In the unusual case of building a dev version from a source tarball
-# without a reachable git tag, LATEST_RELEASE can be overridden on the
-# make command line (e.g. 'make LATEST_RELEASE=1.2.1').
+# If the current working tree has no reachable git tag (e.g. a Docker
+# build that COPYs the source without .git, or a source tarball), the
+# dev-cycle upgrade script cannot be generated and the
+# extension_upgrade regression test is skipped.  LATEST_RELEASE can be
+# overridden on the make command line to force a specific target:
+#   make LATEST_RELEASE=1.2.1
 ifneq ($(findstring -dev,$(EXTVERSION)),)
 LATEST_RELEASE = $(shell git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null | sed 's/^v//')
-ifeq ($(LATEST_RELEASE),)
-$(error Building development version '$(EXTVERSION)' but no release tag is reachable via 'git describe'. Use a git checkout that has tags fetched, or override LATEST_RELEASE on the make command line, e.g. 'make LATEST_RELEASE=1.2.1')
-endif
+ifneq ($(LATEST_RELEASE),)
 DEV_UPGRADE = sql/$(EXTENSION)--$(LATEST_RELEASE)--$(EXTVERSION).sql
+else
+SKIP_UPGRADE_TEST = yes
+endif
 endif
 
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(BASE_INSTALL) $(UPGRADE_SCRIPTS) $(DEV_UPGRADE)
@@ -138,7 +142,9 @@ test/schedule: $(wildcard test/schedule.*)
 	if [ $(PGVER_MAJOR) -ge 14 ]; then \
 		cat test/schedule.14 >> test/schedule; \
 	fi
+ifneq ($(SKIP_UPGRADE_TEST),yes)
 	echo "test: extension_upgrade" >> test/schedule
+endif
 
 $(EXTENSION).control: $(EXTENSION).common.control
 	if [ $(PGVER_MAJOR) -lt 13 ]; then \
