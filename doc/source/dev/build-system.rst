@@ -381,7 +381,11 @@ creating a new release.  It:
    previous tag, aborting otherwise).
 4. Updates ``default_version`` in ``provsql.common.control``,
    ``version:`` and ``date-released:`` in ``CITATION.cff``, and
-   prepends a new entry to ``website/_data/releases.yml``.
+   prepends a new entry to both ``website/_data/releases.yml`` and
+   ``CHANGELOG.md`` (the repo-root changelog mirrors the website
+   release-notes block, with the first
+   ``## What's new in <version>`` heading stripped to avoid
+   duplicating the release heading).
 5. Commits the bumped files, creates a **GPG-signed** annotated tag
    ``vX.Y.Z``, and offers to push the commit and tag.
 6. Offers to create a GitHub Release via ``gh release create`` using

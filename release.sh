@@ -7,7 +7,8 @@
 # Steps:
 #   1. Validate version is newer than existing tags
 #   2. Prompt for release notes in $EDITOR
-#   3. Update provsql.common.control, website/_data/releases.yml, CITATION.cff
+#   3. Update provsql.common.control, website/_data/releases.yml,
+#      CITATION.cff, and CHANGELOG.md
 #   4. Commit, create signed tag, push, create GitHub release
 
 set -euo pipefail
@@ -30,6 +31,8 @@ git config user.signingkey > /dev/null 2>&1 \
   || die "website/_data/releases.yml not found"
 [[ -f CITATION.cff ]] \
   || die "CITATION.cff not found"
+[[ -f CHANGELOG.md ]] \
+  || die "CHANGELOG.md not found"
 GH_REPO=$(git remote get-url origin | sed 's|git@github.com:||;s|\.git$||')
 
 # 1. Parse & validate version
@@ -171,12 +174,40 @@ mv "$TMP_YAML" "$RELEASES_FILE"
 sed -i "s/^version: .*/version: \"$VERSION\"/" CITATION.cff
 sed -i "s/^date-released: .*/date-released: \"$TODAY\"/" CITATION.cff
 
-# 7. Commit
+# 7. Prepend the new release to CHANGELOG.md, mirroring the
+#    website/_data/releases.yml entry we just added.  The new block
+#    consists of a "## [VERSION] - DATE" heading followed by the
+#    release notes, with any leading "## What's new in VERSION" line
+#    from the notes stripped (it would duplicate the heading).
 
-git add provsql.common.control "$RELEASES_FILE" CITATION.cff
+CHANGELOG_FILE="CHANGELOG.md"
+CHANGELOG_ENTRY=$(mktemp)
+TMP_CHANGELOG=$(mktemp)
+
+{
+  echo "## [$VERSION] - $TODAY"
+  echo ""
+  echo "$NOTES" | sed "/^## What's new in /d" | sed -e '/./,$!d'
+  echo ""
+} > "$CHANGELOG_ENTRY"
+
+awk -v entry="$CHANGELOG_ENTRY" '
+  /^## \[/ && !done {
+    while ((getline line < entry) > 0) print line
+    close(entry)
+    done = 1
+  }
+  { print }
+' "$CHANGELOG_FILE" > "$TMP_CHANGELOG"
+mv "$TMP_CHANGELOG" "$CHANGELOG_FILE"
+rm -f "$CHANGELOG_ENTRY"
+
+# 8. Commit
+
+git add provsql.common.control "$RELEASES_FILE" CITATION.cff CHANGELOG.md
 git commit -m "Release version $VERSION"
 
-# 8. Signed tag
+# 9. Signed tag
 
 # Build tag message: first line of notes as subject, full notes as body
 TAG_SUBJECT="ProvSQL $VERSION"
@@ -184,7 +215,7 @@ git tag -s "$TAG" -m "$TAG_SUBJECT"$'\n\n'"$NOTES"
 
 echo "Created signed tag $TAG"
 
-# 9. Push
+# 10. Push
 
 read -r -p "Push commit and tag to origin? [Y/n] " PUSH_CONFIRM
 if [[ ! "$PUSH_CONFIRM" =~ ^[Nn]$ ]]; then
@@ -192,7 +223,7 @@ if [[ ! "$PUSH_CONFIRM" =~ ^[Nn]$ ]]; then
   git push origin "$TAG"
 fi
 
-# 10. GitHub Release
+# 11. GitHub Release
 
 read -r -p "Create GitHub Release? [Y/n] " GH_CONFIRM
 if [[ ! "$GH_CONFIRM" =~ ^[Nn]$ ]]; then
@@ -203,7 +234,7 @@ if [[ ! "$GH_CONFIRM" =~ ^[Nn]$ ]]; then
   echo "GitHub release created: https://github.com/PierreSenellart/provsql/releases/tag/$TAG"
 fi
 
-# 11. Post-release: bump default_version on master to next -dev
+# 12. Post-release: bump default_version on master to next -dev
 
 # Default: bump minor, reset patch, append -dev (e.g. 1.0.0 -> 1.1.0-dev).
 # Override by setting NEXT_VERSION in the environment (e.g. NEXT_VERSION=1.0.1-dev).
