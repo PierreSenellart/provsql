@@ -1,0 +1,21 @@
+\set ECHO none
+extversion
+1.0.0
+(1 row)
+upgrade_reached_default_version
+t
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+name|formula
+alice|alice
+bob|bob
+carol|carol
+(3 rows)

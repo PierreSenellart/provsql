@@ -193,13 +193,18 @@ Release-engineering for upgrades follows this rhythm:
 
 - **When a contributor adds or modifies SQL** in
   ``provsql.common.sql`` or ``provsql.14.sql``, they *do not* have to
-  write the upgrade script themselves.  The maintainer who cuts the
-  next release is responsible for writing it.
+  write a committed upgrade script themselves.  The maintainer who
+  cuts the next release is responsible for writing it.  During the
+  dev cycle, the Makefile auto-generates an empty dev-cycle
+  upgrade script (see above) so that ``ALTER EXTENSION provsql
+  UPDATE`` is structurally reachable to ``default_version``; that
+  file is purely a placeholder and does **not** replay the SQL
+  deltas introduced during the cycle.
 - **When cutting a release**, ``release.sh`` checks for
   ``sql/upgrades/provsql--<prev>--<new>.sql`` and refuses to proceed
   if it is missing unless ``git diff`` shows no SQL source changes
   since the previous tag (in which case it auto-generates a no-op
-  script).
+  script and commits it).
 - **When touching any mmap-serialised struct or enum**, the
   contributor must either preserve binary compatibility (e.g., by
   appending a new :cfunc:`gate_type` enumerator at the end, never in
@@ -207,33 +212,134 @@ Release-engineering for upgrades follows this rhythm:
   maintainer -- see the warning block at the top of
   :cfile:`provsql_utils.h` and :cfile:`MMappedCircuit.h`.
 
-Manual Testing of the Upgrade Path
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Automated Testing of the Upgrade Path
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-There is no automated CI test for ``ALTER EXTENSION UPDATE`` yet:
-exercising it requires a frozen install script for an *old* version
-to be present in the extensions directory alongside the current
-install script, which in turn requires shipping the old install
-script as a test fixture.  That is tractable but not yet done.
+The upgrade chain is exercised end-to-end by a pg_regress test,
+``test/sql/extension_upgrade.sql``.  Because the test is
+destructive (it ``DROP``\ s the extension ``CASCADE`` to replay
+the upgrade from a clean 1.0.0 state), it must run strictly
+**after** every other test in the suite, including the
+``schedule.14``-only tests that follow ``schedule.common`` on
+PostgreSQL 14+.  To guarantee that ordering regardless of which
+source schedule files are active, the `Makefile.internal`
+rule that assembles ``test/schedule`` appends a single
+``test: extension_upgrade`` line **after** concatenating
+``schedule.common`` and (where applicable) ``schedule.14``:
 
-To verify an upgrade chain manually:
+.. code-block:: makefile
+
+   test/schedule: $(wildcard test/schedule.*)
+       cat test/schedule.common > test/schedule
+       if [ $(PGVER_MAJOR) -ge 14 ]; then \
+           cat test/schedule.14 >> test/schedule; \
+       fi
+       echo "test: extension_upgrade" >> test/schedule
+
+so the final schedule always ends with ``extension_upgrade``.
+The test is therefore **not** listed in either ``schedule.common``
+or ``schedule.14`` source files.
+
+The test itself:
+
+1. Drops the current provsql extension (``CASCADE`` destroys all
+   provenance-tracked state from preceding tests).
+2. Installs the oldest supported version via
+   ``CREATE EXTENSION provsql VERSION '1.0.0'``.  PostgreSQL picks
+   up ``provsql--1.0.0.sql`` from the extensions directory -- a
+   frozen install-script fixture generated at build time from
+   ``sql/fixtures/provsql--1.0.0-common.sql`` and
+   ``sql/fixtures/provsql--1.0.0-14.sql`` (themselves exact copies
+   of the historical 1.0.0 source files, extracted via
+   ``git show v1.0.0:sql/...``).
+3. Runs ``ALTER EXTENSION provsql UPDATE`` (no ``TO`` clause), so
+   PostgreSQL advances the extension all the way to whatever the
+   current ``default_version`` is -- walking the full chain of
+   committed upgrade scripts under ``sql/upgrades/`` and, on a
+   development build, the auto-generated empty dev-cycle upgrade
+   script described below.
+4. Asserts that the post-upgrade ``extversion`` equals
+   ``default_version`` (read from
+   ``pg_available_extensions``) via a boolean comparison, so the
+   expected output never contains a hard-coded version string and
+   the test stays correct as master advances.
+5. Runs a tiny smoke query against the upgraded extension to
+   confirm that the query rewriter, :sqlfunc:`add_provenance`,
+   :sqlfunc:`create_provenance_mapping`, and a compiled semiring
+   evaluator still work.
+
+The test runs on **every PostgreSQL version in the CI matrix**
+(10 through 18), because it lives inside the standard pg_regress
+suite.  It catches regressions in: committed upgrade scripts,
+the ``DATA`` wildcard in ``Makefile.internal`` that ships them,
+and the binary stability of the mmap format across versions.
+
+The Auto-Generated Dev-Cycle Upgrade Script
+"""""""""""""""""""""""""""""""""""""""""""
+
+Between releases, HEAD's ``default_version`` is a dev version
+(e.g., ``1.3.0-dev``) for which no committed upgrade script
+exists.  Rather than maintaining a hand-written dev-cycle script
+on master, ``Makefile.internal`` detects dev versions and
+generates an **empty** upgrade script at build time:
+
+.. code-block:: makefile
+
+   ifneq ($(findstring -dev,$(EXTVERSION)),)
+   LATEST_RELEASE = $(shell git describe --tags --abbrev=0 --match 'v[0-9]*' \
+                             2>/dev/null | sed 's/^v//')
+   ifneq ($(LATEST_RELEASE),)
+   DEV_UPGRADE = sql/$(EXTENSION)--$(LATEST_RELEASE)--$(EXTVERSION).sql
+   endif
+   endif
+
+The file is created by a one-line ``touch $@`` recipe, included in
+``DATA`` so ``make install`` ships it, and matched by the existing
+``sql/provsql--*.sql`` gitignore pattern so it never lands in git.
+Its sole purpose is to give ``ALTER EXTENSION provsql UPDATE`` a
+reachable path from the last release to ``default_version`` during
+the dev cycle.
+
+Actual SQL changes made during the dev cycle are *not* captured in
+this auto-generated file; they are captured by the hand-written
+upgrade script that ``release.sh`` creates (or auto-generates as a
+no-op) at release time.  An upgrade from the previous release
+directly to an intermediate dev commit therefore works at the
+``ALTER EXTENSION`` mechanism level but does **not** replay the
+SQL deltas introduced during the dev cycle -- master users who
+need a functionally-complete upgrade should wait for the release
+tag and use the committed upgrade script.
+
+On release builds (where ``EXTVERSION`` does not end in ``-dev``)
+or on dev tarballs without a reachable git tag, ``DEV_UPGRADE``
+expands to the empty string and the Makefile falls back to the
+committed upgrade scripts only.
+
+Manual Testing
+^^^^^^^^^^^^^^
+
+To exercise the same upgrade path interactively:
 
 .. code-block:: bash
 
-   # 1. Check out the old version and install it.
-   git checkout v1.2.0
+   # Install the current build (which now ships the 1.0.0 fixture
+   # and all upgrade scripts alongside the current install script).
    make && sudo make install
    sudo systemctl restart postgresql
-   psql -c "CREATE EXTENSION provsql CASCADE;"
-   # ... exercise the extension, populate some provenance state ...
 
-   # 2. Check out the new version and install it without re-creating.
-   git checkout v1.2.1
-   make && sudo make install
-   sudo systemctl restart postgresql
-   psql -c "ALTER EXTENSION provsql UPDATE;"
-   psql -c "SELECT extversion FROM pg_extension WHERE extname='provsql';"
-   # ... verify the extension still works; mmap state should be intact ...
+   # Install the extension at the old version and populate state.
+   psql <<'SQL'
+   CREATE DATABASE upgrade_test;
+   \c upgrade_test
+   CREATE EXTENSION provsql VERSION '1.0.0';
+   SELECT extversion FROM pg_extension WHERE extname='provsql';
+   -- ... exercise the extension, populate some provenance state ...
+   SQL
+
+   # Apply the upgrade chain.
+   psql -d upgrade_test -c "ALTER EXTENSION provsql UPDATE TO '1.2.1';"
+   psql -d upgrade_test -c "SELECT extversion FROM pg_extension WHERE extname='provsql';"
+   # ... verify the extension still works; mmap state is intact ...
 
 
 The ``tdkc`` Tool

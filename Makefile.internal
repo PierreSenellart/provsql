@@ -7,8 +7,36 @@ OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard s
 
 DOCS = $(wildcard doc/*.md)
 UPGRADE_SCRIPTS = $(wildcard sql/upgrades/$(EXTENSION)--*--*.sql)
-DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(UPGRADE_SCRIPTS)
-EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql sql/$(EXTENSION).sql tdkc test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files
+# sql/provsql--1.0.0.sql is a frozen install-script fixture for the
+# oldest supported version, used by test/sql/extension_upgrade.sql to
+# exercise the ALTER EXTENSION provsql UPDATE chain.  It is generated
+# at build time from version-sensitive fixtures under sql/fixtures/.
+BASE_INSTALL = sql/$(EXTENSION)--1.0.0.sql
+
+# If EXTVERSION is a development version (e.g. 1.3.0-dev), auto-generate
+# an empty upgrade script from the latest released tag to this dev
+# version.  This lets `ALTER EXTENSION provsql UPDATE` reach the
+# current default_version in the upgrade test suite without requiring
+# a committed dev-cycle upgrade script.  Actual SQL changes made during
+# the dev cycle are captured by the real upgrade script that
+# release.sh creates at release time; this auto-generated file is only
+# a placeholder to make the path traversable during dev.  The generated
+# file is matched by the existing sql/provsql--*.sql gitignore pattern
+# and is therefore not committed.
+#
+# In the unusual case of building a dev version from a source tarball
+# without a reachable git tag, LATEST_RELEASE can be overridden on the
+# make command line (e.g. 'make LATEST_RELEASE=1.2.1').
+ifneq ($(findstring -dev,$(EXTVERSION)),)
+LATEST_RELEASE = $(shell git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null | sed 's/^v//')
+ifeq ($(LATEST_RELEASE),)
+$(error Building development version '$(EXTVERSION)' but no release tag is reachable via 'git describe'. Use a git checkout that has tags fetched, or override LATEST_RELEASE on the make command line, e.g. 'make LATEST_RELEASE=1.2.1')
+endif
+DEV_UPGRADE = sql/$(EXTENSION)--$(LATEST_RELEASE)--$(EXTVERSION).sql
+endif
+
+DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(BASE_INSTALL) $(UPGRADE_SCRIPTS) $(DEV_UPGRADE)
+EXTRA_CLEAN = sql/$(EXTENSION)--*.sql sql/$(EXTENSION).sql $(BASE_INSTALL) $(DEV_UPGRADE) tdkc test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files
 
 # We want REGRESS to be empty, since we are going to provide a schedule
 # of tests. But we want REGRESS to be defined, otherwise installcheck
@@ -54,6 +82,23 @@ sql/provsql.sql: sql/provsql.*.sql
 sql/provsql--$(EXTVERSION).sql: sql/provsql.sql
 	cp $< $@
 
+# Frozen install script for the oldest supported version (1.0.0).
+# Concatenated from git-frozen source fixtures, gated on the same
+# PG14+ test as the current install script.
+sql/provsql--1.0.0.sql: sql/fixtures/provsql--1.0.0-common.sql sql/fixtures/provsql--1.0.0-14.sql
+	cat sql/fixtures/provsql--1.0.0-common.sql > $@
+	if [ $(PGVER_MAJOR) -ge 14 ]; then \
+		cat sql/fixtures/provsql--1.0.0-14.sql >> $@; \
+	fi
+
+# Auto-generated empty dev-cycle upgrade script; see the DEV_UPGRADE
+# block above for the rationale.  Only exists when EXTVERSION ends in
+# -dev and a release tag is reachable from HEAD.
+ifneq ($(DEV_UPGRADE),)
+$(DEV_UPGRADE):
+	touch $@
+endif
+
 
 %.o : %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
@@ -93,6 +138,7 @@ test/schedule: $(wildcard test/schedule.*)
 	if [ $(PGVER_MAJOR) -ge 14 ]; then \
 		cat test/schedule.14 >> test/schedule; \
 	fi
+	echo "test: extension_upgrade" >> test/schedule
 
 $(EXTENSION).control: $(EXTENSION).common.control
 	if [ $(PGVER_MAJOR) -lt 13 ]; then \
