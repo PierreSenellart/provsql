@@ -308,3 +308,21 @@ the paper:
 - **Multiset sum** :math:`\uplus` -- ``UNION ALL`` is left alone by
   :cfunc:`process_set_operation_union`; the tokens from each branch
   flow through independently.
+
+Formal Verification
+^^^^^^^^^^^^^^^^^^^
+
+The correctness of rules (R1) and (R2) -- projection and cross
+product -- has a machine-checked proof in the ProvSQL Lean 4
+library.  The main theorem is
+`Query.rewriting_valid
+<https://provsql.org/lean-docs/Provenance/QueryRewriting.html#Query.rewriting_valid>`_
+in the ``Provenance.QueryRewriting`` module: for every
+supported relational-algebra query ``q`` and every annotated
+database ``d``, evaluating ``q`` against the annotated semantics
+and then projecting to the composite (tuple + annotation)
+representation yields the same result as evaluating the
+rewritten query against the composite database.  This is the
+formal analogue of the "the rewritten query produces the same
+provenance as the annotated semantics" correctness statement
+from the ICDE paper, for the partial fragment proved.

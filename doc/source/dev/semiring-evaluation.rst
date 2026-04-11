@@ -69,6 +69,34 @@ does not sensibly implement one of them can throw
 fail *only* for queries that actually use the corresponding gate,
 and all other queries remain evaluable.
 
+.. note::
+
+   The algebraic axioms a new semiring should satisfy are
+   machine-checked in the ProvSQL Lean 4 library.  The
+   `Provenance.SemiringWithMonus
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html>`_
+   module defines the ``SemiringWithMonus`` typeclass and proves
+   the key monus identities -- ``monus_smallest``
+   (:math:`a \ominus b` is the least :math:`c` such that
+   :math:`a \le b + c`), ``monus_self``, ``zero_monus``,
+   ``monus_add``, ``add_monus`` -- plus the characterisation of
+   idempotent m-semirings (``idempotent_iff_add_monus``,
+   ``plus_is_join``).  A contributor adding a new compiled
+   semiring can use that module as a formal reference for what
+   the ``zero`` / ``one`` / ``plus`` / ``times`` / ``monus``
+   methods are *required* to compute -- the Lean class is the
+   ground truth, and the |cpp| overrides should be a faithful
+   implementation of it.  The
+   `Provenance.Semirings.* <https://provsql.org/lean-docs/Provenance.html>`_
+   namespace already contains verified instances for
+   ``Bool``, ``Nat`` (counting), ``BoolFunc`` (Boolean
+   formulas), ``How`` (the how-provenance universal semiring),
+   ``Why``, ``Which`` (lineage), ``MinMax``, ``Tropical``,
+   ``Lukasiewicz``, and ``Viterbi``, each with a proof of the
+   m-semiring axioms and of any extra properties (absorptivity,
+   idempotence, left-distributivity of multiplication over
+   monus) that matter for optimisation.
+
 .. _semiring-optional-methods:
 
 Optional Methods
