@@ -41,7 +41,17 @@ struct pg_uuid_t
 #include "postgres_ext.h"
 #include "nodes/pg_list.h"
 
-/** Possible gate type in the provenance circuit. */
+/**
+ * @brief Possible gate types in the provenance circuit.
+ *
+ * @warning ON-DISK ABI: this enum's integer values are stored in the
+ * @c gates.mmap backing file (see @c MMappedCircuit).  Reordering,
+ * inserting, or renumbering existing members will silently invalidate
+ * every existing installation's persistent circuit.  New gate types
+ * must be appended **at the end**, just before @c gate_invalid.  If an
+ * existing gate type ever needs to be removed or renumbered, the mmap
+ * format must gain a version header and a migration path.
+ */
 typedef enum gate_type {
   gate_input,    ///< Input (variable) gate of the circuit
   gate_plus,     ///< Semiring plus

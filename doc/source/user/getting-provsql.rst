@@ -97,6 +97,43 @@ Installation
    The ``CASCADE`` keyword automatically installs the required
    ``uuid-ossp`` extension if it is not already present.
 
+Upgrading an Existing Installation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Starting with **1.2.1**, ProvSQL ships PostgreSQL extension upgrade
+scripts for the chain ``1.0.0 → 1.1.0 → 1.2.0 → 1.2.1``. To upgrade
+an existing installation:
+
+1. Check out the new source, build, and install::
+
+       make
+       sudo make install
+
+2. Restart PostgreSQL so the new shared library is loaded::
+
+       service postgresql restart
+
+3. In each database where ``provsql`` is already installed, issue::
+
+       ALTER EXTENSION provsql UPDATE;
+
+   PostgreSQL will find the chain of upgrade scripts between your
+   current version and the newly installed one and apply them in
+   order, inside a single transaction. The persistent provenance
+   circuit (stored in memory-mapped files) is preserved across the
+   upgrade.
+
+.. note::
+
+   Upgrades from **pre-1.0.0** development snapshots are not
+   supported: no upgrade script is provided and you must
+   ``DROP EXTENSION provsql CASCADE; CREATE EXTENSION provsql``
+   instead. The memory-mapped files in the PostgreSQL data
+   directory are still binary-compatible with the current release
+   (they have not changed layout since 1.0.0), so any circuit
+   tokens still referenced by user tables continue to work after
+   the drop-and-create.
+
 Testing Your Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 

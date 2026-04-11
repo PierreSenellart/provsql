@@ -20,6 +20,18 @@
  * The free-function @c createGenericCircuit() traverses the mmap data
  * starting from a given root UUID to construct an in-memory
  * @c GenericCircuit for evaluation.
+ *
+ * @warning ON-DISK ABI: the layouts of @c GateInformation, of the
+ * @c gate_type enum (defined in @c provsql_utils.h), of @c pg_uuid_t,
+ * and of @c MMappedUUIDHashTable's slot structure are all serialised
+ * verbatim into the four @c provsql_*.mmap backing files.  ProvSQL
+ * supports in-place extension upgrades (@c ALTER @c EXTENSION @c provsql
+ * @c UPDATE) only because these layouts have been stable since
+ * ProvSQL 1.0.0.  Any change that adds, removes, reorders, or resizes
+ * a field -- or that renumbers a @c gate_type enumerator -- silently
+ * breaks every existing installation's on-disk mmap files.  If such a
+ * change is necessary, bump an explicit format-version header in the
+ * mmap files, write a migration path, and call it out in a release note.
  */
 #ifndef MMAPPED_CIRCUIT_H
 #define MMAPPED_CIRCUIT_H

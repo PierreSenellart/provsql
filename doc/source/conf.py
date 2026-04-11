@@ -172,6 +172,7 @@ _C_FUNC_MAP = {
     'TreeDecomposition':         '/doxygen-c/html/classTreeDecomposition.html',
     'dDNNFTreeDecompositionBuilder': '/doxygen-c/html/classdDNNFTreeDecompositionBuilder.html',
     'MMappedCircuit':            '/doxygen-c/html/classMMappedCircuit.html',
+    'GateInformation':           '/doxygen-c/html/structGateInformation.html',
     'MMappedUUIDHashTable':      '/doxygen-c/html/classMMappedUUIDHashTable.html',
     'MMappedVector':             '/doxygen-c/html/classMMappedVector.html',
     'Aggregator':                '/doxygen-c/html/structAggregator.html',

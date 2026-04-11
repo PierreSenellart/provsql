@@ -71,6 +71,45 @@ if [[ -n "$(git status --porcelain)" ]]; then
   [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 1
 fi
 
+# 2b. Upgrade-script check
+#
+# ProvSQL supports in-place extension upgrades via ALTER EXTENSION
+# provsql UPDATE (see doc/source/dev/build-system.rst).  Every release
+# must ship a sql/upgrades/provsql--<prev>--<new>.sql script that
+# brings a user on the previous release up to the new version, unless
+# there are demonstrably no SQL-surface changes in this release.
+#
+# Check if the upgrade script exists.  If not, diff the SQL sources
+# against the previous tag; if the diff is empty, auto-generate a
+# no-op upgrade script.  Otherwise, abort and ask the author to write
+# the script by hand.
+
+if [[ -n "$PREV_TAG" ]]; then
+  UPGRADE_SCRIPT="sql/upgrades/provsql--${PREV_VER}--${VERSION}.sql"
+  if [[ ! -f "$UPGRADE_SCRIPT" ]]; then
+    SQL_DIFF=$(git diff "$PREV_TAG"..HEAD -- sql/provsql.common.sql sql/provsql.14.sql 2>&1)
+    if [[ -z "$SQL_DIFF" ]]; then
+      echo "No SQL source changes since $PREV_TAG; generating empty upgrade script."
+      cat > "$UPGRADE_SCRIPT" <<EOF
+/**
+ * @file
+ * @brief ProvSQL upgrade script: $PREV_VER → $VERSION
+ *
+ * No SQL-surface changes in this release; the upgrade script is a
+ * no-op.  PostgreSQL still requires its presence to offer an
+ * ALTER EXTENSION provsql UPDATE path between these versions.
+ */
+SET search_path TO provsql;
+EOF
+      git add "$UPGRADE_SCRIPT"
+    else
+      echo "ERROR: $UPGRADE_SCRIPT is missing, and sql/provsql.*.sql has changes since $PREV_TAG."
+      echo "       Write the upgrade script by hand, commit it, and re-run release.sh."
+      exit 1
+    fi
+  fi
+fi
+
 # 3. Collect release notes
 
 NOTES_FILE=$(mktemp /tmp/provsql-release-notes.XXXXXX.md)

@@ -6,7 +6,8 @@ MODULE_big = provsql
 OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp))
 
 DOCS = $(wildcard doc/*.md)
-DATA = sql/$(EXTENSION)--$(EXTVERSION).sql
+UPGRADE_SCRIPTS = $(wildcard sql/upgrades/$(EXTENSION)--*--*.sql)
+DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(UPGRADE_SCRIPTS)
 EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql sql/$(EXTENSION).sql tdkc test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files
 
 # We want REGRESS to be empty, since we are going to provide a schedule
