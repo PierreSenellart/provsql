@@ -4,6 +4,9 @@
 [![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml)
 [![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml)
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19512786.svg)](https://doi.org/10.5281/zenodo.19512786)
+[![Archived in Software Heritage](https://archive.softwareheritage.org/badge/origin/https://github.com/PierreSenellart/provsql/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/PierreSenellart/provsql)
+
 ProvSQL adds (m-)semiring provenance and uncertainty management to PostgreSQL,
 enabling computation of probabilities, Shapley values, and various semiring
 evaluations, as a PostgreSQL extension.

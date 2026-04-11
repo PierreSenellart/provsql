@@ -42,11 +42,19 @@ See the [Lean formalization](/lean/) page for details.
 
 ## Archival and Citation {#archival}
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19512786.svg)](https://doi.org/10.5281/zenodo.19512786)
+[![Archived in Software Heritage](https://archive.softwareheritage.org/badge/origin/https://github.com/PierreSenellart/provsql/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/PierreSenellart/provsql)
+
 ProvSQL is continuously archived by
 [Software Heritage](https://www.softwareheritage.org/), the universal
 software preservation infrastructure. You can browse the archived
 source tree at
 [archive.softwareheritage.org](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/PierreSenellart/provsql).
+
+Every tagged release receives a persistent DOI from
+[Zenodo](https://zenodo.org/). The concept DOI above resolves to the
+latest version; a versioned DOI is available for each release from
+the Zenodo record page.
 
 To cite ProvSQL in academic work, click the
 [**Cite this repository**](https://github.com/PierreSenellart/provsql)
