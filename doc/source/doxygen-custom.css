@@ -85,6 +85,13 @@ code, span.code, div.fragment, pre.fragment, div.line,
   font-family: 'Fira Code', 'Consolas', monospace;
   font-size: 15px;  /* 15px Fira Code ≈ visual 20px EB Garamond */
 }
+/* Inline code inside prose: align baseline with the serif body text.
+   Without this, Fira Code at 15px inherits the 35px line-height of the
+   20px EB Garamond paragraph and ends up floating above the baseline. */
+p code, li code, dd code, td code {
+  line-height: 1;
+  vertical-align: baseline;
+}
 div.fragment, pre.fragment {
   background-color: #E8E0F8;
   color: #5A3E8C;

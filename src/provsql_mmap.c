@@ -44,9 +44,7 @@
 char buffer[PIPE_BUF]={}; // flawfinder: ignore
 unsigned bufferpos=0;
 
-/** @brief Background worker entry point: initialises the mmap circuit store and runs the main loop. */
-__attribute__((visibility("default")))
-void provsql_mmap_worker(Datum ignored)
+PGDLLEXPORT void provsql_mmap_worker(Datum ignored)
 {
   BackgroundWorkerUnblockSignals();
   initialize_provsql_mmap();

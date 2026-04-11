@@ -1,7 +1,13 @@
 # Minimal makefile for Sphinx documentation
 
 SPHINXOPTS    ?= -E
-SPHINXBUILD   ?= sphinx-build
+# Use `python3 -m sphinx` rather than the `sphinx-build` entry script:
+# on Debian-derived systems with both python3-sphinx-rtd-theme (old) and
+# a user-local sphinx-rtd-theme (>= 7.2-compatible) installed, the entry
+# script loads the old /usr/share/sphinx_rtd_theme/layout.html instead
+# of the user-local one, which silently breaks the data-content_root
+# attribute on <html> and therefore Sphinx search summaries.
+SPHINXBUILD   ?= python3 -m sphinx
 SOURCEDIR     = .
 BUILDDIR      = _build
 

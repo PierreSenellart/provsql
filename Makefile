@@ -39,7 +39,8 @@ website: docs
 	cd website && bundle exec jekyll build
 
 deploy: website
-	rsync -avzP website/_site/ provsql:/var/www/provsql/
+	# -c hashes content so Jekyll's fresh mtimes don't trigger spurious transfers
+	rsync -avzcP website/_site/ provsql:/var/www/provsql/
 
 .PHONY: default test docs website deploy
 

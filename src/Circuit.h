@@ -12,8 +12,9 @@
  * loops and containers.
  *
  * ### @c Circuit<gateType>
- * A CRTP-style template base class for all circuit variants in ProvSQL
- * (@c BooleanCircuit, @c GenericCircuit, @c DotCircuit, @c WhereCircuit).
+ * A template base class parameterised by gate type, inherited by all
+ * circuit variants in ProvSQL (@c BooleanCircuit, @c GenericCircuit,
+ * @c DotCircuit, @c WhereCircuit).
  * A circuit is a directed acyclic graph where:
  * - Each **gate** has a type drawn from @c gateType (a user-supplied enum).
  * - **Wires** are directed edges from parent gates to their children.
