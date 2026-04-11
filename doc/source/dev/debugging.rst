@@ -27,7 +27,8 @@ Set it per-session:
 
    SET provsql.verbose_level = 50;
 
-Levels:
+The GUC is an integer 0--100.  Only three thresholds actually gate
+output:
 
 .. list-table::
    :header-rows: 1
@@ -35,23 +36,19 @@ Levels:
 
    * - Level
      - Output
-   * - 0
-     - Quiet (default).
-   * - 1--9
-     - Informational messages (warnings about unsupported features,
-       provenance loss, etc.).
-   * - 10--19
-     - Basic debug information.
+   * - 0 (default)
+     - Quiet.  Values between 1 and 19 behave the same as 0.
    * - 20+
      - Full query text before and after ProvSQL rewriting (PostgreSQL
-       15+ only, via ``pg_get_querydef``).
+       15+ only, via ``pg_get_querydef``), plus verbose output from
+       the Boolean circuit and DOT export code.
    * - 40+
-     - Timing of the rewriting phase.
+     - Adds timing of the rewriting phase.
    * - 50+
-     - Dump of the PostgreSQL ``Query`` node tree before and after
-       rewriting (via ``elog_node_display``).
+     - Adds a dump of the PostgreSQL ``Query`` node tree before and
+       after rewriting (via ``elog_node_display``).
 
-The ``elog_node_display`` output (level >= 50) shows the full internal
+The ``elog_node_display`` output (level ≥ 50) shows the full internal
 representation of the query tree.  This is invaluable for understanding
 exactly what the rewriter changed, but produces very large output.
 
@@ -92,18 +89,10 @@ Example session:
 Visualizing Circuits
 --------------------
 
-:sqlfunc:`view_circuit` exports a provenance circuit as a DOT graph
-that can be rendered with Graphviz:
-
-.. code-block:: sql
-
-   SELECT provsql.view_circuit(provenance(), 'my_mapping')
-   FROM my_table
-   LIMIT 1;
-
-Pipe the output through ``dot -Tpng`` to produce an image.  This is
-often the fastest way to verify that the rewriter built the correct
-circuit structure.
+:sqlfunc:`view_circuit` renders a provenance circuit as an ASCII
+box-art diagram and is often the fastest way to verify that the
+rewriter built the correct circuit structure.  See
+:doc:`../user/export` for usage details and requirements.
 
 
 Disabling Provenance
@@ -142,6 +131,12 @@ Attach GDB to a PostgreSQL backend process:
 When debugging the mmap background worker, attach to the worker
 process instead (find it via ``ps aux | grep provsql``).
 
-PostgreSQL defines useful GDB macros in ``src/tools/gdbinit`` of the
-PostgreSQL source tree.  The most helpful is ``pprint(node)`` which
-pretty-prints any PostgreSQL ``Node *``.
+PostgreSQL ships with ``print(void *)`` and ``pprint(void *)``
+functions (``src/backend/nodes/print.c``, declared in
+``src/include/nodes/print.h``) that dump any ``Node *`` to the
+backend's stderr, with ``pprint`` producing pretty-printed output.
+From GDB you can invoke them on the current backend with
+``call pprint(q)`` to inspect a ``Query`` tree, or similarly on any
+other node pointer.  See the `PostgreSQL Developer FAQ
+<https://wiki.postgresql.org/wiki/Developer_FAQ>`_ for more
+debugging tips.

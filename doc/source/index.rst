@@ -52,6 +52,8 @@ This documentation is organized into three parts:
    dev/query-rewriting
    dev/memory
    dev/adding-semiring
+   dev/adding-aggregate
+   dev/adding-probability-method
    dev/testing
    dev/debugging
    dev/build-system

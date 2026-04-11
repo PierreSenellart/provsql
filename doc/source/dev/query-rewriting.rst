@@ -16,11 +16,11 @@ PostgreSQL's planner hook allows extensions to intercept every query
 before planning.  :cfunc:`provsql_planner` is installed by
 :cfunc:`_PG_init` and is called for every query:
 
-1. **INSERT ... SELECT** (``CMD_INSERT``): delegates to
+1. ``INSERT ... SELECT`` (``CMD_INSERT``): delegates to
    :cfunc:`process_insert_select` to propagate provenance from the
-   source SELECT into the target table's ``provsql`` column.
+   source ``SELECT`` into the target table's ``provsql`` column.
 
-2. **SELECT** (``CMD_SELECT``): checks whether any relation in the
+2. ``SELECT`` (``CMD_SELECT``): checks whether any relation in the
    range table carries a ``provsql`` column (:cfunc:`has_provenance`).
    If so, calls :cfunc:`process_query` to rewrite the query tree.
 
@@ -28,7 +28,7 @@ before planning.  :cfunc:`provsql_planner` is installed by
    previous planner hook or ``standard_planner``.
 
 When ``provsql.verbose_level >= 20`` (PostgreSQL 15+), the full query
-text is logged before and after rewriting.  At level >= 40, the time
+text is logged before and after rewriting.  At level ≥ 40, the time
 spent in the rewriter is logged.
 
 
@@ -38,7 +38,7 @@ spent in the rewriter is logged.
 :cfunc:`process_query` is the heart of ProvSQL.  It receives a
 ``Query`` tree, rewrites it to carry provenance, and returns the
 modified tree.  The function is recursive: subqueries and CTEs are
-processed by re-entering ``process_query``.
+processed by re-entering :cfunc:`process_query`.
 
 The function proceeds in the following order:
 
@@ -49,16 +49,16 @@ If the query has no ``FROM`` clause (``q->rtable == NULL``), there is
 nothing to track -- return immediately.
 
 Step 1: CTE Inlining
-^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^
 
-Non-recursive CTEs (``WITH`` clauses) are inlined as subqueries in the
-range table via :cfunc:`inline_ctes`.  This converts ``RTE_CTE``
-entries to ``RTE_SUBQUERY`` so that the subsequent recursive
-processing can track provenance through them.  Recursive CTEs are
-not supported and raise an error.
+Non-recursive common table expressions (``WITH`` clauses) are
+inlined as subqueries in the range table via :cfunc:`inline_ctes`.
+This converts ``RTE_CTE`` entries to ``RTE_SUBQUERY`` so that the
+subsequent recursive processing can track provenance through them.
+Recursive CTEs are not supported and raise an error.
 
-Inlining happens before set-operation handling because UNION/EXCEPT
-branches may reference CTEs.
+Inlining happens before set-operation handling because ``UNION`` /
+``EXCEPT`` branches may reference CTEs.
 
 Step 2: Strip Existing Provenance Columns
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -67,39 +67,39 @@ Step 2: Strip Existing Provenance Columns
 removes any existing ``provsql`` UUID columns (which might be inherited
 from base tables or subqueries).  These are stripped so that the
 rewriter can append a single, freshly computed provenance expression at
-the end.  Matching GROUP BY / ORDER BY references and set-operation
-column lists are also adjusted.
+the end.  Matching ``GROUP BY`` / ``ORDER BY`` references and
+set-operation column lists are also adjusted.
 
 Step 3: Set-Operation Handling
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-If the query has ``setOperations`` (UNION, EXCEPT):
+If the query has ``setOperations`` (``UNION``, ``EXCEPT``):
 
 - **Non-ALL variants** (``UNION``, ``EXCEPT`` without ``ALL``):
   :cfunc:`rewrite_non_all_into_external_group_by` wraps the set
   operation in a new outer query with ``GROUP BY`` on all columns.
   This implements duplicate elimination as provenance addition (⊕).
-  The function then re-enters ``process_query`` on the wrapper.
+  The function then re-enters :cfunc:`process_query` on the wrapper.
 
-- **UNION ALL**: each branch is processed independently.  The
+- ``UNION ALL``: each branch is processed independently.  The
   provenance tokens from different branches are combined with ⊕
   (``provenance_plus``) by :cfunc:`process_set_operation_union`.
 
-- **EXCEPT ALL**: :cfunc:`transform_except_into_join` rewrites
-  ``A EXCEPT ALL B`` as a LEFT JOIN with a ``provenance_monus`` (⊖)
-  gate, plus a filter removing zero-provenance tuples.
+- ``EXCEPT ALL``: :cfunc:`transform_except_into_join` rewrites
+  ``A EXCEPT ALL B`` as a ``LEFT JOIN`` with a ``provenance_monus``
+  (⊖) gate, plus a filter removing zero-provenance tuples.
 
-- **INTERSECT** is not supported (raises an error).
+- ``INTERSECT`` is not supported (raises an error).
 
-Step 4: Aggregate DISTINCT Rewrite
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Step 4: Aggregate ``DISTINCT`` Rewrite
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 If the query has aggregates with ``DISTINCT`` (e.g.,
 ``COUNT(DISTINCT x)``), :cfunc:`rewrite_agg_distinct` performs a
 structural rewrite: the ``DISTINCT`` inside the aggregate is moved to
 an inner subquery with ``GROUP BY``, and the outer query aggregates
 over the deduplicated results.  The function returns a new query tree,
-and ``process_query`` re-enters on it.
+and :cfunc:`process_query` re-enters on it.
 
 Step 5: Discovery -- ``get_provenance_attributes``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -110,7 +110,7 @@ and collects ``Var`` nodes pointing to provenance columns:
 - **RTE_RELATION** (base table): scans column names for one called
   ``provsql`` of type UUID.
 
-- **RTE_SUBQUERY**: recursively calls ``process_query`` on the
+- **RTE_SUBQUERY**: recursively calls :cfunc:`process_query` on the
   subquery.  If the subquery's rewritten target list contains a
   ``provsql`` column, a ``Var`` pointing to it is added to the parent's
   provenance list.  Outer ``Var`` attribute numbers are adjusted to
@@ -133,11 +133,11 @@ Step 6: Unsupported Feature Checks
 Before proceeding, the function checks for:
 
 - **Sublinks** (``EXISTS``, ``IN``, scalar subqueries): not supported.
-- **DISTINCT ON**: not supported.
-- **DISTINCT** (plain): converted to ``GROUP BY`` via
+- ``DISTINCT ON``: not supported.
+- ``DISTINCT`` (plain): converted to ``GROUP BY`` via
   :cfunc:`transform_distinct_into_group_by`.
-- **GROUPING SETS / CUBE / ROLLUP**: not supported (except the trivial
-  ``GROUP BY ()``).
+- ``GROUPING SETS`` / ``CUBE`` / ``ROLLUP``: not supported (except
+  the trivial ``GROUP BY ()``).
 
 Step 7: Build Column Map
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -159,12 +159,12 @@ rows.  The provenance of grouped rows is combined with ⊕
 
 After aggregation rewriting:
 
-- :cfunc:`migrate_aggtoken_quals_to_having` moves any WHERE
+- :cfunc:`migrate_aggtoken_quals_to_having` moves any ``WHERE``
   comparisons on aggregate results to ``HAVING``, because
   aggregate-typed values can only be filtered after grouping.
 
 - :cfunc:`insert_agg_token_casts` inserts type casts for
-  ``agg_token`` values used in arithmetic or window functions.
+  :cfunc:`agg_token` values used in arithmetic or window functions.
 
 Step 9: Expression Building -- ``make_provenance_expression``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -174,17 +174,17 @@ Step 9: Expression Building -- ``make_provenance_expression``
 
 **Combining tokens from multiple tables** (the ⊗ / ⊕ / ⊖ choice):
 
-- **SR_TIMES** (default for SELECT-FROM-WHERE): wraps the list of
-  provenance tokens in ``provenance_times(ARRAY[...])`` to create a
-  multiplication gate.
+- ``SR_TIMES`` (default for ``SELECT ... FROM ... WHERE``): wraps
+  the list of provenance tokens in ``provenance_times(ARRAY[...])``
+  to create a multiplication gate.
 
-- **SR_PLUS** (UNION ALL): uses the single provenance token from the
-  union directly (each branch already has its own token).
+- ``SR_PLUS`` (``UNION ALL``): uses the single provenance token
+  from the union directly (each branch already has its own token).
 
-- **SR_MONUS** (EXCEPT ALL): wraps the two tokens in
+- ``SR_MONUS`` (``EXCEPT ALL``): wraps the two tokens in
   ``provenance_monus(left, right)``.
 
-If a single table is in the FROM clause, no combining function is
+If a single table is in the ``FROM`` clause, no combining function is
 needed -- the token is used as-is.
 
 **GROUP BY / aggregation**:  When ``group_by_rewrite`` or
@@ -218,7 +218,7 @@ Step 10: Splicing -- ``add_to_select``
 
 :cfunc:`add_to_select` appends the provenance expression to the
 query's target list as a new column named ``provsql``.  If the query
-has GROUP BY, the column is added to the ``groupClause`` as well.
+has ``GROUP BY``, the column is added to the ``groupClause`` as well.
 
 Step 11: Replace ``provenance()`` Calls
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -230,49 +230,76 @@ that ``SELECT provenance() FROM ...`` returns the actual provenance
 token.
 
 
-INSERT ... SELECT
------------------
-
-:cfunc:`process_insert_select` handles ``INSERT INTO target SELECT ... FROM
-source`` when both the target table and the source query have
-provenance tracking.  It rewrites the source subquery via
-``process_query``, then appends the resulting provenance column to the
-INSERT's column list so that the target table receives the computed
-provenance tokens.
-
-EXCEPT Rewriting
-^^^^^^^^^^^^^^^^
-
-:cfunc:`transform_except_into_join` rewrites ``A EXCEPT ALL B`` as a
-rewrite into a LEFT JOIN:
-
-.. code-block:: sql
-
-   -- Original:
-   SELECT * FROM A EXCEPT ALL SELECT * FROM B;
-
-   -- Rewritten (conceptual):
-   SELECT A.*, provenance_monus(A.provsql, B.provsql)
-   FROM A LEFT JOIN B ON A.col1 = B.col1 AND ...
-   WHERE provenance_monus(A.provsql, B.provsql) <> gate_zero();
-
-The ``provenance_monus`` gate implements the ⊖ operation, and the
-``WHERE`` filter (:cfunc:`add_select_non_zero`) removes tuples whose
-provenance evaluates to the semiring zero.
-
-
 Rewriting Rules and Formal Semantics
 -------------------------------------
 
-The rewriting corresponds to the five rewriting rules (R1)--(R5) from
-the ICDE 2026 paper :cite:`sen2026provsql`:
+The rewriting implemented by :cfile:`provsql.c` realises the
+rewriting rules (R1)--(R5) from the ICDE 2026 paper
+:cite:`sen2026provsql`, which is the authoritative reference for
+the formal semantics and correctness results.  The rules are stated
+over an extended relational algebra on annotated relations;
+:cfile:`provsql.c` has to reproduce them on PostgreSQL ``Query``
+trees, so the mapping below is approximate rather than literal --
+the pipeline phases described earlier on this page interleave the
+rules with PostgreSQL-specific bookkeeping (range-table surgery,
+target-list rewriting, HAVING handling, where-provenance, ...).
 
-- **(R1)** Projection: renumber provenance tokens.
-- **(R2)** Cross product / join: ``provenance_times`` (⊗).
-- **(R3)** Selection: identity (selection does not change provenance).
-- **(R4)** Multiset sum / duplicate elimination: ``provenance_plus`` (⊕).
-- **(R5)** Aggregation: ``provenance_aggregate`` + ``provenance_semimod``.
+.. list-table::
+   :header-rows: 1
+   :widths: 15 25 60
 
-The theorem guarantees that for any query without aggregation, the
-rewritten query computes the exact semantics of the extended
-relational algebra over annotated relations.
+   * - Rule
+     - Algebra operator
+     - Concrete realisation in :cfile:`provsql.c`
+   * - (R1)
+     - Projection :math:`\Pi`
+     - The provenance token column is *kept* on the target list.
+       :cfunc:`get_provenance_attributes` collects the token
+       columns from the range table and :cfunc:`add_to_select`
+       appends the computed token expression back onto the
+       rewritten target list.
+   * - (R2)
+     - Cross product / join :math:`\times`
+     - The ``SR_TIMES`` branch of
+       :cfunc:`make_provenance_expression` wraps the list of
+       per-input tokens in a ``provenance_times(ARRAY[...])``
+       (⊗) call.
+   * - (R3)
+     - Duplicate elimination :math:`\varepsilon`
+     - ``SELECT DISTINCT``, ``UNION``, and ``EXCEPT`` (the
+       non-``ALL`` set operations) are all rewritten into an outer
+       ``GROUP BY`` by
+       :cfunc:`transform_distinct_into_group_by` /
+       :cfunc:`rewrite_non_all_into_external_group_by`, and the
+       grouped tokens are combined with ``provenance_plus`` (⊕)
+       via ``array_agg`` inside
+       :cfunc:`make_provenance_expression`.
+   * - (R4)
+     - Multiset difference :math:`-`
+     - ``EXCEPT ALL`` is rewritten by
+       :cfunc:`transform_except_into_join` into a ``LEFT JOIN`` on
+       all data columns, and the ``SR_MONUS`` branch of
+       :cfunc:`make_provenance_expression` wraps the two tokens in
+       ``provenance_monus`` (⊖).
+   * - (R5)
+     - Aggregation :math:`\gamma`
+     - :cfunc:`replace_aggregations_by_provenance_aggregate` walks
+       the target list and replaces each ``Aggref`` with a
+       ``provenance_aggregate`` call built by
+       :cfunc:`make_aggregation_expression` (which in turn wraps
+       arguments in ``provenance_semimod``).  The enclosing
+       provenance expression is then wrapped in a
+       ``provenance_delta`` (δ) gate by
+       :cfunc:`make_provenance_expression`.
+
+Two algebra operators are deliberately **not** rewritten, matching
+the paper:
+
+- **Selection** :math:`\sigma` -- ``WHERE`` clauses pass through
+  unchanged because selection does not affect provenance (with
+  where-provenance enabled, the rewriter additionally wraps the
+  result in ``provenance_eq`` / ``provenance_project`` gates, but
+  that is orthogonal to R1--R5).
+- **Multiset sum** :math:`\uplus` -- ``UNION ALL`` is left alone by
+  :cfunc:`process_set_operation_union`; the tokens from each branch
+  flow through independently.

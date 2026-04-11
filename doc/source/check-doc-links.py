@@ -172,6 +172,26 @@ for ref in sorted(cfile_refs):
         errors.append(f":cfile:`{ref}`: Doxygen page not found: {html_file}")
 
 # ============================================================================
+# :sqlfile: checks
+# ============================================================================
+
+# 14. Extract all :sqlfile: references from .rst files
+sqlfile_refs = set()
+for doc_dir in [DEV_DOCS, USER_DOCS]:
+    if doc_dir.exists():
+        for rst in doc_dir.glob("*.rst"):
+            for match in re.finditer(r":sqlfile:`([^`]+)`", rst.read_text()):
+                sqlfile_refs.add(match.group(1))
+
+# 15. Check: every :sqlfile: ref points to an existing Doxygen HTML page
+for ref in sorted(sqlfile_refs):
+    base, ext = ref.rsplit('.', 1)
+    doxy_name = base.replace('_', '__') + '_8' + ext + '.html'
+    html_file = DOXYGEN_SQL_HTML / doxy_name
+    if not html_file.exists():
+        errors.append(f":sqlfile:`{ref}`: Doxygen page not found: {html_file}")
+
+# ============================================================================
 # Report
 # ============================================================================
 
@@ -183,4 +203,5 @@ if errors:
 else:
     print(f"doc link check OK: sqlfunc {len(sql_refs)} refs / {len(sql_map_entries)} map; "
           f"cfunc {len(c_refs)} refs / {len(c_map_entries)} map; "
-          f"cfile {len(cfile_refs)} refs; all anchors valid.")
+          f"cfile {len(cfile_refs)} refs; "
+          f"sqlfile {len(sqlfile_refs)} refs; all anchors valid.")

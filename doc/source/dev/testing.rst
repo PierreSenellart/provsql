@@ -152,9 +152,20 @@ and open it in a pager.
 
 Common causes of failure:
 
-- **UUID ordering**: UUIDs are random, so tests should not depend on
-  the specific UUID values.  Use ``ORDER BY`` on deterministic columns
-  and project away the provenance column when its exact value is
-  irrelevant.
+- **UUID values**: provenance UUIDs are random and must never appear
+  in expected output.  Project away the ``provsql`` column before
+  comparing, and make tests depend on provenance *content* by
+  evaluating it in a semiring (e.g., :sqlfunc:`sr_boolean`,
+  :sqlfunc:`sr_counting`), displaying the symbolic representation
+  (via :sqlfunc:`sr_formula`), or
+  computing a probability.
+- **Symbolic representation ordering**: when the symbolic
+  representation is computed over a ⊕ (or other associative /
+  commutative) gate, the order in which children are visited is not
+  deterministic.  Tests that print symbolic representations must
+  normalize the ordering before comparison.  The idiomatic pattern
+  is a ``REPLACE`` or ``REGEXP_REPLACE`` that rewrites any variant
+  orderings to a canonical one.  See ``test/sql/union.sql`` and
+  ``test/sql/distinct.sql`` for examples.
 - **Floating-point precision**: probability results may differ slightly
   across platforms.  Use ``ROUND()`` in tests.

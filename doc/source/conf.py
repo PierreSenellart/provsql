@@ -4,6 +4,18 @@ author = 'Pierre Senellart'
 
 extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex']
 
+# |cpp| / |cpp17| substitutions: render "C++" and "C++17" as non-breaking
+# spans so the browser never wraps between "C+" and the final "+".
+rst_prolog = """
+.. |cpp| raw:: html
+
+   <span style="white-space: nowrap">C++</span>
+
+.. |cpp17| raw:: html
+
+   <span style="white-space: nowrap">C++17</span>
+"""
+
 bibtex_bibfiles = ['../../website/_bibliography/references.bib']
 bibtex_default_style = 'pdf_link'
 bibtex_reference_style = 'author_year'
@@ -108,6 +120,7 @@ _C_FUNC_MAP = {
     'has_provenance':            '/doxygen-c/html/provsql_8c.html#af9a93235f73a9ae63ab01cf094d30372',
     'get_provenance_attributes': '/doxygen-c/html/provsql_8c.html#a468eafaad0a1eabc3988d6ab0b824abe',
     'make_provenance_expression':'/doxygen-c/html/provsql_8c.html#ad6c4894f1cd6dac66538064fba556517',
+    'make_aggregation_expression': '/doxygen-c/html/provsql_8c.html#abaae0dcfec89c61c6af4c309eb61c8b4',
     'add_to_select':             '/doxygen-c/html/provsql_8c.html#a6fe52ea4c7f2cc8eb924135ebf239d85',
     'replace_provenance_function_by_expression': '/doxygen-c/html/provsql_8c.html#a3d5fee9c96595db519504978edba8683',
     'process_insert_select':     '/doxygen-c/html/provsql_8c.html#ac3ee0aa66fe553ba28a2bb2959a440ad',
@@ -124,7 +137,6 @@ _C_FUNC_MAP = {
     'insert_agg_token_casts':    '/doxygen-c/html/provsql_8c.html#a539df516de849eb54876a4f98a748861',
     'having_Expr_to_provenance_cmp': '/doxygen-c/html/provsql_8c.html#a0cfaf66fa75b9265bf267b446ac6946f',
     'add_eq_from_Quals_to_Expr': '/doxygen-c/html/provsql_8c.html#aa5f16ef0c73e1c7d651b02311994605d',
-    'add_select_non_zero':       '/doxygen-c/html/provsql_8c.html#af0e331134cb117618a2d8197a5cf7b76',
     # provsql_utils.h — OID cache
     'constants_t':               '/doxygen-c/html/structconstants__t.html',
     'get_constants':             '/doxygen-c/html/provsql__utils_8h.html#a75e7d48321cea0156f8ad4c039c877a0',
@@ -142,6 +154,55 @@ _C_FUNC_MAP = {
     'provsql_shmem_unlock':      '/doxygen-c/html/provsql__shmem_8h.html#a22c7757d55d371f7fe70c542341c0365',
     # provenance_evaluate_compiled
     'provenance_evaluate_compiled': '/doxygen-c/html/provenance__evaluate__compiled_8hpp.html#a4bf8b02981ab738526f4fe50799894ec',
+    # Aggregation dispatch
+    'getAggregationOperator':    '/doxygen-c/html/Aggregation_8h.html#a6f4361e91675b6d5fda821466ba599ea',
+    'makeAggregator':            '/doxygen-c/html/Aggregation_8h.html#ad322b2be8077685d576affbc4d4b9aff',
+    # C++ classes
+    'BooleanCircuit':            '/doxygen-c/html/classBooleanCircuit.html',
+    'GenericCircuit':            '/doxygen-c/html/classGenericCircuit.html',
+    'dDNNF':                     '/doxygen-c/html/classdDNNF.html',
+    'TreeDecomposition':         '/doxygen-c/html/classTreeDecomposition.html',
+    'dDNNFTreeDecompositionBuilder': '/doxygen-c/html/classdDNNFTreeDecompositionBuilder.html',
+    'MMappedCircuit':            '/doxygen-c/html/classMMappedCircuit.html',
+    'MMappedUUIDHashTable':      '/doxygen-c/html/classMMappedUUIDHashTable.html',
+    'MMappedVector':             '/doxygen-c/html/classMMappedVector.html',
+    'Aggregator':                '/doxygen-c/html/structAggregator.html',
+    'SumAgg':                    '/doxygen-c/html/structSumAgg.html',
+    'MinAgg':                    '/doxygen-c/html/structMinAgg.html',
+    'AvgAgg':                    '/doxygen-c/html/structAvgAgg.html',
+    'agg_token':                 '/doxygen-c/html/structagg__token.html',
+    'provsqlSharedState':        '/doxygen-c/html/structprovsqlSharedState.html',
+    'SemiringException':         '/doxygen-c/html/classsemiring_1_1SemiringException.html',
+    'BoolExpr':                  '/doxygen-c/html/classsemiring_1_1BoolExpr.html',
+    'Boolean':                   '/doxygen-c/html/classsemiring_1_1Boolean.html',
+    'Counting':                  '/doxygen-c/html/classsemiring_1_1Counting.html',
+    # Enums and types
+    'AggregationOperator':       '/doxygen-c/html/Aggregation_8h.html#a07e6885296f8f80441d5428bcf72af5a',
+    'gate_type':                 '/doxygen-c/html/provsql__utils_8h.html#a8266c44a6cbf9e08d5f2b12cd3c3d92f',
+    # Other functions
+    'aggregation_evaluate':      '/doxygen-c/html/aggregation__evaluate_8c.html#a4f4a0f60a801ee663671454787aecbab',
+    'getGenericCircuit':         '/doxygen-c/html/CircuitFromMMap_8h.html#aea0e3c624d65cc59c68d313fbe0306af',
+    'getBooleanCircuit':         '/doxygen-c/html/CircuitFromMMap_8h.html#a66a011a61d08d6fd604c4668a62d46d0',
+    'provenance_evaluate_compiled_internal': '/doxygen-c/html/provenance__evaluate__compiled_8cpp.html#a3df67864ec62b62e0b10e5a3d7945c21',
+    'list_insert_nth':           '/doxygen-c/html/compatibility_8c.html#af40069a7906dd7dabbd6ab5fcd429090',
+    # Macros
+    'STARTWRITEM':               '/doxygen-c/html/provsql__mmap_8h.html#a71fa51d40b2e5caeaf49eaf95b85033a',
+    'ADDWRITEM':                 '/doxygen-c/html/provsql__mmap_8h.html#a8ff2a88528de32f06edc2c2df8aec35c',
+    'SENDWRITEM':                '/doxygen-c/html/provsql__mmap_8h.html#a97801fbf53859b521789af0fe79632d8',
+    # BooleanCircuit methods
+    'BooleanCircuit::independentEvaluation': '/doxygen-c/html/classBooleanCircuit.html#aec2e2de236b6ba8915e2088ae3bfa256',
+    'BooleanCircuit::possibleWorlds':        '/doxygen-c/html/classBooleanCircuit.html#a211a22d87946d2c2878f5da2cd28109c',
+    'BooleanCircuit::monteCarlo':            '/doxygen-c/html/classBooleanCircuit.html#a85ca1a4d91d62aa1b4660c42b31ceadd',
+    'BooleanCircuit::WeightMC':              '/doxygen-c/html/classBooleanCircuit.html#a08b28d72e2ddf6be066630bb1c5a59b0',
+    'BooleanCircuit::compilation':           '/doxygen-c/html/classBooleanCircuit.html#ad3bc6b4c5643a25d46083bb72e1fb485',
+    'BooleanCircuit::makeDD':                '/doxygen-c/html/classBooleanCircuit.html#a699b0537bdaf692ff18e36ad32064d6e',
+    'dDNNF::probabilityEvaluation':          '/doxygen-c/html/classdDNNF.html#a3c62965b37ba9e45f59fee50f432eb6c',
+    # probability_evaluate.cpp
+    'probability_evaluate_internal': '/doxygen-c/html/probability__evaluate_8cpp.html#aea39f7b497660c1c1e384b1e090d7db9',
+    'BooleanCircuit::rewriteMultivaluedGates': '/doxygen-c/html/classBooleanCircuit.html#a90ff865c9963480f00000d62c6c37c2f',
+    'TreeDecomposition::MAX_TREEWIDTH': '/doxygen-c/html/classTreeDecomposition.html#ab09a529b1ef0e64fecf2260345c795d3',
+    # Global state
+    'provsql_interrupted':       '/doxygen-c/html/provsql__utils_8h.html#a9692a0205a857ed2cc29558470c2ed77',
 }
 
 
@@ -178,7 +239,18 @@ def setup(app):
         ref += lit
         return [ref], []
 
+    def sqlfile_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+        # Same encoding as cfile but pointing at the SQL Doxygen output.
+        base, ext = text.rsplit('.', 1)
+        doxy_name = base.replace('_', '__') + '_8' + ext + '.html'
+        url = '/doxygen-sql/html/' + doxy_name
+        lit = nodes.literal(text, text)
+        ref = nodes.reference('', '', internal=False, refuri=url)
+        ref += lit
+        return [ref], []
+
     app.add_role('sqlfunc', sqlfunc_role)
     app.add_role('cfunc', cfunc_role)
     app.add_role('cfile', cfile_role)
+    app.add_role('sqlfile', sqlfile_role)
     return {'version': '0.1', 'parallel_read_safe': True}

@@ -2,8 +2,26 @@ Adding a New Semiring
 =====================
 
 ProvSQL evaluates provenance circuits over arbitrary (m-)semirings.
-This page explains the semiring interface, walks through two existing
-implementations, and gives a step-by-step guide for adding a new one.
+This page explains the semiring interface, walks through two
+existing implementations, and gives a step-by-step guide for adding
+a new one.
+
+.. note::
+
+   This page is about **compiled semirings** -- semirings
+   implemented in |cpp| and invoked through
+   :cfunc:`provenance_evaluate_compiled` (via SQL wrappers such as
+   :sqlfunc:`sr_boolean` or :sqlfunc:`sr_counting`).  Compiled
+   semirings are the preferred option when performance matters.
+
+   ProvSQL also exposes an SQL-level mechanism,
+   :sqlfunc:`provenance_evaluate`, that lets users assemble a
+   semiring directly in SQL by supplying ``plus``, ``times``,
+   ``monus`` and ``delta`` functions along with a zero and a one
+   element.  That path requires no |cpp| code or recompilation, but
+   is much slower and limited to what the SQL type system can
+   express.  It is described in :doc:`../user/semirings` and is
+   **not** what this page covers.
 
 
 The ``Semiring<V>`` Interface
@@ -14,10 +32,10 @@ All semirings inherit from the abstract template class
 The template parameter ``V`` is the *carrier type* (e.g., ``bool``,
 ``unsigned``, ``std::string``).
 
-Required methods (pure virtual)
+Required Methods (Pure Virtual)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Every semiring **must** implement:
+Every semiring must override the following pure-virtual methods:
 
 .. list-table::
    :header-rows: 1
@@ -40,12 +58,21 @@ Every semiring **must** implement:
    * - ``delta(x)``
      - Delta operator :math:`\delta(x)`.
 
-Optional methods
+``zero``, ``one``, ``plus``, and ``times`` are load-bearing: every
+evaluator traverses the circuit applying them.  ``monus`` and
+``delta`` are only exercised by specific SQL features --
+``EXCEPT`` / ``EXCEPT ALL`` for ``monus``, and ``GROUP BY`` with
+aggregates (without ``HAVING``) for ``delta``.  A semiring that
+does not sensibly implement one of them can throw
+:cfunc:`SemiringException` from its override; evaluation will then
+fail *only* for queries that actually use the corresponding gate,
+and all other queries remain evaluable.
+
+Optional Methods
 ^^^^^^^^^^^^^^^^
 
 The following methods have default implementations that throw
-``SemiringException``.  Override them only if the semiring supports
-the corresponding gate types:
+:cfunc:`SemiringException`:
 
 .. list-table::
    :header-rows: 1
@@ -62,19 +89,35 @@ the corresponding gate types:
    * - ``value(string)``
      - ``gate_value`` -- interpret a literal string as a semiring value.
 
-Absorptive semirings
+Overriding these methods is only useful for *pseudo-semirings* that
+produce a symbolic representation of the provenance (e.g. the
+formula semiring renders a ``cmp`` gate as a literal string like
+``"x > 5"``).  A proper semiring does not evaluate ``cmp`` gates
+through these overrides: instead, before the main circuit traversal
+starts, :cfile:`having_semantics.hpp` walks the circuit, finds every
+``cmp`` gate that compares an aggregate against a constant, and
+computes its semiring value using the ordinary ``plus`` / ``times``
+/ ``monus`` operations of the semiring.  Each result is injected
+into the provenance mapping keyed by the ``cmp`` gate itself, so
+the main traversal reaches those gates with a pre-resolved value
+and treats them like ordinary leaves.  The semiring's ``cmp`` /
+``agg`` / ... overrides are therefore never reached on real
+queries.
+
+Absorptive Semirings
 ^^^^^^^^^^^^^^^^^^^^
 
 Override ``absorptive()`` to return ``true`` if :math:`a \oplus a = a`
-for all :math:`a` (e.g., Boolean, Why-provenance).  This lets the
-circuit evaluator deduplicate children of ``plus`` gates, which can
+for all :math:`a` (e.g., Boolean, Why-provenance).  The evaluator
+exploits this flag to enable several optimizations, which can
 significantly improve performance.
 
 
 Example: The Boolean Semiring
 -----------------------------
 
-:cfile:`Boolean.h` is the simplest semiring and a good template.
+:cfunc:`Boolean` (in :cfile:`Boolean.h`) is the simplest semiring
+and a good template.
 It evaluates provenance to ``true``/``false``: a tuple is in the result
 iff at least one derivation exists.
 
@@ -111,7 +154,8 @@ Key observations:
 Example: The Counting Semiring
 ------------------------------
 
-:cfile:`Counting.h` counts the number of distinct derivations
+:cfunc:`Counting` (in :cfile:`Counting.h`) counts the number of
+distinct derivations
 of each tuple.  Its carrier type is ``unsigned``.
 
 .. code-block:: cpp
@@ -142,21 +186,22 @@ Step-by-Step: Adding a New Semiring
 -----------------------------------
 
 1. **Create the header file** in ``src/semiring/``.  Name it after the
-   semiring (e.g., ``MyRing.h``).  Implement the class inheriting from
+   semiring (e.g., ``MySemiring.h``).  Implement the class inheriting from
    ``semiring::Semiring<V>``, inside the ``semiring`` namespace.
 
 2. **Register with the compiled evaluator**.  In
-   ``src/provenance_evaluate_compiled.cpp``, the function
-   ``provenance_evaluate_compiled_internal`` dispatches on a semiring
-   name string and a return-type OID.  Add a branch for your semiring:
+   :cfile:`provenance_evaluate_compiled.cpp`, the function
+   :cfunc:`provenance_evaluate_compiled_internal` dispatches on a
+   semiring name string and a return-type OID.  Add a branch for
+   your semiring:
 
    .. code-block:: cpp
 
       // In the appropriate type branch (VARCHAR, INT, BOOL, etc.):
-      if (semiring == "myring")
-        return pec_...(constants, c, g, inputs, "myring", drop_table);
+      if (semiring == "mysemiring")
+        return pec_...(constants, c, g, inputs, "mysemiring", drop_table);
 
-   The ``pec_*`` helper functions instantiate the C++ semiring class,
+   The ``pec_*`` helper functions instantiate the |cpp| semiring class,
    call ``GenericCircuit::evaluate<MySemiring>(...)``, and convert the
    result to a PostgreSQL ``Datum``.
 
@@ -165,10 +210,10 @@ Step-by-Step: Adding a New Semiring
 
    .. code-block:: plpgsql
 
-      CREATE OR REPLACE FUNCTION sr_myring(token UUID, token2anot REGCLASS)
+      CREATE OR REPLACE FUNCTION sr_mysemiring(token UUID, token2anot REGCLASS)
         RETURNS <return_type> AS
       $$
-        SELECT provsql.provenance_evaluate_compiled(token, token2anot, 'myring', NULL::<return_type>);
+        SELECT provsql.provenance_evaluate_compiled(token, token2anot, 'mysemiring', NULL::<return_type>);
       $$ LANGUAGE SQL;
 
 4. **Add a regression test** in ``test/sql/`` with expected output in
@@ -187,12 +232,12 @@ function), the call chain is:
 1. SQL function ``sr_boolean(token, mapping_table)`` calls
    ``provenance_evaluate_compiled(token, table, 'boolean', NULL::BOOLEAN)``.
 
-2. The C++ function :cfunc:`provenance_evaluate_compiled` extracts the
+2. The |cpp| function :cfunc:`provenance_evaluate_compiled` extracts the
    semiring name string and return-type OID, then calls
-   ``provenance_evaluate_compiled_internal``.
+   :cfunc:`provenance_evaluate_compiled_internal`.
 
 3. The internal function reads the circuit from mmap (via
-   ``getGenericCircuit``), creates a mapping from input gates to their
+   :cfunc:`getGenericCircuit`), creates a mapping from input gates to their
    annotations, and dispatches to the appropriate ``pec_*`` helper
    based on return type and semiring name.
 

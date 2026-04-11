@@ -42,38 +42,130 @@ planner and shared-memory hooks.
 Component Map
 -------------
 
-ProvSQL is a mixed C/C++ codebase.  The PostgreSQL interface layer is
+ProvSQL is a mixed C/|cpp| codebase.  The PostgreSQL interface layer is
 written in C (required by the extension API); complex data structures
-and algorithms are in C++.
+and algorithms are in |cpp|.
 
-**C files** (PostgreSQL interface):
+**C files** (PostgreSQL interface layer):
 
-- :cfile:`provsql.c` -- planner hook and query rewriting (the bulk of the
-  extension logic; ~3400 lines).
+*Planner hook and query rewriting*
+
+- :cfile:`provsql.c` -- planner hook and the bulk of the query
+  rewriting logic (~3400 lines).
+
+*Utilities and shared state*
+
 - :cfile:`provsql_utils.c` / :cfile:`provsql_utils.h` -- OID cache
   (:cfunc:`get_constants`), type helpers, gate-type enum.
-- :cfile:`provsql_mmap.c` -- mmap background worker and IPC.
-- :cfile:`provsql_shmem.c` -- shared-memory segment setup.
-- :cfile:`provenance.c` / :cfile:`aggregation_evaluate.c` / :cfile:`agg_token.c` --
-  SQL-callable C functions for provenance evaluation.
+- :cfile:`provsql_error.h` -- ``provsql_error`` / ``_warning`` /
+  ``_notice`` / ``_log`` macros.
+- :cfile:`c_cpp_compatibility.h` -- small shims for mixing C and C++
+  sources.
+
+*Memory-mapped circuit store*
+
+- :cfile:`provsql_mmap.c` / :cfile:`provsql_mmap.h` -- background
+  worker and IPC primitives.
+- :cfile:`provsql_shmem.c` / :cfile:`provsql_shmem.h` -- shared-memory
+  segment setup.
+
+*SQL-callable functions*
+
+- :cfile:`provenance.c` -- error stub for the ``provenance()`` SQL
+  function (reached only when a query bypasses the planner hook).
+- :cfile:`provenance_evaluate.c` -- SQL-level semiring evaluation
+  (user-defined ``plus``/``times``/... functions).
+- :cfile:`aggregation_evaluate.c` -- aggregate evaluation entry point.
+- :cfile:`agg_token.c` / :cfile:`agg_token.h` -- the ``agg_token``
+  composite type (UUID + running value).
+
+*PostgreSQL version compatibility*
+
 - :cfile:`compatibility.c` / :cfile:`compatibility.h` -- shims for
   cross-version PostgreSQL API differences.
 
 **C++ files** (data structures and algorithms):
 
-- :cfile:`Circuit.h` / :cfile:`Circuit.hpp` -- template base class for circuits.
-- :cfile:`GenericCircuit.h` / :cfile:`GenericCircuit.cpp` -- semiring-agnostic
-  in-memory circuit.
-- :cfile:`BooleanCircuit.h` / :cfile:`BooleanCircuit.cpp` -- Boolean-specific
-  circuit with knowledge compilation support.
-- :cfile:`MMappedCircuit.h` / :cfile:`MMappedCircuit.cpp` -- persistent
-  mmap-backed circuit storage.
-- ``semiring/*.h`` -- header-only semiring implementations.
-- :cfile:`dDNNF.h` / :cfile:`dDNNFTreeDecompositionBuilder.h` -- d-DNNF
-  construction for probability computation.
-- :cfile:`TreeDecomposition.h` -- tree decomposition algorithm.
-- :cfile:`TreeDecompositionKnowledgeCompiler.cpp` -- standalone ``tdkc``
-  tool.
+*Circuit representation*
+
+- :cfile:`Circuit.h` / :cfile:`Circuit.hpp` -- template base class
+  parameterised by gate type; inherited by all circuit variants.
+- :cfile:`GenericCircuit.h` / :cfile:`GenericCircuit.hpp` /
+  :cfile:`GenericCircuit.cpp` -- semiring-agnostic in-memory circuit.
+- :cfile:`BooleanCircuit.h` / :cfile:`BooleanCircuit.cpp` -- Boolean
+  circuit used for knowledge compilation and probability evaluation.
+- :cfile:`WhereCircuit.h` / :cfile:`WhereCircuit.cpp` --
+  where-provenance circuit.
+- :cfile:`DotCircuit.h` / :cfile:`DotCircuit.cpp` -- GraphViz DOT
+  export of circuits.
+
+*Persistent storage and in-memory reconstruction*
+
+- :cfile:`MMappedCircuit.h` / :cfile:`MMappedCircuit.cpp` --
+  mmap-backed persistent circuit store.
+- :cfile:`CircuitFromMMap.h` / :cfile:`CircuitFromMMap.cpp` -- reads
+  the mmap store to build in-memory :cfunc:`GenericCircuit` /
+  :cfunc:`BooleanCircuit` instances.
+- :cfile:`CircuitCache.h` / :cfile:`CircuitCache.cpp` /
+  :cfile:`circuit_cache.h` -- per-session gate cache.
+- :cfile:`MMappedUUIDHashTable.h` / :cfile:`MMappedUUIDHashTable.cpp`
+  -- open-addressing hash table keyed by UUID, stored in mmap.
+- :cfile:`MMappedVector.h` / :cfile:`MMappedVector.hpp` --
+  ``std::vector``-like container over an mmap region.
+
+*Semiring evaluation*
+
+- ``semiring/*.h`` -- header-only semiring implementations (Boolean,
+  Counting, Formula, Why, BoolExpr).
+- :cfile:`provenance_evaluate_compiled.cpp` /
+  :cfile:`provenance_evaluate_compiled.hpp` -- dispatcher for
+  compiled semirings.
+- :cfile:`having_semantics.cpp` / :cfile:`having_semantics.hpp` --
+  pre-evaluation of ``HAVING`` sub-circuits before the main semiring
+  traversal.
+
+*Aggregation*
+
+- :cfile:`Aggregation.h` / :cfile:`Aggregation.cpp` -- aggregate
+  operator enum, accumulator interface, and built-in accumulators
+  (see :doc:`adding-aggregate`).
+
+*Probability, Shapley, knowledge compilation*
+
+- :cfile:`probability_evaluate.cpp` -- probability-method dispatcher
+  (see :doc:`adding-probability-method`).
+- :cfile:`dDNNF.h` / :cfile:`dDNNF.cpp` -- d-DNNF data structure and
+  linear-time probability evaluation.
+- :cfile:`dDNNFTreeDecompositionBuilder.h` /
+  :cfile:`dDNNFTreeDecompositionBuilder.cpp` -- constructs a d-DNNF
+  from a tree decomposition.
+- :cfile:`TreeDecomposition.h` / :cfile:`TreeDecomposition.cpp` --
+  tree decomposition via min-fill elimination.
+- :cfile:`TreeDecompositionKnowledgeCompiler.cpp` -- the standalone
+  ``tdkc`` binary built by ``make tdkc``.
+- :cfile:`shapley.cpp` -- Shapley and Banzhaf value computation.
+
+*Export and visualization*
+
+- :cfile:`view_circuit.cpp` -- SQL ``view_circuit`` function
+  (renders a DOT graph via ``graph-easy``).
+- :cfile:`to_prov.cpp` -- PROV-XML export.
+- :cfile:`where_provenance.cpp` -- SQL where-provenance output
+  function.
+
+*C++ utilities*
+
+- :cfile:`provsql_utils_cpp.h` / :cfile:`provsql_utils_cpp.cpp` --
+  C++ counterparts to :cfile:`provsql_utils.h`, including UUID
+  string conversion.
+- :cfile:`subset.cpp` / :cfile:`subset.hpp` -- subset enumeration
+  used by HAVING evaluation.
+- :cfile:`Graph.h` -- lightweight graph helpers used by the tree
+  decomposition code.
+- :cfile:`PermutationStrategy.h` -- pluggable vertex-ordering
+  heuristic for tree decomposition.
+- :cfile:`flat_map.hpp` / :cfile:`flat_set.hpp` -- contiguous
+  associative containers used inside hot loops.
 
 
 Data Flow
@@ -125,8 +217,8 @@ The end-to-end flow of a query through ProvSQL:
    :sqlfunc:`provenance_evaluate`, :sqlfunc:`probability_evaluate`, or a
    compiled semiring evaluator (e.g., :sqlfunc:`sr_boolean`).  These
    retrieve the circuit from mmap, build an in-memory
-   ``GenericCircuit`` or ``BooleanCircuit``, and traverse the DAG
-   applying semiring operations.
+   :cfunc:`GenericCircuit` or :cfunc:`BooleanCircuit`, and traverse
+   the DAG applying semiring operations.
 
 
 The OID Cache: ``constants_t``
@@ -147,7 +239,7 @@ Key fields:
   ``OID_FUNCTION_PROVENANCE_DELTA``, ``OID_FUNCTION_PROVENANCE_AGGREGATE``,
   ``OID_FUNCTION_PROVENANCE_SEMIMOD``, etc.
 - **Gate-type mapping**: ``GATE_TYPE_TO_OID[nb_gate_types]`` maps each
-  ``gate_type`` enum value to the OID of the corresponding
+  :cfunc:`gate_type` enum value to the OID of the corresponding
   ``provenance_gate`` enum member in PostgreSQL.
 - **Status flag**: ``ok`` is ``true`` if the OIDs were loaded
   successfully (``false`` if the extension is not installed in the
@@ -162,8 +254,8 @@ Gate Types
 ----------
 
 The provenance circuit is a directed acyclic graph (DAG) whose nodes are
-*gates*.  Each gate has a type from the ``gate_type`` enum defined in
-:cfile:`provsql_utils.h`:
+*gates*.  Each gate has a type from the :cfunc:`gate_type` enum
+defined in :cfile:`provsql_utils.h`:
 
 .. list-table::
    :header-rows: 1

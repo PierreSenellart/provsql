@@ -105,6 +105,13 @@ a:visited   { color: #5A3E8C; }
 }
 
 /* ---- Code / pre ---- */
+/* Disable Fira Code ligatures (-- would otherwise render as em-dash, etc.) */
+.rst-content tt,
+.rst-content code,
+pre, div.highlight {
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
+}
 .rst-content tt,
 .rst-content code {
   font-family: 'Fira Code', 'Consolas', monospace;
@@ -127,6 +134,27 @@ pre, div.highlight {
 div.highlight pre {
   background-color: transparent;
   color: #2A1850;
+}
+
+/* ---- Tables ---- */
+/* sphinx-rtd-theme puts white-space: nowrap on <code> inside tables,
+   which forces horizontal scrolling for tables containing long
+   :cfunc:`...` names.  Allow wrapping instead. */
+.rst-content table.docutils td,
+.rst-content table.docutils th,
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.rst-content table.docutils td code,
+.rst-content table.docutils th code,
+.wy-table-responsive table td code,
+.wy-table-responsive table th code {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* ---- Tighten paragraph → list spacing ---- */
