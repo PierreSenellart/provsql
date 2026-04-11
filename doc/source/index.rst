@@ -49,7 +49,6 @@ This documentation is organized into three parts:
    user/temporal
    user/export
    user/configuration
-   user/bibliography
 
 .. _dev-guide:
 
@@ -80,3 +79,9 @@ This documentation is organized into three parts:
 
    sql/provsql
    c/provsql
+
+.. toctree::
+   :maxdepth: 1
+   :caption: References
+
+   user/bibliography
