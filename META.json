@@ -1,0 +1,52 @@
+{
+   "name": "provsql",
+   "abstract": "Semiring provenance and probability management for PostgreSQL",
+   "description": "ProvSQL is a PostgreSQL extension that adds (m-)semiring provenance and uncertainty management. It transparently rewrites SQL queries to track how each result depends on input tuples, then evaluates the provenance in any user-chosen semiring -- Boolean reachability, counting, probability, Shapley values, where-provenance, data-modification tracking, and more. The source is split between sql/provsql.common.sql (the primary file, shown in the Source view on this page, for all supported PostgreSQL versions) and sql/provsql.14.sql (additional objects requiring PostgreSQL 14 or later: data-modification tracking and temporal validity ranges). The full source is always available from the linked repository.",
+   "version": "1.2.1",
+   "maintainer": [
+      "Pierre Senellart <pierre@senellart.com>"
+   ],
+   "license": "mit",
+   "provides": {
+      "provsql": {
+         "abstract": "Semiring provenance and probability management for PostgreSQL",
+         "file": "sql/provsql.common.sql",
+         "docfile": "doc/provsql.md",
+         "version": "1.2.1"
+      }
+   },
+   "prereqs": {
+      "runtime": {
+         "requires": {
+            "PostgreSQL": "10.0.0"
+         }
+      }
+   },
+   "resources": {
+      "bugtracker": {
+         "web": "https://github.com/PierreSenellart/provsql/issues"
+      },
+      "repository": {
+         "url": "git://github.com/PierreSenellart/provsql.git",
+         "web": "https://github.com/PierreSenellart/provsql/",
+         "type": "git"
+      },
+      "homepage": "https://provsql.org/"
+   },
+   "generated_by": "release.sh",
+   "tags": [
+      "provenance",
+      "probability",
+      "shapley",
+      "semiring",
+      "uncertainty",
+      "circuit",
+      "where-provenance",
+      "probabilistic database"
+   ],
+   "meta-spec": {
+      "version": "1.0.0",
+      "url": "https://pgxn.org/meta/spec.txt"
+   },
+   "release_status": "stable"
+}

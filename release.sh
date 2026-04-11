@@ -8,7 +8,7 @@
 #   1. Validate version is newer than existing tags
 #   2. Prompt for release notes in $EDITOR
 #   3. Update provsql.common.control, website/_data/releases.yml,
-#      CITATION.cff, and CHANGELOG.md
+#      CITATION.cff, CHANGELOG.md, and META.json
 #   4. Commit, create signed tag, push, create GitHub release
 
 set -euo pipefail
@@ -33,6 +33,8 @@ git config user.signingkey > /dev/null 2>&1 \
   || die "CITATION.cff not found"
 [[ -f CHANGELOG.md ]] \
   || die "CHANGELOG.md not found"
+[[ -f META.json ]] \
+  || die "META.json not found"
 GH_REPO=$(git remote get-url origin | sed 's|git@github.com:||;s|\.git$||')
 
 # 1. Parse & validate version
@@ -174,6 +176,12 @@ mv "$TMP_YAML" "$RELEASES_FILE"
 sed -i "s/^version: .*/version: \"$VERSION\"/" CITATION.cff
 sed -i "s/^date-released: .*/date-released: \"$TODAY\"/" CITATION.cff
 
+# 6b. Update META.json (PGXN Meta Spec) — top-level "version" and
+#     the version under provides.provsql. Both are bare strings at
+#     predictable indents in the file we maintain, so sed is safe.
+sed -i "s/^   \"version\": \"[^\"]*\"/   \"version\": \"$VERSION\"/" META.json
+sed -i "s/^         \"version\": \"[^\"]*\"/         \"version\": \"$VERSION\"/" META.json
+
 # 7. Prepend the new release to CHANGELOG.md, mirroring the
 #    website/_data/releases.yml entry we just added.  The new block
 #    consists of a "## [VERSION] - DATE" heading followed by the
@@ -204,7 +212,7 @@ rm -f "$CHANGELOG_ENTRY"
 
 # 8. Commit
 
-git add provsql.common.control "$RELEASES_FILE" CITATION.cff CHANGELOG.md
+git add provsql.common.control "$RELEASES_FILE" CITATION.cff CHANGELOG.md META.json
 git commit -m "Release version $VERSION"
 
 # 9. Signed tag

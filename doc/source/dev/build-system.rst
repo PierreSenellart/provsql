@@ -380,8 +380,10 @@ creating a new release.  It:
    a no-op script if the SQL sources have not changed since the
    previous tag, aborting otherwise).
 4. Updates ``default_version`` in ``provsql.common.control``,
-   ``version:`` and ``date-released:`` in ``CITATION.cff``, and
-   prepends a new entry to both ``website/_data/releases.yml`` and
+   ``version:`` and ``date-released:`` in ``CITATION.cff``, the
+   top-level ``version`` and the ``provides.provsql.version`` in
+   ``META.json`` (the PGXN Meta Spec file), and prepends a new
+   entry to both ``website/_data/releases.yml`` and
    ``CHANGELOG.md`` (the repo-root changelog mirrors the website
    release-notes block, with the first
    ``## What's new in <version>`` heading stripped to avoid
