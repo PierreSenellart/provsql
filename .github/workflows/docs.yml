@@ -38,6 +38,9 @@ jobs:
     container: pgxn/pgxn-tools
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+          fetch-depth: 0
       - run: apt update
       - run: apt -y install python3-breathe python3-sphinx-rtd-theme python3-pybtex python3-sphinxcontrib.bibtex graphviz wget postgresql-server-dev-all
       - run: |
