@@ -44,6 +44,16 @@
       "where-provenance",
       "probabilistic database"
    ],
+   "no_index": {
+      "directory": [
+         "doc/source",
+         "doc/tutorial",
+         "doc/demo",
+         "doc/aggregation",
+         "doc/temporal_demo",
+         "where_panel"
+      ]
+   },
    "meta-spec": {
       "version": "1.0.0",
       "url": "https://pgxn.org/meta/spec.txt"
