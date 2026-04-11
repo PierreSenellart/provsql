@@ -5,6 +5,78 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.2.2] - 2026-04-11
+
+### In-place extension upgrades
+
+`ALTER EXTENSION provsql UPDATE` is now supported, starting with this
+release.  A committed chain of upgrade scripts under `sql/upgrades/`
+covers every previous release (1.0.0 → 1.1.0 → 1.2.0 → 1.2.1 → 1.2.2),
+so users on any historical version can upgrade in place without
+dropping and recreating the extension.  The persistent provenance
+circuit (memory-mapped files) is preserved across the upgrade: the
+on-disk format has been binary-stable since 1.0.0, and the relevant
+headers (`src/MMappedCircuit.h`, `src/provsql_utils.h`) now carry
+explicit warnings so future contributors don't break that guarantee
+by accident.
+
+A pg_regress regression test (`test/sql/extension_upgrade.sql`)
+exercises the full chain end-to-end on every PostgreSQL version in
+the CI matrix, installing the extension at 1.0.0 from a frozen
+install-script fixture and walking it up to the current
+`default_version`.  See the new "Extension Upgrades" section of the
+developer guide for the workflow contributors should follow when
+making SQL changes.
+
+### Repository housekeeping and discoverability
+
+- **`CHANGELOG.md`** at the repository root, mirroring the release
+  notes published at
+  [provsql.org/releases](https://provsql.org/releases/).  It is
+  automatically kept in sync by `release.sh`.
+
+- **GitHub issue and pull-request templates** under `.github/`.
+  The bug-report form prompts for PostgreSQL version, ProvSQL
+  version, OS, a minimal SQL reproducer, and optional verbose-mode
+  output; the PR template carries a contributor checklist and links
+  to the developer guide.
+
+- **DockerHub** image-version badge added to the README
+  ([`inriavalda/provsql`](https://hub.docker.com/r/inriavalda/provsql))
+  and a prose pointer on the website overview page.
+
+- **PGXN `META.json`** at the repository root, making ProvSQL ready
+  for submission to the [PostgreSQL Extension Network](https://pgxn.org).
+  Submission will happen once upstream approval lands; no change to
+  the build or install flow in the meantime.
+
+- **`CITATION.cff`** now carries the Zenodo concept DOI
+  ([`10.5281/zenodo.19512786`](https://doi.org/10.5281/zenodo.19512786))
+  and a Software Heritage archive URL in its `identifiers` block.
+
+### Infrastructure
+
+- `release.sh` learned to update `CITATION.cff`, `CHANGELOG.md`, and
+  `META.json` in sync with `provsql.common.control` and
+  `website/_data/releases.yml`, and to enforce the presence of an
+  upgrade script (auto-generating a no-op when no SQL sources have
+  changed since the previous tag).
+- CI workflows now fetch git tags so `git describe` works inside
+  the pgxn-tools containers, which unblocks the Makefile's
+  dev-cycle upgrade-script generation.
+- The four build / docs workflows' `paths-ignore` lists exclude
+  `META.json`, `.github/ISSUE_TEMPLATE/**`, and
+  `.github/pull_request_template.md`, so metadata-only edits do not
+  trigger the full CI matrix any more.
+
+### No SQL-level changes
+
+There are **no changes to `sql/provsql.common.sql` or
+`sql/provsql.14.sql`** in this release.  The SQL API, query
+rewriter, semiring evaluators, and probability machinery are
+unchanged from 1.2.1.  The upgrade script `1.2.1 → 1.2.2` is
+accordingly an empty placeholder.
+
 ## [1.2.1] - 2026-04-11
 
 Maintenance release headlining the new **developer guide** and laying
