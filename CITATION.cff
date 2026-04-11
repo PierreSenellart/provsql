@@ -57,6 +57,13 @@ url: "https://provsql.org"
 license: MIT
 version: "1.2.1"
 date-released: "2026-04-11"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.19512786"
+    description: "Concept DOI for all versions of ProvSQL (Zenodo)"
+  - type: url
+    value: "https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/PierreSenellart/provsql"
+    description: "Software Heritage archive of the ProvSQL repository"
 keywords:
   - provenance
   - probabilistic databases
