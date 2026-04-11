@@ -18,6 +18,8 @@ on:
       - 'release.sh'
       - 'CITATION.cff'
       - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
   pull_request:
     paths-ignore:
       - 'docker/**'
@@ -30,6 +32,8 @@ on:
       - 'release.sh'
       - 'CITATION.cff'
       - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
   workflow_dispatch:
 
 jobs:

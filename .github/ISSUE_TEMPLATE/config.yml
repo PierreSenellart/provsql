@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: ProvSQL documentation
+    url: https://provsql.org/docs/
+    about: User guide, developer guide, SQL API reference, and C/C++ API reference.
+  - name: Report a security vulnerability
+    url: https://github.com/PierreSenellart/provsql/security/advisories/new
+    about: Please report security issues privately via GitHub Security Advisories rather than a public issue.

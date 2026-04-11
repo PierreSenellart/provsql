@@ -4,8 +4,15 @@ Thank you for your interest in contributing to ProvSQL!
 
 ## Reporting bugs and requesting features
 
-Please use the [GitHub issue tracker](https://github.com/PierreSenellart/provsql/issues).
-For security vulnerabilities, see [SECURITY.md](SECURITY.md) instead.
+Please use the [GitHub issue
+tracker](https://github.com/PierreSenellart/provsql/issues).  Two
+issue templates are provided and will auto-fill when you open a new
+issue: a bug-report form that asks for the information we typically
+need (PostgreSQL version, ProvSQL version, a minimal SQL reproducer,
+and optional verbose-mode output) and a feature-request form.  For
+security vulnerabilities, please use the [private security
+advisory](https://github.com/PierreSenellart/provsql/security/advisories/new)
+flow instead of a public issue — see [SECURITY.md](SECURITY.md).
 
 ## Developer guide
 
