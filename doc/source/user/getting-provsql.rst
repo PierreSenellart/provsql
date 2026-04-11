@@ -1,10 +1,12 @@
 Getting ProvSQL
 ===============
 
-There are two ways to run ProvSQL:
+There are three ways to run ProvSQL:
 
 * **Installing from source** (recommended) – full-featured, suitable for
   production use and development.
+* **Via PGXN** – the PostgreSQL Extension Network wraps the source build
+  behind a one-line ``pgxn install provsql`` command.
 * **Docker container** – no installation required, ideal for quickly trying
   ProvSQL without modifying your system.
 
@@ -174,8 +176,30 @@ Uninstalling
 Then remove the ``provsql`` entry from ``shared_preload_libraries`` in
 ``postgresql.conf`` and restart the server.
 
+Via PGXN
+--------
+
+ProvSQL is distributed on the `PostgreSQL Extension Network
+<https://pgxn.org/dist/provsql/>`_.  If you have the
+`pgxnclient <https://pgxn.github.io/pgxnclient/>`_ tool installed,
+a single command downloads, builds, and installs the extension::
+
+    pgxn install provsql
+
+You still need the build prerequisites (C++17 compiler, Boost
+headers, PostgreSQL server development headers, and a working
+``pg_config`` on your ``PATH``) and you still need to add ``provsql``
+to ``shared_preload_libraries`` in ``postgresql.conf`` and restart
+the server afterwards -- ``pgxn install`` wraps the source build but
+does not modify your server configuration.
+
+To install a specific version::
+
+    pgxn install provsql=1.2.2
+
+
 Docker Container
------------------
+----------------
 
 For a quick trial without any local installation, a demonstration Docker
 container is available. It is full-featured except for ``c2d`` and

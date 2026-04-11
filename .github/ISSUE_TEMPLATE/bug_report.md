@@ -10,7 +10,7 @@ labels: bug
 - **ProvSQL version**: <!-- run: SELECT extversion FROM pg_extension WHERE extname = 'provsql'; -->
 - **PostgreSQL version**: <!-- run: SELECT version(); -->
 - **Operating system**: <!-- e.g. Ubuntu 22.04, macOS 14.5, WSL2, Docker image -->
-- **Installed from**: <!-- source build / Docker / distribution package -->
+- **Installed from**: <!-- source build / PGXN / Docker / distribution package -->
 - **`shared_preload_libraries`** set to include `provsql`? <!-- yes/no -->
 
 ## Describe the bug
