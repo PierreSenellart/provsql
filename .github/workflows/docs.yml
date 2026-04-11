@@ -16,6 +16,8 @@ on:
       - '.github/workflows/macos.yml'
       - '.github/workflows/wsl.yml'
       - 'release.sh'
+      - 'CITATION.cff'
+      - 'LICENSE'
   pull_request:
     paths-ignore:
       - 'docker/**'
@@ -26,6 +28,8 @@ on:
       - '.github/workflows/macos.yml'
       - '.github/workflows/wsl.yml'
       - 'release.sh'
+      - 'CITATION.cff'
+      - 'LICENSE'
   workflow_dispatch:
 
 jobs:
