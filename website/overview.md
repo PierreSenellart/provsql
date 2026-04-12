@@ -75,7 +75,13 @@ file directly. The canonical reference is:
 > Montréal, Canada, May 2026.*
 > [arXiv:2504.12058](https://arxiv.org/abs/2504.12058)
 
-## Architecture and More {#architecture}
+## Architecture {#architecture}
+
+The diagram below shows the end-to-end flow of a query through ProvSQL
+(see the [architecture chapter](/docs/dev/architecture.html) in the
+developer guide for details):
+
+![ProvSQL dataflow](/assets/images/dataflow.svg)
 
 - [SQL API reference](/doxygen-sql/html/) – user-facing SQL functions
 - [C/C++ API reference](/doxygen-c/html/) – internal implementation

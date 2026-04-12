@@ -177,8 +177,8 @@ The end-to-end flow of a query through ProvSQL:
 
    digraph dataflow {
      rankdir=LR;
-     node [shape=box, fontname="monospace", fontsize=10];
-     edge [fontsize=9];
+     node [shape=box, fontname="sans-serif", fontsize=11];
+     edge [fontsize=9, fontname="sans-serif"];
 
      sql [label="SQL query", shape=ellipse];
      planner [label="provsql_planner"];
