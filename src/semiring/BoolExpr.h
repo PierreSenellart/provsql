@@ -20,6 +20,11 @@
  *
  * The semiring is absorptive: duplicate children of OR/AND gates are
  * deduplicated during gate construction.
+ *
+ * @see https://provsql.org/lean-docs/Provenance/Semirings/BoolFunc.html
+ *      Lean 4 verified instance (@c BoolFunc): the algebraic counterpart
+ *      of Boolean circuits, with proofs of @c BoolFunc.absorptive,
+ *      @c BoolFunc.idempotent, and @c BoolFunc.mul_sub_left_distributive.
  */
 #ifndef BOOLEXPR_H
 #define BOOLEXPR_H

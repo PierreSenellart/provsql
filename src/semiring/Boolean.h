@@ -17,6 +17,11 @@
  * - @c times()  → logical AND (all_of)
  * - @c monus()  → @f$x \;\&\; \lnot y@f$
  * - @c delta()  → identity
+ *
+ * @see https://provsql.org/lean-docs/Provenance/Semirings/Bool.html
+ *      Lean 4 verified instance: @c instSemiringWithMonusBool, with
+ *      proofs of @c Bool.absorptive, @c Bool.idempotent, and
+ *      @c Bool.mul_sub_left_distributive.
  */
 #ifndef BOOLEAN_H
 #define BOOLEAN_H

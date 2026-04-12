@@ -19,6 +19,11 @@
  * - @c delta()  → identity (returns @f$x@f$ unchanged if non-empty)
  *
  * This semiring is absorptive (set union is idempotent).
+ *
+ * @see https://provsql.org/lean-docs/Provenance/Semirings/Why.html
+ *      Lean 4 verified instance: @c instSemiringWithMonusWhy, with
+ *      proofs of @c Why.idempotent, @c Why.not_absorptive, and
+ *      @c Why.not_mul_sub_left_distributive.
  */
 #ifndef WHY_H
 #define WHY_H

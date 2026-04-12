@@ -613,6 +613,10 @@ remove_provenance_attributes_select(const constants_t *constants, Query *q,
  * @c SR_TIMES corresponds to the multiplicative operation (joins, Cartesian
  * products), @c SR_PLUS to the additive operation (duplicate elimination), and
  * @c SR_MONUS to the monus / set-difference operation (EXCEPT).
+ *
+ * @see https://provsql.org/lean-docs/Provenance/QueryRewriting.html
+ *      Lean 4 formalization of rewriting rules (R1)--(R5) and correctness
+ *      theorem @c Query.rewriting_valid.
  */
 typedef enum {
   SR_PLUS,  ///< Semiring addition (UNION, SELECT DISTINCT)

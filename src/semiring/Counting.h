@@ -15,6 +15,11 @@
  * - @c delta()  → 1 if x ≠ 0, else 0
  *
  * This semiring is **not** absorptive.
+ *
+ * @see https://provsql.org/lean-docs/Provenance/Semirings/Nat.html
+ *      Lean 4 verified instance: @c instSemiringWithMonusNat, with
+ *      proofs of @c Nat.mul_sub_left_distributive, @c Nat.not_idempotent,
+ *      and @c Nat.not_absorptive.
  */
 #ifndef COUNTING_H
 #define COUNTING_H

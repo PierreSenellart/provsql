@@ -23,6 +23,12 @@
  *
  * Concrete implementations live in the same @c semiring/ directory:
  * @c Boolean.h, @c Counting.h, @c Formula.h, @c Why.h, @c BoolExpr.h.
+ *
+ * @see https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html
+ *      Lean 4 formalization of the @c SemiringWithMonus typeclass and
+ *      proofs of the key monus identities (@c monus_smallest,
+ *      @c monus_self, @c zero_monus, @c monus_add, @c add_monus,
+ *      @c idempotent_iff_add_monus).
  */
 #ifndef SEMIRING_H
 #define SEMIRING_H
