@@ -23,6 +23,7 @@ on:
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/macos.yml'
+      - '.github/workflows/pgxn.yml'
   pull_request:
     paths-ignore:
       - 'doc/**'
@@ -40,6 +41,7 @@ on:
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/macos.yml'
+      - '.github/workflows/pgxn.yml'
   workflow_dispatch:
 
 jobs:

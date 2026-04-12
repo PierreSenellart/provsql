@@ -22,6 +22,7 @@ on:
       - '.github/workflows/codeql.yml'
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/pgxn.yml'
       - '.github/workflows/wsl.yml'
   pull_request:
     paths-ignore:
@@ -39,6 +40,7 @@ on:
       - '.github/workflows/codeql.yml'
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
+      - '.github/workflows/pgxn.yml'
       - '.github/workflows/wsl.yml'
   workflow_dispatch:
 
