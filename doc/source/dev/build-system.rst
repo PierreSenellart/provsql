@@ -324,8 +324,9 @@ To exercise the same upgrade path interactively:
 
    # Install the current build (which now ships the 1.0.0 fixture
    # and all upgrade scripts alongside the current install script).
-   make && sudo make install
-   sudo systemctl restart postgresql
+   # Run as a user with write access to the PostgreSQL directories
+   make && make install
+   systemctl restart postgresql
 
    # Install the extension at the old version and populate state.
    psql <<'SQL'

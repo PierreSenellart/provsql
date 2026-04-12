@@ -3,11 +3,11 @@ Getting ProvSQL
 
 There are three ways to run ProvSQL:
 
-* **Installing from source** (recommended) – full-featured, suitable for
+* `Installing from Source`_ (recommended) – full-featured, suitable for
   production use and development.
-* **Via PGXN** – the PostgreSQL Extension Network wraps the source build
+* `Via PGXN`_ – the PostgreSQL Extension Network wraps the source build
   behind a one-line ``pgxn install provsql`` command.
-* **Docker container** – no installation required, ideal for quickly trying
+* `Docker Container`_ – no installation required, ideal for quickly trying
   ProvSQL without modifying your system.
 
 Installing from Source
@@ -106,10 +106,11 @@ Starting with **1.2.1**, ProvSQL ships PostgreSQL extension upgrade
 scripts for the chain ``1.0.0 → 1.1.0 → 1.2.0 → 1.2.1``. To upgrade
 an existing installation:
 
-1. Check out the new source, build, and install::
+1. Check out the new source, build, and install (as a user with write
+   access to the PostgreSQL directories)::
 
        make
-       sudo make install
+       make install
 
 2. Restart PostgreSQL so the new shared library is loaded::
 
@@ -182,7 +183,8 @@ Via PGXN
 ProvSQL is distributed on the `PostgreSQL Extension Network
 <https://pgxn.org/dist/provsql/>`_.  If you have the
 `pgxnclient <https://pgxn.github.io/pgxnclient/>`_ tool installed,
-a single command downloads, builds, and installs the extension::
+a single command (run as a user with write access to the PostgreSQL
+directories) downloads, builds, and installs the extension::
 
     pgxn install provsql
 

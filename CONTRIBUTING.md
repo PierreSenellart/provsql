@@ -57,8 +57,8 @@ SQL files, and the CI workflows in detail.
 Tests are integration tests against a live PostgreSQL instance:
 
 ```sh
-sudo make install
-sudo service postgresql restart
+make install    # as a user with write access to the PostgreSQL directories
+service postgresql restart
 make test
 ```
 
