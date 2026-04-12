@@ -5,6 +5,32 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.2.3] - 2026-04-12
+
+### PGXN improvements
+
+- Prevent indexing of secondary documentation directories
+  (`doc/source/`, `doc/tutorial/`, `doc/demo/`, `doc/aggregation/`,
+  `doc/temporal_demo/`, `where_panel/`) on the PGXN distribution page
+  via `no_index` in `META.json`.
+
+- Document PGXN as an installation channel in the user guide, with
+  a note that `pgxn install` does not configure
+  `shared_preload_libraries`.
+
+- Add a GitHub Actions workflow (`.github/workflows/pgxn.yml`) that
+  automatically publishes releases to PGXN on version-tag pushes.
+
+### Documentation and repository housekeeping
+
+- Add `CODE_OF_CONDUCT.md`.
+
+- Add architecture dataflow diagram to the website overview page.
+
+- Replace `sudo` with generic "as a user with write access to the
+  PostgreSQL directories" wording across installation and contribution
+  documentation.
+
 ## [1.2.2] - 2026-04-11
 
 ### In-place extension upgrades

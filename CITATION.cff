@@ -55,8 +55,8 @@ authors:
 repository-code: "https://github.com/PierreSenellart/provsql"
 url: "https://provsql.org"
 license: MIT
-version: "1.2.2"
-date-released: "2026-04-11"
+version: "1.2.3"
+date-released: "2026-04-12"
 identifiers:
   - type: doi
     value: "10.5281/zenodo.19512786"
