@@ -25,6 +25,14 @@ h2.groupheader {
   color: #6B4FA0;
 }
 
+/* ---- Page title (Doxygen renders this as <div class="title">, not <h1>) ---- */
+div.headertitle div.title {
+  font-family: 'EB Garamond', 'Palatino Linotype', serif;
+  font-style: italic;
+  font-weight: 600;
+  color: #2A1850;
+}
+
 /* ---- Title / header area ---- */
 #titlearea {
   background-color: #6B4FA0;
@@ -127,6 +135,14 @@ tr.separator td { border-bottom: 1px solid #D6CCF0; }
   #projectlogo img { max-height: 40px; }
   #projectname { font-size: 1.2rem; }
   #projectbrief { font-size: 0.75rem; }
+
+  /* Move hamburger to the right to match the main site;
+     hide the search box which would otherwise overlap it */
+  .main-menu-btn {
+    float: right;
+    margin-right: 8px;
+  }
+  #MSearchBox { display: none !important; }
 
   /* Wrap navigation tabs */
   div.tabs, div.tabs2, div.tabs3 {

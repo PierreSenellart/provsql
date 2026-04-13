@@ -1,3 +1,11 @@
+<script>
+if (!document.querySelector('link[rel="icon"]')) {
+  var link = document.createElement('link');
+  link.rel = 'icon';
+  link.href = 'favicon.ico';
+  document.head.appendChild(link);
+}
+</script>
 <div id="provsql-back-link" style="
   text-align: center;
   padding: 0.6em 1em;

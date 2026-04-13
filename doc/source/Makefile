@@ -31,11 +31,13 @@ help:
 	# Build Doxygen outputs
 	doxygen Doxyfile-c
 	doxygen Doxyfile-sql
-	# Copy fonts into each Doxygen HTML output (for self-hosted @font-face)
+	# Copy fonts and favicon into each Doxygen HTML output
 	cp -r $(BRANDING)/fonts/. ../doxygen-c/html/fonts
 	cp -r $(BRANDING)/fonts/. ../doxygen-sql/html/fonts
 	cp $(BRANDING)/fonts-face.css ../doxygen-c/html/fonts-face.css
 	cp $(BRANDING)/fonts-face.css ../doxygen-sql/html/fonts-face.css
+	cp $(BRANDING)/favicon.ico ../doxygen-c/html/favicon.ico
+	cp $(BRANDING)/favicon.ico ../doxygen-sql/html/favicon.ico
 	python3 postprocess-sql-html.py
 	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 	# Force-overwrite Sphinx-cached static files with latest branding
