@@ -8,11 +8,8 @@ Parts of the theory underlying ProvSQL have been formally verified in
 [Lean 4](https://lean-lang.org/), providing a rigorous mathematical foundation
 for the provenance semiring framework on which ProvSQL is built.
 
-The source code is available on GitHub:
-[PierreSenellart/provenance-lean](https://github.com/PierreSenellart/provenance-lean){:target="_blank"}
-
-[Browse the Lean Documentation](/lean-docs/Provenance.html){: .btn .btn--primary}{:target="_blank"}
-[Source on GitHub](https://github.com/PierreSenellart/provenance-lean){: .btn .btn--inverse}{:target="_blank"}
+[Browse the Lean Documentation](/lean-docs/Provenance.html){: .btn .btn--primary}
+<a href="https://github.com/PierreSenellart/provenance-lean" class="btn btn--inverse"><i class="fab fa-github"></i>&nbsp; Source</a>
 
 ## What Has Been Formalized
 
