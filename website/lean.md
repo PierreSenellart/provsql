@@ -11,6 +11,9 @@ for the provenance semiring framework on which ProvSQL is built.
 The source code is available on GitHub:
 [PierreSenellart/provenance-lean](https://github.com/PierreSenellart/provenance-lean){:target="_blank"}
 
+[Browse the Lean Documentation](/lean-docs/Provenance.html){: .btn .btn--primary}{:target="_blank"}
+[Source on GitHub](https://github.com/PierreSenellart/provenance-lean){: .btn .btn--inverse}{:target="_blank"}
+
 ## What Has Been Formalized
 
 The formalization covers the core algebraic and database-theoretic foundations of provenance:
@@ -23,7 +26,3 @@ The formalization covers the core algebraic and database-theoretic foundations o
 
 **Query rewriting.** A query rewriting evaluation strategy on annotated relations, with ongoing correctness proofs connecting it to the direct annotated semantics.
 
-## Lean Documentation
-
-Auto-generated documentation for the Lean library is available at:
-[provsql.org/lean-docs/Provenance.html](/lean-docs/Provenance.html){:target="_blank"}
