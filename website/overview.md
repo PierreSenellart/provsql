@@ -75,6 +75,11 @@ file directly. The canonical reference is:
 > Montréal, Canada, May 2026.*
 > [arXiv:2504.12058](https://arxiv.org/abs/2504.12058)
 
+<a href="/assets/provsql.bib" class="btn btn--inverse">Download BibTeX</a>
+
+See the [Publications](/publications/) page for a full list of research
+papers related to ProvSQL.
+
 ## Architecture {#architecture}
 
 The diagram below shows the end-to-end flow of a query through ProvSQL
