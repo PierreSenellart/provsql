@@ -41,9 +41,24 @@
   background-color: rgba(107,79,160,0.6);
 }
 
-/* ---- Topbar ---- */
+/* ---- Topbar (mobile hamburger menu) ---- */
 .wy-nav-top {
   background-color: #6B4FA0;
+}
+/* Move hamburger icon to the right to match the main Jekyll site */
+@media screen and (max-width: 768px) {
+  .wy-nav-top {
+    display: flex;
+    align-items: center;
+  }
+  .wy-nav-top i {
+    order: 1;
+    margin-left: auto;
+    float: none;
+  }
+  .wy-nav-top a {
+    float: none;
+  }
 }
 .wy-nav-top a {
   color: #F4F0FA;
@@ -113,7 +128,9 @@ pre, div.highlight {
   font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
 }
 .rst-content tt,
-.rst-content code {
+.rst-content code,
+.rst-content tt.literal,
+.rst-content code.literal {
   font-family: 'Fira Code', 'Consolas', monospace;
   background-color: #E8E0F8;
   color: #5A3E8C;
