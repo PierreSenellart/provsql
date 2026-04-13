@@ -195,3 +195,15 @@ footer {
   font-family: 'Jost', 'Segoe UI', sans-serif;
   color: #8A7A9B;
 }
+#provsql-back-link {
+  text-align: center;
+  padding: 0.6em 1em;
+  background: #2A1850;
+  border-top: 2px solid #E8B84B;
+  font-family: 'Jost', 'Segoe UI', sans-serif;
+  font-size: 0.85rem;
+}
+#provsql-back-link a {
+  color: rgba(244,240,250,0.85);
+  text-decoration: none;
+}
