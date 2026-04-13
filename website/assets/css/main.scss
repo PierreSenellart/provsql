@@ -277,15 +277,35 @@ div.highlight, figure.highlight {
 // ============================================================
 
 .page__footer {
-  background: #EDE8F7;
-  color: #8A7A9B;
-  border-top: 1px solid #D6CCF0;
+  background: #2A1850;
+  color: rgba(244,240,250,0.85);
+  border-top: 2px solid #E8B84B;
+  padding: 0;
 
-  a { color: #6B4FA0; }
+  a { color: rgba(244,240,250,0.85); }
 
   footer {
     font-family: 'Jost', sans-serif;
     font-size: 0.82rem;
+    padding: 0;
+  }
+}
+
+#provsql-site-footer {
+  text-align: center;
+  padding: 0.8em 1em;
+  font-family: 'Jost', 'Segoe UI', sans-serif;
+  font-size: 0.85rem;
+
+  a {
+    color: rgba(244,240,250,0.85);
+    text-decoration: none;
+    &:hover { color: #E8B84B; }
+  }
+
+  .sep {
+    margin: 0 0.4em;
+    color: rgba(244,240,250,0.4);
   }
 }
 
