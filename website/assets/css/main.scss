@@ -491,3 +491,63 @@ table.grant-meta {
   margin-left: 0.75em;
   display: inline-block;
 }
+
+
+// ============================================================
+// Collapsible release notes
+// ============================================================
+
+details summary {
+  font-family: 'Jost', 'Segoe UI', sans-serif;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #6B4FA0;
+  cursor: pointer;
+  padding: 0.4em 0.8em;
+  border: 1px solid #6B4FA0;
+  border-radius: 4px;
+  display: inline-block;
+  transition: background 0.15s, color 0.15s;
+
+  &:hover {
+    background: #6B4FA0;
+    color: #fff;
+  }
+}
+
+details[open] summary {
+  background: #6B4FA0;
+  color: #fff;
+  border-radius: 4px 4px 0 0;
+  margin-bottom: 0;
+}
+
+details[open] > div {
+  border: 1px solid #D6CCF0;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  padding: 0.5em 1em;
+
+  h3, h4 {
+    margin-top: 0.6em;
+    margin-bottom: 0.3em;
+    font-size: 1rem;
+  }
+
+  p, ul, ol {
+    margin-top: 0.3em;
+    margin-bottom: 0.3em;
+  }
+
+  li {
+    margin-bottom: 0.15em;
+  }
+
+  > :first-child {
+    margin-top: 0;
+  }
+
+  > :last-child {
+    margin-bottom: 0;
+  }
+}
