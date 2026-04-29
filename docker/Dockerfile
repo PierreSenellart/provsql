@@ -12,7 +12,7 @@ WORKDIR /opt/provsql
 RUN apt-get update &&\
     apt-get -y install git build-essential curl\
                libc6-i386 unzip mercurial libgmp-dev libboost-dev\
-               libboost-serialization-dev
+               libboost-serialization-dev iproute2
 
 # Specify which version we are building against
 ARG PSQL_VERSION=15
