@@ -670,6 +670,8 @@ static Expr *add_eq_from_OpExpr_to_Expr(const constants_t *constants,
         return toExpr;
     } else
       return toExpr;
+    if (!columns[v1->varno - 1])
+      return toExpr;
     first_arg = Int16GetDatum(columns[v1->varno - 1][v1->varattno - 1]);
 
     if (IsA(lsecond(fromOpExpr->args), Var)) {
@@ -682,6 +684,8 @@ static Expr *add_eq_from_OpExpr_to_Expr(const constants_t *constants,
       } else
         return toExpr;
     } else
+      return toExpr;
+    if (!columns[v2->varno - 1])
       return toExpr;
     second_arg = Int16GetDatum(columns[v2->varno - 1][v2->varattno - 1]);
 
@@ -1211,7 +1215,8 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           Expr *ge = lfirst(list_nth_cell(rte_v->groupexprs, vte_v->varattno - 1));
           if(IsA(ge, Var)) {
             Var *v = (Var *) ge;
-            value_v = columns[v->varno - 1][v->varattno - 1];
+            value_v = columns[v->varno - 1] ?
+              columns[v->varno - 1][v->varattno - 1] : 0;
           } else {
             Const *ce = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
                                   sizeof(int32), Int32GetDatum(0), false, true);
@@ -1222,11 +1227,13 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
         } else
 #endif
         if (rte_v->rtekind != RTE_JOIN) { // Normal RTE
-          value_v = columns[vte_v->varno - 1][vte_v->varattno - 1];
+          value_v = columns[vte_v->varno - 1] ?
+            columns[vte_v->varno - 1][vte_v->varattno - 1] : 0;
         } else { // Join RTE
           Var *jav_v = (Var *)lfirst(
             list_nth_cell(rte_v->joinaliasvars, vte_v->varattno - 1));
-          value_v = columns[jav_v->varno - 1][jav_v->varattno - 1];
+          value_v = columns[jav_v->varno - 1] ?
+            columns[jav_v->varno - 1][jav_v->varattno - 1] : 0;
         }
 
         /* If this is a valid column */
