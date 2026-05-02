@@ -6,8 +6,10 @@
  * converts a bounded-treewidth Boolean circuit into a d-DNNF by following
  * the construction in Section 5.1 of:
  *
- * > A. Jha and D. Suciu, "Knowledge Compilation Meets Database Theory:
- * >  Compiling Queries to d-DNNFs". ICDT 2013. https://arxiv.org/pdf/1811.02944
+ * > A. Amarilli, F. Capelli, M. Monet, P. Senellart,
+ * >  "Connecting Knowledge Compilation Classes and Width Parameters".
+ * >  Theory of Computing Systems 64(5):861–914, 2020.
+ * >  https://doi.org/10.1007/s00224-019-09930-2
  *
  * The algorithm traverses the tree decomposition bottom-up.  For each bag
  * it maintains a set of *dDNNFGate* partial results, each carrying a
@@ -30,7 +32,7 @@
 
 /* Turn a bounded-treewidth circuit c for which a tree decomposition td
  * is provided into a dNNF rooted at root, following the construction in
- * Section 5.1 of https://arxiv.org/pdf/1811.02944 */
+ * Section 5.1 of https://doi.org/10.1007/s00224-019-09930-2 */
 dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
   // We make the tree decomposition friendly
   td.makeFriendly(root_id);
@@ -437,6 +439,14 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
             for(auto &[var, val]: valuation)
               if(innocent.find(var)==innocent.end())
                 suspicious.insert(var);
+
+            // The reuse optimization in collectGatesToOr can push the same
+            // gate ID twice when two partial entries share a TRUE gate and
+            // collapse to the same (valuation, innocent) key.  Duplicates
+            // in an OR's wire list cause probabilityEvaluation() to
+            // double-count via the cache, so remove them here.
+            std::sort(gates.begin(), gates.end());
+            gates.erase(std::unique(gates.begin(), gates.end()), gates.end());
 
             if(gates.size()==1)
               result_gate = *gates.begin();
