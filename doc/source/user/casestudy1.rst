@@ -1,5 +1,5 @@
-Tutorial: The Open Science Database
-=====================================
+Case Study: The Open Science Database
+======================================
 
 This tutorial introduces a broader set of ProvSQL features through a
 realistic scientific literature analysis scenario.
@@ -33,7 +33,7 @@ Setup
 -----
 
 This tutorial assumes a working ProvSQL installation (see
-:doc:`getting-provsql`). Download :download:`setup.sql <../../tutorial2/setup.sql>`
+:doc:`getting-provsql`). Download :download:`setup.sql <../../casestudy1/setup.sql>`
 and load it into a fresh PostgreSQL database::
 
     psql -d mydb -f setup.sql

@@ -7,11 +7,15 @@ queries to track which input tuples contribute to each result, then
 evaluates the provenance in any user-chosen semiring -- Boolean
 reachability, counting, probability, Shapley values, and more.
 
-This documentation is organized into three parts:
+This documentation is organized into four parts:
 
 * The :ref:`user-guide` explains how to install, configure, and use
   ProvSQL from the SQL level.  Start here if you are new to
   ProvSQL.
+
+* The :ref:`case-studies` present extended worked examples of ProvSQL
+  applied to realistic scenarios, covering a broader range of features
+  than the introductory tutorial.
 
 * The :ref:`dev-guide` describes ProvSQL's internal architecture
   and is aimed at contributors.  It covers the PostgreSQL
@@ -38,7 +42,6 @@ This documentation is organized into three parts:
    user/introduction
    user/getting-provsql
    user/tutorial
-   user/tutorial2
    user/provenance-tables
    user/querying
    user/aggregation
@@ -50,6 +53,14 @@ This documentation is organized into three parts:
    user/temporal
    user/export
    user/configuration
+
+.. _case-studies:
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Case Studies
+
+   user/casestudy1
 
 .. _dev-guide:
 
