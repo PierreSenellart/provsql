@@ -126,6 +126,8 @@ semiring plus and times operations. For example, given a type
                                      'security_plus', 'security_times')
     FROM (SELECT DISTINCT city FROM personnel) t;
 
+.. _custom-semirings:
+
 Custom Semirings with :sqlfunc:`provenance_evaluate`
 ------------------------------------------------------
 

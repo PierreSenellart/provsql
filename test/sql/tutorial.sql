@@ -361,3 +361,13 @@ WHERE probability_evaluate(provenance(),'possible-worlds')>0.99 AND
 SELECT remove_provenance('results');
 SELECT * FROM results;
 DROP TABLE results;
+
+DROP TABLE witness_mapping;
+DROP TABLE count_mapping;
+DROP TABLE suspects;
+DROP TABLE consistent_s;
+DROP TABLE s;
+DROP TABLE sightings;
+DROP TABLE room;
+DROP TABLE reliability;
+DROP TABLE person;

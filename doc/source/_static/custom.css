@@ -183,6 +183,34 @@ div.highlight pre {
   margin-bottom: 12px;
 }
 
+/* ---- Admonitions (note / warning / hint) ---- */
+.rst-content .note,
+.rst-content .hint,
+.rst-content .warning {
+  background-color: #EDE8F7;
+  border-left: 4px solid;
+}
+.rst-content .note  { border-color: #6B4FA0; }
+.rst-content .hint  { border-color: #E8B84B; }
+.rst-content .warning { border-color: #C4664A; }
+
+.rst-content .note    > .admonition-title,
+.rst-content .hint    > .admonition-title,
+.rst-content .warning > .admonition-title {
+  font-family: 'Jost', 'Segoe UI', sans-serif;
+  font-weight: 600;
+  font-style: normal;
+}
+.rst-content .note    > .admonition-title { background-color: #6B4FA0; color: #F4F0FA; }
+.rst-content .hint    > .admonition-title { background-color: #E8B84B; color: #2A1850; }
+.rst-content .warning > .admonition-title { background-color: #C4664A; color: #F4F0FA; }
+
+.rst-content .note    > .admonition-title::before,
+.rst-content .hint    > .admonition-title::before,
+.rst-content .warning > .admonition-title::before {
+  color: inherit;
+}
+
 /* ---- Spoiler / collapsible blocks ---- */
 details {
   margin-bottom: 1.5em;

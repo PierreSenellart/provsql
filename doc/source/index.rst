@@ -38,6 +38,7 @@ This documentation is organized into three parts:
    user/introduction
    user/getting-provsql
    user/tutorial
+   user/tutorial2
    user/provenance-tables
    user/querying
    user/aggregation

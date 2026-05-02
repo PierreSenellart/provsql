@@ -64,6 +64,9 @@ test: where_provenance
 # Full example from tutorial
 test: tutorial
 
+# Full example from tutorial 2 (scientific claims)
+test: tutorial2
+
 # Grouping
 test: group_by_empty
 
