@@ -61,7 +61,12 @@ CREATE OR REPLACE FUNCTION create_gate(
   children uuid[] DEFAULT NULL)
   RETURNS void AS
   'provsql','create_gate' LANGUAGE C PARALLEL SAFE;
-/** @brief Return the gate type of a provenance token */
+/**
+ * @brief Return the gate type of a provenance token
+ *
+ * Returns @c 'input' for any token not yet materialized in the circuit,
+ * since input is the default semantics of an unmaterialized provenance token.
+ */
 CREATE OR REPLACE FUNCTION get_gate_type(
   token UUID)
   RETURNS provenance_gate AS
@@ -137,7 +142,13 @@ CREATE OR REPLACE FUNCTION get_extra(token UUID)
   RETURNS TEXT AS
   'provsql','get_extra' LANGUAGE C STABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT;
 
-/** @brief Return the total number of gates in the provenance circuit */
+/**
+ * @brief Return the total number of materialized gates in the provenance circuit
+ *
+ * Input gates for provenance-tracked table rows are created lazily on
+ * first reference; rows that have never appeared in a query result are
+ * not counted.
+ */
 CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
   'provsql', 'get_nb_gates' LANGUAGE C PARALLEL SAFE;
 
@@ -149,17 +160,6 @@ CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
  *  @{
  */
 
-/** @brief Trigger function that creates an input gate for each newly inserted row */
-CREATE OR REPLACE FUNCTION add_gate_trigger()
-  RETURNS TRIGGER AS
-$$
-DECLARE
-  attribute RECORD;
-BEGIN
-  PERFORM create_gate(NEW.provsql, 'input');
-  RETURN NEW;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 /**
  * @brief Trigger function for DELETE statement provenance tracking
@@ -207,8 +207,8 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 /**
  * @brief Enable provenance tracking on an existing table
  *
- * Adds a <tt>provsql</tt> UUID column to the table, creates input gates
- * for all existing rows, and installs a trigger to track future inserts.
+ * Adds a <tt>provsql</tt> UUID column to the table. Input gates for
+ * existing rows are created lazily when first referenced by a query.
  *
  * @param _tbl the table to add provenance tracking to
  */
@@ -217,8 +217,6 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
 $$
 BEGIN
   EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
-  EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %s', _tbl);
-  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -306,7 +304,6 @@ BEGIN
     END LOOP;
   END LOOP;
   EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
-  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 END
 $$ LANGUAGE plpgsql;
 

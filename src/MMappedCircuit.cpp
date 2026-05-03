@@ -54,8 +54,12 @@ void MMappedCircuit::createGate(
 
   gates.add({type, static_cast<unsigned>(children.size()), wires.nbElements()});
   for(const auto &c: children)
-  {
     wires.add(c);
+
+  for(const auto &c: children) {
+    auto [child_idx, child_created] = mapping.add(c);
+    if(child_created)
+      gates.add({gate_input, 0, wires.nbElements()});
   }
 }
 
@@ -63,7 +67,7 @@ gate_type MMappedCircuit::getGateType(pg_uuid_t token) const
 {
   auto idx = mapping[token];
   if(idx == MMappedUUIDHashTable::NOTHING)
-    return gate_invalid;
+    return gate_input;
   else
     return gates[idx].type;
 }
@@ -82,13 +86,14 @@ std::vector<pg_uuid_t> MMappedCircuit::getChildren(pg_uuid_t token) const
 
 bool MMappedCircuit::setProb(pg_uuid_t token, double prob)
 {
-  auto idx = mapping[token];
-  if(idx != MMappedUUIDHashTable::NOTHING &&
-     (gates[idx].type == gate_input || gates[idx].type==gate_update || gates[idx].type == gate_mulinput)) {
-    gates[idx].prob=prob;
+  auto [idx, created] = mapping.add(token);
+  if(created)
+    gates.add({gate_input, 0, wires.nbElements()});
+  if(gates[idx].type == gate_input || gates[idx].type == gate_update || gates[idx].type == gate_mulinput) {
+    gates[idx].prob = prob;
     return true;
-  } else
-    return false;
+  }
+  return false;
 }
 
 double MMappedCircuit::getProb(pg_uuid_t token) const

@@ -216,11 +216,10 @@ structure guarantees decomposability and determinism.
 Block-Independent Databases and Multivalued Inputs
 --------------------------------------------------
 
-The default path through :sqlfunc:`add_provenance` and the
-per-row ``INSERT`` trigger allocates one fresh ``input`` gate
-per tuple, so each row of a provenance-tracked base table is
-an independent Bernoulli variable.  That is the
-**tuple-independent** probabilistic database (TID) model.
+By default, :sqlfunc:`add_provenance` associates one ``input`` gate
+per tuple (created lazily on first reference), so each row of a
+provenance-tracked base table is an independent Bernoulli variable.
+That is the **tuple-independent** probabilistic database (TID) model.
 
 ProvSQL additionally supports the strictly more general
 **block-independent database** (BID) model, in which input

@@ -142,7 +142,8 @@ void setExtra(pg_uuid_t token, const std::string &s);
  * @brief Set the probability associated with a gate.
  * @param token  UUID of the gate.
  * @param prob   Probability value in [0, 1].
- * @return @c true if the gate was found and updated; @c false otherwise.
+ * @return @c true if the gate was updated; @c false if the token is a non-input gate.
+ *         If the token is not yet in the circuit, an input gate is created lazily.
  */
 bool setProb(pg_uuid_t token, double prob);
 
@@ -154,7 +155,7 @@ void sync();
 /**
  * @brief Return the type of the gate identified by @p token.
  * @param token  UUID of the gate.
- * @return       The gate's type, or @c gate_invalid if not found.
+ * @return       The gate's type, or @c gate_input if not found (lazy default).
  */
 gate_type getGateType(pg_uuid_t token) const;
 

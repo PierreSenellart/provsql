@@ -61,7 +61,7 @@ for func, url in sorted(sql_map_entries.items()):
 # 6. Check: every Doxygen SQL function is in the map (or explicitly excluded)
 INTERNAL_FUNCTIONS = {
     # Triggers
-    'add_gate_trigger', 'insert_statement_trigger',
+    'insert_statement_trigger',
     'update_statement_trigger', 'delete_statement_trigger',
     # agg_token type internals (I/O, casts, operators)
     'agg_token_in', 'agg_token_out', 'agg_token_cast',

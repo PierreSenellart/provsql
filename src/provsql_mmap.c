@@ -110,12 +110,8 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
 
   provsql_shmem_unlock();
 
-  if(type==gate_invalid)
-    PG_RETURN_NULL();
-  else {
-    circuit_cache_create_gate(*token, type, 0, NULL);
-    PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]);
-  }
+  circuit_cache_create_gate(*token, type, 0, NULL);
+  PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]);
 }
 
 PG_FUNCTION_INFO_V1(create_gate);
