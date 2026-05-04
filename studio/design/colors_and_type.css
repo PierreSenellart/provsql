@@ -1,0 +1,204 @@
+/* ==========================================================================
+   ProvSQL Design System — Colors & Type
+   --------------------------------------------------------------------------
+   Provenance for PostgreSQL. The "Provence" theme: a scholarly, academic
+   palette evoking lavender fields, gold sun, and Roman terracotta — paired
+   with EB Garamond italic display, Jost UI, and Fira Code for SQL.
+   ========================================================================== */
+
+/* --- Self-hosted webfonts (OFL-1.1) --- */
+@font-face {
+  font-family: 'EB Garamond'; font-weight: 400; font-style: normal; font-display: swap;
+  src: url('fonts/EBGaramond-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'EB Garamond'; font-weight: 400; font-style: italic; font-display: swap;
+  src: url('fonts/EBGaramond-400-Italic-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'EB Garamond'; font-weight: 600; font-style: normal; font-display: swap;
+  src: url('fonts/EBGaramond-600-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'EB Garamond'; font-weight: 600; font-style: italic; font-display: swap;
+  src: url('fonts/EBGaramond-600-Italic-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Jost'; font-weight: 400; font-style: normal; font-display: swap;
+  src: url('fonts/Jost-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Jost'; font-weight: 500; font-style: normal; font-display: swap;
+  src: url('fonts/Jost-500-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Jost'; font-weight: 600; font-style: normal; font-display: swap;
+  src: url('fonts/Jost-600-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fira Code'; font-weight: 400; font-style: normal; font-display: swap;
+  src: url('fonts/FiraCode-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fira Code'; font-weight: 500; font-style: normal; font-display: swap;
+  src: url('fonts/FiraCode-500-latin.woff2') format('woff2');
+}
+
+:root {
+  /* ====== COLORS — base palette ====== */
+
+  /* Lavender backgrounds (Provence sky/field) */
+  --bg-canvas:        #F4F0FA;   /* page background */
+  --bg-elevated:      #EDE8F7;   /* cards, footers, subtle surfaces */
+  --bg-code:          #E8E0F8;   /* inline code + code block fill */
+  --border-soft:      #D6CCF0;   /* hairline dividers, card borders */
+
+  /* Purple — primary brand, used for chrome and primary actions */
+  --purple-100:       #D6CCF0;
+  --purple-300:       #A48FCC;
+  --purple-500:       #6B4FA0;   /* PRIMARY — masthead, links, gates */
+  --purple-700:       #5A3E8C;   /* code text, visited links */
+  --purple-900:       #2A1850;   /* foreground text, deep footer */
+
+  /* Gold — accent, used for highlights, sun, hover, primary CTAs */
+  --gold-300:         #F0CE6E;
+  --gold-500:         #E8B84B;   /* ACCENT — borders below H2, CTAs */
+  --gold-700:         #C59C40;   /* hover state on gold */
+
+  /* Terracotta — secondary accent, used for danger, semantic warmth */
+  --terracotta-300:   #E0937A;
+  --terracotta-500:   #C4664A;   /* danger / link-hover / + gate */
+
+  /* Foreground / muted */
+  --fg-1:             #2A1850;   /* primary text */
+  --fg-2:             #5A3E8C;   /* secondary text on light bg */
+  --fg-muted:         #8A7A9B;   /* muted captions, meta */
+  --fg-on-dark:       #F4F0FA;   /* text on purple-900 / purple-500 */
+
+  /* ====== COLORS — semantic ====== */
+  --color-primary:    var(--purple-500);
+  --color-accent:     var(--gold-500);
+  --color-success:    var(--purple-500);   /* same as primary in this system */
+  --color-warning:    var(--gold-500);
+  --color-danger:     var(--terracotta-500);
+  --color-info:       var(--purple-500);
+
+  --link:             var(--purple-500);
+  --link-hover:       var(--terracotta-500);
+  --link-visited:     var(--purple-700);
+
+  --selection-bg:     var(--gold-300);
+  --selection-fg:     var(--purple-900);
+
+  /* ====== TYPE — families ====== */
+  --font-serif:       'EB Garamond', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+  --font-sans:        'Jost', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono:        'Fira Code', 'Consolas', 'Monaco', monospace;
+
+  /* ====== TYPE — scale (root html sets 22px, body uses 1.05rem ≈ 23px) ====== */
+  --fs-xs:            0.78rem;
+  --fs-sm:            0.88rem;
+  --fs-base:          1.05rem;
+  --fs-lg:            1.25rem;
+  --fs-xl:            1.6rem;
+  --fs-2xl:           2.0rem;
+  --fs-3xl:           2.75rem;   /* page hero title */
+  --fs-display:       3.5rem;
+
+  --lh-tight:         1.2;
+  --lh-snug:          1.4;
+  --lh-normal:        1.75;      /* body — generous, scholarly */
+
+  --fw-regular:       400;
+  --fw-medium:        500;
+  --fw-semi:          600;
+
+  /* ====== SPACING & RADII ====== */
+  --space-1:          0.25rem;
+  --space-2:          0.5rem;
+  --space-3:          0.75rem;
+  --space-4:          1rem;
+  --space-5:          1.5rem;
+  --space-6:          2rem;
+  --space-8:          3rem;
+
+  --radius-sm:        3px;
+  --radius-md:        4px;
+  --radius-lg:        6px;
+  --radius-xl:        8px;
+  --radius-pill:      999px;
+
+  /* ====== ELEVATION ====== */
+  --shadow-sm:        0 1px 2px rgba(42, 24, 80, 0.08);
+  --shadow-md:        0 2px 8px rgba(42, 24, 80, 0.12);
+  --shadow-lg:        0 4px 20px rgba(0, 0, 0, 0.30);   /* logo card */
+  --shadow-dropdown:  0 4px 16px rgba(0, 0, 0, 0.40);   /* nav dropdowns */
+
+  /* ====== ACCENT BORDERS — a recurring motif ====== */
+  --accent-border:    3px solid var(--gold-500);     /* under masthead, left of code */
+  --rule-h2:          2px solid var(--gold-500);     /* under every H2 */
+}
+
+/* ==========================================================================
+   Semantic element styles — apply by default to anything that includes
+   this stylesheet. Mirrors the production website + docs styling.
+   ========================================================================== */
+
+html { font-size: 22px; }
+
+body {
+  font-family: var(--font-serif);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+  background: var(--bg-canvas);
+}
+
+::selection { background: var(--selection-bg); color: var(--selection-fg); }
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-serif);
+  font-weight: var(--fw-semi);
+  font-style: italic;
+  color: var(--fg-1);
+  line-height: var(--lh-tight);
+}
+
+h1 { font-size: var(--fs-3xl); }
+h2 { font-size: var(--fs-2xl); border-bottom: var(--rule-h2); padding-bottom: 0.2em; }
+h3 { font-size: var(--fs-xl); }
+h4 { font-size: var(--fs-lg); }
+
+p, li, dd { font-family: var(--font-serif); }
+
+a            { color: var(--link); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover      { color: var(--link-hover); }
+a:visited    { color: var(--link-visited); }
+
+/* Inline code */
+code, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--bg-code);
+  color: var(--purple-700);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+}
+
+/* Code blocks — gold left rule is a signature motif */
+pre {
+  font-family: var(--font-mono);
+  background: var(--bg-code);
+  color: var(--purple-700);
+  border-left: var(--accent-border);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  padding: var(--space-4);
+  overflow-x: auto;
+  font-variant-ligatures: contextual;
+}
+pre code { background: transparent; padding: 0; }
+
+/* UI elements — Jost */
+.ui, button, input, select, textarea, .nav, .btn {
+  font-family: var(--font-sans);
+}

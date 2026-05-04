@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ProvSQL · Circuit Visualizer</title>
+<link rel="icon" href="../../assets/favicon.ico">
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.15.4/css/all.css">
+<link rel="stylesheet" href="../../colors_and_type.css">
+<link rel="stylesheet" href="circuit.css">
+</head>
+<body>
+
+<nav class="cv-nav">
+  <div class="cv-nav__brand">
+    <img src="../../assets/logo.png" alt="" class="cv-nav__logo">
+    <span class="cv-nav__title"><em>ProvSQL</em> · Circuit Visualizer</span>
+  </div>
+  <div class="cv-nav__meta">
+    <a class="cv-nav__link" href="../where_panel/index.html"><i class="fas fa-table"></i> Where Panel</a>
+    <a class="cv-nav__link" href="../website/index.html"><i class="fas fa-home"></i> Site</a>
+    <a class="cv-nav__link" href="#"><i class="fab fa-github"></i> Source</a>
+  </div>
+</nav>
+
+<div class="cv-shell">
+
+  <!-- LEFT: query + result -->
+  <aside class="cv-side">
+    <section class="cv-card">
+      <h2 class="cv-card__title">Query</h2>
+      <p class="cv-card__lead">Pick a sample query. The provenance circuit on the right shows how each result tuple is derived from base tuples.</p>
+
+      <div class="cv-querylist" id="querylist">
+        <!-- populated by JS -->
+      </div>
+
+      <div class="cv-editor">
+        <span class="cv-editor__gutter">SQL</span>
+        <pre class="cv-editor__code" id="sql-display"></pre>
+      </div>
+    </section>
+
+    <section class="cv-card">
+      <h2 class="cv-card__title">Result</h2>
+      <p class="cv-card__lead">Click a row to highlight its circuit.</p>
+      <div class="cv-resultwrap">
+        <table class="cv-result" id="result-table">
+          <thead><tr id="result-head"></tr></thead>
+          <tbody id="result-body"></tbody>
+        </table>
+      </div>
+      <p class="cv-result__hint" id="result-hint">
+        <i class="fas fa-mouse-pointer"></i>
+        Selected: <strong id="selected-label">—</strong>
+      </p>
+    </section>
+
+    <section class="cv-card cv-card--legend">
+      <h2 class="cv-card__title">Legend</h2>
+      <ul class="cv-legend">
+        <li><span class="cv-legend__chip cv-gate-times">×</span> <strong>Times gate</strong> — conjunction (join, where-clause)</li>
+        <li><span class="cv-legend__chip cv-gate-plus">+</span> <strong>Plus gate</strong> — disjunction (union, projection)</li>
+        <li><span class="cv-legend__chip cv-gate-eq">=</span> <strong>Eq gate</strong> — value equality witness</li>
+        <li><span class="cv-legend__chip cv-leaf">l</span> <strong>Leaf</strong> — base tuple, identified by <code>provsql</code> UUID</li>
+        <li><span class="cv-legend__chip cv-leaf cv-leaf--one">⊤</span> <strong>One</strong> — semiring identity (always true)</li>
+      </ul>
+    </section>
+  </aside>
+
+  <!-- RIGHT: circuit -->
+  <main class="cv-main">
+    <header class="cv-main__hdr">
+      <div>
+        <h2 class="cv-main__title" id="circuit-title">Provenance Circuit</h2>
+        <p class="cv-main__sub" id="circuit-sub">Select a result row to render its derivation.</p>
+      </div>
+      <div class="cv-toolbar" role="toolbar">
+        <button class="cv-tool" id="tool-zoom-out" title="Zoom out"><i class="fas fa-search-minus"></i></button>
+        <button class="cv-tool" id="tool-zoom-fit" title="Fit"><i class="fas fa-expand"></i></button>
+        <button class="cv-tool" id="tool-zoom-in" title="Zoom in"><i class="fas fa-search-plus"></i></button>
+        <span class="cv-tool__sep"></span>
+        <button class="cv-tool cv-tool--toggle" id="tool-show-uuids" aria-pressed="false" title="Show UUIDs"><i class="fas fa-fingerprint"></i></button>
+        <button class="cv-tool cv-tool--toggle" id="tool-show-formula" aria-pressed="true" title="Show formula"><i class="fas fa-square-root-alt"></i></button>
+      </div>
+    </header>
+
+    <div class="cv-canvas" id="canvas">
+      <svg id="circuit" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--purple-700)"></path>
+          </marker>
+          <marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--terracotta-500)"></path>
+          </marker>
+        </defs>
+        <g id="circuit-edges"></g>
+        <g id="circuit-nodes"></g>
+      </svg>
+
+      <aside class="cv-inspector" id="inspector">
+        <header class="cv-inspector__hdr">
+          <h3 class="cv-inspector__title" id="inspector-title">Node</h3>
+          <button class="cv-inspector__close" id="inspector-close"><i class="fas fa-times"></i></button>
+        </header>
+        <div class="cv-inspector__body" id="inspector-body"></div>
+      </aside>
+    </div>
+
+    <footer class="cv-formula" id="formula-strip">
+      <span class="cv-formula__label">Formula</span>
+      <code class="cv-formula__expr" id="formula-expr">—</code>
+    </footer>
+  </main>
+
+</div>
+
+<script src="circuit.js"></script>
+</body>
+</html>
