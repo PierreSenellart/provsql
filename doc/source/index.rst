@@ -61,6 +61,9 @@ This documentation is organized into four parts:
    :caption: Case Studies
 
    user/casestudy1
+   user/casestudy2
+   user/casestudy3
+   user/casestudy4
 
 .. _dev-guide:
 

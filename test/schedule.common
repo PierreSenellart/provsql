@@ -64,8 +64,14 @@ test: where_provenance
 # Full example from tutorial
 test: tutorial
 
-# Full example from tutorial 2 (scientific claims)
+# Case Study 1: The Intelligence Agency
 test: casestudy1
+
+# Case Study 2: The Open Science Database
+test: casestudy2
+
+# Case Study 3: Île-de-France Public Transit (synthetic mini-dataset)
+test: casestudy3
 
 # Grouping
 test: group_by_empty
