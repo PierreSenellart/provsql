@@ -12,6 +12,7 @@ on:
       - 'website/**'
       - 'branding/**'
       - 'docker/**'
+      - 'studio/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
@@ -23,6 +24,7 @@ on:
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/pgxn.yml'
+      - '.github/workflows/studio.yml'
       - '.github/workflows/wsl.yml'
   pull_request:
     paths-ignore:
@@ -30,6 +32,7 @@ on:
       - 'website/**'
       - 'branding/**'
       - 'docker/**'
+      - 'studio/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
@@ -41,6 +44,7 @@ on:
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/pgxn.yml'
+      - '.github/workflows/studio.yml'
       - '.github/workflows/wsl.yml'
   workflow_dispatch:
 
