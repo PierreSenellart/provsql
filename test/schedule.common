@@ -54,6 +54,7 @@ test: large_circuit
 # Expected Shapley and Banzhaf value computation
 test: shapley
 test: banzhaf
+test: shapley_mulinput
 
 # Viewing circuit
 test: view_circuit_multiple

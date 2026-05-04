@@ -56,6 +56,9 @@ static double shapley_internal
   gate_t root;
   BooleanCircuit c = getBooleanCircuit(token, root);
 
+  if(c.hasMultivaluedGates())
+    provsql_error("Computing Shapley/Banzhaf values is ill-defined for circuits with multivalued (mulinput) gates");
+
   if(c.getGateType(c.getGate(uuid2string(variable))) != BooleanGate::IN)
     return 0.;
 
@@ -151,6 +154,9 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
 
     gate_t root;
     BooleanCircuit c = getBooleanCircuit(token, root);
+
+    if(c.hasMultivaluedGates())
+      provsql_error("Computing Shapley/Banzhaf values is ill-defined for circuits with multivalued (mulinput) gates");
 
     dDNNF dd = c.makeDD(root, method, args);
     dd.makeSmooth();

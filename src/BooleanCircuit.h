@@ -173,6 +173,20 @@ const std::set<gate_t> &getInputs() const {
 }
 
 /**
+ * @brief Return @c true if the circuit contains any MULIN gates.
+ *
+ * Multivalued inputs are normally rewritten into AND/OR/NOT/IN gates by
+ * @c rewriteMultivaluedGates() before the circuit is consumed by an
+ * evaluation method.  Algorithms that cannot handle multivalued inputs
+ * directly can use this as a precondition check.
+ *
+ * @return @c true iff at least one @c MULIN gate is present.
+ */
+bool hasMultivaluedGates() const {
+  return !mulinputs.empty();
+}
+
+/**
  * @brief Set the probability for gate @p g and mark the circuit as probabilistic.
  * @param g  Gate identifier.
  * @param p  Probability value in [0, 1].
