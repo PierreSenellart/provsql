@@ -1,1 +1,3 @@
 ErrorDocument 404 /404.html
+
+Redirect permanent /temporal_demo /docs/user/casestudy4.html
