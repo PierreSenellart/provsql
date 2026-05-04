@@ -2257,9 +2257,19 @@ static bool provenance_function_walker(Node *node, void *data) {
 static bool provenance_function_in_group_by(const constants_t *constants,
                                             Query *q) {
   ListCell *lc;
+
+  /* Build the set of ressortgrouprefs that are actually in GROUP BY
+   * (not ORDER BY or DISTINCT, which also set ressortgroupref). */
+  Bitmapset *group_refs = NULL;
+  foreach (lc, q->groupClause) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    group_refs = bms_add_member(group_refs, sgc->tleSortGroupRef);
+  }
+
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
-    if (te->ressortgroupref > 0) {
+    if (te->ressortgroupref > 0 &&
+        bms_is_member(te->ressortgroupref, group_refs)) {
       if(expression_tree_walker((Node *)te, provenance_function_walker,
                                 (void *)constants)) {
         return true;

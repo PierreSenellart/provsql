@@ -29,3 +29,13 @@ DELETE FROM test WHERE id = 2;
 UPDATE test SET id = 4 WHERE id = 3;
 CREATE TABLE undo_result AS SELECT undo(provsql) FROM update_provenance WHERE query = 'DELETE FROM test WHERE id = 2;';
 (4 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+cat|valid
+A|{["1970-01-01 00:00:00+00","1970-01-01 00:00:02+00"),["1970-01-01 00:00:04+00","1970-01-01 00:00:06+00")}
+B|{["1970-01-01 00:00:01+00","1970-01-01 00:00:03+00")}
+(2 rows)
