@@ -642,7 +642,12 @@ typedef enum {
  * @param constants    Extension OID cache.
  * @param fromOpExpr   The equality @c OpExpr to inspect.
  * @param toExpr       Existing provenance expression to wrap.
- * @param columns      Per-RTE column-numbering array.
+ * @param columns      Per-RTE column-numbering array.  EQ gate positions
+ *                     carry the same sequential-number caveat as PROJECT
+ *                     gate positions (see @c build_column_map()); they are
+ *                     only correct when each operand's RTE is either a join
+ *                     RTE or a subquery, not a bare provenance-tracked base
+ *                     table.
  * @return  @p toExpr wrapped in @c provenance_eq(toExpr, col1, col2), or
  *          @p toExpr unchanged if the shape is unsupported.
  */
@@ -1082,6 +1087,12 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
  * @param group_by_rewrite True if a GROUP BY requires the plus-aggregate wrapper.
  * @param op               Semiring operation to use for combining tokens.
  * @param columns          Per-RTE column-numbering array (for where-provenance).
+ *                         For provenance-tracked @c RTE_RELATION entries, the
+ *                         -1 sentinel is used to identify them; the PROJECT
+ *                         gate positions for their columns use @c varattno
+ *                         rather than the query-order-dependent sequential
+ *                         numbers (see @c build_column_map() for the
+ *                         rationale).
  * @param nbcols           Total number of non-provenance output columns.
  * @return  The provenance @c Expr to be appended to the target list.
  */
@@ -1227,13 +1238,86 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
         } else
 #endif
         if (rte_v->rtekind != RTE_JOIN) { // Normal RTE
-          value_v = columns[vte_v->varno - 1] ?
-            columns[vte_v->varno - 1][vte_v->varattno - 1] : 0;
+          if (rte_v->rtekind == RTE_RELATION && columns[vte_v->varno - 1]) {
+            /* Determine whether this base table is provenance-tracked by
+             * scanning for the sentinel -1 entry that build_column_map()
+             * assigns to the provsql column. */
+            bool is_prov = false;
+            int ncols_rte = list_length(rte_v->eref->colnames);
+            for (int k = 0; k < ncols_rte; k++) {
+              if (columns[vte_v->varno - 1][k] == -1) {
+                is_prov = true;
+                break;
+              }
+            }
+            if (is_prov) {
+              int raw = columns[vte_v->varno - 1][vte_v->varattno - 1];
+              /* Use varattno (1-indexed column position within the table)
+               * rather than the global sequential number from
+               * build_column_map().  The sequential number is
+               * query-order-dependent: when other RTEs appear before this
+               * one in q->rtable, the sequential number exceeds nb_columns
+               * of the IN gate and causes WhereCircuit::evaluate() to
+               * return an empty locator set.  varattno is always the
+               * correct position because add_provenance() appends the
+               * provsql column last, so user columns occupy positions
+               * 1..nb_columns exactly matching the IN gate's Locator
+               * vector layout. */
+              value_v = (raw == -1) ? -1 : (int)vte_v->varattno;
+            } else {
+              /* Non-provenance base table: no IN gate exists for it, so
+               * the position would be out of range regardless.  Explicitly
+               * record 0 so evaluate() returns an empty locator set and
+               * the positions array stays in sync with the output column
+               * count. */
+              Const *ce =
+                makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                          sizeof(int32), Int32GetDatum(0), false, true);
+              array->elements = lappend(array->elements, ce);
+              projection = true;
+              continue;
+            }
+          } else {
+            /* RTE_SUBQUERY and others: the sequential number equals the
+             * column's 1-indexed position in the subquery's output list,
+             * which matches what the child gate's evaluate() expects. */
+            value_v = columns[vte_v->varno - 1] ?
+              columns[vte_v->varno - 1][vte_v->varattno - 1] : 0;
+          }
         } else { // Join RTE
           Var *jav_v = (Var *)lfirst(
             list_nth_cell(rte_v->joinaliasvars, vte_v->varattno - 1));
-          value_v = columns[jav_v->varno - 1] ?
-            columns[jav_v->varno - 1][jav_v->varattno - 1] : 0;
+          if (jav_v && IsA(jav_v, Var) && columns[jav_v->varno - 1]) {
+            RangeTblEntry *jrte_v = (RangeTblEntry *)lfirst(
+              list_nth_cell(q->rtable, jav_v->varno - 1));
+            if (jrte_v->rtekind == RTE_RELATION) {
+              /* Provenance-tracking check and varattno fix — same rationale
+               * as the RTE_RELATION branch above. */
+              bool is_prov = false;
+              int ncols_jrte = list_length(jrte_v->eref->colnames);
+              for (int k = 0; k < ncols_jrte; k++) {
+                if (columns[jav_v->varno - 1][k] == -1) {
+                  is_prov = true;
+                  break;
+                }
+              }
+              if (is_prov) {
+                int raw = columns[jav_v->varno - 1][jav_v->varattno - 1];
+                value_v = (raw == -1) ? -1 : (int)jav_v->varattno;
+              } else {
+                Const *ce =
+                  makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                            sizeof(int32), Int32GetDatum(0), false, true);
+                array->elements = lappend(array->elements, ce);
+                projection = true;
+                continue;
+              }
+            } else {
+              value_v = columns[jav_v->varno - 1][jav_v->varattno - 1];
+            }
+          } else {
+            value_v = 0;
+          }
         }
 
         /* If this is a valid column */
@@ -2760,9 +2844,19 @@ static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
  *
  * Assigns a sequential position (1, 2, 3, …) to every non-provenance,
  * non-join, non-empty column across all RTEs in @p q->rtable.  The
- * @c provsql column is assigned -1 so callers can detect it.  Join-RTE
- * columns and empty-named columns (used for anonymous GROUP BY keys) are
- * assigned 0.
+ * @c provsql column is assigned -1 so callers can detect provenance-tracked
+ * RTEs.  Join-RTE columns and empty-named columns (used for anonymous GROUP
+ * BY keys) are assigned 0.
+ *
+ * @note For @c RTE_RELATION entries that are provenance-tracked, the
+ *       sequential numbers produced here must @b not be used as PROJECT gate
+ *       positions.  Because numbering is query-order-dependent, the sequential
+ *       number for a column of a provenance table that is not the first RTE
+ *       will exceed @c nb_columns of that table's IN gate, causing
+ *       @c WhereCircuit::evaluate() to return an empty locator set.  Instead,
+ *       callers should use @c varattno directly (see
+ *       @c make_provenance_expression()).  The -1 sentinel is the reliable
+ *       way to identify a provenance-tracked RTE.
  *
  * @param q         Query whose range table is mapped.
  * @param columns   Pre-allocated array of length @p q->rtable->length.
