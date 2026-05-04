@@ -301,14 +301,14 @@ BEGIN
         '
           SELECT
             %1$I.*,
-            union_tstzintervals(provenance(), ''%2$I'')
+            union_tstzintervals(provenance(), %2$L)
           FROM
             %1$I
           WHERE
-            union_tstzintervals(provenance(), ''%2$I'') @> %3$L::timestamptz
+            union_tstzintervals(provenance(), %2$L) @> %3$L::timestamptz
         ',
         tablename,
-        'time_validity_view',
+        'provsql.time_validity_view',
         at_time::text
     );
 END;
@@ -337,15 +337,15 @@ BEGIN
     '
       SELECT
         %1$I.*,
-        union_tstzintervals(provenance(), ''%2$I'')
+        union_tstzintervals(provenance(), %2$L)
       FROM
         %1$I
       WHERE
-        union_tstzintervals(provenance(), ''%2$I'')
+        union_tstzintervals(provenance(), %2$L)
         && tstzrange(%3$L::timestamptz, %4$L::timestamptz)
     ',
     tablename,
-    'time_validity_view',
+    'provsql.time_validity_view',
     from_time::text,
     to_time::text
   );
@@ -394,14 +394,14 @@ BEGIN
       '
         SELECT
           %I.*,
-          union_tstzintervals(provenance(), ''%I'')
+          union_tstzintervals(provenance(), %L)
         FROM
           %I
         WHERE
           %s
       ',
       tablename,
-      'time_validity_view',
+      'provsql.time_validity_view',
       tablename,
       condition
     );
@@ -433,7 +433,7 @@ BEGIN
       WHERE
         provsql = %L
     ',
-    'time_validity_view',
+    'provsql.time_validity_view',
     tablename,
     token
   )
