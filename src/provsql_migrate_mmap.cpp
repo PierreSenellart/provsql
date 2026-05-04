@@ -3,7 +3,7 @@
  * @brief Migrate old flat provsql mmap files to the per-database layout.
  *
  * Old format: $PGDATA/provsql_*.mmap (no 16-byte header)
- * New format: $PGDATA/base/<db_oid>/provsql_*.mmap (16-byte header)
+ * New format: $PGDATA/base/\<db_oid\>/provsql_*.mmap (16-byte header)
  *
  * For each database that has provsql installed, the tool:
  *   1. Enumerates provenance-tracked tables via libpq.
@@ -11,18 +11,18 @@
  *   3. BFS-traverses the old flat circuit from those roots.
  *   4. Writes per-database new-format files.
  *
- * Usage: provsql_migrate_mmap -D <pgdata> -c <connstr>
+ * Usage: provsql_migrate_mmap -D \<pgdata\> -c \<connstr\>
  *
  * connstr should point to the postgres / template1 database so the tool
  * can enumerate all databases.  The tool then re-connects per database.
- * If connstr already contains "dbname=", append " dbname=<target>" to
+ * If connstr already contains "dbname=", append " dbname=\<target\>" to
  * override it (libpq uses the last occurrence).
  *
  * Gates belonging to tables in more than one database are written to
  * every relevant database.  UUID v4 collisions across databases are
  * negligible.
  *
- * The tool skips any database whose $PGDATA/base/<oid>/provsql_gates.mmap
+ * The tool skips any database whose $PGDATA/base/\<oid\>/provsql_gates.mmap
  * already exists.
  */
 

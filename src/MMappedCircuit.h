@@ -97,7 +97,7 @@ static constexpr const char *WIRES_FILENAME="provsql_wires.mmap";     ///< Backi
 static constexpr const char *MAPPING_FILENAME="provsql_mapping.mmap"; ///< Backing file for @c mapping
 static constexpr const char *EXTRA_FILENAME="provsql_extra.mmap";     ///< Backing file for @c extra
 
-/** @brief Build the full path for a mmap file under @c $PGDATA/base/<db_oid>/. */
+/** @brief Build the full path for a mmap file under @c $PGDATA/base/\<db_oid\>/. */
 static std::string makePath(Oid db_oid, const char *filename);
 
 /** @brief Delegating constructor that accepts pre-built paths. */
@@ -126,7 +126,7 @@ static constexpr uint64_t MAGIC_EXTRA =
 
 /**
  * @brief Open all four mmap backing files for the given database.
- * @param db_oid    OID of the target database; files go under $PGDATA/base/<db_oid>/.
+ * @param db_oid    OID of the target database; files go under $PGDATA/base/\<db_oid\>/.
  * @param read_only If @c true, all files are mapped read-only.
  */
 explicit MMappedCircuit(Oid db_oid, bool read_only = false);
