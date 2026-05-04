@@ -302,6 +302,52 @@ SELECT study, ROUND(bv::numeric, 4) AS bv
 FROM result_banzhaf ORDER BY bv DESC, study;
 DROP TABLE result_banzhaf;
 
+-- Step 15: shapley_all_vars — bulk Shapley computation, joined back to study names
+CREATE TABLE target_token AS
+SELECT provenance() AS prov
+FROM f_replicated
+WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
+  AND effect = 'beneficial';
+
+SELECT remove_provenance('target_token');
+
+CREATE TABLE result_shapley_all AS
+SELECT sm.value AS study, sav.value AS sv
+FROM target_token, shapley_all_vars(prov) sav
+JOIN study_mapping sm ON sm.provenance = sav.variable;
+
+SELECT study, ROUND(sv::numeric, 4) AS sv
+FROM result_shapley_all ORDER BY sv DESC, study;
+DROP TABLE result_shapley_all;
+
+-- Step 15 (continued): banzhaf_all_vars
+CREATE TABLE result_banzhaf_all AS
+SELECT sm.value AS study, bav.value AS bv
+FROM target_token, banzhaf_all_vars(prov) bav
+JOIN study_mapping sm ON sm.provenance = bav.variable;
+
+SELECT study, ROUND(bv::numeric, 4) AS bv
+FROM result_banzhaf_all ORDER BY bv DESC, study;
+DROP TABLE result_banzhaf_all;
+DROP TABLE target_token;
+
+-- Step 16: arithmetic on aggregate results — drops inner agg provenance,
+-- preserves group provenance; ProvSQL warns on the agg_token cast.
+SET client_min_messages TO ERROR;
+CREATE TABLE result_agg_arith AS
+SELECT exposure, outcome, effect,
+       (COUNT(*))::bigint AS n_studies,
+       ROUND((MAX(reliability))::numeric, 2) AS top_reliability,
+       ROUND((COUNT(*) * MAX(reliability))::numeric, 4) AS evidence_weight
+FROM f
+GROUP BY exposure, outcome, effect;
+RESET client_min_messages;
+
+SELECT remove_provenance('result_agg_arith');
+SELECT * FROM result_agg_arith
+ORDER BY evidence_weight DESC, exposure, outcome, effect;
+DROP TABLE result_agg_arith;
+
 -- Clean up
 DROP VIEW f_replicated;
 DROP VIEW f;

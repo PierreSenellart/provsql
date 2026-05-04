@@ -586,3 +586,83 @@ The relative ranking of Johnson2020, Smith2018, and Williams2021 is the same as
 with Shapley values, confirming that both measures agree on who contributes most
 to the replication probability. The absolute magnitudes are larger (around 1.7
 per study) and their sum does not equal the replication probability.
+
+Step 15: Bulk Shapley/Banzhaf with ``shapley_all_vars`` and ``banzhaf_all_vars``
+---------------------------------------------------------------------------------
+
+The cross-join pattern from :ref:`Step 13 <step-13-shapley>` is convenient when
+you only want a value for a few specific variables, but is inefficient when
+many input variables are involved. :sqlfunc:`shapley_all_vars` and
+:sqlfunc:`banzhaf_all_vars` take a single target token and return one row per
+input variable.
+
+.. raw:: html
+
+   <details>
+   <summary>Solution</summary>
+
+.. code-block:: postgresql
+
+    CREATE TEMP TABLE target_token AS
+    SELECT provenance() AS prov
+    FROM f_replicated
+    WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
+      AND effect = 'beneficial';
+
+    SELECT remove_provenance('target_token');
+
+    SELECT sm.value AS study,
+           ROUND(sav.value::numeric, 4) AS sv
+    FROM target_token, shapley_all_vars(prov) sav
+    JOIN study_mapping sm ON sm.provenance = sav.variable
+    ORDER BY sv DESC, study;
+
+.. raw:: html
+
+   </details>
+
+The output is identical to Step 13: Johnson2020, Smith2018, and Williams2021
+with the same Shapley values. The difference is in the calling convention –
+no enumeration of variables is needed – and in efficiency, especially when
+there are many input variables. Replace ``shapley_all_vars`` with
+``banzhaf_all_vars`` to reproduce Step 14 in the same way.
+
+.. note::
+
+   ``shapley_all_vars`` returns one row per *input variable* of the circuit,
+   keyed by its UUID token. The ``study_mapping`` join maps these tokens
+   back to study titles for display.
+
+Step 16: Arithmetic on Aggregate Results
+------------------------------------------
+
+ProvSQL tracks provenance through SQL aggregates: ``COUNT``, ``SUM``, and
+similar produce *aggregate tokens* (``agg_token``) that record the underlying
+contributions. Plain SQL arithmetic (``*``, ``+``, …) on those aggregates
+still produces a meaningful number, but the resulting expression is no
+longer an aggregate token: only the surrounding group token is retained.
+
+Compute a composite *evidence weight* per (exposure, outcome, effect) triple
+combining how many studies report it (``COUNT(*)``) with the highest
+reliability among them (``MAX(reliability)``):
+
+.. code-block:: postgresql
+
+    SELECT exposure, outcome, effect,
+           COUNT(*)           AS n_studies,
+           MAX(reliability)   AS top_reliability,
+           COUNT(*) * MAX(reliability) AS evidence_weight
+    FROM f
+    GROUP BY exposure, outcome, effect
+    ORDER BY evidence_weight DESC, exposure, outcome, effect;
+
+.. note::
+
+   ProvSQL emits a warning when arithmetic is performed on an aggregate
+   token: the inner aggregate provenance (which studies contributed, with
+   what multiplicity) is dropped from the result. The *group* provenance –
+   the token associated with the (exposure, outcome, effect) triple – is
+   preserved and can still be used for :sqlfunc:`probability_evaluate`,
+   :sqlfunc:`shapley`, etc. on the group itself. This is the practical
+   boundary between what ProvSQL's circuits can express and what plain SQL
+   computation discards.
