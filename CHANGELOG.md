@@ -5,6 +5,111 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.3.1] - 2026-05-04
+
+A bug-fix release focused on `repair_key` / `mulinput` correctness,
+plus a corrected upgrade path from 1.2.3 and documentation additions
+(a fifth case study and expanded material in case studies 1 and 2).
+No on-disk format change relative to 1.3.0; an
+`ALTER EXTENSION provsql UPDATE` is enough.
+
+## Upgrade-script corrections
+
+- **`sql/upgrades/provsql--1.2.3--1.3.0.sql`** shipped with 1.3.0 only
+  carried the per-database mmap migration warning and missed two
+  groups of SQL-surface changes that had landed in
+  `provsql.common.sql` / `provsql.14.sql` during the 1.3.0 dev cycle:
+  the lazy-input-gate refactor of `add_provenance` / `repair_key`
+  (commit `f670b7f`) and the schema-qualified
+  `provsql.time_validity_view` references in `timetravel`,
+  `timeslice`, `history`, and `get_valid_time` (commit `1f59032`).
+  Users on 1.2.3 who ran `ALTER EXTENSION provsql UPDATE TO '1.3.0'`
+  ended up with a stale set of function bodies. The script in 1.3.1
+  has been corrected and now applies all the missing changes; users
+  still on 1.2.3 reach a clean 1.3.0-equivalent SQL surface when they
+  upgrade after 1.3.1.
+
+- **`sql/upgrades/provsql--1.3.0--1.3.1.sql`** applies the same
+  catch-up changes on the 1.3.0 → 1.3.1 path so that users **already
+  on 1.3.0** (who came through the broken upgrade) are brought back
+  in sync. Fresh installs of 1.3.0 also run this script, but the
+  CREATE OR REPLACE statements match the source already on disk, so
+  it is a no-op for them.
+
+## Bug fixes
+
+- **`probability_evaluate(..., 'tree-decomposition')` on circuits
+  containing `mulinput` gates.** Input gates produced by `repair_key`
+  could share an internal id when their UUIDs were never materialised
+  in the d-DNNF builder, causing the probability to be wrong and to
+  vary from one session to the next on identical data. The aliasing
+  has been removed (`src/BooleanCircuit.cpp`,
+  `src/dDNNFTreeDecompositionBuilder.cpp`); a regression test
+  (`test/sql/treedec_mulinput.sql`) covers the affected query shapes.
+
+- **Off-by-one in `BooleanCircuit::rewriteMultivaluedGates`.** The
+  splitter that turns a `mulinput` into a chain of independent
+  Bernoulli inputs produced non-deterministic probabilities under
+  self-join + `GROUP BY` queries. Fixed; the four built-in evaluation
+  methods (default, `'possible-worlds'`, `'tree-decomposition'`,
+  `'monte-carlo'`) now agree on `mulinput`-bearing circuits.
+
+- **Shapley and Banzhaf computation on `mulinput` circuits.**
+  `shapley()`, `shapley_all_vars()`, `banzhaf()`, and
+  `banzhaf_all_vars()` previously walked through `mulinput` gates and
+  returned meaningless values. They now raise a clear error
+  identifying the unsupported gate type.
+
+## Documentation
+
+- **New Case Study 5: The Wildlife Photo Archive.** A 30-photo /
+  13-species / 63-detection synthetic dataset demonstrates the
+  `VALUES` clause, `repair_key` and the `mulinput` gate (with the
+  numerical effect of mutual exclusion made explicit via
+  `sr_boolexpr` and `probability_evaluate`), probabilistic ranking
+  versus naive confidence thresholding, `EXCEPT` with monus, common
+  table expressions, and `expected()` aggregates. The case study is
+  bundled (no external data download) and is part of the regression
+  suite.
+
+- **Case Study 1** gains three steps in the circuit-inspection
+  section: a tree-decomposition probability variant in the benchmark
+  step, an `sr_boolexpr` step on the Nairobi monus token, and a
+  programmatic circuit-inspection step using `get_nb_gates`,
+  `get_gate_type`, `get_children`, and `identify_token`.
+
+- **Case Study 2** gains two steps: a bulk Shapley/Banzhaf step using
+  `shapley_all_vars` / `banzhaf_all_vars` (contrasted with the
+  per-variable cross-join from the existing Steps 13 and 14), and a
+  step on arithmetic over aggregate results illustrating the
+  `agg_token` cast warning.
+
+- **Copy-to-clipboard buttons** on every documentation code block
+  (`sphinx-copybutton`). A small JS shim
+  (`doc/source/_static/copybutton-shim.js`) papers over an
+  incompatibility between `sphinx-copybutton` 0.4.0 (the version in
+  Ubuntu Noble's apt) and Sphinx 9.
+
+## Infrastructure
+
+- Release tarballs and CI workflows exclude the `studio/`
+  subdirectory for future developments.
+
+## Upgrade procedure
+
+```sh
+make install
+```
+
+In each database that uses ProvSQL:
+
+```sql
+ALTER EXTENSION provsql UPDATE;
+```
+
+The mmap circuit format is unchanged from 1.3.0; no migration is
+required.
+
 ## [1.3.0] - 2026-05-04
 
 ### Breaking change: per-database circuit storage
