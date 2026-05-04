@@ -8,17 +8,9 @@ create_provenance_mapping
 remove_provenance
 
 (1 row)
-exposure|outcome|effect|formula
-Alcohol|Cardiovascular Disease|beneficial|Garcia2017
-Coffee|Cardiovascular Disease|harmful|Garcia2017
-Exercise|Inflammation|beneficial|Smith2018
-(3 rows)
-remove_provenance
-
-(1 row)
-exposure|outcome|effect|witnesses
-Aspirin|Cardiovascular Disease|beneficial|{{Smith2018},{Williams2021}}
-Exercise|Cardiovascular Disease|beneficial|{{Johnson2020},{Smith2018},{Williams2021}}
+city|formula
+Beijing|(Ellen ⊗ Jing)
+Nairobi|(Juma ⊗ Paul)
 (2 rows)
 create_provenance_mapping
 
@@ -26,94 +18,36 @@ create_provenance_mapping
 remove_provenance
 
 (1 row)
-exposure|outcome|effect|grade
-Alcohol|Cardiovascular Disease|beneficial|observational
-Alcohol|Cardiovascular Disease|harmful|case_report
-Alcohol|Type 2 Diabetes|harmful|rct
-Aspirin|Cardiovascular Disease|beneficial|rct
-Aspirin|Cognitive Decline|beneficial|rct
-Coffee|Cardiovascular Disease|beneficial|meta_analysis
-Coffee|Cardiovascular Disease|harmful|observational
-Coffee|Cardiovascular Disease|neutral|observational
-Coffee|Cognitive Decline|beneficial|meta_analysis
-Exercise|Cardiovascular Disease|beneficial|meta_analysis
-Exercise|Inflammation|beneficial|rct
-Omega-3|Cardiovascular Disease|beneficial|meta_analysis
-Omega-3|Inflammation|beneficial|meta_analysis
-Processed Food|Type 2 Diabetes|harmful|meta_analysis
-Red Meat|Colorectal Cancer|harmful|meta_analysis
-Red Meat|Inflammation|harmful|observational
-(16 rows)
-remove_provenance
-
-(1 row)
-study|study_type|exposure|outcome|effect|source
-Smith2018|rct|Exercise|Cardiovascular Disease|beneficial|{[],[],[],[],[finding::5],[]}
-(1 row)
-remove_provenance
-
-(1 row)
-study_id|exposure_id|outcome_id|effect|source
-1|2|1|beneficial|{[finding::2],[finding::3],[finding::4],[finding::5],[]}
-(1 row)
-remove_provenance
-
-(1 row)
-exposure|outcome|effect|prob
-Aspirin|Cognitive Decline|beneficial|0.8500
-Coffee|Cardiovascular Disease|harmful|0.6500
-Exercise|Cardiovascular Disease|beneficial|0.9998
+city|min_clearance
+Beijing|secret
+Nairobi|restricted
+Paris|confidential
 (3 rows)
-create_provenance_mapping
+remove_provenance
 
+(1 row)
+city|formula
+Nairobi|((Juma ⊕ Paul) ⊖ (Juma ⊗ Paul))
 (1 row)
 remove_provenance
 
 (1 row)
-exposure|outcome|effect|replicated
-Alcohol|Cardiovascular Disease|beneficial|0
-Alcohol|Cardiovascular Disease|harmful|0
-Alcohol|Type 2 Diabetes|harmful|1
-Aspirin|Cardiovascular Disease|beneficial|1
-Aspirin|Cognitive Decline|beneficial|0
-Coffee|Cardiovascular Disease|beneficial|0
-Coffee|Cardiovascular Disease|harmful|0
-Coffee|Cardiovascular Disease|neutral|0
-Coffee|Cognitive Decline|beneficial|1
-Exercise|Cardiovascular Disease|beneficial|1
-Exercise|Inflammation|beneficial|0
-Omega-3|Cardiovascular Disease|beneficial|0
-Omega-3|Inflammation|beneficial|1
-Processed Food|Type 2 Diabetes|harmful|1
-Red Meat|Colorectal Cancer|harmful|1
-Red Meat|Inflammation|harmful|1
-(16 rows)
-remove_provenance
-
-(1 row)
-exposure|outcome|effect|prob
-Alcohol|Cardiovascular Disease|beneficial|0.0000
-Alcohol|Cardiovascular Disease|harmful|0.0000
-Alcohol|Type 2 Diabetes|harmful|0.5720
-Aspirin|Cardiovascular Disease|beneficial|0.8096
-Aspirin|Cognitive Decline|beneficial|0.0000
-Coffee|Cardiovascular Disease|beneficial|0.0000
-Coffee|Cardiovascular Disease|harmful|0.0000
-Coffee|Cardiovascular Disease|neutral|0.0000
-Coffee|Cognitive Decline|beneficial|0.8075
-Exercise|Cardiovascular Disease|beneficial|0.9868
-Exercise|Inflammation|beneficial|0.0000
-Omega-3|Cardiovascular Disease|beneficial|0.0000
-Omega-3|Inflammation|beneficial|0.8075
-Processed Food|Type 2 Diabetes|harmful|0.7448
-Red Meat|Colorectal Cancer|harmful|0.7448
-Red Meat|Inflammation|harmful|0.3420
-(16 rows)
-remove_provenance
-
-(1 row)
-study|sv
-Johnson2020|0.3625
-Smith2018|0.3289
-Williams2021|0.3085
+city|source
+Beijing|{[agents::4;agents::4],[]}
+Nairobi|{[agents::4;agents::4],[]}
+Paris|{[agents::4;agents::4;agents::4],[]}
 (3 rows)
+remove_provenance
+
+(1 row)
+city|prob
+Beijing|0.5400
+Nairobi|0.2600
+Paris|0.4100
+(3 rows)
+remove_provenance
+
+(1 row)
+city|prob
+Beijing|0.5
+(1 row)
