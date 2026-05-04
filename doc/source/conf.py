@@ -2,7 +2,7 @@ project = 'ProvSQL'
 copyright = '2025, Pierre Senellart'
 author = 'Pierre Senellart'
 
-extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex']
+extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton']
 
 # |cpp| / |cpp17| substitutions: render "C++" and "C++17" as non-breaking
 # spans so the browser never wraps between "C+" and the final "+".
@@ -52,6 +52,9 @@ html_css_files = ['custom.css']
 html_js_files = [
     ('jquery.js', {'priority': 100}),  # sphinx-rtd-theme requires jQuery
     'back-to-site.js',
+    # Shim runs before copybutton.js (default priority 500) and back-fills
+    # DOCUMENTATION_OPTIONS.URL_ROOT for sphinx-copybutton 0.4.0 on Sphinx >= 5.
+    ('copybutton-shim.js', {'priority': 450}),
 ]
 html_show_sphinx = False
 html_show_copyright = False

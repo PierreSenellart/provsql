@@ -153,6 +153,18 @@ div.highlight pre {
   color: #2A1850;
 }
 
+/* sphinx-copybutton: rtd-theme's .rst-content img rules force the icon
+   to display: block with auto margins, which collapses the SVG and
+   leaves only the (cropped) alt text "Copy" visible.  Restore inline
+   rendering for the copy-button icon. */
+.rst-content button.copybtn img {
+  display: inline;
+  margin: 0;
+  padding: .2em;
+  width: 100%;
+  height: auto;
+}
+
 /* ---- Tables ---- */
 /* sphinx-rtd-theme puts white-space: nowrap on <code> inside tables,
    which forces horizontal scrolling for tables containing long
