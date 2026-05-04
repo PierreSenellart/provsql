@@ -7,6 +7,9 @@ test: update_insert
 test: update_update
 test: update_undo
 
-# Temporal DB 
+# Temporal DB
 test: union_tstzintervals
 test: temporal_functions
+
+# Case Study 4: Government Ministers Over Time (Temporal)
+test: casestudy4
