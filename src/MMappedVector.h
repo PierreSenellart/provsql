@@ -21,6 +21,7 @@
 #define MMAPPED_VECTOR_H
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 extern "C" {
@@ -40,6 +41,10 @@ class MMappedVector {
  * @c d is a flexible array member holding the actual elements.
  */
 struct data_t {
+  uint64_t magic;      ///< File-type identifier
+  uint16_t version;    ///< Format version (currently 1)
+  uint16_t elem_size;  ///< sizeof(T) at write time
+  uint32_t _reserved;  ///< Padding to 16-byte boundary, must be 0
   unsigned long nb_elements;  ///< Number of elements currently stored
   unsigned long capacity;     ///< Maximum elements before the next grow
   T d[];                      ///< Flexible array of elements
@@ -73,8 +78,9 @@ public:
  * @param filename   Path to the backing file (created with
  *                   @c STARTING_CAPACITY slots if absent).
  * @param read_only  If @c true, map the file read-only.
+ * @param magic      Expected magic value for format validation.
  */
-MMappedVector(const char *filename, bool read_only);
+MMappedVector(const char *filename, bool read_only, uint64_t magic);
 /** @brief Sync and unmap the file. */
 ~MMappedVector();
 

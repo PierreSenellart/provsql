@@ -20,7 +20,9 @@
  */
 #include <cerrno>
 #include <cmath>
+#include <map>
 #include <sstream>
+#include <string>
 
 #include "MMappedCircuit.h"
 #include "GenericCircuit.h"
@@ -28,21 +30,37 @@
 #include "provsql_utils_cpp.h"
 
 extern "C" {
+#include "miscadmin.h"
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 }
 
-/** @brief Singleton pointer to the process-wide mmap-backed provenance circuit. */
-static MMappedCircuit *circuit = NULL;
+/** @brief Per-database mmap-backed provenance circuits, keyed by database OID. */
+static std::map<Oid, MMappedCircuit*> circuits;
+
+std::string MMappedCircuit::makePath(Oid db_oid, const char *filename)
+{
+  return std::string(DataDir) + "/base/" + std::to_string(db_oid) + "/" + filename;
+}
+
+MMappedCircuit::MMappedCircuit(Oid db_oid, bool read_only) :
+  MMappedCircuit(
+    makePath(db_oid, MAPPING_FILENAME),
+    makePath(db_oid, GATES_FILENAME),
+    makePath(db_oid, WIRES_FILENAME),
+    makePath(db_oid, EXTRA_FILENAME),
+    read_only) {}
 
 void initialize_provsql_mmap()
 {
-  circuit = new MMappedCircuit();
+  /* circuits are opened lazily on first IPC message */
 }
 
 void destroy_provsql_mmap()
 {
-  delete circuit;
+  for(auto &kv: circuits)
+    delete kv.second;
+  circuits.clear();
 }
 
 void MMappedCircuit::createGate(
@@ -150,11 +168,28 @@ std::string MMappedCircuit::getExtra(pg_uuid_t token) const
   return result;
 }
 
+/** @brief Return (creating lazily if needed) the circuit for @p db_oid. */
+static MMappedCircuit *getCircuit(Oid db_oid)
+{
+  auto it = circuits.find(db_oid);
+  if(it == circuits.end()) {
+    circuits[db_oid] = new MMappedCircuit(db_oid);
+    return circuits[db_oid];
+  }
+  return it->second;
+}
+
 void provsql_mmap_main_loop()
 {
   char c;
 
   while(READM(c, char)) {
+    Oid db_oid;
+    if(!READM(db_oid, Oid))
+      provsql_error("Cannot read database OID from pipe");
+
+    MMappedCircuit *circuit = getCircuit(db_oid);
+
     switch(c) {
     case 'C':
     {
@@ -313,7 +348,7 @@ void provsql_mmap_main_loop()
 
       std::stringstream ss;
       boost::archive::binary_oarchive oa(ss);
-      oa << createGenericCircuit(token);
+      oa << circuit->createGenericCircuit(token);
 
       ss.seekg(0, std::ios::end);
       unsigned long size = ss.tellg();
@@ -351,7 +386,7 @@ bool operator<(const pg_uuid_t a, const pg_uuid_t b)
   return memcmp(&a, &b, sizeof(pg_uuid_t))<0;
 }
 
-GenericCircuit createGenericCircuit(pg_uuid_t token)
+GenericCircuit MMappedCircuit::createGenericCircuit(pg_uuid_t token) const
 {
   std::set<pg_uuid_t> to_process, processed;
   to_process.insert(token);
@@ -364,13 +399,13 @@ GenericCircuit createGenericCircuit(pg_uuid_t token)
     processed.insert(uuid);
     std::string f{uuid2string(uuid)};
 
-    gate_type type = circuit->getGateType(uuid);
+    gate_type type = getGateType(uuid);
     gate_t id = result.setGate(f, type);
-    double prob = circuit->getProb(uuid);
+    double prob = getProb(uuid);
     if(!std::isnan(prob))
       result.setProb(id, prob);
 
-    std::vector<pg_uuid_t> children = circuit->getChildren(uuid);
+    std::vector<pg_uuid_t> children = getChildren(uuid);
     for(unsigned i=0; i<children.size(); ++i) {
       result.addWire(
         id,
@@ -380,12 +415,12 @@ GenericCircuit createGenericCircuit(pg_uuid_t token)
     }
 
     if(type==gate_mulinput || type==gate_eq || type==gate_agg || type==gate_cmp) {
-      auto [info1, info2] = circuit->getInfos(uuid);
+      auto [info1, info2] = getInfos(uuid);
       result.setInfos(id, info1, info2);
     }
 
     if(type==gate_project || type==gate_value || type==gate_agg) {
-      auto extra = circuit->getExtra(uuid);
+      auto extra = getExtra(uuid);
       result.setExtra(id, extra);
     }
   }

@@ -1,6 +1,9 @@
 # Setting up the database
 test: setup
 
+# Per-database circuit isolation and mmap file placement
+test: per_db_circuit
+
 # Adding a provenance table
 test: add_provenance
 test: remove_add_provenance

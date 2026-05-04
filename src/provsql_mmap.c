@@ -99,6 +99,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("t", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
@@ -158,6 +159,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("C", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&type, gate_type);
   ADDWRITEM(&nb_children, unsigned);
@@ -219,6 +221,7 @@ Datum set_prob(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("P", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&prob, double);
 
@@ -251,6 +254,7 @@ Datum set_infos(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("I", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&info1, unsigned);
   ADDWRITEM(&info2, unsigned);
@@ -276,6 +280,7 @@ Datum set_extra(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("E", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&len, unsigned);
 
@@ -306,6 +311,7 @@ Datum get_extra(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("e", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
@@ -334,9 +340,13 @@ Datum get_nb_gates(PG_FUNCTION_ARGS)
 {
   unsigned long nb;
 
+  STARTWRITEM();
+  ADDWRITEM("n", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+
   provsql_shmem_lock_exclusive();
 
-  if(!WRITEM("n", char) || !READB(nb, unsigned long)) {
+  if(!SENDWRITEM() || !READB(nb, unsigned long)) {
     provsql_shmem_unlock();
     provsql_error("Cannot communicate with pipe (message type n)");
   }
@@ -365,6 +375,7 @@ Datum get_children(PG_FUNCTION_ARGS)
   if(!children) {
     STARTWRITEM();
     ADDWRITEM("c", char);
+    ADDWRITEM(&MyDatabaseId, Oid);
     ADDWRITEM(token, pg_uuid_t);
 
     provsql_shmem_lock_exclusive();
@@ -429,6 +440,7 @@ Datum get_prob(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("p", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
@@ -458,6 +470,7 @@ Datum get_infos(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("i", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
