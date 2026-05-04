@@ -22,9 +22,8 @@ INSERT INTO detection_td VALUES
   (18, 1, 0.61), (18, 3, 0.55),
   (28, 1, 0.76), (28, 3, 0.69);
 
-ALTER TABLE detection_td
-    ADD COLUMN photo_species text
-        GENERATED ALWAYS AS (photo_id || '/' || species_id) STORED;
+ALTER TABLE detection_td ADD COLUMN photo_species text;
+UPDATE detection_td SET photo_species = photo_id || '/' || species_id;
 
 SELECT repair_key('detection_td', 'photo_species');
 DO $$ BEGIN
@@ -93,20 +92,16 @@ DROP TABLE detection_td;
 -- conditioning on bbox 2's mulvar.
 CREATE TABLE detection_n2 (
     photo_id   integer,
-    bbox_id    integer,
+    bbox_key   text,
     species_id integer,
     confidence double precision
 );
 INSERT INTO detection_n2 VALUES
-    (1, 1, 1, 0.8),
-    (1, 2, 3, 0.7), (1, 2, 1, 0.2),
-    (1, 3, 3, 0.6);
+    (1, '1', 1, 0.8),
+    (1, '2', 3, 0.7), (1, '2', 1, 0.2),
+    (1, '3', 3, 0.6);
 
-ALTER TABLE detection_n2
-    ADD COLUMN photo_bbox text
-        GENERATED ALWAYS AS (photo_id || '/' || bbox_id) STORED;
-
-SELECT repair_key('detection_n2', 'photo_bbox');
+SELECT repair_key('detection_n2', 'bbox_key');
 DO $$ BEGIN
   PERFORM set_prob(provenance(), confidence) FROM detection_n2;
 END $$;
