@@ -111,7 +111,7 @@ semiring plus and times operations. For example, given a type
 
     CREATE AGGREGATE security_plus(classification_level) (
       sfunc = security_plus_state, stype = classification_level,
-      initcond = 'top_secret'
+      initcond = 'unavailable'
     );
     CREATE AGGREGATE security_times(classification_level) (
       sfunc = security_times_state, stype = classification_level,

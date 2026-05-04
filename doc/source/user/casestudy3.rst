@@ -1,9 +1,10 @@
 Case Study: Île-de-France Public Transit
 ==========================================
 
-This case study applies ProvSQL to the real-world GTFS dataset for Île-de-France
-public transit, demonstrating Boolean provenance at scale for wheelchair
-accessibility reasoning.
+This case study, extending the scenario introduced in
+:cite:`DBLP:journals/pvldb/SenellartJMR18`, applies ProvSQL to the
+real-world GTFS dataset for Île-de-France public transit, demonstrating
+Boolean provenance at scale for wheelchair accessibility reasoning.
 
 The Scenario
 ------------
@@ -58,27 +59,39 @@ The script also adds provenance tracking and creates a combined
 
 .. note::
 
-   Indexing the four tables is strongly recommended before running the
-   queries below.  The setup script already includes the most important
-   indexes (``stop_id``, ``trip_id``, parent station).
+   The setup script already creates the most important indexes
+   (on ``stop_id``, ``trip_id``, and parent station), which are
+   essential for acceptable performance on this large dataset.
 
 
 Step 1: Explore the Database
 -----------------------------
 
-Inspect the four tables::
+At the start of every session, set the search path so that ProvSQL functions
+can be called without the ``provsql.`` prefix:
+
+.. code-block:: postgresql
+
+    SET search_path TO public, provsql;
+
+Inspect the four tables:
+
+.. code-block:: postgresql
 
     SELECT COUNT(*) FROM routes;
     SELECT COUNT(*) FROM stops;
     SELECT COUNT(*) FROM trips;
     SELECT COUNT(*) FROM stop_times;
 
-``SELECT * FROM stops WHERE stop_name = 'Bagneux';`` gives
-the stop IDs for Bagneux station and its platforms.
+To find the stop IDs for Bagneux station and its platforms:
+
+.. code-block:: postgresql
+
+    SELECT * FROM stops WHERE stop_name = 'Bagneux';
 
 
-Step 2: Enable Provenance and Create the Wheelchair Mapping
-------------------------------------------------------------
+Step 2: Provenance and Wheelchair Mapping
+------------------------------------------
 
 Provenance has already been added by ``setup.sql``.  The ``wheelchair``
 mapping table combines ``wheelchair_accessible`` from ``trips`` and
@@ -86,7 +99,9 @@ mapping table combines ``wheelchair_accessible`` from ``trips`` and
 ``true`` (1) under :sqlfunc:`sr_boolean` if *every* contributing row
 has its wheelchair column set to 1.
 
-Inspect the mapping::
+Inspect the mapping:
+
+.. code-block:: postgresql
 
     SELECT * FROM wheelchair LIMIT 10;
 
@@ -122,9 +137,7 @@ Step 4: Boolean Provenance – Full Wheelchair Accessibility
 Add Boolean provenance evaluation to mark which results are fully
 wheelchair-accessible along *every* leg.  Because the query returns one
 row per trip (each with its own provenance circuit), materialize the
-result first and then aggregate per destination.  We focus on bus route
-**391** (Bagneux – Meudon), which has a mix of accessible and
-inaccessible stops:
+result first and then aggregate per destination:
 
 .. code-block:: postgresql
 
@@ -140,35 +153,26 @@ inaccessible stops:
       JOIN stops      s2 ON s2.stop_id = t2.stop_id
       JOIN trips      u2 ON u2.trip_id = t2.trip_id
       JOIN routes     r2 ON r2.route_id = u2.route_id
-      WHERE s0.stop_name = 'Bagneux'
-        AND r2.route_long_name = '391';
+      WHERE s0.stop_name = 'Bagneux';
 
     SELECT stop_name, route_long_name, bool_or(accessible) AS accessible
     FROM bagneux_b
     GROUP BY stop_name, route_long_name
-    ORDER BY stop_name;
+    ORDER BY route_long_name, stop_name;
 
 :sqlfunc:`sr_boolean` evaluates the provenance token under the Boolean
 semiring, looking up each leaf token in the ``wheelchair`` table.
 A result of ``true`` means every record along *some* path from Bagneux
 to that stop has the wheelchair flag set; ``false`` means no fully
-accessible path exists.  For route 391 the result includes both::
-
-    stop_name                 | route_long_name | accessible
-    --------------------------+-----------------+------------
-    Cité Jardins              | 391             | true
-    Fontaine - Gueffier       | 391             | false
-    Gare de Vanves - Malakoff | 391             | false
-    Maison Blanche            | 391             | false
-    Paul Bert                 | 391             | false
-    ...
+accessible path exists.
 
 
 Step 5: Inspect Individual Results with :sqlfunc:`sr_formula`
 --------------------------------------------------------------
 
 For a stop that is *not* fully accessible, use :sqlfunc:`sr_formula` to
-identify which specific trip or stop is responsible:
+identify which specific trip or stop is responsible.  Here we inspect
+the ``Paul Bert`` stop on route 391 as an example:
 
 .. code-block:: postgresql
 
@@ -194,12 +198,26 @@ pinpointing the accessibility barrier.  For example::
     ----------+-----------------
     Paul Bert | (1 ⊗ 1 ⊗ 0 ⊗ 1)
 
-The ``0`` in the product identifies the specific record (a stop or trip)
-that is not wheelchair-accessible along this path.
+The four factors correspond to the four provenance-enabled table
+instances in the join: the Bagneux station record (``stops``, 1), its
+platform record (``stops``, 1), the Paul Bert stop record
+(``stops``, 0), and the trip record (``trips``, 1). The ``0`` on the
+third factor pinpoints the specific Paul Bert stop served by route 391
+as the accessibility barrier. Note that there are several stops named
+``Paul Bert`` in the dataset; the one served by route 391 has
+``wheelchair_boarding = 0``, as we can verify:
 
-.. note::
+.. code-block:: postgresql
 
-   On the full GTFS dataset, these queries may take several minutes.
-   Partial indexes on ``stop_times(trip_id)`` and
-   ``stops(parent_station)`` are included in ``setup.sql`` and are
-   essential for acceptable performance.
+    SELECT DISTINCT s2.stop_name, s2.wheelchair_boarding
+    FROM stops s0
+    JOIN stops      s1 ON s1.parent_station = s0.stop_id
+    JOIN stop_times t1 ON s1.stop_id = t1.stop_id
+    JOIN stop_times t2 ON t1.trip_id = t2.trip_id
+                      AND t1.stop_sequence < t2.stop_sequence
+    JOIN stops      s2 ON s2.stop_id = t2.stop_id
+    JOIN trips      u2 ON u2.trip_id = t2.trip_id
+    JOIN routes     r2 ON r2.route_id = u2.route_id
+    WHERE s0.stop_name = 'Bagneux'
+      AND r2.route_long_name = '391'
+      AND s2.stop_name = 'Paul Bert';

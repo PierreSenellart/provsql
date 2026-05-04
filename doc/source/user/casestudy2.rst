@@ -50,7 +50,9 @@ Step 1: Explore the Database
 
 Familiarise yourself with the data. The ``study_type`` column uses a PostgreSQL
 ``ENUM`` ordered by evidence quality:
-``case_report < observational < rct < meta_analysis``.
+``no_evidence < case_report < observational < rct < meta_analysis < perfect_evidence``,
+where ``no_evidence`` is the semiring 𝟘 (no derivation possible) and
+``perfect_evidence`` is the semiring 𝟙 (neutral for ⊗=MIN: does not degrade quality chains).
 
 At the start of every session, set the search path so that ProvSQL functions
 can be called without the ``provsql.`` prefix:
@@ -229,10 +231,10 @@ over the ``study_type`` column, and compute the evidence grade for every
     $$ LANGUAGE SQL IMMUTABLE;
 
     CREATE AGGREGATE quality_plus(study_quality) (
-      sfunc = quality_plus_state, stype = study_quality, initcond = 'case_report'
+      sfunc = quality_plus_state, stype = study_quality, initcond = 'no_evidence'
     );
     CREATE AGGREGATE quality_times(study_quality) (
-      sfunc = quality_times_state, stype = study_quality, initcond = 'meta_analysis'
+      sfunc = quality_times_state, stype = study_quality, initcond = 'perfect_evidence'
     );
 
     CREATE FUNCTION evidence_grade(token UUID, token2value regclass)
@@ -240,7 +242,7 @@ over the ``study_type`` column, and compute the evidence grade for every
     BEGIN
       RETURN provenance_evaluate(
         token, token2value,
-        'meta_analysis'::study_quality,
+        'perfect_evidence'::study_quality,
         'quality_plus', 'quality_times'
       );
     END
@@ -480,14 +482,22 @@ Exercise→CVD→beneficial drops from 0.9998 to 0.9868, reflecting that now
 Step 13: Shapley Values
 ------------------------
 
-Shapley values measure each study's marginal contribution to a finding's
-probability. Compute them for Exercise→CVD→beneficial.
+Shapley values measure each study's marginal contribution to the *replication*
+probability of a finding. Because probabilities are set on the input tuples,
+:sqlfunc:`shapley` computes *expected* Shapley values in the probabilistic
+sense (see :doc:`shapley`). A key property of expected Shapley values is that
+they sum to the probability of the query result – here, the replication
+probability computed in Step 12.
+
+Compute expected Shapley values for Exercise→CVD→beneficial, using
+``f_replicated`` as the target and individual ``f`` rows as the variables.
 
 .. hint::
 
    :sqlfunc:`shapley` takes two provenance tokens: the combined token of
-   the query result (the "target") and the individual token of each input
-   row (the "variable"). Capture both in subqueries and cross-join them.
+   the query result (the "target", from ``f_replicated``) and the individual
+   token of each input row (the "variable", from ``f``).
+   Capture both in subqueries and cross-join them.
 
 .. raw:: html
 
@@ -500,11 +510,9 @@ probability. Compute them for Exercise→CVD→beneficial.
            ROUND(shapley(target.prov, fin.prov)::numeric, 4) AS sv
     FROM (
       SELECT provenance() AS prov
-      FROM (
-        SELECT DISTINCT exposure, outcome, effect FROM f
-        WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
-          AND effect = 'beneficial'
-      ) t
+      FROM f_replicated
+      WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
+        AND effect = 'beneficial'
     ) target,
     (
       SELECT study, provenance() AS prov
@@ -518,25 +526,31 @@ probability. Compute them for Exercise→CVD→beneficial.
 
    </details>
 
-Johnson2020 (meta-analysis, reliability 0.98) has the highest Shapley value,
-reflecting its dominant contribution to the finding's probability. Smith2018
-(RCT, 0.92) and Williams2021 (RCT, 0.88) follow in order of their reliability.
+Johnson2020 (meta-analysis, reliability 0.98) has the highest Shapley value
+(0.3531), reflecting its dominant contribution to the replication probability.
+Smith2018 (RCT, 0.92) scores 0.3267 and Williams2021 (RCT, 0.88) scores 0.3071.
+The three values sum to 0.9869, equal to the replication probability obtained
+in Step 12, as guaranteed by the efficiency axiom for expected Shapley values.
 
 Step 14: Banzhaf Values
 ------------------------
 
-*Banzhaf values* offer an alternative game-theoretic measure of each study's
-contribution. Unlike Shapley values, which average marginal contributions over
-all orderings of the players, Banzhaf values average over all *subsets* of the
-other players. This makes the computation simpler (no ordering weights) and
-often faster in practice.
+*Expected Banzhaf values* offer an alternative game-theoretic measure of each
+study's contribution. Unlike Shapley values, which average marginal
+contributions over all orderings of the players, Banzhaf values average over
+all *subsets* of the other players. This makes the computation simpler (no
+ordering weights) and often faster in practice. Like Shapley values, they are
+computed in the probabilistic sense (see :doc:`shapley`), but they do not
+satisfy the efficiency axiom: they are not constrained to sum to the
+probability of the query result.
 
 .. hint::
 
    :sqlfunc:`banzhaf` takes the same two arguments as :sqlfunc:`shapley`: the
-   combined provenance token of the query result (the "target") and the
-   individual provenance token of each input row (the "variable"). Reuse the
-   same cross-join structure from :ref:`Step 13 <step-13-shapley>`.
+   combined provenance token of the query result (the "target", from
+   ``f_replicated``) and the individual provenance token of each input row
+   (the "variable", from ``f``). Reuse the same cross-join structure from
+   :ref:`Step 13 <step-13-shapley>`.
 
 Compute Banzhaf values for Exercise→CVD→beneficial and compare them with the
 Shapley values from Step 13.
@@ -552,11 +566,9 @@ Shapley values from Step 13.
            ROUND(banzhaf(target.prov, fin.prov)::numeric, 4) AS bv
     FROM (
       SELECT provenance() AS prov
-      FROM (
-        SELECT DISTINCT exposure, outcome, effect FROM f
-        WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
-          AND effect = 'beneficial'
-      ) t
+      FROM f_replicated
+      WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
+        AND effect = 'beneficial'
     ) target,
     (
       SELECT study, provenance() AS prov
@@ -571,6 +583,6 @@ Shapley values from Step 13.
    </details>
 
 The relative ranking of Johnson2020, Smith2018, and Williams2021 is the same as
-with Shapley values, confirming that both measures agree on who contributes most.
-The absolute magnitudes differ: Banzhaf values are not constrained to sum to the
-finding's probability, so they will be smaller in this case.
+with Shapley values, confirming that both measures agree on who contributes most
+to the replication probability. The absolute magnitudes are larger (around 1.7
+per study) and their sum does not equal the replication probability.

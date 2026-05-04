@@ -2,7 +2,7 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
-CREATE TYPE study_quality AS ENUM ('case_report', 'observational', 'rct', 'meta_analysis');
+CREATE TYPE study_quality AS ENUM ('no_evidence', 'case_report', 'observational', 'rct', 'meta_analysis', 'perfect_evidence');
 
 CREATE TABLE study (
     id integer PRIMARY KEY,
@@ -141,10 +141,10 @@ CREATE FUNCTION quality_times_state(state study_quality, q study_quality)
 $$ LANGUAGE SQL IMMUTABLE;
 
 CREATE AGGREGATE quality_plus(study_quality) (
-  sfunc = quality_plus_state, stype = study_quality, initcond = 'case_report'
+  sfunc = quality_plus_state, stype = study_quality, initcond = 'no_evidence'
 );
 CREATE AGGREGATE quality_times(study_quality) (
-  sfunc = quality_times_state, stype = study_quality, initcond = 'meta_analysis'
+  sfunc = quality_times_state, stype = study_quality, initcond = 'perfect_evidence'
 );
 
 CREATE FUNCTION evidence_grade(token UUID, token2value regclass)
@@ -152,7 +152,7 @@ CREATE FUNCTION evidence_grade(token UUID, token2value regclass)
 BEGIN
   RETURN provenance_evaluate(
     token, token2value,
-    'meta_analysis'::study_quality,
+    'perfect_evidence'::study_quality,
     'quality_plus', 'quality_times'
   );
 END
@@ -258,17 +258,15 @@ SELECT remove_provenance('result_replication');
 SELECT * FROM result_replication ORDER BY exposure, outcome, effect;
 DROP TABLE result_replication;
 
--- Step 13: Shapley values — which study drives Exercise→CVD→beneficial?
+-- Step 13: Shapley values — expected contribution to replication probability
 CREATE TABLE result_shapley AS
 SELECT fin.study,
        shapley(target.prov, fin.prov) AS sv
 FROM (
   SELECT provenance() AS prov
-  FROM (
-    SELECT DISTINCT exposure, outcome, effect FROM f
-    WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
-      AND effect = 'beneficial'
-  ) t
+  FROM f_replicated
+  WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
+    AND effect = 'beneficial'
 ) target,
 (
   SELECT study, provenance() AS prov
@@ -288,11 +286,9 @@ SELECT fin.study,
        banzhaf(target.prov, fin.prov) AS bv
 FROM (
   SELECT provenance() AS prov
-  FROM (
-    SELECT DISTINCT exposure, outcome, effect FROM f
-    WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
-      AND effect = 'beneficial'
-  ) t
+  FROM f_replicated
+  WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
+    AND effect = 'beneficial'
 ) target,
 (
   SELECT study, provenance() AS prov

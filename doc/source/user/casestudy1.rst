@@ -1,17 +1,14 @@
 Case Study: The Intelligence Agency
 =====================================
 
-This case study demonstrates ProvSQL's custom semiring capability,
-where-provenance, probability computation with multiple algorithms, and
-circuit export through a security-classification scenario.
+This case study, largely extending the scenario introduced in
+:cite:`DBLP:journals/pvldb/SenellartJMR18`, demonstrates ProvSQL's
+custom semiring capability, where-provenance, probability computation
+with multiple algorithms, and circuit export through a
+security-classification scenario.
 
 The Scenario
 ------------
-
-.. warning::
-
-   The personnel data in this case study are entirely fictional and
-   created solely to illustrate ProvSQL features.
 
 An intelligence agency maintains a database of seven employees spread
 across three cities. Every employee holds a security clearance ranging
@@ -38,14 +35,24 @@ and load it into a fresh PostgreSQL database::
 This creates:
 
 * ``classification_level`` – an ordered ENUM
-  (``unclassified`` < ``restricted`` < ``confidential`` < ``secret`` < ``top_secret``)
+  (``unclassified`` < ``restricted`` < ``confidential`` < ``secret`` < ``top_secret`` < ``unavailable``)
+  where ``unavailable`` is a sentinel representing the semiring 𝟘 (no derivation possible)
 * ``personnel`` – 7 agents with name, position, city, and clearance level
 
 
 Step 1: Explore the Database
 -----------------------------
 
-Inspect the ``personnel`` table::
+At the start of every session, set the search path so that ProvSQL functions
+can be called without the ``provsql.`` prefix:
+
+.. code-block:: postgresql
+
+    SET search_path TO public, provsql;
+
+Inspect the ``personnel`` table:
+
+.. code-block:: postgresql
 
     SELECT * FROM personnel ORDER BY id;
 
@@ -58,12 +65,14 @@ Step 2: Enable Provenance and Create a Name Mapping
 ----------------------------------------------------
 
 Enable provenance tracking on ``personnel`` and create a mapping so that
-provenance tokens can be labelled with agent names::
+provenance tokens can be labelled with agent names:
+
+.. code-block:: postgresql
 
     SELECT add_provenance('personnel');
     SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
 
-After ``add_provenance``, every row of ``personnel`` has a unique UUID
+After :sqlfunc:`add_provenance`, every row of ``personnel`` has a unique UUID
 token in its hidden ``provsql`` column. The mapping ``personnel_name``
 associates each token with the corresponding agent's name.
 
@@ -77,7 +86,7 @@ inequality to generate all unordered pairs, then apply
 
 .. code-block:: postgresql
 
-    SELECT DISTINCT p1.city,
+    SELECT p1.city,
            sr_formula(provenance(), 'personnel_name') AS formula
     FROM personnel p1
     JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
@@ -98,12 +107,12 @@ the city only needs to see the lowest-cleared agent there.
 
 This is a custom semiring over ``classification_level``:
 
-* ``⊕`` (OR combination) = ``MAX``: the minimum clearance to know
-  *either* agent was involved is the higher of the two (you need to be
-  cleared to see both possibilities).
-* ``⊗`` (AND/join) = ``MIN``: to know that *both* agents are present
-  you only need clearance for the less-classified one (the higher-cleared
-  agent already constrains you via the join).
+* ``⊕`` (OR combination) = ``MIN``: to infer *either* agent was
+  involved, you only need clearance for the less-classified one (one
+  witness suffices to establish the disjunction).
+* ``⊗`` (AND/join) = ``MAX``: to confirm *both* agents are present,
+  you need clearance for the more-classified one (you must be able to
+  access both records to establish the join).
 
 .. code-block:: postgresql
 
@@ -130,7 +139,7 @@ This is a custom semiring over ``classification_level``:
     CREATE AGGREGATE security_min(classification_level) (
         sfunc    = security_min_state,
         stype    = classification_level,
-        initcond = 'top_secret'
+        initcond = 'unavailable'
     );
 
     CREATE AGGREGATE security_max(classification_level) (
@@ -159,9 +168,12 @@ This is a custom semiring over ``classification_level``:
     GROUP BY p1.city
     ORDER BY p1.city;
 
-Results: Nairobi requires only ``unclassified`` (Juma), Beijing requires
-``secret`` (both Ellen and Jing hold the same level), and Paris requires
-``confidential`` (David is the least-classified of the three Paris agents).
+Results: Nairobi requires ``restricted`` (Paul is the more-classified of
+the two agents, and both must be accessed to confirm the pair). Beijing
+requires ``secret`` (both Ellen and Jing hold the same level). Paris
+requires ``confidential``: the pair David–Nancy has MAX clearance
+``confidential``, which is the lowest maximum among all Paris pairs,
+so ``confidential`` clearance suffices to confirm at least one pair.
 
 
 Step 5: Cities with Exactly One Agent (EXCEPT / Monus)
@@ -173,7 +185,7 @@ identifies the agent. Find cities where *all* agents are alone using
 
 .. code-block:: postgresql
 
-    SELECT DISTINCT city,
+    SELECT city,
            sr_formula(provenance(), 'personnel_name') AS formula
     FROM (
         SELECT DISTINCT city FROM personnel
@@ -207,7 +219,7 @@ output value. Enable it and re-run the shared-city query:
 
     SET provsql.where_provenance = on;
 
-    SELECT DISTINCT p1.city,
+    SELECT p1.city,
            where_provenance(provenance()) AS source
     FROM personnel p1
     JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
@@ -227,7 +239,9 @@ Step 7: Assign Probabilities
 -----------------------------
 
 Suppose the existence of each agent in the database is uncertain.
-Assign each agent a probability equal to ``id / 10.0``::
+Assign each agent a probability equal to ``id / 10.0``:
+
+.. code-block:: postgresql
 
     ALTER TABLE personnel ADD COLUMN probability DOUBLE PRECISION;
     UPDATE personnel SET probability = id / 10.0;
@@ -239,8 +253,8 @@ Assign each agent a probability equal to ``id / 10.0``::
 Now Juma has probability 0.1, Paul 0.2, …, Jing 0.7.
 
 
-Step 8: Probability – Exact (Possible-Worlds)
-----------------------------------------------
+Step 8: Probability – Exact
+---------------------------
 
 Compute the exact probability that each city is a single-agent city:
 
@@ -272,8 +286,8 @@ sampling gives an approximate answer:
 .. code-block:: postgresql
 
     SELECT city,
-           ROUND(probability_evaluate(
-               provenance(), 'monte-carlo', '10000')::numeric, 1) AS prob
+           probability_evaluate(
+               provenance(), 'monte-carlo', '10000') AS prob
     FROM (
         SELECT DISTINCT city FROM personnel
       EXCEPT
@@ -284,7 +298,9 @@ sampling gives an approximate answer:
     ) t
     ORDER BY city;
 
-With 10 000 samples the result is accurate to roughly ±0.01.
+With 10 000 samples the result is accurate to roughly ±0.01
+(see `Margin of error <https://en.wikipedia.org/wiki/Margin_of_error>`_).
+Results will vary slightly between runs due to sampling.
 Use ``\timing`` in psql to compare the runtime against the exact method.
 
 
@@ -298,8 +314,8 @@ Step 10: Probability – Knowledge Compiler
    is available.
 
 A knowledge compiler converts the provenance circuit to a *d-DNNF*
-representation, enabling exact probability evaluation in time
-proportional to circuit size:
+representation, which enables efficient exact probability evaluation
+on large circuits of specific forms:
 
 .. code-block:: postgresql
 
@@ -317,19 +333,23 @@ proportional to circuit size:
     ORDER BY city;
 
 Compare the runtime with ``\timing`` against the possible-worlds and
-Monte Carlo methods.
+Monte Carlo methods. On this small example, the external knowledge
+compiler will be slower than the other methods: invoking an external
+process and compiling the circuit carries significant overhead that
+only pays off on much larger circuits.
 
 
 Step 11: Visualise a Provenance Circuit
 -----------------------------------------
 
-:sqlfunc:`view_circuit` returns the provenance circuit as a
-`Graphviz <https://graphviz.org>`_ DOT string, which you can pipe to
-``dot -Tpng`` for a PNG image:
+:sqlfunc:`view_circuit` renders the provenance circuit as an ASCII
+box-art diagram using
+`graph-easy <https://metacpan.org/dist/Graph-Easy>`_
+(must be installed and on your ``PATH``):
 
 .. code-block:: postgresql
 
-    SELECT city, view_circuit(provenance(), 'personnel_name') AS dot
+    SELECT city, view_circuit(provenance(), 'personnel_name') AS circuit
     FROM (
         SELECT DISTINCT city FROM personnel
       EXCEPT
@@ -340,19 +360,16 @@ Step 11: Visualise a Provenance Circuit
     ) t
     WHERE city = 'Nairobi';
 
-Copy the DOT text and run::
-
-    echo '<DOT text>' | dot -Tpng -o nairobi_circuit.png
-
-The resulting PNG shows the monus gate at the top, with ``Juma`` and
-``Paul`` as leaf inputs.
+The result shows the monus gate at the top, with ``Juma`` and
+``Paul`` as leaf inputs, rendered in box-art notation in the terminal.
 
 
 Step 12: Export to XML
 -----------------------
 
-:sqlfunc:`to_provxml` serialises the provenance circuit to XML, which
-can be processed by standard XML tools:
+:sqlfunc:`to_provxml` serialises the provenance circuit to
+`PROV-XML <https://www.w3.org/TR/prov-xml/>`_, the W3C standard for
+provenance interchange, which can be processed by any standard XML tool:
 
 .. code-block:: postgresql
 
@@ -373,9 +390,9 @@ Step 13: Large Circuit Benchmark
 ----------------------------------
 
 To compare the three probability algorithms at scale, create a synthetic
-100 × 100 random-probability matrix and run a path query:
+100 × 100 random-probability matrix and enable provenance tracking on it:
 
-.. code-block:: psql
+.. code-block:: postgresql
 
     CREATE TABLE matrix AS
     SELECT ones.n + 10 * tens.n AS x,
@@ -391,7 +408,22 @@ To compare the three probability algorithms at scale, create a synthetic
       PERFORM set_prob(provenance(), prob) FROM matrix;
     END $$;
 
-    \timing
+Now run the same path query with each method in turn (use ``\timing`` in
+psql to record runtimes):
+
+.. code-block:: postgresql
+
+    -- Default method (independent evaluation, tree decomposition, or d4)
+    SELECT m1.x, m2.y,
+           probability_evaluate(provenance()) AS prob
+    FROM matrix m1, matrix m2
+    WHERE m2.x = m1.y AND m1.x > 90 AND m2.x > 90 AND m2.y > 90
+    GROUP BY m1.x, m2.y
+    ORDER BY m1.x, m2.y;
+
+.. code-block:: postgresql
+
+    -- Exact enumeration over all possible worlds
     SELECT m1.x, m2.y,
            probability_evaluate(provenance(), 'possible-worlds') AS prob
     FROM matrix m1, matrix m2
@@ -399,6 +431,9 @@ To compare the three probability algorithms at scale, create a synthetic
     GROUP BY m1.x, m2.y
     ORDER BY m1.x, m2.y;
 
+.. code-block:: postgresql
+
+    -- Monte Carlo sampling (9604 samples ≈ 1 % error at 95 % confidence)
     SELECT m1.x, m2.y,
            probability_evaluate(provenance(), 'monte-carlo', '9604') AS prob
     FROM matrix m1, matrix m2
@@ -406,6 +441,9 @@ To compare the three probability algorithms at scale, create a synthetic
     GROUP BY m1.x, m2.y
     ORDER BY m1.x, m2.y;
 
+.. code-block:: postgresql
+
+    -- Knowledge compilation via external tool d4
     SELECT m1.x, m2.y,
            probability_evaluate(provenance(), 'compilation', 'd4') AS prob
     FROM matrix m1, matrix m2
@@ -416,4 +454,5 @@ To compare the three probability algorithms at scale, create a synthetic
 The Monte Carlo query uses ``9604`` samples, which gives roughly 1 %
 additive error with 95 % confidence (by the formula
 :math:`n = z^2 / (4\varepsilon^2)` with :math:`z = 1.96`,
-:math:`\varepsilon = 0.01`).
+:math:`\varepsilon = 0.01`;
+see `Margin of error <https://en.wikipedia.org/wiki/Margin_of_error>`_).

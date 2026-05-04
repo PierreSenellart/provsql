@@ -5,7 +5,7 @@ CREATE EXTENSION IF NOT EXISTS provsql WITH SCHEMA public;
 
 SET search_path TO public, provsql;
 
-CREATE TYPE study_quality AS ENUM ('case_report', 'observational', 'rct', 'meta_analysis');
+CREATE TYPE study_quality AS ENUM ('no_evidence', 'case_report', 'observational', 'rct', 'meta_analysis', 'perfect_evidence');
 
 CREATE TABLE study (
     id integer PRIMARY KEY,

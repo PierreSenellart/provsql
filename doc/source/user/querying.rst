@@ -42,8 +42,8 @@ The following SQL constructs are supported with full provenance tracking:
 * ``HAVING`` (non-matching groups receive zero provenance ``𝟘``
   rather than being filtered out)
 * `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
-  (``ROW_NUMBER``, ``RANK``, ``SUM OVER``, ``LAG``, ``LEAD``, etc.
-  — provenance stays per-row)
+  (``ROW_NUMBER``, ``RANK``, ``SUM OVER``, ``LAG``, ``LEAD``, etc.;
+  provenance stays per-row)
 * ``FILTER`` clause on aggregates
 * ``INSERT … SELECT`` (provenance propagated when target table is
   provenance-tracked)

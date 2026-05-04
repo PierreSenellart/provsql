@@ -113,15 +113,15 @@ remove_provenance
 
 (1 row)
 study|sv
-Johnson2020|0.3625
-Smith2018|0.3289
-Williams2021|0.3085
+Johnson2020|0.3531
+Smith2018|0.3267
+Williams2021|0.3071
 (3 rows)
 remove_provenance
 
 (1 row)
 study|bv
-Johnson2020|0.9800
-Smith2018|0.9200
-Williams2021|0.8800
+Johnson2020|1.7640
+Smith2018|1.7112
+Williams2021|1.6720
 (3 rows)

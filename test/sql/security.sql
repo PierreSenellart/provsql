@@ -19,7 +19,7 @@ CREATE AGGREGATE security_min(classification_level)
 (
   sfunc = security_min_state,
   stype = classification_level,
-  initcond = 'top_secret'
+  initcond = 'unavailable'
 );
 
 CREATE AGGREGATE security_max(classification_level)

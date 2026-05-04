@@ -7,7 +7,8 @@ CREATE EXTENSION IF NOT EXISTS provsql CASCADE;
 SET search_path TO public, provsql;
 
 CREATE TYPE classification_level AS ENUM (
-    'unclassified', 'restricted', 'confidential', 'secret', 'top_secret'
+    'unclassified', 'restricted', 'confidential', 'secret', 'top_secret',
+    'unavailable'
 );
 
 CREATE TABLE personnel (

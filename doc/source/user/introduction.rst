@@ -32,7 +32,7 @@ query results without changing the queries themselves:
   user-chosen semiring: Boolean reachability, formula display,
   why-provenance, counting, security levels, and more.
 
-* **Probability computation** — assign independent probabilities to
+* **Probability computation** – assign independent probabilities to
   provenance tokens and compute the exact or approximate probability that each query
   result holds in the probabilistic database.
 
