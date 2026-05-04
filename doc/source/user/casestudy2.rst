@@ -283,7 +283,7 @@ finding:
         where_provenance(provenance()) AS source
     FROM f
     WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
-      AND effect = 'beneficial' AND study = 'Smith2018';
+      AND study = 'Smith2018';
 
     SET provsql.where_provenance = off;
 

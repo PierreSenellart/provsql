@@ -180,7 +180,7 @@ SELECT study, study_type, exposure, outcome, effect,
       where_provenance(provenance()), ':[0-9a-f-]*:', '::', 'g') AS source
 FROM f
 WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
-  AND effect = 'beneficial' AND study = 'Smith2018';
+  AND study = 'Smith2018';
 
 SELECT remove_provenance('result_where_f');
 SELECT study, study_type, exposure, outcome, effect, source FROM result_where_f;
