@@ -77,7 +77,18 @@ if [[ -n "$(git status --porcelain)" ]]; then
   [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 1
 fi
 
-# 2b. CI green check
+# 2b. HEAD pushed check
+#
+# The CI check below queries GitHub Actions by commit SHA.  If HEAD has
+# not been pushed to origin yet, no workflows have run on it and every
+# check will report "missing".  Catch this early.
+
+git fetch --quiet origin
+if ! git merge-base --is-ancestor HEAD origin/master 2>/dev/null; then
+  die "HEAD is not on origin/master. Push your branch first so CI can run, then re-run release.sh."
+fi
+
+# 2c. CI green check
 #
 # Verify that all required CI workflows passed on the current HEAD
 # before tagging.  The release commit only touches files in paths-ignore
@@ -164,7 +175,7 @@ done
 [[ "$CI_FAILED" -eq 0 ]] \
   || die "One or more CI workflows did not pass on HEAD ${HEAD_SHA:0:12}. Fix the failures before releasing."
 
-# 2c. Upgrade-script check
+# 2d. Upgrade-script check
 #
 # ProvSQL supports in-place extension upgrades via ALTER EXTENSION
 # provsql UPDATE (see doc/source/dev/build-system.rst).  Every release
