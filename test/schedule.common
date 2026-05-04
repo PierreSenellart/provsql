@@ -77,6 +77,9 @@ test: casestudy2
 # Case Study 3: Île-de-France Public Transit (synthetic mini-dataset)
 test: casestudy3
 
+# Case Study 5: Wildlife Photo Archive (mulinput, EXCEPT, CTE, expected)
+test: casestudy5
+
 # Grouping
 test: group_by_empty
 
