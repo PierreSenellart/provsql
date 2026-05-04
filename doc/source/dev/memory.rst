@@ -31,18 +31,17 @@ registers a PostgreSQL background worker with the postmaster.  When the server
 starts, the postmaster forks the worker process, which calls
 :cfunc:`provsql_mmap_worker`:
 
-1. **Initialization**: :cfunc:`initialize_provsql_mmap` opens (or
-   creates) four memory-mapped files that back the circuit data
-   structures.  A singleton :cfunc:`MMappedCircuit` instance is created
-   over these files.
+1. **Initialization**: :cfunc:`initialize_provsql_mmap` is a no-op --
+   circuits are opened lazily on the first IPC message for each
+   database (see below).
 
 2. **Main loop**: :cfunc:`provsql_mmap_main_loop` reads gate-creation
    messages from a pipe, writes them to the mmap store, and sends
    acknowledgements back.  It handles ``SIGTERM`` for graceful
    shutdown.
 
-3. **Shutdown**: :cfunc:`destroy_provsql_mmap` syncs and closes the
-   memory-mapped files.
+3. **Shutdown**: :cfunc:`destroy_provsql_mmap` syncs and closes all
+   open per-database circuits.
 
 
 Inter-Process Communication
@@ -61,6 +60,12 @@ Pipe writes use buffered macros (:cfunc:`STARTWRITEM` /
 :cfunc:`ADDWRITEM` / :cfunc:`SENDWRITEM`) that respect ``PIPE_BUF``
 atomicity guarantees -- each message is delivered as an atomic unit
 even when multiple backends write concurrently.
+
+Every message begins with a one-byte opcode followed immediately by the
+sender's ``MyDatabaseId`` (a 4-byte ``Oid``).  The worker reads this
+OID before dispatching to the correct per-database
+:cfunc:`MMappedCircuit` instance, opening a new one lazily if this is
+the first message for that database.
 
 
 Shared Memory: ``provsql_shmem``
@@ -95,14 +100,36 @@ Mmap-Backed Data Structures
 ----------------------------
 
 :cfunc:`MMappedCircuit` (in :cfile:`MMappedCircuit.cpp`) is the
-persistent circuit store.  It holds four mmap-backed containers:
+persistent circuit store.  The worker maintains one instance per
+database in a ``std::map<Oid, MMappedCircuit*>``, created lazily on
+first use.  Each instance holds four mmap-backed containers, stored in
+``$PGDATA/base/<db_oid>/``:
 
-- A **gate-type vector** mapping gate IDs to their :cfunc:`gate_type`.
-- A **wire list** storing the children of each gate.
-- A **UUID hash table** (:cfunc:`MMappedUUIDHashTable`) mapping UUID
-  tokens to gate IDs, enabling O(1) lookup.
-- An **annotation store** for per-gate metadata (probabilities,
-  aggregate info, extra labels).
+- ``provsql_mapping.mmap`` -- a :cfunc:`MMappedUUIDHashTable` mapping
+  UUID tokens to gate IDs, enabling O(1) lookup.
+- ``provsql_gates.mmap`` -- a :cfunc:`MMappedVector` of
+  :cfunc:`GateInformation` records, one per gate.
+- ``provsql_wires.mmap`` -- a :cfunc:`MMappedVector` of
+  ``pg_uuid_t``, the flattened child-UUID lists.
+- ``provsql_extra.mmap`` -- a :cfunc:`MMappedVector` of ``char`` for
+  variable-length per-gate string annotations.
+
+Placing the files under ``$PGDATA/base/<db_oid>/`` gives per-database
+isolation and automatic cleanup: PostgreSQL removes that directory when
+the database is dropped.
+
+Every mmap file begins with a **16-byte format header**:
+
+.. code-block:: c
+
+   uint64_t magic;      /* file-type identifier, e.g. 0x7365746147537650 for gates */
+   uint16_t version;    /* format version, currently 1 */
+   uint16_t elem_size;  /* sizeof(T) at write time */
+   uint32_t _reserved;  /* padding, must be 0 */
+
+The constructor validates all three fields on open and throws if they
+do not match, catching type mismatches and incompatible recompilations
+early.
 
 :cfunc:`MMappedVector` (:cfile:`MMappedVector.h` /
 :cfile:`MMappedVector.hpp`) provides a ``std::vector``-like interface

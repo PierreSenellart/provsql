@@ -156,13 +156,14 @@ The On-Disk mmap ABI
 ^^^^^^^^^^^^^^^^^^^^
 
 In-place upgrades only cover the *SQL catalog* state.  ProvSQL's
-persistent circuit lives in four memory-mapped files
+persistent circuit lives in four memory-mapped files per database
 (``provsql_gates.mmap``, ``provsql_wires.mmap``,
-``provsql_mapping.mmap``, ``provsql_extra.mmap``) that are pure
-plain-old-data dumps of C and |cpp| structs -- no format version
-header, no magic bytes, no schema.
+``provsql_mapping.mmap``, ``provsql_extra.mmap``), each under
+``$PGDATA/base/<db_oid>/``.  Every file starts with a 16-byte header
+(magic, version, element size) that is validated on open -- see
+the :doc:`memory` chapter for details.
 
-An upgrade therefore requires that the binary layout of
+An upgrade also requires that the binary layout of
 :cfunc:`GateInformation` (in :cfile:`MMappedCircuit.h`), the
 :cfunc:`gate_type` enum (in :cfile:`provsql_utils.h`), and the
 :cfunc:`MMappedUUIDHashTable` slot structure are all byte-compatible
@@ -171,20 +172,37 @@ deliberately **frozen**: zero commits to any of them.  The block
 comments at the top of those files explicitly call this out.
 
 If a future contribution has to touch the on-disk layout, the
-upgrade story has to change.  Two reasonable options:
+upgrade story has to change:
 
-1. **Bump the on-disk format version.**  Add a small format-version
-   header to each of the four ``*.mmap`` files, write a migration
-   pass that rewrites the old format to the new one at worker
-   startup, and gate the new pass on detecting an old header.  The
-   upgrade script for that release also needs to mention the one-time
-   migration cost.
+1. **Bump the on-disk format version.**  Increment the ``version``
+   field in the 16-byte header, write a migration pass in the
+   background worker or as a standalone tool, and mention the
+   one-time migration cost in the upgrade script.
 2. **Break upgrades for that release.**  Document it in the release
    notes and ship a hard failure at worker startup if the existing
-   ``*.mmap`` files look like an old format -- safer than silently
-   misreading the bytes.  Users then go through
+   ``*.mmap`` files carry an unrecognised version -- safer than
+   silently misreading the bytes.  Users then go through
    ``DROP EXTENSION provsql CASCADE; CREATE EXTENSION provsql``,
    losing only the circuit data (their base tables are unaffected).
+
+**Migration from pre-1.3.0 (flat file layout).**  Before 1.3.0, all
+databases shared a single set of files directly in ``$PGDATA/``
+(without the ``base/<db_oid>/`` prefix and without a format header).
+The standalone tool ``provsql_migrate_mmap`` (built with
+``make provsql_migrate_mmap``) migrates those old flat files to the
+new per-database layout.  It must be run as the ``postgres`` user
+*before* restarting the server with the 1.3.0 binaries:
+
+.. code-block:: bash
+
+   provsql_migrate_mmap -D $PGDATA -c "host=/var/run/postgresql"
+
+The tool connects via libpq to enumerate databases, collects root
+UUIDs from provenance-tracked tables, BFS-traverses the old circuit,
+writes per-database files, and deletes the old flat files on success.
+The upgrade script ``provsql--1.2.3--1.3.0.sql`` raises a
+``WARNING`` if old flat files are still present when
+``ALTER EXTENSION provsql UPDATE`` is run.
 
 Workflow During Development
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -293,12 +311,15 @@ generates an **empty** upgrade script at build time:
    endif
    endif
 
-The file is created by a one-line ``touch $@`` recipe, included in
-``DATA`` so ``make install`` ships it, and matched by the existing
-``sql/provsql--*.sql`` gitignore pattern so it never lands in git.
-Its sole purpose is to give ``ALTER EXTENSION provsql UPDATE`` a
-reachable path from the last release to ``default_version`` during
-the dev cycle.
+If a committed upgrade script already exists for the same
+``LATEST_RELEASE → BARE_VERSION`` pair (i.e.
+``sql/upgrades/provsql--<prev>--<bare>.sql`` without the ``-dev``
+suffix), the Makefile copies it to the dev script so that content
+such as migration warnings is exercisable during the dev cycle.
+Otherwise the file is created by a ``touch $@`` recipe.  Either way
+the file is included in ``DATA`` so ``make install`` ships it, and it
+is matched by the existing ``sql/provsql--*.sql`` gitignore pattern
+so it never lands in git.
 
 Actual SQL changes made during the dev cycle are *not* captured in
 this auto-generated file; they are captured by the hand-written
@@ -343,13 +364,19 @@ To exercise the same upgrade path interactively:
    # ... verify the extension still works; mmap state is intact ...
 
 
-The ``tdkc`` Tool
------------------
+Standalone Tools
+----------------
 
 ``make tdkc`` builds the standalone Tree-Decomposition Knowledge
 Compiler.  It links the |cpp| circuit and tree-decomposition code into
 an independent binary (no PostgreSQL dependency) that reads a circuit
 from a text file and outputs its probability.
+
+``make provsql_migrate_mmap`` builds the mmap migration tool (requires
+``libpq-dev``).  It migrates old flat ``$PGDATA/provsql_*.mmap`` files
+(pre-1.3.0 format) to the new per-database layout under
+``$PGDATA/base/<db_oid>/``.  See the *On-Disk mmap ABI* section
+above for usage details.
 
 
 Documentation Build
