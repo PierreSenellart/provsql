@@ -152,6 +152,8 @@ path, but it may be a no-op (just the header comment and a
 auto-generates such a no-op file when it detects no SQL diff since
 the previous tag.
 
+.. _on-disk-mmap-abi:
+
 The On-Disk mmap ABI
 ^^^^^^^^^^^^^^^^^^^^
 
@@ -375,8 +377,7 @@ from a text file and outputs its probability.
 ``make provsql_migrate_mmap`` builds the mmap migration tool (requires
 ``libpq-dev``).  It migrates old flat ``$PGDATA/provsql_*.mmap`` files
 (pre-1.3.0 format) to the new per-database layout under
-``$PGDATA/base/<db_oid>/``.  See the *On-Disk mmap ABI* section
-above for usage details.
+``$PGDATA/base/<db_oid>/``.  See :ref:`on-disk-mmap-abi` for usage details.
 
 
 Documentation Build
