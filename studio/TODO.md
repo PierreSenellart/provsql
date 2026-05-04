@@ -32,13 +32,13 @@ provsql_studio/static/
 └── img/                    symlink to branding/{logo.png, favicon.ico}
 ```
 
-* [ ] Build `static/index.html` from `studio/design/ui_kits/where_panel/index.html`. Strip the hardcoded `personnel` markup (filled in dynamically by `app.js` in where mode); make the sidebar a generic `<aside id="sidebar">` whose content is rendered by `app.js` per mode; add the mode switcher to the top nav.
-* [ ] Merge `panel.css` + `circuit.css` into `static/app.css`. Both are scoped enough (`wp-*` and gate-class prefixes) that they coexist without conflict.
-* [ ] Merge `panel.js` (where-mode sidebar + hover-highlight) into `static/app.js`; copy `circuit.js` (DAG render) verbatim and import it lazily from `app.js` when entering circuit mode.
-* [ ] Copy `studio/design/colors_and_type.css` into `static/`.
-* [ ] Replace the bundle's local `@font-face` block (Latin only) by loading the upstream `branding/fonts-face.css` (Greek + Latin-extended), paths rewritten to `fonts/`.
-* [ ] Symlink `static/fonts/` → `branding/fonts/`, `static/img/logo.png` → `branding/logo.png`, `static/img/favicon.ico` → `branding/favicon.ico`.
-* [ ] Update relative paths in the merged HTML / CSS so fonts, logo, and stylesheets resolve from `static/`.
+* [x] Build `static/index.html` from `studio/design/ui_kits/where_panel/index.html`. Strip the hardcoded `personnel` markup (rendered into `#sidebar-body` by `app.js` in where mode); make the sidebar a generic `<aside id="sidebar">` whose content is rendered by `app.js` per mode; add the mode switcher to the top nav.
+* [x] Merge `panel.css` + `circuit.css` into `static/app.css`. Both are scoped enough (`wp-*` and `cv-*`/gate-class prefixes) that they coexist without conflict; the only overlap is the global base block (`* { box-sizing }`, `html, body { … }`), unified at the top of `app.css` with a `body.mode-circuit` override for the 100vh+overflow:hidden circuit canvas.
+* [x] Merge `panel.js` (where-mode sidebar + hover-highlight + mock query runner) into `static/app.js`; copy `circuit.js` (DAG render) verbatim. Lazy-loading from `app.js` is left to Stage 2/3 since circuit.js still ships the bundle's mock data and queries DOM that isn't yet built into the shared shell.
+* [x] Copy `studio/design/colors_and_type.css` into `static/`.
+* [x] Replace the bundle's local `@font-face` block (Latin only) by loading the upstream `branding/fonts-face.css` (Greek + Latin-extended) — symlinked as `static/fonts-face.css` and loaded directly from `index.html`. Also added `--font-body` / `--font-display` / `--font-ui` aliases since panel.css and circuit.css reference those names but `colors_and_type.css` only defined `--font-serif` / `--font-sans` / `--font-mono`.
+* [x] Symlink `static/fonts/` → `branding/fonts/`, `static/img/logo.png` → `branding/logo.png`, `static/img/favicon.ico` → `branding/favicon.ico`. Symlinks are tracked in git as mode 120000.
+* [x] Update relative paths in the merged HTML / CSS so fonts, logo, and stylesheets resolve from `static/`.
 
 ---
 

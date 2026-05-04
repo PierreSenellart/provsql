@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ProvSQL Studio</title>
+<link rel="icon" href="img/favicon.ico">
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.15.4/css/all.css">
+<link rel="stylesheet" href="fonts-face.css">
+<link rel="stylesheet" href="colors_and_type.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="mode-where">
+
+<nav class="wp-nav">
+  <div class="wp-nav__brand">
+    <img src="img/logo.png" alt="" class="wp-nav__logo">
+    <span class="wp-nav__title"><em>ProvSQL</em> Studio</span>
+  </div>
+  <div class="wp-nav__meta">
+    <div class="ps-modeswitch" id="modeswitch" role="tablist">
+      <a class="ps-modeswitch__btn is-active" href="/where" data-mode="where" role="tab"><i class="fas fa-table"></i> Where</a>
+      <a class="ps-modeswitch__btn" href="/circuit" data-mode="circuit" role="tab"><i class="fas fa-project-diagram"></i> Circuit</a>
+    </div>
+    <span class="wp-nav__chip"><span class="wp-nav__dot"></span>Connected · <code id="conn-info">postgres@localhost</code></span>
+    <a class="wp-nav__link" href="#"><i class="fas fa-cog"></i> Config</a>
+    <a class="wp-nav__link" href="https://github.com/PierreSenellart/provsql"><i class="fab fa-github"></i> Source</a>
+  </div>
+</nav>
+
+<div class="wp-shell">
+
+  <!-- LEFT PANEL: mode-specific sidebar (rendered by app.js) -->
+  <aside class="wp-card wp-card--db" id="sidebar">
+    <header class="wp-card__hdr">
+      <h2 class="wp-card__title" id="sidebar-title">Your Database</h2>
+      <p class="wp-card__lead" id="sidebar-lead">Provenance-tagged relations.
+        Cells light up in <strong style="color:var(--terracotta-500)">terracotta</strong>
+        when they contribute to a result row on the right.</p>
+    </header>
+    <div id="sidebar-body">
+      <!-- where mode: relation tables, populated by app.js
+           circuit mode: DAG canvas, populated by circuit.js -->
+    </div>
+  </aside>
+
+  <!-- RIGHT PANEL: shared query + result chrome -->
+  <section class="wp-card wp-card--query">
+    <header class="wp-card__hdr">
+      <h2 class="wp-card__title">Your Query</h2>
+      <p class="wp-card__lead">Type a SQL query. Results below carry where-provenance
+        when in Where mode — hover any cell to see its source.</p>
+    </header>
+
+    <div class="wp-examples">
+      <span class="wp-examples__label">Examples</span>
+      <button class="wp-btn wp-btn--ex" data-q="SELECT * FROM personnel">All</button>
+      <button class="wp-btn wp-btn--ex" data-q="SELECT DISTINCT city FROM personnel">Distinct</button>
+      <button class="wp-btn wp-btn--ex" data-q="SELECT city FROM personnel UNION SELECT '5' FROM personnel">Union</button>
+      <button class="wp-btn wp-btn--ex" data-q="SELECT city, COUNT(*) FROM personnel GROUP BY city">Group by</button>
+    </div>
+
+    <form class="wp-form" onsubmit="return runQuery(event)">
+      <div class="wp-editor">
+        <span class="wp-editor__gutter">SQL</span>
+        <textarea class="wp-editor__ta" id="request" rows="3" spellcheck="false">SELECT DISTINCT city FROM personnel</textarea>
+      </div>
+      <div class="wp-form__actions">
+        <span class="wp-form__hint" id="form-hint"><i class="fas fa-info-circle"></i> <code>provsql.where_provenance = on</code></span>
+        <button type="submit" class="wp-btn wp-btn--primary"><i class="fas fa-bolt"></i> Send query</button>
+      </div>
+    </form>
+
+    <div class="wp-result" id="result-pane">
+      <header class="wp-result__hdr">
+        <h3 class="wp-result__title">Query result</h3>
+        <span class="wp-result__meta"><span id="result-count">0</span> rows · evaluated in <span id="result-time">—</span> ms</span>
+      </header>
+      <div class="wp-table-wrap">
+        <table class="wp-table wp-table--result" id="t-result">
+          <thead><tr id="result-head"></tr></thead>
+          <tbody id="result-body"></tbody>
+        </table>
+      </div>
+      <p class="wp-result__legend" id="result-legend">
+        <span class="wp-legend-swatch"></span>
+        Hover a cell above to highlight its <strong>where-provenance</strong> in the source table on the left.
+      </p>
+    </div>
+
+  </section>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
