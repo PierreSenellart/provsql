@@ -728,10 +728,16 @@ void BooleanCircuit::rewriteMultivaluedGatesRec(
   }
 
   unsigned mid = (start+end)/2;
+  // cumulated_probs is an *inclusive* prefix sum (cumulated_probs[i] =
+  // p[0]+...+p[i]).  The conditional probability of being in the left
+  // half [start..mid] given the range [start..end] is therefore
+  //   (cum[mid] - cum[start-1]) / (cum[end] - cum[start-1])
+  // with cum[-1] treated as 0 when start==0.
+  double prev_start = (start == 0) ? 0. : cumulated_probs[start - 1];
   auto g = setGate(
     BooleanGate::IN,
-    (cumulated_probs[mid+1] - cumulated_probs[start]) /
-    (cumulated_probs[end] - cumulated_probs[start]));
+    (cumulated_probs[mid] - prev_start) /
+    (cumulated_probs[end] - prev_start));
   auto not_g = setGate(BooleanGate::NOT);
   getWires(not_g).push_back(g);
 

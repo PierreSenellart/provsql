@@ -78,3 +78,52 @@ FROM result_except;
 
 DROP TABLE result_except;
 DROP TABLE detection_td;
+
+-- Correctness check for rewriteMultivaluedGates() on n=2 mulvars.
+--
+-- The query is a self-join on photo_id with GROUP BY, so identical
+-- mulinputs reach the OR (plus) gate via two different paths.  This
+-- defeats the independent-evaluation shortcut and forces every method
+-- to go through rewriteMultivaluedGates(), exercising the recursive
+-- splitter on a non-trivial (n=2) mulvar.
+--
+-- Setup: bbox 2 has two competing candidates (fox 0.7, deer 0.2);
+-- bbox 1 and bbox 3 each have a single candidate (deer 0.8, fox 0.6).
+-- Hand-computed value: P((deer1 OR deer2) AND (fox2 OR fox3)) = 0.728,
+-- conditioning on bbox 2's mulvar.
+CREATE TABLE detection_n2 (
+    photo_id   integer,
+    bbox_id    integer,
+    species_id integer,
+    confidence double precision
+);
+INSERT INTO detection_n2 VALUES
+    (1, 1, 1, 0.8),
+    (1, 2, 3, 0.7), (1, 2, 1, 0.2),
+    (1, 3, 3, 0.6);
+
+ALTER TABLE detection_n2
+    ADD COLUMN photo_bbox text
+        GENERATED ALWAYS AS (photo_id || '/' || bbox_id) STORED;
+
+SELECT repair_key('detection_n2', 'photo_bbox');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), confidence) FROM detection_n2;
+END $$;
+
+CREATE TABLE result_n2 AS
+SELECT photo_id,
+  ROUND(probability_evaluate(provenance(), 'possible-worlds')::numeric, 6)    AS pw,
+  ROUND(probability_evaluate(provenance(), 'tree-decomposition')::numeric, 6) AS td
+FROM detection_n2 d1 JOIN detection_n2 d2 USING (photo_id)
+WHERE d1.species_id = 1 AND d2.species_id = 3
+GROUP BY photo_id;
+
+SELECT remove_provenance('result_n2');
+SELECT photo_id,
+       pw = 0.728 AS pw_correct,
+       td = 0.728 AS td_correct
+FROM result_n2;
+
+DROP TABLE result_n2;
+DROP TABLE detection_n2;
