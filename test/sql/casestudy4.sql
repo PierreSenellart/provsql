@@ -67,7 +67,7 @@ SELECT DISTINCT name, position
 FROM cs4_person JOIN cs4_holds ON cs4_person.id = cs4_holds.id
 WHERE country = 'FR';
 
--- Step 3: union_tstzintervals — Bernard Chai's Prime Minister tenure
+-- Step 2: union_tstzintervals — Bernard Chai's Prime Minister tenure
 CREATE TABLE result_cs4_uttz AS
 SELECT position, union_tstzintervals(provenance(), 'provsql.time_validity_view') AS valid
 FROM cs4_person JOIN cs4_holds ON cs4_person.id = cs4_holds.id
@@ -77,7 +77,7 @@ SELECT remove_provenance('result_cs4_uttz');
 SELECT position, valid FROM result_cs4_uttz ORDER BY valid;
 DROP TABLE result_cs4_uttz;
 
--- Step 4: timeslice — who was Prime Minister during 2015-2020?
+-- Step 3: timeslice — who was Prime Minister during 2015-2020?
 CREATE TABLE result_cs4_ts AS
 SELECT * FROM timeslice('cs4_person_position', '2015-01-01', '2020-01-01')
   AS (name TEXT, position TEXT, validity tstzmultirange, provsql uuid);
@@ -86,7 +86,7 @@ SELECT remove_provenance('result_cs4_ts');
 SELECT name, validity FROM result_cs4_ts ORDER BY validity;
 DROP TABLE result_cs4_ts;
 
--- Step 5: history — all Prime Ministers
+-- Step 4: history — all Prime Ministers
 CREATE TABLE result_cs4_hist AS
 SELECT * FROM history('cs4_person_position',
                       ARRAY['position'], ARRAY['Prime Minister'])
@@ -96,7 +96,7 @@ SELECT remove_provenance('result_cs4_hist');
 SELECT name, validity FROM result_cs4_hist ORDER BY validity;
 DROP TABLE result_cs4_hist;
 
--- Step 6: timetravel — government on 2018-06-15
+-- Step 5: timetravel — government on 2018-06-15
 CREATE TABLE result_cs4_tt AS
 SELECT * FROM timetravel('cs4_person_position', '2018-06-15')
   AS tt(name TEXT, position TEXT, validity tstzmultirange, provsql uuid);
@@ -105,7 +105,7 @@ SELECT remove_provenance('result_cs4_tt');
 SELECT name, position FROM result_cs4_tt ORDER BY name;
 DROP TABLE result_cs4_tt;
 
--- Steps 7-8: data modification — replace Carla Diop with Dana Evans
+-- Steps 6-7: data modification — replace Carla Diop with Dana Evans
 DELETE FROM cs4_holds
 WHERE position = 'Prime Minister'
   AND id = (SELECT id FROM cs4_person WHERE name = 'Carla Diop');
@@ -134,7 +134,7 @@ SELECT remove_provenance('result_cs4_after');
 SELECT name, position FROM result_cs4_after ORDER BY name;
 DROP TABLE result_cs4_after;
 
--- Step 9: undo all modifications
+-- Step 8: undo all modifications
 CREATE TABLE undo_result AS
   SELECT undo(provsql) FROM update_provenance ORDER BY ts;
 DROP TABLE undo_result;

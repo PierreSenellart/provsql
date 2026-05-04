@@ -33,7 +33,11 @@ CREATE TABLE party (
 \copy holds  FROM 'SG_position.csv' WITH CSV HEADER;
 \copy party  FROM 'SG_party.csv' WITH CSV HEADER;
 
--- Convert DATE columns to tstzmultirange validity intervals
+-- Convert DATE columns to tstzmultirange validity intervals.
+-- Use UTC so that Wikidata dates (which are UTC midnight) are stored correctly
+-- regardless of the server timezone.
+SET timezone TO 'UTC';
+
 ALTER TABLE person ADD COLUMN validity tstzmultirange;
 ALTER TABLE holds  ADD COLUMN validity tstzmultirange;
 
