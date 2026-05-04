@@ -12,9 +12,7 @@ CREATE TABLE shap_mulin_t (id integer, grp text, p double precision);
 INSERT INTO shap_mulin_t VALUES
   (1, 'A', 0.4), (2, 'A', 0.3),
   (3, 'B', 0.5);
-ALTER TABLE shap_mulin_t
-  ADD COLUMN k text GENERATED ALWAYS AS (grp) STORED;
-SELECT repair_key('shap_mulin_t', 'k');
+SELECT repair_key('shap_mulin_t', 'grp');
 DO $$ BEGIN
   PERFORM set_prob(provenance(), p) FROM shap_mulin_t;
 END $$;

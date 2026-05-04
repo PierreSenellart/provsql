@@ -51,3 +51,33 @@ remove_provenance
 city|prob
 Beijing|0.5
 (1 row)
+remove_provenance
+
+(1 row)
+city|prob
+Beijing|0.5400
+Nairobi|0.2600
+Paris|0.4100
+(3 rows)
+remove_provenance
+
+(1 row)
+city|boolexpr
+Nairobi|((x0 ∨ x1) ∧ (¬(x0 ∧ x1)))
+(1 row)
+remove_provenance
+
+(1 row)
+has_gates
+t
+(1 row)
+root_type|root_n_children
+monus|2
+(1 row)
+plus_type|plus_n_children
+plus|2
+(1 row)
+source_table|nb_columns
+agents|6
+agents|6
+(2 rows)

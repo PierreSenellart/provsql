@@ -64,6 +64,7 @@ This documentation is organized into four parts:
    user/casestudy2
    user/casestudy3
    user/casestudy4
+   user/casestudy5
 
 .. _dev-guide:
 
