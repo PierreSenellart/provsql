@@ -1,0 +1,56 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+gate_type|depth|parent|child_pos
+input|0||
+(1 row)
+remove_provenance
+
+(1 row)
+gate_type|depth|n
+plus|0|1
+input|1|7
+(2 rows)
+remove_provenance
+
+(1 row)
+gate_type|depth|n
+times|0|1
+input|1|2
+(2 rows)
+all_parents_present|depth_chain_consistent
+t|t
+(1 row)
+remove_provenance
+
+(1 row)
+gate_type|depth|n
+plus|0|1
+input|1|1
+(2 rows)
+remove_provenance
+
+(1 row)
+gate_type|depth|n
+delta|0|1
+plus|1|1
+input|2|3
+(3 rows)
+remove_provenance
+
+(1 row)
+gate_type|depth|n
+plus|0|1
+(1 row)
+gate_type|depth|n
+plus|0|1
+input|1|7
+(2 rows)
+remove_provenance
+
+(1 row)
+gate_type|depth|n
+project|0|1
+input|1|1
+(2 rows)
