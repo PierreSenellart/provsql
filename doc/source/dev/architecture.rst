@@ -143,6 +143,9 @@ and algorithms are in |cpp|.
   tree decomposition via min-fill elimination.
 - :cfile:`TreeDecompositionKnowledgeCompiler.cpp` -- the standalone
   ``tdkc`` binary built by ``make tdkc``.
+- :cfile:`provsql_migrate_mmap.cpp` -- the standalone
+  ``provsql_migrate_mmap`` binary built by ``make provsql_migrate_mmap``
+  (migrates pre-1.3.0 flat mmap files to the per-database layout).
 - :cfile:`shapley.cpp` -- Shapley and Banzhaf value computation.
 
 *Export and visualization*
@@ -289,6 +292,8 @@ defined in :cfile:`provsql_utils.h`:
      - Scalar constant value.
    * - ``gate_mulinput``
      - Multivalued input (for Boolean probability).
+   * - ``gate_cmp``
+     - Comparison gate used in HAVING sub-circuits (``<``, ``=``, etc.).
    * - ``gate_update``
      - Update-provenance gate.
 

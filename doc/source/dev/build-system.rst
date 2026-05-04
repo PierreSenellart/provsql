@@ -103,10 +103,11 @@ installed alongside the main ``provsql--<version>.sql`` file by the
    UPGRADE_SCRIPTS = $(wildcard sql/upgrades/$(EXTENSION)--*--*.sql)
    DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(UPGRADE_SCRIPTS)
 
-Upgrade support starts with **1.2.1**: there is a chain
-``1.0.0 → 1.1.0 → 1.2.0 → 1.2.1`` of committed upgrade scripts, so
-users on any of those versions can run a single
-``ALTER EXTENSION provsql UPDATE`` to reach 1.2.1.
+Upgrade support starts with **1.2.1**: back-upgrade scripts were
+created for ``1.0.0 → 1.1.0 → 1.2.0 → 1.2.1``, and every release
+since 1.2.1 has its own committed upgrade script, so users on any
+supported version can run a single ``ALTER EXTENSION provsql UPDATE``
+to reach the current release.
 
 Writing an Upgrade Script
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -360,8 +361,8 @@ To exercise the same upgrade path interactively:
    -- ... exercise the extension, populate some provenance state ...
    SQL
 
-   # Apply the upgrade chain.
-   psql -d upgrade_test -c "ALTER EXTENSION provsql UPDATE TO '1.2.1';"
+   # Apply the full upgrade chain to the current version.
+   psql -d upgrade_test -c "ALTER EXTENSION provsql UPDATE;"
    psql -d upgrade_test -c "SELECT extversion FROM pg_extension WHERE extname='provsql';"
    # ... verify the extension still works; mmap state is intact ...
 
@@ -447,7 +448,7 @@ change are not retransferred.
 CI Workflows
 ------------
 
-Five GitHub Actions workflows run on every push:
+Six GitHub Actions workflows are defined:
 
 .. list-table::
    :header-rows: 1
@@ -458,15 +459,23 @@ Five GitHub Actions workflows run on every push:
    * - ``build_and_test.yml``
      - Builds and tests on Linux with PostgreSQL 10--18 (Docker-based).
        Also builds and pushes the Docker image on tagged releases.
+       Runs on every push.
    * - ``macos.yml``
      - Builds and tests on macOS with Homebrew PostgreSQL.
+       Runs on every push.
    * - ``wsl.yml``
      - Builds and tests on Windows Subsystem for Linux.
+       Runs on every push.
    * - ``docs.yml``
      - Builds the full documentation (Doxygen + Sphinx + coherence check).
        Uses the ``pgxn/pgxn-tools`` container with
        ``postgresql-server-dev-all`` for ``pg_config``.
+       Runs on every push.
    * - ``codeql.yml``
      - Static analysis via GitHub CodeQL.
+       Runs on every push.
+   * - ``pgxn.yml``
+     - Publishes the release to PGXN.
+       Runs only on version tags (``v*.*.*``).
 
-All five must pass before merging to ``master``.
+The first five must pass before merging to ``master``.

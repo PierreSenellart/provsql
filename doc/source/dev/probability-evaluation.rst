@@ -196,8 +196,9 @@ Currently Supported Methods
        ``minic2d``) to produce a :cfunc:`dDNNF`, then
        :cfunc:`dDNNF::probabilityEvaluation`.
    * - ``""`` (default)
-     - Fallback chain: try ``independent``, then
-       ``tree-decomposition``, then ``compilation`` with ``d4``.
+     - Fallback chain: try ``independent``, then ``interpretAsDD``
+       (interpret the circuit structure directly as a d-D circuit),
+       then ``tree-decomposition``, then ``compilation`` with ``d4``.
 
 The branches for ``"compilation"``, ``"tree-decomposition"``, and
 the default all funnel through :cfunc:`BooleanCircuit::makeDD`,
