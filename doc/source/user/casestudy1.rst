@@ -443,6 +443,16 @@ psql to record runtimes):
 
 .. code-block:: postgresql
 
+    -- Tree-decomposition-based exact compilation (built-in, no external tool)
+    SELECT m1.x, m2.y,
+           probability_evaluate(provenance(), 'tree-decomposition') AS prob
+    FROM matrix m1, matrix m2
+    WHERE m2.x = m1.y AND m1.x > 90 AND m2.x > 90 AND m2.y > 90
+    GROUP BY m1.x, m2.y
+    ORDER BY m1.x, m2.y;
+
+.. code-block:: postgresql
+
     -- Knowledge compilation via external tool d4
     SELECT m1.x, m2.y,
            probability_evaluate(provenance(), 'compilation', 'd4') AS prob
@@ -456,3 +466,103 @@ additive error with 95 % confidence (by the formula
 :math:`n = z^2 / (4\varepsilon^2)` with :math:`z = 1.96`,
 :math:`\varepsilon = 0.01`;
 see `Margin of error <https://en.wikipedia.org/wiki/Margin_of_error>`_).
+
+The ``'tree-decomposition'`` method is exact and built into ProvSQL (no
+external binary required). It is often the fastest exact method on simple
+queries, but it fails on circuits with high treewidth – when that happens,
+fall back to ``'compilation'`` or one of the other methods.
+
+
+Step 14: The Boolean Expression Behind a Token
+------------------------------------------------
+
+:sqlfunc:`sr_boolexpr` returns the abstract Boolean formula of a provenance
+circuit, using internal variable names ``x0``, ``x1``, … instead of a
+user-supplied mapping. This is the same expression ProvSQL hands to its
+d-DNNF compilers internally to compute probabilities.
+
+.. code-block:: postgresql
+
+    SELECT city, sr_boolexpr(provenance()) AS boolexpr
+    FROM (
+        SELECT DISTINCT city FROM personnel
+      EXCEPT
+        SELECT p1.city
+        FROM personnel p1
+        JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
+        GROUP BY p1.city
+    ) t
+    WHERE city = 'Nairobi';
+
+For Nairobi, the result is the circuit ``(Juma ⊕ Paul) ⊖ (Juma ⊗ Paul)``
+from Step 5, interpreted in the Boolean function semiring – every
+provenance gate is mapped to its Boolean counterpart (``⊕`` to ``∨``,
+``⊗`` to ``∧``, ``⊖`` to ``∧¬``) – and the resulting Boolean function
+rendered as a formula over anonymous variables. Unlike
+:sqlfunc:`sr_formula`, no provenance mapping is required: the
+expression captures the circuit's logical structure independently of
+any naming.
+
+
+Step 15: Programmatic Circuit Inspection
+------------------------------------------
+
+What :sqlfunc:`view_circuit` renders, you can also walk programmatically
+with the low-level circuit API. Capture Nairobi's monus token first:
+
+.. code-block:: postgresql
+
+    CREATE TEMP TABLE nairobi_token AS
+    SELECT provenance() AS prov
+    FROM (
+        SELECT DISTINCT city FROM personnel
+      EXCEPT
+        SELECT p1.city
+        FROM personnel p1
+        JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
+        GROUP BY p1.city
+    ) t
+    WHERE city = 'Nairobi';
+
+:sqlfunc:`get_nb_gates` reports how many gates have been materialized in the
+current database's circuit:
+
+.. code-block:: postgresql
+
+    SELECT get_nb_gates();
+
+:sqlfunc:`get_gate_type` and :sqlfunc:`get_children` give a single-step view
+of the gate structure: they return the operator and direct children of a
+gate.
+
+.. code-block:: postgresql
+
+    SELECT get_gate_type(prov)            AS root_type,
+           get_children(prov)             AS root_children
+    FROM nairobi_token;
+
+For Nairobi, the root is a ``monus`` gate with two children: the ⊕
+sub-circuit (``Juma ⊕ Paul``) and the ⊗ sub-circuit (``Juma ⊗ Paul``).
+Recurse to inspect the children:
+
+.. code-block:: postgresql
+
+    SELECT (get_children(prov))[1]                        AS plus_token,
+           get_gate_type((get_children(prov))[1])         AS plus_type,
+           get_children((get_children(prov))[1])          AS plus_children
+    FROM nairobi_token;
+
+The leaves of the circuit are input gates that originate from the
+``personnel`` table. :sqlfunc:`identify_token` performs a reverse lookup,
+returning the table and column count for an input token:
+
+.. code-block:: postgresql
+
+    SELECT identify_token(child) AS source
+    FROM nairobi_token, unnest(get_children((get_children(prov))[1])) AS child;
+
+Both leaves resolve to ``(personnel, 6)`` – the ``personnel`` table with
+its six non-provenance columns (``id``, ``name``, ``position``, ``city``,
+``classification``, and the ``probability`` column added in Step 7). This
+is exactly the traversal :sqlfunc:`view_circuit` performs to render the
+box-art diagram.

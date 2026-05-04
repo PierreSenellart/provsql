@@ -124,6 +124,70 @@ SELECT city, ROUND(prob::numeric, 1) AS prob FROM result_cs1_mc
 WHERE city = 'Beijing' ORDER BY city;
 DROP TABLE result_cs1_mc;
 
+-- Step 13 (benchmark variant): tree-decomposition exact probability
+CREATE TABLE result_cs1_td AS
+SELECT city,
+    ROUND(probability_evaluate(provenance(), 'tree-decomposition')::numeric, 4) AS prob
+FROM (
+    SELECT DISTINCT city FROM agents
+  EXCEPT
+    SELECT p1.city FROM agents p1
+    JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
+    GROUP BY p1.city
+) t;
+
+SELECT remove_provenance('result_cs1_td');
+SELECT city, prob FROM result_cs1_td ORDER BY city;
+DROP TABLE result_cs1_td;
+
+-- Step 14: sr_boolexpr — abstract Boolean formula on the Nairobi monus token
+CREATE TABLE result_cs1_boolexpr AS
+SELECT city, sr_boolexpr(provenance()) AS boolexpr
+FROM (
+    SELECT DISTINCT city FROM agents
+  EXCEPT
+    SELECT p1.city FROM agents p1
+    JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
+    GROUP BY p1.city
+) t
+WHERE city = 'Nairobi';
+
+SELECT remove_provenance('result_cs1_boolexpr');
+SELECT city, boolexpr FROM result_cs1_boolexpr;
+DROP TABLE result_cs1_boolexpr;
+
+-- Step 15: programmatic circuit inspection (get_gate_type, get_children, identify_token)
+CREATE TABLE nairobi_token AS
+SELECT provenance() AS prov
+FROM (
+    SELECT DISTINCT city FROM agents
+  EXCEPT
+    SELECT p1.city FROM agents p1
+    JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
+    GROUP BY p1.city
+) t
+WHERE city = 'Nairobi';
+
+SELECT remove_provenance('nairobi_token');
+
+SELECT get_nb_gates() > 0 AS has_gates;
+
+SELECT get_gate_type(prov) AS root_type,
+       array_length(get_children(prov), 1) AS root_n_children
+FROM nairobi_token;
+
+SELECT get_gate_type((get_children(prov))[1]) AS plus_type,
+       array_length(get_children((get_children(prov))[1]), 1) AS plus_n_children
+FROM nairobi_token;
+
+SELECT (identify_token(child)).table_name AS source_table,
+       (identify_token(child)).nb_columns AS nb_columns
+FROM nairobi_token,
+     unnest(get_children((get_children(prov))[1])) AS child
+ORDER BY 1, 2;
+
+DROP TABLE nairobi_token;
+
 -- Clean up
 DROP TABLE agents_level;
 DROP TABLE agents_name;
