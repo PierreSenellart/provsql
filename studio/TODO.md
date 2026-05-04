@@ -333,7 +333,7 @@ The first is structural: the where-panel and circuit-visualizer are two **modes*
 * **Knowledge-compilation view**: render the d-DNNF compiled from a circuit, not just the raw provenance DAG. Would surface what `provenance_evaluate_compiled` actually consumes and make probability evaluation legible. Could ship as part of evaluation mode, or as a separate sub-mode.
 * **Shapley / Banzhaf heat-map**: overlay per-gate contribution values on the circuit visualizer. ProvSQL already exposes `shapley_all_vars` / `banzhaf_all_vars`; the visualizer would consume those. Natural fit as evaluation-mode → drill-down on the circuit DAG.
 * **Formula simplification**: collapse semantically-equivalent subgraphs (e.g. shared `times` over identical inputs) for readability. Possibly a server-side pass before layout.
-* **Tweaks panel** for the Where Panel: theme toggle (light only for v1), table density (comfortable / compact), highlight colour (terracotta / gold / purple), show/hide classification pills. Cheap, demonstrates brand flexibility.
+* **Tweaks panel** for where mode: theme toggle (light only for v1), table density (comfortable / compact), highlight colour (terracotta / gold / purple), show/hide classification pills. Cheap, demonstrates brand flexibility.
 * **Save / load notebooks**: persist the textarea contents + result history as a downloadable `.sql` or JSON file.
 * **Lazy expansion sizing**: the chat suggested `depth=4` as a default for very large circuits; TODO currently uses 8 because demo circuits are small. Revisit once we have real data on circuit sizes seen in the wild.
 * **Multi-user demo deployment**: per-browser-session isolation in a single Docker container, so a conference audience can each `localhost:8000` against a hosted instance.

@@ -1,9 +1,9 @@
 # ProvSQL Studio
 
-A Python-backed web UI for ProvSQL, replacing the unmaintained `where_panel/`. Two surfaces:
+A Python-backed web UI for ProvSQL, replacing the unmaintained `where_panel/`. One app with two complementary modes that share the chrome (textarea, send-query, result rendering, mode switcher):
 
-* **Where Panel**: textarea SQL runner with hover-highlight where-provenance against source tables. Writes allowed (CREATE / INSERT / etc.) so users can paste a tutorial or case-study script and step through it.
-* **Circuit Visualizer**: interactive DAG view of the provenance circuit for a result tuple. × / + gates, hover to highlight subtree, click to pin, lazy expansion.
+* **Where mode** (`/where`): hover-highlight where-provenance against the source tables in a sidebar. Writes allowed (CREATE / INSERT / etc.) so users can paste a tutorial or case-study script and step through it.
+* **Circuit mode** (`/circuit`): click a UUID or `agg_token` cell in the result to see the provenance DAG in the sidebar. × / + gates, hover to highlight subtree, click to pin, lazy expansion.
 
 This directory is currently a planning skeleton. See [`TODO.md`](TODO.md) for the implementation plan.
 
