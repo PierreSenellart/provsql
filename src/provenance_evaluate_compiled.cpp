@@ -70,7 +70,7 @@ static Datum pec_bool(
 {
   std::unordered_map<gate_t, bool> provenance_mapping;
   initialize_provenance_mapping<bool>(constants, c, provenance_mapping, [](const char *v) {
-    return *v=='t';
+    return *v != 'f' && *v != '0';
   }, drop_table);
 
   if(semiring!="boolean")
