@@ -1,6 +1,6 @@
 -- Case Study 4: Government Ministers Over Time (Temporal)
 -- Setup script – run from the directory containing the CSV data files:
---   cd doc/temporal_demo
+--   cd doc/casestudy4/data
 --   psql -d mydb -f setup.sql
 
 CREATE TABLE person (

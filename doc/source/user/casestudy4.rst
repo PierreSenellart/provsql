@@ -24,10 +24,10 @@ Setup
 
 This case study assumes a working ProvSQL installation on PostgreSQL 14 or
 later (see :doc:`getting-provsql`).  The data files are distributed with
-ProvSQL under ``doc/temporal_demo/``.  Run the setup script from that
+ProvSQL under ``doc/casestudy4/data/``.  Run the setup script from that
 directory::
 
-    cd /path/to/provsql/doc/temporal_demo
+    cd /path/to/provsql/doc/casestudy4/data
     psql -d mydb -f /path/to/provsql/doc/casestudy4/setup.sql
 
 This creates three tables:
