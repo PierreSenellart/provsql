@@ -47,7 +47,7 @@ test: d4 dsharp weightmc c2d minic2d
 
 # Probability computation using tree decompositions, independent
 # probability computation, and default computation
-test: treedec_simple treedec default_probability_evaluate independent repair_key
+test: treedec_simple treedec treedec_mulinput default_probability_evaluate independent repair_key
 test: expected
 test: large_circuit
 

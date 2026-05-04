@@ -48,9 +48,17 @@ dDNNF&& dDNNFTreeDecompositionBuilder::build() && {
   // nodes. Let's just check that to be safe.
   assert(responsible_bag.size()==c.inputs.size());
 
-  // Create the input and negated input gates
+  // Create the input and negated input gates.  Inputs synthesised by
+  // rewriteMultivaluedGates() carry no UUID; using the empty UUID with
+  // setGate(uuid,...) would dedup them all into a single dDNNF gate
+  // (whose probability would then be overwritten on each call), which
+  // is wrong: each one is a distinct independent variable.
   for(auto g: c.inputs) {
-    auto gate = d.setGate(c.getUUID(g), BooleanGate::IN, c.getProb(g));
+    gate_t gate;
+    if(c.getUUID(g).empty())
+      gate = d.setGate(BooleanGate::IN, c.getProb(g));
+    else
+      gate = d.setGate(c.getUUID(g), BooleanGate::IN, c.getProb(g));
     auto not_gate = d.setGate(BooleanGate::NOT);
     d.addWire(not_gate, gate);
     input_gate[g]=gate;

@@ -827,7 +827,10 @@ gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, d
     if(seen.find(g)!=seen.end())
       throw CircuitException("Not an independent circuit");
     seen.insert(g);
-    dg = dd.setGate(getUUID(g), BooleanGate::IN, getProb(g));
+    if(getUUID(g).empty())
+      dg = dd.setGate(BooleanGate::IN, getProb(g));
+    else
+      dg = dd.setGate(getUUID(g), BooleanGate::IN, getProb(g));
     break;
 
   case BooleanGate::MULIN:
