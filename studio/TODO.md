@@ -59,30 +59,30 @@ CREATE OR REPLACE FUNCTION provsql.circuit_subgraph(
 );
 ```
 
-* [ ] Implement as a recursive CTE in `sql/provsql.common.sql`. Model on existing `sub_circuit_with_desc` (line 888) and `sub_circuit_for_where` (line 956), adding ordinality + infos + depth.
-* [ ] Cap recursion at `max_depth`; record `depth` per node so the front-end can identify frontier nodes for lazy expansion.
-* [ ] Dedup: each node appears once even if reachable via multiple paths (DAG, not tree). Pick a deterministic parent (lowest BFS depth, then lowest `child_pos`).
-* [ ] Add Doxygen-style comment block; the existing `sql/postprocess-sql-html.py` will pick it up.
-* [ ] Reject calls on circuits containing `mulinput` gates the same way `shapley` / `banzhaf` do, if the recursion can't make sense of them. (Check whether existing `sub_circuit_with_desc` already rejects.)
+* [x] Implement as a recursive CTE in `sql/provsql.common.sql`. Model on existing `sub_circuit_with_desc` (line 888) and `sub_circuit_for_where` (line 956), adding ordinality + infos + depth.
+* [x] Cap recursion at `max_depth`; record `depth` per node so the front-end can identify frontier nodes for lazy expansion.
+* [x] Dedup: each node appears once even if reachable via multiple paths (DAG, not tree). Pick a deterministic parent (lowest BFS depth, then lowest `child_pos`).
+* [x] Add Doxygen-style comment block; the existing `sql/postprocess-sql-html.py` will pick it up.
+* [x] No `mulinput` rejection added: a `mulinput` gate has a single `input` child (the row key), which BFS traverses naturally. `sub_circuit_with_desc` / `sub_circuit_for_where` likewise don't reject.
 
 ### `provsql.resolve_input(uuid UUID) RETURNS TABLE(relation regclass, row_data JSONB)`
 
 Given an `input` gate UUID, find which provenance-tagged relation contains a row with that `provsql` column value, and return the row as JSONB. Centralizes the leaf-resolution logic the old PHP did inline.
 
-* [ ] Implement in `sql/provsql.common.sql` using dynamic `EXECUTE` over the same `pg_attribute` query the old `where_panel/index.php:100-145` uses to find tagged relations.
-* [ ] Return zero rows for a non-input gate or an unmapped UUID (don't raise).
-* [ ] Add Doxygen comment.
+* [x] Implement in `sql/provsql.common.sql` using dynamic `EXECUTE` over the same `pg_attribute` query the old `where_panel/index.php:100-145` uses to find tagged relations.
+* [x] Return zero rows for a non-input gate or an unmapped UUID (don't raise).
+* [x] Add Doxygen comment.
 
 ### Tests
 
-* [ ] `test/sql/circuit_subgraph.sql` + expected output. Cover: a few `personnel`-based queries (DISTINCT, UNION, GROUP BY, self-join), a depth-limit case, a `where_provenance = on` case (so `project` and `eq` gates appear), an `input` leaf.
-* [ ] `test/sql/resolve_input.sql`. Cover: known input gate, unknown UUID, non-input gate.
-* [ ] Add both to `test/schedule.common`.
+* [x] `test/sql/circuit_subgraph.sql` + expected output. Cover: a few `personnel`-based queries (DISTINCT, UNION, GROUP BY, self-join), a depth-limit case, a `where_provenance = on` case (so `project` gates appear), an `input` leaf, plus a BFS-tree invariant check. (`eq` gates only arise from explicit equijoins under `where_provenance = on`; the self-join case already covers the join shape, so no separate `eq` test was added.)
+* [x] `test/sql/resolve_input.sql`. Cover: known input gate, all-rows round-trip, unknown UUID, non-input gate.
+* [x] Add both to `test/schedule.common` (on separate lines: their `pg_attribute` discovery and CREATE/DROP TABLE conflict if run as a parallel group).
 
 ### Docs
 
-* [ ] Add a "Subcircuit introspection" subsection to `doc/source/user/export.rst`, mentioning both functions with a short example.
-* [ ] Run `make docs` after edits (per project convention).
+* [x] Add a "Subcircuit introspection" subsection to `doc/source/user/export.rst`, mentioning both functions with a short example.
+* [x] Run `make docs` after edits (per project convention).
 
 ---
 
