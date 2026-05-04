@@ -970,6 +970,111 @@ $$
 $$
 LANGUAGE sql;
 
+/**
+ * @brief BFS expansion of a provenance circuit, capped at @p max_depth
+ *
+ * Returns one row per node reachable from @p root within
+ * <tt>max_depth</tt> edges, including the root itself (with
+ * <tt>parent</tt> and <tt>child_pos</tt> NULL).  Each node appears
+ * exactly once; for a node reachable through several paths, the
+ * (<tt>parent</tt>, <tt>child_pos</tt>) returned is the one with
+ * lowest BFS depth, breaking ties by lowest <tt>child_pos</tt>.  A
+ * node returned with <tt>depth = max_depth</tt> may have unexplored
+ * children; the caller can detect this by comparing
+ * <tt>provsql.get_children</tt> length against the number of edges
+ * reported.
+ *
+ * <tt>info1</tt> and <tt>info2</tt> are the integer values stored on
+ * the gate by <tt>provsql.set_infos</tt>, formatted as text; their
+ * meaning is gate-type-specific (see <tt>provsql.set_infos</tt>).
+ *
+ * @param root root provenance token
+ * @param max_depth maximum BFS depth (default 8)
+ */
+CREATE OR REPLACE FUNCTION circuit_subgraph(root UUID, max_depth INT DEFAULT 8)
+  RETURNS TABLE(node UUID, parent UUID, child_pos INT, gate_type TEXT, info1 TEXT, info2 TEXT, depth INT) AS
+$$
+  WITH RECURSIVE bfs(node, parent, child_pos, depth) AS (
+    SELECT root, NULL::UUID, NULL::INT, 0
+      UNION ALL
+    SELECT c.t, b.node, c.idx::INT, b.depth + 1
+    FROM bfs b
+    CROSS JOIN LATERAL unnest(provsql.get_children(b.node))
+      WITH ORDINALITY AS c(t, idx)
+    WHERE b.depth < max_depth
+  ),
+  dedup AS (
+    SELECT DISTINCT ON (node) node, parent, child_pos, depth
+    FROM bfs
+    ORDER BY node, depth, child_pos NULLS FIRST
+  )
+  SELECT
+    d.node,
+    d.parent,
+    d.child_pos,
+    provsql.get_gate_type(d.node)::TEXT,
+    i.info1::TEXT,
+    i.info2::TEXT,
+    d.depth
+  FROM dedup d
+  LEFT JOIN LATERAL provsql.get_infos(d.node) i ON TRUE
+  ORDER BY d.depth, d.node;
+$$ LANGUAGE sql STABLE PARALLEL SAFE;
+
+/**
+ * @brief Resolve an input gate UUID back to its source row
+ *
+ * Searches every provenance-tracked relation for a row whose
+ * <tt>provsql</tt> column equals @p uuid and returns the relation's
+ * regclass together with the row encoded as JSONB.  Returns zero
+ * rows when @p uuid is not the provenance token of any tracked row,
+ * including when it identifies an internal gate (<tt>plus</tt>,
+ * <tt>times</tt>, ...) rather than an input.
+ *
+ * Ordinarily exactly one row is returned, but if the same UUID
+ * happens to appear as a <tt>provsql</tt> value in several tracked
+ * tables, all matches are returned.
+ *
+ * @param uuid token to resolve
+ */
+CREATE OR REPLACE FUNCTION resolve_input(uuid UUID)
+  RETURNS TABLE(relation regclass, row_data JSONB) AS
+$$
+DECLARE
+  t RECORD;
+  rel regclass;
+  rd  JSONB;
+  -- ProvSQL's rewriter unconditionally appends a provsql column to the
+  -- targetlist of any SELECT reading from a tracked relation; capture and
+  -- discard it here rather than disabling the rewriter for the whole call.
+  ign UUID;
+BEGIN
+  FOR t IN
+    SELECT c.oid::regclass AS regc
+    FROM pg_attribute a
+         JOIN pg_class c ON a.attrelid = c.oid
+         JOIN pg_namespace ns ON c.relnamespace = ns.oid
+         JOIN pg_type ty ON a.atttypid = ty.oid
+    WHERE a.attname = 'provsql'
+      AND ty.typname = 'uuid'
+      AND c.relkind = 'r'
+      AND ns.nspname <> 'provsql'
+      AND a.attnum > 0
+  LOOP
+    FOR rel, rd, ign IN
+      EXECUTE format(
+        'SELECT %L::regclass, to_jsonb(t) - ''provsql'', t.provsql FROM %s AS t WHERE provsql = $1',
+        t.regc, t.regc)
+      USING uuid
+    LOOP
+      relation := rel;
+      row_data := rd;
+      RETURN NEXT;
+    END LOOP;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql STABLE;
+
 /** @} */
 
 /** @defgroup agg_token_type Type for the result of aggregate queries

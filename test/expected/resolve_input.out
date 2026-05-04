@@ -1,0 +1,28 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+relation|name
+personnel|John
+(1 row)
+remove_provenance
+
+(1 row)
+name
+Dave
+Ellen
+John
+Magdalen
+Nancy
+Paul
+Susan
+(7 rows)
+n
+0
+(1 row)
+remove_provenance
+
+(1 row)
+n
+0
+(1 row)

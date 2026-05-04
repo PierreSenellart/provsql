@@ -10,6 +10,8 @@ test: remove_add_provenance
 
 # Basic checks
 test: provenance_in_from identify_token subquery create_provenance_mapping
+test: circuit_subgraph
+test: resolve_input
 
 # Introducing a few semirings
 test: sr_formula sr_counting sr_boolean sr_why
