@@ -1,6 +1,6 @@
 # provsql extension
 comment = 'Semiring provenance for PostgreSQL databases'
-default_version = '1.3.0'
+default_version = '1.4.0-dev'
 requires = 'uuid-ossp'
 relocatable = false
 module_pathname = '$libdir/provsql'
