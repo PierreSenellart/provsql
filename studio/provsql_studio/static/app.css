@@ -97,6 +97,20 @@ em { font-style: italic; }
   color: rgba(255,255,255,0.88);
 }
 
+/* ───────── error block (rendered into the result area) ───────── */
+.wp-error {
+  border: 1px solid var(--terracotta-500);
+  border-left: 3px solid var(--terracotta-500);
+  background: rgba(196, 102, 74, 0.08);
+  color: var(--purple-900);
+  padding: 0.6rem 0.85rem;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  margin: 0.4rem 0;
+}
+.wp-error code { background: var(--bg-code); }
+
 /* ───────── shared site footer (mirrors website + docs) ───────── */
 #provsql-site-footer {
   text-align: center;

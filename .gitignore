@@ -14,3 +14,11 @@ test.log
 .ccls-cache/
 doc/doxygen-*/
 .cache/
+
+# studio Python venv + build artefacts
+studio/.venv/
+studio/provsql_studio.egg-info/
+studio/provsql_studio/__pycache__/
+studio/**/__pycache__/
+studio/build/
+studio/dist/
