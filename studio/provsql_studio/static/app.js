@@ -127,10 +127,20 @@
     const cell = e.target.closest('.wp-result__cell');
     if (!cell) return;
     cell.classList.toggle('is-hover', on);
+    let firstSource = null;
     (cell.dataset.sources || '').split(';').filter(Boolean).forEach(id => {
       const el = document.getElementById(id);
-      if (el) el.classList.toggle('is-source', on);
+      if (el) {
+        el.classList.toggle('is-source', on);
+        if (on && !firstSource) firstSource = el;
+      }
     });
+    // Bring the first highlighted source into view if it's outside the
+    // sidebar's scroll viewport. block:'nearest' avoids unnecessary scroll
+    // when the cell is already visible.
+    if (on && firstSource) {
+      firstSource.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
   }
 
   /* ──────── Circuit mode ──────── */

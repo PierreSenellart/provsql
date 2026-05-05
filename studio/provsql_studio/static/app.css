@@ -184,9 +184,26 @@ em { font-style: italic; }
   max-width: 1600px;
   margin: 0 auto;
   padding: 1.5rem;
+  align-items: start;  /* allow the sidebar to be shorter than the result card */
 }
 @media (max-width: 1080px) {
   .wp-shell { grid-template-columns: 1fr; }
+}
+
+/* In where mode, pin the source-relations sidebar to the viewport so its
+   highlighted (terracotta) cells are always visible regardless of how far
+   the user has scrolled the result table. The sidebar gets its own scroll
+   pane so its content (potentially many relations) is reachable without
+   moving the result. The sticky offset clears the sticky nav. */
+body.mode-where #sidebar {
+  position: sticky;
+  top: 5rem;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+}
+@media (max-width: 1080px) {
+  /* Single-column layout: sticky would overlap the result, so disable. */
+  body.mode-where #sidebar { position: static; max-height: none; }
 }
 
 /* ───────── card ───────── */
