@@ -21,7 +21,13 @@
       <a class="ps-modeswitch__btn" href="/circuit" data-mode="circuit" role="tab"><i class="fas fa-project-diagram"></i> Circuit</a>
       <a class="ps-modeswitch__btn is-active" href="/where" data-mode="where" role="tab"><i class="fas fa-table"></i> Where</a>
     </div>
-    <span class="wp-nav__chip"><span class="wp-nav__dot"></span>Connected · <code id="conn-info">postgres@localhost</code></span>
+    <span class="wp-nav__conn">
+      <span class="wp-nav__dot" title="connected to a live PostgreSQL server"></span>
+      <span class="wp-nav__dbswitch" id="dbswitch">
+        <button type="button" class="wp-nav__db" id="conn-info" aria-haspopup="listbox" aria-expanded="false">…</button>
+        <ul class="wp-nav__dbmenu" id="dbmenu" role="listbox" hidden></ul>
+      </span>
+    </span>
     <a class="wp-nav__link" href="#"><i class="fas fa-cog"></i> Config</a>
   </div>
 </nav>

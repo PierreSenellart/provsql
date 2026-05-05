@@ -32,6 +32,9 @@
   // calls where_provenance(...) and would otherwise return all-empty); the
   // toggle is locked. In circuit mode, both are user-controlled.
   setupGucToggles();
+  // Connection chip in the top nav: pull the live current_user /
+  // current_database() once at page load.
+  fetchConnInfo();
 
   // ⌘ / Ctrl+Enter submits the query form.
   document.getElementById('request').addEventListener('keydown', (e) => {
@@ -163,6 +166,23 @@
       sessionStorage.setItem('ps.preloadCircuit', btn.dataset.jumpCircuit);
       window.location.href = '/circuit';
     });
+    // Quick-nav chips at the top of the sidebar: scroll the sidebar pane
+    // so the target header lands at the top. We do this explicitly rather
+    // than via scrollIntoView, because scrollIntoView picks the nearest
+    // scrollable ancestor and may end up scrolling the page (sticky nav
+    // hides the header) instead of the sidebar's own overflow pane.
+    document.getElementById('sidebar-body').addEventListener('click', (e) => {
+      const btn = e.target.closest('.wp-rel-nav__btn');
+      if (!btn) return;
+      const target = document.getElementById(btn.dataset.target);
+      const sidebar = document.getElementById('sidebar');
+      if (!target || !sidebar) return;
+      const offset = target.getBoundingClientRect().top
+                   - sidebar.getBoundingClientRect().top
+                   + sidebar.scrollTop
+                   - 10;  // small breathing gap above the header
+      sidebar.scrollTo({ top: Math.max(0, offset), behavior: 'smooth' });
+    });
     // If a query was carried over (mode switch), re-run it; otherwise leave
     // the result pane empty until the user submits.
     if (document.getElementById('request').value.trim()) {
@@ -190,7 +210,16 @@
       body.innerHTML = '<p style="opacity:.7">No provenance-tagged relations. Try <code>SELECT add_provenance(\'mytable\')</code>.</p>';
       return;
     }
-    body.innerHTML = relations.map(rel => {
+    // Quick-nav chips at the top: one per relation, click scrolls the
+    // matching section into view inside the sidebar's own scroll pane.
+    const navHtml = relations.length > 1
+      ? `<nav class="wp-rel-nav">${
+          relations.map(rel =>
+            `<button type="button" class="wp-rel-nav__btn" data-target="${escapeAttr(headerId(rel.regclass))}">${escapeHtml(rel.regclass)}</button>`
+          ).join('')
+        }</nav>`
+      : '';
+    body.innerHTML = navHtml + relations.map(rel => {
       // Skip the rewriter-added `provsql` UUID column when displaying; its
       // value is already exposed as the row id (used for the hover-highlight).
       // where_provenance numbers cells by user-column position (1-indexed,
@@ -200,8 +229,8 @@
         .map((c, i) => ({ c, i }))
         .filter(({ c }) => c.name !== 'provsql');
       return `
-      <section class="wp-relation">
-        <header class="wp-relation__hdr">
+      <section class="wp-relation" id="${escapeAttr(sectionId(rel.regclass))}">
+        <header class="wp-relation__hdr" id="${escapeAttr(headerId(rel.regclass))}">
           <h3 class="wp-relation__name">${escapeHtml(rel.regclass)}</h3>
           <span class="wp-relation__meta">${rel.rows.length} tuples · ${visible.length} cols</span>
         </header>
@@ -228,6 +257,15 @@
     }).join('');
   }
 
+  // Stable, CSS-safe id for a relation's section (avoids periods, quotes, ...).
+  function sectionId(regclass) {
+    return 'rel-' + String(regclass).replace(/[^A-Za-z0-9_]/g, '_');
+  }
+  // Companion id for the relation's header element (table name + meta).
+  function headerId(regclass) {
+    return 'hdr-' + String(regclass).replace(/[^A-Za-z0-9_]/g, '_');
+  }
+
   function onResultHover(e, on) {
     const cell = e.target.closest('.wp-result__cell');
     if (!cell) return;
@@ -249,6 +287,90 @@
   }
 
   /* ──────── Circuit mode ──────── */
+
+  let _currentConn = null;
+
+  async function fetchConnInfo() {
+    const el = document.getElementById('conn-info');
+    if (!el) return;
+    try {
+      const resp = await fetch('/api/conn');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const c = await resp.json();
+      _currentConn = c;
+      el.textContent = `${c.user}@${c.database}`;
+      if (c.host) el.title = `host: ${c.host}`;
+    } catch (e) {
+      el.textContent = '–';
+    }
+    setupDbSwitcher();
+  }
+
+  function setupDbSwitcher() {
+    const btn  = document.getElementById('conn-info');
+    const menu = document.getElementById('dbmenu');
+    if (!btn || !menu || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+
+    async function openMenu() {
+      btn.setAttribute('aria-expanded', 'true');
+      menu.hidden = false;
+      menu.innerHTML = '<li style="opacity:.6">loading…</li>';
+      try {
+        const resp = await fetch('/api/databases');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const dbs = await resp.json();
+        const cur = _currentConn ? _currentConn.database : null;
+        menu.innerHTML = dbs.map(name =>
+          `<li role="option" data-db="${escapeAttr(name)}" `
+          + `class="${name === cur ? 'is-current' : ''}">${escapeHtml(name)}</li>`
+        ).join('') || '<li style="opacity:.6">(no accessible databases)</li>';
+      } catch (e) {
+        menu.innerHTML = `<li style="color:var(--terracotta-500)">Failed: ${escapeHtml(e.message)}</li>`;
+      }
+    }
+    function closeMenu() {
+      btn.setAttribute('aria-expanded', 'false');
+      menu.hidden = true;
+    }
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (menu.hidden) openMenu(); else closeMenu();
+    });
+    document.addEventListener('click', (e) => {
+      if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) closeMenu();
+    });
+    menu.addEventListener('click', async (e) => {
+      const li = e.target.closest('li[data-db]');
+      if (!li) return;
+      const target = li.dataset.db;
+      if (_currentConn && target === _currentConn.database) {
+        closeMenu();
+        return;
+      }
+      menu.innerHTML = '<li style="opacity:.6">switching…</li>';
+      let resp;
+      try {
+        resp = await fetch('/api/conn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ database: target }),
+        });
+      } catch (err) {
+        closeMenu();
+        return;
+      }
+      if (!resp.ok) {
+        closeMenu();
+        return;
+      }
+      // Reloading is the cleanest way to reset every cached relation list,
+      // result table, circuit cache, etc., to the new database's contents.
+      // sessionStorage preserves the SQL textarea across the reload.
+      sessionStorage.setItem('ps.sql', document.getElementById('request').value);
+      window.location.reload();
+    });
+  }
 
   function setupGucToggles() {
     const wp = document.getElementById('opt-where-prov');

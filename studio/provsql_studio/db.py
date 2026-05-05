@@ -60,6 +60,32 @@ def make_pool(dsn: str | None) -> ConnectionPool:
     return ConnectionPool(conninfo=dsn or "", min_size=1, max_size=8, open=True)
 
 
+def list_databases(pool: ConnectionPool) -> list[str]:
+    """Names of every database the current_user is allowed to CONNECT to,
+    excluding template databases. Used to populate the database-switcher."""
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT datname FROM pg_database "
+            "WHERE NOT datistemplate "
+            "  AND has_database_privilege(current_user, datname, 'CONNECT') "
+            "ORDER BY datname"
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
+def conn_info(pool: ConnectionPool) -> dict:
+    """Return the current PostgreSQL session's identity for the chrome chip:
+    role, database, and (when not a Unix socket) host. Hits one short SELECT
+    per call; the result is small enough that callers can re-fetch freely."""
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT current_user, current_database(), "
+            "       coalesce(inet_server_addr()::text, '')"
+        )
+        user, database, host = cur.fetchone()
+    return {"user": user, "database": database, "host": host or None}
+
+
 def list_relations(pool: ConnectionPool) -> list[dict]:
     """One entry per provenance-tagged relation:
     {schema, table, regclass, columns: [{name, type_name}, ...],

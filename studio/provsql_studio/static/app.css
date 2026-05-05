@@ -112,21 +112,71 @@ em { font-style: italic; }
 }
 .wp-nav__title em { color: var(--gold-500); font-style: italic; font-weight: 600; }
 .wp-nav__meta { display: flex; align-items: center; gap: 1.25rem; }
-.wp-nav__chip {
+/* Connection indicator: green dot (live-server hint) + clickable DB name. */
+.wp-nav__conn {
+  display: inline-flex; align-items: center; gap: 0.5rem;
   font-family: var(--font-ui);
   font-size: 0.78rem;
-  background: rgba(255,255,255,0.12);
-  border: 1px solid rgba(255,255,255,0.25);
-  padding: 0.3rem 0.65rem;
-  border-radius: 4px;
-  display: inline-flex; align-items: center; gap: 0.45rem;
   color: rgba(255,255,255,0.9);
 }
-.wp-nav__chip code { font-size: 0.85em; color: var(--gold-500); }
 .wp-nav__dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: #6FCF97;
   box-shadow: 0 0 0 3px rgba(111,207,151,0.25);
+  flex-shrink: 0;
+}
+.wp-nav__dbswitch { position: relative; }
+.wp-nav__db {
+  font: inherit;
+  color: var(--gold-500);
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.25rem;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 0.35rem;
+}
+.wp-nav__db::after {
+  content: "▾";
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+.wp-nav__db:hover, .wp-nav__db[aria-expanded="true"] {
+  background: rgba(255,255,255,0.12);
+}
+.wp-nav__dbmenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  margin: 0;
+  padding: 0.3rem 0;
+  list-style: none;
+  background: #fff;
+  color: var(--purple-900);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
+  z-index: 20;
+}
+.wp-nav__dbmenu[hidden] { display: none; }
+.wp-nav__dbmenu li {
+  padding: 0.4rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wp-nav__dbmenu li:hover { background: var(--bg-code); }
+.wp-nav__dbmenu li.is-current {
+  color: var(--purple-500);
+  font-weight: 600;
+}
+.wp-nav__dbmenu li.is-current::before {
+  content: "✓";
+  margin-right: 0.4rem;
 }
 .wp-nav__link {
   font-family: var(--font-ui);
@@ -249,8 +299,37 @@ body.mode-where #sidebar {
 }
 .wp-card__lead code { background: var(--bg-code); padding: 1px 5px; border-radius: 3px; font-size: 0.86em; color: var(--purple-700); }
 
+/* Relation quick-nav chips at the top of the where-mode sidebar. */
+.wp-rel-nav {
+  display: flex; flex-wrap: wrap; gap: 0.3rem;
+  margin: 0 0 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px dashed var(--border-soft);
+}
+.wp-rel-nav__btn {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: var(--bg-code);
+  color: var(--purple-700);
+  border: 1px solid transparent;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.wp-rel-nav__btn:hover {
+  background: var(--purple-500);
+  color: #fff;
+  border-color: var(--purple-500);
+}
+
 /* ───────── relation block (left) ───────── */
 .wp-relation { margin-top: 1.25rem; }
+/* Quick-nav targets land on the header (table name + tuple count) rather
+   than on the section's outer box (which would otherwise put the first
+   tuple at the visible top because the section's margin-top sits above
+   the header). scroll-margin-top adds a small breathing gap. */
+.wp-relation__hdr { scroll-margin-top: 0.6rem; }
 .wp-relation__hdr {
   display: flex; align-items: baseline; justify-content: space-between;
   border-bottom: 1px solid var(--border-soft);

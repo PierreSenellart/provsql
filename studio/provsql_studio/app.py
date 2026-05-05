@@ -2,6 +2,9 @@
 
 Routes:
   GET /, /where, /circuit  – serve the shared shell with a body class.
+  GET  /api/conn           – current_user / current_database / host.
+  POST /api/conn           – swap the active database (rebuilds the pool).
+  GET  /api/databases      – list databases the current user can connect to.
   GET  /api/relations      – list provenance-tagged relations + content.
   POST /api/exec           – run a SQL batch; only the last statement's result is shown.
   GET  /api/circuit/<uuid> – BFS subgraph + dot-layout for a circuit root.
@@ -16,6 +19,7 @@ import re
 import uuid as uuid_mod
 from pathlib import Path
 
+import psycopg.conninfo
 import sqlparse
 from flask import Flask, jsonify, redirect, request, send_from_directory
 
@@ -44,9 +48,15 @@ def create_app(
         MAX_CIRCUIT_NODES=max_circuit_nodes,
     )
 
-    pool = db.make_pool(dsn)
-    app.extensions["provsql_pool"] = pool
+    app.config["DSN"] = dsn or ""
+    app.extensions["provsql_pool"] = db.make_pool(dsn)
     layout_cache = circuit_mod.LayoutCache()
+
+    # Routes read the live pool through this getter so swapping the pool
+    # (when the user switches database) is picked up without re-binding
+    # closures.
+    def get_pool():
+        return app.extensions["provsql_pool"]
 
     # ──────── static + shell routes ────────
 
@@ -85,9 +95,43 @@ def create_app(
 
     # ──────── API routes ────────
 
+    @app.get("/api/conn")
+    def api_conn():
+        return jsonify(db.conn_info(get_pool()))
+
+    @app.post("/api/conn")
+    def api_conn_switch():
+        payload = request.get_json(silent=True) or {}
+        target = payload.get("database")
+        if not target or not isinstance(target, str):
+            return jsonify({"error": "missing 'database'"}), 400
+        # Verify the user can actually connect, before tearing down the pool.
+        accessible = db.list_databases(get_pool())
+        if target not in accessible:
+            return jsonify({"error": f"database {target!r} not accessible"}), 403
+        # Compose a new DSN by swapping dbname, preserving other connection
+        # parameters (host, port, options like search_path, ...).
+        params = psycopg.conninfo.conninfo_to_dict(app.config["DSN"])
+        params["dbname"] = target
+        new_dsn = psycopg.conninfo.make_conninfo(**params)
+        new_pool = db.make_pool(new_dsn)
+        old_pool = app.extensions["provsql_pool"]
+        app.extensions["provsql_pool"] = new_pool
+        app.config["DSN"] = new_dsn
+        layout_cache._store.clear()
+        try:
+            old_pool.close()
+        except Exception:
+            pass
+        return jsonify(db.conn_info(new_pool))
+
+    @app.get("/api/databases")
+    def api_databases():
+        return jsonify(db.list_databases(get_pool()))
+
     @app.get("/api/relations")
     def api_relations():
-        return jsonify(db.list_relations(pool))
+        return jsonify(db.list_relations(get_pool()))
 
     @app.post("/api/exec")
     def api_exec():
@@ -112,7 +156,7 @@ def create_app(
         update_prov = bool(payload.get("update_provenance", False))
 
         intermediate, final, meta = db.exec_batch(
-            pool,
+            get_pool(),
             statements,
             statement_timeout=app.config["STATEMENT_TIMEOUT"],
             where_provenance=where_prov,
@@ -157,7 +201,7 @@ def create_app(
             return jsonify(cached)
         try:
             data = circuit_mod.get_circuit(
-                pool, root=root, depth=depth, max_nodes=app.config["MAX_CIRCUIT_NODES"]
+                get_pool(), root=root, depth=depth, max_nodes=app.config["MAX_CIRCUIT_NODES"]
             )
         except circuit_mod.CircuitTooLarge as e:
             return jsonify({
@@ -175,7 +219,7 @@ def create_app(
             uuid_str = _coerce_to_uuid(token)
         except ValueError:
             return jsonify({"error": "not a valid UUID"}), 400
-        rows = circuit_mod.resolve_input(pool, uuid_str)
+        rows = circuit_mod.resolve_input(get_pool(), uuid_str)
         if not rows:
             return jsonify({"error": "no row maps to this input gate"}), 404
         # Single-relation case is the norm; if multiple tables share the UUID,
@@ -184,7 +228,7 @@ def create_app(
 
     @app.get("/api/config")
     def api_config_get():
-        return jsonify(db.get_gucs(pool, sorted(db._GUC_WHITELIST)))
+        return jsonify(db.get_gucs(get_pool(), sorted(db._GUC_WHITELIST)))
 
     @app.post("/api/config")
     def api_config_set():
@@ -192,7 +236,7 @@ def create_app(
         name = payload.get("key", "")
         value = payload.get("value", "")
         try:
-            db.set_guc(pool, name, value)
+            db.set_guc(get_pool(), name, value)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"ok": True})
