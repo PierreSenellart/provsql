@@ -236,8 +236,8 @@ aggregation_type_mutator(Node *node,
         is_target_agg_var(linitial(f->args), context)) {
       /* Look up the cast from agg_token to the target type */
       HeapTuple castTuple = SearchSysCache2(CASTSOURCETARGET,
-        ObjectIdGetDatum(context->constants->OID_TYPE_AGG_TOKEN),
-        ObjectIdGetDatum(f->funcresulttype));
+                                            ObjectIdGetDatum(context->constants->OID_TYPE_AGG_TOKEN),
+                                            ObjectIdGetDatum(f->funcresulttype));
 
       if (HeapTupleIsValid(castTuple)) {
         Form_pg_cast castForm = (Form_pg_cast) GETSTRUCT(castTuple);
@@ -311,13 +311,13 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
                   SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
                   if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
                     provsql_error("ORDER BY on aggregate results from "
-                                   "a subquery not supported");
+                                  "a subquery not supported");
                 }
                 foreach (lc3, q->groupClause) {
                   SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
                   if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
                     provsql_error("GROUP BY on aggregate results from "
-                                   "a subquery not supported");
+                                  "a subquery not supported");
                 }
               }
             }
@@ -1258,7 +1258,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           if(IsA(ge, Var)) {
             Var *v = (Var *) ge;
             value_v = columns[v->varno - 1] ?
-              columns[v->varno - 1][v->varattno - 1] : 0;
+                      columns[v->varno - 1][v->varattno - 1] : 0;
           } else {
             Const *ce = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
                                   sizeof(int32), Int32GetDatum(0), false, true);
@@ -1292,7 +1292,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                * joins multiple provenance-tracked relations. */
               value_v = (raw == -1) ? -1
                                     : (int)vte_v->varattno
-                                      + prov_offset[vte_v->varno];
+                        + prov_offset[vte_v->varno];
             } else {
               /* Non-provenance base table: no IN gate exists for it, so
                * the position would be out of range regardless.  Explicitly
@@ -1308,10 +1308,10 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
             }
           } else {
             /* RTE_SUBQUERY and others: the sequential number equals the
-             * column's 1-indexed position in the subquery's output list,
-             * which matches what the child gate's evaluate() expects. */
+            * column's 1-indexed position in the subquery's output list,
+            * which matches what the child gate's evaluate() expects. */
             value_v = columns[vte_v->varno - 1] ?
-              columns[vte_v->varno - 1][vte_v->varattno - 1] : 0;
+                      columns[vte_v->varno - 1][vte_v->varattno - 1] : 0;
           }
         } else { // Join RTE
           Var *jav_v = (Var *)lfirst(
@@ -1334,7 +1334,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                 int raw = columns[jav_v->varno - 1][jav_v->varattno - 1];
                 value_v = (raw == -1) ? -1
                                       : (int)jav_v->varattno
-                                        + prov_offset[jav_v->varno];
+                          + prov_offset[jav_v->varno];
               } else {
                 Const *ce =
                   makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
@@ -1793,7 +1793,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
 
             if (!HeapTupleIsValid(opInfo))
               provsql_error("could not find equality operator for type %u",
-                             ytype);
+                            ytype);
             opform = (Form_pg_operator)GETSTRUCT(opInfo);
 
             oe->opno         = opno;
@@ -2579,7 +2579,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 
       if (!HeapTupleIsValid(opInfo))
         provsql_error("could not find operator with OID %u to compare variables of type %u",
-                       opno, v->vartype);
+                      opno, v->vartype);
 
       opform = (Form_pg_operator)GETSTRUCT(opInfo);
       leftArg = makeNode(Var);
@@ -3053,8 +3053,8 @@ static void cast_agg_token_in_list(ListCell *lc,
     return;
 
   castTuple = SearchSysCache2(CASTSOURCETARGET,
-    ObjectIdGetDatum(ctx->constants->OID_TYPE_AGG_TOKEN),
-    ObjectIdGetDatum(target));
+                              ObjectIdGetDatum(ctx->constants->OID_TYPE_AGG_TOKEN),
+                              ObjectIdGetDatum(target));
   if (HeapTupleIsValid(castTuple)) {
     Form_pg_cast castForm = (Form_pg_cast)GETSTRUCT(castTuple);
     if (OidIsValid(castForm->castfunc)) {
@@ -3172,7 +3172,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   int **columns;
   unsigned i = 0;
   if (provsql_verbose >= 50)
-    elog_node_display(NOTICE, "Before ProvSQL query rewriting", q, true);
+    elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
   if (q->rtable == NULL) {
     // No FROM clause, we can skip this query
@@ -3215,7 +3215,7 @@ static Query *process_query(const constants_t *constants, Query *q,
           if (rte->rtekind == RTE_SUBQUERY && rte->subquery &&
               rte->subquery->hasAggs)
             provsql_error("Non-ALL set operations (UNION, EXCEPT) on "
-                           "aggregate results not supported");
+                          "aggregate results not supported");
         }
         q = rewrite_non_all_into_external_group_by(q);
         return process_query(constants, q, removed);
@@ -3248,7 +3248,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         provsql_error("DISTINCT on aggregate results not supported");
       } else if (list_length(q->distinctClause) < list_length(q->targetList)) {
         provsql_error("Inconsistent DISTINCT and GROUP BY clauses not "
-                       "supported");
+                      "supported");
         supported = false;
       } else {
         transform_distinct_into_group_by(q);
@@ -3267,7 +3267,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         has_difference = true;
       } else {
         provsql_error("Set operations other than UNION and EXCEPT not "
-                       "supported");
+                      "supported");
         supported = false;
       }
     }
@@ -3314,7 +3314,7 @@ static Query *process_query(const constants_t *constants, Query *q,
             if (sort->tleSortGroupRef == te->ressortgroupref) {
               if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
                 provsql_error("ORDER BY on the result of an aggregate function is "
-                               "not supported");
+                              "not supported");
               break;
             }
           }
@@ -3347,7 +3347,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   }
 
   if (provsql_verbose >= 50)
-    elog_node_display(NOTICE, "After ProvSQL query rewriting", q, true);
+    elog_node_display(NOTICE, "ProvSQL: After query rewriting", q, true);
 
   return q;
 }
@@ -3402,8 +3402,8 @@ static void process_insert_select(const constants_t *constants, Query *q) {
 
   if (provsql_attno == 0) {
     provsql_warning("INSERT ... SELECT on provenance-tracked "
-                     "tables: source provenance is not propagated "
-                     "to inserted rows");
+                    "tables: source provenance is not propagated "
+                    "to inserted rows");
     return;
   }
 
@@ -3458,7 +3458,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
 
     /* Update the subquery RTE's column names to include provsql */
     src_rte->eref->colnames = lappend(src_rte->eref->colnames,
-      makeString(pstrdup(PROVSQL_COLUMN_NAME)));
+                                      makeString(pstrdup(PROVSQL_COLUMN_NAME)));
   }
 }
 
@@ -3499,8 +3499,8 @@ static PlannedStmt *provsql_planner(Query *q,
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
-        provsql_notice("Main query before ProvSQL query rewriting:\n%s\n",
-                        pg_get_querydef(q, true));
+        provsql_notice("Main query before query rewriting:\n%s\n",
+                       pg_get_querydef(q, true));
 #endif
 
       if (provsql_verbose >= 40)
@@ -3510,12 +3510,12 @@ static PlannedStmt *provsql_planner(Query *q,
 
       if (provsql_verbose >= 40)
         provsql_notice("planner time spent=%f",
-                        (double)(clock() - begin) / CLOCKS_PER_SEC);
+                       (double)(clock() - begin) / CLOCKS_PER_SEC);
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
-        provsql_notice("Main query after ProvSQL query rewriting:\n%s\n",
-                        pg_get_querydef(q, true));
+        provsql_notice("Main query after query rewriting:\n%s\n",
+                       pg_get_querydef(q, true));
 #endif
 
       if (new_query != NULL)
@@ -3549,7 +3549,7 @@ static PlannedStmt *provsql_planner(Query *q,
 void _PG_init(void) {
   if (!process_shared_preload_libraries_in_progress)
     provsql_error("provsql needs to be added to the shared_preload_libraries "
-                   "configuration variable");
+                  "configuration variable");
 
   DefineCustomBoolVariable("provsql.active",
                            "Should ProvSQL track provenance?",
