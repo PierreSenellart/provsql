@@ -1,16 +1,32 @@
 /* ProvSQL Studio — entry script.
    Wires the shared chrome (mode switcher, example buttons, query form) plus
-   the where-mode sidebar (relations + hover-highlight) by calling the Flask
-   /api/exec, /api/relations, and /api/config endpoints. Circuit-mode wiring
-   is a placeholder here and lands in Stage 3. */
+   both mode-specific sidebars: where-mode shows source-relation tables with
+   hover-highlight, circuit-mode shows the provenance DAG (lazy-loaded
+   circuit.js). Cross-mode navigation preserves the textarea content via
+   sessionStorage and offers a per-row "→ Circuit" jump in where mode. */
 
 (function () {
   const mode = document.body.classList.contains('mode-circuit') ? 'circuit' : 'where';
 
-  // Reflect current mode on the switcher.
+  // Reflect current mode on the switcher and carry the textarea + a
+  // per-mode preload UUID across navigation.
   document.querySelectorAll('.ps-modeswitch__btn').forEach(btn => {
     btn.classList.toggle('is-active', btn.dataset.mode === mode);
+    btn.addEventListener('click', () => {
+      sessionStorage.setItem('ps.sql', document.getElementById('request').value);
+    });
   });
+  // Restore the carried-over query if there is one.
+  const carried = sessionStorage.getItem('ps.sql');
+  if (carried != null) {
+    document.getElementById('request').value = carried;
+    sessionStorage.removeItem('ps.sql');
+  }
+  // If the previous page asked us to preload a circuit (via "→ Circuit"
+  // button on a where-mode result row), pull the UUID out now so circuit-mode
+  // setup can fire it after the result table renders.
+  const preloadCircuitUuid = sessionStorage.getItem('ps.preloadCircuit');
+  sessionStorage.removeItem('ps.preloadCircuit');
 
   // Example-query buttons paste into the textarea.
   document.querySelectorAll('.wp-btn--ex').forEach(btn => {
@@ -37,6 +53,13 @@
     const body = document.getElementById('result-body');
     body.addEventListener('mouseover', (e) => onResultHover(e, true));
     body.addEventListener('mouseout',  (e) => onResultHover(e, false));
+    body.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-jump-circuit]');
+      if (!btn) return;
+      sessionStorage.setItem('ps.sql', document.getElementById('request').value);
+      sessionStorage.setItem('ps.preloadCircuit', btn.dataset.jumpCircuit);
+      window.location.href = '/circuit';
+    });
     // Run the default query so the page isn't empty on first load.
     runQuery({ preventDefault() {} });
   }
@@ -95,17 +118,109 @@
     });
   }
 
-  /* ──────── Circuit mode placeholder ──────── */
+  /* ──────── Circuit mode ──────── */
 
   function setupCircuitMode() {
     document.getElementById('sidebar-title').textContent = 'Provenance Circuit';
-    document.getElementById('sidebar-lead').textContent = 'Click a UUID or agg_token cell in the result to render the DAG here.';
-    document.getElementById('sidebar-body').innerHTML =
-      '<p style="opacity:.75; font-size:.9rem">Circuit visualiser wiring lands in Stage 3. The vendored <code>circuit.js</code> ships the layout + interactions; Studio will lazy-load it into this sidebar after the user clicks a typed cell.</p>';
+    document.getElementById('sidebar-lead').textContent =
+      'Click a UUID cell in the result to render its derivation DAG here.';
+    document.getElementById('sidebar-body').innerHTML = circuitSidebarHtml();
     document.getElementById('form-hint').innerHTML =
       '<i class="fas fa-info-circle"></i> Circuit mode: <code>provsql.where_provenance</code> off by default';
     document.getElementById('result-legend').innerHTML =
       '<span class="wp-legend-swatch" style="background:var(--purple-500)"></span> Click a UUID / agg_token cell in the result to inspect its circuit.';
+
+    // Click handler on result-body for UUID/agg_token cells. We rely on the
+    // cell having data-circuit-uuid when it's clickable — set during render.
+    document.getElementById('result-body').addEventListener('click', (e) => {
+      const cell = e.target.closest('.wp-result__cell.is-clickable');
+      if (!cell || !cell.dataset.circuitUuid) return;
+      loadCircuit(cell.dataset.circuitUuid);
+    });
+
+    // Run the user's existing query so the cell-click is meaningful.
+    runQuery({ preventDefault() {} }).then(() => {
+      // After-render hook: if a preload UUID was carried over from where mode,
+      // load it directly.
+      if (preloadCircuitUuid) loadCircuit(preloadCircuitUuid);
+    });
+  }
+
+  async function loadCircuit(uuid) {
+    await ensureCircuitLib();
+    window.ProvsqlCircuit.showLoading();
+    let resp;
+    try {
+      resp = await fetch(`/api/circuit/${encodeURIComponent(uuid)}`);
+    } catch (e) {
+      window.ProvsqlCircuit.showError(`Network error: ${e.message}`);
+      return;
+    }
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      window.ProvsqlCircuit.showError(err.error || `HTTP ${resp.status}`);
+      return;
+    }
+    const scene = await resp.json();
+    window.ProvsqlCircuit.renderCircuit(scene);
+  }
+
+  let _circuitLibPromise = null;
+  function ensureCircuitLib() {
+    if (window.ProvsqlCircuit) return Promise.resolve(window.ProvsqlCircuit);
+    if (_circuitLibPromise) return _circuitLibPromise;
+    _circuitLibPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/static/circuit.js';
+      s.onload  = () => { try { window.ProvsqlCircuit.init(); } catch (e) {} resolve(window.ProvsqlCircuit); };
+      s.onerror = () => reject(new Error('failed to load circuit.js'));
+      document.body.appendChild(s);
+    });
+    return _circuitLibPromise;
+  }
+
+  function circuitSidebarHtml() {
+    return `
+      <header class="cv-main__hdr" style="padding:0; border-bottom:none; margin-bottom:0.4rem">
+        <div>
+          <h3 class="cv-main__sub" id="circuit-sub" style="margin:0; font-family:var(--font-ui); font-size:0.78rem; opacity:0.7">Click a UUID cell to render.</h3>
+          <span id="circuit-title" style="display:none">Provenance Circuit</span>
+        </div>
+      </header>
+      <div class="cv-toolbar" role="toolbar">
+        <button class="cv-tool" id="tool-zoom-out" title="Zoom out"><i class="fas fa-search-minus"></i></button>
+        <button class="cv-tool" id="tool-zoom-fit" title="Fit"><i class="fas fa-expand"></i></button>
+        <button class="cv-tool" id="tool-zoom-in" title="Zoom in"><i class="fas fa-search-plus"></i></button>
+        <span class="cv-tool__sep"></span>
+        <button class="cv-tool cv-tool--toggle" id="tool-show-uuids" aria-pressed="false" title="Show UUIDs"><i class="fas fa-fingerprint"></i></button>
+        <button class="cv-tool cv-tool--toggle" id="tool-show-formula" aria-pressed="true" title="Show formula"><i class="fas fa-square-root-alt"></i></button>
+      </div>
+      <div class="cv-canvas" id="canvas">
+        <svg id="circuit" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--purple-700)"></path>
+            </marker>
+            <marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--terracotta-500)"></path>
+            </marker>
+          </defs>
+          <g id="circuit-edges"></g>
+          <g id="circuit-nodes"></g>
+        </svg>
+        <aside class="cv-inspector" id="inspector">
+          <header class="cv-inspector__hdr">
+            <h3 class="cv-inspector__title" id="inspector-title">Node</h3>
+            <button class="cv-inspector__close" id="inspector-close"><i class="fas fa-times"></i></button>
+          </header>
+          <div class="cv-inspector__body" id="inspector-body"></div>
+        </aside>
+      </div>
+      <footer class="cv-formula" id="formula-strip">
+        <span class="cv-formula__label">Formula</span>
+        <code class="cv-formula__expr" id="formula-expr">—</code>
+      </footer>
+    `;
   }
 
   /* ──────── shared helpers ──────── */
@@ -213,7 +328,8 @@ async function runQuery(ev) {
     if (final.kind === 'rows') {
       const allCols = final.columns;
       // Hide rewriter-injected columns (__prov, __wprov) from display but
-      // keep them so we can build per-cell data-sources.
+      // keep them so we can build per-cell data-sources and per-row jump
+      // buttons.
       const displayIdx = [];
       let provIdx = -1, wprovIdx = -1;
       allCols.forEach((c, i) => {
@@ -222,18 +338,53 @@ async function runQuery(ev) {
         else displayIdx.push(i);
       });
 
-      head.innerHTML = displayIdx.map(i => `<th>${env.escapeHtml(allCols[i].name)}</th>`).join('');
+      const isWhere   = env.mode === 'where';
+      const isCircuit = env.mode === 'circuit';
+      // In circuit mode, surface a hint when there's no UUID/agg_token
+      // column to click. We check this once on the columns.
+      const hasClickableCols = displayIdx.some(i =>
+        ['uuid', 'agg_token'].includes((allCols[i].type_name || '').toLowerCase())
+      );
+
+      const headExtra = (isWhere && wrapped) ? '<th></th>' : '';
+      head.innerHTML = displayIdx.map(i => `<th>${env.escapeHtml(allCols[i].name)}</th>`).join('') + headExtra;
       body.innerHTML = prelude + final.rows.map(r => {
         const sources = wrapped && wprovIdx >= 0
           ? parseWhereProvenance(r[wprovIdx], displayIdx)
           : null;
-        return `<tr>${displayIdx.map((idx, di) => {
+        const cells = displayIdx.map((idx, di) => {
+          const col = allCols[idx];
+          const typeName = (col.type_name || '').toLowerCase();
+          const value = r[idx];
           const dataSrc = sources ? sources[di] || '' : '';
           const sourcesAttr = dataSrc ? ` data-sources="${env.escapeAttr(dataSrc)}"` : '';
-          return `<td class="wp-result__cell"${sourcesAttr}>${env.formatCell(r[idx], allCols[idx].name)}</td>`;
-        }).join('')}</tr>`;
+          let extraCls = '';
+          let extraAttr = '';
+          if (isCircuit && typeName === 'uuid' && value) {
+            extraCls  = ' is-clickable';
+            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
+          }
+          // agg_token cells: their text is "<value> (*)", which doesn't carry
+          // the UUID. v1 leaves them non-clickable; cast in SQL to inspect.
+          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(value, col.name)}</td>`;
+        }).join('');
+        const jumpBtn = (isWhere && wrapped && provIdx >= 0 && r[provIdx])
+          ? `<td class="wp-result__cell--actions"><button class="wp-btn wp-btn--mini" type="button" `
+            + `data-jump-circuit="${env.escapeAttr(String(r[provIdx]))}" title="Open circuit DAG"><i class="fas fa-project-diagram"></i> Circuit</button></td>`
+          : '';
+        return `<tr>${cells}${jumpBtn}</tr>`;
       }).join('');
       count.textContent = final.rows.length;
+
+      if (isCircuit && !hasClickableCols && final.rows.length) {
+        const legend = document.getElementById('result-legend');
+        if (legend) {
+          legend.innerHTML =
+            '<i class="fas fa-info-circle"></i> No UUID columns in this result — '
+            + '<a href="/where" class="ps-modeswitch__btn" style="color:var(--purple-500); text-decoration:underline; padding:0 0.2rem">switch to Where mode</a> '
+            + 'to see source-cell highlights, or add <code>provsql.provenance()</code> to your SELECT.';
+        }
+      }
     }
   }
 

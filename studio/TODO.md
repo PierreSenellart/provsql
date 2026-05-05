@@ -161,7 +161,7 @@ The shared shell from Stage 0 (one `index.html`, `app.css`, `app.js`, `circuit.j
 * [x] Mode switcher in the top nav: two-segment toggle, anchors to `/where` and `/circuit` (Flask serves the same shell with a different body class). Stage 0 wired the visual; Stage 2 just hooks the active marker.
 * [x] Shared query form + result renderer: `POST /api/exec`, renders rows / status / error blocks. Re-fetches `/api/relations` after each successful exec in where mode. ⌘ / Ctrl+Enter submits. Loading state shown while a query is in flight. Empty-result handling shows "0 rows".
 * [x] **Where mode** (sidebar = source relations): on mode entry, `GET /api/relations` renders each tagged relation. Hovering a result cell toggles `is-source` on the matching `<td>` in the sidebar via the cell's `data-sources` list. `data-sources` comes from the wrapped query's `__wprov` column, parsed client-side from the `{[table:uuid:col;...],[...]}` text format produced by `where_provenance.cpp`.
-* [ ] **Circuit mode** (sidebar = circuit DAG): placeholder only in Stage 2. Stage 3 covers cell-click → lazy-import circuit.js → fetch `/api/circuit/<uuid>` → render the DAG.
+* [x] **Circuit mode** (sidebar = circuit DAG): placeholder only in Stage 2. Stage 3 covers cell-click → lazy-import circuit.js → fetch `/api/circuit/<uuid>` → render the DAG.
 
 ### Tests
 
@@ -175,35 +175,36 @@ The shared shell from Stage 0 (one `index.html`, `app.css`, `app.js`, `circuit.j
 
 ### Server side
 
-* [ ] `circuit.py`: given a root UUID and depth, call `provsql.circuit_subgraph`, build a Graphviz DOT string, run `dot -Tjson` (subprocess), parse the JSON to extract per-node coordinates, return `{nodes: [{id, type, label, info1, info2, depth, x, y, frontier: bool}], edges: [{from, to, child_pos}]}`.
-  * Frontier flag: a node is a frontier if `depth == max_depth` and it has un-fetched children (check `get_children` length > number of children fetched).
+* [x] `circuit.py`: given a root UUID and depth, call `provsql.circuit_subgraph`, build a Graphviz DOT string, run `dot -Tjson` (subprocess), parse the JSON to extract per-node coordinates, return `{nodes: [{id, type, label, info1, info2, depth, x, y, frontier: bool}], edges: [{from, to, child_pos}]}`.
+  * Frontier detection: we ask `circuit_subgraph` for `depth + 1`, keep nodes through depth, and use the existence of any depth+1 child to mark depth-`depth` parents as frontier. A separate post-BFS `get_children` probe doesn't work — the provsql backend cache populated by `get_gate_type` (called at the tail of `circuit_subgraph`) masks subsequent direct `get_children` calls in the same backend.
   * Cap at `--max-circuit-nodes` (default 500); if exceeded, return a 413 with `{error: "circuit too large", hint: "reduce depth or expand interactively"}`.
-* [ ] Cache layouts in-process keyed on `(root_uuid, depth)` since Graphviz is not free.
-* [ ] `GET /api/circuit/<uuid>?depth=<N>` – initial render. Accepts both UUID and `agg_token` (the latter is cast to its underlying UUID server-side via `agg_token_uuid`).
-* [ ] `POST /api/circuit/<uuid>/expand` – body `{frontier_node_uuid, additional_depth}` – fetches another layer and merges into the previous response. (Or stateless: client sends the set of UUIDs already known and the server returns only the new ones.)
-* [ ] `GET /api/leaf/<uuid>` – calls `provsql.resolve_input(uuid)`. Returns `{relation, row_data}` or 404.
+* [x] Cache layouts in-process keyed on `(root_uuid, depth)` since Graphviz is not free. Bounded LRU at 32 entries.
+* [x] `GET /api/circuit/<uuid>?depth=<N>` – initial render. The path token is parsed as a UUID; the front-end is responsible for extracting the underlying UUID from `agg_token` cells via `(c::uuid)::text` (the displayed `c::text` returns the aggregate value, not the UUID — see `src/agg_token.c:agg_token_to_text`).
+* [x] `POST /api/circuit/<uuid>/expand` – body `{frontier_node_uuid, additional_depth}` – computes a fresh subgraph rooted at the frontier; the front-end translates it to the anchor's `(x, y)` and merges. Stateless on the server.
+* [x] `GET /api/leaf/<uuid>` – calls `provsql.resolve_input(uuid)`. Returns `{matches: [{relation, row}, ...]}` or 404.
 
 ### Front-end (circuit-mode sidebar, from `static/circuit.js`)
 
-* [ ] Strip the bundled `QUERIES` mock data; the sidebar starts empty until a UUID / `agg_token` cell is clicked in the result.
-* [ ] On click of a typed cell: `GET /api/circuit/<value>`, render the DAG in the sidebar.
-* [ ] Replace the bundle's centroid layout with the server-supplied `{x, y}` per node; the local `circuit.js` only paints + handles interactions.
-* [ ] Click a frontier node: `POST /api/circuit/.../expand`, merge into the existing scene, re-paint.
-* [ ] Inspector panel: when a leaf is pinned, fire `GET /api/leaf/<uuid>` and show the resolved `(relation, row)`.
-* [ ] Toolbar: zoom / fit / UUID toggle / formula-strip toggle (already in the design, just keep working).
+* [x] Strip the bundled `QUERIES` mock data; the sidebar starts empty until a UUID cell is clicked in the result. Exposed as `window.ProvsqlCircuit = { init, renderCircuit, setStatus, showLoading, showError }` so `app.js` lazy-loads it on demand.
+* [x] On click of a typed cell: `GET /api/circuit/<value>`, render the DAG in the sidebar.
+* [x] Replace the bundle's centroid layout with the server-supplied `{x, y}` per node; the local `circuit.js` only paints + handles interactions.
+* [x] Click a frontier node: `POST /api/circuit/.../expand`, merge into the existing scene, re-paint. Frontier nodes get a small gold "+" badge so users know which gates expand.
+* [x] Inspector panel: when an `input` / `mulinput` gate is pinned, fire `GET /api/leaf/<uuid>` and show the resolved `(relation, row)`.
+* [x] Toolbar: zoom / fit / UUID toggle / formula-strip toggle wired into the new state machine.
 
 ### Cross-mode navigation
 
-* [ ] Mode switcher in the top nav (Stage 2): clicking it preserves the current SQL textarea content and re-runs in the new mode.
-* [ ] In where-mode result, each row gets a small "→ Circuit" button that switches to circuit mode and pre-loads the circuit for that row's provenance UUID. (The wrapped query has the UUID; the button passes it directly to `/api/circuit/<uuid>`.)
-* [ ] In circuit-mode result, when no UUID / `agg_token` cells are present, surface a hint: "switch to Where mode to see source-cell highlights for this query".
+* [x] Mode switcher in the top nav: stashes the SQL textarea into `sessionStorage.ps.sql`; the destination page restores it before running. The active marker swaps server-side via the body class set by Flask.
+* [x] In where-mode result, each row gets a small "→ Circuit" button that switches to circuit mode and pre-loads the circuit for that row's provenance UUID via `sessionStorage.ps.preloadCircuit`.
+* [x] In circuit-mode result, when no UUID / `agg_token` cells are present, the legend surfaces a hint: "No UUID columns in this result — switch to Where mode … or add `provsql.provenance()` to your SELECT."
+* [x] `agg_token` cells: not directly clickable in v1. The displayed text from `agg_token_to_text` is the aggregate value, not the UUID; users wanting to inspect the circuit cast explicitly with `(col::uuid)::text`. (See Future-work for direct-click support via a column-introspection wrap.)
 
 ### Tests
 
-* [ ] `tests/test_circuit.py`: a known query → expected node count and edge structure for a small circuit.
-* [ ] Frontier behaviour: depth=1 returns root + 1 layer; expand returns next layer.
-* [ ] Leaf resolution: a known input UUID maps back to its `personnel` row.
-* [ ] `agg_token` accepted as input to `/api/circuit/`.
+* [x] `tests/test_circuit.py` (9 cases): DISTINCT root → + over 3 inputs; layout always populates x/y; invalid UUID → 400.
+* [x] Frontier behaviour: depth-1 envelope is enforced; self-join × gates are flagged as frontier at depth=1; expand returns the new sub-DAG.
+* [x] Leaf resolution: a known input UUID maps back to its personnel row; unknown UUID → 404.
+* [x] `agg_token` underlying UUID accepted by `/api/circuit/`; the agg root is correctly typed `agg`.
 
 ---
 

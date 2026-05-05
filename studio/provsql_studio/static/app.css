@@ -15,9 +15,54 @@ html, body {
 }
 body.mode-circuit {
   font-size: 18px;
-  height: 100vh;
-  overflow: hidden;
 }
+/* Circuit-mode sidebar hosts the cv-canvas + cv-formula. We keep the shared
+   wp-shell grid; the canvas just needs a fixed-ish height so the dot layout
+   is visible without page scrolling. */
+body.mode-circuit #sidebar { padding-bottom: 0; }
+body.mode-circuit #sidebar-body { display: flex; flex-direction: column; gap: 0.8rem; }
+body.mode-circuit #sidebar-body .cv-canvas {
+  height: 460px; min-height: 320px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+body.mode-circuit #sidebar-body .cv-toolbar {
+  display: flex; align-items: center; gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+body.mode-circuit #sidebar-body .cv-formula {
+  display: flex; align-items: center; gap: 0.6rem;
+  font-size: 0.85rem;
+  border-top: 1px dashed var(--border-soft);
+  padding-top: 0.6rem;
+}
+body.mode-circuit #sidebar-body .cv-formula__label {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+/* Cross-mode: per-row "→ Circuit" button in where-mode results */
+.wp-result__cell--actions { width: 1%; white-space: nowrap; }
+.wp-btn--mini {
+  font-size: 0.72rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid var(--purple-500);
+  background: transparent;
+  color: var(--purple-500);
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+.wp-btn--mini:hover { background: var(--purple-500); color: #fff; }
+/* Clickable UUID/agg_token cells in circuit mode */
+.wp-result__cell.is-clickable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  color: var(--purple-500);
+}
+.wp-result__cell.is-clickable:hover { color: var(--terracotta-500); }
 
 code, pre, .wp-editor__ta, .cv-editor__code, .cv-formula__expr { font-family: var(--font-mono); }
 em { font-style: italic; }
