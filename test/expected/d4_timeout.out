@@ -1,0 +1,8 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+NOTICE:  timeout raised as query_canceled
+remove_provenance
+
+(1 row)

@@ -24,6 +24,7 @@
 
 extern "C" {
 #include <unistd.h>
+#include <sys/wait.h>
 #include <math.h>
 }
 
@@ -47,10 +48,12 @@ constexpr bool provsql_interrupted = false;
 constexpr int provsql_verbose = 0;
 enum levels {ERROR, NOTICE};
 #define elog(level, ...) {fprintf(stderr, __VA_ARGS__); if(level==ERROR) exit(EXIT_FAILURE);}
+#define CHECK_FOR_INTERRUPTS() ((void)0)
 #else
 extern "C" {
 #include "provsql_utils.h"
 #include "utils/elog.h"
+#include "miscadmin.h"
 }
 #endif
 #include "provsql_error.h"
@@ -401,12 +404,40 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   int retvalue=system(cmdline.c_str());
 
+  // PG's StatementTimeoutHandler (and pg_cancel_backend, etc.) sends
+  // SIGINT to the whole process group via kill(-MyProcPid, SIGINT).
+  // The child compiler in our group dies on default SIGINT, but
+  // glibc system() temporarily SIG_IGNs SIGINT in the parent for the
+  // duration of the wait, so the same signal is silently discarded
+  // here and InterruptPending / QueryCancelPending are never set.
+  // Translate that wstatus into a proper PG cancel so the
+  // CHECK_FOR_INTERRUPTS below raises 57014 instead of us either
+  // throwing "Error executing", or falling through to the legacy
+  // d4-syntax retry on the corpse (which then mis-parses an empty
+  // .nnf as "Unreadable d-DNNF" XX000).
+#ifndef TDKC
+  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+  }
+#endif
+
+  CHECK_FOR_INTERRUPTS();
+
   if(retvalue && compiler=="d4") {
     // Temporary support for older version of d4
     new_d4 = false;
     cmdline = "d4 "+filename+" -out="+outfilename;
     retvalue=system(cmdline.c_str());
+#ifndef TDKC
+    if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+      InterruptPending = true;
+      QueryCancelPending = true;
+    }
+#endif
   }
+
+  CHECK_FOR_INTERRUPTS();
 
   if(retvalue)
     throw CircuitException("Error executing "+compiler);
