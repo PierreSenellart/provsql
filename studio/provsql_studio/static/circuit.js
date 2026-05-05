@@ -1,29 +1,29 @@
-/* ProvSQL Studio — circuit-mode renderer.
+/* ProvSQL Studio: circuit-mode renderer.
    Lazy-loaded by app.js once the user clicks a UUID/agg_token cell in
    circuit-mode results. The DOT layout is computed server-side
    (provsql_studio/circuit.py via `dot -Tjson`); this module just paints,
    handles zoom/pan/pin, and delegates expansion to the server. */
 
 (function () {
-  if (window.ProvsqlCircuit) return; // idempotent — app.js may call setup repeatedly
+  if (window.ProvsqlCircuit) return; // idempotent; app.js may call setup repeatedly
 
   const NS = 'http://www.w3.org/2000/svg';
 
   const TYPE_SUMMARY = {
-    plus:     'Plus gate (+) — disjunction (UNION, projection, multi-derivation)',
-    times:    'Times gate (×) — conjunction (joins, conjunctive WHERE)',
-    monus:    'Monus gate (−) — m-semiring difference (EXCEPT)',
-    project:  'Project gate (π) — column projection (where-provenance only)',
-    eq:       'Eq gate (=) — equijoin witness (where-provenance only)',
-    agg:      'Aggregation gate (Σ) — GROUP BY aggregate',
-    semimod:  'Semimodule scalar (⊙) — scalar × aggregate',
-    cmp:      'Compare gate (≷) — aggregate-value comparison',
-    delta:    'Delta gate (δ) — δ-semiring operator',
-    value:    'Value gate (v) — scalar constant',
+    plus:     'Plus gate (+): disjunction (UNION, projection, multi-derivation)',
+    times:    'Times gate (×): conjunction (joins, conjunctive WHERE)',
+    monus:    'Monus gate (−): m-semiring difference (EXCEPT)',
+    project:  'Project gate (π): column projection (where-provenance only)',
+    eq:       'Eq gate (=): equijoin witness (where-provenance only)',
+    agg:      'Aggregation gate (Σ): GROUP BY aggregate',
+    semimod:  'Semimodule scalar (⊙): scalar × aggregate',
+    cmp:      'Compare gate (≷): aggregate-value comparison',
+    delta:    'Delta gate (δ): δ-semiring operator',
+    value:    'Value gate (v): scalar constant',
     mulinput: 'Multivalued input (⋮)',
-    input:    'Input gate — base tuple',
-    one:      'One — semiring identity (always-true)',
-    zero:     'Zero — semiring identity (always-false)',
+    input:    'Input gate: base tuple',
+    one:      'One: semiring identity (always-true)',
+    zero:     'Zero: semiring identity (always-false)',
   };
 
   // ─── state ────────────────────────────────────────────────────────────
@@ -45,9 +45,9 @@
 
   window.ProvsqlCircuit = {
     init,                 // bind DOM handles after the sidebar markup is injected
-    renderCircuit,        // (scene) — replace the current scene
-    setStatus,            // (title, sub) — update header copy
-    showLoading,          // () — placeholder while fetching
+    renderCircuit,        // (scene): replace the current scene
+    setStatus,            // (title, sub): update header copy
+    showLoading,          // (): placeholder while fetching
     showError,            // (msg)
   };
 
@@ -120,7 +120,7 @@
         + 'Loading…</text>';
     }
     setStatus('Provenance Circuit', 'Fetching subgraph…');
-    if (formulaEl) formulaEl.textContent = '—';
+    if (formulaEl) formulaEl.textContent = '–';
   }
 
   function showError(msg) {
@@ -434,7 +434,7 @@
   }
 
   function shortUuid(u) {
-    if (!u) return '—';
+    if (!u) return '–';
     return u.length > 12 ? `${u.slice(0, 4)}…${u.slice(-4)}` : u;
   }
 })();

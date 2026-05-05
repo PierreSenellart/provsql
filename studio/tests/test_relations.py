@@ -1,4 +1,4 @@
-"""Tests for GET /api/relations — discovery + content + live refresh after add_provenance."""
+"""Tests for GET /api/relations: discovery + content + live refresh after add_provenance."""
 from __future__ import annotations
 
 

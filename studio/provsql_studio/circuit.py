@@ -132,7 +132,7 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
 
 def _to_dot(rows: list[dict]) -> str:
     """Build a DOT source for `dot -Tjson` consumption. We only need positions,
-    so styling is minimal — the front-end paints with brand colours."""
+    so styling is minimal; the front-end paints with brand colours."""
     lines = [
         "digraph G {",
         '  rankdir=TB;',
@@ -186,7 +186,7 @@ def resolve_input(pool: ConnectionPool, uuid: str) -> list[dict]:
 class LayoutCache:
     """Bounded LRU keyed on (root, depth). dot is not free, and the same root
     is often re-rendered as the user toggles UUIDs / formula. Bound is small
-    by design — circuits are large and serializations even larger."""
+    by design: circuits are large and serializations even larger."""
 
     def __init__(self, capacity: int = 32):
         self._capacity = capacity

@@ -1,4 +1,4 @@
-/* ProvSQL Studio — merged ui_kit stylesheets (Provence brand).
+/* ProvSQL Studio: merged ui_kit stylesheets (Provence brand).
    panel.css (where mode, .wp-* classes) + circuit.css (circuit mode, .cv-*
    and gate/node/edge classes) coexist via disjoint class prefixes; the only
    real overlap is the global base block at the top of each file, lifted
@@ -273,12 +273,28 @@ em { font-style: italic; }
 .wp-table tbody tr:hover td { background: rgba(232, 184, 75, 0.12); }
 .wp-table tbody tr:last-child td { border-bottom: none; }
 
-/* highlighted cells (where-provenance source) */
+/* Right-align numeric and date/time/interval columns. Tabular-nums keeps
+   digit columns aligned across rows. */
+.wp-table th.is-right, .wp-table td.is-right { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Sidebar relation tables: more compact than the result table on the right
+   so several relations fit at a glance. */
+#sidebar .wp-relation { margin-top: 0.85rem; }
+#sidebar .wp-relation__hdr { padding-bottom: 0.25rem; margin-bottom: 0.3rem; }
+#sidebar .wp-relation__name { font-size: 0.92rem; }
+#sidebar .wp-relation__meta { font-size: 0.68rem; }
+#sidebar .wp-table { font-size: 0.78rem; }
+#sidebar .wp-table th, #sidebar .wp-table td { padding: 0.25rem 0.5rem; }
+#sidebar .wp-table th { font-size: 0.66rem; }
+
+/* highlighted cells (where-provenance source).
+   The toggled state must not change layout metrics (font-weight, padding,
+   border) or the column widths reflow as the user moves the mouse; keep
+   only colour + box-shadow (which is outside the box model). */
 .wp-table td.is-source {
   color: #fff !important;
   background: var(--terracotta-500) !important;
   box-shadow: inset 0 0 0 2px var(--purple-900);
-  font-weight: 600;
   transition: background 0.12s, color 0.12s;
 }
 .wp-table td.is-source .wp-pill { filter: brightness(0.85) saturate(1.1); }
@@ -287,7 +303,6 @@ em { font-style: italic; }
 .wp-table--result td.is-hover {
   background: var(--gold-500) !important;
   color: var(--purple-900) !important;
-  font-weight: 600;
 }
 
 /* ───────── classification pills ───────── */
@@ -306,21 +321,6 @@ em { font-style: italic; }
 .wp-pill--confidential { background: #F4D8C8; color: #8A4424; }
 .wp-pill--secret       { background: #E0CCEE; color: #4A2A6A; }
 .wp-pill--top_secret   { background: #2A1850; color: #E8B84B; }
-
-/* ───────── examples row ───────── */
-.wp-examples {
-  display: flex; align-items: center; gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.85rem;
-}
-.wp-examples__label {
-  font-family: var(--font-ui);
-  font-size: 0.78rem;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-right: 0.25rem;
-}
 
 /* ───────── buttons ───────── */
 .wp-btn {
@@ -382,6 +382,7 @@ em { font-style: italic; }
 }
 .wp-form__actions {
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 0.6rem;
   margin-top: 0.7rem;
 }
 .wp-form__hint {
@@ -391,6 +392,69 @@ em { font-style: italic; }
   display: inline-flex; align-items: center; gap: 0.4rem;
 }
 .wp-form__hint code { color: var(--purple-700); }
+
+/* GUC toggles in the form-actions row, styled as switches. The native
+   checkbox keeps semantics + keyboard handling; appearance:none lets us
+   draw a track + knob via the input itself. */
+.wp-toggle {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  cursor: pointer;
+  user-select: none;
+}
+.wp-toggle input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  position: relative;
+  width: 30px; height: 16px;
+  border-radius: 999px;
+  background: var(--border-soft);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.wp-toggle input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(42, 24, 80, 0.25);
+  transition: left 0.15s, background 0.15s;
+}
+.wp-toggle input[type="checkbox"]:checked {
+  background: var(--purple-500);
+  border-color: var(--purple-500);
+}
+.wp-toggle input[type="checkbox"]:checked::before { left: 15px; }
+.wp-toggle input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 1px;
+}
+.wp-toggle code { color: var(--purple-700); font-size: 0.95em; }
+/* Padlock placeholder: present in the DOM in both modes so the toggle's
+   horizontal footprint doesn't change when switching mode. Visibility (not
+   display) toggling keeps the box reserved. */
+.wp-toggle__lock { font-size: 0.7em; color: var(--fg-muted); visibility: hidden; }
+.wp-toggle.is-locked .wp-toggle__lock { visibility: visible; }
+
+/* Locked state: muted track + padlock icon. Track stays in the "on"
+   position but uses a desaturated colour to signal it isn't user-editable. */
+.wp-toggle.is-locked { cursor: not-allowed; }
+.wp-toggle.is-locked input[type="checkbox"] { cursor: not-allowed; }
+.wp-toggle.is-locked input[type="checkbox"]:checked {
+  background: var(--purple-300, #B8A5D6);
+  border-color: var(--purple-300, #B8A5D6);
+}
+.wp-toggle.is-locked input[type="checkbox"]::before {
+  background: #f0e8fa;
+  box-shadow: none;
+}
+.wp-toggle.is-locked code { color: var(--fg-muted); font-style: italic; }
 
 /* ───────── result block ───────── */
 .wp-result__hdr {

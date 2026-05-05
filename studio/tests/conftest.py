@@ -6,7 +6,7 @@ SQL files so each test starts with the same `personnel` table the regression
 suite uses.
 
 The DSN can be overridden with the `PROVSQL_STUDIO_TEST_DSN` env var (CI use)
-— in that case the harness assumes the database is already prepared and only
+; in that case the harness assumes the database is already prepared and only
 verifies the personnel table exists.
 """
 from __future__ import annotations

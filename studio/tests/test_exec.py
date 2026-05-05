@@ -1,4 +1,4 @@
-"""Tests for POST /api/exec — multi-statement splitting, where-mode wrapping,
+"""Tests for POST /api/exec: multi-statement splitting, where-mode wrapping,
 status / error handling. The wrapping is exercised against the personnel
 table set up by conftest."""
 from __future__ import annotations
@@ -90,7 +90,7 @@ def test_syntax_error_in_non_final_statement_halts_batch(client):
 
 
 def test_dml_returning_last_runs_unwrapped(client):
-    # A DML last statement must NOT be wrapped — wrapping turns it into a SELECT,
+    # A DML last statement must NOT be wrapped: wrapping turns it into a SELECT,
     # which would lose the side effects. The where-mode regex only matches WITH/SELECT.
     sql = (
         "CREATE TEMPORARY TABLE t_dml_demo (x int);"

@@ -18,8 +18,8 @@
   </div>
   <div class="wp-nav__meta">
     <div class="ps-modeswitch" id="modeswitch" role="tablist">
-      <a class="ps-modeswitch__btn is-active" href="/where" data-mode="where" role="tab"><i class="fas fa-table"></i> Where</a>
       <a class="ps-modeswitch__btn" href="/circuit" data-mode="circuit" role="tab"><i class="fas fa-project-diagram"></i> Circuit</a>
+      <a class="ps-modeswitch__btn is-active" href="/where" data-mode="where" role="tab"><i class="fas fa-table"></i> Where</a>
     </div>
     <span class="wp-nav__chip"><span class="wp-nav__dot"></span>Connected · <code id="conn-info">postgres@localhost</code></span>
     <a class="wp-nav__link" href="#"><i class="fas fa-cog"></i> Config</a>
@@ -47,24 +47,24 @@
     <header class="wp-card__hdr">
       <h2 class="wp-card__title">Your Query</h2>
       <p class="wp-card__lead">Type a SQL query. Results below carry where-provenance
-        when in Where mode — hover any cell to see its source.</p>
+        when in Where mode; hover any cell to see its source.</p>
     </header>
-
-    <div class="wp-examples">
-      <span class="wp-examples__label">Examples</span>
-      <button class="wp-btn wp-btn--ex" data-q="SELECT * FROM personnel">All</button>
-      <button class="wp-btn wp-btn--ex" data-q="SELECT DISTINCT city FROM personnel">Distinct</button>
-      <button class="wp-btn wp-btn--ex" data-q="SELECT city FROM personnel UNION SELECT '5' FROM personnel">Union</button>
-      <button class="wp-btn wp-btn--ex" data-q="SELECT city, COUNT(*) FROM personnel GROUP BY city">Group by</button>
-    </div>
 
     <form class="wp-form" onsubmit="return runQuery(event)">
       <div class="wp-editor">
         <span class="wp-editor__gutter">SQL</span>
-        <textarea class="wp-editor__ta" id="request" rows="3" spellcheck="false">SELECT DISTINCT city FROM personnel</textarea>
+        <textarea class="wp-editor__ta" id="request" rows="3" spellcheck="false" placeholder="SELECT ... FROM your_relation"></textarea>
       </div>
       <div class="wp-form__actions">
-        <span class="wp-form__hint" id="form-hint"><i class="fas fa-info-circle"></i> <code>provsql.where_provenance = on</code></span>
+        <label class="wp-toggle" id="toggle-where-wrap" title="Track where-provenance for the next query">
+          <i class="fas fa-lock wp-toggle__lock" aria-hidden="true"></i>
+          <input type="checkbox" id="opt-where-prov">
+          <code>provsql.where_provenance</code>
+        </label>
+        <label class="wp-toggle" id="toggle-update-wrap" title="Carry provenance through INSERT / UPDATE / DELETE statements">
+          <input type="checkbox" id="opt-update-prov">
+          <code>provsql.update_provenance</code>
+        </label>
         <button type="submit" class="wp-btn wp-btn--primary"><i class="fas fa-bolt"></i> Send query</button>
       </div>
     </form>
@@ -72,7 +72,7 @@
     <div class="wp-result" id="result-pane">
       <header class="wp-result__hdr">
         <h3 class="wp-result__title">Query result</h3>
-        <span class="wp-result__meta"><span id="result-count">0</span> rows · evaluated in <span id="result-time">—</span> ms</span>
+        <span class="wp-result__meta"><span id="result-count">0</span> tuples · evaluated in <span id="result-time">–</span> ms</span>
       </header>
       <div class="wp-table-wrap">
         <table class="wp-table wp-table--result" id="t-result">

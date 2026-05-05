@@ -1,4 +1,4 @@
-/* ProvSQL Studio — entry script.
+/* ProvSQL Studio: entry script.
    Wires the shared chrome (mode switcher, example buttons, query form) plus
    both mode-specific sidebars: where-mode shows source-relation tables with
    hover-highlight, circuit-mode shows the provenance DAG (lazy-loaded
@@ -28,12 +28,10 @@
   const preloadCircuitUuid = sessionStorage.getItem('ps.preloadCircuit');
   sessionStorage.removeItem('ps.preloadCircuit');
 
-  // Example-query buttons paste into the textarea.
-  document.querySelectorAll('.wp-btn--ex').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.getElementById('request').value = btn.dataset.q;
-    });
-  });
+  // GUC toggles. In where mode, where_provenance is forced on (the wrap
+  // calls where_provenance(...) and would otherwise return all-empty); the
+  // toggle is locked. In circuit mode, both are user-controlled.
+  setupGucToggles();
 
   // ⌘ / Ctrl+Enter submits the query form.
   document.getElementById('request').addEventListener('keydown', (e) => {
@@ -60,8 +58,11 @@
       sessionStorage.setItem('ps.preloadCircuit', btn.dataset.jumpCircuit);
       window.location.href = '/circuit';
     });
-    // Run the default query so the page isn't empty on first load.
-    runQuery({ preventDefault() {} });
+    // If a query was carried over (mode switch), re-run it; otherwise leave
+    // the result pane empty until the user submits.
+    if (document.getElementById('request').value.trim()) {
+      runQuery({ preventDefault() {} });
+    }
   }
 
   async function refreshRelations() {
@@ -84,28 +85,42 @@
       body.innerHTML = '<p style="opacity:.7">No provenance-tagged relations. Try <code>SELECT add_provenance(\'mytable\')</code>.</p>';
       return;
     }
-    body.innerHTML = relations.map(rel => `
+    body.innerHTML = relations.map(rel => {
+      // Skip the rewriter-added `provsql` UUID column when displaying; its
+      // value is already exposed as the row id (used for the hover-highlight).
+      // where_provenance numbers cells by user-column position (1-indexed,
+      // ignoring provsql), which matches the original i+1 since provsql sits
+      // at the end of the column list.
+      const visible = rel.columns
+        .map((c, i) => ({ c, i }))
+        .filter(({ c }) => c.name !== 'provsql');
+      return `
       <section class="wp-relation">
         <header class="wp-relation__hdr">
           <h3 class="wp-relation__name">${escapeHtml(rel.regclass)}</h3>
-          <span class="wp-relation__meta">${rel.rows.length} tuples · ${rel.columns.length} cols · <code>provsql</code> tagged</span>
+          <span class="wp-relation__meta">${rel.rows.length} tuples · ${visible.length} cols</span>
         </header>
         <div class="wp-table-wrap">
           <table class="wp-table" id="t-${escapeAttr(rel.regclass)}">
-            <thead><tr>${rel.columns.map(c => `<th>${escapeHtml(c.name)}</th>`).join('')}</tr></thead>
+            <thead><tr>${visible.map(({ c }) => {
+              const cls = isRightAlignedType(c.type_name) ? ' class="is-right"' : '';
+              return `<th${cls}>${escapeHtml(c.name)}</th>`;
+            }).join('')}</tr></thead>
             <tbody>
               ${rel.rows.map(r => `
                 <tr>
-                  ${r.values.map((v, i) => {
+                  ${visible.map(({ c, i }) => {
                     const id = `${rel.regclass}:${r.uuid}:${i+1}`;
-                    return `<td id="${escapeAttr(id)}">${formatCell(v, rel.columns[i].name)}</td>`;
+                    const cls = isRightAlignedType(c.type_name) ? ' is-right' : '';
+                    return `<td id="${escapeAttr(id)}" class="${cls.trim()}">${formatCell(r.values[i], c.name)}</td>`;
                   }).join('')}
                 </tr>
               `).join('')}
             </tbody>
           </table>
         </div>
-      </section>`).join('');
+      </section>`;
+    }).join('');
   }
 
   function onResultHover(e, on) {
@@ -120,30 +135,69 @@
 
   /* ──────── Circuit mode ──────── */
 
+  function setupGucToggles() {
+    const wp = document.getElementById('opt-where-prov');
+    const up = document.getElementById('opt-update-prov');
+    if (!wp || !up) return;
+
+    // Toggle states persist across mode switches via sessionStorage.
+    // where_provenance: the stored value is the user's circuit-mode choice.
+    // Where mode forces the displayed state to "on" but never overwrites the
+    // stored value, so circuit→where→circuit round-trips preserve the user's
+    // pick. update_provenance: freely toggleable everywhere; persists as-is.
+    const savedWhere  = sessionStorage.getItem('ps.opt.whereProv') === '1';
+    const savedUpdate = sessionStorage.getItem('ps.opt.updateProv') === '1';
+
+    if (mode === 'where') {
+      wp.checked = true;
+      wp.disabled = true;
+      const wrap = document.getElementById('toggle-where-wrap');
+      wrap.classList.add('is-locked');
+      wrap.title = 'where_provenance is forced on in Where mode (the wrap requires it)';
+    } else {
+      wp.checked = savedWhere;
+    }
+    up.checked = savedUpdate;
+
+    wp.addEventListener('change', () => {
+      // Don't persist while locked: the displayed `on` is mode-forced, not a
+      // user choice we want to remember on top of their circuit-mode pick.
+      if (mode !== 'where') {
+        sessionStorage.setItem('ps.opt.whereProv', wp.checked ? '1' : '0');
+      }
+    });
+    up.addEventListener('change', () => {
+      sessionStorage.setItem('ps.opt.updateProv', up.checked ? '1' : '0');
+    });
+  }
+
   function setupCircuitMode() {
     document.getElementById('sidebar-title').textContent = 'Provenance Circuit';
     document.getElementById('sidebar-lead').textContent =
       'Click a UUID cell in the result to render its derivation DAG here.';
     document.getElementById('sidebar-body').innerHTML = circuitSidebarHtml();
-    document.getElementById('form-hint').innerHTML =
-      '<i class="fas fa-info-circle"></i> Circuit mode: <code>provsql.where_provenance</code> off by default';
     document.getElementById('result-legend').innerHTML =
       '<span class="wp-legend-swatch" style="background:var(--purple-500)"></span> Click a UUID / agg_token cell in the result to inspect its circuit.';
 
     // Click handler on result-body for UUID/agg_token cells. We rely on the
-    // cell having data-circuit-uuid when it's clickable — set during render.
+    // cell having data-circuit-uuid when it's clickable; set during render.
     document.getElementById('result-body').addEventListener('click', (e) => {
       const cell = e.target.closest('.wp-result__cell.is-clickable');
       if (!cell || !cell.dataset.circuitUuid) return;
       loadCircuit(cell.dataset.circuitUuid);
     });
 
-    // Run the user's existing query so the cell-click is meaningful.
-    runQuery({ preventDefault() {} }).then(() => {
-      // After-render hook: if a preload UUID was carried over from where mode,
-      // load it directly.
-      if (preloadCircuitUuid) loadCircuit(preloadCircuitUuid);
-    });
+    // If a query was carried over (mode switch / preload), run it so the
+    // user has clickable cells immediately; otherwise wait for them to type.
+    const carry = preloadCircuitUuid;
+    if (document.getElementById('request').value.trim()) {
+      runQuery({ preventDefault() {} }).then(() => {
+        if (carry) loadCircuit(carry);
+      });
+    } else if (carry) {
+      // No query but a preload UUID: render the circuit directly.
+      loadCircuit(carry);
+    }
   }
 
   async function loadCircuit(uuid) {
@@ -218,7 +272,7 @@
       </div>
       <footer class="cv-formula" id="formula-strip">
         <span class="cv-formula__label">Formula</span>
-        <code class="cv-formula__expr" id="formula-expr">—</code>
+        <code class="cv-formula__expr" id="formula-expr">–</code>
       </footer>
     `;
   }
@@ -242,11 +296,27 @@
     return escapeHtml(v == null ? '' : v);
   }
 
+  // PostgreSQL pg_type names that conventionally render right-aligned:
+  // numerics (int / numeric / float / money) plus date/time/interval. Also
+  // agg_token, whose visible glyph is a number ("3 (*)") even though its
+  // underlying storage is a UUID.
+  const RIGHT_ALIGNED_TYPES = new Set([
+    'int2', 'int4', 'int8', 'smallint', 'integer', 'bigint',
+    'numeric', 'decimal',
+    'float4', 'float8', 'real',
+    'money',
+    'agg_token',
+    'date', 'time', 'timetz', 'timestamp', 'timestamptz', 'interval',
+  ]);
+  function isRightAlignedType(typeName) {
+    return RIGHT_ALIGNED_TYPES.has((typeName || '').toLowerCase());
+  }
+
   // Expose to runQuery (defined as a global below for the inline onsubmit).
-  window.__provsqlStudio = { mode, refreshRelations, escapeHtml, escapeAttr, formatCell };
+  window.__provsqlStudio = { mode, refreshRelations, escapeHtml, escapeAttr, formatCell, isRightAlignedType };
 })();
 
-/* Global runQuery — invoked by the form's inline onsubmit. POSTs to /api/exec
+/* Global runQuery: invoked by the form's inline onsubmit. POSTs to /api/exec
    and renders the response into the result section. */
 async function runQuery(ev) {
   ev.preventDefault();
@@ -264,12 +334,19 @@ async function runQuery(ev) {
   time.textContent = '…';
   const t0 = performance.now();
 
+  const wpEl = document.getElementById('opt-where-prov');
+  const upEl = document.getElementById('opt-update-prov');
   let resp;
   try {
     resp = await fetch('/api/exec', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sql: sqlText, mode: env.mode }),
+      body: JSON.stringify({
+        sql: sqlText,
+        mode: env.mode,
+        where_provenance: wpEl ? wpEl.checked : (env.mode === 'where'),
+        update_provenance: upEl ? upEl.checked : false,
+      }),
     });
   } catch (e) {
     renderError(`Network error: ${e.message}`);
@@ -321,25 +398,27 @@ async function runQuery(ev) {
     }
     if (final.kind === 'status') {
       head.innerHTML = '';
-      body.innerHTML = prelude + `<tr><td>${env.escapeHtml(final.message)}${final.rowcount != null ? ` · ${final.rowcount} rows affected` : ''}</td></tr>`;
+      body.innerHTML = prelude + `<tr><td>${env.escapeHtml(final.message)}${final.rowcount != null ? ` · ${final.rowcount} tuples affected` : ''}</td></tr>`;
       count.textContent = final.rowcount != null ? final.rowcount : 0;
       return;
     }
     if (final.kind === 'rows') {
       const allCols = final.columns;
-      // Hide rewriter-injected columns (__prov, __wprov) from display but
-      // keep them so we can build per-cell data-sources and per-row jump
-      // buttons.
+      const isWhere   = env.mode === 'where';
+      const isCircuit = env.mode === 'circuit';
+      // Hide rewriter-injected columns (__prov, __wprov) from display, but
+      // keep them indexed so we can still build per-cell data-sources and
+      // per-row jump buttons. The bare `provsql` UUID column is hidden in
+      // where mode (it duplicates the highlighting metadata) but kept in
+      // circuit mode so users can click it to render the row's DAG.
       const displayIdx = [];
       let provIdx = -1, wprovIdx = -1;
       allCols.forEach((c, i) => {
         if (c.name === '__prov')  provIdx = i;
         else if (c.name === '__wprov') wprovIdx = i;
+        else if (c.name === 'provsql' && isWhere) { /* hidden in where mode */ }
         else displayIdx.push(i);
       });
-
-      const isWhere   = env.mode === 'where';
-      const isCircuit = env.mode === 'circuit';
       // In circuit mode, surface a hint when there's no UUID/agg_token
       // column to click. We check this once on the columns.
       const hasClickableCols = displayIdx.some(i =>
@@ -347,7 +426,10 @@ async function runQuery(ev) {
       );
 
       const headExtra = (isWhere && wrapped) ? '<th></th>' : '';
-      head.innerHTML = displayIdx.map(i => `<th>${env.escapeHtml(allCols[i].name)}</th>`).join('') + headExtra;
+      head.innerHTML = displayIdx.map(i => {
+        const alignCls = env.isRightAlignedType(allCols[i].type_name) ? ' is-right' : '';
+        return `<th class="${alignCls.trim()}">${env.escapeHtml(allCols[i].name)}</th>`;
+      }).join('') + headExtra;
       body.innerHTML = prelude + final.rows.map(r => {
         const sources = wrapped && wprovIdx >= 0
           ? parseWhereProvenance(r[wprovIdx], displayIdx)
@@ -364,6 +446,7 @@ async function runQuery(ev) {
             extraCls  = ' is-clickable';
             extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
           }
+          if (env.isRightAlignedType(typeName)) extraCls += ' is-right';
           // agg_token cells: their text is "<value> (*)", which doesn't carry
           // the UUID. v1 leaves them non-clickable; cast in SQL to inspect.
           return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(value, col.name)}</td>`;
@@ -380,7 +463,7 @@ async function runQuery(ev) {
         const legend = document.getElementById('result-legend');
         if (legend) {
           legend.innerHTML =
-            '<i class="fas fa-info-circle"></i> No UUID columns in this result — '
+            '<i class="fas fa-info-circle"></i> No UUID columns in this result: '
             + '<a href="/where" class="ps-modeswitch__btn" style="color:var(--purple-500); text-decoration:underline; padding:0 0.2rem">switch to Where mode</a> '
             + 'to see source-cell highlights, or add <code>provsql.provenance()</code> to your SELECT.';
         }
@@ -399,9 +482,10 @@ async function runQuery(ev) {
        {[table:uuid:col;table:uuid:col],[table:uuid:col],[]}
      Outer braces, comma-separated groups (one per output column of the
      wrapped query), each group is square-bracketed, semicolon-separated
-     `table:uuid:col` entries. We return one ready-to-set `data-sources`
-     string per displayed column. The wrapped query has the same column
-     order as the inner SELECT, so groups[i] corresponds to displayIdx[i]. */
+     `table:uuid:col` entries. The groups are in inner-SELECT column order,
+     which matches `allCols` exactly, so groups[displayIdx[i]] is the
+     source list for the i-th displayed column. We return one
+     ready-to-set `data-sources` string per displayed column. */
   function parseWhereProvenance(wprovText, displayIdx) {
     if (!wprovText) return null;
     const m = String(wprovText).match(/^\{(.*)\}$/s);
@@ -416,10 +500,9 @@ async function runQuery(ev) {
       if (!gm) return '';
       return gm[1];  // already `table:uuid:col;table:uuid:col`
     });
-    // Drop the trailing __prov / __wprov entries (the wrapping adds two
-    // columns to the inner SELECT, but the output groups correspond to the
-    // inner column order — they're empty for those wrapper-only columns).
-    return perGroup.slice(0, displayIdx.length);
+    // Map each displayed column to its group in the inner-SELECT order.
+    // Hidden columns (provsql, __prov, __wprov) are skipped over.
+    return displayIdx.map(i => perGroup[i] || '');
   }
 
   function splitTopLevel(s, sep) {

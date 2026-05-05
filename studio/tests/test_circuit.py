@@ -89,7 +89,7 @@ def test_circuit_invalid_uuid_returns_400(client):
 
 
 def test_circuit_depth_1_marks_frontier(client, test_dsn):
-    """At depth=1, a + gate's input children have unexplored data — they
+    """At depth=1, a + gate's input children have unexplored data; they
     should be marked as frontier when they themselves have children. For the
     DISTINCT-city case the inputs are leaf inputs (no children) so they are
     NOT frontier; the test instead checks that the depth-1 envelope is enforced
@@ -171,7 +171,7 @@ def test_circuit_accepts_agg_token_underlying_uuid(client, test_dsn):
 
     A `GROUP BY` over a provenance-tagged relation produces `count(*)` as an
     `agg_token`. The text cast strips the aggregate value and returns the
-    circuit root UUID — which the front-end uses for /api/circuit calls."""
+    circuit root UUID, which the front-end uses for /api/circuit calls."""
     with psycopg.connect(
         f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
         autocommit=True,

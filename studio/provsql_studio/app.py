@@ -52,7 +52,7 @@ def create_app(
 
     @app.get("/")
     def root():
-        return redirect("/where", code=302)
+        return redirect("/circuit", code=302)
 
     @app.get("/where")
     def where_shell():
@@ -102,11 +102,21 @@ def create_app(
         last = statements[-1]
         wrap_last = mode == "where" and bool(_WRAPPABLE_RE.match(last))
 
+        # Toggles. In where mode `where_provenance` is forced on because the
+        # wrap calls `provsql.where_provenance(provsql.provenance())` and
+        # would otherwise return zero matches. In circuit mode both are
+        # user-controlled; defaults match the previous fixed behaviour.
+        where_prov = bool(payload.get("where_provenance", mode == "where"))
+        if mode == "where":
+            where_prov = True
+        update_prov = bool(payload.get("update_provenance", False))
+
         intermediate, final = db.exec_batch(
             pool,
             statements,
             statement_timeout=app.config["STATEMENT_TIMEOUT"],
-            where_provenance=(mode == "where"),
+            where_provenance=where_prov,
+            update_provenance=update_prov,
             wrap_last=wrap_last,
         )
 
@@ -190,7 +200,7 @@ def _coerce_to_uuid(token: str) -> str:
     """Accept a UUID string (any case, with or without hyphens) and return its
     canonical 36-char form. Raises ValueError otherwise. Front-end agg_token
     cells should send the underlying UUID, not the formatted '<value> (*)'
-    text — agg_token's text representation does not carry the UUID."""
+    text; agg_token's text representation does not carry the UUID."""
     if not token:
         raise ValueError("empty token")
     return str(uuid_mod.UUID(token))

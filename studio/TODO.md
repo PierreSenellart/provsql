@@ -36,7 +36,7 @@ provsql_studio/static/
 * [x] Merge `panel.css` + `circuit.css` into `static/app.css`. Both are scoped enough (`wp-*` and `cv-*`/gate-class prefixes) that they coexist without conflict; the only overlap is the global base block (`* { box-sizing }`, `html, body { … }`), unified at the top of `app.css` with a `body.mode-circuit` override for the 100vh+overflow:hidden circuit canvas.
 * [x] Merge `panel.js` (where-mode sidebar + hover-highlight + mock query runner) into `static/app.js`; copy `circuit.js` (DAG render) verbatim. Lazy-loading from `app.js` is left to Stage 2/3 since circuit.js still ships the bundle's mock data and queries DOM that isn't yet built into the shared shell.
 * [x] Copy `studio/design/colors_and_type.css` into `static/`.
-* [x] Replace the bundle's local `@font-face` block (Latin only) by loading the upstream `branding/fonts-face.css` (Greek + Latin-extended) — symlinked as `static/fonts-face.css` and loaded directly from `index.html`. Also added `--font-body` / `--font-display` / `--font-ui` aliases since panel.css and circuit.css reference those names but `colors_and_type.css` only defined `--font-serif` / `--font-sans` / `--font-mono`.
+* [x] Replace the bundle's local `@font-face` block (Latin only) by loading the upstream `branding/fonts-face.css` (Greek + Latin-extended), symlinked as `static/fonts-face.css` and loaded directly from `index.html`. Also added `--font-body` / `--font-display` / `--font-ui` aliases since panel.css and circuit.css reference those names but `colors_and_type.css` only defined `--font-serif` / `--font-sans` / `--font-mono`.
 * [x] Symlink `static/fonts/` → `branding/fonts/`, `static/img/logo.png` → `branding/logo.png`, `static/img/favicon.ico` → `branding/favicon.ico`. Symlinks are tracked in git as mode 120000.
 * [x] Update relative paths in the merged HTML / CSS so fonts, logo, and stylesheets resolve from `static/`.
 
@@ -115,7 +115,7 @@ studio/
 
 ### Server
 
-* [x] `pyproject.toml`: deps (`flask`, `psycopg[binary]>=3.1`, `psycopg_pool`, `sqlparse`); optional-deps `test = ["pytest", "pytest-flask"]` and `dev = ["ruff", "mypy"]`; MIT license; console script. Skipped `pydot` and `dot` shellout — those land in Stage 3 with `circuit.py`.
+* [x] `pyproject.toml`: deps (`flask`, `psycopg[binary]>=3.1`, `psycopg_pool`, `sqlparse`); optional-deps `test = ["pytest", "pytest-flask"]` and `dev = ["ruff", "mypy"]`; MIT license; console script. Skipped `pydot` and `dot` shellout; those land in Stage 3 with `circuit.py`.
 * [x] `cli.py`: argparse, defaults `--host 127.0.0.1 --port 8000`. DSN from `--dsn` or psycopg's PG* env vars.
 * [x] `db.py`: `psycopg_pool.ConnectionPool`; `exec_batch(...)` runs a list of pre-split statements in one transaction with `SET LOCAL statement_timeout` + per-mode `provsql.where_provenance`. Returns a `StatementResult` for the last statement (rows / status / error). `list_relations` yields per-relation content as `SELECT *` would render it (the trailing `provsql` column is included; the rewriter strips and re-adds it, so we list the user columns first and pull provsql out by name).
 * [x] `app.py`: Flask app factory with the routes below.
@@ -165,7 +165,7 @@ The shared shell from Stage 0 (one `index.html`, `app.css`, `app.js`, `circuit.j
 
 ### Tests
 
-* [x] `tests/conftest.py` spins up a one-off DB keyed on a random suffix and runs `test/sql/{setup,add_provenance}.sql` against it (security.sql skipped — the existing test suite covers the planner-level security checks; Studio just relays the user's role). `PROVSQL_STUDIO_TEST_DSN` overrides for CI.
+* [x] `tests/conftest.py` spins up a one-off DB keyed on a random suffix and runs `test/sql/{setup,add_provenance}.sql` against it (security.sql skipped: the existing test suite covers the planner-level security checks; Studio just relays the user's role). `PROVSQL_STUDIO_TEST_DSN` overrides for CI.
 * [x] `tests/test_exec.py` (9 tests): SELECT → rows, CREATE → status, syntax error → error block, multi-statement returns only the last, syntax error in a non-final statement halts the batch, where-mode wrapping skips non-SELECT last statements (DML), `WITH ... SELECT` is wrappable, dollar-quoted function bodies in earlier statements don't break the splitter, circuit mode does not wrap.
 * [x] `tests/test_relations.py` (3 tests): `personnel` listed with the right columns + types in `SELECT *` order, every row carries a 36-char provenance UUID matching the provsql cell, fresh `add_provenance('foo')` shows up on the next `/api/relations` call.
 
@@ -176,10 +176,10 @@ The shared shell from Stage 0 (one `index.html`, `app.css`, `app.js`, `circuit.j
 ### Server side
 
 * [x] `circuit.py`: given a root UUID and depth, call `provsql.circuit_subgraph`, build a Graphviz DOT string, run `dot -Tjson` (subprocess), parse the JSON to extract per-node coordinates, return `{nodes: [{id, type, label, info1, info2, depth, x, y, frontier: bool}], edges: [{from, to, child_pos}]}`.
-  * Frontier detection: we ask `circuit_subgraph` for `depth + 1`, keep nodes through depth, and use the existence of any depth+1 child to mark depth-`depth` parents as frontier. A separate post-BFS `get_children` probe doesn't work — the provsql backend cache populated by `get_gate_type` (called at the tail of `circuit_subgraph`) masks subsequent direct `get_children` calls in the same backend.
+  * Frontier detection: we ask `circuit_subgraph` for `depth + 1`, keep nodes through depth, and use the existence of any depth+1 child to mark depth-`depth` parents as frontier. A separate post-BFS `get_children` probe doesn't work: the provsql backend cache populated by `get_gate_type` (called at the tail of `circuit_subgraph`) masks subsequent direct `get_children` calls in the same backend.
   * Cap at `--max-circuit-nodes` (default 500); if exceeded, return a 413 with `{error: "circuit too large", hint: "reduce depth or expand interactively"}`.
 * [x] Cache layouts in-process keyed on `(root_uuid, depth)` since Graphviz is not free. Bounded LRU at 32 entries.
-* [x] `GET /api/circuit/<uuid>?depth=<N>` – initial render. The path token is parsed as a UUID; the front-end is responsible for extracting the underlying UUID from `agg_token` cells via `(c::uuid)::text` (the displayed `c::text` returns the aggregate value, not the UUID — see `src/agg_token.c:agg_token_to_text`).
+* [x] `GET /api/circuit/<uuid>?depth=<N>` – initial render. The path token is parsed as a UUID; the front-end is responsible for extracting the underlying UUID from `agg_token` cells via `(c::uuid)::text` (the displayed `c::text` returns the aggregate value, not the UUID; see `src/agg_token.c:agg_token_to_text`).
 * [x] `POST /api/circuit/<uuid>/expand` – body `{frontier_node_uuid, additional_depth}` – computes a fresh subgraph rooted at the frontier; the front-end translates it to the anchor's `(x, y)` and merges. Stateless on the server.
 * [x] `GET /api/leaf/<uuid>` – calls `provsql.resolve_input(uuid)`. Returns `{matches: [{relation, row}, ...]}` or 404.
 
@@ -196,7 +196,7 @@ The shared shell from Stage 0 (one `index.html`, `app.css`, `app.js`, `circuit.j
 
 * [x] Mode switcher in the top nav: stashes the SQL textarea into `sessionStorage.ps.sql`; the destination page restores it before running. The active marker swaps server-side via the body class set by Flask.
 * [x] In where-mode result, each row gets a small "→ Circuit" button that switches to circuit mode and pre-loads the circuit for that row's provenance UUID via `sessionStorage.ps.preloadCircuit`.
-* [x] In circuit-mode result, when no UUID / `agg_token` cells are present, the legend surfaces a hint: "No UUID columns in this result — switch to Where mode … or add `provsql.provenance()` to your SELECT."
+* [x] In circuit-mode result, when no UUID / `agg_token` cells are present, the legend surfaces a hint: "No UUID columns in this result: switch to Where mode … or add `provsql.provenance()` to your SELECT."
 * [x] `agg_token` cells: not directly clickable in v1. The displayed text from `agg_token_to_text` is the aggregate value, not the UUID; users wanting to inspect the circuit cast explicitly with `(col::uuid)::text`. (See Future-work for direct-click support via a column-introspection wrap.)
 
 ### Tests

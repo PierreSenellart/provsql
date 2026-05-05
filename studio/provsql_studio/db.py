@@ -88,7 +88,7 @@ def list_relations(pool: ConnectionPool) -> list[dict]:
             try:
                 prov_idx = next(i for i, c in enumerate(cols) if c["name"] == "provsql")
             except StopIteration:
-                # Shouldn't happen — the relation made it into _RELATIONS_QUERY.
+                # Shouldn't happen: the relation made it into _RELATIONS_QUERY.
                 continue
 
             out.append({
@@ -120,6 +120,7 @@ def exec_batch(
     *,
     statement_timeout: str,
     where_provenance: bool,
+    update_provenance: bool = False,
     wrap_last: bool,
 ) -> tuple[list[StatementResult], StatementResult | None]:
     """Run `statements` in a single transaction with SET LOCAL settings.
@@ -128,7 +129,7 @@ def exec_batch(
       * intermediate_errors is empty if every non-final statement succeeded;
         otherwise it contains the first failing block (no statements after it
         run). The final_result is None in that case.
-      * final_result is the displayed block — rows, status, or error — for the
+      * final_result is the displayed block (rows, status, or error) for the
         last statement, with where-provenance wrapping applied if wrap_last.
 
     The wrap is:
@@ -152,10 +153,14 @@ def exec_batch(
                         sql.Literal(statement_timeout)
                     )
                 )
-                if where_provenance:
-                    cur.execute("SET LOCAL provsql.where_provenance = on")
-                else:
-                    cur.execute("SET LOCAL provsql.where_provenance = off")
+                cur.execute(
+                    "SET LOCAL provsql.where_provenance = "
+                    + ("on" if where_provenance else "off")
+                )
+                cur.execute(
+                    "SET LOCAL provsql.update_provenance = "
+                    + ("on" if update_provenance else "off")
+                )
 
                 # Run prelude statements; halt on first error.
                 for stmt in prelude:
