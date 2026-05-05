@@ -46,6 +46,7 @@ test: sr_boolexpr probability_having probability_having_avg_min_max having_boole
 
 # Probability computation using external software
 test: d4 dsharp weightmc c2d minic2d
+test: d4_timeout
 
 # Probability computation using tree decompositions, independent
 # probability computation, and default computation
