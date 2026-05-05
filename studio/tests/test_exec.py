@@ -128,3 +128,29 @@ def test_dollar_quoted_body_does_not_confuse_splitter(client):
     final = payload["blocks"][0]
     assert final["kind"] == "rows"
     assert final["rows"][0][0] == 42
+
+
+# ──────── where-mode wrap fallback for non-tracked relations ────────
+
+
+def test_where_mode_falls_back_when_no_provenance_relation(client):
+    # SELECT against a table that has no provsql column. The wrap would
+    # otherwise raise "provenance() called on a table without provenance";
+    # /api/exec must roll the savepoint back, retry unwrapped, and surface
+    # an info notice instead of an error block.
+    sql = (
+        "CREATE TEMPORARY TABLE t_untagged (id int, label text);"
+        " INSERT INTO t_untagged VALUES (1, 'x'), (2, 'y');"
+        " SELECT * FROM t_untagged ORDER BY id"
+    )
+    payload = post_exec(client, sql, mode="where")
+    assert payload["wrapped"] is False
+    assert payload["notice"] is not None
+    assert "not provenance-tracked" in payload["notice"].lower()
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows"
+    assert [r[0] for r in final["rows"]] == [1, 2]
+    # No __prov / __wprov columns since the wrap was dropped.
+    names = {c["name"] for c in final["columns"]}
+    assert "__prov" not in names
+    assert "__wprov" not in names

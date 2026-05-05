@@ -111,7 +111,7 @@ def create_app(
             where_prov = True
         update_prov = bool(payload.get("update_provenance", False))
 
-        intermediate, final = db.exec_batch(
+        intermediate, final, meta = db.exec_batch(
             pool,
             statements,
             statement_timeout=app.config["STATEMENT_TIMEOUT"],
@@ -123,7 +123,11 @@ def create_app(
         blocks = [r.to_dict() for r in intermediate]
         if final is not None:
             blocks.append(final.to_dict())
-        return jsonify({"blocks": blocks, "wrapped": wrap_last})
+        return jsonify({
+            "blocks": blocks,
+            "wrapped": meta["wrapped"],
+            "notice": meta["notice"],
+        })
 
     @app.get("/api/circuit/<token>")
     def api_circuit(token: str):

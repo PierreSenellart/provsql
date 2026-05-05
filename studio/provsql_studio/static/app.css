@@ -156,6 +156,22 @@ em { font-style: italic; }
 }
 .wp-error code { background: var(--bg-code); }
 
+/* Informational banner: shown when the wrap is silently dropped because
+   the user's query touches no provenance-tracked relation. */
+.wp-notice {
+  border: 1px solid var(--gold-500);
+  border-left: 3px solid var(--gold-500);
+  background: rgba(232, 184, 75, 0.12);
+  color: var(--purple-900);
+  padding: 0.6rem 0.85rem;
+  border-radius: 4px;
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  margin: 0.4rem 0;
+}
+.wp-notice i { color: var(--gold-700, #B8901E); margin-right: 0.4rem; }
+#result-banners:not(:empty) { margin: 0.4rem 0 0.6rem; }
+
 /* ───────── shared site footer (mirrors website + docs) ───────── */
 #provsql-site-footer {
   text-align: center;

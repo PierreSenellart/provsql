@@ -476,7 +476,7 @@ async function runQuery(ev) {
     return false;
   }
   const payload = await resp.json();
-  renderBlocks(payload.blocks || [], !!payload.wrapped);
+  renderBlocks(payload.blocks || [], !!payload.wrapped, payload.notice || null);
 
   // After every successful exec in where mode, re-fetch relations so
   // add_provenance results show up live.
@@ -484,37 +484,46 @@ async function runQuery(ev) {
 
   return false;
 
-  function renderBlocks(blocks, wrapped) {
+  function renderBlocks(blocks, wrapped, notice) {
     // For Stage 2, /api/exec returns at most: zero or more error blocks (from
     // earlier failed statements) followed by the final block. We render only
-    // the final block in the result table, but surface earlier errors too.
+    // the final block in the result table, but surface earlier errors plus
+    // any informational notices into the dedicated #result-banners slot
+    // (which sits between the result header and the table — putting <div>s
+    // directly inside <tbody> is invalid HTML and the browser hoists them
+    // into the first <td>, making the message look wedged into a cell).
     const final = blocks[blocks.length - 1];
     const earlier = blocks.slice(0, -1);
 
-    let prelude = '';
+    const banners = document.getElementById('result-banners');
+    let bannerHtml = '';
     if (earlier.length) {
-      prelude = earlier.map(b => b.kind === 'error'
+      bannerHtml += earlier.map(b => b.kind === 'error'
         ? `<div class="wp-error">Earlier statement failed: ${env.escapeHtml(b.message)}</div>`
         : ''
       ).join('');
     }
+    if (notice) {
+      bannerHtml += `<div class="wp-notice"><i class="fas fa-info-circle"></i> ${env.escapeHtml(notice)}</div>`;
+    }
+    if (banners) banners.innerHTML = bannerHtml;
 
     if (!final) {
       head.innerHTML = '';
-      body.innerHTML = prelude || '<tr><td style="opacity:.6">(no statements)</td></tr>';
+      body.innerHTML = '<tr><td style="opacity:.6">(no statements)</td></tr>';
       count.textContent = 0;
       return;
     }
 
     if (final.kind === 'error') {
       head.innerHTML = '';
-      body.innerHTML = prelude + `<tr><td><div class="wp-error">Error: ${env.escapeHtml(final.message)}${final.sqlstate ? ` <code>(SQLSTATE ${env.escapeHtml(final.sqlstate)})</code>` : ''}</div></td></tr>`;
+      body.innerHTML = `<tr><td><div class="wp-error">Error: ${env.escapeHtml(final.message)}${final.sqlstate ? ` <code>(SQLSTATE ${env.escapeHtml(final.sqlstate)})</code>` : ''}</div></td></tr>`;
       count.textContent = 0;
       return;
     }
     if (final.kind === 'status') {
       head.innerHTML = '';
-      body.innerHTML = prelude + `<tr><td>${env.escapeHtml(final.message)}${final.rowcount != null ? ` · ${final.rowcount} tuples affected` : ''}</td></tr>`;
+      body.innerHTML = `<tr><td>${env.escapeHtml(final.message)}${final.rowcount != null ? ` · ${final.rowcount} tuples affected` : ''}</td></tr>`;
       count.textContent = final.rowcount != null ? final.rowcount : 0;
       return;
     }
@@ -546,7 +555,7 @@ async function runQuery(ev) {
         const alignCls = env.isRightAlignedType(allCols[i].type_name) ? ' is-right' : '';
         return `<th class="${alignCls.trim()}">${env.escapeHtml(allCols[i].name)}</th>`;
       }).join('') + headExtra;
-      body.innerHTML = prelude + final.rows.map(r => {
+      body.innerHTML = final.rows.map(r => {
         const sources = wrapped && wprovIdx >= 0
           ? parseWhereProvenance(r[wprovIdx], displayIdx)
           : null;

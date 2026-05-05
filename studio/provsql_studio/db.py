@@ -114,6 +114,9 @@ def _to_jsonable(v):
     return str(v)
 
 
+_NO_PROV_MARKER = "called on a table without provenance"
+
+
 def exec_batch(
     pool: ConnectionPool,
     statements: list[str],
@@ -122,15 +125,20 @@ def exec_batch(
     where_provenance: bool,
     update_provenance: bool = False,
     wrap_last: bool,
-) -> tuple[list[StatementResult], StatementResult | None]:
+) -> tuple[list[StatementResult], StatementResult | None, dict]:
     """Run `statements` in a single transaction with SET LOCAL settings.
 
-    Returns (intermediate_errors, final_result):
+    Returns (intermediate_errors, final_result, meta):
       * intermediate_errors is empty if every non-final statement succeeded;
         otherwise it contains the first failing block (no statements after it
         run). The final_result is None in that case.
       * final_result is the displayed block (rows, status, or error) for the
         last statement, with where-provenance wrapping applied if wrap_last.
+      * meta is `{"wrapped": bool, "notice": str | None}`. `wrapped` reports
+        whether the wrap was actually applied (the wrap is silently dropped
+        with a notice when the user's query references no provenance-tracked
+        relation, so e.g. `SELECT * FROM species` for an untagged table
+        renders as plain rows instead of erroring out).
 
     The wrap is:
         SELECT *,
@@ -139,10 +147,11 @@ def exec_batch(
         FROM (<last>) t
     """
     if not statements:
-        return [], None
+        return [], None, {"wrapped": False, "notice": None}
 
     *prelude, last = statements
     intermediate: list[StatementResult] = []
+    meta: dict = {"wrapped": wrap_last, "notice": None}
 
     with pool.connection() as conn:
         # Use one transaction so SET LOCAL persists across all statements.
@@ -168,27 +177,51 @@ def exec_batch(
                         cur.execute(stmt)
                     except psycopg.Error as e:
                         intermediate.append(_error_result(e))
-                        return intermediate, None
+                        return intermediate, None, meta
 
-                # Run the displayed statement, wrapped if requested.
-                final_sql = (
+                wrapped_sql = (
                     f"SELECT *, "
                     f"provsql.provenance() AS __prov, "
                     f"provsql.where_provenance(provsql.provenance()) AS __wprov "
                     f"FROM ({last}) t"
-                    if wrap_last
-                    else last
                 )
-                try:
-                    cur.execute(final_sql)
-                except psycopg.Error as e:
-                    return [], _error_result(e)
+
+                if wrap_last:
+                    # Try the wrapped form first under a savepoint so we can
+                    # roll back and retry unwrapped if the user's query
+                    # touches no provenance-tracked relation. The provsql
+                    # backend raises a specific error in that case
+                    # ("provenance() called on a table without provenance");
+                    # any other error propagates.
+                    cur.execute("SAVEPOINT before_wrap")
+                    try:
+                        cur.execute(wrapped_sql)
+                    except psycopg.Error as e:
+                        if _NO_PROV_MARKER in str(e):
+                            cur.execute("ROLLBACK TO SAVEPOINT before_wrap")
+                            meta["wrapped"] = False
+                            meta["notice"] = (
+                                "Source relation is not provenance-tracked; "
+                                "where-provenance highlights are unavailable. "
+                                "Run “SELECT add_provenance('…')” to enable."
+                            )
+                            try:
+                                cur.execute(last)
+                            except psycopg.Error as e2:
+                                return [], _error_result(e2), meta
+                        else:
+                            return [], _error_result(e), meta
+                else:
+                    try:
+                        cur.execute(last)
+                    except psycopg.Error as e:
+                        return [], _error_result(e), meta
 
                 final = _result_from_cursor(cur)
         except psycopg.Error as e:
-            return [], _error_result(e)
+            return [], _error_result(e), meta
 
-    return intermediate, final
+    return intermediate, final, meta
 
 
 def _result_from_cursor(cur: psycopg.Cursor) -> StatementResult:
