@@ -115,20 +115,20 @@ studio/
 
 ### Server
 
-* [ ] `pyproject.toml`: declare deps (`flask`, `psycopg[binary]>=3.1`, `sqlparse`, `pydot` or just shell out to `dot`); optional-dependencies `test = ["pytest", "pytest-flask"]` and `dev = ["ruff", "mypy"]`; license matching the upstream extension; project URLs (homepage, source, docs). Console script: `provsql-studio = provsql_studio.cli:main`.
-* [ ] `cli.py`: argparse, default `--host 127.0.0.1 --port 8000`, builds DSN from `--dsn` or `PGHOST` / `PGUSER` / etc. env vars (psycopg's default behaviour).
-* [ ] `db.py`: `psycopg_pool.ConnectionPool` (or simple `psycopg.connect` per request for v1). Helper that runs a SQL string with `SET LOCAL statement_timeout` and yields per-statement results via `cur.nextset()`.
-* [ ] `app.py`: Flask app with the routes below.
+* [x] `pyproject.toml`: deps (`flask`, `psycopg[binary]>=3.1`, `psycopg_pool`, `sqlparse`); optional-deps `test = ["pytest", "pytest-flask"]` and `dev = ["ruff", "mypy"]`; MIT license; console script. Skipped `pydot` and `dot` shellout — those land in Stage 3 with `circuit.py`.
+* [x] `cli.py`: argparse, defaults `--host 127.0.0.1 --port 8000`. DSN from `--dsn` or psycopg's PG* env vars.
+* [x] `db.py`: `psycopg_pool.ConnectionPool`; `exec_batch(...)` runs a list of pre-split statements in one transaction with `SET LOCAL statement_timeout` + per-mode `provsql.where_provenance`. Returns a `StatementResult` for the last statement (rows / status / error). `list_relations` yields per-relation content as `SELECT *` would render it (the trailing `provsql` column is included; the rewriter strips and re-adds it, so we list the user columns first and pull provsql out by name).
+* [x] `app.py`: Flask app factory with the routes below.
 
 ### Routes
 
 The two routes share the same shell HTML and JS bundle; they differ in which sidebar component is rendered, in the default value of `provsql.where_provenance` for the request, and in whether `/api/exec` wraps the user query.
 
-* [ ] `GET /` – redirect to `/where` (the more guided of the two modes).
-* [ ] `GET /where` – serves the shared shell with `mode=where`. Sidebar = source-relations.
-* [ ] `GET /circuit` – serves the shared shell with `mode=circuit`. Sidebar = circuit DAG (empty until the user clicks a UUID / `agg_token` cell in the result).
-* [ ] `GET /api/relations` – list provenance-tagged relations with column names + rows. Port the `pg_attribute` query from `where_panel/index.php:100-145`. Used by Where mode only.
-* [ ] `POST /api/exec` – body `{sql: string, mode: "where"|"circuit"}`. The user's SQL may contain multiple statements (DDL / DML / SELECT) separated by `;`. **Only the last statement's result is displayed.** Server uses `sqlparse` to split (handles dollar-quoting, comments, string literals); all but the last statement run verbatim with results discarded (errors halt the batch). The last statement is potentially wrapped:
+* [x] `GET /` – redirect to `/where`.
+* [x] `GET /where` – serves the shared shell with `mode=where`.
+* [x] `GET /circuit` – serves the shared shell with `mode=circuit`.
+* [x] `GET /api/relations` – lists provenance-tagged relations with column names + types + rows, exactly as `SELECT *` would render them under the active rewriter (so the trailing `provsql` UUID column is included).
+* [x] `POST /api/exec` – body `{sql: string, mode: "where"|"circuit"}`. The user's SQL may contain multiple statements (DDL / DML / SELECT) separated by `;`. **Only the last statement's result is displayed.** Server uses `sqlparse` to split (handles dollar-quoting, comments, string literals); all but the last statement run verbatim with results discarded (errors halt the batch). The last statement is potentially wrapped:
 
   * In **where mode**, if the last statement is a `SELECT` or `WITH ... SELECT`, it is wrapped:
 
@@ -151,34 +151,23 @@ The two routes share the same shell HTML and JS bundle; they differ in which sid
   * `{kind: "status", message, rowcount}` for DDL / DML.
   * `{kind: "error", message, hint, sqlstate}` if a statement fails. Halt the batch on error (psycopg already rolls back).
   * Per-request: `SET LOCAL statement_timeout = '30s'` (from CLI flag).
-* [ ] `GET /api/config` – return current GUC values (`provsql.active`, `provsql.where_provenance`, `provsql.update_provenance`, `provsql.verbose_level`).
-* [ ] `POST /api/config` – body `{key, value}`. Whitelist the four GUCs, run `SET` (per-request; client re-sends, simpler than pinning a connection).
+* [x] `GET /api/config` – returns the four whitelisted GUCs.
+* [x] `POST /api/config` – body `{key, value}`. Whitelist enforced server-side.
 
 ### Front-end
 
 The shared shell from Stage 0 (one `index.html`, `app.css`, `app.js`, `circuit.js`) is the starting point. This stage wires up the chrome (top nav, mode switcher, query form, result rendering) and the Where-mode sidebar. The Circuit-mode sidebar is stubbed here and filled in in Stage 3.
 
-* [ ] Mode switcher in the top nav: two-segment toggle ("Where" / "Circuit"). Switching mode changes the sidebar component, then re-runs the current query (the wrapping differs).
-* [ ] Shared query form + result renderer:
-  * On submit: `POST /api/exec` with `{sql, mode}`, render each result block.
-  * Result rendering helper: takes the `[{kind, ...}]` array and produces a sequence of blocks (table for rows, status banner for DDL / DML, error banner for failures). Match the design's `wp-table--result` styling.
-  * After every successful exec: re-fetch relations (where mode only) so `add_provenance` results show up live.
-  * ⌘ / Ctrl+Enter to submit. Loading skeleton. Empty-result state ("0 rows").
-* [ ] **Where mode** (sidebar = source relations):
-  * On mode entry: `GET /api/relations`, render each tagged relation into `#sidebar` as a table with `<td id="<relation>:<provsql_uuid>:<col>">`. Replace the bundle's hardcoded `personnel` markup with a generic loop.
-  * Hover on result cell: walk the cell's `data-sources` list, toggle `is-source` on the matching `<td>` in the relation tables.
-  * `data-sources` is built from the wrapped query's `where_provenance(provenance())` column. The wrapping happens server-side in `/api/exec`; client parses the array and attaches per-cell ids.
-* [ ] **Circuit mode** (sidebar = circuit DAG):
-  * Result table: cells whose column type is `uuid` or `agg_token` get a clickable affordance.
-  * Click on such a cell: lazy-import `circuit.js`, `GET /api/circuit/<value>`, render the DAG into `#sidebar`.
-  * No source-relation panel is fetched.
-  * Stage 3 covers the actual DAG rendering and lazy expansion.
+* [x] Mode switcher in the top nav: two-segment toggle, anchors to `/where` and `/circuit` (Flask serves the same shell with a different body class). Stage 0 wired the visual; Stage 2 just hooks the active marker.
+* [x] Shared query form + result renderer: `POST /api/exec`, renders rows / status / error blocks. Re-fetches `/api/relations` after each successful exec in where mode. ⌘ / Ctrl+Enter submits. Loading state shown while a query is in flight. Empty-result handling shows "0 rows".
+* [x] **Where mode** (sidebar = source relations): on mode entry, `GET /api/relations` renders each tagged relation. Hovering a result cell toggles `is-source` on the matching `<td>` in the sidebar via the cell's `data-sources` list. `data-sources` comes from the wrapped query's `__wprov` column, parsed client-side from the `{[table:uuid:col;...],[...]}` text format produced by `where_provenance.cpp`.
+* [ ] **Circuit mode** (sidebar = circuit DAG): placeholder only in Stage 2. Stage 3 covers cell-click → lazy-import circuit.js → fetch `/api/circuit/<uuid>` → render the DAG.
 
 ### Tests
 
-* [ ] `tests/conftest.py` spins up an isolated PG database (or relies on `PGDATABASE` set by CI), installs the extension, runs `test/sql/{setup,add_provenance,security}.sql`.
-* [ ] `tests/test_exec.py`: SELECT returns rows; CREATE returns status; syntax error returns error block; multi-statement input returns the LAST statement's result (prior statuses discarded); a syntax error in a non-final statement halts the batch and is surfaced; the where-mode wrapping correctly skips a non-SELECT last statement (e.g. `INSERT INTO ... RETURNING ...` runs raw); `WITH ... SELECT` is recognized as wrappable; dollar-quoted function bodies in earlier statements don't confuse the splitter.
-* [ ] `tests/test_relations.py`: `personnel` is listed, columns are right, after a fresh `add_provenance('foo')` the relation appears on the next call.
+* [x] `tests/conftest.py` spins up a one-off DB keyed on a random suffix and runs `test/sql/{setup,add_provenance}.sql` against it (security.sql skipped — the existing test suite covers the planner-level security checks; Studio just relays the user's role). `PROVSQL_STUDIO_TEST_DSN` overrides for CI.
+* [x] `tests/test_exec.py` (9 tests): SELECT → rows, CREATE → status, syntax error → error block, multi-statement returns only the last, syntax error in a non-final statement halts the batch, where-mode wrapping skips non-SELECT last statements (DML), `WITH ... SELECT` is wrappable, dollar-quoted function bodies in earlier statements don't break the splitter, circuit mode does not wrap.
+* [x] `tests/test_relations.py` (3 tests): `personnel` listed with the right columns + types in `SELECT *` order, every row carries a 36-char provenance UUID matching the provsql cell, fresh `add_provenance('foo')` shows up on the next `/api/relations` call.
 
 ---
 
