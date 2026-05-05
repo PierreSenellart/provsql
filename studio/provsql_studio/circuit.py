@@ -75,9 +75,12 @@ def get_circuit(
 
 
 def _fetch_subgraph(pool: ConnectionPool, root: str, depth: int) -> list[dict]:
+    # `%s::int` is required: psycopg may bind small Python ints as smallint,
+    # and PG's function-overload resolution then can't reach
+    # provsql.circuit_subgraph(uuid, int).
     sql = (
         "SELECT node::text, parent::text, child_pos, gate_type::text, info1, info2, depth "
-        "FROM provsql.circuit_subgraph(%s::uuid, %s)"
+        "FROM provsql.circuit_subgraph(%s::uuid, %s::int)"
     )
     out: list[dict] = []
     with pool.connection() as conn, conn.cursor() as cur:
