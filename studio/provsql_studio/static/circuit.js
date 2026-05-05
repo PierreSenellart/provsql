@@ -70,9 +70,16 @@
     document.getElementById('tool-zoom-out').onclick = () => { state.zoom = Math.max(0.4, state.zoom / 1.2); fitView(); };
     document.getElementById('tool-zoom-fit').onclick = () => { state.zoom = 1; state.pan = { x: 0, y: 0 }; fitView(); };
     const uBtn = document.getElementById('tool-show-uuids');
+    // Sync body class with the initial pressed state so query-result UUID
+    // cells (rendered by formatCell with paired short/full spans) start
+    // out matching whatever the toggle currently shows.
+    document.body.classList.toggle('show-uuids', state.showUuids);
     uBtn.onclick = () => {
       state.showUuids = !state.showUuids;
       uBtn.setAttribute('aria-pressed', String(state.showUuids));
+      // Drives the .wp-uuid__short / .wp-uuid__full visibility in the
+      // result table without re-rendering it.
+      document.body.classList.toggle('show-uuids', state.showUuids);
       paint();
     };
     const fBtn = document.getElementById('tool-show-formula');
@@ -173,14 +180,21 @@
       const label = svgEl('text', { class: 'node-label', y: 1 });
       label.textContent = n.label || n.type[0];
       g.appendChild(label);
-      // Meta line below: short UUID by default; full UUID in toggle mode; for
-      // input gates, info1/info2 (table id, n_columns) when no UUID toggle.
+      // Meta line below: full UUID when the toggle is on, otherwise show
+      // a useful hint per gate type — for leaf gates (input / update —
+      // both reference a source row), the relation id (info1); for
+      // internal gates, nothing (the abbreviated UUID was unreadable
+      // against the edge curves and is one click away in the inspector
+      // anyway).
+      const isLeafGate = n.type === 'input' || n.type === 'update';
       const metaText = state.showUuids
         ? n.id
-        : (n.type === 'input' && n.info1 ? `tbl ${n.info1}` : shortUuid(n.id));
-      const meta = svgEl('text', { class: 'node-meta', y: 38 });
-      meta.textContent = metaText;
-      g.appendChild(meta);
+        : (isLeafGate ? (n.info1 ? `tbl ${n.info1}` : shortUuid(n.id)) : '');
+      if (metaText) {
+        const meta = svgEl('text', { class: 'node-meta', y: 38 });
+        meta.textContent = metaText;
+        g.appendChild(meta);
+      }
       // Frontier marker: small "+" badge top-right
       if (n.frontier) {
         const badge = svgEl('circle', { class: 'frontier-badge', cx: 16, cy: -16, r: 7,
@@ -435,6 +449,9 @@
 
   function shortUuid(u) {
     if (!u) return '–';
-    return u.length > 12 ? `${u.slice(0, 4)}…${u.slice(-4)}` : u;
+    // Match the result-table abbreviation in app.js's formatCell so the
+    // two views stay visually consistent — 4 hex chars are enough for a
+    // cursory same/different check, full uuids are one click away.
+    return u.length > 4 ? `${u.slice(0, 4)}…` : u;
   }
 })();

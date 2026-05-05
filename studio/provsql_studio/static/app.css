@@ -64,6 +64,15 @@ body.mode-circuit #sidebar-body .cv-formula__label {
 }
 .wp-result__cell.is-clickable:hover { color: var(--terracotta-500); }
 
+/* UUID-typed cells render two siblings — an 8-char abbreviation and the
+   full value — so the circuit panel's "Show UUIDs" toggle can flip them
+   via a body-level class without re-rendering the result table. The
+   default is collapsed (matches state.showUuids=false in circuit.js). */
+.wp-uuid__short { display: inline; }
+.wp-uuid__full  { display: none; }
+body.show-uuids .wp-uuid__short { display: none; }
+body.show-uuids .wp-uuid__full  { display: inline; }
+
 code, pre, .wp-editor__ta, .cv-editor__code, .cv-formula__expr { font-family: var(--font-mono); }
 em { font-style: italic; }
 
@@ -533,6 +542,30 @@ em { font-style: italic; }
   white-space: pre-wrap;
 }
 .wp-warning i { color: var(--terracotta-500); margin-right: 0.4rem; }
+
+/* Collapsible variant for long diagnostics (parse-tree dumps from
+   provsql.verbose_level >= 50, full pre/post-rewrite SQL at >= 20). The
+   summary line keeps the same coloured-banner styling as the parent
+   .wp-notice / .wp-warning / .wp-error rules; only the disclosure
+   triangle and the expanded body need bespoke styling. */
+.wp-diag--collapsible > summary {
+  cursor: pointer;
+  list-style-position: outside;
+  /* The parent has white-space: pre-wrap so embedded newlines don't
+     leak from the head line into the summary. */
+}
+.wp-diag--collapsible > summary:hover { filter: brightness(0.97); }
+.wp-diag__body {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed currentColor;
+  opacity: 0.85;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  max-height: 24rem;
+  overflow: auto;
+}
 
 /* Source badge for messages that the C extension emits with the
    "ProvSQL: " prefix. Renders as a small purple pill so the origin

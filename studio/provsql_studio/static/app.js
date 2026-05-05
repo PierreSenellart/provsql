@@ -315,7 +315,7 @@
                   ${visible.map(({ c, i }) => {
                     const id = `${rel.regclass}:${r.uuid}:${i+1}`;
                     const cls = isRightAlignedType(c.type_name) ? ' is-right' : '';
-                    return `<td id="${escapeAttr(id)}" class="${cls.trim()}">${formatCell(r.values[i], c.name)}</td>`;
+                    return `<td id="${escapeAttr(id)}" class="${cls.trim()}">${formatCell(r.values[i], c.name, c.type_name)}</td>`;
                   }).join('')}
                 </tr>
               `).join('')}
@@ -1003,11 +1003,27 @@
     return escapeHtml(s).replace(/"/g, '&quot;');
   }
 
-  function formatCell(v, columnName) {
+  function formatCell(v, columnName, typeName) {
     // Classification pill rendering (well-known column name).
     if (columnName === 'classification' && typeof v === 'string') {
       const safe = v.replace(/[^a-zA-Z0-9_]/g, '');
       return `<span class="wp-pill wp-pill--${safe}">${escapeHtml(v)}</span>`;
+    }
+    // UUID-typed columns render as a short/full pair so the circuit
+    // panel's "Show UUIDs" toggle can flip between abbreviated and full
+    // display via a body-level CSS class — no re-render needed. The
+    // outer span carries the full value as a title so hover always
+    // reveals the original even when collapsed.
+    if ((typeName || '').toLowerCase() === 'uuid' && v != null && v !== '') {
+      const s = String(v);
+      // Match circuit.js's shortUuid so both views render UUIDs the same
+      // way: 4 hex chars + ellipsis is enough for cursory same/different
+      // identification; the full value is a "Show UUIDs" click away.
+      const shortStr = s.length > 4 ? s.slice(0, 4) + '…' : s;
+      return `<span class="wp-uuid" title="${escapeAttr(s)}">`
+           + `<span class="wp-uuid__short">${escapeHtml(shortStr)}</span>`
+           + `<span class="wp-uuid__full">${escapeHtml(s)}</span>`
+           + `</span>`;
     }
     return escapeHtml(v == null ? '' : v);
   }
@@ -1138,6 +1154,24 @@ async function runQuery(ev) {
     const tail  = (sqlstate && sqlstate !== 'XX000')
       ? ` <code>(SQLSTATE ${env.escapeHtml(sqlstate)})</code>`
       : '';
+
+    // Long messages (parse-tree dumps from provsql.verbose_level >= 50,
+    // full pre/post-rewrite SQL at >= 20) collapse behind a <details> so
+    // they don't push the result table off-screen. The first line stays
+    // visible as the summary; clicking the disclosure triangle reveals
+    // the rest.
+    const newlineIdx = text.indexOf('\n');
+    const isLong = newlineIdx >= 0 && (
+      (text.match(/\n/g) || []).length > 1 || text.length > 240
+    );
+    if (isLong) {
+      const head = text.slice(0, newlineIdx);
+      const rest = text.slice(newlineIdx + 1);
+      return `<details class="${cls} wp-diag--collapsible">`
+           + `<summary><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(head)}${tail}</summary>`
+           + `<div class="wp-diag__body">${env.escapeHtml(rest)}</div>`
+           + `</details>`;
+    }
     return `<div class="${cls}"><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(text)}${tail}</div>`;
   }
 
@@ -1234,7 +1268,7 @@ async function runQuery(ev) {
           if (env.isRightAlignedType(typeName)) extraCls += ' is-right';
           // agg_token cells: their text is "<value> (*)", which doesn't carry
           // the UUID. v1 leaves them non-clickable; cast in SQL to inspect.
-          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(value, col.name)}</td>`;
+          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(value, col.name, col.type_name)}</td>`;
         }).join('');
         const jumpBtn = (isWhere && wrapped && provIdx >= 0 && r[provIdx])
           ? `<td class="wp-result__cell--actions"><button class="wp-btn wp-btn--mini" type="button" `

@@ -483,9 +483,20 @@ def exec_batch(
         msg = diag.message_primary or ""
         if "__prov" in msg or "__wprov" in msg:
             return
+        # `elog_node_display` (fired by provsql at verbose_level >= 50 to
+        # dump the parse tree before/after rewriting) puts the title in
+        # message_primary and the actual node dump in message_detail; a
+        # bare message_primary capture would silently drop the dump.
+        detail = diag.message_detail or ""
+        hint = diag.message_hint or ""
+        parts = [msg]
+        if detail:
+            parts.append("DETAIL:  " + detail)
+        if hint:
+            parts.append("HINT:  " + hint)
         meta["notices"].append({
             "severity": (diag.severity or "NOTICE").upper(),
-            "message": msg,
+            "message": "\n".join(parts),
         })
 
     with pool.connection() as conn:
