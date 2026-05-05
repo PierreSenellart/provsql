@@ -1,8 +1,8 @@
 \set ECHO none
-SET search_path TO public,provsql;
+SET search_path TO provsql_test,provsql;
 
 CREATE TABLE complex_set_op_result AS
-SELECT *,formula(provenance(),'personnel_name') FROM (
+SELECT *,sr_formula(provenance(),'personnel_name') FROM (
   SELECT city FROM personnel
   EXCEPT
   (SELECT city FROM personnel

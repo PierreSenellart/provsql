@@ -1,0 +1,27 @@
+# Schedule for the "todo" tests: tests for ProvSQL features that are
+# not yet implemented or are otherwise expected to fail.  These tests
+# describe the *intended* behavior in their expected/ files; they are
+# NOT included in the default regression schedule (test/schedule).
+#
+# Run on demand with:
+#
+#     make installcheck-todo
+#
+# A regression failure here is the normal state of affairs until the
+# corresponding feature lands.  When implementing a feature, move the
+# now-passing test files from test/todo/{sql,expected}/ to
+# test/{sql,expected}/ and add the test name to test/schedule.
+
+# Minimal setup chain borrowed from the main schedule (via symlinks
+# under test/todo/{sql,expected}/) so the todo tests can run against a
+# fresh regression database.
+test: setup
+test: add_provenance
+
+# Tests for unimplemented features follow.
+test: complex_set_op
+test: scalar_sublinks
+test: predicate_sublinks
+test: distinct_on
+test: intersect
+test: grouping_sets

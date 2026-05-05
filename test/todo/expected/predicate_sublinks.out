@@ -1,0 +1,23 @@
+\set ECHO none
+name|formula
+John|(John ⊗ (Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Paul|(Paul ⊗ (Dave ⊕ Ellen ⊕ Magdalen ⊕ Susan))
+Dave|(Dave ⊗ (Ellen ⊕ Magdalen ⊕ Susan))
+Ellen|(Ellen ⊗ Magdalen)
+Nancy|(Nancy ⊗ (Dave ⊕ Ellen ⊕ Magdalen ⊕ Susan))
+Susan|(Susan ⊗ Magdalen)
+(6 rows)
+name|formula
+Magdalen|(Magdalen ⊗ (𝟙 ⊖ 𝟘))
+(1 row)
+name|formula
+Ellen|(Ellen ⊗ (Ellen ⊕ Susan))
+Susan|(Susan ⊗ (Ellen ⊕ Susan))
+(2 rows)
+name|formula
+John|(John ⊗ (𝟙 ⊖ 𝟘))
+Paul|(Paul ⊗ (𝟙 ⊖ 𝟘))
+Dave|(Dave ⊗ (𝟙 ⊖ 𝟘))
+Magdalen|(Magdalen ⊗ (𝟙 ⊖ 𝟘))
+Nancy|(Nancy ⊗ (𝟙 ⊖ 𝟘))
+(5 rows)
