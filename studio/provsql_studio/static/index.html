@@ -53,7 +53,10 @@
     <form class="wp-form" onsubmit="return runQuery(event)">
       <div class="wp-editor">
         <span class="wp-editor__gutter">SQL</span>
-        <textarea class="wp-editor__ta" id="request" rows="3" spellcheck="false" placeholder="SELECT ... FROM your_relation"></textarea>
+        <div class="wp-editor__panel">
+          <pre class="wp-editor__hl" id="request-hl" aria-hidden="true"><code></code></pre>
+          <textarea class="wp-editor__ta" id="request" rows="3" spellcheck="false" placeholder="SELECT ... FROM your_relation"></textarea>
+        </div>
       </div>
       <div class="wp-form__actions">
         <label class="wp-toggle" id="toggle-where-wrap" title="Track where-provenance for the next query">

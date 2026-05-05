@@ -44,6 +44,111 @@
   if (mode === 'where') setupWhereMode();
   else                  setupCircuitMode();
 
+  // The setup call has to come AFTER the SQL_KEYWORDS const declaration
+  // below: function declarations are hoisted but `const` is not, so calling
+  // setupSqlSyntaxHighlight() any earlier would hit the temporal dead zone
+  // when refresh() invokes highlightSql() and reads SQL_KEYWORDS.
+
+  /* ──────── SQL syntax highlight (textarea + <pre> overlay) ──────── */
+
+  // Lightweight tokenizer: keyword / function / string / number / comment /
+  // operator / identifier / whitespace. Single regex with named alternates so
+  // the relative order is preserved (comments before strings before
+  // identifiers). Brand-coloured via the hl-* classes in app.css.
+  const SQL_KEYWORDS = new Set(([
+    'select','from','where','and','or','not','in','is','null','any','some',
+    'join','inner','outer','left','right','full','cross','natural','on','using',
+    'group','by','order','having','distinct','all',
+    'union','intersect','except','as','with','recursive',
+    'insert','into','values','update','set','delete','returning',
+    'create','table','view','index','schema','sequence','extension','function',
+    'drop','alter','add','column','rename','to',
+    'primary','key','foreign','references','unique','default','constraint','check',
+    'case','when','then','else','end',
+    'limit','offset','fetch','first','rows','row','only',
+    'true','false','asc','desc','nulls',
+    'between','like','ilike','similar','overlaps',
+    'exists','cast','collate','escape',
+    'begin','commit','rollback','savepoint','transaction','isolation','level',
+    'grant','revoke','to','from','public','role','user',
+    'if','exists','temp','temporary','unlogged','materialized',
+    'analyze','explain','vacuum','copy','do','language',
+    'array','within','filter','over','partition','window','range','unbounded','preceding','following','current','interval',
+  ]).map(s => s.toLowerCase()));
+
+  function escHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function highlightSql(text) {
+    // Token alternates, in priority order:
+    //   1 = line comment     -- ...
+    //   2 = block comment    /* ... */
+    //   3 = single-quoted string (with escaped '')
+    //   4 = dollar-quoted string $tag$ ... $tag$
+    //   5 = double-quoted identifier "..."
+    //   6 = number
+    //   7 = identifier
+    //   8 = operator
+    //   9 = whitespace (passthrough)
+    const re = /(--[^\n]*)|(\/\*[\s\S]*?\*\/)|('(?:[^']|'')*'?)|(\$([A-Za-z_][A-Za-z0-9_]*)?\$[\s\S]*?\$\5\$)|("(?:[^"]|"")*"?)|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)|([+\-*\/<>=!,;().|&%])|(\s+)/g;
+    let out = '';
+    let lastIdx = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      // Anything between matches is unrecognized; emit as-is (escaped).
+      if (m.index > lastIdx) out += escHtml(text.slice(lastIdx, m.index));
+      lastIdx = re.lastIndex;
+      if      (m[1]) out += `<span class="hl-com">${escHtml(m[1])}</span>`;
+      else if (m[2]) out += `<span class="hl-com">${escHtml(m[2])}</span>`;
+      else if (m[3]) out += `<span class="hl-str">${escHtml(m[3])}</span>`;
+      else if (m[4]) out += `<span class="hl-str">${escHtml(m[4])}</span>`;
+      else if (m[6]) out += `<span class="hl-str">${escHtml(m[6])}</span>`;
+      else if (m[7]) out += `<span class="hl-num">${escHtml(m[7])}</span>`;
+      else if (m[8]) {
+        const w = m[8];
+        if (SQL_KEYWORDS.has(w.toLowerCase())) {
+          out += `<span class="hl-kw">${escHtml(w)}</span>`;
+        } else {
+          // Function-call heuristic: identifier immediately followed by `(`.
+          const after = text.charAt(re.lastIndex);
+          if (after === '(') {
+            out += `<span class="hl-fn">${escHtml(w)}</span>`;
+          } else {
+            out += escHtml(w);
+          }
+        }
+      }
+      else if (m[9]) out += `<span class="hl-op">${escHtml(m[9])}</span>`;
+      else if (m[10]) out += m[10];   // whitespace passthrough
+    }
+    if (lastIdx < text.length) out += escHtml(text.slice(lastIdx));
+    // Trailing newline keeps the <pre>'s last-line height aligned with the
+    // textarea (which always reserves space for a trailing newline).
+    return out + '\n';
+  }
+
+  function setupSqlSyntaxHighlight() {
+    const ta = document.getElementById('request');
+    const hlPre = document.getElementById('request-hl');
+    if (!ta || !hlPre) return;
+    const code = hlPre.querySelector('code');
+
+    function refresh() { code.innerHTML = highlightSql(ta.value); }
+    function syncScroll() {
+      hlPre.scrollTop  = ta.scrollTop;
+      hlPre.scrollLeft = ta.scrollLeft;
+    }
+    ta.addEventListener('input', refresh);
+    ta.addEventListener('scroll', syncScroll);
+    // Re-sync after textarea resize: pre is positioned absolutely so its
+    // box follows automatically, but scroll position can drift.
+    new ResizeObserver(syncScroll).observe(ta);
+    refresh();
+  }
+
+  setupSqlSyntaxHighlight();
+
   /* ──────── Where mode ──────── */
 
   async function setupWhereMode() {
@@ -317,6 +422,7 @@
     'money',
     'agg_token',
     'date', 'time', 'timetz', 'timestamp', 'timestamptz', 'interval',
+    'uuid',
   ]);
   function isRightAlignedType(typeName) {
     return RIGHT_ALIGNED_TYPES.has((typeName || '').toLowerCase());

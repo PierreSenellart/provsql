@@ -385,18 +385,66 @@ body.mode-where #sidebar {
   display: flex; align-items: flex-start;
   font-weight: 600;
 }
-.wp-editor__ta {
+.wp-editor__panel {
   flex: 1;
-  border: none;
-  background: transparent;
+  position: relative;
+  min-width: 0;
+}
+/* Editor + highlighted overlay share identical metrics so glyphs align
+   exactly. The textarea sits on top with transparent text colour; the
+   underlying <pre> renders the syntax-highlighted version. */
+.wp-editor__ta,
+.wp-editor__hl {
   font-family: var(--font-mono);
   font-size: 0.95rem;
   line-height: 1.5;
-  color: var(--purple-900);
   padding: 0.65rem 0.85rem;
+  margin: 0;
+  border: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  tab-size: 2;
+  -moz-tab-size: 2;
+}
+.wp-editor__hl {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--purple-900);
+  background: transparent;
+  overflow: auto;
+  scrollbar-width: none;
+}
+.wp-editor__hl::-webkit-scrollbar { width: 0; height: 0; }
+.wp-editor__hl code { display: block; font: inherit; color: inherit; background: none; }
+.wp-editor__ta {
+  position: relative;
+  display: block;
+  width: 100%;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--purple-900);
   resize: vertical;
   outline: none;
 }
+.wp-editor__ta::selection {
+  background: rgba(107, 79, 160, 0.25);
+}
+.wp-editor__ta::placeholder {
+  color: var(--fg-muted);
+  -webkit-text-fill-color: var(--fg-muted);
+}
+
+/* SQL token colours for the overlay. Match the Pygments "default" style
+   used by the user docs (doc/source/_build/html/_static/pygments.css). */
+.hl-kw { color: #008000; font-weight: bold; }   /* Keyword (.k)         */
+.hl-fn { color: #0000FF; }                       /* Name.Function (.nf)  */
+.hl-str { color: #BA2121; }                      /* Literal.String (.s)  */
+.hl-num { color: #666666; }                      /* Literal.Number (.m)  */
+.hl-com { color: #3D7B7B; font-style: italic; }  /* Comment (.c)         */
+.hl-op  { color: #666666; }                      /* Operator (.o)        */
 .wp-form__actions {
   display: flex; align-items: center; justify-content: space-between;
   flex-wrap: wrap; gap: 0.6rem;
