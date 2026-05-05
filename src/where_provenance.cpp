@@ -128,7 +128,7 @@ static string where_provenance_internal
         } else if(type == "monusr" || type == "monusl" || type == "monus") {
           provsql_error("Where-provenance of non-monotone query not supported");
         } else {
-          provsql_error("Wrong type of gate in circuit");
+          provsql_error("Where-provenance does not support gates of type %s", type.c_str());
         }
         c.addWire(id, c.getGate(SPI_getvalue(tuple, tupdesc, 2)));
       }

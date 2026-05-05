@@ -154,7 +154,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
         }
         else
         {
-          provsql_error("Wrong type of gate in circuit");
+          provsql_error("Unknown type of gate: %s", type.c_str());
         }
         //elog(WARNING, "%d -- %d", id, c.getGate(SPI_getvalue(tuple, tupdesc, 2)));
         c.addWire(id, c.getGate(SPI_getvalue(tuple, tupdesc, 2)));
