@@ -125,7 +125,18 @@ def create_app(
 
     @app.get("/api/conn")
     def api_conn():
-        return jsonify(db.conn_info(get_pool()))
+        # Catch the OperationalError that the pool raises when PG is down
+        # (server stopped, network blip, auth revoked) so /api/conn
+        # responds with a structured 503 + human-readable reason instead
+        # of a bare Flask 500. The connectivity-poll on the front-end
+        # surfaces this string in the dot's tooltip.
+        try:
+            return jsonify(db.conn_info(get_pool()))
+        except psycopg.OperationalError as e:
+            return jsonify({
+                "error": "database unreachable",
+                "reason": str(e).strip() or "cannot connect to PostgreSQL",
+            }), 503
 
     @app.post("/api/conn")
     def api_conn_switch():

@@ -125,6 +125,10 @@ em { font-style: italic; }
   box-shadow: 0 0 0 3px rgba(111,207,151,0.25);
   flex-shrink: 0;
 }
+.wp-nav__dot.is-offline {
+  background: var(--terracotta-500);
+  box-shadow: 0 0 0 3px rgba(196, 102, 74, 0.25);
+}
 .wp-nav__dbswitch { position: relative; }
 .wp-nav__db {
   font: inherit;
@@ -710,7 +714,12 @@ body.mode-where #sidebar {
 .wp-history { position: relative; display: inline-flex; }
 .wp-history__menu {
   position: absolute;
-  bottom: calc(100% + 6px);
+  /* Open downward over the result section so the menu is always anchored
+     against the viewport top (where the History button sits): an upward
+     menu of 60vh would push its top above the viewport when the form is
+     near the top of the window, hiding the upper entries even though
+     overflow-y: auto would otherwise let the user scroll to them. */
+  top: calc(100% + 6px);
   right: 0;
   margin: 0;
   padding: 0.3rem 0;
@@ -722,7 +731,7 @@ body.mode-where #sidebar {
   box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
   min-width: 320px;
   max-width: 540px;
-  max-height: 60vh;
+  max-height: 40vh;
   overflow-y: auto;
   z-index: 20;
 }
@@ -790,7 +799,7 @@ body.mode-where #sidebar {
 .wp-editor__ta,
 .wp-editor__hl {
   font-family: var(--font-mono);
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   line-height: 1.5;
   padding: 0.65rem 0.85rem;
   margin: 0;

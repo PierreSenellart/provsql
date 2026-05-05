@@ -33,8 +33,12 @@
   // toggle is locked. In circuit mode, both are user-controlled.
   setupGucToggles();
   // Connection chip in the top nav: pull the live current_user /
-  // current_database() once at page load.
+  // current_database() once at page load, then poll every 2s so the
+  // dot turns terracotta promptly if the server stops responding (e.g.
+  // PG was restarted, network blip) and back to green when it
+  // recovers.
   fetchConnInfo();
+  setInterval(fetchConnInfo, 2000);
   setupConfigPanel();
 
   // ⌘ / Ctrl+Enter submits the query form. Alt+↑/Alt+↓ steps through the
@@ -179,6 +183,18 @@
     if (!ta || !hlPre) return;
     const code = hlPre.querySelector('code');
 
+    // Restore the user's preferred textarea height across reloads and
+    // mode switches. ta.style.height is the same inline style the browser
+    // writes on vertical drag, so round-tripping through it avoids the
+    // box-sizing drift you'd get from offsetHeight/clientHeight.
+    try {
+      const saved = localStorage.getItem('ps.editorHeight');
+      if (saved && /^\d+(\.\d+)?px$/.test(saved)) {
+        const px = parseFloat(saved);
+        if (px >= 40 && px <= 4000) ta.style.height = saved;
+      }
+    } catch (e) { /* localStorage disabled / quota: skip */ }
+
     function refresh() { code.innerHTML = highlightSql(ta.value); }
     function syncScroll() {
       hlPre.scrollTop  = ta.scrollTop;
@@ -187,8 +203,17 @@
     ta.addEventListener('input', refresh);
     ta.addEventListener('scroll', syncScroll);
     // Re-sync after textarea resize: pre is positioned absolutely so its
-    // box follows automatically, but scroll position can drift.
-    new ResizeObserver(syncScroll).observe(ta);
+    // box follows automatically, but scroll position can drift. Same
+    // observer persists the user-set height; the initial firing during
+    // restore writes back the value we just read, which is harmless.
+    new ResizeObserver(() => {
+      syncScroll();
+      const h = ta.style.height;
+      if (h) {
+        try { localStorage.setItem('ps.editorHeight', h); }
+        catch (e) { /* skip */ }
+      }
+    }).observe(ta);
     refresh();
   }
 
@@ -439,17 +464,40 @@
   let _currentConn = null;
 
   async function fetchConnInfo() {
-    const el = document.getElementById('conn-info');
+    const el  = document.getElementById('conn-info');
+    const dot = document.querySelector('.wp-nav__dot');
     if (!el) return;
+    let reason = '';
     try {
       const resp = await fetch('/api/conn');
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (!resp.ok) {
+        // /api/conn responds with 503 + JSON {error, reason} when the
+        // pool can't reach PG. Pull the reason out for the dot tooltip.
+        try {
+          const body = await resp.json();
+          reason = body.reason || body.error || `HTTP ${resp.status}`;
+        } catch (_) {
+          reason = `HTTP ${resp.status}`;
+        }
+        throw new Error(reason);
+      }
       const c = await resp.json();
       _currentConn = c;
       el.textContent = `${c.user}@${c.database}`;
       if (c.host) el.title = `host: ${c.host}`;
+      if (dot) {
+        dot.classList.remove('is-offline');
+        dot.title = 'connected to a live PostgreSQL server';
+      }
     } catch (e) {
-      el.textContent = '–';
+      // Don't clobber _currentConn or the displayed identity on a
+      // transient blip: the chip keeps showing the last-known db name
+      // (so the dropdown still works); only the dot turns red and the
+      // tooltip explains.
+      if (dot) {
+        dot.classList.add('is-offline');
+        dot.title = `Cannot reach the database: ${reason || e.message || 'cannot connect to PostgreSQL'}`;
+      }
     }
     setupDbSwitcher();
   }
