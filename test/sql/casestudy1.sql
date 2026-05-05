@@ -120,7 +120,10 @@ FROM (
 ) t;
 
 SELECT remove_provenance('result_cs1_mc');
-SELECT city, ROUND(prob::numeric, 1) AS prob FROM result_cs1_mc
+-- True probability for Beijing is 0.54 (Ellen XOR Jing = 0.4*0.3 + 0.6*0.7).
+-- With N=10000 the SE is ~0.005, so test tolerance >> SE for stable CI.
+SELECT city, ABS(prob - 0.54) < 0.05 AS prob_within_tolerance
+FROM result_cs1_mc
 WHERE city = 'Beijing' ORDER BY city;
 DROP TABLE result_cs1_mc;
 

@@ -48,8 +48,8 @@ Paris|0.4100
 remove_provenance
 
 (1 row)
-city|prob
-Beijing|0.5
+city|prob_within_tolerance
+Beijing|t
 (1 row)
 remove_provenance
 
