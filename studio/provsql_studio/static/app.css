@@ -92,6 +92,30 @@ em { font-style: italic; }
   transition: color 0.15s;
 }
 .wp-nav__link:hover { color: var(--gold-500); }
+/* Override the global a:visited rule so visited nav links don't go purple-on-purple */
+.wp-nav__link:visited, .cv-nav__link:visited, .ps-modeswitch__btn:visited {
+  color: rgba(255,255,255,0.88);
+}
+
+/* ───────── shared site footer (mirrors website + docs) ───────── */
+#provsql-site-footer {
+  text-align: center;
+  padding: 0.8em 1em;
+  background: var(--purple-900);
+  border-top: 2px solid var(--gold-500);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+}
+#provsql-site-footer a {
+  color: rgba(244,240,250,0.85);
+  text-decoration: none;
+}
+#provsql-site-footer a:hover { color: var(--gold-500); }
+#provsql-site-footer a:visited { color: rgba(244,240,250,0.85); }
+#provsql-site-footer .sep {
+  margin: 0 0.4em;
+  color: rgba(244,240,250,0.4);
+}
 
 /* ───────── shell ───────── */
 .wp-shell {
