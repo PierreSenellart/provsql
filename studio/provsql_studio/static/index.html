@@ -74,6 +74,14 @@
           <input type="checkbox" id="opt-update-prov">
           <code>provsql.update_provenance</code>
         </label>
+        <span class="wp-history" id="history">
+          <button type="button" class="wp-btn wp-btn--ghost" id="history-btn"
+                  title="Past queries (Alt+↑ / Alt+↓ to step through)"
+                  aria-haspopup="listbox" aria-expanded="false">
+            <i class="fas fa-history"></i> History
+          </button>
+          <ul class="wp-history__menu" id="history-menu" role="listbox" hidden></ul>
+        </span>
         <button type="submit" class="wp-btn wp-btn--primary"><i class="fas fa-bolt"></i> Send query</button>
       </div>
     </form>

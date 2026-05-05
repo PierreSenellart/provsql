@@ -36,13 +36,20 @@
   // current_database() once at page load.
   fetchConnInfo();
 
-  // ⌘ / Ctrl+Enter submits the query form.
+  // ⌘ / Ctrl+Enter submits the query form. Alt+↑/Alt+↓ steps through the
+  // saved query history without opening the dropdown.
   document.getElementById('request').addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       document.querySelector('form.wp-form').requestSubmit();
+      return;
+    }
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      stepHistory(e.key === 'ArrowUp' ? +1 : -1);
     }
   });
+  setupHistoryDropdown();
 
   if (mode === 'where') setupWhereMode();
   else                  setupCircuitMode();
@@ -287,6 +294,112 @@
   }
 
   /* ──────── Circuit mode ──────── */
+
+  /* ──────── query history ──────── */
+
+  const HISTORY_KEY = 'ps.history';
+  const HISTORY_CAP = 50;
+  let _historyCursor = -1;  // -1 = current draft; 0..N-1 = nth-most-recent saved entry
+  let _historyDriving = false;  // suppress the cursor reset when WE set ta.value
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+  function saveHistory(arr) {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(arr.slice(0, HISTORY_CAP)));
+    } catch {}
+  }
+  function pushHistory(sql) {
+    const trimmed = String(sql || '').trim();
+    if (!trimmed) return;
+    const arr = loadHistory();
+    if (arr.length && arr[0] === trimmed) return;  // skip exact-duplicate consecutive entries
+    arr.unshift(trimmed);
+    saveHistory(arr);
+  }
+
+  function stepHistory(direction) {
+    const arr = loadHistory();
+    if (!arr.length) return;
+    const ta = document.getElementById('request');
+    if (_historyCursor === -1) _draft = ta.value;
+    const next = _historyCursor + direction;
+    if (next < -1 || next >= arr.length) return;
+    _historyCursor = next;
+    _historyDriving = true;
+    ta.value = next === -1 ? (_draft || '') : arr[next];
+    ta.dispatchEvent(new Event('input'));  // refresh syntax highlight
+    _historyDriving = false;
+  }
+  let _draft = '';
+
+  // Reset history-cursor when the USER edits the textarea (so the next
+  // Alt+↑ starts from the most-recent entry again). When we set ta.value
+  // ourselves from stepHistory, the synthetic input event must NOT reset
+  // the cursor — that's what _historyDriving guards against.
+  document.getElementById('request').addEventListener('input', () => {
+    if (!_historyDriving) _historyCursor = -1;
+  });
+
+  function setupHistoryDropdown() {
+    const btn  = document.getElementById('history-btn');
+    const menu = document.getElementById('history-menu');
+    if (!btn || !menu) return;
+
+    function renderMenu() {
+      const arr = loadHistory();
+      if (!arr.length) {
+        menu.innerHTML = '<li class="wp-history__empty">No saved queries yet.</li>';
+        return;
+      }
+      const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
+      menu.innerHTML = arr.map((sql, i) =>
+        `<li role="option" data-i="${i}" title="${escapeAttr(sql)}">${escapeHtml(oneLine(sql).slice(0, 200))}</li>`
+      ).join('') + '<li class="wp-history__clear" data-clear="1">Clear history</li>';
+    }
+    function open() {
+      renderMenu();
+      menu.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+    }
+    function close() {
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    }
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (menu.hidden) open(); else close();
+    });
+    document.addEventListener('click', (e) => {
+      if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) close();
+    });
+    menu.addEventListener('click', (e) => {
+      const li = e.target.closest('li');
+      if (!li) return;
+      if (li.dataset.clear) {
+        saveHistory([]);
+        renderMenu();
+        return;
+      }
+      const arr = loadHistory();
+      const i = Number(li.dataset.i);
+      const sql = arr[i];
+      if (sql == null) return;
+      const ta = document.getElementById('request');
+      ta.value = sql;
+      ta.dispatchEvent(new Event('input'));
+      _historyCursor = i;
+      close();
+      ta.focus();
+    });
+  }
 
   let _currentConn = null;
 
@@ -551,7 +664,10 @@
   }
 
   // Expose to runQuery (defined as a global below for the inline onsubmit).
-  window.__provsqlStudio = { mode, refreshRelations, escapeHtml, escapeAttr, formatCell, isRightAlignedType };
+  window.__provsqlStudio = {
+    mode, refreshRelations, escapeHtml, escapeAttr, formatCell,
+    isRightAlignedType, pushHistory,
+  };
 })();
 
 /* Global runQuery: invoked by the form's inline onsubmit. POSTs to /api/exec
@@ -599,6 +715,11 @@ async function runQuery(ev) {
   }
   const payload = await resp.json();
   renderBlocks(payload.blocks || [], !!payload.wrapped, payload.notice || null);
+
+  // Append the just-submitted query to the persistent history (skipping
+  // exact-duplicate consecutive entries). We do this regardless of the
+  // server's outcome so users can recall a query that errored to fix it.
+  if (env.pushHistory) env.pushHistory(sqlText);
 
   // After every successful exec in where mode, re-fetch relations so
   // add_provenance results show up live.

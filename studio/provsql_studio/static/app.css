@@ -457,6 +457,66 @@ body.mode-where #sidebar {
   padding: 0.55rem 1.1rem;
 }
 .wp-btn--primary:hover { background: var(--gold-700); border-color: var(--gold-700); color: var(--purple-900); }
+.wp-btn--ghost {
+  background: transparent;
+  border-color: var(--border-soft);
+  color: var(--purple-700);
+  font-size: 0.78rem;
+  padding: 0.32rem 0.65rem;
+}
+.wp-btn--ghost:hover { background: var(--bg-code); color: var(--purple-700); border-color: var(--purple-500); }
+.wp-btn--ghost[aria-expanded="true"] { background: var(--bg-code); border-color: var(--purple-500); }
+
+/* Past-queries dropdown — pinned to the History button. */
+.wp-history { position: relative; display: inline-flex; }
+.wp-history__menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  margin: 0;
+  padding: 0.3rem 0;
+  list-style: none;
+  background: #fff;
+  color: var(--purple-900);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
+  min-width: 320px;
+  max-width: 540px;
+  max-height: 60vh;
+  overflow-y: auto;
+  z-index: 20;
+}
+.wp-history__menu[hidden] { display: none; }
+.wp-history__menu li {
+  padding: 0.45rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--border-soft);
+}
+.wp-history__menu li:last-child { border-bottom: none; }
+.wp-history__menu li:hover { background: var(--bg-code); }
+.wp-history__empty {
+  padding: 0.6rem 0.85rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.wp-history__clear {
+  border-top: 1px solid var(--border-soft);
+  padding: 0.4rem 0.85rem;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--terracotta-500);
+  cursor: pointer;
+  text-align: right;
+}
+.wp-history__clear:hover { background: rgba(196, 102, 74, 0.08); }
 
 /* ───────── editor ───────── */
 .wp-form { margin-bottom: 1.5rem; }
@@ -532,14 +592,17 @@ body.mode-where #sidebar {
   -webkit-text-fill-color: var(--fg-muted);
 }
 
-/* SQL token colours for the overlay. Match the Pygments "default" style
-   used by the user docs (doc/source/_build/html/_static/pygments.css). */
-.hl-kw { color: #008000; font-weight: bold; }   /* Keyword (.k)         */
-.hl-fn { color: #0000FF; }                       /* Name.Function (.nf)  */
-.hl-str { color: #BA2121; }                      /* Literal.String (.s)  */
-.hl-num { color: #666666; }                      /* Literal.Number (.m)  */
-.hl-com { color: #3D7B7B; font-style: italic; }  /* Comment (.c)         */
-.hl-op  { color: #666666; }                      /* Operator (.o)        */
+/* SQL token colours for the overlay. Colours match the Pygments "default"
+   style used by the user docs (doc/source/_build/html/_static/pygments.css),
+   but bold/italic are dropped: any font-weight or font-style change between
+   the textarea (regular) and the overlay shifts glyph advance widths and
+   the caret drifts off the displayed text. Colour alone is enough. */
+.hl-kw  { color: #008000; }   /* Keyword (.k)         */
+.hl-fn  { color: #0000FF; }   /* Name.Function (.nf)  */
+.hl-str { color: #BA2121; }   /* Literal.String (.s)  */
+.hl-num { color: #666666; }   /* Literal.Number (.m)  */
+.hl-com { color: #3D7B7B; }   /* Comment (.c)         */
+.hl-op  { color: #666666; }   /* Operator (.o)        */
 .wp-form__actions {
   display: flex; align-items: center; justify-content: space-between;
   flex-wrap: wrap; gap: 0.6rem;

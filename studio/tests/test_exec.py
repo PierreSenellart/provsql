@@ -133,6 +133,34 @@ def test_dollar_quoted_body_does_not_confuse_splitter(client):
 # ──────── where-mode wrap fallback for non-tracked relations ────────
 
 
+def test_update_provenance_toggle_propagates_to_guc(client):
+    # In circuit mode the front-end is free to flip update_provenance on or
+    # off via the body of /api/exec. The wire must reach SET LOCAL: SHOW the
+    # GUC inside the same batch and assert the value.
+    payload = post_exec(
+        client,
+        "SHOW provsql.update_provenance",
+        mode="circuit",
+    )
+    final = payload["blocks"][-1]
+    # Default off: nothing in the payload toggles it on, so SHOW returns 'off'.
+    assert final["kind"] == "rows"
+    assert final["rows"][0][0] == "off"
+
+    resp = client.post(
+        "/api/exec",
+        json={
+            "sql": "SHOW provsql.update_provenance",
+            "mode": "circuit",
+            "update_provenance": True,
+        },
+    )
+    assert resp.status_code == 200
+    final = resp.get_json()["blocks"][-1]
+    assert final["kind"] == "rows"
+    assert final["rows"][0][0] == "on"
+
+
 def test_where_mode_falls_back_when_no_provenance_relation(client):
     # SELECT against a table that has no provsql column. The wrap would
     # otherwise raise "provenance() called on a table without provenance";
