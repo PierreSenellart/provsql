@@ -82,6 +82,12 @@ def load_persisted_options() -> dict:
                 out["statement_timeout_seconds"] = n
         except (TypeError, ValueError):
             pass
+    if "search_path" in raw:
+        try:
+            _, canonical = validate_panel_option("search_path", raw["search_path"])
+            out["search_path"] = canonical
+        except ValueError:
+            pass
     return out
 
 
@@ -110,6 +116,23 @@ def validate_panel_option(name: str, value) -> tuple[str, object]:
         if not (1 <= n <= 3600):
             raise ValueError("statement_timeout_seconds must be between 1 and 3600")
         return (name, n)
+    if name == "search_path":
+        if value is None:
+            return (name, "")
+        if not isinstance(value, str):
+            raise ValueError("search_path must be a string")
+        v = value.strip()
+        if len(v) > 1024:
+            raise ValueError("search_path is too long (max 1024 chars)")
+        # Reject characters that could only appear in a SQL injection
+        # attempt: a real schema list never contains semicolons, comment
+        # markers, or unmatched quotes. The value is passed to
+        # set_config(...) as a parameter so it's already safe at runtime,
+        # but rejecting up front gives the user a clearer error than a
+        # cryptic "invalid value for parameter \"search_path\"" later.
+        if any(c in v for c in (";", "--", "/*", "*/")):
+            raise ValueError("search_path contains forbidden characters")
+        return (name, v)
     raise ValueError(f"option not user-configurable: {name}")
 
 
@@ -132,6 +155,69 @@ WHERE a.attname = 'provsql'
   AND a.attnum > 0
 ORDER BY n.nspname, c.relname
 """
+
+
+# Tables and views the current_user can SELECT from. Excludes catalog
+# schemas (pg_catalog, information_schema) and ProvSQL's internal one,
+# which are noise for "what can I query". Columns come back as a
+# parallel array_agg ordered by attnum so the front-end can render the
+# column list inline without a second round-trip.
+_SCHEMA_QUERY = """
+SELECT
+    n.nspname AS schema_name,
+    c.relname AS table_name,
+    CASE c.relkind
+        WHEN 'r' THEN 'table'
+        WHEN 'p' THEN 'table'
+        WHEN 'v' THEN 'view'
+        WHEN 'm' THEN 'matview'
+        WHEN 'f' THEN 'foreign'
+        ELSE c.relkind::text
+    END AS kind,
+    coalesce((
+        SELECT array_agg(a.attname ORDER BY a.attnum)
+        FROM pg_attribute a
+        WHERE a.attrelid = c.oid
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+    ), '{}'::text[]) AS columns,
+    coalesce((
+        SELECT array_agg(format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum)
+        FROM pg_attribute a
+        WHERE a.attrelid = c.oid
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+    ), '{}'::text[]) AS column_types
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'provsql')
+  AND n.nspname NOT LIKE 'pg_toast%'
+  AND n.nspname NOT LIKE 'pg_temp%'
+  AND has_table_privilege(current_user, c.oid, 'SELECT')
+ORDER BY n.nspname, c.relname
+"""
+
+
+def list_schema(pool: ConnectionPool) -> list[dict]:
+    """Return all SELECT-able tables/views/matviews/foreign tables grouped
+    by their qualified name, with each row's columns + types. Used by the
+    Schema nav button so the user can see what they can query without
+    leaving the UI."""
+    out: list[dict] = []
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(_SCHEMA_QUERY)
+        for schema, table, kind, cols, types in cur.fetchall():
+            out.append({
+                "schema": schema,
+                "table": table,
+                "kind": kind,
+                "columns": [
+                    {"name": n, "type": t}
+                    for n, t in zip(cols or [], types or [])
+                ],
+            })
+    return out
 
 
 @dataclass
@@ -213,17 +299,65 @@ def list_databases(pool: ConnectionPool) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
+def _has_provsql_in_search_path(s: str) -> bool:
+    """Return True iff `provsql` appears as a schema in a SHOW search_path
+    string. The format is comma-separated; each part may be wrapped in
+    double-quotes (PG quotes "$user" and any name needing it). A literal
+    substring match would false-positive on a user-named schema like
+    'not_provsql', so we tokenise properly."""
+    for part in s.split(","):
+        part = part.strip()
+        if part.startswith('"') and part.endswith('"'):
+            part = part[1:-1]
+        if part == "provsql":
+            return True
+    return False
+
+
+def _with_provsql_last(s: str) -> str:
+    """Append `provsql` to a SHOW search_path string if not already
+    present. Putting it last means it acts as a fallback for unqualified
+    references: user schemas and any same-named objects there resolve
+    first; ProvSQL's helper functions are reachable unqualified only when
+    nothing else shadows them. PG dedupes resolved schemas internally, so
+    a redundant trailing entry would be harmless, but we keep the
+    textual form clean for the UI display."""
+    return s if _has_provsql_in_search_path(s) else f"{s}, provsql"
+
+
+def compose_search_path(studio_override: str, session_value: str) -> str:
+    """The search_path user queries should see: the Studio-config
+    override (Config panel field) when non-empty, otherwise whatever PG's
+    own session default reported, with `provsql` always pinned to the
+    end so it never shadows user objects. This is what /api/conn
+    displays and what exec_batch sets as SET LOCAL search_path before
+    each batch."""
+    base = (studio_override or "").strip() or session_value
+    return _with_provsql_last(base)
+
+
 def conn_info(pool: ConnectionPool) -> dict:
     """Return the current PostgreSQL session's identity for the chrome chip:
-    role, database, and (when not a Unix socket) host. Hits one short SELECT
-    per call; the result is small enough that callers can re-fetch freely."""
+    role, database, host (when not a Unix socket), and the session's
+    *resolved* search_path. We use current_schemas(false) instead of
+    current_setting('search_path') so the UI shows the schemas user
+    queries actually see: $user is substituted (or dropped when no such
+    schema exists), missing schemas are silently skipped, and the result
+    matches what name resolution will do at query time. Callers compose
+    this with the Studio-config override via compose_search_path."""
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT current_user, current_database(), "
-            "       coalesce(inet_server_addr()::text, '')"
+            "       coalesce(inet_server_addr()::text, ''), "
+            "       array_to_string(current_schemas(false), ', ')"
         )
-        user, database, host = cur.fetchone()
-    return {"user": user, "database": database, "host": host or None}
+        user, database, host, search_path = cur.fetchone()
+    return {
+        "user": user,
+        "database": database,
+        "host": host or None,
+        "search_path": search_path,
+    }
 
 
 def list_relations(pool: ConnectionPool) -> list[dict]:
@@ -293,6 +427,7 @@ def exec_batch(
     wrap_last: bool,
     extra_gucs: dict[str, str] | None = None,
     on_pid=None,
+    search_path: str = "",
 ) -> tuple[list[StatementResult], StatementResult | None, dict]:
     """Run `statements` in a single transaction with SET LOCAL settings.
 
@@ -375,6 +510,23 @@ def exec_batch(
                     sql.SQL("SET LOCAL statement_timeout = {}").format(
                         sql.Literal(statement_timeout)
                     )
+                )
+                # Pin provsql to the end of search_path for the batch
+                # (so its helpers are reachable unqualified as a fallback
+                # without shadowing user objects). When the Studio
+                # config provides a search_path override we also use it
+                # as the base; otherwise we read whatever the session
+                # already has and append provsql if missing. set_config
+                # parameterises the value so the user-supplied portion
+                # never reaches PG as raw SQL.
+                if (search_path or "").strip():
+                    target_path = compose_search_path(search_path, "")
+                else:
+                    cur.execute("SHOW search_path")
+                    target_path = compose_search_path("", cur.fetchone()[0])
+                cur.execute(
+                    "SELECT set_config('search_path', %s, true)",
+                    (target_path,),
                 )
                 cur.execute(
                     "SET LOCAL provsql.where_provenance = "

@@ -178,3 +178,49 @@ def test_config_overrides_persist_across_app_restart(client, test_dsn):
     assert resp.status_code == 200
     final = resp.get_json()["blocks"][-1]
     assert final["rows"][0][0] == "42"
+
+
+def test_search_path_option_round_trips_and_appends_provsql(client):
+    # search_path lives alongside max_circuit_depth and statement_timeout
+    # in /api/config's `options` field. Storing it through POST must
+    # round-trip through GET, and the displayed /api/conn search_path
+    # must reflect the new override with `provsql` pinned at the end.
+    resp = client.post(
+        "/api/config",
+        json={"key": "search_path", "value": "myschema, public"},
+    )
+    assert resp.status_code == 200, resp.data
+    assert resp.get_json()["value"] == "myschema, public"
+
+    cfg = client.get("/api/config").get_json()
+    assert cfg["options"]["search_path"] == "myschema, public"
+
+    conn = client.get("/api/conn").get_json()
+    # provsql is appended for fallback resolution. The user-specified
+    # schemas precede it so any same-named user objects shadow ProvSQL.
+    assert conn["search_path"].endswith(", provsql")
+    assert conn["search_path"].startswith("myschema, public")
+
+
+def test_search_path_option_rejects_injection(client):
+    resp = client.post(
+        "/api/config",
+        json={"key": "search_path", "value": "public; DROP TABLE x"},
+    )
+    assert resp.status_code == 400
+    assert "forbidden" in resp.get_json()["error"].lower()
+
+
+def test_search_path_empty_falls_back_to_session_default(client):
+    # Empty string means "use whatever the database session has",
+    # still with provsql appended. The conftest DSN sets
+    # search_path=provsql_test,provsql,public, so the displayed value
+    # should reflect that (and provsql shouldn't get duplicated since
+    # it's already present).
+    client.post("/api/config", json={"key": "search_path", "value": ""})
+    conn = client.get("/api/conn").get_json()
+    parts = [p.strip().strip('"') for p in conn["search_path"].split(",")]
+    assert "provsql_test" in parts
+    # provsql appears exactly once even though the session already has
+    # it: compose_search_path must detect that and not re-append.
+    assert parts.count("provsql") == 1

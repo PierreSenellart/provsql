@@ -19,7 +19,7 @@
   <div class="wp-nav__meta">
     <div class="ps-modeswitch" id="modeswitch" role="tablist">
       <a class="ps-modeswitch__btn" href="/circuit" data-mode="circuit" role="tab"><i class="fas fa-project-diagram"></i> Circuit</a>
-      <a class="ps-modeswitch__btn is-active" href="/where" data-mode="where" role="tab"><i class="fas fa-table"></i> Where</a>
+      <a class="ps-modeswitch__btn is-active" href="/where" data-mode="where" role="tab"><i class="fas fa-search-location"></i> Where</a>
     </div>
     <span class="wp-nav__conn">
       <span class="wp-nav__dot" title="connected to a live PostgreSQL server"></span>
@@ -27,6 +27,17 @@
         <button type="button" class="wp-nav__db" id="conn-info" aria-haspopup="listbox" aria-expanded="false">…</button>
         <ul class="wp-nav__dbmenu" id="dbmenu" role="listbox" hidden></ul>
       </span>
+    </span>
+    <span class="wp-nav__configwrap">
+      <button type="button" class="wp-nav__link" id="schema-btn" aria-haspopup="dialog" aria-expanded="false"><i class="fas fa-table"></i> Schema</button>
+      <div class="wp-nav__configpanel wp-schema__panel" id="schema-panel" role="dialog" hidden>
+        <h4 class="wp-nav__configtitle">Database schema</h4>
+        <p class="wp-schema__lead">Tables and views you can <code>SELECT</code> from. Click a row to insert <code>schema.relation</code> into the query editor.</p>
+        <input type="search" class="wp-schema__search" id="schema-search" placeholder="Filter relations or columns…" autocomplete="off">
+        <div class="wp-schema__body" id="schema-body" aria-live="polite">
+          <p class="wp-schema__empty">Loading…</p>
+        </div>
+      </div>
     </span>
     <span class="wp-nav__configwrap">
       <button type="button" class="wp-nav__link" id="config-btn" aria-haspopup="dialog" aria-expanded="false"><i class="fas fa-cog"></i> Config</button>
@@ -74,6 +85,16 @@
           </span>
         </label>
 
+        <label class="wp-config__row wp-config__row--col">
+          <span class="wp-config__name">search_path
+            <span class="wp-config__hint">Comma-separated schemas applied per query. <code>provsql</code> is always appended automatically; leave blank to inherit the database default.</span>
+          </span>
+          <span class="wp-config__sp">
+            <input type="text" class="wp-config__sp-input" id="cfg-search-path" placeholder="(database default)" autocomplete="off">
+            <span class="wp-config__sp-suffix" title="provsql is always appended"><i class="fas fa-lock" aria-hidden="true"></i> provsql</span>
+          </span>
+        </label>
+
         <p class="wp-config__status" id="cfg-status" hidden></p>
       </div>
     </span>
@@ -102,6 +123,7 @@
       <h2 class="wp-card__title">Your Query</h2>
       <p class="wp-card__lead">Type a SQL query. Results below carry where-provenance
         when in Where mode; hover any cell to see its source.</p>
+      <p class="wp-card__searchpath">search_path: <code id="searchpath-val">…</code></p>
     </header>
 
     <form class="wp-form" onsubmit="return runQuery(event)">
@@ -130,7 +152,7 @@
           </button>
           <ul class="wp-history__menu" id="history-menu" role="listbox" hidden></ul>
         </span>
-        <button type="submit" class="wp-btn wp-btn--primary" id="run-btn"><i class="fas fa-bolt"></i> Send query</button>
+        <button type="submit" class="wp-btn wp-btn--primary" id="run-btn" title="Send query (Ctrl+Enter / Cmd+Enter)"><i class="fas fa-bolt"></i> Send query</button>
         <button type="button" class="wp-btn wp-btn--ghost" id="cancel-btn" hidden><i class="fas fa-times-circle"></i> Cancel</button>
       </div>
     </form>

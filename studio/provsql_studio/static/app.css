@@ -218,6 +218,85 @@ em { font-style: italic; }
   z-index: 20;
 }
 .wp-nav__configpanel[hidden] { display: none; }
+
+/* ───────── schema panel ───────── */
+/* Wider than the config panel because relation names and columns can be
+   long; capped vertically so the popover never escapes the viewport. */
+.wp-schema__panel { width: 460px; max-height: 70vh; display: flex; flex-direction: column; }
+.wp-schema__lead {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.wp-schema__search {
+  width: 100%;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  margin-bottom: 0.6rem;
+  outline: none;
+}
+.wp-schema__search:focus { border-color: var(--purple-500); }
+.wp-schema__body {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  font-size: 0.82rem;
+}
+.wp-schema__group {
+  margin: 0 0 0.5rem;
+}
+.wp-schema__schema {
+  font-family: var(--font-display); font-weight: 600; font-style: italic;
+  font-size: 0.78rem;
+  color: var(--purple-700);
+  margin: 0 0 0.2rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wp-schema__rel {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0.32rem 0.5rem;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--purple-900);
+  cursor: pointer;
+  margin-bottom: 0.15rem;
+}
+.wp-schema__rel:hover { background: var(--bg-code); border-color: var(--border-soft); }
+.wp-schema__rel-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.wp-schema__rel-kind {
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  margin-left: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.wp-schema__cols {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  margin-top: 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wp-schema__empty {
+  margin: 0.4rem 0;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
 .wp-nav__configtitle {
   font-family: var(--font-display); font-style: italic; font-weight: 600;
   margin: 0 0 0.6rem;
@@ -333,6 +412,37 @@ em { font-style: italic; }
   font-size: 0.82rem;
   color: var(--fg-muted);
 }
+/* search_path text input + locked `provsql` suffix chip. The suffix is
+   visually attached to the right of the input so it reads as one
+   composite control: "<user-typed schemas>, [provsql]" */
+.wp-config__sp { display: flex; align-items: stretch; gap: 0.3rem; }
+.wp-config__sp-input {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--purple-700);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  min-width: 0;
+}
+.wp-config__sp-input:focus {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 1px;
+}
+.wp-config__sp-suffix {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(107, 79, 160, 0.12);
+  color: var(--purple-700);
+  border-radius: 4px;
+  padding: 0 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.wp-config__sp-suffix i { font-size: 0.78em; opacity: 0.75; }
 /* The Active switch reuses the same SVG-free pill we ship for the form
    toggles; copy the relevant rules so it doesn't depend on .wp-toggle. */
 .wp-config__switch {
@@ -520,6 +630,36 @@ body.mode-where #sidebar {
   font-size: 0.95rem;
 }
 .wp-card__lead code { background: var(--bg-code); padding: 1px 5px; border-radius: 3px; font-size: 0.86em; color: var(--purple-700); }
+/* Live search_path readout: keeps the user oriented when they're typing
+   unqualified relation names. Reuses the lead's code chip styling so
+   schema names render the same as inline-code elsewhere. */
+.wp-card__searchpath {
+  margin: 0.3rem 0 0;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.wp-card__searchpath code {
+  font-family: var(--font-mono);
+  background: var(--bg-code);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.95em;
+  color: var(--purple-700);
+}
+/* Locked-chip rendering for the `provsql` segment of search_path: a
+   small purple-tinted pill with a lock glyph, to indicate Studio
+   enforces this entry regardless of the user's configuration. */
+.wp-card__sp-locked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(107, 79, 160, 0.12);
+  color: var(--purple-700);
+  border-radius: 3px;
+  padding: 0 6px;
+  font-size: 0.95em;
+}
+.wp-card__sp-locked i { font-size: 0.78em; opacity: 0.75; }
 
 /* Relation quick-nav chips at the top of the where-mode sidebar. */
 .wp-rel-nav {

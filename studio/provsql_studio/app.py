@@ -6,6 +6,7 @@ Routes:
   POST /api/conn           – swap the active database (rebuilds the pool).
   GET  /api/databases      – list databases the current user can connect to.
   GET  /api/relations      – list provenance-tagged relations + content.
+  GET  /api/schema         – list all SELECT-able tables/views with their columns.
   POST /api/exec           – run a SQL batch; only the last statement's result is shown.
   POST /api/cancel/<id>    – pg_cancel_backend the batch in flight under that request id.
   GET  /api/circuit/<uuid> – BFS subgraph + dot-layout for a circuit root.
@@ -43,12 +44,14 @@ def create_app(
     statement_timeout: str = "30s",
     max_circuit_depth: int = 8,
     max_circuit_nodes: int = 500,
+    search_path: str = "",
 ) -> Flask:
     app = Flask(__name__, static_folder=None)  # we serve /static/ ourselves
     app.config.update(
         STATEMENT_TIMEOUT=statement_timeout,
         MAX_CIRCUIT_DEPTH=max_circuit_depth,
         MAX_CIRCUIT_NODES=max_circuit_nodes,
+        SEARCH_PATH=search_path,
     )
 
     app.config["DSN"] = dsn or ""
@@ -68,6 +71,8 @@ def create_app(
         app.config["MAX_CIRCUIT_DEPTH"] = persisted_opts["max_circuit_depth"]
     if "statement_timeout_seconds" in persisted_opts:
         app.config["STATEMENT_TIMEOUT"] = f"{persisted_opts['statement_timeout_seconds']}s"
+    if "search_path" in persisted_opts:
+        app.config["SEARCH_PATH"] = persisted_opts["search_path"]
     app.extensions["provsql_pool"] = db.make_pool(dsn)
     # Registry of in-flight POST /api/exec batches, keyed by the
     # client-generated request id. Lets POST /api/cancel/<id> resolve a
@@ -131,12 +136,21 @@ def create_app(
         # of a bare Flask 500. The connectivity-poll on the front-end
         # surfaces this string in the dot's tooltip.
         try:
-            return jsonify(db.conn_info(get_pool()))
+            info = db.conn_info(get_pool())
         except psycopg.OperationalError as e:
             return jsonify({
                 "error": "database unreachable",
                 "reason": str(e).strip() or "cannot connect to PostgreSQL",
             }), 503
+        # Display the path that user queries effectively see: the Studio
+        # override (Config panel) when set, else the session value, with
+        # provsql always pinned at the end. The front-end renders this
+        # as `<path> [lock]` to indicate provsql is enforced.
+        info["search_path"] = db.compose_search_path(
+            app.config.get("SEARCH_PATH", ""),
+            info["search_path"],
+        )
+        return jsonify(info)
 
     @app.post("/api/conn")
     def api_conn_switch():
@@ -171,6 +185,10 @@ def create_app(
     @app.get("/api/relations")
     def api_relations():
         return jsonify(db.list_relations(get_pool()))
+
+    @app.get("/api/schema")
+    def api_schema():
+        return jsonify(db.list_schema(get_pool()))
 
     @app.post("/api/exec")
     def api_exec():
@@ -216,6 +234,7 @@ def create_app(
                 wrap_last=wrap_last,
                 extra_gucs=app.config["RUNTIME_GUCS"],
                 on_pid=register_pid,
+                search_path=app.config.get("SEARCH_PATH", ""),
             )
         finally:
             if registered:
@@ -338,7 +357,7 @@ def create_app(
         # return the list and let the front-end pick.
         return jsonify({"matches": rows})
 
-    _OPTION_KEYS = {"max_circuit_depth", "statement_timeout_seconds"}
+    _OPTION_KEYS = {"max_circuit_depth", "statement_timeout_seconds", "search_path"}
 
     def _current_options() -> dict:
         # Surface the live values of the Studio-level options so the
@@ -367,6 +386,7 @@ def create_app(
         return {
             "max_circuit_depth": int(app.config["MAX_CIRCUIT_DEPTH"]),
             "statement_timeout_seconds": seconds if seconds is not None else 30,
+            "search_path": app.config.get("SEARCH_PATH", "") or "",
         }
 
     @app.get("/api/config")
@@ -397,6 +417,8 @@ def create_app(
                 app.config["MAX_CIRCUIT_DEPTH"] = canonical
             elif key == "statement_timeout_seconds":
                 app.config["STATEMENT_TIMEOUT"] = f"{canonical}s"
+            elif key == "search_path":
+                app.config["SEARCH_PATH"] = canonical
             db.save_persisted_options(_current_options())
             return jsonify({"ok": True, "key": key, "value": canonical})
         # Otherwise treat as a GUC override.

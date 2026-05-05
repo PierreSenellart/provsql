@@ -2,7 +2,28 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import re
 import sys
+
+
+# Endpoints the front-end polls on a timer and that would otherwise drown
+# out genuine activity in the access log. The connection-status dot polls
+# /api/conn every 5s; matched against the request line werkzeug logs so
+# both 200s and 503s (server down) are dropped.
+_QUIET_PATHS = (
+    re.compile(r'"GET /api/conn HTTP/[0-9.]+"'),
+)
+
+
+class _QuietAccessLogFilter(logging.Filter):
+    """Drop werkzeug access-log records for the polled endpoints listed in
+    _QUIET_PATHS. Any other log record (including app errors) flows through
+    untouched."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(p.search(msg) for p in _QUIET_PATHS)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=500,
         help="Node-count cap for /api/circuit responses (default 500).",
     )
+    p.add_argument(
+        "--search-path",
+        default="",
+        help="Comma-separated search_path applied per request (provsql is "
+             "appended automatically). Empty = inherit the database default.",
+    )
     p.add_argument("--debug", action="store_true", help="Enable Flask debug mode.")
     return p
 
@@ -49,7 +76,11 @@ def main(argv: list[str] | None = None) -> int:
         statement_timeout=args.statement_timeout,
         max_circuit_depth=args.max_circuit_depth,
         max_circuit_nodes=args.max_circuit_nodes,
+        search_path=args.search_path,
     )
+    # Quiet the high-frequency poll endpoints in the access log. Attached
+    # to the werkzeug logger so it survives Flask's debug reloader.
+    logging.getLogger("werkzeug").addFilter(_QuietAccessLogFilter())
     # threaded=True so POST /api/cancel/<id> can run while a long
     # POST /api/exec is still blocking on its pool connection.
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

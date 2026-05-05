@@ -2,6 +2,27 @@
 from __future__ import annotations
 
 
+def test_schema_lists_personnel_with_columns(client):
+    # /api/schema must include personnel (a SELECT-able table on the test
+    # search_path) with its full column list, including the rewriter's
+    # provsql tag, and exclude catalog / provsql-internal schemas.
+    resp = client.get("/api/schema")
+    assert resp.status_code == 200
+    rows = resp.get_json()
+    assert isinstance(rows, list) and rows, rows
+    by_qname = {f"{r['schema']}.{r['table']}": r for r in rows}
+    assert "provsql_test.personnel" in by_qname
+    rel = by_qname["provsql_test.personnel"]
+    assert rel["kind"] == "table"
+    col_names = [c["name"] for c in rel["columns"]]
+    assert col_names == ["id", "name", "position", "city", "classification", "provsql"]
+    # The catalog and provsql schemas must be filtered out.
+    schemas = {r["schema"] for r in rows}
+    assert "pg_catalog" not in schemas
+    assert "information_schema" not in schemas
+    assert "provsql" not in schemas
+
+
 def test_personnel_listed(client):
     resp = client.get("/api/relations")
     assert resp.status_code == 200

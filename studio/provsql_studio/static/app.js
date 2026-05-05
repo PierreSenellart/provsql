@@ -33,13 +33,15 @@
   // toggle is locked. In circuit mode, both are user-controlled.
   setupGucToggles();
   // Connection chip in the top nav: pull the live current_user /
-  // current_database() once at page load, then poll every 2s so the
-  // dot turns terracotta promptly if the server stops responding (e.g.
-  // PG was restarted, network blip) and back to green when it
-  // recovers.
+  // current_database() once at page load, then poll every 5s so the
+  // dot turns terracotta if the server stops responding (e.g. PG was
+  // restarted, network blip) and back to green when it recovers. The
+  // matching server-side log filter (cli.py) drops these polls from
+  // the access log to keep the console quiet.
   fetchConnInfo();
-  setInterval(fetchConnInfo, 2000);
+  setInterval(fetchConnInfo, 5000);
   setupConfigPanel();
+  setupSchemaPanel();
 
   // ⌘ / Ctrl+Enter submits the query form. Alt+↑/Alt+↓ steps through the
   // saved query history without opening the dropdown.
@@ -489,6 +491,21 @@
         dot.classList.remove('is-offline');
         dot.title = 'connected to a live PostgreSQL server';
       }
+      // Render search_path with `provsql` shown as a locked chip so the
+      // user can tell at a glance which segment is enforced by Studio.
+      // The compose helper on the server already pinned provsql to the
+      // end; we just style that segment.
+      const sp = document.getElementById('searchpath-val');
+      if (sp) {
+        const path = c.search_path || '';
+        const parts = path.split(',').map(s => s.trim()).filter(Boolean);
+        sp.innerHTML = parts.map(p => {
+          if (p === 'provsql' || p === '"provsql"') {
+            return `<span class="wp-card__sp-locked" title="ProvSQL Studio appends “provsql” to your search_path so its helper functions are reachable as a fallback for unqualified names."><i class="fas fa-lock" aria-hidden="true"></i> provsql</span>`;
+          }
+          return escapeHtml(p);
+        }).join(', ');
+      }
     } catch (e) {
       // Don't clobber _currentConn or the displayed identity on a
       // transient blip: the chip keeps showing the last-known db name
@@ -584,6 +601,7 @@
     const depth   = document.getElementById('cfg-depth');
     const depthOut = document.getElementById('cfg-depth-out');
     const timeout = document.getElementById('cfg-timeout');
+    const sp      = document.getElementById('cfg-search-path');
 
     async function loadConfig() {
       try {
@@ -601,6 +619,9 @@
         }
         if (timeout && opts.statement_timeout_seconds != null) {
           timeout.value = String(opts.statement_timeout_seconds);
+        }
+        if (sp && opts.search_path != null) {
+          sp.value = opts.search_path;
         }
         loaded = true;
         showStatus('');
@@ -687,6 +708,147 @@
         setGuc('statement_timeout_seconds', n);
       });
     }
+    if (sp) {
+      // Persist on blur and on Enter so the user's typing isn't saved
+      // mid-edit. The trailing `, provsql` is enforced server-side; the
+      // user only types the leading schemas they care about.
+      const commit = () => {
+        const v = (sp.value || '').trim();
+        sp.value = v;
+        setGuc('search_path', v);
+        // Refresh the search_path readout under the query box so it
+        // reflects the new value immediately rather than on the next
+        // 5s connection-info poll.
+        fetchConnInfo();
+      };
+      sp.addEventListener('blur', commit);
+      sp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); sp.blur(); }
+      });
+    }
+  }
+
+  // Schema browser: top-nav button opening a popover that lists every
+  // SELECT-able relation grouped by schema, with a search box and click
+  // to insert "schema.relation" at the cursor in the textarea. The
+  // /api/schema fetch is lazy (first open) and the result is cached for
+  // the page session: if the schema actually changes (CREATE TABLE etc.),
+  // a page reload re-fetches.
+  function setupSchemaPanel() {
+    const btn    = document.getElementById('schema-btn');
+    const panel  = document.getElementById('schema-panel');
+    const body   = document.getElementById('schema-body');
+    const search = document.getElementById('schema-search');
+    if (!btn || !panel || !body || !search) return;
+
+    let loaded = false;
+    let entries = [];
+    // True when every relation lives in the same schema, so we can insert
+    // the bare table name on click instead of the qualified schema.table
+    // form. Multi-schema databases keep the qualified form to disambiguate.
+    let singleSchema = true;
+
+    async function load() {
+      body.innerHTML = '<p class="wp-schema__empty">Loading…</p>';
+      try {
+        const resp = await fetch('/api/schema');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        entries = await resp.json();
+        singleSchema = new Set(entries.map(r => r.schema)).size <= 1;
+        loaded = true;
+        render();
+      } catch (e) {
+        body.innerHTML =
+          `<p class="wp-schema__empty">Failed to load schema: ${escapeHtml(e.message || String(e))}</p>`;
+      }
+    }
+
+    function render() {
+      const q = (search.value || '').trim().toLowerCase();
+      const filtered = q
+        ? entries.filter(r =>
+            r.schema.toLowerCase().includes(q) ||
+            r.table.toLowerCase().includes(q)  ||
+            r.columns.some(c => c.name.toLowerCase().includes(q))
+          )
+        : entries;
+      if (filtered.length === 0) {
+        body.innerHTML = '<p class="wp-schema__empty">No matches.</p>';
+        return;
+      }
+      const bySchema = new Map();
+      for (const r of filtered) {
+        if (!bySchema.has(r.schema)) bySchema.set(r.schema, []);
+        bySchema.get(r.schema).push(r);
+      }
+      let html = '';
+      for (const [schemaName, rels] of bySchema) {
+        html += '<div class="wp-schema__group">';
+        html += `<h5 class="wp-schema__schema">${escapeHtml(schemaName)}</h5>`;
+        for (const r of rels) {
+          const qname  = `${r.schema}.${r.table}`;
+          const insert = singleSchema ? r.table : qname;
+          const cols   = r.columns.map(c => c.name).join(', ');
+          html +=
+            `<button type="button" class="wp-schema__rel"`
+            + ` data-qname="${escapeAttr(insert)}"`
+            + ` title="${escapeAttr(qname)} — ${r.columns.length} column${r.columns.length === 1 ? '' : 's'}">`
+            + `<span class="wp-schema__rel-name">${escapeHtml(r.table)}</span>`
+            + `<span class="wp-schema__rel-kind">${escapeHtml(r.kind)}</span>`;
+          if (cols) {
+            html += `<span class="wp-schema__cols">${escapeHtml(cols)}</span>`;
+          }
+          html += `</button>`;
+        }
+        html += '</div>';
+      }
+      body.innerHTML = html;
+    }
+
+    function insertAtCursor(text) {
+      const ta = document.getElementById('request');
+      if (!ta) return;
+      const start = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+      const end   = ta.selectionEnd   != null ? ta.selectionEnd   : ta.value.length;
+      ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+      const newPos = start + text.length;
+      ta.setSelectionRange(newPos, newPos);
+      ta.focus();
+      // Notify the syntax-highlight overlay (it listens for `input`).
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    body.addEventListener('click', (e) => {
+      const rel = e.target.closest('.wp-schema__rel');
+      if (!rel || !rel.dataset.qname) return;
+      insertAtCursor(rel.dataset.qname);
+      close();
+    });
+    search.addEventListener('input', () => { if (loaded) render(); });
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+    });
+
+    function open() {
+      panel.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      if (!loaded) load();
+      setTimeout(() => search.focus(), 0);
+    }
+    function close() {
+      panel.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    }
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (panel.hidden) open(); else close();
+    });
+    document.addEventListener('click', (e) => {
+      if (!panel.hidden && !panel.contains(e.target) && e.target !== btn) close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !panel.hidden) close();
+    });
   }
 
   function setupGucToggles() {
