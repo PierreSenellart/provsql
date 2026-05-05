@@ -49,6 +49,22 @@ def create_app(
     )
 
     app.config["DSN"] = dsn or ""
+    # Runtime overrides for the panel-managed GUCs (provsql.active and
+    # provsql.verbose_level). Applied as SET LOCAL on every batch so changes
+    # survive across pool checkouts. Toggle-managed GUCs go in their own
+    # request fields, not here.
+    #
+    # Loaded from ~/.config/provsql-studio/config.json so a Studio restart
+    # doesn't drop the user's chosen kill-switch / verbosity settings.
+    app.config["RUNTIME_GUCS"] = dict(db.load_persisted_gucs())
+    # Studio-level option overrides (Config-panel managed): persisted-on-disk
+    # values for max_circuit_depth and statement_timeout. They override the
+    # CLI defaults set above so the panel-set values survive restarts.
+    persisted_opts = db.load_persisted_options()
+    if "max_circuit_depth" in persisted_opts:
+        app.config["MAX_CIRCUIT_DEPTH"] = persisted_opts["max_circuit_depth"]
+    if "statement_timeout_seconds" in persisted_opts:
+        app.config["STATEMENT_TIMEOUT"] = f"{persisted_opts['statement_timeout_seconds']}s"
     app.extensions["provsql_pool"] = db.make_pool(dsn)
     layout_cache = circuit_mod.LayoutCache()
 
@@ -162,6 +178,7 @@ def create_app(
             where_provenance=where_prov,
             update_provenance=update_prov,
             wrap_last=wrap_last,
+            extra_gucs=app.config["RUNTIME_GUCS"],
         )
 
         blocks = [r.to_dict() for r in intermediate]
@@ -170,7 +187,7 @@ def create_app(
         return jsonify({
             "blocks": blocks,
             "wrapped": meta["wrapped"],
-            "notice": meta["notice"],
+            "notices": meta.get("notices", []),
         })
 
     @app.get("/api/circuit/<token>")
@@ -196,6 +213,7 @@ def create_app(
         return _layout_response(frontier, depth)
 
     def _layout_response(root: str, depth: int):
+        import psycopg
         cached = layout_cache.get(root, depth)
         if cached is not None:
             return jsonify(cached)
@@ -210,36 +228,116 @@ def create_app(
                 "cap": e.cap,
                 "hint": "reduce depth or expand interactively",
             }), 413
+        except psycopg.errors.UndefinedFunction:
+            # The current database carries an older provsql that predates
+            # circuit_subgraph / resolve_input. Tell the user instead of
+            # leaking the raw "function ... does not exist" stack trace.
+            return jsonify({
+                "error": "circuit introspection unavailable on this database",
+                "hint": (
+                    "The connected database has an older provsql installation "
+                    "without provsql.circuit_subgraph. Upgrade the extension "
+                    "(ALTER EXTENSION provsql UPDATE) or switch to a database "
+                    "that has the current version."
+                ),
+            }), 501
         layout_cache.put(root, depth, data)
         return jsonify(data)
 
     @app.get("/api/leaf/<token>")
     def api_leaf(token: str):
+        import psycopg
         try:
             uuid_str = _coerce_to_uuid(token)
         except ValueError:
             return jsonify({"error": "not a valid UUID"}), 400
-        rows = circuit_mod.resolve_input(get_pool(), uuid_str)
+        try:
+            rows = circuit_mod.resolve_input(get_pool(), uuid_str)
+        except psycopg.errors.UndefinedFunction:
+            return jsonify({
+                "error": "leaf resolution unavailable on this database",
+                "hint": (
+                    "The connected database has an older provsql installation "
+                    "without provsql.resolve_input. Upgrade the extension or "
+                    "switch to a database that has the current version."
+                ),
+            }), 501
         if not rows:
             return jsonify({"error": "no row maps to this input gate"}), 404
         # Single-relation case is the norm; if multiple tables share the UUID,
         # return the list and let the front-end pick.
         return jsonify({"matches": rows})
 
+    _OPTION_KEYS = {"max_circuit_depth", "statement_timeout_seconds"}
+
+    def _current_options() -> dict:
+        # Surface the live values of the Studio-level options so the
+        # Config panel can display them after a restart, including those
+        # picked up from CLI flags rather than the on-disk config file.
+        timeout = str(app.config["STATEMENT_TIMEOUT"]).strip().lower()
+        # Best-effort parse of the timeout string; the CLI accepts any
+        # PG-parseable interval ("30s", "500ms", "1min"), but the panel
+        # stores it as plain seconds.
+        seconds: int | None = None
+        if timeout.endswith("ms"):
+            try:
+                seconds = max(1, int(timeout[:-2]) // 1000)
+            except ValueError:
+                pass
+        elif timeout.endswith("s") and not timeout.endswith("ms"):
+            try:
+                seconds = int(timeout[:-1])
+            except ValueError:
+                pass
+        elif timeout.endswith("min"):
+            try:
+                seconds = int(timeout[:-3]) * 60
+            except ValueError:
+                pass
+        return {
+            "max_circuit_depth": int(app.config["MAX_CIRCUIT_DEPTH"]),
+            "statement_timeout_seconds": seconds if seconds is not None else 30,
+        }
+
     @app.get("/api/config")
     def api_config_get():
-        return jsonify(db.get_gucs(get_pool(), sorted(db._GUC_WHITELIST)))
+        # Returns the *effective* values of the panel GUCs after our runtime
+        # overrides are applied, plus the bare overrides we hold in app
+        # state (so the front-end can show "modified" markers if it wants).
+        effective = db.show_panel_gucs(get_pool(), app.config["RUNTIME_GUCS"])
+        return jsonify({
+            "effective": effective,
+            "overrides": dict(app.config["RUNTIME_GUCS"]),
+            "options": _current_options(),
+        })
 
     @app.post("/api/config")
     def api_config_set():
         payload = request.get_json(silent=True) or {}
         name = payload.get("key", "")
         value = payload.get("value", "")
+        # Studio-level options (not GUCs) are validated and stored in app
+        # config, then persisted alongside the GUC overrides.
+        if name in _OPTION_KEYS:
+            try:
+                key, canonical = db.validate_panel_option(name, value)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            if key == "max_circuit_depth":
+                app.config["MAX_CIRCUIT_DEPTH"] = canonical
+            elif key == "statement_timeout_seconds":
+                app.config["STATEMENT_TIMEOUT"] = f"{canonical}s"
+            db.save_persisted_options(_current_options())
+            return jsonify({"ok": True, "key": key, "value": canonical})
+        # Otherwise treat as a GUC override.
         try:
-            db.set_guc(get_pool(), name, value)
+            canonical = db.validate_panel_guc(name, value)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
-        return jsonify({"ok": True})
+        app.config["RUNTIME_GUCS"][name] = canonical
+        # Best-effort persist so a Studio restart keeps the user's choice.
+        db.save_persisted_gucs(app.config["RUNTIME_GUCS"])
+        return jsonify({"ok": True, "key": name, "value": canonical})
 
     return app
 

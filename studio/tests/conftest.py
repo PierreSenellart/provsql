@@ -84,9 +84,18 @@ def test_dsn() -> str:
 
 
 @pytest.fixture()
-def app(test_dsn: str):
+def app(test_dsn: str, tmp_path, monkeypatch):
     """Per-test Flask app bound to the test DSN, with the schema search_path
-    pre-set so unqualified `personnel` references resolve."""
+    pre-set so unqualified `personnel` references resolve.
+
+    Also redirects Studio's on-disk config (used by /api/config persistence)
+    into a per-test tmp dir so tests can't read or write the user's real
+    ~/.config/provsql-studio/config.json. The env var must be in place
+    before `create_app()` runs because the factory eagerly loads any
+    persisted GUC overrides into RUNTIME_GUCS, so we set it here rather
+    than in an autouse fixture (whose ordering relative to `app` is
+    fragile)."""
+    monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "studio_cfg"))
     app = create_app(dsn=f"{test_dsn} options='-c search_path=provsql_test,provsql,public'")
     app.config.update(TESTING=True)
     yield app

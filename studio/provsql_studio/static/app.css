@@ -185,6 +185,11 @@ em { font-style: italic; }
   text-decoration: none;
   display: inline-flex; align-items: center; gap: 0.4rem;
   transition: color 0.15s;
+  /* In case the element is a <button> rather than an <a>: */
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
 }
 .wp-nav__link:hover { color: var(--gold-500); }
 /* Override the global a:visited rule so visited nav links don't go purple-on-purple */
@@ -192,22 +197,200 @@ em { font-style: italic; }
   color: rgba(255,255,255,0.88);
 }
 
-/* ───────── error block (rendered into the result area) ───────── */
-.wp-error {
-  border: 1px solid var(--terracotta-500);
-  border-left: 3px solid var(--terracotta-500);
-  background: rgba(196, 102, 74, 0.08);
+/* Config popover anchored to the cog button. */
+.wp-nav__configwrap { position: relative; display: inline-flex; }
+.wp-nav__link[aria-expanded="true"] { color: var(--gold-500); }
+.wp-nav__configpanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: #fff;
   color: var(--purple-900);
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
+  padding: 0.85rem 1rem;
+  width: 320px;
+  z-index: 20;
+}
+.wp-nav__configpanel[hidden] { display: none; }
+.wp-nav__configtitle {
+  font-family: var(--font-display); font-style: italic; font-weight: 600;
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+  border-bottom: 2px solid var(--gold-500);
+  padding-bottom: 0.2em;
+  display: inline-block;
+}
+.wp-config__row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--border-soft);
+}
+.wp-config__row:first-of-type { border-top: none; }
+.wp-config__name {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  display: flex; flex-direction: column; gap: 0.15rem;
+  flex: 1;
+  min-width: 0;
+}
+.wp-config__name code { color: var(--purple-700); font-size: 0.95em; align-self: flex-start; }
+.wp-config__hint {
+  color: var(--fg-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+/* Multi-line config row: header on top, control below (used by the
+   verbose_level slider, which needs full width). */
+.wp-config__row--col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+.wp-config__slider {
+  display: flex; align-items: center; gap: 0.6rem;
+  width: 100%;
+}
+.wp-config__range {
+  flex: 1;
+  -webkit-appearance: none; appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 18px;
+  margin: 0;
+}
+.wp-config__range:focus { outline: none; }
+/* Track: thin pill in soft purple. */
+.wp-config__range::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--purple-100, #D6CCF0);
+  border-radius: 999px;
+}
+.wp-config__range::-moz-range-track {
+  height: 4px;
+  background: var(--purple-100, #D6CCF0);
+  border-radius: 999px;
+}
+/* Thumb: 14px circle in primary purple. */
+.wp-config__range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--purple-500);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(42, 24, 80, 0.3);
+  margin-top: -5px;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.wp-config__range::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.wp-config__range::-moz-range-thumb {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--purple-500);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(42, 24, 80, 0.3);
+  cursor: pointer;
+}
+.wp-config__range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(232, 184, 75, 0.6);
+}
+.wp-config__rangeval {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--purple-700);
+  width: 2.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Number input with a trailing unit (e.g. seconds for the query timeout). */
+.wp-config__numwrap { display: inline-flex; align-items: center; gap: 0.3rem; }
+.wp-config__num {
+  width: 4.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--purple-700);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.wp-config__num:focus {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 1px;
+}
+.wp-config__unit {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+}
+/* The Active switch reuses the same SVG-free pill we ship for the form
+   toggles; copy the relevant rules so it doesn't depend on .wp-toggle. */
+.wp-config__switch {
+  appearance: none; -webkit-appearance: none;
+  position: relative;
+  width: 30px; height: 16px;
+  border-radius: 999px;
+  background: var(--border-soft);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.wp-config__switch::before {
+  content: "";
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(42, 24, 80, 0.25);
+  transition: left 0.15s;
+}
+.wp-config__switch:checked {
+  background: var(--purple-500);
+  border-color: var(--purple-500);
+}
+.wp-config__switch:checked::before { left: 15px; }
+.wp-config__status {
+  margin: 0.5rem 0 0;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}
+.wp-config__status.is-error { color: var(--terracotta-500); }
+
+/* ───────── error block (rendered into the result area) ───────── */
+/* Errors get a distinctly deeper red than warnings (which use terracotta).
+   Stronger background tint + crimson border + dark-red text so the block
+   reads as a stop sign, not just a warmer warning. */
+.wp-error {
+  border: 1px solid #B00020;
+  border-left: 3px solid #B00020;
+  background: rgba(176, 0, 32, 0.12);
+  color: #5A0010;
   padding: 0.6rem 0.85rem;
   border-radius: 4px;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 0.85rem;
   margin: 0.4rem 0;
+  white-space: pre-wrap;
 }
+.wp-error i { color: #B00020; margin-right: 0.4rem; }
+.wp-error code { background: rgba(176, 0, 32, 0.10); color: #5A0010; }
 .wp-error code { background: var(--bg-code); }
 
 /* Informational banner: shown when the wrap is silently dropped because
-   the user's query touches no provenance-tracked relation. */
+   the user's query touches no provenance-tracked relation, plus the
+   per-NOTICE feed forwarded from psycopg's notice handler.
+   white-space: pre-wrap preserves embedded newlines that PostgreSQL
+   uses to format multi-line diagnostics (DETAIL / HINT / context lines). */
 .wp-notice {
   border: 1px solid var(--gold-500);
   border-left: 3px solid var(--gold-500);
@@ -218,8 +401,43 @@ em { font-style: italic; }
   font-family: var(--font-ui);
   font-size: 0.85rem;
   margin: 0.4rem 0;
+  white-space: pre-wrap;
 }
 .wp-notice i { color: var(--gold-700, #B8901E); margin-right: 0.4rem; }
+
+/* Server WARNING (e.g. provsql_warning): orange/terracotta accent. */
+.wp-warning {
+  border: 1px solid var(--terracotta-500);
+  border-left: 3px solid var(--terracotta-500);
+  background: rgba(196, 102, 74, 0.08);
+  color: var(--purple-900);
+  padding: 0.6rem 0.85rem;
+  border-radius: 4px;
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  margin: 0.4rem 0;
+  white-space: pre-wrap;
+}
+.wp-warning i { color: var(--terracotta-500); margin-right: 0.4rem; }
+
+/* Source badge for messages that the C extension emits with the
+   "ProvSQL: " prefix. Renders as a small purple pill so the origin
+   is readable at a glance and the prefix doesn't have to clutter the
+   message text inline. */
+.wp-srcbadge {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  background: var(--purple-500);
+  color: #fff;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  margin-right: 0.35rem;
+  vertical-align: 1px;
+}
 #result-banners:not(:empty) { margin: 0.4rem 0 0.6rem; }
 
 /* ───────── shared site footer (mirrors website + docs) ───────── */

@@ -35,6 +35,7 @@
   // Connection chip in the top nav: pull the live current_user /
   // current_database() once at page load.
   fetchConnInfo();
+  setupConfigPanel();
 
   // ⌘ / Ctrl+Enter submits the query form. Alt+↑/Alt+↓ steps through the
   // saved query history without opening the dropdown.
@@ -50,6 +51,19 @@
     }
   });
   setupHistoryDropdown();
+
+  // Expose the env that the global runQuery reads (function declarations
+  // are hoisted, so the named functions below are safe to reference here
+  // even though they appear later in the IIFE). This MUST happen before
+  // setupWhereMode / setupCircuitMode runs, because both can auto-replay
+  // a carry-over query via runQuery, and if __provsqlStudio is still
+  // undefined at that point the fallback default `{mode: 'where', ...}`
+  // kicks in — the where-mode wrap then fires on /circuit pages and
+  // explodes on aggregation circuits with "Wrong type of gate".
+  window.__provsqlStudio = {
+    mode, refreshRelations, escapeHtml, escapeAttr, formatCell,
+    isRightAlignedType, pushHistory,
+  };
 
   if (mode === 'where') setupWhereMode();
   else                  setupCircuitMode();
@@ -485,6 +499,127 @@
     });
   }
 
+  /* ──────── Config popover (provsql.active + provsql.verbose_level) ──────── */
+
+  function setupConfigPanel() {
+    const btn    = document.getElementById('config-btn');
+    const panel  = document.getElementById('config-panel');
+    const active = document.getElementById('cfg-active');
+    const verb   = document.getElementById('cfg-verbose');
+    const status = document.getElementById('cfg-status');
+    if (!btn || !panel || !active || !verb) return;
+
+    let loaded = false;
+
+    const verbOut = document.getElementById('cfg-verbose-out');
+    const depth   = document.getElementById('cfg-depth');
+    const depthOut = document.getElementById('cfg-depth-out');
+    const timeout = document.getElementById('cfg-timeout');
+
+    async function loadConfig() {
+      try {
+        const resp = await fetch('/api/config');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const cfg = await resp.json();
+        const eff = cfg.effective || {};
+        active.checked = (eff['provsql.active'] || 'on') !== 'off';
+        verb.value     = eff['provsql.verbose_level'] || '0';
+        if (verbOut) verbOut.textContent = verb.value;
+        const opts = cfg.options || {};
+        if (depth && opts.max_circuit_depth != null) {
+          depth.value = String(opts.max_circuit_depth);
+          if (depthOut) depthOut.textContent = depth.value;
+        }
+        if (timeout && opts.statement_timeout_seconds != null) {
+          timeout.value = String(opts.statement_timeout_seconds);
+        }
+        loaded = true;
+        showStatus('');
+      } catch (e) {
+        showStatus(`Failed to load: ${e.message}`, true);
+      }
+    }
+    function showStatus(msg, isErr) {
+      if (!msg) {
+        status.hidden = true;
+        status.classList.remove('is-error');
+        return;
+      }
+      status.textContent = msg;
+      status.classList.toggle('is-error', !!isErr);
+      status.hidden = false;
+    }
+    async function setGuc(name, value) {
+      try {
+        const resp = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: name, value: String(value) }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+        showStatus(`Saved: ${name} = ${value}`);
+        // Auto-clear the status after a couple of seconds.
+        clearTimeout(setGuc._t);
+        setGuc._t = setTimeout(() => showStatus(''), 2000);
+      } catch (e) {
+        showStatus(e.message, true);
+      }
+    }
+
+    function open() {
+      panel.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      if (!loaded) loadConfig();
+    }
+    function close() {
+      panel.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    }
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (panel.hidden) open(); else close();
+    });
+    document.addEventListener('click', (e) => {
+      if (!panel.hidden && !panel.contains(e.target) && e.target !== btn) close();
+    });
+    active.addEventListener('change', () => {
+      setGuc('provsql.active', active.checked ? 'on' : 'off');
+    });
+    // Live-update the value display as the slider drags; only POST on
+    // release (`change`) so we don't hammer /api/config every step.
+    verb.addEventListener('input', () => {
+      if (verbOut) verbOut.textContent = verb.value;
+    });
+    verb.addEventListener('change', () => {
+      const n = Math.max(0, Math.min(100, parseInt(verb.value || '0', 10) || 0));
+      verb.value = String(n);
+      if (verbOut) verbOut.textContent = verb.value;
+      setGuc('provsql.verbose_level', n);
+    });
+
+    if (depth) {
+      depth.addEventListener('input', () => {
+        if (depthOut) depthOut.textContent = depth.value;
+      });
+      depth.addEventListener('change', () => {
+        const n = Math.max(1, Math.min(50, parseInt(depth.value || '8', 10) || 8));
+        depth.value = String(n);
+        if (depthOut) depthOut.textContent = depth.value;
+        setGuc('max_circuit_depth', n);
+      });
+    }
+    if (timeout) {
+      timeout.addEventListener('change', () => {
+        const n = Math.max(1, Math.min(3600, parseInt(timeout.value || '30', 10) || 30));
+        timeout.value = String(n);
+        setGuc('statement_timeout_seconds', n);
+      });
+    }
+  }
+
   function setupGucToggles() {
     const wp = document.getElementById('opt-where-prov');
     const up = document.getElementById('opt-update-prov');
@@ -663,11 +798,6 @@
     return RIGHT_ALIGNED_TYPES.has((typeName || '').toLowerCase());
   }
 
-  // Expose to runQuery (defined as a global below for the inline onsubmit).
-  window.__provsqlStudio = {
-    mode, refreshRelations, escapeHtml, escapeAttr, formatCell,
-    isRightAlignedType, pushHistory,
-  };
 })();
 
 /* Global runQuery: invoked by the form's inline onsubmit. POSTs to /api/exec
@@ -714,7 +844,7 @@ async function runQuery(ev) {
     return false;
   }
   const payload = await resp.json();
-  renderBlocks(payload.blocks || [], !!payload.wrapped, payload.notice || null);
+  renderBlocks(payload.blocks || [], !!payload.wrapped, payload.notices || []);
 
   // Append the just-submitted query to the persistent history (skipping
   // exact-duplicate consecutive entries). We do this regardless of the
@@ -727,27 +857,58 @@ async function runQuery(ev) {
 
   return false;
 
-  function renderBlocks(blocks, wrapped, notice) {
-    // For Stage 2, /api/exec returns at most: zero or more error blocks (from
-    // earlier failed statements) followed by the final block. We render only
-    // the final block in the result table, but surface earlier errors plus
-    // any informational notices into the dedicated #result-banners slot
-    // (which sits between the result header and the table — putting <div>s
-    // directly inside <tbody> is invalid HTML and the browser hoists them
-    // into the first <td>, making the message look wedged into a cell).
+  // Render a single NOTICE / WARNING / ERROR / INFO banner. Severity drives
+  // colour + icon; the literal severity tag is omitted (the visual style
+  // already conveys it). ProvSQL-emitted messages all carry a "ProvSQL: "
+  // prefix (provsql_error.h's macros prepend it); strip the prefix and
+  // render it as a brand pill so the source is obvious without duplicating
+  // it inline.
+  function renderDiag(severity, message, sqlstate) {
+    const sev = String(severity || 'NOTICE').toUpperCase();
+    let cls, icon;
+    if (sev === 'ERROR' || sev === 'FATAL' || sev === 'PANIC') {
+      cls = 'wp-error';   icon = 'fa-exclamation-circle';
+    } else if (sev === 'WARNING') {
+      cls = 'wp-warning'; icon = 'fa-exclamation-triangle';
+    } else {
+      cls = 'wp-notice';  icon = 'fa-info-circle';
+    }
+    const raw = message || '';
+    const m = raw.match(/^ProvSQL:\s*(.*)$/s);
+    const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
+    const text  = m ? m[1] : raw;
+    // XX000 is the generic "internal_error" catch-all that provsql_error()
+    // raises (the C macro doesn't set a specific errcode); appending it
+    // adds noise without information, so skip it.
+    const tail  = (sqlstate && sqlstate !== 'XX000')
+      ? ` <code>(SQLSTATE ${env.escapeHtml(sqlstate)})</code>`
+      : '';
+    return `<div class="${cls}"><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(text)}${tail}</div>`;
+  }
+
+  function renderBlocks(blocks, wrapped, notices) {
+    // /api/exec returns zero or more error blocks (from earlier failed
+    // statements) followed by the final block. We render only the final
+    // block in the result table; everything informational (failed-prelude
+    // errors, server NOTICE / WARNING messages, Studio's own observations
+    // via severity=INFO) goes into the dedicated #result-banners slot
+    // above the table — putting <div>s straight into <tbody> is invalid
+    // HTML and the browser hoists them into the first <td>.
     const final = blocks[blocks.length - 1];
     const earlier = blocks.slice(0, -1);
 
     const banners = document.getElementById('result-banners');
     let bannerHtml = '';
-    if (earlier.length) {
-      bannerHtml += earlier.map(b => b.kind === 'error'
-        ? `<div class="wp-error">Earlier statement failed: ${env.escapeHtml(b.message)}</div>`
-        : ''
-      ).join('');
+    // Earlier-failed prelude statements: render each as an ERROR banner
+    // alongside notices/warnings.
+    for (const b of earlier) {
+      if (b.kind === 'error') {
+        bannerHtml += renderDiag('ERROR', b.message, b.sqlstate);
+      }
     }
-    if (notice) {
-      bannerHtml += `<div class="wp-notice"><i class="fas fa-info-circle"></i> ${env.escapeHtml(notice)}</div>`;
+    // Server-side notices/warnings + Studio's own INFO observations.
+    for (const n of (notices || [])) {
+      bannerHtml += renderDiag(n.severity, n.message);
     }
     if (banners) banners.innerHTML = bannerHtml;
 
@@ -759,8 +920,15 @@ async function runQuery(ev) {
     }
 
     if (final.kind === 'error') {
+      // Append the final error to the same banner stack as earlier errors
+      // and notices, so the visual treatment is uniform (icon + ProvSQL
+      // pill + same colours + multi-line preserved). The result table
+      // collapses to empty.
+      if (banners) {
+        banners.innerHTML += renderDiag('ERROR', final.message, final.sqlstate);
+      }
       head.innerHTML = '';
-      body.innerHTML = `<tr><td><div class="wp-error">Error: ${env.escapeHtml(final.message)}${final.sqlstate ? ` <code>(SQLSTATE ${env.escapeHtml(final.sqlstate)})</code>` : ''}</div></td></tr>`;
+      body.innerHTML = '';
       count.textContent = 0;
       return;
     }
@@ -787,12 +955,6 @@ async function runQuery(ev) {
         else if (c.name === 'provsql' && isWhere) { /* hidden in where mode */ }
         else displayIdx.push(i);
       });
-      // In circuit mode, surface a hint when there's no UUID/agg_token
-      // column to click. We check this once on the columns.
-      const hasClickableCols = displayIdx.some(i =>
-        ['uuid', 'agg_token'].includes((allCols[i].type_name || '').toLowerCase())
-      );
-
       const headExtra = (isWhere && wrapped) ? '<th></th>' : '';
       head.innerHTML = displayIdx.map(i => {
         const alignCls = env.isRightAlignedType(allCols[i].type_name) ? ' is-right' : '';
@@ -826,22 +988,14 @@ async function runQuery(ev) {
         return `<tr>${cells}${jumpBtn}</tr>`;
       }).join('');
       count.textContent = final.rows.length;
-
-      if (isCircuit && !hasClickableCols && final.rows.length) {
-        const legend = document.getElementById('result-legend');
-        if (legend) {
-          legend.innerHTML =
-            '<i class="fas fa-info-circle"></i> No UUID columns in this result: '
-            + '<a href="/where" class="ps-modeswitch__btn" style="color:var(--purple-500); text-decoration:underline; padding:0 0.2rem">switch to Where mode</a> '
-            + 'to see source-cell highlights, or add <code>provsql.provenance()</code> to your SELECT.';
-        }
-      }
     }
   }
 
   function renderError(msg) {
+    const banners = document.getElementById('result-banners');
+    if (banners) banners.innerHTML = renderDiag('ERROR', msg);
     head.innerHTML = '';
-    body.innerHTML = `<tr><td><div class="wp-error">${env.escapeHtml(msg)}</div></td></tr>`;
+    body.innerHTML = '';
     count.textContent = 0;
   }
 

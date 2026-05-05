@@ -173,8 +173,11 @@ def test_where_mode_falls_back_when_no_provenance_relation(client):
     )
     payload = post_exec(client, sql, mode="where")
     assert payload["wrapped"] is False
-    assert payload["notice"] is not None
-    assert "not provenance-tracked" in payload["notice"].lower()
+    # Wrap-fallback rides in `notices` with severity INFO (uniform path
+    # with server-side NOTICE / WARNING messages).
+    info_notices = [n for n in payload["notices"] if n["severity"] == "INFO"]
+    assert info_notices, payload["notices"]
+    assert "not provenance-tracked" in info_notices[0]["message"].lower()
     final = payload["blocks"][-1]
     assert final["kind"] == "rows"
     assert [r[0] for r in final["rows"]] == [1, 2]

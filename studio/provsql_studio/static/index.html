@@ -28,7 +28,55 @@
         <ul class="wp-nav__dbmenu" id="dbmenu" role="listbox" hidden></ul>
       </span>
     </span>
-    <a class="wp-nav__link" href="#"><i class="fas fa-cog"></i> Config</a>
+    <span class="wp-nav__configwrap">
+      <button type="button" class="wp-nav__link" id="config-btn" aria-haspopup="dialog" aria-expanded="false"><i class="fas fa-cog"></i> Config</button>
+      <div class="wp-nav__configpanel" id="config-panel" role="dialog" hidden>
+        <h4 class="wp-nav__configtitle">Session settings</h4>
+
+        <label class="wp-config__row">
+          <span class="wp-config__name"><code>provsql.active</code>
+            <span class="wp-config__hint">When off, ProvSQL drops provenance attributes.</span>
+          </span>
+          <input type="checkbox" class="wp-config__switch" id="cfg-active">
+        </label>
+
+        <label class="wp-config__row wp-config__row--col">
+          <span class="wp-config__name"><code>provsql.verbose_level</code>
+            <span class="wp-config__hint">
+              See
+              <a href="https://provsql.org/docs/user/configuration.html"
+                 target="_blank" rel="noopener">verbosity-level documentation</a>.
+            </span>
+          </span>
+          <span class="wp-config__slider">
+            <input type="range" class="wp-config__range" id="cfg-verbose" min="0" max="100" step="1" value="0">
+            <output class="wp-config__rangeval" id="cfg-verbose-out">0</output>
+          </span>
+        </label>
+
+        <label class="wp-config__row wp-config__row--col">
+          <span class="wp-config__name">Max circuit depth
+            <span class="wp-config__hint">BFS cutoff for the circuit DAG. Deeper trees expose more frontier nodes the user can click to expand.</span>
+          </span>
+          <span class="wp-config__slider">
+            <input type="range" class="wp-config__range" id="cfg-depth" min="1" max="20" step="1" value="8">
+            <output class="wp-config__rangeval" id="cfg-depth-out">8</output>
+          </span>
+        </label>
+
+        <label class="wp-config__row">
+          <span class="wp-config__name">Query timeout
+            <span class="wp-config__hint">Per-request <code>statement_timeout</code>; cancels long-running queries.</span>
+          </span>
+          <span class="wp-config__numwrap">
+            <input type="number" class="wp-config__num" id="cfg-timeout" min="1" max="3600" step="1" value="30">
+            <span class="wp-config__unit">s</span>
+          </span>
+        </label>
+
+        <p class="wp-config__status" id="cfg-status" hidden></p>
+      </div>
+    </span>
   </div>
 </nav>
 
@@ -65,14 +113,14 @@
         </div>
       </div>
       <div class="wp-form__actions">
-        <label class="wp-toggle" id="toggle-where-wrap" title="Track where-provenance for the next query">
+        <label class="wp-toggle" id="toggle-where-wrap" title="provsql.where_provenance — track where-provenance for the next query">
           <i class="fas fa-lock wp-toggle__lock" aria-hidden="true"></i>
           <input type="checkbox" id="opt-where-prov">
-          <code>provsql.where_provenance</code>
+          <code>where_provenance</code>
         </label>
-        <label class="wp-toggle" id="toggle-update-wrap" title="Carry provenance through INSERT / UPDATE / DELETE statements">
+        <label class="wp-toggle" id="toggle-update-wrap" title="provsql.update_provenance — carry provenance through INSERT / UPDATE / DELETE statements">
           <input type="checkbox" id="opt-update-prov">
-          <code>provsql.update_provenance</code>
+          <code>update_provenance</code>
         </label>
         <span class="wp-history" id="history">
           <button type="button" class="wp-btn wp-btn--ghost" id="history-btn"
