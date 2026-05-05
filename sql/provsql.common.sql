@@ -973,16 +973,20 @@ LANGUAGE sql;
 /**
  * @brief BFS expansion of a provenance circuit, capped at @p max_depth
  *
- * Returns one row per node reachable from @p root within
- * <tt>max_depth</tt> edges, including the root itself (with
- * <tt>parent</tt> and <tt>child_pos</tt> NULL).  Each node appears
- * exactly once; for a node reachable through several paths, the
- * (<tt>parent</tt>, <tt>child_pos</tt>) returned is the one with
- * lowest BFS depth, breaking ties by lowest <tt>child_pos</tt>.  A
- * node returned with <tt>depth = max_depth</tt> may have unexplored
- * children; the caller can detect this by comparing
- * <tt>provsql.get_children</tt> length against the number of edges
- * reported.
+ * Returns one row per (parent, child) edge in the BFS-bounded subgraph
+ * rooted at @p root, plus one row for the root with <tt>parent</tt> and
+ * <tt>child_pos</tt> NULL.  Provenance circuits are DAGs, so a child gate
+ * may have several parents within the bound; each such edge is reported
+ * as a separate row, so callers must deduplicate on <tt>node</tt> if they
+ * need a one-row-per-node view.
+ *
+ * <tt>depth</tt> is the node's BFS depth (its shortest distance from
+ * @p root), so for an edge (parent, child) it is always the case that
+ * <tt>parent.depth + 1 &gt;= child.depth</tt>; equality holds only on
+ * shortest-path edges.  A node at <tt>depth = max_depth</tt> is not
+ * expanded; callers can detect a partial expansion by comparing
+ * <tt>provsql.get_children</tt> length against the number of outgoing
+ * edges reported.
  *
  * <tt>info1</tt> and <tt>info2</tt> are the integer values stored on
  * the gate by <tt>provsql.set_infos</tt>, formatted as text; their
@@ -1003,22 +1007,31 @@ $$
       WITH ORDINALITY AS c(t, idx)
     WHERE b.depth < max_depth
   ),
-  dedup AS (
-    SELECT DISTINCT ON (node) node, parent, child_pos, depth
-    FROM bfs
-    ORDER BY node, depth, child_pos NULLS FIRST
+  -- Each node's canonical depth is its shortest-path distance from the root.
+  -- Tie-breaking on child_pos is irrelevant for the depth value but kept so
+  -- the (now informational) row order is stable.
+  node_depth AS (
+    SELECT node, MIN(depth) AS depth FROM bfs GROUP BY node
+  ),
+  -- All distinct (parent, child, child_pos) triples seen during the BFS.
+  -- A child reached from k parents within the bound contributes k rows.
+  -- Self-joins (times(x, x)) contribute one row per child position.
+  edges AS (
+    SELECT DISTINCT parent, node AS child, child_pos
+    FROM bfs WHERE parent IS NOT NULL
   )
   SELECT
     d.node,
-    d.parent,
-    d.child_pos,
+    e.parent,
+    e.child_pos,
     provsql.get_gate_type(d.node)::TEXT,
     i.info1::TEXT,
     i.info2::TEXT,
     d.depth
-  FROM dedup d
+  FROM node_depth d
+  LEFT JOIN edges e ON e.child = d.node
   LEFT JOIN LATERAL provsql.get_infos(d.node) i ON TRUE
-  ORDER BY d.depth, d.node;
+  ORDER BY d.depth, d.node, e.parent;
 $$ LANGUAGE sql STABLE PARALLEL SAFE;
 
 /**

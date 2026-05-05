@@ -30,14 +30,17 @@ FROM cs_q, LATERAL provsql.circuit_subgraph(p)
 GROUP BY gate_type, depth
 ORDER BY depth, gate_type;
 
--- BFS-tree invariant on the same circuit: every non-root node's reported
--- parent is at depth-1 and is itself in the result.
+-- BFS invariants on the same circuit: every non-root edge's parent is
+-- present in the result, and parent.depth + 1 >= child.depth (equality
+-- on shortest-path edges, strict inequality on shortcut edges into a
+-- multi-parent child). The self-join here is a tree, so equality holds
+-- everywhere — multi-parent inputs would relax the second column.
 WITH cs AS (
   SELECT s.* FROM cs_q, LATERAL provsql.circuit_subgraph(p) s
 )
 SELECT
   bool_and(p.node IS NOT NULL) AS all_parents_present,
-  bool_and(p.depth + 1 = c.depth) AS depth_chain_consistent
+  bool_and(p.depth + 1 >= c.depth) AS depth_chain_consistent
 FROM cs c
 LEFT JOIN cs p ON c.parent = p.node
 WHERE c.parent IS NOT NULL;

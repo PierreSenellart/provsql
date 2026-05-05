@@ -10,20 +10,21 @@
   const NS = 'http://www.w3.org/2000/svg';
 
   const TYPE_SUMMARY = {
-    plus:     'Plus gate (+): disjunction (UNION, projection, multi-derivation)',
-    times:    'Times gate (×): conjunction (joins, conjunctive WHERE)',
-    monus:    'Monus gate (−): m-semiring difference (EXCEPT)',
-    project:  'Project gate (π): column projection (where-provenance only)',
+    plus:     'Plus gate (⊕): alternatives (duplicate elimination, multi-derivation)',
+    times:    'Times gate (⊗): combined use (join, cross product)',
+    monus:    'Monus gate (⊖): m-semiring difference (EXCEPT)',
+    project:  'Project gate (Π): column projection (where-provenance only)',
     eq:       'Eq gate (=): equijoin witness (where-provenance only)',
-    agg:      'Aggregation gate (Σ): GROUP BY aggregate',
-    semimod:  'Semimodule scalar (⊙): scalar × aggregate',
-    cmp:      'Compare gate (≷): aggregate-value comparison',
+    agg:      'Aggregation gate: aggregate function',
+    semimod:  'Semimodule scalar (⋆): tensor product of scalar and semiring value',
+    cmp:      'Compare gate: aggregate-value comparison',
     delta:    'Delta gate (δ): δ-semiring operator',
-    value:    'Value gate (v): scalar constant',
+    value:    'Value gate: scalar constant',
     mulinput: 'Multivalued input (⋮)',
-    input:    'Input gate: base tuple',
-    one:      'One: semiring identity (always-true)',
-    zero:     'Zero: semiring identity (always-false)',
+    input:    'Input gate (ι): base tuple',
+    one:      'One (𝟙): semiring ⊗ identity (always true)',
+    zero:     'Zero (𝟘): semiring ⊕ identity (always false)',
+    update:   'Update gate (υ): INSERT / UPDATE / DELETE',
   };
 
   // ─── state ────────────────────────────────────────────────────────────
@@ -81,6 +82,13 @@
       // result table without re-rendering it.
       document.body.classList.toggle('show-uuids', state.showUuids);
       paint();
+      // If a node is pinned, its inspector is showing the abbreviated
+      // (or full) UUID under the old toggle state. Re-render so the
+      // displayed uuid line tracks the new toggle.
+      if (state.pinnedNode && state.scene) {
+        const pinned = state.scene.nodes.find(n => n.id === state.pinnedNode);
+        if (pinned) openInspector(pinned);
+      }
     };
     const fBtn = document.getElementById('tool-show-formula');
     fBtn.onclick = () => {
@@ -177,19 +185,22 @@
       const cls = `node-group node--${n.type}` + (n.frontier ? ' is-frontier' : '');
       const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${n.x},${n.y})` });
       g.appendChild(svgEl('circle', { class: 'node-shape', r: 22 }));
-      const label = svgEl('text', { class: 'node-label', y: 1 });
+      const label = svgEl('text', { class: 'node-label', y: -2 });
       label.textContent = n.label || n.type[0];
       g.appendChild(label);
-      // Meta line below: full UUID when the toggle is on, otherwise show
-      // a useful hint per gate type — for leaf gates (input / update —
-      // both reference a source row), the relation id (info1); for
-      // internal gates, nothing (the abbreviated UUID was unreadable
-      // against the edge curves and is one click away in the inspector
-      // anyway).
+      // Meta line below: only leaf gates (input / update — both reference
+      // a source row) get one. Internal gates stay bare — even with the
+      // "Show UUIDs" toggle on, dropping a 36-char UUID under each circle
+      // overlapped the edge curves and made nothing readable; the full
+      // UUID is one click away in the inspector. For leaves we show the
+      // relation id (info1) when set, falling back to the abbreviated
+      // UUID, and the full UUID when the toggle is on.
       const isLeafGate = n.type === 'input' || n.type === 'update';
-      const metaText = state.showUuids
-        ? n.id
-        : (isLeafGate ? (n.info1 ? `tbl ${n.info1}` : shortUuid(n.id)) : '');
+      const metaText = !isLeafGate
+        ? ''
+        : state.showUuids
+          ? n.id
+          : (n.info1 ? `tbl ${n.info1}` : shortUuid(n.id));
       if (metaText) {
         const meta = svgEl('text', { class: 'node-meta', y: 38 });
         meta.textContent = metaText;
@@ -306,10 +317,25 @@
     inspectorTitle.textContent = TYPE_SUMMARY[node.type] || `Gate (${node.type})`;
     let html = '<dl>';
     html += `<dt>type</dt><dd>${escapeHtml(node.type)}</dd>`;
-    html += `<dt>uuid</dt><dd>${escapeHtml(node.id)}</dd>`;
+    // Match the in-circuit display: abbreviated UUID by default, full
+    // value only when the "Show UUIDs" toggle is pressed. The title
+    // attribute keeps the full string available on hover for the
+    // collapsed form.
+    const uuidText = state.showUuids ? node.id : shortUuid(node.id);
+    html += `<dt>uuid</dt><dd title="${escapeHtml(node.id)}">${escapeHtml(uuidText)}</dd>`;
     html += `<dt>depth</dt><dd>${node.depth}</dd>`;
     if (node.info1 != null) html += `<dt>info1</dt><dd>${escapeHtml(node.info1)}</dd>`;
     if (node.info2 != null) html += `<dt>info2</dt><dd>${escapeHtml(node.info2)}</dd>`;
+    // `extra` is set by project (input→output column mapping array),
+    // value (scalar), and agg (computed scalar). Label it by gate type
+    // so the meaning is obvious without a docs lookup.
+    if (node.extra != null && node.extra !== '') {
+      const label = node.type === 'project' ? 'mapping'
+                  : node.type === 'value'   ? 'value'
+                  : node.type === 'agg'     ? 'value'
+                  : 'extra';
+      html += `<dt>${label}</dt><dd>${escapeHtml(node.extra)}</dd>`;
+    }
     html += '</dl>';
     if (node.type === 'input' || node.type === 'mulinput') {
       html += '<p><em>Resolving source row…</em></p>';

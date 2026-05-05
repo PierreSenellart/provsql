@@ -1390,7 +1390,7 @@ body.mode-where #sidebar {
 }
 .node-label {
   font-family: var(--font-display);
-  font-style: italic;
+  font-style: normal;
   font-weight: 600;
   fill: var(--purple-500);
   text-anchor: middle;

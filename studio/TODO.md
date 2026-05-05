@@ -60,8 +60,8 @@ CREATE OR REPLACE FUNCTION provsql.circuit_subgraph(
 ```
 
 * [x] Implement as a recursive CTE in `sql/provsql.common.sql`. Model on existing `sub_circuit_with_desc` (line 888) and `sub_circuit_for_where` (line 956), adding ordinality + infos + depth.
-* [x] Cap recursion at `max_depth`; record `depth` per node so the front-end can identify frontier nodes for lazy expansion.
-* [x] Dedup: each node appears once even if reachable via multiple paths (DAG, not tree). Pick a deterministic parent (lowest BFS depth, then lowest `child_pos`).
+* [x] Cap recursion at `max_depth`; record `depth` per node (BFS-shortest distance from the root) so the front-end can identify frontier nodes for lazy expansion.
+* [x] Emit one row per ``(parent, child)`` edge — the circuit is a DAG, so a node with k parents within the bound contributes k rows. Callers needing a one-row-per-node view dedup on `node`. (Earlier versions deduplicated to one row per node and silently dropped multi-parent edges, which broke DAGs with shared subgraphs.)
 * [x] Add Doxygen-style comment block; the existing `sql/postprocess-sql-html.py` will pick it up.
 * [x] No `mulinput` rejection added: a `mulinput` gate has a single `input` child (the row key), which BFS traverses naturally. `sub_circuit_with_desc` / `sub_circuit_for_where` likewise don't reject.
 

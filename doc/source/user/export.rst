@@ -92,8 +92,11 @@ Subcircuit Introspection
 For programmatic exploration of a circuit (rather than a flat formula or
 ASCII diagram), :sqlfunc:`circuit_subgraph` returns a BFS expansion of
 the DAG rooted at a token, capped at a configurable depth. Each row
-describes one node, with its (deterministic) parent, child position,
-gate type, ``info1`` / ``info2`` payload, and BFS depth:
+describes one ``(parent, node)`` edge — gate type, ``info1`` / ``info2``
+payload and BFS depth come along on the same row. The root is reported
+once with ``parent`` and ``child_pos`` ``NULL``; a node with several
+parents within the bound is reported once per incoming edge (callers
+that need a one-row-per-node view should deduplicate on ``node``):
 
 .. code-block:: postgresql
 
@@ -101,9 +104,13 @@ gate type, ``info1`` / ``info2`` payload, and BFS depth:
       (SELECT provenance() FROM personnel WHERE name = 'John'),
       4);
 
-For a node returned with ``depth = max_depth``, the caller can compare
-:sqlfunc:`get_children` against the edges reported to detect a frontier
-node and request another layer.
+``depth`` is the node's shortest-path distance from the root, so an edge
+``(parent, child)`` always satisfies ``parent.depth + 1 >= child.depth``;
+equality holds on shortest-path edges, strict inequality on
+"shortcut" edges into a multi-parent child. For a node at
+``depth = max_depth``, the caller can compare :sqlfunc:`get_children`
+against the edges reported to detect a frontier node and request
+another layer.
 
 To resolve an ``input``-gate UUID back to the row that produced it,
 :sqlfunc:`resolve_input` searches every provenance-tracked relation and

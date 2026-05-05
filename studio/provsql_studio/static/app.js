@@ -906,6 +906,17 @@
     // If a query was carried over (mode switch / preload), run it so the
     // user has clickable cells immediately; otherwise wait for them to type.
     const carry = preloadCircuitUuid;
+    // Coming from where mode's per-row "→ Circuit" jump: the carried UUID
+    // was minted by a where-provenance wrap, so the same query must run
+    // with where_provenance on here for the resulting circuit to contain
+    // the project/eq gates the user is trying to inspect. Force the
+    // toggle on (the user can untick it for follow-up runs); the change
+    // is programmatic so it doesn't fire `change` and doesn't get
+    // persisted to sessionStorage.
+    if (carry) {
+      const wp = document.getElementById('opt-where-prov');
+      if (wp) wp.checked = true;
+    }
     if (document.getElementById('request').value.trim()) {
       runQuery({ preventDefault() {} }).then(() => {
         if (carry) loadCircuit(carry);
