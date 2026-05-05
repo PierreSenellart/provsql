@@ -161,6 +161,14 @@ $(EXTENSION).control: $(EXTENSION).common.control
 
 installcheck: test/schedule
 
+# Run the "todo" regression suite: tests for features that are not yet
+# implemented (test/todo/{sql,expected}/).  Failures are expected until
+# the corresponding feature lands; the expected/ files describe the
+# intended behavior.  Not part of the default `make installcheck`.
+.PHONY: installcheck-todo
+installcheck-todo:
+	$(MAKE) installcheck REGRESS_OPTS="--load-extension=plpgsql --inputdir=test/todo --outputdir=$(shell mktemp -d /tmp/tmp.provsql-todoXXXX) --schedule test/todo/schedule"
+
 tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/Circuit.hpp src/dDNNF.h src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.h src/dDNNFTreeDecompositionBuilder.cpp src/Circuit.h src/Graph.h src/PermutationStrategy.h src/TreeDecompositionKnowledgeCompiler.cpp
 	$(CXX) $(PRECXXFLAGS) -DTDKC -W -Wall -o tdkc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp
 
