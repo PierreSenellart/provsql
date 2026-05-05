@@ -16,9 +16,10 @@ html, body {
 body.mode-circuit {
   font-size: 18px;
 }
-/* Circuit-mode sidebar hosts the cv-canvas + cv-formula. We keep the shared
-   wp-shell grid; the canvas just needs a fixed-ish height so the dot layout
-   is visible without page scrolling. */
+/* Circuit-mode sidebar hosts the cv-canvas and the (currently disabled)
+   semiring-evaluation strip. We keep the shared wp-shell grid; the canvas
+   just needs a fixed-ish height so the dot layout is visible without
+   page scrolling. */
 body.mode-circuit #sidebar { padding-bottom: 0; }
 body.mode-circuit #sidebar-body { display: flex; flex-direction: column; gap: 0.8rem; }
 body.mode-circuit #sidebar-body .cv-canvas {
@@ -30,18 +31,20 @@ body.mode-circuit #sidebar-body .cv-toolbar {
   display: flex; align-items: center; gap: 0.4rem;
   margin-bottom: 0.25rem;
 }
-body.mode-circuit #sidebar-body .cv-formula {
-  display: flex; align-items: center; gap: 0.6rem;
+body.mode-circuit #sidebar-body .cv-eval {
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
   font-size: 0.85rem;
   border-top: 1px dashed var(--border-soft);
   padding-top: 0.6rem;
+  /* Visual cue that the controls are placeholders until the wiring lands. */
+  opacity: 0.55;
 }
-body.mode-circuit #sidebar-body .cv-formula__label {
+body.mode-circuit #sidebar-body .cv-eval__label {
   font-family: var(--font-ui);
   font-size: 0.72rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  opacity: 0.6;
+  opacity: 0.8;
 }
 /* Cross-mode: per-row "→ Circuit" button in where-mode results */
 .wp-result__cell--actions { width: 1%; white-space: nowrap; }
@@ -73,7 +76,7 @@ body.mode-circuit #sidebar-body .cv-formula__label {
 body.show-uuids .wp-uuid__short { display: none; }
 body.show-uuids .wp-uuid__full  { display: inline; }
 
-code, pre, .wp-editor__ta, .cv-editor__code, .cv-formula__expr { font-family: var(--font-mono); }
+code, pre, .wp-editor__ta, .cv-editor__code { font-family: var(--font-mono); }
 em { font-style: italic; }
 
 /* ───────── mode switcher (in top nav, both modes) ───────── */
@@ -187,9 +190,18 @@ em { font-style: italic; }
   color: var(--purple-500);
   font-weight: 600;
 }
-.wp-nav__dbmenu li.is-current::before {
+/* Reserve a fixed-width slot for the current-db checkmark on every row
+   (visibility:hidden, not display:none) so non-current names line up
+   with the current one instead of shifting left by the missing glyph. */
+.wp-nav__dbmenu li::before {
   content: "✓";
+  display: inline-block;
+  width: 1em;
   margin-right: 0.4rem;
+  visibility: hidden;
+}
+.wp-nav__dbmenu li.is-current::before {
+  visibility: visible;
 }
 .wp-nav__link {
   font-family: var(--font-ui);
@@ -289,6 +301,25 @@ em { font-style: italic; }
   margin-left: 0.4rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+/* Provenance badge: pill next to the kind pill, brand purple so it
+   reads as "this relation carries a provsql column" at a glance. */
+.wp-schema__rel-prov {
+  display: inline-block;
+  font-size: 0.7rem;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--purple-500);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+/* Subtle left accent on the relation row so the eye picks up the
+   provenance-tracked tables when scrolling the list. */
+.wp-schema__rel--prov {
+  border-left: 3px solid var(--purple-500);
 }
 .wp-schema__cols {
   display: block;
@@ -1417,8 +1448,6 @@ body.mode-where #sidebar {
 .node--leaf  .node-shape { fill: var(--purple-500); stroke: var(--purple-700); }
 .node--leaf  .node-label { fill: #fff; font-family: var(--font-mono); font-style: normal; font-size: 11px; }
 .node--leaf  .node-meta  { fill: var(--purple-700); font-weight: 500; }
-.node--one   .node-shape { fill: var(--gold-500); stroke: var(--gold-700); }
-.node--one   .node-label { fill: var(--purple-900); }
 
 /* hover + active */
 .node-group:hover .node-shape { stroke-width: 3; filter: drop-shadow(0 2px 6px rgba(42, 24, 80, 0.25)); }
@@ -1428,7 +1457,6 @@ body.mode-where #sidebar {
   fill: rgba(196, 102, 74, 0.12);
 }
 .node-group.is-pinned.node--leaf .node-shape { fill: var(--terracotta-500); }
-.node-group.is-pinned.node--one  .node-shape { fill: var(--terracotta-500); }
 
 /* edges */
 .edge {
@@ -1480,28 +1508,21 @@ body.mode-where #sidebar {
 .cv-inspector__body dd { margin: 0; font-family: var(--font-mono); font-size: 0.78rem; word-break: break-all; color: var(--purple-700); }
 .cv-inspector__body p { margin: 0.6rem 0 0; line-height: 1.5; font-size: 0.82rem; }
 
-/* formula strip */
-.cv-formula {
-  border-top: 1px solid var(--border-soft);
-  background: var(--bg-elevated);
-  padding: 0.7rem 1.5rem;
-  display: flex; align-items: center; gap: 0.85rem;
-  min-height: 48px;
-}
-.cv-formula__label {
+/* Semiring-evaluation strip: placeholder for now. The select + button
+   are disabled until the back-end wiring lands; the strip is rendered
+   dimmed (parent container sets opacity) to signal "not yet active". */
+.cv-eval__semiring {
   font-family: var(--font-ui);
-  font-size: 0.7rem;
-  text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--purple-700);
-  font-weight: 600;
-}
-.cv-formula__expr {
-  font-size: 0.88rem;
+  font-size: 0.82rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: #fff;
   color: var(--purple-900);
-  white-space: nowrap; overflow-x: auto;
-  flex: 1;
 }
-.cv-formula__expr .op-times { color: var(--purple-500); font-weight: 600; padding: 0 0.15em; }
-.cv-formula__expr .op-plus  { color: var(--terracotta-500); font-weight: 600; padding: 0 0.15em; }
-.cv-formula__expr .leaf     { color: var(--purple-700); }
-.cv-formula__expr .one      { color: var(--gold-700); font-weight: 600; }
+.cv-eval__placeholder {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--fg-muted);
+}

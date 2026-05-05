@@ -187,7 +187,17 @@ SELECT
         WHERE a.attrelid = c.oid
           AND a.attnum > 0
           AND NOT a.attisdropped
-    ), '{}'::text[]) AS column_types
+    ), '{}'::text[]) AS column_types,
+    -- Matches the predicate _RELATIONS_QUERY uses (provsql.identify_token's
+    -- discovery rule): a relation is provenance-tracked iff it carries a
+    -- non-dropped `provsql uuid` column.
+    EXISTS (
+        SELECT 1 FROM pg_attribute a
+        WHERE a.attrelid = c.oid
+          AND a.attname = 'provsql'
+          AND NOT a.attisdropped
+          AND a.atttypid = 'uuid'::regtype
+    ) AS has_provenance
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -207,7 +217,7 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
     out: list[dict] = []
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(_SCHEMA_QUERY)
-        for schema, table, kind, cols, types in cur.fetchall():
+        for schema, table, kind, cols, types, has_prov in cur.fetchall():
             out.append({
                 "schema": schema,
                 "table": table,
@@ -216,6 +226,7 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                     {"name": n, "type": t}
                     for n, t in zip(cols or [], types or [])
                 ],
+                "has_provenance": bool(has_prov),
             })
     return out
 

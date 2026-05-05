@@ -29,7 +29,7 @@ _GATE_LABEL = {
     "project":  "Π",
     "zero":     "𝟘",
     "one":      "𝟙",
-    "eq":       "=",
+    "eq":       "⋈",
     "agg":      "Σ",
     "semimod":  "⋆",
     "cmp":      "≷",
@@ -62,7 +62,11 @@ def _gate_label(row: dict) -> str:
         name = row["info1_name"].upper()
         return "Σ" if name == "SUM" else _truncate(name)
     if t == "cmp" and row.get("info1_name"):
-        return _truncate(row["info1_name"])
+        # PostgreSQL stores comparison operators in pg_operator under their
+        # ASCII names ("<=", ">=", "<>"). Render the math glyphs in the
+        # circle so the eye picks them up faster, mirroring what Fira Code
+        # does for the same operators in the editor.
+        return _truncate(_CMP_GLYPH.get(row["info1_name"], row["info1_name"]))
     if t == "value" and row.get("extra"):
         return _truncate(row["extra"])
     return _GATE_LABEL.get(t, t)
@@ -71,6 +75,15 @@ def _gate_label(row: dict) -> str:
 def _truncate(s: str, n: int = 6) -> str:
     s = str(s)
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+# pg_operator.oprname → math glyph for the cmp gate label.
+_CMP_GLYPH = {
+    ">=": "≥",
+    "<=": "≤",
+    "<>": "≠",
+    "!=": "≠",
+}
 
 
 class CircuitTooLarge(Exception):

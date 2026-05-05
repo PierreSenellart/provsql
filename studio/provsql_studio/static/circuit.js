@@ -14,7 +14,7 @@
     times:    'Times gate (⊗): combined use (join, cross product)',
     monus:    'Monus gate (⊖): m-semiring difference (EXCEPT)',
     project:  'Project gate (Π): column projection (where-provenance only)',
-    eq:       'Eq gate (=): equijoin witness (where-provenance only)',
+    eq:       'Eq gate (⋈): equijoin witness (where-provenance only)',
     agg:      'Aggregation gate: aggregate function',
     semimod:  'Semimodule scalar (⋆): tensor product of scalar and semiring value',
     cmp:      'Compare gate: aggregate-value comparison',
@@ -32,14 +32,12 @@
   let state = {
     scene: null,        // {nodes, edges, root, depth} from /api/circuit
     showUuids: false,
-    showFormula: true,
     zoom: 1,
     pan: { x: 0, y: 0 },
     pinnedNode: null,
   };
   let svg = null, edgeLayer = null, nodeLayer = null;
   let titleEl = null, subEl = null;
-  let formulaEl = null, formulaStrip = null;
   let inspectorEl = null, inspectorTitle = null, inspectorBody = null;
 
   // ─── public API ───────────────────────────────────────────────────────
@@ -60,8 +58,6 @@
     nodeLayer = document.getElementById('circuit-nodes');
     titleEl = document.getElementById('circuit-title');
     subEl = document.getElementById('circuit-sub');
-    formulaEl = document.getElementById('formula-expr');
-    formulaStrip = document.getElementById('formula-strip');
     inspectorEl = document.getElementById('inspector');
     inspectorTitle = document.getElementById('inspector-title');
     inspectorBody = document.getElementById('inspector-body');
@@ -79,22 +75,20 @@
       state.showUuids = !state.showUuids;
       uBtn.setAttribute('aria-pressed', String(state.showUuids));
       // Drives the .wp-uuid__short / .wp-uuid__full visibility in the
-      // result table without re-rendering it.
+      // result table without re-rendering it; works even when no circuit
+      // has been loaded yet (the toggle is shared between the result
+      // table and the circuit view).
       document.body.classList.toggle('show-uuids', state.showUuids);
-      paint();
-      // If a node is pinned, its inspector is showing the abbreviated
-      // (or full) UUID under the old toggle state. Re-render so the
-      // displayed uuid line tracks the new toggle.
-      if (state.pinnedNode && state.scene) {
-        const pinned = state.scene.nodes.find(n => n.id === state.pinnedNode);
-        if (pinned) openInspector(pinned);
+      if (state.scene) {
+        paint();
+        // If a node is pinned, its inspector is showing the abbreviated
+        // (or full) UUID under the old toggle state. Re-render so the
+        // displayed uuid line tracks the new toggle.
+        if (state.pinnedNode) {
+          const pinned = state.scene.nodes.find(n => n.id === state.pinnedNode);
+          if (pinned) openInspector(pinned);
+        }
       }
-    };
-    const fBtn = document.getElementById('tool-show-formula');
-    fBtn.onclick = () => {
-      state.showFormula = !state.showFormula;
-      fBtn.setAttribute('aria-pressed', String(state.showFormula));
-      formulaStrip.style.display = state.showFormula ? 'flex' : 'none';
     };
     document.getElementById('inspector-close').onclick = closeInspector;
 
@@ -135,7 +129,6 @@
         + 'Loading…</text>';
     }
     setStatus('Provenance Circuit', 'Fetching subgraph…');
-    if (formulaEl) formulaEl.textContent = '–';
   }
 
   function showError(msg) {
@@ -225,12 +218,6 @@
     }
 
     fitView();
-
-    // formula
-    if (formulaEl) {
-      formulaEl.innerHTML = state.showFormula ? formulaHtml(state.scene) : '<span style="opacity:.5">(hidden)</span>';
-      formulaStrip.style.display = state.showFormula ? 'flex' : 'none';
-    }
 
     setStatus(
       'Provenance Circuit',
@@ -434,30 +421,6 @@
     // The anchor is no longer a frontier (we just expanded it).
     const idx = state.scene.nodes.findIndex(n => n.id === anchor.id);
     if (idx >= 0) state.scene.nodes[idx] = { ...state.scene.nodes[idx], frontier: false };
-  }
-
-  // ─── formula rendering ────────────────────────────────────────────────
-
-  function formulaHtml(scene) {
-    if (!scene.nodes.length) return '<span style="opacity:.5">(empty)</span>';
-    const childrenOf = {};
-    for (const e of scene.edges) {
-      (childrenOf[e.from] = childrenOf[e.from] || []).push(e);
-    }
-    function recur(nodeId, depth) {
-      const node = scene.nodes.find(n => n.id === nodeId);
-      if (!node) return '';
-      if (depth > 4) return '<span class="leaf">…</span>';
-      const ch = (childrenOf[nodeId] || []).slice().sort((a, b) => (a.child_pos || 0) - (b.child_pos || 0));
-      if (!ch.length) {
-        const cls = (node.type === 'input' || node.type === 'mulinput') ? 'leaf' : 'one';
-        return `<span class="${cls}">${escapeHtml(node.label)}</span>`;
-      }
-      const op = ` <span class="op-${node.type}">${escapeHtml(node.label)}</span> `;
-      const inner = ch.map(e => recur(e.to, depth + 1)).join(op);
-      return `(${inner})`;
-    }
-    return recur(scene.root, 0);
   }
 
   // ─── helpers ──────────────────────────────────────────────────────────

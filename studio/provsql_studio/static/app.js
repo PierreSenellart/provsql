@@ -769,7 +769,11 @@
         ? entries.filter(r =>
             r.schema.toLowerCase().includes(q) ||
             r.table.toLowerCase().includes(q)  ||
-            r.columns.some(c => c.name.toLowerCase().includes(q))
+            // Skip the bookkeeping `provsql` column so search results
+            // match the visible column list — typing "provsql" should not
+            // match every provenance-tracked relation through this hidden
+            // column (use the PROV pill for that).
+            r.columns.some(c => c.name !== 'provsql' && c.name.toLowerCase().includes(q))
           )
         : entries;
       if (filtered.length === 0) {
@@ -788,13 +792,26 @@
         for (const r of rels) {
           const qname  = `${r.schema}.${r.table}`;
           const insert = singleSchema ? r.table : qname;
-          const cols   = r.columns.map(c => c.name).join(', ');
+          // Hide the bookkeeping `provsql` uuid column from the user-visible
+          // column list — its presence is what the PROV pill already signals.
+          const cols   = r.columns.filter(c => c.name !== 'provsql')
+                                  .map(c => c.name).join(', ');
+          const provCls   = r.has_provenance ? ' wp-schema__rel--prov' : '';
+          const provBadge = r.has_provenance
+            ? `<span class="wp-schema__rel-prov" title="Provenance-tracked (provsql uuid column)">prov</span>`
+            : '';
+          const titleSuffix = r.has_provenance ? ' · provenance-tracked' : '';
+          // Column count for the tooltip mirrors what's actually listed
+          // (provsql column hidden when has_provenance), so the tooltip
+          // and the comma-separated list don't disagree.
+          const visibleCount = r.has_provenance ? r.columns.length - 1 : r.columns.length;
           html +=
-            `<button type="button" class="wp-schema__rel"`
+            `<button type="button" class="wp-schema__rel${provCls}"`
             + ` data-qname="${escapeAttr(insert)}"`
-            + ` title="${escapeAttr(qname)} — ${r.columns.length} column${r.columns.length === 1 ? '' : 's'}">`
+            + ` title="${escapeAttr(qname)} — ${visibleCount} column${visibleCount === 1 ? '' : 's'}${titleSuffix}">`
             + `<span class="wp-schema__rel-name">${escapeHtml(r.table)}</span>`
-            + `<span class="wp-schema__rel-kind">${escapeHtml(r.kind)}</span>`;
+            + `<span class="wp-schema__rel-kind">${escapeHtml(r.kind)}</span>`
+            + provBadge;
           if (cols) {
             html += `<span class="wp-schema__cols">${escapeHtml(cols)}</span>`;
           }
@@ -917,6 +934,21 @@
       const wp = document.getElementById('opt-where-prov');
       if (wp) wp.checked = true;
     }
+    // Load circuit.js so its init() can wire the toolbar buttons (zoom,
+    // show-uuids). loadCircuit() also calls this, but only
+    // when a circuit is being rendered — without the unconditional load
+    // here, a circuit-mode page that just runs a query (no carry, no
+    // immediate circuit fetch) would leave the toolbar buttons unbound.
+    //
+    // Microtask deferral: `ensureCircuitLib` closes over
+    // `_circuitLibPromise`, which is declared with `let` further down in
+    // this IIFE. setupCircuitMode runs synchronously during IIFE eval,
+    // so calling it directly here would hit a TDZ. Queueing as a
+    // microtask defers the call until after the IIFE returns, by which
+    // time the binding is initialised. The function is idempotent (it
+    // caches the promise), so the later loadCircuit() callers piggyback.
+    queueMicrotask(ensureCircuitLib);
+
     if (document.getElementById('request').value.trim()) {
       runQuery({ preventDefault() {} }).then(() => {
         if (carry) loadCircuit(carry);
@@ -974,7 +1006,6 @@
         <button class="cv-tool" id="tool-zoom-in" title="Zoom in"><i class="fas fa-search-plus"></i></button>
         <span class="cv-tool__sep"></span>
         <button class="cv-tool cv-tool--toggle" id="tool-show-uuids" aria-pressed="false" title="Show UUIDs"><i class="fas fa-fingerprint"></i></button>
-        <button class="cv-tool cv-tool--toggle" id="tool-show-formula" aria-pressed="true" title="Show formula"><i class="fas fa-square-root-alt"></i></button>
       </div>
       <div class="cv-canvas" id="canvas">
         <svg id="circuit" preserveAspectRatio="xMidYMid meet">
@@ -997,9 +1028,19 @@
           <div class="cv-inspector__body" id="inspector-body"></div>
         </aside>
       </div>
-      <footer class="cv-formula" id="formula-strip">
-        <span class="cv-formula__label">Formula</span>
-        <code class="cv-formula__expr" id="formula-expr">–</code>
+      <footer class="cv-eval" id="eval-strip" aria-disabled="true">
+        <span class="cv-eval__label">Semiring evaluation</span>
+        <select class="cv-eval__semiring" disabled title="Coming soon">
+          <option>Boolean</option>
+          <option>Counting</option>
+          <option>Why-provenance</option>
+          <option>Formula</option>
+          <option>Probability</option>
+        </select>
+        <button class="cv-eval__run wp-btn wp-btn--mini" type="button" disabled title="Coming soon">
+          <i class="fas fa-play"></i> Evaluate
+        </button>
+        <span class="cv-eval__placeholder">— wiring TBD</span>
       </footer>
     `;
   }
