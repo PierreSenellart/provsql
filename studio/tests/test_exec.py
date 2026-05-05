@@ -161,6 +161,26 @@ def test_update_provenance_toggle_propagates_to_guc(client):
     assert final["rows"][0][0] == "on"
 
 
+# ──────── statement timeout ────────
+
+
+def test_statement_timeout_returns_clear_error_and_drops_pg_notices(app, client):
+    # Force a tight per-statement timeout, then run a query guaranteed to
+    # exceed it. The error must be the Studio-styled timeout message (not
+    # the bare PG "canceling statement" text), carry sqlstate 57014, and
+    # the response must contain no notices: any PG NOTICE buffered before
+    # the cancel could have been truncated mid-message and showing it
+    # alongside the timeout would mislead.
+    app.config["STATEMENT_TIMEOUT"] = "100ms"
+    payload = post_exec(client, "SELECT pg_sleep(2)", mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "error"
+    assert final["sqlstate"] == "57014"
+    assert "statement timeout" in final["message"].lower()
+    assert "100ms" in final["message"]
+    assert payload["notices"] == []
+
+
 def test_where_mode_falls_back_when_no_provenance_relation(client):
     # SELECT against a table that has no provsql column. The wrap would
     # otherwise raise "provenance() called on a table without provenance";

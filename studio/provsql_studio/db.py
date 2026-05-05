@@ -389,7 +389,9 @@ def exec_batch(
                     try:
                         cur.execute(stmt)
                     except psycopg.Error as e:
-                        intermediate.append(_error_result(e))
+                        intermediate.append(
+                            _user_error_result(e, meta, statement_timeout)
+                        )
                         return intermediate, None, meta
 
                 wrapped_sql = (
@@ -452,9 +454,9 @@ def exec_batch(
                             try:
                                 cur.execute(last)
                             except psycopg.Error as e2:
-                                return [], _error_result(e2), meta
+                                return [], _user_error_result(e2, meta, statement_timeout), meta
                         else:
-                            return [], _error_result(e), meta
+                            return [], _user_error_result(e, meta, statement_timeout), meta
                     capture[0] = True
                 else:
                     # No wrap (circuit mode or unwrappable last). The user's
@@ -463,11 +465,11 @@ def exec_batch(
                     try:
                         cur.execute(last)
                     except psycopg.Error as e:
-                        return [], _error_result(e), meta
+                        return [], _user_error_result(e, meta, statement_timeout), meta
 
                 final = _result_from_cursor(cur)
         except psycopg.Error as e:
-            return [], _error_result(e), meta
+            return [], _user_error_result(e, meta, statement_timeout), meta
         finally:
             # Connections come from a pool, so leaving the per-batch handler
             # attached would accumulate one handler per request.
@@ -522,6 +524,44 @@ def _error_result(e: psycopg.Error) -> StatementResult:
         message=str(e).strip(),
         sqlstate=diag.sqlstate if diag else None,
     )
+
+
+def _is_timeout_error(e: psycopg.Error) -> bool:
+    """A statement_timeout firing comes back as sqlstate 57014 with the
+    canonical message "canceling statement due to statement timeout". Other
+    57014 cancellations (lock_timeout, pg_cancel_backend) carry different
+    text, so message-matching distinguishes the timeout cleanly."""
+    diag = getattr(e, "diag", None)
+    sqlstate = diag.sqlstate if diag else None
+    if sqlstate != "57014":
+        return False
+    msg = (diag.message_primary if diag and diag.message_primary else str(e)).lower()
+    return "statement timeout" in msg
+
+
+def _timeout_error_result(timeout: str) -> StatementResult:
+    return StatementResult(
+        kind="error",
+        message=(
+            f"Query canceled: statement timeout ({timeout}) reached. "
+            f"Increase the timeout in the Config panel if larger queries are expected."
+        ),
+        sqlstate="57014",
+    )
+
+
+def _user_error_result(
+    e: psycopg.Error, meta: dict, statement_timeout: str
+) -> StatementResult:
+    """Translate a user-facing psycopg error into a StatementResult. On
+    statement_timeout, swap in a Studio-styled message and drop any captured
+    PostgreSQL notices: the timeout aborts execution mid-stream and any
+    NOTICE / WARNING text already buffered may be partial, so showing them
+    alongside the timeout would mislead more than help."""
+    if _is_timeout_error(e):
+        meta["notices"] = []
+        return _timeout_error_result(statement_timeout)
+    return _error_result(e)
 
 
 # GUCs the front-end is allowed to manage. Split into two: those managed
