@@ -52,6 +52,27 @@
   });
   setupHistoryDropdown();
 
+  // Cancel button (sibling of the Send button, hidden by default; runQuery
+  // unhides it for the duration of an in-flight POST /api/exec). Firing
+  // POST /api/cancel/<id> in parallel reaches the server on a different
+  // worker thread and triggers pg_cancel_backend on the running pid; the
+  // original /api/exec then comes back with a 57014 the renderer surfaces
+  // as the standard error banner.
+  document.getElementById('cancel-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('cancel-btn');
+    const id  = btn.dataset.requestId;
+    if (!id) return;
+    btn.disabled = true;
+    try {
+      await fetch(`/api/cancel/${encodeURIComponent(id)}`, { method: 'POST' });
+    } catch (e) {
+      // Swallow: the in-flight /api/exec will still come back, with or
+      // without our cancel landing. Re-enable the button so a follow-up
+      // click is possible if the first didn't make it.
+      btn.disabled = false;
+    }
+  });
+
   // Expose the env that the global runQuery reads (function declarations
   // are hoisted, so the named functions below are safe to reference here
   // even though they appear later in the IIFE). This MUST happen before
@@ -818,6 +839,25 @@ async function runQuery(ev) {
   time.textContent = '…';
   const t0 = performance.now();
 
+  // Cancel-button wiring: tag the in-flight request so /api/cancel/<id>
+  // can resolve it back to the backend pid. The Send -> Cancel swap is
+  // deferred 100ms so very fast queries (which return before the timer
+  // fires) never flicker the row; clearTimeout in the finally branch
+  // cancels the swap, and the same finally restores Send unconditionally.
+  const requestId = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const runBtn    = document.getElementById('run-btn');
+  const cancelBtn = document.getElementById('cancel-btn');
+  if (cancelBtn) {
+    cancelBtn.dataset.requestId = requestId;
+    cancelBtn.disabled = false;
+  }
+  const swapTimer = setTimeout(() => {
+    if (cancelBtn) cancelBtn.hidden = false;
+    if (runBtn)    runBtn.hidden    = true;
+  }, 100);
+
   const wpEl = document.getElementById('opt-where-prov');
   const upEl = document.getElementById('opt-update-prov');
   let resp;
@@ -830,11 +870,16 @@ async function runQuery(ev) {
         mode: env.mode,
         where_provenance: wpEl ? wpEl.checked : (env.mode === 'where'),
         update_provenance: upEl ? upEl.checked : false,
+        request_id: requestId,
       }),
     });
   } catch (e) {
     renderError(`Network error: ${e.message}`);
     return false;
+  } finally {
+    clearTimeout(swapTimer);
+    if (cancelBtn) cancelBtn.hidden = true;
+    if (runBtn)    runBtn.hidden    = false;
   }
   const dt = Math.round(performance.now() - t0);
   time.textContent = dt;

@@ -50,7 +50,9 @@ def main(argv: list[str] | None = None) -> int:
         max_circuit_depth=args.max_circuit_depth,
         max_circuit_nodes=args.max_circuit_nodes,
     )
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    # threaded=True so POST /api/cancel/<id> can run while a long
+    # POST /api/exec is still blocking on its pool connection.
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
     return 0
 
 

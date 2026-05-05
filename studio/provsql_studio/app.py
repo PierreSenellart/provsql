@@ -7,6 +7,7 @@ Routes:
   GET  /api/databases      – list databases the current user can connect to.
   GET  /api/relations      – list provenance-tagged relations + content.
   POST /api/exec           – run a SQL batch; only the last statement's result is shown.
+  POST /api/cancel/<id>    – pg_cancel_backend the batch in flight under that request id.
   GET  /api/circuit/<uuid> – BFS subgraph + dot-layout for a circuit root.
   POST /api/circuit/<uuid>/expand – fetch a sub-DAG rooted at a frontier node.
   GET  /api/leaf/<uuid>    – resolve an input gate back to its source row.
@@ -16,9 +17,11 @@ Routes:
 from __future__ import annotations
 
 import re
+import threading
 import uuid as uuid_mod
 from pathlib import Path
 
+import psycopg
 import psycopg.conninfo
 import sqlparse
 from flask import Flask, jsonify, redirect, request, send_from_directory
@@ -66,6 +69,15 @@ def create_app(
     if "statement_timeout_seconds" in persisted_opts:
         app.config["STATEMENT_TIMEOUT"] = f"{persisted_opts['statement_timeout_seconds']}s"
     app.extensions["provsql_pool"] = db.make_pool(dsn)
+    # Registry of in-flight POST /api/exec batches, keyed by the
+    # client-generated request id. Lets POST /api/cancel/<id> resolve a
+    # request id to a backend pid and fire pg_cancel_backend on a
+    # separate connection while the original /api/exec is still
+    # blocked. Threaded Flask (cli.py) is required for that to work.
+    app.extensions["provsql_inflight"] = {
+        "lock": threading.Lock(),
+        "by_id": {},  # request_id -> pg_backend_pid
+    }
     layout_cache = circuit_mod.LayoutCache()
 
     # Routes read the live pool through this getter so swapping the pool
@@ -154,6 +166,7 @@ def create_app(
         payload = request.get_json(silent=True) or {}
         sql_text = payload.get("sql", "")
         mode = payload.get("mode", "where")
+        request_id = str(payload.get("request_id") or "").strip()
 
         statements = _split_statements(sql_text)
         if not statements:
@@ -171,15 +184,32 @@ def create_app(
             where_prov = True
         update_prov = bool(payload.get("update_provenance", False))
 
-        intermediate, final, meta = db.exec_batch(
-            get_pool(),
-            statements,
-            statement_timeout=app.config["STATEMENT_TIMEOUT"],
-            where_provenance=where_prov,
-            update_provenance=update_prov,
-            wrap_last=wrap_last,
-            extra_gucs=app.config["RUNTIME_GUCS"],
-        )
+        inflight = app.extensions["provsql_inflight"]
+        registered = False
+
+        def register_pid(pid: int) -> None:
+            nonlocal registered
+            if not request_id:
+                return
+            with inflight["lock"]:
+                inflight["by_id"][request_id] = pid
+                registered = True
+
+        try:
+            intermediate, final, meta = db.exec_batch(
+                get_pool(),
+                statements,
+                statement_timeout=app.config["STATEMENT_TIMEOUT"],
+                where_provenance=where_prov,
+                update_provenance=update_prov,
+                wrap_last=wrap_last,
+                extra_gucs=app.config["RUNTIME_GUCS"],
+                on_pid=register_pid,
+            )
+        finally:
+            if registered:
+                with inflight["lock"]:
+                    inflight["by_id"].pop(request_id, None)
 
         blocks = [r.to_dict() for r in intermediate]
         if final is not None:
@@ -189,6 +219,35 @@ def create_app(
             "wrapped": meta["wrapped"],
             "notices": meta.get("notices", []),
         })
+
+    @app.post("/api/cancel/<request_id>")
+    def api_cancel(request_id: str):
+        # Fires pg_cancel_backend(pid) on a *fresh* connection (not from
+        # the pool) so we never wait for a slot that may itself be held
+        # by the very query we're trying to cancel. The cancel arrives
+        # at the running backend as a SIGINT, which the patched
+        # provsql_sigint_handler turns into the standard
+        # InterruptPending / QueryCancelPending pair, and PG ereports
+        # 57014 that exec_batch then surfaces as a normal error block.
+        inflight = app.extensions["provsql_inflight"]
+        with inflight["lock"]:
+            pid = inflight["by_id"].get(request_id)
+        if pid is None:
+            return jsonify({
+                "ok": False,
+                "reason": "no in-flight query for this id",
+            }), 404
+        try:
+            with psycopg.connect(app.config["DSN"]) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_cancel_backend(%s)", (pid,))
+                    ok = bool(cur.fetchone()[0])
+            return jsonify({"ok": ok})
+        except psycopg.Error as e:
+            return jsonify({
+                "ok": False,
+                "reason": str(e).strip(),
+            }), 500
 
     @app.get("/api/circuit/<token>")
     def api_circuit(token: str):

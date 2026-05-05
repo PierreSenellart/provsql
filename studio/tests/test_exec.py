@@ -164,6 +164,70 @@ def test_update_provenance_toggle_propagates_to_guc(client):
 # ──────── statement timeout ────────
 
 
+def test_cancel_endpoint_aborts_in_flight_query(app, client):
+    # Bump the timeout high enough that pg_sleep can't naturally hit it,
+    # then run the slow query on a background thread while the main
+    # thread fires POST /api/cancel/<id>. The cancel must reach the
+    # backend (via pg_cancel_backend on a fresh connection) and abort
+    # the in-flight query as a 57014, not let it run to completion.
+    import threading
+    import time
+    import uuid as uuid_mod
+
+    app.config["STATEMENT_TIMEOUT"] = "30s"
+    request_id = str(uuid_mod.uuid4())
+    result_holder: dict = {}
+
+    def run_slow():
+        c = app.test_client()
+        resp = c.post(
+            "/api/exec",
+            json={
+                "sql": "SELECT pg_sleep(5)",
+                "mode": "circuit",
+                "request_id": request_id,
+            },
+        )
+        result_holder["status"] = resp.status_code
+        result_holder["payload"] = resp.get_json()
+
+    th = threading.Thread(target=run_slow, daemon=True)
+    th.start()
+
+    # Wait until the registry has the pid (i.e. exec_batch has started
+    # and registered via on_pid). Bounded loop so a regression that
+    # never registers fails fast rather than hanging the suite.
+    inflight = app.extensions["provsql_inflight"]
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        with inflight["lock"]:
+            if request_id in inflight["by_id"]:
+                break
+        time.sleep(0.02)
+    else:
+        th.join(timeout=10)
+        raise AssertionError(
+            "exec_batch never registered a pid for the request id"
+        )
+
+    cancel_resp = client.post(f"/api/cancel/{request_id}")
+    assert cancel_resp.status_code == 200, cancel_resp.data
+    assert cancel_resp.get_json()["ok"] is True
+
+    th.join(timeout=10)
+    assert not th.is_alive(), "slow query did not return after cancel"
+    assert result_holder["status"] == 200
+    final = result_holder["payload"]["blocks"][-1]
+    assert final["kind"] == "error"
+    assert final["sqlstate"] == "57014"
+
+
+def test_cancel_endpoint_404s_when_no_query_in_flight(client):
+    resp = client.post("/api/cancel/00000000-0000-0000-0000-000000000000")
+    assert resp.status_code == 404
+    assert resp.get_json()["ok"] is False
+
+
 def test_statement_timeout_returns_clear_error_and_drops_pg_notices(app, client):
     # Force a tight per-statement timeout, then run a query guaranteed to
     # exceed it. The error must be the Studio-styled timeout message (not

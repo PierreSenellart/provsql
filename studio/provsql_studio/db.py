@@ -292,6 +292,7 @@ def exec_batch(
     update_provenance: bool = False,
     wrap_last: bool,
     extra_gucs: dict[str, str] | None = None,
+    on_pid=None,
 ) -> tuple[list[StatementResult], StatementResult | None, dict]:
     """Run `statements` in a single transaction with SET LOCAL settings.
 
@@ -353,6 +354,19 @@ def exec_batch(
         })
 
     with pool.connection() as conn:
+        # Capture this connection's backend pid before we run anything the
+        # user can wait on, so /api/cancel/<id> can resolve the request id
+        # to a pid and fire pg_cancel_backend on a separate connection.
+        # Failure here is non-fatal: the batch still runs, but cancel
+        # won't have a target.
+        if on_pid is not None:
+            try:
+                with conn.cursor() as cur0:
+                    cur0.execute("SELECT pg_backend_pid()")
+                    on_pid(int(cur0.fetchone()[0]))
+            except psycopg.Error:
+                pass
+
         conn.add_notice_handler(_on_notice)
         # Use one transaction so SET LOCAL persists across all statements.
         try:

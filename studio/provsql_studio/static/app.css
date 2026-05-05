@@ -667,6 +667,27 @@ body.mode-where #sidebar {
   display: inline-flex; align-items: center; gap: 0.4rem;
 }
 .wp-btn:hover { background: var(--purple-500); color: #fff; }
+.wp-btn[hidden] { display: none; }
+/* Send and Cancel share the slot in the form action bar; pin them to the
+   same width and center their content so swapping one for the other
+   doesn't shift the rest of the row. The cancel button is .wp-btn--ghost
+   for its colour palette but inherits the primary's box (font-size,
+   padding, weight) so the row height stays put. */
+#run-btn, #cancel-btn { min-width: 9.5rem; justify-content: center; }
+#cancel-btn {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.55rem 1.1rem;
+  background: var(--terracotta-500);
+  border-color: var(--terracotta-500);
+  color: var(--fg-on-dark);
+}
+#cancel-btn:hover {
+  background: var(--terracotta-500);
+  border-color: var(--terracotta-500);
+  color: var(--fg-on-dark);
+  filter: brightness(0.9);
+}
 .wp-btn--primary {
   background: var(--gold-500);
   border-color: var(--gold-500);
