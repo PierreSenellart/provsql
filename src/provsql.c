@@ -1203,6 +1203,21 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     FuncExpr *fe = makeNode(FuncExpr);
     bool projection = false;
     int nb_column = 0;
+    /* Cumulative offset of each RTE within the TIMES gate's concatenated
+     * locator vector.  WhereCircuit::evaluate(TIMES) appends the locator
+     * vector of each child input in q->rtable order, so a column at
+     * varattno k of the i-th provenance-tracked base RTE lands at
+     * prov_offset[i] + k in the concat.  varattno alone (the recent fix
+     * documented at the top of this file) is correct only when there is a
+     * single provenance-tracked input; for multi-input joins it omits the
+     * preceding inputs' nb_user_cols and the project gate then reads from
+     * the wrong table's locator slice.
+     *
+     * 1-indexed by rteid for direct indexing via Var->varno; entry 0 is
+     * unused.  Length q->rtable->length + 1. */
+    int *prov_offset = (int *)palloc0((q->rtable->length + 1) * sizeof(int));
+    int cum = 0;
+    Index r;
 
     fe->funcid = constants->OID_FUNCTION_PROVENANCE_PROJECT;
     fe->funcvariadic = true;
@@ -1213,6 +1228,22 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     array->element_typeid = constants->OID_TYPE_INT;
     array->elements = NIL;
     array->location = -1;
+
+    for (r = 1; r <= (Index)q->rtable->length; ++r) {
+      prov_offset[r] = cum;
+      if (columns[r-1]) {
+        RangeTblEntry *rte_r = (RangeTblEntry *)list_nth(q->rtable, r-1);
+        int ncols = list_length(rte_r->eref->colnames);
+        bool is_prov = false;
+        int nb_user = 0;
+        int k;
+        for (k = 0; k < ncols; ++k) {
+          if (columns[r-1][k] == -1) is_prov = true;
+          else if (columns[r-1][k] > 0) nb_user++;
+        }
+        if (is_prov) cum += nb_user;
+      }
+    }
 
     foreach (lc_v, q->targetList) {
       TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
@@ -1252,18 +1283,16 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
             }
             if (is_prov) {
               int raw = columns[vte_v->varno - 1][vte_v->varattno - 1];
-              /* Use varattno (1-indexed column position within the table)
-               * rather than the global sequential number from
-               * build_column_map().  The sequential number is
-               * query-order-dependent: when other RTEs appear before this
-               * one in q->rtable, the sequential number exceeds nb_columns
-               * of the IN gate and causes WhereCircuit::evaluate() to
-               * return an empty locator set.  varattno is always the
-               * correct position because add_provenance() appends the
-               * provsql column last, so user columns occupy positions
-               * 1..nb_columns exactly matching the IN gate's Locator
-               * vector layout. */
-              value_v = (raw == -1) ? -1 : (int)vte_v->varattno;
+              /* Local position within this table is `varattno` (the
+               * provsql column is appended last by add_provenance(), so
+               * user columns occupy 1..nb_user_cols exactly matching the
+               * IN gate's Locator vector).  We then shift by
+               * prov_offset[varno] to land in the right slice of the
+               * TIMES gate's concatenated locator vector when the query
+               * joins multiple provenance-tracked relations. */
+              value_v = (raw == -1) ? -1
+                                    : (int)vte_v->varattno
+                                      + prov_offset[vte_v->varno];
             } else {
               /* Non-provenance base table: no IN gate exists for it, so
                * the position would be out of range regardless.  Explicitly
@@ -1303,7 +1332,9 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
               }
               if (is_prov) {
                 int raw = columns[jav_v->varno - 1][jav_v->varattno - 1];
-                value_v = (raw == -1) ? -1 : (int)jav_v->varattno;
+                value_v = (raw == -1) ? -1
+                                      : (int)jav_v->varattno
+                                        + prov_offset[jav_v->varno];
               } else {
                 Const *ce =
                   makeConst(constants->OID_TYPE_INT, -1, InvalidOid,

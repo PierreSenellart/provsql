@@ -66,6 +66,7 @@ test: keyword_table
 
 # Where-provenance
 test: where_provenance
+test: where_provenance_join
 
 # Full example from tutorial
 test: tutorial

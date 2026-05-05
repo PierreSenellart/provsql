@@ -190,11 +190,11 @@ vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(gate_t g) const
     
 bool WhereCircuit::Locator::operator<(WhereCircuit::Locator that) const
 {
-  if(this->table<that.table)
-    return true;
-  if(this->tid<that.tid)
-    return true;
-  return this->position<that.position;
+  if(this->table != that.table)
+    return this->table < that.table;
+  if(this->tid != that.tid)
+    return this->tid < that.tid;
+  return this->position < that.position;
 }
 
 std::string WhereCircuit::Locator::toString() const
