@@ -300,7 +300,7 @@
       // (no need to rerun the painter on toggle).
       const root = state.scene.root;
       subEl.innerHTML =
-        `${state.scene.nodes.length} gates, BFS depth ${state.scene.depth} · root `
+        `${state.scene.nodes.length} gates · root `
         + `<span class="wp-uuid">`
         + `<span class="wp-uuid__short">${escapeHtml(shortUuid(root))}</span>`
         + `<span class="wp-uuid__full">${escapeHtml(root)}</span>`
