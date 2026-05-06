@@ -56,7 +56,8 @@ Circuit Visualisation
 diagram. Internally it writes the circuit in GraphViz DOT format to a
 temporary file and runs ``graph-easy --as=boxart`` on it, returning the
 result as a text value. The ``graph-easy`` executable must be installed and
-accessible in the PostgreSQL server's PATH.
+accessible in the PostgreSQL server's PATH (or in a directory listed in the
+``provsql.tool_search_path`` GUC; see :doc:`configuration`).
 
 .. code-block:: postgresql
 

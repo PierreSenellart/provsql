@@ -56,10 +56,14 @@ Prerequisites
    * `weightmc <https://bitbucket.org/kuldeepmeel/weightmc/src/master/>`_
 
    Each tool must be installed as an executable reachable in the PATH of
-   the PostgreSQL server process (e.g., ``/usr/local/bin/``).
+   the PostgreSQL server process (e.g., ``/usr/local/bin/``). If the tools
+   live outside that PATH (a Conda environment, ``$HOME/local/bin``,
+   ``/opt/...``), point ProvSQL at them with the
+   ``provsql.tool_search_path`` GUC; see :doc:`configuration`.
 
 6. **(Optional) graph-easy** for circuit visualisation (``libgraph-easy-perl``
-   on Debian-based systems, or CPAN).
+   on Debian-based systems, or CPAN). Same PATH considerations as above
+   apply.
 
 Installation
 ^^^^^^^^^^^^

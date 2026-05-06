@@ -36,6 +36,7 @@ extern "C" {
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
+#include "semiring/Which.h"
 
 namespace {
 // Parse int from string
@@ -349,6 +350,14 @@ void provsql_try_having_why(
   std::unordered_map<gate_t, semiring::why_provenance_t> &mapping)
 {
   try_having_impl<semiring::Why>(c, g, mapping, semiring::Why());
+}
+
+void provsql_try_having_which(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, semiring::which_provenance_t> &mapping)
+{
+  try_having_impl<semiring::Which>(c, g, mapping, semiring::Which());
 }
 
 void provsql_try_having_boolexpr(

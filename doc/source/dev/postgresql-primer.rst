@@ -229,7 +229,7 @@ GUCs (Configuration Parameters)
 PostgreSQL exposes server- and session-scoped settings as *Grand
 Unified Configuration* (GUC) variables, registered via
 ``DefineCustom*Variable`` from :cfunc:`_PG_init`.  ProvSQL exposes
-four:
+six:
 
 - ``provsql.active`` -- master switch.
 - ``provsql.where_provenance`` -- enable where-provenance tracking
@@ -238,6 +238,27 @@ four:
   (see :doc:`data-modification`).
 - ``provsql.verbose_level`` -- diagnostic verbosity (see
   :doc:`debugging`).
+- ``provsql.aggtoken_text_as_uuid`` -- when on, ``agg_token_out``
+  emits the underlying provenance UUID instead of the default
+  ``"value (*)"`` display string. Used by UI layers (notably ProvSQL
+  Studio) to expose aggregate-cell circuit roots for click-through.
+- ``provsql.tool_search_path`` -- colon-separated directories
+  prepended to ``PATH`` when ProvSQL spawns external tools (the
+  d-DNNF compilers d4, c2d, minic2d, dsharp; the ``weightmc``
+  weighted model counter; the ``graph-easy`` DOT renderer). The
+  helper :cfunc:`run_external_tool` in :cfile:`external_tool.cpp`
+  reads this GUC, ``setenv``\ s ``PATH`` for the duration of the
+  ``system()`` call, and restores it afterwards. Two companion
+  helpers handle the surrounding error reporting:
+  :cfunc:`find_external_tool` pre-flights tool availability by
+  delegating to ``/bin/sh -c 'command -v ...'`` (so it sees the same
+  PATH resolution that the eventual invocation will), and
+  :cfunc:`format_external_tool_status` decodes the @c system() return
+  value -- distinguishing exit 127 (not found), exit 126 (not
+  executable), termination by signal, and plain nonzero exit -- into
+  a single human-readable message used by the throws in
+  :cfunc:`BooleanCircuit::compilation`,
+  :cfunc:`BooleanCircuit::WeightMC`, and :cfunc:`DotCircuit::render`.
 
 GUCs can be set in ``postgresql.conf``, with ``ALTER SYSTEM``,
 per-session with ``SET``, or per-transaction with ``SET LOCAL``.

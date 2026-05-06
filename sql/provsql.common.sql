@@ -1736,6 +1736,20 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance as which-provenance (lineage: a single set of contributing labels) */
+CREATE FUNCTION sr_which(token ANYELEMENT, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'which',
+    '{}'::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
 /** @brief Evaluate provenance as a Boolean expression */
 CREATE FUNCTION sr_boolexpr(token ANYELEMENT)
   RETURNS VARCHAR AS

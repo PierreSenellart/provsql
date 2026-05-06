@@ -30,7 +30,7 @@ query results without changing the queries themselves:
 
 * **Semiring evaluation** – evaluate the provenance circuit in any
   user-chosen semiring: Boolean reachability, formula display,
-  why-provenance, counting, security levels, and more.
+  why-provenance, lineage, counting, security levels, and more.
 
 * **Probability computation** – assign independent probabilities to
   provenance tokens and compute the exact or approximate probability that each query

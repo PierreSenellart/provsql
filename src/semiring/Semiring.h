@@ -81,9 +81,12 @@ virtual char const * what() const noexcept {
  * subclasses that support these circuit gate types.
  *
  * ### Absorptive semirings
- * A semiring is *absorptive* (i.e., @f$a \oplus a = a@f$ for all @f$a@f$)
- * iff @c absorptive() returns @c true.  This allows the circuit evaluator
- * to deduplicate children of @c plus gates for efficiency.
+ * A semiring is *absorptive* (i.e.,
+ * @f$\mathbb{1} \oplus a = \mathbb{1}@f$ for all @f$a@f$) iff
+ * @c absorptive() returns @c true.  Absorptivity implies idempotency
+ * (@f$a \oplus a = a@f$), which lets the circuit evaluator and the
+ * HAVING-semantics machinery deduplicate operands and short-circuit
+ * over the multiplicative identity.
  */
 template<typename V>
 class Semiring
@@ -190,11 +193,13 @@ virtual value_type value(const std::string &s) const {
 virtual ~Semiring() = default;
 
 /**
- * @brief Return @c true if this semiring is absorptive (@f$a \oplus a = a@f$).
+ * @brief Return @c true if this semiring is absorptive
+ *        (@f$\mathbb{1} \oplus a = \mathbb{1}@f$ for all @f$a@f$).
  *
- * When @c true, the circuit evaluator may deduplicate the children of
- * @c plus gates, which can improve performance significantly for
- * semirings such as Boolean and Why-provenance.
+ * When @c true, the circuit evaluator and HAVING-semantics machinery
+ * may exploit the resulting idempotency (@f$a \oplus a = a@f$, implied
+ * by absorptivity) to deduplicate children of @c plus gates and to
+ * short-circuit over the multiplicative identity.
  *
  * @return @c false by default; override to return @c true.
  */

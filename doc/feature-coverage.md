@@ -81,6 +81,7 @@ Legend:
 | `sr_formula`                             | ✓ | ✓ | ✓ | ✓ |   | ✓ |
 | `sr_counting`                            | ✓ |   | ✓ |   |   |   |
 | `sr_why`                                 |   |   | ✓ |   |   |   |
+| `sr_which`                               |   |   |   |   |   |   |
 | Custom semiring via `provenance_evaluate`|   | ✓ | ✓ |   |   |   |
 | `aggregation_evaluate`                   |   |   |   |   |   |   |
 

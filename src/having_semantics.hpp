@@ -24,6 +24,7 @@
 #include "BooleanCircuit.h"
 #include "semiring/BoolExpr.h"
 #include "semiring/Why.h"
+#include "semiring/Which.h"
 
 /**
  * @brief Evaluate the HAVING sub-circuit at @p g over the Formula (symbolic representation).
@@ -65,6 +66,20 @@ void provsql_try_having_why(
   GenericCircuit &c,
   gate_t g,
   std::unordered_map<gate_t, semiring::why_provenance_t> &mapping
+  );
+
+/**
+ * @brief Evaluate the HAVING sub-circuit at @p g over the Which-provenance semiring.
+ *
+ * @param c        The generic circuit containing gate @p g.
+ * @param g        Root gate of the HAVING sub-circuit.
+ * @param mapping  Map from input gates to their which-provenance values;
+ *                 populated on successful evaluation.
+ */
+void provsql_try_having_which(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, semiring::which_provenance_t> &mapping
   );
 
 /**

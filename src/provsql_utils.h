@@ -166,6 +166,12 @@ extern int provsql_verbose;
  * provsql.aggtoken_text_as_uuid GUC. */
 extern bool provsql_aggtoken_text_as_uuid;
 
+/** Colon-separated list of directories prepended to PATH when ProvSQL
+ * spawns external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy),
+ * set by the provsql.tool_search_path run-time configuration parameter.
+ * NULL or empty means rely on the server's PATH alone. */
+extern char *provsql_tool_search_path;
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */

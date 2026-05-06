@@ -100,6 +100,7 @@ _SQL_FUNC_MAP = {
     'sr_boolexpr':              '/doxygen-sql/html/group__compiled__semirings.html#ga0a4057956b4751b4263fc1a913161012',
     'sr_counting':              '/doxygen-sql/html/group__compiled__semirings.html#gad3e2b6c5dc5d0041fc29ee086add1de6',
     'sr_why':                   '/doxygen-sql/html/group__compiled__semirings.html#ga7501c5d75cf9a2920e9176169c310a7f',
+    'sr_which':                 '/doxygen-sql/html/group__compiled__semirings.html#ga86da4e2a0f5c0f865e9e30714748679c',
     'to_provxml':               '/doxygen-sql/html/group__provenance__output.html#gacc9e8b2a47ade6f5c87c27f64b4707b1',
     'view_circuit':             '/doxygen-sql/html/group__provenance__output.html#ga1c6caf1bb91c0cfdfc56c33666d41897',
     'where_provenance':         '/doxygen-sql/html/group__provenance__output.html#ga6ddf85fea18edbd973c118020ff4551b',
@@ -232,6 +233,12 @@ _C_FUNC_MAP = {
     'GenericCircuit::evaluate':  '/doxygen-c/html/classGenericCircuit.html#a3ff1b0c90156515393986082def83900',
     'TreeDecomposition::MAX_TREEWIDTH': '/doxygen-c/html/classTreeDecomposition.html#ab09a529b1ef0e64fecf2260345c795d3',
     'TreeDecomposition::makeFriendly': '/doxygen-c/html/classTreeDecomposition.html#ad4ddde20abe4dae4f282945c3b666b05',
+    # DotCircuit
+    'DotCircuit::render':        '/doxygen-c/html/classDotCircuit.html#aef126e92723bd4f229e656c4e8ff704e',
+    # External-tool helpers
+    'run_external_tool':         '/doxygen-c/html/external__tool_8cpp.html#a0fc04107a884e66f0393356432a354c2',
+    'find_external_tool':        '/doxygen-c/html/external__tool_8cpp.html#afc4e5f1da9e5c67b5476d87a80726739',
+    'format_external_tool_status': '/doxygen-c/html/external__tool_8cpp.html#a9dea3c210f8e5188da8c3d56d6d21f2a',
     # Global state
     'provsql_interrupted':       '/doxygen-c/html/provsql__utils_8h.html#a9692a0205a857ed2cc29558470c2ed77',
     # Error reporting macros

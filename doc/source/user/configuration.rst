@@ -1,7 +1,7 @@
 Configuration Reference
 ========================
 
-ProvSQL is controlled by four `GUC (Grand Unified Configuration)
+ProvSQL is controlled by `GUC (Grand Unified Configuration)
 <https://www.postgresql.org/docs/current/config-setting.html>`_ variables,
 all settable per session with ``SET`` or permanently in
 `postgresql.conf <https://www.postgresql.org/docs/current/config-setting.html>`_
@@ -47,5 +47,16 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``EXPLAIN`` output, on the underlying storage, or on numeric / casting
     behaviour of ``agg_token``.
 
-All five variables have user-level scope: any user can change them for their
+``provsql.tool_search_path`` (default: empty)
+    Colon-separated list of directories prepended to ``PATH`` when ProvSQL
+    spawns external command-line tools: the d-DNNF compilers (``d4``,
+    ``c2d``, ``minic2d``, ``dsharp``), the WeightMC weighted model counter
+    (``weightmc``), and the GraphViz ASCII renderer (``graph-easy``). The
+    server's ``PATH`` is searched as a fallback, so an entry here only needs
+    to be set when a tool lives outside the server's default ``PATH`` (e.g.
+    in ``$HOME/local/bin``, a Conda environment, ``/opt/...``). Example::
+
+        SET provsql.tool_search_path = '/opt/d4:/home/postgres/bin';
+
+All variables above have user-level scope: any user can change them for their
 own session without superuser privileges.
