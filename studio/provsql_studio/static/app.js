@@ -332,6 +332,20 @@
     }
   }
 
+  // Last fetched /api/relations response, kept so the "Input gates only"
+  // toggle can re-render without an extra round-trip.
+  let _lastRelations = [];
+  const INPUT_ONLY_KEY = 'ps.where.inputOnly';
+  function inputOnlyEnabled() {
+    // Default ON : the typical use case is inspecting the source tables
+    // of a query, which are by construction input-gated.
+    const v = sessionStorage.getItem(INPUT_ONLY_KEY);
+    return v === null ? true : v === '1';
+  }
+  function setInputOnly(on) {
+    sessionStorage.setItem(INPUT_ONLY_KEY, on ? '1' : '0');
+  }
+
   async function refreshRelations() {
     let relations;
     try {
@@ -343,6 +357,7 @@
         `<p style="color:var(--terracotta-500)">Failed to load relations: ${escapeHtml(e.message)}</p>`;
       return;
     }
+    _lastRelations = relations;
     renderRelations(relations);
   }
 
@@ -352,6 +367,30 @@
       body.innerHTML = '<p style="opacity:.7">No provenance-tagged relations. Try <code>SELECT add_provenance(\'mytable\')</code>.</p>';
       return;
     }
+    // Apply the "input gates only" filter : a relation passes when its
+    // first row's provsql token is an input gate. Empty relations
+    // (first_gate_type == null) are dropped under the filter, since
+    // there's no input row to point at; rendering them would be noise.
+    const inputOnly = inputOnlyEnabled();
+    const totalCount = relations.length;
+    const filtered = inputOnly
+      ? relations.filter(r => r.first_gate_type === 'input')
+      : relations;
+    const hiddenCount = totalCount - filtered.length;
+    const toggleHtml = `
+      <div class="wp-rel-filter">
+        <label class="wp-rel-filter__label" title="Hide relations whose provsql tokens are derived gates rather than input leaves">
+          <input type="checkbox" id="opt-input-only"${inputOnly ? ' checked' : ''}>
+          Input gates only${hiddenCount > 0 ? ` <span class="wp-rel-filter__hint">(${hiddenCount} hidden)</span>` : ''}
+        </label>
+      </div>`;
+    if (!filtered.length) {
+      body.innerHTML = toggleHtml +
+        '<p style="opacity:.7">All provenance-tracked relations carry derived gates. Untick the filter to show them.</p>';
+      bindInputOnlyToggle();
+      return;
+    }
+    relations = filtered;
     // Quick-nav chips at the top: one per relation, click scrolls the
     // matching section into view inside the sidebar's own scroll pane.
     const navHtml = relations.length > 1
@@ -361,7 +400,7 @@
           ).join('')
         }</nav>`
       : '';
-    body.innerHTML = navHtml + relations.map(rel => {
+    body.innerHTML = toggleHtml + navHtml + relations.map(rel => {
       // Skip the rewriter-added `provsql` UUID column when displaying; its
       // value is already exposed as the row id (used for the hover-highlight).
       // where_provenance numbers cells by user-column position (1-indexed,
@@ -397,6 +436,19 @@
         </div>
       </section>`;
     }).join('');
+    bindInputOnlyToggle();
+  }
+
+  // Wire the "Input gates only" checkbox emitted by renderRelations. The
+  // toggle persists in sessionStorage and re-renders from the cached
+  // /api/relations response : no extra round-trip just to flip the filter.
+  function bindInputOnlyToggle() {
+    const cb = document.getElementById('opt-input-only');
+    if (!cb) return;
+    cb.addEventListener('change', () => {
+      setInputOnly(cb.checked);
+      renderRelations(_lastRelations);
+    });
   }
 
   // Stable, CSS-safe id for a relation's section (avoids periods, quotes, ...).

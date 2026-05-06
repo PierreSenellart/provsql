@@ -970,6 +970,26 @@ body.mode-where #sidebar {
 }
 .wp-card__sp-locked i { font-size: 0.78em; opacity: 0.75; }
 
+/* "Input gates only" toggle at the top of the where-mode sidebar :
+   filters out provenance-tracked relations whose first row's provsql
+   token is not an input leaf. */
+.wp-rel-filter {
+  margin: 0 0 0.6rem;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+.wp-rel-filter__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+.wp-rel-filter__hint {
+  color: var(--purple-700);
+  font-style: italic;
+}
+
 /* Relation quick-nav chips at the top of the where-mode sidebar. */
 .wp-rel-nav {
   display: flex; flex-wrap: wrap; gap: 0.3rem;

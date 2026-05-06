@@ -461,12 +461,18 @@ def conn_info(pool: ConnectionPool) -> dict:
 def list_relations(pool: ConnectionPool) -> list[dict]:
     """One entry per provenance-tagged relation:
     {schema, table, regclass, columns: [{name, type_name}, ...],
-     rows: [{uuid, values}, ...]}.
+     rows: [{uuid, values}, ...], first_gate_type}.
 
     The relation content is shown exactly as `SELECT *` would render it under
     the active ProvSQL planner, which means the trailing `provsql` UUID column
     is included alongside the user-defined columns. We pick that column out
-    by name to provide a stable per-row identifier for the hover-highlight."""
+    by name to provide a stable per-row identifier for the hover-highlight.
+
+    `first_gate_type` is `provsql.get_gate_type(...)` of the first row's
+    provsql token, used by the front-end's "Input gates only" toggle to hide
+    derived relations (where the provsql column carries plus/times/agg
+    gates rather than input leaves). One extra round-trip per relation;
+    None when the relation is empty or the probe errors."""
     out: list[dict] = []
     with pool.connection() as conn:
         with conn.cursor() as cur:
@@ -489,12 +495,32 @@ def list_relations(pool: ConnectionPool) -> list[dict]:
                 # Shouldn't happen: the relation made it into _RELATIONS_QUERY.
                 continue
 
+            first_gate_type: str | None = None
+            if data:
+                first_token = data[0][prov_idx]
+                try:
+                    with conn.transaction(force_rollback=False):
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT provsql.get_gate_type(%s::uuid)",
+                                (str(first_token),),
+                            )
+                            row = cur.fetchone()
+                            if row and row[0] is not None:
+                                first_gate_type = str(row[0])
+                except Exception:
+                    # Probe failure (token not in circuit, race, etc.) is
+                    # non-fatal : leave first_gate_type=None and let the UI
+                    # treat the relation as unfiltered.
+                    first_gate_type = None
+
             out.append({
                 "schema": schema,
                 "table": table,
                 "regclass": regclass,
                 "columns": cols,
                 "prov_col": prov_idx,
+                "first_gate_type": first_gate_type,
                 "rows": [
                     {"uuid": str(r[prov_idx]), "values": [_to_jsonable(v) for v in r]}
                     for r in data
