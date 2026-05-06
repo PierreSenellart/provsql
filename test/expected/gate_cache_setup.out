@@ -1,0 +1,8 @@
+\set ECHO none
+NOTICE:  table "_ggt_seed" does not exist, skipping
+remove_provenance
+
+(1 row)
+gate_type|n_children
+plus|2
+(1 row)

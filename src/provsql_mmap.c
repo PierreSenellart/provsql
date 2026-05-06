@@ -83,12 +83,24 @@ void RegisterProvSQLMMapWorker(void)
 }
 
 PG_FUNCTION_INFO_V1(get_gate_type);
-/** @brief PostgreSQL-callable wrapper for get_gate_type(). */
+/** @brief PostgreSQL-callable wrapper for get_gate_type().
+ *
+ * On cache miss this fetches BOTH the gate type and its children from
+ * the worker, in one critical section, then caches them together. If
+ * we cached only the type (with an empty children list), a subsequent
+ * get_children() call for the same token would consult the cache, find
+ * the entry, and return 0 children : never querying the worker for the
+ * real children. provsql.provenance_evaluate hits exactly that pattern
+ * (it calls get_gate_type first, then unnest(get_children(...))) and
+ * silently folds plus/times gates over an empty set.
+ */
 Datum get_gate_type(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   gate_type type;
   constants_t constants=get_constants(true);
+  unsigned nb_children = 0;
+  pg_uuid_t *children = NULL;
 
   if(PG_ARGISNULL(0))
     PG_RETURN_NULL();
@@ -97,6 +109,7 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
   if(type!=gate_invalid)
     PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]); ;
 
+  /* Type fetch (message 't'). */
   STARTWRITEM();
   ADDWRITEM("t", char);
   ADDWRITEM(&MyDatabaseId, Oid);
@@ -109,9 +122,43 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
     provsql_error("Cannot communicate on pipe (message type t)");
   }
 
+  /* Children fetch (message 'c'), batched in the same critical
+   * section so the cache entry below is complete. Skipped when the
+   * token is unknown (worker reports gate_invalid). */
+  if(type != gate_invalid) {
+    STARTWRITEM();
+    ADDWRITEM("c", char);
+    ADDWRITEM(&MyDatabaseId, Oid);
+    ADDWRITEM(token, pg_uuid_t);
+
+    if(!SENDWRITEM() || !READB(nb_children, unsigned)) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot communicate on pipe (message type c during get_gate_type)");
+    }
+
+    if(nb_children > 0) {
+      char *p;
+      ssize_t actual_read, remaining_size;
+
+      children = calloc(nb_children, sizeof(pg_uuid_t));
+      p = (char*)children;
+      remaining_size = nb_children * sizeof(pg_uuid_t);
+      while((actual_read = read(provsql_shared_state->pipembr, p, remaining_size)) < remaining_size) {
+        if(actual_read <= 0) {
+          provsql_shmem_unlock();
+          provsql_error("Cannot read children from pipe (during get_gate_type)");
+        } else {
+          remaining_size -= actual_read;
+          p += actual_read;
+        }
+      }
+    }
+  }
+
   provsql_shmem_unlock();
 
-  circuit_cache_create_gate(*token, type, 0, NULL);
+  circuit_cache_create_gate(*token, type, nb_children, children);
+  if(children) free(children);
   PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]);
 }
 
