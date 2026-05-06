@@ -8,10 +8,10 @@
 (function () {
   const mode = document.body.classList.contains('mode-circuit') ? 'circuit' : 'where';
 
-  // Reflect current mode on the switcher and carry the textarea + a
-  // per-mode preload UUID across navigation.
+  // Carry the textarea + a per-mode preload UUID across navigation.
+  // The active-tab highlight is driven by CSS off <body class="mode-X">
+  // so it doesn't flash when JS lags behind initial render.
   document.querySelectorAll('.ps-modeswitch__btn').forEach(btn => {
-    btn.classList.toggle('is-active', btn.dataset.mode === mode);
     btn.addEventListener('click', () => {
       sessionStorage.setItem('ps.sql', document.getElementById('request').value);
     });

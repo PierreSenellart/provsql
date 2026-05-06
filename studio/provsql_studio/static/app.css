@@ -163,7 +163,13 @@ em { font-style: italic; }
   transition: background 0.15s, color 0.15s;
 }
 .ps-modeswitch__btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
-.ps-modeswitch__btn.is-active {
+/* Drive the active highlight from <body class="mode-X"> so it lands on
+   the right tab from the very first paint. The body class is set
+   server-side in _serve_shell, while a JS toggle would only fire once
+   app.js parses : that delay is what produced the brief "Where"
+   flash on /circuit. */
+body.mode-where   .ps-modeswitch__btn[data-mode="where"],
+body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   background: var(--gold-500);
   color: var(--purple-900);
   font-weight: 600;
@@ -285,6 +291,12 @@ em { font-style: italic; }
   border-radius: 3px;
   cursor: pointer;
   display: inline-flex; align-items: center; gap: 0.35rem;
+  /* Reserve roughly user@db worth of space so the nav doesn't reflow
+     when the placeholder "…" is replaced by the actual identity that
+     /api/conn returns. ~14ch fits typical role+dbname pairs without
+     looking padded for shorter names. */
+  min-width: 14ch;
+  justify-content: flex-start;
 }
 .wp-nav__db::after {
   content: "▾";
