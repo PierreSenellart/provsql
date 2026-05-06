@@ -74,6 +74,7 @@
     setStatus,            // (title, sub): update header copy
     showLoading,          // (): placeholder while fetching
     showError,            // (msg)
+    clearScene,           // (): wipe canvas, inspector, eval result, and target
   };
 
   // ─── init ─────────────────────────────────────────────────────────────
@@ -225,6 +226,18 @@
     setStatus('Provenance Circuit', 'Fetching subgraph…');
   }
 
+  function clearScene() {
+    if (edgeLayer) edgeLayer.innerHTML = '';
+    if (nodeLayer) nodeLayer.innerHTML = '';
+    state.scene = null;
+    state.pinnedNode = null;
+    state.dragOffsets = Object.create(null);
+    closeInspector();
+    setStatus('Provenance Circuit', 'Click a UUID cell to render.');
+    refreshEvalTarget();
+    clearEvalResult();
+  }
+
   function showError(msg) {
     if (edgeLayer) edgeLayer.innerHTML = '';
     if (nodeLayer) {
@@ -252,6 +265,7 @@
     closeInspector();
     paint();
     refreshEvalTarget();
+    clearEvalResult();
   }
 
   // ─── paint ────────────────────────────────────────────────────────────

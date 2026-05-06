@@ -1351,6 +1351,13 @@ async function runQuery(ev) {
   time.textContent = '…';
   const t0 = performance.now();
 
+  // Wipe any previous circuit so it doesn't linger next to the new query's
+  // result. The user may click a UUID cell in the new result to render a
+  // fresh DAG; until then the canvas should be empty.
+  if (env.mode === 'circuit') {
+    window.ProvsqlCircuit?.clearScene?.();
+  }
+
   // Cancel-button wiring: tag the in-flight request so /api/cancel/<id>
   // can resolve it back to the backend pid. The Send -> Cancel swap is
   // deferred 100ms so very fast queries (which return before the timer
