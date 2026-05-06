@@ -475,6 +475,20 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
 .wp-schema__rel--prov {
   border-left: 3px solid var(--purple-500);
 }
+/* Mapping badge: same shape as `prov`, gold so the two pills are
+   distinguishable at a glance when a relation is both. */
+.wp-schema__rel-map {
+  display: inline-block;
+  font-size: 0.7rem;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--gold-500);
+  color: var(--purple-900);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
 .wp-schema__cols {
   display: block;
   font-family: var(--font-mono);

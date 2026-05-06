@@ -846,11 +846,21 @@
           // column list : its presence is what the PROV pill already signals.
           const cols   = r.columns.filter(c => c.name !== 'provsql')
                                   .map(c => c.name).join(', ');
-          const provCls   = r.has_provenance ? ' wp-schema__rel--prov' : '';
-          const provBadge = r.has_provenance
+          // Mapping is the more specific classification: a mapping view
+          // typically also carries an implicit provsql column (the planner
+          // re-injects it for any view that selects from a provenance-tracked
+          // table), but tagging it as both is noisy. Show only "mapping".
+          const showProv = r.has_provenance && !r.is_mapping;
+          const provCls   = showProv ? ' wp-schema__rel--prov' : '';
+          const provBadge = showProv
             ? `<span class="wp-schema__rel-prov" title="Provenance-tracked (provsql uuid column)">prov</span>`
             : '';
-          const titleSuffix = r.has_provenance ? ' · provenance-tracked' : '';
+          const mapBadge = r.is_mapping
+            ? `<span class="wp-schema__rel-map" title="Provenance mapping (value + provenance uuid columns)">mapping</span>`
+            : '';
+          const titleSuffix =
+              (showProv ? ' · provenance-tracked' : '')
+            + (r.is_mapping ? ' · provenance mapping' : '');
           // Column count for the tooltip mirrors what's actually listed
           // (provsql column hidden when has_provenance), so the tooltip
           // and the comma-separated list don't disagree.
@@ -861,7 +871,8 @@
             + ` title="${escapeAttr(qname)}: ${visibleCount} column${visibleCount === 1 ? '' : 's'}${titleSuffix}">`
             + `<span class="wp-schema__rel-name">${escapeHtml(r.table)}</span>`
             + `<span class="wp-schema__rel-kind">${escapeHtml(r.kind)}</span>`
-            + provBadge;
+            + provBadge
+            + mapBadge;
           if (cols) {
             html += `<span class="wp-schema__cols">${escapeHtml(cols)}</span>`;
           }

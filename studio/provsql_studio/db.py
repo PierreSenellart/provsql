@@ -197,7 +197,22 @@ SELECT
           AND a.attname = 'provsql'
           AND NOT a.attisdropped
           AND a.atttypid = 'uuid'::regtype
-    ) AS has_provenance
+    ) AS has_provenance,
+    -- Mirrors list_provenance_mappings's discovery rule: a relation is a
+    -- provenance mapping iff it has a `value` column and a `provenance uuid`
+    -- column (the shape `create_provenance_mapping` produces).
+    (EXISTS (
+        SELECT 1 FROM pg_attribute a
+        WHERE a.attrelid = c.oid
+          AND a.attname = 'value'
+          AND NOT a.attisdropped
+    ) AND EXISTS (
+        SELECT 1 FROM pg_attribute a
+        WHERE a.attrelid = c.oid
+          AND a.attname = 'provenance'
+          AND NOT a.attisdropped
+          AND a.atttypid = 'uuid'::regtype
+    )) AS is_mapping
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -226,7 +241,7 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(_SCHEMA_QUERY)
             rows = cur.fetchall()
-        for schema, table, kind, cols, types, has_prov in rows:
+        for schema, table, kind, cols, types, has_prov, is_mapping in rows:
             propagates = bool(has_prov) or (
                 kind in ("view", "matview")
                 and _view_propagates_provenance(conn, schema, table)
@@ -240,6 +255,7 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                     for n, t in zip(cols or [], types or [])
                 ],
                 "has_provenance": propagates,
+                "is_mapping": bool(is_mapping),
             })
     return out
 
