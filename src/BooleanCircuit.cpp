@@ -352,12 +352,15 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   }
   clauses.push_back({(int)g+1});
 
-  int fd;
-  char cfilename[] = "/tmp/provsqlXXXXXX";
-  fd = mkstemp(cfilename);
-  close(fd);
-
-  std::string filename=cfilename;
+  // Use a private 0700 directory rather than a bare mkstemp file so the
+  // sibling output paths (.nnf / .out, derived deterministically from
+  // this base) cannot be raced by a local user pre-creating a symlink
+  // before the external tool opens them.
+  char cdir[] = "/tmp/provsqlXXXXXX";
+  if(mkdtemp(cdir) == NULL) {
+    throw CircuitException("Cannot create temporary directory");
+  }
+  std::string filename=std::string(cdir)+"/input";
   std::ofstream ofs(filename.c_str());
 
   ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
@@ -582,6 +585,10 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     if(unlink(outfilename.c_str())) {
       throw CircuitException("Error removing "+outfilename);
     }
+    std::string dirname=filename.substr(0, filename.rfind('/'));
+    if(rmdir(dirname.c_str())) {
+      throw CircuitException("Error removing temp directory "+dirname);
+    }
   } else
     provsql_notice("Compiled d-DNNF in %s", outfilename.c_str());
 
@@ -656,6 +663,11 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
 
   if(unlink((filename+".out").c_str())) {
     throw CircuitException("Error removing "+filename+".out");
+  }
+
+  std::string dirname=filename.substr(0, filename.rfind('/'));
+  if(rmdir(dirname.c_str())) {
+    throw CircuitException("Error removing temp directory "+dirname);
   }
 
   return ret;

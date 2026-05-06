@@ -143,12 +143,15 @@ std::string DotCircuit::toString(gate_t) const
 }
 
 std::string DotCircuit::render() const {
-  //Writing dot to a temporary file
-  int fd;
-  char cfilename[] = "/tmp/provsqlXXXXXX";
-  fd = mkstemp(cfilename);
-  close(fd);
-  std::string filename=cfilename, outfilename=filename+".out";
+  // Use a private 0700 directory rather than a bare mkstemp file so
+  // the deterministically-derived sibling output path (.out) cannot
+  // be raced by a local user pre-creating a symlink before
+  // graph-easy opens it.
+  char cdir[] = "/tmp/provsqlXXXXXX";
+  if(mkdtemp(cdir) == NULL) {
+    throw CircuitException("Cannot create temporary directory");
+  }
+  std::string filename=std::string(cdir)+"/dot", outfilename=filename+".out";
 
   std::ofstream ofs(filename.c_str());
   ofs << toString(gate_t{0});
@@ -157,9 +160,10 @@ std::string DotCircuit::render() const {
   //Executing the Graphviz dot renderer through graph-easy for ASCII
   //output
   if(find_external_tool("graph-easy").empty()) {
-    if(unlink(filename.c_str())) {
-      // best-effort cleanup; ignore failure
-    }
+    // best-effort cleanup; ignore failures
+    unlink(filename.c_str());
+    std::string dirname=filename.substr(0, filename.rfind('/'));
+    rmdir(dirname.c_str());
     throw CircuitException(
             "graph-easy not found on PATH; install it or add its "
             "directory to provsql.tool_search_path");
@@ -185,6 +189,10 @@ std::string DotCircuit::render() const {
   if(provsql_verbose<20) {
     if(unlink(outfilename.c_str())) {
       throw CircuitException("Error removing "+outfilename);
+    }
+    std::string dirname=filename.substr(0, filename.rfind('/'));
+    if(rmdir(dirname.c_str())) {
+      throw CircuitException("Error removing temp directory "+dirname);
     }
   }
 
