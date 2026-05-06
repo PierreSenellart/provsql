@@ -32,7 +32,32 @@ SELECT remove_provenance('tsp_result');
 SELECT rendered FROM tsp_result;
 DROP TABLE tsp_result;
 
--- 5. RESET restores the empty default.
+-- 5. Replace the stub with one that exits 42.  format_external_tool_status
+--    should decode the WEXITSTATUS into "exited with status 42" rather
+--    than the old generic "Error executing graph-easy".  The DO/EXCEPTION
+--    wrapper turns the substring match into a stable, sqlstate-independent
+--    NOTICE so the test does not depend on PG locale or error-prefix
+--    formatting.
+\! printf '#!/bin/sh\nexit 42\n' > /tmp/provsql_tsp_test/graph-easy
+\! chmod 755 /tmp/provsql_tsp_test/graph-easy
+
+DO $$
+BEGIN
+  PERFORM view_circuit(provenance(), 'd')
+  FROM (
+    SELECT p1.name FROM personnel p1, personnel p2
+    WHERE p1.id=1 AND p2.id=1
+  ) t;
+  RAISE NOTICE 'unexpected: view_circuit succeeded';
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM LIKE '%exited with status 42%' THEN
+    RAISE NOTICE 'graph-easy exit 42 surfaces as structured error';
+  ELSE
+    RAISE NOTICE 'unexpected error: %', SQLERRM;
+  END IF;
+END $$;
+
+-- 6. RESET restores the empty default.
 RESET provsql.tool_search_path;
 SHOW provsql.tool_search_path;
 

@@ -233,8 +233,10 @@ _C_FUNC_MAP = {
     'TreeDecomposition::makeFriendly': '/doxygen-c/html/classTreeDecomposition.html#ad4ddde20abe4dae4f282945c3b666b05',
     # DotCircuit
     'DotCircuit::render':        '/doxygen-c/html/classDotCircuit.html#aef126e92723bd4f229e656c4e8ff704e',
-    # External-tool helper
+    # External-tool helpers
     'run_external_tool':         '/doxygen-c/html/external__tool_8cpp.html#a0fc04107a884e66f0393356432a354c2',
+    'find_external_tool':        '/doxygen-c/html/external__tool_8cpp.html#afc4e5f1da9e5c67b5476d87a80726739',
+    'format_external_tool_status': '/doxygen-c/html/external__tool_8cpp.html#a9dea3c210f8e5188da8c3d56d6d21f2a',
     # Global state
     'provsql_interrupted':       '/doxygen-c/html/provsql__utils_8h.html#a9692a0205a857ed2cc29558470c2ed77',
     # Error reporting macros

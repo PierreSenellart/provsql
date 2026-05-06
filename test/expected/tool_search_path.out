@@ -11,6 +11,7 @@ remove_provenance
 rendered
 STUB-MARKER
 (1 row)
+NOTICE:  graph-easy exit 42 surfaces as structured error
 provsql.tool_search_path
 
 (1 row)

@@ -403,6 +403,11 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     throw CircuitException("Unknown compiler '"+compiler+"'");
   }
 
+  if(find_external_tool(compiler).empty())
+    throw CircuitException(
+            compiler + " not found on PATH; install it or add its "
+            "directory to provsql.tool_search_path");
+
   int retvalue=run_external_tool(cmdline);
 
   // PG's StatementTimeoutHandler (and pg_cancel_backend, etc.) sends
@@ -441,7 +446,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   CHECK_FOR_INTERRUPTS();
 
   if(retvalue)
-    throw CircuitException("Error executing "+compiler);
+    throw CircuitException(format_external_tool_status(retvalue, compiler));
 
   if(provsql_verbose<20) {
     if(unlink(filename.c_str())) {
@@ -614,11 +619,16 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   //calcul pivotAC
   const double pivotAC=2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
 
+  if(find_external_tool("weightmc").empty())
+    throw CircuitException(
+            "weightmc not found on PATH; install it or add its "
+            "directory to provsql.tool_search_path");
+
   std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+filename+".out";
 
   int retvalue=run_external_tool(cmdline);
   if(retvalue) {
-    throw CircuitException("Error executing weightmc");
+    throw CircuitException(format_external_tool_status(retvalue, "weightmc"));
   }
 
   //parsing

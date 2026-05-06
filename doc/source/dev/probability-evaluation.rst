@@ -100,8 +100,14 @@ compiler with that file and reads the result back. The invocation
 goes through :cfunc:`run_external_tool` (:cfile:`external_tool.cpp`),
 which honours the ``provsql.tool_search_path`` GUC by prepending
 its value to ``PATH`` for the duration of the ``system()`` call.
-The same helper is used by :cfunc:`BooleanCircuit::WeightMC` for
-``weightmc`` and by :cfunc:`DotCircuit::render` for ``graph-easy``.
+Before composing the command line, the same call site pre-flights
+the binary with :cfunc:`find_external_tool`, so a missing tool
+fails with an actionable error rather than letting the shell return
+exit 127. After the call, the wait status is decoded by
+:cfunc:`format_external_tool_status` to distinguish "not found",
+"killed by signal", and "ran and exited nonzero". The same trio
+is used by :cfunc:`BooleanCircuit::WeightMC` for ``weightmc`` and
+by :cfunc:`DotCircuit::render` for ``graph-easy``.
 
 Knowledge Compilers and the NNF Format
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

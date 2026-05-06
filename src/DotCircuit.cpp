@@ -156,6 +156,15 @@ std::string DotCircuit::render() const {
 
   //Executing the Graphviz dot renderer through graph-easy for ASCII
   //output
+  if(find_external_tool("graph-easy").empty()) {
+    if(unlink(filename.c_str())) {
+      // best-effort cleanup; ignore failure
+    }
+    throw CircuitException(
+            "graph-easy not found on PATH; install it or add its "
+            "directory to provsql.tool_search_path");
+  }
+
   std::string cmdline="graph-easy --as=boxart --output="+outfilename+" "+filename;
 
   int retvalue = run_external_tool(cmdline);
@@ -167,7 +176,7 @@ std::string DotCircuit::render() const {
   }
 
   if(retvalue)
-    throw CircuitException("Error executing graph-easy");
+    throw CircuitException(format_external_tool_status(retvalue, "graph-easy"));
 
   std::ifstream ifs(outfilename.c_str());
   std::string str((std::istreambuf_iterator<char>(ifs)),
