@@ -84,6 +84,23 @@ minimal witnesses (sets of input tuples) that support the result:
     SELECT name, sr_why(provenance(), 'my_mapping')
     FROM mytable;
 
+Which-Provenance (Lineage)
+---------------------------
+
+:sqlfunc:`sr_which` returns the *which-provenance* (also known as
+*lineage*) of a result – a single set of input labels that contributed
+to it, namely the union of all witnesses:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_which(provenance(), 'my_mapping')
+    FROM mytable;
+
+The result is rendered as ``{a,b,c}`` for a non-empty derivation, or
+``⊥`` if no derivation exists.  Compared to :sqlfunc:`sr_why`,
+which-provenance is more compact (a flat set rather than a set of
+sets) but loses the breakdown into individual derivations.
+
 Security Semiring
 ------------------
 

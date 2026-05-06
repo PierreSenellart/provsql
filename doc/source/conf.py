@@ -100,6 +100,7 @@ _SQL_FUNC_MAP = {
     'sr_boolexpr':              '/doxygen-sql/html/group__compiled__semirings.html#ga0a4057956b4751b4263fc1a913161012',
     'sr_counting':              '/doxygen-sql/html/group__compiled__semirings.html#gad3e2b6c5dc5d0041fc29ee086add1de6',
     'sr_why':                   '/doxygen-sql/html/group__compiled__semirings.html#ga7501c5d75cf9a2920e9176169c310a7f',
+    'sr_which':                 '/doxygen-sql/html/group__compiled__semirings.html#ga86da4e2a0f5c0f865e9e30714748679c',
     'to_provxml':               '/doxygen-sql/html/group__provenance__output.html#gacc9e8b2a47ade6f5c87c27f64b4707b1',
     'view_circuit':             '/doxygen-sql/html/group__provenance__output.html#ga1c6caf1bb91c0cfdfc56c33666d41897',
     'where_provenance':         '/doxygen-sql/html/group__provenance__output.html#ga6ddf85fea18edbd973c118020ff4551b',

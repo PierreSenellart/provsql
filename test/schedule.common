@@ -14,7 +14,7 @@ test: circuit_subgraph
 test: resolve_input
 
 # Introducing a few semirings
-test: sr_formula sr_counting sr_boolean sr_why
+test: sr_formula sr_counting sr_boolean sr_why sr_which
 test: security formula counting boolean
 
 # Test of various ProvSQL features and SQL language capabilities

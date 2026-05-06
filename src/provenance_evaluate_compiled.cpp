@@ -13,6 +13,7 @@
  * - @c "counting"  → @c semiring::Counting
  * - @c "formula"   → @c semiring::Formula (symbolic representation as a formula)
  * - @c "why"       → @c semiring::Why (witness sets)
+ * - @c "which"     → @c semiring::Which (lineage)
  * - @c "boolexpr"  → @c semiring::BoolExpr (Boolean circuit for probability)
  *
  * The function first builds a provenance mapping (input-gate UUID → semiring
@@ -45,6 +46,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
+#include "semiring/Which.h"
 #include "semiring/BoolExpr.h"
 
 
@@ -164,6 +166,64 @@ static Datum pec_why(
   PG_RETURN_TEXT_P(result);
 
 }
+
+/**
+ * @brief Evaluate the Which-provenance (lineage) semiring for a circuit.
+ * @param constants   Extension OID cache.
+ * @param c           Generic circuit to evaluate.
+ * @param g           Root gate.
+ * @param inputs      Set of input gate IDs.
+ * @param drop_table  Whether the temporary UUID table should be dropped.
+ * @return            Varchar datum containing the serialised Which-provenance.
+ */
+static Datum pec_which(
+  const constants_t &constants,
+  GenericCircuit &c,
+  gate_t g,
+  const std::set<gate_t> &inputs,
+  bool drop_table)
+{
+  std::unordered_map<gate_t, semiring::which_provenance_t> provenance_mapping;
+
+  initialize_provenance_mapping<semiring::which_provenance_t>(
+    constants,
+    c,
+    provenance_mapping,
+    [](const char *v) {
+    if(strchr(v, '{'))
+      provsql_error("Complex Which-semiring values for input tuples not currently supported.");
+    std::set<std::string> single;
+    single.insert(std::string(v));
+    return semiring::which_provenance_t(std::move(single));
+  },
+    drop_table
+    );
+
+  provsql_try_having_which(c, g, provenance_mapping);
+  semiring::which_provenance_t prov =
+    c.evaluate<semiring::Which>(g, provenance_mapping, semiring::Which());
+
+  std::ostringstream oss;
+  if(!prov.has_value()) {
+    oss << "⊥";
+  } else {
+    oss << "{";
+    bool first = true;
+    for (const auto &label : *prov) {
+      if (!first) oss << ",";
+      first = false;
+      oss << label;
+    }
+    oss << "}";
+  }
+
+  std::string out = oss.str();
+  text *result = (text *) palloc(VARHDRSZ + out.size());
+  SET_VARSIZE(result, VARHDRSZ + out.size());
+  memcpy(VARDATA(result), out.c_str(), out.size());
+  PG_RETURN_TEXT_P(result);
+}
+
 /**
  * @brief Evaluate a varchar semiring provenance for a circuit.
  * @param constants   Extension OID cache.
@@ -354,6 +414,8 @@ static Datum provenance_evaluate_compiled_internal
   {
     if (semiring == "why")
       return pec_why(constants, c, g, inputs, drop_table);
+    else if (semiring == "which")
+      return pec_which(constants, c, g, inputs, drop_table);
     else
       return pec_varchar(constants, c, g, inputs, semiring, drop_table);
   }
