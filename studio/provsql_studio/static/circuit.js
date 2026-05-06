@@ -982,8 +982,50 @@
     run.addEventListener('click', runEvaluation);
     const clearBtn = document.getElementById('eval-clear');
     if (clearBtn) clearBtn.onclick = clearEvalResult;
+    const copyBtn = document.getElementById('eval-copy');
+    if (copyBtn) copyBtn.onclick = copyEvalResult;
     loadCustomSemirings();
     syncControls();
+  }
+
+  // Copy the just-evaluated value (or PROV-XML payload) to the clipboard.
+  // The raw text is stashed on `eval-result.dataset.copy` at render time,
+  // so this is independent of how the result is displayed (chip vs <pre>)
+  // and skips the leading `= ` prefix the chip variant adds for legibility.
+  async function copyEvalResult() {
+    const result = document.getElementById('eval-result');
+    const btn    = document.getElementById('eval-copy');
+    const text   = result?.dataset.copy;
+    if (!text || !btn) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard API blocked (insecure origin / permission) : fall back
+      // to a hidden-textarea + execCommand round-trip so the action still
+      // succeeds on http:// dev servers and older browsers.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch {}
+      ta.remove();
+    }
+    // Brief visual confirmation : swap the icon to a check for ~1s and
+    // tint the button green via .is-copied (matches sphinx-copybutton's
+    // success state, so the affordance reads the same in docs and app).
+    const icon = btn.querySelector('i');
+    const prev = icon ? icon.className : '';
+    if (icon) icon.className = 'fas fa-check';
+    btn.classList.add('is-copied');
+    btn.disabled = true;
+    setTimeout(() => {
+      if (icon) icon.className = prev;
+      btn.classList.remove('is-copied');
+      btn.disabled = false;
+    }, 1000);
   }
 
   // Wipe the result chip + bound + time. Useful in fullscreen where a
@@ -994,10 +1036,16 @@
     const bound  = document.getElementById('eval-bound');
     const time   = document.getElementById('eval-time');
     const clear  = document.getElementById('eval-clear');
-    if (result) { result.textContent = ''; delete result.dataset.kind; }
+    const copy   = document.getElementById('eval-copy');
+    if (result) {
+      result.textContent = '';
+      delete result.dataset.kind;
+      delete result.dataset.copy;
+    }
     if (bound)  bound.textContent  = '';
     if (time)   time.textContent   = '';
     if (clear)  clear.hidden = true;
+    if (copy)   copy.hidden  = true;
   }
 
   function refreshEvalTarget() {
@@ -1072,6 +1120,9 @@
     run.disabled = true;
     result.textContent = 'evaluating…';
     result.dataset.kind = 'pending';
+    // Drop the previous run's copy text so the copy button doesn't stay
+    // armed if this run errors before producing a fresh payload.
+    delete result.dataset.copy;
     // Round-trip time, captured around the fetch + JSON parse the same
     // way runQuery times /api/exec. Mirrors the "evaluated in N ms"
     // chip in the result-table footer so users can compare evaluation
@@ -1099,6 +1150,7 @@
         result.innerHTML =
           `<pre class="wp-cell-pre">${escapeHtml(xmlText)}</pre>`;
         result.dataset.kind = 'xml';
+        result.dataset.copy = xmlText;
         result.title = 'PROV-XML export';
       } else {
       // Show the value verbatim. Probability gets clipped to 4 decimals
@@ -1116,6 +1168,7 @@
       }
       result.textContent = '= ' + display;
       result.dataset.kind = 'ok';
+      result.dataset.copy = display;
       result.title = data.kind === 'custom'
         ? `${data.function} → ${data.type_name}`
         : `${data.kind} value`;
@@ -1147,6 +1200,10 @@
       // something in the result chip the user may want to dismiss.
       const clear = document.getElementById('eval-clear');
       if (clear) clear.hidden = false;
+      // Show the copy affordance only when there's a successful payload
+      // worth copying (errors and pending states have no useful text).
+      const copy = document.getElementById('eval-copy');
+      if (copy) copy.hidden = !result.dataset.copy;
     }
   }
 

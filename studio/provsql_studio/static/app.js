@@ -1373,9 +1373,14 @@
           <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">
             <i class="fas fa-play"></i> Run
           </button>
-          <button type="button" class="cv-eval__clear" id="eval-clear" title="Clear result" aria-label="Clear result" hidden>
-            <i class="fas fa-eraser"></i>
-          </button>
+          <span class="cv-eval__btnpair">
+            <button type="button" class="cv-eval__clear" id="eval-clear" title="Clear result" aria-label="Clear result" hidden>
+              <i class="fas fa-eraser"></i>
+            </button>
+            <button type="button" class="cv-eval__copy" id="eval-copy" title="Copy result to clipboard" aria-label="Copy result" hidden>
+              <i class="fas fa-clipboard"></i>
+            </button>
+          </span>
           <span class="cv-eval__result" id="eval-result"></span>
           <span class="cv-eval__bound"  id="eval-bound"></span>
           <span class="cv-eval__time"   id="eval-time"></span>

@@ -1881,14 +1881,45 @@ body.mode-where #sidebar {
 .cv-eval__bound { font-style: italic; }
 /* Tiny dismiss button next to the result; revealed only after a run.
    Keeps the result row tidy when no value is shown. */
-.cv-eval__clear {
-  background: none;
-  border: none;
-  color: var(--fg-muted);
+/* Slim framed icon buttons : the visual matches sphinx-copybutton (the
+   user docs' copy widget) so the same affordance reads the same way in
+   docs and Studio. 1px border, rounded corners, light-grey background;
+   hover deepens. The eraser keeps a terracotta hover for its
+   destructive role; the clipboard goes purple, then green on success. */
+.cv-eval__clear,
+.cv-eval__copy {
   cursor: pointer;
-  padding: 0 0.3rem;
-  font-size: 0.78rem;
+  width: 1.7em;
+  height: 1.7em;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
   line-height: 1;
-  margin-left: 0.2rem;
+  border-radius: 0.4em;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.cv-eval__clear:hover { color: var(--terracotta-500); }
+.cv-eval__clear:hover { color: var(--terracotta-500); background: var(--bg-code); }
+.cv-eval__copy:hover  { color: var(--purple-700); background: var(--bg-code); }
+/* `display: inline-flex` would otherwise win over the `[hidden]` UA
+   `display: none`, leaving both buttons visible before the user has run
+   any evaluation. */
+.cv-eval__clear[hidden],
+.cv-eval__copy[hidden] { display: none; }
+.cv-eval__copy.is-copied {
+  /* Sphinx-copybutton's success colour, kept as a literal so the green
+     reads the same across docs and Studio. */
+  border-color: #22863a;
+  color: #22863a;
+}
+/* Cluster the dismiss + copy buttons so they sit immediately next to
+   each other, separate from the rest of the eval-action-row's flex gap. */
+.cv-eval__btnpair {
+  display: inline-flex;
+  gap: 0.2rem;
+  align-items: center;
+}
