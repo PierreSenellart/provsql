@@ -1502,7 +1502,9 @@ async function runQuery(ev) {
           // (because provsql.aggtoken_text_as_uuid is on for studio
           // sessions). Make them clickable in circuit mode like
           // regular UUID cells; the cell's text content is replaced
-          // with the "value (*)" form pulled from agg_display.
+          // with the "value (*)" form pulled from agg_display, and the
+          // tooltip carries the UUID so users can confirm which
+          // circuit the cell points at without inspecting the DOM.
           let displayValue = value;
           if (typeName === 'agg_token' && value) {
             if (isCircuit) {
@@ -1510,6 +1512,7 @@ async function runQuery(ev) {
               extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
               if (extraCls.length) extraCls = ' ' + extraCls;
             }
+            extraAttr += ` title="${env.escapeAttr(String(value))}"`;
             const friendly = aggDisplay[value];
             if (friendly) displayValue = friendly;
           }
