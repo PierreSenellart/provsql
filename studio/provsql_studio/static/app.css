@@ -1082,6 +1082,24 @@ body.mode-where #sidebar {
    digit columns aligned across rows. */
 .wp-table th.is-right, .wp-table td.is-right { text-align: right; font-variant-numeric: tabular-nums; }
 
+/* Multi-line text cells (provsql.view_circuit dump, anything with
+   embedded newlines) : monospaced, whitespace preserved, horizontal
+   scrollbar on long lines so wide ASCII trees stay legible. The
+   max-width caps the cell so the rest of the row stays usable. */
+.wp-cell-pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: pre;
+  max-width: 80ch;
+  max-height: 24rem;
+  overflow: auto;
+  line-height: 1.35;
+  scrollbar-width: thin;
+}
+.wp-cell-pre::-webkit-scrollbar { width: 6px; height: 6px; }
+.wp-cell-pre::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 3px; }
+
 /* Sidebar relation tables: more compact than the result table on the right
    so several relations fit at a glance. */
 #sidebar .wp-relation { margin-top: 0.85rem; }

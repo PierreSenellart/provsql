@@ -1410,6 +1410,13 @@
            + `<span class="wp-uuid__full">${escapeHtml(s)}</span>`
            + `</span>`;
     }
+    // Multi-line text values (e.g. provsql.view_circuit's ASCII tree
+    // dump, or any TEXT column that contains newlines) need pre-wrap +
+    // monospace so newlines and indentation survive : the table cell's
+    // default whitespace handling collapses them otherwise.
+    if (typeof v === 'string' && v.indexOf('\n') !== -1) {
+      return `<pre class="wp-cell-pre">${escapeHtml(v)}</pre>`;
+    }
     return escapeHtml(v == null ? '' : v);
   }
 
