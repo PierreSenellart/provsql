@@ -831,15 +831,18 @@
 
     const t = node.type;
     if (t === 'agg') {
-      // info1 = aggregate function oid → proname; info2 = result type oid → typname.
-      if (node.info1_name) out.push({ label: 'function',    value: node.info1_name });
-      else if (node.info1 != null) out.push({ label: 'function oid', value: node.info1 });
-      if (node.info2_name) out.push({ label: 'result type', value: node.info2_name });
-      else if (node.info2 != null) out.push({ label: 'result type oid', value: node.info2 });
+      // info1 = aggregate function oid → proname; info2 = result type
+      // oid → typname. Label stays "function" / "result type" even on
+      // the unresolved-name fallback (rare: dropped type / function);
+      // the user gets a number instead of a name but doesn't have to
+      // mentally translate "oid" themselves.
+      const fn = node.info1_name || node.info1;
+      if (fn != null) out.push({ label: 'function', value: fn });
+      const rt = node.info2_name || node.info2;
+      if (rt != null) out.push({ label: 'result type', value: rt });
     } else if (t === 'cmp') {
-      // info1 = comparison operator oid → oprname.
-      if (node.info1_name) out.push({ label: 'operator', value: node.info1_name });
-      else if (node.info1 != null) out.push({ label: 'operator oid', value: node.info1 });
+      const op = node.info1_name || node.info1;
+      if (op != null) out.push({ label: 'operator', value: op });
     } else if (t === 'eq') {
       // info1 / info2 are attribute indices for the two equijoin sides.
       if (node.info1 != null) out.push({ label: 'left attr',  value: node.info1 });
