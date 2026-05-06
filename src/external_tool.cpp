@@ -9,7 +9,9 @@
 extern "C" {
 #include "postgres.h"
 #include "provsql_utils.h"
+#include "miscadmin.h"
 
+#include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -75,7 +77,23 @@ std::string find_external_tool(const std::string &name) {
   // five tool names provsql actually uses ("d4", "c2d", "minic2d",
   // "dsharp", "weightmc", "graph-easy") contain none.
   std::string check = "command -v '" + name + "' >/dev/null 2>&1";
-  return run_external_tool(check) == 0 ? name : "";
+  int rv = run_external_tool(check);
+
+  // If statement_timeout (or any cancel) fired while command -v was
+  // running, the SIGINT kills the child but glibc's system() SIG_IGNs it
+  // in the parent, leaving InterruptPending unset. Without this
+  // translation, the empty return below would surface as "tool not
+  // found on PATH" (XX000), which the d4_timeout test's
+  // EXCEPTION WHEN query_canceled clause cannot catch. Mirrors the
+  // post-system() recovery pattern used after the actual compiler call
+  // in BooleanCircuit::compilation.
+  if (WIFSIGNALED(rv) && WTERMSIG(rv) == SIGINT) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+    CHECK_FOR_INTERRUPTS();
+  }
+
+  return rv == 0 ? name : "";
 }
 
 std::string format_external_tool_status(int rv, const std::string &tool) {
