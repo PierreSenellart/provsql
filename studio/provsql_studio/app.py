@@ -428,9 +428,17 @@ def create_app(
             }), 501
         if not rows:
             return jsonify({"error": "no row maps to this input gate"}), 404
+        # Best-effort probability: when set_prob has been called on the
+        # gate, surface the value alongside the resolved row so the
+        # inspector can show the per-row probability without a second
+        # round-trip. None when unset / inapplicable.
+        body = {"matches": rows}
+        probability = circuit_mod.get_prob(get_pool(), uuid_str)
+        if probability is not None:
+            body["probability"] = probability
         # Single-relation case is the norm; if multiple tables share the UUID,
         # return the list and let the front-end pick.
-        return jsonify({"matches": rows})
+        return jsonify(body)
 
     @app.get("/api/provenance_mappings")
     def api_provenance_mappings():

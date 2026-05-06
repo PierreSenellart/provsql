@@ -179,14 +179,43 @@ def test_circuit_expand_returns_next_layer(client, test_dsn):
 
 
 def test_leaf_resolves_personnel_row(client, test_dsn):
-    """A direct provsql UUID from the personnel table maps back to that row."""
+    """A direct provsql UUID from the personnel table maps back to that row.
+
+    ProvSQL returns 1.0 as the default probability for any input gate
+    that doesn't have an explicit set_prob entry, so /api/leaf surfaces
+    `probability: 1.0` on personnel rows untouched by the conftest setup."""
     uuid = _personnel_uuid(test_dsn, "Magdalen")
     resp = client.get(f"/api/leaf/{uuid}")
     assert resp.status_code == 200
-    matches = resp.get_json()["matches"]
+    body = resp.get_json()
+    matches = body["matches"]
     assert len(matches) == 1
     assert matches[0]["relation"].endswith("personnel")
     assert matches[0]["row"]["name"] == "Magdalen"
+    assert body["probability"] == 1.0
+
+
+def test_leaf_includes_probability_when_set(client, test_dsn):
+    """When `set_prob` has assigned a non-default probability to an
+    input gate, /api/leaf surfaces it next to the resolved row so the
+    inspector can show it without a second round-trip."""
+    uuid = _personnel_uuid(test_dsn, "Magdalen")
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.set_prob(%s::uuid, 0.42)", (uuid,))
+    try:
+        resp = client.get(f"/api/leaf/{uuid}")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["probability"] == 0.42
+    finally:
+        # ProvSQL rejects NULL on set_prob; reset to 1.0 (the implicit
+        # default) so other tests see Magdalen as unset.
+        with psycopg.connect(
+            f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+        ) as conn, conn.cursor() as cur:
+            cur.execute("SELECT provsql.set_prob(%s::uuid, 1.0)", (uuid,))
 
 
 def test_leaf_unknown_uuid_returns_404(client):

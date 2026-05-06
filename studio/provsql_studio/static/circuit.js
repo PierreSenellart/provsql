@@ -726,6 +726,24 @@
       replaceLeafBody('<p style="color:var(--fg-muted)">No source row found.</p>');
       return;
     }
+    // Probability is per-input-gate (the UUID itself), not per-resolved-row.
+    // Append it to the gate-metadata <dl> as another <dt>/<dd> row so it
+    // sits in the same visual stream as uuid / depth / info1, rather
+    // than getting a separate paragraph that breaks the rhythm.
+    if (payload.probability != null) {
+      const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+        ? window.ProvsqlStudio.getProbDecimals()
+        : 4;
+      const p = Number(payload.probability);
+      const display = Number.isFinite(p) ? p.toFixed(dec) : String(payload.probability);
+      const dl = inspectorBody.querySelector('dl');
+      if (dl) {
+        dl.insertAdjacentHTML(
+          'beforeend',
+          `<dt>probability</dt><dd>${escapeHtml(display)}</dd>`,
+        );
+      }
+    }
     const items = matches.map(m => {
       const cells = Object.entries(m.row || {}).map(
         ([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v == null ? '' : String(v))}</dd>`

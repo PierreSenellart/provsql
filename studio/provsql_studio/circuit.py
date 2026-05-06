@@ -298,6 +298,22 @@ def resolve_input(pool: ConnectionPool, uuid: str) -> list[dict]:
     return out
 
 
+def get_prob(pool: ConnectionPool, uuid: str) -> float | None:
+    """Best-effort probability fetch via `provsql.get_prob`. Returns None
+    when the gate has no probability set, when the gate type doesn't
+    support get_prob, or when the function is unavailable on this
+    database. The inspector calls this for input / mulinput / update
+    gates so the user sees the per-row probability alongside the
+    resolved row, without having to query for it manually."""
+    try:
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT provsql.get_prob(%s::uuid)", (uuid,))
+            row = cur.fetchone()
+            return float(row[0]) if row and row[0] is not None else None
+    except Exception:
+        return None
+
+
 # ───── in-process layout cache ─────────────────────────────────────────
 
 class LayoutCache:
