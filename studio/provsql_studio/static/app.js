@@ -728,10 +728,15 @@
       }
       // Reloading is the cleanest way to reset every cached relation list,
       // result table, circuit cache, etc., to the new database's contents.
-      // sessionStorage preserves the SQL textarea across the reload; the
-      // ran-flag carry rule ensures we only auto-replay when the user had
-      // actually executed the query (no side-effects on idle reloads).
-      window.ProvsqlStudio.carryQueryForSwitch();
+      // The previous query is meaningless against the new database (table
+      // names rarely match), so we wipe the textarea : push the current
+      // text to history first so the user can recover it via Alt+↑.
+      const ta = document.getElementById('request');
+      if (ta) pushHistory(ta.value);
+      sessionStorage.removeItem('ps.sql');
+      sessionStorage.removeItem('ps.sql.ran');
+      sessionStorage.removeItem('ps.lastRunSql');
+      if (ta) ta.value = '';
       window.location.reload();
     });
   }
