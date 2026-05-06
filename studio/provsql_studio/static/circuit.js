@@ -729,19 +729,22 @@
     // Probability is per-input-gate (the UUID itself), not per-resolved-row.
     // Append it to the gate-metadata <dl> as another <dt>/<dd> row so it
     // sits in the same visual stream as uuid / depth / info1, rather
-    // than getting a separate paragraph that breaks the rhythm.
+    // than getting a separate paragraph that breaks the rhythm. The dd
+    // is click-to-edit: clicking it swaps the displayed value for a
+    // number input, Enter fires POST /api/set_prob, Esc / blur cancels.
     if (payload.probability != null) {
-      const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
-        ? window.ProvsqlStudio.getProbDecimals()
-        : 4;
-      const p = Number(payload.probability);
-      const display = Number.isFinite(p) ? p.toFixed(dec) : String(payload.probability);
       const dl = inspectorBody.querySelector('dl');
       if (dl) {
         dl.insertAdjacentHTML(
           'beforeend',
-          `<dt>probability</dt><dd>${escapeHtml(display)}</dd>`,
+          `<dt>probability</dt>`
+          + `<dd class="cv-prob__editable" title="Click to edit"`
+          + ` data-prob-uuid="${escapeHtml(uuid)}"`
+          + ` data-prob-value="${escapeHtml(String(payload.probability))}">`
+          + `${escapeHtml(formatProbabilityValue(payload.probability))}</dd>`,
         );
+        const dd = dl.querySelector('dd[data-prob-uuid]');
+        if (dd) dd.addEventListener('click', () => editProbability(dd));
       }
     }
     const items = matches.map(m => {
@@ -758,6 +761,88 @@
     const ps = inspectorBody.querySelectorAll('p');
     if (ps.length) ps[ps.length - 1].outerHTML = html;
     else inspectorBody.insertAdjacentHTML('beforeend', html);
+  }
+
+  function formatProbabilityValue(p) {
+    const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+      ? window.ProvsqlStudio.getProbDecimals()
+      : 4;
+    const n = Number(p);
+    return Number.isFinite(n) ? n.toFixed(dec) : String(p);
+  }
+
+  // Click-to-edit on the inspector probability cell. Replaces the
+  // rendered value with a number input; Enter fires POST /api/set_prob,
+  // Esc and blur cancel without saving (blur-as-cancel avoids surprise
+  // commits when the user clicks elsewhere mid-thought).
+  function editProbability(dd) {
+    const uuid = dd.dataset.probUuid;
+    const current = dd.dataset.probValue;
+    if (!uuid) return;
+    const cur = Number(current);
+    const initial = Number.isFinite(cur) ? cur : 1.0;
+    dd.innerHTML =
+      `<input class="cv-prob__input" type="number" min="0" max="1" `
+      + `step="0.0001" value="${escapeHtml(String(initial))}">`
+      + `<span class="cv-prob__msg" hidden></span>`;
+    const input = dd.querySelector('input');
+    const msg = dd.querySelector('.cv-prob__msg');
+    input.focus();
+    input.select();
+    let saved = false;
+
+    function showMsg(text, isError) {
+      if (!msg) return;
+      msg.textContent = text;
+      msg.hidden = false;
+      msg.classList.toggle('is-error', !!isError);
+    }
+    function restore(value) {
+      const v = value != null ? value : initial;
+      dd.dataset.probValue = String(v);
+      dd.innerHTML = escapeHtml(formatProbabilityValue(v));
+    }
+    async function save() {
+      if (saved) return;
+      const v = Number(input.value);
+      if (!Number.isFinite(v) || v < 0 || v > 1) {
+        input.classList.add('is-error');
+        showMsg('must be 0..1', true);
+        return;
+      }
+      saved = true;
+      input.disabled = true;
+      try {
+        const resp = await fetch('/api/set_prob', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uuid, probability: v }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          input.disabled = false;
+          input.classList.add('is-error');
+          showMsg(err.detail || err.error || `HTTP ${resp.status}`, true);
+          saved = false;
+          return;
+        }
+        restore(v);
+      } catch (e) {
+        input.disabled = false;
+        input.classList.add('is-error');
+        showMsg(e.message || 'network error', true);
+        saved = false;
+      }
+    }
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter')   { e.preventDefault(); save(); }
+      else if (e.key === 'Escape') { e.preventDefault(); restore(); }
+    });
+    input.addEventListener('blur', () => {
+      // Avoid restoring while save() is in flight (the disabled input
+      // briefly loses focus on some browsers when network mode swaps).
+      if (!saved) restore();
+    });
   }
 
   // ─── expansion ────────────────────────────────────────────────────────

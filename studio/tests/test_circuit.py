@@ -224,6 +224,42 @@ def test_leaf_unknown_uuid_returns_404(client):
     assert resp.status_code == 404
 
 
+# ──────── /api/set_prob ────────
+
+
+def test_set_prob_writes_value(client, test_dsn):
+    """POST /api/set_prob writes to provsql.set_prob; the value is then
+    visible via GET /api/leaf as `probability` on the same UUID."""
+    uuid = _personnel_uuid(test_dsn, "John")
+    try:
+        resp = client.post("/api/set_prob", json={"uuid": uuid, "probability": 0.7})
+        assert resp.status_code == 200, resp.data
+        assert resp.get_json()["ok"] is True
+        leaf = client.get(f"/api/leaf/{uuid}").get_json()
+        assert leaf["probability"] == 0.7
+    finally:
+        # Reset to the implicit default so other tests on John don't see 0.7.
+        client.post("/api/set_prob", json={"uuid": uuid, "probability": 1.0})
+
+
+def test_set_prob_rejects_out_of_range(client, test_dsn):
+    uuid = _personnel_uuid(test_dsn, "John")
+    resp = client.post("/api/set_prob", json={"uuid": uuid, "probability": 2.5})
+    assert resp.status_code == 400
+    assert "between 0 and 1" in resp.get_json()["error"]
+
+
+def test_set_prob_rejects_invalid_uuid(client):
+    resp = client.post("/api/set_prob", json={"uuid": "not-a-uuid", "probability": 0.5})
+    assert resp.status_code == 400
+
+
+def test_set_prob_rejects_non_numeric(client, test_dsn):
+    uuid = _personnel_uuid(test_dsn, "John")
+    resp = client.post("/api/set_prob", json={"uuid": uuid, "probability": "abc"})
+    assert resp.status_code == 400
+
+
 # ──────── agg_token acceptance ────────
 
 

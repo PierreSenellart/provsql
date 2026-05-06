@@ -1853,6 +1853,26 @@ body.mode-where #sidebar {
 }
 .cv-inspector__mapping li { margin: 0.05rem 0; }
 
+/* Editable probability cell: subtle hover affordance + a small pencil
+   that appears on hover so the user knows the value is interactive
+   without committing screen real estate to it permanently. */
+.cv-prob__editable { cursor: pointer; border-bottom: 1px dotted transparent; }
+.cv-prob__editable:hover { border-bottom-color: var(--purple-500); }
+.cv-prob__editable:hover::after { content: " ✎"; opacity: 0.55; font-size: 0.85em; }
+.cv-prob__input {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  width: 5.5rem;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--purple-500);
+  border-radius: 3px;
+  color: var(--purple-700);
+}
+.cv-prob__input.is-error { border-color: var(--terracotta-500); }
+.cv-prob__msg { margin-left: 0.4rem; font-size: 0.72rem; color: var(--fg-muted); }
+.cv-prob__msg.is-error { color: var(--terracotta-500); }
+
 /* Semiring-evaluation strip. The selects collapse / expand depending on
    the chosen semiring (boolexpr → none; probability → method; rest →
    mapping). The result chip changes accent based on its data-kind. */

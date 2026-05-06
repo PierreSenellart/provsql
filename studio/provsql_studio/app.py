@@ -440,6 +440,40 @@ def create_app(
         # return the list and let the front-end pick.
         return jsonify(body)
 
+    @app.post("/api/set_prob")
+    def api_set_prob():
+        """Write a probability for an input/update gate via
+        provsql.set_prob. Backs the inspector's click-to-edit affordance:
+        the user opens an input gate, clicks the displayed probability,
+        types a new value, hits Enter, and we fire this endpoint."""
+        import psycopg
+        payload = request.get_json(silent=True) or {}
+        try:
+            uuid_str = _coerce_to_uuid(payload.get("uuid", ""))
+        except ValueError:
+            return jsonify({"error": "not a valid UUID"}), 400
+        raw = payload.get("probability", None)
+        try:
+            p = float(raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "probability must be a number"}), 400
+        if not (0.0 <= p <= 1.0):
+            return jsonify({"error": "probability must be between 0 and 1"}), 400
+        try:
+            with get_pool().connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT provsql.set_prob(%s::uuid, %s::double precision)",
+                    (uuid_str, p),
+                )
+        except psycopg.Error as e:
+            diag = getattr(e, "diag", None)
+            return jsonify({
+                "error": "set_prob failed",
+                "detail": (diag.message_primary if diag else str(e)) or str(e),
+                "sqlstate": diag.sqlstate if diag else None,
+            }), 400
+        return jsonify({"ok": True, "probability": p})
+
     @app.get("/api/provenance_mappings")
     def api_provenance_mappings():
         # Used by the circuit-mode semiring evaluation strip to populate
