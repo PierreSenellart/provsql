@@ -256,18 +256,17 @@
       label.textContent = n.label || n.type[0];
       g.appendChild(label);
       // Meta line below: only leaf gates (input / update — both reference
-      // a source row) get one. Internal gates stay bare — even with the
-      // "Show UUIDs" toggle on, dropping a 36-char UUID under each circle
-      // overlapped the edge curves and made nothing readable; the full
-      // UUID is one click away in the inspector. For leaves we show the
-      // relation id (info1) when set, falling back to the abbreviated
-      // UUID, and the full UUID when the toggle is on.
+      // a source row) get one. Internal gates stay bare — dropping a
+      // 36-char UUID under each circle overlapped the edge curves and
+      // made nothing readable; the full UUID is one click away in the
+      // inspector. Leaves always render their compact form (relation id
+      // when info1 is set, otherwise an abbreviated UUID) regardless of
+      // the "Show UUIDs" toggle: leaves are dense enough that the full
+      // UUID would overflow neighbouring nodes.
       const isLeafGate = n.type === 'input' || n.type === 'update';
-      const metaText = !isLeafGate
-        ? ''
-        : state.showUuids
-          ? n.id
-          : (n.info1 ? `tbl ${n.info1}` : shortUuid(n.id));
+      const metaText = isLeafGate
+        ? (n.info1 ? `tbl ${n.info1}` : shortUuid(n.id))
+        : '';
       if (metaText) {
         const meta = svgEl('text', { class: 'node-meta', y: 38 });
         meta.textContent = metaText;
