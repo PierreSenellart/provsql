@@ -1650,6 +1650,13 @@ async function runQuery(ev) {
   body.innerHTML = `<tr><td style="opacity:.6; text-align:center; padding:1rem">Running…</td></tr>`;
   count.textContent = '…';
   time.textContent = '…';
+  // Clear the previous run's truncation hint so it doesn't linger next
+  // to the new query's "running…" placeholder.
+  const truncMark = document.getElementById('result-truncated');
+  if (truncMark) {
+    truncMark.textContent = '';
+    truncMark.hidden = true;
+  }
   const t0 = performance.now();
 
   // Wipe any previous circuit so it doesn't linger next to the new query's
