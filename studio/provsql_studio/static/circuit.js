@@ -275,7 +275,13 @@
     const count = payload && payload.node_count != null ? payload.node_count : 0;
     const cap   = payload && payload.cap != null ? payload.cap : 0;
     const depth = payload && payload.depth != null ? payload.depth : null;
-    const lower = depth != null && depth > 1 ? depth - 1 : null;
+    const d1    = payload && payload.depth_1_size != null ? payload.depth_1_size : null;
+    // Offer "Render at depth 1" only when the user is at depth > 1 AND
+    // the depth-1 view (root + direct children) actually fits under
+    // the cap. Wide-bound circuits (e.g. an aggregation root with
+    // thousands of children) leave d1 > cap, so the button vanishes
+    // rather than promising a render that would 413 again.
+    const offerD1 = depth != null && depth > 1 && d1 != null && d1 <= cap;
 
     let html = '<div class="cv-banner__title">Circuit too large to render</div>';
     html += '<p class="cv-banner__body">This subgraph has <strong>'
@@ -285,19 +291,17 @@
       html += ' (rendering at depth <strong>' + depth + '</strong>)';
     }
     html += '.</p>';
-    if (lower != null) {
+    if (offerD1) {
       html += '<div class="cv-banner__actions">'
-           +  '<button type="button" class="cv-tool" id="cv-banner-retry">'
-           +  'Render at depth ' + lower + '</button></div>';
+           +  '<button type="button" class="cv-banner__btn" id="cv-banner-retry">'
+           +  'Render at depth 1, then expand interactively</button></div>';
     }
-    html += '<p class="cv-banner__hint">Or click a UUID cell in the result above '
-         +  'to root the view at a specific node.</p>';
     bannerEl.innerHTML = html;
     bannerEl.hidden = false;
 
-    if (lower != null && typeof onRetry === 'function') {
+    if (offerD1 && typeof onRetry === 'function') {
       const btn = document.getElementById('cv-banner-retry');
-      if (btn) btn.addEventListener('click', () => onRetry(lower), { once: true });
+      if (btn) btn.addEventListener('click', () => onRetry(1), { once: true });
     }
     setStatus('Provenance Circuit', 'Circuit too large.');
   }
@@ -721,16 +725,17 @@
 
   // ─── expansion ────────────────────────────────────────────────────────
 
-  async function expandFrontier(node) {
+  async function expandFrontier(node, additionalDepth) {
     const root = state.scene && state.scene.root;
     if (!root) return;
+    const depth = Number.isFinite(additionalDepth) ? additionalDepth : state.scene.depth;
     setStatus(null, `Expanding ${shortUuid(node.id)}…`);
     let resp;
     try {
       resp = await fetch(`/api/circuit/${encodeURIComponent(root)}/expand`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ frontier_node_uuid: node.id, additional_depth: state.scene.depth }),
+        body: JSON.stringify({ frontier_node_uuid: node.id, additional_depth: depth }),
       });
     } catch (e) {
       showError(`Network error: ${e.message}`);
@@ -738,6 +743,13 @@
     }
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
+      // Same actionable banner as loadCircuit's 413 path: when the
+      // anchor's subgraph is too large at the requested depth, offer a
+      // depth-1 retry if the depth-1 frontier fits under the cap.
+      if (resp.status === 413 && err && err.error === 'circuit too large') {
+        showTooLarge(err, (lowerDepth) => expandFrontier(node, lowerDepth));
+        return;
+      }
       showError(err.error || `HTTP ${resp.status}`);
       return;
     }
@@ -753,11 +765,24 @@
     const subRoot = sub.nodes.find(n => n.id === sub.root);
     const dx = anchor.x - (subRoot ? subRoot.x : 0);
     const dy = anchor.y - (subRoot ? subRoot.y : 0);
+    // Depth rebase: the sub-DAG's depths are relative to the frontier
+    // (sub.root is at depth 0), but state.scene's depths are relative
+    // to the original root. The inspector reads node.depth, so without
+    // the offset, expanded nodes report wrong depths. Anchor.depth in
+    // state.scene is the absolute depth of the frontier; new nodes
+    // sit `anchor.depth + n.depth` levels under the original root.
+    const ddepth = (anchor.depth != null ? anchor.depth : 0)
+                 - (subRoot && subRoot.depth != null ? subRoot.depth : 0);
 
     const known = new Set(state.scene.nodes.map(n => n.id));
     for (const n of sub.nodes) {
       if (known.has(n.id)) continue;
-      state.scene.nodes.push({ ...n, x: n.x + dx, y: n.y + dy });
+      state.scene.nodes.push({
+        ...n,
+        x: n.x + dx,
+        y: n.y + dy,
+        depth: (n.depth != null ? n.depth + ddepth : n.depth),
+      });
     }
     const knownEdges = new Set(state.scene.edges.map(e => `${e.from}->${e.to}`));
     for (const e of sub.edges) {

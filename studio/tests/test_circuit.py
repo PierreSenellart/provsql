@@ -106,9 +106,15 @@ def test_circuit_too_large_returns_actionable_413(test_dsn, tmp_path, monkeypatc
     assert body["error"] == "circuit too large"
     assert body["cap"] == 2
     assert body["node_count"] > 2
-    # depth lets the front-end compute "render at depth N-1" without
-    # knowing the server's MAX_CIRCUIT_DEPTH default.
+    # depth lets the front-end know the rendering depth used by the
+    # server (it picks up MAX_CIRCUIT_DEPTH when the request omits it).
     assert isinstance(body["depth"], int) and body["depth"] >= 1
+    # depth_1_size lets the front-end decide whether the "Render at
+    # depth 1" retry is meaningful: only when this fits under the cap.
+    # The Paris circuit at depth=1 is the plus root + 3 input children
+    # = 4 nodes, which is > cap=2 here, so the front-end will (correctly)
+    # suppress the retry button for this case.
+    assert body["depth_1_size"] == 4
 
 
 # ──────── frontier + expand ────────

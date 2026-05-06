@@ -87,11 +87,17 @@ _CMP_GLYPH = {
 
 
 class CircuitTooLarge(Exception):
-    def __init__(self, node_count: int, cap: int, depth: int):
+    def __init__(self, node_count: int, cap: int, depth: int, depth_1_size: int):
         super().__init__(f"circuit too large: {node_count} > {cap}")
         self.node_count = node_count
         self.cap = cap
         self.depth = depth
+        # Size of the BFS-frontier at depth 1 (root + direct children).
+        # The front-end uses this to decide whether to offer a "Render
+        # at depth 1" retry: meaningful only when this value fits under
+        # the cap (otherwise the circuit is wide-bound and reducing
+        # depth wouldn't help).
+        self.depth_1_size = depth_1_size
 
 
 def get_circuit(
@@ -120,8 +126,19 @@ def get_circuit(
     # row count.
     unique_nodes = {r["node"] for r in raw}
     if len(unique_nodes) > max_nodes:
+        # Probe the depth-1 frontier from the same overshoot data : root
+        # + direct children. If this fits under the cap, the front-end
+        # can offer a single-click "Render at depth 1" retry that drops
+        # the user into a small initial view they can frontier-expand
+        # from. If it doesn't fit (root has thousands of children, e.g.
+        # an aggregation), the circuit is width-bound and depth cuts
+        # don't help : the front-end suppresses the button entirely.
+        depth_1_size = len({r["node"] for r in raw if r["depth"] <= 1})
         raise CircuitTooLarge(
-            node_count=len(unique_nodes), cap=max_nodes, depth=depth,
+            node_count=len(unique_nodes),
+            cap=max_nodes,
+            depth=depth,
+            depth_1_size=depth_1_size,
         )
 
     # A depth-`depth` node is a frontier iff at least one node in `overshot`
@@ -305,3 +322,9 @@ class LayoutCache:
         self._store.move_to_end(key)
         while len(self._store) > self._capacity:
             self._store.popitem(last=False)
+
+    def clear(self) -> None:
+        """Drop every entry. Useful when a global parameter (the node
+        cap, the depth) changes and previously-rendered scenes would
+        no longer reflect the live setting."""
+        self._store.clear()

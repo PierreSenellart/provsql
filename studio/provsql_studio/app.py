@@ -79,6 +79,8 @@ def create_app(
     persisted_opts = db.load_persisted_options()
     if "max_circuit_depth" in persisted_opts:
         app.config["MAX_CIRCUIT_DEPTH"] = persisted_opts["max_circuit_depth"]
+    if "max_circuit_nodes" in persisted_opts:
+        app.config["MAX_CIRCUIT_NODES"] = persisted_opts["max_circuit_nodes"]
     if "max_sidebar_rows" in persisted_opts:
         app.config["MAX_SIDEBAR_ROWS"] = persisted_opts["max_sidebar_rows"]
     if "max_result_rows" in persisted_opts:
@@ -387,6 +389,7 @@ def create_app(
                 "node_count": e.node_count,
                 "cap": e.cap,
                 "depth": e.depth,
+                "depth_1_size": e.depth_1_size,
                 "hint": "reduce depth or click into a specific node",
             }), 413
         except psycopg.errors.UndefinedFunction:
@@ -488,6 +491,7 @@ def create_app(
 
     _OPTION_KEYS = {
         "max_circuit_depth",
+        "max_circuit_nodes",
         "max_sidebar_rows",
         "max_result_rows",
         "statement_timeout_seconds",
@@ -520,6 +524,7 @@ def create_app(
                 pass
         return {
             "max_circuit_depth": int(app.config["MAX_CIRCUIT_DEPTH"]),
+            "max_circuit_nodes": int(app.config["MAX_CIRCUIT_NODES"]),
             "max_sidebar_rows": int(app.config["MAX_SIDEBAR_ROWS"]),
             "max_result_rows": int(app.config["MAX_RESULT_ROWS"]),
             "statement_timeout_seconds": seconds if seconds is not None else 30,
@@ -552,6 +557,12 @@ def create_app(
                 return jsonify({"error": str(e)}), 400
             if key == "max_circuit_depth":
                 app.config["MAX_CIRCUIT_DEPTH"] = canonical
+            elif key == "max_circuit_nodes":
+                app.config["MAX_CIRCUIT_NODES"] = canonical
+                # Drop any cached layouts: the cap change may unblock
+                # circuits that were 413'd at the old cap, and stale
+                # cache entries would still reflect the old result.
+                layout_cache.clear()
             elif key == "max_sidebar_rows":
                 app.config["MAX_SIDEBAR_ROWS"] = canonical
             elif key == "max_result_rows":

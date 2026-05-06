@@ -773,6 +773,7 @@
     const depthOut = document.getElementById('cfg-depth-out');
     const sidebarRows = document.getElementById('cfg-sidebar-rows');
     const resultRows = document.getElementById('cfg-result-rows');
+    const circuitNodes = document.getElementById('cfg-circuit-nodes');
     const timeout = document.getElementById('cfg-timeout');
     const sp      = document.getElementById('cfg-search-path');
 
@@ -795,6 +796,9 @@
         }
         if (resultRows && opts.max_result_rows != null) {
           resultRows.value = String(opts.max_result_rows);
+        }
+        if (circuitNodes && opts.max_circuit_nodes != null) {
+          circuitNodes.value = String(opts.max_circuit_nodes);
         }
         if (timeout && opts.statement_timeout_seconds != null) {
           timeout.value = String(opts.statement_timeout_seconds);
@@ -897,6 +901,13 @@
         const n = Math.max(1, Math.min(100000, parseInt(resultRows.value || '1000', 10) || 1000));
         resultRows.value = String(n);
         setGuc('max_result_rows', n);
+      });
+    }
+    if (circuitNodes) {
+      circuitNodes.addEventListener('change', () => {
+        const n = Math.max(10, Math.min(10000, parseInt(circuitNodes.value || '200', 10) || 200));
+        circuitNodes.value = String(n);
+        setGuc('max_circuit_nodes', n);
       });
     }
     if (timeout) {

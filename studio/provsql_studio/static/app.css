@@ -1716,7 +1716,18 @@ body.mode-where #sidebar {
 }
 .cv-banner__body { margin: 0 0 0.6rem; font-size: 0.86rem; color: var(--purple-900); }
 .cv-banner__actions { margin-bottom: 0.5rem; }
-.cv-banner__hint { margin: 0; font-size: 0.78rem; color: var(--fg-muted); font-style: italic; }
+.cv-banner__btn {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--purple-500);
+  background: var(--purple-500);
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.cv-banner__btn:hover { background: var(--purple-700); border-color: var(--purple-700); }
 #circuit {
   /* Pin to the bordered .cv-canvas (which is position: relative).
      `width: 100%; height: 100%` alone is unreliable on SVG inside a

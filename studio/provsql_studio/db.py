@@ -75,6 +75,13 @@ def load_persisted_options() -> dict:
                 out["max_circuit_depth"] = n
         except (TypeError, ValueError):
             pass
+    if "max_circuit_nodes" in raw:
+        try:
+            n = int(raw["max_circuit_nodes"])
+            if 10 <= n <= 10000:
+                out["max_circuit_nodes"] = n
+        except (TypeError, ValueError):
+            pass
     if "max_sidebar_rows" in raw:
         try:
             n = int(raw["max_sidebar_rows"])
@@ -121,6 +128,14 @@ def validate_panel_option(name: str, value) -> tuple[str, object]:
             raise ValueError("max_circuit_depth must be an integer")
         if not (1 <= n <= 50):
             raise ValueError("max_circuit_depth must be between 1 and 50")
+        return (name, n)
+    if name == "max_circuit_nodes":
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("max_circuit_nodes must be an integer")
+        if not (10 <= n <= 10000):
+            raise ValueError("max_circuit_nodes must be between 10 and 10000")
         return (name, n)
     if name == "max_sidebar_rows":
         try:
