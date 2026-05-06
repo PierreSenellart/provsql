@@ -879,13 +879,6 @@ body.mode-where #sidebar {
   padding-bottom: 0.2em;
   display: inline-block;
 }
-.wp-card__lead {
-  margin: 0.4rem 0 0;
-  color: var(--purple-900);
-  opacity: 0.85;
-  font-size: 0.95rem;
-}
-.wp-card__lead code { background: var(--bg-code); padding: 1px 5px; border-radius: 3px; font-size: 0.86em; color: var(--purple-700); }
 /* Live search_path readout: keeps the user oriented when they're typing
    unqualified relation names. Reuses the lead's code chip styling so
    schema names render the same as inline-code elsewhere. */

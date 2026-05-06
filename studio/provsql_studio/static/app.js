@@ -972,8 +972,6 @@
 
   function setupCircuitMode() {
     document.getElementById('sidebar-title').textContent = 'Provenance Circuit';
-    document.getElementById('sidebar-lead').textContent =
-      'Click a UUID cell in the result to render its derivation DAG here.';
     document.getElementById('sidebar-body').innerHTML = circuitSidebarHtml();
     document.getElementById('result-legend').innerHTML =
       '<span class="wp-legend-swatch" style="background:var(--purple-500)"></span> Click a UUID / agg_token cell in the result to inspect its circuit.';
