@@ -68,6 +68,7 @@ bool provsql_active = true; ///< @c true while ProvSQL query rewriting is enable
 bool provsql_where_provenance = false;
 bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
+char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
@@ -3507,11 +3508,12 @@ static PlannedStmt *provsql_planner(Query *q,
 }
 
 /**
- * @brief Extension initialization — called once when the shared library is loaded.
+ * @brief Extension initialization – called once when the shared library is loaded.
  *
- * Registers the four GUC variables (@c provsql.active, @c where_provenance,
- * @c update_provenance, @c verbose_level), installs the planner hook and
- * shared-memory hooks, and launches the background MMap worker.
+ * Registers the GUC variables (@c provsql.active, @c where_provenance,
+ * @c update_provenance, @c verbose_level, @c tool_search_path), installs
+ * the planner hook and shared-memory hooks, and launches the background
+ * MMap worker.
  *
  * Must be loaded via @c shared_preload_libraries; raises an error otherwise.
  */
@@ -3562,6 +3564,18 @@ void _PG_init(void) {
                           NULL,
                           NULL,
                           NULL);
+  DefineCustomStringVariable("provsql.tool_search_path",
+                             "Directories prepended to PATH when ProvSQL spawns external tools.",
+                             "Colon-separated list of directories searched before the server's PATH "
+                             "when locating d4, c2d, minic2d, dsharp, weightmc, or graph-easy. "
+                             "Empty (default) means rely on the server's PATH alone.",
+                             &provsql_tool_search_path,
+                             "",
+                             PGC_USERSET,
+                             0,
+                             NULL,
+                             NULL,
+                             NULL);
 
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");

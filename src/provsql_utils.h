@@ -160,6 +160,12 @@ extern bool provsql_where_provenance;
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
 
+/** Colon-separated list of directories prepended to PATH when ProvSQL
+ * spawns external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy),
+ * set by the provsql.tool_search_path run-time configuration parameter.
+ * NULL or empty means rely on the server's PATH alone. */
+extern char *provsql_tool_search_path;
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */

@@ -13,6 +13,7 @@
  *   provenance token UUIDs as edge labels for input gates.
  */
 #include "DotCircuit.h"
+#include "external_tool.h"
 #include <type_traits>
 
 extern "C"
@@ -157,7 +158,7 @@ std::string DotCircuit::render() const {
   //output
   std::string cmdline="graph-easy --as=boxart --output="+outfilename+" "+filename;
 
-  int retvalue = system(cmdline.c_str());
+  int retvalue = run_external_tool(cmdline);
 
   if(provsql_verbose<20) {
     if(unlink(filename.c_str())) {

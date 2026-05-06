@@ -61,6 +61,9 @@ test: shapley_mulinput
 # Viewing circuit
 test: view_circuit_multiple
 
+# External-tool PATH override (provsql.tool_search_path GUC)
+test: tool_search_path
+
 # Tables with keywords as name
 test: keyword_table
 

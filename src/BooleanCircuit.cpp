@@ -40,6 +40,7 @@ extern "C" {
 #include <boost/archive/text_iarchive.hpp>
 
 #include "dDNNFTreeDecompositionBuilder.h"
+#include "external_tool.h"
 
 // "provsql_utils.h"
 #ifdef TDKC
@@ -399,13 +400,13 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     throw CircuitException("Unknown compiler '"+compiler+"'");
   }
 
-  int retvalue=system(cmdline.c_str());
+  int retvalue=run_external_tool(cmdline);
 
   if(retvalue && compiler=="d4") {
     // Temporary support for older version of d4
     new_d4 = false;
     cmdline = "d4 "+filename+" -out="+outfilename;
-    retvalue=system(cmdline.c_str());
+    retvalue=run_external_tool(cmdline);
   }
 
   if(retvalue)
@@ -584,7 +585,7 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
 
   std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+filename+".out";
 
-  int retvalue=system(cmdline.c_str());
+  int retvalue=run_external_tool(cmdline);
   if(retvalue) {
     throw CircuitException("Error executing weightmc");
   }

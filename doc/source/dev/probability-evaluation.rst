@@ -96,7 +96,12 @@ multiply through.
 
 The output is dumped to a temporary file under ``/tmp``;
 :cfunc:`BooleanCircuit::compilation` then invokes the chosen
-compiler with that file and reads the result back.
+compiler with that file and reads the result back. The invocation
+goes through :cfunc:`run_external_tool` (:cfile:`external_tool.cpp`),
+which honours the ``provsql.tool_search_path`` GUC by prepending
+its value to ``PATH`` for the duration of the ``system()`` call.
+The same helper is used by :cfunc:`BooleanCircuit::WeightMC` for
+``weightmc`` and by :cfunc:`DotCircuit::render` for ``graph-easy``.
 
 Knowledge Compilers and the NNF Format
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

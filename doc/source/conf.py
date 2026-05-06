@@ -231,6 +231,10 @@ _C_FUNC_MAP = {
     'GenericCircuit::evaluate':  '/doxygen-c/html/classGenericCircuit.html#a3ff1b0c90156515393986082def83900',
     'TreeDecomposition::MAX_TREEWIDTH': '/doxygen-c/html/classTreeDecomposition.html#ab09a529b1ef0e64fecf2260345c795d3',
     'TreeDecomposition::makeFriendly': '/doxygen-c/html/classTreeDecomposition.html#ad4ddde20abe4dae4f282945c3b666b05',
+    # DotCircuit
+    'DotCircuit::render':        '/doxygen-c/html/classDotCircuit.html#aef126e92723bd4f229e656c4e8ff704e',
+    # External-tool helper
+    'run_external_tool':         '/doxygen-c/html/external__tool_8cpp.html#a0fc04107a884e66f0393356432a354c2',
     # Global state
     'provsql_interrupted':       '/doxygen-c/html/provsql__utils_8h.html#a9692a0205a857ed2cc29558470c2ed77',
     # Error reporting macros

@@ -17,7 +17,7 @@ on demand.
 
 When PostgreSQL starts, it calls :cfunc:`_PG_init`, which:
 
-1. Registers four GUC (Grand Unified Configuration) variables:
+1. Registers five GUC (Grand Unified Configuration) variables:
 
    - ``provsql.active`` -- enable/disable provenance tracking (default: on).
    - ``provsql.where_provenance`` -- enable where-provenance (default: off).
@@ -25,6 +25,9 @@ When PostgreSQL starts, it calls :cfunc:`_PG_init`, which:
      statements (default: off).
    - ``provsql.verbose_level`` -- verbosity for debug messages (0--100,
      default: 0).
+   - ``provsql.tool_search_path`` -- colon-separated directories prepended
+     to ``PATH`` when invoking external tools (d4, c2d, minic2d, dsharp,
+     weightmc, graph-easy); see :cfile:`external_tool.cpp`.
 
 2. Installs the **planner hook** (:cfunc:`provsql_planner`) by saving
    the previous hook in ``prev_planner`` and replacing ``planner_hook``.
