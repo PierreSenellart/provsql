@@ -1066,11 +1066,25 @@ def exec_batch(
                         )
                         return intermediate, None, meta
 
+                # The wrap projection calls where_provenance() once per
+                # row. PG's executor is pull-based, so pushing the LIMIT
+                # into the outermost SELECT stops the projection after
+                # N+1 rows : without it, a `SELECT *` over 50k rows runs
+                # 50k where_provenance() calls server-side before a
+                # single byte reaches the client. The trailing cap_clause
+                # mirrors the fetchmany peek used in circuit mode (one
+                # extra row distinguishes "exactly N" from "at least N").
+                cap_clause = (
+                    f" LIMIT {int(max_result_rows) + 1}"
+                    if max_result_rows is not None and max_result_rows >= 0
+                    else ""
+                )
                 wrapped_sql = (
                     f"SELECT *, "
                     f"provsql.provenance() AS __prov, "
                     f"provsql.where_provenance(provsql.provenance()) AS __wprov "
                     f"FROM ({last}) t"
+                    f"{cap_clause}"
                 )
 
                 if wrap_last:
