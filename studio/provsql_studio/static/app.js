@@ -32,17 +32,47 @@
   // Carry the textarea + a per-mode preload UUID across navigation.
   // The active-tab highlight is driven by CSS off <body class="mode-X">
   // so it doesn't flash when JS lags behind initial render.
+  //
+  // Two carry channels :
+  //   ps.sql      always written : preserves the user's draft across the
+  //               switch so they don't lose what they had typed.
+  //   ps.sql.ran  written only if the textarea content matches the
+  //               most-recently-executed SQL (ps.lastRunSql, set by
+  //               runQuery). Drives the auto-replay decision in the new
+  //               mode : we re-run on switch only if the query had
+  //               actually been executed in the original mode. A draft
+  //               sitting in the textarea (page reload, history nav,
+  //               in-flight edit) must NOT auto-execute on switch
+  //               because of side-effecting queries like add_provenance.
   document.querySelectorAll('.ps-modeswitch__btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      sessionStorage.setItem('ps.sql', document.getElementById('request').value);
+      carryQueryForSwitch();
     });
   });
-  // Restore the carried-over query if there is one.
+  // Restore the carried-over query if there is one. carriedRan controls
+  // auto-replay; it's set only when the carried query had actually been
+  // run in the previous mode.
   const carried = sessionStorage.getItem('ps.sql');
-  if (carried != null) {
+  const carriedFromSwitch = carried != null;
+  const carriedRan = sessionStorage.getItem('ps.sql.ran') === '1';
+  if (carriedFromSwitch) {
     document.getElementById('request').value = carried;
     sessionStorage.removeItem('ps.sql');
+    sessionStorage.removeItem('ps.sql.ran');
   }
+  function carryQueryForSwitch() {
+    const sql = document.getElementById('request').value;
+    sessionStorage.setItem('ps.sql', sql);
+    const lastRun = sessionStorage.getItem('ps.lastRunSql');
+    if (sql && lastRun === sql) {
+      sessionStorage.setItem('ps.sql.ran', '1');
+    } else {
+      sessionStorage.removeItem('ps.sql.ran');
+    }
+  }
+  // Expose so the where→circuit jump and the database-switch handler can
+  // reuse the same carry rule.
+  window.ProvsqlStudio.carryQueryForSwitch = carryQueryForSwitch;
   // If the previous page asked us to preload a circuit (via "→ Circuit"
   // button on a where-mode result row), pull the UUID out now so circuit-mode
   // setup can fire it after the result table renders.
@@ -252,7 +282,11 @@
     body.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-jump-circuit]');
       if (!btn) return;
-      sessionStorage.setItem('ps.sql', document.getElementById('request').value);
+      // Same carry rule as the mode-switch tab : only auto-replay in the
+      // new mode if the textarea still matches the last-run SQL. The
+      // preloadCircuit UUID is always carried so the DAG renders
+      // regardless of whether we re-run the query.
+      window.ProvsqlStudio.carryQueryForSwitch();
       sessionStorage.setItem('ps.preloadCircuit', btn.dataset.jumpCircuit);
       window.location.href = '/circuit';
     });
@@ -273,9 +307,12 @@
                    - 10;  // small breathing gap above the header
       sidebar.scrollTo({ top: Math.max(0, offset), behavior: 'smooth' });
     });
-    // If a query was carried over (mode switch), re-run it; otherwise leave
-    // the result pane empty until the user submits.
-    if (document.getElementById('request').value.trim()) {
+    // Auto-replay only when the carried query had actually been executed
+    // in the original mode (carriedRan). Plain reloads, history nav, and
+    // unrun drafts must NOT auto-execute, because re-running a
+    // side-effecting query (typically add_provenance) on switch is
+    // dangerous.
+    if (carriedRan && document.getElementById('request').value.trim()) {
       runQuery({ preventDefault() {} });
     }
   }
@@ -624,8 +661,10 @@
       }
       // Reloading is the cleanest way to reset every cached relation list,
       // result table, circuit cache, etc., to the new database's contents.
-      // sessionStorage preserves the SQL textarea across the reload.
-      sessionStorage.setItem('ps.sql', document.getElementById('request').value);
+      // sessionStorage preserves the SQL textarea across the reload; the
+      // ran-flag carry rule ensures we only auto-replay when the user had
+      // actually executed the query (no side-effects on idle reloads).
+      window.ProvsqlStudio.carryQueryForSwitch();
       window.location.reload();
     });
   }
@@ -865,18 +904,41 @@
           // (provsql column hidden when has_provenance), so the tooltip
           // and the comma-separated list don't disagree.
           const visibleCount = r.has_provenance ? r.columns.length - 1 : r.columns.length;
+          // add/remove_provenance only target plain tables (the underlying
+          // ALTER TABLE rejects views/matviews); mappings already serve a
+          // separate purpose so we don't offer the toggle on them.
+          const canAddRemove = r.kind === 'table' && !r.is_mapping;
+          let actions = '';
+          if (canAddRemove) {
+            if (r.has_provenance) {
+              actions =
+                `<button type="button" class="wp-schema__rel-action" `
+                + `data-action="remove-prov" data-qname="${escapeAttr(qname)}" `
+                + `title="Insert SELECT remove_provenance('${escapeAttr(qname)}');">`
+                + `<i class="fas fa-minus"></i> prov</button>`;
+            } else {
+              actions =
+                `<button type="button" class="wp-schema__rel-action" `
+                + `data-action="add-prov" data-qname="${escapeAttr(qname)}" `
+                + `title="Insert SELECT add_provenance('${escapeAttr(qname)}');">`
+                + `<i class="fas fa-plus"></i> prov</button>`;
+            }
+          }
+          // Outer is a div with role=button so the inner action buttons can
+          // be real <button> elements (nested buttons aren't valid HTML).
           html +=
-            `<button type="button" class="wp-schema__rel${provCls}"`
+            `<div class="wp-schema__rel${provCls}" role="button" tabindex="0"`
             + ` data-qname="${escapeAttr(insert)}"`
             + ` title="${escapeAttr(qname)}: ${visibleCount} column${visibleCount === 1 ? '' : 's'}${titleSuffix}">`
             + `<span class="wp-schema__rel-name">${escapeHtml(r.table)}</span>`
             + `<span class="wp-schema__rel-kind">${escapeHtml(r.kind)}</span>`
             + provBadge
-            + mapBadge;
+            + mapBadge
+            + (actions ? `<span class="wp-schema__rel-actions">${actions}</span>` : '');
           if (cols) {
             html += `<span class="wp-schema__cols">${escapeHtml(cols)}</span>`;
           }
-          html += `</button>`;
+          html += `</div>`;
         }
         html += '</div>';
       }
@@ -896,9 +958,51 @@
       ta.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
+    // Used by the per-relation action buttons (add/remove_provenance):
+    // they generate a complete standalone query, so blow the previous
+    // textarea content away rather than concatenate.
+    function replaceQuery(text) {
+      const ta = document.getElementById('request');
+      if (!ta) return;
+      ta.value = text;
+      ta.setSelectionRange(text.length, text.length);
+      ta.focus();
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
     body.addEventListener('click', (e) => {
+      // Action buttons (add/remove_provenance) replace the textarea with a
+      // complete SELECT call so the user can review and run it directly.
+      // Match these first so they don't fall through to the row-level
+      // qname insert.
+      const action = e.target.closest('.wp-schema__rel-action');
+      if (action && action.dataset.action && action.dataset.qname) {
+        const q = action.dataset.qname;
+        let sql;
+        if (action.dataset.action === 'add-prov') {
+          sql = `SELECT add_provenance('${q}');`;
+        } else if (action.dataset.action === 'remove-prov') {
+          sql = `SELECT remove_provenance('${q}');`;
+        }
+        if (sql) {
+          replaceQuery(sql);
+          close();
+        }
+        return;
+      }
       const rel = e.target.closest('.wp-schema__rel');
       if (!rel || !rel.dataset.qname) return;
+      insertAtCursor(rel.dataset.qname);
+      close();
+    });
+    // The relation row is now a div role=button (so the inner action
+    // <button>s nest validly). Wire Enter/Space so keyboard users can
+    // still activate the row insert.
+    body.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const rel = e.target.closest('.wp-schema__rel');
+      if (!rel || rel !== e.target || !rel.dataset.qname) return;
+      e.preventDefault();
       insertAtCursor(rel.dataset.qname);
       close();
     });
@@ -1032,7 +1136,14 @@
     // caches the promise), so the later loadCircuit() callers piggyback.
     queueMicrotask(ensureCircuitLib);
 
-    if (document.getElementById('request').value.trim()) {
+    // Auto-replay only when the carried query had actually been executed
+    // (carriedRan), or when we arrived via a where→circuit jump (carry):
+    // the jump implies a successful query run in where mode whose row
+    // the user clicked. On plain reload / unrun draft, do NOT re-execute
+    // (side-effects like add_provenance must not fire on their own).
+    const shouldReplay =
+      (carriedRan || carry) && document.getElementById('request').value.trim();
+    if (shouldReplay) {
       runQuery({ preventDefault() {} }).then(() => {
         if (carry) loadCircuit(carry);
       });
@@ -1425,6 +1536,12 @@ async function runQuery(ev) {
   // exact-duplicate consecutive entries). We do this regardless of the
   // server's outcome so users can recall a query that errored to fix it.
   if (env.pushHistory) env.pushHistory(sqlText);
+
+  // Record the just-run SQL so a subsequent mode/database switch knows
+  // whether the textarea content was actually executed (the carry handler
+  // compares this to the textarea value to decide whether to set the
+  // ran-flag, which gates auto-replay in the new mode).
+  try { sessionStorage.setItem('ps.lastRunSql', sqlText); } catch {}
 
   // After every successful exec in where mode, re-fetch relations so
   // add_provenance results show up live.

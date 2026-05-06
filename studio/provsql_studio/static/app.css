@@ -489,6 +489,33 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   letter-spacing: 0.05em;
   font-weight: 600;
 }
+/* Right-floated action chip cluster: add/remove_provenance buttons that
+   prefill the corresponding SELECT call into the querybox. */
+.wp-schema__rel-actions {
+  float: right;
+  display: inline-flex;
+  gap: 0.25rem;
+}
+.wp-schema__rel-action {
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.wp-schema__rel-action:hover {
+  background: var(--purple-500);
+  color: #fff;
+  border-color: var(--purple-500);
+}
+.wp-schema__rel-action .fas {
+  font-size: 0.6rem;
+  margin-right: 0.15rem;
+}
 .wp-schema__cols {
   display: block;
   font-family: var(--font-mono);
