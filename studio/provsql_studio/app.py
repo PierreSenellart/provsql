@@ -157,29 +157,79 @@ def create_app(
             info["search_path"],
         )
         info["db_is_auto"] = app.config.get("DB_IS_AUTO", False)
+        # Send back a password-stripped DSN so the connection editor
+        # can prefill its input without leaking secrets to the page.
+        # The user re-types the password if they need to switch host
+        # or role.
+        try:
+            params = psycopg.conninfo.conninfo_to_dict(app.config.get("DSN", ""))
+            params.pop("password", None)
+            info["dsn"] = psycopg.conninfo.make_conninfo(**params)
+        except Exception:
+            info["dsn"] = ""
         return jsonify(info)
 
     @app.post("/api/conn")
     def api_conn_switch():
         payload = request.get_json(silent=True) or {}
-        target = payload.get("database")
-        if not target or not isinstance(target, str):
-            return jsonify({"error": "missing 'database'"}), 400
-        # Verify the user can actually connect, before tearing down the pool.
-        accessible = db.list_databases(get_pool())
-        if target not in accessible:
-            return jsonify({"error": f"database {target!r} not accessible"}), 403
-        # Compose a new DSN by swapping dbname, preserving other connection
-        # parameters (host, port, options like search_path, ...).
-        params = psycopg.conninfo.conninfo_to_dict(app.config["DSN"])
-        params["dbname"] = target
-        new_dsn = psycopg.conninfo.make_conninfo(**params)
-        new_pool = db.make_pool(new_dsn)
+        new_dsn = payload.get("dsn")
+        target  = payload.get("database")
+        dsn_no_db = False
+        if new_dsn and isinstance(new_dsn, str) and new_dsn.strip():
+            # Free-form DSN path: the user pasted a full conninfo string
+            # (host, port, user, password, options, ...). We open a fresh
+            # pool and probe it with SELECT 1 before swapping; if anything
+            # is wrong (auth, host unreachable, bad syntax) the old pool
+            # stays in service and the error reaches the front-end.
+            new_dsn = new_dsn.strip()
+            # If the user didn't specify dbname, default to the postgres
+            # maintenance DB and re-raise the auto-fallback banner so
+            # they can pick a real database from the switcher. Mirrors
+            # the CLI launch behaviour.
+            try:
+                params = psycopg.conninfo.conninfo_to_dict(new_dsn)
+            except Exception:
+                params = None
+            if params is not None and "dbname" not in params:
+                params["dbname"] = "postgres"
+                new_dsn = psycopg.conninfo.make_conninfo(**params)
+                dsn_no_db = True
+            try:
+                probe_pool = db.make_pool(new_dsn)
+                with probe_pool.connection() as c, c.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+            except Exception as e:
+                try:
+                    probe_pool.close()
+                except Exception:
+                    pass
+                return jsonify({
+                    "error": "cannot connect with the supplied DSN",
+                    "reason": str(e).strip() or repr(e),
+                }), 400
+            new_pool = probe_pool
+        elif target and isinstance(target, str):
+            # Convenience path: swap dbname only, preserving the rest of
+            # the connection parameters. Used by the top-nav switcher.
+            accessible = db.list_databases(get_pool())
+            if target not in accessible:
+                return jsonify({"error": f"database {target!r} not accessible"}), 403
+            params = psycopg.conninfo.conninfo_to_dict(app.config["DSN"])
+            params["dbname"] = target
+            new_dsn = psycopg.conninfo.make_conninfo(**params)
+            new_pool = db.make_pool(new_dsn)
+        else:
+            return jsonify({"error": "missing 'dsn' or 'database'"}), 400
+
         old_pool = app.extensions["provsql_pool"]
         app.extensions["provsql_pool"] = new_pool
         app.config["DSN"] = new_dsn
-        # User explicitly picked a DB : drop the auto-fallback hint.
-        app.config["DB_IS_AUTO"] = False
+        # The "no DB picked" hint reappears whenever we land on the
+        # postgres maintenance DB by default (here when the user
+        # supplied a DSN without a dbname). For an explicit dbname or a
+        # plain database-switch, drop it.
+        app.config["DB_IS_AUTO"] = dsn_no_db
         layout_cache._store.clear()
         try:
             old_pool.close()

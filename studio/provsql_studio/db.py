@@ -370,13 +370,15 @@ def conn_info(pool: ConnectionPool) -> dict:
         cur.execute(
             "SELECT current_user, current_database(), "
             "       coalesce(inet_server_addr()::text, ''), "
+            "       coalesce(inet_server_port()::text, ''), "
             "       array_to_string(current_schemas(false), ', ')"
         )
-        user, database, host, search_path = cur.fetchone()
+        user, database, host, port, search_path = cur.fetchone()
     return {
         "user": user,
         "database": database,
         "host": host or None,
+        "port": port or None,
         "search_path": search_path,
     }
 

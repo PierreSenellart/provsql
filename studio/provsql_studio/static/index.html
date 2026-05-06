@@ -22,7 +22,26 @@
       <a class="ps-modeswitch__btn is-active" href="/where" data-mode="where" role="tab"><i class="fas fa-search-location"></i> Where</a>
     </div>
     <span class="wp-nav__conn">
-      <span class="wp-nav__dot" title="connected to a live PostgreSQL server"></span>
+      <button type="button" class="wp-nav__connbtn" id="conn-dot"
+              title="connected to a live PostgreSQL server"
+              aria-haspopup="dialog" aria-expanded="false"
+              aria-label="Edit connection">
+        <i class="fas fa-plug wp-nav__connicon" aria-hidden="true"></i>
+        <span class="wp-nav__dot"></span>
+      </button>
+      <div class="wp-nav__dsnpanel" id="dsn-panel" role="dialog" hidden>
+        <h4 class="wp-nav__dsntitle">Connection</h4>
+        <p class="wp-nav__dsnhint">Paste a libpq connection string (host, port, user, password, dbname, options…).</p>
+        <input type="text" class="wp-nav__dsninput" id="dsn-input"
+               placeholder="host=localhost port=5432 user=alice dbname=cs5"
+               autocomplete="off" spellcheck="false">
+        <div class="wp-nav__dsnactions">
+          <button type="button" class="wp-btn wp-btn--mini" id="dsn-apply">
+            <i class="fas fa-plug"></i> Connect
+          </button>
+          <span class="wp-nav__dsnstatus" id="dsn-status" hidden></span>
+        </div>
+      </div>
       <span class="wp-nav__dbswitch" id="dbswitch">
         <button type="button" class="wp-nav__db" id="conn-info" aria-haspopup="listbox" aria-expanded="false">…</button>
         <ul class="wp-nav__dbmenu" id="dbmenu" role="listbox" hidden></ul>

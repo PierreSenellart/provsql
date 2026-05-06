@@ -467,6 +467,11 @@
 
   async function fetchConnInfo() {
     const el  = document.getElementById('conn-info');
+    // The trigger is the wrapping <button id="conn-dot"> (plug icon +
+    // status dot). We set the tooltip on the button so hovering the
+    // icon also surfaces it; the inner span carries only the colour
+    // class (.is-offline / connected).
+    const trigger = document.getElementById('conn-dot');
     const dot = document.querySelector('.wp-nav__dot');
     if (!el) return;
     let reason = '';
@@ -487,9 +492,15 @@
       _currentConn = c;
       el.textContent = `${c.user}@${c.database}`;
       if (c.host) el.title = `host: ${c.host}`;
-      if (dot) {
-        dot.classList.remove('is-offline');
-        dot.title = 'connected to a live PostgreSQL server';
+      if (dot) dot.classList.remove('is-offline');
+      if (trigger) {
+        // Surface only the server endpoint. The DB name is already
+        // shown right next to the dot in the switcher chip, so we
+        // don't repeat it; user@host:port is what the chip can't say.
+        const where = c.host
+          ? (c.port ? `${c.host}:${c.port}` : c.host)
+          : 'local socket';
+        trigger.title = `connected to ${c.user}@${where} (click to change)`;
       }
       // No DSN was given on the CLI and no PG* env hinted at a DB, so
       // the server fell back to the postgres maintenance DB. Show a
@@ -516,9 +527,9 @@
       // transient blip: the chip keeps showing the last-known db name
       // (so the dropdown still works); only the dot turns red and the
       // tooltip explains.
-      if (dot) {
-        dot.classList.add('is-offline');
-        dot.title = `Cannot reach the database: ${reason || e.message || 'cannot connect to PostgreSQL'}`;
+      if (dot) dot.classList.add('is-offline');
+      if (trigger) {
+        trigger.title = `Cannot reach the database: ${reason || e.message || 'cannot connect to PostgreSQL'}`;
       }
     }
     setupDbSwitcher();
@@ -1135,6 +1146,86 @@
   function isRightAlignedType(typeName) {
     return RIGHT_ALIGNED_TYPES.has((typeName || '').toLowerCase());
   }
+
+  // Connection-editor popover anchored to the green/red status dot.
+  // Lets the user paste an arbitrary libpq DSN (host, port, user,
+  // password, dbname, options) so they can switch server / role
+  // without restarting the studio. Uses POST /api/conn { dsn: "…" }.
+  function setupConnEditor() {
+    const dot    = document.getElementById('conn-dot');
+    const panel  = document.getElementById('dsn-panel');
+    const input  = document.getElementById('dsn-input');
+    const apply  = document.getElementById('dsn-apply');
+    const status = document.getElementById('dsn-status');
+    if (!dot || !panel || !input || !apply || dot.dataset.bound === '1') return;
+    dot.dataset.bound = '1';
+
+    function showStatus(msg, isErr) {
+      if (!status) return;
+      if (!msg) { status.hidden = true; status.textContent = ''; status.classList.remove('is-error'); return; }
+      status.hidden = false;
+      status.textContent = msg;
+      status.classList.toggle('is-error', !!isErr);
+    }
+    function open() {
+      // Prefill with the password-stripped DSN the server reports.
+      // The user retypes the password when switching role/host if
+      // needed; we don't echo secrets back.
+      if (_currentConn && _currentConn.dsn) input.value = _currentConn.dsn;
+      panel.hidden = false;
+      dot.setAttribute('aria-expanded', 'true');
+      showStatus('');
+      input.focus();
+      input.select();
+    }
+    function close() {
+      panel.hidden = true;
+      dot.setAttribute('aria-expanded', 'false');
+    }
+
+    dot.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (panel.hidden) open(); else close();
+    });
+    document.addEventListener('click', (e) => {
+      if (!panel.hidden && !panel.contains(e.target) && e.target !== dot) close();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      else if (e.key === 'Enter') { e.preventDefault(); apply.click(); }
+    });
+
+    apply.addEventListener('click', async () => {
+      const dsn = (input.value || '').trim();
+      if (!dsn) { showStatus('Empty DSN', true); return; }
+      apply.disabled = true;
+      showStatus('Connecting…');
+      try {
+        const resp = await fetch('/api/conn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dsn }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showStatus(data.reason || data.error || `HTTP ${resp.status}`, true);
+          return;
+        }
+        // Refresh the page so cached relations / circuit / result table
+        // reflect the new server's contents (same approach as the DB
+        // switcher's POST handler). sessionStorage carries the SQL
+        // textarea across the reload.
+        const ta = document.getElementById('request');
+        if (ta) sessionStorage.setItem('ps.sql', ta.value);
+        window.location.reload();
+      } catch (e) {
+        showStatus(`Network error: ${e.message}`, true);
+      } finally {
+        apply.disabled = false;
+      }
+    });
+  }
+  setupConnEditor();
 
   // Show / clear the "no DB selected" hint banner. Lives at the top of
   // the page (above the wp-shell grid) so it's the first thing the user

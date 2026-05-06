@@ -195,6 +195,20 @@ em { font-style: italic; }
   font-size: 0.78rem;
   color: rgba(255,255,255,0.9);
 }
+/* Connection trigger: a plug icon + status dot, both inside one
+   <button>. Clicking either opens the connection editor; the dot keeps
+   its colour-change role (green when connected, terracotta when the
+   server is unreachable). */
+.wp-nav__connbtn {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.15rem 0.3rem;
+  background: transparent; border: none; cursor: pointer;
+  color: rgba(255,255,255,0.85);
+  border-radius: 4px;
+}
+.wp-nav__connbtn:hover  { background: rgba(255,255,255,0.08); color: #fff; }
+.wp-nav__connbtn:focus  { outline: 2px solid var(--gold-500); outline-offset: 1px; }
+.wp-nav__connicon { font-size: 0.85rem; }
 .wp-nav__dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: #6FCF97;
@@ -205,6 +219,62 @@ em { font-style: italic; }
   background: var(--terracotta-500);
   box-shadow: 0 0 0 3px rgba(196, 102, 74, 0.25);
 }
+/* Connection editor popover anchored to the dot. Uses the same
+   colour palette as the config panel so the chrome stays cohesive. */
+.wp-nav__dsnpanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  /* Anchor to the right edge of .wp-nav__conn so the panel grows
+     leftward into the page and never overflows the viewport. The dot
+     lives at the far right of the nav, so left:0 was pushing the
+     panel offscreen. */
+  right: 0;
+  z-index: 30;
+  width: 460px;
+  max-width: calc(100vw - 1.5rem);
+  padding: 0.85rem 1rem;
+  background: #fff;
+  color: var(--purple-900);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(42, 24, 80, 0.25);
+  font-family: var(--font-ui);
+}
+.wp-nav__dsnpanel[hidden] { display: none; }
+.wp-nav__dsntitle {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-display); font-style: italic; font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--purple-700);
+}
+.wp-nav__dsnhint {
+  margin: 0 0 0.55rem;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.wp-nav__dsninput {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  font-family: var(--font-mono); font-size: 0.82rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--purple-900);
+  box-sizing: border-box;
+}
+.wp-nav__dsninput:focus { outline: 2px solid var(--gold-500); border-color: var(--gold-500); }
+.wp-nav__dsnactions {
+  display: flex; align-items: center; gap: 0.6rem;
+  margin-top: 0.55rem;
+}
+.wp-nav__dsnstatus {
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.wp-nav__dsnstatus.is-error { color: var(--terracotta-500); }
+/* The dot lives inside .wp-nav__conn; we anchor the popover to that
+   span so the dropdown coords stay sensible regardless of dot size. */
+.wp-nav__conn { position: relative; }
 .wp-nav__dbswitch { position: relative; }
 .wp-nav__db {
   font: inherit;
