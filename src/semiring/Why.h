@@ -18,7 +18,9 @@
  * - @c monus()  → remove elements of @f$y@f$ from @f$x@f$
  * - @c delta()  → identity (returns @f$x@f$ unchanged if non-empty)
  *
- * This semiring is absorptive (set union is idempotent).
+ * This semiring is idempotent (set union is idempotent: @f$a \oplus a = a@f$),
+ * but **not** absorptive in the @f$\mathbb{1} \oplus a = \mathbb{1}@f$ sense
+ * used by @c absorptive(): @f${\{\emptyset\}} \cup \{\{x\}\} = \{\emptyset, \{x\}\} \neq \{\emptyset\}@f$.
  *
  * @see https://provsql.org/lean-docs/Provenance/Semirings/Why.html
  *      Lean 4 verified instance: @c instSemiringWithMonusWhy, with

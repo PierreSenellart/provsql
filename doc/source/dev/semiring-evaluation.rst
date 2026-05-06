@@ -138,10 +138,15 @@ queries.
 Absorptive Semirings
 ^^^^^^^^^^^^^^^^^^^^
 
-Override ``absorptive()`` to return ``true`` if :math:`a \oplus a = a`
-for all :math:`a` (e.g., Boolean, Why-provenance).  The evaluator
-exploits this flag to enable several optimizations, which can
-significantly improve performance.
+Override ``absorptive()`` to return ``true`` if
+:math:`\mathbb{1} \oplus a = \mathbb{1}` for all :math:`a` (e.g., the
+Boolean semiring).  Absorptivity implies idempotency
+(:math:`a \oplus a = a`); the evaluator exploits this flag to
+deduplicate operands of ``plus`` gates and to short-circuit over the
+multiplicative identity, which can significantly improve performance.
+Idempotent-but-not-absorptive semirings (such as why-provenance and
+which-provenance, where :math:`\mathbb{1} \oplus a \neq \mathbb{1}` in
+general) should leave it at the default ``false``.
 
 
 Example: The Boolean Semiring
