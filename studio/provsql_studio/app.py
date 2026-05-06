@@ -45,6 +45,7 @@ def create_app(
     max_circuit_depth: int = 8,
     max_circuit_nodes: int = 500,
     max_sidebar_rows: int = 100,
+    max_result_rows: int = 1000,
     search_path: str = "",
     db_is_auto: bool = False,
 ) -> Flask:
@@ -54,6 +55,7 @@ def create_app(
         MAX_CIRCUIT_DEPTH=max_circuit_depth,
         MAX_CIRCUIT_NODES=max_circuit_nodes,
         MAX_SIDEBAR_ROWS=max_sidebar_rows,
+        MAX_RESULT_ROWS=max_result_rows,
         SEARCH_PATH=search_path,
     )
 
@@ -79,6 +81,8 @@ def create_app(
         app.config["MAX_CIRCUIT_DEPTH"] = persisted_opts["max_circuit_depth"]
     if "max_sidebar_rows" in persisted_opts:
         app.config["MAX_SIDEBAR_ROWS"] = persisted_opts["max_sidebar_rows"]
+    if "max_result_rows" in persisted_opts:
+        app.config["MAX_RESULT_ROWS"] = persisted_opts["max_result_rows"]
     if "statement_timeout_seconds" in persisted_opts:
         app.config["STATEMENT_TIMEOUT"] = f"{persisted_opts['statement_timeout_seconds']}s"
     if "search_path" in persisted_opts:
@@ -301,6 +305,7 @@ def create_app(
                 extra_gucs=app.config["RUNTIME_GUCS"],
                 on_pid=register_pid,
                 search_path=app.config.get("SEARCH_PATH", ""),
+                max_result_rows=int(app.config["MAX_RESULT_ROWS"]),
             )
         finally:
             if registered:
@@ -483,6 +488,7 @@ def create_app(
     _OPTION_KEYS = {
         "max_circuit_depth",
         "max_sidebar_rows",
+        "max_result_rows",
         "statement_timeout_seconds",
         "search_path",
     }
@@ -514,6 +520,7 @@ def create_app(
         return {
             "max_circuit_depth": int(app.config["MAX_CIRCUIT_DEPTH"]),
             "max_sidebar_rows": int(app.config["MAX_SIDEBAR_ROWS"]),
+            "max_result_rows": int(app.config["MAX_RESULT_ROWS"]),
             "statement_timeout_seconds": seconds if seconds is not None else 30,
             "search_path": app.config.get("SEARCH_PATH", "") or "",
         }
@@ -546,6 +553,8 @@ def create_app(
                 app.config["MAX_CIRCUIT_DEPTH"] = canonical
             elif key == "max_sidebar_rows":
                 app.config["MAX_SIDEBAR_ROWS"] = canonical
+            elif key == "max_result_rows":
+                app.config["MAX_RESULT_ROWS"] = canonical
             elif key == "statement_timeout_seconds":
                 app.config["STATEMENT_TIMEOUT"] = f"{canonical}s"
             elif key == "search_path":

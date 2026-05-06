@@ -122,6 +122,13 @@
           </label>
 
           <label class="wp-config__row">
+            <span class="wp-config__name">Result rows</span>
+            <span class="wp-config__numwrap">
+              <input type="number" class="wp-config__num" id="cfg-result-rows" min="1" max="100000" step="1" value="1000">
+            </span>
+          </label>
+
+          <label class="wp-config__row">
             <span class="wp-config__name">Probability decimals</span>
             <span class="wp-config__numwrap">
               <input type="number" class="wp-config__num" id="cfg-prob-decimals" min="0" max="15" step="1" value="4">
@@ -197,7 +204,7 @@
     <div class="wp-result" id="result-pane">
       <header class="wp-result__hdr">
         <h3 class="wp-result__title">Query result</h3>
-        <span class="wp-result__meta"><span id="result-count">0</span> tuples · evaluated in <span id="result-time">–</span> ms</span>
+        <span class="wp-result__meta"><span id="result-count">0</span> tuples<span id="result-truncated" class="wp-result__trunc" hidden></span> · evaluated in <span id="result-time">–</span> ms</span>
       </header>
       <div id="result-banners"></div>
       <div class="wp-table-wrap">

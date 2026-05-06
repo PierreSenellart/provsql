@@ -28,6 +28,37 @@ def test_select_returns_rows(client):
     assert any(row[0] == "John" for row in final["rows"])
 
 
+def test_result_rows_truncate_when_query_exceeds_cap(test_dsn, tmp_path, monkeypatch):
+    """Personnel has 7 rows; cap at 3 to force the fetchmany(N+1) peek to
+    flag truncation. /api/exec must trim to max_rows and surface
+    truncated=True + max_rows=N so the front-end can render the
+    "showing first N" footer."""
+    from provsql_studio.app import create_app
+    monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "studio_cfg"))
+    app = create_app(
+        dsn=f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        max_result_rows=3,
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    payload = post_exec(client, "SELECT name FROM personnel ORDER BY id", mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows"
+    assert final["truncated"] is True
+    assert final["max_rows"] == 3
+    assert len(final["rows"]) == 3
+
+
+def test_result_rows_no_truncation_when_under_cap(client):
+    """At the default cap (1000), personnel's 7 rows must come through in
+    full and not be flagged as truncated."""
+    payload = post_exec(client, "SELECT name FROM personnel", mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["truncated"] is False
+    assert final["max_rows"] == 1000
+    assert len(final["rows"]) == 7
+
+
 def test_circuit_mode_does_not_wrap(client):
     payload = post_exec(client, "SELECT name FROM personnel WHERE name = 'John'", mode="circuit")
     final = payload["blocks"][-1]

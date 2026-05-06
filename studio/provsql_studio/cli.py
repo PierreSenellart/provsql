@@ -66,6 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
              "datasets.",
     )
     p.add_argument(
+        "--max-result-rows",
+        type=int,
+        default=1000,
+        help="Row cap for /api/exec result rendering (default 1000). The "
+             "server fetches up to N+1 rows and trims to N; the front-end "
+             "surfaces a 'showing first N rows' footer when truncated.",
+    )
+    p.add_argument(
         "--search-path",
         default="",
         help="Comma-separated search_path applied per request (provsql is "
@@ -105,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         max_circuit_depth=args.max_circuit_depth,
         max_circuit_nodes=args.max_circuit_nodes,
         max_sidebar_rows=args.max_sidebar_rows,
+        max_result_rows=args.max_result_rows,
         search_path=args.search_path,
         db_is_auto=db_is_auto,
     )

@@ -772,6 +772,7 @@
     const depth   = document.getElementById('cfg-depth');
     const depthOut = document.getElementById('cfg-depth-out');
     const sidebarRows = document.getElementById('cfg-sidebar-rows');
+    const resultRows = document.getElementById('cfg-result-rows');
     const timeout = document.getElementById('cfg-timeout');
     const sp      = document.getElementById('cfg-search-path');
 
@@ -791,6 +792,9 @@
         }
         if (sidebarRows && opts.max_sidebar_rows != null) {
           sidebarRows.value = String(opts.max_sidebar_rows);
+        }
+        if (resultRows && opts.max_result_rows != null) {
+          resultRows.value = String(opts.max_result_rows);
         }
         if (timeout && opts.statement_timeout_seconds != null) {
           timeout.value = String(opts.statement_timeout_seconds);
@@ -886,6 +890,13 @@
         if (document.body.classList.contains('mode-where')) {
           refreshRelations();
         }
+      });
+    }
+    if (resultRows) {
+      resultRows.addEventListener('change', () => {
+        const n = Math.max(1, Math.min(100000, parseInt(resultRows.value || '1000', 10) || 1000));
+        resultRows.value = String(n);
+        setGuc('max_result_rows', n);
       });
     }
     if (timeout) {
@@ -1783,6 +1794,15 @@ async function runQuery(ev) {
     const final = blocks[blocks.length - 1];
     const earlier = blocks.slice(0, -1);
 
+    // Reset the truncation marker on every render; the rows branch
+    // re-shows it when final.truncated. Status / error / empty paths
+    // therefore never leak a stale "first N; more available" hint.
+    const truncMark = document.getElementById('result-truncated');
+    if (truncMark) {
+      truncMark.textContent = '';
+      truncMark.hidden = true;
+    }
+
     const banners = document.getElementById('result-banners');
     let bannerHtml = '';
     // Earlier-failed prelude statements: render each as an ERROR banner
@@ -1896,6 +1916,16 @@ async function runQuery(ev) {
         return `<tr>${cells}${jumpBtn}</tr>`;
       }).join('');
       count.textContent = final.rows.length;
+      const truncated = document.getElementById('result-truncated');
+      if (truncated) {
+        if (final.truncated && final.max_rows != null) {
+          truncated.textContent = ` (first ${final.max_rows}; more available)`;
+          truncated.hidden = false;
+        } else {
+          truncated.textContent = '';
+          truncated.hidden = true;
+        }
+      }
     }
   }
 

@@ -1440,6 +1440,7 @@ body.mode-where #sidebar {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.wp-result__trunc { color: var(--terracotta-500); text-transform: none; }
 .wp-result__cell { cursor: pointer; }
 .wp-result__legend {
   font-family: var(--font-ui);

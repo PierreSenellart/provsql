@@ -82,6 +82,13 @@ def load_persisted_options() -> dict:
                 out["max_sidebar_rows"] = n
         except (TypeError, ValueError):
             pass
+    if "max_result_rows" in raw:
+        try:
+            n = int(raw["max_result_rows"])
+            if 1 <= n <= 100000:
+                out["max_result_rows"] = n
+        except (TypeError, ValueError):
+            pass
     if "statement_timeout_seconds" in raw:
         try:
             n = int(raw["statement_timeout_seconds"])
@@ -122,6 +129,14 @@ def validate_panel_option(name: str, value) -> tuple[str, object]:
             raise ValueError("max_sidebar_rows must be an integer")
         if not (1 <= n <= 5000):
             raise ValueError("max_sidebar_rows must be between 1 and 5000")
+        return (name, n)
+    if name == "max_result_rows":
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("max_result_rows must be an integer")
+        if not (1 <= n <= 100000):
+            raise ValueError("max_result_rows must be between 1 and 100000")
         return (name, n)
     if name == "statement_timeout_seconds":
         try:
@@ -335,6 +350,11 @@ class StatementResult:
     # "value (*)" string so the front-end can render the friendly form
     # while keeping the UUID in data-circuit-uuid for click-through.
     agg_display: dict[str, str] | None = None
+    # True when fetchmany peeked one row past the cap : the row list has
+    # been trimmed and at least one more row is available. The front-end
+    # surfaces this as a "showing first N rows" footer.
+    truncated: bool = False
+    max_rows: int | None = None
 
     def to_dict(self) -> dict:
         d = {"kind": self.kind}
@@ -342,6 +362,9 @@ class StatementResult:
             d["columns"] = self.columns
             d["rows"] = self.rows
             d["rowcount"] = self.rowcount
+            d["truncated"] = self.truncated
+            if self.max_rows is not None:
+                d["max_rows"] = self.max_rows
             if self.agg_display:
                 d["agg_display"] = self.agg_display
         elif self.kind == "status":
@@ -899,6 +922,7 @@ def exec_batch(
     extra_gucs: dict[str, str] | None = None,
     on_pid=None,
     search_path: str = "",
+    max_result_rows: int | None = None,
 ) -> tuple[list[StatementResult], StatementResult | None, dict]:
     """Run `statements` in a single transaction with SET LOCAL settings.
 
@@ -1115,7 +1139,7 @@ def exec_batch(
                     except psycopg.Error as e:
                         return [], _user_error_result(e, meta, statement_timeout), meta
 
-                final = _result_from_cursor(cur)
+                final = _result_from_cursor(cur, max_rows=max_result_rows)
                 # If the result has any agg_token columns, resolve their
                 # underlying UUIDs back to "value (*)" display strings in
                 # one shot via provsql.agg_token_value_text. The pool
@@ -1138,8 +1162,16 @@ def exec_batch(
     return intermediate, final, meta
 
 
-def _result_from_cursor(cur: psycopg.Cursor) -> StatementResult:
-    """Translate the cursor's most recent statement result into a StatementResult."""
+def _result_from_cursor(
+    cur: psycopg.Cursor, *, max_rows: int | None = None
+) -> StatementResult:
+    """Translate the cursor's most recent statement result into a StatementResult.
+
+    When `max_rows` is given, fetch at most `max_rows + 1` rows so we can
+    detect whether the query had more rows than the cap. The +1 row is
+    dropped before serialization; `truncated=True` is set so the
+    front-end can render a "showing first N rows" footer. fetchmany also
+    spares the json-serialization cost on the surplus rows."""
     if cur.description is None:
         # DDL / DML without RETURNING.
         return StatementResult(
@@ -1151,9 +1183,23 @@ def _result_from_cursor(cur: psycopg.Cursor) -> StatementResult:
         {"name": c.name, "type_oid": c.type_code, "type_name": _type_name(cur, c.type_code)}
         for c in cur.description
     ]
-    raw_rows = cur.fetchall()
+    truncated = False
+    if max_rows is not None and max_rows >= 0:
+        raw_rows = cur.fetchmany(max_rows + 1)
+        if len(raw_rows) > max_rows:
+            truncated = True
+            raw_rows = raw_rows[:max_rows]
+    else:
+        raw_rows = cur.fetchall()
     rows = [[_to_jsonable(v) for v in r] for r in raw_rows]
-    return StatementResult(kind="rows", columns=columns, rows=rows, rowcount=len(rows))
+    return StatementResult(
+        kind="rows",
+        columns=columns,
+        rows=rows,
+        rowcount=len(rows),
+        truncated=truncated,
+        max_rows=max_rows,
+    )
 
 
 def _resolve_agg_display(
