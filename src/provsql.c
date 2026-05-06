@@ -68,6 +68,7 @@ bool provsql_active = true; ///< @c true while ProvSQL query rewriting is enable
 bool provsql_where_provenance = false;
 bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
+bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
@@ -3575,6 +3576,22 @@ void _PG_init(void) {
                            "Should ProvSQL track update provenance?",
                            "1 turns update provenance on, 0 off.",
                            &provsql_update_provenance,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.aggtoken_text_as_uuid",
+                           "Output agg_token cells as the underlying UUID "
+                           "instead of \"value (*)\".",
+                           "Off by default for psql-friendly output. UI "
+                           "layers (notably ProvSQL Studio) flip this on "
+                           "per session so aggregate cells expose the "
+                           "circuit root UUID for click-through; the "
+                           "display value is recovered via "
+                           "provsql.agg_token_value_text(uuid).",
+                           &provsql_aggtoken_text_as_uuid,
                            false,
                            PGC_USERSET,
                            0,

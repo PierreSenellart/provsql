@@ -160,6 +160,12 @@ extern bool provsql_where_provenance;
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
 
+/** Global flag controlling agg_token text output: when true,
+ * agg_token_out emits the underlying provenance UUID instead of the
+ * default "value (*)" display string. Driven by the
+ * provsql.aggtoken_text_as_uuid GUC. */
+extern bool provsql_aggtoken_text_as_uuid;
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */

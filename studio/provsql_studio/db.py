@@ -240,6 +240,12 @@ class StatementResult:
     rowcount: int | None = None            # for rows + status
     message: str | None = None             # for status + error
     sqlstate: str | None = None            # for error
+    # When the studio session has provsql.aggtoken_text_as_uuid = on (the
+    # default for studio connections), agg_token cells arrive as bare
+    # UUIDs. agg_display maps each such UUID to its user-facing
+    # "value (*)" string so the front-end can render the friendly form
+    # while keeping the UUID in data-circuit-uuid for click-through.
+    agg_display: dict[str, str] | None = None
 
     def to_dict(self) -> dict:
         d = {"kind": self.kind}
@@ -247,6 +253,8 @@ class StatementResult:
             d["columns"] = self.columns
             d["rows"] = self.rows
             d["rowcount"] = self.rowcount
+            if self.agg_display:
+                d["agg_display"] = self.agg_display
         elif self.kind == "status":
             d["message"] = self.message
             d["rowcount"] = self.rowcount
@@ -290,6 +298,22 @@ def make_pool(dsn: str | None) -> ConnectionPool:
             with conn.cursor() as cur:
                 cur.execute("SET lc_messages = 'C'")
                 cur.execute("SET provsql.verbose_level = 0")
+                # Flip the agg_token output format to the underlying UUID
+                # for every studio session: result-table cells of type
+                # agg_token then expose the circuit root for click-
+                # through. The user-facing "value (*)" string is recovered
+                # per cell via provsql.agg_token_value_text(uuid).
+                # Older provsql versions don't know this GUC; the
+                # SAVEPOINT lets us swallow the resulting error without
+                # poisoning the rest of the configure block (cells then
+                # just stay as "value (*)" and aren't clickable).
+                cur.execute("SAVEPOINT _aggtok_guc")
+                try:
+                    cur.execute("SET provsql.aggtoken_text_as_uuid = on")
+                    cur.execute("RELEASE SAVEPOINT _aggtok_guc")
+                except Exception:
+                    cur.execute("ROLLBACK TO SAVEPOINT _aggtok_guc")
+                    cur.execute("RELEASE SAVEPOINT _aggtok_guc")
             conn.commit()
         except Exception:
             # Don't refuse the connection just because we can't pin
@@ -824,6 +848,15 @@ def exec_batch(
                         return [], _user_error_result(e, meta, statement_timeout), meta
 
                 final = _result_from_cursor(cur)
+                # If the result has any agg_token columns, resolve their
+                # underlying UUIDs back to "value (*)" display strings in
+                # one shot via provsql.agg_token_value_text. The pool
+                # session has aggtoken_text_as_uuid = on, so the cells
+                # arrived as bare UUIDs; the front-end uses agg_display
+                # to render the friendly form without losing the UUID
+                # click target.
+                if final.kind == "rows":
+                    final.agg_display = _resolve_agg_display(cur, final)
         except psycopg.Error as e:
             return [], _user_error_result(e, meta, statement_timeout), meta
         finally:
@@ -853,6 +886,44 @@ def _result_from_cursor(cur: psycopg.Cursor) -> StatementResult:
     raw_rows = cur.fetchall()
     rows = [[_to_jsonable(v) for v in r] for r in raw_rows]
     return StatementResult(kind="rows", columns=columns, rows=rows, rowcount=len(rows))
+
+
+def _resolve_agg_display(
+    cur: psycopg.Cursor, result: StatementResult
+) -> dict[str, str] | None:
+    """Bulk-resolve agg_token UUIDs in `result` back to "value (*)" via
+    provsql.agg_token_value_text. Returns None when there's nothing to
+    resolve so the JSON payload stays minimal; returns an empty dict if
+    older provsql doesn't expose the helper (the front-end then falls
+    back to displaying the raw UUID, same shape as before this fix).
+    """
+    if not result.columns or not result.rows:
+        return None
+    agg_idx = [i for i, c in enumerate(result.columns)
+               if (c.get("type_name") or "").lower() == "agg_token"]
+    if not agg_idx:
+        return None
+    uuids: set[str] = set()
+    for r in result.rows:
+        for i in agg_idx:
+            v = r[i]
+            if isinstance(v, str) and v:
+                uuids.add(v)
+    if not uuids:
+        return {}
+    try:
+        with cur.connection.cursor() as c2:
+            c2.execute(
+                "SELECT u, provsql.agg_token_value_text(u::uuid) "
+                "FROM unnest(%s::text[]) AS u",
+                (list(uuids),),
+            )
+            return {row[0]: row[1] for row in c2.fetchall() if row[1] is not None}
+    except psycopg.Error:
+        # Older provsql without agg_token_value_text. Don't poison the
+        # batch's transaction (we used a separate cursor); return empty
+        # so the front-end keeps showing the UUID as-is.
+        return {}
 
 
 def _type_name(cur: psycopg.Cursor, oid: int) -> str:

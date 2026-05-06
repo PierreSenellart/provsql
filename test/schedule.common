@@ -23,6 +23,7 @@ test: cte
 test: active
 test: aggregation
 test: agg_distinct agg_order_by agg_arithmetic
+test: agg_token_text_as_uuid
 test: create_as
 test: insert_select_provenance
 test: no_zero_gate

@@ -1098,6 +1098,14 @@ $$ LANGUAGE plpgsql STABLE;
  *  displayed in a specific way (as the result of the aggregation
  *  followed by a "(*)") to help with readability.
  *
+ *  The text output is controlled by the
+ *  <tt>provsql.aggtoken_text_as_uuid</tt> GUC. By default it is off and
+ *  the cell renders as <tt>"value (*)"</tt>. When set to on (typical
+ *  for UI layers such as ProvSQL Studio), the cell renders as the
+ *  underlying UUID instead, so the caller can click through to the
+ *  provenance circuit; the value side is then recovered via
+ *  <tt>provsql.agg_token_value_text(uuid)</tt>.
+ *
  *  @{
  */
 
@@ -1108,10 +1116,25 @@ CREATE OR REPLACE FUNCTION agg_token_in(cstring)
   RETURNS agg_token
   AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief Output function for the agg_token type (produces text representation) */
+/**
+ * @brief Output function for the agg_token type
+ *
+ * Default: produces the human-friendly @c "value (*)" form, where
+ * @c value is the running aggregate state.
+ *
+ * When the @c provsql.aggtoken_text_as_uuid GUC is on, returns the
+ * underlying provenance UUID instead. UI layers (notably ProvSQL
+ * Studio) flip this on per session so aggregate cells expose the
+ * circuit root UUID for click-through; the @c "value (*)" display
+ * string is recovered via @c provsql.agg_token_value_text(uuid).
+ *
+ * Marked STABLE rather than IMMUTABLE because the chosen output
+ * shape now depends on a GUC that the same session can flip at
+ * runtime.
+ */
 CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
   RETURNS cstring
-  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','agg_token_out' LANGUAGE C STABLE STRICT PARALLEL SAFE;
 
 /** @brief Cast an agg_token to its text representation */
 CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
@@ -1136,6 +1159,32 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 
 /** @brief Implicit PostgreSQL cast from agg_token to UUID (delegates to agg_token_uuid()) */
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
+
+/**
+ * @brief Recover the @c "value (*)" display string for an aggregation gate
+ *
+ * Companion helper to the @c provsql.aggtoken_text_as_uuid GUC. With
+ * the GUC on, an @c agg_token cell prints as the underlying provenance
+ * UUID, which is convenient for tooling that wants to click through to
+ * the circuit but loses the human-readable aggregate value. This
+ * function takes such a UUID and returns the original @c "value (*)"
+ * string by reading the gate's @c extra (set by aggregate evaluation
+ * to the computed scalar). Returns @c NULL if @p token does not
+ * resolve to an @c agg gate.
+ *
+ * @param token UUID of an @c agg gate (typically obtained from an
+ *              @c agg_token cell when @c aggtoken_text_as_uuid is on,
+ *              or via @c (col::uuid)::text otherwise).
+ */
+CREATE OR REPLACE FUNCTION agg_token_value_text(token UUID)
+  RETURNS text AS
+$$
+  SELECT CASE
+    WHEN provsql.get_gate_type(token) = 'agg'
+      THEN provsql.get_extra(token) || ' (*)'
+    ELSE NULL
+  END;
+$$ LANGUAGE sql STABLE STRICT PARALLEL SAFE;
 
 /** @brief Cast an agg_token to numeric (extracts the aggregate value, loses provenance) */
 CREATE OR REPLACE FUNCTION agg_token_to_numeric(agg_token)

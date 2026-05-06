@@ -309,3 +309,53 @@ def test_where_provenance_toggle_survives_auto_prepare(client):
     for _ in range(8):
         assert root_uuid(True)  == on_uuid
         assert root_uuid(False) == off_uuid
+
+
+# ──────── agg_token surfaces underlying UUID + display map ────────
+
+
+def test_agg_token_cells_carry_uuid_and_display(client):
+    """Studio sets provsql.aggtoken_text_as_uuid = on per session, so
+    agg_token cells in the result come back as the underlying provenance
+    UUIDs (not "value (*)") and a sibling agg_display map provides the
+    friendly form. Front-end uses the UUID as the click target and the
+    map as the display string. Without the GUC + map, agg cells would
+    be unclickable from the UI: the original Stage-3 limitation."""
+    payload = post_exec(
+        client,
+        "SELECT city, COUNT(*) AS c FROM personnel GROUP BY city ORDER BY city",
+        mode="circuit",
+    )
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows"
+    cols = {c["name"]: c["type_name"] for c in final["columns"]}
+    assert cols.get("c") == "agg_token", cols
+
+    # Each agg cell looks like a UUID (8-4-4-4-12 hex pattern), not
+    # like "3 (*)".
+    import re
+    UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    c_idx = next(i for i, col in enumerate(final["columns"]) if col["name"] == "c")
+    for row in final["rows"]:
+        assert isinstance(row[c_idx], str) and UUID_RE.match(row[c_idx]), row
+
+    # The agg_display map covers every cell UUID with a "value (*)"
+    # string. The rewriter wraps GROUP BY counts in agg gates whose
+    # extra holds the count, so the values come out as integers
+    # followed by " (*)".
+    assert "agg_display" in final, final.keys()
+    for row in final["rows"]:
+        u = row[c_idx]
+        assert u in final["agg_display"], (u, final["agg_display"])
+        disp = final["agg_display"][u]
+        assert disp.endswith(" (*)") and disp[:-len(" (*)")].isdigit(), disp
+
+
+def test_agg_display_absent_when_no_agg_columns(client):
+    """A plain SELECT with no agg_token columns should not carry an
+    agg_display map: it'd be empty payload waste. test_exec's other
+    tests rely on agg_display being optional, so make that explicit."""
+    payload = post_exec(client, "SELECT name FROM personnel WHERE name = 'John'", mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows"
+    assert "agg_display" not in final

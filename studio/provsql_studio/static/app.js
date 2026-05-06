@@ -1458,6 +1458,12 @@ async function runQuery(ev) {
       const allCols = final.columns;
       const isWhere   = env.mode === 'where';
       const isCircuit = env.mode === 'circuit';
+      // The studio session has provsql.aggtoken_text_as_uuid = on, so
+      // agg_token cells arrive as bare UUIDs. The server pre-resolves
+      // each unique UUID's "value (*)" via agg_token_value_text and
+      // ships the map in final.agg_display; the front-end renders the
+      // friendly form while keeping the UUID for click-through.
+      const aggDisplay = final.agg_display || {};
       // Hide rewriter-injected columns (__prov, __wprov) from display, but
       // keep them indexed so we can still build per-cell data-sources and
       // per-row jump buttons. The bare `provsql` UUID column is hidden in
@@ -1492,10 +1498,23 @@ async function runQuery(ev) {
             extraCls  = ' is-clickable';
             extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
           }
+          // agg_token cells: their on-wire text is the underlying UUID
+          // (because provsql.aggtoken_text_as_uuid is on for studio
+          // sessions). Make them clickable in circuit mode like
+          // regular UUID cells; the cell's text content is replaced
+          // with the "value (*)" form pulled from agg_display.
+          let displayValue = value;
+          if (typeName === 'agg_token' && value) {
+            if (isCircuit) {
+              extraCls  = (extraCls + ' is-clickable').trim();
+              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
+              if (extraCls.length) extraCls = ' ' + extraCls;
+            }
+            const friendly = aggDisplay[value];
+            if (friendly) displayValue = friendly;
+          }
           if (env.isRightAlignedType(typeName)) extraCls += ' is-right';
-          // agg_token cells: their text is "<value> (*)", which doesn't carry
-          // the UUID. v1 leaves them non-clickable; cast in SQL to inspect.
-          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(value, col.name, col.type_name)}</td>`;
+          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(displayValue, col.name, col.type_name)}</td>`;
         }).join('');
         const jumpBtn = (isWhere && wrapped && provIdx >= 0 && r[provIdx])
           ? `<td class="wp-result__cell--actions"><button class="wp-btn wp-btn--mini" type="button" `
