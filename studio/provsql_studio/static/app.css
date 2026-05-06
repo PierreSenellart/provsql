@@ -53,7 +53,7 @@ body.circuit-fullscreen #sidebar-body .cv-toolbar {
 }
 /* Eval strip in fullscreen: pinned top-left, where the DAG layout is
    usually empty (the root sits centre-top, branches fan out below).
-   Top-centre is the toolbar, top-right is the inspector — the corner
+   Top-centre is the toolbar, top-right is the inspector : the corner
    is the only spare slot near the controls. */
 body.circuit-fullscreen #sidebar-body .cv-eval {
   position: fixed; top: 0.6rem; left: 0.6rem;
@@ -71,7 +71,7 @@ body.mode-circuit #sidebar-body .cv-toolbar {
   display: flex; align-items: center; gap: 0.4rem;
   margin-bottom: 0.25rem;
 }
-/* Status text moved onto the toolbar row — pushed to the right via
+/* Status text moved onto the toolbar row : pushed to the right via
    margin-left:auto, ellipsised so the buttons keep their natural
    width on narrow viewports. */
 body.mode-circuit #sidebar-body .cv-toolbar__info {
@@ -131,8 +131,8 @@ body.mode-circuit #sidebar-body .cv-eval__result-row {
 }
 .wp-result__cell.is-clickable:hover { color: var(--terracotta-500); }
 
-/* UUID-typed cells render two siblings — an 8-char abbreviation and the
-   full value — so the circuit panel's "Show UUIDs" toggle can flip them
+/* UUID-typed cells render two siblings : an 8-char abbreviation and the
+   full value : so the circuit panel's "Show UUIDs" toggle can flip them
    via a body-level class without re-rendering the result table. The
    default is collapsed (matches state.showUuids=false in circuit.js). */
 .wp-uuid__short { display: inline; }
@@ -702,6 +702,40 @@ em { font-style: italic; }
   color: rgba(244,240,250,0.4);
 }
 
+/* "No database picked at launch" banner : wedged between the nav and
+   the wp-shell grid so it can't be missed but doesn't shift the page
+   below it once dismissed. */
+.wp-db-hint {
+  margin: 0; padding: 0.6rem 1.5rem;
+  font-family: var(--font-ui); font-size: 0.85rem;
+  background: rgba(232, 184, 75, 0.18);
+  border-bottom: 1px solid var(--gold-500);
+  color: var(--purple-900);
+  /* Right-align so the "Pick a database…" button ends up under the
+     top-right database switcher chip : short visual line of travel
+     from the prompt to the dropdown. */
+  text-align: right;
+}
+.wp-db-hint i { color: var(--gold-700); margin-right: 0.4rem; }
+.wp-db-hint code {
+  font-family: var(--font-mono); font-size: 0.82em;
+  padding: 0.05rem 0.3rem; background: rgba(0,0,0,0.05);
+  border-radius: 3px;
+}
+.wp-db-hint__btn {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--gold-700);
+  background: #fff;
+  color: var(--purple-900);
+  font-family: var(--font-ui); font-size: 0.82rem; font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.wp-db-hint__btn:hover {
+  background: var(--gold-500); color: var(--purple-900);
+}
+
 /* ───────── shell ───────── */
 .wp-shell {
   display: grid;
@@ -982,7 +1016,7 @@ body.mode-where #sidebar {
 .wp-btn--ghost:hover { background: var(--bg-code); color: var(--purple-700); border-color: var(--purple-500); }
 .wp-btn--ghost[aria-expanded="true"] { background: var(--bg-code); border-color: var(--purple-500); }
 
-/* Past-queries dropdown — pinned to the History button. */
+/* Past-queries dropdown : pinned to the History button. */
 .wp-history { position: relative; display: inline-flex; }
 .wp-history__menu {
   position: absolute;
@@ -1475,7 +1509,7 @@ body.mode-where #sidebar {
 #circuit {
   /* Pin to the bordered .cv-canvas (which is position: relative).
      `width: 100%; height: 100%` alone is unreliable on SVG inside a
-     flex parent — the element's intrinsic aspect ratio (driven by the
+     flex parent : the element's intrinsic aspect ratio (driven by the
      viewBox) can override the CSS height in some browsers, leaving
      the SVG at half the parent's height. inset: 0 sidesteps that by
      anchoring all four edges to the container. */

@@ -65,7 +65,7 @@ def save_persisted_gucs(values: dict[str, str]) -> None:
 def load_persisted_options() -> dict:
     """Return Studio-level option overrides (max_circuit_depth, statement
     timeout, ...) from the on-disk config file. Untrusted values are
-    silently dropped — callers should treat missing keys as 'use default'."""
+    silently dropped : callers should treat missing keys as 'use default'."""
     raw = _read_config_file().get("options", {}) or {}
     out: dict = {}
     if "max_circuit_depth" in raw:
@@ -278,7 +278,7 @@ def make_pool(dsn: str | None) -> ConnectionPool:
     def _configure(conn):
         # Disable psycopg3's auto-prepare. The default threshold (5)
         # caches the query plan after the same SQL string has run that
-        # many times — but the cached plan locks in whatever
+        # many times : but the cached plan locks in whatever
         # provsql.where_provenance / update_provenance was active at
         # prepare time, so subsequent SET LOCAL toggles silently no-op
         # at the planner-hook level (the gates produced reflect the
@@ -462,7 +462,7 @@ _PROBABILITY_METHODS = {
 
 
 def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
-    """Discover tables / views shaped like a provenance mapping —
+    """Discover tables / views shaped like a provenance mapping :
     `create_provenance_mapping` produces `(value <T>, provenance uuid)`,
     and `sr_*` semirings consume any regclass with that signature.
     Returns one entry per match, qualified by schema."""
@@ -522,7 +522,7 @@ def evaluate_circuit(
     bad input and propagates psycopg.Error from the SQL call.
 
     The caller is responsible for catching psycopg errors and translating
-    them to HTTP — we don't shape them here so the route can also surface
+    them to HTTP : we don't shape them here so the route can also surface
     the underlying SQLSTATE / message verbatim."""
     if semiring == "boolexpr":
         sql_stmt = sql.SQL("SELECT provsql.sr_boolexpr({}::uuid)::text").format(
@@ -555,7 +555,7 @@ def evaluate_circuit(
         # ::regclass cast both validates the identifier and resolves it
         # against the search_path. Each sr_* function has its own natural
         # return type (int for counting, bool for boolean, text for
-        # formula / why) — we keep that so `_to_jsonable` can pass the
+        # formula / why) : we keep that so `_to_jsonable` can pass the
         # primitive through to JSON without wrapping it as a string.
         fn = sql.Identifier("provsql", _SR_FUNCTIONS[semiring])
         sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)").format(
@@ -641,7 +641,7 @@ def exec_batch(
     meta: dict = {"wrapped": wrap_last, "notices": []}
 
     # Notices reach the front-end only for SQL the user explicitly ran via
-    # "Send Query" — i.e. the `last` statement (and any prelude statements
+    # "Send Query" : i.e. the `last` statement (and any prelude statements
     # they typed alongside it). When we run Studio-injected SQL ourselves
     # (the where-mode wrap, with its internal `where_provenance() ->
     # identify_token() -> SELECT * FROM <relation> WHERE provsql=…` chain),
@@ -801,7 +801,7 @@ def exec_batch(
                                     "where-provenance highlights are unavailable. "
                                     "Run “SELECT add_provenance('…')” to enable.",
                             })
-                            # Re-enable capture for the unwrapped retry —
+                            # Re-enable capture for the unwrapped retry :
                             # this run IS the user's query (no probe ran
                             # because the wrap failed before we got there).
                             capture[0] = True
@@ -814,7 +814,7 @@ def exec_batch(
                     capture[0] = True
                 else:
                     # No wrap (circuit mode or unwrappable last). The user's
-                    # query runs once with capture enabled — its planner-hook
+                    # query runs once with capture enabled : its planner-hook
                     # notices describe the user's literal SQL.
                     try:
                         cur.execute(last)
@@ -937,7 +937,7 @@ _GUC_WHITELIST = _TOGGLE_GUCS | _PANEL_GUCS
 
 def show_panel_gucs(pool: ConnectionPool, runtime: dict[str, str]) -> dict[str, str]:
     """Return the *effective* values of the panel GUCs after the runtime
-    overrides have been applied — i.e. what a query would see right now.
+    overrides have been applied : i.e. what a query would see right now.
     Runs SHOW inside a one-shot transaction so the SET LOCALs stay scoped.
     """
     out: dict[str, str] = {}

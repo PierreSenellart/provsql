@@ -67,16 +67,36 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import os
     args = build_parser().parse_args(argv)
+
+    # When neither --dsn nor a PG* env var hints at a database, fall
+    # back to the `postgres` maintenance DB so the in-page switcher can
+    # list candidates and the user picks one. The banner makes that
+    # next step visible before they get the page.
+    dsn = args.dsn
+    db_is_auto = False
+    if not dsn and not any(os.environ.get(v) for v in (
+        "PGDATABASE", "PGSERVICE", "DATABASE_URL"
+    )):
+        dsn = "dbname=postgres"
+        db_is_auto = True
+        print(
+            "[provsql-studio] No --dsn and no PG* env hint: connecting to "
+            "the 'postgres' maintenance DB. The page shows a 'Pick a "
+            "database' button in the banner at the top.",
+            file=sys.stderr,
+        )
 
     from .app import create_app  # local import keeps --help fast
 
     app = create_app(
-        dsn=args.dsn,
+        dsn=dsn,
         statement_timeout=args.statement_timeout,
         max_circuit_depth=args.max_circuit_depth,
         max_circuit_nodes=args.max_circuit_nodes,
         search_path=args.search_path,
+        db_is_auto=db_is_auto,
     )
     # Quiet the high-frequency poll endpoints in the access log. Attached
     # to the werkzeug logger so it survives Flask's debug reloader.

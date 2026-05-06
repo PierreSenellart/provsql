@@ -100,7 +100,7 @@
     // Fullscreen toggle: a body-level class pins .cv-canvas to the
     // viewport via CSS; the ResizeObserver already wired up below
     // catches the new size and reflows the viewBox via fitView. Esc
-    // exits — that's the standard convention for fullscreen and saves
+    // exits : that's the standard convention for fullscreen and saves
     // a trip to the toolbar.
     const fsBtn = document.getElementById('tool-fullscreen');
     if (fsBtn) {
@@ -142,7 +142,7 @@
 
     // Wheel-to-zoom. Same clamp as the toolbar buttons (0.4..2.5) but
     // a smaller per-tick factor so successive notches feel smooth. We
-    // need passive: false to call preventDefault — otherwise the
+    // need passive: false to call preventDefault : otherwise the
     // browser also scrolls the page while the user is zooming the
     // canvas.
     svg.addEventListener('wheel', (e) => {
@@ -217,7 +217,7 @@
     const nodesById = Object.fromEntries(state.scene.nodes.map(n => [n.id, n]));
 
     // Gate types whose children carry a meaningful order: cmp's
-    // lhs/rhs, monus's minuend/subtrahend, and agg — but agg only
+    // lhs/rhs, monus's minuend/subtrahend, and agg : but agg only
     // when the function is order-sensitive (array_agg, string_agg,
     // json_agg, …). For sum/count/min/max/avg the result is
     // independent of the input order, so the digits would be noise.
@@ -248,7 +248,7 @@
 
       // Position label at the child end of the edge for ordered gates.
       // We offset 16px away from the child centre, in the direction of
-      // the parent — so the digit sits just outside the child circle
+      // the parent : so the digit sits just outside the child circle
       // along the incoming edge, regardless of layout angle.
       if (shouldLabelChildren(from) && e.child_pos != null) {
         const dx = from.x - to.x;
@@ -275,8 +275,8 @@
       const label = svgEl('text', { class: 'node-label', y: -2 });
       label.textContent = n.label || n.type[0];
       g.appendChild(label);
-      // Meta line below: only leaf gates (input / update — both reference
-      // a source row) get one. Internal gates stay bare — dropping a
+      // Meta line below: only leaf gates (input / update : both reference
+      // a source row) get one. Internal gates stay bare : dropping a
       // 36-char UUID under each circle overlapped the edge curves and
       // made nothing readable; the full UUID is one click away in the
       // inspector. Leaves always render their compact form (relation id
@@ -427,7 +427,7 @@
     inspectorTitle.textContent = TYPE_SUMMARY[node.type] || `Gate (${node.type})`;
     let html = '<dl>';
     // The title already says which gate type this is, so we drop the
-    // separate `type` row from the body. depth stays — it tells the
+    // separate `type` row from the body. depth stays : it tells the
     // user how far this gate is from the root, useful when navigating
     // a deep BFS.
     // Match the in-circuit display: abbreviated UUID by default, full
@@ -607,7 +607,7 @@
       // method (if any); hide every other one so the row stays compact.
       const wantedId = (v === 'probability') ? _PROB_ARG_CONTROL[meth.value] : null;
       for (const ctrl of argControls) ctrl.hidden = (ctrl.id !== wantedId);
-      // Stale once the input shape changes — wipe result + bound +
+      // Stale once the input shape changes : wipe result + bound +
       // time + the clear button.
       clearEvalResult();
       if (!map.hidden && !mappingsLoaded) loadMappings();
@@ -620,7 +620,7 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const list = await resp.json();
         if (!list.length) {
-          map.innerHTML = '<option value="">(no mappings — run create_provenance_mapping)</option>';
+          map.innerHTML = '<option value="">(no mappings : run create_provenance_mapping)</option>';
           return;
         }
         // `display_name` drops the schema when the relation is search_path-
@@ -777,7 +777,7 @@
         }
       }
     } catch (e) {
-      // The fetch itself failed (no response) — record the time-to-fail
+      // The fetch itself failed (no response) : record the time-to-fail
       // so the user can tell a hung connection (timeout) from an
       // immediate refusal.
       const dt = Math.round(performance.now() - t0);
@@ -857,7 +857,7 @@
       if (node.info1 != null) out.push({ label: 'relation id', value: node.info1 });
       if (node.info2 != null) out.push({ label: 'columns',     value: node.info2 });
     } else {
-      // No type-specific translation — fall back to raw fields if set.
+      // No type-specific translation : fall back to raw fields if set.
       if (node.info1 != null) out.push({ label: 'info1', value: node.info1 });
       if (node.info2 != null) out.push({ label: 'info2', value: node.info2 });
     }
@@ -896,7 +896,7 @@
   function shortUuid(u) {
     if (!u) return '–';
     // Match the result-table abbreviation in app.js's formatCell so the
-    // two views stay visually consistent — 4 hex chars are enough for a
+    // two views stay visually consistent : 4 hex chars are enough for a
     // cursory same/different check, full uuids are one click away.
     return u.length > 4 ? `${u.slice(0, 4)}…` : u;
   }

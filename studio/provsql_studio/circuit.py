@@ -6,7 +6,7 @@ returns a `{nodes, edges}` JSON shape ready for the SVG renderer in the
 front-end. The layout is bound by `--max-circuit-depth` (BFS depth) and
 `--max-circuit-nodes` (response cap, rejected with 413 when exceeded).
 
-`circuit_subgraph` returns one row per (parent, node) edge — provenance
+`circuit_subgraph` returns one row per (parent, node) edge : provenance
 circuits are DAGs, so a node with k parents within the bound is reported
 k times. We dedup by node id to build the `nodes` list and treat every
 row with a non-null parent as an edge.

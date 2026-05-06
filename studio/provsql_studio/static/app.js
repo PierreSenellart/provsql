@@ -85,7 +85,7 @@
   // setupWhereMode / setupCircuitMode runs, because both can auto-replay
   // a carry-over query via runQuery, and if __provsqlStudio is still
   // undefined at that point the fallback default `{mode: 'where', ...}`
-  // kicks in — the where-mode wrap then fires on /circuit pages and
+  // kicks in : the where-mode wrap then fires on /circuit pages and
   // explodes on aggregation circuits with "Wrong type of gate".
   window.__provsqlStudio = {
     mode, refreshRelations, escapeHtml, escapeAttr, formatCell,
@@ -405,7 +405,7 @@
   // Reset history-cursor when the USER edits the textarea (so the next
   // Alt+↑ starts from the most-recent entry again). When we set ta.value
   // ourselves from stepHistory, the synthetic input event must NOT reset
-  // the cursor — that's what _historyDriving guards against.
+  // the cursor : that's what _historyDriving guards against.
   document.getElementById('request').addEventListener('input', () => {
     if (!_historyDriving) _historyCursor = -1;
   });
@@ -491,6 +491,11 @@
         dot.classList.remove('is-offline');
         dot.title = 'connected to a live PostgreSQL server';
       }
+      // No DSN was given on the CLI and no PG* env hinted at a DB, so
+      // the server fell back to the postgres maintenance DB. Show a
+      // dismissible banner pointing the user at the switcher; once
+      // they pick a real DB the flag clears server-side.
+      _renderDbAutoHint(!!c.db_is_auto);
       // Render search_path with `provsql` shown as a locked chip so the
       // user can tell at a glance which segment is enforced by Studio.
       // The compose helper on the server already pinned provsql to the
@@ -770,7 +775,7 @@
             r.schema.toLowerCase().includes(q) ||
             r.table.toLowerCase().includes(q)  ||
             // Skip the bookkeeping `provsql` column so search results
-            // match the visible column list — typing "provsql" should not
+            // match the visible column list : typing "provsql" should not
             // match every provenance-tracked relation through this hidden
             // column (use the PROV pill for that).
             r.columns.some(c => c.name !== 'provsql' && c.name.toLowerCase().includes(q))
@@ -793,7 +798,7 @@
           const qname  = `${r.schema}.${r.table}`;
           const insert = singleSchema ? r.table : qname;
           // Hide the bookkeeping `provsql` uuid column from the user-visible
-          // column list — its presence is what the PROV pill already signals.
+          // column list : its presence is what the PROV pill already signals.
           const cols   = r.columns.filter(c => c.name !== 'provsql')
                                   .map(c => c.name).join(', ');
           const provCls   = r.has_provenance ? ' wp-schema__rel--prov' : '';
@@ -808,7 +813,7 @@
           html +=
             `<button type="button" class="wp-schema__rel${provCls}"`
             + ` data-qname="${escapeAttr(insert)}"`
-            + ` title="${escapeAttr(qname)} — ${visibleCount} column${visibleCount === 1 ? '' : 's'}${titleSuffix}">`
+            + ` title="${escapeAttr(qname)}: ${visibleCount} column${visibleCount === 1 ? '' : 's'}${titleSuffix}">`
             + `<span class="wp-schema__rel-name">${escapeHtml(r.table)}</span>`
             + `<span class="wp-schema__rel-kind">${escapeHtml(r.kind)}</span>`
             + provBadge;
@@ -936,7 +941,7 @@
     }
     // Load circuit.js so its init() can wire the toolbar buttons (zoom,
     // show-uuids). loadCircuit() also calls this, but only
-    // when a circuit is being rendered — without the unconditional load
+    // when a circuit is being rendered : without the unconditional load
     // here, a circuit-mode page that just runs a query (no carry, no
     // immediate circuit fetch) would leave the toolbar buttons unbound.
     //
@@ -1097,7 +1102,7 @@
     }
     // UUID-typed columns render as a short/full pair so the circuit
     // panel's "Show UUIDs" toggle can flip between abbreviated and full
-    // display via a body-level CSS class — no re-render needed. The
+    // display via a body-level CSS class : no re-render needed. The
     // outer span carries the full value as a title so hover always
     // reveals the original even when collapsed.
     if ((typeName || '').toLowerCase() === 'uuid' && v != null && v !== '') {
@@ -1129,6 +1134,51 @@
   ]);
   function isRightAlignedType(typeName) {
     return RIGHT_ALIGNED_TYPES.has((typeName || '').toLowerCase());
+  }
+
+  // Show / clear the "no DB selected" hint banner. Lives at the top of
+  // the page (above the wp-shell grid) so it's the first thing the user
+  // sees on a freshly-launched studio with no --dsn. Single instance
+  // keyed by id so repeated /api/conn polls don't duplicate it.
+  function _renderDbAutoHint(show) {
+    const id = 'db-auto-hint';
+    let el = document.getElementById(id);
+    if (!show) {
+      if (el) el.remove();
+      return;
+    }
+    if (el) return;
+    el = document.createElement('div');
+    el.id = id;
+    el.className = 'wp-db-hint';
+    el.innerHTML =
+      `<i class="fas fa-info-circle"></i> `
+      + `No database picked at launch: currently on the <code>postgres</code> `
+      + `maintenance DB. `
+      + `<button type="button" class="wp-db-hint__btn" id="db-auto-pick">`
+      + `Pick a database…</button>`;
+    // Insert directly after <nav>; using body.firstChild was unsafe
+    // because whitespace text nodes sit before the nav element and
+    // pushed the banner above it.
+    const nav = document.querySelector('.wp-nav');
+    if (nav && nav.parentNode) {
+      nav.parentNode.insertBefore(el, nav.nextSibling);
+    } else {
+      document.body.appendChild(el);
+    }
+    // Open the database menu (the user@dbname chip in the top-right of
+    // the nav) on click. The chip's own click toggles the dropdown, so
+    // we forward the event to it. Crucially, the original click event
+    // ALSO bubbles up to a document-level handler in setupDbSwitcher
+    // that closes any open menu when the click target isn't the chip
+    // : without stopPropagation here, the menu would open and instantly
+    // close again.
+    const pick = document.getElementById('db-auto-pick');
+    if (pick) pick.onclick = (e) => {
+      e.stopPropagation();
+      const chip = document.getElementById('conn-info');
+      if (chip) chip.click();
+    };
   }
 
 })();
@@ -1267,7 +1317,7 @@ async function runQuery(ev) {
     // block in the result table; everything informational (failed-prelude
     // errors, server NOTICE / WARNING messages, Studio's own observations
     // via severity=INFO) goes into the dedicated #result-banners slot
-    // above the table — putting <div>s straight into <tbody> is invalid
+    // above the table : putting <div>s straight into <tbody> is invalid
     // HTML and the browser hoists them into the first <td>.
     const final = blocks[blocks.length - 1];
     const earlier = blocks.slice(0, -1);

@@ -45,6 +45,7 @@ def create_app(
     max_circuit_depth: int = 8,
     max_circuit_nodes: int = 500,
     search_path: str = "",
+    db_is_auto: bool = False,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)  # we serve /static/ ourselves
     app.config.update(
@@ -55,6 +56,11 @@ def create_app(
     )
 
     app.config["DSN"] = dsn or ""
+    # True when the CLI couldn't infer a DB from --dsn or PG* env vars
+    # and fell back to the postgres maintenance DB. The /api/conn route
+    # surfaces this so the UI can prompt the user to pick a real DB
+    # via the top-nav switcher. Cleared once the user switches.
+    app.config["DB_IS_AUTO"] = bool(db_is_auto)
     # Runtime overrides for the panel-managed GUCs (provsql.active and
     # provsql.verbose_level). Applied as SET LOCAL on every batch so changes
     # survive across pool checkouts. Toggle-managed GUCs go in their own
@@ -150,6 +156,7 @@ def create_app(
             app.config.get("SEARCH_PATH", ""),
             info["search_path"],
         )
+        info["db_is_auto"] = app.config.get("DB_IS_AUTO", False)
         return jsonify(info)
 
     @app.post("/api/conn")
@@ -171,6 +178,8 @@ def create_app(
         old_pool = app.extensions["provsql_pool"]
         app.extensions["provsql_pool"] = new_pool
         app.config["DSN"] = new_dsn
+        # User explicitly picked a DB : drop the auto-fallback hint.
+        app.config["DB_IS_AUTO"] = False
         layout_cache._store.clear()
         try:
             old_pool.close()
@@ -389,7 +398,7 @@ def create_app(
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except psycopg.errors.UndefinedFunction as e:
-            # Older provsql or missing helper — surface the underlying
+            # Older provsql or missing helper : surface the underlying
             # diagnostic so the user can see which function is missing.
             return jsonify({
                 "error": "evaluation function unavailable on this database",
