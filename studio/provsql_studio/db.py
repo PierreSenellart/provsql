@@ -75,6 +75,13 @@ def load_persisted_options() -> dict:
                 out["max_circuit_depth"] = n
         except (TypeError, ValueError):
             pass
+    if "max_sidebar_rows" in raw:
+        try:
+            n = int(raw["max_sidebar_rows"])
+            if 1 <= n <= 5000:
+                out["max_sidebar_rows"] = n
+        except (TypeError, ValueError):
+            pass
     if "statement_timeout_seconds" in raw:
         try:
             n = int(raw["statement_timeout_seconds"])
@@ -107,6 +114,14 @@ def validate_panel_option(name: str, value) -> tuple[str, object]:
             raise ValueError("max_circuit_depth must be an integer")
         if not (1 <= n <= 50):
             raise ValueError("max_circuit_depth must be between 1 and 50")
+        return (name, n)
+    if name == "max_sidebar_rows":
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("max_sidebar_rows must be an integer")
+        if not (1 <= n <= 5000):
+            raise ValueError("max_sidebar_rows must be between 1 and 5000")
         return (name, n)
     if name == "statement_timeout_seconds":
         try:
@@ -143,7 +158,8 @@ _RELATIONS_QUERY = """
 SELECT
     n.nspname             AS schema_name,
     c.relname             AS table_name,
-    c.oid::regclass::text AS regclass
+    c.oid::regclass::text AS regclass,
+    c.reltuples::bigint   AS estimated_rows
 FROM pg_attribute a
 JOIN pg_class      c ON a.attrelid = c.oid
 JOIN pg_namespace  n ON c.relnamespace = n.oid
@@ -480,36 +496,51 @@ def conn_info(pool: ConnectionPool) -> dict:
     }
 
 
-def list_relations(pool: ConnectionPool) -> list[dict]:
+def list_relations(pool: ConnectionPool, *, max_rows: int = 100) -> list[dict]:
     """One entry per provenance-tagged relation:
     {schema, table, regclass, columns: [{name, type_name}, ...],
-     rows: [{uuid, values}, ...], first_gate_type}.
+     rows: [{uuid, values}, ...], first_gate_type,
+     truncated: bool, max_rows: int, estimated_rows: int|null}.
 
     The relation content is shown exactly as `SELECT *` would render it under
     the active ProvSQL planner, which means the trailing `provsql` UUID column
     is included alongside the user-defined columns. We pick that column out
     by name to provide a stable per-row identifier for the hover-highlight.
 
+    Each per-relation SELECT is capped at `max_rows + 1` rows: when the +1
+    row comes back we drop it, set `truncated=True`, and let the front-end
+    surface a "showing first N of ~T" footer using `estimated_rows`
+    (pg_class.reltuples). Without this cap the sidebar would try to render
+    every row of every tagged relation on page load, which freezes the
+    browser on real datasets.
+
     `first_gate_type` is `provsql.get_gate_type(...)` of the first row's
     provsql token, used by the front-end's "Input gates only" toggle to hide
     derived relations (where the provsql column carries plus/times/agg
     gates rather than input leaves). One extra round-trip per relation;
     None when the relation is empty or the probe errors."""
+    fetch_limit = max(1, int(max_rows)) + 1
     out: list[dict] = []
     with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(_RELATIONS_QUERY)
             rels = cur.fetchall()
-        for schema, table, regclass in rels:
+        for schema, table, regclass, estimated_rows in rels:
             with conn.cursor() as cur:
                 cur.execute(
-                    sql.SQL("SELECT * FROM {}").format(sql.Identifier(schema, table))
+                    sql.SQL("SELECT * FROM {} LIMIT {}").format(
+                        sql.Identifier(schema, table),
+                        sql.Literal(fetch_limit),
+                    )
                 )
                 cols = [
                     {"name": d.name, "type_name": _type_name(cur, d.type_code)}
                     for d in cur.description
                 ]
                 data = cur.fetchall()
+            truncated = len(data) > max_rows
+            if truncated:
+                data = data[:max_rows]
 
             try:
                 prov_idx = next(i for i, c in enumerate(cols) if c["name"] == "provsql")
@@ -536,6 +567,12 @@ def list_relations(pool: ConnectionPool) -> list[dict]:
                     # treat the relation as unfiltered.
                     first_gate_type = None
 
+            # pg_class.reltuples is -1 on never-analyzed tables; expose
+            # null in that case so the front-end can suppress the "of ~T"
+            # suffix rather than show "of ~-1".
+            est = int(estimated_rows) if estimated_rows is not None else None
+            if est is not None and est < 0:
+                est = None
             out.append({
                 "schema": schema,
                 "table": table,
@@ -543,6 +580,9 @@ def list_relations(pool: ConnectionPool) -> list[dict]:
                 "columns": cols,
                 "prov_col": prov_idx,
                 "first_gate_type": first_gate_type,
+                "truncated": truncated,
+                "max_rows": int(max_rows),
+                "estimated_rows": est,
                 "rows": [
                     {"uuid": str(r[prov_idx]), "values": [_to_jsonable(v) for v in r]}
                     for r in data

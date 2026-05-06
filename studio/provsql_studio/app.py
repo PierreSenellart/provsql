@@ -44,6 +44,7 @@ def create_app(
     statement_timeout: str = "30s",
     max_circuit_depth: int = 8,
     max_circuit_nodes: int = 500,
+    max_sidebar_rows: int = 100,
     search_path: str = "",
     db_is_auto: bool = False,
 ) -> Flask:
@@ -52,6 +53,7 @@ def create_app(
         STATEMENT_TIMEOUT=statement_timeout,
         MAX_CIRCUIT_DEPTH=max_circuit_depth,
         MAX_CIRCUIT_NODES=max_circuit_nodes,
+        MAX_SIDEBAR_ROWS=max_sidebar_rows,
         SEARCH_PATH=search_path,
     )
 
@@ -75,6 +77,8 @@ def create_app(
     persisted_opts = db.load_persisted_options()
     if "max_circuit_depth" in persisted_opts:
         app.config["MAX_CIRCUIT_DEPTH"] = persisted_opts["max_circuit_depth"]
+    if "max_sidebar_rows" in persisted_opts:
+        app.config["MAX_SIDEBAR_ROWS"] = persisted_opts["max_sidebar_rows"]
     if "statement_timeout_seconds" in persisted_opts:
         app.config["STATEMENT_TIMEOUT"] = f"{persisted_opts['statement_timeout_seconds']}s"
     if "search_path" in persisted_opts:
@@ -243,7 +247,10 @@ def create_app(
 
     @app.get("/api/relations")
     def api_relations():
-        return jsonify(db.list_relations(get_pool()))
+        return jsonify(db.list_relations(
+            get_pool(),
+            max_rows=int(app.config["MAX_SIDEBAR_ROWS"]),
+        ))
 
     @app.get("/api/schema")
     def api_schema():
@@ -473,7 +480,12 @@ def create_app(
             }), 500
         return jsonify(data)
 
-    _OPTION_KEYS = {"max_circuit_depth", "statement_timeout_seconds", "search_path"}
+    _OPTION_KEYS = {
+        "max_circuit_depth",
+        "max_sidebar_rows",
+        "statement_timeout_seconds",
+        "search_path",
+    }
 
     def _current_options() -> dict:
         # Surface the live values of the Studio-level options so the
@@ -501,6 +513,7 @@ def create_app(
                 pass
         return {
             "max_circuit_depth": int(app.config["MAX_CIRCUIT_DEPTH"]),
+            "max_sidebar_rows": int(app.config["MAX_SIDEBAR_ROWS"]),
             "statement_timeout_seconds": seconds if seconds is not None else 30,
             "search_path": app.config.get("SEARCH_PATH", "") or "",
         }
@@ -531,6 +544,8 @@ def create_app(
                 return jsonify({"error": str(e)}), 400
             if key == "max_circuit_depth":
                 app.config["MAX_CIRCUIT_DEPTH"] = canonical
+            elif key == "max_sidebar_rows":
+                app.config["MAX_SIDEBAR_ROWS"] = canonical
             elif key == "statement_timeout_seconds":
                 app.config["STATEMENT_TIMEOUT"] = f"{canonical}s"
             elif key == "search_path":

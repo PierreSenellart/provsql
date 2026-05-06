@@ -107,6 +107,37 @@ def test_each_row_has_provenance_uuid(client):
         assert row["values"][rel["prov_col"]] == row["uuid"]
 
 
+def test_relations_truncation_when_table_exceeds_cap(test_dsn, tmp_path, monkeypatch):
+    """When a relation has more rows than `max_sidebar_rows`, /api/relations
+    must return exactly `max_sidebar_rows` rows, set truncated=True, and
+    surface max_rows so the front-end can render the "showing N of ~T" hint.
+
+    Personnel has 7 rows; we cap at 3 to force truncation."""
+    from provsql_studio.app import create_app
+    monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "studio_cfg"))
+    app = create_app(
+        dsn=f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        max_sidebar_rows=3,
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    relations = client.get("/api/relations").get_json()
+    rel = next(r for r in relations if r["regclass"] == "personnel")
+    assert rel["truncated"] is True
+    assert rel["max_rows"] == 3
+    assert len(rel["rows"]) == 3
+
+
+def test_relations_no_truncation_when_under_cap(client):
+    """Personnel has 7 rows; with the default cap (100) the response must
+    not be flagged as truncated."""
+    relations = client.get("/api/relations").get_json()
+    rel = next(r for r in relations if r["regclass"] == "personnel")
+    assert rel["truncated"] is False
+    assert rel["max_rows"] == 100
+    assert len(rel["rows"]) == 7
+
+
 def test_relations_excludes_provenance_mappings(client):
     """Provenance-mapping-shaped relations -- tables with both `value` and
     `provenance uuid` columns -- play a different role from source data

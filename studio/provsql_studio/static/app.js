@@ -409,11 +409,26 @@
       const visible = rel.columns
         .map((c, i) => ({ c, i }))
         .filter(({ c }) => c.name !== 'provsql');
+      // When list_relations capped the SELECT, surface the cap inline
+      // ("100 of ~50000 tuples") so the user knows the sidebar isn't a
+      // full mirror of the table. The "~" reflects pg_class.reltuples
+      // being a planner estimate, not an exact count.
+      const tuples = (() => {
+        const shown = rel.rows.length;
+        if (rel.truncated) {
+          const total = rel.estimated_rows;
+          if (total != null && total > shown) {
+            return `${shown} of ~${total} tuples`;
+          }
+          return `${shown}+ tuples (capped)`;
+        }
+        return `${shown} tuples`;
+      })();
       return `
       <section class="wp-relation" id="${escapeAttr(sectionId(rel.regclass))}">
         <header class="wp-relation__hdr" id="${escapeAttr(headerId(rel.regclass))}">
           <h3 class="wp-relation__name">${escapeHtml(rel.regclass)}</h3>
-          <span class="wp-relation__meta">${rel.rows.length} tuples · ${visible.length} cols</span>
+          <span class="wp-relation__meta">${tuples} · ${visible.length} cols</span>
         </header>
         <div class="wp-table-wrap">
           <table class="wp-table" id="t-${escapeAttr(rel.regclass)}">
@@ -756,6 +771,7 @@
     const verbOut = document.getElementById('cfg-verbose-out');
     const depth   = document.getElementById('cfg-depth');
     const depthOut = document.getElementById('cfg-depth-out');
+    const sidebarRows = document.getElementById('cfg-sidebar-rows');
     const timeout = document.getElementById('cfg-timeout');
     const sp      = document.getElementById('cfg-search-path');
 
@@ -772,6 +788,9 @@
         if (depth && opts.max_circuit_depth != null) {
           depth.value = String(opts.max_circuit_depth);
           if (depthOut) depthOut.textContent = depth.value;
+        }
+        if (sidebarRows && opts.max_sidebar_rows != null) {
+          sidebarRows.value = String(opts.max_sidebar_rows);
         }
         if (timeout && opts.statement_timeout_seconds != null) {
           timeout.value = String(opts.statement_timeout_seconds);
@@ -855,6 +874,18 @@
         depth.value = String(n);
         if (depthOut) depthOut.textContent = depth.value;
         setGuc('max_circuit_depth', n);
+      });
+    }
+    if (sidebarRows) {
+      sidebarRows.addEventListener('change', async () => {
+        const n = Math.max(1, Math.min(5000, parseInt(sidebarRows.value || '100', 10) || 100));
+        sidebarRows.value = String(n);
+        await setGuc('max_sidebar_rows', n);
+        // Refresh the where-mode sidebar so the new cap takes effect
+        // immediately rather than on the next mode entry.
+        if (document.body.classList.contains('mode-where')) {
+          refreshRelations();
+        }
       });
     }
     if (timeout) {

@@ -57,6 +57,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Node-count cap for /api/circuit responses (default 500).",
     )
     p.add_argument(
+        "--max-sidebar-rows",
+        type=int,
+        default=100,
+        help="Per-relation row cap in the where-mode sidebar (default 100). "
+             "Without a cap, the sidebar tries to render every row of every "
+             "tagged relation on page load and freezes the browser on real "
+             "datasets.",
+    )
+    p.add_argument(
         "--search-path",
         default="",
         help="Comma-separated search_path applied per request (provsql is "
@@ -95,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         statement_timeout=args.statement_timeout,
         max_circuit_depth=args.max_circuit_depth,
         max_circuit_nodes=args.max_circuit_nodes,
+        max_sidebar_rows=args.max_sidebar_rows,
         search_path=args.search_path,
         db_is_auto=db_is_auto,
     )
