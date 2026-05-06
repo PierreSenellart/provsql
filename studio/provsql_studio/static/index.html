@@ -48,7 +48,11 @@
           <span class="wp-config__name"><code>provsql.active</code>
             <span class="wp-config__hint">When off, ProvSQL drops provenance attributes.</span>
           </span>
-          <input type="checkbox" class="wp-config__switch" id="cfg-active">
+          <!-- Default `checked`: provsql.active defaults to ON server-side,
+               so pre-checking the box keeps the UI consistent with the
+               actual setting and avoids a visible flick on first
+               panel-open while loadConfig() round-trips. -->
+          <input type="checkbox" class="wp-config__switch" id="cfg-active" checked>
         </label>
 
         <label class="wp-config__row wp-config__row--col">
