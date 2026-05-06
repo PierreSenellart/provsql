@@ -208,7 +208,104 @@ The shared shell from Stage 0 (one `index.html`, `app.css`, `app.js`, `circuit.j
 
 ---
 
-## Stage 4: Distribution (1 day)
+## Stage 4: Polish (1 day)
+
+* [x] Loading state for long queries (spinner via swap-after-100ms; Cancel button hidden by default, surfaced once the query is in flight; firing POST `/api/cancel/<id>` resolves the request id to a backend pid and runs `pg_cancel_backend` on a separate connection).
+* [x] Error toast styled with the brand: terracotta-tinted `wp-error` block with crimson left rule; `wp-warning` (orange / terracotta) and `wp-notice` (gold) variants. ProvSQL-emitted messages get a "ProvSQL" pill so the source is obvious.
+* [x] Empty-result state with a clear message ("(no statements)" / "0 rows" footer).
+* [x] Classification pills rendered for `classification` columns matching the known levels (`formatCell` recognises the column name and emits `wp-pill wp-pill--<value>`).
+* [x] ⌘ / Ctrl+Enter to submit. Alt+↑ / Alt+↓ steps through the persistent query history.
+* [x] Config panel for the panel-managed GUCs (`provsql.active`, `provsql.verbose_level`) plus the studio-level options (`max_circuit_depth`, `statement_timeout`, `search_path`). Persisted to `~/.config/provsql-studio/config.json` so settings survive a restart.
+
+---
+
+## Additional work shipped (still pre-v0.1)
+
+Polish + feature work that landed after the original Stage-5 plan, on the road to the first release. Each bullet links to the user-visible behaviour, not the patch internals.
+
+### Top-nav chrome
+
+* [x] Top-nav DB switcher: clicking the database name lists every accessible DB on the current server; pick one and the page reloads onto it.
+* [x] **Free-form DSN editor under the green/red status dot**: a plug icon + status dot opens a popover where the user pastes a libpq connection string (`host=… port=… user=… password=… dbname=…`). The studio probes the DSN with `SELECT 1` before swapping pools, so a bad host / wrong password leaves the existing connection up and surfaces the PG error in the popover.
+* [x] **Launch fallback**: when neither `--dsn` nor `PGDATABASE` / `PGSERVICE` / `DATABASE_URL` is set, the studio defaults to `dbname=postgres` and shows a gold "No database picked at launch" banner with a "Pick a database…" button that opens the DB switcher. Same fallback fires when the user posts a DSN without `dbname`.
+* [x] Live connection-status dot (green / terracotta), polled every 5s, with the actual `user@host:port` endpoint in the tooltip.
+* [x] Database menu items aligned regardless of which one is current (the checkmark slot is always reserved).
+* [x] Mode switcher highlight driven by `<body class="mode-X">` instead of a JS toggle, so it lands on the right tab from the very first paint (no Where→Circuit flash on `/circuit`).
+
+### Where mode
+
+* [x] Schema panel: a navbar button opens a searchable popover listing every SELECT-able table / view / matview / foreign table, with column lists. Provenance-tracked relations get a brand-purple `prov` pill and a left accent stripe; the `provsql` bookkeeping column is hidden from the column list (its presence is what the pill signals).
+* [x] Search_path locked + displayed: the studio always pins `provsql` at the end of the per-batch search_path (rendered with a lock icon in the header), and surfaces an override field in the Config panel.
+* [x] Wrap-fallback notice: a where-mode query that touches no provenance-tracked relation drops the `__prov` / `__wprov` wrap with an INFO banner ("Source relation is not provenance-tracked; …"), instead of erroring out.
+
+### Circuit mode
+
+* [x] Glyph polish on circuit gates: `⊕ ⊗ ⊖ Π 𝟙 𝟘 ⋆ δ ι υ ⋈` for plus / times / monus / project / one / zero / semimod / delta / input / update / eq; agg renders the actual SQL function name (uppercased, with `Σ` shorthand for `SUM`); cmp renders the operator name with `≥ ≤ ≠` substitutions for `>= <= <>`; value renders the actual literal. All non-italic, centred via empirical y-offset tuning.
+* [x] Edge child-position labels for non-commutative gates (`cmp`, `monus`, ordered `agg`s), 8px digits drawn just outside the child node along the edge direction. Plus, times, eq, and commutative aggs (sum/count/min/max/avg) stay clean.
+* [x] Show UUIDs toggle synced across the result-table UUID cells, the eval-target indicator, the inspector's UUID row, and the "root abc1…" status line. Internal-gate UUIDs stay collapsed (the meta line under each circle is reserved for leaves only).
+* [x] Inspector panel rewrite: drops the redundant `type` row (already in the title), translates `info1` / `info2` to gate-specific labels (`function` + `result type` for agg, `operator` for cmp, `left attr` / `right attr` for eq, `value` for mulinput, `relation id` + `columns` for input/update), parses project's `extra` from `{{1,1},{2,3}}` into a bullet list of `input col → output col` lines, and shows a children count.
+* [x] Wheel-to-zoom on the canvas (clamped 0.4..2.5).
+* [x] viewBox sized to match the canvas aspect ratio (no more letterbox bands inside the bordered rectangle).
+* [x] Canvas height bumped to 720px; status line moved into the toolbar row to free vertical space.
+* [x] Fullscreen circuit toggle: a button in the toolbar pins the canvas to the viewport, Esc exits. The eval strip pins to the top-left so semiring evaluation works without leaving fullscreen.
+* [x] Reset zoom + pan on every new circuit so the whole graph fits at first paint.
+* [x] Inspector close button clears the pin (so the Show UUIDs toggle no longer reopens the panel after dismiss).
+* [x] DAG-correct `circuit_subgraph`: emits one row per `(parent, node)` edge, so circuits with shared subgraphs no longer drop edges silently. Studio's `_layout` dedups by node id; `evaluate_circuit` works against the full DAG.
+
+### Semiring evaluation (new feature)
+
+* [x] Per-circuit-node Run button supporting `boolexpr`, `boolean`, `counting`, `why`, `formula`, `probability`. Mapping select populated lazily from `/api/provenance_mappings` (discovered as any table / view / matview with `(value, provenance uuid)` columns; default-namespace tables shown unqualified). Method picker for probability with per-method args input (number for `monte-carlo`, dropdown of compilers for `compilation`, free-form text default `0.8;0.2` for `weightmc`).
+* [x] Result chip + runtime measurement (similar to the result-table footer) + Hoeffding 95% absolute-error bound for Monte-Carlo runs (`ε = sqrt(ln(40) / 2N)`).
+* [x] Clear button next to Run wipes the result so a verbose Why / Formula output doesn't obscure the canvas (especially in fullscreen).
+* [x] Eval target indicator: `→ root abc1…` (or `→ selected node abc1…` when a node is pinned), tracking whichever the next Run will hit.
+
+### Diagnostics + correctness
+
+* [x] Collapsible NOTICE messages with full `DETAIL` / `HINT` capture: `elog_node_display` parse-tree dumps from `provsql.verbose_level >= 50` are no longer truncated and collapse behind a `<details>` element.
+* [x] `statement_timeout` surfaced as a clear "Query canceled: statement timeout reached" message instead of leaking the raw 57014.
+* [x] Auto-prepare disabled on the connection pool: `prepare_threshold = None` so `SET LOCAL provsql.where_provenance = on/off` actually reaches the planner across multiple runs of the same query (psycopg3 was caching the first plan after 5 executions, freezing whatever wp setting was active at prepare time).
+
+### Tests
+
+* [x] `tests/test_evaluate.py` (10 tests): `/api/provenance_mappings` discovery + filter, `/api/evaluate` dispatch for each semiring (boolexpr / formula / counting / boolean) and the validation paths (missing mapping, unknown semiring, unknown probability method, invalid UUID).
+* [x] `tests/test_relations.py`: schema-panel `has_provenance` flag (positive on personnel, negative on a freshly-created untagged table).
+* [x] `tests/test_exec.py`: auto-prepare regression — same SELECT run 16+ times alternating wp on/off, asserting the UUIDs swing between two values (would hang at the wp=on UUID without `prepare_threshold = None`).
+
+### Studio CLI / packaging
+* [x] `provsql-studio` console script wired through `pyproject.toml`.
+* [x] CLI banner on startup when `--dsn` and PG env are both unset.
+
+---
+
+## Open before v0.1
+
+Coverage gaps and UX work that should land (or at least be triaged) before tagging the first PyPI release.
+
+* [ ] **Online help inside the studio**: `<?>`-style tooltips and per-section "?" links pointing at the relevant chapter of the online doc. Concretely: hover help on the Config panel rows (each GUC), the where-mode wrap notice, the circuit toolbar buttons, the semiring select / methods / args inputs, and the connection editor. The links resolve to `provsql.org/docs/...` anchors rather than re-explaining things in cramped tooltips.
+* [ ] **Tutorial + case-study coverage audit**: walk through every tutorial (`doc/source/user/tutorial.rst`) and case study (`doc/source/user/casestudy*.rst`) end-to-end inside the studio and confirm each step is comfortably reachable from the UI. Note any step that requires dropping to psql, drop-in helpers we can add to fix it, and pacing issues (e.g. results that don't fit on screen, gates that need too much zoom, evaluations that lack a UI surface).
+* [ ] **ProvSQL feature gaps**: enumerate the extension features that are hard or impossible to drive from the studio today (e.g. `repair_key`, `set_prob`, GUC tweaks beyond `provsql.active` / `verbose_level`, `to_provxml` export, multi-relation provenance mappings). Triage each: in-UI surface, doc pointer with a copy-paste SQL snippet, or explicit out-of-scope.
+* [ ] **Big-table strategy**: result tables and the relations sidebar currently render every row. For real datasets that breaks both rendering speed and the UI. Pick + implement an approach: server-side `LIMIT` with a "show more" affordance; virtual scrolling; explicit "preview N rows" with a row-count estimate; or refuse to render past a threshold with a guidance message. Same question for the schema-panel relations sidebar in Where mode (currently lists every row of every tagged relation).
+* [ ] **`agg_token` cells clickable in circuit mode**: the original Stage-3 plan deferred this to v2 because `agg_token::text` returns the aggregate value (not the UUID), so the click handler couldn't extract the circuit root cheaply. Without it, inspecting a `count(*)` / `sum(...)` result requires the user to wrap the query in `(col::uuid)::text` by hand: a real friction point for tutorials and case studies. Fix: have the `/api/exec` response carry the underlying UUID alongside each `agg_token` cell (e.g. as a sibling array indexed by column position), and let the front-end set `data-circuit-uuid` on the cell so the existing click flow works. Stage-3 checkbox at line 200 to be flipped accordingly.
+
+---
+
+## Stage 5: Documentation (1 day)
+
+Documentation lands BEFORE the v0.1 PyPI / Docker release: the studio chapter, the cross-links, and the screenshots all need to ship in the same window so the public release has a place to send users.
+
+* [ ] New chapter `doc/source/user/studio.rst`. Sections: Installation (pip / Docker), Connecting (DSN / GUCs / read-only-role recipe), Where mode walkthrough, Circuit mode walkthrough (including semiring evaluation), Mode-switching, Limitations.
+* [ ] Screenshots for `doc/source/user/studio.rst` (ported from the original Stage-5 polish list, since they belong with the docs chapter rather than the polish work).
+* [ ] Add to `doc/source/index.rst` `:caption: User Guide` toctree, between `export` and `configuration`.
+* [ ] Cross-link from `where-provenance.rst` ("see the Studio for an interactive view") and `export.rst` (next to `view_circuit`).
+* [ ] Run `make docs` after every edit to `.rst` (per project convention).
+* [ ] Update top-level `README.md` to mention Studio under "Demos" or "Tools".
+* [ ] Update `website/_data/demos.yml` if there's a corresponding entry.
+
+---
+
+## Stage 6: Distribution (1 day)
+
+Last step: the v0.1 release itself. Gated on Stage 5 being done so the published artifact actually has docs to point at.
 
 ### PyPI
 
@@ -236,29 +333,6 @@ The shared shell from Stage 0 (one `index.html`, `app.css`, `app.js`, `circuit.j
 * [ ] Update `docker/demo.sh` to drop the `cp -r /opt/provsql/where_panel/* /var/www/html/` block.
 * [ ] Search the docs for references to `where_panel` and update.
 * [x] `studio/` added to `.gitattributes` `export-ignore` so PGXN / `git archive` extension release tarballs don't carry it.
-
----
-
-## Stage 5: Polish (1 day)
-
-* [ ] Loading state for long queries (spinner + cancel button).
-* [ ] Error toast styled with the brand (red border, terracotta-500 accent).
-* [ ] Empty-result state with a clear message.
-* [ ] Classification pills rendered for `classification` columns when value is one of the known levels (the design already has the styles, just hook them up generically: any enum column with values matching the `_unclassified|_restricted|...` pattern, or a hardcoded list to start).
-* [ ] ⌘ / Ctrl+Enter to submit (already in Stage 2; verify on macOS + Linux + Windows browsers).
-* [ ] Settings panel for the four GUCs, exposed from the navbar's "Config" link (currently a `#` placeholder in the design).
-* [ ] Screenshots for `doc/source/user/studio.rst` (see below).
-
----
-
-## Documentation
-
-* [ ] New chapter `doc/source/user/studio.rst`. Sections: Installation (pip / Docker), Connecting (DSN / GUCs / read-only-role recipe), Where mode walkthrough, Circuit mode walkthrough, Mode-switching, Limitations.
-* [ ] Add to `doc/source/index.rst` `:caption: User Guide` toctree, between `export` and `configuration`.
-* [ ] Cross-link from `where-provenance.rst` ("see the Studio for an interactive view") and `export.rst` (next to `view_circuit`).
-* [ ] Run `make docs` after every edit to `.rst` (per project convention).
-* [ ] Update top-level `README.md` to mention Studio under "Demos" or "Tools".
-* [ ] Update `website/_data/demos.yml` if there's a corresponding entry.
 
 ---
 
@@ -310,22 +384,27 @@ A studio-only commit triggers only the new `studio.yml`, never the extension / d
 
 ## Future work (v2 and beyond)
 
-Ideas raised during design + planning that are out of scope for v1 but worth keeping on the radar.
+Ideas raised during design + planning that are out of scope for v1 but worth keeping on the radar. Triage notes (after the v0.1 development push) split the list into "already shipped (in part)", "could land earlier", and "genuinely v2-shaped".
 
 The first is structural: the where-panel and circuit-visualizer are two **modes** of one tool that share the chrome (textarea, send-query, result rendering, mode switcher). Each mode adds its own sidebar and its own per-cell click affordance. New modes plug into the same pattern.
 
-* **Evaluation mode** (`/eval` or similar): a third mode where the user picks a semiring / probability / Shapley / Banzhaf evaluation and the result table grows extra columns showing the per-row evaluation. Concretely:
-  * Sidebar: evaluation picker (semiring registry, probability method, Shapley vs Banzhaf), plus configuration (probability mapping table, semiring witness mapping, Monte-Carlo iterations).
-  * Per-cell click on a UUID / `agg_token`: drill in to see the per-gate contribution (e.g. Shapley values per leaf, lit up on the circuit DAG: the heat-map idea).
-  * Server side: thin wrappers around `probability_evaluate`, `shapley_all_vars`, `banzhaf_all_vars`, `provenance_evaluate`.
-  * Cross-mode: the mode switcher carries the query forward; eval-mode results become a numerical companion to the where / circuit views.
-* **What's generic** (so v1 doesn't paint future modes into a corner): keep `/api/exec` mode-agnostic (the wrapping logic lives in a per-mode helper, not hardcoded in the route); keep the result-renderer mode-aware only via the column-type → click-handler mapping; keep the sidebar a swappable component with its own state. Adding a new mode in v2 should mean: one new sidebar template, one new column-type handler, one new endpoint per evaluation kind.
-* **Knowledge-compilation view**: render the d-DNNF compiled from a circuit, not just the raw provenance DAG. Would surface what `provenance_evaluate_compiled` actually consumes and make probability evaluation legible. Could ship as part of evaluation mode, or as a separate sub-mode.
-* **Shapley / Banzhaf heat-map**: overlay per-gate contribution values on the circuit visualizer. ProvSQL already exposes `shapley_all_vars` / `banzhaf_all_vars`; the visualizer would consume those. Natural fit as evaluation-mode → drill-down on the circuit DAG.
+### Already shipped (move out of v2)
+
+* [x] **Per-circuit-node semiring evaluation** (the heart of "evaluation mode"): the circuit-mode sidebar exposes a Run button supporting `boolexpr`, `boolean`, `counting`, `why`, `formula`, and `probability` (with method picker, per-method args, runtime, and a Hoeffding 95% bound for Monte-Carlo). It targets the pinned node or the root, and shares the same / `api/evaluate` endpoint that a future `/eval` mode would reuse. What remains v2 (see below) is the per-row column extension and the heat-map drill-down.
+* [x] **Mode-agnostic API design** ("what's generic"): `/api/exec` takes a `mode` field instead of having mode-specific routes; the wrapping logic lives in `db.exec_batch` behind a `wrap_last` flag rather than inside the route; the result renderer keys off `column.type_name` for click handlers (uuid + agg_token). Adding a new mode means a new sidebar template + a new endpoint, as planned.
+
+### Could land earlier (candidates for v0.2)
+
+* [ ] **Save / load notebooks** — partial: query history is already persisted (sessionStorage `ps.sql` carry-over + the history dropdown). The remaining work is small: a "Download .sql" button next to the history dropdown that exports the recent buffer, and a file-picker that imports back into the textarea. ~30 lines.
+* [ ] **Lazy expansion sizing**: a one-line GUC default tweak (`max_circuit_depth`). Current default 8 was sized for tutorial circuits; once we collect real-world depth data (Stage 5 documentation walkthroughs would surface this), drop to 4 with a "Show more" affordance via the existing frontier-expand path.
+
+### Genuinely v2-shaped
+
+* **Result-table evaluation extension**: the missing half of "evaluation mode": run the chosen semiring across every row of the current result and add a column with the per-row value. Today the eval strip evaluates one node at a time; this would batch-evaluate all UUIDs in the displayed `provsql` column.
+* **Shapley / Banzhaf heat-map**: overlay per-gate contribution values on the circuit visualizer. ProvSQL already exposes `shapley_all_vars` / `banzhaf_all_vars`; the visualizer would consume those and colour-tint each input gate. Natural fit as a drill-down click on a result row from the result-table evaluation extension.
+* **Knowledge-compilation view**: render the d-DNNF compiled from a circuit, not just the raw provenance DAG. Would surface what `provenance_evaluate_compiled` actually consumes and make probability evaluation legible. Could ship as a sub-mode toggled from the circuit-mode toolbar (`Π`-shaped circuit ↔ d-DNNF view).
 * **Formula simplification**: collapse semantically-equivalent subgraphs (e.g. shared `times` over identical inputs) for readability. Possibly a server-side pass before layout.
 * **Tweaks panel** for where mode: theme toggle (light only for v1), table density (comfortable / compact), highlight colour (terracotta / gold / purple), show/hide classification pills. Cheap, demonstrates brand flexibility.
-* **Save / load notebooks**: persist the textarea contents + result history as a downloadable `.sql` or JSON file.
-* **Lazy expansion sizing**: the chat suggested `depth=4` as a default for very large circuits; TODO currently uses 8 because demo circuits are small. Revisit once we have real data on circuit sizes seen in the wild.
 * **Multi-user demo deployment**: per-browser-session isolation in a single Docker container, so a conference audience can each `localhost:8000` against a hosted instance.
 
 ---
