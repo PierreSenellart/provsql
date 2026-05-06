@@ -47,6 +47,40 @@ def test_schema_marks_provenance_tracked_relations(client):
         )
 
 
+def test_schema_marks_views_propagating_provenance(client):
+    """A view built on top of a provenance-tracked relation never carries
+    a literal `provsql` column in pg_attribute, but ProvSQL's planner
+    hook injects one into the rewritten output. The schema endpoint must
+    still flag such views (CS2's `f` and `f_replicated` are the canonical
+    case)."""
+    setup = (
+        "DROP VIEW IF EXISTS rel_test_view;"
+        " DROP VIEW IF EXISTS rel_test_view_plain;"
+        " DROP TABLE IF EXISTS rel_test_plain;"
+        " CREATE TABLE rel_test_plain (a int, b text);"
+        " CREATE VIEW rel_test_view        AS SELECT * FROM personnel;"
+        " CREATE VIEW rel_test_view_plain  AS SELECT * FROM rel_test_plain;"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    try:
+        rows = client.get("/api/schema").get_json()
+        by_qname = {f"{r['schema']}.{r['table']}": r for r in rows}
+        # View on a provenance-tracked table propagates provenance.
+        assert by_qname["provsql_test.rel_test_view"]["has_provenance"] is True
+        # View on a plain table does not.
+        assert by_qname["provsql_test.rel_test_view_plain"]["has_provenance"] is False
+    finally:
+        client.post("/api/exec", json={
+            "sql": (
+                "DROP VIEW IF EXISTS rel_test_view;"
+                " DROP VIEW IF EXISTS rel_test_view_plain;"
+                " DROP TABLE IF EXISTS rel_test_plain;"
+            ),
+            "mode": "circuit",
+        })
+
+
 def test_personnel_listed(client):
     resp = client.get("/api/relations")
     assert resp.status_code == 200

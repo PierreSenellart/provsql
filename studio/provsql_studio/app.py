@@ -423,6 +423,13 @@ def create_app(
         # newly-created mappings show up without a page reload.
         return jsonify(db.list_provenance_mappings(get_pool()))
 
+    @app.get("/api/custom_semirings")
+    def api_custom_semirings():
+        # Discovered SQL/PL wrappers around `provenance_evaluate`.
+        # Populates the eval strip's "Custom Semirings" optgroup; refreshed
+        # whenever the panel opens.
+        return jsonify(db.list_custom_semirings(get_pool()))
+
     @app.post("/api/evaluate")
     def api_evaluate():
         import psycopg
@@ -435,6 +442,7 @@ def create_app(
         mapping   = payload.get("mapping") or None
         method    = payload.get("method") or None
         arguments = payload.get("arguments") or None
+        function  = payload.get("function") or None
         try:
             data = db.evaluate_circuit(
                 get_pool(),
@@ -443,7 +451,9 @@ def create_app(
                 mapping=mapping,
                 method=method,
                 arguments=arguments,
+                function=function,
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
+                search_path=app.config.get("SEARCH_PATH", ""),
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400

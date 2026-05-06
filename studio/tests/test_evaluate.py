@@ -180,3 +180,163 @@ def test_evaluate_invalid_uuid_is_400(client):
         "semiring": "boolexpr",
     })
     assert resp.status_code == 400
+
+
+# ──────── /api/custom_semirings + custom evaluation ────────
+
+
+@pytest.fixture()
+def custom_wrapper(client):
+    """Mirror the CS1 `security_clearance` recipe: aggregates over the
+    `classification_level` ENUM (already shipped in add_provenance.sql)
+    plus a `(uuid, regclass) RETURNS classification_level` wrapper that
+    calls `provenance_evaluate`. Discovery should pick up the wrapper.
+
+    Also creates a `decoy_fn(uuid, regclass) RETURNS int` that does NOT
+    call `provenance_evaluate` so we can assert the body filter excludes
+    it. The aggregates and decoy live in `provsql_test`, isolated from
+    the rest of the schema."""
+    setup = """
+    CREATE OR REPLACE FUNCTION clr_min_state(
+        state classification_level, level classification_level)
+      RETURNS classification_level AS $$
+        SELECT CASE WHEN state IS NULL OR state > level THEN level ELSE state END
+    $$ LANGUAGE SQL IMMUTABLE;
+    CREATE OR REPLACE FUNCTION clr_max_state(
+        state classification_level, level classification_level)
+      RETURNS classification_level AS $$
+        SELECT CASE WHEN state IS NULL OR state < level THEN level ELSE state END
+    $$ LANGUAGE SQL IMMUTABLE;
+    DROP AGGREGATE IF EXISTS clr_min(classification_level);
+    CREATE AGGREGATE clr_min(classification_level) (
+        sfunc=clr_min_state, stype=classification_level, initcond='unavailable');
+    DROP AGGREGATE IF EXISTS clr_max(classification_level);
+    CREATE AGGREGATE clr_max(classification_level) (
+        sfunc=clr_max_state, stype=classification_level, initcond='unclassified');
+    -- Bare provenance_evaluate (no `provsql.` qualifier) matches the
+    -- pattern the case-study wrappers use; relies on the eval-route's
+    -- search_path composition pinning `provsql`.
+    CREATE OR REPLACE FUNCTION clr_clearance(token UUID, token2value regclass)
+      RETURNS classification_level AS $$
+    BEGIN
+      RETURN provenance_evaluate(
+        token, token2value, 'unclassified'::classification_level,
+        'clr_min', 'clr_max');
+    END
+    $$ LANGUAGE plpgsql;
+    CREATE OR REPLACE FUNCTION decoy_fn(token UUID, token2value regclass)
+      RETURNS int AS $$ SELECT 1 $$ LANGUAGE SQL IMMUTABLE;
+    DROP TABLE IF EXISTS personnel_clr;
+    CREATE TABLE personnel_clr AS
+      SELECT classification AS value, provsql AS provenance FROM personnel;
+    SELECT remove_provenance('personnel_clr');
+    CREATE INDEX ON personnel_clr(provenance);
+    """
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    yield {"function": "provsql_test.clr_clearance", "mapping": "provsql_test.personnel_clr"}
+    teardown = (
+        "DROP FUNCTION IF EXISTS clr_clearance(UUID, regclass);"
+        " DROP FUNCTION IF EXISTS decoy_fn(UUID, regclass);"
+        " DROP AGGREGATE IF EXISTS clr_min(classification_level);"
+        " DROP AGGREGATE IF EXISTS clr_max(classification_level);"
+        " DROP FUNCTION IF EXISTS clr_min_state(classification_level, classification_level);"
+        " DROP FUNCTION IF EXISTS clr_max_state(classification_level, classification_level);"
+        " DROP TABLE IF EXISTS personnel_clr;"
+    )
+    client.post("/api/exec", json={"sql": teardown, "mode": "circuit"})
+
+
+def test_custom_semirings_lists_user_wrapper(client, custom_wrapper):
+    resp = client.get("/api/custom_semirings")
+    assert resp.status_code == 200
+    rows = resp.get_json()
+    qnames = {r["qname"] for r in rows}
+    assert "provsql_test.clr_clearance" in qnames
+    entry = next(r for r in rows if r["qname"] == "provsql_test.clr_clearance")
+    assert entry["return_type"] == "classification_level"
+    # No name collision in the test schema, so display_name is bare.
+    assert entry["display_name"] == "clr_clearance"
+
+
+def test_custom_semirings_excludes_decoy_without_provenance_evaluate(client, custom_wrapper):
+    """decoy_fn matches the (uuid, regclass) signature but its body never
+    mentions provenance_evaluate, so the prosrc filter must drop it."""
+    rows = client.get("/api/custom_semirings").get_json()
+    qnames = {r["qname"] for r in rows}
+    assert "provsql_test.decoy_fn" not in qnames
+
+
+def test_custom_semirings_excludes_sr_formula(client):
+    """sr_formula's first argument is anyelement, not uuid; even though it
+    calls into the compiled engine, its signature shape is excluded by the
+    `proargtypes[1] = regclass` discriminator only when the first arg is
+    something other than anyelement. We rely on the body filter to exclude
+    it: sr_formula calls provenance_evaluate_compiled, not the bare
+    provenance_evaluate."""
+    rows = client.get("/api/custom_semirings").get_json()
+    qnames = {r["qname"] for r in rows}
+    assert "provsql.sr_formula" not in qnames
+    assert "provsql.sr_counting" not in qnames
+    assert "provsql.sr_why" not in qnames
+    assert "provsql.sr_boolean" not in qnames
+
+
+def test_evaluate_custom_returns_classification(client, custom_wrapper):
+    """Run clr_clearance over a single-row SELECT; the result is the
+    minimum-classification of that row, which for the personnel fixture
+    is whatever classification John holds."""
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "custom",
+        "function": custom_wrapper["function"],
+        "mapping": custom_wrapper["mapping"],
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "custom"
+    assert data["type_name"] == "classification_level"
+    assert data["function"] == custom_wrapper["function"]
+    # John's classification level is one of the enum members.
+    assert data["result"] in {
+        "unclassified", "restricted", "confidential",
+        "secret", "top_secret", "unavailable",
+    }
+
+
+def test_evaluate_custom_unknown_function_is_400(client):
+    """A payload referencing a non-discovered function must be refused
+    even if such a function exists in pg_proc, so the discovery filter
+    is the gate."""
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "custom",
+        "function": "pg_catalog.now",  # exists, but not a wrapper
+        "mapping": "provsql_test.personnel",
+    })
+    assert resp.status_code == 400
+    assert "unknown" in resp.get_json()["error"].lower()
+
+
+def test_evaluate_custom_missing_function_is_400(client):
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "custom",
+        "mapping": "provsql_test.personnel",
+    })
+    assert resp.status_code == 400
+    assert "function" in resp.get_json()["error"].lower()
+
+
+def test_evaluate_custom_missing_mapping_is_400(client, custom_wrapper):
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "custom",
+        "function": custom_wrapper["function"],
+    })
+    assert resp.status_code == 400
+    assert "mapping" in resp.get_json()["error"].lower()

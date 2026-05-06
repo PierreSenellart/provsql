@@ -368,6 +368,14 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   color: rgba(255,255,255,0.88);
 }
 
+/* Refresh button: icon-only, sits in the nav with extra left margin so
+   it reads as a toolbar-level affordance rather than belonging to the
+   adjacent Schema button. The .fa-spin lasts a fraction of a second
+   after a click (set in app.js) to give visual feedback even when the
+   schema panel is closed. */
+.wp-nav__refresh { margin-left: 0.9rem; padding: 0 0.2rem; }
+.wp-nav__refresh:hover { color: var(--gold-500); }
+
 /* Config popover anchored to the cog button. */
 .wp-nav__configwrap { position: relative; display: inline-flex; }
 .wp-nav__link[aria-expanded="true"] { color: var(--gold-500); }

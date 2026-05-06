@@ -704,7 +704,33 @@
   // ─── semiring evaluation ──────────────────────────────────────────────
 
   // Semirings that take a provenance mapping (regclass with `value` + `provenance`).
+  // Custom-semiring options (encoded as `custom:<schema>.<name>`) also need a
+  // mapping; see `needsMapping`.
   const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'formula']);
+  function needsMapping(v) {
+    return _SR_NEEDS_MAPPING.has(v) || v.startsWith('custom:');
+  }
+
+  // PG type names psycopg surfaces as either JS numbers (smallints, ints,
+  // floats) or strings (numeric / Decimal). Either way we render with 4
+  // decimals for parity with the probability-value formatter.
+  const _CUSTOM_NUMERIC_TYPES = new Set([
+    'numeric', 'double precision', 'real',
+    'integer', 'bigint', 'smallint',
+    'int', 'int2', 'int4', 'int8', 'float4', 'float8',
+  ]);
+  function formatCustomValue(value, typeName) {
+    if (value == null) return '(null)';
+    if (_CUSTOM_NUMERIC_TYPES.has(typeName)) {
+      const n = typeof value === 'number' ? value : parseFloat(value);
+      if (Number.isFinite(n)) return n.toFixed(4);
+    }
+    if (typeName === 'boolean' && typeof value === 'boolean') {
+      return value ? 'true' : 'false';
+    }
+    // Multiranges, enums, ranges, text : already display-ready as strings.
+    return String(value);
+  }
 
   // For each probability method that takes an `arguments` value, point
   // at the dedicated control. Each control keeps its own state (so the
@@ -731,10 +757,26 @@
       .filter(Boolean);
 
     let mappingsLoaded = false;
+    let customsLoaded  = false;
+
+    // Both caches are dirty by default, and are flipped to dirty again
+    // by `runQuery` after every successful exec. Each loader clears its
+    // own flag once the fetch returns. The picker's `mousedown` handler
+    // re-runs the loaders if the corresponding dirty flag is set, so a
+    // newly-created mapping or wrapper shows up the moment the user
+    // opens the dropdown.
+    function metadataDirty(key) {
+      return !!window.ProvsqlStudio?.metadata?.[key];
+    }
+    function clearMetadataDirty(key) {
+      if (window.ProvsqlStudio?.metadata) {
+        window.ProvsqlStudio.metadata[key] = false;
+      }
+    }
 
     function syncControls() {
       const v = sel.value;
-      map.hidden  = !_SR_NEEDS_MAPPING.has(v);
+      map.hidden  = !needsMapping(v);
       meth.hidden = v !== 'probability';
       // Show only the args control that matches the current probability
       // method (if any); hide every other one so the row stays compact.
@@ -743,17 +785,51 @@
       // Stale once the input shape changes : wipe result + bound +
       // time + the clear button.
       clearEvalResult();
-      if (!map.hidden && !mappingsLoaded) loadMappings();
+      if (!map.hidden && (!mappingsLoaded || metadataDirty('mappingsDirty'))) loadMappings();
+    }
+
+    async function loadCustomSemirings() {
+      const grp = document.getElementById('eval-custom-group');
+      if (!grp) return;
+      try {
+        const resp = await fetch('/api/custom_semirings');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const list = await resp.json();
+        if (!list.length) {
+          grp.hidden = true;
+          customsLoaded = true;
+          clearMetadataDirty('customsDirty');
+          return;
+        }
+        grp.innerHTML = list.map(c => {
+          const label = c.display_name || c.qname;
+          const title = `${c.qname} → ${c.return_type}`;
+          return `<option value="custom:${escapeHtml(c.qname)}" title="${escapeHtml(title)}">${escapeHtml(label)}</option>`;
+        }).join('');
+        grp.hidden = false;
+        customsLoaded = true;
+        clearMetadataDirty('customsDirty');
+      } catch (e) {
+        // Discovery failure is non-fatal: leave the optgroup hidden so
+        // the rest of the strip stays usable. Don't clear the dirty
+        // flag : next dropdown open should retry.
+        grp.hidden = true;
+      }
     }
 
     async function loadMappings() {
       mappingsLoaded = true;
+      // Preserve the user's current selection across a refresh so a
+      // dirty-driven reload doesn't drop a mapping the user picked
+      // before running an exec.
+      const previousValue = map.value || '';
       try {
         const resp = await fetch('/api/provenance_mappings');
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const list = await resp.json();
         if (!list.length) {
           map.innerHTML = '<option value="">(no mappings : run create_provenance_mapping)</option>';
+          clearMetadataDirty('mappingsDirty');
           return;
         }
         // `display_name` drops the schema when the relation is search_path-
@@ -765,6 +841,10 @@
           const label = m.display_name || m.qname;
           return `<option value="${escapeHtml(m.qname)}" title="${escapeHtml(m.qname)}">${escapeHtml(label)}</option>`;
         }).join('');
+        if (previousValue && [...map.options].some(o => o.value === previousValue)) {
+          map.value = previousValue;
+        }
+        clearMetadataDirty('mappingsDirty');
       } catch (e) {
         // Allow a retry on next semiring change.
         mappingsLoaded = false;
@@ -773,12 +853,24 @@
     }
 
     sel.addEventListener('change', syncControls);
+    // Refresh on dropdown open : if the user has run an exec since the
+    // last load (or hit the toolbar refresh button), the dirty flag is
+    // set, and we silently re-fetch before the dropdown actually opens.
+    // mousedown beats the native open by a frame; that's enough for a
+    // freshly-created wrapper to appear before the user picks.
+    sel.addEventListener('mousedown', () => {
+      if (!customsLoaded || metadataDirty('customsDirty')) loadCustomSemirings();
+    });
+    map.addEventListener('mousedown', () => {
+      if (metadataDirty('mappingsDirty')) loadMappings();
+    });
     // Method change also affects whether the args input is shown / what
     // its placeholder reads.
     meth.addEventListener('change', syncControls);
     run.addEventListener('click', runEvaluation);
     const clearBtn = document.getElementById('eval-clear');
     if (clearBtn) clearBtn.onclick = clearEvalResult;
+    loadCustomSemirings();
     syncControls();
   }
 
@@ -834,9 +926,14 @@
       return;
     }
     const token = state.pinnedNode || state.scene.root;
-    const semiring = sel.value;
+    const selValue = sel.value;
+    // `custom:<schema>.<name>` packs the wrapper identity into the option
+    // value; unpack here so the request shape stays {semiring, function}.
+    const isCustom = selValue.startsWith('custom:');
+    const semiring = isCustom ? 'custom' : selValue;
     const body = { token, semiring };
-    if (_SR_NEEDS_MAPPING.has(semiring)) {
+    if (isCustom) body.function = selValue.slice('custom:'.length);
+    if (needsMapping(selValue)) {
       const m = map.value || '';
       if (!m) {
         result.textContent = 'pick a provenance mapping';
@@ -888,6 +985,8 @@
       let display;
       if (data.kind === 'float' && typeof data.result === 'number') {
         display = data.result.toFixed(4);
+      } else if (data.kind === 'custom') {
+        display = formatCustomValue(data.result, data.type_name);
       } else if (data.result == null) {
         display = '(null)';
       } else {
@@ -895,7 +994,9 @@
       }
       result.textContent = '= ' + display;
       result.dataset.kind = 'ok';
-      result.title = `${data.kind} value`;
+      result.title = data.kind === 'custom'
+        ? `${data.function} → ${data.type_name}`
+        : `${data.kind} value`;
       // Monte-Carlo: append a Hoeffding-style 95% absolute-error bound
       // ε = sqrt(ln(2/α) / (2N))  (α = 0.05)
       // The bound is distribution-free and only depends on the sample

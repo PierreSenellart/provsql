@@ -8,6 +8,27 @@
 (function () {
   const mode = document.body.classList.contains('mode-circuit') ? 'circuit' : 'where';
 
+  // Metadata caches (schema panel, eval-strip mapping picker, eval-strip
+  // custom-semiring optgroup) lazy-load once and would otherwise stay
+  // stale for the lifetime of the page. We mark them dirty after every
+  // successful /api/exec so the next time each panel opens, it
+  // re-fetches; the toolbar refresh button forces an invalidation
+  // explicitly (e.g. after schema changes outside the Studio session).
+  // Each consumer is responsible for clearing its own flag once reload
+  // succeeds.
+  const Metadata = {
+    schemaDirty:   true,
+    mappingsDirty: true,
+    customsDirty:  true,
+    invalidateAll() {
+      this.schemaDirty   = true;
+      this.mappingsDirty = true;
+      this.customsDirty  = true;
+    },
+  };
+  window.ProvsqlStudio = window.ProvsqlStudio || {};
+  window.ProvsqlStudio.metadata = Metadata;
+
   // Carry the textarea + a per-mode preload UUID across navigation.
   // The active-tab highlight is driven by CSS off <body class="mode-X">
   // so it doesn't flash when JS lags behind initial render.
@@ -772,6 +793,11 @@
         entries = await resp.json();
         singleSchema = new Set(entries.map(r => r.schema)).size <= 1;
         loaded = true;
+        // Successful reload : clear the dirty flag so subsequent opens
+        // reuse the cache until the next exec.
+        if (window.ProvsqlStudio?.metadata) {
+          window.ProvsqlStudio.metadata.schemaDirty = false;
+        }
         render();
       } catch (e) {
         body.innerHTML =
@@ -865,7 +891,11 @@
     function open() {
       panel.hidden = false;
       btn.setAttribute('aria-expanded', 'true');
-      if (!loaded) load();
+      // Re-fetch on open if either we never loaded, or an exec since the
+      // last load may have changed the schema (the dirty flag is set by
+      // runQuery and by the toolbar refresh button).
+      const dirty = window.ProvsqlStudio?.metadata?.schemaDirty;
+      if (!loaded || dirty) load();
       setTimeout(() => search.focus(), 0);
     }
     function close() {
@@ -882,6 +912,26 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !panel.hidden) close();
     });
+
+    // Toolbar refresh button. Forces a reload of the three metadata
+    // caches; schema reloads in place if its panel is open, the eval-
+    // strip caches reload lazily on next dropdown open via their dirty
+    // flags. Also briefly spins the icon so the user sees feedback even
+    // when the panel is closed.
+    const refreshBtn = document.getElementById('metadata-refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => {
+        if (window.ProvsqlStudio?.metadata) {
+          window.ProvsqlStudio.metadata.invalidateAll();
+        }
+        const icon = refreshBtn.querySelector('i');
+        if (icon) {
+          icon.classList.add('fa-spin');
+          setTimeout(() => icon.classList.remove('fa-spin'), 600);
+        }
+        if (!panel.hidden) load();
+      });
+    }
   }
 
   function setupGucToggles() {
@@ -1049,12 +1099,19 @@
         </div>
         <div class="cv-eval__form">
           <select class="cv-eval__semiring" id="eval-semiring">
-            <option value="boolexpr">Boolean expression</option>
-            <option value="boolean">Boolean</option>
-            <option value="counting">Counting</option>
-            <option value="why">Why-provenance</option>
-            <option value="formula">Formula</option>
-            <option value="probability">Probability</option>
+            <optgroup label="Compiled Semirings">
+              <option value="boolexpr">Boolean expression</option>
+              <option value="boolean">Boolean</option>
+              <option value="counting">Counting</option>
+              <option value="why">Why-provenance</option>
+              <option value="formula">Formula</option>
+            </optgroup>
+            <optgroup label="Custom Semirings" id="eval-custom-group" hidden>
+              <!-- populated lazily from /api/custom_semirings -->
+            </optgroup>
+            <optgroup label="Other">
+              <option value="probability">Probability</option>
+            </optgroup>
           </select>
           <select class="cv-eval__mapping" id="eval-mapping" hidden>
             <option value="">(no mappings found)</option>
@@ -1353,6 +1410,14 @@ async function runQuery(ev) {
   // After every successful exec in where mode, re-fetch relations so
   // add_provenance results show up live.
   if (env.mode === 'where' && env.refreshRelations) env.refreshRelations();
+
+  // Mark all metadata caches dirty: the user may have just run a CREATE
+  // TABLE, add_provenance, create_provenance_mapping, or a CREATE
+  // FUNCTION that defines a new custom-semiring wrapper. Each panel
+  // re-fetches lazily on next open.
+  if (window.ProvsqlStudio?.metadata?.invalidateAll) {
+    window.ProvsqlStudio.metadata.invalidateAll();
+  }
 
   return false;
 

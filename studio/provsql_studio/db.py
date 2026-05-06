@@ -213,11 +213,24 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
     """Return all SELECT-able tables/views/matviews/foreign tables grouped
     by their qualified name, with each row's columns + types. Used by the
     Schema nav button so the user can see what they can query without
-    leaving the UI."""
+    leaving the UI.
+
+    Views and matviews never carry a literal `provsql` column in
+    `pg_attribute` even when the ProvSQL planner hook adds one to their
+    rewritten output (CS2's `f` and `f_replicated` are the canonical
+    case). For these we fall back to a runtime probe: `SELECT * FROM
+    <qname> LIMIT 0` exposes the post-rewrite column list, and a
+    `provsql uuid` column there means the view propagates provenance."""
     out: list[dict] = []
-    with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(_SCHEMA_QUERY)
-        for schema, table, kind, cols, types, has_prov in cur.fetchall():
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_SCHEMA_QUERY)
+            rows = cur.fetchall()
+        for schema, table, kind, cols, types, has_prov in rows:
+            propagates = bool(has_prov) or (
+                kind in ("view", "matview")
+                and _view_propagates_provenance(conn, schema, table)
+            )
             out.append({
                 "schema": schema,
                 "table": table,
@@ -226,9 +239,31 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                     {"name": n, "type": t}
                     for n, t in zip(cols or [], types or [])
                 ],
-                "has_provenance": bool(has_prov),
+                "has_provenance": propagates,
             })
     return out
+
+
+_UUID_OID = 2950  # `'uuid'::regtype::oid` is stable across PG versions.
+
+
+def _view_propagates_provenance(conn, schema: str, table: str) -> bool:
+    """Probe whether a `SELECT * FROM <schema>.<table> LIMIT 0` plan
+    carries a provsql uuid column. The probe runs inside a savepoint so a
+    broken view (or one whose plan errors for any reason) doesn't taint
+    the schema-listing transaction."""
+    qname = sql.Identifier(schema, table)
+    try:
+        with conn.transaction(force_rollback=False):
+            with conn.cursor() as cur:
+                cur.execute(sql.SQL("SELECT * FROM {} LIMIT 0").format(qname))
+                desc = cur.description or []
+                for col in desc:
+                    if col.name == "provsql" and col.type_code == _UUID_OID:
+                        return True
+                return False
+    except Exception:
+        return False
 
 
 @dataclass
@@ -533,6 +568,56 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
     return out
 
 
+_CUSTOM_SEMIRING_FILTER = """
+    p.pronargs = 2
+    AND p.proargtypes[1] = 'regclass'::regtype
+    AND p.prosrc ~ '\\mprovenance_evaluate\\M'
+    AND has_function_privilege(current_user, p.oid, 'EXECUTE')
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+"""
+# Word-boundary regex on `prosrc` matches the bare `provenance_evaluate`
+# call but not `provenance_evaluate_compiled` (since `_` is a word
+# character, `\M` won't bind between `evaluate` and `_compiled`). This
+# excludes the four `sr_*` wrappers from discovery while accepting the
+# case-study wrappers and `provsql.union_tstzintervals`.
+
+
+def list_custom_semirings(pool: ConnectionPool) -> list[dict]:
+    """Discover SQL/PL functions shaped like a custom-semiring wrapper:
+    `f(<token>, regclass) RETURNS T` whose body invokes the bare
+    `provenance_evaluate(...)`. The first argument's type is left
+    unconstrained so wrappers declared with `anyelement` for parsing
+    reasons still surface.
+    Returns one entry per wrapper, qualified by schema."""
+    sql_text = f"""
+        SELECT n.nspname AS schema, p.proname AS name,
+               format_type(p.prorettype, NULL) AS rettype
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE {_CUSTOM_SEMIRING_FILTER}
+        ORDER BY (n.nspname = 'provsql') DESC, n.nspname, p.proname
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql_text)
+        rows = cur.fetchall()
+    # Bare names are nicer in the dropdown; fall back to schema.name only
+    # for entries that actually collide (rare in practice).
+    name_count: dict[str, int] = {}
+    for _, name, _rt in rows:
+        name_count[name] = name_count.get(name, 0) + 1
+    out: list[dict] = []
+    for schema, name, rettype in rows:
+        qname = f"{schema}.{name}"
+        out.append({
+            "schema": schema,
+            "name": name,
+            "qname": qname,
+            "display_name": qname if name_count[name] > 1 else name,
+            "return_type": rettype,
+        })
+    return out
+
+
 def evaluate_circuit(
     pool: ConnectionPool,
     *,
@@ -541,7 +626,9 @@ def evaluate_circuit(
     mapping: str | None,
     method: str | None,
     arguments: str | None = None,
+    function: str | None = None,
     statement_timeout: str,
+    search_path: str = "",
 ) -> dict:
     """Run a compiled-semiring or probability evaluation against `token`.
     Returns `{result, kind}` ready to JSON-encode. Raises ValueError on
@@ -572,6 +659,45 @@ def evaluate_circuit(
             sql.Literal(a or None),
         )
         params = ()
+    elif semiring == "custom":
+        fn = (function or "").strip()
+        if not fn:
+            raise ValueError("custom semiring requires a function name")
+        if not mapping:
+            raise ValueError("custom semiring requires a provenance mapping")
+        if "." not in fn:
+            raise ValueError(
+                f"custom semiring function must be schema-qualified: {fn!r}"
+            )
+        schema, name = fn.split(".", 1)
+        # Re-run the discovery filter restricted to (schema, name) so a
+        # crafted payload can't reach an arbitrary `(uuid, regclass)`
+        # function. The filter is identical to list_custom_semirings'.
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""SELECT 1 FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE {_CUSTOM_SEMIRING_FILTER}
+                      AND n.nspname = %s AND p.proname = %s""",
+                (schema, name),
+            )
+            if cur.fetchone() is None:
+                raise ValueError(f"unknown custom semiring: {fn!r}")
+            cur.execute(
+                f"""SELECT format_type(p.prorettype, NULL)
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = %s AND p.proname = %s
+                      AND p.pronargs = 2 AND p.proargtypes[1] = 'regclass'::regtype""",
+                (schema, name),
+            )
+            rt_row = cur.fetchone()
+        rettype = rt_row[0] if rt_row else None
+        sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)").format(
+            sql.Identifier(schema, name),
+            sql.Literal(token),
+            sql.Literal(mapping),
+        )
+        params = ()
     elif semiring in _SR_FUNCTIONS:
         if not mapping:
             raise ValueError(
@@ -597,13 +723,31 @@ def evaluate_circuit(
                 sql.Literal(statement_timeout)
             )
         )
+        # Custom-semiring wrappers commonly call `provenance_evaluate`
+        # unqualified (every case-study wrapper does), so pin `provsql` on
+        # the search_path the same way exec_batch does. Mirrors the
+        # composition rules: explicit Studio override otherwise the
+        # session default, with `provsql` appended when missing.
+        if (search_path or "").strip():
+            target_path = compose_search_path(search_path, "")
+        else:
+            cur.execute("SHOW search_path")
+            target_path = compose_search_path("", cur.fetchone()[0])
+        cur.execute(
+            "SELECT set_config('search_path', %s, true)",
+            (target_path,),
+        )
         cur.execute(sql_stmt, params)
         row = cur.fetchone()
     value = row[0] if row else None
-    return {
+    out = {
         "result": _to_jsonable(value),
         "kind": _result_kind(semiring),
     }
+    if semiring == "custom":
+        out["function"] = function
+        out["type_name"] = rettype
+    return out
 
 
 def _result_kind(semiring: str) -> str:
@@ -613,6 +757,8 @@ def _result_kind(semiring: str) -> str:
         return "int"
     if semiring == "boolean":
         return "bool"
+    if semiring == "custom":
+        return "custom"
     # boolexpr / formula / why all return text
     return "text"
 
