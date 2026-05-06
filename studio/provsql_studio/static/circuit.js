@@ -35,10 +35,36 @@
     zoom: 1,
     pan: { x: 0, y: 0 },
     pinnedNode: null,
+    // Drag-to-move offsets, keyed by node id. Survive frontier expansion
+    // (paint() reads them on every repaint) so the user's manual nudges
+    // aren't undone when new nodes appear; reset on renderCircuit() so a
+    // new circuit always starts from the Graphviz layout.
+    dragOffsets: Object.create(null),
   };
   let svg = null, edgeLayer = null, nodeLayer = null;
   let titleEl = null, subEl = null;
   let inspectorEl = null, inspectorTitle = null, inspectorBody = null;
+  // Active node-drag session, populated on mousedown over a .node-group
+  // and consumed by the window-level mousemove/mouseup handlers.
+  let _drag = null;
+
+  // Gate types whose children carry a meaningful order: cmp's lhs/rhs,
+  // monus's minuend/subtrahend, and agg : but agg only when the function
+  // is order-sensitive (array_agg, string_agg, json_agg, …). For
+  // sum/count/min/max/avg the result is independent of input order, so
+  // the digits would be noise. semimod is omitted: its value/scalar
+  // split is implied by gate type. eq has a single child so positional
+  // labels would be redundant.
+  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg']);
+  const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
+  function shouldLabelChildren(parent) {
+    if (!ORDERED_GATES.has(parent.type)) return false;
+    if (parent.type === 'agg') {
+      const fn = (parent.info1_name || '').toLowerCase();
+      return !COMMUTATIVE_AGG.has(fn);
+    }
+    return true;
+  }
 
   // ─── public API ───────────────────────────────────────────────────────
 
@@ -161,6 +187,26 @@
     } else {
       window.addEventListener('resize', () => { if (state.scene) fitView(); });
     }
+
+    // Drag-to-move circuit nodes. Per-node mousedown handlers (set in
+    // paint()) seed `_drag`; the window-level move/up handlers track the
+    // gesture so the drag continues even if the pointer leaves the
+    // node's circle.
+    window.addEventListener('mousemove', _onDragMove);
+    window.addEventListener('mouseup',   _onDragEnd);
+
+    const resetBtn = document.getElementById('tool-reset-layout');
+    if (resetBtn) resetBtn.onclick = resetLayout;
+  }
+
+  // Wipe any user-applied positional offsets. Re-paints so the next
+  // frame restores the Graphviz layout. The "I made it worse" escape
+  // hatch flagged in the v0.2 TODO: positions are accumulated tweaks,
+  // and there is no per-node "reset this one" affordance, so a single
+  // canvas-wide reset is the simplest recovery path.
+  function resetLayout() {
+    state.dragOffsets = Object.create(null);
+    if (state.scene) paint();
   }
 
   function setStatus(title, sub) {
@@ -196,9 +242,13 @@
     // Each new circuit starts from a clean fit: reset zoom + pan so
     // the whole graph fits in the viewport regardless of how the user
     // had panned/zoomed the previous one. The fitView() inside paint()
-    // then sizes the viewBox around the new bounding box.
+    // then sizes the viewBox around the new bounding box. Drop any
+    // node-drag offsets accumulated against the previous circuit:
+    // they're keyed by uuid, so a stray entry from a different DAG
+    // would otherwise re-apply if the same uuid recurred.
     state.zoom = 1;
     state.pan = { x: 0, y: 0 };
+    state.dragOffsets = Object.create(null);
     closeInspector();
     paint();
     refreshEvalTarget();
@@ -211,66 +261,15 @@
       showError('Empty circuit (no nodes returned).');
       return;
     }
-    edgeLayer.innerHTML = '';
     nodeLayer.innerHTML = '';
 
-    const nodesById = Object.fromEntries(state.scene.nodes.map(n => [n.id, n]));
-
-    // Gate types whose children carry a meaningful order: cmp's
-    // lhs/rhs, monus's minuend/subtrahend, and agg : but agg only
-    // when the function is order-sensitive (array_agg, string_agg,
-    // json_agg, …). For sum/count/min/max/avg the result is
-    // independent of the input order, so the digits would be noise.
-    // semimod is omitted: its value/scalar split is implied by gate
-    // type (the scalar always comes from a `value` child). eq has a
-    // single child so positional labels would be redundant.
-    const ORDERED_GATES = new Set(['cmp', 'monus', 'agg']);
-    const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
-    function shouldLabelChildren(parent) {
-      if (!ORDERED_GATES.has(parent.type)) return false;
-      if (parent.type === 'agg') {
-        const fn = (parent.info1_name || '').toLowerCase();
-        return !COMMUTATIVE_AGG.has(fn);
-      }
-      return true;
-    }
-
-    // edges
-    for (const e of state.scene.edges) {
-      const from = nodesById[e.from], to = nodesById[e.to];
-      if (!from || !to) continue;
-      const path = svgEl('path', {
-        class: 'edge',
-        d: `M ${from.x} ${from.y + 22} C ${from.x} ${from.y + 50}, ${to.x} ${to.y - 50}, ${to.x} ${to.y - 22}`,
-        'data-from': e.from, 'data-to': e.to,
-      });
-      edgeLayer.appendChild(path);
-
-      // Position label at the child end of the edge for ordered gates.
-      // We offset 16px away from the child centre, in the direction of
-      // the parent : so the digit sits just outside the child circle
-      // along the incoming edge, regardless of layout angle.
-      if (shouldLabelChildren(from) && e.child_pos != null) {
-        const dx = from.x - to.x;
-        const dy = from.y - to.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const offset = 32;  // r=22 + a small gap so the digit clears the stroke
-        const lx = to.x + (dx / len) * offset;
-        const ly = to.y + (dy / len) * offset;
-        const tag = svgEl('text', {
-          class: 'edge-pos',
-          x: lx, y: ly,
-          'text-anchor': 'middle', 'dominant-baseline': 'central',
-        });
-        tag.textContent = String(e.child_pos);
-        edgeLayer.appendChild(tag);
-      }
-    }
+    paintEdges();
 
     // nodes
     for (const n of state.scene.nodes) {
       const cls = `node-group node--${n.type}` + (n.frontier ? ' is-frontier' : '');
-      const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${n.x},${n.y})` });
+      const p = nodePos(n);
+      const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${p.x},${p.y})` });
       g.appendChild(svgEl('circle', { class: 'node-shape', r: 22 }));
       const label = svgEl('text', { class: 'node-label', y: -2 });
       label.textContent = n.label || n.type[0];
@@ -304,7 +303,15 @@
         g.appendChild(badge);
         g.appendChild(bt);
       }
-      g.addEventListener('click', (ev) => { ev.stopPropagation(); onNodeClick(n); });
+      g.addEventListener('mousedown', (ev) => _onNodeMouseDown(ev, n, g));
+      g.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        // A drag that crossed the movement threshold sets this flag so
+        // the post-mouseup click does not pin / expand the node we just
+        // dropped : the user's intent was to move it, not to click it.
+        if (g._suppressClick) { g._suppressClick = false; return; }
+        onNodeClick(n);
+      });
       g.addEventListener('mouseenter', () => highlightSubtree(n.id, true));
       g.addEventListener('mouseleave', () => { if (!state.pinnedNode) highlightSubtree(n.id, false); });
       nodeLayer.appendChild(g);
@@ -329,8 +336,12 @@
 
   function fitView() {
     if (!state.scene) return;
-    const xs = state.scene.nodes.map(n => n.x);
-    const ys = state.scene.nodes.map(n => n.y);
+    // Bounding box is over the displaced positions: a node the user
+    // dragged outside the original Graphviz envelope still belongs
+    // inside the viewBox, otherwise "Fit" silently clips it.
+    const ps = state.scene.nodes.map(nodePos);
+    const xs = ps.map(p => p.x);
+    const ys = ps.map(p => p.y);
     const minX = Math.min(...xs) - 60, maxX = Math.max(...xs) + 60;
     const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
     const bbW = Math.max(maxX - minX, 200);
@@ -358,6 +369,128 @@
     vbW /= state.zoom;
     vbH /= state.zoom;
     svg.setAttribute('viewBox', `${cx - vbW / 2} ${cy - vbH / 2} ${vbW} ${vbH}`);
+  }
+
+  // ─── edges + position helpers ────────────────────────────────────────
+
+  // The painted (x, y) for a node: layout coordinate plus any drag offset.
+  function nodePos(n) {
+    const o = state.dragOffsets[n.id];
+    return o ? { x: n.x + o.dx, y: n.y + o.dy } : { x: n.x, y: n.y };
+  }
+
+  // Rebuilds every edge path + ordered-child position label from
+  // current nodePos(). Cheap (a few dozen paths typically), and lets
+  // drag-move re-flow incident edges without diffing.
+  function paintEdges() {
+    edgeLayer.innerHTML = '';
+    if (!state.scene) return;
+    const nodesById = Object.fromEntries(state.scene.nodes.map(n => [n.id, n]));
+    for (const e of state.scene.edges) {
+      const from = nodesById[e.from], to = nodesById[e.to];
+      if (!from || !to) continue;
+      const fp = nodePos(from), tp = nodePos(to);
+      const path = svgEl('path', {
+        class: 'edge',
+        d: `M ${fp.x} ${fp.y + 22} C ${fp.x} ${fp.y + 50}, ${tp.x} ${tp.y - 50}, ${tp.x} ${tp.y - 22}`,
+        'data-from': e.from, 'data-to': e.to,
+      });
+      edgeLayer.appendChild(path);
+
+      // Position label at the child end of the edge for ordered gates.
+      // Offset 32px (r=22 + a small gap) away from the child centre
+      // along the edge direction so the digit clears the stroke.
+      if (shouldLabelChildren(from) && e.child_pos != null) {
+        const dx = fp.x - tp.x;
+        const dy = fp.y - tp.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const offset = 32;
+        const lx = tp.x + (dx / len) * offset;
+        const ly = tp.y + (dy / len) * offset;
+        const tag = svgEl('text', {
+          class: 'edge-pos',
+          x: lx, y: ly,
+          'text-anchor': 'middle', 'dominant-baseline': 'central',
+        });
+        tag.textContent = String(e.child_pos);
+        edgeLayer.appendChild(tag);
+      }
+    }
+    // The pinned-subtree edge highlight lives on `.is-active` classes
+    // we just discarded; reapply so a drag-while-pinned doesn't lose
+    // the visual cue.
+    if (state.pinnedNode) {
+      const set = descendants(state.pinnedNode);
+      edgeLayer.querySelectorAll('.edge').forEach(p => {
+        if (set.has(p.dataset.from) && set.has(p.dataset.to)) p.classList.add('is-active');
+      });
+    }
+  }
+
+  // ─── drag-to-move ────────────────────────────────────────────────────
+
+  // Convert client (mouse) coordinates to the SVG's user-space, so a
+  // delta in pixels translates correctly regardless of the current
+  // zoom / pan / aspect ratio. Reading getScreenCTM() each call is
+  // fine: the SVG only resizes on layout changes, not per mousemove.
+  function clientToSvg(clientX, clientY) {
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: clientX, y: clientY };
+    const pt = svg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    const p = pt.matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
+  }
+
+  function _onNodeMouseDown(e, n, g) {
+    if (e.button !== 0) return;
+    // Don't kick off the SVG-level pan handler underneath us.
+    e.stopPropagation();
+    // Fresh interaction: clear any stale click-suppress flag from a
+    // previous drag whose mouseup happened off-element (no click event
+    // delivered to clear it the natural way).
+    g._suppressClick = false;
+    const start = clientToSvg(e.clientX, e.clientY);
+    const off = state.dragOffsets[n.id] || { dx: 0, dy: 0 };
+    _drag = {
+      nodeId: n.id, group: g,
+      sx: start.x, sy: start.y,
+      origDx: off.dx, origDy: off.dy,
+      clientX: e.clientX, clientY: e.clientY,
+      didDrag: false,
+    };
+  }
+
+  function _onDragMove(e) {
+    if (!_drag) return;
+    // Movement threshold (~4px in screen space): below this, we treat
+    // the gesture as a click in waiting and don't perturb the layout.
+    const dpx = Math.hypot(e.clientX - _drag.clientX, e.clientY - _drag.clientY);
+    if (!_drag.didDrag && dpx < 4) return;
+    _drag.didDrag = true;
+    const cur = clientToSvg(e.clientX, e.clientY);
+    state.dragOffsets[_drag.nodeId] = {
+      dx: _drag.origDx + (cur.x - _drag.sx),
+      dy: _drag.origDy + (cur.y - _drag.sy),
+    };
+    // Translate the moved group; meta line, label, and frontier badge
+    // are children of the group, so they follow for free.
+    const node = state.scene && state.scene.nodes.find(x => x.id === _drag.nodeId);
+    if (node && _drag.group) {
+      const p = nodePos(node);
+      _drag.group.setAttribute('transform', `translate(${p.x},${p.y})`);
+    }
+    // Reflow incident edges (cheap full rebuild beats diffing).
+    paintEdges();
+  }
+
+  function _onDragEnd() {
+    if (_drag && _drag.didDrag && _drag.group) {
+      // Eat the click event the browser is about to deliver: the user
+      // dragged the node, they didn't click it.
+      _drag.group._suppressClick = true;
+    }
+    _drag = null;
   }
 
   // ─── interactions ─────────────────────────────────────────────────────

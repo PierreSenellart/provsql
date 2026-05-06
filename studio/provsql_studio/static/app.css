@@ -1603,7 +1603,8 @@ body.mode-where #sidebar {
 #circuit:active { cursor: grabbing; }
 
 /* circuit nodes (svg) */
-.node-group { cursor: pointer; }
+.node-group { cursor: grab; }
+.node-group:active { cursor: grabbing; }
 .node-shape {
   fill: #fff;
   stroke: var(--purple-500);
