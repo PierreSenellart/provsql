@@ -97,6 +97,21 @@
     // node and re-rendered the panel.
     document.getElementById('inspector-close').onclick = clearPin;
 
+    // Fullscreen toggle: a body-level class pins .cv-canvas to the
+    // viewport via CSS; the ResizeObserver already wired up below
+    // catches the new size and reflows the viewBox via fitView. Esc
+    // exits — that's the standard convention for fullscreen and saves
+    // a trip to the toolbar.
+    const fsBtn = document.getElementById('tool-fullscreen');
+    if (fsBtn) {
+      fsBtn.onclick = () => toggleFullscreen();
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && document.body.classList.contains('circuit-fullscreen')) {
+          toggleFullscreen(false);
+        }
+      });
+    }
+
     // Semiring-evaluation strip wiring. The select drives which side
     // control is visible: a provenance-mapping picker for compiled
     // semirings, a method picker for probability, neither for boolexpr
@@ -592,11 +607,9 @@
       // method (if any); hide every other one so the row stays compact.
       const wantedId = (v === 'probability') ? _PROB_ARG_CONTROL[meth.value] : null;
       for (const ctrl of argControls) ctrl.hidden = (ctrl.id !== wantedId);
-      result.textContent = '';  // stale once the input shape changes
-      const timeEl  = document.getElementById('eval-time');
-      const boundEl = document.getElementById('eval-bound');
-      if (timeEl)  timeEl.textContent  = '';
-      if (boundEl) boundEl.textContent = '';
+      // Stale once the input shape changes — wipe result + bound +
+      // time + the clear button.
+      clearEvalResult();
       if (!map.hidden && !mappingsLoaded) loadMappings();
     }
 
@@ -631,7 +644,23 @@
     // its placeholder reads.
     meth.addEventListener('change', syncControls);
     run.addEventListener('click', runEvaluation);
+    const clearBtn = document.getElementById('eval-clear');
+    if (clearBtn) clearBtn.onclick = clearEvalResult;
     syncControls();
+  }
+
+  // Wipe the result chip + bound + time. Useful in fullscreen where a
+  // verbose Why / Formula output otherwise obscures the canvas with no
+  // way to dismiss without re-running on a smaller circuit.
+  function clearEvalResult() {
+    const result = document.getElementById('eval-result');
+    const bound  = document.getElementById('eval-bound');
+    const time   = document.getElementById('eval-time');
+    const clear  = document.getElementById('eval-clear');
+    if (result) { result.textContent = ''; delete result.dataset.kind; }
+    if (bound)  bound.textContent  = '';
+    if (time)   time.textContent   = '';
+    if (clear)  clear.hidden = true;
   }
 
   function refreshEvalTarget() {
@@ -757,7 +786,35 @@
       result.dataset.kind = 'error';
     } finally {
       run.disabled = false;
+      // Whatever happened (ok / error / network fail), there's now
+      // something in the result chip the user may want to dismiss.
+      const clear = document.getElementById('eval-clear');
+      if (clear) clear.hidden = false;
     }
+  }
+
+  function toggleFullscreen(force) {
+    const on = (typeof force === 'boolean')
+      ? force
+      : !document.body.classList.contains('circuit-fullscreen');
+    document.body.classList.toggle('circuit-fullscreen', on);
+    const btn = document.getElementById('tool-fullscreen');
+    if (btn) {
+      btn.setAttribute('aria-pressed', String(on));
+      const icon = btn.querySelector('i');
+      if (icon) {
+        // FA5 names: expand/compress-arrows-alt are the standard
+        // four-way fullscreen pair (the v6 *-from-center / *-to-center
+        // names don't exist in 5.x).
+        icon.classList.toggle('fa-expand-arrows-alt', !on);
+        icon.classList.toggle('fa-compress-arrows-alt', on);
+      }
+    }
+    // The ResizeObserver on the SVG handles the reflow, but its callback
+    // may fire on a microtask boundary; explicit fitView keeps things
+    // tight on browsers where the observer is slow to deliver the first
+    // resize after a layout-changing class flip.
+    if (state.scene) fitView();
   }
 
   // ─── inspector helpers ────────────────────────────────────────────────

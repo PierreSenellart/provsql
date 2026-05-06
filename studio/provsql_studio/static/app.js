@@ -1000,6 +1000,7 @@
         <button class="cv-tool" id="tool-zoom-in" title="Zoom in"><i class="fas fa-search-plus"></i></button>
         <span class="cv-tool__sep"></span>
         <button class="cv-tool cv-tool--toggle" id="tool-show-uuids" aria-pressed="false" title="Show UUIDs"><i class="fas fa-fingerprint"></i></button>
+        <button class="cv-tool cv-tool--toggle" id="tool-fullscreen" aria-pressed="false" title="Fullscreen circuit (Esc to exit)"><i class="fas fa-expand-arrows-alt"></i></button>
         <span id="circuit-title" hidden>Provenance Circuit</span>
         <span class="cv-toolbar__info" id="circuit-sub">Click a UUID cell to render.</span>
       </div>
@@ -1067,6 +1068,7 @@
           <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">
             <i class="fas fa-play"></i> Run
           </button>
+          <button type="button" class="cv-eval__clear" id="eval-clear" title="Clear result" hidden><i class="fas fa-times"></i></button>
         </div>
         <div class="cv-eval__result-row">
           <span class="cv-eval__result" id="eval-result"></span>

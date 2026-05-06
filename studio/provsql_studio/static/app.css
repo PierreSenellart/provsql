@@ -27,6 +27,46 @@ body.mode-circuit #sidebar-body .cv-canvas {
   border: 1px solid var(--border-soft);
   border-radius: 6px;
 }
+/* Fullscreen: pin .cv-canvas + .cv-toolbar to the viewport. We don't
+   hide the underlying page; the canvas's `inset: 0` + opaque background
+   + high z-index covers it instead, so the toggle is a single CSS
+   class flip with no display:none cascade to manage. The
+   ResizeObserver on #circuit catches the new size and reflows the
+   viewBox automatically. */
+body.circuit-fullscreen { overflow: hidden; }
+body.circuit-fullscreen #sidebar-body .cv-canvas {
+  position: fixed; inset: 0;
+  height: auto; min-height: 0;
+  border: none; border-radius: 0;
+  background: #fff;
+  z-index: 9999;
+}
+body.circuit-fullscreen #sidebar-body .cv-toolbar {
+  position: fixed; top: 0.6rem; left: 50%; transform: translateX(-50%);
+  z-index: 10000;
+  margin: 0;
+  background: rgba(255,255,255,0.96);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  box-shadow: 0 4px 18px rgba(42, 24, 80, 0.18);
+}
+/* Eval strip in fullscreen: pinned top-left, where the DAG layout is
+   usually empty (the root sits centre-top, branches fan out below).
+   Top-centre is the toolbar, top-right is the inspector — the corner
+   is the only spare slot near the controls. */
+body.circuit-fullscreen #sidebar-body .cv-eval {
+  position: fixed; top: 0.6rem; left: 0.6rem;
+  z-index: 10000;
+  margin: 0;
+  background: rgba(255,255,255,0.96);
+  border: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-soft);  /* neutralise the dashed top */
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  box-shadow: 0 4px 18px rgba(42, 24, 80, 0.18);
+  max-width: min(420px, calc(100vw - 1.2rem));
+}
 body.mode-circuit #sidebar-body .cv-toolbar {
   display: flex; align-items: center; gap: 0.4rem;
   margin-bottom: 0.25rem;
@@ -1604,3 +1644,16 @@ body.mode-where #sidebar {
 .cv-eval__time:empty,
 .cv-eval__bound:empty { display: none; }
 .cv-eval__bound { font-style: italic; }
+/* Tiny dismiss button next to the result; revealed only after a run.
+   Keeps the result row tidy when no value is shown. */
+.cv-eval__clear {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0 0.3rem;
+  font-size: 0.78rem;
+  line-height: 1;
+  margin-left: 0.2rem;
+}
+.cv-eval__clear:hover { color: var(--terracotta-500); }
