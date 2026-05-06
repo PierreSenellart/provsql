@@ -269,3 +269,43 @@ def test_where_mode_falls_back_when_no_provenance_relation(client):
     names = {c["name"] for c in final["columns"]}
     assert "__prov" not in names
     assert "__wprov" not in names
+
+
+# ──────── auto-prepare guard (regression for psycopg3 prepare_threshold) ────────
+
+
+def test_where_provenance_toggle_survives_auto_prepare(client):
+    """psycopg3 auto-prepares a query after `prepare_threshold` (default 5)
+    executions, freezing whatever planner-hook decisions the FIRST plan
+    made — including the gates produced for `provsql.where_provenance`.
+    The pool's `_configure` disables auto-prepare so SET LOCAL toggles
+    keep reaching the planner. This test runs the same SELECT eleven
+    times (well past the default threshold), alternating wp on/off, and
+    verifies the resulting provsql UUID swings between two values.
+
+    Without the prepare_threshold=None override, every iteration past
+    the 5th would return the wp=on UUID regardless of the toggle."""
+    sql = "SELECT name FROM personnel WHERE name = 'John'"
+
+    def root_uuid(wp):
+        resp = client.post("/api/exec", json={
+            "sql": sql,
+            "mode": "circuit",
+            "where_provenance": wp,
+        })
+        assert resp.status_code == 200, resp.data
+        final = resp.get_json()["blocks"][-1]
+        cols = [c["name"] for c in final["columns"]]
+        return final["rows"][0][cols.index("provsql")]
+
+    on_uuid  = root_uuid(True)
+    off_uuid = root_uuid(False)
+    # Sanity: the rewriter MUST emit different gates for the two wp
+    # settings (where_provenance=on wraps the input gate in project/eq
+    # subgraphs, changing the root UUID).
+    assert on_uuid != off_uuid
+
+    # Now hammer the query through the prepare threshold and back.
+    for _ in range(8):
+        assert root_uuid(True)  == on_uuid
+        assert root_uuid(False) == off_uuid

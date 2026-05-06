@@ -23,6 +23,30 @@ def test_schema_lists_personnel_with_columns(client):
     assert "provsql" not in schemas
 
 
+def test_schema_marks_provenance_tracked_relations(client):
+    """The schema endpoint flags relations carrying a `provsql uuid`
+    column so the front-end can render the PROV pill. personnel is
+    provenance-tracked by the conftest setup; pg_catalog tables are
+    excluded outright, so we add a vanilla untracked table inline to
+    check the negative case too."""
+    setup = (
+        "DROP TABLE IF EXISTS rel_test_plain;"
+        " CREATE TABLE rel_test_plain (a int, b text)"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    try:
+        rows = client.get("/api/schema").get_json()
+        by_qname = {f"{r['schema']}.{r['table']}": r for r in rows}
+        assert by_qname["provsql_test.personnel"]["has_provenance"] is True
+        assert by_qname["provsql_test.rel_test_plain"]["has_provenance"] is False
+    finally:
+        client.post(
+            "/api/exec",
+            json={"sql": "DROP TABLE rel_test_plain", "mode": "circuit"},
+        )
+
+
 def test_personnel_listed(client):
     resp = client.get("/api/relations")
     assert resp.status_code == 200

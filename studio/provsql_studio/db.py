@@ -553,10 +553,12 @@ def evaluate_circuit(
             )
         # `mapping` is a qualified name like "public.species_mapping"; the
         # ::regclass cast both validates the identifier and resolves it
-        # against the search_path. Casting the result to text keeps the
-        # endpoint response trivially JSON-serializable for every semiring.
+        # against the search_path. Each sr_* function has its own natural
+        # return type (int for counting, bool for boolean, text for
+        # formula / why) — we keep that so `_to_jsonable` can pass the
+        # primitive through to JSON without wrapping it as a string.
         fn = sql.Identifier("provsql", _SR_FUNCTIONS[semiring])
-        sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)::text").format(
+        sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)").format(
             fn, sql.Literal(token), sql.Literal(mapping)
         )
         params = ()
