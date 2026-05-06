@@ -109,6 +109,21 @@
   });
   setupHistoryDropdown();
 
+  // Clear-query button in the editor gutter : wipes the textarea so the
+  // user can start over without selecting + deleting the previous text.
+  // The current text is pushed to history first (pushHistory dedupes
+  // consecutive entries, so an already-saved query won't double up) so
+  // an accidental clear is one Alt+↑ away from recovery.
+  document.getElementById('clear-btn')?.addEventListener('click', () => {
+    const ta = document.getElementById('request');
+    if (!ta) return;
+    pushHistory(ta.value);
+    ta.value = '';
+    ta.setSelectionRange(0, 0);
+    ta.focus();
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
   // Cancel button (sibling of the Send button, hidden by default; runQuery
   // unhides it for the duration of an in-flight POST /api/exec). Firing
   // POST /api/cancel/<id> in parallel reaches the server on a different
@@ -883,8 +898,23 @@
           const insert = singleSchema ? r.table : qname;
           // Hide the bookkeeping `provsql` uuid column from the user-visible
           // column list : its presence is what the PROV pill already signals.
-          const cols   = r.columns.filter(c => c.name !== 'provsql')
-                                  .map(c => c.name).join(', ');
+          const visibleCols = r.columns.filter(c => c.name !== 'provsql');
+          // Provenance-tracked tables (not mappings, not views) can have
+          // a provenance mapping created on any of their columns. Render
+          // each column name as a clickable span so the user can prefill
+          // the corresponding `create_provenance_mapping(...)` call.
+          const canMap = r.has_provenance && !r.is_mapping && r.kind === 'table';
+          const cols   = visibleCols.map(c => {
+            if (canMap) {
+              return `<span class="wp-schema__col" data-action="create-mapping"`
+                + ` data-qname="${escapeAttr(qname)}"`
+                + ` data-table="${escapeAttr(r.table)}"`
+                + ` data-col="${escapeAttr(c.name)}"`
+                + ` title="Click to create a provenance mapping on ${escapeAttr(c.name)}"`
+                + `>${escapeHtml(c.name)}</span>`;
+            }
+            return escapeHtml(c.name);
+          }).join(', ');
           // Mapping is the more specific classification: a mapping view
           // typically also carries an implicit provsql column (the planner
           // re-injects it for any view that selects from a provenance-tracked
@@ -936,7 +966,9 @@
             + mapBadge
             + (actions ? `<span class="wp-schema__rel-actions">${actions}</span>` : '');
           if (cols) {
-            html += `<span class="wp-schema__cols">${escapeHtml(cols)}</span>`;
+            // `cols` is already escaped per-column inside the map above
+            // (it's a mix of HTML spans and escaped text), so don't double-escape.
+            html += `<span class="wp-schema__cols">${cols}</span>`;
           }
           html += `</div>`;
         }
@@ -971,18 +1003,28 @@
     }
 
     body.addEventListener('click', (e) => {
-      // Action buttons (add/remove_provenance) replace the textarea with a
-      // complete SELECT call so the user can review and run it directly.
-      // Match these first so they don't fall through to the row-level
-      // qname insert.
-      const action = e.target.closest('.wp-schema__rel-action');
-      if (action && action.dataset.action && action.dataset.qname) {
+      // Action elements (add/remove_provenance row buttons,
+      // create-mapping column spans) replace the textarea with a complete
+      // SELECT call so the user can review and run it directly. Match
+      // these first so they don't fall through to the row-level qname
+      // insert.
+      const action = e.target.closest('[data-action]');
+      if (action) {
+        const a = action.dataset.action;
         const q = action.dataset.qname;
         let sql;
-        if (action.dataset.action === 'add-prov') {
+        if (a === 'add-prov' && q) {
           sql = `SELECT add_provenance('${q}');`;
-        } else if (action.dataset.action === 'remove-prov') {
+        } else if (a === 'remove-prov' && q) {
           sql = `SELECT remove_provenance('${q}');`;
+        } else if (a === 'create-mapping' && q && action.dataset.col) {
+          const col   = action.dataset.col;
+          const table = action.dataset.table || q;
+          // Default mapping name `<table>_<col>_mapping` is a sensible
+          // starting point; the user can tweak it in the textarea before
+          // hitting Send.
+          const mname = `${table}_${col}_mapping`;
+          sql = `SELECT create_provenance_mapping('${mname}', '${q}', '${col}');`;
         }
         if (sql) {
           replaceQuery(sql);

@@ -516,6 +516,19 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   font-size: 0.6rem;
   margin-right: 0.15rem;
 }
+/* Per-column hot-spot inside the column list of a provenance-tracked
+   table : clicking prefills the corresponding `create_provenance_mapping`
+   call. Only the affordance changes (cursor + hover background); the
+   column name itself reads the same as a non-clickable column. */
+.wp-schema__col {
+  cursor: pointer;
+  padding: 0 0.15rem;
+  border-radius: 2px;
+}
+.wp-schema__col:hover {
+  background: var(--purple-100, var(--bg-code));
+  color: var(--purple-700);
+}
 .wp-schema__cols {
   display: block;
   font-family: var(--font-mono);
@@ -523,9 +536,15 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   color: var(--fg-muted);
   margin-top: 0.15rem;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Slim scrollbar so an extra long column list scrolls horizontally
+     instead of being truncated with an ellipsis. Tracks the panel
+     width, kicks in only when the content actually overflows. */
+  scrollbar-width: thin;
 }
+.wp-schema__cols::-webkit-scrollbar { height: 4px; }
+.wp-schema__cols::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 2px; }
 .wp-schema__empty {
   margin: 0.4rem 0;
   font-size: 0.82rem;
@@ -1194,10 +1213,28 @@ body.mode-where #sidebar {
   font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  padding: 0.65rem 0.75rem;
+  padding: 0.65rem 0.5rem;
   border-right: 1px solid var(--border-soft);
-  display: flex; align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
   font-weight: 600;
+}
+.wp-editor__gutter-action {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.wp-editor__gutter-action:hover {
+  color: var(--terracotta-500);
+  border-color: var(--border-soft);
+  background: var(--bg-canvas);
 }
 .wp-editor__panel {
   flex: 1;

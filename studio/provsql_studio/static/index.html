@@ -148,7 +148,14 @@
 
     <form class="wp-form" onsubmit="return runQuery(event)">
       <div class="wp-editor">
-        <span class="wp-editor__gutter">SQL</span>
+        <div class="wp-editor__gutter">
+          <span class="wp-editor__gutter-label">SQL</span>
+          <button type="button" class="wp-editor__gutter-action" id="clear-btn"
+                  title="Clear the query box"
+                  aria-label="Clear the query box">
+            <i class="fas fa-eraser"></i>
+          </button>
+        </div>
         <div class="wp-editor__panel">
           <pre class="wp-editor__hl" id="request-hl" aria-hidden="true"><code></code></pre>
           <textarea class="wp-editor__ta" id="request" rows="3" spellcheck="false" placeholder="SELECT ... FROM your_relation"></textarea>
