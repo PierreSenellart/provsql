@@ -94,6 +94,8 @@ INTERNAL_FUNCTIONS = {
     'union_tstzintervals_monus',
     # Temporal internals
     'update_provenance',
+    # GUC variables (not functions)
+    'aggtoken_text_as_uuid',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
 }
