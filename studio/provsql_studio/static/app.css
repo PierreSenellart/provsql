@@ -105,9 +105,11 @@ body.mode-circuit #sidebar-body .cv-eval__label {
 body.mode-circuit #sidebar-body .cv-eval__form {
   display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
 }
-body.mode-circuit #sidebar-body .cv-eval__result-row {
-  /* Reserve a line so the strip height is stable even before the user
-     hits Run. The result span itself is empty by default. */
+body.mode-circuit #sidebar-body .cv-eval__action-row {
+  /* Run button on its own row, with the result chip + bound + time
+     trailing it. min-height keeps the strip stable when there's no
+     result yet. */
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
   min-height: 1.6em;
 }
 /* Cross-mode: per-row "→ Circuit" button in where-mode results */
@@ -1817,6 +1819,15 @@ body.mode-where #sidebar {
   font-size: 0.75rem;
   color: var(--fg-muted);
   margin-left: 0.2rem;
+}
+/* Inline note next to the mapping dropdown : flags compiled semirings'
+   value-type expectations (boolean / numeric) and shows the active
+   filter for custom semirings. */
+.cv-eval__hint {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  font-style: italic;
 }
 .cv-eval__result {
   font-family: var(--font-mono);

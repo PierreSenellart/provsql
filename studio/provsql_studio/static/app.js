@@ -1343,6 +1343,7 @@
           <select class="cv-eval__mapping" id="eval-mapping" hidden>
             <option value="">(no mappings found)</option>
           </select>
+          <span class="cv-eval__hint" id="eval-mapping-hint" hidden></span>
           <select class="cv-eval__method" id="eval-method" hidden>
             <option value="">(default)</option>
             <option value="independent">independent</option>
@@ -1366,12 +1367,14 @@
                  value="0.8;0.2" placeholder="epsilon;delta"
                  autocomplete="off" spellcheck="false"
                  title="WeightMC parameters: epsilon;delta (defaults: 0.8;0.2)">
+        </div>
+        <div class="cv-eval__action-row">
           <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">
             <i class="fas fa-play"></i> Run
           </button>
-          <button type="button" class="cv-eval__clear" id="eval-clear" title="Clear result" hidden><i class="fas fa-times"></i></button>
-        </div>
-        <div class="cv-eval__result-row">
+          <button type="button" class="cv-eval__clear" id="eval-clear" title="Clear result" aria-label="Clear result" hidden>
+            <i class="fas fa-eraser"></i>
+          </button>
           <span class="cv-eval__result" id="eval-result"></span>
           <span class="cv-eval__bound"  id="eval-bound"></span>
           <span class="cv-eval__time"   id="eval-time"></span>

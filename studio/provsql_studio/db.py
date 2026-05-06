@@ -568,12 +568,20 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
     """Discover tables / views shaped like a provenance mapping :
     `create_provenance_mapping` produces `(value <T>, provenance uuid)`,
     and `sr_*` semirings consume any regclass with that signature.
-    Returns one entry per match, qualified by schema."""
+    Returns one entry per match, qualified by schema. `value_type` is the
+    declared type of the `value` column (e.g. `classification_level`,
+    `text`, `integer`); the eval-strip dropdown filters custom semirings
+    by matching this against the wrapper's `return_type`."""
     out: list[dict] = []
     sql_text = """
-        SELECT n.nspname, c.relname, pg_table_is_visible(c.oid) AS visible
+        SELECT n.nspname, c.relname, pg_table_is_visible(c.oid) AS visible,
+               format_type(va.atttypid, va.atttypmod) AS value_type
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute va
+          ON va.attrelid = c.oid
+         AND va.attname = 'value'
+         AND NOT va.attisdropped
         WHERE c.relkind IN ('r', 'v', 'm')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'provsql')
           AND n.nspname NOT LIKE 'pg_%'
@@ -585,12 +593,6 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
               AND NOT a.attisdropped
               AND a.atttypid = 'uuid'::regtype
           )
-          AND EXISTS (
-            SELECT 1 FROM pg_attribute a
-            WHERE a.attrelid = c.oid
-              AND a.attname = 'value'
-              AND NOT a.attisdropped
-          )
         ORDER BY n.nspname, c.relname
     """
     # `pg_table_is_visible` is true iff the table is reachable through the
@@ -600,12 +602,13 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
     # in `qname` for the API call so the regclass cast is unambiguous.
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(sql_text)
-        for schema, name, visible in cur.fetchall():
+        for schema, name, visible, value_type in cur.fetchall():
             out.append({
                 "schema": schema,
                 "name": name,
                 "qname": f"{schema}.{name}",
                 "display_name": name if visible else f"{schema}.{name}",
+                "value_type": str(value_type),
             })
     return out
 

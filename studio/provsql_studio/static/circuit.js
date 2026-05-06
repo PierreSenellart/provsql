@@ -772,6 +772,11 @@
 
     let mappingsLoaded = false;
     let customsLoaded  = false;
+    // Last loader payloads; kept around so a semiring change can re-render
+    // the mapping dropdown (with the right type-compatibility filter
+    // applied) without an extra round-trip.
+    let _mappings = [];
+    let _customs  = [];
 
     // Both caches are dirty by default, and are flipped to dirty again
     // by `runQuery` after every successful exec. Each loader clears its
@@ -799,7 +804,88 @@
       // Stale once the input shape changes : wipe result + bound +
       // time + the clear button.
       clearEvalResult();
-      if (!map.hidden && (!mappingsLoaded || metadataDirty('mappingsDirty'))) loadMappings();
+      if (!map.hidden && (!mappingsLoaded || metadataDirty('mappingsDirty'))) {
+        loadMappings();
+      } else if (!map.hidden) {
+        // Fresh cache : re-render with the (possibly new) type filter.
+        renderMappingOptions();
+      }
+      updateMappingHint();
+    }
+
+    // Type expected for the mapping's `value` column under the current
+    // semiring choice. Custom semirings expose it as the wrapper's return
+    // type (the convention is `wrapper return type == mapping value type`,
+    // since the typed `zero`/`plus`/`times` inside provenance_evaluate
+    // pin the value column's type). Returns null when no filter applies.
+    function expectedValueType() {
+      const v = sel.value;
+      if (!v.startsWith('custom:')) return null;
+      const qname = v.slice('custom:'.length);
+      const c = _customs.find(x => x.qname === qname);
+      return c ? c.return_type : null;
+    }
+
+    // Render the mapping <option>s from the cached list, filtered by the
+    // current semiring's expected value type. Compiled / probability
+    // semirings get the full list (their kernels accept any value type
+    // polymorphically); custom semirings get only the type-compatible
+    // ones, with a clear empty-state if none match.
+    function renderMappingOptions() {
+      if (!_mappings.length) {
+        map.innerHTML = '<option value="">(no mappings : run create_provenance_mapping)</option>';
+        map.disabled = true;
+        return;
+      }
+      const expect = expectedValueType();
+      const list = expect
+        ? _mappings.filter(m => m.value_type === expect)
+        : _mappings;
+      if (!list.length) {
+        map.innerHTML =
+          `<option value="">(no compatible mappings : value type ≠ ${escapeHtml(expect)})</option>`;
+        map.disabled = true;
+        return;
+      }
+      map.disabled = false;
+      const previousValue = map.value || '';
+      map.innerHTML = list.map(m => {
+        const label = m.display_name || m.qname;
+        const tagged = `${label} (${m.value_type})`;
+        const title = `${m.qname} : value ${m.value_type}`;
+        return `<option value="${escapeHtml(m.qname)}" title="${escapeHtml(title)}">${escapeHtml(tagged)}</option>`;
+      }).join('');
+      if (previousValue && [...map.options].some(o => o.value === previousValue)) {
+        map.value = previousValue;
+      }
+    }
+
+    // Hint text next to the mapping dropdown for compiled semirings whose
+    // value-type expectations can't be enforced statically (the wrapper
+    // signature uses regclass without a type constraint, but the kernel
+    // still implicitly expects values it can interpret as boolean / int).
+    // The user can pick anything but knows what's expected.
+    const _COMPILED_HINTS = {
+      boolean:  'Expects boolean values.',
+      counting: 'Expects numeric values.',
+    };
+    function updateMappingHint() {
+      const hint = document.getElementById('eval-mapping-hint');
+      if (!hint) return;
+      const expect = expectedValueType();
+      if (expect) {
+        hint.textContent = `Filtered to ${expect}`;
+        hint.hidden = map.hidden;
+        return;
+      }
+      const msg = _COMPILED_HINTS[sel.value];
+      if (msg && !map.hidden) {
+        hint.textContent = msg;
+        hint.hidden = false;
+      } else {
+        hint.hidden = true;
+        hint.textContent = '';
+      }
     }
 
     async function loadCustomSemirings() {
@@ -809,6 +895,7 @@
         const resp = await fetch('/api/custom_semirings');
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const list = await resp.json();
+        _customs = list;
         if (!list.length) {
           grp.hidden = true;
           customsLoaded = true;
@@ -823,6 +910,13 @@
         grp.hidden = false;
         customsLoaded = true;
         clearMetadataDirty('customsDirty');
+        // The user may already have a custom semiring selected from a
+        // previous session : now that we know its return_type, refresh
+        // the mapping dropdown's filter and the hint text.
+        if (mappingsLoaded && !map.hidden) {
+          renderMappingOptions();
+          updateMappingHint();
+        }
       } catch (e) {
         // Discovery failure is non-fatal: leave the optgroup hidden so
         // the rest of the strip stays usable. Don't clear the dirty
@@ -833,36 +927,26 @@
 
     async function loadMappings() {
       mappingsLoaded = true;
-      // Preserve the user's current selection across a refresh so a
-      // dirty-driven reload doesn't drop a mapping the user picked
-      // before running an exec.
-      const previousValue = map.value || '';
       try {
         const resp = await fetch('/api/provenance_mappings');
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const list = await resp.json();
-        if (!list.length) {
-          map.innerHTML = '<option value="">(no mappings : run create_provenance_mapping)</option>';
-          clearMetadataDirty('mappingsDirty');
-          return;
-        }
+        _mappings = await resp.json();
+        clearMetadataDirty('mappingsDirty');
         // `display_name` drops the schema when the relation is search_path-
         // visible (resolves unambiguously without qualification), keeping
         // labels short for the common public-schema case. The option's
         // value is still the qualified name so the regclass cast on the
-        // server can never resolve to the wrong schema.
-        map.innerHTML = list.map(m => {
-          const label = m.display_name || m.qname;
-          return `<option value="${escapeHtml(m.qname)}" title="${escapeHtml(m.qname)}">${escapeHtml(label)}</option>`;
-        }).join('');
-        if (previousValue && [...map.options].some(o => o.value === previousValue)) {
-          map.value = previousValue;
-        }
-        clearMetadataDirty('mappingsDirty');
+        // server can never resolve to the wrong schema. Type-tagging plus
+        // optional filter happens in renderMappingOptions, which also
+        // preserves the user's current selection across the refresh.
+        renderMappingOptions();
+        updateMappingHint();
       } catch (e) {
         // Allow a retry on next semiring change.
         mappingsLoaded = false;
+        _mappings = [];
         map.innerHTML = `<option value="">(load failed: ${escapeHtml(e.message)})</option>`;
+        map.disabled = true;
       }
     }
 
