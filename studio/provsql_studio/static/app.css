@@ -1869,6 +1869,10 @@ body.mode-where #sidebar {
   display: block;
   flex-basis: 100%;
 }
+/* Probability results : clickable to flip rounded ↔ full precision. */
+.cv-eval__result[data-flip-kind="prob"] {
+  cursor: pointer;
+}
 .cv-eval__time,
 .cv-eval__bound {
   font-family: var(--font-ui);

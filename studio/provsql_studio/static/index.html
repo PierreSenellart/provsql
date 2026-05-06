@@ -109,6 +109,15 @@
           </span>
         </label>
 
+        <label class="wp-config__row">
+          <span class="wp-config__name">Probability decimals
+            <span class="wp-config__hint">Default rounding for probability results; click a result to flip between rounded and full precision.</span>
+          </span>
+          <span class="wp-config__numwrap">
+            <input type="number" class="wp-config__num" id="cfg-prob-decimals" min="0" max="15" step="1" value="4">
+          </span>
+        </label>
+
         <label class="wp-config__row wp-config__row--col">
           <span class="wp-config__name">search_path
             <span class="wp-config__hint">Comma-separated schemas applied per query. <code>provsql</code> is always appended automatically; leave blank to inherit the database default.</span>

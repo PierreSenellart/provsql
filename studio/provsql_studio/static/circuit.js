@@ -984,8 +984,24 @@
     if (clearBtn) clearBtn.onclick = clearEvalResult;
     const copyBtn = document.getElementById('eval-copy');
     if (copyBtn) copyBtn.onclick = copyEvalResult;
+    result.addEventListener('click', flipEvalResult);
     loadCustomSemirings();
     syncControls();
+  }
+
+  // Toggle the displayed precision of a probability result : the rounded
+  // form is the default (driven by the Config-panel decimals setting);
+  // clicking flips to full double-precision and back. Other kinds have
+  // no second form, so the click is a no-op.
+  function flipEvalResult() {
+    const result = document.getElementById('eval-result');
+    if (!result || result.dataset.flipKind !== 'prob') return;
+    const expanded = result.dataset.expanded === '1';
+    const next = expanded ? result.dataset.rounded : result.dataset.full;
+    if (next == null) return;
+    result.textContent = '= ' + next;
+    result.dataset.expanded = expanded ? '' : '1';
+    result.title = expanded ? 'Click to show full precision' : 'Click to show rounded value';
   }
 
   // Copy the just-evaluated value (or PROV-XML payload) to the clipboard.
@@ -1041,6 +1057,11 @@
       result.textContent = '';
       delete result.dataset.kind;
       delete result.dataset.copy;
+      delete result.dataset.full;
+      delete result.dataset.rounded;
+      delete result.dataset.flipKind;
+      delete result.dataset.expanded;
+      result.title = '';
     }
     if (bound)  bound.textContent  = '';
     if (time)   time.textContent   = '';
@@ -1120,9 +1141,14 @@
     run.disabled = true;
     result.textContent = 'evaluating…';
     result.dataset.kind = 'pending';
-    // Drop the previous run's copy text so the copy button doesn't stay
-    // armed if this run errors before producing a fresh payload.
+    // Drop the previous run's copy + flip state so the copy button doesn't
+    // stay armed and the click-to-flip handler doesn't reach back to a
+    // stale value if this run errors before producing a fresh payload.
     delete result.dataset.copy;
+    delete result.dataset.full;
+    delete result.dataset.rounded;
+    delete result.dataset.flipKind;
+    delete result.dataset.expanded;
     // Round-trip time, captured around the fetch + JSON parse the same
     // way runQuery times /api/exec. Mirrors the "evaluated in N ms"
     // chip in the result-table footer so users can compare evaluation
@@ -1153,12 +1179,22 @@
         result.dataset.copy = xmlText;
         result.title = 'PROV-XML export';
       } else {
-      // Show the value verbatim. Probability gets clipped to 4 decimals
-      // for readability; everything else is already a string from the
-      // server cast or a JSON-native scalar.
+      // Show the value verbatim. Probability gets clipped to the configured
+      // decimal count (default 4) for readability; the full-precision form
+      // stays available via dataset.full and the click-to-flip handler.
+      // Everything else is already a string from the server cast or a
+      // JSON-native scalar.
       let display;
       if (data.kind === 'float' && typeof data.result === 'number') {
-        display = data.result.toFixed(4);
+        const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+          ? window.ProvsqlStudio.getProbDecimals()
+          : 4;
+        const full = String(data.result);
+        display = data.result.toFixed(dec);
+        result.dataset.full = full;
+        result.dataset.rounded = display;
+        result.dataset.flipKind = 'prob';
+        result.title = 'Click to show full precision';
       } else if (data.kind === 'custom') {
         display = formatCustomValue(data.result, data.type_name);
       } else if (data.result == null) {
@@ -1168,10 +1204,17 @@
       }
       result.textContent = '= ' + display;
       result.dataset.kind = 'ok';
-      result.dataset.copy = display;
-      result.title = data.kind === 'custom'
-        ? `${data.function} → ${data.type_name}`
-        : `${data.kind} value`;
+      // Copy always carries the full-precision form for probabilities so
+      // the user can paste an exact value regardless of how it's
+      // displayed; for other kinds, copy and display match.
+      result.dataset.copy = (data.kind === 'float' && typeof data.result === 'number')
+        ? String(data.result)
+        : display;
+      if (data.kind !== 'float') {
+        result.title = data.kind === 'custom'
+          ? `${data.function} → ${data.type_name}`
+          : `${data.kind} value`;
+      }
       }
       // Monte-Carlo: append a Hoeffding-style 95% absolute-error bound
       // ε = sqrt(ln(2/α) / (2N))  (α = 0.05)

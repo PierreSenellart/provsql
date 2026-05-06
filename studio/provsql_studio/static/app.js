@@ -882,7 +882,29 @@
         if (e.key === 'Enter') { e.preventDefault(); sp.blur(); }
       });
     }
+
+    // Probability-display decimals : pure UI setting (no server roundtrip),
+    // persisted in localStorage so the choice survives reloads. The eval
+    // strip's float branch reads getProbDecimals() at render time.
+    const probDec = document.getElementById('cfg-prob-decimals');
+    if (probDec) {
+      probDec.value = String(getProbDecimals());
+      probDec.addEventListener('change', () => {
+        const n = Math.max(0, Math.min(15, parseInt(probDec.value || '4', 10)));
+        probDec.value = String(n);
+        try { localStorage.setItem('ps.probDecimals', String(n)); } catch {}
+      });
+    }
   }
+
+  // Default rounding for probability results. Configurable via the Config
+  // panel's "Probability decimals" field; falls back to 4 when unset.
+  function getProbDecimals() {
+    const raw = (() => { try { return localStorage.getItem('ps.probDecimals'); } catch { return null; } })();
+    const n = parseInt(raw || '', 10);
+    return Number.isFinite(n) && n >= 0 && n <= 15 ? n : 4;
+  }
+  window.ProvsqlStudio.getProbDecimals = getProbDecimals;
 
   // Schema browser: top-nav button opening a popover that lists every
   // SELECT-able relation grouped by schema, with a search box and click
