@@ -411,7 +411,10 @@
     inspectorEl.classList.add('is-open');
     inspectorTitle.textContent = TYPE_SUMMARY[node.type] || `Gate (${node.type})`;
     let html = '<dl>';
-    html += `<dt>type</dt><dd>${escapeHtml(node.type)}</dd>`;
+    // The title already says which gate type this is, so we drop the
+    // separate `type` row from the body. depth stays — it tells the
+    // user how far this gate is from the root, useful when navigating
+    // a deep BFS.
     // Match the in-circuit display: abbreviated UUID by default, full
     // value only when the "Show UUIDs" toggle is pressed. The title
     // attribute keeps the full string available on hover for the
@@ -419,17 +422,36 @@
     const uuidText = state.showUuids ? node.id : shortUuid(node.id);
     html += `<dt>uuid</dt><dd title="${escapeHtml(node.id)}">${escapeHtml(uuidText)}</dd>`;
     html += `<dt>depth</dt><dd>${node.depth}</dd>`;
-    if (node.info1 != null) html += `<dt>info1</dt><dd>${escapeHtml(node.info1)}</dd>`;
-    if (node.info2 != null) html += `<dt>info2</dt><dd>${escapeHtml(node.info2)}</dd>`;
+    // info1 / info2 are gate-type-specific integers in the raw schema
+    // (see provsql.set_infos doc). Translate to a human-readable form
+    // wherever we can: aggregate function name (info1) + result type
+    // (info2) for `agg`, comparison operator name for `cmp`, the
+    // multivalued variable's actual value for `mulinput`, attribute
+    // indices for `eq`. Anything else falls back to raw `infoN`.
+    for (const fact of _gateInfos(node)) {
+      html += `<dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd>`;
+    }
     // `extra` is set by project (input→output column mapping array),
-    // value (scalar), and agg (computed scalar). Label it by gate type
-    // so the meaning is obvious without a docs lookup.
+    // value (scalar), and agg (computed scalar). Project's mapping is
+    // PG's text-encoded array-of-pairs ({{1,1},{2,3}}); pretty-print
+    // it as "input col → output col" lines so the user doesn't have to
+    // parse the punctuation.
     if (node.extra != null && node.extra !== '') {
-      const label = node.type === 'project' ? 'mapping'
-                  : node.type === 'value'   ? 'value'
-                  : node.type === 'agg'     ? 'value'
-                  : 'extra';
-      html += `<dt>${label}</dt><dd>${escapeHtml(node.extra)}</dd>`;
+      if (node.type === 'project') {
+        const pairs = _parseProjectMapping(node.extra);
+        if (pairs.length) {
+          const items = pairs.map(([a, b]) =>
+            `<li>input col ${escapeHtml(a)} → output col ${escapeHtml(b)}</li>`
+          ).join('');
+          html += `<dt>mapping</dt><dd><ul class="cv-inspector__mapping">${items}</ul></dd>`;
+        } else {
+          html += `<dt>mapping</dt><dd>${escapeHtml(node.extra)}</dd>`;
+        }
+      } else if (node.type === 'value' || node.type === 'agg') {
+        html += `<dt>value</dt><dd>${escapeHtml(node.extra)}</dd>`;
+      } else {
+        html += `<dt>extra</dt><dd>${escapeHtml(node.extra)}</dd>`;
+      }
     }
     html += '</dl>';
     if (node.type === 'input' || node.type === 'mulinput') {
@@ -736,6 +758,66 @@
     } finally {
       run.disabled = false;
     }
+  }
+
+  // ─── inspector helpers ────────────────────────────────────────────────
+
+  // Translate a node's gate-type-specific (info1, info2) pair into
+  // human-readable facts. Always includes the children count (a useful
+  // structural property: which times has 4 inputs? which agg has 12?).
+  function _gateInfos(node) {
+    const out = [];
+    const childCount = (state.scene && state.scene.edges)
+      ? state.scene.edges.filter(e => e.from === node.id).length
+      : 0;
+    if (childCount > 0) out.push({ label: 'children', value: String(childCount) });
+
+    const t = node.type;
+    if (t === 'agg') {
+      // info1 = aggregate function oid → proname; info2 = result type oid → typname.
+      if (node.info1_name) out.push({ label: 'function',    value: node.info1_name });
+      else if (node.info1 != null) out.push({ label: 'function oid', value: node.info1 });
+      if (node.info2_name) out.push({ label: 'result type', value: node.info2_name });
+      else if (node.info2 != null) out.push({ label: 'result type oid', value: node.info2 });
+    } else if (t === 'cmp') {
+      // info1 = comparison operator oid → oprname.
+      if (node.info1_name) out.push({ label: 'operator', value: node.info1_name });
+      else if (node.info1 != null) out.push({ label: 'operator oid', value: node.info1 });
+    } else if (t === 'eq') {
+      // info1 / info2 are attribute indices for the two equijoin sides.
+      if (node.info1 != null) out.push({ label: 'left attr',  value: node.info1 });
+      if (node.info2 != null) out.push({ label: 'right attr', value: node.info2 });
+    } else if (t === 'mulinput') {
+      // info1 = the multivalued variable's value.
+      if (node.info1 != null) out.push({ label: 'value', value: node.info1 });
+    } else if (t === 'input' || t === 'update') {
+      // info1 = source relation id (already shown as `tbl X` under the
+      // node), info2 = column count. Surface column count here so the
+      // inspector adds something the canvas doesn't.
+      if (node.info1 != null) out.push({ label: 'relation id', value: node.info1 });
+      if (node.info2 != null) out.push({ label: 'columns',     value: node.info2 });
+    } else {
+      // No type-specific translation — fall back to raw fields if set.
+      if (node.info1 != null) out.push({ label: 'info1', value: node.info1 });
+      if (node.info2 != null) out.push({ label: 'info2', value: node.info2 });
+    }
+    return out;
+  }
+
+  // Parse PG's text-encoded ARRAY of two-element ARRAYs ({{1,1},{2,3}}…)
+  // into a list of [input, output] pairs. Returns [] on anything we
+  // don't recognise so the caller can fall back to the raw text.
+  function _parseProjectMapping(s) {
+    if (!s) return [];
+    const m = String(s).match(/^\{(.*)\}$/);
+    if (!m) return [];
+    const inner = m[1];
+    const out = [];
+    // Match every {a,b} group; both elements are integers in practice.
+    const re = /\{\s*(-?\d+)\s*,\s*(-?\d+)\s*\}/g;
+    let g;
+    while ((g = re.exec(inner)) !== null) out.push([g[1], g[2]]);
+    return out;
   }
 
   // ─── helpers ──────────────────────────────────────────────────────────

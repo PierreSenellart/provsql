@@ -1550,6 +1550,11 @@ body.mode-where #sidebar {
 .cv-inspector__body dt { color: var(--fg-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .cv-inspector__body dd { margin: 0; font-family: var(--font-mono); font-size: 0.78rem; word-break: break-all; color: var(--purple-700); }
 .cv-inspector__body p { margin: 0.6rem 0 0; line-height: 1.5; font-size: 0.82rem; }
+.cv-inspector__mapping {
+  margin: 0; padding: 0; list-style: none;
+  font-family: var(--font-mono); font-size: 0.78rem;
+}
+.cv-inspector__mapping li { margin: 0.05rem 0; }
 
 /* Semiring-evaluation strip. The selects collapse / expand depending on
    the chosen semiring (boolexpr → none; probability → method; rest →

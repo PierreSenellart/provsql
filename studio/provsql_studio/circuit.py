@@ -149,13 +149,16 @@ def _fetch_subgraph(pool: ConnectionPool, root: str, depth: int) -> list[dict]:
         "            WHEN cs.gate_type = 'cmp' THEN "
         "              (SELECT oprname::text FROM pg_operator WHERE oid = cs.info1::int) "
         "            ELSE NULL END AS info1_name, "
+        "       CASE WHEN cs.gate_type = 'agg' THEN "
+        "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int) "
+        "            ELSE NULL END AS info2_name, "
         "       cs.depth "
         "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
     )
     out: list[dict] = []
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(sql, (root, depth))
-        for node, parent, child_pos, gate_type, info1, info2, extra, info1_name, d in cur.fetchall():
+        for node, parent, child_pos, gate_type, info1, info2, extra, info1_name, info2_name, d in cur.fetchall():
             out.append({
                 "node": node,
                 "parent": parent,
@@ -165,6 +168,7 @@ def _fetch_subgraph(pool: ConnectionPool, root: str, depth: int) -> list[dict]:
                 "info2": info2,
                 "extra": extra,
                 "info1_name": info1_name,
+                "info2_name": info2_name,
                 "depth": d,
             })
     return out
@@ -200,6 +204,7 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             "info1":     r["info1"],
             "info2":     r["info2"],
             "info1_name": r["info1_name"],
+            "info2_name": r["info2_name"],
             "extra":     r["extra"],
             "depth":     r["depth"],
             "x":         pos.get(r["node"], (0, 0))[0],
