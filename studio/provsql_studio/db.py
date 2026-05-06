@@ -743,6 +743,19 @@ def evaluate_circuit(
             sql.Literal(mapping),
         )
         params = ()
+    elif semiring == "prov-xml":
+        # Export the circuit as ProvenanceXML. The mapping is optional :
+        # without it, leaves carry bare UUIDs; with it, leaves are
+        # labelled by the mapping's `value` column.
+        if mapping:
+            sql_stmt = sql.SQL(
+                "SELECT provsql.to_provxml({}::uuid, {}::regclass)"
+            ).format(sql.Literal(token), sql.Literal(mapping))
+        else:
+            sql_stmt = sql.SQL(
+                "SELECT provsql.to_provxml({}::uuid)"
+            ).format(sql.Literal(token))
+        params = ()
     elif semiring in _SR_FUNCTIONS:
         if not mapping:
             raise ValueError(
@@ -804,6 +817,8 @@ def _result_kind(semiring: str) -> str:
         return "bool"
     if semiring == "custom":
         return "custom"
+    if semiring == "prov-xml":
+        return "xml"
     # boolexpr / formula / why all return text
     return "text"
 

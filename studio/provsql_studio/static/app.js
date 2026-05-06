@@ -1338,6 +1338,7 @@
             </optgroup>
             <optgroup label="Other">
               <option value="probability">Probability</option>
+              <option value="prov-xml">PROV-XML export</option>
             </optgroup>
           </select>
           <select class="cv-eval__mapping" id="eval-mapping" hidden>

@@ -1860,6 +1860,15 @@ body.mode-where #sidebar {
 .cv-eval__result[data-kind="ok"]      { background: rgba(125, 65, 153, 0.12); color: var(--purple-900); }
 .cv-eval__result[data-kind="pending"] { background: rgba(184, 144, 30, 0.15); color: var(--gold-700); font-style: italic; }
 .cv-eval__result[data-kind="error"]   { background: rgba(196, 102, 74, 0.12); color: var(--terracotta-500); font-weight: 500; }
+/* PROV-XML export: drop the chip background and let the inner <pre>
+   carry its own monospace styling. The result span becomes a block-level
+   container so the pre wraps to its own line. */
+.cv-eval__result[data-kind="xml"] {
+  background: transparent;
+  padding: 0;
+  display: block;
+  flex-basis: 100%;
+}
 .cv-eval__time,
 .cv-eval__bound {
   font-family: var(--font-ui);

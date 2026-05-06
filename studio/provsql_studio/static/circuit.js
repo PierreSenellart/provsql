@@ -719,10 +719,16 @@
 
   // Semirings that take a provenance mapping (regclass with `value` + `provenance`).
   // Custom-semiring options (encoded as `custom:<schema>.<name>`) also need a
-  // mapping; see `needsMapping`.
-  const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'formula']);
+  // mapping; see `needsMapping`. `prov-xml` accepts an optional mapping
+  // (used to label leaves) so the dropdown shows for it too, but emptying
+  // the selection is allowed : see `_OPTIONAL_MAPPING`.
+  const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'formula', 'prov-xml']);
+  const _OPTIONAL_MAPPING = new Set(['prov-xml']);
   function needsMapping(v) {
     return _SR_NEEDS_MAPPING.has(v) || v.startsWith('custom:');
+  }
+  function mappingOptional(v) {
+    return _OPTIONAL_MAPPING.has(v);
   }
 
   // PG type names psycopg surfaces as either JS numbers (smallints, ints,
@@ -832,9 +838,12 @@
     // polymorphically); custom semirings get only the type-compatible
     // ones, with a clear empty-state if none match.
     function renderMappingOptions() {
+      const optional = mappingOptional(sel.value);
       if (!_mappings.length) {
-        map.innerHTML = '<option value="">(no mappings : run create_provenance_mapping)</option>';
-        map.disabled = true;
+        map.innerHTML = optional
+          ? '<option value="">(no mapping : unlabeled tokens)</option>'
+          : '<option value="">(no mappings : run create_provenance_mapping)</option>';
+        map.disabled = !optional;
         return;
       }
       const expect = expectedValueType();
@@ -849,7 +858,12 @@
       }
       map.disabled = false;
       const previousValue = map.value || '';
-      map.innerHTML = list.map(m => {
+      // Prov-XML accepts an optional mapping : prepend a "(no mapping)"
+      // sentinel so the user can explicitly export without leaf labels.
+      const head = optional
+        ? '<option value="">(no mapping : unlabeled tokens)</option>'
+        : '';
+      map.innerHTML = head + list.map(m => {
         const label = m.display_name || m.qname;
         const tagged = `${label} (${m.value_type})`;
         const title = `${m.qname} : value ${m.value_type}`;
@@ -1033,12 +1047,12 @@
     if (isCustom) body.function = selValue.slice('custom:'.length);
     if (needsMapping(selValue)) {
       const m = map.value || '';
-      if (!m) {
+      if (!m && !mappingOptional(selValue)) {
         result.textContent = 'pick a provenance mapping';
         result.dataset.kind = 'error';
         return;
       }
-      body.mapping = m;
+      if (m) body.mapping = m;
     }
     if (semiring === 'probability') {
       body.method = meth.value || '';
@@ -1077,6 +1091,16 @@
         result.dataset.kind = 'error';
         return;
       }
+      // PROV-XML is a multi-line export, not a scalar : render it inside
+      // a scrollable <pre> instead of the inline `= value` chip. Same
+      // styling as multi-line text cells in the result table.
+      if (data.kind === 'xml') {
+        const xmlText = data.result == null ? '' : String(data.result);
+        result.innerHTML =
+          `<pre class="wp-cell-pre">${escapeHtml(xmlText)}</pre>`;
+        result.dataset.kind = 'xml';
+        result.title = 'PROV-XML export';
+      } else {
       // Show the value verbatim. Probability gets clipped to 4 decimals
       // for readability; everything else is already a string from the
       // server cast or a JSON-native scalar.
@@ -1095,6 +1119,7 @@
       result.title = data.kind === 'custom'
         ? `${data.function} → ${data.type_name}`
         : `${data.kind} value`;
+      }
       // Monte-Carlo: append a Hoeffding-style 95% absolute-error bound
       // ε = sqrt(ln(2/α) / (2N))  (α = 0.05)
       // The bound is distribution-free and only depends on the sample
