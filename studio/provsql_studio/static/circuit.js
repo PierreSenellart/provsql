@@ -90,7 +90,12 @@
         }
       }
     };
-    document.getElementById('inspector-close').onclick = closeInspector;
+    // Close = clear pin: dismiss the inspector AND drop state.pinnedNode
+    // so subsequent paint() / Show-UUIDs toggles don't reopen it. The X
+    // button used to call closeInspector directly (CSS-only hide), which
+    // left pinnedNode set; the show-uuids handler then saw a "pinned"
+    // node and re-rendered the panel.
+    document.getElementById('inspector-close').onclick = clearPin;
 
     // Semiring-evaluation strip wiring. The select drives which side
     // control is visible: a provenance-mapping picker for compiled
