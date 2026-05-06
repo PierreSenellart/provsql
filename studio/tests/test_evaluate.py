@@ -95,6 +95,20 @@ def test_evaluate_formula_with_mapping(client, mapping):
     assert "John" in data["result"]
 
 
+def test_evaluate_which_with_mapping(client, mapping):
+    """sr_which returns the lineage as the set of contributing labels."""
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "which",
+        "mapping": f"provsql_test.{mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert "John" in data["result"]
+
+
 @pytest.fixture()
 def counting_mapping(client):
     """Counting / boolean semirings need a typed mapping (the value
@@ -279,6 +293,7 @@ def test_custom_semirings_excludes_sr_formula(client):
     assert "provsql.sr_formula" not in qnames
     assert "provsql.sr_counting" not in qnames
     assert "provsql.sr_why" not in qnames
+    assert "provsql.sr_which" not in qnames
     assert "provsql.sr_boolean" not in qnames
 
 

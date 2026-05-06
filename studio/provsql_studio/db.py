@@ -646,6 +646,7 @@ _SR_FUNCTIONS = {
     "formula":  "sr_formula",
     "counting": "sr_counting",
     "why":      "sr_why",
+    "which":    "sr_which",
     "boolean":  "sr_boolean",
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).

@@ -1424,6 +1424,7 @@
               <option value="boolean">Boolean</option>
               <option value="counting">Counting</option>
               <option value="why">Why-provenance</option>
+              <option value="which">Which-provenance (lineage)</option>
               <option value="formula">Formula</option>
             </optgroup>
             <optgroup label="Custom Semirings" id="eval-custom-group" hidden>
