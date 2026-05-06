@@ -1650,13 +1650,17 @@ async function runQuery(ev) {
   body.innerHTML = `<tr><td style="opacity:.6; text-align:center; padding:1rem">Running…</td></tr>`;
   count.textContent = '…';
   time.textContent = '…';
-  // Clear the previous run's truncation hint so it doesn't linger next
-  // to the new query's "running…" placeholder.
+  // Clear the previous run's truncation hint and notice / error banners
+  // so they don't linger next to the new query's "running…" placeholder.
+  // renderError still writes into result-banners on a failed POST, so
+  // wiping here is safe : the success path repopulates them on render.
   const truncMark = document.getElementById('result-truncated');
   if (truncMark) {
     truncMark.textContent = '';
     truncMark.hidden = true;
   }
+  const banners = document.getElementById('result-banners');
+  if (banners) banners.innerHTML = '';
   const t0 = performance.now();
 
   // Wipe any previous circuit so it doesn't linger next to the new query's
