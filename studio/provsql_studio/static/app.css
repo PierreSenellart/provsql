@@ -1020,30 +1020,11 @@ body.mode-where #sidebar {
   box-shadow: inset 0 0 0 2px var(--purple-900);
   transition: background 0.12s, color 0.12s;
 }
-.wp-table td.is-source .wp-pill { filter: brightness(0.85) saturate(1.1); }
-
 /* hovered result cell mirror */
 .wp-table--result td.is-hover {
   background: var(--gold-500) !important;
   color: var(--purple-900) !important;
 }
-
-/* ───────── classification pills ───────── */
-.wp-pill {
-  display: inline-block;
-  font-family: var(--font-ui);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 0.15rem 0.5rem;
-  border-radius: 3px;
-  font-weight: 500;
-}
-.wp-pill--unclassified { background: #DCEEDC; color: #2F6B3E; }
-.wp-pill--restricted   { background: #F4E6C8; color: #7A5722; }
-.wp-pill--confidential { background: #F4D8C8; color: #8A4424; }
-.wp-pill--secret       { background: #E0CCEE; color: #4A2A6A; }
-.wp-pill--top_secret   { background: #2A1850; color: #E8B84B; }
 
 /* ───────── buttons ───────── */
 .wp-btn {

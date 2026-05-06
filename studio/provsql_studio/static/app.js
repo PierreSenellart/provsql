@@ -336,7 +336,7 @@
                   ${visible.map(({ c, i }) => {
                     const id = `${rel.regclass}:${r.uuid}:${i+1}`;
                     const cls = isRightAlignedType(c.type_name) ? ' is-right' : '';
-                    return `<td id="${escapeAttr(id)}" class="${cls.trim()}">${formatCell(r.values[i], c.name, c.type_name)}</td>`;
+                    return `<td id="${escapeAttr(id)}" class="${cls.trim()}">${formatCell(r.values[i], c.type_name)}</td>`;
                   }).join('')}
                 </tr>
               `).join('')}
@@ -413,11 +413,19 @@
     if (!arr.length) return;
     const ta = document.getElementById('request');
     if (_historyCursor === -1) _draft = ta.value;
-    const next = _historyCursor + direction;
+    const valueAt = (i) => i === -1 ? (_draft || '') : arr[i];
+    const current = ta.value;
+    // Skip entries identical to what's already in the textarea so Alt+↑/↓
+    // always produces a visible change (history can contain consecutive
+    // duplicates separated by other queries, and the draft can match arr[0]).
+    let next = _historyCursor + direction;
+    while (next >= -1 && next < arr.length && valueAt(next) === current) {
+      next += direction;
+    }
     if (next < -1 || next >= arr.length) return;
     _historyCursor = next;
     _historyDriving = true;
-    ta.value = next === -1 ? (_draft || '') : arr[next];
+    ta.value = valueAt(next);
     ta.dispatchEvent(new Event('input'));  // refresh syntax highlight
     _historyDriving = false;
   }
@@ -1161,12 +1169,7 @@
     return escapeHtml(s).replace(/"/g, '&quot;');
   }
 
-  function formatCell(v, columnName, typeName) {
-    // Classification pill rendering (well-known column name).
-    if (columnName === 'classification' && typeof v === 'string') {
-      const safe = v.replace(/[^a-zA-Z0-9_]/g, '');
-      return `<span class="wp-pill wp-pill--${safe}">${escapeHtml(v)}</span>`;
-    }
+  function formatCell(v, typeName) {
     // UUID-typed columns render as a short/full pair so the circuit
     // panel's "Show UUIDs" toggle can flip between abbreviated and full
     // display via a body-level CSS class : no re-render needed. The
@@ -1581,7 +1584,7 @@ async function runQuery(ev) {
             if (friendly) displayValue = friendly;
           }
           if (env.isRightAlignedType(typeName)) extraCls += ' is-right';
-          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(displayValue, col.name, col.type_name)}</td>`;
+          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(displayValue, col.type_name)}</td>`;
         }).join('');
         const jumpBtn = (isWhere && wrapped && provIdx >= 0 && r[provIdx])
           ? `<td class="wp-result__cell--actions"><button class="wp-btn wp-btn--mini" type="button" `
