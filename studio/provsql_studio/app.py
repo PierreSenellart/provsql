@@ -386,7 +386,8 @@ def create_app(
                 "error": "circuit too large",
                 "node_count": e.node_count,
                 "cap": e.cap,
-                "hint": "reduce depth or expand interactively",
+                "depth": e.depth,
+                "hint": "reduce depth or click into a specific node",
             }), 413
         except psycopg.errors.UndefinedFunction:
             # The current database carries an older provsql that predates

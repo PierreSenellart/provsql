@@ -87,10 +87,11 @@ _CMP_GLYPH = {
 
 
 class CircuitTooLarge(Exception):
-    def __init__(self, node_count: int, cap: int):
+    def __init__(self, node_count: int, cap: int, depth: int):
         super().__init__(f"circuit too large: {node_count} > {cap}")
         self.node_count = node_count
         self.cap = cap
+        self.depth = depth
 
 
 def get_circuit(
@@ -119,7 +120,9 @@ def get_circuit(
     # row count.
     unique_nodes = {r["node"] for r in raw}
     if len(unique_nodes) > max_nodes:
-        raise CircuitTooLarge(node_count=len(unique_nodes), cap=max_nodes)
+        raise CircuitTooLarge(
+            node_count=len(unique_nodes), cap=max_nodes, depth=depth,
+        )
 
     # A depth-`depth` node is a frontier iff at least one node in `overshot`
     # at depth+1 has it as a parent.

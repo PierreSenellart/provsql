@@ -85,6 +85,32 @@ def test_circuit_invalid_uuid_returns_400(client):
     assert resp.status_code == 400
 
 
+def test_circuit_too_large_returns_actionable_413(test_dsn, tmp_path, monkeypatch):
+    """When the rendered subgraph exceeds max_circuit_nodes, the route must
+    answer 413 with the structured payload the front-end uses to surface
+    a "Render at depth N-1" button: node_count, cap, depth, hint. The
+    'Paris' DISTINCT circuit has 4 nodes (3 input gates + 1 plus root);
+    capping at 2 forces the path."""
+    from provsql_studio.app import create_app
+    monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "studio_cfg"))
+    app = create_app(
+        dsn=f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        max_circuit_nodes=2,
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    root = _circuit_root_for_distinct_city(test_dsn, "Paris")
+    resp = client.get(f"/api/circuit/{root}")
+    assert resp.status_code == 413
+    body = resp.get_json()
+    assert body["error"] == "circuit too large"
+    assert body["cap"] == 2
+    assert body["node_count"] > 2
+    # depth lets the front-end compute "render at depth N-1" without
+    # knowing the server's MAX_CIRCUIT_DEPTH default.
+    assert isinstance(body["depth"], int) and body["depth"] >= 1
+
+
 # ──────── frontier + expand ────────
 
 

@@ -1316,18 +1316,30 @@
     }
   }
 
-  async function loadCircuit(uuid) {
+  async function loadCircuit(uuid, opts) {
     await ensureCircuitLib();
     window.ProvsqlCircuit.showLoading();
+    const depthArg = opts && Number.isFinite(opts.depth) ? opts.depth : null;
+    const url = `/api/circuit/${encodeURIComponent(uuid)}`
+              + (depthArg != null ? `?depth=${depthArg}` : '');
     let resp;
     try {
-      resp = await fetch(`/api/circuit/${encodeURIComponent(uuid)}`);
+      resp = await fetch(url);
     } catch (e) {
       window.ProvsqlCircuit.showError(`Network error: ${e.message}`);
       return;
     }
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
+      // 413: structured "circuit too large" payload. Render the
+      // actionable banner with a "Render at depth N-1" retry button
+      // that re-fires loadCircuit at a lower depth.
+      if (resp.status === 413 && err && err.error === 'circuit too large') {
+        window.ProvsqlCircuit.showTooLarge(err, (lowerDepth) => {
+          loadCircuit(uuid, { depth: lowerDepth });
+        });
+        return;
+      }
       window.ProvsqlCircuit.showError(err.error || `HTTP ${resp.status}`);
       return;
     }
@@ -1363,6 +1375,7 @@
         <span class="cv-toolbar__info" id="circuit-sub">Click a UUID cell to render.</span>
       </div>
       <div class="cv-canvas" id="canvas">
+        <div class="cv-banner" id="cv-banner" hidden></div>
         <svg id="circuit" preserveAspectRatio="xMidYMid meet">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">

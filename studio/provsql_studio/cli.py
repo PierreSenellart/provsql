@@ -53,8 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--max-circuit-nodes",
         type=int,
-        default=500,
-        help="Node-count cap for /api/circuit responses (default 500).",
+        default=200,
+        help="Node-count cap for /api/circuit responses (default 200). "
+             "When a render exceeds the cap the front-end surfaces a "
+             "structured banner with a 'Render at depth N-1' button and "
+             "a hint to drill into a specific node, so the cap should be "
+             "low enough that wide circuits hit the actionable path "
+             "rather than silently rendering an unreadable hairball.",
     )
     p.add_argument(
         "--max-sidebar-rows",

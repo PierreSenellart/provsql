@@ -41,7 +41,7 @@
     // new circuit always starts from the Graphviz layout.
     dragOffsets: Object.create(null),
   };
-  let svg = null, edgeLayer = null, nodeLayer = null;
+  let svg = null, edgeLayer = null, nodeLayer = null, bannerEl = null;
   let titleEl = null, subEl = null;
   let inspectorEl = null, inspectorTitle = null, inspectorBody = null;
   // Active node-drag session, populated on mousedown over a .node-group
@@ -74,6 +74,7 @@
     setStatus,            // (title, sub): update header copy
     showLoading,          // (): placeholder while fetching
     showError,            // (msg)
+    showTooLarge,         // (payload, onRetry): structured 413 banner with retry button
     clearScene,           // (): wipe canvas, inspector, eval result, and target
   };
 
@@ -83,6 +84,7 @@
     svg = document.getElementById('circuit');
     edgeLayer = document.getElementById('circuit-edges');
     nodeLayer = document.getElementById('circuit-nodes');
+    bannerEl = document.getElementById('cv-banner');
     titleEl = document.getElementById('circuit-title');
     subEl = document.getElementById('circuit-sub');
     inspectorEl = document.getElementById('inspector');
@@ -215,7 +217,16 @@
     if (subEl && sub != null)     subEl.textContent = sub;
   }
 
+  function hideBanner() {
+    if (!bannerEl) bannerEl = document.getElementById('cv-banner');
+    if (bannerEl) {
+      bannerEl.hidden = true;
+      bannerEl.innerHTML = '';
+    }
+  }
+
   function showLoading() {
+    hideBanner();
     if (edgeLayer) edgeLayer.innerHTML = '';
     if (nodeLayer) {
       nodeLayer.innerHTML =
@@ -227,6 +238,7 @@
   }
 
   function clearScene() {
+    hideBanner();
     if (edgeLayer) edgeLayer.innerHTML = '';
     if (nodeLayer) nodeLayer.innerHTML = '';
     state.scene = null;
@@ -239,6 +251,7 @@
   }
 
   function showError(msg) {
+    hideBanner();
     if (edgeLayer) edgeLayer.innerHTML = '';
     if (nodeLayer) {
       nodeLayer.innerHTML =
@@ -249,7 +262,48 @@
     setStatus('Provenance Circuit', 'Error.');
   }
 
+  // Structured "circuit too large" banner. payload comes straight from
+  // the 413 body: {node_count, cap, depth, hint}. onRetry receives the
+  // suggested lower depth (depth - 1) and re-fires the fetch; we omit
+  // the retry button entirely when depth <= 1 since there's no lower
+  // bound to drop to.
+  function showTooLarge(payload, onRetry) {
+    if (!bannerEl) bannerEl = document.getElementById('cv-banner');
+    if (edgeLayer) edgeLayer.innerHTML = '';
+    if (nodeLayer) nodeLayer.innerHTML = '';
+    if (!bannerEl) return;
+    const count = payload && payload.node_count != null ? payload.node_count : 0;
+    const cap   = payload && payload.cap != null ? payload.cap : 0;
+    const depth = payload && payload.depth != null ? payload.depth : null;
+    const lower = depth != null && depth > 1 ? depth - 1 : null;
+
+    let html = '<div class="cv-banner__title">Circuit too large to render</div>';
+    html += '<p class="cv-banner__body">This subgraph has <strong>'
+         +  count.toLocaleString() + '</strong> nodes; the cap is <strong>'
+         +  cap.toLocaleString() + '</strong>';
+    if (depth != null) {
+      html += ' (rendering at depth <strong>' + depth + '</strong>)';
+    }
+    html += '.</p>';
+    if (lower != null) {
+      html += '<div class="cv-banner__actions">'
+           +  '<button type="button" class="cv-tool" id="cv-banner-retry">'
+           +  'Render at depth ' + lower + '</button></div>';
+    }
+    html += '<p class="cv-banner__hint">Or click a UUID cell in the result above '
+         +  'to root the view at a specific node.</p>';
+    bannerEl.innerHTML = html;
+    bannerEl.hidden = false;
+
+    if (lower != null && typeof onRetry === 'function') {
+      const btn = document.getElementById('cv-banner-retry');
+      if (btn) btn.addEventListener('click', () => onRetry(lower), { once: true });
+    }
+    setStatus('Provenance Circuit', 'Circuit too large.');
+  }
+
   function renderCircuit(scene) {
+    hideBanner();
     state.scene = scene;
     state.pinnedNode = null;
     // Each new circuit starts from a clean fit: reset zoom + pan so

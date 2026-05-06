@@ -1692,6 +1692,31 @@ body.mode-where #sidebar {
   position: relative;
   overflow: hidden;
 }
+/* Floating actionable banner inside .cv-canvas (e.g. 413 "too large").
+   Centred with translate; max-width keeps it readable on wide layouts. */
+.cv-banner {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  border: 1px solid var(--border-soft);
+  border-left: 4px solid var(--terracotta-500);
+  padding: 0.95rem 1.1rem;
+  border-radius: 5px;
+  max-width: min(80%, 460px);
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.18);
+  font-family: var(--font-ui);
+  z-index: 10;
+}
+.cv-banner__title {
+  font-family: var(--font-display); font-style: italic; font-weight: 600;
+  font-size: 1rem;
+  color: var(--terracotta-500);
+  margin-bottom: 0.4rem;
+}
+.cv-banner__body { margin: 0 0 0.6rem; font-size: 0.86rem; color: var(--purple-900); }
+.cv-banner__actions { margin-bottom: 0.5rem; }
+.cv-banner__hint { margin: 0; font-size: 0.78rem; color: var(--fg-muted); font-style: italic; }
 #circuit {
   /* Pin to the bordered .cv-canvas (which is position: relative).
      `width: 100%; height: 100%` alone is unreliable on SVG inside a
