@@ -1346,9 +1346,14 @@
       // actionable banner with a "Render at depth N-1" retry button
       // that re-fires loadCircuit at a lower depth.
       if (resp.status === 413 && err && err.error === 'circuit too large') {
-        window.ProvsqlCircuit.showTooLarge(err, (lowerDepth) => {
-          loadCircuit(uuid, { depth: lowerDepth });
-        });
+        // Pass rootUuid so the eval strip can still target the
+        // unrendered circuit: evaluation only needs the token, not a
+        // displayed DAG.
+        window.ProvsqlCircuit.showTooLarge(
+          err,
+          (lowerDepth) => loadCircuit(uuid, { depth: lowerDepth }),
+          { rootUuid: uuid },
+        );
         return;
       }
       window.ProvsqlCircuit.showError(err.error || `HTTP ${resp.status}`);

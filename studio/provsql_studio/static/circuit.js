@@ -263,14 +263,33 @@
   }
 
   // Structured "circuit too large" banner. payload comes straight from
-  // the 413 body: {node_count, cap, depth, hint}. onRetry receives the
-  // suggested lower depth (depth - 1) and re-fires the fetch; we omit
-  // the retry button entirely when depth <= 1 since there's no lower
-  // bound to drop to.
-  function showTooLarge(payload, onRetry) {
+  // the 413 body: {node_count, cap, depth, depth_1_size, hint}. onRetry
+  // is invoked with the suggested lower depth when the user clicks the
+  // retry button; the button is suppressed entirely when depth <= 1 or
+  // when even depth-1 wouldn't fit under the cap (the wide-bound case).
+  //
+  // opts.rootUuid: when given (loadCircuit's 413 path), install a stub
+  // scene rooted at that UUID so the eval strip can still fire against
+  // it -- the eval API only needs the token, not a rendered DAG, so a
+  // too-large circuit shouldn't lock the user out of evaluation.
+  // Omit it from expandFrontier's 413 path: the existing rendered
+  // scene is still the right eval target there.
+  function showTooLarge(payload, onRetry, opts) {
     if (!bannerEl) bannerEl = document.getElementById('cv-banner');
     if (edgeLayer) edgeLayer.innerHTML = '';
     if (nodeLayer) nodeLayer.innerHTML = '';
+    if (opts && opts.rootUuid) {
+      state.scene = {
+        root: opts.rootUuid,
+        nodes: [],
+        edges: [],
+        depth: payload && payload.depth != null ? payload.depth : 0,
+      };
+      state.pinnedNode = null;
+      state.dragOffsets = Object.create(null);
+      closeInspector();
+      refreshEvalTarget();
+    }
     if (!bannerEl) return;
     const count = payload && payload.node_count != null ? payload.node_count : 0;
     const cap   = payload && payload.cap != null ? payload.cap : 0;
