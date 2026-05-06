@@ -1174,7 +1174,7 @@ CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLI
  *
  * @param token UUID of an @c agg gate (typically obtained from an
  *              @c agg_token cell when @c aggtoken_text_as_uuid is on,
- *              or via @c (col::uuid)::text otherwise).
+ *              or via a manual UUID cast otherwise).
  */
 CREATE OR REPLACE FUNCTION agg_token_value_text(token UUID)
   RETURNS text AS
