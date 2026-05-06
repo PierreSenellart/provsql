@@ -119,6 +119,28 @@
       if (e.target.closest('.node-group')) return;
       if (state.pinnedNode) clearPin();
     });
+
+    // Wheel-to-zoom. Same clamp as the toolbar buttons (0.4..2.5) but
+    // a smaller per-tick factor so successive notches feel smooth. We
+    // need passive: false to call preventDefault — otherwise the
+    // browser also scrolls the page while the user is zooming the
+    // canvas.
+    svg.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      state.zoom = Math.max(0.4, Math.min(2.5, state.zoom * factor));
+      fitView();
+    }, { passive: false });
+
+    // Re-fit when the canvas's on-screen size changes (e.g. window
+    // resize, sidebar reflow). fitView builds the viewBox from the
+    // SVG's clientWidth/clientHeight, so a stale fit otherwise leaves
+    // the circuit clipped or letterboxed against the new geometry.
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => { if (state.scene) fitView(); }).observe(svg);
+    } else {
+      window.addEventListener('resize', () => { if (state.scene) fitView(); });
+    }
   }
 
   function setStatus(title, sub) {
@@ -151,6 +173,12 @@
   function renderCircuit(scene) {
     state.scene = scene;
     state.pinnedNode = null;
+    // Each new circuit starts from a clean fit: reset zoom + pan so
+    // the whole graph fits in the viewport regardless of how the user
+    // had panned/zoomed the previous one. The fitView() inside paint()
+    // then sizes the viewBox around the new bounding box.
+    state.zoom = 1;
+    state.pan = { x: 0, y: 0 };
     closeInspector();
     paint();
     refreshEvalTarget();
@@ -168,6 +196,25 @@
 
     const nodesById = Object.fromEntries(state.scene.nodes.map(n => [n.id, n]));
 
+    // Gate types whose children carry a meaningful order: cmp's
+    // lhs/rhs, monus's minuend/subtrahend, and agg — but agg only
+    // when the function is order-sensitive (array_agg, string_agg,
+    // json_agg, …). For sum/count/min/max/avg the result is
+    // independent of the input order, so the digits would be noise.
+    // semimod is omitted: its value/scalar split is implied by gate
+    // type (the scalar always comes from a `value` child). eq has a
+    // single child so positional labels would be redundant.
+    const ORDERED_GATES = new Set(['cmp', 'monus', 'agg']);
+    const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
+    function shouldLabelChildren(parent) {
+      if (!ORDERED_GATES.has(parent.type)) return false;
+      if (parent.type === 'agg') {
+        const fn = (parent.info1_name || '').toLowerCase();
+        return !COMMUTATIVE_AGG.has(fn);
+      }
+      return true;
+    }
+
     // edges
     for (const e of state.scene.edges) {
       const from = nodesById[e.from], to = nodesById[e.to];
@@ -178,6 +225,26 @@
         'data-from': e.from, 'data-to': e.to,
       });
       edgeLayer.appendChild(path);
+
+      // Position label at the child end of the edge for ordered gates.
+      // We offset 16px away from the child centre, in the direction of
+      // the parent — so the digit sits just outside the child circle
+      // along the incoming edge, regardless of layout angle.
+      if (shouldLabelChildren(from) && e.child_pos != null) {
+        const dx = from.x - to.x;
+        const dy = from.y - to.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const offset = 32;  // r=22 + a small gap so the digit clears the stroke
+        const lx = to.x + (dx / len) * offset;
+        const ly = to.y + (dy / len) * offset;
+        const tag = svgEl('text', {
+          class: 'edge-pos',
+          x: lx, y: ly,
+          'text-anchor': 'middle', 'dominant-baseline': 'central',
+        });
+        tag.textContent = String(e.child_pos);
+        edgeLayer.appendChild(tag);
+      }
     }
 
     // nodes
@@ -247,12 +314,31 @@
     const ys = state.scene.nodes.map(n => n.y);
     const minX = Math.min(...xs) - 60, maxX = Math.max(...xs) + 60;
     const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
-    const w = Math.max(maxX - minX, 200), h = Math.max(maxY - minY, 150);
-    const cx = minX + w / 2 + state.pan.x;
-    const cy = minY + h / 2 + state.pan.y;
-    const halfW = w / (2 * state.zoom);
-    const halfH = h / (2 * state.zoom);
-    svg.setAttribute('viewBox', `${cx - halfW} ${cy - halfH} ${halfW * 2} ${halfH * 2}`);
+    const bbW = Math.max(maxX - minX, 200);
+    const bbH = Math.max(maxY - minY, 150);
+    const cx = minX + bbW / 2 + state.pan.x;
+    const cy = minY + bbH / 2 + state.pan.y;
+
+    // Match the viewBox aspect ratio to the SVG element's on-screen
+    // aspect ratio. With preserveAspectRatio="xMidYMid meet" any
+    // mismatch is rendered as letterbox bands inside the canvas
+    // border, so the circuit appears to live in a smaller area than
+    // the bordered rectangle. We take the dimensions from the parent
+    // .cv-canvas (the visibly-bordered container) rather than the
+    // SVG itself: SVG sizing inside a flex parent can be reported as
+    // half-height in some browsers because of the SVG element's
+    // intrinsic-aspect-ratio quirks, so we anchor on the container
+    // whose box model is unambiguous.
+    const host = svg.parentElement || svg;
+    const elW = host.clientWidth  || bbW;
+    const elH = host.clientHeight || bbH;
+    const aspect = elW / elH;
+    let vbW, vbH;
+    if (bbW / bbH > aspect) { vbW = bbW;          vbH = bbW / aspect; }
+    else                    { vbH = bbH;          vbW = bbH * aspect; }
+    vbW /= state.zoom;
+    vbH /= state.zoom;
+    svg.setAttribute('viewBox', `${cx - vbW / 2} ${cy - vbH / 2} ${vbW} ${vbH}`);
   }
 
   // ─── interactions ─────────────────────────────────────────────────────

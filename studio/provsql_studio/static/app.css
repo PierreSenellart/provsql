@@ -23,13 +23,26 @@ body.mode-circuit {
 body.mode-circuit #sidebar { padding-bottom: 0; }
 body.mode-circuit #sidebar-body { display: flex; flex-direction: column; gap: 0.8rem; }
 body.mode-circuit #sidebar-body .cv-canvas {
-  height: 460px; min-height: 320px;
+  height: 720px; min-height: 480px;
   border: 1px solid var(--border-soft);
   border-radius: 6px;
 }
 body.mode-circuit #sidebar-body .cv-toolbar {
   display: flex; align-items: center; gap: 0.4rem;
   margin-bottom: 0.25rem;
+}
+/* Status text moved onto the toolbar row — pushed to the right via
+   margin-left:auto, ellipsised so the buttons keep their natural
+   width on narrow viewports. */
+body.mode-circuit #sidebar-body .cv-toolbar__info {
+  margin-left: auto;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 body.mode-circuit #sidebar-body .cv-eval {
   display: flex; flex-direction: column; gap: 0.4rem;
@@ -654,7 +667,11 @@ em { font-style: italic; }
   display: grid;
   grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
   gap: 1.5rem;
-  max-width: 1600px;
+  /* No outer max-width: on wide screens the schema/result panes get
+     more horizontal room (more columns visible, less wrapping). The
+     internal column ratio still keeps the sidebar:main proportions
+     comfortable; the page padding prevents content from hugging the
+     viewport edges. */
   margin: 0 auto;
   padding: 1.5rem;
   align-items: start;  /* allow the sidebar to be shorter than the result card */
@@ -1416,7 +1433,14 @@ body.mode-where #sidebar {
   overflow: hidden;
 }
 #circuit {
-  width: 100%; height: 100%;
+  /* Pin to the bordered .cv-canvas (which is position: relative).
+     `width: 100%; height: 100%` alone is unreliable on SVG inside a
+     flex parent — the element's intrinsic aspect ratio (driven by the
+     viewBox) can override the CSS height in some browsers, leaving
+     the SVG at half the parent's height. inset: 0 sidesteps that by
+     anchoring all four edges to the container. */
+  position: absolute;
+  inset: 0;
   display: block;
   cursor: grab;
 }
@@ -1479,6 +1503,16 @@ body.mode-where #sidebar {
   stroke: var(--terracotta-500);
   stroke-width: 2.4;
   marker-end: url(#arrow-active);
+}
+/* Child-position digit drawn near the child end of edges out of
+   non-commutative gates (cmp / semimod / monus / agg / eq). Small,
+   muted, mono so it reads as metadata rather than a node label. */
+.edge-pos {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  fill: var(--fg-muted);
+  pointer-events: none;
+  user-select: none;
 }
 
 /* inspector */

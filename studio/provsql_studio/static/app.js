@@ -994,18 +994,14 @@
 
   function circuitSidebarHtml() {
     return `
-      <header class="cv-main__hdr" style="padding:0; border-bottom:none; margin-bottom:0.4rem">
-        <div>
-          <h3 class="cv-main__sub" id="circuit-sub" style="margin:0; font-family:var(--font-ui); font-size:0.78rem; opacity:0.7">Click a UUID cell to render.</h3>
-          <span id="circuit-title" style="display:none">Provenance Circuit</span>
-        </div>
-      </header>
       <div class="cv-toolbar" role="toolbar">
         <button class="cv-tool" id="tool-zoom-out" title="Zoom out"><i class="fas fa-search-minus"></i></button>
         <button class="cv-tool" id="tool-zoom-fit" title="Fit"><i class="fas fa-expand"></i></button>
         <button class="cv-tool" id="tool-zoom-in" title="Zoom in"><i class="fas fa-search-plus"></i></button>
         <span class="cv-tool__sep"></span>
         <button class="cv-tool cv-tool--toggle" id="tool-show-uuids" aria-pressed="false" title="Show UUIDs"><i class="fas fa-fingerprint"></i></button>
+        <span id="circuit-title" hidden>Provenance Circuit</span>
+        <span class="cv-toolbar__info" id="circuit-sub">Click a UUID cell to render.</span>
       </div>
       <div class="cv-canvas" id="canvas">
         <svg id="circuit" preserveAspectRatio="xMidYMid meet">
