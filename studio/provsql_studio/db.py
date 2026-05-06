@@ -153,6 +153,28 @@ WHERE a.attname = 'provsql'
   AND c.relkind = 'r'
   AND n.nspname <> 'provsql'
   AND a.attnum > 0
+  -- Exclude provenance-mapping-shaped relations even if they happen to
+  -- carry a provsql column (e.g. CTAS over a tracked table materializes
+  -- the planner-injected provsql alongside the user's value/provenance
+  -- pair). Mappings label input gates rather than acting as source data,
+  -- so they have no place in the where-mode source-relations sidebar.
+  -- Same is_mapping predicate as _SCHEMA_QUERY.
+  AND NOT (
+    EXISTS (
+      SELECT 1 FROM pg_attribute aa
+      WHERE aa.attrelid = c.oid
+        AND aa.attname = 'value'
+        AND aa.attnum > 0
+        AND NOT aa.attisdropped
+    ) AND EXISTS (
+      SELECT 1 FROM pg_attribute aa
+      WHERE aa.attrelid = c.oid
+        AND aa.attname = 'provenance'
+        AND aa.atttypid = 'uuid'::regtype
+        AND aa.attnum > 0
+        AND NOT aa.attisdropped
+    )
+  )
 ORDER BY n.nspname, c.relname
 """
 

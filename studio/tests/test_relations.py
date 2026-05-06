@@ -107,6 +107,43 @@ def test_each_row_has_provenance_uuid(client):
         assert row["values"][rel["prov_col"]] == row["uuid"]
 
 
+def test_relations_excludes_provenance_mappings(client):
+    """Provenance-mapping-shaped relations -- tables with both `value` and
+    `provenance uuid` columns -- play a different role from source data
+    (they label input gates) and must not appear in the where-mode
+    sidebar even when they happen to also carry a provsql column. The
+    latter is the CTAS case: building a mapping with `CREATE TABLE foo
+    AS SELECT x AS value, provenance() AS provenance FROM tracked` lets
+    the planner hook inject a provsql column, which the older
+    _RELATIONS_QUERY would have surfaced."""
+    setup = (
+        "DROP TABLE IF EXISTS rel_test_mapping;"
+        # Mapping shape (value, provenance uuid) sourced from personnel
+        # so the planner rewrite materializes a provsql column too.
+        " CREATE TABLE rel_test_mapping AS"
+        "   SELECT name AS value, provenance() AS provenance FROM personnel;"
+        # And mark it tracked, just to be unambiguous about the case
+        # under test (mapping-shape AND provsql column present).
+        " SELECT add_provenance('rel_test_mapping'::regclass)"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    try:
+        relations = client.get("/api/relations").get_json()
+        names = {r["regclass"] for r in relations}
+        assert "rel_test_mapping" not in names, (
+            "mapping-shape relation leaked into the where-mode sidebar"
+        )
+        # Personnel itself is still listed -- the filter shouldn't be
+        # over-broad.
+        assert "personnel" in names
+    finally:
+        client.post(
+            "/api/exec",
+            json={"sql": "DROP TABLE rel_test_mapping", "mode": "circuit"},
+        )
+
+
 def test_add_provenance_picks_up_new_relation(client, app):
     # Run add_provenance via /api/exec, then re-query relations and check
     # the new table shows up. Use a unique name so we don't clash with other tests.
