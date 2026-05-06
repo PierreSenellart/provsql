@@ -425,6 +425,160 @@ def _to_jsonable(v):
     return str(v)
 
 
+# Whitelist of compiled semirings the Studio's evaluate endpoint exposes.
+# `boolexpr` is the odd one out: it doesn't take a mapping (the leaf labels
+# are the gate UUIDs themselves). Probability is handled separately because
+# it dispatches on a method name rather than a mapping.
+_SR_FUNCTIONS = {
+    "formula":  "sr_formula",
+    "counting": "sr_counting",
+    "why":      "sr_why",
+    "boolean":  "sr_boolean",
+}
+# probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
+# Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
+# requires a compiler name (d4 / c2d / minic2d / dsharp); `weightmc` takes a
+# weightmc-specific args string. The others ignore `arguments` (and warn on
+# `possible-worlds` if one is given).
+_PROBABILITY_METHODS = {
+    "",                   # let provsql pick (independent → tree-decomposition → d4)
+    "independent",
+    "tree-decomposition",
+    "possible-worlds",
+    "monte-carlo",
+    "compilation",
+    "weightmc",
+}
+
+
+def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
+    """Discover tables / views shaped like a provenance mapping —
+    `create_provenance_mapping` produces `(value <T>, provenance uuid)`,
+    and `sr_*` semirings consume any regclass with that signature.
+    Returns one entry per match, qualified by schema."""
+    out: list[dict] = []
+    sql_text = """
+        SELECT n.nspname, c.relname, pg_table_is_visible(c.oid) AS visible
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'v', 'm')
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'provsql')
+          AND n.nspname NOT LIKE 'pg_%'
+          AND has_table_privilege(current_user, c.oid, 'SELECT')
+          AND EXISTS (
+            SELECT 1 FROM pg_attribute a
+            WHERE a.attrelid = c.oid
+              AND a.attname = 'provenance'
+              AND NOT a.attisdropped
+              AND a.atttypid = 'uuid'::regtype
+          )
+          AND EXISTS (
+            SELECT 1 FROM pg_attribute a
+            WHERE a.attrelid = c.oid
+              AND a.attname = 'value'
+              AND NOT a.attisdropped
+          )
+        ORDER BY n.nspname, c.relname
+    """
+    # `pg_table_is_visible` is true iff the table is reachable through the
+    # connection's search_path AND no earlier search_path entry shadows it.
+    # When that holds the relation can be referenced unqualified, so the
+    # display name drops the schema. The qualified name still goes back
+    # in `qname` for the API call so the regclass cast is unambiguous.
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql_text)
+        for schema, name, visible in cur.fetchall():
+            out.append({
+                "schema": schema,
+                "name": name,
+                "qname": f"{schema}.{name}",
+                "display_name": name if visible else f"{schema}.{name}",
+            })
+    return out
+
+
+def evaluate_circuit(
+    pool: ConnectionPool,
+    *,
+    token: str,
+    semiring: str,
+    mapping: str | None,
+    method: str | None,
+    arguments: str | None = None,
+    statement_timeout: str,
+) -> dict:
+    """Run a compiled-semiring or probability evaluation against `token`.
+    Returns `{result, kind}` ready to JSON-encode. Raises ValueError on
+    bad input and propagates psycopg.Error from the SQL call.
+
+    The caller is responsible for catching psycopg errors and translating
+    them to HTTP — we don't shape them here so the route can also surface
+    the underlying SQLSTATE / message verbatim."""
+    if semiring == "boolexpr":
+        sql_stmt = sql.SQL("SELECT provsql.sr_boolexpr({}::uuid)::text").format(
+            sql.Literal(token)
+        )
+        params: tuple = ()
+    elif semiring == "probability":
+        m = (method or "").strip()
+        if m not in _PROBABILITY_METHODS:
+            raise ValueError(f"unknown probability method: {m!r}")
+        a = (arguments or "").strip()
+        # Arguments are method-specific (sample count for monte-carlo,
+        # compiler name for compilation, etc.). probability_evaluate's
+        # third arg is nullable; pass NULL when empty so provsql falls
+        # back to the method's own default behaviour.
+        sql_stmt = sql.SQL(
+            "SELECT provsql.probability_evaluate({}::uuid, {}, {})"
+        ).format(
+            sql.Literal(token),
+            sql.Literal(m or None),
+            sql.Literal(a or None),
+        )
+        params = ()
+    elif semiring in _SR_FUNCTIONS:
+        if not mapping:
+            raise ValueError(
+                f"semiring {semiring!r} requires a provenance mapping"
+            )
+        # `mapping` is a qualified name like "public.species_mapping"; the
+        # ::regclass cast both validates the identifier and resolves it
+        # against the search_path. Casting the result to text keeps the
+        # endpoint response trivially JSON-serializable for every semiring.
+        fn = sql.Identifier("provsql", _SR_FUNCTIONS[semiring])
+        sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)::text").format(
+            fn, sql.Literal(token), sql.Literal(mapping)
+        )
+        params = ()
+    else:
+        raise ValueError(f"unknown semiring: {semiring!r}")
+
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("SET LOCAL statement_timeout = {}").format(
+                sql.Literal(statement_timeout)
+            )
+        )
+        cur.execute(sql_stmt, params)
+        row = cur.fetchone()
+    value = row[0] if row else None
+    return {
+        "result": _to_jsonable(value),
+        "kind": _result_kind(semiring),
+    }
+
+
+def _result_kind(semiring: str) -> str:
+    if semiring == "probability":
+        return "float"
+    if semiring == "counting":
+        return "int"
+    if semiring == "boolean":
+        return "bool"
+    # boolexpr / formula / why all return text
+    return "text"
+
+
 _NO_PROV_MARKER = "called on a table without provenance"
 
 

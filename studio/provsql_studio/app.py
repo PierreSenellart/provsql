@@ -357,6 +357,53 @@ def create_app(
         # return the list and let the front-end pick.
         return jsonify({"matches": rows})
 
+    @app.get("/api/provenance_mappings")
+    def api_provenance_mappings():
+        # Used by the circuit-mode semiring evaluation strip to populate
+        # the mapping select; refreshed each time the panel opens, so
+        # newly-created mappings show up without a page reload.
+        return jsonify(db.list_provenance_mappings(get_pool()))
+
+    @app.post("/api/evaluate")
+    def api_evaluate():
+        import psycopg
+        payload = request.get_json(silent=True) or {}
+        try:
+            token = _coerce_to_uuid(payload.get("token", ""))
+        except ValueError:
+            return jsonify({"error": "token is not a valid UUID"}), 400
+        semiring  = (payload.get("semiring") or "").strip().lower()
+        mapping   = payload.get("mapping") or None
+        method    = payload.get("method") or None
+        arguments = payload.get("arguments") or None
+        try:
+            data = db.evaluate_circuit(
+                get_pool(),
+                token=token,
+                semiring=semiring,
+                mapping=mapping,
+                method=method,
+                arguments=arguments,
+                statement_timeout=app.config["STATEMENT_TIMEOUT"],
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except psycopg.errors.UndefinedFunction as e:
+            # Older provsql or missing helper — surface the underlying
+            # diagnostic so the user can see which function is missing.
+            return jsonify({
+                "error": "evaluation function unavailable on this database",
+                "detail": str(e).splitlines()[0],
+            }), 501
+        except psycopg.Error as e:
+            diag = getattr(e, "diag", None)
+            return jsonify({
+                "error": "evaluation failed",
+                "sqlstate": diag.sqlstate if diag else None,
+                "detail": str(e).strip(),
+            }), 500
+        return jsonify(data)
+
     _OPTION_KEYS = {"max_circuit_depth", "statement_timeout_seconds", "search_path"}
 
     def _current_options() -> dict:

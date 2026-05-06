@@ -92,6 +92,12 @@
     };
     document.getElementById('inspector-close').onclick = closeInspector;
 
+    // Semiring-evaluation strip wiring. The select drives which side
+    // control is visible: a provenance-mapping picker for compiled
+    // semirings, a method picker for probability, neither for boolexpr
+    // (whose leaf labels are the gate UUIDs themselves).
+    initEvalStrip();
+
     // Pan via drag.
     let dragging = false, dragStart = null;
     svg.addEventListener('mousedown', (e) => {
@@ -147,6 +153,7 @@
     state.pinnedNode = null;
     closeInspector();
     paint();
+    refreshEvalTarget();
   }
 
   // ─── paint ────────────────────────────────────────────────────────────
@@ -219,10 +226,19 @@
 
     fitView();
 
-    setStatus(
-      'Provenance Circuit',
-      `${state.scene.nodes.length} gates, BFS depth ${state.scene.depth} · root ${shortUuid(state.scene.root)}`
-    );
+    if (titleEl) titleEl.textContent = 'Provenance Circuit';
+    if (subEl) {
+      // Emit the root UUID as a short/full pair so the toolbar's "Show
+      // UUIDs" button toggles its display via the body-level CSS class
+      // (no need to rerun the painter on toggle).
+      const root = state.scene.root;
+      subEl.innerHTML =
+        `${state.scene.nodes.length} gates, BFS depth ${state.scene.depth} · root `
+        + `<span class="wp-uuid">`
+        + `<span class="wp-uuid__short">${escapeHtml(shortUuid(root))}</span>`
+        + `<span class="wp-uuid__full">${escapeHtml(root)}</span>`
+        + `</span>`;
+    }
   }
 
   function fitView() {
@@ -259,6 +275,7 @@
     document.querySelectorAll('.edge').forEach(p => p.classList.remove('is-active'));
     highlightSubtree(node.id, true, true);
     openInspector(node);
+    refreshEvalTarget();
   }
 
   function clearPin() {
@@ -266,6 +283,7 @@
     document.querySelectorAll('.edge').forEach(p => p.classList.remove('is-active'));
     state.pinnedNode = null;
     closeInspector();
+    refreshEvalTarget();
   }
 
   function descendants(id) {
@@ -421,6 +439,213 @@
     // The anchor is no longer a frontier (we just expanded it).
     const idx = state.scene.nodes.findIndex(n => n.id === anchor.id);
     if (idx >= 0) state.scene.nodes[idx] = { ...state.scene.nodes[idx], frontier: false };
+  }
+
+  // ─── semiring evaluation ──────────────────────────────────────────────
+
+  // Semirings that take a provenance mapping (regclass with `value` + `provenance`).
+  const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'formula']);
+
+  // For each probability method that takes an `arguments` value, point
+  // at the dedicated control. Each control keeps its own state (so the
+  // user's MC sample count survives a round-trip through compilation
+  // and back) and offers an input shape that matches the expected value:
+  // a number field for samples, a dropdown of ProvSQL-known compilers,
+  // a free-form text field pre-filled with the WeightMC defaults.
+  const _PROB_ARG_CONTROL = {
+    'monte-carlo': 'eval-args-mc',
+    'compilation': 'eval-args-compiler',
+    'weightmc':    'eval-args-wmc',
+  };
+
+  function initEvalStrip() {
+    const sel    = document.getElementById('eval-semiring');
+    const map    = document.getElementById('eval-mapping');
+    const meth   = document.getElementById('eval-method');
+    const run    = document.getElementById('eval-run');
+    const result = document.getElementById('eval-result');
+    if (!sel || !map || !meth || !run) return;
+
+    const argControls = Object.values(_PROB_ARG_CONTROL)
+      .map(id => document.getElementById(id))
+      .filter(Boolean);
+
+    let mappingsLoaded = false;
+
+    function syncControls() {
+      const v = sel.value;
+      map.hidden  = !_SR_NEEDS_MAPPING.has(v);
+      meth.hidden = v !== 'probability';
+      // Show only the args control that matches the current probability
+      // method (if any); hide every other one so the row stays compact.
+      const wantedId = (v === 'probability') ? _PROB_ARG_CONTROL[meth.value] : null;
+      for (const ctrl of argControls) ctrl.hidden = (ctrl.id !== wantedId);
+      result.textContent = '';  // stale once the input shape changes
+      const timeEl  = document.getElementById('eval-time');
+      const boundEl = document.getElementById('eval-bound');
+      if (timeEl)  timeEl.textContent  = '';
+      if (boundEl) boundEl.textContent = '';
+      if (!map.hidden && !mappingsLoaded) loadMappings();
+    }
+
+    async function loadMappings() {
+      mappingsLoaded = true;
+      try {
+        const resp = await fetch('/api/provenance_mappings');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const list = await resp.json();
+        if (!list.length) {
+          map.innerHTML = '<option value="">(no mappings — run create_provenance_mapping)</option>';
+          return;
+        }
+        // `display_name` drops the schema when the relation is search_path-
+        // visible (resolves unambiguously without qualification), keeping
+        // labels short for the common public-schema case. The option's
+        // value is still the qualified name so the regclass cast on the
+        // server can never resolve to the wrong schema.
+        map.innerHTML = list.map(m => {
+          const label = m.display_name || m.qname;
+          return `<option value="${escapeHtml(m.qname)}" title="${escapeHtml(m.qname)}">${escapeHtml(label)}</option>`;
+        }).join('');
+      } catch (e) {
+        // Allow a retry on next semiring change.
+        mappingsLoaded = false;
+        map.innerHTML = `<option value="">(load failed: ${escapeHtml(e.message)})</option>`;
+      }
+    }
+
+    sel.addEventListener('change', syncControls);
+    // Method change also affects whether the args input is shown / what
+    // its placeholder reads.
+    meth.addEventListener('change', syncControls);
+    run.addEventListener('click', runEvaluation);
+    syncControls();
+  }
+
+  function refreshEvalTarget() {
+    const tgt = document.getElementById('eval-target');
+    if (!tgt) return;
+    if (!state.scene) {
+      tgt.textContent = '';
+      return;
+    }
+    const id = state.pinnedNode || state.scene.root;
+    const label = state.pinnedNode ? 'selected node' : 'root';
+    // Emit the same short/full pair as the result-table UUID cells, so
+    // `body.show-uuids` (toggled by the toolbar's "Show UUIDs" button)
+    // swaps the displayed form via CSS without us having to re-render
+    // here on every toggle change.
+    tgt.innerHTML =
+      `→ ${label} `
+      + `<span class="wp-uuid">`
+      + `<span class="wp-uuid__short">${escapeHtml(shortUuid(id))}</span>`
+      + `<span class="wp-uuid__full">${escapeHtml(id)}</span>`
+      + `</span>`;
+    tgt.title = `Evaluation runs on the ${label}: ${id}`;
+  }
+
+  async function runEvaluation() {
+    const sel    = document.getElementById('eval-semiring');
+    const map    = document.getElementById('eval-mapping');
+    const meth   = document.getElementById('eval-method');
+    const run    = document.getElementById('eval-run');
+    const result = document.getElementById('eval-result');
+    const time   = document.getElementById('eval-time');
+    const bound  = document.getElementById('eval-bound');
+    if (time)  time.textContent  = '';
+    if (bound) bound.textContent = '';
+    if (!state.scene) {
+      result.textContent = 'no circuit loaded';
+      result.dataset.kind = 'error';
+      return;
+    }
+    const token = state.pinnedNode || state.scene.root;
+    const semiring = sel.value;
+    const body = { token, semiring };
+    if (_SR_NEEDS_MAPPING.has(semiring)) {
+      const m = map.value || '';
+      if (!m) {
+        result.textContent = 'pick a provenance mapping';
+        result.dataset.kind = 'error';
+        return;
+      }
+      body.mapping = m;
+    }
+    if (semiring === 'probability') {
+      body.method = meth.value || '';
+      // Pull the argument from whichever per-method control is wired up
+      // (number field for monte-carlo, compiler dropdown for
+      // compilation, text field for weightmc). Methods that ignore args
+      // (independent / tree-decomposition / possible-worlds / default)
+      // have no entry here, so we just don't send `arguments`.
+      const ctrlId = _PROB_ARG_CONTROL[meth.value];
+      if (ctrlId) {
+        const ctrl = document.getElementById(ctrlId);
+        const a = (ctrl?.value || '').trim();
+        if (a) body.arguments = a;
+      }
+    }
+
+    run.disabled = true;
+    result.textContent = 'evaluating…';
+    result.dataset.kind = 'pending';
+    // Round-trip time, captured around the fetch + JSON parse the same
+    // way runQuery times /api/exec. Mirrors the "evaluated in N ms"
+    // chip in the result-table footer so users can compare evaluation
+    // cost across methods (e.g. monte-carlo vs tree-decomposition).
+    const t0 = performance.now();
+    try {
+      const resp = await fetch('/api/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      const dt = Math.round(performance.now() - t0);
+      if (time) time.textContent = `· ${dt} ms`;
+      if (!resp.ok) {
+        result.textContent = data.detail || data.error || `HTTP ${resp.status}`;
+        result.dataset.kind = 'error';
+        return;
+      }
+      // Show the value verbatim. Probability gets clipped to 4 decimals
+      // for readability; everything else is already a string from the
+      // server cast or a JSON-native scalar.
+      let display;
+      if (data.kind === 'float' && typeof data.result === 'number') {
+        display = data.result.toFixed(4);
+      } else if (data.result == null) {
+        display = '(null)';
+      } else {
+        display = String(data.result);
+      }
+      result.textContent = '= ' + display;
+      result.dataset.kind = 'ok';
+      result.title = `${data.kind} value`;
+      // Monte-Carlo: append a Hoeffding-style 95% absolute-error bound
+      // ε = sqrt(ln(2/α) / (2N))  (α = 0.05)
+      // The bound is distribution-free and only depends on the sample
+      // count, so we read it back from the args input. Other methods are
+      // exact (or have their own internal bounds), so no annotation.
+      if (semiring === 'probability' && body.method === 'monte-carlo') {
+        const n = parseInt(body.arguments || '', 10);
+        if (Number.isFinite(n) && n > 0) {
+          const eps = Math.sqrt(Math.log(40) / (2 * n));
+          if (bound) bound.textContent =
+            `(± ${eps.toFixed(eps < 0.01 ? 4 : 3)} with 95% probability)`;
+        }
+      }
+    } catch (e) {
+      // The fetch itself failed (no response) — record the time-to-fail
+      // so the user can tell a hung connection (timeout) from an
+      // immediate refusal.
+      const dt = Math.round(performance.now() - t0);
+      if (time) time.textContent = `· ${dt} ms`;
+      result.textContent = `Network error: ${e.message}`;
+      result.dataset.kind = 'error';
+    } finally {
+      run.disabled = false;
+    }
   }
 
   // ─── helpers ──────────────────────────────────────────────────────────

@@ -1028,19 +1028,55 @@
           <div class="cv-inspector__body" id="inspector-body"></div>
         </aside>
       </div>
-      <footer class="cv-eval" id="eval-strip" aria-disabled="true">
-        <span class="cv-eval__label">Semiring evaluation</span>
-        <select class="cv-eval__semiring" disabled title="Coming soon">
-          <option>Boolean</option>
-          <option>Counting</option>
-          <option>Why-provenance</option>
-          <option>Formula</option>
-          <option>Probability</option>
-        </select>
-        <button class="cv-eval__run wp-btn wp-btn--mini" type="button" disabled title="Coming soon">
-          <i class="fas fa-play"></i> Evaluate
-        </button>
-        <span class="cv-eval__placeholder">— wiring TBD</span>
+      <footer class="cv-eval" id="eval-strip">
+        <div class="cv-eval__hdr">
+          <h4 class="cv-eval__label">Evaluate</h4>
+          <span class="cv-eval__target" id="eval-target" title="Token the evaluation will be run against (selected node, otherwise the root)"></span>
+        </div>
+        <div class="cv-eval__form">
+          <select class="cv-eval__semiring" id="eval-semiring">
+            <option value="boolexpr">Boolean expression</option>
+            <option value="boolean">Boolean</option>
+            <option value="counting">Counting</option>
+            <option value="why">Why-provenance</option>
+            <option value="formula">Formula</option>
+            <option value="probability">Probability</option>
+          </select>
+          <select class="cv-eval__mapping" id="eval-mapping" hidden>
+            <option value="">(no mappings found)</option>
+          </select>
+          <select class="cv-eval__method" id="eval-method" hidden>
+            <option value="">(default)</option>
+            <option value="independent">independent</option>
+            <option value="tree-decomposition">tree-decomposition</option>
+            <option value="possible-worlds">possible-worlds</option>
+            <option value="monte-carlo">monte-carlo</option>
+            <option value="compilation">compilation</option>
+            <option value="weightmc">weightmc</option>
+          </select>
+          <input type="number" class="cv-eval__args" id="eval-args-mc" hidden
+                 min="1" step="1" placeholder="samples" value="10000"
+                 autocomplete="off" title="Monte-Carlo sample count">
+          <select class="cv-eval__args" id="eval-args-compiler" hidden
+                  title="Knowledge compiler ProvSQL will invoke">
+            <option value="d4">d4</option>
+            <option value="c2d">c2d</option>
+            <option value="minic2d">minic2d</option>
+            <option value="dsharp">dsharp</option>
+          </select>
+          <input type="text" class="cv-eval__args" id="eval-args-wmc" hidden
+                 value="0.8;0.2" placeholder="epsilon;delta"
+                 autocomplete="off" spellcheck="false"
+                 title="WeightMC parameters: epsilon;delta (defaults: 0.8;0.2)">
+          <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">
+            <i class="fas fa-play"></i> Run
+          </button>
+        </div>
+        <div class="cv-eval__result-row">
+          <span class="cv-eval__result" id="eval-result"></span>
+          <span class="cv-eval__bound"  id="eval-bound"></span>
+          <span class="cv-eval__time"   id="eval-time"></span>
+        </div>
       </footer>
     `;
   }

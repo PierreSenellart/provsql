@@ -32,19 +32,30 @@ body.mode-circuit #sidebar-body .cv-toolbar {
   margin-bottom: 0.25rem;
 }
 body.mode-circuit #sidebar-body .cv-eval {
-  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  display: flex; flex-direction: column; gap: 0.4rem;
   font-size: 0.85rem;
   border-top: 1px dashed var(--border-soft);
   padding-top: 0.6rem;
-  /* Visual cue that the controls are placeholders until the wiring lands. */
-  opacity: 0.55;
+}
+body.mode-circuit #sidebar-body .cv-eval__hdr {
+  display: flex; align-items: baseline; gap: 0.6rem;
 }
 body.mode-circuit #sidebar-body .cv-eval__label {
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.8;
+  margin: 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  color: var(--purple-700);
+}
+body.mode-circuit #sidebar-body .cv-eval__form {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+}
+body.mode-circuit #sidebar-body .cv-eval__result-row {
+  /* Reserve a line so the strip height is stable even before the user
+     hits Run. The result span itself is empty by default. */
+  min-height: 1.6em;
 }
 /* Cross-mode: per-row "→ Circuit" button in where-mode results */
 .wp-result__cell--actions { width: 1%; white-space: nowrap; }
@@ -1438,13 +1449,11 @@ body.mode-where #sidebar {
   user-select: none;
 }
 
-/* type-specific */
-.node--times .node-shape { stroke: var(--purple-500); }
-.node--times .node-label { fill: var(--purple-500); }
-.node--plus  .node-shape { stroke: var(--terracotta-500); }
-.node--plus  .node-label { fill: var(--terracotta-500); }
-.node--eq    .node-shape { stroke: var(--purple-700); }
-.node--eq    .node-label { fill: var(--purple-700); }
+/* Leaves keep their distinctive filled-circle look (purple disk, white
+   glyph) so input/update gates pop out as the data sources of the
+   circuit. Internal gates all share the default outlined-circle style:
+   per-type stroke / fill overrides reserved terracotta / deep-purple
+   accents that ended up indistinguishable from the active-pinned state. */
 .node--leaf  .node-shape { fill: var(--purple-500); stroke: var(--purple-700); }
 .node--leaf  .node-label { fill: #fff; font-family: var(--font-mono); font-style: normal; font-size: 11px; }
 .node--leaf  .node-meta  { fill: var(--purple-700); font-weight: 500; }
@@ -1508,10 +1517,13 @@ body.mode-where #sidebar {
 .cv-inspector__body dd { margin: 0; font-family: var(--font-mono); font-size: 0.78rem; word-break: break-all; color: var(--purple-700); }
 .cv-inspector__body p { margin: 0.6rem 0 0; line-height: 1.5; font-size: 0.82rem; }
 
-/* Semiring-evaluation strip: placeholder for now. The select + button
-   are disabled until the back-end wiring lands; the strip is rendered
-   dimmed (parent container sets opacity) to signal "not yet active". */
-.cv-eval__semiring {
+/* Semiring-evaluation strip. The selects collapse / expand depending on
+   the chosen semiring (boolexpr → none; probability → method; rest →
+   mapping). The result chip changes accent based on its data-kind. */
+.cv-eval__semiring,
+.cv-eval__mapping,
+.cv-eval__method,
+.cv-eval__args {
   font-family: var(--font-ui);
   font-size: 0.82rem;
   padding: 0.2rem 0.4rem;
@@ -1520,9 +1532,36 @@ body.mode-where #sidebar {
   background: #fff;
   color: var(--purple-900);
 }
-.cv-eval__placeholder {
+.cv-eval__args {
+  font-family: var(--font-mono);
+  min-width: 14ch;
+}
+.cv-eval__target {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  margin-left: 0.2rem;
+}
+.cv-eval__result {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  word-break: break-all;
+  max-width: 100%;
+}
+.cv-eval__result:empty { display: none; }
+.cv-eval__result[data-kind="ok"]      { background: rgba(125, 65, 153, 0.12); color: var(--purple-900); }
+.cv-eval__result[data-kind="pending"] { background: rgba(184, 144, 30, 0.15); color: var(--gold-700); font-style: italic; }
+.cv-eval__result[data-kind="error"]   { background: rgba(196, 102, 74, 0.12); color: var(--terracotta-500); font-weight: 500; }
+.cv-eval__time,
+.cv-eval__bound {
   font-family: var(--font-ui);
   font-size: 0.75rem;
-  font-style: italic;
   color: var(--fg-muted);
+  margin-left: 0.45rem;
 }
+.cv-eval__time:empty,
+.cv-eval__bound:empty { display: none; }
+.cv-eval__bound { font-style: italic; }
