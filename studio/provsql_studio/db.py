@@ -276,6 +276,16 @@ def make_pool(dsn: str | None) -> ConnectionPool:
     non-superuser session still sees the cluster defaults (no harm done,
     we just lose the noise filter)."""
     def _configure(conn):
+        # Disable psycopg3's auto-prepare. The default threshold (5)
+        # caches the query plan after the same SQL string has run that
+        # many times — but the cached plan locks in whatever
+        # provsql.where_provenance / update_provenance was active at
+        # prepare time, so subsequent SET LOCAL toggles silently no-op
+        # at the planner-hook level (the gates produced reflect the
+        # original wp/up choice). Studio runs ad-hoc user queries with
+        # varying toggles, so correctness wins over the marginal
+        # planning saving.
+        conn.prepare_threshold = None
         try:
             with conn.cursor() as cur:
                 cur.execute("SET lc_messages = 'C'")
