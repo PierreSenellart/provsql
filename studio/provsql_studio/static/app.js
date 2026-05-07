@@ -638,6 +638,15 @@
       }
       const c = await resp.json();
       _currentConn = c;
+      // Surface the numeric server version on the global so circuit.js
+      // can gate version-specific dropdown options (currently the
+      // `temporal` compiled semiring, which depends on tstzmultirange
+      // and is therefore PG14+ only). Re-syncs the eval strip if it has
+      // already been initialised, since /api/conn lands asynchronously.
+      window.ProvsqlStudio.serverVersion = Number(c.server_version) || 0;
+      if (window.ProvsqlStudio.syncCompiledSemiringAvailability) {
+        window.ProvsqlStudio.syncCompiledSemiringAvailability();
+      }
       el.textContent = `${c.user}@${c.database}`;
       if (c.host) el.title = `host: ${c.host}`;
       if (dot) dot.classList.remove('is-offline');
@@ -1437,6 +1446,7 @@
               <option value="formula">Formula</option>
               <option value="tropical">Tropical (min-plus)</option>
               <option value="viterbi">Viterbi (max-times)</option>
+              <option value="temporal">Temporal (interval-union)</option>
             </optgroup>
             <optgroup label="Custom Semirings" id="eval-custom-group" hidden>
               <!-- populated lazily from /api/custom_semirings -->

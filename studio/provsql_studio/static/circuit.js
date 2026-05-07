@@ -923,7 +923,7 @@
   // mapping; see `needsMapping`. `prov-xml` accepts an optional mapping
   // (used to label leaves) so the dropdown shows for it too, but emptying
   // the selection is allowed : see `_OPTIONAL_MAPPING`.
-  const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'which', 'formula', 'tropical', 'viterbi', 'prov-xml']);
+  const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'which', 'formula', 'tropical', 'viterbi', 'temporal', 'prov-xml']);
   const _OPTIONAL_MAPPING = new Set(['prov-xml']);
   function needsMapping(v) {
     return _SR_NEEDS_MAPPING.has(v) || v.startsWith('custom:');
@@ -965,6 +965,41 @@
     'weightmc':    'eval-args-wmc',
   };
 
+  // Compiled semirings whose availability depends on the server's PG
+  // version. `temporal` (sr_temporal) is the only one so far : it lives
+  // in `provsql.14.sql` because it consumes / produces `tstzmultirange`
+  // which only exists from PostgreSQL 14 onwards. Hide its <option> on
+  // older servers so the user never selects something that can't run.
+  // The map is read at sync time, after `/api/conn` has populated
+  // `window.ProvsqlStudio.serverVersion`.
+  const _COMPILED_MIN_PG = {
+    temporal: 140000,
+  };
+  function syncCompiledSemiringAvailability() {
+    const sel = document.getElementById('eval-semiring');
+    if (!sel) return;
+    const sv = Number(window.ProvsqlStudio?.serverVersion) || 0;
+    for (const [val, minPg] of Object.entries(_COMPILED_MIN_PG)) {
+      const opt = sel.querySelector(`option[value="${val}"]`);
+      if (!opt) continue;
+      // 0 means "not yet known" : keep the option visible until we hear
+      // back from /api/conn so the strip is usable on first paint. Once
+      // the version arrives it'll be gated correctly on the next sync.
+      const supported = !sv || sv >= minPg;
+      opt.hidden = !supported;
+      opt.disabled = !supported;
+      // If the user had it selected on a stale page, fall back to the
+      // first compiled semiring so the strip stays valid.
+      if (!supported && sel.value === val) {
+        sel.value = 'boolexpr';
+        sel.dispatchEvent(new Event('change'));
+      }
+    }
+  }
+  // Expose to app.js so it can re-sync after /api/conn lands.
+  window.ProvsqlStudio = window.ProvsqlStudio || {};
+  window.ProvsqlStudio.syncCompiledSemiringAvailability = syncCompiledSemiringAvailability;
+
   function initEvalStrip() {
     const sel    = document.getElementById('eval-semiring');
     const map    = document.getElementById('eval-mapping');
@@ -972,6 +1007,7 @@
     const run    = document.getElementById('eval-run');
     const result = document.getElementById('eval-result');
     if (!sel || !map || !meth || !run) return;
+    syncCompiledSemiringAvailability();
 
     const argControls = Object.values(_PROB_ARG_CONTROL)
       .map(id => document.getElementById(id))
@@ -1085,6 +1121,7 @@
       counting: 'Expects numeric values.',
       tropical: 'Expects numeric (cost) values.',
       viterbi:  'Expects numeric values in [0, 1].',
+      temporal: 'Expects tstzmultirange (validity-interval) values; PostgreSQL 14+.',
     };
     function updateMappingHint() {
       const hint = document.getElementById('eval-mapping-hint');

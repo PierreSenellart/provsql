@@ -9,7 +9,20 @@ fixture as test_relations.py and don't depend on cs5-style data.
 """
 from __future__ import annotations
 
+import psycopg
 import pytest
+
+
+def _pg_server_version(dsn: str) -> int:
+    """Return the server version as a 6-digit int (e.g. 140000 for PG 14)."""
+    with psycopg.connect(dsn) as conn:
+        return conn.info.server_version
+
+
+def _requires_pg14(test_dsn):
+    """Skip helper: `sr_temporal` and `tstzmultirange` need PostgreSQL 14+."""
+    if _pg_server_version(test_dsn) < 140000:
+        pytest.skip("sr_temporal requires PostgreSQL 14+ (tstzmultirange)")
 
 
 @pytest.fixture()
@@ -157,6 +170,46 @@ def test_evaluate_viterbi_returns_float(client, float_mapping):
     data = resp.get_json()
     assert data["kind"] == "float"
     assert float(data["result"]) == 7.0
+
+
+@pytest.fixture()
+def temporal_mapping(client, test_dsn):
+    """A (value::tstzmultirange, provenance) mapping where every personnel
+    row is tagged with the validity interval `[2020-01-01, 2021-01-01)`.
+    Skipped on PostgreSQL <14 where `tstzmultirange` does not exist."""
+    _requires_pg14(test_dsn)
+    setup = (
+        "DROP TABLE IF EXISTS personnel_validity;"
+        " CREATE TABLE personnel_validity AS"
+        "   SELECT '{[2020-01-01,2021-01-01)}'::tstzmultirange AS value,"
+        "          provsql AS provenance FROM personnel;"
+        " SELECT remove_provenance('personnel_validity');"
+        " CREATE INDEX ON personnel_validity(provenance);"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    yield "personnel_validity"
+    client.post("/api/exec", json={"sql": "DROP TABLE personnel_validity", "mode": "circuit"})
+
+
+def test_evaluate_temporal_returns_text(client, temporal_mapping):
+    """sr_temporal (interval-union): for a + over the seven personnel
+    input gates each tagged with the same validity interval, the result
+    is that single interval (no widening). The endpoint surfaces the
+    multirange via the `text` chip path: psycopg's Multirange.__str__
+    formats it as the canonical `{[lo, hi)}` literal."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "temporal",
+        "mapping": f"provsql_test.{temporal_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert isinstance(data["result"], str)
+    assert "2020-01-01" in data["result"]
+    assert "2021-01-01" in data["result"]
 
 
 @pytest.fixture()
@@ -347,6 +400,7 @@ def test_custom_semirings_excludes_sr_formula(client):
     assert "provsql.sr_boolean" not in qnames
     assert "provsql.sr_tropical" not in qnames
     assert "provsql.sr_viterbi" not in qnames
+    assert "provsql.sr_temporal" not in qnames
 
 
 def test_evaluate_custom_returns_classification(client, custom_wrapper):

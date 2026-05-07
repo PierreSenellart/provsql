@@ -525,12 +525,17 @@ def conn_info(pool: ConnectionPool) -> dict:
             "       array_to_string(current_schemas(false), ', ')"
         )
         user, database, host, port, search_path = cur.fetchone()
+        # Numeric server version, e.g. 130000 for PG 13, 140000 for PG 14.
+        # Surfaced so the UI can gate features that depend on PG-version-
+        # specific objects (currently `tstzmultirange` for sr_temporal).
+        server_version = conn.info.server_version
     return {
         "user": user,
         "database": database,
         "host": host or None,
         "port": port or None,
         "search_path": search_path,
+        "server_version": server_version,
     }
 
 
@@ -650,6 +655,7 @@ _SR_FUNCTIONS = {
     "boolean":  "sr_boolean",
     "tropical": "sr_tropical",
     "viterbi":  "sr_viterbi",
+    "temporal": "sr_temporal",
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
@@ -860,6 +866,18 @@ def evaluate_circuit(
             ).format(sql.Literal(token))
         params = ()
     elif semiring in _SR_FUNCTIONS:
+        # `sr_temporal` lives in `provsql.14.sql` (it depends on the
+        # `tstzmultirange` PG14+ type), so reject it cleanly when the
+        # server is older instead of letting psycopg surface the bare
+        # "function does not exist" error. Frontend hides the option in
+        # the same case, but we still gate here for crafted payloads.
+        if semiring == "temporal":
+            with pool.connection() as conn:
+                if conn.info.server_version < 140000:
+                    raise ValueError(
+                        "semiring 'temporal' requires PostgreSQL 14+ "
+                        "(tstzmultirange is not available)"
+                    )
         if not mapping:
             raise ValueError(
                 f"semiring {semiring!r} requires a provenance mapping"
@@ -922,7 +940,9 @@ def _result_kind(semiring: str) -> str:
         return "custom"
     if semiring == "prov-xml":
         return "xml"
-    # boolexpr / formula / why / which all return text
+    # boolexpr / formula / why / which all return text; temporal returns
+    # tstzmultirange (psycopg's Multirange str-formats as `{[lo, hi), ...}`,
+    # which `_to_jsonable` carries through unchanged).
     return "text"
 
 
