@@ -26,3 +26,7 @@ Each plan document follows a consistent layout:
   cross-referencing every documented user-facing feature against the
   tutorial and case studies. Source of truth for the gaps that
   `case-studies.md` proposes to close.
+- [`studio.md`](studio.md) : plan for ProvSQL Studio work landing
+  alongside or after the first PyPI release (`studio-v1.0.0`):
+  release plumbing, CI, Docker swap-over, in-app polish, and the
+  Contributions / Time-travel modes scheduled for later versions.
