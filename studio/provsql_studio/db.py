@@ -648,6 +648,8 @@ _SR_FUNCTIONS = {
     "why":      "sr_why",
     "which":    "sr_which",
     "boolean":  "sr_boolean",
+    "tropical": "sr_tropical",
+    "viterbi":  "sr_viterbi",
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
@@ -910,7 +912,7 @@ def evaluate_circuit(
 
 
 def _result_kind(semiring: str) -> str:
-    if semiring == "probability":
+    if semiring in ("probability", "tropical", "viterbi"):
         return "float"
     if semiring == "counting":
         return "int"
@@ -920,7 +922,7 @@ def _result_kind(semiring: str) -> str:
         return "custom"
     if semiring == "prov-xml":
         return "xml"
-    # boolexpr / formula / why all return text
+    # boolexpr / formula / why / which all return text
     return "text"
 
 

@@ -1435,6 +1435,8 @@
               <option value="why">Why-provenance</option>
               <option value="which">Which-provenance (lineage)</option>
               <option value="formula">Formula</option>
+              <option value="tropical">Tropical (min-plus)</option>
+              <option value="viterbi">Viterbi (max-times)</option>
             </optgroup>
             <optgroup label="Custom Semirings" id="eval-custom-group" hidden>
               <!-- populated lazily from /api/custom_semirings -->

@@ -110,6 +110,56 @@ def test_evaluate_which_with_mapping(client, mapping):
 
 
 @pytest.fixture()
+def float_mapping(client):
+    """A (value::float, provenance) mapping suitable for both sr_tropical
+    (cost: id taken as a positive cost) and sr_viterbi (probability:
+    1/(id+1) keeps every leaf in (0, 1])."""
+    setup = (
+        "DROP TABLE IF EXISTS personnel_floats;"
+        " CREATE TABLE personnel_floats AS"
+        "   SELECT id::float AS value, provsql AS provenance FROM personnel;"
+        " SELECT remove_provenance('personnel_floats');"
+        " CREATE INDEX ON personnel_floats(provenance);"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    yield "personnel_floats"
+    client.post("/api/exec", json={"sql": "DROP TABLE personnel_floats", "mode": "circuit"})
+
+
+def test_evaluate_tropical_returns_float(client, float_mapping):
+    """sr_tropical (min-plus): for a + over the seven personnel input
+    gates each tagged with id::float, the result is the smallest id
+    (the cheapest derivation)."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "tropical",
+        "mapping": f"provsql_test.{float_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "float"
+    assert float(data["result"]) == 1.0
+
+
+def test_evaluate_viterbi_returns_float(client, float_mapping):
+    """sr_viterbi (max-times): for a + over the seven personnel input
+    gates each tagged with id::float, the result is the largest leaf
+    value (the most-likely-derivation probability)."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "viterbi",
+        "mapping": f"provsql_test.{float_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "float"
+    assert float(data["result"]) == 7.0
+
+
+@pytest.fixture()
 def counting_mapping(client):
     """Counting / boolean semirings need a typed mapping (the value
     column's type is consumed by the C semiring evaluator). We map every
@@ -295,6 +345,8 @@ def test_custom_semirings_excludes_sr_formula(client):
     assert "provsql.sr_why" not in qnames
     assert "provsql.sr_which" not in qnames
     assert "provsql.sr_boolean" not in qnames
+    assert "provsql.sr_tropical" not in qnames
+    assert "provsql.sr_viterbi" not in qnames
 
 
 def test_evaluate_custom_returns_classification(client, custom_wrapper):

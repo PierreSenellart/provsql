@@ -923,7 +923,7 @@
   // mapping; see `needsMapping`. `prov-xml` accepts an optional mapping
   // (used to label leaves) so the dropdown shows for it too, but emptying
   // the selection is allowed : see `_OPTIONAL_MAPPING`.
-  const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'which', 'formula', 'prov-xml']);
+  const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'which', 'formula', 'tropical', 'viterbi', 'prov-xml']);
   const _OPTIONAL_MAPPING = new Set(['prov-xml']);
   function needsMapping(v) {
     return _SR_NEEDS_MAPPING.has(v) || v.startsWith('custom:');
@@ -1083,6 +1083,8 @@
     const _COMPILED_HINTS = {
       boolean:  'Expects boolean values.',
       counting: 'Expects numeric values.',
+      tropical: 'Expects numeric (cost) values.',
+      viterbi:  'Expects numeric values in [0, 1].',
     };
     function updateMappingHint() {
       const hint = document.getElementById('eval-mapping-hint');

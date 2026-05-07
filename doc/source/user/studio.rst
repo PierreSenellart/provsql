@@ -200,7 +200,7 @@ no node is pinned, the root). The semiring select groups available
 evaluations into three optgroups:
 
 * **Compiled semirings**: ``boolean``, ``boolexpr``, ``counting``,
-  ``why``, ``which``, ``formula``.
+  ``why``, ``which``, ``formula``, ``tropical``, ``viterbi``.
 * **Custom semirings**: any user-defined wrapper over
   :sqlfunc:`provenance_evaluate` discovered in the schema. Mappings
   are filtered by value-type compatibility for custom entries.
