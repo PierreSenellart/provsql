@@ -206,88 +206,15 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
  *  @{
  */
 
-/** @brief Transition function for temporal union (plus): merge multiranges */
 SET search_path TO provsql;
-CREATE OR REPLACE FUNCTION union_tstzintervals_plus_state(
-    state tstzmultirange,
-    value tstzmultirange
-)
-RETURNS tstzmultirange AS
-$$
-  SELECT CASE WHEN state IS NULL THEN value ELSE state + value END
-$$ LANGUAGE SQL IMMUTABLE;
-
-/** @brief Transition function for temporal intersection (times): intersect multiranges */
-CREATE OR REPLACE FUNCTION union_tstzintervals_times_state(
-    state tstzmultirange,
-    value tstzmultirange
-)
-RETURNS tstzmultirange AS
-$$
-  SELECT CASE WHEN state IS NULL THEN value ELSE state * value END
-$$ LANGUAGE SQL IMMUTABLE;
-
-/** @brief Aggregate: union of timestamp multiranges (semiring plus) */
-CREATE OR REPLACE AGGREGATE union_tstzintervals_plus(tstzmultirange)
-(
-  sfunc    = union_tstzintervals_plus_state,
-  stype    = tstzmultirange,
-  initcond = '{}'
-);
-
-/** @brief Aggregate: intersection of timestamp multiranges (semiring times) */
-CREATE OR REPLACE AGGREGATE union_tstzintervals_times(tstzmultirange)
-(
-  sfunc    = union_tstzintervals_times_state,
-  stype    = tstzmultirange,
-  initcond = '{(,)}'
-);
-
-/** @brief Temporal monus: subtract one multirange from another */
-CREATE OR REPLACE FUNCTION union_tstzintervals_monus(
-    state tstzmultirange,
-    value tstzmultirange
-)
-RETURNS tstzmultirange AS
-$$
-  SELECT CASE WHEN state <@ value THEN '{}'::tstzmultirange ELSE state - value END
-$$ LANGUAGE SQL IMMUTABLE STRICT;
-
-/**
- * @brief Evaluate temporal provenance as a timestamp multirange
- *
- * Evaluates provenance over the multirange semiring to compute the
- * valid time intervals of a tuple.
- *
- * @param token provenance token to evaluate
- * @param token2value mapping table from tokens to temporal validity ranges
- */
-CREATE OR REPLACE FUNCTION union_tstzintervals(
-    token UUID,
-    token2value regclass
-)
-RETURNS tstzmultirange AS
-$$
-BEGIN
-  RETURN provenance_evaluate(
-    token,
-    token2value,
-    '{(,)}'::tstzmultirange,
-    'union_tstzintervals_plus',
-    'union_tstzintervals_times',
-    'union_tstzintervals_monus'
-  );
-END
-$$ LANGUAGE plpgsql PARALLEL SAFE;
 
 /**
  * @brief Evaluate provenance over the temporal (interval-union) m-semiring
  *
- * Compiled counterpart of :sqlfunc:`union_tstzintervals`. Inputs are
- * read as @c tstzmultirange validity intervals; the additive identity
- * is @c '{}'::tstzmultirange (empty), the multiplicative identity is
- * @c '{(,)}'::tstzmultirange (universal). Returns the union of
- * intervals supporting the result, computed via the compiled circuit
+ * Inputs are read as %tstzmultirange validity intervals; the additive
+ * identity is <tt>'{}'::%tstzmultirange</tt> (empty), the multiplicative
+ * identity is <tt>'{(,)}'::%tstzmultirange</tt> (universal). Returns the union
+ * of intervals supporting the result, computed via the compiled circuit
  * traversal.
  *
  * @param token       Provenance token to evaluate.
@@ -305,6 +232,24 @@ BEGIN
   );
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/**
+ * @brief Evaluate temporal provenance as a timestamp multirange
+ *
+ * Thin wrapper around :sqlfunc:`sr_temporal` retained for backward
+ * compatibility; both compute the same union of validity intervals.
+ *
+ * @param token provenance token to evaluate
+ * @param token2value mapping table from tokens to temporal validity ranges
+ */
+CREATE OR REPLACE FUNCTION union_tstzintervals(
+    token UUID,
+    token2value regclass
+)
+RETURNS tstzmultirange AS
+$$
+  SELECT sr_temporal(token, token2value)
+$$ LANGUAGE SQL PARALLEL SAFE STABLE;
 
 /**
  * @brief Query a table as it was at a specific point in time
@@ -327,11 +272,11 @@ BEGIN
         '
           SELECT
             %1$I.*,
-            union_tstzintervals(provenance(), %2$L)
+            sr_temporal(provenance(), %2$L)
           FROM
             %1$I
           WHERE
-            union_tstzintervals(provenance(), %2$L) @> %3$L::timestamptz
+            sr_temporal(provenance(), %2$L) @> %3$L::timestamptz
         ',
         tablename,
         'provsql.time_validity_view',
@@ -363,11 +308,11 @@ BEGIN
     '
       SELECT
         %1$I.*,
-        union_tstzintervals(provenance(), %2$L)
+        sr_temporal(provenance(), %2$L)
       FROM
         %1$I
       WHERE
-        union_tstzintervals(provenance(), %2$L)
+        sr_temporal(provenance(), %2$L)
         && tstzrange(%3$L::timestamptz, %4$L::timestamptz)
     ',
     tablename,
@@ -420,7 +365,7 @@ BEGIN
       '
         SELECT
           %I.*,
-          union_tstzintervals(provenance(), %L)
+          sr_temporal(provenance(), %L)
         FROM
           %I
         WHERE
@@ -453,7 +398,7 @@ BEGIN
   EXECUTE format(
     '
       SELECT
-        union_tstzintervals(provenance(), %L)
+        sr_temporal(provenance(), %L)
       FROM
         %I
       WHERE

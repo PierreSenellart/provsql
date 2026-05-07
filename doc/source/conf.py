@@ -194,6 +194,7 @@ _C_FUNC_MAP = {
     'BoolExpr':                  '/doxygen-c/html/classsemiring_1_1BoolExpr.html',
     'Boolean':                   '/doxygen-c/html/classsemiring_1_1Boolean.html',
     'Counting':                  '/doxygen-c/html/classsemiring_1_1Counting.html',
+    'Temporal':                  '/doxygen-c/html/classsemiring_1_1Temporal.html',
     # Enums and types
     'AggregationOperator':       '/doxygen-c/html/Aggregation_8h.html#a07e6885296f8f80441d5428bcf72af5a',
     'gate_type':                 '/doxygen-c/html/provsql__utils_8h.html#a8266c44a6cbf9e08d5f2b12cd3c3d92f',

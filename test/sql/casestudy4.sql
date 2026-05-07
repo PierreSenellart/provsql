@@ -67,9 +67,9 @@ SELECT DISTINCT name, position
 FROM cs4_person JOIN cs4_holds ON cs4_person.id = cs4_holds.id
 WHERE country = 'FR';
 
--- Step 2: union_tstzintervals — Bernard Chai's Prime Minister tenure
+-- Step 2: sr_temporal — Bernard Chai's Prime Minister tenure
 CREATE TABLE result_cs4_uttz AS
-SELECT position, union_tstzintervals(provenance(), 'provsql.time_validity_view') AS valid
+SELECT position, sr_temporal(provenance(), 'provsql.time_validity_view') AS valid
 FROM cs4_person JOIN cs4_holds ON cs4_person.id = cs4_holds.id
 WHERE name = 'Bernard Chai';
 

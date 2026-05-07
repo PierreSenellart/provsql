@@ -23,7 +23,8 @@ ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
 PREDEFINED             = __attribute__(x)= \
-                         PGDLLEXPORT=
+                         PGDLLEXPORT= \
+                         DOXYGEN
 
 # Source browsing
 SOURCE_BROWSER         = YES

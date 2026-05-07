@@ -1,17 +1,17 @@
 /**
  * @file semiring/Temporal.h
- * @brief Interval-union (temporal) m-semiring over @c tstzmultirange.
+ * @brief Interval-union (temporal) m-semiring over <tt>tstzmultirange</tt>.
  *
  * The temporal m-semiring associates each gate with a finite union of
- * pairwise-disjoint timestamp intervals (a PostgreSQL @c tstzmultirange).
+ * pairwise-disjoint timestamp intervals (a PostgreSQL <tt>tstzmultirange</tt>).
  * It is the compiled counterpart of the SQL :sqlfunc:`union_tstzintervals`
  * helper, but unlike the PL/pgSQL evaluator it supports the full set
  * of circuit gate types (including @c cmp from HAVING clauses, @c agg,
  * @c semimod, and @c eq / @c project for where-provenance).
  *
  * Operations:
- * - @c zero()   → @c '{}'::tstzmultirange (empty)
- * - @c one()    → @c '{(,)}'::tstzmultirange (universal range)
+ * - @c zero()   → <tt>'{}'::%tstzmultirange</tt> (empty)
+ * - @c one()    → <tt>'{(,)}'::%tstzmultirange</tt> (universal range)
  * - @c plus()   → multirange union (@c multirange_union)
  * - @c times()  → multirange intersection (@c multirange_intersect)
  * - @c monus()  → multirange set difference (@c multirange_minus)
@@ -21,7 +21,7 @@
  * of the universal range, @f$\mathbb{1} \oplus a = (-\infty,+\infty) \cup a
  * = (-\infty,+\infty) = \mathbb{1}@f$.
  *
- * @note Requires PostgreSQL 14+ (for @c tstzmultirange). Multirange
+ * @note Requires PostgreSQL 14+ (for <tt>tstzmultirange</tt>). Multirange
  * functions like @c multirange_union access @c fcinfo->flinfo->fn_extra
  * for type-cache lookups, so they must be invoked through
  * @c OidFunctionCall* (which builds a proper @c FmgrInfo) rather than
@@ -35,7 +35,7 @@
 #ifndef TEMPORAL_H
 #define TEMPORAL_H
 
-#if PG_VERSION_NUM >= 140000
+#if PG_VERSION_NUM >= 140000 || defined(DOXYGEN)
 
 extern "C" {
 #include "fmgr.h"
@@ -53,7 +53,7 @@ namespace semiring {
 /**
  * @brief Temporal (interval-union) m-semiring with @c Datum carrier.
  *
- * Each gate evaluates to a @c tstzmultirange Datum allocated in the
+ * Each gate evaluates to a <tt>tstzmultirange</tt> Datum allocated in the
  * current memory context.  The class caches function OIDs and the
  * zero/one Datum values in its constructor so that operations dispatch
  * cheaply during circuit traversal.
@@ -118,6 +118,6 @@ Datum parse(const char *str) const {
 };
 }
 
-#endif /* PG_VERSION_NUM >= 140000 */
+#endif /* PG_VERSION_NUM >= 140000 || defined(DOXYGEN) */
 
 #endif /* TEMPORAL_H */

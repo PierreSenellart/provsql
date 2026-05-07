@@ -140,7 +140,7 @@ void provsql_try_having_viterbi(
   std::unordered_map<gate_t, double> &mapping
   );
 
-#if PG_VERSION_NUM >= 140000
+#if PG_VERSION_NUM >= 140000 || defined(DOXYGEN)
 /**
  * @brief Evaluate the HAVING sub-circuit at @p g over the Temporal semiring.
  *

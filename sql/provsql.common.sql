@@ -1718,8 +1718,8 @@ $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over the tropical (min-plus) m-semiring
  *
- * Inputs are read as @c float8 cost values; the additive identity is
- * @c 'Infinity'::float8 and the multiplicative identity is @c 0.
+ * Inputs are read as %float8 cost values; the additive identity
+ * is <tt>'Infinity'::%float8</tt> and the multiplicative identity is 0.
  * Returns the cost of the cheapest derivation.
  */
 CREATE FUNCTION sr_tropical(token ANYELEMENT, token2value regclass)
@@ -1737,7 +1737,7 @@ $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over the Viterbi (max-times) m-semiring
  *
- * Inputs are read as @c float8 probability values in @f$[0,1]@f$.
+ * Inputs are read as %float8 probability values in @f$[0,1]@f$.
  * Returns the probability of the most likely derivation.
  */
 CREATE FUNCTION sr_viterbi(token ANYELEMENT, token2value regclass)
