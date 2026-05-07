@@ -1390,7 +1390,7 @@
     return `
       <div class="cv-toolbar" role="toolbar">
         <button class="cv-tool" id="tool-zoom-out" title="Zoom out"><i class="fas fa-search-minus"></i></button>
-        <button class="cv-tool" id="tool-zoom-fit" title="Fit"><i class="fas fa-expand"></i></button>
+        <button class="cv-tool" id="tool-zoom-fit" title="Fit to screen"><i class="fas fa-expand"></i></button>
         <button class="cv-tool" id="tool-zoom-in" title="Zoom in"><i class="fas fa-search-plus"></i></button>
         <span class="cv-tool__sep"></span>
         <button class="cv-tool" id="tool-reset-layout" title="Reset node positions (undo any drag-to-move)"><i class="fas fa-undo"></i></button>
@@ -1461,13 +1461,17 @@
           </select>
           <span class="cv-eval__hint" id="eval-mapping-hint" hidden></span>
           <select class="cv-eval__method" id="eval-method" hidden>
-            <option value="">(default)</option>
-            <option value="independent">independent</option>
-            <option value="tree-decomposition">tree-decomposition</option>
-            <option value="possible-worlds">possible-worlds</option>
-            <option value="monte-carlo">monte-carlo</option>
-            <option value="compilation">compilation</option>
-            <option value="weightmc">weightmc</option>
+            <optgroup label="Exact">
+              <option value="">(default)</option>
+              <option value="independent">independent</option>
+              <option value="possible-worlds">possible-worlds</option>
+              <option value="tree-decomposition">tree-decomposition</option>
+              <option value="compilation">compilation</option>
+            </optgroup>
+            <optgroup label="Approximate">
+              <option value="monte-carlo">monte-carlo</option>
+              <option value="weightmc">weightmc</option>
+            </optgroup>
           </select>
           <input type="number" class="cv-eval__args" id="eval-args-mc" hidden
                  min="1" step="1" placeholder="samples" value="10000"
