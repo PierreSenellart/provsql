@@ -167,14 +167,21 @@ def main(argv: list[str] | None = None) -> int:
     import os
     args = build_parser().parse_args(argv)
 
-    # When neither --dsn nor a PG* env var hints at a database, fall
-    # back to the `postgres` maintenance DB so the in-page switcher can
-    # list candidates and the user picks one. The banner makes that
-    # next step visible before they get the page.
+    # Resolution order for the connection target:
+    #   1. --dsn (CLI flag)
+    #   2. DATABASE_URL, used as a DSN (libpq itself does not read
+    #      this var, so we forward it explicitly)
+    #   3. libpq's native PG* vars (PGDATABASE / PGSERVICE / ...): no
+    #      DSN passed to psycopg, libpq picks them up directly.
+    #   4. Fallback to the `postgres` maintenance DB so the in-page
+    #      switcher can list candidates. The banner makes that next
+    #      step visible before they get the page.
     dsn = args.dsn
     db_is_auto = False
+    if not dsn:
+        dsn = os.environ.get("DATABASE_URL") or None
     if not dsn and not any(os.environ.get(v) for v in (
-        "PGDATABASE", "PGSERVICE", "DATABASE_URL"
+        "PGDATABASE", "PGSERVICE"
     )):
         dsn = "dbname=postgres"
         db_is_auto = True
