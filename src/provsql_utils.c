@@ -344,6 +344,13 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_TYPE_VARCHAR = TypenameGetTypid("varchar");
   CheckOid(OID_TYPE_VARCHAR);
 
+#if PG_VERSION_NUM >= 140000
+  constants.OID_TYPE_TSTZMULTIRANGE = TypenameGetTypid("tstzmultirange");
+  CheckOid(OID_TYPE_TSTZMULTIRANGE);
+#else
+  constants.OID_TYPE_TSTZMULTIRANGE = InvalidOid;
+#endif
+
   constants.OID_FUNCTION_ARRAY_AGG = get_func_oid("array_agg");
   CheckOid(OID_FUNCTION_ARRAY_AGG);
 

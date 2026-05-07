@@ -45,7 +45,7 @@ namespace semiring {
  *
  * Each gate evaluates to a real-valued cost (with @f$+\infty@f$ as
  * the additive identity). Inputs are read from the mapping table as
- * @c float8 values; pass @c 'Infinity'::float8 to encode the
+ * %float8 values; pass <tt>'Infinity'::%float8</tt> to encode the
  * additive zero.
  */
 class Tropical : public semiring::Semiring<double>

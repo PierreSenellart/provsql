@@ -89,7 +89,7 @@ by a well-known position gives cleaner results:
 Step 2: Union of Temporal Intervals
 -------------------------------------
 
-:sqlfunc:`union_tstzintervals` is a custom semiring evaluation that computes
+:sqlfunc:`sr_temporal` is a compiled semiring evaluation that computes
 the *union of all temporal validity intervals* across the provenance circuit
 of a result row.  Use it to reconstruct the full history of Jacques Chirac's
 positions:
@@ -97,7 +97,7 @@ positions:
 .. code-block:: postgresql
 
     SELECT position,
-           union_tstzintervals(provenance(), 'time_validity_view') AS valid
+           sr_temporal(provenance(), 'time_validity_view') AS valid
     FROM person
     JOIN holds ON person.id = holds.id
     WHERE name = 'Jacques Chirac'
@@ -226,7 +226,7 @@ Also inspect the fired PM's history post-firing:
 .. code-block:: postgresql
 
     SELECT position,
-           union_tstzintervals(provenance(), 'time_validity_view') AS valid
+           sr_temporal(provenance(), 'time_validity_view') AS valid
     FROM person
     JOIN holds ON person.id = holds.id
     JOIN fired_pm ON person.id = fired_pm.id
@@ -260,7 +260,7 @@ And verify their interval is again open-ended:
 .. code-block:: postgresql
 
     SELECT position,
-           union_tstzintervals(provenance(), 'time_validity_view') AS valid
+           sr_temporal(provenance(), 'time_validity_view') AS valid
     FROM person
     JOIN holds ON person.id = holds.id
     JOIN fired_pm ON person.id = fired_pm.id

@@ -103,6 +103,7 @@ _SQL_FUNC_MAP = {
     'sr_which':                 '/doxygen-sql/html/group__compiled__semirings.html#ga86da4e2a0f5c0f865e9e30714748679c',
     'sr_tropical':              '/doxygen-sql/html/group__compiled__semirings.html#gaa2a6ec05f977d18204b1b6181dee28b5',
     'sr_viterbi':               '/doxygen-sql/html/group__compiled__semirings.html#ga67d375630a9674bfecd4f87d0d003d31',
+    'sr_temporal':              '/doxygen-sql/html/group__temporal__db.html#ga53665747f710e8bacbf9bb985420c173',
     'to_provxml':               '/doxygen-sql/html/group__provenance__output.html#gacc9e8b2a47ade6f5c87c27f64b4707b1',
     'view_circuit':             '/doxygen-sql/html/group__provenance__output.html#ga1c6caf1bb91c0cfdfc56c33666d41897',
     'where_provenance':         '/doxygen-sql/html/group__provenance__output.html#ga6ddf85fea18edbd973c118020ff4551b',
@@ -194,6 +195,7 @@ _C_FUNC_MAP = {
     'BoolExpr':                  '/doxygen-c/html/classsemiring_1_1BoolExpr.html',
     'Boolean':                   '/doxygen-c/html/classsemiring_1_1Boolean.html',
     'Counting':                  '/doxygen-c/html/classsemiring_1_1Counting.html',
+    'Temporal':                  '/doxygen-c/html/classsemiring_1_1Temporal.html',
     # Enums and types
     'AggregationOperator':       '/doxygen-c/html/Aggregation_8h.html#a07e6885296f8f80441d5428bcf72af5a',
     'gate_type':                 '/doxygen-c/html/provsql__utils_8h.html#a8266c44a6cbf9e08d5f2b12cd3c3d92f',

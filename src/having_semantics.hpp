@@ -140,4 +140,20 @@ void provsql_try_having_viterbi(
   std::unordered_map<gate_t, double> &mapping
   );
 
+#if PG_VERSION_NUM >= 140000 || defined(DOXYGEN)
+/**
+ * @brief Evaluate the HAVING sub-circuit at @p g over the Temporal semiring.
+ *
+ * @param c        The generic circuit containing gate @p g.
+ * @param g        Root gate of the HAVING sub-circuit.
+ * @param mapping  Map from input gates to their tstzmultirange Datum values;
+ *                 populated on successful evaluation.
+ */
+void provsql_try_having_temporal(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, Datum> &mapping
+  );
+#endif
+
 #endif

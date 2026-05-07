@@ -8,6 +8,7 @@ test: update_update
 test: update_undo
 
 # Temporal DB
+test: sr_temporal
 test: union_tstzintervals
 test: temporal_functions
 

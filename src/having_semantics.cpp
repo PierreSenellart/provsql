@@ -12,6 +12,7 @@
  * - @c provsql_try_having_boolean()
  * - @c provsql_try_having_tropical()
  * - @c provsql_try_having_viterbi()
+ * - @c provsql_try_having_temporal() (PG14+)
  *
  * Each function evaluates the sub-circuit rooted at the given
  * @c gate_agg / @c gate_semimod gate using @c enumerate_valid_worlds()
@@ -42,6 +43,7 @@ extern "C" {
 #include "semiring/Which.h"
 #include "semiring/Tropical.h"
 #include "semiring/Viterbi.h"
+#include "semiring/Temporal.h"
 
 namespace {
 // Parse int from string
@@ -397,3 +399,14 @@ void provsql_try_having_viterbi(
 {
   try_having_impl<semiring::Viterbi>(c, g, mapping, semiring::Viterbi());
 }
+
+#if PG_VERSION_NUM >= 140000
+void provsql_try_having_temporal(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, Datum> &mapping)
+{
+  semiring::Temporal sr;
+  try_having_impl<semiring::Temporal>(c, g, mapping, sr);
+}
+#endif

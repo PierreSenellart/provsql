@@ -122,7 +122,7 @@ and algorithms are in |cpp|.
 *Semiring evaluation*
 
 - ``semiring/*.h`` -- header-only semiring implementations (Boolean,
-  BoolExpr, Counting, Formula, Tropical, Viterbi, Which, Why).
+  BoolExpr, Counting, Formula, Temporal, Tropical, Viterbi, Which, Why).
 - :cfile:`provenance_evaluate_compiled.cpp` /
   :cfile:`provenance_evaluate_compiled.hpp` -- dispatcher for
   compiled semirings.

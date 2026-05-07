@@ -48,14 +48,19 @@ You can filter to only currently-valid facts:
 Union of Validity Intervals
 -----------------------------
 
-:sqlfunc:`union_tstzintervals` computes the union of validity intervals
+:sqlfunc:`sr_temporal` computes the union of validity intervals
 associated with a query result via its provenance:
 
 .. code-block:: postgresql
 
     SELECT entity_id,
-           union_tstzintervals(provenance(), 'interval_mapping')
+           sr_temporal(provenance(), 'interval_mapping')
     FROM temporal_table;
+
+:sqlfunc:`union_tstzintervals` is a backward-compatible alias for
+:sqlfunc:`sr_temporal` retained for existing code; new code should
+use :sqlfunc:`sr_temporal` directly. See :doc:`semirings` for a
+description of the underlying interval-union m-semiring.
 
 Temporal Query Functions
 -------------------------
