@@ -20,9 +20,10 @@ def _pg_server_version(dsn: str) -> int:
 
 
 def _requires_pg14(test_dsn):
-    """Skip helper: `sr_temporal` and `tstzmultirange` need PostgreSQL 14+."""
+    """Skip helper: the interval-union family (sr_temporal /
+    sr_interval_num / sr_interval_int) needs the PG14+ multirange types."""
     if _pg_server_version(test_dsn) < 140000:
-        pytest.skip("sr_temporal requires PostgreSQL 14+ (tstzmultirange)")
+        pytest.skip("interval-union requires PostgreSQL 14+ (multirange types)")
 
 
 @pytest.fixture()
@@ -70,6 +71,13 @@ def test_mappings_lists_personnel_names(client, mapping):
     # On the test search_path (provsql_test, provsql, public) the relation
     # is visible unqualified, so the bare name lands in display_name.
     assert entry["display_name"] == "personnel_names"
+    # `value_type` is the parameterised display string (e.g.,
+    # `character varying(40)`); `value_base_type` is the unparameterised
+    # form (e.g., `character varying`) used for the eval-strip's type
+    # filter. `personnel.name` is unbounded varchar, so both render as
+    # `character varying`.
+    assert entry["value_type"] == "character varying"
+    assert entry["value_base_type"] == "character varying"
 
 
 def test_mappings_skips_non_mapping_tables(client):
@@ -207,37 +215,74 @@ def test_evaluate_lukasiewicz_returns_float(client, lukasiewicz_mapping):
     assert float(data["result"]) == 0.5
 
 
+def _interval_mapping_fixture(client, table, literal, carrier_type):
+    """Helper for the three interval-union fixtures below: build a
+    (value::<multirange>, provenance) mapping where every personnel row
+    is tagged with the same multirange literal, return the table name
+    and tear it down afterwards."""
+    setup = (
+        f"DROP TABLE IF EXISTS {table};"
+        f" CREATE TABLE {table} AS"
+        f"   SELECT '{literal}'::{carrier_type} AS value,"
+        f"          provsql AS provenance FROM personnel;"
+        f" SELECT remove_provenance('{table}');"
+        f" CREATE INDEX ON {table}(provenance);"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+
+
 @pytest.fixture()
-def temporal_mapping(client, test_dsn):
+def interval_tstz_mapping(client, test_dsn):
     """A (value::tstzmultirange, provenance) mapping where every personnel
     row is tagged with the validity interval `[2020-01-01, 2021-01-01)`.
     Skipped on PostgreSQL <14 where `tstzmultirange` does not exist."""
     _requires_pg14(test_dsn)
-    setup = (
-        "DROP TABLE IF EXISTS personnel_validity;"
-        " CREATE TABLE personnel_validity AS"
-        "   SELECT '{[2020-01-01,2021-01-01)}'::tstzmultirange AS value,"
-        "          provsql AS provenance FROM personnel;"
-        " SELECT remove_provenance('personnel_validity');"
-        " CREATE INDEX ON personnel_validity(provenance);"
-    )
-    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
-    assert resp.status_code == 200, resp.data
+    _interval_mapping_fixture(
+        client, "personnel_validity",
+        "{[2020-01-01,2021-01-01)}", "tstzmultirange")
     yield "personnel_validity"
     client.post("/api/exec", json={"sql": "DROP TABLE personnel_validity", "mode": "circuit"})
 
 
-def test_evaluate_temporal_returns_text(client, temporal_mapping):
-    """sr_temporal (interval-union): for a + over the seven personnel
-    input gates each tagged with the same validity interval, the result
-    is that single interval (no widening). The endpoint surfaces the
-    multirange via the `text` chip path: psycopg's Multirange.__str__
-    formats it as the canonical `{[lo, hi)}` literal."""
+@pytest.fixture()
+def interval_num_mapping(client, test_dsn):
+    """A (value::nummultirange, provenance) mapping where every personnel
+    row is tagged with the same numeric validity range `[3.2, 7.8)`.
+    Mirrors the sensor-fusion use case in doc/TODO/compiled-semirings.md."""
+    _requires_pg14(test_dsn)
+    _interval_mapping_fixture(
+        client, "personnel_num_validity",
+        "{[3.2,7.8)}", "nummultirange")
+    yield "personnel_num_validity"
+    client.post("/api/exec", json={"sql": "DROP TABLE personnel_num_validity", "mode": "circuit"})
+
+
+@pytest.fixture()
+def interval_int_mapping(client, test_dsn):
+    """A (value::int4multirange, provenance) mapping where every personnel
+    row is tagged with the same integer page range `[12, 18)`. Mirrors
+    the page-range provenance use case."""
+    _requires_pg14(test_dsn)
+    _interval_mapping_fixture(
+        client, "personnel_int_validity",
+        "{[12,18)}", "int4multirange")
+    yield "personnel_int_validity"
+    client.post("/api/exec", json={"sql": "DROP TABLE personnel_int_validity", "mode": "circuit"})
+
+
+def test_evaluate_interval_union_tstzmultirange(client, interval_tstz_mapping):
+    """interval-union over a tstzmultirange mapping: the backend resolves
+    to sr_temporal. For a + over the seven personnel input gates each
+    tagged with the same validity interval, the result is that single
+    interval (no widening). The endpoint surfaces the multirange via the
+    `text` chip path: psycopg's Multirange.__str__ formats it as the
+    canonical `{[lo, hi)}` literal."""
     root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
     resp = client.post("/api/evaluate", json={
         "token": root,
-        "semiring": "temporal",
-        "mapping": f"provsql_test.{temporal_mapping}",
+        "semiring": "interval-union",
+        "mapping": f"provsql_test.{interval_tstz_mapping}",
     })
     assert resp.status_code == 200, resp.data
     data = resp.get_json()
@@ -245,6 +290,59 @@ def test_evaluate_temporal_returns_text(client, temporal_mapping):
     assert isinstance(data["result"], str)
     assert "2020-01-01" in data["result"]
     assert "2021-01-01" in data["result"]
+
+
+def test_evaluate_interval_union_nummultirange(client, interval_num_mapping):
+    """interval-union over a nummultirange mapping: the backend resolves
+    to sr_interval_num. Same shape as the tstz test : a + collapses to
+    the single shared range `[3.2, 7.8)`."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "interval-union",
+        "mapping": f"provsql_test.{interval_num_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert isinstance(data["result"], str)
+    assert "3.2" in data["result"]
+    assert "7.8" in data["result"]
+
+
+def test_evaluate_interval_union_int4multirange(client, interval_int_mapping):
+    """interval-union over an int4multirange mapping: the backend resolves
+    to sr_interval_int. Same shape : a + collapses to the single shared
+    page range `[12, 18)`."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "interval-union",
+        "mapping": f"provsql_test.{interval_int_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert isinstance(data["result"], str)
+    assert "12" in data["result"]
+    assert "18" in data["result"]
+
+
+def test_evaluate_interval_union_rejects_non_multirange_mapping(client, mapping):
+    """The interval-union family requires a multirange-typed mapping. A
+    text-typed mapping (`personnel_names.value`) must be rejected at the
+    400 layer with a message naming the accepted carriers, before any SQL
+    round-trip to the kernel."""
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "interval-union",
+        "mapping": f"provsql_test.{mapping}",
+    })
+    assert resp.status_code == 400
+    error = resp.get_json()["error"].lower()
+    assert "interval-union" in error
+    assert "multirange" in error or "tstzmultirange" in error
 
 
 @pytest.fixture()
@@ -282,12 +380,30 @@ def test_evaluate_counting_returns_int(client, counting_mapping):
     assert int(data["result"]) == 7
 
 
-def test_evaluate_boolean_returns_bool(client, counting_mapping):
+@pytest.fixture()
+def boolean_mapping(client):
+    """A (value::boolean, provenance) mapping. The Studio's eval strip
+    filters compiled-semiring mappings by value type, so sr_boolean only
+    accepts a boolean-typed mapping; this fixture provides one."""
+    setup = (
+        "DROP TABLE IF EXISTS personnel_active;"
+        " CREATE TABLE personnel_active AS"
+        "   SELECT TRUE AS value, provsql AS provenance FROM personnel;"
+        " SELECT remove_provenance('personnel_active');"
+        " CREATE INDEX ON personnel_active(provenance);"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    yield "personnel_active"
+    client.post("/api/exec", json={"sql": "DROP TABLE personnel_active", "mode": "circuit"})
+
+
+def test_evaluate_boolean_returns_bool(client, boolean_mapping):
     root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
     resp = client.post("/api/evaluate", json={
         "token": root,
         "semiring": "boolean",
-        "mapping": f"provsql_test.{counting_mapping}",
+        "mapping": f"provsql_test.{boolean_mapping}",
     })
     assert resp.status_code == 200, resp.data
     data = resp.get_json()
@@ -435,7 +551,10 @@ def test_custom_semirings_excludes_sr_formula(client):
     assert "provsql.sr_boolean" not in qnames
     assert "provsql.sr_tropical" not in qnames
     assert "provsql.sr_viterbi" not in qnames
+    assert "provsql.sr_lukasiewicz" not in qnames
     assert "provsql.sr_temporal" not in qnames
+    assert "provsql.sr_interval_num" not in qnames
+    assert "provsql.sr_interval_int" not in qnames
 
 
 def test_evaluate_custom_returns_classification(client, custom_wrapper):

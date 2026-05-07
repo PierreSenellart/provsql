@@ -918,15 +918,76 @@
 
   // ─── semiring evaluation ──────────────────────────────────────────────
 
-  // Semirings that take a provenance mapping (regclass with `value` + `provenance`).
+  // Single source of truth for compiled semirings exposed in the eval
+  // strip. Each entry drives the dropdown population (label + group),
+  // the mapping-required check, the type-compatibility filter on the
+  // mapping picker (matched against `mapping.value_base_type`), the
+  // PG-version gate, and the optional hint shown next to the mapping
+  // dropdown. Adding a new compiled semiring is a one-line registry
+  // entry plus a matching backend dispatch.
+  //
+  // `types: null` means polymorphic (no filter, no expectation message).
+  // `types: [...]` filters the mapping picker; an empty result yields a
+  // "no compatible mappings" sentinel so the user can't run the option
+  // against a mapping the kernel won't accept.
+  const _NUMERIC_BASE_TYPES = [
+    'smallint', 'integer', 'bigint',
+    'numeric', 'real', 'double precision',
+  ];
+  const _INTERVAL_BASE_TYPES = [
+    'tstzmultirange', 'nummultirange', 'int4multirange',
+  ];
+  const _COMPILED_REGISTRY = {
+    // Boolean.
+    'boolexpr':    { label: 'Boolean expression',        group: 'bool',
+                     needsMapping: false, types: null,                hint: null },
+    'boolean':     { label: 'Boolean',                    group: 'bool',
+                     needsMapping: true,  types: ['boolean'],         hint: 'Expects boolean values.' },
+    // Lineage. `formula` is the canonical free-polynomial expression
+    // (Green-Karvounarakis-Tannen): a strict refinement of why and which.
+    'formula':     { label: 'Formula',                    group: 'lin',
+                     needsMapping: true,  types: null,                hint: null },
+    'why':         { label: 'Why-provenance',             group: 'lin',
+                     needsMapping: true,  types: null,                hint: null },
+    'which':       { label: 'Which-provenance',          group: 'lin',
+                     needsMapping: true,  types: null,                hint: null },
+    // Numeric / scoring. The [0, 1] constraint for Viterbi / Łukasiewicz
+    // can't be enforced at type level (no PG type for "numeric in [0, 1]")
+    // so the hint flags it; the kernel itself doesn't reject out-of-range
+    // values, it just yields nonsense.
+    'counting':    { label: 'Counting',                   group: 'num',
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values.' },
+    'tropical':    { label: 'Tropical (min-plus)',        group: 'num',
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric (cost) values.' },
+    'viterbi':     { label: 'Viterbi (max-times)',        group: 'num',
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].' },
+    'lukasiewicz': { label: 'Łukasiewicz (fuzzy)',       group: 'num',
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].' },
+    // Intervals. One UI option, three kernels: the backend picks
+    // sr_temporal / sr_interval_num / sr_interval_int from the mapping's
+    // multirange type. PG14+ because every multirange type was added in 14.
+    'interval-union': { label: 'Interval union (multirange)', group: 'iv',
+                        needsMapping: true,  types: _INTERVAL_BASE_TYPES,
+                        minPg: 140000,
+                        hint: 'Multirange-valued (PostgreSQL 14+); selects sr_temporal / sr_interval_num / sr_interval_int by mapping type.' },
+  };
+  const _COMPILED_GROUPS = [
+    ['bool', 'Boolean'],
+    ['lin',  'Lineage'],
+    ['num',  'Numeric'],
+    ['iv',   'Intervals'],
+  ];
+
   // Custom-semiring options (encoded as `custom:<schema>.<name>`) also need a
   // mapping; see `needsMapping`. `prov-xml` accepts an optional mapping
   // (used to label leaves) so the dropdown shows for it too, but emptying
   // the selection is allowed : see `_OPTIONAL_MAPPING`.
-  const _SR_NEEDS_MAPPING = new Set(['boolean', 'counting', 'why', 'which', 'formula', 'tropical', 'viterbi', 'lukasiewicz', 'temporal', 'prov-xml']);
   const _OPTIONAL_MAPPING = new Set(['prov-xml']);
   function needsMapping(v) {
-    return _SR_NEEDS_MAPPING.has(v) || v.startsWith('custom:');
+    if (v.startsWith('custom:')) return true;
+    if (v === 'prov-xml')       return true;
+    const spec = _COMPILED_REGISTRY[v];
+    return !!(spec && spec.needsMapping);
   }
   function mappingOptional(v) {
     return _OPTIONAL_MAPPING.has(v);
@@ -965,27 +1026,56 @@
     'weightmc':    'eval-args-wmc',
   };
 
-  // Compiled semirings whose availability depends on the server's PG
-  // version. `temporal` (sr_temporal) is the only one so far : it lives
-  // in `provsql.14.sql` because it consumes / produces `tstzmultirange`
-  // which only exists from PostgreSQL 14 onwards. Hide its <option> on
-  // older servers so the user never selects something that can't run.
-  // The map is read at sync time, after `/api/conn` has populated
-  // `window.ProvsqlStudio.serverVersion`.
-  const _COMPILED_MIN_PG = {
-    temporal: 140000,
-  };
+  // Build the "Compiled Semirings" sub-optgroups from the registry and
+  // splice them into the <select> ahead of "Custom Semirings" / "Other".
+  // Idempotent: calling twice is a no-op (the anchor div is checked).
+  // The registry is the single source of truth, so future compiled
+  // semirings appear without touching the static HTML.
+  function populateCompiledOptgroups() {
+    const sel = document.getElementById('eval-semiring');
+    if (!sel || sel.dataset.compiledPopulated === '1') return;
+    const fragment = document.createDocumentFragment();
+    for (const [groupId, groupLabel] of _COMPILED_GROUPS) {
+      const og = document.createElement('optgroup');
+      og.label = groupLabel;
+      og.dataset.compiledGroup = groupId;
+      let added = 0;
+      for (const [val, spec] of Object.entries(_COMPILED_REGISTRY)) {
+        if (spec.group !== groupId) continue;
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = spec.label;
+        og.appendChild(opt);
+        added++;
+      }
+      if (added) fragment.appendChild(og);
+    }
+    // Inject ahead of the static "Custom Semirings" / "Other" optgroups
+    // already present in the markup.
+    sel.insertBefore(fragment, sel.firstChild);
+    // Default the selection to the first compiled option so the strip
+    // is in a runnable state on first paint, matching the old behaviour
+    // where `boolexpr` was the first <option> in the select.
+    if (!sel.value) sel.value = 'boolexpr';
+    sel.dataset.compiledPopulated = '1';
+  }
+
+  // Compiled-semiring availability is gated by the server's PG version
+  // via the `minPg` field on the registry. Read at sync time, after
+  // `/api/conn` has populated `window.ProvsqlStudio.serverVersion`.
   function syncCompiledSemiringAvailability() {
     const sel = document.getElementById('eval-semiring');
     if (!sel) return;
+    populateCompiledOptgroups();
     const sv = Number(window.ProvsqlStudio?.serverVersion) || 0;
-    for (const [val, minPg] of Object.entries(_COMPILED_MIN_PG)) {
+    for (const [val, spec] of Object.entries(_COMPILED_REGISTRY)) {
+      if (!spec.minPg) continue;
       const opt = sel.querySelector(`option[value="${val}"]`);
       if (!opt) continue;
       // 0 means "not yet known" : keep the option visible until we hear
       // back from /api/conn so the strip is usable on first paint. Once
       // the version arrives it'll be gated correctly on the next sync.
-      const supported = !sv || sv >= minPg;
+      const supported = !sv || sv >= spec.minPg;
       opt.hidden = !supported;
       opt.disabled = !supported;
       // If the user had it selected on a stale page, fall back to the
@@ -1056,24 +1146,33 @@
       updateMappingHint();
     }
 
-    // Type expected for the mapping's `value` column under the current
-    // semiring choice. Custom semirings expose it as the wrapper's return
-    // type (the convention is `wrapper return type == mapping value type`,
-    // since the typed `zero`/`plus`/`times` inside provenance_evaluate
-    // pin the value column's type). Returns null when no filter applies.
-    function expectedValueType() {
+    // Set of value base types accepted for the mapping's `value` column
+    // under the current semiring choice. Returns null when no filter
+    // applies (polymorphic semirings: formula / why / which).
+    //   * Custom semirings: exactly the wrapper's return type (the
+    //     convention is `wrapper return type == mapping value type`,
+    //     since the typed `zero`/`plus`/`times` inside provenance_evaluate
+    //     pin the value column's type).
+    //   * Compiled semirings: the registry's `types` list. Matched
+    //     against `mapping.value_base_type` so a `numeric(10, 2)` mapping
+    //     compares against `numeric` and is accepted by Counting.
+    function expectedValueTypes() {
       const v = sel.value;
-      if (!v.startsWith('custom:')) return null;
-      const qname = v.slice('custom:'.length);
-      const c = _customs.find(x => x.qname === qname);
-      return c ? c.return_type : null;
+      if (v.startsWith('custom:')) {
+        const qname = v.slice('custom:'.length);
+        const c = _customs.find(x => x.qname === qname);
+        return c && c.return_type ? [c.return_type] : null;
+      }
+      const spec = _COMPILED_REGISTRY[v];
+      return spec && spec.types ? spec.types : null;
     }
 
     // Render the mapping <option>s from the cached list, filtered by the
-    // current semiring's expected value type. Compiled / probability
-    // semirings get the full list (their kernels accept any value type
-    // polymorphically); custom semirings get only the type-compatible
-    // ones, with a clear empty-state if none match.
+    // current semiring's expected value type set. Polymorphic semirings
+    // (formula / why / which) get the full list; typed compiled and
+    // custom semirings get only the type-compatible mappings, with a
+    // clear empty-state if none match. The base-type comparison is
+    // unparameterised (so, e.g., numeric(10, 2) matches the `numeric` slot).
     function renderMappingOptions() {
       const optional = mappingOptional(sel.value);
       if (!_mappings.length) {
@@ -1083,13 +1182,14 @@
         map.disabled = !optional;
         return;
       }
-      const expect = expectedValueType();
-      const list = expect
-        ? _mappings.filter(m => m.value_type === expect)
+      const expectedTypes = expectedValueTypes();
+      const list = expectedTypes
+        ? _mappings.filter(m => expectedTypes.includes(m.value_base_type))
         : _mappings;
       if (!list.length) {
+        const accepted = (expectedTypes || []).join(', ');
         map.innerHTML =
-          `<option value="">(no compatible mappings : value type ≠ ${escapeHtml(expect)})</option>`;
+          `<option value="">(no compatible mappings : expected ${escapeHtml(accepted)})</option>`;
         map.disabled = true;
         return;
       }
@@ -1111,30 +1211,32 @@
       }
     }
 
-    // Hint text next to the mapping dropdown for compiled semirings whose
-    // value-type expectations can't be enforced statically (the wrapper
-    // signature uses regclass without a type constraint, but the kernel
-    // still implicitly expects values it can interpret as boolean / int).
-    // The user can pick anything but knows what's expected.
-    const _COMPILED_HINTS = {
-      boolean:  'Expects boolean values.',
-      counting: 'Expects numeric values.',
-      tropical:    'Expects numeric (cost) values.',
-      viterbi:     'Expects numeric values in [0, 1].',
-      lukasiewicz: 'Expects numeric values in [0, 1].',
-      temporal:    'Expects tstzmultirange (validity-interval) values; PostgreSQL 14+.',
-    };
+    // Hint text next to the mapping dropdown. For typed compiled
+    // semirings the registry-defined hint flags constraints the type
+    // filter can't express (e.g., "values in [0, 1]" for Viterbi /
+    // Łukasiewicz, or the multirange-dispatch note for interval-union).
+    // Custom semirings get a generic "Filtered to <T>" so the user
+    // knows why the picker shrank.
     function updateMappingHint() {
       const hint = document.getElementById('eval-mapping-hint');
       if (!hint) return;
-      const expect = expectedValueType();
-      if (expect) {
-        hint.textContent = `Filtered to ${expect}`;
-        hint.hidden = map.hidden;
+      if (map.hidden) {
+        hint.hidden = true;
+        hint.textContent = '';
         return;
       }
-      const msg = _COMPILED_HINTS[sel.value];
-      if (msg && !map.hidden) {
+      const v = sel.value;
+      let msg = null;
+      if (v.startsWith('custom:')) {
+        const expectedTypes = expectedValueTypes();
+        if (expectedTypes && expectedTypes.length === 1) {
+          msg = `Filtered to ${expectedTypes[0]}`;
+        }
+      } else {
+        const spec = _COMPILED_REGISTRY[v];
+        if (spec && spec.hint) msg = spec.hint;
+      }
+      if (msg) {
         hint.textContent = msg;
         hint.hidden = false;
       } else {

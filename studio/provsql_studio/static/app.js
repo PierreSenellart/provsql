@@ -1454,18 +1454,10 @@
         </div>
         <div class="cv-eval__form">
           <select class="cv-eval__semiring" id="eval-semiring">
-            <optgroup label="Compiled Semirings">
-              <option value="boolexpr">Boolean expression</option>
-              <option value="boolean">Boolean</option>
-              <option value="counting">Counting</option>
-              <option value="why">Why-provenance</option>
-              <option value="which">Which-provenance (lineage)</option>
-              <option value="formula">Formula</option>
-              <option value="tropical">Tropical (min-plus)</option>
-              <option value="viterbi">Viterbi (max-times)</option>
-              <option value="lukasiewicz">Łukasiewicz (fuzzy)</option>
-              <option value="temporal">Temporal (interval-union)</option>
-            </optgroup>
+            <!-- Compiled-semiring sub-optgroups (Boolean & symbolic,
+                 Lineage, Numeric, Interval-valued) are injected at init
+                 from circuit.js's compiled-semiring registry, ahead of
+                 the "Custom Semirings" / "Other" groups below. -->
             <optgroup label="Custom Semirings" id="eval-custom-group" hidden>
               <!-- populated lazily from /api/custom_semirings -->
             </optgroup>

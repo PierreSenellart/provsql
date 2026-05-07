@@ -680,20 +680,54 @@ def _to_jsonable(v):
     return str(v)
 
 
-# Whitelist of compiled semirings the Studio's evaluate endpoint exposes.
-# `boolexpr` is the odd one out: it doesn't take a mapping (the leaf labels
-# are the gate UUIDs themselves). Probability is handled separately because
-# it dispatches on a method name rather than a mapping.
-_SR_FUNCTIONS = {
-    "formula":  "sr_formula",
-    "counting": "sr_counting",
-    "why":      "sr_why",
-    "which":    "sr_which",
-    "boolean":  "sr_boolean",
-    "tropical":    "sr_tropical",
-    "viterbi":     "sr_viterbi",
-    "lukasiewicz": "sr_lukasiewicz",
-    "temporal":    "sr_temporal",
+# Compiled-semiring registry. Single source of truth for what the Studio
+# exposes in the eval strip: the SQL function to call, the value-types its
+# kernel accepts on the mapping (None means "polymorphic, any type"), and
+# the minimum PG version required (None means "no gate").
+#
+# `interval-union` is a *family*: one UI option backed by three kernels
+# (sr_temporal / sr_interval_num / sr_interval_int) that all implement the
+# same `IntervalUnion(Oid)` algebra over different multirange carriers.
+# The kernel dispatches on the mapping's value type at evaluation time;
+# see `_resolve_compiled_semiring`.
+#
+# `boolexpr` is the odd one out: it does not take a mapping (leaf labels
+# are the gate UUIDs themselves). Probability and prov-xml are handled
+# separately, outside this registry.
+#
+# Numeric base types accepted by the scoring semirings (counting, tropical,
+# viterbi, lukasiewicz). `format_type(_, NULL)` produces these exact
+# spellings, so the set is matched against `value_base_type`, not the
+# typmod-parameterised `value_type`.
+_NUMERIC_TYPES = (
+    "smallint", "integer", "bigint",
+    "numeric", "real", "double precision",
+)
+_INTERVAL_KERNELS = {
+    "tstzmultirange": "sr_temporal",
+    "nummultirange":  "sr_interval_num",
+    "int4multirange": "sr_interval_int",
+}
+_COMPILED_SEMIRINGS: dict[str, dict] = {
+    # Boolean & symbolic.
+    "boolexpr": {"func": "sr_boolexpr", "needs_mapping": False, "types": None},
+    "boolean":  {"func": "sr_boolean",  "types": ("boolean",)},
+    "formula":  {"func": "sr_formula",  "types": None},
+    # Lineage.
+    "why":      {"func": "sr_why",      "types": None},
+    "which":    {"func": "sr_which",    "types": None},
+    # Numeric / scoring.
+    "counting":    {"func": "sr_counting",    "types": _NUMERIC_TYPES},
+    "tropical":    {"func": "sr_tropical",    "types": _NUMERIC_TYPES},
+    "viterbi":     {"func": "sr_viterbi",     "types": _NUMERIC_TYPES},
+    "lukasiewicz": {"func": "sr_lukasiewicz", "types": _NUMERIC_TYPES},
+    # Interval-valued (PG14+ multirange family). `func` is None: the
+    # kernel is picked at evaluation time from the mapping's value type.
+    "interval-union": {
+        "func": None,
+        "types": tuple(_INTERVAL_KERNELS.keys()),
+        "min_pg": 140000,
+    },
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
@@ -716,13 +750,17 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
     `create_provenance_mapping` produces `(value <T>, provenance uuid)`,
     and `sr_*` semirings consume any regclass with that signature.
     Returns one entry per match, qualified by schema. `value_type` is the
-    declared type of the `value` column (e.g. `classification_level`,
-    `text`, `integer`); the eval-strip dropdown filters custom semirings
-    by matching this against the wrapper's `return_type`."""
+    parameterised type of the `value` column for display
+    (e.g., `numeric(10,2)`, `varchar(40)`, `classification_level`);
+    `value_base_type` is the same type without the `atttypmod`
+    parameterisation (e.g., `numeric`, `character varying`), used to
+    filter the eval-strip dropdown by type compatibility against
+    compiled-semiring registries and custom-wrapper return types."""
     out: list[dict] = []
     sql_text = """
         SELECT n.nspname, c.relname, pg_table_is_visible(c.oid) AS visible,
-               format_type(va.atttypid, va.atttypmod) AS value_type
+               format_type(va.atttypid, va.atttypmod) AS value_type,
+               format_type(va.atttypid, NULL)         AS value_base_type
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_attribute va
@@ -749,13 +787,14 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
     # in `qname` for the API call so the regclass cast is unambiguous.
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(sql_text)
-        for schema, name, visible, value_type in cur.fetchall():
+        for schema, name, visible, value_type, value_base_type in cur.fetchall():
             out.append({
                 "schema": schema,
                 "name": name,
                 "qname": f"{schema}.{name}",
                 "display_name": name if visible else f"{schema}.{name}",
                 "value_type": str(value_type),
+                "value_base_type": str(value_base_type),
             })
     return out
 
@@ -904,19 +943,8 @@ def evaluate_circuit(
                 "SELECT provsql.to_provxml({}::uuid)"
             ).format(sql.Literal(token))
         params = ()
-    elif semiring in _SR_FUNCTIONS:
-        # `sr_temporal` lives in `provsql.14.sql` (it depends on the
-        # `tstzmultirange` PG14+ type), so reject it cleanly when the
-        # server is older instead of letting psycopg surface the bare
-        # "function does not exist" error. Frontend hides the option in
-        # the same case, but we still gate here for crafted payloads.
-        if semiring == "temporal":
-            with pool.connection() as conn:
-                if conn.info.server_version < 140000:
-                    raise ValueError(
-                        "semiring 'temporal' requires PostgreSQL 14+ "
-                        "(tstzmultirange is not available)"
-                    )
+    elif semiring in _COMPILED_SEMIRINGS:
+        spec = _COMPILED_SEMIRINGS[semiring]
         if not mapping:
             raise ValueError(
                 f"semiring {semiring!r} requires a provenance mapping"
@@ -927,10 +955,26 @@ def evaluate_circuit(
         # return type (int for counting, bool for boolean, text for
         # formula / why) : we keep that so `_to_jsonable` can pass the
         # primitive through to JSON without wrapping it as a string.
-        fn = sql.Identifier("provsql", _SR_FUNCTIONS[semiring])
-        sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)").format(
-            fn, sql.Literal(token), sql.Literal(mapping)
-        )
+        kernel = _resolve_compiled_semiring(pool, semiring, spec, mapping)
+        fn = sql.Identifier("provsql", kernel)
+        # Cast multirange results to text server-side so we get PG's
+        # canonical literal (`{(,)}`, `{[lo, hi)}`) instead of psycopg's
+        # `str(Multirange([Range(None, None, '()')]))` which prints as
+        # `{(None, None)}` and surprises users when the universal
+        # multirange (the `one()` of IntervalUnion) shows up : that
+        # happens whenever the mapping doesn't cover an input gate, since
+        # `GenericCircuit::evaluate` falls back to `semiring.one()` for
+        # unmapped leaves. Other compiled kernels return scalar types
+        # that flow through `_to_jsonable` cleanly, so leave their SQL
+        # alone.
+        if semiring == "interval-union":
+            sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)::text").format(
+                fn, sql.Literal(token), sql.Literal(mapping)
+            )
+        else:
+            sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)").format(
+                fn, sql.Literal(token), sql.Literal(mapping)
+            )
         params = ()
     else:
         raise ValueError(f"unknown semiring: {semiring!r}")
@@ -988,10 +1032,83 @@ def _result_kind(semiring: str) -> str:
         return "custom"
     if semiring == "prov-xml":
         return "xml"
-    # boolexpr / formula / why / which all return text; temporal returns
-    # tstzmultirange (psycopg's Multirange str-formats as `{[lo, hi), ...}`,
-    # which `_to_jsonable` carries through unchanged).
+    # boolexpr / formula / why / which all return text; interval-union
+    # returns a multirange (psycopg's Multirange str-formats as
+    # `{[lo, hi), ...}`, which `_to_jsonable` carries through unchanged).
     return "text"
+
+
+def _mapping_value_base_type(pool: ConnectionPool, mapping: str) -> str:
+    """Return the unparameterised type of `mapping.value`, used for
+    type-compatibility checks against compiled-semiring registries.
+    Raises ValueError if the relation isn't shaped like a mapping (no
+    `value` column reachable from the current search_path)."""
+    if "." in mapping:
+        schema, name = mapping.split(".", 1)
+        where = "n.nspname = %s AND c.relname = %s"
+        params: tuple = (schema, name)
+    else:
+        where = "c.relname = %s AND pg_table_is_visible(c.oid)"
+        params = (mapping,)
+    sql_text = f"""
+        SELECT format_type(va.atttypid, NULL)
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute va
+          ON va.attrelid = c.oid
+         AND va.attname = 'value'
+         AND NOT va.attisdropped
+        WHERE {where}
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql_text, params)
+        row = cur.fetchone()
+    if row is None:
+        raise ValueError(
+            f"mapping {mapping!r} not found or has no `value` column"
+        )
+    return str(row[0])
+
+
+def _resolve_compiled_semiring(
+    pool: ConnectionPool, semiring: str, spec: dict, mapping: str
+) -> str:
+    """Pick the SQL function name to call for a compiled-semiring entry.
+    Validates the mapping's value type against the registry's accepted
+    set and gates families (whose `func` is None) on that type. PG-version
+    gating happens here too so crafted payloads can't bypass the frontend
+    hide.
+
+    Raises ValueError on PG-version mismatch or value-type incompatibility;
+    the caller turns that into a clean 400."""
+    min_pg = spec.get("min_pg")
+    if min_pg is not None:
+        with pool.connection() as conn:
+            if conn.info.server_version < min_pg:
+                raise ValueError(
+                    f"semiring {semiring!r} requires PostgreSQL "
+                    f"{min_pg // 10000} or newer"
+                )
+    accepted = spec.get("types")
+    if accepted is None and spec["func"] is not None:
+        # Polymorphic kernel, single function : nothing to validate.
+        return spec["func"]
+    base_type = _mapping_value_base_type(pool, mapping)
+    if accepted is not None and base_type not in accepted:
+        accepted_list = ", ".join(accepted)
+        raise ValueError(
+            f"semiring {semiring!r} expects mapping value type in "
+            f"{{{accepted_list}}}, got {base_type!r}"
+        )
+    if spec["func"] is not None:
+        return spec["func"]
+    # Family entry (`interval-union`): dispatch by carrier type.
+    if semiring == "interval-union":
+        return _INTERVAL_KERNELS[base_type]
+    # Defensive: every family entry should have an explicit dispatch
+    # branch. Hitting this means the registry got an entry the resolver
+    # doesn't know about.
+    raise ValueError(f"no kernel dispatch for semiring {semiring!r}")
 
 
 _NO_PROV_MARKER = "called on a table without provenance"

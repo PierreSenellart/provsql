@@ -245,21 +245,44 @@ Semiring evaluation strip
 
 Below the canvas, the :doc:`semiring evaluation <semirings>` strip
 targets the pinned node (or, when no node is pinned, the root). The
-semiring select groups available evaluations into three optgroups:
+semiring select groups compiled entries into four sub-optgroups, with
+custom and "Other" entries below:
 
-* **Compiled semirings**: ``boolean``, ``boolexpr``, ``counting``,
-  ``why``, ``which``, ``formula``, ``tropical``, ``viterbi``,
-  ``lukasiewicz``, and ``temporal`` (this last one requires
-  PostgreSQL 14+; see :doc:`temporal`).
+* **Compiled semirings**
+
+  * *Boolean*: ``boolexpr``, ``boolean``.
+  * *Lineage*: ``formula``, ``why``, ``which``. ``formula`` is the
+    canonical free-polynomial expression (Green-Karvounarakis-Tannen),
+    a strict refinement of the set-valued ``why`` and ``which``.
+  * *Numeric*: ``counting``, ``tropical``, ``viterbi``,
+    ``lukasiewicz``.
+  * *Intervals*: ``interval-union``. One UI option backed by the
+    :sqlfunc:`sr_temporal`, :sqlfunc:`sr_interval_num` and
+    :sqlfunc:`sr_interval_int` kernels: the strip picks the right one
+    from the selected mapping's multirange type
+    (``tstzmultirange`` / ``nummultirange`` / ``int4multirange``);
+    requires PostgreSQL 14+. See :doc:`temporal` for the
+    interval-union algebra.
+
 * **Custom semirings**: any user-defined wrapper over
-  :sqlfunc:`provenance_evaluate` discovered in the schema. Mappings
-  are filtered by value-type compatibility for custom entries.
+  :sqlfunc:`provenance_evaluate` discovered in the schema.
 * **Other**: ``probability`` and ``PROV-XML export``. The
   probability method picker (see :doc:`probabilities`) groups exact
   methods (``(default)``, ``independent``, ``possible-worlds``,
   ``tree-decomposition``, ``compilation``) and approximate methods
   (``monte-carlo``, ``weightmc``). PROV-XML export uses
   :sqlfunc:`to_provxml`; see :doc:`export`.
+
+The mapping picker filters on the selected semiring's expected value
+type: only ``boolean``-typed mappings appear under ``boolean``, only
+the numeric base types (``smallint`` / ``integer`` / ``bigint`` /
+``numeric`` / ``real`` / ``double precision``) under the numeric
+group, and only multirange-typed mappings under ``interval-union``.
+Polymorphic entries (``boolexpr``, ``formula``, ``why``, ``which``)
+accept any mapping. Custom-semiring entries filter to mappings whose
+value type matches the wrapper's return type. Mismatches are
+surfaced before the round-trip as ``(no compatible mappings :
+expected …)`` in the picker.
 
 :guilabel:`Run` reports the result inline along with the runtime; Monte-Carlo
 runs additionally show a ± confidence band (`Hoeffding bound

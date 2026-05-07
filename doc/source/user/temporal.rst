@@ -62,6 +62,22 @@ associated with a query result via its provenance:
 use :sqlfunc:`sr_temporal` directly. See :doc:`semirings` for a
 description of the underlying interval-union m-semiring.
 
+:sqlfunc:`sr_temporal` is the ``tstzmultirange`` specialisation of a
+more general interval-union m-semiring parameterised by the carrier
+type: union for ⊕, intersection for ⊗, and set difference for monus,
+defined uniformly over any densely-ordered linearly-ordered carrier
+with a bounded order. ProvSQL ships two further instances :
+:sqlfunc:`sr_interval_num` over ``nummultirange`` (e.g.
+measurement-validity ranges in scientific data integration) and
+:sqlfunc:`sr_interval_int` over ``int4multirange`` (e.g., page-range
+or line-range provenance in scholarly or source-code corpora). All
+three share the same algebra and the same C++ kernel
+(``IntervalUnion(Oid)``), differing only in the underlying multirange
+type. ProvSQL Studio surfaces them as a single
+``Interval union (multirange)`` option in its evaluation strip, with
+the kernel selected automatically from the chosen mapping's value
+type; see :doc:`studio`.
+
 Temporal Query Functions
 -------------------------
 

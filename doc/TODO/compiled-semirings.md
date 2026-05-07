@@ -206,3 +206,36 @@ These are useful to bear in mind for any future compiled semiring:
   to `_SQL_FUNC_MAP` in `doc/source/conf.py` with a Doxygen anchor
   obtained by running `doxygen Doxyfile-sql` and grepping
   `doc/doxygen-sql/html/group__compiled__semirings.html`.
+
+## Studio integration
+
+The Studio eval strip (`studio/provsql_studio/static/circuit.js`,
+`_COMPILED_REGISTRY`) and backend dispatch
+(`studio/provsql_studio/db.py`, `_COMPILED_SEMIRINGS`) are the two
+hand-maintained registries. Each is one entry per UI option:
+
+* **Single-kernel entry** (the common case): adding a new compiled
+  semiring is a one-line entry in each registry plus a sub-optgroup
+  pick in `_COMPILED_REGISTRY` (`bool` / `lin` / `num` / `iv` ; add a
+  new group id + label to `_COMPILED_GROUPS` in `circuit.js` only if
+  the new semiring doesn't fit). Type filtering on the mapping picker
+  is driven by the `types` field; leave `null` for polymorphic kernels.
+
+* **Family entry** (one UI option, multiple kernels keyed by mapping
+  type): the model is `interval-union`. Backend `_COMPILED_SEMIRINGS`
+  sets `func: None` and `types: (...accepted carrier types...)`; the
+  resolver `_resolve_compiled_semiring` looks up the kernel from a
+  per-family map (`_INTERVAL_KERNELS`). On the frontend, the registry
+  entry has `types: [...]` listing the accepted multirange types and
+  a `hint` line explaining the dispatch. This is how
+  `sr_temporal` / `sr_interval_num` / `sr_interval_int` are exposed as
+  one ``Interval union (multirange)`` option.
+
+Two reasons to prefer the family pattern when adding multi-carrier
+algebras (e.g., a future `sr_minmax_enum` instantiated per user enum,
+or any new multirange carrier that lands in PG): (a) one UI option
+per *algebra* keeps the dropdown legible as the list grows, and (b)
+the type filter on the mapping picker does the dispatch naturally,
+so adding a new carrier (e.g., `datemultirange`) is a backend-only
+change : a one-line entry in `_INTERVAL_KERNELS` and one type added
+to both registries' `types` field.
