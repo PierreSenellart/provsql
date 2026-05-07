@@ -1463,6 +1463,7 @@
               <option value="formula">Formula</option>
               <option value="tropical">Tropical (min-plus)</option>
               <option value="viterbi">Viterbi (max-times)</option>
+              <option value="lukasiewicz">Łukasiewicz (fuzzy)</option>
               <option value="temporal">Temporal (interval-union)</option>
             </optgroup>
             <optgroup label="Custom Semirings" id="eval-custom-group" hidden>

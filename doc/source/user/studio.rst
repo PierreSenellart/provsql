@@ -248,9 +248,9 @@ targets the pinned node (or, when no node is pinned, the root). The
 semiring select groups available evaluations into three optgroups:
 
 * **Compiled semirings**: ``boolean``, ``boolexpr``, ``counting``,
-  ``why``, ``which``, ``formula``, ``tropical``, ``viterbi``, and
-  ``temporal`` (this last one requires PostgreSQL 14+; see
-  :doc:`temporal`).
+  ``why``, ``which``, ``formula``, ``tropical``, ``viterbi``,
+  ``lukasiewicz``, and ``temporal`` (this last one requires
+  PostgreSQL 14+; see :doc:`temporal`).
 * **Custom semirings**: any user-defined wrapper over
   :sqlfunc:`provenance_evaluate` discovered in the schema. Mappings
   are filtered by value-type compatibility for custom entries.

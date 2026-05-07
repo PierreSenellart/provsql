@@ -173,6 +173,41 @@ def test_evaluate_viterbi_returns_float(client, float_mapping):
 
 
 @pytest.fixture()
+def lukasiewicz_mapping(client):
+    """A (value::float, provenance) mapping in [0, 1], suitable for the
+    Łukasiewicz fuzzy semiring (which uses ⊕ = max). Values are
+    1/(id+1), so the seven personnel rows get 0.5, 0.333, 0.25, 0.2,
+    0.167, 0.143, 0.125."""
+    setup = (
+        "DROP TABLE IF EXISTS personnel_unit;"
+        " CREATE TABLE personnel_unit AS"
+        "   SELECT (1.0/(id+1))::float AS value, provsql AS provenance FROM personnel;"
+        " SELECT remove_provenance('personnel_unit');"
+        " CREATE INDEX ON personnel_unit(provenance);"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    yield "personnel_unit"
+    client.post("/api/exec", json={"sql": "DROP TABLE personnel_unit", "mode": "circuit"})
+
+
+def test_evaluate_lukasiewicz_returns_float(client, lukasiewicz_mapping):
+    """sr_lukasiewicz: ⊕ is max, so for a + over the seven personnel
+    input gates with values 1/(id+1) ∈ [0, 1], the result is 1/2 (the
+    largest, from id=1)."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "lukasiewicz",
+        "mapping": f"provsql_test.{lukasiewicz_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "float"
+    assert float(data["result"]) == 0.5
+
+
+@pytest.fixture()
 def temporal_mapping(client, test_dsn):
     """A (value::tstzmultirange, provenance) mapping where every personnel
     row is tagged with the validity interval `[2020-01-01, 2021-01-01)`.
