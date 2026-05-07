@@ -1,31 +1,38 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "provsql-studio"
-version = "0.1.0"
-description = "Web UI for ProvSQL — where-provenance inspection and circuit visualisation."
+dynamic = ["version"]
+description = "Web UI for ProvSQL: provenance inspection, circuit visualisation, and on-the-fly semiring evaluation."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Pierre Senellart", email = "pierre@senellart.com" }]
 requires-python = ">=3.10"
+keywords = ["postgresql", "probabilistic-database", "provenance", "provenance-tracking", "provsql", "web-ui"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Web Environment",
     "Framework :: Flask",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Database",
     "Topic :: Internet :: WWW/HTTP :: WSGI :: Application",
+    "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 dependencies = [
     "flask>=3.0",
     "psycopg[binary]>=3.1",
-    "psycopg_pool>=3.2",
+    "psycopg-pool>=3.2",
     "sqlparse>=0.4",
 ]
 
@@ -35,11 +42,15 @@ dev  = ["ruff>=0.5", "mypy>=1.8"]
 
 [project.urls]
 Homepage      = "https://provsql.org"
-Documentation = "https://provsql.org/docs/"
+Documentation = "https://provsql.org/docs/user/studio.html"
 Source        = "https://github.com/PierreSenellart/provsql"
+Issues        = "https://github.com/PierreSenellart/provsql/issues"
 
 [project.scripts]
 provsql-studio = "provsql_studio.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "provsql_studio.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["provsql_studio*"]
