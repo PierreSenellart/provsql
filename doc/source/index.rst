@@ -1,17 +1,20 @@
 Welcome to ProvSQL's documentation!
 ===================================
 
-ProvSQL is a PostgreSQL extension that adds semiring provenance and
+**ProvSQL** is a PostgreSQL extension that adds semiring provenance and
 uncertainty management to SQL queries.  It transparently rewrites
 queries to track which input tuples contribute to each result, then
 evaluates the provenance in any user-chosen semiring -- Boolean
 reachability, counting, probability, Shapley values, and more.
 
+A companion Python web UI, **ProvSQL Studio**, provides interactive
+provenance inspection on top of any ProvSQL-enabled database.
+
 This documentation is organized into four parts:
 
 * The :ref:`user-guide` explains how to install, configure, and use
-  ProvSQL from the SQL level.  Start here if you are new to
-  ProvSQL.
+  ProvSQL from the SQL level and through ProvSQL Studio.  Start here
+  if you are new to ProvSQL.
 
 * The :ref:`case-studies` present extended worked examples of ProvSQL
   applied to realistic scenarios, covering a broader range of features

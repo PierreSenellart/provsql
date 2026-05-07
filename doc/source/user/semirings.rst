@@ -18,6 +18,12 @@ where ``provenance()`` returns the token for the current output row and
 Semirings are also extended with a *monus* operation allowing to
 represent the output of non-monotone queries.
 
+ProvSQL Studio's :ref:`evaluation strip <studio-circuit-eval-strip>`
+drives every compiled and custom semiring interactively: pick a
+semiring and a provenance mapping in the dropdown, click :guilabel:`Run`,
+and the result lands inline. The rest of this chapter is the SQL
+reference for the same operations.
+
 Boolean Semiring
 -----------------
 

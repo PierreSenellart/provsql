@@ -222,6 +222,15 @@ To use a specific release version::
 Follow the on-screen instructions to connect to the PostgreSQL server
 inside the container with a PostgreSQL client.
 
+ProvSQL Studio
+--------------
+
+ProvSQL Studio is a Python-backed web UI for ProvSQL, distributed as a
+separate package on PyPI. It connects to any ProvSQL-enabled database
+and provides interactive provenance inspection (Where mode), circuit
+visualisation (Circuit mode), and on-the-fly semiring evaluation. See
+:doc:`studio` for installation and usage.
+
 License
 -------
 

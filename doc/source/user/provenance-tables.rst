@@ -120,6 +120,25 @@ source table, which is useful when the table is frequently updated:
 The view can be used anywhere a table-based mapping is expected (e.g., as
 the second argument to semiring evaluation functions).
 
+ProvSQL Studio
+---------------
+
+ProvSQL Studio's :ref:`schema panel <studio-schema-panel>` is an
+interactive surface for the operations above:
+
+* it lists every ``SELECT``-able relation, with a purple :sc:`prov`
+  pill on tables whose ``provsql`` column is injected by the planner
+  (provenance tracking is active) and a gold :sc:`mapping` pill on
+  relations shaped ``(value <T>, provenance uuid)``;
+* :guilabel:`+ prov` and :guilabel:`− prov` action chips on
+  provenance-eligible plain tables prefill the corresponding
+  ``SELECT add_provenance(...)`` / ``SELECT remove_provenance(...)``
+  call into the query box;
+* clicking a column on a tracked table prefills a
+  ``SELECT create_provenance_mapping('<table>_<col>_mapping',
+  '<schema>.<table>', '<col>');`` call, so a fresh provenance
+  mapping is two clicks away.
+
 .. _circuit-gates:
 
 Inspecting the Circuit

@@ -26,6 +26,14 @@ reliability through a psychological evaluation.
 **Your mission:** help the police discover who killed Daphine, using the
 power of provenance management and probabilistic databases.
 
+.. note::
+
+   The tutorial reads as a sequence of ``psql`` sessions, but every
+   step also runs in :doc:`studio` (the web UI for ProvSQL): clickable
+   circuits in Circuit mode, hover-to-trace in Where mode, and an
+   evaluation strip that drives the semiring and probability calls
+   the tutorial introduces.
+
 Setup
 -----
 
