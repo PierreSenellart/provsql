@@ -204,6 +204,8 @@ To install a specific version::
     pgxn install provsql=1.2.2
 
 
+.. _docker-container:
+
 Docker Container
 ----------------
 

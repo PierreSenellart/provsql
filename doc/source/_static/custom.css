@@ -254,3 +254,15 @@ footer {
   margin: 0 0.4em;
   color: rgba(244,240,250,0.4);
 }
+
+/* :sc:`text` role — small caps for in-UI labels mentioned in prose. */
+.smallcaps {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+}
+
+/* :guilabel:`text` role — UI button / chip labels rendered in the body
+   sans-serif font (not monospace), to match how they look in Studio. */
+.guilabel {
+  font-family: var(--font-sans, system-ui, sans-serif);
+}

@@ -296,8 +296,12 @@ def setup(app):
         ref += lit
         return [ref], []
 
+    def sc_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+        return [nodes.inline(rawtext, text, classes=['smallcaps'])], []
+
     app.add_role('sqlfunc', sqlfunc_role)
     app.add_role('cfunc', cfunc_role)
     app.add_role('cfile', cfile_role)
     app.add_role('sqlfile', sqlfile_role)
+    app.add_role('sc', sc_role)
     return {'version': '0.1', 'parallel_read_safe': True}

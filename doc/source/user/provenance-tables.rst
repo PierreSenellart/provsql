@@ -120,6 +120,8 @@ source table, which is useful when the table is frequently updated:
 The view can be used anywhere a table-based mapping is expected (e.g., as
 the second argument to semiring evaluation functions).
 
+.. _circuit-gates:
+
 Inspecting the Circuit
 -----------------------
 
