@@ -49,6 +49,11 @@ Example output (abbreviated):
       </prov:wasDerivedFrom>
     </prov:document>
 
+The same export is reachable from Studio's
+:ref:`evaluation strip <studio-circuit-eval-strip>`: it lists
+PROV-XML under the *Other* optgroup and serialises the currently
+rendered circuit on demand.
+
 Circuit Visualisation
 ----------------------
 
@@ -71,6 +76,14 @@ To visualise the circuits for multiple rows simultaneously:
 
     SELECT city, view_circuit(provenance(), 'my_mapping')
     FROM (SELECT DISTINCT city FROM personnel) t;
+
+For an interactive alternative, see Studio's
+:ref:`Circuit mode <studio-circuit-mode>`. It renders the same DAG
+in the browser: click a UUID cell in a query result to display its
+circuit, hover to highlight a subtree, expand the frontier on
+demand, and read every gate's metadata (including stored
+probability) in the side inspector. It does not require
+``graph-easy`` and is unaffected by ``provsql.tool_search_path``.
 
 Verbosity
 ----------

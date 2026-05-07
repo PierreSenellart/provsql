@@ -52,6 +52,7 @@ This documentation is organized into four parts:
    user/data-modification
    user/temporal
    user/export
+   user/studio
    user/configuration
 
 .. _case-studies:

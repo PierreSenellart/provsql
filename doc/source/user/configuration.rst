@@ -8,6 +8,8 @@ all settable per session with ``SET`` or permanently in
 or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdatabase.html>`_
 / `ALTER ROLE <https://www.postgresql.org/docs/current/sql-alterrole.html>`_.
 
+.. _provsql-active:
+
 ``provsql.active`` (default: ``on``)
     Master switch. When ``off``, ProvSQL drops all provenance annotations
     silently, as if the extension were not loaded. Useful to temporarily
@@ -21,6 +23,8 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 ``provsql.update_provenance`` (default: ``off``)
     Enable provenance tracking for ``INSERT``, ``UPDATE``, and ``DELETE``
     statements (see :doc:`data-modification`). Requires PostgreSQL ≥ 14.
+
+.. _provsql-verbose-level:
 
 ``provsql.verbose_level`` (default: ``0``)
     Controls the verbosity of ProvSQL diagnostic messages. ``0`` is silent.

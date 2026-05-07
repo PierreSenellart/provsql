@@ -85,7 +85,82 @@ def build_parser() -> argparse.ArgumentParser:
              "appended automatically). Empty = inherit the database default.",
     )
     p.add_argument("--debug", action="store_true", help="Enable Flask debug mode.")
+    p.add_argument(
+        "--ignore-version",
+        action="store_true",
+        help="Skip the ProvSQL extension version check on startup. "
+             "Use when running against a development branch that pre-dates "
+             "the minimum required version.",
+    )
     return p
+
+
+# Minimum ProvSQL extension version Studio is built against. A `-dev`
+# suffix on the installed version is accepted as the matching release
+# (e.g. `1.4.0-dev` is treated as `1.4.0`), so Studio can ride alongside
+# an unreleased extension build.
+REQUIRED_PROVSQL_VERSION = (1, 4, 0)
+
+_VERSION_RE = re.compile(r'^\s*(\d+)\.(\d+)(?:\.(\d+))?')
+
+
+def _parse_extversion(s: str) -> tuple[int, int, int] | None:
+    m = _VERSION_RE.match(s)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+
+def _check_extension_version(dsn: str) -> None:
+    """Read provsql's extversion from the target DB; exit if too old.
+
+    The check is best-effort: if the connection fails or the extension
+    isn't listed, the function logs and returns rather than blocking
+    startup, so an unreachable database surfaces through the normal
+    pool-creation error path instead of through a confusing version
+    message. Mismatch on a successful query exits the process."""
+    import psycopg
+    try:
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT extversion FROM pg_extension WHERE extname = 'provsql'"
+                )
+                row = cur.fetchone()
+    except Exception as e:
+        print(
+            f"[provsql-studio] Skipping extension version check: "
+            f"could not query target database ({e}).",
+            file=sys.stderr,
+        )
+        return
+    if row is None:
+        req = '.'.join(str(x) for x in REQUIRED_PROVSQL_VERSION)
+        print(
+            "[provsql-studio] ProvSQL extension is not installed in the "
+            "target database. Run `CREATE EXTENSION provsql CASCADE;` "
+            f"first (Studio requires >= {req}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    actual = row[0]
+    parsed = _parse_extversion(actual)
+    if parsed is None:
+        print(
+            f"[provsql-studio] Could not parse extension version "
+            f"'{actual}'; skipping version check.",
+            file=sys.stderr,
+        )
+        return
+    if parsed < REQUIRED_PROVSQL_VERSION:
+        req = '.'.join(str(x) for x in REQUIRED_PROVSQL_VERSION)
+        print(
+            f"[provsql-studio] ProvSQL extension version {actual} is "
+            f"too old; Studio requires >= {req}. Upgrade the extension "
+            f"or pass --ignore-version to override.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,6 +184,13 @@ def main(argv: list[str] | None = None) -> int:
             "database' button in the banner at the top.",
             file=sys.stderr,
         )
+
+    # Verify the extension is recent enough before launching the
+    # server. Skip on the no-DSN fallback (the maintenance `postgres`
+    # DB rarely carries the extension; the user picks a real database
+    # via the in-page switcher) and when --ignore-version is set.
+    if not args.ignore_version and not db_is_auto:
+        _check_extension_version(dsn)
 
     from .app import create_app  # local import keeps --help fast
 

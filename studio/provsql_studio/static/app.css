@@ -249,7 +249,8 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   font-family: var(--font-ui);
 }
 .wp-nav__dsnpanel[hidden] { display: none; }
-.wp-nav__dsntitle {
+.wp-nav__dsntitle,
+.wp-nav__configtitle {
   margin: 0 0 0.35rem;
   font-family: var(--font-display); font-style: italic; font-weight: 600;
   font-size: 1.05rem;
@@ -375,8 +376,7 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
    adjacent Schema button. The .fa-spin lasts a fraction of a second
    after a click (set in app.js) to give visual feedback even when the
    schema panel is closed. */
-.wp-nav__refresh { margin-left: 0.9rem; padding: 0 0.2rem; }
-.wp-nav__refresh:hover { color: var(--gold-500); }
+.wp-nav__refresh { padding: 0 0.2rem; }
 
 /* Config popover anchored to the cog button. */
 .wp-nav__configwrap { position: relative; display: inline-flex; }
@@ -574,16 +574,10 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
 .wp-config__name {
   font-family: var(--font-ui);
   font-size: 0.78rem;
-  display: flex; flex-direction: column; gap: 0.15rem;
   flex: 1;
   min-width: 0;
 }
-.wp-config__name code { color: var(--purple-700); font-size: 0.95em; align-self: flex-start; }
-.wp-config__hint {
-  color: var(--fg-muted);
-  font-size: 0.72rem;
-  line-height: 1.35;
-}
+.wp-config__name code { color: var(--purple-700); font-size: 0.95em; }
 /* Multi-line config row: header on top, control below (used by the
    verbose_level slider, which needs full width). */
 .wp-config__row--col {
@@ -1987,3 +1981,27 @@ body.mode-where #sidebar {
   gap: 0.2rem;
   align-items: center;
 }
+
+/* ───────── inline help links ─────────
+   A small (?) icon next to a labelled control. Click opens the matching
+   anchor in the online documentation; the native `title=` attribute on
+   the same element provides a one-line summary on hover, no JS. */
+.wp-help {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  font-size: 0.85em;
+  line-height: 1;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0.55;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.wp-help:hover { opacity: 1; color: var(--terracotta-500); }
+.wp-help:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--terracotta-500);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+.wp-help i { vertical-align: middle; }

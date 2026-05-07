@@ -50,7 +50,10 @@
     <span class="wp-nav__configwrap">
       <button type="button" class="wp-nav__link" id="schema-btn" aria-haspopup="dialog" aria-expanded="false"><i class="fas fa-table"></i> Schema</button>
       <div class="wp-nav__configpanel wp-schema__panel" id="schema-panel" role="dialog" hidden>
-        <h4 class="wp-nav__configtitle">Database schema</h4>
+        <h4 class="wp-nav__configtitle">Database schema<a class="wp-help"
+            href="https://provsql.org/docs/user/studio.html#studio-schema-panel"
+            target="_blank" rel="noopener"
+            aria-label="Help: schema panel"><i class="fas fa-question-circle"></i></a></h4>
         <p class="wp-schema__lead">Tables and views you can <code>SELECT</code> from. Click a row to insert <code>schema.relation</code> into the query editor.</p>
         <input type="search" class="wp-schema__search" id="schema-search" placeholder="Filter relations or columns…" autocomplete="off">
         <div class="wp-schema__body" id="schema-body" aria-live="polite">
@@ -60,13 +63,17 @@
     </span>
     <button type="button" class="wp-nav__link wp-nav__refresh" id="metadata-refresh-btn" title="Refresh schema, provenance mappings, and custom semirings" aria-label="Refresh metadata"><i class="fas fa-sync"></i></button>
     <span class="wp-nav__configwrap">
-      <button type="button" class="wp-nav__link" id="config-btn" aria-haspopup="dialog" aria-expanded="false"><i class="fas fa-cog"></i> Config</button>
+      <button type="button" class="wp-nav__link wp-nav__refresh" id="config-btn" aria-haspopup="dialog" aria-expanded="false" title="Config" aria-label="Config"><i class="fas fa-cog"></i></button>
       <div class="wp-nav__configpanel" id="config-panel" role="dialog" hidden>
         <section class="wp-config__group">
           <h5 class="wp-config__grouphdr">Provenance</h5>
 
           <label class="wp-config__row">
-            <span class="wp-config__name"><code>provsql.active</code></span>
+            <span class="wp-config__name"><code>provsql.active</code><a class="wp-help"
+                href="https://provsql.org/docs/user/configuration.html#provsql-active"
+                target="_blank" rel="noopener"
+                title="Master switch for ProvSQL. Off drops provenance silently."
+                aria-label="Help: provsql.active"><i class="fas fa-question-circle"></i></a></span>
             <!-- Default `checked`: provsql.active defaults to ON server-side,
                  so pre-checking the box keeps the UI consistent with the
                  actual setting and avoids a visible flick on first
@@ -75,7 +82,11 @@
           </label>
 
           <label class="wp-config__row wp-config__row--col">
-            <span class="wp-config__name"><code>provsql.verbose_level</code></span>
+            <span class="wp-config__name"><code>provsql.verbose_level</code><a class="wp-help"
+                href="https://provsql.org/docs/user/configuration.html#provsql-verbose-level"
+                target="_blank" rel="noopener"
+                title="Diagnostic verbosity. ≥ 20 keeps temp files; ≥ 40 prints planner timing; ≥ 50 dumps parse trees."
+                aria-label="Help: provsql.verbose_level"><i class="fas fa-question-circle"></i></a></span>
             <span class="wp-config__slider">
               <input type="range" class="wp-config__range" id="cfg-verbose" min="0" max="100" step="1" value="0">
               <output class="wp-config__rangeval" id="cfg-verbose-out">0</output>
@@ -87,7 +98,11 @@
           <h5 class="wp-config__grouphdr">Session</h5>
 
           <label class="wp-config__row">
-            <span class="wp-config__name">Query timeout</span>
+            <span class="wp-config__name">Query timeout<a class="wp-help"
+                href="https://provsql.org/docs/user/studio.html#studio-configuration"
+                target="_blank" rel="noopener"
+                title="Per-batch statement_timeout. Studio applies it via SET LOCAL on every request."
+                aria-label="Help: query timeout"><i class="fas fa-question-circle"></i></a></span>
             <span class="wp-config__numwrap">
               <input type="number" class="wp-config__num" id="cfg-timeout" min="1" max="3600" step="1" value="30">
               <span class="wp-config__unit">s</span>
@@ -95,7 +110,11 @@
           </label>
 
           <label class="wp-config__row wp-config__row--col">
-            <span class="wp-config__name">search_path</span>
+            <span class="wp-config__name">search_path<a class="wp-help"
+                href="https://provsql.org/docs/user/studio.html#studio-connecting-search-path"
+                target="_blank" rel="noopener"
+                title="Visible part of the per-batch search_path. Studio always pins `provsql` at the end."
+                aria-label="Help: search_path"><i class="fas fa-question-circle"></i></a></span>
             <span class="wp-config__sp">
               <input type="text" class="wp-config__sp-input" id="cfg-search-path" placeholder="(database default)" autocomplete="off">
               <span class="wp-config__sp-suffix" title="provsql is always appended"><i class="fas fa-lock" aria-hidden="true"></i> provsql</span>
@@ -107,7 +126,11 @@
           <h5 class="wp-config__grouphdr">Display limits</h5>
 
           <label class="wp-config__row wp-config__row--col">
-            <span class="wp-config__name">Max circuit depth</span>
+            <span class="wp-config__name">Max circuit depth<a class="wp-help"
+                href="https://provsql.org/docs/user/studio.html#studio-circuit-frontier"
+                target="_blank" rel="noopener"
+                title="BFS depth cap on the initial circuit fetch. Expand frontiers to drill deeper interactively."
+                aria-label="Help: max circuit depth"><i class="fas fa-question-circle"></i></a></span>
             <span class="wp-config__slider">
               <input type="range" class="wp-config__range" id="cfg-depth" min="1" max="20" step="1" value="8">
               <output class="wp-config__rangeval" id="cfg-depth-out">8</output>
@@ -115,28 +138,44 @@
           </label>
 
           <label class="wp-config__row">
-            <span class="wp-config__name">Nodes per fetch</span>
+            <span class="wp-config__name">Nodes per fetch<a class="wp-help"
+                href="https://provsql.org/docs/user/studio.html#studio-circuit-oversized"
+                target="_blank" rel="noopener"
+                title="Per-fetch node cap. Bigger circuits surface a banner offering Render-at-depth-1 + interactive expansion."
+                aria-label="Help: nodes per fetch"><i class="fas fa-question-circle"></i></a></span>
             <span class="wp-config__numwrap">
               <input type="number" class="wp-config__num" id="cfg-circuit-nodes" min="10" max="10000" step="10" value="200">
             </span>
           </label>
 
           <label class="wp-config__row">
-            <span class="wp-config__name">Sidebar rows per relation</span>
+            <span class="wp-config__name">Sidebar rows per relation<a class="wp-help"
+                href="https://provsql.org/docs/user/studio.html#studio-where-mode"
+                target="_blank" rel="noopener"
+                title="Per-relation row cap in the Where-mode sidebar. Capped relations show e.g. `100 of ~50000` in the header."
+                aria-label="Help: sidebar rows per relation"><i class="fas fa-question-circle"></i></a></span>
             <span class="wp-config__numwrap">
               <input type="number" class="wp-config__num" id="cfg-sidebar-rows" min="1" max="5000" step="1" value="100">
             </span>
           </label>
 
           <label class="wp-config__row">
-            <span class="wp-config__name">Result rows</span>
+            <span class="wp-config__name">Result rows<a class="wp-help"
+                href="https://provsql.org/docs/user/studio.html#studio-configuration"
+                target="_blank" rel="noopener"
+                title="Cap on rows fetched into the result table. Truncation marker shows in the meta line when applied."
+                aria-label="Help: result rows"><i class="fas fa-question-circle"></i></a></span>
             <span class="wp-config__numwrap">
               <input type="number" class="wp-config__num" id="cfg-result-rows" min="1" max="100000" step="1" value="1000">
             </span>
           </label>
 
           <label class="wp-config__row">
-            <span class="wp-config__name">Probability decimals</span>
+            <span class="wp-config__name">Probability decimals<a class="wp-help"
+                href="https://provsql.org/docs/user/studio.html#studio-circuit-eval-strip"
+                target="_blank" rel="noopener"
+                title="Decimals shown on probability results. Click the result chip to flip rounded ↔ full precision."
+                aria-label="Help: probability decimals"><i class="fas fa-question-circle"></i></a></span>
             <span class="wp-config__numwrap">
               <input type="number" class="wp-config__num" id="cfg-prob-decimals" min="0" max="15" step="1" value="4">
             </span>
@@ -146,6 +185,11 @@
         <p class="wp-config__status" id="cfg-status" hidden></p>
       </div>
     </span>
+    <a class="wp-nav__link wp-nav__refresh" id="help-btn"
+       href="https://provsql.org/docs/user/studio.html"
+       target="_blank" rel="noopener"
+       title="Help: Studio chapter of the ProvSQL documentation"
+       aria-label="Help: Studio documentation"><i class="fas fa-question-circle"></i></a>
   </div>
 </nav>
 
@@ -186,12 +230,12 @@
         </div>
       </div>
       <div class="wp-form__actions">
-        <label class="wp-toggle" id="toggle-where-wrap" title="provsql.where_provenance — track where-provenance for the next query">
+        <label class="wp-toggle" id="toggle-where-wrap" title="provsql.where_provenance: track where-provenance for the next query">
           <i class="fas fa-lock wp-toggle__lock" aria-hidden="true"></i>
           <input type="checkbox" id="opt-where-prov">
           <code>where_provenance</code>
         </label>
-        <label class="wp-toggle" id="toggle-update-wrap" title="provsql.update_provenance — carry provenance through INSERT / UPDATE / DELETE statements">
+        <label class="wp-toggle" id="toggle-update-wrap" title="provsql.update_provenance: carry provenance through INSERT / UPDATE / DELETE statements">
           <input type="checkbox" id="opt-update-prov">
           <code>update_provenance</code>
         </label>

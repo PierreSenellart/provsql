@@ -40,6 +40,22 @@ CREATE EXTENSION provsql CASCADE;
 See the [full installation guide](https://provsql.org/docs/user/getting-provsql.html)
 for prerequisites, optional dependencies, testing, and Docker instructions.
 
+## Studio
+
+[ProvSQL Studio](https://pypi.org/project/provsql-studio/) is a separate
+Python package that adds a web UI on top of the extension: a Circuit mode
+that renders the provenance DAG behind any result UUID, with frontier
+expansion, an inspector, and on-the-fly semiring evaluation; and a Where
+mode that hover-highlights the source cells of each output value.
+
+```sh
+pip install provsql-studio
+provsql-studio --dsn postgresql://localhost/mydb
+```
+
+See the [Studio chapter](https://provsql.org/docs/user/studio.html) of the
+documentation.
+
 ## License
 
 ProvSQL is provided as open-source software under the MIT License. See [LICENSE](LICENSE).

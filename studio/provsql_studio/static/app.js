@@ -1407,6 +1407,11 @@
         <aside class="cv-inspector" id="inspector">
           <header class="cv-inspector__hdr">
             <h3 class="cv-inspector__title" id="inspector-title">Node</h3>
+            <a class="wp-help"
+               href="https://provsql.org/docs/user/studio.html#studio-circuit-inspector"
+               target="_blank" rel="noopener"
+               title="Inspector: gate-specific metadata. Input/update gates expose probability with click-to-edit."
+               aria-label="Help: inspector panel"><i class="fas fa-question-circle"></i></a>
             <button class="cv-inspector__close" id="inspector-close"><i class="fas fa-times"></i></button>
           </header>
           <div class="cv-inspector__body" id="inspector-body"></div>
@@ -1414,7 +1419,11 @@
       </div>
       <footer class="cv-eval" id="eval-strip">
         <div class="cv-eval__hdr">
-          <h4 class="cv-eval__label">Evaluate</h4>
+          <h4 class="cv-eval__label">Evaluate<a class="wp-help"
+             href="https://provsql.org/docs/user/studio.html#studio-circuit-eval-strip"
+             target="_blank" rel="noopener"
+             title="Run a semiring (compiled, custom, or Other: probability / PROV-XML) against the pinned node, else the root."
+             aria-label="Help: evaluation strip"><i class="fas fa-question-circle"></i></a></h4>
           <span class="cv-eval__target" id="eval-target" title="Token the evaluation will be run against (selected node, otherwise the root)"></span>
         </div>
         <div class="cv-eval__form">

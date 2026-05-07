@@ -45,6 +45,12 @@ value using the :sqlfunc:`where_provenance` function:
 The function returns a ``where_provenance`` value describing the
 origin of the column value.
 
+For interactive exploration, see Studio's
+:ref:`Where mode <studio-where-mode>`. It runs your query, displays
+the result alongside the source relations, and highlights the
+contributing cells when you hover over an output value: no explicit
+call to :sqlfunc:`where_provenance` required.
+
 Projection Gates
 -----------------
 
