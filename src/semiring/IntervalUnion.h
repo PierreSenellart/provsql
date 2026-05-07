@@ -1,17 +1,20 @@
 /**
- * @file semiring/Temporal.h
- * @brief Interval-union (temporal) m-semiring over <tt>tstzmultirange</tt>.
+ * @file semiring/IntervalUnion.h
+ * @brief Interval-union m-semiring over PostgreSQL @c multirange types.
  *
- * The temporal m-semiring associates each gate with a finite union of
- * pairwise-disjoint timestamp intervals (a PostgreSQL <tt>tstzmultirange</tt>).
- * It is the compiled counterpart of the SQL :sqlfunc:`union_tstzintervals`
- * helper, but unlike the PL/pgSQL evaluator it supports the full set
- * of circuit gate types (including @c cmp from HAVING clauses, @c agg,
- * @c semimod, and @c eq / @c project for where-provenance).
+ * The interval-union m-semiring associates each gate with a finite
+ * union of pairwise-disjoint intervals over a densely-ordered linear
+ * domain (timestamp, numeric, integer, ...).  Addition is multirange
+ * union, multiplication is intersection, and monus is set difference.
+ * The class is parameterised by a multirange type OID, so a single
+ * implementation covers @c tstzmultirange (the temporal instance),
+ * @c nummultirange (numeric validity ranges), and @c int4multirange
+ * (integer page/line ranges) — and any other multirange type the user
+ * happens to define.
  *
  * Operations:
- * - @c zero()   → <tt>'{}'::%tstzmultirange</tt> (empty)
- * - @c one()    → <tt>'{(,)}'::%tstzmultirange</tt> (universal range)
+ * - @c zero()   → <tt>'{}'</tt> (empty multirange)
+ * - @c one()    → <tt>'{(,)}'</tt> (universal multirange)
  * - @c plus()   → multirange union (@c multirange_union)
  * - @c times()  → multirange intersection (@c multirange_intersect)
  * - @c monus()  → multirange set difference (@c multirange_minus)
@@ -21,19 +24,21 @@
  * of the universal range, @f$\mathbb{1} \oplus a = (-\infty,+\infty) \cup a
  * = (-\infty,+\infty) = \mathbb{1}@f$.
  *
- * @note Requires PostgreSQL 14+ (for <tt>tstzmultirange</tt>). Multirange
- * functions like @c multirange_union access @c fcinfo->flinfo->fn_extra
- * for type-cache lookups, so they must be invoked through
- * @c OidFunctionCall* (which builds a proper @c FmgrInfo) rather than
- * @c DirectFunctionCall* (which leaves @c flinfo NULL and would crash).
+ * @note Requires PostgreSQL 14+ (multirange types). The polymorphic
+ * built-ins @c F_MULTIRANGE_UNION / @c F_MULTIRANGE_INTERSECT /
+ * @c F_MULTIRANGE_MINUS work for every multirange carrier and access
+ * @c fcinfo->flinfo->fn_extra for type-cache lookups, so they must be
+ * invoked through @c OidFunctionCall* (which builds a proper
+ * @c FmgrInfo) rather than @c DirectFunctionCall* (which leaves
+ * @c flinfo NULL and would crash).
  *
  * @see https://provsql.org/lean-docs/Provenance/Semirings/IntervalUnion.html
  *      Lean 4 verified instance: @c instSemiringWithMonusIntervalUnion,
  *      with proofs of @c IntervalUnion.absorptive and
  *      @c IntervalUnion.mul_sub_left_distributive.
  */
-#ifndef TEMPORAL_H
-#define TEMPORAL_H
+#ifndef INTERVAL_UNION_H
+#define INTERVAL_UNION_H
 
 #if PG_VERSION_NUM >= 140000 || defined(DOXYGEN)
 
@@ -51,14 +56,15 @@ extern "C" {
 
 namespace semiring {
 /**
- * @brief Temporal (interval-union) m-semiring with @c Datum carrier.
+ * @brief Interval-union m-semiring with @c Datum carrier, parameterised
+ * by a multirange type OID.
  *
- * Each gate evaluates to a <tt>tstzmultirange</tt> Datum allocated in the
- * current memory context.  The class caches function OIDs and the
- * zero/one Datum values in its constructor so that operations dispatch
- * cheaply during circuit traversal.
+ * Each gate evaluates to a multirange Datum allocated in the current
+ * memory context.  The class caches function OIDs and the zero/one
+ * Datum values in its constructor so that operations dispatch cheaply
+ * during circuit traversal.
  */
-class Temporal : public semiring::Semiring<Datum>
+class IntervalUnion : public semiring::Semiring<Datum>
 {
 Oid in_func;
 Oid typioparam;
@@ -66,8 +72,8 @@ Datum cached_zero;
 Datum cached_one;
 
 public:
-Temporal() {
-  getTypeInputInfo(TSTZMULTIRANGEOID, &in_func, &typioparam);
+explicit IntervalUnion(Oid multirange_oid) {
+  getTypeInputInfo(multirange_oid, &in_func, &typioparam);
   cached_zero = OidInputFunctionCall(in_func, const_cast<char *>("{}"), typioparam, -1);
   cached_one = OidInputFunctionCall(in_func, const_cast<char *>("{(,)}"), typioparam, -1);
 }
@@ -106,9 +112,9 @@ virtual bool absorptive() const override {
 }
 
 /**
- * @brief Parse a tstzmultirange text literal to a Datum.
+ * @brief Parse a multirange text literal to a Datum.
  *
- * Used by @c pec_temporal() to build the input mapping; exposed here
+ * Used by @c pec_multirange() to build the input mapping; exposed here
  * so the parser can share the cached @c in_func / @c typioparam.
  */
 Datum parse(const char *str) const {
@@ -120,4 +126,4 @@ Datum parse(const char *str) const {
 
 #endif /* PG_VERSION_NUM >= 140000 || defined(DOXYGEN) */
 
-#endif /* TEMPORAL_H */
+#endif /* INTERVAL_UNION_H */

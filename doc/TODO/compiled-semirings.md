@@ -11,8 +11,9 @@ explicitly does not handle. That is the main reason to *compile* a
 semiring rather than express it via SQL aggregates.
 
 Already compiled (for reference): Boolean, BoolExpr, Counting, Formula
-(debug pretty-printer), Lukasiewicz, Tropical, Viterbi, Which, Why,
-Temporal.
+(debug pretty-printer), IntervalUnion (carriers `tstzmultirange`,
+`nummultirange`, `int4multirange`), Lukasiewicz, Tropical, Viterbi,
+Which, Why.
 
 All proposals below are anchored on the Lean formalisation in
 `../provenance-lean/Provenance/Semirings/`: where the description here
@@ -50,7 +51,7 @@ showcase application use case.
   Viterbi already covers the independent-probability case;
   Łukasiewicz fills the non-probabilistic graded-truth gap.
 
-### 2. `pec_temporal` → `pec_multirange<...>` refactor, then `sr_interval_num` / `sr_interval_int4`
+### 2. `pec_temporal` → `pec_multirange<...>` refactor, then `sr_interval_num` / `sr_interval_int` **[shipped]**
 
 * Same algebra as `Temporal` but over numeric or integer multiranges
   instead of `tstzmultirange`. Lean reference is the same
@@ -75,7 +76,7 @@ showcase application use case.
   valid for x ∈ [3.2, 7.8] ∪ [9.1, 12.0]"), needs to compute the
   validity range of the joined tuple. Union for ⊕ (alternate
   evidence), intersection for ⊗ (jointly required), monus for EXCEPT.
-* **Use case (`sr_interval_int4`) : page-range provenance in a
+* **Use case (`sr_interval_int`) : page-range provenance in a
   digital library.** A scholarly query computing "which page intervals
   in the source documents support this conclusion" produces statements
   like "supported by pages [12,18] of doc A and pages [3,5] ∪ [40,42]
@@ -147,9 +148,11 @@ showcase application use case.
    radius, no new dispatch path, aligns with an existing Lean
    instance.
 2. **`pec_multirange<...>` refactor**, then `sr_interval_num` /
-   `sr_interval_int4` if/when a user appears. The refactor is worth
-   doing even without a second multirange type, because it eliminates
-   duplication when the third appears.
+   `sr_interval_int`: **shipped**. The refactor lifted `Temporal`
+   into a single `IntervalUnion(Oid)` class parameterised by the
+   multirange type OID; the polymorphic `F_MULTIRANGE_*` built-ins
+   apply uniformly across multirange carriers, so the dispatch is one
+   branch per carrier and the C++ class is a single header.
 3. **`sr_minmax_enum`** : ship when a security / access-control user
    materialises; until then, the SQL custom-semiring path documented
    in `doc/source/user/semirings.rst` covers it. Subsumes any

@@ -90,6 +90,8 @@ typedef struct constants_t {
   Oid OID_TYPE_FLOAT; ///< OID of the FLOAT TYPE
   Oid OID_TYPE_VARCHAR; ///< OID of the VARCHAR TYPE
   Oid OID_TYPE_TSTZMULTIRANGE; ///< OID of the tstzmultirange TYPE (PG14+, InvalidOid otherwise)
+  Oid OID_TYPE_NUMMULTIRANGE; ///< OID of the nummultirange TYPE (PG14+, InvalidOid otherwise)
+  Oid OID_TYPE_INT4MULTIRANGE; ///< OID of the int4multirange TYPE (PG14+, InvalidOid otherwise)
   Oid OID_FUNCTION_ARRAY_AGG; ///< OID of the array_agg FUNCTION
   Oid OID_FUNCTION_PROVENANCE_PLUS; ///< OID of the provenance_plus FUNCTION
   Oid OID_FUNCTION_PROVENANCE_TIMES; ///< OID of the provenance_times FUNCTION

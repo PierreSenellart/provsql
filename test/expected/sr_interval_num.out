@@ -1,0 +1,12 @@
+\set ECHO none
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|validity
+Berlin|{[4.0,5.0]}
+New York|{}
+Paris|{[2.0,4.5]}
+(3 rows)
