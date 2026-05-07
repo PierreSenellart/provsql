@@ -224,3 +224,65 @@ def test_search_path_empty_falls_back_to_session_default(client):
     # provsql appears exactly once even though the session already has
     # it: compose_search_path must detect that and not re-append.
     assert parts.count("provsql") == 1
+
+
+def test_tool_search_path_option_round_trips(client):
+    # provsql.tool_search_path lives alongside search_path in
+    # /api/config's `options` field. Storing it through POST must
+    # round-trip through GET.
+    resp = client.post(
+        "/api/config",
+        json={"key": "tool_search_path", "value": "/opt/d4:/home/me/bin"},
+    )
+    assert resp.status_code == 200, resp.data
+    assert resp.get_json()["value"] == "/opt/d4:/home/me/bin"
+
+    cfg = client.get("/api/config").get_json()
+    assert cfg["options"]["tool_search_path"] == "/opt/d4:/home/me/bin"
+
+
+def test_tool_search_path_option_rejects_injection(client):
+    resp = client.post(
+        "/api/config",
+        json={"key": "tool_search_path", "value": "/opt/d4; DROP TABLE x"},
+    )
+    assert resp.status_code == 400
+    assert "forbidden" in resp.get_json()["error"].lower()
+
+
+def test_tool_search_path_applied_in_exec(client):
+    # Sanity-check that the option propagates into exec_batch's
+    # SET LOCAL provsql.tool_search_path: SHOW inside the query batch
+    # must observe the configured value.
+    client.post(
+        "/api/config",
+        json={"key": "tool_search_path", "value": "/opt/d4:/home/me/bin"},
+    )
+    resp = client.post(
+        "/api/exec",
+        json={"sql": "SHOW provsql.tool_search_path", "mode": "circuit"},
+    )
+    assert resp.status_code == 200
+    final = resp.get_json()["blocks"][-1]
+    assert final["kind"] == "rows"
+    assert final["rows"][0][0] == "/opt/d4:/home/me/bin"
+
+
+def test_tool_search_path_empty_does_not_override(client):
+    # Empty string means "no Studio override": exec_batch shouldn't
+    # call set_config, so the session's value (the server default,
+    # empty here) survives. Set then clear to make sure clearing
+    # actually unsticks the previous override.
+    client.post(
+        "/api/config",
+        json={"key": "tool_search_path", "value": "/opt/d4"},
+    )
+    client.post("/api/config", json={"key": "tool_search_path", "value": ""})
+    resp = client.post(
+        "/api/exec",
+        json={"sql": "SHOW provsql.tool_search_path", "mode": "circuit"},
+    )
+    assert resp.status_code == 200
+    final = resp.get_json()["blocks"][-1]
+    assert final["kind"] == "rows"
+    assert final["rows"][0][0] == ""

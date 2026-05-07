@@ -84,6 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated search_path applied per request (provsql is "
              "appended automatically). Empty = inherit the database default.",
     )
+    p.add_argument(
+        "--tool-search-path",
+        default="",
+        help="Colon-separated list of directories prepended to PATH when "
+             "ProvSQL spawns external tools (d4, c2d, minic2d, dsharp, "
+             "weightmc, graph-easy). Sets provsql.tool_search_path.",
+    )
     p.add_argument("--debug", action="store_true", help="Enable Flask debug mode.")
     p.add_argument(
         "--ignore-version",
@@ -209,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         max_sidebar_rows=args.max_sidebar_rows,
         max_result_rows=args.max_result_rows,
         search_path=args.search_path,
+        tool_search_path=args.tool_search_path,
         db_is_auto=db_is_auto,
     )
     # Quiet the high-frequency poll endpoints in the access log. Attached

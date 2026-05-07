@@ -47,6 +47,7 @@ def create_app(
     max_sidebar_rows: int = 100,
     max_result_rows: int = 1000,
     search_path: str = "",
+    tool_search_path: str = "",
     db_is_auto: bool = False,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)  # we serve /static/ ourselves
@@ -57,6 +58,7 @@ def create_app(
         MAX_SIDEBAR_ROWS=max_sidebar_rows,
         MAX_RESULT_ROWS=max_result_rows,
         SEARCH_PATH=search_path,
+        TOOL_SEARCH_PATH=tool_search_path,
     )
 
     app.config["DSN"] = dsn or ""
@@ -89,6 +91,8 @@ def create_app(
         app.config["STATEMENT_TIMEOUT"] = f"{persisted_opts['statement_timeout_seconds']}s"
     if "search_path" in persisted_opts:
         app.config["SEARCH_PATH"] = persisted_opts["search_path"]
+    if "tool_search_path" in persisted_opts:
+        app.config["TOOL_SEARCH_PATH"] = persisted_opts["tool_search_path"]
     app.extensions["provsql_pool"] = db.make_pool(dsn)
     # Registry of in-flight POST /api/exec batches, keyed by the
     # client-generated request id. Lets POST /api/cancel/<id> resolve a
@@ -307,6 +311,7 @@ def create_app(
                 extra_gucs=app.config["RUNTIME_GUCS"],
                 on_pid=register_pid,
                 search_path=app.config.get("SEARCH_PATH", ""),
+                tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
                 max_result_rows=int(app.config["MAX_RESULT_ROWS"]),
             )
         finally:
@@ -512,6 +517,7 @@ def create_app(
                 function=function,
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
                 search_path=app.config.get("SEARCH_PATH", ""),
+                tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -538,6 +544,7 @@ def create_app(
         "max_result_rows",
         "statement_timeout_seconds",
         "search_path",
+        "tool_search_path",
     }
 
     def _current_options() -> dict:
@@ -571,6 +578,7 @@ def create_app(
             "max_result_rows": int(app.config["MAX_RESULT_ROWS"]),
             "statement_timeout_seconds": seconds if seconds is not None else 30,
             "search_path": app.config.get("SEARCH_PATH", "") or "",
+            "tool_search_path": app.config.get("TOOL_SEARCH_PATH", "") or "",
         }
 
     @app.get("/api/config")
@@ -613,6 +621,8 @@ def create_app(
                 app.config["STATEMENT_TIMEOUT"] = f"{canonical}s"
             elif key == "search_path":
                 app.config["SEARCH_PATH"] = canonical
+            elif key == "tool_search_path":
+                app.config["TOOL_SEARCH_PATH"] = canonical
             db.save_persisted_options(_current_options())
             return jsonify({"ok": True, "key": key, "value": canonical})
         # Otherwise treat as a GUC override.

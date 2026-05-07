@@ -109,6 +109,14 @@ def load_persisted_options() -> dict:
             out["search_path"] = canonical
         except ValueError:
             pass
+    if "tool_search_path" in raw:
+        try:
+            _, canonical = validate_panel_option(
+                "tool_search_path", raw["tool_search_path"]
+            )
+            out["tool_search_path"] = canonical
+        except ValueError:
+            pass
     return out
 
 
@@ -177,6 +185,22 @@ def validate_panel_option(name: str, value) -> tuple[str, object]:
         # cryptic "invalid value for parameter \"search_path\"" later.
         if any(c in v for c in (";", "--", "/*", "*/")):
             raise ValueError("search_path contains forbidden characters")
+        return (name, v)
+    if name == "tool_search_path":
+        # provsql.tool_search_path is a colon-separated list of directories
+        # prepended to PATH when ProvSQL spawns external tools (d4, c2d,
+        # weightmc, graph-easy…). Same up-front rejection as search_path
+        # for clearer errors; set_config parameterises the value at
+        # runtime so it's already injection-safe.
+        if value is None:
+            return (name, "")
+        if not isinstance(value, str):
+            raise ValueError("tool_search_path must be a string")
+        v = value.strip()
+        if len(v) > 1024:
+            raise ValueError("tool_search_path is too long (max 1024 chars)")
+        if any(c in v for c in (";", "--", "/*", "*/")):
+            raise ValueError("tool_search_path contains forbidden characters")
         return (name, v)
     raise ValueError(f"option not user-configurable: {name}")
 
@@ -783,6 +807,7 @@ def evaluate_circuit(
     function: str | None = None,
     statement_timeout: str,
     search_path: str = "",
+    tool_search_path: str = "",
 ) -> dict:
     """Run a compiled-semiring or probability evaluation against `token`.
     Returns `{result, kind}` ready to JSON-encode. Raises ValueError on
@@ -916,6 +941,15 @@ def evaluate_circuit(
             "SELECT set_config('search_path', %s, true)",
             (target_path,),
         )
+        # Probability methods (compilation, weightmc) and PROV-XML export
+        # may shell out to d4 / c2d / minic2d / dsharp / weightmc /
+        # graph-easy. provsql.tool_search_path lets the user point
+        # ProvSQL at a non-default install location for those binaries.
+        if (tool_search_path or "").strip():
+            cur.execute(
+                "SELECT set_config('provsql.tool_search_path', %s, true)",
+                (tool_search_path,),
+            )
         cur.execute(sql_stmt, params)
         row = cur.fetchone()
     value = row[0] if row else None
@@ -960,6 +994,7 @@ def exec_batch(
     extra_gucs: dict[str, str] | None = None,
     on_pid=None,
     search_path: str = "",
+    tool_search_path: str = "",
     max_result_rows: int | None = None,
 ) -> tuple[list[StatementResult], StatementResult | None, dict]:
     """Run `statements` in a single transaction with SET LOCAL settings.
@@ -1080,6 +1115,15 @@ def exec_batch(
                     "SET LOCAL provsql.update_provenance = "
                     + ("on" if update_provenance else "off")
                 )
+                # provsql.tool_search_path: prepended to $PATH when
+                # provsql spawns external tools (d4 / c2d / weightmc /
+                # graph-easy). set_config parameterises the value so
+                # the user-supplied portion never reaches PG as raw SQL.
+                if (tool_search_path or "").strip():
+                    cur.execute(
+                        "SELECT set_config('provsql.tool_search_path', %s, true)",
+                        (tool_search_path,),
+                    )
                 # Config-panel GUCs (provsql.active, provsql.verbose_level)
                 # apply on top of the per-query toggles so the user can keep
                 # the rewriter off via the panel without having to remember

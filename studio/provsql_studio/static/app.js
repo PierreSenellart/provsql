@@ -785,6 +785,7 @@
     const circuitNodes = document.getElementById('cfg-circuit-nodes');
     const timeout = document.getElementById('cfg-timeout');
     const sp      = document.getElementById('cfg-search-path');
+    const tsp     = document.getElementById('cfg-tool-search-path');
 
     async function loadConfig() {
       try {
@@ -814,6 +815,9 @@
         }
         if (sp && opts.search_path != null) {
           sp.value = opts.search_path;
+        }
+        if (tsp && opts.tool_search_path != null) {
+          tsp.value = opts.tool_search_path;
         }
         loaded = true;
         showStatus('');
@@ -942,6 +946,19 @@
       sp.addEventListener('blur', commit);
       sp.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); sp.blur(); }
+      });
+    }
+    if (tsp) {
+      // provsql.tool_search_path: same blur-and-Enter commit pattern as
+      // search_path. Empty string falls back to the server's PATH.
+      const commitTsp = () => {
+        const v = (tsp.value || '').trim();
+        tsp.value = v;
+        setGuc('tool_search_path', v);
+      };
+      tsp.addEventListener('blur', commitTsp);
+      tsp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); tsp.blur(); }
       });
     }
 
