@@ -82,6 +82,8 @@ Legend:
 | `sr_counting`                            | ✓ |   | ✓ |   |   |   |
 | `sr_why`                                 |   |   | ✓ |   |   |   |
 | `sr_which`                               |   |   |   |   |   |   |
+| `sr_tropical`                            |   |   |   |   |   |   |
+| `sr_viterbi`                             |   |   |   |   |   |   |
 | Custom semiring via `provenance_evaluate`|   | ✓ | ✓ |   |   |   |
 | `aggregation_evaluate`                   |   |   |   |   |   |   |
 

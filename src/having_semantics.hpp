@@ -112,4 +112,32 @@ void provsql_try_having_boolean(
   std::unordered_map<gate_t, bool> &mapping
   );
 
+/**
+ * @brief Evaluate the HAVING sub-circuit at @p g over the Tropical semiring.
+ *
+ * @param c        The generic circuit containing gate @p g.
+ * @param g        Root gate of the HAVING sub-circuit.
+ * @param mapping  Map from input gates to their tropical (cost) values;
+ *                 populated on successful evaluation.
+ */
+void provsql_try_having_tropical(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, double> &mapping
+  );
+
+/**
+ * @brief Evaluate the HAVING sub-circuit at @p g over the Viterbi semiring.
+ *
+ * @param c        The generic circuit containing gate @p g.
+ * @param g        Root gate of the HAVING sub-circuit.
+ * @param mapping  Map from input gates to their Viterbi (probability) values;
+ *                 populated on successful evaluation.
+ */
+void provsql_try_having_viterbi(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, double> &mapping
+  );
+
 #endif

@@ -101,6 +101,41 @@ The result is rendered as ``{a,b,c}`` for a non-empty derivation, or
 which-provenance is more compact (a flat set rather than a set of
 sets) but loses the breakdown into individual derivations.
 
+Tropical Semiring (m-semiring)
+-------------------------------
+
+:sqlfunc:`sr_tropical` evaluates the provenance in the *tropical* (min-plus)
+m-semiring ``(ℝ ∪ {+∞}, min, +, +∞, 0)``, returning the cost of the
+cheapest derivation:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_tropical(provenance(), 'cost_mapping')
+    FROM mytable;
+
+The mapping should assign ``float8`` cost values to leaf tokens; use
+``'Infinity'::float8`` to encode the additive identity. This is useful
+for shortest-path or least-cost provenance, where ``plus`` selects the
+cheaper alternative and ``times`` accumulates cost along a derivation.
+
+Viterbi Semiring (m-semiring)
+------------------------------
+
+:sqlfunc:`sr_viterbi` evaluates the provenance in the *Viterbi* (max-times)
+m-semiring ``([0,1], max, ×, 0, 1)``, returning the probability of the
+most likely derivation:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_viterbi(provenance(), 'prob_mapping')
+    FROM mytable;
+
+The mapping should assign ``float8`` probability values in :math:`[0,1]`
+to leaf tokens. Unlike :sqlfunc:`probability_evaluate`, which marginalises
+over derivations, the Viterbi semiring keeps only the single most likely
+derivation, making it suitable for *most-probable-explanation* style
+queries.
+
 Security Semiring
 ------------------
 

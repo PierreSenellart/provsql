@@ -15,6 +15,8 @@
  * - @c "why"       → @c semiring::Why (witness sets)
  * - @c "which"     → @c semiring::Which (lineage)
  * - @c "boolexpr"  → @c semiring::BoolExpr (Boolean circuit for probability)
+ * - @c "tropical"  → @c semiring::Tropical (min-plus, shortest-cost)
+ * - @c "viterbi"   → @c semiring::Viterbi (max-times, most-likely derivation)
  *
  * The function first builds a provenance mapping (input-gate UUID → semiring
  * value) by querying the @c tmp_uuids table via SPI
@@ -48,6 +50,8 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Why.h"
 #include "semiring/Which.h"
 #include "semiring/BoolExpr.h"
+#include "semiring/Tropical.h"
+#include "semiring/Viterbi.h"
 
 
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
@@ -264,6 +268,42 @@ static Datum pec_varchar(
 
 }
 /**
+ * @brief Evaluate a float semiring provenance for a circuit.
+ * @param constants   Extension OID cache.
+ * @param c           Generic circuit to evaluate.
+ * @param g           Root gate.
+ * @param inputs      Set of input gate IDs.
+ * @param semiring    Semiring name ("tropical" or "viterbi").
+ * @param drop_table  Whether the temporary UUID table should be dropped.
+ * @return            Float8 datum with the evaluated provenance.
+ */
+static Datum pec_float(
+  const constants_t &constants,
+  GenericCircuit &c,
+  gate_t g,
+  const std::set<gate_t> &inputs,
+  const std::string &semiring,
+  bool drop_table)
+{
+  std::unordered_map<gate_t, double> provenance_mapping;
+  initialize_provenance_mapping<double>(constants, c, provenance_mapping, [](const char *v) {
+    return atof(v);
+  }, drop_table);
+
+  double out;
+  if(semiring=="tropical") {
+    provsql_try_having_tropical(c, g, provenance_mapping);
+    out = c.evaluate<semiring::Tropical>(g, provenance_mapping, semiring::Tropical());
+  } else if(semiring=="viterbi") {
+    provsql_try_having_viterbi(c, g, provenance_mapping);
+    out = c.evaluate<semiring::Viterbi>(g, provenance_mapping, semiring::Viterbi());
+  } else
+    throw CircuitException("Unknown semiring for type float: "+semiring);
+
+  PG_RETURN_FLOAT8(out);
+}
+
+/**
  * @brief Evaluate an integer semiring provenance for a circuit.
  * @param constants   Extension OID cache.
  * @param c           Generic circuit to evaluate.
@@ -421,6 +461,8 @@ static Datum provenance_evaluate_compiled_internal
   }
   else if(type==constants.OID_TYPE_INT)
     return pec_int(constants, c, g, inputs, semiring, drop_table);
+  else if(type==constants.OID_TYPE_FLOAT)
+    return pec_float(constants, c, g, inputs, semiring, drop_table);
   else if(type==constants.OID_TYPE_BOOL)
     return pec_bool(constants, c, g, inputs, semiring, drop_table);
   else
