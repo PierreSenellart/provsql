@@ -84,7 +84,7 @@ Legend:
 | `sr_which`                               |   |   |   |   |   |   |
 | `sr_tropical`                            |   |   |   |   |   |   |
 | `sr_viterbi`                             |   |   |   |   |   |   |
-| `sr_temporal`                            |   |   |   |   |   |   |
+| `sr_temporal`                            |   |   |   |   | ✓ |   |
 | Custom semiring via `provenance_evaluate`|   | ✓ | ✓ |   |   |   |
 | `aggregation_evaluate`                   |   |   |   |   |   |   |
 
@@ -147,21 +147,3 @@ Legend:
 | `to_provxml`                             |   | ✓ |   |   |   |   |
 | `view_circuit` (graph-easy)              |   | ✓ |   |   |   |   |
 | `provsql.verbose_level`                  |   |   |   |   |   |   |
-
-## Documented features not exercised anywhere
-
-The following features are described in `doc/source/user/` but neither the
-tutorial nor any of the five case studies currently demonstrates them:
-
-- SQL constructs: UNION / UNION ALL, LATERAL, window functions, FILTER on
-  aggregates, INSERT … SELECT with provenance propagation.
-- Aggregates: `string_agg` / `array_agg`, `COUNT(DISTINCT …)`, the
-  `choose` aggregate.
-- Semirings: `aggregation_evaluate` (custom semirings over GROUP BY).
-- Probabilities: the `'independent'` and `'weightmc'` methods,
-  `get_prob`.
-- Circuit API: `get_infos`, `get_extra`.
-- Temporal: `get_valid_time` (only the higher-level `timeslice`,
-  `timetravel`, and `history` are exercised).
-- Configuration: `provsql.active`, `provsql.verbose_level` (referenced in
-  the export and configuration docs but never demonstrated).

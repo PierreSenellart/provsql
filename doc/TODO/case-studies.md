@@ -1,16 +1,24 @@
 # Documentation TODO: case-study coverage
 
-`doc/feature-coverage.md` lists user-guide features that are not exercised
-by the tutorial or any of the five existing case studies. This file plans
-how to close that gap, by extending CS1-CS5 where the existing scenario
-fits, and by sketching a new CS6 around upcoming ProvSQL features.
+`feature-coverage.md` (in this directory) lists user-guide features that
+are not exercised by the tutorial or any of the five existing case
+studies. This file plans how to close that gap, by extending CS1-CS5
+where the existing scenario fits, and by sketching a new CS6 around
+upcoming ProvSQL features.
 
-Out of scope: `provsql.active`, `provsql.verbose_level`, `get_infos`,
-`get_extra`, `get_prob`. These are covered by `user/configuration.rst`,
-`dev/debugging.rst`, and the SQL API reference, and do not need case-study
-real estate.
+## Out of scope
 
-## CS1: Intelligence Agency
+The following features are documented elsewhere and do not need
+case-study real estate:
+
+- `provsql.active`, `provsql.verbose_level`: covered by
+  `user/configuration.rst` and `dev/debugging.rst`.
+- `get_infos`, `get_extra`, `get_prob`: covered by the SQL API
+  reference.
+
+## Plan
+
+### CS1: Intelligence Agency
 
 - Add the `'independent'` and `'weightmc'` probability methods to the
   benchmark in Step 13. The step already compares possible-worlds,
@@ -18,7 +26,7 @@ real estate.
   is a useful teaching point because it succeeds or errors depending on
   circuit shape.
 
-## CS2: Open Science Database
+### CS2: Open Science Database
 
 - `COUNT(DISTINCT study)` and `string_agg(study, ', ')` per
   (exposure, outcome): a natural addition before or after Step 4
@@ -33,7 +41,7 @@ real estate.
   a `GROUP BY outcome` query with a custom semimodule that aggregates
   per-finding grades into a per-outcome grade.
 
-## CS3: Île-de-France Public Transit
+### CS3: Île-de-France Public Transit
 
 - `LATERAL`: for each route, find the next reachable stop with a
   `LATERAL (SELECT ... LIMIT 1)`. Reads naturally as "what comes after
@@ -41,7 +49,7 @@ real estate.
 - Window functions: `ROW_NUMBER() OVER (PARTITION BY trip_id ORDER BY
   stop_sequence)` to enumerate Bagneux's position along each trip.
 
-## CS4: Government Ministers
+### CS4: Government Ministers
 
 - Add a step that calls `get_valid_time` directly on a single row.
   Currently only the higher-level `union_tstzintervals`, `timeslice`,
@@ -50,7 +58,7 @@ real estate.
   Step 6 with an `UPDATE holds SET ...`, then `undo` it. UPDATE is
   documented but not shown in any case study.
 
-## CS5: Wildlife Photo Archive
+### CS5: Wildlife Photo Archive
 
 - Add `'independent'` to Step 4 (before the `repair_key` step): the
   naive conjunctive query is independent-shaped, so the explicit method
@@ -61,7 +69,7 @@ real estate.
   high-confidence filter, showing that inserted rows inherit source
   provenance rather than fresh tokens.
 
-## CS6: Upcoming features (new case study, blocked on implementation)
+### CS6: Upcoming features (new case study, blocked on implementation)
 
 A new case study to be written once the corresponding ProvSQL features
 land. Targets:
@@ -74,3 +82,15 @@ land. Targets:
   candidate outputs, `choose` models the alternatives as mutually
   exclusive in the provenance circuit (analogous to `repair_key`'s role
   in CS5, but for derived rather than ingested data).
+
+## Priorities
+
+1. **Quick wins on existing case studies** : the single-bullet
+   additions to CS1 and CS3, and the small CS5 additions, can land
+   independently and immediately close coverage gaps in
+   `feature-coverage.md`.
+2. **Larger CS2 / CS4 extensions** : CS2 grows by five bullets and CS4
+   adds a UPDATE / `undo` round-trip. These are the biggest single-CS
+   coverage wins.
+3. **CS6** : blocked on the upstream features (UDFs, aggregate joins,
+   `choose`) landing in ProvSQL; revisit when those ship.
