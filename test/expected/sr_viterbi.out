@@ -1,0 +1,12 @@
+\set ECHO none
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|prob
+Berlin|0.000488
+New York|0.125000
+Paris|0.003906
+(3 rows)

@@ -2,13 +2,16 @@
  * @file having_semantics.cpp
  * @brief HAVING-clause provenance evaluation for all built-in semirings.
  *
- * Implements the five @c provsql_try_having_*() functions declared in
+ * Implements the @c provsql_try_having_*() functions declared in
  * @c having_semantics.hpp, one per supported semiring:
  * - @c provsql_try_having_formula()
  * - @c provsql_try_having_counting()
  * - @c provsql_try_having_why()
+ * - @c provsql_try_having_which()
  * - @c provsql_try_having_boolexpr()
  * - @c provsql_try_having_boolean()
+ * - @c provsql_try_having_tropical()
+ * - @c provsql_try_having_viterbi()
  *
  * Each function evaluates the sub-circuit rooted at the given
  * @c gate_agg / @c gate_semimod gate using @c enumerate_valid_worlds()
@@ -37,6 +40,8 @@ extern "C" {
 #include "semiring/Formula.h"
 #include "semiring/Why.h"
 #include "semiring/Which.h"
+#include "semiring/Tropical.h"
+#include "semiring/Viterbi.h"
 
 namespace {
 // Parse int from string
@@ -375,4 +380,20 @@ void provsql_try_having_boolean(
   std::unordered_map<gate_t, bool> &mapping)
 {
   try_having_impl<semiring::Boolean>(c, g, mapping, semiring::Boolean());
+}
+
+void provsql_try_having_tropical(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, double> &mapping)
+{
+  try_having_impl<semiring::Tropical>(c, g, mapping, semiring::Tropical());
+}
+
+void provsql_try_having_viterbi(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, double> &mapping)
+{
+  try_having_impl<semiring::Viterbi>(c, g, mapping, semiring::Viterbi());
 }
