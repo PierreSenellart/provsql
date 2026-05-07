@@ -281,6 +281,32 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
 /**
+ * @brief Evaluate provenance over the temporal (interval-union) m-semiring
+ *
+ * Compiled counterpart of :sqlfunc:`union_tstzintervals`. Inputs are
+ * read as @c tstzmultirange validity intervals; the additive identity
+ * is @c '{}'::tstzmultirange (empty), the multiplicative identity is
+ * @c '{(,)}'::tstzmultirange (universal). Returns the union of
+ * intervals supporting the result, computed via the compiled circuit
+ * traversal.
+ *
+ * @param token       Provenance token to evaluate.
+ * @param token2value Mapping from input gates to validity multiranges.
+ */
+CREATE FUNCTION sr_temporal(token ANYELEMENT, token2value regclass)
+  RETURNS tstzmultirange AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'temporal',
+    '{(,)}'::tstzmultirange
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/**
  * @brief Query a table as it was at a specific point in time
  *
  * Returns all rows whose temporal validity includes the given timestamp.

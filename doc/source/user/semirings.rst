@@ -136,6 +136,27 @@ over derivations, the Viterbi semiring keeps only the single most likely
 derivation, making it suitable for *most-probable-explanation* style
 queries.
 
+Temporal (Interval-Union) Semiring (m-semiring)
+------------------------------------------------
+
+:sqlfunc:`sr_temporal` evaluates the provenance in the *temporal*
+(interval-union) m-semiring over PostgreSQL ``tstzmultirange`` values.
+Addition is multirange union, multiplication is intersection, monus is
+set difference; the additive identity is ``'{}'`` and the multiplicative
+identity is ``'{(,)}'`` (the universal range):
+
+.. code-block:: postgresql
+
+    SELECT entity_id, sr_temporal(provenance(), 'validity_mapping')
+    FROM mytable;
+
+This is the compiled counterpart of :sqlfunc:`union_tstzintervals`. The
+two compute the same quantity for plain SELECT-FROM-WHERE-GROUP BY
+queries, but :sqlfunc:`sr_temporal` additionally supports HAVING clauses,
+aggregation, and where-provenance, which the PL/pgSQL evaluator skips.
+
+Requires PostgreSQL ≥ 14 (for ``tstzmultirange``).
+
 Security Semiring
 ------------------
 

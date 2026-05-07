@@ -57,6 +57,11 @@ associated with a query result via its provenance:
            union_tstzintervals(provenance(), 'interval_mapping')
     FROM temporal_table;
 
+For queries that involve HAVING clauses, aggregation, or
+where-provenance, prefer the compiled :sqlfunc:`sr_temporal` evaluator
+(see :doc:`semirings`); it computes the same quantity but supports the
+full set of circuit gate types.
+
 Temporal Query Functions
 -------------------------
 
