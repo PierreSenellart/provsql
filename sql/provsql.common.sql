@@ -1753,6 +1753,26 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance over the Łukasiewicz fuzzy m-semiring
+ *
+ * Inputs are read as %float8 graded-truth values in @f$[0,1]@f$.
+ * Addition is @f$\max@f$; multiplication is the Łukasiewicz t-norm
+ * @f$\max(a + b - 1, 0)@f$, which preserves crisp truth and avoids
+ * the near-zero collapse of long product chains.
+ */
+CREATE FUNCTION sr_lukasiewicz(token ANYELEMENT, token2value regclass)
+  RETURNS FLOAT AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'lukasiewicz',
+    1::FLOAT
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
 /** @} */
 
 /** @defgroup choose_aggregate choose aggregate

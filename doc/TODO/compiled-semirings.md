@@ -11,7 +11,8 @@ explicitly does not handle. That is the main reason to *compile* a
 semiring rather than express it via SQL aggregates.
 
 Already compiled (for reference): Boolean, BoolExpr, Counting, Formula
-(debug pretty-printer), Tropical, Viterbi, Which, Why, Temporal.
+(debug pretty-printer), Lukasiewicz, Tropical, Viterbi, Which, Why,
+Temporal.
 
 All proposals below are anchored on the Lean formalisation in
 `../provenance-lean/Provenance/Semirings/`: where the description here
@@ -22,7 +23,7 @@ disagrees with Lean, Lean wins and the description is fixed.
 Four proposals, ranked by cost vs. coverage. Each is presented with its
 showcase application use case.
 
-### 1. `sr_lukasiewicz` : fuzzy logic semiring
+### 1. `sr_lukasiewicz` : fuzzy logic semiring **[shipped]**
 
 * Per the Lean reference (`Provenance/Semirings/Lukasiewicz.lean`,
   `instSemiringWithMonusLukasiewicz`):
@@ -142,7 +143,7 @@ showcase application use case.
 
 ## Priorities
 
-1. **`sr_lukasiewicz`** : ship now. Lowest cost, smallest blast
+1. **`sr_lukasiewicz`** : **shipped**. Lowest cost, smallest blast
    radius, no new dispatch path, aligns with an existing Lean
    instance.
 2. **`pec_multirange<...>` refactor**, then `sr_interval_num` /

@@ -12,6 +12,7 @@
  * - @c provsql_try_having_boolean()
  * - @c provsql_try_having_tropical()
  * - @c provsql_try_having_viterbi()
+ * - @c provsql_try_having_lukasiewicz()
  * - @c provsql_try_having_temporal() (PG14+)
  *
  * Each function evaluates the sub-circuit rooted at the given
@@ -43,6 +44,7 @@ extern "C" {
 #include "semiring/Which.h"
 #include "semiring/Tropical.h"
 #include "semiring/Viterbi.h"
+#include "semiring/Lukasiewicz.h"
 #include "semiring/Temporal.h"
 
 namespace {
@@ -398,6 +400,14 @@ void provsql_try_having_viterbi(
   std::unordered_map<gate_t, double> &mapping)
 {
   try_having_impl<semiring::Viterbi>(c, g, mapping, semiring::Viterbi());
+}
+
+void provsql_try_having_lukasiewicz(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, double> &mapping)
+{
+  try_having_impl<semiring::Lukasiewicz>(c, g, mapping, semiring::Lukasiewicz());
 }
 
 #if PG_VERSION_NUM >= 140000

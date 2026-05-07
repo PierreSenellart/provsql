@@ -136,6 +136,27 @@ over derivations, the Viterbi semiring keeps only the single most likely
 derivation, making it suitable for *most-probable-explanation* style
 queries.
 
+Łukasiewicz Fuzzy Semiring (m-semiring)
+----------------------------------------
+
+:sqlfunc:`sr_lukasiewicz` evaluates the provenance in the *Łukasiewicz*
+fuzzy m-semiring ``([0,1], max, ⊗_Ł, 0, 1)``, where the
+multiplicative operation is the Łukasiewicz t-norm
+:math:`a \otimes_{\text{Ł}} b = \max(a + b - 1, 0)`:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_lukasiewicz(provenance(), 'evidence_mapping')
+    FROM mytable;
+
+The mapping should assign ``float8`` graded-truth values in
+:math:`[0,1]` to leaf tokens. Compared to :sqlfunc:`sr_viterbi` (which
+multiplies probabilities), the Łukasiewicz t-norm preserves crisp
+truth — :math:`0.7 \otimes_{\text{Ł}} 1 = 0.7` — and avoids the
+near-zero collapse of long product chains. This makes it the standard
+choice for fuzzy graded conjunctions where inputs are degrees of
+evidence rather than independent probabilities.
+
 Temporal (Interval-Union) Semiring (m-semiring)
 ------------------------------------------------
 
