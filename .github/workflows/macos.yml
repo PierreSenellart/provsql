@@ -56,7 +56,7 @@ jobs:
     name: macOS — PostgreSQL ${{ matrix.pg }}
     runs-on: macos-latest
     steps:
-      - run: brew update
+      - run: brew update || true
       - run: brew install postgresql@${{ matrix.pg }}
       - run: brew link --force postgresql@${{ matrix.pg }}
       - run: brew install boost

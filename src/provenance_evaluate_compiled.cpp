@@ -17,6 +17,7 @@
  * - @c "boolexpr"  → @c semiring::BoolExpr (Boolean circuit for probability)
  * - @c "tropical"  → @c semiring::Tropical (min-plus, shortest-cost)
  * - @c "viterbi"   → @c semiring::Viterbi (max-times, most-likely derivation)
+ * - @c "lukasiewicz" → @c semiring::Lukasiewicz (Łukasiewicz fuzzy t-norm)
  * - @c "temporal"  → @c semiring::Temporal (interval-union, PG14+)
  *
  * The function first builds a provenance mapping (input-gate UUID → semiring
@@ -53,6 +54,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/BoolExpr.h"
 #include "semiring/Tropical.h"
 #include "semiring/Viterbi.h"
+#include "semiring/Lukasiewicz.h"
 #include "semiring/Temporal.h"
 
 
@@ -305,7 +307,7 @@ static Datum pec_temporal(
  * @param c           Generic circuit to evaluate.
  * @param g           Root gate.
  * @param inputs      Set of input gate IDs.
- * @param semiring    Semiring name ("tropical" or "viterbi").
+ * @param semiring    Semiring name ("tropical", "viterbi" or "lukasiewicz").
  * @param drop_table  Whether the temporary UUID table should be dropped.
  * @return            Float8 datum with the evaluated provenance.
  */
@@ -329,6 +331,9 @@ static Datum pec_float(
   } else if(semiring=="viterbi") {
     provsql_try_having_viterbi(c, g, provenance_mapping);
     out = c.evaluate<semiring::Viterbi>(g, provenance_mapping, semiring::Viterbi());
+  } else if(semiring=="lukasiewicz") {
+    provsql_try_having_lukasiewicz(c, g, provenance_mapping);
+    out = c.evaluate<semiring::Lukasiewicz>(g, provenance_mapping, semiring::Lukasiewicz());
   } else
     throw CircuitException("Unknown semiring for type float: "+semiring);
 

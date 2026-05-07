@@ -19,7 +19,7 @@ test: gate_cache_setup
 test: gate_cache_consistency
 
 # Introducing a few semirings
-test: sr_formula sr_counting sr_boolean sr_why sr_which sr_tropical sr_viterbi
+test: sr_formula sr_counting sr_boolean sr_why sr_which sr_tropical sr_viterbi sr_lukasiewicz
 test: security formula counting boolean
 
 # Test of various ProvSQL features and SQL language capabilities

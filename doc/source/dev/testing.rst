@@ -47,7 +47,7 @@ that require PostgreSQL 14+) is either a comment (``#``) or a
    test: provenance_in_from identify_token subquery create_provenance_mapping
 
    # Introducing a few semirings
-   test: sr_formula sr_counting sr_boolean sr_why sr_which sr_tropical sr_viterbi
+   test: sr_formula sr_counting sr_boolean sr_why sr_which sr_tropical sr_viterbi sr_lukasiewicz
 
 Tests on the **same line** run in parallel.  Tests on **different lines**
 run sequentially.  The first test (``setup``) creates the test schema
