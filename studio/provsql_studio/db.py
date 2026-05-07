@@ -15,12 +15,25 @@ from psycopg_pool import ConnectionPool
 def _config_dir() -> Path:
     """Where Studio persists user-level state across restarts. Honours
     the testing override `PROVSQL_STUDIO_CONFIG_DIR` so tests don't write
-    into the user's real config tree."""
+    into the user's real config tree.
+
+    Platform-specific defaults via `platformdirs`:
+      * Linux:   $XDG_CONFIG_HOME/provsql-studio (else ~/.config/provsql-studio)
+      * macOS:   ~/Library/Application Support/provsql-studio
+      * Windows: %APPDATA%\\provsql-studio
+    """
     override = os.environ.get("PROVSQL_STUDIO_CONFIG_DIR")
     if override:
         return Path(override)
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "provsql-studio"
+    import platformdirs
+    # appauthor=False suppresses the extra `$appauthor` segment platformdirs
+    # otherwise inserts on Windows (which defaults to the appname and would
+    # produce `…\provsql-studio\provsql-studio`). roaming=True picks
+    # %APPDATA% over %LOCALAPPDATA% on Windows so the panel preferences
+    # roam between machines on a domain account.
+    return Path(platformdirs.user_config_dir(
+        "provsql-studio", appauthor=False, roaming=True
+    ))
 
 
 def _read_config_file() -> dict:
