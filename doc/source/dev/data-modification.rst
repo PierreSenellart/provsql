@@ -215,8 +215,8 @@ carrier is ``tstzmultirange``:
 
 This is exactly the m-semiring the PW'25 paper
 (:cite:`DBLP:conf/pw/WidiaatmajaDDS25`) describes.  It is
-implemented as the :cfunc:`Temporal` compiled semiring in
-:cfile:`Temporal.h`, dispatched via :sqlfunc:`sr_temporal`,
+implemented as the :cfunc:`IntervalUnion` compiled semiring in
+:cfile:`IntervalUnion.h`, dispatched via :sqlfunc:`sr_temporal`,
 which delegates the ⊕, ⊗, and ⊖ operations to PostgreSQL's
 ``multirange_union``, ``multirange_intersect``, and
 ``multirange_minus`` built-ins.

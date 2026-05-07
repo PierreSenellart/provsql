@@ -65,7 +65,9 @@ INTERNAL_FUNCTIONS = {
     'update_statement_trigger', 'delete_statement_trigger',
     # agg_token type internals (I/O, casts, operators)
     'agg_token_in', 'agg_token_out', 'agg_token_cast',
-    'agg_token_to_float', 'agg_token_to_int', 'agg_token_to_numeric',
+    'agg_token_to_float', 'agg_token_to_float8',
+    'agg_token_to_int', 'agg_token_to_int4', 'agg_token_to_int8',
+    'agg_token_to_numeric',
     'agg_token_to_text', 'agg_token_uuid',
     'agg_token_eq_numeric', 'agg_token_ne_numeric',
     'agg_token_lt_numeric', 'agg_token_le_numeric',
@@ -103,7 +105,7 @@ INTERNAL_FUNCTIONS = {
 if DOXYGEN_SQL_HTML.exists():
     doxygen_funcs = set()
     for html_file in DOXYGEN_SQL_HTML.glob("group__*.html"):
-        for match in re.finditer(r'provsql\.([a-z_]+)', html_file.read_text()):
+        for match in re.finditer(r'provsql\.([a-z0-9_]+)', html_file.read_text()):
             fname = match.group(1)
             if fname not in INTERNAL_FUNCTIONS:
                 doxygen_funcs.add(fname)

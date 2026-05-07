@@ -18,7 +18,9 @@
  * - @c "tropical"  → @c semiring::Tropical (min-plus, shortest-cost)
  * - @c "viterbi"   → @c semiring::Viterbi (max-times, most-likely derivation)
  * - @c "lukasiewicz" → @c semiring::Lukasiewicz (Łukasiewicz fuzzy t-norm)
- * - @c "temporal"  → @c semiring::Temporal (interval-union, PG14+)
+ * - @c "interval_union" → @c semiring::IntervalUnion (multirange union, PG14+)
+ *   for any of <tt>tstzmultirange</tt>, <tt>nummultirange</tt>,
+ *   <tt>int4multirange</tt>; selected by the result type of the call
  *
  * The function first builds a provenance mapping (input-gate UUID → semiring
  * value) by querying the @c tmp_uuids table via SPI
@@ -55,7 +57,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Tropical.h"
 #include "semiring/Viterbi.h"
 #include "semiring/Lukasiewicz.h"
-#include "semiring/Temporal.h"
+#include "semiring/IntervalUnion.h"
 
 
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
@@ -273,29 +275,33 @@ static Datum pec_varchar(
 }
 #if PG_VERSION_NUM >= 140000
 /**
- * @brief Evaluate the temporal (interval-union) semiring provenance.
- * @param constants   Extension OID cache.
- * @param c           Generic circuit to evaluate.
- * @param g           Root gate.
- * @param inputs      Set of input gate IDs.
- * @param drop_table  Whether the temporary UUID table should be dropped.
- * @return            tstzmultirange Datum with the evaluated provenance.
+ * @brief Evaluate the interval-union semiring provenance over a
+ *        multirange carrier.
+ * @param constants        Extension OID cache.
+ * @param c                Generic circuit to evaluate.
+ * @param g                Root gate.
+ * @param inputs           Set of input gate IDs.
+ * @param multirange_oid   OID of the multirange type used for parsing
+ *                         leaf values and constructing zero/one.
+ * @param drop_table       Whether the temporary UUID table should be dropped.
+ * @return                 Multirange Datum with the evaluated provenance.
  */
-static Datum pec_temporal(
+static Datum pec_multirange(
   const constants_t &constants,
   GenericCircuit &c,
   gate_t g,
   const std::set<gate_t> &inputs,
+  Oid multirange_oid,
   bool drop_table)
 {
   std::unordered_map<gate_t, Datum> provenance_mapping;
-  semiring::Temporal sr;
+  semiring::IntervalUnion sr(multirange_oid);
   initialize_provenance_mapping<Datum>(constants, c, provenance_mapping, [&sr](const char *v) {
     return sr.parse(v);
   }, drop_table);
 
-  provsql_try_having_temporal(c, g, provenance_mapping);
-  Datum out = c.evaluate<semiring::Temporal>(g, provenance_mapping, sr);
+  provsql_try_having_multirange(c, g, provenance_mapping, sr);
+  Datum out = c.evaluate<semiring::IntervalUnion>(g, provenance_mapping, sr);
 
   PG_RETURN_DATUM(out);
 }
@@ -504,9 +510,19 @@ static Datum provenance_evaluate_compiled_internal
     return pec_bool(constants, c, g, inputs, semiring, drop_table);
 #if PG_VERSION_NUM >= 140000
   else if(type==constants.OID_TYPE_TSTZMULTIRANGE) {
-    if(semiring!="temporal")
+    if(semiring!="temporal" && semiring!="interval_union")
       throw CircuitException("Unknown semiring for type tstzmultirange: "+semiring);
-    return pec_temporal(constants, c, g, inputs, drop_table);
+    return pec_multirange(constants, c, g, inputs, constants.OID_TYPE_TSTZMULTIRANGE, drop_table);
+  }
+  else if(type==constants.OID_TYPE_NUMMULTIRANGE) {
+    if(semiring!="interval_union")
+      throw CircuitException("Unknown semiring for type nummultirange: "+semiring);
+    return pec_multirange(constants, c, g, inputs, constants.OID_TYPE_NUMMULTIRANGE, drop_table);
+  }
+  else if(type==constants.OID_TYPE_INT4MULTIRANGE) {
+    if(semiring!="interval_union")
+      throw CircuitException("Unknown semiring for type int4multirange: "+semiring);
+    return pec_multirange(constants, c, g, inputs, constants.OID_TYPE_INT4MULTIRANGE, drop_table);
   }
 #endif
   else

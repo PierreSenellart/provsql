@@ -184,6 +184,34 @@ aggregation, and where-provenance, which the PL/pgSQL evaluator skips.
 
 Requires PostgreSQL ≥ 14 (for ``tstzmultirange``).
 
+Numeric and Integer Interval-Union Semirings (m-semirings)
+-----------------------------------------------------------
+
+:sqlfunc:`sr_interval_num` and :sqlfunc:`sr_interval_int` are the
+numeric and integer counterparts of :sqlfunc:`sr_temporal`: the same
+interval-union algebra (union for ⊕, intersection for ⊗, set
+difference for monus) over ``nummultirange`` and ``int4multirange``
+respectively.
+
+.. code-block:: postgresql
+
+    SELECT name, sr_interval_num(provenance(), 'sensor_validity_mapping')
+    FROM mytable;
+
+    SELECT cite, sr_interval_int(provenance(), 'page_range_mapping')
+    FROM mytable;
+
+Typical use cases:
+
+- ``sr_interval_num``: measurement-validity provenance in scientific
+  data integration (a sensor reading or model coefficient is valid
+  only over a parameter range; joins compute jointly-valid ranges).
+- ``sr_interval_int``: page-range or line-range provenance in
+  scholarly / source-code corpora ("supported by pages [12,18] of
+  doc A and pages [3,5] ∪ [40,42] of doc B").
+
+Both require PostgreSQL ≥ 14.
+
 Security Semiring
 ------------------
 

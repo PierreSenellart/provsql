@@ -12,5 +12,8 @@ test: sr_temporal
 test: union_tstzintervals
 test: temporal_functions
 
+# Interval-union semiring over numeric / int4 multiranges
+test: sr_interval_num sr_interval_int
+
 # Case Study 4: Government Ministers Over Time (Temporal)
 test: casestudy4

@@ -105,6 +105,8 @@ _SQL_FUNC_MAP = {
     'sr_viterbi':               '/doxygen-sql/html/group__compiled__semirings.html#ga67d375630a9674bfecd4f87d0d003d31',
     'sr_lukasiewicz':           '/doxygen-sql/html/group__compiled__semirings.html#ga27ff464e570641a7b195ed3578a66ab1',
     'sr_temporal':              '/doxygen-sql/html/group__temporal__db.html#ga53665747f710e8bacbf9bb985420c173',
+    'sr_interval_num':          '/doxygen-sql/html/group__temporal__db.html#gaa35eca68f37290485c5319697b408d3a',
+    'sr_interval_int':          '/doxygen-sql/html/group__temporal__db.html#ga62d18db08c8b0b341d271ccad61f2c82',
     'to_provxml':               '/doxygen-sql/html/group__provenance__output.html#gacc9e8b2a47ade6f5c87c27f64b4707b1',
     'view_circuit':             '/doxygen-sql/html/group__provenance__output.html#ga1c6caf1bb91c0cfdfc56c33666d41897',
     'where_provenance':         '/doxygen-sql/html/group__provenance__output.html#ga6ddf85fea18edbd973c118020ff4551b',
@@ -196,7 +198,7 @@ _C_FUNC_MAP = {
     'BoolExpr':                  '/doxygen-c/html/classsemiring_1_1BoolExpr.html',
     'Boolean':                   '/doxygen-c/html/classsemiring_1_1Boolean.html',
     'Counting':                  '/doxygen-c/html/classsemiring_1_1Counting.html',
-    'Temporal':                  '/doxygen-c/html/classsemiring_1_1Temporal.html',
+    'IntervalUnion':             '/doxygen-c/html/classsemiring_1_1IntervalUnion.html',
     # Enums and types
     'AggregationOperator':       '/doxygen-c/html/Aggregation_8h.html#a07e6885296f8f80441d5428bcf72af5a',
     'gate_type':                 '/doxygen-c/html/provsql__utils_8h.html#a8266c44a6cbf9e08d5f2b12cd3c3d92f',

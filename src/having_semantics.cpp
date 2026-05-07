@@ -13,7 +13,7 @@
  * - @c provsql_try_having_tropical()
  * - @c provsql_try_having_viterbi()
  * - @c provsql_try_having_lukasiewicz()
- * - @c provsql_try_having_temporal() (PG14+)
+ * - @c provsql_try_having_multirange() (PG14+)
  *
  * Each function evaluates the sub-circuit rooted at the given
  * @c gate_agg / @c gate_semimod gate using @c enumerate_valid_worlds()
@@ -45,7 +45,7 @@ extern "C" {
 #include "semiring/Tropical.h"
 #include "semiring/Viterbi.h"
 #include "semiring/Lukasiewicz.h"
-#include "semiring/Temporal.h"
+#include "semiring/IntervalUnion.h"
 
 namespace {
 // Parse int from string
@@ -411,12 +411,12 @@ void provsql_try_having_lukasiewicz(
 }
 
 #if PG_VERSION_NUM >= 140000
-void provsql_try_having_temporal(
+void provsql_try_having_multirange(
   GenericCircuit &c,
   gate_t g,
-  std::unordered_map<gate_t, Datum> &mapping)
+  std::unordered_map<gate_t, Datum> &mapping,
+  const semiring::IntervalUnion &sr)
 {
-  semiring::Temporal sr;
-  try_having_impl<semiring::Temporal>(c, g, mapping, sr);
+  try_having_impl<semiring::IntervalUnion>(c, g, mapping, sr);
 }
 #endif

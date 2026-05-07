@@ -227,8 +227,62 @@ BEGIN
   RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
-    'temporal',
+    'interval_union',
     '{(,)}'::tstzmultirange
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/**
+ * @brief Evaluate provenance over the interval-union m-semiring
+ *        with a numeric multirange carrier
+ *
+ * Inputs are read as %nummultirange validity ranges over a numeric
+ * domain (e.g. sensor measurement-validity ranges). Addition is
+ * multirange union, multiplication is intersection, monus is set
+ * difference; the additive identity is <tt>'{}'::%nummultirange</tt>
+ * and the multiplicative identity is <tt>'{(,)}'::%nummultirange</tt>
+ * (universal range).
+ *
+ * @param token       Provenance token to evaluate.
+ * @param token2value Mapping from input gates to numeric multiranges.
+ */
+CREATE FUNCTION sr_interval_num(token ANYELEMENT, token2value regclass)
+  RETURNS nummultirange AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'interval_union',
+    '{(,)}'::nummultirange
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/**
+ * @brief Evaluate provenance over the interval-union m-semiring
+ *        with an int4 multirange carrier
+ *
+ * Inputs are read as %int4multirange validity ranges over the
+ * integers (e.g. page or line ranges of supporting documents).
+ * Addition is multirange union, multiplication is intersection,
+ * monus is set difference; the additive identity is
+ * <tt>'{}'::%int4multirange</tt> and the multiplicative identity is
+ * <tt>'{(,)}'::%int4multirange</tt>.
+ *
+ * @param token       Provenance token to evaluate.
+ * @param token2value Mapping from input gates to int4 multiranges.
+ */
+CREATE FUNCTION sr_interval_int(token ANYELEMENT, token2value regclass)
+  RETURNS int4multirange AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'interval_union',
+    '{(,)}'::int4multirange
   );
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
