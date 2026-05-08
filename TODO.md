@@ -225,16 +225,20 @@ ready-to-demo container.
       to PyPI, `make docker-build` (which uses the default
       `STUDIO_SOURCE=`) will fail at the pip step; use the
       dry-run below to verify locally before publish.
-- [ ] Dry-run with `--build-arg
+- [x] Dry-run with `--build-arg
       STUDIO_SOURCE=/opt/provsql/studio` to confirm the
       contributor path also works when Studio isn't on PyPI yet
       (this is the path used at release time, before the PyPI
-      tag has landed). **User action**: invoke as
-      `make clean && docker build -f docker/Dockerfile
-      --build-arg PROVSQL_VERSION=1.4.0-dev
-      --build-arg STUDIO_SOURCE=/opt/provsql/studio
-      -t provsql:dev .`, then `docker run --rm -p 8000:8000
-      provsql:dev`.
+      tag has landed). Verified on 2026-05-08: `make clean &&
+      docker build --build-arg PROVSQL_VERSION=1.4.0-dev
+      --build-arg STUDIO_SOURCE=/opt/provsql/studio` succeeded
+      (image `provsql:dev`, 2.43 GB; Studio installed in
+      editable mode from `/opt/provsql/studio` per the build
+      log). `docker run --rm -p 8000:8000` printed the ready
+      banner ("Both services are reachable... Studio web UI:
+      http://172.17.0.2:8000"), and `curl 127.0.0.1:8000`
+      returned 302 on `/`, 200 on `/where`, and 200 on
+      `/circuit` (page title `ProvSQL Studio` on both).
 
 ### P1.F — `where_panel/` cleanup
 
