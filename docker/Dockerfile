@@ -1,31 +1,32 @@
 FROM debian:bookworm
 
 ARG PROVSQL_VERSION=dev
+ARG PSQL_VERSION=17
+
 LABEL maintainer=pierre@senellart.com
 LABEL org.opencontainers.image.version="${PROVSQL_VERSION}"
 
-# Copy the source into /opt/provsql
-COPY . /opt/provsql
-WORKDIR /opt/provsql
-
-# needed to build provsql the tools
-RUN apt-get update &&\
-    apt-get -y install git build-essential curl\
-               libc6-i386 unzip mercurial libgmp-dev libboost-dev\
-               libboost-serialization-dev iproute2
-
-# Specify which version we are building against
-ARG PSQL_VERSION=15
-ENV PSQL_VERSION=$PSQL_VERSION
-
-RUN apt-get update &&\
-    apt-get -y install zlib1g-dev postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION}
-
 # Ensure a sane environment
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive
-
-# Ensure that bash is the default shell
 ENV SHELL=/bin/bash
+ENV PSQL_VERSION=$PSQL_VERSION
+
+# Single apt-get install for: ProvSQL build deps, external-tool clone
+# deps, the postgresql server matching $PSQL_VERSION, demo.sh
+# utilities (iproute2 for `ip`), the Studio runtime stack
+# (python3 + venv + graphviz), and libgraph-easy-perl for the
+# extension's ASCII view_circuit rendering. Consolidating all deps
+# into one RUN keeps the image to a single apt layer and a single
+# apt-get update.
+RUN apt-get update &&\
+    apt-get -y install \
+        build-essential curl git mercurial unzip \
+        libc6-i386 libgmp-dev libboost-dev libboost-serialization-dev \
+        zlib1g-dev iproute2 \
+        postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION} \
+        python3 python3-pip python3-venv \
+        graphviz libgraph-easy-perl &&\
+    rm -rf /var/lib/apt/lists/*
 
 
 ############################## GETTING ADD-ON TOOLS ##############################
@@ -62,12 +63,17 @@ RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 
 ##############################   GETTING  PROVSQL  ##############################
 
+# Copy the source AFTER apt + external-tool builds so a source-only
+# change does not invalidate those (long) cache layers.
+COPY . /opt/provsql
+WORKDIR /opt/provsql
+
 # Provsql will be built & run as user postgres
 RUN chown -R postgres:postgres /opt/provsql
 USER postgres
 
-# Building
-RUN make
+# Building (parallelize across all available cores)
+RUN make -j$(nproc)
 
 # install provsql
 USER root
@@ -100,11 +106,9 @@ RUN echo "host all all ::/0 trust" >> /etc/postgresql/${PSQL_VERSION}/main/pg_hb
 USER postgres
 RUN /usr/bin/pg_ctlcluster $PSQL_VERSION main start
 
-USER root
-RUN apt-get update &&\
-    apt-get -y install python3 python3-pip python3-venv graphviz libgraph-easy-perl
-
 ##############################   GETTING  STUDIO   ##############################
+
+USER root
 
 # Studio install path. By default, install the released `provsql-studio`
 # from PyPI at `STUDIO_VERSION`. To build the image *before* the matching

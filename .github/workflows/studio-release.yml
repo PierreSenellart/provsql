@@ -59,7 +59,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - run: make && make install
+      - run: make -j$(nproc) && make install
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/16/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30

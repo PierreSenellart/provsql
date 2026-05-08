@@ -67,7 +67,7 @@ jobs:
         with:
           fetch-tags: true
           fetch-depth: 0
-      - run: make && make tdkc && make provsql_migrate_mmap && make install
+      - run: make -j$(nproc) && make tdkc && make provsql_migrate_mmap && make install
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30
