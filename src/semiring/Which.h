@@ -110,12 +110,51 @@ value_type delta(value_type x) const override {
   return x;
 }
 
+/**
+ * @brief Parse a leaf value into a which-provenance set.
+ *
+ * Accepted input formats (round-trip with @c to_text):
+ * - @c "⊥" → zero (no derivation)
+ * - Bare label (no leading @c '{'): @c "Alice" → @c {Alice}
+ * - Empty set: @c "{}" → one (a derivation requiring no witnesses)
+ * - Full set: @c "{a,b,c}" → @c {a,b,c}
+ *
+ * Labels may contain any character except @c ',', @c '{', @c '}'.
+ */
 value_type parse_leaf(const char *v) const {
-  if(strchr(v, '{'))
-    throw SemiringException("Complex Which-semiring values for input tuples not currently supported.");
-  std::set<std::string> single;
-  single.insert(std::string(v));
-  return value_type(std::move(single));
+  if(strcmp(v, "⊥") == 0)
+    return std::nullopt;
+
+  if(*v != '{') {
+    std::set<std::string> single;
+    single.insert(std::string(v));
+    return value_type(std::move(single));
+  }
+
+  const char *p = v + 1;
+  std::set<std::string> result;
+
+  if(*p == '}') {
+    if(*(p+1) != '\0')
+      throw SemiringException("Which: trailing junk after closing '}'");
+    return value_type(std::move(result));
+  }
+
+  while(true) {
+    const char *start = p;
+    while(*p && *p != ',' && *p != '}' && *p != '{')
+      ++p;
+    if(p == start)
+      throw SemiringException("Which: empty label");
+    result.insert(std::string(start, p - start));
+    if(*p == ',') { ++p; continue; }
+    if(*p == '}') {
+      if(*(p+1) != '\0')
+        throw SemiringException("Which: trailing junk after closing '}'");
+      return value_type(std::move(result));
+    }
+    throw SemiringException("Which: unterminated set");
+  }
 }
 
 std::string to_text(const value_type &prov) const {

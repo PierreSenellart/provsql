@@ -105,14 +105,67 @@ value_type delta(value_type x) const override {
   return x.empty() ? zero() : x;
 }
 
+/**
+ * @brief Parse a leaf value into a why-provenance set-of-sets.
+ *
+ * Accepted input formats (round-trip with @c to_text):
+ * - Bare label (no leading @c '{'): @c "Alice" → @c {{Alice}}
+ * - Empty set-of-sets: @c "{}" → zero
+ * - Full form: @c "{{a},{b,c}}" → @c {{a},{b,c}}
+ *   (in particular @c "{{}}" parses as @c one)
+ *
+ * Labels may contain any character except @c ',', @c '{', @c '}'.
+ */
 value_type parse_leaf(const char *v) const {
-  if(strchr(v, '{'))
-    throw SemiringException("Complex Why-semiring values for input tuples not currently supported.");
-  label_set single;
-  single.insert(std::string(v));
+  if(*v != '{') {
+    label_set single;
+    single.insert(std::string(v));
+    value_type result;
+    result.insert(std::move(single));
+    return result;
+  }
+
+  const char *p = v + 1;
   value_type result;
-  result.insert(std::move(single));
-  return result;
+
+  if(*p == '}') {
+    if(*(p+1) != '\0')
+      throw SemiringException("Why: trailing junk after closing '}'");
+    return result;
+  }
+
+  while(*p) {
+    if(*p != '{')
+      throw SemiringException("Why: expected '{' starting a witness");
+    ++p;
+    label_set witness;
+    if(*p != '}') {
+      while(true) {
+        const char *start = p;
+        while(*p && *p != ',' && *p != '}' && *p != '{')
+          ++p;
+        if(p == start)
+          throw SemiringException("Why: empty label");
+        witness.insert(std::string(start, p - start));
+        if(*p == ',') { ++p; continue; }
+        break;
+      }
+    }
+    if(*p != '}')
+      throw SemiringException("Why: expected '}' ending a witness");
+    ++p;
+    result.insert(std::move(witness));
+
+    if(*p == '}') {
+      if(*(p+1) != '\0')
+        throw SemiringException("Why: trailing junk after closing '}'");
+      return result;
+    }
+    if(*p != ',')
+      throw SemiringException("Why: expected ',' or '}' between witnesses");
+    ++p;
+  }
+  throw SemiringException("Why: unterminated input");
 }
 
 std::string to_text(const value_type &prov) const {

@@ -125,12 +125,98 @@ value_type delta(value_type x) const override {
   return x.empty() ? zero() : one();
 }
 
+/**
+ * @brief Parse a leaf value into a how-provenance polynomial.
+ *
+ * Accepted input formats (round-trip with @c to_text):
+ * - @c "0" → zero polynomial
+ * - Bare label: @c "Alice" → @c {Alice}
+ * - Constant: @c "5" → @c 5 (polynomial @c 5⋅1)
+ * - Monomial: @c "2⋅Alice⋅Bob^2"
+ * - Sum of monomials: @c "2⋅Alice⋅Bob^2 + 3⋅Charlie"
+ *
+ * Variables may contain any character except @c '⋅', @c '+', @c '^'.
+ * The @c " + " separator must use ASCII spaces around the @c '+'.
+ */
 value_type parse_leaf(const char *v) const {
-  if(strchr(v, '{') || strchr(v, '+') || strchr(v, '*') || strchr(v, '^'))
-    throw SemiringException("Complex How-semiring values for input tuples not currently supported.");
-  how_monomial_t mono;
-  mono[std::string(v)] = 1u;
-  return value_type{ { std::move(mono), 1u } };
+  static const std::string DOT = "\xE2\x8B\x85";   // ⋅ U+22C5
+  static const std::string PLUS_SEP = " + ";
+
+  value_type result;
+  std::string s(v);
+
+  if(s == "0")
+    return result;
+
+  size_t pos = 0;
+  while(pos <= s.size()) {
+    size_t mono_end = s.find(PLUS_SEP, pos);
+    bool last = (mono_end == std::string::npos);
+    if(last)
+      mono_end = s.size();
+
+    std::string mono_s = s.substr(pos, mono_end - pos);
+    if(mono_s.empty())
+      throw SemiringException("How: empty monomial");
+
+    std::vector<std::string> parts;
+    size_t mp = 0;
+    while(mp <= mono_s.size()) {
+      size_t end = mono_s.find(DOT, mp);
+      bool plast = (end == std::string::npos);
+      if(plast) end = mono_s.size();
+      parts.push_back(mono_s.substr(mp, end - mp));
+      if(plast) break;
+      mp = end + DOT.size();
+    }
+
+    unsigned coeff = 1;
+    size_t first_factor = 0;
+    if(!parts.empty()) {
+      const std::string &first = parts[0];
+      bool is_num = !first.empty();
+      for(char c : first) {
+        if(c < '0' || c > '9') { is_num = false; break; }
+      }
+      if(is_num) {
+        coeff = static_cast<unsigned>(std::stoul(first));
+        first_factor = 1;
+      }
+    }
+
+    how_monomial_t mono;
+    for(size_t i = first_factor; i < parts.size(); ++i) {
+      const std::string &factor = parts[i];
+      if(factor.empty())
+        throw SemiringException("How: empty factor");
+      size_t caret = factor.find('^');
+      std::string var;
+      unsigned exp = 1;
+      if(caret == std::string::npos) {
+        var = factor;
+      } else {
+        var = factor.substr(0, caret);
+        if(var.empty())
+          throw SemiringException("How: empty variable name");
+        try {
+          exp = static_cast<unsigned>(std::stoul(factor.substr(caret + 1)));
+        } catch(...) {
+          throw SemiringException("How: invalid exponent");
+        }
+      }
+      if(var.empty())
+        throw SemiringException("How: empty variable name");
+      mono[var] += exp;
+    }
+
+    if(coeff > 0)
+      result[std::move(mono)] += coeff;
+
+    if(last) break;
+    pos = mono_end + PLUS_SEP.size();
+  }
+
+  return result;
 }
 
 std::string to_text(const value_type &prov) const {
