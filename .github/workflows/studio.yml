@@ -1,0 +1,111 @@
+name: Studio
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'studio/**'
+      - 'sql/provsql.common.sql'
+      - 'sql/provsql.14.sql'
+      - '.github/workflows/studio.yml'
+  pull_request:
+    paths:
+      - 'studio/**'
+      - 'sql/provsql.common.sql'
+      - 'sql/provsql.14.sql'
+      - '.github/workflows/studio.yml'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: ✨ ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff
+      - run: ruff check .
+        working-directory: studio
+
+  package:
+    name: 📦 sdist + wheel + --help
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install build
+      - run: python -m build
+        working-directory: studio
+      # Install into a clean venv to confirm the wheel carries everything
+      # the entry point needs (no implicit dep on the editable checkout).
+      - run: python -m venv /tmp/wheel-venv
+      - run: /tmp/wheel-venv/bin/pip install studio/dist/*.whl
+      - run: /tmp/wheel-venv/bin/provsql-studio --help
+
+  test:
+    name: 🧪 pytest Py${{ matrix.python }} × PG${{ matrix.pg }}
+    needs: lint
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
+        pg: [14, 15, 16]
+    steps:
+      - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev
+      - run: pg_dropcluster ${{ matrix.pg }} main
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: make && make install
+      - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
+      - run: service postgresql restart
+      - run: pg_isready -t 30
+      - run: pip install -e "./studio[test]"
+      # Unit suite only -- the Playwright e2e tests run in the `e2e` job
+      # below, which adds the chromium download + system deps step. Keeping
+      # them separate makes triage easier when one set fails and the other
+      # doesn't.
+      - run: pytest studio/tests --ignore=studio/tests/e2e
+        env:
+          PGUSER: postgres
+
+  e2e:
+    name: 🎭 Playwright Py${{ matrix.python }} × PG${{ matrix.pg }}
+    needs: lint
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
+        pg: [14, 15, 16]
+    steps:
+      - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev
+      - run: pg_dropcluster ${{ matrix.pg }} main
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: make && make install
+      - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
+      - run: service postgresql restart
+      - run: pg_isready -t 30
+      - run: pip install -e "./studio[test]"
+      # `--with-deps` apt-installs chromium's system libs; the container
+      # runs as root so no sudo is needed. Browser binary download is
+      # ~112 MiB.
+      - run: playwright install --with-deps chromium
+      - run: pytest studio/tests/e2e
+        env:
+          PGUSER: postgres
