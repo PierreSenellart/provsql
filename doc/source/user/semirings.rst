@@ -225,7 +225,8 @@ PostgreSQL ``ENUM`` type. The carrier order comes from
 The third argument to both functions is a sample value of the carrier
 enum, used only for type inference; its value is ignored. Given a
 ``classification_level`` enum ordered from ``unclassified`` to
-``top_secret``:
+``not_available``, where ``not_available`` is the top of the enum and
+plays the role of the semiring 𝟘 (no derivation possible):
 
 .. code-block:: postgresql
 
@@ -271,8 +272,10 @@ As a worked example, consider the *capability* semiring over the
 :math:`\{00, 01, 10, 11\}` (e.g., ``(can_read, can_write)``).
 ``⊕ = |`` (bitwise OR) combines alternative derivations permissively;
 ``⊗ = &`` (bitwise AND) combines joins restrictively;
-``⊖ = a & ~b`` (bitwise AND-NOT) is the Boolean difference monus.
-Zero is ``B'00'``, one is ``B'11'``:
+``⊖ = a & ~b`` (bitwise AND-NOT) is the Boolean difference monus;
+``δ`` is the support indicator (``B'00'`` stays ``B'00'``, anything else
+becomes ``B'11'``), matching the convention used by the compiled
+semirings. Zero is ``B'00'``, one is ``B'11'``:
 
 .. code-block:: postgresql
 
@@ -282,6 +285,9 @@ Zero is ``B'00'``, one is ``B'11'``:
       LANGUAGE SQL AS $$ SELECT state & v $$;
     CREATE FUNCTION cap_minus(a bit(2), b bit(2))    RETURNS bit(2) IMMUTABLE
       LANGUAGE SQL AS $$ SELECT a & ~b $$;
+    CREATE FUNCTION cap_delta(v bit(2)) RETURNS bit(2) IMMUTABLE
+      LANGUAGE SQL AS $$
+        SELECT CASE WHEN v = B'00' THEN B'00'::bit(2) ELSE B'11'::bit(2) END $$;
 
     CREATE AGGREGATE cap_plus (bit(2)) (
       sfunc=cap_or,  stype=bit(2), initcond='00');
@@ -291,10 +297,14 @@ Zero is ``B'00'``, one is ``B'11'``:
     SELECT name,
            provenance_evaluate(provenance(), 'capability_mapping',
                                B'11'::bit(2),
-                               'cap_plus', 'cap_times', 'cap_minus')
+                               'cap_plus', 'cap_times', 'cap_minus', 'cap_delta')
     FROM mytable;
 
-This is a genuine commutative m-semiring on the four-element Boolean
+For a real access-control deployment one would typically take ``δ`` to
+be the identity instead, to avoid promoting a partial capability such
+as ``B'01'`` to full ``B'11'`` when it flows through a δ-gate.
+
+This is a commutative m-semiring on the four-element Boolean
 lattice :math:`B^2`; the lattice is partial (the two middle elements
 are incomparable), so it is not subsumed by :sqlfunc:`sr_minmax` or
 :sqlfunc:`sr_maxmin`. Additional examples can be found in the test

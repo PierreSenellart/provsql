@@ -4,7 +4,8 @@ SET search_path TO provsql_test,provsql;
 
 /* The capability semiring: ⊕ = bitwise OR (alternatives combine
    permissively), ⊗ = bitwise AND (joins require both flags),
-   ⊖ = a AND NOT b (Boolean difference). Carrier is bit(2) over the
+   ⊖ = a AND NOT b (Boolean difference), δ = support indicator
+   (B'00' if input is zero, else B'11'). Carrier is bit(2) over the
    diamond lattice {00, 01, 10, 11} with 00 as zero and 11 as one. */
 
 CREATE FUNCTION cap_or(state bit(2), v bit(2))
@@ -13,6 +14,9 @@ CREATE FUNCTION cap_and(state bit(2), v bit(2))
   RETURNS bit(2) IMMUTABLE LANGUAGE SQL AS $$ SELECT state & v $$;
 CREATE FUNCTION cap_minus(a bit(2), b bit(2))
   RETURNS bit(2) IMMUTABLE LANGUAGE SQL AS $$ SELECT a & ~b $$;
+CREATE FUNCTION cap_delta(v bit(2))
+  RETURNS bit(2) IMMUTABLE LANGUAGE SQL
+  AS $$ SELECT CASE WHEN v = B'00' THEN B'00'::bit(2) ELSE B'11'::bit(2) END $$;
 
 CREATE AGGREGATE cap_plus(bit(2)) (
   sfunc = cap_or, stype = bit(2), initcond = '00'
@@ -29,7 +33,7 @@ BEGIN
     token,
     token2value,
     B'11'::bit(2),
-    'cap_plus', 'cap_times', 'cap_minus');
+    'cap_plus', 'cap_times', 'cap_minus', 'cap_delta');
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE;
 
