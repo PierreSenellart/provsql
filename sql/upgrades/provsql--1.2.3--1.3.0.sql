@@ -56,11 +56,11 @@ BEGIN
       'per-database layout and is currently inaccessible.\n'
       '\n'
       'To recover:\n'
-      '  1. Run: provsql_migrate_mmap -D %s -c <connstr>\n'
+      '  1. Run: provsql_migrate_mmap -D % -c <connstr>\n'
       '     The tool migrates all databases and deletes the old flat files.\n'
       '     Run it before any provenance query executes; if queries have already\n'
       '     run, first delete any empty per-database files:\n'
-      '       rm -f %s/base/*/provsql_*.mmap\n'
+      '       rm -f %/base/*/provsql_*.mmap\n'
       '     then restart PostgreSQL and run the tool immediately.\n'
       '  2. Restart PostgreSQL so the background worker picks up the migrated files.',
       current_setting('data_directory'),
