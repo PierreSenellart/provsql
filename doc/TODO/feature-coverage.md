@@ -81,6 +81,7 @@ Legend:
 | `sr_formula`                             | ✓ | ✓ | ✓ | ✓ |   | ✓ |
 | `sr_counting`                            | ✓ |   | ✓ |   |   |   |
 | `sr_why`                                 |   |   | ✓ |   |   |   |
+| `sr_how`                                 |   |   |   |   |   |   |
 | `sr_which`                               |   |   |   |   |   |   |
 | `sr_tropical`                            |   |   |   |   |   |   |
 | `sr_viterbi`                             |   |   |   |   |   |   |

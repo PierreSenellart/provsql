@@ -84,6 +84,31 @@ minimal witnesses (sets of input tuples) that support the result:
     SELECT name, sr_why(provenance(), 'my_mapping')
     FROM mytable;
 
+How-Provenance
+---------------
+
+:sqlfunc:`sr_how` returns the *how-provenance* of a result – the
+canonical polynomial in :math:`\mathbb{N}[X]` over the input-tuple
+labels (Green, Karvounarakis & Tannen, *Provenance Semirings*,
+PODS'07).  Each derivation contributes a monomial; coefficients count
+distinct derivations of the same monomial:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_how(provenance(), 'my_mapping')
+    FROM mytable;
+
+The result is rendered in canonical sum-of-products form, e.g.
+``2⋅Alice⋅Bob + Alice^2 + Bob^2``.  Multiplication is the dot
+``⋅``; exponents use ``^k``; ``0`` and ``1`` denote the additive and
+multiplicative identities.  Because the form is canonical, two
+semantically-equivalent provenance circuits collapse to identical
+strings, making :sqlfunc:`sr_how` suitable for provenance-aware query
+equivalence (e.g. checking that two ETL pipelines produce the same
+provenance, not just the same tuples).  The how-semiring is
+:math:`\mathbb{N}[X]`, the universal commutative semiring for
+provenance.
+
 Which-Provenance (Lineage)
 ---------------------------
 
@@ -152,7 +177,7 @@ multiplicative operation is the Łukasiewicz t-norm
 The mapping should assign ``float8`` graded-truth values in
 :math:`[0,1]` to leaf tokens. Compared to :sqlfunc:`sr_viterbi` (which
 multiplies probabilities), the Łukasiewicz t-norm preserves crisp
-truth — :math:`0.7 \otimes_{\text{Ł}} 1 = 0.7` — and avoids the
+truth (:math:`0.7 \otimes_{\text{Ł}} 1 = 0.7`) and avoids the
 near-zero collapse of long product chains. This makes it the standard
 choice for fuzzy graded conjunctions where inputs are degrees of
 evidence rather than independent probabilities.

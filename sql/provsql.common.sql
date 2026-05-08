@@ -1674,6 +1674,20 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance as how-provenance (canonical polynomial provenance ℕ[X], universal commutative-semiring provenance) */
+CREATE FUNCTION sr_how(token ANYELEMENT, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'how',
+    '{}'::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
 /** @brief Evaluate provenance as which-provenance (lineage: a single set of contributing labels) */
 CREATE FUNCTION sr_which(token ANYELEMENT, token2value regclass)
   RETURNS VARCHAR AS

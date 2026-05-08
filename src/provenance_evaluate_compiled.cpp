@@ -12,6 +12,7 @@
  * - @c "boolean"   → @c semiring::Boolean
  * - @c "counting"  → @c semiring::Counting
  * - @c "formula"   → @c semiring::Formula (symbolic representation as a formula)
+ * - @c "how"       → @c semiring::How (canonical polynomial provenance ℕ[X])
  * - @c "why"       → @c semiring::Why (witness sets)
  * - @c "which"     → @c semiring::Which (lineage)
  * - @c "boolexpr"  → @c semiring::BoolExpr (Boolean circuit for probability)
@@ -53,6 +54,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Boolean.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
+#include "semiring/How.h"
 #include "semiring/Why.h"
 #include "semiring/Which.h"
 #include "semiring/BoolExpr.h"
@@ -178,6 +180,76 @@ static Datum pec_why(
   memcpy(VARDATA(result), out.c_str(), out.size());
   PG_RETURN_TEXT_P(result);
 
+}
+
+/**
+ * @brief Evaluate the How-provenance semiring (canonical polynomial provenance) for a circuit.
+ * @param constants   Extension OID cache.
+ * @param c           Generic circuit to evaluate.
+ * @param g           Root gate.
+ * @param inputs      Set of input gate IDs.
+ * @param drop_table  Whether the temporary UUID table should be dropped.
+ * @return            Varchar datum containing the canonical sum-of-products
+ *                    representation of the polynomial.
+ */
+static Datum pec_how(
+  const constants_t &constants,
+  GenericCircuit &c,
+  gate_t g,
+  const std::set<gate_t> &inputs,
+  bool drop_table)
+{
+  std::unordered_map<gate_t, semiring::how_provenance_t> provenance_mapping;
+
+  initialize_provenance_mapping<semiring::how_provenance_t>(
+    constants,
+    c,
+    provenance_mapping,
+    [](const char *v) {
+    if(strchr(v, '{') || strchr(v, '+') || strchr(v, '*') || strchr(v, '^'))
+      provsql_error("Complex How-semiring values for input tuples not currently supported.");
+    semiring::how_monomial_t mono;
+    mono[std::string(v)] = 1u;
+    return semiring::how_provenance_t{ { std::move(mono), 1u } };
+  },
+    drop_table
+    );
+
+  provsql_try_having_how(c, g, provenance_mapping);
+  semiring::how_provenance_t prov =
+    c.evaluate<semiring::How>(g, provenance_mapping, semiring::How());
+
+  // Canonical sum-of-products serialisation: monomials in lexicographic
+  // order (std::map iteration order), variables within a monomial also
+  // lexicographic. Multiplication is the dot operator U+22C5; exponents
+  // are ASCII "^k". e.g. "2⋅Alice⋅Bob^2 + 3⋅Charlie", "0", "1".
+  std::ostringstream oss;
+  if (prov.empty()) {
+    oss << "0";
+  } else {
+    bool firstMono = true;
+    for (const auto &[mono, coeff] : prov) {
+      if (!firstMono) oss << " + ";
+      firstMono = false;
+      bool need_dot = false;
+      if (coeff != 1 || mono.empty()) {
+        oss << coeff;
+        need_dot = true;
+      }
+      for (const auto &[var, exp] : mono) {
+        if (need_dot) oss << "⋅";
+        need_dot = true;
+        oss << var;
+        if (exp != 1) oss << "^" << exp;
+      }
+    }
+  }
+
+  std::string out = oss.str();
+  text *result = (text *) palloc(VARHDRSZ + out.size());
+  SET_VARSIZE(result, VARHDRSZ + out.size());
+  memcpy(VARDATA(result), out.c_str(), out.size());
+  PG_RETURN_TEXT_P(result);
 }
 
 /**
@@ -536,6 +608,8 @@ static Datum provenance_evaluate_compiled_internal
   {
     if (semiring == "why")
       return pec_why(constants, c, g, inputs, drop_table);
+    else if (semiring == "how")
+      return pec_how(constants, c, g, inputs, drop_table);
     else if (semiring == "which")
       return pec_which(constants, c, g, inputs, drop_table);
     else

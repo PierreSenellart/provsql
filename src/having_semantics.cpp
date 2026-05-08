@@ -7,6 +7,7 @@
  * - @c provsql_try_having_formula()
  * - @c provsql_try_having_counting()
  * - @c provsql_try_having_why()
+ * - @c provsql_try_having_how()
  * - @c provsql_try_having_which()
  * - @c provsql_try_having_boolexpr()
  * - @c provsql_try_having_boolean()
@@ -40,6 +41,7 @@ extern "C" {
 #include "semiring/BoolExpr.h"
 #include "semiring/Counting.h"
 #include "semiring/Formula.h"
+#include "semiring/How.h"
 #include "semiring/Why.h"
 #include "semiring/Which.h"
 #include "semiring/Tropical.h"
@@ -360,6 +362,14 @@ void provsql_try_having_why(
   std::unordered_map<gate_t, semiring::why_provenance_t> &mapping)
 {
   try_having_impl<semiring::Why>(c, g, mapping, semiring::Why());
+}
+
+void provsql_try_having_how(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, semiring::how_provenance_t> &mapping)
+{
+  try_having_impl<semiring::How>(c, g, mapping, semiring::How());
 }
 
 void provsql_try_having_which(
