@@ -18,9 +18,15 @@ ENV PSQL_VERSION=$PSQL_VERSION
 # extension's ASCII view_circuit rendering. Consolidating all deps
 # into one RUN keeps the image to a single apt layer and a single
 # apt-get update.
+#
+# Debian bookworm ships PostgreSQL 15; for any other PG, we add the
+# PGDG apt source first via postgresql-common's bundled installer so
+# `postgresql-${PSQL_VERSION}` resolves for the whole supported range.
 RUN apt-get update &&\
+    apt-get -y install postgresql-common ca-certificates curl gnupg &&\
+    /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y &&\
     apt-get -y install \
-        build-essential curl git mercurial unzip \
+        build-essential git mercurial unzip \
         libc6-i386 libgmp-dev libboost-dev libboost-serialization-dev \
         zlib1g-dev iproute2 \
         postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION} \
@@ -65,11 +71,13 @@ RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 
 # Copy the source AFTER apt + external-tool builds so a source-only
 # change does not invalidate those (long) cache layers.
-COPY . /opt/provsql
+# `--chown=postgres:postgres` writes the files into the new layer
+# already owned by `postgres`, avoiding a separate `chown -R` step
+# (which would force overlay2 to copy-up every file just to change
+# ownership : a 5x slowdown on a tree this large).
+COPY --chown=postgres:postgres . /opt/provsql
 WORKDIR /opt/provsql
 
-# Provsql will be built & run as user postgres
-RUN chown -R postgres:postgres /opt/provsql
 USER postgres
 
 # Building (parallelize across all available cores)

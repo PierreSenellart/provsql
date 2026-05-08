@@ -4,3 +4,4 @@ branding/       export-ignore
 docker/         export-ignore
 website/        export-ignore
 release.sh      export-ignore
+.dockerignore   export-ignore
