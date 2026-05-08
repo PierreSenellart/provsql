@@ -87,7 +87,7 @@ RUN /etc/init.d/postgresql start &&\
     psql -f /opt/provsql/test/sql/setup.sql test test  &&\
     psql -f /opt/provsql/test/sql/add_provenance.sql test test &&\
     psql -f /opt/provsql/test/sql/formula.sql test test  &&\
-    psql -f /opt/provsql/test/sql/security.sql test test &&\
+    psql -f /opt/provsql/test/sql/sr_minmax.sql test test &&\
     psql -c "ALTER ROLE test SET search_path TO public, provsql";
 
 ############################## FINISHING THE DOCKER  ##############################
