@@ -26,7 +26,8 @@ This documentation is organized into four parts:
   component map, the query rewriting pipeline, memory management,
   the where-provenance and data-modification subsystems,
   aggregation and semiring evaluation, probability computation,
-  coding conventions, testing, debugging, and the build system.
+  coding conventions, testing, debugging, the build system, and
+  ProvSQL Studio's architecture.
 
 * The :ref:`api-ref` provides auto-generated reference documentation
   for the SQL and C/C++ APIs (via Doxygen).
@@ -90,6 +91,7 @@ This documentation is organized into four parts:
    dev/testing
    dev/debugging
    dev/build-system
+   dev/studio
 
 .. _api-ref:
 

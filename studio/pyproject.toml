@@ -51,6 +51,7 @@ Homepage      = "https://provsql.org"
 Documentation = "https://provsql.org/docs/user/studio.html"
 Source        = "https://github.com/PierreSenellart/provsql"
 Issues        = "https://github.com/PierreSenellart/provsql/issues"
+Changelog     = "https://github.com/PierreSenellart/provsql/releases?q=tag%3Astudio-v"
 
 [project.scripts]
 provsql-studio = "provsql_studio.cli:main"

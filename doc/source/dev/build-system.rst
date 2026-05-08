@@ -429,6 +429,70 @@ The signed tag push is what the Linux CI workflow keys on to build
 and push the ``inriavalda/provsql`` Docker image for the new version.
 
 
+.. _studio-releases:
+
+Studio Releases
+---------------
+
+ProvSQL Studio (``studio/``) is released independently of the
+extension, as the ``provsql-studio`` package on PyPI, from
+``studio-vX.Y.Z`` git tags. Studio's version stream is independent of
+the extension's; the compatibility table in :doc:`/user/studio`
+records each Studio release's minimum required extension version.
+For the Studio source-code architecture, see :doc:`studio`.
+
+To cut a Studio release:
+
+1. Bump ``__version__`` in ``studio/provsql_studio/__init__.py`` to
+   the new ``X.Y.Z`` (the wheel's version is dynamic and reads from
+   that string; ``pyproject.toml`` does not need a manual edit).
+2. **Update** ``studio/CHANGELOG.md``: rename the topmost
+   ``## [Unreleased]`` heading (or add a new ``## [X.Y.Z]`` heading
+   above any prior versioned section) and list user-visible changes
+   under the conventional sub-headings (Highlights / Added / Fixed /
+   Changed / Removed). The release workflow extracts the section
+   matching the tag's version and embeds it under "What's changed"
+   in the GitHub release notes; if the section is missing or empty,
+   the workflow aborts before publishing.
+3. Commit the version bump + changelog entry, push, and let
+   ``studio.yml`` confirm the matrix is green on the resulting
+   commit.
+4. Tag ``studio-vX.Y.Z`` and push the tag. ``studio-release.yml``
+   takes over from there.
+
+The release workflow runs four jobs:
+
+1. **gate**: a single-cell sanity test (Py 3.12 × PG 16) that mirrors
+   ``studio.yml``'s lint + pytest steps, run against a checkout of
+   the tagged commit. Cheaper than re-running the 24-cell matrix at
+   release time, and catches a regressing tag that was not first
+   verified on push.
+2. **build**: ``python -m build`` produces ``dist/*.tar.gz`` (sdist)
+   and ``dist/*-py3-none-any.whl`` (wheel) under ``studio/dist/``.
+   The job verifies that the produced filenames carry the version
+   parsed from the tag, so a stale ``__version__`` fails loudly
+   instead of publishing a mismatched wheel.
+3. **publish**: uploads the artifacts to PyPI via
+   ``pypa/gh-action-pypi-publish`` using OIDC (no API token in repo
+   secrets). The ``environment: pypi`` declaration on this job is
+   what binds it to the *Pending Publisher* configured at
+   ``pypi.org/manage/account/publishing/``: PyPI accepts the upload
+   only when the workflow file (``studio-release.yml``), the
+   environment (``pypi``), and the tag pattern (``studio-v*``) all
+   match the publisher record. The matching ``pypi`` GitHub
+   environment also enforces a tag rule (``studio-v*``) so an
+   unrelated workflow cannot reach the publisher.
+4. **release**: extracts the version's section from
+   ``studio/CHANGELOG.md``, builds the release notes (install
+   command, "What's changed", requirements, docs link), and runs
+   ``gh release create studio-vX.Y.Z dist/*`` to create the GitHub
+   release with the sdist + wheel attached as assets.
+
+The studio-only ``studio-vX.Y.Z`` tag does **not** trigger
+``pgxn.yml`` (which only fires on extension-style ``vX.Y.Z`` tags)
+or the Docker image push (gated on extension tags too).
+
+
 Website and Deployment
 ----------------------
 
@@ -448,7 +512,7 @@ change are not retransferred.
 CI Workflows
 ------------
 
-Six GitHub Actions workflows are defined:
+Eight GitHub Actions workflows are defined:
 
 .. list-table::
    :header-rows: 1
@@ -477,5 +541,20 @@ Six GitHub Actions workflows are defined:
    * - ``pgxn.yml``
      - Publishes the release to PGXN.
        Runs only on version tags (``v*.*.*``).
+   * - ``studio.yml``
+     - Lint, package smoke, and pytest+Playwright e2e on a Py 3.10/
+       3.11/3.12/3.13 × PG 14/15/16 matrix for ProvSQL Studio.
+       Runs on every push that touches ``studio/**``,
+       ``sql/provsql.common.sql``, ``sql/provsql.14.sql``, or the
+       workflow file.
+   * - ``studio-release.yml``
+     - Tag-driven PyPI publish for ProvSQL Studio. Builds sdist +
+       wheel, publishes via Trusted Publisher (no API token), and
+       creates a GitHub release with the artifacts attached and
+       notes assembled from ``studio/CHANGELOG.md``.
+       Runs only on Studio tags (``studio-v*``).
 
-The first five must pass before merging to ``master``.
+The five non-release workflows that run on every applicable push
+(``build_and_test``, ``macos``, ``wsl``, ``docs``, ``codeql``, plus
+``studio`` for Studio-touching pushes) must pass before merging to
+``master``.
