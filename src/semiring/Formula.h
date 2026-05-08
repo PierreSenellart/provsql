@@ -99,28 +99,6 @@ static std::string strip_wrap_if_op(const std::string &s, const std::string &op)
   return s;
 }
 
-/**
- * @brief Strip a single matched outer paren pair from @p s, if any.
- *
- * Used at the root of a @c Formula evaluation to drop the cosmetic
- * outer wrap that @c plus / @c times / @c monus always produce: at the
- * root there is no enclosing context, so the outer parens carry no
- * disambiguation value.
- */
-static std::string strip_outer_parens(const std::string &s) {
-  if(s.size() < 2 || s.front() != '(' || s.back() != ')')
-    return s;
-  int depth = 0;
-  for(size_t i = 0; i < s.size() - 1; ++i) {
-    if(s[i] == '(') ++depth;
-    else if(s[i] == ')') {
-      if(--depth == 0)
-        return s;
-    }
-  }
-  return s.substr(1, s.size() - 2);
-}
-
 namespace semiring {
 /**
  * @brief Symbolic provenance representation over @c std::string.
