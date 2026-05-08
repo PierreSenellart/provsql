@@ -42,7 +42,13 @@ deploy: website
 	# -c hashes content so Jekyll's fresh mtimes don't trigger spurious transfers
 	rsync -avzcP website/_site/ provsql:/var/www/provsql/
 
-.PHONY: default test docs website deploy tdkc provsql_migrate_mmap
+studio:
+	cd studio && python3 -m provsql_studio
+
+studio-test:
+	cd studio && python3 -m pytest tests
+
+.PHONY: default test docs website deploy studio studio-test tdkc provsql_migrate_mmap
 
 tdkc provsql_migrate_mmap:
 	$(MAKE) -f $(INTERNAL) $@ $(ARGS)

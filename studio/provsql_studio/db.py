@@ -5,7 +5,6 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import psycopg
 from psycopg import sql
@@ -937,7 +936,7 @@ def evaluate_circuit(
             if cur.fetchone() is None:
                 raise ValueError(f"unknown custom semiring: {fn!r}")
             cur.execute(
-                f"""SELECT format_type(p.prorettype, NULL)
+                """SELECT format_type(p.prorettype, NULL)
                     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                     WHERE n.nspname = %s AND p.proname = %s
                       AND p.pronargs = 2 AND p.proargtypes[1] = 'regclass'::regtype""",
@@ -1632,8 +1631,10 @@ def validate_panel_guc(name: str, value: str) -> str:
         raise ValueError(f"GUC not user-configurable: {name}")
     v = (value or "").strip().lower()
     if name == "provsql.active":
-        if v in ("on", "true", "1", "yes"):  return "on"
-        if v in ("off", "false", "0", "no"): return "off"
+        if v in ("on", "true", "1", "yes"):
+            return "on"
+        if v in ("off", "false", "0", "no"):
+            return "off"
         raise ValueError("provsql.active must be on or off")
     if name == "provsql.verbose_level":
         try:

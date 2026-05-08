@@ -3,8 +3,6 @@ status / error handling. The wrapping is exercised against the personnel
 table set up by conftest."""
 from __future__ import annotations
 
-import pytest
-
 
 def post_exec(client, sql, mode="where"):
     resp = client.post("/api/exec", json={"sql": sql, "mode": mode})

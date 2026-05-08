@@ -14,7 +14,6 @@ so they require the test database to have provsql installed and personnel set up
 from __future__ import annotations
 
 import psycopg
-import pytest
 
 
 def _personnel_uuid(test_dsn: str, name: str) -> str:
