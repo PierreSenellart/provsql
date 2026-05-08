@@ -104,6 +104,8 @@ _SQL_FUNC_MAP = {
     'sr_tropical':              '/doxygen-sql/html/group__compiled__semirings.html#gaa2a6ec05f977d18204b1b6181dee28b5',
     'sr_viterbi':               '/doxygen-sql/html/group__compiled__semirings.html#ga67d375630a9674bfecd4f87d0d003d31',
     'sr_lukasiewicz':           '/doxygen-sql/html/group__compiled__semirings.html#ga27ff464e570641a7b195ed3578a66ab1',
+    'sr_minmax':                '/doxygen-sql/html/group__compiled__semirings.html#ga253e939604914fce14201b85cd4e90bb',
+    'sr_maxmin':                '/doxygen-sql/html/group__compiled__semirings.html#ga2761df1f75e734655a0f43d34e02e9e8',
     'sr_temporal':              '/doxygen-sql/html/group__temporal__db.html#ga53665747f710e8bacbf9bb985420c173',
     'sr_interval_num':          '/doxygen-sql/html/group__temporal__db.html#gaa35eca68f37290485c5319697b408d3a',
     'sr_interval_int':          '/doxygen-sql/html/group__temporal__db.html#ga62d18db08c8b0b341d271ccad61f2c82',

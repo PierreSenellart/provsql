@@ -21,6 +21,8 @@
  * - @c "interval_union" → @c semiring::IntervalUnion (multirange union, PG14+)
  *   for any of <tt>tstzmultirange</tt>, <tt>nummultirange</tt>,
  *   <tt>int4multirange</tt>; selected by the result type of the call
+ * - @c "minmax" / @c "maxmin" → @c semiring::MinMax over any user-defined
+ *   PostgreSQL enum type, selected by @c get_typtype() == @c TYPTYPE_ENUM
  *
  * The function first builds a provenance mapping (input-gate UUID → semiring
  * value) by querying the @c tmp_uuids table via SPI
@@ -58,6 +60,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/Viterbi.h"
 #include "semiring/Lukasiewicz.h"
 #include "semiring/IntervalUnion.h"
+#include "semiring/MinMax.h"
 
 
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
@@ -308,6 +311,42 @@ static Datum pec_multirange(
 #endif
 
 /**
+ * @brief Evaluate the min-max / max-min m-semiring provenance over a
+ *        user-defined PostgreSQL enum carrier.
+ * @param constants    Extension OID cache.
+ * @param c            Generic circuit to evaluate.
+ * @param g            Root gate.
+ * @param inputs       Set of input gate IDs.
+ * @param enum_oid     OID of the carrier enum type used for parsing
+ *                     leaf values and resolving bottom/top.
+ * @param reverse      @c false for @c sr_minmax (security shape:
+ *                     @f$\oplus = \min, \otimes = \max@f$),
+ *                     @c true for @c sr_maxmin (fuzzy shape).
+ * @param drop_table   Whether the temporary UUID table should be dropped.
+ * @return             Enum Datum (an Oid) with the evaluated provenance.
+ */
+static Datum pec_anyenum(
+  const constants_t &constants,
+  GenericCircuit &c,
+  gate_t g,
+  const std::set<gate_t> &inputs,
+  Oid enum_oid,
+  bool reverse,
+  bool drop_table)
+{
+  std::unordered_map<gate_t, Datum> provenance_mapping;
+  semiring::MinMax sr(enum_oid, reverse);
+  initialize_provenance_mapping<Datum>(constants, c, provenance_mapping, [&sr](const char *v) {
+    return sr.parse(v);
+  }, drop_table);
+
+  provsql_try_having_minmax(c, g, provenance_mapping, sr);
+  Datum out = c.evaluate<semiring::MinMax>(g, provenance_mapping, sr);
+
+  PG_RETURN_DATUM(out);
+}
+
+/**
  * @brief Evaluate a float semiring provenance for a circuit.
  * @param constants   Extension OID cache.
  * @param c           Generic circuit to evaluate.
@@ -525,6 +564,14 @@ static Datum provenance_evaluate_compiled_internal
     return pec_multirange(constants, c, g, inputs, constants.OID_TYPE_INT4MULTIRANGE, drop_table);
   }
 #endif
+  else if(get_typtype(type) == TYPTYPE_ENUM) {
+    if(semiring=="minmax")
+      return pec_anyenum(constants, c, g, inputs, type, false, drop_table);
+    else if(semiring=="maxmin")
+      return pec_anyenum(constants, c, g, inputs, type, true, drop_table);
+    else
+      throw CircuitException("Unknown semiring for enum type: "+semiring);
+  }
   else
     throw CircuitException("Unknown element type for provenance_evaluate_compiled");
 }

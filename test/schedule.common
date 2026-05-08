@@ -15,7 +15,8 @@ test: resolve_input
 
 # Introducing a few semirings
 test: sr_formula sr_counting sr_boolean sr_why sr_which sr_tropical sr_viterbi sr_lukasiewicz
-test: security formula counting boolean
+test: sr_minmax sr_maxmin capability
+test: formula counting boolean
 
 # Test of various ProvSQL features and SQL language capabilities
 test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk values

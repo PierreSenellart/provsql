@@ -206,47 +206,39 @@ Typical use cases:
 
 Both require PostgreSQL ≥ 14.
 
-Security Semiring
-------------------
+Min-Max and Max-Min Semirings (m-semirings)
+--------------------------------------------
 
-The security semiring assigns security-level labels to tuples and
-propagates them through queries according to a lattice. It is implemented
-using :sqlfunc:`provenance_evaluate` with custom aggregates for the
-semiring plus and times operations. For example, given a type
-``classification_level`` (an enum ordered from ``unclassified`` to
-``top_secret``):
+:sqlfunc:`sr_minmax` and :sqlfunc:`sr_maxmin` evaluate the provenance
+in the min-max and max-min m-semirings over an arbitrary user-defined
+PostgreSQL ``ENUM`` type. The carrier order comes from
+``pg_enum.enumsortorder``; bottom and top are derived automatically.
+
+- :sqlfunc:`sr_minmax`: ``⊕ = min``, ``⊗ = max``, zero is the top of
+  the enum, one is the bottom. The *security* shape: alternative
+  derivations combine to the least sensitive label, joins combine to
+  the most sensitive label.
+- :sqlfunc:`sr_maxmin`: dual ``⊕ = max``, ``⊗ = min``. The *fuzzy* /
+  availability / trust shape: alternatives combine to the most
+  permissive label, joins combine to the strictest label.
+
+The third argument to both functions is a sample value of the carrier
+enum, used only for type inference; its value is ignored. Given a
+``classification_level`` enum ordered from ``unclassified`` to
+``top_secret``:
 
 .. code-block:: postgresql
 
-    -- Define the semiring operations
-    CREATE FUNCTION security_plus_state(state classification_level,
-                                        level classification_level)
-      RETURNS classification_level LANGUAGE SQL IMMUTABLE AS $$
-        SELECT LEAST(state, level)
-    $$;
-
-    CREATE FUNCTION security_times_state(state classification_level,
-                                         level classification_level)
-      RETURNS classification_level LANGUAGE SQL IMMUTABLE AS $$
-        SELECT GREATEST(state, level)
-    $$;
-
-    CREATE AGGREGATE security_plus(classification_level) (
-      sfunc = security_plus_state, stype = classification_level,
-      initcond = 'unavailable'
-    );
-    CREATE AGGREGATE security_times(classification_level) (
-      sfunc = security_times_state, stype = classification_level,
-      initcond = 'unclassified'
-    );
-
-    -- Evaluate the security level of a query result
     SELECT create_provenance_mapping('personnel_level', 'personnel', 'classification');
 
-    SELECT city, provenance_evaluate(provenance(), 'personnel_level',
-                                     'unclassified'::classification_level,
-                                     'security_plus', 'security_times')
+    SELECT city, sr_minmax(provenance(), 'personnel_level',
+                           'unclassified'::classification_level) AS clearance
     FROM (SELECT DISTINCT city FROM personnel) t;
+
+This is the compiled replacement for the hand-rolled access-control
+semiring previously documented as the *security semiring*: a single
+implementation covers any user enum (security lattices, fuzzy-discrete
+trust levels, three-valued logic, project-specific orderings).
 
 .. _custom-semirings:
 
@@ -255,7 +247,7 @@ Custom Semirings with :sqlfunc:`provenance_evaluate`
 
 Advanced users can define custom semirings in SQL and evaluate them
 using :sqlfunc:`provenance_evaluate`.  The function takes a provenance token,
-a mapping table, a zero element, and the names of aggregate functions
+a mapping table, a one element, and the names of aggregate functions
 implementing the semiring operations:
 
 .. code-block:: postgresql
@@ -271,11 +263,44 @@ implementing the semiring operations:
     )
 
 The plus and times operations must be defined as PostgreSQL aggregate
-functions with a two-argument state transition function.  The monus and
-delta operations are plain functions.  See the security semiring example
-above for a complete illustration.  Additional examples can be found in
-the test suite: :download:`test/sql/security.sql <../../../test/sql/security.sql>`
-(security semiring) and :download:`test/sql/formula.sql <../../../test/sql/formula.sql>`
+functions with a two-argument state transition function. The monus and
+delta operations are plain functions.
+
+As a worked example, consider the *capability* semiring over the
+``bit(2)`` carrier interpreted as the diamond lattice
+:math:`\{00, 01, 10, 11\}` (e.g., ``(can_read, can_write)``).
+``⊕ = |`` (bitwise OR) combines alternative derivations permissively;
+``⊗ = &`` (bitwise AND) combines joins restrictively;
+``⊖ = a & ~b`` (bitwise AND-NOT) is the Boolean difference monus.
+Zero is ``B'00'``, one is ``B'11'``:
+
+.. code-block:: postgresql
+
+    CREATE FUNCTION cap_or  (state bit(2), v bit(2)) RETURNS bit(2) IMMUTABLE
+      LANGUAGE SQL AS $$ SELECT state | v $$;
+    CREATE FUNCTION cap_and (state bit(2), v bit(2)) RETURNS bit(2) IMMUTABLE
+      LANGUAGE SQL AS $$ SELECT state & v $$;
+    CREATE FUNCTION cap_minus(a bit(2), b bit(2))    RETURNS bit(2) IMMUTABLE
+      LANGUAGE SQL AS $$ SELECT a & ~b $$;
+
+    CREATE AGGREGATE cap_plus (bit(2)) (
+      sfunc=cap_or,  stype=bit(2), initcond='00');
+    CREATE AGGREGATE cap_times(bit(2)) (
+      sfunc=cap_and, stype=bit(2), initcond='11');
+
+    SELECT name,
+           provenance_evaluate(provenance(), 'capability_mapping',
+                               B'11'::bit(2),
+                               'cap_plus', 'cap_times', 'cap_minus')
+    FROM mytable;
+
+This is a genuine commutative m-semiring on the four-element Boolean
+lattice :math:`B^2`; the lattice is partial (the two middle elements
+are incomparable), so it is not subsumed by :sqlfunc:`sr_minmax` or
+:sqlfunc:`sr_maxmin`. Additional examples can be found in the test
+suite: :download:`test/sql/capability.sql <../../../test/sql/capability.sql>`
+(the capability semiring above) and
+:download:`test/sql/formula.sql <../../../test/sql/formula.sql>`
 (symbolic representation as a formula).
 
 For queries involving aggregation (``GROUP BY``), use

@@ -83,7 +83,7 @@ showcase application use case.
   of doc B". The `int4multirange` carrier encodes "which page
   intervals contributed" exactly.
 
-### 3. `sr_minmax_enum` : generic security / fuzzy-discrete semiring over user-defined PG enums
+### 3. `sr_minmax` / `sr_maxmin` : generic security / fuzzy-discrete semirings over user-defined PG enums **[shipped]**
 
 * Min over addition, max over multiplication, over a bounded linear
   order. Lean reference: `MinMax α` for any
@@ -153,10 +153,18 @@ showcase application use case.
    multirange type OID; the polymorphic `F_MULTIRANGE_*` built-ins
    apply uniformly across multirange carriers, so the dispatch is one
    branch per carrier and the C++ class is a single header.
-3. **`sr_minmax_enum`** : ship when a security / access-control user
-   materialises; until then, the SQL custom-semiring path documented
-   in `doc/source/user/semirings.rst` covers it. Subsumes any
-   per-enum compiled instance.
+3. **`sr_minmax` / `sr_maxmin`** : **shipped**. Two compiled
+   instantiations of the same template, dispatched on
+   `get_typtype(type) == TYPTYPE_ENUM`; bottom and top are looked up
+   from `pg_enum.enumsortorder` via the `ENUMTYPOIDNAME` syscache and
+   element comparison goes through `F_ENUM_CMP`. The SQL custom
+   security semiring previously documented in `semirings.rst` and
+   exercised by `test/sql/security.sql` was replaced by `sr_minmax`;
+   `casestudy1` Step 4 now calls the compiled function. The new
+   custom-semiring docs example is the bit(2) capability semiring
+   (genuine commutative m-semiring on the four-element Boolean
+   lattice, partial order so not subsumed by `sr_minmax` /
+   `sr_maxmin`); see `test/sql/capability.sql`.
 4. **`sr_how`** : ship only if circuit-equivalence checking becomes a
    stated need. The expanded polynomial output by itself is not the
    value-add over `sr_formula`; canonicalisation is.

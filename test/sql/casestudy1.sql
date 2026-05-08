@@ -38,13 +38,13 @@ SELECT city, formula FROM result_cs1_formula
 WHERE city IN ('Nairobi','Beijing') ORDER BY city;
 DROP TABLE result_cs1_formula;
 
--- Step 4: security semiring — minimum clearance for each shared city
--- (reuses security_min/security_max/security aggregates from security.sql)
+-- Step 4: sr_minmax — security clearance for each shared city
 SELECT create_provenance_mapping('agents_level', 'agents', 'classification');
 
 CREATE TABLE result_cs1_security AS
 SELECT p1.city,
-    security(provenance(), 'agents_level') AS min_clearance
+    sr_minmax(provenance(), 'agents_level',
+              'unclassified'::classification_level) AS min_clearance
 FROM agents p1
 JOIN agents p2 ON p1.city = p2.city AND p1.id < p2.id
 GROUP BY p1.city;
