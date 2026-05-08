@@ -266,6 +266,29 @@ virtual value_type agg(AggregationOperator op, const std::vector<std::string> &s
 virtual value_type value(const std::string &s) const override {
   return s;
 }
+value_type parse_leaf(const char *v) const {
+  return std::string(v);
+}
+/**
+ * @brief Serialise a Formula evaluation as text.
+ *
+ * Drops the cosmetic outer paren pair that @c plus / @c times / @c monus
+ * always produce: at the root there is no enclosing context, so the
+ * outer parens carry no disambiguation value.
+ */
+std::string to_text(const value_type &s) const {
+  if(s.size() < 2 || s.front() != '(' || s.back() != ')')
+    return s;
+  int depth = 0;
+  for(size_t i = 0; i < s.size() - 1; ++i) {
+    if(s[i] == '(') ++depth;
+    else if(s[i] == ')') {
+      if(--depth == 0)
+        return s;
+    }
+  }
+  return s.substr(1, s.size() - 2);
+}
 };
 }
 

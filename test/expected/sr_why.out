@@ -7,3 +7,14 @@ Berlin|{{Ellen,Susan}}
 New York|{{John,Paul}}
 Paris|{{Dave,Magdalen},{Dave,Nancy},{Magdalen,Nancy}}
 (3 rows)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|why
+Berlin|{{Ellen_a,Susan_a},{Ellen_a,Susan_b},{Ellen_b,Susan_a},{Ellen_b,Susan_b}}
+New York|{{John_a,Paul_a},{John_a,Paul_b},{John_b,Paul_a},{John_b,Paul_b}}
+Paris|{{Dave_a,Magdalen_a},{Dave_a,Magdalen_b},{Dave_a,Nancy_a},{Dave_a,Nancy_b},{Dave_b,Magdalen_a},{Dave_b,Magdalen_b},{Dave_b,Nancy_a},{Dave_b,Nancy_b},{Magdalen_a,Nancy_a},{Magdalen_a,Nancy_b},{Magdalen_b,Nancy_a},{Magdalen_b,Nancy_b}}
+(3 rows)

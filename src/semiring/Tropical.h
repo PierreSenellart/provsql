@@ -72,6 +72,9 @@ virtual value_type delta(value_type x) const override
 {
   return x==zero() ? zero() : one();
 }
+value_type parse_leaf(const char *v) const {
+  return atof(v);
+}
 
 };
 }

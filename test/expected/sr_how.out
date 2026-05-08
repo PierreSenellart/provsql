@@ -15,3 +15,14 @@ Berlin|2⋅Ellen⋅Susan + Ellen^2 + Susan^2
 New York|2⋅John⋅Paul + John^2 + Paul^2
 Paris|2⋅Dave⋅Magdalen + 2⋅Dave⋅Nancy + Dave^2 + 2⋅Magdalen⋅Nancy + Magdalen^2 + Nancy^2
 (3 rows)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|how
+Berlin|4⋅Ellen⋅Susan
+New York|4⋅John⋅Paul
+Paris|4⋅Dave⋅Magdalen + 4⋅Dave⋅Nancy + 4⋅Magdalen⋅Nancy
+(3 rows)

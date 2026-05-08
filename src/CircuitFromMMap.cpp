@@ -98,7 +98,7 @@ BooleanCircuit getBooleanCircuit(
     }
   }
   semiring::BoolExpr semiring(c);
-  provsql_try_having_boolexpr(gc, semiring, ggate, gc_to_bc);
+  provsql_having(gc, ggate, gc_to_bc, semiring);
   gate=gc.evaluate(ggate, gc_to_bc, semiring);
 
   return c;

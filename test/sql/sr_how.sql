@@ -36,3 +36,24 @@ SELECT city, how
 FROM result_how_self;
 
 DROP TABLE result_how_self;
+
+-- Round-trip: each leaf is already a polynomial (2⋅name); times
+-- multiplies coefficients, so each cross-pair contributes a monomial
+-- with coefficient 4.
+SELECT create_provenance_mapping('personnel_poly',
+  'personnel',
+  $$'2⋅' || name$$);
+
+CREATE TABLE result_how_poly AS SELECT
+  p1.city,
+  sr_how(provenance(), 'personnel_poly') AS how
+FROM personnel p1, personnel p2
+WHERE p1.city = p2.city AND p1.id < p2.id
+GROUP BY p1.city
+ORDER BY p1.city;
+
+SELECT remove_provenance('result_how_poly');
+SELECT city, how
+FROM result_how_poly;
+
+DROP TABLE result_how_poly;

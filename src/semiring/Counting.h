@@ -24,6 +24,7 @@
 #ifndef COUNTING_H
 #define COUNTING_H
 
+#include <cstdlib>
 #include <numeric>
 #include <vector>
 #include <stdexcept>
@@ -59,6 +60,9 @@ virtual value_type monus(value_type x, value_type y) const override
 virtual value_type delta(value_type x) const override
 {
   return x!=0 ? 1 : 0;
+}
+value_type parse_leaf(const char *v) const {
+  return atoi(v);
 }
 
 };

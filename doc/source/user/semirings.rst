@@ -96,6 +96,12 @@ minimal witnesses (sets of input tuples) that support the result:
     SELECT name, sr_why(provenance(), 'my_mapping')
     FROM mytable;
 
+Leaf values may be bare labels (e.g. ``Alice``, treated as the singleton
+witness ``{{Alice}}``) or already-structured why-provenance values
+(``{}`` for zero, ``{{}}`` for one, ``{{a},{b,c}}`` for a multi-witness
+set), which lets the output of one ``sr_why`` query be reused as input
+to another.
+
 How-Provenance
 ---------------
 
@@ -121,6 +127,12 @@ provenance, not just the same tuples).  The how-semiring is
 :math:`\mathbb{N}[X]`, the universal commutative semiring for
 provenance.
 
+Leaf values may be bare labels (e.g. ``Alice``, treated as the
+monomial ``Alice``), the literal ``0``, or already-structured
+polynomials following the same canonical syntax as the output (e.g.
+``2⋅Alice⋅Bob^2 + 3⋅Charlie``), so the output of one ``sr_how`` query
+can be reused as input to another.
+
 Which-Provenance (Lineage)
 ---------------------------
 
@@ -137,6 +149,12 @@ The result is rendered as ``{a,b,c}`` for a non-empty derivation, or
 ``⊥`` if no derivation exists.  Compared to :sqlfunc:`sr_why`,
 which-provenance is more compact (a flat set rather than a set of
 sets) but loses the breakdown into individual derivations.
+
+Leaf values may be bare labels (e.g. ``Alice``, treated as the
+singleton ``{Alice}``), the literal ``⊥`` (the additive zero), or
+already-structured sets (``{}`` for the multiplicative identity,
+``{a,b,c}`` for a non-empty set), so the output of one ``sr_which``
+query can be reused as input to another.
 
 Tropical Semiring (m-semiring)
 -------------------------------
