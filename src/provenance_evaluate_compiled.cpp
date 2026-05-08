@@ -93,7 +93,7 @@ static Datum pec_bool(
   if(semiring!="boolean")
     throw CircuitException("Unknown semiring for type varchar: "+semiring);
 
-  provsql_try_having_boolean(c,g,provenance_mapping);
+  provsql_having(c, g, provenance_mapping, semiring::Boolean());
   bool out = c.evaluate<semiring::Boolean>(g, provenance_mapping, semiring::Boolean());
 
   PG_RETURN_BOOL(out);
@@ -153,7 +153,7 @@ static Datum pec_why(
     drop_table
     );
 
-  provsql_try_having_why(c, g, provenance_mapping);
+  provsql_having(c, g, provenance_mapping, semiring::Why());
   semiring::why_provenance_t prov = c.evaluate<semiring::Why>(g, provenance_mapping, semiring::Why());
 
   // Serialize nested set structure: {{x},{y}}
@@ -215,7 +215,7 @@ static Datum pec_how(
     drop_table
     );
 
-  provsql_try_having_how(c, g, provenance_mapping);
+  provsql_having(c, g, provenance_mapping, semiring::How());
   semiring::how_provenance_t prov =
     c.evaluate<semiring::How>(g, provenance_mapping, semiring::How());
 
@@ -284,7 +284,7 @@ static Datum pec_which(
     drop_table
     );
 
-  provsql_try_having_which(c, g, provenance_mapping);
+  provsql_having(c, g, provenance_mapping, semiring::Which());
   semiring::which_provenance_t prov =
     c.evaluate<semiring::Which>(g, provenance_mapping, semiring::Which());
 
@@ -339,7 +339,7 @@ static Datum pec_varchar(
   if (semiring!= "formula")
     throw CircuitException("Unknown seimring for type varchar: " + semiring);
 
-  provsql_try_having_formula(c, g, provenance_mapping);
+  provsql_having(c, g, provenance_mapping, semiring::Formula());
   std::string s = c.evaluate<semiring::Formula>(g, provenance_mapping, semiring::Formula());
 
   text *result = (text *) palloc(VARHDRSZ + s.size());
@@ -375,7 +375,7 @@ static Datum pec_multirange(
     return sr.parse(v);
   }, drop_table);
 
-  provsql_try_having_multirange(c, g, provenance_mapping, sr);
+  provsql_having(c, g, provenance_mapping, sr);
   Datum out = c.evaluate<semiring::IntervalUnion>(g, provenance_mapping, sr);
 
   PG_RETURN_DATUM(out);
@@ -412,7 +412,7 @@ static Datum pec_anyenum(
     return sr.parse(v);
   }, drop_table);
 
-  provsql_try_having_minmax(c, g, provenance_mapping, sr);
+  provsql_having(c, g, provenance_mapping, sr);
   Datum out = c.evaluate<semiring::MinMax>(g, provenance_mapping, sr);
 
   PG_RETURN_DATUM(out);
@@ -443,13 +443,13 @@ static Datum pec_float(
 
   double out;
   if(semiring=="tropical") {
-    provsql_try_having_tropical(c, g, provenance_mapping);
+    provsql_having(c, g, provenance_mapping, semiring::Tropical());
     out = c.evaluate<semiring::Tropical>(g, provenance_mapping, semiring::Tropical());
   } else if(semiring=="viterbi") {
-    provsql_try_having_viterbi(c, g, provenance_mapping);
+    provsql_having(c, g, provenance_mapping, semiring::Viterbi());
     out = c.evaluate<semiring::Viterbi>(g, provenance_mapping, semiring::Viterbi());
   } else if(semiring=="lukasiewicz") {
-    provsql_try_having_lukasiewicz(c, g, provenance_mapping);
+    provsql_having(c, g, provenance_mapping, semiring::Lukasiewicz());
     out = c.evaluate<semiring::Lukasiewicz>(g, provenance_mapping, semiring::Lukasiewicz());
   } else
     throw CircuitException("Unknown semiring for type float: "+semiring);
@@ -483,7 +483,7 @@ static Datum pec_int(
   if(semiring!="counting")
     throw CircuitException("Unknown semiring for type int: "+semiring);
 
-  provsql_try_having_counting(c, g, provenance_mapping);
+  provsql_having(c, g, provenance_mapping, semiring::Counting());
   unsigned out = c.evaluate<semiring::Counting>(g, provenance_mapping, semiring::Counting());
 
   PG_RETURN_INT32((int32) out);

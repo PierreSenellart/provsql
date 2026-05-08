@@ -96,7 +96,7 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
     }
   }
   semiring::BoolExpr semiring(c);
-  provsql_try_having_boolexpr(gc, semiring, gc.getGate(uuid2string(token)), mapping);
+  provsql_having(gc, gc.getGate(uuid2string(token)), mapping, semiring);
   gate=gc.evaluate(ggate, mapping, semiring);
 
   return c;
