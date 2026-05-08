@@ -21,6 +21,7 @@ on:
       - '.github/workflows/macos.yml'
       - '.github/workflows/pgxn.yml'
       - '.github/workflows/studio.yml'
+      - '.github/workflows/studio-release.yml'
       - '.github/workflows/wsl.yml'
   pull_request:
     paths-ignore:
@@ -40,6 +41,7 @@ on:
       - '.github/workflows/macos.yml'
       - '.github/workflows/pgxn.yml'
       - '.github/workflows/studio.yml'
+      - '.github/workflows/studio-release.yml'
       - '.github/workflows/wsl.yml'
   workflow_dispatch:
 
