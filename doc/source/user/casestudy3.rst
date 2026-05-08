@@ -196,7 +196,7 @@ pinpointing the accessibility barrier.  For example::
 
     stop_name | formula
     ----------+-----------------
-    Paul Bert | (1 ⊗ 1 ⊗ 0 ⊗ 1)
+    Paul Bert | 1 ⊗ 1 ⊗ 0 ⊗ 1
 
 The four factors correspond to the four provenance-enabled table
 instances in the join: the Bagneux station record (``stops``, 1), its

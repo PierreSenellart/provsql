@@ -259,7 +259,7 @@ confidences 0.40 and 0.30:
     WHERE photo_id = 5 AND bbox_id = 1 AND species_id IN (1, 2)
     GROUP BY photo_id, bbox_id;
 
-The Boolean expression is now ``({0=1}[0.400000] ∨ {0=2}[0.300000])``:
+The Boolean expression is now ``{0=1}[0.400000] ∨ {0=2}[0.300000]``:
 a single mulinput variable (variable 0) with two mutually exclusive
 values, value 1 (Red Deer) with probability 0.40 and value 2
 (Roe Deer) with probability 0.30. Probability evaluation gives
