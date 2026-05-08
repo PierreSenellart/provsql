@@ -46,7 +46,7 @@ bool CircuitCache::insert(const CircuitCacheInfos& infos)
         static_cast<long>(current_size) + current_size_delta);
     }
     il.relocate(il.begin(),p.first);
-    return true;
+    return false;
   } else {
     current_size+=infos.size();
     while(current_size>MAX_CIRCUIT_CACHE_SIZE && !il.empty()) {
@@ -55,7 +55,7 @@ bool CircuitCache::insert(const CircuitCacheInfos& infos)
       current_size -= il.back().size();
       il.pop_back();
     }
-    return false;
+    return true;
   }
 }
 

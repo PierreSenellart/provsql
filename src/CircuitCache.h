@@ -5,12 +5,16 @@
  * Reading gates from the mmap-backed persistent storage is relatively
  * expensive.  The @c CircuitCache stores the most recently created gates
  * in an in-memory Boost multi-index container so that subsequent lookups
- * within the same backend transaction can skip the IPC round-trip to the
- * background worker.
+ * within the same backend can skip the IPC round-trip to the background
+ * worker.
  *
- * The cache is bounded by a fixed byte budget.  When inserting a new gate
- * would exceed the budget the oldest entry (FIFO order) is evicted.
- * Evicted entries must be flushed to the background worker by the caller.
+ * The cache is bounded by a fixed byte budget.  When inserting a new
+ * gate would exceed the budget the oldest entry (FIFO order) is
+ * evicted.  Eviction simply drops the entry: the cache is a read
+ * accelerator on top of a write-through design (every @c create_gate
+ * goes to the worker via IPC regardless of cache state, see
+ * @c provsql_mmap.c), so the worker already holds every gate the cache
+ * ever did and no flush hook is required.
  *
  * The C-linkage wrapper functions in @c circuit_cache.h provide the
  * interface used by the C portions of the extension.
@@ -94,14 +98,17 @@ CircuitCache() : current_size(0) {
 /**
  * @brief Insert a new gate into the cache, evicting the oldest if necessary.
  *
- * If @p infos.token is already present in the cache the insert is a
- * no-op and the function returns @c false.  Otherwise the entry is
- * added and, if the cache exceeds its size budget, the oldest entry is
- * removed.
+ * If @p infos.token is already present in the cache the existing entry
+ * is bumped to the LRU front and, when @p infos carries strictly more
+ * information than the existing entry (a real @c gate_type replacing a
+ * stored @c gate_invalid placeholder, or a non-empty children list
+ * replacing an empty one), its contents are overwritten in place.
+ * Otherwise the entry is added and, if the cache then exceeds its size
+ * budget, the oldest entry (FIFO tail) is removed.
  *
  * @param infos  Gate information to cache.
  * @return @c true if the entry was newly inserted, @c false if it was
- *         already present.
+ *         already present (regardless of whether it was upgraded).
  */
 bool insert(const CircuitCacheInfos& infos);
 
