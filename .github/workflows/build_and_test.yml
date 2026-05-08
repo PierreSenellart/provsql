@@ -109,5 +109,12 @@ jobs:
               && format(',inriavalda/provsql:{0}', steps.version.outputs.provsql_version)
               || ''
             }}
+          # STUDIO_SOURCE installs Studio editably from the in-tree
+          # studio/ rather than from PyPI. Decouples the Docker build
+          # from PyPI availability of the matching provsql-studio
+          # version, which matters during the coordinated release
+          # window when the extension is tagged before Studio is
+          # published.
           build-args: |
             PROVSQL_VERSION=${{ steps.version.outputs.provsql_version }}
+            STUDIO_SOURCE=/opt/provsql/studio
