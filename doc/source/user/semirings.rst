@@ -96,6 +96,31 @@ minimal witnesses (sets of input tuples) that support the result:
     SELECT name, sr_why(provenance(), 'my_mapping')
     FROM mytable;
 
+How-Provenance
+---------------
+
+:sqlfunc:`sr_how` returns the *how-provenance* of a result – the
+canonical polynomial in :math:`\mathbb{N}[X]` over the input-tuple
+labels (Green, Karvounarakis & Tannen, *Provenance Semirings*,
+PODS'07).  Each derivation contributes a monomial; coefficients count
+distinct derivations of the same monomial:
+
+.. code-block:: postgresql
+
+    SELECT name, sr_how(provenance(), 'my_mapping')
+    FROM mytable;
+
+The result is rendered in canonical sum-of-products form, e.g.
+``2⋅Alice⋅Bob + Alice^2 + Bob^2``.  Multiplication is the dot
+``⋅``; exponents use ``^k``; ``0`` and ``1`` denote the additive and
+multiplicative identities.  Because the form is canonical, two
+semantically-equivalent provenance circuits collapse to identical
+strings, making :sqlfunc:`sr_how` suitable for provenance-aware query
+equivalence (e.g. checking that two ETL pipelines produce the same
+provenance, not just the same tuples).  The how-semiring is
+:math:`\mathbb{N}[X]`, the universal commutative semiring for
+provenance.
+
 Which-Provenance (Lineage)
 ---------------------------
 
@@ -164,7 +189,7 @@ multiplicative operation is the Łukasiewicz t-norm
 The mapping should assign ``float8`` graded-truth values in
 :math:`[0,1]` to leaf tokens. Compared to :sqlfunc:`sr_viterbi` (which
 multiplies probabilities), the Łukasiewicz t-norm preserves crisp
-truth — :math:`0.7 \otimes_{\text{Ł}} 1 = 0.7` — and avoids the
+truth (:math:`0.7 \otimes_{\text{Ł}} 1 = 0.7`) and avoids the
 near-zero collapse of long product chains. This makes it the standard
 choice for fuzzy graded conjunctions where inputs are degrees of
 evidence rather than independent probabilities.
@@ -285,9 +310,11 @@ As a worked example, consider the *capability* semiring over the
 ``⊕ = |`` (bitwise OR) combines alternative derivations permissively;
 ``⊗ = &`` (bitwise AND) combines joins restrictively;
 ``⊖ = a & ~b`` (bitwise AND-NOT) is the Boolean difference monus;
-``δ`` is the support indicator (``B'00'`` stays ``B'00'``, anything else
-becomes ``B'11'``), matching the convention used by the compiled
-semirings. Zero is ``B'00'``, one is ``B'11'``:
+``δ`` is the identity, so an aggregated group carries the OR of the
+capabilities of its supporting rows (e.g., a Paris group built from a
+read-only and a write-only row is annotated ``B'11'``, while a group
+built from two read-only rows stays ``B'01'``). Zero is ``B'00'``,
+one is ``B'11'``:
 
 .. code-block:: postgresql
 
@@ -298,8 +325,7 @@ semirings. Zero is ``B'00'``, one is ``B'11'``:
     CREATE FUNCTION cap_minus(a bit(2), b bit(2))    RETURNS bit(2) IMMUTABLE
       LANGUAGE SQL AS $$ SELECT a & ~b $$;
     CREATE FUNCTION cap_delta(v bit(2)) RETURNS bit(2) IMMUTABLE
-      LANGUAGE SQL AS $$
-        SELECT CASE WHEN v = B'00' THEN B'00'::bit(2) ELSE B'11'::bit(2) END $$;
+      LANGUAGE SQL AS $$ SELECT v $$;
 
     CREATE AGGREGATE cap_plus (bit(2)) (
       sfunc=cap_or,  stype=bit(2), initcond='00');
@@ -312,9 +338,6 @@ semirings. Zero is ``B'00'``, one is ``B'11'``:
                                'cap_plus', 'cap_times', 'cap_minus', 'cap_delta')
     FROM mytable;
 
-For a real access-control deployment one would typically take ``δ`` to
-be the identity instead, to avoid promoting a partial capability such
-as ``B'01'`` to full ``B'11'`` when it flows through a δ-gate.
 
 This is a commutative m-semiring on the four-element Boolean
 lattice :math:`B^2`; the lattice is partial (the two middle elements

@@ -26,7 +26,9 @@
  * - @c times()  → enum-max over operands (empty list → @c one())
  * - @c monus()  → @f$\mathbb{0}@f$ if @f$x \le_S y@f$, else @f$x@f$,
  *                 where @f$\le_S@f$ is the semiring order
- * - @c delta()  → @c zero() if @c x equals @c zero(), @c one() otherwise
+ * - @c delta()  → identity (preserves the lattice value of the support so
+ *                 that aggregated groups carry the meaningful classification
+ *                 of contributing rows rather than a flattened @c one())
  *
  * Absorptivity: `absorptive()` returns `true`. With inputs in the
  * bounded order, @f$\mathbb{1} \oplus a = a \oplus \mathbb{1} =
@@ -158,7 +160,7 @@ virtual value_type monus(value_type x, value_type y) const override
 }
 virtual value_type delta(value_type x) const override
 {
-  return x == zero() ? zero() : one();
+  return x;
 }
 virtual bool absorptive() const override {
   return true;
