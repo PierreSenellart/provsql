@@ -48,6 +48,10 @@ test: viewing_setup
 # Probability computation using internal methods
 test: possible_worlds monte_carlo
 
+# Regression: SUM and AVG over the same children must produce
+# distinct agg gates (the aggfnoid is part of the gate UUID).
+test: agg_uuid_aggfnoid
+
 # Complex test relying on probabilities
 test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors
 
