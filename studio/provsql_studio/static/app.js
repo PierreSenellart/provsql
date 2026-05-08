@@ -1047,6 +1047,15 @@
         if (!bySchema.has(r.schema)) bySchema.set(r.schema, []);
         bySchema.get(r.schema).push(r);
       }
+      // Within each schema, surface provenance-tracked tables first
+      // (the user's primary working surface), then plain tables/views,
+      // then mapping tables (rarely useful to inspect on their own;
+      // they are auto-discovered by the eval strip). Alphabetical
+      // within each rank, preserved by JS Array.sort's stability.
+      const relRank = r => r.is_mapping ? 2 : (r.has_provenance ? 0 : 1);
+      for (const rels of bySchema.values()) {
+        rels.sort((a, b) => relRank(a) - relRank(b));
+      }
       let html = '';
       for (const [schemaName, rels] of bySchema) {
         html += '<div class="wp-schema__group">';
