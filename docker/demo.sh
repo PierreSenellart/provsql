@@ -1,14 +1,10 @@
 #!/bin/bash
 
 rm -rf /var/www/html/*
-cp -r /opt/provsql/where_panel/* /var/www/html/
 touch /messages
 mkdir -p /var/www/html/pdf
 chmod a+rwX /var/www/html/pdf
 chmod a+rw /messages
-
-sed -i 's/demo/test/g' /var/www/html/config
-sed -i 's/localhost/127.0.0.1/g' /var/www/html/config
 
 IP=$(ip addr |grep -v 127.0.0 | sed -n 's_^.*inet \(.*\)/.* brd.*$_\1_p')
 
@@ -38,11 +34,6 @@ echo "The psql shell should now be available with the command "
 echo "  psql -h ${IP} -p 5432 test test"
 echo ""
 echo ""
-echo "The where_panel web interface is also running and available"
-echo "  at the address http://${IP} "
-echo "  (only relevant for the where-provenance demo)"
-echo ""
-
 echo "Docker fully started" >> /messages
 sleep 3 ;
 #su - postgres psql -c "ALTER USER \"test\" WITH PASSWORD 'test';"

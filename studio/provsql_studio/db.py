@@ -218,9 +218,9 @@ def validate_panel_option(name: str, value) -> tuple[str, object]:
     raise ValueError(f"option not user-configurable: {name}")
 
 
-# Per pg_attribute discovery query, cribbed from where_panel/index.php and
-# matched against provsql.identify_token's filter (typname='uuid' AND
-# nspname<>'provsql'). Returns one row per provenance-tagged relation.
+# Per pg_attribute discovery query, matched against
+# provsql.identify_token's filter (typname='uuid' AND nspname<>'provsql').
+# Returns one row per provenance-tagged relation.
 _RELATIONS_QUERY = """
 SELECT
     n.nspname             AS schema_name,

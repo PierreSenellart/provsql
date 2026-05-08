@@ -10,7 +10,6 @@ on:
     paths-ignore:
       - 'docker/**'
       - 'website/**'
-      - 'where_panel/**'
       - 'studio/**'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/codeql.yml'
@@ -28,7 +27,6 @@ on:
     paths-ignore:
       - 'docker/**'
       - 'website/**'
-      - 'where_panel/**'
       - 'studio/**'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/codeql.yml'
