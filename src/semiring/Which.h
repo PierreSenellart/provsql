@@ -35,8 +35,10 @@
 #ifndef WHICH_H
 #define WHICH_H
 
+#include <cstring>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -106,6 +108,31 @@ value_type monus(value_type x, value_type y) const override {
 
 value_type delta(value_type x) const override {
   return x;
+}
+
+value_type parse_leaf(const char *v) const {
+  if(strchr(v, '{'))
+    throw SemiringException("Complex Which-semiring values for input tuples not currently supported.");
+  std::set<std::string> single;
+  single.insert(std::string(v));
+  return value_type(std::move(single));
+}
+
+std::string to_text(const value_type &prov) const {
+  std::ostringstream oss;
+  if(!prov.has_value()) {
+    oss << "⊥";
+  } else {
+    oss << "{";
+    bool first = true;
+    for (const auto &label : *prov) {
+      if (!first) oss << ",";
+      first = false;
+      oss << label;
+    }
+    oss << "}";
+  }
+  return oss.str();
 }
 };
 

@@ -30,7 +30,9 @@
 #ifndef WHY_H
 #define WHY_H
 
+#include <cstring>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -101,6 +103,36 @@ virtual value_type monus(value_type x, value_type y) const override {
 
 value_type delta(value_type x) const override {
   return x.empty() ? zero() : x;
+}
+
+value_type parse_leaf(const char *v) const {
+  if(strchr(v, '{'))
+    throw SemiringException("Complex Why-semiring values for input tuples not currently supported.");
+  label_set single;
+  single.insert(std::string(v));
+  value_type result;
+  result.insert(std::move(single));
+  return result;
+}
+
+std::string to_text(const value_type &prov) const {
+  std::ostringstream oss;
+  oss << "{";
+  bool firstOuter = true;
+  for (const auto &inner : prov) {
+    if (!firstOuter) oss << ",";
+    firstOuter = false;
+    oss << "{";
+    bool firstInner = true;
+    for (const auto &label : inner) {
+      if (!firstInner) oss << ",";
+      firstInner = false;
+      oss << label;
+    }
+    oss << "}";
+  }
+  oss << "}";
+  return oss.str();
 }
 
 };

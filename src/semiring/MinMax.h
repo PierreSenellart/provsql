@@ -172,7 +172,7 @@ virtual bool absorptive() const override {
  * Used by @c pec_anyenum() to build the input mapping; exposed here so
  * the parser can share the cached @c in_func / @c typioparam.
  */
-Datum parse(const char *str) const {
+Datum parse_leaf(const char *str) const {
   return OidInputFunctionCall(in_func, const_cast<char *>(str), typioparam, -1);
 }
 

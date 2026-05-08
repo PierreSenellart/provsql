@@ -44,7 +44,9 @@
 #ifndef HOW_H
 #define HOW_H
 
+#include <cstring>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -121,6 +123,39 @@ value_type monus(value_type x, value_type y) const override {
 
 value_type delta(value_type x) const override {
   return x.empty() ? zero() : one();
+}
+
+value_type parse_leaf(const char *v) const {
+  if(strchr(v, '{') || strchr(v, '+') || strchr(v, '*') || strchr(v, '^'))
+    throw SemiringException("Complex How-semiring values for input tuples not currently supported.");
+  how_monomial_t mono;
+  mono[std::string(v)] = 1u;
+  return value_type{ { std::move(mono), 1u } };
+}
+
+std::string to_text(const value_type &prov) const {
+  std::ostringstream oss;
+  if (prov.empty()) {
+    oss << "0";
+  } else {
+    bool firstMono = true;
+    for (const auto &[mono, coeff] : prov) {
+      if (!firstMono) oss << " + ";
+      firstMono = false;
+      bool need_dot = false;
+      if (coeff != 1 || mono.empty()) {
+        oss << coeff;
+        need_dot = true;
+      }
+      for (const auto &[var, exp] : mono) {
+        if (need_dot) oss << "⋅";
+        need_dot = true;
+        oss << var;
+        if (exp != 1) oss << "^" << exp;
+      }
+    }
+  }
+  return oss.str();
 }
 
 };

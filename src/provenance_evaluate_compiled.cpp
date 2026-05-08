@@ -25,11 +25,13 @@
  * - @c "minmax" / @c "maxmin" → @c semiring::MinMax over any user-defined
  *   PostgreSQL enum type, selected by @c get_typtype() == @c TYPTYPE_ENUM
  *
- * The function first builds a provenance mapping (input-gate UUID → semiring
- * value) by querying the @c tmp_uuids table via SPI
- * (using @c initialize_provenance_mapping()), then evaluates the
- * @c GenericCircuit with @c GenericCircuit::evaluate() and returns the
- * result as text.
+ * Each compiled semiring exposes @c parse_leaf() and (for text-valued
+ * carriers) @c to_text() member functions, so this file is purely a
+ * dispatcher: it picks the right semiring instance from the
+ * (result-type, semiring-name) pair, then calls the @c pec() template
+ * which runs the same four-step pipeline for every semiring (build leaf
+ * mapping, evaluate HAVING sub-circuits, evaluate the main circuit,
+ * encode the result as a Datum).
  */
 extern "C" {
 #include "postgres.h"
@@ -37,14 +39,12 @@ extern "C" {
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
 #include "utils/lsyscache.h"
-#include "provsql_shmem.h"
 #include "provsql_utils.h"
 
 PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 }
 
 #include <string>
-#include <sstream>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
@@ -64,431 +64,79 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include "semiring/IntervalUnion.h"
 #include "semiring/MinMax.h"
 
-
 const char *drop_temp_table = "DROP TABLE IF EXISTS tmp_uuids;";
 
-/**
- * @brief Evaluate the Boolean semiring provenance for a circuit.
- * @param constants   Extension OID cache.
- * @param c           Generic circuit to evaluate.
- * @param g           Root gate of the sub-circuit.
- * @param inputs      Set of input gate IDs.
- * @param semiring    Semiring name (must be "boolean").
- * @param drop_table  Whether the temporary UUID table should be dropped.
- * @return            Bool datum with the evaluated provenance.
- */
-static Datum pec_bool(
-  const constants_t &constants,
-  GenericCircuit &c,
-  gate_t g,
-  const std::set<gate_t> &inputs,
-  const std::string &semiring,
-  bool drop_table)
-{
-  std::unordered_map<gate_t, bool> provenance_mapping;
-  initialize_provenance_mapping<bool>(constants, c, provenance_mapping, [](const char *v) {
-    return *v != 'f' && *v != '0';
-  }, drop_table);
-
-  if(semiring!="boolean")
-    throw CircuitException("Unknown semiring for type varchar: "+semiring);
-
-  provsql_having(c, g, provenance_mapping, semiring::Boolean());
-  bool out = c.evaluate<semiring::Boolean>(g, provenance_mapping, semiring::Boolean());
-
-  PG_RETURN_BOOL(out);
-}
+namespace {
 
 /**
- * @brief Evaluate the Boolean-expression semiring provenance for a circuit.
- * @param constants  Extension OID cache.
- * @param bc         Boolean circuit to render as a formula.
- * @param root       Root gate of the circuit.
- * @return           Text datum with the formula string.
+ * @brief Wrap a @c std::string in a Postgres @c text Datum.
  */
-static Datum pec_boolexpr(
-  const constants_t &constants,
-  BooleanCircuit &bc,
-  gate_t root)
-{
-  std::string out = bc.toString(root);
-
-  text *result = (text *) palloc(VARHDRSZ + out.size());
-  SET_VARSIZE(result, VARHDRSZ + out.size());
-  memcpy(VARDATA(result), out.c_str(), out.size());
-  PG_RETURN_TEXT_P(result);
-}
-
-/**
- * @brief Evaluate the Why-provenance semiring for a circuit.
- * @param constants   Extension OID cache.
- * @param c           Generic circuit to evaluate.
- * @param g           Root gate.
- * @param inputs      Set of input gate IDs.
- * @param drop_table  Whether the temporary UUID table should be dropped.
- * @return            Varchar datum containing the serialised Why-provenance.
- */
-static Datum pec_why(
-  const constants_t &constants,
-  GenericCircuit &c,
-  gate_t g,
-  const std::set<gate_t> &inputs,
-  bool drop_table)
-{
-  std::unordered_map<gate_t, semiring::why_provenance_t> provenance_mapping;
-
-  initialize_provenance_mapping<semiring::why_provenance_t>(
-    constants,
-    c,
-    provenance_mapping,
-    [](const char *v) {
-    semiring::why_provenance_t result;
-    semiring::label_set single;
-    if(strchr(v, '{'))
-      provsql_error("Complex Why-semiring values for input tuples not currently supported.");
-    single.insert(std::string(v));
-    result.insert(std::move(single));
-    return result;
-  },
-    drop_table
-    );
-
-  provsql_having(c, g, provenance_mapping, semiring::Why());
-  semiring::why_provenance_t prov = c.evaluate<semiring::Why>(g, provenance_mapping, semiring::Why());
-
-  // Serialize nested set structure: {{x},{y}}
-  std::ostringstream oss;
-  oss << "{";
-  bool firstOuter = true;
-  for (const auto &inner : prov) {
-    if (!firstOuter) oss << ",";
-    firstOuter = false;
-    oss << "{";
-    bool firstInner = true;
-    for (const auto &label : inner) {
-      if (!firstInner) oss << ",";
-      firstInner = false;
-      oss << label;
-    }
-    oss << "}";
-  }
-  oss << "}";
-
-  std::string out = oss.str();
-  text *result = (text *) palloc(VARHDRSZ + out.size());
-  SET_VARSIZE(result, VARHDRSZ + out.size());
-  memcpy(VARDATA(result), out.c_str(), out.size());
-  PG_RETURN_TEXT_P(result);
-
-}
-
-/**
- * @brief Evaluate the How-provenance semiring (canonical polynomial provenance) for a circuit.
- * @param constants   Extension OID cache.
- * @param c           Generic circuit to evaluate.
- * @param g           Root gate.
- * @param inputs      Set of input gate IDs.
- * @param drop_table  Whether the temporary UUID table should be dropped.
- * @return            Varchar datum containing the canonical sum-of-products
- *                    representation of the polynomial.
- */
-static Datum pec_how(
-  const constants_t &constants,
-  GenericCircuit &c,
-  gate_t g,
-  const std::set<gate_t> &inputs,
-  bool drop_table)
-{
-  std::unordered_map<gate_t, semiring::how_provenance_t> provenance_mapping;
-
-  initialize_provenance_mapping<semiring::how_provenance_t>(
-    constants,
-    c,
-    provenance_mapping,
-    [](const char *v) {
-    if(strchr(v, '{') || strchr(v, '+') || strchr(v, '*') || strchr(v, '^'))
-      provsql_error("Complex How-semiring values for input tuples not currently supported.");
-    semiring::how_monomial_t mono;
-    mono[std::string(v)] = 1u;
-    return semiring::how_provenance_t{ { std::move(mono), 1u } };
-  },
-    drop_table
-    );
-
-  provsql_having(c, g, provenance_mapping, semiring::How());
-  semiring::how_provenance_t prov =
-    c.evaluate<semiring::How>(g, provenance_mapping, semiring::How());
-
-  // Canonical sum-of-products serialisation: monomials in lexicographic
-  // order (std::map iteration order), variables within a monomial also
-  // lexicographic. Multiplication is the dot operator U+22C5; exponents
-  // are ASCII "^k". e.g. "2⋅Alice⋅Bob^2 + 3⋅Charlie", "0", "1".
-  std::ostringstream oss;
-  if (prov.empty()) {
-    oss << "0";
-  } else {
-    bool firstMono = true;
-    for (const auto &[mono, coeff] : prov) {
-      if (!firstMono) oss << " + ";
-      firstMono = false;
-      bool need_dot = false;
-      if (coeff != 1 || mono.empty()) {
-        oss << coeff;
-        need_dot = true;
-      }
-      for (const auto &[var, exp] : mono) {
-        if (need_dot) oss << "⋅";
-        need_dot = true;
-        oss << var;
-        if (exp != 1) oss << "^" << exp;
-      }
-    }
-  }
-
-  std::string out = oss.str();
-  text *result = (text *) palloc(VARHDRSZ + out.size());
-  SET_VARSIZE(result, VARHDRSZ + out.size());
-  memcpy(VARDATA(result), out.c_str(), out.size());
-  PG_RETURN_TEXT_P(result);
-}
-
-/**
- * @brief Evaluate the Which-provenance (lineage) semiring for a circuit.
- * @param constants   Extension OID cache.
- * @param c           Generic circuit to evaluate.
- * @param g           Root gate.
- * @param inputs      Set of input gate IDs.
- * @param drop_table  Whether the temporary UUID table should be dropped.
- * @return            Varchar datum containing the serialised Which-provenance.
- */
-static Datum pec_which(
-  const constants_t &constants,
-  GenericCircuit &c,
-  gate_t g,
-  const std::set<gate_t> &inputs,
-  bool drop_table)
-{
-  std::unordered_map<gate_t, semiring::which_provenance_t> provenance_mapping;
-
-  initialize_provenance_mapping<semiring::which_provenance_t>(
-    constants,
-    c,
-    provenance_mapping,
-    [](const char *v) {
-    if(strchr(v, '{'))
-      provsql_error("Complex Which-semiring values for input tuples not currently supported.");
-    std::set<std::string> single;
-    single.insert(std::string(v));
-    return semiring::which_provenance_t(std::move(single));
-  },
-    drop_table
-    );
-
-  provsql_having(c, g, provenance_mapping, semiring::Which());
-  semiring::which_provenance_t prov =
-    c.evaluate<semiring::Which>(g, provenance_mapping, semiring::Which());
-
-  std::ostringstream oss;
-  if(!prov.has_value()) {
-    oss << "⊥";
-  } else {
-    oss << "{";
-    bool first = true;
-    for (const auto &label : *prov) {
-      if (!first) oss << ",";
-      first = false;
-      oss << label;
-    }
-    oss << "}";
-  }
-
-  std::string out = oss.str();
-  text *result = (text *) palloc(VARHDRSZ + out.size());
-  SET_VARSIZE(result, VARHDRSZ + out.size());
-  memcpy(VARDATA(result), out.c_str(), out.size());
-  PG_RETURN_TEXT_P(result);
-}
-
-/**
- * @brief Evaluate a varchar semiring provenance for a circuit.
- * @param constants   Extension OID cache.
- * @param c           Generic circuit to evaluate.
- * @param g           Root gate.
- * @param inputs      Set of input gate IDs.
- * @param semiring    Semiring name (e.g. "formula").
- * @param drop_table  Whether the temporary UUID table should be dropped.
- * @return            Varchar datum containing the serialised provenance.
- */
-static Datum pec_varchar(
-  const constants_t &constants,
-  GenericCircuit &c,
-  gate_t g,
-  const std::set<gate_t> &inputs,
-  const std::string &semiring,
-  bool drop_table)
-{
-  std::unordered_map<gate_t, std::string> provenance_mapping;
-  initialize_provenance_mapping<std::string>(
-    constants, c, provenance_mapping,
-    [](const char *v) {
-    return std::string(v);
-  },
-    drop_table
-    );
-
-  if (semiring!= "formula")
-    throw CircuitException("Unknown seimring for type varchar: " + semiring);
-
-  provsql_having(c, g, provenance_mapping, semiring::Formula());
-  std::string s = c.evaluate<semiring::Formula>(g, provenance_mapping, semiring::Formula());
-
+Datum text_datum(const std::string &s) {
   text *result = (text *) palloc(VARHDRSZ + s.size());
   SET_VARSIZE(result, VARHDRSZ + s.size());
   memcpy(VARDATA(result), s.c_str(), s.size());
-  PG_RETURN_TEXT_P(result);
-
+  return PointerGetDatum(result);
 }
+
+// to_datum overloads: encode a semiring's evaluation result as a Postgres Datum.
+Datum to_datum(const semiring::Boolean &, bool v)         { return BoolGetDatum(v); }
+Datum to_datum(const semiring::Counting &, unsigned v)    { return Int32GetDatum(static_cast<int32>(v)); }
+Datum to_datum(const semiring::Tropical &, double v)      { return Float8GetDatum(v); }
+Datum to_datum(const semiring::Viterbi &, double v)       { return Float8GetDatum(v); }
+Datum to_datum(const semiring::Lukasiewicz &, double v)   { return Float8GetDatum(v); }
+Datum to_datum(const semiring::Formula &, const std::string &v) { return text_datum(v); }
+Datum to_datum(const semiring::Why &sr, const semiring::why_provenance_t &v)     { return text_datum(sr.to_text(v)); }
+Datum to_datum(const semiring::How &sr, const semiring::how_provenance_t &v)     { return text_datum(sr.to_text(v)); }
+Datum to_datum(const semiring::Which &sr, const semiring::which_provenance_t &v) { return text_datum(sr.to_text(v)); }
 #if PG_VERSION_NUM >= 140000
-/**
- * @brief Evaluate the interval-union semiring provenance over a
- *        multirange carrier.
- * @param constants        Extension OID cache.
- * @param c                Generic circuit to evaluate.
- * @param g                Root gate.
- * @param inputs           Set of input gate IDs.
- * @param multirange_oid   OID of the multirange type used for parsing
- *                         leaf values and constructing zero/one.
- * @param drop_table       Whether the temporary UUID table should be dropped.
- * @return                 Multirange Datum with the evaluated provenance.
- */
-static Datum pec_multirange(
-  const constants_t &constants,
-  GenericCircuit &c,
-  gate_t g,
-  const std::set<gate_t> &inputs,
-  Oid multirange_oid,
-  bool drop_table)
-{
-  std::unordered_map<gate_t, Datum> provenance_mapping;
-  semiring::IntervalUnion sr(multirange_oid);
-  initialize_provenance_mapping<Datum>(constants, c, provenance_mapping, [&sr](const char *v) {
-    return sr.parse(v);
-  }, drop_table);
-
-  provsql_having(c, g, provenance_mapping, sr);
-  Datum out = c.evaluate<semiring::IntervalUnion>(g, provenance_mapping, sr);
-
-  PG_RETURN_DATUM(out);
-}
+Datum to_datum(const semiring::IntervalUnion &, Datum v)  { return v; }
 #endif
+Datum to_datum(const semiring::MinMax &, Datum v)         { return v; }
 
 /**
- * @brief Evaluate the min-max / max-min m-semiring provenance over a
- *        user-defined PostgreSQL enum carrier.
- * @param constants    Extension OID cache.
- * @param c            Generic circuit to evaluate.
- * @param g            Root gate.
- * @param inputs       Set of input gate IDs.
- * @param enum_oid     OID of the carrier enum type used for parsing
- *                     leaf values and resolving bottom/top.
- * @param reverse      @c false for @c sr_minmax (security shape:
- *                     @f$\oplus = \min, \otimes = \max@f$),
- *                     @c true for @c sr_maxmin (fuzzy shape).
- * @param drop_table   Whether the temporary UUID table should be dropped.
- * @return             Enum Datum (an Oid) with the evaluated provenance.
- */
-static Datum pec_anyenum(
-  const constants_t &constants,
-  GenericCircuit &c,
-  gate_t g,
-  const std::set<gate_t> &inputs,
-  Oid enum_oid,
-  bool reverse,
-  bool drop_table)
-{
-  std::unordered_map<gate_t, Datum> provenance_mapping;
-  semiring::MinMax sr(enum_oid, reverse);
-  initialize_provenance_mapping<Datum>(constants, c, provenance_mapping, [&sr](const char *v) {
-    return sr.parse(v);
-  }, drop_table);
-
-  provsql_having(c, g, provenance_mapping, sr);
-  Datum out = c.evaluate<semiring::MinMax>(g, provenance_mapping, sr);
-
-  PG_RETURN_DATUM(out);
-}
-
-/**
- * @brief Evaluate a float semiring provenance for a circuit.
+ * @brief Run the four-step compiled-evaluation pipeline for a semiring.
+ *
+ * 1. Build the input-gate → leaf-value mapping by parsing each leaf via
+ *    @c sr.parse_leaf().
+ * 2. Rewrite HAVING comparison gates in @p c via @c provsql_having().
+ * 3. Evaluate the main circuit at @p g.
+ * 4. Encode the result as a Postgres Datum via @c to_datum(sr, ...).
+ *
+ * @tparam Sem        The compiled semiring class.
  * @param constants   Extension OID cache.
  * @param c           Generic circuit to evaluate.
  * @param g           Root gate.
- * @param inputs      Set of input gate IDs.
- * @param semiring    Semiring name ("tropical", "viterbi" or "lukasiewicz").
+ * @param sr          Semiring instance.
  * @param drop_table  Whether the temporary UUID table should be dropped.
- * @return            Float8 datum with the evaluated provenance.
+ * @return            The semiring evaluation result encoded as a Datum.
  */
-static Datum pec_float(
+template <typename Sem>
+Datum pec(
   const constants_t &constants,
   GenericCircuit &c,
   gate_t g,
-  const std::set<gate_t> &inputs,
-  const std::string &semiring,
+  const Sem &sr,
   bool drop_table)
 {
-  std::unordered_map<gate_t, double> provenance_mapping;
-  initialize_provenance_mapping<double>(constants, c, provenance_mapping, [](const char *v) {
-    return atof(v);
-  }, drop_table);
+  using V = typename Sem::value_type;
+  std::unordered_map<gate_t, V> mapping;
+  initialize_provenance_mapping<V>(constants, c, mapping,
+    [&sr](const char *v) { return sr.parse_leaf(v); }, drop_table);
 
-  double out;
-  if(semiring=="tropical") {
-    provsql_having(c, g, provenance_mapping, semiring::Tropical());
-    out = c.evaluate<semiring::Tropical>(g, provenance_mapping, semiring::Tropical());
-  } else if(semiring=="viterbi") {
-    provsql_having(c, g, provenance_mapping, semiring::Viterbi());
-    out = c.evaluate<semiring::Viterbi>(g, provenance_mapping, semiring::Viterbi());
-  } else if(semiring=="lukasiewicz") {
-    provsql_having(c, g, provenance_mapping, semiring::Lukasiewicz());
-    out = c.evaluate<semiring::Lukasiewicz>(g, provenance_mapping, semiring::Lukasiewicz());
-  } else
-    throw CircuitException("Unknown semiring for type float: "+semiring);
-
-  PG_RETURN_FLOAT8(out);
+  provsql_having(c, g, mapping, sr);
+  V out = c.evaluate<Sem>(g, mapping, sr);
+  return to_datum(sr, std::move(out));
 }
 
 /**
- * @brief Evaluate an integer semiring provenance for a circuit.
- * @param constants   Extension OID cache.
- * @param c           Generic circuit to evaluate.
- * @param g           Root gate.
- * @param inputs      Set of input gate IDs.
- * @param semiring    Semiring name (e.g. "counting").
- * @param drop_table  Whether the temporary UUID table should be dropped.
- * @return            Int32 datum with the evaluated provenance.
+ * @brief Evaluate the BoolExpr semiring; bypasses the GenericCircuit pipeline.
  */
-static Datum pec_int(
-  const constants_t &constants,
-  GenericCircuit &c,
-  gate_t g,
-  const std::set<gate_t> &inputs,
-  const std::string &semiring,
-  bool drop_table)
+Datum pec_boolexpr(BooleanCircuit &bc, gate_t root)
 {
-  std::unordered_map<gate_t, unsigned> provenance_mapping;
-  initialize_provenance_mapping<unsigned>(constants, c, provenance_mapping, [](const char *v) {
-    return atoi(v);
-  }, drop_table);
-
-  if(semiring!="counting")
-    throw CircuitException("Unknown semiring for type int: "+semiring);
-
-  provsql_having(c, g, provenance_mapping, semiring::Counting());
-  unsigned out = c.evaluate<semiring::Counting>(g, provenance_mapping, semiring::Counting());
-
-  PG_RETURN_INT32((int32) out);
-
+  return text_datum(bc.toString(root));
 }
+
+} // namespace
 
 /**
  * @brief Join a provenance mapping table with a set of UUIDs using SPI.
@@ -591,7 +239,7 @@ static Datum provenance_evaluate_compiled_internal
   if(semiring=="boolexpr") {
     gate_t root;
     BooleanCircuit bc = getBooleanCircuit(token, root);
-    return pec_boolexpr(constants, bc, root);
+    return pec_boolexpr(bc, root);
   }
 
   GenericCircuit c = getGenericCircuit(token);
@@ -606,48 +254,49 @@ static Datum provenance_evaluate_compiled_internal
 
   if (type == constants.OID_TYPE_VARCHAR)
   {
-    if (semiring == "why")
-      return pec_why(constants, c, g, inputs, drop_table);
-    else if (semiring == "how")
-      return pec_how(constants, c, g, inputs, drop_table);
-    else if (semiring == "which")
-      return pec_which(constants, c, g, inputs, drop_table);
-    else
-      return pec_varchar(constants, c, g, inputs, semiring, drop_table);
+    if (semiring == "formula") return pec(constants, c, g, semiring::Formula{}, drop_table);
+    if (semiring == "why")     return pec(constants, c, g, semiring::Why{}, drop_table);
+    if (semiring == "how")     return pec(constants, c, g, semiring::How{}, drop_table);
+    if (semiring == "which")   return pec(constants, c, g, semiring::Which{}, drop_table);
+    throw CircuitException("Unknown semiring for type varchar: " + semiring);
   }
-  else if(type==constants.OID_TYPE_INT)
-    return pec_int(constants, c, g, inputs, semiring, drop_table);
-  else if(type==constants.OID_TYPE_FLOAT)
-    return pec_float(constants, c, g, inputs, semiring, drop_table);
-  else if(type==constants.OID_TYPE_BOOL)
-    return pec_bool(constants, c, g, inputs, semiring, drop_table);
+  if (type == constants.OID_TYPE_INT) {
+    if (semiring == "counting") return pec(constants, c, g, semiring::Counting{}, drop_table);
+    throw CircuitException("Unknown semiring for type int: " + semiring);
+  }
+  if (type == constants.OID_TYPE_FLOAT) {
+    if (semiring == "tropical")    return pec(constants, c, g, semiring::Tropical{}, drop_table);
+    if (semiring == "viterbi")     return pec(constants, c, g, semiring::Viterbi{}, drop_table);
+    if (semiring == "lukasiewicz") return pec(constants, c, g, semiring::Lukasiewicz{}, drop_table);
+    throw CircuitException("Unknown semiring for type float: " + semiring);
+  }
+  if (type == constants.OID_TYPE_BOOL) {
+    if (semiring == "boolean") return pec(constants, c, g, semiring::Boolean{}, drop_table);
+    throw CircuitException("Unknown semiring for type bool: " + semiring);
+  }
 #if PG_VERSION_NUM >= 140000
-  else if(type==constants.OID_TYPE_TSTZMULTIRANGE) {
-    if(semiring!="temporal" && semiring!="interval_union")
-      throw CircuitException("Unknown semiring for type tstzmultirange: "+semiring);
-    return pec_multirange(constants, c, g, inputs, constants.OID_TYPE_TSTZMULTIRANGE, drop_table);
+  if (type == constants.OID_TYPE_TSTZMULTIRANGE) {
+    if (semiring != "temporal" && semiring != "interval_union")
+      throw CircuitException("Unknown semiring for type tstzmultirange: " + semiring);
+    return pec(constants, c, g, semiring::IntervalUnion(constants.OID_TYPE_TSTZMULTIRANGE), drop_table);
   }
-  else if(type==constants.OID_TYPE_NUMMULTIRANGE) {
-    if(semiring!="interval_union")
-      throw CircuitException("Unknown semiring for type nummultirange: "+semiring);
-    return pec_multirange(constants, c, g, inputs, constants.OID_TYPE_NUMMULTIRANGE, drop_table);
+  if (type == constants.OID_TYPE_NUMMULTIRANGE) {
+    if (semiring != "interval_union")
+      throw CircuitException("Unknown semiring for type nummultirange: " + semiring);
+    return pec(constants, c, g, semiring::IntervalUnion(constants.OID_TYPE_NUMMULTIRANGE), drop_table);
   }
-  else if(type==constants.OID_TYPE_INT4MULTIRANGE) {
-    if(semiring!="interval_union")
-      throw CircuitException("Unknown semiring for type int4multirange: "+semiring);
-    return pec_multirange(constants, c, g, inputs, constants.OID_TYPE_INT4MULTIRANGE, drop_table);
+  if (type == constants.OID_TYPE_INT4MULTIRANGE) {
+    if (semiring != "interval_union")
+      throw CircuitException("Unknown semiring for type int4multirange: " + semiring);
+    return pec(constants, c, g, semiring::IntervalUnion(constants.OID_TYPE_INT4MULTIRANGE), drop_table);
   }
 #endif
-  else if(get_typtype(type) == TYPTYPE_ENUM) {
-    if(semiring=="minmax")
-      return pec_anyenum(constants, c, g, inputs, type, false, drop_table);
-    else if(semiring=="maxmin")
-      return pec_anyenum(constants, c, g, inputs, type, true, drop_table);
-    else
-      throw CircuitException("Unknown semiring for enum type: "+semiring);
+  if (get_typtype(type) == TYPTYPE_ENUM) {
+    if (semiring == "minmax") return pec(constants, c, g, semiring::MinMax(type, false), drop_table);
+    if (semiring == "maxmin") return pec(constants, c, g, semiring::MinMax(type, true), drop_table);
+    throw CircuitException("Unknown semiring for enum type: " + semiring);
   }
-  else
-    throw CircuitException("Unknown element type for provenance_evaluate_compiled");
+  throw CircuitException("Unknown element type for provenance_evaluate_compiled");
 }
 
 /** @brief PostgreSQL-callable wrapper for provenance_evaluate_compiled(). */
