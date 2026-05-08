@@ -31,11 +31,13 @@ website: docs
 	cp    branding/favicon.ico website/favicon.ico
 	# Generate SCSS partial for fonts (adjust path from fonts/ to ../fonts/)
 	sed "s|url('fonts/|url('../fonts/|g" branding/fonts-face.css > website/assets/css/_fonts-face.scss
-	# Copy generated docs into Jekyll source tree so jekyll serve also sees them
+	# Copy generated docs into Jekyll source tree so jekyll serve also sees them.
+	# rsync --delete so files removed upstream (e.g. retired sql/index.rst)
+	# don't linger as stale, half-styled artifacts under website/docs/.
 	mkdir -p website/docs website/doxygen-sql/html website/doxygen-c/html
-	cp -r doc/source/_build/html/. website/docs
-	cp -r doc/doxygen-sql/html/.   website/doxygen-sql/html
-	cp -r doc/doxygen-c/html/.     website/doxygen-c/html
+	rsync -a --delete doc/source/_build/html/ website/docs/
+	rsync -a --delete doc/doxygen-sql/html/   website/doxygen-sql/html/
+	rsync -a --delete doc/doxygen-c/html/     website/doxygen-c/html/
 	cd website && bundle exec jekyll build
 
 deploy: website
