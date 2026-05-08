@@ -17,8 +17,8 @@ remove_provenance
 
 (1 row)
 name1|name2|formula
-Dave|Magdalen|(Dave ⊗ Magdalen)
-Dave|Nancy|(Dave ⊗ Nancy)
-Magdalen|Nancy|(Magdalen ⊗ Nancy)
+Dave|Magdalen|Dave ⊗ Magdalen
+Dave|Nancy|Dave ⊗ Nancy
+Magdalen|Nancy|Magdalen ⊗ Nancy
 (3 rows)
 WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows

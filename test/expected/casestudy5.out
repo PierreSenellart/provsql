@@ -21,8 +21,8 @@ remove_provenance
 
 (1 row)
 id|formula
-2|(Red Deer ⊗ Red Fox)
-5|((Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox))
+2|Red Deer ⊗ Red Fox
+5|(Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox)
 (2 rows)
 remove_provenance
 
@@ -50,7 +50,7 @@ remove_provenance
 
 (1 row)
 photo_id|bbox_id|bexpr|p
-5|1|({0=1}[0.400000] ∨ {0=2}[0.300000])|0.7000
+5|1|{0=1}[0.400000] ∨ {0=2}[0.300000]|0.7000
 (1 row)
 remove_provenance
 

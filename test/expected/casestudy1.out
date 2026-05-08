@@ -9,8 +9,8 @@ remove_provenance
 
 (1 row)
 city|formula
-Beijing|(Ellen ⊗ Jing)
-Nairobi|(Juma ⊗ Paul)
+Beijing|Ellen ⊗ Jing
+Nairobi|Juma ⊗ Paul
 (2 rows)
 create_provenance_mapping
 
@@ -27,7 +27,7 @@ remove_provenance
 
 (1 row)
 city|formula
-Nairobi|((Juma ⊕ Paul) ⊖ (Juma ⊗ Paul))
+Nairobi|(Juma ⊕ Paul) ⊖ (Juma ⊗ Paul)
 (1 row)
 remove_provenance
 
@@ -63,7 +63,7 @@ remove_provenance
 
 (1 row)
 city|boolexpr
-Nairobi|((x0 ∨ x1) ∧ (¬(x0 ∧ x1)))
+Nairobi|(x0 ∨ x1) ∧ (¬(x0 ∧ x1))
 (1 row)
 remove_provenance
 

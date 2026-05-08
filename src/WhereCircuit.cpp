@@ -56,10 +56,16 @@ gate_t WhereCircuit::setGateInput(const uuid &u, string table, int nb_columns)
 
 string WhereCircuit::toString(gate_t g) const
 {
+  return toStringHelper(g, WhereGate::UNDETERMINED);
+}
+
+string WhereCircuit::toStringHelper(gate_t g, WhereGate parent) const
+{
   std::string op;
   string result;
+  auto gtype = getGateType(g);
 
-  switch(getGateType(g)) {
+  switch(gtype) {
   case WhereGate::IN:
     return input_info.find(g)->second.first+":"+to_string(input_info.find(g)->second.second)+":"+input_token.find(g)->second;
   case WhereGate::UNDETERMINED:
@@ -89,13 +95,25 @@ string WhereCircuit::toString(gate_t g) const
   }
 
   for(auto s: getWires(g)) {
-    if(getGateType(g)==WhereGate::PROJECT || getGateType(g)==WhereGate::EQ)
+    if(gtype==WhereGate::PROJECT || gtype==WhereGate::EQ)
       result = op;
     else if(!result.empty())
       result+=" "+op+" ";
-    result+=toString(s);
+    result+=toStringHelper(s, gtype);
   }
 
+  // Parenthesis elision (mirrors BooleanCircuit::toStringHelper):
+  //   * single-wire TIMES/PLUS: drop the now-meaningless wrap.
+  //   * root call (parent = UNDETERMINED): drop the outer wrap.
+  //   * same-op nesting (parent == gtype, TIMES/PLUS only): associative.
+  // PROJECT and EQ keep their parens so the prefix-bracketed shape
+  // (e.g., @c =[i,j](...)) renders unambiguously inside a parent gate.
+  bool single_join = (gtype==WhereGate::TIMES || gtype==WhereGate::PLUS)
+                     && getWires(g).size()==1;
+  bool same_op_assoc = (gtype==WhereGate::TIMES || gtype==WhereGate::PLUS)
+                       && parent==gtype;
+  if(single_join || parent==WhereGate::UNDETERMINED || same_op_assoc)
+    return result;
   return "("+result+")";
 }
 

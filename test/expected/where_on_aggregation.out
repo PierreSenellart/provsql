@@ -5,12 +5,12 @@ remove_provenance
 city|formula|counting
 Berlin|𝟘|0
 New York|𝟘|0
-Paris|(Dave ⊗ Magdalen ⊗ Nancy)|1
+Paris|Dave ⊗ Magdalen ⊗ Nancy|1
 (3 rows)
 remove_provenance
 
 (1 row)
 city|formula|counting
-New York|(John ⊗ Paul)|1
-Paris|((Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ ((Dave ⊗ Magdalen) ⊗ (𝟙 ⊖ Nancy)) ⊕ ((Dave ⊗ Nancy) ⊗ (𝟙 ⊖ Magdalen)) ⊕ ((Magdalen ⊗ Nancy) ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy))|1
+New York|John ⊗ Paul|1
+Paris|(Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Dave ⊗ Magdalen ⊗ (𝟙 ⊖ Nancy)) ⊕ (Dave ⊗ Nancy ⊗ (𝟙 ⊖ Magdalen)) ⊕ (Magdalen ⊗ Nancy ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)|1
 (2 rows)

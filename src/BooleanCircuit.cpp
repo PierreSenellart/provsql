@@ -110,24 +110,26 @@ gate_t BooleanCircuit::addGate()
 
 std::string BooleanCircuit::toString(gate_t g) const
 {
-  return toStringHelper(g, nullptr);
+  return toStringHelper(g, BooleanGate::UNDETERMINED, nullptr);
 }
 
 std::string BooleanCircuit::toString(
   gate_t g,
   const std::unordered_map<gate_t, std::string> &labels) const
 {
-  return toStringHelper(g, &labels);
+  return toStringHelper(g, BooleanGate::UNDETERMINED, &labels);
 }
 
 std::string BooleanCircuit::toStringHelper(
   gate_t g,
+  BooleanGate parent,
   const std::unordered_map<gate_t, std::string> *labels) const
 {
   std::string op;
   std::string result;
+  auto gtype = getGateType(g);
 
-  switch(getGateType(g)) {
+  switch(gtype) {
   case BooleanGate::IN:
     if(labels) {
       auto it = labels->find(g);
@@ -159,21 +161,31 @@ std::string BooleanCircuit::toStringHelper(
   }
 
   if(getWires(g).empty()) {
-    if(getGateType(g)==BooleanGate::AND)
+    if(gtype==BooleanGate::AND)
       return "⊤";
-    else if(getGateType(g)==BooleanGate::OR)
+    else if(gtype==BooleanGate::OR)
       return "⊥";
     else return op;
   }
 
   for(auto s: getWires(g)) {
-    if(getGateType(g)==BooleanGate::NOT)
+    if(gtype==BooleanGate::NOT)
       result = op;
     else if(!result.empty())
       result+=" "+op+" ";
-    result+=toStringHelper(s, labels);
+    result+=toStringHelper(s, gtype, labels);
   }
 
+  // Parenthesis elision:
+  //   * single-wire AND/OR: the join carries no information, drop the wrap.
+  //   * root call (parent = UNDETERMINED): no enclosing context, drop the wrap.
+  //   * same-op nesting (parent == gtype, AND/OR only): associative, drop the wrap.
+  bool single_join = (gtype==BooleanGate::AND || gtype==BooleanGate::OR)
+                     && getWires(g).size()==1;
+  bool same_op_assoc = (gtype==BooleanGate::AND || gtype==BooleanGate::OR)
+                       && parent==gtype;
+  if(single_join || parent==BooleanGate::UNDETERMINED || same_op_assoc)
+    return result;
   return "("+result+")";
 }
 

@@ -272,6 +272,10 @@ static Datum pec_varchar(
 
   provsql_try_having_formula(c, g, provenance_mapping);
   std::string s = c.evaluate<semiring::Formula>(g, provenance_mapping, semiring::Formula());
+  // Drop the cosmetic outer wrap that plus / times / monus always
+  // produce: at the root there is no enclosing context, so the outer
+  // parens carry no disambiguation value.
+  s = strip_outer_parens(s);
 
   text *result = (text *) palloc(VARHDRSZ + s.size());
   SET_VARSIZE(result, VARHDRSZ + s.size());

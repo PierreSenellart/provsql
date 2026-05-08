@@ -9,7 +9,7 @@ CREATE TABLE distinct_result AS
   ) t;
 
 SELECT remove_provenance('distinct_result');
-SELECT classification,replace(formula,'(Paul ⊕ Nancy)','(Nancy ⊕ Paul)') AS formula FROM distinct_result ORDER BY classification;
+SELECT classification,replace(formula,'Paul ⊕ Nancy','Nancy ⊕ Paul') AS formula FROM distinct_result ORDER BY classification;
 DROP TABLE distinct_result;
 
 CREATE TABLE distinct_result AS

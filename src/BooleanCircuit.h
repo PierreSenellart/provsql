@@ -336,12 +336,22 @@ private:
 /**
  * @brief Internal recursive helper for the two @c toString() variants.
  *
+ * The @p parent parameter carries the gate type of the immediate
+ * caller. It drives parenthesis elision in two cases: at the root
+ * (parent set to @c UNDETERMINED) the outer wrap is omitted, and
+ * when @p parent matches the current gate type (associative
+ * AND/OR) the wrap is omitted to flatten same-op nesting. A 1-wire
+ * AND/OR also bypasses the wrap and delegates to its child since
+ * such single-element joins carry no information.
+ *
  * @param g       Gate to render.
+ * @param parent  Gate type of the caller, or @c UNDETERMINED at the root.
  * @param labels  Pointer to a label map, or @c nullptr for the
  *                unlabelled rendering.
  */
 std::string toStringHelper(
   gate_t g,
+  BooleanGate parent,
   const std::unordered_map<gate_t, std::string> *labels) const;
 
 public:

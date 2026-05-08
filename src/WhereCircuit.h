@@ -93,6 +93,21 @@ class WhereCircuit : public Circuit<WhereGate> {
   /** @copydoc Circuit::toString() */
   std::string toString(gate_t g) const override;
 
+ private:
+  /**
+   * @brief Recursive helper for @c toString that propagates the parent
+   * gate type for parenthesis elision.
+   *
+   * The @p parent parameter drives the wrap decision: at the root
+   * (parent set to @c UNDETERMINED) the outer parens are dropped, and
+   * when @p parent matches the current gate type (associative
+   * TIMES/PLUS) the wrap is dropped to flatten same-op nesting. A
+   * 1-wire TIMES/PLUS also bypasses the wrap and delegates to its
+   * single child.
+   */
+  std::string toStringHelper(gate_t g, WhereGate parent) const;
+ public:
+
   /**
    * @brief Describes the origin of a single attribute value.
    *
