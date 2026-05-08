@@ -63,9 +63,9 @@ jobs:
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/16/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30
-      - run: python -m pip install -e "./studio[test]"
+      - run: python -m pip install -e "./studio[test]" ruff
       - run: python -m playwright install --with-deps chromium
-      - run: cd studio && ruff check .
+      - run: cd studio && python -m ruff check .
       - run: python -m pytest studio/tests
         env:
           PGUSER: postgres
