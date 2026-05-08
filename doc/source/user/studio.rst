@@ -255,7 +255,10 @@ custom and "Other" entries below:
     canonical free-polynomial expression (Green-Karvounarakis-Tannen),
     a strict refinement of the set-valued ``why`` and ``which``.
   * *Numeric*: ``counting``, ``tropical``, ``viterbi``,
-    ``lukasiewicz``.
+    ``lukasiewicz``. Łukasiewicz is the continuous-valued fuzzy logic
+    on numeric values in :math:`[0, 1]`; for the discrete fuzzy /
+    trust shape on a user-defined enum lattice, see ``maxmin`` under
+    *User-enum* below.
   * *Intervals*: ``interval-union``. One UI option backed by the
     :sqlfunc:`sr_temporal`, :sqlfunc:`sr_interval_num` and
     :sqlfunc:`sr_interval_int` kernels: the strip picks the right one
@@ -263,6 +266,14 @@ custom and "Other" entries below:
     (``tstzmultirange`` / ``nummultirange`` / ``int4multirange``);
     requires PostgreSQL 14+. See :doc:`temporal` for the
     interval-union algebra.
+  * *User-enum*: ``minmax`` and ``maxmin``. One UI option per shape,
+    polymorphic over any user-defined PostgreSQL enum carrier (the
+    bottom and top of the lattice come from
+    :literal:`pg_enum.enumsortorder`). ``minmax`` is the security shape
+    (alternatives combine to enum-min, joins to enum-max); ``maxmin``
+    is the discrete fuzzy / availability / trust shape (alternatives
+    to enum-max, joins to enum-min). Backed by :sqlfunc:`sr_minmax`
+    and :sqlfunc:`sr_maxmin` respectively.
 
 * **Custom semirings**: any user-defined wrapper over
   :sqlfunc:`provenance_evaluate` discovered in the schema.
@@ -277,7 +288,9 @@ The mapping picker filters on the selected semiring's expected value
 type: only ``boolean``-typed mappings appear under ``boolean``, only
 the numeric base types (``smallint`` / ``integer`` / ``bigint`` /
 ``numeric`` / ``real`` / ``double precision``) under the numeric
-group, and only multirange-typed mappings under ``interval-union``.
+group, only multirange-typed mappings under ``interval-union``, and
+only mappings whose ``value`` column is a user-defined enum
+(``pg_type.typtype = 'e'``) under ``minmax`` / ``maxmin``.
 Polymorphic entries (``boolexpr``, ``formula``, ``why``, ``which``)
 accept any mapping. ``boolexpr`` and ``PROV-XML export`` accept the
 mapping as *optional*: with one, leaves are labelled by the mapping's

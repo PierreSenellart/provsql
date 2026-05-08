@@ -930,6 +930,9 @@
   // `types: [...]` filters the mapping picker; an empty result yields a
   // "no compatible mappings" sentinel so the user can't run the option
   // against a mapping the kernel won't accept.
+  // `acceptsEnum: true` filters the mapping picker to user-defined enum
+  // carriers (matched against `mapping.is_enum`), used by sr_minmax /
+  // sr_maxmin where the carrier is "any user-defined enum".
   const _NUMERIC_BASE_TYPES = [
     'smallint', 'integer', 'bigint',
     'numeric', 'real', 'double precision',
@@ -962,7 +965,7 @@
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric (cost) values.' },
     'viterbi':     { label: 'Viterbi (max-times)',        group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].' },
-    'lukasiewicz': { label: 'Łukasiewicz (fuzzy)',       group: 'num',
+    'lukasiewicz': { label: 'Łukasiewicz (numeric fuzzy)', group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].' },
     // Intervals. One UI option, three kernels: the backend picks
     // sr_temporal / sr_interval_num / sr_interval_int from the mapping's
@@ -971,12 +974,23 @@
                         needsMapping: true,  types: _INTERVAL_BASE_TYPES,
                         minPg: 140000,
                         hint: 'Multirange-valued (PostgreSQL 14+); selects sr_temporal / sr_interval_num / sr_interval_int by mapping type.' },
+    // User-enum carrier. The bottom and top come from the enum's
+    // pg_enum.enumsortorder; the kernel is polymorphic over any
+    // user-defined enum, so the picker filters by `is_enum` rather
+    // than a fixed type list.
+    'minmax':      { label: 'Min-max (security shape)',   group: 'enum',
+                     needsMapping: true,  types: null,    acceptsEnum: true,
+                     hint: 'Expects a user-defined enum carrier; alternatives combine to enum-min, joins to enum-max.' },
+    'maxmin':      { label: 'Max-min (enum fuzzy / trust)', group: 'enum',
+                     needsMapping: true,  types: null,    acceptsEnum: true,
+                     hint: 'Expects a user-defined enum carrier; alternatives combine to enum-max, joins to enum-min.' },
   };
   const _COMPILED_GROUPS = [
     ['bool', 'Boolean'],
     ['lin',  'Lineage'],
     ['num',  'Numeric'],
     ['iv',   'Intervals'],
+    ['enum', 'User-enum'],
   ];
 
   // Custom-semiring options (encoded as `custom:<schema>.<name>`) also need a
@@ -1169,6 +1183,14 @@
       return spec && spec.types ? spec.types : null;
     }
 
+    // True if the current semiring expects a user-defined enum carrier.
+    // sr_minmax / sr_maxmin are polymorphic over any user enum, so the
+    // picker filters by `mapping.is_enum` instead of a fixed type list.
+    function expectsEnumCarrier() {
+      const spec = _COMPILED_REGISTRY[sel.value];
+      return !!(spec && spec.acceptsEnum);
+    }
+
     // Render the mapping <option>s from the cached list, filtered by the
     // current semiring's expected value type set. Polymorphic semirings
     // (formula / why / which) get the full list; typed compiled and
@@ -1185,11 +1207,19 @@
         return;
       }
       const expectedTypes = expectedValueTypes();
-      const list = expectedTypes
-        ? _mappings.filter(m => expectedTypes.includes(m.value_base_type))
-        : _mappings;
+      const wantEnum = expectsEnumCarrier();
+      let list;
+      if (wantEnum) {
+        list = _mappings.filter(m => m.is_enum);
+      } else if (expectedTypes) {
+        list = _mappings.filter(m => expectedTypes.includes(m.value_base_type));
+      } else {
+        list = _mappings;
+      }
       if (!list.length) {
-        const accepted = (expectedTypes || []).join(', ');
+        const accepted = wantEnum
+          ? 'a user-defined enum carrier'
+          : (expectedTypes || []).join(', ');
         map.innerHTML =
           `<option value="">(no compatible mappings : expected ${escapeHtml(accepted)})</option>`;
         map.disabled = true;

@@ -78,6 +78,11 @@ def test_mappings_lists_personnel_names(client, mapping):
     # `character varying`.
     assert entry["value_type"] == "character varying"
     assert entry["value_base_type"] == "character varying"
+    # `is_enum` is True iff the value column's type has typtype = 'e';
+    # the eval strip's mapping filter consumes it for sr_minmax /
+    # sr_maxmin (which expect any user-defined enum carrier). varchar
+    # is not an enum, so the flag is false here.
+    assert entry["is_enum"] is False
 
 
 def test_mappings_skips_non_mapping_tables(client):
@@ -363,6 +368,93 @@ def test_evaluate_interval_union_rejects_non_multirange_mapping(client, mapping)
 
 
 @pytest.fixture()
+def classification_mapping(client):
+    """A (value::classification_level, provenance) mapping built from the
+    personnel.classification column. The enum is shipped by
+    `add_provenance.sql` and ordered
+    (unclassified < restricted < confidential < secret < top_secret < unavailable),
+    so sr_minmax / sr_maxmin can be exercised against a real user enum
+    carrier."""
+    setup = (
+        "DROP TABLE IF EXISTS personnel_clearance;"
+        " CREATE TABLE personnel_clearance AS"
+        "   SELECT classification AS value, provsql AS provenance FROM personnel;"
+        " SELECT remove_provenance('personnel_clearance');"
+        " CREATE INDEX ON personnel_clearance(provenance);"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    yield "personnel_clearance"
+    client.post("/api/exec", json={"sql": "DROP TABLE personnel_clearance", "mode": "circuit"})
+
+
+def test_mappings_flags_enum_carrier(client, classification_mapping):
+    """The classification_level enum carrier surfaces as is_enum: true,
+    which the eval-strip filter relies on to expose sr_minmax / sr_maxmin
+    only when at least one enum-typed mapping exists."""
+    rows = client.get("/api/provenance_mappings").get_json()
+    entry = next(
+        r for r in rows
+        if r["qname"] == f"provsql_test.{classification_mapping}"
+    )
+    assert entry["is_enum"] is True
+    assert entry["value_base_type"] == "classification_level"
+
+
+def test_evaluate_minmax_returns_least_sensitive(client, classification_mapping):
+    """sr_minmax over a UNION ALL of the seven personnel rows: the +
+    collapses alternative derivations to the enum-min, so the result is
+    the lowest classification present (`unclassified` is the minimum
+    label seeded by add_provenance.sql)."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "minmax",
+        "mapping": f"provsql_test.{classification_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert data["result"] == "unclassified"
+
+
+def test_evaluate_maxmin_returns_most_permissive(client, classification_mapping):
+    """sr_maxmin is the dual of sr_minmax: + is enum-max, so over the
+    same seven-row union the result is the highest classification
+    present in the seeded data. The personnel fixture's max
+    classification is `top_secret` (Magdalen); `unavailable` sits at
+    the top of the enum but no row holds it, and acts as the max-min
+    multiplicative identity, not as a + outcome."""
+    root = _root_uuid(client, "SELECT 1 AS k FROM personnel GROUP BY 1")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "maxmin",
+        "mapping": f"provsql_test.{classification_mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert data["result"] == "top_secret"
+
+
+def test_evaluate_minmax_rejects_non_enum_mapping(client, mapping):
+    """sr_minmax requires a user-defined enum carrier. A text-typed
+    mapping (`personnel_names.value`) must be rejected at the 400
+    layer with a message naming the enum requirement, before any SQL
+    round-trip to the kernel."""
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "minmax",
+        "mapping": f"provsql_test.{mapping}",
+    })
+    assert resp.status_code == 400
+    error = resp.get_json()["error"].lower()
+    assert "minmax" in error
+    assert "enum" in error
+
+
+@pytest.fixture()
 def counting_mapping(client):
     """Counting / boolean semirings need a typed mapping (the value
     column's type is consumed by the C semiring evaluator). We map every
@@ -572,6 +664,11 @@ def test_custom_semirings_excludes_sr_formula(client):
     assert "provsql.sr_temporal" not in qnames
     assert "provsql.sr_interval_num" not in qnames
     assert "provsql.sr_interval_int" not in qnames
+    # sr_minmax / sr_maxmin take three arguments, so the pronargs = 2
+    # filter excludes them on shape; pin the assertion anyway so an
+    # accidental loosening of the filter would surface here.
+    assert "provsql.sr_minmax" not in qnames
+    assert "provsql.sr_maxmin" not in qnames
 
 
 def test_evaluate_custom_returns_classification(client, custom_wrapper):

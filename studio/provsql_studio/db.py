@@ -729,6 +729,14 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
         "types": tuple(_INTERVAL_KERNELS.keys()),
         "min_pg": 140000,
     },
+    # User-enum carrier. `accepts_enum: True` filters to mappings whose
+    # `value` column is any user-defined enum (typtype = 'e'); the
+    # carrier's bottom and top come from `pg_enum.enumsortorder`. The
+    # third arg of `sr_minmax`/`sr_maxmin` is a sample value of that
+    # enum, used only for type inference; the dispatch synthesises one
+    # via `enum_first(NULL::<base_type>)`.
+    "minmax": {"func": "sr_minmax", "accepts_enum": True},
+    "maxmin": {"func": "sr_maxmin", "accepts_enum": True},
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
@@ -761,13 +769,15 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
     sql_text = """
         SELECT n.nspname, c.relname, pg_table_is_visible(c.oid) AS visible,
                format_type(va.atttypid, va.atttypmod) AS value_type,
-               format_type(va.atttypid, NULL)         AS value_base_type
+               format_type(va.atttypid, NULL)         AS value_base_type,
+               t.typtype = 'e'                        AS is_enum
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_attribute va
           ON va.attrelid = c.oid
          AND va.attname = 'value'
          AND NOT va.attisdropped
+        JOIN pg_type t ON t.oid = va.atttypid
         WHERE c.relkind IN ('r', 'v', 'm')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'provsql')
           AND n.nspname NOT LIKE 'pg_%'
@@ -788,7 +798,7 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
     # in `qname` for the API call so the regclass cast is unambiguous.
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(sql_text)
-        for schema, name, visible, value_type, value_base_type in cur.fetchall():
+        for schema, name, visible, value_type, value_base_type, is_enum in cur.fetchall():
             out.append({
                 "schema": schema,
                 "name": name,
@@ -796,6 +806,7 @@ def list_provenance_mappings(pool: ConnectionPool) -> list[dict]:
                 "display_name": name if visible else f"{schema}.{name}",
                 "value_type": str(value_type),
                 "value_base_type": str(value_base_type),
+                "is_enum": bool(is_enum),
             })
     return out
 
@@ -964,7 +975,7 @@ def evaluate_circuit(
         # return type (int for counting, bool for boolean, text for
         # formula / why) : we keep that so `_to_jsonable` can pass the
         # primitive through to JSON without wrapping it as a string.
-        kernel = _resolve_compiled_semiring(pool, semiring, spec, mapping)
+        kernel, base_type = _resolve_compiled_semiring(pool, semiring, spec, mapping)
         fn = sql.Identifier("provsql", kernel)
         # Cast multirange results to text server-side so we get PG's
         # canonical literal (`{(,)}`, `{[lo, hi)}`) instead of psycopg's
@@ -979,6 +990,19 @@ def evaluate_circuit(
         if semiring == "interval-union":
             sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)::text").format(
                 fn, sql.Literal(token), sql.Literal(mapping)
+            )
+        elif spec.get("accepts_enum"):
+            # `sr_minmax`/`sr_maxmin` need a sample value of the carrier
+            # enum for type inference. `enum_first(NULL::<base_type>)`
+            # synthesises one without needing the mapping to contain any
+            # row. `base_type` came from `format_type(_, NULL)` on the
+            # mapping's value column, so it's a properly schema-qualified,
+            # quoted PG type expression: safe to splice as raw SQL.
+            sql_stmt = sql.SQL(
+                "SELECT {}({}::uuid, {}::regclass, enum_first(NULL::{}))"
+            ).format(
+                fn, sql.Literal(token), sql.Literal(mapping),
+                sql.SQL(base_type),
             )
         else:
             sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)").format(
@@ -1047,9 +1071,11 @@ def _result_kind(semiring: str) -> str:
     return "text"
 
 
-def _mapping_value_base_type(pool: ConnectionPool, mapping: str) -> str:
-    """Return the unparameterised type of `mapping.value`, used for
+def _mapping_value_info(pool: ConnectionPool, mapping: str) -> tuple[str, bool]:
+    """Return (unparameterised type of `mapping.value`, is_enum), used for
     type-compatibility checks against compiled-semiring registries.
+    `is_enum` is true iff the value column's type has `pg_type.typtype = 'e'`,
+    i.e., it is a user-defined enum carrier accepted by `sr_minmax`/`sr_maxmin`.
     Raises ValueError if the relation isn't shaped like a mapping (no
     `value` column reachable from the current search_path)."""
     if "." in mapping:
@@ -1060,13 +1086,14 @@ def _mapping_value_base_type(pool: ConnectionPool, mapping: str) -> str:
         where = "c.relname = %s AND pg_table_is_visible(c.oid)"
         params = (mapping,)
     sql_text = f"""
-        SELECT format_type(va.atttypid, NULL)
+        SELECT format_type(va.atttypid, NULL), t.typtype = 'e'
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_attribute va
           ON va.attrelid = c.oid
          AND va.attname = 'value'
          AND NOT va.attisdropped
+        JOIN pg_type t ON t.oid = va.atttypid
         WHERE {where}
     """
     with pool.connection() as conn, conn.cursor() as cur:
@@ -1076,17 +1103,23 @@ def _mapping_value_base_type(pool: ConnectionPool, mapping: str) -> str:
         raise ValueError(
             f"mapping {mapping!r} not found or has no `value` column"
         )
-    return str(row[0])
+    return str(row[0]), bool(row[1])
 
 
 def _resolve_compiled_semiring(
     pool: ConnectionPool, semiring: str, spec: dict, mapping: str
-) -> str:
+) -> tuple[str, str | None]:
     """Pick the SQL function name to call for a compiled-semiring entry.
     Validates the mapping's value type against the registry's accepted
     set and gates families (whose `func` is None) on that type. PG-version
     gating happens here too so crafted payloads can't bypass the frontend
     hide.
+
+    Returns (kernel, base_type): `base_type` is None for entries that did
+    not need a type lookup (polymorphic kernels), the unparameterised
+    `format_type` of the mapping's `value` column otherwise. Callers that
+    need to splice a type expression into the dispatch SQL (currently
+    only `sr_minmax`/`sr_maxmin`'s third argument) consume it.
 
     Raises ValueError on PG-version mismatch or value-type incompatibility;
     the caller turns that into a clean 400."""
@@ -1099,10 +1132,18 @@ def _resolve_compiled_semiring(
                     f"{min_pg // 10000} or newer"
                 )
     accepted = spec.get("types")
-    if accepted is None and spec["func"] is not None:
+    accepts_enum = bool(spec.get("accepts_enum"))
+    if accepted is None and not accepts_enum and spec["func"] is not None:
         # Polymorphic kernel, single function : nothing to validate.
-        return spec["func"]
-    base_type = _mapping_value_base_type(pool, mapping)
+        return spec["func"], None
+    base_type, is_enum = _mapping_value_info(pool, mapping)
+    if accepts_enum:
+        if not is_enum:
+            raise ValueError(
+                f"semiring {semiring!r} expects an enum-typed mapping, "
+                f"got {base_type!r}"
+            )
+        return spec["func"], base_type
     if accepted is not None and base_type not in accepted:
         accepted_list = ", ".join(accepted)
         raise ValueError(
@@ -1110,10 +1151,10 @@ def _resolve_compiled_semiring(
             f"{{{accepted_list}}}, got {base_type!r}"
         )
     if spec["func"] is not None:
-        return spec["func"]
+        return spec["func"], base_type
     # Family entry (`interval-union`): dispatch by carrier type.
     if semiring == "interval-union":
-        return _INTERVAL_KERNELS[base_type]
+        return _INTERVAL_KERNELS[base_type], base_type
     # Defensive: every family entry should have an explicit dispatch
     # branch. Hitting this means the registry got an entry the resolver
     # doesn't know about.
