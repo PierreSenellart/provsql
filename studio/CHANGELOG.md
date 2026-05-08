@@ -7,10 +7,12 @@ the ProvSQL extension's; the
 in the user manual records each Studio release's minimum required
 extension version.
 
-The release workflow (`.github/workflows/studio-release.yml`) extracts
-the section matching the tag's version and embeds it under "What's
-changed" in the GitHub release notes; PRs that change Studio behaviour
-should add an entry to the topmost (unreleased) section.
+This file is **maintained by hand at release time** by the Studio
+maintainer (mirroring how `release.sh` maintains the extension's
+top-level `CHANGELOG.md`); pull requests should not modify it. The
+release workflow (`.github/workflows/studio-release.yml`) extracts the
+section matching the tag's version and embeds it under "What's
+changed" in the GitHub release notes.
 
 ## [1.0.0]
 

@@ -446,14 +446,16 @@ To cut a Studio release:
 1. Bump ``__version__`` in ``studio/provsql_studio/__init__.py`` to
    the new ``X.Y.Z`` (the wheel's version is dynamic and reads from
    that string; ``pyproject.toml`` does not need a manual edit).
-2. **Update** ``studio/CHANGELOG.md``: rename the topmost
-   ``## [Unreleased]`` heading (or add a new ``## [X.Y.Z]`` heading
-   above any prior versioned section) and list user-visible changes
-   under the conventional sub-headings (Highlights / Added / Fixed /
-   Changed / Removed). The release workflow extracts the section
-   matching the tag's version and embeds it under "What's changed"
-   in the GitHub release notes; if the section is missing or empty,
-   the workflow aborts before publishing.
+2. **Write the changelog entry** in ``studio/CHANGELOG.md``: prepend
+   a new ``## [X.Y.Z]`` section above any prior versioned section,
+   listing user-visible changes under the conventional sub-headings
+   (Highlights / Added / Fixed / Changed / Removed). PRs do **not**
+   modify this file; the maintainer assembles the section from the
+   merged-since-last-release PR descriptions when cutting the
+   release. The release workflow extracts the section matching the
+   tag's version and embeds it under "What's changed" in the GitHub
+   release notes; if the section is missing or empty, the workflow
+   aborts before publishing.
 3. Commit the version bump + changelog entry, push, and let
    ``studio.yml`` confirm the matrix is green on the resulting
    commit.

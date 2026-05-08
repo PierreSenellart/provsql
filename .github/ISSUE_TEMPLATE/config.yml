@@ -3,3 +3,6 @@ contact_links:
   - name: ProvSQL documentation
     url: https://provsql.org/docs/
     about: User guide, developer guide, SQL API reference, and C/C++ API reference.
+  - name: ProvSQL Studio chapter
+    url: https://provsql.org/docs/user/studio.html
+    about: Studio's user manual (modes, eval strip, schema panel, configuration). Read this before filing a Studio bug.

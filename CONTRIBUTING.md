@@ -68,6 +68,34 @@ to write a new test, the schedule files, the alternative-output
 skip pattern for tests that depend on optional external tools,
 and how to read regression diffs.
 
+## Contributing to ProvSQL Studio
+
+ProvSQL Studio (`studio/`, distributed on PyPI as `provsql-studio`)
+is a Flask + JavaScript web UI that lives alongside the extension
+in this repository. Studio has its own test suite, lint
+configuration, and release pipeline, all separate from the
+extension's. See the [Studio architecture
+chapter](https://provsql.org/docs/dev/studio.html) of the
+developer guide for the source-code map, the HTTP API surface,
+and the test harness layout.
+
+```sh
+# One-off setup: a venv with Studio + its [test] extras and the
+# Playwright browser binary.
+python3 -m venv studio/.venv
+studio/.venv/bin/pip install -e "studio[test]"
+studio/.venv/bin/playwright install --with-deps chromium
+
+# Run lint + the unit suite + the Playwright e2e smoke (against the
+# extension already installed on your local PostgreSQL).
+make studio-test
+```
+
+`make studio-test` chains `ruff check .` before `pytest tests`, so
+the same lint that gates CI also gates the local target. The
+release pipeline is documented in the [build-system
+chapter](https://provsql.org/docs/dev/build-system.html#studio-releases).
+
 ## Code organization
 
 The codebase mixes C and C++:
@@ -106,17 +134,29 @@ checker can validate them.
 ## Submitting a pull request
 
 1. Fork the repository and create a branch from `master`.
-2. Make your changes. If adding a new feature, add a regression test in
-   `test/sql/` with expected output in `test/expected/`.
-3. Ensure `make test` passes.
+2. Make your changes. If adding a new feature or fixing a bug:
+   - **Extension**: add a regression test in `test/sql/` with
+     expected output in `test/expected/`, registered in
+     `test/schedule.common` (or `test/schedule.14`).
+   - **Studio**: add a unit test under `studio/tests/` or a
+     Playwright smoke under `studio/tests/e2e/` that exercises
+     the changed behaviour.
+3. Ensure the relevant local test target passes: `make test` for
+   extension changes, `make studio-test` for Studio changes (or
+   both if the change crosses the boundary).
 4. If your change touches the documentation, run `make docs` and
    confirm the coherence checker (`check-doc-links.py`) reports
    `OK`.
 5. Open a pull request against `master` with a clear description of what the
-   change does and why.
+   change does and why. Do **not** modify either `CHANGELOG.md`
+   (extension) or `studio/CHANGELOG.md` (Studio): both are
+   maintained at release time. Use the PR description itself to
+   describe user-visible changes; that is what the maintainer
+   draws from when assembling release notes.
 
-CI runs on Linux (PostgreSQL 10–18), macOS, and WSL. Failures on any of these
-block merging.
+CI runs on Linux (PostgreSQL 10–18), macOS, and WSL for the
+extension, and on a Py 3.10/3.11/3.12/3.13 × PG 14/15/16 matrix
+for Studio. Failures on any applicable workflow block merging.
 
 ## License
 

@@ -3,6 +3,7 @@
 [![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/build_and_test.yml)
 [![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/macos.yml)
 [![Build Status](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/wsl.yml)
+[![Studio Status](https://github.com/PierreSenellart/provsql/actions/workflows/studio.yml/badge.svg?branch=master)](https://github.com/PierreSenellart/provsql/actions/workflows/studio.yml)
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19512786.svg)](https://doi.org/10.5281/zenodo.19512786)
 [![Archived in Software Heritage](https://archive.softwareheritage.org/badge/origin/https://github.com/PierreSenellart/provsql/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/PierreSenellart/provsql)
