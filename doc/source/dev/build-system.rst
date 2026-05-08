@@ -446,7 +446,15 @@ To cut a Studio release:
 1. Bump ``__version__`` in ``studio/provsql_studio/__init__.py`` to
    the new ``X.Y.Z`` (the wheel's version is dynamic and reads from
    that string; ``pyproject.toml`` does not need a manual edit).
-2. **Write the changelog entry** in ``studio/CHANGELOG.md``: prepend
+2. Bump ``STUDIO_VERSION`` in ``docker/Dockerfile`` to the same
+   ``X.Y.Z`` so the next ``inriavalda/provsql:<extension-version>``
+   image installs the matching Studio from PyPI. Forgetting this
+   bump leaves the Docker image installing a stale Studio. (We do
+   not derive this from ``__version__`` because between releases
+   that string is something like ``1.1.0.dev0``, which is not a
+   PyPI artifact: hardcoding the last-released version is the
+   lesser evil.)
+3. **Write the changelog entry** in ``studio/CHANGELOG.md``: prepend
    a new ``## [X.Y.Z]`` section above any prior versioned section,
    listing user-visible changes under the conventional sub-headings
    (Highlights / Added / Fixed / Changed / Removed). PRs do **not**
@@ -456,10 +464,10 @@ To cut a Studio release:
    tag's version and embeds it under "What's changed" in the GitHub
    release notes; if the section is missing or empty, the workflow
    aborts before publishing.
-3. Commit the version bump + changelog entry, push, and let
+4. Commit the version bumps + changelog entry, push, and let
    ``studio.yml`` confirm the matrix is green on the resulting
    commit.
-4. Tag ``studio-vX.Y.Z`` and push the tag. ``studio-release.yml``
+5. Tag ``studio-vX.Y.Z`` and push the tag. ``studio-release.yml``
    takes over from there.
 
 The release workflow runs four jobs:

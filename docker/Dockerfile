@@ -102,7 +102,28 @@ RUN /usr/bin/pg_ctlcluster $PSQL_VERSION main start
 
 USER root
 RUN apt-get update &&\
-    apt-get -y install apache2 libapache2-mod-php php-pgsql graphviz libgraph-easy-perl
+    apt-get -y install python3 python3-pip python3-venv graphviz libgraph-easy-perl
+
+##############################   GETTING  STUDIO   ##############################
+
+# Studio install path. By default, install the released `provsql-studio`
+# from PyPI at `STUDIO_VERSION`. To build the image *before* the matching
+# Studio has been published (e.g. for the simultaneous-release rehearsal),
+# pass `--build-arg STUDIO_SOURCE=/opt/provsql/studio` to install in
+# editable mode from the source already copied into the image.
+ARG STUDIO_VERSION=1.0.0
+ARG STUDIO_SOURCE=
+
+# Debian bookworm's Python 3.11 enforces PEP 668, so we install Studio
+# into a venv rather than the system site-packages. Prepending the venv's
+# bin/ to PATH makes `provsql-studio` reachable everywhere.
+RUN python3 -m venv /opt/studio-venv &&\
+    if [ -n "$STUDIO_SOURCE" ]; then \
+        /opt/studio-venv/bin/pip install -e "$STUDIO_SOURCE"; \
+    else \
+        /opt/studio-venv/bin/pip install "provsql-studio==$STUDIO_VERSION"; \
+    fi
+ENV PATH="/opt/studio-venv/bin:$PATH"
 
 CMD ["/bin/bash", "/opt/provsql/docker/demo.sh"]
-EXPOSE 80
+EXPOSE 8000
