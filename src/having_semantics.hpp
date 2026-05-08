@@ -175,4 +175,23 @@ void provsql_try_having_multirange(
   );
 #endif
 
+#include "semiring/MinMax.h"
+/**
+ * @brief Evaluate the HAVING sub-circuit at @p g over the min-max /
+ * max-min m-semiring (any user-defined enum carrier).
+ *
+ * @param c        The generic circuit containing gate @p g.
+ * @param g        Root gate of the HAVING sub-circuit.
+ * @param mapping  Map from input gates to their enum Datum values;
+ *                 populated on successful evaluation.
+ * @param sr       The MinMax semiring instance (configured with the
+ *                 carrier enum type OID and the @c reverse flag).
+ */
+void provsql_try_having_minmax(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, Datum> &mapping,
+  const semiring::MinMax &sr
+  );
+
 #endif

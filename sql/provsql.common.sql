@@ -1843,6 +1843,59 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance over the min-max m-semiring on a user enum
+ *
+ * Inputs are read as values of a user-defined enum carrier; addition
+ * is enum-min, multiplication is enum-max. Bottom and top of the enum
+ * are derived from @c pg_enum.enumsortorder. The third argument is a
+ * sample value of the carrier enum, used only for type inference; its
+ * value is ignored.
+ *
+ * The security shape: alternative derivations combine to the least
+ * sensitive label, joins combine to the most sensitive label.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to enum values.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE FUNCTION sr_minmax(token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYENUM AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'minmax',
+    element_one
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over the max-min m-semiring on a user enum
+ *
+ * Dual of :sqlfunc:`sr_minmax`: addition is enum-max, multiplication
+ * is enum-min. The fuzzy / availability / trust shape: alternatives
+ * combine to the most permissive label, joins combine to the strictest
+ * label. The third argument is a sample value of the carrier enum,
+ * used only for type inference; its value is ignored.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to enum values.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE FUNCTION sr_maxmin(token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYENUM AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'maxmin',
+    element_one
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
 /** @} */
 
 /** @defgroup choose_aggregate choose aggregate

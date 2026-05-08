@@ -85,6 +85,8 @@ Legend:
 | `sr_tropical`                            |   |   |   |   |   |   |
 | `sr_viterbi`                             |   |   |   |   |   |   |
 | `sr_lukasiewicz`                         |   |   |   |   |   |   |
+| `sr_minmax`                              |   | ✓ |   |   |   |   |
+| `sr_maxmin`                              |   |   |   |   |   |   |
 | `sr_temporal`                            |   |   |   |   | ✓ |   |
 | `sr_interval_num`                        |   |   |   |   |   |   |
 | `sr_interval_int`                       |   |   |   |   |   |   |

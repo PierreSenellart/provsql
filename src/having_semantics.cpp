@@ -46,6 +46,7 @@ extern "C" {
 #include "semiring/Viterbi.h"
 #include "semiring/Lukasiewicz.h"
 #include "semiring/IntervalUnion.h"
+#include "semiring/MinMax.h"
 
 namespace {
 // Parse int from string
@@ -420,3 +421,12 @@ void provsql_try_having_multirange(
   try_having_impl<semiring::IntervalUnion>(c, g, mapping, sr);
 }
 #endif
+
+void provsql_try_having_minmax(
+  GenericCircuit &c,
+  gate_t g,
+  std::unordered_map<gate_t, Datum> &mapping,
+  const semiring::MinMax &sr)
+{
+  try_having_impl<semiring::MinMax>(c, g, mapping, sr);
+}

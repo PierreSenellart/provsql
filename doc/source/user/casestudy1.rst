@@ -98,71 +98,35 @@ for Nairobi to appear. Beijing similarly shows ``Ellen ⊗ Jing``. Paris,
 with three agents, shows all three pairwise products joined by ``⊕``.
 
 
-Step 4: Minimum Security Clearance (Custom Semiring)
------------------------------------------------------
+Step 4: Minimum Security Clearance (sr_minmax)
+-----------------------------------------------
 
 For each shared city, what is the *minimum clearance level* required to
 have inferred that the city has multiple agents? An analyst who knows
 the city only needs to see the lowest-cleared agent there.
 
-This is a custom semiring over ``classification_level``:
+This is the security shape of the min-max m-semiring, computed by the
+compiled function :sqlfunc:`sr_minmax` over the ``classification_level``
+enum:
 
-* ``⊕`` (OR combination) = ``MIN``: to infer *either* agent was
+* ``⊕`` (OR combination) = ``min``: to infer *either* agent was
   involved, you only need clearance for the less-classified one (one
   witness suffices to establish the disjunction).
-* ``⊗`` (AND/join) = ``MAX``: to confirm *both* agents are present,
+* ``⊗`` (AND/join) = ``max``: to confirm *both* agents are present,
   you need clearance for the more-classified one (you must be able to
   access both records to establish the join).
 
+The third argument is a sample value of the carrier enum (used only
+for type inference); its value is ignored:
+
 .. code-block:: postgresql
-
-    CREATE FUNCTION security_min_state(
-        state classification_level,
-        level classification_level)
-      RETURNS classification_level AS $$
-        SELECT CASE
-          WHEN state IS NULL THEN level
-          WHEN state < level THEN state
-          ELSE level END
-    $$ LANGUAGE SQL IMMUTABLE;
-
-    CREATE FUNCTION security_max_state(
-        state classification_level,
-        level classification_level)
-      RETURNS classification_level AS $$
-        SELECT CASE
-          WHEN state IS NULL THEN level
-          WHEN state < level THEN level
-          ELSE state END
-    $$ LANGUAGE SQL IMMUTABLE;
-
-    CREATE AGGREGATE security_min(classification_level) (
-        sfunc    = security_min_state,
-        stype    = classification_level,
-        initcond = 'unavailable'
-    );
-
-    CREATE AGGREGATE security_max(classification_level) (
-        sfunc    = security_max_state,
-        stype    = classification_level,
-        initcond = 'unclassified'
-    );
-
-    CREATE FUNCTION security_clearance(token UUID, token2value regclass)
-      RETURNS classification_level AS $$
-    BEGIN
-      RETURN provenance_evaluate(
-        token, token2value,
-        'unclassified'::classification_level,
-        'security_min', 'security_max');
-    END
-    $$ LANGUAGE plpgsql;
 
     SELECT create_provenance_mapping('personnel_level',
                                      'personnel', 'classification');
 
     SELECT p1.city,
-           security_clearance(provenance(), 'personnel_level') AS min_clearance
+           sr_minmax(provenance(), 'personnel_level',
+                     'unclassified'::classification_level) AS min_clearance
     FROM personnel p1
     JOIN personnel p2 ON p1.city = p2.city AND p1.id < p2.id
     GROUP BY p1.city

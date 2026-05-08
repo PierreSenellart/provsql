@@ -5,7 +5,7 @@ create_provenance_mapping
 remove_provenance
 
 (1 row)
-city|security
+city|clearance
 Berlin|secret
 New York|restricted
 Paris|confidential
