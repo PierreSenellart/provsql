@@ -99,14 +99,17 @@ static Datum pec_bool(
  * @param constants  Extension OID cache.
  * @param bc         Boolean circuit to render as a formula.
  * @param root       Root gate of the circuit.
+ * @param labels     Optional input-gate label map; when @c nullptr the
+ *                   default @c x@<id@> placeholders are used for leaves.
  * @return           Text datum with the formula string.
  */
 static Datum pec_boolexpr(
   const constants_t &constants,
   BooleanCircuit &bc,
-  gate_t root)
+  gate_t root,
+  const std::unordered_map<gate_t, std::string> *labels)
 {
-  std::string out = bc.toString(root);
+  std::string out = labels ? bc.toString(root, *labels) : bc.toString(root);
 
   text *result = (text *) palloc(VARHDRSZ + out.size());
   SET_VARSIZE(result, VARHDRSZ + out.size());
@@ -479,8 +482,34 @@ static Datum provenance_evaluate_compiled_internal
 
   if(semiring=="boolexpr") {
     gate_t root;
-    BooleanCircuit bc = getBooleanCircuit(token, root);
-    return pec_boolexpr(constants, bc, root);
+    if(!OidIsValid(table)) {
+      BooleanCircuit bc = getBooleanCircuit(token, root);
+      return pec_boolexpr(constants, bc, root, nullptr);
+    }
+
+    GenericCircuit gc = getGenericCircuit(token);
+    auto inputs = gc.getInputs();
+    std::vector<std::string> inputs_uuid;
+    std::transform(inputs.begin(), inputs.end(), std::back_inserter(inputs_uuid), [&gc](auto x) {
+      return gc.getUUID(x);
+    });
+    bool drop_table = join_with_temp_uuids(table, inputs_uuid);
+    std::unordered_map<gate_t, std::string> gc_labels;
+    initialize_provenance_mapping<std::string>(constants, gc, gc_labels, [](const char *v) {
+      return std::string(v);
+    }, drop_table);
+
+    std::unordered_map<gate_t, gate_t> gc_to_bc;
+    BooleanCircuit bc = getBooleanCircuit(gc, token, root, gc_to_bc);
+
+    std::unordered_map<gate_t, std::string> bc_labels;
+    bc_labels.reserve(gc_labels.size());
+    for(const auto &kv : gc_labels) {
+      auto it = gc_to_bc.find(kv.first);
+      if(it != gc_to_bc.end())
+        bc_labels[it->second] = kv.second;
+    }
+    return pec_boolexpr(constants, bc, root, &bc_labels);
   }
 
   GenericCircuit c = getGenericCircuit(token);

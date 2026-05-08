@@ -76,30 +76,39 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
   return c;
 }
 
-BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
+BooleanCircuit getBooleanCircuit(
+  GenericCircuit &gc,
+  pg_uuid_t token,
+  gate_t &gate,
+  std::unordered_map<gate_t, gate_t> &gc_to_bc)
 {
-  GenericCircuit gc = getGenericCircuit(token);
   auto ggate = gc.getGate(uuid2string(token));
   BooleanCircuit c;
-  std::unordered_map<gate_t, gate_t> mapping;
   for(gate_t u: gc.getInputs()) {
-    mapping[u]=c.setGate(gc.getUUID(u), BooleanGate::IN, gc.getProb(u));
+    gc_to_bc[u]=c.setGate(gc.getUUID(u), BooleanGate::IN, gc.getProb(u));
   }
   for(size_t i=0; i<gc.getNbGates(); ++i) {
     auto u=static_cast<gate_t>(i);
     if(gc.getGateType(u)==gate_mulinput) {
-      mapping[u]=c.setGate(gc.getUUID(u), BooleanGate::MULIN, gc.getProb(u));
-      c.setInfo(mapping[u], gc.getInfos(u).first);
+      gc_to_bc[u]=c.setGate(gc.getUUID(u), BooleanGate::MULIN, gc.getProb(u));
+      c.setInfo(gc_to_bc[u], gc.getInfos(u).first);
       c.addWire(
-        mapping[u],
-        mapping[gc.getWires(u)[0]]);
+        gc_to_bc[u],
+        gc_to_bc[gc.getWires(u)[0]]);
     }
   }
   semiring::BoolExpr semiring(c);
-  provsql_try_having_boolexpr(gc, semiring, gc.getGate(uuid2string(token)), mapping);
-  gate=gc.evaluate(ggate, mapping, semiring);
+  provsql_try_having_boolexpr(gc, semiring, ggate, gc_to_bc);
+  gate=gc.evaluate(ggate, gc_to_bc, semiring);
 
   return c;
+}
+
+BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
+{
+  GenericCircuit gc = getGenericCircuit(token);
+  std::unordered_map<gate_t, gate_t> gc_to_bc;
+  return getBooleanCircuit(gc, token, gate, gc_to_bc);
 }
 
 GenericCircuit getGenericCircuit(pg_uuid_t token)

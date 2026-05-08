@@ -316,6 +316,37 @@ dDNNF makeDD(gate_t g, const std::string &method, const std::string &args) const
 virtual std::string toString(gate_t g) const override;
 
 /**
+ * @brief Render the sub-circuit at @p g, labelling input gates from a map.
+ *
+ * Same as @c toString(gate_t), but @c IN and @c MULIN gates whose
+ * gate identifier is present in @p labels are rendered using the
+ * mapped string instead of the default @c x@<id@> placeholder.  Gates
+ * not found in @p labels fall back to the default rendering.
+ *
+ * @param g       Gate to render.
+ * @param labels  Optional mapping from input/mulinput gate IDs to
+ *                user-supplied labels.
+ * @return        Human-readable string.
+ */
+std::string toString(
+  gate_t g,
+  const std::unordered_map<gate_t, std::string> &labels) const;
+
+private:
+/**
+ * @brief Internal recursive helper for the two @c toString() variants.
+ *
+ * @param g       Gate to render.
+ * @param labels  Pointer to a label map, or @c nullptr for the
+ *                unlabelled rendering.
+ */
+std::string toStringHelper(
+  gate_t g,
+  const std::unordered_map<gate_t, std::string> *labels) const;
+
+public:
+
+/**
  * @brief Export the circuit in the textual format expected by external compilers.
  *
  * Produces a multi-line string encoding all gates reachable from the

@@ -1750,19 +1750,27 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
-/** @brief Evaluate provenance as a Boolean expression */
-CREATE FUNCTION sr_boolexpr(token ANYELEMENT)
+/** @brief Evaluate provenance as a Boolean expression
+ *
+ * The optional @p token2value mapping labels the leaves of the
+ * formula: when omitted, leaves are rendered as bare @c x@<id@>
+ * placeholders.
+ */
+CREATE FUNCTION sr_boolexpr(token ANYELEMENT, token2value regclass = NULL)
   RETURNS VARCHAR AS
 $$
 BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
   RETURN provsql.provenance_evaluate_compiled(
     token,
-    NULL,
+    token2value,
     'boolexpr',
     '⊤'::VARCHAR
   );
 END
-$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over the Boolean semiring (true/false) */
 CREATE FUNCTION sr_boolean(token ANYELEMENT, token2value regclass)

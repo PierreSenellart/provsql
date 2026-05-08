@@ -279,10 +279,13 @@ the numeric base types (``smallint`` / ``integer`` / ``bigint`` /
 ``numeric`` / ``real`` / ``double precision``) under the numeric
 group, and only multirange-typed mappings under ``interval-union``.
 Polymorphic entries (``boolexpr``, ``formula``, ``why``, ``which``)
-accept any mapping. Custom-semiring entries filter to mappings whose
-value type matches the wrapper's return type. Mismatches are
-surfaced before the round-trip as ``(no compatible mappings :
-expected …)`` in the picker.
+accept any mapping. ``boolexpr`` and ``PROV-XML export`` accept the
+mapping as *optional*: with one, leaves are labelled by the mapping's
+``value`` column; without one, leaves carry their gate UUID
+(``PROV-XML``) or a bare ``x<id>`` placeholder (``boolexpr``). Custom-
+semiring entries filter to mappings whose value type matches the
+wrapper's return type. Mismatches are surfaced before the round-trip
+as ``(no compatible mappings : expected …)`` in the picker.
 
 :guilabel:`Run` reports the result inline along with the runtime; Monte-Carlo
 runs additionally show a ± confidence band (`Hoeffding bound

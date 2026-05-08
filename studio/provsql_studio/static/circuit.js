@@ -143,8 +143,8 @@
 
     // Semiring-evaluation strip wiring. The select drives which side
     // control is visible: a provenance-mapping picker for compiled
-    // semirings, a method picker for probability, neither for boolexpr
-    // (whose leaf labels are the gate UUIDs themselves).
+    // semirings (mapping is optional for boolexpr and prov-xml), a
+    // method picker for probability.
     initEvalStrip();
 
     // Pan via drag.
@@ -940,7 +940,8 @@
   const _COMPILED_REGISTRY = {
     // Boolean.
     'boolexpr':    { label: 'Boolean expression',        group: 'bool',
-                     needsMapping: false, types: null,                hint: null },
+                     needsMapping: false, types: null,                hint: null,
+                     optionalMapping: true },
     'boolean':     { label: 'Boolean',                    group: 'bool',
                      needsMapping: true,  types: ['boolean'],         hint: 'Expects boolean values.' },
     // Lineage. `formula` is the canonical free-polynomial expression
@@ -979,13 +980,14 @@
   ];
 
   // Custom-semiring options (encoded as `custom:<schema>.<name>`) also need a
-  // mapping; see `needsMapping`. `prov-xml` accepts an optional mapping
-  // (used to label leaves) so the dropdown shows for it too, but emptying
-  // the selection is allowed : see `_OPTIONAL_MAPPING`.
-  const _OPTIONAL_MAPPING = new Set(['prov-xml']);
+  // mapping; see `needsMapping`. `prov-xml` and `boolexpr` accept an
+  // optional mapping (used to label leaves) so the dropdown shows for
+  // them too, but emptying the selection is allowed : see
+  // `_OPTIONAL_MAPPING`.
+  const _OPTIONAL_MAPPING = new Set(['prov-xml', 'boolexpr']);
   function needsMapping(v) {
     if (v.startsWith('custom:')) return true;
-    if (v === 'prov-xml')       return true;
+    if (_OPTIONAL_MAPPING.has(v)) return true;
     const spec = _COMPILED_REGISTRY[v];
     return !!(spec && spec.needsMapping);
   }

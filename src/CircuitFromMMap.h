@@ -35,6 +35,30 @@ extern "C" {
 BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate);
 
 /**
+ * @brief Build a @c BooleanCircuit from an already-loaded @c GenericCircuit.
+ *
+ * Variant of @c getBooleanCircuit() that reuses an existing
+ * @c GenericCircuit (typically obtained via @c getGenericCircuit()) and
+ * additionally exposes the @c GenericCircuit-to-@c BooleanCircuit gate
+ * mapping, so that callers can translate input-side annotations
+ * (e.g., user-supplied leaf labels) from @p gc to the constructed
+ * @c BooleanCircuit.
+ *
+ * @param gc        Source generic circuit (mutated through HAVING
+ *                  evaluation).
+ * @param token     UUID of the root gate.
+ * @param gate      Output: @c gate_t of the root within the returned circuit.
+ * @param gc_to_bc  Output: mapping from @c gc input/mulinput gates to the
+ *                  corresponding gates in the returned @c BooleanCircuit.
+ * @return          An in-memory @c BooleanCircuit.
+ */
+BooleanCircuit getBooleanCircuit(
+  GenericCircuit &gc,
+  pg_uuid_t token,
+  gate_t &gate,
+  std::unordered_map<gate_t, gate_t> &gc_to_bc);
+
+/**
  * @brief Build a @c GenericCircuit from the mmap store rooted at @p token.
  *
  * Equivalent to @c createGenericCircuit() declared in @c MMappedCircuit.h.

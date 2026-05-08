@@ -691,9 +691,10 @@ def _to_jsonable(v):
 # The kernel dispatches on the mapping's value type at evaluation time;
 # see `_resolve_compiled_semiring`.
 #
-# `boolexpr` is the odd one out: it does not take a mapping (leaf labels
-# are the gate UUIDs themselves). Probability and prov-xml are handled
-# separately, outside this registry.
+# `boolexpr` accepts an *optional* mapping: with one, leaves are labelled
+# by the mapping's `value` column; without one, leaves render as bare
+# `x<id>` placeholders. Probability and prov-xml are handled separately,
+# outside this registry.
 #
 # Numeric base types accepted by the scoring semirings (counting, tropical,
 # viterbi, lukasiewicz). `format_type(_, NULL)` produces these exact
@@ -870,9 +871,17 @@ def evaluate_circuit(
     them to HTTP : we don't shape them here so the route can also surface
     the underlying SQLSTATE / message verbatim."""
     if semiring == "boolexpr":
-        sql_stmt = sql.SQL("SELECT provsql.sr_boolexpr({}::uuid)::text").format(
-            sql.Literal(token)
-        )
+        # Like prov-xml: the mapping is optional. With one, leaves are
+        # labelled by the mapping's `value` column; without one, leaves
+        # render as bare `x<id>` placeholders.
+        if mapping:
+            sql_stmt = sql.SQL(
+                "SELECT provsql.sr_boolexpr({}::uuid, {}::regclass)::text"
+            ).format(sql.Literal(token), sql.Literal(mapping))
+        else:
+            sql_stmt = sql.SQL(
+                "SELECT provsql.sr_boolexpr({}::uuid)::text"
+            ).format(sql.Literal(token))
         params: tuple = ()
     elif semiring == "probability":
         m = (method or "").strip()

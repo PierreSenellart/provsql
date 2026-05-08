@@ -1868,8 +1868,9 @@ body.mode-where #sidebar {
 .cv-prob__msg.is-error { color: var(--terracotta-500); }
 
 /* Semiring-evaluation strip. The selects collapse / expand depending on
-   the chosen semiring (boolexpr → none; probability → method; rest →
-   mapping). The result chip changes accent based on its data-kind. */
+   the chosen semiring (probability → method; rest → mapping, optional
+   for boolexpr and prov-xml). The result chip changes accent based on
+   its data-kind. */
 .cv-eval__semiring,
 .cv-eval__mapping,
 .cv-eval__method,

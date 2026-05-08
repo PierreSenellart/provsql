@@ -98,8 +98,25 @@ def test_evaluate_boolexpr_does_not_need_mapping(client):
     assert resp.status_code == 200, resp.data
     data = resp.get_json()
     assert data["kind"] == "text"
-    # boolexpr returns the (single) input gate's UUID for a one-row select.
-    assert isinstance(data["result"], str) and data["result"]
+    # No mapping → leaves render as bare `x<id>` placeholders.
+    assert isinstance(data["result"], str)
+    assert data["result"].startswith("x")
+
+
+def test_evaluate_boolexpr_with_mapping(client, mapping):
+    """sr_boolexpr with an optional mapping labels each input gate with
+    its mapped value, just like sr_formula."""
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "boolexpr",
+        "mapping": f"provsql_test.{mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    # With a mapping, the (single) leaf renders as the mapped value.
+    assert data["result"] == "John"
 
 
 def test_evaluate_formula_with_mapping(client, mapping):

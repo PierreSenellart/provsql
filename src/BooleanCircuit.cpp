@@ -110,13 +110,37 @@ gate_t BooleanCircuit::addGate()
 
 std::string BooleanCircuit::toString(gate_t g) const
 {
+  return toStringHelper(g, nullptr);
+}
+
+std::string BooleanCircuit::toString(
+  gate_t g,
+  const std::unordered_map<gate_t, std::string> &labels) const
+{
+  return toStringHelper(g, &labels);
+}
+
+std::string BooleanCircuit::toStringHelper(
+  gate_t g,
+  const std::unordered_map<gate_t, std::string> *labels) const
+{
   std::string op;
   std::string result;
 
   switch(getGateType(g)) {
   case BooleanGate::IN:
+    if(labels) {
+      auto it = labels->find(g);
+      if(it != labels->end())
+        return it->second;
+    }
     return "x"+to_string(g);
   case BooleanGate::MULIN:
+    if(labels) {
+      auto it = labels->find(g);
+      if(it != labels->end())
+        return it->second + "[" + std::to_string(getProb(g)) + "]";
+    }
     return "{" + to_string(*getWires(g).begin()) + "=" + std::to_string(getInfo(g)) + "}[" + std::to_string(getProb(g)) + "]";
   case BooleanGate::NOT:
     op="¬";
@@ -147,7 +171,7 @@ std::string BooleanCircuit::toString(gate_t g) const
       result = op;
     else if(!result.empty())
       result+=" "+op+" ";
-    result+=toString(s);
+    result+=toStringHelper(s, labels);
   }
 
   return "("+result+")";

@@ -41,11 +41,17 @@ Boolean-Expression Semiring
 -----------------------------
 
 :sqlfunc:`sr_boolexpr` evaluates the provenance in the *Boolean-expression*
-semiring, returning a human-readable propositional formula:
+semiring, returning a human-readable propositional formula. The mapping
+argument is optional: with one, leaves are labelled by the mapping's
+``value`` column; without one, leaves are rendered as bare ``x<id>``
+placeholders.
 
 .. code-block:: postgresql
 
     SELECT name, sr_boolexpr(provenance(), 'my_mapping')
+    FROM mytable;
+
+    SELECT name, sr_boolexpr(provenance())
     FROM mytable;
 
 This is used as the basis for probability computation.
