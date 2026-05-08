@@ -1425,9 +1425,14 @@ BEGIN
   IF c = 0 THEN
     agg_tok := gate_zero();
   ELSE
+    -- aggfnoid must be part of the UUID: SUM(id) and AVG(id) over the
+    -- same children would otherwise collapse to a single gate, and
+    -- their concurrent set_infos calls would overwrite each other's
+    -- aggregation operator (resulting in the wrong agg_kind being
+    -- read by provsql_having under cross-backend contention).
     agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('agg',tokens));
+      concat('agg',aggfnoid,tokens));
     PERFORM create_gate(agg_tok, 'agg', tokens);
     PERFORM set_infos(agg_tok, aggfnoid, aggtype);
     PERFORM set_extra(agg_tok, agg_val);
