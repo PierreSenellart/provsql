@@ -107,6 +107,17 @@ The following are documented elsewhere and do not need a TODO entry:
   `docker/demo.sh`. Remove `where_panel/**` from `docs.yml`'s
   `paths-ignore`. Sweep the docs for stale `where_panel` references.
 
+### `studio/` housekeeping
+
+- Audit `studio/` and remove anything that is not the Python
+  package, its tests, or its docs / release plumbing. Targets
+  include `studio/design/` (initial design documents and the
+  embedded `where_panel/` UI-kit copy under
+  `design/ui_kits/where_panel/`, plus `design/screenshots/`),
+  `studio/.claude/`, and any other build artefacts, scratch files,
+  or legacy prototypes still tracked by git. Cross-check with
+  `git ls-files studio/` before and after.
+
 ## Beyond v1.0
 
 ### New inspection modes
