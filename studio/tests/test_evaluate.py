@@ -152,6 +152,21 @@ def test_evaluate_which_with_mapping(client, mapping):
     assert "John" in data["result"]
 
 
+def test_evaluate_how_with_mapping(client, mapping):
+    """sr_how returns the canonical N[X] polynomial; with a single
+    contributing input the result is just the leaf label."""
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "how",
+        "mapping": f"provsql_test.{mapping}",
+    })
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert "John" in data["result"]
+
+
 @pytest.fixture()
 def float_mapping(client):
     """A (value::float, provenance) mapping suitable for both sr_tropical
@@ -657,6 +672,7 @@ def test_custom_semirings_excludes_sr_formula(client):
     assert "provsql.sr_counting" not in qnames
     assert "provsql.sr_why" not in qnames
     assert "provsql.sr_which" not in qnames
+    assert "provsql.sr_how" not in qnames
     assert "provsql.sr_boolean" not in qnames
     assert "provsql.sr_tropical" not in qnames
     assert "provsql.sr_viterbi" not in qnames

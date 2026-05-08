@@ -948,9 +948,15 @@
     'boolean':     { label: 'Boolean',                    group: 'bool',
                      needsMapping: true,  types: ['boolean'],         hint: 'Expects boolean values.' },
     // Lineage. `formula` is the canonical free-polynomial expression
-    // (Green-Karvounarakis-Tannen): a strict refinement of why and which.
+    // (Green-Karvounarakis-Tannen) as a circuit pretty-print; `how` is
+    // the same algebra collapsed to canonical sum-of-products form,
+    // making it suitable for provenance-equivalence checks across
+    // syntactically different circuits.
     'formula':     { label: 'Formula',                    group: 'lin',
                      needsMapping: true,  types: null,                hint: null },
+    'how':         { label: 'How-provenance',             group: 'lin',
+                     needsMapping: true,  types: null,
+                     hint: 'Canonical N[X] polynomial; equal circuits collapse to the same string.' },
     'why':         { label: 'Why-provenance',             group: 'lin',
                      needsMapping: true,  types: null,                hint: null },
     'which':       { label: 'Which-provenance',          group: 'lin',

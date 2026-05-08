@@ -717,6 +717,7 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
     # Lineage.
     "why":      {"func": "sr_why",      "types": None},
     "which":    {"func": "sr_which",    "types": None},
+    "how":      {"func": "sr_how",      "types": None},
     # Numeric / scoring.
     "counting":    {"func": "sr_counting",    "types": _NUMERIC_TYPES},
     "tropical":    {"func": "sr_tropical",    "types": _NUMERIC_TYPES},

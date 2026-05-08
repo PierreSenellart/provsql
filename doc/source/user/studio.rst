@@ -251,9 +251,13 @@ custom and "Other" entries below:
 * **Compiled semirings**
 
   * *Boolean*: ``boolexpr``, ``boolean``.
-  * *Lineage*: ``formula``, ``why``, ``which``. ``formula`` is the
-    canonical free-polynomial expression (Green-Karvounarakis-Tannen),
-    a strict refinement of the set-valued ``why`` and ``which``.
+  * *Lineage*: ``formula``, ``how``, ``why``, ``which``. ``formula``
+    pretty-prints the provenance circuit as a symbolic expression
+    (Green-Karvounarakis-Tannen); ``how`` is the same algebra in
+    canonical :math:`\mathbb{N}[X]` sum-of-products form, so two
+    semantically-equal circuits collapse to identical strings :
+    suitable for provenance-aware equivalence checks. ``why`` and
+    ``which`` are the set-valued projections.
   * *Numeric*: ``counting``, ``tropical``, ``viterbi``,
     ``lukasiewicz``. Łukasiewicz is the continuous-valued fuzzy logic
     on numeric values in :math:`[0, 1]`; for the discrete fuzzy /
@@ -291,8 +295,8 @@ the numeric base types (``smallint`` / ``integer`` / ``bigint`` /
 group, only multirange-typed mappings under ``interval-union``, and
 only mappings whose ``value`` column is a user-defined enum
 (``pg_type.typtype = 'e'``) under ``minmax`` / ``maxmin``.
-Polymorphic entries (``boolexpr``, ``formula``, ``why``, ``which``)
-accept any mapping. ``boolexpr`` and ``PROV-XML export`` accept the
+Polymorphic entries (``boolexpr``, ``formula``, ``how``, ``why``,
+``which``) accept any mapping. ``boolexpr`` and ``PROV-XML export`` accept the
 mapping as *optional*: with one, leaves are labelled by the mapping's
 ``value`` column; without one, leaves carry their gate UUID
 (``PROV-XML``) or a bare ``x<id>`` placeholder (``boolexpr``). Custom-
@@ -494,8 +498,8 @@ Limitations
   frontier expansions can exceed the cap. This is intentional: the
   cap exists to keep the browser responsive on initial render, not
   to prevent drilling deep where you want to.
-* **Verbose semiring outputs are unbounded**: ``formula``, ``why``,
-  ``which``, and ``PROV-XML export`` can return multi-megabyte
+* **Verbose semiring outputs are unbounded**: ``formula``, ``how``,
+  ``why``, ``which``, and ``PROV-XML export`` can return multi-megabyte
   strings on large circuits. Compute time is bounded by
   ``statement_timeout``; output size is not. Use :guilabel:`Clear` after a
   bulky run, or evaluate against a pinned subnode to scope the
