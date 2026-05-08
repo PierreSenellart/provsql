@@ -18,7 +18,9 @@
  * - @c plus()   → multirange union (@c multirange_union)
  * - @c times()  → multirange intersection (@c multirange_intersect)
  * - @c monus()  → multirange set difference (@c multirange_minus)
- * - @c delta()  → @c zero() if input is empty, @c one() otherwise
+ * - @c delta()  → identity (preserves the supporting multirange so that
+ *                 aggregated groups carry the actual time/parameter region
+ *                 of contributing rows rather than the universal range)
  *
  * Absorptivity: `absorptive()` returns `true`. With inputs being subsets
  * of the universal range, @f$\mathbb{1} \oplus a = (-\infty,+\infty) \cup a
@@ -104,8 +106,7 @@ virtual value_type monus(value_type x, value_type y) const override
 }
 virtual value_type delta(value_type x) const override
 {
-  MultirangeType *mr = DatumGetMultirangeTypeP(x);
-  return MultirangeIsEmpty(mr) ? zero() : one();
+  return x;
 }
 virtual bool absorptive() const override {
   return true;
