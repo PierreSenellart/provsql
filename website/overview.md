@@ -39,6 +39,18 @@ The rewriter handles:
 Semiring evaluations, probability computation, and Shapley/Banzhaf values
 are described in the [user documentation](/docs/).
 
+## ProvSQL Studio {#studio}
+
+[ProvSQL Studio](/docs/user/studio.html) is a web UI for provenance
+inspection that pairs with the extension. It runs as a separate Python
+package (on PyPI as
+[`provsql-studio`](https://pypi.org/project/provsql-studio/)), connects
+to any ProvSQL-enabled PostgreSQL database, and offers two complementary
+modes: a **Circuit** view that renders the provenance DAG behind a
+result token with on-the-fly semiring evaluation on any pinned subnode,
+and a **Where** view that highlights, on hover, the source cells that
+contributed to each output value.
+
 ## Lean Formalization {#lean}
 
 Key parts of the algebraic framework underlying ProvSQL – m-semirings,
