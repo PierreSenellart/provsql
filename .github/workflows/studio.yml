@@ -71,12 +71,15 @@ jobs:
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30
-      - run: pip install -e "./studio[test]"
+      # `setup-python` exports `pythonLocation` but doesn't add its bin/ to
+      # PATH inside a container, so call pip / pytest via `python -m` to
+      # bind to the matrix-selected interpreter.
+      - run: python -m pip install -e "./studio[test]"
       # Unit suite only -- the Playwright e2e tests run in the `e2e` job
       # below, which adds the chromium download + system deps step. Keeping
       # them separate makes triage easier when one set fails and the other
       # doesn't.
-      - run: pytest studio/tests --ignore=studio/tests/e2e
+      - run: python -m pytest studio/tests --ignore=studio/tests/e2e
         env:
           PGUSER: postgres
 
@@ -101,11 +104,11 @@ jobs:
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30
-      - run: pip install -e "./studio[test]"
+      - run: python -m pip install -e "./studio[test]"
       # `--with-deps` apt-installs chromium's system libs; the container
       # runs as root so no sudo is needed. Browser binary download is
       # ~112 MiB.
-      - run: playwright install --with-deps chromium
-      - run: pytest studio/tests/e2e
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest studio/tests/e2e
         env:
           PGUSER: postgres
