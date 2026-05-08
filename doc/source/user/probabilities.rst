@@ -45,6 +45,10 @@ result holds, given the assigned input probabilities:
 The function accepts an optional second argument specifying the computation
 method, and an optional third argument for method-specific parameters.
 
+ProvSQL Studio's :ref:`evaluation strip <studio-circuit-eval-strip>`
+exposes :sqlfunc:`probability_evaluate` interactively, with method
+and arguments selectors.
+
 Computation Methods
 ^^^^^^^^^^^^^^^^^^^^
 

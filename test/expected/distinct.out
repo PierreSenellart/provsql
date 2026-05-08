@@ -4,9 +4,9 @@ remove_provenance
 (1 row)
 classification|formula
 unclassified|John
-restricted|(Nancy ⊕ Paul)
+restricted|Nancy ⊕ Paul
 confidential|Dave
-secret|(Ellen ⊕ Susan)
+secret|Ellen ⊕ Susan
 top_secret|Magdalen
 (5 rows)
 remove_provenance

@@ -27,7 +27,7 @@ remove_provenance
 (1 row)
 gate_type|depth|n
 plus|0|1
-input|1|1
+input|1|2
 (2 rows)
 remove_provenance
 

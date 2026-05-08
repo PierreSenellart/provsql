@@ -50,8 +50,7 @@
          "doc/tutorial",
          "doc/demo",
          "doc/aggregation",
-         "doc/temporal_demo",
-         "where_panel"
+         "doc/temporal_demo"
       ]
    },
    "meta-spec": {

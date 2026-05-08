@@ -57,3 +57,19 @@ perspective, queries are unchanged: each result row simply gains an extra
 ``provsql`` UUID column that identifies its provenance circuit gate. All
 subsequent computations (probability, Shapley values, semiring evaluation)
 operate on these tokens through ordinary SQL function calls.
+
+Where to Start
+---------------
+
+Two complementary entry points:
+
+* :doc:`tutorial` and :doc:`casestudy1` (and the four case studies that
+  follow) walk through ProvSQL's features as a sequence of ``psql``
+  (the PostgreSQL command-line client) sessions, each anchored on a
+  real-world dataset.
+* :doc:`studio` is a Python-backed web UI for ProvSQL: point it at any
+  ProvSQL-enabled database and you get hover-to-trace where-provenance,
+  an interactive circuit visualiser, and an evaluation strip that runs
+  any of the compiled or custom semirings (and probability) against
+  the current circuit. Studio is the recommended way to explore
+  provenance interactively while reading the user guide.

@@ -69,11 +69,19 @@ agg_token_in(PG_FUNCTION_ARGS)
 
 PG_FUNCTION_INFO_V1(agg_token_out);
 /**
- * @brief Produce a human-readable display string for an @c agg_token.
+ * @brief Produce a display string for an @c agg_token.
  *
- * Returns @c "value (*)", i.e. the running value followed by @c " (*)".
- * This is the output used by @c EXPLAIN and direct @c CAST to text.
- * @return C-string representation of the agg_token value.
+ * Default: returns @c "value (*)" (the running value followed by
+ * @c " (*)"), matching @c EXPLAIN and direct @c CAST to text.
+ *
+ * When the @c provsql.aggtoken_text_as_uuid GUC is on, returns the
+ * underlying provenance UUID instead. This is the form ProvSQL
+ * Studio enables per session so agg_token cells in a result table
+ * expose the circuit root UUID for click-through; the user-facing
+ * @c "value (*)" string is recovered via the
+ * @c provsql.agg_token_value_text(uuid) helper.
+ *
+ * @return C-string representation of the agg_token.
  */
 Datum
 agg_token_out(PG_FUNCTION_ARGS)
@@ -81,7 +89,10 @@ agg_token_out(PG_FUNCTION_ARGS)
   agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
   char *result;
 
-  result = psprintf("%s (*)", aggtok->val);
+  if (provsql_aggtoken_text_as_uuid)
+    result = psprintf("%s", aggtok->tok);
+  else
+    result = psprintf("%s (*)", aggtok->val);
 
   PG_RETURN_CSTRING(result);
 }

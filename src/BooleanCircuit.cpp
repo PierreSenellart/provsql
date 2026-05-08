@@ -110,13 +110,39 @@ gate_t BooleanCircuit::addGate()
 
 std::string BooleanCircuit::toString(gate_t g) const
 {
+  return toStringHelper(g, BooleanGate::UNDETERMINED, nullptr);
+}
+
+std::string BooleanCircuit::toString(
+  gate_t g,
+  const std::unordered_map<gate_t, std::string> &labels) const
+{
+  return toStringHelper(g, BooleanGate::UNDETERMINED, &labels);
+}
+
+std::string BooleanCircuit::toStringHelper(
+  gate_t g,
+  BooleanGate parent,
+  const std::unordered_map<gate_t, std::string> *labels) const
+{
   std::string op;
   std::string result;
+  auto gtype = getGateType(g);
 
-  switch(getGateType(g)) {
+  switch(gtype) {
   case BooleanGate::IN:
+    if(labels) {
+      auto it = labels->find(g);
+      if(it != labels->end())
+        return it->second;
+    }
     return "x"+to_string(g);
   case BooleanGate::MULIN:
+    if(labels) {
+      auto it = labels->find(g);
+      if(it != labels->end())
+        return it->second + "[" + std::to_string(getProb(g)) + "]";
+    }
     return "{" + to_string(*getWires(g).begin()) + "=" + std::to_string(getInfo(g)) + "}[" + std::to_string(getProb(g)) + "]";
   case BooleanGate::NOT:
     op="¬";
@@ -135,21 +161,31 @@ std::string BooleanCircuit::toString(gate_t g) const
   }
 
   if(getWires(g).empty()) {
-    if(getGateType(g)==BooleanGate::AND)
+    if(gtype==BooleanGate::AND)
       return "⊤";
-    else if(getGateType(g)==BooleanGate::OR)
+    else if(gtype==BooleanGate::OR)
       return "⊥";
     else return op;
   }
 
   for(auto s: getWires(g)) {
-    if(getGateType(g)==BooleanGate::NOT)
+    if(gtype==BooleanGate::NOT)
       result = op;
     else if(!result.empty())
       result+=" "+op+" ";
-    result+=toString(s);
+    result+=toStringHelper(s, gtype, labels);
   }
 
+  // Parenthesis elision:
+  //   * single-wire AND/OR: the join carries no information, drop the wrap.
+  //   * root call (parent = UNDETERMINED): no enclosing context, drop the wrap.
+  //   * same-op nesting (parent == gtype, AND/OR only): associative, drop the wrap.
+  bool single_join = (gtype==BooleanGate::AND || gtype==BooleanGate::OR)
+                     && getWires(g).size()==1;
+  bool same_op_assoc = (gtype==BooleanGate::AND || gtype==BooleanGate::OR)
+                       && parent==gtype;
+  if(single_join || parent==BooleanGate::UNDETERMINED || same_op_assoc)
+    return result;
   return "("+result+")";
 }
 
@@ -412,6 +448,26 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
             "directory to provsql.tool_search_path");
 
   int retvalue=run_external_tool(cmdline);
+
+  // PG's StatementTimeoutHandler (and pg_cancel_backend, etc.) sends
+  // SIGINT to the whole process group via kill(-MyProcPid, SIGINT).
+  // The child compiler in our group dies on default SIGINT, but
+  // glibc system() temporarily SIG_IGNs SIGINT in the parent for the
+  // duration of the wait, so the same signal is silently discarded
+  // here and InterruptPending / QueryCancelPending are never set.
+  // Translate that wstatus into a proper PG cancel so the
+  // CHECK_FOR_INTERRUPTS below raises 57014 instead of us either
+  // throwing "Error executing", or falling through to the legacy
+  // d4-syntax retry on the corpse (which then mis-parses an empty
+  // .nnf as "Unreadable d-DNNF" XX000).
+#ifndef TDKC
+  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+  }
+#endif
+
+  CHECK_FOR_INTERRUPTS();
 
   // PG's StatementTimeoutHandler (and pg_cancel_backend, etc.) sends
   // SIGINT to the whole process group via kill(-MyProcPid, SIGINT).

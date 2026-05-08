@@ -3,6 +3,8 @@ main:
     url: /overview/
   - title: "Documentation"
     url: /docs/
+  - title: "Studio"
+    url: /docs/user/studio.html
   - title: "Publications"
     url: /publications/
   - title: "Contributors"

@@ -8,6 +8,8 @@ all settable per session with ``SET`` or permanently in
 or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdatabase.html>`_
 / `ALTER ROLE <https://www.postgresql.org/docs/current/sql-alterrole.html>`_.
 
+.. _provsql-active:
+
 ``provsql.active`` (default: ``on``)
     Master switch. When ``off``, ProvSQL drops all provenance annotations
     silently, as if the extension were not loaded. Useful to temporarily
@@ -22,6 +24,8 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     Enable provenance tracking for ``INSERT``, ``UPDATE``, and ``DELETE``
     statements (see :doc:`data-modification`). Requires PostgreSQL ≥ 14.
 
+.. _provsql-verbose-level:
+
 ``provsql.verbose_level`` (default: ``0``)
     Controls the verbosity of ProvSQL diagnostic messages. ``0`` is silent.
     The meaningful thresholds are:
@@ -35,6 +39,17 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     * **≥ 40** – also print the time spent by the planner on rewriting.
     * **≥ 50** – also print the full internal parse-tree representation of
       the query before and after rewriting.
+
+``provsql.aggtoken_text_as_uuid`` (default: ``off``)
+    Controls how an ``agg_token`` cell renders as text. By default the
+    output function returns the human-friendly ``"value (*)"`` form, where
+    *value* is the running aggregate state. When set to ``on``, it returns
+    the underlying provenance UUID instead. UI layers (notably ProvSQL
+    Studio) flip this on per session so aggregate cells expose the circuit
+    root UUID for click-through; the user-facing display string is recovered
+    via :sqlfunc:`agg_token_value_text` for any such UUID. Has no effect on
+    ``EXPLAIN`` output, on the underlying storage, or on numeric / casting
+    behaviour of ``agg_token``.
 
 ``provsql.tool_search_path`` (default: empty)
     Colon-separated list of directories prepended to ``PATH`` when ProvSQL

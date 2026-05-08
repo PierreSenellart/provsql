@@ -58,6 +58,47 @@ static std::string join(Range const& elements, const char *const delimiter) {
   return os.str();
 }
 
+/**
+ * @brief If @p s is wrapped in a single matched outer paren pair AND its
+ *        top-level operator (depth 1, inside that pair) is @p op, return
+ *        the inner content; otherwise return @p s unchanged.
+ *
+ * Used by @c Formula::plus() and @c Formula::times() to flatten same-op
+ * nested gates by associativity: a child @c "(a ⊕ b)" feeding into a
+ * parent @c plus is unwrapped to @c "a ⊕ b" so the join produces
+ * @c "a ⊕ b ⊕ c" instead of @c "(a ⊕ b) ⊕ c". A different top-level op
+ * (e.g., a @c times child) keeps its parens.
+ */
+static std::string strip_wrap_if_op(const std::string &s, const std::string &op) {
+  if(s.size() < 2 || s.front() != '(' || s.back() != ')')
+    return s;
+  // Verify the leading '(' closes only at the very end : if any earlier
+  // ')' brings depth back to 0, the outer pair isn't a single matched
+  // wrap (e.g., @c "(a) ⊕ (b)" must not be stripped).
+  int depth = 0;
+  for(size_t i = 0; i < s.size() - 1; ++i) {
+    if(s[i] == '(') ++depth;
+    else if(s[i] == ')') {
+      if(--depth == 0)
+        return s;
+    }
+  }
+  // Scan inner for a depth-0 occurrence of @p op. UTF-8 operators are
+  // multi-byte but @c compare on raw bytes is correct since we never
+  // straddle a UTF-8 char boundary at depth-0 positions outside parens.
+  const std::string inner = s.substr(1, s.size() - 2);
+  depth = 0;
+  for(size_t i = 0; i + op.size() <= inner.size(); ) {
+    if(inner[i] == '(') { ++depth; ++i; }
+    else if(inner[i] == ')') { --depth; ++i; }
+    else if(depth == 0 && inner.compare(i, op.size(), op) == 0)
+      return inner;
+    else
+      ++i;
+  }
+  return s;
+}
+
 namespace semiring {
 /**
  * @brief Symbolic provenance representation over @c std::string.
@@ -80,16 +121,26 @@ virtual value_type plus(const std::vector<value_type> &v) const override {
     return zero();
   else if(v.size()==1)
     return v[0];
-  else
-    return "("+join(v, " ⊕ ")+")";
+  // Flatten same-op nesting by associativity: a child "(a ⊕ b)" is
+  // inlined as "a ⊕ b" so the join produces "a ⊕ b ⊕ c", not
+  // "(a ⊕ b) ⊕ c". Mixed-op children (e.g., a times subexpression)
+  // keep their parens.
+  std::vector<value_type> flat;
+  flat.reserve(v.size());
+  for(const auto &x : v)
+    flat.push_back(strip_wrap_if_op(x, "⊕"));
+  return "("+join(flat, " ⊕ ")+")";
 }
 virtual value_type times(const std::vector<value_type> &v) const override {
   if(v.size()==0)
     return one();
   else if(v.size()==1)
     return v[0];
-  else
-    return "("+join(v, " ⊗ ")+")";
+  std::vector<value_type> flat;
+  flat.reserve(v.size());
+  for(const auto &x : v)
+    flat.push_back(strip_wrap_if_op(x, "⊗"));
+  return "("+join(flat, " ⊗ ")+")";
 }
 virtual value_type monus(value_type x, value_type y) const override
 {
@@ -217,6 +268,26 @@ virtual value_type value(const std::string &s) const override {
 }
 value_type parse_leaf(const char *v) const {
   return std::string(v);
+}
+/**
+ * @brief Serialise a Formula evaluation as text.
+ *
+ * Drops the cosmetic outer paren pair that @c plus / @c times / @c monus
+ * always produce: at the root there is no enclosing context, so the
+ * outer parens carry no disambiguation value.
+ */
+std::string to_text(const value_type &s) const {
+  if(s.size() < 2 || s.front() != '(' || s.back() != ')')
+    return s;
+  int depth = 0;
+  for(size_t i = 0; i < s.size() - 1; ++i) {
+    if(s[i] == '(') ++depth;
+    else if(s[i] == ')') {
+      if(--depth == 0)
+        return s;
+    }
+  }
+  return s.substr(1, s.size() - 2);
 }
 };
 }

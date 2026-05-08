@@ -1,6 +1,6 @@
 ---
-name: Bug report
-about: Report a bug or unexpected behaviour in ProvSQL
+name: Bug report (extension)
+about: Report a bug or unexpected behaviour in the ProvSQL PostgreSQL extension. For Studio (web UI) bugs, use the Studio template instead.
 title: ''
 labels: bug
 ---

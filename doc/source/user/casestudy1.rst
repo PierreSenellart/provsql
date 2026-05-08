@@ -442,8 +442,10 @@ Step 14: The Boolean Expression Behind a Token
 ------------------------------------------------
 
 :sqlfunc:`sr_boolexpr` returns the abstract Boolean formula of a provenance
-circuit, using internal variable names ``x0``, ``x1``, … instead of a
-user-supplied mapping. This is the same expression ProvSQL hands to its
+circuit. Without a mapping it uses internal variable names ``x0``,
+``x1``, …; with an optional second argument naming a provenance
+mapping table the leaves are labelled by the mapping's ``value``
+column instead. This is the same expression ProvSQL hands to its
 d-DNNF compilers internally to compute probabilities.
 
 .. code-block:: postgresql
@@ -464,9 +466,10 @@ from Step 5, interpreted in the Boolean function semiring – every
 provenance gate is mapped to its Boolean counterpart (``⊕`` to ``∨``,
 ``⊗`` to ``∧``, ``⊖`` to ``∧¬``) – and the resulting Boolean function
 rendered as a formula over anonymous variables. Unlike
-:sqlfunc:`sr_formula`, no provenance mapping is required: the
+:sqlfunc:`sr_formula`, the provenance mapping is optional: the
 expression captures the circuit's logical structure independently of
-any naming.
+any naming, and a mapping can be supplied later if you want the
+leaves labelled.
 
 
 Step 15: Programmatic Circuit Inspection

@@ -1,31 +1,38 @@
 FROM debian:bookworm
 
 ARG PROVSQL_VERSION=dev
+ARG PSQL_VERSION=17
+
 LABEL maintainer=pierre@senellart.com
 LABEL org.opencontainers.image.version="${PROVSQL_VERSION}"
 
-# Copy the source into /opt/provsql
-COPY . /opt/provsql
-WORKDIR /opt/provsql
-
-# needed to build provsql the tools
-RUN apt-get update &&\
-    apt-get -y install git build-essential curl\
-               libc6-i386 unzip mercurial libgmp-dev libboost-dev\
-               libboost-serialization-dev iproute2
-
-# Specify which version we are building against
-ARG PSQL_VERSION=15
-ENV PSQL_VERSION=$PSQL_VERSION
-
-RUN apt-get update &&\
-    apt-get -y install zlib1g-dev postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION}
-
 # Ensure a sane environment
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive
-
-# Ensure that bash is the default shell
 ENV SHELL=/bin/bash
+ENV PSQL_VERSION=$PSQL_VERSION
+
+# Single apt-get install for: ProvSQL build deps, external-tool clone
+# deps, the postgresql server matching $PSQL_VERSION, demo.sh
+# utilities (iproute2 for `ip`), the Studio runtime stack
+# (python3 + venv + graphviz), and libgraph-easy-perl for the
+# extension's ASCII view_circuit rendering. Consolidating all deps
+# into one RUN keeps the image to a single apt layer and a single
+# apt-get update.
+#
+# Debian bookworm ships PostgreSQL 15; for any other PG, we add the
+# PGDG apt source first via postgresql-common's bundled installer so
+# `postgresql-${PSQL_VERSION}` resolves for the whole supported range.
+RUN apt-get update &&\
+    apt-get -y install postgresql-common ca-certificates curl gnupg &&\
+    /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y &&\
+    apt-get -y install \
+        build-essential git mercurial unzip \
+        libc6-i386 libgmp-dev libboost-dev libboost-serialization-dev \
+        zlib1g-dev iproute2 \
+        postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION} \
+        python3 python3-pip python3-venv \
+        graphviz libgraph-easy-perl &&\
+    rm -rf /var/lib/apt/lists/*
 
 
 ############################## GETTING ADD-ON TOOLS ##############################
@@ -62,12 +69,19 @@ RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 
 ##############################   GETTING  PROVSQL  ##############################
 
-# Provsql will be built & run as user postgres
-RUN chown -R postgres:postgres /opt/provsql
+# Copy the source AFTER apt + external-tool builds so a source-only
+# change does not invalidate those (long) cache layers.
+# `--chown=postgres:postgres` writes the files into the new layer
+# already owned by `postgres`, avoiding a separate `chown -R` step
+# (which would force overlay2 to copy-up every file just to change
+# ownership : a 5x slowdown on a tree this large).
+COPY --chown=postgres:postgres . /opt/provsql
+WORKDIR /opt/provsql
+
 USER postgres
 
-# Building
-RUN make
+# Building (parallelize across all available cores)
+RUN make -j$(nproc)
 
 # install provsql
 USER root
@@ -100,9 +114,28 @@ RUN echo "host all all ::/0 trust" >> /etc/postgresql/${PSQL_VERSION}/main/pg_hb
 USER postgres
 RUN /usr/bin/pg_ctlcluster $PSQL_VERSION main start
 
+##############################   GETTING  STUDIO   ##############################
+
 USER root
-RUN apt-get update &&\
-    apt-get -y install apache2 libapache2-mod-php php-pgsql graphviz libgraph-easy-perl
+
+# Studio install path. By default, install the released `provsql-studio`
+# from PyPI at `STUDIO_VERSION`. To build the image *before* the matching
+# Studio has been published (e.g. for the simultaneous-release rehearsal),
+# pass `--build-arg STUDIO_SOURCE=/opt/provsql/studio` to install in
+# editable mode from the source already copied into the image.
+ARG STUDIO_VERSION=1.0.0
+ARG STUDIO_SOURCE=
+
+# Debian bookworm's Python 3.11 enforces PEP 668, so we install Studio
+# into a venv rather than the system site-packages. Prepending the venv's
+# bin/ to PATH makes `provsql-studio` reachable everywhere.
+RUN python3 -m venv /opt/studio-venv &&\
+    if [ -n "$STUDIO_SOURCE" ]; then \
+        /opt/studio-venv/bin/pip install -e "$STUDIO_SOURCE"; \
+    else \
+        /opt/studio-venv/bin/pip install "provsql-studio==$STUDIO_VERSION"; \
+    fi
+ENV PATH="/opt/studio-venv/bin:$PATH"
 
 CMD ["/bin/bash", "/opt/provsql/docker/demo.sh"]
-EXPOSE 80
+EXPOSE 8000

@@ -1,0 +1,24 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+pg_typeof
+agg_token
+(1 row)
+provsql.aggtoken_text_as_uuid
+off
+(1 row)
+provsql.aggtoken_text_as_uuid
+on
+(1 row)
+provsql.aggtoken_text_as_uuid
+off
+(1 row)
+city|display
+Berlin|2 (*)
+New York|2 (*)
+Paris|3 (*)
+(3 rows)
+not_an_agg
+t
+(1 row)

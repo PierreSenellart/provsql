@@ -67,8 +67,32 @@ void MMappedCircuit::createGate(
   pg_uuid_t token, gate_type type, const std::vector<pg_uuid_t> &children)
 {
   auto [idx, created] = mapping.add(token);
-  if(!created) // Was already existing, no need to do anything
+  if(!created) {
+    // The gate may have been lazy-added as a default gate_input below
+    // (when an earlier-arriving parent createGate referenced it as a
+    // child whose own createGate had not yet been received). Under
+    // concurrent backends, parent/child IPCs from different sessions
+    // can be interleaved such that the parent's lazy-add wins and the
+    // real create for the child is then silently dropped. Detect that
+    // case and upgrade the placeholder in place; otherwise leave the
+    // existing gate alone (real duplicate creation, idempotent).
+    bool placeholder = gates[idx].type == gate_input
+                       && gates[idx].nb_children == 0;
+    bool real_create = type != gate_input || !children.empty();
+    if(placeholder && real_create) {
+      gates[idx].type = type;
+      gates[idx].nb_children = static_cast<unsigned>(children.size());
+      gates[idx].children_idx = wires.nbElements();
+      for(const auto &c: children)
+        wires.add(c);
+      for(const auto &c: children) {
+        auto [child_idx, child_created] = mapping.add(c);
+        if(child_created)
+          gates.add({gate_input, 0, wires.nbElements()});
+      }
+    }
     return;
+  }
 
   gates.add({type, static_cast<unsigned>(children.size()), wires.nbElements()});
   for(const auto &c: children)

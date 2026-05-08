@@ -88,6 +88,13 @@ Chapters
 :doc:`build-system`
    The two-Makefile structure, PGXS integration, PostgreSQL version
    guards, generated SQL files, ``make website`` / ``make deploy``,
-   ``release.sh``, and CI workflows.
+   ``release.sh``, the Studio release pipeline, and CI workflows.
+
+:doc:`studio`
+   ProvSQL Studio's source-code architecture: the Python module
+   layout, the HTTP API surface, the Where / Circuit frontend
+   split, per-batch GUC application, on-disk Config persistence,
+   the circuit-fetch + frontier-expansion pipeline, and the unit +
+   Playwright test harness.
 
 

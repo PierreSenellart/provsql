@@ -973,16 +973,20 @@ LANGUAGE sql;
 /**
  * @brief BFS expansion of a provenance circuit, capped at @p max_depth
  *
- * Returns one row per node reachable from @p root within
- * <tt>max_depth</tt> edges, including the root itself (with
- * <tt>parent</tt> and <tt>child_pos</tt> NULL).  Each node appears
- * exactly once; for a node reachable through several paths, the
- * (<tt>parent</tt>, <tt>child_pos</tt>) returned is the one with
- * lowest BFS depth, breaking ties by lowest <tt>child_pos</tt>.  A
- * node returned with <tt>depth = max_depth</tt> may have unexplored
- * children; the caller can detect this by comparing
- * <tt>provsql.get_children</tt> length against the number of edges
- * reported.
+ * Returns one row per (parent, child) edge in the BFS-bounded subgraph
+ * rooted at @p root, plus one row for the root with <tt>parent</tt> and
+ * <tt>child_pos</tt> NULL.  Provenance circuits are DAGs, so a child gate
+ * may have several parents within the bound; each such edge is reported
+ * as a separate row, so callers must deduplicate on <tt>node</tt> if they
+ * need a one-row-per-node view.
+ *
+ * <tt>depth</tt> is the node's BFS depth (its shortest distance from
+ * @p root), so for an edge (parent, child) it is always the case that
+ * <tt>parent.depth + 1 &gt;= child.depth</tt>; equality holds only on
+ * shortest-path edges.  A node at <tt>depth = max_depth</tt> is not
+ * expanded; callers can detect a partial expansion by comparing
+ * <tt>provsql.get_children</tt> length against the number of outgoing
+ * edges reported.
  *
  * <tt>info1</tt> and <tt>info2</tt> are the integer values stored on
  * the gate by <tt>provsql.set_infos</tt>, formatted as text; their
@@ -1003,22 +1007,31 @@ $$
       WITH ORDINALITY AS c(t, idx)
     WHERE b.depth < max_depth
   ),
-  dedup AS (
-    SELECT DISTINCT ON (node) node, parent, child_pos, depth
-    FROM bfs
-    ORDER BY node, depth, child_pos NULLS FIRST
+  -- Each node's canonical depth is its shortest-path distance from the root.
+  -- Tie-breaking on child_pos is irrelevant for the depth value but kept so
+  -- the (now informational) row order is stable.
+  node_depth AS (
+    SELECT node, MIN(depth) AS depth FROM bfs GROUP BY node
+  ),
+  -- All distinct (parent, child, child_pos) triples seen during the BFS.
+  -- A child reached from k parents within the bound contributes k rows.
+  -- Self-joins (times(x, x)) contribute one row per child position.
+  edges AS (
+    SELECT DISTINCT parent, node AS child, child_pos
+    FROM bfs WHERE parent IS NOT NULL
   )
   SELECT
     d.node,
-    d.parent,
-    d.child_pos,
+    e.parent,
+    e.child_pos,
     provsql.get_gate_type(d.node)::TEXT,
     i.info1::TEXT,
     i.info2::TEXT,
     d.depth
-  FROM dedup d
+  FROM node_depth d
+  LEFT JOIN edges e ON e.child = d.node
   LEFT JOIN LATERAL provsql.get_infos(d.node) i ON TRUE
-  ORDER BY d.depth, d.node;
+  ORDER BY d.depth, d.node, e.parent;
 $$ LANGUAGE sql STABLE PARALLEL SAFE;
 
 /**
@@ -1085,6 +1098,14 @@ $$ LANGUAGE plpgsql STABLE;
  *  displayed in a specific way (as the result of the aggregation
  *  followed by a "(*)") to help with readability.
  *
+ *  The text output is controlled by the
+ *  <tt>provsql.aggtoken_text_as_uuid</tt> GUC. By default it is off and
+ *  the cell renders as <tt>"value (*)"</tt>. When set to on (typical
+ *  for UI layers such as ProvSQL Studio), the cell renders as the
+ *  underlying UUID instead, so the caller can click through to the
+ *  provenance circuit; the value side is then recovered via
+ *  <tt>provsql.agg_token_value_text(uuid)</tt>.
+ *
  *  @{
  */
 
@@ -1095,10 +1116,25 @@ CREATE OR REPLACE FUNCTION agg_token_in(cstring)
   RETURNS agg_token
   AS 'provsql','agg_token_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief Output function for the agg_token type (produces text representation) */
+/**
+ * @brief Output function for the agg_token type
+ *
+ * Default: produces the human-friendly @c "value (*)" form, where
+ * @c value is the running aggregate state.
+ *
+ * When the @c provsql.aggtoken_text_as_uuid GUC is on, returns the
+ * underlying provenance UUID instead. UI layers (notably ProvSQL
+ * Studio) flip this on per session so aggregate cells expose the
+ * circuit root UUID for click-through; the @c "value (*)" display
+ * string is recovered via @c provsql.agg_token_value_text(uuid).
+ *
+ * Marked STABLE rather than IMMUTABLE because the chosen output
+ * shape now depends on a GUC that the same session can flip at
+ * runtime.
+ */
 CREATE OR REPLACE FUNCTION agg_token_out(agg_token)
   RETURNS cstring
-  AS 'provsql','agg_token_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+  AS 'provsql','agg_token_out' LANGUAGE C STABLE STRICT PARALLEL SAFE;
 
 /** @brief Cast an agg_token to its text representation */
 CREATE OR REPLACE FUNCTION agg_token_cast(agg_token)
@@ -1123,6 +1159,32 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 
 /** @brief Implicit PostgreSQL cast from agg_token to UUID (delegates to agg_token_uuid()) */
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
+
+/**
+ * @brief Recover the @c "value (*)" display string for an aggregation gate
+ *
+ * Companion helper to the @c provsql.aggtoken_text_as_uuid GUC. With
+ * the GUC on, an @c agg_token cell prints as the underlying provenance
+ * UUID, which is convenient for tooling that wants to click through to
+ * the circuit but loses the human-readable aggregate value. This
+ * function takes such a UUID and returns the original @c "value (*)"
+ * string by reading the gate's @c extra (set by aggregate evaluation
+ * to the computed scalar). Returns @c NULL if @p token does not
+ * resolve to an @c agg gate.
+ *
+ * @param token UUID of an @c agg gate (typically obtained from an
+ *              @c agg_token cell when @c aggtoken_text_as_uuid is on,
+ *              or via a manual UUID cast otherwise).
+ */
+CREATE OR REPLACE FUNCTION agg_token_value_text(token UUID)
+  RETURNS text AS
+$$
+  SELECT CASE
+    WHEN provsql.get_gate_type(token) = 'agg'
+      THEN provsql.get_extra(token) || ' (*)'
+    ELSE NULL
+  END;
+$$ LANGUAGE sql STABLE STRICT PARALLEL SAFE;
 
 /** @brief Cast an agg_token to numeric (extracts the aggregate value, loses provenance) */
 CREATE OR REPLACE FUNCTION agg_token_to_numeric(agg_token)
@@ -1363,9 +1425,14 @@ BEGIN
   IF c = 0 THEN
     agg_tok := gate_zero();
   ELSE
+    -- aggfnoid must be part of the UUID: SUM(id) and AVG(id) over the
+    -- same children would otherwise collapse to a single gate, and
+    -- their concurrent set_infos calls would overwrite each other's
+    -- aggregation operator (resulting in the wrong agg_kind being
+    -- read by provsql_having under cross-backend contention).
     agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('agg',tokens));
+      concat('agg',aggfnoid,tokens));
     PERFORM create_gate(agg_tok, 'agg', tokens);
     PERFORM set_infos(agg_tok, aggfnoid, aggtype);
     PERFORM set_extra(agg_tok, agg_val);
@@ -1702,19 +1769,27 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
-/** @brief Evaluate provenance as a Boolean expression */
-CREATE FUNCTION sr_boolexpr(token ANYELEMENT)
+/** @brief Evaluate provenance as a Boolean expression
+ *
+ * The optional @p token2value mapping labels the leaves of the
+ * formula: when omitted, leaves are rendered as bare @c x@<id@>
+ * placeholders.
+ */
+CREATE FUNCTION sr_boolexpr(token ANYELEMENT, token2value regclass = NULL)
   RETURNS VARCHAR AS
 $$
 BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
   RETURN provsql.provenance_evaluate_compiled(
     token,
-    NULL,
+    token2value,
     'boolexpr',
     '⊤'::VARCHAR
   );
 END
-$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over the Boolean semiring (true/false) */
 CREATE FUNCTION sr_boolean(token ANYELEMENT, token2value regclass)

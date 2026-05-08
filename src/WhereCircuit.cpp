@@ -38,7 +38,7 @@ gate_t WhereCircuit::setGateProjection(const uuid &u, vector<int> &&infos)
   projection_info[id]=infos;
   return id;
 }
-  
+
 gate_t WhereCircuit::setGateEquality(const uuid &u, int pos1, int pos2)
 {
   auto id = setGate(u, WhereGate::EQ);
@@ -56,145 +56,163 @@ gate_t WhereCircuit::setGateInput(const uuid &u, string table, int nb_columns)
 
 string WhereCircuit::toString(gate_t g) const
 {
+  return toStringHelper(g, WhereGate::UNDETERMINED);
+}
+
+string WhereCircuit::toStringHelper(gate_t g, WhereGate parent) const
+{
   std::string op;
   string result;
+  auto gtype = getGateType(g);
 
-  switch(getGateType(g)) {
-    case WhereGate::IN:
-      return input_info.find(g)->second.first+":"+to_string(input_info.find(g)->second.second)+":"+input_token.find(g)->second;
-    case WhereGate::UNDETERMINED:
-      op="?";
-      break;
-    case WhereGate::TIMES:
-      op="⊗";
-      break;
-    case WhereGate::PLUS:
-      op="⊕";
-      break;
-    case WhereGate::PROJECT:
-      op="Π[";
-      {
-        bool first=true;
-        for(auto i : projection_info.find(g)->second) {
-          if(!first)
-            op+=",";
-          op+=to_string(i);
-          first=false;
-        }
+  switch(gtype) {
+  case WhereGate::IN:
+    return input_info.find(g)->second.first+":"+to_string(input_info.find(g)->second.second)+":"+input_token.find(g)->second;
+  case WhereGate::UNDETERMINED:
+    op="?";
+    break;
+  case WhereGate::TIMES:
+    op="⊗";
+    break;
+  case WhereGate::PLUS:
+    op="⊕";
+    break;
+  case WhereGate::PROJECT:
+    op="Π[";
+    {
+      bool first=true;
+      for(auto i : projection_info.find(g)->second) {
+        if(!first)
+          op+=",";
+        op+=to_string(i);
+        first=false;
       }
-      op+="]";
-      break;
-    case WhereGate::EQ:
-      op="=["+to_string(equality_info.find(g)->second.first)+","+to_string(equality_info.find(g)->second.second)+"]";  
+    }
+    op+="]";
+    break;
+  case WhereGate::EQ:
+    op="=["+to_string(equality_info.find(g)->second.first)+","+to_string(equality_info.find(g)->second.second)+"]";
   }
 
   for(auto s: getWires(g)) {
-    if(getGateType(g)==WhereGate::PROJECT || getGateType(g)==WhereGate::EQ)
+    if(gtype==WhereGate::PROJECT || gtype==WhereGate::EQ)
       result = op;
     else if(!result.empty())
       result+=" "+op+" ";
-    result+=toString(s);
+    result+=toStringHelper(s, gtype);
   }
 
+  // Parenthesis elision (mirrors BooleanCircuit::toStringHelper):
+  //   * single-wire TIMES/PLUS: drop the now-meaningless wrap.
+  //   * root call (parent = UNDETERMINED): drop the outer wrap.
+  //   * same-op nesting (parent == gtype, TIMES/PLUS only): associative.
+  // PROJECT and EQ keep their parens so the prefix-bracketed shape
+  // (e.g., @c =[i,j](...)) renders unambiguously inside a parent gate.
+  bool single_join = (gtype==WhereGate::TIMES || gtype==WhereGate::PLUS)
+                     && getWires(g).size()==1;
+  bool same_op_assoc = (gtype==WhereGate::TIMES || gtype==WhereGate::PLUS)
+                       && parent==gtype;
+  if(single_join || parent==WhereGate::UNDETERMINED || same_op_assoc)
+    return result;
   return "("+result+")";
 }
-  
-vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(gate_t g) const
+
+vector<set<WhereCircuit::Locator> > WhereCircuit::evaluate(gate_t g) const
 {
-  vector<set<Locator>> v;
+  vector<set<Locator> > v;
 
   switch(getGateType(g)) {
-    case WhereGate::IN:
-      {
-        string table=input_info.find(g)->second.first;
-        uuid tid=input_token.find(g)->second;
-        int nb_columns=input_info.find(g)->second.second;
-        for(int i=0;i<nb_columns;++i) {
-          set<Locator> s;
-          s.insert(Locator(table,tid,i+1));
-          v.push_back(s);
+  case WhereGate::IN:
+  {
+    string table=input_info.find(g)->second.first;
+    uuid tid=input_token.find(g)->second;
+    int nb_columns=input_info.find(g)->second.second;
+    for(int i=0; i<nb_columns; ++i) {
+      set<Locator> s;
+      s.insert(Locator(table,tid,i+1));
+      v.push_back(s);
+    }
+  }
+  break;
+
+  case WhereGate::TIMES:
+    if(getWires(g).empty())
+      throw CircuitException("No wire connected to ⊗ gate");
+
+    for(auto g2 : getWires(g)) {
+      if(v.empty())
+        v=evaluate(g2);
+      else {
+        vector<set<Locator> > w=evaluate(g2);
+        v.insert(v.end(), w.begin(), w.end());
+      }
+    }
+    break;
+
+  case WhereGate::PLUS:
+    if(getWires(g).empty())
+      throw CircuitException("No wire connected to ⊕ gate");
+
+    for(auto g2 : getWires(g)) {
+      if(v.empty())
+        v=evaluate(g2);
+      else {
+        vector<set<Locator> > w=evaluate(g2);
+        if(w.size()!=v.size())
+          throw CircuitException("Incompatible inputs for ⊕ gate");
+
+        for(size_t k=0; k<v.size(); ++k) {
+          v[k].insert(w[k].begin(), w[k].end());
         }
       }
-      break;
+    }
+    break;
 
-    case WhereGate::TIMES:
-      if(getWires(g).empty())
-        throw CircuitException("No wire connected to ⊗ gate");
+  case WhereGate::PROJECT:
+    if(getWires(g).size()!=1)
+      throw CircuitException("Not exactly one wire connected to Π gate");
 
-      for(auto g2 : getWires(g)) {
-        if(v.empty())
-          v=evaluate(g2);
-        else {
-          vector<set<Locator>> w=evaluate(g2);
-          v.insert(v.end(), w.begin(), w.end());
-        }
+    {
+      vector<set<Locator> > w=evaluate(*getWires(g).begin());
+      vector<int> positions=projection_info.find(g)->second;
+      for(auto i : positions) {
+        if(i==0 || i>(int)w.size())
+          v.push_back(set<Locator>());
+        else
+          v.push_back(w[i-1]);
       }
-      break;
+    }
+    break;
 
-    case WhereGate::PLUS:
-      if(getWires(g).empty())
-        throw CircuitException("No wire connected to ⊕ gate");
+  case WhereGate::EQ:
+    if(getWires(g).size()!=1)
+      throw CircuitException("Not exactly one wire connected to = gate");
 
-      for(auto g2 : getWires(g)) {
-        if(v.empty())
-          v=evaluate(g2);
-        else {
-          vector<set<Locator>> w=evaluate(g2);
-          if(w.size()!=v.size())
-            throw CircuitException("Incompatible inputs for ⊕ gate");
-
-          for(size_t k=0;k<v.size();++k) {
-            v[k].insert(w[k].begin(), w[k].end());
-          }
-        }
+    v=evaluate(*getWires(g).begin());
+    {
+      pair<int,int> positions=equality_info.find(g)->second;
+      if(positions.first>=1 && positions.first<=(int)v.size() &&
+         positions.second>=1 && positions.second<=(int)v.size()) {
+        v[positions.first-1].insert(v[positions.second-1].begin(), v[positions.second-1].end());
+        v[positions.second-1].insert(v[positions.first-1].begin(), v[positions.first-1].end());
       }
-      break;
+    }
+    break;
 
-    case WhereGate::PROJECT:
-      if(getWires(g).size()!=1)
-        throw CircuitException("Not exactly one wire connected to Π gate");
-
-      {
-        vector<set<Locator>> w=evaluate(*getWires(g).begin());
-        vector<int> positions=projection_info.find(g)->second;
-        for(auto i : positions) {
-          if(i==0 || i>(int)w.size())
-            v.push_back(set<Locator>());
-          else
-            v.push_back(w[i-1]);
-        }
-      }
-      break;
-
-    case WhereGate::EQ:
-      if(getWires(g).size()!=1)
-        throw CircuitException("Not exactly one wire connected to = gate");
-
-      v=evaluate(*getWires(g).begin());
-      {
-        pair<int,int> positions=equality_info.find(g)->second;
-        if(positions.first>=1 && positions.first<=(int)v.size() &&
-           positions.second>=1 && positions.second<=(int)v.size()) {
-          v[positions.first-1].insert(v[positions.second-1].begin(), v[positions.second-1].end());
-          v[positions.second-1].insert(v[positions.first-1].begin(), v[positions.first-1].end());
-        }
-      }
-      break;
-
-    default:
-      throw CircuitException("Wrong type of gate");
+  default:
+    throw CircuitException("Gate type not supported by where-provenance");
   }
 
   return v;
 }
-    
+
 bool WhereCircuit::Locator::operator<(WhereCircuit::Locator that) const
 {
-  if(this->table<that.table)
-    return true;
-  if(this->tid<that.tid)
-    return true;
-  return this->position<that.position;
+  if(this->table != that.table)
+    return this->table < that.table;
+  if(this->tid != that.tid)
+    return this->tid < that.tid;
+  return this->position < that.position;
 }
 
 std::string WhereCircuit::Locator::toString() const

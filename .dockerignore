@@ -1,0 +1,59 @@
+# Files Docker should not ship into the build context. Smaller
+# context means faster `COPY .` and a smaller image; tracked here
+# alongside `.gitignore` since the two have overlapping intent but
+# Docker uses its own ignore file.
+
+# Version control: huge tree of small objects, never useful inside
+# the image.
+.git/
+.gitignore
+.gitattributes
+
+# Local CI / IDE caches.
+.clangd
+.ccls-cache/
+.cache/
+compile_commands.json
+
+# Editor swap files.
+*.swp
+*~
+
+# Extension build artefacts.
+src/*.o
+src/*.bc
+*.so
+sql/provsql--*.sql
+sql/provsql.sql
+test/schedule
+provsql.control
+tdkc
+provsql_migrate_mmap
+test.log
+test/results/
+test/regression.diffs
+test/regression.out
+
+# Documentation, website source, and branding assets are only used
+# by `make docs` / `make website` to build the hosted provsql.org
+# pages; the image never reads them. Note: the top-level
+# `doc/*.md` files (notably `doc/provsql.md`, the README) ARE
+# referenced by `make install` via PGXS's DOCS variable, so we
+# keep `doc/` itself and only exclude the heavy subtrees.
+doc/source/
+doc/doxygen-c/
+doc/doxygen-sql/
+website/
+branding/
+
+# Studio dev artefacts.
+studio/.venv/
+studio/.pytest_cache/
+studio/dist/
+studio/build/
+studio/provsql_studio.egg-info/
+**/__pycache__/
+
+# Claude / scratch files.
+**/.claude/
+TODO.md

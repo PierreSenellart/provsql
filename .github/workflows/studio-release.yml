@@ -1,0 +1,208 @@
+name: Studio release
+
+on:
+  push:
+    tags: ['studio-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. studio-v1.0.0). Must already exist."
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false  # Don't cancel a release mid-publish.
+
+jobs:
+  # ----------------------------------------------------------------------
+  # Step 0: derive the bare version (e.g. "1.0.0") from the tag once and
+  # expose it as a job output so downstream jobs don't each re-parse it.
+  # ----------------------------------------------------------------------
+  version:
+    name: 🏷️ resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      tag:     ${{ steps.parse.outputs.tag }}
+    steps:
+      - id: parse
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          case "$TAG" in
+            studio-v*) ;;
+            *) echo "Tag '$TAG' does not match studio-v*" >&2; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#studio-v}" >> "$GITHUB_OUTPUT"
+
+  # ----------------------------------------------------------------------
+  # Step 1: release-time sanity gate. The full Py × PG matrix runs on
+  # every push via studio.yml, so a passing run on this commit already
+  # exists. Re-running one cell here ensures we don't publish a broken
+  # tagged commit if the contributor pushed the tag without watching CI.
+  # ----------------------------------------------------------------------
+  gate:
+    name: 🧪 sanity (Py 3.12 × PG 16)
+    needs: version
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      - run: pg-start 16 libboost-dev libboost-serialization-dev graphviz
+      - run: pg_dropcluster 16 main
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: make -j$(nproc) && make install
+      - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/16/test/postgresql.conf
+      - run: service postgresql restart
+      - run: pg_isready -t 30
+      - run: python -m pip install -e "./studio[test]"
+      - run: python -m playwright install --with-deps chromium
+      - run: cd studio && ruff check .
+      - run: python -m pytest studio/tests
+        env:
+          PGUSER: postgres
+
+  # ----------------------------------------------------------------------
+  # Step 2: build sdist + wheel. Single source of artifacts shared by the
+  # publish and release jobs, so the bytes uploaded to PyPI and the bytes
+  # attached to the GitHub release are identical.
+  # ----------------------------------------------------------------------
+  build:
+    name: 📦 build sdist + wheel
+    needs: [version, gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install build
+      - run: python -m build
+        working-directory: studio
+      - name: Verify built version matches the tag
+        run: |
+          set -e
+          VERSION="${{ needs.version.outputs.version }}"
+          ls "studio/dist/provsql_studio-${VERSION}.tar.gz" \
+             "studio/dist/provsql_studio-${VERSION}-py3-none-any.whl"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: studio/dist/*
+          if-no-files-found: error
+
+  # ----------------------------------------------------------------------
+  # Step 3: publish to PyPI via Trusted Publisher (OIDC, no API token).
+  # The `environment: pypi` declaration is what binds this job to the
+  # Pending Publisher configured at pypi.org/manage/account/publishing/.
+  # ----------------------------------------------------------------------
+  publish:
+    name: 🚀 publish to PyPI
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/provsql-studio/${{ needs.version.outputs.version }}/
+    permissions:
+      id-token: write  # Required by gh-action-pypi-publish for OIDC.
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ----------------------------------------------------------------------
+  # Step 4: GitHub Release with the sdist + wheel attached. The auto-
+  # generated source tarball is empty of Studio code (studio/ is
+  # export-ignore'd in .gitattributes), so the release notes redirect
+  # readers to the attached assets and to PyPI.
+  # ----------------------------------------------------------------------
+  release:
+    name: 🐙 GitHub release
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # gh release create writes to refs/tags releases.
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Extract changelog section for this version
+        id: changelog
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -e
+          # Pull everything between `## [VERSION]` (the heading itself
+          # is dropped) and the next `## [` heading. Trailing date on
+          # the heading (`## [1.0.0] - 2026-05-15`) is fine: the regex
+          # only anchors `## [VERSION]` at the start.
+          BODY=$(awk -v v="$VERSION" '
+            $0 ~ "^## \\["v"\\]" { in_section=1; next }
+            in_section && /^## \[/ { exit }
+            in_section { print }
+          ' studio/CHANGELOG.md)
+          if [ -z "$(printf '%s' "$BODY" | tr -d '[:space:]')" ]; then
+            echo "::error::No changelog section for $VERSION in studio/CHANGELOG.md" >&2
+            exit 1
+          fi
+          {
+            echo 'body<<__CHANGELOG_EOF__'
+            printf '%s\n' "$BODY"
+            echo '__CHANGELOG_EOF__'
+          } >> "$GITHUB_OUTPUT"
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          CHANGELOG_BODY: ${{ steps.changelog.outputs.body }}
+        run: |
+          set -e
+          NOTES_FILE="$(mktemp)"
+          cat > "$NOTES_FILE" <<EOF
+          ## ProvSQL Studio $TAG
+
+          Web UI for the ProvSQL PostgreSQL extension: provenance
+          inspection, circuit visualisation, and on-the-fly semiring
+          evaluation.
+
+          ### Install
+
+          \`\`\`bash
+          pip install provsql-studio==$VERSION
+          \`\`\`
+
+          ### What's changed
+
+          $CHANGELOG_BODY
+
+          ### Requirements
+
+          - Python >= 3.10
+          - A PostgreSQL database with the **ProvSQL extension >= 1.4.0**
+            (see [getting ProvSQL](https://provsql.org/docs/user/getting-provsql.html)).
+
+          ### Documentation
+
+          [ProvSQL Studio user manual](https://provsql.org/docs/user/studio.html)
+          EOF
+          gh release create "$TAG" \
+            --title "ProvSQL Studio $TAG" \
+            --notes-file "$NOTES_FILE" \
+            dist/*

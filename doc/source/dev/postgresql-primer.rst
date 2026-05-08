@@ -229,7 +229,7 @@ GUCs (Configuration Parameters)
 PostgreSQL exposes server- and session-scoped settings as *Grand
 Unified Configuration* (GUC) variables, registered via
 ``DefineCustom*Variable`` from :cfunc:`_PG_init`.  ProvSQL exposes
-five:
+six:
 
 - ``provsql.active`` -- master switch.
 - ``provsql.where_provenance`` -- enable where-provenance tracking
@@ -238,6 +238,10 @@ five:
   (see :doc:`data-modification`).
 - ``provsql.verbose_level`` -- diagnostic verbosity (see
   :doc:`debugging`).
+- ``provsql.aggtoken_text_as_uuid`` -- when on, ``agg_token_out``
+  emits the underlying provenance UUID instead of the default
+  ``"value (*)"`` display string. Used by UI layers (notably ProvSQL
+  Studio) to expose aggregate-cell circuit roots for click-through.
 - ``provsql.tool_search_path`` -- colon-separated directories
   prepended to ``PATH`` when ProvSQL spawns external tools (the
   d-DNNF compilers d4, c2d, minic2d, dsharp; the ``weightmc``

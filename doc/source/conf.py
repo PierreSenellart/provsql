@@ -97,7 +97,7 @@ _SQL_FUNC_MAP = {
     'expected':                 '/doxygen-sql/html/group__probability.html#ga7124b41224adc29ff5405d5ad6db277e',
     'sr_formula':               '/doxygen-sql/html/group__compiled__semirings.html#ga76c32e829ab40658af1103ffc22717a6',
     'sr_boolean':               '/doxygen-sql/html/group__compiled__semirings.html#ga80ae99ffbdec6d1e298a53d0bbb1ec1b',
-    'sr_boolexpr':              '/doxygen-sql/html/group__compiled__semirings.html#ga0a4057956b4751b4263fc1a913161012',
+    'sr_boolexpr':              '/doxygen-sql/html/group__compiled__semirings.html#ga41016a3000b008b59848687485b79425',
     'sr_counting':              '/doxygen-sql/html/group__compiled__semirings.html#gad3e2b6c5dc5d0041fc29ee086add1de6',
     'sr_why':                   '/doxygen-sql/html/group__compiled__semirings.html#ga7501c5d75cf9a2920e9176169c310a7f',
     'sr_how':                   '/doxygen-sql/html/group__compiled__semirings.html#gaa4900646bb610cc5159c8dad0b74bb95',
@@ -121,6 +121,7 @@ _SQL_FUNC_MAP = {
     'timetravel':               '/doxygen-sql/html/group__temporal__db.html#ga73181ef9e1e7b5f293ae379414fe7d63',
     'timeslice':                '/doxygen-sql/html/group__temporal__db.html#gaa3de6e26f960ee27e916a1c35fbb75f0',
     'history':                  '/doxygen-sql/html/group__temporal__db.html#gac96504e5f0f7bf9da1dfc089cdbcdd21',
+    'agg_token_value_text':     '/doxygen-sql/html/group__agg__token__type.html#gadec6242b3b9213ae9dc16c1a15831b03',
 }
 
 
@@ -301,8 +302,12 @@ def setup(app):
         ref += lit
         return [ref], []
 
+    def sc_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+        return [nodes.inline(rawtext, text, classes=['smallcaps'])], []
+
     app.add_role('sqlfunc', sqlfunc_role)
     app.add_role('cfunc', cfunc_role)
     app.add_role('cfile', cfile_role)
     app.add_role('sqlfile', sqlfile_role)
+    app.add_role('sc', sc_role)
     return {'version': '0.1', 'parallel_read_safe': True}

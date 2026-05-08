@@ -16,25 +16,36 @@ excerpt: >
   Shapley values, and semiring evaluations — transparently, with no application changes.
 feature_row:
   - title: "Transparent Query Rewriting"
+    image_path: /assets/images/query-rewriting.png
+    alt: "Diagram of a query Q rewritten into Q-hat by ProvSQL's planner hook, then evaluated by PostgreSQL with provenance UUIDs in the result."
     excerpt: >
       SQL queries are automatically rewritten to track provenance circuits.
       No changes to your schema or application code required.
     url: "/overview/#query-rewriting"
     btn_label: "Learn more"
     btn_class: "btn--primary"
-  - title: "Rich Semiring Support"
+  - title: "Evaluate Provenance"
+    image_path: /assets/images/evaluate-provenance.png
+    alt: "Diagram of semiring instantiation: a semiring K is compiled into a C++ class and combined with a provenance mapping to evaluate circuits and produce a result table with explanations in K."
     excerpt: >
-      Boolean, counting, why-provenance, where-provenance, bag semirings,
-      and user-defined semirings via a clean extension API.
+      Compute Boolean, counting, why-, how-, which-provenance, symbolic
+      formulas, tuple-independent probabilities (d-DNNF, tree
+      decomposition), and Shapley / Banzhaf values through a unified
+      semiring API.
     url: "/docs/user/semirings.html"
     btn_label: "Learn more"
     btn_class: "btn--primary"
-  - title: "Probability & Shapley"
+  - title: "ProvSQL Studio"
+    image_path: /assets/images/studio/circuit-mode.png
+    alt: "ProvSQL Studio Circuit-mode screenshot showing a provenance DAG with a pinned input gate."
     excerpt: >
-      Compute tuple-independent probabilities via knowledge compilation
-      (d-DNNF, tree decomposition). Compute Shapley values of query answers.
-    url: "/docs/user/probabilities.html"
-    btn_label: "Learn more"
+      A web UI for provenance inspection: render the circuit DAG behind any
+      result token, evaluate any compiled semiring on a pinned subnode, and
+      hover output cells to highlight the source rows that produced them.
+      Available on PyPI as
+      [`provsql-studio`](https://pypi.org/project/provsql-studio/).
+    url: "/docs/user/studio.html"
+    btn_label: "Studio docs"
     btn_class: "btn--primary"
 feature_row2:
   - title: "SQL API"

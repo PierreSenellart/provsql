@@ -1,0 +1,7 @@
+\set ECHO none
+gate_type
+plus
+(1 row)
+n_children
+2
+(1 row)

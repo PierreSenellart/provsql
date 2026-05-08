@@ -84,7 +84,7 @@ Datum to_datum(const semiring::Counting &, unsigned v)    { return Int32GetDatum
 Datum to_datum(const semiring::Tropical &, double v)      { return Float8GetDatum(v); }
 Datum to_datum(const semiring::Viterbi &, double v)       { return Float8GetDatum(v); }
 Datum to_datum(const semiring::Lukasiewicz &, double v)   { return Float8GetDatum(v); }
-Datum to_datum(const semiring::Formula &, const std::string &v) { return text_datum(v); }
+Datum to_datum(const semiring::Formula &sr, const std::string &v) { return text_datum(sr.to_text(v)); }
 Datum to_datum(const semiring::Why &sr, const semiring::why_provenance_t &v)     { return text_datum(sr.to_text(v)); }
 Datum to_datum(const semiring::How &sr, const semiring::how_provenance_t &v)     { return text_datum(sr.to_text(v)); }
 Datum to_datum(const semiring::Which &sr, const semiring::which_provenance_t &v) { return text_datum(sr.to_text(v)); }
@@ -130,10 +130,16 @@ Datum pec(
 
 /**
  * @brief Evaluate the BoolExpr semiring; bypasses the GenericCircuit pipeline.
+ *
+ * With @p labels, each input gate renders as its mapped label; without,
+ * leaves render as the default @c x@<id@> placeholders.
  */
-Datum pec_boolexpr(BooleanCircuit &bc, gate_t root)
+Datum pec_boolexpr(
+  BooleanCircuit &bc,
+  gate_t root,
+  const std::unordered_map<gate_t, std::string> *labels)
 {
-  return text_datum(bc.toString(root));
+  return text_datum(labels ? bc.toString(root, *labels) : bc.toString(root));
 }
 
 } // namespace
@@ -236,10 +242,14 @@ static Datum provenance_evaluate_compiled_internal
 {
   constants_t constants = get_constants(true);
 
-  if(semiring=="boolexpr") {
+  // boolexpr without a mapping has nothing to fetch from SPI: skip the
+  // GenericCircuit build + temp-UUID join and read the BooleanCircuit
+  // directly. Every other case (including boolexpr WITH a mapping)
+  // shares the prelude below.
+  if(semiring=="boolexpr" && !OidIsValid(table)) {
     gate_t root;
     BooleanCircuit bc = getBooleanCircuit(token, root);
-    return pec_boolexpr(bc, root);
+    return pec_boolexpr(bc, root, nullptr);
   }
 
   GenericCircuit c = getGenericCircuit(token);
@@ -251,6 +261,31 @@ static Datum provenance_evaluate_compiled_internal
     return c.getUUID(x);
   });
   bool drop_table = join_with_temp_uuids(table, inputs_uuid);
+
+  if(semiring=="boolexpr") {
+    // boolexpr with a mapping: build the gate-to-label map on the
+    // GenericCircuit (the mapping table is keyed by input UUIDs that
+    // don't survive translation to BooleanCircuit gate ids), then
+    // translate keys to bc gates via gc_to_bc so bc.toString can label
+    // each leaf with its mapped value.
+    gate_t root;
+    std::unordered_map<gate_t, std::string> gc_labels;
+    initialize_provenance_mapping<std::string>(constants, c, gc_labels, [](const char *v) {
+      return std::string(v);
+    }, drop_table);
+
+    std::unordered_map<gate_t, gate_t> gc_to_bc;
+    BooleanCircuit bc = getBooleanCircuit(c, token, root, gc_to_bc);
+
+    std::unordered_map<gate_t, std::string> bc_labels;
+    bc_labels.reserve(gc_labels.size());
+    for(const auto &kv : gc_labels) {
+      auto it = gc_to_bc.find(kv.first);
+      if(it != gc_to_bc.end())
+        bc_labels[it->second] = kv.second;
+    }
+    return pec_boolexpr(bc, root, &bc_labels);
+  }
 
   if (type == constants.OID_TYPE_VARCHAR)
   {

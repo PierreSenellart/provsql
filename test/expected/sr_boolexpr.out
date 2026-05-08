@@ -2,8 +2,11 @@
 remove_provenance
 
 (1 row)
-city|regexp_replace
-Berlin|(x ∧ x)
-New York|(x ∧ x)
-Paris|((x ∧ x) ∨ (x ∧ x) ∨ (x ∧ x))
+city|regexp_replace|boolexpr_named
+Berlin|x ∧ x|Ellen ∧ Susan
+New York|x ∧ x|John ∧ Paul
+Paris|(x ∧ x) ∨ (x ∧ x) ∨ (x ∧ x)|(Dave ∧ Nancy) ∨ (Dave ∧ Magdalen) ∨ (Magdalen ∧ Nancy)
 (3 rows)
+null_no_mapping|null_with_mapping
+t|t
+(1 row)

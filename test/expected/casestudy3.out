@@ -22,7 +22,7 @@ remove_provenance
 
 (1 row)
 stop_name|formula
-DestB|(1 ⊗ 1 ⊗ 0 ⊗ 1)
+DestB|1 ⊗ 1 ⊗ 0 ⊗ 1
 (1 row)
 remove_provenance
 

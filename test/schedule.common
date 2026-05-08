@@ -12,6 +12,11 @@ test: remove_add_provenance
 test: provenance_in_from identify_token subquery create_provenance_mapping
 test: circuit_subgraph
 test: resolve_input
+# Regression for the get_gate_type → get_children cache-poisoning bug:
+# the two tests must run in separate backends (sequential `test:` lines),
+# so the cache for gate_cache_consistency starts empty.
+test: gate_cache_setup
+test: gate_cache_consistency
 
 # Introducing a few semirings
 test: sr_formula sr_counting sr_boolean sr_why sr_how sr_which sr_tropical sr_viterbi sr_lukasiewicz
@@ -24,6 +29,7 @@ test: cte
 test: active
 test: aggregation
 test: agg_distinct agg_order_by agg_arithmetic
+test: agg_token_text_as_uuid
 test: create_as
 test: insert_select_provenance
 test: no_zero_gate
@@ -41,6 +47,10 @@ test: viewing_setup
 
 # Probability computation using internal methods
 test: possible_worlds monte_carlo
+
+# Regression: SUM and AVG over the same children must produce
+# distinct agg gates (the aggfnoid is part of the gate UUID).
+test: agg_uuid_aggfnoid
 
 # Complex test relying on probabilities
 test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors
@@ -71,6 +81,7 @@ test: keyword_table
 
 # Where-provenance
 test: where_provenance
+test: where_provenance_join
 
 # Full example from tutorial
 test: tutorial

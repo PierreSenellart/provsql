@@ -1,0 +1,2008 @@
+/* ProvSQL Studio: merged ui_kit stylesheets (Provence brand).
+   panel.css (where mode, .wp-* classes) + circuit.css (circuit mode, .cv-*
+   and gate/node/edge classes) coexist via disjoint class prefixes; the only
+   real overlap is the global base block at the top of each file, lifted
+   here into a single block with a body-class override for circuit mode. */
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg-canvas);
+  color: var(--purple-900);
+  font-family: var(--font-body);
+  font-size: 19px;
+  line-height: 1.55;
+}
+body.mode-circuit {
+  font-size: 18px;
+}
+/* Circuit-mode sidebar hosts the cv-canvas and the (currently disabled)
+   semiring-evaluation strip. We keep the shared wp-shell grid; the canvas
+   just needs a fixed-ish height so the dot layout is visible without
+   page scrolling. */
+body.mode-circuit #sidebar { padding-bottom: 0; }
+body.mode-circuit #sidebar-body { display: flex; flex-direction: column; gap: 0.8rem; }
+body.mode-circuit #sidebar-body .cv-canvas {
+  height: 720px; min-height: 480px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+/* Fullscreen: pin .cv-canvas + .cv-toolbar to the viewport. We don't
+   hide the underlying page; the canvas's `inset: 0` + opaque background
+   + high z-index covers it instead, so the toggle is a single CSS
+   class flip with no display:none cascade to manage. The
+   ResizeObserver on #circuit catches the new size and reflows the
+   viewBox automatically. */
+body.circuit-fullscreen { overflow: hidden; }
+body.circuit-fullscreen #sidebar-body .cv-canvas {
+  position: fixed; inset: 0;
+  height: auto; min-height: 0;
+  border: none; border-radius: 0;
+  background: #fff;
+  z-index: 9999;
+}
+body.circuit-fullscreen #sidebar-body .cv-toolbar {
+  position: fixed; top: 0.6rem; left: 50%; transform: translateX(-50%);
+  z-index: 10000;
+  margin: 0;
+  background: rgba(255,255,255,0.96);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  box-shadow: 0 4px 18px rgba(42, 24, 80, 0.18);
+}
+/* Eval strip in fullscreen: pinned top-left, where the DAG layout is
+   usually empty (the root sits centre-top, branches fan out below).
+   Top-centre is the toolbar, top-right is the inspector : the corner
+   is the only spare slot near the controls. */
+body.circuit-fullscreen #sidebar-body .cv-eval {
+  position: fixed; top: 0.6rem; left: 0.6rem;
+  z-index: 10000;
+  margin: 0;
+  background: rgba(255,255,255,0.96);
+  border: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-soft);  /* neutralise the dashed top */
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  box-shadow: 0 4px 18px rgba(42, 24, 80, 0.18);
+  max-width: min(420px, calc(100vw - 1.2rem));
+}
+body.mode-circuit #sidebar-body .cv-toolbar {
+  display: flex; align-items: center; gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+/* Status text moved onto the toolbar row : pushed to the right via
+   margin-left:auto, ellipsised so the buttons keep their natural
+   width on narrow viewports. */
+body.mode-circuit #sidebar-body .cv-toolbar__info {
+  margin-left: auto;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+body.mode-circuit #sidebar-body .cv-eval {
+  display: flex; flex-direction: column; gap: 0.4rem;
+  font-size: 0.85rem;
+  border-top: 1px dashed var(--border-soft);
+  padding-top: 0.6rem;
+}
+body.mode-circuit #sidebar-body .cv-eval__hdr {
+  display: flex; align-items: baseline; gap: 0.6rem;
+}
+body.mode-circuit #sidebar-body .cv-eval__label {
+  margin: 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  color: var(--purple-700);
+}
+body.mode-circuit #sidebar-body .cv-eval__form {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+}
+body.mode-circuit #sidebar-body .cv-eval__action-row {
+  /* Run button on its own row, with the result chip + bound + time
+     trailing it. min-height keeps the strip stable when there's no
+     result yet. */
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  min-height: 1.6em;
+}
+/* Cross-mode: per-row "→ Circuit" button in where-mode results */
+.wp-result__cell--actions { width: 1%; white-space: nowrap; }
+.wp-btn--mini {
+  font-size: 0.72rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid var(--purple-500);
+  background: transparent;
+  color: var(--purple-500);
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+.wp-btn--mini:hover { background: var(--purple-500); color: #fff; }
+/* Clickable UUID/agg_token cells in circuit mode */
+.wp-result__cell.is-clickable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  color: var(--purple-500);
+}
+.wp-result__cell.is-clickable:hover { color: var(--terracotta-500); }
+
+/* UUID-typed cells render two siblings : an 8-char abbreviation and the
+   full value : so the circuit panel's "Show UUIDs" toggle can flip them
+   via a body-level class without re-rendering the result table. The
+   default is collapsed (matches state.showUuids=false in circuit.js). */
+.wp-uuid__short { display: inline; }
+.wp-uuid__full  { display: none; }
+body.show-uuids .wp-uuid__short { display: none; }
+body.show-uuids .wp-uuid__full  { display: inline; }
+
+code, pre, .wp-editor__ta, .cv-editor__code { font-family: var(--font-mono); }
+em { font-style: italic; }
+
+/* ───────── mode switcher (in top nav, both modes) ───────── */
+.ps-modeswitch {
+  display: inline-flex;
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 4px;
+  overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+}
+.ps-modeswitch__btn {
+  background: transparent;
+  color: rgba(255,255,255,0.8);
+  border: none;
+  padding: 0.35rem 0.85rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  transition: background 0.15s, color 0.15s;
+}
+.ps-modeswitch__btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+/* Drive the active highlight from <body class="mode-X"> so it lands on
+   the right tab from the very first paint. The body class is set
+   server-side in _serve_shell, while a JS toggle would only fire once
+   app.js parses : that delay is what produced the brief "Where"
+   flash on /circuit. */
+body.mode-where   .ps-modeswitch__btn[data-mode="where"],
+body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
+  background: var(--gold-500);
+  color: var(--purple-900);
+  font-weight: 600;
+}
+
+.wp-nav {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--purple-500);
+  border-bottom: 3px solid var(--gold-500);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.7rem 1.5rem;
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(42, 24, 80, 0.18);
+}
+.wp-nav__brand { display: flex; align-items: center; gap: 0.85rem; }
+.wp-nav__logo { width: 38px; height: 38px; }
+.wp-nav__title {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.wp-nav__title em { color: var(--gold-500); font-style: italic; font-weight: 600; }
+.wp-nav__meta { display: flex; align-items: center; gap: 1.25rem; }
+/* Connection indicator: green dot (live-server hint) + clickable DB name. */
+.wp-nav__conn {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: rgba(255,255,255,0.9);
+}
+/* Connection trigger: a plug icon + status dot, both inside one
+   <button>. Clicking either opens the connection editor; the dot keeps
+   its colour-change role (green when connected, terracotta when the
+   server is unreachable). */
+.wp-nav__connbtn {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.15rem 0.3rem;
+  background: transparent; border: none; cursor: pointer;
+  color: rgba(255,255,255,0.85);
+  border-radius: 4px;
+}
+.wp-nav__connbtn:hover  { background: rgba(255,255,255,0.08); color: #fff; }
+.wp-nav__connbtn:focus  { outline: 2px solid var(--gold-500); outline-offset: 1px; }
+.wp-nav__connicon { font-size: 0.85rem; }
+.wp-nav__dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #6FCF97;
+  box-shadow: 0 0 0 3px rgba(111,207,151,0.25);
+  flex-shrink: 0;
+}
+.wp-nav__dot.is-offline {
+  background: var(--terracotta-500);
+  box-shadow: 0 0 0 3px rgba(196, 102, 74, 0.25);
+}
+/* Connection editor popover anchored to the dot. Uses the same
+   colour palette as the config panel so the chrome stays cohesive. */
+.wp-nav__dsnpanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  /* Anchor to the right edge of .wp-nav__conn so the panel grows
+     leftward into the page and never overflows the viewport. The dot
+     lives at the far right of the nav, so left:0 was pushing the
+     panel offscreen. */
+  right: 0;
+  z-index: 30;
+  width: 460px;
+  max-width: calc(100vw - 1.5rem);
+  padding: 0.85rem 1rem;
+  background: #fff;
+  color: var(--purple-900);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(42, 24, 80, 0.25);
+  font-family: var(--font-ui);
+}
+.wp-nav__dsnpanel[hidden] { display: none; }
+.wp-nav__dsntitle,
+.wp-nav__configtitle {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-display); font-style: italic; font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--purple-700);
+}
+.wp-nav__dsnhint {
+  margin: 0 0 0.55rem;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.wp-nav__dsninput {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  font-family: var(--font-mono); font-size: 0.82rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--purple-900);
+  box-sizing: border-box;
+}
+.wp-nav__dsninput:focus { outline: 2px solid var(--gold-500); border-color: var(--gold-500); }
+.wp-nav__dsnactions {
+  display: flex; align-items: center; gap: 0.6rem;
+  margin-top: 0.55rem;
+}
+.wp-nav__dsnstatus {
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.wp-nav__dsnstatus.is-error { color: var(--terracotta-500); }
+/* The dot lives inside .wp-nav__conn; we anchor the popover to that
+   span so the dropdown coords stay sensible regardless of dot size. */
+.wp-nav__conn { position: relative; }
+.wp-nav__dbswitch { position: relative; }
+.wp-nav__db {
+  font: inherit;
+  color: var(--gold-500);
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.25rem;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  /* Reserve roughly user@db worth of space so the nav doesn't reflow
+     when the placeholder "…" is replaced by the actual identity that
+     /api/conn returns. ~14ch fits typical role+dbname pairs without
+     looking padded for shorter names. */
+  min-width: 14ch;
+  justify-content: flex-start;
+}
+.wp-nav__db::after {
+  content: "▾";
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+.wp-nav__db:hover, .wp-nav__db[aria-expanded="true"] {
+  background: rgba(255,255,255,0.12);
+}
+.wp-nav__dbmenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  margin: 0;
+  padding: 0.3rem 0;
+  list-style: none;
+  background: #fff;
+  color: var(--purple-900);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
+  z-index: 20;
+}
+.wp-nav__dbmenu[hidden] { display: none; }
+.wp-nav__dbmenu li {
+  padding: 0.4rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wp-nav__dbmenu li:hover { background: var(--bg-code); }
+.wp-nav__dbmenu li.is-current {
+  color: var(--purple-500);
+  font-weight: 600;
+}
+/* Reserve a fixed-width slot for the current-db checkmark on every row
+   (visibility:hidden, not display:none) so non-current names line up
+   with the current one instead of shifting left by the missing glyph. */
+.wp-nav__dbmenu li::before {
+  content: "✓";
+  display: inline-block;
+  width: 1em;
+  margin-right: 0.4rem;
+  visibility: hidden;
+}
+.wp-nav__dbmenu li.is-current::before {
+  visibility: visible;
+}
+.wp-nav__link {
+  font-family: var(--font-ui);
+  font-size: 0.88rem;
+  color: rgba(255,255,255,0.88);
+  text-decoration: none;
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  transition: color 0.15s;
+  /* In case the element is a <button> rather than an <a>: */
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.wp-nav__link:hover { color: var(--gold-500); }
+/* Override the global a:visited rule so visited nav links don't go purple-on-purple */
+.wp-nav__link:visited, .cv-nav__link:visited, .ps-modeswitch__btn:visited {
+  color: rgba(255,255,255,0.88);
+}
+
+/* Refresh button: icon-only, sits in the nav with extra left margin so
+   it reads as a toolbar-level affordance rather than belonging to the
+   adjacent Schema button. The .fa-spin lasts a fraction of a second
+   after a click (set in app.js) to give visual feedback even when the
+   schema panel is closed. */
+.wp-nav__refresh { padding: 0 0.2rem; }
+
+/* Config popover anchored to the cog button. */
+.wp-nav__configwrap { position: relative; display: inline-flex; }
+.wp-nav__link[aria-expanded="true"] { color: var(--gold-500); }
+.wp-nav__configpanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: #fff;
+  color: var(--purple-900);
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
+  padding: 0.85rem 1rem;
+  width: 320px;
+  z-index: 20;
+}
+.wp-nav__configpanel[hidden] { display: none; }
+
+/* ───────── schema panel ───────── */
+/* Wider than the config panel because relation names and columns can be
+   long; capped vertically so the popover never escapes the viewport. */
+.wp-schema__panel { width: 460px; max-height: 70vh; display: flex; flex-direction: column; }
+.wp-schema__lead {
+  margin: 0 0 0.6rem;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.wp-schema__search {
+  width: 100%;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  margin-bottom: 0.6rem;
+  outline: none;
+}
+.wp-schema__search:focus { border-color: var(--purple-500); }
+.wp-schema__body {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  font-size: 0.82rem;
+}
+.wp-schema__group {
+  margin: 0 0 0.5rem;
+}
+.wp-schema__schema {
+  font-family: var(--font-display); font-weight: 600; font-style: italic;
+  font-size: 0.78rem;
+  color: var(--purple-700);
+  margin: 0 0 0.2rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wp-schema__rel {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0.32rem 0.5rem;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--purple-900);
+  cursor: pointer;
+  margin-bottom: 0.15rem;
+}
+.wp-schema__rel:hover { background: var(--bg-code); border-color: var(--border-soft); }
+.wp-schema__rel-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.wp-schema__rel-kind {
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  margin-left: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+/* Provenance badge: pill next to the kind pill, brand purple so it
+   reads as "this relation carries a provsql column" at a glance. */
+.wp-schema__rel-prov {
+  display: inline-block;
+  font-size: 0.7rem;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--purple-500);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+/* Subtle left accent on the relation row so the eye picks up the
+   provenance-tracked tables when scrolling the list. */
+.wp-schema__rel--prov {
+  border-left: 3px solid var(--purple-500);
+}
+/* Mapping badge: same shape as `prov`, gold so the two pills are
+   distinguishable at a glance when a relation is both. */
+.wp-schema__rel-map {
+  display: inline-block;
+  font-size: 0.7rem;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--gold-500);
+  color: var(--purple-900);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+/* Right-floated action chip cluster: add/remove_provenance buttons that
+   prefill the corresponding SELECT call into the querybox. */
+.wp-schema__rel-actions {
+  float: right;
+  display: inline-flex;
+  gap: 0.25rem;
+}
+.wp-schema__rel-action {
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.wp-schema__rel-action:hover {
+  background: var(--purple-500);
+  color: #fff;
+  border-color: var(--purple-500);
+}
+.wp-schema__rel-action .fas {
+  font-size: 0.6rem;
+  margin-right: 0.15rem;
+}
+/* Per-column hot-spot inside the column list of a provenance-tracked
+   table : clicking prefills the corresponding `create_provenance_mapping`
+   call. Only the affordance changes (cursor + hover background); the
+   column name itself reads the same as a non-clickable column. */
+.wp-schema__col {
+  cursor: pointer;
+  padding: 0 0.15rem;
+  border-radius: 2px;
+}
+.wp-schema__col:hover {
+  background: var(--purple-100, var(--bg-code));
+  color: var(--purple-700);
+}
+.wp-schema__cols {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  margin-top: 0.15rem;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Slim scrollbar so an extra long column list scrolls horizontally
+     instead of being truncated with an ellipsis. Tracks the panel
+     width, kicks in only when the content actually overflows. */
+  scrollbar-width: thin;
+}
+.wp-schema__cols::-webkit-scrollbar { height: 4px; }
+.wp-schema__cols::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 2px; }
+.wp-schema__empty {
+  margin: 0.4rem 0;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.wp-config__group { margin-top: 0.7rem; }
+.wp-config__group:first-child { margin-top: 0; }
+.wp-config__grouphdr {
+  font-family: var(--font-display); font-style: italic; font-weight: 500;
+  font-size: 0.78rem;
+  margin: 0 0 0.15rem;
+  color: var(--purple-700);
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--gold-500);
+  padding-bottom: 0.15em;
+}
+.wp-config__row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--border-soft);
+}
+.wp-config__row:first-of-type { border-top: none; }
+.wp-config__name {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  flex: 1;
+  min-width: 0;
+}
+.wp-config__name code { color: var(--purple-700); font-size: 0.95em; }
+/* Multi-line config row: header on top, control below (used by the
+   verbose_level slider, which needs full width). */
+.wp-config__row--col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+.wp-config__slider {
+  display: flex; align-items: center; gap: 0.6rem;
+  width: 100%;
+}
+.wp-config__range {
+  flex: 1;
+  -webkit-appearance: none; appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 18px;
+  margin: 0;
+}
+.wp-config__range:focus { outline: none; }
+/* Track: thin pill in soft purple. */
+.wp-config__range::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--purple-100, #D6CCF0);
+  border-radius: 999px;
+}
+.wp-config__range::-moz-range-track {
+  height: 4px;
+  background: var(--purple-100, #D6CCF0);
+  border-radius: 999px;
+}
+/* Thumb: 14px circle in primary purple. */
+.wp-config__range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--purple-500);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(42, 24, 80, 0.3);
+  margin-top: -5px;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.wp-config__range::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.wp-config__range::-moz-range-thumb {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--purple-500);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(42, 24, 80, 0.3);
+  cursor: pointer;
+}
+.wp-config__range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(232, 184, 75, 0.6);
+}
+.wp-config__rangeval {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--purple-700);
+  width: 2.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Number input with a trailing unit (e.g. seconds for the query timeout). */
+.wp-config__numwrap { display: inline-flex; align-items: center; gap: 0.3rem; }
+.wp-config__num {
+  width: 4.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--purple-700);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.wp-config__num:focus {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 1px;
+}
+.wp-config__unit {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+}
+/* search_path text input + locked `provsql` suffix chip. The suffix is
+   visually attached to the right of the input so it reads as one
+   composite control: "<user-typed schemas>, [provsql]" */
+.wp-config__sp { display: flex; align-items: stretch; gap: 0.3rem; }
+.wp-config__sp-input {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--purple-700);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  min-width: 0;
+}
+.wp-config__sp-input:focus {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 1px;
+}
+.wp-config__sp-suffix {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(107, 79, 160, 0.12);
+  color: var(--purple-700);
+  border-radius: 4px;
+  padding: 0 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.wp-config__sp-suffix i { font-size: 0.78em; opacity: 0.75; }
+/* The Active switch reuses the same SVG-free pill we ship for the form
+   toggles; copy the relevant rules so it doesn't depend on .wp-toggle. */
+.wp-config__switch {
+  appearance: none; -webkit-appearance: none;
+  position: relative;
+  width: 30px; height: 16px;
+  border-radius: 999px;
+  background: var(--border-soft);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.wp-config__switch::before {
+  content: "";
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(42, 24, 80, 0.25);
+  transition: left 0.15s;
+}
+.wp-config__switch:checked {
+  background: var(--purple-500);
+  border-color: var(--purple-500);
+}
+.wp-config__switch:checked::before { left: 15px; }
+.wp-config__status {
+  margin: 0.5rem 0 0;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}
+.wp-config__status.is-error { color: var(--terracotta-500); }
+
+/* ───────── error block (rendered into the result area) ───────── */
+/* Errors get a distinctly deeper red than warnings (which use terracotta).
+   Stronger background tint + crimson border + dark-red text so the block
+   reads as a stop sign, not just a warmer warning. */
+.wp-error {
+  border: 1px solid #B00020;
+  border-left: 3px solid #B00020;
+  background: rgba(176, 0, 32, 0.12);
+  color: #5A0010;
+  padding: 0.6rem 0.85rem;
+  border-radius: 4px;
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  margin: 0.4rem 0;
+  white-space: pre-wrap;
+}
+.wp-error i { color: #B00020; margin-right: 0.4rem; }
+.wp-error code { background: rgba(176, 0, 32, 0.10); color: #5A0010; }
+.wp-error code { background: var(--bg-code); }
+
+/* Informational banner: shown when the wrap is silently dropped because
+   the user's query touches no provenance-tracked relation, plus the
+   per-NOTICE feed forwarded from psycopg's notice handler.
+   white-space: pre-wrap preserves embedded newlines that PostgreSQL
+   uses to format multi-line diagnostics (DETAIL / HINT / context lines). */
+.wp-notice {
+  border: 1px solid var(--gold-500);
+  border-left: 3px solid var(--gold-500);
+  background: rgba(232, 184, 75, 0.12);
+  color: var(--purple-900);
+  padding: 0.6rem 0.85rem;
+  border-radius: 4px;
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  margin: 0.4rem 0;
+  white-space: pre-wrap;
+}
+.wp-notice i { color: var(--gold-700, #B8901E); margin-right: 0.4rem; }
+
+/* Server WARNING (e.g. provsql_warning): orange/terracotta accent. */
+.wp-warning {
+  border: 1px solid var(--terracotta-500);
+  border-left: 3px solid var(--terracotta-500);
+  background: rgba(196, 102, 74, 0.08);
+  color: var(--purple-900);
+  padding: 0.6rem 0.85rem;
+  border-radius: 4px;
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  margin: 0.4rem 0;
+  white-space: pre-wrap;
+}
+.wp-warning i { color: var(--terracotta-500); margin-right: 0.4rem; }
+
+/* Collapsible variant for long diagnostics (parse-tree dumps from
+   provsql.verbose_level >= 50, full pre/post-rewrite SQL at >= 20). The
+   summary line keeps the same coloured-banner styling as the parent
+   .wp-notice / .wp-warning / .wp-error rules; only the disclosure
+   triangle and the expanded body need bespoke styling. */
+.wp-diag--collapsible > summary {
+  cursor: pointer;
+  list-style-position: outside;
+  /* The parent has white-space: pre-wrap so embedded newlines don't
+     leak from the head line into the summary. */
+}
+.wp-diag--collapsible > summary:hover { filter: brightness(0.97); }
+.wp-diag__body {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed currentColor;
+  opacity: 0.85;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  max-height: 24rem;
+  overflow: auto;
+}
+
+/* Source badge for messages that the C extension emits with the
+   "ProvSQL: " prefix. Renders as a small purple pill so the origin
+   is readable at a glance and the prefix doesn't have to clutter the
+   message text inline. */
+.wp-srcbadge {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  background: var(--purple-500);
+  color: #fff;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  margin-right: 0.35rem;
+  vertical-align: 1px;
+}
+#result-banners:not(:empty) { margin: 0.4rem 0 0.6rem; }
+
+/* ───────── shared site footer (mirrors website + docs) ───────── */
+#provsql-site-footer {
+  text-align: center;
+  padding: 0.8em 1em;
+  background: var(--purple-900);
+  border-top: 2px solid var(--gold-500);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+}
+#provsql-site-footer a {
+  color: rgba(244,240,250,0.85);
+  text-decoration: none;
+}
+#provsql-site-footer a:hover { color: var(--gold-500); }
+#provsql-site-footer a:visited { color: rgba(244,240,250,0.85); }
+#provsql-site-footer .sep {
+  margin: 0 0.4em;
+  color: rgba(244,240,250,0.4);
+}
+
+/* "No database picked at launch" banner : wedged between the nav and
+   the wp-shell grid so it can't be missed but doesn't shift the page
+   below it once dismissed. */
+.wp-db-hint {
+  margin: 0; padding: 0.6rem 1.5rem;
+  font-family: var(--font-ui); font-size: 0.85rem;
+  background: rgba(232, 184, 75, 0.18);
+  border-bottom: 1px solid var(--gold-500);
+  color: var(--purple-900);
+  /* Right-align so the "Pick a database…" button ends up under the
+     top-right database switcher chip : short visual line of travel
+     from the prompt to the dropdown. */
+  text-align: right;
+}
+.wp-db-hint i { color: var(--gold-700); margin-right: 0.4rem; }
+.wp-db-hint code {
+  font-family: var(--font-mono); font-size: 0.82em;
+  padding: 0.05rem 0.3rem; background: rgba(0,0,0,0.05);
+  border-radius: 3px;
+}
+.wp-db-hint__btn {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--gold-700);
+  background: #fff;
+  color: var(--purple-900);
+  font-family: var(--font-ui); font-size: 0.82rem; font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.wp-db-hint__btn:hover {
+  background: var(--gold-500); color: var(--purple-900);
+}
+
+/* ───────── shell ───────── */
+.wp-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 1.5rem;
+  /* No outer max-width: on wide screens the schema/result panes get
+     more horizontal room (more columns visible, less wrapping). The
+     internal column ratio still keeps the sidebar:main proportions
+     comfortable; the page padding prevents content from hugging the
+     viewport edges. */
+  margin: 0 auto;
+  padding: 1.5rem;
+  align-items: start;  /* allow the sidebar to be shorter than the result card */
+}
+@media (max-width: 1080px) {
+  .wp-shell { grid-template-columns: 1fr; }
+}
+
+/* In where mode, pin the source-relations sidebar to the viewport so its
+   highlighted (terracotta) cells are always visible regardless of how far
+   the user has scrolled the result table. The sidebar gets its own scroll
+   pane so its content (potentially many relations) is reachable without
+   moving the result. The sticky offset clears the sticky nav. */
+body.mode-where #sidebar {
+  position: sticky;
+  top: 5rem;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+}
+@media (max-width: 1080px) {
+  /* Single-column layout: sticky would overlap the result, so disable. */
+  body.mode-where #sidebar { position: static; max-height: none; }
+}
+
+/* ───────── card ───────── */
+.wp-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 1.75rem 1.75rem 1.5rem;
+}
+.wp-card__hdr { margin-bottom: 1.25rem; }
+.wp-card__title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 2rem;
+  margin: 0 0 0.35rem;
+  color: var(--purple-900);
+  border-bottom: 2px solid var(--gold-500);
+  padding-bottom: 0.2em;
+  display: inline-block;
+}
+/* Live search_path readout: keeps the user oriented when they're typing
+   unqualified relation names. Reuses the lead's code chip styling so
+   schema names render the same as inline-code elsewhere. */
+.wp-card__searchpath {
+  margin: 0.3rem 0 0;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.wp-card__searchpath code {
+  font-family: var(--font-mono);
+  background: var(--bg-code);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.95em;
+  color: var(--purple-700);
+}
+/* Locked-chip rendering for the `provsql` segment of search_path: a
+   small purple-tinted pill with a lock glyph, to indicate Studio
+   enforces this entry regardless of the user's configuration. */
+.wp-card__sp-locked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(107, 79, 160, 0.12);
+  color: var(--purple-700);
+  border-radius: 3px;
+  padding: 0 6px;
+  font-size: 0.95em;
+}
+.wp-card__sp-locked i { font-size: 0.78em; opacity: 0.75; }
+
+/* "Input gates only" toggle at the top of the where-mode sidebar :
+   filters out provenance-tracked relations whose first row's provsql
+   token is not an input leaf. */
+.wp-rel-filter {
+  margin: 0 0 0.6rem;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+.wp-rel-filter__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+.wp-rel-filter__hint {
+  color: var(--purple-700);
+  font-style: italic;
+}
+
+/* Relation quick-nav chips at the top of the where-mode sidebar. */
+.wp-rel-nav {
+  display: flex; flex-wrap: wrap; gap: 0.3rem;
+  margin: 0 0 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px dashed var(--border-soft);
+}
+.wp-rel-nav__btn {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: var(--bg-code);
+  color: var(--purple-700);
+  border: 1px solid transparent;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.wp-rel-nav__btn:hover {
+  background: var(--purple-500);
+  color: #fff;
+  border-color: var(--purple-500);
+}
+
+/* ───────── relation block (left) ───────── */
+.wp-relation { margin-top: 1.25rem; }
+/* Quick-nav targets land on the header (table name + tuple count) rather
+   than on the section's outer box (which would otherwise put the first
+   tuple at the visible top because the section's margin-top sits above
+   the header). scroll-margin-top adds a small breathing gap. */
+.wp-relation__hdr { scroll-margin-top: 0.6rem; }
+.wp-relation__hdr {
+  display: flex; align-items: baseline; justify-content: space-between;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.wp-relation__name {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 500;
+  margin: 0;
+  color: var(--purple-700);
+}
+.wp-relation__meta {
+  font-family: var(--font-ui);
+  font-size: 0.76rem;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wp-relation__meta code { font-size: 0.95em; color: var(--purple-700); }
+
+/* ───────── tables ───────── */
+.wp-table-wrap {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  overflow: auto;
+}
+.wp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-ui);
+  font-size: 0.88rem;
+}
+.wp-table th, .wp-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: middle;
+}
+.wp-table th {
+  background: var(--bg-elevated);
+  font-weight: 600;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--purple-700);
+  border-bottom: 1px solid var(--border-soft);
+  position: sticky; top: 0;
+}
+.wp-table tbody tr:nth-child(even) td { background: rgba(214, 204, 240, 0.18); }
+.wp-table tbody tr:hover td { background: rgba(232, 184, 75, 0.12); }
+.wp-table tbody tr:last-child td { border-bottom: none; }
+
+/* Right-align numeric and date/time/interval columns. Tabular-nums keeps
+   digit columns aligned across rows. */
+.wp-table th.is-right, .wp-table td.is-right { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Multi-line text cells (provsql.view_circuit dump, anything with
+   embedded newlines) : monospaced, whitespace preserved, horizontal
+   scrollbar on long lines so wide ASCII trees stay legible. The
+   max-width caps the cell so the rest of the row stays usable. */
+.wp-cell-pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  white-space: pre;
+  max-width: 80ch;
+  max-height: 24rem;
+  overflow: auto;
+  line-height: 1.35;
+  scrollbar-width: thin;
+}
+.wp-cell-pre::-webkit-scrollbar { width: 6px; height: 6px; }
+.wp-cell-pre::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 3px; }
+
+/* Sidebar relation tables: more compact than the result table on the right
+   so several relations fit at a glance. */
+#sidebar .wp-relation { margin-top: 0.85rem; }
+#sidebar .wp-relation__hdr { padding-bottom: 0.25rem; margin-bottom: 0.3rem; }
+#sidebar .wp-relation__name { font-size: 0.92rem; }
+#sidebar .wp-relation__meta { font-size: 0.68rem; }
+#sidebar .wp-table { font-size: 0.78rem; }
+#sidebar .wp-table th, #sidebar .wp-table td { padding: 0.25rem 0.5rem; }
+#sidebar .wp-table th { font-size: 0.66rem; }
+
+/* highlighted cells (where-provenance source).
+   The toggled state must not change layout metrics (font-weight, padding,
+   border) or the column widths reflow as the user moves the mouse; keep
+   only colour + box-shadow (which is outside the box model). */
+.wp-table td.is-source {
+  color: #fff !important;
+  background: var(--terracotta-500) !important;
+  box-shadow: inset 0 0 0 2px var(--purple-900);
+  transition: background 0.12s, color 0.12s;
+}
+/* hovered result cell mirror */
+.wp-table--result td.is-hover {
+  background: var(--gold-500) !important;
+  color: var(--purple-900) !important;
+}
+
+/* ───────── buttons ───────── */
+.wp-btn {
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  font-weight: 500;
+  border: 1px solid var(--purple-500);
+  background: transparent;
+  color: var(--purple-500);
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  display: inline-flex; align-items: center; gap: 0.4rem;
+}
+.wp-btn:hover { background: var(--purple-500); color: #fff; }
+.wp-btn[hidden] { display: none; }
+/* Send and Cancel share the slot in the form action bar; pin them to the
+   same width and center their content so swapping one for the other
+   doesn't shift the rest of the row. The cancel button is .wp-btn--ghost
+   for its colour palette but inherits the primary's box (font-size,
+   padding, weight) so the row height stays put. */
+#run-btn, #cancel-btn { min-width: 9.5rem; justify-content: center; }
+#cancel-btn {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.55rem 1.1rem;
+  background: var(--terracotta-500);
+  border-color: var(--terracotta-500);
+  color: var(--fg-on-dark);
+}
+#cancel-btn:hover {
+  background: var(--terracotta-500);
+  border-color: var(--terracotta-500);
+  color: var(--fg-on-dark);
+  filter: brightness(0.9);
+}
+.wp-btn--primary {
+  background: var(--gold-500);
+  border-color: var(--gold-500);
+  color: var(--purple-900);
+  font-weight: 600;
+  padding: 0.55rem 1.1rem;
+}
+.wp-btn--primary:hover { background: var(--gold-700); border-color: var(--gold-700); color: var(--purple-900); }
+.wp-btn--ghost {
+  background: transparent;
+  border-color: var(--border-soft);
+  color: var(--purple-700);
+  font-size: 0.78rem;
+  padding: 0.32rem 0.65rem;
+}
+.wp-btn--ghost:hover { background: var(--bg-code); color: var(--purple-700); border-color: var(--purple-500); }
+.wp-btn--ghost[aria-expanded="true"] { background: var(--bg-code); border-color: var(--purple-500); }
+
+/* Past-queries dropdown : pinned to the History button. */
+.wp-history { position: relative; display: inline-flex; }
+.wp-history__menu {
+  position: absolute;
+  /* Open downward over the result section so the menu is always anchored
+     against the viewport top (where the History button sits): an upward
+     menu of 60vh would push its top above the viewport when the form is
+     near the top of the window, hiding the upper entries even though
+     overflow-y: auto would otherwise let the user scroll to them. */
+  top: calc(100% + 6px);
+  right: 0;
+  margin: 0;
+  padding: 0.3rem 0;
+  list-style: none;
+  background: #fff;
+  color: var(--purple-900);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
+  min-width: 320px;
+  max-width: 540px;
+  max-height: 40vh;
+  overflow-y: auto;
+  z-index: 20;
+}
+.wp-history__menu[hidden] { display: none; }
+.wp-history__menu li {
+  padding: 0.45rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--border-soft);
+}
+.wp-history__menu li:last-child { border-bottom: none; }
+.wp-history__menu li:hover { background: var(--bg-code); }
+.wp-history__empty {
+  padding: 0.6rem 0.85rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.wp-history__clear {
+  border-top: 1px solid var(--border-soft);
+  padding: 0.4rem 0.85rem;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--terracotta-500);
+  cursor: pointer;
+  text-align: right;
+}
+.wp-history__clear:hover { background: rgba(196, 102, 74, 0.08); }
+
+/* ───────── editor ───────── */
+.wp-form { margin-bottom: 1.5rem; }
+.wp-editor {
+  display: flex;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+  overflow: hidden;
+  border-left: 3px solid var(--gold-500);
+}
+.wp-editor__gutter {
+  background: var(--bg-code);
+  color: var(--purple-700);
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.65rem 0.5rem;
+  border-right: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+.wp-editor__gutter-action {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.wp-editor__gutter-action:hover {
+  color: var(--terracotta-500);
+  border-color: var(--border-soft);
+  background: var(--bg-canvas);
+}
+.wp-editor__panel {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+/* Editor + highlighted overlay share identical metrics so glyphs align
+   exactly. The textarea sits on top with transparent text colour; the
+   underlying <pre> renders the syntax-highlighted version. */
+.wp-editor__ta,
+.wp-editor__hl {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  padding: 0.65rem 0.85rem;
+  margin: 0;
+  border: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  tab-size: 2;
+  -moz-tab-size: 2;
+}
+.wp-editor__hl {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--purple-900);
+  background: transparent;
+  overflow: auto;
+  scrollbar-width: none;
+}
+.wp-editor__hl::-webkit-scrollbar { width: 0; height: 0; }
+.wp-editor__hl code { display: block; font: inherit; color: inherit; background: none; }
+.wp-editor__ta {
+  position: relative;
+  display: block;
+  width: 100%;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--purple-900);
+  resize: vertical;
+  outline: none;
+}
+.wp-editor__ta::selection {
+  background: rgba(107, 79, 160, 0.25);
+}
+.wp-editor__ta::placeholder {
+  color: var(--fg-muted);
+  -webkit-text-fill-color: var(--fg-muted);
+}
+
+/* SQL token colours for the overlay. Colours match the Pygments "default"
+   style used by the user docs (doc/source/_build/html/_static/pygments.css),
+   but bold/italic are dropped: any font-weight or font-style change between
+   the textarea (regular) and the overlay shifts glyph advance widths and
+   the caret drifts off the displayed text. Colour alone is enough. */
+.hl-kw  { color: #008000; }   /* Keyword (.k)         */
+.hl-fn  { color: #0000FF; }   /* Name.Function (.nf)  */
+.hl-str { color: #BA2121; }   /* Literal.String (.s)  */
+.hl-num { color: #666666; }   /* Literal.Number (.m)  */
+.hl-com { color: #3D7B7B; }   /* Comment (.c)         */
+.hl-op  { color: #666666; }   /* Operator (.o)        */
+.wp-form__actions {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+.wp-form__hint {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  display: inline-flex; align-items: center; gap: 0.4rem;
+}
+.wp-form__hint code { color: var(--purple-700); }
+
+/* GUC toggles in the form-actions row, styled as switches. The native
+   checkbox keeps semantics + keyboard handling; appearance:none lets us
+   draw a track + knob via the input itself. */
+.wp-toggle {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  cursor: pointer;
+  user-select: none;
+}
+.wp-toggle input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  position: relative;
+  width: 30px; height: 16px;
+  border-radius: 999px;
+  background: var(--border-soft);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.wp-toggle input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(42, 24, 80, 0.25);
+  transition: left 0.15s, background 0.15s;
+}
+.wp-toggle input[type="checkbox"]:checked {
+  background: var(--purple-500);
+  border-color: var(--purple-500);
+}
+.wp-toggle input[type="checkbox"]:checked::before { left: 15px; }
+.wp-toggle input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 1px;
+}
+.wp-toggle code { color: var(--purple-700); font-size: 0.95em; }
+/* Padlock placeholder: present in the DOM in both modes so the toggle's
+   horizontal footprint doesn't change when switching mode. Visibility (not
+   display) toggling keeps the box reserved. */
+.wp-toggle__lock { font-size: 0.7em; color: var(--fg-muted); visibility: hidden; }
+.wp-toggle.is-locked .wp-toggle__lock { visibility: visible; }
+
+/* Locked state: muted track + padlock icon. Track stays in the "on"
+   position but uses a desaturated colour to signal it isn't user-editable. */
+.wp-toggle.is-locked { cursor: not-allowed; }
+.wp-toggle.is-locked input[type="checkbox"] { cursor: not-allowed; }
+.wp-toggle.is-locked input[type="checkbox"]:checked {
+  background: var(--purple-300, #B8A5D6);
+  border-color: var(--purple-300, #B8A5D6);
+}
+.wp-toggle.is-locked input[type="checkbox"]::before {
+  background: #f0e8fa;
+  box-shadow: none;
+}
+.wp-toggle.is-locked code { color: var(--fg-muted); font-style: italic; }
+
+/* ───────── result block ───────── */
+.wp-result__hdr {
+  display: flex; align-items: baseline; justify-content: space-between;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+.wp-result__title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 1.4rem;
+  margin: 0;
+  color: var(--purple-900);
+}
+.wp-result__meta {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wp-result__trunc { color: var(--terracotta-500); text-transform: none; }
+.wp-result__cell { cursor: pointer; }
+.wp-result__legend {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  margin: 0.65rem 0 0;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.wp-legend-swatch {
+  display: inline-block;
+  width: 14px; height: 14px;
+  background: var(--terracotta-500);
+  border-radius: 3px;
+}
+
+/* ───────── circuit mode (from ui_kits/circuit/circuit.css) ───────── */
+
+/* ───────── nav ───────── */
+.cv-nav {
+  background: var(--purple-500);
+  border-bottom: 3px solid var(--gold-500);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.65rem 1.5rem;
+  color: #fff;
+  height: 64px;
+}
+.cv-nav__brand { display: flex; align-items: center; gap: 0.85rem; }
+.cv-nav__logo { width: 36px; height: 36px; }
+.cv-nav__title {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+.cv-nav__title em { color: var(--gold-500); font-style: italic; font-weight: 600; }
+.cv-nav__meta { display: flex; align-items: center; gap: 1.25rem; }
+.cv-nav__link {
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  color: rgba(255,255,255,0.88);
+  text-decoration: none;
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  transition: color 0.15s;
+}
+.cv-nav__link:hover { color: var(--gold-500); }
+
+/* ───────── shell ───────── */
+.cv-shell {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 0;
+  height: calc(100vh - 64px);
+}
+
+/* ───────── side ───────── */
+.cv-side {
+  border-right: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  overflow-y: auto;
+  padding: 1.25rem;
+  display: flex; flex-direction: column; gap: 1.25rem;
+}
+.cv-card {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  padding: 1rem 1.1rem 1.1rem;
+}
+.cv-card__title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 1.35rem;
+  margin: 0 0 0.3rem;
+  color: var(--purple-900);
+  border-bottom: 2px solid var(--gold-500);
+  padding-bottom: 0.15em;
+  display: inline-block;
+}
+.cv-card__lead {
+  margin: 0.4rem 0 0.85rem;
+  font-size: 0.85rem;
+  opacity: 0.82;
+}
+
+/* query list */
+.cv-querylist { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.85rem; }
+.cv-query {
+  font-family: var(--font-ui);
+  font-size: 0.83rem;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.5rem 0.7rem;
+  color: var(--purple-900);
+  cursor: pointer;
+  display: flex; align-items: center; gap: 0.5rem;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.cv-query:hover { background: var(--bg-code); border-color: var(--purple-500); }
+.cv-query.is-active {
+  background: var(--purple-500);
+  color: #fff;
+  border-color: var(--purple-500);
+}
+.cv-query__name {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 80px;
+}
+.cv-query__sql {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  opacity: 0.85;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* SQL display */
+.cv-editor {
+  display: flex;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+  overflow: hidden;
+  border-left: 3px solid var(--gold-500);
+}
+.cv-editor__gutter {
+  background: var(--bg-code);
+  color: var(--purple-700);
+  font-family: var(--font-ui);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.5rem 0.6rem;
+  border-right: 1px solid var(--border-soft);
+  font-weight: 600;
+}
+.cv-editor__code {
+  margin: 0;
+  flex: 1;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--purple-900);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* result table */
+.cv-resultwrap {
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.cv-result { width: 100%; border-collapse: collapse; font-family: var(--font-ui); font-size: 0.82rem; }
+.cv-result th, .cv-result td { padding: 0.45rem 0.6rem; text-align: left; border-bottom: 1px solid var(--border-soft); }
+.cv-result th {
+  background: var(--bg-elevated);
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--purple-700); font-weight: 600;
+}
+.cv-result tbody tr { cursor: pointer; transition: background 0.12s; }
+.cv-result tbody tr:hover td { background: rgba(232, 184, 75, 0.18); }
+.cv-result tbody tr.is-selected td {
+  background: var(--gold-500);
+  color: var(--purple-900);
+  font-weight: 600;
+}
+.cv-result tbody tr:last-child td { border-bottom: none; }
+.cv-result__hint {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  margin: 0.6rem 0 0;
+  display: flex; align-items: center; gap: 0.4rem;
+}
+.cv-result__hint strong { color: var(--purple-900); font-weight: 600; }
+
+/* legend */
+.cv-card--legend .cv-legend { list-style: none; padding: 0; margin: 0.5rem 0 0; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.83rem; }
+.cv-card--legend .cv-legend li { display: flex; align-items: center; gap: 0.65rem; }
+.cv-card--legend .cv-legend code { background: var(--bg-code); padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
+.cv-legend__chip {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 1.05rem;
+  flex-shrink: 0;
+  border: 1.5px solid currentColor;
+}
+.cv-gate-times { background: #fff; color: var(--purple-500); border-color: var(--purple-500); }
+.cv-gate-plus  { background: #fff; color: var(--terracotta-500); border-color: var(--terracotta-500); }
+.cv-gate-eq    { background: #fff; color: var(--purple-700); border-color: var(--purple-700); }
+.cv-leaf       { background: var(--purple-500); color: #fff; border-color: var(--purple-500); font-family: var(--font-mono); font-style: normal; font-size: 0.85rem; }
+.cv-leaf--one  { background: var(--gold-500); color: var(--purple-900); border-color: var(--gold-500); }
+
+/* ───────── main canvas ───────── */
+.cv-main {
+  display: flex; flex-direction: column;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(107, 79, 160, 0.08) 1px, transparent 0) 0 0 / 24px 24px,
+    var(--bg-canvas);
+}
+.cv-main__hdr {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding: 1.1rem 1.5rem 0.6rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+.cv-main__title {
+  font-family: var(--font-display); font-style: italic; font-weight: 600;
+  font-size: 1.65rem; margin: 0;
+  border-bottom: 2px solid var(--gold-500);
+  padding-bottom: 0.1em;
+  display: inline-block;
+}
+.cv-main__sub {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem; color: var(--fg-muted);
+}
+
+/* toolbar */
+.cv-toolbar {
+  display: flex; align-items: center; gap: 0.4rem;
+}
+.cv-tool {
+  width: 34px; height: 34px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--purple-700);
+  font-size: 0.85rem;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.cv-tool:hover { background: var(--purple-500); color: #fff; border-color: var(--purple-500); }
+.cv-tool--toggle[aria-pressed="true"] {
+  background: var(--gold-500); border-color: var(--gold-500); color: var(--purple-900);
+}
+.cv-tool__sep { width: 1px; height: 24px; background: var(--border-soft); margin: 0 0.25rem; }
+
+/* canvas */
+.cv-canvas {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+/* Floating actionable banner inside .cv-canvas (e.g. 413 "too large").
+   Centred with translate; max-width keeps it readable on wide layouts. */
+.cv-banner {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  border: 1px solid var(--border-soft);
+  border-left: 4px solid var(--terracotta-500);
+  padding: 0.95rem 1.1rem;
+  border-radius: 5px;
+  max-width: min(80%, 460px);
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.18);
+  font-family: var(--font-ui);
+  z-index: 10;
+}
+.cv-banner__title {
+  font-family: var(--font-display); font-style: italic; font-weight: 600;
+  font-size: 1rem;
+  color: var(--terracotta-500);
+  margin-bottom: 0.4rem;
+}
+.cv-banner__body { margin: 0 0 0.6rem; font-size: 0.86rem; color: var(--purple-900); }
+.cv-banner__actions { margin-bottom: 0.5rem; }
+.cv-banner__btn {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--purple-500);
+  background: var(--purple-500);
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.cv-banner__btn:hover { background: var(--purple-700); border-color: var(--purple-700); }
+#circuit {
+  /* Pin to the bordered .cv-canvas (which is position: relative).
+     `width: 100%; height: 100%` alone is unreliable on SVG inside a
+     flex parent : the element's intrinsic aspect ratio (driven by the
+     viewBox) can override the CSS height in some browsers, leaving
+     the SVG at half the parent's height. inset: 0 sidesteps that by
+     anchoring all four edges to the container. */
+  position: absolute;
+  inset: 0;
+  display: block;
+  cursor: grab;
+}
+#circuit:active { cursor: grabbing; }
+
+/* circuit nodes (svg) */
+.node-group { cursor: grab; }
+.node-group:active { cursor: grabbing; }
+.node-shape {
+  fill: #fff;
+  stroke: var(--purple-500);
+  stroke-width: 2;
+  transition: fill 0.18s, stroke 0.18s, stroke-width 0.18s;
+}
+.node-label {
+  font-family: var(--font-display);
+  font-style: normal;
+  font-weight: 600;
+  fill: var(--purple-500);
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  user-select: none;
+}
+.node-meta {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  fill: var(--fg-muted);
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Leaves keep their distinctive filled-circle look (purple disk, white
+   glyph) so input/update gates pop out as the data sources of the
+   circuit. Internal gates all share the default outlined-circle style:
+   per-type stroke / fill overrides reserved terracotta / deep-purple
+   accents that ended up indistinguishable from the active-pinned state. */
+.node--leaf  .node-shape { fill: var(--purple-500); stroke: var(--purple-700); }
+.node--leaf  .node-label { fill: #fff; font-family: var(--font-mono); font-style: normal; font-size: 11px; }
+.node--leaf  .node-meta  { fill: var(--purple-700); font-weight: 500; }
+
+/* hover + active */
+.node-group:hover .node-shape { stroke-width: 3; filter: drop-shadow(0 2px 6px rgba(42, 24, 80, 0.25)); }
+.node-group.is-active .node-shape { stroke: var(--terracotta-500); stroke-width: 3; }
+.node-group.is-pinned .node-shape {
+  stroke: var(--terracotta-500); stroke-width: 3;
+  fill: rgba(196, 102, 74, 0.12);
+}
+.node-group.is-pinned.node--leaf .node-shape { fill: var(--terracotta-500); }
+
+/* edges */
+.edge {
+  fill: none;
+  stroke: var(--purple-700);
+  stroke-width: 1.6;
+  marker-end: url(#arrow);
+  transition: stroke 0.18s, stroke-width 0.18s;
+}
+.edge.is-active {
+  stroke: var(--terracotta-500);
+  stroke-width: 2.4;
+  marker-end: url(#arrow-active);
+}
+/* Child-position digit drawn near the child end of edges out of
+   non-commutative gates (cmp / semimod / monus / agg / eq). Small,
+   muted, mono so it reads as metadata rather than a node label. */
+.edge-pos {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  fill: var(--fg-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* inspector */
+.cv-inspector {
+  position: absolute;
+  top: 1rem; right: 1rem;
+  width: 280px;
+  background: #fff;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  box-shadow: 0 4px 16px rgba(42, 24, 80, 0.18);
+  font-family: var(--font-ui);
+  font-size: 0.83rem;
+  display: none;
+}
+.cv-inspector.is-open { display: block; }
+.cv-inspector__hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.55rem 0.85rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-soft);
+  border-top-left-radius: 5px; border-top-right-radius: 5px;
+}
+.cv-inspector__title {
+  font-family: var(--font-display); font-style: italic; font-weight: 600;
+  margin: 0; font-size: 1.05rem;
+}
+.cv-inspector__close {
+  background: transparent; border: none; color: var(--fg-muted); cursor: pointer;
+  font-size: 0.85rem;
+}
+.cv-inspector__close:hover { color: var(--terracotta-500); }
+.cv-inspector__body { padding: 0.7rem 0.85rem; }
+.cv-inspector__body dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 0.7rem; }
+.cv-inspector__body dt { color: var(--fg-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.cv-inspector__body dd { margin: 0; font-family: var(--font-mono); font-size: 0.78rem; word-break: break-all; color: var(--purple-700); }
+.cv-inspector__body p { margin: 0.6rem 0 0; line-height: 1.5; font-size: 0.82rem; }
+.cv-inspector__mapping {
+  margin: 0; padding: 0; list-style: none;
+  font-family: var(--font-mono); font-size: 0.78rem;
+}
+.cv-inspector__mapping li { margin: 0.05rem 0; }
+
+/* Editable probability cell: subtle hover affordance + a small pencil
+   that appears on hover so the user knows the value is interactive
+   without committing screen real estate to it permanently. */
+.cv-prob__editable { cursor: pointer; border-bottom: 1px dotted transparent; }
+.cv-prob__editable:hover { border-bottom-color: var(--purple-500); }
+.cv-prob__editable:hover::after { content: " ✎"; opacity: 0.55; font-size: 0.85em; }
+.cv-prob__input {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  width: 5.5rem;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--purple-500);
+  border-radius: 3px;
+  color: var(--purple-700);
+}
+.cv-prob__input.is-error { border-color: var(--terracotta-500); }
+.cv-prob__msg { margin-left: 0.4rem; font-size: 0.72rem; color: var(--fg-muted); }
+.cv-prob__msg.is-error { color: var(--terracotta-500); }
+
+/* Semiring-evaluation strip. The selects collapse / expand depending on
+   the chosen semiring (probability → method; rest → mapping, optional
+   for boolexpr and prov-xml). The result chip changes accent based on
+   its data-kind. */
+.cv-eval__semiring,
+.cv-eval__mapping,
+.cv-eval__method,
+.cv-eval__args {
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--purple-900);
+}
+.cv-eval__args {
+  font-family: var(--font-mono);
+  min-width: 14ch;
+}
+.cv-eval__target {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  margin-left: 0.2rem;
+}
+/* Inline note next to the mapping dropdown : flags compiled semirings'
+   value-type expectations (boolean / numeric) and shows the active
+   filter for custom semirings. */
+.cv-eval__hint {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.cv-eval__result {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  word-break: break-all;
+  max-width: 100%;
+}
+.cv-eval__result:empty { display: none; }
+.cv-eval__result[data-kind="ok"]      { background: rgba(125, 65, 153, 0.12); color: var(--purple-900); }
+.cv-eval__result[data-kind="pending"] { background: rgba(184, 144, 30, 0.15); color: var(--gold-700); font-style: italic; }
+.cv-eval__result[data-kind="error"]   { background: rgba(196, 102, 74, 0.12); color: var(--terracotta-500); font-weight: 500; }
+/* PROV-XML export: drop the chip background and let the inner <pre>
+   carry its own monospace styling. The result span becomes a block-level
+   container so the pre wraps to its own line. */
+.cv-eval__result[data-kind="xml"] {
+  background: transparent;
+  padding: 0;
+  display: block;
+  flex-basis: 100%;
+}
+/* Probability results : clickable to flip rounded ↔ full precision. */
+.cv-eval__result[data-flip-kind="prob"] {
+  cursor: pointer;
+}
+.cv-eval__time,
+.cv-eval__bound {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  margin-left: 0.45rem;
+}
+.cv-eval__time:empty,
+.cv-eval__bound:empty { display: none; }
+.cv-eval__bound { font-style: italic; }
+/* Tiny dismiss button next to the result; revealed only after a run.
+   Keeps the result row tidy when no value is shown. */
+/* Slim framed icon buttons : the visual matches sphinx-copybutton (the
+   user docs' copy widget) so the same affordance reads the same way in
+   docs and Studio. 1px border, rounded corners, light-grey background;
+   hover deepens. The eraser keeps a terracotta hover for its
+   destructive role; the clipboard goes purple, then green on success. */
+.cv-eval__clear,
+.cv-eval__copy {
+  cursor: pointer;
+  width: 1.7em;
+  height: 1.7em;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
+  line-height: 1;
+  border-radius: 0.4em;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.cv-eval__clear:hover { color: var(--terracotta-500); background: var(--bg-code); }
+.cv-eval__copy:hover  { color: var(--purple-700); background: var(--bg-code); }
+/* `display: inline-flex` would otherwise win over the `[hidden]` UA
+   `display: none`, leaving both buttons visible before the user has run
+   any evaluation. */
+.cv-eval__clear[hidden],
+.cv-eval__copy[hidden] { display: none; }
+.cv-eval__copy.is-copied {
+  /* Sphinx-copybutton's success colour, kept as a literal so the green
+     reads the same across docs and Studio. */
+  border-color: #22863a;
+  color: #22863a;
+}
+/* Cluster the dismiss + copy buttons so they sit immediately next to
+   each other, separate from the rest of the eval-action-row's flex gap. */
+.cv-eval__btnpair {
+  display: inline-flex;
+  gap: 0.2rem;
+  align-items: center;
+}
+
+/* ───────── inline help links ─────────
+   A small (?) icon next to a labelled control. Click opens the matching
+   anchor in the online documentation; the native `title=` attribute on
+   the same element provides a one-line summary on hover, no JS. */
+.wp-help {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  font-size: 0.85em;
+  line-height: 1;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0.55;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.wp-help:hover { opacity: 1; color: var(--terracotta-500); }
+.wp-help:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--terracotta-500);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+.wp-help i { vertical-align: middle; }

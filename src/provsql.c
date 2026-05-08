@@ -68,6 +68,7 @@ bool provsql_active = true; ///< @c true while ProvSQL query rewriting is enable
 bool provsql_where_provenance = false;
 bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
+bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
@@ -237,8 +238,8 @@ aggregation_type_mutator(Node *node,
         is_target_agg_var(linitial(f->args), context)) {
       /* Look up the cast from agg_token to the target type */
       HeapTuple castTuple = SearchSysCache2(CASTSOURCETARGET,
-        ObjectIdGetDatum(context->constants->OID_TYPE_AGG_TOKEN),
-        ObjectIdGetDatum(f->funcresulttype));
+                                            ObjectIdGetDatum(context->constants->OID_TYPE_AGG_TOKEN),
+                                            ObjectIdGetDatum(f->funcresulttype));
 
       if (HeapTupleIsValid(castTuple)) {
         Form_pg_cast castForm = (Form_pg_cast) GETSTRUCT(castTuple);
@@ -312,13 +313,13 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
                   SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
                   if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
                     provsql_error("ORDER BY on aggregate results from "
-                                   "a subquery not supported");
+                                  "a subquery not supported");
                 }
                 foreach (lc3, q->groupClause) {
                   SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
                   if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
                     provsql_error("GROUP BY on aggregate results from "
-                                   "a subquery not supported");
+                                  "a subquery not supported");
                 }
               }
             }
@@ -1204,6 +1205,21 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     FuncExpr *fe = makeNode(FuncExpr);
     bool projection = false;
     int nb_column = 0;
+    /* Cumulative offset of each RTE within the TIMES gate's concatenated
+     * locator vector.  WhereCircuit::evaluate(TIMES) appends the locator
+     * vector of each child input in q->rtable order, so a column at
+     * varattno k of the i-th provenance-tracked base RTE lands at
+     * prov_offset[i] + k in the concat.  varattno alone (the recent fix
+     * documented at the top of this file) is correct only when there is a
+     * single provenance-tracked input; for multi-input joins it omits the
+     * preceding inputs' nb_user_cols and the project gate then reads from
+     * the wrong table's locator slice.
+     *
+     * 1-indexed by rteid for direct indexing via Var->varno; entry 0 is
+     * unused.  Length q->rtable->length + 1. */
+    int *prov_offset = (int *)palloc0((q->rtable->length + 1) * sizeof(int));
+    int cum = 0;
+    Index r;
 
     fe->funcid = constants->OID_FUNCTION_PROVENANCE_PROJECT;
     fe->funcvariadic = true;
@@ -1214,6 +1230,22 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     array->element_typeid = constants->OID_TYPE_INT;
     array->elements = NIL;
     array->location = -1;
+
+    for (r = 1; r <= (Index)q->rtable->length; ++r) {
+      prov_offset[r] = cum;
+      if (columns[r-1]) {
+        RangeTblEntry *rte_r = (RangeTblEntry *)list_nth(q->rtable, r-1);
+        int ncols = list_length(rte_r->eref->colnames);
+        bool is_prov = false;
+        int nb_user = 0;
+        int k;
+        for (k = 0; k < ncols; ++k) {
+          if (columns[r-1][k] == -1) is_prov = true;
+          else if (columns[r-1][k] > 0) nb_user++;
+        }
+        if (is_prov) cum += nb_user;
+      }
+    }
 
     foreach (lc_v, q->targetList) {
       TargetEntry *te_v = (TargetEntry *)lfirst(lc_v);
@@ -1228,7 +1260,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           if(IsA(ge, Var)) {
             Var *v = (Var *) ge;
             value_v = columns[v->varno - 1] ?
-              columns[v->varno - 1][v->varattno - 1] : 0;
+                      columns[v->varno - 1][v->varattno - 1] : 0;
           } else {
             Const *ce = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
                                   sizeof(int32), Int32GetDatum(0), false, true);
@@ -1253,18 +1285,16 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
             }
             if (is_prov) {
               int raw = columns[vte_v->varno - 1][vte_v->varattno - 1];
-              /* Use varattno (1-indexed column position within the table)
-               * rather than the global sequential number from
-               * build_column_map().  The sequential number is
-               * query-order-dependent: when other RTEs appear before this
-               * one in q->rtable, the sequential number exceeds nb_columns
-               * of the IN gate and causes WhereCircuit::evaluate() to
-               * return an empty locator set.  varattno is always the
-               * correct position because add_provenance() appends the
-               * provsql column last, so user columns occupy positions
-               * 1..nb_columns exactly matching the IN gate's Locator
-               * vector layout. */
-              value_v = (raw == -1) ? -1 : (int)vte_v->varattno;
+              /* Local position within this table is `varattno` (the
+               * provsql column is appended last by add_provenance(), so
+               * user columns occupy 1..nb_user_cols exactly matching the
+               * IN gate's Locator vector).  We then shift by
+               * prov_offset[varno] to land in the right slice of the
+               * TIMES gate's concatenated locator vector when the query
+               * joins multiple provenance-tracked relations. */
+              value_v = (raw == -1) ? -1
+                                    : (int)vte_v->varattno
+                        + prov_offset[vte_v->varno];
             } else {
               /* Non-provenance base table: no IN gate exists for it, so
                * the position would be out of range regardless.  Explicitly
@@ -1280,10 +1310,10 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
             }
           } else {
             /* RTE_SUBQUERY and others: the sequential number equals the
-             * column's 1-indexed position in the subquery's output list,
-             * which matches what the child gate's evaluate() expects. */
+            * column's 1-indexed position in the subquery's output list,
+            * which matches what the child gate's evaluate() expects. */
             value_v = columns[vte_v->varno - 1] ?
-              columns[vte_v->varno - 1][vte_v->varattno - 1] : 0;
+                      columns[vte_v->varno - 1][vte_v->varattno - 1] : 0;
           }
         } else { // Join RTE
           Var *jav_v = (Var *)lfirst(
@@ -1304,7 +1334,9 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
               }
               if (is_prov) {
                 int raw = columns[jav_v->varno - 1][jav_v->varattno - 1];
-                value_v = (raw == -1) ? -1 : (int)jav_v->varattno;
+                value_v = (raw == -1) ? -1
+                                      : (int)jav_v->varattno
+                          + prov_offset[jav_v->varno];
               } else {
                 Const *ce =
                   makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
@@ -1763,7 +1795,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
 
             if (!HeapTupleIsValid(opInfo))
               provsql_error("could not find equality operator for type %u",
-                             ytype);
+                            ytype);
             opform = (Form_pg_operator)GETSTRUCT(opInfo);
 
             oe->opno         = opno;
@@ -2549,7 +2581,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 
       if (!HeapTupleIsValid(opInfo))
         provsql_error("could not find operator with OID %u to compare variables of type %u",
-                       opno, v->vartype);
+                      opno, v->vartype);
 
       opform = (Form_pg_operator)GETSTRUCT(opInfo);
       leftArg = makeNode(Var);
@@ -3023,8 +3055,8 @@ static void cast_agg_token_in_list(ListCell *lc,
     return;
 
   castTuple = SearchSysCache2(CASTSOURCETARGET,
-    ObjectIdGetDatum(ctx->constants->OID_TYPE_AGG_TOKEN),
-    ObjectIdGetDatum(target));
+                              ObjectIdGetDatum(ctx->constants->OID_TYPE_AGG_TOKEN),
+                              ObjectIdGetDatum(target));
   if (HeapTupleIsValid(castTuple)) {
     Form_pg_cast castForm = (Form_pg_cast)GETSTRUCT(castTuple);
     if (OidIsValid(castForm->castfunc)) {
@@ -3142,7 +3174,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   int **columns;
   unsigned i = 0;
   if (provsql_verbose >= 50)
-    elog_node_display(NOTICE, "Before ProvSQL query rewriting", q, true);
+    elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
   if (q->rtable == NULL) {
     // No FROM clause, we can skip this query
@@ -3185,7 +3217,7 @@ static Query *process_query(const constants_t *constants, Query *q,
           if (rte->rtekind == RTE_SUBQUERY && rte->subquery &&
               rte->subquery->hasAggs)
             provsql_error("Non-ALL set operations (UNION, EXCEPT) on "
-                           "aggregate results not supported");
+                          "aggregate results not supported");
         }
         q = rewrite_non_all_into_external_group_by(q);
         return process_query(constants, q, removed);
@@ -3218,7 +3250,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         provsql_error("DISTINCT on aggregate results not supported");
       } else if (list_length(q->distinctClause) < list_length(q->targetList)) {
         provsql_error("Inconsistent DISTINCT and GROUP BY clauses not "
-                       "supported");
+                      "supported");
         supported = false;
       } else {
         transform_distinct_into_group_by(q);
@@ -3237,7 +3269,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         has_difference = true;
       } else {
         provsql_error("Set operations other than UNION and EXCEPT not "
-                       "supported");
+                      "supported");
         supported = false;
       }
     }
@@ -3284,7 +3316,7 @@ static Query *process_query(const constants_t *constants, Query *q,
             if (sort->tleSortGroupRef == te->ressortgroupref) {
               if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
                 provsql_error("ORDER BY on the result of an aggregate function is "
-                               "not supported");
+                              "not supported");
               break;
             }
           }
@@ -3317,7 +3349,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   }
 
   if (provsql_verbose >= 50)
-    elog_node_display(NOTICE, "After ProvSQL query rewriting", q, true);
+    elog_node_display(NOTICE, "ProvSQL: After query rewriting", q, true);
 
   return q;
 }
@@ -3372,8 +3404,8 @@ static void process_insert_select(const constants_t *constants, Query *q) {
 
   if (provsql_attno == 0) {
     provsql_warning("INSERT ... SELECT on provenance-tracked "
-                     "tables: source provenance is not propagated "
-                     "to inserted rows");
+                    "tables: source provenance is not propagated "
+                    "to inserted rows");
     return;
   }
 
@@ -3428,7 +3460,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
 
     /* Update the subquery RTE's column names to include provsql */
     src_rte->eref->colnames = lappend(src_rte->eref->colnames,
-      makeString(pstrdup(PROVSQL_COLUMN_NAME)));
+                                      makeString(pstrdup(PROVSQL_COLUMN_NAME)));
   }
 }
 
@@ -3469,8 +3501,8 @@ static PlannedStmt *provsql_planner(Query *q,
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
-        provsql_notice("Main query before ProvSQL query rewriting:\n%s\n",
-                        pg_get_querydef(q, true));
+        provsql_notice("Main query before query rewriting:\n%s\n",
+                       pg_get_querydef(q, true));
 #endif
 
       if (provsql_verbose >= 40)
@@ -3480,12 +3512,12 @@ static PlannedStmt *provsql_planner(Query *q,
 
       if (provsql_verbose >= 40)
         provsql_notice("planner time spent=%f",
-                        (double)(clock() - begin) / CLOCKS_PER_SEC);
+                       (double)(clock() - begin) / CLOCKS_PER_SEC);
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
-        provsql_notice("Main query after ProvSQL query rewriting:\n%s\n",
-                        pg_get_querydef(q, true));
+        provsql_notice("Main query after query rewriting:\n%s\n",
+                       pg_get_querydef(q, true));
 #endif
 
       if (new_query != NULL)
@@ -3511,16 +3543,16 @@ static PlannedStmt *provsql_planner(Query *q,
  * @brief Extension initialization – called once when the shared library is loaded.
  *
  * Registers the GUC variables (@c provsql.active, @c where_provenance,
- * @c update_provenance, @c verbose_level, @c tool_search_path), installs
- * the planner hook and shared-memory hooks, and launches the background
- * MMap worker.
+ * @c update_provenance, @c verbose_level, @c aggtoken_text_as_uuid,
+ * @c tool_search_path), installs the planner hook and shared-memory hooks,
+ * and launches the background MMap worker.
  *
  * Must be loaded via @c shared_preload_libraries; raises an error otherwise.
  */
 void _PG_init(void) {
   if (!process_shared_preload_libraries_in_progress)
     provsql_error("provsql needs to be added to the shared_preload_libraries "
-                   "configuration variable");
+                  "configuration variable");
 
   DefineCustomBoolVariable("provsql.active",
                            "Should ProvSQL track provenance?",
@@ -3546,6 +3578,22 @@ void _PG_init(void) {
                            "Should ProvSQL track update provenance?",
                            "1 turns update provenance on, 0 off.",
                            &provsql_update_provenance,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.aggtoken_text_as_uuid",
+                           "Output agg_token cells as the underlying UUID "
+                           "instead of \"value (*)\".",
+                           "Off by default for psql-friendly output. UI "
+                           "layers (notably ProvSQL Studio) flip this on "
+                           "per session so aggregate cells expose the "
+                           "circuit root UUID for click-through; the "
+                           "display value is recovered via "
+                           "provsql.agg_token_value_text(uuid).",
+                           &provsql_aggtoken_text_as_uuid,
                            false,
                            PGC_USERSET,
                            0,

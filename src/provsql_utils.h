@@ -163,6 +163,12 @@ extern bool provsql_where_provenance;
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
 
+/** Global flag controlling agg_token text output: when true,
+ * agg_token_out emits the underlying provenance UUID instead of the
+ * default "value (*)" display string. Driven by the
+ * provsql.aggtoken_text_as_uuid GUC. */
+extern bool provsql_aggtoken_text_as_uuid;
+
 /** Colon-separated list of directories prepended to PATH when ProvSQL
  * spawns external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy),
  * set by the provsql.tool_search_path run-time configuration parameter.
