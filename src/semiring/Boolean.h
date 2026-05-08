@@ -67,6 +67,9 @@ virtual value_type delta(value_type x) const override
 virtual bool absorptive() const override {
   return true;
 }
+value_type parse_leaf(const char *v) const {
+  return *v != 'f' && *v != '0';
+}
 };
 }
 

@@ -5,6 +5,205 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.3.1] - 2026-05-04
+
+A bug-fix release focused on `repair_key` / `mulinput` correctness,
+plus a corrected upgrade path from 1.2.3 and documentation additions
+(a fifth case study and expanded material in case studies 1 and 2).
+No on-disk format change relative to 1.3.0; an
+`ALTER EXTENSION provsql UPDATE` is enough.
+
+## Upgrade-script corrections
+
+- **`sql/upgrades/provsql--1.2.3--1.3.0.sql`** shipped with 1.3.0 only
+  carried the per-database mmap migration warning and missed two
+  groups of SQL-surface changes that had landed in
+  `provsql.common.sql` / `provsql.14.sql` during the 1.3.0 dev cycle:
+  the lazy-input-gate refactor of `add_provenance` / `repair_key`
+  (commit `f670b7f`) and the schema-qualified
+  `provsql.time_validity_view` references in `timetravel`,
+  `timeslice`, `history`, and `get_valid_time` (commit `1f59032`).
+  Users on 1.2.3 who ran `ALTER EXTENSION provsql UPDATE TO '1.3.0'`
+  ended up with a stale set of function bodies. The script in 1.3.1
+  has been corrected and now applies all the missing changes; users
+  still on 1.2.3 reach a clean 1.3.0-equivalent SQL surface when they
+  upgrade after 1.3.1.
+
+- **`sql/upgrades/provsql--1.3.0--1.3.1.sql`** applies the same
+  catch-up changes on the 1.3.0 → 1.3.1 path so that users **already
+  on 1.3.0** (who came through the broken upgrade) are brought back
+  in sync. Fresh installs of 1.3.0 also run this script, but the
+  CREATE OR REPLACE statements match the source already on disk, so
+  it is a no-op for them.
+
+## Bug fixes
+
+- **`probability_evaluate(..., 'tree-decomposition')` on circuits
+  containing `mulinput` gates.** Input gates produced by `repair_key`
+  could share an internal id when their UUIDs were never materialised
+  in the d-DNNF builder, causing the probability to be wrong and to
+  vary from one session to the next on identical data. The aliasing
+  has been removed (`src/BooleanCircuit.cpp`,
+  `src/dDNNFTreeDecompositionBuilder.cpp`); a regression test
+  (`test/sql/treedec_mulinput.sql`) covers the affected query shapes.
+
+- **Off-by-one in `BooleanCircuit::rewriteMultivaluedGates`.** The
+  splitter that turns a `mulinput` into a chain of independent
+  Bernoulli inputs produced non-deterministic probabilities under
+  self-join + `GROUP BY` queries. Fixed; the four built-in evaluation
+  methods (default, `'possible-worlds'`, `'tree-decomposition'`,
+  `'monte-carlo'`) now agree on `mulinput`-bearing circuits.
+
+- **Shapley and Banzhaf computation on `mulinput` circuits.**
+  `shapley()`, `shapley_all_vars()`, `banzhaf()`, and
+  `banzhaf_all_vars()` previously walked through `mulinput` gates and
+  returned meaningless values. They now raise a clear error
+  identifying the unsupported gate type.
+
+## Documentation
+
+- **New Case Study 5: The Wildlife Photo Archive.** A 30-photo /
+  13-species / 63-detection synthetic dataset demonstrates the
+  `VALUES` clause, `repair_key` and the `mulinput` gate (with the
+  numerical effect of mutual exclusion made explicit via
+  `sr_boolexpr` and `probability_evaluate`), probabilistic ranking
+  versus naive confidence thresholding, `EXCEPT` with monus, common
+  table expressions, and `expected()` aggregates. The case study is
+  bundled (no external data download) and is part of the regression
+  suite.
+
+- **Case Study 1** gains three steps in the circuit-inspection
+  section: a tree-decomposition probability variant in the benchmark
+  step, an `sr_boolexpr` step on the Nairobi monus token, and a
+  programmatic circuit-inspection step using `get_nb_gates`,
+  `get_gate_type`, `get_children`, and `identify_token`.
+
+- **Case Study 2** gains two steps: a bulk Shapley/Banzhaf step using
+  `shapley_all_vars` / `banzhaf_all_vars` (contrasted with the
+  per-variable cross-join from the existing Steps 13 and 14), and a
+  step on arithmetic over aggregate results illustrating the
+  `agg_token` cast warning.
+
+- **Copy-to-clipboard buttons** on every documentation code block
+  (`sphinx-copybutton`). A small JS shim
+  (`doc/source/_static/copybutton-shim.js`) papers over an
+  incompatibility between `sphinx-copybutton` 0.4.0 (the version in
+  Ubuntu Noble's apt) and Sphinx 9.
+
+## Infrastructure
+
+- Release tarballs and CI workflows exclude the `studio/`
+  subdirectory for future developments.
+
+## Upgrade procedure
+
+```sh
+make install
+```
+
+In each database that uses ProvSQL:
+
+```sql
+ALTER EXTENSION provsql UPDATE;
+```
+
+The mmap circuit format is unchanged from 1.3.0; no migration is
+required.
+
+## [1.3.0] - 2026-05-04
+
+### Breaking change: per-database circuit storage
+
+Prior to 1.3.0, the provenance circuit was stored in four flat files at
+the root of the PostgreSQL data directory (`$PGDATA/provsql_gates.mmap`,
+`provsql_wires.mmap`, `provsql_mapping.mmap`, `provsql_extra.mmap`),
+shared across all databases in the cluster. Starting with 1.3.0, each
+database gets its own isolated set of files under
+`$PGDATA/base/<db_oid>/`.
+
+**Users upgrading from 1.2.x must migrate their circuit data before
+upgrading.** The new `provsql_migrate_mmap` tool handles this. If the
+migration is skipped, existing circuit data becomes inaccessible (new
+provenance queries still work, but provenance computed under the old
+version is lost). The upgrade script detects old flat files and raises a
+WARNING with recovery instructions if they are still present.
+
+#### Upgrade procedure
+
+1. Install the new ProvSQL binaries:
+   ```
+   make install
+   ```
+
+2. Run the migration tool as the `postgres` user:
+   ```
+   provsql_migrate_mmap -D $PGDATA -c <connstr>
+   ```
+   The tool reads the old flat files, collects root UUIDs from each
+   database's provenance-tracked tables, writes per-database files under
+   `$PGDATA/base/<db_oid>/`, and deletes the old flat files on success.
+
+3. Restart PostgreSQL.
+
+4. In each database that uses ProvSQL:
+   ```sql
+   ALTER EXTENSION provsql UPDATE;
+   ```
+
+#### If you forgot step 2
+
+If PostgreSQL has already been restarted with the new binaries before
+migrating, some empty per-database files may have been created. To
+recover:
+
+1. Delete the empty per-database files:
+   ```
+   rm -f $PGDATA/base/*/provsql_*.mmap
+   ```
+2. Restart PostgreSQL.
+3. Immediately run `provsql_migrate_mmap` before executing any
+   provenance query.
+
+### Lazy input gate creation
+
+`add_provenance()` no longer eagerly writes an input gate to the circuit
+for every existing row in the table at the time it is called. Gates are
+now created on first reference during a query, at the cost of a small
+overhead on the first query that touches each row. This significantly
+reduces the overhead of provisioning large tables.
+
+### Four case studies
+
+Four worked examples have been added to the documentation and are
+included as regression tests:
+
+- **Case Study 1: The Intelligence Agency**: simple introductory
+  example with Boolean and why-provenance.
+- **Case Study 2: The Open Science Database**: comprehensive example
+  covering why-provenance, where-provenance, custom semirings,
+  probabilities, Shapley and Banzhaf values.
+- **Case Study 3: Île-de-France Public Transit**: Boolean provenance
+  and formula inspection over GTFS transit data.
+- **Case Study 4: Government Ministers Over Time**: temporal provenance
+  with `union_tstzintervals` and time-validity views.
+
+### Bug fixes
+
+- Fix GROUP BY provenance aggregation silently dropped when ORDER BY
+  referenced the semiring result column.
+- Fix d-DNNF tree decomposition: deduplicate OR gate children to prevent
+  double-counting in probability evaluation.
+- Fix NULL dereference and out-of-bounds crashes in where-provenance on
+  views.
+- Fix temporal functions (`time_filter`, `time_range`, `in_interval`) to
+  use schema-qualified `provsql.time_validity_view`, preventing failures
+  when `search_path` does not include the `provsql` schema.
+- Fix `sr_boolean` evaluation when the provenance mapping uses integer
+  values.
+- Fix where-provenance PROJECT gate positions for provenance tables that
+  are not the first RTE in a query, causing empty locator sets on some
+  PostgreSQL versions.
+
 ## [1.2.3] - 2026-04-12
 
 ### PGXN improvements

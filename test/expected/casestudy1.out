@@ -1,0 +1,83 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|formula
+Beijing|(Ellen ⊗ Jing)
+Nairobi|(Juma ⊗ Paul)
+(2 rows)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|min_clearance
+Beijing|secret
+Nairobi|restricted
+Paris|confidential
+(3 rows)
+remove_provenance
+
+(1 row)
+city|formula
+Nairobi|((Juma ⊕ Paul) ⊖ (Juma ⊗ Paul))
+(1 row)
+remove_provenance
+
+(1 row)
+city|source
+Beijing|{[agents::4;agents::4],[]}
+Nairobi|{[agents::4;agents::4],[]}
+Paris|{[agents::4;agents::4;agents::4],[]}
+(3 rows)
+remove_provenance
+
+(1 row)
+city|prob
+Beijing|0.5400
+Nairobi|0.2600
+Paris|0.4100
+(3 rows)
+remove_provenance
+
+(1 row)
+city|prob_within_tolerance
+Beijing|t
+(1 row)
+remove_provenance
+
+(1 row)
+city|prob
+Beijing|0.5400
+Nairobi|0.2600
+Paris|0.4100
+(3 rows)
+remove_provenance
+
+(1 row)
+city|boolexpr
+Nairobi|((x0 ∨ x1) ∧ (¬(x0 ∧ x1)))
+(1 row)
+remove_provenance
+
+(1 row)
+has_gates
+t
+(1 row)
+root_type|root_n_children
+monus|2
+(1 row)
+plus_type|plus_n_children
+plus|2
+(1 row)
+source_table|nb_columns
+agents|6
+agents|6
+(2 rows)

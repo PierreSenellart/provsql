@@ -26,9 +26,11 @@
 
 #include <cassert>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <new>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <fcntl.h>
@@ -37,7 +39,7 @@
 #include <sys/mman.h>
 
 template <typename T>
-MMappedVector<T>::MMappedVector(const char *filename, bool read_only)
+MMappedVector<T>::MMappedVector(const char *filename, bool read_only, uint64_t magic_value)
 {
   fd=open(filename, O_CREAT|(read_only?O_RDONLY:O_RDWR), 0600); // flawfinder: ignore
   if(fd==-1)
@@ -58,8 +60,20 @@ MMappedVector<T>::MMappedVector(const char *filename, bool read_only)
   mmap(length, read_only);
 
   if(empty) {
-    data->capacity = STARTING_CAPACITY;
+    data->magic     = magic_value;
+    data->version   = 1;
+    data->elem_size = static_cast<uint16_t>(sizeof(T));
+    data->_reserved = 0;
+    data->capacity    = STARTING_CAPACITY;
     data->nb_elements = 0;
+  } else {
+    if(data->magic != magic_value)
+      throw std::runtime_error("ProvSQL mmap: wrong file type (magic mismatch)");
+    if(data->version != 1)
+      throw std::runtime_error("ProvSQL mmap: unsupported format version "
+                               + std::to_string(data->version));
+    if(data->elem_size != sizeof(T))
+      throw std::runtime_error("ProvSQL mmap: element size mismatch (recompile required)");
   }
 }
 

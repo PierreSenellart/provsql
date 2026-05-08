@@ -1,0 +1,33 @@
+\set ECHO none
+name|first_name|formula
+John|John|(John ⊗ John)
+Paul|John|(Paul ⊗ John)
+Dave|John|(Dave ⊗ John)
+Ellen|John|(Ellen ⊗ John)
+Magdalen|John|(Magdalen ⊗ John)
+Nancy|John|(Nancy ⊗ John)
+Susan|John|(Susan ⊗ John)
+(7 rows)
+name|total|formula
+John|7|(John ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Paul|7|(Paul ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Dave|7|(Dave ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Ellen|7|(Ellen ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Magdalen|7|(Magdalen ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Nancy|7|(Nancy ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Susan|7|(Susan ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+(7 rows)
+name|city_count|formula
+John|2|(John ⊗ δ(John ⊕ Paul))
+Paul|2|(Paul ⊗ δ(John ⊕ Paul))
+Dave|3|(Dave ⊗ δ(Dave ⊕ Magdalen ⊕ Nancy))
+Ellen|2|(Ellen ⊗ δ(Ellen ⊕ Susan))
+Magdalen|3|(Magdalen ⊗ δ(Dave ⊕ Magdalen ⊕ Nancy))
+Nancy|3|(Nancy ⊗ δ(Dave ⊕ Magdalen ⊕ Nancy))
+Susan|2|(Susan ⊗ δ(Ellen ⊕ Susan))
+(7 rows)
+name|formula
+Magdalen|(Magdalen ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Nancy|(Nancy ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+Susan|(Susan ⊗ δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan))
+(3 rows)

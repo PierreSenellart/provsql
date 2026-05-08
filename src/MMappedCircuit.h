@@ -36,6 +36,9 @@
 #ifndef MMAPPED_CIRCUIT_H
 #define MMAPPED_CIRCUIT_H
 
+#include <cstdint>
+#include <string>
+
 #include "GenericCircuit.h"
 #include "MMappedUUIDHashTable.h"
 #include "MMappedVector.hpp"
@@ -94,17 +97,40 @@ static constexpr const char *WIRES_FILENAME="provsql_wires.mmap";     ///< Backi
 static constexpr const char *MAPPING_FILENAME="provsql_mapping.mmap"; ///< Backing file for @c mapping
 static constexpr const char *EXTRA_FILENAME="provsql_extra.mmap";     ///< Backing file for @c extra
 
+/** @brief Build the full path for a mmap file under @c $PGDATA/base/\<db_oid\>/. */
+static std::string makePath(Oid db_oid, const char *filename);
+
+/** @brief Delegating constructor that accepts pre-built paths. */
+MMappedCircuit(const std::string &mp, const std::string &gp,
+               const std::string &wp, const std::string &ep,
+               bool read_only) :
+  mapping(mp.c_str(), read_only, MAGIC_MAPPING),
+  gates  (gp.c_str(), read_only, MAGIC_GATES),
+  wires  (wp.c_str(), read_only, MAGIC_WIRES),
+  extra  (ep.c_str(), read_only, MAGIC_EXTRA) {}
+
 public:
+/** @brief 8-byte magic constants identifying each mmap file type. */
+static constexpr uint64_t MAGIC_GATES =
+  uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('G') << 24 |
+  uint64_t('a') << 32 | uint64_t('t') << 40 | uint64_t('e') << 48 | uint64_t('s') << 56;
+static constexpr uint64_t MAGIC_WIRES =
+  uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('W') << 24 |
+  uint64_t('i') << 32 | uint64_t('r') << 40 | uint64_t('e') << 48 | uint64_t('s') << 56;
+static constexpr uint64_t MAGIC_MAPPING =
+  uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('M') << 24 |
+  uint64_t('a') << 32 | uint64_t('p') << 40 | uint64_t('n') << 48 | uint64_t('g') << 56;
+static constexpr uint64_t MAGIC_EXTRA =
+  uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('E') << 24 |
+  uint64_t('x') << 32 | uint64_t('t') << 40 | uint64_t('r') << 48 | uint64_t('a') << 56;
+
 /**
- * @brief Open all four mmap backing files.
- * @param read_only  If @c true, all files are mapped read-only.
+ * @brief Open all four mmap backing files for the given database.
+ * @param db_oid    OID of the target database; files go under $PGDATA/base/\<db_oid\>/.
+ * @param read_only If @c true, all files are mapped read-only.
  */
-explicit MMappedCircuit(bool read_only = false) :
-  mapping(MAPPING_FILENAME, read_only),
-  gates(GATES_FILENAME, read_only),
-  wires(WIRES_FILENAME, read_only),
-  extra(EXTRA_FILENAME, read_only) {
-}
+explicit MMappedCircuit(Oid db_oid, bool read_only = false);
+
 /** @brief Sync all backing files before destruction. */
 ~MMappedCircuit() {
   sync();
@@ -142,7 +168,8 @@ void setExtra(pg_uuid_t token, const std::string &s);
  * @brief Set the probability associated with a gate.
  * @param token  UUID of the gate.
  * @param prob   Probability value in [0, 1].
- * @return @c true if the gate was found and updated; @c false otherwise.
+ * @return @c true if the gate was updated; @c false if the token is a non-input gate.
+ *         If the token is not yet in the circuit, an input gate is created lazily.
  */
 bool setProb(pg_uuid_t token, double prob);
 
@@ -154,7 +181,7 @@ void sync();
 /**
  * @brief Return the type of the gate identified by @p token.
  * @param token  UUID of the gate.
- * @return       The gate's type, or @c gate_invalid if not found.
+ * @return       The gate's type, or @c gate_input if not found (lazy default).
  */
 gate_type getGateType(pg_uuid_t token) const;
 
@@ -193,7 +220,6 @@ std::string getExtra(pg_uuid_t token) const;
 inline unsigned long getNbGates() const {
   return gates.nbElements();
 }
-};
 
 /**
  * @brief Build an in-memory @c GenericCircuit rooted at @p token.
@@ -205,6 +231,8 @@ inline unsigned long getNbGates() const {
  * @param token  UUID of the root gate.
  * @return       An in-memory @c GenericCircuit containing the sub-circuit.
  */
-GenericCircuit createGenericCircuit(pg_uuid_t token);
+GenericCircuit createGenericCircuit(pg_uuid_t token) const;
+};
+
 
 #endif /* MMAPPED_CIRCUIT_H */

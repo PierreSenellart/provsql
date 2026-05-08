@@ -1,16 +1,22 @@
 # Setting up the database
 test: setup
 
+# Per-database circuit isolation and mmap file placement
+test: per_db_circuit
+
 # Adding a provenance table
 test: add_provenance
 test: remove_add_provenance
 
 # Basic checks
 test: provenance_in_from identify_token subquery create_provenance_mapping
+test: circuit_subgraph
+test: resolve_input
 
 # Introducing a few semirings
-test: sr_formula sr_counting sr_boolean sr_why
-test: security formula counting boolean
+test: sr_formula sr_counting sr_boolean sr_why sr_how sr_which sr_tropical sr_viterbi sr_lukasiewicz
+test: sr_minmax sr_maxmin capability
+test: formula counting boolean
 
 # Test of various ProvSQL features and SQL language capabilities
 test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk values
@@ -41,19 +47,24 @@ test: sr_boolexpr probability_having probability_having_avg_min_max having_boole
 
 # Probability computation using external software
 test: d4 dsharp weightmc c2d minic2d
+test: d4_timeout
 
 # Probability computation using tree decompositions, independent
 # probability computation, and default computation
-test: treedec_simple treedec default_probability_evaluate independent repair_key
+test: treedec_simple treedec treedec_mulinput default_probability_evaluate independent repair_key
 test: expected
 test: large_circuit
 
 # Expected Shapley and Banzhaf value computation
 test: shapley
 test: banzhaf
+test: shapley_mulinput
 
 # Viewing circuit
 test: view_circuit_multiple
+
+# External-tool PATH override (provsql.tool_search_path GUC)
+test: tool_search_path
 
 # Tables with keywords as name
 test: keyword_table
@@ -63,6 +74,18 @@ test: where_provenance
 
 # Full example from tutorial
 test: tutorial
+
+# Case Study 1: The Intelligence Agency
+test: casestudy1
+
+# Case Study 2: The Open Science Database
+test: casestudy2
+
+# Case Study 3: Île-de-France Public Transit (synthetic mini-dataset)
+test: casestudy3
+
+# Case Study 5: Wildlife Photo Archive (mulinput, EXCEPT, CTE, expected)
+test: casestudy5
 
 # Grouping
 test: group_by_empty

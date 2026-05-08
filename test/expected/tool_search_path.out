@@ -1,0 +1,17 @@
+\set ECHO none
+provsql.tool_search_path
+
+(1 row)
+provsql.tool_search_path
+/tmp/provsql_tsp_test
+(1 row)
+remove_provenance
+
+(1 row)
+rendered
+STUB-MARKER
+(1 row)
+NOTICE:  graph-easy exit 42 surfaces as structured error
+provsql.tool_search_path
+
+(1 row)

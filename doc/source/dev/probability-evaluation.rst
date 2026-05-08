@@ -96,7 +96,18 @@ multiply through.
 
 The output is dumped to a temporary file under ``/tmp``;
 :cfunc:`BooleanCircuit::compilation` then invokes the chosen
-compiler with that file and reads the result back.
+compiler with that file and reads the result back. The invocation
+goes through :cfunc:`run_external_tool` (:cfile:`external_tool.cpp`),
+which honours the ``provsql.tool_search_path`` GUC by prepending
+its value to ``PATH`` for the duration of the ``system()`` call.
+Before composing the command line, the same call site pre-flights
+the binary with :cfunc:`find_external_tool`, so a missing tool
+fails with an actionable error rather than letting the shell return
+exit 127. After the call, the wait status is decoded by
+:cfunc:`format_external_tool_status` to distinguish "not found",
+"killed by signal", and "ran and exited nonzero". The same trio
+is used by :cfunc:`BooleanCircuit::WeightMC` for ``weightmc`` and
+by :cfunc:`DotCircuit::render` for ``graph-easy``.
 
 Knowledge Compilers and the NNF Format
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -196,8 +207,9 @@ Currently Supported Methods
        ``minic2d``) to produce a :cfunc:`dDNNF`, then
        :cfunc:`dDNNF::probabilityEvaluation`.
    * - ``""`` (default)
-     - Fallback chain: try ``independent``, then
-       ``tree-decomposition``, then ``compilation`` with ``d4``.
+     - Fallback chain: try ``independent``, then ``interpretAsDD``
+       (interpret the circuit structure directly as a d-D circuit),
+       then ``tree-decomposition``, then ``compilation`` with ``d4``.
 
 The branches for ``"compilation"``, ``"tree-decomposition"``, and
 the default all funnel through :cfunc:`BooleanCircuit::makeDD`,
@@ -216,11 +228,10 @@ structure guarantees decomposability and determinism.
 Block-Independent Databases and Multivalued Inputs
 --------------------------------------------------
 
-The default path through :sqlfunc:`add_provenance` and the
-per-row ``INSERT`` trigger allocates one fresh ``input`` gate
-per tuple, so each row of a provenance-tracked base table is
-an independent Bernoulli variable.  That is the
-**tuple-independent** probabilistic database (TID) model.
+By default, :sqlfunc:`add_provenance` associates one ``input`` gate
+per tuple (created lazily on first reference), so each row of a
+provenance-tracked base table is an independent Bernoulli variable.
+That is the **tuple-independent** probabilistic database (TID) model.
 
 ProvSQL additionally supports the strictly more general
 **block-independent database** (BID) model, in which input

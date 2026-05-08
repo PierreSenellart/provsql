@@ -1,0 +1,104 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+label|id|formula
+mammal of interest|2|Red Deer
+predator of interest|2|Red Fox
+mammal of interest|5|Red Deer
+mammal of interest|5|Red Deer
+mammal of interest|5|Red Deer
+predator of interest|5|Red Fox
+predator of interest|5|Red Fox
+(7 rows)
+remove_provenance
+
+(1 row)
+id|formula
+2|(Red Deer ⊗ Red Fox)
+5|((Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox) ⊕ (Red Deer ⊗ Red Fox))
+(2 rows)
+remove_provenance
+
+(1 row)
+repair_key
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+photo_id|species_id|gtype
+2|1|mulinput
+2|3|mulinput
+5|1|mulinput
+5|1|mulinput
+5|1|mulinput
+5|2|mulinput
+5|3|mulinput
+5|3|mulinput
+(8 rows)
+remove_provenance
+
+(1 row)
+photo_id|bbox_id|bexpr|p
+5|1|({0=1}[0.400000] ∨ {0=2}[0.300000])|0.7000
+(1 row)
+remove_provenance
+
+(1 row)
+id|prob
+22|0.8760
+2|0.6120
+5|0.5518
+28|0.5244
+10|0.4818
+18|0.3355
+(6 rows)
+remove_provenance
+
+(1 row)
+id
+2
+10
+18
+22
+28
+(5 rows)
+remove_provenance
+
+(1 row)
+id|prob
+9|0.0632
+14|0.6888
+22|0.9582
+(3 rows)
+remove_provenance
+
+(1 row)
+id|prob
+22|0.8760
+2|0.6120
+5|0.5518
+28|0.5244
+10|0.4818
+18|0.3355
+(6 rows)
+remove_provenance
+
+(1 row)
+id|exp_detections|exp_total_conf
+1|2.1400|1.5350
+5|2.4100|0.9861
+7|2.5500|1.6465
+9|1.7100|1.4705
+22|4.3800|2.9976
+(5 rows)

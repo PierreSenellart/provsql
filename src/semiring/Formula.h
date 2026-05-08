@@ -215,6 +215,9 @@ virtual value_type agg(AggregationOperator op, const std::vector<std::string> &s
 virtual value_type value(const std::string &s) const override {
   return s;
 }
+value_type parse_leaf(const char *v) const {
+  return std::string(v);
+}
 };
 }
 

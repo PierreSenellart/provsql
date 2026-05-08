@@ -8,6 +8,7 @@ on:
       - 'doc/**'
       - 'website/**'
       - 'branding/**'
+      - 'studio/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
@@ -19,12 +20,14 @@ on:
       - '.github/workflows/docs.yml'
       - '.github/workflows/macos.yml'
       - '.github/workflows/pgxn.yml'
+      - '.github/workflows/studio.yml'
       - '.github/workflows/wsl.yml'
   pull_request:
     paths-ignore:
       - 'doc/**'
       - 'website/**'
       - 'branding/**'
+      - 'studio/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
@@ -36,6 +39,7 @@ on:
       - '.github/workflows/docs.yml'
       - '.github/workflows/macos.yml'
       - '.github/workflows/pgxn.yml'
+      - '.github/workflows/studio.yml'
       - '.github/workflows/wsl.yml'
   workflow_dispatch:
 
@@ -63,7 +67,7 @@ jobs:
         with:
           fetch-tags: true
           fetch-depth: 0
-      - run: make && make tdkc && make install
+      - run: make && make tdkc && make provsql_migrate_mmap && make install
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30

@@ -1,0 +1,12 @@
+\set ECHO none
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|validity
+Berlin|{["2022-01-01 00:00:00+00","2023-01-01 00:00:00+00")}
+New York|{}
+Paris|{["2020-01-01 00:00:00+00","2022-01-01 00:00:00+00")}
+(3 rows)

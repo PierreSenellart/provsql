@@ -26,7 +26,7 @@
 
 /** @brief Saved pointer to the previous @c shmem_startup_hook, for chaining. */
 extern shmem_startup_hook_type prev_shmem_startup;
-#if (PG_VERSION_NUM >= 150000)
+#if (PG_VERSION_NUM >= 150000) || defined(DOXYGEN)
 /** @brief Saved pointer to the previous @c shmem_request_hook (PG ≥ 15), for chaining. */
 extern shmem_request_hook_type prev_shmem_request;
 #endif

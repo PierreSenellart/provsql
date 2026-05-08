@@ -215,12 +215,11 @@ carrier is ``tstzmultirange``:
 
 This is exactly the m-semiring the PW'25 paper
 (:cite:`DBLP:conf/pw/WidiaatmajaDDS25`) describes.  It is
-implemented in ``sql/provsql.14.sql`` by three aggregate
-functions:
-
-- ``union_tstzintervals_plus`` -- ⊕ (union);
-- ``union_tstzintervals_times`` -- ⊗ (intersection);
-- ``union_tstzintervals_monus`` -- ⊖ (difference).
+implemented as the :cfunc:`IntervalUnion` compiled semiring in
+:cfile:`IntervalUnion.h`, dispatched via :sqlfunc:`sr_temporal`,
+which delegates the ⊕, ⊗, and ⊖ operations to PostgreSQL's
+``multirange_union``, ``multirange_intersect``, and
+``multirange_minus`` built-ins.
 
 The interpretation of a gate in this semiring is simple:
 
@@ -234,7 +233,7 @@ The interpretation of a gate in this semiring is simple:
 The mapping is provided by the auto-generated provenance mapping
 view ``time_validity_view`` over the ``update_provenance.valid_time``
 column; :sqlfunc:`get_valid_time` calls
-``union_tstzintervals(provenance(), 'time_validity_view')`` on
+``sr_temporal(provenance(), 'time_validity_view')`` on
 the target row and returns the resulting multirange.
 
 The reason the temporal result "just works" after an undo is

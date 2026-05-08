@@ -2,8 +2,11 @@
 add_provenance
 
 (1 row)
-nb
-7
+nb_after_add_provenance
+0
+(1 row)
+nb_after_select
+8
 (1 row)
 attname
 city

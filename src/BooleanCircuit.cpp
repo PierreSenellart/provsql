@@ -24,6 +24,7 @@
 
 extern "C" {
 #include <unistd.h>
+#include <sys/wait.h>
 #include <math.h>
 }
 
@@ -40,6 +41,7 @@ extern "C" {
 #include <boost/archive/text_iarchive.hpp>
 
 #include "dDNNFTreeDecompositionBuilder.h"
+#include "external_tool.h"
 
 // "provsql_utils.h"
 #ifdef TDKC
@@ -47,10 +49,12 @@ constexpr bool provsql_interrupted = false;
 constexpr int provsql_verbose = 0;
 enum levels {ERROR, NOTICE};
 #define elog(level, ...) {fprintf(stderr, __VA_ARGS__); if(level==ERROR) exit(EXIT_FAILURE);}
+#define CHECK_FOR_INTERRUPTS() ((void)0)
 #else
 extern "C" {
 #include "provsql_utils.h"
 #include "utils/elog.h"
+#include "miscadmin.h"
 }
 #endif
 #include "provsql_error.h"
@@ -348,12 +352,15 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   }
   clauses.push_back({(int)g+1});
 
-  int fd;
-  char cfilename[] = "/tmp/provsqlXXXXXX";
-  fd = mkstemp(cfilename);
-  close(fd);
-
-  std::string filename=cfilename;
+  // Use a private 0700 directory rather than a bare mkstemp file so the
+  // sibling output paths (.nnf / .out, derived deterministically from
+  // this base) cannot be raced by a local user pre-creating a symlink
+  // before the external tool opens them.
+  char cdir[] = "/tmp/provsqlXXXXXX";
+  if(mkdtemp(cdir) == NULL) {
+    throw CircuitException("Cannot create temporary directory");
+  }
+  std::string filename=std::string(cdir)+"/input";
   std::ofstream ofs(filename.c_str());
 
   ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
@@ -399,17 +406,50 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     throw CircuitException("Unknown compiler '"+compiler+"'");
   }
 
-  int retvalue=system(cmdline.c_str());
+  if(find_external_tool(compiler).empty())
+    throw CircuitException(
+            compiler + " not found on PATH; install it or add its "
+            "directory to provsql.tool_search_path");
+
+  int retvalue=run_external_tool(cmdline);
+
+  // PG's StatementTimeoutHandler (and pg_cancel_backend, etc.) sends
+  // SIGINT to the whole process group via kill(-MyProcPid, SIGINT).
+  // The child compiler in our group dies on default SIGINT, but
+  // glibc system() temporarily SIG_IGNs SIGINT in the parent for the
+  // duration of the wait, so the same signal is silently discarded
+  // here and InterruptPending / QueryCancelPending are never set.
+  // Translate that wstatus into a proper PG cancel so the
+  // CHECK_FOR_INTERRUPTS below raises 57014 instead of us either
+  // throwing "Error executing", or falling through to the legacy
+  // d4-syntax retry on the corpse (which then mis-parses an empty
+  // .nnf as "Unreadable d-DNNF" XX000).
+#ifndef TDKC
+  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+  }
+#endif
+
+  CHECK_FOR_INTERRUPTS();
 
   if(retvalue && compiler=="d4") {
     // Temporary support for older version of d4
     new_d4 = false;
     cmdline = "d4 "+filename+" -out="+outfilename;
-    retvalue=system(cmdline.c_str());
+    retvalue=run_external_tool(cmdline);
+#ifndef TDKC
+    if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+      InterruptPending = true;
+      QueryCancelPending = true;
+    }
+#endif
   }
 
+  CHECK_FOR_INTERRUPTS();
+
   if(retvalue)
-    throw CircuitException("Error executing "+compiler);
+    throw CircuitException(format_external_tool_status(retvalue, compiler));
 
   if(provsql_verbose<20) {
     if(unlink(filename.c_str())) {
@@ -545,6 +585,10 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     if(unlink(outfilename.c_str())) {
       throw CircuitException("Error removing "+outfilename);
     }
+    std::string dirname=filename.substr(0, filename.rfind('/'));
+    if(rmdir(dirname.c_str())) {
+      throw CircuitException("Error removing temp directory "+dirname);
+    }
   } else
     provsql_notice("Compiled d-DNNF in %s", outfilename.c_str());
 
@@ -582,11 +626,16 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   //calcul pivotAC
   const double pivotAC=2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
 
+  if(find_external_tool("weightmc").empty())
+    throw CircuitException(
+            "weightmc not found on PATH; install it or add its "
+            "directory to provsql.tool_search_path");
+
   std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+filename+".out";
 
-  int retvalue=system(cmdline.c_str());
+  int retvalue=run_external_tool(cmdline);
   if(retvalue) {
-    throw CircuitException("Error executing weightmc");
+    throw CircuitException(format_external_tool_status(retvalue, "weightmc"));
   }
 
   //parsing
@@ -614,6 +663,11 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
 
   if(unlink((filename+".out").c_str())) {
     throw CircuitException("Error removing "+filename+".out");
+  }
+
+  std::string dirname=filename.substr(0, filename.rfind('/'));
+  if(rmdir(dirname.c_str())) {
+    throw CircuitException("Error removing temp directory "+dirname);
   }
 
   return ret;
@@ -728,10 +782,16 @@ void BooleanCircuit::rewriteMultivaluedGatesRec(
   }
 
   unsigned mid = (start+end)/2;
+  // cumulated_probs is an *inclusive* prefix sum (cumulated_probs[i] =
+  // p[0]+...+p[i]).  The conditional probability of being in the left
+  // half [start..mid] given the range [start..end] is therefore
+  //   (cum[mid] - cum[start-1]) / (cum[end] - cum[start-1])
+  // with cum[-1] treated as 0 when start==0.
+  double prev_start = (start == 0) ? 0. : cumulated_probs[start - 1];
   auto g = setGate(
     BooleanGate::IN,
-    (cumulated_probs[mid+1] - cumulated_probs[start]) /
-    (cumulated_probs[end] - cumulated_probs[start]));
+    (cumulated_probs[mid] - prev_start) /
+    (cumulated_probs[end] - prev_start));
   auto not_g = setGate(BooleanGate::NOT);
   getWires(not_g).push_back(g);
 
@@ -827,7 +887,10 @@ gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, d
     if(seen.find(g)!=seen.end())
       throw CircuitException("Not an independent circuit");
     seen.insert(g);
-    dg = dd.setGate(getUUID(g), BooleanGate::IN, getProb(g));
+    if(getUUID(g).empty())
+      dg = dd.setGate(BooleanGate::IN, getProb(g));
+    else
+      dg = dd.setGate(getUUID(g), BooleanGate::IN, getProb(g));
     break;
 
   case BooleanGate::MULIN:

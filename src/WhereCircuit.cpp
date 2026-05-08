@@ -158,7 +158,7 @@ vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(gate_t g) const
         vector<set<Locator>> w=evaluate(*getWires(g).begin());
         vector<int> positions=projection_info.find(g)->second;
         for(auto i : positions) {
-          if(i==0)
+          if(i==0 || i>(int)w.size())
             v.push_back(set<Locator>());
           else
             v.push_back(w[i-1]);
@@ -173,8 +173,11 @@ vector<set<WhereCircuit::Locator>> WhereCircuit::evaluate(gate_t g) const
       v=evaluate(*getWires(g).begin());
       {
         pair<int,int> positions=equality_info.find(g)->second;
-        v[positions.first-1].insert(v[positions.second-1].begin(), v[positions.second-1].end());
-        v[positions.second-1].insert(v[positions.first-1].begin(), v[positions.first-1].end());
+        if(positions.first>=1 && positions.first<=(int)v.size() &&
+           positions.second>=1 && positions.second<=(int)v.size()) {
+          v[positions.first-1].insert(v[positions.second-1].begin(), v[positions.second-1].end());
+          v[positions.second-1].insert(v[positions.first-1].begin(), v[positions.first-1].end());
+        }
       }
       break;
 

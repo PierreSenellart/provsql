@@ -17,7 +17,7 @@ on demand.
 
 When PostgreSQL starts, it calls :cfunc:`_PG_init`, which:
 
-1. Registers four GUC (Grand Unified Configuration) variables:
+1. Registers five GUC (Grand Unified Configuration) variables:
 
    - ``provsql.active`` -- enable/disable provenance tracking (default: on).
    - ``provsql.where_provenance`` -- enable where-provenance (default: off).
@@ -25,6 +25,9 @@ When PostgreSQL starts, it calls :cfunc:`_PG_init`, which:
      statements (default: off).
    - ``provsql.verbose_level`` -- verbosity for debug messages (0--100,
      default: 0).
+   - ``provsql.tool_search_path`` -- colon-separated directories prepended
+     to ``PATH`` when invoking external tools (d4, c2d, minic2d, dsharp,
+     weightmc, graph-easy); see :cfile:`external_tool.cpp`.
 
 2. Installs the **planner hook** (:cfunc:`provsql_planner`) by saving
    the previous hook in ``prev_planner`` and replacing ``planner_hook``.
@@ -116,7 +119,8 @@ and algorithms are in |cpp|.
 *Semiring evaluation*
 
 - ``semiring/*.h`` -- header-only semiring implementations (Boolean,
-  Counting, Formula, Why, BoolExpr).
+  BoolExpr, Counting, Formula, IntervalUnion, Lukasiewicz, Tropical,
+  Viterbi, Which, Why).
 - :cfile:`provenance_evaluate_compiled.cpp` /
   :cfile:`provenance_evaluate_compiled.hpp` -- dispatcher for
   compiled semirings.
@@ -143,6 +147,9 @@ and algorithms are in |cpp|.
   tree decomposition via min-fill elimination.
 - :cfile:`TreeDecompositionKnowledgeCompiler.cpp` -- the standalone
   ``tdkc`` binary built by ``make tdkc``.
+- :cfile:`provsql_migrate_mmap.cpp` -- the standalone
+  ``provsql_migrate_mmap`` binary built by ``make provsql_migrate_mmap``
+  (migrates pre-1.3.0 flat mmap files to the per-database layout).
 - :cfile:`shapley.cpp` -- Shapley and Banzhaf value computation.
 
 *Export and visualization*
@@ -289,6 +296,8 @@ defined in :cfile:`provsql_utils.h`:
      - Scalar constant value.
    * - ``gate_mulinput``
      - Multivalued input (for Boolean probability).
+   * - ``gate_cmp``
+     - Comparison gate used in HAVING sub-circuits (``<``, ``=``, etc.).
    * - ``gate_update``
      - Update-provenance gate.
 

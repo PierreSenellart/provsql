@@ -24,6 +24,7 @@
 #include "provsql_utils_cpp.h"
 
 extern "C" {
+#include "miscadmin.h"
 #include "provsql_shmem.h"
 #include "provsql_mmap.h"
 }
@@ -38,8 +39,13 @@ extern "C" {
 template<typename C>
 static C getCircuitFromMMap(pg_uuid_t token, char message_char)
 {
+  STARTWRITEM();
+  ADDWRITEM(&message_char, char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&token, pg_uuid_t);
+
   provsql_shmem_lock_exclusive();
-  if(!WRITEM(&message_char, char) || !WRITEM(&token, pg_uuid_t))
+  if(!SENDWRITEM())
     provsql_error("Cannot write to pipe (message type %c)", message_char);
 
   unsigned long size;
@@ -90,7 +96,7 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
     }
   }
   semiring::BoolExpr semiring(c);
-  provsql_try_having_boolexpr(gc, semiring, gc.getGate(uuid2string(token)), mapping);
+  provsql_having(gc, gc.getGate(uuid2string(token)), mapping, semiring);
   gate=gc.evaluate(ggate, mapping, semiring);
 
   return c;

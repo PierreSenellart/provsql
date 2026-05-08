@@ -95,7 +95,8 @@ Computation Methods
         FROM suspects;
 
     The tool must be installed and accessible in the PostgreSQL server's
-    PATH.
+    PATH, or in a directory listed in the ``provsql.tool_search_path`` GUC
+    (see :doc:`configuration`).
 
 ``'weightmc'``
     Approximate weighted model counting using the external ``weightmc``
@@ -105,6 +106,9 @@ Computation Methods
 
         SELECT probability_evaluate(provenance(), 'weightmc')
         FROM suspects;
+
+    Same PATH / ``provsql.tool_search_path`` considerations as
+    ``'compilation'``.
 
 Default strategy (no second argument)
     ProvSQL tries each method in order until one succeeds:

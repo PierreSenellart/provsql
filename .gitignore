@@ -9,6 +9,7 @@ provsql.control
 .clangd
 compile_commands.json
 tdkc
+provsql_migrate_mmap
 test.log
 .ccls-cache/
 doc/doxygen-*/

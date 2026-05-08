@@ -1,0 +1,16 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+aux_has_gates
+t
+(1 row)
+primary_unaffected
+t
+(1 row)
+mmap_files
+4
+(1 row)
+aux_dir_gone
+0
+(1 row)

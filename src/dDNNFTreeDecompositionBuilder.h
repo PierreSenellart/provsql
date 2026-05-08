@@ -4,8 +4,10 @@
  *
  * @c dDNNFTreeDecompositionBuilder implements the knowledge-compilation
  * algorithm described in:
- * > A. Jha and D. Suciu, "Knowledge Compilation Meets Database Theory:
- * >  Compiling Queries to d-DNNFs". ICDT 2013.
+ * > A. Amarilli, F. Capelli, M. Monet, P. Senellart,
+ * >  "Connecting Knowledge Compilation Classes and Width Parameters".
+ * >  Theory of Computing Systems 64(5):861–914, 2020.
+ * >  https://doi.org/10.1007/s00224-019-09930-2
  *
  * The algorithm traverses the tree decomposition bottom-up.  At each
  * bag it enumerates *valuations* (assignments of Boolean values to the

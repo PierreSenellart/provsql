@@ -2,7 +2,7 @@ project = 'ProvSQL'
 copyright = '2025, Pierre Senellart'
 author = 'Pierre Senellart'
 
-extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex']
+extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton']
 
 # |cpp| / |cpp17| substitutions: render "C++" and "C++17" as non-breaking
 # spans so the browser never wraps between "C+" and the final "+".
@@ -52,6 +52,9 @@ html_css_files = ['custom.css']
 html_js_files = [
     ('jquery.js', {'priority': 100}),  # sphinx-rtd-theme requires jQuery
     'back-to-site.js',
+    # Shim runs before copybutton.js (default priority 500) and back-fills
+    # DOCUMENTATION_OPTIONS.URL_ROOT for sphinx-copybutton 0.4.0 on Sphinx >= 5.
+    ('copybutton-shim.js', {'priority': 450}),
 ]
 html_show_sphinx = False
 html_show_copyright = False
@@ -74,6 +77,8 @@ _SQL_FUNC_MAP = {
     'get_extra':                '/doxygen-sql/html/group__gate__manipulation.html#ga12ce1bcd1609204d091d18d8912b840b',
     'get_nb_gates':             '/doxygen-sql/html/group__gate__manipulation.html#gad694ac39c8517985d39ac6c5fff72d80',
     'identify_token':           '/doxygen-sql/html/group__circuit__introspection.html#gad53f5ec3f9c5d86714dd6299e5a5185e',
+    'circuit_subgraph':         '/doxygen-sql/html/group__circuit__introspection.html#ga268dd3b17c88aab9942f9f510a4d36f8',
+    'resolve_input':            '/doxygen-sql/html/group__circuit__introspection.html#gace5412596beb2701ce516bbbac62aab2',
     'gate_zero':                '/doxygen-sql/html/group__internal__constants.html#ga13455054a9c6a90a9088d8666b105812',
     'gate_one':                 '/doxygen-sql/html/group__internal__constants.html#ga27aad07a447f5b1f17018ac09ef4ea32',
 
@@ -95,6 +100,16 @@ _SQL_FUNC_MAP = {
     'sr_boolexpr':              '/doxygen-sql/html/group__compiled__semirings.html#ga0a4057956b4751b4263fc1a913161012',
     'sr_counting':              '/doxygen-sql/html/group__compiled__semirings.html#gad3e2b6c5dc5d0041fc29ee086add1de6',
     'sr_why':                   '/doxygen-sql/html/group__compiled__semirings.html#ga7501c5d75cf9a2920e9176169c310a7f',
+    'sr_how':                   '/doxygen-sql/html/group__compiled__semirings.html#gaa4900646bb610cc5159c8dad0b74bb95',
+    'sr_which':                 '/doxygen-sql/html/group__compiled__semirings.html#ga86da4e2a0f5c0f865e9e30714748679c',
+    'sr_tropical':              '/doxygen-sql/html/group__compiled__semirings.html#gaa2a6ec05f977d18204b1b6181dee28b5',
+    'sr_viterbi':               '/doxygen-sql/html/group__compiled__semirings.html#ga67d375630a9674bfecd4f87d0d003d31',
+    'sr_lukasiewicz':           '/doxygen-sql/html/group__compiled__semirings.html#ga27ff464e570641a7b195ed3578a66ab1',
+    'sr_minmax':                '/doxygen-sql/html/group__compiled__semirings.html#ga1861588ff5f551d207f332bccab4626c',
+    'sr_maxmin':                '/doxygen-sql/html/group__compiled__semirings.html#gaebd28a3deead5cd455176f19a848e620',
+    'sr_temporal':              '/doxygen-sql/html/group__temporal__db.html#ga53665747f710e8bacbf9bb985420c173',
+    'sr_interval_num':          '/doxygen-sql/html/group__temporal__db.html#gaa35eca68f37290485c5319697b408d3a',
+    'sr_interval_int':          '/doxygen-sql/html/group__temporal__db.html#ga62d18db08c8b0b341d271ccad61f2c82',
     'to_provxml':               '/doxygen-sql/html/group__provenance__output.html#gacc9e8b2a47ade6f5c87c27f64b4707b1',
     'view_circuit':             '/doxygen-sql/html/group__provenance__output.html#ga1c6caf1bb91c0cfdfc56c33666d41897',
     'where_provenance':         '/doxygen-sql/html/group__provenance__output.html#ga6ddf85fea18edbd973c118020ff4551b',
@@ -185,6 +200,7 @@ _C_FUNC_MAP = {
     'BoolExpr':                  '/doxygen-c/html/classsemiring_1_1BoolExpr.html',
     'Boolean':                   '/doxygen-c/html/classsemiring_1_1Boolean.html',
     'Counting':                  '/doxygen-c/html/classsemiring_1_1Counting.html',
+    'IntervalUnion':             '/doxygen-c/html/classsemiring_1_1IntervalUnion.html',
     # Enums and types
     'AggregationOperator':       '/doxygen-c/html/Aggregation_8h.html#a07e6885296f8f80441d5428bcf72af5a',
     'gate_type':                 '/doxygen-c/html/provsql__utils_8h.html#a8266c44a6cbf9e08d5f2b12cd3c3d92f',
@@ -226,6 +242,12 @@ _C_FUNC_MAP = {
     'GenericCircuit::evaluate':  '/doxygen-c/html/classGenericCircuit.html#a3ff1b0c90156515393986082def83900',
     'TreeDecomposition::MAX_TREEWIDTH': '/doxygen-c/html/classTreeDecomposition.html#ab09a529b1ef0e64fecf2260345c795d3',
     'TreeDecomposition::makeFriendly': '/doxygen-c/html/classTreeDecomposition.html#ad4ddde20abe4dae4f282945c3b666b05',
+    # DotCircuit
+    'DotCircuit::render':        '/doxygen-c/html/classDotCircuit.html#aef126e92723bd4f229e656c4e8ff704e',
+    # External-tool helpers
+    'run_external_tool':         '/doxygen-c/html/external__tool_8cpp.html#a0fc04107a884e66f0393356432a354c2',
+    'find_external_tool':        '/doxygen-c/html/external__tool_8cpp.html#afc4e5f1da9e5c67b5476d87a80726739',
+    'format_external_tool_status': '/doxygen-c/html/external__tool_8cpp.html#a9dea3c210f8e5188da8c3d56d6d21f2a',
     # Global state
     'provsql_interrupted':       '/doxygen-c/html/provsql__utils_8h.html#a9692a0205a857ed2cc29558470c2ed77',
     # Error reporting macros

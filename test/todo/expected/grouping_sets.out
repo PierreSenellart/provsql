@@ -1,0 +1,12 @@
+\set ECHO none
+city|classification|n|formula
+Berlin||2 (*)|δ(Ellen ⊕ Susan)
+New York||2 (*)|δ(John ⊕ Paul)
+Paris||3 (*)|δ(Dave ⊕ Magdalen ⊕ Nancy)
+|unclassified|1 (*)|δ(John)
+|restricted|2 (*)|δ(Paul ⊕ Nancy)
+|confidential|1 (*)|δ(Dave)
+|secret|2 (*)|δ(Ellen ⊕ Susan)
+|top_secret|1 (*)|δ(Magdalen)
+||7 (*)|δ(John ⊕ Paul ⊕ Dave ⊕ Ellen ⊕ Magdalen ⊕ Nancy ⊕ Susan)
+(9 rows)

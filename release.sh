@@ -6,10 +6,11 @@
 #
 # Steps:
 #   1. Validate version is newer than existing tags
-#   2. Prompt for release notes in $EDITOR
-#   3. Update provsql.common.control, website/_data/releases.yml,
+#   2. Verify CI is green on HEAD (Linux, Mac OS, WSL workflows)
+#   3. Prompt for release notes in $EDITOR
+#   4. Update provsql.common.control, website/_data/releases.yml,
 #      CITATION.cff, CHANGELOG.md, and META.json
-#   4. Commit, create signed tag, push, create GitHub release
+#   5. Commit, create signed tag, push, create GitHub release
 
 set -euo pipefail
 
@@ -76,7 +77,105 @@ if [[ -n "$(git status --porcelain)" ]]; then
   [[ "$CONFIRM" =~ ^[Yy]$ ]] || exit 1
 fi
 
-# 2b. Upgrade-script check
+# 2b. HEAD pushed check
+#
+# The CI check below queries GitHub Actions by commit SHA.  If HEAD has
+# not been pushed to origin yet, no workflows have run on it and every
+# check will report "missing".  Catch this early.
+
+git fetch --quiet origin
+if ! git merge-base --is-ancestor HEAD origin/master 2>/dev/null; then
+  die "HEAD is not on origin/master. Push your branch first so CI can run, then re-run release.sh."
+fi
+
+# 2c. CI green check
+#
+# Verify that all required CI workflows passed on the current HEAD
+# before tagging.  The release commit only touches files in paths-ignore
+# (control file, CHANGELOG, CITATION, META.json, releases.yml), so CI
+# will not re-run after it; the pre-release HEAD is the last tested commit.
+#
+# We check the three platform workflows: Linux (build_and_test.yml),
+# Mac OS (macos.yml), and Windows Subsystem for Linux (wsl.yml).
+# Each is queried for its most recent completed run on the current SHA.
+# A missing or failed run is a hard stop; an in-progress run prompts to
+# wait or skip.
+
+HEAD_SHA=$(git rev-parse HEAD)
+CI_WORKFLOWS=("Linux" "Mac OS" "Windows Subsystem for Linux")
+CI_FAILED=0
+
+echo "Checking CI status for HEAD ${HEAD_SHA:0:12}..."
+for WF in "${CI_WORKFLOWS[@]}"; do
+  # gh run list returns JSON; pick the first completed run on this SHA.
+  RUN_JSON=$(gh run list \
+    --repo "$GH_REPO" \
+    --workflow "$WF" \
+    --commit "$HEAD_SHA" \
+    --json status,conclusion,url \
+    --limit 5 2>/dev/null || true)
+
+  # Prefer a completed run; fall back to any run.
+  CONCLUSION=$(echo "$RUN_JSON" | \
+    python3 -c "
+import sys, json
+runs = json.load(sys.stdin)
+for r in runs:
+    if r['status'] == 'completed':
+        print(r['conclusion'])
+        sys.exit(0)
+# no completed run — check for in_progress
+for r in runs:
+    if r['status'] in ('in_progress', 'queued', 'waiting'):
+        print('pending')
+        sys.exit(0)
+print('missing')
+" 2>/dev/null || echo "missing")
+
+  URL=$(echo "$RUN_JSON" | \
+    python3 -c "
+import sys, json
+runs = json.load(sys.stdin)
+if runs: print(runs[0].get('url',''))
+" 2>/dev/null || true)
+
+  case "$CONCLUSION" in
+    success)
+      echo "  ✓ $WF"
+      ;;
+    pending)
+      echo "  ~ $WF: still running  ${URL}"
+      read -r -p "    Wait and re-check, skip this workflow check, or abort? [w/s/A] " CI_ACTION
+      case "$CI_ACTION" in
+        [Ww])
+          echo "    Waiting 60 s then re-checking — re-run release.sh when CI finishes."
+          exit 1
+          ;;
+        [Ss])
+          echo "    Skipping CI check for '$WF'."
+          ;;
+        *)
+          die "Aborting — wait for CI to finish, then re-run release.sh."
+          ;;
+      esac
+      ;;
+    missing)
+      echo "  ? $WF: no run found for this commit (workflow may not have been triggered)"
+      read -r -p "    Skip this workflow check or abort? [s/A] " CI_ACTION
+      [[ "$CI_ACTION" =~ ^[Ss]$ ]] \
+        || die "Aborting — push your branch and wait for CI, then re-run release.sh."
+      ;;
+    *)
+      echo "  ✗ $WF: $CONCLUSION  ${URL}"
+      CI_FAILED=1
+      ;;
+  esac
+done
+
+[[ "$CI_FAILED" -eq 0 ]] \
+  || die "One or more CI workflows did not pass on HEAD ${HEAD_SHA:0:12}. Fix the failures before releasing."
+
+# 2d. Upgrade-script check
 #
 # ProvSQL supports in-place extension upgrades via ALTER EXTENSION
 # provsql UPDATE (see doc/source/dev/build-system.rst).  Every release

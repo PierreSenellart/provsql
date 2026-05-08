@@ -89,6 +89,9 @@ typedef struct constants_t {
   Oid OID_TYPE_INT_ARRAY; ///< OID of the INT[] TYPE
   Oid OID_TYPE_FLOAT; ///< OID of the FLOAT TYPE
   Oid OID_TYPE_VARCHAR; ///< OID of the VARCHAR TYPE
+  Oid OID_TYPE_TSTZMULTIRANGE; ///< OID of the tstzmultirange TYPE (PG14+, InvalidOid otherwise)
+  Oid OID_TYPE_NUMMULTIRANGE; ///< OID of the nummultirange TYPE (PG14+, InvalidOid otherwise)
+  Oid OID_TYPE_INT4MULTIRANGE; ///< OID of the int4multirange TYPE (PG14+, InvalidOid otherwise)
   Oid OID_FUNCTION_ARRAY_AGG; ///< OID of the array_agg FUNCTION
   Oid OID_FUNCTION_PROVENANCE_PLUS; ///< OID of the provenance_plus FUNCTION
   Oid OID_FUNCTION_PROVENANCE_TIMES; ///< OID of the provenance_times FUNCTION
@@ -159,6 +162,12 @@ extern bool provsql_where_provenance;
 /** Global variable that indicates the verbosity level set by the
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
+
+/** Colon-separated list of directories prepended to PATH when ProvSQL
+ * spawns external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy),
+ * set by the provsql.tool_search_path run-time configuration parameter.
+ * NULL or empty means rely on the server's PATH alone. */
+extern char *provsql_tool_search_path;
 
 #include "provsql_error.h"
 

@@ -51,7 +51,7 @@ bag_t TreeDecomposition::findGateConnection(gate_t v) const
 
 // Transform a tree decomposition into one that is root-friendly for a
 // given node root, as per the definition page 6 of
-// https://arxiv.org/pdf/1811.02944 ; the transformation implemented is
+// https://doi.org/10.1007/s00224-019-09930-2 ; the transformation implemented is
 // described in Lemma 2.2 of that paper. The only difference is that we
 // do not enforce the tree to be full, as this is not required for
 // correctness; and we do not make it binary but n-ary for a small n, as

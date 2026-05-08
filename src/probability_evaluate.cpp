@@ -22,6 +22,8 @@ extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
 #include "catalog/pg_type.h"
+#include "miscadmin.h"
+#include "storage/latch.h"
 #include "utils/uuid.h"
 #include "executor/spi.h"
 #include "provsql_shmem.h"
@@ -51,10 +53,29 @@ using namespace std;
  *
  * The signal number argument is required by the @c signal() API but is
  * not used.
+ *
+ * In addition to the @c provsql_interrupted flag polled by the long
+ * Monte-Carlo / possible-worlds evaluation loops, we drive PG's
+ * standard cancel pipeline (@c InterruptPending / @c QueryCancelPending
+ * + @c SetLatch) the same way PG's own @c StatementCancelHandler does.
+ * That makes a SIGINT delivered to the backend (e.g. via
+ * @c pg_cancel_backend) outside of a @c system() wait turn into a
+ * proper 57014 cancel at the next @c CHECK_FOR_INTERRUPTS instead of
+ * being silently absorbed.  (The matching case where @c system() is
+ * blocked when the timer's @c kill(-MyProcPid, SIGINT) fires is
+ * handled in @c BooleanCircuit::compilation, since glibc @c system()
+ * temporarily @c SIG_IGNs SIGINT in the parent so this handler does
+ * not run for it.)
  */
 static void provsql_sigint_handler (int)
 {
   provsql_interrupted = true;
+
+  if (!proc_exit_inprogress) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+  }
+  SetLatch(MyLatch);
 }
 
 /**

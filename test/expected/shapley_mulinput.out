@@ -1,0 +1,7 @@
+\set ECHO none
+repair_key
+
+(1 row)
+ERROR:  ProvSQL: Computing Shapley/Banzhaf values is ill-defined for circuits with multivalued (mulinput) gates
+ERROR:  ProvSQL: Computing Shapley/Banzhaf values is ill-defined for circuits with multivalued (mulinput) gates
+ERROR:  ProvSQL: Computing Shapley/Banzhaf values is ill-defined for circuits with multivalued (mulinput) gates

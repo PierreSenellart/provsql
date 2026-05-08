@@ -61,7 +61,12 @@ CREATE OR REPLACE FUNCTION create_gate(
   children uuid[] DEFAULT NULL)
   RETURNS void AS
   'provsql','create_gate' LANGUAGE C PARALLEL SAFE;
-/** @brief Return the gate type of a provenance token */
+/**
+ * @brief Return the gate type of a provenance token
+ *
+ * Returns @c 'input' for any token not yet materialized in the circuit,
+ * since input is the default semantics of an unmaterialized provenance token.
+ */
 CREATE OR REPLACE FUNCTION get_gate_type(
   token UUID)
   RETURNS provenance_gate AS
@@ -137,7 +142,13 @@ CREATE OR REPLACE FUNCTION get_extra(token UUID)
   RETURNS TEXT AS
   'provsql','get_extra' LANGUAGE C STABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT;
 
-/** @brief Return the total number of gates in the provenance circuit */
+/**
+ * @brief Return the total number of materialized gates in the provenance circuit
+ *
+ * Input gates for provenance-tracked table rows are created lazily on
+ * first reference; rows that have never appeared in a query result are
+ * not counted.
+ */
 CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
   'provsql', 'get_nb_gates' LANGUAGE C PARALLEL SAFE;
 
@@ -149,17 +160,6 @@ CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
  *  @{
  */
 
-/** @brief Trigger function that creates an input gate for each newly inserted row */
-CREATE OR REPLACE FUNCTION add_gate_trigger()
-  RETURNS TRIGGER AS
-$$
-DECLARE
-  attribute RECORD;
-BEGIN
-  PERFORM create_gate(NEW.provsql, 'input');
-  RETURN NEW;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 /**
  * @brief Trigger function for DELETE statement provenance tracking
@@ -207,8 +207,8 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 /**
  * @brief Enable provenance tracking on an existing table
  *
- * Adds a <tt>provsql</tt> UUID column to the table, creates input gates
- * for all existing rows, and installs a trigger to track future inserts.
+ * Adds a <tt>provsql</tt> UUID column to the table. Input gates for
+ * existing rows are created lazily when first referenced by a query.
  *
  * @param _tbl the table to add provenance tracking to
  */
@@ -217,8 +217,6 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
 $$
 BEGIN
   EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
-  EXECUTE format('SELECT provsql.create_gate(provsql, ''input'') FROM %s', _tbl);
-  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -306,7 +304,6 @@ BEGIN
     END LOOP;
   END LOOP;
   EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
-  EXECUTE format('CREATE TRIGGER add_gate BEFORE INSERT ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.add_gate_trigger()',_tbl);
 END
 $$ LANGUAGE plpgsql;
 
@@ -973,6 +970,111 @@ $$
 $$
 LANGUAGE sql;
 
+/**
+ * @brief BFS expansion of a provenance circuit, capped at @p max_depth
+ *
+ * Returns one row per node reachable from @p root within
+ * <tt>max_depth</tt> edges, including the root itself (with
+ * <tt>parent</tt> and <tt>child_pos</tt> NULL).  Each node appears
+ * exactly once; for a node reachable through several paths, the
+ * (<tt>parent</tt>, <tt>child_pos</tt>) returned is the one with
+ * lowest BFS depth, breaking ties by lowest <tt>child_pos</tt>.  A
+ * node returned with <tt>depth = max_depth</tt> may have unexplored
+ * children; the caller can detect this by comparing
+ * <tt>provsql.get_children</tt> length against the number of edges
+ * reported.
+ *
+ * <tt>info1</tt> and <tt>info2</tt> are the integer values stored on
+ * the gate by <tt>provsql.set_infos</tt>, formatted as text; their
+ * meaning is gate-type-specific (see <tt>provsql.set_infos</tt>).
+ *
+ * @param root root provenance token
+ * @param max_depth maximum BFS depth (default 8)
+ */
+CREATE OR REPLACE FUNCTION circuit_subgraph(root UUID, max_depth INT DEFAULT 8)
+  RETURNS TABLE(node UUID, parent UUID, child_pos INT, gate_type TEXT, info1 TEXT, info2 TEXT, depth INT) AS
+$$
+  WITH RECURSIVE bfs(node, parent, child_pos, depth) AS (
+    SELECT root, NULL::UUID, NULL::INT, 0
+      UNION ALL
+    SELECT c.t, b.node, c.idx::INT, b.depth + 1
+    FROM bfs b
+    CROSS JOIN LATERAL unnest(provsql.get_children(b.node))
+      WITH ORDINALITY AS c(t, idx)
+    WHERE b.depth < max_depth
+  ),
+  dedup AS (
+    SELECT DISTINCT ON (node) node, parent, child_pos, depth
+    FROM bfs
+    ORDER BY node, depth, child_pos NULLS FIRST
+  )
+  SELECT
+    d.node,
+    d.parent,
+    d.child_pos,
+    provsql.get_gate_type(d.node)::TEXT,
+    i.info1::TEXT,
+    i.info2::TEXT,
+    d.depth
+  FROM dedup d
+  LEFT JOIN LATERAL provsql.get_infos(d.node) i ON TRUE
+  ORDER BY d.depth, d.node;
+$$ LANGUAGE sql STABLE PARALLEL SAFE;
+
+/**
+ * @brief Resolve an input gate UUID back to its source row
+ *
+ * Searches every provenance-tracked relation for a row whose
+ * <tt>provsql</tt> column equals @p uuid and returns the relation's
+ * regclass together with the row encoded as JSONB.  Returns zero
+ * rows when @p uuid is not the provenance token of any tracked row,
+ * including when it identifies an internal gate (<tt>plus</tt>,
+ * <tt>times</tt>, ...) rather than an input.
+ *
+ * Ordinarily exactly one row is returned, but if the same UUID
+ * happens to appear as a <tt>provsql</tt> value in several tracked
+ * tables, all matches are returned.
+ *
+ * @param uuid token to resolve
+ */
+CREATE OR REPLACE FUNCTION resolve_input(uuid UUID)
+  RETURNS TABLE(relation regclass, row_data JSONB) AS
+$$
+DECLARE
+  t RECORD;
+  rel regclass;
+  rd  JSONB;
+  -- ProvSQL's rewriter unconditionally appends a provsql column to the
+  -- targetlist of any SELECT reading from a tracked relation; capture and
+  -- discard it here rather than disabling the rewriter for the whole call.
+  ign UUID;
+BEGIN
+  FOR t IN
+    SELECT c.oid::regclass AS regc
+    FROM pg_attribute a
+         JOIN pg_class c ON a.attrelid = c.oid
+         JOIN pg_namespace ns ON c.relnamespace = ns.oid
+         JOIN pg_type ty ON a.atttypid = ty.oid
+    WHERE a.attname = 'provsql'
+      AND ty.typname = 'uuid'
+      AND c.relkind = 'r'
+      AND ns.nspname <> 'provsql'
+      AND a.attnum > 0
+  LOOP
+    FOR rel, rd, ign IN
+      EXECUTE format(
+        'SELECT %L::regclass, to_jsonb(t) - ''provsql'', t.provsql FROM %s AS t WHERE provsql = $1',
+        t.regc, t.regc)
+      USING uuid
+    LOOP
+      relation := rel;
+      row_data := rd;
+      RETURN NEXT;
+    END LOOP;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql STABLE;
+
 /** @} */
 
 /** @defgroup agg_token_type Type for the result of aggregate queries
@@ -1572,6 +1674,34 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
 
+/** @brief Evaluate provenance as how-provenance (canonical polynomial provenance ℕ[X], universal commutative-semiring provenance) */
+CREATE FUNCTION sr_how(token ANYELEMENT, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'how',
+    '{}'::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance as which-provenance (lineage: a single set of contributing labels) */
+CREATE FUNCTION sr_which(token ANYELEMENT, token2value regclass)
+  RETURNS VARCHAR AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'which',
+    '{}'::VARCHAR
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
 /** @brief Evaluate provenance as a Boolean expression */
 CREATE FUNCTION sr_boolexpr(token ANYELEMENT)
   RETURNS VARCHAR AS
@@ -1596,6 +1726,116 @@ BEGIN
     token2value,
     'boolean',
     TRUE
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over the tropical (min-plus) m-semiring
+ *
+ * Inputs are read as %float8 cost values; the additive identity
+ * is <tt>'Infinity'::%float8</tt> and the multiplicative identity is 0.
+ * Returns the cost of the cheapest derivation.
+ */
+CREATE FUNCTION sr_tropical(token ANYELEMENT, token2value regclass)
+  RETURNS FLOAT AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'tropical',
+    0::FLOAT
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over the Viterbi (max-times) m-semiring
+ *
+ * Inputs are read as %float8 probability values in @f$[0,1]@f$.
+ * Returns the probability of the most likely derivation.
+ */
+CREATE FUNCTION sr_viterbi(token ANYELEMENT, token2value regclass)
+  RETURNS FLOAT AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'viterbi',
+    1::FLOAT
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over the Łukasiewicz fuzzy m-semiring
+ *
+ * Inputs are read as %float8 graded-truth values in @f$[0,1]@f$.
+ * Addition is @f$\max@f$; multiplication is the Łukasiewicz t-norm
+ * @f$\max(a + b - 1, 0)@f$, which preserves crisp truth and avoids
+ * the near-zero collapse of long product chains.
+ */
+CREATE FUNCTION sr_lukasiewicz(token ANYELEMENT, token2value regclass)
+  RETURNS FLOAT AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'lukasiewicz',
+    1::FLOAT
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over the min-max m-semiring on a user enum
+ *
+ * Inputs are read as values of a user-defined enum carrier; addition
+ * is enum-min, multiplication is enum-max. Bottom and top of the enum
+ * are derived from @c pg_enum.enumsortorder. The third argument is a
+ * sample value of the carrier enum, used only for type inference; its
+ * value is ignored.
+ *
+ * The security shape: alternative derivations combine to the least
+ * sensitive label, joins combine to the most sensitive label.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to enum values.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE FUNCTION sr_minmax(token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYENUM AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'minmax',
+    element_one
+  );
+END
+$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Evaluate provenance over the max-min m-semiring on a user enum
+ *
+ * Dual of :sqlfunc:`sr_minmax`: addition is enum-max, multiplication
+ * is enum-min. The fuzzy / availability / trust shape: alternatives
+ * combine to the most permissive label, joins combine to the strictest
+ * label. The third argument is a sample value of the carrier enum,
+ * used only for type inference; its value is ignored.
+ *
+ * @param token Provenance token to evaluate.
+ * @param token2value Mapping from input gates to enum values.
+ * @param element_one Sample value of the carrier enum (any value works).
+ */
+CREATE FUNCTION sr_maxmin(token UUID, token2value regclass, element_one ANYENUM)
+  RETURNS ANYENUM AS
+$$
+BEGIN
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'maxmin',
+    element_one
   );
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;

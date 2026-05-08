@@ -25,6 +25,7 @@
 #define MMAPPED_UUID_HASH_TABLE_H
 
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 
 extern "C" {
@@ -80,6 +81,10 @@ struct table_t {
     return 1u << log_size;
   }
 
+  uint64_t magic;      ///< File-type identifier
+  uint16_t version;    ///< Format version (currently 1)
+  uint16_t elem_size;  ///< sizeof(value_t) at write time
+  uint32_t _reserved;  ///< Padding, must be 0
   unsigned log_size;          ///< log2 of the number of slots
   unsigned long nb_elements;  ///< Current number of stored key-value pairs
   unsigned long next_value;   ///< Next integer value to assign to a new UUID
@@ -137,8 +142,9 @@ static constexpr unsigned long NOTHING=static_cast<unsigned long>(-1);
  * @param filename   Path to the backing file (created if absent).
  * @param read_only  If @c true, map the file read-only (no new entries
  *                   can be inserted).
+ * @param magic      Expected magic value for format validation.
  */
-MMappedUUIDHashTable(const char *filename, bool read_only);
+MMappedUUIDHashTable(const char *filename, bool read_only, uint64_t magic);
 /** @brief Sync and unmap the file. */
 ~MMappedUUIDHashTable();
 

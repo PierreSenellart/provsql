@@ -1,0 +1,27 @@
+\set ECHO none
+repair_key
+
+(1 row)
+remove_provenance
+
+(1 row)
+photo_id|default_matches_pw|td_matches_pw
+5|t|t
+18|t|t
+28|t|t
+(3 rows)
+remove_provenance
+
+(1 row)
+photo_id|default_correct|td_matches_default
+14|t|t
+(1 row)
+repair_key
+
+(1 row)
+remove_provenance
+
+(1 row)
+photo_id|pw_correct|td_correct
+1|t|t
+(1 row)

@@ -1,0 +1,6 @@
+\set ECHO none
+name|city|classification|formula
+Ellen (*)|Berlin|secret (*)|choose(Ellen*Ellen,Susan*Susan)
+John (*)|New York|unclassified (*)|choose(John*John,Paul*Paul)
+Dave (*)|Paris|confidential (*)|choose(Dave*Dave,Magdalen*Magdalen,Nancy*Nancy)
+(3 rows)

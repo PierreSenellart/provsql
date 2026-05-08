@@ -12,6 +12,7 @@ on:
       - 'website/**'
       - 'branding/**'
       - 'docker/**'
+      - 'studio/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
@@ -23,6 +24,7 @@ on:
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/pgxn.yml'
+      - '.github/workflows/studio.yml'
       - '.github/workflows/wsl.yml'
   pull_request:
     paths-ignore:
@@ -30,6 +32,7 @@ on:
       - 'website/**'
       - 'branding/**'
       - 'docker/**'
+      - 'studio/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/pull_request_template.md'
@@ -41,6 +44,7 @@ on:
       - '.github/workflows/docs.yml'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/pgxn.yml'
+      - '.github/workflows/studio.yml'
       - '.github/workflows/wsl.yml'
   workflow_dispatch:
 
@@ -52,7 +56,7 @@ jobs:
     name: macOS — PostgreSQL ${{ matrix.pg }}
     runs-on: macos-latest
     steps:
-      - run: brew update
+      - run: brew update || true
       - run: brew install postgresql@${{ matrix.pg }}
       - run: brew link --force postgresql@${{ matrix.pg }}
       - run: brew install boost
@@ -61,7 +65,7 @@ jobs:
         with:
           fetch-tags: true
           fetch-depth: 0
-      - run: make && make tdkc && make install
+      - run: make && make tdkc && make provsql_migrate_mmap && make install
       - run: pg_isready -t 60 || (cat /usr/local/var/log/potgres*.log; false)
       - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres | xargs)" >> "$GITHUB_ENV"
       - run: echo "shared_preload_libraries = 'provsql'" >> "$POSTGRESQL_CONFIG"

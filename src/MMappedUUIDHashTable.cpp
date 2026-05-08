@@ -20,9 +20,11 @@
 
 #include <cassert>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <new>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <fcntl.h>
@@ -30,7 +32,7 @@
 
 #include <sys/mman.h>
 
-MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename, bool read_only)
+MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename, bool read_only, uint64_t magic_value)
 {
   fd=open(filename, O_CREAT|(read_only?O_RDONLY:O_RDWR), 0600); // flawfinder: ignore
   if(fd==-1)
@@ -51,12 +53,24 @@ MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename, bool read_only)
   mmap(size, read_only);
 
   if(empty) {
+    table->magic     = magic_value;
+    table->version   = 1;
+    table->elem_size = static_cast<uint16_t>(sizeof(value_t));
+    table->_reserved = 0;
     table->log_size = table_t::logSizeForSize(size);
     table->nb_elements = 0;
     table->next_value = 0;
     for(unsigned long i=0; i<table->capacity(); ++i) {
       table->t[i].value = NOTHING;
     }
+  } else {
+    if(table->magic != magic_value)
+      throw std::runtime_error("ProvSQL mmap: wrong file type (magic mismatch)");
+    if(table->version != 1)
+      throw std::runtime_error("ProvSQL mmap: unsupported format version "
+                               + std::to_string(table->version));
+    if(table->elem_size != sizeof(value_t))
+      throw std::runtime_error("ProvSQL mmap: element size mismatch (recompile required)");
   }
 }
 

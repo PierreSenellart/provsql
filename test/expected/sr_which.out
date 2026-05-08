@@ -1,0 +1,31 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+city|which
+Berlin|{Ellen,Susan}
+New York|{John,Paul}
+Paris|{Dave,Magdalen,Nancy}
+(3 rows)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|which
+Berlin|{Ellen_x,Ellen_y,Susan_x,Susan_y}
+New York|{John_x,John_y,Paul_x,Paul_y}
+Paris|{Dave_x,Dave_y,Magdalen_x,Magdalen_y,Nancy_x,Nancy_y}
+(3 rows)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|which
+Berlin|{Ellen,Susan}
+New York|⊥
+Paris|{Dave,Magdalen,Nancy}
+(3 rows)

@@ -124,9 +124,9 @@ Inspecting the Circuit
 -----------------------
 
 ProvSQL represents provenance as a *circuit*: a directed acyclic graph
-(DAG) of *gates*.  By default, :sqlfunc:`add_provenance` associates an
-``input`` gate to each existing tuple, and newly inserted tuples
-also receive ``input`` gates.  However, tuples may carry more complex
+(DAG) of *gates*.  Each tuple in a provenance-tracked table is
+associated with an ``input`` gate, created lazily the first time that
+tuple appears in a query result.  Tuples may also carry more complex
 provenance -- for instance, rows created by ``INSERT ... SELECT`` or
 ``CREATE TABLE AS`` inherit the provenance expression of the source
 query.

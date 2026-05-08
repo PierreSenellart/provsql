@@ -1,0 +1,37 @@
+# Fetch ministers for all configured countries.
+# To add or remove a country, edit the COUNTRIES dict in fetch.sh:
+#   wd:Q142 = France, wd:Q334 = Singapore
+#
+# The ?country placeholder below is substituted per-country by fetch.sh.
+# Do not run this file directly against the SPARQL endpoint.
+SELECT DISTINCT ?person ?genderLabel ?personLabel ?ministerLabel ?countryCode
+                ?startISO ?endISO ?birthISO ?deathISO ?partyLabel {
+
+  # Restrict to government-minister positions belonging to the target country.
+  ?person p:P39 ?statement.
+  ?person wdt:P21 ?gender.
+  ?statement ps:P39 ?minister.
+
+  ?statement pq:P580 ?start.
+  OPTIONAL { ?statement pq:P582 ?end }
+
+  ?minister wdt:P31?/(wdt:P279*) wd:Q83307.
+  ?minister wdt:P17 COUNTRY_QID.
+
+  ?person wdt:P27 COUNTRY_QID.
+
+  OPTIONAL { ?person wdt:P570 ?death }
+  OPTIONAL { ?person wdt:P569 ?birth }
+
+  OPTIONAL { ?person wdt:P102 ?party }
+
+  BIND(STR(?start) AS ?startISO)
+  BIND(STR(?end) AS ?endISO)
+  BIND(STR(?birth) AS ?birthISO)
+  BIND(STR(?death) AS ?deathISO)
+  BIND("COUNTRY_CODE" AS ?countryCode)
+
+  # English-first labels; French only as fallback for positions with no English label.
+  # Non-English labels are filtered out by json2csv.py.
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en,fr". }
+}
