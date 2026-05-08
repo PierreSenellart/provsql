@@ -157,7 +157,14 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
 
   provsql_shmem_unlock();
 
-  circuit_cache_create_gate(*token, type, nb_children, children);
+  /* Skip caching the gate_input lazy default: MMappedCircuit::getGateType
+   * returns gate_input both for real input gates and for tokens that are
+   * not yet in the mapping. Caching the latter would poison subsequent
+   * create_gate() calls in this session (the cache hit would short-circuit
+   * the worker IPC, dropping the gate). The cost is one extra IPC per
+   * lookup of a real input gate -- acceptable. */
+  if(!(type == gate_input && nb_children == 0))
+    circuit_cache_create_gate(*token, type, nb_children, children);
   if(children) free(children);
   PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]);
 }
@@ -201,8 +208,14 @@ Datum create_gate(PG_FUNCTION_ARGS)
   else
     children_data = NULL;
 
-  if(circuit_cache_create_gate(*token, type, nb_children, children_data))
-    PG_RETURN_VOID();
+  /* Populate the per-session cache, but unconditionally fall through to
+   * the worker IPC: a cache hit only proves "this token has been seen
+   * in this session before" (e.g. by get_gate_type returning the
+   * gate_input lazy default for an unknown token) -- not "the worker
+   * already has a gate for it". Skipping the IPC on a cache hit caused
+   * silently-dropped create_gate calls under concurrent backends.
+   * MMappedCircuit::createGate is idempotent on already-mapped tokens. */
+  circuit_cache_create_gate(*token, type, nb_children, children_data);
 
   STARTWRITEM();
   ADDWRITEM("C", char);
@@ -454,7 +467,12 @@ Datum get_children(PG_FUNCTION_ARGS)
     }
     provsql_shmem_unlock();
 
-    circuit_cache_create_gate(*token, gate_invalid, nb_children, children);
+    /* Skip caching when the worker reports zero children: we cannot
+     * distinguish a real zero-child gate (input/zero/one/...) from a
+     * token unknown to the worker, and caching the latter poisons
+     * subsequent create_gate() calls in this session. */
+    if(nb_children > 0)
+      circuit_cache_create_gate(*token, gate_invalid, nb_children, children);
   }
 
   children_ptr = palloc(nb_children * sizeof(Datum));

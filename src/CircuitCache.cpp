@@ -28,12 +28,31 @@ bool CircuitCache::insert(const CircuitCacheInfos& infos)
   std::pair<iterator,bool> p=il.push_front(infos);
 
   if(!p.second) {
+    /* Key collision: an entry for this token already exists. If the
+     * incoming entry carries more information (i.e. a real type
+     * replacing a placeholder gate_invalid stored by get_children),
+     * overwrite it; otherwise just touch the LRU position. The
+     * eviction loop is not re-run here: a replace can only grow an
+     * entry by (delta children count) * sizeof(pg_uuid_t), which is
+     * negligible against MAX_CIRCUIT_CACHE_SIZE and self-corrects on
+     * the next true insert. */
+    auto current_size_delta = static_cast<long>(infos.size())
+                              - static_cast<long>(p.first->size());
+    bool replace = (p.first->type == gate_invalid && infos.type != gate_invalid)
+                   || (p.first->children.empty() && !infos.children.empty());
+    if(replace) {
+      il.replace(p.first, infos);
+      current_size = static_cast<unsigned>(
+        static_cast<long>(current_size) + current_size_delta);
+    }
     il.relocate(il.begin(),p.first);
     return true;
   } else {
     current_size+=infos.size();
     while(current_size>MAX_CIRCUIT_CACHE_SIZE && !il.empty()) {
-      current_size -= (*il.end()).size();
+      /* Evict the LRU tail. Use back() rather than *il.end() to avoid
+       * dereferencing the past-the-end iterator (undefined behaviour). */
+      current_size -= il.back().size();
       il.pop_back();
     }
     return false;
@@ -63,6 +82,13 @@ unsigned circuit_cache_get_children(pg_uuid_t token, pg_uuid_t **children)
 
   if(opt) {
     auto nb_children = opt.value().children.size();
+    /* Avoid calloc(0, ...): on glibc this returns a non-null pointer,
+     * which would defeat the caller's `if(!children)` cache-miss
+     * check. Treat zero-children cache entries as nullptr/0. */
+    if(nb_children == 0) {
+      *children = nullptr;
+      return 0;
+    }
     *children=reinterpret_cast<pg_uuid_t*>(calloc(nb_children, sizeof(pg_uuid_t)));
     for(unsigned i=0; i<nb_children; ++i)
       (*children)[i] = opt.value().children[i];
