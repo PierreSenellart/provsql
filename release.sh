@@ -107,19 +107,20 @@ CI_FAILED=0
 
 echo "Checking CI status for HEAD ${HEAD_SHA:0:12}..."
 for WF in "${CI_WORKFLOWS[@]}"; do
-  # gh run list returns JSON; pick the first completed run on this SHA.
+  # Fetch the last 30 runs for the workflow and filter to this SHA in
+  # python. We don't use `gh run list --commit` because that flag was
+  # added in gh 2.40 and Ubuntu LTS still ships an older release.
   RUN_JSON=$(gh run list \
     --repo "$GH_REPO" \
     --workflow "$WF" \
-    --commit "$HEAD_SHA" \
-    --json status,conclusion,url \
-    --limit 5 2>/dev/null || true)
+    --json status,conclusion,url,headSha \
+    --limit 30 2>/dev/null || true)
 
   # Prefer a completed run; fall back to any run.
-  CONCLUSION=$(echo "$RUN_JSON" | \
-    python3 -c "
-import sys, json
-runs = json.load(sys.stdin)
+  CONCLUSION=$(HEAD_SHA="$HEAD_SHA" python3 -c "
+import sys, json, os
+sha = os.environ['HEAD_SHA']
+runs = [r for r in json.load(sys.stdin) if r.get('headSha') == sha]
 for r in runs:
     if r['status'] == 'completed':
         print(r['conclusion'])
@@ -130,14 +131,14 @@ for r in runs:
         print('pending')
         sys.exit(0)
 print('missing')
-" 2>/dev/null || echo "missing")
+" <<<"$RUN_JSON" 2>/dev/null || echo "missing")
 
-  URL=$(echo "$RUN_JSON" | \
-    python3 -c "
-import sys, json
-runs = json.load(sys.stdin)
+  URL=$(HEAD_SHA="$HEAD_SHA" python3 -c "
+import sys, json, os
+sha = os.environ['HEAD_SHA']
+runs = [r for r in json.load(sys.stdin) if r.get('headSha') == sha]
 if runs: print(runs[0].get('url',''))
-" 2>/dev/null || true)
+" <<<"$RUN_JSON" 2>/dev/null || true)
 
   case "$CONCLUSION" in
     success)
