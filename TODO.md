@@ -348,19 +348,33 @@ All Phase 1 work happens on the `studio` branch. Before Phase 2
 can run (the release scripts operate on `master`), the branch
 needs to land on master via a merge.
 
-- [ ] On `studio`, merge in the latest `master` to absorb any
+- [x] On `studio`, merge in the latest `master` to absorb any
       drift and resolve conflicts there:
-      `git fetch origin && git merge origin/master`.
-- [ ] Confirm the full extension test suite is green on `studio`
+      `git fetch origin && git merge origin/master`. Done in
+      merge commit `3e4b778`. The 3-dot diff
+      (`origin/studio...origin/master`) was empty: master's only
+      post-divergence commit `a793aeb` (Docker demo iproute2 +
+      startup messages) was superseded by studio's later
+      `361a488` (Studio launch) and `1d76e01` (PGDG/cleanup), so
+      the merge introduced no working-tree changes.
+- [x] Confirm the full extension test suite is green on `studio`
       after the merge (`sudo make install && sudo service
       postgresql restart && make installcheck`), plus `pytest
-      studio/tests` and `make docs`.
-- [ ] Switch to `master`, merge `studio` in (no fast-forward, so
+      studio/tests` and `make docs`. Skipped as redundant:
+      `3e4b778` is content-identical to pre-merge tip `44f9b46`;
+      `44f9b46` differs from `1d76e01` only in `TODO.md`; and
+      `1d76e01` carries a fully green CI run (Linux + Mac OS +
+      WSL + Studio + Documentation). The Documentation workflow
+      on `44f9b46` also completed green
+      (run id `25579295742`).
+- [x] Switch to `master`, merge `studio` in (no fast-forward, so
       the integration is visible in the history):
-      `git checkout master && git merge --no-ff studio`.
-- [ ] Push `master`. The branch deletion is deferred to Phase 3
+      `git checkout master && git merge --no-ff studio`. Done in
+      merge commit `af37f58` on 2026-05-08.
+- [x] Push `master`. The branch deletion is deferred to Phase 3
       so any release-time fixups can still land on `studio` and
-      be re-merged if needed.
+      be re-merged if needed. Pushed `origin/master` (af37f58)
+      and `origin/studio` (3e4b778) together.
 
 ---
 
