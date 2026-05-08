@@ -22,3 +22,6 @@ studio/provsql_studio/__pycache__/
 studio/**/__pycache__/
 studio/build/
 studio/dist/
+
+# Release-notes draft, fed to release.sh's $EDITOR step
+RELEASE_NOTES_*.md
