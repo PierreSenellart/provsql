@@ -5,6 +5,257 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.4.0] - 2026-05-09
+
+Major release headlining the **ProvSQL Studio** companion (released
+in parallel as `provsql-studio` 1.0.0 on PyPI) and a substantial
+expansion of the compiled-semiring family.  The mmap circuit format
+is unchanged from 1.3.0; an `ALTER EXTENSION provsql UPDATE` is
+enough.
+
+## ProvSQL Studio companion release
+
+[**ProvSQL Studio**](https://provsql.org/docs/user/studio.html), a
+self-contained Flask/JS web UI for provenance inspection, ships in
+parallel as `pip install provsql-studio==1.0.0`.  Studio renders the
+provenance DAG behind any UUID or `agg_token` cell, runs any
+compiled semiring (or probability method or PROV-XML export) against
+a pinned node, lights up the source rows of a Where-mode result via
+hover, and prefils `add_provenance` / `create_provenance_mapping`
+calls from the schema panel.  Studio's version stream is independent
+of the extension's; the
+[compatibility matrix](https://provsql.org/docs/user/studio.html#compatibility)
+in the user guide records each Studio release's minimum required
+extension version (1.0.0 ↔ extension 1.4.0+).  The Docker image
+`inriavalda/provsql:1.4.0` bundles both, exposes Studio on port 8000,
+and replaces the legacy Apache + `where_panel` PHP UI.
+
+## New compiled semirings
+
+Ten new `sr_*` evaluators land alongside the existing
+`sr_formula` / `sr_counting` / `sr_why` / `sr_boolexpr` /
+`sr_boolean` family.  All are dispatched through the
+`provenance_evaluate_compiled` C++ path, so they evaluate in a
+single circuit traversal and respect circuit caching.
+
+- **`sr_how(token, mapping)`**: canonical `N[X]` polynomial
+  provenance (how-provenance), the universal commutative-semiring
+  carrier.
+
+- **`sr_which(token, mapping)`**: which-provenance / lineage: the
+  set of input labels that influence the result.
+
+- **`sr_tropical(token, mapping)`**: tropical (min-plus) semiring
+  on `float8`, returning the cost of the cheapest derivation.
+
+- **`sr_viterbi(token, mapping)`**: Viterbi (max-times) semiring
+  on `float8` `∈ [0, 1]`, returning the probability of the most
+  likely derivation.
+
+- **`sr_lukasiewicz(token, mapping)`**: Łukasiewicz fuzzy
+  semiring: `+ = max`, `× = max(a + b − 1, 0)` on `float8`
+  `∈ [0, 1]`, preserving crisp truth and avoiding the near-zero
+  collapse of long product chains.
+
+- **`sr_minmax(token, mapping, element_one)`** and
+  **`sr_maxmin(token, mapping, element_one)`**: min-max / max-min
+  m-semirings over a user-defined enum carrier (security-classification
+  shape and trust/availability shape, respectively).  The third
+  argument is a sample value of the carrier enum, used only for type
+  inference.
+
+- **PG14+: `sr_temporal(token, mapping)`,
+  `sr_interval_num(token, mapping)`,
+  `sr_interval_int(token, mapping)`**: interval-union m-semiring
+  carriers over `tstzmultirange`,
+  `nummultirange`, and `int4multirange`.  `sr_temporal` subsumes
+  the old `union_tstzintervals_*` helpers (state functions,
+  aggregates, monus) which have been removed; the user-facing
+  `union_tstzintervals(token, mapping)` wrapper is now a thin
+  `SELECT sr_temporal(...)` call retained for backward compatibility,
+  and `timetravel`, `timeslice`, `history`, and `get_valid_time` now
+  call `sr_temporal` directly.
+
+- **`sr_boolexpr` signature change**: the provenance-mapping
+  argument is now optional (`token2value regclass = NULL`).  When
+  omitted, leaves are rendered as bare `x<id>` placeholders.
+  Existing one-argument callers continue to work unchanged.
+
+- **Paren elision in `sr_boolexpr` and `sr_formula` output**:
+  redundant outer parentheses, parentheses around single-child
+  subtrees, and parentheses around same-op nested subtrees are
+  dropped at rendering time, so long expressions stay readable.
+  The parsed expression is unchanged; only the textual form is
+  shorter.  Callers that grep `sr_boolexpr` output for exact
+  paren counts will need to adjust.
+
+## Circuit introspection helpers
+
+Two new SQL-level helpers expose the gate DAG so external tools can
+walk a bounded slice without copying the entire circuit; Studio
+uses them to render Circuit mode:
+
+- **`circuit_subgraph(root UUID, max_depth INT DEFAULT 8)`**:
+  returns `(node, parent, child_pos, gate_type, info1, info2, depth)`
+  for the BFS-bounded subgraph rooted at `root`, joining
+  `get_gate_type` / `get_children` / `get_infos` in a single
+  recursive CTE and keeping every distinct DAG edge (a child reached
+  from `k` parents within the bound contributes `k` rows; self-joins
+  contribute one row per child position).
+
+- **`resolve_input(uuid UUID)`**: returns
+  `(relation regclass, row_data jsonb)` for the source row whose
+  `provsql` column equals `uuid`, by enumerating every
+  provenance-tracked relation.  Returns zero rows for non-input gates
+  (`plus`, `times`, `agg`, …).
+
+## `agg_token` rendering and the `aggtoken_text_as_uuid` GUC
+
+`agg_token` cells now have two render modes, controlled by a new
+`provsql.aggtoken_text_as_uuid` GUC:
+
+- **Off (default, unchanged)**: cells render as `value (*)`.
+
+- **On (typical for UI layers like Studio)**: cells render as the
+  underlying UUID, so callers can click through to the provenance
+  circuit; the `value (*)` side is recovered via the new
+  `agg_token_value_text(uuid)` helper, which returns
+  `get_extra(token) || ' (*)'` when `token` resolves to an `agg`
+  gate.
+
+`agg_token_out` is consequently `STABLE` rather than `IMMUTABLE`
+(the chosen output now depends on a session GUC).
+
+## `provsql.tool_search_path` and external-tool robustness
+
+A new `provsql.tool_search_path` GUC (colon-separated directories
+prepended to `PATH` when invoking external tools) replaces the
+previous "tool must be on the postmaster's `PATH`" assumption.  The
+external-tool dispatch layer also gains:
+
+- **Pre-flight tool lookup with structured error decoding**: calls
+  fail fast with a clear message when a required tool is missing,
+  instead of waiting for an opaque downstream error.
+
+- **`statement_timeout` translation**: a `statement_timeout` that
+  fires during d4 / c2d / dsharp / weightmc compilation now becomes
+  a proper SQLSTATE 57014 (`query_canceled`) cancel rather than a
+  raw subprocess kill.
+
+- **SIGINT translation**: Ctrl-C during `find_external_tool`
+  pre-flight is translated into a proper PostgreSQL cancel.
+
+- **Private mkdtemp dir**: external tools now run in a per-call
+  `mkdtemp` directory, closing a `/tmp` race on shared hosts.
+
+## Bug fixes
+
+- **`provenance_aggregate` UUID collision under concurrent
+  aggregation.** `SUM(id)` and `AVG(id)` over the same children
+  could collapse to a single agg gate, after which their
+  concurrent `set_infos` calls would overwrite each other's
+  aggregation operator (and `provsql_having` would read the wrong
+  `agg_kind` under cross-backend contention).  The aggregate
+  function OID is now folded into the gate UUID so the two queries
+  produce distinct gates.
+
+- **`CircuitCache` poisoning under concurrent gate creation.** A
+  rare lost-write between two backends creating the same gate
+  could leave the cache pointing at the wrong type / children
+  pair.  Fixed; the cache's return-value contract is now aligned
+  with what the callers expect (`src/CircuitCache.cpp`).
+
+- **`CircuitCache` poisoning when calling `get_gate_type` before
+  `get_children`.** A separate cache-coherence bug along the
+  `get_gate_type` → `get_children` ordering has been fixed.
+
+- **Where-provenance column position for multi-table joins.**
+  PROJECT-gate column positions were computed against the wrong
+  RTE for multi-table joins, causing empty locator sets on some
+  query shapes.  Fixed.
+
+- **1.2.3 → 1.3.0 upgrade WARNING text.** The recovery-instructions
+  block raised by the storage-layout check used `%s` placeholders
+  inside a `RAISE WARNING`, where the substitution marker is `%`
+  (no type letter); the data-directory path was rendered with a
+  stray `s` appended (`<datadir>s` instead of `<datadir>`). Fixed.
+  The behaviour of the upgrade itself was unaffected.
+
+## Documentation
+
+- **Studio user-guide chapter** (`doc/source/user/studio.rst`): a
+  full walkthrough of Where mode, Circuit mode, the eval strip, and
+  the Config panel, plus a compatibility matrix and screenshots.
+  Cross-links from the introduction, semiring, and probability
+  pages.
+
+- **Semirings chapter expansion**
+  (`doc/source/user/semirings.rst`, +300 lines): new sections
+  documenting `sr_how`, `sr_which`, `sr_tropical`, `sr_viterbi`,
+  `sr_lukasiewicz`, `sr_minmax` / `sr_maxmin`, and the PG14+
+  interval-union family, with a capability matrix summarising
+  each semiring's identities and δ-handling.
+
+- **Expanded case studies**: Case Study 1 gains a
+  *Minimum Security Clearance* step that walks `sr_minmax` over a
+  `classification_level` enum mapping; case study 4 has its
+  temporal-DB code samples migrated from `union_tstzintervals` to
+  `sr_temporal`; case studies 3 and 5 are realigned with the new
+  paren-elided `sr_boolexpr` / `sr_formula` output.
+
+- **Developer guide**: new Studio architecture chapter
+  (`doc/source/dev/studio.rst`) covering the Flask app layout, the
+  `/api/*` surface, the auto-prepare and `search_path` pinning
+  strategy, and how Circuit mode walks `circuit_subgraph`.
+
+- **Build-system chapter**: new "Studio releases" section in
+  `doc/source/dev/build-system.rst` documenting Studio's
+  independent version stream, Trusted Publishing on PyPI, the
+  `studio-v*` tag workflow, and the hand-edited
+  `studio/CHANGELOG.md` discipline.
+
+## Infrastructure
+
+- **Studio CI workflow** (`.github/workflows/studio.yml`): Python
+  3.10 / 3.11 / 3.12 / 3.13 × PostgreSQL 14 / 15 / 16 matrix
+  covering pytest, Playwright e2e, ruff, and a wheel-install smoke.
+
+- **Studio release pipeline**
+  (`.github/workflows/studio-release.yml`): tag-triggered
+  (`studio-v*`), publishes to PyPI via Trusted Publishing,
+  attaches sdist + wheel to a GitHub release, embeds
+  the matching `studio/CHANGELOG.md` section in the release notes,
+  and aborts loudly if the section is missing.
+
+- **Docker image rework**: bundles Studio (PyPI install at image
+  build time, contributor `STUDIO_SOURCE=` override for editable
+  installs); adds the PGDG apt source so any `PSQL_VERSION` resolves
+  (Debian bookworm only ships 15); collapses the apt layer; replaces
+  Apache + `where_panel/` with `provsql-studio` on port 8000;
+  parallelises `make` in the build.
+
+- **`where_panel/` removed.**  The legacy PHP where-provenance UI is
+  superseded by Studio's Where mode.
+
+## Upgrade procedure
+
+```sh
+make install
+```
+
+In each database that uses ProvSQL:
+
+```sql
+ALTER EXTENSION provsql UPDATE;
+```
+
+The mmap circuit format is unchanged from 1.3.0; for users already
+on 1.3.x no migration is required.  Users still on 1.2.x must run
+`provsql_migrate_mmap` first to move the flat
+`$PGDATA/provsql_*.mmap` files into the per-database layout
+introduced in 1.3.0; see the [1.3.0 release notes](https://provsql.org/releases/v1.3.0/)
+for the full procedure.
+
 ## [1.3.1] - 2026-05-04
 
 A bug-fix release focused on `repair_key` / `mulinput` correctness,
