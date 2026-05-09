@@ -68,3 +68,17 @@ SELECT random_variable_uuid(7::integer::random_variable)
 -- type for unquoted decimals is numeric).
 SELECT random_variable_uuid(2.5::numeric::random_variable)
      = random_variable_uuid(provsql.as_random(2.5::numeric)) AS numeric_literal_via_cast;
+
+-- The continuous-distribution constructors are VOLATILE so that each
+-- call mints a FRESH uuid_generate_v4(): two calls to normal(0, 1) in
+-- the same query must produce *independent* random variables.  If
+-- anyone weakens these to STABLE or IMMUTABLE, PostgreSQL would fold
+-- the call and the resulting circuit would silently collapse the two
+-- RVs into one shared gate, breaking the c-table model.  These tests
+-- pin the contract.
+SELECT random_variable_uuid(provsql.normal(0, 1))
+    <> random_variable_uuid(provsql.normal(0, 1)) AS normal_calls_independent;
+SELECT random_variable_uuid(provsql.uniform(0, 1))
+    <> random_variable_uuid(provsql.uniform(0, 1)) AS uniform_calls_independent;
+SELECT random_variable_uuid(provsql.exponential(1))
+    <> random_variable_uuid(provsql.exponential(1)) AS exponential_calls_independent;

@@ -1425,6 +1425,15 @@ CREATE CAST (random_variable AS uuid)
  * Creates a fresh <tt>gate_rv</tt> with @c "normal:μ,σ" stored in
  * the gate's @c extra field, and returns a <tt>random_variable</tt>
  * pointing at it.  The cached scalar is @c NaN.
+ *
+ * @warning The <tt>VOLATILE</tt> marking is load-bearing and must
+ * not be weakened.  Each call mints a fresh <tt>uuid_generate_v4</tt>
+ * token because two calls to <tt>normal(0, 1)</tt> are *independent*
+ * random variables; if PostgreSQL were allowed to fold the function
+ * (which it would under <tt>STABLE</tt> / <tt>IMMUTABLE</tt>), two
+ * calls in the same query would share a UUID and collapse into a
+ * single dependent RV, silently breaking the c-table semantics.
+ * Same warning applies to @c uniform and @c exponential below.
  */
 CREATE OR REPLACE FUNCTION normal(mu double precision, sigma double precision)
   RETURNS random_variable AS
@@ -1440,6 +1449,9 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /**
  * @brief Construct a uniform-distribution random variable on [a, b]
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @c normal above.
  */
 CREATE OR REPLACE FUNCTION uniform(a double precision, b double precision)
   RETURNS random_variable AS
@@ -1455,6 +1467,9 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /**
  * @brief Construct an exponential-distribution random variable with rate λ
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @c normal above.
  */
 CREATE OR REPLACE FUNCTION exponential(lambda double precision)
   RETURNS random_variable AS

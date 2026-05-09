@@ -62,3 +62,12 @@ t
 numeric_literal_via_cast
 t
 (1 row)
+normal_calls_independent
+t
+(1 row)
+uniform_calls_independent
+t
+(1 row)
+exponential_calls_independent
+t
+(1 row)
