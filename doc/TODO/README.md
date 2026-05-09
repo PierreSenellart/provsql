@@ -22,6 +22,10 @@ Each plan document follows a consistent layout:
 - [`compiled-semirings.md`](compiled-semirings.md) : plan for new
   compiled semirings under `src/semiring/`, anchored on the Lean
   formalisation from [https://provsql.org/lean-docs/]
+- [`continuous_distributions.md`](continuous_distributions.md) : plan
+  for adding continuous probability distributions (Gaussian, uniform,
+  exponential, ...) to ProvSQL's pc-table model, anchored on Timothy
+  Leong's 2022 BSc thesis (NUS).
 - [`feature-coverage.md`](feature-coverage.md) : reference matrix
   cross-referencing every documented user-facing feature against the
   tutorial and case studies. Source of truth for the gaps that
