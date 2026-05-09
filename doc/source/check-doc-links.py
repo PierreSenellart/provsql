@@ -80,6 +80,7 @@ INTERNAL_FUNCTIONS = {
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',
+    'provenance_arith',
     'provenance_delta', 'provenance_semimod',
     'provenance_evaluate_compiled',
     # Internal constants and utilities
@@ -109,6 +110,15 @@ INTERNAL_FUNCTIONS = {
     # chapter of the user manual is written and references them via
     # :sqlfunc:.
     'normal', 'uniform', 'exponential', 'as_random',
+    # random_variable arithmetic and comparison operator implementations
+    # (invoked through the SQL operators + - * / < <= = <> >= >, not
+    # called by name; promote alongside the constructors in priority 9).
+    'random_variable_plus', 'random_variable_minus',
+    'random_variable_times', 'random_variable_div',
+    'random_variable_neg',
+    'random_variable_lt', 'random_variable_le', 'random_variable_eq',
+    'random_variable_ne', 'random_variable_ge', 'random_variable_gt',
+    'random_variable_cmp_oid',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
 }

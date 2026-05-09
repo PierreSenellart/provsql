@@ -107,6 +107,7 @@ test: grouping_sets
 # Continuous probability distributions (random_variable type)
 test: continuous_basic
 test: continuous_sampler
+test: continuous_arithmetic
 
 # PROV export
 test: to_provxml

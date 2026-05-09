@@ -612,6 +612,46 @@ $$ LANGUAGE plpgsql
   PARALLEL SAFE
   STRICT;
 
+/**
+ * @brief Create an arithmetic gate over scalar-valued provenance children
+ *
+ * Builds a deterministic @c gate_arith from an operator tag and an
+ * ordered list of children.  The tag is one of the @c provsql_arith_op
+ * enum values declared in @c src/provsql_utils.h
+ * (@c PLUS=0, @c TIMES=1, @c MINUS=2, @c DIV=3, @c NEG=4) and is
+ * stored in the gate's @c info1 field.  Children must be UUIDs of
+ * scalar-producing gates (@c gate_rv, @c gate_value, or another
+ * @c gate_arith).  The token UUID is derived deterministically from
+ * @p op and @p children so identical sub-expressions share their gate.
+ *
+ * @param op        Operator tag (@c provsql_arith_op).
+ * @param children  Ordered list of child gate UUIDs.
+ * @return  UUID of the (possibly pre-existing) @c gate_arith.
+ */
+CREATE OR REPLACE FUNCTION provenance_arith(
+  op       INTEGER,
+  children UUID[]
+)
+RETURNS UUID AS
+$$
+DECLARE
+  arith_token UUID;
+BEGIN
+  arith_token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('arith', op::text, children::text)
+  );
+  PERFORM create_gate(arith_token, 'arith', children);
+  PERFORM set_infos(arith_token, op);
+  RETURN arith_token;
+END
+$$ LANGUAGE plpgsql
+  SET search_path=provsql,pg_temp,public
+  SECURITY DEFINER
+  IMMUTABLE
+  PARALLEL SAFE
+  STRICT;
+
 /** @} */
 
 /** @defgroup semiring_evaluation Semiring evaluation
@@ -1618,6 +1658,258 @@ CREATE CAST (integer AS random_variable)
 /** @brief Implicit cast numeric -> random_variable. */
 CREATE CAST (numeric AS random_variable)
   WITH FUNCTION as_random(numeric) AS IMPLICIT;
+
+/**
+ * @name Arithmetic and comparison on random_variable
+ *
+ * Each binary operator below is declared on @c (random_variable,
+ * random_variable) only; mixed shapes such as <tt>rv + 2</tt> or
+ * <tt>2.5 > rv</tt> resolve through the implicit casts from
+ * @c integer / @c numeric / @c double @c precision to
+ * @c random_variable declared above.  This avoids the resolution
+ * ambiguity that would arise if both <tt>(rv, numeric)</tt> and
+ * <tt>(rv, rv)</tt> overloads were declared while implicit casts also
+ * existed.
+ *
+ * Arithmetic operators build a @c gate_arith via @c provenance_arith
+ * and return a new @c random_variable whose cached scalar is
+ * @c NaN (the cached scalar is meaningful only on @c gate_rv leaves
+ * and @c gate_value constants from @c as_random).
+ *
+ * Comparison operators build a @c gate_cmp via @c provenance_cmp and
+ * return its UUID directly &ndash; not a @c boolean.  This is intentional:
+ * priority 4 wires the planner hook so <tt>WHERE rv > 2</tt> becomes
+ * <tt>WHERE TRUE</tt> with the comparator's UUID conjoined into the
+ * tuple's @c provsql column.  Until then, tests can still build the
+ * comparator explicitly via <tt>SELECT (rv > 2) AS provsql</tt>; using
+ * the operator inside a real WHERE clause will fail type checking
+ * until the planner hook ships.  The OID stored in the @c gate_cmp's
+ * @c info1 field is the float8 comparator
+ * (e.g. <tt>'>(double precision,double precision)'::regoperator</tt>);
+ * @c cmpOpFromOid in @c src/Aggregation.cpp keys on the operator name,
+ * so any OID with the right symbol works.
+ *
+ * @{
+ */
+
+/** @brief @c random_variable + @c random_variable (gate_arith PLUS). */
+CREATE OR REPLACE FUNCTION random_variable_plus(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      0,  -- PROVSQL_ARITH_PLUS
+      ARRAY[provsql.random_variable_uuid(a),
+            provsql.random_variable_uuid(b)]),
+    'NaN'::double precision);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable - @c random_variable (gate_arith MINUS). */
+CREATE OR REPLACE FUNCTION random_variable_minus(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      2,  -- PROVSQL_ARITH_MINUS
+      ARRAY[provsql.random_variable_uuid(a),
+            provsql.random_variable_uuid(b)]),
+    'NaN'::double precision);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable * @c random_variable (gate_arith TIMES). */
+CREATE OR REPLACE FUNCTION random_variable_times(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      1,  -- PROVSQL_ARITH_TIMES
+      ARRAY[provsql.random_variable_uuid(a),
+            provsql.random_variable_uuid(b)]),
+    'NaN'::double precision);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable / @c random_variable (gate_arith DIV). */
+CREATE OR REPLACE FUNCTION random_variable_div(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      3,  -- PROVSQL_ARITH_DIV
+      ARRAY[provsql.random_variable_uuid(a),
+            provsql.random_variable_uuid(b)]),
+    'NaN'::double precision);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Unary @c -random_variable (gate_arith NEG). */
+CREATE OR REPLACE FUNCTION random_variable_neg(a random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      4,  -- PROVSQL_ARITH_NEG
+      ARRAY[provsql.random_variable_uuid(a)]),
+    'NaN'::double precision);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Internal helper: float8-comparator OID for a given symbol.
+ *
+ * Wraps the <tt>'<sym>(double precision,double precision)'::regoperator</tt>
+ * lookup so the per-comparator functions read uniformly.  Marked
+ * @c IMMUTABLE because the resolved OID is fixed at catalog level
+ * (the float8 comparators are core PG and never re-installed).
+ */
+CREATE OR REPLACE FUNCTION random_variable_cmp_oid(sym text)
+  RETURNS oid AS
+$$
+  SELECT (sym || '(double precision,double precision)')::regoperator::oid;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable < @c random_variable (gate_cmp). */
+CREATE OR REPLACE FUNCTION random_variable_lt(
+  a random_variable, b random_variable)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    provsql.random_variable_uuid(a),
+    provsql.random_variable_cmp_oid('<'),
+    provsql.random_variable_uuid(b));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable <= @c random_variable (gate_cmp). */
+CREATE OR REPLACE FUNCTION random_variable_le(
+  a random_variable, b random_variable)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    provsql.random_variable_uuid(a),
+    provsql.random_variable_cmp_oid('<='),
+    provsql.random_variable_uuid(b));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable = @c random_variable (gate_cmp). */
+CREATE OR REPLACE FUNCTION random_variable_eq(
+  a random_variable, b random_variable)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    provsql.random_variable_uuid(a),
+    provsql.random_variable_cmp_oid('='),
+    provsql.random_variable_uuid(b));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable <> @c random_variable (gate_cmp). */
+CREATE OR REPLACE FUNCTION random_variable_ne(
+  a random_variable, b random_variable)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    provsql.random_variable_uuid(a),
+    provsql.random_variable_cmp_oid('<>'),
+    provsql.random_variable_uuid(b));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable >= @c random_variable (gate_cmp). */
+CREATE OR REPLACE FUNCTION random_variable_ge(
+  a random_variable, b random_variable)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    provsql.random_variable_uuid(a),
+    provsql.random_variable_cmp_oid('>='),
+    provsql.random_variable_uuid(b));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable > @c random_variable (gate_cmp). */
+CREATE OR REPLACE FUNCTION random_variable_gt(
+  a random_variable, b random_variable)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    provsql.random_variable_uuid(a),
+    provsql.random_variable_cmp_oid('>'),
+    provsql.random_variable_uuid(b));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR + (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_plus,
+  COMMUTATOR = +
+);
+
+CREATE OPERATOR - (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_minus
+);
+
+CREATE OPERATOR * (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_times,
+  COMMUTATOR = *
+);
+
+CREATE OPERATOR / (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_div
+);
+
+/** @brief Prefix unary minus on @c random_variable. */
+CREATE OPERATOR - (
+  RIGHTARG  = random_variable,
+  PROCEDURE = random_variable_neg
+);
+
+CREATE OPERATOR < (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_lt,
+  COMMUTATOR = >
+);
+
+CREATE OPERATOR <= (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_le,
+  COMMUTATOR = >=
+);
+
+CREATE OPERATOR = (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_eq,
+  COMMUTATOR = =
+);
+
+CREATE OPERATOR <> (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_ne,
+  COMMUTATOR = <>
+);
+
+CREATE OPERATOR >= (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_ge,
+  COMMUTATOR = <=
+);
+
+CREATE OPERATOR > (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_gt,
+  COMMUTATOR = <
+);
+
+/** @} */
 
 /** @} */
 
