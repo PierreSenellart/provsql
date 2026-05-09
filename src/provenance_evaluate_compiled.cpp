@@ -38,6 +38,7 @@ extern "C" {
 #include "fmgr.h"
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
+#include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "provsql_utils.h"
 
@@ -159,6 +160,13 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
     SPI_finish();
     throw CircuitException("Invalid OID: no such table");
   }
+  // Schema-qualify so the lookup works regardless of search_path.
+  // get_rel_name alone would resolve unqualified, which fails when the
+  // mapping lives in a schema not on search_path (e.g. provsql_test in
+  // the regression DB, or any user schema reached via Studio with the
+  // default "public, provsql" search_path).
+  const char *qualified = quote_qualified_identifier(
+    get_namespace_name(get_rel_namespace(table)), table_name);
 
   constexpr size_t nb_max_uuid_value = 10000000;
 
@@ -174,10 +182,10 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
   // and join with it.
   if(uuids.size() == 0) {
     appendStringInfo(&join_query,
-                     "SELECT value, provenance FROM \"%s\" WHERE 'f'", table_name);
+                     "SELECT value, provenance FROM %s WHERE 'f'", qualified);
   } else if(uuids.size() <= nb_max_uuid_value) {
     appendStringInfo(&join_query,
-                     "SELECT value, provenance FROM \"%s\" t JOIN (VALUES", table_name);
+                     "SELECT value, provenance FROM %s t JOIN (VALUES", qualified);
     bool first=true;
     for(auto u: uuids) {
       appendStringInfo(&join_query, "%s('%s'::uuid)", first?"":",", u.c_str());
@@ -216,7 +224,7 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
     }
 
     appendStringInfo(&join_query,
-                     "SELECT value, provenance FROM \"%s\" t JOIN tmp_uuids u ON t.provenance = u.id", table_name);
+                     "SELECT value, provenance FROM %s t JOIN tmp_uuids u ON t.provenance = u.id", qualified);
   }
 
   if (SPI_exec(join_query.data, 0) != SPI_OK_SELECT) {
