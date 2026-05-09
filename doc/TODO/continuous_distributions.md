@@ -48,28 +48,51 @@ Append to `gate_type` (src/provsql_utils.h:55-73) and to
 `provenance_gate` (sql/provsql.common.sql:27-44). On-disk ABI requires
 that new gate types are added at the end, before `gate_invalid`.
 
-| Gate              | Children       | Stored data                                | Purpose                       |
-|-------------------|----------------|--------------------------------------------|-------------------------------|
-| `gate_rv_input`   | (none)         | `extra` = `"normal:μ,σ"` / `"uniform:a,b"` | Continuous RV leaf            |
-| `gate_rv_const`   | (none)         | `prob` = literal value                     | Zero-variance RV (constant)   |
-| `gate_rv_plus`    | n RV children  | none                                       | Sum of RV expressions         |
-| `gate_rv_times`   | n RV children  | none                                       | Product of RV expressions     |
-| `gate_rv_minus`   | 2 RV children  | none                                       | Subtraction                   |
-| `gate_rv_neg`     | 1 RV child     | none                                       | Negation                      |
+| Gate              | Children       | `info1`              | Stored data                                | Purpose                                |
+|-------------------|----------------|----------------------|--------------------------------------------|----------------------------------------|
+| `gate_rv`         | (none)         | (unused)             | `extra` = `"normal:μ,σ"` / `"uniform:a,b"` | Continuous RV leaf                     |
+| `gate_rv_arith`   | ≥ 1 RV children | arith op tag        | (unused)                                   | n-ary arithmetic over RV expressions   |
 
-Six new gates total. All append-only, all using fields that already
-exist in `GateInformation` (src/MMappedCircuit.h:59-79).
+Two new gates total. The full vocabulary covering pc-tables comes from
+combining these with three pre-existing gates:
 
-**No new comparison gate is needed.** Generalise the existing
-`gate_cmp` so its children may be RV expressions in addition to the
-current `agg` / `value` pair. The Monte Carlo evaluator learns one
-new branch: if a child is an RV expression, sample it; otherwise fall
-back to the existing aggregate-vs-constant logic. The HAVING-clause
-path (src/having_semantics.cpp) keeps working unchanged. The stale
-"Currently unused" comment on `gate_cmp` in src/provsql_utils.h:66
-and sql/provsql.common.sql:39 has already been refreshed; the matching
-line in sql/fixtures/provsql--1.0.0-common.sql:39 is intentionally
-left alone (the fixture is a frozen snapshot of 1.0.0, where `cmp`
+- `gate_value` for scalar constants in inequalities (`reading > 2`):
+  the literal lives in `extra`, exactly as today; the only follow-on
+  is a tiny parsing tweak (see "value-gate parsing" below).
+- `gate_cmp` for inequality predicates: today it compares
+  `agg` to `value`; generalise so its children may also be RV
+  expressions. The HAVING-clause path
+  (src/having_semantics.cpp) keeps working unchanged.
+- `gate_input` (already present) is unaffected.
+
+`info1` for `gate_rv_arith` carries a small local-enum operator tag:
+
+```
+PROVSQL_ARITH_PLUS   = 0    // n-ary, sum of children
+PROVSQL_ARITH_TIMES  = 1    // n-ary, product of children
+PROVSQL_ARITH_MINUS  = 2    // binary, child0 - child1
+PROVSQL_ARITH_DIV    = 3    // binary, child0 / child1
+PROVSQL_ARITH_NEG    = 4    // unary,  -child0
+```
+
+Local enum, not a PostgreSQL operator OID: RV arithmetic in the
+sampler is just C++ doubles, so there's no need to dispatch through
+PG's catalog. Trade-off: these tag values become part of the on-disk
+ABI (they are persisted in `info1`), so they need their own
+"warning, do not renumber" comment alongside the existing one on
+`gate_type`. New tags get appended.
+
+**Value-gate parsing.** Today's `extract_constant_C`
+(src/having_semantics.cpp:115) parses an int from `gate_value`'s
+`extra` byte string. Extend it (or add a sibling
+`extract_constant_double`) to accept `float8`. No on-disk change;
+the field is already a free-form string.
+
+**Stale comment cleanup.** The "Currently unused" comment on
+`gate_cmp` in src/provsql_utils.h:66 and sql/provsql.common.sql:39
+has already been refreshed; the matching line in
+sql/fixtures/provsql--1.0.0-common.sql:39 is intentionally left
+alone (the fixture is a frozen snapshot of 1.0.0, where `cmp`
 truly was unused; `provenance_cmp` was added in the 1.1.0 → 1.2.0
 upgrade per sql/upgrades/provsql--1.1.0--1.2.0.sql:48).
 
@@ -106,19 +129,24 @@ Internals:
 
 - A `random_variable` value is a row `(token uuid, value float8)`.
   The UUID indexes a gate in the circuit (input or composite). The
-  value field caches a deterministic literal (e.g. for constants
-  converted to zero-variance RVs).
-- Constructor functions register a fresh `gate_rv_input` with the
+  value field caches a deterministic literal (used by zero-variance
+  constants).
+- Constructor functions register a fresh `gate_rv` with the
   distribution serialised into `extra` (e.g. `"normal:2.5,0.5"`),
   and return a `random_variable` carrying that UUID.
+- Constants (e.g. `as_random(2)` or the literal `2` on the right-hand
+  side of `reading > 2`) become `gate_value` gates with the literal
+  serialised into `extra`, reusing the existing storage convention.
 - Operator overloads `+`, `-`, `*`, `/` on `random_variable ×
-  random_variable` (and `random_variable × numeric`) build composite
-  RV gates and return a new `random_variable`.
+  random_variable` (and `random_variable × numeric`) build
+  `gate_rv_arith` gates with the appropriate `info1` operator tag,
+  and return a new `random_variable`.
 - Operators `<`, `<=`, `=`, `>=`, `>`, `<>` between
-  `random_variable`s (or `random_variable × numeric`) return a
-  `uuid` (a Boolean token), which the planner-hook rewriter conjoins
-  into the tuple's provsql column instead of feeding it to
-  PostgreSQL's WHERE filter.
+  `random_variable`s (or `random_variable × numeric`) build a
+  `gate_cmp` whose children are RV expressions (or RV vs `value`),
+  and return a `uuid` (a Boolean token). The planner-hook rewriter
+  conjoins it into the tuple's provsql column instead of feeding it
+  to PostgreSQL's WHERE filter.
 
 This addresses the only awkward bit: a regular `WHERE reading > 2`
 would normally be evaluated by PostgreSQL and filter rows out. The
@@ -138,7 +166,8 @@ This is exactly the spirit of ProvSQL's existing rewriting.
   into a `gate_cmp` in the circuit (reusing `provenance_cmp`,
   sql/provsql.common.sql:586-611) and conjoin the resulting Boolean
   token into the tuple's provsql column via `provenance_times`. RV
-  arithmetic in SELECT expressions creates `gate_rv_*` gates.
+  arithmetic in SELECT expressions creates `gate_rv_arith` gates
+  with the right `info1` op tag.
 - **Splice.** Unchanged for the common case. WHERE clauses that
   the rewriter consumes are replaced by `TRUE` (or by
   `BoundCheck(provsql)` when the optional solver is enabled).
@@ -148,11 +177,18 @@ This is exactly the spirit of ProvSQL's existing rewriting.
 In src/BooleanCircuit.cpp:287-307. Add a per-call
 `unordered_map<uuid, double>` cache that:
 
-- on encountering an `rv_*` gate, recursively samples / combines
-  children to produce a scalar;
+- on encountering a `gate_rv`, draws a fresh sample from the
+  distribution serialised in `extra` (memoised by UUID per
+  tuple-MC iteration, per the thesis's SampleOne);
+- on encountering a `gate_rv_arith`, recursively samples its
+  children to produce scalars and combines them per `info1`
+  (PLUS / TIMES n-ary, MINUS / DIV binary, NEG unary);
+- on encountering a `gate_value` with a child path that's reached
+  during RV evaluation, parses the literal from `extra` as
+  `float8`;
 - on encountering a `gate_cmp` whose children are RV expressions,
-  samples both operand sub-DAGs once each (memoised by UUID, per the
-  thesis's SampleOne) and returns the Boolean comparator value;
+  samples both operand sub-DAGs (memoised) and returns the Boolean
+  comparator value;
 - leaves the existing aggregate-vs-constant `gate_cmp` branch
   unchanged;
 - keeps `plus` (OR), `times` (AND), `monus` (AND-NOT) for the
@@ -190,10 +226,17 @@ that get filtered post-MC by a threshold).
 
 Existing files to modify:
 
-- `src/provsql_utils.h` (gate_type enum: append 6 new tags before
-  `gate_invalid`; bump `gate_type_name[]` accordingly).
-- `sql/provsql.common.sql` (new type, constructors, operators,
-  helper functions; bump enum).
+- `src/provsql_utils.h` (gate_type enum: append 2 new tags
+  `gate_rv`, `gate_rv_arith` before `gate_invalid`; bump
+  `gate_type_name[]`; declare the `provsql_arith_op` enum with
+  the same "do not renumber" warning).
+- `sql/provsql.common.sql` (new `random_variable` type and
+  constructors, arithmetic and comparison operators, bump
+  `provenance_gate` enum with the two new values).
+- `src/having_semantics.cpp` (extend `extract_constant_C` or add
+  a sibling `extract_constant_double` so `gate_value`'s
+  `extra` field can be parsed as `float8` in addition to
+  `int`).
 - `src/provsql.c` (planner hook: recognise `random_variable`
   columns and inequality predicates; splice into provsql).
 - `src/BooleanCircuit.cpp`/`.h` (extend monteCarlo;
@@ -227,30 +270,35 @@ New files:
 Each stage ends with green `make installcheck` and a small demo SQL
 script.
 
-1. **Foundations: type and constructors.** Add `random_variable`
-   composite type, IO functions, and constructors `normal /
-   uniform / exponential / as_random` that create `gate_rv_input` /
-   `gate_rv_const` gates with the distribution serialised into
-   `extra`. Append the 6 new gate-type enumerators (in C, in SQL,
-   in `gate_type_name[]`). No planner-hook changes yet;
-   constructors and gates round-trip through `MMappedCircuit` and
-   survive a restart.
+1. **Foundations: type, constructors, value parsing.** Add
+   `random_variable` composite type, IO functions, and
+   constructors `normal / uniform / exponential / as_random` that
+   create `gate_rv` (or `gate_value` for `as_random`) with
+   the distribution serialised into `extra`. Append the 2 new
+   gate-type enumerators and the `provsql_arith_op` enum (in C,
+   in SQL, in `gate_type_name[]`). Extend the `gate_value`
+   parsing helpers in `src/having_semantics.cpp` to accept
+   `float8`. No planner-hook changes yet; constructors and gates
+   round-trip through `MMappedCircuit` and survive a restart.
 
 2. **Sampler: continuous Monte Carlo.** Extend the in-memory
    circuit to load and recognise the new gate types. Wire
-   `<random>`-based sampling for `gate_rv_input` per
+   `<random>`-based sampling for `gate_rv` per
    distribution; memoise samples by UUID per tuple-MC iteration.
-   Extend `gate_cmp` evaluation: when its children are RV
-   expressions, compare two scalar samples; the existing
-   aggregate-vs-constant branch stays. First regression tests at
-   this stage are circuit-level (no SQL rewriting yet).
+   Add the `gate_rv_arith` evaluator that dispatches on the
+   `info1` op tag. Extend `gate_cmp` evaluation: when its
+   children are RV expressions (`rv`, `rv_arith`, or
+   `value` parsed as `float8`), compare two scalar samples;
+   the existing aggregate-vs-constant branch stays. First
+   regression tests at this stage are circuit-level (no SQL
+   rewriting yet).
 
 3. **Operator overloading: arithmetic and inequality.** SQL
    operators `+ - * /` on `random_variable × random_variable` and
-   `random_variable × numeric` (build `gate_rv_*` gates, return
-   `random_variable`). SQL comparison operators (returning a
-   Boolean token UUID). SQL-level tests that hand-write the
-   `provsql` column.
+   `random_variable × numeric` (build `gate_rv_arith` gates with
+   the right `info1` tag, return `random_variable`). SQL
+   comparison operators (returning a Boolean token UUID).
+   SQL-level tests that hand-write the `provsql` column.
 
 4. **Planner hook: SELECT, WHERE, JOIN, UNION on pc-tables.**
    Detect `random_variable` columns in `get_provenance_attributes`.
