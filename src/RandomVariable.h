@@ -2,12 +2,13 @@
  * @file RandomVariable.h
  * @brief Continuous random-variable helpers (distribution parsing, moments).
  *
- * Helpers for the @c gate_rv leaf and the @c gate_rv_arith composite gate
- * introduced for continuous probabilistic c-tables.  A @c gate_rv stores
- * its distribution name and parameters in the gate's @c extra byte string
- * using a small text encoding (e.g. <tt>"normal:2.5,0.5"</tt>); these
- * helpers parse and format that encoding, and provide closed-form
- * moments where they exist.
+ * Helpers for the @c gate_rv leaf introduced for continuous probabilistic
+ * c-tables.  A @c gate_rv stores its distribution name and parameters in
+ * the gate's @c extra byte string using a small text encoding (e.g.
+ * <tt>"normal:2.5,0.5"</tt>); these helpers parse and format that encoding,
+ * and provide closed-form moments where they exist.  Arithmetic over RV
+ * expressions is built on the generic @c gate_arith gate (see
+ * @c provsql_utils.h), which is shared with non-RV scalar arithmetic.
  *
  * Sampling itself lives in @c BooleanCircuit::monteCarlo (added in
  * priority 2 of @c TODO.md); this header only exposes what is needed

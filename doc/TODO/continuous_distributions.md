@@ -56,7 +56,7 @@ that new gate types are added at the end, before `gate_invalid`.
 | Gate              | Children       | `info1`              | Stored data                                | Purpose                                |
 |-------------------|----------------|----------------------|--------------------------------------------|----------------------------------------|
 | `gate_rv`         | (none)         | (unused)             | `extra` = `"normal:μ,σ"` / `"uniform:a,b"` | Continuous RV leaf                     |
-| `gate_rv_arith`   | ≥ 1 RV children | arith op tag        | (unused)                                   | n-ary arithmetic over RV expressions   |
+| `gate_arith`   | ≥ 1 RV children | arith op tag        | (unused)                                   | n-ary arithmetic over RV expressions   |
 
 Two new gates total. The full vocabulary covering pc-tables comes from
 combining these with three pre-existing gates:
@@ -70,7 +70,7 @@ combining these with three pre-existing gates:
   (src/having_semantics.cpp) keeps working unchanged.
 - `gate_input` (already present) is unaffected.
 
-`info1` for `gate_rv_arith` carries a small local-enum operator tag:
+`info1` for `gate_arith` carries a small local-enum operator tag:
 
 ```
 PROVSQL_ARITH_PLUS   = 0    // n-ary, sum of children
@@ -144,7 +144,7 @@ Internals:
   serialised into `extra`, reusing the existing storage convention.
 - Operator overloads `+`, `-`, `*`, `/` on `random_variable ×
   random_variable` (and `random_variable × numeric`) build
-  `gate_rv_arith` gates with the appropriate `info1` operator tag,
+  `gate_arith` gates with the appropriate `info1` operator tag,
   and return a new `random_variable`.
 - Operators `<`, `<=`, `=`, `>=`, `>`, `<>` between
   `random_variable`s (or `random_variable × numeric`) build a
@@ -171,7 +171,7 @@ This is exactly the spirit of ProvSQL's existing rewriting.
   into a `gate_cmp` in the circuit (reusing `provenance_cmp`,
   sql/provsql.common.sql:586-611) and conjoin the resulting Boolean
   token into the tuple's provsql column via `provenance_times`. RV
-  arithmetic in SELECT expressions creates `gate_rv_arith` gates
+  arithmetic in SELECT expressions creates `gate_arith` gates
   with the right `info1` op tag.
 - **Splice.** Unchanged for the common case. WHERE clauses that
   the rewriter consumes are replaced by `TRUE` (or by
@@ -185,7 +185,7 @@ In src/BooleanCircuit.cpp:287-307. Add a per-call
 - on encountering a `gate_rv`, draws a fresh sample from the
   distribution serialised in `extra` (memoised by UUID per
   tuple-MC iteration, per the thesis's SampleOne);
-- on encountering a `gate_rv_arith`, recursively samples its
+- on encountering a `gate_arith`, recursively samples its
   children to produce scalars and combines them per `info1`
   (PLUS / TIMES n-ary, MINUS / DIV binary, NEG unary);
 - on encountering a `gate_value` with a child path that's reached
@@ -257,7 +257,7 @@ exists.
       distribution (`μ` for normal, `(a+b)/2` for uniform,
       `1/λ` for exponential, ...).
     - `gate_value` returns the literal.
-    - `gate_rv_arith`: linearity gives `E[ΣX_i] = ΣE[X_i]`
+    - `gate_arith`: linearity gives `E[ΣX_i] = ΣE[X_i]`
       for free; for products, `E[XY] = E[X]E[Y]` *iff* X and Y
       share no base RV in common (independence detectable
       structurally from the descendant-UUID footprint of each
@@ -288,7 +288,7 @@ to the dispatch table is mechanical.
 **Independence detection.** A small precomputation per circuit
 walk: for each gate, record the set (or Bloom filter) of base
 `gate_rv` UUIDs reachable below it. Two children of an
-`rv_arith(TIMES, ...)` are independent iff their base-RV sets are
+`arith(TIMES, ...)` are independent iff their base-RV sets are
 disjoint. Cheap, structural, and gives correct closed-form
 expectations on the common cases (most analytical workloads).
 
@@ -305,7 +305,7 @@ top-level modes).
   `"normal(2.5, 0.5)"`) with a small PDF thumbnail rendered
   in-place. Analytical density for normal / uniform /
   exponential, no sampling required at the leaf.
-- `gate_rv_arith`: operator glyph derived from `info1`
+- `gate_arith`: operator glyph derived from `info1`
   (`+`, `-`, `×`, `÷`, `−x`).
 
 Both reuse the JSON-shape conventions of the existing `agg` /
@@ -313,12 +313,12 @@ Both reuse the JSON-shape conventions of the existing `agg` /
 
 **Node inspector: distribution preview.** When the pinned node is
 a `gate_rv`, plot its analytical density. When it's a
-`gate_rv_arith` or a `gate_cmp` over RV children, draw an
+`gate_arith` or a `gate_cmp` over RV children, draw an
 empirical histogram from a quick MC pull. This is the answer to
 "do these two distributions overlap" in one click, mirroring the
 Squiggle / @Risk / `bayestestR::overlap()` UX.
 
-**Side-by-side comparison.** Pin two `rv` (or `rv_arith`) nodes
+**Side-by-side comparison.** Pin two `rv` (or `arith`) nodes
 and overlay their densities, with an estimated `P(X > Y)`
 annotated. Direct UX equivalent of the everyday probabilistic-DB
 question.
@@ -367,7 +367,7 @@ types. CHANGELOG entry at release time only.
 Existing files to modify:
 
 - `src/provsql_utils.h` (gate_type enum: append 2 new tags
-  `gate_rv`, `gate_rv_arith` before `gate_invalid`; bump
+  `gate_rv`, `gate_arith` before `gate_invalid`; bump
   `gate_type_name[]`; declare the `provsql_arith_op` enum with
   the same "do not renumber" warning).
 - `sql/provsql.common.sql` (new `random_variable` type and
@@ -409,7 +409,7 @@ New files:
   `random_variable`).
 - `src/semiring/Expectation.h` (compiled-semiring head; computes
   `E[·]` over a circuit, with structural independence detection on
-  `gate_rv_arith(TIMES, …)`, MC fallback when independence fails).
+  `gate_arith(TIMES, …)`, MC fallback when independence fails).
 - `src/BoundCheck.cpp`/`.h` (optional, gated by `HAVE_LPSOLVE`).
 - `test/sql/continuous_basic.sql`,
   `continuous_arithmetic.sql`, `continuous_selection.sql`,
@@ -440,9 +440,9 @@ script.
    circuit to load and recognise the new gate types. Wire
    `<random>`-based sampling for `gate_rv` per
    distribution; memoise samples by UUID per tuple-MC iteration.
-   Add the `gate_rv_arith` evaluator that dispatches on the
+   Add the `gate_arith` evaluator that dispatches on the
    `info1` op tag. Extend `gate_cmp` evaluation: when its
-   children are RV expressions (`rv`, `rv_arith`, or
+   children are RV expressions (`rv`, `arith`, or
    `value` parsed as `float8`), compare two scalar samples;
    the existing aggregate-vs-constant branch stays. First
    regression tests at this stage are circuit-level (no SQL
@@ -450,7 +450,7 @@ script.
 
 3. **Operator overloading: arithmetic and inequality.** SQL
    operators `+ - * /` on `random_variable × random_variable` and
-   `random_variable × numeric` (build `gate_rv_arith` gates with
+   `random_variable × numeric` (build `gate_arith` gates with
    the right `info1` tag, return `random_variable`). SQL
    comparison operators (returning a Boolean token UUID).
    SQL-level tests that hand-write the `provsql` column.
@@ -483,8 +483,8 @@ script.
    cases.
 
 7. **Studio.** Specific renderers for `gate_rv` and
-   `gate_rv_arith`; node-inspector distribution preview (analytical
-   for `rv` leaves, empirical histogram for `rv_arith` and
+   `gate_arith`; node-inspector distribution preview (analytical
+   for `rv` leaves, empirical histogram for `arith` and
    `gate_cmp` over RVs); side-by-side density overlay with
    estimated `P(X > Y)`; Config-panel rows for the new GUCs;
    demo script in `studio/scripts/`; Playwright e2e; new

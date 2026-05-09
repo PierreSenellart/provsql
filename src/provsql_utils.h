@@ -69,17 +69,17 @@ typedef enum gate_type {
   gate_mulinput, ///< Multivalued input (for Boolean provenance)
   gate_update,   ///< Update operation
   gate_rv,       ///< Continuous random-variable leaf (extra encodes distribution)
-  gate_rv_arith, ///< n-ary arithmetic over RV expressions (info1 holds operator tag)
+  gate_arith,    ///< n-ary arithmetic gate over scalar-valued children (info1 holds operator tag)
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
 
 /**
- * @brief Arithmetic operator tags used by @c gate_rv_arith.
+ * @brief Arithmetic operator tags used by @c gate_arith.
  *
  * Stored in the gate's @c info1 field.  Local enum (not a PostgreSQL
- * operator OID) because RV arithmetic in the sampler is just C++
- * doubles, with no need to dispatch through the PG catalog.
+ * operator OID) because arithmetic in the sampler / evaluator is just
+ * C++ doubles, with no need to dispatch through the PG catalog.
  *
  * @warning ON-DISK ABI: like @c gate_type, these integer values are
  * persisted (in @c info1).  Reordering or renumbering existing tags

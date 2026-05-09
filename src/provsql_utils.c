@@ -52,7 +52,7 @@ const char *gate_type_name[] = {
   "mulinput",
   "update",
   "rv",
-  "rv_arith",
+  "arith",
   "invalid"
 };
 
@@ -450,7 +450,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID(mulinput);
   GET_GATE_TYPE_OID(update);
   GET_GATE_TYPE_OID_OPTIONAL(rv);
-  GET_GATE_TYPE_OID_OPTIONAL(rv_arith);
+  GET_GATE_TYPE_OID_OPTIONAL(arith);
 
   constants.ok=true;
 

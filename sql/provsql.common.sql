@@ -42,7 +42,7 @@ CREATE TYPE provenance_gate AS
     'mulinput',-- Multivalued input (for Boolean provenance)
     'update',  -- Update operation
     'rv',      -- Continuous random-variable leaf
-    'rv_arith' -- n-ary arithmetic over RV expressions
+    'arith'    -- n-ary arithmetic gate over scalar-valued children
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation

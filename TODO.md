@@ -4,7 +4,7 @@
 
 The branch `continuous_distributions` was opened to bring back continuous-distribution support that was prototyped in Timothy Leong's 2022 NUS BSc thesis but never integrated. The design document at `doc/TODO/continuous_distributions.md` is the authoritative source for *what* to build and *why*; this operation plan is the executable form — sequencing, verification gates, commit points, and corrections to a few line-number references in the TODO.
 
-The TODO already commits to: two new gate types (`gate_rv`, `gate_rv_arith`) appended to the on-disk gate-type ABI; reuse of pre-existing `gate_value`, `gate_cmp`, `gate_input`; a `random_variable` SQL composite type mirroring `agg_token`; planner-hook rewriting of inequalities against RV columns; a continuous Monte Carlo extension to `BooleanCircuit::monteCarlo`; an optional `lp_solve` BoundCheck pruner; an `Expectation` compiled semiring with structural independence detection; and Studio renderer/inspector enhancements that stay inside the existing Circuit mode (no new top-level mode).
+The TODO already commits to: two new gate types (`gate_rv`, `gate_arith`) appended to the on-disk gate-type ABI; reuse of pre-existing `gate_value`, `gate_cmp`, `gate_input`; a `random_variable` SQL composite type mirroring `agg_token`; planner-hook rewriting of inequalities against RV columns; a continuous Monte Carlo extension to `BooleanCircuit::monteCarlo`; an optional `lp_solve` BoundCheck pruner; an `Expectation` compiled semiring with structural independence detection; and Studio renderer/inspector enhancements that stay inside the existing Circuit mode (no new top-level mode).
 
 Out of scope per the TODO and confirmed: EXCEPT, DISTINCT, aggregation over RVs, where-provenance × RV design work, a "Continuous mode" in Studio, and an in-Studio distribution editor. Each remains a clearly-marked follow-up.
 
@@ -33,7 +33,7 @@ Additional anchors found during exploration that the TODO doesn't pin:
 - **Operator declarations** for `agg_token × numeric` comparisons: `sql/provsql.common.sql:1259-1358` (12 declarations, two per operator). Mirror this shape for `random_variable`.
 - **Compiled-semiring dispatch table**: `src/provenance_evaluate_compiled.cpp:290-335` (string → semiring class via templated `pec(...)`). Add an `expectation` entry under the FLOAT block.
 - **External tools** are resolved through `provsql.tool_search_path` GUC and `src/external_tool.h:42-80`'s `run_external_tool` / `find_external_tool` — but this is for *runtime* invocation. `lp_solve` for BoundCheck is a *link-time* dependency, so it needs a new `HAVE_LPSOLVE` autoprobe in `Makefile.internal` (no existing precedent in that file; introduce one).
-- **Studio gate rendering** is class-based (`node--<type>` from `studio/provsql_studio/static/circuit.js:361`, with CSS in `studio/provsql_studio/static/app.css:1772-1783`); server-side serialiser is `studio/provsql_studio/circuit.py:165-239`. The new `gate_rv` / `gate_rv_arith` types need both client and server entries.
+- **Studio gate rendering** is class-based (`node--<type>` from `studio/provsql_studio/static/circuit.js:361`, with CSS in `studio/provsql_studio/static/app.css:1772-1783`); server-side serialiser is `studio/provsql_studio/circuit.py:165-239`. The new `gate_rv` / `gate_arith` types need both client and server entries.
 - **Test schedule**: append new `test: continuous_*` lines to `test/schedule.common`; never edit `test/schedule` (generated).
 
 ## Execution sequence
@@ -42,7 +42,7 @@ Each priority ends with a green `make installcheck`, a one-liner commit, and (wh
 
 ### Priority 1 — Foundations: type, constructors, value parsing
 
-- Append `gate_rv`, `gate_rv_arith` to `gate_type` in `src/provsql_utils.h:55-73` (before `gate_invalid`); update `gate_type_name[]`. Declare `provsql_arith_op` enum (PLUS=0, TIMES=1, MINUS=2, DIV=3, NEG=4) with the same "do not renumber" warning.
+- Append `gate_rv`, `gate_arith` to `gate_type` in `src/provsql_utils.h:55-73` (before `gate_invalid`); update `gate_type_name[]`. Declare `provsql_arith_op` enum (PLUS=0, TIMES=1, MINUS=2, DIV=3, NEG=4) with the same "do not renumber" warning.
 - Mirror the gate names in `sql/provsql.common.sql:27-44` (`provenance_gate` enum).
 - New file `src/random_variable_type.c`: PG IO functions `random_variable_in` / `_out` / `_cast` patterned on `src/agg_token.c:27-120`.
 - New file `src/RandomVariable.{h,cpp}`: helpers for parsing the `extra` blob (`"normal:μ,σ"` / `"uniform:a,b"` / `"exponential:λ"`), for analytical moments per distribution, and for sampling (used in priority 2).
@@ -52,21 +52,21 @@ Each priority ends with a green `make installcheck`, a one-liner commit, and (wh
 
 **Tests**: `test/sql/continuous_basic.sql` — create distributions, dump them, restart-survival is implicit because pg_regress runs in a live cluster. Add to `test/schedule.common`.
 
-**Commit gate**: `make installcheck` green, commit "TODO continuous_distributions: random_variable type, gate_rv/gate_rv_arith, float8 value parsing".
+**Commit gate**: `make installcheck` green, commit "TODO continuous_distributions: random_variable type, gate_rv/gate_arith, float8 value parsing".
 
 ### Priority 2 — Sampler: continuous Monte Carlo
 
 - Extend `src/CircuitFromMMap.{cpp,hpp}` to load the new gate types (Boost-deserialise into the in-memory circuit).
-- In `src/BooleanCircuit.cpp:287-307` (`monteCarlo`): switch leaf RNG from `rand()` to `std::mt19937_64` seeded from a new GUC `provsql.monte_carlo_seed` (int, registered alongside the existing GUCs in `src/provsql.c:3557-3626`); the Bernoulli path inherits this RNG. Add a per-call `unordered_map<uuid, double>` cache. Implement the four cases from the TODO: `gate_rv` → fresh draw via `<random>` (memoised by UUID per tuple-MC iteration); `gate_rv_arith` → recurse on children, combine per `info1`; `gate_value` reached via an RV path → parse `extra` as `float8` (using `extract_constant_double`); `gate_cmp` over RV children → sample both operand sub-DAGs, return the comparator. Aggregate-vs-constant `gate_cmp` branch unchanged.
+- In `src/BooleanCircuit.cpp:287-307` (`monteCarlo`): switch leaf RNG from `rand()` to `std::mt19937_64` seeded from a new GUC `provsql.monte_carlo_seed` (int, registered alongside the existing GUCs in `src/provsql.c:3557-3626`); the Bernoulli path inherits this RNG. Add a per-call `unordered_map<uuid, double>` cache. Implement the four cases from the TODO: `gate_rv` → fresh draw via `<random>` (memoised by UUID per tuple-MC iteration); `gate_arith` → recurse on children, combine per `info1`; `gate_value` reached via an RV path → parse `extra` as `float8` (using `extract_constant_double`); `gate_cmp` over RV children → sample both operand sub-DAGs, return the comparator. Aggregate-vs-constant `gate_cmp` branch unchanged.
 - Tests at this stage are circuit-level (no SQL rewriting yet): use `create_gate(...)` to hand-build small circuits and call `probability_evaluate(token, 'monte-carlo', n)` with the seed GUC pinned for determinism.
 
 **Tests**: `test/sql/continuous_sampler.sql` — covers each new gate type, the per-iteration memoisation property (the same RV UUID inside an arith expression must use the same draw), and seed reproducibility.
 
-**Commit gate**: `make installcheck` green, commit "TODO continuous_distributions: monteCarlo over gate_rv/gate_rv_arith with std::mt19937_64".
+**Commit gate**: `make installcheck` green, commit "TODO continuous_distributions: monteCarlo over gate_rv/gate_arith with std::mt19937_64".
 
 ### Priority 3 — Operator overloading: arithmetic and inequality
 
-- In `sql/provsql.common.sql`: SQL operators `+ - * /` over (`random_variable × random_variable`) and (`random_variable × numeric`), each building a `gate_rv_arith` with the right `info1` op tag and returning a `random_variable`. Comparison operators `< <= = <> >= >` over the same pairs, each building a `gate_cmp` and returning a Boolean token (`uuid`). Mirror `agg_token`'s 12 operator declarations at `sql/provsql.common.sql:1259-1358`.
+- In `sql/provsql.common.sql`: SQL operators `+ - * /` over (`random_variable × random_variable`) and (`random_variable × numeric`), each building a `gate_arith` with the right `info1` op tag and returning a `random_variable`. Comparison operators `< <= = <> >= >` over the same pairs, each building a `gate_cmp` and returning a Boolean token (`uuid`). Mirror `agg_token`'s 12 operator declarations at `sql/provsql.common.sql:1259-1358`.
 - Tests at this stage hand-write the `provsql` column to verify that arithmetic and comparisons compose correctly, before the planner hook automates it.
 
 **Tests**: `test/sql/continuous_arithmetic.sql` — `(a+b) > c` shapes, mixed `random_variable × numeric`, commutators, identity laws.
@@ -76,7 +76,7 @@ Each priority ends with a green `make installcheck`, a one-liner commit, and (wh
 ### Priority 4 — Planner hook: SELECT, WHERE, JOIN, UNION on pc-tables
 
 - `src/provsql.c:407-531` (`get_provenance_attributes`): recognise `random_variable` columns alongside `provsql UUID`.
-- `src/provsql.c:1101-1392` (`make_provenance_expression`): when a comparison node anywhere in WHERE/SELECT compares a `random_variable` Var, translate it into a `gate_cmp` (reuse `provenance_cmp`, `sql/provsql.common.sql:586-611`) and conjoin the resulting Boolean token into the tuple's provsql via `provenance_times`. RV arithmetic in SELECT expressions creates `gate_rv_arith`.
+- `src/provsql.c:1101-1392` (`make_provenance_expression`): when a comparison node anywhere in WHERE/SELECT compares a `random_variable` Var, translate it into a `gate_cmp` (reuse `provenance_cmp`, `sql/provsql.common.sql:586-611`) and conjoin the resulting Boolean token into the tuple's provsql via `provenance_times`. RV arithmetic in SELECT expressions creates `gate_arith`.
 - Splice: WHERE clauses consumed by the rewriter are replaced with `TRUE` (BoundCheck wrapping comes in priority 5). JOIN / UNION ALL paths already use `SR_TIMES` / `SR_PLUS` and need no change.
 
 **Tests**: `test/sql/continuous_selection.sql`, `continuous_join.sql`, `continuous_union.sql`. The sensors example from the TODO (s1 normal(2.5, 0.5), s2 uniform(1,3); `WHERE reading > 2`; expect ≈0.84 and ≈0.50 with `monte_carlo_seed` pinned and large `n`) anchors the end-to-end test.
@@ -96,7 +96,7 @@ Each priority ends with a green `make installcheck`, a one-liner commit, and (wh
 
 ### Priority 6 — Expected value and moments
 
-- New file `src/semiring/Expectation.h`: compiled semiring computing `E[·]` over a circuit. `gate_rv` returns the analytical expectation per distribution (`μ` for normal, `(a+b)/2` for uniform, `1/λ` for exponential). `gate_value` returns the literal. `gate_rv_arith(PLUS)` sums child expectations. `gate_rv_arith(TIMES)` returns `∏ E[X_i]` iff children's base-RV footprints are disjoint; otherwise falls back to MC on the offending sub-circuit.
+- New file `src/semiring/Expectation.h`: compiled semiring computing `E[·]` over a circuit. `gate_rv` returns the analytical expectation per distribution (`μ` for normal, `(a+b)/2` for uniform, `1/λ` for exponential). `gate_value` returns the literal. `gate_arith(PLUS)` sums child expectations. `gate_arith(TIMES)` returns `∏ E[X_i]` iff children's base-RV footprints are disjoint; otherwise falls back to MC on the offending sub-circuit.
 - A small precomputation: per gate, a Bloom filter (or `std::set<uuid>`) of base `gate_rv` UUIDs reachable below it, used for the structural independence test on TIMES.
 - Wire `expectation` into the dispatch table at `src/provenance_evaluate_compiled.cpp:290-335` (FLOAT block).
 - SQL functions in `sql/provsql.common.sql`: `expected_value(rv random_variable) -> float8`, `variance(rv random_variable) -> float8`, `moment(rv random_variable, k integer) -> float8`. Aggregate forms come for free from the existing aggregation pipeline.
@@ -110,10 +110,10 @@ Each priority ends with a green `make installcheck`, a one-liner commit, and (wh
 
 All inside the existing Circuit mode. No new top-level mode.
 
-- **Frontend renderer**: add CSS rules `.node--rv` / `.node--rv_arith` in `studio/provsql_studio/static/app.css` (mirroring `.node--leaf` at lines 1772-1783) and conditional label branches in `studio/provsql_studio/static/circuit.js` (mirroring the `'project'` / `'value'` / `'agg'` branches at lines 689-703). For `gate_rv`: distribution name and parameters with a small inline analytical-PDF thumbnail (no sampling at the leaf — closed form for normal / uniform / exponential). For `gate_rv_arith`: operator glyph from `info1` (`+`, `-`, `×`, `÷`, `−x`).
+- **Frontend renderer**: add CSS rules `.node--rv` / `.node--arith` in `studio/provsql_studio/static/app.css` (mirroring `.node--leaf` at lines 1772-1783) and conditional label branches in `studio/provsql_studio/static/circuit.js` (mirroring the `'project'` / `'value'` / `'agg'` branches at lines 689-703). For `gate_rv`: distribution name and parameters with a small inline analytical-PDF thumbnail (no sampling at the leaf — closed form for normal / uniform / exponential). For `gate_arith`: operator glyph from `info1` (`+`, `-`, `×`, `÷`, `−x`).
 - **Server-side serialiser**: extend the SQL CASE block in `studio/provsql_studio/circuit.py:165-175` if special `info1`/`info2` extraction is needed for the new types.
-- **Node inspector**: distribution preview — analytical density for `gate_rv` leaves, empirical histogram from a quick MC pull for `gate_rv_arith` and `gate_cmp` over RVs.
-- **Side-by-side comparison**: pin two `rv` (or `rv_arith`) nodes and overlay their densities, with `P(X > Y)` annotated.
+- **Node inspector**: distribution preview — analytical density for `gate_rv` leaves, empirical histogram from a quick MC pull for `gate_arith` and `gate_cmp` over RVs.
+- **Side-by-side comparison**: pin two `rv` (or `arith`) nodes and overlay their densities, with `P(X > Y)` annotated.
 - **Hover info on `rv` nodes**: distribution parameters, plus computed support interval when `BoundCheck` is on. RangeCheck surfaces here.
 - **Config-panel rows** for the new GUCs: `provsql.monte_carlo_seed`, `provsql.use_bound_check`. Recapture `doc/source/_static/studio/config-panel.png` per the OS-level `import + convert` flow in CLAUDE.md.
 - **Demo script**: `studio/scripts/demo_continuous.{sh,py}` loads the sensors / two-distribution example.
