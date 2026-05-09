@@ -98,6 +98,15 @@ INTERNAL_FUNCTIONS = {
     'update_provenance',
     # GUC variables (not functions)
     'aggtoken_text_as_uuid',
+    # random_variable type internals (I/O, accessors, internal builder)
+    'random_variable_in', 'random_variable_out',
+    'random_variable_uuid', 'random_variable_value',
+    'random_variable_make',
+    # User-facing constructors for continuous random variables.
+    # Promote to _SQL_FUNC_MAP once the continuous-distributions
+    # chapter of the user manual is written and references them via
+    # :sqlfunc:.
+    'normal', 'uniform', 'exponential', 'as_random',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
 }
