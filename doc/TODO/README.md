@@ -19,9 +19,6 @@ Each plan document follows a consistent layout:
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
   case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.
-- [`compiled-semirings.md`](compiled-semirings.md) : plan for new
-  compiled semirings under `src/semiring/`, anchored on the Lean
-  formalisation from [https://provsql.org/lean-docs/]
 - [`continuous_distributions.md`](continuous_distributions.md) : plan
   for adding continuous probability distributions (Gaussian, uniform,
   exponential, ...) to ProvSQL's pc-table model, anchored on Timothy
