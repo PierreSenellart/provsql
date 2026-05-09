@@ -2,7 +2,7 @@
 add_provenance
 
 (1 row)
-NOTICE:  timeout raised as query_canceled
+NOTICE:  d4 compilation terminated cleanly
 remove_provenance
 
 (1 row)

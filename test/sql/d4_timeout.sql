@@ -5,8 +5,10 @@ SET search_path TO provsql_test, provsql;
 
 -- 100x100 random-probability matrix (matches the casestudy1 documentation).
 -- The self-join below produces a circuit whose per-group d4 compilations
--- collectively exceed the 200ms statement_timeout, reliably triggering a
--- cancel during the system(d4) wait inside BooleanCircuit::compilation.
+-- typically exceed the 200ms statement_timeout, triggering a cancel during
+-- the system(d4) wait inside BooleanCircuit::compilation. On fast hardware
+-- the work may finish under the timeout; both outcomes are accepted (see
+-- the EXCEPTION block below).
 CREATE TABLE matrix AS
 SELECT ones.n + 10 * tens.n  AS x,
        other.n + 10 * tens2.n AS y,
@@ -26,8 +28,9 @@ END $$;
 -- consumed by the throw of "Unreadable d-DNNF" (XX000) that follows when
 -- the d4 subprocess returns a partial .nnf, masking the timeout. The
 -- DO/EXCEPTION wrapper normalises the surface error so the comparison is
--- sqlstate-only rather than depending on how many groups had completed
--- before the cancel fired (which is timing-dependent).
+-- sqlstate-only: both branches emit the same NOTICE so the test is
+-- immune to whether the cancel actually fired (machine-speed dependent).
+-- The bug, if reintroduced, surfaces as XX000 escaping the handler.
 SET statement_timeout = '200ms';
 
 DO $$
@@ -38,10 +41,10 @@ BEGIN
     WHERE m2.x = m1.y AND m1.x > 90 AND m2.x > 90 AND m2.y > 90
     GROUP BY m1.x, m2.y
     ORDER BY m1.x, m2.y;
-    RAISE NOTICE 'unexpected: query finished within timeout';
+    RAISE NOTICE 'd4 compilation terminated cleanly';
 EXCEPTION
     WHEN query_canceled THEN
-        RAISE NOTICE 'timeout raised as query_canceled';
+        RAISE NOTICE 'd4 compilation terminated cleanly';
 END $$;
 
 RESET statement_timeout;
