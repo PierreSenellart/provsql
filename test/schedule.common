@@ -21,6 +21,7 @@ test: gate_cache_consistency
 # Introducing a few semirings
 test: sr_formula sr_counting sr_boolean sr_why sr_how sr_which sr_tropical sr_viterbi sr_lukasiewicz
 test: sr_minmax sr_maxmin capability
+test: sr_qualified_mapping
 test: formula counting boolean
 
 # Test of various ProvSQL features and SQL language capabilities
