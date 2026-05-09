@@ -41,15 +41,22 @@ PG_FUNCTION_INFO_V1(random_variable_in);
 Datum
 random_variable_in(PG_FUNCTION_ARGS)
 {
-  char *str = PG_GETARG_CSTRING(0);
-  size_t len = strlen(str);
-
   /* Layout: '(' ' ' UUID(36) ' ' ',' ' ' value ' ' ')' */
   const size_t prefix_len = 2;        /* "( "                            */
   const size_t uuid_len   = 36;       /* xxxxxxxx-...-xxxxxxxxxxxx       */
   const size_t mid_len    = 3;        /* " , "                           */
   const size_t suffix_len = 2;        /* " )"                            */
   const size_t fixed_len  = prefix_len + uuid_len + mid_len + suffix_len;
+
+  char *str = PG_GETARG_CSTRING(0);
+  size_t len = strlen(str);
+  char uuid_buf[37];
+  Datum uuid_d;
+  size_t value_start;
+  size_t value_len;
+  char *value_buf;
+  Datum val_d;
+  random_variable *result;
 
   if (len < fixed_len + 1
       || str[0] != '(' || str[1] != ' '
@@ -63,20 +70,19 @@ random_variable_in(PG_FUNCTION_ARGS)
              errmsg("invalid input syntax for random_variable: \"%s\"",
                     str)));
 
-  char uuid_buf[37];
   memcpy(uuid_buf, str + prefix_len, uuid_len);
   uuid_buf[uuid_len] = '\0';
-  Datum uuid_d = DirectFunctionCall1(uuid_in, CStringGetDatum(uuid_buf));
+  uuid_d = DirectFunctionCall1(uuid_in, CStringGetDatum(uuid_buf));
 
-  size_t value_start = prefix_len + uuid_len + mid_len;
-  size_t value_len   = len - value_start - suffix_len;
-  char *value_buf = (char *) palloc(value_len + 1);
+  value_start = prefix_len + uuid_len + mid_len;
+  value_len   = len - value_start - suffix_len;
+  value_buf = (char *) palloc(value_len + 1);
   memcpy(value_buf, str + value_start, value_len);
   value_buf[value_len] = '\0';
-  Datum val_d = DirectFunctionCall1(float8in, CStringGetDatum(value_buf));
+  val_d = DirectFunctionCall1(float8in, CStringGetDatum(value_buf));
   pfree(value_buf);
 
-  random_variable *result = (random_variable *) palloc(sizeof(random_variable));
+  result = (random_variable *) palloc(sizeof(random_variable));
   memcpy(&result->tok, DatumGetUUIDP(uuid_d), sizeof(pg_uuid_t));
   result->val = DatumGetFloat8(val_d);
   PG_RETURN_POINTER(result);
@@ -90,13 +96,16 @@ Datum
 random_variable_out(PG_FUNCTION_ARGS)
 {
   random_variable *rv = (random_variable *) PG_GETARG_POINTER(0);
+  char *uuid_str;
+  char *val_str;
+  char *result;
 
-  char *uuid_str = DatumGetCString(
+  uuid_str = DatumGetCString(
       DirectFunctionCall1(uuid_out, UUIDPGetDatum(&rv->tok)));
-  char *val_str = DatumGetCString(
+  val_str = DatumGetCString(
       DirectFunctionCall1(float8out, Float8GetDatum(rv->val)));
 
-  char *result = psprintf("( %s , %s )", uuid_str, val_str);
+  result = psprintf("( %s , %s )", uuid_str, val_str);
 
   pfree(uuid_str);
   pfree(val_str);

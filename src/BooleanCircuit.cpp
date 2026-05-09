@@ -29,11 +29,13 @@ extern "C" {
 }
 
 #include <cassert>
+#include <cstdint>
 #include <string>
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
 #include <iostream>
+#include <random>
 #include <vector>
 #include <stack>
 
@@ -47,6 +49,7 @@ extern "C" {
 #ifdef TDKC
 constexpr bool provsql_interrupted = false;
 constexpr int provsql_verbose = 0;
+constexpr int provsql_monte_carlo_seed = -1;
 enum levels {ERROR, NOTICE};
 #define elog(level, ...) {fprintf(stderr, __VA_ARGS__); if(level==ERROR) exit(EXIT_FAILURE);}
 #define CHECK_FOR_INTERRUPTS() ((void)0)
@@ -286,12 +289,25 @@ bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sample
 
 double BooleanCircuit::monteCarlo(gate_t g, unsigned samples) const
 {
+  // Seed mt19937_64 from the provsql.monte_carlo_seed GUC: -1 (the
+  // default) means non-deterministic via std::random_device, any other
+  // value (including 0) is a literal seed so regression tests can pin
+  // sampling for reproducibility.
+  std::mt19937_64 rng;
+  if(provsql_monte_carlo_seed != -1) {
+    rng.seed(static_cast<uint64_t>(provsql_monte_carlo_seed));
+  } else {
+    std::random_device rd;
+    rng.seed((static_cast<uint64_t>(rd()) << 32) | rd());
+  }
+  std::uniform_real_distribution<double> uniform01(0.0, 1.0);
+
   auto success{0u};
 
   for(unsigned i=0; i<samples; ++i) {
     std::unordered_set<gate_t> sampled;
     for(auto in: inputs) {
-      if(rand() *1. / RAND_MAX < getProb(in)) {
+      if(uniform01(rng) < getProb(in)) {
         sampled.insert(in);
       }
     }

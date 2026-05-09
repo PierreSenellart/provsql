@@ -54,25 +54,7 @@ double parse_double_strict(const std::string &s, bool &ok) {
 
 // Map a cmp gate's Postgres operator to subset.cpp's ComparisonOperator
 ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok) {
-  ok = false;
-  auto infos = c.getInfos(cmp_gate);
-
-  char *opname = get_opname(infos.first); // palloc'd string or NULL
-  if (!opname) return ComparisonOperator::EQ;
-
-  std::string s(opname);
-  pfree(opname);
-
-  ok = true;
-  if (s == "=") return ComparisonOperator::EQ;
-  if (s == "<>") return ComparisonOperator::NE;
-  if (s == "<") return ComparisonOperator::LT;
-  if (s == "<=") return ComparisonOperator::LE;
-  if (s == ">") return ComparisonOperator::GT;
-  if (s == ">=") return ComparisonOperator::GE;
-
-  ok = false;
-  return ComparisonOperator::EQ;
+  return cmpOpFromOid(c.getInfos(cmp_gate).first, ok);
 }
 
 // Flip operator for "C op agg" <=> "agg flip(op) C"

@@ -197,6 +197,15 @@ extern bool provsql_aggtoken_text_as_uuid;
  * NULL or empty means rely on the server's PATH alone. */
 extern char *provsql_tool_search_path;
 
+/** Seed for the Monte Carlo sampler, set by the provsql.monte_carlo_seed
+ * run-time configuration parameter.  -1 (default) means seed from
+ * std::random_device for non-deterministic sampling; any other value
+ * (including 0) is a literal seed for std::mt19937_64.  Used by both
+ * the Bernoulli path (BooleanCircuit::monteCarlo) and the continuous
+ * path (gate_rv sampling), so a single GUC controls reproducibility
+ * end-to-end. */
+extern int provsql_monte_carlo_seed;
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */

@@ -89,30 +89,13 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
 
   case gate_cmp:
   {
-    auto infos = getInfos(g);
-    char * opname = get_opname(infos.first);
-    if(opname == nullptr)
-      provsql_error("Invalid OID for operator: %d", infos.first);
-
-    std::string func_name {opname};
-
-    ComparisonOperator op;
-
-    if(func_name == "=") {
-      op = ComparisonOperator::EQ;
-    } else if(func_name == "<=") {
-      op = ComparisonOperator::LE;
-    } else if(func_name == "<") {
-      op = ComparisonOperator::LT;
-    } else if(func_name == ">") {
-      op = ComparisonOperator::GT;
-    } else if(func_name == ">=") {
-      op = ComparisonOperator::GE;
-    } else if(func_name == "<>") {
-      op = ComparisonOperator::NE;
-    } else {
-      throw CircuitException("Comparison operator " + func_name + " not supported");
-    }
+    bool ok;
+    ComparisonOperator op = cmpOpFromOid(getInfos(g).first, ok);
+    if(!ok)
+      throw CircuitException(
+              "Comparison operator OID " +
+              std::to_string(getInfos(g).first) +
+              " not supported");
 
     return semiring.cmp(evaluate<S>(getWires(g)[0], provenance_mapping, semiring), op, evaluate<S>(getWires(g)[1], provenance_mapping, semiring));
   }

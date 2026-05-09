@@ -438,12 +438,14 @@ GenericCircuit MMappedCircuit::createGenericCircuit(pg_uuid_t token) const
         to_process.insert(children[i]);
     }
 
-    if(type==gate_mulinput || type==gate_eq || type==gate_agg || type==gate_cmp) {
+    if(type==gate_mulinput || type==gate_eq || type==gate_agg
+       || type==gate_cmp  || type==gate_arith) {
       auto [info1, info2] = getInfos(uuid);
       result.setInfos(id, info1, info2);
     }
 
-    if(type==gate_project || type==gate_value || type==gate_agg) {
+    if(type==gate_project || type==gate_value || type==gate_agg
+       || type==gate_rv) {
       auto extra = getExtra(uuid);
       result.setExtra(id, extra);
     }

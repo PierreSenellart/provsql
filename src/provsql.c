@@ -70,6 +70,7 @@ bool provsql_update_provenance = false; ///< @c true when provenance tracking fo
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC
+int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
@@ -3624,6 +3625,24 @@ void _PG_init(void) {
                              NULL,
                              NULL,
                              NULL);
+  DefineCustomIntVariable("provsql.monte_carlo_seed",
+                          "Seed for the Monte Carlo sampler.",
+                          "-1 (default) seeds from std::random_device for "
+                          "non-deterministic sampling. Any other value "
+                          "(including 0) is used as a literal seed for "
+                          "std::mt19937_64, making "
+                          "probability_evaluate(..., 'monte-carlo', n) "
+                          "reproducible across runs and across the Bernoulli "
+                          "and continuous (gate_rv) sampling paths.",
+                          &provsql_monte_carlo_seed,
+                          -1,
+                          -1,
+                          INT_MAX,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
 
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");

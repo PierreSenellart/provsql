@@ -1,0 +1,19 @@
+\set ECHO none
+rv_equals_itself|rv_lt_itself
+t|t
+(1 row)
+normal_gt_zero_within_tolerance
+t
+(1 row)
+uniform_le_0_3_within_tolerance
+t
+(1 row)
+exponential_gt_1_within_tolerance
+t
+(1 row)
+deterministic
+t
+(1 row)
+continuous_sampler_done
+ok
+(1 row)

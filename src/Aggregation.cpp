@@ -63,6 +63,28 @@ AggregationOperator getAggregationOperator(Oid oid)
   return op;
 }
 
+ComparisonOperator cmpOpFromOid(Oid op_oid, bool &ok)
+{
+  ok = false;
+  char *opname = get_opname(op_oid);
+  if(opname == nullptr)
+    return ComparisonOperator::EQ;
+
+  std::string s {opname};
+  pfree(opname);
+
+  ok = true;
+  if(s == "=")  return ComparisonOperator::EQ;
+  if(s == "<>") return ComparisonOperator::NE;
+  if(s == "<")  return ComparisonOperator::LT;
+  if(s == "<=") return ComparisonOperator::LE;
+  if(s == ">")  return ComparisonOperator::GT;
+  if(s == ">=") return ComparisonOperator::GE;
+
+  ok = false;
+  return ComparisonOperator::EQ;
+}
+
 /** @brief Aggregator that ignores all inputs and always returns NULL. */
 struct NoneAgg : Aggregator {
   void add(const AggValue& x) override {

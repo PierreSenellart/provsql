@@ -40,6 +40,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "BooleanCircuit.h"
 #include "CircuitFromMMap.h"
 #include "GenericCircuit.h"
+#include "MonteCarloSampler.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "having_semantics.hpp"
 #include "provsql_mmap.h"
@@ -88,13 +89,13 @@ static void provsql_sigint_handler (int)
 static Datum probability_evaluate_internal
   (pg_uuid_t token, const string &method, const string &args)
 {
-  gate_t gate;
-  BooleanCircuit c = getBooleanCircuit(token, gate);
+  // Load the GenericCircuit once: we need it for the RV-detection
+  // dispatch below, and getBooleanCircuit() reuses it internally so we
+  // pay no extra cost compared to the previous flow.
+  GenericCircuit gc = getGenericCircuit(token);
+  gate_t gc_root = gc.getGate(uuid2string(token));
 
   double result;
-
-  // Display the circuit for debugging:
-  // elog(WARNING, "%s", c.toString(gate).c_str());
 
   provsql_interrupted = false;
 
@@ -102,49 +103,73 @@ static Datum probability_evaluate_internal
   prev_sigint_handler = signal(SIGINT, provsql_sigint_handler);
 
   try {
-    bool processed=false;
-
-    if(method=="independent") {
-      result = c.independentEvaluation(gate);
-      processed = true;
-    } else if(method=="") {
-      // Default evaluation, use independent, tree-decomposition, and
-      // compilation in order until one works
+    // RV-aware Monte Carlo: when the circuit contains continuous
+    // random-variable leaves, the BoolExpr translation in
+    // getBooleanCircuit drops them, so we sample directly on the
+    // GenericCircuit instead.  Other probability methods are not
+    // (yet) defined over RV circuits.
+    if(method == "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
+      int samples = 0;
       try {
+        samples = stoi(args);
+      } catch(const std::invalid_argument &) {
+      }
+      if(samples <= 0)
+        provsql_error("Invalid number of samples: '%s'", args.c_str());
+
+      result = provsql::monteCarloRV(gc, gc_root, samples);
+    } else {
+      // Existing Boolean-circuit path: applies HAVING semantics and
+      // BoolExpr translation, then dispatches across the legacy
+      // probability methods.
+      gate_t gate;
+      std::unordered_map<gate_t, gate_t> gc_to_bc;
+      BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
+
+      bool processed = false;
+
+      if(method=="independent") {
         result = c.independentEvaluation(gate);
         processed = true;
-      } catch(CircuitException &) {}
-    }
-
-    if(!processed) {
-      // Other methods do not deal with multivalued input gates, they
-      // need to be rewritten
-      c.rewriteMultivaluedGates();
-
-      if(method=="monte-carlo") {
-        int samples=0;
-
+      } else if(method=="") {
+        // Default evaluation, use independent, tree-decomposition, and
+        // compilation in order until one works
         try {
-          samples = stoi(args);
-        } catch(const std::invalid_argument &e) {
+          result = c.independentEvaluation(gate);
+          processed = true;
+        } catch(CircuitException &) {}
+      }
+
+      if(!processed) {
+        // Other methods do not deal with multivalued input gates, they
+        // need to be rewritten
+        c.rewriteMultivaluedGates();
+
+        if(method=="monte-carlo") {
+          int samples=0;
+
+          try {
+            samples = stoi(args);
+          } catch(const std::invalid_argument &e) {
+          }
+
+          if(samples<=0)
+            provsql_error("Invalid number of samples: '%s'", args.c_str());
+
+          result = c.monteCarlo(gate, samples);
+        } else if(method=="possible-worlds") {
+          if(!args.empty())
+            provsql_warning("Argument '%s' ignored for method possible-worlds", args.c_str());
+
+          result = c.possibleWorlds(gate);
+        } else if(method=="weightmc") {
+          result = c.WeightMC(gate, args);
+        } else if(method=="compilation" || method=="tree-decomposition" || method=="") {
+          auto dd = c.makeDD(gate, method, args);
+          result = dd.probabilityEvaluation();
+        } else {
+          provsql_error("Wrong method '%s' for probability evaluation", method.c_str());
         }
-
-        if(samples<=0)
-          provsql_error("Invalid number of samples: '%s'", args.c_str());
-
-        result = c.monteCarlo(gate, samples);
-      } else if(method=="possible-worlds") {
-        if(!args.empty())
-          provsql_warning("Argument '%s' ignored for method possible-worlds", args.c_str());
-
-        result = c.possibleWorlds(gate);
-      } else if(method=="weightmc") {
-        result = c.WeightMC(gate, args);
-      } else if(method=="compilation" || method=="tree-decomposition" || method=="") {
-        auto dd = c.makeDD(gate, method, args);
-        result = dd.probabilityEvaluation();
-      } else {
-        provsql_error("Wrong method '%s' for probability evaluation", method.c_str());
       }
     }
   } catch(CircuitException &e) {
