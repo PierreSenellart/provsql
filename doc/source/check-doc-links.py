@@ -98,10 +98,12 @@ INTERNAL_FUNCTIONS = {
     'update_provenance',
     # GUC variables (not functions)
     'aggtoken_text_as_uuid',
-    # random_variable type internals (I/O, accessors, internal builder)
+    # random_variable type internals (I/O, accessors, internal builder,
+    # parameter-validation helper)
     'random_variable_in', 'random_variable_out',
     'random_variable_uuid', 'random_variable_value',
     'random_variable_make',
+    'is_finite_float8',
     # User-facing constructors for continuous random variables.
     # Promote to _SQL_FUNC_MAP once the continuous-distributions
     # chapter of the user manual is written and references them via

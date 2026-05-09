@@ -1420,11 +1420,35 @@ CREATE CAST (random_variable AS uuid)
   WITH FUNCTION random_variable_uuid(random_variable) AS IMPLICIT;
 
 /**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
  * @brief Construct a normal-distribution random variable
  *
  * Creates a fresh <tt>gate_rv</tt> with @c "normal:μ,σ" stored in
  * the gate's @c extra field, and returns a <tt>random_variable</tt>
  * pointing at it.  The cached scalar is @c NaN.
+ *
+ * Validation:
+ * - @p mu and @p sigma must be finite (no @c NaN, no @c ±Infinity).
+ * - @p sigma must be non-negative.
+ * - When @p sigma is zero the distribution degenerates to the Dirac
+ *   at @p mu; the call is silently routed through @c as_random(mu),
+ *   producing a @c gate_value rather than a zero-variance @c gate_rv.
+ *   This keeps the sampler / moment / boundcheck paths free of σ=0
+ *   special cases and lets <tt>normal(x, 0)</tt> share its gate with
+ *   <tt>as_random(x)</tt>.
  *
  * @warning The <tt>VOLATILE</tt> marking is load-bearing and must
  * not be weakened.  Each call mints a fresh <tt>uuid_generate_v4</tt>
@@ -1439,8 +1463,18 @@ CREATE OR REPLACE FUNCTION normal(mu double precision, sigma double precision)
   RETURNS random_variable AS
 $$
 DECLARE
-  token uuid := public.uuid_generate_v4();
+  token uuid;
 BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(sigma) THEN
+    RAISE EXCEPTION 'provsql.normal: parameters must be finite (got mu=%, sigma=%)', mu, sigma;
+  END IF;
+  IF sigma < 0 THEN
+    RAISE EXCEPTION 'provsql.normal: sigma must be non-negative (got %)', sigma;
+  END IF;
+  IF sigma = 0 THEN
+    RETURN provsql.as_random(mu);
+  END IF;
+  token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'normal:' || mu || ',' || sigma);
   RETURN provsql.random_variable_make(token, 'NaN'::double precision);
@@ -1450,6 +1484,13 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 /**
  * @brief Construct a uniform-distribution random variable on [a, b]
  *
+ * Validation:
+ * - @p a and @p b must be finite.
+ * - @p a must be ≤ @p b (reversed bounds are rejected).
+ * - When <tt>a = b</tt> the distribution is the Dirac at @p a; the
+ *   call is silently routed through @c as_random(a) for the same
+ *   reason as @c normal with @p sigma = 0.
+ *
  * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
  * @c normal above.
  */
@@ -1457,8 +1498,18 @@ CREATE OR REPLACE FUNCTION uniform(a double precision, b double precision)
   RETURNS random_variable AS
 $$
 DECLARE
-  token uuid := public.uuid_generate_v4();
+  token uuid;
 BEGIN
+  IF NOT provsql.is_finite_float8(a) OR NOT provsql.is_finite_float8(b) THEN
+    RAISE EXCEPTION 'provsql.uniform: bounds must be finite (got a=%, b=%)', a, b;
+  END IF;
+  IF a > b THEN
+    RAISE EXCEPTION 'provsql.uniform: a must be <= b (got a=%, b=%)', a, b;
+  END IF;
+  IF a = b THEN
+    RETURN provsql.as_random(a);
+  END IF;
+  token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'uniform:' || a || ',' || b);
   RETURN provsql.random_variable_make(token, 'NaN'::double precision);
@@ -1468,6 +1519,11 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 /**
  * @brief Construct an exponential-distribution random variable with rate λ
  *
+ * Validation:
+ * - @p lambda must be finite and strictly positive.  No degenerate
+ *   form exists for the exponential distribution, so there is no
+ *   silent route through @c as_random.
+ *
  * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
  * @c normal above.
  */
@@ -1475,8 +1531,15 @@ CREATE OR REPLACE FUNCTION exponential(lambda double precision)
   RETURNS random_variable AS
 $$
 DECLARE
-  token uuid := public.uuid_generate_v4();
+  token uuid;
 BEGIN
+  IF NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.exponential: lambda must be finite (got %)', lambda;
+  END IF;
+  IF lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.exponential: lambda must be strictly positive (got %)', lambda;
+  END IF;
+  token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'exponential:' || lambda);
   RETURN provsql.random_variable_make(token, 'NaN'::double precision);
@@ -1504,13 +1567,19 @@ CREATE OR REPLACE FUNCTION as_random(c double precision)
   RETURNS random_variable AS
 $$
 DECLARE
-  c_text varchar := CAST(c AS VARCHAR);
+  -- Canonicalise -0.0 to +0.0: IEEE 754 defines x + 0.0 = +0.0 for
+  -- both signed zeros, and is identity for finite, NaN, and ±Infinity.
+  -- Without this, as_random(-0.0) and as_random(+0.0) would produce
+  -- different gate UUIDs (their CAST AS VARCHAR text representations
+  -- differ: '-0' vs '0') even though they denote the same constant.
+  c_canon double precision := c + 0.0;
+  c_text varchar := CAST(c_canon AS VARCHAR);
   token uuid := public.uuid_generate_v5(
     provsql.uuid_ns_provsql(), concat('value', c_text));
 BEGIN
   PERFORM provsql.create_gate(token, 'value');
   PERFORM provsql.set_extra(token, c_text);
-  RETURN provsql.random_variable_make(token, c);
+  RETURN provsql.random_variable_make(token, c_canon);
 END
 $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
 

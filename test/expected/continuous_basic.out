@@ -71,3 +71,44 @@ t
 exponential_calls_independent
 t
 (1 row)
+normal_zero_sigma_kind
+value
+(1 row)
+normal_zero_sigma_dedups_with_as_random
+t
+(1 row)
+uniform_degenerate_kind
+value
+(1 row)
+uniform_degenerate_dedups_with_as_random
+t
+(1 row)
+ERROR:  provsql.normal: parameters must be finite (got mu=NaN, sigma=1)
+ERROR:  provsql.normal: parameters must be finite (got mu=0, sigma=Infinity)
+ERROR:  provsql.normal: sigma must be non-negative (got -1)
+ERROR:  provsql.uniform: bounds must be finite (got a=NaN, b=1)
+ERROR:  provsql.uniform: a must be <= b (got a=3, b=1)
+ERROR:  provsql.exponential: lambda must be finite (got Infinity)
+ERROR:  provsql.exponential: lambda must be strictly positive (got 0)
+ERROR:  provsql.exponential: lambda must be strictly positive (got -0.5)
+as_random_nan_value
+t
+(1 row)
+as_random_pos_inf_value
+t
+(1 row)
+as_random_neg_inf_value
+t
+(1 row)
+nan_text_roundtrip
+t
+(1 row)
+distinct_special_uuids
+3
+(1 row)
+as_random_signed_zero_dedup
+t
+(1 row)
+uniform_signed_zero_dedup
+t
+(1 row)

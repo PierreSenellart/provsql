@@ -82,3 +82,53 @@ SELECT random_variable_uuid(provsql.uniform(0, 1))
     <> random_variable_uuid(provsql.uniform(0, 1)) AS uniform_calls_independent;
 SELECT random_variable_uuid(provsql.exponential(1))
     <> random_variable_uuid(provsql.exponential(1)) AS exponential_calls_independent;
+
+-- Degenerate distributions: silently routed through as_random so the
+-- resulting gate is a gate_value, sharing its UUID with as_random(x).
+SELECT get_gate_type(random_variable_uuid(provsql.normal(5, 0))) AS normal_zero_sigma_kind;
+SELECT random_variable_uuid(provsql.normal(5, 0))
+     = random_variable_uuid(provsql.as_random(5)) AS normal_zero_sigma_dedups_with_as_random;
+SELECT get_gate_type(random_variable_uuid(provsql.uniform(7, 7))) AS uniform_degenerate_kind;
+SELECT random_variable_uuid(provsql.uniform(7, 7))
+     = random_variable_uuid(provsql.as_random(7)) AS uniform_degenerate_dedups_with_as_random;
+
+-- Rejected parameters.  Use VERBOSITY terse to keep error output
+-- compact; restore default afterwards so other tests in the suite are
+-- unaffected if they share the connection.
+\set VERBOSITY terse
+SELECT provsql.normal('NaN'::float8, 1);
+SELECT provsql.normal(0, 'Infinity'::float8);
+SELECT provsql.normal(0, -1);
+SELECT provsql.uniform('NaN'::float8, 1);
+SELECT provsql.uniform(3, 1);
+SELECT provsql.exponential('Infinity'::float8);
+SELECT provsql.exponential(0);
+SELECT provsql.exponential(-0.5);
+\set VERBOSITY default
+
+-- as_random allows non-finite floats: NaN and ±Infinity are valid
+-- float8 values with well-defined IEEE 754 comparison semantics.
+-- Each round-trips through the text IO and produces a distinct gate.
+SELECT random_variable_value(provsql.as_random('NaN'::float8)) = 'NaN'::float8 AS as_random_nan_value;
+SELECT random_variable_value(provsql.as_random('Infinity'::float8))
+     = 'Infinity'::float8 AS as_random_pos_inf_value;
+SELECT random_variable_value(provsql.as_random('-Infinity'::float8))
+     = '-Infinity'::float8 AS as_random_neg_inf_value;
+WITH r AS (SELECT provsql.as_random('NaN'::float8) AS v)
+SELECT random_variable_uuid(v::text::random_variable) = random_variable_uuid(v) AS nan_text_roundtrip FROM r;
+-- The three special values produce three distinct gates.
+SELECT count(DISTINCT u) AS distinct_special_uuids
+  FROM (VALUES
+    (random_variable_uuid(provsql.as_random('NaN'::float8))),
+    (random_variable_uuid(provsql.as_random('Infinity'::float8))),
+    (random_variable_uuid(provsql.as_random('-Infinity'::float8)))
+  ) AS t(u);
+
+-- IEEE 754 has two zeros (-0.0 and +0.0) but they denote the same
+-- constant.  as_random canonicalises -0.0 to +0.0 so both yield the
+-- same gate, and uniform(-0, +0) (which routes through as_random)
+-- inherits the canonicalisation.
+SELECT random_variable_uuid(provsql.as_random((-0)::float8))
+     = random_variable_uuid(provsql.as_random((0)::float8)) AS as_random_signed_zero_dedup;
+SELECT random_variable_uuid(provsql.uniform((-0)::float8, (0)::float8))
+     = random_variable_uuid(provsql.as_random((0)::float8)) AS uniform_signed_zero_dedup;
