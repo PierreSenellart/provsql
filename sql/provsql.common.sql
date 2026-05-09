@@ -40,7 +40,9 @@ CREATE TYPE provenance_gate AS
     'delta',   -- δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
     'value',   -- Scalar value (for aggregate provenance)
     'mulinput',-- Multivalued input (for Boolean provenance)
-    'update'   -- Update operation
+    'update',  -- Update operation
+    'rv',      -- Continuous random-variable leaf
+    'rv_arith' -- n-ary arithmetic over RV expressions
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -1356,6 +1358,135 @@ CREATE OPERATOR > (
   COMMUTATOR = <,
   NEGATOR    = <=
 );
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt> that pairs a provenance gate
+ *  UUID with a cached scalar value, used to expose continuous
+ *  probabilistic c-tables in SQL.  The UUID indexes either a
+ *  <tt>gate_rv</tt> (an actual distribution) or a <tt>gate_value</tt>
+ *  (a zero-variance constant produced by <tt>provsql.as_random</tt>);
+ *  in both cases the cached scalar is convenient for callers that
+ *  want the literal without re-parsing the gate's <tt>extra</tt> field.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  and <tt>provsql.as_random(c)</tt>.  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are added in priority 3
+ *  of the continuous-distributions plan; until then user queries can
+ *  build expressions by calling the constructors and combining them
+ *  through the standard <tt>provenance_*</tt> functions.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 24,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = double
+);
+
+/** @brief Extract the provenance UUID part of a random_variable */
+CREATE OR REPLACE FUNCTION random_variable_uuid(rv random_variable)
+  RETURNS uuid
+  AS 'provsql','random_variable_uuid' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Extract the cached scalar value of a random_variable */
+CREATE OR REPLACE FUNCTION random_variable_value(rv random_variable)
+  RETURNS double precision
+  AS 'provsql','random_variable_value' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Build a random_variable from a UUID and a cached value (internal) */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid, val double precision)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Implicit cast random_variable -> uuid (for provsql columns) */
+CREATE CAST (random_variable AS uuid)
+  WITH FUNCTION random_variable_uuid(random_variable) AS IMPLICIT;
+
+/**
+ * @brief Construct a normal-distribution random variable
+ *
+ * Creates a fresh <tt>gate_rv</tt> with @c "normal:μ,σ" stored in
+ * the gate's @c extra field, and returns a <tt>random_variable</tt>
+ * pointing at it.  The cached scalar is @c NaN.
+ */
+CREATE OR REPLACE FUNCTION normal(mu double precision, sigma double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid := public.uuid_generate_v4();
+BEGIN
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'normal:' || mu || ',' || sigma);
+  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a uniform-distribution random variable on [a, b]
+ */
+CREATE OR REPLACE FUNCTION uniform(a double precision, b double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid := public.uuid_generate_v4();
+BEGIN
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'uniform:' || a || ',' || b);
+  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct an exponential-distribution random variable with rate λ
+ */
+CREATE OR REPLACE FUNCTION exponential(lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid := public.uuid_generate_v4();
+BEGIN
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'exponential:' || lambda);
+  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Lift a deterministic constant into a random_variable
+ *
+ * Creates a <tt>gate_value</tt> carrying the constant's text form so
+ * that comparisons against a <tt>random_variable</tt> column produce
+ * the same circuit shape regardless of whether the operand is an
+ * actual RV or a literal constant.  The cached scalar is the constant.
+ */
+CREATE OR REPLACE FUNCTION as_random(c double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid := public.uuid_generate_v4();
+BEGIN
+  PERFORM provsql.create_gate(token, 'value');
+  PERFORM provsql.set_extra(token, c::text);
+  RETURN provsql.random_variable_make(token, c);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /** @} */
 

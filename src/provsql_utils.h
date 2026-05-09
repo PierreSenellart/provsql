@@ -68,9 +68,31 @@ typedef enum gate_type {
   gate_value,    ///< Scalar value (for aggregate provenance)
   gate_mulinput, ///< Multivalued input (for Boolean provenance)
   gate_update,   ///< Update operation
+  gate_rv,       ///< Continuous random-variable leaf (extra encodes distribution)
+  gate_rv_arith, ///< n-ary arithmetic over RV expressions (info1 holds operator tag)
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
+
+/**
+ * @brief Arithmetic operator tags used by @c gate_rv_arith.
+ *
+ * Stored in the gate's @c info1 field.  Local enum (not a PostgreSQL
+ * operator OID) because RV arithmetic in the sampler is just C++
+ * doubles, with no need to dispatch through the PG catalog.
+ *
+ * @warning ON-DISK ABI: like @c gate_type, these integer values are
+ * persisted (in @c info1).  Reordering or renumbering existing tags
+ * will silently invalidate every existing installation's persistent
+ * circuit.  New tags must be appended at the end.
+ */
+typedef enum provsql_arith_op {
+  PROVSQL_ARITH_PLUS  = 0, ///< n-ary, sum of children
+  PROVSQL_ARITH_TIMES = 1, ///< n-ary, product of children
+  PROVSQL_ARITH_MINUS = 2, ///< binary, child0 - child1
+  PROVSQL_ARITH_DIV   = 3, ///< binary, child0 / child1
+  PROVSQL_ARITH_NEG   = 4  ///< unary, -child0
+} provsql_arith_op;
 
 /** Names of gate types */
 extern const char *gate_type_name[];

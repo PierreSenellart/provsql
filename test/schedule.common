@@ -103,5 +103,8 @@ test: group_by_empty
 
 test: grouping_sets
 
+# Continuous probability distributions (random_variable type)
+test: continuous_basic
+
 # PROV export
 test: to_provxml

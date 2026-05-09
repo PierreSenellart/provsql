@@ -35,6 +35,21 @@ int parse_int_strict(const std::string &s, bool &ok) {
     return 0;
   }
 }
+
+// Parse double from string
+double parse_double_strict(const std::string &s, bool &ok) {
+  ok = false;
+  if (s.empty()) return 0.0;
+  size_t idx = 0;
+  try {
+    double v = std::stod(s, &idx);
+    if (idx != s.size()) return 0.0;
+    ok = true;
+    return v;
+  } catch (...) {
+    return 0.0;
+  }
+}
 } // namespace
 
 // Map a cmp gate's Postgres operator to subset.cpp's ComparisonOperator
@@ -113,6 +128,22 @@ bool extract_constant_C(GenericCircuit &c, gate_t x, int &C_out) {
 
   bool ok = false;
   int v = parse_int_strict(c.getExtra(w[1]), ok);
+  if (!ok)
+    return false;
+
+  C_out = v;
+  return true;
+}
+
+// Float8 sibling of extract_constant_C: parses a gate_value's extra as
+// double precision instead of int.  Used by the continuous-distributions
+// path where the right-hand side of a gate_cmp is a float literal.
+bool extract_constant_double(GenericCircuit &c, gate_t x, double &C_out) {
+  if (c.getGateType(x) != gate_value)
+    return false;
+
+  bool ok = false;
+  double v = parse_double_strict(c.getExtra(x), ok);
   if (!ok)
     return false;
 

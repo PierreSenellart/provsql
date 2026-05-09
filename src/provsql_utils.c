@@ -51,6 +51,8 @@ const char *gate_type_name[] = {
   "value",
   "mulinput",
   "update",
+  "rv",
+  "rv_arith",
   "invalid"
 };
 
@@ -248,7 +250,8 @@ static void OperatorGet(
  *
  * @param enumtypoid  OID of the enum type (e.g. @c provenance_gate).
  * @param label       C-string label of the enum value to look up.
- * @return            OID of the enum label's @c pg_enum row.
+ * @return            OID of the enum label's @c pg_enum row, or
+ *                    @c InvalidOid if the label is not present.
  */
 static Oid get_enum_oid(Oid enumtypoid, const char *label)
 {
@@ -258,7 +261,8 @@ static Oid get_enum_oid(Oid enumtypoid, const char *label)
   tup = SearchSysCache2(ENUMTYPOIDNAME,
                         ObjectIdGetDatum(enumtypoid),
                         CStringGetDatum(label));
-  Assert(HeapTupleIsValid(tup));
+  if (!HeapTupleIsValid(tup))
+    return InvalidOid;
 
 #if PG_VERSION_NUM >= 120000
   ret = ((Form_pg_enum) GETSTRUCT(tup))->oid;
@@ -411,6 +415,25 @@ static constants_t initialize_constants(bool failure_if_not_possible)
             if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
             provsql_error("Could not initialize provsql gate type " #x); }
 
+  /** @brief Like @c GET_GATE_TYPE_OID but tolerates a missing enum value.
+   *
+   * Used for gate types added in releases newer than the oldest schema
+   * the @c extension_upgrade test exercises (currently 1.0.0).  An
+   * intermediate state where a 1.0.0 database has been bound to a newer
+   * shared library is possible (e.g. between @c CREATE @c EXTENSION
+   * @c VERSION and @c ALTER @c EXTENSION @c UPDATE) and must not abort
+   * @c get_constants -- the missing OID stays @c InvalidOid and any
+   * attempt to actually create such a gate fails later in
+   * @c create_gate's "Invalid gate type" branch.  When the upgrade
+   * scripts catch up, the lookup succeeds and the gate becomes usable
+   * normally.  No state for @c InvalidOid is stored, so the field
+   * keeps its zero-init value (which is @c InvalidOid).
+   */
+  #define GET_GATE_TYPE_OID_OPTIONAL(x) { \
+            constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
+              constants.OID_TYPE_GATE_TYPE, \
+              #x); }
+
   GET_GATE_TYPE_OID(input);
   GET_GATE_TYPE_OID(plus);
   GET_GATE_TYPE_OID(times);
@@ -426,6 +449,8 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID(value);
   GET_GATE_TYPE_OID(mulinput);
   GET_GATE_TYPE_OID(update);
+  GET_GATE_TYPE_OID_OPTIONAL(rv);
+  GET_GATE_TYPE_OID_OPTIONAL(rv_arith);
 
   constants.ok=true;
 
