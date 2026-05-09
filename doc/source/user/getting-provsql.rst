@@ -123,10 +123,11 @@ your checkout). To upgrade an existing installation:
    ``$PGDATA/provsql_*.mmap`` set to per-database files under
    ``$PGDATA/base/<db_oid>/`` with a versioned header. Build and run
    the bundled migration tool as the ``postgres`` system user with
-   the server stopped::
+   the server stopped (adjust the connection string for your
+   socket directory if different)::
 
        make provsql_migrate_mmap
-       sudo -u postgres ./provsql_migrate_mmap
+       sudo -u postgres ./provsql_migrate_mmap -D $PGDATA -c "host=/var/run/postgresql"
 
    The tool removes the old flat files on success. Skip this step
    when upgrading between 1.3.0+ releases.
