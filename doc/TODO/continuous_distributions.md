@@ -33,12 +33,17 @@ core lands:
 - **Aggregation over RVs.** Open theoretical question: how does
   `SUM` over a column of normals interact with the existing
   aggregation semirings? Out of scope here.
-- **Studio UI for RV inspection.** Useful but not needed for the
-  prototype: leave as a follow-up under `studio/`.
 - **Where-provenance + RVs.** The `where_provenance` mode already adds
   `eq` / `project` gates; verify with a regression test that adding
   RV-children to `gate_cmp` does not interfere, but no design work is
   scheduled.
+- **A new top-level "Continuous mode" in Studio.** The continuous
+  machinery is just richer Circuit-mode rendering; promoting it to a
+  third mode alongside Where and Circuit splits the UI for no
+  functional benefit. See "Studio" below for what *is* in scope.
+- **A distribution editor in Studio** that lets users edit RV
+  parameters in-place. That's a data-modelling tool, not a provenance
+  inspector.
 
 ## Plan
 
@@ -222,6 +227,141 @@ When `lp_solve` is unavailable, queries still work; selectivity is
 just looser (always-false predicates produce zero-probability rows
 that get filtered post-MC by a threshold).
 
+### Expected value and moments
+
+A natural addition that fits ProvSQL's existing aggregation
+machinery. Continuous distributions have well-defined moments, and
+the existing `agg` / `semimod` gates plus the compiled-semiring
+framework (src/semiring/) already give us the right shape for
+"evaluate a scalar function over a circuit".
+
+**SQL surface.** New scalar functions, taking a `random_variable`
+(or a UUID pointing at a circuit) and returning a `float8`:
+
+- `expected_value(rv random_variable) -> float8`
+- `variance(rv random_variable) -> float8`
+- `moment(rv random_variable, k integer) -> float8` (kth raw
+  moment)
+
+Aggregate forms (`expected_value(rv) ... GROUP BY ...`) come for
+free from the existing aggregation pipeline once the scalar form
+exists.
+
+**Two evaluation paths.**
+
+- **Closed-form via a compiled-semiring walk.** A new
+  `src/semiring/Expectation.h` (and its `sr_expectation` SQL
+  binding alongside the existing `sr_*` family) descends the
+  circuit:
+    - `gate_rv` returns the analytical expectation of its
+      distribution (`μ` for normal, `(a+b)/2` for uniform,
+      `1/λ` for exponential, ...).
+    - `gate_value` returns the literal.
+    - `gate_rv_arith`: linearity gives `E[ΣX_i] = ΣE[X_i]`
+      for free; for products, `E[XY] = E[X]E[Y]` *iff* X and Y
+      share no base RV in common (independence detectable
+      structurally from the descendant-UUID footprint of each
+      child). When independence does not hold, fall through to MC
+      on the offending sub-circuit.
+    - `gate_cmp`: `P(comparator)`, i.e. expectation of the
+      Boolean, computable by MC.
+- **MC fallback** (`sr_expectation_mc` or a `monte-carlo`
+  parameter on the same call): same sampler as
+  `probability_evaluate`, just averaging the scalar instead of
+  tallying Boolean outcomes.
+
+**Higher moments.** Same descent with the appropriate algebraic
+identity. Variance via `Var(X+Y) = Var(X) + Var(Y) + 2 Cov(X,Y)`,
+with covariance zero when independent. Higher moments: closed-form
+for the basic distributions, MC otherwise.
+
+**Why this matches ProvSQL's existing shape.** The aggregation
+framework (src/Aggregation.{h,cpp}, src/aggregation_evaluate.c)
+already evaluates scalar functions over circuits and produces
+`agg_token` results carrying running values. A moment-computing
+semiring slots into the same machinery: input is a circuit, output
+is a scalar, evaluation is a semiring fold. The compiled-semiring
+machinery already dispatches on a name string
+(src/provenance_evaluate_compiled.{cpp,hpp}); adding `expectation`
+to the dispatch table is mechanical.
+
+**Independence detection.** A small precomputation per circuit
+walk: for each gate, record the set (or Bloom filter) of base
+`gate_rv` UUIDs reachable below it. Two children of an
+`rv_arith(TIMES, ...)` are independent iff their base-RV sets are
+disjoint. Cheap, structural, and gives correct closed-form
+expectations on the common cases (most analytical workloads).
+
+### Studio
+
+Most of the Studio work fits into the existing Circuit mode by
+enriching the gate renderer and the node inspector, rather than
+adding a new top-level mode (Where and Circuit stay as the two
+top-level modes).
+
+**Render the new gate types.**
+
+- `gate_rv`: distribution name and parameters (e.g.
+  `"normal(2.5, 0.5)"`) with a small PDF thumbnail rendered
+  in-place. Analytical density for normal / uniform /
+  exponential, no sampling required at the leaf.
+- `gate_rv_arith`: operator glyph derived from `info1`
+  (`+`, `-`, `×`, `÷`, `−x`).
+
+Both reuse the JSON-shape conventions of the existing `agg` /
+`value` renderers; pure frontend work.
+
+**Node inspector: distribution preview.** When the pinned node is
+a `gate_rv`, plot its analytical density. When it's a
+`gate_rv_arith` or a `gate_cmp` over RV children, draw an
+empirical histogram from a quick MC pull. This is the answer to
+"do these two distributions overlap" in one click, mirroring the
+Squiggle / @Risk / `bayestestR::overlap()` UX.
+
+**Side-by-side comparison.** Pin two `rv` (or `rv_arith`) nodes
+and overlay their densities, with an estimated `P(X > Y)`
+annotated. Direct UX equivalent of the everyday probabilistic-DB
+question.
+
+**Probability-evaluation strip.** The strip already runs
+`probability_evaluate(token, 'monte-carlo', n)`; once the sampler
+handles continuous inputs, the strip works unchanged for Boolean
+circuits over RVs. Verify with one e2e test rather than write
+code. Same applies to a future `sr_expectation` binding: once
+exposed, the strip picks it up automatically.
+
+**Hover info.** Hovering an `rv` node shows its distribution
+parameters and (when `BoundCheck` is on) its computed support
+interval. This is where RangeCheck surfaces in the UI without
+needing an extra panel.
+
+**Config-panel rows.** Surface the new GUCs once they ship:
+`provsql.monte_carlo_seed` (reproducible MC) and
+`provsql.use_bound_check` (when `lp_solve` is enabled). One row
+each, following the existing Config-panel capture pattern
+(`doc/source/_static/studio/config-panel.png`).
+
+**Demo script.** `studio/scripts/demo_continuous.{sh,py}` loads
+the sensors / two-distribution example, alongside the existing
+demos, so the menu launches the full continuous demo with one
+click.
+
+**Playwright e2e.** Load the demo fixture, run a `WHERE rv > 2`
+query, click into the resulting circuit, verify the strip shows a
+probability in `(0, 1)` and the new gate types render with their
+specific labels.
+
+**User documentation.** A new "Continuous distributions"
+subsection in `doc/source/user/studio.rst`, with one screenshot
+of the circuit panel showing a `gate_rv` node with its preview
+and one of the side-by-side comparison. Capture per the
+`import + convert` flow already in CLAUDE.md.
+
+**Compatibility floor.** The compatibility table in
+`doc/source/user/studio.rst` (`extension >= 1.4.0` today) bumps
+in lockstep with the extension version that ships these gate
+types. CHANGELOG entry at release time only.
+
 ### Files
 
 Existing files to modify:
@@ -245,25 +385,40 @@ Existing files to modify:
   the in-memory circuit).
 - `src/probability_evaluate.cpp` (no API change; routes through
   the extended sampler).
+- `src/provenance_evaluate_compiled.{cpp,hpp}` (dispatch table:
+  add `expectation` alongside the existing compiled semirings).
 - `Makefile.internal` (optional `HAVE_LPSOLVE` probe; link
   `-llpsolve55` when found).
 - `test/schedule.common` (add new tests; never edit
   `test/schedule` directly: it is generated).
 - `doc/source/user/probabilities.rst` and a new
   `doc/source/user/continuous-distributions.rst` (user manual);
+  `doc/source/user/studio.rst` (new "Continuous distributions"
+  subsection plus compatibility-floor bump);
   `doc/source/dev/probability-evaluation.rst` (architecture).
+- Studio frontend: the gate-renderer module and the node-inspector
+  panel (under `studio/provsql_studio/static/`), plus
+  `studio/provsql_studio/circuit.py` if the server-side circuit
+  serialiser needs to learn the new gate-type tags.
 
 New files:
 
 - `src/RandomVariable.cpp`/`.h` (C++ helpers for distribution
-  sampling, registry lookup).
+  sampling, registry lookup, analytical moments per distribution).
 - `src/random_variable_type.c` (PostgreSQL type IO functions for
   `random_variable`).
+- `src/semiring/Expectation.h` (compiled-semiring head; computes
+  `E[·]` over a circuit, with structural independence detection on
+  `gate_rv_arith(TIMES, …)`, MC fallback when independence fails).
 - `src/BoundCheck.cpp`/`.h` (optional, gated by `HAVE_LPSOLVE`).
 - `test/sql/continuous_basic.sql`,
   `continuous_arithmetic.sql`, `continuous_selection.sql`,
-  `continuous_join.sql`, `continuous_union.sql`, plus
-  `expected/*.out`.
+  `continuous_join.sql`, `continuous_union.sql`,
+  `continuous_expectation.sql`, plus `expected/*.out`.
+- `studio/scripts/demo_continuous.{sh,py}` (loads the sensors /
+  two-distribution demo).
+- `studio/tests/e2e/test_continuous.py` (Playwright e2e covering
+  the rendered gate types and the probability-strip path).
 
 ## Priorities
 
@@ -316,14 +471,32 @@ script.
    `provsql.use_bound_check`. One regression test that exercises
    an unsatisfiable predicate and verifies the row is pruned.
 
-6. **Polish.** Documentation:
+6. **Expected value and moments.** Add the
+   `src/semiring/Expectation.h` compiled semiring and its
+   `sr_expectation` SQL binding, the scalar functions
+   `expected_value` / `variance` / `moment`, and the
+   independence-detection precomputation on circuits. Closed-form
+   path for the basic distributions; MC fallback otherwise.
+   Aggregate forms come from the existing aggregation pipeline.
+   Regression test in `test/sql/continuous_expectation.sql`
+   covering analytical, structurally-independent, and MC-fallback
+   cases.
+
+7. **Studio.** Specific renderers for `gate_rv` and
+   `gate_rv_arith`; node-inspector distribution preview (analytical
+   for `rv` leaves, empirical histogram for `rv_arith` and
+   `gate_cmp` over RVs); side-by-side density overlay with
+   estimated `P(X > Y)`; Config-panel rows for the new GUCs;
+   demo script in `studio/scripts/`; Playwright e2e; new
+   "Continuous distributions" subsection in
+   `doc/source/user/studio.rst`. Compatibility-floor bump aligned
+   with the extension version that ships these gate types.
+
+8. **Polish.** Documentation:
    `doc/source/user/continuous-distributions.rst` (tutorial),
    `doc/source/dev/probability-evaluation.rst` (arch update).
-   Run `make docs`. Demo script in `studio/scripts/` if the Studio
-   UI handles the new gate types as opaque tokens (likely yes; it
-   already labels gate types it does not specially render). Leave
-   `EXCEPT`, `DISTINCT`, `GROUP BY`, and HAVING with RV operands
-   as a clearly-marked TODO.
+   Run `make docs`. Leave `EXCEPT`, `DISTINCT`, `GROUP BY`, and
+   HAVING with RV operands as a clearly-marked TODO.
 
 ## Implementation observations
 
