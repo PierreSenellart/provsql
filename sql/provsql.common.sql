@@ -36,7 +36,7 @@ CREATE TYPE provenance_gate AS
     'eq',      -- Equijoin gate (for where provenance)
     'agg',     -- Aggregation operator (for aggregate provenance)
     'semimod', -- Semimodule scalar multiplication (for aggregate provenance)
-    'cmp',     -- Currently unused, meant for comparison of aggregate values
+    'cmp',     -- Comparison of aggregate values (HAVING-clause provenance)
     'delta',   -- δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
     'value',   -- Scalar value (for aggregate provenance)
     'mulinput',-- Multivalued input (for Boolean provenance)

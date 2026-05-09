@@ -63,7 +63,7 @@ typedef enum gate_type {
   gate_eq,       ///< Equijoin gate (for where provenance)
   gate_agg,      ///< Aggregation operator (for aggregate provenance)
   gate_semimod,  ///< Semimodule scalar multiplication (for aggregate provenance)
-  gate_cmp,      ///< Currently unused, meant for comparison of aggregate values
+  gate_cmp,      ///< Comparison of aggregate values (HAVING-clause provenance)
   gate_delta,    ///< δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
   gate_value,    ///< Scalar value (for aggregate provenance)
   gate_mulinput, ///< Multivalued input (for Boolean provenance)
