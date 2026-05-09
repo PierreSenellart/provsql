@@ -107,8 +107,9 @@ Upgrading an Existing Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Starting with **1.2.1**, ProvSQL ships PostgreSQL extension upgrade
-scripts for the chain ``1.0.0 → 1.1.0 → 1.2.0 → 1.2.1``. To upgrade
-an existing installation:
+scripts covering every released version from ``1.0.0`` onwards (see
+``sql/upgrades/`` in the source tree for the exact chain available in
+your checkout). To upgrade an existing installation:
 
 1. Check out the new source, build, and install (as a user with write
    access to the PostgreSQL directories)::
@@ -116,11 +117,25 @@ an existing installation:
        make
        make install
 
-2. Restart PostgreSQL so the new shared library is loaded::
+2. **If you are upgrading across 1.3.0** (i.e. from any pre-1.3.0
+   release), migrate the on-disk provenance store before restarting
+   PostgreSQL. 1.3.0 changed the memory-mapped layout from a flat
+   ``$PGDATA/provsql_*.mmap`` set to per-database files under
+   ``$PGDATA/base/<db_oid>/`` with a versioned header. Build and run
+   the bundled migration tool as the ``postgres`` system user with
+   the server stopped::
+
+       make provsql_migrate_mmap
+       sudo -u postgres ./provsql_migrate_mmap
+
+   The tool removes the old flat files on success. Skip this step
+   when upgrading between 1.3.0+ releases.
+
+3. Restart PostgreSQL so the new shared library is loaded::
 
        service postgresql restart
 
-3. In each database where ``provsql`` is already installed, issue::
+4. In each database where ``provsql`` is already installed, issue::
 
        ALTER EXTENSION provsql UPDATE;
 
@@ -135,11 +150,9 @@ an existing installation:
    Upgrades from **pre-1.0.0** development snapshots are not
    supported: no upgrade script is provided and you must
    ``DROP EXTENSION provsql CASCADE; CREATE EXTENSION provsql``
-   instead. The memory-mapped files in the PostgreSQL data
-   directory are still binary-compatible with the current release
-   (they have not changed layout since 1.0.0), so any circuit
-   tokens still referenced by user tables continue to work after
-   the drop-and-create.
+   instead. Any provenance tokens previously stored in user tables
+   become orphans and will not be resolvable against the new
+   circuit store.
 
 Testing Your Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -201,7 +214,7 @@ does not modify your server configuration.
 
 To install a specific version::
 
-    pgxn install provsql=1.2.2
+    pgxn install provsql=X.Y.Z
 
 
 .. _docker-container:
@@ -217,7 +230,7 @@ container is available. It is full-featured except for ``c2d`` and
 
 To use a specific release version::
 
-    docker run inriavalda/provsql:1.0.0
+    docker run inriavalda/provsql:X.Y.Z
 
 Follow the on-screen instructions to connect to the PostgreSQL server
 inside the container with a PostgreSQL client.
