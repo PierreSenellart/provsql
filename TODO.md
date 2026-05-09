@@ -8,7 +8,7 @@ The TODO already commits to: two new gate types (`gate_rv`, `gate_arith`) append
 
 Out of scope per the TODO and confirmed: EXCEPT, DISTINCT, aggregation over RVs, where-provenance × RV design work, a "Continuous mode" in Studio, and an in-Studio distribution editor. Each remains a clearly-marked follow-up.
 
-Per user direction (2026-05-09): all eight priorities land on the `continuous_distributions` branch. No PRs needed; commit at the end of each priority once `make installcheck` is green. Priorities 5 (BoundCheck) and 6 (expected value & moments) are firmly in scope.
+Per user direction (2026-05-09): all nine priorities land on the `continuous_distributions` branch. No PRs needed; commit at the end of each priority once `make installcheck` is green. Priorities 5 (peephole pruning + BoundCheck) and 6 (expected value & moments) are firmly in scope; Priority 7 (hybrid evaluation) was added the same day after a design discussion on integrating continuous evaluation with the existing structural methods (treedec, d-DNNF, independent).
 
 ## Verified file references
 
@@ -83,16 +83,25 @@ Each priority ends with a green `make installcheck`, a one-liner commit, and (wh
 
 **Commit gate**: `make installcheck` green, commit "TODO continuous_distributions: planner-hook rewriting for random_variable".
 
-### Priority 5 — Optional pruning: BoundCheck
+### Priority 5 — Pruning and exact shortcuts
 
+Three peephole shortcuts that run before MC, ordered cheapest-first. All are sound: they only collapse cmp gates whose probability is provably 0, 1, or a closed-form value. Anything they cannot decide falls through to MC unchanged.
+
+**(a) Support-based bound check (RangeCheck per the thesis).** Each distribution has a known support (uniform [a, b], exponential [0, ∞), normal ℝ). Interval arithmetic propagates `[lo, hi]` bounds through `gate_arith`: `[a₁,b₁] + [a₂,b₂]`, `× [c, d]`, etc. For a `gate_cmp` against a constant, if the propagated interval is strictly above/below, the comparator's probability is 0 or 1 exactly. No external dependency. New file `src/RangeCheck.{h,cpp}`.
+
+**(b) Analytic CDF for closed-form `gate_cmp`.** When a comparator reduces to `X cmp c` for a single named distribution X with a closed-form CDF, return `F(c)` or `1 − F(c)` using Boost.Math (`erf`, `betainc`). Same for `X cmp Y` when X, Y are independent normals (reduce to `(X − Y) > 0` via Φ). New file `src/AnalyticEvaluator.{h,cpp}`. Boost.Math is header-only; add `libboost-math-dev` to the build deps and the `#include` — no autoprobe.
+
+**(c) BoundCheck via `lp_solve`** (the original Priority 5 scope). For tuples where (a)+(b) cannot decide and the joint feasibility of multiple comparators on shared RVs matters:
 - `Makefile.internal`: add an autoprobe `HAVE_LPSOLVE` (probe for `lpsolve55` library + header) and conditionally link `-llpsolve55`. No precedent in the file for build-time tool autodetection — introduce one and document it in `doc/source/dev/build-system.rst`.
 - New file `src/BoundCheck.{h,cpp}`, gated by `#ifdef HAVE_LPSOLVE`: walks the Boolean part of the circuit, lowers each `gate_cmp` over RV children into an LP constraint, encodes disjoint support intervals via binary indicators (per the thesis), asks the solver for feasibility.
-- New GUC `provsql.use_bound_check` (bool, default `on` if `HAVE_LPSOLVE`, else hardcoded `off`).
-- Planner-hook post-pass on the rewritten WHERE: if `BoundCheck` returns false, the row is pruned.
 
-**Tests**: `test/sql/continuous_boundcheck.sql` — one tuple with an unsatisfiable predicate (e.g. `normal(0, 1) > 100 AND normal(0, 1) < -100` with the same RV UUID), verify the row is pruned. Skip the test gracefully when `lp_solve` is not available, following the existing conditional-skip pattern for `c2d` / `d4` / `dsharp`.
+**Wire-up.** All three run as a peephole pass that, when it can decide a `gate_cmp`, replaces it by a Bernoulli `gate_input` with the determined probability — making the result transparent to *every* downstream evaluator (MC, independent, treedec, d-DNNF, d4), not just MC. Pass owned by `src/probability_evaluate.cpp` before sampler dispatch.
 
-**Commit gate**: `make installcheck` green (with and without `lp_solve` available, both paths verified), commit "TODO continuous_distributions: optional BoundCheck pruning behind HAVE_LPSOLVE".
+**GUCs.** `provsql.use_bound_check` (bool, default `on` if `HAVE_LPSOLVE`, else hardcoded `off`) controls (c). (a) and (b) are unconditional — they're cheap and never wrong.
+
+**Tests**: `test/sql/continuous_boundcheck.sql` — three SQL files would be neater but pg_regress overhead favours one. Cover each shortcut: support-based pruning (`U(1, 2) > 0` returns exactly 1.0, `−U(1, 2) > 0` returns exactly 0.0), analytic CDF (`N(0, 1) > 0` returns 0.5 exactly without MC, `U(0, 1) ≤ 0.3` returns 0.3), and LP feasibility (one tuple with `N(0,1) > 100 AND N(0,1) < −100` over the same RV UUID, verify the row is pruned). Skip the LP block gracefully when `lp_solve` is not available, following the existing conditional-skip pattern for `c2d` / `d4` / `dsharp`.
+
+**Commit gate**: `make installcheck` green (with and without `lp_solve` available, both paths verified), commit "TODO continuous_distributions: peephole pruning (RangeCheck, analytic CDF, BoundCheck)".
 
 ### Priority 6 — Expected value and moments
 
@@ -106,7 +115,35 @@ Each priority ends with a green `make installcheck`, a one-liner commit, and (wh
 
 **Commit gate**: `make installcheck` green, commit "TODO continuous_distributions: Expectation semiring and moment SQL functions".
 
-### Priority 7 — Studio
+### Priority 7 — Hybrid evaluation: simplifier and island decomposition
+
+The peephole pass from Priority 5 collapses *constant-probability* comparators. This priority generalises it in two directions: (a) simplify continuous sub-circuits via exponential-family closure rules so the analytic CDF from 5(b) reaches further, and (b) factor the circuit into a Boolean wrapper plus continuous "islands" so the existing structural evaluators (`independent`, `treedec`, `d-DNNF`, `d4`) can still evaluate the Boolean part once the islands are marginalised.
+
+**(a) Peephole simplifier on `gate_arith`** (evaluation-time, never mutates the persisted DAG). Closure rules worth implementing:
+- Linear combinations of *independent* normals: `aX + bY → N(aμ_X + bμ_Y, a²σ²_X + b²σ²_Y)` iff X and Y reach disjoint base-RV UUIDs (the same independence test as Priority 6's Expectation semiring; share the implementation).
+- Sums of i.i.d. exponentials with the same rate → Erlang. Different rates: skip (hypoexponential is messy, MC is fine).
+- Trivial folds: `arith(PLUS, 0, X) → X`, `arith(TIMES, 1, X) → X`, etc. — these are essentially constant folding and complement (a)+(b) of Priority 5.
+
+Skip uniform + uniform (Irwin–Hall, not in our family), normal × normal (product distribution), exponential × constant (becomes a different exponential — only marginally useful).
+
+**(b) Island decomposition.** A circuit factors into a *Boolean wrapper* (input/plus/times/monus over `gate_cmp` outcomes and Bernoulli leaves) plus *continuous islands* — connected components in `arith`/`rv` whose only outward edges leave through `gate_cmp` gates.
+- **Each island feeds a single cmp** ⇒ marginalise it (analytically when possible per Priority 5(b)+(a) above, MC otherwise), replace the cmp with a Bernoulli `gate_input` carrying the marginal. The resulting purely-Boolean circuit feeds *every* existing evaluator unchanged.
+- **One island feeds multiple cmps** ⇒ the cmps are jointly distributed. Compute the 2^k joint table over the k cmps sharing that island (analytically when feasible, MC otherwise) and inline it as a small Boolean sub-circuit. Tree decomposition still applies as long as k per island is small (the realistic case for HAVING/WHERE).
+- Whole-circuit MC (Priority 2 behaviour) stays as a fallback.
+
+**Wire-up.** New file `src/HybridEvaluator.{h,cpp}` owns the simplifier and the decomposer. `src/probability_evaluate.cpp` runs the peephole pass (Priority 5) → simplifier (7a) → decomposer (7b) before dispatching to a Boolean-only evaluator selected by the existing `'monte-carlo' / 'independent' / 'treedec' / 'd-DNNF' / 'd4'` method string. New GUC `provsql.hybrid_evaluation` (bool, default `on`) lets us A/B against pure MC during development.
+
+**Tests**: `test/sql/continuous_hybrid.sql`:
+- Sum of two independent normals against a constant ⇒ exact via simplifier + analytic CDF, no MC noise (`abs(p − truth) < 1e-12`).
+- Boolean disjunction over two cmps with disjoint islands ⇒ marginalised independently, then evaluated with `'independent'` → matches inclusion-exclusion analytically.
+- Boolean structure over two cmps that share an RV (e.g. `X > 0 OR X > 1`) ⇒ joint table on the shared island, then treedec on the wrapper. The dependence-aware result must equal `P(X > 0)` exactly (the OR-of-dependent special case), not the MC-leaning estimate of independent ORs.
+- Sanity: with `provsql.hybrid_evaluation = off`, the same queries fall through to whole-circuit MC and produce within-tolerance answers.
+
+**Doc note.** `doc/source/dev/probability-evaluation.rst` gains an "Hybrid evaluation for continuous distributions" subsection: peephole pruning, family-closure simplifier, island decomposition.
+
+**Commit gate**: `make installcheck` green, commit "TODO continuous_distributions: hybrid evaluation (simplifier + island decomposition)".
+
+### Priority 8 — Studio
 
 All inside the existing Circuit mode. No new top-level mode.
 
@@ -122,7 +159,7 @@ All inside the existing Circuit mode. No new top-level mode.
 
 **Commit gate**: Studio CI green (lint + matrix + Playwright); commit "TODO continuous_distributions: Studio renderer, inspector preview, demo, e2e".
 
-### Priority 8 — Polish
+### Priority 9 — Polish
 
 - **`doc/source/user/continuous-distributions.rst`** (new): tutorial covering the sensors example, RV arithmetic, expected_value / variance / moment, and the `monte_carlo_seed` / `use_bound_check` GUCs.
 - **`doc/source/user/probabilities.rst`**: cross-reference the new continuous-distributions page.
@@ -154,8 +191,11 @@ All inside the existing Circuit mode. No new top-level mode.
 - `src/RandomVariable.{cpp,h}` — distribution helpers (parse extra, sample, analytical moments).
 - `src/random_variable_type.c` — PG IO functions for `random_variable`.
 - `src/semiring/Expectation.h` — Expectation compiled semiring.
-- `src/BoundCheck.{cpp,h}` — gated by `HAVE_LPSOLVE`.
-- `test/sql/continuous_basic.sql`, `continuous_sampler.sql`, `continuous_arithmetic.sql`, `continuous_selection.sql`, `continuous_join.sql`, `continuous_union.sql`, `continuous_boundcheck.sql`, `continuous_expectation.sql` (+ `expected/*.out`).
+- `src/RangeCheck.{cpp,h}` — interval-arithmetic support analysis (Priority 5a).
+- `src/AnalyticEvaluator.{cpp,h}` — closed-form CDF for trivial `gate_cmp` (Priority 5b).
+- `src/BoundCheck.{cpp,h}` — gated by `HAVE_LPSOLVE` (Priority 5c).
+- `src/HybridEvaluator.{cpp,h}` — peephole simplifier + island decomposer (Priority 7).
+- `test/sql/continuous_basic.sql`, `continuous_sampler.sql`, `continuous_arithmetic.sql`, `continuous_selection.sql`, `continuous_join.sql`, `continuous_union.sql`, `continuous_boundcheck.sql`, `continuous_expectation.sql`, `continuous_hybrid.sql` (+ `expected/*.out`).
 - `studio/scripts/demo_continuous.{sh,py}`.
 - `studio/tests/e2e/test_continuous.py`.
 - `doc/source/user/continuous-distributions.rst`.
@@ -175,10 +215,11 @@ Per CLAUDE memory: between any code change and `make installcheck`, the user run
     FROM (SELECT id, reading FROM sensors WHERE reading > 2) t;
   -- s1 ≈ 0.84, s2 ≈ 0.50
   ```
-- After priority 5: same demo with one tuple replaced by an unsatisfiable predicate; verify it is pruned when `provsql.use_bound_check = on`.
+- After priority 5: same demo with one tuple replaced by an unsatisfiable predicate; verify it is pruned when `provsql.use_bound_check = on`. Also: `P(N(0, 1) > 0)` returns exactly 0.5 (analytic CDF); `P(U(1, 2) > 0)` returns exactly 1.0 (RangeCheck).
 - After priority 6: `expected_value(provsql.normal(2.5, 0.5))` returns 2.5 closed-form; `expected_value(s1.reading + s2.reading)` returns 4.5 (linearity); a structurally-dependent product falls back to MC and matches a hand-computed value within sampling error.
-- After priority 7: Studio CI green; manual smoke test of the demo fixture in a real browser, capturing the two new screenshots for `doc/source/_static/studio/`.
-- After priority 8: `make docs` clean; the new tutorial renders correctly.
+- After priority 7: a Boolean disjunction over two cmps with disjoint islands evaluated with `'independent'` matches inclusion-exclusion analytically; `X > 0 OR X > 1` (shared RV) equals `P(X > 0)` exactly via the joint table on the shared island; whole-circuit MC (`provsql.hybrid_evaluation = off`) still matches within sampling error.
+- After priority 8: Studio CI green; manual smoke test of the demo fixture in a real browser, capturing the two new screenshots for `doc/source/_static/studio/`.
+- After priority 9: `make docs` clean; the new tutorial renders correctly.
 
 ## Risks and follow-ups
 

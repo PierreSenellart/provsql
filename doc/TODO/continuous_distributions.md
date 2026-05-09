@@ -465,11 +465,27 @@ script.
    through (already what `SR_PLUS` does). The sensors example
    above runs end-to-end.
 
-5. **Optional pruning: BoundCheck.** Behind `--with-lpsolve`
-   (autodetected): build `BoundCheck.cpp`; planner hook wraps the
-   rewritten WHERE in a BoundCheck call. GUC
-   `provsql.use_bound_check`. One regression test that exercises
-   an unsatisfiable predicate and verifies the row is pruned.
+5. **Pruning and exact shortcuts.** Three peephole shortcuts that
+   run before MC, ordered cheapest-first; all are sound and replace
+   a decided `gate_cmp` with a Bernoulli `gate_input` carrying the
+   determined probability, so they help every downstream evaluator
+   (MC, `independent`, `treedec`, `d-DNNF`, `d4`), not just MC.
+   (a) **RangeCheck** (per the thesis): interval arithmetic on
+   `gate_arith`; for `gate_cmp` against a constant whose support
+   bound is strictly above/below, return 0 or 1 exactly. New file
+   `src/RangeCheck.{h,cpp}`. No external dependency.
+   (b) **Analytic CDF**: for `gate_cmp` reducing to `X cmp c` (or
+   `X cmp Y` with X, Y independent normals), return `F(c)` (or `Φ`)
+   from a closed-form CDF via Boost.Math. New file
+   `src/AnalyticEvaluator.{h,cpp}`. Boost.Math is header-only;
+   add `libboost-math-dev` to build deps.
+   (c) **BoundCheck** (the original Priority 5 scope): behind
+   `--with-lpsolve` (autodetected), build `BoundCheck.cpp`; planner
+   hook wraps the rewritten WHERE in a BoundCheck call. GUC
+   `provsql.use_bound_check`. Used when (a)+(b) cannot decide and
+   joint feasibility across multiple cmps on shared RVs matters.
+   Regression tests in `continuous_boundcheck.sql` cover all three
+   layers.
 
 6. **Expected value and moments.** Add the
    `src/semiring/Expectation.h` compiled semiring and its
@@ -482,7 +498,32 @@ script.
    covering analytical, structurally-independent, and MC-fallback
    cases.
 
-7. **Studio.** Specific renderers for `gate_rv` and
+7. **Hybrid evaluation: simplifier and island decomposition.**
+   Generalises the Priority 5 peephole pass in two directions, so
+   the existing structural evaluators stay applicable on circuits
+   with continuous comparators.
+   (a) **Simplifier on `gate_arith`** (evaluation-time, never
+   mutates the persisted DAG). Linear combinations of *independent*
+   normals collapse: `aX + bY → N(aμ + bμ', a²σ² + b²σ'²)` iff X
+   and Y reach disjoint base-RV UUIDs (same independence test as
+   Priority 6). Sum of i.i.d. exponentials with the same rate →
+   Erlang. Plus trivial constant folds (`PLUS, 0, X → X` etc.).
+   Skip uniform + uniform (Irwin–Hall, not in our family),
+   normal × normal (product distribution).
+   (b) **Island decomposition.** Factor a circuit into a Boolean
+   wrapper (input/plus/times/monus over `gate_cmp` outcomes and
+   Bernoulli leaves) plus continuous islands — connected components
+   in `arith`/`rv` whose only outward edges leave through `gate_cmp`.
+   Islands feeding a single cmp are marginalised (analytically per
+   5(b) when possible, MC otherwise) and replaced by a Bernoulli
+   `gate_input`; islands feeding multiple cmps inline a 2^k joint
+   table over the k shared comparators. The Boolean wrapper feeds
+   any of MC, `independent`, `treedec`, `d-DNNF`, `d4` unchanged.
+   New file `src/HybridEvaluator.{h,cpp}`. New GUC
+   `provsql.hybrid_evaluation` (bool, default `on`). Regression
+   tests in `test/sql/continuous_hybrid.sql`.
+
+8. **Studio.** Specific renderers for `gate_rv` and
    `gate_arith`; node-inspector distribution preview (analytical
    for `rv` leaves, empirical histogram for `arith` and
    `gate_cmp` over RVs); side-by-side density overlay with
@@ -492,9 +533,10 @@ script.
    `doc/source/user/studio.rst`. Compatibility-floor bump aligned
    with the extension version that ships these gate types.
 
-8. **Polish.** Documentation:
+9. **Polish.** Documentation:
    `doc/source/user/continuous-distributions.rst` (tutorial),
-   `doc/source/dev/probability-evaluation.rst` (arch update).
+   `doc/source/dev/probability-evaluation.rst` (arch update,
+   including the Priority 7 hybrid-evaluation architecture).
    Run `make docs`. Leave `EXCEPT`, `DISTINCT`, `GROUP BY`, and
    HAVING with RV operands as a clearly-marked TODO.
 
