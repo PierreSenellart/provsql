@@ -7,25 +7,21 @@ SET search_path TO provsql_test,provsql;
 -- (PLUS=0, TIMES=1, MINUS=2, DIV=3, NEG=4) and returns a new
 -- random_variable whose UUID is the gate's UUID.  We use as_random
 -- for stable UUIDs so the test reads as a pure structural check.
--- COALESCE the info1 reads to 0 because get_infos returns NULL when
--- both info1 and info2 are 0 (see provsql_mmap.c:550); the in-memory
--- circuit still stores info1=0 verbatim, so the sampler reads PLUS
--- correctly &ndash; the COALESCE only fixes the SQL accessor.
 
 WITH e AS (
   SELECT provsql.as_random(2) AS a, provsql.as_random(3) AS b
 )
 SELECT
   get_gate_type((a + b)::uuid) AS plus_kind,
-  COALESCE((get_infos((a + b)::uuid)).info1, 0) AS plus_op,
+  (get_infos((a + b)::uuid)).info1 AS plus_op,
   get_gate_type((a - b)::uuid) AS minus_kind,
-  COALESCE((get_infos((a - b)::uuid)).info1, 0) AS minus_op,
+  (get_infos((a - b)::uuid)).info1 AS minus_op,
   get_gate_type((a * b)::uuid) AS times_kind,
-  COALESCE((get_infos((a * b)::uuid)).info1, 0) AS times_op,
+  (get_infos((a * b)::uuid)).info1 AS times_op,
   get_gate_type((a / b)::uuid) AS div_kind,
-  COALESCE((get_infos((a / b)::uuid)).info1, 0) AS div_op,
+  (get_infos((a / b)::uuid)).info1 AS div_op,
   get_gate_type((-a)::uuid)    AS neg_kind,
-  COALESCE((get_infos((-a)::uuid)).info1, 0) AS neg_op
+  (get_infos((-a)::uuid)).info1 AS neg_op
 FROM e;
 
 -- Children of each arith gate are the operand UUIDs in operand order.
@@ -115,7 +111,7 @@ SELECT
   get_gate_type((a + b) > c)                      AS root_kind,
   get_gate_type((get_children((a + b) > c))[1])   AS lhs_kind,
   get_gate_type((get_children((a + b) > c))[2])   AS rhs_kind,
-  COALESCE((get_infos((get_children((a + b) > c))[1])).info1, 0) AS lhs_arith_op
+  (get_infos((get_children((a + b) > c))[1])).info1 AS lhs_arith_op
 FROM e;
 
 -- End-to-end Monte Carlo sanity check.  P(N(0,1) + N(0,1) > 0) = 0.5

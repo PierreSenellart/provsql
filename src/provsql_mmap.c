@@ -547,9 +547,7 @@ Datum get_infos(PG_FUNCTION_ARGS)
 
   provsql_shmem_unlock();
 
-  if(info1 == 0 && info2 == 0)
-    PG_RETURN_NULL();
-  else {
+  {
     TupleDesc tupdesc;
     Datum values[2];
     bool nulls[2] = {false, false};
