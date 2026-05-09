@@ -1475,18 +1475,65 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * that comparisons against a <tt>random_variable</tt> column produce
  * the same circuit shape regardless of whether the operand is an
  * actual RV or a literal constant.  The cached scalar is the constant.
+ *
+ * Marked <tt>IMMUTABLE</tt>: the gate UUID is derived deterministically
+ * from the constant via the same v5 convention as <tt>provenance_semimod</tt>'s
+ * inline value gate (<tt>concat('value', CAST(c AS VARCHAR))</tt>), so
+ * <tt>as_random(2)</tt> always resolves to the same gate, and any other
+ * code path that already creates a value gate for the same constant
+ * (e.g. <tt>provenance_semimod</tt>) shares the UUID.
+ * <tt>create_gate</tt> is idempotent on already-mapped tokens, so
+ * repeat invocations are harmless.
  */
 CREATE OR REPLACE FUNCTION as_random(c double precision)
   RETURNS random_variable AS
 $$
 DECLARE
-  token uuid := public.uuid_generate_v4();
+  c_text varchar := CAST(c AS VARCHAR);
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('value', c_text));
 BEGIN
   PERFORM provsql.create_gate(token, 'value');
-  PERFORM provsql.set_extra(token, c::text);
+  PERFORM provsql.set_extra(token, c_text);
   RETURN provsql.random_variable_make(token, c);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Implicit cast double precision -> random_variable (lifts a
+ *        scalar literal to a constant RV).
+ *
+ * Lets users write <tt>WHERE reading > 2.5::float8</tt> instead of
+ * <tt>WHERE reading > provsql.as_random(2.5)</tt>; the planner-hook
+ * rewriter then sees a uniform <tt>random_variable</tt> on both sides.
+ * Sibling casts below cover @c integer and @c numeric literals so
+ * plain <tt>WHERE reading > 2</tt> and <tt>WHERE reading > 2.5</tt>
+ * also work — PostgreSQL's operator resolution does not chain casts
+ * across more than one step, so each numeric-source type needs its
+ * own direct cast.
+ */
+CREATE CAST (double precision AS random_variable)
+  WITH FUNCTION as_random(double precision) AS IMPLICIT;
+
+/** @brief @c as_random for @c integer (delegates to the @c float8 form). */
+CREATE OR REPLACE FUNCTION as_random(c integer)
+  RETURNS random_variable AS
+$$ SELECT provsql.as_random(c::double precision); $$
+LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE;
+
+/** @brief @c as_random for @c numeric (delegates to the @c float8 form). */
+CREATE OR REPLACE FUNCTION as_random(c numeric)
+  RETURNS random_variable AS
+$$ SELECT provsql.as_random(c::double precision); $$
+LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE;
+
+/** @brief Implicit cast integer -> random_variable. */
+CREATE CAST (integer AS random_variable)
+  WITH FUNCTION as_random(integer) AS IMPLICIT;
+
+/** @brief Implicit cast numeric -> random_variable. */
+CREATE CAST (numeric AS random_variable)
+  WITH FUNCTION as_random(numeric) AS IMPLICIT;
 
 /** @} */
 

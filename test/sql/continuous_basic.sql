@@ -47,3 +47,24 @@ INSERT INTO sensors VALUES
 SELECT id, get_gate_type(reading::uuid) AS gate_type FROM sensors ORDER BY id;
 SELECT id, get_extra(reading::uuid) AS extra FROM sensors ORDER BY id;
 DROP TABLE sensors;
+
+-- as_random is IMMUTABLE with a deterministic UUID derived from the
+-- constant: two calls for the same value resolve to the same gate.
+SELECT random_variable_uuid(provsql.as_random(2)) = random_variable_uuid(provsql.as_random(2)) AS as_random_deterministic;
+-- Different constants give different UUIDs.
+SELECT random_variable_uuid(provsql.as_random(2)) <> random_variable_uuid(provsql.as_random(3)) AS as_random_distinct;
+
+-- Implicit cast double precision -> random_variable: a float8 literal
+-- in a random_variable context is auto-lifted to the same gate
+-- as_random would produce.
+SELECT random_variable_uuid(2.5::double precision::random_variable)
+     = random_variable_uuid(provsql.as_random(2.5::double precision)) AS implicit_cast_dedup_float8;
+-- Direct integer cast (PG operator resolution does not chain casts
+-- across multiple steps, so int -> random_variable is registered as
+-- its own cast via an as_random(integer) overload).
+SELECT random_variable_uuid(7::integer::random_variable)
+     = random_variable_uuid(provsql.as_random(7::integer)) AS int_literal_via_cast;
+-- Direct numeric cast for "2.5"-style literals (PG's default literal
+-- type for unquoted decimals is numeric).
+SELECT random_variable_uuid(2.5::numeric::random_variable)
+     = random_variable_uuid(provsql.as_random(2.5::numeric)) AS numeric_literal_via_cast;
