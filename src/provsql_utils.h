@@ -214,6 +214,17 @@ extern char *provsql_tool_search_path;
  * end-to-end. */
 extern int provsql_monte_carlo_seed;
 
+/** @brief When @c true (default), every @c GenericCircuit returned by
+ * @c getGenericCircuit is run through the universal cmp-resolution
+ * passes (RangeCheck for now, plus any future passes that decide
+ * comparators to certain Boolean values).  Decisions become Bernoulli
+ * @c gate_input gates with probability 0 or 1, transparent to every
+ * downstream consumer (semiring evaluators, MC, view_circuit, PROV
+ * export, etc.).  Set @c provsql.simplify_on_load to @c off when
+ * inspecting a circuit's raw structure (e.g. debugging gate-creation
+ * code paths). */
+extern bool provsql_simplify_on_load;
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */

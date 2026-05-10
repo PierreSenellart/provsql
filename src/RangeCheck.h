@@ -27,25 +27,27 @@
 namespace provsql {
 
 /**
- * @brief Run the support-based pruning pass over the circuit rooted
- *        at @p root.
+ * @brief Run the support-based pruning pass over @p gc.
  *
- * For every @c gate_cmp reachable from @p root, computes the
- * interval of @c (lhs - rhs) via interval arithmetic over
- * @c gate_value, @c gate_rv, and @c gate_arith leaves; when the
- * interval is provably above, below, or disjoint from zero, replaces
- * the @c gate_cmp by a Bernoulli @c gate_input carrying the decided
+ * For every @c gate_cmp in the circuit, computes the interval of
+ * @c (lhs - rhs) via interval arithmetic over @c gate_value,
+ * @c gate_rv, and @c gate_arith leaves; when the interval is
+ * provably above, below, or disjoint from zero, replaces the
+ * @c gate_cmp by a Bernoulli @c gate_input carrying the decided
  * probability (0 or 1).
  *
  * Comparators whose interval is inconclusive (overlaps zero) are
  * left intact for downstream passes.
  *
- * @param gc    Circuit to mutate in place.
- * @param root  Root gate to traverse from (only reachable cmps are
- *              considered).
- * @return      Number of comparators resolved by this pass.
+ * Iterates every gate (rather than walking from a specific root) so
+ * that a single sweep at @c getGenericCircuit time benefits every
+ * downstream consumer regardless of which sub-circuit they later
+ * traverse.
+ *
+ * @param gc  Circuit to mutate in place.
+ * @return    Number of comparators resolved by this pass.
  */
-unsigned runRangeCheck(GenericCircuit &gc, gate_t root);
+unsigned runRangeCheck(GenericCircuit &gc);
 
 }  // namespace provsql
 

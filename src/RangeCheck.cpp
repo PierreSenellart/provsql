@@ -8,9 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <stack>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
@@ -195,40 +193,28 @@ double decideCmp(const Interval &diff, ComparisonOperator op)
   return std::numeric_limits<double>::quiet_NaN();
 }
 
-/* DFS from @p root collecting every reachable @c gate_cmp.  We
- * gather first and resolve afterwards so we don't mutate the circuit
- * mid-traversal. */
-std::vector<gate_t> collectReachableCmps(const GenericCircuit &gc, gate_t root)
-{
-  std::vector<gate_t> cmps;
-  std::unordered_set<gate_t> seen;
-  std::stack<gate_t> stack;
-  stack.push(root);
-  while (!stack.empty()) {
-    gate_t g = stack.top();
-    stack.pop();
-    if (!seen.insert(g).second) continue;
-    if (gc.getGateType(g) == gate_cmp)
-      cmps.push_back(g);
-    for (gate_t c : gc.getWires(g)) stack.push(c);
-  }
-  return cmps;
-}
-
 }  // namespace
 
-unsigned runRangeCheck(GenericCircuit &gc, gate_t root)
+unsigned runRangeCheck(GenericCircuit &gc)
 {
-  auto cmps = collectReachableCmps(gc, root);
   std::unordered_map<gate_t, Interval> cache;
   unsigned resolved = 0;
 
+  /* Snapshot the cmp gate ids before we start mutating: in-place
+   * resolution turns a @c gate_cmp into a @c gate_input, but
+   * @c getNbGates only grows, never shrinks, so iterating by index
+   * over the original count is safe.  We re-check the type at each
+   * step to skip already-resolved slots. */
+  const auto nb = gc.getNbGates();
+  std::vector<gate_t> cmps;
+  for (std::size_t i = 0; i < nb; ++i) {
+    auto g = static_cast<gate_t>(i);
+    if (gc.getGateType(g) == gate_cmp)
+      cmps.push_back(g);
+  }
+
   for (gate_t c : cmps) {
-    /* A previous iteration could in principle have resolved this gate
-     * via aliasing (it shares its slot with another cmp).  In
-     * practice each cmp gate is unique, but the guard keeps things
-     * defensive. */
-    if (gc.getGateType(c) != gate_cmp) continue;
+    if (gc.getGateType(c) != gate_cmp) continue;  /* defensive */
 
     bool ok = false;
     ComparisonOperator op = cmpOpFromOid(gc.getInfos(c).first, ok);

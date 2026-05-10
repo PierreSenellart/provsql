@@ -71,6 +71,7 @@ int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.ve
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
+bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
@@ -4075,6 +4076,26 @@ void _PG_init(void) {
                              NULL,
                              NULL,
                              NULL);
+  DefineCustomBoolVariable("provsql.simplify_on_load",
+                           "Apply universal cmp-resolution passes when "
+                           "loading a provenance circuit.",
+                           "When on (default), every GenericCircuit returned "
+                           "by getGenericCircuit goes through RangeCheck "
+                           "(and any future universal pass): comparators "
+                           "decidable to certain Boolean values become "
+                           "Bernoulli gate_input gates with probability 0 "
+                           "or 1, transparent to every downstream consumer "
+                           "(semiring evaluators, MC, view_circuit, PROV "
+                           "export). Set off to inspect raw circuit "
+                           "structure (e.g. when debugging gate-creation "
+                           "paths).",
+                           &provsql_simplify_on_load,
+                           true,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
   DefineCustomIntVariable("provsql.monte_carlo_seed",
                           "Seed for the Monte Carlo sampler.",
                           "-1 (default) seeds from std::random_device for "

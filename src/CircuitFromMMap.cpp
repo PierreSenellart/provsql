@@ -19,6 +19,7 @@
 #include <boost/iostreams/stream.hpp>
 
 #include "CircuitFromMMap.h"
+#include "RangeCheck.h"
 #include "having_semantics.hpp"
 #include "semiring/BoolExpr.h"
 #include "provsql_utils_cpp.h"
@@ -27,6 +28,7 @@ extern "C" {
 #include "miscadmin.h"
 #include "provsql_shmem.h"
 #include "provsql_mmap.h"
+#include "provsql_utils.h"
 }
 
 /**
@@ -113,5 +115,22 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
 
 GenericCircuit getGenericCircuit(pg_uuid_t token)
 {
-  return getCircuitFromMMap<GenericCircuit>(token, 'g');
+  GenericCircuit gc = getCircuitFromMMap<GenericCircuit>(token, 'g');
+
+  /* Apply universal cmp-resolution passes (currently RangeCheck) at
+   * load time so every downstream consumer -- semiring evaluators,
+   * MC, view_circuit, PROV export -- sees the simplified circuit.
+   * Each pass replaces decided gate_cmps with Bernoulli gate_input
+   * gates with probability 0 or 1 via
+   * GenericCircuit::resolveCmpToBernoulli; the rewrite is uniform
+   * across semirings (gate_zero / gate_one are the additive /
+   * multiplicative identities in any semiring) so a single sweep
+   * here is correct for every later evaluator.
+   *
+   * Gated by the provsql.simplify_on_load GUC so users debugging
+   * raw circuit structure can opt out. */
+  if (provsql_simplify_on_load)
+    provsql::runRangeCheck(gc);
+
+  return gc;
 }
