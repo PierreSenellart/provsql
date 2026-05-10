@@ -81,6 +81,8 @@ Each priority ends with a green `make installcheck`, a one-liner commit, and (wh
 
 **Tests**: `test/sql/continuous_selection.sql`, `continuous_join.sql`, `continuous_union.sql`. The sensors example from the TODO (s1 normal(2.5, 0.5), s2 uniform(1,3); `WHERE reading > 2`; expect ≈0.84 and ≈0.50 with `monte_carlo_seed` pinned and large `n`) anchors the end-to-end test.
 
+**Note — agg_token ↔ random_variable parallel.** The walker added in this priority (`extract_rv_cmps_from_quals` + `check_expr_on_rv`) is structurally isomorphic to `migrate_aggtoken_quals_to_having` + `check_expr_on_aggregate`. See the new "Cross-cutting: agg_token / random_variable unification" section below; the unified-classifier refactor and the sampler-side hybrid path are tracked there.
+
 **Commit gate**: `make installcheck` green, commit "TODO continuous_distributions: planner-hook rewriting for random_variable".
 
 ### Priority 5 — Pruning and exact shortcuts
@@ -132,6 +134,8 @@ Skip uniform + uniform (Irwin–Hall, not in our family), normal × normal (prod
 - Whole-circuit MC (Priority 2 behaviour) stays as a fallback.
 
 **Wire-up.** New file `src/HybridEvaluator.{h,cpp}` owns the simplifier and the decomposer. `src/probability_evaluate.cpp` runs the peephole pass (Priority 5) → simplifier (7a) → decomposer (7b) before dispatching to a Boolean-only evaluator selected by the existing `'monte-carlo' / 'independent' / 'treedec' / 'd-DNNF' / 'd4'` method string. New GUC `provsql.hybrid_evaluation` (bool, default `on`) lets us A/B against pure MC during development.
+
+**Note — sampler-side unification with agg_token.** The island decomposer's marginalisation step is exactly the analogue of `provsql_having`'s possible-world enumeration (which the legacy boolean MC path uses to resolve HAVING `gate_cmp` over `gate_agg`). Implementing 7b should let `monteCarloRV` handle `gate_cmp(gate_agg, …)` for the first time, removing the priority-4 limitation that made `continuous_selection.sql` section G structural-only. See the cross-cutting section below; if the unified classifier from priority 4's follow-up has already landed, the routing of mixed `agg ⊗ rv` conjuncts in WHERE/HAVING falls out of it.
 
 **Tests**: `test/sql/continuous_hybrid.sql`:
 - Sum of two independent normals against a constant ⇒ exact via simplifier + analytic CDF, no MC noise (`abs(p − truth) < 1e-12`).
@@ -220,6 +224,30 @@ Per CLAUDE memory: between any code change and `make installcheck`, the user run
 - After priority 7: a Boolean disjunction over two cmps with disjoint islands evaluated with `'independent'` matches inclusion-exclusion analytically; `X > 0 OR X > 1` (shared RV) equals `P(X > 0)` exactly via the joint table on the shared island; whole-circuit MC (`provsql.hybrid_evaluation = off`) still matches within sampling error.
 - After priority 8: Studio CI green; manual smoke test of the demo fixture in a real browser, capturing the two new screenshots for `doc/source/_static/studio/`.
 - After priority 9: `make docs` clean; the new tutorial renders correctly.
+
+## Cross-cutting: agg_token / random_variable unification
+
+`agg_token` and `random_variable` are two presentations of the same algebraic object: a *probabilistic scalar* paired with a UUID that encodes its possible-world structure. Both ride the same comparator surface (`< <= = <> >= >`), both materialise into `gate_cmp` UUIDs, both want the planner hook to lift comparisons out of WHERE and route them into provenance. Where they differ is the distribution machinery — `agg_token`'s is *combinatorial* (finite worlds enumerated by `provsql_having` over the surrounding `gate_agg`'s children); `random_variable`'s is *continuous* (sampled by `monteCarloRV`).
+
+Three unification opportunities, ordered by ROI. None are blockers; they are listed here so subsequent priorities don't drift further apart and so the follow-up commits land in the right order.
+
+**(a) Unified WHERE classifier (low effort, high readability).** `migrate_aggtoken_quals_to_having` (`src/provsql.c:2955`) and `extract_rv_cmps_from_quals` (priority 4) are nearly isomorphic. Consolidate into a single pass that walks `q->jointree->quals`, classifies each top-level conjunct as `{pure-agg, pure-RV, deterministic, mixed-probabilistic, error}` and routes:
+- pure-agg → HAVING (existing flow)
+- pure-RV → `provenance_times` splice into `prov_atts` (priority 4 flow)
+- deterministic (e.g. `id = 's1'`) → leave in WHERE
+- mixed `agg ⊗ rv` inside the same Boolean op → error today; the natural place to grow into priority 7
+- mixed `prob ⊗ deterministic` inside the same Boolean op → error today (same pattern as agg_token's existing rejection of `WHERE c1 = 1 OR agg_count > 5`); the natural place to grow into a CASE-based lift in priority 7
+
+No on-disk or behaviour change; pure refactor. Slot in as a follow-up commit after priority 4 lands. Tracked in the in-conversation task list.
+
+**(b) Unified scalar-source dispatch in MC (medium effort, unlocks HAVING+RV).** Today `monteCarloRV::evalScalar` handles `gate_value`, `gate_rv`, `gate_arith`; `gate_agg` throws. Adding a `gate_agg` arm that calls the same possible-world enumeration `provsql_having` uses (or shares its core) closes the gap that forced `continuous_selection.sql` section G to be structural-only. This is the natural intersection of priority 7's island decomposer (which already knows how to marginalise non-Boolean gates) and the existing HAVING resolution; bake it in there. After this, `WHERE rv > 0 GROUP BY x HAVING count(*) > 1` runs end-to-end under MC.
+
+**(c) Type-level merger (low value).** Defining a common base type that both `agg_token` and `random_variable` inhabit looks tempting algebraically but pays poorly: their physical layouts differ (117 B vs 24 B), `agg_token`'s GUC-flipped output (`agg_token_out` reading `provsql.aggtoken_text_as_uuid`) does not generalise, and existing on-disk data would need migration. Skip.
+
+**Implications for downstream priorities.**
+- Priority 4 lands the second walker but stays consistent in pattern (a) — no regression in agg_token handling. The classifier refactor is a follow-up.
+- Priority 7 should consume (b) as part of its island decomposer rather than reinvent it.
+- Studio (priority 8) renders both `gate_agg` and `gate_rv` as scalar-source nodes; the inspector preview can share a common widget that asks the source for "give me a value distribution" rather than special-casing each gate type.
 
 ## Risks and follow-ups
 

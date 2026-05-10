@@ -1,0 +1,17 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+a1|t
+b1|t
+(2 rows)
+continuous_union_done
+ok
+(1 row)

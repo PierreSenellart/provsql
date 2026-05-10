@@ -403,6 +403,36 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_AGG_TOKEN_UUID = get_provsql_func_oid("agg_token_uuid");
   CheckOid(OID_FUNCTION_AGG_TOKEN_UUID);
 
+  /* random_variable type and its operator procedures will ship in
+   * 1.5.0.  Older schemas (notably the 1.0.0 baseline used by
+   * extension_upgrade) do not have them.  Treat each lookup as
+   * optional -- if the catalog lacks the symbol, the OID stays
+   * InvalidOid and downstream code (rv_cmp_index, the planner-hook
+   * walker) silently no-ops on such schemas because real OpExpr
+   * funcoids never equal InvalidOid.  Mirrors the
+   * GET_GATE_TYPE_OID_OPTIONAL pattern above. */
+  constants.OID_TYPE_RANDOM_VARIABLE = GetSysCacheOid2(
+    TYPENAMENSP,
+#if PG_VERSION_NUM >= 120000
+    Anum_pg_type_oid,
+#endif
+    CStringGetDatum("random_variable"),
+    ObjectIdGetDatum(constants.OID_SCHEMA_PROVSQL)
+    );
+
+  constants.OID_FUNCTION_RANDOM_VARIABLE_UUID =
+    get_provsql_func_oid("random_variable_uuid");
+
+  /* random_variable_{eq,ne,le,lt,ge,gt} -- order matches the
+   * ComparisonOperator enum in src/Aggregation.h (EQ=0, NE=1, LE=2,
+   * LT=3, GE=4, GT=5). */
+  constants.OID_FUNCTION_RV_CMP[0] = get_provsql_func_oid("random_variable_eq");
+  constants.OID_FUNCTION_RV_CMP[1] = get_provsql_func_oid("random_variable_ne");
+  constants.OID_FUNCTION_RV_CMP[2] = get_provsql_func_oid("random_variable_le");
+  constants.OID_FUNCTION_RV_CMP[3] = get_provsql_func_oid("random_variable_lt");
+  constants.OID_FUNCTION_RV_CMP[4] = get_provsql_func_oid("random_variable_ge");
+  constants.OID_FUNCTION_RV_CMP[5] = get_provsql_func_oid("random_variable_gt");
+
   OperatorGet("<>", PG_CATALOG_NAMESPACE, constants.OID_TYPE_UUID, constants.OID_TYPE_UUID, &constants.OID_OPERATOR_NOT_EQUAL_UUID, &constants.OID_FUNCTION_NOT_EQUAL_UUID);
   CheckOid(OID_OPERATOR_NOT_EQUAL_UUID);
   CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);

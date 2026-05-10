@@ -108,6 +108,9 @@ test: grouping_sets
 test: continuous_basic
 test: continuous_sampler
 test: continuous_arithmetic
+test: continuous_selection
+test: continuous_join
+test: continuous_union
 
 # PROV export
 test: to_provxml

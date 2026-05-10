@@ -1,0 +1,72 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+s1|t
+s2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+s1|t
+(1 row)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+s1|t
+s2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+s1|t
+s2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+s1|t
+s2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+u1|t
+u2|t
+(2 rows)
+add_provenance
+
+(1 row)
+root_is_cmp|having_lhs_is_agg|per_row_token_is_times|row_times_has_cmp_factor
+t|t|t|t
+(1 row)
+remove_provenance
+
+(1 row)
+category
+hot
+warm
+(2 rows)
+remove_provenance
+
+(1 row)
+category|within_tolerance
+hot|t
+warm|t
+(2 rows)
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: WHERE clause mixes random_variable comparisons with other predicates inside the same Boolean expression; split the non-RV part into its own AND conjunct
+continuous_selection_done
+ok
+(1 row)

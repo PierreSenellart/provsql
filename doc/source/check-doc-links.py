@@ -118,7 +118,12 @@ INTERNAL_FUNCTIONS = {
     'random_variable_neg',
     'random_variable_lt', 'random_variable_le', 'random_variable_eq',
     'random_variable_ne', 'random_variable_ge', 'random_variable_gt',
+    'random_variable_cmp_placeholder',
     'random_variable_cmp_oid',
+    # Direct gate_cmp UUID constructors -- bypass the planner hook for
+    # callers (mostly tests) that want a UUID instead of a boolean.
+    'rv_cmp_lt', 'rv_cmp_le', 'rv_cmp_eq', 'rv_cmp_ne',
+    'rv_cmp_ge', 'rv_cmp_gt',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
 }

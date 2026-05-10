@@ -1676,18 +1676,16 @@ CREATE CAST (numeric AS random_variable)
  * @c NaN (the cached scalar is meaningful only on @c gate_rv leaves
  * and @c gate_value constants from @c as_random).
  *
- * Comparison operators build a @c gate_cmp via @c provenance_cmp and
- * return its UUID directly &ndash; not a @c boolean.  This is intentional:
- * priority 4 wires the planner hook so <tt>WHERE rv > 2</tt> becomes
- * <tt>WHERE TRUE</tt> with the comparator's UUID conjoined into the
- * tuple's @c provsql column.  Until then, tests can still build the
- * comparator explicitly via <tt>SELECT (rv > 2) AS provsql</tt>; using
- * the operator inside a real WHERE clause will fail type checking
- * until the planner hook ships.  The OID stored in the @c gate_cmp's
- * @c info1 field is the float8 comparator
- * (e.g. <tt>'>(double precision,double precision)'::regoperator</tt>);
- * @c cmpOpFromOid in @c src/Aggregation.cpp keys on the operator name,
- * so any OID with the right symbol works.
+ * Comparison operators are placeholders that return @c boolean and
+ * raise if executed -- the @c boolean return type is required so that
+ * PostgreSQL accepts <tt>WHERE rv > 2</tt> at parse-analyze.  The
+ * planner hook intercepts every such @c OpExpr (matched by
+ * @c opfuncid against @c constants_t::OID_FUNCTION_RV_CMP) and rewrites
+ * it into a @c provenance_cmp call whose UUID is conjoined into the
+ * tuple's @c provsql column via @c provenance_times.  Code that needs
+ * a @c gate_cmp UUID directly (without going through the planner hook)
+ * uses the @c rv_cmp_* family below, which call @c provenance_cmp
+ * with the matching float8-comparator OID.
  *
  * @{
  */
@@ -1769,10 +1767,68 @@ $$
   SELECT (sym || '(double precision,double precision)')::regoperator::oid;
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief @c random_variable < @c random_variable (gate_cmp). */
-CREATE OR REPLACE FUNCTION random_variable_lt(
+/* The six @c random_variable_{lt,le,eq,ne,ge,gt} functions below are
+ * boolean placeholders -- they exist only so the @c (rv, rv) operators
+ * can be declared at all (PostgreSQL needs a procedure to bind to the
+ * operator definition, and a procedure returning anything but @c boolean
+ * would be rejected by parse-analyze in a WHERE position).  They MUST
+ * NOT be invoked directly: the planner hook in @c src/provsql.c
+ * intercepts every @c OpExpr whose @c opfuncid matches one of these and
+ * rewrites it into a @c provenance_cmp() call against the row's
+ * provenance.  If the executor ever reaches one of these, it means the
+ * planner hook was bypassed (e.g. @c provsql.active was off), in which
+ * case raising is the right behaviour. */
+
+/** @brief Placeholder body shared by every <tt>random_variable_*</tt>
+ *  comparison procedure.  Raises with a uniform message. */
+CREATE OR REPLACE FUNCTION random_variable_cmp_placeholder(
   a random_variable, b random_variable)
-  RETURNS uuid AS
+  RETURNS boolean AS
+$$
+BEGIN
+  RAISE EXCEPTION 'random_variable comparison must be rewritten by the '
+                  'ProvSQL planner hook (is provsql.active off?)';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_lt(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_le(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_eq(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_ne(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_ge(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_gt(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/* Direct UUID constructors -- used by tests and any caller that wants
+ * a @c gate_cmp without going through the planner hook (e.g. building
+ * a circuit fragment in a SELECT list).  Each delegates to
+ * @c provenance_cmp with the matching float8-comparator OID. */
+
+/** @brief Build a @c gate_cmp for <tt>a &lt; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_lt(
+  a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
     provsql.random_variable_uuid(a),
@@ -1780,10 +1836,9 @@ $$
     provsql.random_variable_uuid(b));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief @c random_variable <= @c random_variable (gate_cmp). */
-CREATE OR REPLACE FUNCTION random_variable_le(
-  a random_variable, b random_variable)
-  RETURNS uuid AS
+/** @brief Build a @c gate_cmp for <tt>a &le; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_le(
+  a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
     provsql.random_variable_uuid(a),
@@ -1791,10 +1846,9 @@ $$
     provsql.random_variable_uuid(b));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief @c random_variable = @c random_variable (gate_cmp). */
-CREATE OR REPLACE FUNCTION random_variable_eq(
-  a random_variable, b random_variable)
-  RETURNS uuid AS
+/** @brief Build a @c gate_cmp for <tt>a = b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_eq(
+  a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
     provsql.random_variable_uuid(a),
@@ -1802,10 +1856,9 @@ $$
     provsql.random_variable_uuid(b));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief @c random_variable <> @c random_variable (gate_cmp). */
-CREATE OR REPLACE FUNCTION random_variable_ne(
-  a random_variable, b random_variable)
-  RETURNS uuid AS
+/** @brief Build a @c gate_cmp for <tt>a &lt;&gt; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_ne(
+  a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
     provsql.random_variable_uuid(a),
@@ -1813,10 +1866,9 @@ $$
     provsql.random_variable_uuid(b));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief @c random_variable >= @c random_variable (gate_cmp). */
-CREATE OR REPLACE FUNCTION random_variable_ge(
-  a random_variable, b random_variable)
-  RETURNS uuid AS
+/** @brief Build a @c gate_cmp for <tt>a &ge; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_ge(
+  a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
     provsql.random_variable_uuid(a),
@@ -1824,10 +1876,9 @@ $$
     provsql.random_variable_uuid(b));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief @c random_variable > @c random_variable (gate_cmp). */
-CREATE OR REPLACE FUNCTION random_variable_gt(
-  a random_variable, b random_variable)
-  RETURNS uuid AS
+/** @brief Build a @c gate_cmp for <tt>a &gt; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_gt(
+  a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
     provsql.random_variable_uuid(a),
@@ -1871,42 +1922,48 @@ CREATE OPERATOR < (
   LEFTARG    = random_variable,
   RIGHTARG   = random_variable,
   PROCEDURE  = random_variable_lt,
-  COMMUTATOR = >
+  COMMUTATOR = >,
+  NEGATOR    = >=
 );
 
 CREATE OPERATOR <= (
   LEFTARG    = random_variable,
   RIGHTARG   = random_variable,
   PROCEDURE  = random_variable_le,
-  COMMUTATOR = >=
+  COMMUTATOR = >=,
+  NEGATOR    = >
 );
 
 CREATE OPERATOR = (
   LEFTARG    = random_variable,
   RIGHTARG   = random_variable,
   PROCEDURE  = random_variable_eq,
-  COMMUTATOR = =
+  COMMUTATOR = =,
+  NEGATOR    = <>
 );
 
 CREATE OPERATOR <> (
   LEFTARG    = random_variable,
   RIGHTARG   = random_variable,
   PROCEDURE  = random_variable_ne,
-  COMMUTATOR = <>
+  COMMUTATOR = <>,
+  NEGATOR    = =
 );
 
 CREATE OPERATOR >= (
   LEFTARG    = random_variable,
   RIGHTARG   = random_variable,
   PROCEDURE  = random_variable_ge,
-  COMMUTATOR = <=
+  COMMUTATOR = <=,
+  NEGATOR    = <
 );
 
 CREATE OPERATOR > (
   LEFTARG    = random_variable,
   RIGHTARG   = random_variable,
   PROCEDURE  = random_variable_gt,
-  COMMUTATOR = <
+  COMMUTATOR = <,
+  NEGATOR    = <=
 );
 
 /** @} */

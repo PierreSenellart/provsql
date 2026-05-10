@@ -131,6 +131,14 @@ typedef struct constants_t {
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION
   Oid OID_FUNCTION_NOT_EQUAL_UUID; ///< OID of the = operator on UUIDs FUNCTION
   Oid OID_FUNCTION_AGG_TOKEN_UUID; ///< OID of the agg_token_uuid FUNCTION
+  Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
+  Oid OID_FUNCTION_RANDOM_VARIABLE_UUID; ///< OID of random_variable_uuid (rv -> uuid)
+  /** OIDs of the @c random_variable_{eq,ne,le,lt,ge,gt} comparison
+   * procedure functions, indexed by the @c ComparisonOperator enum
+   * (@c EQ=0, @c NE=1, @c LE=2, @c LT=3, @c GE=4, @c GT=5; matches the
+   * order in @c src/Aggregation.h).  Used by the planner hook to detect
+   * RV-comparison @c OpExpr nodes in WHERE clauses. */
+  Oid OID_FUNCTION_RV_CMP[6];
   bool ok; ///< true if constants were loaded
 } constants_t;
 

@@ -592,6 +592,60 @@ wider gate vocabulary. Concretely:
   `boost::math`, no LP/MILP solver. WeightMC is the only
   sampling-adjacent external tool.
 
+### `agg_token` and `random_variable`: a unification opportunity
+
+`agg_token` and `random_variable` are two presentations of the
+same algebraic object. Both pair a UUID with a cached scalar; both
+ride the same six-comparator surface (`< <= = <> >= >`); both are
+turned into `gate_cmp` nodes by the planner hook and combined into
+the row's provenance via `provenance_times` / `provenance_plus`.
+They differ in *how* the UUID's value distribution is computed:
+`agg_token`'s is combinatorial (finite worlds enumerated by
+`provsql_having` over the surrounding `gate_agg`'s children);
+`random_variable`'s is continuous (sampled from `<random>` by
+`monteCarloRV`).
+
+Three concrete unification levers. None is required for any one
+priority, but flagging them here keeps subsequent priorities from
+drifting apart.
+
+1. **Walker dispatch (low effort, high readability).** The
+   `migrate_aggtoken_quals_to_having` /
+   `check_expr_on_aggregate` family
+   (`src/provsql.c:2955`–`3157`) and the priority-4 RV walker
+   (`extract_rv_cmps_from_quals` / `check_expr_on_rv`) are
+   structurally isomorphic: each classifies WHERE conjuncts into
+   `{pure-X, deterministic, mixed-error}` and routes pure-X
+   somewhere semantic (HAVING vs `provenance_times` splice). A
+   single classifier that distinguishes pure-agg / pure-RV /
+   mixed-prob / deterministic and dispatches accordingly removes
+   the duplication and gives users a single error vocabulary.
+   Tracked as a follow-up to priority 4.
+
+2. **Sampler scalar-source dispatch (medium effort, unlocks
+   HAVING+RV).** `monteCarloRV::evalScalar` handles `gate_value`,
+   `gate_rv`, `gate_arith`; `gate_agg` throws. The legacy boolean
+   MC path resolves `gate_cmp(gate_agg, …)` via
+   `provsql_having`'s per-world enumeration in `getBooleanCircuit`
+   (`src/CircuitFromMMap.cpp:101`). Sharing that core (or its
+   priority-7 island-decomposer reincarnation) lets `monteCarloRV`
+   handle aggregate-bearing comparators uniformly with continuous
+   ones — and `WHERE rv > 0 GROUP BY x HAVING count(*) > 1` runs
+   end-to-end under MC. This is the natural intersection of
+   priority 7's island decomposer and the existing HAVING
+   resolution; bake it in there.
+
+3. **Type-level merger (low value).** Tempting algebraically, but
+   the physical layouts differ (117 B `agg_token` vs 24 B
+   `random_variable`), `agg_token`'s GUC-flipped output
+   (`agg_token_out` reading `provsql.aggtoken_text_as_uuid`) does
+   not generalise, and existing on-disk data would need
+   migration. Skip.
+
+The first two together also unlock cross-type comparisons that are
+currently rejected outright: `WHERE rv > avg(other_rvs)`,
+`WHERE count(rv > 0) > 5`, etc.
+
 ### Verification
 
 - `make -j$(nproc)` clean (no new warnings).
@@ -619,4 +673,4 @@ wider gate vocabulary. Concretely:
 
 Studio's compatibility table (extension >= 1.4.0 today) will need
 a bump when the new gate types ship, in coordination with the
-1.4.0 / Studio 1.0.0 release window.
+1.5.0 / Studio release window.

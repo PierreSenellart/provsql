@@ -1063,6 +1063,343 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
     provsql_error("Unknown structure within Boolean expression");
 }
 
+/* -------------------------------------------------------------------------
+ * Random-variable WHERE-clause rewriting
+ *
+ * Mirror of the HAVING trio above.  An OpExpr whose @c opfuncid matches
+ * one of the @c random_variable_{eq,ne,le,lt,ge,gt} procedures is an
+ * RV comparison; the planner hook lifts it out of @c jointree->quals,
+ * builds an equivalent @c provenance_cmp(left_uuid, op_oid, right_uuid)
+ * @c FuncExpr, and conjoins the resulting UUID into the row's
+ * provenance via @c provenance_times.  The lifted WHERE conjunct is
+ * removed (or the whole WHERE replaced by @c NULL when only RV cmps
+ * were present); what remains is purely Boolean and the executor
+ * evaluates it in the usual way.  The RV-cmp operators themselves are
+ * boolean placeholders -- their procedure raises if reached, which can
+ * happen only when the planner hook is bypassed (e.g. provsql.active
+ * off).
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Test whether @p funcoid is one of the @c random_variable_*
+ *        comparison procedures, and if so return its
+ *        @c ComparisonOperator index.
+ *
+ * @param  constants  Extension OID cache.
+ * @param  funcoid    Procedure OID to test (typically @c OpExpr->opfuncid).
+ * @return Index in @c [0..6) on match, @c -1 otherwise.  Match indices
+ *         line up with @c ComparisonOperator (EQ=0, NE=1, LE=2, LT=3,
+ *         GE=4, GT=5).
+ */
+static int rv_cmp_index(const constants_t *constants, Oid funcoid)
+{
+  for (int i = 0; i < 6; ++i) {
+    if (funcoid == constants->OID_FUNCTION_RV_CMP[i])
+      return i;
+  }
+  return -1;
+}
+
+/**
+ * @brief Wrap an expression returning @c random_variable in a
+ *        @c random_variable_uuid() FuncExpr to extract its UUID.
+ *
+ * Operand of the comparison may be a Var, a constant lifted by an
+ * implicit cast, or another OpExpr (e.g. <tt>a + b</tt>).  In every
+ * case the wrapping is the same — a single-arg FuncExpr around it.
+ */
+static FuncExpr *
+wrap_random_variable_uuid(Node *operand, const constants_t *constants)
+{
+  FuncExpr *cast = makeNode(FuncExpr);
+  cast->funcid = constants->OID_FUNCTION_RANDOM_VARIABLE_UUID;
+  cast->funcresulttype = constants->OID_TYPE_UUID;
+  cast->args = list_make1(operand);
+  cast->location = -1;
+  return cast;
+}
+
+/* Forward declaration: the BoolExpr and Expr walkers below are mutually
+ * recursive (BoolExpr recurses into Expr for each AND/OR child). */
+static FuncExpr *rv_Expr_to_provenance(Expr *expr,
+                                       const constants_t *constants,
+                                       bool negated);
+
+/**
+ * @brief Convert a single RV-comparison @c OpExpr into a
+ *        @c provenance_cmp() FuncExpr returning UUID.
+ *
+ * If @p negated is true the operator OID is replaced by its negator
+ * (so <tt>NOT (a &gt; b)</tt> becomes <tt>a &le; b</tt> at the
+ * provenance level), exactly as @c having_OpExpr_to_provenance_cmp
+ * does.
+ *
+ * @param opExpr    The comparison expression from the WHERE clause.
+ *                  Must satisfy @c rv_cmp_index(opExpr->opfuncid) &ge; 0;
+ *                  callers are responsible for the type check.
+ * @param constants Extension OID cache.
+ * @param negated   Whether the expression appears under a NOT.
+ */
+static FuncExpr *
+rv_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants_t *constants,
+                            bool negated)
+{
+  FuncExpr *cmpExpr;
+  Const    *oid_const;
+  Oid       opno = opExpr->opno;
+  Node     *left = (Node *)linitial(opExpr->args);
+  Node     *right = (Node *)lsecond(opExpr->args);
+
+  if (negated) {
+    opno = get_negator(opno);
+    if (!opno)
+      provsql_error("Missing negator for random_variable comparison");
+  }
+
+  oid_const = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                        sizeof(int32), Int32GetDatum(opno), false, true);
+
+  cmpExpr = makeNode(FuncExpr);
+  cmpExpr->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
+  cmpExpr->funcresulttype = constants->OID_TYPE_UUID;
+  cmpExpr->args = list_make3(
+    wrap_random_variable_uuid(left, constants),
+    oid_const,
+    wrap_random_variable_uuid(right, constants));
+  cmpExpr->location = opExpr->location;
+
+  return cmpExpr;
+}
+
+/**
+ * @brief Convert a Boolean combination of RV comparisons into a
+ *        @c provenance_times / @c provenance_plus expression.
+ *
+ * Same De Morgan handling as @c having_BoolExpr_to_provenance: under
+ * negation, AND ↔ OR (which means PROVENANCE_TIMES ↔ PROVENANCE_PLUS).
+ * NOT flips @c negated and recurses.
+ */
+static FuncExpr *
+rv_BoolExpr_to_provenance(BoolExpr *be, const constants_t *constants,
+                          bool negated)
+{
+  FuncExpr   *result;
+  ArrayExpr  *array;
+  List       *l = NIL;
+  ListCell   *lc;
+
+  if (be->boolop == NOT_EXPR) {
+    Expr *child = (Expr *)linitial(be->args);
+    return rv_Expr_to_provenance(child, constants, !negated);
+  }
+
+  array = makeNode(ArrayExpr);
+  array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+  array->element_typeid = constants->OID_TYPE_UUID;
+  array->location = -1;
+
+  result = makeNode(FuncExpr);
+  result->funcresulttype = constants->OID_TYPE_UUID;
+  result->funcvariadic = true;
+  result->location = be->location;
+  result->args = list_make1(array);
+
+  if ((be->boolop == AND_EXPR && !negated) ||
+      (be->boolop == OR_EXPR  && negated))
+    result->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+  else if ((be->boolop == AND_EXPR && negated) ||
+           (be->boolop == OR_EXPR  && !negated))
+    result->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
+  else
+    provsql_error("Unknown Boolean operator in random_variable WHERE clause");
+
+  foreach (lc, be->args) {
+    FuncExpr *arg = rv_Expr_to_provenance((Expr *)lfirst(lc),
+                                          constants, negated);
+    l = lappend(l, arg);
+  }
+  array->elements = l;
+
+  return result;
+}
+
+/**
+ * @brief Dispatch a WHERE sub-expression to the appropriate RV converter.
+ *
+ * Entry point for the mutual recursion between
+ * @c rv_BoolExpr_to_provenance and @c rv_OpExpr_to_provenance_cmp.
+ */
+static FuncExpr *
+rv_Expr_to_provenance(Expr *expr, const constants_t *constants, bool negated)
+{
+  if (IsA(expr, BoolExpr))
+    return rv_BoolExpr_to_provenance((BoolExpr *)expr, constants, negated);
+  if (IsA(expr, OpExpr)) {
+    OpExpr *opExpr = (OpExpr *)expr;
+    if (rv_cmp_index(constants, opExpr->opfuncid) >= 0)
+      return rv_OpExpr_to_provenance_cmp(opExpr, constants, negated);
+  }
+  provsql_error("Unsupported sub-expression in random_variable WHERE clause "
+                "(only Boolean combinations of RV comparisons are accepted)");
+  return NULL; /* unreachable, silences -Wreturn-type */
+}
+
+/**
+ * @brief Test whether an Expr (sub-)tree contains any RV comparison.
+ *
+ * Used by the WHERE-clause extractor to decide whether a top-level
+ * conjunct mentions any random_variable comparator and therefore
+ * needs lifting (or, if the conjunct mixes RV and non-RV operators
+ * in a way we cannot rewrite, errors).
+ */
+static bool
+expr_contains_rv_cmp(Node *node, const constants_t *constants)
+{
+  if (node == NULL)
+    return false;
+  if (IsA(node, OpExpr)) {
+    OpExpr *opExpr = (OpExpr *)node;
+    if (rv_cmp_index(constants, opExpr->opfuncid) >= 0)
+      return true;
+  }
+  if (IsA(node, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *)node;
+    ListCell *lc;
+    foreach (lc, be->args) {
+      if (expr_contains_rv_cmp(lfirst(lc), constants))
+        return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * @brief Test whether @p expr is a Boolean combination of @em only
+ *        random_variable comparisons (no other leaves allowed).
+ *
+ * Mirrors @c check_expr_on_aggregate / @c check_boolexpr_on_aggregate
+ * for the agg_token WHERE-to-HAVING migration path.  Recursively
+ * accepts:
+ * - @c BoolExpr (AND/OR/NOT) all of whose children pass; and
+ * - @c OpExpr matching one of the @c random_variable_* comparators.
+ *
+ * Anything else (a non-RV @c OpExpr, a @c Var, a @c Const, a non-cmp
+ * @c FuncExpr) makes the expression mixed and unsupportable by the
+ * RV-only walker, so the function returns @c false and the caller
+ * raises a clear error.
+ */
+static bool
+check_expr_on_rv(Expr *expr, const constants_t *constants)
+{
+  if (expr == NULL)
+    return false;
+  if (IsA(expr, OpExpr))
+    return rv_cmp_index(constants, ((OpExpr *)expr)->opfuncid) >= 0;
+  if (IsA(expr, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *)expr;
+    ListCell *lc;
+    foreach (lc, be->args) {
+      if (!check_expr_on_rv((Expr *)lfirst(lc), constants))
+        return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Lift RV comparisons out of @p q->jointree->quals into a list
+ *        of UUID-yielding expressions.
+ *
+ * Mirrors @c migrate_aggtoken_quals_to_having's split of a WHERE
+ * clause, lifting RV-bearing conjuncts to provenance instead of to
+ * HAVING.  Supported shapes:
+ *
+ * - Whole WHERE is a Boolean combination of RV comparisons (and only
+ *   those): the entire predicate is lifted, the WHERE is dropped.
+ * - Top-level AND with a mix of conjuncts: each conjunct that mentions
+ *   any RV cmp must be a pure RV expression (verified by
+ *   @c check_expr_on_rv); pure RV conjuncts are lifted, the others
+ *   stay in WHERE to filter rows in the usual way.
+ *
+ * Unsupported shapes (mixed RV / non-RV inside the same Boolean
+ * sub-expression, e.g. <tt>WHERE rv > 3 OR column = 2</tt>) raise an
+ * error here, before the rest of the planner hook sees an inconsistent
+ * predicate.  Lifting them would require treating the deterministic
+ * sub-expression as a Boolean RV gate; the natural place for that is
+ * priority 7 (hybrid evaluation), and until then a clear error is
+ * better than a half-rewritten plan.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query whose WHERE may be mutated in place.
+ * @return List of @c FuncExpr nodes (one per lifted conjunct), each
+ *         producing a @c UUID; @c NIL if no RV comparison was found.
+ */
+static List *
+extract_rv_cmps_from_quals(const constants_t *constants, Query *q)
+{
+  List *extracted = NIL;
+
+  if (!q->jointree || !q->jointree->quals)
+    return NIL;
+
+  if (!expr_contains_rv_cmp(q->jointree->quals, constants))
+    return NIL;
+
+  /* Whole WHERE is RV-bearing.  Accept iff it is purely a Boolean
+   * combination of RV comparisons; otherwise the predicate mixes
+   * RV and non-RV in a way we cannot rewrite. */
+  if (!IsA(q->jointree->quals, BoolExpr) ||
+      ((BoolExpr *)q->jointree->quals)->boolop != AND_EXPR) {
+    if (!check_expr_on_rv((Expr *)q->jointree->quals, constants))
+      provsql_error("WHERE clause mixes random_variable comparisons with "
+                    "other predicates inside the same Boolean expression; "
+                    "split the non-RV part into its own AND conjunct");
+    extracted = lappend(extracted,
+                        rv_Expr_to_provenance((Expr *)q->jointree->quals,
+                                              constants, false));
+    q->jointree->quals = NULL;
+    return extracted;
+  }
+
+  /* Top-level AND: walk conjuncts.  RV-bearing conjuncts must be pure
+   * RV expressions; non-RV conjuncts stay in WHERE. */
+  {
+    BoolExpr *be = (BoolExpr *)q->jointree->quals;
+    ListCell *cell, *prev;
+
+    for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
+      Expr *conjunct = (Expr *)lfirst(cell);
+      if (expr_contains_rv_cmp((Node *)conjunct, constants)) {
+        if (!check_expr_on_rv(conjunct, constants))
+          provsql_error("WHERE conjunct mixes random_variable comparisons "
+                        "with other predicates inside the same Boolean "
+                        "expression; split the non-RV part into its own "
+                        "AND conjunct");
+        extracted = lappend(extracted,
+                            rv_Expr_to_provenance(conjunct, constants, false));
+        be->args = my_list_delete_cell(be->args, cell, prev);
+        if (prev)
+          cell = my_lnext(be->args, prev);
+        else
+          cell = list_head(be->args);
+      } else {
+        prev = cell;
+        cell = my_lnext(be->args, cell);
+      }
+    }
+
+    /* If the AND has no children left, drop the WHERE entirely. */
+    if (be->args == NIL)
+      q->jointree->quals = NULL;
+    else if (list_length(be->args) == 1)
+      q->jointree->quals = (Node *)linitial(be->args);
+  }
+
+  return extracted;
+}
+
 /**
  * @brief Build the combined provenance expression to be added to the SELECT list.
  *
@@ -3235,8 +3572,25 @@ static Query *process_query(const constants_t *constants, Query *q,
     // by calling process_query
     prov_atts = get_provenance_attributes(constants, q);
 
-    if (prov_atts == NIL)
-      return q;
+    if (prov_atts == NIL) {
+      /* If the WHERE clause contains a random_variable comparison, we
+       * still need to take the rewriting path so the result tuple
+       * carries the comparator's gate_cmp UUID as its provenance.
+       * Synthesize a single gate_one() prov_att; the combination
+       * provenance_times(one, rv_cmp) collapses to rv_cmp downstream
+       * because gate_one is the multiplicative identity. */
+      if (q->jointree && q->jointree->quals &&
+          expr_contains_rv_cmp(q->jointree->quals, constants)) {
+        FuncExpr *one_expr = makeNode(FuncExpr);
+        one_expr->funcid = constants->OID_FUNCTION_GATE_ONE;
+        one_expr->funcresulttype = constants->OID_TYPE_UUID;
+        one_expr->args = NIL;
+        one_expr->location = -1;
+        prov_atts = list_make1(one_expr);
+      } else {
+        return q;
+      }
+    }
 
     if (q->hasSubLinks) {
       provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
@@ -3297,6 +3651,30 @@ static Query *process_query(const constants_t *constants, Query *q,
 
     if (supported) {
       Expr *provenance;
+      List *rv_cmps;
+
+      /* Lift random_variable comparisons out of WHERE first, so the
+       * lifted gate_cmp UUID can be folded into prov_atts and then
+       * propagate through every downstream consumer of prov_atts:
+       * - make_aggregation_expression's per-row provenance_times
+       *   (so HAVING / aggregate counts see only worlds where the
+       *   RV comparison holds);
+       * - make_provenance_expression's row-level provenance_times
+       *   (the non-aggregation case);
+       * - the array_agg + provenance_plus + delta wrappers above.
+       * Without this early splice the cmp would either be discarded
+       * by the HAVING-replaces-result branch or stranded at group
+       * level with row-typed Vars the executor cannot resolve.
+       *
+       * Skipped for SR_PLUS / SR_MONUS (UNION / EXCEPT outer level):
+       * each branch is rewritten by its own recursive process_query
+       * call, so an outer-level WHERE on RV here is exotic; the
+       * fallback after make_provenance_expression handles it. */
+      rv_cmps = extract_rv_cmps_from_quals(constants, q);
+      if (rv_cmps != NIL && !has_union && !has_difference) {
+        prov_atts = list_concat(prov_atts, rv_cmps);
+        rv_cmps = NIL;
+      }
 
       if (q->hasAggs) {
         ListCell *lc_sort;
@@ -3335,6 +3713,24 @@ static Query *process_query(const constants_t *constants, Query *q,
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
         nbcols);
+
+      /* Fallback for the rare set-op outer WHERE case: conjoin via
+       * provenance_times after the aggregation wrappers.  Correct only
+       * when no aggregation collapses rows above this point. */
+      if (rv_cmps != NIL) {
+        FuncExpr *times = makeNode(FuncExpr);
+        ArrayExpr *array = makeNode(ArrayExpr);
+        times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+        times->funcresulttype = constants->OID_TYPE_UUID;
+        times->funcvariadic = true;
+        times->location = -1;
+        array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+        array->element_typeid = constants->OID_TYPE_UUID;
+        array->elements = lcons(provenance, rv_cmps);
+        array->location = -1;
+        times->args = list_make1(array);
+        provenance = (Expr *)times;
+      }
 
       add_to_select(q, provenance);
       replace_provenance_function_by_expression(constants, q, provenance);
