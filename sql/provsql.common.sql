@@ -2418,6 +2418,162 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
+ * @brief Internal: rv-side support computation
+ *
+ * Lifts @c provsql::compute_support out of @c RangeCheck.cpp -- the
+ * same interval-arithmetic propagation @c runRangeCheck uses to
+ * decide @c gate_cmps.  Returns @c [-Infinity, +Infinity] when the
+ * tightest bound is the conservative all-real interval (e.g. for a
+ * normal RV, or any sub-circuit that mixes a normal in).
+ */
+CREATE OR REPLACE FUNCTION rv_support(token uuid, OUT lo float8, OUT hi float8)
+  AS 'provsql','rv_support' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Compute the support interval @c [lo, hi] of a probabilistic
+ *        (or deterministic) scalar
+ *
+ * Polymorphic dispatcher mirroring @c expected / @c variance /
+ * @c moment / @c central_moment, with two extra "free" branches:
+ *
+ * - <b>Plain numeric</b> (@c smallint / @c integer / @c bigint /
+ *   @c numeric / @c real / @c double @c precision): degenerate
+ *   point support @f$[c, c]@f$.  Lets callers ask for the support
+ *   of a literal without round-tripping through @c as_random.
+ * - <b>@c random_variable / bare @c uuid</b> (any provenance gate
+ *   token, including the implicit @c random_variable @c -> @c uuid
+ *   cast): routes to @c rv_support, which propagates distribution
+ *   supports (uniform exact, exponential @c [0,+∞), normal
+ *   @c (-∞,+∞)) through @c gate_arith via interval arithmetic.
+ *   @c gate_value gives the same @f$[c, c]@f$ point support as the
+ *   numeric branch; any non-scalar gate (Boolean gates, aggregates,
+ *   ...) safely falls back to the conservative all-real interval
+ *   without raising.  Conditioning on @c prov is not yet supported.
+ *
+ * - @c agg_token: closed-form per aggregation function:
+ *   - @c SUM : @f$[\sum_i \min(0,v_i), \sum_i \max(0,v_i)]@f$
+ *     (every row is independently in or out of the included set; the
+ *     extreme SUMs are reached by including only positive or only
+ *     negative-valued rows).
+ *   - @c MIN : @f$[\min_i v_i, \max_i v_i]@f$ in the non-empty
+ *     subsets, plus @c +Infinity if the empty subset has positive
+ *     probability under @c prov.
+ *   - @c MAX : symmetric -- @c -Infinity if empty has positive
+ *     probability under @c prov, otherwise @c min_i v_i; @c hi is
+ *     always @c max_i v_i.
+ *
+ * Other aggregation functions raise.
+ *
+ * @return Composite (lo, hi) with @c -Infinity / @c +Infinity for
+ *         unbounded ends.
+ */
+CREATE OR REPLACE FUNCTION support(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL,
+  OUT lo float8,
+  OUT hi float8)
+  AS $$
+DECLARE
+  aggregation_function VARCHAR;
+  child_pairs uuid[];
+  values_arr float8[];
+  total_probability float8;
+BEGIN
+  IF input IS NULL THEN
+    lo := NULL; hi := NULL; RETURN;
+  END IF;
+
+  -- Plain numeric: degenerate point support.  Lets `support(2.5)` /
+  -- `support(42)` / etc.  return (2.5, 2.5) without making the user
+  -- wrap in `as_random`.
+  IF pg_typeof(input) IN (
+       'smallint'::regtype, 'integer'::regtype, 'bigint'::regtype,
+       'numeric'::regtype, 'real'::regtype, 'double precision'::regtype) THEN
+    lo := input::double precision;
+    hi := input::double precision;
+    RETURN;
+  END IF;
+
+  -- random_variable has an IMPLICIT cast to uuid, so a single
+  -- rv_support call covers both shapes.  rv_support handles
+  -- gate_value (point), gate_rv (distribution), gate_arith
+  -- (propagated), and falls back to the conservative all-real
+  -- interval for any other gate kind.  Conditioning on prov is not
+  -- supported (would require restricting the underlying joint
+  -- distribution by the indicator of prov, which has no closed form
+  -- for the basic distributions we ship).
+  IF pg_typeof(input) IN ('random_variable'::regtype, 'uuid'::regtype) THEN
+    IF prov <> gate_one() THEN
+      RAISE EXCEPTION 'support(): conditioning on prov is not yet supported for circuit-token inputs';
+    END IF;
+    SELECT r.lo, r.hi INTO lo, hi
+      FROM provsql.rv_support(input::uuid) r;
+    RETURN;
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF get_gate_type(input::agg_token) <> 'agg' THEN
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for support computation';
+    END IF;
+    SELECT pp.proname::varchar FROM pg_proc pp
+      WHERE oid=(get_infos(input::agg_token)).info1
+      INTO aggregation_function;
+    child_pairs := get_children(input::agg_token);
+
+    IF aggregation_function = 'sum' THEN
+      -- Empty agg_token: SUM is identically 0.
+      IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
+        lo := 0; hi := 0; RETURN;
+      END IF;
+      SELECT sum(LEAST(v, 0::float8)), sum(GREATEST(v, 0::float8))
+        INTO lo, hi
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+              FROM unnest(child_pairs) AS c) sub;
+    ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+      -- Empty agg_token: MIN = +Infinity, MAX = -Infinity (the
+      -- empty-set conventions used by `expected`).
+      IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
+        IF aggregation_function = 'min' THEN
+          lo := 'Infinity'::float8; hi := 'Infinity'::float8;
+        ELSE
+          lo := '-Infinity'::float8; hi := '-Infinity'::float8;
+        END IF;
+        RETURN;
+      END IF;
+
+      WITH tok_value AS (
+        SELECT (get_children(c))[1] AS tok,
+               CAST(get_extra((get_children(c))[2]) AS float8) AS v
+        FROM UNNEST(child_pairs) AS c
+      )
+      SELECT min(v), max(v),
+             probability_evaluate(
+               provenance_monus(prov, provenance_plus(ARRAY_AGG(tok))),
+               method, arguments)
+        INTO lo, hi, total_probability
+        FROM tok_value;
+
+      IF total_probability > epsilon() THEN
+        IF aggregation_function = 'min' THEN
+          hi := 'Infinity'::float8;
+        ELSE
+          lo := '-Infinity'::float8;
+        END IF;
+      END IF;
+    ELSE
+      RAISE EXCEPTION USING MESSAGE=
+        'Cannot compute support for aggregation function ' || aggregation_function;
+    END IF;
+    RETURN;
+  END IF;
+
+  RAISE EXCEPTION 'support() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
  * @brief Compute the central moment E[(X - E[X|prov])^k | prov]
  *
  * @c k = 0 returns 1; @c k = 1 returns 0; @c k = 2 is equivalent to

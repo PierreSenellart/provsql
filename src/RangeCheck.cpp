@@ -14,9 +14,18 @@
 #include <vector>
 
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
+#include "CircuitFromMMap.h"    // getGenericCircuit
 #include "RandomVariable.h"     // parse_distribution_spec, DistKind
+#include "provsql_utils_cpp.h"  // uuid2string
 extern "C" {
+#include "postgres.h"
+#include "fmgr.h"
+#include "funcapi.h"            // get_call_result_type, BlessTupleDesc
+#include "utils/uuid.h"
 #include "provsql_utils.h"      // gate_type, provsql_arith_op
+#include "provsql_error.h"
+
+PG_FUNCTION_INFO_V1(rv_support);
 }
 
 namespace provsql {
@@ -639,4 +648,53 @@ unsigned runRangeCheck(GenericCircuit &gc)
   return resolved;
 }
 
+std::pair<double, double>
+compute_support(const GenericCircuit &gc, gate_t root)
+{
+  std::unordered_map<gate_t, Interval> cache;
+  Interval iv = intervalOf(gc, root, cache);
+  return {iv.lo, iv.hi};
+}
+
 }  // namespace provsql
+
+extern "C" {
+
+/**
+ * @brief SQL: rv_support(token uuid, OUT lo float8, OUT hi float8)
+ *
+ * Loads the persisted circuit rooted at @p token and returns the
+ * @c [lo, hi] support interval computed by @c provsql::compute_support.
+ * @c -Infinity / @c +Infinity float8 represent unbounded ends (e.g.
+ * the support of a normal RV is @c [-Infinity, +Infinity]).
+ */
+Datum rv_support(PG_FUNCTION_ARGS)
+{
+  try {
+    pg_uuid_t *token = PG_GETARG_UUID_P(0);
+
+    auto gc = getGenericCircuit(*token);
+    auto root = gc.getGate(uuid2string(*token));
+    auto iv = provsql::compute_support(gc, root);
+
+    TupleDesc tupdesc;
+    Datum values[2];
+    bool nulls[2] = {false, false};
+
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+      provsql_error("rv_support: expected composite return type");
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    values[0] = Float8GetDatum(iv.first);
+    values[1] = Float8GetDatum(iv.second);
+
+    PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+  } catch (const std::exception &e) {
+    provsql_error("rv_support: %s", e.what());
+  } catch (...) {
+    provsql_error("rv_support: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
+}  // extern "C"

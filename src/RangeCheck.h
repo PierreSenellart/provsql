@@ -22,9 +22,31 @@
 #ifndef PROVSQL_RANGE_CHECK_H
 #define PROVSQL_RANGE_CHECK_H
 
+#include <utility>
+
 #include "GenericCircuit.h"
 
 namespace provsql {
+
+/**
+ * @brief Compute the @c [lo, hi] support interval of a scalar
+ *        sub-circuit rooted at @p root.
+ *
+ * Same interval-arithmetic propagation @c runRangeCheck uses
+ * internally, exposed for the SQL @c support() function:
+ * - @c gate_value: point @c [c, c].
+ * - @c gate_rv:    distribution support (uniform exact, exponential
+ *                  on @c [0, +∞), normal on @c (-∞, +∞)).
+ * - @c gate_arith: propagated through @c +, @c −, @c ×, @c /, unary
+ *                  @c −.
+ *
+ * Anything else collapses to the conservative all-real interval
+ * @c (-∞, +∞).  Never throws on unrecognised gates -- callers receive
+ * the wide interval instead, which is the right semantic for "we
+ * cannot prove a tighter bound".
+ */
+std::pair<double, double>
+compute_support(const GenericCircuit &gc, gate_t root);
 
 /**
  * @brief Run the support-based pruning pass over @p gc.
