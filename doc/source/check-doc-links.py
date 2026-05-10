@@ -121,10 +121,37 @@ INTERNAL_FUNCTIONS = {
     'random_variable_ne', 'random_variable_ge', 'random_variable_gt',
     'random_variable_cmp_placeholder',
     'random_variable_cmp_oid',
+    # Doxygen synthesises one symbol per `CREATE OPERATOR` declaration
+    # in the form <procedure>_<rightarg>; for the random_variable
+    # comparison and arithmetic operators the right argument is also
+    # random_variable, hence the doubled-name shape.  These are not
+    # callable SQL functions; the underlying procedures live above.
+    'random_variable_lt_random_variable',
+    'random_variable_le_random_variable',
+    'random_variable_eq_random_variable',
+    'random_variable_ne_random_variable',
+    'random_variable_ge_random_variable',
+    'random_variable_gt_random_variable',
+    'random_variable_op_random_variable',
     # Direct gate_cmp UUID constructors -- bypass the planner hook for
     # callers (mostly tests) that want a UUID instead of a boolean.
     'rv_cmp_lt', 'rv_cmp_le', 'rv_cmp_eq', 'rv_cmp_ne',
     'rv_cmp_ge', 'rv_cmp_gt',
+    # Internal C entry points behind the polymorphic moment / support
+    # SQL surface.  Not invoked by name -- callers go through expected /
+    # variance / moment / central_moment / support, dispatched through
+    # rv_moment for random_variable inputs and agg_raw_moment for
+    # agg_token inputs; rv_support is the support() backend.
+    'rv_moment', 'rv_support', 'agg_raw_moment',
+    # C++ helper picked up by Doxygen because it lives in the `provsql`
+    # namespace; it has no SQL-level binding.
+    'compute_support',
+    # User-facing polymorphic moment / support SQL surface (priority 6
+    # of the continuous-distributions plan).  Promote to _SQL_FUNC_MAP
+    # alongside the constructors above when the
+    # continuous-distributions chapter of the user manual is written
+    # and references them via :sqlfunc:.
+    'variance', 'moment', 'central_moment', 'support',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
 }

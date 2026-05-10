@@ -190,7 +190,7 @@ aggregation at the *pipeline* level: Step 4 calls
 :cfunc:`rewrite_agg_distinct` to lift ``COUNT(DISTINCT ...)``
 into an inner ``GROUP BY``, Step 8 calls
 :cfunc:`replace_aggregations_by_provenance_aggregate` followed
-by :cfunc:`migrate_aggtoken_quals_to_having` and
+by :cfunc:`migrate_probabilistic_quals` and
 :cfunc:`insert_agg_token_casts`, and Step 9 fuses the row-level
 tokens with ``provenance_plus(array_agg(...))`` and wraps the
 result in ``provenance_delta``.  This section only documents the

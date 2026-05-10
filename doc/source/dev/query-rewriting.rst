@@ -159,9 +159,12 @@ rows.  The provenance of grouped rows is combined with ⊕
 
 After aggregation rewriting:
 
-- :cfunc:`migrate_aggtoken_quals_to_having` moves any ``WHERE``
-  comparisons on aggregate results to ``HAVING``, because
-  aggregate-typed values can only be filtered after grouping.
+- :cfunc:`migrate_probabilistic_quals` moves any ``WHERE``
+  comparisons on aggregate results to ``HAVING`` (and lifts
+  ``WHERE`` comparisons on ``random_variable`` columns into the
+  per-tuple provenance), because aggregate-typed and continuous-RV
+  values both need post-classification routing the executor cannot
+  do directly.
 
 - :cfunc:`insert_agg_token_casts` inserts type casts for
   :cfunc:`agg_token` values used in arithmetic or window functions.

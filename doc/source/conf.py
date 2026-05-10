@@ -152,7 +152,7 @@ _C_FUNC_MAP = {
     'transform_distinct_into_group_by': '/doxygen-c/html/provsql_8c.html#a00905dfe8e8acbfb740bafab0c5f366b',
     'build_column_map':          '/doxygen-c/html/provsql_8c.html#acf66b583d7d5c92186c17e172ab34edf',
     'replace_aggregations_by_provenance_aggregate': '/doxygen-c/html/provsql_8c.html#a64dcbec21c99e399191a997b19da111c',
-    'migrate_aggtoken_quals_to_having': '/doxygen-c/html/provsql_8c.html#a52800ea34fc58e9157fe76ecb7dfeac7',
+    'migrate_probabilistic_quals': '/doxygen-c/html/provsql_8c.html#a807c78bed512a1e85cfd8da28a75078e',
     'insert_agg_token_casts':    '/doxygen-c/html/provsql_8c.html#a539df516de849eb54876a4f98a748861',
     'having_Expr_to_provenance_cmp': '/doxygen-c/html/provsql_8c.html#a0cfaf66fa75b9265bf267b446ac6946f',
     'add_eq_from_Quals_to_Expr': '/doxygen-c/html/provsql_8c.html#aa5f16ef0c73e1c7d651b02311994605d',
