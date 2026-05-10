@@ -1308,8 +1308,8 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
   return false;
 }
 
-/* The historical @c extract_rv_cmps_from_quals function (priority 4)
- * has been folded into the unified WHERE classifier
+/* The earlier RV-only WHERE walker (@c extract_rv_cmps_from_quals)
+ * has been folded into the unified classifier
  * @c migrate_probabilistic_quals further down in this file; both the
  * agg_token and the random_variable migration paths are now special
  * cases of one walk over @c q->jointree->quals.  See the comment on
@@ -3269,7 +3269,7 @@ static void error_for_mixed_qual(qual_class c)
       provsql_error("WHERE clause mixes agg_token (HAVING-style) and "
                     "random_variable (per-tuple) comparisons inside the "
                     "same Boolean expression; this combination is not "
-                    "supported (priority 7 hybrid evaluation)");
+                    "supported");
       break;
     default:
       /* QUAL_DETERMINISTIC / QUAL_PURE_AGG / QUAL_PURE_RV: not a mixed case. */
@@ -3718,7 +3718,10 @@ static Query *process_query(const constants_t *constants, Query *q,
        *
        * Must run before replace_aggregations_by_provenance_aggregate
        * so the lifted RV cmps factor into each row's contribution to
-       * any surrounding agg_token (priority 4 splice constraint).
+       * any surrounding agg_token: otherwise the cmp lands at group
+       * level with row-typed Vars the executor cannot resolve, or
+       * gets discarded by the HAVING-replaces-result branch of
+       * make_provenance_expression.
        *
        * Skipped for SR_PLUS / SR_MONUS (UNION / EXCEPT outer level):
        * each branch is rewritten by its own recursive process_query

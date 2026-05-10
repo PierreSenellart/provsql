@@ -33,23 +33,6 @@ std::mt19937_64 seedRng()
   return rng;
 }
 
-/// Strict double parse used for @c gate_value extras.
-double parseDoubleStrict(const std::string &s)
-{
-  if(s.empty())
-    throw CircuitException("Empty gate_value extra");
-  std::size_t idx = 0;
-  double v;
-  try {
-    v = std::stod(s, &idx);
-  } catch(const std::exception &) {
-    throw CircuitException("Cannot parse gate_value extra as double: " + s);
-  }
-  if(idx != s.size())
-    throw CircuitException("Trailing characters in gate_value extra: " + s);
-  return v;
-}
-
 bool applyCmp(double l, ComparisonOperator op, double r)
 {
   // IEEE 754 semantics: any comparison involving NaN is false except !=.

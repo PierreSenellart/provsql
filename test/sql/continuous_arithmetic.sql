@@ -49,12 +49,12 @@ SELECT
 FROM e;
 
 -- Implicit casts: PG operator resolution falls back on the implicit
--- integer/numeric/float8 -> random_variable casts declared in
--- priority 1 because we only declared (rv, rv) operators.  Mixed
--- shapes are equivalent to wrapping the literal in as_random by hand.
--- (Comparison operators return boolean placeholders that are rewritten
--- by the planner hook in WHERE; for direct UUID construction in the
--- SELECT list we use the rv_cmp_* helpers.)
+-- integer/numeric/float8 -> random_variable casts because we only
+-- declared (rv, rv) operators.  Mixed shapes are equivalent to
+-- wrapping the literal in as_random by hand.  (Comparison operators
+-- return boolean placeholders that are rewritten by the planner hook
+-- in WHERE; for direct UUID construction in the SELECT list we use
+-- the rv_cmp_* helpers.)
 WITH e AS (SELECT provsql.as_random(2) AS a)
 SELECT
   (a + 2)::uuid             = (a + provsql.as_random(2))::uuid             AS plus_int,

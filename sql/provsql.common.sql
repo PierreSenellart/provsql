@@ -1414,10 +1414,10 @@ CREATE OPERATOR > (
  *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
  *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
  *  and <tt>provsql.as_random(c)</tt>.  Operator overloads
- *  (<tt>+ - * /</tt> and the six comparators) are added in priority 3
- *  of the continuous-distributions plan; until then user queries can
- *  build expressions by calling the constructors and combining them
- *  through the standard <tt>provenance_*</tt> functions.
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
  *  @{
  */
 

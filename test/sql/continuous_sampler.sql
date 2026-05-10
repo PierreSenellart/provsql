@@ -62,9 +62,9 @@ SELECT mc_prob(provsql.normal(0, 1), provsql.as_random(0), '>', 5000)
 
 -- Hand-built gate_arith over two independent normals: P(X + Y > 0) is
 -- exactly 0.5 because X+Y ~ N(0, 2).  The arith gate's info1 holds
--- the PROVSQL_ARITH_PLUS tag (= 0).  We hand-build the circuit so this
--- exercises the gate_arith branch of the sampler before priority 3
--- ships the user-facing operators.
+-- the PROVSQL_ARITH_PLUS tag (= 0).  We hand-build the circuit here
+-- to exercise the gate_arith branch of the sampler directly, without
+-- relying on the user-facing rv arithmetic operators.
 DO $$
 DECLARE
   x uuid := provsql.random_variable_uuid(provsql.normal(0, 1));

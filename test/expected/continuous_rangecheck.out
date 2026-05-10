@@ -1,0 +1,35 @@
+\set ECHO none
+uniform_above_zero_decided
+t
+(1 row)
+uniform_negated_decided
+t
+(1 row)
+exponential_nonnegative_decided
+t
+(1 row)
+uniform_le_zero_decided
+t
+(1 row)
+arith_plus_above_decided
+t
+(1 row)
+arith_neg_exp_decided
+t
+(1 row)
+normal_undecided_falls_through_to_mc
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|exact_one
+a|t
+b|t
+(2 rows)
+continuous_rangecheck_done
+ok
+(1 row)

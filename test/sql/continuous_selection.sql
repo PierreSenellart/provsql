@@ -130,9 +130,9 @@ DROP TABLE untracked;
 -- We verify this STRUCTURE rather than running probability_evaluate
 -- because the RV-aware Monte Carlo sampler does not yet pre-resolve
 -- HAVING gate_agg children (the legacy boolean MC path does this via
--- @c provsql_having in @c CircuitFromMMap.cpp; the RV path will gain
--- the equivalent in priority 7).  Probability over WHERE + GROUP BY
--- without HAVING is exercised by section H below.
+-- @c provsql_having in @c CircuitFromMMap.cpp; the RV path can grow
+-- the equivalent later).  Probability over WHERE + GROUP BY without
+-- HAVING is exercised by section H below.
 -- ====================================================================
 CREATE TABLE readings(category text, val provsql.random_variable);
 INSERT INTO readings VALUES
@@ -207,7 +207,7 @@ DROP TABLE readings;
 -- explicitly rejected with a clear error -- the planner cannot lift
 -- the RV part without lifting the deterministic part too, and the
 -- latter would require synthesising a Boolean RV gate (CASE WHEN ...
--- THEN gate_one() ELSE gate_zero() END), which is priority-7 work.
+-- THEN gate_one() ELSE gate_zero() END), which is deferred work.
 -- This mirrors agg_token's check_expr_on_aggregate behaviour for
 -- mixed WHERE clauses.
 -- ====================================================================

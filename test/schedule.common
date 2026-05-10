@@ -111,6 +111,7 @@ test: continuous_arithmetic
 test: continuous_selection
 test: continuous_join
 test: continuous_union
+test: continuous_rangecheck
 
 # PROV export
 test: to_provxml

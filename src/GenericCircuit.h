@@ -145,6 +145,36 @@ double getProb(gate_t g) const {
 }
 
 /**
+ * @brief Replace a @c gate_cmp by a Bernoulli @c gate_input with the
+ *        determined probability @p p.
+ *
+ * Used by the peephole pruning passes (RangeCheck and any future
+ * analytic-CDF / LP-based passes) when a comparator's probability is
+ * provably 0, 1, or a closed-form value: turning the comparator
+ * into a Bernoulli leaf lets every downstream evaluator (MC,
+ * independent, treedec, d-DNNF, d4) consume the result transparently
+ * without having to learn about the resolution mechanism.  Operates
+ * on the in-memory circuit only; the persistent mmap store is never
+ * mutated.
+ *
+ * Side effects: the gate's type becomes @c gate_input, its
+ * probability becomes @p p, its child wires are cleared (so the
+ * gate is a true leaf), it is added to the inputs set, and its
+ * @c info / @c extra fields are cleared.  Children that become
+ * orphaned are not reaped here; @c circuitHasRV walks reachable
+ * gates only, so an orphaned @c gate_rv stops looking like RV
+ * content if no other comparator references it.
+ */
+void resolveCmpToBernoulli(gate_t g, double p) {
+  setGateType(g, gate_input);
+  setProb(g, p);
+  getWires(g).clear();
+  inputs.insert(g);
+  infos.erase(g);
+  extra.erase(g);
+}
+
+/**
  * @brief Boost serialisation support.
  * @param ar       Boost archive (input or output).
  * @param version  Archive version (unused).

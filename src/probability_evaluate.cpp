@@ -41,6 +41,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "CircuitFromMMap.h"
 #include "GenericCircuit.h"
 #include "MonteCarloSampler.h"
+#include "RangeCheck.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "having_semantics.hpp"
 #include "provsql_mmap.h"
@@ -94,6 +95,19 @@ static Datum probability_evaluate_internal
   // pay no extra cost compared to the previous flow.
   GenericCircuit gc = getGenericCircuit(token);
   gate_t gc_root = gc.getGate(uuid2string(token));
+
+  /* Peephole pruning: try to resolve gate_cmps before we dispatch
+   * to a sampler.  Each pass that decides a comparator replaces it
+   * by a Bernoulli gate_input via
+   * GenericCircuit::resolveCmpToBernoulli, so the resolution becomes
+   * transparent to every downstream evaluator (MC, independent,
+   * treedec, d-DNNF, d4).
+   *
+   * RangeCheck is the support-based interval-arithmetic pass: cheap,
+   * never wrong, no external dependency.  It decides comparators
+   * whose two sides have provably disjoint or strictly ordered
+   * supports. */
+  provsql::runRangeCheck(gc, gc_root);
 
   double result;
 

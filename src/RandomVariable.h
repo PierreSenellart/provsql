@@ -10,9 +10,9 @@
  * expressions is built on the generic @c gate_arith gate (see
  * @c provsql_utils.h), which is shared with non-RV scalar arithmetic.
  *
- * Sampling itself lives in @c BooleanCircuit::monteCarlo (added in
- * priority 2 of @c TODO.md); this header only exposes what is needed
- * for parsing and analytical moment computation.
+ * Sampling itself lives in @c BooleanCircuit::monteCarlo and
+ * @c MonteCarloSampler; this header only exposes what is needed for
+ * parsing and analytical moment computation.
  */
 #ifndef PROVSQL_RANDOM_VARIABLE_H
 #define PROVSQL_RANDOM_VARIABLE_H
@@ -62,6 +62,20 @@ std::optional<DistributionSpec> parse_distribution_spec(const std::string &s);
  * precision of @c std::to_string for @c double.
  */
 std::string format_distribution_spec(const DistributionSpec &d);
+
+/**
+ * @brief Strictly parse @p s as a @c double.
+ *
+ * Used by every consumer that has to interpret the @c extra byte
+ * string of a @c gate_value: the sampler when sampling a constant
+ * leaf, the interval-arith pass when bounding a constant leaf, and
+ * any future scalar-evaluation pass.  Lives here (rather than next
+ * to one specific consumer) so the parsing convention is shared.
+ *
+ * @throws CircuitException on empty input, non-numeric input, or
+ *         trailing characters past the parsed double.
+ */
+double parseDoubleStrict(const std::string &s);
 
 /**
  * @brief Closed-form expectation E[X] for a basic distribution.

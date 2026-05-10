@@ -112,7 +112,8 @@ INTERNAL_FUNCTIONS = {
     'normal', 'uniform', 'exponential', 'as_random',
     # random_variable arithmetic and comparison operator implementations
     # (invoked through the SQL operators + - * / < <= = <> >= >, not
-    # called by name; promote alongside the constructors in priority 9).
+    # called by name; promote alongside the constructors when the
+    # user-manual chapter is written).
     'random_variable_plus', 'random_variable_minus',
     'random_variable_times', 'random_variable_div',
     'random_variable_neg',

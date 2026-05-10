@@ -9,7 +9,25 @@
 #include <exception>
 #include <string>
 
+#include "Circuit.h"  // CircuitException
+
 namespace provsql {
+
+double parseDoubleStrict(const std::string &s)
+{
+  if (s.empty())
+    throw CircuitException("Empty gate_value extra");
+  std::size_t idx = 0;
+  double v;
+  try {
+    v = std::stod(s, &idx);
+  } catch (const std::exception &) {
+    throw CircuitException("Cannot parse gate_value extra as double: " + s);
+  }
+  if (idx != s.size())
+    throw CircuitException("Trailing characters in gate_value extra: " + s);
+  return v;
+}
 
 namespace {
 
