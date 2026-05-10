@@ -21,17 +21,47 @@ INSERT INTO rch VALUES
   ('beta',  -5), ('beta',   2);
 SELECT add_provenance('rch');
 
--- (1) HAVING count(*) >= 0 -- always true (count is in [0, n] so
--- always >= 0).  Should resolve to gate_one and produce a row for
--- every group with probability 1.0.
-CREATE TABLE rch_count_ge0 AS
+-- (1) HAVING count(*) >= 0 -- TRUE for every non-empty subset, but
+-- in ProvSQL's possible-world semantics the empty subset is
+-- excluded from valid worlds, so the cmp's value is "the group is
+-- non-empty" (a non-constant), NOT gate_one.  RangeCheck must
+-- therefore NOT resolve this to gate_one.
+--
+-- With the all-prob-1 inputs above, group existence happens to be
+-- 1.0, which would mask the difference between gate_one and the
+-- correct group-existence rewrite -- so this section also tests
+-- with prob=0.5 inputs, where the two outcomes diverge.
+CREATE TABLE rch_count_ge0_full AS
   SELECT category, probability_evaluate(provenance(),
                                          'monte-carlo', '1') AS p
     FROM rch GROUP BY category HAVING count(*) >= 0;
-SELECT remove_provenance('rch_count_ge0');
-SELECT category, p = 1.0 AS exact_one
-  FROM rch_count_ge0 ORDER BY category;
-DROP TABLE rch_count_ge0;
+SELECT remove_provenance('rch_count_ge0_full');
+SELECT category, p = 1.0 AS exact_one_when_prob_one
+  FROM rch_count_ge0_full ORDER BY category;
+DROP TABLE rch_count_ge0_full;
+
+-- Soundness check: with prob=0.5 inputs, group existence
+-- = 1 - 0.5^n (alpha n=3 -> 0.875; beta n=2 -> 0.75).
+-- A wrongly-resolved gate_one would always give 1.0 instead.
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM rch;
+END $$;
+SET provsql.monte_carlo_seed = 42;
+CREATE TABLE rch_count_ge0_sound AS
+  SELECT category,
+         probability_evaluate(provenance(), 'monte-carlo', '50000') AS p
+    FROM rch GROUP BY category HAVING count(*) >= 0;
+RESET provsql.monte_carlo_seed;
+SELECT remove_provenance('rch_count_ge0_sound');
+SELECT category,
+       abs(p - CASE category WHEN 'alpha' THEN 0.875
+                             WHEN 'beta'  THEN 0.75 END) < 0.02
+       AS within_tolerance
+  FROM rch_count_ge0_sound ORDER BY category;
+DROP TABLE rch_count_ge0_sound;
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 1.0) FROM rch;
+END $$;
 
 -- (2) HAVING count(*) > 100 -- always false (alpha has 3 rows,
 -- beta has 2; both well below 100).  Resolves to gate_zero and

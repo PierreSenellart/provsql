@@ -5,7 +5,14 @@ add_provenance
 remove_provenance
 
 (1 row)
-category|exact_one
+category|exact_one_when_prob_one
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|within_tolerance
 alpha|t
 beta|t
 (2 rows)

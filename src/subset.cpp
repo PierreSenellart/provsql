@@ -218,6 +218,15 @@ static std::vector<mask_t> count_enum(const std::vector<long> &values, int m, Co
     ++m;
     [[fallthrough]];
   case ComparisonOperator::GE:
+    /* Skip the empty subset, mirroring the // Skip empty world rule
+     * in @c all_worlds and @c enumerate_exhaustive: a HAVING
+     * predicate on an empty group is undefined in SQL semantics
+     * (the group does not exist, so HAVING is not evaluated), so
+     * the @c count >= 0 / @c count > -K family must collapse to
+     * "group is non-empty" rather than to a universal tautology
+     * (probability 1 in every world).  Equivalently, m is clamped
+     * to at least 1 here. */
+    if (m < 1) m = 1;
     if(absorptive) {
       upset=true;
       add_exact_k(m);

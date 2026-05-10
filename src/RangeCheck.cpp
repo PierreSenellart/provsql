@@ -216,23 +216,30 @@ double decideCmp(const Interval &diff, ComparisonOperator op)
  *
  * Computes a value-interval for the aggregate from its semimod
  * children's per-row values, then folds the comparator like the
- * non-agg path.  The crucial wrinkle is the empty-subset case:
- * - @c COUNT of an empty subset is @c 0 (PG semantics), so its
- *   interval @c [0, n] is exact across every possible world and
- *   both TRUE and FALSE decisions are sound.
- * - @c SUM, @c MIN, @c MAX of an empty subset are @c NULL.  Any
- *   cmp on @c NULL evaluates to FALSE in HAVING, regardless of the
- *   non-empty bound.  So a "TRUE for every world" decision derived
- *   from the bound is unsound &ndash; in the empty world the cmp
- *   would be FALSE, contradicting the bound's claim.  We therefore
- *   accept only FALSE decisions (which are conservative: the cmp is
- *   FALSE in non-empty worlds via the bound, and FALSE in the
- *   empty world via NULL).
+ * non-agg path &ndash; but accepts only FALSE decisions, never
+ * TRUE.  The reason is structural to ProvSQL's HAVING semantics:
+ * the per-aggregator subset enumerators in @c subset.cpp
+ * (@c count_enum, @c sum_dp, @c enumerate_exhaustive) all skip
+ * the empty subset, matching SQL's "no group, no HAVING" rule.
+ * So a HAVING cmp's value is the OR over the @em non-empty subsets
+ * where the predicate holds.
  *
- * Other aggregators (@c AVG, @c AND, @c OR, @c CHOOSE,
+ * - When no non-empty subset satisfies the predicate (the bound is
+ *   strictly disjoint from the threshold on the right side of the
+ *   comparator), the cmp value is exactly @c 0 = @c gate_zero.
+ *   FALSE decision: sound.
+ * - When every non-empty subset satisfies the predicate, the cmp
+ *   value equals "the group is non-empty" &ndash; the OR over the
+ *   children's k_gates &ndash; which is a non-constant Boolean
+ *   expression, @em not @c gate_one.  Returning TRUE here would
+ *   replace the cmp with @c gate_one and over-count probability
+ *   mass from the empty world (where the group does not exist),
+ *   so TRUE decisions are blocked uniformly across all aggregators.
+ *
+ * Aggregators we don't bound (@c AVG, @c AND, @c OR, @c CHOOSE,
  * @c ARRAY_AGG, @c NONE) fall through to undecidable.
  *
- * @return @c 0.0 / @c 1.0 if decided, @c NaN otherwise.
+ * @return @c 0.0 if decided to FALSE, @c NaN otherwise.
  */
 double decideAggVsConstCmp(const GenericCircuit &gc, gate_t agg_gate,
                            ComparisonOperator op, double const_val,
@@ -259,30 +266,18 @@ double decideAggVsConstCmp(const GenericCircuit &gc, gate_t agg_gate,
   }
 
   Interval val_interval = Interval::all();
-  bool may_be_null = false;
 
   switch (aop) {
     case AggregationOperator::COUNT:
-      /* Count is the number of contributing children; always in
-       * @c [0, n_children], never NULL even for the empty subset. */
       val_interval = {0.0, static_cast<double>(values.size())};
-      may_be_null = false;
       break;
     case AggregationOperator::SUM: {
-      /* Sum across an arbitrary subset is bounded by the sum of the
-       * negative values (when only negatives are selected) and the
-       * sum of the positive values (when only positives are
-       * selected).  Include @c 0 explicitly for the empty subset
-       * even though PG returns NULL for it &ndash; including 0
-       * keeps the bounds correct for the non-empty cases too, and
-       * @c may_be_null below blocks unsound TRUE decisions. */
       double sum_neg = 0.0, sum_pos = 0.0;
       for (double v : values) {
         if (v < 0.0) sum_neg += v;
         else          sum_pos += v;
       }
       val_interval = {std::min(0.0, sum_neg), std::max(0.0, sum_pos)};
-      may_be_null = true;
       break;
     }
     case AggregationOperator::MIN:
@@ -291,7 +286,6 @@ double decideAggVsConstCmp(const GenericCircuit &gc, gate_t agg_gate,
         return std::numeric_limits<double>::quiet_NaN();
       val_interval = {*std::min_element(values.begin(), values.end()),
                       *std::max_element(values.begin(), values.end())};
-      may_be_null = true;
       break;
     default:
       /* AVG / AND / OR / CHOOSE / ARRAY_AGG / NONE: not decidable
@@ -304,10 +298,12 @@ double decideAggVsConstCmp(const GenericCircuit &gc, gate_t agg_gate,
   Interval diff = sub(lhs, rhs);
   double p = decideCmp(diff, op);
 
-  if (std::isnan(p)) return p;
-  if (may_be_null && p == 1.0)
-    return std::numeric_limits<double>::quiet_NaN();
-  return p;
+  /* Only FALSE decisions are sound (see doc comment).  TRUE
+   * decisions, if accepted, would replace the cmp with gate_one
+   * and credit probability to the empty subset, which provsql_having
+   * deliberately excludes from valid worlds. */
+  if (p == 0.0) return 0.0;
+  return std::numeric_limits<double>::quiet_NaN();
 }
 
 /**
