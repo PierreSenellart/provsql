@@ -15,5 +15,5 @@ Berlin|1.34|1.34|7.93|5.54|6.56
 New York|1.07|1.07|1.79|1.64|1.71
 Paris|1.63|1.63|8.14|4.55|5.56
 (3 rows)
-ERROR:  invalid input syntax for agg_token: "toto"
-ERROR:  Cannot compute expected value for aggregation function avg
+ERROR:  moment() is not yet supported for input type text
+ERROR:  Cannot compute moment for aggregation function avg

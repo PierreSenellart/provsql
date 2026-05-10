@@ -2112,16 +2112,25 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   'provsql','probability_evaluate' LANGUAGE C STABLE;
 
 /**
- * @brief Compute the expected value of an aggregate expression
+ * @brief Compute the expected value of a probabilistic scalar
  *
- * Computes E[input | prov], the expected value of an aggregate result
- * conditioned on a provenance expression. Supports SUM, MIN, and MAX
- * aggregation functions.
+ * Computes E[input | prov] for either an @c agg_token (discrete
+ * SUM/MIN/MAX aggregation over Boolean-input gate_agg circuits, with
+ * @c prov as the Boolean conditioning event) or a @c random_variable
+ * (continuous distribution, traversed by the analytical / MC
+ * evaluator from @c Expectation.cpp).
  *
- * @param input aggregate expression (agg_token) to compute the expected value of
+ * Implementation: thin wrapper over @c moment(input, 1, prov, method,
+ * arguments).  Both branches converge on the same machinery; the
+ * agg_token side computes E[X] as the @f$k=1@f$ instance of the
+ * @f$n^k@f$-tuple enumeration in @c agg_raw_moment, the
+ * random_variable side calls @c compute_expectation through
+ * @c rv_moment.
+ *
+ * @param input aggregate expression or random variable to compute E[·] of
  * @param prov provenance condition (defaults to gate_one(), i.e., unconditional)
- * @param method knowledge compilation method
- * @param arguments additional arguments for the method
+ * @param method knowledge compilation method (agg_token path only)
+ * @param arguments additional arguments for the method (agg_token path only)
  */
 CREATE OR REPLACE FUNCTION expected(
   input ANYELEMENT,
@@ -2129,51 +2138,359 @@ CREATE OR REPLACE FUNCTION expected(
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS $$
+  SELECT moment(input, 1, prov, method, arguments);
+$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Internal: shared C entry point for variance / moment / central_moment.
+ *
+ * The @c expected() SQL function reaches the Expectation evaluator
+ * through @c provenance_evaluate_compiled(..., 'expectation', ...).
+ * The variance / raw-moment / central-moment SQL functions need an
+ * extra @p k integer argument that does not fit that dispatcher's
+ * signature, so they go through this dedicated entry point.  Returns
+ * E[X^k] when @p central is FALSE, or E[(X - E[X])^k] when TRUE.
+ */
+CREATE OR REPLACE FUNCTION rv_moment(token uuid, k integer, central boolean)
+  RETURNS double precision
+  AS 'provsql','rv_moment' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Compute the raw moment E[X^k | prov] of an agg_token aggregate
+ *
+ * Sister of @c expected() for the agg_token side of the polymorphic
+ * @c moment / @c variance / @c central_moment dispatch.  Supports the
+ * same aggregation functions as @c expected: SUM (which COUNT
+ * normalises to at the gate level via @c Aggregation.cpp:322), MIN,
+ * and MAX.
+ *
+ * Strategy:
+ * - <b>SUM</b>: with X = Σᵢ Iᵢ·vᵢ (Iᵢ the per-row inclusion indicator,
+ *   vᵢ the row's value), expanding X^k and taking expectation gives
+ *   @f$E[X^k] = \sum_{(i_1,\ldots,i_k) \in \{1..n\}^k} v_{i_1}\cdots v_{i_k}
+ *               \cdot P(\bigwedge_{i \in \text{distinct}(i_1..i_k)} I_i)@f$.
+ *   We enumerate the @f$n^k@f$ tuples, conjoin the distinct inclusion
+ *   tokens (and @p prov when conditioning), and evaluate the
+ *   probability via @c probability_evaluate.
+ * - <b>MIN / MAX</b>: replace @c v with @c v^k in the rank-based
+ *   enumeration that @c expected already uses; @c MAX is handled by
+ *   sign-flipping per the existing trick (negate vs.  rerank), with
+ *   the outer multiplier becoming @f$(-1)^k@f$ instead of just @f$-1@f$.
+ *
+ * Cost: SUM is @f$O(n^k)@f$ probability evaluations -- tractable for
+ * small @p k or small @p n; for larger sizes, prefer reaching for the
+ * sampler.  MIN / MAX stay linear in @p n.
+ */
+CREATE OR REPLACE FUNCTION agg_raw_moment(
+  token agg_token,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
 DECLARE
   aggregation_function VARCHAR;
-  token agg_token;
-  result DOUBLE PRECISION;
-  total_probability DOUBLE PRECISION;
+  child_pairs uuid[];
+  pair_children uuid[];
+  n integer;
+  i integer;
+  j integer;
+  vals float8[];
+  toks uuid[];
+  total float8;
+  total_probability float8;
+  tup integer[];
+  d integer;
+  prod_v float8;
+  distinct_tok uuid[];
+  conj_token uuid;
+  prob float8;
+  sign_max float8;
 BEGIN
-  token := input::agg_token;
-  IF token IS NULL THEN
+  IF token IS NULL OR k IS NULL THEN
     RETURN NULL;
   END IF;
+  IF k < 0 THEN
+    RAISE EXCEPTION 'agg_raw_moment(): k must be non-negative (got %)', k;
+  END IF;
   IF get_gate_type(token) <> 'agg' THEN
-    RAISE EXCEPTION USING MESSAGE='Wrong gate type for expected value computation';
+    RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation';
   END IF;
-  SELECT pp.proname::varchar FROM pg_proc pp WHERE oid=(get_infos(token)).info1 INTO aggregation_function;
+  IF k = 0 THEN
+    RETURN 1;
+  END IF;
+
+  SELECT pp.proname::varchar FROM pg_proc pp
+    WHERE oid=(get_infos(token)).info1
+    INTO aggregation_function;
+
+  child_pairs := get_children(token);
+  n := COALESCE(array_length(child_pairs, 1), 0);
+
   IF aggregation_function = 'sum' THEN
-    -- Expected value and summation operators commute
-    SELECT SUM(probability_evaluate((get_children(c))[1], method, arguments) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION))
-    FROM UNNEST(get_children(token)) AS c INTO result;
-  ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
-    -- The entire distribution is of linear size, can be easily computed
-    WITH tok_value AS (
-      SELECT (get_children(c))[1] AS tok, (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
-      FROM UNNEST(get_children(token)) AS c
-    ) SELECT probability_evaluate(provenance_monus(prov, provenance_plus(ARRAY_AGG(tok)))) FROM tok_value INTO total_probability;
-      IF total_probability > epsilon() THEN
-        result := (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST('Infinity' AS DOUBLE PRECISION);
-      ELSE
-        WITH tok_value AS (
-          SELECT (get_children(c))[1] AS tok, (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
-          FROM UNNEST(get_children(token)) AS c
-        ) SELECT
-        (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * SUM(p*v) FROM
-          (SELECT t1.v AS v, probability_evaluate(provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),provenance_plus(ARRAY_AGG(t2.tok))), method, arguments) AS p
-          FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
-          GROUP BY t1.v) t INTO result;
+    -- Trivial empty aggregation: SUM = 0, so SUM^k = 0 for k >= 1.
+    -- Note: agg_token semantics treat the "no row included" world as
+    -- SUM = 0, so this stays consistent with k = 1 (= expected()).
+    IF n = 0 THEN
+      RETURN 0;
+    END IF;
+
+    -- Extract per-child token + value arrays.
+    vals := ARRAY[]::float8[];
+    toks := ARRAY[]::uuid[];
+    FOR i IN 1..n LOOP
+      pair_children := get_children(child_pairs[i]);
+      toks := toks || pair_children[1];
+      vals := vals || CAST(get_extra(pair_children[2]) AS float8);
+    END LOOP;
+
+    -- Enumerate all k-tuples (i_1, ..., i_k) in {1..n}^k.  tup is the
+    -- current tuple; we step through them in lexicographic order.
+    total := 0;
+    tup := array_fill(1, ARRAY[k]);
+    LOOP
+      prod_v := 1;
+      FOR j IN 1..k LOOP
+        prod_v := prod_v * vals[tup[j]];
+      END LOOP;
+
+      SELECT array_agg(DISTINCT toks[idx]) INTO distinct_tok
+        FROM unnest(tup) AS idx;
+
+      IF prov <> gate_one() THEN
+        distinct_tok := distinct_tok || prov;
       END IF;
+      conj_token := provenance_times(VARIADIC distinct_tok);
+      prob := probability_evaluate(conj_token, method, arguments);
+
+      total := total + prod_v * prob;
+
+      d := k;
+      WHILE d >= 1 AND tup[d] = n LOOP
+        tup[d] := 1;
+        d := d - 1;
+      END LOOP;
+      EXIT WHEN d = 0;
+      tup[d] := tup[d] + 1;
+    END LOOP;
+  ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+    -- Rank enumeration: per distinct value v, P(MIN = v) is the
+    -- probability that some t_i with v_i=v is true and all t_j with
+    -- smaller v are false.  For MAX we negate values so the same
+    -- "smaller-than" rank logic computes MIN-of-negated, then flip.
+    -- The outer multiplier picks up the right sign for the k-th moment
+    -- of MAX: E[MAX^k] = (-1)^k * E[MIN(-v)^k], so sign_max = (-1)^k.
+    sign_max := CASE
+                  WHEN aggregation_function = 'max'
+                  THEN power(-1::float8, k)
+                  ELSE 1
+                END;
+
+    -- ±Infinity sink: positive probability of "no row included" makes
+    -- MIN = +Inf and MAX = -Inf.  For MIN^k that's +Inf for any k>=1;
+    -- for MAX^k it's (-1)^k * (+Inf) = ±Inf depending on k's parity.
+    WITH tok_value AS (
+      SELECT (get_children(c))[1] AS tok,
+             (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
+               * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
+      FROM UNNEST(child_pairs) AS c
+    ) SELECT probability_evaluate(provenance_monus(prov, provenance_plus(ARRAY_AGG(tok))))
+        FROM tok_value
+        INTO total_probability;
+
+    IF total_probability > epsilon() THEN
+      total := sign_max * 'Infinity'::float8;
+    ELSE
+      WITH tok_value AS (
+        SELECT (get_children(c))[1] AS tok,
+               (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
+                 * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
+        FROM UNNEST(child_pairs) AS c
+      ) SELECT sign_max * SUM(p * power(v, k)) FROM (
+          SELECT t1.v AS v,
+            probability_evaluate(
+              provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                               provenance_plus(ARRAY_AGG(t2.tok))),
+              method, arguments) AS p
+          FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
+          GROUP BY t1.v) tmp
+        INTO total;
+    END IF;
   ELSE
-    RAISE EXCEPTION USING MESSAGE='Cannot compute expected value for aggregation function ' || aggregation_function;
+    RAISE EXCEPTION USING MESSAGE=
+      'Cannot compute moment for aggregation function ' || aggregation_function;
   END IF;
-  IF prov <> gate_one() AND result <> 0. AND result <> 'Infinity' AND result <> '-Infinity' THEN
-    result := result/probability_evaluate(prov, method, arguments);
+
+  -- Conditional normalisation: E[X^k · 1_A] / P(A) = E[X^k | A].
+  IF prov <> gate_one()
+     AND total <> 0
+     AND total <> 'Infinity'::float8
+     AND total <> '-Infinity'::float8 THEN
+    total := total / probability_evaluate(prov, method, arguments);
   END IF;
-  RETURN result;
+
+  RETURN total;
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;;
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Compute the variance Var[X | prov] of a probabilistic scalar
+ *
+ * Polymorphic dispatcher that mirrors @c expected: @c random_variable
+ * inputs go through the analytical / MC evaluator
+ * (@c rv_moment(uuid, 2, true)); @c agg_token inputs go through the
+ * @c agg_raw_moment helper, computing
+ * @f$\mathrm{Var}[X|A] = E[X^2|A] - E[X|A]^2@f$.  Conditioning on
+ * @c prov is supported for @c agg_token (matching @c expected) but
+ * not yet for @c random_variable.
+ */
+CREATE OR REPLACE FUNCTION variance(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  m1 float8;
+  m2 float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF prov <> gate_one() THEN
+      RAISE EXCEPTION 'variance(): conditioning on prov is not yet supported for random_variable inputs';
+    END IF;
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    RETURN provsql.rv_moment(
+      provsql.random_variable_uuid(input::random_variable), 2, true);
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    m1 := agg_raw_moment(input::agg_token, 1, prov, method, arguments);
+    m2 := agg_raw_moment(input::agg_token, 2, prov, method, arguments);
+    IF m1 IS NULL OR m2 IS NULL THEN
+      RETURN NULL;
+    END IF;
+    RETURN m2 - m1 * m1;
+  END IF;
+
+  RAISE EXCEPTION 'variance() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Compute the raw moment E[X^k | prov] of a probabilistic scalar
+ *
+ * @c k must be a non-negative integer.  @c k = 0 returns 1; @c k = 1
+ * is equivalent to @c expected(input).  Polymorphic dispatcher: routes
+ * @c random_variable through @c rv_moment (analytical / MC) and
+ * @c agg_token through @c agg_raw_moment (SUM via tuple enumeration,
+ * MIN / MAX via rank enumeration).
+ */
+CREATE OR REPLACE FUNCTION moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF prov <> gate_one() THEN
+      RAISE EXCEPTION 'moment(): conditioning on prov is not yet supported for random_variable inputs';
+    END IF;
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    RETURN provsql.rv_moment(
+      provsql.random_variable_uuid(input::random_variable), k, false);
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    RETURN agg_raw_moment(input::agg_token, k, prov, method, arguments);
+  END IF;
+
+  RAISE EXCEPTION 'moment() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Compute the central moment E[(X - E[X|prov])^k | prov]
+ *
+ * @c k = 0 returns 1; @c k = 1 returns 0; @c k = 2 is equivalent to
+ * @c variance(input, prov, ...).  Polymorphic dispatcher: routes
+ * @c random_variable through @c rv_moment, and @c agg_token through
+ * the binomial expansion
+ * @f$E[(X-\mu)^k|A] = \sum_{i=0}^{k} \binom{k}{i} (-\mu)^{k-i} E[X^i|A]@f$
+ * with @f$\mu = E[X|A]@f$, where each @f$E[X^i|A]@f$ comes from
+ * @c agg_raw_moment.
+ */
+CREATE OR REPLACE FUNCTION central_moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  mu float8;
+  total float8;
+  i integer;
+  raw_i float8;
+  binom float8;
+  -- iterative binomial coefficient C(k, i)
+  k_double float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF prov <> gate_one() THEN
+      RAISE EXCEPTION 'central_moment(): conditioning on prov is not yet supported for random_variable inputs';
+    END IF;
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    RETURN provsql.rv_moment(
+      provsql.random_variable_uuid(input::random_variable), k, true);
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k < 0 THEN
+      RAISE EXCEPTION 'central_moment(): k must be non-negative (got %)', k;
+    END IF;
+    IF k = 0 THEN RETURN 1; END IF;
+    IF k = 1 THEN RETURN 0; END IF;
+
+    mu := agg_raw_moment(input::agg_token, 1, prov, method, arguments);
+    IF mu IS NULL THEN RETURN NULL; END IF;
+    -- mu may be ±Infinity for empty MIN / MAX with positive empty
+    -- probability; central_moment is undefined in that case.
+    IF mu = 'Infinity'::float8 OR mu = '-Infinity'::float8 THEN
+      RETURN mu;
+    END IF;
+
+    total := 0;
+    binom := 1;  -- C(k, 0)
+    k_double := k;
+    FOR i IN 0..k LOOP
+      raw_i := agg_raw_moment(input::agg_token, i, prov, method, arguments);
+      IF raw_i IS NULL THEN RETURN NULL; END IF;
+      total := total + binom * power(-mu, k - i) * raw_i;
+      -- C(k, i+1) = C(k, i) * (k - i) / (i + 1)
+      IF i < k THEN
+        binom := binom * (k_double - i) / (i + 1);
+      END IF;
+    END LOOP;
+    RETURN total;
+  END IF;
+
+  RAISE EXCEPTION 'central_moment() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Compute the Shapley value of an input variable

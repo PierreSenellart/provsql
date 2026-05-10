@@ -71,6 +71,7 @@ int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.ve
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
+int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
@@ -4108,6 +4109,26 @@ void _PG_init(void) {
                           &provsql_monte_carlo_seed,
                           -1,
                           -1,
+                          INT_MAX,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
+  DefineCustomIntVariable("provsql.rv_mc_samples",
+                          "Default sample count for analytical-evaluator MC fallbacks.",
+                          "Used when an analytical evaluator (Expectation, "
+                          "future hybrid evaluator, etc.) cannot decompose a "
+                          "sub-circuit and needs to fall back to Monte Carlo. "
+                          "Default 10000. Set to 0 to disable the fallback "
+                          "entirely: callers raise an exception rather than "
+                          "sampling, which is useful when only analytical "
+                          "answers are acceptable. Unrelated to "
+                          "probability_evaluate(..., 'monte-carlo', n) where "
+                          "the sample count is an explicit argument.",
+                          &provsql_rv_mc_samples,
+                          10000,
+                          0,
                           INT_MAX,
                           PGC_USERSET,
                           0,

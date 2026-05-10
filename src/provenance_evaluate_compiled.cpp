@@ -50,6 +50,7 @@ PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
 #include <unordered_map>
 #include <algorithm>
 
+#include "Expectation.h"
 #include "having_semantics.hpp"
 #include "provenance_evaluate_compiled.hpp"
 #include "semiring/Boolean.h"
@@ -258,6 +259,18 @@ static Datum provenance_evaluate_compiled_internal
     gate_t root;
     BooleanCircuit bc = getBooleanCircuit(token, root);
     return pec_boolexpr(bc, root, nullptr);
+  }
+
+  // The expectation evaluator reads its leaves directly from the
+  // gate_rv / gate_value extra fields; no leaf-mapping table is
+  // involved.  Bypass the SPI prelude.
+  if(semiring=="expectation") {
+    if(type != constants.OID_TYPE_FLOAT)
+      throw CircuitException(
+              "Unknown element type for expectation: must be float8");
+    GenericCircuit gc = getGenericCircuit(token);
+    auto root = gc.getGate(uuid2string(token));
+    return Float8GetDatum(provsql::compute_expectation(gc, root));
   }
 
   GenericCircuit c = getGenericCircuit(token);

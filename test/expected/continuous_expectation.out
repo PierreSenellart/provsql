@@ -1,0 +1,94 @@
+\set ECHO none
+const_mean
+7.25
+(1 row)
+const_variance
+0
+(1 row)
+normal_mean
+2.5
+(1 row)
+normal_variance
+0.25
+(1 row)
+uniform_mean
+2
+(1 row)
+uniform_variance_exact
+t
+(1 row)
+exp_mean
+0.5
+(1 row)
+exp_variance
+0.25
+(1 row)
+sum_indep_normals_mean
+t
+(1 row)
+affine_mean
+t
+(1 row)
+neg_mean
+t
+(1 row)
+minus_indep_mean
+t
+(1 row)
+sum_indep_variance
+t
+(1 row)
+minus_indep_variance
+t
+(1 row)
+neg_variance
+t
+(1 row)
+div_const_variance
+t
+(1 row)
+times_indep_mean|times_indep_variance
+t|t
+(1 row)
+m0|m1|m2|m3|m4|m5|m6
+1|0|1|0|3|0|15
+(1 row)
+m0|m1_ok|m2_ok|m3_ok|m4_ok
+1|t|t|t|t
+(1 row)
+m0|m1|m2|m3|m4
+1|1|2|6|24
+(1 row)
+c0|c1|c2|c3_zero|c4_ok
+1|0|4|t|t
+(1 row)
+plus_independent_m2
+t
+(1 row)
+NOTICE:  expected_times_shared_raises_specific=t
+NOTICE:  variance_times_shared_raises_specific=t
+NOTICE:  moment_times_shared_raises_specific=t
+NOTICE:  expected_div_nonconst_raises_specific=t
+mc_fallback_mean|mc_fallback_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  agg_expected_sum=60
+NOTICE:  agg_sum_expected=22
+NOTICE:  agg_sum_variance=310
+NOTICE:  agg_sum_moment_2=794
+NOTICE:  agg_sum_moment_0=1
+NOTICE:  agg_sum_moment_1_eq_expected=t
+NOTICE:  agg_sum_central_2_eq_variance=t
+NOTICE:  agg_central_0=1
+NOTICE:  agg_central_1=0
+NOTICE:  agg_min_expected_finite=t
+NOTICE:  agg_max_expected_finite=t
+NOTICE:  agg_min_variance_consistent=t
+NOTICE:  agg_max_variance_consistent=t
+NOTICE:  agg_max_m3_nonneg=t
+NOTICE:  agg_max_m4_nonneg=t
+NOTICE:  agg_max_lyapunov=t
+NOTICE:  agg_avg_moment_raises=t

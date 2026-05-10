@@ -214,6 +214,20 @@ extern char *provsql_tool_search_path;
  * end-to-end. */
 extern int provsql_monte_carlo_seed;
 
+/** Default sample count for Monte Carlo fallbacks when an analytical
+ * evaluator (Expectation, future hybrid evaluator, ...) cannot
+ * decompose a sub-circuit structurally.  Unlike
+ * @c probability_evaluate(token, 'monte-carlo', n) where the sample
+ * count is an explicit argument, these implicit MC paths have no
+ * natural place to take @c n from.
+ *
+ * Set by the @c provsql.rv_mc_samples run-time configuration
+ * parameter; default 10000.  Setting it to 0 disables the implicit
+ * MC fallback entirely: callers must then raise an exception rather
+ * than sampling.  Useful for callers that want to guarantee
+ * analytical-only evaluation. */
+extern int provsql_rv_mc_samples;
+
 /** @brief When @c true (default), every @c GenericCircuit returned by
  * @c getGenericCircuit is run through the universal cmp-resolution
  * passes (RangeCheck for now, plus any future passes that decide

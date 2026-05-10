@@ -38,6 +38,8 @@
 #ifndef PROVSQL_MONTE_CARLO_SAMPLER_H
 #define PROVSQL_MONTE_CARLO_SAMPLER_H
 
+#include <vector>
+
 #include "GenericCircuit.h"
 
 extern "C" {
@@ -68,6 +70,27 @@ double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples);
  * @c BooleanCircuit path and the RV-aware sampler in this file.
  */
 bool circuitHasRV(const GenericCircuit &gc, gate_t root);
+
+/**
+ * @brief Sample a scalar sub-circuit @p samples times and return the draws.
+ *
+ * @p root must yield a scalar (@c gate_value, @c gate_rv, or @c gate_arith
+ * over scalar children); otherwise a @c CircuitException is thrown.  Each
+ * iteration uses a fresh per-iteration memo cache so that repeated
+ * occurrences of the same @c gate_rv UUID inside an arithmetic expression
+ * share their draw within an iteration but not across iterations.
+ *
+ * The RNG is seeded from @c provsql.monte_carlo_seed exactly like
+ * @c monteCarloRV; pinning the GUC makes the returned vector reproducible.
+ *
+ * Used as the universal MC fallback by the analytical evaluators
+ * (@c Expectation, @c HybridEvaluator) when structural shortcuts cannot
+ * decide a sub-expression.  Returning the raw draws (rather than a
+ * single statistic) lets callers compute any combination of moments
+ * from a single sampling pass.
+ */
+std::vector<double> monteCarloScalarSamples(
+  const GenericCircuit &gc, gate_t root, unsigned samples);
 
 }  // namespace provsql
 

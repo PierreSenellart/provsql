@@ -5,6 +5,7 @@
 #include "RandomVariable.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <string>
@@ -120,6 +121,74 @@ double analytical_variance(const DistributionSpec &d)
     case DistKind::Exponential: {
       const double lambda = d.p1;
       return 1.0 / (lambda * lambda);
+    }
+  }
+  return 0.0;
+}
+
+namespace {
+
+double factorial(unsigned k)
+{
+  double r = 1.0;
+  for (unsigned i = 2; i <= k; ++i) r *= static_cast<double>(i);
+  return r;
+}
+
+double binomial_coeff(unsigned n, unsigned k)
+{
+  if (k > n) return 0.0;
+  if (k > n - k) k = n - k;
+  double r = 1.0;
+  for (unsigned i = 1; i <= k; ++i) {
+    r *= static_cast<double>(n - i + 1);
+    r /= static_cast<double>(i);
+  }
+  return r;
+}
+
+// (j-1)!! with the empty-product convention (-1)!! = 1.
+//   j = 0  ->  1
+//   j = 2  ->  1!! = 1
+//   j = 4  ->  3!! = 3
+//   j = 6  ->  5!! = 15
+double double_factorial_minus_one(unsigned j)
+{
+  if (j == 0) return 1.0;
+  double r = 1.0;
+  for (unsigned i = 1; i < j; i += 2) r *= static_cast<double>(i);
+  return r;
+}
+
+}  // namespace
+
+double analytical_raw_moment(const DistributionSpec &d, unsigned k)
+{
+  if (k == 0) return 1.0;
+  if (k == 1) return analytical_mean(d);
+  switch (d.kind) {
+    case DistKind::Normal: {
+      const double mu    = d.p1;
+      const double sigma = d.p2;
+      // E[X^k] = sum_{j=0,2,...}^{k} C(k,j) mu^(k-j) sigma^j (j-1)!!
+      double total = 0.0;
+      for (unsigned j = 0; j <= k; j += 2) {
+        total += binomial_coeff(k, j)
+               * std::pow(mu, static_cast<double>(k - j))
+               * std::pow(sigma, static_cast<double>(j))
+               * double_factorial_minus_one(j);
+      }
+      return total;
+    }
+    case DistKind::Uniform: {
+      const double a   = d.p1;
+      const double b   = d.p2;
+      const double kp1 = static_cast<double>(k + 1);
+      return (std::pow(b, kp1) - std::pow(a, kp1)) / (kp1 * (b - a));
+    }
+    case DistKind::Exponential: {
+      const double lambda = d.p1;
+      return factorial(k) / std::pow(lambda, static_cast<double>(k));
     }
   }
   return 0.0;

@@ -95,6 +95,20 @@ double analytical_mean(const DistributionSpec &d);
  */
 double analytical_variance(const DistributionSpec &d);
 
+/**
+ * @brief Closed-form raw moment @f$E[X^k]@f$ for a basic distribution.
+ *
+ * - Normal(μ, σ):
+ *   @f$\sum_{j=0,2,\ldots}^{k} \binom{k}{j} \mu^{k-j} \sigma^j (j-1)!!@f$
+ *   (odd-@f$j@f$ terms vanish since central moments of @f$N(0, \sigma)@f$
+ *   are zero for odd @f$j@f$).
+ * - Uniform(a, b):    @f$(b^{k+1} - a^{k+1}) / ((k+1)(b-a))@f$.
+ * - Exponential(λ):   @f$k! / \lambda^k@f$.
+ *
+ * Returns 1 for @f$k = 0@f$ and @c analytical_mean for @f$k = 1@f$.
+ */
+double analytical_raw_moment(const DistributionSpec &d, unsigned k);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_RANDOM_VARIABLE_H

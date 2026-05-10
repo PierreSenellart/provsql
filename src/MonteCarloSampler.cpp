@@ -243,6 +243,25 @@ double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples)
   return success * 1.0 / samples;
 }
 
+std::vector<double> monteCarloScalarSamples(
+  const GenericCircuit &gc, gate_t root, unsigned samples)
+{
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  std::vector<double> out;
+  out.reserve(samples);
+  for(unsigned i = 0; i < samples; ++i) {
+    sampler.resetIteration();
+    out.push_back(sampler.evalScalar(root));
+
+    if(provsql_interrupted)
+      throw CircuitException(
+              "Interrupted after " + std::to_string(i + 1) + " samples");
+  }
+  return out;
+}
+
 bool circuitHasRV(const GenericCircuit &gc, gate_t root)
 {
   std::unordered_set<gate_t> seen;
