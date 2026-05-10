@@ -1308,97 +1308,12 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
   return false;
 }
 
-/**
- * @brief Lift RV comparisons out of @p q->jointree->quals into a list
- *        of UUID-yielding expressions.
- *
- * Mirrors @c migrate_aggtoken_quals_to_having's split of a WHERE
- * clause, lifting RV-bearing conjuncts to provenance instead of to
- * HAVING.  Supported shapes:
- *
- * - Whole WHERE is a Boolean combination of RV comparisons (and only
- *   those): the entire predicate is lifted, the WHERE is dropped.
- * - Top-level AND with a mix of conjuncts: each conjunct that mentions
- *   any RV cmp must be a pure RV expression (verified by
- *   @c check_expr_on_rv); pure RV conjuncts are lifted, the others
- *   stay in WHERE to filter rows in the usual way.
- *
- * Unsupported shapes (mixed RV / non-RV inside the same Boolean
- * sub-expression, e.g. <tt>WHERE rv > 3 OR column = 2</tt>) raise an
- * error here, before the rest of the planner hook sees an inconsistent
- * predicate.  Lifting them would require treating the deterministic
- * sub-expression as a Boolean RV gate; the natural place for that is
- * priority 7 (hybrid evaluation), and until then a clear error is
- * better than a half-rewritten plan.
- *
- * @param constants  Extension OID cache.
- * @param q          Query whose WHERE may be mutated in place.
- * @return List of @c FuncExpr nodes (one per lifted conjunct), each
- *         producing a @c UUID; @c NIL if no RV comparison was found.
- */
-static List *
-extract_rv_cmps_from_quals(const constants_t *constants, Query *q)
-{
-  List *extracted = NIL;
-
-  if (!q->jointree || !q->jointree->quals)
-    return NIL;
-
-  if (!expr_contains_rv_cmp(q->jointree->quals, constants))
-    return NIL;
-
-  /* Whole WHERE is RV-bearing.  Accept iff it is purely a Boolean
-   * combination of RV comparisons; otherwise the predicate mixes
-   * RV and non-RV in a way we cannot rewrite. */
-  if (!IsA(q->jointree->quals, BoolExpr) ||
-      ((BoolExpr *)q->jointree->quals)->boolop != AND_EXPR) {
-    if (!check_expr_on_rv((Expr *)q->jointree->quals, constants))
-      provsql_error("WHERE clause mixes random_variable comparisons with "
-                    "other predicates inside the same Boolean expression; "
-                    "split the non-RV part into its own AND conjunct");
-    extracted = lappend(extracted,
-                        rv_Expr_to_provenance((Expr *)q->jointree->quals,
-                                              constants, false));
-    q->jointree->quals = NULL;
-    return extracted;
-  }
-
-  /* Top-level AND: walk conjuncts.  RV-bearing conjuncts must be pure
-   * RV expressions; non-RV conjuncts stay in WHERE. */
-  {
-    BoolExpr *be = (BoolExpr *)q->jointree->quals;
-    ListCell *cell, *prev;
-
-    for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
-      Expr *conjunct = (Expr *)lfirst(cell);
-      if (expr_contains_rv_cmp((Node *)conjunct, constants)) {
-        if (!check_expr_on_rv(conjunct, constants))
-          provsql_error("WHERE conjunct mixes random_variable comparisons "
-                        "with other predicates inside the same Boolean "
-                        "expression; split the non-RV part into its own "
-                        "AND conjunct");
-        extracted = lappend(extracted,
-                            rv_Expr_to_provenance(conjunct, constants, false));
-        be->args = my_list_delete_cell(be->args, cell, prev);
-        if (prev)
-          cell = my_lnext(be->args, prev);
-        else
-          cell = list_head(be->args);
-      } else {
-        prev = cell;
-        cell = my_lnext(be->args, cell);
-      }
-    }
-
-    /* If the AND has no children left, drop the WHERE entirely. */
-    if (be->args == NIL)
-      q->jointree->quals = NULL;
-    else if (list_length(be->args) == 1)
-      q->jointree->quals = (Node *)linitial(be->args);
-  }
-
-  return extracted;
-}
+/* The historical @c extract_rv_cmps_from_quals function (priority 4)
+ * has been folded into the unified WHERE classifier
+ * @c migrate_probabilistic_quals further down in this file; both the
+ * agg_token and the random_variable migration paths are now special
+ * cases of one walk over @c q->jointree->quals.  See the comment on
+ * @c qual_class for the routing matrix. */
 
 /**
  * @brief Build the combined provenance expression to be added to the SELECT list.
@@ -3276,70 +3191,210 @@ static void build_column_map(Query *q, int **columns, int *nbcols) {
 }
 
 /**
- * @brief Move WHERE conditions on aggregate results (@c agg_token) to HAVING.
+ * @brief Categorisation of a top-level WHERE conjunct.
  *
- * Supported patterns (moved to HAVING):
- * - The entire WHERE is a supported agg comparison.
- * - The WHERE is a top-level AND where some conjuncts reference aggregates
- *   (those are extracted individually) and the rest remain in WHERE.
+ * Drives the unified WHERE classifier that replaced the original pair
+ * @c migrate_aggtoken_quals_to_having + @c extract_rv_cmps_from_quals.
+ * Both probabilistic flavours (agg_token's "moved to HAVING" world and
+ * random_variable's "lifted to provenance" world) are special cases of
+ * "this conjunct involves a probabilistic value the executor cannot
+ * evaluate as a Boolean directly, so the planner has to route it to a
+ * different evaluation site".  The classifier reports which site, or
+ * (for unsupported mixes) errors.
+ */
+typedef enum {
+  QUAL_DETERMINISTIC,    /**< no probabilistic value; stays in WHERE        */
+  QUAL_PURE_AGG,         /**< pure agg_token expression; route to HAVING    */
+  QUAL_PURE_RV,          /**< pure random_variable expression; lift to provenance */
+  QUAL_MIXED_AGG_DET,    /**< agg_token mixed with non-agg leaves; error    */
+  QUAL_MIXED_RV_DET,     /**< random_variable mixed with non-RV leaves; error */
+  QUAL_MIXED_AGG_RV      /**< agg_token and random_variable in the same expr; error */
+} qual_class;
+
+/**
+ * @brief Classify @p expr along the @c qual_class axis.
  *
- * Unsupported patterns (e.g., "WHERE x=1 OR c>3") raise an error.
+ * Decision table (the predicates @c has_aggtoken,
+ * @c expr_contains_rv_cmp, @c check_expr_on_aggregate, and
+ * @c check_expr_on_rv each return whether the expression "contains" or
+ * "is purely" the corresponding flavour):
+ *
+ * | aggtoken | rv_cmp | check_agg | check_rv | classification        |
+ * |----------|--------|-----------|----------|-----------------------|
+ * | yes      | yes    |    -      |    -     | QUAL_MIXED_AGG_RV     |
+ * | yes      | no     |   true    |    -     | QUAL_PURE_AGG         |
+ * | yes      | no     |   false   |    -     | QUAL_MIXED_AGG_DET    |
+ * | no       | yes    |    -      |   true   | QUAL_PURE_RV          |
+ * | no       | yes    |    -      |   false  | QUAL_MIXED_RV_DET     |
+ * | no       | no     |    -      |    -     | QUAL_DETERMINISTIC    |
+ */
+static qual_class classify_qual(Expr *expr, const constants_t *constants)
+{
+  bool has_agg = has_aggtoken((Node *)expr, constants);
+  bool has_rv  = expr_contains_rv_cmp((Node *)expr, constants);
+
+  if (has_agg && has_rv)
+    return QUAL_MIXED_AGG_RV;
+  if (has_agg) {
+    if (check_expr_on_aggregate(expr, constants))
+      return QUAL_PURE_AGG;
+    return QUAL_MIXED_AGG_DET;
+  }
+  if (has_rv) {
+    if (check_expr_on_rv(expr, constants))
+      return QUAL_PURE_RV;
+    return QUAL_MIXED_RV_DET;
+  }
+  return QUAL_DETERMINISTIC;
+}
+
+/** @brief Raise the user-facing error appropriate to a mixed @p c.
+ *
+ * Each @c provsql_error call is @c ereport(ERROR), which does not
+ * return; the explicit @c break statements below are present only to
+ * keep @c -Wimplicit-fallthrough happy (PostgreSQL's @c elog macro is
+ * not marked @c noreturn for the compiler's flow analysis). */
+static void error_for_mixed_qual(qual_class c)
+{
+  switch (c) {
+    case QUAL_MIXED_AGG_DET:
+      provsql_error("Complex selection on aggregation results not supported");
+      break;
+    case QUAL_MIXED_RV_DET:
+      provsql_error("WHERE clause mixes random_variable comparisons with "
+                    "other predicates inside the same Boolean expression; "
+                    "split the non-RV part into its own AND conjunct");
+      break;
+    case QUAL_MIXED_AGG_RV:
+      provsql_error("WHERE clause mixes agg_token (HAVING-style) and "
+                    "random_variable (per-tuple) comparisons inside the "
+                    "same Boolean expression; this combination is not "
+                    "supported (priority 7 hybrid evaluation)");
+      break;
+    default:
+      /* QUAL_DETERMINISTIC / QUAL_PURE_AGG / QUAL_PURE_RV: not a mixed case. */
+      break;
+  }
+}
+
+/**
+ * @brief Unified WHERE classifier &ndash; routes each top-level conjunct
+ *        to the right evaluation site in a single pass.
+ *
+ * Replaces and consolidates the original
+ * @c migrate_aggtoken_quals_to_having (agg-only) and
+ * @c extract_rv_cmps_from_quals (rv-only).  The two old functions were
+ * structurally isomorphic: each walked the WHERE clause, classified
+ * each top-level conjunct, and routed pure-X conjuncts somewhere
+ * semantic (HAVING vs the returned rv_cmps list); the deterministic
+ * conjuncts stayed in WHERE.  Doing it in one pass means the rare
+ * conjunct that mixes agg_token and random_variable (which neither old
+ * function would have caught cleanly) gets a deterministic, useful
+ * error message.
+ *
+ * Supported shapes mirror the union of the two predecessors:
+ * - Whole WHERE is a single conjunct: classify and route or error.
+ * - Top-level AND of conjuncts: classify each, route, and (after
+ *   walking) collapse the AND if it has zero or one remaining children
+ *   so downstream code does not see a degenerate Boolean node.
+ * - Top-level OR / NOT containing both deterministic and probabilistic
+ *   leaves: error.
  *
  * @param constants  Extension OID cache.
- * @param q          Query to modify in place (@c jointree->quals and
- *                   @c havingQual may both be updated).
+ * @param q          Query whose @c jointree->quals and @c havingQual
+ *                   may both be mutated in place.
+ * @return List of @c FuncExpr nodes (one per lifted RV conjunct), each
+ *         producing a @c UUID.  The caller conjoins these into
+ *         @c prov_atts before @c make_provenance_expression.
  */
-static void migrate_aggtoken_quals_to_having(const constants_t *constants,
-                                             Query *q) {
+static List *
+migrate_probabilistic_quals(const constants_t *constants, Query *q)
+{
+  List *rv_cmps = NIL;
+  Node *quals;
+
   if (!q->jointree || !q->jointree->quals)
-    return;
+    return NIL;
 
-  if (!has_aggtoken(q->jointree->quals, constants))
-    return;
+  quals = q->jointree->quals;
 
-  /*
-   * We support WHERE clauses that are (possibly trivial) AND conjunctions of:
-   * - Conditions that do not mention aggregates (kept in WHERE).
-   * - Arbitrary Boolean combinations that all refer to aggregates and that
-   *   check_expr_on_aggregate accepts (moved to HAVING).
-   * Other forms (e.g., "WHERE x=1 OR c>3") are not supported.
-   */
-  if (check_expr_on_aggregate((Expr *)q->jointree->quals, constants)) {
-    /* Entire WHERE is an agg comparison — move it wholesale to HAVING */
-    q->havingQual =
-      add_to_havingQual(q->havingQual, (Expr *)q->jointree->quals);
-    q->jointree->quals = NULL;
-  } else if (IsA(q->jointree->quals, BoolExpr)) {
-    BoolExpr *be = (BoolExpr *)q->jointree->quals;
-    if (be->boolop == AND_EXPR) {
-      /* Split the AND: move agg conjuncts to HAVING, leave the rest */
-      ListCell *cell, *prev;
-      for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
-        if (has_aggtoken(lfirst(cell), constants)) {
-          Expr *expr = (Expr *)lfirst(cell);
+  /* Whole WHERE is one conjunct (single OpExpr, or non-AND BoolExpr
+   * which we treat opaquely &ndash; the per-flavour pure checks
+   * @c check_expr_on_aggregate / @c check_expr_on_rv recurse through
+   * the BoolExpr structure themselves). */
+  if (!IsA(quals, BoolExpr) || ((BoolExpr *)quals)->boolop != AND_EXPR) {
+    qual_class c = classify_qual((Expr *)quals, constants);
+    error_for_mixed_qual(c);
 
-          if (check_expr_on_aggregate(expr, constants)) {
-            be->args = my_list_delete_cell(be->args, cell, prev);
-            if (prev)
-              cell = my_lnext(be->args, prev);
-            else
-              cell = list_head(be->args);
+    switch (c) {
+      case QUAL_PURE_AGG:
+        q->havingQual = add_to_havingQual(q->havingQual, (Expr *)quals);
+        q->jointree->quals = NULL;
+        break;
+      case QUAL_PURE_RV:
+        rv_cmps = lappend(rv_cmps,
+                          rv_Expr_to_provenance((Expr *)quals,
+                                                constants, false));
+        q->jointree->quals = NULL;
+        break;
+      case QUAL_DETERMINISTIC:
+        /* Leave WHERE alone. */
+        break;
+      default:
+        /* Errors handled by error_for_mixed_qual. */
+        break;
+    }
+    return rv_cmps;
+  }
 
-            q->havingQual = add_to_havingQual(q->havingQual, expr);
-          } else {
-            provsql_error("Complex selection on aggregation results not supported");
-          }
-        } else {
+  /* Top-level AND: walk conjuncts. */
+  {
+    BoolExpr *be = (BoolExpr *)quals;
+    ListCell *cell, *prev;
+
+    for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
+      Expr *conjunct = (Expr *)lfirst(cell);
+      qual_class c = classify_qual(conjunct, constants);
+
+      error_for_mixed_qual(c);
+
+      switch (c) {
+        case QUAL_PURE_AGG:
+          q->havingQual = add_to_havingQual(q->havingQual, conjunct);
+          be->args = my_list_delete_cell(be->args, cell, prev);
+          if (prev)
+            cell = my_lnext(be->args, prev);
+          else
+            cell = list_head(be->args);
+          break;
+        case QUAL_PURE_RV:
+          rv_cmps = lappend(rv_cmps,
+                            rv_Expr_to_provenance(conjunct,
+                                                  constants, false));
+          be->args = my_list_delete_cell(be->args, cell, prev);
+          if (prev)
+            cell = my_lnext(be->args, prev);
+          else
+            cell = list_head(be->args);
+          break;
+        case QUAL_DETERMINISTIC:
           prev = cell;
           cell = my_lnext(be->args, cell);
-        }
+          break;
+        default:
+          /* Errors handled by error_for_mixed_qual. */
+          break;
       }
-    } else {
-      provsql_error("Complex selection on aggregation results not supported");
     }
-  } else {
-    provsql_error("Unknown structure within Boolean expression");
+
+    /* Collapse degenerate ANDs so downstream code sees a tidy WHERE. */
+    if (be->args == NIL)
+      q->jointree->quals = NULL;
+    else if (list_length(be->args) == 1)
+      q->jointree->quals = (Node *)linitial(be->args);
   }
+
+  return rv_cmps;
 }
 
 /** @brief Context for the @c insert_agg_token_casts_mutator. */
@@ -3653,24 +3708,23 @@ static Query *process_query(const constants_t *constants, Query *q,
       Expr *provenance;
       List *rv_cmps;
 
-      /* Lift random_variable comparisons out of WHERE first, so the
-       * lifted gate_cmp UUID can be folded into prov_atts and then
-       * propagate through every downstream consumer of prov_atts:
-       * - make_aggregation_expression's per-row provenance_times
-       *   (so HAVING / aggregate counts see only worlds where the
-       *   RV comparison holds);
-       * - make_provenance_expression's row-level provenance_times
-       *   (the non-aggregation case);
-       * - the array_agg + provenance_plus + delta wrappers above.
-       * Without this early splice the cmp would either be discarded
-       * by the HAVING-replaces-result branch or stranded at group
-       * level with row-typed Vars the executor cannot resolve.
+      /* Single unified pass over WHERE: each top-level conjunct is
+       * routed to the right evaluation site (HAVING for agg_token,
+       * the returned rv_cmps list for random_variable, left in WHERE
+       * otherwise).  Mixed shapes raise a clear error.  Replaces the
+       * historical pair migrate_aggtoken_quals_to_having +
+       * extract_rv_cmps_from_quals; see the qual_class doc above for
+       * the routing matrix.
+       *
+       * Must run before replace_aggregations_by_provenance_aggregate
+       * so the lifted RV cmps factor into each row's contribution to
+       * any surrounding agg_token (priority 4 splice constraint).
        *
        * Skipped for SR_PLUS / SR_MONUS (UNION / EXCEPT outer level):
        * each branch is rewritten by its own recursive process_query
        * call, so an outer-level WHERE on RV here is exotic; the
        * fallback after make_provenance_expression handles it. */
-      rv_cmps = extract_rv_cmps_from_quals(constants, q);
+      rv_cmps = migrate_probabilistic_quals(constants, q);
       if (rv_cmps != NIL && !has_union && !has_difference) {
         prov_atts = list_concat(prov_atts, rv_cmps);
         rv_cmps = NIL;
@@ -3701,9 +3755,6 @@ static Query *process_query(const constants_t *constants, Query *q,
           }
         }
       }
-
-      /* Move any WHERE comparisons on aggregate results to HAVING */
-      migrate_aggtoken_quals_to_having(constants, q);
 
       /* Insert casts for agg_token Vars used in arithmetic or window
        * functions, now that WHERE-to-HAVING migration is done */

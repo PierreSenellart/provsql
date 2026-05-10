@@ -609,18 +609,18 @@ Three concrete unification levers. None is required for any one
 priority, but flagging them here keeps subsequent priorities from
 drifting apart.
 
-1. **Walker dispatch (low effort, high readability).** The
+1. **Walker dispatch &mdash; landed.** The historical
    `migrate_aggtoken_quals_to_having` /
-   `check_expr_on_aggregate` family
-   (`src/provsql.c:2955`–`3157`) and the priority-4 RV walker
-   (`extract_rv_cmps_from_quals` / `check_expr_on_rv`) are
-   structurally isomorphic: each classifies WHERE conjuncts into
-   `{pure-X, deterministic, mixed-error}` and routes pure-X
-   somewhere semantic (HAVING vs `provenance_times` splice). A
-   single classifier that distinguishes pure-agg / pure-RV /
-   mixed-prob / deterministic and dispatches accordingly removes
-   the duplication and gives users a single error vocabulary.
-   Tracked as a follow-up to priority 4.
+   `check_expr_on_aggregate` family and the priority-4
+   `extract_rv_cmps_from_quals` / `check_expr_on_rv` walker are now
+   consolidated behind a single `migrate_probabilistic_quals` in
+   `src/provsql.c`, driven by a `qual_class` enum
+   (`QUAL_PURE_AGG`, `QUAL_PURE_RV`, `QUAL_DETERMINISTIC`, plus
+   three mixed-error classes). Pure-agg conjuncts route to
+   `q->havingQual`, pure-RV conjuncts route to the returned
+   `rv_cmps` list (later spliced into `prov_atts`), deterministic
+   conjuncts stay in WHERE, and the three mixed cases each get a
+   distinct user-facing error.
 
 2. **Sampler scalar-source dispatch (medium effort, unlocks
    HAVING+RV).** `monteCarloRV::evalScalar` handles `gate_value`,

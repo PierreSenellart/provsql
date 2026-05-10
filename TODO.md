@@ -231,14 +231,14 @@ Per CLAUDE memory: between any code change and `make installcheck`, the user run
 
 Three unification opportunities, ordered by ROI. None are blockers; they are listed here so subsequent priorities don't drift further apart and so the follow-up commits land in the right order.
 
-**(a) Unified WHERE classifier (low effort, high readability).** `migrate_aggtoken_quals_to_having` (`src/provsql.c:2955`) and `extract_rv_cmps_from_quals` (priority 4) are nearly isomorphic. Consolidate into a single pass that walks `q->jointree->quals`, classifies each top-level conjunct as `{pure-agg, pure-RV, deterministic, mixed-probabilistic, error}` and routes:
+**(a) Unified WHERE classifier &mdash; landed.** The historical pair `migrate_aggtoken_quals_to_having` and (priority-4-era) `extract_rv_cmps_from_quals` were structurally isomorphic: each walked `q->jointree->quals`, classified each top-level conjunct, and routed pure-X conjuncts somewhere semantic. They have been consolidated into `migrate_probabilistic_quals` in `src/provsql.c`, driven by a single `qual_class` enum (`QUAL_PURE_AGG`, `QUAL_PURE_RV`, `QUAL_DETERMINISTIC`, plus three mixed-error classes). Routing:
 - pure-agg → HAVING (existing flow)
 - pure-RV → `provenance_times` splice into `prov_atts` (priority 4 flow)
 - deterministic (e.g. `id = 's1'`) → leave in WHERE
-- mixed `agg ⊗ rv` inside the same Boolean op → error today; the natural place to grow into priority 7
-- mixed `prob ⊗ deterministic` inside the same Boolean op → error today (same pattern as agg_token's existing rejection of `WHERE c1 = 1 OR agg_count > 5`); the natural place to grow into a CASE-based lift in priority 7
+- mixed `agg ⊗ rv` inside the same Boolean op → distinct error message naming both flavours; the natural place to grow into priority 7
+- mixed `prob ⊗ deterministic` inside the same Boolean op → error (same pattern as agg_token's existing rejection of `WHERE c1 = 1 OR agg_count > 5`); the natural place to grow into a CASE-based lift in priority 7
 
-No on-disk or behaviour change; pure refactor. Slot in as a follow-up commit after priority 4 lands. Tracked in the in-conversation task list.
+No on-disk or behaviour change in the supported cases; the new mixed-`agg_token`-and-`random_variable` error is a previously unhandled edge case that would have errored anyway, just less informatively.
 
 **(b) Unified scalar-source dispatch in MC (medium effort, unlocks HAVING+RV).** Today `monteCarloRV::evalScalar` handles `gate_value`, `gate_rv`, `gate_arith`; `gate_agg` throws. Adding a `gate_agg` arm that calls the same possible-world enumeration `provsql_having` uses (or shares its core) closes the gap that forced `continuous_selection.sql` section G to be structural-only. This is the natural intersection of priority 7's island decomposer (which already knows how to marginalise non-Boolean gates) and the existing HAVING resolution; bake it in there. After this, `WHERE rv > 0 GROUP BY x HAVING count(*) > 1` runs end-to-end under MC.
 
