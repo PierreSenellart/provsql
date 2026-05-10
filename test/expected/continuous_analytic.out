@@ -1,0 +1,48 @@
+\set ECHO none
+normal_gt_zero_exact
+t
+(1 row)
+normal_le_zero_exact
+t
+(1 row)
+uniform_le_03_exact
+t
+(1 row)
+uniform_gt_75_exact
+t
+(1 row)
+exponential_gt_one_exact
+t
+(1 row)
+normal_diff_exact
+t
+(1 row)
+continuous_eq_zero
+t
+(1 row)
+continuous_ne_one
+t
+(1 row)
+eq_x_x|ne_x_x|le_x_x|lt_x_x|ge_x_x|gt_x_x
+t|t|t|t|t|t
+(1 row)
+const_cmp_rv_exact
+t
+(1 row)
+ERROR:  ProvSQL: probability_evaluate: This semiring does not support value gates.
+arith_falls_through_to_mc
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+a|t
+b|t
+(2 rows)
+continuous_analytic_done
+ok
+(1 row)

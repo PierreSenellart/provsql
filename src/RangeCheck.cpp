@@ -370,6 +370,50 @@ unsigned runRangeCheck(GenericCircuit &gc)
     const auto &wires = gc.getWires(c);
     if (wires.size() != 2) continue;
 
+    /* Identity shortcut: when both sides of the cmp are the same
+     * gate (same UUID), the sampler's per-iteration memoisation
+     * guarantees both reads return identical values, so the
+     * comparator collapses to a constant.  Universal across gate
+     * types and semirings; runs first so neither the continuous
+     * EQ/NE shortcut nor the interval-based path needs an explicit
+     * @c lhs != rhs guard. */
+    if (wires[0] == wires[1]) {
+      double p = std::numeric_limits<double>::quiet_NaN();
+      switch (op) {
+        case ComparisonOperator::EQ:
+        case ComparisonOperator::LE:
+        case ComparisonOperator::GE:
+          p = 1.0; break;
+        case ComparisonOperator::NE:
+        case ComparisonOperator::LT:
+        case ComparisonOperator::GT:
+          p = 0.0; break;
+      }
+      gc.resolveCmpToBernoulli(c, p);
+      ++resolved;
+      continue;
+    }
+
+    /* Continuous EQ / NE shortcut: P(X = c) = 0 and P(X != c) = 1
+     * exactly for any continuous X (point equality has measure zero
+     * under a continuous distribution).  Universal across semirings:
+     * the gate_zero / gate_one rewrite is meaningful in every
+     * semiring (not just probability), so the resolution belongs
+     * here rather than in AnalyticEvaluator.  The wires[0] !=
+     * wires[1] case is already handled by the identity shortcut
+     * above. */
+    if (op == ComparisonOperator::EQ ||
+        op == ComparisonOperator::NE) {
+      bool lhs_continuous = (gc.getGateType(wires[0]) == gate_rv);
+      bool rhs_continuous = (gc.getGateType(wires[1]) == gate_rv);
+      if (lhs_continuous || rhs_continuous) {
+        double p = (op == ComparisonOperator::EQ) ? 0.0 : 1.0;
+        gc.resolveCmpToBernoulli(c, p);
+        ++resolved;
+        continue;
+      }
+    }
+
     /* HAVING-style cmp: agg on one side, scalar constant on the
      * other.  Decide via the agg-aware path which is cheaper than
      * intervalOf + decideCmp and which knows the empty-subset NULL

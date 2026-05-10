@@ -476,9 +476,10 @@ script.
    `src/RangeCheck.{h,cpp}`. No external dependency.
    (b) **Analytic CDF**: for `gate_cmp` reducing to `X cmp c` (or
    `X cmp Y` with X, Y independent normals), return `F(c)` (or `Φ`)
-   from a closed-form CDF via Boost.Math. New file
-   `src/AnalyticEvaluator.{h,cpp}`. Boost.Math is header-only;
-   add `libboost-math-dev` to build deps.
+   from a closed-form CDF. New file `src/AnalyticEvaluator.{h,cpp}`.
+   CDFs are computed inline against `<cmath>` (`std::erf` for the
+   normal, `std::expm1` for the exponential, arithmetic for uniform);
+   no external math dependency.
    (c) **BoundCheck** (the original Priority 5 scope): behind
    `--with-lpsolve` (autodetected), build `BoundCheck.cpp`; planner
    hook wraps the rewritten WHERE in a BoundCheck call. GUC

@@ -40,6 +40,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "BooleanCircuit.h"
 #include "CircuitFromMMap.h"
 #include "GenericCircuit.h"
+#include "AnalyticEvaluator.h"
 #include "MonteCarloSampler.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "having_semantics.hpp"
@@ -98,6 +99,18 @@ static Datum probability_evaluate_internal
   // peephole-pruned for any "always true / always false" comparator.
   GenericCircuit gc = getGenericCircuit(token);
   gate_t gc_root = gc.getGate(uuid2string(token));
+
+  // Probability-specific peephole: AnalyticEvaluator decides
+  // continuous-RV comparators with closed-form CDFs (X cmp c for any
+  // bare gate_rv leaf, X cmp Y for two independent normal leaves) by
+  // replacing them with Bernoulli gate_input gates carrying the
+  // analytical probability.  Always sound for probability evaluation;
+  // produces fractional probabilities so it is meaningful only on
+  // this path (not in getGenericCircuit, which is shared with
+  // semiring evaluators).  Runs after RangeCheck so the cheaper
+  // 0/1 decisions are already taken; AnalyticEvaluator only sees
+  // the comparators RangeCheck could not collapse.
+  provsql::runAnalyticEvaluator(gc);
 
   double result;
 
