@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stack>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
@@ -340,6 +342,164 @@ double extractScalarConst(const GenericCircuit &gc, gate_t g)
   return std::numeric_limits<double>::quiet_NaN();
 }
 
+/**
+ * @brief Flip the sides of a comparison operator.
+ *
+ * @c (a op b) is equivalent to @c (b flip(op) a).  Used to normalise
+ * a cmp so the random-variable side is always on the left.
+ */
+ComparisonOperator flipCmpOp(ComparisonOperator op)
+{
+  switch (op) {
+    case ComparisonOperator::LT: return ComparisonOperator::GT;
+    case ComparisonOperator::LE: return ComparisonOperator::GE;
+    case ComparisonOperator::GT: return ComparisonOperator::LT;
+    case ComparisonOperator::GE: return ComparisonOperator::LE;
+    case ComparisonOperator::EQ: return ComparisonOperator::EQ;
+    case ComparisonOperator::NE: return ComparisonOperator::NE;
+  }
+  return op;
+}
+
+/**
+ * @brief Interpret a @c gate_cmp as a per-RV constraint @c rv op c.
+ *
+ * Returns @c true and fills @p rv_out, @p op_out, @p const_out when
+ * exactly one side of the cmp is a @c gate_rv and the other a
+ * @c gate_value with a parseable scalar; @c false otherwise (both
+ * sides are RVs, both constants, an @c arith subtree appears, etc.).
+ *
+ * Strict-vs-non-strict inequalities are preserved as the operator;
+ * the caller decides whether to treat the boundary as inclusive
+ * (continuous distributions: measure-zero, irrelevant for
+ * feasibility verdicts).
+ */
+bool asRvVsConstCmp(const GenericCircuit &gc, gate_t cmp_gate,
+                    gate_t &rv_out, ComparisonOperator &op_out,
+                    double &const_out)
+{
+  bool ok = false;
+  ComparisonOperator op = cmpOpFromOid(gc.getInfos(cmp_gate).first, ok);
+  if (!ok) return false;
+  const auto &wires = gc.getWires(cmp_gate);
+  if (wires.size() != 2) return false;
+
+  auto t0 = gc.getGateType(wires[0]);
+  auto t1 = gc.getGateType(wires[1]);
+  if (t0 == gate_rv && t1 == gate_value) {
+    try { const_out = parseDoubleStrict(gc.getExtra(wires[1])); }
+    catch (const CircuitException &) { return false; }
+    rv_out = wires[0];
+    op_out = op;
+    return true;
+  }
+  if (t0 == gate_value && t1 == gate_rv) {
+    try { const_out = parseDoubleStrict(gc.getExtra(wires[0])); }
+    catch (const CircuitException &) { return false; }
+    rv_out = wires[1];
+    op_out = flipCmpOp(op);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Apply a single @c rv-op-constant constraint to a running
+ *        interval for the RV.
+ *
+ * Strict vs non-strict inequalities collapse onto the same closed
+ * interval: continuous distributions assign zero mass to the
+ * boundary, so the joint-feasibility verdict is unchanged whether
+ * we use @c < or @c \<=.  @c \<\> (NE) cannot be represented as a
+ * single interval and is left to the per-cmp pass.
+ */
+Interval intersectRvConstraint(Interval current, ComparisonOperator op,
+                               double c)
+{
+  switch (op) {
+    case ComparisonOperator::LT:
+    case ComparisonOperator::LE:
+      current.hi = std::min(current.hi, c);
+      break;
+    case ComparisonOperator::GT:
+    case ComparisonOperator::GE:
+      current.lo = std::max(current.lo, c);
+      break;
+    case ComparisonOperator::EQ:
+      current.lo = std::max(current.lo, c);
+      current.hi = std::min(current.hi, c);
+      break;
+    case ComparisonOperator::NE:
+      /* Cannot represent the complement of a point as a single
+       * interval; leave the running interval unchanged. */
+      break;
+  }
+  return current;
+}
+
+bool intervalEmpty(Interval i) { return i.lo > i.hi; }
+
+/**
+ * @brief Walk @p root's AND-conjunct cmps and decide whether the
+ *        conjunction is jointly infeasible by per-RV interval
+ *        intersection.
+ *
+ * For every @c gate_cmp reachable through a chain of @c gate_times
+ * starting at @p root, that is interpretable as @c rv-op-constant,
+ * intersect the constraint with the running interval for that RV
+ * (initialised to the RV's distribution support).  As soon as any
+ * RV's interval becomes empty, the AND is infeasible.
+ *
+ * Descends only through @c gate_times: @c gate_plus is OR (the
+ * disjuncts could individually be feasible even when each is a
+ * narrow constraint on the RV, so they do not contribute to the
+ * conjunction's infeasibility), @c gate_monus is set difference
+ * (likewise), and other gate types break the AND chain.
+ *
+ * Cmps that this pass cannot interpret (RV vs RV, arith on either
+ * side, agg, …) are simply ignored: skipping them is sound &ndash; we
+ * just have fewer constraints, so we never falsely declare
+ * infeasibility we cannot prove.
+ */
+bool isAndJointlyInfeasible(const GenericCircuit &gc, gate_t root)
+{
+  std::unordered_map<gate_t, Interval> rv_intervals;
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stk;
+  stk.push(root);
+
+  /* Reused across intervalOf calls for the RVs themselves; the
+   * per-cmp pass already computed these for many gates, but this
+   * snapshot is local so the cache is fresh each invocation. */
+  std::unordered_map<gate_t, Interval> support_cache;
+
+  while (!stk.empty()) {
+    gate_t g = stk.top(); stk.pop();
+    if (!seen.insert(g).second) continue;
+
+    auto t = gc.getGateType(g);
+    if (t == gate_cmp) {
+      gate_t rv = static_cast<gate_t>(0);
+      ComparisonOperator op = ComparisonOperator::EQ;
+      double c = 0.0;
+      if (!asRvVsConstCmp(gc, g, rv, op, c)) continue;
+      auto it = rv_intervals.find(rv);
+      Interval current = (it == rv_intervals.end())
+                         ? intervalOf(gc, rv, support_cache)
+                         : it->second;
+      current = intersectRvConstraint(current, op, c);
+      rv_intervals[rv] = current;
+      if (intervalEmpty(current)) return true;
+      continue;  /* never descend into a cmp's operands */
+    }
+    if (t == gate_times || g == root) {
+      for (gate_t c : gc.getWires(g)) stk.push(c);
+    }
+    /* gate_plus, gate_monus, gate_input, etc.: stop the descent. */
+  }
+  return false;
+}
+
 }  // namespace
 
 unsigned runRangeCheck(GenericCircuit &gc)
@@ -446,6 +606,32 @@ unsigned runRangeCheck(GenericCircuit &gc)
     double p = decideCmp(diff, op);
     if (!std::isnan(p)) {
       gc.resolveCmpToBernoulli(c, p);
+      ++resolved;
+    }
+  }
+
+  /* Joint-conjunction pass: walk every @c gate_times and check
+   * whether its AND-conjunct cmps, viewed together, constrain some
+   * shared RV to an empty interval.  Catches the joint-infeasibility
+   * case the per-cmp pass above cannot see (each cmp individually
+   * leaves a non-empty range, but their intersection is empty).
+   *
+   * Snapshot the gate_times indices first: @c resolveGateToZero
+   * mutates the type, so iterating the live vector while resolving
+   * would skip slots.  The post-snapshot type re-check guards against
+   * a @c gate_times that the per-cmp pass somehow already collapsed
+   * (currently not possible, but cheap insurance for future passes). */
+  const auto nb_after = gc.getNbGates();
+  std::vector<gate_t> times_gates;
+  for (std::size_t i = 0; i < nb_after; ++i) {
+    auto g = static_cast<gate_t>(i);
+    if (gc.getGateType(g) == gate_times)
+      times_gates.push_back(g);
+  }
+  for (gate_t t : times_gates) {
+    if (gc.getGateType(t) != gate_times) continue;  /* defensive */
+    if (isAndJointlyInfeasible(gc, t)) {
+      gc.resolveGateToZero(t);
       ++resolved;
     }
   }

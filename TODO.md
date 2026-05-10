@@ -125,6 +125,7 @@ The peephole pass from Priority 5 collapses *constant-probability* comparators. 
 - Linear combinations of *independent* normals: `aX + bY → N(aμ_X + bμ_Y, a²σ²_X + b²σ²_Y)` iff X and Y reach disjoint base-RV UUIDs (the same independence test as Priority 6's Expectation semiring; share the implementation).
 - Sums of i.i.d. exponentials with the same rate → Erlang. Different rates: skip (hypoexponential is messy, MC is fine).
 - Trivial folds: `arith(PLUS, 0, X) → X`, `arith(TIMES, 1, X) → X`, etc. — these are essentially constant folding and complement (a)+(b) of Priority 5.
+- Constant folding of `gate_arith` over all-`gate_value` subtrees: collapse to a single `gate_value`. Concrete motivating case: `(reading > -100)` parses as `rv_cmp_gt(reading, -(100::random_variable))`, producing `gate_arith(NEG, gate_value:100)` rather than `gate_value:-100`. RangeCheck (per-cmp interval pass and joint AND-conjunction pass) only treats direct `gate_value` / `gate_rv` operands as constants today; tests parenthesise as `(-100)::random_variable` to sidestep this. Once the simplifier folds `arith(NEG, value:100) → value:-100` (and analogously for other unary/n-ary arith over constants), the parenthesisation can be removed and the corresponding branches in RangeCheck and AnalyticEvaluator will start firing on naturally-written predicates.
 
 Skip uniform + uniform (Irwin–Hall, not in our family), normal × normal (product distribution), exponential × constant (becomes a different exponential — only marginally useful).
 

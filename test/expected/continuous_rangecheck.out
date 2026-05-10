@@ -30,6 +30,24 @@ id|exact_one
 a|t
 b|t
 (2 rows)
+joint_infeasible_normal
+t
+(1 row)
+joint_feasible_not_pruned
+t
+(1 row)
+joint_infeasible_uniform
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|exact_zero
+s1|t
+(1 row)
 continuous_rangecheck_done
 ok
 (1 row)

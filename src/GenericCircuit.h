@@ -188,6 +188,28 @@ void resolveCmpToBernoulli(gate_t g, double p) {
 }
 
 /**
+ * @brief Replace an arbitrary gate (typically @c gate_times) by
+ *        @c gate_zero.
+ *
+ * Used by RangeCheck's joint-conjunction pass when an AND of cmps
+ * over a shared RV constrains its support to an empty interval:
+ * since @c gate_zero is the multiplicative absorber in every
+ * semiring, replacing a @c gate_times with it is universally sound,
+ * and orphans the conjuncts (their effects are now unreachable
+ * from the root, regardless of what each individual cmp would
+ * resolve to).
+ *
+ * The wires, infos and extra fields are cleared so the gate is a
+ * proper leaf.  Operates on the in-memory circuit only.
+ */
+void resolveGateToZero(gate_t g) {
+  setGateType(g, gate_zero);
+  getWires(g).clear();
+  infos.erase(g);
+  extra.erase(g);
+}
+
+/**
  * @brief Boost serialisation support.
  * @param ar       Boost archive (input or output).
  * @param version  Archive version (unused).
