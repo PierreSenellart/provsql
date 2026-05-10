@@ -141,8 +141,25 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
       }
       break;
     }
+    case gate_semimod: {
+      /* HAVING-style constant wrapper: semimod(gate_one, value).  The
+       * semiring action of gate_one (always true) on a scalar leaves
+       * the scalar unchanged in every world, so the interval of the
+       * semimod equals the interval of its value child.  Other
+       * semimod shapes (non-trivial k_gate) keep the conservative
+       * all-real default. */
+      const auto &wires = gc.getWires(g);
+      if (wires.size() == 2 && gc.getGateType(wires[0]) == gate_one)
+        result = intervalOf(gc, wires[1], cache);
+      break;
+    }
     default:
-      /* Unsupported gate type for interval arith ⇒ all of ℝ. */
+      /* gate_agg is intentionally not handled here -- the empty-subset
+       * NULL semantics make a flat interval misleading, so the
+       * runRangeCheck loop dispatches agg-bearing cmps to a separate
+       * decider that knows the asymmetry between sound FALSE and
+       * unsound TRUE decisions for SUM / MIN / MAX.  All other gate
+       * types fall through to the all-real default. */
       break;
   }
 
@@ -193,6 +210,140 @@ double decideCmp(const Interval &diff, ComparisonOperator op)
   return std::numeric_limits<double>::quiet_NaN();
 }
 
+/**
+ * @brief Decide a @c gate_cmp where one side is a @c gate_agg, the
+ *        other is a scalar constant.
+ *
+ * Computes a value-interval for the aggregate from its semimod
+ * children's per-row values, then folds the comparator like the
+ * non-agg path.  The crucial wrinkle is the empty-subset case:
+ * - @c COUNT of an empty subset is @c 0 (PG semantics), so its
+ *   interval @c [0, n] is exact across every possible world and
+ *   both TRUE and FALSE decisions are sound.
+ * - @c SUM, @c MIN, @c MAX of an empty subset are @c NULL.  Any
+ *   cmp on @c NULL evaluates to FALSE in HAVING, regardless of the
+ *   non-empty bound.  So a "TRUE for every world" decision derived
+ *   from the bound is unsound &ndash; in the empty world the cmp
+ *   would be FALSE, contradicting the bound's claim.  We therefore
+ *   accept only FALSE decisions (which are conservative: the cmp is
+ *   FALSE in non-empty worlds via the bound, and FALSE in the
+ *   empty world via NULL).
+ *
+ * Other aggregators (@c AVG, @c AND, @c OR, @c CHOOSE,
+ * @c ARRAY_AGG, @c NONE) fall through to undecidable.
+ *
+ * @return @c 0.0 / @c 1.0 if decided, @c NaN otherwise.
+ */
+double decideAggVsConstCmp(const GenericCircuit &gc, gate_t agg_gate,
+                           ComparisonOperator op, double const_val,
+                           bool agg_on_lhs)
+{
+  AggregationOperator aop = getAggregationOperator(gc.getInfos(agg_gate).first);
+
+  /* Extract per-child scalar values from the semimod children. */
+  std::vector<double> values;
+  for (gate_t child : gc.getWires(agg_gate)) {
+    if (gc.getGateType(child) != gate_semimod)
+      return std::numeric_limits<double>::quiet_NaN();
+    const auto &sw = gc.getWires(child);
+    if (sw.size() != 2)
+      return std::numeric_limits<double>::quiet_NaN();
+    gate_t value_gate = sw[1];
+    if (gc.getGateType(value_gate) != gate_value)
+      return std::numeric_limits<double>::quiet_NaN();
+    try {
+      values.push_back(parseDoubleStrict(gc.getExtra(value_gate)));
+    } catch (const CircuitException &) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+  }
+
+  Interval val_interval = Interval::all();
+  bool may_be_null = false;
+
+  switch (aop) {
+    case AggregationOperator::COUNT:
+      /* Count is the number of contributing children; always in
+       * @c [0, n_children], never NULL even for the empty subset. */
+      val_interval = {0.0, static_cast<double>(values.size())};
+      may_be_null = false;
+      break;
+    case AggregationOperator::SUM: {
+      /* Sum across an arbitrary subset is bounded by the sum of the
+       * negative values (when only negatives are selected) and the
+       * sum of the positive values (when only positives are
+       * selected).  Include @c 0 explicitly for the empty subset
+       * even though PG returns NULL for it &ndash; including 0
+       * keeps the bounds correct for the non-empty cases too, and
+       * @c may_be_null below blocks unsound TRUE decisions. */
+      double sum_neg = 0.0, sum_pos = 0.0;
+      for (double v : values) {
+        if (v < 0.0) sum_neg += v;
+        else          sum_pos += v;
+      }
+      val_interval = {std::min(0.0, sum_neg), std::max(0.0, sum_pos)};
+      may_be_null = true;
+      break;
+    }
+    case AggregationOperator::MIN:
+    case AggregationOperator::MAX:
+      if (values.empty())
+        return std::numeric_limits<double>::quiet_NaN();
+      val_interval = {*std::min_element(values.begin(), values.end()),
+                      *std::max_element(values.begin(), values.end())};
+      may_be_null = true;
+      break;
+    default:
+      /* AVG / AND / OR / CHOOSE / ARRAY_AGG / NONE: not decidable
+       * with this pass. */
+      return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  Interval lhs = agg_on_lhs ? val_interval : Interval::point(const_val);
+  Interval rhs = agg_on_lhs ? Interval::point(const_val) : val_interval;
+  Interval diff = sub(lhs, rhs);
+  double p = decideCmp(diff, op);
+
+  if (std::isnan(p)) return p;
+  if (may_be_null && p == 1.0)
+    return std::numeric_limits<double>::quiet_NaN();
+  return p;
+}
+
+/**
+ * @brief Try to extract a scalar constant from a cmp's child.
+ *
+ * Recognises two shapes:
+ * - bare @c gate_value: parse its @c extra as a double;
+ * - HAVING-style @c gate_semimod with @c k=gate_one and
+ *   @c value=gate_value: parse the value's extra.
+ *
+ * Returns @c NaN on any other shape.
+ */
+double extractScalarConst(const GenericCircuit &gc, gate_t g)
+{
+  auto t = gc.getGateType(g);
+  if (t == gate_value) {
+    try { return parseDoubleStrict(gc.getExtra(g)); }
+    catch (const CircuitException &) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+  }
+  if (t == gate_semimod) {
+    const auto &w = gc.getWires(g);
+    if (w.size() != 2) return std::numeric_limits<double>::quiet_NaN();
+    if (gc.getGateType(w[0]) != gate_one)
+      return std::numeric_limits<double>::quiet_NaN();
+    if (gc.getGateType(w[1]) != gate_value)
+      return std::numeric_limits<double>::quiet_NaN();
+    try { return parseDoubleStrict(gc.getExtra(w[1])); }
+    catch (const CircuitException &) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+  }
+  return std::numeric_limits<double>::quiet_NaN();
+}
+
 }  // namespace
 
 unsigned runRangeCheck(GenericCircuit &gc)
@@ -223,6 +374,28 @@ unsigned runRangeCheck(GenericCircuit &gc)
     const auto &wires = gc.getWires(c);
     if (wires.size() != 2) continue;
 
+    /* HAVING-style cmp: agg on one side, scalar constant on the
+     * other.  Decide via the agg-aware path which is cheaper than
+     * intervalOf + decideCmp and which knows the empty-subset NULL
+     * semantics for SUM / MIN / MAX (see decideAggVsConstCmp). */
+    bool lhs_is_agg = gc.getGateType(wires[0]) == gate_agg;
+    bool rhs_is_agg = gc.getGateType(wires[1]) == gate_agg;
+    if (lhs_is_agg != rhs_is_agg) {
+      gate_t agg_side   = lhs_is_agg ? wires[0] : wires[1];
+      gate_t const_side = lhs_is_agg ? wires[1] : wires[0];
+      double const_val = extractScalarConst(gc, const_side);
+      if (!std::isnan(const_val)) {
+        double p = decideAggVsConstCmp(gc, agg_side, op, const_val,
+                                       lhs_is_agg);
+        if (!std::isnan(p)) {
+          gc.resolveCmpToBernoulli(c, p);
+          ++resolved;
+          continue;
+        }
+      }
+    }
+
+    /* Interval-based path for non-agg cmps (RV, gate_arith, value). */
     Interval lhs = intervalOf(gc, wires[0], cache);
     Interval rhs = intervalOf(gc, wires[1], cache);
     /* Skip if both sides are unbounded; @c decideCmp would never

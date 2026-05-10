@@ -112,6 +112,7 @@ test: continuous_selection
 test: continuous_join
 test: continuous_union
 test: continuous_rangecheck
+test: continuous_rangecheck_having
 
 # PROV export
 test: to_provxml

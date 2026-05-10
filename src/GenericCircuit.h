@@ -145,31 +145,44 @@ double getProb(gate_t g) const {
 }
 
 /**
- * @brief Replace a @c gate_cmp by a Bernoulli @c gate_input with the
- *        determined probability @p p.
+ * @brief Replace a @c gate_cmp by a constant Boolean leaf
+ *        (@c gate_one for @p p == 1, @c gate_zero for @p p == 0)
+ *        or by a Bernoulli @c gate_input for any other @p p.
  *
- * Used by the peephole pruning passes (RangeCheck and any future
- * analytic-CDF / LP-based passes) when a comparator's probability is
- * provably 0, 1, or a closed-form value: turning the comparator
- * into a Bernoulli leaf lets every downstream evaluator (MC,
- * independent, treedec, d-DNNF, d4) consume the result transparently
- * without having to learn about the resolution mechanism.  Operates
- * on the in-memory circuit only; the persistent mmap store is never
- * mutated.
+ * Used by peephole pruning passes when a comparator's probability is
+ * provably 0, 1, or a closed-form value.  Distinguishing the
+ * 0 / 1 case from the fractional case matters because non-probabilistic
+ * semirings (e.g. @c sr_formula, @c sr_counting) have well-defined
+ * @c zero() / @c one() values but no notion of "Bernoulli with
+ * probability @c p" &ndash; an unknown @c gate_input would default
+ * to @c semiring.one() in every semiring (per
+ * @c GenericCircuit::evaluate), which is wrong for an
+ * always-false comparator.  Using @c gate_zero / @c gate_one
+ * directly is universally correct: every semiring knows its
+ * identities.
  *
- * Side effects: the gate's type becomes @c gate_input, its
- * probability becomes @p p, its child wires are cleared (so the
- * gate is a true leaf), it is added to the inputs set, and its
- * @c info / @c extra fields are cleared.  Children that become
- * orphaned are not reaped here; @c circuitHasRV walks reachable
- * gates only, so an orphaned @c gate_rv stops looking like RV
- * content if no other comparator references it.
+ * Fractional probabilities are still encoded as @c gate_input + a
+ * probability so probability evaluators (MC, independent, treedec,
+ * d-DNNF, d4) can consume them, but only those evaluators handle
+ * non-trivial probabilities meaningfully.  Such resolutions should
+ * therefore be confined to passes invoked from a probability
+ * context (not the universal @c getGenericCircuit-time pass).
+ *
+ * Operates on the in-memory circuit only; the persistent mmap store
+ * is never mutated.  Children that become orphaned are not reaped
+ * here.
  */
 void resolveCmpToBernoulli(gate_t g, double p) {
-  setGateType(g, gate_input);
-  setProb(g, p);
+  if (p == 0.0) {
+    setGateType(g, gate_zero);
+  } else if (p == 1.0) {
+    setGateType(g, gate_one);
+  } else {
+    setGateType(g, gate_input);
+    setProb(g, p);
+    inputs.insert(g);
+  }
   getWires(g).clear();
-  inputs.insert(g);
   infos.erase(g);
   extra.erase(g);
 }
