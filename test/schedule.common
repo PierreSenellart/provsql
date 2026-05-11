@@ -117,6 +117,7 @@ test: continuous_analytic
 test: continuous_expectation
 test: continuous_support
 test: continuous_hybrid
+test: continuous_rv_histogram
 
 # PROV export
 test: to_provxml

@@ -1106,6 +1106,29 @@ CREATE OR REPLACE FUNCTION simplified_circuit_subgraph(
   LANGUAGE C STABLE PARALLEL SAFE;
 
 /**
+ * @brief Empirical histogram of a scalar sub-circuit
+ *
+ * Returns a jsonb array of @c {bin_lo, bin_hi, count} objects covering
+ * the observed @c [min, max] range of @p bins equal-width samples from
+ * the sub-circuit rooted at @p token.  Sample count is taken from
+ * @c provsql.rv_mc_samples; pinning @c provsql.monte_carlo_seed makes
+ * the result reproducible.
+ *
+ * Accepted root gate types are the scalar ones: @c gate_value (Dirac
+ * at the constant, single bin), @c gate_rv (sampled from the leaf's
+ * distribution), and @c gate_arith (sampled by recursing through the
+ * arithmetic DAG, with shared @c gate_rv leaves correctly correlated
+ * within an iteration).  Any other gate type raises.
+ *
+ * @param token Root provenance token of a scalar sub-circuit.
+ * @param bins  Number of equal-width histogram bins (default 30).
+ */
+CREATE OR REPLACE FUNCTION rv_histogram(
+  token UUID, bins INT DEFAULT 30) RETURNS jsonb
+  AS 'provsql','rv_histogram'
+  LANGUAGE C VOLATILE PARALLEL SAFE;
+
+/**
  * @brief Resolve an input gate UUID back to its source row
  *
  * Searches every provenance-tracked relation for a row whose
