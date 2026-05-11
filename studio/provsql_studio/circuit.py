@@ -107,7 +107,55 @@ def _gate_label(row: dict) -> str:
         glyph = _ARITH_OP_GLYPH.get(tag)
         if glyph is not None:
             return glyph
+    if t == "input" and _is_anonymous_input(row):
+        # Anonymous gate_input (no source row in any tracked relation:
+        # provsql.mixture's Bernoulli, or any `create_gate(uuid, 'input')
+        # + set_prob` the user mints by hand) renders its probability as
+        # an inline percentage instead of the generic ι glyph -- gives
+        # an at-a-glance hint of the gate's role.  Inputs tied to a
+        # tracked relation keep ι: there `ι` reads as "this is a
+        # variable", with the per-row probability one click into the
+        # inspector away.  The percent sign distinguishes the label
+        # from a regular scalar value displayed on a gate_value circle.
+        prob = row.get("prob")
+        if (prob is not None
+                and isinstance(prob, (int, float))
+                and not (prob != prob)         # NaN guard
+                and prob != 1.0):
+            return _format_prob_label(float(prob))
     return _GATE_LABEL.get(t, t)
+
+
+def _is_anonymous_input(row: dict) -> bool:
+    """An input gate is "anonymous" when no row in any tracked relation
+    references its UUID.  In the persisted circuit, `info1` is the
+    source-relation OID for tracked rows (set by `add_provenance`) and
+    stays at 0 for hand-minted gates, so the cheap discriminator is
+    `info1 == 0 / null`.  Avoids a per-gate `resolve_input` round-trip.
+    `info1` may arrive as int (persisted-DAG branch) or text (simplified-
+    DAG branch via jsonb), hence the lenient int() coercion."""
+    info1 = row.get("info1")
+    if info1 is None:
+        return True
+    try:
+        return int(info1) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _format_prob_label(p: float) -> str:
+    """Render a probability for an in-circle label as a compact percent.
+
+    Two decimal places at most, trailing zeros stripped (0.30 → "30%",
+    0.025 → "2.5%", 0.99 → "99%").  Very small probabilities fall back
+    to scientific notation so they don't round to "0%" and disappear."""
+    if p == 0:
+        return "0%"
+    pct = p * 100.0
+    if 0 < pct < 0.01:
+        return f"{pct:.1e}%"
+    s = f"{pct:.2f}".rstrip("0").rstrip(".")
+    return s + "%"
 
 
 def _format_rv_label(extra: str) -> str:
@@ -244,7 +292,11 @@ def _fetch_subgraph(
         # columns as the persisted-DAG query.  `extra` is inlined in
         # the jsonb (the simplifier may introduce extras not visible
         # in the persisted store), so we read it from there rather
-        # than calling get_extra (which would hit the mmap).
+        # than calling get_extra (which would hit the mmap).  `prob`
+        # is fetched per-node via provsql.get_prob: gate_input gates
+        # whose probability has been pinned away from 1.0 (the default)
+        # render the probability inline as a percentage in
+        # _gate_label rather than the generic ι glyph.
         sql = (
             "WITH src AS ("
             "  SELECT (e->>'node')        AS node,"
@@ -268,6 +320,7 @@ def _fetch_subgraph(
             "       CASE WHEN cs.gate_type = 'agg' THEN"
             "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int)"
             "            ELSE NULL END AS info2_name,"
+            "       provsql.get_prob(cs.node::uuid)::float8 AS prob,"
             "       cs.depth "
             "FROM src cs"
         )
@@ -283,6 +336,7 @@ def _fetch_subgraph(
             "       CASE WHEN cs.gate_type = 'agg' THEN "
             "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int) "
             "            ELSE NULL END AS info2_name, "
+            "       provsql.get_prob(cs.node)::float8 AS prob, "
             "       cs.depth "
             "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
         )
@@ -317,7 +371,8 @@ def _fetch_subgraph(
             if simplified and "simplified_circuit_subgraph" in str(e):
                 raise _SimplifiedNotAvailable() from e
             raise
-        for node, parent, child_pos, gate_type, info1, info2, extra, info1_name, info2_name, d in cur.fetchall():
+        for (node, parent, child_pos, gate_type, info1, info2, extra,
+             info1_name, info2_name, prob, d) in cur.fetchall():
             out.append({
                 "node": node,
                 "parent": parent,
@@ -328,6 +383,7 @@ def _fetch_subgraph(
                 "extra": extra,
                 "info1_name": info1_name,
                 "info2_name": info2_name,
+                "prob": prob,
                 "depth": d,
             })
     return out

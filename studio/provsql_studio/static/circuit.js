@@ -891,6 +891,43 @@
     else inspectorBody.insertAdjacentHTML('beforeend', html);
   }
 
+  // After a successful set_prob write, refresh the corresponding
+  // node's in-circle label so the user sees the new value without
+  // having to reload the circuit.  Only applies to ANONYMOUS gate_input
+  // gates (those with info1 == 0 / null: hand-minted Bernoullis like
+  // provsql.mixture's p_token, or `create_gate(uuid, 'input') +
+  // set_prob` in user code).  Inputs tied to a tracked relation keep
+  // their ι glyph regardless of probability -- ι reads as "this is a
+  // variable" and the per-row probability stays one click into the
+  // inspector away.  Mirrors circuit.py's _is_anonymous_input +
+  // _format_prob_label exactly.
+  function updateNodeProbLabel(uuid, p) {
+    if (!state.scene || !Array.isArray(state.scene.nodes)) return;
+    const node = state.scene.nodes.find(n => n.id === uuid);
+    if (!node || node.type !== 'input') return;
+    const info1 = node.info1;
+    const isAnonymous = info1 == null || Number(info1) === 0;
+    if (!isAnonymous) return;
+    let newLabel;
+    if (!Number.isFinite(p) || p === 1) {
+      newLabel = 'ι';  // gate-input default glyph
+    } else if (p === 0) {
+      newLabel = '0%';
+    } else {
+      const pct = p * 100;
+      if (pct > 0 && pct < 0.01) {
+        newLabel = pct.toExponential(1) + '%';
+      } else {
+        let s = pct.toFixed(2).replace(/\.?0+$/, '');
+        newLabel = s + '%';
+      }
+    }
+    node.label = newLabel;
+    const labelEl = document.querySelector(
+      `.node-group[data-id="${uuid}"] .node-label`);
+    if (labelEl) labelEl.textContent = newLabel;
+  }
+
   function formatProbabilityValue(p) {
     const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
       ? window.ProvsqlStudio.getProbDecimals()
@@ -955,6 +992,7 @@
           return;
         }
         restore(v);
+        updateNodeProbLabel(uuid, v);
       } catch (e) {
         input.disabled = false;
         input.classList.add('is-error');
