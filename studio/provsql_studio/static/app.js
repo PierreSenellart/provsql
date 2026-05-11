@@ -2073,6 +2073,27 @@ async function runQuery(ev) {
           truncated.hidden = true;
         }
       }
+      // Auto-render the single clickable UUID: when a circuit-mode
+      // query returns exactly one cell the user could click through
+      // to a DAG, save them the click.  Two+ candidates stay
+      // ambiguous (let the user pick); zero means nothing to render.
+      // A subsequent where-mode-jump preloadCircuit still runs after
+      // this via setupCircuitMode's then() callback and overwrites
+      // the auto-rendered scene with the user-chosen one.
+      //
+      // Implementation: dispatch a synthetic click on the cell so the
+      // existing click handler (wired inside the setupCircuitMode IIFE)
+      // takes care of loadCircuit + ensureCircuitLib + the eval-strip
+      // re-bind.  This file's `renderBlocks` is at module-global
+      // scope and can't reach `loadCircuit` directly, but clicking the
+      // cell DOM element travels through whichever listener was
+      // installed for the current mode.
+      if (isCircuit) {
+        const clickable = body.querySelectorAll('[data-circuit-uuid]');
+        if (clickable.length === 1) {
+          clickable[0].click();
+        }
+      }
     }
   }
 
