@@ -638,16 +638,93 @@ void collect_cmp_rv_footprint(const GenericCircuit &gc, gate_t cmp_gate,
 
 }  // namespace
 
+namespace {
+
+/* Joint-table cap.  2^k mulinput leaves are materialised per group;
+ * 256 cells is more than ample for HAVING/WHERE workloads while
+ * keeping the in-memory footprint and the per-cell MC variance
+ * (samples / 2^k counts per cell) bounded.  Groups exceeding the
+ * cap fall through to whole-circuit MC by leaving their cmps as
+ * gate_cmp; the dispatch in probability_evaluate then routes
+ * through monteCarloRV. */
+constexpr std::size_t JOINT_TABLE_K_MAX = 8;
+
+/**
+ * @brief Inline a joint-distribution table over a group of k cmps
+ *        sharing an island.
+ *
+ * Materialises 2^k - z mulinput leaves (where z is the number of
+ * outcomes with empirical probability zero, omitted to keep the
+ * circuit lean), all sharing a fresh anonymous key gate.  Each
+ * comparator @c cmps[i] is rewritten in place as @c gate_plus over
+ * the mulinputs whose joint outcome word has bit @c i set; the
+ * combined probability is the marginal P(cmp_i = 1) and shared bits
+ * across different cmps reuse the same mulinput leaf so the OR over
+ * cmps at downstream sites correctly observes the joint distribution
+ * (mutually exclusive over the joint outcomes).
+ *
+ * Sound when the per-iteration sampler memoisation in
+ * @c monteCarloRV / @c monteCarloJointDistribution gives all k cmps
+ * a consistent draw of the shared island - which is precisely the
+ * is_continuous_island_cmp + shared-footprint precondition the
+ * caller has already enforced.
+ */
+void inline_joint_table(GenericCircuit &gc,
+                        const std::vector<gate_t> &cmps,
+                        unsigned samples)
+{
+  const unsigned k = static_cast<unsigned>(cmps.size());
+  auto probs = monteCarloJointDistribution(gc, cmps, samples);
+
+  /* Fresh key gate (the anonymous block anchor for these mulinputs).
+   * Probability 1.0 because the key itself is not a sampled choice;
+   * the mutually-exclusive outcomes among the mulinputs are what
+   * carries the joint mass. */
+  gate_t key = gc.addAnonymousInputGate(1.0);
+
+  /* Allocate one mulinput per joint outcome with positive probability.
+   * Zero-probability outcomes are pruned: the cmp gate_plus
+   * rewrites below would have included them as wires with prob 0,
+   * which is a no-op in OR (gate_zero is the additive identity).
+   * value_index = w gives independentEvaluation's mulin_seen dedup
+   * a stable key (group, info) per outcome. */
+  const std::size_t nb_outcomes = std::size_t{1} << k;
+  std::vector<gate_t> mul_for_outcome(nb_outcomes,
+                                      static_cast<gate_t>(-1));
+  for (std::size_t w = 0; w < nb_outcomes; ++w) {
+    if (probs[w] <= 0.0) continue;
+    mul_for_outcome[w] =
+      gc.addAnonymousMulinputGate(key, probs[w],
+                                  static_cast<unsigned>(w));
+  }
+
+  /* Rewrite each cmp as gate_plus over the mulinputs whose joint
+   * outcome word has the cmp's bit set. */
+  for (unsigned i = 0; i < k; ++i) {
+    std::vector<gate_t> plus_wires;
+    plus_wires.reserve(nb_outcomes / 2);
+    for (std::size_t w = 0; w < nb_outcomes; ++w) {
+      if ((w & (std::size_t{1} << i)) == 0) continue;
+      gate_t m = mul_for_outcome[w];
+      if (m == static_cast<gate_t>(-1)) continue;
+      plus_wires.push_back(m);
+    }
+    gc.resolveToPlus(cmps[i], std::move(plus_wires));
+  }
+}
+
+}  // namespace
+
 unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
 {
   if (samples == 0) return 0;
 
   /* Snapshot all gate_cmp ids that look like continuous islands.
    * Each call later mutates a snapshot entry from @c gate_cmp to
-   * @c gate_input via @c resolveCmpToBernoulli, but the snapshot
-   * vector is unaffected.  The defensive type re-check at iteration
-   * time guards against any pass between snapshot and resolution
-   * having already mutated the gate. */
+   * @c gate_input via @c resolveCmpToBernoulli (singleton group)
+   * or to @c gate_plus via @c resolveToPlus (multi-cmp group), but
+   * the snapshot vector is unaffected.  The defensive type re-check
+   * at iteration time guards against intervening mutations. */
   const auto nb = gc.getNbGates();
   std::vector<gate_t> cmps;
   for (std::size_t i = 0; i < nb; ++i) {
@@ -664,36 +741,72 @@ unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
     collect_cmp_rv_footprint(gc, c, footprints[c]);
   }
 
-  /* Identify cmps that share an island with another cmp (footprint
-   * overlap on at least one base gate_rv).  These cannot be
-   * marginalised independently: doing so would treat them as
-   * spuriously independent.  The multi-cmp shared-island case is the
-   * second half of Priority 7(b) and is intentionally skipped here. */
-  std::unordered_set<gate_t> shared;
+  /* Group cmps into connected components by base-RV footprint
+   * overlap (union-find via parent[]).  Linear-probe path
+   * compression keeps the asymptotics near-linear in the number of
+   * pairwise overlap checks. */
+  std::vector<std::size_t> parent(cmps.size());
+  for (std::size_t i = 0; i < cmps.size(); ++i) parent[i] = i;
+  auto find = [&](std::size_t x) {
+    while (parent[x] != x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  auto unite = [&](std::size_t a, std::size_t b) {
+    a = find(a); b = find(b);
+    if (a != b) parent[a] = b;
+  };
   for (std::size_t i = 0; i < cmps.size(); ++i) {
     for (std::size_t j = i + 1; j < cmps.size(); ++j) {
+      if (find(i) == find(j)) continue;
       const auto &fp_i = footprints[cmps[i]];
       const auto &fp_j = footprints[cmps[j]];
-      /* Iterate the smaller set against the larger for the early-exit. */
       const auto &small = fp_i.size() < fp_j.size() ? fp_i : fp_j;
       const auto &big   = fp_i.size() < fp_j.size() ? fp_j : fp_i;
       for (gate_t rv : small) {
-        if (big.count(rv)) {
-          shared.insert(cmps[i]);
-          shared.insert(cmps[j]);
-          break;
-        }
+        if (big.count(rv)) { unite(i, j); break; }
       }
     }
   }
 
+  /* Collect cmps by component root. */
+  std::unordered_map<std::size_t, std::vector<gate_t>> groups;
+  for (std::size_t i = 0; i < cmps.size(); ++i)
+    groups[find(i)].push_back(cmps[i]);
+
   unsigned resolved = 0;
-  for (gate_t c : cmps) {
-    if (gc.getGateType(c) != gate_cmp) continue;
-    if (shared.count(c)) continue;
-    double p = monteCarloRV(gc, c, samples);
-    gc.resolveCmpToBernoulli(c, p);
-    ++resolved;
+  for (auto &[root, group] : groups) {
+    (void) root;
+    /* Defensive: re-check every cmp is still gate_cmp.  Nothing in
+     * the pipeline should have mutated them since the snapshot, but
+     * the check is cheap. */
+    bool all_pristine = true;
+    for (gate_t c : group) {
+      if (gc.getGateType(c) != gate_cmp) { all_pristine = false; break; }
+    }
+    if (!all_pristine) continue;
+
+    if (group.size() == 1) {
+      /* Singleton island: marginalise into a Bernoulli leaf.  Cheap,
+       * variance only on the one marginal, downstream evaluators see
+       * a plain gate_input. */
+      double p = monteCarloRV(gc, group[0], samples);
+      gc.resolveCmpToBernoulli(group[0], p);
+      ++resolved;
+      continue;
+    }
+
+    /* Multi-cmp shared island: inline the joint table iff k is
+     * small enough to keep the 2^k materialisation tractable.  For
+     * larger k the cmps stay as gate_cmp and fall through to
+     * whole-circuit MC via monteCarloRV (the only currently-correct
+     * path for k > JOINT_TABLE_K_MAX shared islands). */
+    if (group.size() > JOINT_TABLE_K_MAX) continue;
+
+    inline_joint_table(gc, group, samples);
+    resolved += static_cast<unsigned>(group.size());
   }
 
   return resolved;

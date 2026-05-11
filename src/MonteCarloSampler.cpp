@@ -251,6 +251,44 @@ double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples)
   return success * 1.0 / samples;
 }
 
+std::vector<double> monteCarloJointDistribution(
+  const GenericCircuit &gc,
+  const std::vector<gate_t> &cmps,
+  unsigned samples)
+{
+  const unsigned k = cmps.size();
+  if (k == 0)
+    throw CircuitException(
+      "monteCarloJointDistribution: empty cmps list");
+  if (k > 30)
+    throw CircuitException(
+      "monteCarloJointDistribution: too many cmps in island ("
+      + std::to_string(k) + " > 30)");
+
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  const std::size_t nb_outcomes = std::size_t{1} << k;
+  std::vector<unsigned> counts(nb_outcomes, 0);
+
+  for (unsigned i = 0; i < samples; ++i) {
+    sampler.resetIteration();
+    std::size_t w = 0;
+    for (unsigned j = 0; j < k; ++j) {
+      if (sampler.evalBool(cmps[j])) w |= (std::size_t{1} << j);
+    }
+    ++counts[w];
+    if (provsql_interrupted)
+      throw CircuitException(
+        "Interrupted after " + std::to_string(i + 1) + " samples");
+  }
+
+  std::vector<double> probs(nb_outcomes);
+  for (std::size_t w = 0; w < nb_outcomes; ++w)
+    probs[w] = counts[w] * 1.0 / samples;
+  return probs;
+}
+
 std::vector<double> monteCarloScalarSamples(
   const GenericCircuit &gc, gate_t root, unsigned samples)
 {

@@ -89,15 +89,28 @@ unsigned runHybridSimplifier(GenericCircuit &gc);
  * compilation methods become available on circuits that would
  * otherwise have to fall through to whole-circuit MC.
  *
- * **Single-cmp islands only.**  When two or more comparators share
- * a base @c gate_rv (their per-cmp footprints overlap), their
- * joint distribution would have to be enumerated together;
- * marginalising them independently would silently introduce
- * spurious-independence error.  This pass detects shared-island
- * groups via the base-RV footprint and skips them: those cmps
- * stay as @c gate_cmp and fall through to whole-circuit MC.
- * Resolving the shared-island case is the second half of Priority
- * 7(b) (the 2^k joint-table construction).
+ * **Singleton groups** are marginalised into a single
+ * @c gate_input via @c GenericCircuit::resolveCmpToBernoulli.
+ *
+ * **Multi-cmp shared-island groups** (k comparators sharing one or
+ * more base @c gate_rv leaves, detected via pairwise footprint
+ * overlap with union-find) are resolved by inlining a 2^k joint
+ * distribution table:
+ * - One anonymous @c gate_input acts as the block key.
+ * - One @c gate_mulinput per joint outcome with positive probability,
+ *   all sharing the key, carries the joint mass (mutually-exclusive
+ *   block).
+ * - Each comparator is rewritten as @c gate_plus over the mulinputs
+ *   whose joint outcome word has the comparator's bit set.
+ * The downstream OR over the rewritten comparators thereby observes
+ * the dependent joint distribution: mulinputs across comparators
+ * dedup at OR sites in
+ * @c BooleanCircuit::independentEvaluationInternal (or are
+ * Bayesian-tree-rewritten by @c rewriteMultivaluedGates before
+ * @c tree-decomposition / @c monte-carlo / external compilers).
+ * Groups with k > @c JOINT_TABLE_K_MAX (currently 8, i.e. 256
+ * outcomes) fall through to whole-circuit MC to keep the
+ * materialisation bounded.
  *
  * @param gc       Circuit to mutate in place.
  * @param samples  Number of MC iterations used per marginalisation.

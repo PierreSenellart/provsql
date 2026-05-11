@@ -185,18 +185,21 @@ SELECT abs(provsql.probability_evaluate(
 RESET provsql.rv_mc_samples;
 RESET provsql.monte_carlo_seed;
 
--- (13) Shared island.  Two cmps share the SAME (N + U) arith gate
---      (via a CTE binding so r.expr is the same gate_t in both
---      cmp_gt calls).  The dependent truth is P(x > 0 OR x > 1)
---      = P(x > 0) = 0.5 by the subset relation `x > 1 implies
---      x > 0`.  If the decomposer wrongly marginalised the two
---      cmps independently, their Bernoulli OR would give
---      ~ 0.5 + 0.2 - 0.1 = 0.6 instead - well outside tolerance.
---      The decomposer's footprint-overlap check leaves both cmps
---      as gate_cmp; 'monte-carlo' then evaluates them through
---      monteCarloRV's per-iteration scalar memoisation, which
---      gives both cmps the same draw of x and recovers the
---      dependent truth.
+-- (13) Shared island, joint-table inline via 'monte-carlo'.  Two
+--      cmps share the SAME (N + U) arith gate (via a CTE binding so
+--      r.expr is the same gate_t in both cmp_gt calls).  The
+--      dependent truth is P(x > 0 OR x > 1) = P(x > 0) = 0.5 by the
+--      subset relation `x > 1 implies x > 0`.  The decomposer
+--      detects the shared footprint, samples the joint distribution
+--      over (cmp_A, cmp_B), and inlines a 4-way mulinput block;
+--      cmp_A and cmp_B are rewritten as gate_plus over the mulinputs
+--      with their bit set.  After rewriteMultivaluedGates (called
+--      inside the legacy 'monte-carlo' path) the Bayesian tree
+--      preserves the joint dependence, so the BC monteCarlo over
+--      the OR gives ~0.5.  If the decomposer had wrongly treated
+--      the two cmps as independent, each marginal Bernoulli (0.5
+--      and ~0.2) OR'd independently would give ~0.6 - well outside
+--      tolerance.
 SET provsql.monte_carlo_seed = 42;
 WITH r AS (SELECT provsql.normal(0, 1) + provsql.uniform(-1, 1) AS expr)
 SELECT abs(provsql.probability_evaluate(
@@ -205,8 +208,61 @@ SELECT abs(provsql.probability_evaluate(
                provsql.rv_cmp_gt(r.expr, 1::random_variable)
              ]),
              'monte-carlo', '100000') - 0.5) < 0.01
-       AS shared_island_falls_through_to_mc
+       AS shared_island_joint_table_mc
 FROM r;
+RESET provsql.monte_carlo_seed;
+
+-- (14) Same shared-island shape via 'tree-decomposition'.  The
+--      tree-decomposition method calls rewriteMultivaluedGates
+--      on the joint-table mulinputs and then runs the
+--      d-DNNF-based evaluator on the resulting Boolean circuit,
+--      which handles repeated MULIN references across cmps
+--      cleanly (the Bayesian-tree rewrite re-shares the per-block
+--      Bernoulli decisions across cmp_A and cmp_B by construction).
+--      The result should match the dependent truth (0.5) within
+--      the joint-table MC noise.
+SET provsql.monte_carlo_seed = 42;
+WITH r AS (SELECT provsql.normal(0, 1) + provsql.uniform(-1, 1) AS expr)
+SELECT abs(provsql.probability_evaluate(
+             provsql.provenance_plus(ARRAY[
+               provsql.rv_cmp_gt(r.expr, 0::random_variable),
+               provsql.rv_cmp_gt(r.expr, 1::random_variable)
+             ]),
+             'tree-decomposition') - 0.5) < 0.02
+       AS shared_island_joint_table_treedec
+FROM r;
+RESET provsql.monte_carlo_seed;
+
+-- (15) Multi-cmp shared island where the cmps do NOT share a
+--      common scalar lhs.  Two cmps `(X + Y_A) > 0` and
+--      `(X + Y_B) > 0` share base RV X (their footprints overlap
+--      on X) but use different arith composites (Y_A and Y_B are
+--      distinct fresh uniforms, so the lhs gate_arith UUIDs
+--      differ).  A future monotone-shared-scalar fast path would
+--      check for an identical lhs gate_t and skip this case; the
+--      generic 2^k MC joint table is the only correct handler.
+--
+--      With X ~ N(0, 1) and Y_A, Y_B ~ U(-1, 1) all independent,
+--      P(A) = P(B) = 0.5 by symmetry; conditional on X = x the two
+--      cmps are independent, so P(A AND B) integrates
+--      `clip((1 + x) / 2, 0, 1)^2` against the standard normal
+--      density, yielding ~0.379.  P(A OR B) ~= 0.621.  The
+--      independent-Bernoulli answer would be 0.5 + 0.5 - 0.25
+--      = 0.75 - well outside the 0.05 tolerance.
+SET provsql.monte_carlo_seed = 42;
+SET provsql.rv_mc_samples = 20000;
+WITH r AS (SELECT provsql.normal(0, 1) AS x)
+SELECT abs(provsql.probability_evaluate(
+             provsql.provenance_plus(ARRAY[
+               provsql.rv_cmp_gt(r.x + provsql.uniform(-1, 1),
+                                 0::random_variable),
+               provsql.rv_cmp_gt(r.x + provsql.uniform(-1, 1),
+                                 0::random_variable)
+             ]),
+             'tree-decomposition') - 0.621) < 0.05
+       AS shared_island_disparate_scalars
+FROM r;
+RESET provsql.rv_mc_samples;
 RESET provsql.monte_carlo_seed;
 
 -- ---------------------------------------------------------------

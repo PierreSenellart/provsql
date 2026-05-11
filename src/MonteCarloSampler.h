@@ -72,6 +72,39 @@ double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples);
 bool circuitHasRV(const GenericCircuit &gc, gate_t root);
 
 /**
+ * @brief Estimate the joint distribution of @p cmps via Monte Carlo.
+ *
+ * For each of @p samples worlds, samples the underlying continuous
+ * island once (shared @c gate_rv leaves use the same per-iteration
+ * draw, per @c monteCarloRV's evalScalar) and evaluates each
+ * comparator in @p cmps; the @c k = @p cmps.size() resulting bits
+ * form a single word @c w with bit @c i = result of @c cmps[i].  The
+ * returned vector has size @c 2^k; entry @c w is the empirical
+ * probability that the joint outcome @c w occurred.
+ *
+ * Used by the multi-cmp half of the hybrid evaluator's island
+ * decomposer to inline a categorical distribution over the @c k cmps
+ * that share an island; @p cmps must all sit over a continuous
+ * island whose scalar evaluation reuses common @c gate_rv leaves so
+ * the cmp draws are correctly correlated.
+ *
+ * @c k is capped at 30 (the result vector size is @c 2^30) to keep
+ * memory bounded; the decomposer enforces a much tighter cap
+ * (@c k_max in @c HybridEvaluator.cpp) so this is purely a safety
+ * limit.  Throws @c CircuitException above the cap.
+ *
+ * @param gc       The circuit.
+ * @param cmps     The comparators jointly evaluated.
+ * @param samples  Number of independent worlds.
+ * @return         Vector of joint probabilities, indexed by the bit
+ *                 word @c w (bit @c i = @c cmps[i] outcome).
+ */
+std::vector<double> monteCarloJointDistribution(
+  const GenericCircuit &gc,
+  const std::vector<gate_t> &cmps,
+  unsigned samples);
+
+/**
  * @brief Sample a scalar sub-circuit @p samples times and return the draws.
  *
  * @p root must yield a scalar (@c gate_value, @c gate_rv, or @c gate_arith

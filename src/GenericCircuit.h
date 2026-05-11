@@ -259,6 +259,74 @@ void setWires(gate_t g, std::vector<gate_t> w) {
 }
 
 /**
+ * @brief Rewrite an arbitrary gate as a @c gate_plus over @p w.
+ *
+ * Used by the @c HybridEvaluator multi-cmp island decomposer when
+ * a comparator from a shared-island group is rewritten as the OR
+ * of the joint-table @c gate_mulinput leaves where the comparator's
+ * bit is set.  Clears infos and extra and installs the new wires.
+ */
+void resolveToPlus(gate_t g, std::vector<gate_t> w) {
+  setGateType(g, gate_plus);
+  getWires(g) = std::move(w);
+  infos.erase(g);
+  extra.erase(g);
+}
+
+/**
+ * @brief Allocate a fresh @c gate_input gate carrying probability
+ *        @p p, with a unique synthetic UUID so subsequent
+ *        @c BooleanCircuit conversion does not collide multiple
+ *        no-UUID inputs onto the same gate.
+ *
+ * The synthetic UUID is derived from the freshly-assigned gate id;
+ * it is not a real v4 UUID (does not match the @c xxxxxxxx-...
+ * format) and exists only for in-memory uniqueness during the
+ * probability_evaluate pipeline.  The gate is added to @c inputs
+ * so the conversion's first loop maps it into @c BooleanCircuit's
+ * @c gc_to_bc.
+ *
+ * @param p  Probability for the new input.
+ * @return   The id of the new gate.
+ */
+gate_t addAnonymousInputGate(double p) {
+  gate_t id = addGate();
+  setGateType(id, gate_input);
+  setProb(id, p);
+  std::string u = "dec-in-" + std::to_string(static_cast<size_t>(id));
+  uuid2id[u] = id;
+  id2uuid[id] = u;
+  inputs.insert(id);
+  return id;
+}
+
+/**
+ * @brief Allocate a fresh @c gate_mulinput gate with key @p key,
+ *        probability @p p, and value index @p value_index.
+ *
+ * Used by the joint-table decomposer to materialise one Bernoulli
+ * outcome of a 2^k-way categorical distribution over a shared
+ * continuous island.  All mulinputs in one joint table share the
+ * same @p key (the block anchor returned by @c addAnonymousInputGate);
+ * @p value_index is stored in @c info1 so
+ * @c BooleanCircuit::independentEvaluation can group / dedup
+ * MULIN references at OR sites.  A unique synthetic UUID is
+ * minted for the same reason as @c addAnonymousInputGate.
+ */
+gate_t addAnonymousMulinputGate(gate_t key, double p,
+                                unsigned value_index) {
+  gate_t id = addGate();
+  setGateType(id, gate_mulinput);
+  setProb(id, p);
+  setInfos(id, value_index, 0);
+  getWires(id).push_back(key);
+  std::string u = "dec-mul-" + std::to_string(static_cast<size_t>(id));
+  uuid2id[u] = id;
+  id2uuid[id] = u;
+  return id;
+}
+
+/**
  * @brief Boost serialisation support.
  * @param ar       Boost archive (input or output).
  * @param version  Archive version (unused).

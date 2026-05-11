@@ -131,19 +131,19 @@ static Datum probability_evaluate_internal
   // the comparators RangeCheck could not collapse.
   provsql::runAnalyticEvaluator(gc);
 
-  // Hybrid-evaluator island decomposer: per-cmp MC marginalisation
-  // of the residual continuous-island comparators that none of the
-  // earlier passes could resolve (e.g. heterogeneous distributions
-  // under arith, or normal+uniform compositions outside the analytic
-  // CDF's scope).  Each qualifying cmp becomes a Bernoulli gate_input
-  // so the surrounding Boolean structure can be evaluated by every
-  // existing method ('independent', 'tree-decomposition',
-  // 'monte-carlo', 'd4', etc.) without the BoolExpr semiring choking
-  // on a leftover gate_arith leaf.  Single-cmp islands only; cmps
-  // that share a base RV with another unresolved cmp are skipped and
-  // fall through to whole-circuit MC (handled later via monteCarloRV
-  // when the method permits, or by the multi-cmp joint-table half
-  // of Priority 7(b) once that lands).
+  // Hybrid-evaluator island decomposer: MC marginalisation of the
+  // residual continuous-island comparators that none of the earlier
+  // passes could resolve (e.g. heterogeneous distributions under
+  // arith, or compositions outside the analytic CDF's scope).
+  // Singleton groups become Bernoulli gate_input; shared-island
+  // groups of k <= 8 cmps get a 2^k joint-distribution table inlined
+  // as gate_mulinput leaves with each cmp rewritten as gate_plus
+  // over the bits-set mulinputs.  Either way the surrounding circuit
+  // becomes purely Boolean, so the existing 'independent' /
+  // 'tree-decomposition' / 'monte-carlo' / external-compiler paths
+  // become usable on continuous circuits.  Groups with k > 8 (rare
+  // in practice) keep their cmps as gate_cmp and fall through to
+  // whole-circuit MC via monteCarloRV.
   if (provsql_hybrid_evaluation) {
     provsql::runHybridDecomposer(
       gc, static_cast<unsigned>(provsql_rv_mc_samples));
