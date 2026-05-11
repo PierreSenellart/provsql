@@ -119,35 +119,47 @@ static Datum probability_evaluate_internal
     provsql::runRangeCheck(gc);
   }
 
-  // Probability-specific peephole: AnalyticEvaluator decides
-  // continuous-RV comparators with closed-form CDFs (X cmp c for any
-  // bare gate_rv leaf, X cmp Y for two independent normal leaves) by
-  // replacing them with Bernoulli gate_input gates carrying the
-  // analytical probability.  Always sound for probability evaluation;
-  // produces fractional probabilities so it is meaningful only on
-  // this path (not in getGenericCircuit, which is shared with
-  // semiring evaluators).  Runs after RangeCheck so the cheaper
-  // 0/1 decisions are already taken; AnalyticEvaluator only sees
-  // the comparators RangeCheck could not collapse.
-  provsql::runAnalyticEvaluator(gc);
-
-  // Hybrid-evaluator island decomposer: MC marginalisation of the
-  // residual continuous-island comparators that none of the earlier
-  // passes could resolve (e.g. heterogeneous distributions under
-  // arith, or compositions outside the analytic CDF's scope).
-  // Singleton groups become Bernoulli gate_input; shared-island
-  // groups of k <= 8 cmps get a 2^k joint-distribution table inlined
-  // as gate_mulinput leaves with each cmp rewritten as gate_plus
-  // over the bits-set mulinputs.  Either way the surrounding circuit
-  // becomes purely Boolean, so the existing 'independent' /
-  // 'tree-decomposition' / 'monte-carlo' / external-compiler paths
-  // become usable on continuous circuits.  Groups with k > 8 (rare
-  // in practice) keep their cmps as gate_cmp and fall through to
-  // whole-circuit MC via monteCarloRV.
+  // Hybrid-evaluator island decomposer: handles continuous-island
+  // comparators by grouping them via base-RV footprint overlap.
+  // Multi-cmp shared-island groups get a joint-distribution table
+  // inlined as a mulinput block - via the monotone-shared-scalar
+  // fast path (k+1 mulinputs; interval probabilities exact via
+  // cdfAt when the shared scalar is a bare gate_rv, MC binning over
+  // k+1 intervals when it is a gate_arith composite) when all cmps
+  // share an lhs gate_t and have gate_value rhs, falling through to
+  // the generic 2^k MC joint table otherwise.  Singleton bare-RV
+  // cmps are left for AnalyticEvaluator (closed-form CDF on its own
+  // is cheaper than per-cmp MC); singleton gate_arith cmps get a
+  // per-cmp MC marginalisation here.  Either way the rewritten
+  // cmps become gate_plus over mulinputs (or gate_input
+  // Bernoullis), so the surrounding circuit is purely Boolean for
+  // the downstream pass.
+  //
+  // Runs BEFORE AnalyticEvaluator so shared bare-RV cmps reach the
+  // grouping logic - AnalyticEvaluator would otherwise resolve each
+  // independently into a Bernoulli, silently using the independence
+  // approximation on shared base RVs.  The trade-off: the fast
+  // path's mulinput block is a dependent circuit that
+  // BooleanCircuit::independentEvaluation rejects when the cmps
+  // combine via AND ('Not an independent circuit').  Callers that
+  // need shared-island dependence handling must use
+  // 'tree-decomposition' / 'monte-carlo' / external compilation;
+  // 'independent' remains correct only for circuits that ARE
+  // independent.
   if (provsql_hybrid_evaluation) {
     provsql::runHybridDecomposer(
       gc, static_cast<unsigned>(provsql_rv_mc_samples));
   }
+
+  // Probability-specific peephole: AnalyticEvaluator decides any
+  // residual continuous-RV comparators the decomposer left alone
+  // (singleton bare gate_rv vs gate_value, or two bare normals) by
+  // replacing them with Bernoulli gate_input gates carrying the
+  // analytical probability.  Always sound for probability
+  // evaluation; produces fractional probabilities so it is
+  // meaningful only on this path (not in getGenericCircuit, which
+  // is shared with semiring evaluators).
+  provsql::runAnalyticEvaluator(gc);
 
   double result;
 

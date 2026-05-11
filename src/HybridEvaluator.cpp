@@ -16,11 +16,14 @@
 #include <utility>
 #include <vector>
 
-#include "MonteCarloSampler.h"  // monteCarloRV
+#include "Aggregation.h"        // ComparisonOperator, cmpOpFromOid
+#include "AnalyticEvaluator.h"  // cdfAt
+#include "MonteCarloSampler.h"  // monteCarloRV, monteCarloScalarSamples
 #include "RandomVariable.h"     // parse_distribution_spec, parseDoubleStrict, DistKind
 extern "C" {
 #include "provsql_utils.h"      // gate_type, provsql_arith_op
 }
+#include <algorithm>            // std::sort, std::unique, std::upper_bound
 
 namespace provsql {
 
@@ -650,6 +653,270 @@ namespace {
 constexpr std::size_t JOINT_TABLE_K_MAX = 8;
 
 /**
+ * @brief Test whether @c AnalyticEvaluator would resolve @p cmp_gate
+ *        analytically on its own.
+ *
+ * The decomposer now runs before @c AnalyticEvaluator (so shared
+ * bare-RV cmps reach the grouping logic and the fast path's
+ * analytical CDF can fire), but it must leave isolated bare-RV cmps
+ * untouched: marginalising those via MC would waste samples on a
+ * case the closed-form CDF handles exactly.  Mirror the shape match
+ * in @c tryAnalyticDecide (bare RV vs gate_value either way around;
+ * two bare normal RVs).
+ */
+bool is_analytic_singleton_cmp(const GenericCircuit &gc, gate_t cmp_gate)
+{
+  const auto &wires = gc.getWires(cmp_gate);
+  if (wires.size() != 2) return false;
+  auto t0 = gc.getGateType(wires[0]);
+  auto t1 = gc.getGateType(wires[1]);
+
+  /* X cmp c / c cmp X: AnalyticEvaluator resolves any supported
+   * distribution kind via the closed-form CDF. */
+  if ((t0 == gate_rv && t1 == gate_value) ||
+      (t0 == gate_value && t1 == gate_rv))
+    return true;
+
+  /* X cmp Y both bare normals: AnalyticEvaluator's normal-diff
+   * shortcut applies. */
+  if (t0 == gate_rv && t1 == gate_rv) {
+    auto sx = parse_distribution_spec(gc.getExtra(wires[0]));
+    auto sy = parse_distribution_spec(gc.getExtra(wires[1]));
+    if (sx && sy && sx->kind == DistKind::Normal
+                 && sy->kind == DistKind::Normal)
+      return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Information needed by @c inline_fast_path: the shared scalar
+ *        plus, for each cmp, the comparison operator and the
+ *        constant rhs threshold (after flipping for cmps shaped
+ *        @c c @c op @c X).
+ */
+struct FastPathInfo {
+  gate_t scalar;
+  std::vector<ComparisonOperator> ops;     /* one per cmp, oriented as `scalar op c` */
+  std::vector<double> thresholds;          /* one per cmp */
+};
+
+ComparisonOperator flip_cmp_op(ComparisonOperator op)
+{
+  switch (op) {
+    case ComparisonOperator::LT: return ComparisonOperator::GT;
+    case ComparisonOperator::LE: return ComparisonOperator::GE;
+    case ComparisonOperator::GT: return ComparisonOperator::LT;
+    case ComparisonOperator::GE: return ComparisonOperator::LE;
+    case ComparisonOperator::EQ: return ComparisonOperator::EQ;
+    case ComparisonOperator::NE: return ComparisonOperator::NE;
+  }
+  return op;
+}
+
+bool apply_cmp(double l, ComparisonOperator op, double r)
+{
+  switch (op) {
+    case ComparisonOperator::LT: return l <  r;
+    case ComparisonOperator::LE: return l <= r;
+    case ComparisonOperator::EQ: return l == r;
+    case ComparisonOperator::NE: return l != r;
+    case ComparisonOperator::GE: return l >= r;
+    case ComparisonOperator::GT: return l >  r;
+  }
+  return false;
+}
+
+/**
+ * @brief Detect the monotone-shared-scalar fast path on a group of
+ *        comparators.
+ *
+ * Fires when every cmp in @p cmps has one side equal to a single
+ * shared gate_t @c s and the other side a @c gate_value: the k cmps
+ * then jointly partition the @c s-line into at most k+1 intervals,
+ * with each interval producing a deterministic k-bit outcome.  This
+ * shape is common in HAVING / WHERE with multiple thresholds on the
+ * same aggregate / column: e.g.
+ * <tt>count(*) > 10 OR count(*) < 5</tt>.
+ *
+ * Returns @c std::nullopt when any cmp has both non-constant sides,
+ * when the cmps don't all share the same @c s gate_t, when a
+ * comparator OID is unrecognised, or when @c EQ / @c NE appears (the
+ * interval representation can't express a measure-zero point).
+ */
+std::optional<FastPathInfo>
+detect_shared_scalar(const GenericCircuit &gc,
+                     const std::vector<gate_t> &cmps)
+{
+  FastPathInfo info;
+  info.ops.reserve(cmps.size());
+  info.thresholds.reserve(cmps.size());
+  bool first = true;
+
+  for (gate_t c : cmps) {
+    const auto &wires = gc.getWires(c);
+    if (wires.size() != 2) return std::nullopt;
+
+    bool ok = false;
+    ComparisonOperator op = cmpOpFromOid(gc.getInfos(c).first, ok);
+    if (!ok) return std::nullopt;
+    /* EQ / NE on continuous RVs have measure zero / one and were
+     * already resolved by RangeCheck; if we still see one we don't
+     * know how to fit it into an interval partition.  Bail. */
+    if (op == ComparisonOperator::EQ || op == ComparisonOperator::NE)
+      return std::nullopt;
+
+    gate_t scalar_side = static_cast<gate_t>(-1);
+    double threshold = std::numeric_limits<double>::quiet_NaN();
+    ComparisonOperator effective_op = op;
+    if (gc.getGateType(wires[1]) == gate_value) {
+      scalar_side = wires[0];
+      try { threshold = parseDoubleStrict(gc.getExtra(wires[1])); }
+      catch (const CircuitException &) { return std::nullopt; }
+    } else if (gc.getGateType(wires[0]) == gate_value) {
+      scalar_side = wires[1];
+      try { threshold = parseDoubleStrict(gc.getExtra(wires[0])); }
+      catch (const CircuitException &) { return std::nullopt; }
+      effective_op = flip_cmp_op(op);
+    } else {
+      return std::nullopt;
+    }
+
+    if (first) {
+      info.scalar = scalar_side;
+      first = false;
+    } else if (info.scalar != scalar_side) {
+      return std::nullopt;
+    }
+    info.ops.push_back(effective_op);
+    info.thresholds.push_back(threshold);
+  }
+  return info;
+}
+
+/**
+ * @brief Inline a fast-path joint table for a monotone-shared-scalar
+ *        group.
+ *
+ * The k cmps partition the scalar line into at most k+1 intervals
+ * (one per pair of consecutive sorted distinct thresholds plus the
+ * two infinite tails).  Each interval gets a single mulinput with
+ * probability equal to the scalar's mass on the interval; the
+ * comparator outcomes are deterministic per interval (evaluated at
+ * a strictly-interior representative point) and the k cmps are
+ * rewritten as @c gate_plus over the mulinputs whose interval makes
+ * them true.
+ *
+ * Interval probabilities are computed analytically via @c cdfAt when
+ * the scalar is a bare @c gate_rv with a CDF the helper supports;
+ * otherwise (a @c gate_arith composite, or an Erlang with
+ * non-integer shape) we fall back to MC by sampling the scalar
+ * @p samples times and binning into intervals.
+ */
+void inline_fast_path(GenericCircuit &gc,
+                      const std::vector<gate_t> &cmps,
+                      const FastPathInfo &info,
+                      unsigned samples)
+{
+  /* Sort + dedup thresholds; the resulting m distinct boundaries
+   * partition R into m+1 open intervals
+   * (-∞, t_0), (t_0, t_1), ..., (t_{m-1}, +∞). */
+  std::vector<double> ts = info.thresholds;
+  std::sort(ts.begin(), ts.end());
+  ts.erase(std::unique(ts.begin(), ts.end()), ts.end());
+  const std::size_t m = ts.size();
+  const std::size_t nb_intervals = m + 1;
+
+  /* Compute interval probabilities.  Try the analytical CDF first:
+   * when the shared scalar is a bare @c gate_rv with a CDF
+   * @c cdfAt understands, the interval probability is
+   * @c F(t_{i+1}) - F(t_i) exactly &mdash; no MC noise, no sampling.
+   * This is the headline benefit of the fast path: shared bare-RV
+   * groups land on the exact dependent truth and the resulting
+   * Bernoulli probabilities propagate through tree-decomposition /
+   * compilation without any sampling noise contributed by the
+   * decomposer.  Fall back to MC binning over @p samples scalar
+   * draws when the scalar is a @c gate_arith composite (no CDF) or
+   * when @c cdfAt returns NaN on a boundary (Erlang with
+   * non-integer shape, etc.). */
+  std::vector<double> interval_probs(nb_intervals, 0.0);
+  bool analytical = false;
+  if (gc.getGateType(info.scalar) == gate_rv) {
+    auto spec = parse_distribution_spec(gc.getExtra(info.scalar));
+    if (spec) {
+      std::vector<double> cdf_at_boundary(m);
+      bool all_ok = true;
+      for (std::size_t i = 0; i < m; ++i) {
+        cdf_at_boundary[i] = cdfAt(*spec, ts[i]);
+        if (std::isnan(cdf_at_boundary[i])) { all_ok = false; break; }
+      }
+      if (all_ok) {
+        interval_probs[0] = cdf_at_boundary[0];
+        for (std::size_t i = 1; i < m; ++i)
+          interval_probs[i] = cdf_at_boundary[i] - cdf_at_boundary[i - 1];
+        interval_probs[m] = 1.0 - cdf_at_boundary[m - 1];
+        analytical = true;
+      }
+    }
+  }
+  if (!analytical) {
+    auto draws = monteCarloScalarSamples(gc, info.scalar, samples);
+    for (double s : draws) {
+      auto it = std::upper_bound(ts.begin(), ts.end(), s);
+      std::size_t idx = static_cast<std::size_t>(it - ts.begin());
+      ++interval_probs[idx];
+    }
+    for (auto &p : interval_probs) p /= samples;
+  }
+
+  /* For each interval, determine the k-bit cmp outcome word.  Pick
+   * a representative point strictly inside the interval: the
+   * midpoint for finite intervals, t_0 - 1 / t_{m-1} + 1 for the
+   * infinite tails.  Continuous distributions assign zero mass to
+   * the boundaries, so the choice of interior point doesn't
+   * affect any cmp's outcome on the open interval. */
+  std::vector<unsigned long> outcome_word(nb_intervals, 0);
+  for (std::size_t i = 0; i < nb_intervals; ++i) {
+    double point;
+    if (i == 0)              point = ts[0] - 1.0;
+    else if (i == m)         point = ts[m - 1] + 1.0;
+    else                     point = 0.5 * (ts[i - 1] + ts[i]);
+    unsigned long w = 0;
+    for (std::size_t j = 0; j < info.thresholds.size(); ++j) {
+      if (apply_cmp(point, info.ops[j], info.thresholds[j]))
+        w |= (1ul << j);
+    }
+    outcome_word[i] = w;
+  }
+
+  /* Allocate key + per-interval mulinputs (skipping zero-prob
+   * intervals to keep the materialised circuit lean). */
+  gate_t key = gc.addAnonymousInputGate(1.0);
+  std::vector<gate_t> mul_for_interval(nb_intervals,
+                                       static_cast<gate_t>(-1));
+  for (std::size_t i = 0; i < nb_intervals; ++i) {
+    if (interval_probs[i] <= 0.0) continue;
+    mul_for_interval[i] =
+      gc.addAnonymousMulinputGate(key, interval_probs[i],
+                                  static_cast<unsigned>(i));
+  }
+
+  /* Rewrite each cmp as gate_plus over the mulinputs whose
+   * interval-outcome word has the cmp's bit set. */
+  for (std::size_t j = 0; j < cmps.size(); ++j) {
+    std::vector<gate_t> plus_wires;
+    plus_wires.reserve(nb_intervals);
+    for (std::size_t i = 0; i < nb_intervals; ++i) {
+      if (!(outcome_word[i] & (1ul << j))) continue;
+      gate_t mw = mul_for_interval[i];
+      if (mw == static_cast<gate_t>(-1)) continue;
+      plus_wires.push_back(mw);
+    }
+    gc.resolveToPlus(cmps[j], std::move(plus_wires));
+  }
+}
+
+/**
  * @brief Inline a joint-distribution table over a group of k cmps
  *        sharing an island.
  *
@@ -789,20 +1056,35 @@ unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
     if (!all_pristine) continue;
 
     if (group.size() == 1) {
-      /* Singleton island: marginalise into a Bernoulli leaf.  Cheap,
-       * variance only on the one marginal, downstream evaluators see
-       * a plain gate_input. */
+      /* Singleton island.  If AnalyticEvaluator would resolve this
+       * cmp exactly on its own (bare gate_rv vs gate_value, or two
+       * bare normals), leave it untouched and let the closed-form
+       * pass below handle it - no point burning MC samples on a
+       * case with an analytical answer.  Otherwise MC-marginalise
+       * into a Bernoulli leaf here. */
+      if (is_analytic_singleton_cmp(gc, group[0])) continue;
       double p = monteCarloRV(gc, group[0], samples);
       gc.resolveCmpToBernoulli(group[0], p);
       ++resolved;
       continue;
     }
 
-    /* Multi-cmp shared island: inline the joint table iff k is
-     * small enough to keep the 2^k materialisation tractable.  For
-     * larger k the cmps stay as gate_cmp and fall through to
-     * whole-circuit MC via monteCarloRV (the only currently-correct
-     * path for k > JOINT_TABLE_K_MAX shared islands). */
+    /* Multi-cmp shared island.  Try the monotone-shared-scalar fast
+     * path first: when every cmp has shape `s op c` for a common
+     * scalar gate_t s, the joint table is built from k+1 intervals
+     * (analytical when s is a bare gate_rv with a known CDF, MC
+     * binning otherwise) instead of 2^k cells, and the test
+     * 14-style shared bare-RV case (`X > 0 OR X > 1`) lands on the
+     * exact answer with no MC noise.  When detection fails, fall
+     * through to the generic 2^k MC joint table iff k is small
+     * enough; larger groups keep their cmps as gate_cmp and fall
+     * through to whole-circuit MC. */
+    if (auto info = detect_shared_scalar(gc, group)) {
+      inline_fast_path(gc, group, *info, samples);
+      resolved += static_cast<unsigned>(group.size());
+      continue;
+    }
+
     if (group.size() > JOINT_TABLE_K_MAX) continue;
 
     inline_joint_table(gc, group, samples);

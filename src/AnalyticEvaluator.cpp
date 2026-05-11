@@ -18,19 +18,7 @@ extern "C" {
 
 namespace provsql {
 
-namespace {
-
-/* All four ordered comparators reduce to either F(c) or 1 - F(c)
- * (continuous: @c < and @c <= have the same probability, ditto @c >
- * and @c >=).  EQ / NE on continuous RVs are handled universally by
- * RangeCheck (P(X = c) = 0, P(X != c) = 1, sound in every semiring
- * via gate_zero / gate_one); they should never reach this function.
- *
- * CDFs come from @c <cmath>: @c std::erf for the normal,
- * @c std::expm1 for the exponential, plain arithmetic for the
- * uniform.  Standard-library precision (~1 ULP on modern platforms)
- * is well within the 1e-12 tolerance the regression tests pin. */
-double cdfDecide(const DistributionSpec &d, ComparisonOperator op, double c)
+double cdfAt(const DistributionSpec &d, double c)
 {
   double cdf_c = std::numeric_limits<double>::quiet_NaN();
   switch (d.kind) {
@@ -74,6 +62,19 @@ double cdfDecide(const DistributionSpec &d, ComparisonOperator op, double c)
       break;
     }
   }
+  return cdf_c;
+}
+
+namespace {
+
+/* All four ordered comparators reduce to either F(c) or 1 - F(c)
+ * (continuous: @c < and @c <= have the same probability, ditto @c >
+ * and @c >=).  EQ / NE on continuous RVs are handled universally by
+ * RangeCheck (P(X = c) = 0, P(X != c) = 1, sound in every semiring
+ * via gate_zero / gate_one); they should never reach this function. */
+double cdfDecide(const DistributionSpec &d, ComparisonOperator op, double c)
+{
+  double cdf_c = cdfAt(d, c);
   if (std::isnan(cdf_c)) return cdf_c;
 
   switch (op) {

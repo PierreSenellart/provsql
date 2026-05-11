@@ -33,8 +33,32 @@
 #define PROVSQL_ANALYTIC_EVALUATOR_H
 
 #include "GenericCircuit.h"
+#include "RandomVariable.h"  // DistributionSpec
 
 namespace provsql {
+
+/**
+ * @brief Closed-form CDF @f$F_X(c) = P(X \le c)@f$ for a basic
+ *        continuous distribution.
+ *
+ * Returns the cumulative distribution at @p c for the distribution
+ * @p d.  Used internally by @c AnalyticEvaluator's @c gate_cmp
+ * resolution and by the @c HybridEvaluator decomposer's
+ * monotone-shared-scalar fast path to compute interval probabilities
+ * analytically (no MC noise) when the shared scalar is a bare
+ * @c gate_rv.  Returns @c NaN when @p d carries a parameter shape
+ * the CDF doesn't cover (e.g. non-integer Erlang shape, which would
+ * require the regularised lower incomplete gamma function).
+ *
+ * - Normal(μ, σ):   @f$\Phi((c - \mu) / \sigma)@f$ via @c std::erf.
+ * - Uniform(a, b):  piecewise linear; 0 for @c c<=a, 1 for
+ *                   @c c>=b, @c (c - a) / (b - a) otherwise.
+ * - Exponential(λ): @c 1 - exp(-λc) for @c c>0; 0 for @c c<=0.
+ * - Erlang(k, λ) (integer @c k≥1): finite-sum form
+ *                   @f$1 - e^{-\lambda c} \sum_{n=0}^{k-1}
+ *                   (\lambda c)^n / n!@f$ for @c c>0.
+ */
+double cdfAt(const DistributionSpec &d, double c);
 
 /**
  * @brief Run the closed-form CDF resolution pass over @p gc.

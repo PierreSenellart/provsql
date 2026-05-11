@@ -115,17 +115,20 @@ FROM r;
 
 -- (J2) Sanity: SATISFIABLE conjunction is NOT pruned.  -1 < x < 1
 -- intersects to [-1, 1] which is non-empty, so the joint pass leaves
--- the gate_times intact and the AnalyticEvaluator-multiplied
--- per-cmp result is strictly positive.  Asserting > 0 only checks
--- the joint pass did not falsely prune; the actual numeric value
--- (which uses an independence approximation here) is not the
--- subject of this test.
+-- the gate_times intact.  Asserting > 0 only checks the joint pass
+-- did not falsely prune.  Uses 'tree-decomposition' because the
+-- hybrid decomposer's fast path now groups the two shared-X cmps
+-- and inlines a joint-table mulinput block, which 'independent'
+-- correctly rejects as a dependent circuit ("Not an independent
+-- circuit") when the cmps combine via AND.  The
+-- tree-decomposition path handles the dependent circuit and
+-- recovers the exact P(-1 < X < 1) = 2*Phi(1) - 1 ~= 0.6827.
 WITH r AS (SELECT provsql.normal(0, 1) AS x)
 SELECT provsql.probability_evaluate(
          provsql.provenance_times(
            provsql.rv_cmp_gt(x, (-1)::random_variable),
            provsql.rv_cmp_lt(x,  1::random_variable)),
-         'independent') > 0.0
+         'tree-decomposition') > 0.0
        AS joint_feasible_not_pruned
 FROM r;
 

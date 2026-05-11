@@ -238,9 +238,14 @@ RESET provsql.monte_carlo_seed;
 --      `(X + Y_B) > 0` share base RV X (their footprints overlap
 --      on X) but use different arith composites (Y_A and Y_B are
 --      distinct fresh uniforms, so the lhs gate_arith UUIDs
---      differ).  A future monotone-shared-scalar fast path would
---      check for an identical lhs gate_t and skip this case; the
---      generic 2^k MC joint table is the only correct handler.
+--      differ).  The monotone-shared-scalar fast path's
+--      detect_shared_scalar checks for an identical lhs gate_t
+--      and bails on this case; the generic 2^k MC joint table is
+--      the only correct handler.  Test pins the dependent truth
+--      ~ 0.621 against the wrong-independent ~ 0.75 to detect a
+--      regression where detection wrongly accepts disparate
+--      scalars (e.g. a future canonicalisation that conflates
+--      different arith subtrees with the same base-RV footprint).
 --
 --      With X ~ N(0, 1) and Y_A, Y_B ~ U(-1, 1) all independent,
 --      P(A) = P(B) = 0.5 by symmetry; conditional on X = x the two
@@ -264,6 +269,37 @@ SELECT abs(provsql.probability_evaluate(
 FROM r;
 RESET provsql.rv_mc_samples;
 RESET provsql.monte_carlo_seed;
+
+-- (16) Fast-path analytical CDF on a shared bare-RV scalar.  Two
+--      cmps `X > 0` and `X > 1` over the SAME N(0, 1) (CTE-bound,
+--      so r.x is the same gate_t in both cmps).  The decomposer
+--      runs before AnalyticEvaluator so the shared footprint
+--      groups the cmps; detect_shared_scalar matches (same lhs
+--      gate_t, gate_value rhs) and the fast path computes the 3
+--      interval probabilities via cdfAt on the normal CDF -
+--      analytically, no MC anywhere:
+--        P((-inf, 0])  = Phi(0)      = 0.5
+--        P((0, 1])     = Phi(1) - 0.5 ~ 0.34134
+--        P((1, +inf))  = 1 - Phi(1)   ~ 0.15866
+--      P(X > 0 OR X > 1) = P(X > 0) = 0.5 exactly by the subset
+--      relation `x > 1 implies x > 0`, so 'tree-decomposition' over
+--      the joint mulinput block recovers 0.5 to float8 precision.
+--      Test asserts bit-equal 0.5 (no tolerance) - this assertion
+--      is only achievable via the analytical branch; if the fast
+--      path bailed to MC binning or the analytical CDF were
+--      miscomputed, the result would land off-bit.  The wrong-
+--      independent answer (silent AnalyticEvaluator pre-emption
+--      before the reorder) would give 0.5 + 0.1587 - 0.5*0.1587
+--      ~ 0.579, far from 0.5.
+WITH r AS (SELECT provsql.normal(0, 1) AS x)
+SELECT provsql.probability_evaluate(
+         provsql.provenance_plus(ARRAY[
+           provsql.rv_cmp_gt(r.x, 0::random_variable),
+           provsql.rv_cmp_gt(r.x, 1::random_variable)
+         ]),
+         'tree-decomposition') = 0.5
+       AS shared_bare_rv_fast_path_exact
+FROM r;
 
 -- ---------------------------------------------------------------
 -- Sanity: with provsql.hybrid_evaluation = off the simplifier does
