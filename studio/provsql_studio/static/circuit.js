@@ -444,10 +444,9 @@
     // circle's default font-size can fit.  Measure each label after
     // attach and shrink its font until it fits the usable diameter
     // (~40px for r=22 minus stroke + 1px padding on each side); the
-    // 5.5px floor keeps mono glyphs legible.  Inline style beats the
-    // per-type CSS rules (.node--rv etc.) on font-size; setAttribute
-    // would not (CSS takes precedence over SVG presentation
-    // attributes here).
+    // 5.5px floor keeps glyphs legible.  Inline style on the label
+    // beats any cascading rule from app.css because SVG presentation
+    // attributes lose to CSS, but the inline style itself wins.
     nodeLayer.querySelectorAll('.node-label').forEach(el => {
       const maxW = 40;
       const bb = el.getBBox();

@@ -1777,28 +1777,14 @@ body.mode-where #sidebar {
   user-select: none;
 }
 
-/* Leaves keep their distinctive filled-circle look (purple disk, white
-   glyph) so input/update gates pop out as the data sources of the
-   circuit. Internal gates all share the default outlined-circle style:
-   per-type stroke / fill overrides reserved terracotta / deep-purple
-   accents that ended up indistinguishable from the active-pinned state. */
-.node--leaf  .node-shape { fill: var(--purple-500); stroke: var(--purple-700); }
-.node--leaf  .node-label { fill: #fff; font-family: var(--font-mono); font-style: normal; font-size: 11px; }
-.node--leaf  .node-meta  { fill: var(--purple-700); font-weight: 500; }
-
-/* gate_rv: continuous-distribution leaf. Visually a leaf (filled disk)
-   so it groups with input / update / value, but with a gold accent
-   that signals "stochastic, not deterministic". The label is the
-   distribution kind initial ("N", "U", "Exp", "Erl") plus parameters
-   when they fit, set in a slightly smaller mono font so multi-char
-   labels still read inside the circle. */
-.node--rv    .node-shape { fill: var(--gold-500); stroke: var(--gold-700); }
-.node--rv    .node-label { fill: var(--purple-900); font-family: var(--font-mono); font-style: normal; font-size: 9.5px; }
-
-/* gate_arith: internal scalar-arithmetic node. Distinct from the
-   semiring ⊕ / ⊗ gates: same outlined-circle look but a mono
-   operator glyph (+, ×, −, ÷) instead of the math-italic identifier. */
-.node--arith .node-label { font-family: var(--font-mono); font-style: normal; font-size: 14px; }
+/* Every gate renders as a uniform white disk with the purple stroke
+   defined on .node-shape above; the in-circle glyph alone carries the
+   gate-type information.  Colour is reserved for STATE -- terracotta
+   for active / pinned, gold for frontier badges -- so type and state
+   never compete visually.  The post-paint font-size shrink in
+   circuit.js handles labels that overflow the circle (parametric RV
+   names like "N(2.5,0.5)", long agg / value extras), so we don't
+   need per-type font-size overrides either. */
 
 /* hover + active */
 .node-group:hover .node-shape { stroke-width: 3; filter: drop-shadow(0 2px 6px rgba(42, 24, 80, 0.25)); }
@@ -1807,7 +1793,6 @@ body.mode-where #sidebar {
   stroke: var(--terracotta-500); stroke-width: 3;
   fill: rgba(196, 102, 74, 0.12);
 }
-.node-group.is-pinned.node--leaf .node-shape { fill: var(--terracotta-500); }
 
 /* edges */
 .edge {
