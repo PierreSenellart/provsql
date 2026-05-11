@@ -2115,6 +2115,22 @@
       }
       return Number(n.toFixed(4)).toString();
     };
+    // Looser formatter for axis tick labels: bin edges of an MC
+    // histogram are random-sampling artefacts (the leftmost and
+    // rightmost draws), so showing four decimals is precision the data
+    // does not carry.  Round to roughly three significant figures
+    // based on magnitude: for |x| ~ 30 that gives one decimal (33.8),
+    // for |x| ~ 0.3 that gives three (0.338), and very small / large
+    // values fall back to scientific notation.
+    const fmtTick = v => {
+      if (v == null || !Number.isFinite(Number(v))) return String(v);
+      const n = Number(v);
+      if (n === 0) return '0';
+      const abs = Math.abs(n);
+      if (abs >= 1e6 || abs < 1e-3) return n.toExponential(2);
+      const dec = Math.max(0, 2 - Math.floor(Math.log10(abs)));
+      return Number(n.toFixed(dec)).toString();
+    };
     const fmtSupportEnd = v => {
       // Postgres serialises +/-Infinity as the strings 'Infinity'/'-Infinity'
       // through the float8 OUT params; psycopg surfaces them as the JSON
@@ -2163,9 +2179,9 @@
           + `stroke-dasharray="3 3" opacity="0.75" />`;
       }
       svgInner = `<g class="cv-profile-bars">${bars}</g>${meanLine}`
-        + `<text class="cv-rv-tick" x="${padX}" y="${H - 4}">${escapeHtml(fmt(lo))}</text>`
+        + `<text class="cv-rv-tick" x="${padX}" y="${H - 4}">${escapeHtml(fmtTick(lo))}</text>`
         + `<text class="cv-rv-tick" x="${W - padX}" y="${H - 4}" text-anchor="end">`
-        + `${escapeHtml(fmt(hi))}</text>`;
+        + `${escapeHtml(fmtTick(hi))}</text>`;
     } else {
       svgInner = `<text class="cv-rv-tick" x="${W / 2}" y="${H / 2}" text-anchor="middle">`
         + `no samples</text>`;
