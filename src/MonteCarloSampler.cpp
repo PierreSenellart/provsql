@@ -221,6 +221,22 @@ double Sampler::evalScalar(gate_t g)
       }
       break;
     }
+    case gate_mixture:
+    {
+      // Wires: [p_token (gate_input Bernoulli), x_token, y_token].
+      // Draw the Bernoulli via evalBool -- which already handles
+      // gate_input by sampling uniform(0,1) < get_prob and memoises
+      // the result on bool_cache_ for this iteration.  Two mixtures
+      // sharing the same p_token therefore see the same draw, and
+      // any unrelated Boolean parent of p_token also stays in sync.
+      if(wires.size() != 3)
+        throw CircuitException(
+                "gate_mixture must have exactly three children "
+                "[p_token, x_token, y_token]");
+      result = evalBool(wires[0]) ? evalScalar(wires[1])
+                                  : evalScalar(wires[2]);
+      break;
+    }
     default:
       throw CircuitException(
               "Unsupported gate type in scalar evaluation: " +
@@ -320,7 +336,9 @@ bool circuitHasRV(const GenericCircuit &gc, gate_t root)
     auto type = gc.getGateType(g);
     // gate_arith too: it's exclusively a continuous-arithmetic
     // composite, the BoolExpr semiring path has no rule for it.
-    if(type == gate_rv || type == gate_arith) return true;
+    // gate_mixture is structurally a compound RV root as well.
+    if(type == gate_rv || type == gate_arith || type == gate_mixture)
+      return true;
     for(gate_t c : gc.getWires(g)) stack.push(c);
   }
   return false;

@@ -53,6 +53,7 @@ const char *gate_type_name[] = {
   "update",
   "rv",
   "arith",
+  "mixture",
   "invalid"
 };
 
@@ -481,6 +482,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID(update);
   GET_GATE_TYPE_OID_OPTIONAL(rv);
   GET_GATE_TYPE_OID_OPTIONAL(arith);
+  GET_GATE_TYPE_OID_OPTIONAL(mixture);
 
   constants.ok=true;
 

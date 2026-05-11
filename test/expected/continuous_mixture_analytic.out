@@ -1,0 +1,22 @@
+\set ECHO none
+set_prob
+
+(1 row)
+exact_mean|exact_variance|exact_third_moment
+t|t|t
+(1 row)
+set_prob
+
+(1 row)
+mixed_mean|mixed_variance
+t|t
+(1 row)
+set_prob
+
+(1 row)
+set_prob
+
+(1 row)
+nested_mean|nested_variance
+t|t
+(1 row)

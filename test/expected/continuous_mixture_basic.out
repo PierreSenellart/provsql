@@ -1,0 +1,36 @@
+\set ECHO none
+set_prob
+
+(1 row)
+mixture_kind
+mixture
+(1 row)
+nb_children|wire0_kind|wire1_kind|wire2_kind
+3|input|rv|rv
+(1 row)
+p_token_preserved
+t
+(1 row)
+distinct_gates|shared_p_token
+t|t
+(1 row)
+set_prob
+
+(1 row)
+outer_kind|outer_y_kind|inner_nb_children
+mixture|mixture|3
+(1 row)
+arith_mix_kind|arith_mix_x_kind|arith_mix_y_kind
+mixture|arith|arith
+(1 row)
+dirac_mix_kind
+mixture
+(1 row)
+ERROR:  provsql.mixture: p must point to a gate_input Bernoulli token (got value)
+create_gate
+
+(1 row)
+set_prob
+
+(1 row)
+ERROR:  provsql.mixture: p must have a probability in [0,1] set via set_prob (got 1.5)

@@ -23,6 +23,10 @@
  *   - @c gate_arith: sampled by recursing through the arithmetic DAG,
  *     reusing @c gate_rv draws within an iteration so shared leaves
  *     are correctly correlated.
+ *   - @c gate_mixture: sampled by recursing through the mixture's
+ *     Bernoulli (gate_input) wire and the selected scalar branch,
+ *     reusing per-iteration caches so a shared p_token across the
+ *     circuit produces coupled draws.
  *
  * Any other gate type raises: probability of a Boolean-valued gate is
  * a scalar that the existing @c probability_evaluate dispatch covers,
@@ -110,7 +114,7 @@ rv_histogram(PG_FUNCTION_ARGS)
                          ? static_cast<unsigned>(provsql_rv_mc_samples)
                          : 1u;
       emit_bin(out, first, v, v, n);
-    } else if (t == gate_rv || t == gate_arith) {
+    } else if (t == gate_rv || t == gate_arith || t == gate_mixture) {
       if (provsql_rv_mc_samples <= 0)
         provsql_error(
           "rv_histogram: provsql.rv_mc_samples = 0 disables sampling; "
@@ -152,7 +156,8 @@ rv_histogram(PG_FUNCTION_ARGS)
                               ? gate_type_name[t] : "invalid";
       provsql_error(
         "rv_histogram: root gate type '%s' is not a scalar "
-        "(expected gate_value, gate_rv, or gate_arith)", type_name);
+        "(expected gate_value, gate_rv, gate_arith, or gate_mixture)",
+        type_name);
     }
   } catch (const std::exception &e) {
     provsql_error("rv_histogram: %s", e.what());

@@ -27,6 +27,7 @@
     update:   'Update gate (υ): INSERT / UPDATE / DELETE',
     rv:       'Random variable: continuous distribution leaf',
     arith:    'Arithmetic gate: scalar operation over child gates',
+    mixture:  'Mixture (Mix): Bernoulli-weighted choice between two scalar RV branches',
   };
 
   // gate_arith info1 holds a PROVSQL_ARITH_* tag (src/provsql_utils.h).
@@ -1121,7 +1122,7 @@
   // the dropdown between the Boolean-method menu and the scalar-method
   // menu (distribution profile, PROV-XML).  Picked by inspecting the
   // eval target's gate type via state.scene.nodes.
-  const _SCALAR_GATE_TYPES = new Set(['rv', 'arith', 'value']);
+  const _SCALAR_GATE_TYPES = new Set(['rv', 'arith', 'value', 'mixture']);
   // Options visible when the eval target is scalar.  Everything else in
   // the <select> gets hidden + disabled for the duration of the scalar
   // focus.  PROV-XML stays because it accepts any provenance gate.

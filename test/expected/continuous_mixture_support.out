@@ -1,0 +1,25 @@
+\set ECHO none
+set_prob
+
+(1 row)
+lo|hi
+0|10
+(1 row)
+lo|hi
+-Infinity|Infinity
+(1 row)
+lo|hi
+0|Infinity
+(1 row)
+set_prob
+
+(1 row)
+set_prob
+
+(1 row)
+lo|hi
+-5|30
+(1 row)
+lo|hi
+-1.5|7.25
+(1 row)

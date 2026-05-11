@@ -165,6 +165,18 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
         result = intervalOf(gc, wires[1], cache);
       break;
     }
+    case gate_mixture: {
+      /* Support of a mixture is the union of its branch supports.
+       * Wires: [p_token, x_token, y_token] -- the Bernoulli is a
+       * Boolean leaf and contributes nothing to the scalar interval. */
+      const auto &wires = gc.getWires(g);
+      if (wires.size() == 3) {
+        Interval ix = intervalOf(gc, wires[1], cache);
+        Interval iy = intervalOf(gc, wires[2], cache);
+        result = {std::min(ix.lo, iy.lo), std::max(ix.hi, iy.hi)};
+      }
+      break;
+    }
     default:
       /* gate_agg is intentionally not handled here -- the empty-subset
        * NULL semantics make a flat interval misleading, so the

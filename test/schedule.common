@@ -118,6 +118,12 @@ test: continuous_expectation
 test: continuous_support
 test: continuous_hybrid
 test: continuous_rv_histogram
+test: continuous_mixture_basic
+test: continuous_mixture_sampler
+test: continuous_mixture_analytic
+test: continuous_mixture_support
+test: continuous_mixture_histogram
+test: continuous_mixture_hybrid
 
 # PROV export
 test: to_provxml

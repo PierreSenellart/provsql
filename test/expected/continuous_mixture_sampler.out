@@ -1,0 +1,19 @@
+\set ECHO none
+set_prob
+
+(1 row)
+mean_matches|variance_matches
+t|t
+(1 row)
+set_prob
+
+(1 row)
+shared_bernoulli_couples_branches
+t
+(1 row)
+set_prob
+
+(1 row)
+distinct_bernoullis_decouple
+t
+(1 row)

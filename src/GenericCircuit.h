@@ -350,6 +350,57 @@ gate_t addAnonymousMulinputGate(gate_t key, double p,
 }
 
 /**
+ * @brief Allocate a fresh @c gate_arith gate with operator tag @p op
+ *        and the given @p wires.
+ *
+ * Used by the @c HybridEvaluator simplifier's mixture-lift rule when
+ * pushing a @c PLUS / @c TIMES inside a mixture's two scalar branches:
+ * each branch needs a fresh @c gate_arith child carrying the lifted
+ * operation, and those children must round-trip through downstream
+ * @c id2uuid / @c uuid2id lookups (Studio's simplified subgraph,
+ * @c to_provxml).  A unique synthetic UUID is minted for the same
+ * reason as @c addAnonymousInputGate.
+ */
+gate_t addAnonymousArithGate(provsql_arith_op op,
+                             std::vector<gate_t> wires_) {
+  gate_t id = addGate();
+  setGateType(id, gate_arith);
+  setInfos(id, static_cast<int>(op), 0);
+  getWires(id) = std::move(wires_);
+  std::string u = "dec-arith-" + std::to_string(static_cast<size_t>(id));
+  uuid2id[u] = id;
+  id2uuid[id] = u;
+  return id;
+}
+
+/**
+ * @brief Rewrite @p g in place as a @c gate_mixture over the wires
+ *        @c [p_token, x_token, y_token].
+ *
+ * Used by the @c HybridEvaluator simplifier's mixture-lift rule when
+ * a @c gate_arith containing a single @c gate_mixture child is pushed
+ * inside the mixture's branches: the outer arith gate is rewritten in
+ * place as the lifted mixture, preserving its UUID and the
+ * non-mixture-aware code paths that already hold references to it.
+ * The @p p_token is reused verbatim so Bernoulli identity is
+ * preserved across the rewrite; the @p x_token and @p y_token are
+ * the freshly-minted arith children built via
+ * @c addAnonymousArithGate.
+ */
+void resolveToMixture(gate_t g, gate_t p_token,
+                      gate_t x_token, gate_t y_token) {
+  setGateType(g, gate_mixture);
+  std::vector<gate_t> w;
+  w.reserve(3);
+  w.push_back(p_token);
+  w.push_back(x_token);
+  w.push_back(y_token);
+  getWires(g) = std::move(w);
+  infos.erase(g);
+  extra.erase(g);
+}
+
+/**
  * @brief Boost serialisation support.
  * @param ar       Boost archive (input or output).
  * @param version  Archive version (unused).

@@ -70,6 +70,7 @@ typedef enum gate_type {
   gate_update,   ///< Update operation
   gate_rv,       ///< Continuous random-variable leaf (extra encodes distribution)
   gate_arith,    ///< n-ary arithmetic gate over scalar-valued children (info1 holds operator tag)
+  gate_mixture,  ///< Probabilistic mixture: three wires [p_token (gate_input Bernoulli), x_token, y_token]; samples x when p is true, y otherwise
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;

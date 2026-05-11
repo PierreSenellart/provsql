@@ -253,6 +253,19 @@ void collect_rv_footprint(const GenericCircuit &gc, gate_t g,
     for (gate_t c : gc.getWires(g))
       collect_rv_footprint(gc, c, fp, seen);
   }
+  if (t == gate_mixture) {
+    /* gate_mixture wires: [p_token (gate_input), x_token, y_token].
+     * The p_token is a Boolean Bernoulli, not a continuous-RV identity,
+     * so we do NOT include it in the continuous footprint -- otherwise
+     * two unrelated mixtures sharing a base normal would appear
+     * disjoint just because their p_tokens differ.  Descend only into
+     * wires[1] and wires[2] to gather the continuous identities. */
+    const auto &wires = gc.getWires(g);
+    if (wires.size() == 3) {
+      collect_rv_footprint(gc, wires[1], fp, seen);
+      collect_rv_footprint(gc, wires[2], fp, seen);
+    }
+  }
 }
 
 /**
@@ -484,6 +497,96 @@ bool try_erlang_closure(GenericCircuit &gc, gate_t g)
 }
 
 /**
+ * @brief Mixture-lift rewrite: push @c PLUS / @c TIMES inside a
+ *        single @c gate_mixture child.
+ *
+ * Fires on a @c gate_arith with op @c PLUS or @c TIMES whose children
+ * contain exactly one @c gate_mixture.  Replaces the parent with a
+ * @c gate_mixture sharing the same Bernoulli (so the original
+ * <tt>p_token</tt> identity is preserved and any other gate that
+ * referenced it continues to see it):
+ *
+ *   <tt>a + mixture(p, X, Y) → mixture(p, a + X, a + Y)</tt>
+ *
+ * The two new branches are fresh @c gate_arith children built via
+ * @c addAnonymousArithGate; each is then re-fed to @c apply_rules so
+ * the existing normal-family / erlang-family closures get a chance
+ * to collapse them.  This is the source of the headline simplifier
+ * gain for compound RV expressions: <tt>3 + mixture(p, N(0,1), N(2,1))</tt>
+ * folds to <tt>mixture(p, N(3,1), N(5,1))</tt> in a single bottom-up
+ * pass.
+ *
+ * Multi-mixture lifts (two or more @c gate_mixture children of the
+ * same arith) are out of scope: each would multiply the branch count
+ * by 2 and the lifted form would couple the resulting branches
+ * through their Bernoullis, which the current closures cannot
+ * collapse further.  @c MINUS / @c DIV / @c NEG lifts are also out of
+ * scope (the user requested only @c PLUS and @c TIMES); they can be
+ * added in a follow-up once the @c try_normal_closure handles
+ * subtraction.
+ *
+ * Returns @c true if @p g was mutated.
+ */
+unsigned apply_rules(GenericCircuit &gc, gate_t g);  /* forward decl */
+
+bool try_mixture_lift(GenericCircuit &gc, gate_t g)
+{
+  auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
+  if (op != PROVSQL_ARITH_PLUS && op != PROVSQL_ARITH_TIMES) return false;
+
+  const auto &wires = gc.getWires(g);
+  if (wires.size() < 2) return false;  /* nothing to lift */
+
+  /* Find exactly one mixture child. */
+  std::size_t mix_idx = static_cast<std::size_t>(-1);
+  for (std::size_t i = 0; i < wires.size(); ++i) {
+    if (gc.getGateType(wires[i]) == gate_mixture) {
+      if (mix_idx != static_cast<std::size_t>(-1)) return false;
+      mix_idx = i;
+    }
+  }
+  if (mix_idx == static_cast<std::size_t>(-1)) return false;
+
+  const auto mix_gate = wires[mix_idx];
+  const auto &mw = gc.getWires(mix_gate);
+  if (mw.size() != 3) return false;
+  const gate_t p_tok = mw[0];
+  const gate_t x_tok = mw[1];
+  const gate_t y_tok = mw[2];
+
+  /* Snapshot the remaining wires.  We need a copy because the
+   * resolveToMixture call below clears the parent's wire vector. */
+  std::vector<gate_t> others;
+  others.reserve(wires.size() - 1);
+  for (std::size_t i = 0; i < wires.size(); ++i) {
+    if (i != mix_idx) others.push_back(wires[i]);
+  }
+
+  /* Build two new arith children: one with x in the mixture slot,
+   * one with y.  Order matters for non-commutative ops, but PLUS /
+   * TIMES are both commutative so we just append the branch RV to
+   * the others. */
+  std::vector<gate_t> new_x_wires = others; new_x_wires.push_back(x_tok);
+  std::vector<gate_t> new_y_wires = others; new_y_wires.push_back(y_tok);
+  gate_t new_x = gc.addAnonymousArithGate(op, std::move(new_x_wires));
+  gate_t new_y = gc.addAnonymousArithGate(op, std::move(new_y_wires));
+
+  /* Rewrite g as gate_mixture(p, new_x, new_y).  This clears g's
+   * old wires / infos / extra and installs the new structure. */
+  gc.resolveToMixture(g, p_tok, new_x, new_y);
+
+  /* Recursively fold the two new arith children so they get a chance
+   * to collapse via normal-family / erlang-family closures.  Each is
+   * itself a gate_arith of the same op, with at least 2 wires (the
+   * "others" we copied plus the branch RV), so apply_rules's
+   * PLUS/TIMES path is the correct entry point. */
+  apply_rules(gc, new_x);
+  apply_rules(gc, new_y);
+
+  return true;
+}
+
+/**
  * @brief Run the per-gate fixed-point loop.
  *
  * After each rule succeeds the gate is re-evaluated under every rule,
@@ -518,7 +621,18 @@ unsigned apply_rules(GenericCircuit &gc, gate_t g)
       continue;
     }
 
-    /* 3. Family closures on PLUS. */
+    /* 3. Mixture lift: push PLUS / TIMES inside a single mixture
+     *    child.  Runs BEFORE the normal / erlang closures so the
+     *    branch arith children get to try those closures themselves
+     *    after the lift.  Once the lift fires the parent is no
+     *    longer gate_arith, so the loop terminates on the next
+     *    iteration via the gate_arith guard above. */
+    if (try_mixture_lift(gc, g)) {
+      ++local;
+      break;
+    }
+
+    /* 4. Family closures on PLUS. */
     auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
     if (op == PROVSQL_ARITH_PLUS) {
       if (try_normal_closure(gc, g)) { ++local; break; }
@@ -603,8 +717,24 @@ bool is_continuous_island_cmp(const GenericCircuit &gc, gate_t cmp_gate)
     gate_t g = stk.top(); stk.pop();
     if (!seen.insert(g).second) continue;
     auto t = gc.getGateType(g);
-    if (t != gate_value && t != gate_rv && t != gate_arith) return false;
-    for (gate_t c : gc.getWires(g)) stk.push(c);
+    if (t == gate_value || t == gate_rv || t == gate_arith) {
+      for (gate_t c : gc.getWires(g)) stk.push(c);
+      continue;
+    }
+    if (t == gate_mixture) {
+      /* A mixture's first wire is a gate_input Bernoulli; the rest of
+       * the island walker would reject it as non-continuous, but the
+       * Monte-Carlo sampler handles it correctly via per-iteration
+       * coupling.  Treat the mixture as a black-box scalar leaf in the
+       * island shape: do NOT descend into wires[0], only into the
+       * scalar branches wires[1] / wires[2]. */
+      const auto &mw = gc.getWires(g);
+      if (mw.size() != 3) return false;
+      stk.push(mw[1]);
+      stk.push(mw[2]);
+      continue;
+    }
+    return false;
   }
   return true;
 }
@@ -630,6 +760,20 @@ void collect_cmp_rv_footprint(const GenericCircuit &gc, gate_t cmp_gate,
     if (t == gate_rv) { fp.insert(g); continue; }
     if (t == gate_arith) {
       for (gate_t c : gc.getWires(g)) stk.push(c);
+      continue;
+    }
+    if (t == gate_mixture) {
+      /* Descend into the scalar branches but NOT into the Bernoulli
+       * (wires[0] is a gate_input, not a continuous RV identity).
+       * Two cmps that share a mixture's continuous RVs still need to
+       * be grouped together; sharing the Bernoulli alone does too,
+       * but that coupling is captured at the sampler level rather
+       * than here -- the joint-table sampler hits both cmps in the
+       * same MC iteration and the shared bool_cache_ produces
+       * coherent draws. */
+      const auto &mw = gc.getWires(g);
+      if (mw.size() == 3) { stk.push(mw[1]); stk.push(mw[2]); }
+      continue;
     }
     /* gate_value contributes no RV identity; other types should not
      * appear here (is_continuous_island_cmp gates that path), but if

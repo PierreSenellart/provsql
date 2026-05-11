@@ -42,7 +42,8 @@ CREATE TYPE provenance_gate AS
     'mulinput',-- Multivalued input (for Boolean provenance)
     'update',  -- Update operation
     'rv',      -- Continuous random-variable leaf
-    'arith'    -- n-ary arithmetic gate over scalar-valued children
+    'arith',   -- n-ary arithmetic gate over scalar-valued children
+    'mixture'  -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -1681,6 +1682,80 @@ BEGIN
   token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'erlang:' || k || ',' || lambda);
+  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a probabilistic-mixture random variable.
+ *
+ * Returns a @c random_variable whose distribution is a Bernoulli
+ * mixture of two scalar RV roots: with probability <tt>P(p = true)</tt>
+ * the mixture samples @p x, with the complementary probability it
+ * samples @p y.  The mixing token @p p is a @c gate_input Bernoulli
+ * whose probability has been pinned with @c set_prob, and the same
+ * @p p can be shared with other branches of the circuit -- the
+ * Monte-Carlo sampler's per-iteration cache couples every reference
+ * to the same draw, so users can build joint conditional structures
+ * (e.g. <tt>mixture(p, X1, Y1) + mixture(p, X2, Y2)</tt> samples
+ * X1 + X2 with prob π and Y1 + Y2 with prob 1-π).
+ *
+ * @p x and @p y may be any scalar RV root: a base @c gate_rv
+ * (@c normal / @c uniform / @c exponential / @c erlang), a
+ * @c gate_value Dirac (@c as_random), a @c gate_arith expression, or
+ * another @c mixture.  N-ary mixtures are built by composition --
+ * <tt>mixture(p1, A, mixture(p2, B, C))</tt> realises a 3-component
+ * mixture with effective weights <tt>π1, (1-π1)·π2, (1-π1)·(1-π2)</tt>.
+ *
+ * Validation:
+ * - @p p must point to a @c gate_input gate with a probability in
+ *   [0, 1].  A fresh @c gate_input has default probability 1.0 (so the
+ *   mixture deterministically selects @p x); call @c set_prob to pin a
+ *   different mixing weight.
+ * - @p x and @p y must be scalar RV roots; aggregate / Boolean roots
+ *   are rejected at construction.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @c normal above.  Two calls to @c mixture with the same operands
+ * are *independent* mixtures with their own gate UUID.  Note that the
+ * Bernoulli token @p p, by contrast, is *not* re-minted -- sharing it
+ * across calls is exactly how the user couples branch selection.
+ */
+CREATE OR REPLACE FUNCTION mixture(
+  p uuid, x random_variable, y random_variable)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+  p_kind provsql.provenance_gate;
+  x_uuid uuid;
+  y_uuid uuid;
+  x_kind provsql.provenance_gate;
+  y_kind provsql.provenance_gate;
+  pi double precision;
+BEGIN
+  p_kind := provsql.get_gate_type(p);
+  IF p_kind <> 'input' THEN
+    RAISE EXCEPTION 'provsql.mixture: p must point to a gate_input Bernoulli token (got %)', p_kind;
+  END IF;
+  pi := provsql.get_prob(p);
+  IF pi IS NULL OR pi <> pi OR pi < 0 OR pi > 1 THEN
+    RAISE EXCEPTION 'provsql.mixture: p must have a probability in [0,1] set via set_prob (got %)', pi;
+  END IF;
+
+  x_uuid := provsql.random_variable_uuid(x);
+  y_uuid := provsql.random_variable_uuid(y);
+  x_kind := provsql.get_gate_type(x_uuid);
+  y_kind := provsql.get_gate_type(y_uuid);
+  IF x_kind NOT IN ('rv','value','arith','mixture') THEN
+    RAISE EXCEPTION 'provsql.mixture: x must be a scalar RV root (rv / value / arith / mixture), got %', x_kind;
+  END IF;
+  IF y_kind NOT IN ('rv','value','arith','mixture') THEN
+    RAISE EXCEPTION 'provsql.mixture: y must be a scalar RV root (rv / value / arith / mixture), got %', y_kind;
+  END IF;
+
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'mixture', ARRAY[p, x_uuid, y_uuid]);
   RETURN provsql.random_variable_make(token, 'NaN'::double precision);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;

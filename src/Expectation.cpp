@@ -56,6 +56,22 @@ public:
         const auto &cs = of(c);
         s.insert(cs.begin(), cs.end());
       }
+    } else if (type == gate_mixture) {
+      // Footprint = {p_token} ∪ footprint(x) ∪ footprint(y).  The
+      // Bernoulli p_token is included as a discrete random source so
+      // that two mixtures sharing the same p in an arith expression
+      // are correctly recognised as dependent (their branch selection
+      // is perfectly coupled), bypassing the closed-form independence
+      // shortcut and routing through MC -- the only sound path when
+      // the branches' selection is correlated.
+      const auto &wires = gc_.getWires(g);
+      if (wires.size() == 3) {
+        s.insert(wires[0]);
+        const auto &fx = of(wires[1]);
+        s.insert(fx.begin(), fx.end());
+        const auto &fy = of(wires[2]);
+        s.insert(fy.begin(), fy.end());
+      }
     } else {
       // Unknown scalar gate type: return an empty footprint.  Callers
       // will trip the analytical-decomposition switch and route the
@@ -190,6 +206,16 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
         "Expectation: unknown gate_arith op tag: " +
         std::to_string(static_cast<unsigned>(op)));
     }
+    case gate_mixture: {
+      // E[mixture(p, X, Y)] = π·E[X] + (1-π)·E[Y], where π = P(p = true).
+      const auto &wires = gc.getWires(g);
+      if (wires.size() != 3)
+        throw CircuitException(
+          "Expectation: gate_mixture must have exactly three children");
+      const double pi = gc.getProb(wires[0]);
+      return pi        * rec_expectation(gc, wires[1], fp)
+           + (1.0 - pi) * rec_expectation(gc, wires[2], fp);
+    }
     default:
       return mc_raw_moment(gc, g, 1,
         "Expectation of gate type " + std::string(gate_type_name[type]));
@@ -272,6 +298,23 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
       throw CircuitException(
         "Variance: unknown gate_arith op tag: " +
         std::to_string(static_cast<unsigned>(op)));
+    }
+    case gate_mixture: {
+      // Var(M) = π·(Var(X) + E[X]²) + (1-π)·(Var(Y) + E[Y]²) - E[M]²
+      // (law of total variance specialised to a Bernoulli mixture).
+      const auto &wires = gc.getWires(g);
+      if (wires.size() != 3)
+        throw CircuitException(
+          "Variance: gate_mixture must have exactly three children");
+      const double pi = gc.getProb(wires[0]);
+      const double ex = rec_expectation(gc, wires[1], fp);
+      const double ey = rec_expectation(gc, wires[2], fp);
+      const double vx = rec_variance(gc, wires[1], fp);
+      const double vy = rec_variance(gc, wires[2], fp);
+      const double em = pi * ex + (1.0 - pi) * ey;
+      return pi        * (vx + ex * ex)
+           + (1.0 - pi) * (vy + ey * ey)
+           - em * em;
     }
     default: {
       const std::string what =
@@ -379,6 +422,16 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
       throw CircuitException(
         "Moment: unknown gate_arith op tag: " +
         std::to_string(static_cast<unsigned>(op)));
+    }
+    case gate_mixture: {
+      // E[M^k] = π·E[X^k] + (1-π)·E[Y^k].
+      const auto &wires = gc.getWires(g);
+      if (wires.size() != 3)
+        throw CircuitException(
+          "Moment: gate_mixture must have exactly three children");
+      const double pi = gc.getProb(wires[0]);
+      return pi        * rec_raw_moment(gc, wires[1], k, fp)
+           + (1.0 - pi) * rec_raw_moment(gc, wires[2], k, fp);
     }
     default:
       return mc_raw_moment(gc, g, k,

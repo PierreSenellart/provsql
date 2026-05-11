@@ -39,6 +39,7 @@ _GATE_LABEL = {
     "update":   "υ",
     "rv":       "ξ",
     "arith":    "α",
+    "mixture":  "Mix",
 }
 
 # PROVSQL_ARITH_* enum tags (src/provsql_utils.h) → in-circle glyph. The

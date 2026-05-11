@@ -914,4 +914,106 @@ def test_evaluate_distribution_profile_bad_bins_is_400(client):
             "token": tok, "semiring": "distribution-profile", "arguments": bad,
         })
         assert resp.status_code == 400, (bad, resp.data)
+
+
+def test_evaluate_distribution_profile_mixture_root(client):
+    """A binary Gaussian mixture is a first-class scalar RV root.  Build
+    a well-separated bimodal mixture, verify the distribution-profile
+    response carries the analytical mean / variance (closed-form via
+    rec_expectation / rec_variance, not MC) and that the histogram has
+    bimodal mass: the leftmost and rightmost bins are populated while
+    the middle band is empty.  Pins the wire shape (`gate_type ==
+    'mixture'`, three child edges, first child is a `gate_input`)."""
+    # Mint a Bernoulli with prob 0.5 by running SQL through /api/exec.
+    setup = client.post("/api/exec", json={
+        "sql": (
+            "DO $$\n"
+            "DECLARE p uuid := public.uuid_generate_v4();\n"
+            "BEGIN\n"
+            "  PERFORM provsql.create_gate(p, 'input');\n"
+            "  PERFORM provsql.set_prob(p, 0.5);\n"
+            "  CREATE TEMP TABLE mix_p(t uuid) ON COMMIT DROP;\n"
+            "  INSERT INTO mix_p VALUES (p);\n"
+            "END $$;"
+        ),
+        "mode": "circuit",
+    })
+    assert setup.status_code == 200, setup.data
+    # The DO block above creates a TEMP TABLE that lives only for the
+    # transaction.  Studio's /api/exec opens its own connection per
+    # request, so the temp table is gone by the next call.  Materialise
+    # the mixture's UUID by reading the Bernoulli token and the mixture
+    # in one shot via /api/exec, which keeps the temp table alive
+    # within that single request's transaction.
+    resp = client.post("/api/exec", json={
+        "sql": (
+            "DO $$\n"
+            "DECLARE p uuid := public.uuid_generate_v4();\n"
+            "        u uuid;\n"
+            "BEGIN\n"
+            "  PERFORM provsql.create_gate(p, 'input');\n"
+            "  PERFORM provsql.set_prob(p, 0.5);\n"
+            "  u := provsql.random_variable_uuid(\n"
+            "         provsql.mixture(p,\n"
+            "           provsql.normal(-5::float8, 0.5::float8),\n"
+            "           provsql.normal( 5::float8, 0.5::float8)));\n"
+            "  CREATE TEMP TABLE mix_out(u uuid) ON COMMIT DROP;\n"
+            "  INSERT INTO mix_out VALUES (u);\n"
+            "END $$;\n"
+            "SELECT u FROM mix_out;"
+        ),
+        "mode": "circuit",
+    })
+    # The temp table dies with the transaction, so we must execute the
+    # build and the SELECT in a single statement batch -- which
+    # /api/exec already wraps for us.
+    assert resp.status_code == 200, resp.data
+    final = resp.get_json()["blocks"][-1]
+    cols = [c["name"] for c in final["columns"]]
+    tok = final["rows"][0][cols.index("u")]
+
+    # Pin the rv_mc_samples GUC at the panel so the histogram is
+    # deterministic-ish for the structural asserts.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile", "arguments": "20",
+        "extra_gucs": {
+            "provsql.rv_mc_samples": "20000",
+            "provsql.monte_carlo_seed": "7",
+        },
+    })
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["kind"] == "distribution-profile"
+    r = body["result"]
+    # Closed-form mean and variance for 0.5·N(-5,0.5) + 0.5·N(5,0.5):
+    #   E[M] = 0, Var(M) = 0.5·(0.25+25)·2 - 0 = 25.25.
+    assert abs(r["expected"] - 0.0)  < 1e-9, r["expected"]
+    assert abs(r["variance"] - 25.25) < 1e-9, r["variance"]
+    assert isinstance(r["histogram"], list) and len(r["histogram"]) == 20
+    # Bimodal sanity: leftmost and rightmost bins both populated, the
+    # middle bins (around 0) are empty.
+    bins = r["histogram"]
+    left_count  = sum(int(b["count"]) for b in bins
+                      if (b["bin_lo"] + b["bin_hi"]) / 2 < -1)
+    right_count = sum(int(b["count"]) for b in bins
+                      if (b["bin_lo"] + b["bin_hi"]) / 2 > 1)
+    mid_count   = sum(int(b["count"]) for b in bins
+                      if -1 <= (b["bin_lo"] + b["bin_hi"]) / 2 <= 1)
+    assert left_count  > 5000, left_count
+    assert right_count > 5000, right_count
+    assert mid_count   < 200,  mid_count
+
+    # And the circuit subgraph for this mixture has gate_type == 'mixture'
+    # with three child edges, the first being a gate_input.
+    circ = client.post("/api/circuit", json={"root": tok, "depth": 1})
+    assert circ.status_code == 200, circ.data
+    scene = circ.get_json()
+    root_node = next(n for n in scene["nodes"] if n["id"] == tok)
+    assert root_node["type"] == "mixture", root_node
+    children = [e for e in scene["edges"] if e["from"] == tok]
+    assert len(children) == 3, children
+    # Sorted by child_pos: wire 0 is the Bernoulli (gate_input).
+    children.sort(key=lambda e: e["child_pos"])
+    wire0_node = next(n for n in scene["nodes"] if n["id"] == children[0]["to"])
+    assert wire0_node["type"] == "input", wire0_node
         assert "bins" in resp.get_json()["error"].lower()
