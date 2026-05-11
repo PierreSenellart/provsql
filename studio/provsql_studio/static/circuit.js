@@ -68,8 +68,18 @@
   // sum/count/min/max/avg the result is independent of input order, so
   // the digits would be noise. semimod is omitted: its value/scalar
   // split is implied by gate type. eq has a single child so positional
-  // labels would be redundant.
-  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith']);
+  // labels would be redundant.  mixture's three wires (p / x / y) are
+  // positional and get the semantic labels defined in EDGE_POS_LABEL
+  // below.
+  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture']);
+  // Per-(parent type, 1-based child_pos) edge-label overrides for
+  // gates whose wires have well-known names.  Falls back to the bare
+  // digit (1, 2, 3, …) for any entry not in the map.  mixture(p, x, y)
+  // mirrors the SQL constructor's parameter names so the rendered edge
+  // labels match the user-facing API.
+  const EDGE_POS_LABEL = {
+    mixture: { 1: 'p', 2: 'x', 3: 'y' },
+  };
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   // = and <> are commutative; lhs/rhs digits add noise for those cmp
   // gates the same way they would for SUM/COUNT/etc.  The strict
@@ -582,7 +592,10 @@
           x: lx, y: ly,
           'text-anchor': 'middle', 'dominant-baseline': 'central',
         });
-        tag.textContent = String(e.child_pos);
+        const labelMap = EDGE_POS_LABEL[from.type];
+        tag.textContent = (labelMap && labelMap[e.child_pos] != null)
+          ? labelMap[e.child_pos]
+          : String(e.child_pos);
         edgeLayer.appendChild(tag);
       }
     }
