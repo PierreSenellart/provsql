@@ -951,6 +951,92 @@ def evaluate_circuit(
             sql.Literal(mapping),
         )
         params = ()
+    elif semiring == "distribution-profile":
+        # Scalar-only evaluator: fan out to rv_support / rv_moment(_, 1, false)
+        # / rv_moment(_, 2, true) / rv_histogram in one round-trip, package
+        # the four results as a single dict so the strip can render the
+        # support / expectation / variance / histogram panel from one
+        # response.  Calls the internal C kernels directly rather than the
+        # polymorphic `support` / `expected` / `variance` dispatchers
+        # because (a) there is no uuid -> random_variable cast (the type
+        # carries a (uuid, value) pair, not just a uuid), and (b) the
+        # frontend filters the option to scalar root gates only, so the
+        # polymorphic agg_token / numeric branches don't apply here.  For
+        # non-scalar gates rv_support falls back to the conservative
+        # all-real interval and rv_moment raises with the underlying type
+        # mismatch, which surfaces as a 500 with the diagnostic.
+        bins_str = (arguments or "30").strip()
+        try:
+            bins = int(bins_str)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"distribution-profile: bins must be an integer (got {bins_str!r})"
+            )
+        if bins <= 0:
+            raise ValueError(
+                f"distribution-profile: bins must be positive (got {bins})"
+            )
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("SET LOCAL statement_timeout = {}").format(
+                    sql.Literal(statement_timeout)
+                )
+            )
+            # Same search_path / tool_search_path / panel-GUC composition
+            # as the main branch below; duplicated here because we don't
+            # share the trailer.  rv_histogram honours rv_mc_samples and
+            # monte_carlo_seed; rv_moment honours the same seed for its
+            # MC fallback.
+            if (search_path or "").strip():
+                target_path = compose_search_path(search_path, "")
+            else:
+                cur.execute("SHOW search_path")
+                target_path = compose_search_path("", cur.fetchone()[0])
+            cur.execute(
+                "SELECT set_config('search_path', %s, true)",
+                (target_path,),
+            )
+            if (tool_search_path or "").strip():
+                cur.execute(
+                    "SELECT set_config('provsql.tool_search_path', %s, true)",
+                    (tool_search_path,),
+                )
+            for guc_name, guc_val in (extra_gucs or {}).items():
+                if guc_name not in _PANEL_GUCS:
+                    continue
+                cur.execute(
+                    sql.SQL("SET LOCAL {} = {}").format(
+                        sql.Identifier(*guc_name.split(".")),
+                        sql.Literal(guc_val),
+                    )
+                )
+            cur.execute(
+                sql.SQL("""
+                    SELECT s.lo, s.hi,
+                           provsql.rv_moment({tok}::uuid, 1, false),
+                           provsql.rv_moment({tok}::uuid, 2, true),
+                           provsql.rv_histogram({tok}::uuid, {bins})
+                      FROM provsql.rv_support({tok}::uuid) s
+                """).format(
+                    tok=sql.Literal(token), bins=sql.Literal(bins)
+                )
+            )
+            row = cur.fetchone()
+        lo, hi, exp_val, var_val, hist = row if row else (None, None, None, None, None)
+        return {
+            "result": {
+                "support": [_to_jsonable(lo), _to_jsonable(hi)],
+                "expected": _to_jsonable(exp_val),
+                "variance": _to_jsonable(var_val),
+                # rv_histogram returns jsonb; psycopg surfaces it as a
+                # parsed Python list of {bin_lo, bin_hi, count} dicts that
+                # is already JSON-native, so bypass `_to_jsonable` (which
+                # would stringify the list).
+                "histogram": hist if isinstance(hist, (list, dict)) else json.loads(hist) if hist else [],
+                "bins": bins,
+            },
+            "kind": "distribution-profile",
+        }
     elif semiring == "prov-xml":
         # Export the circuit as ProvenanceXML. The mapping is optional :
         # without it, leaves carry bare UUIDs; with it, leaves are

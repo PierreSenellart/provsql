@@ -1508,6 +1508,7 @@
             </optgroup>
             <optgroup label="Other">
               <option value="probability">Probability</option>
+              <option value="distribution-profile">Distribution profile</option>
               <option value="prov-xml">PROV-XML export</option>
             </optgroup>
           </select>
@@ -1542,6 +1543,9 @@
                  value="0.8;0.2" placeholder="epsilon;delta"
                  autocomplete="off" spellcheck="false"
                  title="WeightMC parameters: epsilon;delta (defaults: 0.8;0.2)">
+          <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
+                 min="1" step="1" placeholder="bins" value="30"
+                 autocomplete="off" title="Histogram bin count for the distribution profile">
         </div>
         <div class="cv-eval__action-row">
           <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">

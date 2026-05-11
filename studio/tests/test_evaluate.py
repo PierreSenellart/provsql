@@ -810,3 +810,83 @@ def test_evaluate_applies_panel_gucs(client):
         # Reset so subsequent tests aren't affected by the override.
         client.post("/api/config",
                     json={"key": "provsql.rv_mc_samples", "value": "10000"})
+
+
+# ──────── distribution-profile (scalar-only) ────────
+
+
+def _rv_uuid(client, sql_expr: str) -> str:
+    """Build a random_variable via `sql_expr`, dump its UUID through
+    `provsql.random_variable_uuid`, and return it.  Used to anchor the
+    distribution-profile tests on a known scalar gate (rv leaf or arith
+    DAG) without going through the planner-hook rewriter."""
+    resp = client.post(
+        "/api/exec",
+        json={
+            "sql": f"SELECT provsql.random_variable_uuid({sql_expr}) AS u",
+            "mode": "circuit",
+        },
+    )
+    assert resp.status_code == 200, resp.data
+    final = resp.get_json()["blocks"][-1]
+    cols = [c["name"] for c in final["columns"]]
+    return final["rows"][0][cols.index("u")]
+
+
+def test_evaluate_distribution_profile_uniform(client):
+    """U(0, 1) leaf: support = [0, 1], expectation ≈ 0.5, variance ≈ 1/12,
+    histogram counts sum to provsql.rv_mc_samples."""
+    tok = _rv_uuid(client, "provsql.uniform(0::float8, 1::float8)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["kind"] == "distribution-profile"
+    r = body["result"]
+    assert r["support"] == [0.0, 1.0]
+    # MC-driven moments: tolerate the default 10k-sample noise.
+    assert abs(r["expected"] - 0.5) < 0.02, r["expected"]
+    assert abs(r["variance"] - 1.0 / 12.0) < 0.01, r["variance"]
+    assert isinstance(r["histogram"], list) and len(r["histogram"]) == 30
+    total = sum(int(b["count"]) for b in r["histogram"])
+    # Should equal rv_mc_samples; the default panel value is 10000.
+    assert total > 0
+
+
+def test_evaluate_distribution_profile_bins_argument(client):
+    """The `arguments` field is the bin count; bins=5 returns at most 5 bins."""
+    tok = _rv_uuid(client, "provsql.uniform(0::float8, 1::float8)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile", "arguments": "5",
+    })
+    assert resp.status_code == 200, resp.data
+    hist = resp.get_json()["result"]["histogram"]
+    assert len(hist) <= 5
+
+
+def test_evaluate_distribution_profile_dirac_value(client):
+    """gate_value root (Dirac): support is [c, c], expectation is c,
+    variance is 0, histogram is a single bin at c."""
+    tok = _rv_uuid(client, "provsql.as_random(7.5)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    r = resp.get_json()["result"]
+    assert r["support"] == [7.5, 7.5]
+    assert r["expected"] == 7.5
+    assert r["variance"] == 0.0
+    assert len(r["histogram"]) == 1
+    assert r["histogram"][0]["bin_lo"] == 7.5
+    assert r["histogram"][0]["bin_hi"] == 7.5
+
+
+def test_evaluate_distribution_profile_bad_bins_is_400(client):
+    tok = _rv_uuid(client, "provsql.uniform(0::float8, 1::float8)")
+    for bad in ("0", "-3", "abc"):
+        resp = client.post("/api/evaluate", json={
+            "token": tok, "semiring": "distribution-profile", "arguments": bad,
+        })
+        assert resp.status_code == 400, (bad, resp.data)
+        assert "bins" in resp.get_json()["error"].lower()

@@ -1221,7 +1221,10 @@
     if (!sel || !map || !meth || !run) return;
     syncCompiledSemiringAvailability();
 
-    const argControls = Object.values(_PROB_ARG_CONTROL)
+    // Includes the bins input for distribution-profile alongside the
+    // per-probability-method controls, so syncControls can hide every
+    // unrelated args input in one sweep.
+    const argControls = [...Object.values(_PROB_ARG_CONTROL), 'eval-args-bins']
       .map(id => document.getElementById(id))
       .filter(Boolean);
 
@@ -1254,7 +1257,12 @@
       meth.hidden = v !== 'probability';
       // Show only the args control that matches the current probability
       // method (if any); hide every other one so the row stays compact.
-      const wantedId = (v === 'probability') ? _PROB_ARG_CONTROL[meth.value] : null;
+      // distribution-profile is the lone non-probability semiring that
+      // takes an `arguments` value (the histogram bin count), so its
+      // bins input gets its own dispatch.
+      let wantedId = null;
+      if (v === 'probability') wantedId = _PROB_ARG_CONTROL[meth.value];
+      else if (v === 'distribution-profile') wantedId = 'eval-args-bins';
       for (const ctrl of argControls) ctrl.hidden = (ctrl.id !== wantedId);
       // Stale once the input shape changes : wipe result + bound +
       // time + the clear button.
@@ -1617,6 +1625,10 @@
         const a = (ctrl?.value || '').trim();
         if (a) body.arguments = a;
       }
+    } else if (semiring === 'distribution-profile') {
+      // The backend reads `arguments` as the histogram bin count.
+      const bins = (document.getElementById('eval-args-bins')?.value || '').trim();
+      if (bins) body.arguments = bins;
     }
 
     run.disabled = true;
@@ -1666,6 +1678,15 @@
         result.dataset.kind = 'xml';
         result.dataset.copy = xmlText;
         result.title = 'PROV-XML export';
+      } else if (data.kind === 'distribution-profile') {
+        // Inline-SVG panel: support badge + μ / σ² labels + empirical
+        // histogram of the sampled distribution.  The full JSON payload
+        // goes into dataset.copy so the user can grab it for further
+        // analysis with the existing copy button.
+        result.innerHTML = renderProfilePanel(data.result);
+        result.dataset.kind = 'distribution-profile';
+        result.dataset.copy = JSON.stringify(data.result);
+        result.title = 'Distribution profile';
       } else {
       // Show the value verbatim. Probability gets clipped to the configured
       // decimal count (default 4) for readability; the full-precision form
@@ -1929,6 +1950,94 @@
       + `<text class="cv-rv-tick" x="${W - padX}" y="${H - 1}" text-anchor="end">`
       + `${escapeHtml(tickFmt(hi))}</text>`
       + `</svg></div>`;
+  }
+
+  // Inline-SVG profile panel for the `distribution-profile` evaluation
+  // method.  Mirrors renderRvDensity's geometry / palette but draws an
+  // empirical histogram from the backend's [{bin_lo, bin_hi, count}]
+  // array, with a support badge (which can extend past the sampled
+  // range when the underlying distribution has unbounded support) and
+  // mean / variance labels.
+  function renderProfilePanel(profile) {
+    if (!profile) return '';
+    const histogram = Array.isArray(profile.histogram) ? profile.histogram : [];
+    const support  = Array.isArray(profile.support) ? profile.support : [null, null];
+    const expected = Number(profile.expected);
+    const variance = Number(profile.variance);
+    const fmt = v => {
+      if (v == null || !Number.isFinite(Number(v))) return String(v);
+      const n = Number(v);
+      if (Math.abs(n) >= 1e6 || (Math.abs(n) > 0 && Math.abs(n) < 1e-3)) {
+        return n.toExponential(3);
+      }
+      return Number(n.toFixed(4)).toString();
+    };
+    const fmtSupportEnd = v => {
+      // Postgres serialises +/-Infinity as the strings 'Infinity'/'-Infinity'
+      // through the float8 OUT params; psycopg surfaces them as the JSON
+      // numbers Infinity/-Infinity, which JSON.stringify drops to null.
+      // Accept either shape.
+      if (v === null || v === undefined) return '∞';
+      const s = String(v);
+      if (s === 'Infinity' || v === Infinity) return '+∞';
+      if (s === '-Infinity' || v === -Infinity) return '−∞';
+      return fmt(v);
+    };
+    const supportLabel =
+      `[${fmtSupportEnd(support[0])}, ${fmtSupportEnd(support[1])}]`;
+
+    // Histogram geometry: same canvas as renderRvDensity so the two
+    // sit visually consistent if the user pin-compares.
+    const W = 280, H = 110, padX = 10, padTop = 6, padBottom = 18;
+    let svgInner = '';
+    if (histogram.length) {
+      const maxCount = histogram.reduce((m, b) => Math.max(m, Number(b.count) || 0), 0) || 1;
+      const lo = Number(histogram[0].bin_lo);
+      const hi = Number(histogram[histogram.length - 1].bin_hi);
+      const span = (hi - lo) || 1;
+      const sx = x => padX + (W - 2 * padX) * (x - lo) / span;
+      const sy = c => (H - padBottom) - (H - padTop - padBottom) * (c / maxCount);
+      const bars = histogram.map(b => {
+        const x1 = sx(Number(b.bin_lo));
+        const x2 = sx(Number(b.bin_hi));
+        const y  = sy(Number(b.count) || 0);
+        const w  = Math.max(1, x2 - x1 - 1);
+        const h  = (H - padBottom) - y;
+        return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" `
+             + `width="${w.toFixed(1)}" height="${h.toFixed(1)}" />`;
+      }).join('');
+      // Mean reference line, faint dashed terracotta — same convention
+      // as renderRvDensity's mean line.
+      let meanLine = '';
+      if (Number.isFinite(expected) && expected >= lo && expected <= hi) {
+        const mx = sx(expected).toFixed(1);
+        meanLine =
+          `<line x1="${mx}" y1="${padTop}" x2="${mx}" y2="${(H - padBottom).toFixed(1)}" `
+          + `stroke="var(--terracotta-500)" stroke-width="1" `
+          + `stroke-dasharray="3 3" opacity="0.75" />`;
+      }
+      svgInner = `<g class="cv-profile-bars">${bars}</g>${meanLine}`
+        + `<text class="cv-rv-tick" x="${padX}" y="${H - 4}">${escapeHtml(fmt(lo))}</text>`
+        + `<text class="cv-rv-tick" x="${W - padX}" y="${H - 4}" text-anchor="end">`
+        + `${escapeHtml(fmt(hi))}</text>`;
+    } else {
+      svgInner = `<text class="cv-rv-tick" x="${W / 2}" y="${H / 2}" text-anchor="middle">`
+        + `no samples</text>`;
+    }
+    const svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="empirical histogram">${svgInner}</svg>`;
+    const stddev = (Number.isFinite(variance) && variance >= 0)
+      ? Math.sqrt(variance) : null;
+    return `<div class="cv-profile-panel" aria-label="distribution profile">`
+      + `<div class="cv-profile-meta">`
+      + `<span class="cv-profile-badge" title="support interval">supp ${escapeHtml(supportLabel)}</span>`
+      + `<span class="cv-profile-stat" title="expected value">μ = ${escapeHtml(fmt(expected))}</span>`
+      + `<span class="cv-profile-stat" title="variance">σ² = ${escapeHtml(fmt(variance))}</span>`
+      + (stddev != null
+          ? `<span class="cv-profile-stat" title="standard deviation">σ = ${escapeHtml(fmt(stddev))}</span>`
+          : '')
+      + `</div>`
+      + `<div class="cv-profile-svg cv-rv-density">${svg}</div>`
+      + `</div>`;
   }
 
   // Parse PG's text-encoded ARRAY of two-element ARRAYs ({{1,1},{2,3}}…)

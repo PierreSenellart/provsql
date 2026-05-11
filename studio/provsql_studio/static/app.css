@@ -1982,6 +1982,51 @@ body.mode-where #sidebar {
   display: block;
   flex-basis: 100%;
 }
+/* Distribution profile: same block-level treatment as PROV-XML so the
+   support/μ/σ² header + inline-SVG histogram lay out across the full
+   strip width instead of getting squeezed into the inline chip. */
+.cv-eval__result[data-kind="distribution-profile"] {
+  background: transparent;
+  padding: 0;
+  display: block;
+  flex-basis: 100%;
+}
+.cv-profile-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem 0.3rem;
+  background: rgba(125, 65, 153, 0.05);
+  border: 1px solid rgba(125, 65, 153, 0.18);
+  border-radius: 4px;
+}
+.cv-profile-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: baseline;
+}
+.cv-profile-badge,
+.cv-profile-stat {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+}
+.cv-profile-badge {
+  background: rgba(184, 144, 30, 0.18);
+  color: var(--gold-700);
+}
+.cv-profile-stat {
+  background: rgba(125, 65, 153, 0.12);
+  color: var(--purple-900);
+}
+.cv-profile-svg { margin: 0; }
+.cv-profile-bars rect {
+  fill: rgba(112, 82, 184, 0.55);
+  stroke: var(--purple-500);
+  stroke-width: 0.6;
+}
 /* Probability results : clickable to flip rounded ↔ full precision. */
 .cv-eval__result[data-flip-kind="prob"] {
   cursor: pointer;
