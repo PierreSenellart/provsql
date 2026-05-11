@@ -386,7 +386,9 @@ def create_app(
             return jsonify(cached)
         try:
             data = circuit_mod.get_circuit(
-                get_pool(), root=root, depth=depth, max_nodes=app.config["MAX_CIRCUIT_NODES"]
+                get_pool(), root=root, depth=depth,
+                max_nodes=app.config["MAX_CIRCUIT_NODES"],
+                extra_gucs=app.config["RUNTIME_GUCS"],
             )
         except circuit_mod.CircuitTooLarge as e:
             return jsonify({
@@ -634,6 +636,12 @@ def create_app(
         app.config["RUNTIME_GUCS"][name] = canonical
         # Best-effort persist so a Studio restart keeps the user's choice.
         db.save_persisted_gucs(app.config["RUNTIME_GUCS"])
+        # The layout cache is keyed on (root, depth) only; any panel
+        # GUC that changes what the C function returns (notably
+        # provsql.simplify_on_load) must invalidate cached scenes so
+        # the next /api/circuit fetches the fresh shape.
+        if name == "provsql.simplify_on_load":
+            layout_cache.clear()
         return jsonify({"ok": True, "key": name, "value": canonical})
 
     return app

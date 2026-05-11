@@ -142,6 +142,11 @@ _CMP_GLYPH = {
 }
 
 
+class _SimplifiedNotAvailable(Exception):
+    """Raised by _fetch_subgraph when the running provsql lacks
+    `simplified_circuit_subgraph` (older extension version)."""
+
+
 class CircuitTooLarge(Exception):
     def __init__(self, node_count: int, cap: int, depth: int, depth_1_size: int):
         super().__init__(f"circuit too large: {node_count} > {cap}")
@@ -162,6 +167,8 @@ def get_circuit(
     root: str,
     depth: int,
     max_nodes: int,
+    simplified: bool = True,
+    extra_gucs: dict[str, str] | None = None,
 ) -> dict:
     """Return `{nodes, edges, root, depth}` for the BFS-bounded subgraph rooted
     at `root` (a UUID-formatted string). Raises CircuitTooLarge if the cap is
@@ -173,7 +180,16 @@ def get_circuit(
     target is past our render bound). The BFS-depth invariant guarantees
     those parents sit exactly at depth `depth`, so collecting parent UUIDs
     from depth-`depth+1` edge rows yields the frontier set directly."""
-    overshot = _fetch_subgraph(pool, root, depth + 1)
+    try:
+        overshot = _fetch_subgraph(
+            pool, root, depth + 1,
+            simplified=simplified, extra_gucs=extra_gucs)
+    except _SimplifiedNotAvailable:
+        # Older provsql lacks the new accessor; degrade to the
+        # persisted-DAG path so the panel still renders something.
+        overshot = _fetch_subgraph(
+            pool, root, depth + 1,
+            simplified=False, extra_gucs=extra_gucs)
     if not overshot:
         return {"nodes": [], "edges": [], "root": root, "depth": depth}
     raw = [r for r in overshot if r["depth"] <= depth]
@@ -205,7 +221,11 @@ def get_circuit(
     return _layout(raw, root=root, depth=depth, frontier_uuids=has_deeper)
 
 
-def _fetch_subgraph(pool: ConnectionPool, root: str, depth: int) -> list[dict]:
+def _fetch_subgraph(
+    pool: ConnectionPool, root: str, depth: int,
+    *, simplified: bool = False,
+    extra_gucs: dict[str, str] | None = None,
+) -> list[dict]:
     # `%s::int` is required: psycopg may bind small Python ints as smallint,
     # and PG's function-overload resolution then can't reach
     # provsql.circuit_subgraph(uuid, int).
@@ -217,23 +237,85 @@ def _fetch_subgraph(pool: ConnectionPool, root: str, depth: int) -> list[dict]:
     # the in-circle label can read "sum" / "<=" instead of a generic Σ / ≷.
     # The CASE only evaluates the branch matching gate_type, so non-int
     # info1 values are never cast.
-    sql = (
-        "SELECT cs.node::text, cs.parent::text, cs.child_pos, cs.gate_type::text, "
-        "       cs.info1, cs.info2, provsql.get_extra(cs.node)::text AS extra, "
-        "       CASE WHEN cs.gate_type = 'agg' THEN "
-        "              (SELECT proname::text FROM pg_proc WHERE oid = cs.info1::int) "
-        "            WHEN cs.gate_type = 'cmp' THEN "
-        "              (SELECT oprname::text FROM pg_operator WHERE oid = cs.info1::int) "
-        "            ELSE NULL END AS info1_name, "
-        "       CASE WHEN cs.gate_type = 'agg' THEN "
-        "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int) "
-        "            ELSE NULL END AS info2_name, "
-        "       cs.depth "
-        "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
-    )
+    if simplified:
+        # The simplified function returns jsonb (one object per row);
+        # expand it via jsonb_array_elements and project the same
+        # columns as the persisted-DAG query.  `extra` is inlined in
+        # the jsonb (the simplifier may introduce extras not visible
+        # in the persisted store), so we read it from there rather
+        # than calling get_extra (which would hit the mmap).
+        sql = (
+            "WITH src AS ("
+            "  SELECT (e->>'node')        AS node,"
+            "         (e->>'parent')      AS parent,"
+            "         (e->>'child_pos')::int AS child_pos,"
+            "         (e->>'gate_type')   AS gate_type,"
+            "         (e->>'info1')       AS info1,"
+            "         (e->>'info2')       AS info2,"
+            "         (e->>'extra')       AS extra,"
+            "         (e->>'depth')::int  AS depth"
+            "  FROM jsonb_array_elements("
+            "         provsql.simplified_circuit_subgraph(%s::uuid, %s::int)) AS e"
+            ") "
+            "SELECT cs.node, cs.parent, cs.child_pos, cs.gate_type,"
+            "       cs.info1, cs.info2, cs.extra,"
+            "       CASE WHEN cs.gate_type = 'agg' THEN"
+            "              (SELECT proname::text FROM pg_proc WHERE oid = cs.info1::int)"
+            "            WHEN cs.gate_type = 'cmp' THEN"
+            "              (SELECT oprname::text FROM pg_operator WHERE oid = cs.info1::int)"
+            "            ELSE NULL END AS info1_name,"
+            "       CASE WHEN cs.gate_type = 'agg' THEN"
+            "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int)"
+            "            ELSE NULL END AS info2_name,"
+            "       cs.depth "
+            "FROM src cs"
+        )
+    else:
+        sql = (
+            "SELECT cs.node::text, cs.parent::text, cs.child_pos, cs.gate_type::text, "
+            "       cs.info1, cs.info2, provsql.get_extra(cs.node)::text AS extra, "
+            "       CASE WHEN cs.gate_type = 'agg' THEN "
+            "              (SELECT proname::text FROM pg_proc WHERE oid = cs.info1::int) "
+            "            WHEN cs.gate_type = 'cmp' THEN "
+            "              (SELECT oprname::text FROM pg_operator WHERE oid = cs.info1::int) "
+            "            ELSE NULL END AS info1_name, "
+            "       CASE WHEN cs.gate_type = 'agg' THEN "
+            "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int) "
+            "            ELSE NULL END AS info2_name, "
+            "       cs.depth "
+            "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
+        )
     out: list[dict] = []
+    import psycopg
+    from psycopg import sql as pg_sql
     with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(sql, (root, depth))
+        # Apply panel-managed GUCs (provsql.simplify_on_load, ...) so
+        # the user's panel choice controls what
+        # simplified_circuit_subgraph returns.  Mirrors evaluate_circuit
+        # / exec_batch; lazy-import the whitelist to avoid a circular
+        # import at module load.
+        if extra_gucs:
+            from . import db as _db
+            for guc_name, guc_val in extra_gucs.items():
+                if guc_name not in _db._PANEL_GUCS:
+                    continue
+                cur.execute(
+                    pg_sql.SQL("SET LOCAL {} = {}").format(
+                        pg_sql.Identifier(*guc_name.split(".")),
+                        pg_sql.Literal(guc_val),
+                    )
+                )
+        try:
+            cur.execute(sql, (root, depth))
+        except psycopg.errors.UndefinedFunction as e:
+            # provsql.simplified_circuit_subgraph wasn't installed on
+            # this database; signal the caller to retry against
+            # circuit_subgraph (the persisted DAG).  Only convert the
+            # specific missing-function diagnostic; everything else
+            # propagates.
+            if simplified and "simplified_circuit_subgraph" in str(e):
+                raise _SimplifiedNotAvailable() from e
+            raise
         for node, parent, child_pos, gate_type, info1, info2, extra, info1_name, info2_name, d in cur.fetchall():
             out.append({
                 "node": node,

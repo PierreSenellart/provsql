@@ -1082,6 +1082,30 @@ $$
 $$ LANGUAGE sql STABLE PARALLEL SAFE;
 
 /**
+ * @brief BFS subgraph of the IN-MEMORY simplified circuit rooted at @p root.
+ *
+ * Same row shape as @ref circuit_subgraph plus an inline @c extra
+ * column, but built from the @c GenericCircuit returned by
+ * @c getGenericCircuit -- i.e. AFTER @c provsql.simplify_on_load
+ * passes (RangeCheck, ...) have rewritten any decidable @c gate_cmp
+ * into Bernoulli @c gate_input / @c gate_zero / @c gate_one leaves.
+ * Lets a renderer show the user what the evaluator actually sees,
+ * without mutating the persisted DAG.
+ *
+ * Returns @c jsonb (an array of objects) rather than @c SETOF record
+ * to keep the C++ implementation free of SRF / @c FuncCallContext
+ * boilerplate; callers either consume the array directly or expand
+ * it via @c jsonb_array_elements.
+ *
+ * @param root      Root provenance token.
+ * @param max_depth Maximum BFS depth (default 8).
+ */
+CREATE OR REPLACE FUNCTION simplified_circuit_subgraph(
+  root UUID, max_depth INT DEFAULT 8) RETURNS jsonb
+  AS 'provsql','simplified_circuit_subgraph'
+  LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
  * @brief Resolve an input gate UUID back to its source row
  *
  * Searches every provenance-tracked relation for a row whose

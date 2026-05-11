@@ -294,3 +294,54 @@ def test_circuit_accepts_agg_token_underlying_uuid(client, test_dsn):
     # The root of an aggregation circuit is an `agg` gate.
     nodes_by_id = {n["id"]: n for n in data["nodes"]}
     assert nodes_by_id[agg_uuid]["type"] == "agg"
+
+
+def test_simplified_circuit_drops_decidable_cmp(client, test_dsn):
+    """When provsql.simplify_on_load is on (the panel default and the
+    server default), /api/circuit renders the IN-MEMORY simplified DAG
+    so RangeCheck-decidable rv comparisons appear as gate_one /
+    gate_zero leaves instead of the persisted gate_cmp shape.
+
+    Build a query whose lifted WHERE is `uniform(0, 1) > -10`, which
+    is certainly TRUE (support [0, 1] is entirely above -10).
+    RangeCheck rewrites the cmp to gate_one; the times gate that wraps
+    it then has gate_one as its second child.  With simplify_on_load
+    turned off via /api/config, the same fetch returns the raw cmp.
+    """
+    import psycopg
+    # Capture a row provenance whose WHERE conjunct is the rv cmp.
+    sql = ("CREATE TEMP TABLE _simp_demo AS "
+           "SELECT provsql.provenance() AS p "
+           "WHERE provsql.uniform(0.0::float8, 1.0::float8) "
+           "      > (-10)::provsql.random_variable;")
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        autocommit=True,
+    ) as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        cur.execute("SELECT p::text FROM _simp_demo")
+        row = cur.fetchone()
+    assert row, "expected a row from the FROM-less RV cmp"
+    root = row[0]
+
+    # Default panel state: simplify_on_load is on -> cmp folded to one.
+    resp = client.get(f"/api/circuit/{root}?depth=2")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+    types_on = {n["type"] for n in scene["nodes"]}
+    assert "one" in types_on, scene
+    assert "cmp" not in types_on, scene
+
+    # Flip the panel GUC off; the next fetch must see the raw cmp.
+    r = client.post("/api/config",
+                    json={"key": "provsql.simplify_on_load", "value": "off"})
+    assert r.status_code == 200, r.data
+    try:
+        resp = client.get(f"/api/circuit/{root}?depth=2")
+        assert resp.status_code == 200, resp.data
+        scene = resp.get_json()
+        types_off = {n["type"] for n in scene["nodes"]}
+        assert "cmp" in types_off, scene
+    finally:
+        client.post("/api/config",
+                    json={"key": "provsql.simplify_on_load", "value": "on"})
