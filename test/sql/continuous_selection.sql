@@ -219,6 +219,57 @@ SELECT id FROM mix WHERE reading > 0 OR id = 'm1';
 \set VERBOSITY default
 DROP TABLE mix;
 
+-- ====================================================================
+-- J: WHERE on a random_variable with NO add_provenance()'d source
+-- AND NO provenance() in the SELECT.  Before the has_provenance
+-- walker recursed with itself (rather than the limited
+-- provenance_function_walker), the rv-comparison OpExpr inside the
+-- WHERE clause was invisible to the gate, so the planner hook was
+-- skipped and the executor reached random_variable_cmp_placeholder.
+-- The fix is the smallest case that exercises pure-RV provenance
+-- synthesis: no tracked relation, no provenance() call, just a CTE
+-- producing an RV and a WHERE comparing it to a constant.
+-- ====================================================================
+CREATE TABLE result_j AS
+  WITH x(u) AS (SELECT uniform(0, 1))
+  SELECT 1 AS one FROM x WHERE u > 0.5;
+-- Two structural checks before removing the provenance column:
+--  (a) row count: the rewriter must let the row through (WHERE rewritten
+--      to TRUE, the lifted comparison goes to the provsql column).
+--  (b) the root gate is the cmp itself, NOT a single-child times wrapping
+--      it.  provenance_times(gate_one(), cmp) used to leave that useless
+--      wrapper because the CASE dispatched on the unfiltered token count
+--      and missed the [one, cmp] -> [cmp] collapse.
+-- SET LOCAL provsql.active=off so the rewriter doesn't auto-add a fresh
+-- provsql column to this very SELECT and wrap count(*) in agg_token.
+BEGIN;
+SET LOCAL provsql.active = off;
+SELECT count(*) AS rows_returned,
+       bool_and(get_gate_type(provsql) = 'cmp') AS root_is_cmp
+  FROM result_j;
+COMMIT;
+SELECT remove_provenance('result_j');
+DROP TABLE result_j;
+
+-- ====================================================================
+-- K: FROM-less SELECT with an rv_cmp in WHERE.  The planner hook used
+-- to short-circuit on `q->commandType == CMD_SELECT && q->rtable`, so
+-- a query with no FROM never even reached has_provenance and the
+-- placeholder fired.  After widening the gate to drop the rtable
+-- check, the rewriter lifts the comparison into the synthesised
+-- provsql column the same way it does for FROM-bearing queries.
+-- ====================================================================
+CREATE TABLE result_k AS
+  SELECT 1 AS one WHERE normal(0, 1) > 2;
+BEGIN;
+SET LOCAL provsql.active = off;
+SELECT count(*) AS rows_returned,
+       bool_and(get_gate_type(provsql) = 'cmp') AS root_is_cmp
+  FROM result_k;
+COMMIT;
+SELECT remove_provenance('result_k');
+DROP TABLE result_k;
+
 RESET provsql.monte_carlo_seed;
 
 SELECT 'ok'::text AS continuous_selection_done;

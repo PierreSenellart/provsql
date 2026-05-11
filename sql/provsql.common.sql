@@ -437,7 +437,12 @@ DECLARE
 BEGIN
   SELECT array_agg(t) FROM unnest(tokens) t WHERE t IS NOT NULL AND t <> gate_one() INTO filtered_tokens;
 
-  CASE array_length(tokens, 1)
+  -- Dispatch on the FILTERED count: a single survivor short-circuits
+  -- to that token directly (no useless single-child times gate); zero
+  -- survivors collapse to the identity. Using array_length(tokens, 1)
+  -- here would miss the [one, cmp] → [cmp] case, leaving the cmp wrapped
+  -- in a one-child times when its only sibling was gate_one().
+  CASE coalesce(array_length(filtered_tokens, 1), 0)
     WHEN 0 THEN
       times_token:=gate_one();
     WHEN 1 THEN

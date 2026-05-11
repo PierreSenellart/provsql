@@ -2673,6 +2673,47 @@ static bool provenance_function_in_group_by(const constants_t *constants,
  * @param data  Pointer to @c constants_t (cast from @c void*).
  * @return      @c true if provenance rewriting is needed for this node.
  */
+/**
+ * @brief Recursive helper for @c has_provenance_walker that detects
+ *        rv_cmp @c OpExpr and @c provenance() @c FuncExpr in
+ *        expression subtrees.
+ *
+ * Stops at Query boundaries: @c SubLink subselects (used as
+ * scalar/array subqueries in expressions) are not rewritten by the
+ * outer planner_hook pass, so a tracked relation inside one must not
+ * cause the OUTER query's gate to engage.  Only the @c testexpr of a
+ * SubLink is followed (it lives in the outer's evaluation scope).
+ */
+static bool has_rv_or_provenance_call(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return false;
+
+  if (IsA(node, OpExpr)) {
+    OpExpr *op = (OpExpr *)node;
+    if (rv_cmp_index(constants, op->opfuncid) >= 0)
+      return true;
+  }
+
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *f = (FuncExpr *)node;
+    if (f->funcid == constants->OID_FUNCTION_PROVENANCE)
+      return true;
+  }
+
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    return has_rv_or_provenance_call((Node *)sl->testexpr, data);
+  }
+
+  /* Query nodes are opaque here; expression_tree_walker returns false
+   * on them.  Explicit short-circuit just makes the intent obvious. */
+  if (IsA(node, Query))
+    return false;
+
+  return expression_tree_walker(node, has_rv_or_provenance_call, data);
+}
+
 static bool has_provenance_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -2682,16 +2723,32 @@ static bool has_provenance_walker(Node *node, void *data) {
     Query *q = (Query *)node;
     ListCell *rc;
 
-    /* Walk into CTE subqueries explicitly, because expression_tree_walker
-     * ignores Query nodes so query_tree_walker's walk of cteList does not
-     * recurse into ctequery */
+    /* Walk into CTE subqueries explicitly: they will be inlined as
+     * subqueries by the rewriter, so a tracked-table inside one (or
+     * an rv_cmp / provenance() call) matters for this query. */
     foreach (rc, q->cteList) {
       CommonTableExpr *cte = (CommonTableExpr *)lfirst(rc);
       if (has_provenance_walker((Node *)cte->ctequery, data))
         return true;
     }
 
-    if (query_tree_walker(q, has_provenance_walker, data, 0))
+    /* Walk this query's own expressions for rv_cmp OpExpr and
+     * provenance() FuncExpr.  Use the SubLink-aware walker so we
+     * don't descend into expression-context subqueries (they get
+     * planned standalone; an rv_cmp inside one matters only to
+     * that planning pass).
+     *
+     * This intentionally replaces a single query_tree_walker call:
+     * that helper recurses with the passed walker into BOTH rtable
+     * RTEs (RTE_SUBQUERY) and SubLink subselects, which would erase
+     * the SubLink/RTE_SUBQUERY distinction we need. */
+    if (has_rv_or_provenance_call((Node *)q->targetList, data))
+      return true;
+    if (has_rv_or_provenance_call((Node *)q->jointree, data))
+      return true;
+    if (has_rv_or_provenance_call((Node *)q->havingQual, data))
+      return true;
+    if (has_rv_or_provenance_call((Node *)q->returningList, data))
       return true;
 
     foreach (rc, q->rtable) {
@@ -2728,11 +2785,23 @@ static bool has_provenance_walker(Node *node, void *data) {
 
           attid += func->funccolcount;
         }
+      } else if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL) {
+        /* A FROM-source subquery contributes its provenance to ours;
+         * process_query recurses on it explicitly, so we must detect
+         * tracked relations / rv_cmp / provenance() inside it. */
+        if (has_provenance_walker((Node *)r->subquery, data))
+          return true;
       }
     }
   }
 
-  return expression_tree_walker(node, provenance_function_walker, data);
+  /* For non-Query nodes, use the expression-only walker.  It detects
+   * rv_cmp OpExpr and provenance() FuncExpr inside arbitrary
+   * sub-expressions (BoolExpr around an rv comparison, RV cmp under
+   * IS-DISTINCT-FROM, ...) but stops at Query boundaries so a sibling
+   * subquery's tracked rtable doesn't make THIS query's gate engage
+   * (subqueries have their own planner_hook pass). */
+  return has_rv_or_provenance_call(node, data);
 }
 
 /**
@@ -3573,8 +3642,90 @@ static Query *process_query(const constants_t *constants, Query *q,
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
   if (q->rtable == NULL) {
-    // No FROM clause, we can skip this query
-    return NULL;
+    /* FROM-less SELECT: the rest of the rewriter indexes into
+     * q->rtable, so it can't process anything tied to a base relation.
+     * But a WHERE-on-RV is still meaningful in this shape (e.g.
+     *   SELECT 1 WHERE normal(0,1) > 2)
+     * since the comparison produces a pure-rv gate that's lifted into
+     * a synthesised provsql column on the single result row.  Run only
+     * the qual migration + targetList splice and return; everything
+     * else this function does (column mapping, set-ops, aggregation
+     * rewriting, ...) assumes a non-empty rtable. */
+    List *rv_cmps = migrate_probabilistic_quals(constants, q);
+    if (rv_cmps != NIL) {
+      Expr *provenance;
+      RangeTblEntry *values_rte;
+      RangeTblRef *rtr;
+      Var *v;
+
+      if (list_length(rv_cmps) == 1) {
+        provenance = (Expr *)linitial(rv_cmps);
+      } else {
+        /* Multiple rv conjuncts: combine via provenance_times. */
+        FuncExpr *times = makeNode(FuncExpr);
+        ArrayExpr *array = makeNode(ArrayExpr);
+        times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+        times->funcresulttype = constants->OID_TYPE_UUID;
+        times->funcvariadic = true;
+        times->location = -1;
+        array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+        array->element_typeid = constants->OID_TYPE_UUID;
+        array->elements = rv_cmps;
+        array->location = -1;
+        times->args = list_make1(array);
+        provenance = (Expr *)times;
+      }
+
+      /* Bind the lifted expression to a single evaluation by wrapping
+       * it in a synthesized FROM (VALUES (<expr>)) AS _prov_(provsql).
+       * Without this, multiple references to the same provenance
+       * expression in the outer targetList (the user's provenance()
+       * call, plus the auto-added provsql column) each re-invoke any
+       * rv constructor inside, producing distinct UUIDs per call
+       * because uniform / normal / ... mint a fresh leaf gate each
+       * time.  Wrapping in VALUES gives one evaluation site that all
+       * outer references read from. */
+      values_rte = makeNode(RangeTblEntry);
+      values_rte->rtekind = RTE_VALUES;
+      values_rte->values_lists = list_make1(list_make1(provenance));
+      values_rte->coltypes = list_make1_oid(constants->OID_TYPE_UUID);
+      values_rte->coltypmods = list_make1_int(-1);
+      values_rte->colcollations = list_make1_oid(InvalidOid);
+      values_rte->eref = makeAlias(
+        "_prov_",
+        list_make1(makeString(pstrdup(PROVSQL_COLUMN_NAME))));
+      values_rte->inh = false;
+      values_rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+      values_rte->requiredPerms = 0;
+#endif
+      q->rtable = list_make1(values_rte);
+
+      rtr = makeNode(RangeTblRef);
+      rtr->rtindex = 1;
+      if (q->jointree == NULL) {
+        q->jointree = makeNode(FromExpr);
+      }
+      q->jointree->fromlist = list_make1(rtr);
+
+      v = makeVar(1, 1, constants->OID_TYPE_UUID, -1, InvalidOid, 0);
+
+      /* Substitute any provenance() FuncExpr in the targetList with
+       * a reference to the bound expression. */
+      replace_provenance_function_by_expression(constants, q, (Expr *)v);
+
+      /* Append a provsql column reading the same Var so callers that
+       * expect the auto-added column find it. */
+      {
+        TargetEntry *te = makeTargetEntry(
+          (Expr *)copyObject(v),
+          list_length(q->targetList) + 1,
+          pstrdup(PROVSQL_COLUMN_NAME),
+          false);
+        q->targetList = lappend(q->targetList, te);
+      }
+    }
+    return q;
   }
 
   /* Inline non-recursive CTE references as subqueries so we can track
@@ -3945,7 +4096,13 @@ static PlannedStmt *provsql_planner(Query *q,
     const constants_t constants = get_constants(false);
     if (constants.ok)
       process_insert_select(&constants, q);
-  } else if (q->commandType == CMD_SELECT && q->rtable) {
+  } else if (q->commandType == CMD_SELECT) {
+    /* No rtable check here: a FROM-less SELECT (e.g.
+     *   SELECT 1 WHERE normal(0,1) > 2)
+     * still needs the hook to engage when the WHERE contains an
+     * rv_cmp.  has_provenance walks the tree and returns false fast
+     * on FROM-less queries that have neither rv_cmp nor provenance(),
+     * so widening the gate costs nothing in the common case. */
     const constants_t constants = get_constants(false);
 
     if (constants.ok && has_provenance(&constants, q)) {

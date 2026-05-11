@@ -67,6 +67,18 @@ add_provenance
 
 (1 row)
 ERROR:  ProvSQL: WHERE clause mixes random_variable comparisons with other predicates inside the same Boolean expression; split the non-RV part into its own AND conjunct
+rows_returned|root_is_cmp
+1|t
+(1 row)
+remove_provenance
+
+(1 row)
+rows_returned|root_is_cmp
+1|t
+(1 row)
+remove_provenance
+
+(1 row)
 continuous_selection_done
 ok
 (1 row)
