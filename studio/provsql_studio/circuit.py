@@ -37,6 +37,30 @@ _GATE_LABEL = {
     "value":    "v",
     "mulinput": "⋮",
     "update":   "υ",
+    "rv":       "ξ",
+    "arith":    "α",
+}
+
+# PROVSQL_ARITH_* enum tags (src/provsql_utils.h) → in-circle glyph. The
+# unary-minus tag is rendered as a bare minus: with a single child the
+# context is unambiguous, and adding "x" would burn precious circle
+# real estate.
+_ARITH_OP_GLYPH = {
+    0: "+",
+    1: "×",
+    2: "−",
+    3: "÷",
+    4: "−",
+}
+
+# Distribution-kind initials used in the in-circle label for gate_rv.
+# Same logic as gate_value: the full encoding lives in `extra`; the
+# circle just needs a glance-recognisable hint.
+_RV_KIND_INITIAL = {
+    "normal":      "N",
+    "uniform":     "U",
+    "exponential": "Exp",
+    "erlang":      "Erl",
 }
 
 
@@ -69,7 +93,39 @@ def _gate_label(row: dict) -> str:
         return _truncate(_CMP_GLYPH.get(row["info1_name"], row["info1_name"]))
     if t == "value" and row.get("extra"):
         return _truncate(row["extra"])
+    if t == "rv" and row.get("extra"):
+        return _format_rv_label(row["extra"])
+    if t == "arith":
+        # circuit_subgraph returns info1 as TEXT (uniform-typed column); coerce
+        # to int before the enum-tag lookup. Anything unparseable falls
+        # through to the generic 'α' glyph below.
+        try:
+            tag = int(row["info1"]) if row.get("info1") is not None else None
+        except (TypeError, ValueError):
+            tag = None
+        glyph = _ARITH_OP_GLYPH.get(tag)
+        if glyph is not None:
+            return glyph
     return _GATE_LABEL.get(t, t)
+
+
+def _format_rv_label(extra: str) -> str:
+    """Render the in-circle label for a gate_rv leaf from its extra text.
+
+    Extra is "<kind>:<p1>[,<p2>]" (see src/RandomVariable.{h,cpp}). We
+    return the full kind-initial + parenthesised parameter list (e.g.
+    "N(2.5,0.5)") without truncating; the front-end shrinks the
+    font-size to fit so the user keeps the full parameter list rather
+    than seeing an ellipsis. The full text is still surfaced by the
+    inspector under the `distribution` row.
+    """
+    s = str(extra).strip()
+    kind, _, params = s.partition(":")
+    label = _RV_KIND_INITIAL.get(kind.strip().lower())
+    if label is None:
+        return s
+    p = params.strip()
+    return f"{label}({p})" if p else label
 
 
 def _truncate(s: str, n: int = 6) -> str:

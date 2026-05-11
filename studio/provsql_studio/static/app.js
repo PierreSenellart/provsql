@@ -786,6 +786,9 @@
     const timeout = document.getElementById('cfg-timeout');
     const sp      = document.getElementById('cfg-search-path');
     const tsp     = document.getElementById('cfg-tool-search-path');
+    const simplify = document.getElementById('cfg-simplify-on-load');
+    const mcSeed   = document.getElementById('cfg-monte-carlo-seed');
+    const rvSamples = document.getElementById('cfg-rv-mc-samples');
 
     async function loadConfig() {
       try {
@@ -796,6 +799,15 @@
         active.checked = (eff['provsql.active'] || 'on') !== 'off';
         verb.value     = eff['provsql.verbose_level'] || '0';
         if (verbOut) verbOut.textContent = verb.value;
+        if (simplify) {
+          simplify.checked = (eff['provsql.simplify_on_load'] || 'on') !== 'off';
+        }
+        if (mcSeed && eff['provsql.monte_carlo_seed'] != null) {
+          mcSeed.value = String(eff['provsql.monte_carlo_seed']);
+        }
+        if (rvSamples && eff['provsql.rv_mc_samples'] != null) {
+          rvSamples.value = String(eff['provsql.rv_mc_samples']);
+        }
         const opts = cfg.options || {};
         if (depth && opts.max_circuit_depth != null) {
           depth.value = String(opts.max_circuit_depth);
@@ -874,6 +886,30 @@
     active.addEventListener('change', () => {
       setGuc('provsql.active', active.checked ? 'on' : 'off');
     });
+    if (simplify) {
+      simplify.addEventListener('change', () => {
+        setGuc('provsql.simplify_on_load', simplify.checked ? 'on' : 'off');
+      });
+    }
+    if (mcSeed) {
+      // -1 means "non-deterministic"; clamp absurd negatives but allow
+      // any non-negative literal seed (including 0).
+      mcSeed.addEventListener('change', () => {
+        const raw = parseInt(mcSeed.value, 10);
+        const n = Number.isFinite(raw) ? Math.max(-1, raw) : -1;
+        mcSeed.value = String(n);
+        setGuc('provsql.monte_carlo_seed', n);
+      });
+    }
+    if (rvSamples) {
+      // 0 is meaningful (disables the MC fallback); clamp negatives.
+      rvSamples.addEventListener('change', () => {
+        const raw = parseInt(rvSamples.value, 10);
+        const n = Number.isFinite(raw) ? Math.max(0, raw) : 10000;
+        rvSamples.value = String(n);
+        setGuc('provsql.rv_mc_samples', n);
+      });
+    }
     // Live-update the value display as the slider drags; only POST on
     // release (`change`) so we don't hammer /api/config every step.
     verb.addEventListener('input', () => {
@@ -1543,7 +1579,8 @@
     // display via a body-level CSS class : no re-render needed. The
     // outer span carries the full value as a title so hover always
     // reveals the original even when collapsed.
-    if ((typeName || '').toLowerCase() === 'uuid' && v != null && v !== '') {
+    const lowerType = (typeName || '').toLowerCase();
+    if ((lowerType === 'uuid' || lowerType === 'random_variable') && v != null && v !== '') {
       const s = String(v);
       // Match circuit.js's shortUuid so both views render UUIDs the same
       // way: 4 hex chars + ellipsis is enough for cursory same/different
@@ -1574,6 +1611,7 @@
     'float4', 'float8', 'real',
     'money',
     'agg_token',
+    'random_variable',
     'date', 'time', 'timetz', 'timestamp', 'timestamptz', 'interval',
     'uuid',
   ]);
@@ -1981,6 +2019,26 @@ async function runQuery(ev) {
           // tooltip carries the UUID so users can confirm which
           // circuit the cell points at without inspecting the DOM.
           let displayValue = value;
+          // random_variable cells arrive as the composite text
+          // "( UUID , value )" (random_variable_out in
+          // src/random_variable_type.c). The UUID alone is what the
+          // user wants : it's the click-through target and matches how
+          // other UUID columns are rendered. The trailing scalar value
+          // is NaN for any symbolic RV so it's pure noise; we drop it.
+          if (typeName === 'random_variable' && value) {
+            const m = String(value).match(
+              /^\(\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*,/
+            );
+            if (m) {
+              const rvUuid = m[1];
+              displayValue = rvUuid;
+              if (isCircuit) {
+                extraCls  = (extraCls + ' is-clickable').trim();
+                extraAttr = ` data-circuit-uuid="${env.escapeAttr(rvUuid)}"`;
+                if (extraCls.length) extraCls = ' ' + extraCls;
+              }
+            }
+          }
           if (typeName === 'agg_token' && value) {
             if (isCircuit) {
               extraCls  = (extraCls + ' is-clickable').trim();

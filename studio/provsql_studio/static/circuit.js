@@ -25,6 +25,19 @@
     one:      'One (𝟙): semiring ⊗ identity (always true)',
     zero:     'Zero (𝟘): semiring ⊕ identity (always false)',
     update:   'Update gate (υ): INSERT / UPDATE / DELETE',
+    rv:       'Random variable: continuous distribution leaf',
+    arith:    'Arithmetic gate: scalar operation over child gates',
+  };
+
+  // gate_arith info1 holds a PROVSQL_ARITH_* tag (src/provsql_utils.h).
+  // Mirror the server-side _ARITH_OP_GLYPH in circuit.py so the
+  // inspector can label the operator without an extra round-trip.
+  const ARITH_OP_NAME = {
+    0: 'plus (+)',
+    1: 'times (×)',
+    2: 'minus (−)',
+    3: 'divide (÷)',
+    4: 'negate (−x)',
   };
 
   // ─── state ────────────────────────────────────────────────────────────
@@ -55,13 +68,30 @@
   // the digits would be noise. semimod is omitted: its value/scalar
   // split is implied by gate type. eq has a single child so positional
   // labels would be redundant.
-  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg']);
+  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith']);
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
+  // = and <> are commutative; lhs/rhs digits add noise for those cmp
+  // gates the same way they would for SUM/COUNT/etc.  The strict
+  // comparators (<, <=, >, >=) keep the positional digits since
+  // flipping them changes semantics.
+  const COMMUTATIVE_CMP = new Set(['=', '<>', '!=']);
+  // PROVSQL_ARITH_* tags whose result depends on argument order:
+  // 2 = MINUS, 3 = DIV.  PLUS / TIMES are commutative (no labels);
+  // NEG has a single child (label would be a lone "1", redundant).
+  const NON_COMMUTATIVE_ARITH = new Set([2, 3]);
   function shouldLabelChildren(parent) {
     if (!ORDERED_GATES.has(parent.type)) return false;
     if (parent.type === 'agg') {
       const fn = (parent.info1_name || '').toLowerCase();
       return !COMMUTATIVE_AGG.has(fn);
+    }
+    if (parent.type === 'cmp') {
+      const op = parent.info1_name || '';
+      return !COMMUTATIVE_CMP.has(op);
+    }
+    if (parent.type === 'arith') {
+      const tag = parent.info1 == null ? null : Number(parent.info1);
+      return Number.isFinite(tag) && NON_COMMUTATIVE_ARITH.has(tag);
     }
     return true;
   }
@@ -408,6 +438,25 @@
       nodeLayer.appendChild(g);
     }
 
+    // Some labels carry payload (rv distribution params, value
+    // scalars like "1e9", agg function names) wider than the
+    // circle's default font-size can fit.  Measure each label after
+    // attach and shrink its font until it fits the usable diameter
+    // (~40px for r=22 minus stroke + 1px padding on each side); the
+    // 5.5px floor keeps mono glyphs legible.  Inline style beats the
+    // per-type CSS rules (.node--rv etc.) on font-size; setAttribute
+    // would not (CSS takes precedence over SVG presentation
+    // attributes here).
+    nodeLayer.querySelectorAll('.node-label').forEach(el => {
+      const maxW = 40;
+      const bb = el.getBBox();
+      if (bb.width > maxW) {
+        const cur = parseFloat(getComputedStyle(el).fontSize) || 11;
+        const scaled = Math.max(5.5, cur * maxW / bb.width);
+        el.style.fontSize = scaled.toFixed(2) + 'px';
+      }
+    });
+
     fitView();
 
     if (titleEl) titleEl.textContent = 'Provenance Circuit';
@@ -435,10 +484,16 @@
     const ys = ps.map(p => p.y);
     const minX = Math.min(...xs) - 60, maxX = Math.max(...xs) + 60;
     const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
+    /* Anchor the viewBox on the BBOX CENTRE rather than on minX/minY +
+     * a clamped width.  For multi-node scenes the two coincide (the
+     * bbox is its own centroid); for single-node scenes the clamped
+     * dimensions used to extend the box right + down from the node,
+     * dragging the node into the top-left quadrant of the canvas
+     * instead of sitting in the middle. */
     const bbW = Math.max(maxX - minX, 200);
     const bbH = Math.max(maxY - minY, 150);
-    const cx = minX + bbW / 2 + state.pan.x;
-    const cy = minY + bbH / 2 + state.pan.y;
+    const cx = (minX + maxX) / 2 + state.pan.x;
+    const cy = (minY + maxY) / 2 + state.pan.y;
 
     // Match the viewBox aspect ratio to the SVG element's on-screen
     // aspect ratio. With preserveAspectRatio="xMidYMid meet" any
@@ -477,26 +532,50 @@
     edgeLayer.innerHTML = '';
     if (!state.scene) return;
     const nodesById = Object.fromEntries(state.scene.nodes.map(n => [n.id, n]));
+    // When the same parent → child pair appears more than once (gate_arith
+    // with both args pointing at the same RV, gate_times with duplicate
+    // factors, ...) the straight-line geometry would stack the curves
+    // on top of each other so the user sees a single edge.  Count
+    // parallel edges per (from, to) and bow each one sideways so all
+    // of them stay visible and the child_pos label has a distinct slot.
+    const parallelTotal = {};
+    for (const e of state.scene.edges) {
+      const k = `${e.from}|${e.to}`;
+      parallelTotal[k] = (parallelTotal[k] || 0) + 1;
+    }
+    const parallelSeen = {};
     for (const e of state.scene.edges) {
       const from = nodesById[e.from], to = nodesById[e.to];
       if (!from || !to) continue;
       const fp = nodePos(from), tp = nodePos(to);
+      const k = `${e.from}|${e.to}`;
+      const total = parallelTotal[k];
+      parallelSeen[k] = (parallelSeen[k] || 0) + 1;
+      const idx = parallelSeen[k] - 1;
+      // Symmetric horizontal bow: single edge stays straight; for n>1
+      // edges we space them at ±18px steps centred on the straight
+      // line, so total spread scales with multiplicity.
+      const bow = total > 1 ? (idx - (total - 1) / 2) * 18 : 0;
       const path = svgEl('path', {
         class: 'edge',
-        d: `M ${fp.x} ${fp.y + 22} C ${fp.x} ${fp.y + 50}, ${tp.x} ${tp.y - 50}, ${tp.x} ${tp.y - 22}`,
+        d: `M ${fp.x} ${fp.y + 22} `
+         + `C ${fp.x + bow} ${fp.y + 50}, `
+         +   `${tp.x + bow} ${tp.y - 50}, `
+         +   `${tp.x} ${tp.y - 22}`,
         'data-from': e.from, 'data-to': e.to,
       });
       edgeLayer.appendChild(path);
 
       // Position label at the child end of the edge for ordered gates.
       // Offset 32px (r=22 + a small gap) away from the child centre
-      // along the edge direction so the digit clears the stroke.
+      // along the edge direction so the digit clears the stroke. Shift
+      // by the same bow so labels track their parallel curve.
       if (shouldLabelChildren(from) && e.child_pos != null) {
         const dx = fp.x - tp.x;
         const dy = fp.y - tp.y;
         const len = Math.hypot(dx, dy) || 1;
         const offset = 32;
-        const lx = tp.x + (dx / len) * offset;
+        const lx = tp.x + (dx / len) * offset + bow;
         const ly = tp.y + (dy / len) * offset;
         const tag = svgEl('text', {
           class: 'edge-pos',
@@ -688,11 +767,32 @@
         }
       } else if (node.type === 'value' || node.type === 'agg') {
         html += `<dt>value</dt><dd>${escapeHtml(node.extra)}</dd>`;
+      } else if (node.type === 'rv') {
+        // extra is "<kind>:<p1>[,<p2>]"; split for readability.
+        const spec = parseDistributionSpec(node.extra);
+        if (spec) {
+          html += `<dt>distribution</dt><dd>${escapeHtml(spec.kind)}</dd>`;
+          spec.params.forEach((p, i) => {
+            // cv-inspector__dt--keep-case opts these rows out of the
+            // inspector's default text-transform: uppercase so the
+            // Greek-letter param names (μ, σ, λ) keep their proper
+            // lowercase form.
+            html += `<dt class="cv-inspector__dt--keep-case">`
+                 + `${escapeHtml(spec.paramNames[i])}</dt>`
+                 + `<dd>${escapeHtml(String(p))}</dd>`;
+          });
+        } else {
+          html += `<dt>distribution</dt><dd>${escapeHtml(node.extra)}</dd>`;
+        }
       } else {
         html += `<dt>extra</dt><dd>${escapeHtml(node.extra)}</dd>`;
       }
     }
     html += '</dl>';
+    if (node.type === 'rv') {
+      const density = renderRvDensity(parseDistributionSpec(node.extra));
+      if (density) html += density;
+    }
     if (node.type === 'input' || node.type === 'mulinput') {
       html += '<p><em>Resolving source row…</em></p>';
     } else if (node.frontier) {
@@ -1545,7 +1645,14 @@
       const dt = Math.round(performance.now() - t0);
       if (time) time.textContent = `· ${dt} ms`;
       if (!resp.ok) {
-        result.textContent = data.detail || data.error || `HTTP ${resp.status}`;
+        const msg = data.detail || data.error || `HTTP ${resp.status}`;
+        // Render with the same icon + ProvSQL pill + crimson banner
+        // treatment the result-table errors use, instead of a bare
+        // terracotta chip.  Logic mirrors app.js's renderDiag (see
+        // there for the long-message <details> branch); inlined here
+        // because that function lives inside the runQuery closure
+        // and isn't exposed at module-load time.
+        result.innerHTML = renderEvalError(msg, data.sqlstate);
         result.dataset.kind = 'error';
         return;
       }
@@ -1694,12 +1801,134 @@
       // inspector adds something the canvas doesn't.
       if (node.info1 != null) out.push({ label: 'relation id', value: node.info1 });
       if (node.info2 != null) out.push({ label: 'columns',     value: node.info2 });
+    } else if (t === 'arith') {
+      // info1 = PROVSQL_ARITH_* tag (provsql.circuit_subgraph returns it
+      // as TEXT so the value is a string here); map to a name+glyph so
+      // the user doesn't have to remember enum order.
+      const tag = node.info1 == null ? null : Number(node.info1);
+      const name = Number.isFinite(tag) ? ARITH_OP_NAME[tag] : null;
+      if (name) out.push({ label: 'operator', value: name });
+      else if (node.info1 != null) out.push({ label: 'operator', value: node.info1 });
     } else {
-      // No type-specific translation : fall back to raw fields if set.
-      if (node.info1 != null) out.push({ label: 'info1', value: node.info1 });
-      if (node.info2 != null) out.push({ label: 'info2', value: node.info2 });
+      // No type-specific translation : fall back to raw fields when
+      // the value is meaningfully set. Zero is the universal "unused"
+      // sentinel for these slots (gate_rv, gate_value, gate_plus,
+      // gate_times, ... all leave info1 / info2 as 0), so suppress
+      // the row rather than dumping a noisy "info1: 0" for every
+      // gate that doesn't use those slots.
+      const i1 = node.info1, i2 = node.info2;
+      const meaningful = v => v != null && v !== 0 && v !== '0' && v !== '';
+      if (meaningful(i1)) out.push({ label: 'info1', value: i1 });
+      if (meaningful(i2)) out.push({ label: 'info2', value: i2 });
     }
     return out;
+  }
+
+  // Parse the gate_rv `extra` text encoding into {kind, params, paramNames}.
+  // Mirrors src/RandomVariable.cpp's parse_distribution_spec; returns null
+  // on anything we don't recognise so callers fall back to the raw text.
+  function parseDistributionSpec(s) {
+    if (!s) return null;
+    const m = String(s).match(/^\s*([a-zA-Z]+)\s*(?::(.*))?$/);
+    if (!m) return null;
+    const kind = m[1].toLowerCase();
+    const params = (m[2] || '')
+      .split(',').map(x => Number(x.trim())).filter(x => Number.isFinite(x));
+    const meta = {
+      normal:      { params: 2, names: ['μ', 'σ'] },
+      uniform:     { params: 2, names: ['a', 'b'] },
+      exponential: { params: 1, names: ['λ'] },
+      erlang:      { params: 2, names: ['k', 'λ'] },
+    }[kind];
+    if (!meta || params.length < meta.params) return null;
+    return { kind, params: params.slice(0, meta.params), paramNames: meta.names };
+  }
+
+  // Render the analytical PDF of a parsed distribution spec into a small
+  // inline SVG. Returns an HTML string suitable for insertion into the
+  // inspector body. Returns "" when the spec is unrecognised so callers
+  // can simply skip the preview without a special case.
+  function renderRvDensity(spec) {
+    if (!spec) return '';
+    const W = 240, H = 100, padX = 6, padY = 6;
+    const samples = 120;
+    let lo, hi, pdf;
+    if (spec.kind === 'normal') {
+      const [mu, sigma] = spec.params;
+      if (!(sigma > 0)) return '';
+      lo = mu - 4 * sigma; hi = mu + 4 * sigma;
+      const k = 1 / (sigma * Math.sqrt(2 * Math.PI));
+      pdf = x => k * Math.exp(-0.5 * ((x - mu) / sigma) ** 2);
+    } else if (spec.kind === 'uniform') {
+      const [a, b] = spec.params;
+      if (!(b > a)) return '';
+      const margin = 0.15 * (b - a);
+      lo = a - margin; hi = b + margin;
+      const h = 1 / (b - a);
+      pdf = x => (x >= a && x <= b) ? h : 0;
+    } else if (spec.kind === 'exponential') {
+      const [lam] = spec.params;
+      if (!(lam > 0)) return '';
+      lo = 0; hi = 6 / lam;
+      pdf = x => x < 0 ? 0 : lam * Math.exp(-lam * x);
+    } else if (spec.kind === 'erlang') {
+      const [k, lam] = spec.params;
+      if (!(k >= 1) || !(lam > 0)) return '';
+      lo = 0; hi = Math.max(2 * k / lam, 6 / lam);
+      // (k-1)! via gamma; k is integer in practice but we tolerate float.
+      let fact = 1;
+      for (let i = 2; i < k; i++) fact *= i;
+      const norm = Math.pow(lam, k) / fact;
+      pdf = x => x < 0 ? 0 : norm * Math.pow(x, k - 1) * Math.exp(-lam * x);
+    } else {
+      return '';
+    }
+    const xs = [], ys = [];
+    for (let i = 0; i <= samples; i++) {
+      const x = lo + (hi - lo) * (i / samples);
+      xs.push(x);
+      ys.push(pdf(x));
+    }
+    const yMax = Math.max(...ys, 1e-12);
+    const sx = x => padX + (W - 2 * padX) * (x - lo) / (hi - lo);
+    const sy = y => (H - padY) - (H - 2 * padY) * (y / yMax);
+    const pts = xs.map((x, i) => `${sx(x).toFixed(1)},${sy(ys[i]).toFixed(1)}`).join(' ');
+    const polygon =
+      `${sx(lo).toFixed(1)},${sy(0).toFixed(1)} `
+      + pts + ' '
+      + `${sx(hi).toFixed(1)},${sy(0).toFixed(1)}`;
+    // X-axis ticks at lo / mid / hi. The mean is the natural reference
+    // line for normal / exponential / erlang and the midpoint for
+    // uniform; render it as a faint dashed vertical.
+    let meanLine = '';
+    let mean = null;
+    if (spec.kind === 'normal')      mean = spec.params[0];
+    else if (spec.kind === 'uniform')     mean = (spec.params[0] + spec.params[1]) / 2;
+    else if (spec.kind === 'exponential') mean = 1 / spec.params[0];
+    else if (spec.kind === 'erlang')      mean = spec.params[0] / spec.params[1];
+    if (mean != null && mean >= lo && mean <= hi) {
+      meanLine =
+        `<line x1="${sx(mean).toFixed(1)}" y1="${padY}" `
+        + `x2="${sx(mean).toFixed(1)}" y2="${(H - padY).toFixed(1)}" `
+        + `stroke="var(--terracotta-500)" stroke-width="1" `
+        + `stroke-dasharray="3 3" opacity="0.7" />`;
+    }
+    const tickFmt = v => {
+      if (!Number.isFinite(v)) return '';
+      if (Math.abs(v) >= 1000 || (Math.abs(v) > 0 && Math.abs(v) < 0.01)) return v.toExponential(1);
+      return Number(v.toFixed(3)).toString();
+    };
+    return `<div class="cv-rv-density" aria-label="probability density">`
+      + `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">`
+      + `<polygon points="${polygon}" fill="rgba(112, 82, 184, 0.18)" `
+      + `         stroke="var(--purple-500)" stroke-width="1.4" />`
+      + meanLine
+      + `<text class="cv-rv-tick" x="${padX}" y="${H - 1}">${escapeHtml(tickFmt(lo))}</text>`
+      + `<text class="cv-rv-tick" x="${W / 2}" y="${H - 1}" text-anchor="middle">`
+      + `${escapeHtml(tickFmt((lo + hi) / 2))}</text>`
+      + `<text class="cv-rv-tick" x="${W - padX}" y="${H - 1}" text-anchor="end">`
+      + `${escapeHtml(tickFmt(hi))}</text>`
+      + `</svg></div>`;
   }
 
   // Parse PG's text-encoded ARRAY of two-element ARRAYs ({{1,1},{2,3}}…)
@@ -1729,6 +1958,27 @@
   function escapeHtml(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Render a server error inside the eval-strip with the same icon +
+  // ProvSQL pill + crimson .wp-error panel that the result-table banner
+  // uses.  Strips the "ProvSQL: " prefix and turns it into a brand
+  // badge, the way app.js's renderDiag does.  XX000 is the generic
+  // internal_error SQLSTATE that provsql_error() emits, so we drop it
+  // (it would add noise to every message without telling the user
+  // anything actionable).
+  function renderEvalError(message, sqlstate) {
+    const raw = message || '';
+    const m = raw.match(/^ProvSQL:\s*(.*)$/s);
+    const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
+    const text  = m ? m[1] : raw;
+    const tail  = (sqlstate && sqlstate !== 'XX000')
+      ? ` <code>(SQLSTATE ${escapeHtml(sqlstate)})</code>`
+      : '';
+    return `<div class="wp-error">`
+         + `<i class="fas fa-exclamation-circle"></i> `
+         + `${badge}${escapeHtml(text)}${tail}`
+         + `</div>`;
   }
 
   function shortUuid(u) {
