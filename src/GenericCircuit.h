@@ -247,6 +247,29 @@ void resolveToRv(gate_t g, const std::string &s) {
 }
 
 /**
+ * @brief Drop semiring identity wires and collapse single-wire
+ *        @c gate_times / @c gate_plus to their lone non-identity
+ *        child; collapse a @c gate_times containing a @c gate_zero
+ *        wire to that absorber.
+ *
+ * Universal rewrite: the multiplicative identity (@c gate_one), the
+ * additive identity (@c gate_zero), and the multiplicative absorber
+ * (@c gate_zero) hold across every provsql semiring, so a single
+ * pass after @c RangeCheck is sound for every downstream consumer
+ * (probability_evaluate, to_provxml, view_circuit, Studio's
+ * simplified subgraph).  Does NOT apply the additive absorber
+ * rewrite (@c plus-with-one): @c gate_one only absorbs in
+ * idempotent semirings (Boolean, MinMax), so applying it
+ * unconditionally would silently change the semantics for
+ * @c Counting / @c Formula / etc.
+ *
+ * Operates on the in-memory circuit only; the persistent mmap store
+ * is never touched.  Gated alongside @c RangeCheck by
+ * @c provsql.simplify_on_load.
+ */
+void foldSemiringIdentities();
+
+/**
  * @brief Replace the wires of @p g with @p w.
  *
  * Used by the @c HybridEvaluator simplifier's identity-element drop

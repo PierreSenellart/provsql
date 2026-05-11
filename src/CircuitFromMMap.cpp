@@ -129,8 +129,17 @@ GenericCircuit getGenericCircuit(pg_uuid_t token)
    *
    * Gated by the provsql.simplify_on_load GUC so users debugging
    * raw circuit structure can opt out. */
-  if (provsql_simplify_on_load)
+  if (provsql_simplify_on_load) {
     provsql::runRangeCheck(gc);
+    /* Universal identity/absorber collapse on @c gate_times and
+     * @c gate_plus: drop @c gate_one wires from @c times and
+     * @c gate_zero wires from @c plus, collapse a @c gate_times
+     * containing a @c gate_zero to that absorber, and collapse any
+     * singleton-wire @c times / @c plus to its lone child.  Runs
+     * after RangeCheck so the @c gate_one / @c gate_zero leaves
+     * RangeCheck introduces are eligible for elimination. */
+    gc.foldSemiringIdentities();
+  }
 
   return gc;
 }

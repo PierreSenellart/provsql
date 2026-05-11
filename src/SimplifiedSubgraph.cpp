@@ -153,6 +153,11 @@ simplified_circuit_subgraph(PG_FUNCTION_ARGS)
       PG_RETURN_DATUM(json_datum);
     }
 
+    /* getGenericCircuit applied foldSemiringIdentities for us when
+     * provsql.simplify_on_load is on, so the wires here already
+     * reflect identity / absorber collapses; no extra substitution
+     * needed at BFS time. */
+
     /* BFS to compute the canonical (shortest-path) depth of each
      * reachable gate. */
     std::unordered_map<gate_t, int> depth_of;
@@ -172,10 +177,10 @@ simplified_circuit_subgraph(PG_FUNCTION_ARGS)
       }
     }
 
-    /* Emit one row per (parent, node, child_pos) edge whose ENDPOINTS
-     * both sit at or below max_depth, plus a synthetic root row with
-     * parent=NULL.  Matches `circuit_subgraph`'s output shape: a node
-     * with k parents inside the bound emits k rows. */
+    /* Emit one row per (parent, node, child_pos) edge plus a
+     * synthetic root row with parent=NULL.  Matches the output shape
+     * of the SQL @c circuit_subgraph (one row per (parent, child)
+     * triple). */
     const std::string root_uuid = gc.getUUID(root_gate);
     emit_node_row(out, first, gc, root_gate, root_uuid,
                   /* parent */ nullptr, /* child_pos */ 0,
