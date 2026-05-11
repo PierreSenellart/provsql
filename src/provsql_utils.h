@@ -239,24 +239,27 @@ extern int provsql_rv_mc_samples;
  * code paths). */
 extern bool provsql_simplify_on_load;
 
-/** @brief Run the hybrid-evaluator simplifier before dispatching a
- *         probability_evaluate query.
+/** @brief Run the hybrid evaluator (simplifier + per-cmp island
+ *         decomposer) before dispatching a probability_evaluate query.
  *
- * When on (default), @c probability_evaluate runs the
- * @c HybridEvaluator simplifier between @c RangeCheck (the universal
- * cmp-resolution at load time) and @c AnalyticEvaluator (the
- * probability-specific closed-form CDF pass).  The simplifier
- * collapses @c gate_arith subtrees via constant folding,
- * identity-element drops, and family-closure rules over independent
- * normals and i.i.d. exponentials; the resulting bare @c gate_rv
- * leaves unlock @c AnalyticEvaluator on naturally-written predicates
- * that would otherwise have to fall through to Monte Carlo.
+ * Debug-only GUC, hidden from @c SHOW @c ALL and from
+ * @c postgresql.conf.sample (registered with
+ * @c GUC_NO_SHOW_ALL @c | @c GUC_NOT_IN_SAMPLE).  When on (default),
+ * @c probability_evaluate runs the @c HybridEvaluator simplifier
+ * between @c RangeCheck and @c AnalyticEvaluator and the per-cmp
+ * MC island decomposer after @c AnalyticEvaluator: @c gate_arith
+ * subtrees are constant-folded and family-closed (normals, Erlang),
+ * and residual continuous-island comparators are MC-marginalised
+ * into Bernoulli @c gate_input leaves so the surrounding circuit
+ * becomes purely Boolean.
  *
- * Set @c provsql.hybrid_evaluation to @c off to bypass the simplifier
- * entirely: every comparator that @c RangeCheck and @c AnalyticEvaluator
- * cannot decide on the original DAG then falls through to whole-circuit
- * MC.  Used to A/B the simplifier path against the MC fallback during
- * development.  Has no effect on non-probability queries. */
+ * Set to @c off to bypass both passes: undecidable comparators
+ * then fall through to whole-circuit MC (for the @c monte-carlo
+ * method) or raise (for @c independent / @c tree-decomposition).
+ * End users have no reason to flip this -- on is strictly better
+ * for them.  Exists for developer A/B testing of the analytic
+ * path against the raw MC path and as a bisection knob if a
+ * closure rule turns out to be unsound on some workload. */
 extern bool provsql_hybrid_evaluation;
 
 #include "provsql_error.h"

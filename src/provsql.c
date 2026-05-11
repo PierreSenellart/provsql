@@ -4098,29 +4098,30 @@ void _PG_init(void) {
                            NULL,
                            NULL,
                            NULL);
+  /* Debug-only: hidden from SHOW ALL and postgresql.conf.sample.
+   * On is strictly better for end users (analytic answers where
+   * possible, lower MC variance, more methods usable on continuous
+   * circuits); off only serves developer A/B against pure MC and as
+   * a bisection escape valve if a closure rule misbehaves. */
   DefineCustomBoolVariable("provsql.hybrid_evaluation",
-                           "Run the hybrid-evaluator simplifier inside "
-                           "probability_evaluate.",
+                           "Run the hybrid-evaluator simplifier and "
+                           "island decomposer inside probability_evaluate. "
+                           "Debug only.",
                            "When on (default), probability_evaluate runs "
                            "the HybridEvaluator peephole simplifier "
-                           "between RangeCheck and AnalyticEvaluator: "
-                           "gate_arith subtrees are constant-folded, "
-                           "identity-element wires (0 in PLUS, 1 in "
-                           "TIMES) are dropped, and PLUS over independent "
-                           "normals or i.i.d. exponentials with the same "
-                           "rate is collapsed to a single normal / "
-                           "Erlang gate_rv. The folded forms unlock "
-                           "AnalyticEvaluator's closed-form CDF on "
-                           "naturally-written predicates. Set off to "
-                           "bypass the simplifier and let undecidable "
-                           "comparators fall through to whole-circuit MC; "
-                           "useful when A/B-testing the analytic path "
-                           "against the MC fallback. No effect on "
-                           "non-probability queries.",
+                           "between RangeCheck and AnalyticEvaluator and "
+                           "the per-cmp MC island decomposer after "
+                           "AnalyticEvaluator. Off bypasses both and lets "
+                           "unresolved comparators fall through to "
+                           "whole-circuit MC. End users have no reason "
+                           "to flip this; it exists for developer A/B "
+                           "testing against the unfolded path and as a "
+                           "bisection knob if a closure rule turns out "
+                           "to be unsound on some workload.",
                            &provsql_hybrid_evaluation,
                            true,
                            PGC_USERSET,
-                           0,
+                           GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
                            NULL,
                            NULL,
                            NULL);
