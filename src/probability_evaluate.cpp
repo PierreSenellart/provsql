@@ -161,6 +161,35 @@ static Datum probability_evaluate_internal
   // is shared with semiring evaluators).
   provsql::runAnalyticEvaluator(gc);
 
+  /* After every resolution pass has run, any gate_rv left in the
+   * circuit reaches the BoolExpr translation in getBooleanCircuit
+   * unchanged; that walk recurses into the surrounding gate_cmp and
+   * calls semiring.value() on the gate_value side, producing the
+   * generic "This semiring does not support value gates." error.
+   * Detect that here and raise a message that names the actual
+   * root cause: the analytical evaluators couldn't fold the RV
+   * leaves away, and the MC fallback that would have decided the
+   * surrounding cmp is either disabled (rv_mc_samples = 0) or
+   * wasn't able to close the gap.  HAVING-style cmps over gate_agg
+   * don't contain gate_rv, so this check leaves them for
+   * provsql_having. */
+  if (method != "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
+    if (provsql_rv_mc_samples <= 0) {
+      provsql_error(
+        "probability_evaluate: a comparison over random variables "
+        "could not be resolved analytically; raise "
+        "provsql.rv_mc_samples above 0 to enable the Monte Carlo "
+        "fallback, or call probability_evaluate(..., 'monte-carlo', "
+        "<n>) directly");
+    } else {
+      provsql_error(
+        "probability_evaluate: a comparison over random variables "
+        "could not be resolved analytically and the hybrid evaluator "
+        "left it unresolved; call probability_evaluate(..., "
+        "'monte-carlo', <n>) directly for an MC estimate");
+    }
+  }
+
   double result;
 
   provsql_interrupted = false;

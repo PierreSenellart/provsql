@@ -41,7 +41,7 @@ t
 shared_bare_rv_fast_path_exact
 t
 (1 row)
-ERROR:  ProvSQL: probability_evaluate: This semiring does not support value gates.
+ERROR:  ProvSQL: probability_evaluate: a comparison over random variables could not be resolved analytically and the hybrid evaluator left it unresolved; call probability_evaluate(..., 'monte-carlo', <n>) directly for an MC estimate
 hybrid_off_falls_through_to_mc
 t
 (1 row)
