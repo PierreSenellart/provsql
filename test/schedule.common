@@ -116,6 +116,7 @@ test: continuous_rangecheck_having
 test: continuous_analytic
 test: continuous_expectation
 test: continuous_support
+test: continuous_hybrid
 
 # PROV export
 test: to_provxml

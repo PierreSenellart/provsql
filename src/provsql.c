@@ -73,6 +73,7 @@ char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepe
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
+bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
@@ -4091,6 +4092,32 @@ void _PG_init(void) {
                            "structure (e.g. when debugging gate-creation "
                            "paths).",
                            &provsql_simplify_on_load,
+                           true,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.hybrid_evaluation",
+                           "Run the hybrid-evaluator simplifier inside "
+                           "probability_evaluate.",
+                           "When on (default), probability_evaluate runs "
+                           "the HybridEvaluator peephole simplifier "
+                           "between RangeCheck and AnalyticEvaluator: "
+                           "gate_arith subtrees are constant-folded, "
+                           "identity-element wires (0 in PLUS, 1 in "
+                           "TIMES) are dropped, and PLUS over independent "
+                           "normals or i.i.d. exponentials with the same "
+                           "rate is collapsed to a single normal / "
+                           "Erlang gate_rv. The folded forms unlock "
+                           "AnalyticEvaluator's closed-form CDF on "
+                           "naturally-written predicates. Set off to "
+                           "bypass the simplifier and let undecidable "
+                           "comparators fall through to whole-circuit MC; "
+                           "useful when A/B-testing the analytic path "
+                           "against the MC fallback. No effect on "
+                           "non-probability queries.",
+                           &provsql_hybrid_evaluation,
                            true,
                            PGC_USERSET,
                            0,

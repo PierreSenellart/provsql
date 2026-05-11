@@ -41,6 +41,8 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "CircuitFromMMap.h"
 #include "GenericCircuit.h"
 #include "AnalyticEvaluator.h"
+#include "HybridEvaluator.h"
+#include "RangeCheck.h"
 #include "MonteCarloSampler.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "having_semantics.hpp"
@@ -99,6 +101,23 @@ static Datum probability_evaluate_internal
   // peephole-pruned for any "always true / always false" comparator.
   GenericCircuit gc = getGenericCircuit(token);
   gate_t gc_root = gc.getGate(uuid2string(token));
+
+  // Hybrid-evaluator simplifier: constant-fold gate_arith subtrees,
+  // drop identity wires (0 from PLUS, 1 from TIMES), and collapse
+  // PLUS over independent normals or i.i.d. exponentials into a
+  // single gate_rv with the closed-form distribution.  Gated by
+  // provsql.hybrid_evaluation (default on) so the unfolded DAG can
+  // still be exercised end-to-end through the MC fallback during
+  // A/B-testing.  Runs before AnalyticEvaluator so newly-bare normal
+  // / Erlang leaves unlock the closed-form CDF on the surrounding
+  // cmp gate.  Runs before a re-pass of RangeCheck so that the
+  // joint-conjunction pass also benefits from constant folding
+  // (e.g. a cmp's `arith(NEG, value:100)` operand becomes a bare
+  // `value:-100` that the asRvVsConstCmp shape match accepts).
+  if (provsql_hybrid_evaluation) {
+    provsql::runHybridSimplifier(gc);
+    provsql::runRangeCheck(gc);
+  }
 
   // Probability-specific peephole: AnalyticEvaluator decides
   // continuous-RV comparators with closed-form CDFs (X cmp c for any

@@ -32,8 +32,10 @@ t|t|t|t|t|t
 const_cmp_rv_exact
 t
 (1 row)
-ERROR:  ProvSQL: probability_evaluate: This semiring does not support value gates.
-arith_falls_through_to_mc
+normal_sum_via_simplifier_exact
+t
+(1 row)
+normal_sum_monte_carlo_within_tolerance
 t
 (1 row)
 add_provenance

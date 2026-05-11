@@ -1,0 +1,35 @@
+\set ECHO none
+sum_two_indep_normals_exact
+t
+(1 row)
+scaled_normal_sum_exact
+t
+(1 row)
+neg_normal_in_closure_exact
+t
+(1 row)
+dependent_normals_not_folded
+t
+(1 row)
+erlang_fold_exact
+t
+(1 row)
+mixed_rates_not_folded
+t
+(1 row)
+constant_fold_neg_value
+t
+(1 row)
+identity_drop_unlocks_normal_closure
+t
+(1 row)
+zero_absorber_times
+t
+(1 row)
+ERROR:  ProvSQL: probability_evaluate: This semiring does not support value gates.
+hybrid_off_falls_through_to_mc
+t
+(1 row)
+continuous_hybrid_done
+ok
+(1 row)

@@ -210,6 +210,55 @@ void resolveGateToZero(gate_t g) {
 }
 
 /**
+ * @brief Rewrite an arbitrary gate as a @c gate_value carrying the
+ *        textual extra @p s.
+ *
+ * Used by the @c HybridEvaluator simplifier when a @c gate_arith
+ * subtree constant-folds to a scalar.  Same wire/info/extra clearing
+ * as @c resolveCmpToBernoulli &ndash; the old children become
+ * orphans relative to @p g.  @p s is interpreted by the consumer
+ * via @c parseDoubleStrict (or analogous routines), so it must be
+ * a canonical textual representation that round-trips through
+ * @c std::stod.  Operates on the in-memory circuit only.
+ */
+void resolveToValue(gate_t g, const std::string &s) {
+  setGateType(g, gate_value);
+  getWires(g).clear();
+  infos.erase(g);
+  extra[g] = s;
+}
+
+/**
+ * @brief Rewrite an arbitrary gate as a @c gate_rv carrying the
+ *        distribution-spec extra @p s.
+ *
+ * Used by the @c HybridEvaluator simplifier when a linear
+ * combination of independent normals (or i.i.d. exponentials with
+ * the same rate) collapses to a single closed-form distribution.
+ * @p s must be a textual encoding parseable by
+ * @c parse_distribution_spec.  Same wire/info clearing as
+ * @c resolveCmpToBernoulli.  Operates on the in-memory circuit only.
+ */
+void resolveToRv(gate_t g, const std::string &s) {
+  setGateType(g, gate_rv);
+  getWires(g).clear();
+  infos.erase(g);
+  extra[g] = s;
+}
+
+/**
+ * @brief Replace the wires of @p g with @p w.
+ *
+ * Used by the @c HybridEvaluator simplifier's identity-element drop
+ * to remove constant-zero wires from a @c PLUS gate (or constant-one
+ * wires from a @c TIMES gate) without changing the gate's type.
+ * Dropped children become orphans relative to @p g.
+ */
+void setWires(gate_t g, std::vector<gate_t> w) {
+  getWires(g) = std::move(w);
+}
+
+/**
  * @brief Boost serialisation support.
  * @param ar       Boost archive (input or output).
  * @param version  Archive version (unused).

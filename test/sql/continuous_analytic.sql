@@ -98,33 +98,32 @@ SELECT provsql.probability_evaluate(
          'independent') = 0.5
        AS const_cmp_rv_exact;
 
--- (10a) Composition that AnalyticEvaluator does NOT handle: X cmp c
--- where X is a gate_arith (not a bare gate_rv).  Negative-space
--- check: if AnalyticEvaluator had silently resolved it (wrongly),
--- the cmp would have been replaced by a Bernoulli gate_input and
--- the 'independent' method would compute a probability without
--- error.  Because AnalyticEvaluator correctly skips this shape,
--- the cmp remains in the circuit; the 'independent' method routes
--- through the BoolExpr semiring whose cmp() throws -- and the
--- error proves the cmp was not resolved.
-\set VERBOSITY terse
+-- (10a) gate_arith composition handled jointly by the HybridEvaluator
+-- simplifier + AnalyticEvaluator: N(0, 1) + N(0, 1) folds to a single
+-- N(0, sqrt(2)) via the normal-family closure (the two underlying
+-- gate_rv leaves have disjoint base-RV footprints, so they are
+-- independent), and the resulting bare gate_rv vs gate_value 0 cmp
+-- resolves to 0.5 via the closed-form CDF.  Exact equality - no MC
+-- noise.  When provsql.hybrid_evaluation is off (see (10c)) the same
+-- query falls through to whole-circuit MC instead.
 SELECT provsql.probability_evaluate(
          provsql.rv_cmp_gt(provsql.normal(0, 1) + provsql.normal(0, 1),
                             0::random_variable),
-         'independent');
-\set VERBOSITY default
+         'independent') = 0.5
+       AS normal_sum_via_simplifier_exact;
 
--- (10b) Same shape, this time via 'monte-carlo': the RV-aware MC
--- sampler handles gate_arith / gate_rv natively (it is the
--- fall-through path for what AnalyticEvaluator does not decide),
--- and gives the right answer within sampling noise.
--- N(0,1) + N(0,1) ~ N(0, sqrt(2)); P(sum > 0) = 0.5 by symmetry.
+-- (10b) Same query via 'monte-carlo': with the simplifier active the
+-- cmp is again resolved to a Bernoulli before MC runs, so the result
+-- is exact (the MC step only samples the resolved Bernoulli).  The
+-- tolerance assertion still passes; the test is kept as a sanity
+-- check that the dispatch under 'monte-carlo' agrees with the
+-- 'independent' result above.
 SET provsql.monte_carlo_seed = 42;
 SELECT abs(provsql.probability_evaluate(
              provsql.rv_cmp_gt(provsql.normal(0, 1) + provsql.normal(0, 1),
                                 0::random_variable),
              'monte-carlo', '100000') - 0.5) < 0.01
-       AS arith_falls_through_to_mc;
+       AS normal_sum_monte_carlo_within_tolerance;
 RESET provsql.monte_carlo_seed;
 
 -- (11) End-to-end through the planner hook: WHERE rv > c gets

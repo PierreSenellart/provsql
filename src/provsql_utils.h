@@ -239,6 +239,26 @@ extern int provsql_rv_mc_samples;
  * code paths). */
 extern bool provsql_simplify_on_load;
 
+/** @brief Run the hybrid-evaluator simplifier before dispatching a
+ *         probability_evaluate query.
+ *
+ * When on (default), @c probability_evaluate runs the
+ * @c HybridEvaluator simplifier between @c RangeCheck (the universal
+ * cmp-resolution at load time) and @c AnalyticEvaluator (the
+ * probability-specific closed-form CDF pass).  The simplifier
+ * collapses @c gate_arith subtrees via constant folding,
+ * identity-element drops, and family-closure rules over independent
+ * normals and i.i.d. exponentials; the resulting bare @c gate_rv
+ * leaves unlock @c AnalyticEvaluator on naturally-written predicates
+ * that would otherwise have to fall through to Monte Carlo.
+ *
+ * Set @c provsql.hybrid_evaluation to @c off to bypass the simplifier
+ * entirely: every comparator that @c RangeCheck and @c AnalyticEvaluator
+ * cannot decide on the original DAG then falls through to whole-circuit
+ * MC.  Used to A/B the simplifier path against the MC fallback during
+ * development.  Has no effect on non-probability queries. */
+extern bool provsql_hybrid_evaluation;
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */
