@@ -576,17 +576,22 @@
       });
       edgeLayer.appendChild(path);
 
-      // Position label at the child end of the edge for ordered gates.
-      // Offset 32px (r=22 + a small gap) away from the child centre
-      // along the edge direction so the digit clears the stroke. Shift
-      // by the same bow so labels track their parallel curve.
+      // Position label at the edge midpoint with a small perpendicular
+      // nudge so the digit sits next to the edge stroke rather than on
+      // top of it.  Mid-edge instead of near-child because labelling at
+      // the child end overlaps the arrowhead at typical node radii;
+      // mid-edge clears both the arrow and the node circles regardless
+      // of edge length.  The perpendicular sign rotates the unit vector
+      // 90° clockwise so labels consistently land on the same side of
+      // every edge.  Bow already shifts both the curve and the
+      // midpoint, so labels track parallel curves automatically.
       if (shouldLabelChildren(from) && e.child_pos != null) {
         const dx = fp.x - tp.x;
         const dy = fp.y - tp.y;
         const len = Math.hypot(dx, dy) || 1;
-        const offset = 32;
-        const lx = tp.x + (dx / len) * offset + bow;
-        const ly = tp.y + (dy / len) * offset;
+        const perp = 9;
+        const lx = (fp.x + tp.x) / 2 + bow + (-dy / len) * perp;
+        const ly = (fp.y + tp.y) / 2 + ( dx / len) * perp;
         const tag = svgEl('text', {
           class: 'edge-pos',
           x: lx, y: ly,
