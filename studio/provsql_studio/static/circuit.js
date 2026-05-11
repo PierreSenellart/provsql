@@ -1115,6 +1115,36 @@
     return _OPTIONAL_MAPPING.has(v);
   }
 
+  // Gate types whose value is a *scalar* (deterministic constant, random
+  // variable leaf, or arithmetic combination of either) rather than a
+  // Boolean / set-valued provenance gate.  Used by the eval strip to flip
+  // the dropdown between the Boolean-method menu and the scalar-method
+  // menu (distribution profile, PROV-XML).  Picked by inspecting the
+  // eval target's gate type via state.scene.nodes.
+  const _SCALAR_GATE_TYPES = new Set(['rv', 'arith', 'value']);
+  // Options visible when the eval target is scalar.  Everything else in
+  // the <select> gets hidden + disabled for the duration of the scalar
+  // focus.  PROV-XML stays because it accepts any provenance gate.
+  const _SCALAR_TARGET_OPTIONS = new Set(['distribution-profile', 'prov-xml']);
+  // Options visible only on scalar targets.  Hidden + disabled when the
+  // eval target is Boolean / aggregate / etc., so the user can't pick a
+  // semiring whose SQL kernel doesn't accept this gate type.
+  const _SCALAR_ONLY_OPTIONS = new Set(['distribution-profile']);
+
+  // Lookup the gate type of the current eval target (pinned node, else
+  // the scene root) by walking state.scene.nodes.  Returns null when
+  // the scene isn't loaded yet or the target is outside the rendered
+  // subgraph (which can happen for a circuit that was expanded then
+  // re-rooted; the strip stays runnable but the filter falls back to
+  // showing every option so the user isn't locked out).
+  function currentTargetGateType() {
+    if (!state.scene || !state.scene.nodes) return null;
+    const targetId = state.pinnedNode || state.scene.root;
+    if (!targetId) return null;
+    const node = state.scene.nodes.find(n => n.id === targetId);
+    return node ? node.type : null;
+  }
+
   // PG type names psycopg surfaces as either JS numbers (smallints, ints,
   // floats) or strings (numeric / Decimal). Either way we render with 4
   // decimals for parity with the probability-value formatter.
@@ -1200,6 +1230,11 @@
       const supported = !sv || sv >= spec.minPg;
       opt.hidden = !supported;
       opt.disabled = !supported;
+      // Persist the gate so syncDropdownVisibility's later passes keep
+      // unsupported options hidden even when the target-type filter
+      // would otherwise reveal them.
+      if (supported) delete opt.dataset.pgGated;
+      else opt.dataset.pgGated = '1';
       // If the user had it selected on a stale page, fall back to the
       // first compiled semiring so the strip stays valid.
       if (!supported && sel.value === val) {
@@ -1251,7 +1286,75 @@
       }
     }
 
+    // Hide every <option> the current eval target can't drive, and pick
+    // a sensible fallback if the user's existing selection just got
+    // hidden.  Returns true iff the active sel.value was bumped to a
+    // different option, so callers can decide whether to re-run the
+    // full syncControls (which also wipes the result chip).
+    function syncDropdownVisibility() {
+      const gateType = currentTargetGateType();
+      // null = scene not loaded yet (or target outside the rendered
+      // subgraph); leave every option visible so the strip is usable.
+      // Otherwise, scalar gates get the scalar menu, all other gates
+      // get the Boolean menu.
+      const isScalar = gateType != null && _SCALAR_GATE_TYPES.has(gateType);
+      let firstVisible = null;
+      for (const opt of sel.querySelectorAll('option')) {
+        let hide;
+        if (gateType == null) {
+          // Indeterminate: hide nothing target-specific; respect the
+          // existing PG-version gate on compiled options.
+          hide = false;
+        } else if (isScalar) {
+          hide = !_SCALAR_TARGET_OPTIONS.has(opt.value);
+        } else {
+          hide = _SCALAR_ONLY_OPTIONS.has(opt.value);
+        }
+        // PG-version gating on compiled semirings (set by
+        // syncCompiledSemiringAvailability) wins: if the option was
+        // already hidden as unsupported, leave it hidden.  Track that
+        // via `data-pg-gated` so we don't accidentally re-enable it.
+        if (opt.dataset.pgGated === '1') opt.hidden = true;
+        else opt.hidden = hide;
+        opt.disabled = opt.hidden;
+        if (!opt.hidden && !firstVisible) firstVisible = opt.value;
+      }
+      // Collapse optgroups whose options are all hidden so the dropdown
+      // reads cleanly (a `<optgroup>` with zero visible options still
+      // shows its label in some browsers).
+      for (const og of sel.querySelectorAll('optgroup')) {
+        const anyVisible = [...og.querySelectorAll('option')]
+          .some(o => !o.hidden);
+        og.hidden = !anyVisible;
+        og.disabled = !anyVisible;
+      }
+      // If the active selection just got hidden, fall back to the first
+      // still-visible option so the run button stays meaningful.
+      const cur = sel.querySelector(`option[value="${CSS.escape(sel.value)}"]`);
+      if (firstVisible && (!cur || cur.hidden)) {
+        sel.value = firstVisible;
+        return true;
+      }
+      return false;
+    }
+
+    // Wrapper called by refreshEvalTarget on pin change: re-filter the
+    // dropdown, and if the value actually moved (e.g. the user pinned a
+    // gate_rv after running Boolean over the root), re-run syncControls
+    // so the mapping / method / args dispatch matches the new sel.value.
+    // The result chip is intentionally wiped in that case because the
+    // previous evaluation was against a different semiring kind and is
+    // no longer meaningful.  When the value stays put, the chip is
+    // preserved.
+    function refilterForTarget() {
+      const changed = syncDropdownVisibility();
+      if (changed) syncControls();
+    }
+    window.ProvsqlStudio = window.ProvsqlStudio || {};
+    window.ProvsqlStudio.refilterForTarget = refilterForTarget;
+
     function syncControls() {
+      syncDropdownVisibility();
       const v = sel.value;
       map.hidden  = !needsMapping(v);
       meth.hidden = v !== 'probability';
@@ -1560,6 +1663,18 @@
 
   function refreshEvalTarget() {
     const tgt = document.getElementById('eval-target');
+    // Re-run the semiring dropdown filter whenever the target changes
+    // (pin / clear pin / scene reload): the new target may have a
+    // different gate type, which flips the menu between the scalar
+    // (distribution-profile + prov-xml) and the Boolean families.
+    // refilterForTarget is hoisted via window.ProvsqlStudio because it
+    // lives inside initEvalStrip's closure.  It re-applies the
+    // scalar-vs-Boolean gate-type filter, and only re-runs syncControls
+    // (which wipes the result chip) when the active selection was
+    // actually bumped — so a pin change between two Boolean nodes
+    // preserves the displayed evaluation.
+    const refilter = window.ProvsqlStudio?.refilterForTarget;
+    if (typeof refilter === 'function') refilter();
     if (!tgt) return;
     if (!state.scene) {
       tgt.textContent = '';
