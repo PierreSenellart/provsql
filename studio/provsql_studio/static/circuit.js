@@ -870,7 +870,7 @@
       replaceLeafBody(
         '<p style="color:var(--fg-muted)">'
         + (payload.probability != null
-          ? 'Anonymous input gate -- no source row maps to this UUID.'
+          ? 'Anonymous input gate: no source row maps to this UUID.'
           : 'No source row found.')
         + '</p>');
       return;
@@ -1600,6 +1600,18 @@
     // its placeholder reads.
     meth.addEventListener('change', syncControls);
     run.addEventListener('click', runEvaluation);
+    // Enter inside a text / number argument field fires Run, matching
+    // the form-submit convention.  Skip <select> controls (e.g. the
+    // compilation method picker) where Enter natively confirms the
+    // current option rather than committing the surrounding form.
+    for (const ctrl of argControls) {
+      if (ctrl.tagName !== 'INPUT') continue;
+      ctrl.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        if (!run.disabled) runEvaluation();
+      });
+    }
     const clearBtn = document.getElementById('eval-clear');
     if (clearBtn) clearBtn.onclick = clearEvalResult;
     const copyBtn = document.getElementById('eval-copy');
@@ -1825,11 +1837,13 @@
         // Inline-SVG panel: support badge + μ / σ² labels + empirical
         // histogram of the sampled distribution.  The full JSON payload
         // goes into dataset.copy so the user can grab it for further
-        // analysis with the existing copy button.
-        result.innerHTML = renderProfilePanel(data.result);
+        // analysis with the existing copy button, and is also re-used
+        // by the PDF / CDF toggle to re-render without a round-trip.
+        result.innerHTML = renderProfilePanel(data.result, 'pdf');
         result.dataset.kind = 'distribution-profile';
         result.dataset.copy = JSON.stringify(data.result);
         result.title = 'Distribution profile';
+        wireProfileInteractions(result, data.result);
       } else {
       // Show the value verbatim. Probability gets clipped to the configured
       // decimal count (default 4) for readability; the full-precision form
@@ -2101,12 +2115,130 @@
   // array, with a support badge (which can extend past the sampled
   // range when the underlying distribution has unbounded support) and
   // mean / variance labels.
-  function renderProfilePanel(profile) {
+  // Shared geometry for the distribution-profile SVG.  Lives at module
+  // scope so wireProfileInteractions can convert wheel-cursor positions
+  // into the same data-space the bars are drawn in without duplicating
+  // the constants in two places.
+  const PROFILE_W = 280, PROFILE_H = 160;
+  const PROFILE_PAD_X = 10, PROFILE_PAD_TOP = 6, PROFILE_PAD_BOTTOM = 18;
+  // Zoom factor per wheel notch (1.2× in, 1/1.2× out).  Min visible
+  // span is 1% of the full range so the user can't zoom into nothing.
+  const PROFILE_ZOOM_STEP = 1.2;
+  const PROFILE_MIN_SPAN_FRAC = 0.01;
+
+  function readProfileView(panel) {
+    if (!panel) return null;
+    const lo = Number(panel.dataset.viewLo);
+    const hi = Number(panel.dataset.viewHi);
+    return (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)
+      ? { lo, hi } : null;
+  }
+
+  // Delegated handlers for the distribution-profile panel.  Wheel and
+  // dblclick are registered on `document` in the CAPTURE phase so the
+  // browser sees our preventDefault before any ancestor scroll
+  // listener (or its own auto-scroll path) can claim the gesture --
+  // the prior bubble-phase listener on the inner SVG occasionally let
+  // wheel events leak through into a page scroll when innerHTML
+  // teardown briefly orphaned the listener or the cursor straddled
+  // the SVG bounding rect.  Click for the PDF/CDF toggle stays on
+  // resultEl since it's a discrete interaction with no scroll-side
+  // effects.  Profile payload is parked on `resultEl.__profile` so
+  // subsequent calls can swap data without re-wiring.
+  function wireProfileInteractions(resultEl, profile) {
+    resultEl.__profile = profile;
+    if (!wireProfileInteractions._docWired) {
+      wireProfileInteractions._docWired = true;
+      document.addEventListener('wheel', _onProfileWheel,
+                                { passive: false, capture: true });
+      document.addEventListener('dblclick', _onProfileDblClick,
+                                { capture: true });
+    }
+    if (!resultEl.__profileWired) {
+      resultEl.__profileWired = true;
+      resultEl.addEventListener('click', (ev) => {
+        if (!ev.target.closest('.cv-profile-toggle')) return;
+        ev.stopPropagation();
+        const panel = resultEl.querySelector('.cv-profile-panel');
+        if (!panel) return;
+        const cur = panel.dataset.profileMode || 'pdf';
+        const next = cur === 'cdf' ? 'pdf' : 'cdf';
+        const view = readProfileView(panel);
+        resultEl.innerHTML = renderProfilePanel(
+          resultEl.__profile, next, view);
+      });
+    }
+  }
+
+  function _onProfileWheel(ev) {
+    // Catch wheel over the WHOLE distribution-profile panel, not just
+    // the inner SVG, so brief layout shifts that put the cursor over
+    // the meta row (μ / σ / toggle) during re-render don't let the
+    // page scroll.  Zoom only applies when the cursor is actually
+    // over the SVG -- but preventDefault is unconditional inside the
+    // panel.
+    if (!ev.target.closest) return;
+    const panel = ev.target.closest('.cv-profile-panel');
+    if (!panel) return;
+    ev.preventDefault();
+    const svg = ev.target.closest('.cv-profile-svg svg');
+    if (!svg) return;  /* over meta row: prevent scroll, don't zoom */
+    const resultEl = svg.closest('.cv-eval__result');
+    if (!resultEl || !resultEl.__profile) return;
+    const fullLo = Number(panel.dataset.fullLo);
+    const fullHi = Number(panel.dataset.fullHi);
+    if (!Number.isFinite(fullLo) || !Number.isFinite(fullHi)) return;
+    const view = readProfileView(panel) || { lo: fullLo, hi: fullHi };
+    // Cursor → viewBox X.  getBoundingClientRect returns the CSS
+    // pixel box; scale to PROFILE_W so the data-x lookup is correct
+    // under any CSS scaling of the SVG element.
+    const r = svg.getBoundingClientRect();
+    const cxSvg = ((ev.clientX - r.left) / r.width) * PROFILE_W;
+    const cxClamped = Math.max(PROFILE_PAD_X,
+                                Math.min(PROFILE_W - PROFILE_PAD_X, cxSvg));
+    const t = (cxClamped - PROFILE_PAD_X) /
+              (PROFILE_W - 2 * PROFILE_PAD_X);          /* 0..1 */
+    const dataX = view.lo + (view.hi - view.lo) * t;
+    const factor = ev.deltaY < 0
+      ? 1 / PROFILE_ZOOM_STEP
+      : PROFILE_ZOOM_STEP;
+    const fullSpan = fullHi - fullLo;
+    let newSpan = (view.hi - view.lo) * factor;
+    newSpan = Math.min(newSpan, fullSpan);
+    newSpan = Math.max(newSpan, fullSpan * PROFILE_MIN_SPAN_FRAC);
+    let newLo = dataX - t * newSpan;
+    let newHi = newLo + newSpan;
+    if (newLo < fullLo) { newLo = fullLo; newHi = newLo + newSpan; }
+    if (newHi > fullHi) { newHi = fullHi; newLo = newHi - newSpan; }
+    const mode = panel.dataset.profileMode || 'pdf';
+    resultEl.innerHTML = renderProfilePanel(
+      resultEl.__profile, mode, { lo: newLo, hi: newHi });
+  }
+
+  function _onProfileDblClick(ev) {
+    const svg = ev.target.closest && ev.target.closest('.cv-profile-svg svg');
+    if (!svg) return;
+    ev.preventDefault();
+    const panel = svg.closest('.cv-profile-panel');
+    const resultEl = svg.closest('.cv-eval__result');
+    if (!panel || !resultEl || !resultEl.__profile) return;
+    const mode = panel.dataset.profileMode || 'pdf';
+    resultEl.innerHTML = renderProfilePanel(resultEl.__profile, mode);
+  }
+
+  function renderProfilePanel(profile, mode, view) {
     if (!profile) return '';
     const histogram = Array.isArray(profile.histogram) ? profile.histogram : [];
     const support  = Array.isArray(profile.support) ? profile.support : [null, null];
     const expected = Number(profile.expected);
     const variance = Number(profile.variance);
+    const _mode = mode === 'cdf' ? 'cdf' : 'pdf';
+    // Optional viewport for x-axis zoom.  When omitted (initial render
+    // or after reset), the view spans the full histogram range.  The
+    // viewport carries through every re-render -- toggle, zoom, pan --
+    // so the user's chosen zoom level survives mode flips.
+    const _view = (view && Number.isFinite(view.lo) && Number.isFinite(view.hi)
+                   && view.hi > view.lo) ? view : null;
     const fmt = v => {
       if (v == null || !Number.isFinite(Number(v))) return String(v);
       const n = Number(v);
@@ -2150,26 +2282,88 @@
     // taller (160 vs. the density preview's narrower band) because
     // the bar chart needs vertical room for the count axis to read,
     // and the eval strip is full-width below the toolbar anyway.
-    const W = 280, H = 160, padX = 10, padTop = 6, padBottom = 18;
+    // Constants live at module scope so wireProfileInteractions sees
+    // the same coordinate frame for cursor → data-x conversion.
+    const W = PROFILE_W, H = PROFILE_H, padX = PROFILE_PAD_X;
+    const padTop = PROFILE_PAD_TOP, padBottom = PROFILE_PAD_BOTTOM;
     let svgInner = '';
     if (histogram.length) {
-      const maxCount = histogram.reduce((m, b) => Math.max(m, Number(b.count) || 0), 0) || 1;
-      const lo = Number(histogram[0].bin_lo);
-      const hi = Number(histogram[histogram.length - 1].bin_hi);
+      const fullLo = Number(histogram[0].bin_lo);
+      const fullHi = Number(histogram[histogram.length - 1].bin_hi);
+      const lo = _view ? _view.lo : fullLo;
+      const hi = _view ? _view.hi : fullHi;
       const span = (hi - lo) || 1;
       const sx = x => padX + (W - 2 * padX) * (x - lo) / span;
-      const sy = c => (H - padBottom) - (H - padTop - padBottom) * (c / maxCount);
-      const bars = histogram.map(b => {
-        const x1 = sx(Number(b.bin_lo));
-        const x2 = sx(Number(b.bin_hi));
-        const y  = sy(Number(b.count) || 0);
-        const w  = Math.max(1, x2 - x1 - 1);
-        const h  = (H - padBottom) - y;
-        return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" `
-             + `width="${w.toFixed(1)}" height="${h.toFixed(1)}" />`;
-      }).join('');
-      // Mean reference line, faint dashed terracotta — same convention
-      // as renderRvDensity's mean line.
+      const usableH = H - padTop - padBottom;
+      let bars;
+      const total = histogram.reduce(
+        (s, b) => s + (Number(b.count) || 0), 0) || 1;
+      // Tooltip text per bar.  Same readout shape in both modes:
+      //   x ∈ [lo, hi]
+      //   P(X ∈ bin) = p          (always)
+      //   P(X ≤ hi)  = F          (CDF mode only)
+      // The browser surfaces SVG <title> as a native hover tooltip
+      // with a short delay; together with the .cv-profile-bars rect
+      // hover style the user gets a per-bin readout without needing
+      // a JS-driven overlay.
+      const fmtPct = p => {
+        if (!Number.isFinite(p)) return '?';
+        if (p === 0) return '0';
+        if (p < 1e-4) return p.toExponential(2);
+        return (p * 100).toFixed(2) + '%';
+      };
+      const tooltip = (b, cum) => {
+        const lo_ = fmtTick(Number(b.bin_lo));
+        const hi_ = fmtTick(Number(b.bin_hi));
+        const c   = Number(b.count) || 0;
+        const lines = [
+          `x ∈ [${lo_}, ${hi_}]`,
+          `P(X ∈ bin) = ${fmtPct(c / total)}  (n = ${c})`,
+        ];
+        if (_mode === 'cdf') {
+          lines.push(`P(X ≤ ${hi_}) = ${fmtPct(cum / total)}`);
+        }
+        return escapeHtml(lines.join('\n'));
+      };
+      if (_mode === 'cdf') {
+        // Empirical CDF as a staircase of cumulative-count bars.  Each
+        // bar's height is the proportion of samples with value <= that
+        // bar's right edge, so the rightmost bar reaches the top of
+        // the usable area.
+        let cum = 0;
+        bars = histogram.map(b => {
+          cum += Number(b.count) || 0;
+          const x1 = sx(Number(b.bin_lo));
+          const x2 = sx(Number(b.bin_hi));
+          const w  = Math.max(1, x2 - x1 - 1);
+          const h  = (cum / total) * usableH;
+          const y  = (H - padBottom) - h;
+          return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" `
+               + `width="${w.toFixed(1)}" height="${h.toFixed(1)}">`
+               + `<title>${tooltip(b, cum)}</title></rect>`;
+        }).join('');
+      } else {
+        // PDF: bar heights proportional to the per-bin count, scaled so
+        // the tallest bin fills the usable area.
+        const maxCount = histogram.reduce(
+          (m, b) => Math.max(m, Number(b.count) || 0), 0) || 1;
+        let cum = 0;
+        bars = histogram.map(b => {
+          cum += Number(b.count) || 0;
+          const x1 = sx(Number(b.bin_lo));
+          const x2 = sx(Number(b.bin_hi));
+          const w  = Math.max(1, x2 - x1 - 1);
+          const h  = ((Number(b.count) || 0) / maxCount) * usableH;
+          const y  = (H - padBottom) - h;
+          return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" `
+               + `width="${w.toFixed(1)}" height="${h.toFixed(1)}">`
+               + `<title>${tooltip(b, cum)}</title></rect>`;
+        }).join('');
+      }
+      // Mean reference line, faint dashed terracotta -- same convention
+      // as renderRvDensity's mean line.  In CDF mode the line still
+      // marks the expected value on the x-axis, which is independent
+      // of bar interpretation.
       let meanLine = '';
       if (Number.isFinite(expected) && expected >= lo && expected <= hi) {
         const mx = sx(expected).toFixed(1);
@@ -2186,17 +2380,47 @@
       svgInner = `<text class="cv-rv-tick" x="${W / 2}" y="${H / 2}" text-anchor="middle">`
         + `no samples</text>`;
     }
-    const svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="empirical histogram">${svgInner}</svg>`;
+    const ariaLabel = _mode === 'cdf'
+      ? 'empirical cumulative distribution'
+      : 'empirical histogram';
+    // Inline cursor + touch-action on the SVG itself: the CSS
+    // counterparts live in app.css but the browser's aggressive cache
+    // on /static/app.css can serve a stale copy after a Studio
+    // upgrade; the inline style guarantees the affordance regardless.
+    const svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"`
+      + ` style="cursor:zoom-in;touch-action:none;display:block"`
+      + ` role="img" aria-label="${ariaLabel}">${svgInner}</svg>`;
     const stddev = (Number.isFinite(variance) && variance >= 0)
       ? Math.sqrt(variance) : null;
-    return `<div class="cv-profile-panel" aria-label="distribution profile">`
+    // The toggle stores the JSON payload on the panel so the click
+    // handler can re-render without re-fetching from the server.
+    const toggleLabel = _mode === 'cdf' ? 'CDF' : 'PDF';
+    const toggleNext  = _mode === 'cdf' ? 'PDF' : 'CDF';
+    // Data attributes carry the full range and current view so the
+    // wheel / dblclick handlers wired by wireProfileInteractions can
+    // re-render without recomputing from the histogram array.
+    const fullLoAttr = histogram.length ? Number(histogram[0].bin_lo) : 0;
+    const fullHiAttr = histogram.length
+                     ? Number(histogram[histogram.length - 1].bin_hi)
+                     : 0;
+    const viewLoAttr = _view ? _view.lo : fullLoAttr;
+    const viewHiAttr = _view ? _view.hi : fullHiAttr;
+    const zoomedHint = _view ? ' (double-click to reset)' : '';
+    return `<div class="cv-profile-panel" aria-label="distribution profile"`
+      + ` data-profile-mode="${_mode}"`
+      + ` data-full-lo="${fullLoAttr}" data-full-hi="${fullHiAttr}"`
+      + ` data-view-lo="${viewLoAttr}" data-view-hi="${viewHiAttr}"`
+      + ` title="Scroll over the histogram to zoom${zoomedHint}">`
       + `<div class="cv-profile-meta">`
       + `<span class="cv-profile-badge" title="support interval">supp ${escapeHtml(supportLabel)}</span>`
       + `<span class="cv-profile-stat" title="expected value">μ = ${escapeHtml(fmt(expected))}</span>`
-      + `<span class="cv-profile-stat" title="variance">σ² = ${escapeHtml(fmt(variance))}</span>`
       + (stddev != null
-          ? `<span class="cv-profile-stat" title="standard deviation">σ = ${escapeHtml(fmt(stddev))}</span>`
-          : '')
+          ? `<span class="cv-profile-stat"`
+            + ` title="standard deviation (σ² = ${escapeHtml(fmt(variance))})">`
+            + `σ = ${escapeHtml(fmt(stddev))}</span>`
+          : `<span class="cv-profile-stat" title="variance">σ² = ${escapeHtml(fmt(variance))}</span>`)
+      + `<button type="button" class="cv-profile-toggle"`
+      + ` title="Switch to ${toggleNext}">${toggleLabel}</button>`
       + `</div>`
       + `<div class="cv-profile-svg cv-rv-density">${svg}</div>`
       + `</div>`;

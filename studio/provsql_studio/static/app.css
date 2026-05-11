@@ -2006,11 +2006,39 @@ body.mode-where #sidebar {
   background: rgba(125, 65, 153, 0.12);
   color: var(--purple-900);
 }
-.cv-profile-svg { margin: 0; }
+.cv-profile-toggle {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 3px;
+  background: rgba(125, 65, 153, 0.12);
+  color: var(--purple-900);
+  border: 1px solid rgba(125, 65, 153, 0.25);
+  cursor: pointer;
+  margin-left: auto;
+}
+.cv-profile-toggle:hover {
+  background: rgba(125, 65, 153, 0.22);
+}
+.cv-profile-svg {
+  margin: 0;
+  /* Cursor lives on the container div rather than the inner <svg>
+     so empty padding regions inside the SVG also pick up the zoom-in
+     glyph (SVG cursor only applies over filled / stroked regions;
+     div cursor is inherited by every descendant). */
+  cursor: zoom-in;
+  touch-action: none;
+}
+.cv-profile-toggle { cursor: pointer; }
 .cv-profile-bars rect {
   fill: rgba(112, 82, 184, 0.55);
   stroke: var(--purple-500);
   stroke-width: 0.6;
+  transition: fill 0.12s;
+}
+.cv-profile-bars rect:hover {
+  fill: var(--terracotta-500);
+  stroke: var(--terracotta-500);
 }
 /* Probability results : clickable to flip rounded ↔ full precision. */
 .cv-eval__result[data-flip-kind="prob"] {
