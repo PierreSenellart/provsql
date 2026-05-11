@@ -223,6 +223,28 @@ def test_leaf_unknown_uuid_returns_404(client):
     assert resp.status_code == 404
 
 
+def test_leaf_anonymous_input_surfaces_probability(client, test_dsn):
+    """An input gate created via `create_gate(uuid, 'input') + set_prob`
+    -- e.g. by the `provsql.mixture(p_value, x, y)` overload, or by hand
+    for a manual Bernoulli -- has no source row in any tracked relation,
+    but its probability is still meaningful and must be surfaced.  Verify
+    that /api/leaf returns 200 with an empty `matches` list AND the
+    probability field, so the front-end can render the prob alongside
+    the "no source row" notice."""
+    import uuid as _uuid
+    anon_uuid = str(_uuid.uuid4())
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.create_gate(%s::uuid, 'input')", (anon_uuid,))
+        cur.execute("SELECT provsql.set_prob(%s::uuid, 0.37)", (anon_uuid,))
+    resp = client.get(f"/api/leaf/{anon_uuid}")
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["matches"] == []
+    assert abs(body["probability"] - 0.37) < 1e-12
+
+
 # ──────── /api/set_prob ────────
 
 

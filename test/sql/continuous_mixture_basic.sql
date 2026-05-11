@@ -98,6 +98,29 @@ SELECT get_gate_type(random_variable_uuid(
            provsql.as_random(-1.0),
            provsql.as_random(1.0)))) AS dirac_mix_kind;
 
+-- E2. Probability-shorthand overload mixture(double, x, y) mints an
+-- anonymous gate_input and pins its probability.  The resulting root
+-- gate is a gate_mixture with three wires whose first wire is a fresh
+-- gate_input (different UUID for two calls -- the convenience form is
+-- not designed for coupling).
+CREATE TEMP TABLE adhoc_mix AS
+  SELECT random_variable_uuid(
+           provsql.mixture(0.4::float8,
+                           provsql.normal(0, 1),
+                           provsql.normal(5, 1))) AS u1,
+         random_variable_uuid(
+           provsql.mixture(0.4::float8,
+                           provsql.normal(0, 1),
+                           provsql.normal(5, 1))) AS u2;
+
+SELECT get_gate_type(u1)                              AS adhoc_kind,
+       array_length(get_children(u1), 1)              AS adhoc_nb_children,
+       get_gate_type((get_children(u1))[1])           AS adhoc_wire0_kind,
+       abs(get_prob((get_children(u1))[1]) - 0.4) < 1e-12
+                                                      AS adhoc_prob_pinned,
+       (get_children(u1))[1] <> (get_children(u2))[1] AS adhoc_distinct_bernoulli
+  FROM adhoc_mix;
+
 -- F.  Validation errors.  Keep VERBOSITY terse so the messages stay
 -- compact and we capture them line-by-line.
 \set VERBOSITY terse
@@ -118,5 +141,10 @@ SELECT set_prob((SELECT p FROM bern_bad), 1.5);
 SELECT provsql.mixture((SELECT p FROM bern_bad),
                        provsql.normal(0, 1),
                        provsql.normal(0, 1));
+
+-- F3. probability-shorthand overload: out-of-range scalar.
+SELECT provsql.mixture(1.5::float8, provsql.normal(0, 1), provsql.normal(0, 1));
+SELECT provsql.mixture((-0.1)::float8, provsql.normal(0, 1), provsql.normal(0, 1));
+SELECT provsql.mixture('NaN'::float8, provsql.normal(0, 1), provsql.normal(0, 1));
 
 \set VERBOSITY default

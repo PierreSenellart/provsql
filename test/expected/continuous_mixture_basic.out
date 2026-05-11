@@ -26,6 +26,9 @@ mixture|arith|arith
 dirac_mix_kind
 mixture
 (1 row)
+adhoc_kind|adhoc_nb_children|adhoc_wire0_kind|adhoc_prob_pinned|adhoc_distinct_bernoulli
+mixture|3|input|t|t
+(1 row)
 ERROR:  provsql.mixture: p must point to a gate_input Bernoulli token (got value)
 create_gate
 
@@ -34,3 +37,6 @@ set_prob
 
 (1 row)
 ERROR:  provsql.mixture: p must have a probability in [0,1] set via set_prob (got 1.5)
+ERROR:  provsql.mixture: probability must be in [0,1] (got 1.5)
+ERROR:  provsql.mixture: probability must be in [0,1] (got -0.1)
+ERROR:  provsql.mixture: probability must be in [0,1] (got NaN)

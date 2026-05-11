@@ -823,16 +823,17 @@
     }
     const payload = await resp.json();
     const matches = payload.matches || [];
-    if (!matches.length) {
-      replaceLeafBody('<p style="color:var(--fg-muted)">No source row found.</p>');
-      return;
-    }
     // Probability is per-input-gate (the UUID itself), not per-resolved-row.
     // Append it to the gate-metadata <dl> as another <dt>/<dd> row so it
     // sits in the same visual stream as uuid / depth / info1, rather
     // than getting a separate paragraph that breaks the rhythm. The dd
     // is click-to-edit: clicking it swaps the displayed value for a
     // number input, Enter fires POST /api/set_prob, Esc / blur cancels.
+    // We surface the probability BEFORE deciding on the source-row body
+    // so anonymous Bernoullis -- gate_inputs created by
+    // provsql.mixture(p_value, ...) or by hand via create_gate + set_prob
+    // without a tracked source table -- still see their probability
+    // even though no row in any tracked relation references the UUID.
     if (payload.probability != null) {
       const dl = inspectorBody.querySelector('dl');
       if (dl) {
@@ -847,6 +848,15 @@
         const dd = dl.querySelector('dd[data-prob-uuid]');
         if (dd) dd.addEventListener('click', () => editProbability(dd));
       }
+    }
+    if (!matches.length) {
+      replaceLeafBody(
+        '<p style="color:var(--fg-muted)">'
+        + (payload.probability != null
+          ? 'Anonymous input gate -- no source row maps to this UUID.'
+          : 'No source row found.')
+        + '</p>');
+      return;
     }
     const items = matches.map(m => {
       const cells = Object.entries(m.row || {}).map(

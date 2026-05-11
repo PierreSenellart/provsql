@@ -433,14 +433,21 @@ def create_app(
                     "switch to a database that has the current version."
                 ),
             }), 501
-        if not rows:
-            return jsonify({"error": "no row maps to this input gate"}), 404
         # Best-effort probability: when set_prob has been called on the
-        # gate, surface the value alongside the resolved row so the
+        # gate, surface the value alongside the resolved row(s) so the
         # inspector can show the per-row probability without a second
-        # round-trip. None when unset / inapplicable.
-        body = {"matches": rows}
+        # round-trip.  None when unset / inapplicable.  Fetch BEFORE the
+        # empty-rows short-circuit so anonymous Bernoullis (e.g. those
+        # minted by `provsql.mixture(p_value, x, y)`, or by the user
+        # via `create_gate(uuid, 'input') + set_prob(uuid, p)` without
+        # a tracked source table) still surface their probability even
+        # though no row in any tracked relation references the UUID.
         probability = circuit_mod.get_prob(get_pool(), uuid_str)
+        if not rows:
+            if probability is not None:
+                return jsonify({"matches": [], "probability": probability})
+            return jsonify({"error": "no row maps to this input gate"}), 404
+        body = {"matches": rows}
         if probability is not None:
             body["probability"] = probability
         # Single-relation case is the norm; if multiple tables share the UUID,

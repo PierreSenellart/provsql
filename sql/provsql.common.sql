@@ -1761,6 +1761,48 @@ END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /**
+ * @brief Ad-hoc mixture constructor that mints a fresh anonymous
+ *        @c gate_input Bernoulli with probability @p p_value.
+ *
+ * Sugar over the @c mixture(uuid, x, y) form: when the caller doesn't
+ * care about reusing the Bernoulli token elsewhere in the circuit
+ * (which is the common case &mdash; "give me a 0.3 / 0.7 weighted GMM,
+ * I don't need to share the coin"), this overload creates the
+ * underlying @c gate_input on the fly with a fresh
+ * @c uuid_generate_v4() token, pins @p p_value via @c set_prob, and
+ * threads everything into the uuid-keyed constructor.
+ *
+ * Each call mints a NEW Bernoulli, so two calls to
+ * <tt>mixture(0.5, X, Y)</tt> are *independent* mixtures whose branch
+ * selections are uncorrelated.  When coupling is desired (e.g. two
+ * mixtures sharing a coin), use the @c mixture(uuid, x, y) form with a
+ * user-managed @c gate_input token.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing for the same reason as
+ * the other mixture / RV constructors -- folding under @c STABLE /
+ * @c IMMUTABLE would collapse two independent draws into one shared
+ * gate.
+ */
+CREATE OR REPLACE FUNCTION mixture(
+  p_value double precision,
+  x random_variable,
+  y random_variable)
+  RETURNS random_variable AS
+$$
+DECLARE
+  p_token uuid;
+BEGIN
+  IF p_value IS NULL OR p_value <> p_value OR p_value < 0 OR p_value > 1 THEN
+    RAISE EXCEPTION 'provsql.mixture: probability must be in [0,1] (got %)', p_value;
+  END IF;
+  p_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(p_token, 'input');
+  PERFORM provsql.set_prob(p_token, p_value);
+  RETURN provsql.mixture(p_token, x, y);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
  * @brief Lift a deterministic constant into a random_variable
  *
  * Creates a <tt>gate_value</tt> carrying the constant's text form so

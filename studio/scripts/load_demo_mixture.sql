@@ -145,7 +145,18 @@ SELECT 7, 'decoupled pair (distinct p_50 / p_50b): -5/+5 mixtures summed',
          provsql.as_random(-5),
          provsql.as_random( 5));
 
-\echo 'Loaded 7 mixture rows.  Open Studio against this database and try:'
+-- Row 8: ad-hoc probability overload.  No need to pre-mint a Bernoulli
+-- token when you don't intend to share it with another circuit branch:
+-- the mixture(probability, x, y) overload creates an anonymous
+-- gate_input on the fly with the given probability.  Each call mints a
+-- fresh Bernoulli, so two calls to mixture(0.5, ...) are independent.
+INSERT INTO mixture_demo (id, label, expr)
+VALUES (8, '0.7·N(0, 1) + 0.3·N(8, 1) -- ad-hoc probability overload',
+        provsql.mixture(0.7::float8,
+                        provsql.normal(0::float8, 1::float8),
+                        provsql.normal(8::float8, 1::float8)));
+
+\echo 'Loaded 8 mixture rows.  Open Studio against this database and try:'
 \echo '  SELECT id, label, expr FROM mixture_demo ORDER BY id;'
 \echo 'Then click any random_variable cell to inspect the circuit, and run'
 \echo 'the Distribution profile evaluator (try 60 bins on row 1 for the'
