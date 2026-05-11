@@ -81,6 +81,14 @@ std::optional<DistributionSpec> parse_distribution_spec(const std::string &s)
     out.kind = DistKind::Exponential;
     return out;
   }
+  if (kind_str == "erlang") {
+    const auto comma = params.find(',');
+    if (comma == std::string::npos) return std::nullopt;
+    if (!parse_double(params.substr(0, comma), out.p1)) return std::nullopt;
+    if (!parse_double(params.substr(comma + 1), out.p2)) return std::nullopt;
+    out.kind = DistKind::Erlang;
+    return out;
+  }
   return std::nullopt;
 }
 
@@ -93,6 +101,11 @@ std::string format_distribution_spec(const DistributionSpec &d)
       return "uniform:" + std::to_string(d.p1) + "," + std::to_string(d.p2);
     case DistKind::Exponential:
       return "exponential:" + std::to_string(d.p1);
+    case DistKind::Erlang:
+      /* k is integer-valued; print as integer so the textual form
+       * matches what the SQL constructor writes. */
+      return "erlang:" + std::to_string(static_cast<long long>(d.p1))
+           + "," + std::to_string(d.p2);
   }
   return {};
 }
@@ -103,6 +116,7 @@ double analytical_mean(const DistributionSpec &d)
     case DistKind::Normal:      return d.p1;
     case DistKind::Uniform:     return 0.5 * (d.p1 + d.p2);
     case DistKind::Exponential: return 1.0 / d.p1;
+    case DistKind::Erlang:      return d.p1 / d.p2;
   }
   return 0.0;
 }
@@ -121,6 +135,10 @@ double analytical_variance(const DistributionSpec &d)
     case DistKind::Exponential: {
       const double lambda = d.p1;
       return 1.0 / (lambda * lambda);
+    }
+    case DistKind::Erlang: {
+      const double k = d.p1, lambda = d.p2;
+      return k / (lambda * lambda);
     }
   }
   return 0.0;
@@ -189,6 +207,17 @@ double analytical_raw_moment(const DistributionSpec &d, unsigned k)
     case DistKind::Exponential: {
       const double lambda = d.p1;
       return factorial(k) / std::pow(lambda, static_cast<double>(k));
+    }
+    case DistKind::Erlang: {
+      /* E[X^k] = Gamma(s + k) / (Gamma(s) lambda^k)
+       *        = s (s+1) ... (s+k-1) / lambda^k
+       * for integer shape s ≥ 1; the rising factorial is built as a
+       * plain double loop to keep the routine free of <cmath>'s tgamma
+       * (which is fine but unnecessary here since s is integer). */
+      const double s = d.p1, lambda = d.p2;
+      double rising = 1.0;
+      for (unsigned i = 0; i < k; ++i) rising *= (s + static_cast<double>(i));
+      return rising / std::pow(lambda, static_cast<double>(k));
     }
   }
   return 0.0;

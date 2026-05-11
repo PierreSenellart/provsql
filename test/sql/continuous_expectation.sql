@@ -35,6 +35,10 @@ SELECT abs(variance(provsql.uniform(1, 3)) - 1.0/3.0) < 1e-12
 SELECT expected(provsql.exponential(2))    AS exp_mean;
 SELECT variance(provsql.exponential(2))    AS exp_variance;
 
+-- Erlang(k=4, λ=2): E = k/λ = 2, Var = k/λ² = 1.
+SELECT expected(provsql.erlang(4, 2))      AS erlang_mean;
+SELECT variance(provsql.erlang(4, 2)) = 1.0 AS erlang_variance_exact;
+
 -- ---------------------------------------------------------------------
 -- Linearity of expectation (always analytical; no independence required).
 -- ---------------------------------------------------------------------

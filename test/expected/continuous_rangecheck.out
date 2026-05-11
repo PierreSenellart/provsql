@@ -8,6 +8,9 @@ t
 exponential_nonnegative_decided
 t
 (1 row)
+erlang_strictly_negative_decided
+t
+(1 row)
 uniform_le_zero_decided
 t
 (1 row)

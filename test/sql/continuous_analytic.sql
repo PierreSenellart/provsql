@@ -46,6 +46,13 @@ SELECT abs(provsql.probability_evaluate(
              'independent') - exp(-1)) < 1e-12
        AS exponential_gt_one_exact;
 
+-- (5b) Erlang closed-form CDF: for Erlang(2, 1), F(x) = 1 - e^{-x}(1+x);
+-- P(X > 1) = 2/e, exact via the finite-sum CDF.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_gt(provsql.erlang(2, 1), 1::random_variable),
+             'independent') - 2.0 * exp(-1.0)) < 1e-12
+       AS erlang_gt_exact;
+
 -- (6) P(N(1, 1) > N(0, 1)) for two independent normals.
 -- X - Y ~ N(1, sqrt(2)); P(X > Y) = Phi(1/sqrt(2)).
 -- Phi(1/sqrt(2)) ~= 0.7602499389...

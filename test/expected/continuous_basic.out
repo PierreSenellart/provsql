@@ -17,6 +17,12 @@ rv
 rv_exp_extra
 exponential:0.7
 (1 row)
+rv_erlang_kind
+rv
+(1 row)
+rv_erlang_extra
+erlang:3,0.5
+(1 row)
 const_kind
 value
 (1 row)
@@ -71,6 +77,12 @@ t
 exponential_calls_independent
 t
 (1 row)
+erlang_calls_independent
+t
+(1 row)
+erlang_one_routes_to_exp
+exponential:0.7
+(1 row)
 normal_zero_sigma_kind
 value
 (1 row)
@@ -91,6 +103,11 @@ ERROR:  provsql.uniform: a must be <= b (got a=3, b=1)
 ERROR:  provsql.exponential: lambda must be finite (got Infinity)
 ERROR:  provsql.exponential: lambda must be strictly positive (got 0)
 ERROR:  provsql.exponential: lambda must be strictly positive (got -0.5)
+ERROR:  provsql.erlang: k must be >= 1 (got 0)
+ERROR:  provsql.erlang: k must be >= 1 (got -2)
+ERROR:  provsql.erlang: lambda must be finite (got NaN)
+ERROR:  provsql.erlang: lambda must be strictly positive (got 0)
+ERROR:  provsql.erlang: lambda must be strictly positive (got -0.5)
 as_random_nan_value
 t
 (1 row)

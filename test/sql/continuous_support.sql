@@ -9,6 +9,7 @@ SELECT lo, hi FROM support(provsql.as_random(7.25));   -- (7.25, 7.25)
 SELECT lo, hi FROM support(provsql.normal(0, 1));      -- (-Infinity, +Infinity)
 SELECT lo, hi FROM support(provsql.uniform(1, 3));     -- (1, 3)
 SELECT lo, hi FROM support(provsql.exponential(2));    -- (0, +Infinity)
+SELECT lo, hi FROM support(provsql.erlang(3, 1));      -- (0, +Infinity)
 
 -- Interval-arithmetic propagation through gate_arith.  The lateral
 -- subselect is needed so support() sees the column from the enclosing

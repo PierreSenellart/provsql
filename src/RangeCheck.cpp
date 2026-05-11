@@ -116,6 +116,7 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
           result = {spec->p1, spec->p2};
           break;
         case DistKind::Exponential:
+        case DistKind::Erlang:
           result = {0.0, std::numeric_limits<double>::infinity()};
           break;
       }

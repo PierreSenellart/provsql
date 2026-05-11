@@ -11,6 +11,9 @@ t
 exponential_gt_1_within_tolerance
 t
 (1 row)
+erlang_gt_3_within_tolerance
+t
+(1 row)
 deterministic
 t
 (1 row)

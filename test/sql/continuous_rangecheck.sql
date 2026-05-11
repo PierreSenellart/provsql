@@ -33,6 +33,13 @@ SELECT provsql.probability_evaluate(
          'monte-carlo', '1000000') = 1.0
        AS exponential_nonnegative_decided;
 
+-- (3b) Erlang inherits the [0, +inf) support; Erlang(3, 1) < 0 is
+-- always false.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_lt(provsql.erlang(3, 1), 0::random_variable),
+         'monte-carlo', '1000000') = 0.0
+       AS erlang_strictly_negative_decided;
+
 -- (4) U(1, 2) <= 0 -- the upper bound 2 is not <= 0, but every U
 -- value is in [1, 2] which is strictly above 0; P(<=0) = 0.0.
 SELECT provsql.probability_evaluate(

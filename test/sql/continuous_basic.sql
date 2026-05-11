@@ -14,6 +14,9 @@ SELECT get_extra(random_variable_uuid(provsql.uniform(1, 3))) AS rv_uniform_extr
 SELECT get_gate_type(random_variable_uuid(provsql.exponential(0.7))) AS rv_exp_kind;
 SELECT get_extra(random_variable_uuid(provsql.exponential(0.7))) AS rv_exp_extra;
 
+SELECT get_gate_type(random_variable_uuid(provsql.erlang(3, 0.5))) AS rv_erlang_kind;
+SELECT get_extra(random_variable_uuid(provsql.erlang(3, 0.5))) AS rv_erlang_extra;
+
 -- as_random creates a gate_value (constant), not a gate_rv.
 SELECT get_gate_type(random_variable_uuid(provsql.as_random(42))) AS const_kind;
 SELECT get_extra(random_variable_uuid(provsql.as_random(42))) AS const_extra;
@@ -82,6 +85,14 @@ SELECT random_variable_uuid(provsql.uniform(0, 1))
     <> random_variable_uuid(provsql.uniform(0, 1)) AS uniform_calls_independent;
 SELECT random_variable_uuid(provsql.exponential(1))
     <> random_variable_uuid(provsql.exponential(1)) AS exponential_calls_independent;
+SELECT random_variable_uuid(provsql.erlang(3, 1))
+    <> random_variable_uuid(provsql.erlang(3, 1)) AS erlang_calls_independent;
+
+-- Erlang(1, λ) is exactly Exp(λ): the constructor silently routes
+-- through exponential so the gate's extra reflects the underlying
+-- exponential form, sharing the entire downstream sampler / analytic
+-- path with vanilla Exp(λ).
+SELECT get_extra(random_variable_uuid(provsql.erlang(1, 0.7))) AS erlang_one_routes_to_exp;
 
 -- Degenerate distributions: silently routed through as_random so the
 -- resulting gate is a gate_value, sharing its UUID with as_random(x).
@@ -104,6 +115,11 @@ SELECT provsql.uniform(3, 1);
 SELECT provsql.exponential('Infinity'::float8);
 SELECT provsql.exponential(0);
 SELECT provsql.exponential(-0.5);
+SELECT provsql.erlang(0, 1);
+SELECT provsql.erlang(-2, 1);
+SELECT provsql.erlang(3, 'NaN'::float8);
+SELECT provsql.erlang(3, 0);
+SELECT provsql.erlang(3, -0.5);
 \set VERBOSITY default
 
 -- as_random allows non-finite floats: NaN and ±Infinity are valid

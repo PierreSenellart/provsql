@@ -174,6 +174,14 @@ double Sampler::evalScalar(gate_t g)
           result = d(rng_);
           break;
         }
+        case DistKind::Erlang: {
+          /* Gamma(shape, scale) with integer shape k and scale 1/λ
+           * samples Erlang(k, λ) directly.  std::gamma_distribution
+           * uses the rate's inverse as its scale parameter. */
+          std::gamma_distribution<double> d(spec->p1, 1.0 / spec->p2);
+          result = d(rng_);
+          break;
+        }
       }
       break;
     }

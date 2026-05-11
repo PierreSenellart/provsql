@@ -23,6 +23,12 @@ exp_mean
 exp_variance
 0.25
 (1 row)
+erlang_mean
+2
+(1 row)
+erlang_variance_exact
+t
+(1 row)
 sum_indep_normals_mean
 t
 (1 row)

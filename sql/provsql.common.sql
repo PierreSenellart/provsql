@@ -1413,7 +1413,8 @@ CREATE OPERATOR > (
  *
  *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
  *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
- *  and <tt>provsql.as_random(c)</tt>.  Operator overloads
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
  *  (<tt>+ - * /</tt> and the six comparators) are defined further
  *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
  *  callers that want a <tt>gate_cmp</tt> token without going through
@@ -1582,6 +1583,52 @@ BEGIN
   token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'exponential:' || lambda);
+  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct an Erlang-distribution random variable, sum of
+ *        @p k i.i.d. exponentials with shared rate @p lambda
+ *
+ * The Erlang distribution is the sum of @p k independent
+ * <tt>Exp(λ)</tt> random variables (equivalently the gamma with
+ * integer shape).  It is the natural closure of i.i.d.
+ * exponentials under addition, and is materialised here as a single
+ * <tt>gate_rv</tt> so the analytic CDF and closed-form moments fire
+ * directly (rather than the sampler having to draw and sum @p k
+ * exponential leaves per Monte-Carlo iteration).
+ *
+ * Validation:
+ * - @p k must be ≥ 1.  The degenerate @c k=1 case is silently routed
+ *   through @c exponential so <tt>erlang(1, λ)</tt> shares its gate
+ *   with <tt>exponential(λ)</tt>.
+ * - @p lambda must be finite and strictly positive.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @c normal above.
+ */
+CREATE OR REPLACE FUNCTION erlang(k integer, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF k < 1 THEN
+    RAISE EXCEPTION 'provsql.erlang: k must be >= 1 (got %)', k;
+  END IF;
+  IF NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.erlang: lambda must be finite (got %)', lambda;
+  END IF;
+  IF lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.erlang: lambda must be strictly positive (got %)', lambda;
+  END IF;
+  IF k = 1 THEN
+    RETURN provsql.exponential(lambda);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'erlang:' || k || ',' || lambda);
   RETURN provsql.random_variable_make(token, 'NaN'::double precision);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;

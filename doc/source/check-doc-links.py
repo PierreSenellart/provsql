@@ -109,7 +109,7 @@ INTERNAL_FUNCTIONS = {
     # Promote to _SQL_FUNC_MAP once the continuous-distributions
     # chapter of the user manual is written and references them via
     # :sqlfunc:.
-    'normal', 'uniform', 'exponential', 'as_random',
+    'normal', 'uniform', 'exponential', 'erlang', 'as_random',
     # random_variable arithmetic and comparison operator implementations
     # (invoked through the SQL operators + - * / < <= = <> >= >, not
     # called by name; promote alongside the constructors when the

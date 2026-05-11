@@ -55,6 +55,14 @@ SELECT abs(mc_prob(provsql.uniform(0, 1), provsql.as_random(0.3), '<=', 100000) 
 SELECT abs(mc_prob(provsql.exponential(1), provsql.as_random(1), '>', 100000) - 0.36787944117)
        < 0.01 AS exponential_gt_1_within_tolerance;
 
+-- Erlang sampling: wrap in a no-op arith gate so AnalyticEvaluator's
+-- closed-form CDF (which only fires on bare gate_rv leaves) doesn't
+-- resolve the cmp before the sampler sees it.  For Erlang(3, 1),
+-- P(X > 3) = e^{-3}(1 + 3 + 4.5) = 8.5 / e^3 ≈ 0.4232.
+SELECT abs(mc_prob(provsql.erlang(3, 1) + provsql.as_random(0),
+                   provsql.as_random(3), '>', 100000) - 8.5 * exp(-3.0))
+       < 0.01 AS erlang_gt_3_within_tolerance;
+
 -- Determinism: same seed -> same MC result, even with a non-trivial
 -- sample count.  Run twice, expect bit-identical doubles.
 SELECT mc_prob(provsql.normal(0, 1), provsql.as_random(0), '>', 5000)

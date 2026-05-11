@@ -51,6 +51,28 @@ double cdfDecide(const DistributionSpec &d, ComparisonOperator op, double c)
       if (c <= 0.0) cdf_c = 0.0;
       else          cdf_c = -std::expm1(-d.p1 * c);  /* 1 - exp(-λc) */
       break;
+    case DistKind::Erlang: {
+      /* For integer shape s ≥ 1, the Erlang CDF has the finite-sum
+       * form F(c; s, λ) = 1 - e^{-λc} Σ_{n=0..s-1} (λc)^n / n!.
+       * Numerically stable for the small-to-moderate s the simplifier
+       * produces (a SUM of k i.i.d. Exp gates).  Non-integer s would
+       * require the regularised lower incomplete gamma function, so
+       * we skip those cases by leaving cdf_c = NaN (caller treats NaN
+       * as "undecided" and the cmp falls through to MC). */
+      const double s = d.p1, lambda = d.p2;
+      if (s < 1.0 || s != std::floor(s)) break;
+      if (c <= 0.0) { cdf_c = 0.0; break; }
+      const double lc = lambda * c;
+      double term = 1.0;   /* (λc)^0 / 0! */
+      double sum  = 1.0;
+      const unsigned long k = static_cast<unsigned long>(s);
+      for (unsigned long n = 1; n < k; ++n) {
+        term *= lc / static_cast<double>(n);
+        sum  += term;
+      }
+      cdf_c = 1.0 - std::exp(-lc) * sum;
+      break;
+    }
   }
   if (std::isnan(cdf_c)) return cdf_c;
 
