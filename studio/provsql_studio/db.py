@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -674,7 +675,21 @@ def _to_jsonable(v):
     """Coerce a Python value returned by psycopg into something json.dumps can handle."""
     if v is None:
         return None
-    if isinstance(v, (str, int, float, bool)):
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, float):
+        # Postgres float8 carries +/-Infinity / NaN (e.g. rv_support of a
+        # normal RV is [-Infinity, +Infinity]).  Python's json.dumps emits
+        # them as the bare literals Infinity / -Infinity / NaN, which
+        # browser JSON.parse rejects.  Send the string form so the wire is
+        # valid JSON; circuit.js already accepts the strings 'Infinity' /
+        # '-Infinity' alongside the JS number infinities.
+        if math.isnan(v):
+            return "NaN"
+        if math.isinf(v):
+            return "Infinity" if v > 0 else "-Infinity"
+        return v
+    if isinstance(v, (str, int)):
         return v
     return str(v)
 

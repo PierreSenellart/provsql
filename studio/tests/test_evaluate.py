@@ -9,6 +9,8 @@ fixture as test_relations.py and don't depend on cs5-style data.
 """
 from __future__ import annotations
 
+import json
+
 import psycopg
 import pytest
 
@@ -880,6 +882,29 @@ def test_evaluate_distribution_profile_dirac_value(client):
     assert len(r["histogram"]) == 1
     assert r["histogram"][0]["bin_lo"] == 7.5
     assert r["histogram"][0]["bin_hi"] == 7.5
+
+
+def test_evaluate_distribution_profile_unbounded_support(client):
+    """Normal RV: support is (-Infinity, +Infinity).  Postgres float8
+    surfaces as Python +/-inf; if those leak into jsonify unchanged,
+    Python emits the bare literals Infinity / -Infinity and browser
+    JSON.parse rejects the response with 'unexpected non-digit ...'.
+    Verify the wire is valid JSON and the endpoints arrive as the
+    string sentinels circuit.js already handles."""
+    tok = _rv_uuid(client, "provsql.normal(2::float8, 2::float8)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    # resp.get_json() would re-parse Flask's bytes; that's the same
+    # path the browser takes.  json.loads with the default (strict)
+    # parser rejects bare Infinity, mirroring JSON.parse.
+    body = json.loads(resp.data)
+    r = body["result"]
+    assert r["support"] == ["-Infinity", "Infinity"], r["support"]
+    assert abs(r["expected"] - 2.0) < 0.1, r["expected"]
+    assert abs(r["variance"] - 4.0) < 0.5, r["variance"]
+    assert isinstance(r["histogram"], list) and len(r["histogram"]) == 30
 
 
 def test_evaluate_distribution_profile_bad_bins_is_400(client):
