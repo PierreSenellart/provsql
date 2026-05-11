@@ -92,7 +92,7 @@ def _gate_label(row: dict) -> str:
         # does for the same operators in the editor.
         return _truncate(_CMP_GLYPH.get(row["info1_name"], row["info1_name"]))
     if t == "value" and row.get("extra"):
-        return _truncate(row["extra"])
+        return row["extra"]
     if t == "rv" and row.get("extra"):
         return _format_rv_label(row["extra"])
     if t == "arith":
