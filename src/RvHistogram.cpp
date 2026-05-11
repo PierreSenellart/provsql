@@ -49,8 +49,11 @@ PG_FUNCTION_INFO_V1(rv_histogram);
 #include "GenericCircuit.h"
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
+#include "RangeCheck.h"
 #include "provsql_utils_cpp.h"
 
+#include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -124,15 +127,34 @@ rv_histogram(PG_FUNCTION_ARGS)
       auto samples = provsql::monteCarloScalarSamples(gc, root_gate, N);
 
       if (!samples.empty()) {
-        double smin = samples[0], smax = samples[0];
-        for (double x : samples) {
-          if (x < smin) smin = x;
-          if (x > smax) smax = x;
-        }
+        /* Pick the bin range per side: when @c compute_support proves
+         * a finite support endpoint we use it verbatim (Uniform / sums
+         * of Uniforms / mixtures of bounded RVs / Exponential's lower
+         * end at 0 / etc.), because the analytical bound is tighter
+         * than any sample-based estimate.  When the support is open
+         * on a side (Normal, sums involving Normal, the upper tail of
+         * Exponential / Erlang) the raw empirical extreme would be
+         * an outlier draw -- ~±4σ for a Normal at rv_mc_samples = 10000
+         * -- which stretches the histogram so the bulk of the mass
+         * concentrates in middle bins and the edge bins look empty.
+         * Trim the outermost 0.1% of samples on that side; samples
+         * outside the trimmed range still get pooled into the edge
+         * bin (the clamp below), so total counts stay conserved. */
+        std::sort(samples.begin(), samples.end());
+        const std::size_t n = samples.size();
+        const std::size_t lo_idx = n / 1000;             /* 0.1% */
+        const std::size_t hi_idx = n - 1 - lo_idx;
+        auto support = provsql::compute_support(gc, root_gate);
+        double smin = std::isfinite(support.first)
+                    ? support.first
+                    : samples[lo_idx];
+        double smax = std::isfinite(support.second)
+                    ? support.second
+                    : samples[hi_idx];
         if (smin == smax) {
-          /* Degenerate: every draw landed on the same value.  Could
-           * happen when the simplifier elided everything but a leaf
-           * the sampler is forced to evaluate point-wise. */
+          /* Degenerate: trimmed range collapsed to a point (every
+           * non-tail draw is the same value, or the simplifier
+           * elided everything but a single point-mass leaf). */
           emit_bin(out, first, smin, smax,
                    static_cast<unsigned>(samples.size()));
         } else {
