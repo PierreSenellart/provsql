@@ -95,7 +95,7 @@ jobs:
           VERSION="${{ needs.version.outputs.version }}"
           ls "studio/dist/provsql_studio-${VERSION}.tar.gz" \
              "studio/dist/provsql_studio-${VERSION}-py3-none-any.whl"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: studio/dist/*
