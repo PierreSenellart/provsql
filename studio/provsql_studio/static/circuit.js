@@ -2129,9 +2129,12 @@
     const supportLabel =
       `[${fmtSupportEnd(support[0])}, ${fmtSupportEnd(support[1])}]`;
 
-    // Histogram geometry: same canvas as renderRvDensity so the two
-    // sit visually consistent if the user pin-compares.
-    const W = 280, H = 110, padX = 10, padTop = 6, padBottom = 18;
+    // Histogram geometry.  Width tracks renderRvDensity so the two
+    // sit visually consistent if the user pin-compares; height is
+    // taller (160 vs. the density preview's narrower band) because
+    // the bar chart needs vertical room for the count axis to read,
+    // and the eval strip is full-width below the toolbar anyway.
+    const W = 280, H = 160, padX = 10, padTop = 6, padBottom = 18;
     let svgInner = '';
     if (histogram.length) {
       const maxCount = histogram.reduce((m, b) => Math.max(m, Number(b.count) || 0), 0) || 1;
