@@ -67,6 +67,45 @@ namespace provsql {
  */
 unsigned runHybridSimplifier(GenericCircuit &gc);
 
+/**
+ * @brief Marginalise unresolved continuous-island @c gate_cmp gates
+ *        into Bernoulli @c gate_input leaves.
+ *
+ * Runs after @c RangeCheck, the simplifier (@c runHybridSimplifier),
+ * and @c AnalyticEvaluator have done what they can.  Picks up the
+ * residual comparators whose two sides are an entirely continuous
+ * island (subtree of @c gate_value, @c gate_rv, @c gate_arith with
+ * no Boolean structure underneath) but whose specific shape is not
+ * one the analytic CDF resolver handles &mdash; e.g.
+ * <tt>Normal + Uniform &gt; 0</tt>, heterogeneous-rate sums of
+ * exponentials, or other compositions the simplifier could not fold
+ * to a bare distribution leaf.
+ *
+ * Each qualifying comparator is marginalised by drawing @p samples
+ * worlds and applying the comparator scalar-by-scalar; the empirical
+ * probability replaces the @c gate_cmp via
+ * @c resolveCmpToBernoulli.  The circuit downstream becomes purely
+ * Boolean, so the existing @c independent / @c tree-decomposition /
+ * compilation methods become available on circuits that would
+ * otherwise have to fall through to whole-circuit MC.
+ *
+ * **Single-cmp islands only.**  When two or more comparators share
+ * a base @c gate_rv (their per-cmp footprints overlap), their
+ * joint distribution would have to be enumerated together;
+ * marginalising them independently would silently introduce
+ * spurious-independence error.  This pass detects shared-island
+ * groups via the base-RV footprint and skips them: those cmps
+ * stay as @c gate_cmp and fall through to whole-circuit MC.
+ * Resolving the shared-island case is the second half of Priority
+ * 7(b) (the 2^k joint-table construction).
+ *
+ * @param gc       Circuit to mutate in place.
+ * @param samples  Number of MC iterations used per marginalisation.
+ *                 Callers typically pass @c provsql_rv_mc_samples.
+ * @return         Number of comparators resolved by this pass.
+ */
+unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_HYBRID_EVALUATOR_H

@@ -151,6 +151,65 @@ SELECT provsql.probability_evaluate(
        AS zero_absorber_times;
 
 -- ---------------------------------------------------------------
+-- Island decomposer: per-cmp MC marginalisation of unresolved
+-- continuous-island cmps into Bernoulli gate_input leaves.  Picks
+-- up cmps whose shape none of RangeCheck / simplifier /
+-- AnalyticEvaluator can resolve - e.g. heterogeneous distributions
+-- under arith (the normal closure rejects non-normal wires).
+-- Single-cmp islands only; cmps sharing a base RV with another
+-- unresolved cmp are detected via footprint overlap and skipped.
+-- ---------------------------------------------------------------
+
+-- (12) Disjoint islands.  Two independent N(0,1) + U(-1,1) mixes,
+--      neither folded by the simplifier (U isn't normal, so the
+--      normal closure bails).  The decomposer MC-marginalises each
+--      cmp into its own Bernoulli; 'independent' then computes
+--      inclusion-exclusion over them.  By the symmetry of N(0,1)
+--      and U(-1,1) around zero, P(N + U > 0) = 0.5 exactly, so the
+--      analytical truth of the disjunction is 0.5 + 0.5 - 0.25
+--      = 0.75.  Without the decomposer, 'independent' would error
+--      on the unresolved gate_arith leaves.
+SET provsql.monte_carlo_seed = 42;
+SET provsql.rv_mc_samples = 20000;
+SELECT abs(provsql.probability_evaluate(
+             provsql.provenance_plus(ARRAY[
+               provsql.rv_cmp_gt(provsql.normal(0, 1)
+                                + provsql.uniform(-1, 1),
+                                  0::random_variable),
+               provsql.rv_cmp_gt(provsql.normal(0, 1)
+                                + provsql.uniform(-1, 1),
+                                  0::random_variable)
+             ]),
+             'independent') - 0.75) < 0.02
+       AS disjoint_islands_inclusion_exclusion;
+RESET provsql.rv_mc_samples;
+RESET provsql.monte_carlo_seed;
+
+-- (13) Shared island.  Two cmps share the SAME (N + U) arith gate
+--      (via a CTE binding so r.expr is the same gate_t in both
+--      cmp_gt calls).  The dependent truth is P(x > 0 OR x > 1)
+--      = P(x > 0) = 0.5 by the subset relation `x > 1 implies
+--      x > 0`.  If the decomposer wrongly marginalised the two
+--      cmps independently, their Bernoulli OR would give
+--      ~ 0.5 + 0.2 - 0.1 = 0.6 instead - well outside tolerance.
+--      The decomposer's footprint-overlap check leaves both cmps
+--      as gate_cmp; 'monte-carlo' then evaluates them through
+--      monteCarloRV's per-iteration scalar memoisation, which
+--      gives both cmps the same draw of x and recovers the
+--      dependent truth.
+SET provsql.monte_carlo_seed = 42;
+WITH r AS (SELECT provsql.normal(0, 1) + provsql.uniform(-1, 1) AS expr)
+SELECT abs(provsql.probability_evaluate(
+             provsql.provenance_plus(ARRAY[
+               provsql.rv_cmp_gt(r.expr, 0::random_variable),
+               provsql.rv_cmp_gt(r.expr, 1::random_variable)
+             ]),
+             'monte-carlo', '100000') - 0.5) < 0.01
+       AS shared_island_falls_through_to_mc
+FROM r;
+RESET provsql.monte_carlo_seed;
+
+-- ---------------------------------------------------------------
 -- Sanity: with provsql.hybrid_evaluation = off the simplifier does
 -- not run.  The same queries fall through to the original paths:
 -- - The normal-sum cmp reaches the BoolExpr semiring without a

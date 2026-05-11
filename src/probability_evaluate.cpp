@@ -131,6 +131,24 @@ static Datum probability_evaluate_internal
   // the comparators RangeCheck could not collapse.
   provsql::runAnalyticEvaluator(gc);
 
+  // Hybrid-evaluator island decomposer: per-cmp MC marginalisation
+  // of the residual continuous-island comparators that none of the
+  // earlier passes could resolve (e.g. heterogeneous distributions
+  // under arith, or normal+uniform compositions outside the analytic
+  // CDF's scope).  Each qualifying cmp becomes a Bernoulli gate_input
+  // so the surrounding Boolean structure can be evaluated by every
+  // existing method ('independent', 'tree-decomposition',
+  // 'monte-carlo', 'd4', etc.) without the BoolExpr semiring choking
+  // on a leftover gate_arith leaf.  Single-cmp islands only; cmps
+  // that share a base RV with another unresolved cmp are skipped and
+  // fall through to whole-circuit MC (handled later via monteCarloRV
+  // when the method permits, or by the multi-cmp joint-table half
+  // of Priority 7(b) once that lands).
+  if (provsql_hybrid_evaluation) {
+    provsql::runHybridDecomposer(
+      gc, static_cast<unsigned>(provsql_rv_mc_samples));
+  }
+
   double result;
 
   provsql_interrupted = false;

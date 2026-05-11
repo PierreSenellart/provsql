@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "MonteCarloSampler.h"  // monteCarloRV
 #include "RandomVariable.h"     // parse_distribution_spec, parseDoubleStrict, DistKind
 extern "C" {
 #include "provsql_utils.h"      // gate_type, provsql_arith_op
@@ -573,6 +574,129 @@ unsigned runHybridSimplifier(GenericCircuit &gc)
     simplify(gc, static_cast<gate_t>(i), done, counter);
   }
   return counter;
+}
+
+namespace {
+
+/**
+ * @brief Test whether both sides of @p cmp_gate are a continuous-only
+ *        island (subtree of @c gate_value / @c gate_rv / @c gate_arith).
+ *
+ * A continuous island has no Boolean / aggregate / IO gates underneath
+ * the cmp; the only outward edge is the cmp itself.  This is the
+ * shape monteCarloRV's @c evalScalar can integrate over, so per-cmp
+ * MC marginalisation is sound on these and these alone.
+ */
+bool is_continuous_island_cmp(const GenericCircuit &gc, gate_t cmp_gate)
+{
+  const auto &wires = gc.getWires(cmp_gate);
+  if (wires.size() != 2) return false;
+
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stk;
+  stk.push(wires[0]);
+  stk.push(wires[1]);
+  while (!stk.empty()) {
+    gate_t g = stk.top(); stk.pop();
+    if (!seen.insert(g).second) continue;
+    auto t = gc.getGateType(g);
+    if (t != gate_value && t != gate_rv && t != gate_arith) return false;
+    for (gate_t c : gc.getWires(g)) stk.push(c);
+  }
+  return true;
+}
+
+/**
+ * @brief Collect the base @c gate_rv leaves reachable from @p root
+ *        through @c gate_arith composition.
+ *
+ * The set is the cmp's "RV footprint": two cmps share an island iff
+ * their footprints overlap (a shared base RV is the only way their
+ * sampled values can be correlated, given the island shape).
+ */
+void collect_cmp_rv_footprint(const GenericCircuit &gc, gate_t cmp_gate,
+                              std::unordered_set<gate_t> &fp)
+{
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stk;
+  for (gate_t w : gc.getWires(cmp_gate)) stk.push(w);
+  while (!stk.empty()) {
+    gate_t g = stk.top(); stk.pop();
+    if (!seen.insert(g).second) continue;
+    auto t = gc.getGateType(g);
+    if (t == gate_rv) { fp.insert(g); continue; }
+    if (t == gate_arith) {
+      for (gate_t c : gc.getWires(g)) stk.push(c);
+    }
+    /* gate_value contributes no RV identity; other types should not
+     * appear here (is_continuous_island_cmp gates that path), but if
+     * they did we'd simply ignore them in the footprint &ndash; the
+     * decomposer's safety relies on the island-shape pre-check, not
+     * on this routine. */
+  }
+}
+
+}  // namespace
+
+unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
+{
+  if (samples == 0) return 0;
+
+  /* Snapshot all gate_cmp ids that look like continuous islands.
+   * Each call later mutates a snapshot entry from @c gate_cmp to
+   * @c gate_input via @c resolveCmpToBernoulli, but the snapshot
+   * vector is unaffected.  The defensive type re-check at iteration
+   * time guards against any pass between snapshot and resolution
+   * having already mutated the gate. */
+  const auto nb = gc.getNbGates();
+  std::vector<gate_t> cmps;
+  for (std::size_t i = 0; i < nb; ++i) {
+    auto g = static_cast<gate_t>(i);
+    if (gc.getGateType(g) == gate_cmp && is_continuous_island_cmp(gc, g))
+      cmps.push_back(g);
+  }
+
+  /* Compute the per-cmp footprint up front so the pairwise-overlap
+   * check is O(C * C * F) rather than O(C * C * tree_size). */
+  std::unordered_map<gate_t, std::unordered_set<gate_t>> footprints;
+  footprints.reserve(cmps.size());
+  for (gate_t c : cmps) {
+    collect_cmp_rv_footprint(gc, c, footprints[c]);
+  }
+
+  /* Identify cmps that share an island with another cmp (footprint
+   * overlap on at least one base gate_rv).  These cannot be
+   * marginalised independently: doing so would treat them as
+   * spuriously independent.  The multi-cmp shared-island case is the
+   * second half of Priority 7(b) and is intentionally skipped here. */
+  std::unordered_set<gate_t> shared;
+  for (std::size_t i = 0; i < cmps.size(); ++i) {
+    for (std::size_t j = i + 1; j < cmps.size(); ++j) {
+      const auto &fp_i = footprints[cmps[i]];
+      const auto &fp_j = footprints[cmps[j]];
+      /* Iterate the smaller set against the larger for the early-exit. */
+      const auto &small = fp_i.size() < fp_j.size() ? fp_i : fp_j;
+      const auto &big   = fp_i.size() < fp_j.size() ? fp_j : fp_i;
+      for (gate_t rv : small) {
+        if (big.count(rv)) {
+          shared.insert(cmps[i]);
+          shared.insert(cmps[j]);
+          break;
+        }
+      }
+    }
+  }
+
+  unsigned resolved = 0;
+  for (gate_t c : cmps) {
+    if (gc.getGateType(c) != gate_cmp) continue;
+    if (shared.count(c)) continue;
+    double p = monteCarloRV(gc, c, samples);
+    gc.resolveCmpToBernoulli(c, p);
+    ++resolved;
+  }
+
+  return resolved;
 }
 
 }  // namespace provsql
