@@ -518,6 +518,7 @@ def create_app(
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
                 search_path=app.config.get("SEARCH_PATH", ""),
                 tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
+                extra_gucs=app.config["RUNTIME_GUCS"],
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400

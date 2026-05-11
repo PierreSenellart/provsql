@@ -745,3 +745,68 @@ def test_evaluate_custom_missing_mapping_is_400(client, custom_wrapper):
     })
     assert resp.status_code == 400
     assert "mapping" in resp.get_json()["error"].lower()
+
+
+def test_evaluate_applies_panel_gucs(client):
+    """The evaluate-strip's SQL call must see the panel-managed GUCs
+    (provsql.rv_mc_samples, monte_carlo_seed, simplify_on_load).
+    Previously /api/evaluate only set statement_timeout / search_path
+    / tool_search_path, so setting rv_mc_samples = 0 in the Config
+    panel still silently used the default (10000) sample budget for
+    HybridEvaluator's MC fallback.
+
+    Regression check: build a circuit whose probability can ONLY be
+    decided by the MC fallback (a continuous-island cmp the
+    AnalyticEvaluator cannot resolve closed-form: sum of independent
+    uniforms compared to a constant).  With rv_mc_samples = 0 set via
+    the panel, the evaluate call must raise.  Without my fix, the
+    panel value never reaches the SQL session and the call silently
+    returns an MC estimate.
+    """
+    # Lift uniform(0,1) + uniform(0,5) > 0.5 into a provsql token via
+    # the FROM-less rewrite path.  The 0.5 constant becomes a value
+    # gate the AnalyticEvaluator cannot pair with the sum-of-uniforms
+    # arith, so the cmp can only be resolved via MC.
+    resp = client.post(
+        "/api/exec",
+        json={
+            "sql": "SELECT 1 AS x, provsql.provenance() AS p "
+                   "WHERE provsql.uniform(0.0::float8, 1.0::float8) "
+                   "    + provsql.uniform(0.0::float8, 5.0::float8) "
+                   "      > 0.5::provsql.random_variable;",
+            "mode": "circuit",
+        },
+    )
+    assert resp.status_code == 200, resp.data
+    final = resp.get_json()["blocks"][-1]
+    assert final["kind"] == "rows"
+    cols = [c["name"] for c in final["columns"]]
+    token = final["rows"][0][cols.index("p")]
+
+    # 1. With the default (large) sample count, the call succeeds and
+    #    returns a probability in (0, 1).
+    resp = client.post("/api/evaluate", json={
+        "token": token, "semiring": "probability", "method": "",
+    })
+    assert resp.status_code == 200, resp.data
+    p_default = resp.get_json()["result"]
+    assert 0.0 < float(p_default) < 1.0, p_default
+
+    # 2. With rv_mc_samples = 0 set via /api/config, the call must
+    #    surface the disabled-fallback error rather than silently MC.
+    r = client.post("/api/config",
+                    json={"key": "provsql.rv_mc_samples", "value": "0"})
+    assert r.status_code == 200, r.data
+    try:
+        resp = client.post("/api/evaluate", json={
+            "token": token, "semiring": "probability", "method": "",
+        })
+        # The exact HTTP status depends on which evaluator raises and
+        # how psycopg.errors maps it; either 400 or 500 is acceptable.
+        # The point is that we DON'T get a silent 200 with a numeric
+        # probability that ignores the GUC.
+        assert resp.status_code != 200, resp.data
+    finally:
+        # Reset so subsequent tests aren't affected by the override.
+        client.post("/api/config",
+                    json={"key": "provsql.rv_mc_samples", "value": "10000"})

@@ -106,6 +106,41 @@
         </section>
 
         <section class="wp-config__group">
+          <h5 class="wp-config__grouphdr">Probabilities</h5>
+
+          <label class="wp-config__row">
+            <span class="wp-config__name"><code>provsql.simplify_on_load</code><a class="wp-help"
+                href="https://provsql.org/docs/user/configuration.html#provsql-simplify-on-load"
+                target="_blank" rel="noopener"
+                title="Apply universal cmp-resolution passes (RangeCheck…) when loading a circuit. Off inspects the raw structure."
+                aria-label="Help: provsql.simplify_on_load"><i class="fas fa-question-circle"></i></a></span>
+            <input type="checkbox" class="wp-config__switch" id="cfg-simplify-on-load" checked>
+          </label>
+
+          <label class="wp-config__row">
+            <span class="wp-config__name"><code>provsql.monte_carlo_seed</code><a class="wp-help"
+                href="https://provsql.org/docs/user/configuration.html#provsql-monte-carlo-seed"
+                target="_blank" rel="noopener"
+                title="Seed for the Monte Carlo sampler. -1 (default) seeds from std::random_device for non-deterministic sampling; any other value (incl. 0) is a literal mt19937_64 seed."
+                aria-label="Help: provsql.monte_carlo_seed"><i class="fas fa-question-circle"></i></a></span>
+            <span class="wp-config__numwrap">
+              <input type="number" class="wp-config__num" id="cfg-monte-carlo-seed" min="-1" step="1" value="-1">
+            </span>
+          </label>
+
+          <label class="wp-config__row">
+            <span class="wp-config__name"><code>provsql.rv_mc_samples</code><a class="wp-help"
+                href="https://provsql.org/docs/user/configuration.html#provsql-rv-mc-samples"
+                target="_blank" rel="noopener"
+                title="Default sample count for analytical-evaluator MC fallbacks (Expectation, hybrid evaluator). 0 disables the fallback : callers raise instead."
+                aria-label="Help: provsql.rv_mc_samples"><i class="fas fa-question-circle"></i></a></span>
+            <span class="wp-config__numwrap">
+              <input type="number" class="wp-config__num" id="cfg-rv-mc-samples" min="0" step="100" value="10000">
+            </span>
+          </label>
+        </section>
+
+        <section class="wp-config__group">
           <h5 class="wp-config__grouphdr">Session</h5>
 
           <label class="wp-config__row">

@@ -58,6 +58,52 @@ def test_config_post_rejects_out_of_range_verbose(client):
     assert resp.status_code == 400
 
 
+def test_config_simplify_on_load_round_trip(client):
+    # Toggle the boolean GUC off, confirm it round-trips and exec_batch
+    # sees the override via SHOW.
+    resp = client.post("/api/config",
+                       json={"key": "provsql.simplify_on_load", "value": "off"})
+    assert resp.status_code == 200
+    assert resp.get_json()["value"] == "off"
+    cfg = client.get("/api/config").get_json()
+    assert cfg["effective"]["provsql.simplify_on_load"] == "off"
+
+
+def test_config_monte_carlo_seed_accepts_negative_one(client):
+    resp = client.post("/api/config",
+                       json={"key": "provsql.monte_carlo_seed", "value": "-1"})
+    assert resp.status_code == 200
+    assert resp.get_json()["value"] == "-1"
+    resp = client.post("/api/config",
+                       json={"key": "provsql.monte_carlo_seed", "value": "42"})
+    assert resp.status_code == 200
+    assert resp.get_json()["value"] == "42"
+
+
+def test_config_monte_carlo_seed_rejects_below_minus_one(client):
+    resp = client.post("/api/config",
+                       json={"key": "provsql.monte_carlo_seed", "value": "-5"})
+    assert resp.status_code == 400
+
+
+def test_config_rv_mc_samples_round_trip(client):
+    resp = client.post("/api/config",
+                       json={"key": "provsql.rv_mc_samples", "value": " 500 "})
+    assert resp.status_code == 200
+    assert resp.get_json()["value"] == "500"
+    # 0 is meaningful (disables the MC fallback) and must be accepted.
+    resp = client.post("/api/config",
+                       json={"key": "provsql.rv_mc_samples", "value": "0"})
+    assert resp.status_code == 200
+    assert resp.get_json()["value"] == "0"
+
+
+def test_config_rv_mc_samples_rejects_negative(client):
+    resp = client.post("/api/config",
+                       json={"key": "provsql.rv_mc_samples", "value": "-1"})
+    assert resp.status_code == 400
+
+
 def test_config_post_rejects_non_panel_guc(client):
     # `provsql.where_provenance` is whitelisted overall but is owned by the
     # per-query toggle; the panel must not accept it.

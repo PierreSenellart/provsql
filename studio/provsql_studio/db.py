@@ -873,6 +873,7 @@ def evaluate_circuit(
     statement_timeout: str,
     search_path: str = "",
     tool_search_path: str = "",
+    extra_gucs: dict[str, str] | None = None,
 ) -> dict:
     """Run a compiled-semiring or probability evaluation against `token`.
     Returns `{result, kind}` ready to JSON-encode. Raises ValueError on
@@ -1040,6 +1041,21 @@ def evaluate_circuit(
             cur.execute(
                 "SELECT set_config('provsql.tool_search_path', %s, true)",
                 (tool_search_path,),
+            )
+        # Panel-managed GUCs (provsql.rv_mc_samples,
+        # provsql.monte_carlo_seed, provsql.simplify_on_load, ...) must
+        # apply here too, otherwise the evaluate-strip's probability
+        # call ignores the user's panel overrides (e.g. setting
+        # rv_mc_samples=0 to disable the MC fallback still gets MC).
+        # exec_batch already does this for batched queries; mirror it.
+        for guc_name, guc_val in (extra_gucs or {}).items():
+            if guc_name not in _PANEL_GUCS:
+                continue
+            cur.execute(
+                sql.SQL("SET LOCAL {} = {}").format(
+                    sql.Identifier(*guc_name.split(".")),
+                    sql.Literal(guc_val),
+                )
             )
         cur.execute(sql_stmt, params)
         row = cur.fetchone()
@@ -1595,6 +1611,9 @@ _TOGGLE_GUCS = {
 _PANEL_GUCS = {
     "provsql.active",
     "provsql.verbose_level",
+    "provsql.monte_carlo_seed",
+    "provsql.rv_mc_samples",
+    "provsql.simplify_on_load",
 }
 _GUC_WHITELIST = _TOGGLE_GUCS | _PANEL_GUCS
 
@@ -1644,6 +1663,31 @@ def validate_panel_guc(name: str, value: str) -> str:
         if not (0 <= n <= 100):
             raise ValueError("provsql.verbose_level must be between 0 and 100")
         return str(n)
+    if name == "provsql.monte_carlo_seed":
+        # -1 means "seed from std::random_device" per src/provsql.c; any
+        # other int (including 0) is a literal seed for the mt19937_64
+        # used by the Bernoulli and gate_rv sampling paths.
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            raise ValueError("provsql.monte_carlo_seed must be an integer (-1 for non-deterministic)")
+        if n < -1:
+            raise ValueError("provsql.monte_carlo_seed must be -1 or a non-negative integer")
+        return str(n)
+    if name == "provsql.rv_mc_samples":
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            raise ValueError("provsql.rv_mc_samples must be a non-negative integer")
+        if n < 0:
+            raise ValueError("provsql.rv_mc_samples must be non-negative (0 disables the MC fallback)")
+        return str(n)
+    if name == "provsql.simplify_on_load":
+        if v in ("on", "true", "1", "yes"):
+            return "on"
+        if v in ("off", "false", "0", "no"):
+            return "off"
+        raise ValueError("provsql.simplify_on_load must be on or off")
     raise ValueError(f"GUC not user-configurable: {name}")
 
 
