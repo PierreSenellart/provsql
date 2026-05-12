@@ -1372,6 +1372,11 @@
     const run    = document.getElementById('eval-run');
     const result = document.getElementById('eval-result');
     if (!sel || !map || !meth || !run) return;
+    // Start hidden: the strip only makes sense once a circuit is
+    // rendered.  refreshEvalTarget toggles it visible/hidden on every
+    // scene change.
+    const strip = document.getElementById('eval-strip');
+    if (strip) strip.hidden = true;
     syncCompiledSemiringAvailability();
 
     // Includes the per-probability-method controls, the bins input for
@@ -1806,7 +1811,15 @@
   }
 
   function refreshEvalTarget() {
-    const tgt = document.getElementById('eval-target');
+    const tgt   = document.getElementById('eval-target');
+    const strip = document.getElementById('eval-strip');
+    // Hide the whole strip when there is no scene (initial load,
+    // post-error, post-clearScene).  Evaluating against nothing is
+    // meaningless and the strip's controls take ~50px of vertical
+    // space the user can reclaim for the SVG canvas.  The strip
+    // re-appears on the next successful renderCircuit (which calls
+    // back into refreshEvalTarget).
+    if (strip) strip.hidden = !state.scene;
     // Re-run the semiring dropdown filter whenever the target changes
     // (pin / clear pin / scene reload): the new target may have a
     // different gate type, which flips the menu between the scalar

@@ -90,6 +90,12 @@ body.mode-circuit #sidebar-body .cv-eval {
   border-top: 1px dashed var(--border-soft);
   padding-top: 0.6rem;
 }
+/* The [hidden] attribute default rule loses on specificity to the
+   selector above, so the JS toggle in refreshEvalTarget would
+   otherwise have no visual effect.  Restore the expected hide. */
+body.mode-circuit #sidebar-body .cv-eval[hidden] {
+  display: none;
+}
 body.mode-circuit #sidebar-body .cv-eval__hdr {
   display: flex; align-items: baseline; gap: 0.6rem;
 }
