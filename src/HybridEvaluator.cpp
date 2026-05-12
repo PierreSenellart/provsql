@@ -604,8 +604,14 @@ bool try_categorical_mixture_lift(GenericCircuit &gc, gate_t g,
 
   /* Build the new wire list: same key (preserves correlation with the
    * original categorical) and one fresh mulinput per outcome with the
-   * transformed value text. */
-  const auto &mw = gc.getWires(mix_gate);
+   * transformed value text.  Snapshot the mixture's wires by value:
+   * @c addAnonymousMulinputGateWithValue below calls @c addGate, which
+   * does @c wires.push_back({}) on the circuit's outer wire vector,
+   * and that can reallocate -- invalidating any reference returned by
+   * @c getWires.  Reads of the reference after the first iteration
+   * then return garbage gate ids, which surfaces either as wrong
+   * outcome values or as a backend crash. */
+  const std::vector<gate_t> mw = gc.getWires(mix_gate);
   const gate_t key = mw[0];
   std::vector<gate_t> new_wires;
   new_wires.reserve(mw.size());
