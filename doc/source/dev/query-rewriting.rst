@@ -164,7 +164,8 @@ After aggregation rewriting:
   ``WHERE`` comparisons on ``random_variable`` columns into the
   per-tuple provenance), because aggregate-typed and continuous-RV
   values both need post-classification routing the executor cannot
-  do directly.
+  do directly. See *Probabilistic-qual classifier* below for the
+  routing matrix.
 
 - :cfunc:`insert_agg_token_casts` inserts type casts for
   :cfunc:`agg_token` values used in arithmetic or window functions.
@@ -329,3 +330,54 @@ rewritten query against the composite database.  This is the
 formal analogue of the "the rewritten query produces the same
 provenance as the annotated semantics" correctness statement
 from the ICDE paper, for the partial fragment proved.
+
+Probabilistic-Qual Classifier
+-----------------------------
+
+The single walker :cfunc:`migrate_probabilistic_quals` covers both
+the historical *agg_token* HAVING surface and the *random_variable*
+WHERE/JOIN surface introduced by the continuous-distribution work.
+It routes every qual into one of four mutually-exclusive classes
+(the ``qual_class`` enum), plus a short tail of *mixed-error*
+classes that raise a clean diagnostic rather than producing a
+malformed circuit:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - ``qual_class``
+     - Routing
+   * - ``QUAL_PURE_AGG``
+     - The qual is built only from :cfunc:`agg_token` comparators
+       (HAVING on aggregate results). Moved into the HAVING list
+       so :cfunc:`having_Expr_to_provenance_cmp` builds the
+       corresponding ``gate_cmp`` over ``gate_agg``
+       children.
+   * - ``QUAL_PURE_RV``
+     - The qual is built only from ``random_variable``
+       comparators. Each comparator is rewritten into a
+       ``gate_cmp`` whose UUID is conjoined into the row's
+       provenance via ``provenance_times``; the
+       original ``OpExpr`` is dropped from the WHERE clause so the
+       executor never reaches the placeholder procedure that would
+       raise.
+   * - ``QUAL_DETERMINISTIC``
+     - Ordinary SQL, left untouched.
+   * - Mixed-error classes
+     - Quals that conjoin a probabilistic comparator with another
+       in the same node, or that compare an RV against an
+       agg_token, raise a structured error so users see the
+       offending shape rather than a downstream evaluation
+       failure.
+
+For ``QUAL_PURE_RV``, the planner-hook path also covers the
+corner case of ``WHERE rv > 2`` on a FROM-less ``SELECT``: there
+is no row provenance to conjoin into, so the rewriter synthesises
+a single-row FROM-less host so :sqlfunc:`probability_evaluate`
+reads a well-formed circuit. The dispatch in
+:cfunc:`make_aggregation_expression` keys on the aggregate's
+result type (``OID_TYPE_RANDOM_VARIABLE`` vs
+``OID_TYPE_AGG_TOKEN``) so the same path covers any future
+RV-returning aggregate. See :doc:`continuous-distributions` for
+the broader architecture.

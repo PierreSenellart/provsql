@@ -250,6 +250,41 @@ lists the operators currently implemented in |cpp|: ``COUNT``
 to this list is the topic of the next section.
 
 
+Random-Variable Aggregates
+--------------------------
+
+When the aggregated column has type ``random_variable``
+(see :doc:`continuous-distributions`), the rewriter routes
+through a separate path: instead of producing a
+``provenance_aggregate`` call that wraps the original
+``Aggref`` in an :cfunc:`agg_token`, it produces an aggregate
+that *returns* a ``random_variable`` root. The aggregate's
+result is the lifted scalar :math:`\sum_i \mathbf{1}\{\varphi_i\}
+\cdot X_i` (or its product / average analogue), realised as a
+single ``gate_arith`` over per-row ``gate_mixture``
+children.
+
+The dispatch in :cfunc:`make_aggregation_expression` keys on
+``aggtype`` (the aggregate's *result type* OID): when
+``aggtype = OID_TYPE_RANDOM_VARIABLE``, the per-row argument
+``X_i`` is wrapped in ``rv_aggregate_semimod``
+(a :sqlfunc:`mixture` over the row's provenance gate and
+the identity for the aggregate) *before* it reaches the SFUNC.
+The aggregate's SFUNC accumulates the wrapped per-row UUIDs;
+the FFUNC builds the final ``gate_arith`` root. The three
+RV-returning aggregates currently shipped –
+:sqlfunc:`sum`, :sqlfunc:`avg`,
+:sqlfunc:`product` – share an
+``INITCOND = '{}'`` so the FFUNC runs even on an empty group,
+with per-aggregate empty-group identities.
+
+This is the *semimodule-of-mixtures* shape: rather than minting a
+new M-polymorphic ``gate_agg`` that would require parallel
+evaluation paths in every analytical evaluator, the rewrite
+composes through the existing ``gate_arith`` /
+``gate_mixture`` rules. See
+:doc:`continuous-distributions` for the FFUNC details.
+
 Step-by-Step: Adding a New Aggregate
 ------------------------------------
 

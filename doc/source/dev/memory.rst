@@ -131,6 +131,31 @@ The constructor validates all three fields on open and throws if they
 do not match, catching type mismatches and incompatible recompilations
 early.
 
+Gate-Type ABI
+^^^^^^^^^^^^^
+
+The :cfunc:`gate_type` enum in :cfile:`provsql_utils.h` is
+persisted: each :cfunc:`GateInformation` record's ``type`` field
+stores the numeric enum value, not the name. The enum is
+therefore **append-only**: new gate types must be added before
+the ``gate_invalid`` sentinel without renumbering existing
+values, and pre-existing files must remain readable by a
+recompiled extension.
+
+The companion ``provsql_arith_op`` enum (used in ``info1`` of
+every ``gate_arith`` gate to identify the operator) follows
+the same rule: ``PLUS = 0``, ``TIMES = 1``, ``MINUS = 2``,
+``DIV = 3``, ``NEG = 4`` are persisted on disk and must not be
+reordered.
+
+The float8 mode of ``gate_value`` introduced for the
+continuous-distribution surface does not require a format
+version bump: the ``extra`` blob is text, the integer-mode and
+float8-mode parsers (``extract_constant_C`` and
+``extract_constant_double``) both consume that same text
+representation, and the choice of parser is made by the consumer
+at evaluation time based on the gate's surrounding context.
+
 :cfunc:`MMappedVector` (:cfile:`MMappedVector.h` /
 :cfile:`MMappedVector.hpp`) provides a ``std::vector``-like interface
 over an mmap region, supporting ``push_back``, random access, and

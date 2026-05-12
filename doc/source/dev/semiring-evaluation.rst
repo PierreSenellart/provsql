@@ -282,6 +282,37 @@ function), the call chain is:
    post-order DAG traversal applying semiring operations at each gate.
 
 
+The Expectation Semiring
+------------------------
+
+The continuous-distribution surface registers a dedicated compiled
+semiring under the name ``"expectation"`` (carrier ``double``) in
+the FLOAT block of :cfunc:`provenance_evaluate_compiled_internal`.
+:sqlfunc:`expected` over a ``random_variable`` and the
+``rv_moment`` C entry point both reach this semiring; the
+class implementation lives in :cfile:`Expectation.cpp`.
+
+Expectation differs from the other compiled semirings in that
+``plus`` / ``times`` are not always closed under the carrier:
+
+- ``plus`` over independent operands returns the sum of
+  expectations (always valid by linearity);
+- ``times`` over operands with disjoint *footprints* (the set of
+  base ``gate_rv`` leaves reachable from each operand)
+  returns the product of expectations; over operands sharing a
+  footprint, the closed form is unknown in general and the
+  semiring falls back to a Monte Carlo estimate of the joint
+  expectation through ``MonteCarloSampler``.
+
+The footprint check is memoised per evaluation via a
+``FootprintCache`` so the structural-independence test runs
+in amortised linear time. The MC budget is the
+``provsql.rv_mc_samples`` GUC; setting it to ``0`` turns the
+fallback into an exception so callers that need analytical
+answers detect silent fallbacks.
+
+See :doc:`continuous-distributions` for the full algorithm.
+
 Symbolic Representation Semirings
 ---------------------------------
 
