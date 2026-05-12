@@ -167,10 +167,28 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
     }
     case gate_mixture: {
       /* Support of a mixture is the union of its branch supports.
-       * Wires: [p_token, x_token, y_token] -- the Bernoulli is a
-       * Boolean leaf and contributes nothing to the scalar interval. */
+       * Two shapes:
+       *  - Classic 3-wire [p_token, x_token, y_token]: the Bernoulli
+       *    is a Boolean leaf and contributes nothing to the scalar
+       *    interval.
+       *  - Categorical N-wire [key, mul_1, ..., mul_n]: each mulinput
+       *    carries its outcome value in extra; the support is the
+       *    [min, max] of those values. */
       const auto &wires = gc.getWires(g);
-      if (wires.size() == 3) {
+      if (gc.isCategoricalMixture(g)) {
+        double lo = std::numeric_limits<double>::infinity();
+        double hi = -std::numeric_limits<double>::infinity();
+        bool any = false;
+        for (std::size_t i = 1; i < wires.size(); ++i) {
+          double v;
+          try { v = parseDoubleStrict(gc.getExtra(wires[i])); }
+          catch (const CircuitException &) { any = false; break; }
+          lo = std::min(lo, v);
+          hi = std::max(hi, v);
+          any = true;
+        }
+        if (any) result = {lo, hi};
+      } else if (wires.size() == 3) {
         Interval ix = intervalOf(gc, wires[1], cache);
         Interval iy = intervalOf(gc, wires[2], cache);
         result = {std::min(ix.lo, iy.lo), std::max(ix.hi, iy.hi)};

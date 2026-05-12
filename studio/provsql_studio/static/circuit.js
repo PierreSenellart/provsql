@@ -27,7 +27,7 @@
     update:   'Update gate (υ): INSERT / UPDATE / DELETE',
     rv:       'Random variable: continuous distribution leaf',
     arith:    'Arithmetic gate: scalar operation over child gates',
-    mixture:  'Mixture (Mix): Bernoulli-weighted choice between two scalar RV branches',
+    mixture:  'Mixture (Mix): Bernoulli-weighted choice between two scalar RV branches, or a categorical block (key + N mulinput outcomes)',
   };
 
   // gate_arith info1 holds a PROVSQL_ARITH_* tag (src/provsql_utils.h).
@@ -76,9 +76,23 @@
   // gates whose wires have well-known names.  Falls back to the bare
   // digit (1, 2, 3, …) for any entry not in the map.  mixture(p, x, y)
   // mirrors the SQL constructor's parameter names so the rendered edge
-  // labels match the user-facing API.
+  // labels match the user-facing API.  Entries may also be functions
+  // (parent_node, child_pos) → string for shape-dependent labels: the
+  // categorical-form gate_mixture has wires [key, mul_1, ..., mul_n]
+  // and labels them accordingly when more than three wires are present.
+  function _mixtureEdgeLabel(parent, child_pos) {
+    const nbChildren = (state.scene && state.scene.edges)
+      ? state.scene.edges.filter(e => e.from === parent.id).length
+      : 0;
+    if (nbChildren > 3) {
+      // Categorical-form mixture: [key, mul_1, ..., mul_n].
+      return child_pos === 1 ? 'key' : String(child_pos - 1);
+    }
+    // Classic 3-wire mixture: [p, x, y].
+    return ({ 1: 'p', 2: 'x', 3: 'y' })[child_pos] ?? String(child_pos);
+  }
   const EDGE_POS_LABEL = {
-    mixture: { 1: 'p', 2: 'x', 3: 'y' },
+    mixture: _mixtureEdgeLabel,
   };
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   // = and <> are commutative; lhs/rhs digits add noise for those cmp
@@ -598,9 +612,13 @@
           'text-anchor': 'middle', 'dominant-baseline': 'central',
         });
         const labelMap = EDGE_POS_LABEL[from.type];
-        tag.textContent = (labelMap && labelMap[e.child_pos] != null)
-          ? labelMap[e.child_pos]
-          : String(e.child_pos);
+        if (typeof labelMap === 'function') {
+          tag.textContent = labelMap(from, e.child_pos);
+        } else if (labelMap && labelMap[e.child_pos] != null) {
+          tag.textContent = labelMap[e.child_pos];
+        } else {
+          tag.textContent = String(e.child_pos);
+        }
         edgeLayer.appendChild(tag);
       }
     }
@@ -2009,8 +2027,13 @@
       if (node.info1 != null) out.push({ label: 'left attr',  value: node.info1 });
       if (node.info2 != null) out.push({ label: 'right attr', value: node.info2 });
     } else if (t === 'mulinput') {
-      // info1 = the multivalued variable's value.
-      if (node.info1 != null) out.push({ label: 'value', value: node.info1 });
+      // info1 = the multivalued variable's ordinal within its block;
+      // extra (when present) is the outcome value for the categorical
+      // mixture form (key + mulinput-per-outcome).  Show both so the
+      // categorical mulinput's payload is visible alongside the
+      // repair_key-style ordinal.
+      if (node.info1 != null) out.push({ label: 'ordinal', value: node.info1 });
+      if (node.extra) out.push({ label: 'value', value: node.extra });
     } else if (t === 'input' || t === 'update') {
       // info1 = source relation id (already shown as `tbl X` under the
       // node), info2 = column count. Surface column count here so the

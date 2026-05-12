@@ -68,6 +68,20 @@ double compute_raw_moment(const GenericCircuit &gc, gate_t root, unsigned k);
  */
 double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k);
 
+/**
+ * @brief Probability that the Boolean subcircuit rooted at @p boolRoot
+ *        evaluates to @c true under the tuple-independent
+ *        probabilistic-database model.
+ *
+ * Tries @c BooleanCircuit::independentEvaluation first; if that throws
+ * (e.g. the subcircuit is not disconnected for that method), falls
+ * back to Monte Carlo with @c provsql.rv_mc_samples samples.  Used by
+ * the mixture moment evaluators for compound Boolean Bernoulli wires
+ * and by the Dirac-mixture-collapse simplifier for path-product
+ * weights.
+ */
+double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_EXPECTATION_H

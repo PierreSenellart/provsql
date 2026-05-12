@@ -94,6 +94,13 @@ def _gate_label(row: dict) -> str:
         return _truncate(_CMP_GLYPH.get(row["info1_name"], row["info1_name"]))
     if t == "value" and row.get("extra"):
         return row["extra"]
+    if t == "mulinput" and row.get("extra"):
+        # Categorical mixture's mulinputs carry the outcome value in
+        # extra (vs repair_key's mulinputs which leave it empty and
+        # encode the value-index in info1).  Render the outcome value
+        # inline so the categorical block's payload is visible at a
+        # glance, mirroring gate_value's treatment.
+        return _truncate(row["extra"])
     if t == "rv" and row.get("extra"):
         return _format_rv_label(row["extra"])
     if t == "arith":
@@ -293,10 +300,11 @@ def _fetch_subgraph(
         # the jsonb (the simplifier may introduce extras not visible
         # in the persisted store), so we read it from there rather
         # than calling get_extra (which would hit the mmap).  `prob`
-        # is fetched per-node via provsql.get_prob: gate_input gates
-        # whose probability has been pinned away from 1.0 (the default)
-        # render the probability inline as a percentage in
-        # _gate_label rather than the generic ι glyph.
+        # is also inlined (for gate_input / gate_mulinput) so consumers
+        # don't need a separate provsql.get_prob round-trip -- and
+        # crucially, that round-trip would fail on the synthetic
+        # "dec-in-N" / "dec-mul-N" UUIDs the hybrid simplifier mints
+        # for anonymous-key categorical blocks and joint-table inlinings.
         sql = (
             "WITH src AS ("
             "  SELECT (e->>'node')        AS node,"
@@ -306,6 +314,7 @@ def _fetch_subgraph(
             "         (e->>'info1')       AS info1,"
             "         (e->>'info2')       AS info2,"
             "         (e->>'extra')       AS extra,"
+            "         (e->>'prob')::float8 AS prob,"
             "         (e->>'depth')::int  AS depth"
             "  FROM jsonb_array_elements("
             "         provsql.simplified_circuit_subgraph(%s::uuid, %s::int)) AS e"
@@ -320,7 +329,7 @@ def _fetch_subgraph(
             "       CASE WHEN cs.gate_type = 'agg' THEN"
             "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int)"
             "            ELSE NULL END AS info2_name,"
-            "       provsql.get_prob(cs.node::uuid)::float8 AS prob,"
+            "       cs.prob,"
             "       cs.depth "
             "FROM src cs"
         )

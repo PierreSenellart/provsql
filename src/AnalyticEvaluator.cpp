@@ -146,6 +146,42 @@ bareRv(const GenericCircuit &gc, gate_t g)
   return parse_distribution_spec(gc.getExtra(g));
 }
 
+/* Closed-form P(X cmp c) for a categorical-form gate_mixture X.  X's
+ * wires are [key, mul_1, ..., mul_n]; each mul_i carries its
+ * probability in set_prob and its outcome value in extra (parsed as
+ * float8).  The probability is just the sum of π_i over mulinputs
+ * whose value satisfies the predicate.
+ *
+ * EQ / NE are exact too in this setting (X = c iff some outcome equals
+ * c with positive mass): the RangeCheck pre-pass treats EQ / NE over
+ * continuous RVs as P=0 / P=1, but a categorical is discrete so we
+ * decide them here.  Returns NaN if any mulinput's extra fails to
+ * parse as a finite float8 -- the cmp then falls through to MC. */
+double categoricalDecide(const GenericCircuit &gc, gate_t mix,
+                         ComparisonOperator op, double c)
+{
+  const auto &wires = gc.getWires(mix);
+  double p = 0.0;
+  for (std::size_t i = 1; i < wires.size(); ++i) {
+    double v;
+    try { v = parseDoubleStrict(gc.getExtra(wires[i])); }
+    catch (const CircuitException &) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    bool hit = false;
+    switch (op) {
+      case ComparisonOperator::LT: hit = v <  c; break;
+      case ComparisonOperator::LE: hit = v <= c; break;
+      case ComparisonOperator::GT: hit = v >  c; break;
+      case ComparisonOperator::GE: hit = v >= c; break;
+      case ComparisonOperator::EQ: hit = v == c; break;
+      case ComparisonOperator::NE: hit = v != c; break;
+    }
+    if (hit) p += gc.getProb(wires[i]);
+  }
+  return p;
+}
+
 /**
  * @brief Try to decide @p cmp_gate via a closed-form CDF.
  *
@@ -178,6 +214,19 @@ double tryAnalyticDecide(const GenericCircuit &gc, gate_t cmp_gate)
   if (auto specX = bareRv(gc, rhs)) {
     double c = bareValue(gc, lhs);
     if (!std::isnan(c)) return cdfDecide(*specX, flipCmpOp(op), c);
+  }
+
+  /* Categorical mixture cmp constant: exact sum of mass over the
+   * mulinputs whose value satisfies the predicate.  EQ / NE are
+   * meaningful on a discrete distribution and decided here rather
+   * than the continuous-default route RangeCheck takes. */
+  if (gc.isCategoricalMixture(lhs)) {
+    double c = bareValue(gc, rhs);
+    if (!std::isnan(c)) return categoricalDecide(gc, lhs, op, c);
+  }
+  if (gc.isCategoricalMixture(rhs)) {
+    double c = bareValue(gc, lhs);
+    if (!std::isnan(c)) return categoricalDecide(gc, rhs, flipCmpOp(op), c);
   }
 
   /* X cmp Y, both bare normal RVs.  The @c X cmp X same-UUID case

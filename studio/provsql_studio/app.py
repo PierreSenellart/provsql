@@ -515,6 +515,17 @@ def create_app(
         method    = payload.get("method") or None
         arguments = payload.get("arguments") or None
         function  = payload.get("function") or None
+        # Merge per-request GUC overrides over the panel-managed ones.
+        # The payload's extra_gucs lets tests / Studio's evaluate-strip
+        # pin per-request behaviour (e.g. seed / sample budget for a
+        # distribution-profile invocation) without mutating the
+        # session-wide panel state -- evaluate_circuit validates each
+        # key via the same _PANEL_GUCS whitelist either path uses.
+        merged_gucs = dict(app.config["RUNTIME_GUCS"])
+        payload_gucs = payload.get("extra_gucs") or {}
+        if isinstance(payload_gucs, dict):
+            for k, v in payload_gucs.items():
+                merged_gucs[k] = str(v)
         try:
             data = db.evaluate_circuit(
                 get_pool(),
@@ -527,7 +538,7 @@ def create_app(
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
                 search_path=app.config.get("SEARCH_PATH", ""),
                 tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
-                extra_gucs=app.config["RUNTIME_GUCS"],
+                extra_gucs=merged_gucs,
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -645,9 +656,10 @@ def create_app(
         db.save_persisted_gucs(app.config["RUNTIME_GUCS"])
         # The layout cache is keyed on (root, depth) only; any panel
         # GUC that changes what the C function returns (notably
-        # provsql.simplify_on_load) must invalidate cached scenes so
-        # the next /api/circuit fetches the fresh shape.
-        if name == "provsql.simplify_on_load":
+        # provsql.simplify_on_load, provsql.hybrid_evaluation) must
+        # invalidate cached scenes so the next /api/circuit fetches
+        # the fresh shape.
+        if name in ("provsql.simplify_on_load", "provsql.hybrid_evaluation"):
             layout_cache.clear()
         return jsonify({"ok": True, "key": name, "value": canonical})
 

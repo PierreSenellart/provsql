@@ -1,0 +1,28 @@
+\set ECHO none
+root_kind|nb_children|wire0_kind|wire1_kind|wire2_kind
+mixture|3|input|mulinput|mulinput
+(1 row)
+mul1_key_matches|mul2_key_matches
+t|t
+(1 row)
+mul1_prob|mul2_prob|mul1_value|mul2_value
+t|t|0|10
+(1 row)
+cat_mean|cat_variance
+t|t
+(1 row)
+cat_gt_analytic
+t
+(1 row)
+cat_eq_analytic
+t
+(1 row)
+cat_zero_nb_mulinputs
+2
+(1 row)
+ERROR:  provsql.categorical: probs and outcomes must have the same length (got 2 and 3)
+ERROR:  provsql.categorical: probs must sum to 1 within 1e-9 (got 0.8)
+ERROR:  provsql.categorical: probs[1] must be in [0,1] (got 1.5)
+ERROR:  provsql.categorical: outcomes[2] must be finite (got NaN)
+ERROR:  provsql.categorical: outcomes[2] must be finite (got Infinity)
+ERROR:  provsql.categorical: probs must be non-empty

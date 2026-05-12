@@ -1807,6 +1807,111 @@ END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /**
+ * @brief Categorical-RV constructor over explicit (probabilities,
+ *        values) arrays.
+ *
+ * Builds the same structural representation the Dirac-mixture-collapse
+ * simplifier lowers nested @c mixture(p_value, value, value) cascades
+ * into: a fresh @c gate_input "key" anchor and one @c gate_mulinput per
+ * outcome with positive mass, all sharing the key.  Wraps the block in
+ * a categorical-form @c gate_mixture (wires
+ * <tt>[key, mul_1, ..., mul_n]</tt>) so downstream evaluators
+ * (@c Expectation, @c MonteCarloSampler, @c AnalyticEvaluator,
+ * @c RangeCheck) treat the result as a scalar RV with the categorical
+ * distribution @p probs over @p outcomes.
+ *
+ * Validation:
+ * - @p probs and @p outcomes must be non-null, same length, length &ge; 1.
+ * - Each @c probs[i] must be finite, in <tt>[0, 1]</tt>, and the array
+ *   must sum to 1 within @c 1e-9.
+ * - Each @c outcomes[i] must be finite.
+ *
+ * Each call mints a fresh key gate and a fresh set of mulinputs, so
+ * two calls to @c categorical with the same arrays are *independent*
+ * categorical RVs.  The marking is @c VOLATILE accordingly.
+ *
+ * @sa @c mixture for the Bernoulli-weighted choice constructor; nested
+ *     calls of the Dirac @c mixture form collapse to this same
+ *     structural representation during @c probability_evaluate.
+ */
+CREATE OR REPLACE FUNCTION categorical(
+  probs    double precision[],
+  outcomes double precision[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  p_sum double precision := 0.0;
+  i integer;
+  key_token uuid;
+  mix_token uuid;
+  mul_token uuid;
+  mul_tokens uuid[] := ARRAY[]::uuid[];
+  mix_wires  uuid[];
+  pi_i double precision;
+  vi_i double precision;
+BEGIN
+  IF probs IS NULL OR outcomes IS NULL THEN
+    RAISE EXCEPTION 'provsql.categorical: probs and outcomes must be non-null';
+  END IF;
+  n := array_length(probs, 1);
+  IF n IS NULL OR n < 1 THEN
+    RAISE EXCEPTION 'provsql.categorical: probs must be non-empty';
+  END IF;
+  IF array_length(outcomes, 1) <> n THEN
+    RAISE EXCEPTION 'provsql.categorical: probs and outcomes must have the same length (got % and %)',
+      n, array_length(outcomes, 1);
+  END IF;
+
+  FOR i IN 1..n LOOP
+    pi_i := probs[i];
+    vi_i := outcomes[i];
+    -- PostgreSQL diverges from IEEE 754: NaN = NaN is TRUE there, so
+    -- the canonical x <> x NaN test doesn't fire.  Compare against the
+    -- literal 'NaN'::float8 instead, and reject ±Infinity for outcomes
+    -- explicitly.
+    IF pi_i IS NULL OR pi_i = 'NaN'::float8 OR pi_i < 0 OR pi_i > 1 THEN
+      RAISE EXCEPTION 'provsql.categorical: probs[%] must be in [0,1] (got %)', i, pi_i;
+    END IF;
+    IF vi_i IS NULL OR vi_i = 'NaN'::float8
+       OR vi_i = 'Infinity'::float8 OR vi_i = '-Infinity'::float8 THEN
+      RAISE EXCEPTION 'provsql.categorical: outcomes[%] must be finite (got %)', i, vi_i;
+    END IF;
+    p_sum := p_sum + pi_i;
+  END LOOP;
+  IF abs(p_sum - 1.0) > 1e-9 THEN
+    RAISE EXCEPTION 'provsql.categorical: probs must sum to 1 within 1e-9 (got %)', p_sum;
+  END IF;
+
+  -- Mint the block's key anchor.  Probability 1.0 matches the
+  -- joint-table / Dirac-collapse convention: the categorical mass lives
+  -- on the mulinputs, the key just identifies the block.
+  key_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(key_token, 'input');
+  PERFORM provsql.set_prob(key_token, 1.0);
+
+  -- One mulinput per positive-probability outcome.  Zero-probability
+  -- entries contribute no mass and are skipped: the gate_mixture's
+  -- wire vector is otherwise polluted with no-op leaves.
+  FOR i IN 1..n LOOP
+    pi_i := probs[i];
+    IF pi_i <= 0.0 THEN CONTINUE; END IF;
+    mul_token := public.uuid_generate_v4();
+    PERFORM provsql.create_gate(mul_token, 'mulinput', ARRAY[key_token]);
+    PERFORM provsql.set_prob(mul_token, pi_i);
+    PERFORM provsql.set_infos(mul_token, (i - 1));
+    PERFORM provsql.set_extra(mul_token, outcomes[i]::text);
+    mul_tokens := mul_tokens || mul_token;
+  END LOOP;
+
+  mix_wires := ARRAY[key_token] || mul_tokens;
+  mix_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(mix_token, 'mixture', mix_wires);
+  RETURN provsql.random_variable_make(mix_token, 'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
  * @brief Lift a deterministic constant into a random_variable
  *
  * Creates a <tt>gate_value</tt> carrying the constant's text form so

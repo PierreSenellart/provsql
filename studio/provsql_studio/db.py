@@ -1715,6 +1715,7 @@ _PANEL_GUCS = {
     "provsql.monte_carlo_seed",
     "provsql.rv_mc_samples",
     "provsql.simplify_on_load",
+    "provsql.hybrid_evaluation",
 }
 _GUC_WHITELIST = _TOGGLE_GUCS | _PANEL_GUCS
 
@@ -1783,12 +1784,12 @@ def validate_panel_guc(name: str, value: str) -> str:
         if n < 0:
             raise ValueError("provsql.rv_mc_samples must be non-negative (0 disables the MC fallback)")
         return str(n)
-    if name == "provsql.simplify_on_load":
+    if name in ("provsql.simplify_on_load", "provsql.hybrid_evaluation"):
         if v in ("on", "true", "1", "yes"):
             return "on"
         if v in ("off", "false", "0", "no"):
             return "off"
-        raise ValueError("provsql.simplify_on_load must be on or off")
+        raise ValueError(f"{name} must be on or off")
     raise ValueError(f"GUC not user-configurable: {name}")
 
 

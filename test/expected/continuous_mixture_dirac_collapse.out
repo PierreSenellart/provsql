@@ -1,0 +1,22 @@
+\set ECHO none
+bimodal_nb_mulinputs
+2
+(1 row)
+prob_for_value_0_matches|prob_for_value_10_matches
+t|t
+(1 row)
+cascade_nb_mulinputs
+3
+(1 row)
+cascade_prob_0|cascade_prob_1|cascade_prob_2
+t|t|t
+(1 row)
+analytic_cmp_categorical
+t
+(1 row)
+mixed_nb_mulinputs|mixed_nb_mixtures
+0|1
+(1 row)
+bimodal_mean|bimodal_variance
+t|t
+(1 row)

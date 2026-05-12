@@ -1005,7 +1005,7 @@ def test_evaluate_distribution_profile_mixture_root(client):
 
     # And the circuit subgraph for this mixture has gate_type == 'mixture'
     # with three child edges, the first being a gate_input.
-    circ = client.post("/api/circuit", json={"root": tok, "depth": 1})
+    circ = client.get(f"/api/circuit/{tok}?depth=1")
     assert circ.status_code == 200, circ.data
     scene = circ.get_json()
     root_node = next(n for n in scene["nodes"] if n["id"] == tok)
@@ -1016,4 +1016,3 @@ def test_evaluate_distribution_profile_mixture_root(client):
     children.sort(key=lambda e: e["child_pos"])
     wire0_node = next(n for n in scene["nodes"] if n["id"] == children[0]["to"])
     assert wire0_node["type"] == "input", wire0_node
-        assert "bins" in resp.get_json()["error"].lower()

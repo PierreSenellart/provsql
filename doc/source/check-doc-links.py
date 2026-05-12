@@ -105,11 +105,18 @@ INTERNAL_FUNCTIONS = {
     'random_variable_uuid', 'random_variable_value',
     'random_variable_make',
     'is_finite_float8',
-    # User-facing constructors for continuous random variables.
-    # Promote to _SQL_FUNC_MAP once the continuous-distributions
-    # chapter of the user manual is written and references them via
-    # :sqlfunc:.
+    # User-facing constructors for continuous random variables and
+    # discrete categoricals.  Promote to _SQL_FUNC_MAP once the
+    # continuous-distributions chapter of the user manual is written
+    # and references them via :sqlfunc:.
     'normal', 'uniform', 'exponential', 'erlang', 'as_random',
+    'mixture', 'categorical',
+    # Continuous-distributions GUC variables (introspected by Doxygen
+    # through the SQL `SET` / `RESET` documentation pages) and the
+    # introspection helpers added alongside the simplifier.
+    'monte_carlo_seed', 'rv_mc_samples', 'simplify_on_load',
+    'hybrid_evaluation',
+    'simplified_circuit_subgraph', 'rv_histogram',
     # random_variable arithmetic and comparison operator implementations
     # (invoked through the SQL operators + - * / < <= = <> >= >, not
     # called by name; promote alongside the constructors when the

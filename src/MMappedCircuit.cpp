@@ -445,7 +445,7 @@ GenericCircuit MMappedCircuit::createGenericCircuit(pg_uuid_t token) const
     }
 
     if(type==gate_project || type==gate_value || type==gate_agg
-       || type==gate_rv) {
+       || type==gate_rv || type==gate_mulinput) {
       auto extra = getExtra(uuid);
       result.setExtra(id, extra);
     }

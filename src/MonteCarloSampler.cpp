@@ -223,12 +223,41 @@ double Sampler::evalScalar(gate_t g)
     }
     case gate_mixture:
     {
-      // Wires: [p_token (gate_input Bernoulli), x_token, y_token].
-      // Draw the Bernoulli via evalBool -- which already handles
-      // gate_input by sampling uniform(0,1) < get_prob and memoises
-      // the result on bool_cache_ for this iteration.  Two mixtures
-      // sharing the same p_token therefore see the same draw, and
-      // any unrelated Boolean parent of p_token also stays in sync.
+      // Two shapes of gate_mixture share this case:
+      //
+      //  - Classic 3-wire:  [p_token, x_token, y_token].  Draw the
+      //    Bernoulli via evalBool, which handles gate_input by
+      //    sampling uniform(0,1) < get_prob and memoises on
+      //    bool_cache_; two mixtures sharing the same p_token
+      //    therefore see the same draw, and any unrelated Boolean
+      //    parent of p_token stays in sync.
+      //
+      //  - Categorical N-wire: [key, mul_1, ..., mul_n].  Dirac-only
+      //    mixture cascades collapse into this shape via the
+      //    hybrid-simplifier Dirac-collapse pass.  Each mul_i carries
+      //    its probability in set_prob and its outcome value in extra.
+      //    We draw a single uniform[0,1) per block, walk the
+      //    cumulative probabilities to pick a mulinput, and stash the
+      //    Boolean truth values into bool_cache_ so any downstream
+      //    Boolean consumer of the mulinputs (independentEvaluation,
+      //    OR/AND parents) sees a consistent sampled outcome.
+      if(gc_.isCategoricalMixture(g)) {
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        const double r = u(rng_);
+        double cum = 0.0;
+        // Default to the last mulinput in case floating-point cumulative
+        // sums leave us shy of 1.0 by a few ULPs.
+        std::size_t chosen = wires.size() - 1;
+        for(std::size_t i = 1; i < wires.size(); ++i) {
+          cum += gc_.getProb(wires[i]);
+          if(r < cum) { chosen = i; break; }
+        }
+        for(std::size_t i = 1; i < wires.size(); ++i) {
+          bool_cache_[wires[i]] = (i == chosen);
+        }
+        result = parseDoubleStrict(gc_.getExtra(wires[chosen]));
+        break;
+      }
       if(wires.size() != 3)
         throw CircuitException(
                 "gate_mixture must have exactly three children "

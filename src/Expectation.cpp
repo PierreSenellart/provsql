@@ -31,19 +31,6 @@ PG_FUNCTION_INFO_V1(rv_moment);
 
 namespace provsql {
 
-namespace {
-
-using RvSet = std::set<gate_t>;
-
-/// Probability that a Boolean subcircuit rooted at @p boolRoot
-/// evaluates to true under the tuple-independent probabilistic-database
-/// model.  Used for the @c gate_mixture branch when the Bernoulli wire
-/// is a compound Boolean gate (not a bare @c gate_input): the closed
-/// form @c π·E[X] + (1−π)·E[Y] applies as long as π is well-defined,
-/// and π for an arbitrary Boolean DAG is what
-/// @c probability_evaluate(..., 'independent', …) already computes.
-/// Falls back to Monte Carlo (under @c provsql.rv_mc_samples) when the
-/// independent evaluator rejects the subcircuit as not-disconnected.
 double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot)
 {
   BooleanCircuit c;
@@ -67,7 +54,7 @@ double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot)
   } catch (CircuitException &) {
     if (provsql_rv_mc_samples <= 0) {
       throw CircuitException(
-        "mixture: compound Boolean p could not be evaluated "
+        "evaluateBooleanProbability: subcircuit could not be evaluated "
         "independently and provsql.rv_mc_samples = 0 disables the "
         "Monte Carlo fallback");
     }
@@ -76,6 +63,10 @@ double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot)
                         static_cast<unsigned>(provsql_rv_mc_samples));
   }
 }
+
+namespace {
+
+using RvSet = std::set<gate_t>;
 
 /// Mixing weight π = P(p = true) for a mixture's Bernoulli wire.
 /// For a bare @c gate_input, the probability is the leaf's pinned
@@ -112,17 +103,25 @@ public:
         s.insert(cs.begin(), cs.end());
       }
     } else if (type == gate_mixture) {
-      // Footprint = footprint(p) ∪ footprint(x) ∪ footprint(y).  The
-      // Boolean wire is included as a discrete random source so that
-      // two mixtures whose p's share an atom are correctly recognised
-      // as dependent (their branch selection is correlated), bypassing
-      // the closed-form independence shortcut and routing through MC
-      // -- the only sound path when the branches' selection is
-      // correlated.  Recursing into wires[0] (rather than inserting
-      // its gate_t directly) is what generalises that recognition
-      // from bare-input Bernoullis to compound Boolean wires.
       const auto &wires = gc_.getWires(g);
-      if (wires.size() == 3) {
+      if (gc_.isCategoricalMixture(g)) {
+        // Categorical-form mixture.  Footprint = union of the
+        // mulinputs' footprints (each contributes {self, key} via the
+        // mulinput branch below), so two categoricals sharing a key
+        // overlap on it and are correctly flagged dependent.
+        for (std::size_t i = 1; i < wires.size(); ++i) {
+          const auto &fm = of(wires[i]);
+          s.insert(fm.begin(), fm.end());
+        }
+      } else if (wires.size() == 3) {
+        // Classic 3-wire mixture.  Footprint = footprint(p) ∪
+        // footprint(x) ∪ footprint(y).  The Boolean wire is included
+        // as a discrete random source so two mixtures whose p's share
+        // an atom are correctly recognised as dependent (their branch
+        // selection is correlated), bypassing the closed-form
+        // independence shortcut.  Recursing into wires[0] (rather than
+        // inserting its gate_t directly) generalises that recognition
+        // from bare-input Bernoullis to compound Boolean wires.
         const auto &fp = of(wires[0]);
         s.insert(fp.begin(), fp.end());
         const auto &fx = of(wires[1]);
@@ -296,11 +295,21 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
         std::to_string(static_cast<unsigned>(op)));
     }
     case gate_mixture: {
+      const auto &wires = gc.getWires(g);
+      if (gc.isCategoricalMixture(g)) {
+        // Categorical mixture: E[M] = Σ π_i · v_i, where each mulinput
+        // mul_i carries π_i in set_prob and v_i in extra.
+        double s = 0.0;
+        for (std::size_t i = 1; i < wires.size(); ++i) {
+          s += gc.getProb(wires[i])
+             * parseDoubleStrict(gc.getExtra(wires[i]));
+        }
+        return s;
+      }
       // E[mixture(p, X, Y)] = π·E[X] + (1-π)·E[Y], where π = P(p = true).
       // For a bare gate_input p, π is the leaf's pinned set_prob.  For
       // a compound Boolean p, route through evaluateBooleanProbability
       // so π honors the tuple-independent semantics of the Boolean DAG.
-      const auto &wires = gc.getWires(g);
       if (wires.size() != 3)
         throw CircuitException(
           "Expectation: gate_mixture must have exactly three children");
@@ -392,9 +401,20 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
         std::to_string(static_cast<unsigned>(op)));
     }
     case gate_mixture: {
+      const auto &wires = gc.getWires(g);
+      if (gc.isCategoricalMixture(g)) {
+        // Categorical mixture: Var(M) = Σ π_i v_i² − (Σ π_i v_i)².
+        double e1 = 0.0, e2 = 0.0;
+        for (std::size_t i = 1; i < wires.size(); ++i) {
+          const double p = gc.getProb(wires[i]);
+          const double v = parseDoubleStrict(gc.getExtra(wires[i]));
+          e1 += p * v;
+          e2 += p * v * v;
+        }
+        return e2 - e1 * e1;
+      }
       // Var(M) = π·(Var(X) + E[X]²) + (1-π)·(Var(Y) + E[Y]²) - E[M]²
       // (law of total variance specialised to a Bernoulli mixture).
-      const auto &wires = gc.getWires(g);
       if (wires.size() != 3)
         throw CircuitException(
           "Variance: gate_mixture must have exactly three children");
@@ -516,8 +536,18 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
         std::to_string(static_cast<unsigned>(op)));
     }
     case gate_mixture: {
-      // E[M^k] = π·E[X^k] + (1-π)·E[Y^k].
       const auto &wires = gc.getWires(g);
+      if (gc.isCategoricalMixture(g)) {
+        // Categorical mixture: E[M^k] = Σ π_i v_i^k.
+        double s = 0.0;
+        for (std::size_t i = 1; i < wires.size(); ++i) {
+          const double v = parseDoubleStrict(gc.getExtra(wires[i]));
+          s += gc.getProb(wires[i])
+             * std::pow(v, static_cast<double>(k));
+        }
+        return s;
+      }
+      // E[M^k] = π·E[X^k] + (1-π)·E[Y^k].
       if (wires.size() != 3)
         throw CircuitException(
           "Moment: gate_mixture must have exactly three children");

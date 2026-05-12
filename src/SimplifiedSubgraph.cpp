@@ -32,6 +32,7 @@ PG_FUNCTION_INFO_V1(simplified_circuit_subgraph);
 
 #include "CircuitFromMMap.h"
 #include "GenericCircuit.h"
+#include "HybridEvaluator.h"
 #include "provsql_utils_cpp.h"
 
 #include <queue>
@@ -122,6 +123,20 @@ emit_node_row(std::ostringstream &out,
   } catch (const CircuitException &) {
     out << "null";
   }
+  /* Emit prob inline for every input / mulinput gate.  Consumers that
+   * need a per-gate probability (Studio's anonymous-input inline
+   * percentage; the dirac-collapse introspection in
+   * continuous_mixture_dirac_collapse) get it without a separate
+   * provsql.get_prob round-trip -- which would fail on synthetic
+   * "dec-in-N" / "dec-mul-N" UUIDs the simplifier mints for the
+   * mulinput-over-key categorical block.  NaN is serialised as JSON
+   * null so jsonb_in does not choke on it. */
+  if (t == gate_input || t == gate_mulinput) {
+    const double p = gc.getProb(g);
+    out << ",\"prob\":";
+    if (p != p)         /* NaN */ out << "null";
+    else                          out << p;
+  }
   out << ",\"depth\":" << depth;
   out << '}';
 }
@@ -156,7 +171,17 @@ simplified_circuit_subgraph(PG_FUNCTION_ARGS)
     /* getGenericCircuit applied foldSemiringIdentities for us when
      * provsql.simplify_on_load is on, so the wires here already
      * reflect identity / absorber collapses; no extra substitution
-     * needed at BFS time. */
+     * needed at BFS time.
+     *
+     * Run the hybrid-evaluator simplifier too when the corresponding
+     * GUC is on (default), so consumers see arith folding /
+     * normal-family closures / Dirac-mixture collapse the way
+     * probability_evaluate would.  Otherwise the persisted-DAG view
+     * and the in-memory simplified view drift on every introspection
+     * feature that depends on a structural rewrite. */
+    if (provsql_hybrid_evaluation) {
+      provsql::runHybridSimplifier(gc);
+    }
 
     /* BFS to compute the canonical (shortest-path) depth of each
      * reachable gate. */

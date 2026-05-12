@@ -401,6 +401,71 @@ void resolveToMixture(gate_t g, gate_t p_token,
 }
 
 /**
+ * @brief Allocate a fresh @c gate_mulinput labelled with a numeric
+ *        outcome value carried in @c extra.
+ *
+ * Variant of @c addAnonymousMulinputGate used by the categorical
+ * mixture lowering: the mulinput's @c info1 still holds the ordinal
+ * @p value_index for @c independentEvaluation's dedup, and the
+ * outcome's numeric label is stored in @c extra so the evaluator-side
+ * categorical-mixture handlers can read it as a @c float8.
+ */
+gate_t addAnonymousMulinputGateWithValue(gate_t key, double p,
+                                         unsigned value_index,
+                                         const std::string &value_text) {
+  gate_t id = addAnonymousMulinputGate(key, p, value_index);
+  setExtra(id, value_text);
+  return id;
+}
+
+/**
+ * @brief Rewrite @p g in place as a categorical-form @c gate_mixture
+ *        over @p wires (@c [key, mul_1, ..., mul_n]).
+ *
+ * Used by the Dirac-mixture-collapse simplifier: when a chained
+ * @c gate_mixture tree's leaves are all @c gate_value, the structure
+ * is the same as a categorical RV.  We reuse the @c gate_mixture
+ * type with @c N > 3 wires, where @c wires[0] is a fresh
+ * @c gate_input "key" anchor (its own probability is irrelevant: the
+ * categorical mass is on the mulinputs) and @c wires[1..n] are
+ * @c gate_mulinput leaves sharing that key.  Every @c gate_mixture
+ * handler downstream of the simplifier branches on
+ * <tt>wires.size() == 3</tt> for the classic
+ * <tt>[p_token, x_token, y_token]</tt> shape vs the categorical
+ * shape; the latter is what unlocks closed-form CDF / cmp evaluation
+ * via @c AnalyticEvaluator.
+ */
+void resolveToCategoricalMixture(gate_t g, std::vector<gate_t> wires_) {
+  setGateType(g, gate_mixture);
+  getWires(g) = std::move(wires_);
+  infos.erase(g);
+  extra.erase(g);
+}
+
+/**
+ * @brief Test whether @p g is a categorical-form @c gate_mixture
+ *        (the Dirac-mixture collapse output).
+ *
+ * Returns true iff @p g is a @c gate_mixture whose wires are
+ * @c [key, mul_1, ..., mul_n] with @p n &ge; 1: @c wires[0] a
+ * @c gate_input key anchor, and every subsequent wire a
+ * @c gate_mulinput.  The classic mixture shape
+ * @c [p_token, x_token, y_token] returns false (one or both of
+ * @c wires[1..2] are not @c gate_mulinput).
+ */
+bool isCategoricalMixture(gate_t g) const
+{
+  if (getGateType(g) != gate_mixture) return false;
+  const auto &w = getWires(g);
+  if (w.size() < 2) return false;
+  if (getGateType(w[0]) != gate_input) return false;
+  for (std::size_t i = 1; i < w.size(); ++i) {
+    if (getGateType(w[i]) != gate_mulinput) return false;
+  }
+  return true;
+}
+
+/**
  * @brief Boost serialisation support.
  * @param ar       Boost archive (input or output).
  * @param version  Archive version (unused).
