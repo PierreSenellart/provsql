@@ -214,12 +214,11 @@ With the aggtype-based dispatch in place, the cost of a new RV-returning aggrega
 - `sum_squares(x)` is already expressible as `sum(reading * reading)` via the existing `*` operator on `random_variable` — no new aggregate needed; document the pattern in the user manual.
 
 **Tier B — composable from SUM/AVG via `gate_arith` (next to land).**
-- `var_pop(x) = avg(x²) − avg(x)²` via existing `MINUS`, `TIMES`. SFUNC-side choice (square the per-row arg in the SFUNC vs square inside the FFUNC from the mixture's then-branch) is local.
-- `var_samp(x)` adds the Bessel correction (`count − 1` instead of `count`); the `MINUS(sum(as_random(1)), as_random(1))` denominator is a valid `gate_arith` expression.
-- `covar_pop(x, y) = E[XY] − E[X]E[Y]`, same shape with a per-row `X_i · Y_i` cross-term.
+- `covar_pop(x, y) = E[XY] − E[X]E[Y]`, with a per-row `X_i · Y_i` cross-term. This is the headline Tier B candidate: captures cross-column joint behaviour over the group (portfolio correlations, sensor cross-correlations, regression-style covariance) and is not expressible as a composition of single-RV moments, because the per-row joint draw of `X` and `Y` carries information that no single-column aggregate exposes.
+- `var_pop(x) = avg(x²) − avg(x)²` and `var_samp(x)` (Bessel-corrected) are mechanically straightforward but pull weak weight. Priority 11's `variance(rv)` already covers the canonical single-distribution case (`variance(provsql.normal(2.5, 0.5)) = 0.25`); the aggregate form gives the sample variance across the group as a `random_variable`, which a user can already build by hand via `avg(x*x) - avg(x)*avg(x)` against the existing aggregates and the operator overloads.  Worth landing if a real workload turns up that wants the convenience; otherwise the SQL-compatibility motivation alone doesn't justify the FFUNC + tests.
 
 **Tier C — needs a `SQRT` op on `gate_arith`.**
-- `stddev(x) = sqrt(var(x))`. `gate_arith` carries only `{PLUS, TIMES, MINUS, DIV, NEG}` today (`PROVSQL_ARITH_*` in `src/provsql_utils.h`). Adding `SQRT` requires evaluator entries in `MonteCarloSampler::evalScalar` (trivial), `Expectation::rec_*` (no closed form for `E[sqrt(X)]` in general → MC fallback), `RangeCheck::intervalOf` (interval `sqrt` is standard), and the simplifier passes. Worth doing once a second consumer appears (RMS, geometric mean).
+- `stddev(x) = sqrt(var(x))` and `corr_pop(x, y) = covar_pop(x, y) / sqrt(var_pop(x) · var_pop(y))`.  `gate_arith` carries only `{PLUS, TIMES, MINUS, DIV, NEG}` today (`PROVSQL_ARITH_*` in `src/provsql_utils.h`). Adding `SQRT` requires evaluator entries in `MonteCarloSampler::evalScalar` (trivial), `Expectation::rec_*` (no closed form for `E[sqrt(X)]` in general → MC fallback), `RangeCheck::intervalOf` (interval `sqrt` is standard), and the simplifier passes.  Worth doing once a second consumer appears (corr, RMS, geometric mean).
 
 **Tier D — needs `LOG` / `EXP` ops on `gate_arith`.**
 - `geomean(x) = exp((1/n) · Σ log X_i)`. Domain check `X_i > 0`. Lower priority than SQRT.
@@ -231,6 +230,46 @@ With the aggtype-based dispatch in place, the cost of a new RV-returning aggrega
 - `STRING_AGG`, `BIT_AND`, `BIT_OR`, `BOOL_AND/EVERY`, `BOOL_OR`. `ARRAY_AGG(random_variable)` is fine (returns `random_variable[]`, not a scalar RV — no overload needed).
 
 **Commit gate (whenever a Tier B aggregate lands)**: `make installcheck` green, commit per the same `continuous_aggregation: <name> aggregate over random_variable` convention.
+
+### Priority 11 – Conditional moments / support / histogram / sampling on `random_variable` (originally out of scope; landed)
+
+When Priority 6 drafted the moment family it punted on the "conditioning event" argument: `expected(rv)`, `variance(rv)`, `moment(rv, k)`, `support(rv)`, `rv_histogram(rv, bins)` all returned the *unconditional* answer, and the four functions raised on any non-trivial event.  Doing the conditioning properly requires a joint circuit so the indicator's draw and the value's draw share their per-iteration state (otherwise the truncated answer is biased by the independence assumption); the joint loader didn't exist, so the feature waited.
+
+Joint loader landed.  Each scalar-moment function now takes an optional `prov UUID DEFAULT gate_one()` argument, plus a new `rv_sample(token, n, prov)` SRF that draws raw conditional samples via rejection sampling.  In a planner-hook query the standard idiom is `expected(reading, provenance())` (or any of the moment family); on a row that survived a `WHERE reading > c` filter the planner-hook-lifted cmp becomes the conditioning event automatically.
+
+**Closed-form fast paths.**  When `collectRvConstraints` can fold the event's AND-conjunct rv-op-const cmps into a single interval on a bare `gate_rv`, the moment family uses the truncated-distribution closed form: Normal via Mills ratio + integration-by-parts, Uniform on the intersected support, Exponential by memorylessness on the lower bound (or finite-interval truncation).  Anything else (gate_arith expressions, multiple disjoint events, shared atoms across cmps) falls through to MC rejection on the joint circuit.  `support()` returns the intersected interval directly; `rv_histogram` / `rv_sample` route through MC with the conditioning event applied at the acceptance check.
+
+**Shared-atom coupling.**  The MC rejection sampler loads `token` and `prov` into a single `GenericCircuit` so any `gate_rv` reachable from both roots collapses to a single `gate_t`; that's the invariant `monteCarloConditionalScalarSamples` relies on to couple the indicator's draw with the value's draw.  `MMappedCircuit` grew a `getJointCircuit(token, prov)` entry point; `createGenericCircuit` accepts multiple roots and BFS-merges them.
+
+**Zero-probability events.**  When the conditioning acceptance rate drops below the `provsql.rv_mc_samples` budget can support, the C SRF raises an actionable error naming the GUC; RangeCheck's joint AND-conjunction pass also short-circuits on a provably-infeasible interval.
+
+**Landed pieces.**
+- `src/CircuitFromMMap.{cpp,h}`: `getJointCircuit`, multi-root `createGenericCircuit` BFS.
+- `src/MMappedCircuit.{cpp,h}`: shared-circuit loader plumbing.
+- `src/RangeCheck.{cpp,h}`: joint-interval pass over multiple conjuncts.
+- `src/MonteCarloSampler.{cpp,h}`: `monteCarloConditionalScalarSamples`, joint-circuit rejection loop, shared `mt19937_64` state across indicator and value draws.
+- `src/Expectation.{cpp,h}`: conditional `rec_expected` / `rec_variance` / `rec_raw_moment` / `rec_central_moment`, truncated closed-form for Normal / Uniform / Exponential.
+- `src/RvHistogram.cpp`: `prov` arg threaded into the rejection loop; existing `bins` semantics unchanged.
+- `src/RvSample.cpp`: new C SRF returning `SETOF float8`; emits a `NOTICE` when fewer samples than requested land within the budget.
+- `sql/provsql.common.sql`: `prov` argument on `rv_moment` / `rv_support` / `rv_histogram`; new `rv_sample(token, n, prov)`; the `expected` / `variance` / `moment` / `central_moment` / `support` SQL dispatchers route `random_variable` inputs through the conditional path.
+- `test/sql/continuous_conditioning.sql`: eight sections covering truncated Normal (Mills-ratio mean + second raw moment vs `1 + α·M`), truncated Uniform with two cmps, truncated Exponential (memorylessness + finite interval), `gate_one()` round-trip, WHERE end-to-end, shared-atom coupling, sample/histogram support truncation, zero-probability error.
+- Studio: new `Sample` semiring under the Distribution optgroup; `Condition on` text input on the eval strip (`distribution-profile` / `moment` / `sample`); the result-table renderer stamps each clickable cell with `data-row-prov` so the eval strip's `autoPresetConditionInput` defaults the Condition input to the row's provenance the moment the user clicks into a row's circuit.  Auto-preset is row-context aware: clicking the `random_variable` cell (scene root = the rv itself) still conditions on the row.  Manual edits stick within a row, get overwritten on row navigation.  The `Conditioned by:` chip is a toggle: clicking the active chip clears the conditioning (unconditional answer); clicking the muted chip restores the row prov.  `rv_sample` result renders as a `<details>` panel with an inline preview of the first six values, expandable full list, and a hint pointing at `provsql.rv_mc_samples` when MC's acceptance rate truncated the run.
+
+**Commits**:
+- `a5092e1` continuous_distributions: conditional moments / support / histogram / sampling on rv with planner-hook prov
+- `8ae52c4` studio: auto-preset row provenance into the eval-strip Condition input with a toggleable badge
+- `664c289` studio: preserve scroll position across eval-strip Run to keep the distribution-profile panel in view on Firefox
+- `74eadc0` studio: render rv_sample as a details panel with inline preview, full list, and conditional-MC budget hint
+
+**Documentation follow-ups (open).**
+- `doc/source/user/continuous-distributions.rst` needs a "Conditional inference" subsection: the closed-form table (Normal / Uniform / Exponential truncations), the `provenance()` idiom in tracked queries, the `provsql.rv_mc_samples` budget GUC, the `rv_sample` SRF.
+- `doc/source/user/studio.rst` needs a paragraph on the `Conditioned by:` badge + Sample semiring + the row-prov auto-preset workflow.
+- `doc/source/dev/probability-evaluation.rst` needs an "Conditional evaluation" subsection (joint circuit, closed-form decision tree, MC rejection invariants).
+
+**Open follow-ups.**
+- Variance closed-form via `rec_variance` is currently routed through `rec_raw_moment + rec_expected²` for the truncated branch; if any new distribution lands whose Var formula isn't `m₂ − m₁²` (mixtures, sums) the dispatcher in `Expectation.cpp` will need a direct-variance arm.
+- Joint circuit cache currently rebuilds on every call; if profiling shows it's hot, memoise per `(token, prov)` pair the way `circuit_cache` does for plain `getGenericCircuit`.
+- Studio: the `[[name]]` link from the `rv_sample` panel back to the `rv_mc_samples` config row is hand-written prose right now; if the Config panel grows a programmatic anchor we can `<a href>` it.
 
 ## Files affected (consolidated)
 
