@@ -32,14 +32,25 @@ mixture
 adhoc_kind|adhoc_nb_children|adhoc_wire0_kind|adhoc_prob_pinned|adhoc_distinct_bernoulli
 mixture|3|input|t|t
 (1 row)
-ERROR:  provsql.mixture: p must point to a gate_input Bernoulli token (got value)
+create_gate
+
+(1 row)
 create_gate
 
 (1 row)
 set_prob
 
 (1 row)
-ERROR:  provsql.mixture: p must have a probability in [0,1] set via set_prob (got 1.5)
+set_prob
+
+(1 row)
+compound_times_p_kind
+mixture
+(1 row)
+compound_monus_p_kind
+mixture
+(1 row)
+ERROR:  provsql.mixture: p must be a Boolean gate (input/mulinput/update/plus/times/monus/project/eq/cmp/zero/one), got value
 ERROR:  provsql.mixture: probability must be in [0,1] (got 1.5)
 ERROR:  provsql.mixture: probability must be in [0,1] (got -0.1)
 ERROR:  provsql.mixture: probability must be in [0,1] (got NaN)

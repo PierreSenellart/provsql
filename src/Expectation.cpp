@@ -5,11 +5,13 @@
  */
 #include "Expectation.h"
 
+#include "BooleanCircuit.h"
 #include "Circuit.h"
 #include "CircuitFromMMap.h"
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
 #include "provsql_utils_cpp.h"
+#include "semiring/BoolExpr.h"
 
 extern "C" {
 #include "postgres.h"
@@ -32,6 +34,59 @@ namespace provsql {
 namespace {
 
 using RvSet = std::set<gate_t>;
+
+/// Probability that a Boolean subcircuit rooted at @p boolRoot
+/// evaluates to true under the tuple-independent probabilistic-database
+/// model.  Used for the @c gate_mixture branch when the Bernoulli wire
+/// is a compound Boolean gate (not a bare @c gate_input): the closed
+/// form @c π·E[X] + (1−π)·E[Y] applies as long as π is well-defined,
+/// and π for an arbitrary Boolean DAG is what
+/// @c probability_evaluate(..., 'independent', …) already computes.
+/// Falls back to Monte Carlo (under @c provsql.rv_mc_samples) when the
+/// independent evaluator rejects the subcircuit as not-disconnected.
+double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot)
+{
+  BooleanCircuit c;
+  std::unordered_map<gate_t, gate_t> gc_to_bc;
+  for (gate_t u : gc.getInputs()) {
+    gc_to_bc[u] = c.setGate(gc.getUUID(u), BooleanGate::IN, gc.getProb(u));
+  }
+  for (size_t i = 0; i < gc.getNbGates(); ++i) {
+    auto u = static_cast<gate_t>(i);
+    if (gc.getGateType(u) == gate_mulinput) {
+      gc_to_bc[u] = c.setGate(gc.getUUID(u), BooleanGate::MULIN, gc.getProb(u));
+      c.setInfo(gc_to_bc[u], gc.getInfos(u).first);
+      c.addWire(gc_to_bc[u], gc_to_bc[gc.getWires(u)[0]]);
+    }
+  }
+  semiring::BoolExpr semiring(c);
+  gate_t bcRoot = gc.evaluate(boolRoot, gc_to_bc, semiring);
+
+  try {
+    return c.independentEvaluation(bcRoot);
+  } catch (CircuitException &) {
+    if (provsql_rv_mc_samples <= 0) {
+      throw CircuitException(
+        "mixture: compound Boolean p could not be evaluated "
+        "independently and provsql.rv_mc_samples = 0 disables the "
+        "Monte Carlo fallback");
+    }
+    c.rewriteMultivaluedGates();
+    return c.monteCarlo(bcRoot,
+                        static_cast<unsigned>(provsql_rv_mc_samples));
+  }
+}
+
+/// Mixing weight π = P(p = true) for a mixture's Bernoulli wire.
+/// For a bare @c gate_input, the probability is the leaf's pinned
+/// @c set_prob; for any compound Boolean gate, defer to
+/// @c evaluateBooleanProbability.
+double mixturePi(const GenericCircuit &gc, gate_t p)
+{
+  return (gc.getGateType(p) == gate_input)
+    ? gc.getProb(p)
+    : evaluateBooleanProbability(gc, p);
+}
 
 /// Cache of the base-@c gate_rv UUID footprints reachable below each
 /// scalar gate, used as the structural-independence witness.  Two
@@ -57,21 +112,55 @@ public:
         s.insert(cs.begin(), cs.end());
       }
     } else if (type == gate_mixture) {
-      // Footprint = {p_token} ∪ footprint(x) ∪ footprint(y).  The
-      // Bernoulli p_token is included as a discrete random source so
-      // that two mixtures sharing the same p in an arith expression
-      // are correctly recognised as dependent (their branch selection
-      // is perfectly coupled), bypassing the closed-form independence
-      // shortcut and routing through MC -- the only sound path when
-      // the branches' selection is correlated.
+      // Footprint = footprint(p) ∪ footprint(x) ∪ footprint(y).  The
+      // Boolean wire is included as a discrete random source so that
+      // two mixtures whose p's share an atom are correctly recognised
+      // as dependent (their branch selection is correlated), bypassing
+      // the closed-form independence shortcut and routing through MC
+      // -- the only sound path when the branches' selection is
+      // correlated.  Recursing into wires[0] (rather than inserting
+      // its gate_t directly) is what generalises that recognition
+      // from bare-input Bernoullis to compound Boolean wires.
       const auto &wires = gc_.getWires(g);
       if (wires.size() == 3) {
-        s.insert(wires[0]);
+        const auto &fp = of(wires[0]);
+        s.insert(fp.begin(), fp.end());
         const auto &fx = of(wires[1]);
         s.insert(fx.begin(), fx.end());
         const auto &fy = of(wires[2]);
         s.insert(fy.begin(), fy.end());
       }
+    } else if (type == gate_mulinput) {
+      // A mulinput is a state-carrying atom (so its own gate_t is in
+      // its footprint -- two mulinputs of the same group are distinct
+      // atoms even though they share a key) *and* references a shared
+      // key gate at wires[0] (whose footprint is added so the shared
+      // key makes the two mulinputs overlap on it, flagging them as
+      // dependent for pairwise_disjoint).
+      s.insert(g);
+      const auto &wires = gc_.getWires(g);
+      if (!wires.empty()) {
+        const auto &fk = of(wires[0]);
+        s.insert(fk.begin(), fk.end());
+      }
+    } else if (type == gate_input) {
+      // Atomic Boolean leaf.  Use the gate's own UUID as its footprint
+      // so two Boolean expressions sharing this input collide on it.
+      s.insert(g);
+    } else if (type == gate_plus || type == gate_times || type == gate_monus
+            || type == gate_project || type == gate_eq
+            || type == gate_cmp || type == gate_update) {
+      // Boolean gates: footprint is the union of children's footprints.
+      // Lets a compound `p` wire feeding a mixture propagate its atom
+      // dependencies to FootprintCache for the disjoint-children
+      // shortcuts in rec_expectation / rec_variance / rec_raw_moment.
+      for (gate_t c : gc_.getWires(g)) {
+        const auto &cs = of(c);
+        s.insert(cs.begin(), cs.end());
+      }
+    } else if (type == gate_zero || type == gate_one) {
+      // Empty footprint -- a constant-true / constant-false Boolean
+      // contributes no shared atoms.
     } else {
       // Unknown scalar gate type: return an empty footprint.  Callers
       // will trip the analytical-decomposition switch and route the
@@ -208,11 +297,14 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
     }
     case gate_mixture: {
       // E[mixture(p, X, Y)] = π·E[X] + (1-π)·E[Y], where π = P(p = true).
+      // For a bare gate_input p, π is the leaf's pinned set_prob.  For
+      // a compound Boolean p, route through evaluateBooleanProbability
+      // so π honors the tuple-independent semantics of the Boolean DAG.
       const auto &wires = gc.getWires(g);
       if (wires.size() != 3)
         throw CircuitException(
           "Expectation: gate_mixture must have exactly three children");
-      const double pi = gc.getProb(wires[0]);
+      const double pi = mixturePi(gc, wires[0]);
       return pi        * rec_expectation(gc, wires[1], fp)
            + (1.0 - pi) * rec_expectation(gc, wires[2], fp);
     }
@@ -306,7 +398,7 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
       if (wires.size() != 3)
         throw CircuitException(
           "Variance: gate_mixture must have exactly three children");
-      const double pi = gc.getProb(wires[0]);
+      const double pi = mixturePi(gc, wires[0]);
       const double ex = rec_expectation(gc, wires[1], fp);
       const double ey = rec_expectation(gc, wires[2], fp);
       const double vx = rec_variance(gc, wires[1], fp);
@@ -429,7 +521,7 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
       if (wires.size() != 3)
         throw CircuitException(
           "Moment: gate_mixture must have exactly three children");
-      const double pi = gc.getProb(wires[0]);
+      const double pi = mixturePi(gc, wires[0]);
       return pi        * rec_raw_moment(gc, wires[1], k, fp)
            + (1.0 - pi) * rec_raw_moment(gc, wires[2], k, fp);
     }

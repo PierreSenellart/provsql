@@ -17,3 +17,18 @@ set_prob
 distinct_bernoullis_decouple
 t
 (1 row)
+create_gate
+
+(1 row)
+create_gate
+
+(1 row)
+set_prob
+
+(1 row)
+set_prob
+
+(1 row)
+compound_p_mean|compound_p_variance
+t|t
+(1 row)

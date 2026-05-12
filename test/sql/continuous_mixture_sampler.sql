@@ -82,5 +82,31 @@ CREATE TEMP TABLE mix_indep_pair AS
 SELECT abs(provsql.rv_moment((SELECT u FROM mix_indep_pair), 2, true) - 50.0) < 5.0
          AS distinct_bernoullis_decouple;
 
+-- D.  Compound Boolean p: mixture(times(b1, b2), -5, 5) with both
+--     b1, b2 ~ Bern(0.5).  π = P(b1 ∧ b2) = 0.25, so
+--       E[M]   = 0.25·(-5) + 0.75·5 = 2.5
+--       Var[M] = 0.25·25 + 0.75·25 - 2.5² = 18.75
+--     The analytic path goes through evaluateBooleanProbability for
+--     π, which routes the Boolean subcircuit through
+--     BooleanCircuit::independentEvaluation (b1, b2 are independent
+--     gate_inputs).  Both branches are Diracs so the result is exact
+--     -- no MC tolerance needed.
+CREATE TEMP TABLE bern_d(b1 uuid, b2 uuid);
+INSERT INTO bern_d VALUES (public.uuid_generate_v4(), public.uuid_generate_v4());
+SELECT create_gate((SELECT b1 FROM bern_d), 'input');
+SELECT create_gate((SELECT b2 FROM bern_d), 'input');
+SELECT set_prob((SELECT b1 FROM bern_d), 0.5);
+SELECT set_prob((SELECT b2 FROM bern_d), 0.5);
+
+CREATE TEMP TABLE mix_d AS
+  SELECT random_variable_uuid(
+           provsql.mixture(
+             provenance_times((SELECT b1 FROM bern_d), (SELECT b2 FROM bern_d)),
+             provsql.as_random(-5),
+             provsql.as_random( 5))) AS u;
+
+SELECT abs(provsql.rv_moment((SELECT u FROM mix_d), 1, false) - 2.50)  < 1e-9 AS compound_p_mean,
+       abs(provsql.rv_moment((SELECT u FROM mix_d), 2, true)  - 18.75) < 1e-9 AS compound_p_variance;
+
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;

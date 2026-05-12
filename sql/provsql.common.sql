@@ -1710,10 +1710,10 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * Validation:
  * - @p p must point to a Boolean gate (@c input, @c mulinput,
  *   @c update, @c plus, @c times, @c monus, @c project, @c eq,
- *   @c cmp, @c zero, @c one).  When @p p is a bare @c gate_input it
- *   must carry a probability in [0, 1] set via @c set_prob;
- *   compound Boolean gates derive their probability from their
- *   atoms via the active probability-evaluation method.
+ *   @c cmp, @c zero, @c one).  Compound Boolean gates derive their
+ *   probability from their atoms via the active probability-evaluation
+ *   method; a bare @c gate_input's probability is whatever @c set_prob
+ *   pinned (@c set_prob is responsible for keeping it in [0, 1]).
  * - @p x and @p y must be scalar RV roots; aggregate / Boolean roots
  *   are rejected at construction.
  *
@@ -1735,15 +1735,14 @@ DECLARE
   y_uuid uuid;
   x_kind provsql.provenance_gate;
   y_kind provsql.provenance_gate;
-  pi double precision;
 BEGIN
   p_kind := provsql.get_gate_type(p);
-  IF p_kind <> 'input' THEN
-    RAISE EXCEPTION 'provsql.mixture: p must point to a gate_input Bernoulli token (got %)', p_kind;
-  END IF;
-  pi := provsql.get_prob(p);
-  IF pi IS NULL OR pi <> pi OR pi < 0 OR pi > 1 THEN
-    RAISE EXCEPTION 'provsql.mixture: p must have a probability in [0,1] set via set_prob (got %)', pi;
+  IF p_kind NOT IN ('input','mulinput','update',
+                    'plus','times','monus',
+                    'project','eq','cmp',
+                    'zero','one') THEN
+    RAISE EXCEPTION 'provsql.mixture: p must be a Boolean gate '
+                    '(input/mulinput/update/plus/times/monus/project/eq/cmp/zero/one), got %', p_kind;
   END IF;
 
   x_uuid := provsql.random_variable_uuid(x);

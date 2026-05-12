@@ -139,28 +139,46 @@ SELECT get_gate_type(u1)                              AS adhoc_kind,
        (get_children(u1))[1] <> (get_children(u2))[1] AS adhoc_distinct_bernoulli
   FROM adhoc_mix;
 
+-- G.  Compound Boolean p is accepted.  The constructor only checks
+-- that p is a Boolean gate kind (input / mulinput / update / plus /
+-- times / monus / project / eq / cmp / zero / one); π for compound p
+-- is computed at expectation/variance time via the probability
+-- evaluator.
+
+-- G1. p = times(b1, b2): conjunctive selector.  Two probability-0.5
+-- inputs combined via provenance_times; the resulting mixture is
+-- well-formed and routes through the Boolean-probability evaluator
+-- when its moments are queried.
+CREATE TEMP TABLE bern_g(b1 uuid, b2 uuid);
+INSERT INTO bern_g VALUES (public.uuid_generate_v4(), public.uuid_generate_v4());
+SELECT create_gate((SELECT b1 FROM bern_g), 'input');
+SELECT create_gate((SELECT b2 FROM bern_g), 'input');
+SELECT set_prob((SELECT b1 FROM bern_g), 0.5);
+SELECT set_prob((SELECT b2 FROM bern_g), 0.5);
+SELECT get_gate_type(random_variable_uuid(
+         provsql.mixture(
+           provenance_times((SELECT b1 FROM bern_g), (SELECT b2 FROM bern_g)),
+           provsql.as_random(-5),
+           provsql.as_random( 5)))) AS compound_times_p_kind;
+
+-- G2. p = monus(b1, b2): b1 AND NOT b2.
+SELECT get_gate_type(random_variable_uuid(
+         provsql.mixture(
+           provenance_monus((SELECT b1 FROM bern_g), (SELECT b2 FROM bern_g)),
+           provsql.as_random(-5),
+           provsql.as_random( 5)))) AS compound_monus_p_kind;
+
 -- F.  Validation errors.  Keep VERBOSITY terse so the messages stay
 -- compact and we capture them line-by-line.
 \set VERBOSITY terse
 
--- F1. p_token is not a gate_input (here it is a gate_value from
+-- F1. p is not a Boolean gate (here it is a gate_value from
 --     as_random) -- rejected with a kind-mismatch message.
 SELECT provsql.mixture(random_variable_uuid(provsql.as_random(0.5)),
                        provsql.normal(0, 1),
                        provsql.normal(0, 1));
 
--- F2. p_token has a probability outside [0,1].  Fresh gate_inputs
---     default to prob = 1.0 (a deterministic always-X mixture), so the
---     [0,1] guard only fires when set_prob explicitly sets a bad value.
-CREATE TEMP TABLE bern_bad(p uuid);
-INSERT INTO bern_bad VALUES (public.uuid_generate_v4());
-SELECT create_gate((SELECT p FROM bern_bad), 'input');
-SELECT set_prob((SELECT p FROM bern_bad), 1.5);
-SELECT provsql.mixture((SELECT p FROM bern_bad),
-                       provsql.normal(0, 1),
-                       provsql.normal(0, 1));
-
--- F3. probability-shorthand overload: out-of-range scalar.
+-- F2. probability-shorthand overload: out-of-range scalar.
 SELECT provsql.mixture(1.5::float8, provsql.normal(0, 1), provsql.normal(0, 1));
 SELECT provsql.mixture((-0.1)::float8, provsql.normal(0, 1), provsql.normal(0, 1));
 SELECT provsql.mixture('NaN'::float8, provsql.normal(0, 1), provsql.normal(0, 1));
