@@ -54,6 +54,21 @@
     // aren't undone when new nodes appear; reset on renderCircuit() so a
     // new circuit always starts from the Graphviz layout.
     dragOffsets: Object.create(null),
+    // Row context for the current scene: the `__prov` (or `provsql`)
+    // UUID of the result-table row whose click loaded this circuit.
+    // Used by autoPresetConditionInput so the eval strip's "Condition
+    // on" input defaults to the row's provenance gate (i.e. the
+    // canonical conditioning event for `expected(rv, provenance())`),
+    // even when the click target was the row's random_variable cell
+    // (whose scene root is the RV itself, not the row's prov).
+    rowProv: null,
+    // Tracks which row provsql we last auto-preset against, so a row
+    // context change (clicking another row's cell) overwrites the
+    // Condition input even if the user had manually pasted a UUID
+    // for the previous row.  Manual edits within the same row are
+    // still respected (the `input` listener clears autoset, and we
+    // don't overwrite while lastAutoPresetRow matches).
+    lastAutoPresetRow: null,
   };
   let svg = null, edgeLayer = null, nodeLayer = null, bannerEl = null;
   let titleEl = null, subEl = null;
@@ -321,6 +336,8 @@
     if (nodeLayer) nodeLayer.innerHTML = '';
     state.scene = null;
     state.pinnedNode = null;
+    state.rowProv = null;
+    state.lastAutoPresetRow = null;
     state.dragOffsets = Object.create(null);
     closeInspector();
     setStatus('Provenance Circuit', 'Click a UUID cell to render.');
@@ -403,10 +420,11 @@
     setStatus('Provenance Circuit', 'Circuit too large.');
   }
 
-  function renderCircuit(scene) {
+  function renderCircuit(scene, opts) {
     hideBanner();
     state.scene = scene;
     state.pinnedNode = null;
+    state.rowProv = (opts && opts.rowProv) ? String(opts.rowProv) : null;
     // Each new circuit starts from a clean fit: reset zoom + pan so
     // the whole graph fits in the viewport regardless of how the user
     // had panned/zoomed the previous one. The fitView() inside paint()
@@ -1402,7 +1420,10 @@
       'eval-args-moment-k',
       'eval-args-moment-central',
       'eval-args-sample-n',
-      'eval-args-condition',
+      // The "Condition on" control is the badge + input wrapped in a
+      // <span>; toggle the wrapper so the badge hides too when no
+      // semiring needs the condition arg.
+      'eval-args-condition-group',
     ]
       .map(id => document.getElementById(id))
       .filter(Boolean);
@@ -1521,7 +1542,7 @@
         wantedIds.add('eval-args-sample-n');
       }
       if (_CONDITION_OPTIONS.has(v)) {
-        wantedIds.add('eval-args-condition');
+        wantedIds.add('eval-args-condition-group');
       }
       for (const ctrl of argControls) ctrl.hidden = !wantedIds.has(ctrl.id);
       // Stale once the input shape changes : wipe result + bound +
@@ -1741,6 +1762,48 @@
         if (!run.disabled) runEvaluation();
       });
     }
+    // Drop the auto-preset marker as soon as the user types into the
+    // "Condition on" input so a subsequent pin change within the same
+    // row doesn't clobber their manual UUID.  Refresh the badge so
+    // its styling flips to the muted/clickable variant (the chip stays
+    // visible as a one-click "restore row prov" affordance).
+    const condInput = document.getElementById('eval-args-condition');
+    if (condInput) {
+      condInput.addEventListener('input', () => {
+        delete condInput.dataset.autoset;
+        updateConditionInputBadge();
+      });
+    }
+    // The "row prov" badge is a toggle:
+    //   * active state  (value matches row prov) -> click clears the
+    //     Condition input.  Useful for switching to the unconditional
+    //     distribution without having to manually empty the field.
+    //   * muted state   (value diverges) -> click restores the row
+    //     prov.  One-click undo for a manual edit, or a re-apply
+    //     after the user clicked Clear.
+    const condBadge = document.getElementById('eval-args-condition-badge');
+    if (condBadge) {
+      condBadge.addEventListener('click', () => {
+        const rowProv = state.rowProv || '';
+        if (!rowProv) return;
+        const cond = document.getElementById('eval-args-condition');
+        if (!cond) return;
+        const isActive =
+          cond.dataset.autoset === '1' && cond.value.trim() === rowProv;
+        if (isActive) {
+          // Clear: the user wants the unconditional answer.
+          cond.value = '';
+          delete cond.dataset.autoset;
+        } else {
+          // Restore: the user pressed the muted chip after editing or
+          // clearing the input.
+          cond.value = rowProv;
+          cond.dataset.autoset = '1';
+          state.lastAutoPresetRow = rowProv;
+        }
+        updateConditionInputBadge();
+      });
+    }
     const clearBtn = document.getElementById('eval-clear');
     if (clearBtn) clearBtn.onclick = clearEvalResult;
     const copyBtn = document.getElementById('eval-copy');
@@ -1852,6 +1915,7 @@
     // preserves the displayed evaluation.
     const refilter = window.ProvsqlStudio?.refilterForTarget;
     if (typeof refilter === 'function') refilter();
+    autoPresetConditionInput();
     if (!tgt) return;
     if (!state.scene) {
       tgt.textContent = '';
@@ -1870,6 +1934,119 @@
       + `<span class="wp-uuid__full">${escapeHtml(id)}</span>`
       + `</span>`;
     tgt.title = `Evaluation runs on the ${label}: ${id}`;
+  }
+
+  // Auto-preset the "Condition on" UUID to the row's provenance gate,
+  // so `Moment` / `Distribution profile` / `Sample` evaluated against
+  // any scalar inside the row's circuit yields a conditional answer
+  // (truncated by the cmps the planner hook lifted out of WHERE)
+  // without the user having to paste the row's provsql UUID.
+  //
+  // Source of truth: state.rowProv -- the row's `__prov` (or
+  // user-selected `provsql`) UUID, stashed by renderCircuit from the
+  // data-row-prov attribute the result-table renderer stamps on every
+  // clickable cell.  Falls back to scene.root for the legacy
+  // "click the provsql cell" path (scene root === row's prov).
+  //
+  // Row-context change (clicking a different row's cell) ALWAYS
+  // overwrites, even prior manual edits -- a UUID pasted for row A
+  // doesn't generalise to row B.  Within a single row, manual edits
+  // stick (the `input` listener drops dataset.autoset; we don't
+  // re-overwrite while lastAutoPresetRow matches the current row).
+  function autoPresetConditionInput() {
+    const cond = document.getElementById('eval-args-condition');
+    if (!cond) return;
+    if (!state.scene) {
+      // Scene gone; drop any preset and reset row tracking.
+      cond.value = '';
+      delete cond.dataset.autoset;
+      state.lastAutoPresetRow = null;
+      updateConditionInputBadge();
+      return;
+    }
+    // Row context: prefer the row prov stashed at scene load.  When
+    // missing (legacy click path with no data-row-prov attribute, or
+    // a direct loadCircuit call) fall back to scene.root iff a scalar
+    // gate is pinned distinctly from the root -- conditioning the
+    // root on itself is meaningless.
+    let target = state.rowProv;
+    if (!target) {
+      const pinned = state.pinnedNode;
+      const root = state.scene.root;
+      const node = pinned ? state.scene.nodes.find(n => n.id === pinned) : null;
+      const isScalarPinned =
+        node != null && _SCALAR_GATE_TYPES.has(node.type) && pinned !== root;
+      if (isScalarPinned) target = root;
+    }
+    if (!target) {
+      // No row context and no scalar pin: drop any prior auto value.
+      if (cond.dataset.autoset === '1') {
+        cond.value = '';
+        delete cond.dataset.autoset;
+      }
+      state.lastAutoPresetRow = null;
+      updateConditionInputBadge();
+      return;
+    }
+    // Same row as the previous auto-preset -- leave the value alone
+    // (the user may have typed a manual override, which we want to
+    // honour across pin changes within the same scene).
+    if (state.lastAutoPresetRow === target) {
+      updateConditionInputBadge();
+      return;
+    }
+    // Row context changed: overwrite, regardless of prior autoset
+    // marker.  Manual UUIDs pasted for the previous row would
+    // silently condition the new row on the wrong event.
+    cond.value = target;
+    cond.dataset.autoset = '1';
+    state.lastAutoPresetRow = target;
+    updateConditionInputBadge();
+  }
+
+  // Visual cue that the "Condition on" input was auto-filled from the
+  // row's provenance, with three states:
+  //
+  //   * no row context           -- badge hidden (we don't have a row
+  //                                 prov to offer in the first place).
+  //   * value matches row prov   -- badge shown, "active" styling
+  //                                 (purple chip + tint on the input);
+  //                                 not clickable since clicking would
+  //                                 be a no-op.
+  //   * value diverges from prov -- badge shown, "muted" styling
+  //                                 (faded chip, no input tint); the
+  //                                 chip becomes a clickable button
+  //                                 that restores the row prov so the
+  //                                 user can revert a manual edit
+  //                                 without having to navigate away
+  //                                 and back.
+  //
+  // Called from autoPresetConditionInput on every refreshEvalTarget,
+  // and from the input's `input` listener on every keystroke.
+  function updateConditionInputBadge() {
+    const cond = document.getElementById('eval-args-condition');
+    if (!cond) return;
+    const badge = document.getElementById('eval-args-condition-badge');
+    const rowProv = state.rowProv || '';
+    if (!badge) return;
+    if (!rowProv) {
+      // No row context -- nothing to offer, hide the chip.
+      badge.hidden = true;
+      badge.classList.remove('cv-eval__cond-badge--muted');
+      cond.classList.remove('is-auto-conditioned');
+      return;
+    }
+    const matches =
+      cond.dataset.autoset === '1' &&
+      cond.value.trim() === rowProv;
+    badge.hidden = false;
+    badge.classList.toggle('cv-eval__cond-badge--muted', !matches);
+    cond.classList.toggle('is-auto-conditioned', matches);
+    // Tooltip updates so the affordance reads correctly in both
+    // states (the badge is a toggle: active -> clear, muted -> restore).
+    badge.title = matches
+      ? 'Click to clear the conditioning (unconditional result).'
+      : 'Click to restore the row provenance (replaces the current value).';
   }
 
   async function runEvaluation() {

@@ -1924,6 +1924,86 @@ body.mode-where #sidebar {
   font-family: var(--font-mono);
   min-width: 14ch;
 }
+/* "Condition on" group: badge + input rendered inline so the badge
+   reads as a left-side label on the input rather than a separate
+   floating chip.  The whole group is hidden/shown by the eval-strip's
+   arg-control dispatch in circuit.js, so the badge follows the input. */
+.cv-eval__args-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+/* The class rule above's `display: inline-flex` wins over the UA's
+   `[hidden] { display: none }` rule, so we need to spell out the
+   hidden state explicitly: otherwise the eval strip's arg-control
+   dispatch (which toggles the `.hidden` property) has no effect on
+   the group. */
+.cv-eval__args-group[hidden] {
+  display: none;
+}
+/* Quiet inline label for grouped arg controls; reads as a sentence
+   fragment before the badge + input, e.g. "Conditioned by: [row prov]
+   <uuid>". */
+.cv-eval__args-label {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--fg-muted, #6b6378);
+  font-style: italic;
+  white-space: nowrap;
+}
+/* "Row prov" badge: shown whenever the current row has a known
+   provenance gate (data-row-prov on the clicked cell).  Two visual
+   states:
+     * active (default) -- the Condition input's value IS the row
+       prov.  Solid purple chip + the input gets the matching tint.
+     * muted -- the user has edited the value, so it diverges from
+       the row prov.  Faded chip with a hover affordance and the
+       input loses the tint.  Clicking the muted chip restores the
+       row prov, so a manual edit is a one-click undo.
+   The chip uses `<button>` semantics under the hood via the
+   button[type="button"] markup, so keyboard activation and focus
+   styles come from the browser default. */
+.cv-eval__cond-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: var(--purple-100, #ece6f7);
+  color: var(--purple-700, #4d369e);
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.cv-eval__cond-badge:hover {
+  filter: brightness(0.95);
+}
+.cv-eval__cond-badge i {
+  font-size: 0.65rem;
+}
+.cv-eval__cond-badge--muted {
+  background: transparent;
+  color: var(--fg-muted, #6b6378);
+  border-color: var(--border-soft, #d8d3e3);
+}
+.cv-eval__cond-badge--muted:hover {
+  background: var(--purple-100, #ece6f7);
+  color: var(--purple-700, #4d369e);
+  border-color: var(--purple-300, #c5b4ec);
+  filter: none;
+}
+/* Subtle tint on the input itself while the auto-preset is active --
+   reinforces the "this came from the row, not the user" signal
+   without competing with the badge for attention. */
+.cv-eval__args.is-auto-conditioned {
+  background: var(--purple-100, #ece6f7);
+  border-color: var(--purple-300, #c5b4ec);
+}
 .cv-eval__target {
   font-family: var(--font-mono);
   font-size: 0.75rem;

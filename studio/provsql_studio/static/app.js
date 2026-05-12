@@ -1346,10 +1346,14 @@
 
     // Click handler on result-body for UUID/agg_token cells. We rely on the
     // cell having data-circuit-uuid when it's clickable; set during render.
+    // data-row-prov (also set during render) is forwarded so the eval
+    // strip's "Condition on" auto-preset reflects the row the user just
+    // clicked, including when the target was the row's random_variable
+    // cell (whose scene root is the RV itself, not the row's prov).
     document.getElementById('result-body').addEventListener('click', (e) => {
       const cell = e.target.closest('.wp-result__cell.is-clickable');
       if (!cell || !cell.dataset.circuitUuid) return;
-      loadCircuit(cell.dataset.circuitUuid);
+      loadCircuit(cell.dataset.circuitUuid, { rowProv: cell.dataset.rowProv || '' });
     });
 
     // If a query was carried over (mode switch / preload), run it so the
@@ -1431,7 +1435,9 @@
       return;
     }
     const scene = await resp.json();
-    window.ProvsqlCircuit.renderCircuit(scene);
+    window.ProvsqlCircuit.renderCircuit(scene, {
+      rowProv: (opts && opts.rowProv) || '',
+    });
   }
 
   let _circuitLibPromise = null;
@@ -1561,10 +1567,17 @@
           <input type="number" class="cv-eval__args" id="eval-args-sample-n" hidden
                  min="1" step="1" placeholder="n" value="100"
                  autocomplete="off" title="Number of samples to draw">
-          <input type="text" class="cv-eval__args" id="eval-args-condition" hidden
-                 placeholder="condition on (UUID)" autocomplete="off"
-                 spellcheck="false" size="20"
-                 title="Optional conditioning gate UUID: the result becomes the conditional distribution X | event">
+          <span class="cv-eval__args-group" id="eval-args-condition-group" hidden>
+            <span class="cv-eval__args-label">Conditioned by:</span>
+            <span class="cv-eval__cond-badge" id="eval-args-condition-badge" hidden
+                  title="The Condition input was auto-filled with the row's provenance gate -- the canonical conditioning event for expected(rv, provenance()).  Edit it to override.">
+              <i class="fas fa-link"></i> row prov
+            </span>
+            <input type="text" class="cv-eval__args" id="eval-args-condition"
+                   placeholder="condition on (UUID)" autocomplete="off"
+                   spellcheck="false" size="20"
+                   title="Optional conditioning gate UUID: the result becomes the conditional distribution X | event.  Auto-filled with the row's provenance when you click into a row's circuit; clear it for the unconditional distribution.">
+          </span>
         </div>
         <div class="cv-eval__action-row">
           <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">
@@ -2013,6 +2026,19 @@ async function runQuery(ev) {
         else if (c.name === 'provsql' && isWhere) { /* hidden in where mode */ }
         else displayIdx.push(i);
       });
+      // Pick the row's provenance UUID for the auto-conditioning hint
+      // we stamp on each clickable cell below: prefer the rewriter's
+      // __prov column when present (always set on tracked queries with
+      // provsql.active), otherwise fall back to a user-selected
+      // `provsql` column.  Used by circuit-mode click-through so the
+      // eval strip's "Condition on" input can default to the row's
+      // provenance even when the click target is the `random_variable`
+      // cell (whose scene root is the RV itself, not the row's prov).
+      let rowProvIdx = provIdx;
+      if (rowProvIdx === -1) {
+        const i = allCols.findIndex(c => c.name === 'provsql');
+        if (i !== -1) rowProvIdx = i;
+      }
       const headExtra = (isWhere && wrapped) ? '<th></th>' : '';
       head.innerHTML = displayIdx.map(i => {
         const alignCls = env.isRightAlignedType(allCols[i].type_name) ? ' is-right' : '';
@@ -2022,6 +2048,15 @@ async function runQuery(ev) {
         const sources = wrapped && wprovIdx >= 0
           ? parseWhereProvenance(r[wprovIdx], displayIdx)
           : null;
+        // Row's provenance UUID, attached to every clickable cell of
+        // this row so circuit-mode click-through can carry the row
+        // context into the eval strip's "Condition on" auto-preset.
+        const rowProv = rowProvIdx >= 0 && r[rowProvIdx]
+          ? String(r[rowProvIdx])
+          : '';
+        const rowProvAttr = rowProv
+          ? ` data-row-prov="${env.escapeAttr(rowProv)}"`
+          : '';
         const cells = displayIdx.map((idx, di) => {
           const col = allCols[idx];
           const typeName = (col.type_name || '').toLowerCase();
@@ -2032,7 +2067,7 @@ async function runQuery(ev) {
           let extraAttr = '';
           if (isCircuit && typeName === 'uuid' && value) {
             extraCls  = ' is-clickable';
-            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
+            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
           }
           // agg_token cells: their on-wire text is the underlying UUID
           // (because provsql.aggtoken_text_as_uuid is on for studio
@@ -2057,7 +2092,7 @@ async function runQuery(ev) {
               displayValue = rvUuid;
               if (isCircuit) {
                 extraCls  = (extraCls + ' is-clickable').trim();
-                extraAttr = ` data-circuit-uuid="${env.escapeAttr(rvUuid)}"`;
+                extraAttr = ` data-circuit-uuid="${env.escapeAttr(rvUuid)}"${rowProvAttr}`;
                 if (extraCls.length) extraCls = ' ' + extraCls;
               }
             }
@@ -2065,7 +2100,7 @@ async function runQuery(ev) {
           if (typeName === 'agg_token' && value) {
             if (isCircuit) {
               extraCls  = (extraCls + ' is-clickable').trim();
-              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
+              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
               if (extraCls.length) extraCls = ' ' + extraCls;
             }
             extraAttr += ` title="${env.escapeAttr(String(value))}"`;
