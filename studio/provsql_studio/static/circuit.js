@@ -946,25 +946,28 @@
   // After a successful set_prob write, refresh the corresponding
   // node's in-circle label so the user sees the new value without
   // having to reload the circuit.  Only applies to ANONYMOUS gate_input
-  // gates (those with info1 == 0 / null: hand-minted Bernoullis like
-  // provsql.mixture's p_token, or `create_gate(uuid, 'input') +
-  // set_prob` in user code).  Inputs tied to a tracked relation keep
-  // their ι glyph regardless of probability -- ι reads as "this is a
-  // variable" and the per-row probability stays one click into the
-  // inspector away.  Mirrors circuit.py's _is_anonymous_input +
+  // gates (no source row in any tracked relation: hand-minted
+  // Bernoullis like provsql.mixture's p_token, the simplifier's
+  // synthetic dec-in-N anchor for a categorical block, or `create_gate
+  // + set_prob` in user code).  The server stamps `tracked_input` on
+  // each node; we read that directly rather than re-deriving the
+  // catalog lookup client-side.  Inputs tied to a tracked relation
+  // keep their ι glyph regardless of probability -- ι reads as "this
+  // is a variable" and the per-row probability stays one click into
+  // the inspector away.  Mirrors circuit.py's _is_anonymous_input +
   // _format_prob_label exactly.
   function updateNodeProbLabel(uuid, p) {
     if (!state.scene || !Array.isArray(state.scene.nodes)) return;
     const node = state.scene.nodes.find(n => n.id === uuid);
     if (!node || node.type !== 'input') return;
-    const info1 = node.info1;
-    const isAnonymous = info1 == null || Number(info1) === 0;
-    if (!isAnonymous) return;
+    if (node.tracked_input) return;
     let newLabel;
-    if (!Number.isFinite(p) || p === 1) {
-      newLabel = 'ι';  // gate-input default glyph
+    if (!Number.isFinite(p)) {
+      newLabel = 'ι';  // gate-input default glyph (no prob known)
     } else if (p === 0) {
       newLabel = '0%';
+    } else if (p === 1) {
+      newLabel = '100%';
     } else {
       const pct = p * 100;
       if (pct > 0 && pct < 0.01) {

@@ -116,38 +116,51 @@ def _gate_label(row: dict) -> str:
             return glyph
     if t == "input" and _is_anonymous_input(row):
         # Anonymous gate_input (no source row in any tracked relation:
-        # provsql.mixture's Bernoulli, or any `create_gate(uuid, 'input')
-        # + set_prob` the user mints by hand) renders its probability as
-        # an inline percentage instead of the generic ι glyph -- gives
-        # an at-a-glance hint of the gate's role.  Inputs tied to a
-        # tracked relation keep ι: there `ι` reads as "this is a
-        # variable", with the per-row probability one click into the
-        # inspector away.  The percent sign distinguishes the label
-        # from a regular scalar value displayed on a gate_value circle.
+        # provsql.mixture's Bernoulli, the synthetic categorical-block
+        # anchor minted by the simplifier, or any `create_gate(uuid,
+        # 'input') + set_prob` the user mints by hand) renders its
+        # probability as an inline percentage instead of the generic ι
+        # glyph -- gives an at-a-glance hint of the gate's role.  We
+        # always display the prob inline, including the 1.0 case (the
+        # categorical block's anchor-key default), so the synthetic
+        # dec-in-N gates the simplifier mints don't render as a bare ι
+        # next to their dec-mul-N siblings (which carry the actual
+        # outcome value as label).  Inputs tied to a tracked relation
+        # take the other branch (`_is_anonymous_input` -> False) and
+        # keep ι: there `ι` reads as "this is a variable", with the
+        # per-row probability one click into the inspector away.  The
+        # percent sign distinguishes the label from a regular scalar
+        # value displayed on a gate_value circle.
         prob = row.get("prob")
         if (prob is not None
                 and isinstance(prob, (int, float))
-                and not (prob != prob)         # NaN guard
-                and prob != 1.0):
+                and not (prob != prob)):       # NaN guard
             return _format_prob_label(float(prob))
     return _GATE_LABEL.get(t, t)
 
 
 def _is_anonymous_input(row: dict) -> bool:
     """An input gate is "anonymous" when no row in any tracked relation
-    references its UUID.  In the persisted circuit, `info1` is the
-    source-relation OID for tracked rows (set by `add_provenance`) and
-    stays at 0 for hand-minted gates, so the cheap discriminator is
-    `info1 == 0 / null`.  Avoids a per-gate `resolve_input` round-trip.
-    `info1` may arrive as int (persisted-DAG branch) or text (simplified-
-    DAG branch via jsonb), hence the lenient int() coercion."""
-    info1 = row.get("info1")
-    if info1 is None:
-        return True
-    try:
-        return int(info1) == 0
-    except (TypeError, ValueError):
-        return False
+    references its UUID.
+
+    The discriminator is set by `_fetch_subgraph` via a single bulk
+    catalog scan: it walks every user-schema table that carries a
+    `provsql uuid` column, collects which of the rendered gate UUIDs
+    appear there, and stamps the matching rows with
+    `is_tracked_input=True`.  The Boolean is then mirrored into the
+    per-node JSON returned to the front-end so `circuit.js` can
+    distinguish the two flavours without re-deriving the lookup
+    client-side.
+
+    The historical heuristic (`info1 == 0 / null`) was unsound:
+    `add_provenance` doesn't write into `info1`, so a tracked-table
+    input gate with a user-pinned probability would be misclassified
+    as anonymous and rendered with its percentage instead of ι.  The
+    synthetic `dec-in-N` gates the simplifier mints (jsonb branch)
+    have `info1` literally null and are correctly anonymous; both the
+    bulk lookup and the heuristic agree on those.
+    """
+    return not row.get("is_tracked_input", False)
 
 
 def _format_prob_label(p: float) -> str:
@@ -395,7 +408,88 @@ def _fetch_subgraph(
                 "prob": prob,
                 "depth": d,
             })
+        # Decide which gate_input rows are tracked-table inputs (their
+        # UUID appears as a `provsql` value in some user-schema
+        # relation) vs anonymous (mixture's Bernoulli, simplifier-
+        # minted dec-in-N anchor, hand-minted Bernoulli, ...).  The
+        # label decision in `_gate_label` reads `is_tracked_input`
+        # straight off the row, so this single bulk lookup replaces
+        # what would otherwise be one resolve_input round-trip per
+        # input gate.  Synthetic dec-in-N IDs minted by the hybrid
+        # simplifier never appear as `provsql` values, so they're
+        # naturally classified anonymous without a special case.
+        candidate_uuids = {
+            r["node"] for r in out
+            if r["gate_type"] == "input" and _looks_like_uuid(r["node"])
+        }
+        tracked = _fetch_tracked_input_uuids(cur, candidate_uuids)
+        for r in out:
+            r["is_tracked_input"] = (
+                r["gate_type"] == "input" and r["node"] in tracked)
     return out
+
+
+def _looks_like_uuid(s: object) -> bool:
+    """Cheap shape check: real provsql input UUIDs are 36-char strings
+    of the standard 8-4-4-4-12 hex form.  The simplifier mints synthetic
+    `dec-in-N` / `dec-mul-N` IDs that fail this shape; skipping them
+    keeps the bulk catalog lookup from issuing a no-op `WHERE provsql =
+    ANY(...)` over user tables for IDs that can never match (and that
+    psycopg would otherwise reject when it tries to bind them as uuid)."""
+    if not isinstance(s, str) or len(s) != 36:
+        return False
+    return s[8] == s[13] == s[18] == s[23] == "-"
+
+
+def _fetch_tracked_input_uuids(cur, candidate_uuids):
+    """Return the subset of @p candidate_uuids that appear as `provsql`
+    values in any user-schema tracked relation.
+
+    Single bulk catalog scan + UNION ALL over every relevant table;
+    `provsql.active = off` for the duration so the rewriter doesn't
+    auto-append the provsql column to each branch (which would force
+    further gate creation just to render the label).  The Python set
+    return is consumed by `_fetch_subgraph` to stamp
+    `is_tracked_input` on each row before `_gate_label` runs.
+    """
+    if not candidate_uuids:
+        return set()
+    cur.execute(
+        "SELECT (c.oid::regclass)::text "
+        "FROM pg_attribute a "
+        "  JOIN pg_class c ON a.attrelid = c.oid "
+        "  JOIN pg_namespace ns ON c.relnamespace = ns.oid "
+        "  JOIN pg_type ty ON a.atttypid = ty.oid "
+        "WHERE a.attname = 'provsql' "
+        "  AND ty.typname = 'uuid' "
+        "  AND c.relkind = 'r' "
+        "  AND ns.nspname <> 'provsql' "
+        "  AND a.attnum > 0"
+    )
+    relations = [row[0] for row in cur.fetchall()]
+    if not relations:
+        return set()
+    from psycopg import sql as pg_sql
+    cur.execute("SET LOCAL provsql.active = off")
+    branches = []
+    for rel_text in relations:
+        # `rel_text` came from `c.oid::regclass::text` so it's already
+        # correctly schema-qualified and quoted by PostgreSQL; pass it
+        # through as raw SQL.  The named-parameter %(uu)s binds the
+        # candidate-UUID list once and is reused across every branch.
+        branches.append(
+            pg_sql.SQL("SELECT t.provsql FROM {} t WHERE t.provsql = ANY(%(uu)s)")
+                .format(pg_sql.SQL(rel_text))
+        )
+    final_sql = (
+        pg_sql.SQL("SELECT DISTINCT provsql::text FROM (")
+        + pg_sql.SQL(" UNION ALL ").join(branches)
+        + pg_sql.SQL(") u")
+    )
+    # ANY() needs a list (psycopg binds Python list as PG array of the
+    # column's type).  Pass strings; PG casts to uuid at the comparison.
+    cur.execute(final_sql, {"uu": list(candidate_uuids)})
+    return {row[0] for row in cur.fetchall()}
 
 
 def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]) -> dict:
@@ -434,6 +528,10 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             "x":         pos.get(r["node"], (0, 0))[0],
             "y":         pos.get(r["node"], (0, 0))[1],
             "frontier":  r["node"] in frontier_uuids,
+            # Mirror server-side label dispatch onto the front-end so
+            # the post-set_prob refresh in circuit.js can re-derive the
+            # label without re-querying the bulk catalog scan.
+            "tracked_input": bool(r.get("is_tracked_input")),
         })
     edges = [
         {"from": r["parent"], "to": r["node"], "child_pos": r["child_pos"]}

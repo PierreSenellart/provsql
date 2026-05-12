@@ -223,6 +223,55 @@ def test_leaf_unknown_uuid_returns_404(client):
     assert resp.status_code == 404
 
 
+def test_circuit_tracked_input_keeps_iota_label(client, test_dsn):
+    """An input gate whose UUID appears in some tracked relation must
+    keep its ι glyph regardless of any pinned probability.  Regression
+    test for the old `info1 == 0` discriminator: `add_provenance`
+    doesn't write into `info1`, so a tracked-table gate with a
+    user-pinned probability used to render as e.g. "42%" instead of ι.
+    The bulk catalog scan in `_fetch_tracked_input_uuids` is the
+    source of truth now; the test pins the contract."""
+    uuid = _personnel_uuid(test_dsn, "John")
+    # Pin a non-default probability so the bug condition (prob != 1.0)
+    # would have fired the percentage-label branch.
+    client.post("/api/set_prob", json={"uuid": uuid, "probability": 0.42})
+    try:
+        resp = client.get(f"/api/circuit/{uuid}")
+        assert resp.status_code == 200, resp.data
+        body = resp.get_json()
+        node = next((n for n in body["nodes"] if n["id"] == uuid), None)
+        assert node is not None, body
+        assert node["type"] == "input"
+        assert node["label"] == "ι", node
+        assert node["tracked_input"] is True
+    finally:
+        # Reset to the implicit default so other tests on John see 1.0.
+        client.post("/api/set_prob", json={"uuid": uuid, "probability": 1.0})
+
+
+def test_circuit_anonymous_input_renders_probability(client, test_dsn):
+    """An anonymous input (no source row in any tracked relation) must
+    render its probability inline as a percentage, including the 1.0
+    case so the simplifier-minted dec-in-N anchor of a categorical
+    block doesn't fall through to a bare ι next to its dec-mul-N
+    siblings."""
+    import uuid as _uuid
+    anon_uuid = str(_uuid.uuid4())
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.create_gate(%s::uuid, 'input')", (anon_uuid,))
+        cur.execute("SELECT provsql.set_prob(%s::uuid, 0.37)", (anon_uuid,))
+    resp = client.get(f"/api/circuit/{anon_uuid}")
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    node = next((n for n in body["nodes"] if n["id"] == anon_uuid), None)
+    assert node is not None, body
+    assert node["type"] == "input"
+    assert node["label"] == "37%", node
+    assert node["tracked_input"] is False
+
+
 def test_leaf_anonymous_input_surfaces_probability(client, test_dsn):
     """An input gate created via `create_gate(uuid, 'input') + set_prob`
     -- e.g. by the `provsql.mixture(p_value, x, y)` overload, or by hand
