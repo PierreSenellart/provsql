@@ -424,14 +424,17 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_RANDOM_VARIABLE_UUID =
     get_provsql_func_oid("random_variable_uuid");
 
-  /* rv_sum aggregate and its per-row helper are part of the
-   * continuous-distribution surface introduced in 1.5.0; absent from
-   * older schemas. The lookup is harmless if the symbol is missing
+  /* sum(random_variable) aggregate and its per-row helper are part of
+   * the continuous-distribution surface introduced in 1.5.0; absent
+   * from older schemas. The lookup is harmless if the symbol is missing
    * (InvalidOid stored, the planner-hook rewriter compares against this
-   * OID to decide whether to apply the rv_sum rewrite, so an InvalidOid
-   * just means the rewrite is never triggered -- in particular the
-   * 1.0.0 baseline used by extension_upgrade silently no-ops). */
-  constants.OID_FUNCTION_RV_SUM = get_provsql_func_oid("rv_sum");
+   * OID to decide whether to apply the sum(random_variable) rewrite,
+   * so an InvalidOid just means the rewrite is never triggered -- in
+   * particular the 1.0.0 baseline used by extension_upgrade silently
+   * no-ops).  The lookup is unambiguous because provsql.sum is the
+   * sole sum() overload in the provsql schema; the built-in numeric
+   * sum overloads live in pg_catalog and are not searched. */
+  constants.OID_FUNCTION_SUM_RV = get_provsql_func_oid("sum");
   constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD =
     get_provsql_func_oid("rv_aggregate_semimod");
 

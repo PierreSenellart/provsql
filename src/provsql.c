@@ -788,7 +788,7 @@ static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
  * @brief Build the per-row provenance token for an aggregate rewrite.
  *
  * Used by both @c make_aggregation_expression (for the agg_token /
- * @c provenance_semimod path) and @c make_rv_sum_expression (for the
+ * @c provenance_semimod path) and @c make_sum_rv_expression (for the
  * inline @c gate_arith-of-mixtures path).  Combines @p prov_atts via
  * @c provenance_times (under @c SR_TIMES) or @c provenance_monus
  * (under @c SR_MONUS); a single @c prov_att is returned as-is.
@@ -825,14 +825,16 @@ static Expr *combine_prov_atts(const constants_t *constants,
 }
 
 /**
- * @brief Inline rewrite of @c rv_sum into a @c gate_arith-of-mixtures.
+ * @brief Inline rewrite of @c sum(random_variable) into a
+ *        @c gate_arith-of-mixtures.
  *
  * Phase 1 of the SUM-over-RV story (see @c aggregation-of-rvs.md).
- * Replaces @c rv_sum(@c x) with an Aggref whose per-row argument is
+ * Replaces @c sum(@c x) with an Aggref whose per-row argument is
  * lifted through @c rv_aggregate_semimod to attach the row's
  * provenance: each row contributes @c mixture(prov_token, X_i,
- * as_random(0)), the rv_sum aggregate then collects the per-row
- * mixtures into a single @c gate_arith @c PLUS root.  This realises
+ * as_random(0)), the @c sum(random_variable) aggregate then collects
+ * the per-row mixtures into a single @c gate_arith @c PLUS root.
+ * This realises
  * @f$\mathrm{SUM}(x) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i@f$
  * directly through the existing scalar-RV machinery (sampler,
  * Expectation, RangeCheck, simplifier) without going through
@@ -842,7 +844,7 @@ static Expr *combine_prov_atts(const constants_t *constants,
  * SR_PLUS (UNION outer level) is handled by the caller; this builder
  * never runs for SR_PLUS.
  */
-static Expr *make_rv_sum_expression(const constants_t *constants,
+static Expr *make_sum_rv_expression(const constants_t *constants,
                                     Aggref *agg_ref, List *prov_atts,
                                     semiring_operation op) {
   Expr *prov_expr = combine_prov_atts(constants, prov_atts, op);
@@ -862,15 +864,15 @@ static Expr *make_rv_sum_expression(const constants_t *constants,
   wrap->args = list_make2(prov_expr, rv_arg);
   wrap->location = -1;
 
-  /* Rebuild an Aggref calling the same rv_sum aggregate, but with the
-   * argument now wrapped.  Inherit the original Aggref's clause
-   * positioning; aggargtypes / aggtype stay random_variable. */
+  /* Rebuild an Aggref calling the same sum(random_variable) aggregate,
+   * but with the argument now wrapped.  Inherit the original Aggref's
+   * clause positioning; aggargtypes / aggtype stay random_variable. */
   te = makeNode(TargetEntry);
   te->resno = 1;
   te->expr = (Expr *)wrap;
 
   new_agg = makeNode(Aggref);
-  new_agg->aggfnoid = constants->OID_FUNCTION_RV_SUM;
+  new_agg->aggfnoid = constants->OID_FUNCTION_SUM_RV;
   new_agg->aggtype = constants->OID_TYPE_RANDOM_VARIABLE;
   new_agg->aggargtypes = list_make1_oid(constants->OID_TYPE_RANDOM_VARIABLE);
   new_agg->aggkind = AGGKIND_NORMAL;
@@ -900,15 +902,15 @@ static Expr *make_aggregation_expression(const constants_t *constants,
   } else {
     Oid aggregation_function = agg_ref->aggfnoid;
 
-    /* rv_sum (SUM over a random_variable column) gets a different
-     * rewrite: instead of going through provenance_semimod (which
-     * builds a gate_value from CAST(val AS VARCHAR), nonsensical for
-     * an RV), each row is wrapped in mixture(prov, rv, as_random(0))
-     * and rv_sum aggregates the resulting mixtures into a single
-     * gate_arith PLUS root.  See aggregation-of-rvs.md. */
-    if (OidIsValid(constants->OID_FUNCTION_RV_SUM) &&
-        aggregation_function == constants->OID_FUNCTION_RV_SUM) {
-      return make_rv_sum_expression(constants, agg_ref, prov_atts, op);
+    /* sum(random_variable) gets a different rewrite: instead of going
+     * through provenance_semimod (which builds a gate_value from
+     * CAST(val AS VARCHAR), nonsensical for an RV), each row is
+     * wrapped in mixture(prov, rv, as_random(0)) and the
+     * sum(random_variable) aggregate collects the resulting mixtures
+     * into a single gate_arith PLUS root.  See aggregation-of-rvs.md. */
+    if (OidIsValid(constants->OID_FUNCTION_SUM_RV) &&
+        aggregation_function == constants->OID_FUNCTION_SUM_RV) {
+      return make_sum_rv_expression(constants, agg_ref, prov_atts, op);
     }
 
     if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)

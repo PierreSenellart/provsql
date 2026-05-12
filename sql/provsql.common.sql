@@ -2325,18 +2325,19 @@ CREATE OPERATOR > (
 /**
  * @name Aggregates over random_variable
  *
- * Phase 1 of the SUM-over-RV story: an explicit @c provsql.rv_sum
- * aggregate that takes a @c random_variable per row and returns the
- * @c random_variable representing the (provenance-weighted) sum.
+ * Phase 1 of the SUM-over-RV story: an overload of the standard
+ * @c sum aggregate that takes a @c random_variable per row and returns
+ * the @c random_variable representing the (provenance-weighted) sum.
+ * Lives in the @c provsql schema so a @c sum(random_variable) call
+ * resolves to it without colliding with the built-in numeric @c sum
+ * overloads in @c pg_catalog.
  *
- * The user-facing aggregate has signature
- * <tt>rv_sum(random_variable) RETURNS random_variable</tt>.  Direct
- * calls outside a provenance-tracked query treat each row's contribution
- * unconditionally (no per-row Boolean selector).  When the planner hook
- * sees an @c rv_sum @c Aggref over a provenance-tracked query, it wraps
- * the per-row argument @c x in <tt>provsql.mixture(prov_token, x,
- * provsql.as_random(0))</tt> so the aggregate's effective semantics
- * become
+ * Direct calls outside a provenance-tracked query treat each row's
+ * contribution unconditionally (no per-row Boolean selector).  When
+ * the planner hook sees a @c provsql.sum @c Aggref over a
+ * provenance-tracked query, it wraps the per-row argument @c x in
+ * <tt>provsql.mixture(prov_token, x, provsql.as_random(0))</tt> so the
+ * aggregate's effective semantics become
  * @f$\mathrm{SUM}(x) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i@f$,
  * the natural extension of semimodule-provenance to RV-valued M.
  *
@@ -2344,7 +2345,7 @@ CREATE OPERATOR > (
  * The final function builds a single @c gate_arith @c PLUS over them
  * (or returns @c as_random(0) for an empty group, the additive
  * identity).  Sharing on @c provenance_arith's v5 hash means two
- * @c rv_sum invocations over the same set of rows collide on the same
+ * @c sum invocations over the same set of rows collide on the same
  * gate.
  *
  * @{
@@ -2353,14 +2354,14 @@ CREATE OPERATOR > (
 /**
  * @brief Per-row helper: wrap an RV in @c mixture(prov, rv, as_random(0)).
  *
- * Internal helper used by the planner-hook rewriter to lift an @c rv_sum
- * argument into its provenance-aware form.  Encodes one row's
- * contribution to the SUM as a Bernoulli mixture over the row's
- * provenance: with probability @c P(prov) the mixture samples @c rv,
- * otherwise it samples the additive identity @c as_random(0).  Exposed
- * as a regular SQL function so the planner can construct a @c FuncExpr
- * by name without needing to disambiguate @c mixture / @c as_random
- * overloads at OID-lookup time.
+ * Internal helper used by the planner-hook rewriter to lift a
+ * @c sum(random_variable) argument into its provenance-aware form.
+ * Encodes one row's contribution to the SUM as a Bernoulli mixture
+ * over the row's provenance: with probability @c P(prov) the mixture
+ * samples @c rv, otherwise it samples the additive identity
+ * @c as_random(0).  Exposed as a regular SQL function so the planner
+ * can construct a @c FuncExpr by name without needing to disambiguate
+ * @c mixture / @c as_random overloads at OID-lookup time.
  */
 CREATE OR REPLACE FUNCTION rv_aggregate_semimod(
   prov uuid, rv random_variable)
@@ -2370,7 +2371,7 @@ $$
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /**
- * @brief State-transition function for @c rv_sum.
+ * @brief State-transition function for @c sum(random_variable).
  *
  * Appends the input RV's UUID to the running array.  NULL inputs are
  * skipped (matching standard SUM semantics).  The aggregate's INITCOND
@@ -2378,7 +2379,7 @@ $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
  * is what lets us return @c as_random(0) (the additive identity) for
  * an empty SUM rather than NULL.
  */
-CREATE OR REPLACE FUNCTION rv_sum_sfunc(
+CREATE OR REPLACE FUNCTION sum_rv_sfunc(
   state uuid[], rv random_variable)
   RETURNS uuid[] AS
 $$
@@ -2389,7 +2390,8 @@ $$
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 /**
- * @brief Final function for @c rv_sum: build a @c gate_arith PLUS root.
+ * @brief Final function for @c sum(random_variable): build a
+ *        @c gate_arith PLUS root.
  *
  * Empty group (@c state = @c '{}'): return @c as_random(0), the
  * additive identity, so SUM over zero rows is the deterministic
@@ -2400,7 +2402,7 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
  *
  * Otherwise: build @c gate_arith(PLUS, state) via @c provenance_arith.
  */
-CREATE OR REPLACE FUNCTION rv_sum_ffunc(state uuid[])
+CREATE OR REPLACE FUNCTION sum_rv_ffunc(state uuid[])
   RETURNS random_variable AS
 $$
 DECLARE
@@ -2417,11 +2419,11 @@ BEGIN
 END
 $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
-CREATE AGGREGATE rv_sum(random_variable) (
-  SFUNC     = rv_sum_sfunc,
+CREATE AGGREGATE sum(random_variable) (
+  SFUNC     = sum_rv_sfunc,
   STYPE     = uuid[],
   INITCOND  = '{}',
-  FINALFUNC = rv_sum_ffunc
+  FINALFUNC = sum_rv_ffunc
 );
 
 /** @} */

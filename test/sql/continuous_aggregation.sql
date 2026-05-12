@@ -2,7 +2,7 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- Phase 1 of the SUM-over-RV story: provsql.rv_sum is the explicit
+-- Phase 1 of the SUM-over-RV story: provsql.sum is the explicit
 -- aggregate that takes a random_variable per row and returns a
 -- random_variable representing the (provenance-weighted) sum.  In a
 -- provenance-tracked query the planner-hook rewriter wraps each row's
@@ -33,7 +33,7 @@ INSERT INTO rv_basic VALUES
   ('c', provsql.normal(3, 1));
 SELECT add_provenance('rv_basic');
 
-CREATE TABLE rv_basic_sum AS SELECT provsql.rv_sum(x) AS s FROM rv_basic;
+CREATE TABLE rv_basic_sum AS SELECT provsql.sum(x) AS s FROM rv_basic;
 SELECT remove_provenance('rv_basic_sum');
 
 -- Structure: the rewriter produces gate_arith(PLUS, [mixture, mixture, mixture]).
@@ -56,7 +56,7 @@ DROP TABLE rv_basic;
 -- ---------------------------------------------------------------------
 -- Each row carries a Bernoulli atom with probability p_i; X_i is
 -- normal(mu_i, 1).  Linearity of expectation gives
---   E[rv_sum] = sum_i p_i * mu_i
+--   E[sum] = sum_i p_i * mu_i
 -- exactly, regardless of independence between rows; rec_expectation
 -- collapses to the closed-form mixture branch and pins to 1e-9.
 
@@ -76,7 +76,7 @@ END
 $$;
 
 CREATE TABLE rv_uncertain_sum AS
-  SELECT provsql.rv_sum(x) AS s FROM rv_uncertain;
+  SELECT provsql.sum(x) AS s FROM rv_uncertain;
 SELECT remove_provenance('rv_uncertain_sum');
 
 -- E[SUM] = 0.5*1 + 0.4*2 + 0.3*3 = 0.5 + 0.8 + 0.9 = 2.2
@@ -136,7 +136,7 @@ INSERT INTO rv_coupled VALUES
   ('a', provsql.normal(1, 1), (SELECT b1 FROM bern_pair)),
   ('b', provsql.normal(1, 1), (SELECT b1 FROM bern_pair));
 
-CREATE TABLE coupled_sum AS SELECT provsql.rv_sum(x) AS s FROM rv_coupled;
+CREATE TABLE coupled_sum AS SELECT provsql.sum(x) AS s FROM rv_coupled;
 SELECT remove_provenance('coupled_sum');
 
 SELECT abs(provsql.expected(s) - 1.0) < 1e-9 AS coupled_mean,
@@ -148,7 +148,7 @@ INSERT INTO rv_decoupled VALUES
   ('a', provsql.normal(1, 1), (SELECT b1 FROM bern_pair)),
   ('b', provsql.normal(1, 1), (SELECT b2 FROM bern_pair));
 
-CREATE TABLE decoupled_sum AS SELECT provsql.rv_sum(x) AS s FROM rv_decoupled;
+CREATE TABLE decoupled_sum AS SELECT provsql.sum(x) AS s FROM rv_decoupled;
 SELECT remove_provenance('decoupled_sum');
 
 SELECT abs(provsql.expected(s) - 1.0) < 1e-9 AS decoupled_mean,
@@ -183,7 +183,7 @@ INSERT INTO rv_shared VALUES
   ('b', random_variable_make((SELECT u FROM rv_anchor), 'NaN'::float8));
 SELECT add_provenance('rv_shared');
 
-CREATE TABLE shared_rv_sum AS SELECT provsql.rv_sum(x) AS s FROM rv_shared;
+CREATE TABLE shared_rv_sum AS SELECT provsql.sum(x) AS s FROM rv_shared;
 SELECT remove_provenance('shared_rv_sum');
 
 SELECT abs(provsql.expected(s) - 0.0) < 1e-9 AS shared_rv_mean,
@@ -196,7 +196,7 @@ INSERT INTO rv_distinct VALUES
   ('b', provsql.normal(0, 1));
 SELECT add_provenance('rv_distinct');
 
-CREATE TABLE distinct_rv_sum AS SELECT provsql.rv_sum(x) AS s FROM rv_distinct;
+CREATE TABLE distinct_rv_sum AS SELECT provsql.sum(x) AS s FROM rv_distinct;
 SELECT remove_provenance('distinct_rv_sum');
 
 SELECT abs(provsql.expected(s) - 0.0) < 1e-9 AS distinct_rv_mean,
@@ -224,7 +224,7 @@ INSERT INTO rv_empty VALUES
 SELECT add_provenance('rv_empty');
 
 CREATE TABLE empty_sum AS
-  SELECT provsql.rv_sum(x) AS s FROM rv_empty WHERE keep;
+  SELECT provsql.sum(x) AS s FROM rv_empty WHERE keep;
 SELECT remove_provenance('empty_sum');
 
 SELECT get_gate_type(s::uuid)                AS empty_root_kind,
@@ -237,7 +237,7 @@ DROP TABLE empty_sum;
 DROP TABLE rv_empty;
 
 -- ---------------------------------------------------------------------
--- 6.  COUNT(*) lift via rv_sum(as_random(1)).
+-- 6.  COUNT(*) lift via sum(as_random(1)).
 -- ---------------------------------------------------------------------
 -- A SUM over Dirac-1 inputs is the lift of COUNT(*) into the
 -- continuous-RV space: each row contributes mixture(prov_i, 1, 0),
@@ -261,7 +261,7 @@ END
 $$;
 
 CREATE TABLE count_lift_sum AS
-  SELECT provsql.rv_sum(provsql.as_random(1)) AS s FROM rv_count;
+  SELECT provsql.sum(provsql.as_random(1)) AS s FROM rv_count;
 SELECT remove_provenance('count_lift_sum');
 
 -- Structural check: gate_arith with one mixture per row.  The mixture
