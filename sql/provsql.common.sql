@@ -2423,6 +2423,105 @@ CREATE AGGREGATE sum(random_variable) (
   FINALFUNC = sum_rv_ffunc
 );
 
+/**
+ * @brief Final function for @c avg(random_variable).
+ *
+ * Builds the natural lift of @c "AVG = SUM / COUNT" into the
+ * @c random_variable algebra:
+ * @f[
+ *   \mathrm{AVG}(x) \;=\; \frac{\sum_i \mathbf{1}\{\varphi_i\} \cdot X_i}
+ *                                {\sum_i \mathbf{1}\{\varphi_i\}}
+ * @f]
+ * realised as @c gate_arith(DIV, num, denom) where @c num is the
+ * @c sum(random_variable) gate over the per-row mixtures and @c denom
+ * is the @c sum(random_variable) gate over the same provenance gates
+ * weighted by a per-row @c as_random(1) -- exactly the SQL pattern
+ * "@c sum(x) @c / @c sum(as_random(1))" emitted as a single
+ * @c random_variable token.
+ *
+ * Reuses @c sum_rv_sfunc as the state-transition function so the
+ * array of per-row UUIDs is collected identically to
+ * @c sum(random_variable).  In a provenance-tracked query the
+ * planner-hook rewriter routes RV-returning aggregates through
+ * @c make_rv_aggregate_expression, which wraps each per-row argument
+ * in @c mixture(prov_i, x_i, as_random(0)); the FFUNC then recovers
+ * @c prov_i from each mixture's first child to construct the matching
+ * @c mixture(prov_i, as_random(1), as_random(0)) for the denominator.
+ * Outside a tracked query the per-row UUIDs are plain RV roots, in
+ * which case each row contributes an unconditional @c as_random(1)
+ * to the denominator -- the natural extension of "no provenance =
+ * every row counts" used elsewhere in the extension.
+ *
+ * Empty group: returns @c NULL, matching the standard SQL @c AVG
+ * convention.  This differs from @c sum(random_variable), which
+ * returns the additive identity @c as_random(0) for an empty group;
+ * for AVG the multiplicative identity is not the right answer and
+ * the caller has no way to disambiguate "0 rows" from "rows that
+ * sum to 0".
+ */
+CREATE OR REPLACE FUNCTION avg_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  i integer;
+  num_token uuid;
+  denom_token uuid;
+  denom_state uuid[] := '{}';
+  one_uuid uuid;
+  gtype provsql.provenance_gate;
+  children uuid[];
+  prov_i uuid;
+BEGIN
+  IF state IS NULL THEN
+    RETURN NULL;
+  END IF;
+  n := array_length(state, 1);
+  IF n IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  one_uuid := provsql.random_variable_uuid(
+                provsql.as_random(1::double precision));
+
+  FOR i IN 1..n LOOP
+    gtype := provsql.get_gate_type(state[i]);
+    IF gtype = 'mixture'::provsql.provenance_gate THEN
+      children := provsql.get_children(state[i]);
+      prov_i := children[1];
+      denom_state := array_append(
+        denom_state,
+        provsql.random_variable_uuid(
+          provsql.rv_aggregate_semimod(
+            prov_i, provsql.as_random(1::double precision))));
+    ELSE
+      denom_state := array_append(denom_state, one_uuid);
+    END IF;
+  END LOOP;
+
+  IF n = 1 THEN
+    num_token := state[1];
+    denom_token := denom_state[1];
+  ELSE
+    num_token := provsql.provenance_arith(0, state);          -- 0 = PLUS
+    denom_token := provsql.provenance_arith(0, denom_state);  -- 0 = PLUS
+  END IF;
+
+  RETURN provsql.random_variable_make(
+    provsql.provenance_arith(
+      3,  -- 3 = PROVSQL_ARITH_DIV
+      ARRAY[num_token, denom_token]),
+    'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE avg(random_variable) (
+  SFUNC     = sum_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = avg_rv_ffunc
+);
+
 /** @} */
 
 /** @} */

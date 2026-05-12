@@ -89,3 +89,36 @@ t
 count_lift_variance
 t
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+root_kind|root_arity|num_kind|den_kind|num_arity|den_arity
+arith|2|arith|arith|3|3
+(1 row)
+avg_basic_mean|avg_basic_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+avg_uncert_mean|avg_uncert_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+avg_empty_is_null|provsql
+t|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+den_kind|den_child_kind
+arith|value
+(1 row)
+avg_direct_mean|avg_direct_variance
+t|t
+(1 row)

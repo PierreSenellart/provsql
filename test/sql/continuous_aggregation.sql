@@ -293,5 +293,136 @@ SELECT abs(provsql.variance(s) - 0.62) < 1e-9 AS count_lift_variance
 DROP TABLE count_lift_sum;
 DROP TABLE rv_count;
 
+-- ---------------------------------------------------------------------
+-- 7.  AVG(random_variable) on a tracked table.
+-- ---------------------------------------------------------------------
+-- provsql.avg lifts the standard "AVG = SUM / COUNT" identity into the
+-- random_variable algebra.  The planner-hook generalises the SUM-rewrite
+-- to every RV-returning aggregate (dispatch on aggtype = random_variable
+-- in make_aggregation_expression), so each row's argument is wrapped in
+-- mixture(prov_i, X_i, as_random(0)) before reaching avg_rv_ffunc.  The
+-- FFUNC then walks each mixture to recover prov_i and builds the
+-- per-row denominator as mixture(prov_i, as_random(1), as_random(0)),
+-- so num/denom share the SAME provenance footprint per row -- the
+-- pattern is exactly "provsql.sum(x) / provsql.sum(provsql.as_random(1))"
+-- emitted as a single token.
+
+-- 7a.  Deterministic provenance.
+--   AVG of N(1,1), N(2,1), N(3,1) under default prob=1.0:
+--     SUM = N(6, 3); SUM_ones = 3; AVG = N(2, 1/3).
+--   The DIV gate doesn't have a closed-form evaluator in general, so
+--   expected/variance go through Monte Carlo; tolerance 0.05 leaves
+--   headroom for sampler noise at 50k samples.
+
+CREATE TABLE rv_avg_basic(label text, x random_variable);
+INSERT INTO rv_avg_basic VALUES
+  ('a', provsql.normal(1, 1)),
+  ('b', provsql.normal(2, 1)),
+  ('c', provsql.normal(3, 1));
+SELECT add_provenance('rv_avg_basic');
+
+CREATE TABLE rv_avg_basic_res AS
+  SELECT provsql.avg(x) AS m FROM rv_avg_basic;
+SELECT remove_provenance('rv_avg_basic_res');
+
+-- Structure: gate_arith DIV with two gate_arith PLUS children (num,
+-- denom), each over three mixture per-row contributions.
+SELECT get_gate_type(m::uuid)                              AS root_kind,
+       array_length(get_children(m::uuid), 1)              AS root_arity,
+       get_gate_type((get_children(m::uuid))[1])           AS num_kind,
+       get_gate_type((get_children(m::uuid))[2])           AS den_kind,
+       array_length(get_children((get_children(m::uuid))[1]), 1) AS num_arity,
+       array_length(get_children((get_children(m::uuid))[2]), 1) AS den_arity
+  FROM rv_avg_basic_res;
+
+SELECT abs(provsql.expected(m) - 2.0)       < 0.05 AS avg_basic_mean,
+       abs(provsql.variance(m) - 1.0 / 3.0) < 0.05 AS avg_basic_variance
+  FROM rv_avg_basic_res;
+
+DROP TABLE rv_avg_basic_res;
+DROP TABLE rv_avg_basic;
+
+-- 7b.  Uncertain provenance, guaranteed non-empty.
+--   p_a = p_b = 1.0, p_c = 0.5.  Decompose by survivor of c:
+--     W1 (prob 0.5, c absent):  AVG = (X_a + X_b)/2, mean 1.5, var 0.5
+--     W2 (prob 0.5, c present): AVG = (X_a + X_b + X_c)/3, mean 2.0, var 1/3
+--   Mixture means and variances:
+--     E[AVG]    = 0.5 * 1.5 + 0.5 * 2.0 = 1.75
+--     E[AVG^2]  = 0.5 * (0.5 + 1.5^2) + 0.5 * (1/3 + 2.0^2)
+--               = 0.5 * 2.75 + 0.5 * 4.3333  = 3.5417
+--     Var[AVG]  = 3.5417 - 1.75^2 = 0.4792
+--   Conditioning on at least one row keeps num/denom from hitting 0/0,
+--   so the MC mean is well-defined.
+
+CREATE TABLE rv_avg_uncert(label text, x random_variable);
+INSERT INTO rv_avg_uncert VALUES
+  ('a', provsql.normal(1, 1)),
+  ('b', provsql.normal(2, 1)),
+  ('c', provsql.normal(3, 1));
+SELECT add_provenance('rv_avg_uncert');
+
+DO $$
+BEGIN
+  PERFORM set_prob(provenance(), 1.0) FROM rv_avg_uncert WHERE label = 'a';
+  PERFORM set_prob(provenance(), 1.0) FROM rv_avg_uncert WHERE label = 'b';
+  PERFORM set_prob(provenance(), 0.5) FROM rv_avg_uncert WHERE label = 'c';
+END
+$$;
+
+CREATE TABLE rv_avg_uncert_res AS
+  SELECT provsql.avg(x) AS m FROM rv_avg_uncert;
+SELECT remove_provenance('rv_avg_uncert_res');
+
+SELECT abs(provsql.expected(m) - 1.75)   < 0.05 AS avg_uncert_mean,
+       abs(provsql.variance(m) - 0.4792) < 0.05 AS avg_uncert_variance
+  FROM rv_avg_uncert_res;
+
+DROP TABLE rv_avg_uncert_res;
+DROP TABLE rv_avg_uncert;
+
+-- 7c.  Empty group: WHERE filters out every row.
+--   avg_rv_ffunc returns NULL on the INITCOND='{}' state, matching the
+--   standard SQL AVG convention and intentionally differing from
+--   provsql.sum (which returns as_random(0) for an empty group).
+
+CREATE TABLE rv_avg_empty(label text, x random_variable, keep boolean);
+INSERT INTO rv_avg_empty VALUES
+  ('a', provsql.normal(1, 1), false),
+  ('b', provsql.normal(2, 1), false);
+SELECT add_provenance('rv_avg_empty');
+
+SELECT provsql.avg(x) IS NULL AS avg_empty_is_null
+  FROM rv_avg_empty WHERE keep;
+
+DROP TABLE rv_avg_empty;
+
+-- 7d.  Direct (untracked) call.
+--   No add_provenance => the planner hook leaves the Aggref alone and
+--   the FFUNC sees raw RV uuids, not mixture-wrapped ones.  The fallback
+--   branch in avg_rv_ffunc counts each row unconditionally
+--   (as_random(1) per row), so AVG matches the straight arithmetic mean.
+
+CREATE TABLE rv_avg_direct(label text, x random_variable);
+INSERT INTO rv_avg_direct VALUES
+  ('a', provsql.normal(1, 1)),
+  ('b', provsql.normal(2, 1)),
+  ('c', provsql.normal(3, 1));
+
+CREATE TABLE rv_avg_direct_res AS
+  SELECT provsql.avg(x) AS m FROM rv_avg_direct;
+
+-- The denominator is gate_arith(PLUS, [value, value, value]) -- three
+-- raw as_random(1) Dirac gates, no mixtures.
+SELECT get_gate_type((get_children(m::uuid))[2])                       AS den_kind,
+       get_gate_type((get_children((get_children(m::uuid))[2]))[1])    AS den_child_kind
+  FROM rv_avg_direct_res;
+
+SELECT abs(provsql.expected(m) - 2.0)       < 0.05 AS avg_direct_mean,
+       abs(provsql.variance(m) - 1.0 / 3.0) < 0.05 AS avg_direct_variance
+  FROM rv_avg_direct_res;
+
+DROP TABLE rv_avg_direct_res;
+DROP TABLE rv_avg_direct;
+
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;
