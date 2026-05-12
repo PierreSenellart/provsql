@@ -6,7 +6,7 @@ The branch `continuous_distributions` was opened to bring back continuous-distri
 
 The TODO already commits to: two new gate types (`gate_rv`, `gate_arith`) appended to the on-disk gate-type ABI; reuse of pre-existing `gate_value`, `gate_cmp`, `gate_input`; a `random_variable` SQL composite type mirroring `agg_token`; planner-hook rewriting of inequalities against RV columns; a continuous Monte Carlo extension to `BooleanCircuit::monteCarlo`; an `Expectation` compiled semiring with structural independence detection; and Studio renderer/inspector enhancements that stay inside the existing Circuit mode (no new top-level mode).
 
-Out of scope per the TODO and confirmed: EXCEPT, DISTINCT, aggregation over RVs, where-provenance × RV design work, a "Continuous mode" in Studio, and an in-Studio distribution editor. Each remains a clearly-marked follow-up.
+Out of scope per the TODO and confirmed: EXCEPT, DISTINCT, where-provenance × RV design work, a "Continuous mode" in Studio, and an in-Studio distribution editor. Each remains a clearly-marked follow-up. Aggregation over RVs was originally out of scope and is now partially landed (`sum`, `avg`, `product`) — see Priority 10 below.
 
 Per user direction (2026-05-09): all nine priorities land on the `continuous_distributions` branch. No PRs needed; commit at the end of each priority once `make installcheck` is green. Priorities 5 (peephole pruning) and 6 (expected value & moments) are firmly in scope; Priority 7 (hybrid evaluation) was added the same day after a design discussion on integrating continuous evaluation with the existing structural methods (treedec, d-DNNF, independent).
 
@@ -172,6 +172,70 @@ All inside the existing Circuit mode. No new top-level mode.
 
 **Commit gate**: docs build clean, commit "TODO continuous_distributions: user manual, dev architecture, compatibility-floor bump".
 
+### Priority 10 — Aggregation over `random_variable` (originally out of scope; partially landed)
+
+When the operation plan was drafted, aggregation over RVs was deferred because the existing semimodule-provenance machinery (`agg_token`, `provenance_semimod`, `agg_raw_moment`) is wired for numeric `M`: each per-row value lands in a `gate_value`'s `extra` blob via `CAST(val AS VARCHAR)`, which is nonsensical for a `random_variable`. The follow-up landed in increments on this branch, in the order SUM → AVG → PRODUCT.
+
+**Strategy: inline `gate_arith`-of-mixtures rewrite, not M-polymorphic `gate_agg`.** Each RV-returning aggregate is implemented as a pl/pgsql aggregate whose FFUNC builds a `gate_arith`-of-mixtures shape directly, parallel to the existing `gate_agg`/`gate_semimod` shape for numeric M:
+
+```
+SUM(x)  ⟶  gate_arith(PLUS, [mixture(prov_1, X_1, as_random(0)),
+                              mixture(prov_2, X_2, as_random(0)),
+                              …])
+```
+
+The planner-hook dispatch in `make_aggregation_expression` (`src/provsql.c`) routes on `agg_ref->aggtype == OID_TYPE_RANDOM_VARIABLE`, so *any* aggregate whose result type is `random_variable` gets its per-row argument wrapped in `mixture(prov_i, X_i, as_random(0))` via the `rv_aggregate_semimod` helper. The wrap routine is named `make_rv_aggregate_expression` and preserves the original `aggfnoid`, so future RV-returning aggregates require zero C delta — only a pl/pgsql FFUNC and `CREATE AGGREGATE`. The semantic content is `SUM(x) = Σ_i 1{φ_i} · X_i` — the direct extension of semimodule-provenance from numeric M to RV-valued M. `MonteCarloSampler::evalScalar` walks the resulting tree with `bool_cache_` coupling provenances and `rv_cache_` coupling RVs; `Expectation::rec_expectation` collapses the closed-form branch to `Σ P(prov_i) · E[X_i]` (linearity, regardless of dependence between the `φ_i` and the `X_i`); `RangeCheck::intervalOf` returns `[Σ min, Σ max]` over branches whose indicator can be true.
+
+The M-polymorphic alternative (extend `gate_agg`/`gate_semimod` to carry RV-rooted values) was considered and deferred. Its only structural advantage is representational uniformity (one shape for SUM-over-numeric vs SUM-over-RV); it would require allowing `gate_semimod`'s second child to be any scalar RV root and auditing every consumer of `(get_children(pair))[2]` (`aggregation_evaluate`, `agg_raw_moment`, the Studio aggregate panel). No capability gap motivates it today — variance and higher moments come from `Expectation::rec_*` over the existing `gate_arith` shape, which already handles dependence correctly.
+
+**Landed aggregates** (each `provsql.<name>(random_variable) → random_variable`):
+
+- `sum` — `SUM(x) = Σ_i 1{φ_i} · X_i`. Empty group returns `as_random(0)` (additive identity). `sum_rv_sfunc` collects per-row UUIDs; `sum_rv_ffunc` builds `gate_arith(PLUS, …)`. Singleton group returns the single child without minting a useless single-child arith root.
+- `avg` — `AVG(x) = SUM(x) / Σ_i 1{φ_i}`. Empty group returns SQL `NULL` (matching standard SQL `AVG`, intentionally differing from `sum`'s `as_random(0)`: the additive identity is the right empty-SUM, no multiplicative identity is the right empty-AVG). `avg_rv_ffunc` walks each state UUID, recovers `prov_i` from each mixture's first child, builds the matching `mixture(prov_i, as_random(1), as_random(0))` for the denominator via the same `rv_aggregate_semimod` helper, and emits `gate_arith(DIV, sum_num, sum_denom)`. State entries whose gate type is not `mixture` (direct/untracked call) take an unconditional `as_random(1)` denominator contribution, so `SELECT avg(x) FROM untracked_t` returns `sum(x) / as_random(n)`.
+- `product` — `PRODUCT(x) = Π_i (X_i if φ_i else 1)`. Empty group returns `as_random(1)` (multiplicative identity). `product_rv_ffunc` patches each mixture's else-branch from `as_random(0)` to `as_random(1)` by reconstructing it through `provsql.mixture` (preserving v5-hash sharing with any other path that produces the same `(prov, X_i, as_random(1))` triple), then builds `gate_arith(TIMES, …)`. The "in-FFUNC fix-up" route was chosen over introducing a second wrapper helper (`rv_aggregate_semimod_one`) because it keeps the C dispatch trivial — the per-row cost is one extra `provsql.mixture` call, dominated by the actual gate construction anyway.
+
+The `INITCOND='{}'` convention makes the FFUNC fire even on empty input, which is how each aggregate decides its empty-group identity.
+
+**AVG division-by-zero in the all-`φ_i`-false world.** AVG produces `gate_arith(DIV, sum_num, sum_denom)` where numerator and denominator share per-row provenance, so in the world where every `φ_i` is false both reduce to `as_random(0)` and the gate evaluates to `0/0 = NaN`. Under MC, `provsql.expected(avg(x))` returns NaN whenever `P(all φ_i false) > 0`. Two mitigations are deferred:
+
+1. **User-side conditioning.** An SFUNC variant minting a conditioning gate so `provsql.expected(...)` returns `E[AVG | at least one row]`.
+2. **NULL-on-NaN finalisation.** Detect a provably-zero-denominator world via `RangeCheck` over the denominator subtree and short-circuit to SQL `NULL`. RangeCheck extension, not a planner-hook change.
+
+**Tests**: `test/sql/continuous_aggregation.sql` covers six SUM cases (basic, uncertain provenance, coupling through shared atoms, coupling through shared RVs, empty group, COUNT(*) lift), four AVG cases (basic, uncertain-but-nonempty, empty group, direct/untracked), and three PRODUCT cases (basic, uncertain provenance, empty group). All on a green `make installcheck` (128/128).
+
+**Commits**:
+- `d92292a` continuous_aggregation: rv_sum aggregate + planner rewrite of rv_sum(rv_col) into gate_arith of mixtures
+- `8d45a7c` continuous_aggregation: rename rv_sum aggregate to sum (overload of the standard sum)
+- `f82c635` continuous_aggregation: dispatch RV-returning aggregates on aggtype, not aggfnoid
+- `2dbb94d` continuous_aggregation: avg aggregate over random_variable
+- `0a73de8` continuous_aggregation: product aggregate over random_variable
+
+#### Feasibility of further aggregates over `random_variable`
+
+With the aggtype-based dispatch in place, the cost of a new RV-returning aggregate collapses to "pl/pgsql FFUNC + `CREATE AGGREGATE`." The question becomes which aggregates have a clean lowering into the existing gate algebra and which need new gate primitives.
+
+**Tier A — trivial extensions of the SUM template.**
+- `sum_squares(x)` is already expressible as `sum(reading * reading)` via the existing `*` operator on `random_variable` — no new aggregate needed; document the pattern in the user manual.
+
+**Tier B — composable from SUM/AVG via `gate_arith` (next to land).**
+- `var_pop(x) = avg(x²) − avg(x)²` via existing `MINUS`, `TIMES`. SFUNC-side choice (square the per-row arg in the SFUNC vs square inside the FFUNC from the mixture's then-branch) is local.
+- `var_samp(x)` adds the Bessel correction (`count − 1` instead of `count`); the `MINUS(sum(as_random(1)), as_random(1))` denominator is a valid `gate_arith` expression.
+- `covar_pop(x, y) = E[XY] − E[X]E[Y]`, same shape with a per-row `X_i · Y_i` cross-term.
+
+**Tier C — needs a `SQRT` op on `gate_arith`.**
+- `stddev(x) = sqrt(var(x))`. `gate_arith` carries only `{PLUS, TIMES, MINUS, DIV, NEG}` today (`PROVSQL_ARITH_*` in `src/provsql_utils.h`). Adding `SQRT` requires evaluator entries in `MonteCarloSampler::evalScalar` (trivial), `Expectation::rec_*` (no closed form for `E[sqrt(X)]` in general → MC fallback), `RangeCheck::intervalOf` (interval `sqrt` is standard), and the simplifier passes. Worth doing once a second consumer appears (RMS, geometric mean).
+
+**Tier D — needs `LOG` / `EXP` ops on `gate_arith`.**
+- `geomean(x) = exp((1/n) · Σ log X_i)`. Domain check `X_i > 0`. Lower priority than SQRT.
+
+**Tier E — fundamentally different representation.**
+- `MIN(rv)` / `MAX(rv)` / `PERCENTILE_CONT` / `PERCENTILE_DISC` / `MEDIAN`. MIN doesn't distribute over indicators the way SUM does; the natural lowering routes through the `gate_mulinput`-over-winner-identity primitive (one mulinput per possible "winner" row, with that row's conditional distribution as the value). This shares the `gate_mulinput`-over-key primitive already used for categorical RVs. Genuinely a separate design pass — flag as a follow-up; left in the out-of-scope follow-ups at the bottom of `doc/source/user/continuous-distributions.rst`.
+
+**Tier F — N/A for `random_variable`.**
+- `STRING_AGG`, `BIT_AND`, `BIT_OR`, `BOOL_AND/EVERY`, `BOOL_OR`. `ARRAY_AGG(random_variable)` is fine (returns `random_variable[]`, not a scalar RV — no overload needed).
+
+**Commit gate (whenever a Tier B aggregate lands)**: `make installcheck` green, commit per the same `continuous_aggregation: <name> aggregate over random_variable` convention.
+
 ## Files affected (consolidated)
 
 **Modified**:
@@ -250,4 +314,4 @@ No on-disk or behaviour change in the supported cases; the new mixed-`agg_token`
 - **`MMappedCircuit::setInfos` / `setExtra` do not lazy-create gates** (only `setProb` does). Ensure the `gate_rv` constructor goes through a path that *does* create the gate before setting `extra` on it. Likely pattern: emit a `setProb` (or equivalent gate-creation IPC) first, then `setExtra` for the distribution parameters.
 - **Monte Carlo seeding contract**. The `provsql.monte_carlo_seed` GUC must be respected by all samplers (Bernoulli + continuous + boundcheck negative tests) so that regression tests are deterministic with large `n`.
 - **Compatibility floor bump** on Studio happens in lockstep with the extension version that ships these gate types; CHANGELOG entries are written by the maintainer at release time per CLAUDE memory.
-- **Out-of-scope follow-ups** to leave clearly TODO'd at the bottom of `doc/source/user/continuous-distributions.rst`: EXCEPT, DISTINCT, aggregation over RVs, where-provenance × RVs, in-Studio distribution editor.
+- **Out-of-scope follow-ups** to leave clearly TODO'd at the bottom of `doc/source/user/continuous-distributions.rst`: EXCEPT, DISTINCT, MIN/MAX/percentile aggregates over RVs (Priority 10's Tier E), where-provenance × RVs, in-Studio distribution editor.
