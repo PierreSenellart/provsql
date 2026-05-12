@@ -358,6 +358,17 @@ server-side by :sqlfunc:`rv_histogram`; the sample count comes
 from ``provsql.rv_mc_samples`` and the seed from
 ``provsql.monte_carlo_seed`` (both surfaced in the Config panel).
 
+.. figure:: /_static/studio/distribution-profile.png
+   :alt: The eval-strip Distribution profile panel showing the
+         support interval, the mean and standard deviation, and
+         an inline-SVG histogram of the sub-circuit's
+         distribution.
+
+   The *Distribution profile* eval-strip panel on a ``gate_rv``
+   ``N(28, 2)`` leaf: header stats (support, :math:`\mu`,
+   :math:`\sigma`), an inline-SVG histogram, and a PDF/CDF
+   toggle on the right.
+
 The same optgroup hosts a *Sample* entry that draws raw samples
 via :sqlfunc:`rv_sample`; the result renders as a collapsible
 ``<details>`` panel with a six-value inline preview and a "show
