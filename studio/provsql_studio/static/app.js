@@ -1509,6 +1509,7 @@
             <optgroup label="Distribution">
               <option value="distribution-profile">Distribution profile</option>
               <option value="moment">Moment</option>
+              <option value="sample">Sample</option>
             </optgroup>
             <optgroup label="Other">
               <option value="probability">Probability</option>
@@ -1557,6 +1558,13 @@
             <option value="false">raw</option>
             <option value="true">central</option>
           </select>
+          <input type="number" class="cv-eval__args" id="eval-args-sample-n" hidden
+                 min="1" step="1" placeholder="n" value="100"
+                 autocomplete="off" title="Number of samples to draw">
+          <input type="text" class="cv-eval__args" id="eval-args-condition" hidden
+                 placeholder="condition on (UUID)" autocomplete="off"
+                 spellcheck="false" size="20"
+                 title="Optional conditioning gate UUID: the result becomes the conditional distribution X | event">
         </div>
         <div class="cv-eval__action-row">
           <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">

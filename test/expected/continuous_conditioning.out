@@ -1,0 +1,36 @@
+\set ECHO none
+trunc_normal_mean|trunc_normal_m2
+t|t
+(1 row)
+trunc_normal_lo_eq_3|trunc_normal_hi_inf
+t|t
+(1 row)
+NOTICE:  trunc_uniform_mean=t
+NOTICE:  trunc_uniform_variance=t
+NOTICE:  trunc_uniform_support=t
+trunc_exp_memorylessness
+t
+(1 row)
+trunc_exp_finite_interval
+t
+(1 row)
+gate_one_unconditional|unconditional_mean_zero
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+where_e2e_mean|where_e2e_m2
+t|t
+(1 row)
+NOTICE:  shared_atom_coupling=t
+samples_in_truncation
+t
+(1 row)
+hist_lo_eq_3|hist_hi_eq_7
+t|t
+(1 row)
+NOTICE:  zero_prob_event_raises_specific=t

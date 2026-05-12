@@ -5,11 +5,13 @@
  */
 #include "Expectation.h"
 
+#include "AnalyticEvaluator.h"
 #include "BooleanCircuit.h"
 #include "Circuit.h"
 #include "CircuitFromMMap.h"
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
+#include "RangeCheck.h"
 #include "provsql_utils_cpp.h"
 #include "semiring/BoolExpr.h"
 
@@ -220,6 +222,58 @@ double mc_central_moment(const GenericCircuit &gc, gate_t g, unsigned k,
   return total / static_cast<double>(samples.size());
 }
 
+/// Minimum accepted-sample count for conditional MC moments.  Below
+/// this floor we'd be reporting a moment from a handful of accepted
+/// draws and the variance of the estimator would be enormous; raise
+/// rather than silently return a noisy number.
+unsigned min_accepted_floor(unsigned attempted)
+{
+  unsigned floor = attempted / 1000;
+  return floor < 5 ? 5 : floor;
+}
+
+void check_acceptance_or_throw(const ConditionalScalarSamples &cs,
+                               const std::string &what)
+{
+  const unsigned floor = min_accepted_floor(cs.attempted);
+  if (cs.accepted.size() < floor) {
+    throw CircuitException(
+      what + ": conditional MC accepted " +
+      std::to_string(cs.accepted.size()) + " out of " +
+      std::to_string(cs.attempted) +
+      " samples (need >= " + std::to_string(floor) +
+      "); raise provsql.rv_mc_samples or check that the event is satisfiable");
+  }
+}
+
+double mc_conditional_raw_moment(const GenericCircuit &gc, gate_t g,
+                                 unsigned k, gate_t event_root,
+                                 const std::string &what)
+{
+  auto cs = monteCarloConditionalScalarSamples(
+              gc, g, event_root, mc_samples_or_throw(what));
+  check_acceptance_or_throw(cs, what);
+  double total = 0.0;
+  for (double x : cs.accepted) total += std::pow(x, static_cast<double>(k));
+  return total / static_cast<double>(cs.accepted.size());
+}
+
+double mc_conditional_central_moment(const GenericCircuit &gc, gate_t g,
+                                     unsigned k, double mu,
+                                     gate_t event_root,
+                                     const std::string &what)
+{
+  auto cs = monteCarloConditionalScalarSamples(
+              gc, g, event_root, mc_samples_or_throw(what));
+  check_acceptance_or_throw(cs, what);
+  double total = 0.0;
+  for (double x : cs.accepted) {
+    const double d = x - mu;
+    total += std::pow(d, static_cast<double>(k));
+  }
+  return total / static_cast<double>(cs.accepted.size());
+}
+
 double binomial(unsigned n, unsigned k)
 {
   if (k > n) return 0.0;
@@ -236,6 +290,218 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp);
 double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp);
 double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
                       FootprintCache &fp);
+
+/// Standard normal pdf φ(z) = exp(-z²/2)/√(2π).
+double phi(double z)
+{
+  static const double INV_SQRT_2PI = 1.0 / std::sqrt(2.0 * M_PI);
+  return INV_SQRT_2PI * std::exp(-0.5 * z * z);
+}
+
+/// Standard normal CDF Φ(z) = ½(1 + erf(z/√2)).  Mirrors the
+/// AnalyticEvaluator::cdfAt Normal branch so the truncation formulas
+/// here use the same numerical convention.
+double Phi(double z)
+{
+  static const double SQRT2 = std::sqrt(2.0);
+  return 0.5 * (1.0 + std::erf(z / SQRT2));
+}
+
+/**
+ * @brief Raw moments of @c X ~ Normal(μ, σ) truncated to @c [a, b].
+ *
+ * Closed form via the integration-by-parts recurrence on the
+ * standardised variable Z = (X - μ)/σ:
+ *   E[Z^{k}|α<Z<β] = (k-1) E[Z^{k-2}|α<Z<β]
+ *                  + (α^{k-1}φ(α) − β^{k-1}φ(β)) / (Φ(β) − Φ(α))
+ * with E[Z^0|…] = 1 and E[Z^1|…] = (φ(α) − φ(β)) / (Φ(β) − Φ(α))
+ * (Greene, "Econometric Analysis", 5e, App. F).  Then expand
+ * E[X^k] = E[(μ + σZ)^k] binomially.
+ *
+ * @c α = -∞ corresponds to @p a = -INFINITY (semi-infinite left tail);
+ * @c β = +∞ to @p b = +INFINITY.  Returns @c NaN if @c P(α<Z<β) is
+ * below a numerical floor (so the caller falls through to MC).
+ */
+double truncated_normal_raw_moment(double mu, double sigma, double a, double b,
+                                   unsigned k)
+{
+  const double alpha = std::isfinite(a) ? (a - mu) / sigma
+                                        : -std::numeric_limits<double>::infinity();
+  const double beta  = std::isfinite(b) ? (b - mu) / sigma
+                                        : +std::numeric_limits<double>::infinity();
+  const double Phi_alpha = std::isfinite(alpha) ? Phi(alpha) : 0.0;
+  const double Phi_beta  = std::isfinite(beta)  ? Phi(beta)  : 1.0;
+  const double Z = Phi_beta - Phi_alpha;
+  if (Z < 1e-12) return std::numeric_limits<double>::quiet_NaN();
+
+  const double phi_alpha = std::isfinite(alpha) ? phi(alpha) : 0.0;
+  const double phi_beta  = std::isfinite(beta)  ? phi(beta)  : 0.0;
+
+  /* E[Z^k | α<Z<β] via recurrence; store all moments up to k. */
+  std::vector<double> M(k + 1, 0.0);
+  M[0] = 1.0;
+  if (k >= 1) M[1] = (phi_alpha - phi_beta) / Z;
+  for (unsigned m = 2; m <= k; ++m) {
+    /* α^{m-1}·φ(α) and β^{m-1}·φ(β); take 0 when the endpoint is
+     * infinite (the φ factor vanishes faster than any polynomial). */
+    double end_term = 0.0;
+    if (std::isfinite(alpha))
+      end_term += std::pow(alpha, static_cast<double>(m - 1)) * phi_alpha;
+    if (std::isfinite(beta))
+      end_term -= std::pow(beta, static_cast<double>(m - 1)) * phi_beta;
+    M[m] = (m - 1) * M[m - 2] + end_term / Z;
+  }
+
+  /* E[X^k] = E[(μ + σZ)^k] = Σ_{i=0..k} C(k,i) μ^{k-i} σ^i E[Z^i|…]. */
+  double total = 0.0;
+  for (unsigned i = 0; i <= k; ++i) {
+    total += binomial(k, i)
+           * std::pow(mu, static_cast<double>(k - i))
+           * std::pow(sigma, static_cast<double>(i))
+           * M[i];
+  }
+  return total;
+}
+
+/**
+ * @brief Raw moments of @c X ~ Uniform(p1, p2) truncated to @c [a, b].
+ *
+ * The intersection @c [a', b'] = [max(p1,a), min(p2,b)] is uniform;
+ * its k-th raw moment is @c (b'^{k+1} - a'^{k+1}) / ((k+1)(b' - a')).
+ */
+double truncated_uniform_raw_moment(double p1, double p2, double a, double b,
+                                    unsigned k)
+{
+  const double lo = std::max(p1, a);
+  const double hi = std::min(p2, b);
+  if (hi <= lo) return std::numeric_limits<double>::quiet_NaN();
+  if (k == 0) return 1.0;
+  return (std::pow(hi, static_cast<double>(k + 1))
+        - std::pow(lo, static_cast<double>(k + 1)))
+       / ((k + 1) * (hi - lo));
+}
+
+/**
+ * @brief Raw moments of @c X ~ Exp(λ) truncated to @c [a, b].
+ *
+ * Decomposes via change of variable Y = X - max(a,0):
+ *   - left endpoint @c a > 0, right endpoint @c b = +∞: by
+ *     memorylessness @c X | X>a is distributed as @c a + Exp(λ), so
+ *     @c E[X^k|X>a] = Σ_{i=0..k} C(k,i) a^{k-i} · i!/λ^i.
+ *   - finite @c [a, b] (with @c a ≥ 0, @c b < ∞): integrate
+ *     @c x^k λ e^{-λx} dx by parts and divide by the truncation mass
+ *     @c e^{-λa} - e^{-λb}.  Uses the recurrence
+ *     @c I_k = k I_{k-1} / λ - (b^k e^{-λb} - a^k e^{-λa}) / λ
+ *     with @c I_0 = e^{-λa} - e^{-λb}.
+ */
+double truncated_exponential_raw_moment(double lambda, double a, double b,
+                                        unsigned k)
+{
+  const double aa = std::max(a, 0.0);  /* Exp support is [0, +∞) */
+  if (std::isfinite(b)) {
+    if (b <= aa) return std::numeric_limits<double>::quiet_NaN();
+    /* Finite-interval recurrence on I_k = ∫_{aa}^{b} x^k λ e^{-λx} dx. */
+    const double e_a = std::exp(-lambda * aa);
+    const double e_b = std::exp(-lambda * b);
+    const double Z = e_a - e_b;  /* P(aa < X < b) */
+    if (Z < 1e-12) return std::numeric_limits<double>::quiet_NaN();
+    if (k == 0) return 1.0;
+    /* Integration by parts: ∫ x^k λ e^{-λx} dx = -x^k e^{-λx} + k ∫ x^{k-1} e^{-λx} dx
+     * so I_k (with λ factor folded into the e^{-λx}·λ dx term) follows:
+     *   I_k = [aa^k e^{-λaa} - b^k e^{-λb}] + (k/λ) · I_{k-1}_no_lambda
+     * where I_{k-1}_no_lambda = ∫ x^{k-1} e^{-λx} dx = I_{k-1}/λ.
+     * Cleaner: compute J_k = ∫_{aa}^{b} x^k e^{-λx} dx via
+     *   J_0 = Z/λ; J_k = (aa^k e^{-λaa} - b^k e^{-λb})/λ + (k/λ) J_{k-1}.
+     * Then E[X^k|aa<X<b] = λ J_k / Z. */
+    std::vector<double> J(k + 1, 0.0);
+    J[0] = Z / lambda;
+    for (unsigned m = 1; m <= k; ++m) {
+      const double endpoint = std::pow(aa, static_cast<double>(m)) * e_a
+                            - std::pow(b,  static_cast<double>(m)) * e_b;
+      J[m] = endpoint / lambda + (m / lambda) * J[m - 1];
+    }
+    return lambda * J[k] / Z;
+  }
+  /* Semi-infinite right tail [aa, +∞): memorylessness. */
+  double total = 0.0;
+  double fact_i = 1.0;
+  for (unsigned i = 0; i <= k; ++i) {
+    total += binomial(k, i)
+           * std::pow(aa, static_cast<double>(k - i))
+           * fact_i / std::pow(lambda, static_cast<double>(i));
+    fact_i *= (i + 1);
+  }
+  return total;
+}
+
+/**
+ * @brief Try to evaluate @f$E[X^k \mid A]@f$ in closed form.
+ *
+ * Fires only when @p root is a bare @c gate_rv of a recognised kind
+ * (Normal / Uniform / Exponential) and the event walk under
+ * @p event_root collects a sound interval constraint on it.
+ * Otherwise returns @c std::nullopt and the caller falls through to
+ * MC rejection.
+ *
+ * For @p central, returns @f$E[(X - \mu_A)^k \mid A]@f$ where
+ * @f$\mu_A@f$ is the closed-form conditional mean obtained by
+ * recursing on @c k = 1, then binomially expanding the central
+ * moment in terms of the raw moments.
+ */
+std::optional<double>
+try_truncated_closed_form(const GenericCircuit &gc, gate_t root,
+                          gate_t event_root, unsigned k, bool central)
+{
+  if (gc.getGateType(root) != gate_rv) return std::nullopt;
+
+  auto iv = collectRvConstraints(gc, event_root, root);
+  if (!iv.has_value()) return std::nullopt;
+
+  auto spec = parse_distribution_spec(gc.getExtra(root));
+  if (!spec) return std::nullopt;
+
+  /* Closed-form raw moment of the truncated distribution. */
+  auto raw = [&](unsigned q) -> std::optional<double> {
+    if (q == 0) return 1.0;
+    double r = std::numeric_limits<double>::quiet_NaN();
+    switch (spec->kind) {
+      case DistKind::Normal:
+        r = truncated_normal_raw_moment(spec->p1, spec->p2,
+                                        iv->first, iv->second, q);
+        break;
+      case DistKind::Uniform:
+        r = truncated_uniform_raw_moment(spec->p1, spec->p2,
+                                         iv->first, iv->second, q);
+        break;
+      case DistKind::Exponential:
+        r = truncated_exponential_raw_moment(spec->p1,
+                                             iv->first, iv->second, q);
+        break;
+      case DistKind::Erlang:
+        /* Truncated Erlang moments require the regularised lower
+         * incomplete gamma; out of scope for v1.  Fall through to MC. */
+        return std::nullopt;
+    }
+    if (std::isnan(r)) return std::nullopt;
+    return r;
+  };
+
+  if (!central) return raw(k);
+
+  /* Central: E[(X - μ_A)^k | A] = Σ_{i=0..k} C(k,i) (-μ_A)^{k-i} E[X^i | A]. */
+  auto mu_opt = raw(1);
+  if (!mu_opt) return std::nullopt;
+  const double mu = *mu_opt;
+  if (k == 1) return 0.0;
+  double total = 0.0;
+  for (unsigned i = 0; i <= k; ++i) {
+    auto m_i = raw(i);
+    if (!m_i) return std::nullopt;
+    total += binomial(k, i)
+           * std::pow(-mu, static_cast<double>(k - i)) * (*m_i);
+  }
+  return total;
+}
 
 double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
 {
@@ -563,26 +829,73 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
 
 }  // namespace
 
-double compute_expectation(const GenericCircuit &gc, gate_t root)
+/* Conditional dispatch helpers: try closed-form first, fall through
+ * to MC rejection.  Used by all four public compute_* entries to keep
+ * the conditional logic in one place and the unconditional path
+ * unchanged. */
+namespace {
+
+double conditional_raw_moment(const GenericCircuit &gc, gate_t root,
+                              unsigned k, gate_t event_root)
 {
+  if (k == 0) return 1.0;
+  if (auto cf = try_truncated_closed_form(gc, root, event_root, k, false))
+    return *cf;
+  return mc_conditional_raw_moment(
+    gc, root, k, event_root,
+    "Conditional raw moment of gate type " +
+      std::string(gate_type_name[gc.getGateType(root)]));
+}
+
+double conditional_central_moment(const GenericCircuit &gc, gate_t root,
+                                  unsigned k, gate_t event_root)
+{
+  if (k == 0) return 1.0;
+  if (k == 1) return 0.0;
+  if (auto cf = try_truncated_closed_form(gc, root, event_root, k, true))
+    return *cf;
+  /* MC central: need μ_A first. */
+  const double mu = conditional_raw_moment(gc, root, 1, event_root);
+  return mc_conditional_central_moment(
+    gc, root, k, mu, event_root,
+    "Conditional central moment of gate type " +
+      std::string(gate_type_name[gc.getGateType(root)]));
+}
+
+}  // namespace
+
+double compute_expectation(const GenericCircuit &gc, gate_t root,
+                           std::optional<gate_t> event_root)
+{
+  if (event_root.has_value())
+    return conditional_raw_moment(gc, root, 1, *event_root);
   FootprintCache fp(gc);
   return rec_expectation(gc, root, fp);
 }
 
-double compute_variance(const GenericCircuit &gc, gate_t root)
+double compute_variance(const GenericCircuit &gc, gate_t root,
+                        std::optional<gate_t> event_root)
 {
+  if (event_root.has_value())
+    return conditional_central_moment(gc, root, 2, *event_root);
   FootprintCache fp(gc);
   return rec_variance(gc, root, fp);
 }
 
-double compute_raw_moment(const GenericCircuit &gc, gate_t root, unsigned k)
+double compute_raw_moment(const GenericCircuit &gc, gate_t root, unsigned k,
+                          std::optional<gate_t> event_root)
 {
+  if (event_root.has_value())
+    return conditional_raw_moment(gc, root, k, *event_root);
   FootprintCache fp(gc);
   return rec_raw_moment(gc, root, k, fp);
 }
 
-double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k)
+double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k,
+                              std::optional<gate_t> event_root)
 {
+  if (event_root.has_value())
+    return conditional_central_moment(gc, root, k, *event_root);
   if (k == 0) return 1.0;
   if (k == 1) return 0.0;
   FootprintCache fp(gc);
@@ -602,16 +915,26 @@ double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k)
 extern "C" {
 
 /**
- * @brief SQL: rv_moment(token uuid, k integer, central boolean) -> float8
+ * @brief SQL: rv_moment(token uuid, k integer, central boolean,
+ *                       prov uuid DEFAULT gate_one()) -> float8
  *
  * Single C entry point shared by the @c expected / @c variance /
  * @c moment / @c central_moment SQL functions.  The SQL wrappers
  * select the (k, central) pair that matches their semantics:
- * - @c expected(rv): k=1, central=false (or routes through
- *   @c provenance_evaluate_compiled(..., 'expectation', ...)).
- * - @c variance(rv): k=2, central=true.
- * - @c moment(rv, k): central=false.
- * - @c central_moment(rv, k): central=true.
+ * - @c expected(rv, prov): k=1, central=false.
+ * - @c variance(rv, prov): k=2, central=true.
+ * - @c moment(rv, k, prov): central=false.
+ * - @c central_moment(rv, k, prov): central=true.
+ *
+ * The @p prov argument carries the conditioning event: typically the
+ * row's @c provenance() gate after a @c WHERE predicate folded a
+ * @c gate_cmp into it.  When @p prov resolves to @c gate_one (the
+ * default, or the load-time simplification of any always-true
+ * sub-circuit) the unconditional path runs unchanged.  Otherwise we
+ * load a JOINT circuit reaching both roots, so shared @c gate_rv
+ * leaves collapse to a single @c gate_t -- the property the
+ * conditional MC sampler relies on to couple the indicator's draw
+ * with the value's draw.
  */
 Datum rv_moment(PG_FUNCTION_ARGS)
 {
@@ -619,21 +942,27 @@ Datum rv_moment(PG_FUNCTION_ARGS)
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     const int32 k_signed = PG_GETARG_INT32(1);
     const bool central = PG_GETARG_BOOL(2);
+    pg_uuid_t *prov = PG_GETARG_UUID_P(3);
 
     if (k_signed < 0)
       provsql_error("rv_moment: k must be non-negative (got %d)", k_signed);
     const unsigned k = static_cast<unsigned>(k_signed);
 
-    auto gc = getGenericCircuit(*token);
-    auto root = gc.getGate(uuid2string(*token));
+    gate_t root_gate, event_gate;
+    auto gc = getJointCircuit(*token, *prov, root_gate, event_gate);
+
+    /* gate_one event = unconditional after load-time simplification. */
+    std::optional<gate_t> event_opt;
+    if (gc.getGateType(event_gate) != gate_one)
+      event_opt = event_gate;
 
     double result;
     if (central)
-      result = provsql::compute_central_moment(gc, root, k);
+      result = provsql::compute_central_moment(gc, root_gate, k, event_opt);
     else if (k == 1)
-      result = provsql::compute_expectation(gc, root);
+      result = provsql::compute_expectation(gc, root_gate, event_opt);
     else
-      result = provsql::compute_raw_moment(gc, root, k);
+      result = provsql::compute_raw_moment(gc, root_gate, k, event_opt);
     return Float8GetDatum(result);
   } catch (const std::exception &e) {
     provsql_error("rv_moment: %s", e.what());

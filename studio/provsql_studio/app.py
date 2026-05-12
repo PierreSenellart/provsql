@@ -515,6 +515,17 @@ def create_app(
         method    = payload.get("method") or None
         arguments = payload.get("arguments") or None
         function  = payload.get("function") or None
+        # Conditioning gate UUID for scalar evaluators (distribution-
+        # profile, moment, sample).  When the user pins a "Condition on"
+        # gate via the strip's UUID picker we forward it as the `prov`
+        # argument to rv_moment / rv_support / rv_histogram / rv_sample.
+        # Validated as a UUID below; ignored by every other semiring.
+        condition_uuid = payload.get("condition_uuid") or None
+        if condition_uuid:
+            try:
+                condition_uuid = _coerce_to_uuid(condition_uuid)
+            except ValueError:
+                return jsonify({"error": "condition_uuid is not a valid UUID"}), 400
         # Merge per-request GUC overrides over the panel-managed ones.
         # The payload's extra_gucs lets tests / Studio's evaluate-strip
         # pin per-request behaviour (e.g. seed / sample budget for a
@@ -539,6 +550,7 @@ def create_app(
                 search_path=app.config.get("SEARCH_PATH", ""),
                 tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
                 extra_gucs=merged_gucs,
+                condition_uuid=condition_uuid,
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400

@@ -483,6 +483,85 @@ Interval intersectRvConstraint(Interval current, ComparisonOperator op,
 bool intervalEmpty(Interval i) { return i.lo > i.hi; }
 
 /**
+ * @brief Walk an AND-conjunct tree collecting per-RV interval
+ *        constraints from its @c gate_cmp leaves.
+ *
+ * Shared between @c isAndJointlyInfeasible (which checks for an empty
+ * intersection) and the public @c collectRvConstraints / conditional
+ * @c compute_support paths.  Descends through @c gate_times,
+ * collecting every @c gate_cmp interpretable as `rv op const` and
+ * intersecting its constraint into a running interval for that RV.
+ *
+ * @p complete is set to @c true on entry and cleared if the walk
+ * encounters any structure other than the AND-friendly set
+ * (@c gate_times, @c gate_cmp, @c gate_input, @c gate_one,
+ * @c gate_zero) whose footprint *might* constrain an RV
+ * (i.e. excluding bare Bernoulli factors).  Callers that need a
+ * tight bound (the closed-form moment shortcut) must check it; the
+ * support intersection caller can use the result unconditionally
+ * because dropping a disjunctive factor only loosens the interval,
+ * which is sound for a superset bound on the conditional support.
+ *
+ * Cmps that do not interpret as `rv op const` (RV vs RV, arith on
+ * either side, agg, …) are silently ignored; they belong to the
+ * conditioning event but don't constrain a single RV's interval.
+ */
+void walkAndConjunctIntervals(
+    const GenericCircuit &gc, gate_t root,
+    std::unordered_map<gate_t, Interval> &rv_intervals,
+    std::unordered_map<gate_t, Interval> &support_cache,
+    bool &complete)
+{
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stk;
+  stk.push(root);
+  complete = true;
+
+  while (!stk.empty()) {
+    gate_t g = stk.top(); stk.pop();
+    if (!seen.insert(g).second) continue;
+
+    auto t = gc.getGateType(g);
+    if (t == gate_cmp) {
+      gate_t rv = static_cast<gate_t>(0);
+      ComparisonOperator op = ComparisonOperator::EQ;
+      double c = 0.0;
+      if (!asRvVsConstCmp(gc, g, rv, op, c)) {
+        /* Cmp shape we don't interpret (RV vs RV, arith involved).
+         * Conservatively mark the walk incomplete: this cmp belongs
+         * to the event AND could constrain an RV in a way we can't
+         * fold into a single interval. */
+        complete = false;
+        continue;
+      }
+      auto it = rv_intervals.find(rv);
+      Interval current = (it == rv_intervals.end())
+                         ? intervalOf(gc, rv, support_cache)
+                         : it->second;
+      current = intersectRvConstraint(current, op, c);
+      rv_intervals[rv] = current;
+      continue;  /* never descend into a cmp's operands */
+    }
+    if (t == gate_times || g == root) {
+      for (gate_t c : gc.getWires(g)) stk.push(c);
+      continue;
+    }
+    if (t == gate_input || t == gate_update || t == gate_one ||
+        t == gate_zero) {
+      /* Bernoulli leaf / constants: shift P(event), don't truncate
+       * any continuous RV.  Skipping is sound and the walk stays
+       * complete. */
+      continue;
+    }
+    /* gate_plus (OR), gate_monus (set diff), gate_arith, gate_rv, ...:
+     * could affect an RV's conditional distribution in ways that
+     * don't reduce to an interval intersection.  Mark the walk
+     * incomplete so a moment closed-form caller falls through to MC. */
+    complete = false;
+  }
+}
+
+/**
  * @brief Walk @p root's AND-conjunct cmps and decide whether the
  *        conjunction is jointly infeasible by per-RV interval
  *        intersection.
@@ -507,38 +586,11 @@ bool intervalEmpty(Interval i) { return i.lo > i.hi; }
 bool isAndJointlyInfeasible(const GenericCircuit &gc, gate_t root)
 {
   std::unordered_map<gate_t, Interval> rv_intervals;
-  std::unordered_set<gate_t> seen;
-  std::stack<gate_t> stk;
-  stk.push(root);
-
-  /* Reused across intervalOf calls for the RVs themselves; the
-   * per-cmp pass already computed these for many gates, but this
-   * snapshot is local so the cache is fresh each invocation. */
   std::unordered_map<gate_t, Interval> support_cache;
-
-  while (!stk.empty()) {
-    gate_t g = stk.top(); stk.pop();
-    if (!seen.insert(g).second) continue;
-
-    auto t = gc.getGateType(g);
-    if (t == gate_cmp) {
-      gate_t rv = static_cast<gate_t>(0);
-      ComparisonOperator op = ComparisonOperator::EQ;
-      double c = 0.0;
-      if (!asRvVsConstCmp(gc, g, rv, op, c)) continue;
-      auto it = rv_intervals.find(rv);
-      Interval current = (it == rv_intervals.end())
-                         ? intervalOf(gc, rv, support_cache)
-                         : it->second;
-      current = intersectRvConstraint(current, op, c);
-      rv_intervals[rv] = current;
-      if (intervalEmpty(current)) return true;
-      continue;  /* never descend into a cmp's operands */
-    }
-    if (t == gate_times || g == root) {
-      for (gate_t c : gc.getWires(g)) stk.push(c);
-    }
-    /* gate_plus, gate_monus, gate_input, etc.: stop the descent. */
+  bool complete;
+  walkAndConjunctIntervals(gc, root, rv_intervals, support_cache, complete);
+  for (const auto &kv : rv_intervals) {
+    if (intervalEmpty(kv.second)) return true;
   }
   return false;
 }
@@ -683,11 +735,68 @@ unsigned runRangeCheck(GenericCircuit &gc)
 }
 
 std::pair<double, double>
-compute_support(const GenericCircuit &gc, gate_t root)
+compute_support(const GenericCircuit &gc, gate_t root,
+                std::optional<gate_t> event_root)
 {
   std::unordered_map<gate_t, Interval> cache;
   Interval iv = intervalOf(gc, root, cache);
+
+  /* Conditional path: intersect with the event's AND-conjunct
+   * constraints on @p root.  Walks event_root collecting `rv op c`
+   * cmps; non-target constraints are ignored (they affect P(event)
+   * but not the truncation of root's distribution).  Even if the
+   * walk is "incomplete" (gate_plus / gate_monus / arith encountered)
+   * the result is sound: we're computing a SUPERSET bound on the
+   * conditional support, and the unconditional support is already a
+   * superset, so the intersection of the collected constraints with
+   * the unconditional is also a superset. */
+  if (event_root.has_value()) {
+    std::unordered_map<gate_t, Interval> rv_intervals;
+    bool complete;
+    walkAndConjunctIntervals(gc, *event_root, rv_intervals, cache, complete);
+    auto it = rv_intervals.find(root);
+    if (it != rv_intervals.end()) {
+      iv.lo = std::max(iv.lo, it->second.lo);
+      iv.hi = std::min(iv.hi, it->second.hi);
+      /* Defensively clamp to avoid an inverted interval if a buggy
+       * walker produced one; should not happen but cheap. */
+      if (iv.lo > iv.hi) iv.lo = iv.hi;
+    }
+  }
+
   return {iv.lo, iv.hi};
+}
+
+std::optional<std::pair<double, double>>
+collectRvConstraints(const GenericCircuit &gc, gate_t event_root,
+                     gate_t target_rv)
+{
+  std::unordered_map<gate_t, Interval> rv_intervals;
+  std::unordered_map<gate_t, Interval> support_cache;
+  bool complete;
+  walkAndConjunctIntervals(gc, event_root, rv_intervals, support_cache,
+                           complete);
+  if (!complete) return std::nullopt;
+  /* If the walk found no cmp constraining target_rv, the conditional
+   * support is the unconditional support (the event is independent
+   * of target_rv along the recognised structure).  Returning the
+   * unconditional interval lets the moment closed-form path
+   * short-circuit to the unconditional moment, matching the
+   * mathematical truth. */
+  auto it = rv_intervals.find(target_rv);
+  Interval iv;
+  if (it != rv_intervals.end()) {
+    iv = it->second;
+    /* Intersect with the RV's own support to be safe (event may
+     * over-constrain past the support, e.g. `Exp(λ) < -1`). */
+    Interval base = intervalOf(gc, target_rv, support_cache);
+    iv.lo = std::max(iv.lo, base.lo);
+    iv.hi = std::min(iv.hi, base.hi);
+    if (iv.lo > iv.hi) iv.lo = iv.hi;
+  } else {
+    iv = intervalOf(gc, target_rv, support_cache);
+  }
+  return std::make_pair(iv.lo, iv.hi);
 }
 
 }  // namespace provsql
@@ -695,10 +804,15 @@ compute_support(const GenericCircuit &gc, gate_t root)
 extern "C" {
 
 /**
- * @brief SQL: rv_support(token uuid, OUT lo float8, OUT hi float8)
+ * @brief SQL: rv_support(token uuid, prov uuid, OUT lo float8, OUT hi float8)
  *
- * Loads the persisted circuit rooted at @p token and returns the
- * @c [lo, hi] support interval computed by @c provsql::compute_support.
+ * Loads the persisted circuit rooted at @p token, intersects with the
+ * AND-conjunct cmps in @p prov constraining @p token, and returns the
+ * resulting @c [lo, hi] support interval.  When @p prov resolves to
+ * @c gate_one (the unconditional default after load-time
+ * simplification), the conditional path is skipped and the bare
+ * unconditional support of @p token is returned.
+ *
  * @c -Infinity / @c +Infinity float8 represent unbounded ends (e.g.
  * the support of a normal RV is @c [-Infinity, +Infinity]).
  */
@@ -706,10 +820,20 @@ Datum rv_support(PG_FUNCTION_ARGS)
 {
   try {
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
+    pg_uuid_t *prov  = PG_GETARG_UUID_P(1);
 
-    auto gc = getGenericCircuit(*token);
-    auto root = gc.getGate(uuid2string(*token));
-    auto iv = provsql::compute_support(gc, root);
+    gate_t root_gate, event_gate;
+    auto gc = getJointCircuit(*token, *prov, root_gate, event_gate);
+
+    /* gate_one as event-side means the conditioning is the trivial
+     * "always true" event (either the user passed gate_one() directly
+     * or load-time simplification collapsed the event to it).  Take
+     * the unconditional path. */
+    std::optional<gate_t> event_opt;
+    if (gc.getGateType(event_gate) != gate_one)
+      event_opt = event_gate;
+
+    auto iv = provsql::compute_support(gc, root_gate, event_opt);
 
     TupleDesc tupdesc;
     Datum values[2];

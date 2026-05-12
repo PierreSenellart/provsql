@@ -25,18 +25,19 @@ SELECT (support(provsql.uniform(1, 3) / 2)).*;                     -- (0.5, 1.5)
 -- conservative all-real support.
 SELECT (support(provsql.normal(0, 1) + provsql.uniform(1, 3))).*;
 
--- Conditioning on prov: not supported for random_variable.  Use a
--- precomputed gate UUID (gate_zero) as the prov so the call doesn't
--- accidentally fail earlier on a non-existent gate.
+-- Conditioning on prov: the random_variable path now intersects the
+-- unconditional support with the AND-conjunct rv-vs-const cmps in the
+-- conditioning gate.  A bare rv conditioned on (rv > 1.5) returns the
+-- truncated interval (1.5, +Infinity); the closed-form Normal support
+-- is otherwise (-Infinity, +Infinity).
 DO $$
-DECLARE msg text; matched bool;
+DECLARE rv random_variable; ev uuid; lo_v float8; hi_v float8;
 BEGIN
-  PERFORM lo FROM support(provsql.normal(0, 1), gate_zero());
-  RAISE NOTICE 'rv_support_with_prov_did_not_raise';
-EXCEPTION WHEN OTHERS THEN
-  msg := SQLERRM;
-  matched := position('not yet supported for circuit-token' in msg) > 0;
-  RAISE NOTICE 'rv_support_prov_raises_specific=%', matched;
+  rv := provsql.normal(0, 1);
+  ev := provsql.rv_cmp_gt(rv, as_random(1.5));
+  SELECT lo, hi INTO lo_v, hi_v FROM support(rv, ev);
+  RAISE NOTICE 'rv_support_conditional_lo=%', lo_v;
+  RAISE NOTICE 'rv_support_conditional_hi=%', hi_v;
 END
 $$;
 

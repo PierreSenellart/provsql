@@ -353,6 +353,36 @@ std::vector<double> monteCarloScalarSamples(
   return out;
 }
 
+ConditionalScalarSamples monteCarloConditionalScalarSamples(
+  const GenericCircuit &gc, gate_t root, gate_t event_root, unsigned samples)
+{
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  ConditionalScalarSamples out;
+  out.attempted = 0;
+  out.accepted.reserve(samples);
+
+  for(unsigned i = 0; i < samples; ++i) {
+    sampler.resetIteration();
+    /* Evaluate the indicator FIRST: this populates bool_cache_ AND
+     * scalar_cache_ for every gate_rv / gate_input that the event
+     * touches, so the subsequent evalScalar(root) reads the same
+     * draws.  Shared gate_t leaves between root and event_root are
+     * therefore correctly coupled across the indicator and the
+     * value. */
+    if(sampler.evalBool(event_root)) {
+      out.accepted.push_back(sampler.evalScalar(root));
+    }
+    ++out.attempted;
+
+    if(provsql_interrupted)
+      throw CircuitException(
+              "Interrupted after " + std::to_string(i + 1) + " samples");
+  }
+  return out;
+}
+
 bool circuitHasRV(const GenericCircuit &gc, gate_t root)
 {
   std::unordered_set<gate_t> seen;

@@ -889,6 +889,7 @@ def evaluate_circuit(
     search_path: str = "",
     tool_search_path: str = "",
     extra_gucs: dict[str, str] | None = None,
+    condition_uuid: str | None = None,
 ) -> dict:
     """Run a compiled-semiring or probability evaluation against `token`.
     Returns `{result, kind}` ready to JSON-encode. Raises ValueError on
@@ -896,7 +897,13 @@ def evaluate_circuit(
 
     The caller is responsible for catching psycopg errors and translating
     them to HTTP : we don't shape them here so the route can also surface
-    the underlying SQLSTATE / message verbatim."""
+    the underlying SQLSTATE / message verbatim.
+
+    `condition_uuid` is the conditioning gate for scalar evaluators
+    (`distribution-profile`, `moment`, `sample`).  When provided, it's
+    spliced as the `prov` argument to provsql.rv_moment / rv_support /
+    rv_histogram / rv_sample so the truncated distribution is returned
+    instead of the unconditional one.  Ignored by every other semiring."""
     if semiring == "boolexpr":
         # Like prov-xml: the mapping is optional. With one, leaves are
         # labelled by the mapping's `value` column; without one, leaves
@@ -1025,15 +1032,27 @@ def evaluate_circuit(
                         sql.Literal(guc_val),
                     )
                 )
+            # When condition_uuid is set, splice it as the prov arg of
+            # every RV-side call so the strip shows the truncated
+            # distribution-profile.  rv_moment / rv_support /
+            # rv_histogram all default `prov` to gate_one() (the
+            # unconditional case), so unset is a no-op at the SQL
+            # layer.
+            cond_expr = (
+                sql.SQL("{}::uuid").format(sql.Literal(condition_uuid))
+                if condition_uuid
+                else sql.SQL("provsql.gate_one()")
+            )
             cur.execute(
                 sql.SQL("""
                     SELECT s.lo, s.hi,
-                           provsql.rv_moment({tok}::uuid, 1, false),
-                           provsql.rv_moment({tok}::uuid, 2, true),
-                           provsql.rv_histogram({tok}::uuid, {bins})
-                      FROM provsql.rv_support({tok}::uuid) s
+                           provsql.rv_moment({tok}::uuid, 1, false, {cond}),
+                           provsql.rv_moment({tok}::uuid, 2, true,  {cond}),
+                           provsql.rv_histogram({tok}::uuid, {bins}, {cond})
+                      FROM provsql.rv_support({tok}::uuid, {cond}) s
                 """).format(
-                    tok=sql.Literal(token), bins=sql.Literal(bins)
+                    tok=sql.Literal(token), bins=sql.Literal(bins),
+                    cond=cond_expr,
                 )
             )
             row = cur.fetchone()
@@ -1084,12 +1103,84 @@ def evaluate_circuit(
             raise ValueError(
                 f"moment: central must be 'raw' or 'central' (got {central_str!r})"
             )
+        # Splice the conditioning event when set; otherwise rv_moment's
+        # `prov` default of gate_one() makes the call unconditional.
+        cond_expr = (
+            sql.SQL("{}::uuid").format(sql.Literal(condition_uuid))
+            if condition_uuid
+            else sql.SQL("provsql.gate_one()")
+        )
         sql_stmt = sql.SQL(
-            "SELECT provsql.rv_moment({}::uuid, {}, {})"
+            "SELECT provsql.rv_moment({}::uuid, {}, {}, {})"
         ).format(
             sql.Literal(token), sql.Literal(k_value), sql.Literal(central),
+            cond_expr,
         )
         params = ()
+    elif semiring == "sample":
+        # Scalar-only evaluator returning a list of MC samples for the
+        # gate, optionally conditioned on `condition_uuid`.  The
+        # `arguments` field carries the sample count `n` as a positive
+        # integer (default 100).  Each row of provsql.rv_sample is one
+        # float, which we collect into a JSON-able list for the
+        # frontend Sample tab.
+        n_str = (arguments or "100").strip()
+        try:
+            n_value = int(n_str)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"sample: n must be a positive integer (got {n_str!r})"
+            )
+        if n_value <= 0:
+            raise ValueError(f"sample: n must be positive (got {n_value})")
+        cond_expr = (
+            sql.SQL("{}::uuid").format(sql.Literal(condition_uuid))
+            if condition_uuid
+            else sql.SQL("provsql.gate_one()")
+        )
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("SET LOCAL statement_timeout = {}").format(
+                    sql.Literal(statement_timeout)
+                )
+            )
+            if (search_path or "").strip():
+                target_path = compose_search_path(search_path, "")
+            else:
+                cur.execute("SHOW search_path")
+                target_path = compose_search_path("", cur.fetchone()[0])
+            cur.execute(
+                "SELECT set_config('search_path', %s, true)",
+                (target_path,),
+            )
+            if (tool_search_path or "").strip():
+                cur.execute(
+                    "SELECT set_config('provsql.tool_search_path', %s, true)",
+                    (tool_search_path,),
+                )
+            for guc_name, guc_val in (extra_gucs or {}).items():
+                if guc_name not in _PANEL_GUCS:
+                    continue
+                cur.execute(
+                    sql.SQL("SET LOCAL {} = {}").format(
+                        sql.Identifier(*guc_name.split(".")),
+                        sql.Literal(guc_val),
+                    )
+                )
+            cur.execute(
+                sql.SQL(
+                    "SELECT v FROM provsql.rv_sample({}::uuid, {}, {}) AS v"
+                ).format(sql.Literal(token), sql.Literal(n_value), cond_expr)
+            )
+            rows = cur.fetchall()
+        return {
+            "result": {
+                "samples": [_to_jsonable(r[0]) for r in rows],
+                "n_requested": n_value,
+                "n_returned": len(rows),
+            },
+            "kind": "sample",
+        }
     elif semiring == "prov-xml":
         # Export the circuit as ProvenanceXML. The mapping is optional :
         # without it, leaves carry bare UUIDs; with it, leaves are

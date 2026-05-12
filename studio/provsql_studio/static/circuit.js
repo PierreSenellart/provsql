@@ -1245,11 +1245,22 @@
   // Options visible when the eval target is scalar.  Everything else in
   // the <select> gets hidden + disabled for the duration of the scalar
   // focus.  PROV-XML stays because it accepts any provenance gate.
-  const _SCALAR_TARGET_OPTIONS = new Set(['distribution-profile', 'moment', 'prov-xml']);
+  const _SCALAR_TARGET_OPTIONS = new Set([
+    'distribution-profile', 'moment', 'sample', 'prov-xml'
+  ]);
   // Options visible only on scalar targets.  Hidden + disabled when the
   // eval target is Boolean / aggregate / etc., so the user can't pick a
   // semiring whose SQL kernel doesn't accept this gate type.
-  const _SCALAR_ONLY_OPTIONS = new Set(['distribution-profile', 'moment']);
+  const _SCALAR_ONLY_OPTIONS = new Set([
+    'distribution-profile', 'moment', 'sample'
+  ]);
+  // Semirings that accept an optional "Condition on" gate UUID --
+  // routed to provsql.rv_moment / rv_support / rv_histogram /
+  // rv_sample as the `prov` argument so the result is the conditional
+  // (truncated) distribution rather than the unconditional one.
+  const _CONDITION_OPTIONS = new Set([
+    'distribution-profile', 'moment', 'sample'
+  ]);
 
   // Lookup the gate type of the current eval target (pinned node, else
   // the scene root) by walking state.scene.nodes.  Returns null when
@@ -1390,6 +1401,8 @@
       'eval-args-bins',
       'eval-args-moment-k',
       'eval-args-moment-central',
+      'eval-args-sample-n',
+      'eval-args-condition',
     ]
       .map(id => document.getElementById(id))
       .filter(Boolean);
@@ -1504,6 +1517,11 @@
       } else if (v === 'moment') {
         wantedIds.add('eval-args-moment-k');
         wantedIds.add('eval-args-moment-central');
+      } else if (v === 'sample') {
+        wantedIds.add('eval-args-sample-n');
+      }
+      if (_CONDITION_OPTIONS.has(v)) {
+        wantedIds.add('eval-args-condition');
       }
       for (const ctrl of argControls) ctrl.hidden = !wantedIds.has(ctrl.id);
       // Stale once the input shape changes : wipe result + bound +
@@ -1909,6 +1927,16 @@
       const k = (document.getElementById('eval-args-moment-k')?.value || '').trim();
       const c = (document.getElementById('eval-args-moment-central')?.value || 'false').trim();
       body.arguments = `${k};${c === 'true' ? 'central' : 'raw'}`;
+    } else if (semiring === 'sample') {
+      const n = (document.getElementById('eval-args-sample-n')?.value || '').trim();
+      if (n) body.arguments = n;
+    }
+    // Conditioning gate UUID, optional, accepted by every scalar
+    // semiring above.  Splices into the rv_moment / rv_support /
+    // rv_histogram / rv_sample `prov` arg server-side.
+    if (_CONDITION_OPTIONS.has(semiring)) {
+      const cond = (document.getElementById('eval-args-condition')?.value || '').trim();
+      if (cond) body.condition_uuid = cond;
     }
 
     run.disabled = true;
@@ -1969,6 +1997,20 @@
         result.dataset.copy = JSON.stringify(data.result);
         result.title = 'Distribution profile';
         wireProfileInteractions(result, data.result);
+      } else if (data.kind === 'sample') {
+        // Sample is a (potentially long) list of floats.  Render the
+        // n_requested / n_returned counters inline, drop the raw
+        // samples into dataset.copy so the user can grab them as JSON.
+        const r = data.result || {};
+        const requested = r.n_requested ?? '';
+        const returned = r.n_returned ?? (r.samples ? r.samples.length : 0);
+        result.textContent = `= ${returned} sample${returned === 1 ? '' : 's'}`
+          + (requested && requested !== returned ? ` of ${requested}` : '');
+        result.dataset.kind = 'sample';
+        result.dataset.copy = JSON.stringify(r.samples || []);
+        result.title = (returned < requested)
+          ? `Conditional MC: ${returned}/${requested} accepted -- raise provsql.rv_mc_samples to widen the budget`
+          : `${returned} samples`;
       } else {
       // Show the value verbatim. Probability gets clipped to the configured
       // decimal count (default 4) for readability; the full-precision form

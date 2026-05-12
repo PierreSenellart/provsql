@@ -71,4 +71,40 @@ BooleanCircuit getBooleanCircuit(
  */
 GenericCircuit getGenericCircuit(pg_uuid_t token);
 
+/**
+ * @brief Build a @c GenericCircuit containing the closures of two
+ *        roots, with shared subgraphs unified.
+ *
+ * Loads the union of every gate reachable from @p root_token and
+ * every gate reachable from @p event_token in a single in-memory
+ * @c GenericCircuit.  Because @c GenericCircuit's UUID-to-gate
+ * mapping is idempotent, a @c gate_rv (or any other gate) reachable
+ * from both roots gets exactly one @c gate_t -- the property the
+ * conditional MC sampler needs to couple the indicator's draw with
+ * the value's draw through @c Sampler's per-iteration cache.
+ *
+ * The on-load simplification passes that @c getGenericCircuit runs
+ * (@c runRangeCheck and @c foldSemiringIdentities, gated by
+ * @c provsql.simplify_on_load) are applied to the joint circuit too.
+ * Both passes are in-place: gate types may change, but UUID-to-gate_t
+ * mappings stay valid, so callers can resolve their two roots via
+ * @c getGate after the call returns.
+ *
+ * Output parameters @p root_gate and @p event_gate are the resolved
+ * @c gate_t for the two input UUIDs.
+ *
+ * @param root_token   First root UUID (e.g. an RV's gate).
+ * @param event_token  Second root UUID (e.g. the conditioning gate).
+ * @param root_gate    Output: @c gate_t for @p root_token in the
+ *                     returned circuit.
+ * @param event_gate   Output: @c gate_t for @p event_token in the
+ *                     returned circuit.
+ * @return             An in-memory @c GenericCircuit.
+ */
+GenericCircuit getJointCircuit(
+  pg_uuid_t root_token,
+  pg_uuid_t event_token,
+  gate_t &root_gate,
+  gate_t &event_gate);
+
 #endif /* BOOLEAN_CIRCUIT_FROM_MMAP_H */

@@ -32,7 +32,8 @@ lo|hi
 lo|hi
 -Infinity|Infinity
 (1 row)
-NOTICE:  rv_support_prov_raises_specific=t
+NOTICE:  rv_support_conditional_lo=1.5
+NOTICE:  rv_support_conditional_hi=Infinity
 add_provenance
 
 (1 row)

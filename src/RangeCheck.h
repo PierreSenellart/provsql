@@ -22,6 +22,7 @@
 #ifndef PROVSQL_RANGE_CHECK_H
 #define PROVSQL_RANGE_CHECK_H
 
+#include <optional>
 #include <utility>
 
 #include "GenericCircuit.h"
@@ -44,9 +45,43 @@ namespace provsql {
  * @c (-∞, +∞).  Never throws on unrecognised gates -- callers receive
  * the wide interval instead, which is the right semantic for "we
  * cannot prove a tighter bound".
+ *
+ * When @p event_root is set, the returned interval is the
+ * intersection of the unconditional support with the per-RV
+ * constraints implied by the AND-conjunct chain rooted at the event
+ * (`rv op c` cmps over @p root collected via the same walker
+ * @c runRangeCheck uses for joint feasibility).  Constraints we
+ * cannot interpret are silently skipped: the result is then a
+ * conservative superset of the true conditional support, never a
+ * subset.
  */
 std::pair<double, double>
-compute_support(const GenericCircuit &gc, gate_t root);
+compute_support(const GenericCircuit &gc, gate_t root,
+                std::optional<gate_t> event_root = std::nullopt);
+
+/**
+ * @brief Walk @p event_root collecting `rv op c` constraints on @p target_rv.
+ *
+ * Descends through AND-conjunct factors (@c gate_times, @c gate_one,
+ * Boolean leaves whose footprint doesn't include @p target_rv -- these
+ * are independent of the RV and contribute no truncation) collecting
+ * every @c gate_cmp interpretable as `target_rv op c` for a constant
+ * @c c, and intersects them into a running interval seeded with the
+ * unconditional support of @p target_rv.
+ *
+ * Returns the resulting interval as @c (lo, hi), or @c std::nullopt
+ * if the walk found a structure that defeats the recognisers (a
+ * @c gate_plus / @c gate_monus disjunction over the chain, a cmp
+ * shape other than `rv op const`, ...).  Callers treat
+ * @c std::nullopt as "fall back to the unconditional case" --
+ * sound for support and MC fallback for moments.
+ *
+ * Constraints on RVs other than @p target_rv are ignored; they affect
+ * @c P(A) but not the truncation of the target's distribution.
+ */
+std::optional<std::pair<double, double>>
+collectRvConstraints(const GenericCircuit &gc, gate_t event_root,
+                     gate_t target_rv);
 
 /**
  * @brief Run the support-based pruning pass over @p gc.

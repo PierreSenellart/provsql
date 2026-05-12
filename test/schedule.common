@@ -115,6 +115,7 @@ test: continuous_rangecheck
 test: continuous_rangecheck_having
 test: continuous_analytic
 test: continuous_expectation
+test: continuous_conditioning
 test: continuous_support
 test: continuous_hybrid
 test: continuous_rv_histogram

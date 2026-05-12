@@ -125,6 +125,49 @@ std::vector<double> monteCarloJointDistribution(
 std::vector<double> monteCarloScalarSamples(
   const GenericCircuit &gc, gate_t root, unsigned samples);
 
+/**
+ * @brief Outcome of a conditional Monte Carlo sampling pass.
+ *
+ * @c accepted holds the @c root values from the iterations where
+ * @c event_root evaluated to @c true (the rest are rejected).
+ * @c attempted is the total number of iterations -- equal to @c samples
+ * unless the pass was interrupted -- so the caller can derive the
+ * empirical acceptance rate as
+ * <tt>accepted.size() / attempted</tt> for diagnostics.
+ */
+struct ConditionalScalarSamples {
+  std::vector<double> accepted;
+  unsigned attempted;
+};
+
+/**
+ * @brief Rejection-sample @p root conditioned on @p event_root.
+ *
+ * For each of @p samples iterations, the shared @c Sampler resets its
+ * per-iteration cache, then:
+ *   1. evaluates @p event_root as a Boolean (populating @c bool_cache_
+ *      and @c scalar_cache_ for every @c gate_rv / @c gate_input touched);
+ *   2. if the indicator is @c true, evaluates @p root as a scalar
+ *      using the SAME caches, so any shared @c gate_t leaf produces
+ *      one draw that the indicator and the value both observe;
+ *   3. otherwise rejects the iteration.
+ *
+ * This coupling is the entire point of routing the conditional path
+ * through one joint circuit: a @c gate_rv reachable from both
+ * @p root and @p event_root has the same @c gate_t and therefore
+ * shares its per-iteration draw between the indicator (which decides
+ * acceptance) and the value (which we record).  The accepted draws
+ * are samples from the conditional distribution
+ * @f$X \mid A@f$ where @c X = @p root and @c A = @p event_root.
+ *
+ * @param gc          Circuit (typically from @c getJointCircuit).
+ * @param root        Scalar gate whose value we sample.
+ * @param event_root  Boolean gate that the iteration must satisfy.
+ * @param samples     Number of iterations to attempt.
+ */
+ConditionalScalarSamples monteCarloConditionalScalarSamples(
+  const GenericCircuit &gc, gate_t root, gate_t event_root, unsigned samples);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_MONTE_CARLO_SAMPLER_H

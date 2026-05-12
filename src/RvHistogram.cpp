@@ -55,8 +55,10 @@ PG_FUNCTION_INFO_V1(rv_histogram);
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -78,6 +80,7 @@ rv_histogram(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *root_arg = (pg_uuid_t *) PG_GETARG_POINTER(0);
   int bins = PG_GETARG_INT32(1);
+  pg_uuid_t *prov_arg = (pg_uuid_t *) PG_GETARG_POINTER(2);
 
   if (bins <= 0)
     provsql_error("rv_histogram: bins must be positive (got %d)", bins);
@@ -91,20 +94,27 @@ rv_histogram(PG_FUNCTION_ARGS)
   bool first = true;
 
   try {
-    GenericCircuit gc = getGenericCircuit(*root_arg);
-
-    gate_t root_gate;
+    /* Always go through getJointCircuit: when prov is gate_one() the
+     * joint loader still produces a valid single-root closure (the
+     * gate_one leaf is just an extra disconnected node).  This keeps
+     * a single code path for shared-leaf coupling between the
+     * indicator (event_gate) and the value (root_gate) in the
+     * conditional case. */
+    gate_t root_gate, event_gate;
+    GenericCircuit gc;
     try {
-      root_gate = gc.getGate(uuid2string(*root_arg));
+      gc = getJointCircuit(*root_arg, *prov_arg, root_gate, event_gate);
     } catch (const CircuitException &) {
-      /* Root not present in the simplified circuit (e.g. a gate that
-       * the simplifier rewrote into a different UUID).  Return an
-       * empty array so the caller can degrade gracefully. */
       out << ']';
       Datum json = DirectFunctionCall1(
         jsonb_in, CStringGetDatum(pstrdup(out.str().c_str())));
       PG_RETURN_DATUM(json);
     }
+
+    /* gate_one event = unconditional. */
+    const bool conditional = gc.getGateType(event_gate) != gate_one;
+    std::optional<gate_t> event_opt;
+    if (conditional) event_opt = event_gate;
 
     const gate_type t = gc.getGateType(root_gate);
 
@@ -124,7 +134,19 @@ rv_histogram(PG_FUNCTION_ARGS)
           "raise it above 0 to compute a histogram");
       const unsigned N = static_cast<unsigned>(provsql_rv_mc_samples);
 
-      auto samples = provsql::monteCarloScalarSamples(gc, root_gate, N);
+      std::vector<double> samples;
+      if (conditional) {
+        auto cs = provsql::monteCarloConditionalScalarSamples(
+                    gc, root_gate, event_gate, N);
+        if (cs.accepted.empty())
+          provsql_error(
+            "rv_histogram: conditional MC accepted 0 of %u samples; "
+            "raise provsql.rv_mc_samples or check that the event is satisfiable",
+            cs.attempted);
+        samples = std::move(cs.accepted);
+      } else {
+        samples = provsql::monteCarloScalarSamples(gc, root_gate, N);
+      }
 
       if (!samples.empty()) {
         /* Pick the bin range per side: when @c compute_support proves
@@ -144,7 +166,7 @@ rv_histogram(PG_FUNCTION_ARGS)
         const std::size_t n = samples.size();
         const std::size_t lo_idx = n / 1000;             /* 0.1% */
         const std::size_t hi_idx = n - 1 - lo_idx;
-        auto support = provsql::compute_support(gc, root_gate);
+        auto support = provsql::compute_support(gc, root_gate, event_opt);
         double smin = std::isfinite(support.first)
                     ? support.first
                     : samples[lo_idx];

@@ -1125,8 +1125,34 @@ CREATE OR REPLACE FUNCTION simplified_circuit_subgraph(
  * @param bins  Number of equal-width histogram bins (default 30).
  */
 CREATE OR REPLACE FUNCTION rv_histogram(
-  token UUID, bins INT DEFAULT 30) RETURNS jsonb
+  token UUID, bins INT DEFAULT 30, prov UUID DEFAULT gate_one())
+  RETURNS jsonb
   AS 'provsql','rv_histogram'
+  LANGUAGE C VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Draw conditional Monte Carlo samples from a scalar gate.
+ *
+ * Returns up to @c n samples of the scalar value at @c token; when
+ * @c prov is not the trivial @c gate_one() event, draws are accepted
+ * only on iterations where @c prov evaluates true (rejection
+ * sampling).  Shared @c gate_rv leaves between @c token and @c prov
+ * are loaded into a single joint circuit so the indicator's draw
+ * and the value's draw share their per-iteration state.
+ *
+ * @param token  Scalar sub-circuit root.
+ * @param n      Number of accepted samples to attempt.
+ * @param prov   Conditioning event (defaults to @c gate_one() = no
+ *               conditioning).
+ *
+ * Emits a @c NOTICE when the conditional acceptance rate yields fewer
+ * than @c n samples within the @c provsql.rv_mc_samples budget so the
+ * caller can choose to widen the budget.
+ */
+CREATE OR REPLACE FUNCTION rv_sample(
+  token UUID, n integer, prov UUID DEFAULT gate_one())
+  RETURNS SETOF float8
+  AS 'provsql','rv_sample'
   LANGUAGE C VOLATILE PARALLEL SAFE;
 
 /**
@@ -2799,7 +2825,9 @@ $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
  * signature, so they go through this dedicated entry point.  Returns
  * E[X^k] when @p central is FALSE, or E[(X - E[X])^k] when TRUE.
  */
-CREATE OR REPLACE FUNCTION rv_moment(token uuid, k integer, central boolean)
+CREATE OR REPLACE FUNCTION rv_moment(
+  token uuid, k integer, central boolean,
+  prov uuid DEFAULT gate_one())
   RETURNS double precision
   AS 'provsql','rv_moment' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -3003,14 +3031,18 @@ DECLARE
   m2 float8;
 BEGIN
   IF pg_typeof(input) = 'random_variable'::regtype THEN
-    IF prov <> gate_one() THEN
-      RAISE EXCEPTION 'variance(): conditioning on prov is not yet supported for random_variable inputs';
-    END IF;
     IF input IS NULL THEN
       RETURN NULL;
     END IF;
+    -- Conditioning on prov is handled inside rv_moment: when prov
+    -- resolves to gate_one() (the default, or load-time
+    -- simplification of any always-true sub-circuit) the
+    -- unconditional analytical path runs unchanged; otherwise the
+    -- joint-circuit loader unifies shared gate_rv leaves between
+    -- input and prov, and the conditional path runs either
+    -- truncated-distribution closed form or MC rejection.
     RETURN provsql.rv_moment(
-      provsql.random_variable_uuid(input::random_variable), 2, true);
+      provsql.random_variable_uuid(input::random_variable), 2, true, prov);
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
@@ -3047,14 +3079,13 @@ CREATE OR REPLACE FUNCTION moment(
   RETURNS DOUBLE PRECISION AS $$
 BEGIN
   IF pg_typeof(input) = 'random_variable'::regtype THEN
-    IF prov <> gate_one() THEN
-      RAISE EXCEPTION 'moment(): conditioning on prov is not yet supported for random_variable inputs';
-    END IF;
     IF input IS NULL OR k IS NULL THEN
       RETURN NULL;
     END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
     RETURN provsql.rv_moment(
-      provsql.random_variable_uuid(input::random_variable), k, false);
+      provsql.random_variable_uuid(input::random_variable), k, false, prov);
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
@@ -3074,7 +3105,9 @@ $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
  * tightest bound is the conservative all-real interval (e.g. for a
  * normal RV, or any sub-circuit that mixes a normal in).
  */
-CREATE OR REPLACE FUNCTION rv_support(token uuid, OUT lo float8, OUT hi float8)
+CREATE OR REPLACE FUNCTION rv_support(
+  token uuid, prov uuid DEFAULT gate_one(),
+  OUT lo float8, OUT hi float8)
   AS 'provsql','rv_support' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 /**
@@ -3153,11 +3186,12 @@ BEGIN
   -- distribution by the indicator of prov, which has no closed form
   -- for the basic distributions we ship).
   IF pg_typeof(input) IN ('random_variable'::regtype, 'uuid'::regtype) THEN
-    IF prov <> gate_one() THEN
-      RAISE EXCEPTION 'support(): conditioning on prov is not yet supported for circuit-token inputs';
-    END IF;
+    -- Conditional support: rv_support folds the AND-conjunct interval
+    -- constraints from prov into the unconditional support.  When
+    -- prov is gate_one() the unconditional support is returned
+    -- unchanged.
     SELECT r.lo, r.hi INTO lo, hi
-      FROM provsql.rv_support(input::uuid) r;
+      FROM provsql.rv_support(input::uuid, prov) r;
     RETURN;
   END IF;
 
@@ -3249,14 +3283,13 @@ DECLARE
   k_double float8;
 BEGIN
   IF pg_typeof(input) = 'random_variable'::regtype THEN
-    IF prov <> gate_one() THEN
-      RAISE EXCEPTION 'central_moment(): conditioning on prov is not yet supported for random_variable inputs';
-    END IF;
     IF input IS NULL OR k IS NULL THEN
       RETURN NULL;
     END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
     RETURN provsql.rv_moment(
-      provsql.random_variable_uuid(input::random_variable), k, true);
+      provsql.random_variable_uuid(input::random_variable), k, true, prov);
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
