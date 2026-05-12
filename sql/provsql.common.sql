@@ -1708,18 +1708,21 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * mixture with effective weights <tt>π1, (1-π1)·π2, (1-π1)·(1-π2)</tt>.
  *
  * Validation:
- * - @p p must point to a @c gate_input gate with a probability in
- *   [0, 1].  A fresh @c gate_input has default probability 1.0 (so the
- *   mixture deterministically selects @p x); call @c set_prob to pin a
- *   different mixing weight.
+ * - @p p must point to a Boolean gate (@c input, @c mulinput,
+ *   @c update, @c plus, @c times, @c monus, @c project, @c eq,
+ *   @c cmp, @c zero, @c one).  When @p p is a bare @c gate_input it
+ *   must carry a probability in [0, 1] set via @c set_prob;
+ *   compound Boolean gates derive their probability from their
+ *   atoms via the active probability-evaluation method.
  * - @p x and @p y must be scalar RV roots; aggregate / Boolean roots
  *   are rejected at construction.
  *
- * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
- * @c normal above.  Two calls to @c mixture with the same operands
- * are *independent* mixtures with their own gate UUID.  Note that the
- * Bernoulli token @p p, by contrast, is *not* re-minted -- sharing it
- * across calls is exactly how the user couples branch selection.
+ * Two calls to @c mixture with the same @c (p, x, y) operands collapse
+ * to the same @c gate_mixture node by v5-hash, exactly like
+ * @c arith(PLUS, X, Y).  Draw independence is controlled by @p p:
+ * sharing @p p couples branch selection across consumers via the
+ * sampler's @c bool_cache_; minting independent Bernoullis (e.g. via
+ * the @c mixture(p_value, …) overload) decouples them.
  */
 CREATE OR REPLACE FUNCTION mixture(
   p uuid, x random_variable, y random_variable)
@@ -1754,11 +1757,13 @@ BEGIN
     RAISE EXCEPTION 'provsql.mixture: y must be a scalar RV root (rv / value / arith / mixture), got %', y_kind;
   END IF;
 
-  token := public.uuid_generate_v4();
+  token := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(),
+    concat('mixture', p, x_uuid, y_uuid));
   PERFORM provsql.create_gate(token, 'mixture', ARRAY[p, x_uuid, y_uuid]);
   RETURN provsql.random_variable_make(token, 'NaN'::double precision);
 END
-$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
 
 /**
  * @brief Ad-hoc mixture constructor that mints a fresh anonymous

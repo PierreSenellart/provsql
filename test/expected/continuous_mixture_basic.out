@@ -11,8 +11,11 @@ nb_children|wire0_kind|wire1_kind|wire2_kind
 p_token_preserved
 t
 (1 row)
-distinct_gates|shared_p_token
+structural_sharing_collapses|shared_p_token
 t|t
+(1 row)
+distinct_when_operands_differ
+t
 (1 row)
 set_prob
 

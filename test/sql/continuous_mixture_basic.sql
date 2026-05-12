@@ -38,23 +38,41 @@ SELECT array_length(get_children(u), 1) AS nb_children,
 SELECT (get_children(u))[1] = (SELECT p FROM bern) AS p_token_preserved
   FROM basic_mix;
 
--- B.  Two calls to mixture(...) with the same operands mint distinct
--- gate UUIDs (VOLATILE, like the rest of the RV constructors), but
--- the Bernoulli token slot is shared verbatim.
+-- B.  v5 structural sharing: two calls to mixture(...) with identical
+-- (p, x, y) operands collapse to the same gate_mixture node, exactly
+-- like arith(PLUS, X, Y).  Draw independence is controlled by p, not
+-- by gate identity.  Here we share p (deterministic coin slot) AND
+-- the same Dirac branches, so the two mixtures must collide.
 CREATE TEMP TABLE two_mix AS
   SELECT random_variable_uuid(
            provsql.mixture(
              (SELECT p FROM bern),
-             provsql.normal(0, 1),
-             provsql.normal(0, 1))) AS u1,
+             provsql.as_random(-5),
+             provsql.as_random(5))) AS u1,
          random_variable_uuid(
            provsql.mixture(
              (SELECT p FROM bern),
-             provsql.normal(0, 1),
-             provsql.normal(0, 1))) AS u2;
-SELECT u1 <> u2                            AS distinct_gates,
+             provsql.as_random(-5),
+             provsql.as_random(5))) AS u2;
+SELECT u1 = u2                            AS structural_sharing_collapses,
        (get_children(u1))[1] = (get_children(u2))[1] AS shared_p_token
   FROM two_mix;
+
+-- B2.  Different operands stay distinct: changing any of (p, x, y)
+-- yields a different v5 hash.  Probe by swapping the x-leaf only.
+CREATE TEMP TABLE two_mix_diff AS
+  SELECT random_variable_uuid(
+           provsql.mixture(
+             (SELECT p FROM bern),
+             provsql.as_random(-5),
+             provsql.as_random(5))) AS u1,
+         random_variable_uuid(
+           provsql.mixture(
+             (SELECT p FROM bern),
+             provsql.as_random(-6),
+             provsql.as_random(5))) AS u2;
+SELECT u1 <> u2 AS distinct_when_operands_differ
+  FROM two_mix_diff;
 
 -- C.  Compositional: x and y may themselves be mixtures.  Build a
 -- mixture-of-mixtures and verify the nested structure.
