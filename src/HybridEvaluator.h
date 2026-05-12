@@ -17,6 +17,20 @@
  *   non-constant) wires.
  * - Identity-element drops: remove @c gate_value:0 wires from a
  *   @c PLUS gate; remove @c gate_value:1 wires from a @c TIMES gate.
+ * - Mixture lift: a @c PLUS / @c TIMES over a single @c gate_mixture
+ *   child pushes the other wires inside the branches.  For the classic
+ *   3-wire shape <tt>mixture(p, X, Y)</tt> each branch becomes a fresh
+ *   arith over the lifted wires; for the categorical N-wire shape
+ *   <tt>mixture(key, mul_1, ..., mul_n)</tt> the constant offset / factor
+ *   is folded directly into each mulinput's value text (sharing the key
+ *   keeps the new mixture correlated with the original).
+ * - PLUS coefficient aggregation: a @c PLUS whose wires decompose as
+ *   <tt>a_i·Z_i + b_i</tt> merges same-@c Z_i terms by summing
+ *   coefficients (so @c X+X folds to @c 2·X, @c X-X to @c 0, etc.) and
+ *   consolidates the constant offsets.
+ * - Scalar-times-RV closure: <tt>c·X</tt> for @c X a @c gate_rv whose
+ *   distribution admits a closed-form scale (Normal, Uniform, Exp,
+ *   Erlang) folds to a single scaled @c gate_rv.
  * - Normal-family closure: a @c PLUS over linear combinations of
  *   independent normal @c gate_rv leaves folds to a single normal
  *   @c gate_rv whose mean and variance are the closed-form
@@ -31,6 +45,14 @@
  * succeeds, the gate is re-evaluated under all rules until none fire.
  * Compositions like <tt>arith(NEG, arith(PLUS, value, value))</tt>
  * therefore collapse fully in one bottom-up pass.
+ *
+ * The simplifier runs in two passes for shared-RV identity preservation:
+ * pass 1 applies every rule EXCEPT the scalar-times-RV closure so the
+ * aggregator gets to see @c c·X-shaped wires inside a parent PLUS with
+ * their underlying RV identity intact (otherwise a bottom-up fold of
+ * the inner TIMES would mint a fresh @c gate_rv there and decouple it
+ * from a sibling reference to the same @c X).  Pass 2 then folds the
+ * remaining @c TIMES wrappers with the scalar-times-RV rule.
  *
  * Soundness: every rule produces a circuit semantically equivalent to
  * the original in every world (same scalar distribution, same support,

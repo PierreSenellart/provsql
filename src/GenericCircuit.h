@@ -374,6 +374,29 @@ gate_t addAnonymousArithGate(provsql_arith_op op,
 }
 
 /**
+ * @brief Allocate a fresh @c gate_value gate carrying the textual
+ *        scalar @p text.
+ *
+ * Used by the @c HybridEvaluator simplifier's PLUS coefficient
+ * aggregation rule: when same-RV terms in a @c PLUS gate are merged
+ * into <tt>arith(TIMES, value:a_total, Z)</tt> per RV, each
+ * coefficient @c a_total needs a fresh @c gate_value to feed the
+ * synthetic @c TIMES.  @p text must be a canonical text form that
+ * round-trips through @c parseDoubleStrict (the simplifier already
+ * formats with precision 17).  A unique synthetic UUID is minted for
+ * the same reason as @c addAnonymousInputGate.
+ */
+gate_t addAnonymousValueGate(const std::string &text) {
+  gate_t id = addGate();
+  setGateType(id, gate_value);
+  setExtra(id, text);
+  std::string u = "dec-value-" + std::to_string(static_cast<size_t>(id));
+  uuid2id[u] = id;
+  id2uuid[id] = u;
+  return id;
+}
+
+/**
  * @brief Rewrite @p g in place as a @c gate_mixture over the wires
  *        @c [p_token, x_token, y_token].
  *
