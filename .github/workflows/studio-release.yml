@@ -116,7 +116,7 @@ jobs:
     permissions:
       id-token: write  # Required by gh-action-pypi-publish for OIDC.
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -138,7 +138,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.version.outputs.tag }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
