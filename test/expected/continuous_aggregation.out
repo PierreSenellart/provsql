@@ -122,3 +122,33 @@ arith|value
 avg_direct_mean|avg_direct_variance
 t|t
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+root_kind|root_arity|child_kind
+arith|3|mixture
+(1 row)
+prod_basic_mean|prod_basic_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+prod_uncert_mean
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+empty_prod_kind|empty_prod_value|empty_prod_mean|empty_prod_variance
+value|1|t|t
+(1 row)

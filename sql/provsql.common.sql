@@ -2522,6 +2522,98 @@ CREATE AGGREGATE avg(random_variable) (
   FINALFUNC = avg_rv_ffunc
 );
 
+/**
+ * @brief Final function for @c product(random_variable).
+ *
+ * Multiplicative analogue of @c sum(random_variable):
+ * @f[
+ *   \mathrm{PRODUCT}(x) \;=\; \prod_i \big(\mathbf{1}\{\varphi_i\} \cdot X_i
+ *                                          + \mathbf{1}\{\neg\varphi_i\} \cdot 1\big)
+ *                       \;=\; \prod_{i : \varphi_i} X_i
+ * @f]
+ * realised as @c gate_arith(TIMES, mixtures) over per-row contributions
+ * whose @em else-branch is @c as_random(1) (the multiplicative
+ * identity), so rows whose provenance is false contribute @c 1 to the
+ * product instead of @c 0.
+ *
+ * The C-side wrap shared with @c sum / @c avg always builds
+ * @c mixture(prov_i, X_i, as_random(0)); the PRODUCT FFUNC patches each
+ * mixture's else-branch to @c as_random(1) by reconstructing the
+ * mixture with the corrected else-arg.  Going through
+ * @c provsql.mixture (rather than @c create_gate directly) keeps the
+ * gate v5-hash consistent with any other mixture sharing the same
+ * @c (prov_i, X_i, as_random(1)) triple.
+ *
+ * Reuses @c sum_rv_sfunc as the state-transition function.  Empty
+ * group: returns the multiplicative identity @c as_random(1) -- the
+ * natural counterpart to @c sum(random_variable)'s empty-group
+ * @c as_random(0).
+ *
+ * Singleton group: returns the single patched child directly without
+ * minting a useless single-child @c gate_arith TIMES root.
+ *
+ * Direct (untracked) call: state entries are raw RV uuids rather than
+ * mixtures; pass them through unchanged so PRODUCT degenerates to the
+ * straight RV product over all rows, the natural "no provenance =
+ * every row counts" behaviour.
+ */
+CREATE OR REPLACE FUNCTION product_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  i integer;
+  prod_state uuid[] := '{}';
+  one_rv random_variable;
+  gtype provsql.provenance_gate;
+  children uuid[];
+  prov_i uuid;
+  x_uuid uuid;
+BEGIN
+  one_rv := provsql.as_random(1::double precision);
+
+  IF state IS NULL THEN
+    RETURN one_rv;
+  END IF;
+  n := array_length(state, 1);
+  IF n IS NULL THEN
+    RETURN one_rv;
+  END IF;
+
+  FOR i IN 1..n LOOP
+    gtype := provsql.get_gate_type(state[i]);
+    IF gtype = 'mixture'::provsql.provenance_gate THEN
+      children := provsql.get_children(state[i]);
+      prov_i := children[1];
+      x_uuid := children[2];
+      prod_state := array_append(
+        prod_state,
+        provsql.random_variable_uuid(
+          provsql.mixture(
+            prov_i,
+            provsql.random_variable_make(x_uuid, 'NaN'::double precision),
+            one_rv)));
+    ELSE
+      prod_state := array_append(prod_state, state[i]);
+    END IF;
+  END LOOP;
+
+  IF n = 1 THEN
+    RETURN provsql.random_variable_make(prod_state[1], 'NaN'::double precision);
+  END IF;
+  RETURN provsql.random_variable_make(
+    provsql.provenance_arith(1, prod_state),  -- 1 = PROVSQL_ARITH_TIMES
+    'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE product(random_variable) (
+  SFUNC     = sum_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = product_rv_ffunc
+);
+
 /** @} */
 
 /** @} */

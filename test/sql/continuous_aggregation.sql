@@ -424,5 +424,106 @@ SELECT abs(provsql.expected(m) - 2.0)       < 0.05 AS avg_direct_mean,
 DROP TABLE rv_avg_direct_res;
 DROP TABLE rv_avg_direct;
 
+-- ---------------------------------------------------------------------
+-- 8.  PRODUCT(random_variable) on a tracked table.
+-- ---------------------------------------------------------------------
+-- provsql.product is the multiplicative analogue of provsql.sum: each
+-- row contributes a per-row mixture whose else-branch is the
+-- multiplicative identity as_random(1) (so absent rows contribute 1,
+-- not 0), and the FFUNC builds a gate_arith TIMES root.  Implementation
+-- detail: the C-side wrap always emits mixture(prov, x, as_random(0));
+-- product_rv_ffunc patches each mixture's else-branch to as_random(1)
+-- by reconstructing it.  Empty group returns the multiplicative
+-- identity as_random(1), the natural counterpart to sum's as_random(0).
+
+-- 8a.  Deterministic provenance (prob=1.0 default).
+--   PRODUCT of independent N(1,1), N(2,1), N(3,1):
+--     E[X1*X2*X3]   = mu1*mu2*mu3 = 6
+--     E[(X1*X2*X3)^2] = (mu1^2+1)*(mu2^2+1)*(mu3^2+1) = 2*5*10 = 100
+--     Var[PRODUCT]  = 100 - 36 = 64
+--   The closed-form evaluator's independence shortcut applies because
+--   each mixture's footprint reduces to its own X_i (the prov gate is
+--   gate_one() under default probability).  Pin to 1e-9.
+
+CREATE TABLE rv_prod_basic(label text, x random_variable);
+INSERT INTO rv_prod_basic VALUES
+  ('a', provsql.normal(1, 1)),
+  ('b', provsql.normal(2, 1)),
+  ('c', provsql.normal(3, 1));
+SELECT add_provenance('rv_prod_basic');
+
+CREATE TABLE rv_prod_basic_res AS
+  SELECT provsql.product(x) AS p FROM rv_prod_basic;
+SELECT remove_provenance('rv_prod_basic_res');
+
+-- Structure: gate_arith TIMES over three mixture per-row contributions.
+SELECT get_gate_type(p::uuid)                              AS root_kind,
+       array_length(get_children(p::uuid), 1)              AS root_arity,
+       get_gate_type((get_children(p::uuid))[1])           AS child_kind
+  FROM rv_prod_basic_res;
+
+SELECT abs(provsql.expected(p) - 6.0)  < 1e-9 AS prod_basic_mean,
+       abs(provsql.variance(p) - 64.0) < 1e-9 AS prod_basic_variance
+  FROM rv_prod_basic_res;
+
+DROP TABLE rv_prod_basic_res;
+DROP TABLE rv_prod_basic;
+
+-- 8b.  Uncertain provenance with independent Bernoullis.
+--   Each row's per-row contribution is mixture(b_i, X_i, as_random(1)):
+--     E[mix_a] = 0.5 * 1 + 0.5 * 1 = 1.0
+--     E[mix_b] = 0.4 * 2 + 0.6 * 1 = 1.4
+--     E[mix_c] = 0.3 * 3 + 0.7 * 1 = 1.6
+--   Footprints are disjoint (b_i and X_i are per-row independent), so
+--   the closed-form evaluator factorises:
+--     E[PRODUCT] = 1.0 * 1.4 * 1.6 = 2.24  (exact to 1e-9)
+
+CREATE TABLE rv_prod_uncert(label text, x random_variable);
+INSERT INTO rv_prod_uncert VALUES
+  ('a', provsql.normal(1, 1)),
+  ('b', provsql.normal(2, 1)),
+  ('c', provsql.normal(3, 1));
+SELECT add_provenance('rv_prod_uncert');
+DO $$
+BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM rv_prod_uncert WHERE label = 'a';
+  PERFORM set_prob(provenance(), 0.4) FROM rv_prod_uncert WHERE label = 'b';
+  PERFORM set_prob(provenance(), 0.3) FROM rv_prod_uncert WHERE label = 'c';
+END
+$$;
+
+CREATE TABLE rv_prod_uncert_res AS
+  SELECT provsql.product(x) AS p FROM rv_prod_uncert;
+SELECT remove_provenance('rv_prod_uncert_res');
+
+SELECT abs(provsql.expected(p) - 2.24) < 1e-9 AS prod_uncert_mean
+  FROM rv_prod_uncert_res;
+
+DROP TABLE rv_prod_uncert_res;
+DROP TABLE rv_prod_uncert;
+
+-- 8c.  Empty group: PRODUCT over zero rows is the multiplicative
+--   identity 1 (a gate_value Dirac), counterpart to sum's empty-group
+--   as_random(0).
+
+CREATE TABLE rv_prod_empty(label text, x random_variable, keep boolean);
+INSERT INTO rv_prod_empty VALUES
+  ('a', provsql.normal(1, 1), false),
+  ('b', provsql.normal(2, 1), false);
+SELECT add_provenance('rv_prod_empty');
+
+CREATE TABLE empty_prod AS
+  SELECT provsql.product(x) AS p FROM rv_prod_empty WHERE keep;
+SELECT remove_provenance('empty_prod');
+
+SELECT get_gate_type(p::uuid)                AS empty_prod_kind,
+       random_variable_value(p)              AS empty_prod_value,
+       abs(provsql.expected(p) - 1.0) < 1e-9 AS empty_prod_mean,
+       abs(provsql.variance(p) - 0.0) < 1e-9 AS empty_prod_variance
+  FROM empty_prod;
+
+DROP TABLE empty_prod;
+DROP TABLE rv_prod_empty;
+
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;
