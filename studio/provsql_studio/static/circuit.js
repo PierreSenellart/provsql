@@ -2359,13 +2359,22 @@
     // so the user's chosen zoom level survives mode flips.
     const _view = (view && Number.isFinite(view.lo) && Number.isFinite(view.hi)
                    && view.hi > view.lo) ? view : null;
+    // Stats (μ, σ, σ²) obey the panel's "Probability decimals" setting
+    // for parity with the eval strip's plain-float branch.  Falls back
+    // to 4 decimals when the helper isn't available (e.g. circuit.js
+    // loaded standalone in a test harness).  The exponential-fallback
+    // bounds stay fixed: very-small / very-large magnitudes always
+    // round-trip through scientific notation regardless of the user's
+    // chosen decimal count.
+    const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+                ? window.ProvsqlStudio.getProbDecimals() : 4;
     const fmt = v => {
       if (v == null || !Number.isFinite(Number(v))) return String(v);
       const n = Number(v);
       if (Math.abs(n) >= 1e6 || (Math.abs(n) > 0 && Math.abs(n) < 1e-3)) {
-        return n.toExponential(3);
+        return n.toExponential(Math.max(2, dec - 1));
       }
-      return Number(n.toFixed(4)).toString();
+      return Number(n.toFixed(dec)).toString();
     };
     // Looser formatter for axis tick labels: bin edges of an MC
     // histogram are random-sampling artefacts (the leftmost and
@@ -2426,11 +2435,16 @@
       // with a short delay; together with the .cv-profile-bars rect
       // hover style the user gets a per-bin readout without needing
       // a JS-driven overlay.
+      // Per-bin probability tooltip.  The displayed percent uses
+      // `dec - 2` decimals so a "Probability decimals = 4" setting
+      // renders as "12.34%" (i.e. four digits of decimal probability
+      // precision); clamp to 0 so small `dec` doesn't go negative.
+      const pctDec = Math.max(0, dec - 2);
       const fmtPct = p => {
         if (!Number.isFinite(p)) return '?';
         if (p === 0) return '0';
-        if (p < 1e-4) return p.toExponential(2);
-        return (p * 100).toFixed(2) + '%';
+        if (p < Math.pow(10, -dec)) return p.toExponential(Math.max(2, dec - 1));
+        return (p * 100).toFixed(pctDec) + '%';
       };
       const tooltip = (b, cum) => {
         const lo_ = fmtTick(Number(b.bin_lo));
