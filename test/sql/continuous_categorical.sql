@@ -80,6 +80,27 @@ CREATE TEMP TABLE cat_zero AS
 SELECT array_length(get_children(u), 1) - 1 AS cat_zero_nb_mulinputs  -- minus the key
   FROM cat_zero;
 
+-- D2. Degenerate categorical: a single positive-mass outcome reduces
+--     to as_random(v) at construction.  The result is a gate_value,
+--     not a gate_mixture, and two such calls collide on the same v5
+--     UUID (since as_random is IMMUTABLE).
+SELECT get_gate_type(random_variable_uuid(
+         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[])))
+         AS singleton_kind;
+
+SELECT random_variable_uuid(
+         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[]))
+       = random_variable_uuid(
+         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[]))
+         AS singleton_shared_uuid;
+
+-- D3. Zero-padded singleton: same shortcut applies when the only
+--     positive entry is buried in a longer array.
+SELECT get_gate_type(random_variable_uuid(
+         provsql.categorical(ARRAY[0.0, 1.0, 0.0]::float8[],
+                             ARRAY[7,   8,   9]::float8[])))
+         AS padded_singleton_kind;
+
 -- E.  Validation errors.
 \set VERBOSITY terse
 

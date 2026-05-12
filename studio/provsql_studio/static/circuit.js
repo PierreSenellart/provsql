@@ -81,12 +81,34 @@
   // categorical-form gate_mixture has wires [key, mul_1, ..., mul_n]
   // and labels them accordingly when more than three wires are present.
   function _mixtureEdgeLabel(parent, child_pos) {
-    const nbChildren = (state.scene && state.scene.edges)
-      ? state.scene.edges.filter(e => e.from === parent.id).length
-      : 0;
-    if (nbChildren > 3) {
-      // Categorical-form mixture: [key, mul_1, ..., mul_n].
-      return child_pos === 1 ? 'key' : String(child_pos - 1);
+    // Distinguish the categorical form structurally rather than by
+    // wire count: a Dirac-collapsed bimodal mixture has only three
+    // wires ([key, mul_1, mul_2]) yet is still categorical, while a
+    // classic 3-wire mixture is [p_input, x_scalar, y_scalar].  The
+    // discriminator is the types of the non-first wires -- all
+    // gate_mulinput in the categorical form, gate_rv / gate_value /
+    // gate_arith / gate_mixture in the classic form.
+    if (state.scene && state.scene.edges && state.scene.nodes) {
+      const nodes_by_id = {};
+      for (const n of state.scene.nodes) nodes_by_id[n.id] = n;
+      const children = state.scene.edges
+        .filter(e => e.from === parent.id)
+        .sort((a, b) => a.child_pos - b.child_pos);
+      if (children.length >= 2) {
+        const wire0 = nodes_by_id[children[0].to];
+        const isCategorical = wire0 && wire0.type === 'input'
+          && children.slice(1).every(c => {
+               const t = nodes_by_id[c.to];
+               return t && t.type === 'mulinput';
+             });
+        if (isCategorical) {
+          // Only the key wire has a distinguished role; the
+          // mulinputs are unordered outcomes of the same block, so
+          // positional digits would be misleading.  Return null on
+          // the mulinput wires to suppress the edge label entirely.
+          return child_pos === 1 ? 'key' : null;
+        }
+      }
     }
     // Classic 3-wire mixture: [p, x, y].
     return ({ 1: 'p', 2: 'x', 3: 'y' })[child_pos] ?? String(child_pos);
@@ -600,26 +622,34 @@
       // every edge.  Bow already shifts both the curve and the
       // midpoint, so labels track parallel curves automatically.
       if (shouldLabelChildren(from) && e.child_pos != null) {
-        const dx = fp.x - tp.x;
-        const dy = fp.y - tp.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const perp = 9;
-        const lx = (fp.x + tp.x) / 2 + bow + (-dy / len) * perp;
-        const ly = (fp.y + tp.y) / 2 + ( dx / len) * perp;
-        const tag = svgEl('text', {
-          class: 'edge-pos',
-          x: lx, y: ly,
-          'text-anchor': 'middle', 'dominant-baseline': 'central',
-        });
+        // Compute the label first; a labelMap function that returns
+        // null/empty suppresses the edge label entirely (used by
+        // the categorical-form mixture for its unordered mulinput
+        // outcomes -- only the key wire gets a label there).
         const labelMap = EDGE_POS_LABEL[from.type];
+        let label;
         if (typeof labelMap === 'function') {
-          tag.textContent = labelMap(from, e.child_pos);
+          label = labelMap(from, e.child_pos);
         } else if (labelMap && labelMap[e.child_pos] != null) {
-          tag.textContent = labelMap[e.child_pos];
+          label = labelMap[e.child_pos];
         } else {
-          tag.textContent = String(e.child_pos);
+          label = String(e.child_pos);
         }
-        edgeLayer.appendChild(tag);
+        if (label != null && label !== '') {
+          const dx = fp.x - tp.x;
+          const dy = fp.y - tp.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const perp = 9;
+          const lx = (fp.x + tp.x) / 2 + bow + (-dy / len) * perp;
+          const ly = (fp.y + tp.y) / 2 + ( dx / len) * perp;
+          const tag = svgEl('text', {
+            class: 'edge-pos',
+            x: lx, y: ly,
+            'text-anchor': 'middle', 'dominant-baseline': 'central',
+          });
+          tag.textContent = label;
+          edgeLayer.appendChild(tag);
+        }
       }
     }
     // The pinned-subtree edge highlight lives on `.is-active` classes
@@ -803,6 +833,10 @@
         }
       } else if (node.type === 'value' || node.type === 'agg') {
         html += `<dt>value</dt><dd>${escapeHtml(node.extra)}</dd>`;
+      } else if (node.type === 'mulinput') {
+        // The categorical-mixture form stores the outcome value in
+        // extra; _gateInfos already exposes it as `value`, so the
+        // generic `extra` fallback below would duplicate it.  Skip.
       } else if (node.type === 'rv') {
         // extra is "<kind>:<p1>[,<p2>]"; split for readability.
         const spec = parseDistributionSpec(node.extra);
@@ -2027,13 +2061,18 @@
       if (node.info1 != null) out.push({ label: 'left attr',  value: node.info1 });
       if (node.info2 != null) out.push({ label: 'right attr', value: node.info2 });
     } else if (t === 'mulinput') {
-      // info1 = the multivalued variable's ordinal within its block;
-      // extra (when present) is the outcome value for the categorical
-      // mixture form (key + mulinput-per-outcome).  Show both so the
-      // categorical mulinput's payload is visible alongside the
-      // repair_key-style ordinal.
-      if (node.info1 != null) out.push({ label: 'ordinal', value: node.info1 });
-      if (node.extra) out.push({ label: 'value', value: node.extra });
+      // Two shapes share gate_mulinput:
+      //  - repair_key-style: extra is empty, info1 carries the
+      //    multivalued variable's ordinal within its block.
+      //  - categorical-mixture: extra holds the outcome value
+      //    (float8 text), and the ordinal is irrelevant -- the
+      //    mulinputs of a categorical block are unordered.
+      // Surface whichever payload the mulinput actually carries.
+      if (node.extra) {
+        out.push({ label: 'value', value: node.extra });
+      } else if (node.info1 != null) {
+        out.push({ label: 'ordinal', value: node.info1 });
+      }
     } else if (t === 'input' || t === 'update') {
       // info1 = source relation id (already shown as `tbl X` under the
       // node), info2 = column count. Surface column count here so the

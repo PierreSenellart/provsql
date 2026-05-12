@@ -20,6 +20,15 @@ t
 cat_zero_nb_mulinputs
 2
 (1 row)
+singleton_kind
+value
+(1 row)
+singleton_shared_uuid
+t
+(1 row)
+padded_singleton_kind
+value
+(1 row)
 ERROR:  provsql.categorical: probs and outcomes must have the same length (got 2 and 3)
 ERROR:  provsql.categorical: probs must sum to 1 within 1e-9 (got 0.8)
 ERROR:  provsql.categorical: probs[1] must be in [0,1] (got 1.5)

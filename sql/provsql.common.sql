@@ -1830,6 +1830,12 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * two calls to @c categorical with the same arrays are *independent*
  * categorical RVs.  The marking is @c VOLATILE accordingly.
  *
+ * Degenerate case: a categorical with exactly one positive-mass
+ * outcome reduces to @c as_random(v) at construction (the block would
+ * just be a single mulinput, which is operationally a Dirac point
+ * mass).  Two such calls share the @c gate_value UUID via the v5
+ * convention @c as_random already uses.
+ *
  * @sa @c mixture for the Bernoulli-weighted choice constructor; nested
  *     calls of the Dirac @c mixture form collapse to this same
  *     structural representation during @c probability_evaluate.
@@ -1882,6 +1888,29 @@ BEGIN
   IF abs(p_sum - 1.0) > 1e-9 THEN
     RAISE EXCEPTION 'provsql.categorical: probs must sum to 1 within 1e-9 (got %)', p_sum;
   END IF;
+
+  -- Degenerate case: exactly one positive-mass outcome (the rest are
+  -- zero).  The "categorical" is then a Dirac point mass; skip the
+  -- block-allocation entirely and return @c as_random(v), which yields
+  -- a shared, v5-keyed gate_value -- exactly what downstream
+  -- evaluators (rv_moment, AnalyticEvaluator, rv_support) treat
+  -- specially.  Saves a key gate and a mulinput per call, and lets
+  -- two calls to @c categorical({1.0}, {v}) collide on the same
+  -- gate_value UUID instead of producing distinct anonymous blocks.
+  DECLARE
+    nb_positive integer := 0;
+    only_idx    integer := 0;
+  BEGIN
+    FOR i IN 1..n LOOP
+      IF probs[i] > 0.0 THEN
+        nb_positive := nb_positive + 1;
+        only_idx := i;
+      END IF;
+    END LOOP;
+    IF nb_positive = 1 THEN
+      RETURN provsql.as_random(outcomes[only_idx]);
+    END IF;
+  END;
 
   -- Mint the block's key anchor.  Probability 1.0 matches the
   -- joint-table / Dirac-collapse convention: the categorical mass lives
