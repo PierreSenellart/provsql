@@ -2322,6 +2322,110 @@ CREATE OPERATOR > (
 
 /** @} */
 
+/**
+ * @name Aggregates over random_variable
+ *
+ * Phase 1 of the SUM-over-RV story: an explicit @c provsql.rv_sum
+ * aggregate that takes a @c random_variable per row and returns the
+ * @c random_variable representing the (provenance-weighted) sum.
+ *
+ * The user-facing aggregate has signature
+ * <tt>rv_sum(random_variable) RETURNS random_variable</tt>.  Direct
+ * calls outside a provenance-tracked query treat each row's contribution
+ * unconditionally (no per-row Boolean selector).  When the planner hook
+ * sees an @c rv_sum @c Aggref over a provenance-tracked query, it wraps
+ * the per-row argument @c x in <tt>provsql.mixture(prov_token, x,
+ * provsql.as_random(0))</tt> so the aggregate's effective semantics
+ * become
+ * @f$\mathrm{SUM}(x) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i@f$,
+ * the natural extension of semimodule-provenance to RV-valued M.
+ *
+ * The internal state is the array of UUIDs of the per-row mixtures.
+ * The final function builds a single @c gate_arith @c PLUS over them
+ * (or returns @c as_random(0) for an empty group, the additive
+ * identity).  Sharing on @c provenance_arith's v5 hash means two
+ * @c rv_sum invocations over the same set of rows collide on the same
+ * gate.
+ *
+ * @{
+ */
+
+/**
+ * @brief Per-row helper: wrap an RV in @c mixture(prov, rv, as_random(0)).
+ *
+ * Internal helper used by the planner-hook rewriter to lift an @c rv_sum
+ * argument into its provenance-aware form.  Encodes one row's
+ * contribution to the SUM as a Bernoulli mixture over the row's
+ * provenance: with probability @c P(prov) the mixture samples @c rv,
+ * otherwise it samples the additive identity @c as_random(0).  Exposed
+ * as a regular SQL function so the planner can construct a @c FuncExpr
+ * by name without needing to disambiguate @c mixture / @c as_random
+ * overloads at OID-lookup time.
+ */
+CREATE OR REPLACE FUNCTION rv_aggregate_semimod(
+  prov uuid, rv random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.mixture(prov, rv, provsql.as_random(0::double precision));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief State-transition function for @c rv_sum.
+ *
+ * Appends the input RV's UUID to the running array.  NULL inputs are
+ * skipped (matching standard SUM semantics).  The aggregate's INITCOND
+ * is @c '{}' so the FINALFUNC always runs even on an empty group, which
+ * is what lets us return @c as_random(0) (the additive identity) for
+ * an empty SUM rather than NULL.
+ */
+CREATE OR REPLACE FUNCTION rv_sum_sfunc(
+  state uuid[], rv random_variable)
+  RETURNS uuid[] AS
+$$
+  SELECT CASE
+    WHEN rv IS NULL THEN state
+    ELSE array_append(state, provsql.random_variable_uuid(rv))
+  END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Final function for @c rv_sum: build a @c gate_arith PLUS root.
+ *
+ * Empty group (@c state = @c '{}'): return @c as_random(0), the
+ * additive identity, so SUM over zero rows is the deterministic
+ * scalar 0 -- matches the agg_token convention in @c agg_raw_moment.
+ *
+ * Singleton group: return the single child directly without minting a
+ * useless single-child @c gate_arith.
+ *
+ * Otherwise: build @c gate_arith(PLUS, state) via @c provenance_arith.
+ */
+CREATE OR REPLACE FUNCTION rv_sum_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  arith_token uuid;
+BEGIN
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN provsql.as_random(0::double precision);
+  END IF;
+  IF array_length(state, 1) = 1 THEN
+    RETURN provsql.random_variable_make(state[1], 'NaN'::double precision);
+  END IF;
+  arith_token := provsql.provenance_arith(0, state);  -- 0 = PROVSQL_ARITH_PLUS
+  RETURN provsql.random_variable_make(arith_token, 'NaN'::double precision);
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE rv_sum(random_variable) (
+  SFUNC     = rv_sum_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = rv_sum_ffunc
+);
+
+/** @} */
+
 /** @} */
 
 /** @defgroup aggregate_provenance Aggregate provenance

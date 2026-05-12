@@ -126,6 +126,7 @@ test: continuous_mixture_histogram
 test: continuous_mixture_hybrid
 test: continuous_mixture_dirac_collapse
 test: continuous_categorical
+test: continuous_aggregation
 
 # PROV export
 test: to_provxml
