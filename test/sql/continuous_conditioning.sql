@@ -16,12 +16,14 @@ SET provsql.rv_mc_samples = 0;
 --   X ~ N(0, 1) conditioned on X > 3.  The truncated-normal mean is
 --   φ(3) / (1 − Φ(3)).  The second raw moment is
 --   σ² (1 + α·φ(α)/(1−Φ(α))) with α = 3.  Reference values come from
---   directly evaluating the closed form via PG's erf().
+--   the closed form; erf(3/sqrt(2)) is inlined as a precomputed
+--   17-significant-digit literal because PG's built-in erf() is
+--   PostgreSQL 18+ only.
 -- ---------------------------------------------------------------------
 WITH r AS (SELECT provsql.normal(0, 1) AS rv),
      ref AS (
        SELECT  0.39894228040143268 * exp(-9.0/2)
-             / (1 - (0.5 * (1 + erf(3/sqrt(2.0))))) AS mean_ref
+             / (1 - (0.5 * (1 + 0.997300203936739793))) AS mean_ref
      )
 SELECT abs(expected(rv, rv_cmp_gt(rv, as_random(3))) - ref.mean_ref) < 1e-12
          AS trunc_normal_mean,
@@ -103,7 +105,7 @@ SELECT add_provenance('cond_sensor');
 
 WITH ref AS (
   SELECT  0.39894228040143268 * exp(-9.0/2)
-        / (1 - (0.5 * (1 + erf(3/sqrt(2.0))))) AS mean_ref
+        / (1 - (0.5 * (1 + 0.997300203936739793))) AS mean_ref
 )
 SELECT abs(expected(reading, provenance()) - ref.mean_ref) < 1e-12
          AS where_e2e_mean,
