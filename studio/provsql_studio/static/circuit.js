@@ -1272,7 +1272,7 @@
   const _SCALAR_ONLY_OPTIONS = new Set([
     'distribution-profile', 'moment', 'sample'
   ]);
-  // Semirings that accept an optional "Condition on" gate UUID --
+  // Semirings that accept an optional "Condition on" gate UUID,
   // routed to provsql.rv_moment / rv_support / rv_histogram /
   // rv_sample as the `prov` argument so the result is the conditional
   // (truncated) distribution rather than the unconditional one.
@@ -1942,14 +1942,14 @@
   // (truncated by the cmps the planner hook lifted out of WHERE)
   // without the user having to paste the row's provsql UUID.
   //
-  // Source of truth: state.rowProv -- the row's `__prov` (or
+  // Source of truth: state.rowProv, the row's `__prov` (or
   // user-selected `provsql`) UUID, stashed by renderCircuit from the
   // data-row-prov attribute the result-table renderer stamps on every
   // clickable cell.  Falls back to scene.root for the legacy
   // "click the provsql cell" path (scene root === row's prov).
   //
   // Row-context change (clicking a different row's cell) ALWAYS
-  // overwrites, even prior manual edits -- a UUID pasted for row A
+  // overwrites, even prior manual edits: a UUID pasted for row A
   // doesn't generalise to row B.  Within a single row, manual edits
   // stick (the `input` listener drops dataset.autoset; we don't
   // re-overwrite while lastAutoPresetRow matches the current row).
@@ -1967,7 +1967,7 @@
     // Row context: prefer the row prov stashed at scene load.  When
     // missing (legacy click path with no data-row-prov attribute, or
     // a direct loadCircuit call) fall back to scene.root iff a scalar
-    // gate is pinned distinctly from the root -- conditioning the
+    // gate is pinned distinctly from the root; conditioning the
     // root on itself is meaningless.
     let target = state.rowProv;
     if (!target) {
@@ -1988,7 +1988,7 @@
       updateConditionInputBadge();
       return;
     }
-    // Same row as the previous auto-preset -- leave the value alone
+    // Same row as the previous auto-preset: leave the value alone
     // (the user may have typed a manual override, which we want to
     // honour across pin changes within the same scene).
     if (state.lastAutoPresetRow === target) {
@@ -2007,19 +2007,19 @@
   // Visual cue that the "Condition on" input was auto-filled from the
   // row's provenance, with three states:
   //
-  //   * no row context           -- badge hidden (we don't have a row
-  //                                 prov to offer in the first place).
-  //   * value matches row prov   -- badge shown, "active" styling
-  //                                 (purple chip + tint on the input);
-  //                                 not clickable since clicking would
-  //                                 be a no-op.
-  //   * value diverges from prov -- badge shown, "muted" styling
-  //                                 (faded chip, no input tint); the
-  //                                 chip becomes a clickable button
-  //                                 that restores the row prov so the
-  //                                 user can revert a manual edit
-  //                                 without having to navigate away
-  //                                 and back.
+  //   * no row context:           badge hidden (we don't have a row
+  //                               prov to offer in the first place).
+  //   * value matches row prov:   badge shown, "active" styling
+  //                               (purple chip + tint on the input);
+  //                               not clickable since clicking would
+  //                               be a no-op.
+  //   * value diverges from prov: badge shown, "muted" styling
+  //                               (faded chip, no input tint); the
+  //                               chip becomes a clickable button
+  //                               that restores the row prov so the
+  //                               user can revert a manual edit
+  //                               without having to navigate away
+  //                               and back.
   //
   // Called from autoPresetConditionInput on every refreshEvalTarget,
   // and from the input's `input` listener on every keystroke.
@@ -2030,7 +2030,7 @@
     const rowProv = state.rowProv || '';
     if (!badge) return;
     if (!rowProv) {
-      // No row context -- nothing to offer, hide the chip.
+      // No row context: nothing to offer, hide the chip.
       badge.hidden = true;
       badge.classList.remove('cv-eval__cond-badge--muted');
       cond.classList.remove('is-auto-conditioned');
@@ -2125,7 +2125,7 @@
     // Belt-and-braces: pin the scroll position across the run.  Even
     // with the blur above, Firefox occasionally scrolls the viewport
     // when the result panel grows tall (distribution-profile SVG,
-    // sample list) -- presumably a focus / scroll-anchoring quirk we
+    // sample list), presumably a focus / scroll-anchoring quirk we
     // can't isolate further.  Capture scrollY now, restore it once
     // after the synchronous DOM mutations and once on the next
     // animation frame to cover async layout passes.  Skip the
@@ -2196,19 +2196,60 @@
         result.title = 'Distribution profile';
         wireProfileInteractions(result, data.result);
       } else if (data.kind === 'sample') {
-        // Sample is a (potentially long) list of floats.  Render the
-        // n_requested / n_returned counters inline, drop the raw
-        // samples into dataset.copy so the user can grab them as JSON.
+        // Sample renders as a <details> panel with three regions:
+        //   * summary: "N samples [of M]" counter + a comma-separated
+        //              preview of the first PREVIEW_N values.
+        //   * full:    the complete sample array (visible when the
+        //              user opens the panel); monospace + wrapping
+        //              so long n's stay readable.
+        //   * hint:    shown only when MC's conditional acceptance
+        //              rate truncated the run, pointing at the
+        //              provsql.rv_mc_samples GUC.
+        // The clipboard button (cv-eval__copy) is wired through
+        // dataset.copy and copies the full JSON array.
         const r = data.result || {};
         const requested = r.n_requested ?? '';
-        const returned = r.n_returned ?? (r.samples ? r.samples.length : 0);
-        result.textContent = `= ${returned} sample${returned === 1 ? '' : 's'}`
+        const samples = Array.isArray(r.samples) ? r.samples : [];
+        const returned = r.n_returned ?? samples.length;
+        const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+          ? window.ProvsqlStudio.getProbDecimals() : 4;
+        const fmt = v => Number.isFinite(v)
+          ? Number(v.toFixed(Math.min(dec, 4))).toString()
+          : String(v);
+        const PREVIEW_N = 6;
+        const previewVals = samples.slice(0, PREVIEW_N).map(fmt).join(', ');
+        const moreCount = Math.max(0, samples.length - PREVIEW_N);
+        const preview = previewVals
+          ? `[${previewVals}${moreCount > 0 ? ` … +${moreCount} more` : ''}]`
+          : '[]';
+        const countLabel = `${returned} sample${returned === 1 ? '' : 's'}`
           + (requested && requested !== returned ? ` of ${requested}` : '');
+        const fullList = samples.length
+          ? `[${samples.map(fmt).join(', ')}]`
+          : '[]';
+        const budgetHint = (requested && returned < requested)
+          ? `<div class="cv-sample-hint" role="status">`
+            + `MC accepted ${returned}/${requested}.  `
+            + `Raise <code>provsql.rv_mc_samples</code> in the Config panel `
+            + `to widen the rejection-sampling budget.`
+            + `</div>`
+          : '';
+        result.innerHTML =
+          `<details class="cv-sample-panel">`
+          + `<summary class="cv-sample-summary">`
+          +   `<span class="cv-sample-count">${escapeHtml(countLabel)}</span>`
+          +   `<code class="cv-sample-preview" `
+          +        `title="First ${PREVIEW_N} values; click the chevron `
+          +        `to see all; clipboard icon copies the JSON array.">`
+          +     escapeHtml(preview)
+          +   `</code>`
+          + `</summary>`
+          + `<pre class="cv-sample-full">${escapeHtml(fullList)}</pre>`
+          + budgetHint
+          + `</details>`;
         result.dataset.kind = 'sample';
-        result.dataset.copy = JSON.stringify(r.samples || []);
-        result.title = (returned < requested)
-          ? `Conditional MC: ${returned}/${requested} accepted -- raise provsql.rv_mc_samples to widen the budget`
-          : `${returned} samples`;
+        result.dataset.copy = JSON.stringify(samples);
+        result.title = '';   // panel + per-element titles carry the info
       } else {
       // Show the value verbatim. Probability gets clipped to the configured
       // decimal count (default 4) for readability; the full-precision form
@@ -2278,7 +2319,7 @@
       // worth copying (errors and pending states have no useful text).
       const copy = document.getElementById('eval-copy');
       if (copy) copy.hidden = !result.dataset.copy;
-      // Restore the scroll position captured before the run -- once
+      // Restore the scroll position captured before the run: once
       // synchronously and once on the next animation frame, since
       // Firefox's scroll-jump can fire either during the result
       // mutation or on the subsequent layout pass.

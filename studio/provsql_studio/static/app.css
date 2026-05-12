@@ -1954,9 +1954,9 @@ body.mode-where #sidebar {
 /* "Row prov" badge: shown whenever the current row has a known
    provenance gate (data-row-prov on the clicked cell).  Two visual
    states:
-     * active (default) -- the Condition input's value IS the row
+     * active (default): the Condition input's value IS the row
        prov.  Solid purple chip + the input gets the matching tint.
-     * muted -- the user has edited the value, so it diverges from
+     * muted: the user has edited the value, so it diverges from
        the row prov.  Faded chip with a hover affordance and the
        input loses the tint.  Clicking the muted chip restores the
        row prov, so a manual edit is a one-click undo.
@@ -1997,7 +1997,7 @@ body.mode-where #sidebar {
   border-color: var(--purple-300, #c5b4ec);
   filter: none;
 }
-/* Subtle tint on the input itself while the auto-preset is active --
+/* Subtle tint on the input itself while the auto-preset is active,
    reinforces the "this came from the row, not the user" signal
    without competing with the badge for attention. */
 .cv-eval__args.is-auto-conditioned {
@@ -2061,6 +2061,77 @@ body.mode-where #sidebar {
   padding: 0;
   display: block;
   flex-basis: 100%;
+}
+/* Sample: same block-level treatment + a <details> panel with an
+   inline preview of the first samples and an expandable full list.
+   The preview tells the user at a glance "you got these values", and
+   the chevron is the conventional disclosure affordance for "show
+   me everything". */
+.cv-eval__result[data-kind="sample"] {
+  background: transparent;
+  padding: 0;
+  display: block;
+  flex-basis: 100%;
+}
+.cv-sample-panel {
+  padding: 0.35rem 0.5rem 0.3rem;
+  background: rgba(125, 65, 153, 0.05);
+  border: 1px solid rgba(125, 65, 153, 0.18);
+  border-radius: 4px;
+}
+.cv-sample-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: revert;
+}
+.cv-sample-summary::-webkit-details-marker { display: revert; }
+.cv-sample-count {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--purple-700, #4d369e);
+  white-space: nowrap;
+}
+.cv-sample-preview {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--fg-muted, #6b6378);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-sample-full {
+  margin: 0.35rem 0 0 0;
+  padding: 0.4rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--purple-900);
+  background: #fff;
+  border: 1px solid var(--border-soft, #d8d3e3);
+  border-radius: 3px;
+  max-height: 14rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.cv-sample-hint {
+  margin-top: 0.35rem;
+  padding: 0.3rem 0.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--terracotta-700, #803a1b);
+  background: rgba(202, 86, 53, 0.08);
+  border-left: 3px solid var(--terracotta-500, #ca5635);
+  border-radius: 3px;
+}
+.cv-sample-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: rgba(202, 86, 53, 0.12);
+  padding: 0 0.2rem;
+  border-radius: 2px;
 }
 .cv-profile-panel {
   display: flex;

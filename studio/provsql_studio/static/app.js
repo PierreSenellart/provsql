@@ -1565,12 +1565,13 @@
             <option value="true">central</option>
           </select>
           <input type="number" class="cv-eval__args" id="eval-args-sample-n" hidden
-                 min="1" step="1" placeholder="n" value="100"
-                 autocomplete="off" title="Number of samples to draw">
+                 min="1" step="1" placeholder="target n" value="100"
+                 autocomplete="off"
+                 title="Target number of samples.  Without conditioning, every draw is kept, so this is just the draw count.  With conditioning, rv_sample uses rejection sampling: draws from the unconditional distribution are accepted only when the event holds, capped at provsql.rv_mc_samples trials.  If the event is rare, you may get fewer accepts than requested.">
           <span class="cv-eval__args-group" id="eval-args-condition-group" hidden>
             <span class="cv-eval__args-label">Conditioned by:</span>
             <span class="cv-eval__cond-badge" id="eval-args-condition-badge" hidden
-                  title="The Condition input was auto-filled with the row's provenance gate -- the canonical conditioning event for expected(rv, provenance()).  Edit it to override.">
+                  title="The Condition input was auto-filled with the row's provenance gate, the canonical conditioning event for expected(rv, provenance()).  Edit it to override.">
               <i class="fas fa-link"></i> row prov
             </span>
             <input type="text" class="cv-eval__args" id="eval-args-condition"
