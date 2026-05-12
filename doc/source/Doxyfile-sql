@@ -27,6 +27,10 @@ GENERATE_LATEX         = NO
 GENERATE_TREEVIEW      = YES
 QUIET                  = YES
 
+# Math rendering (MathJax renders LaTeX formulas in the browser, no LaTeX install needed)
+USE_MATHJAX            = YES
+MATHJAX_VERSION        = MathJax_3
+
 # Branding
 PROJECT_LOGO           = ../../branding/logo.png
 HTML_EXTRA_STYLESHEET  = doxygen-custom.css

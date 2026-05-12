@@ -766,25 +766,6 @@ static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
 }
 
 /**
- * @brief Build the provenance expression for a single aggregate function.
- *
- * For @c SR_PLUS (union context) returns the first provenance attribute
- * directly.  For @c SR_TIMES or @c SR_MONUS, constructs:
- * @code
- *   provenance_aggregate(fn_oid, result_type,
- *                        original_aggref,
- *                        array_agg(provenance_semimod(arg, times_or_monus_token)))
- * @endcode
- * COUNT(*) and COUNT(expr) are remapped to SUM so that the semimodule
- * semantics (scalar × token → token) work correctly.
- *
- * @param constants  Extension OID cache.
- * @param agg_ref    The original @c Aggref node from the query.
- * @param prov_atts  List of provenance @c Var nodes.
- * @param op         Semiring operation (determines how tokens are combined).
- * @return  Provenance expression of type @c agg_token.
- */
-/**
  * @brief Build the per-row provenance token for an aggregate rewrite.
  *
  * Used by both @c make_aggregation_expression (for the agg_token /
@@ -894,6 +875,25 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
   return (Expr *)new_agg;
 }
 
+/**
+ * @brief Build the provenance expression for a single aggregate function.
+ *
+ * For @c SR_PLUS (union context) returns the first provenance attribute
+ * directly.  For @c SR_TIMES or @c SR_MONUS, constructs:
+ * @code
+ *   provenance_aggregate(fn_oid, result_type,
+ *                        original_aggref,
+ *                        array_agg(provenance_semimod(arg, times_or_monus_token)))
+ * @endcode
+ * COUNT(*) and COUNT(expr) are remapped to SUM so that the semimodule
+ * semantics (scalar × token → token) work correctly.
+ *
+ * @param constants  Extension OID cache.
+ * @param agg_ref    The original @c Aggref node from the query.
+ * @param prov_atts  List of provenance @c Var nodes.
+ * @param op         Semiring operation (determines how tokens are combined).
+ * @return  Provenance expression of type @c agg_token.
+ */
 static Expr *make_aggregation_expression(const constants_t *constants,
                                          Aggref *agg_ref, List *prov_atts,
                                          semiring_operation op) {

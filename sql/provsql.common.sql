@@ -1123,6 +1123,10 @@ CREATE OR REPLACE FUNCTION simplified_circuit_subgraph(
  *
  * @param token Root provenance token of a scalar sub-circuit.
  * @param bins  Number of equal-width histogram bins (default 30).
+ * @param prov  Conditioning event (defaults to @c gate_one() = no
+ *              conditioning).  When non-trivial, the histogram is
+ *              over the conditional distribution recovered by
+ *              rejection sampling on the joint circuit with @p token.
  */
 CREATE OR REPLACE FUNCTION rv_histogram(
   token UUID, bins INT DEFAULT 30, prov UUID DEFAULT gate_one())
@@ -2133,7 +2137,7 @@ $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 /**
  * @brief Internal helper: float8-comparator OID for a given symbol.
  *
- * Wraps the <tt>'<sym>(double precision,double precision)'::regoperator</tt>
+ * Wraps the @c '&lt;sym&gt;(double precision,double precision)'::regoperator
  * lookup so the per-comparator functions read uniformly.  Marked
  * @c IMMUTABLE because the resolved OID is fixed at catalog level
  * (the float8 comparators are core PG and never re-installed).
@@ -3145,8 +3149,9 @@ CREATE OR REPLACE FUNCTION rv_support(
  *
  * Other aggregation functions raise.
  *
- * @return Composite (lo, hi) with @c -Infinity / @c +Infinity for
- *         unbounded ends.
+ * Returns the composite record @c (lo, hi) via the function's
+ * @c OUT parameters, with @c -Infinity / @c +Infinity marking
+ * unbounded ends.
  */
 CREATE OR REPLACE FUNCTION support(
   input ANYELEMENT,
