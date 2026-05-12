@@ -1052,6 +1052,44 @@ def evaluate_circuit(
             },
             "kind": "distribution-profile",
         }
+    elif semiring == "moment":
+        # Scalar-only evaluator that calls provsql.rv_moment(token, k,
+        # central) directly.  Arguments arrive as `"k;central"` where
+        # central is `"raw"` or `"central"`; we parse both halves and
+        # validate before splicing.  Returns a single float8 result,
+        # rendered by the eval strip alongside Probability and the
+        # numeric compiled semirings.
+        arg = (arguments or "").strip()
+        if ";" in arg:
+            k_str, central_str = arg.split(";", 1)
+        else:
+            k_str, central_str = arg, "raw"
+        k_str = k_str.strip()
+        central_str = central_str.strip().lower()
+        try:
+            k_value = int(k_str)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"moment: k must be a non-negative integer (got {k_str!r})"
+            )
+        if k_value < 0:
+            raise ValueError(
+                f"moment: k must be non-negative (got {k_value})"
+            )
+        if central_str in ("central", "true", "1", "yes"):
+            central = True
+        elif central_str in ("raw", "false", "0", "no", ""):
+            central = False
+        else:
+            raise ValueError(
+                f"moment: central must be 'raw' or 'central' (got {central_str!r})"
+            )
+        sql_stmt = sql.SQL(
+            "SELECT provsql.rv_moment({}::uuid, {}, {})"
+        ).format(
+            sql.Literal(token), sql.Literal(k_value), sql.Literal(central),
+        )
+        params = ()
     elif semiring == "prov-xml":
         # Export the circuit as ProvenanceXML. The mapping is optional :
         # without it, leaves carry bare UUIDs; with it, leaves are
@@ -1172,7 +1210,7 @@ def evaluate_circuit(
 
 
 def _result_kind(semiring: str) -> str:
-    if semiring in ("probability", "tropical", "viterbi", "lukasiewicz"):
+    if semiring in ("probability", "moment", "tropical", "viterbi", "lukasiewicz"):
         return "float"
     if semiring == "counting":
         return "int"

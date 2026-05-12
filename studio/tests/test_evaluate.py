@@ -884,6 +884,63 @@ def test_evaluate_distribution_profile_dirac_value(client):
     assert r["histogram"][0]["bin_hi"] == 7.5
 
 
+def test_evaluate_moment_categorical(client):
+    """The moment evaluator threads (k, central) through
+    `provsql.rv_moment(token, k, central)`.  Use a categorical RV with
+    analytically exact moments:
+      X ~ categorical({0.5, 0.3, 0.2}, {-1, 0, 1})
+      E[X]      = 0.5·(-1) + 0.3·0 + 0.2·1 = -0.3
+      E[X^2]    = 0.5·1 + 0.2·1            = 0.7
+      Var(X)    = E[X^2] - E[X]^2         = 0.7 - 0.09 = 0.61
+      E[(X-E[X])^3] = 0.5·(-0.7)^3 + 0.3·(0.3)^3 + 0.2·(1.3)^3
+                    = -0.1715 + 0.0081 + 0.4394 = 0.276
+    Any reasonable tolerance is fine since the Expectation evaluator
+    returns the exact closed-form values for a categorical."""
+    tok = _rv_uuid(
+        client,
+        "provsql.categorical(ARRAY[0.5, 0.3, 0.2]::float8[], "
+        "ARRAY[-1, 0, 1]::float8[])",
+    )
+
+    # k=1, raw: expectation.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "moment", "arguments": "1;raw",
+    })
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["kind"] == "float"
+    assert abs(float(body["result"]) - (-0.3)) < 1e-12
+
+    # k=2, raw: second raw moment.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "moment", "arguments": "2;raw",
+    })
+    assert abs(float(resp.get_json()["result"]) - 0.7) < 1e-12
+
+    # k=2, central: variance.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "moment", "arguments": "2;central",
+    })
+    assert abs(float(resp.get_json()["result"]) - 0.61) < 1e-12
+
+    # k=3, central: third central moment.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "moment", "arguments": "3;central",
+    })
+    assert abs(float(resp.get_json()["result"]) - 0.276) < 1e-9
+
+
+def test_evaluate_moment_rejects_bad_arguments(client):
+    """Validation: k must be a non-negative integer, central must be
+    raw / central."""
+    tok = _rv_uuid(client, "provsql.as_random(3)")
+    for bad in ("abc;raw", "-1;raw", "1;maybe"):
+        resp = client.post("/api/evaluate", json={
+            "token": tok, "semiring": "moment", "arguments": bad,
+        })
+        assert resp.status_code == 400, (bad, resp.data)
+
+
 def test_evaluate_distribution_profile_unbounded_support(client):
     """Normal RV: support is (-Infinity, +Infinity).  Postgres float8
     surfaces as Python +/-inf; if those leak into jsonify unchanged,

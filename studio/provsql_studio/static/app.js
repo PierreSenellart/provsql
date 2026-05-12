@@ -1506,9 +1506,12 @@
             <optgroup label="Custom Semirings" id="eval-custom-group" hidden>
               <!-- populated lazily from /api/custom_semirings -->
             </optgroup>
+            <optgroup label="Distribution">
+              <option value="distribution-profile">Distribution profile</option>
+              <option value="moment">Moment</option>
+            </optgroup>
             <optgroup label="Other">
               <option value="probability">Probability</option>
-              <option value="distribution-profile">Distribution profile</option>
               <option value="prov-xml">PROV-XML export</option>
             </optgroup>
           </select>
@@ -1546,6 +1549,14 @@
           <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
                  min="1" step="1" placeholder="bins" value="30"
                  autocomplete="off" title="Histogram bin count for the distribution profile">
+          <input type="number" class="cv-eval__args" id="eval-args-moment-k" hidden
+                 min="0" step="1" placeholder="k" value="2"
+                 autocomplete="off" title="Moment order k (k=1 gives the mean, k=2 with central=on gives the variance)">
+          <select class="cv-eval__args" id="eval-args-moment-central" hidden
+                  title="Raw moment E[X^k] vs central moment E[(X − E[X])^k]">
+            <option value="false">raw</option>
+            <option value="true">central</option>
+          </select>
         </div>
         <div class="cv-eval__action-row">
           <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">

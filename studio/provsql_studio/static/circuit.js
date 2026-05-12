@@ -1243,11 +1243,11 @@
   // Options visible when the eval target is scalar.  Everything else in
   // the <select> gets hidden + disabled for the duration of the scalar
   // focus.  PROV-XML stays because it accepts any provenance gate.
-  const _SCALAR_TARGET_OPTIONS = new Set(['distribution-profile', 'prov-xml']);
+  const _SCALAR_TARGET_OPTIONS = new Set(['distribution-profile', 'moment', 'prov-xml']);
   // Options visible only on scalar targets.  Hidden + disabled when the
   // eval target is Boolean / aggregate / etc., so the user can't pick a
   // semiring whose SQL kernel doesn't accept this gate type.
-  const _SCALAR_ONLY_OPTIONS = new Set(['distribution-profile']);
+  const _SCALAR_ONLY_OPTIONS = new Set(['distribution-profile', 'moment']);
 
   // Lookup the gate type of the current eval target (pinned node, else
   // the scene root) by walking state.scene.nodes.  Returns null when
@@ -1374,10 +1374,16 @@
     if (!sel || !map || !meth || !run) return;
     syncCompiledSemiringAvailability();
 
-    // Includes the bins input for distribution-profile alongside the
-    // per-probability-method controls, so syncControls can hide every
-    // unrelated args input in one sweep.
-    const argControls = [...Object.values(_PROB_ARG_CONTROL), 'eval-args-bins']
+    // Includes the per-probability-method controls, the bins input for
+    // distribution-profile, and the (k, central) pair for moment.
+    // syncControls hides every unrelated input in one sweep, then
+    // unhides whichever the current semiring needs.
+    const argControls = [
+      ...Object.values(_PROB_ARG_CONTROL),
+      'eval-args-bins',
+      'eval-args-moment-k',
+      'eval-args-moment-central',
+    ]
       .map(id => document.getElementById(id))
       .filter(Boolean);
 
@@ -1476,15 +1482,23 @@
       const v = sel.value;
       map.hidden  = !needsMapping(v);
       meth.hidden = v !== 'probability';
-      // Show only the args control that matches the current probability
-      // method (if any); hide every other one so the row stays compact.
-      // distribution-profile is the lone non-probability semiring that
-      // takes an `arguments` value (the histogram bin count), so its
-      // bins input gets its own dispatch.
-      let wantedId = null;
-      if (v === 'probability') wantedId = _PROB_ARG_CONTROL[meth.value];
-      else if (v === 'distribution-profile') wantedId = 'eval-args-bins';
-      for (const ctrl of argControls) ctrl.hidden = (ctrl.id !== wantedId);
+      // Show only the args control(s) that match the current semiring,
+      // hide every other one so the row stays compact.  Most semirings
+      // need at most one control (the per-method picker for
+      // probability, the bins input for distribution-profile); moment
+      // is the exception, with both a k input and a raw/central
+      // selector, so the dispatch returns a set rather than a single id.
+      const wantedIds = new Set();
+      if (v === 'probability') {
+        const id = _PROB_ARG_CONTROL[meth.value];
+        if (id) wantedIds.add(id);
+      } else if (v === 'distribution-profile') {
+        wantedIds.add('eval-args-bins');
+      } else if (v === 'moment') {
+        wantedIds.add('eval-args-moment-k');
+        wantedIds.add('eval-args-moment-central');
+      }
+      for (const ctrl of argControls) ctrl.hidden = !wantedIds.has(ctrl.id);
       // Stale once the input shape changes : wipe result + bound +
       // time + the clear button.
       clearEvalResult();
@@ -1874,6 +1888,12 @@
       // The backend reads `arguments` as the histogram bin count.
       const bins = (document.getElementById('eval-args-bins')?.value || '').trim();
       if (bins) body.arguments = bins;
+    } else if (semiring === 'moment') {
+      // The backend reads `arguments` as `"k;central"` where k is a
+      // non-negative integer and central is `raw` or `central`.
+      const k = (document.getElementById('eval-args-moment-k')?.value || '').trim();
+      const c = (document.getElementById('eval-args-moment-central')?.value || 'false').trim();
+      body.arguments = `${k};${c === 'true' ? 'central' : 'raw'}`;
     }
 
     run.disabled = true;
