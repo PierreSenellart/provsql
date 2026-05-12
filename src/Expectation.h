@@ -76,9 +76,7 @@ double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k)
  * Tries @c BooleanCircuit::independentEvaluation first; if that throws
  * (e.g. the subcircuit is not disconnected for that method), falls
  * back to Monte Carlo with @c provsql.rv_mc_samples samples.  Used by
- * the mixture moment evaluators for compound Boolean Bernoulli wires
- * and by the Dirac-mixture-collapse simplifier for path-product
- * weights.
+ * the mixture moment evaluators for compound Boolean Bernoulli wires.
  */
 double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot);
 

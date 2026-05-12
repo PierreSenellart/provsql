@@ -82,12 +82,13 @@
   // and labels them accordingly when more than three wires are present.
   function _mixtureEdgeLabel(parent, child_pos) {
     // Distinguish the categorical form structurally rather than by
-    // wire count: a Dirac-collapsed bimodal mixture has only three
-    // wires ([key, mul_1, mul_2]) yet is still categorical, while a
-    // classic 3-wire mixture is [p_input, x_scalar, y_scalar].  The
-    // discriminator is the types of the non-first wires -- all
-    // gate_mulinput in the categorical form, gate_rv / gate_value /
-    // gate_arith / gate_mixture in the classic form.
+    // wire count: a bimodal categorical (provsql.categorical with
+    // two outcomes) has only three wires ([key, mul_1, mul_2]) yet
+    // is still categorical, while a classic 3-wire mixture is
+    // [p_input, x_scalar, y_scalar].  The discriminator is the
+    // types of the non-first wires -- all gate_mulinput in the
+    // categorical form, gate_rv / gate_value / gate_arith /
+    // gate_mixture in the classic form.
     if (state.scene && state.scene.edges && state.scene.nodes) {
       const nodes_by_id = {};
       for (const n of state.scene.nodes) nodes_by_id[n.id] = n;

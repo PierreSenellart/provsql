@@ -232,10 +232,10 @@ double Sampler::evalScalar(gate_t g)
       //    therefore see the same draw, and any unrelated Boolean
       //    parent of p_token stays in sync.
       //
-      //  - Categorical N-wire: [key, mul_1, ..., mul_n].  Dirac-only
-      //    mixture cascades collapse into this shape via the
-      //    hybrid-simplifier Dirac-collapse pass.  Each mul_i carries
-      //    its probability in set_prob and its outcome value in extra.
+      //  - Categorical N-wire: [key, mul_1, ..., mul_n].  Built
+      //    directly by the @c provsql.categorical SQL constructor;
+      //    each mul_i carries its probability in set_prob and its
+      //    outcome value in extra.
       //    We draw a single uniform[0,1) per block, walk the
       //    cumulative probabilities to pick a mulinput, and stash the
       //    Boolean truth values into bool_cache_ so any downstream

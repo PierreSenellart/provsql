@@ -1810,15 +1810,14 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * @brief Categorical-RV constructor over explicit (probabilities,
  *        values) arrays.
  *
- * Builds the same structural representation the Dirac-mixture-collapse
- * simplifier lowers nested @c mixture(p_value, value, value) cascades
- * into: a fresh @c gate_input "key" anchor and one @c gate_mulinput per
- * outcome with positive mass, all sharing the key.  Wraps the block in
- * a categorical-form @c gate_mixture (wires
- * <tt>[key, mul_1, ..., mul_n]</tt>) so downstream evaluators
+ * Builds a categorical-form @c gate_mixture directly: a fresh
+ * @c gate_input "key" anchor and one @c gate_mulinput per outcome with
+ * positive mass, all sharing the key.  The wires
+ * <tt>[key, mul_1, ..., mul_n]</tt> are what downstream evaluators
  * (@c Expectation, @c MonteCarloSampler, @c AnalyticEvaluator,
- * @c RangeCheck) treat the result as a scalar RV with the categorical
- * distribution @p probs over @p outcomes.
+ * @c RangeCheck) recognise via @c isCategoricalMixture and treat as a
+ * scalar RV with the categorical distribution @p probs over
+ * @p outcomes.
  *
  * Validation:
  * - @p probs and @p outcomes must be non-null, same length, length &ge; 1.
@@ -1836,9 +1835,7 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * mass).  Two such calls share the @c gate_value UUID via the v5
  * convention @c as_random already uses.
  *
- * @sa @c mixture for the Bernoulli-weighted choice constructor; nested
- *     calls of the Dirac @c mixture form collapse to this same
- *     structural representation during @c probability_evaluate.
+ * @sa @c mixture for the Bernoulli-weighted choice constructor.
  */
 CREATE OR REPLACE FUNCTION categorical(
   probs    double precision[],
@@ -1913,8 +1910,8 @@ BEGIN
   END;
 
   -- Mint the block's key anchor.  Probability 1.0 matches the
-  -- joint-table / Dirac-collapse convention: the categorical mass lives
-  -- on the mulinputs, the key just identifies the block.
+  -- joint-table convention: the categorical mass lives on the
+  -- mulinputs, the key just identifies the block.
   key_token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(key_token, 'input');
   PERFORM provsql.set_prob(key_token, 1.0);

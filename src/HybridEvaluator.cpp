@@ -1076,116 +1076,6 @@ void simplify(GenericCircuit &gc, gate_t g,
   }
 }
 
-/**
- * @brief Walk a chained @c gate_mixture tree, collecting @c (weight,
- *        value) outcomes via path-product over the Bernoulli weights.
- *
- * Returns @c true iff every reachable leaf is a @c gate_value (i.e.
- * the mixture tree is a pure Dirac cascade).  A @c gate_rv,
- * @c gate_arith, or any other scalar shape under one of the branches
- * makes the recursion bail and the caller falls back to no rewrite.
- *
- * The accumulated path-product probabilities sum to 1 by construction
- * (every split contributes @c π and @c 1-π to the two recursions).
- * Zero-probability leaves are kept here and filtered downstream so the
- * recursion stays trivial.
- *
- * @c π for the Bernoulli wire at each split is the leaf @c set_prob
- * when the wire is a bare @c gate_input, and the
- * @c evaluateBooleanProbability of the Boolean subcircuit when it is
- * compound -- so a @c mixture(times(b1, b2), Dirac, Dirac) cascade
- * collapses with the correct compound weight 0.25 / 0.75.
- */
-bool collect_dirac_outcomes(const GenericCircuit &gc, gate_t g,
-                            double weight,
-                            std::vector<std::pair<double, double>> &out)
-{
-  auto t = gc.getGateType(g);
-  if (t == gate_value) {
-    double v;
-    try { v = parseDoubleStrict(gc.getExtra(g)); }
-    catch (const CircuitException &) { return false; }
-    out.emplace_back(weight, v);
-    return true;
-  }
-  if (t == gate_mixture) {
-    /* Bail on an already-collapsed categorical-form mixture: the
-     * scalar branches aren't a single value, they're a block of
-     * mulinputs, which the collector cannot interpret as a Dirac
-     * cascade.  In practice the collapse pass only runs once per
-     * circuit so re-entry on an already-collapsed gate doesn't
-     * happen, but the guard keeps the recursion total. */
-    const auto &w = gc.getWires(g);
-    if (w.size() != 3) return false;
-    double pi = (gc.getGateType(w[0]) == gate_input)
-                ? gc.getProb(w[0])
-                : evaluateBooleanProbability(gc, w[0]);
-    if (!collect_dirac_outcomes(gc, w[1], weight * pi, out)) return false;
-    return collect_dirac_outcomes(gc, w[2], weight * (1.0 - pi), out);
-  }
-  return false;
-}
-
-/**
- * @brief Rewrite a Dirac-only @c gate_mixture tree in place as the
- *        categorical-form @c gate_mixture
- *        @c [key, mul_1, ..., mul_n].
- *
- * Fires when @p g is a classic 3-wire @c gate_mixture and the
- * recursive descent through nested mixture children reaches only
- * @c gate_value leaves.  Builds a fresh @c gate_input anchor "key" and
- * one @c gate_mulinput per outcome (carrying the per-outcome
- * probability as @c set_prob and the value's text form in @c extra),
- * then rewrites @p g in place via
- * @c GenericCircuit::resolveToCategoricalMixture.  Downstream
- * evaluators dispatch on @c isCategoricalMixture to recognise the new
- * shape.
- *
- * Returns @c true if @p g was mutated.
- */
-bool try_dirac_mixture_collapse(GenericCircuit &gc, gate_t g)
-{
-  if (gc.getGateType(g) != gate_mixture) return false;
-  /* Skip an already-collapsed gate. */
-  if (gc.isCategoricalMixture(g)) return false;
-
-  const auto &wires = gc.getWires(g);
-  if (wires.size() != 3) return false;
-
-  std::vector<std::pair<double, double>> outcomes;
-  if (!collect_dirac_outcomes(gc, g, 1.0, outcomes)) return false;
-  if (outcomes.empty()) return false;
-
-  /* Drop zero-probability outcomes (no mass, no need to materialise a
-   * mulinput).  An all-zero outcome list shouldn't be reachable but is
-   * cheap to guard against. */
-  std::vector<std::pair<double, double>> kept;
-  kept.reserve(outcomes.size());
-  for (const auto &po : outcomes) {
-    if (po.first > 0.0) kept.push_back(po);
-  }
-  if (kept.empty()) return false;
-
-  /* Mint the key gate anchoring the mulinput block, and one mulinput
-   * per outcome.  Probability 1.0 on the key matches the existing
-   * joint-table inlining convention (the categorical mass lives on
-   * the mulinputs; the key is the block's group identity). */
-  gate_t key = gc.addAnonymousInputGate(1.0);
-  std::vector<gate_t> new_wires;
-  new_wires.reserve(1 + kept.size());
-  new_wires.push_back(key);
-  for (std::size_t i = 0; i < kept.size(); ++i) {
-    std::ostringstream ss;
-    ss << std::setprecision(17) << kept[i].second;
-    gate_t mul = gc.addAnonymousMulinputGateWithValue(
-      key, kept[i].first, static_cast<unsigned>(i), ss.str());
-    new_wires.push_back(mul);
-  }
-
-  gc.resolveToCategoricalMixture(g, std::move(new_wires));
-  return true;
-}
-
 }  // namespace
 
 unsigned runHybridSimplifier(GenericCircuit &gc)
@@ -1230,16 +1120,6 @@ unsigned runHybridSimplifier(GenericCircuit &gc)
     }
   }
 
-  /* Pass 3: Dirac-mixture collapse.  Runs after the arith simplifier so
-   * any nested arith folding (e.g. arith over Dirac children collapsing
-   * to a Dirac via try_eval_constant) has already happened -- the
-   * collector then sees a clean Dirac cascade.  Walks the gate range
-   * with the post-simplifier @c getNbGates() so any new gates the
-   * simplifier minted are also considered. */
-  const auto nb2 = gc.getNbGates();
-  for (std::size_t i = 0; i < nb2; ++i) {
-    if (try_dirac_mixture_collapse(gc, static_cast<gate_t>(i))) ++counter;
-  }
   return counter;
 }
 
@@ -1272,9 +1152,9 @@ bool is_continuous_island_cmp(const GenericCircuit &gc, gate_t cmp_gate)
       continue;
     }
     if (t == gate_mixture) {
-      /* Categorical-form mixture (Dirac-collapsed): a discrete scalar
-       * leaf with no continuous identities below.  Treat it as a
-       * black-box scalar leaf and don't descend. */
+      /* Categorical-form mixture (from @c provsql.categorical): a
+       * discrete scalar leaf with no continuous identities below.
+       * Treat it as a black-box scalar leaf and don't descend. */
       if (gc.isCategoricalMixture(g)) continue;
       /* Classic 3-wire mixture: first wire is a gate_input Bernoulli;
        * the rest of the island walker would reject it as
@@ -1318,8 +1198,8 @@ void collect_cmp_rv_footprint(const GenericCircuit &gc, gate_t cmp_gate,
       continue;
     }
     if (t == gate_mixture) {
-      /* Categorical-form mixture (Dirac-collapsed): discrete leaves,
-       * no continuous identities below.  Stop. */
+      /* Categorical-form mixture (from @c provsql.categorical):
+       * discrete leaves, no continuous identities below.  Stop. */
       if (gc.isCategoricalMixture(g)) continue;
       /* Classic 3-wire mixture: descend into the scalar branches but
        * NOT into the Bernoulli (wires[0] is a gate_input, not a

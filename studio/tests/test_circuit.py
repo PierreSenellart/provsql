@@ -475,52 +475,6 @@ def test_circuit_categorical_has_categorical_shape(client, test_dsn):
     assert values == [0.0, 10.0], values
 
 
-def test_circuit_dirac_mixture_collapses_when_simplified(client, test_dsn):
-    """The hybrid simplifier rewrites a Dirac-only `mixture(p, value,
-    value)` cascade into the same categorical block `categorical()`
-    builds directly: one fresh gate_input key + one gate_mulinput per
-    outcome with its value in `extra`.  Studio renders the simplified
-    DAG by default (provsql.hybrid_evaluation is on), so a mixture
-    built from `as_random` Diracs shows as a categorical block in the
-    panel."""
-    import psycopg
-    with psycopg.connect(
-        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
-        autocommit=True,
-    ) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT provsql.random_variable_uuid("
-            "  provsql.mixture(0.3::float8,"
-            "                  provsql.as_random(0),"
-            "                  provsql.as_random(10)))::text"
-        )
-        row = cur.fetchone()
-    assert row, "mixture(...) returned no row"
-    root = row[0]
-
-    resp = client.get(f"/api/circuit/{root}?depth=2")
-    assert resp.status_code == 200, resp.data
-    scene = resp.get_json()
-    nodes_by_id = {n["id"]: n for n in scene["nodes"]}
-
-    root_node = nodes_by_id[root]
-    assert root_node["type"] == "mixture", root_node
-
-    # The collapsed form has a key + N mulinputs (≥ 2 here), not the
-    # classic 3-wire [p, x, y] shape.
-    children = sorted(
-        (e for e in scene["edges"] if e["from"] == root),
-        key=lambda e: e["child_pos"],
-    )
-    assert len(children) == 3, children
-    types = [nodes_by_id[e["to"]]["type"] for e in children]
-    assert types == ["input", "mulinput", "mulinput"], types
-
-    # The mulinputs carry the Dirac values in `extra`.
-    values = sorted(float(nodes_by_id[e["to"]]["extra"]) for e in children[1:])
-    assert values == [0.0, 10.0], values
-
-
 def test_circuit_categorical_mulinput_label_shows_value(client, test_dsn):
     """A mulinput's in-circle label normally renders as the generic '⋮'
     glyph (repair_key's ordinal mulinputs).  For the categorical
@@ -542,11 +496,11 @@ def test_circuit_categorical_mulinput_label_shows_value(client, test_dsn):
     assert mul_labels == ["42", "7"], mul_labels  # alphabetical
 
 
-def test_circuit_persisted_view_keeps_classic_mixture_shape(client, test_dsn):
-    """With provsql.hybrid_evaluation turned off via /api/config, the
-    simplifier's Dirac collapse does not run, so a Dirac mixture
-    appears in its classic 3-wire `[p, x, y]` form instead of the
-    categorical block."""
+def test_circuit_dirac_mixture_keeps_classic_shape(client, test_dsn):
+    """A mixture of Diracs (no nested mixture below) stays in its
+    classic 3-wire `[p, x, y]` form; there is no automatic fold into
+    the categorical block.  The categorical-form mixture only arises
+    from an explicit `provsql.categorical` construction."""
     import psycopg
     with psycopg.connect(
         f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
@@ -562,23 +516,16 @@ def test_circuit_persisted_view_keeps_classic_mixture_shape(client, test_dsn):
     assert row
     root = row[0]
 
-    r = client.post("/api/config",
-                    json={"key": "provsql.hybrid_evaluation", "value": "off"})
-    assert r.status_code == 200, r.data
-    try:
-        resp = client.get(f"/api/circuit/{root}?depth=2")
-        assert resp.status_code == 200, resp.data
-        scene = resp.get_json()
-        nodes_by_id = {n["id"]: n for n in scene["nodes"]}
+    resp = client.get(f"/api/circuit/{root}?depth=2")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+    nodes_by_id = {n["id"]: n for n in scene["nodes"]}
 
-        children = sorted(
-            (e for e in scene["edges"] if e["from"] == root),
-            key=lambda e: e["child_pos"],
-        )
-        assert len(children) == 3, children
-        types = [nodes_by_id[e["to"]]["type"] for e in children]
-        # Classic shape: Bernoulli input + two Dirac value leaves.
-        assert types == ["input", "value", "value"], types
-    finally:
-        client.post("/api/config",
-                    json={"key": "provsql.hybrid_evaluation", "value": "on"})
+    children = sorted(
+        (e for e in scene["edges"] if e["from"] == root),
+        key=lambda e: e["child_pos"],
+    )
+    assert len(children) == 3, children
+    types = [nodes_by_id[e["to"]]["type"] for e in children]
+    # Classic shape: Bernoulli input + two Dirac value leaves.
+    assert types == ["input", "value", "value"], types
