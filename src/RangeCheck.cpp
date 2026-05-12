@@ -542,7 +542,13 @@ void walkAndConjunctIntervals(
       rv_intervals[rv] = current;
       continue;  /* never descend into a cmp's operands */
     }
-    if (t == gate_times || g == root) {
+    if (t == gate_times || t == gate_delta || g == root) {
+      /* gate_delta wraps a single child as the δ-semiring identity on
+       * Booleans, so the AND-conjunct walker is sound to descend
+       * through it -- the wrapper carries no constraint of its own.
+       * Skipping the descent would mark the walk incomplete and force
+       * the moment caller to fall back to MC even when the inner
+       * cmps are decidable closed-form. */
       for (gate_t c : gc.getWires(g)) stk.push(c);
       continue;
     }

@@ -132,6 +132,16 @@ bool Sampler::evalBool(gate_t g)
       throw CircuitException(
               "Monte Carlo over circuits containing gate_mulinput "
               "is not yet supported on the RV path");
+    case gate_delta:
+      // δ-semiring operator: identity on the Boolean semiring, so the
+      // sampled truth value is just the wrapped child's.  Showed up
+      // when conditioning on a row's provenance() in an aggregate
+      // query (HAVING / GROUP BY paths can splice δ over the
+      // semimod's k-side).
+      if(wires.size() != 1)
+        throw CircuitException("gate_delta must have exactly one child");
+      result = evalBool(wires[0]);
+      break;
     default:
       throw CircuitException(
               "Unsupported gate type in Boolean evaluation: " +

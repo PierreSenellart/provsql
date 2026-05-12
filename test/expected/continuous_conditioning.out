@@ -34,3 +34,16 @@ hist_lo_eq_3|hist_hi_eq_7
 t|t
 (1 row)
 NOTICE:  zero_prob_event_raises_specific=t
+delta_transparent_for_expected|delta_transparent_for_variance|delta_transparent_for_raw_moment
+t|t|t
+(1 row)
+support_lo_eq_3|support_hi_inf
+t|t
+(1 row)
+NOTICE:  delta_around_and_conjunct=t
+rv_sample_respects_delta_event
+t
+(1 row)
+hist_lo_eq_3|hist_hi_eq_7
+t|t
+(1 row)

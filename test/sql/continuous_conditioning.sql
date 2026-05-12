@@ -215,5 +215,105 @@ BEGIN
 END
 $$;
 
+-- ---------------------------------------------------------------------
+-- 9. gate_delta is transparent in the event walker.
+--
+--   In the Boolean semiring δ is the identity, so wrapping the event
+--   in provsql.provenance_delta() must leave every rv_* answer
+--   unchanged.  Surfaced as an "Unsupported gate type in Boolean
+--   evaluation: delta" error before the sweep landed; the Sampler's
+--   evalBool now treats gate_delta as identity, and the AND-conjunct
+--   walker descends through it so the truncated-distribution
+--   closed-form still fires.
+-- ---------------------------------------------------------------------
+SET provsql.rv_mc_samples = 0;  -- closed-form only.
+
+-- 9a. Expected / variance / second raw moment of N(0,1) | X > 3 with
+-- and without a δ wrapper around the cmp.  Equality is exact under
+-- the closed-form path; if the walker fell back to MC for either
+-- side the comparison would fail.
+WITH r AS (SELECT provsql.normal(0, 1) AS rv),
+     ev AS (
+       SELECT rv,
+              provsql.rv_cmp_gt(rv, provsql.as_random(3)) AS plain,
+              provsql.provenance_delta(
+                provsql.rv_cmp_gt(rv, provsql.as_random(3))) AS wrapped
+         FROM r
+     )
+SELECT expected(rv, plain) = expected(rv, wrapped)
+         AS delta_transparent_for_expected,
+       provsql.variance(rv, plain) = provsql.variance(rv, wrapped)
+         AS delta_transparent_for_variance,
+       moment(rv, 2, plain) = moment(rv, 2, wrapped)
+         AS delta_transparent_for_raw_moment
+  FROM ev;
+
+-- 9b. rv_support: closed-form intersected interval must survive a δ
+-- wrapper.
+WITH r AS (SELECT provsql.normal(0, 1) AS rv),
+     ev AS (
+       SELECT rv, provsql.provenance_delta(
+                    provsql.rv_cmp_gt(rv, provsql.as_random(3))) AS wrapped
+         FROM r
+     )
+SELECT s.lo = 3 AS support_lo_eq_3,
+       s.hi = 'Infinity'::float8 AS support_hi_inf
+  FROM ev, provsql.rv_support(rv, wrapped) s;
+
+-- 9c. δ around an AND-conjunction: the walker must descend through δ
+-- AND recurse into the inner gate_times to collect both cmps.
+-- Truncated U(0, 10) | (X > 3 AND X < 7) → conditional mean = 5.
+DO $$
+DECLARE
+  rv random_variable;
+  inner_ev uuid;
+  wrapped uuid;
+BEGIN
+  rv := provsql.uniform(0, 10);
+  inner_ev := provenance_times(rv_cmp_gt(rv, as_random(3)),
+                               rv_cmp_lt(rv, as_random(7)));
+  wrapped := provsql.provenance_delta(inner_ev);
+  RAISE NOTICE 'delta_around_and_conjunct=%',
+    abs(expected(rv, wrapped) - 5.0) < 1e-12;
+END
+$$;
+
+-- 9d. rv_sample / rv_histogram under a δ-wrapped event need MC, so
+-- raise the sample budget for the remaining checks.
+SET provsql.rv_mc_samples = 10000;
+
+-- Every accepted sample lies in the truncation interval.
+WITH r AS (SELECT provsql.uniform(0, 10) AS rv),
+     s AS (
+       SELECT rv,
+              provsql.provenance_delta(
+                provenance_times(rv_cmp_gt(rv, as_random(3)),
+                                 rv_cmp_lt(rv, as_random(7)))) AS wrapped
+         FROM r
+     )
+SELECT bool_and(v > 3 AND v < 7) AS rv_sample_respects_delta_event
+  FROM s, provsql.rv_sample(rv, 100, wrapped) AS v;
+
+-- Histogram bin edges line up with the truncated support under δ.
+WITH r AS (SELECT provsql.uniform(0, 10) AS rv),
+     s AS (
+       SELECT rv,
+              provsql.provenance_delta(
+                provenance_times(rv_cmp_gt(rv, as_random(3)),
+                                 rv_cmp_lt(rv, as_random(7)))) AS wrapped
+         FROM r
+     )
+SELECT (h.first_bin_lo)::numeric = 3 AS hist_lo_eq_3,
+       (h.last_bin_hi)::numeric = 7 AS hist_hi_eq_7
+  FROM s,
+       LATERAL (
+         WITH bins AS (
+           SELECT jsonb_array_elements(provsql.rv_histogram(rv, 10, wrapped)) AS b
+         )
+         SELECT (SELECT (b->>'bin_lo')::float8 FROM bins LIMIT 1) AS first_bin_lo,
+                (SELECT (b->>'bin_hi')::float8 FROM bins
+                  ORDER BY (b->>'bin_hi')::float8 DESC LIMIT 1) AS last_bin_hi
+       ) h;
+
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;
