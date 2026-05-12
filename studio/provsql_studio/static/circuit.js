@@ -962,12 +962,10 @@
     if (!node || node.type !== 'input') return;
     if (node.tracked_input) return;
     let newLabel;
-    if (!Number.isFinite(p)) {
+    if (!Number.isFinite(p) || p === 1) {
       newLabel = 'ι';  // gate-input default glyph (no prob known)
     } else if (p === 0) {
       newLabel = '0%';
-    } else if (p === 1) {
-      newLabel = '100%';
     } else {
       const pct = p * 100;
       if (pct > 0 && pct < 0.01) {

@@ -134,7 +134,8 @@ def _gate_label(row: dict) -> str:
         prob = row.get("prob")
         if (prob is not None
                 and isinstance(prob, (int, float))
-                and not (prob != prob)):       # NaN guard
+                and not (prob != prob)       # NaN guard
+                and prob != 1.0):
             return _format_prob_label(float(prob))
     return _GATE_LABEL.get(t, t)
 
