@@ -788,8 +788,8 @@ static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
  * @brief Build the per-row provenance token for an aggregate rewrite.
  *
  * Used by both @c make_aggregation_expression (for the agg_token /
- * @c provenance_semimod path) and @c make_sum_rv_expression (for the
- * inline @c gate_arith-of-mixtures path).  Combines @p prov_atts via
+ * @c provenance_semimod path) and @c make_rv_aggregate_expression (for
+ * the inline RV-aggregate path).  Combines @p prov_atts via
  * @c provenance_times (under @c SR_TIMES) or @c provenance_monus
  * (under @c SR_MONUS); a single @c prov_att is returned as-is.
  *
@@ -825,28 +825,36 @@ static Expr *combine_prov_atts(const constants_t *constants,
 }
 
 /**
- * @brief Inline rewrite of @c sum(random_variable) into a
- *        @c gate_arith-of-mixtures.
+ * @brief Inline rewrite of an RV-returning aggregate into the same
+ *        aggregate over provenance-wrapped per-row arguments.
  *
- * Phase 1 of the SUM-over-RV story (see @c aggregation-of-rvs.md).
- * Replaces @c sum(@c x) with an Aggref whose per-row argument is
- * lifted through @c rv_aggregate_semimod to attach the row's
- * provenance: each row contributes @c mixture(prov_token, X_i,
- * as_random(0)), the @c sum(random_variable) aggregate then collects
- * the per-row mixtures into a single @c gate_arith @c PLUS root.
- * This realises
- * @f$\mathrm{SUM}(x) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i@f$
- * directly through the existing scalar-RV machinery (sampler,
- * Expectation, RangeCheck, simplifier) without going through
- * @c agg_token / @c provenance_semimod (which expects a numeric
- * value).
+ * Originally Phase 1 of the SUM-over-RV story (see @c aggregation-of-rvs.md);
+ * extended to any aggregate whose result type is @c random_variable
+ * (e.g. @c provsql.sum, @c provsql.avg).  Replaces @c agg(@c x) with an
+ * Aggref whose per-row argument is lifted through @c rv_aggregate_semimod
+ * to attach the row's provenance: each row contributes
+ * @c mixture(prov_token, X_i, as_random(0)).  The aggregate itself
+ * (@c aggfnoid) is preserved verbatim, so its SFUNC / FFUNC decide what
+ * gate shape to build from the per-row mixtures.  In particular:
+ *  - @c sum(random_variable) collects the mixtures into a single
+ *    @c gate_arith @c PLUS root, realising
+ *    @f$\mathrm{SUM}(x) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i@f$;
+ *  - @c avg(random_variable) walks each mixture to recover @c prov_i
+ *    and emits @c gate_arith(DIV, @c sum(mixture(p_i,x_i,0)),
+ *    @c sum(mixture(p_i,1,0))), the natural lift of "AVG = SUM / COUNT"
+ *    into the @c random_variable algebra.
+ *
+ * Routing happens at @c make_aggregation_expression on
+ * @c agg_ref->aggtype @c == @c OID_TYPE_RANDOM_VARIABLE, so any future
+ * RV-returning aggregate inherits the same per-row provenance wrap
+ * without further C-side dispatch.
  *
  * SR_PLUS (UNION outer level) is handled by the caller; this builder
  * never runs for SR_PLUS.
  */
-static Expr *make_sum_rv_expression(const constants_t *constants,
-                                    Aggref *agg_ref, List *prov_atts,
-                                    semiring_operation op) {
+static Expr *make_rv_aggregate_expression(const constants_t *constants,
+                                          Aggref *agg_ref, List *prov_atts,
+                                          semiring_operation op) {
   Expr *prov_expr = combine_prov_atts(constants, prov_atts, op);
   Expr *rv_arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
   FuncExpr *wrap;
@@ -864,7 +872,7 @@ static Expr *make_sum_rv_expression(const constants_t *constants,
   wrap->args = list_make2(prov_expr, rv_arg);
   wrap->location = -1;
 
-  /* Rebuild an Aggref calling the same sum(random_variable) aggregate,
+  /* Rebuild an Aggref calling the SAME aggregate (sum_rv, avg_rv, ...),
    * but with the argument now wrapped.  Inherit the original Aggref's
    * clause positioning; aggargtypes / aggtype stay random_variable. */
   te = makeNode(TargetEntry);
@@ -872,7 +880,7 @@ static Expr *make_sum_rv_expression(const constants_t *constants,
   te->expr = (Expr *)wrap;
 
   new_agg = makeNode(Aggref);
-  new_agg->aggfnoid = constants->OID_FUNCTION_SUM_RV;
+  new_agg->aggfnoid = agg_ref->aggfnoid;
   new_agg->aggtype = constants->OID_TYPE_RANDOM_VARIABLE;
   new_agg->aggargtypes = list_make1_oid(constants->OID_TYPE_RANDOM_VARIABLE);
   new_agg->aggkind = AGGKIND_NORMAL;
@@ -902,15 +910,16 @@ static Expr *make_aggregation_expression(const constants_t *constants,
   } else {
     Oid aggregation_function = agg_ref->aggfnoid;
 
-    /* sum(random_variable) gets a different rewrite: instead of going
-     * through provenance_semimod (which builds a gate_value from
-     * CAST(val AS VARCHAR), nonsensical for an RV), each row is
-     * wrapped in mixture(prov, rv, as_random(0)) and the
-     * sum(random_variable) aggregate collects the resulting mixtures
-     * into a single gate_arith PLUS root.  See aggregation-of-rvs.md. */
-    if (OidIsValid(constants->OID_FUNCTION_SUM_RV) &&
-        aggregation_function == constants->OID_FUNCTION_SUM_RV) {
-      return make_sum_rv_expression(constants, agg_ref, prov_atts, op);
+    /* Aggregates that return random_variable (sum_rv, avg_rv, and any
+     * future RV-returning aggregate) get a different rewrite: instead
+     * of going through provenance_semimod (which builds a gate_value
+     * from CAST(val AS VARCHAR), nonsensical for an RV), each per-row
+     * argument is wrapped in mixture(prov, rv, as_random(0)) and the
+     * original aggregate's SFUNC / FFUNC decide what gate shape to
+     * build from the resulting mixtures.  See aggregation-of-rvs.md. */
+    if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
+        agg_ref->aggtype == constants->OID_TYPE_RANDOM_VARIABLE) {
+      return make_rv_aggregate_expression(constants, agg_ref, prov_atts, op);
     }
 
     if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
