@@ -296,13 +296,13 @@ constexpr gate_t INVALID_GATE = static_cast<gate_t>(-1);
 bool is_invalid(gate_t g) { return g == INVALID_GATE; }
 
 /**
- * @brief Try to interpret @p g as @c a*Z + b for a single normal RV.
+ * @brief Try to interpret @p g as @c a*Z + b for a single base RV.
  *
  * Recognised shapes:
- * - bare normal @c gate_rv:           @c (Z=g, a=1, b=0)
- * - bare @c gate_value:               @c (Z=invalid, a=0, b=value)
- * - @c arith(NEG, child):             negate the child's decomposition
- * - @c arith(TIMES, value:c, child):  scale the child's decomposition
+ * - bare @c gate_rv (any distribution):  @c (Z=g, a=1, b=0)
+ * - bare @c gate_value:                  @c (Z=invalid, a=0, b=value)
+ * - @c arith(NEG, child):                negate the child's decomposition
+ * - @c arith(TIMES, value:c, child):     scale the child's decomposition
  *   by @c c (and symmetrically @c arith(TIMES, child, value:c)).
  *   Only 2-wire @c TIMES with exactly one @c gate_value side is
  *   recognised; other shapes fall through to "not decomposable".
@@ -311,11 +311,16 @@ bool is_invalid(gate_t g) { return g == INVALID_GATE; }
  * decomposed by this routine: the bottom-up simplifier already
  * folded them before the outer PLUS is processed, so by the time
  * we examine the outer PLUS its children are either leaves or
- * non-foldable arith.  An undecomposable wire causes the whole
- * normal closure to bail.
+ * non-foldable arith.  An undecomposable wire causes the caller to
+ * bail.
+ *
+ * Distribution-kind filtering is the caller's responsibility:
+ * @c try_normal_closure additionally requires every @p rv_gate to be
+ * @c DistKind::Normal, while @c try_plus_aggregate is kind-agnostic
+ * because the aggregation rewrite preserves the base-RV identity.
  */
 std::optional<LinearTerm>
-decompose_normal_term(const GenericCircuit &gc, gate_t g)
+decompose_linear_term(const GenericCircuit &gc, gate_t g)
 {
   auto t = gc.getGateType(g);
 
@@ -327,8 +332,24 @@ decompose_normal_term(const GenericCircuit &gc, gate_t g)
   }
 
   if (t == gate_rv) {
-    auto spec = parse_distribution_spec(gc.getExtra(g));
-    if (!spec || spec->kind != DistKind::Normal) return std::nullopt;
+    /* Any RV kind: aggregation only depends on identity, not on
+     * closed-form scaling.  The normal-family closure filters to
+     * @c DistKind::Normal externally. */
+    return LinearTerm{g, 1.0, 0.0};
+  }
+
+  if (t == gate_mixture) {
+    /* A @c gate_mixture (3-wire Bernoulli or categorical N-wire) is a
+     * scalar-RV leaf: two references to the same @c gate_t produce
+     * perfectly-correlated draws of the same RV.  Treat it like a
+     * @c gate_rv so the PLUS aggregator can collapse same-mixture
+     * terms (e.g. @c X+X to @c 2·X, @c X-X to @c 0).  The in-place
+     * op-change to TIMES then triggers @c try_mixture_lift to push the
+     * scalar inside the branches (3-wire) or the mulinputs'
+     * value text (categorical).  The normal- and Erlang-family closures
+     * filter on the rv leaf's kind via @c parse_distribution_spec, which
+     * returns @c nullopt on a mixture's empty extra, so they
+     * automatically bail when the LHS-RV side is a mixture. */
     return LinearTerm{g, 1.0, 0.0};
   }
 
@@ -346,12 +367,12 @@ decompose_normal_term(const GenericCircuit &gc, gate_t g)
    * but the outer closure rewrites the OUTER gate, which is safe. */
   if ((op == PROVSQL_ARITH_PLUS || op == PROVSQL_ARITH_TIMES)
       && wires.size() == 1) {
-    return decompose_normal_term(gc, wires[0]);
+    return decompose_linear_term(gc, wires[0]);
   }
 
   if (op == PROVSQL_ARITH_NEG) {
     if (wires.size() != 1) return std::nullopt;
-    auto inner = decompose_normal_term(gc, wires[0]);
+    auto inner = decompose_linear_term(gc, wires[0]);
     if (!inner) return std::nullopt;
     return LinearTerm{inner->rv_gate, -inner->a, -inner->b};
   }
@@ -372,7 +393,7 @@ decompose_normal_term(const GenericCircuit &gc, gate_t g)
     } else {
       return std::nullopt;
     }
-    auto inner = decompose_normal_term(gc, var_side);
+    auto inner = decompose_linear_term(gc, var_side);
     if (!inner) return std::nullopt;
     return LinearTerm{inner->rv_gate, c * inner->a, c * inner->b};
   }
@@ -405,8 +426,15 @@ bool try_normal_closure(GenericCircuit &gc, gate_t g)
   std::vector<LinearTerm> terms;
   terms.reserve(wires.size());
   for (gate_t w : wires) {
-    auto term = decompose_normal_term(gc, w);
+    auto term = decompose_linear_term(gc, w);
     if (!term) return false;
+    /* The closure produces a single normal, so every non-constant
+     * term's base RV must itself be normal.  The generic decomposer
+     * does not filter by kind; we apply the filter here. */
+    if (!is_invalid(term->rv_gate)) {
+      auto spec = parse_distribution_spec(gc.getExtra(term->rv_gate));
+      if (!spec || spec->kind != DistKind::Normal) return false;
+    }
     terms.push_back(*term);
   }
 
@@ -533,9 +561,75 @@ bool try_erlang_closure(GenericCircuit &gc, gate_t g)
  *
  * Returns @c true if @p g was mutated.
  */
-unsigned apply_rules(GenericCircuit &gc, gate_t g);  /* forward decl */
+unsigned apply_rules(GenericCircuit &gc, gate_t g,
+                     bool include_scalar_fold);  /* forward decl */
 
-bool try_mixture_lift(GenericCircuit &gc, gate_t g)
+/**
+ * @brief Categorical-mixture lift helper.
+ *
+ * Pushes a constant scaling (@c TIMES) or offset (@c PLUS) inside the
+ * N-wire categorical-form @c gate_mixture <tt>[key, mul_1, ..., mul_n]</tt>
+ * by minting a fresh categorical mixture sharing the same @p key gate
+ * and one new @c gate_mulinput per outcome with an updated value text.
+ *
+ * Sharing the key preserves the semantic that the new mixture is a
+ * deterministic function of the same underlying categorical draw (so
+ * <tt>c · X</tt> and @c X stay perfectly correlated downstream via
+ * FootprintCache key-overlap dependency tracking).  All other arith
+ * wires must be @c gate_value constants; an RV factor / offset cannot
+ * be pushed into a mulinput's scalar @c extra so the rule bails.
+ *
+ * Returns @c true if @p g was mutated.
+ */
+bool try_categorical_mixture_lift(GenericCircuit &gc, gate_t g,
+                                  provsql_arith_op op,
+                                  gate_t mix_gate,
+                                  const std::vector<gate_t> &others)
+{
+  if (op != PROVSQL_ARITH_PLUS && op != PROVSQL_ARITH_TIMES) return false;
+
+  /* Combine the non-mixture wires into a single scalar offset (PLUS)
+   * or factor (TIMES).  Bail on any non-value wire: an RV factor /
+   * offset cannot be pushed into a mulinput's value text. */
+  double offset = 0.0;
+  double factor = 1.0;
+  for (gate_t w : others) {
+    if (gc.getGateType(w) != gate_value) return false;
+    double v;
+    try { v = parseDoubleStrict(gc.getExtra(w)); }
+    catch (const CircuitException &) { return false; }
+    if (op == PROVSQL_ARITH_PLUS) offset += v;
+    else                          factor *= v;
+  }
+
+  /* Build the new wire list: same key (preserves correlation with the
+   * original categorical) and one fresh mulinput per outcome with the
+   * transformed value text. */
+  const auto &mw = gc.getWires(mix_gate);
+  const gate_t key = mw[0];
+  std::vector<gate_t> new_wires;
+  new_wires.reserve(mw.size());
+  new_wires.push_back(key);
+  for (std::size_t i = 1; i < mw.size(); ++i) {
+    const gate_t old_mul = mw[i];
+    double old_v;
+    try { old_v = parseDoubleStrict(gc.getExtra(old_mul)); }
+    catch (const CircuitException &) { return false; }
+    const double new_v = (op == PROVSQL_ARITH_PLUS)
+                         ? (offset + old_v)
+                         : (factor * old_v);
+    const double p = gc.getProb(old_mul);
+    const auto vi = static_cast<unsigned>(gc.getInfos(old_mul).first);
+    gate_t new_mul = gc.addAnonymousMulinputGateWithValue(
+                       key, p, vi, double_to_text(new_v));
+    new_wires.push_back(new_mul);
+  }
+  gc.resolveToCategoricalMixture(g, std::move(new_wires));
+  return true;
+}
+
+bool try_mixture_lift(GenericCircuit &gc, gate_t g,
+                      bool include_scalar_fold)
 {
   auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
   if (op != PROVSQL_ARITH_PLUS && op != PROVSQL_ARITH_TIMES) return false;
@@ -554,19 +648,29 @@ bool try_mixture_lift(GenericCircuit &gc, gate_t g)
   if (mix_idx == static_cast<std::size_t>(-1)) return false;
 
   const auto mix_gate = wires[mix_idx];
-  const auto &mw = gc.getWires(mix_gate);
-  if (mw.size() != 3) return false;
-  const gate_t p_tok = mw[0];
-  const gate_t x_tok = mw[1];
-  const gate_t y_tok = mw[2];
 
   /* Snapshot the remaining wires.  We need a copy because the
-   * resolveToMixture call below clears the parent's wire vector. */
+   * resolveToMixture / resolveToCategoricalMixture calls below clear
+   * the parent's wire vector. */
   std::vector<gate_t> others;
   others.reserve(wires.size() - 1);
   for (std::size_t i = 0; i < wires.size(); ++i) {
     if (i != mix_idx) others.push_back(wires[i]);
   }
+
+  /* Categorical N-wire form: push the constant offset / factor into
+   * each mulinput's value text.  RV factors / offsets cannot be pushed
+   * into mulinput leaves so the rule bails on those. */
+  if (gc.isCategoricalMixture(mix_gate)) {
+    return try_categorical_mixture_lift(gc, g, op, mix_gate, others);
+  }
+
+  /* Classic 3-wire Bernoulli mixture. */
+  const auto &mw = gc.getWires(mix_gate);
+  if (mw.size() != 3) return false;
+  const gate_t p_tok = mw[0];
+  const gate_t x_tok = mw[1];
+  const gate_t y_tok = mw[2];
 
   /* Build two new arith children: one with x in the mixture slot,
    * one with y.  Order matters for non-commutative ops, but PLUS /
@@ -585,10 +689,264 @@ bool try_mixture_lift(GenericCircuit &gc, gate_t g)
    * to collapse via normal-family / erlang-family closures.  Each is
    * itself a gate_arith of the same op, with at least 2 wires (the
    * "others" we copied plus the branch RV), so apply_rules's
-   * PLUS/TIMES path is the correct entry point. */
-  apply_rules(gc, new_x);
-  apply_rules(gc, new_y);
+   * PLUS/TIMES path is the correct entry point.  The scalar-fold flag
+   * is propagated so pass-2's scalar-times-RV closure stays the only
+   * place that mints a fresh @c gate_rv at a scaled-RV TIMES site
+   * (avoids losing shared-RV identity in front of a sibling PLUS). */
+  apply_rules(gc, new_x, include_scalar_fold);
+  apply_rules(gc, new_y, include_scalar_fold);
 
+  return true;
+}
+
+/**
+ * @brief Scalar-times-RV closure: fold @c arith(TIMES, value:c, Z) to
+ *        a single closed-form-scaled @c gate_rv.
+ *
+ * Fires on a 2-wire @c TIMES whose wires are exactly one @c gate_value
+ * (the scalar @c c) and one @c gate_rv leaf @c Z whose distribution
+ * admits a closed-form scale transform:
+ *
+ * - <tt>c · Normal(μ, σ) = Normal(c·μ, |c|·σ)</tt> (any non-zero c).
+ * - <tt>c · Uniform(a, b)</tt>: @c Uniform(c·a, c·b) for @c c > 0;
+ *   @c Uniform(c·b, c·a) for @c c < 0.
+ * - <tt>c · Exponential(λ) = Exponential(λ/c)</tt> for @c c > 0 only
+ *   (negative scaling flips support to (-∞, 0] and is no longer
+ *   exponential).
+ * - <tt>c · Erlang(k, λ) = Erlang(k, λ/c)</tt> for @c c > 0 only.
+ *
+ * The c=0 absorber and c=1 identity are handled by
+ * @c try_identity_drop, so this rule defensively bails on them to
+ * avoid a duplicate rewrite path.  RV kinds without a closed-form
+ * scaling fall through.
+ *
+ * Coupling caveat (shared with @c try_normal_closure): replacing the
+ * TIMES with a fresh @c gate_rv mints a new RV identity at @p g, so
+ * any other path that references @c Z and shares a downstream consumer
+ * with @p g will see decoupled draws after the fold.  In practice the
+ * rewrite path produces per-row orphan subtrees, so this is consistent
+ * with the existing normal-family closure behaviour.
+ *
+ * Returns @c true if @p g was mutated.
+ */
+bool try_times_scalar_rv(GenericCircuit &gc, gate_t g)
+{
+  auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
+  if (op != PROVSQL_ARITH_TIMES) return false;
+  const auto &wires = gc.getWires(g);
+  if (wires.size() != 2) return false;
+
+  /* Identify the value side and the rv side. */
+  double c = NaN;
+  gate_t rv_side = INVALID_GATE;
+  if (gc.getGateType(wires[0]) == gate_value
+      && gc.getGateType(wires[1]) == gate_rv) {
+    try { c = parseDoubleStrict(gc.getExtra(wires[0])); }
+    catch (const CircuitException &) { return false; }
+    rv_side = wires[1];
+  } else if (gc.getGateType(wires[1]) == gate_value
+             && gc.getGateType(wires[0]) == gate_rv) {
+    try { c = parseDoubleStrict(gc.getExtra(wires[1])); }
+    catch (const CircuitException &) { return false; }
+    rv_side = wires[0];
+  } else {
+    return false;
+  }
+
+  /* c=0 / c=1 are the identity-drop's job; bailing here keeps the
+   * two rules' responsibilities disjoint. */
+  if (c == 0.0 || c == 1.0) return false;
+
+  auto spec = parse_distribution_spec(gc.getExtra(rv_side));
+  if (!spec) return false;
+
+  switch (spec->kind) {
+    case DistKind::Normal: {
+      const double new_mu    = c * spec->p1;
+      const double new_sigma = std::fabs(c) * spec->p2;
+      /* Defensive: a zero-σ normal collapses to a Dirac.  σ=0 normals
+       * are normally constructed via @c as_random by @c provsql.normal,
+       * but if one slipped through (e.g. a future closure produced
+       * σ=0 from the linear combination), route it through value. */
+      if (new_sigma == 0.0) {
+        replace_with_value(gc, g, new_mu);
+      } else {
+        replace_with_normal_rv(gc, g, new_mu, new_sigma);
+      }
+      return true;
+    }
+    case DistKind::Uniform: {
+      const double a = spec->p1;
+      const double b = spec->p2;
+      const double lo = (c > 0.0) ? c * a : c * b;
+      const double hi = (c > 0.0) ? c * b : c * a;
+      gc.resolveToRv(g, "uniform:" + double_to_text(lo)
+                        + "," + double_to_text(hi));
+      return true;
+    }
+    case DistKind::Exponential: {
+      if (c <= 0.0) return false;
+      const double new_lambda = spec->p1 / c;
+      gc.resolveToRv(g, "exponential:" + double_to_text(new_lambda));
+      return true;
+    }
+    case DistKind::Erlang: {
+      if (c <= 0.0) return false;
+      /* spec->p1 is integer-valued by construction (the SQL constructor
+       * enforces k >= 1); guard defensively. */
+      if (spec->p1 < 1.0 || spec->p1 != std::floor(spec->p1)) return false;
+      const auto k = static_cast<unsigned long>(spec->p1);
+      const double new_lambda = spec->p2 / c;
+      replace_with_erlang_rv(gc, g, k, new_lambda);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @brief PLUS coefficient aggregation: collapse same-base-RV terms
+ *        in a sum.
+ *
+ * For a @c PLUS gate whose every wire decomposes via
+ * @c decompose_linear_term to <tt>a·Z + b</tt>, sums the coefficients
+ * per @c rv_gate UUID and accumulates all the constant offsets into a
+ * single @c b_total.  Rebuilds the wire list as one @c TIMES per
+ * surviving RV (or a bare RV wire when its coefficient is exactly @c 1)
+ * plus a single @c value wire for @c b_total when non-zero.
+ *
+ * Fires when at least one of the following holds:
+ *  - some @c rv_gate appears in more than one wire (the X+X case);
+ *  - more than one constant wire is present (consolidates them).
+ *
+ * Without these triggers the rebuild would be a no-op or worse
+ * (minting fresh @c TIMES wrappers identical in shape to existing
+ * input wires), so the rule bails to keep the simplifier idempotent.
+ *
+ * Unlike @c try_normal_closure / @c try_times_scalar_rv, this rule is
+ * @b safe under shared base-RV identity: the rebuild preserves every
+ * @c rv_gate as a wire (wrapped in @c TIMES when its coefficient is
+ * non-unit), so any other path that referenced @c Z continues to see
+ * the same gate.  The subsequent fold of <tt>arith(TIMES, value:a, Z)</tt>
+ * by @c try_times_scalar_rv inherits the same coupling caveat as the
+ * existing normal-family closure (see its docstring).
+ *
+ * Returns @c true if @p g was mutated.
+ */
+bool try_plus_aggregate(GenericCircuit &gc, gate_t g,
+                        bool include_scalar_fold)
+{
+  auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
+  if (op != PROVSQL_ARITH_PLUS) return false;
+  const auto &wires_in = gc.getWires(g);
+  if (wires_in.size() < 2) return false;
+
+  std::vector<LinearTerm> terms;
+  terms.reserve(wires_in.size());
+  for (gate_t w : wires_in) {
+    auto t = decompose_linear_term(gc, w);
+    if (!t) return false;
+    terms.push_back(*t);
+  }
+
+  /* Aggregate per rv_gate.  A vector preserves insertion order so the
+   * rebuilt wire list is deterministic across runs; the per-PLUS
+   * arity is small enough that O(n²) lookup is fine. */
+  std::vector<std::pair<gate_t, double>> coeffs;
+  double b_total = 0.0;
+  unsigned constants_in = 0;
+  for (const auto &t : terms) {
+    b_total += t.b;
+    if (is_invalid(t.rv_gate)) {
+      ++constants_in;
+      continue;
+    }
+    bool found = false;
+    for (auto &p : coeffs) {
+      if (p.first == t.rv_gate) {
+        p.second += t.a;
+        found = true;
+        break;
+      }
+    }
+    if (!found) coeffs.emplace_back(t.rv_gate, t.a);
+  }
+
+  /* Fire only when there's actual consolidation to do.  Without a
+   * duplicate RV (or multiple constants) the rebuild would mint
+   * shape-equivalent TIMES wrappers for input wires like
+   * arith(TIMES, value:a, Z), oscillating the gate vector. */
+  const bool has_duplicate = (coeffs.size() < terms.size() - constants_in);
+  const bool many_constants = (constants_in >= 2);
+  if (!has_duplicate && !many_constants) return false;
+
+  /* Drop zero-coefficient RVs (X + (-X) survivors). */
+  std::vector<std::pair<gate_t, double>> kept;
+  kept.reserve(coeffs.size());
+  for (const auto &p : coeffs) {
+    if (p.second != 0.0) kept.push_back(p);
+  }
+
+  /* All RVs canceled: fold g to a value gate carrying b_total. */
+  if (kept.empty()) {
+    replace_with_value(gc, g, b_total);
+    return true;
+  }
+
+  /* Single surviving RV term with no constant offset.  Rewrite g
+   * directly in place as the simplest representation:
+   *  - a == 1 ⇒ singleton PLUS([Z]) (we can't safely dissolve to Z
+   *    in place because that would mint a fresh RV identity at g).
+   *  - a != 1 ⇒ in-place op-change from PLUS to TIMES with wires
+   *    [value:a, Z].  When @p include_scalar_fold is set the fixed-point
+   *    loop then re-enters apply_rules on g (now a TIMES), giving
+   *    try_times_scalar_rv a chance to fold the scaled RV.  Pass 1
+   *    runs with @p include_scalar_fold = false (deferring the fold so
+   *    the outer aggregator sees @c c·X-shaped children with intact
+   *    RV identity); pass 2 then folds the surviving TIMES wrapper.
+   *    Either way, the in-place op-change avoids the PLUS([TIMES(..)])
+   *    double wrapper that would otherwise hide the bare-RV shape from
+   *    @c AnalyticEvaluator's @c bareRv lookup. */
+  if (kept.size() == 1 && b_total == 0.0) {
+    const auto &only = kept.front();
+    if (only.second == 1.0) {
+      gc.setWires(g, {only.first});
+    } else {
+      const gate_t cv = gc.addAnonymousValueGate(
+                          double_to_text(only.second));
+      gc.setInfos(g, static_cast<unsigned>(PROVSQL_ARITH_TIMES), 0);
+      gc.setWires(g, {cv, only.first});
+    }
+    return true;
+  }
+
+  /* General case: rebuild g as a multi-wire PLUS. */
+  std::vector<gate_t> new_wires;
+  new_wires.reserve(kept.size() + 1);
+  for (const auto &p : kept) {
+    if (p.second == 1.0) {
+      new_wires.push_back(p.first);
+    } else {
+      const gate_t cv = gc.addAnonymousValueGate(double_to_text(p.second));
+      const gate_t tm = gc.addAnonymousArithGate(PROVSQL_ARITH_TIMES,
+                                                  {cv, p.first});
+      new_wires.push_back(tm);
+    }
+  }
+  if (b_total != 0.0) {
+    new_wires.push_back(gc.addAnonymousValueGate(double_to_text(b_total)));
+  }
+
+  gc.setWires(g, std::move(new_wires));
+
+  /* Recurse into freshly-minted TIMES children so try_times_scalar_rv
+   * gets a chance to fold them within the same bottom-up pass when
+   * @p include_scalar_fold is set.  Same pattern as try_mixture_lift. */
+  for (gate_t w : gc.getWires(g)) {
+    if (gc.getGateType(w) == gate_arith) {
+      apply_rules(gc, w, include_scalar_fold);
+    }
+  }
   return true;
 }
 
@@ -601,7 +959,8 @@ bool try_mixture_lift(GenericCircuit &gc, gate_t g)
  *
  * @return Number of rewrites performed on this gate.
  */
-unsigned apply_rules(GenericCircuit &gc, gate_t g)
+unsigned apply_rules(GenericCircuit &gc, gate_t g,
+                     bool include_scalar_fold)
 {
   unsigned local = 0;
   /* Iteration bound: each rule strictly shrinks the gate (fewer wires
@@ -633,13 +992,43 @@ unsigned apply_rules(GenericCircuit &gc, gate_t g)
      *    after the lift.  Once the lift fires the parent is no
      *    longer gate_arith, so the loop terminates on the next
      *    iteration via the gate_arith guard above. */
-    if (try_mixture_lift(gc, g)) {
+    if (try_mixture_lift(gc, g, include_scalar_fold)) {
       ++local;
       break;
     }
 
-    /* 4. Family closures on PLUS. */
     auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
+
+    /* 4. PLUS coefficient aggregation: collapse X+X, X-X, multiple
+     *    constants, etc.  Runs BEFORE the family closures so they see
+     *    a sum with distinct RV identities (which they assume), and
+     *    so X+X folds through the scalar-times-RV closure on the
+     *    minted 2*X child. */
+    if (op == PROVSQL_ARITH_PLUS) {
+      if (try_plus_aggregate(gc, g, include_scalar_fold)) {
+        ++local;
+        continue;
+      }
+    }
+
+    /* 5. Scalar-times-RV closure on TIMES: c · gate_rv folds to a
+     *    closed-form-scaled gate_rv for the supported families.  Gated
+     *    by @p include_scalar_fold: the bottom-up DFS visits children
+     *    before parents, and folding @c c·X to a fresh @c gate_rv at
+     *    the TIMES gate would lose @c X's identity, which an outer
+     *    @c PLUS-aggregation sibling like @c x in @c 2·x+x relies on
+     *    to recognise the shared base RV.  Pass 1 runs all other rules
+     *    so the aggregator gets first crack at @c c·X-shaped wires;
+     *    pass 2 then folds the remaining TIMES gates with this rule
+     *    via @c runHybridSimplifier's post-pass. */
+    if (op == PROVSQL_ARITH_TIMES && include_scalar_fold) {
+      if (try_times_scalar_rv(gc, g)) {
+        ++local;
+        break;
+      }
+    }
+
+    /* 6. Family closures on PLUS. */
     if (op == PROVSQL_ARITH_PLUS) {
       if (try_normal_closure(gc, g)) { ++local; break; }
       if (try_erlang_closure(gc, g)) { ++local; break; }
@@ -660,7 +1049,8 @@ unsigned apply_rules(GenericCircuit &gc, gate_t g)
  * constant away).
  */
 void simplify(GenericCircuit &gc, gate_t g,
-              std::unordered_set<gate_t> &done, unsigned &counter)
+              std::unordered_set<gate_t> &done, unsigned &counter,
+              bool include_scalar_fold)
 {
   /* Iterative DFS with an explicit stack: the natural recursive form
    * blew the host stack on deeply-nested arith chains in early
@@ -681,7 +1071,7 @@ void simplify(GenericCircuit &gc, gate_t g,
     }
     /* All children processed; apply rules to cur. */
     if (gc.getGateType(cur) == gate_arith)
-      counter += apply_rules(gc, cur);
+      counter += apply_rules(gc, cur, include_scalar_fold);
     stk.pop();
   }
 }
@@ -801,17 +1191,51 @@ bool try_dirac_mixture_collapse(GenericCircuit &gc, gate_t g)
 unsigned runHybridSimplifier(GenericCircuit &gc)
 {
   unsigned counter = 0;
-  std::unordered_set<gate_t> done;
-  const auto nb = gc.getNbGates();
-  for (std::size_t i = 0; i < nb; ++i) {
-    simplify(gc, static_cast<gate_t>(i), done, counter);
+
+  /* Pass 1: bottom-up DFS applying every rule EXCEPT the scalar-times-RV
+   * fold.  Deferring that one rule lets @c try_plus_aggregate see
+   * @c arith(TIMES, value:c, X) shapes inside a parent PLUS -- the
+   * decomposer recognises them as @c c·X with @c rv_gate=X, so a
+   * sibling @c x in @c 2·x + x correctly aggregates to coefficient
+   * three on the shared base RV.  If the scalar fold had fired bottom-up
+   * on the inner TIMES first it would have minted a fresh @c gate_rv
+   * there, decoupling its identity from the sibling @c x and forcing
+   * the outer normal-closure path which assumes independence. */
+  {
+    std::unordered_set<gate_t> done;
+    const auto nb = gc.getNbGates();
+    for (std::size_t i = 0; i < nb; ++i) {
+      simplify(gc, static_cast<gate_t>(i), done, counter,
+               /*include_scalar_fold=*/false);
+    }
   }
-  /* Second pass: Dirac-mixture collapse.  Runs after the arith
-   * simplifier so any nested arith folding (e.g. arith over Dirac
-   * children collapsing to a Dirac via try_eval_constant) has already
-   * happened -- the collector then sees a clean Dirac cascade.  Walks
-   * the gate range with the post-simplifier @c getNbGates() so any new
-   * gates the simplifier minted are also considered. */
+
+  /* Pass 2: scalar-times-RV fold on every remaining @c gate_arith.
+   * Pass 1's aggregator and family closures have already consumed the
+   * shapes where the fold would have lost shared-RV identity; any
+   * surviving 2-wire <tt>arith(TIMES, value:c, gate_rv)</tt> is now
+   * either a standalone @c c·X (no sibling to couple with) or the
+   * leftover wrapper from a single-RV aggregation result.  No DFS is
+   * needed -- the rule is local and idempotent, and walking the gate
+   * range with the post-pass-1 @c getNbGates() picks up the freshly
+   * minted TIMES wrappers from @c try_plus_aggregate and
+   * @c try_mixture_lift. */
+  {
+    const auto nb = gc.getNbGates();
+    for (std::size_t i = 0; i < nb; ++i) {
+      auto g = static_cast<gate_t>(i);
+      if (gc.getGateType(g) == gate_arith) {
+        if (try_times_scalar_rv(gc, g)) ++counter;
+      }
+    }
+  }
+
+  /* Pass 3: Dirac-mixture collapse.  Runs after the arith simplifier so
+   * any nested arith folding (e.g. arith over Dirac children collapsing
+   * to a Dirac via try_eval_constant) has already happened -- the
+   * collector then sees a clean Dirac cascade.  Walks the gate range
+   * with the post-simplifier @c getNbGates() so any new gates the
+   * simplifier minted are also considered. */
   const auto nb2 = gc.getNbGates();
   for (std::size_t i = 0; i < nb2; ++i) {
     if (try_dirac_mixture_collapse(gc, static_cast<gate_t>(i))) ++counter;
@@ -953,6 +1377,17 @@ bool is_analytic_singleton_cmp(const GenericCircuit &gc, gate_t cmp_gate)
    * distribution kind via the closed-form CDF. */
   if ((t0 == gate_rv && t1 == gate_value) ||
       (t0 == gate_value && t1 == gate_rv))
+    return true;
+
+  /* Categorical-form mixture cmp constant: AnalyticEvaluator's
+   * @c categoricalDecide computes the exact mass sum over the
+   * mulinputs satisfying the predicate, so the decomposer should not
+   * pre-empt with per-cmp MC.  Also picks up the
+   * @c try_categorical_mixture_lift output (a constant scaled / offset
+   * categorical), keeping the analytical path end-to-end for
+   * <tt>c · X cmp k</tt> shapes over categorical RVs. */
+  if ((gc.isCategoricalMixture(wires[0]) && t1 == gate_value) ||
+      (gc.isCategoricalMixture(wires[1]) && t0 == gate_value))
     return true;
 
   /* X cmp Y both bare normals: AnalyticEvaluator's normal-diff

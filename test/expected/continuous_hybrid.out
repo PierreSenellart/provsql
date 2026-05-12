@@ -8,7 +8,13 @@ t
 neg_normal_in_closure_exact
 t
 (1 row)
-dependent_normals_not_folded
+shared_uuid_plus_collapses_to_2x
+t
+(1 row)
+shared_uuid_plus_mixed_coeffs
+t
+(1 row)
+shared_uuid_plus_cancels_to_zero
 t
 (1 row)
 erlang_fold_exact
@@ -24,6 +30,18 @@ identity_drop_unlocks_normal_closure
 t
 (1 row)
 zero_absorber_times
+t
+(1 row)
+cat_lift_scaled_exact
+t
+(1 row)
+cat_lift_shifted_exact
+t
+(1 row)
+cat_lift_neg_scale_exact
+t
+(1 row)
+cat_shared_mixture_plus_aggregate
 t
 (1 row)
 disjoint_islands_inclusion_exclusion

@@ -54,27 +54,42 @@ SELECT abs(provsql.probability_evaluate(
              'independent') - 0.23975006109347664) < 1e-12
        AS neg_normal_in_closure_exact;
 
--- (4) Dependent normals: PLUS over the SAME N(0, 1) twice MUST NOT
---     trigger the closure (the independence test in try_normal_closure
---     rejects shared UUIDs).  The threshold is chosen to discriminate
---     between the correct (dependent) answer and the would-be-wrong
---     answer if the closure had fired:
---     - dependent truth:    P(2x > 1) = P(x > 0.5) = 1 - Phi(0.5)
---                                      ≈ 0.3085
---     - wrongful fold:      P(N(0, sqrt(2)) > 1) = 1 - Phi(1/sqrt(2))
---                                      ≈ 0.2398
---     The 0.01 MC tolerance around 0.3085 is well outside 0.2398, so
---     a wrongful fold would fail the assertion.  This also indirectly
---     exercises the sampler's per-iteration scalar memoisation (x must
---     produce the same draw on both PLUS wires).
-SET provsql.monte_carlo_seed = 42;
-WITH r AS (SELECT provsql.normal(0, 1) AS x)
+-- (4) Shared-UUID PLUS: x + x aggregates via try_plus_aggregate to
+--     `2 * x`, which then folds via try_times_scalar_rv to N(0, 2).
+--     The cmp resolves analytically off that single bare gate_rv:
+--     P(2x > 1) = P(x > 0.5) = 1 - Phi(0.5) ≈ 0.3085.  A wrongful
+--     independence-assumed fold (independent-normal closure firing
+--     before aggregation) would give N(0, sqrt(2)) and P ≈ 0.2398,
+--     well outside the 1e-12 tolerance.
 SELECT abs(provsql.probability_evaluate(
              provsql.rv_cmp_gt(x + x, 1::random_variable),
-             'monte-carlo', '100000') - 0.3085375387259869) < 0.01
-       AS dependent_normals_not_folded
-FROM r;
-RESET provsql.monte_carlo_seed;
+             'independent') - 0.3085375387259869) < 1e-12
+       AS shared_uuid_plus_collapses_to_2X
+FROM (SELECT provsql.normal(0, 1) AS x) r;
+
+-- (4b) Mixed coefficients on the same RV: `2*x + x` aggregates to
+--     `3*x` (coefficient sum), then folds to N(0, 3) via the scalar
+--     closure.  P(3x > 3) = P(x > 1) = 1 - Phi(1) ≈ 0.1587.  A miss of
+--     the coefficient sum (e.g. dropping the inner 2*x's coefficient
+--     and treating it as just `x`) would fold to N(0, 2) and give
+--     P ≈ 0.3085, well outside tolerance.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_gt(2::random_variable * x + x,
+                                3::random_variable),
+             'independent') - 0.15865525393145707) < 1e-12
+       AS shared_uuid_plus_mixed_coeffs
+FROM (SELECT provsql.normal(0, 1) AS x) r;
+
+-- (4c) Coefficient cancellation: `x + (-x)` aggregates to coefficient
+--     0 on x, collapsing the PLUS to gate_value:0.  The cmp `0 > 0`
+--     resolves to P = 0 via RangeCheck on the value gate.  A miss of
+--     the NEG sign in the linear-term decomposition would aggregate
+--     to 2*x or keep the PLUS unfolded, giving 0.5 / 0.5 respectively.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_gt(x + (-x), 0::random_variable),
+         'independent') = 0.0
+       AS shared_uuid_plus_cancels_to_zero
+FROM (SELECT provsql.normal(0, 1) AS x) r;
 
 -- ---------------------------------------------------------------
 -- Erlang-family closure: PLUS over k i.i.d. Exp(λ) leaves with the
@@ -149,6 +164,66 @@ SELECT provsql.probability_evaluate(
                             0.5::random_variable),
          'independent') = 0.0
        AS zero_absorber_times;
+
+-- ---------------------------------------------------------------
+-- Categorical N-wire mixture lift: push constant scaling / offset
+-- inside the [key, mul_1, ..., mul_n] form by minting new mulinputs
+-- with transformed value extras.  Shares the key gate with the
+-- original so the lifted mixture stays perfectly correlated with the
+-- input (FootprintCache flags the shared key as a dependency atom).
+-- ---------------------------------------------------------------
+
+-- (10a) TIMES lift on categorical: 3 * cat({0.5, 0.5}, {2, 4}) folds
+--      to cat({0.5, 0.5}, {6, 12}).  P(>7) = 0.5 (mass on outcome 12)
+--      decided exactly via AnalyticEvaluator's categoricalDecide.  A
+--      wrong fold (e.g. missing the scaling, or using factor=1) would
+--      give P(>7) = 0 on the original {2, 4} outcomes, far outside
+--      the bit-equal 0.5 assertion.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_gt(
+           3::random_variable * provsql.categorical(ARRAY[0.5, 0.5]::float[],
+                                                     ARRAY[2.0, 4.0]::float[]),
+           7::random_variable),
+         'independent') = 0.5
+       AS cat_lift_scaled_exact;
+
+-- (10b) PLUS lift on categorical: 10 + cat({0.5, 0.5}, {2, 4}) folds
+--      to cat({0.5, 0.5}, {12, 14}).  P(>13) = 0.5 (mass on outcome
+--      14) decided exactly.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_gt(
+           10::random_variable + provsql.categorical(ARRAY[0.5, 0.5]::float[],
+                                                      ARRAY[2.0, 4.0]::float[]),
+           13::random_variable),
+         'independent') = 0.5
+       AS cat_lift_shifted_exact;
+
+-- (10c) Negative scale on categorical (allowed; flips support but the
+--      categorical stays well-formed since outcomes are explicit
+--      points).  -2 * cat({0.5, 0.5}, {2, 4}) folds to
+--      cat({0.5, 0.5}, {-4, -8}).  P(>-5) = 0.5 (mass on outcome -4).
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_gt(
+           (-2)::random_variable * provsql.categorical(ARRAY[0.5, 0.5]::float[],
+                                                       ARRAY[2.0, 4.0]::float[]),
+           (-5)::random_variable),
+         'independent') = 0.5
+       AS cat_lift_neg_scale_exact;
+
+-- (10d) Shared-mixture PLUS aggregation: `x+x` where x is a
+--      categorical folds via try_plus_aggregate (now treating
+--      gate_mixture as a scalar-RV leaf) to `2*x`, which the
+--      categorical mixture lift then folds to a new categorical with
+--      doubled outcome values.  P(2*x > 3) for x in {1, 2} = mass of
+--      outcome 4 = 0.5.  Without the gate_mixture leaf case the
+--      aggregator would bail and the PLUS would stay unfolded, falling
+--      through to MC.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_gt(x + x, 3::random_variable),
+         'independent') = 0.5
+       AS cat_shared_mixture_plus_aggregate
+FROM (SELECT provsql.categorical(ARRAY[0.5, 0.5]::float[],
+                                  ARRAY[1.0, 2.0]::float[]) AS x) r;
 
 -- ---------------------------------------------------------------
 -- Island decomposer: per-cmp MC marginalisation of unresolved
