@@ -105,18 +105,16 @@ INTERNAL_FUNCTIONS = {
     'random_variable_uuid', 'random_variable_value',
     'random_variable_make',
     'is_finite_float8',
-    # User-facing constructors for continuous random variables and
-    # discrete categoricals.  Promote to _SQL_FUNC_MAP once the
-    # continuous-distributions chapter of the user manual is written
-    # and references them via :sqlfunc:.
-    'normal', 'uniform', 'exponential', 'erlang', 'as_random',
-    'mixture', 'categorical',
+    # (User-facing constructors for continuous random variables —
+    # 'normal', 'uniform', 'exponential', 'erlang', 'as_random',
+    # 'mixture', 'categorical' — now promoted to _SQL_FUNC_MAP and
+    # referenced from doc/source/user/continuous-distributions.rst.)
     # Continuous-distributions GUC variables (introspected by Doxygen
-    # through the SQL `SET` / `RESET` documentation pages) and the
-    # introspection helpers added alongside the simplifier.
+    # through the SQL `SET` / `RESET` documentation pages).
     'monte_carlo_seed', 'rv_mc_samples', 'simplify_on_load',
     'hybrid_evaluation',
-    'simplified_circuit_subgraph', 'rv_histogram',
+    # ('simplified_circuit_subgraph' and 'rv_histogram' are now in
+    # _SQL_FUNC_MAP, referenced from the user manual.)
     # random_variable arithmetic and comparison operator implementations
     # (invoked through the SQL operators + - * / < <= = <> >= >, not
     # called by name; promote alongside the constructors when the
@@ -153,22 +151,12 @@ INTERNAL_FUNCTIONS = {
     # C++ helper picked up by Doxygen because it lives in the `provsql`
     # namespace; it has no SQL-level binding.
     'compute_support',
-    # User-facing polymorphic moment / support SQL surface (priority 6
-    # of the continuous-distributions plan).  Promote to _SQL_FUNC_MAP
-    # alongside the constructors above when the
-    # continuous-distributions chapter of the user manual is written
-    # and references them via :sqlfunc:.
-    'variance', 'moment', 'central_moment', 'support',
-    # User-facing aggregate sampler over random_variable.  Promote when
-    # the continuous-distributions chapter documents it via :sqlfunc:.
-    'rv_sample',
-    # SQL aggregates extended to random_variable inputs (avg / sum /
-    # product over a column of random_variable values) and their
-    # internal state / final transition functions.  The aggregates are
-    # user-facing; the *_rv_sfunc / *_rv_ffunc helpers are not called
-    # directly.  Promote the aggregates when the continuous-distributions
-    # chapter of the user manual is written.
-    'avg', 'sum', 'product',
+    # ('variance' / 'moment' / 'central_moment' / 'support' /
+    # 'rv_sample' / 'avg' / 'sum' / 'product' are now in
+    # _SQL_FUNC_MAP, referenced from the continuous-distributions
+    # user manual.)
+    # SFUNC / FFUNC helpers behind the avg / sum / product RV
+    # aggregates — not called directly.
     'avg_rv_ffunc', 'sum_rv_sfunc', 'sum_rv_ffunc', 'product_rv_ffunc',
     # Internal C entry point behind the random_variable aggregates above.
     'rv_aggregate_semimod',

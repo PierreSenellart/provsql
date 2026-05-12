@@ -341,6 +341,78 @@ root: it operates on the token UUID, not the rendered DAG.
    cap, Studio surfaces a single button to start at depth 1 and
    expand on demand.
 
+.. _studio-circuit-distribution-profile:
+
+Distribution profile panel
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For nodes whose underlying gate is a scalar random-variable root
+(``gate_rv``, ``gate_value`` in float8 mode, ``gate_arith``,
+``gate_mixture``), the eval strip exposes a *Distribution profile*
+entry under the *Distribution* optgroup. Running it returns
+header stats (mean :math:`\mu` and variance :math:`\sigma^2`),
+an inline-SVG histogram of the sub-circuit's distribution, a
+PDF/CDF toggle, per-bar tooltips with :math:`\sigma` markers, and
+wheel-zoom on the value axis. The histogram is backed
+server-side by :sqlfunc:`rv_histogram`; the sample count comes
+from ``provsql.rv_mc_samples`` and the seed from
+``provsql.monte_carlo_seed`` (both surfaced in the Config panel).
+
+The same optgroup hosts a *Sample* entry that draws raw samples
+via :sqlfunc:`rv_sample`; the result renders as a collapsible
+``<details>`` panel with a six-value inline preview and a "show
+full list" expander. When the conditioning event's acceptance
+rate truncates the run below the requested ``n``, the panel
+surfaces an actionable hint pointing at ``provsql.rv_mc_samples``.
+
+The *Moment* entry on the same strip computes :sqlfunc:`moment`
+or :sqlfunc:`central_moment` for a chosen ``k`` (raw vs central
+toggle), and the *Support* entry returns the closed-form
+:sqlfunc:`support` interval.
+
+.. _studio-circuit-conditioning:
+
+Conditioning and the row-prov auto-preset
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The eval strip carries a *Condition on* text input that takes any
+provenance UUID, when populated, every distribution-shaped
+evaluation (profile, sample, moment, support) routes through the
+conditional path. Clicking a result-table cell auto-presets the
+field to the row's provenance UUID, with a :guilabel:`Conditioned
+by:` badge visible underneath the input. Clicking the active
+badge clears the conditioning and reverts to the unconditional
+answer; clicking the muted badge restores the row provenance.
+Manual edits stick within a row and reset on row navigation.
+
+Combined with the distribution profile, this makes side-by-side
+comparison of unconditional vs conditional shape a single click:
+pin the random variable, run *Distribution profile* unconditional,
+toggle the badge, run it conditional. The truncated closed-form
+table (Normal via Mills ratio, Uniform on the intersected
+support, Exponential by memorylessness) takes over when
+applicable; otherwise the panel reflects the rejection-sampling
+estimate at the configured budget.
+
+.. _studio-circuit-simplify-on-load:
+
+Simplified-circuit rendering
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Circuit mode honours the ``provsql.simplify_on_load`` GUC
+(see :doc:`configuration` and :doc:`continuous-distributions`) and
+renders the in-memory peephole-simplified graph via the
+:sqlfunc:`simplified_circuit_subgraph` SRF. Toggling the GUC in
+the Config panel switches between the raw, gate-creation view
+(useful when debugging RV constructors or the comparison-rewriter
+path) and the simplified, evaluation-time view (what every
+downstream consumer sees). Comparators decidable from the
+propagated support (a Normal restricted to ``x > 2`` reduces
+trivially when shifted out of the support) collapse to Bernoulli
+``gate_input`` leaves before the canvas renders, so the visible
+graph matches what the semiring evaluators and Monte-Carlo
+sampler actually consume.
+
 .. _studio-where-mode:
 
 Where mode
@@ -529,6 +601,18 @@ extension version.
        :sqlfunc:`resolve_input`, and the
        ``provsql.aggtoken_text_as_uuid`` GUC (used for clickable
        ``agg_token`` cells), all introduced in 1.4.0.
+   * - ``1.1.x``
+     - ``≥ 1.5.0``
+     - Adds renderers for the continuous-distribution gate
+       family (``gate_rv``, ``gate_arith``, ``gate_mixture``,
+       float8 ``gate_value``), the *Distribution profile* /
+       *Sample* / *Moment* / *Support* evaluators, the
+       *Condition on* row-provenance auto-preset, and
+       simplified-circuit rendering driven by
+       ``provsql.simplify_on_load``. Backed by the
+       :sqlfunc:`simplified_circuit_subgraph`, :sqlfunc:`rv_histogram`
+       and :sqlfunc:`rv_sample` C entry points introduced in 1.5.0.
+       See :doc:`continuous-distributions`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to

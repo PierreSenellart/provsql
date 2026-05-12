@@ -4,7 +4,14 @@ Probabilities
 ProvSQL can compute the probability that a query answer holds in a
 *probabilistic database* :cite:`DBLP:conf/edbtw/GreenT06` – a database where each provenance token has an
 independent probability, which is in turned used to determine
-probabilities of existence of specific tuples.
+probabilities of existence of specific tuples. The same machinery
+also handles **continuous random variables** at the value level
+(see :doc:`continuous-distributions`): a column of type
+``random_variable`` carries a distribution per row, and filter
+predicates on that column lift into the row's provenance circuit.
+RV-bearing queries route through Monte Carlo by default, with the
+hybrid evaluator routing closed-form sub-circuits to the analytical
+path.
 
 Setting Probabilities
 ----------------------
@@ -204,3 +211,19 @@ key value into independent, mutually-exclusive alternatives.
     SELECT ground,
            ROUND(probability_evaluate(provenance())::numeric, 3) AS prob
     FROM (SELECT ground FROM weather GROUP BY ground) t;
+
+Continuous Random Variables
+----------------------------
+
+The discrete-Bernoulli setting above can be combined with a
+continuous tier: columns of type ``random_variable`` carry
+distributions (Normal, Uniform, Exponential, Erlang, Categorical,
+Mixture) rather than scalars, and ``WHERE`` predicates on these
+columns are rewritten into conditioning events on the row's
+provenance. Evaluation routes through Monte Carlo by default, with
+a hybrid evaluator falling back to analytical closed forms where
+applicable (RangeCheck for support-decidable comparators, exact
+CDFs for single-distribution :math:`\mathrm{gate\_cmp}`,
+family-closure simplification for linear combinations of
+normals, …). See :doc:`continuous-distributions` for the full
+surface.

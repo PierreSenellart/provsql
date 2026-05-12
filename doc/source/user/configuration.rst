@@ -51,6 +51,46 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``EXPLAIN`` output, on the underlying storage, or on numeric / casting
     behaviour of ``agg_token``.
 
+.. _provsql-monte-carlo-seed:
+
+``provsql.monte_carlo_seed`` (default: ``-1``)
+    Seed for the Monte Carlo sampler used throughout the
+    probability and continuous-distribution paths. The default
+    ``-1`` seeds from ``std::random_device`` for non-deterministic
+    sampling; any other integer value (including ``0``) is used as
+    a literal seed for ``std::mt19937_64``, making
+    ``probability_evaluate(..., 'monte-carlo', n)`` reproducible
+    across runs and across the Bernoulli and continuous
+    (``gate_rv``) sampling paths.
+
+.. _provsql-rv-mc-samples:
+
+``provsql.rv_mc_samples`` (default: ``10000``)
+    Default sample count for the Monte-Carlo fallback inside the
+    analytical evaluators (:sqlfunc:`expected`, :sqlfunc:`variance`,
+    :sqlfunc:`moment`, :sqlfunc:`rv_sample`, :sqlfunc:`rv_histogram`)
+    when a sub-circuit cannot be decomposed and must be sampled.
+    Set to ``0`` to disable the fallback entirely: callers raise an
+    exception rather than sampling, which is useful when only
+    analytical answers are acceptable. Unrelated to
+    ``probability_evaluate(..., 'monte-carlo', n)`` where the sample
+    count is an explicit argument.
+
+.. _provsql-simplify-on-load:
+
+``provsql.simplify_on_load`` (default: ``on``)
+    Apply the universal peephole simplifier (currently the
+    ``RangeCheck`` cmp-resolution pass; future passes plug into the
+    same pipeline) when loading a provenance circuit from the
+    mmap store into memory. Every comparator decidable from the
+    propagated support intervals collapses to a Bernoulli
+    ``gate_input`` with probability ``0`` or ``1``, transparent to
+    every downstream consumer (semiring evaluators, Monte Carlo,
+    ``view_circuit``, PROV-XML export, ProvSQL Studio). Set to
+    ``off`` to inspect raw circuit structure (e.g. when debugging
+    gate-creation paths). See :doc:`continuous-distributions` for
+    the broader hybrid-evaluation context.
+
 ``provsql.tool_search_path`` (default: empty)
     Colon-separated list of directories prepended to ``PATH`` when ProvSQL
     spawns external command-line tools: the d-DNNF compilers (``d4``,

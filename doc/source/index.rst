@@ -51,6 +51,7 @@ This documentation is organized into four parts:
    user/aggregation
    user/semirings
    user/probabilities
+   user/continuous-distributions
    user/shapley
    user/where-provenance
    user/data-modification
@@ -70,6 +71,7 @@ This documentation is organized into four parts:
    user/casestudy3
    user/casestudy4
    user/casestudy5
+   user/casestudy6
 
 .. _dev-guide:
 
@@ -87,6 +89,7 @@ This documentation is organized into four parts:
    dev/aggregation
    dev/semiring-evaluation
    dev/probability-evaluation
+   dev/continuous-distributions
    dev/coding-conventions
    dev/testing
    dev/debugging

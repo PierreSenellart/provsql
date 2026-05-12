@@ -64,6 +64,50 @@ A warning is emitted to indicate that the provenance information is lost
 in the conversion. The provenance of the aggregate group itself is still
 tracked in the ``provsql`` column.
 
+Random-Variable Aggregates
+---------------------------
+
+When the aggregated column has type ``random_variable``
+(see :doc:`continuous-distributions`), three aggregates lift
+the standard arithmetic aggregates to the distribution algebra:
+:sqlfunc:`sum`, :sqlfunc:`avg`, and
+:sqlfunc:`product`. Each returns a ``random_variable``
+rather than a scalar, and the per-row provenance gates lower to
+*semimodule-of-mixtures* shape via ``rv_aggregate_semimod``:
+each per-row argument ``X_i`` is wrapped in
+``provsql.mixture(prov_i, X_i, as_random(identity))`` so the
+aggregate's effective semantics become
+
+.. math::
+
+   \mathrm{SUM}(X) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i, \qquad
+   \mathrm{AVG}(X) = \frac{\sum_i \mathbf{1}\{\varphi_i\} \cdot X_i}
+                          {\sum_i \mathbf{1}\{\varphi_i\}}, \qquad
+   \mathrm{PRODUCT}(X) = \prod_{i:\varphi_i} X_i.
+
+Each aggregate has an ``INITCOND = '{}'`` so the FFUNC runs even on
+an empty group, with per-aggregate empty-group identities:
+:sqlfunc:`as_random` ``(0)`` for ``SUM``, SQL ``NULL`` for
+``AVG`` (matching standard SQL), :sqlfunc:`as_random` ``(1)``
+for ``PRODUCT``.
+
+.. code-block:: postgresql
+
+    SELECT district,
+           sum(pm25)              AS sum_rv,
+           avg(pm25)              AS avg_rv,
+           expected(avg(pm25))    AS expected_avg
+    FROM readings JOIN stations USING (station_id)
+    GROUP BY district;
+
+``AVG`` over a group whose every row has false provenance returns
+``NaN`` (the natural floating-point ``0/0``); filter by
+``probability_evaluate(provenance()) > 0`` before averaging if
+``NULL`` is preferred. Other aggregates (``MIN``, ``MAX``,
+``stddev``, ``covar_pop``, percentile aggregates) over
+``random_variable`` are not yet supported. See
+:doc:`continuous-distributions` for details.
+
 HAVING
 ------
 

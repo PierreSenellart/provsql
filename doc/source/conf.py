@@ -122,6 +122,26 @@ _SQL_FUNC_MAP = {
     'timeslice':                '/doxygen-sql/html/group__temporal__db.html#gaa3de6e26f960ee27e916a1c35fbb75f0',
     'history':                  '/doxygen-sql/html/group__temporal__db.html#gac96504e5f0f7bf9da1dfc089cdbcdd21',
     'agg_token_value_text':     '/doxygen-sql/html/group__agg__token__type.html#gadec6242b3b9213ae9dc16c1a15831b03',
+    # Continuous-distribution constructors and aggregates
+    'normal':                   '/doxygen-sql/html/group__random__variable__type.html#ga1a974bad82d83b110e9d158083b113ce',
+    'uniform':                  '/doxygen-sql/html/group__random__variable__type.html#ga35f5bd84e907e0a7bffd9281abd55c68',
+    'exponential':              '/doxygen-sql/html/group__random__variable__type.html#ga763f1ce322fcbb082ffe25defbe68e47',
+    'erlang':                   '/doxygen-sql/html/group__random__variable__type.html#gaebceaebb5cdae98469affb8742bb83a9',
+    'categorical':              '/doxygen-sql/html/group__random__variable__type.html#ga41d074e6a6e06d585efda49edd32f0a5',
+    'mixture':                  '/doxygen-sql/html/group__random__variable__type.html#gabb228422bc96460b22ee9f75c5a4144e',
+    'as_random':                '/doxygen-sql/html/group__random__variable__type.html#ga0826bcc083d15b685e71783a006395f4',
+    'sum':                      '/doxygen-sql/html/group__random__variable__type.html#ga833d8a50c45061fdb7f302067a9f0bf1',
+    'avg':                      '/doxygen-sql/html/group__random__variable__type.html#ga3e227bce63085af57849b6f021d3992e',
+    'product':                  '/doxygen-sql/html/group__random__variable__type.html#ga1e24aafc2de11c41db2f0239feb490de',
+    # Polymorphic moment / support dispatchers
+    'variance':                 '/doxygen-sql/html/group__probability.html#gab1d52fb442dd262c0ac950d349a87ca3',
+    'moment':                   '/doxygen-sql/html/group__probability.html#ga99a2c256122559c1580459699288c20d',
+    'central_moment':           '/doxygen-sql/html/group__probability.html#ga738a4694f2c2a43e74414cbbc19739a8',
+    'support':                  '/doxygen-sql/html/group__probability.html#ga52dbe84c73d98c50a25784afa173183f',
+    # Sampling / histogram / simplifier introspection
+    'rv_histogram':             '/doxygen-sql/html/group__circuit__introspection.html#ga4e287ff30a597e203f43c80d12098c89',
+    'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#gaec7d70d0f94f8225861e3377682ce348',
+    'simplified_circuit_subgraph': '/doxygen-sql/html/group__circuit__introspection.html#ga7717079ec6b1f50ecb1a5a9fd5b15531',
 }
 
 
