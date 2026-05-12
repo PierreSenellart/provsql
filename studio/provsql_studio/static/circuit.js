@@ -2116,6 +2116,27 @@
       if (cond) body.condition_uuid = cond;
     }
 
+    // Firefox: disabling a focused button moves focus to the document
+    // body, which scrolls the viewport back to the top so the body's
+    // "default focus position" comes into view.  Blur first so the
+    // button loses focus before becoming disabled and Firefox has no
+    // active focus to reassign.  Chrome doesn't exhibit this.
+    if (typeof run.blur === 'function') run.blur();
+    // Belt-and-braces: pin the scroll position across the run.  Even
+    // with the blur above, Firefox occasionally scrolls the viewport
+    // when the result panel grows tall (distribution-profile SVG,
+    // sample list) -- presumably a focus / scroll-anchoring quirk we
+    // can't isolate further.  Capture scrollY now, restore it once
+    // after the synchronous DOM mutations and once on the next
+    // animation frame to cover async layout passes.  Skip the
+    // restore if the user themselves scrolled in the meantime
+    // (heuristic: their final scrollY differs from ours by more than
+    // a few px), so we don't fight a deliberate viewport change.
+    const _scrollY0 = window.scrollY;
+    const _restoreScroll = () => {
+      const dy = Math.abs(window.scrollY - _scrollY0);
+      if (dy > 4) window.scrollTo(window.scrollX, _scrollY0);
+    };
     run.disabled = true;
     result.textContent = 'evaluating…';
     result.dataset.kind = 'pending';
@@ -2257,6 +2278,12 @@
       // worth copying (errors and pending states have no useful text).
       const copy = document.getElementById('eval-copy');
       if (copy) copy.hidden = !result.dataset.copy;
+      // Restore the scroll position captured before the run -- once
+      // synchronously and once on the next animation frame, since
+      // Firefox's scroll-jump can fire either during the result
+      // mutation or on the subsequent layout pass.
+      _restoreScroll();
+      requestAnimationFrame(_restoreScroll);
     }
   }
 
