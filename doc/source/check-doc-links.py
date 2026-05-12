@@ -159,6 +159,19 @@ INTERNAL_FUNCTIONS = {
     # continuous-distributions chapter of the user manual is written
     # and references them via :sqlfunc:.
     'variance', 'moment', 'central_moment', 'support',
+    # User-facing aggregate sampler over random_variable.  Promote when
+    # the continuous-distributions chapter documents it via :sqlfunc:.
+    'rv_sample',
+    # SQL aggregates extended to random_variable inputs (avg / sum /
+    # product over a column of random_variable values) and their
+    # internal state / final transition functions.  The aggregates are
+    # user-facing; the *_rv_sfunc / *_rv_ffunc helpers are not called
+    # directly.  Promote the aggregates when the continuous-distributions
+    # chapter of the user manual is written.
+    'avg', 'sum', 'product',
+    'avg_rv_ffunc', 'sum_rv_sfunc', 'sum_rv_ffunc', 'product_rv_ffunc',
+    # Internal C entry point behind the random_variable aggregates above.
+    'rv_aggregate_semimod',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
 }
