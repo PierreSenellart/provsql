@@ -8,12 +8,15 @@
 #include "Circuit.h"
 
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <random>
 #include <stack>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 namespace provsql {
@@ -218,6 +221,61 @@ double Sampler::evalScalar(gate_t g)
           throw CircuitException(
                   "Unknown gate_arith operator tag: " +
                   std::to_string(static_cast<unsigned>(op)));
+      }
+      break;
+    }
+    case gate_agg:
+    {
+      // HAVING-style aggregate evaluated per MC iteration: walk the
+      // gate_semimod children, keep the rows whose k_gate fires in
+      // this world, push their value into a reusable Aggregator,
+      // return the finalised scalar.  Closes the priority-4-era gap
+      // that made `WHERE rv > 0 GROUP BY x HAVING count(*) > 1`
+      // structural-only (see continuous_selection.sql section G).
+      //
+      // Type plan: we evaluate every numeric path in float8 to stay
+      // inside evalScalar's return type.  COUNT is normalised by
+      // makeAggregator to SumAgg<long>, so we feed it 1L per kept row
+      // without evaluating the gate_one value child; SUM / AVG / MIN /
+      // MAX consume the value via evalScalar.  Empty groups finalise
+      // to NONE; we surface NaN, which compares false under IEEE on
+      // any subsequent gate_cmp -- the SQL convention for HAVING on
+      // an empty group.
+      AggregationOperator op =
+        getAggregationOperator(gc_.getInfos(g).first);
+      std::unique_ptr<Aggregator> agg =
+        (op == AggregationOperator::COUNT)
+          ? makeAggregator(op, ValueType::INT)
+          : makeAggregator(op, ValueType::FLOAT);
+      if(!agg)
+        throw CircuitException(
+                "gate_agg: makeAggregator returned null for op " +
+                std::to_string(static_cast<int>(op)));
+      for(gate_t child : wires) {
+        if(gc_.getGateType(child) != gate_semimod) continue;
+        const auto &sm = gc_.getWires(child);
+        if(sm.size() != 2) continue;
+        if(!evalBool(sm[0])) continue;
+        if(op == AggregationOperator::COUNT) {
+          agg->add(AggValue(1L));
+        } else {
+          agg->add(AggValue(evalScalar(sm[1])));
+        }
+      }
+      AggValue r = agg->finalize();
+      switch(r.getType()) {
+        case ValueType::INT:
+          result = static_cast<double>(std::get<long>(r.v));
+          break;
+        case ValueType::FLOAT:
+          result = std::get<double>(r.v);
+          break;
+        case ValueType::NONE:
+          result = std::numeric_limits<double>::quiet_NaN();
+          break;
+        default:
+          throw CircuitException(
+                  "gate_agg: unsupported aggregate result ValueType in MC");
       }
       break;
     }
