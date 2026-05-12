@@ -21,6 +21,9 @@ extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
 #include "funcapi.h"            // get_call_result_type, BlessTupleDesc
+#include "access/htup_details.h" // heap_form_tuple (PG 10 declares it here;
+                                 // funcapi.h pulls it in transitively from
+                                 // PG 11 onwards, but not on 10)
 #include "utils/uuid.h"
 #include "provsql_utils.h"      // gate_type, provsql_arith_op
 #include "provsql_error.h"
