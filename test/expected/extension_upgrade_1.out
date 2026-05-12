@@ -1,0 +1,2 @@
+\set ECHO none
+extension_upgrade: skipped on PostgreSQL < 12 (ALTER TYPE ADD VALUE restriction)
