@@ -235,14 +235,25 @@ unsigned min_accepted_floor(unsigned attempted)
 void check_acceptance_or_throw(const ConditionalScalarSamples &cs,
                                const std::string &what)
 {
+  if (cs.accepted.empty()) {
+    /* 0-of-N accepted is the unmistakable signature of an infeasible
+     * conditioning event: raising rv_mc_samples cannot help (the
+     * acceptance probability is exactly 0).  Surface that directly
+     * rather than the generic "raise samples or check satisfiability"
+     * advice that applies to merely under-sampled events. */
+    throw CircuitException(
+      what + ": conditioning event is infeasible (0 of " +
+      std::to_string(cs.attempted) +
+      " Monte Carlo samples satisfied it)");
+  }
   const unsigned floor = min_accepted_floor(cs.attempted);
   if (cs.accepted.size() < floor) {
     throw CircuitException(
-      what + ": conditional MC accepted " +
+      what + ": conditional MC accepted only " +
       std::to_string(cs.accepted.size()) + " out of " +
       std::to_string(cs.attempted) +
       " samples (need >= " + std::to_string(floor) +
-      "); raise provsql.rv_mc_samples or check that the event is satisfiable");
+      "); raise provsql.rv_mc_samples or tighten the event.");
   }
 }
 
@@ -829,12 +840,22 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
  * unchanged. */
 namespace {
 
+[[noreturn]] void raise_infeasible_event(const GenericCircuit &gc, gate_t root)
+{
+  (void)gc; (void)root;
+  throw CircuitException(
+    "conditioning event is infeasible (empty intersection with the "
+    "random variable's support)");
+}
+
 double conditional_raw_moment(const GenericCircuit &gc, gate_t root,
                               unsigned k, gate_t event_root)
 {
   if (k == 0) return 1.0;
   if (auto cf = try_truncated_closed_form(gc, root, event_root, k, false))
     return *cf;
+  if (eventIsProvablyInfeasible(gc, root, event_root))
+    raise_infeasible_event(gc, root);
   return mc_conditional_raw_moment(
     gc, root, k, event_root,
     "Conditional raw moment of gate type " +
@@ -848,6 +869,8 @@ double conditional_central_moment(const GenericCircuit &gc, gate_t root,
   if (k == 1) return 0.0;
   if (auto cf = try_truncated_closed_form(gc, root, event_root, k, true))
     return *cf;
+  if (eventIsProvablyInfeasible(gc, root, event_root))
+    raise_infeasible_event(gc, root);
   /* MC central: need μ_A first. */
   const double mu = conditional_raw_moment(gc, root, 1, event_root);
   return mc_conditional_central_moment(

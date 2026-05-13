@@ -22,8 +22,11 @@
 #ifndef PROVSQL_RANGE_CHECK_H
 #define PROVSQL_RANGE_CHECK_H
 
+#include <memory>
 #include <optional>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "GenericCircuit.h"
 #include "RandomVariable.h"
@@ -133,6 +136,107 @@ struct TruncatedSingleRv {
 std::optional<TruncatedSingleRv>
 matchTruncatedSingleRv(const GenericCircuit &gc, gate_t root,
                        std::optional<gate_t> event_root);
+
+/**
+ * @brief True iff the conditioning event is provably infeasible for
+ *        a bare @c gate_rv root.
+ *
+ * Distinguishes "event proved infeasible" (event resolves to
+ * @c gate_zero, or @c collectRvConstraints intersects to an empty
+ * interval) from "shape unsupported by @c matchTruncatedSingleRv"
+ * (return @c std::nullopt that just means "fall back to MC").
+ *
+ * Used by the conditional-moment dispatcher to raise an explicit
+ * infeasibility error before falling through to MC rejection — MC
+ * would still detect the same condition by accepting 0 of N samples,
+ * but the closed-form predicate spots it without ten thousand
+ * wasted draws and emits a tighter message.
+ *
+ * Returns @c false for non-@c gate_rv roots and for roots whose
+ * event/support pair is not provably infeasible by this cheap pass
+ * (the caller can still proceed to MC).
+ */
+bool eventIsProvablyInfeasible(const GenericCircuit &gc, gate_t root,
+                               std::optional<gate_t> event_root);
+
+/**
+ * @brief Point mass at a finite scalar value (a @c gate_value root, or
+ *        an @c as_random(c) leaf surfaced as a @c gate_value).
+ *
+ * Unconditional only; @c matchClosedFormDistribution bails when an
+ * event_root is supplied for a Dirac root.  Carries no probability
+ * field: a Dirac root standalone has total mass 1, and inside a
+ * @c BernoulliMixtureShape the parent's @c p / 1-p weight is applied
+ * by the curve renderer.
+ */
+struct DiracShape {
+  double value;
+};
+
+/**
+ * @brief Categorical distribution over a finite outcome set.
+ *
+ * Matches a categorical-form @c gate_mixture
+ * (@c isCategoricalMixture): the key @c gate_input is ignored (its
+ * own probability is irrelevant — the mass is on the @c mulinputs),
+ * each remaining wire contributes one @c {value, prob} pair.
+ *
+ * Unconditional only; conditioning on a categorical's value is
+ * handled upstream by @c RangeCheck folding the cmp into a Bernoulli,
+ * leaving no event_root for this matcher to see.
+ */
+struct CategoricalShape {
+  std::vector<std::pair<double, double>> outcomes;  ///< (value, mass) pairs
+};
+
+struct BernoulliMixtureShape;  // forward (variant cycle)
+
+/**
+ * @brief One of the closed-form shapes the analytical-curves payload
+ *        can render: bare RV (continuous PDF/CDF), Dirac (point mass),
+ *        categorical (multiple point masses), or Bernoulli mixture
+ *        of any two of the above.
+ */
+using ClosedFormShape = std::variant<TruncatedSingleRv,
+                                     DiracShape,
+                                     CategoricalShape,
+                                     BernoulliMixtureShape>;
+
+/**
+ * @brief Bernoulli mixture (@c gate_mixture with the
+ *        @c [p_token, x_token, y_token] shape).
+ *
+ * @c p is @c getProb(p_token) when @c p_token is a bare
+ * @c gate_input; a compound Boolean @c p_token bails (its probability
+ * would require a recursive @c probability_evaluate call, out of
+ * scope for the static predicate).  @c left and @c right recursively
+ * match the two arms; either may itself be a mixture, a bare RV, a
+ * Dirac, or a categorical — but always unconditional (truncation
+ * under a mixture is deferred until a real query needs it; see
+ * @c TODO2.md / Item 6a).
+ */
+struct BernoulliMixtureShape {
+  double p;
+  std::shared_ptr<ClosedFormShape> left;
+  std::shared_ptr<ClosedFormShape> right;
+};
+
+/**
+ * @brief Detect any of the closed-form shapes supported by
+ *        @c rv_analytical_curves.
+ *
+ * Generalisation of @c matchTruncatedSingleRv that adds Bernoulli
+ * mixtures, categoricals, and Dirac (scalar @c gate_value) roots.
+ * Conditioning (@p event_root) is honoured for bare RV roots only;
+ * Dirac / categorical / mixture roots bail when the event isn't
+ * @c gate_one (the post-load-simplification "always true" default).
+ *
+ * Returns @c std::nullopt when none of the supported shapes match;
+ * callers fall back to histogram-only rendering.
+ */
+std::optional<ClosedFormShape>
+matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
+                            std::optional<gate_t> event_root);
 
 /**
  * @brief Run the support-based pruning pass over @p gc.

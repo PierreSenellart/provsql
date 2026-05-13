@@ -17,13 +17,31 @@ t
 truncated_uniform
 t
 (1 row)
+mixture_bimodal_normal
+t
+(1 row)
+mixture_continuous_plus_dirac
+t
+(1 row)
+dirac_unconditional
+t
+(1 row)
+categorical_three_outcomes
+t
+(1 row)
 arith_composite_returns_null
 t
 (1 row)
-mixture_returns_null
+hybrid_simplifier_fold_picked_up
 t
 (1 row)
-categorical_returns_null
+truncated_mixture_returns_null
+t
+(1 row)
+truncated_categorical_returns_null
+t
+(1 row)
+nested_mixture_with_dirac
 t
 (1 row)
 infeasible_event_returns_null

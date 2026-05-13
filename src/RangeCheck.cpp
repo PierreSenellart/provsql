@@ -1110,6 +1110,49 @@ collectRvConstraints(const GenericCircuit &gc, gate_t event_root,
   return std::make_pair(iv.lo, iv.hi);
 }
 
+/**
+ * @brief Parse a @c gate_value's @c extra as a finite @c float8.
+ *
+ * Sibling of @c extract_constant_double in @c having_semantics.cpp but
+ * with a const @c GenericCircuit ref (used in the closed-form shape
+ * detector path).  Bails on @c NaN / @c ±Infinity so a downstream
+ * stem renderer never sees a non-finite x coordinate.
+ */
+static bool extract_finite_double(const GenericCircuit &gc, gate_t x,
+                                  double &out)
+{
+  if (gc.getGateType(x) != gate_value) return false;
+  const std::string &s = gc.getExtra(x);
+  if (s.empty()) return false;
+  try {
+    size_t idx = 0;
+    double v = std::stod(s, &idx);
+    if (idx != s.size() || !std::isfinite(v)) return false;
+    out = v;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+/** @brief Same parsing applied to a mulinput's outcome label (categorical). */
+static bool extract_mulinput_value(const GenericCircuit &gc, gate_t mul,
+                                   double &out)
+{
+  if (gc.getGateType(mul) != gate_mulinput) return false;
+  const std::string &s = gc.getExtra(mul);
+  if (s.empty()) return false;
+  try {
+    size_t idx = 0;
+    double v = std::stod(s, &idx);
+    if (idx != s.size() || !std::isfinite(v)) return false;
+    out = v;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 std::optional<TruncatedSingleRv>
 matchTruncatedSingleRv(const GenericCircuit &gc, gate_t root,
                        std::optional<gate_t> event_root)
@@ -1152,6 +1195,97 @@ matchTruncatedSingleRv(const GenericCircuit &gc, gate_t root,
   if (!(iv->first < iv->second)) return std::nullopt;
 
   return TruncatedSingleRv{*spec, iv->first, iv->second, /*truncated=*/true};
+}
+
+bool eventIsProvablyInfeasible(const GenericCircuit &gc, gate_t root,
+                               std::optional<gate_t> event_root)
+{
+  if (gc.getGateType(root) != gate_rv) return false;
+  if (!event_root.has_value()) return false;
+  const auto et = gc.getGateType(*event_root);
+  if (et == gate_one) return false;
+  /* RangeCheck folded the event to false upstream. */
+  if (et == gate_zero) return true;
+  /* Walk the event's AND-conjuncts; an empty intersection with the
+   * RV's natural support is the second infeasibility signal that
+   * @c matchTruncatedSingleRv collapses into @c std::nullopt. */
+  auto iv = collectRvConstraints(gc, *event_root, root);
+  if (!iv.has_value()) return false;
+  return !(iv->first < iv->second);
+}
+
+std::optional<ClosedFormShape>
+matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
+                            std::optional<gate_t> event_root)
+{
+  /* Test "event is trivial true": either absent, or resolved to
+   * gate_one by load-time simplification.  All non-bare-RV shapes
+   * (Dirac / categorical / mixture) only match unconditionally;
+   * any other event_root makes them bail. */
+  const bool event_trivial = !event_root.has_value()
+                          || gc.getGateType(*event_root) == gate_one;
+
+  /* Bare gate_rv root: delegate to the existing single-RV matcher
+   * so the truncation logic (collectRvConstraints) is the single
+   * source of truth across the closed-form-shape surface. */
+  if (gc.getGateType(root) == gate_rv) {
+    auto m = matchTruncatedSingleRv(gc, root, event_root);
+    if (!m) return std::nullopt;
+    return ClosedFormShape{*m};
+  }
+
+  /* Dirac point: a gate_value with extra parseable as a finite
+   * float8 (the underlying form of as_random(c)).  Only matches
+   * unconditionally; conditioning on a constant is degenerate and
+   * already collapsed upstream by RangeCheck before we get here. */
+  if (gc.getGateType(root) == gate_value) {
+    if (!event_trivial) return std::nullopt;
+    double v;
+    if (!extract_finite_double(gc, root, v)) return std::nullopt;
+    return ClosedFormShape{DiracShape{v}};
+  }
+
+  /* gate_mixture: either the explicit categorical form
+   * (isCategoricalMixture) or the classic Bernoulli triple
+   * [p_token, x_token, y_token]. */
+  if (gc.getGateType(root) == gate_mixture) {
+    if (!event_trivial) return std::nullopt;
+    const auto &w = gc.getWires(root);
+
+    if (gc.isCategoricalMixture(root)) {
+      CategoricalShape cs;
+      cs.outcomes.reserve(w.size() - 1);
+      for (std::size_t i = 1; i < w.size(); ++i) {
+        double v;
+        if (!extract_mulinput_value(gc, w[i], v)) return std::nullopt;
+        double p = gc.getProb(w[i]);
+        if (!std::isfinite(p) || p < 0.0 || p > 1.0) return std::nullopt;
+        cs.outcomes.emplace_back(v, p);
+      }
+      if (cs.outcomes.empty()) return std::nullopt;
+      return ClosedFormShape{std::move(cs)};
+    }
+
+    /* Classic Bernoulli mixture: 3 wires, [p_token, x_token, y_token]
+     * with p_token a bare gate_input (compound Boolean p bails per
+     * the TODO scope). */
+    if (w.size() != 3) return std::nullopt;
+    if (gc.getGateType(w[0]) != gate_input) return std::nullopt;
+    double p = gc.getProb(w[0]);
+    if (!std::isfinite(p) || p < 0.0 || p > 1.0) return std::nullopt;
+
+    auto left  = matchClosedFormDistribution(gc, w[1], std::nullopt);
+    auto right = matchClosedFormDistribution(gc, w[2], std::nullopt);
+    if (!left || !right) return std::nullopt;
+
+    BernoulliMixtureShape m;
+    m.p     = p;
+    m.left  = std::make_shared<ClosedFormShape>(std::move(*left));
+    m.right = std::make_shared<ClosedFormShape>(std::move(*right));
+    return ClosedFormShape{std::move(m)};
+  }
+
+  return std::nullopt;
 }
 
 }  // namespace provsql

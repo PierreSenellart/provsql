@@ -209,10 +209,54 @@ BEGIN
     msg := SQLERRM;
     -- Either MC's acceptance check or RangeCheck's infeasibility
     -- collapse fires; both are acceptable signals to the user.
-    matched := position('rv_mc_samples' IN msg) > 0
+    -- The 0-accepted MC path now says "conditioning event is
+    -- infeasible" directly; the partial-acceptance path still
+    -- mentions rv_mc_samples; the closed-form-aware short-circuit
+    -- says "infeasible" too.
+    matched := position('infeasible' IN msg) > 0
+            OR position('rv_mc_samples' IN msg) > 0
             OR position('satisfiable' IN msg) > 0
             OR position('accepted' IN msg) > 0;
     RAISE NOTICE 'zero_prob_event_raises_specific=%', matched;
+  END;
+END
+$$;
+
+-- ---------------------------------------------------------------------
+-- 8b. Closed-form-aware infeasibility short-circuit.
+--     For a bare gate_rv root with an event provably empty against
+--     the RV's support (Uniform(0, 10) | X > 100 — the conjunct
+--     intersects to an empty interval), eventIsProvablyInfeasible
+--     spots it before any MC sampling.  Proof that the short-circuit
+--     fires: set provsql.rv_mc_samples = 0, which would otherwise
+--     raise "MC fallback disabled"; the conditional moment must
+--     still raise with the "infeasible" wording.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  rv random_variable;
+  ev uuid;
+  msg text;
+  matched_infeasible bool;
+  mentions_mc bool;
+BEGIN
+  rv := provsql.uniform(0, 10);
+  ev := provsql.rv_cmp_gt(rv, 100::random_variable);
+  -- MC budget = 0 so any path that falls through to MC would raise
+  -- with a "MC fallback disabled" message instead of an infeasibility
+  -- one; reaching "infeasible" without the MC string proves the
+  -- closed-form-aware short-circuit fired.
+  SET LOCAL provsql.rv_mc_samples = 0;
+  BEGIN
+    PERFORM expected(rv, ev);
+    RAISE NOTICE 'short_circuit_did_not_raise';
+  EXCEPTION WHEN OTHERS THEN
+    msg := SQLERRM;
+    matched_infeasible := position('infeasible' IN msg) > 0;
+    mentions_mc := position('rv_mc_samples' IN msg) > 0
+                OR position('Monte Carlo' IN msg) > 0;
+    RAISE NOTICE 'closed_form_short_circuit=%',
+                 matched_infeasible AND NOT mentions_mc;
   END;
 END
 $$;

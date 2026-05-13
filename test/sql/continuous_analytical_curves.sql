@@ -109,34 +109,154 @@ SELECT jsonb_array_length(j -> 'pdf') = 100
 FROM c;
 
 -- ---------------------------------------------------------------
--- Returns NULL for shapes V1 doesn't cover.  These are the cases
--- where the Studio frontend falls back to histogram-only rendering
--- (the overlay skip-test must pass without raising).
+-- Bernoulli mixtures over closed-form arms: the analytical PDF is
+-- the weighted sum of the children's PDFs; the x-range covers the
+-- union of branch supports.  Dirac arms contribute point masses
+-- under the `stems` field, with weight equal to the parent's
+-- Bernoulli weight (and recursively for nested mixtures).
 -- ---------------------------------------------------------------
 
--- (7) gate_arith composite root: N + U is not a single closed-form
+-- (7) Bimodal: mixture(0.3, Normal(0, 1), Normal(10, 1)).  Two
+-- local maxima at x ≈ 0 (height ≈ 0.3 · φ(0) ≈ 0.1197) and
+-- x ≈ 10 (height ≈ 0.7 · φ(0) ≈ 0.2793).  No stems.
+WITH r AS (SELECT provsql.mixture(0.3, provsql.normal(0, 1),
+                                        provsql.normal(10, 1)) AS m),
+     c AS (SELECT provsql.rv_analytical_curves((m)::uuid, 201) AS j FROM r),
+     pdf AS (SELECT (e ->> 'x')::float8 AS x,
+                    (e ->> 'p')::float8 AS p
+               FROM c, jsonb_array_elements(j -> 'pdf') AS e)
+SELECT abs(MAX(p) FILTER (WHERE x < 5.0) - 0.3 * 0.3989422804014327) < 5e-3
+       AND abs(MAX(p) FILTER (WHERE x > 5.0) - 0.7 * 0.3989422804014327) < 5e-3
+       AND (SELECT (j -> 'stems') IS NULL FROM c) AS mixture_bimodal_normal
+FROM pdf;
+
+-- (8) Mixed continuous + Dirac: mixture(0.4, Uniform(0, 1), as_random(5)).
+-- The continuous part is a flat 0.4 over [0, 1]; the Dirac at 5
+-- becomes a stem of weight 0.6.  pdf and stems both present.
+WITH r AS (SELECT provsql.mixture(0.4, provsql.uniform(0, 1),
+                                        provsql.as_random(5)) AS m),
+     c AS (SELECT provsql.rv_analytical_curves((m)::uuid, 201) AS j FROM r)
+SELECT (j -> 'pdf') IS NOT NULL
+       AND jsonb_array_length(j -> 'stems') = 1
+       AND abs(((j -> 'stems' -> 0 ->> 'x'))::float8 - 5.0) < 1e-9
+       AND abs(((j -> 'stems' -> 0 ->> 'p'))::float8 - 0.6) < 1e-9
+       AS mixture_continuous_plus_dirac
+FROM c;
+
+-- (9) Pure Dirac root via as_random: a single stem at the constant,
+-- no continuous pdf, and a CDF staircase that jumps from 0 to 1 at
+-- the constant value (samples before the jump are 0, after are 1).
+WITH r AS (SELECT provsql.as_random(3.5) AS d),
+     c AS (SELECT provsql.rv_analytical_curves((d)::uuid, 100) AS j FROM r)
+SELECT (j -> 'pdf') IS NULL
+       AND jsonb_array_length(j -> 'cdf') = 100
+       AND jsonb_array_length(j -> 'stems') = 1
+       AND abs(((j -> 'stems' -> 0 ->> 'x'))::float8 - 3.5) < 1e-9
+       AND abs(((j -> 'stems' -> 0 ->> 'p'))::float8 - 1.0) < 1e-9
+       AND ((j -> 'cdf' -> 0  ->> 'p'))::float8 = 0.0
+       AND ((j -> 'cdf' -> 99 ->> 'p'))::float8 = 1.0
+       AS dirac_unconditional
+FROM c;
+
+-- (10) Categorical: three outcomes with prescribed masses.  Stems
+-- match the constructor arguments exactly; CDF staircase ends at 1
+-- and the cumulative jump before x = 0 equals the first outcome's
+-- mass (0.3).
+WITH r AS (SELECT provsql.categorical(ARRAY[0.3, 0.5, 0.2],
+                                       ARRAY[-1.0, 0.0, 2.0]) AS c),
+     c AS (SELECT provsql.rv_analytical_curves((c)::uuid, 100) AS j FROM r),
+     st AS (SELECT (e ->> 'x')::float8 AS x,
+                   (e ->> 'p')::float8 AS p
+              FROM c, jsonb_array_elements(j -> 'stems') AS e)
+SELECT (SELECT (j -> 'pdf') IS NULL FROM c)
+       AND (SELECT abs(((j -> 'cdf' -> 99 ->> 'p'))::float8 - 1.0) < 1e-9 FROM c)
+       AND COUNT(*) = 3
+       AND abs(SUM(p) - 1.0) < 1e-9
+       AND abs(MAX(p) FILTER (WHERE x = -1.0) - 0.3) < 1e-9
+       AND abs(MAX(p) FILTER (WHERE x =  0.0) - 0.5) < 1e-9
+       AND abs(MAX(p) FILTER (WHERE x =  2.0) - 0.2) < 1e-9
+       AS categorical_three_outcomes
+FROM st;
+
+-- ---------------------------------------------------------------
+-- Returns NULL for shapes the closed-form table doesn't cover.
+-- These are the cases where the Studio frontend falls back to
+-- histogram-only rendering.
+-- ---------------------------------------------------------------
+
+-- (11) gate_arith composite root: N + U is not a single closed-form
 -- family, so the function bails.
 WITH r AS (SELECT provsql.normal(0, 1) + provsql.uniform(0, 1) AS s)
 SELECT provsql.rv_analytical_curves((s)::uuid, 100)
        IS NULL AS arith_composite_returns_null
 FROM r;
 
--- (8) Bernoulli mixture: V1 doesn't render the weighted-sum PDF yet.
+-- (11b) Hybrid-simplifier integration.  c * Exp(λ) is a gate_arith
+-- composite at persistence time, but the simplifier folds it to a
+-- single Exp(λ/c) leaf.  rv_analytical_curves must run the same
+-- simplifier so the closed-form path picks up the folded shape; a
+-- regression where the simplifier is bypassed would surface as a
+-- NULL payload here.
+--   2 * Exp(1)  ≡  Exp(0.5):
+--     pdf(0)            = 0.5
+--     pdf(ln 2 / 0.5)   = 0.5 * exp(-ln 2) = 0.25 at x ≈ 1.386
+WITH r AS (SELECT 2 * provsql.exponential(1.0) AS s),
+     c AS (SELECT provsql.rv_analytical_curves((s)::uuid, 100) AS j FROM r)
+SELECT (j -> 'pdf') IS NOT NULL
+       AND abs(((j -> 'pdf' -> 0 ->> 'x'))::float8 - 0.0) < 1e-9
+       AND abs(((j -> 'pdf' -> 0 ->> 'p'))::float8 - 0.5) < 1e-9
+       AND abs(((j -> 'cdf' -> 0 ->> 'p'))::float8 - 0.0) < 1e-9
+       AS hybrid_simplifier_fold_picked_up
+FROM c;
+
+-- (11c) Truncated mixture: matchClosedFormDistribution deliberately
+-- bails when an event constrains a mixture / categorical / Dirac root
+-- (truncation normalisation Z = p·Z_L + (1-p)·Z_R is deferred per
+-- TODO2.md / Item 6a).  Guard against accidental partial support
+-- being wired in without the proper normalisation.
 WITH r AS (SELECT provsql.mixture(0.3, provsql.normal(0, 1),
-                                        provsql.uniform(-1, 1)) AS m)
-SELECT provsql.rv_analytical_curves((m)::uuid, 100)
-       IS NULL AS mixture_returns_null
-FROM r;
+                                        provsql.normal(10, 1)) AS m,
+                  provsql.normal(5, 1) AS aux),
+     ev AS (SELECT (m)::uuid AS tok,
+                   provsql.rv_cmp_gt(aux, 5::random_variable) AS ev
+              FROM r)
+SELECT provsql.rv_analytical_curves(tok, 100, ev) IS NULL
+       AS truncated_mixture_returns_null
+FROM ev;
 
--- (9) Categorical: discrete distribution, V1 doesn't render a stem
--- plot yet.
+-- (11d) Truncated categorical: same scope choice as the mixture case.
 WITH r AS (SELECT provsql.categorical(ARRAY[0.5, 0.5],
-                                       ARRAY[0.0, 1.0]) AS c)
-SELECT provsql.rv_analytical_curves((c)::uuid, 100)
-       IS NULL AS categorical_returns_null
-FROM r;
+                                       ARRAY[0.0, 1.0]) AS c,
+                  provsql.normal(0, 1) AS aux),
+     ev AS (SELECT (c)::uuid AS tok,
+                   provsql.rv_cmp_gt(aux, 0::random_variable) AS ev
+              FROM r)
+SELECT provsql.rv_analytical_curves(tok, 100, ev) IS NULL
+       AS truncated_categorical_returns_null
+FROM ev;
 
--- (10) Infeasible conditioning event: closed-form bails, returns NULL.
+-- (11e) Nested mixture with a Dirac arm.  The recursive matcher must
+-- propagate Bernoulli weights along the path: a Dirac at 10 sitting
+-- inside a (0.5, _, (0.8, _, dirac)) tree carries weight 0.5·0.2 = 0.1,
+-- the rest is continuous PDF over Normal(0,1) (0.5) + Normal(5,1)
+-- (0.5·0.8 = 0.4).  Use 201 samples so a sample lands close to each
+-- mode (x = 0 and x = 5).
+WITH r AS (SELECT provsql.mixture(0.5,
+                          provsql.normal(0, 1),
+                          provsql.mixture(0.8,
+                                  provsql.normal(5, 1),
+                                  provsql.as_random(10))) AS m),
+     c AS (SELECT provsql.rv_analytical_curves((m)::uuid, 201) AS j FROM r)
+SELECT (j -> 'pdf') IS NOT NULL
+       AND jsonb_array_length(j -> 'stems') = 1
+       AND abs(((j -> 'stems' -> 0 ->> 'x'))::float8 - 10.0) < 1e-9
+       -- Nested weight: top mixture's right arm (0.5), inner mixture's
+       -- right arm (0.2) → 0.5 · 0.2 = 0.1.
+       AND abs(((j -> 'stems' -> 0 ->> 'p'))::float8 - 0.1) < 1e-9
+       AS nested_mixture_with_dirac
+FROM c;
+
+-- (12) Infeasible conditioning event: closed-form bails, returns NULL.
 -- Uniform(0, 10) | X > 100 collapses to an empty support; the curve
 -- function returns NULL so the panel falls back to whatever
 -- rv_histogram produced (which itself errors on infeasible events

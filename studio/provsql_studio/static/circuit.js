@@ -2718,9 +2718,52 @@
     const W = PROFILE_W, H = PROFILE_H, padX = PROFILE_PAD_X;
     const padTop = PROFILE_PAD_TOP, padBottom = PROFILE_PAD_BOTTOM;
     let svgInner = '';
+    /* Hoisted so the data-full-lo / data-full-hi panel attrs below
+     * pick up any frame extension done inside the histogram block
+     * (pure-discrete shapes widen to the analytical curves' range).
+     * The zoom handler reads these to clamp newLo/newHi, so without
+     * the hoist a mode toggle or zoom-out would silently snap back
+     * to the raw histogram extent. */
+    let fullLo = 0, fullHi = 0;
     if (histogram.length) {
-      const fullLo = Number(histogram[0].bin_lo);
-      const fullHi = Number(histogram[histogram.length - 1].bin_hi);
+      fullLo = Number(histogram[0].bin_lo);
+      fullHi = Number(histogram[histogram.length - 1].bin_hi);
+      /* Whenever the backend ships an analytical curves payload, take
+       * the union of the histogram extent and the curves' x-range as
+       * the chart frame.  shape_x_range already pads ±10% around the
+       * underlying support (and unions branch ranges for mixtures),
+       * so this:
+       *  - pure-discrete shapes (Dirac, categorical, nested mixtures
+       *    of those): shows the flat staircase before the first and
+       *    after the last stem, which the MC histogram alone collapses
+       *    onto the outermost outcomes;
+       *  - mixed continuous + discrete: shows Dirac discs that sit at
+       *    or past the empirical histogram's edge (e.g. Dirac at 0 in
+       *    a Uniform(0,1) mixture would otherwise be flush against the
+       *    left margin);
+       *  - degenerate histograms (Dirac alone): replaces the zero-
+       *    width frame with a sensible padded window.
+       * Without curves we keep the histogram frame, plus a ±1 fallback
+       * if the histogram is degenerate. */
+      const aCurves = profile.analytical_curves;
+      const cdfArr = aCurves && Array.isArray(aCurves.cdf) ? aCurves.cdf : null;
+      if (cdfArr && cdfArr.length >= 2) {
+        const cLo = Number(cdfArr[0].x);
+        const cHi = Number(cdfArr[cdfArr.length - 1].x);
+        if (Number.isFinite(cLo) && Number.isFinite(cHi) && cLo < cHi) {
+          if (fullLo < fullHi) {
+            fullLo = Math.min(fullLo, cLo);
+            fullHi = Math.max(fullHi, cHi);
+          } else {
+            fullLo = cLo;
+            fullHi = cHi;
+          }
+        }
+      } else if (!(fullLo < fullHi)) {
+        const c = fullLo;
+        fullLo = c - 1;
+        fullHi = c + 1;
+      }
       const lo = _view ? _view.lo : fullLo;
       const hi = _view ? _view.hi : fullHi;
       const span = (hi - lo) || 1;
@@ -2826,7 +2869,57 @@
       const curveArr = curves
                        && Array.isArray(curves[_mode === 'cdf' ? 'cdf' : 'pdf'])
                      ? curves[_mode === 'cdf' ? 'cdf' : 'pdf'] : null;
-      if (curveArr && curveArr.length >= 2) {
+      /* Pure-discrete shape (Dirac, categorical, or any nested
+       * mixture of those without a continuous arm): the CDF is a
+       * staircase, not a smooth function.  Render it as horizontal
+       * segments joined by vertical jumps so the jump at each
+       * outcome lands on the stem instead of being interpolated
+       * across the two surrounding x-samples. */
+      const discreteCdf = _mode === 'cdf'
+                       && curves
+                       && !Array.isArray(curves.pdf)
+                       && Array.isArray(curves.stems);
+      if (discreteCdf && Array.isArray(curves.stems) && curves.stems.length) {
+        /* Pure-discrete CDF: build the staircase directly from the
+         * stems so the jumps land exactly on the outcome values
+         * (sampled-cdf rendering would smear each jump across the
+         * surrounding sample interval and the final segment would
+         * stop one sample short of x_hi).  Stems outside the current
+         * viewport still contribute to the cumulative mass — stems
+         * before lo preload `cum` so the path enters the view at the
+         * correct height (matching the empirical bars, which also
+         * track cum across the full histogram, not just the visible
+         * bins); stems after hi are ignored, the staircase exits at
+         * the last in-view cum. */
+        const baseY = (H - padBottom);
+        const allStems = curves.stems.slice()
+          .map(s => ({ x: Number(s.x), p: Number(s.p) }))
+          .filter(s => Number.isFinite(s.x) && Number.isFinite(s.p))
+          .sort((a, b) => a.x - b.x);
+        if (allStems.length) {
+          let cum = 0;
+          for (const st of allStems) if (st.x < lo) cum += st.p;
+          const seg = [];
+          seg.push(
+            `${sx(lo).toFixed(1)},`
+            + `${(baseY - Math.min(1, cum) * usableH).toFixed(1)}`);
+          for (const st of allStems) {
+            if (st.x < lo || st.x > hi) continue;
+            const px = sx(st.x).toFixed(1);
+            const yPrev = (baseY - Math.min(1, cum) * usableH).toFixed(1);
+            seg.push(`${px},${yPrev}`);
+            cum += st.p;
+            const yCur = (baseY - Math.min(1, cum) * usableH).toFixed(1);
+            seg.push(`${px},${yCur}`);
+          }
+          const yEnd = (baseY - Math.min(1, cum) * usableH).toFixed(1);
+          seg.push(`${sx(hi).toFixed(1)},${yEnd}`);
+          overlayPath =
+            `<path class="cv-profile-overlay" d="M${seg.join(' L')}" `
+            + `fill="none" stroke="var(--terracotta-500)" `
+            + `stroke-width="1.5" opacity="0.9" />`;
+        }
+      } else if (curveArr && curveArr.length >= 2) {
         // Equal-width histogram: bin width = (full range) / nbins.
         // The backend builds the histogram with constant bin width
         // (compute_support's lo..hi divided into `bins` cells), so
@@ -2871,7 +2964,48 @@
             + `stroke-width="1.5" opacity="0.9" />`;
         }
       }
-      svgInner = `<g class="cv-profile-bars">${bars}</g>${overlayPath}${meanLine}`
+      /* Point-mass overlay.  When the backend payload carries
+       * stems:[{x, p}], render each as a vertical line capped by a
+       * small disc — Dirac (as_random) or categorical roots, or
+       * Dirac arms inside a Bernoulli mixture.  PDF mode only; CDF
+       * mode already conveys the same information through the
+       * staircase jumps that shape_cdf bakes into the curve. */
+      let stemsGroup = '';
+      const stemArr = curves && Array.isArray(curves.stems) ? curves.stems : null;
+      if (stemArr && stemArr.length && _mode !== 'cdf') {
+        const baseY = (H - padBottom);
+        const parts = [];
+        for (const st of stemArr) {
+          const xv = Number(st.x);
+          const pv = Number(st.p);
+          if (!Number.isFinite(xv) || !Number.isFinite(pv)) continue;
+          if (xv < lo || xv > hi) continue;
+          /* Match the bar scale.  Bars are scaled count/maxCount, and
+           * the expected count at a stem's x is pv·total.  Using
+           *   stem_h_frac = pv · total / maxCount
+           * puts the disc at the same height as the bar that the
+           * sampler builds at that x, so a perfectly-modelled
+           * categorical / Dirac has its disc landing right on top
+           * of its bar. */
+          const scaled = (pv * total) / maxCount;
+          const h = Math.max(0, Math.min(1, scaled)) * usableH;
+          const px = sx(xv).toFixed(1);
+          const py = (baseY - h).toFixed(1);
+          const tip = `x = ${escapeHtml(String(xv))}\nP(X = x) = ${fmtPct(pv)}`;
+          parts.push(
+            `<line x1="${px}" y1="${baseY.toFixed(1)}" `
+            + `x2="${px}" y2="${py}" />`
+            + `<circle cx="${px}" cy="${py}" r="4">`
+            + `<title>${tip}</title></circle>`
+          );
+        }
+        if (parts.length) {
+          stemsGroup =
+            `<g class="cv-profile-stems" stroke="var(--terracotta-500)" `
+            + `stroke-width="1.5" fill="var(--terracotta-500)">${parts.join('')}</g>`;
+        }
+      }
+      svgInner = `<g class="cv-profile-bars">${bars}</g>${overlayPath}${stemsGroup}${meanLine}`
         + `<text class="cv-rv-tick" x="${padX}" y="${H - 4}">${escapeHtml(fmtTick(lo))}</text>`
         + `<text class="cv-rv-tick" x="${W - padX}" y="${H - 4}" text-anchor="end">`
         + `${escapeHtml(fmtTick(hi))}</text>`;
@@ -2898,10 +3032,8 @@
     // Data attributes carry the full range and current view so the
     // wheel / dblclick handlers wired by wireProfileInteractions can
     // re-render without recomputing from the histogram array.
-    const fullLoAttr = histogram.length ? Number(histogram[0].bin_lo) : 0;
-    const fullHiAttr = histogram.length
-                     ? Number(histogram[histogram.length - 1].bin_hi)
-                     : 0;
+    const fullLoAttr = fullLo;
+    const fullHiAttr = fullHi;
     const viewLoAttr = _view ? _view.lo : fullLoAttr;
     const viewHiAttr = _view ? _view.hi : fullHiAttr;
     const zoomedHint = _view ? ' (double-click to reset)' : '';
