@@ -159,8 +159,10 @@ variables resolves through the implicit casts above:
     -- All of these are well-typed random_variable expressions.
     SELECT reading + 1            FROM sensor_readings;
     SELECT 2 * reading - 0.5      FROM sensor_readings;
-    SELECT reading / reading      FROM sensor_readings;
     SELECT -reading               FROM sensor_readings;
+    SELECT r1.reading / r2.reading
+      FROM sensor_readings r1, sensor_readings r2
+     WHERE r1.id < r2.id;
 
 The arithmetic operators are *structural*: they record the
 operation in the circuit without evaluating it. Evaluation happens
@@ -437,18 +439,18 @@ downstream analytics.
     (single bin), ``gate_rv``, and ``gate_arith``. Any other gate
     kind raises.
 
-Example, drawing 200 samples from the truncated sensor-1 reading:
+Example, drawing 200 samples from the truncated sensor-1 reading
+(conditioned on ``reading > 2.5``, which the planner lifts into
+the row's provenance as a ``gate_cmp``):
 
 .. code-block:: postgresql
 
     SET provsql.monte_carlo_seed = 42;
     SELECT s
-    FROM sensor_readings sr,
-         LATERAL provsql.rv_sample(
-                   provsql.random_variable_uuid(sr.reading),
-                   200,
-                   sr.provsql) AS t(s)
-    WHERE sr.id = 1;
+    FROM (SELECT reading, provenance() AS prov
+            FROM sensor_readings
+           WHERE id = 1 AND reading > 2.5) q,
+         LATERAL provsql.rv_sample(q.reading, 200, q.prov) AS t(s);
 
 Mixtures and Categorical Random Variables
 ------------------------------------------
