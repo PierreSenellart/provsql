@@ -288,9 +288,11 @@ the rewrites produced by the earlier ones:
   > 1 AND reading < 3`` constrains a single normal once and runs
   the conjunction as one analytic CDF call. Equality and
   inequality on continuous distributions collapse here (``X = X``
-  is identically true, ``X <> X`` identically false; ``X = c``
-  with ``X`` continuous is identically false, ``X <> c``
-  identically true).
+  is identically true, ``X <> X`` identically false; ``X = Y`` is
+  identically false whenever at least one side has a continuous
+  distribution, even when neither is a bare leaf, including
+  composites like ``Exp(λ_1) + Exp(λ_2)`` with distinct rates, or
+  a Bernoulli mixture over two continuous arms).
 - **AnalyticEvaluator** computes the exact CDF of a single
   distribution's ``gate_cmp`` (e.g. ``Normal > 2``,
   ``Uniform <= 1.5``, ``Exponential >= λ⁻¹``) via the standard

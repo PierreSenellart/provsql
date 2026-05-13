@@ -163,4 +163,94 @@ SELECT id, p = 0.0 AS exact_zero FROM rc_joint_result ORDER BY id;
 DROP TABLE rc_joint_result;
 DROP TABLE rc_joint_sensors;
 
+-- ---------------------------------------------------------------
+-- Broadened continuous EQ / NE shortcut.
+--
+-- RangeCheck recognises @c P(X = Y) = 0 / @c P(X != Y) = 1 not just
+-- for bare @c gate_rv leaves but for every sub-circuit that produces
+-- a continuous distribution: @c gate_arith composites whose leaves
+-- are all @c gate_rv, and Bernoulli mixtures over two continuous
+-- arms.  Categorical mixtures and pure @c gate_value Diracs fall
+-- through to the agg / interval / AnalyticEvaluator paths (the
+-- former has point masses; the latter is bit-comparable to a
+-- literal).
+--
+-- The exact 0.0 / 1.0 assertions below would not hold if MC ran on
+-- top, so they pin the analytical resolution.
+-- ---------------------------------------------------------------
+
+-- (E1) Heterogeneous-rate exponential sum: no Erlang closure exists,
+-- so the simplifier cannot fold to a bare @c gate_rv.  RangeCheck's
+-- broadened EQ shortcut sees a gate_arith composite whose every leaf
+-- is gate_rv and collapses the cmp to gate_zero.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(provsql.exponential(0.4)
+                           + provsql.exponential(0.3),
+                           1::random_variable),
+         'independent') = 0.0
+       AS heterogeneous_exp_sum_eq;
+
+-- (E2) Product of two independent continuous RVs: also no closure,
+-- but every leaf below the gate_arith is gate_rv so EQ collapses
+-- exactly.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(provsql.normal(0, 1) * provsql.normal(0, 1),
+                            0::random_variable),
+         'independent') = 0.0
+       AS product_two_normals_eq;
+
+-- (E3) Bernoulli mixture over two continuous arms is itself a
+-- continuous distribution (convex combination of two continuous
+-- densities, no point mass).
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(provsql.mixture(0.3, provsql.normal(0, 1),
+                                                  provsql.uniform(-1, 1)),
+                            0::random_variable),
+         'independent') = 0.0
+       AS bernoulli_mixture_continuous_arms_eq;
+
+-- (E4) NE is symmetric: same shapes resolve to 1.0 exactly.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_ne(provsql.exponential(0.4)
+                           + provsql.exponential(0.3),
+                           1::random_variable),
+         'independent') = 1.0
+       AS heterogeneous_exp_sum_ne;
+
+-- (E5) Mixture-of-arith and arith-of-mixture both qualify: the
+-- recursion through gate_arith into gate_mixture's branches sees
+-- two continuous arms.  A common shape after the simplifier's
+-- mixture-lift fold.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(provsql.mixture(0.5, provsql.normal(0, 1)
+                                                + provsql.uniform(0, 1),
+                                                  provsql.exponential(1)
+                                                + provsql.uniform(0, 1)),
+                            0::random_variable),
+         'independent') = 0.0
+       AS mixture_of_arith_continuous_eq;
+
+-- ---- Negative cases (shortcut does NOT fire) -------------------
+
+-- (E6) Categorical is a discrete distribution: it has a Dirac mass
+-- at 0 with weight 0.5, so P(cat = 0) = 0.5, not 0.  The shortcut
+-- must distinguish the Bernoulli mixture shape (3-wire) from the
+-- categorical N-wire shape via @c isCategoricalMixture.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(provsql.categorical(ARRAY[0.5, 0.5],
+                                                ARRAY[0.0, 1.0]),
+                            0::random_variable),
+         'independent') = 0.5
+       AS categorical_dirac_eq_not_shorted;
+
+-- (E7) Pure Dirac (@c as_random) compared to itself: handled by the
+-- identity shortcut (wires[0] == wires[1]); compared to a literal of
+-- the same value, the cmp drops out via the constant comparator and
+-- the broadened predicate does not fire on the gate_value side.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(provsql.as_random(2),
+                            2::random_variable),
+         'independent') = 1.0
+       AS dirac_eq_constant;
+
 SELECT 'ok'::text AS continuous_rangecheck_done;

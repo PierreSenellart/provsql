@@ -51,6 +51,27 @@ remove_provenance
 id|exact_zero
 s1|t
 (1 row)
+heterogeneous_exp_sum_eq
+t
+(1 row)
+product_two_normals_eq
+t
+(1 row)
+bernoulli_mixture_continuous_arms_eq
+t
+(1 row)
+heterogeneous_exp_sum_ne
+t
+(1 row)
+mixture_of_arith_continuous_eq
+t
+(1 row)
+categorical_dirac_eq_not_shorted
+t
+(1 row)
+dirac_eq_constant
+t
+(1 row)
 continuous_rangecheck_done
 ok
 (1 row)

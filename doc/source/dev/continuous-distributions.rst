@@ -231,8 +231,21 @@ linear arithmetic for the uniform CDF; the regularised lower
 incomplete gamma for the Erlang CDF. Equality and inequality on
 continuous distributions collapse correctly: ``X = X`` is
 identically true (handled in ``RangeCheck`` as a
-zero-width interval identity), ``X = c`` for a continuous ``X``
-is identically false.
+zero-width interval identity), ``X = Y`` for any two sub-circuits
+of which at least one has a continuous distribution is identically
+false. ``RangeCheck::hasOnlyContinuousSupport`` is the predicate
+behind the second case: a recursive walk that returns true on
+``gate_rv`` leaves, on ``gate_arith`` whose every wire is
+continuous, and on Bernoulli mixtures whose two branches are both
+continuous; false on ``gate_value`` (Dirac), on categorical
+mixtures (point masses at each outcome), and on Boolean / agg
+gates. The widened test catches heterogeneous-rate exponential
+sums (``Exp(λ_1) + Exp(λ_2)`` with ``λ_1 ≠ λ_2``, no Erlang
+closure), products of two independent continuous RVs, and mixed
+``gate_arith`` composites that the simplifier cannot fold to a
+single ``gate_rv`` -- their equality predicate would otherwise
+have flowed all the way down to the MC marginalisation only to
+return 0 in finite precision anyway.
 
 Expectation Semiring
 --------------------

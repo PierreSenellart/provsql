@@ -601,11 +601,97 @@ bool isAndJointlyInfeasible(const GenericCircuit &gc, gate_t root)
   return false;
 }
 
+/**
+ * @brief Memoised recursive predicate: does @p g's sub-circuit
+ *        produce a continuous random variable (no point-mass /
+ *        Dirac component)?
+ *
+ * Used to widen the EQ / NE = 0 / 1 shortcut at the cmp resolution
+ * site below the bare-@c gate_rv test, so multi-gate composites like
+ * <tt>Exp(0.4) + Exp(0.3) = c</tt> (heterogeneous-rate exponential
+ * sum, no closed-form Erlang fold) or
+ * <tt>mixture(p, Normal, Uniform) = c</tt> (Bernoulli mixture over
+ * two continuous arms) also resolve at load time.  Without this the
+ * cmp falls through to AnalyticEvaluator (which returns NaN for
+ * EQ / NE) and then to the MC marginalisation, which in finite
+ * precision estimates @c P(X = Y) at 0 anyway -- but costs
+ * @c provsql.rv_mc_samples iterations to do so.
+ *
+ * Recursion:
+ *  - @c gate_rv -> true (Normal / Uniform / Exp / Erlang all have
+ *    continuous densities, no point masses).
+ *  - @c gate_value -> false (Dirac at the literal).
+ *  - @c gate_arith -> true iff every wire has only-continuous
+ *    support.  Sums, products, negations, divisions of continuous
+ *    RVs stay continuous in distribution; a @c gate_value sibling
+ *    poisons the result (e.g. @c X + 2 is continuous, but
+ *    @c X * 0 = 0 has a Dirac at zero -- handled by the existing
+ *    constant-fold pre-pass, but defensive here).
+ *  - @c gate_mixture, Bernoulli 3-wire <tt>[p, X, Y]</tt> -> true
+ *    iff X and Y are both continuous; the Boolean @c p only chooses
+ *    an arm, so it does not affect the support type.
+ *  - @c gate_mixture, categorical
+ *    <tt>[key, mul_1, ..., mul_n]</tt> -> false (point masses at
+ *    each mulinput's outcome value).
+ *  - Any other gate type -> false (defensive: gate_plus / gate_times
+ *    / gate_cmp / gate_agg are not continuous-RV containers).
+ *
+ * The cache is keyed on @c gate_t and may be shared across multiple
+ * cmp gates inside a single @c runRangeCheck invocation.
+ */
+bool hasOnlyContinuousSupport(const GenericCircuit &gc, gate_t g,
+                              std::unordered_map<gate_t, bool> &cache)
+{
+  auto it = cache.find(g);
+  if (it != cache.end()) return it->second;
+  /* Memoise pessimistically before recursing so a malformed cyclic
+   * sub-circuit (shouldn't happen on well-formed input) returns
+   * @c false rather than blowing the stack. */
+  cache[g] = false;
+
+  bool result = false;
+  auto t = gc.getGateType(g);
+  switch (t) {
+    case gate_rv:
+      result = true;
+      break;
+    case gate_value:
+      result = false;
+      break;
+    case gate_arith: {
+      result = true;
+      for (gate_t w : gc.getWires(g)) {
+        if (!hasOnlyContinuousSupport(gc, w, cache)) { result = false; break; }
+      }
+      break;
+    }
+    case gate_mixture: {
+      if (gc.isCategoricalMixture(g)) { result = false; break; }
+      const auto &w = gc.getWires(g);
+      if (w.size() != 3) { result = false; break; }
+      result = hasOnlyContinuousSupport(gc, w[1], cache)
+            && hasOnlyContinuousSupport(gc, w[2], cache);
+      break;
+    }
+    default:
+      result = false;
+      break;
+  }
+
+  cache[g] = result;
+  return result;
+}
+
 }  // namespace
 
 unsigned runRangeCheck(GenericCircuit &gc)
 {
   std::unordered_map<gate_t, Interval> cache;
+  /* Shared across all cmp gates in this @c runRangeCheck invocation.
+   * Keyed on gate_t and immutable across cmp iterations because
+   * resolving one cmp only changes the cmp's own gate type, not
+   * the sub-circuit underneath @c wires[0..1] of other cmps. */
+  std::unordered_map<gate_t, bool> continuous_support_cache;
   unsigned resolved = 0;
 
   /* Snapshot the cmp gate ids before we start mutating: in-place
@@ -656,17 +742,30 @@ unsigned runRangeCheck(GenericCircuit &gc)
     }
 
     /* Continuous EQ / NE shortcut: P(X = c) = 0 and P(X != c) = 1
-     * exactly for any continuous X (point equality has measure zero
-     * under a continuous distribution).  Universal across semirings:
-     * the gate_zero / gate_one rewrite is meaningful in every
-     * semiring (not just probability), so the resolution belongs
-     * here rather than in AnalyticEvaluator.  The wires[0] !=
-     * wires[1] case is already handled by the identity shortcut
-     * above. */
+     * exactly when at least one side has a continuous distribution
+     * (point equality has measure zero under any continuous
+     * distribution).  Universal across semirings: the gate_zero /
+     * gate_one rewrite is meaningful in every semiring (not just
+     * probability), so the resolution belongs here rather than in
+     * AnalyticEvaluator.
+     *
+     * @c hasOnlyContinuousSupport widens the test beyond a bare
+     * @c gate_rv leaf: heterogeneous-rate exponential sums, products
+     * of independent continuous RVs, and Bernoulli mixtures over
+     * two continuous arms all qualify because their distribution
+     * has no point-mass component.  Categorical mixtures (point
+     * masses at each outcome value) and pure-deterministic
+     * @c gate_value sub-circuits do NOT qualify and fall through to
+     * the agg / interval / AnalyticEvaluator paths.
+     *
+     * The @c wires[0] == @c wires[1] case is already handled by the
+     * identity shortcut above. */
     if (op == ComparisonOperator::EQ ||
         op == ComparisonOperator::NE) {
-      bool lhs_continuous = (gc.getGateType(wires[0]) == gate_rv);
-      bool rhs_continuous = (gc.getGateType(wires[1]) == gate_rv);
+      bool lhs_continuous = hasOnlyContinuousSupport(gc, wires[0],
+                                                     continuous_support_cache);
+      bool rhs_continuous = hasOnlyContinuousSupport(gc, wires[1],
+                                                     continuous_support_cache);
       if (lhs_continuous || rhs_continuous) {
         double p = (op == ComparisonOperator::EQ) ? 0.0 : 1.0;
         gc.resolveCmpToBernoulli(c, p);
