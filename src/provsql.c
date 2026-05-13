@@ -1230,13 +1230,11 @@ static int rv_cmp_index(const constants_t *constants, Oid funcoid)
  *        binary-coercible cast to @c uuid.
  *
  * Operand of the comparison may be a Var, a constant lifted by an
- * implicit cast, or another OpExpr (e.g. <tt>a + b</tt>).  After
- * the cached-scalar removal @c random_variable and @c uuid share
- * the same byte layout, so we emit a @c RelabelType node rather
- * than a @c FuncExpr -- the planner sees a zero-cost type relabel
- * and the executor doesn't dispatch through a runtime conversion
- * function (which would otherwise resolve to InvalidOid since the
- * old @c random_variable_uuid() SQL function no longer exists).
+ * implicit cast, or another OpExpr (e.g. <tt>a + b</tt>).
+ * @c random_variable and @c uuid share the same byte layout, so we
+ * emit a @c RelabelType node -- the planner sees a zero-cost type
+ * relabel, the executor never dispatches through a runtime
+ * conversion function.
  */
 static Expr *
 wrap_random_variable_uuid(Node *operand, const constants_t *constants)

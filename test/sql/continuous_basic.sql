@@ -22,9 +22,9 @@ SELECT get_gate_type((provsql.as_random(42))::uuid) AS const_kind;
 SELECT get_extra((provsql.as_random(42))::uuid) AS const_extra;
 
 -- Text IO round-trips: reparsing the printed form yields the same
--- struct.  After the cached-scalar removal a random_variable is a
--- thin UUID wrapper, so the text form is the bare hyphenated UUID
--- and equality on the UUID is sufficient to certify the round-trip.
+-- struct.  A random_variable is a thin UUID wrapper, so the text
+-- form is the bare hyphenated UUID and equality on the UUID is
+-- sufficient to certify the round-trip.
 WITH r AS (SELECT provsql.as_random(3.14) AS v)
 SELECT
   (v::text::random_variable)::uuid = (v)::uuid AS uuid_roundtrip

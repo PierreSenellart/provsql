@@ -16,9 +16,9 @@ and an `ALTER EXTENSION provsql UPDATE` is sufficient.
 
 ## First-class random variables
 
-A new `random_variable` composite type (UUID + cached scalar)
-carries a probability distribution per row.  Constructors live in
-the `provsql` schema:
+A new `random_variable` type (a thin UUID wrapper,
+binary-coercible with `uuid`) carries a probability distribution
+per row.  Constructors live in the `provsql` schema:
 
 - `provsql.normal(μ, σ)`, `provsql.uniform(a, b)`,
   `provsql.exponential(λ)`, `provsql.erlang(k, λ)` for the four

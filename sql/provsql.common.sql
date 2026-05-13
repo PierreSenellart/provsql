@@ -1517,13 +1517,14 @@ CREATE OPERATOR > (
 
 /** @defgroup random_variable_type Type for continuous random variables
  *
- *  Custom type <tt>random_variable</tt> that pairs a provenance gate
- *  UUID with a cached scalar value, used to expose continuous
- *  probabilistic c-tables in SQL.  The UUID indexes either a
- *  <tt>gate_rv</tt> (an actual distribution) or a <tt>gate_value</tt>
- *  (a zero-variance constant produced by <tt>provsql.as_random</tt>);
- *  in both cases the cached scalar is convenient for callers that
- *  want the literal without re-parsing the gate's <tt>extra</tt> field.
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
  *
  *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
  *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
@@ -1561,11 +1562,11 @@ CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
   AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Binary-coercible cast random_variable -> uuid.
- *  After the cached-scalar removal a random_variable is byte-for-byte
- *  a pg_uuid_t (alignment char, length 16), so WITHOUT FUNCTION lets
- *  PostgreSQL reinterpret the bytes at zero runtime cost.  The cast
- *  is IMPLICIT so a `provsql` column or any random_variable
- *  expression flows directly into any function expecting a uuid. */
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is IMPLICIT so a `provsql`
+ *  column or any random_variable expression flows directly into any
+ *  function expecting a uuid. */
 CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS IMPLICIT;
 CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
 
@@ -1588,7 +1589,7 @@ $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
  *
  * Creates a fresh <tt>gate_rv</tt> with @c "normal:μ,σ" stored in
  * the gate's @c extra field, and returns a <tt>random_variable</tt>
- * pointing at it.  The cached scalar is @c NaN.
+ * pointing at it.
  *
  * Validation:
  * - @p mu and @p sigma must be finite (no @c NaN, no @c ±Infinity).
@@ -2012,7 +2013,7 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * Creates a <tt>gate_value</tt> carrying the constant's text form so
  * that comparisons against a <tt>random_variable</tt> column produce
  * the same circuit shape regardless of whether the operand is an
- * actual RV or a literal constant.  The cached scalar is the constant.
+ * actual RV or a literal constant.
  *
  * Marked <tt>IMMUTABLE</tt>: the gate UUID is derived deterministically
  * from the constant via the same v5 convention as <tt>provenance_semimod</tt>'s
@@ -2094,9 +2095,7 @@ CREATE CAST (numeric AS random_variable)
  * existed.
  *
  * Arithmetic operators build a @c gate_arith via @c provenance_arith
- * and return a new @c random_variable whose cached scalar is
- * @c NaN (the cached scalar is meaningful only on @c gate_rv leaves
- * and @c gate_value constants from @c as_random).
+ * and return a new @c random_variable wrapping its UUID.
  *
  * Comparison operators are placeholders that return @c boolean and
  * raise if executed -- the @c boolean return type is required so that

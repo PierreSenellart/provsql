@@ -7,13 +7,10 @@
  *
  * On-disk and on-wire text format: the canonical
  * @c xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx UUID form (identical to
- * PostgreSQL's @c uuid).  No leading parenthesis / cached scalar / closing
- * parenthesis: every C++ evaluator dispatches on the gate behind the
- * UUID rather than any cached scalar, so the scalar is not load-bearing
- * and only complicated the text I/O.  A binary-coercible
- * @c random_variable -> @c uuid cast (declared @c WITHOUT @c FUNCTION
- * since the two types share their byte layout) keeps SQL ergonomics:
- * an @c rv-typed column flows directly into any function that accepts
+ * PostgreSQL's @c uuid).  A binary-coercible @c random_variable
+ * -> @c uuid cast (declared @c WITHOUT @c FUNCTION since the two
+ * types share their byte layout) keeps SQL ergonomics: an
+ * @c rv-typed column flows directly into any function that accepts
  * a @c uuid at zero runtime cost.
  */
 #include "postgres.h"
