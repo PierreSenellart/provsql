@@ -506,13 +506,13 @@ to a list of outcomes:
              ARRAY[0.2, 0.5, 0.3]::double precision[],
              ARRAY[0, 1, 2]::double precision[]);
 
-Categoricals share UUIDs through a v5 hash of their wires, so two
-``categorical(probs, outcomes)`` calls with the same
-arrays produce the same gate. Calls with the same arrays but
-distinct fresh ``gate_input`` keys (in the underlying block
-encoding) remain independent; in practice the constructor
-mints a fresh key per call, so two calls with the same arrays
-produce two *independent* categorical draws.
+Each ``categorical(probs, outcomes)`` call mints a fresh block
+anchor, so two calls with the same arrays produce two
+*independent* categorical draws. (Exception: a single-outcome
+categorical, where exactly one entry of ``probs`` is positive,
+collapses to :sqlfunc:`as_random` of the corresponding outcome at
+construction time; two such calls with the same outcome value
+then share the v5-keyed ``as_random`` gate.)
 
 .. note::
 
@@ -555,15 +555,6 @@ deterministic scalars to ``random_variable`` columns:
     The empty-group identity is :sqlfunc:`as_random`
     ``(1)``.
 
-The aggregates lower to *semimodule-of-mixtures* shape via
-``rv_aggregate_semimod``: each per-row argument ``X_i`` is
-wrapped in ``mixture(prov_i, X_i, as_random(identity))``
-so the aggregate's effective semantics become the natural lift of
-the semimodule-provenance machinery to RV-valued semimodules. The
-``INITCOND = '{}'`` convention on all three aggregates guarantees
-the FFUNC runs even on an empty group, which is what lets the
-empty-group identity be controlled per aggregate.
-
 .. note::
 
    ``AVG`` returns ``NaN`` when every row's provenance is false
@@ -573,11 +564,8 @@ empty-group identity be controlled per aggregate.
    effective groups, filter by ``probability_evaluate(provenance())
    > 0`` before averaging.
 
-The following aggregates over ``random_variable`` are not yet
-supported: ``MIN``, ``MAX``, ``stddev``, ``covar_pop``,
-percentile aggregates. ``COUNT`` over a tracked
-``random_variable`` column goes through the standard ``COUNT``
-path on the ``provsql`` UUID column.
+``COUNT`` over a tracked ``random_variable`` column goes through
+the standard ``COUNT`` path on the ``provsql`` UUID column.
 
 Studio Integration
 ------------------
@@ -609,8 +597,8 @@ writing and tracked as separate follow-ups:
 - ``EXCEPT`` and ``SELECT DISTINCT`` on relations that carry
   ``random_variable`` columns.
 - ``MIN``, ``MAX``, percentile aggregates over
-  ``random_variable``; the broader covariance family
-  (``covar_pop``, ``stddev`` …) and other Tier B aggregates.
+  ``random_variable``, and the broader covariance family
+  (``covar_pop``, ``stddev`` …).
 - Where-provenance crossed with random variables (the
   column-level tracking layered on top of an RV-bearing query is
   not yet defined).
