@@ -153,6 +153,7 @@ _SQL_FUNC_MAP = {
     # Sampling / histogram / simplifier introspection
     'rv_histogram':             '/doxygen-sql/html/group__circuit__introspection.html#ga4e287ff30a597e203f43c80d12098c89',
     'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#gaec7d70d0f94f8225861e3377682ce348',
+    'rv_analytical_curves':     '/doxygen-sql/html/group__circuit__introspection.html#ga927310c0e7a80b6b092149b66d679ffb',
     'simplified_circuit_subgraph': '/doxygen-sql/html/group__circuit__introspection.html#ga7717079ec6b1f50ecb1a5a9fd5b15531',
 }
 
