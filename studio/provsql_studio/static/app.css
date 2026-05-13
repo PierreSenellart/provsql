@@ -852,6 +852,7 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
 
 /* ───────── shared site footer (mirrors website + docs) ───────── */
 #provsql-site-footer {
+  position: relative;
   text-align: center;
   padding: 0.8em 1em;
   background: var(--purple-900);
@@ -868,6 +869,19 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
 #provsql-site-footer .sep {
   margin: 0 0.4em;
   color: rgba(244,240,250,0.4);
+}
+#provsql-site-footer .versions {
+  position: absolute;
+  right: 1em;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.75rem;
+  color: rgba(244,240,250,0.45);
+  letter-spacing: 0.01em;
+}
+#provsql-site-footer .versions span:not(:empty) + span:not(:empty)::before {
+  content: " · ";
+  color: rgba(244,240,250,0.3);
 }
 
 /* "No database picked at launch" banner : wedged between the nav and

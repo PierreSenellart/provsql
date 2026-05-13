@@ -27,6 +27,7 @@ import psycopg.conninfo
 import sqlparse
 from flask import Flask, jsonify, redirect, request, send_from_directory
 
+from . import __version__ as STUDIO_VERSION
 from . import circuit as circuit_mod
 from . import db
 
@@ -171,6 +172,7 @@ def create_app(
             info["search_path"],
         )
         info["db_is_auto"] = app.config.get("DB_IS_AUTO", False)
+        info["studio_version"] = STUDIO_VERSION
         # Send back a password-stripped DSN so the connection editor
         # can prefill its input without leaking secrets to the page.
         # The user re-types the password if they need to switch host
@@ -249,7 +251,9 @@ def create_app(
             old_pool.close()
         except Exception:
             pass
-        return jsonify(db.conn_info(new_pool))
+        info = db.conn_info(new_pool)
+        info["studio_version"] = STUDIO_VERSION
+        return jsonify(info)
 
     @app.get("/api/databases")
     def api_databases():

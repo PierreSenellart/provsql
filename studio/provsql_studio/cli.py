@@ -6,6 +6,8 @@ import logging
 import re
 import sys
 
+from . import __version__
+
 
 # Endpoints the front-end polls on a timer and that would otherwise drown
 # out genuine activity in the access log. The connection-status dot polls
@@ -30,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="provsql-studio",
         description="Web UI for the ProvSQL PostgreSQL extension.",
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"provsql-studio {__version__}",
     )
     p.add_argument(
         "--dsn",

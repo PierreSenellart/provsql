@@ -559,9 +559,10 @@ def conn_info(pool: ConnectionPool) -> dict:
             "SELECT current_user, current_database(), "
             "       coalesce(inet_server_addr()::text, ''), "
             "       coalesce(inet_server_port()::text, ''), "
-            "       array_to_string(current_schemas(false), ', ')"
+            "       array_to_string(current_schemas(false), ', '), "
+            "       (SELECT extversion FROM pg_extension WHERE extname = 'provsql')"
         )
-        user, database, host, port, search_path = cur.fetchone()
+        user, database, host, port, search_path, ext_version = cur.fetchone()
         # Numeric server version, e.g. 130000 for PG 13, 140000 for PG 14.
         # Surfaced so the UI can gate features that depend on PG-version-
         # specific objects (currently `tstzmultirange` for sr_temporal).
@@ -573,6 +574,7 @@ def conn_info(pool: ConnectionPool) -> dict:
         "port": port or None,
         "search_path": search_path,
         "server_version": server_version,
+        "extension_version": ext_version or None,
     }
 
 

@@ -647,6 +647,14 @@
       if (window.ProvsqlStudio.syncCompiledSemiringAvailability) {
         window.ProvsqlStudio.syncCompiledSemiringAvailability();
       }
+      // Footer version chip: ProvSQL extension version (NULL when the
+      // extension is not installed on the connected database) and
+      // Studio package version. Discreet — runs once per /api/conn poll
+      // and is a no-op if the spans aren't present (e.g. tests).
+      const extEl = document.getElementById('version-ext');
+      const studioEl = document.getElementById('version-studio');
+      if (extEl) extEl.textContent = c.extension_version ? `ProvSQL ${c.extension_version}` : '';
+      if (studioEl) studioEl.textContent = c.studio_version ? `Studio ${c.studio_version}` : '';
       el.textContent = `${c.user}@${c.database}`;
       if (c.host) el.title = `host: ${c.host}`;
       if (dot) dot.classList.remove('is-offline');
