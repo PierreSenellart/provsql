@@ -2609,7 +2609,7 @@ DECLARE
   n integer;
   i integer;
   prod_state uuid[] := '{}';
-  one_rv random_variable;
+  one_rv provsql.random_variable;
   gtype provsql.provenance_gate;
   children uuid[];
   prov_i uuid;
