@@ -17,8 +17,9 @@ The Scenario
 
 A municipal observatory operates a small air-quality sensor
 network. Sensors of three different vendors report a
-:math:`PM_{2.5}` concentration (micrograms per cubic metre) on a
-fixed schedule. The sensors differ in calibration and noise
+:math:`PM_{2.5}` concentration (*fine particulate matter*, i.e.
+airborne particles with aerodynamic diameter at most 2.5 μm,
+expressed in micrograms per cubic metre) on a fixed schedule. The sensors differ in calibration and noise
 characteristics:
 
 * high-end units report ``Normal(μ, σ)`` with small σ;
@@ -29,13 +30,13 @@ characteristics:
   pass count.
 
 A reference station with a calibrated lab-grade instrument
-contributes deterministic readings via the implicit
-``numeric → random_variable`` cast.
+contributes deterministic readings.
 
 Regulatory categories partition the value axis: *Good* below 12,
-*Moderate* between 12.1 and 35, *Unhealthy* above 35.1. Each
-station has a Bernoulli probability of being in calibration on a
-given day. A separate batch table of *historical* readings carries
+*Moderate* between 12.1 and 35, *Unhealthy* above 35.1 (loosely
+following the US EPA AQI breakpoints for PM2.5 in their pre-2024
+form, simplified to three tiers). Each station has a Bernoulli
+probability of being in calibration on a given day. A separate batch table of *historical* readings carries
 the same shape so cross-batch queries via ``UNION ALL`` are
 meaningful.
 
