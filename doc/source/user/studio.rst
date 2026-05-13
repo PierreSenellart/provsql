@@ -404,13 +404,15 @@ the right.
 
 .. figure:: /_static/studio/distribution-profile.png
    :alt: The eval-strip Distribution profile panel showing the
-         support interval, the mean and standard deviation, and
-         an inline-SVG histogram of the sub-circuit's
-         distribution.
+         support interval, the mean and standard deviation, an
+         inline-SVG histogram of the sub-circuit's distribution,
+         and the analytical Normal(28, 2) PDF curve overlaid on
+         the MC bars.
 
    The *Distribution profile* eval-strip panel on a ``gate_rv``
    ``N(28, 2)`` leaf: header stats (support, :math:`\mu`,
-   :math:`\sigma`), an inline-SVG histogram, and a PDF/CDF
+   :math:`\sigma`), an inline-SVG histogram with the analytical
+   PDF overlaid as a smooth terracotta curve, and a PDF/CDF
    toggle on the right.
 
 The same group hosts a *Sample* entry that draws raw samples
