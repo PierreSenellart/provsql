@@ -268,11 +268,17 @@ the rewrites produced by the earlier ones:
 - **HybridEvaluator** (simplifier pass) rewrites the in-memory
   circuit first: linear closure on normals (``a·X + b·Y + c`` is a
   single normal when ``X``, ``Y`` are independent normals), i.i.d.
-  exponentials sum to Erlang, ``c·X``-style shifts and scales
-  thread through mixtures and categoricals, single-child arith
-  roots and semiring identities collapse. Running first means the
-  later passes see bare ``gate_rv`` leaves wherever a closed-form
-  fold applied, instead of multi-gate ``gate_arith`` subtrees.
+  exponentials sum to Erlang, affine shift on a single uniform
+  (``a·U(p, q) + c`` is a single uniform), closed-form negation of
+  a bare Normal or Uniform (``-N(μ, σ) = N(-μ, σ)``,
+  ``-U(a, b) = U(-b, -a)``), subtraction shapes (``A − B``)
+  canonicalise to addition (``A + (−B)``) so the same pipeline
+  handles ``N − c``, ``c − N``, ``U − c``, ``c − U``,
+  ``c·X``-style shifts and scales thread through mixtures and
+  categoricals, single-child arith roots and semiring identities
+  collapse. Running first means the later passes see bare
+  ``gate_rv`` leaves wherever a closed-form fold applied, instead
+  of multi-gate ``gate_arith`` subtrees.
 - **RangeCheck** propagates support intervals through ``gate_arith``
   and tests every ``gate_cmp`` against the propagated interval. A
   comparator that is decidable from the support alone collapses

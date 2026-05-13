@@ -66,6 +66,39 @@ t
 double_to_text_shortest_roundtrip
 t
 (1 row)
+neg_normal_folds
+t
+(1 row)
+neg_uniform_folds
+t
+(1 row)
+normal_minus_constant_folds
+t
+(1 row)
+constant_minus_normal_folds
+t
+(1 row)
+uniform_minus_constant_folds
+t
+(1 row)
+constant_minus_uniform_folds
+t
+(1 row)
+uniform_plus_constant_folds
+t
+(1 row)
+neg_exp_stays
+t
+(1 row)
+exp_plus_constant_stays
+t
+(1 row)
+uniform_plus_uniform_stays
+t
+(1 row)
+neg_normal_unlocks_analytic
+t
+(1 row)
 continuous_hybrid_done
 ok
 (1 row)

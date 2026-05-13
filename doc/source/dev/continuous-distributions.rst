@@ -275,12 +275,23 @@ circuit, it runs:
    that folds family-preserving combinations into a single leaf:
    linear combinations of independent normals (``a·X + b·Y + c``
    into a single normal), sums of i.i.d. exponentials with the
-   same rate (into an Erlang), shift-and-scale of a single normal
-   through mixtures and categoricals, single-child arith roots,
-   semiring-identity drops (``gate_one`` in TIMES,
-   ``gate_zero`` in PLUS, …). The pass is invariant-preserving:
-   every transformation produces a semantically equivalent
-   circuit.
+   same rate (into an Erlang), affine combinations of a single
+   uniform (``a·U(p, q) + c`` into ``U(a·p + c, a·q + c)`` with
+   bounds reordered when ``a < 0``), closed-form negation of a
+   bare Normal or Uniform (``-N(μ, σ)`` into ``N(-μ, σ)``,
+   ``-U(a, b)`` into ``U(-b, -a)``), MINUS-to-PLUS canonicalisation
+   so subtraction shapes flow through the same PLUS pipeline,
+   shift-and-scale of a single normal through mixtures and
+   categoricals, single-child arith roots, semiring-identity drops
+   (``gate_one`` in TIMES, ``gate_zero`` in PLUS, …). The pass is
+   invariant-preserving: every transformation produces a
+   semantically equivalent circuit. Out of scope: subtraction
+   between two distinct continuous RVs of the same family
+   (``U - U`` is triangular, not uniform), shifting an exponential
+   or Erlang (``Exp + c`` has the wrong support), and negating an
+   exponential or Erlang (``-Exp`` flips the support to
+   ``(-∞, 0]``); these shapes stay as ``gate_arith`` and the MC
+   sampler handles them per-iteration.
 
    *Peephole* is borrowed from compiler engineering (McKeeman,
    CACM 8(7), 1965): a small sliding window over consecutive

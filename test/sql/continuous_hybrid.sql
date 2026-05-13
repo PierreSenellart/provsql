@@ -426,4 +426,140 @@ SELECT s LIKE '%"extra": "exponential:0.2"%'
        AS double_to_text_shortest_roundtrip
 FROM j;
 
+-- ---------------------------------------------------------------
+-- Affine closures: MINUS-to-PLUS canonicalisation, NEG-of-RV on
+-- Normal / Uniform, Uniform-family closure with a constant offset.
+--
+-- The simplifier rewrites @c MINUS(A, B) as @c PLUS(A, NEG(B)) up
+-- front, then the existing normal-family / Erlang-family closures
+-- and the new uniform-family closure handle the resulting PLUS.
+-- @c try_neg_rv (pass 2) folds a standalone @c NEG over a bare
+-- Normal / Uniform leaf; it bails on Exp / Erlang (negative support
+-- is not those families).
+--
+-- We pin via @c simplified_circuit_subgraph at depth 1: when a fold
+-- succeeds the root collapses to a single bare @c gate_rv, so the
+-- depth-1 view's only row is the root itself with the expected
+-- gate_type and extra.  Negative cases assert the root stays
+-- @c gate_arith.
+-- ---------------------------------------------------------------
+
+-- (1) -N(2, 0.5) folds to N(-2, 0.5).
+WITH q AS (SELECT - provsql.normal(2, 0.5) AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'rv'
+       AND (s -> 0 ->> 'extra') = 'normal:-2,0.5'
+       AS neg_normal_folds
+FROM j;
+
+-- (2) -U(1, 3) folds to U(-3, -1).
+WITH q AS (SELECT - provsql.uniform(1, 3) AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'rv'
+       AND (s -> 0 ->> 'extra') = 'uniform:-3,-1'
+       AS neg_uniform_folds
+FROM j;
+
+-- (3) N(2, 0.5) - 1 folds to N(1, 0.5).
+WITH q AS (SELECT provsql.normal(2, 0.5) - 1::random_variable AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'rv'
+       AND (s -> 0 ->> 'extra') = 'normal:1,0.5'
+       AS normal_minus_constant_folds
+FROM j;
+
+-- (4) 1 - N(2, 0.5) folds to N(-1, 0.5).
+WITH q AS (SELECT 1::random_variable - provsql.normal(2, 0.5) AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'rv'
+       AND (s -> 0 ->> 'extra') = 'normal:-1,0.5'
+       AS constant_minus_normal_folds
+FROM j;
+
+-- (5) U(1, 3) - 0.5 folds to U(0.5, 2.5).
+WITH q AS (SELECT provsql.uniform(1, 3) - 0.5::random_variable AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'rv'
+       AND (s -> 0 ->> 'extra') = 'uniform:0.5,2.5'
+       AS uniform_minus_constant_folds
+FROM j;
+
+-- (6) 0.5 - U(1, 3) folds to U(-2.5, -0.5).  Exercises the chain
+--     MINUS -> PLUS(value, NEG(U)) -> uniform closure with a == -1.
+WITH q AS (SELECT 0.5::random_variable - provsql.uniform(1, 3) AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'rv'
+       AND (s -> 0 ->> 'extra') = 'uniform:-2.5,-0.5'
+       AS constant_minus_uniform_folds
+FROM j;
+
+-- (7) U(1, 3) + 2 folds to U(3, 5).
+WITH q AS (SELECT provsql.uniform(1, 3) + 2::random_variable AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'rv'
+       AND (s -> 0 ->> 'extra') = 'uniform:3,5'
+       AS uniform_plus_constant_folds
+FROM j;
+
+-- Negative (8): -Exp(0.4) keeps a NEG gate (negative support is no
+-- longer exponential).
+WITH q AS (SELECT - provsql.exponential(0.4) AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'arith'
+       AND (s -> 0 ->> 'info1') = '4'  -- PROVSQL_ARITH_NEG
+       AS neg_exp_stays
+FROM j;
+
+-- Negative (9): Exp + c keeps a PLUS gate (shifted exponential is no
+-- longer exponential).
+WITH q AS (SELECT provsql.exponential(0.4) + 1::random_variable AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'arith'
+       AND (s -> 0 ->> 'info1') = '0'  -- PROVSQL_ARITH_PLUS
+       AS exp_plus_constant_stays
+FROM j;
+
+-- Negative (10): U + U with distinct uniforms keeps a PLUS gate
+-- (sum of two independent uniforms is triangular, not uniform).
+WITH q AS (SELECT provsql.uniform(0, 1) + provsql.uniform(0, 1) AS r),
+     j AS (SELECT provsql.simplified_circuit_subgraph(
+                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+              FROM q)
+SELECT (s -> 0 ->> 'gate_type') = 'arith'
+       AND (s -> 0 ->> 'info1') = '0'  -- PROVSQL_ARITH_PLUS
+       AS uniform_plus_uniform_stays
+FROM j;
+
+-- End-to-end: the new -N fold unlocks an AnalyticEvaluator path.
+-- P(-N(2.5, 0.5) < -2) = P(N(2.5, 0.5) > 2) = 1 - Phi((2-2.5)/0.5)
+-- = 1 - Phi(-1) = Phi(1) ~= 0.8413.  Before the new -N fold the
+-- comparator would have flowed to the MC marginalisation; after the
+-- simplifier folds -N(2.5, 0.5) to N(-2.5, 0.5), AnalyticEvaluator
+-- resolves the cmp via the closed-form normal CDF.  The 1e-12
+-- tolerance is the analytical-exact tolerance, only achievable when
+-- the analytical path actually fires.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_lt(-provsql.normal(2.5, 0.5),
+                                (-2)::random_variable),
+             'independent') - 0.8413447460685429) < 1e-12
+       AS neg_normal_unlocks_analytic;
+
 SELECT 'ok'::text AS continuous_hybrid_done;
