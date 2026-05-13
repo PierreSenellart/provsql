@@ -3138,9 +3138,14 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
     rte->alias = NULL;
     rte->eref = makeAlias("unnamed_join", colnames);
     rte->joinaliasvars = aliasvars;
+#if PG_VERSION_NUM >= 130000
     rte->joinleftcols = leftcols;
     rte->joinrightcols = rightcols;
     rte->joinmergedcols = 0;
+#else
+    (void) leftcols;
+    (void) rightcols;
+#endif
   }
 
   rte->rtekind = RTE_JOIN;
