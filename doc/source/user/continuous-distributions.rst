@@ -254,7 +254,9 @@ Two GUCs control the Monte Carlo fallback path. See
     fallback entirely: callers will raise rather than sample.
 
 The sample count for ``probability_evaluate(..., 'monte-carlo',
-n)`` is independent and explicit in the third argument.
+'n')`` is independent and explicit in the third argument (the
+sample count is passed as a string, like every other
+:sqlfunc:`probability_evaluate` parameter).
 
 Closed-Form Evaluation
 ----------------------

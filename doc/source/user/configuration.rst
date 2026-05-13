@@ -59,7 +59,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``-1`` seeds from ``std::random_device`` for non-deterministic
     sampling; any other integer value (including ``0``) is used as
     a literal seed for ``std::mt19937_64``, making
-    ``probability_evaluate(..., 'monte-carlo', n)`` reproducible
+    ``probability_evaluate(..., 'monte-carlo', 'n')`` reproducible
     across runs and across the Bernoulli and continuous
     (``gate_rv``) sampling paths.
 
@@ -73,7 +73,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     Set to ``0`` to disable the fallback entirely: callers raise an
     exception rather than sampling, which is useful when only
     analytical answers are acceptable. Unrelated to
-    ``probability_evaluate(..., 'monte-carlo', n)`` where the sample
+    ``probability_evaluate(..., 'monte-carlo', 'n')`` where the sample
     count is an explicit argument.
 
 .. _provsql-simplify-on-load:

@@ -310,7 +310,7 @@ Per CLAUDE memory: between any code change and `make installcheck`, the user run
   INSERT INTO sensors VALUES ('s1', provsql.normal(2.5, 0.5)), ('s2', provsql.uniform(1, 3));
   SELECT add_provenance('sensors');
   SET provsql.monte_carlo_seed = 42;
-  SELECT id, probability_evaluate(provsql, 'monte-carlo', 100000)
+  SELECT id, probability_evaluate(provsql, 'monte-carlo', '100000')
     FROM (SELECT id, reading FROM sensors WHERE reading > 2) t;
   -- s1 ≈ 0.84, s2 ≈ 0.50
   ```

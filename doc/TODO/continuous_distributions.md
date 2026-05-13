@@ -122,7 +122,7 @@ SELECT id, reading
 
 -- the result has a provsql column carrying the Boolean formula
 -- "reading_RV > 2" for each surviving tuple
-SELECT id, probability_evaluate(provsql, 'monte-carlo', 10000) AS p
+SELECT id, probability_evaluate(provsql, 'monte-carlo', '10000') AS p
   FROM (SELECT id, reading FROM sensors WHERE reading > 2) t;
 
 -- arithmetic on RVs: sum of two readings
@@ -666,7 +666,7 @@ currently rejected outright: `WHERE rv > avg(other_rvs)`,
     ('s1', provsql.normal(2.5, 0.5)),
     ('s2', provsql.uniform(1, 3));
   SELECT add_provenance('sensors');
-  SELECT id, probability_evaluate(provsql, 'monte-carlo', 10000)
+  SELECT id, probability_evaluate(provsql, 'monte-carlo', '10000')
     FROM (SELECT id, reading FROM sensors WHERE reading > 2) t;
   -- expected: s1 ~ 0.84, s2 ~ 0.50, within sampling error
   ```
