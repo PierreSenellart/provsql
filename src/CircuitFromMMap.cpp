@@ -19,6 +19,7 @@
 #include <boost/iostreams/stream.hpp>
 
 #include "CircuitFromMMap.h"
+#include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "having_semantics.hpp"
 #include "semiring/BoolExpr.h"
@@ -126,6 +127,17 @@ static void applyLoadTimeSimplification(GenericCircuit &gc)
 {
   if (provsql_simplify_on_load) {
     provsql::runRangeCheck(gc);
+    /* Fold deterministic @c gate_arith subtrees to @c gate_value
+     * before @c foldSemiringIdentities (which then collapses any
+     * single-wire @c gate_times / @c gate_plus wrappers around the
+     * resulting @c gate_value).  Constant folding is uniformly safe
+     * across consumers: a @c gate_value carries no random identity,
+     * so no shared-RV coupling is decoupled by the rewrite.  Lifts
+     * common parser shapes -- the @c -c::random_variable cast emits
+     * @c arith(NEG, value:c) where @c value:-c would round-trip
+     * identically -- into the canonical form so downstream
+     * @c collectRvConstraints / @c asRvVsConstCmp recognise them. */
+    provsql::runConstantFold(gc);
     gc.foldSemiringIdentities();
   }
 }

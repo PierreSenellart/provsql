@@ -1267,6 +1267,28 @@ void simplify(GenericCircuit &gc, gate_t g,
 
 }  // namespace
 
+unsigned runConstantFold(GenericCircuit &gc)
+{
+  unsigned counter = 0;
+  /* Walk every gate in order: @c try_eval_constant recurses through
+   * @c gate_arith children itself (via @c try_eval_constant's own
+   * recursion on @c gate_arith ops + base case at @c gate_value),
+   * so a single linear pass over the gate indices is sufficient.
+   * No DFS bookkeeping needed because the rewrite produces a
+   * @c gate_value (terminal), never another @c gate_arith. */
+  const auto nb = gc.getNbGates();
+  for (std::size_t i = 0; i < nb; ++i) {
+    auto g = static_cast<gate_t>(i);
+    if (gc.getGateType(g) != gate_arith) continue;
+    double c = try_eval_constant(gc, g);
+    if (!std::isnan(c)) {
+      replace_with_value(gc, g, c);
+      ++counter;
+    }
+  }
+  return counter;
+}
+
 unsigned runHybridSimplifier(GenericCircuit &gc)
 {
   unsigned counter = 0;

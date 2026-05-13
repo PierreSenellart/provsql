@@ -99,6 +99,33 @@ namespace provsql {
 unsigned runHybridSimplifier(GenericCircuit &gc);
 
 /**
+ * @brief Constant-fold pass over every @c gate_arith in @p gc.
+ *
+ * Walks the circuit bottom-up and replaces any @c gate_arith whose
+ * children all evaluate to scalar constants with the equivalent
+ * @c gate_value (e.g. @c arith(NEG, value:2) becomes @c value:-2,
+ * @c arith(PLUS, value:1, value:2) becomes @c value:3).
+ *
+ * Strictly a subset of @c runHybridSimplifier (only @c try_eval_constant
+ * fires; no family closures, identity drops, or mixture lifts), and
+ * therefore safe to run at load time alongside @c runRangeCheck and
+ * @c foldSemiringIdentities: the resulting @c gate_value gates carry
+ * no random identity, so no consumer's shared-RV coupling is broken
+ * by the rewrite.  The family closures stay behind the separate
+ * @c hybrid_evaluation GUC because they replace a multi-leaf subtree
+ * with a fresh @c gate_rv UUID and would decouple shared base RVs
+ * that other parts of the circuit reference.
+ *
+ * Lifts the @c -c::random_variable parser quirk (which builds an
+ * @c arith(NEG, value:c) gate rather than @c value:-c) into a clean
+ * @c gate_value before downstream consumers like
+ * @c collectRvConstraints / @c asRvVsConstCmp inspect the circuit.
+ *
+ * @return Number of gates rewritten.
+ */
+unsigned runConstantFold(GenericCircuit &gc);
+
+/**
  * @brief Marginalise unresolved continuous-island @c gate_cmp gates
  *        into Bernoulli @c gate_input leaves.
  *

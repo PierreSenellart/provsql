@@ -401,6 +401,24 @@ acceptance rate drops below the requested ``n`` within the
 budget, so the caller can either widen the budget or loosen the
 conditioning.
 
+The load-time pass ``runConstantFold`` (in ``HybridEvaluator.cpp``,
+invoked from ``CircuitFromMMap::applyLoadTimeSimplification``
+alongside ``runRangeCheck`` and ``foldSemiringIdentities``)
+folds deterministic ``gate_arith`` subtrees to ``gate_value``
+at load time. This lifts the common parser shape
+``arith(NEG, value:c)`` (produced when SQL parses
+``-c::random_variable`` as ``-(c::random_variable)``) into a
+clean ``value:-c``, so ``asRvVsConstCmp`` and friends recognise
+the comparator's constant side without callers having to
+parenthesise. The pass runs only the constant-fold rule from the
+hybrid simplifier, never the family closures or identity drops,
+because the result is always a ``gate_value`` that carries no
+random identity, so no shared-RV coupling is decoupled by the
+rewrite. The family closures stay behind the separate
+``provsql.hybrid_evaluation`` GUC, which gates ``runHybridSimplifier``
+inside the probability and view paths where the simplifier owns
+the rewritten subtree.
+
 Aggregate Dispatch
 ------------------
 
