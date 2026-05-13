@@ -128,6 +128,7 @@ test: continuous_mixture_hybrid
 test: continuous_categorical
 test: continuous_aggregation
 test: continuous_having
+test: continuous_sample_truncated
 
 # PROV export
 test: to_provxml

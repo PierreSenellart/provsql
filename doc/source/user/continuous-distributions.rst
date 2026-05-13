@@ -439,19 +439,29 @@ Two functions expose raw and binned samples for inspection or
 downstream analytics.
 
 :sqlfunc:`rv_sample` ``(token, n [, prov])`` ``RETURNS SETOF float8``
-    Draw up to ``n`` accepted Monte-Carlo samples from the scalar
-    sub-circuit rooted at ``token``, conditioning on the
-    provenance event ``prov`` (defaulting to unconditional). The
-    function is a set-returning function. Shared ``gate_rv``
-    leaves between ``token`` and ``prov`` are loaded into a
-    single joint circuit so the conditioning event's draw and the
-    value's draw share their per-iteration state.
+    Draw ``n`` samples from the scalar sub-circuit rooted at
+    ``token``, conditioning on the provenance event ``prov``
+    (defaulting to unconditional). The function is a
+    set-returning function. Shared ``gate_rv`` leaves between
+    ``token`` and ``prov`` are loaded into a single joint circuit
+    so the conditioning event's draw and the value's draw share
+    their per-iteration state.
 
-    A ``NOTICE`` is emitted when the acceptance rate yields fewer
-    than ``n`` accepted samples within the
-    ``provsql.rv_mc_samples`` budget; the SRF returns whatever
-    samples were accepted so the caller can proceed with a
-    smaller batch.
+    When the root is a bare ``gate_rv`` of a supported family
+    (Uniform / Normal / Exponential) and the event reduces to an
+    interval constraint on it, the conditional distribution is
+    sampled directly in closed form (uniform on the truncated
+    interval; memoryless shift for exponential one-sided tails;
+    inverse-CDF transform for two-sided exponential and normal).
+    100% acceptance: exactly ``n`` samples are returned even when
+    the event is a tight tail like ``X > 9.5`` over ``U(0, 10)``
+    that would degrade the rejection budget.
+
+    Otherwise the rejection path runs: ``provsql.rv_mc_samples``
+    iterations attempt to satisfy the event; a ``NOTICE`` is
+    emitted when fewer than ``n`` accept, and the SRF returns
+    whatever samples were accepted so the caller can proceed with
+    a smaller batch.
 
 :sqlfunc:`rv_histogram` ``(token, bins [, prov])`` ``RETURNS jsonb``
     Empirical histogram of the same scalar sub-circuit as
@@ -465,6 +475,11 @@ downstream analytics.
     Accepted root gates are the scalar ones: ``gate_value``
     (single bin), ``gate_rv``, and ``gate_arith``. Any other gate
     kind raises.
+
+    The same closed-form truncated sampler as :sqlfunc:`rv_sample`
+    applies when the shape qualifies, so a tight ``provsql.rv_mc_samples``
+    budget no longer fails with ``conditional MC accepted 0 of N``
+    on conditioning events that the closed-form path can handle.
 
 Example, drawing 200 samples from the truncated sensor-1 reading
 (conditioned on ``reading > 2.5``, which the planner lifts into

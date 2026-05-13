@@ -401,6 +401,22 @@ acceptance rate drops below the requested ``n`` within the
 budget, so the caller can either widen the budget or loosen the
 conditioning.
 
+:sqlfunc:`rv_sample` and :sqlfunc:`rv_histogram` additionally
+share ``MonteCarloSampler::try_truncated_closed_form_sample``: a
+direct exact-sampling fast path that fires on the same shape as
+the moment surface (bare ``gate_rv`` of Uniform / Normal /
+Exponential with an interval-extractable event). Uniform draws
+``U(lo, hi)`` on the intersected truncation; Exponential
+one-sided uses memorylessness (``X | X > c = c + Exp(λ)``),
+two-sided uses inverse-CDF via ``std::log1p`` / ``std::expm1``
+for numerical accuracy near the support boundary; Normal uses
+inverse-CDF transform with ``std::erf`` for the forward CDF and
+the Beasley-Springer-Moro rational approximation for the
+inverse. The fast path delivers exactly ``n`` samples with 100%
+acceptance even for tight tail events that previously starved
+the rejection budget. Erlang truncation and ``gate_arith``
+composite roots fall through to MC rejection unchanged.
+
 The load-time pass ``runConstantFold`` (in ``HybridEvaluator.cpp``,
 invoked from ``CircuitFromMMap::applyLoadTimeSimplification``
 alongside ``runRangeCheck`` and ``foldSemiringIdentities``)

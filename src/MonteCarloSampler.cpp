@@ -5,11 +5,15 @@
 #include "MonteCarloSampler.h"
 #include "Aggregation.h"
 #include "RandomVariable.h"
+#include "RangeCheck.h"        // collectRvConstraints
 #include "Circuit.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <random>
 #include <stack>
 #include <stdexcept>
@@ -449,6 +453,163 @@ ConditionalScalarSamples monteCarloConditionalScalarSamples(
               "Interrupted after " + std::to_string(i + 1) + " samples");
   }
   return out;
+}
+
+namespace {
+
+/**
+ * @brief Inverse standard-normal CDF, Beasley-Springer-Moro (1995).
+ *
+ * Returns @c z such that @f$\Phi(z) = p@f$.  Accurate to about
+ * @c 1e-7 over @c p ∈ [0.02425, 1 - 0.02425], with a tail
+ * rational fallback for the rest of @c (0, 1).  Callers must clamp
+ * @c p strictly inside @c (0, 1) since the function diverges at the
+ * endpoints; the truncated-normal sampler below clamps to
+ * @c [1e-15, 1 - 1e-15] before each call.
+ *
+ * Used by @c try_truncated_closed_form_sample to invert the normal
+ * CDF for inverse-CDF transform sampling.  The Beasley-Springer-Moro
+ * routine is in widespread library use (NumPy/SciPy 'norminv', etc.)
+ * and its accuracy is several orders of magnitude tighter than the
+ * sampling noise the tests can detect at 10k draws, so it's a
+ * comfortable margin.
+ */
+double inv_phi(double p)
+{
+  static const double a[] = {
+    -3.969683028665376e+01,  2.209460984245205e+02,
+    -2.759285104469687e+02,  1.383577518672690e+02,
+    -3.066479806614716e+01,  2.506628277459239e+00
+  };
+  static const double b[] = {
+    -5.447609879822406e+01,  1.615858368580409e+02,
+    -1.556989798598866e+02,  6.680131188771972e+01,
+    -1.328068155288572e+01
+  };
+  static const double c_arr[] = {
+    -7.784894002430293e-03, -3.223964580411365e-01,
+    -2.400758277161838e+00, -2.549732539343734e+00,
+     4.374664141464968e+00,  2.938163982698783e+00
+  };
+  static const double d[] = {
+     7.784695709041462e-03,  3.224671290700398e-01,
+     2.445134137142996e+00,  3.754408661907416e+00
+  };
+  static const double p_low  = 0.02425;
+  static const double p_high = 1.0 - p_low;
+
+  if (p < p_low) {
+    const double q = std::sqrt(-2.0 * std::log(p));
+    return (((((c_arr[0]*q + c_arr[1])*q + c_arr[2])*q
+              + c_arr[3])*q + c_arr[4])*q + c_arr[5])
+         / ((((d[0]*q + d[1])*q + d[2])*q + d[3])*q + 1.0);
+  }
+  if (p <= p_high) {
+    const double q = p - 0.5;
+    const double r = q * q;
+    return (((((a[0]*r + a[1])*r + a[2])*r + a[3])*r + a[4])*r + a[5]) * q
+         / (((((b[0]*r + b[1])*r + b[2])*r + b[3])*r + b[4])*r + 1.0);
+  }
+  const double q = std::sqrt(-2.0 * std::log(1.0 - p));
+  return -(((((c_arr[0]*q + c_arr[1])*q + c_arr[2])*q
+             + c_arr[3])*q + c_arr[4])*q + c_arr[5])
+        / ((((d[0]*q + d[1])*q + d[2])*q + d[3])*q + 1.0);
+}
+
+}  // namespace
+
+std::optional<std::vector<double>>
+try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
+                                 gate_t event_root, unsigned n)
+{
+  if (gc.getGateType(root) != gate_rv) return std::nullopt;
+
+  auto iv = collectRvConstraints(gc, event_root, root);
+  if (!iv.has_value()) return std::nullopt;
+  /* collectRvConstraints already intersected with the RV's natural
+   * support and clamped @c lo to @c hi for the infeasible case.  We
+   * treat any degenerate or empty interval as "not closed-form
+   * tractable" so the caller's MC fallback emits its usual
+   * "accepted 0" diagnostic. */
+  if (!(iv->first < iv->second)) return std::nullopt;
+
+  auto spec = parse_distribution_spec(gc.getExtra(root));
+  if (!spec) return std::nullopt;
+
+  std::mt19937_64 rng = seedRng();
+  std::uniform_real_distribution<double> U01(0.0, 1.0);
+
+  std::vector<double> out;
+  out.reserve(n);
+
+  switch (spec->kind) {
+    case DistKind::Uniform: {
+      /* The intersection [max(a, iv.lo), min(b, iv.hi)] is already
+       * baked into iv by collectRvConstraints, so a plain uniform
+       * draw on [iv.lo, iv.hi] is the conditional distribution. */
+      std::uniform_real_distribution<double> U(iv->first, iv->second);
+      for (unsigned i = 0; i < n; ++i) out.push_back(U(rng));
+      return out;
+    }
+    case DistKind::Exponential: {
+      const double lambda = spec->p1;
+      if (!(lambda > 0.0)) return std::nullopt;
+      const double lo = iv->first;
+      const double hi = iv->second;
+      if (std::isinf(hi)) {
+        /* X | X > lo = lo + Exp(λ) by memorylessness.  Numerically
+         * stable for arbitrarily large @c lo, where the inverse-CDF
+         * would underflow on @c 1 - exp(-λ·lo). */
+        std::exponential_distribution<double> E(lambda);
+        for (unsigned i = 0; i < n; ++i) out.push_back(lo + E(rng));
+        return out;
+      }
+      /* Two-sided truncation: inverse-CDF on @c [F(lo), F(hi)] with
+       * @c F(x) = -expm1(-λx) for accuracy near 0, and @c x =
+       * -log1p(-u)/λ for accuracy as @c u approaches 1. */
+      const double F_lo = -std::expm1(-lambda * lo);
+      const double F_hi = -std::expm1(-lambda * hi);
+      if (!(F_lo < F_hi)) return std::nullopt;
+      for (unsigned i = 0; i < n; ++i) {
+        const double u = F_lo + U01(rng) * (F_hi - F_lo);
+        out.push_back(-std::log1p(-u) / lambda);
+      }
+      return out;
+    }
+    case DistKind::Normal: {
+      const double mu    = spec->p1;
+      const double sigma = spec->p2;
+      if (!(sigma > 0.0)) return std::nullopt;
+      const double sqrt2 = std::sqrt(2.0);
+      const double alpha = (iv->first  - mu) / sigma;
+      const double beta  = (iv->second - mu) / sigma;
+      const double Phi_a = std::isfinite(alpha)
+        ? 0.5 * (1.0 + std::erf(alpha / sqrt2))
+        : (alpha < 0 ? 0.0 : 1.0);
+      const double Phi_b = std::isfinite(beta)
+        ? 0.5 * (1.0 + std::erf(beta / sqrt2))
+        : (beta < 0 ? 0.0 : 1.0);
+      if (!(Phi_a < Phi_b)) return std::nullopt;
+      /* Clamp the target probability strictly inside (0, 1) so
+       * @c inv_phi does not diverge near the asymptotes.  The 1e-15
+       * margin is well below the BSM approximation's intrinsic
+       * accuracy floor (~1e-7), so it's a safe sentinel. */
+      static constexpr double EPS = 1e-15;
+      for (unsigned i = 0; i < n; ++i) {
+        double u = Phi_a + U01(rng) * (Phi_b - Phi_a);
+        if (u < EPS)        u = EPS;
+        if (u > 1.0 - EPS)  u = 1.0 - EPS;
+        const double z = inv_phi(u);
+        out.push_back(mu + sigma * z);
+      }
+      return out;
+    }
+    case DistKind::Erlang:
+      /* Truncated Erlang requires the regularised lower incomplete
+       * gamma's inverse.  Out of scope for v1; MC fallback handles it. */
+      return std::nullopt;
+  }
+  return std::nullopt;
 }
 
 bool circuitHasRV(const GenericCircuit &gc, gate_t root)

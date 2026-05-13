@@ -1,0 +1,25 @@
+\set ECHO none
+uniform_truncation_exact
+t
+(1 row)
+exponential_memorylessness_exact
+t
+(1 row)
+exponential_two_sided_inverse_cdf
+t
+(1 row)
+normal_two_sided_inverse_cdf
+t
+(1 row)
+normal_asymmetric_truncation
+t
+(1 row)
+erlang_falls_through_to_mc
+t
+(1 row)
+histogram_tight_budget_closed_form
+t
+(1 row)
+continuous_sample_truncated_done
+ok
+(1 row)

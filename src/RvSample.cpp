@@ -70,25 +70,39 @@ rv_sample(PG_FUNCTION_ARGS)
 
     std::vector<double> samples;
     if (conditional) {
-      /* Budget: n / acceptance_floor candidate draws, capped at the
-       * GUC ceiling.  acceptance_floor = 0.001 means a 0.1% acceptance
-       * rate still delivers n samples; rates below that yield fewer
-       * samples + a NOTICE. */
-      const unsigned budget = std::min(
-        static_cast<unsigned>(1000u) * n,
-        provsql_rv_mc_samples > 0
-          ? static_cast<unsigned>(provsql_rv_mc_samples) : 1000u * n);
-      auto cs = provsql::monteCarloConditionalScalarSamples(
-                  gc, root_gate, event_gate, budget);
-      if (cs.accepted.size() > n) cs.accepted.resize(n);
-      if (cs.accepted.size() < n) {
-        ereport(NOTICE,
-                (errmsg("rv_sample: requested %u, returning %zu "
-                        "(acceptance rate %zu/%u)",
-                        n, cs.accepted.size(),
-                        cs.accepted.size(), cs.attempted)));
+      /* Closed-form truncation fast path: when the root is a bare
+       * gate_rv of a supported family (Uniform / Normal / Exponential)
+       * and the event reduces to a single interval on it, we draw
+       * exactly @c n samples directly from the truncated distribution.
+       * 100% acceptance, no NOTICE on tight events like X > 9.5 over
+       * U(0, 10) that the MC rejection path degrades on.  Falls
+       * through to the MC rejection path for un-extractable shapes
+       * (Erlang, gate_arith composites, gate_mixture roots, …). */
+      auto direct = provsql::try_truncated_closed_form_sample(
+                      gc, root_gate, event_gate, n);
+      if (direct) {
+        samples = std::move(*direct);
+      } else {
+        /* Budget: n / acceptance_floor candidate draws, capped at the
+         * GUC ceiling.  acceptance_floor = 0.001 means a 0.1% acceptance
+         * rate still delivers n samples; rates below that yield fewer
+         * samples + a NOTICE. */
+        const unsigned budget = std::min(
+          static_cast<unsigned>(1000u) * n,
+          provsql_rv_mc_samples > 0
+            ? static_cast<unsigned>(provsql_rv_mc_samples) : 1000u * n);
+        auto cs = provsql::monteCarloConditionalScalarSamples(
+                    gc, root_gate, event_gate, budget);
+        if (cs.accepted.size() > n) cs.accepted.resize(n);
+        if (cs.accepted.size() < n) {
+          ereport(NOTICE,
+                  (errmsg("rv_sample: requested %u, returning %zu "
+                          "(acceptance rate %zu/%u)",
+                          n, cs.accepted.size(),
+                          cs.accepted.size(), cs.attempted)));
+        }
+        samples = std::move(cs.accepted);
       }
-      samples = std::move(cs.accepted);
     } else {
       samples = provsql::monteCarloScalarSamples(gc, root_gate, n);
     }

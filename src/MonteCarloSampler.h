@@ -38,6 +38,7 @@
 #ifndef PROVSQL_MONTE_CARLO_SAMPLER_H
 #define PROVSQL_MONTE_CARLO_SAMPLER_H
 
+#include <optional>
 #include <vector>
 
 #include "GenericCircuit.h"
@@ -167,6 +168,43 @@ struct ConditionalScalarSamples {
  */
 ConditionalScalarSamples monteCarloConditionalScalarSamples(
   const GenericCircuit &gc, gate_t root, gate_t event_root, unsigned samples);
+
+/**
+ * @brief Try to draw @p n exact samples from the conditional
+ *        distribution of @p root @b given @p event_root via closed-form
+ *        truncation, bypassing MC rejection.
+ *
+ * Fires only when @p root is a bare @c gate_rv whose family admits a
+ * closed-form truncation (@c Uniform / @c Exponential / @c Normal)
+ * and @c collectRvConstraints can extract a sound interval from
+ * @p event_root.  Other shapes (arith composites, mixtures, Erlang,
+ * un-extractable events) return @c std::nullopt so the caller can fall
+ * back to @c monteCarloConditionalScalarSamples.
+ *
+ * Sampling kernels:
+ * - <b>Uniform(a, b)</b>: @c collectRvConstraints already intersects
+ *   with @c [a, b], so the draw is a plain @c U(lo, hi) on the
+ *   intersected interval.  100% acceptance.
+ * - <b>Exponential(λ)</b>, one-sided @c X > c: memorylessness yields
+ *   @c c + Exp(λ).  Two-sided @c lo < X < hi: inverse-CDF via
+ *   @c std::log1p / @c std::expm1 for numerical accuracy near the
+ *   support boundary.
+ * - <b>Normal(μ, σ)</b>: inverse-CDF transform.  Forward CDF uses
+ *   @c std::erf (matching @c AnalyticEvaluator::cdfAt); inverse uses
+ *   the Beasley-Springer-Moro rational approximation (~1e-7 accuracy,
+ *   ample for sampling).
+ *
+ * Empty / degenerate truncations (@c lo >= @c hi after intersection)
+ * also return @c std::nullopt so the caller's MC fallback can emit
+ * its usual "accepted 0" diagnostic.
+ *
+ * The RNG is seeded from @c provsql.monte_carlo_seed identically to
+ * @c monteCarloScalarSamples, so a pinned seed gives reproducible
+ * output on either path.
+ */
+std::optional<std::vector<double>>
+try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
+                                 gate_t event_root, unsigned n);
 
 }  // namespace provsql
 

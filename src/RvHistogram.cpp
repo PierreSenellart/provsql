@@ -136,14 +136,27 @@ rv_histogram(PG_FUNCTION_ARGS)
 
       std::vector<double> samples;
       if (conditional) {
-        auto cs = provsql::monteCarloConditionalScalarSamples(
-                    gc, root_gate, event_gate, N);
-        if (cs.accepted.empty())
-          provsql_error(
-            "rv_histogram: conditional MC accepted 0 of %u samples; "
-            "raise provsql.rv_mc_samples or check that the event is satisfiable",
-            cs.attempted);
-        samples = std::move(cs.accepted);
+        /* Closed-form truncation fast path: when the root is a bare
+         * gate_rv of a supported family and the event reduces to an
+         * interval on it, draw exactly @c N samples from the truncated
+         * distribution.  100% acceptance, so the "accepted 0 of N"
+         * error below no longer fires on tight events that previously
+         * starved the MC rejection path. */
+        auto direct = provsql::try_truncated_closed_form_sample(
+                        gc, root_gate, event_gate, N);
+        if (direct) {
+          samples = std::move(*direct);
+        } else {
+          auto cs = provsql::monteCarloConditionalScalarSamples(
+                      gc, root_gate, event_gate, N);
+          if (cs.accepted.empty())
+            provsql_error(
+              "rv_histogram: conditional MC accepted 0 of %u samples; "
+              "raise provsql.rv_mc_samples or check that the event is "
+              "satisfiable",
+              cs.attempted);
+          samples = std::move(cs.accepted);
+        }
       } else {
         samples = provsql::monteCarloScalarSamples(gc, root_gate, N);
       }
