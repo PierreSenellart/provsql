@@ -80,16 +80,19 @@ shared underlying randomness.
     ``Normal(μ, σ)`` with mean ``μ`` and standard deviation ``σ``.
     Both arguments must be finite; ``σ`` must be non-negative. The
     degenerate ``σ = 0`` case is silently routed through
-    :sqlfunc:`as_random` to share the constant-token gate.
+    :sqlfunc:`as_random` to share the constant-token gate. See
+    `Wikipedia <https://en.wikipedia.org/wiki/Normal_distribution>`__.
 
 :sqlfunc:`uniform` ``(a, b)``
     ``Uniform[a, b]`` with bounds ``a ≤ b``. Both bounds must be
     finite. The degenerate ``a = b`` case is routed through
-    :sqlfunc:`as_random`.
+    :sqlfunc:`as_random`. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>`__.
 
 :sqlfunc:`exponential` ``(lambda)``
     ``Exponential(λ)`` with rate ``λ > 0`` and mean ``1/λ``. There
-    is no degenerate form: ``λ = 0`` raises.
+    is no degenerate form: ``λ = 0`` raises. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Exponential_distribution>`__.
 
 :sqlfunc:`erlang` ``(k, lambda)``
     ``Erlang(k, λ)`` is the sum of ``k`` independent
@@ -98,7 +101,8 @@ shared underlying randomness.
     closed-form CDF and moments fire directly, rather than the
     sampler having to draw ``k`` exponentials per iteration. The
     degenerate ``k = 1`` case is routed through
-    :sqlfunc:`exponential` to share its gate.
+    :sqlfunc:`exponential` to share its gate. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Erlang_distribution>`__.
 
 :sqlfunc:`categorical` ``(probs, outcomes)``
     Discrete distribution over the values in ``outcomes`` with the
@@ -106,7 +110,8 @@ shared underlying randomness.
     the same length, every probability must be in ``[0, 1]``, and
     the probabilities must sum to ``1`` within ``1e-9``. A
     single-outcome categorical reduces to
-    :sqlfunc:`as_random` at construction.
+    :sqlfunc:`as_random` at construction. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Categorical_distribution>`__.
 
 :sqlfunc:`mixture` ``(p, x, y)`` *(two overloads)*
     Bernoulli-weighted choice between two random variables: with
@@ -124,12 +129,16 @@ shared underlying randomness.
       hood. Each call mints a new coin, so two
       ``mixture(0.5, X, Y)`` calls draw independently.
 
+    See `Wikipedia
+    <https://en.wikipedia.org/wiki/Mixture_distribution>`__.
+
 :sqlfunc:`as_random` ``(c)``
     Lift a numeric constant into a deterministic ``random_variable``
     (a Dirac point mass at ``c``). Three overloads exist
     (``double precision``, ``integer``, ``numeric``) and the same
     constants share a UUID. ``c = -0.0`` is canonicalised to
-    ``+0.0`` so the two zeros refer to the same gate.
+    ``+0.0`` so the two zeros refer to the same gate. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Degenerate_distribution>`__.
 
 Implicit casts ``integer → random_variable``, ``numeric →
 random_variable`` and ``double precision → random_variable``
