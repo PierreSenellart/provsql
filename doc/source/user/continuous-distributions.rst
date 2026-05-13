@@ -25,8 +25,8 @@ Introduction
 
 A *random-variable column* stores, in each row, a token referring to a
 probability distribution rather than a single value. The token is a
-composite ``random_variable`` (a UUID plus a cached scalar for
-deterministic constants) that fits in any ``CREATE TABLE``:
+``random_variable``, a thin wrapper around the UUID of a provenance
+gate, that fits in any ``CREATE TABLE``:
 
 .. code-block:: postgresql
 

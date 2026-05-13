@@ -62,9 +62,13 @@ random-variable-constant mode used by :sqlfunc:`as_random`.
 SQL Surface
 -----------
 
-The composite type ``random_variable`` mirrors the ``agg_token``
-pattern (UUID + cached scalar). Its IO functions live in
-:cfile:`random_variable_type.c`; the C++-side helpers
+The type ``random_variable`` is a thin wrapper around the UUID of
+the provenance gate behind the variable: the UUID is the single
+source of truth, and every downstream evaluator (``MonteCarloSampler``,
+``AnalyticEvaluator``, ``Expectation``, ``RangeCheck``,
+``HybridEvaluator``) dispatches on the gate it points at, parsing
+the distribution from the gate's ``extra`` blob. Its IO functions
+live in :cfile:`random_variable_type.c`; the C++-side helpers
 (``RandomVariable::parseExtra``, ``RandomVariable::mean``
 and so on) live in :cfile:`RandomVariable.cpp` and are
 the parsers consumed by every downstream evaluator.

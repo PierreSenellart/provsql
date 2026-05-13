@@ -596,15 +596,19 @@ wider gate vocabulary. Concretely:
 ### `agg_token` and `random_variable`: a unification opportunity
 
 `agg_token` and `random_variable` are two presentations of the
-same algebraic object. Both pair a UUID with a cached scalar; both
-ride the same six-comparator surface (`< <= = <> >= >`); both are
-turned into `gate_cmp` nodes by the planner hook and combined into
-the row's provenance via `provenance_times` / `provenance_plus`.
-They differ in *how* the UUID's value distribution is computed:
-`agg_token`'s is combinatorial (finite worlds enumerated by
-`provsql_having` over the surrounding `gate_agg`'s children);
-`random_variable`'s is continuous (sampled from `<random>` by
-`monteCarloRV`).
+same algebraic object. Both are UUID-indexed handles on a
+provenance gate; both ride the same six-comparator surface
+(`< <= = <> >= >`); both are turned into `gate_cmp` nodes by the
+planner hook and combined into the row's provenance via
+`provenance_times` / `provenance_plus`. They differ in *how* the
+UUID's value distribution is computed: `agg_token`'s is
+combinatorial (finite worlds enumerated by `provsql_having` over
+the surrounding `gate_agg`'s children); `random_variable`'s is
+continuous (sampled from `<random>` by `monteCarloRV`). They
+differ structurally only in that `agg_token` additionally carries
+a running aggregate value alongside the UUID (used by
+`agg_token_out`'s `value (*)` display), whereas `random_variable`
+is a thin UUID wrapper.
 
 Three concrete unification levers. None is required for any one
 priority, but flagging them here keeps subsequent priorities from
