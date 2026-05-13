@@ -282,6 +282,17 @@ circuit, it runs:
    every transformation produces a semantically equivalent
    circuit.
 
+   *Peephole* is borrowed from compiler engineering (McKeeman,
+   CACM 8(7), 1965): a small sliding window over consecutive
+   instructions / gates, a fixed list of local pattern ->
+   replacement rules, iterated to a fixed point. Each rule here
+   looks at one ``gate_arith`` plus its immediate children,
+   never further, matching the original scope. Contrast with
+   ``RangeCheck`` (:cfile:`RangeCheck.cpp`), which propagates a
+   data-flow fact (the support interval) through the whole
+   circuit, and with the island decomposer below, which uses a
+   global union-find over base-RV footprints.
+
 2. **Island decomposition** (``HybridEvaluator::decompose``)
    that splits a multi-cmp query into independent islands
    (connected components on a union-find over base-RV

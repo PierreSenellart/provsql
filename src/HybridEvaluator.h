@@ -8,6 +8,15 @@
  * (@c AnalyticEvaluator).  This header exposes the simplifier; the
  * island decomposer will be added alongside in the same namespace.
  *
+ * The term @e peephole comes from compiler engineering (McKeeman, CACM
+ * 8(7), 1965): a small sliding window over consecutive instructions /
+ * gates, a fixed list of local pattern -> replacement rules, iterated
+ * to a fixed point.  Each rule below looks at one @c gate_arith plus
+ * its immediate children, never further, which is exactly the
+ * peephole scope.  Contrast with @c RangeCheck (global interval-
+ * propagation walk) and @c runHybridDecomposer (union-find over
+ * base-RV footprints across the whole circuit).
+ *
  * The simplifier rewrites @c gate_arith gates in-place using closure
  * rules that preserve the gate's scalar value in every world:
  * - Constant folding of @c gate_arith subtrees over only @c gate_value
