@@ -247,6 +247,27 @@ single ``gate_rv`` -- their equality predicate would otherwise
 have flowed all the way down to the MC marginalisation only to
 return 0 in finite precision anyway.
 
+When neither side is purely continuous, a second analytical path
+in ``RangeCheck`` fires: ``collectDiracMassMap`` extracts the
+``(value → mass)`` map from each side (recursing into
+categoricals and Bernoulli mixtures of ``as_random`` /
+``gate_value`` branches), and the cmp resolves exactly via the
+independent-Dirac sum-product
+
+  ``P(X = Y) = Σ_{v ∈ M_X ∩ M_Y} M_X(v) · M_Y(v)``.
+
+Continuous components on either side contribute zero by
+measure-zero arguments (continuous vs Dirac and continuous vs
+continuous), so they need not appear in the sum. Independence is
+required for the factoring to hold; ``collectRandomLeaves`` walks
+both sides for the union of ``gate_rv`` + ``gate_input`` leaves
+and the shortcut bails on any overlap (e.g. two mixtures sharing
+a Bernoulli ``p_token``). Bernoulli mixtures whose ``p_token`` is
+a compound Boolean (whose static probability would require a
+recursive ``probability_evaluate`` call) also bail. The
+sum-product subsumes the disjoint-Dirac case as its boundary
+(empty intersection ⇒ ``P(X = Y) = 0``).
+
 Expectation Semiring
 --------------------
 

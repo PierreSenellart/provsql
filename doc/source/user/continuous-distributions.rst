@@ -292,7 +292,11 @@ the rewrites produced by the earlier ones:
   identically false whenever at least one side has a continuous
   distribution, even when neither is a bare leaf, including
   composites like ``Exp(λ_1) + Exp(λ_2)`` with distinct rates, or
-  a Bernoulli mixture over two continuous arms).
+  a Bernoulli mixture over two continuous arms). When both sides
+  have statically-known discrete masses (categoricals, mixtures of
+  ``as_random`` branches, …) and are independent, ``P(X = Y)`` is
+  computed exactly by summing the per-outcome mass products; the
+  disjoint-outcome case is the boundary where the sum is 0.
 - **AnalyticEvaluator** computes the exact CDF of a single
   distribution's ``gate_cmp`` (e.g. ``Normal > 2``,
   ``Uniform <= 1.5``, ``Exponential >= λ⁻¹``) via the standard

@@ -682,6 +682,158 @@ bool hasOnlyContinuousSupport(const GenericCircuit &gc, gate_t g,
   return result;
 }
 
+/**
+ * @brief Recursive collection of the @c gate_rv and @c gate_input
+ *        leaves reachable from @p g.
+ *
+ * The result is a sub-circuit's "random-source footprint": two
+ * sub-circuits are independent iff their random-source sets are
+ * disjoint.  Used to gate the exact-EQ Dirac sum-product below: the
+ * factoring @c P(X = Y) = Σ_v @c P(X=v)·P(Y=v) is only valid when
+ * @c X and @c Y are independent, otherwise the per-row coupling
+ * (e.g. two mixtures sharing a Bernoulli @c p_token) breaks the
+ * factoring and the sum-product silently produces the wrong
+ * probability.
+ *
+ * Descent rules: @c gate_arith and @c gate_mixture descend into all
+ * children (Bernoulli @c p_token, categorical key, mulinputs all
+ * contribute to the random footprint).  @c gate_value is a
+ * deterministic literal and contributes no random source.  Other
+ * gate types (Boolean / agg / etc.) don't appear under a continuous
+ * cmp side in well-formed circuits; defensively, they contribute
+ * nothing.
+ */
+const std::unordered_set<gate_t> &
+collectRandomLeaves(const GenericCircuit &gc, gate_t g,
+                    std::unordered_map<gate_t, std::unordered_set<gate_t>> &cache)
+{
+  auto it = cache.find(g);
+  if (it != cache.end()) return it->second;
+  /* Insert an empty entry first so a recursive call on a cyclic
+   * sub-circuit returns early.  std::unordered_map insertion does
+   * not invalidate references to existing elements, but it MAY
+   * rehash on growth (invalidating ALL references, including the
+   * one we're about to capture).  Build the result locally, then
+   * write it back in one shot at the end. */
+  cache.emplace(g, std::unordered_set<gate_t>{});
+
+  std::unordered_set<gate_t> out;
+  auto t = gc.getGateType(g);
+  if (t == gate_rv || t == gate_input) {
+    out.insert(g);
+  } else if (t == gate_arith || t == gate_mixture) {
+    for (gate_t w : gc.getWires(g)) {
+      const auto &child = collectRandomLeaves(gc, w, cache);
+      out.insert(child.begin(), child.end());
+    }
+  }
+
+  /* Overwrite the placeholder; locate by find() to avoid a fresh
+   * insertion that could rehash and invalidate other iterators in
+   * upstream frames. */
+  auto fit = cache.find(g);
+  fit->second = std::move(out);
+  return fit->second;
+}
+
+using DiracMap    = std::unordered_map<double, double>;
+using DiracMapOpt = std::optional<DiracMap>;
+
+/**
+ * @brief Recursive extraction of @p g's Dirac mass map (value -> mass).
+ *
+ * Returns @c std::nullopt when the sub-circuit's discrete component
+ * is not statically extractable (e.g. an opaque @c gate_arith over
+ * mixtures, a Bernoulli mixture whose @c p_token is a compound
+ * Boolean, etc.).  When the sub-circuit is purely continuous the
+ * map is well-defined but empty (no Diracs, no masses).
+ *
+ * Used by the exact EQ shortcut below: for independent @c X, @c Y
+ * with extractable mass maps @c M_X, @c M_Y:
+ * <tt>P(X = Y) = Σ_{v ∈ M_X ∩ M_Y} M_X[v] · M_Y[v]</tt>.  Continuous
+ * components contribute zero by measure-zero arguments (Dirac vs
+ * continuous and continuous vs continuous), so they need not appear
+ * in the sum.
+ *
+ * Shape rules:
+ * - @c gate_value:v: a Dirac at the literal with mass @c 1.
+ * - @c gate_rv: continuous in every supported family, empty map.
+ * - categorical @c gate_mixture <tt>[key, mul_1, ..., mul_n]</tt>:
+ *   sum @c getProb(mul_i) into @c map[parseDouble(extra(mul_i))].
+ *   Multiple mulinputs at the same outcome (which the constructor
+ *   doesn't produce but is sound to handle) merge masses.
+ * - Bernoulli @c gate_mixture <tt>[p_token, X, Y]</tt> with
+ *   @c p_token a bare @c gate_input: pull @c π = @c getProb(p_token)
+ *   and recurse into X, Y to get @c M_X, @c M_Y; result is
+ *   <tt>π·M_X[v] + (1-π)·M_Y[v]</tt> per outcome value.  Compound
+ *   Boolean @c p_tokens (whose probability would have to come from
+ *   a recursive @c probability_evaluate call) bail.
+ * - Anything else: @c std::nullopt.
+ */
+DiracMapOpt
+collectDiracMassMap(const GenericCircuit &gc, gate_t g,
+                    std::unordered_map<gate_t, DiracMapOpt> &cache)
+{
+  auto it = cache.find(g);
+  if (it != cache.end()) return it->second;
+  /* Pessimistic cycle guard, same reasoning as @c collectRandomLeaves. */
+  cache.emplace(g, std::nullopt);
+
+  DiracMapOpt result;
+  auto t = gc.getGateType(g);
+  switch (t) {
+    case gate_value: {
+      try {
+        DiracMap m;
+        m[parseDoubleStrict(gc.getExtra(g))] = 1.0;
+        result = std::move(m);
+      } catch (const CircuitException &) {
+        /* unparseable extra: bail */
+      }
+      break;
+    }
+    case gate_rv:
+      result = DiracMap{};  /* continuous, no point masses */
+      break;
+    case gate_mixture: {
+      const auto &w = gc.getWires(g);
+      if (gc.isCategoricalMixture(g)) {
+        DiracMap m;
+        bool ok = true;
+        for (std::size_t i = 1; i < w.size(); ++i) {
+          double v;
+          try { v = parseDoubleStrict(gc.getExtra(w[i])); }
+          catch (const CircuitException &) { ok = false; break; }
+          const double p = gc.getProb(w[i]);
+          if (!std::isfinite(p) || p < 0.0 || p > 1.0) { ok = false; break; }
+          m[v] += p;
+        }
+        if (ok) result = std::move(m);
+      } else if (w.size() == 3
+                 && gc.getGateType(w[0]) == gate_input) {
+        const double pi = gc.getProb(w[0]);
+        if (std::isfinite(pi) && pi >= 0.0 && pi <= 1.0) {
+          auto mx = collectDiracMassMap(gc, w[1], cache);
+          auto my = collectDiracMassMap(gc, w[2], cache);
+          if (mx && my) {
+            DiracMap m;
+            for (const auto &[v, mass] : *mx) m[v] += pi * mass;
+            for (const auto &[v, mass] : *my) m[v] += (1.0 - pi) * mass;
+            result = std::move(m);
+          }
+        }
+      }
+      break;
+    }
+    default:
+      break;
+  }
+
+  auto fit = cache.find(g);
+  fit->second = result;
+  return result;
+}
+
 }  // namespace
 
 unsigned runRangeCheck(GenericCircuit &gc)
@@ -692,6 +844,8 @@ unsigned runRangeCheck(GenericCircuit &gc)
    * resolving one cmp only changes the cmp's own gate type, not
    * the sub-circuit underneath @c wires[0..1] of other cmps. */
   std::unordered_map<gate_t, bool> continuous_support_cache;
+  std::unordered_map<gate_t, DiracMapOpt> dirac_cache;
+  std::unordered_map<gate_t, std::unordered_set<gate_t>> leaf_cache;
   unsigned resolved = 0;
 
   /* Snapshot the cmp gate ids before we start mutating: in-place
@@ -771,6 +925,58 @@ unsigned runRangeCheck(GenericCircuit &gc)
         gc.resolveCmpToBernoulli(c, p);
         ++resolved;
         continue;
+      }
+
+      /* Exact Dirac sum-product.  When both sides have extractable
+       * @c (value -> mass) maps AND the two sub-circuits are
+       * independent (random-leaf footprints disjoint), the
+       * convolution at zero of @c (X - Y) has support exactly on
+       * @c Dirac(X) ∩ Dirac(Y) with mass
+       * <tt>M_X(v) · M_Y(v)</tt> per overlapping value; the
+       * continuous and continuous-vs-Dirac contributions vanish by
+       * measure zero.  This generalises the bare-disjoint case to
+       * any pair of statically-known discrete distributions:
+       * <tt>P(categorical(a) = categorical(b))</tt> with overlapping
+       * outcomes, mixtures with @c as_random branches, etc.
+       *
+       * The independence test is essential: two mixtures sharing a
+       * Bernoulli @c p_token are correlated and the sum-product
+       * factoring breaks (the actual @c P(X=Y) cannot be recovered
+       * from the marginals alone).  @c collectRandomLeaves'
+       * footprint-disjoint check is the gate.
+       *
+       * When both maps are empty (purely continuous on both sides)
+       * the existing branch above already fired, so the sum-product
+       * path here only runs for at-least-one-discrete shapes. */
+      auto m_l = collectDiracMassMap(gc, wires[0], dirac_cache);
+      auto m_r = collectDiracMassMap(gc, wires[1], dirac_cache);
+      if (m_l && m_r) {
+        const auto &leaves_l = collectRandomLeaves(gc, wires[0], leaf_cache);
+        const auto &leaves_r = collectRandomLeaves(gc, wires[1], leaf_cache);
+        bool independent = true;
+        for (gate_t leaf : leaves_l) {
+          if (leaves_r.count(leaf)) { independent = false; break; }
+        }
+        if (independent) {
+          double p_eq = 0.0;
+          /* Iterate over the smaller map to keep the sum at
+           * O(min(|M_l|, |M_r|)) lookups. */
+          const DiracMap *small = (m_l->size() <= m_r->size()) ? &*m_l : &*m_r;
+          const DiracMap *large = (m_l->size() <= m_r->size()) ? &*m_r : &*m_l;
+          for (const auto &[v, mass] : *small) {
+            auto fit = large->find(v);
+            if (fit != large->end()) p_eq += mass * fit->second;
+          }
+          /* Clamp into @c [0, 1] defensively: floating-point summation
+           * of masses (each in [0, 1]) might overshoot by an ULP, and
+           * @c resolveCmpToBernoulli requires a strict probability. */
+          if (p_eq < 0.0) p_eq = 0.0;
+          if (p_eq > 1.0) p_eq = 1.0;
+          double p = (op == ComparisonOperator::EQ) ? p_eq : 1.0 - p_eq;
+          gc.resolveCmpToBernoulli(c, p);
+          ++resolved;
+          continue;
+        }
       }
     }
 

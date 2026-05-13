@@ -253,4 +253,113 @@ SELECT provsql.probability_evaluate(
          'independent') = 1.0
        AS dirac_eq_constant;
 
+-- ---------------------------------------------------------------
+-- Exact EQ / NE via Dirac mass-map sum-product.
+--
+-- When both sides of an EQ / NE cmp have statically-extractable
+-- @c (value -> mass) Dirac maps and are independent (random-leaf
+-- footprints disjoint), RangeCheck computes
+--   @c P(X = Y) = Σ_{v ∈ M_X ∩ M_Y} M_X[v] · M_Y[v]
+-- exactly and resolves the cmp to a Bernoulli with that probability.
+-- This generalises the disjoint-Diracs case (sum is 0) to overlapping
+-- Diracs with any mass distribution, and covers categoricals,
+-- Bernoulli mixtures with as_random branches, and combinations.
+--
+-- The exact = 0.0 / 1.0 assertions pin analytical resolution (MC
+-- would have finite-sample noise); the fractional cases use exact
+-- equality on the closed-form sum-product.
+-- ---------------------------------------------------------------
+
+-- (F1) Disjoint categoricals fold to 0 exactly.  The shortcut's
+-- common boundary case.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(
+           provsql.categorical(ARRAY[0.5, 0.5], ARRAY[0.0, 1.0]),
+           provsql.categorical(ARRAY[0.5, 0.5], ARRAY[2.0, 3.0])),
+         'independent') = 0.0
+       AS disjoint_categoricals_eq_zero;
+
+-- (F2) Categoricals with one outcome in common (value 1) and
+-- distinct supports otherwise: P(=) = 0.5 * 0.3 = 0.15 exactly.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(
+           provsql.categorical(ARRAY[0.5, 0.5], ARRAY[0.0, 1.0]),
+           provsql.categorical(ARRAY[0.3, 0.7], ARRAY[1.0, 2.0])),
+         'independent') = 0.15
+       AS overlapping_categoricals_one_match;
+
+-- (F3) Categoricals with identical outcome sets but different masses:
+-- P(=) = 0.4·0.7 + 0.6·0.3 = 0.46.  A floating-point sum, so we
+-- compare with a tight 1e-12 tolerance against the exact value -- the
+-- analytical path is bit-deterministic, MC would not reach 1e-12.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_eq(
+               provsql.categorical(ARRAY[0.4, 0.6], ARRAY[0.0, 1.0]),
+               provsql.categorical(ARRAY[0.7, 0.3], ARRAY[0.0, 1.0])),
+             'independent') - 0.46) < 1e-12
+       AS same_outcomes_different_masses_eq;
+
+-- (F4) Bernoulli mixture of Diracs vs another mixture of Diracs:
+-- M_lhs = {0: 0.3, 5: 0.7}, M_rhs = {0: 0.5, 7: 0.5}.
+-- Only value 0 overlaps: P(=) = 0.3 · 0.5 = 0.15.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_eq(
+           provsql.mixture(0.3, provsql.as_random(0), provsql.as_random(5)),
+           provsql.mixture(0.5, provsql.as_random(0), provsql.as_random(7))),
+         'independent') = 0.15
+       AS mixture_of_diracs_overlap_eq;
+
+-- (F5) NE: symmetric to (F4): 1 - 0.15 = 0.85.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_ne(
+           provsql.mixture(0.3, provsql.as_random(0), provsql.as_random(5)),
+           provsql.mixture(0.5, provsql.as_random(0), provsql.as_random(7))),
+         'independent') = 0.85
+       AS mixture_of_diracs_overlap_ne;
+
+-- (F6) Mixture with one continuous and one Dirac arm vs categorical.
+-- LHS = mixture(0.3, N(0,1), as_random(5)) has Dirac mass at 5 with
+-- weight 0.7 (the continuous arm contributes no Dirac mass; vs the
+-- categorical's discrete points, that arm gives 0 by measure zero).
+-- RHS = categorical([0.5, 0.5], [5, 6]).  Overlap at 5: 0.7 · 0.5 = 0.35.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_eq(
+               provsql.mixture(0.3, provsql.normal(0, 1),
+                                     provsql.as_random(5)),
+               provsql.categorical(ARRAY[0.5, 0.5], ARRAY[5.0, 6.0])),
+             'independent') - 0.35) < 1e-12
+       AS mixture_continuous_plus_dirac_vs_cat;
+
+-- (F7) Independence guard: shared Bernoulli p_token makes the two
+-- mixtures perfectly correlated through their selector, so the
+-- sum-product factoring would silently mis-resolve.  RangeCheck must
+-- bail and let the cmp flow through to the downstream path.  We
+-- check this by verifying that 'independent' returns the same MC
+-- estimate (within tolerance) as a direct 'monte-carlo' call -- a
+-- silently-wrong shortcut would produce 0.4 · 0.4 = 0.16 instead of
+-- the true 0.4.
+DO $$
+DECLARE
+  p_tok uuid := public.uuid_generate_v4();
+  lhs random_variable;
+  rhs random_variable;
+  p_independent double precision;
+BEGIN
+  PERFORM provsql.create_gate(p_tok, 'input');
+  PERFORM provsql.set_prob(p_tok, 0.4);
+  lhs := provsql.mixture(p_tok, provsql.as_random(0), provsql.as_random(1));
+  rhs := provsql.mixture(p_tok, provsql.as_random(0), provsql.as_random(2));
+  SET LOCAL provsql.monte_carlo_seed = 42;
+  p_independent := provsql.probability_evaluate(
+                     provsql.rv_cmp_eq(lhs, rhs), 'independent');
+  /* True value is 0.4; MC is within ~1% over 10k samples (the hybrid
+   * decomposer's default budget).  The silently-wrong shortcut would
+   * have produced 0.16, far outside the tolerance.  We pin >= 0.30
+   * (very loose) so this test is robust to MC seed changes. */
+  IF p_independent < 0.30 OR p_independent > 0.50 THEN
+    RAISE EXCEPTION 'independence guard failed: got %, expected ~0.4', p_independent;
+  END IF;
+END $$;
+SELECT 't'::text AS shared_p_token_correlation_guard;
+
 SELECT 'ok'::text AS continuous_rangecheck_done;

@@ -72,6 +72,27 @@ t
 dirac_eq_constant
 t
 (1 row)
+disjoint_categoricals_eq_zero
+t
+(1 row)
+overlapping_categoricals_one_match
+t
+(1 row)
+same_outcomes_different_masses_eq
+t
+(1 row)
+mixture_of_diracs_overlap_eq
+t
+(1 row)
+mixture_of_diracs_overlap_ne
+t
+(1 row)
+mixture_continuous_plus_dirac_vs_cat
+t
+(1 row)
+shared_p_token_correlation_guard
+t
+(1 row)
 continuous_rangecheck_done
 ok
 (1 row)
