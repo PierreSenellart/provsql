@@ -496,8 +496,8 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   return constants;
 }
 
-database_constants_t *constants_cache; ///< Per-database OID constants cache (sorted by database OID)
-unsigned constants_cache_len=0;        ///< Number of valid entries in @c constants_cache
+static database_constants_t *constants_cache; ///< Per-database OID constants cache (sorted by database OID)
+static unsigned constants_cache_len=0;        ///< Number of valid entries in @c constants_cache
 
 constants_t get_constants(bool failure_if_not_possible)
 {
