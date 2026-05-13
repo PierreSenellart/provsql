@@ -245,7 +245,7 @@ Semiring evaluation strip
 
 Below the canvas, the :doc:`semiring evaluation <semirings>` strip
 targets the pinned node (or, when no node is pinned, the root). The
-semiring select groups compiled entries into four sub-optgroups, with
+semiring select organises compiled entries into four sub-groups, with
 custom and "Other" entries below:
 
 * **Compiled semirings**
@@ -349,7 +349,7 @@ Distribution profile panel
 For nodes whose underlying gate is a scalar random-variable root
 (``gate_rv``, ``gate_value`` in float8 mode, ``gate_arith``,
 ``gate_mixture``), the eval strip exposes a *Distribution profile*
-entry under the *Distribution* optgroup. Running it returns
+entry under the *Distribution* group. Running it returns
 header stats (mean :math:`\mu` and variance :math:`\sigma^2`),
 an inline-SVG histogram of the sub-circuit's distribution, a
 PDF/CDF toggle, per-bar tooltips with :math:`\sigma` markers, and
@@ -369,10 +369,10 @@ from ``provsql.rv_mc_samples`` and the seed from
    :math:`\sigma`), an inline-SVG histogram, and a PDF/CDF
    toggle on the right.
 
-The same optgroup hosts a *Sample* entry that draws raw samples
+The same group hosts a *Sample* entry that draws raw samples
 via :sqlfunc:`rv_sample`; the result renders as a collapsible
-``<details>`` panel with a six-value inline preview and a "show
-full list" expander. When the conditioning event's acceptance
+panel with a six-value inline preview and a "show full list"
+expander. When the conditioning event's acceptance
 rate truncates the run below the requested ``n``, the panel
 surfaces an actionable hint pointing at ``provsql.rv_mc_samples``.
 
@@ -397,8 +397,8 @@ answer; clicking the muted badge restores the row provenance.
 Manual edits stick within a row and reset on row navigation.
 
 Combined with the distribution profile, this makes side-by-side
-comparison of unconditional vs conditional shape a single click:
-pin the random variable, run *Distribution profile* unconditional,
+comparison of unconditional vs conditional shape two clicks: pin
+the random variable, run *Distribution profile* unconditional,
 toggle the badge, run it conditional. The truncated closed-form
 table (Normal via Mills ratio, Uniform on the intersected
 support, Exponential by memorylessness) takes over when
