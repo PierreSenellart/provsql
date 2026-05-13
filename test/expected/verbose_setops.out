@@ -1,0 +1,7 @@
+\set ECHO none
+result
+except_ok
+(1 row)
+result
+union_ok
+(1 row)

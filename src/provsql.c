@@ -3073,9 +3073,75 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
     ++attno;
   }
 
-  rte->alias = NULL;
-  rte->eref = NULL;
-  rte->joinaliasvars = NULL;
+  /* Populate the JOIN RTE's eref / joinaliasvars / joinleftcols /
+   * joinrightcols by walking the larg and rarg subqueries' targetLists.
+   * Execution doesn't need these (outer Vars reference the input RTEs
+   * directly), but PostgreSQL's ruleutils deparser walks them when
+   * pg_get_querydef / EXPLAIN VERBOSE traverse the rewritten tree and
+   * segfaults on NULL eref. Non-USING LEFT JOIN: joinmergedcols = 0,
+   * output is left columns followed by right columns. */
+  {
+    RangeTblRef *larg_ref = (RangeTblRef *)setOps->larg;
+    RangeTblRef *rarg_ref = (RangeTblRef *)setOps->rarg;
+    RangeTblEntry *larg_rte =
+      (RangeTblEntry *)list_nth(q->rtable, larg_ref->rtindex - 1);
+    RangeTblEntry *rarg_rte =
+      (RangeTblEntry *)list_nth(q->rtable, rarg_ref->rtindex - 1);
+    List *aliasvars = NIL;
+    List *leftcols = NIL;
+    List *rightcols = NIL;
+    List *colnames = NIL;
+    ListCell *lc_te;
+    int colno;
+
+    colno = 1;
+    foreach (lc_te, larg_rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc_te);
+      if (te->resjunk) {
+        colno++;
+        continue;
+      }
+      aliasvars = lappend(aliasvars,
+                          makeVar(larg_ref->rtindex, colno,
+                                  exprType((Node *)te->expr),
+                                  exprTypmod((Node *)te->expr),
+                                  exprCollation((Node *)te->expr),
+                                  0));
+      leftcols = lappend_int(leftcols, colno);
+      rightcols = lappend_int(rightcols, 0);
+      colnames = lappend(colnames,
+                         makeString(pstrdup(te->resname ? te->resname
+                                                        : "?column?")));
+      colno++;
+    }
+    colno = 1;
+    foreach (lc_te, rarg_rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc_te);
+      if (te->resjunk) {
+        colno++;
+        continue;
+      }
+      aliasvars = lappend(aliasvars,
+                          makeVar(rarg_ref->rtindex, colno,
+                                  exprType((Node *)te->expr),
+                                  exprTypmod((Node *)te->expr),
+                                  exprCollation((Node *)te->expr),
+                                  0));
+      leftcols = lappend_int(leftcols, 0);
+      rightcols = lappend_int(rightcols, colno);
+      colnames = lappend(colnames,
+                         makeString(pstrdup(te->resname ? te->resname
+                                                        : "?column?")));
+      colno++;
+    }
+
+    rte->alias = NULL;
+    rte->eref = makeAlias("unnamed_join", colnames);
+    rte->joinaliasvars = aliasvars;
+    rte->joinleftcols = leftcols;
+    rte->joinrightcols = rightcols;
+    rte->joinmergedcols = 0;
+  }
 
   rte->rtekind = RTE_JOIN;
   rte->jointype = JOIN_LEFT;
@@ -4252,14 +4318,14 @@ static PlannedStmt *provsql_planner(Query *q,
         provsql_notice("planner time spent=%f",
                        (double)(clock() - begin) / CLOCKS_PER_SEC);
 
+      if (new_query != NULL)
+        q = new_query;
+
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
         provsql_notice("Main query after query rewriting:\n%s\n",
                        pg_get_querydef(q, true));
 #endif
-
-      if (new_query != NULL)
-        q = new_query;
     }
   }
 
