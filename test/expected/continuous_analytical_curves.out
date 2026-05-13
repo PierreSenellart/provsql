@@ -35,10 +35,16 @@ t
 hybrid_simplifier_fold_picked_up
 t
 (1 row)
-truncated_mixture_returns_null
+independent_event_leaves_mixture_unchanged
 t
 (1 row)
-truncated_categorical_returns_null
+truncated_mixture_clipped_to_right_arm
+t
+(1 row)
+truncated_categorical_drops_outcomes
+t
+(1 row)
+truncated_dirac_feasible
 t
 (1 row)
 nested_mixture_with_dirac

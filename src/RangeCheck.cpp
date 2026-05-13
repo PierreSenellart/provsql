@@ -14,9 +14,13 @@
 #include <vector>
 
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
+#include "AnalyticEvaluator.h"  // cdfAt for shape_mass under truncation
 #include "CircuitFromMMap.h"    // getGenericCircuit
 #include "RandomVariable.h"     // parse_distribution_spec, DistKind
 #include "provsql_utils_cpp.h"  // uuid2string
+
+#include <type_traits>          // std::is_same_v in truncateShape
+#include <variant>
 extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
@@ -427,16 +431,27 @@ bool asRvVsConstCmp(const GenericCircuit &gc, gate_t cmp_gate,
   const auto &wires = gc.getWires(cmp_gate);
   if (wires.size() != 2) return false;
 
+  /* Recognise scalar-vs-constant cmps where the scalar side is a
+   * bare gate_rv (the original use case for the per-cmp resolution
+   * pass) or a gate_mixture (so the conditioning walker can extract
+   * intervals on mixture / categorical variables — value-vs-value
+   * cmps are folded upstream by RangeCheck before they reach this
+   * walker).  Dirac (gate_value) is never the scalar side of a
+   * non-trivial cmp at this point; the value-vs-value pair would have
+   * been resolved upstream. */
+  auto isScalarRv = [](gate_type t) {
+    return t == gate_rv || t == gate_mixture;
+  };
   auto t0 = gc.getGateType(wires[0]);
   auto t1 = gc.getGateType(wires[1]);
-  if (t0 == gate_rv && t1 == gate_value) {
+  if (isScalarRv(t0) && t1 == gate_value) {
     try { const_out = parseDoubleStrict(gc.getExtra(wires[1])); }
     catch (const CircuitException &) { return false; }
     rv_out = wires[0];
     op_out = op;
     return true;
   }
-  if (t0 == gate_value && t1 == gate_rv) {
+  if (t0 == gate_value && isScalarRv(t1)) {
     try { const_out = parseDoubleStrict(gc.getExtra(wires[0])); }
     catch (const CircuitException &) { return false; }
     rv_out = wires[1];
@@ -1200,18 +1215,135 @@ matchTruncatedSingleRv(const GenericCircuit &gc, gate_t root,
 bool eventIsProvablyInfeasible(const GenericCircuit &gc, gate_t root,
                                std::optional<gate_t> event_root)
 {
-  if (gc.getGateType(root) != gate_rv) return false;
   if (!event_root.has_value()) return false;
   const auto et = gc.getGateType(*event_root);
   if (et == gate_one) return false;
-  /* RangeCheck folded the event to false upstream. */
+  /* RangeCheck folded the event to false upstream — universal
+   * signal, independent of root gate type (a constant scalar
+   * value paired with an impossible cmp lands here too). */
   if (et == gate_zero) return true;
   /* Walk the event's AND-conjuncts; an empty intersection with the
    * RV's natural support is the second infeasibility signal that
-   * @c matchTruncatedSingleRv collapses into @c std::nullopt. */
+   * @c matchTruncatedSingleRv collapses into @c std::nullopt.  Only
+   * applicable when the root is itself a bare gate_rv that the
+   * walker recognises. */
+  if (gc.getGateType(root) != gate_rv) return false;
   auto iv = collectRvConstraints(gc, *event_root, root);
   if (!iv.has_value()) return false;
   return !(iv->first < iv->second);
+}
+
+/**
+ * @brief Unconditional probability mass of a shape over the
+ *        interval @c [lo, hi].
+ *
+ * @c TruncatedSingleRv arms supplied here must carry
+ * @c truncated == @c false (the unconditional shape); the helper
+ * uses the natural support to compute the CDF endpoints, so calling
+ * with an already-truncated input would double-truncate.
+ *
+ * Recursive: a Bernoulli mixture's mass is the Bernoulli-weighted
+ * combination of its arms' masses.  Categorical mass is the sum of
+ * outcome masses falling in the interval.  Dirac mass is 1 iff the
+ * Dirac value sits in the interval, else 0.  Returns @c std::nullopt
+ * when a leaf's spec defeats the closed-form CDF (e.g. non-integer
+ * Erlang shape — @c cdfAt returns NaN there).
+ */
+static std::optional<double>
+shape_mass(const ClosedFormShape &s, double lo, double hi)
+{
+  return std::visit([&](const auto &v) -> std::optional<double> {
+    using T = std::decay_t<decltype(v)>;
+    if constexpr (std::is_same_v<T, TruncatedSingleRv>) {
+      const double a = std::max(lo, v.lo);
+      const double b = std::min(hi, v.hi);
+      if (!(a < b)) return 0.0;
+      const double cl = std::isfinite(a) ? cdfAt(v.spec, a) : 0.0;
+      const double ch = std::isfinite(b) ? cdfAt(v.spec, b) : 1.0;
+      if (std::isnan(cl) || std::isnan(ch)) return std::nullopt;
+      return ch - cl;
+    } else if constexpr (std::is_same_v<T, DiracShape>) {
+      return (v.value >= lo && v.value <= hi) ? 1.0 : 0.0;
+    } else if constexpr (std::is_same_v<T, CategoricalShape>) {
+      double m = 0.0;
+      for (const auto &pr : v.outcomes)
+        if (pr.first >= lo && pr.first <= hi) m += pr.second;
+      return m;
+    } else if constexpr (std::is_same_v<T, BernoulliMixtureShape>) {
+      auto L = shape_mass(*v.left, lo, hi);
+      auto R = shape_mass(*v.right, lo, hi);
+      if (!L || !R) return std::nullopt;
+      return v.p * (*L) + (1.0 - v.p) * (*R);
+    }
+    return std::nullopt;
+  }, s);
+}
+
+/**
+ * @brief Conditional shape after truncating the underlying variable
+ *        to @c [lo, hi].
+ *
+ * Bare-RV arm: intersects its natural / current truncation with
+ * @c [lo, hi] and marks the result truncated so downstream
+ * @c shape_pdf renormalises by the truncated CDF.  Dirac: keep iff
+ * value ∈ interval, otherwise nullopt (infeasible).  Categorical:
+ * keep outcomes in interval, renormalise masses.  Bernoulli mixture:
+ * recursively truncate each arm and reweight the Bernoulli by the
+ * ratio of arm masses (the standard
+ * @f$ \pi' = \pi Z_L / (\pi Z_L + (1-\pi) Z_R) @f$ update); a
+ * fully-eliminated arm degenerates to the surviving one.  Returns
+ * @c nullopt when the truncated shape has zero mass (caller can
+ * raise infeasibility).
+ */
+static std::optional<ClosedFormShape>
+truncateShape(const ClosedFormShape &s, double lo, double hi)
+{
+  return std::visit([&](const auto &v) -> std::optional<ClosedFormShape> {
+    using T = std::decay_t<decltype(v)>;
+    if constexpr (std::is_same_v<T, TruncatedSingleRv>) {
+      const double a = std::max(lo, v.lo);
+      const double b = std::min(hi, v.hi);
+      if (!(a < b)) return std::nullopt;
+      return ClosedFormShape{TruncatedSingleRv{v.spec, a, b, /*trunc=*/true}};
+    } else if constexpr (std::is_same_v<T, DiracShape>) {
+      if (v.value < lo || v.value > hi) return std::nullopt;
+      return ClosedFormShape{v};
+    } else if constexpr (std::is_same_v<T, CategoricalShape>) {
+      CategoricalShape out;
+      double total = 0.0;
+      for (const auto &pr : v.outcomes) {
+        if (pr.first >= lo && pr.first <= hi) {
+          out.outcomes.emplace_back(pr.first, pr.second);
+          total += pr.second;
+        }
+      }
+      if (out.outcomes.empty() || !(total > 0.0)) return std::nullopt;
+      for (auto &pr : out.outcomes) pr.second /= total;
+      return ClosedFormShape{std::move(out)};
+    } else if constexpr (std::is_same_v<T, BernoulliMixtureShape>) {
+      auto mL = shape_mass(*v.left, lo, hi);
+      auto mR = shape_mass(*v.right, lo, hi);
+      if (!mL || !mR) return std::nullopt;
+      const double pL = v.p         * (*mL);
+      const double pR = (1.0 - v.p) * (*mR);
+      const double Z = pL + pR;
+      if (!(Z > 0.0)) return std::nullopt;
+      auto Lt = truncateShape(*v.left,  lo, hi);
+      auto Rt = truncateShape(*v.right, lo, hi);
+      /* Either arm eliminated by the truncation collapses to the
+       * surviving arm (its mass was already 0 in shape_mass, so the
+       * reweighted p_arm is 1). */
+      if (!Lt && !Rt) return std::nullopt;
+      if (!Lt) return Rt;
+      if (!Rt) return Lt;
+      BernoulliMixtureShape m;
+      m.p     = pL / Z;
+      m.left  = std::make_shared<ClosedFormShape>(std::move(*Lt));
+      m.right = std::make_shared<ClosedFormShape>(std::move(*Rt));
+      return ClosedFormShape{std::move(m)};
+    }
+    return std::nullopt;
+  }, s);
 }
 
 std::optional<ClosedFormShape>
@@ -1219,9 +1351,7 @@ matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
                             std::optional<gate_t> event_root)
 {
   /* Test "event is trivial true": either absent, or resolved to
-   * gate_one by load-time simplification.  All non-bare-RV shapes
-   * (Dirac / categorical / mixture) only match unconditionally;
-   * any other event_root makes them bail. */
+   * gate_one by load-time simplification. */
   const bool event_trivial = !event_root.has_value()
                           || gc.getGateType(*event_root) == gate_one;
 
@@ -1234,22 +1364,39 @@ matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
     return ClosedFormShape{*m};
   }
 
+  /* Helper: match the shape unconditionally first, then if the event
+   * is non-trivial extract an interval via collectRvConstraints and
+   * apply truncateShape.  Used by the Dirac / categorical / mixture
+   * branches below so all three honour conditioning through the same
+   * pipeline. */
+  auto with_optional_truncation =
+    [&](std::optional<ClosedFormShape> unc)
+      -> std::optional<ClosedFormShape> {
+    if (!unc) return std::nullopt;
+    if (event_trivial) return unc;
+    auto iv = collectRvConstraints(gc, *event_root, root);
+    if (!iv.has_value()) return std::nullopt;
+    if (!(iv->first < iv->second)) return std::nullopt;
+    return truncateShape(*unc, iv->first, iv->second);
+  };
+
   /* Dirac point: a gate_value with extra parseable as a finite
-   * float8 (the underlying form of as_random(c)).  Only matches
-   * unconditionally; conditioning on a constant is degenerate and
-   * already collapsed upstream by RangeCheck before we get here. */
+   * float8 (the underlying form of as_random(c)).  Conditioning on
+   * a constant is normally folded upstream by RangeCheck to
+   * gate_one / gate_zero, but a probabilistic event whose footprint
+   * doesn't constrain the constant lands here untouched (the cmp
+   * walker returns the unconditional support); truncateShape then
+   * keeps the Dirac iff its value falls in the recognised interval. */
   if (gc.getGateType(root) == gate_value) {
-    if (!event_trivial) return std::nullopt;
     double v;
     if (!extract_finite_double(gc, root, v)) return std::nullopt;
-    return ClosedFormShape{DiracShape{v}};
+    return with_optional_truncation(ClosedFormShape{DiracShape{v}});
   }
 
   /* gate_mixture: either the explicit categorical form
    * (isCategoricalMixture) or the classic Bernoulli triple
    * [p_token, x_token, y_token]. */
   if (gc.getGateType(root) == gate_mixture) {
-    if (!event_trivial) return std::nullopt;
     const auto &w = gc.getWires(root);
 
     if (gc.isCategoricalMixture(root)) {
@@ -1263,7 +1410,7 @@ matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
         cs.outcomes.emplace_back(v, p);
       }
       if (cs.outcomes.empty()) return std::nullopt;
-      return ClosedFormShape{std::move(cs)};
+      return with_optional_truncation(ClosedFormShape{std::move(cs)});
     }
 
     /* Classic Bernoulli mixture: 3 wires, [p_token, x_token, y_token]
@@ -1282,7 +1429,7 @@ matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
     m.p     = p;
     m.left  = std::make_shared<ClosedFormShape>(std::move(*left));
     m.right = std::make_shared<ClosedFormShape>(std::move(*right));
-    return ClosedFormShape{std::move(m)};
+    return with_optional_truncation(ClosedFormShape{std::move(m)});
   }
 
   return std::nullopt;

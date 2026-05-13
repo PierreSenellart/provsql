@@ -209,31 +209,84 @@ SELECT (j -> 'pdf') IS NOT NULL
        AS hybrid_simplifier_fold_picked_up
 FROM c;
 
--- (11c) Truncated mixture: matchClosedFormDistribution deliberately
--- bails when an event constrains a mixture / categorical / Dirac root
--- (truncation normalisation Z = p·Z_L + (1-p)·Z_R is deferred per
--- TODO2.md / Item 6a).  Guard against accidental partial support
--- being wired in without the proper normalisation.
+-- (11c) Independent event leaves the mixture unchanged.
+-- collectRvConstraints finds no cmp constraining the mixture
+-- variable (the event is on `aux`, a different RV); truncateShape
+-- with the mixture's full support is the identity.  The bimodal
+-- curve must look the same as the unconditional case.
 WITH r AS (SELECT provsql.mixture(0.3, provsql.normal(0, 1),
                                         provsql.normal(10, 1)) AS m,
                   provsql.normal(5, 1) AS aux),
      ev AS (SELECT (m)::uuid AS tok,
                    provsql.rv_cmp_gt(aux, 5::random_variable) AS ev
-              FROM r)
-SELECT provsql.rv_analytical_curves(tok, 100, ev) IS NULL
-       AS truncated_mixture_returns_null
-FROM ev;
+              FROM r),
+     c AS (SELECT provsql.rv_analytical_curves(tok, 201, ev) AS j FROM ev),
+     pdf AS (SELECT (e ->> 'x')::float8 AS x,
+                    (e ->> 'p')::float8 AS p
+               FROM c, jsonb_array_elements(j -> 'pdf') AS e)
+SELECT abs(MAX(p) FILTER (WHERE x < 5.0) - 0.3 * 0.3989422804014327) < 5e-3
+       AND abs(MAX(p) FILTER (WHERE x > 5.0) - 0.7 * 0.3989422804014327) < 5e-3
+       AS independent_event_leaves_mixture_unchanged
+FROM pdf;
 
--- (11d) Truncated categorical: same scope choice as the mixture case.
-WITH r AS (SELECT provsql.categorical(ARRAY[0.5, 0.5],
-                                       ARRAY[0.0, 1.0]) AS c,
-                  provsql.normal(0, 1) AS aux),
+-- (11d) Truncated mixture on the mixture variable itself.  Both
+-- arms get clipped to (x > 5); the Bernoulli weight reweights by
+-- the ratio of arm masses (the truncated_normal_left_arm has tiny
+-- mass to the right of 5, so the rebalanced p is dominated by the
+-- right arm's mass — almost a pure Normal(10,1) restricted to x>5).
+WITH r AS (SELECT provsql.mixture(0.3, provsql.normal(0, 1),
+                                        provsql.normal(10, 1)) AS m),
+     ev AS (SELECT (m)::uuid AS tok,
+                   provsql.rv_cmp_gt(m, 5::random_variable) AS ev
+              FROM r),
+     c AS (SELECT provsql.rv_analytical_curves(tok, 201, ev) AS j FROM ev),
+     pdf AS (SELECT (e ->> 'x')::float8 AS x,
+                    (e ->> 'p')::float8 AS p
+               FROM c, jsonb_array_elements(j -> 'pdf') AS e),
+     peak AS (SELECT MAX(p) AS peak_p FROM pdf)
+SELECT (SELECT (j -> 'pdf') IS NOT NULL FROM c)
+       -- First sample at x = 5 (truncation boundary).
+       AND abs((SELECT x FROM pdf ORDER BY x LIMIT 1) - 5.0) < 1e-9
+       -- Right tail at x = 10 (peak of the right arm): peak ≈
+       -- φ(0) / Z ≈ 0.3989 with Z very close to 1.
+       AND abs(peak_p - 0.3989422804014327) < 5e-3
+       AS truncated_mixture_clipped_to_right_arm
+FROM peak;
+
+-- (11e) Truncated categorical on the categorical variable: outcomes
+-- outside the event interval are dropped; surviving outcomes have
+-- their masses renormalised to sum to 1.  3-outcome categorical
+-- under c > 0 keeps only the third outcome (value = 2).
+-- Use a strict cutoff away from any outcome so the strict-vs-
+-- non-strict collapse in intersectRvConstraint (which closes
+-- strict inequalities for the continuous-support setting) doesn't
+-- accidentally keep an outcome lying on the boundary.
+WITH r AS (SELECT provsql.categorical(ARRAY[0.3, 0.5, 0.2],
+                                       ARRAY[-1.0, 0.0, 2.0]) AS c),
      ev AS (SELECT (c)::uuid AS tok,
-                   provsql.rv_cmp_gt(aux, 0::random_variable) AS ev
-              FROM r)
-SELECT provsql.rv_analytical_curves(tok, 100, ev) IS NULL
-       AS truncated_categorical_returns_null
-FROM ev;
+                   provsql.rv_cmp_gt(c, 1::random_variable) AS ev
+              FROM r),
+     j AS (SELECT provsql.rv_analytical_curves(tok, 100, ev) AS jj FROM ev)
+SELECT (jj -> 'pdf') IS NULL
+       AND jsonb_array_length(jj -> 'stems') = 1
+       AND abs(((jj -> 'stems' -> 0 ->> 'x'))::float8 - 2.0) < 1e-9
+       AND abs(((jj -> 'stems' -> 0 ->> 'p'))::float8 - 1.0) < 1e-9
+       AS truncated_categorical_drops_outcomes
+FROM j;
+
+-- (11f) Truncated Dirac, feasible: as_random(5) restricted to x < 10
+-- keeps the point; mass remains 1.
+WITH r AS (SELECT provsql.as_random(5) AS d),
+     ev AS (SELECT (d)::uuid AS tok,
+                   provsql.rv_cmp_lt(d, 10::random_variable) AS ev
+              FROM r),
+     j AS (SELECT provsql.rv_analytical_curves(tok, 100, ev) AS jj FROM ev)
+SELECT (jj -> 'pdf') IS NULL
+       AND jsonb_array_length(jj -> 'stems') = 1
+       AND abs(((jj -> 'stems' -> 0 ->> 'x'))::float8 - 5.0) < 1e-9
+       AND abs(((jj -> 'stems' -> 0 ->> 'p'))::float8 - 1.0) < 1e-9
+       AS truncated_dirac_feasible
+FROM j;
 
 -- (11e) Nested mixture with a Dirac arm.  The recursive matcher must
 -- propagate Bernoulli weights along the path: a Dirac at 10 sitting
