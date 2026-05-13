@@ -359,19 +359,48 @@ from ``provsql.rv_mc_samples`` and the seed from
 ``provsql.monte_carlo_seed`` (both surfaced in the Config panel).
 
 When the pinned node resolves to a recognised closed-form shape
-(a bare ``gate_rv`` of Normal / Uniform / Exponential / Erlang,
-optionally with a one-interval conditioning event), the panel
-overlays the analytical PDF (or CDF, depending on the toggle)
-on the histogram as a smooth terracotta curve. The overlay
-makes the simplifier's analytical wins visible: when
+the panel overlays the analytical PDF (or CDF, depending on the
+toggle) on the histogram as a smooth terracotta curve, and
+point masses as vertical stems capped by a small disc. The
+overlay makes the simplifier's analytical wins visible: when
 ``2 * Exp(0.4)`` folds to ``Exp(0.2)`` the panel shows the
 exact exponential decay curve over the MC-sampled bars, so the
 user can verify by eye that the fold matched the distribution.
+
+The recognised shapes are:
+
+* a bare ``gate_rv`` of Normal / Uniform / Exponential / Erlang,
+  optionally with a one-interval conditioning event -- smooth
+  curve;
+* a Dirac (``provsql.as_random(c)``) -- single stem at ``c``;
+* a categorical (``provsql.categorical``) -- one stem per
+  outcome, height proportional to its probability mass;
+* a Bernoulli mixture (``provsql.mixture(p, X, Y)``) over any
+  recursively-matched shape -- weighted sum of the per-arm
+  curves, with Dirac / categorical arms contributing stems
+  whose mass propagates through the Bernoulli weight.
+
+Conditioning (a ``WHERE`` predicate, or any conditioning
+provenance UUID) applies to every shape: bare-RV curves clip
+to the conditioning interval and renormalise; mixture arms
+truncate individually and the Bernoulli weight rebalances by
+the ratio of arm masses; categorical outcomes outside the
+interval are dropped and surviving masses renormalise to 1;
+Diracs survive iff their value sits in the interval, and an
+infeasible event raises a clean "conditioning event is
+infeasible" error without running 100,000 wasted MC samples.
+
 The curve is computed server-side by
 :sqlfunc:`rv_analytical_curves`; shapes outside the closed-form
-table (``gate_arith`` composites of independent RVs, Bernoulli
-mixtures, categoricals) render histogram-only without an
-overlay.
+table (``gate_arith`` composites of independent RVs that the
+simplifier cannot fold, non-integer Erlang shapes) render
+histogram-only without an overlay.
+
+For pure-discrete shapes (a Dirac, a categorical, or a nested
+mixture whose every arm is one of those) the CDF mode draws a
+true staircase: horizontal flats joined by vertical jumps at
+each outcome, running from 0 at the chart's left edge to 1 on
+the right.
 
 .. figure:: /_static/studio/distribution-profile.png
    :alt: The eval-strip Distribution profile panel showing the

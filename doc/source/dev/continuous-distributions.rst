@@ -402,17 +402,52 @@ budget, so the caller can either widen the budget or loosen the
 conditioning.
 
 ``matchTruncatedSingleRv`` (in :cfile:`RangeCheck.cpp`) is the
-shared shape-detection helper used by every closed-form
-single-RV consumer: ``Expectation::try_truncated_closed_form``
-(moments), ``MonteCarloSampler::try_truncated_closed_form_sample``
-(rejection-free sampling), and :sqlfunc:`rv_analytical_curves`
-(PDF / CDF overlay). It runs the four common gates --
-``gate_rv`` root check, ``parse_distribution_spec``,
-``collectRvConstraints``, and the empty-intersection / ``gate_zero``
-event guards -- so the supported-shape set stays in sync across
-all three callers and adding a fifth (e.g. truncated Erlang via
-the regularised incomplete gamma) only touches one detection
-site.
+single-RV shape-detection helper used by the moment surface
+(``Expectation::try_truncated_closed_form``) and the
+rejection-free sampler
+(``MonteCarloSampler::try_truncated_closed_form_sample``). It
+runs the four common gates -- ``gate_rv`` root check,
+``parse_distribution_spec``, ``collectRvConstraints``, and the
+empty-intersection / ``gate_zero`` event guards -- so the
+supported-shape set stays in sync between moments and sampling
+and adding a fifth (e.g. truncated Erlang via the regularised
+incomplete gamma) only touches one detection site.
+
+``matchClosedFormDistribution`` (same file) generalises the
+single-RV matcher to the four-arm variant
+``std::variant<TruncatedSingleRv, DiracShape, CategoricalShape,
+BernoulliMixtureShape>`` consumed by
+:sqlfunc:`rv_analytical_curves`. The variant covers, in addition
+to the bare-RV case, ``as_random(c)`` Diracs (``gate_value``
+roots), categorical-form ``gate_mixture`` roots, and classic
+Bernoulli ``gate_mixture`` roots over any recursively-matched
+shape. Conditioning is honoured uniformly across all four arms:
+non-trivial events are routed through ``collectRvConstraints``
+to extract a ``[lo, hi]`` interval on the root variable, then
+``truncateShape`` is applied recursively -- bare RVs intersect
+their bounds and renormalise via the truncated CDF; Diracs are
+kept iff the value falls inside the interval (otherwise the
+event is infeasible); categoricals drop outcomes outside the
+interval and renormalise surviving masses; Bernoulli mixtures
+recursively truncate their arms and reweight the Bernoulli by
+the ratio of arm masses
+(:math:`\pi' = \pi Z_L / (\pi Z_L + (1-\pi) Z_R)`), with the
+arm masses computed by ``shape_mass`` (a parallel recursive
+pass that integrates the unconditional CDF over the interval).
+An arm with zero post-truncation mass is eliminated and the
+mixture degenerates to the surviving arm.
+
+``eventIsProvablyInfeasible`` (also :cfile:`RangeCheck.cpp`) is
+the conditional-moment dispatcher's pre-MC short-circuit:
+``gate_zero`` events are detected for every root type, and
+``gate_rv`` roots additionally surface
+``collectRvConstraints``-empty intersections. The dispatcher in
+``Expectation::conditional_raw_moment`` /
+``conditional_central_moment`` calls it after
+``try_truncated_closed_form`` returns ``nullopt`` and raises a
+"conditioning event is infeasible" error directly when the
+predicate fires, avoiding a 100 000-sample MC round whose
+acceptance probability is exactly zero.
 
 :sqlfunc:`rv_sample` and :sqlfunc:`rv_histogram` share
 ``MonteCarloSampler::try_truncated_closed_form_sample``: a
@@ -431,19 +466,57 @@ the rejection budget. Erlang truncation and ``gate_arith``
 composite roots fall through to MC rejection unchanged.
 
 :sqlfunc:`rv_analytical_curves` (in :cfile:`RvAnalyticalCurves.cpp`)
-exposes the closed-form PDF and CDF as a sampled curve for ProvSQL
-Studio's Distribution profile overlay. Returns NULL when the root
-sub-circuit is not a closed-form shape, so callers can dispatch
-it in parallel with :sqlfunc:`rv_histogram` without a structural
-pre-check. V1 supports bare ``gate_rv`` of Normal / Uniform /
-Exponential / Erlang, optionally truncated by a one-interval
-conditioning event. ``gate_arith`` composites, ``gate_mixture``
-(Bernoulli or categorical), and non-integer Erlang shapes return
+exposes the closed-form PDF, CDF, and discrete stems as sampled
+data for ProvSQL Studio's Distribution profile overlay. Returns
+NULL when the root sub-circuit is not a closed-form shape, so
+callers can dispatch it in parallel with :sqlfunc:`rv_histogram`
+without a structural pre-check. The payload has three optional
+fields:
+
+* ``pdf`` -- evenly-spaced ``{x, p}`` samples of the continuous
+  density. Absent when the shape has no continuous component
+  (pure Dirac, pure categorical, or nested mixture of those).
+* ``cdf`` -- same grid as ``pdf``, cumulative probability.
+  Always emitted (well-defined for any supported shape; a pure-
+  discrete shape produces a staircase, a continuous shape a
+  smooth curve, and a mixed shape a smooth curve with jumps at
+  the stem positions).
+* ``stems`` -- ``{x, p}`` point masses produced by Dirac roots,
+  categorical roots, or Dirac / categorical arms inside a
+  Bernoulli mixture. Bernoulli weights propagate down the path
+  (a Dirac inside ``mixture(0.3, X, c)`` appears at ``(c, 0.7)``).
+
+The supported shape set is the union of
+``matchClosedFormDistribution`` 's variant arms (see above):
+bare ``gate_rv`` of Normal / Uniform / Exponential /
+integer-shape Erlang, ``as_random(c)`` Diracs, categorical
+mixtures, and Bernoulli mixtures over any recursively-matched
+shape -- all four arms accept a non-trivial conditioning event.
+``gate_arith`` composites and non-integer Erlang shapes return
 NULL; the frontend renders histogram-only in those cases.
-Truncation normalises the PDF by ``Z = CDF(hi) - CDF(lo)`` and
-rescales the CDF to ``[0, 1]`` over the conditioning interval, so
-the overlay and the (truncated) histogram bars share a single
-scale.
+
+Before matching, :sqlfunc:`rv_analytical_curves` runs
+``runHybridSimplifier`` so the curves see the same folded tree
+that ``simplified_circuit_subgraph`` exposes to Studio's circuit
+view: ``c·Exp(λ)`` folded to ``Exp(λ/c)``, sums of independent
+normals folded to a single normal, ``c + mixture(p, X, Y)``
+pushed inside the mixture, etc. Without this pass a circuit
+that displays as a single ``Exp(0.5)`` node would still be
+seen by the matcher as a ``gate_arith`` composite of
+``value(2)`` and ``gate_rv:Exp(1)`` and would silently fall
+back to histogram-only.
+
+Truncation under a bare RV normalises the PDF by
+:math:`Z = \text{CDF}(\text{hi}) - \text{CDF}(\text{lo})` and
+rescales the CDF to ``[0, 1]`` over the conditioning interval.
+Under a Bernoulli mixture the truncated PDF is
+:math:`f_{M|A}(x) = (\pi \cdot Z_L \cdot f_{L|A}(x) +
+(1-\pi) \cdot Z_R \cdot f_{R|A}(x)) / (\pi Z_L + (1-\pi) Z_R)`
+with the per-arm normalisers
+:math:`Z_L, Z_R` computed by ``shape_mass``. Under a categorical
+the conditional masses are :math:`p_i \cdot
+\mathbb{1}\{v_i \in A\} / \sum_j p_j \cdot \mathbb{1}\{v_j \in A\}`.
+A Dirac is invariant under any feasible event.
 
 The load-time pass ``runConstantFold`` (in ``HybridEvaluator.cpp``,
 invoked from ``CircuitFromMMap::applyLoadTimeSimplification``
