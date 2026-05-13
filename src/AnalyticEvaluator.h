@@ -61,6 +61,25 @@ namespace provsql {
 double cdfAt(const DistributionSpec &d, double c);
 
 /**
+ * @brief Closed-form probability density @f$f(c)@f$ for a basic
+ *        distribution.
+ *
+ * Used by @c rv_analytical_curves to ship a sampled curve to clients
+ * (Studio's Distribution profile overlay).  Returns @c 0 outside the
+ * natural support and @c NaN for parameter shapes the analytical
+ * form doesn't cover (e.g. non-integer Erlang shape).
+ *
+ * - Normal(μ, σ):   @f$\frac{1}{\sigma\sqrt{2\pi}}
+ *                       \exp(-(c-\mu)^2 / (2\sigma^2))@f$.
+ * - Uniform(a, b):  @c 1/(b-a) for @c a<=c<=b, @c 0 otherwise.
+ * - Exponential(λ): @c λ·exp(-λc) for @c c>=0, @c 0 otherwise.
+ * - Erlang(k, λ) (integer @c k>=1):
+ *                   @f$\frac{\lambda^k c^{k-1} e^{-\lambda c}}{(k-1)!}@f$
+ *                   for @c c>=0, @c 0 otherwise.
+ */
+double pdfAt(const DistributionSpec &d, double c);
+
+/**
  * @brief Run the closed-form CDF resolution pass over @p gc.
  *
  * For every @c gate_cmp in the circuit whose two sides match one of

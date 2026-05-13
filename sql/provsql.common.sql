@@ -1135,6 +1135,37 @@ CREATE OR REPLACE FUNCTION rv_histogram(
   LANGUAGE C VOLATILE PARALLEL SAFE;
 
 /**
+ * @brief Sample the closed-form PDF and CDF of a (possibly truncated)
+ *        scalar distribution.
+ *
+ * Returns @c {"pdf": [{x, p}, ...], "cdf": [{x, p}, ...]} with @p samples
+ * evenly-spaced points spanning the distribution's natural display
+ * range (intersected with the conditioning event's interval when
+ * @c prov is non-trivial).  Used by ProvSQL Studio's Distribution
+ * profile panel to overlay the analytical curve on the empirical
+ * histogram from :sqlfunc:`rv_histogram` -- the simplifier's
+ * analytical wins (e.g. @c c·Exp(λ) folding to @c Exp(λ/c)) become
+ * visible as a smooth curve riding over the MC-sampled bars.
+ *
+ * Returns @c NULL when the root sub-circuit is not a closed-form
+ * shape (V1: only bare @c gate_rv of Normal / Uniform / Exponential
+ * / integer-Erlang).  The frontend reads @c NULL as "skip overlay"
+ * without erroring, so the caller can dispatch this in parallel with
+ * @c rv_histogram regardless of the underlying shape.
+ *
+ * @param token   Scalar gate token (random_variable's UUID).
+ * @param samples Number of (x, p) points; must be >= 2.
+ * @param prov    Conditioning event (defaults to @c gate_one() = no
+ *                conditioning).  When non-trivial, the curves are
+ *                over the truncated distribution.
+ */
+CREATE OR REPLACE FUNCTION rv_analytical_curves(
+  token UUID, samples INT DEFAULT 100, prov UUID DEFAULT gate_one())
+  RETURNS jsonb
+  AS 'provsql','rv_analytical_curves'
+  LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
  * @brief Draw conditional Monte Carlo samples from a scalar gate.
  *
  * Returns up to @c n samples of the scalar value at @c token; when

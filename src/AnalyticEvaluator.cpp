@@ -18,6 +18,55 @@ extern "C" {
 
 namespace provsql {
 
+double pdfAt(const DistributionSpec &d, double c)
+{
+  double pdf_c = std::numeric_limits<double>::quiet_NaN();
+  switch (d.kind) {
+    case DistKind::Normal: {
+      /* f(c) = (1 / (σ √(2π))) · exp(-(c-μ)² / (2σ²)).  Numerically
+       * stable for any finite c; for c far in the tail the exp
+       * underflows to 0 cleanly. */
+      const double mu = d.p1, sigma = d.p2;
+      if (!(sigma > 0.0)) break;
+      static const double SQRT_2PI = std::sqrt(2.0 * M_PI);
+      const double z = (c - mu) / sigma;
+      pdf_c = std::exp(-0.5 * z * z) / (sigma * SQRT_2PI);
+      break;
+    }
+    case DistKind::Uniform: {
+      const double a = d.p1, b = d.p2;
+      if (!(b > a)) break;
+      pdf_c = (c < a || c > b) ? 0.0 : 1.0 / (b - a);
+      break;
+    }
+    case DistKind::Exponential: {
+      const double lambda = d.p1;
+      if (!(lambda > 0.0)) break;
+      pdf_c = (c < 0.0) ? 0.0 : lambda * std::exp(-lambda * c);
+      break;
+    }
+    case DistKind::Erlang: {
+      /* f(c; k, λ) = λ^k · c^(k-1) · e^(-λc) / (k-1)! for c >= 0.
+       * Same integer-k caveat as the CDF: non-integer shapes need
+       * the regularised lower incomplete gamma and are out of scope. */
+      const double s = d.p1, lambda = d.p2;
+      if (s < 1.0 || s != std::floor(s) || !(lambda > 0.0)) break;
+      if (c < 0.0) { pdf_c = 0.0; break; }
+      const unsigned long k = static_cast<unsigned long>(s);
+      /* (k-1)! is small for the typical Erlang shapes (k <= ~20);
+       * compute incrementally to keep precision. */
+      double fact = 1.0;
+      for (unsigned long i = 2; i < k; ++i) fact *= static_cast<double>(i);
+      pdf_c = std::pow(lambda, static_cast<double>(k))
+            * std::pow(c, static_cast<double>(k - 1))
+            * std::exp(-lambda * c)
+            / fact;
+      break;
+    }
+  }
+  return pdf_c;
+}
+
 double cdfAt(const DistributionSpec &d, double c)
 {
   double cdf_c = std::numeric_limits<double>::quiet_NaN();

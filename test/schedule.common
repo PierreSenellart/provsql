@@ -129,6 +129,7 @@ test: continuous_categorical
 test: continuous_aggregation
 test: continuous_having
 test: continuous_sample_truncated
+test: continuous_analytical_curves
 
 # PROV export
 test: to_provxml

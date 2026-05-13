@@ -1048,7 +1048,9 @@ def evaluate_circuit(
                     SELECT s.lo, s.hi,
                            provsql.rv_moment({tok}::uuid, 1, false, {cond}),
                            provsql.rv_moment({tok}::uuid, 2, true,  {cond}),
-                           provsql.rv_histogram({tok}::uuid, {bins}, {cond})
+                           provsql.rv_histogram({tok}::uuid, {bins}, {cond}),
+                           provsql.rv_analytical_curves(
+                             {tok}::uuid, 100, {cond})
                       FROM provsql.rv_support({tok}::uuid, {cond}) s
                 """).format(
                     tok=sql.Literal(token), bins=sql.Literal(bins),
@@ -1056,7 +1058,10 @@ def evaluate_circuit(
                 )
             )
             row = cur.fetchone()
-        lo, hi, exp_val, var_val, hist = row if row else (None, None, None, None, None)
+        if row:
+            lo, hi, exp_val, var_val, hist, curves = row
+        else:
+            lo, hi, exp_val, var_val, hist, curves = (None,) * 6
         return {
             "result": {
                 "support": [_to_jsonable(lo), _to_jsonable(hi)],
@@ -1068,6 +1073,13 @@ def evaluate_circuit(
                 # would stringify the list).
                 "histogram": hist if isinstance(hist, (list, dict)) else json.loads(hist) if hist else [],
                 "bins": bins,
+                # rv_analytical_curves returns jsonb {pdf: [...], cdf: [...]}
+                # for closed-form bare-gate_rv roots (optionally truncated),
+                # NULL otherwise.  Forward the NULL verbatim so the frontend
+                # can skip the overlay without a special case.
+                "analytical_curves":
+                    curves if isinstance(curves, (list, dict))
+                    else json.loads(curves) if curves else None,
             },
             "kind": "distribution-profile",
         }

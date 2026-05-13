@@ -358,6 +358,21 @@ server-side by :sqlfunc:`rv_histogram`; the sample count comes
 from ``provsql.rv_mc_samples`` and the seed from
 ``provsql.monte_carlo_seed`` (both surfaced in the Config panel).
 
+When the pinned node resolves to a recognised closed-form shape
+(a bare ``gate_rv`` of Normal / Uniform / Exponential / Erlang,
+optionally with a one-interval conditioning event), the panel
+overlays the analytical PDF (or CDF, depending on the toggle)
+on the histogram as a smooth terracotta curve. The overlay
+makes the simplifier's analytical wins visible: when
+``2 * Exp(0.4)`` folds to ``Exp(0.2)`` the panel shows the
+exact exponential decay curve over the MC-sampled bars, so the
+user can verify by eye that the fold matched the distribution.
+The curve is computed server-side by
+:sqlfunc:`rv_analytical_curves`; shapes outside the closed-form
+table (``gate_arith`` composites of independent RVs, Bernoulli
+mixtures, categoricals) render histogram-only without an
+overlay.
+
 .. figure:: /_static/studio/distribution-profile.png
    :alt: The eval-strip Distribution profile panel showing the
          support interval, the mean and standard deviation, and

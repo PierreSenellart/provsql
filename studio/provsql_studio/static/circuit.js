@@ -2729,6 +2729,10 @@
       let bars;
       const total = histogram.reduce(
         (s, b) => s + (Number(b.count) || 0), 0) || 1;
+      // Hoisted out of the mode dispatch so the analytical-curve overlay
+      // below can scale PDF density to count-scaled bar heights.
+      const maxCount = histogram.reduce(
+        (m, b) => Math.max(m, Number(b.count) || 0), 0) || 1;
       // Tooltip text per bar.  Same readout shape in both modes:
       //   x ∈ [lo, hi]
       //   P(X ∈ bin) = p          (always)
@@ -2780,9 +2784,8 @@
         }).join('');
       } else {
         // PDF: bar heights proportional to the per-bin count, scaled so
-        // the tallest bin fills the usable area.
-        const maxCount = histogram.reduce(
-          (m, b) => Math.max(m, Number(b.count) || 0), 0) || 1;
+        // the tallest bin fills the usable area.  `maxCount` is hoisted
+        // above the dispatch so the analytical-curve overlay can reuse it.
         let cum = 0;
         bars = histogram.map(b => {
           cum += Number(b.count) || 0;
@@ -2808,7 +2811,67 @@
           + `stroke="var(--terracotta-500)" stroke-width="1" `
           + `stroke-dasharray="3 3" opacity="0.75" />`;
       }
-      svgInner = `<g class="cv-profile-bars">${bars}</g>${meanLine}`
+      // Analytical-curve overlay.  When the backend's rv_analytical_curves
+      // returned a {pdf, cdf} payload (closed-form shape: bare gate_rv with
+      // a recognised family, possibly truncated), draw the matching curve
+      // over the histogram bars.  In PDF mode we scale the density into
+      // the count-axis frame so the curve rides over the bars at the
+      // same scale; in CDF mode we map the cumulative probability into
+      // the staircase's [0, usableH] frame.  Falls back to no overlay
+      // when the payload is absent (NULL on the SQL side -> null here)
+      // so non-closed-form shapes (gate_arith composites, mixtures,
+      // categoricals) render histogram-only without a special case.
+      let overlayPath = '';
+      const curves = profile.analytical_curves;
+      const curveArr = curves
+                       && Array.isArray(curves[_mode === 'cdf' ? 'cdf' : 'pdf'])
+                     ? curves[_mode === 'cdf' ? 'cdf' : 'pdf'] : null;
+      if (curveArr && curveArr.length >= 2) {
+        // Equal-width histogram: bin width = (full range) / nbins.
+        // The backend builds the histogram with constant bin width
+        // (compute_support's lo..hi divided into `bins` cells), so
+        // averaging the first cell's width is equivalent and avoids a
+        // separate reduction.
+        const binW = (Number(histogram[0].bin_hi)
+                      - Number(histogram[0].bin_lo)) || 1;
+        const pts = [];
+        for (const pt of curveArr) {
+          const xv = Number(pt.x);
+          const pv = Number(pt.p);
+          if (!Number.isFinite(xv) || !Number.isFinite(pv)) continue;
+          /* Clip to the current x-axis view so a curve that extends
+           * past the histogram (e.g. unconditional Normal's mu ± 4σ
+           * window vs. a tighter empirical bin range) does not
+           * overhang the SVG. */
+          if (xv < lo || xv > hi) continue;
+          const px = sx(xv);
+          let py;
+          if (_mode === 'cdf') {
+            /* Staircase maps cum/total in [0, 1] to height usableH.
+             * The analytical CDF is already in [0, 1] over the
+             * truncation, so a direct linear map matches. */
+            const c = Math.max(0, Math.min(1, pv));
+            py = (H - padBottom) - c * usableH;
+          } else {
+            /* Bar height is (count / maxCount) * usableH.  The
+             * expected count in a bin of width binW is total · binW
+             * · pdf(midpoint).  Substituting count = total · binW · p:
+             *   bar_h_frac = total · binW · p / maxCount.
+             * Same scale as the bars, so a correctly-modelled
+             * histogram lays right under the curve. */
+            const scaled = (total * binW * pv) / maxCount;
+            py = (H - padBottom) - Math.max(0, scaled) * usableH;
+          }
+          pts.push(`${px.toFixed(1)},${py.toFixed(1)}`);
+        }
+        if (pts.length >= 2) {
+          overlayPath =
+            `<path class="cv-profile-overlay" d="M${pts.join(' L')}" `
+            + `fill="none" stroke="var(--terracotta-500)" `
+            + `stroke-width="1.5" opacity="0.9" />`;
+        }
+      }
+      svgInner = `<g class="cv-profile-bars">${bars}</g>${overlayPath}${meanLine}`
         + `<text class="cv-rv-tick" x="${padX}" y="${H - 4}">${escapeHtml(fmtTick(lo))}</text>`
         + `<text class="cv-rv-tick" x="${W - padX}" y="${H - 4}" text-anchor="end">`
         + `${escapeHtml(fmtTick(hi))}</text>`;

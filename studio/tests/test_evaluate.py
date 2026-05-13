@@ -884,6 +884,47 @@ def test_evaluate_distribution_profile_dirac_value(client):
     assert r["histogram"][0]["bin_hi"] == 7.5
 
 
+def test_evaluate_distribution_profile_analytical_curves_normal(client):
+    """A bare Normal gate_rv root should ship the analytical PDF / CDF
+    sampled curve alongside the empirical histogram so the Studio
+    frontend can overlay the closed-form density on the MC bars."""
+    tok = _rv_uuid(client, "provsql.normal(0, 1)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    r = resp.get_json()["result"]
+    curves = r.get("analytical_curves")
+    assert isinstance(curves, dict), curves
+    pdf = curves["pdf"]
+    cdf = curves["cdf"]
+    assert isinstance(pdf, list) and len(pdf) == 100
+    assert isinstance(cdf, list) and len(cdf) == 100
+    # PDF at the midpoint (x ≈ 0) is 1/sqrt(2 pi) ≈ 0.3989.  Allow a
+    # generous tolerance because the midpoint sample's x may not be
+    # exactly 0 (the curve window is mu ± 4σ over 100 points).
+    mid = pdf[50]
+    assert abs(float(mid["x"])) < 0.1, mid
+    assert abs(float(mid["p"]) - 0.3989422804014327) < 0.01, mid
+    # CDF is monotone nondecreasing, ends at ~1.
+    assert float(cdf[0]["p"]) < float(cdf[-1]["p"])
+    assert float(cdf[-1]["p"]) > 0.99
+
+
+def test_evaluate_distribution_profile_analytical_curves_arith(client):
+    """A gate_arith composite (N + U) has no closed-form PDF in V1, so
+    the analytical_curves field is None and the frontend falls back to
+    histogram-only rendering."""
+    tok = _rv_uuid(
+        client, "provsql.normal(0, 1) + provsql.uniform(0, 1)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    r = resp.get_json()["result"]
+    assert r.get("analytical_curves") is None
+
+
 def test_evaluate_moment_categorical(client):
     """The moment evaluator threads (k, central) through
     `provsql.rv_moment(token, k, central)`.  Use a categorical RV with

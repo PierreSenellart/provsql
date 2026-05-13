@@ -417,6 +417,21 @@ acceptance even for tight tail events that previously starved
 the rejection budget. Erlang truncation and ``gate_arith``
 composite roots fall through to MC rejection unchanged.
 
+:sqlfunc:`rv_analytical_curves` (in :cfile:`RvAnalyticalCurves.cpp`)
+exposes the closed-form PDF and CDF as a sampled curve for ProvSQL
+Studio's Distribution profile overlay. Returns NULL when the root
+sub-circuit is not a closed-form shape, so callers can dispatch
+it in parallel with :sqlfunc:`rv_histogram` without a structural
+pre-check. V1 supports bare ``gate_rv`` of Normal / Uniform /
+Exponential / Erlang, optionally truncated by a one-interval
+conditioning event. ``gate_arith`` composites, ``gate_mixture``
+(Bernoulli or categorical), and non-integer Erlang shapes return
+NULL; the frontend renders histogram-only in those cases.
+Truncation normalises the PDF by ``Z = CDF(hi) - CDF(lo)`` and
+rescales the CDF to ``[0, 1]`` over the conditioning interval, so
+the overlay and the (truncated) histogram bars share a single
+scale.
+
 The load-time pass ``runConstantFold`` (in ``HybridEvaluator.cpp``,
 invoked from ``CircuitFromMMap::applyLoadTimeSimplification``
 alongside ``runRangeCheck`` and ``foldSemiringIdentities``)

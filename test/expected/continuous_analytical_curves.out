@@ -1,0 +1,34 @@
+\set ECHO none
+normal_unconditional
+t
+(1 row)
+uniform_unconditional
+t
+(1 row)
+exponential_unconditional
+t
+(1 row)
+erlang_unconditional
+t
+(1 row)
+truncated_normal
+t
+(1 row)
+truncated_uniform
+t
+(1 row)
+arith_composite_returns_null
+t
+(1 row)
+mixture_returns_null
+t
+(1 row)
+categorical_returns_null
+t
+(1 row)
+infeasible_event_returns_null
+t
+(1 row)
+continuous_analytical_curves_done
+ok
+(1 row)
