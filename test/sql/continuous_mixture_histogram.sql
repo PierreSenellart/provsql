@@ -15,11 +15,11 @@ INSERT INTO p VALUES (public.uuid_generate_v4());
 SELECT set_prob((SELECT t FROM p), 0.5);
 
 CREATE TEMP TABLE bimix AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT t FROM p),
              provsql.normal(-5, 0.5),
-             provsql.normal( 5, 0.5))) AS u;
+             provsql.normal( 5, 0.5)))::uuid AS u;
 
 CREATE TEMP TABLE bimix_hist AS
   SELECT provsql.rv_histogram((SELECT u FROM bimix), 40) AS h;

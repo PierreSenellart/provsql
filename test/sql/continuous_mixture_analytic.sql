@@ -25,11 +25,11 @@ SELECT set_prob((SELECT t FROM p), 0.4);
 --             Y ~ N(5,2): raw_moment(3) = μ³ + 3μσ² = 125 + 3·5·4 = 185.
 --             So E[M^3] = 0.4·0 + 0.6·185 = 111.0.
 CREATE TEMP TABLE m_normal AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT t FROM p),
              provsql.normal(0, 1),
-             provsql.normal(5, 2))) AS u;
+             provsql.normal(5, 2)))::uuid AS u;
 
 SELECT abs(provsql.rv_moment((SELECT u FROM m_normal), 1, false) - 3.0  ) < 1e-9 AS exact_mean,
        abs(provsql.rv_moment((SELECT u FROM m_normal), 2, true)  - 8.8  ) < 1e-9 AS exact_variance,
@@ -44,11 +44,11 @@ SELECT abs(provsql.rv_moment((SELECT u FROM m_normal), 1, false) - 3.0  ) < 1e-9
 --             = 0.4·4/3 + 1.2 - 1.0 = 0.5333... + 0.2 = 0.7333...
 SELECT set_prob((SELECT t FROM p), 0.4);
 CREATE TEMP TABLE m_mixed AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT t FROM p),
              provsql.uniform(0, 2),
-             provsql.exponential(1))) AS u;
+             provsql.exponential(1)))::uuid AS u;
 
 SELECT abs(provsql.rv_moment((SELECT u FROM m_mixed), 1, false) - 1.0) < 1e-9 AS mixed_mean,
        abs(provsql.rv_moment((SELECT u FROM m_mixed), 2, true)  - (0.4 * (1.0/3.0) + 0.6 * 1.0 + (0.4 * 1 + 0.6 * 1) - (0.4 * 1 + 0.6 * 1)*(0.4 * 1 + 0.6 * 1) ))
@@ -74,9 +74,8 @@ INSERT INTO p2 VALUES (public.uuid_generate_v4());
 SELECT set_prob((SELECT t FROM p2), 0.5);
 
 CREATE TEMP TABLE m_nested AS
-  SELECT random_variable_uuid(
-           provsql.mixture(
-             (SELECT t FROM p1),
+  SELECT (provsql.mixture(
+             (SELECT t FROM p1)::uuid,
              provsql.as_random(0),
              provsql.mixture(
                (SELECT t FROM p2),

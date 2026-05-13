@@ -21,11 +21,11 @@ SELECT set_prob((SELECT t FROM p), 0.3);
 --             = 0.3 + 70.7 - 49 = 22.0
 --             (general formula: π·(Var(X)+E[X]²) + (1-π)·(Var(Y)+E[Y]²) - E[M]²)
 CREATE TEMP TABLE mix_a AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT t FROM p),
              provsql.normal(0,  1),
-             provsql.normal(10, 1))) AS u;
+             provsql.normal(10, 1)))::uuid AS u;
 
 SELECT abs(provsql.rv_moment((SELECT u FROM mix_a), 1, false) - 7.0)  < 0.1  AS mean_matches,
        abs(provsql.rv_moment((SELECT u FROM mix_a), 2, true)  - 22.0) < 0.5  AS variance_matches;
@@ -44,7 +44,7 @@ SELECT abs(provsql.rv_moment((SELECT u FROM mix_a), 1, false) - 7.0)  < 0.1  AS 
 SELECT set_prob((SELECT t FROM p), 0.5);
 
 CREATE TEMP TABLE mix_pair AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT t FROM p),
              provsql.as_random(-5),
@@ -52,7 +52,7 @@ CREATE TEMP TABLE mix_pair AS
          + provsql.mixture(
              (SELECT t FROM p),
              provsql.as_random(-5),
-             provsql.as_random( 5))) AS u;
+             provsql.as_random( 5)))::uuid AS u;
 
 -- The expected coupled variance is 100 (Bernoulli-driven swing across
 -- the joint pair).  Allow a wide tolerance since the analytical path
@@ -69,7 +69,7 @@ INSERT INTO p2 VALUES (public.uuid_generate_v4());
 SELECT set_prob((SELECT t FROM p2), 0.5);
 
 CREATE TEMP TABLE mix_indep_pair AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT t FROM p),
              provsql.as_random(-5),
@@ -77,7 +77,7 @@ CREATE TEMP TABLE mix_indep_pair AS
          + provsql.mixture(
              (SELECT t FROM p2),
              provsql.as_random(-5),
-             provsql.as_random( 5))) AS u;
+             provsql.as_random( 5)))::uuid AS u;
 
 SELECT abs(provsql.rv_moment((SELECT u FROM mix_indep_pair), 2, true) - 50.0) < 5.0
          AS distinct_bernoullis_decouple;
@@ -99,9 +99,8 @@ SELECT set_prob((SELECT b1 FROM bern_d), 0.5);
 SELECT set_prob((SELECT b2 FROM bern_d), 0.5);
 
 CREATE TEMP TABLE mix_d AS
-  SELECT random_variable_uuid(
-           provsql.mixture(
-             provenance_times((SELECT b1 FROM bern_d), (SELECT b2 FROM bern_d)),
+  SELECT (provsql.mixture(
+             provenance_times((SELECT b1 FROM bern_d)::uuid, (SELECT b2 FROM bern_d)),
              provsql.as_random(-5),
              provsql.as_random( 5))) AS u;
 

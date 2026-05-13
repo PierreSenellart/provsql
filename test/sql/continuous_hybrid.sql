@@ -419,7 +419,7 @@ RESET provsql.hybrid_evaluation;
 WITH q AS (SELECT 2 * provsql.exponential(0.4) AS r),
      j AS (
        SELECT provsql.simplified_circuit_subgraph(
-                provsql.random_variable_uuid(r), 1)::text AS s
+                (r)::uuid, 1)::text AS s
          FROM q
      )
 SELECT s LIKE '%"extra": "exponential:0.2"%'
@@ -447,7 +447,7 @@ FROM j;
 -- (1) -N(2, 0.5) folds to N(-2, 0.5).
 WITH q AS (SELECT - provsql.normal(2, 0.5) AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'rv'
        AND (s -> 0 ->> 'extra') = 'normal:-2,0.5'
@@ -457,7 +457,7 @@ FROM j;
 -- (2) -U(1, 3) folds to U(-3, -1).
 WITH q AS (SELECT - provsql.uniform(1, 3) AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'rv'
        AND (s -> 0 ->> 'extra') = 'uniform:-3,-1'
@@ -467,7 +467,7 @@ FROM j;
 -- (3) N(2, 0.5) - 1 folds to N(1, 0.5).
 WITH q AS (SELECT provsql.normal(2, 0.5) - 1::random_variable AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'rv'
        AND (s -> 0 ->> 'extra') = 'normal:1,0.5'
@@ -477,7 +477,7 @@ FROM j;
 -- (4) 1 - N(2, 0.5) folds to N(-1, 0.5).
 WITH q AS (SELECT 1::random_variable - provsql.normal(2, 0.5) AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'rv'
        AND (s -> 0 ->> 'extra') = 'normal:-1,0.5'
@@ -487,7 +487,7 @@ FROM j;
 -- (5) U(1, 3) - 0.5 folds to U(0.5, 2.5).
 WITH q AS (SELECT provsql.uniform(1, 3) - 0.5::random_variable AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'rv'
        AND (s -> 0 ->> 'extra') = 'uniform:0.5,2.5'
@@ -498,7 +498,7 @@ FROM j;
 --     MINUS -> PLUS(value, NEG(U)) -> uniform closure with a == -1.
 WITH q AS (SELECT 0.5::random_variable - provsql.uniform(1, 3) AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'rv'
        AND (s -> 0 ->> 'extra') = 'uniform:-2.5,-0.5'
@@ -508,7 +508,7 @@ FROM j;
 -- (7) U(1, 3) + 2 folds to U(3, 5).
 WITH q AS (SELECT provsql.uniform(1, 3) + 2::random_variable AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'rv'
        AND (s -> 0 ->> 'extra') = 'uniform:3,5'
@@ -519,7 +519,7 @@ FROM j;
 -- longer exponential).
 WITH q AS (SELECT - provsql.exponential(0.4) AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'arith'
        AND (s -> 0 ->> 'info1') = '4'  -- PROVSQL_ARITH_NEG
@@ -530,7 +530,7 @@ FROM j;
 -- longer exponential).
 WITH q AS (SELECT provsql.exponential(0.4) + 1::random_variable AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'arith'
        AND (s -> 0 ->> 'info1') = '0'  -- PROVSQL_ARITH_PLUS
@@ -541,7 +541,7 @@ FROM j;
 -- (sum of two independent uniforms is triangular, not uniform).
 WITH q AS (SELECT provsql.uniform(0, 1) + provsql.uniform(0, 1) AS r),
      j AS (SELECT provsql.simplified_circuit_subgraph(
-                    provsql.random_variable_uuid(r), 1)::jsonb AS s
+                    (r)::uuid, 1)::jsonb AS s
               FROM q)
 SELECT (s -> 0 ->> 'gate_type') = 'arith'
        AND (s -> 0 ->> 'info1') = '0'  -- PROVSQL_ARITH_PLUS

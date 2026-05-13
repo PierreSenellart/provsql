@@ -5,39 +5,35 @@ SET search_path TO provsql_test,provsql;
 -- Constructors create the right gate types and serialise their
 -- distribution parameters into the gate's extra byte string.
 
-SELECT get_gate_type(random_variable_uuid(provsql.normal(2.5, 0.5))) AS rv_normal_kind;
-SELECT get_extra(random_variable_uuid(provsql.normal(2.5, 0.5))) AS rv_normal_extra;
+SELECT get_gate_type((provsql.normal(2.5, 0.5))::uuid) AS rv_normal_kind;
+SELECT get_extra((provsql.normal(2.5, 0.5))::uuid) AS rv_normal_extra;
 
-SELECT get_gate_type(random_variable_uuid(provsql.uniform(1, 3))) AS rv_uniform_kind;
-SELECT get_extra(random_variable_uuid(provsql.uniform(1, 3))) AS rv_uniform_extra;
+SELECT get_gate_type((provsql.uniform(1, 3))::uuid) AS rv_uniform_kind;
+SELECT get_extra((provsql.uniform(1, 3))::uuid) AS rv_uniform_extra;
 
-SELECT get_gate_type(random_variable_uuid(provsql.exponential(0.7))) AS rv_exp_kind;
-SELECT get_extra(random_variable_uuid(provsql.exponential(0.7))) AS rv_exp_extra;
+SELECT get_gate_type((provsql.exponential(0.7))::uuid) AS rv_exp_kind;
+SELECT get_extra((provsql.exponential(0.7))::uuid) AS rv_exp_extra;
 
-SELECT get_gate_type(random_variable_uuid(provsql.erlang(3, 0.5))) AS rv_erlang_kind;
-SELECT get_extra(random_variable_uuid(provsql.erlang(3, 0.5))) AS rv_erlang_extra;
+SELECT get_gate_type((provsql.erlang(3, 0.5))::uuid) AS rv_erlang_kind;
+SELECT get_extra((provsql.erlang(3, 0.5))::uuid) AS rv_erlang_extra;
 
 -- as_random creates a gate_value (constant), not a gate_rv.
-SELECT get_gate_type(random_variable_uuid(provsql.as_random(42))) AS const_kind;
-SELECT get_extra(random_variable_uuid(provsql.as_random(42))) AS const_extra;
+SELECT get_gate_type((provsql.as_random(42))::uuid) AS const_kind;
+SELECT get_extra((provsql.as_random(42))::uuid) AS const_extra;
 
--- The cached scalar value mirrors the constructor argument for
--- as_random; for actual distributions it is NaN.
-SELECT random_variable_value(provsql.as_random(7.25)) AS as_random_value;
-SELECT random_variable_value(provsql.normal(0, 1)) = 'NaN'::float8 AS normal_value_is_nan;
-
--- Text IO round-trips: reparsing the printed form must produce a
--- struct whose UUID and cached value match the original.
+-- Text IO round-trips: reparsing the printed form yields the same
+-- struct.  After the cached-scalar removal a random_variable is a
+-- thin UUID wrapper, so the text form is the bare hyphenated UUID
+-- and equality on the UUID is sufficient to certify the round-trip.
 WITH r AS (SELECT provsql.as_random(3.14) AS v)
 SELECT
-  random_variable_uuid(v::text::random_variable) = random_variable_uuid(v) AS uuid_roundtrip,
-  random_variable_value(v::text::random_variable) = random_variable_value(v) AS value_roundtrip
+  (v::text::random_variable)::uuid = (v)::uuid AS uuid_roundtrip
 FROM r;
 
 -- Implicit cast random_variable -> uuid yields the same UUID as the
--- explicit random_variable_uuid() function.
+-- explicit ()::uuid function.
 WITH r AS (SELECT provsql.normal(0, 1) AS v)
-SELECT v::uuid = random_variable_uuid(v) AS implicit_cast_to_uuid FROM r;
+SELECT v::uuid = (v)::uuid AS implicit_cast_to_uuid FROM r;
 
 -- A column of a real table can hold random_variable values and survive
 -- through the pg_dump-shaped text representation back into a row.
@@ -53,24 +49,24 @@ DROP TABLE sensors;
 
 -- as_random is IMMUTABLE with a deterministic UUID derived from the
 -- constant: two calls for the same value resolve to the same gate.
-SELECT random_variable_uuid(provsql.as_random(2)) = random_variable_uuid(provsql.as_random(2)) AS as_random_deterministic;
+SELECT (provsql.as_random(2))::uuid = (provsql.as_random(2))::uuid AS as_random_deterministic;
 -- Different constants give different UUIDs.
-SELECT random_variable_uuid(provsql.as_random(2)) <> random_variable_uuid(provsql.as_random(3)) AS as_random_distinct;
+SELECT (provsql.as_random(2))::uuid <> (provsql.as_random(3))::uuid AS as_random_distinct;
 
 -- Implicit cast double precision -> random_variable: a float8 literal
 -- in a random_variable context is auto-lifted to the same gate
 -- as_random would produce.
-SELECT random_variable_uuid(2.5::double precision::random_variable)
-     = random_variable_uuid(provsql.as_random(2.5::double precision)) AS implicit_cast_dedup_float8;
+SELECT (2.5::double precision::random_variable)::uuid
+     = (provsql.as_random(2.5::double precision))::uuid AS implicit_cast_dedup_float8;
 -- Direct integer cast (PG operator resolution does not chain casts
 -- across multiple steps, so int -> random_variable is registered as
 -- its own cast via an as_random(integer) overload).
-SELECT random_variable_uuid(7::integer::random_variable)
-     = random_variable_uuid(provsql.as_random(7::integer)) AS int_literal_via_cast;
+SELECT (7::integer::random_variable)::uuid
+     = (provsql.as_random(7::integer))::uuid AS int_literal_via_cast;
 -- Direct numeric cast for "2.5"-style literals (PG's default literal
 -- type for unquoted decimals is numeric).
-SELECT random_variable_uuid(2.5::numeric::random_variable)
-     = random_variable_uuid(provsql.as_random(2.5::numeric)) AS numeric_literal_via_cast;
+SELECT (2.5::numeric::random_variable)::uuid
+     = (provsql.as_random(2.5::numeric))::uuid AS numeric_literal_via_cast;
 
 -- The continuous-distribution constructors are VOLATILE so that each
 -- call mints a FRESH uuid_generate_v4(): two calls to normal(0, 1) in
@@ -79,29 +75,29 @@ SELECT random_variable_uuid(2.5::numeric::random_variable)
 -- the call and the resulting circuit would silently collapse the two
 -- RVs into one shared gate, breaking the c-table model.  These tests
 -- pin the contract.
-SELECT random_variable_uuid(provsql.normal(0, 1))
-    <> random_variable_uuid(provsql.normal(0, 1)) AS normal_calls_independent;
-SELECT random_variable_uuid(provsql.uniform(0, 1))
-    <> random_variable_uuid(provsql.uniform(0, 1)) AS uniform_calls_independent;
-SELECT random_variable_uuid(provsql.exponential(1))
-    <> random_variable_uuid(provsql.exponential(1)) AS exponential_calls_independent;
-SELECT random_variable_uuid(provsql.erlang(3, 1))
-    <> random_variable_uuid(provsql.erlang(3, 1)) AS erlang_calls_independent;
+SELECT (provsql.normal(0, 1))::uuid
+    <> (provsql.normal(0, 1))::uuid AS normal_calls_independent;
+SELECT (provsql.uniform(0, 1))::uuid
+    <> (provsql.uniform(0, 1))::uuid AS uniform_calls_independent;
+SELECT (provsql.exponential(1))::uuid
+    <> (provsql.exponential(1))::uuid AS exponential_calls_independent;
+SELECT (provsql.erlang(3, 1))::uuid
+    <> (provsql.erlang(3, 1))::uuid AS erlang_calls_independent;
 
 -- Erlang(1, λ) is exactly Exp(λ): the constructor silently routes
 -- through exponential so the gate's extra reflects the underlying
 -- exponential form, sharing the entire downstream sampler / analytic
 -- path with vanilla Exp(λ).
-SELECT get_extra(random_variable_uuid(provsql.erlang(1, 0.7))) AS erlang_one_routes_to_exp;
+SELECT get_extra((provsql.erlang(1, 0.7))::uuid) AS erlang_one_routes_to_exp;
 
 -- Degenerate distributions: silently routed through as_random so the
 -- resulting gate is a gate_value, sharing its UUID with as_random(x).
-SELECT get_gate_type(random_variable_uuid(provsql.normal(5, 0))) AS normal_zero_sigma_kind;
-SELECT random_variable_uuid(provsql.normal(5, 0))
-     = random_variable_uuid(provsql.as_random(5)) AS normal_zero_sigma_dedups_with_as_random;
-SELECT get_gate_type(random_variable_uuid(provsql.uniform(7, 7))) AS uniform_degenerate_kind;
-SELECT random_variable_uuid(provsql.uniform(7, 7))
-     = random_variable_uuid(provsql.as_random(7)) AS uniform_degenerate_dedups_with_as_random;
+SELECT get_gate_type((provsql.normal(5, 0))::uuid) AS normal_zero_sigma_kind;
+SELECT (provsql.normal(5, 0))::uuid
+     = (provsql.as_random(5))::uuid AS normal_zero_sigma_dedups_with_as_random;
+SELECT get_gate_type((provsql.uniform(7, 7))::uuid) AS uniform_degenerate_kind;
+SELECT (provsql.uniform(7, 7))::uuid
+     = (provsql.as_random(7))::uuid AS uniform_degenerate_dedups_with_as_random;
 
 -- Rejected parameters.  Use VERBOSITY terse to keep error output
 -- compact; restore default afterwards so other tests in the suite are
@@ -124,27 +120,26 @@ SELECT provsql.erlang(3, -0.5);
 
 -- as_random allows non-finite floats: NaN and ±Infinity are valid
 -- float8 values with well-defined IEEE 754 comparison semantics.
--- Each round-trips through the text IO and produces a distinct gate.
-SELECT random_variable_value(provsql.as_random('NaN'::float8)) = 'NaN'::float8 AS as_random_nan_value;
-SELECT random_variable_value(provsql.as_random('Infinity'::float8))
-     = 'Infinity'::float8 AS as_random_pos_inf_value;
-SELECT random_variable_value(provsql.as_random('-Infinity'::float8))
-     = '-Infinity'::float8 AS as_random_neg_inf_value;
+-- Each routes through the value-gate extra (where the literal text
+-- is preserved verbatim) and produces a distinct gate.
+SELECT get_extra((provsql.as_random('NaN'::float8))::uuid) AS as_random_nan_extra;
+SELECT get_extra((provsql.as_random('Infinity'::float8))::uuid) AS as_random_pos_inf_extra;
+SELECT get_extra((provsql.as_random('-Infinity'::float8))::uuid) AS as_random_neg_inf_extra;
 WITH r AS (SELECT provsql.as_random('NaN'::float8) AS v)
-SELECT random_variable_uuid(v::text::random_variable) = random_variable_uuid(v) AS nan_text_roundtrip FROM r;
+SELECT (v::text::random_variable)::uuid = (v)::uuid AS nan_text_roundtrip FROM r;
 -- The three special values produce three distinct gates.
 SELECT count(DISTINCT u) AS distinct_special_uuids
   FROM (VALUES
-    (random_variable_uuid(provsql.as_random('NaN'::float8))),
-    (random_variable_uuid(provsql.as_random('Infinity'::float8))),
-    (random_variable_uuid(provsql.as_random('-Infinity'::float8)))
+    ((provsql.as_random('NaN'::float8))::uuid),
+    ((provsql.as_random('Infinity'::float8))::uuid),
+    ((provsql.as_random('-Infinity'::float8))::uuid)
   ) AS t(u);
 
 -- IEEE 754 has two zeros (-0.0 and +0.0) but they denote the same
 -- constant.  as_random canonicalises -0.0 to +0.0 so both yield the
 -- same gate, and uniform(-0, +0) (which routes through as_random)
 -- inherits the canonicalisation.
-SELECT random_variable_uuid(provsql.as_random((-0)::float8))
-     = random_variable_uuid(provsql.as_random((0)::float8)) AS as_random_signed_zero_dedup;
-SELECT random_variable_uuid(provsql.uniform((-0)::float8, (0)::float8))
-     = random_variable_uuid(provsql.as_random((0)::float8)) AS uniform_signed_zero_dedup;
+SELECT (provsql.as_random((-0)::float8))::uuid
+     = (provsql.as_random((0)::float8))::uuid AS as_random_signed_zero_dedup;
+SELECT (provsql.uniform((-0)::float8, (0)::float8))::uuid
+     = (provsql.as_random((0)::float8))::uuid AS uniform_signed_zero_dedup;

@@ -126,8 +126,8 @@ SELECT (support((-3.14)::float8)).*;    -- (-3.14, -3.14)
 
 -- Bare UUID: route to rv_support directly.  A gate_value UUID gives a
 -- point support; a gate_rv UUID gives the distribution's support.
-SELECT (support(provsql.random_variable_uuid(provsql.as_random(9.5)))).*;
-SELECT (support(provsql.random_variable_uuid(provsql.uniform(2, 5)))).*;
+SELECT (support((provsql.as_random(9.5))::uuid)).*;
+SELECT (support((provsql.uniform(2, 5))::uuid)).*;
 -- A non-scalar gate falls back to the conservative all-real interval
 -- without raising (gate_one is the identity, not a scalar).
 SELECT (support(gate_one())).*;

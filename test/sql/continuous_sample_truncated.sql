@@ -27,7 +27,7 @@ SET provsql.monte_carlo_seed = 42;
 -- ---------------------------------------------------------------
 WITH r AS (SELECT provsql.uniform(0, 10) AS u),
      ev AS (SELECT provsql.rv_cmp_gt(u, 9.5::random_variable) AS ev,
-                   provsql.random_variable_uuid(u) AS tok
+                   (u)::uuid AS tok
               FROM r),
      s AS (SELECT v FROM ev, provsql.rv_sample(tok, 10000, ev) v)
 SELECT count(*) = 10000
@@ -44,7 +44,7 @@ FROM s;
 -- ---------------------------------------------------------------
 WITH r AS (SELECT provsql.exponential(0.4) AS e),
      ev AS (SELECT provsql.rv_cmp_gt(e, 5::random_variable) AS ev,
-                   provsql.random_variable_uuid(e) AS tok
+                   (e)::uuid AS tok
               FROM r),
      s AS (SELECT v FROM ev, provsql.rv_sample(tok, 10000, ev) v)
 SELECT count(*) = 10000
@@ -69,7 +69,7 @@ WITH r AS (SELECT provsql.exponential(1) AS e),
      ev AS (SELECT provsql.provenance_times(
                      provsql.rv_cmp_gt(e, 1::random_variable),
                      provsql.rv_cmp_lt(e, 3::random_variable)) AS ev,
-                   provsql.random_variable_uuid(e) AS tok
+                   (e)::uuid AS tok
               FROM r),
      s AS (SELECT v FROM ev, provsql.rv_sample(tok, 10000, ev) v)
 SELECT count(*) = 10000
@@ -95,7 +95,7 @@ WITH r AS (SELECT provsql.normal(0, 1) AS n),
      ev AS (SELECT provsql.provenance_times(
                      provsql.rv_cmp_gt(n, -2::random_variable),
                      provsql.rv_cmp_lt(n,  2::random_variable)) AS ev,
-                   provsql.random_variable_uuid(n) AS tok
+                   (n)::uuid AS tok
               FROM r),
      s AS (SELECT v FROM ev, provsql.rv_sample(tok, 10000, ev) v)
 SELECT count(*) = 10000
@@ -120,7 +120,7 @@ WITH r AS (SELECT provsql.normal(0, 1) AS n),
      ev AS (SELECT provsql.provenance_times(
                      provsql.rv_cmp_gt(n, 1::random_variable),
                      provsql.rv_cmp_lt(n, 3::random_variable)) AS ev,
-                   provsql.random_variable_uuid(n) AS tok
+                   (n)::uuid AS tok
               FROM r),
      s AS (SELECT v FROM ev, provsql.rv_sample(tok, 10000, ev) v)
 SELECT count(*) = 10000
@@ -140,7 +140,7 @@ SET provsql.rv_mc_samples = 100000;   -- enough budget to deliver 10k
 \set VERBOSITY terse
 WITH r AS (SELECT provsql.erlang(2, 1) AS e),
      ev AS (SELECT provsql.rv_cmp_gt(e, 3::random_variable) AS ev,
-                   provsql.random_variable_uuid(e) AS tok
+                   (e)::uuid AS tok
               FROM r),
      s AS (SELECT v FROM ev, provsql.rv_sample(tok, 10000, ev) v)
 SELECT count(*) >= 9000   -- ~10000 expected with 20% acceptance on 100k budget
@@ -161,7 +161,7 @@ RESET provsql.rv_mc_samples;
 SET provsql.rv_mc_samples = 100;
 WITH r AS (SELECT provsql.uniform(0, 100) AS u),
      ev AS (SELECT provsql.rv_cmp_gt(u, 99::random_variable) AS ev,
-                   provsql.random_variable_uuid(u) AS tok
+                   (u)::uuid AS tok
               FROM r),
      h AS (SELECT provsql.rv_histogram(tok, 5, ev)::jsonb AS j FROM ev)
 SELECT jsonb_array_length(j) = 5

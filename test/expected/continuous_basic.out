@@ -29,14 +29,8 @@ value
 const_extra
 42
 (1 row)
-as_random_value
-7.25
-(1 row)
-normal_value_is_nan
+uuid_roundtrip
 t
-(1 row)
-uuid_roundtrip|value_roundtrip
-t|t
 (1 row)
 implicit_cast_to_uuid
 t
@@ -108,14 +102,14 @@ ERROR:  provsql.erlang: k must be >= 1 (got -2)
 ERROR:  provsql.erlang: lambda must be finite (got NaN)
 ERROR:  provsql.erlang: lambda must be strictly positive (got 0)
 ERROR:  provsql.erlang: lambda must be strictly positive (got -0.5)
-as_random_nan_value
-t
+as_random_nan_extra
+NaN
 (1 row)
-as_random_pos_inf_value
-t
+as_random_pos_inf_extra
+Infinity
 (1 row)
-as_random_neg_inf_value
-t
+as_random_neg_inf_extra
+-Infinity
 (1 row)
 nan_text_roundtrip
 t

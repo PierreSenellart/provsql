@@ -26,11 +26,11 @@ SELECT set_prob((SELECT t FROM p), 0.3);
 --     and the closed-form mean is 0.3·3 + 0.7·5 = 4.4, variance is
 --       0.3·(1+9) + 0.7·(1+25) - 4.4² = 3 + 18.2 - 19.36 = 1.84.
 CREATE TEMP TABLE m_add AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.as_random(3) +
            provsql.mixture((SELECT t FROM p),
                            provsql.normal(0, 1),
-                           provsql.normal(2, 1))) AS u;
+                           provsql.normal(2, 1)))::uuid AS u;
 
 SELECT abs(provsql.rv_moment((SELECT u FROM m_add), 1, false) - 4.4)  < 1e-9 AS add_lift_mean,
        abs(provsql.rv_moment((SELECT u FROM m_add), 2, true)  - 1.84) < 1e-9 AS add_lift_variance;
@@ -40,11 +40,11 @@ SELECT abs(provsql.rv_moment((SELECT u FROM m_add), 1, false) - 4.4)  < 1e-9 AS 
 --       E[M] = 0.3·0 + 0.7·4 = 2.8
 --       Var(M) = 0.3·(4+0) + 0.7·(4+16) - 2.8² = 1.2 + 14 - 7.84 = 7.36.
 CREATE TEMP TABLE m_mul AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.as_random(2) *
            provsql.mixture((SELECT t FROM p),
                            provsql.normal(0, 1),
-                           provsql.normal(2, 1))) AS u;
+                           provsql.normal(2, 1)))::uuid AS u;
 
 SELECT abs(provsql.rv_moment((SELECT u FROM m_mul), 1, false) - 2.8 ) < 1e-9 AS mul_lift_mean,
        abs(provsql.rv_moment((SELECT u FROM m_mul), 2, true)  - 7.36) < 1e-9 AS mul_lift_variance;
@@ -61,11 +61,11 @@ SELECT abs(provsql.rv_moment((SELECT u FROM m_mul), 1, false) - 2.8 ) < 1e-9 AS 
 --              = 0.4·(16.333) + 0.6·17 - 16 = 6.533 + 10.2 - 16 = 0.733
 SELECT set_prob((SELECT t FROM p), 0.4);
 CREATE TEMP TABLE m_het AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.as_random(3) +
            provsql.mixture((SELECT t FROM p),
                            provsql.uniform(0, 2),
-                           provsql.exponential(1))) AS u;
+                           provsql.exponential(1)))::uuid AS u;
 
 SELECT abs(provsql.rv_moment((SELECT u FROM m_het), 1, false) - 4.0) < 1e-9 AS het_lift_mean;
 -- Variance value: 0.4*(1/3 + 16) + 0.6*(1 + 16) - 16 = 0.7333...

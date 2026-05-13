@@ -133,7 +133,6 @@ typedef struct constants_t {
   Oid OID_FUNCTION_NOT_EQUAL_UUID; ///< OID of the = operator on UUIDs FUNCTION
   Oid OID_FUNCTION_AGG_TOKEN_UUID; ///< OID of the agg_token_uuid FUNCTION
   Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
-  Oid OID_FUNCTION_RANDOM_VARIABLE_UUID; ///< OID of random_variable_uuid (rv -> uuid)
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
   /** OIDs of the @c random_variable_{eq,ne,le,lt,ge,gt} comparison
    * procedure functions, indexed by the @c ComparisonOperator enum

@@ -9,7 +9,7 @@ SET provsql.rv_mc_samples = 10000;
 -- gate_value (Dirac): single bin at the constant.
 WITH h AS (
   SELECT provsql.rv_histogram(
-           provsql.random_variable_uuid(provsql.as_random(7.5)),
+           (provsql.as_random(7.5))::uuid,
            10) AS j
 )
 SELECT jsonb_array_length(j) AS nbins,
@@ -21,7 +21,7 @@ SELECT jsonb_array_length(j) AS nbins,
 -- gate_rv: total count = sample budget, every bin in support.
 WITH h AS (
   SELECT provsql.rv_histogram(
-           provsql.random_variable_uuid(provsql.uniform(0, 1)),
+           (provsql.uniform(0, 1))::uuid,
            20) AS j
 )
 SELECT jsonb_array_length(j) AS nbins,
@@ -38,8 +38,8 @@ SELECT jsonb_array_length(j) AS nbins,
 -- bin count must respect the user-supplied bins argument.
 DO $$
 DECLARE
-  x uuid := provsql.random_variable_uuid(provsql.normal(0, 1));
-  y uuid := provsql.random_variable_uuid(provsql.normal(0, 1));
+  x uuid := (provsql.normal(0, 1))::uuid;
+  y uuid := (provsql.normal(0, 1))::uuid;
   sum_tok uuid := public.uuid_generate_v4();
   hist jsonb;
   total int;
@@ -61,21 +61,21 @@ $$;
 
 -- Determinism: same seed + same sample count -> identical histogram.
 SELECT provsql.rv_histogram(
-         provsql.random_variable_uuid(provsql.normal(0, 1)), 15)
+         (provsql.normal(0, 1))::uuid, 15)
      = provsql.rv_histogram(
-         provsql.random_variable_uuid(provsql.normal(0, 1)), 15)
+         (provsql.normal(0, 1))::uuid, 15)
        AS deterministic;
 
 -- bins parameter is honoured: bins=5 returns at most 5 bins.
 SELECT jsonb_array_length(
          provsql.rv_histogram(
-           provsql.random_variable_uuid(provsql.uniform(0, 1)), 5)) <= 5
+           (provsql.uniform(0, 1))::uuid, 5)) <= 5
        AS bins_param_respected;
 
 -- Default bins (no argument) is 30.
 SELECT jsonb_array_length(
          provsql.rv_histogram(
-           provsql.random_variable_uuid(provsql.uniform(0, 1)))) <= 30
+           (provsql.uniform(0, 1))::uuid)) <= 30
        AS default_bins_ok;
 
 -- Non-scalar root errors.  Use a gate_input UUID via add_provenance.
@@ -104,7 +104,7 @@ DO $$
 BEGIN
   BEGIN
     PERFORM provsql.rv_histogram(
-      provsql.random_variable_uuid(provsql.normal(0, 1)), 0);
+      (provsql.normal(0, 1))::uuid, 0);
     RAISE EXCEPTION 'expected rv_histogram to reject bins = 0';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%bins must be positive%' THEN
@@ -120,7 +120,7 @@ DO $$
 BEGIN
   BEGIN
     PERFORM provsql.rv_histogram(
-      provsql.random_variable_uuid(provsql.normal(0, 1)), 10);
+      (provsql.normal(0, 1))::uuid, 10);
     RAISE EXCEPTION 'expected rv_histogram to reject rv_mc_samples = 0';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%rv_mc_samples%' THEN

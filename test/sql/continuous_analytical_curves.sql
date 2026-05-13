@@ -23,7 +23,7 @@ SET search_path TO provsql_test, provsql;
 --     sample is at x = 0 (50th index).
 WITH r AS (SELECT provsql.normal(0, 1) AS n),
      c AS (SELECT provsql.rv_analytical_curves(
-                    provsql.random_variable_uuid(n), 101) AS j
+                    (n)::uuid, 101) AS j
              FROM r)
 SELECT jsonb_array_length(j -> 'pdf') = 101
        AND jsonb_array_length(j -> 'cdf') = 101
@@ -38,7 +38,7 @@ FROM c;
 --     interior sample.  CDF at the upper end approaches 1.
 WITH r AS (SELECT provsql.uniform(2, 5) AS u),
      c AS (SELECT provsql.rv_analytical_curves(
-                    provsql.random_variable_uuid(u), 100) AS j
+                    (u)::uuid, 100) AS j
              FROM r)
 SELECT jsonb_array_length(j -> 'pdf') = 100
        AND abs(((j -> 'pdf' -> 50 ->> 'p'))::float8 - (1.0/3.0)) < 1e-6
@@ -49,7 +49,7 @@ FROM c;
 -- (3) Exponential(0.5).  PDF at x = 0 is λ = 0.5; CDF at x = 0 is 0.
 WITH r AS (SELECT provsql.exponential(0.5) AS e),
      c AS (SELECT provsql.rv_analytical_curves(
-                    provsql.random_variable_uuid(e), 100) AS j
+                    (e)::uuid, 100) AS j
              FROM r)
 SELECT jsonb_array_length(j -> 'pdf') = 100
        AND ((j -> 'pdf' -> 0 ->> 'x'))::float8 = 0.0
@@ -61,7 +61,7 @@ FROM c;
 -- (4) Erlang(3, 1).  PDF at x = 0 is 0 (k > 1 shape); CDF at x = 0 is 0.
 WITH r AS (SELECT provsql.erlang(3, 1) AS er),
      c AS (SELECT provsql.rv_analytical_curves(
-                    provsql.random_variable_uuid(er), 100) AS j
+                    (er)::uuid, 100) AS j
              FROM r)
 SELECT jsonb_array_length(j -> 'pdf') = 100
        AND ((j -> 'pdf' -> 0 ->> 'p'))::float8 = 0.0
@@ -84,7 +84,7 @@ WITH r AS (SELECT provsql.normal(0, 1) AS n),
      ev AS (SELECT provsql.provenance_times(
                      provsql.rv_cmp_gt(n, -2::random_variable),
                      provsql.rv_cmp_lt(n,  2::random_variable)) AS ev,
-                   provsql.random_variable_uuid(n) AS tok FROM r),
+                   (n)::uuid AS tok FROM r),
      c AS (SELECT provsql.rv_analytical_curves(tok, 101, ev) AS j FROM ev)
 SELECT jsonb_array_length(j -> 'pdf') = 101
        AND abs(((j -> 'pdf' -> 0  ->> 'x'))::float8 - (-2.0)) < 1e-9
@@ -99,7 +99,7 @@ FROM c;
 --     at height 1/0.5 = 2.0; CDF runs from 0 to 1 over [9.5, 10].
 WITH r AS (SELECT provsql.uniform(0, 10) AS u),
      ev AS (SELECT provsql.rv_cmp_gt(u, 9.5::random_variable) AS ev,
-                   provsql.random_variable_uuid(u) AS tok FROM r),
+                   (u)::uuid AS tok FROM r),
      c AS (SELECT provsql.rv_analytical_curves(tok, 100, ev) AS j FROM ev)
 SELECT jsonb_array_length(j -> 'pdf') = 100
        AND abs(((j -> 'pdf' -> 50 ->> 'p'))::float8 - 2.0) < 1e-9
@@ -117,14 +117,14 @@ FROM c;
 -- (7) gate_arith composite root: N + U is not a single closed-form
 -- family, so the function bails.
 WITH r AS (SELECT provsql.normal(0, 1) + provsql.uniform(0, 1) AS s)
-SELECT provsql.rv_analytical_curves(provsql.random_variable_uuid(s), 100)
+SELECT provsql.rv_analytical_curves((s)::uuid, 100)
        IS NULL AS arith_composite_returns_null
 FROM r;
 
 -- (8) Bernoulli mixture: V1 doesn't render the weighted-sum PDF yet.
 WITH r AS (SELECT provsql.mixture(0.3, provsql.normal(0, 1),
                                         provsql.uniform(-1, 1)) AS m)
-SELECT provsql.rv_analytical_curves(provsql.random_variable_uuid(m), 100)
+SELECT provsql.rv_analytical_curves((m)::uuid, 100)
        IS NULL AS mixture_returns_null
 FROM r;
 
@@ -132,7 +132,7 @@ FROM r;
 -- plot yet.
 WITH r AS (SELECT provsql.categorical(ARRAY[0.5, 0.5],
                                        ARRAY[0.0, 1.0]) AS c)
-SELECT provsql.rv_analytical_curves(provsql.random_variable_uuid(c), 100)
+SELECT provsql.rv_analytical_curves((c)::uuid, 100)
        IS NULL AS categorical_returns_null
 FROM r;
 
@@ -143,7 +143,7 @@ FROM r;
 -- under tight MC budgets).
 WITH r AS (SELECT provsql.uniform(0, 10) AS u),
      ev AS (SELECT provsql.rv_cmp_gt(u, 100::random_variable) AS ev,
-                   provsql.random_variable_uuid(u) AS tok FROM r)
+                   (u)::uuid AS tok FROM r)
 SELECT provsql.rv_analytical_curves(tok, 100, ev) IS NULL
        AS infeasible_event_returns_null
 FROM ev;

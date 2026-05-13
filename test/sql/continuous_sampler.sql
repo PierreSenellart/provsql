@@ -17,9 +17,9 @@ CREATE OR REPLACE FUNCTION mc_prob(
 $$
   SELECT provsql.probability_evaluate(
     provsql.provenance_cmp(
-      provsql.random_variable_uuid(l),
+      (l)::uuid,
       (op || '(double precision,double precision)')::regoperator::oid,
-      provsql.random_variable_uuid(r)),
+      (r)::uuid),
     'monte-carlo', samples::text)
 $$ LANGUAGE sql VOLATILE;
 
@@ -30,15 +30,15 @@ WITH r AS (SELECT provsql.normal(0, 1) AS rv)
 SELECT
   provsql.probability_evaluate(
     provsql.provenance_cmp(
-      provsql.random_variable_uuid(rv),
+      (rv)::uuid,
       '=(double precision,double precision)'::regoperator::oid,
-      provsql.random_variable_uuid(rv)),
+      (rv)::uuid),
     'monte-carlo', '1000') = 1.0 AS rv_equals_itself,
   provsql.probability_evaluate(
     provsql.provenance_cmp(
-      provsql.random_variable_uuid(rv),
+      (rv)::uuid,
       '<(double precision,double precision)'::regoperator::oid,
-      provsql.random_variable_uuid(rv)),
+      (rv)::uuid),
     'monte-carlo', '1000') = 0.0 AS rv_lt_itself
 FROM r;
 
@@ -75,9 +75,9 @@ SELECT mc_prob(provsql.normal(0, 1), provsql.as_random(0), '>', 5000)
 -- relying on the user-facing rv arithmetic operators.
 DO $$
 DECLARE
-  x uuid := provsql.random_variable_uuid(provsql.normal(0, 1));
-  y uuid := provsql.random_variable_uuid(provsql.normal(0, 1));
-  zero uuid := provsql.random_variable_uuid(provsql.as_random(0));
+  x uuid := (provsql.normal(0, 1))::uuid;
+  y uuid := (provsql.normal(0, 1))::uuid;
+  zero uuid := (provsql.as_random(0))::uuid;
   sum_token uuid := public.uuid_generate_v4();
   cmp_token uuid;
   p double precision;
@@ -99,8 +99,8 @@ END $$;
 -- per-iteration memoisation must produce the same x twice.
 DO $$
 DECLARE
-  x uuid := provsql.random_variable_uuid(provsql.normal(0, 1));
-  zero uuid := provsql.random_variable_uuid(provsql.as_random(0));
+  x uuid := (provsql.normal(0, 1))::uuid;
+  zero uuid := (provsql.as_random(0))::uuid;
   sum_token uuid := public.uuid_generate_v4();
   cmp_token uuid;
   p double precision;
@@ -122,9 +122,9 @@ END $$;
 -- branches don't throw and the result is a finite probability.
 DO $$
 DECLARE
-  x uuid := provsql.random_variable_uuid(provsql.uniform(1, 2));
-  y uuid := provsql.random_variable_uuid(provsql.uniform(1, 2));
-  zero uuid := provsql.random_variable_uuid(provsql.as_random(0));
+  x uuid := (provsql.uniform(1, 2))::uuid;
+  y uuid := (provsql.uniform(1, 2))::uuid;
+  zero uuid := (provsql.as_random(0))::uuid;
   arith_token uuid;
   cmp_token uuid;
   p double precision;

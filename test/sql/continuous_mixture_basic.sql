@@ -9,22 +9,22 @@ CREATE TEMP TABLE bern(p uuid);
 INSERT INTO bern VALUES (public.uuid_generate_v4());
 SELECT set_prob((SELECT p FROM bern), 0.3);
 
-SELECT get_gate_type(random_variable_uuid(
+SELECT get_gate_type((
          provsql.mixture(
            (SELECT p FROM bern),
            provsql.normal(-2, 1),
-           provsql.normal(2, 1)))) AS mixture_kind;
+           provsql.normal(2, 1)))::uuid) AS mixture_kind;
 
 -- The mixture gate carries exactly three children, in [p, x, y] order:
 -- the first wire is the Bernoulli (gate_input), the next two are the
 -- branch RVs (here gate_rv normals).  Materialise via a temp table so
 -- the volatile constructor fires exactly once.
 CREATE TEMP TABLE basic_mix AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT p FROM bern),
              provsql.normal(-2, 1),
-             provsql.normal(2, 1))) AS u;
+             provsql.normal(2, 1)))::uuid AS u;
 
 SELECT array_length(get_children(u), 1) AS nb_children,
        get_gate_type((get_children(u))[1]) AS wire0_kind,
@@ -44,16 +44,16 @@ SELECT (get_children(u))[1] = (SELECT p FROM bern) AS p_token_preserved
 -- by gate identity.  Here we share p (deterministic coin slot) AND
 -- the same Dirac branches, so the two mixtures must collide.
 CREATE TEMP TABLE two_mix AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT p FROM bern),
              provsql.as_random(-5),
-             provsql.as_random(5))) AS u1,
-         random_variable_uuid(
+             provsql.as_random(5)))::uuid AS u1,
+         (
            provsql.mixture(
              (SELECT p FROM bern),
              provsql.as_random(-5),
-             provsql.as_random(5))) AS u2;
+             provsql.as_random(5)))::uuid AS u2;
 SELECT u1 = u2                            AS structural_sharing_collapses,
        (get_children(u1))[1] = (get_children(u2))[1] AS shared_p_token
   FROM two_mix;
@@ -61,16 +61,16 @@ SELECT u1 = u2                            AS structural_sharing_collapses,
 -- B2.  Different operands stay distinct: changing any of (p, x, y)
 -- yields a different v5 hash.  Probe by swapping the x-leaf only.
 CREATE TEMP TABLE two_mix_diff AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT p FROM bern),
              provsql.as_random(-5),
-             provsql.as_random(5))) AS u1,
-         random_variable_uuid(
+             provsql.as_random(5)))::uuid AS u1,
+         (
            provsql.mixture(
              (SELECT p FROM bern),
              provsql.as_random(-6),
-             provsql.as_random(5))) AS u2;
+             provsql.as_random(5)))::uuid AS u2;
 SELECT u1 <> u2 AS distinct_when_operands_differ
   FROM two_mix_diff;
 
@@ -81,9 +81,8 @@ INSERT INTO bern2 VALUES (public.uuid_generate_v4());
 SELECT set_prob((SELECT p FROM bern2), 0.5);
 
 CREATE TEMP TABLE nested_mix AS
-  SELECT random_variable_uuid(
-           provsql.mixture(
-             (SELECT p FROM bern),
+  SELECT (provsql.mixture(
+             (SELECT p FROM bern)::uuid,
              provsql.normal(-5, 0.5),
              provsql.mixture(
                (SELECT p FROM bern2),
@@ -97,11 +96,11 @@ SELECT get_gate_type(u)                                      AS outer_kind,
 
 -- D.  Mixture of arith expressions: branch RVs may be gate_arith.
 CREATE TEMP TABLE arith_mix AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(
              (SELECT p FROM bern),
              provsql.normal(0, 1) + provsql.as_random(3),
-             provsql.normal(0, 1) * provsql.as_random(2))) AS u;
+             provsql.normal(0, 1) * provsql.as_random(2)))::uuid AS u;
 
 SELECT get_gate_type(u)                              AS arith_mix_kind,
        get_gate_type((get_children(u))[2])           AS arith_mix_x_kind,
@@ -110,11 +109,11 @@ SELECT get_gate_type(u)                              AS arith_mix_kind,
 
 -- E.  Mixture of gate_value Diracs: degenerates to a discrete
 -- Bernoulli over two constants.  Still a valid mixture root.
-SELECT get_gate_type(random_variable_uuid(
+SELECT get_gate_type((
          provsql.mixture(
            (SELECT p FROM bern),
            provsql.as_random(-1.0),
-           provsql.as_random(1.0)))) AS dirac_mix_kind;
+           provsql.as_random(1.0)))::uuid) AS dirac_mix_kind;
 
 -- E2. Probability-shorthand overload mixture(double, x, y) mints an
 -- anonymous gate_input and pins its probability.  The resulting root
@@ -122,14 +121,14 @@ SELECT get_gate_type(random_variable_uuid(
 -- gate_input (different UUID for two calls -- the convenience form is
 -- not designed for coupling).
 CREATE TEMP TABLE adhoc_mix AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.mixture(0.4::float8,
                            provsql.normal(0, 1),
-                           provsql.normal(5, 1))) AS u1,
-         random_variable_uuid(
+                           provsql.normal(5, 1)))::uuid AS u1,
+         (
            provsql.mixture(0.4::float8,
                            provsql.normal(0, 1),
-                           provsql.normal(5, 1))) AS u2;
+                           provsql.normal(5, 1)))::uuid AS u2;
 
 SELECT get_gate_type(u1)                              AS adhoc_kind,
        array_length(get_children(u1), 1)              AS adhoc_nb_children,
@@ -155,16 +154,14 @@ SELECT create_gate((SELECT b1 FROM bern_g), 'input');
 SELECT create_gate((SELECT b2 FROM bern_g), 'input');
 SELECT set_prob((SELECT b1 FROM bern_g), 0.5);
 SELECT set_prob((SELECT b2 FROM bern_g), 0.5);
-SELECT get_gate_type(random_variable_uuid(
-         provsql.mixture(
-           provenance_times((SELECT b1 FROM bern_g), (SELECT b2 FROM bern_g)),
+SELECT get_gate_type((provsql.mixture(
+           provenance_times((SELECT b1 FROM bern_g)::uuid, (SELECT b2 FROM bern_g)),
            provsql.as_random(-5),
            provsql.as_random( 5)))) AS compound_times_p_kind;
 
 -- G2. p = monus(b1, b2): b1 AND NOT b2.
-SELECT get_gate_type(random_variable_uuid(
-         provsql.mixture(
-           provenance_monus((SELECT b1 FROM bern_g), (SELECT b2 FROM bern_g)),
+SELECT get_gate_type((provsql.mixture(
+           provenance_monus((SELECT b1 FROM bern_g)::uuid, (SELECT b2 FROM bern_g)),
            provsql.as_random(-5),
            provsql.as_random( 5)))) AS compound_monus_p_kind;
 
@@ -174,7 +171,7 @@ SELECT get_gate_type(random_variable_uuid(
 
 -- F1. p is not a Boolean gate (here it is a gate_value from
 --     as_random) -- rejected with a kind-mismatch message.
-SELECT provsql.mixture(random_variable_uuid(provsql.as_random(0.5)),
+SELECT provsql.mixture((provsql.as_random(0.5))::uuid,
                        provsql.normal(0, 1),
                        provsql.normal(0, 1));
 

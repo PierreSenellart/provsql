@@ -13,9 +13,9 @@ SET search_path TO provsql_test,provsql;
 -- A.  Basic shape: the root is a gate_mixture with N+1 wires; the
 --     first wire is a gate_input key; the rest are gate_mulinputs.
 CREATE TEMP TABLE cat_a AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.categorical(ARRAY[0.3, 0.7]::float8[],
-                               ARRAY[0,   10]::float8[])) AS u;
+                               ARRAY[0,   10]::float8[]))::uuid AS u;
 
 SELECT get_gate_type(u)                              AS root_kind,
        array_length(get_children(u), 1)              AS nb_children,
@@ -73,9 +73,9 @@ RESET provsql.rv_mc_samples;
 -- D.  Zero-probability outcomes are skipped: the resulting block has
 --     only the positive-mass outcomes.
 CREATE TEMP TABLE cat_zero AS
-  SELECT random_variable_uuid(
+  SELECT (
            provsql.categorical(ARRAY[0.4, 0.0, 0.6]::float8[],
-                               ARRAY[1,   2,   3]::float8[])) AS u;
+                               ARRAY[1,   2,   3]::float8[]))::uuid AS u;
 
 SELECT array_length(get_children(u), 1) - 1 AS cat_zero_nb_mulinputs  -- minus the key
   FROM cat_zero;
@@ -84,21 +84,21 @@ SELECT array_length(get_children(u), 1) - 1 AS cat_zero_nb_mulinputs  -- minus t
 --     to as_random(v) at construction.  The result is a gate_value,
 --     not a gate_mixture, and two such calls collide on the same v5
 --     UUID (since as_random is IMMUTABLE).
-SELECT get_gate_type(random_variable_uuid(
-         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[])))
+SELECT get_gate_type((
+         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[]))::uuid)
          AS singleton_kind;
 
-SELECT random_variable_uuid(
-         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[]))
-       = random_variable_uuid(
-         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[]))
+SELECT (
+         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[]))::uuid
+       = (
+         provsql.categorical(ARRAY[1.0]::float8[], ARRAY[42]::float8[]))::uuid
          AS singleton_shared_uuid;
 
 -- D3. Zero-padded singleton: same shortcut applies when the only
 --     positive entry is buried in a longer array.
-SELECT get_gate_type(random_variable_uuid(
+SELECT get_gate_type((
          provsql.categorical(ARRAY[0.0, 1.0, 0.0]::float8[],
-                             ARRAY[7,   8,   9]::float8[])))
+                             ARRAY[7,   8,   9]::float8[]))::uuid)
          AS padded_singleton_kind;
 
 -- E.  Validation errors.

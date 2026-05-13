@@ -199,9 +199,9 @@ BEGIN
   -- walker (cmp side is gate_arith, not bare gate_rv), so MC kicks in.
   -- With finite samples, the acceptance rate is ~0.
   ev := provsql.provenance_cmp(
-          random_variable_uuid(rv * rv),
+          (rv * rv)::uuid,
           random_variable_cmp_oid('>'),
-          random_variable_uuid(as_random(10000)));
+          (as_random(10000))::uuid);
   BEGIN
     PERFORM expected(rv, ev);
     RAISE NOTICE 'zero_prob_event_did_not_raise';

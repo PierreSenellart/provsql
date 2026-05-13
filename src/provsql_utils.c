@@ -421,9 +421,6 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     ObjectIdGetDatum(constants.OID_SCHEMA_PROVSQL)
     );
 
-  constants.OID_FUNCTION_RANDOM_VARIABLE_UUID =
-    get_provsql_func_oid("random_variable_uuid");
-
   /* rv_aggregate_semimod helper used by the RV-returning aggregate
    * rewrite (sum, avg, and any future aggregate whose result type is
    * random_variable).  The planner-hook routes on aggtype instead of a

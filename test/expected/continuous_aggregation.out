@@ -71,7 +71,7 @@ add_provenance
 remove_provenance
 
 (1 row)
-empty_root_kind|empty_root_value|empty_mean|empty_variance
+empty_root_kind|empty_root_extra|empty_mean|empty_variance
 value|0|t|t
 (1 row)
 add_provenance
@@ -149,6 +149,6 @@ add_provenance
 remove_provenance
 
 (1 row)
-empty_prod_kind|empty_prod_value|empty_prod_mean|empty_prod_variance
+empty_prod_kind|empty_prod_extra|empty_prod_mean|empty_prod_variance
 value|1|t|t
 (1 row)

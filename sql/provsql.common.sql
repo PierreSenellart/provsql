@@ -1549,30 +1549,25 @@ CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
   AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 CREATE TYPE random_variable (
-  internallength = 24,
+  internallength = 16,
   input  = random_variable_in,
   output = random_variable_out,
-  alignment = double
+  alignment = char
 );
 
-/** @brief Extract the provenance UUID part of a random_variable */
-CREATE OR REPLACE FUNCTION random_variable_uuid(rv random_variable)
-  RETURNS uuid
-  AS 'provsql','random_variable_uuid' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-/** @brief Extract the cached scalar value of a random_variable */
-CREATE OR REPLACE FUNCTION random_variable_value(rv random_variable)
-  RETURNS double precision
-  AS 'provsql','random_variable_value' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-/** @brief Build a random_variable from a UUID and a cached value (internal) */
-CREATE OR REPLACE FUNCTION random_variable_make(tok uuid, val double precision)
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
   RETURNS random_variable
   AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief Implicit cast random_variable -> uuid (for provsql columns) */
-CREATE CAST (random_variable AS uuid)
-  WITH FUNCTION random_variable_uuid(random_variable) AS IMPLICIT;
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  After the cached-scalar removal a random_variable is byte-for-byte
+ *  a pg_uuid_t (alignment char, length 16), so WITHOUT FUNCTION lets
+ *  PostgreSQL reinterpret the bytes at zero runtime cost.  The cast
+ *  is IMPLICIT so a `provsql` column or any random_variable
+ *  expression flows directly into any function expecting a uuid. */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS IMPLICIT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
 
 /**
  * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
@@ -1634,7 +1629,7 @@ BEGIN
   token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'normal:' || mu || ',' || sigma);
-  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+  RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
@@ -1671,7 +1666,7 @@ BEGIN
   token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'uniform:' || a || ',' || b);
-  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+  RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
@@ -1703,7 +1698,7 @@ BEGIN
   token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'exponential:' || lambda);
-  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+  RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
@@ -1751,7 +1746,7 @@ BEGIN
   token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'erlang:' || k || ',' || lambda);
-  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+  RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
@@ -1816,8 +1811,8 @@ BEGIN
                     '(input/mulinput/update/plus/times/monus/project/eq/cmp/zero/one), got %', p_kind;
   END IF;
 
-  x_uuid := provsql.random_variable_uuid(x);
-  y_uuid := provsql.random_variable_uuid(y);
+  x_uuid := (x)::uuid;
+  y_uuid := (y)::uuid;
   x_kind := provsql.get_gate_type(x_uuid);
   y_kind := provsql.get_gate_type(y_uuid);
   IF x_kind NOT IN ('rv','value','arith','mixture') THEN
@@ -1831,7 +1826,7 @@ BEGIN
     provsql.uuid_ns_provsql(),
     concat('mixture', p, x_uuid, y_uuid));
   PERFORM provsql.create_gate(token, 'mixture', ARRAY[p, x_uuid, y_uuid]);
-  RETURN provsql.random_variable_make(token, 'NaN'::double precision);
+  RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
 
@@ -2007,7 +2002,7 @@ BEGIN
   mix_wires := ARRAY[key_token] || mul_tokens;
   mix_token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(mix_token, 'mixture', mix_wires);
-  RETURN provsql.random_variable_make(mix_token, 'NaN'::double precision);
+  RETURN provsql.random_variable_make(mix_token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
@@ -2046,7 +2041,7 @@ DECLARE
 BEGIN
   PERFORM provsql.create_gate(token, 'value');
   PERFORM provsql.set_extra(token, c_text);
-  RETURN provsql.random_variable_make(token, c_canon);
+  RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
 
@@ -2125,9 +2120,8 @@ $$
   SELECT provsql.random_variable_make(
     provsql.provenance_arith(
       0,  -- PROVSQL_ARITH_PLUS
-      ARRAY[provsql.random_variable_uuid(a),
-            provsql.random_variable_uuid(b)]),
-    'NaN'::double precision);
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief @c random_variable - @c random_variable (gate_arith MINUS). */
@@ -2138,9 +2132,8 @@ $$
   SELECT provsql.random_variable_make(
     provsql.provenance_arith(
       2,  -- PROVSQL_ARITH_MINUS
-      ARRAY[provsql.random_variable_uuid(a),
-            provsql.random_variable_uuid(b)]),
-    'NaN'::double precision);
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief @c random_variable * @c random_variable (gate_arith TIMES). */
@@ -2151,9 +2144,8 @@ $$
   SELECT provsql.random_variable_make(
     provsql.provenance_arith(
       1,  -- PROVSQL_ARITH_TIMES
-      ARRAY[provsql.random_variable_uuid(a),
-            provsql.random_variable_uuid(b)]),
-    'NaN'::double precision);
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief @c random_variable / @c random_variable (gate_arith DIV). */
@@ -2164,9 +2156,8 @@ $$
   SELECT provsql.random_variable_make(
     provsql.provenance_arith(
       3,  -- PROVSQL_ARITH_DIV
-      ARRAY[provsql.random_variable_uuid(a),
-            provsql.random_variable_uuid(b)]),
-    'NaN'::double precision);
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Unary @c -random_variable (gate_arith NEG). */
@@ -2176,8 +2167,7 @@ $$
   SELECT provsql.random_variable_make(
     provsql.provenance_arith(
       4,  -- PROVSQL_ARITH_NEG
-      ARRAY[provsql.random_variable_uuid(a)]),
-    'NaN'::double precision);
+      ARRAY[(a)::uuid]));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /**
@@ -2258,9 +2248,9 @@ CREATE OR REPLACE FUNCTION rv_cmp_lt(
   a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
-    provsql.random_variable_uuid(a),
+    (a)::uuid,
     provsql.random_variable_cmp_oid('<'),
-    provsql.random_variable_uuid(b));
+    (b)::uuid);
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Build a @c gate_cmp for <tt>a &le; b</tt> and return its UUID. */
@@ -2268,9 +2258,9 @@ CREATE OR REPLACE FUNCTION rv_cmp_le(
   a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
-    provsql.random_variable_uuid(a),
+    (a)::uuid,
     provsql.random_variable_cmp_oid('<='),
-    provsql.random_variable_uuid(b));
+    (b)::uuid);
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Build a @c gate_cmp for <tt>a = b</tt> and return its UUID. */
@@ -2278,9 +2268,9 @@ CREATE OR REPLACE FUNCTION rv_cmp_eq(
   a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
-    provsql.random_variable_uuid(a),
+    (a)::uuid,
     provsql.random_variable_cmp_oid('='),
-    provsql.random_variable_uuid(b));
+    (b)::uuid);
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Build a @c gate_cmp for <tt>a &lt;&gt; b</tt> and return its UUID. */
@@ -2288,9 +2278,9 @@ CREATE OR REPLACE FUNCTION rv_cmp_ne(
   a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
-    provsql.random_variable_uuid(a),
+    (a)::uuid,
     provsql.random_variable_cmp_oid('<>'),
-    provsql.random_variable_uuid(b));
+    (b)::uuid);
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Build a @c gate_cmp for <tt>a &ge; b</tt> and return its UUID. */
@@ -2298,9 +2288,9 @@ CREATE OR REPLACE FUNCTION rv_cmp_ge(
   a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
-    provsql.random_variable_uuid(a),
+    (a)::uuid,
     provsql.random_variable_cmp_oid('>='),
-    provsql.random_variable_uuid(b));
+    (b)::uuid);
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @brief Build a @c gate_cmp for <tt>a &gt; b</tt> and return its UUID. */
@@ -2308,9 +2298,9 @@ CREATE OR REPLACE FUNCTION rv_cmp_gt(
   a random_variable, b random_variable) RETURNS uuid AS
 $$
   SELECT provsql.provenance_cmp(
-    provsql.random_variable_uuid(a),
+    (a)::uuid,
     provsql.random_variable_cmp_oid('>'),
-    provsql.random_variable_uuid(b));
+    (b)::uuid);
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 CREATE OPERATOR + (
@@ -2458,7 +2448,7 @@ CREATE OR REPLACE FUNCTION sum_rv_sfunc(
 $$
   SELECT CASE
     WHEN rv IS NULL THEN state
-    ELSE array_append(state, provsql.random_variable_uuid(rv))
+    ELSE array_append(state, (rv)::uuid)
   END;
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
@@ -2485,10 +2475,10 @@ BEGIN
     RETURN provsql.as_random(0::double precision);
   END IF;
   IF array_length(state, 1) = 1 THEN
-    RETURN provsql.random_variable_make(state[1], 'NaN'::double precision);
+    RETURN provsql.random_variable_make(state[1]);
   END IF;
   arith_token := provsql.provenance_arith(0, state);  -- 0 = PROVSQL_ARITH_PLUS
-  RETURN provsql.random_variable_make(arith_token, 'NaN'::double precision);
+  RETURN provsql.random_variable_make(arith_token);
 END
 $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
@@ -2557,8 +2547,8 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  one_uuid := provsql.random_variable_uuid(
-                provsql.as_random(1::double precision));
+  one_uuid := (
+                provsql.as_random(1::double precision))::uuid;
 
   FOR i IN 1..n LOOP
     gtype := provsql.get_gate_type(state[i]);
@@ -2567,9 +2557,9 @@ BEGIN
       prov_i := children[1];
       denom_state := array_append(
         denom_state,
-        provsql.random_variable_uuid(
+        (
           provsql.rv_aggregate_semimod(
-            prov_i, provsql.as_random(1::double precision))));
+            prov_i, provsql.as_random(1::double precision)))::uuid);
     ELSE
       denom_state := array_append(denom_state, one_uuid);
     END IF;
@@ -2586,8 +2576,7 @@ BEGIN
   RETURN provsql.random_variable_make(
     provsql.provenance_arith(
       3,  -- 3 = PROVSQL_ARITH_DIV
-      ARRAY[num_token, denom_token]),
-    'NaN'::double precision);
+      ARRAY[num_token, denom_token]));
 END
 $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
@@ -2664,22 +2653,21 @@ BEGIN
       x_uuid := children[2];
       prod_state := array_append(
         prod_state,
-        provsql.random_variable_uuid(
+        (
           provsql.mixture(
             prov_i,
-            provsql.random_variable_make(x_uuid, 'NaN'::double precision),
-            one_rv)));
+            provsql.random_variable_make(x_uuid),
+            one_rv))::uuid);
     ELSE
       prod_state := array_append(prod_state, state[i]);
     END IF;
   END LOOP;
 
   IF n = 1 THEN
-    RETURN provsql.random_variable_make(prod_state[1], 'NaN'::double precision);
+    RETURN provsql.random_variable_make(prod_state[1]);
   END IF;
   RETURN provsql.random_variable_make(
-    provsql.provenance_arith(1, prod_state),  -- 1 = PROVSQL_ARITH_TIMES
-    'NaN'::double precision);
+    provsql.provenance_arith(1, prod_state));  -- 1 = PROVSQL_ARITH_TIMES
 END
 $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
@@ -3092,7 +3080,7 @@ BEGIN
     -- input and prov, and the conditional path runs either
     -- truncated-distribution closed form or MC rejection.
     RETURN provsql.rv_moment(
-      provsql.random_variable_uuid(input::random_variable), 2, true, prov);
+      (input::random_variable)::uuid, 2, true, prov);
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
@@ -3135,7 +3123,7 @@ BEGIN
     -- See variance() above: rv_moment handles the conditional/unconditional
     -- dispatch internally based on the resolved prov gate type.
     RETURN provsql.rv_moment(
-      provsql.random_variable_uuid(input::random_variable), k, false, prov);
+      (input::random_variable)::uuid, k, false, prov);
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
@@ -3340,7 +3328,7 @@ BEGIN
     -- See variance() above: rv_moment handles the conditional/unconditional
     -- dispatch internally based on the resolved prov gate type.
     RETURN provsql.rv_moment(
-      provsql.random_variable_uuid(input::random_variable), k, true, prov);
+      (input::random_variable)::uuid, k, true, prov);
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN

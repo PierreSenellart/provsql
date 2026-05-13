@@ -1227,21 +1227,28 @@ static int rv_cmp_index(const constants_t *constants, Oid funcoid)
 
 /**
  * @brief Wrap an expression returning @c random_variable in a
- *        @c random_variable_uuid() FuncExpr to extract its UUID.
+ *        binary-coercible cast to @c uuid.
  *
  * Operand of the comparison may be a Var, a constant lifted by an
- * implicit cast, or another OpExpr (e.g. <tt>a + b</tt>).  In every
- * case the wrapping is the same — a single-arg FuncExpr around it.
+ * implicit cast, or another OpExpr (e.g. <tt>a + b</tt>).  After
+ * the cached-scalar removal @c random_variable and @c uuid share
+ * the same byte layout, so we emit a @c RelabelType node rather
+ * than a @c FuncExpr -- the planner sees a zero-cost type relabel
+ * and the executor doesn't dispatch through a runtime conversion
+ * function (which would otherwise resolve to InvalidOid since the
+ * old @c random_variable_uuid() SQL function no longer exists).
  */
-static FuncExpr *
+static Expr *
 wrap_random_variable_uuid(Node *operand, const constants_t *constants)
 {
-  FuncExpr *cast = makeNode(FuncExpr);
-  cast->funcid = constants->OID_FUNCTION_RANDOM_VARIABLE_UUID;
-  cast->funcresulttype = constants->OID_TYPE_UUID;
-  cast->args = list_make1(operand);
-  cast->location = -1;
-  return cast;
+  RelabelType *rt = makeNode(RelabelType);
+  rt->arg = (Expr *) operand;
+  rt->resulttype = constants->OID_TYPE_UUID;
+  rt->resulttypmod = -1;
+  rt->resultcollid = InvalidOid;
+  rt->relabelformat = COERCE_IMPLICIT_CAST;
+  rt->location = -1;
+  return (Expr *) rt;
 }
 
 /* Forward declaration: the BoolExpr and Expr walkers below are mutually

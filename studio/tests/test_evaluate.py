@@ -818,14 +818,15 @@ def test_evaluate_applies_panel_gucs(client):
 
 
 def _rv_uuid(client, sql_expr: str) -> str:
-    """Build a random_variable via `sql_expr`, dump its UUID through
-    `provsql.random_variable_uuid`, and return it.  Used to anchor the
-    distribution-profile tests on a known scalar gate (rv leaf or arith
-    DAG) without going through the planner-hook rewriter."""
+    """Build a random_variable via `sql_expr`, dump its UUID via the
+    binary-coercible ``random_variable -> uuid`` cast, and return it.
+    Used to anchor the distribution-profile tests on a known scalar
+    gate (rv leaf or arith DAG) without going through the
+    planner-hook rewriter."""
     resp = client.post(
         "/api/exec",
         json={
-            "sql": f"SELECT provsql.random_variable_uuid({sql_expr}) AS u",
+            "sql": f"SELECT ({sql_expr})::uuid AS u",
             "mode": "circuit",
         },
     )
@@ -1051,10 +1052,10 @@ def test_evaluate_distribution_profile_mixture_root(client):
             "BEGIN\n"
             "  PERFORM provsql.create_gate(p, 'input');\n"
             "  PERFORM provsql.set_prob(p, 0.5);\n"
-            "  u := provsql.random_variable_uuid(\n"
+            "  u := (\n"
             "         provsql.mixture(p,\n"
             "           provsql.normal(-5::float8, 0.5::float8),\n"
-            "           provsql.normal( 5::float8, 0.5::float8)));\n"
+            "           provsql.normal( 5::float8, 0.5::float8)))::uuid;\n"
             "  CREATE TEMP TABLE mix_out(u uuid) ON COMMIT DROP;\n"
             "  INSERT INTO mix_out VALUES (u);\n"
             "END $$;\n"

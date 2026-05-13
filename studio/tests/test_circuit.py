@@ -430,8 +430,8 @@ def _categorical_root_uuid(test_dsn: str, probs_sql: str, values_sql: str) -> st
         autocommit=True,
     ) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT provsql.random_variable_uuid("
-            "  provsql.categorical(%s::float8[], %s::float8[]))::text"
+            "SELECT ("
+            "  provsql.categorical(%s::float8[], %s::float8[]))::uuid::text"
             % (probs_sql, values_sql)
         )
         row = cur.fetchone()
@@ -507,10 +507,10 @@ def test_circuit_dirac_mixture_keeps_classic_shape(client, test_dsn):
         autocommit=True,
     ) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT provsql.random_variable_uuid("
+            "SELECT ("
             "  provsql.mixture(0.3::float8,"
             "                  provsql.as_random(0),"
-            "                  provsql.as_random(10)))::text"
+            "                  provsql.as_random(10)))::uuid::text"
         )
         row = cur.fetchone()
     assert row

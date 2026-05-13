@@ -175,12 +175,12 @@ DROP TABLE rv_decoupled;
 --   SUM = X1 + X2, E[SUM] = 0, Var[SUM] = 2 * Var(X) = 2.
 
 CREATE TEMP TABLE rv_anchor(u uuid);
-INSERT INTO rv_anchor VALUES (random_variable_uuid(provsql.normal(0, 1)));
+INSERT INTO rv_anchor VALUES ((provsql.normal(0, 1))::uuid);
 
 CREATE TABLE rv_shared(label text, x random_variable);
 INSERT INTO rv_shared VALUES
-  ('a', random_variable_make((SELECT u FROM rv_anchor), 'NaN'::float8)),
-  ('b', random_variable_make((SELECT u FROM rv_anchor), 'NaN'::float8));
+  ('a', random_variable_make((SELECT u FROM rv_anchor))),
+  ('b', random_variable_make((SELECT u FROM rv_anchor)));
 SELECT add_provenance('rv_shared');
 
 CREATE TABLE shared_rv_sum AS SELECT provsql.sum(x) AS s FROM rv_shared;
@@ -228,7 +228,7 @@ CREATE TABLE empty_sum AS
 SELECT remove_provenance('empty_sum');
 
 SELECT get_gate_type(s::uuid)                AS empty_root_kind,
-       random_variable_value(s)              AS empty_root_value,
+       get_extra(s::uuid)                    AS empty_root_extra,
        abs(provsql.expected(s) - 0.0) < 1e-9 AS empty_mean,
        abs(provsql.variance(s) - 0.0) < 1e-9 AS empty_variance
   FROM empty_sum;
@@ -517,7 +517,7 @@ CREATE TABLE empty_prod AS
 SELECT remove_provenance('empty_prod');
 
 SELECT get_gate_type(p::uuid)                AS empty_prod_kind,
-       random_variable_value(p)              AS empty_prod_value,
+       get_extra(p::uuid)                    AS empty_prod_extra,
        abs(provsql.expected(p) - 1.0) < 1e-9 AS empty_prod_mean,
        abs(provsql.variance(p) - 0.0) < 1e-9 AS empty_prod_variance
   FROM empty_prod;
