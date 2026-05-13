@@ -1582,6 +1582,8 @@ $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
  * calls in the same query would share a UUID and collapse into a
  * single dependent RV, silently breaking the c-table semantics.
  * Same warning applies to @c uniform and @c exponential below.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Normal_distribution">Wikipedia: Normal distribution</a>
  */
 CREATE OR REPLACE FUNCTION normal(mu double precision, sigma double precision)
   RETURNS random_variable AS
@@ -1616,7 +1618,9 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  *   reason as @c normal with @p sigma = 0.
  *
  * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
- * @c normal above.
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Continuous_uniform_distribution">Wikipedia: Continuous uniform distribution</a>
  */
 CREATE OR REPLACE FUNCTION uniform(a double precision, b double precision)
   RETURNS random_variable AS
@@ -1649,7 +1653,9 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  *   silent route through @c as_random.
  *
  * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
- * @c normal above.
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Exponential_distribution">Wikipedia: Exponential distribution</a>
  */
 CREATE OR REPLACE FUNCTION exponential(lambda double precision)
   RETURNS random_variable AS
@@ -1689,7 +1695,9 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * - @p lambda must be finite and strictly positive.
  *
  * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
- * @c normal above.
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Erlang_distribution">Wikipedia: Erlang distribution</a>
  */
 CREATE OR REPLACE FUNCTION erlang(k integer, lambda double precision)
   RETURNS random_variable AS
@@ -1753,6 +1761,8 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * sharing @p p couples branch selection across consumers via the
  * sampler's @c bool_cache_; minting independent Bernoullis (e.g. via
  * the @c mixture(p_value, …) overload) decouples them.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Mixture_distribution">Wikipedia: Mixture distribution</a>
  */
 CREATE OR REPLACE FUNCTION mixture(
   p uuid, x random_variable, y random_variable)
@@ -1813,9 +1823,11 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
  * user-managed @c gate_input token.
  *
  * @warning <tt>VOLATILE</tt> is load-bearing for the same reason as
- * the other mixture / RV constructors -- folding under @c STABLE /
- * @c IMMUTABLE would collapse two independent draws into one shared
- * gate.
+ * @ref normal and the other RV constructors -- folding under
+ * @c STABLE / @c IMMUTABLE would collapse two independent draws into
+ * one shared gate.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Mixture_distribution">Wikipedia: Mixture distribution</a>
  */
 CREATE OR REPLACE FUNCTION mixture(
   p_value double precision,
@@ -1866,6 +1878,7 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * convention @c as_random already uses.
  *
  * @sa @c mixture for the Bernoulli-weighted choice constructor.
+ * @sa <a href="https://en.wikipedia.org/wiki/Categorical_distribution">Wikipedia: Categorical distribution</a>
  */
 CREATE OR REPLACE FUNCTION categorical(
   probs    double precision[],
@@ -1983,6 +1996,8 @@ $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
  * (e.g. <tt>provenance_semimod</tt>) shares the UUID.
  * <tt>create_gate</tt> is idempotent on already-mapped tokens, so
  * repeat invocations are harmless.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Degenerate_distribution">Wikipedia: Degenerate distribution (Dirac point mass)</a>
  */
 CREATE OR REPLACE FUNCTION as_random(c double precision)
   RETURNS random_variable AS
