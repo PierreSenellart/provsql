@@ -523,6 +523,8 @@ produce two *independent* categorical draws.
    for one; if you build a tower of mixtures, the circuit keeps
    the tower shape so its structural sharing remains intact.
 
+.. _continuous-aggregation:
+
 Aggregation Over Random Variables
 ---------------------------------
 
