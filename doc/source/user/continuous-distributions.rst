@@ -260,8 +260,17 @@ Closed-Form Evaluation
 ----------------------
 
 Three pieces work together to keep evaluation analytical where
-possible:
+possible. They run in this order, so each later pass benefits from
+the rewrites produced by the earlier ones:
 
+- **HybridEvaluator** (simplifier pass) rewrites the in-memory
+  circuit first: linear closure on normals (``a·X + b·Y + c`` is a
+  single normal when ``X``, ``Y`` are independent normals), i.i.d.
+  exponentials sum to Erlang, ``c·X``-style shifts and scales
+  thread through mixtures and categoricals, single-child arith
+  roots and semiring identities collapse. Running first means the
+  later passes see bare ``gate_rv`` leaves wherever a closed-form
+  fold applied, instead of multi-gate ``gate_arith`` subtrees.
 - **RangeCheck** propagates support intervals through ``gate_arith``
   and tests every ``gate_cmp`` against the propagated interval. A
   comparator that is decidable from the support alone collapses
@@ -269,19 +278,23 @@ possible:
   the rest of the circuit sees a plain Boolean leaf. Joint
   ``WHERE`` clauses are intersected per random variable: ``reading
   > 1 AND reading < 3`` constrains a single normal once and runs
-  the conjunction as one analytic CDF call.
+  the conjunction as one analytic CDF call. Equality and
+  inequality on continuous distributions collapse here (``X = X``
+  is identically true, ``X <> X`` identically false; ``X = c``
+  with ``X`` continuous is identically false, ``X <> c``
+  identically true).
 - **AnalyticEvaluator** computes the exact CDF of a single
   distribution's ``gate_cmp`` (e.g. ``Normal > 2``,
   ``Uniform <= 1.5``, ``Exponential >= λ⁻¹``) via the standard
-  CDFs of the supported families. Equality and inequality on
-  continuous distributions collapse correctly (``X = X`` is
-  identically true, ``X <> X`` identically false).
-- **HybridEvaluator** simplifies the in-memory circuit before
-  evaluation: linear closure on normals (``a·X + b·Y + c`` is a
-  single normal when ``X``, ``Y`` are independent normals), i.i.d.
-  exponentials sum to Erlang, ``c·X``-style shifts and scales
-  thread through mixtures and categoricals, single-child arith
-  roots and semiring identities collapse.
+  CDFs of the supported families, for any ``gate_cmp`` that
+  RangeCheck could not decide from the support alone.
+
+A residual ``HybridEvaluator`` decomposer pass runs between
+RangeCheck and AnalyticEvaluator for continuous-island ``gate_cmp``
+gates that no closed form has resolved; it marginalises them by
+Monte Carlo into Bernoulli leaves so the downstream Boolean
+machinery (``independent`` / tree-decomposition / external
+compilers) becomes available.
 
 ``provsql.simplify_on_load`` (default: ``on``) folds the universal
 peephole pass at the moment a circuit is read into memory, so
