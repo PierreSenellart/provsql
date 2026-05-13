@@ -405,4 +405,25 @@ RESET provsql.monte_carlo_seed;
 
 RESET provsql.hybrid_evaluation;
 
+-- ---------------------------------------------------------------
+-- Shortest round-trip in double_to_text: scalar parameters written
+-- back into a folded gate_rv's extra should print as the shortest
+-- decimal that round-trips through std::stod, not the verbose
+-- precision-17 form.  E.g. `2 * Exp(0.4)` folds to Exp(0.2); the
+-- extra should be "exponential:0.2", not "exponential:0.20000000000000001".
+-- This pins the behaviour of the std::to_chars-based formatter.
+-- The simplifier runs against the in-memory GenericCircuit returned
+-- by getGenericCircuit, so we read the folded extra via
+-- simplified_circuit_subgraph (which dispatches through the loader).
+-- ---------------------------------------------------------------
+WITH q AS (SELECT 2 * provsql.exponential(0.4) AS r),
+     j AS (
+       SELECT provsql.simplified_circuit_subgraph(
+                provsql.random_variable_uuid(r), 1)::text AS s
+         FROM q
+     )
+SELECT s LIKE '%"extra": "exponential:0.2"%'
+       AS double_to_text_shortest_roundtrip
+FROM j;
+
 SELECT 'ok'::text AS continuous_hybrid_done;

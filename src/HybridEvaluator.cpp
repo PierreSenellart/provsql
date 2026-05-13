@@ -5,6 +5,8 @@
  */
 #include "HybridEvaluator.h"
 
+#include <array>
+#include <charconv>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -12,6 +14,7 @@
 #include <sstream>
 #include <stack>
 #include <string>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -36,19 +39,24 @@ constexpr double NaN = std::numeric_limits<double>::quiet_NaN();
  * @brief Format a double back into the canonical text form used by
  *        @c gate_value extras.
  *
- * Default-float format at precision 17 round-trips through
- * @c std::stod: doubles need at most 17 significant decimal digits
- * to be exactly recoverable.  Round-numbered values (e.g. 0.5, 2.0)
- * print with the minimal representation under @c defaultfloat, so
- * the test output stays clean for the common analytical cases.
+ * @c std::to_chars produces the shortest decimal representation that
+ * round-trips through @c std::from_chars / @c std::stod, so round
+ * cases like @c 0.2 = 0.4/2 print as @c "0.2" rather than
+ * @c "0.20000000000000001" while irrational values fall back to
+ * whatever length is needed for exact recovery.  The legacy
+ * @c std::ostringstream @c << @c setprecision(17) path is kept as a
+ * defensive fallback in case @c to_chars fails (range / buffer).
  *
- * @c std::ostringstream is used rather than @c std::snprintf because
- * including @c <cstdio> after PostgreSQL's @c port.h would expand
- * @c std::snprintf to the non-existent @c std::pg_snprintf via the
- * @c #define snprintf macro in @c port.h.
+ * @c std::ostringstream is used rather than @c std::snprintf in the
+ * fallback because including @c <cstdio> after PostgreSQL's @c port.h
+ * would expand @c std::snprintf to the non-existent
+ * @c std::pg_snprintf via the @c #define snprintf macro.
  */
 std::string double_to_text(double v)
 {
+  std::array<char, 32> buf;
+  auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
+  if (ec == std::errc{}) return std::string(buf.data(), ptr);
   std::ostringstream oss;
   oss << std::setprecision(17) << v;
   return oss.str();

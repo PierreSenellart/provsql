@@ -63,6 +63,9 @@ ERROR:  ProvSQL: probability_evaluate: a comparison over random variables could 
 hybrid_off_falls_through_to_mc
 t
 (1 row)
+double_to_text_shortest_roundtrip
+t
+(1 row)
 continuous_hybrid_done
 ok
 (1 row)
