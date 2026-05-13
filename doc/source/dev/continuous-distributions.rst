@@ -401,8 +401,21 @@ acceptance rate drops below the requested ``n`` within the
 budget, so the caller can either widen the budget or loosen the
 conditioning.
 
-:sqlfunc:`rv_sample` and :sqlfunc:`rv_histogram` additionally
-share ``MonteCarloSampler::try_truncated_closed_form_sample``: a
+``matchTruncatedSingleRv`` (in :cfile:`RangeCheck.cpp`) is the
+shared shape-detection helper used by every closed-form
+single-RV consumer: ``Expectation::try_truncated_closed_form``
+(moments), ``MonteCarloSampler::try_truncated_closed_form_sample``
+(rejection-free sampling), and :sqlfunc:`rv_analytical_curves`
+(PDF / CDF overlay). It runs the four common gates --
+``gate_rv`` root check, ``parse_distribution_spec``,
+``collectRvConstraints``, and the empty-intersection / ``gate_zero``
+event guards -- so the supported-shape set stays in sync across
+all three callers and adding a fifth (e.g. truncated Erlang via
+the regularised incomplete gamma) only touches one detection
+site.
+
+:sqlfunc:`rv_sample` and :sqlfunc:`rv_histogram` share
+``MonteCarloSampler::try_truncated_closed_form_sample``: a
 direct exact-sampling fast path that fires on the same shape as
 the moment surface (bare ``gate_rv`` of Uniform / Normal /
 Exponential with an interval-extractable event). Uniform draws

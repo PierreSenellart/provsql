@@ -131,33 +131,18 @@ rv_analytical_curves(PG_FUNCTION_ARGS)
 
     /* V1: bare gate_rv root only.  gate_arith composites, mixtures,
      * categoricals -- follow-ups.  Falling through to NULL signals the
-     * frontend "no overlay" without raising. */
-    if (gc.getGateType(root_gate) != gate_rv) PG_RETURN_NULL();
-
-    auto spec = provsql::parse_distribution_spec(gc.getExtra(root_gate));
-    if (!spec) PG_RETURN_NULL();
-
-    /* Truncation interval, if any.  collectRvConstraints already
-     * intersects with the RV's natural support and normalises an
-     * infeasible event to a single point.  We treat any degenerate
-     * interval as "skip overlay" so the panel falls back to the
-     * histogram-only rendering.  @c gate_zero events (an infeasible
-     * cmp resolved by RangeCheck) bypass the walker entirely (it
-     * skips gate_zero leaves the same way it skips gate_one), so
-     * @c collectRvConstraints would return the unconditional support
-     * for those; treat them as NULL explicitly. */
-    double trunc_lo = -std::numeric_limits<double>::infinity();
-    double trunc_hi = +std::numeric_limits<double>::infinity();
-    const gate_type event_t = gc.getGateType(event_gate);
-    if (event_t == gate_zero) PG_RETURN_NULL();
-    const bool conditional = event_t != gate_one;
-    if (conditional) {
-      auto iv = provsql::collectRvConstraints(gc, event_gate, root_gate);
-      if (!iv.has_value()) PG_RETURN_NULL();
-      if (!(iv->first < iv->second)) PG_RETURN_NULL();
-      trunc_lo = iv->first;
-      trunc_hi = iv->second;
-    }
+     * frontend "no overlay" without raising.  @c matchTruncatedSingleRv
+     * is the shared shape predicate used by every closed-form
+     * single-RV consumer (moments, sampling, curves); see its
+     * declaration in @c RangeCheck.h for the full bail conditions
+     * (non-gate_rv root, gate_zero event, empty intersection, ...). */
+    auto match = provsql::matchTruncatedSingleRv(
+                   gc, root_gate, std::optional<gate_t>{event_gate});
+    if (!match) PG_RETURN_NULL();
+    const provsql::DistributionSpec &spec_v = match->spec;
+    const auto *spec = &spec_v;
+    const double trunc_lo = match->lo;
+    const double trunc_hi = match->hi;
 
     /* Normalisation Z = CDF(hi) - CDF(lo).  Unconditional case: Z = 1
      * trivially (lo = -inf -> CDF = 0, hi = +inf -> CDF = 1).  Truncated:
@@ -167,6 +152,7 @@ rv_analytical_curves(PG_FUNCTION_ARGS)
     const double cdf_hi = std::isfinite(trunc_hi) ? provsql::cdfAt(*spec, trunc_hi) : 1.0;
     const double Z = cdf_hi - cdf_lo;
     if (!(Z > 0.0)) PG_RETURN_NULL();   /* infeasible event */
+    const bool conditional = match->truncated;
 
     /* Pick the x-range and sample. */
     auto [x_lo, x_hi] = choose_x_range(*spec, trunc_lo, trunc_hi);

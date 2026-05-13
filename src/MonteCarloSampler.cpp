@@ -522,19 +522,10 @@ std::optional<std::vector<double>>
 try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
                                  gate_t event_root, unsigned n)
 {
-  if (gc.getGateType(root) != gate_rv) return std::nullopt;
-
-  auto iv = collectRvConstraints(gc, event_root, root);
-  if (!iv.has_value()) return std::nullopt;
-  /* collectRvConstraints already intersected with the RV's natural
-   * support and clamped @c lo to @c hi for the infeasible case.  We
-   * treat any degenerate or empty interval as "not closed-form
-   * tractable" so the caller's MC fallback emits its usual
-   * "accepted 0" diagnostic. */
-  if (!(iv->first < iv->second)) return std::nullopt;
-
-  auto spec = parse_distribution_spec(gc.getExtra(root));
-  if (!spec) return std::nullopt;
+  auto m = matchTruncatedSingleRv(gc, root, event_root);
+  if (!m) return std::nullopt;
+  const DistributionSpec &spec = m->spec;
+  const double lo = m->lo, hi = m->hi;
 
   std::mt19937_64 rng = seedRng();
   std::uniform_real_distribution<double> U01(0.0, 1.0);
@@ -542,20 +533,18 @@ try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
   std::vector<double> out;
   out.reserve(n);
 
-  switch (spec->kind) {
+  switch (spec.kind) {
     case DistKind::Uniform: {
-      /* The intersection [max(a, iv.lo), min(b, iv.hi)] is already
-       * baked into iv by collectRvConstraints, so a plain uniform
-       * draw on [iv.lo, iv.hi] is the conditional distribution. */
-      std::uniform_real_distribution<double> U(iv->first, iv->second);
+      /* @c matchTruncatedSingleRv already intersected the event's
+       * interval with the RV's natural [a, b] support, so a plain
+       * uniform draw on [lo, hi] is the conditional distribution. */
+      std::uniform_real_distribution<double> U(lo, hi);
       for (unsigned i = 0; i < n; ++i) out.push_back(U(rng));
       return out;
     }
     case DistKind::Exponential: {
-      const double lambda = spec->p1;
+      const double lambda = spec.p1;
       if (!(lambda > 0.0)) return std::nullopt;
-      const double lo = iv->first;
-      const double hi = iv->second;
       if (std::isinf(hi)) {
         /* X | X > lo = lo + Exp(λ) by memorylessness.  Numerically
          * stable for arbitrarily large @c lo, where the inverse-CDF
@@ -577,12 +566,12 @@ try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
       return out;
     }
     case DistKind::Normal: {
-      const double mu    = spec->p1;
-      const double sigma = spec->p2;
+      const double mu    = spec.p1;
+      const double sigma = spec.p2;
       if (!(sigma > 0.0)) return std::nullopt;
       const double sqrt2 = std::sqrt(2.0);
-      const double alpha = (iv->first  - mu) / sigma;
-      const double beta  = (iv->second - mu) / sigma;
+      const double alpha = (lo - mu) / sigma;
+      const double beta  = (hi - mu) / sigma;
       const double Phi_a = std::isfinite(alpha)
         ? 0.5 * (1.0 + std::erf(alpha / sqrt2))
         : (alpha < 0 ? 0.0 : 1.0);

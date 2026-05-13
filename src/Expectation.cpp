@@ -452,30 +452,24 @@ std::optional<double>
 try_truncated_closed_form(const GenericCircuit &gc, gate_t root,
                           gate_t event_root, unsigned k, bool central)
 {
-  if (gc.getGateType(root) != gate_rv) return std::nullopt;
-
-  auto iv = collectRvConstraints(gc, event_root, root);
-  if (!iv.has_value()) return std::nullopt;
-
-  auto spec = parse_distribution_spec(gc.getExtra(root));
-  if (!spec) return std::nullopt;
+  auto m = matchTruncatedSingleRv(gc, root, event_root);
+  if (!m) return std::nullopt;
+  const DistributionSpec &spec = m->spec;
+  const double lo = m->lo, hi = m->hi;
 
   /* Closed-form raw moment of the truncated distribution. */
   auto raw = [&](unsigned q) -> std::optional<double> {
     if (q == 0) return 1.0;
     double r = std::numeric_limits<double>::quiet_NaN();
-    switch (spec->kind) {
+    switch (spec.kind) {
       case DistKind::Normal:
-        r = truncated_normal_raw_moment(spec->p1, spec->p2,
-                                        iv->first, iv->second, q);
+        r = truncated_normal_raw_moment(spec.p1, spec.p2, lo, hi, q);
         break;
       case DistKind::Uniform:
-        r = truncated_uniform_raw_moment(spec->p1, spec->p2,
-                                         iv->first, iv->second, q);
+        r = truncated_uniform_raw_moment(spec.p1, spec.p2, lo, hi, q);
         break;
       case DistKind::Exponential:
-        r = truncated_exponential_raw_moment(spec->p1,
-                                             iv->first, iv->second, q);
+        r = truncated_exponential_raw_moment(spec.p1, lo, hi, q);
         break;
       case DistKind::Erlang:
         /* Truncated Erlang moments require the regularised lower

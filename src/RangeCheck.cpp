@@ -1110,6 +1110,50 @@ collectRvConstraints(const GenericCircuit &gc, gate_t event_root,
   return std::make_pair(iv.lo, iv.hi);
 }
 
+std::optional<TruncatedSingleRv>
+matchTruncatedSingleRv(const GenericCircuit &gc, gate_t root,
+                       std::optional<gate_t> event_root)
+{
+  if (gc.getGateType(root) != gate_rv) return std::nullopt;
+  auto spec = parse_distribution_spec(gc.getExtra(root));
+  if (!spec) return std::nullopt;
+
+  /* Natural support per family.  Normal is unbounded both sides;
+   * Uniform sits exactly on its parameters; Exp / Erlang on
+   * [0, +inf).  Used both as the unconditional case and as the
+   * intersection seed for collectRvConstraints (which already
+   * intersects internally, but the bare-natural case still needs
+   * a baseline). */
+  double nat_lo = -std::numeric_limits<double>::infinity();
+  double nat_hi = +std::numeric_limits<double>::infinity();
+  switch (spec->kind) {
+    case DistKind::Normal:                                       break;
+    case DistKind::Uniform:     nat_lo = spec->p1;
+                                nat_hi = spec->p2;               break;
+    case DistKind::Exponential: nat_lo = 0.0;                    break;
+    case DistKind::Erlang:      nat_lo = 0.0;                    break;
+  }
+
+  /* Unconditional path: return natural support, mark untruncated. */
+  if (!event_root.has_value()
+      || gc.getGateType(*event_root) == gate_one) {
+    return TruncatedSingleRv{*spec, nat_lo, nat_hi, /*truncated=*/false};
+  }
+
+  /* Infeasible event resolved upstream by RangeCheck: the cmp was
+   * folded to gate_zero, the conditional distribution is undefined.
+   * @c collectRvConstraints would silently fall back to the natural
+   * support here (its walker skips gate_zero like gate_one), so we
+   * have to detect this explicitly. */
+  if (gc.getGateType(*event_root) == gate_zero) return std::nullopt;
+
+  auto iv = collectRvConstraints(gc, *event_root, root);
+  if (!iv.has_value()) return std::nullopt;
+  if (!(iv->first < iv->second)) return std::nullopt;
+
+  return TruncatedSingleRv{*spec, iv->first, iv->second, /*truncated=*/true};
+}
+
 }  // namespace provsql
 
 extern "C" {

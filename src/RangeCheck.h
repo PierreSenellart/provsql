@@ -26,6 +26,7 @@
 #include <utility>
 
 #include "GenericCircuit.h"
+#include "RandomVariable.h"
 
 namespace provsql {
 
@@ -82,6 +83,56 @@ compute_support(const GenericCircuit &gc, gate_t root,
 std::optional<std::pair<double, double>>
 collectRvConstraints(const GenericCircuit &gc, gate_t event_root,
                      gate_t target_rv);
+
+/**
+ * @brief Detection result for a closed-form, optionally-truncated
+ *        single-RV shape.
+ *
+ * Carries the parsed distribution and the @c [lo, hi] support after
+ * intersection with the conditioning event (or the natural support
+ * when @c truncated == @c false).  Either bound may be infinite when
+ * the RV's natural support or the event leaves the corresponding
+ * side unbounded (e.g. @c Normal | @c X > 0 yields
+ * @c (0, +&infin;)).
+ */
+struct TruncatedSingleRv {
+  DistributionSpec spec;  ///< Parsed kind + parameters
+  double lo;              ///< Lower bound (-INF if unbounded)
+  double hi;              ///< Upper bound (+INF if unbounded)
+  bool truncated;         ///< True iff the bounds came from a
+                          ///< non-trivial @c event_root
+};
+
+/**
+ * @brief Detect a closed-form, optionally-truncated single-RV shape.
+ *
+ * Common shape-detection helper shared by every closed-form
+ * single-RV consumer:
+ * - @c try_truncated_closed_form (truncated moments,
+ *   @c Expectation.cpp);
+ * - @c try_truncated_closed_form_sample (rejection-free sampling,
+ *   @c MonteCarloSampler.cpp);
+ * - @c rv_analytical_curves (PDF / CDF overlay,
+ *   @c RvAnalyticalCurves.cpp).
+ *
+ * Returns @c std::nullopt when the shape is not tractable:
+ *  - @p root is not a bare @c gate_rv;
+ *  - the gate's @c extra does not parse as a @c DistributionSpec;
+ *  - @p event_root resolves to @c gate_zero (event already decided
+ *    infeasible by @c runRangeCheck);
+ *  - @c collectRvConstraints fails (incomplete walk);
+ *  - the resulting interval is empty or degenerate
+ *    (@c lo @>= @c hi).
+ *
+ * When @p event_root is omitted or resolves to @c gate_one, the
+ * returned @c TruncatedSingleRv carries the RV's natural support and
+ * @c truncated = @c false; callers that don't distinguish the
+ * conditional and unconditional cases (e.g. the analytical-curves
+ * x-range chooser) can read uniformly off the result.
+ */
+std::optional<TruncatedSingleRv>
+matchTruncatedSingleRv(const GenericCircuit &gc, gate_t root,
+                       std::optional<gate_t> event_root);
 
 /**
  * @brief Run the support-based pruning pass over @p gc.
