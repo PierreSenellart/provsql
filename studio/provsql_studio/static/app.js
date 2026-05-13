@@ -2074,7 +2074,10 @@ async function runQuery(ev) {
           const sourcesAttr = dataSrc ? ` data-sources="${env.escapeAttr(dataSrc)}"` : '';
           let extraCls = '';
           let extraAttr = '';
-          if (isCircuit && typeName === 'uuid' && value) {
+          // random_variable is binary-coercible with uuid and its on-wire
+          // text form is a bare UUID, so it click-throughs the same way
+          // a uuid cell does.
+          if (isCircuit && (typeName === 'uuid' || typeName === 'random_variable') && value) {
             extraCls  = ' is-clickable';
             extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
           }
@@ -2086,26 +2089,6 @@ async function runQuery(ev) {
           // tooltip carries the UUID so users can confirm which
           // circuit the cell points at without inspecting the DOM.
           let displayValue = value;
-          // random_variable cells arrive as the composite text
-          // "( UUID , value )" (random_variable_out in
-          // src/random_variable_type.c). The UUID alone is what the
-          // user wants : it's the click-through target and matches how
-          // other UUID columns are rendered. The trailing scalar value
-          // is NaN for any symbolic RV so it's pure noise; we drop it.
-          if (typeName === 'random_variable' && value) {
-            const m = String(value).match(
-              /^\(\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*,/
-            );
-            if (m) {
-              const rvUuid = m[1];
-              displayValue = rvUuid;
-              if (isCircuit) {
-                extraCls  = (extraCls + ' is-clickable').trim();
-                extraAttr = ` data-circuit-uuid="${env.escapeAttr(rvUuid)}"${rowProvAttr}`;
-                if (extraCls.length) extraCls = ' ' + extraCls;
-              }
-            }
-          }
           if (typeName === 'agg_token' && value) {
             if (isCircuit) {
               extraCls  = (extraCls + ' is-clickable').trim();
