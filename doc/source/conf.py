@@ -2,7 +2,19 @@ project = 'ProvSQL'
 copyright = '2025, Pierre Senellart'
 author = 'Pierre Senellart'
 
-extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton']
+extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton', 'sphinx.ext.imgmath']
+
+# Render math at build time as SVG via LaTeX + dvisvgm rather than
+# letting Sphinx's default MathJax handler fetch
+# https://cdn.jsdelivr.net/npm/mathjax@3/... at every page load.
+# Files go to _images/math/<content-hash>.svg so unchanged formulas
+# stay cached across builds (imgmath_embed=True would inline them in
+# the HTML, but then there's no on-disk cache and each build re-runs
+# LaTeX on every formula -- ~50s for ~136 formulas).  Local relative
+# img refs are still zero outgoing requests.
+imgmath_image_format = 'svg'
+imgmath_use_preview = True
+imgmath_font_size = 14
 
 # |cpp| / |cpp17| substitutions: render "C++" and "C++17" as non-breaking
 # spans so the browser never wraps between "C+" and the final "+".
