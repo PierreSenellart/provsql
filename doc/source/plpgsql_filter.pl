@@ -132,8 +132,17 @@ s{
 s{^[ \t]*--[-\s]*$}{}mg;
 # Convert remaining full-line SQL comments, stripping trailing decorative dashes
 s{^(\s*)--\s?(.*?)\s*-*\s*$}{$1///$2}mg;
+# Protect Doxygen /** ... */ blocks from the inline-comment rule below: text
+# dashes inside docstrings (e.g. "foo -- bar") must not be rewritten to "///<".
+my @doxy_blocks;
+s{(/\*\*(?:[^*]|\*(?!/))*\*/)}{
+    push @doxy_blocks, $1;
+    "\0DOXY" . (@doxy_blocks - 1) . "\0"
+}sge;
 # Convert remaining inline SQL comments (-- after code on the same line)
 s{([^\n])--}{$1///<}sigx;
+# Restore Doxygen blocks
+s{\0DOXY(\d+)\0}{$doxy_blocks[$1]}sg;
 
 s{
   CREATE\s+TYPE\s+([^\s]+)\s+AS\s+\((.*?)\);
