@@ -35,9 +35,9 @@ gate, that fits in any ``CREATE TABLE``:
       reading random_variable);
 
     INSERT INTO sensor_readings VALUES
-      (1, provsql.normal(2.5, 0.5)),
-      (2, provsql.uniform(1, 3)),
-      (3, provsql.exponential(0.4));
+      (1, normal(2.5, 0.5)),
+      (2, uniform(1, 3)),
+      (3, exponential(0.4));
 
     SELECT add_provenance('sensor_readings');
 
@@ -72,7 +72,7 @@ Distribution Constructors
 
 The constructors below all return a ``random_variable``. Each call
 mints a fresh, independent random variable: two calls to
-``provsql.normal(0, 1)`` produce two uncorrelated draws, not the
+``normal(0, 1)`` produce two uncorrelated draws, not the
 same draw. Use :sqlfunc:`mixture` (below) when you need
 shared underlying randomness.
 
@@ -143,7 +143,7 @@ shared underlying randomness.
 Implicit casts ``integer → random_variable``, ``numeric →
 random_variable`` and ``double precision → random_variable``
 are installed. Writing ``WHERE reading > 2`` works without an
-explicit ``provsql.as_random(2)`` wrapper.
+explicit ``as_random(2)`` wrapper.
 
 Arithmetic on Random Variables
 ------------------------------
@@ -340,7 +340,7 @@ End-to-end on the sensors fixture:
            support(reading)    AS supp
     FROM sensor_readings;
 
-The expectation, variance, and support of ``provsql.normal(2.5,
+The expectation, variance, and support of ``normal(2.5,
 0.5)`` come out exactly as ``2.5``, ``0.25``, and
 ``(-Infinity, +Infinity)``; the uniform's as ``2``, ``1/3``, and
 ``(1, 3)``; the exponential's as ``2.5``, ``6.25``, and
@@ -450,7 +450,7 @@ the row's provenance as a ``gate_cmp``):
     FROM (SELECT reading, provenance() AS prov
             FROM sensor_readings
            WHERE id = 1 AND reading > 2.5) q,
-         LATERAL provsql.rv_sample(q.reading, 200, q.prov) AS t(s);
+         LATERAL rv_sample(q.reading, 200, q.prov) AS t(s);
 
 Mixtures and Categorical Random Variables
 ------------------------------------------
@@ -467,21 +467,21 @@ differ in whether the coin is shared:
     -- Two mixtures coupled through a shared coin: they always
     -- pick the same side per Monte-Carlo iteration.
     WITH coin AS (
-      SELECT provsql.create_input_gate(0.3) AS p)
+      SELECT create_input_gate(0.3) AS p)
     SELECT
-      provsql.mixture((SELECT p FROM coin),
-                      provsql.normal(0, 1),
-                      provsql.normal(10, 1))   AS shared_a,
-      provsql.mixture((SELECT p FROM coin),
-                      provsql.uniform(-1, 1),
-                      provsql.uniform(9, 11))  AS shared_b;
+      mixture((SELECT p FROM coin),
+              normal(0, 1),
+              normal(10, 1))   AS shared_a,
+      mixture((SELECT p FROM coin),
+              uniform(-1, 1),
+              uniform(9, 11))  AS shared_b;
 
     -- Two ad-hoc mixtures: each mints its own fresh coin.
     SELECT
-      provsql.mixture(0.3, provsql.normal(0, 1),
-                           provsql.normal(10, 1)) AS independent_a,
-      provsql.mixture(0.3, provsql.uniform(-1, 1),
-                           provsql.uniform(9, 11)) AS independent_b;
+      mixture(0.3, normal(0, 1),
+                   normal(10, 1)) AS independent_a,
+      mixture(0.3, uniform(-1, 1),
+                   uniform(9, 11)) AS independent_b;
 
 A **categorical** random variable assigns explicit probabilities
 to a list of outcomes:
@@ -489,12 +489,12 @@ to a list of outcomes:
 .. code-block:: postgresql
 
     -- 0 with probability 0.2, 1 with probability 0.5, 2 with 0.3
-    SELECT provsql.categorical(
+    SELECT categorical(
              ARRAY[0.2, 0.5, 0.3]::double precision[],
              ARRAY[0, 1, 2]::double precision[]);
 
 Categoricals share UUIDs through a v5 hash of their wires, so two
-``provsql.categorical(probs, outcomes)`` calls with the same
+``categorical(probs, outcomes)`` calls with the same
 arrays produce the same gate. Calls with the same arrays but
 distinct fresh ``gate_input`` keys (in the underlying block
 encoding) remain independent; in practice the constructor
@@ -542,7 +542,7 @@ deterministic scalars to ``random_variable`` columns:
 
 The aggregates lower to *semimodule-of-mixtures* shape via
 ``rv_aggregate_semimod``: each per-row argument ``X_i`` is
-wrapped in ``provsql.mixture(prov_i, X_i, as_random(identity))``
+wrapped in ``mixture(prov_i, X_i, as_random(identity))``
 so the aggregate's effective semantics become the natural lift of
 the semimodule-provenance machinery to RV-valued semimodules. The
 ``INITCOND = '{}'`` convention on all three aggregates guarantees
