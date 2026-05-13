@@ -87,8 +87,11 @@ a:hover      { color: #C4664A; }
 #nav-tree a:hover { color: #E8B84B; }
 
 /* ---- Code / pre ---- */
-/* Override all JetBrains Mono usages and size-match to EB Garamond body */
-code, span.code, div.fragment, pre.fragment, div.line,
+/* Override all JetBrains Mono usages and size-match to EB Garamond body.
+   span.tt is Doxygen's wrapper for <tt>...</tt> in docstrings; the base
+   doxygen.css sets its font-family but no font-size, so without this
+   rule it inherits the 20px serif body size. */
+code, span.code, span.tt, div.fragment, pre.fragment, div.line,
 .memname, td.paramtype, td.paramname {
   font-family: 'Fira Code', 'Consolas', monospace;
   font-size: 15px;  /* 15px Fira Code ≈ visual 20px EB Garamond */
@@ -96,7 +99,8 @@ code, span.code, div.fragment, pre.fragment, div.line,
 /* Inline code inside prose: align baseline with the serif body text.
    Without this, Fira Code at 15px inherits the 35px line-height of the
    20px EB Garamond paragraph and ends up floating above the baseline. */
-p code, li code, dd code, td code {
+p code, li code, dd code, td code,
+p span.tt, li span.tt, dd span.tt, td span.tt {
   line-height: 1;
   vertical-align: baseline;
 }
@@ -158,7 +162,7 @@ tr.separator td { border-bottom: 1px solid #D6CCF0; }
     max-width: 100%;
     box-sizing: border-box;
   }
-  code, span.code, div.fragment, pre.fragment, div.line,
+  code, span.code, span.tt, div.fragment, pre.fragment, div.line,
   .memname, td.paramtype, td.paramname {
     font-size: 13px;
   }
@@ -203,7 +207,7 @@ tr.separator td { border-bottom: 1px solid #D6CCF0; }
   h2 { font-size: 1.15rem; }
   h3 { font-size: 1.05rem; }
 
-  code, span.code, div.fragment, pre.fragment, div.line,
+  code, span.code, span.tt, div.fragment, pre.fragment, div.line,
   .memname, td.paramtype, td.paramname {
     font-size: 11px;
   }
