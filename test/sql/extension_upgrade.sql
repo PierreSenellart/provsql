@@ -54,6 +54,12 @@ CREATE TABLE upgrade_result AS
 SELECT remove_provenance('upgrade_result');
 SELECT * FROM upgrade_result ORDER BY name;
 
+-- 1.5.0 surface check: a closed-form moment evaluation. expected() of
+-- a Normal(2, 1) is exactly 2, so this both exercises the new
+-- random_variable type / gate_rv / Expectation evaluator and the
+-- polymorphic expected dispatcher landed by this upgrade.
+SELECT expected(provsql.normal(2, 1)) AS expected_normal_mean;
+
 \else
 
 \echo extension_upgrade: skipped on PostgreSQL < 12 (ALTER TYPE ADD VALUE restriction)

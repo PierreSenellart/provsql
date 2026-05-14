@@ -19,3 +19,6 @@ alice|alice
 bob|bob
 carol|carol
 (3 rows)
+expected_normal_mean
+2
+(1 row)
