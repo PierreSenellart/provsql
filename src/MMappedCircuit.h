@@ -38,6 +38,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "GenericCircuit.h"
 #include "MMappedUUIDHashTable.h"
@@ -232,6 +233,27 @@ inline unsigned long getNbGates() const {
  * @return       An in-memory @c GenericCircuit containing the sub-circuit.
  */
 GenericCircuit createGenericCircuit(pg_uuid_t token) const;
+
+/**
+ * @brief Build an in-memory @c GenericCircuit reachable from any of
+ *        @p roots.
+ *
+ * Multi-root variant of @c createGenericCircuit.  Seeds the BFS with
+ * every UUID in @p roots so a shared subgraph reachable from more
+ * than one root is represented by a single @c gate_t (the
+ * @c GenericCircuit::setGate / @c getGate pair is idempotent on the
+ * UUID key).  Used by @c getJointCircuit to load an RV's sub-DAG
+ * together with a conditioning gate that sits above it in the
+ * persisted DAG.
+ *
+ * @param roots  UUIDs whose reachable closure to load.  Order is
+ *               irrelevant; identical UUIDs collapse via the
+ *               @c std::set deduplication of the work list.
+ * @return       An in-memory @c GenericCircuit containing every gate
+ *               reachable from any root.
+ */
+GenericCircuit createGenericCircuit(
+    const std::vector<pg_uuid_t> &roots) const;
 };
 
 

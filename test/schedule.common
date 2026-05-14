@@ -11,6 +11,7 @@ test: remove_add_provenance
 # Basic checks
 test: provenance_in_from identify_token subquery create_provenance_mapping
 test: circuit_subgraph
+test: simplify_identities
 test: resolve_input
 # Regression for the get_gate_type → get_children cache-poisoning bug:
 # the two tests must run in separate backends (sequential `test:` lines),
@@ -25,7 +26,7 @@ test: sr_qualified_mapping
 test: formula counting boolean
 
 # Test of various ProvSQL features and SQL language capabilities
-test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk values
+test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk values verbose_setops
 test: cte
 test: active
 test: aggregation
@@ -103,6 +104,36 @@ test: casestudy5
 test: group_by_empty
 
 test: grouping_sets
+
+# Continuous probability distributions (random_variable type)
+test: continuous_basic
+test: continuous_sampler
+test: continuous_arithmetic
+test: continuous_selection
+test: continuous_join
+test: continuous_union
+test: continuous_rangecheck
+test: continuous_rangecheck_having
+test: continuous_analytic
+test: continuous_expectation
+test: continuous_conditioning
+test: continuous_support
+test: continuous_hybrid
+test: continuous_rv_histogram
+test: continuous_mixture_basic
+test: continuous_mixture_sampler
+test: continuous_mixture_analytic
+test: continuous_mixture_support
+test: continuous_mixture_histogram
+test: continuous_mixture_hybrid
+test: continuous_categorical
+test: continuous_aggregation
+test: continuous_having
+test: continuous_sample_truncated
+test: continuous_analytical_curves
+
+# Case Study 6: City Air-Quality Sensor Network (continuous RVs)
+test: casestudy6
 
 # PROV export
 test: to_provxml

@@ -68,9 +68,32 @@ typedef enum gate_type {
   gate_value,    ///< Scalar value (for aggregate provenance)
   gate_mulinput, ///< Multivalued input (for Boolean provenance)
   gate_update,   ///< Update operation
+  gate_rv,       ///< Continuous random-variable leaf (extra encodes distribution)
+  gate_arith,    ///< n-ary arithmetic gate over scalar-valued children (info1 holds operator tag)
+  gate_mixture,  ///< Probabilistic mixture: three wires [p_token (gate_input Bernoulli), x_token, y_token]; samples x when p is true, y otherwise
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
+
+/**
+ * @brief Arithmetic operator tags used by @c gate_arith.
+ *
+ * Stored in the gate's @c info1 field.  Local enum (not a PostgreSQL
+ * operator OID) because arithmetic in the sampler / evaluator is just
+ * C++ doubles, with no need to dispatch through the PG catalog.
+ *
+ * @warning ON-DISK ABI: like @c gate_type, these integer values are
+ * persisted (in @c info1).  Reordering or renumbering existing tags
+ * will silently invalidate every existing installation's persistent
+ * circuit.  New tags must be appended at the end.
+ */
+typedef enum provsql_arith_op {
+  PROVSQL_ARITH_PLUS  = 0, ///< n-ary, sum of children
+  PROVSQL_ARITH_TIMES = 1, ///< n-ary, product of children
+  PROVSQL_ARITH_MINUS = 2, ///< binary, child0 - child1
+  PROVSQL_ARITH_DIV   = 3, ///< binary, child0 / child1
+  PROVSQL_ARITH_NEG   = 4  ///< unary, -child0
+} provsql_arith_op;
 
 /** Names of gate types */
 extern const char *gate_type_name[];
@@ -109,6 +132,14 @@ typedef struct constants_t {
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION
   Oid OID_FUNCTION_NOT_EQUAL_UUID; ///< OID of the = operator on UUIDs FUNCTION
   Oid OID_FUNCTION_AGG_TOKEN_UUID; ///< OID of the agg_token_uuid FUNCTION
+  Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
+  Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
+  /** OIDs of the @c random_variable_{eq,ne,le,lt,ge,gt} comparison
+   * procedure functions, indexed by the @c ComparisonOperator enum
+   * (@c EQ=0, @c NE=1, @c LE=2, @c LT=3, @c GE=4, @c GT=5; matches the
+   * order in @c src/Aggregation.h).  Used by the planner hook to detect
+   * RV-comparison @c OpExpr nodes in WHERE clauses. */
+  Oid OID_FUNCTION_RV_CMP[6];
   bool ok; ///< true if constants were loaded
 } constants_t;
 
@@ -174,6 +205,63 @@ extern bool provsql_aggtoken_text_as_uuid;
  * set by the provsql.tool_search_path run-time configuration parameter.
  * NULL or empty means rely on the server's PATH alone. */
 extern char *provsql_tool_search_path;
+
+/** Seed for the Monte Carlo sampler, set by the provsql.monte_carlo_seed
+ * run-time configuration parameter.  -1 (default) means seed from
+ * std::random_device for non-deterministic sampling; any other value
+ * (including 0) is a literal seed for std::mt19937_64.  Used by both
+ * the Bernoulli path (BooleanCircuit::monteCarlo) and the continuous
+ * path (gate_rv sampling), so a single GUC controls reproducibility
+ * end-to-end. */
+extern int provsql_monte_carlo_seed;
+
+/** Default sample count for Monte Carlo fallbacks when an analytical
+ * evaluator (Expectation, future hybrid evaluator, ...) cannot
+ * decompose a sub-circuit structurally.  Unlike
+ * @c probability_evaluate(token, 'monte-carlo', n) where the sample
+ * count is an explicit argument, these implicit MC paths have no
+ * natural place to take @c n from.
+ *
+ * Set by the @c provsql.rv_mc_samples run-time configuration
+ * parameter; default 10000.  Setting it to 0 disables the implicit
+ * MC fallback entirely: callers must then raise an exception rather
+ * than sampling.  Useful for callers that want to guarantee
+ * analytical-only evaluation. */
+extern int provsql_rv_mc_samples;
+
+/** @brief When @c true (default), every @c GenericCircuit returned by
+ * @c getGenericCircuit is run through the universal cmp-resolution
+ * passes (RangeCheck for now, plus any future passes that decide
+ * comparators to certain Boolean values).  Decisions become Bernoulli
+ * @c gate_input gates with probability 0 or 1, transparent to every
+ * downstream consumer (semiring evaluators, MC, view_circuit, PROV
+ * export, etc.).  Set @c provsql.simplify_on_load to @c off when
+ * inspecting a circuit's raw structure (e.g. debugging gate-creation
+ * code paths). */
+extern bool provsql_simplify_on_load;
+
+/** @brief Run the hybrid evaluator (simplifier + per-cmp island
+ *         decomposer) before dispatching a probability_evaluate query.
+ *
+ * Debug-only GUC, hidden from @c SHOW @c ALL and from
+ * @c postgresql.conf.sample (registered with
+ * @c GUC_NO_SHOW_ALL @c | @c GUC_NOT_IN_SAMPLE).  When on (default),
+ * @c probability_evaluate runs the @c HybridEvaluator simplifier
+ * between @c RangeCheck and @c AnalyticEvaluator and the per-cmp
+ * MC island decomposer after @c AnalyticEvaluator: @c gate_arith
+ * subtrees are constant-folded and family-closed (normals, Erlang),
+ * and residual continuous-island comparators are MC-marginalised
+ * into Bernoulli @c gate_input leaves so the surrounding circuit
+ * becomes purely Boolean.
+ *
+ * Set to @c off to bypass both passes: undecidable comparators
+ * then fall through to whole-circuit MC (for the @c monte-carlo
+ * method) or raise (for @c independent / @c tree-decomposition).
+ * End users have no reason to flip this -- on is strictly better
+ * for them.  Exists for developer A/B testing of the analytic
+ * path against the raw MC path and as a bisection knob if a
+ * closure rule turns out to be unsound on some workload. */
+extern bool provsql_hybrid_evaluation;
 
 #include "provsql_error.h"
 

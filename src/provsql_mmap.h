@@ -74,9 +74,9 @@ extern char buffer[PIPE_BUF];
 extern unsigned bufferpos;
 
 /** @brief Read one value of @p type from the background-to-main pipe. */
-#define READM(var, type) (read(provsql_shared_state->pipebmr, &var, sizeof(type))-sizeof(type)>=0) // flawfinder: ignore
+#define READM(var, type) (read(provsql_shared_state->pipebmr, &var, sizeof(type))==(ssize_t)sizeof(type)) // flawfinder: ignore
 /** @brief Read one value of @p type from the main-to-background pipe. */
-#define READB(var, type) (read(provsql_shared_state->pipembr, &var, sizeof(type))-sizeof(type)>=0) // flawfinder: ignore
+#define READB(var, type) (read(provsql_shared_state->pipembr, &var, sizeof(type))==(ssize_t)sizeof(type)) // flawfinder: ignore
 /** @brief Write one value of @p type to the main-to-background pipe. */
 #define WRITEB(pvar, type) (write(provsql_shared_state->pipembw, pvar, sizeof(type))!=-1)
 /** @brief Write one value of @p type to the background-to-main pipe. */

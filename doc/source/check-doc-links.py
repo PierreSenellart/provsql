@@ -80,6 +80,7 @@ INTERNAL_FUNCTIONS = {
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',
+    'provenance_arith',
     'provenance_delta', 'provenance_semimod',
     'provenance_evaluate_compiled',
     # Internal constants and utilities
@@ -98,6 +99,66 @@ INTERNAL_FUNCTIONS = {
     'update_provenance',
     # GUC variables (not functions)
     'aggtoken_text_as_uuid',
+    # random_variable type internals (I/O, internal builder,
+    # parameter-validation helper)
+    'random_variable_in', 'random_variable_out',
+    'random_variable_make',
+    'is_finite_float8',
+    # (User-facing constructors for continuous random variables —
+    # 'normal', 'uniform', 'exponential', 'erlang', 'as_random',
+    # 'mixture', 'categorical' — now promoted to _SQL_FUNC_MAP and
+    # referenced from doc/source/user/continuous-distributions.rst.)
+    # Continuous-distributions GUC variables (introspected by Doxygen
+    # through the SQL `SET` / `RESET` documentation pages).
+    'monte_carlo_seed', 'rv_mc_samples', 'simplify_on_load',
+    'hybrid_evaluation',
+    # ('simplified_circuit_subgraph' and 'rv_histogram' are now in
+    # _SQL_FUNC_MAP, referenced from the user manual.)
+    # random_variable arithmetic and comparison operator implementations
+    # (invoked through the SQL operators + - * / < <= = <> >= >, not
+    # called by name; promote alongside the constructors when the
+    # user-manual chapter is written).
+    'random_variable_plus', 'random_variable_minus',
+    'random_variable_times', 'random_variable_div',
+    'random_variable_neg',
+    'random_variable_lt', 'random_variable_le', 'random_variable_eq',
+    'random_variable_ne', 'random_variable_ge', 'random_variable_gt',
+    'random_variable_cmp_placeholder',
+    'random_variable_cmp_oid',
+    # Doxygen synthesises one symbol per `CREATE OPERATOR` declaration
+    # in the form <procedure>_<rightarg>; for the random_variable
+    # comparison and arithmetic operators the right argument is also
+    # random_variable, hence the doubled-name shape.  These are not
+    # callable SQL functions; the underlying procedures live above.
+    'random_variable_lt_random_variable',
+    'random_variable_le_random_variable',
+    'random_variable_eq_random_variable',
+    'random_variable_ne_random_variable',
+    'random_variable_ge_random_variable',
+    'random_variable_gt_random_variable',
+    'random_variable_op_random_variable',
+    # Direct gate_cmp UUID constructors -- bypass the planner hook for
+    # callers (mostly tests) that want a UUID instead of a boolean.
+    'rv_cmp_lt', 'rv_cmp_le', 'rv_cmp_eq', 'rv_cmp_ne',
+    'rv_cmp_ge', 'rv_cmp_gt',
+    # Internal C entry points behind the polymorphic moment / support
+    # SQL surface.  Not invoked by name -- callers go through expected /
+    # variance / moment / central_moment / support, dispatched through
+    # rv_moment for random_variable inputs and agg_raw_moment for
+    # agg_token inputs; rv_support is the support() backend.
+    'rv_moment', 'rv_support', 'agg_raw_moment',
+    # C++ helper picked up by Doxygen because it lives in the `provsql`
+    # namespace; it has no SQL-level binding.
+    'compute_support',
+    # ('variance' / 'moment' / 'central_moment' / 'support' /
+    # 'rv_sample' / 'avg' / 'sum' / 'product' are now in
+    # _SQL_FUNC_MAP, referenced from the continuous-distributions
+    # user manual.)
+    # SFUNC / FFUNC helpers behind the avg / sum / product RV
+    # aggregates — not called directly.
+    'avg_rv_ffunc', 'sum_rv_sfunc', 'sum_rv_ffunc', 'product_rv_ffunc',
+    # Internal C entry point behind the random_variable aggregates above.
+    'rv_aggregate_semimod',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
 }

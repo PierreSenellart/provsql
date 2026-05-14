@@ -1,0 +1,154 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+basic_root_kind|basic_root_arity|basic_child0_kind|basic_child1_kind|basic_child2_kind
+arith|3|mixture|mixture|mixture
+(1 row)
+basic_mean|basic_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+uncertain_mean
+t
+(1 row)
+uncertain_variance
+t
+(1 row)
+create_gate
+
+(1 row)
+create_gate
+
+(1 row)
+set_prob
+
+(1 row)
+set_prob
+
+(1 row)
+remove_provenance
+
+(1 row)
+coupled_mean|coupled_variance
+t|t
+(1 row)
+remove_provenance
+
+(1 row)
+decoupled_mean|decoupled_variance_exact
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shared_rv_mean|shared_rv_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+distinct_rv_mean|distinct_rv_variance_exact
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+empty_root_kind|empty_root_extra|empty_mean|empty_variance
+value|0|t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+count_root_kind|count_root_arity|count_child_kind|count_branch_x_kind|count_branch_y_kind
+arith|3|mixture|value|value
+(1 row)
+count_lift_mean
+t
+(1 row)
+count_lift_variance
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+root_kind|root_arity|num_kind|den_kind|num_arity|den_arity
+arith|2|arith|arith|3|3
+(1 row)
+avg_basic_mean|avg_basic_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+avg_uncert_mean|avg_uncert_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+avg_empty_is_null|provsql
+t|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+den_kind|den_child_kind
+arith|value
+(1 row)
+avg_direct_mean|avg_direct_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+root_kind|root_arity|child_kind
+arith|3|mixture
+(1 row)
+prod_basic_mean|prod_basic_variance
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+prod_uncert_mean
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+empty_prod_kind|empty_prod_extra|empty_prod_mean|empty_prod_variance
+value|1|t|t
+(1 row)

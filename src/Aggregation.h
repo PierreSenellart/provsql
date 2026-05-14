@@ -183,6 +183,23 @@ struct Aggregator {
 AggregationOperator getAggregationOperator(Oid oid);
 
 /**
+ * @brief Map a PostgreSQL comparison-operator OID to a @c ComparisonOperator.
+ *
+ * The OID is the one stored in @c gate_cmp's @c info1 field (the OID of
+ * one of the six standard comparators @c =, @c <>, @c <, @c <=, @c >,
+ * @c >=).  The translation goes via @c get_opname() so it is operand-type
+ * agnostic.
+ *
+ * @param[in]  op_oid  Comparison-operator OID.
+ * @param[out] ok      Set to @c true on a recognised comparator, @c false
+ *                     when @p op_oid does not resolve in @c pg_operator
+ *                     or its name is not one of the six standard ones.
+ * @return     The matching @c ComparisonOperator on success; an
+ *             unspecified value (currently @c EQ) when @p ok is @c false.
+ */
+ComparisonOperator cmpOpFromOid(Oid op_oid, bool &ok);
+
+/**
  * @brief Create a concrete @c Aggregator for the given operator and value type.
  *
  * @param op  The aggregation function to implement.

@@ -19,14 +19,19 @@
 #include <boost/iostreams/stream.hpp>
 
 #include "CircuitFromMMap.h"
+#include "HybridEvaluator.h"
+#include "RangeCheck.h"
 #include "having_semantics.hpp"
 #include "semiring/BoolExpr.h"
 #include "provsql_utils_cpp.h"
+
+#include <vector>
 
 extern "C" {
 #include "miscadmin.h"
 #include "provsql_shmem.h"
 #include "provsql_mmap.h"
+#include "provsql_utils.h"
 }
 
 /**
@@ -111,7 +116,121 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
   return getBooleanCircuit(gc, token, gate, gc_to_bc);
 }
 
+/**
+ * @brief Apply the universal load-time simplification passes to @p gc.
+ *
+ * Extracted from @c getGenericCircuit so the joint-circuit loader
+ * (@c getJointCircuit) runs the same passes on its multi-root output.
+ * Gated by the @c provsql.simplify_on_load GUC, identical semantics.
+ */
+static void applyLoadTimeSimplification(GenericCircuit &gc)
+{
+  if (provsql_simplify_on_load) {
+    provsql::runRangeCheck(gc);
+    /* Fold deterministic @c gate_arith subtrees to @c gate_value
+     * before @c foldSemiringIdentities (which then collapses any
+     * single-wire @c gate_times / @c gate_plus wrappers around the
+     * resulting @c gate_value).  Constant folding is uniformly safe
+     * across consumers: a @c gate_value carries no random identity,
+     * so no shared-RV coupling is decoupled by the rewrite.  Lifts
+     * common parser shapes -- the @c -c::random_variable cast emits
+     * @c arith(NEG, value:c) where @c value:-c would round-trip
+     * identically -- into the canonical form so downstream
+     * @c collectRvConstraints / @c asRvVsConstCmp recognise them. */
+    provsql::runConstantFold(gc);
+    gc.foldSemiringIdentities();
+  }
+}
+
 GenericCircuit getGenericCircuit(pg_uuid_t token)
 {
-  return getCircuitFromMMap<GenericCircuit>(token, 'g');
+  GenericCircuit gc = getCircuitFromMMap<GenericCircuit>(token, 'g');
+
+  /* Apply universal cmp-resolution passes (currently RangeCheck) at
+   * load time so every downstream consumer -- semiring evaluators,
+   * MC, view_circuit, PROV export -- sees the simplified circuit.
+   * Each pass replaces decided gate_cmps with Bernoulli gate_input
+   * gates with probability 0 or 1 via
+   * GenericCircuit::resolveCmpToBernoulli; the rewrite is uniform
+   * across semirings (gate_zero / gate_one are the additive /
+   * multiplicative identities in any semiring) so a single sweep
+   * here is correct for every later evaluator.
+   *
+   * Gated by the provsql.simplify_on_load GUC so users debugging
+   * raw circuit structure can opt out. */
+  applyLoadTimeSimplification(gc);
+
+  return gc;
+}
+
+/**
+ * @brief IPC: ship a 'j' (joint) request to the mmap worker and
+ *        deserialise the returned @c GenericCircuit.
+ *
+ * Mirrors @c getCircuitFromMMap but writes the multi-root payload
+ * the worker's @c 'j' handler expects: <tt>'j' Oid nb_roots {pg_uuid_t}*</tt>.
+ * The response shape is identical to @c 'g' -- @c unsigned @c long
+ * size prefix followed by a Boost-serialised @c GenericCircuit.
+ */
+static GenericCircuit getJointCircuitFromMMap(
+    pg_uuid_t root_token, pg_uuid_t event_token)
+{
+  char message_char = 'j';
+  unsigned nb_roots = 2;
+  STARTWRITEM();
+  ADDWRITEM(&message_char, char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&nb_roots, unsigned);
+  ADDWRITEM(&root_token, pg_uuid_t);
+  ADDWRITEM(&event_token, pg_uuid_t);
+
+  provsql_shmem_lock_exclusive();
+  if(!SENDWRITEM())
+    provsql_error("Cannot write to pipe (message type j)");
+
+  unsigned long size;
+  if(!READB(size, unsigned long))
+    provsql_error("Cannot read from pipe (message type j)");
+
+  char *buf = new char[size], *p = buf;
+  ssize_t actual_read, remaining_size=size;
+  while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
+    if(actual_read<=0) {
+      provsql_shmem_unlock();
+      delete [] buf;
+      provsql_error("Cannot read from pipe (message type j)");
+    } else {
+      remaining_size-=actual_read;
+      p+=actual_read;
+    }
+  }
+  provsql_shmem_unlock();
+
+  boost::iostreams::stream<boost::iostreams::array_source> stream(buf, size);
+  boost::archive::binary_iarchive ia(stream);
+  GenericCircuit c;
+  ia >> c;
+
+  delete [] buf;
+
+  return c;
+}
+
+GenericCircuit getJointCircuit(
+  pg_uuid_t root_token,
+  pg_uuid_t event_token,
+  gate_t &root_gate,
+  gate_t &event_gate)
+{
+  GenericCircuit gc = getJointCircuitFromMMap(root_token, event_token);
+
+  applyLoadTimeSimplification(gc);
+
+  /* Resolve the gate_t for the two roots AFTER simplification.  The
+   * passes mutate gate types in place but never delete gates, so the
+   * UUID-to-gate_t map (and therefore @c getGate) stays valid. */
+  root_gate  = gc.getGate(uuid2string(root_token));
+  event_gate = gc.getGate(uuid2string(event_token));
+
+  return gc;
 }

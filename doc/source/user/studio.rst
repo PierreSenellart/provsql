@@ -140,6 +140,16 @@ tunable in `Configuration`_). When more rows are available, the
 result-table footer shows a ``(first 1000; more available)`` marker
 so the truncation is explicit.
 
+Each ``<th>`` carries the column's SQL type name as a tooltip, and
+ProvSQL-significant columns get a small pill next to the column
+name, mirroring the schema-panel pills described under
+:ref:`studio-schema-panel`: terracotta :sc:`rv` for
+``random_variable``, terracotta :sc:`agg` for ``agg_token``, and
+purple :sc:`prov` for the row-provenance ``provsql`` column itself.
+The pills make it obvious which result columns carry circuit
+references (and are therefore clickable in Circuit mode) without
+having to inspect the schema panel.
+
 .. _studio-query-toggles:
 
 Per-query toggles
@@ -245,7 +255,7 @@ Semiring evaluation strip
 
 Below the canvas, the :doc:`semiring evaluation <semirings>` strip
 targets the pinned node (or, when no node is pinned, the root). The
-semiring select groups compiled entries into four sub-optgroups, with
+semiring select organises compiled entries into four sub-groups, with
 custom and "Other" entries below:
 
 * **Compiled semirings**
@@ -341,6 +351,135 @@ root: it operates on the token UUID, not the rendered DAG.
    cap, Studio surfaces a single button to start at depth 1 and
    expand on demand.
 
+.. _studio-circuit-distribution-profile:
+
+Distribution profile panel
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For nodes whose underlying gate is a scalar random-variable root
+(``gate_rv``, ``gate_value`` in float8 mode, ``gate_arith``,
+``gate_mixture``), the eval strip exposes a *Distribution profile*
+entry under the *Distribution* group. Running it returns
+header stats (mean :math:`\mu` and variance :math:`\sigma^2`),
+an inline-SVG histogram of the sub-circuit's distribution, a
+PDF/CDF toggle, per-bar tooltips with :math:`\sigma` markers, and
+wheel-zoom on the value axis. The histogram is backed
+server-side by :sqlfunc:`rv_histogram`; the sample count comes
+from ``provsql.rv_mc_samples`` and the seed from
+``provsql.monte_carlo_seed`` (both surfaced in the Config panel).
+
+When the pinned node resolves to a recognised closed-form shape
+the panel overlays the analytical PDF (or CDF, depending on the
+toggle) on the histogram as a smooth terracotta curve, and
+point masses as vertical stems capped by a small disc. The
+overlay makes the simplifier's analytical wins visible: when
+``2 * Exp(0.4)`` folds to ``Exp(0.2)`` the panel shows the
+exact exponential decay curve over the MC-sampled bars, so the
+user can verify by eye that the fold matched the distribution.
+
+The recognised shapes are:
+
+* a bare ``gate_rv`` of Normal / Uniform / Exponential / Erlang,
+  optionally with a one-interval conditioning event -- smooth
+  curve;
+* a Dirac (``provsql.as_random(c)``) -- single stem at ``c``;
+* a categorical (``provsql.categorical``) -- one stem per
+  outcome, height proportional to its probability mass;
+* a Bernoulli mixture (``provsql.mixture(p, X, Y)``) over any
+  recursively-matched shape -- weighted sum of the per-arm
+  curves, with Dirac / categorical arms contributing stems
+  whose mass propagates through the Bernoulli weight.
+
+Conditioning (a ``WHERE`` predicate, or any conditioning
+provenance UUID) applies to every shape: bare-RV curves clip
+to the conditioning interval and renormalise; mixture arms
+truncate individually and the Bernoulli weight rebalances by
+the ratio of arm masses; categorical outcomes outside the
+interval are dropped and surviving masses renormalise to 1;
+Diracs survive iff their value sits in the interval, and an
+infeasible event raises a clean "conditioning event is
+infeasible" error without running 100,000 wasted MC samples.
+
+The curve is computed server-side by
+:sqlfunc:`rv_analytical_curves`; shapes outside the closed-form
+table (``gate_arith`` composites of independent RVs that the
+simplifier cannot fold, non-integer Erlang shapes) render
+histogram-only without an overlay.
+
+For pure-discrete shapes (a Dirac, a categorical, or a nested
+mixture whose every arm is one of those) the CDF mode draws a
+true staircase: horizontal flats joined by vertical jumps at
+each outcome, running from 0 at the chart's left edge to 1 on
+the right.
+
+.. figure:: /_static/studio/distribution-profile.png
+   :alt: The eval-strip Distribution profile panel showing the
+         support interval, the mean and standard deviation, an
+         inline-SVG histogram of the sub-circuit's distribution,
+         and the analytical Normal(28, 2) PDF curve overlaid on
+         the MC bars.
+
+   The *Distribution profile* eval-strip panel on a ``gate_rv``
+   ``N(28, 2)`` leaf: header stats (support, :math:`\mu`,
+   :math:`\sigma`), an inline-SVG histogram with the analytical
+   PDF overlaid as a smooth terracotta curve, and a PDF/CDF
+   toggle on the right.
+
+The same group hosts a *Sample* entry that draws raw samples
+via :sqlfunc:`rv_sample`; the result renders as a collapsible
+panel with a six-value inline preview and a "show full list"
+expander. When the conditioning event's acceptance
+rate truncates the run below the requested ``n``, the panel
+surfaces an actionable hint pointing at ``provsql.rv_mc_samples``.
+
+The *Moment* entry on the same strip computes :sqlfunc:`moment`
+or :sqlfunc:`central_moment` for a chosen ``k`` (raw vs central
+toggle), and the *Support* entry returns the closed-form
+:sqlfunc:`support` interval.
+
+.. _studio-circuit-conditioning:
+
+Conditioning and the row-prov auto-preset
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The eval strip carries a *Condition on* text input that takes any
+provenance UUID, when populated, every distribution-shaped
+evaluation (profile, sample, moment, support) routes through the
+conditional path. Clicking a result-table cell auto-presets the
+field to the row's provenance UUID, with a :guilabel:`Conditioned
+by:` badge visible underneath the input. Clicking the active
+badge clears the conditioning and reverts to the unconditional
+answer; clicking the muted badge restores the row provenance.
+Manual edits stick within a row and reset on row navigation.
+
+Combined with the distribution profile, this makes side-by-side
+comparison of unconditional vs conditional shape two clicks: pin
+the random variable, run *Distribution profile* unconditional,
+toggle the badge, run it conditional. The truncated closed-form
+table (Normal via Mills ratio, Uniform on the intersected
+support, Exponential by memorylessness) takes over when
+applicable; otherwise the panel reflects the rejection-sampling
+estimate at the configured budget.
+
+.. _studio-circuit-simplify-on-load:
+
+Simplified-circuit rendering
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Circuit mode honours the ``provsql.simplify_on_load`` GUC
+(see :doc:`configuration` and :doc:`continuous-distributions`) and
+renders the in-memory peephole-simplified graph via the
+:sqlfunc:`simplified_circuit_subgraph` SRF. Toggling the GUC in
+the Config panel switches between the raw, gate-creation view
+(useful when debugging RV constructors or the comparison-rewriter
+path) and the simplified, evaluation-time view (what every
+downstream consumer sees). Comparators decidable from the
+propagated support (a Normal restricted to ``x > 2`` reduces
+trivially when shifted out of the support) collapse to Bernoulli
+``gate_input`` leaves before the canvas renders, so the visible
+graph matches what the semiring evaluators and Monte-Carlo
+sampler actually consume.
+
 .. _studio-where-mode:
 
 Where mode
@@ -403,7 +542,8 @@ Schema panel
 ------------
 
 A button in the top nav opens a searchable popover listing every
-``SELECT``-able relation. Each gets one of two pills:
+``SELECT``-able relation. Each gets one of two relation-level
+pills:
 
 * :sc:`prov` (purple) on a relation whose ``provsql`` column is
   injected by the planner: provenance tracking is active.
@@ -414,10 +554,20 @@ A button in the top nav opens a searchable popover listing every
   injected ``provsql`` column is classified as :sc:`mapping` (the
   more specific category).
 
+Columns whose type is one of ProvSQL's circuit-bearing types
+carry their own terracotta pill next to the column name:
+:sc:`rv` for ``random_variable`` (operators rewrite into
+``gate_cmp`` / ``gate_arith``; see
+:doc:`continuous-distributions`) and :sc:`agg` for ``agg_token``
+(each value is a circuit root with a running aggregate value).
+
 On a tracked table, each column is a click target that prefills
 ``SELECT create_provenance_mapping('<table>_<col>_mapping',
 '<schema>.<table>', '<col>');`` into the query box, so a fresh
-mapping is two clicks away.
+mapping is two clicks away. The click affordance is suppressed
+on :sc:`rv` and :sc:`agg` columns, since their values are circuit
+references rather than scalars and a mapping built from them
+would not label input gates meaningfully.
 
 On any provenance-eligible plain table, :guilabel:`+ prov` and
 :guilabel:`− prov` action chips prefill ``SELECT add_provenance(...)``
@@ -529,6 +679,18 @@ extension version.
        :sqlfunc:`resolve_input`, and the
        ``provsql.aggtoken_text_as_uuid`` GUC (used for clickable
        ``agg_token`` cells), all introduced in 1.4.0.
+   * - ``1.1.x``
+     - ``≥ 1.5.0``
+     - Adds renderers for the continuous-distribution gate
+       family (``gate_rv``, ``gate_arith``, ``gate_mixture``,
+       float8 ``gate_value``), the *Distribution profile* /
+       *Sample* / *Moment* / *Support* evaluators, the
+       *Condition on* row-provenance auto-preset, and
+       simplified-circuit rendering driven by
+       ``provsql.simplify_on_load``. Backed by the
+       :sqlfunc:`simplified_circuit_subgraph`, :sqlfunc:`rv_histogram`
+       and :sqlfunc:`rv_sample` C entry points introduced in 1.5.0.
+       See :doc:`continuous-distributions`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to

@@ -383,6 +383,35 @@ void provsql_mmap_main_loop()
       break;
     }
 
+    case 'j':
+    {
+      /* Joint-circuit load: BFS from a vector of roots so a shared
+       * subgraph reachable from multiple roots collapses to a single
+       * gate_t.  Used by getJointCircuit() to load an RV's sub-DAG
+       * together with a conditioning gate that sits above it in the
+       * persisted DAG. */
+      unsigned nb_roots;
+      if(!READM(nb_roots, unsigned))
+        provsql_error("Cannot read from pipe (message type j)");
+
+      std::vector<pg_uuid_t> roots(nb_roots);
+      for(unsigned i=0; i<nb_roots; ++i)
+        if(!READM(roots[i], pg_uuid_t))
+          provsql_error("Cannot read from pipe (message type j)");
+
+      std::stringstream ss;
+      boost::archive::binary_oarchive oa(ss);
+      oa << circuit->createGenericCircuit(roots);
+
+      ss.seekg(0, std::ios::end);
+      unsigned long size = ss.tellg();
+      ss.seekg(0, std::ios::beg);
+
+      if(!WRITEB(&size, unsigned long) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
+        provsql_error("Cannot write to pipe (message type j)");
+      break;
+    }
+
     default:
       provsql_error("Wrong message type: %c", c);
     }
@@ -412,8 +441,21 @@ bool operator<(const pg_uuid_t a, const pg_uuid_t b)
 
 GenericCircuit MMappedCircuit::createGenericCircuit(pg_uuid_t token) const
 {
+  return createGenericCircuit(std::vector<pg_uuid_t>{token});
+}
+
+GenericCircuit MMappedCircuit::createGenericCircuit(
+    const std::vector<pg_uuid_t> &roots) const
+{
+  /* Seed the work list with every root.  std::set deduplicates so a
+   * UUID listed twice (or reached as a child of one root and the
+   * other's root itself) is processed only once.  Shared subgraphs
+   * therefore land on a single gate_t in `result` -- the property
+   * that lets the conditional MC sampler couple the indicator and
+   * value paths through @c Sampler::scalar_cache_ / @c bool_cache_. */
   std::set<pg_uuid_t> to_process, processed;
-  to_process.insert(token);
+  for(const auto &r : roots)
+    to_process.insert(r);
 
   GenericCircuit result;
 
@@ -438,12 +480,14 @@ GenericCircuit MMappedCircuit::createGenericCircuit(pg_uuid_t token) const
         to_process.insert(children[i]);
     }
 
-    if(type==gate_mulinput || type==gate_eq || type==gate_agg || type==gate_cmp) {
+    if(type==gate_mulinput || type==gate_eq || type==gate_agg
+       || type==gate_cmp  || type==gate_arith) {
       auto [info1, info2] = getInfos(uuid);
       result.setInfos(id, info1, info2);
     }
 
-    if(type==gate_project || type==gate_value || type==gate_agg) {
+    if(type==gate_project || type==gate_value || type==gate_agg
+       || type==gate_rv || type==gate_mulinput) {
       auto extra = getExtra(uuid);
       result.setExtra(id, extra);
     }

@@ -1,0 +1,125 @@
+\set ECHO none
+rv_normal_kind
+rv
+(1 row)
+rv_normal_extra
+normal:2.5,0.5
+(1 row)
+rv_uniform_kind
+rv
+(1 row)
+rv_uniform_extra
+uniform:1,3
+(1 row)
+rv_exp_kind
+rv
+(1 row)
+rv_exp_extra
+exponential:0.7
+(1 row)
+rv_erlang_kind
+rv
+(1 row)
+rv_erlang_extra
+erlang:3,0.5
+(1 row)
+const_kind
+value
+(1 row)
+const_extra
+42
+(1 row)
+uuid_roundtrip
+t
+(1 row)
+implicit_cast_to_uuid
+t
+(1 row)
+id|gate_type
+s1|rv
+s2|rv
+s3|rv
+s4|value
+(4 rows)
+id|extra
+s1|normal:2.5,0.5
+s2|uniform:1,3
+s3|exponential:0.7
+s4|2
+(4 rows)
+as_random_deterministic
+t
+(1 row)
+as_random_distinct
+t
+(1 row)
+implicit_cast_dedup_float8
+t
+(1 row)
+int_literal_via_cast
+t
+(1 row)
+numeric_literal_via_cast
+t
+(1 row)
+normal_calls_independent
+t
+(1 row)
+uniform_calls_independent
+t
+(1 row)
+exponential_calls_independent
+t
+(1 row)
+erlang_calls_independent
+t
+(1 row)
+erlang_one_routes_to_exp
+exponential:0.7
+(1 row)
+normal_zero_sigma_kind
+value
+(1 row)
+normal_zero_sigma_dedups_with_as_random
+t
+(1 row)
+uniform_degenerate_kind
+value
+(1 row)
+uniform_degenerate_dedups_with_as_random
+t
+(1 row)
+ERROR:  provsql.normal: parameters must be finite (got mu=NaN, sigma=1)
+ERROR:  provsql.normal: parameters must be finite (got mu=0, sigma=Infinity)
+ERROR:  provsql.normal: sigma must be non-negative (got -1)
+ERROR:  provsql.uniform: bounds must be finite (got a=NaN, b=1)
+ERROR:  provsql.uniform: a must be <= b (got a=3, b=1)
+ERROR:  provsql.exponential: lambda must be finite (got Infinity)
+ERROR:  provsql.exponential: lambda must be strictly positive (got 0)
+ERROR:  provsql.exponential: lambda must be strictly positive (got -0.5)
+ERROR:  provsql.erlang: k must be >= 1 (got 0)
+ERROR:  provsql.erlang: k must be >= 1 (got -2)
+ERROR:  provsql.erlang: lambda must be finite (got NaN)
+ERROR:  provsql.erlang: lambda must be strictly positive (got 0)
+ERROR:  provsql.erlang: lambda must be strictly positive (got -0.5)
+as_random_nan_extra
+NaN
+(1 row)
+as_random_pos_inf_extra
+Infinity
+(1 row)
+as_random_neg_inf_extra
+-Infinity
+(1 row)
+nan_text_roundtrip
+t
+(1 row)
+distinct_special_uuids
+3
+(1 row)
+as_random_signed_zero_dedup
+t
+(1 row)
+uniform_signed_zero_dedup
+t
+(1 row)

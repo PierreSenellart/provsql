@@ -10,6 +10,13 @@ with a step-by-step guide for adding a new method.  See
 :doc:`../user/probabilities` for the user-facing description of the
 existing methods.
 
+The continuous-random-variable surface layers an analytical /
+hybrid path *on top of* this Boolean machinery; the architecture
+of that layer is documented separately in
+:doc:`continuous-distributions`. The sections below cross-link to
+the relevant arms of the hybrid evaluator and the conditional
+inference path.
+
 
 Architecture
 ------------
@@ -269,7 +276,7 @@ The canonical way to create such gates from SQL is
 values, allocates one fresh ``input`` gate per key group, and
 turns each member of the group into a ``mulinput`` whose child
 is that block key.  When no probabilities are attached,
-``repair_key`` defaults them to a uniform distribution over the
+:sqlfunc:`repair_key` defaults them to a uniform distribution over the
 block members.
 
 Rewriting Blocks into Independent Booleans
@@ -409,7 +416,7 @@ mirrors that structure:
 the target input gate has been replaced by an ``AND`` /
 ``OR``-with-no-children acting as the constant ``true`` /
 ``false`` respectively.  The private helper
-``dDNNF::shapley_alpha()`` then performs a single bottom-up pass
+:cfunc:`dDNNF::shapley_alpha` then performs a single bottom-up pass
 computing a two-dimensional array
 :math:`\beta^g_{k,\ell}` (called ``result[g]`` in the code) at
 every gate :math:`g`, where :math:`k` is the number of variables
@@ -429,7 +436,7 @@ Algorithm 1 of the paper:
   distributions.  This convolution is the reason AND gates have
   to be binarised before the algorithm runs.
 - A standalone bottom-up pass
-  (``dDNNF::shapley_delta()``) precomputes the :math:`\delta^g_k`
+  (:cfunc:`dDNNF::shapley_delta`) precomputes the :math:`\delta^g_k`
   polynomials, which the algorithm uses at ``NOT`` gates to turn
   negation into a coefficient flip.
 
@@ -445,8 +452,9 @@ complexity is :math:`O(|C| \cdot |V|^5)` arithmetic operations,
 dominated by the double-sum convolution at AND gates over the
 :math:`|V|^2`-sized arrays.
 
-The ``if (isProbabilistic())`` guards inside ``shapley_alpha``
-and ``shapley_delta`` short-circuit the polynomials to a single
+The ``if (isProbabilistic())`` guards inside
+:cfunc:`dDNNF::shapley_alpha` and :cfunc:`dDNNF::shapley_delta`
+short-circuit the polynomials to a single
 top-level coefficient when all input probabilities are 1, so that
 the same code path computes classical (deterministic) Shapley
 values without paying the expected-score overhead.
@@ -465,13 +473,66 @@ The expected Banzhaf value admits a much simpler formula
 where :math:`\mathrm{ENV}(\varphi) = \sum_{Z \subseteq V} \Pi_V(Z)
 \sum_{E \subseteq Z} \varphi(E)` can be computed in a *single*
 linear pass over a smooth d-D circuit without binarising AND
-gates.  :cfunc:`dDNNF::banzhaf` runs ``banzhaf_internal()`` on
+gates.  :cfunc:`dDNNF::banzhaf` runs
+:cfunc:`dDNNF::banzhaf_internal` on
 the two conditioned circuits :math:`C_1` and :math:`C_0` and
 returns the difference times :math:`p_x`; the overall
 complexity is :math:`O(|C| \cdot |V|)`, one factor of :math:`|V|`
 less than Shapley.  This is why :cfunc:`shapley_internal` skips
 the :cfunc:`dDNNF::makeGatesBinary` call in the Banzhaf branch.
 
+
+Hybrid Evaluation for Continuous Distributions
+----------------------------------------------
+
+When the circuit being evaluated contains continuous gates
+(``gate_rv``, ``gate_arith``, ``gate_mixture``),
+a hybrid evaluator runs *before* the Boolean dispatch above. Its
+job is to fold every sub-circuit that has a closed-form analytical
+answer into a Bernoulli leaf so the resulting circuit is a normal
+Boolean circuit ready for any of the Boolean methods.
+
+The hybrid evaluator has three passes:
+
+- **Peephole pruning** (``RangeCheck``): support intervals
+  propagate through ``gate_arith``, every ``gate_cmp``
+  is tested against the propagated interval, and every comparator
+  decidable from the support alone collapses to a Bernoulli
+  ``gate_input`` with probability ``0`` or ``1``.
+- **Family-closure simplifier** (:cfunc:`runHybridSimplifier`):
+  linear combinations of independent normals fold into a single
+  normal; sums of i.i.d. exponentials with the same rate fold
+  into an Erlang; identity / single-child arith gates and
+  semiring identities collapse.
+- **Island decomposition** (:cfunc:`runHybridDecomposer`):
+  the remaining cmps are partitioned by base-RV footprints into
+  *islands*; single-cmp islands marginalise via
+  ``AnalyticEvaluator``'s closed-form CDF; multi-cmp islands
+  with shared base RVs go through the joint table.
+
+See :doc:`continuous-distributions` for the full simplifier rule
+set and the island-decomposition algorithm.
+
+Conditional Evaluation
+----------------------
+
+:sqlfunc:`expected` / :sqlfunc:`variance` / :sqlfunc:`moment` /
+:sqlfunc:`central_moment` / :sqlfunc:`support` / :sqlfunc:`rv_sample` /
+:sqlfunc:`rv_histogram` all accept an optional ``prov uuid`` argument
+that conditions the moment, sample, or histogram on the provenance
+event ``prov``. When ``prov`` resolves to anything other than
+:sqlfunc:`gate_one`, evaluation routes through the joint-circuit
+loader ``getJointCircuit`` (:cfile:`MMappedCircuit.cpp`),
+which performs a multi-rooted BFS over the union of the reachable
+gates from both ``input`` and ``prov`` so shared ``gate_rv``
+leaves between the two are loaded into a single
+:cfunc:`GenericCircuit` and consequently couple correctly in the
+Monte Carlo sampler's ``rv_cache_``. The closed-form
+truncated-distribution table is exhaustive for Normal (Mills
+ratio), Uniform (intersected support), and Exponential
+(memorylessness); other shapes fall back to MC rejection sampling
+at ``provsql.rv_mc_samples`` budget. See
+:doc:`continuous-distributions` for depth.
 
 .. _adding-new-probability-method:
 

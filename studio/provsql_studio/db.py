@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -558,9 +559,10 @@ def conn_info(pool: ConnectionPool) -> dict:
             "SELECT current_user, current_database(), "
             "       coalesce(inet_server_addr()::text, ''), "
             "       coalesce(inet_server_port()::text, ''), "
-            "       array_to_string(current_schemas(false), ', ')"
+            "       array_to_string(current_schemas(false), ', '), "
+            "       (SELECT extversion FROM pg_extension WHERE extname = 'provsql')"
         )
-        user, database, host, port, search_path = cur.fetchone()
+        user, database, host, port, search_path, ext_version = cur.fetchone()
         # Numeric server version, e.g. 130000 for PG 13, 140000 for PG 14.
         # Surfaced so the UI can gate features that depend on PG-version-
         # specific objects (currently `tstzmultirange` for sr_temporal).
@@ -572,6 +574,7 @@ def conn_info(pool: ConnectionPool) -> dict:
         "port": port or None,
         "search_path": search_path,
         "server_version": server_version,
+        "extension_version": ext_version or None,
     }
 
 
@@ -674,7 +677,21 @@ def _to_jsonable(v):
     """Coerce a Python value returned by psycopg into something json.dumps can handle."""
     if v is None:
         return None
-    if isinstance(v, (str, int, float, bool)):
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, float):
+        # Postgres float8 carries +/-Infinity / NaN (e.g. rv_support of a
+        # normal RV is [-Infinity, +Infinity]).  Python's json.dumps emits
+        # them as the bare literals Infinity / -Infinity / NaN, which
+        # browser JSON.parse rejects.  Send the string form so the wire is
+        # valid JSON; circuit.js already accepts the strings 'Infinity' /
+        # '-Infinity' alongside the JS number infinities.
+        if math.isnan(v):
+            return "NaN"
+        if math.isinf(v):
+            return "Infinity" if v > 0 else "-Infinity"
+        return v
+    if isinstance(v, (str, int)):
         return v
     return str(v)
 
@@ -873,6 +890,8 @@ def evaluate_circuit(
     statement_timeout: str,
     search_path: str = "",
     tool_search_path: str = "",
+    extra_gucs: dict[str, str] | None = None,
+    condition_uuid: str | None = None,
 ) -> dict:
     """Run a compiled-semiring or probability evaluation against `token`.
     Returns `{result, kind}` ready to JSON-encode. Raises ValueError on
@@ -880,7 +899,13 @@ def evaluate_circuit(
 
     The caller is responsible for catching psycopg errors and translating
     them to HTTP : we don't shape them here so the route can also surface
-    the underlying SQLSTATE / message verbatim."""
+    the underlying SQLSTATE / message verbatim.
+
+    `condition_uuid` is the conditioning gate for scalar evaluators
+    (`distribution-profile`, `moment`, `sample`).  When provided, it's
+    spliced as the `prov` argument to provsql.rv_moment / rv_support /
+    rv_histogram / rv_sample so the truncated distribution is returned
+    instead of the unconditional one.  Ignored by every other semiring."""
     if semiring == "boolexpr":
         # Like prov-xml: the mapping is optional. With one, leaves are
         # labelled by the mapping's `value` column; without one, leaves
@@ -950,6 +975,226 @@ def evaluate_circuit(
             sql.Literal(mapping),
         )
         params = ()
+    elif semiring == "distribution-profile":
+        # Scalar-only evaluator: fan out to rv_support / rv_moment(_, 1, false)
+        # / rv_moment(_, 2, true) / rv_histogram in one round-trip, package
+        # the four results as a single dict so the strip can render the
+        # support / expectation / variance / histogram panel from one
+        # response.  Calls the internal C kernels directly rather than the
+        # polymorphic `support` / `expected` / `variance` dispatchers
+        # because (a) there is no uuid -> random_variable cast (the type
+        # carries a (uuid, value) pair, not just a uuid), and (b) the
+        # frontend filters the option to scalar root gates only, so the
+        # polymorphic agg_token / numeric branches don't apply here.  For
+        # non-scalar gates rv_support falls back to the conservative
+        # all-real interval and rv_moment raises with the underlying type
+        # mismatch, which surfaces as a 500 with the diagnostic.
+        bins_str = (arguments or "30").strip()
+        try:
+            bins = int(bins_str)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"distribution-profile: bins must be an integer (got {bins_str!r})"
+            )
+        if bins <= 0:
+            raise ValueError(
+                f"distribution-profile: bins must be positive (got {bins})"
+            )
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("SET LOCAL statement_timeout = {}").format(
+                    sql.Literal(statement_timeout)
+                )
+            )
+            # Same search_path / tool_search_path / panel-GUC composition
+            # as the main branch below; duplicated here because we don't
+            # share the trailer.  rv_histogram honours rv_mc_samples and
+            # monte_carlo_seed; rv_moment honours the same seed for its
+            # MC fallback.
+            if (search_path or "").strip():
+                target_path = compose_search_path(search_path, "")
+            else:
+                cur.execute("SHOW search_path")
+                target_path = compose_search_path("", cur.fetchone()[0])
+            cur.execute(
+                "SELECT set_config('search_path', %s, true)",
+                (target_path,),
+            )
+            if (tool_search_path or "").strip():
+                cur.execute(
+                    "SELECT set_config('provsql.tool_search_path', %s, true)",
+                    (tool_search_path,),
+                )
+            for guc_name, guc_val in (extra_gucs or {}).items():
+                if guc_name not in _PANEL_GUCS:
+                    continue
+                cur.execute(
+                    sql.SQL("SET LOCAL {} = {}").format(
+                        sql.Identifier(*guc_name.split(".")),
+                        sql.Literal(guc_val),
+                    )
+                )
+            # When condition_uuid is set, splice it as the prov arg of
+            # every RV-side call so the strip shows the truncated
+            # distribution-profile.  rv_moment / rv_support /
+            # rv_histogram all default `prov` to gate_one() (the
+            # unconditional case), so unset is a no-op at the SQL
+            # layer.
+            cond_expr = (
+                sql.SQL("{}::uuid").format(sql.Literal(condition_uuid))
+                if condition_uuid
+                else sql.SQL("provsql.gate_one()")
+            )
+            cur.execute(
+                sql.SQL("""
+                    SELECT s.lo, s.hi,
+                           provsql.rv_moment({tok}::uuid, 1, false, {cond}),
+                           provsql.rv_moment({tok}::uuid, 2, true,  {cond}),
+                           provsql.rv_histogram({tok}::uuid, {bins}, {cond}),
+                           provsql.rv_analytical_curves(
+                             {tok}::uuid, 100, {cond})
+                      FROM provsql.rv_support({tok}::uuid, {cond}) s
+                """).format(
+                    tok=sql.Literal(token), bins=sql.Literal(bins),
+                    cond=cond_expr,
+                )
+            )
+            row = cur.fetchone()
+        if row:
+            lo, hi, exp_val, var_val, hist, curves = row
+        else:
+            lo, hi, exp_val, var_val, hist, curves = (None,) * 6
+        return {
+            "result": {
+                "support": [_to_jsonable(lo), _to_jsonable(hi)],
+                "expected": _to_jsonable(exp_val),
+                "variance": _to_jsonable(var_val),
+                # rv_histogram returns jsonb; psycopg surfaces it as a
+                # parsed Python list of {bin_lo, bin_hi, count} dicts that
+                # is already JSON-native, so bypass `_to_jsonable` (which
+                # would stringify the list).
+                "histogram": hist if isinstance(hist, (list, dict)) else json.loads(hist) if hist else [],
+                "bins": bins,
+                # rv_analytical_curves returns jsonb {pdf: [...], cdf: [...]}
+                # for closed-form bare-gate_rv roots (optionally truncated),
+                # NULL otherwise.  Forward the NULL verbatim so the frontend
+                # can skip the overlay without a special case.
+                "analytical_curves":
+                    curves if isinstance(curves, (list, dict))
+                    else json.loads(curves) if curves else None,
+            },
+            "kind": "distribution-profile",
+        }
+    elif semiring == "moment":
+        # Scalar-only evaluator that calls provsql.rv_moment(token, k,
+        # central) directly.  Arguments arrive as `"k;central"` where
+        # central is `"raw"` or `"central"`; we parse both halves and
+        # validate before splicing.  Returns a single float8 result,
+        # rendered by the eval strip alongside Probability and the
+        # numeric compiled semirings.
+        arg = (arguments or "").strip()
+        if ";" in arg:
+            k_str, central_str = arg.split(";", 1)
+        else:
+            k_str, central_str = arg, "raw"
+        k_str = k_str.strip()
+        central_str = central_str.strip().lower()
+        try:
+            k_value = int(k_str)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"moment: k must be a non-negative integer (got {k_str!r})"
+            )
+        if k_value < 0:
+            raise ValueError(
+                f"moment: k must be non-negative (got {k_value})"
+            )
+        if central_str in ("central", "true", "1", "yes"):
+            central = True
+        elif central_str in ("raw", "false", "0", "no", ""):
+            central = False
+        else:
+            raise ValueError(
+                f"moment: central must be 'raw' or 'central' (got {central_str!r})"
+            )
+        # Splice the conditioning event when set; otherwise rv_moment's
+        # `prov` default of gate_one() makes the call unconditional.
+        cond_expr = (
+            sql.SQL("{}::uuid").format(sql.Literal(condition_uuid))
+            if condition_uuid
+            else sql.SQL("provsql.gate_one()")
+        )
+        sql_stmt = sql.SQL(
+            "SELECT provsql.rv_moment({}::uuid, {}, {}, {})"
+        ).format(
+            sql.Literal(token), sql.Literal(k_value), sql.Literal(central),
+            cond_expr,
+        )
+        params = ()
+    elif semiring == "sample":
+        # Scalar-only evaluator returning a list of MC samples for the
+        # gate, optionally conditioned on `condition_uuid`.  The
+        # `arguments` field carries the sample count `n` as a positive
+        # integer (default 100).  Each row of provsql.rv_sample is one
+        # float, which we collect into a JSON-able list for the
+        # frontend Sample tab.
+        n_str = (arguments or "100").strip()
+        try:
+            n_value = int(n_str)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"sample: n must be a positive integer (got {n_str!r})"
+            )
+        if n_value <= 0:
+            raise ValueError(f"sample: n must be positive (got {n_value})")
+        cond_expr = (
+            sql.SQL("{}::uuid").format(sql.Literal(condition_uuid))
+            if condition_uuid
+            else sql.SQL("provsql.gate_one()")
+        )
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("SET LOCAL statement_timeout = {}").format(
+                    sql.Literal(statement_timeout)
+                )
+            )
+            if (search_path or "").strip():
+                target_path = compose_search_path(search_path, "")
+            else:
+                cur.execute("SHOW search_path")
+                target_path = compose_search_path("", cur.fetchone()[0])
+            cur.execute(
+                "SELECT set_config('search_path', %s, true)",
+                (target_path,),
+            )
+            if (tool_search_path or "").strip():
+                cur.execute(
+                    "SELECT set_config('provsql.tool_search_path', %s, true)",
+                    (tool_search_path,),
+                )
+            for guc_name, guc_val in (extra_gucs or {}).items():
+                if guc_name not in _PANEL_GUCS:
+                    continue
+                cur.execute(
+                    sql.SQL("SET LOCAL {} = {}").format(
+                        sql.Identifier(*guc_name.split(".")),
+                        sql.Literal(guc_val),
+                    )
+                )
+            cur.execute(
+                sql.SQL(
+                    "SELECT v FROM provsql.rv_sample({}::uuid, {}, {}) AS v"
+                ).format(sql.Literal(token), sql.Literal(n_value), cond_expr)
+            )
+            rows = cur.fetchall()
+        return {
+            "result": {
+                "samples": [_to_jsonable(r[0]) for r in rows],
+                "n_requested": n_value,
+                "n_returned": len(rows),
+            },
+            "kind": "sample",
+        }
     elif semiring == "prov-xml":
         # Export the circuit as ProvenanceXML. The mapping is optional :
         # without it, leaves carry bare UUIDs; with it, leaves are
@@ -1041,6 +1286,21 @@ def evaluate_circuit(
                 "SELECT set_config('provsql.tool_search_path', %s, true)",
                 (tool_search_path,),
             )
+        # Panel-managed GUCs (provsql.rv_mc_samples,
+        # provsql.monte_carlo_seed, provsql.simplify_on_load, ...) must
+        # apply here too, otherwise the evaluate-strip's probability
+        # call ignores the user's panel overrides (e.g. setting
+        # rv_mc_samples=0 to disable the MC fallback still gets MC).
+        # exec_batch already does this for batched queries; mirror it.
+        for guc_name, guc_val in (extra_gucs or {}).items():
+            if guc_name not in _PANEL_GUCS:
+                continue
+            cur.execute(
+                sql.SQL("SET LOCAL {} = {}").format(
+                    sql.Identifier(*guc_name.split(".")),
+                    sql.Literal(guc_val),
+                )
+            )
         cur.execute(sql_stmt, params)
         row = cur.fetchone()
     value = row[0] if row else None
@@ -1055,7 +1315,7 @@ def evaluate_circuit(
 
 
 def _result_kind(semiring: str) -> str:
-    if semiring in ("probability", "tropical", "viterbi", "lukasiewicz"):
+    if semiring in ("probability", "moment", "tropical", "viterbi", "lukasiewicz"):
         return "float"
     if semiring == "counting":
         return "int"
@@ -1595,6 +1855,10 @@ _TOGGLE_GUCS = {
 _PANEL_GUCS = {
     "provsql.active",
     "provsql.verbose_level",
+    "provsql.monte_carlo_seed",
+    "provsql.rv_mc_samples",
+    "provsql.simplify_on_load",
+    "provsql.hybrid_evaluation",
 }
 _GUC_WHITELIST = _TOGGLE_GUCS | _PANEL_GUCS
 
@@ -1644,6 +1908,31 @@ def validate_panel_guc(name: str, value: str) -> str:
         if not (0 <= n <= 100):
             raise ValueError("provsql.verbose_level must be between 0 and 100")
         return str(n)
+    if name == "provsql.monte_carlo_seed":
+        # -1 means "seed from std::random_device" per src/provsql.c; any
+        # other int (including 0) is a literal seed for the mt19937_64
+        # used by the Bernoulli and gate_rv sampling paths.
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            raise ValueError("provsql.monte_carlo_seed must be an integer (-1 for non-deterministic)")
+        if n < -1:
+            raise ValueError("provsql.monte_carlo_seed must be -1 or a non-negative integer")
+        return str(n)
+    if name == "provsql.rv_mc_samples":
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            raise ValueError("provsql.rv_mc_samples must be a non-negative integer")
+        if n < 0:
+            raise ValueError("provsql.rv_mc_samples must be non-negative (0 disables the MC fallback)")
+        return str(n)
+    if name in ("provsql.simplify_on_load", "provsql.hybrid_evaluation"):
+        if v in ("on", "true", "1", "yes"):
+            return "on"
+        if v in ("off", "false", "0", "no"):
+            return "off"
+        raise ValueError(f"{name} must be on or off")
     raise ValueError(f"GUC not user-configurable: {name}")
 
 

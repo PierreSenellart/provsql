@@ -50,9 +50,35 @@ jobs:
       - run: /tmp/wheel-venv/bin/pip install studio/dist/*.whl
       - run: /tmp/wheel-venv/bin/provsql-studio --help
 
+  build:
+    name: 🔨 build PG${{ matrix.pg }}
+    needs: lint
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [14, 15, 16]
+    steps:
+      - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev
+      - uses: actions/checkout@v6
+      - run: make -j$(nproc)
+      # Stage what test/e2e need (.so, .control, sql/*) under /tmp/inst
+      # via DESTDIR, then tar it. We tar because `actions/upload-artifact@v4`
+      # uses zip internally and drops Unix file modes, which can strip the
+      # executable bit from provsql.so.
+      - run: |
+          make install DESTDIR=/tmp/inst
+          tar -czf /tmp/provsql-build.tar.gz -C /tmp/inst .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: provsql-build-pg${{ matrix.pg }}
+          path: /tmp/provsql-build.tar.gz
+          retention-days: 1
+
   test:
     name: 🧪 pytest Py${{ matrix.python }} × PG${{ matrix.pg }}
-    needs: lint
+    needs: build
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
     strategy:
@@ -67,7 +93,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - run: make -j$(nproc) && make install
+      - uses: actions/download-artifact@v4
+        with:
+          name: provsql-build-pg${{ matrix.pg }}
+          path: /tmp/build
+      - run: tar -xzf /tmp/build/provsql-build.tar.gz -C /
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30
@@ -85,7 +115,7 @@ jobs:
 
   e2e:
     name: 🎭 Playwright Py${{ matrix.python }} × PG${{ matrix.pg }}
-    needs: lint
+    needs: build
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
     strategy:
@@ -100,14 +130,30 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - run: make -j$(nproc) && make install
+      - uses: actions/download-artifact@v4
+        with:
+          name: provsql-build-pg${{ matrix.pg }}
+          path: /tmp/build
+      - run: tar -xzf /tmp/build/provsql-build.tar.gz -C /
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30
       - run: python -m pip install -e "./studio[test]"
-      # `--with-deps` apt-installs chromium's system libs; the container
-      # runs as root so no sudo is needed. Browser binary download is
-      # ~112 MiB.
+      - name: Get Playwright version
+        id: pw-version
+        shell: bash
+        run: |
+          PW=$(python -c "from importlib.metadata import version; print(version('playwright'))")
+          echo "version=$PW" >> "$GITHUB_OUTPUT"
+      # Browser binary is ~112 MiB; cache it keyed on the Playwright
+      # release so an upgrade invalidates the cache automatically.
+      # System libs from `--with-deps` are installed apt-side every run,
+      # but on a cache hit Playwright skips the chromium download itself.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: /root/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
       - run: python -m playwright install --with-deps chromium
       - run: python -m pytest studio/tests/e2e
         env:

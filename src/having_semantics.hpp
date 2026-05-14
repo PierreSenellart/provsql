@@ -25,6 +25,7 @@
 namespace provsql_having_detail {
 std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start);
 bool extract_constant_C(GenericCircuit &c, gate_t x, int &C_out);
+bool extract_constant_double(GenericCircuit &c, gate_t x, double &C_out);
 bool semimod_extract_M_and_K(GenericCircuit &c, gate_t semimod_gate, int &m_out, gate_t &k_gate_out);
 ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok);
 ComparisonOperator flip_op(ComparisonOperator op);

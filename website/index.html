@@ -24,16 +24,49 @@ feature_row:
     url: "/overview/#query-rewriting"
     btn_label: "Learn more"
     btn_class: "btn--primary"
-  - title: "Evaluate Provenance"
+  - title: "Semiring Provenance"
     image_path: /assets/images/evaluate-provenance.png
     alt: "Diagram of semiring instantiation: a semiring K is compiled into a C++ class and combined with a provenance mapping to evaluate circuits and produce a result table with explanations in K."
     excerpt: >
-      Compute Boolean, counting, why-, how-, which-provenance, symbolic
-      formulas, tuple-independent probabilities (d-DNNF, tree
-      decomposition), and Shapley / Banzhaf values through a unified
-      semiring API.
+      A unified semiring API for Boolean, counting, why-, how-, and
+      which-provenance, symbolic formulas, tropical, Viterbi,
+      Łukasiewicz, and min-max / max-min evaluations — all through
+      one compiled-evaluation path.
     url: "/docs/user/semirings.html"
-    btn_label: "Learn more"
+    btn_label: "Semiring docs"
+    btn_class: "btn--primary"
+  - title: "Probabilistic Databases"
+    image_path: /assets/images/probabilities.png
+    alt: "ProvSQL Studio screenshot: a small provenance circuit with the evaluation strip's Probability-method dropdown open, listing the exact (independent, possible-worlds, tree-decomposition, compilation) and approximate (monte-carlo, weightmc) backends."
+    excerpt: >
+      Compute tuple-independent probabilities of query answers via
+      independent-circuit evaluation, tree decomposition, d-DNNF
+      knowledge compilation (d4 / c2d / dsharp / minic2d), Monte
+      Carlo, or weighted model counting.
+    url: "/docs/user/probabilities.html"
+    btn_label: "Probability docs"
+    btn_class: "btn--primary"
+  - title: "Continuous Distributions"
+    image_path: /assets/images/continuous.png
+    alt: "ProvSQL Studio screenshot: a Normal random_variable gate N(40, 4) above its Distribution-profile panel, conditioned on the threshold event x &ge; 35 (truncated PDF with the analytical curve overlaid)."
+    excerpt: >
+      First-class random-variable columns. Build queries with
+      Normal, Uniform, Exponential, Erlang, Mixture, and
+      Categorical distributions; evaluate expectations and moments
+      analytically or by Monte Carlo; condition on filter
+      predicates inline.
+    url: "/docs/user/continuous-distributions.html"
+    btn_label: "Continuous-distribution docs"
+    btn_class: "btn--primary"
+  - title: "Shapley &amp; Banzhaf Values"
+    image_path: /assets/images/shapley.png
+    alt: "Image-retrieval demo screenshot: per-object table showing the probability and Shapley value of each predicted object contributing to a probabilistic count query, with the highest-contribution row highlighted."
+    excerpt: >
+      Quantify each input tuple's contribution to a query answer
+      through Shapley and Banzhaf values, computed in a single
+      circuit traversal.
+    url: "/docs/user/shapley.html"
+    btn_label: "Shapley docs"
     btn_class: "btn--primary"
   - title: "ProvSQL Studio"
     image_path: /assets/images/studio/circuit-mode.png

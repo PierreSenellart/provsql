@@ -64,6 +64,17 @@ A warning is emitted to indicate that the provenance information is lost
 in the conversion. The provenance of the aggregate group itself is still
 tracked in the ``provsql`` column.
 
+Random-Variable Aggregates
+---------------------------
+
+When the aggregated column has type ``random_variable``
+(see :doc:`continuous-distributions`), three aggregates lift
+the standard arithmetic aggregates to the distribution algebra:
+:sqlfunc:`sum`, :sqlfunc:`avg`, and
+:sqlfunc:`product`. Each returns a ``random_variable``
+rather than a scalar. See :ref:`continuous-aggregation` for the
+semantics, empty-group identities, and worked examples.
+
 HAVING
 ------
 
@@ -76,9 +87,18 @@ Simple ``HAVING`` clauses are supported:
     GROUP BY dept
     HAVING COUNT(*) > 2;
 
-Complex ``HAVING`` conditions that involve provenance-tracked aggregates
-(e.g., a ``HAVING`` on the result of a computation over an aggregate)
-are not fully supported and may produce incorrect results or an error.
+``HAVING`` clauses whose outcome is a deterministic scalar are also
+supported, including conditions that wrap a ``random_variable``
+aggregate in a moment function such as
+``HAVING expected(avg(measurement)) > 20`` (see
+:doc:`continuous-distributions`): the predicate is evaluated by
+PostgreSQL on the surviving groups while ProvSQL still tracks the
+per-group provenance.
+
+Complex ``HAVING`` conditions that build a non-trivial expression on
+top of an ``agg_token`` aggregate result (e.g., arithmetic across
+multiple aggregates) are not fully supported and may produce
+incorrect results or an error.
 
 The ``choose`` Aggregate
 -------------------------

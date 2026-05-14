@@ -223,6 +223,77 @@ def test_leaf_unknown_uuid_returns_404(client):
     assert resp.status_code == 404
 
 
+def test_circuit_tracked_input_keeps_iota_label(client, test_dsn):
+    """An input gate whose UUID appears in some tracked relation must
+    keep its ι glyph regardless of any pinned probability.  Regression
+    test for the old `info1 == 0` discriminator: `add_provenance`
+    doesn't write into `info1`, so a tracked-table gate with a
+    user-pinned probability used to render as e.g. "42%" instead of ι.
+    The bulk catalog scan in `_fetch_tracked_input_uuids` is the
+    source of truth now; the test pins the contract."""
+    uuid = _personnel_uuid(test_dsn, "John")
+    # Pin a non-default probability so the bug condition (prob != 1.0)
+    # would have fired the percentage-label branch.
+    client.post("/api/set_prob", json={"uuid": uuid, "probability": 0.42})
+    try:
+        resp = client.get(f"/api/circuit/{uuid}")
+        assert resp.status_code == 200, resp.data
+        body = resp.get_json()
+        node = next((n for n in body["nodes"] if n["id"] == uuid), None)
+        assert node is not None, body
+        assert node["type"] == "input"
+        assert node["label"] == "ι", node
+        assert node["tracked_input"] is True
+    finally:
+        # Reset to the implicit default so other tests on John see 1.0.
+        client.post("/api/set_prob", json={"uuid": uuid, "probability": 1.0})
+
+
+def test_circuit_anonymous_input_renders_probability(client, test_dsn):
+    """An anonymous input (no source row in any tracked relation) must
+    render its probability inline as a percentage, including the 1.0
+    case so the simplifier-minted dec-in-N anchor of a categorical
+    block doesn't fall through to a bare ι next to its dec-mul-N
+    siblings."""
+    import uuid as _uuid
+    anon_uuid = str(_uuid.uuid4())
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.create_gate(%s::uuid, 'input')", (anon_uuid,))
+        cur.execute("SELECT provsql.set_prob(%s::uuid, 0.37)", (anon_uuid,))
+    resp = client.get(f"/api/circuit/{anon_uuid}")
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    node = next((n for n in body["nodes"] if n["id"] == anon_uuid), None)
+    assert node is not None, body
+    assert node["type"] == "input"
+    assert node["label"] == "37%", node
+    assert node["tracked_input"] is False
+
+
+def test_leaf_anonymous_input_surfaces_probability(client, test_dsn):
+    """An input gate created via `create_gate(uuid, 'input') + set_prob`
+    -- e.g. by the `provsql.mixture(p_value, x, y)` overload, or by hand
+    for a manual Bernoulli -- has no source row in any tracked relation,
+    but its probability is still meaningful and must be surfaced.  Verify
+    that /api/leaf returns 200 with an empty `matches` list AND the
+    probability field, so the front-end can render the prob alongside
+    the "no source row" notice."""
+    import uuid as _uuid
+    anon_uuid = str(_uuid.uuid4())
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.create_gate(%s::uuid, 'input')", (anon_uuid,))
+        cur.execute("SELECT provsql.set_prob(%s::uuid, 0.37)", (anon_uuid,))
+    resp = client.get(f"/api/leaf/{anon_uuid}")
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["matches"] == []
+    assert abs(body["probability"] - 0.37) < 1e-12
+
+
 # ──────── /api/set_prob ────────
 
 
@@ -294,3 +365,167 @@ def test_circuit_accepts_agg_token_underlying_uuid(client, test_dsn):
     # The root of an aggregation circuit is an `agg` gate.
     nodes_by_id = {n["id"]: n for n in data["nodes"]}
     assert nodes_by_id[agg_uuid]["type"] == "agg"
+
+
+def test_simplified_circuit_drops_decidable_cmp(client, test_dsn):
+    """When provsql.simplify_on_load is on (the panel default and the
+    server default), /api/circuit renders the IN-MEMORY simplified DAG
+    so RangeCheck-decidable rv comparisons appear as gate_one /
+    gate_zero leaves instead of the persisted gate_cmp shape.
+
+    Build a query whose lifted WHERE is `uniform(0, 1) > -10`, which
+    is certainly TRUE (support [0, 1] is entirely above -10).
+    RangeCheck rewrites the cmp to gate_one; the times gate that wraps
+    it then has gate_one as its second child.  With simplify_on_load
+    turned off via /api/config, the same fetch returns the raw cmp.
+    """
+    import psycopg
+    # Capture a row provenance whose WHERE conjunct is the rv cmp.
+    sql = ("CREATE TEMP TABLE _simp_demo AS "
+           "SELECT provsql.provenance() AS p "
+           "WHERE provsql.uniform(0.0::float8, 1.0::float8) "
+           "      > (-10)::provsql.random_variable;")
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        autocommit=True,
+    ) as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        cur.execute("SELECT p::text FROM _simp_demo")
+        row = cur.fetchone()
+    assert row, "expected a row from the FROM-less RV cmp"
+    root = row[0]
+
+    # Default panel state: simplify_on_load is on -> cmp folded to one.
+    resp = client.get(f"/api/circuit/{root}?depth=2")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+    types_on = {n["type"] for n in scene["nodes"]}
+    assert "one" in types_on, scene
+    assert "cmp" not in types_on, scene
+
+    # Flip the panel GUC off; the next fetch must see the raw cmp.
+    r = client.post("/api/config",
+                    json={"key": "provsql.simplify_on_load", "value": "off"})
+    assert r.status_code == 200, r.data
+    try:
+        resp = client.get(f"/api/circuit/{root}?depth=2")
+        assert resp.status_code == 200, resp.data
+        scene = resp.get_json()
+        types_off = {n["type"] for n in scene["nodes"]}
+        assert "cmp" in types_off, scene
+    finally:
+        client.post("/api/config",
+                    json={"key": "provsql.simplify_on_load", "value": "on"})
+
+
+# ──────── categorical mixtures ────────
+
+
+def _categorical_root_uuid(test_dsn: str, probs_sql: str, values_sql: str) -> str:
+    """Build a `provsql.categorical(probs, values)` random variable and
+    return the root UUID."""
+    import psycopg
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        autocommit=True,
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT ("
+            "  provsql.categorical(%s::float8[], %s::float8[]))::uuid::text"
+            % (probs_sql, values_sql)
+        )
+        row = cur.fetchone()
+    assert row, "categorical() returned no row"
+    return row[0]
+
+
+def test_circuit_categorical_has_categorical_shape(client, test_dsn):
+    """`provsql.categorical([0.3, 0.7], [0, 10])` builds a root
+    `gate_mixture` whose wires are `[key, mul_1, mul_2]`: the first
+    child is a `gate_input` key anchor, the rest are `gate_mulinput`
+    outcome leaves.  Each mulinput carries its outcome value in the
+    `extra` field and its probability via set_prob (rendered inline by
+    the simplified subgraph path so the front-end shows it without a
+    separate round-trip)."""
+    root = _categorical_root_uuid(
+        test_dsn,
+        "ARRAY[0.3, 0.7]", "ARRAY[0, 10]",
+    )
+    resp = client.get(f"/api/circuit/{root}?depth=2")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+    nodes_by_id = {n["id"]: n for n in scene["nodes"]}
+
+    root_node = nodes_by_id[root]
+    assert root_node["type"] == "mixture", root_node
+
+    # Children of the root in child_pos order.
+    children = sorted(
+        (e for e in scene["edges"] if e["from"] == root),
+        key=lambda e: e["child_pos"],
+    )
+    assert len(children) == 3, children  # key + 2 mulinputs
+
+    types = [nodes_by_id[e["to"]]["type"] for e in children]
+    assert types == ["input", "mulinput", "mulinput"], types
+
+    # The mulinputs carry their outcome values in `extra`, parseable
+    # as float8 -- 0.0 and 10.0 in some order.
+    values = sorted(float(nodes_by_id[e["to"]]["extra"]) for e in children[1:])
+    assert values == [0.0, 10.0], values
+
+
+def test_circuit_categorical_mulinput_label_shows_value(client, test_dsn):
+    """A mulinput's in-circle label normally renders as the generic '⋮'
+    glyph (repair_key's ordinal mulinputs).  For the categorical
+    mixture form the mulinput carries its outcome value in `extra`,
+    and `_gate_label` renders that value inline so the canvas shows
+    the payload at a glance."""
+    root = _categorical_root_uuid(
+        test_dsn,
+        "ARRAY[0.25, 0.75]", "ARRAY[7, 42]",
+    )
+    resp = client.get(f"/api/circuit/{root}?depth=2")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+
+    mul_labels = sorted(
+        n["label"] for n in scene["nodes"]
+        if n["type"] == "mulinput"
+    )
+    assert mul_labels == ["42", "7"], mul_labels  # alphabetical
+
+
+def test_circuit_dirac_mixture_keeps_classic_shape(client, test_dsn):
+    """A mixture of Diracs (no nested mixture below) stays in its
+    classic 3-wire `[p, x, y]` form; there is no automatic fold into
+    the categorical block.  The categorical-form mixture only arises
+    from an explicit `provsql.categorical` construction."""
+    import psycopg
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        autocommit=True,
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT ("
+            "  provsql.mixture(0.3::float8,"
+            "                  provsql.as_random(0),"
+            "                  provsql.as_random(10)))::uuid::text"
+        )
+        row = cur.fetchone()
+    assert row
+    root = row[0]
+
+    resp = client.get(f"/api/circuit/{root}?depth=2")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+    nodes_by_id = {n["id"]: n for n in scene["nodes"]}
+
+    children = sorted(
+        (e for e in scene["edges"] if e["from"] == root),
+        key=lambda e: e["child_pos"],
+    )
+    assert len(children) == 3, children
+    types = [nodes_by_id[e["to"]]["type"] for e in children]
+    # Classic shape: Bernoulli input + two Dirac value leaves.
+    assert types == ["input", "value", "value"], types

@@ -1,0 +1,22 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+l_id|r_id|within_tolerance
+l1|r1|t
+(1 row)
+remove_provenance
+
+(1 row)
+l_id|r_id|within_tolerance
+l1|r1|t
+(1 row)
+continuous_join_done
+ok
+(1 row)

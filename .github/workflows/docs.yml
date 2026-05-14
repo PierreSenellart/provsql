@@ -50,12 +50,16 @@ jobs:
     container: pgxn/pgxn-tools
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-tags: true
-          fetch-depth: 0
       - run: apt update
       - run: apt -y install python3-breathe python3-sphinx-rtd-theme python3-sphinx-copybutton python3-pybtex python3-sphinxcontrib.bibtex graphviz wget postgresql-server-dev-all
-      - run: |
+      - name: Cache Doxygen
+        id: cache-doxygen
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/doxygen
+          key: doxygen-1.13.2-${{ runner.os }}
+      - if: steps.cache-doxygen.outputs.cache-hit != 'true'
+        run: |
           wget -q https://github.com/doxygen/doxygen/releases/download/Release_1_13_2/doxygen-1.13.2.linux.bin.tar.gz
           tar xzf doxygen-1.13.2.linux.bin.tar.gz
           cp doxygen-1.13.2/bin/doxygen /usr/local/bin/

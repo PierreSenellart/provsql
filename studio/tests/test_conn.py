@@ -21,6 +21,22 @@ def test_conn_reports_user_and_test_database(client, test_dsn):
     assert info["host"] is None or isinstance(info["host"], str)
 
 
+def test_conn_surfaces_extension_and_studio_versions(client):
+    """Footer chip reads both versions off /api/conn:
+       - extension_version pulled from pg_extension (None when provsql
+         isn't installed on the connected DB);
+       - studio_version copied from provsql_studio.__version__."""
+    info = client.get("/api/conn").get_json()
+    # The test DB has provsql installed via the conftest fixture, so the
+    # extension version must surface as a non-empty string.
+    assert isinstance(info.get("extension_version"), str)
+    assert info["extension_version"]
+    # Studio version: same value the package exposes; track __version__
+    # rather than hard-coding so a release bump doesn't break the test.
+    from provsql_studio import __version__ as studio_version
+    assert info.get("studio_version") == studio_version
+
+
 def test_databases_lists_postgres_and_test_db(client, test_dsn):
     dbs = client.get("/api/databases").get_json()
     assert isinstance(dbs, list)

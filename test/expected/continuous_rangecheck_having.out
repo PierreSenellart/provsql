@@ -1,0 +1,70 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+category|exact_one_when_prob_one
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|within_tolerance
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|exact_zero
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|exact_one
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|exact_zero
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|exact_zero
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|exact_zero
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|exact_zero
+alpha|t
+beta|t
+(2 rows)
+remove_provenance
+
+(1 row)
+category|within_tolerance
+alpha|t
+beta|t
+(2 rows)
+continuous_rangecheck_having_done
+ok
+(1 row)

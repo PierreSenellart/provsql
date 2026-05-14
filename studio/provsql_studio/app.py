@@ -27,6 +27,7 @@ import psycopg.conninfo
 import sqlparse
 from flask import Flask, jsonify, redirect, request, send_from_directory
 
+from . import __version__ as STUDIO_VERSION
 from . import circuit as circuit_mod
 from . import db
 
@@ -171,6 +172,7 @@ def create_app(
             info["search_path"],
         )
         info["db_is_auto"] = app.config.get("DB_IS_AUTO", False)
+        info["studio_version"] = STUDIO_VERSION
         # Send back a password-stripped DSN so the connection editor
         # can prefill its input without leaking secrets to the page.
         # The user re-types the password if they need to switch host
@@ -249,7 +251,9 @@ def create_app(
             old_pool.close()
         except Exception:
             pass
-        return jsonify(db.conn_info(new_pool))
+        info = db.conn_info(new_pool)
+        info["studio_version"] = STUDIO_VERSION
+        return jsonify(info)
 
     @app.get("/api/databases")
     def api_databases():
@@ -386,7 +390,9 @@ def create_app(
             return jsonify(cached)
         try:
             data = circuit_mod.get_circuit(
-                get_pool(), root=root, depth=depth, max_nodes=app.config["MAX_CIRCUIT_NODES"]
+                get_pool(), root=root, depth=depth,
+                max_nodes=app.config["MAX_CIRCUIT_NODES"],
+                extra_gucs=app.config["RUNTIME_GUCS"],
             )
         except circuit_mod.CircuitTooLarge as e:
             return jsonify({
@@ -431,14 +437,21 @@ def create_app(
                     "switch to a database that has the current version."
                 ),
             }), 501
-        if not rows:
-            return jsonify({"error": "no row maps to this input gate"}), 404
         # Best-effort probability: when set_prob has been called on the
-        # gate, surface the value alongside the resolved row so the
+        # gate, surface the value alongside the resolved row(s) so the
         # inspector can show the per-row probability without a second
-        # round-trip. None when unset / inapplicable.
-        body = {"matches": rows}
+        # round-trip.  None when unset / inapplicable.  Fetch BEFORE the
+        # empty-rows short-circuit so anonymous Bernoullis (e.g. those
+        # minted by `provsql.mixture(p_value, x, y)`, or by the user
+        # via `create_gate(uuid, 'input') + set_prob(uuid, p)` without
+        # a tracked source table) still surface their probability even
+        # though no row in any tracked relation references the UUID.
         probability = circuit_mod.get_prob(get_pool(), uuid_str)
+        if not rows:
+            if probability is not None:
+                return jsonify({"matches": [], "probability": probability})
+            return jsonify({"error": "no row maps to this input gate"}), 404
+        body = {"matches": rows}
         if probability is not None:
             body["probability"] = probability
         # Single-relation case is the norm; if multiple tables share the UUID,
@@ -506,6 +519,28 @@ def create_app(
         method    = payload.get("method") or None
         arguments = payload.get("arguments") or None
         function  = payload.get("function") or None
+        # Conditioning gate UUID for scalar evaluators (distribution-
+        # profile, moment, sample).  When the user pins a "Condition on"
+        # gate via the strip's UUID picker we forward it as the `prov`
+        # argument to rv_moment / rv_support / rv_histogram / rv_sample.
+        # Validated as a UUID below; ignored by every other semiring.
+        condition_uuid = payload.get("condition_uuid") or None
+        if condition_uuid:
+            try:
+                condition_uuid = _coerce_to_uuid(condition_uuid)
+            except ValueError:
+                return jsonify({"error": "condition_uuid is not a valid UUID"}), 400
+        # Merge per-request GUC overrides over the panel-managed ones.
+        # The payload's extra_gucs lets tests / Studio's evaluate-strip
+        # pin per-request behaviour (e.g. seed / sample budget for a
+        # distribution-profile invocation) without mutating the
+        # session-wide panel state -- evaluate_circuit validates each
+        # key via the same _PANEL_GUCS whitelist either path uses.
+        merged_gucs = dict(app.config["RUNTIME_GUCS"])
+        payload_gucs = payload.get("extra_gucs") or {}
+        if isinstance(payload_gucs, dict):
+            for k, v in payload_gucs.items():
+                merged_gucs[k] = str(v)
         try:
             data = db.evaluate_circuit(
                 get_pool(),
@@ -518,6 +553,8 @@ def create_app(
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
                 search_path=app.config.get("SEARCH_PATH", ""),
                 tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
+                extra_gucs=merged_gucs,
+                condition_uuid=condition_uuid,
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -633,6 +670,13 @@ def create_app(
         app.config["RUNTIME_GUCS"][name] = canonical
         # Best-effort persist so a Studio restart keeps the user's choice.
         db.save_persisted_gucs(app.config["RUNTIME_GUCS"])
+        # The layout cache is keyed on (root, depth) only; any panel
+        # GUC that changes what the C function returns (notably
+        # provsql.simplify_on_load, provsql.hybrid_evaluation) must
+        # invalidate cached scenes so the next /api/circuit fetches
+        # the fresh shape.
+        if name in ("provsql.simplify_on_load", "provsql.hybrid_evaluation"):
+            layout_cache.clear()
         return jsonify({"ok": True, "key": name, "value": canonical})
 
     return app

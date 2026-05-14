@@ -1,0 +1,98 @@
+\set ECHO none
+uniform_above_zero_decided
+t
+(1 row)
+uniform_negated_decided
+t
+(1 row)
+exponential_nonnegative_decided
+t
+(1 row)
+erlang_strictly_negative_decided
+t
+(1 row)
+uniform_le_zero_decided
+t
+(1 row)
+arith_plus_above_decided
+t
+(1 row)
+arith_neg_exp_decided
+t
+(1 row)
+normal_undecided_falls_through_to_mc
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|exact_one
+a|t
+b|t
+(2 rows)
+joint_infeasible_normal
+t
+(1 row)
+joint_feasible_not_pruned
+t
+(1 row)
+joint_infeasible_uniform
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|exact_zero
+s1|t
+(1 row)
+heterogeneous_exp_sum_eq
+t
+(1 row)
+product_two_normals_eq
+t
+(1 row)
+bernoulli_mixture_continuous_arms_eq
+t
+(1 row)
+heterogeneous_exp_sum_ne
+t
+(1 row)
+mixture_of_arith_continuous_eq
+t
+(1 row)
+categorical_dirac_eq_not_shorted
+t
+(1 row)
+dirac_eq_constant
+t
+(1 row)
+disjoint_categoricals_eq_zero
+t
+(1 row)
+overlapping_categoricals_one_match
+t
+(1 row)
+same_outcomes_different_masses_eq
+t
+(1 row)
+mixture_of_diracs_overlap_eq
+t
+(1 row)
+mixture_of_diracs_overlap_ne
+t
+(1 row)
+mixture_continuous_plus_dirac_vs_cat
+t
+(1 row)
+shared_p_token_correlation_guard
+t
+(1 row)
+continuous_rangecheck_done
+ok
+(1 row)

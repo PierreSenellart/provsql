@@ -90,6 +90,12 @@ body.mode-circuit #sidebar-body .cv-eval {
   border-top: 1px dashed var(--border-soft);
   padding-top: 0.6rem;
 }
+/* The [hidden] attribute default rule loses on specificity to the
+   selector above, so the JS toggle in refreshEvalTarget would
+   otherwise have no visual effect.  Restore the expected hide. */
+body.mode-circuit #sidebar-body .cv-eval[hidden] {
+  display: none;
+}
 body.mode-circuit #sidebar-body .cv-eval__hdr {
   display: flex; align-items: baseline; gap: 0.6rem;
 }
@@ -391,8 +397,14 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   border-radius: 5px;
   box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
   padding: 0.85rem 1rem;
-  width: 320px;
+  width: 380px;
   z-index: 20;
+  /* Bound the panel against the viewport so users on shorter screens
+     can still reach the bottom groups (Probabilities, Session, Display
+     limits) by scrolling. 80px leaves headroom for the top nav above
+     and a small breathing margin below. */
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
 }
 .wp-nav__configpanel[hidden] { display: none; }
 
@@ -531,6 +543,61 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   background: var(--purple-100, var(--bg-code));
   color: var(--purple-700);
 }
+/* Per-column ProvSQL-type badges: terracotta pills marking columns whose
+   values are circuit references rather than scalars (random_variable's
+   per-row gate, agg_token's UUID + running value). Distinct from the
+   relation-level purple PROV pill and gold MAPPING pill: this is column-
+   level, and signals that operators on the column don't have plain-SQL
+   semantics. The two share styling and only differ by label so the user
+   can tell which special type they're looking at. */
+.wp-schema__col-rv,
+.wp-schema__col-agg,
+.wp-result__col-rv,
+.wp-result__col-agg {
+  display: inline-block;
+  font-family: var(--font-ui);
+  font-size: 0.6rem;
+  margin-left: 0.1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--terracotta-500);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  vertical-align: middle;
+}
+/* In-header variant: result-table <th> uses a tighter typographic
+   weight (.wp-result__hdr) than the schema panel's column list, so
+   nudge the pill up a hair and give it a touch more left margin to
+   keep it visually distinct from the column name.  `vertical-align`
+   overrides the shared `middle` -- with uppercase pill text the
+   optical centre sits noticeably above the box centre, so `middle`
+   reads as "below the baseline"; a small positive offset puts the
+   pill back on the header's optical baseline. */
+.wp-result__col-rv,
+.wp-result__col-agg,
+.wp-result__col-prov {
+  margin-left: 0.3rem;
+  vertical-align: 0.15em;
+}
+/* Purple `prov` pill on the `provsql` uuid column header: same shape as
+   the rv/agg pills but recoloured to match the schema panel's relation-
+   level prov badge, so the two prov affordances read as the same idea.
+   Note: `vertical-align` is set by the in-header override block above
+   (shared with rv/agg) so the three pills line up identically. */
+.wp-result__col-prov {
+  display: inline-block;
+  font-family: var(--font-ui);
+  font-size: 0.6rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--purple-500);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
 .wp-schema__cols {
   display: block;
   font-family: var(--font-mono);
@@ -577,7 +644,14 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   flex: 1;
   min-width: 0;
 }
-.wp-config__name code { color: var(--purple-700); font-size: 0.95em; }
+.wp-config__name code {
+  color: var(--purple-700); font-size: 0.95em;
+  /* Allow long GUC names (provsql.simplify_on_load,
+     provsql.monte_carlo_seed…) to wrap inside the panel rather than
+     overflow horizontally. Without this they push past the 320px
+     panel because . and _ aren't natural break points. */
+  overflow-wrap: anywhere;
+}
 /* Multi-line config row: header on top, control below (used by the
    verbose_level slider, which needs full width). */
 .wp-config__row--col {
@@ -833,6 +907,7 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
 
 /* ───────── shared site footer (mirrors website + docs) ───────── */
 #provsql-site-footer {
+  position: relative;
   text-align: center;
   padding: 0.8em 1em;
   background: var(--purple-900);
@@ -849,6 +924,19 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
 #provsql-site-footer .sep {
   margin: 0 0.4em;
   color: rgba(244,240,250,0.4);
+}
+#provsql-site-footer .versions {
+  position: absolute;
+  right: 1em;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.75rem;
+  color: rgba(244,240,250,0.45);
+  letter-spacing: 0.01em;
+}
+#provsql-site-footer .versions span:not(:empty) + span:not(:empty)::before {
+  content: " · ";
+  color: rgba(244,240,250,0.3);
 }
 
 /* "No database picked at launch" banner : wedged between the nav and
@@ -1764,14 +1852,14 @@ body.mode-where #sidebar {
   user-select: none;
 }
 
-/* Leaves keep their distinctive filled-circle look (purple disk, white
-   glyph) so input/update gates pop out as the data sources of the
-   circuit. Internal gates all share the default outlined-circle style:
-   per-type stroke / fill overrides reserved terracotta / deep-purple
-   accents that ended up indistinguishable from the active-pinned state. */
-.node--leaf  .node-shape { fill: var(--purple-500); stroke: var(--purple-700); }
-.node--leaf  .node-label { fill: #fff; font-family: var(--font-mono); font-style: normal; font-size: 11px; }
-.node--leaf  .node-meta  { fill: var(--purple-700); font-weight: 500; }
+/* Every gate renders as a uniform white disk with the purple stroke
+   defined on .node-shape above; the in-circle glyph alone carries the
+   gate-type information.  Colour is reserved for STATE -- terracotta
+   for active / pinned, gold for frontier badges -- so type and state
+   never compete visually.  The post-paint font-size shrink in
+   circuit.js handles labels that overflow the circle (parametric RV
+   names like "N(2.5,0.5)", long agg / value extras), so we don't
+   need per-type font-size overrides either. */
 
 /* hover + active */
 .node-group:hover .node-shape { stroke-width: 3; filter: drop-shadow(0 2px 6px rgba(42, 24, 80, 0.25)); }
@@ -1780,7 +1868,6 @@ body.mode-where #sidebar {
   stroke: var(--terracotta-500); stroke-width: 3;
   fill: rgba(196, 102, 74, 0.12);
 }
-.node-group.is-pinned.node--leaf .node-shape { fill: var(--terracotta-500); }
 
 /* edges */
 .edge {
@@ -1839,6 +1926,10 @@ body.mode-where #sidebar {
 .cv-inspector__body { padding: 0.7rem 0.85rem; }
 .cv-inspector__body dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 0.7rem; }
 .cv-inspector__body dt { color: var(--fg-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+/* Opt-out for rows whose label is intrinsically lowercase (Greek-letter
+   distribution parameters: μ, σ, λ). The default text-transform would
+   uppercase them into Μ / Σ / Λ which read as different letters. */
+.cv-inspector__body dt.cv-inspector__dt--keep-case { text-transform: none; letter-spacing: 0; }
 .cv-inspector__body dd { margin: 0; font-family: var(--font-mono); font-size: 0.78rem; word-break: break-all; color: var(--purple-700); }
 .cv-inspector__body p { margin: 0.6rem 0 0; line-height: 1.5; font-size: 0.82rem; }
 .cv-inspector__mapping {
@@ -1846,6 +1937,21 @@ body.mode-where #sidebar {
   font-family: var(--font-mono); font-size: 0.78rem;
 }
 .cv-inspector__mapping li { margin: 0.05rem 0; }
+
+/* Analytical PDF preview rendered under the gate_rv inspector dl.
+   The SVG fits the inspector body (~248px wide after padding); a
+   muted purple fill under a darker purple stroke matches the leaf
+   palette so the preview reads as "more detail about this leaf"
+   rather than a separate widget. */
+.cv-rv-density {
+  margin: 0.6rem 0 0;
+  display: flex; justify-content: center;
+}
+.cv-rv-density svg { display: block; }
+.cv-rv-tick {
+  font-family: var(--font-mono); font-size: 9px;
+  fill: var(--fg-muted);
+}
 
 /* Editable probability cell: subtle hover affordance + a small pencil
    that appears on hover so the user knows the value is interactive
@@ -1887,6 +1993,86 @@ body.mode-where #sidebar {
   font-family: var(--font-mono);
   min-width: 14ch;
 }
+/* "Condition on" group: badge + input rendered inline so the badge
+   reads as a left-side label on the input rather than a separate
+   floating chip.  The whole group is hidden/shown by the eval-strip's
+   arg-control dispatch in circuit.js, so the badge follows the input. */
+.cv-eval__args-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+/* The class rule above's `display: inline-flex` wins over the UA's
+   `[hidden] { display: none }` rule, so we need to spell out the
+   hidden state explicitly: otherwise the eval strip's arg-control
+   dispatch (which toggles the `.hidden` property) has no effect on
+   the group. */
+.cv-eval__args-group[hidden] {
+  display: none;
+}
+/* Quiet inline label for grouped arg controls; reads as a sentence
+   fragment before the badge + input, e.g. "Conditioned by: [row prov]
+   <uuid>". */
+.cv-eval__args-label {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--fg-muted, #6b6378);
+  font-style: italic;
+  white-space: nowrap;
+}
+/* "Row prov" badge: shown whenever the current row has a known
+   provenance gate (data-row-prov on the clicked cell).  Two visual
+   states:
+     * active (default): the Condition input's value IS the row
+       prov.  Solid purple chip + the input gets the matching tint.
+     * muted: the user has edited the value, so it diverges from
+       the row prov.  Faded chip with a hover affordance and the
+       input loses the tint.  Clicking the muted chip restores the
+       row prov, so a manual edit is a one-click undo.
+   The chip uses `<button>` semantics under the hood via the
+   button[type="button"] markup, so keyboard activation and focus
+   styles come from the browser default. */
+.cv-eval__cond-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: var(--purple-100, #ece6f7);
+  color: var(--purple-700, #4d369e);
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.cv-eval__cond-badge:hover {
+  filter: brightness(0.95);
+}
+.cv-eval__cond-badge i {
+  font-size: 0.65rem;
+}
+.cv-eval__cond-badge--muted {
+  background: transparent;
+  color: var(--fg-muted, #6b6378);
+  border-color: var(--border-soft, #d8d3e3);
+}
+.cv-eval__cond-badge--muted:hover {
+  background: var(--purple-100, #ece6f7);
+  color: var(--purple-700, #4d369e);
+  border-color: var(--purple-300, #c5b4ec);
+  filter: none;
+}
+/* Subtle tint on the input itself while the auto-preset is active,
+   reinforces the "this came from the row, not the user" signal
+   without competing with the badge for attention. */
+.cv-eval__args.is-auto-conditioned {
+  background: var(--purple-100, #ece6f7);
+  border-color: var(--purple-300, #c5b4ec);
+}
 .cv-eval__target {
   font-family: var(--font-mono);
   font-size: 0.75rem;
@@ -1914,7 +2100,19 @@ body.mode-where #sidebar {
 .cv-eval__result:empty { display: none; }
 .cv-eval__result[data-kind="ok"]      { background: rgba(125, 65, 153, 0.12); color: var(--purple-900); }
 .cv-eval__result[data-kind="pending"] { background: rgba(184, 144, 30, 0.15); color: var(--gold-700); font-style: italic; }
-.cv-eval__result[data-kind="error"]   { background: rgba(196, 102, 74, 0.12); color: var(--terracotta-500); font-weight: 500; }
+/* Errors render the same wp-error banner the result-table uses (icon
+   + ProvSQL pill + crimson panel + pre-wrap for multi-line messages),
+   so the outer chip drops its own background/padding to avoid
+   double-framing the banner. Block layout lets the banner sit on
+   its own line below the action row. */
+.cv-eval__result[data-kind="error"]   {
+  background: transparent;
+  padding: 0;
+  display: block;
+  flex-basis: 100%;
+  font-weight: 400;
+}
+.cv-eval__result[data-kind="error"] .wp-error { margin: 0; }
 /* PROV-XML export: drop the chip background and let the inner <pre>
    carry its own monospace styling. The result span becomes a block-level
    container so the pre wraps to its own line. */
@@ -1923,6 +2121,150 @@ body.mode-where #sidebar {
   padding: 0;
   display: block;
   flex-basis: 100%;
+}
+/* Distribution profile: same block-level treatment as PROV-XML so the
+   support/μ/σ² header + inline-SVG histogram lay out across the full
+   strip width instead of getting squeezed into the inline chip. */
+.cv-eval__result[data-kind="distribution-profile"] {
+  background: transparent;
+  padding: 0;
+  display: block;
+  flex-basis: 100%;
+}
+/* Sample: same block-level treatment + a <details> panel with an
+   inline preview of the first samples and an expandable full list.
+   The preview tells the user at a glance "you got these values", and
+   the chevron is the conventional disclosure affordance for "show
+   me everything". */
+.cv-eval__result[data-kind="sample"] {
+  background: transparent;
+  padding: 0;
+  display: block;
+  flex-basis: 100%;
+}
+.cv-sample-panel {
+  padding: 0.35rem 0.5rem 0.3rem;
+  background: rgba(125, 65, 153, 0.05);
+  border: 1px solid rgba(125, 65, 153, 0.18);
+  border-radius: 4px;
+}
+.cv-sample-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: revert;
+}
+.cv-sample-summary::-webkit-details-marker { display: revert; }
+.cv-sample-count {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--purple-700, #4d369e);
+  white-space: nowrap;
+}
+.cv-sample-preview {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--fg-muted, #6b6378);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-sample-full {
+  margin: 0.35rem 0 0 0;
+  padding: 0.4rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--purple-900);
+  background: #fff;
+  border: 1px solid var(--border-soft, #d8d3e3);
+  border-radius: 3px;
+  max-height: 14rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.cv-sample-hint {
+  margin-top: 0.35rem;
+  padding: 0.3rem 0.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--terracotta-700, #803a1b);
+  background: rgba(202, 86, 53, 0.08);
+  border-left: 3px solid var(--terracotta-500, #ca5635);
+  border-radius: 3px;
+}
+.cv-sample-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: rgba(202, 86, 53, 0.12);
+  padding: 0 0.2rem;
+  border-radius: 2px;
+}
+.cv-profile-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem 0.3rem;
+  background: rgba(125, 65, 153, 0.05);
+  border: 1px solid rgba(125, 65, 153, 0.18);
+  border-radius: 4px;
+}
+.cv-profile-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: baseline;
+}
+.cv-profile-badge,
+.cv-profile-stat {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+}
+.cv-profile-badge {
+  background: rgba(184, 144, 30, 0.18);
+  color: var(--gold-700);
+}
+.cv-profile-stat {
+  background: rgba(125, 65, 153, 0.12);
+  color: var(--purple-900);
+}
+.cv-profile-toggle {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 3px;
+  background: rgba(125, 65, 153, 0.12);
+  color: var(--purple-900);
+  border: 1px solid rgba(125, 65, 153, 0.25);
+  cursor: pointer;
+  margin-left: auto;
+}
+.cv-profile-toggle:hover {
+  background: rgba(125, 65, 153, 0.22);
+}
+.cv-profile-svg {
+  margin: 0;
+  /* Cursor lives on the container div rather than the inner <svg>
+     so empty padding regions inside the SVG also pick up the zoom-in
+     glyph (SVG cursor only applies over filled / stroked regions;
+     div cursor is inherited by every descendant). */
+  cursor: zoom-in;
+  touch-action: none;
+}
+.cv-profile-toggle { cursor: pointer; }
+.cv-profile-bars rect {
+  fill: rgba(112, 82, 184, 0.55);
+  stroke: var(--purple-500);
+  stroke-width: 0.6;
+  transition: fill 0.12s;
+}
+.cv-profile-bars rect:hover {
+  fill: var(--terracotta-500);
+  stroke: var(--terracotta-500);
 }
 /* Probability results : clickable to flip rounded ↔ full precision. */
 .cv-eval__result[data-flip-kind="prob"] {

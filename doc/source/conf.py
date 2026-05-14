@@ -2,7 +2,19 @@ project = 'ProvSQL'
 copyright = '2025, Pierre Senellart'
 author = 'Pierre Senellart'
 
-extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton']
+extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton', 'sphinx.ext.imgmath']
+
+# Render math at build time as SVG via LaTeX + dvisvgm rather than
+# letting Sphinx's default MathJax handler fetch
+# https://cdn.jsdelivr.net/npm/mathjax@3/... at every page load.
+# Files go to _images/math/<content-hash>.svg so unchanged formulas
+# stay cached across builds (imgmath_embed=True would inline them in
+# the HTML, but then there's no on-disk cache and each build re-runs
+# LaTeX on every formula -- ~50s for ~136 formulas).  Local relative
+# img refs are still zero outgoing requests.
+imgmath_image_format = 'svg'
+imgmath_use_preview = True
+imgmath_font_size = 14
 
 # |cpp| / |cpp17| substitutions: render "C++" and "C++17" as non-breaking
 # spans so the browser never wraps between "C+" and the final "+".
@@ -122,6 +134,27 @@ _SQL_FUNC_MAP = {
     'timeslice':                '/doxygen-sql/html/group__temporal__db.html#gaa3de6e26f960ee27e916a1c35fbb75f0',
     'history':                  '/doxygen-sql/html/group__temporal__db.html#gac96504e5f0f7bf9da1dfc089cdbcdd21',
     'agg_token_value_text':     '/doxygen-sql/html/group__agg__token__type.html#gadec6242b3b9213ae9dc16c1a15831b03',
+    # Continuous-distribution constructors and aggregates
+    'normal':                   '/doxygen-sql/html/group__random__variable__type.html#ga1a974bad82d83b110e9d158083b113ce',
+    'uniform':                  '/doxygen-sql/html/group__random__variable__type.html#ga35f5bd84e907e0a7bffd9281abd55c68',
+    'exponential':              '/doxygen-sql/html/group__random__variable__type.html#ga763f1ce322fcbb082ffe25defbe68e47',
+    'erlang':                   '/doxygen-sql/html/group__random__variable__type.html#gaebceaebb5cdae98469affb8742bb83a9',
+    'categorical':              '/doxygen-sql/html/group__random__variable__type.html#ga41d074e6a6e06d585efda49edd32f0a5',
+    'mixture':                  '/doxygen-sql/html/group__random__variable__type.html#gabb228422bc96460b22ee9f75c5a4144e',
+    'as_random':                '/doxygen-sql/html/group__random__variable__type.html#ga0826bcc083d15b685e71783a006395f4',
+    'sum':                      '/doxygen-sql/html/group__random__variable__type.html#ga833d8a50c45061fdb7f302067a9f0bf1',
+    'avg':                      '/doxygen-sql/html/group__random__variable__type.html#ga3e227bce63085af57849b6f021d3992e',
+    'product':                  '/doxygen-sql/html/group__random__variable__type.html#ga1e24aafc2de11c41db2f0239feb490de',
+    # Polymorphic moment / support dispatchers
+    'variance':                 '/doxygen-sql/html/group__probability.html#gab1d52fb442dd262c0ac950d349a87ca3',
+    'moment':                   '/doxygen-sql/html/group__probability.html#ga99a2c256122559c1580459699288c20d',
+    'central_moment':           '/doxygen-sql/html/group__probability.html#ga738a4694f2c2a43e74414cbbc19739a8',
+    'support':                  '/doxygen-sql/html/group__probability.html#ga52dbe84c73d98c50a25784afa173183f',
+    # Sampling / histogram / simplifier introspection
+    'rv_histogram':             '/doxygen-sql/html/group__circuit__introspection.html#ga4e287ff30a597e203f43c80d12098c89',
+    'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#gaec7d70d0f94f8225861e3377682ce348',
+    'rv_analytical_curves':     '/doxygen-sql/html/group__circuit__introspection.html#ga927310c0e7a80b6b092149b66d679ffb',
+    'simplified_circuit_subgraph': '/doxygen-sql/html/group__circuit__introspection.html#ga7717079ec6b1f50ecb1a5a9fd5b15531',
 }
 
 
@@ -152,9 +185,10 @@ _C_FUNC_MAP = {
     'transform_distinct_into_group_by': '/doxygen-c/html/provsql_8c.html#a00905dfe8e8acbfb740bafab0c5f366b',
     'build_column_map':          '/doxygen-c/html/provsql_8c.html#acf66b583d7d5c92186c17e172ab34edf',
     'replace_aggregations_by_provenance_aggregate': '/doxygen-c/html/provsql_8c.html#a64dcbec21c99e399191a997b19da111c',
-    'migrate_aggtoken_quals_to_having': '/doxygen-c/html/provsql_8c.html#a52800ea34fc58e9157fe76ecb7dfeac7',
+    'migrate_probabilistic_quals': '/doxygen-c/html/provsql_8c.html#a807c78bed512a1e85cfd8da28a75078e',
     'insert_agg_token_casts':    '/doxygen-c/html/provsql_8c.html#a539df516de849eb54876a4f98a748861',
     'having_Expr_to_provenance_cmp': '/doxygen-c/html/provsql_8c.html#a0cfaf66fa75b9265bf267b446ac6946f',
+    'needs_having_lift':         '/doxygen-c/html/provsql_8c.html#ad70fe33958c5308511eaa33071db07ec',
     'add_eq_from_Quals_to_Expr': '/doxygen-c/html/provsql_8c.html#aa5f16ef0c73e1c7d651b02311994605d',
     'add_eq_from_OpExpr_to_Expr':'/doxygen-c/html/provsql_8c.html#abed26c95056d10b1f670bd37d840d989',
     # provsql_utils.h — OID cache
@@ -228,6 +262,17 @@ _C_FUNC_MAP = {
     'dDNNF::makeSmooth':                     '/doxygen-c/html/classdDNNF.html#a794e4aeb3d90d0a64256684ea9f9435a',
     'dDNNF::makeGatesBinary':                '/doxygen-c/html/classdDNNF.html#a7f10e16db401187a3b8ab69ecc2afa42',
     'dDNNF::condition':                      '/doxygen-c/html/classdDNNF.html#a346a7c002cd94842b6553d3727c5e9b3',
+    'dDNNF::shapley_alpha':                  '/doxygen-c/html/classdDNNF.html#a822375c67b333b1315353f8e12d436d9',
+    'dDNNF::shapley_delta':                  '/doxygen-c/html/classdDNNF.html#ae3f15850d0d376b543037bc132810da4',
+    'dDNNF::banzhaf_internal':               '/doxygen-c/html/classdDNNF.html#a36f3d2866cd8a1076cf6bd9e9e729179',
+    'compute_expectation':                   '/doxygen-c/html/namespaceprovsql.html#ae7b04c5e1aee7a1dc9fd92576786689c',
+    'analytical_mean':                       '/doxygen-c/html/namespaceprovsql.html#ad88d76a7b04d884f55767ad2d3426870',
+    'parse_distribution_spec':               '/doxygen-c/html/namespaceprovsql.html#acb4c29b0d3026cb1c3c1ad0764767b20',
+    'monteCarloRV':                          '/doxygen-c/html/namespaceprovsql.html#ad3b5f2fc7a0f0b0da8a1e10cd2523852',
+    'try_truncated_closed_form_sample':      '/doxygen-c/html/namespaceprovsql.html#ad3dfe787a2405f62619971ed5161b990',
+    'CircuitFromMMap::applyLoadTimeSimplification': '/doxygen-c/html/CircuitFromMMap_8cpp.html#af118aedd9ef6148318f9ffbc503bb5bc',
+    'runHybridSimplifier':                   '/doxygen-c/html/namespaceprovsql.html#aa5ea6b1bb8b2d9726a1f0bc508fa8711',
+    'runHybridDecomposer':                   '/doxygen-c/html/namespaceprovsql.html#af4b46c398f275b2dd56a4f6e543ccbb3',
     'shapley_internal':                      '/doxygen-c/html/shapley_8cpp.html#a4703d29e438b3454874017304a945d67',
     # CircuitCache
     'CircuitCache':                          '/doxygen-c/html/classCircuitCache.html',

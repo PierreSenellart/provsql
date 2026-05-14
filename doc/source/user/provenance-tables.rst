@@ -161,11 +161,24 @@ operations that were applied:
 - ``delta`` (δ): aggregation boundary (``GROUP BY``)
 - ``agg``, ``semimod``: aggregate provenance
 - ``project``, ``eq``: where-provenance (column tracking, equijoin)
-- ``cmp``: ``HAVING`` comparisons
+- ``cmp``: ``HAVING`` comparisons (and the filter-on-RV comparator
+  lift, see :doc:`continuous-distributions`)
+- ``mulinput``: multivalued input (one alternative of a
+  block-independent input; see :doc:`probabilities`)
 
 Two constant gates represent the semiring identity elements:
 :sqlfunc:`gate_zero` (additive identity, ``𝟘``) and
 :sqlfunc:`gate_one` (multiplicative identity, ``𝟙``).
+
+Three additional gate types support continuous random variables
+(see :doc:`continuous-distributions`):
+
+- ``rv``: random-variable leaf (Normal / Uniform / Exponential /
+  Erlang)
+- ``arith``: ``N``-ary arithmetic over scalar children
+  (``+ - * /``, unary ``-``)
+- ``mixture``: Bernoulli or categorical mixture of scalar
+  random-variable roots
 
 The following functions let you navigate and inspect the circuit:
 

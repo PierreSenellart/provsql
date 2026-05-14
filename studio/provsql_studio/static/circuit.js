@@ -25,6 +25,20 @@
     one:      'One (𝟙): semiring ⊗ identity (always true)',
     zero:     'Zero (𝟘): semiring ⊕ identity (always false)',
     update:   'Update gate (υ): INSERT / UPDATE / DELETE',
+    rv:       'Random variable: continuous distribution leaf',
+    arith:    'Arithmetic gate: scalar operation over child gates',
+    mixture:  'Mixture (Mix): Bernoulli-weighted choice between two scalar RV branches, or a categorical block (key + N mulinput outcomes)',
+  };
+
+  // gate_arith info1 holds a PROVSQL_ARITH_* tag (src/provsql_utils.h).
+  // Mirror the server-side _ARITH_OP_GLYPH in circuit.py so the
+  // inspector can label the operator without an extra round-trip.
+  const ARITH_OP_NAME = {
+    0: 'plus (+)',
+    1: 'times (×)',
+    2: 'minus (−)',
+    3: 'divide (÷)',
+    4: 'negate (−x)',
   };
 
   // ─── state ────────────────────────────────────────────────────────────
@@ -40,6 +54,21 @@
     // aren't undone when new nodes appear; reset on renderCircuit() so a
     // new circuit always starts from the Graphviz layout.
     dragOffsets: Object.create(null),
+    // Row context for the current scene: the `__prov` (or `provsql`)
+    // UUID of the result-table row whose click loaded this circuit.
+    // Used by autoPresetConditionInput so the eval strip's "Condition
+    // on" input defaults to the row's provenance gate (i.e. the
+    // canonical conditioning event for `expected(rv, provenance())`),
+    // even when the click target was the row's random_variable cell
+    // (whose scene root is the RV itself, not the row's prov).
+    rowProv: null,
+    // Tracks which row provsql we last auto-preset against, so a row
+    // context change (clicking another row's cell) overwrites the
+    // Condition input even if the user had manually pasted a UUID
+    // for the previous row.  Manual edits within the same row are
+    // still respected (the `input` listener clears autoset, and we
+    // don't overwrite while lastAutoPresetRow matches).
+    lastAutoPresetRow: null,
   };
   let svg = null, edgeLayer = null, nodeLayer = null, bannerEl = null;
   let titleEl = null, subEl = null;
@@ -54,14 +83,78 @@
   // sum/count/min/max/avg the result is independent of input order, so
   // the digits would be noise. semimod is omitted: its value/scalar
   // split is implied by gate type. eq has a single child so positional
-  // labels would be redundant.
-  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg']);
+  // labels would be redundant.  mixture's three wires (p / x / y) are
+  // positional and get the semantic labels defined in EDGE_POS_LABEL
+  // below.
+  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture']);
+  // Per-(parent type, 1-based child_pos) edge-label overrides for
+  // gates whose wires have well-known names.  Falls back to the bare
+  // digit (1, 2, 3, …) for any entry not in the map.  mixture(p, x, y)
+  // mirrors the SQL constructor's parameter names so the rendered edge
+  // labels match the user-facing API.  Entries may also be functions
+  // (parent_node, child_pos) → string for shape-dependent labels: the
+  // categorical-form gate_mixture has wires [key, mul_1, ..., mul_n]
+  // and labels them accordingly when more than three wires are present.
+  function _mixtureEdgeLabel(parent, child_pos) {
+    // Distinguish the categorical form structurally rather than by
+    // wire count: a bimodal categorical (provsql.categorical with
+    // two outcomes) has only three wires ([key, mul_1, mul_2]) yet
+    // is still categorical, while a classic 3-wire mixture is
+    // [p_input, x_scalar, y_scalar].  The discriminator is the
+    // types of the non-first wires -- all gate_mulinput in the
+    // categorical form, gate_rv / gate_value / gate_arith /
+    // gate_mixture in the classic form.
+    if (state.scene && state.scene.edges && state.scene.nodes) {
+      const nodes_by_id = {};
+      for (const n of state.scene.nodes) nodes_by_id[n.id] = n;
+      const children = state.scene.edges
+        .filter(e => e.from === parent.id)
+        .sort((a, b) => a.child_pos - b.child_pos);
+      if (children.length >= 2) {
+        const wire0 = nodes_by_id[children[0].to];
+        const isCategorical = wire0 && wire0.type === 'input'
+          && children.slice(1).every(c => {
+               const t = nodes_by_id[c.to];
+               return t && t.type === 'mulinput';
+             });
+        if (isCategorical) {
+          // Only the key wire has a distinguished role; the
+          // mulinputs are unordered outcomes of the same block, so
+          // positional digits would be misleading.  Return null on
+          // the mulinput wires to suppress the edge label entirely.
+          return child_pos === 1 ? 'key' : null;
+        }
+      }
+    }
+    // Classic 3-wire mixture: [p, x, y].
+    return ({ 1: 'p', 2: 'x', 3: 'y' })[child_pos] ?? String(child_pos);
+  }
+  const EDGE_POS_LABEL = {
+    mixture: _mixtureEdgeLabel,
+  };
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
+  // = and <> are commutative; lhs/rhs digits add noise for those cmp
+  // gates the same way they would for SUM/COUNT/etc.  The strict
+  // comparators (<, <=, >, >=) keep the positional digits since
+  // flipping them changes semantics.
+  const COMMUTATIVE_CMP = new Set(['=', '<>', '!=']);
+  // PROVSQL_ARITH_* tags whose result depends on argument order:
+  // 2 = MINUS, 3 = DIV.  PLUS / TIMES are commutative (no labels);
+  // NEG has a single child (label would be a lone "1", redundant).
+  const NON_COMMUTATIVE_ARITH = new Set([2, 3]);
   function shouldLabelChildren(parent) {
     if (!ORDERED_GATES.has(parent.type)) return false;
     if (parent.type === 'agg') {
       const fn = (parent.info1_name || '').toLowerCase();
       return !COMMUTATIVE_AGG.has(fn);
+    }
+    if (parent.type === 'cmp') {
+      const op = parent.info1_name || '';
+      return !COMMUTATIVE_CMP.has(op);
+    }
+    if (parent.type === 'arith') {
+      const tag = parent.info1 == null ? null : Number(parent.info1);
+      return Number.isFinite(tag) && NON_COMMUTATIVE_ARITH.has(tag);
     }
     return true;
   }
@@ -243,6 +336,8 @@
     if (nodeLayer) nodeLayer.innerHTML = '';
     state.scene = null;
     state.pinnedNode = null;
+    state.rowProv = null;
+    state.lastAutoPresetRow = null;
     state.dragOffsets = Object.create(null);
     closeInspector();
     setStatus('Provenance Circuit', 'Click a UUID cell to render.');
@@ -325,10 +420,11 @@
     setStatus('Provenance Circuit', 'Circuit too large.');
   }
 
-  function renderCircuit(scene) {
+  function renderCircuit(scene, opts) {
     hideBanner();
     state.scene = scene;
     state.pinnedNode = null;
+    state.rowProv = (opts && opts.rowProv) ? String(opts.rowProv) : null;
     // Each new circuit starts from a clean fit: reset zoom + pan so
     // the whole graph fits in the viewport regardless of how the user
     // had panned/zoomed the previous one. The fitView() inside paint()
@@ -408,6 +504,24 @@
       nodeLayer.appendChild(g);
     }
 
+    // Some labels carry payload (rv distribution params, value
+    // scalars like "1e9", agg function names) wider than the
+    // circle's default font-size can fit.  Measure each label after
+    // attach and shrink its font until it fits the usable diameter
+    // (~40px for r=22 minus stroke + 1px padding on each side); the
+    // 5.5px floor keeps glyphs legible.  Inline style on the label
+    // beats any cascading rule from app.css because SVG presentation
+    // attributes lose to CSS, but the inline style itself wins.
+    nodeLayer.querySelectorAll('.node-label').forEach(el => {
+      const maxW = 40;
+      const bb = el.getBBox();
+      if (bb.width > maxW) {
+        const cur = parseFloat(getComputedStyle(el).fontSize) || 11;
+        const scaled = Math.max(5.5, cur * maxW / bb.width);
+        el.style.fontSize = scaled.toFixed(2) + 'px';
+      }
+    });
+
     fitView();
 
     if (titleEl) titleEl.textContent = 'Provenance Circuit';
@@ -435,10 +549,16 @@
     const ys = ps.map(p => p.y);
     const minX = Math.min(...xs) - 60, maxX = Math.max(...xs) + 60;
     const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
+    /* Anchor the viewBox on the BBOX CENTRE rather than on minX/minY +
+     * a clamped width.  For multi-node scenes the two coincide (the
+     * bbox is its own centroid); for single-node scenes the clamped
+     * dimensions used to extend the box right + down from the node,
+     * dragging the node into the top-left quadrant of the canvas
+     * instead of sitting in the middle. */
     const bbW = Math.max(maxX - minX, 200);
     const bbH = Math.max(maxY - minY, 150);
-    const cx = minX + bbW / 2 + state.pan.x;
-    const cy = minY + bbH / 2 + state.pan.y;
+    const cx = (minX + maxX) / 2 + state.pan.x;
+    const cy = (minY + maxY) / 2 + state.pan.y;
 
     // Match the viewBox aspect ratio to the SVG element's on-screen
     // aspect ratio. With preserveAspectRatio="xMidYMid meet" any
@@ -477,34 +597,78 @@
     edgeLayer.innerHTML = '';
     if (!state.scene) return;
     const nodesById = Object.fromEntries(state.scene.nodes.map(n => [n.id, n]));
+    // When the same parent → child pair appears more than once (gate_arith
+    // with both args pointing at the same RV, gate_times with duplicate
+    // factors, ...) the straight-line geometry would stack the curves
+    // on top of each other so the user sees a single edge.  Count
+    // parallel edges per (from, to) and bow each one sideways so all
+    // of them stay visible and the child_pos label has a distinct slot.
+    const parallelTotal = {};
+    for (const e of state.scene.edges) {
+      const k = `${e.from}|${e.to}`;
+      parallelTotal[k] = (parallelTotal[k] || 0) + 1;
+    }
+    const parallelSeen = {};
     for (const e of state.scene.edges) {
       const from = nodesById[e.from], to = nodesById[e.to];
       if (!from || !to) continue;
       const fp = nodePos(from), tp = nodePos(to);
+      const k = `${e.from}|${e.to}`;
+      const total = parallelTotal[k];
+      parallelSeen[k] = (parallelSeen[k] || 0) + 1;
+      const idx = parallelSeen[k] - 1;
+      // Symmetric horizontal bow: single edge stays straight; for n>1
+      // edges we space them at ±18px steps centred on the straight
+      // line, so total spread scales with multiplicity.
+      const bow = total > 1 ? (idx - (total - 1) / 2) * 18 : 0;
       const path = svgEl('path', {
         class: 'edge',
-        d: `M ${fp.x} ${fp.y + 22} C ${fp.x} ${fp.y + 50}, ${tp.x} ${tp.y - 50}, ${tp.x} ${tp.y - 22}`,
+        d: `M ${fp.x} ${fp.y + 22} `
+         + `C ${fp.x + bow} ${fp.y + 50}, `
+         +   `${tp.x + bow} ${tp.y - 50}, `
+         +   `${tp.x} ${tp.y - 22}`,
         'data-from': e.from, 'data-to': e.to,
       });
       edgeLayer.appendChild(path);
 
-      // Position label at the child end of the edge for ordered gates.
-      // Offset 32px (r=22 + a small gap) away from the child centre
-      // along the edge direction so the digit clears the stroke.
+      // Position label at the edge midpoint with a small perpendicular
+      // nudge so the digit sits next to the edge stroke rather than on
+      // top of it.  Mid-edge instead of near-child because labelling at
+      // the child end overlaps the arrowhead at typical node radii;
+      // mid-edge clears both the arrow and the node circles regardless
+      // of edge length.  The perpendicular sign rotates the unit vector
+      // 90° clockwise so labels consistently land on the same side of
+      // every edge.  Bow already shifts both the curve and the
+      // midpoint, so labels track parallel curves automatically.
       if (shouldLabelChildren(from) && e.child_pos != null) {
-        const dx = fp.x - tp.x;
-        const dy = fp.y - tp.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const offset = 32;
-        const lx = tp.x + (dx / len) * offset;
-        const ly = tp.y + (dy / len) * offset;
-        const tag = svgEl('text', {
-          class: 'edge-pos',
-          x: lx, y: ly,
-          'text-anchor': 'middle', 'dominant-baseline': 'central',
-        });
-        tag.textContent = String(e.child_pos);
-        edgeLayer.appendChild(tag);
+        // Compute the label first; a labelMap function that returns
+        // null/empty suppresses the edge label entirely (used by
+        // the categorical-form mixture for its unordered mulinput
+        // outcomes -- only the key wire gets a label there).
+        const labelMap = EDGE_POS_LABEL[from.type];
+        let label;
+        if (typeof labelMap === 'function') {
+          label = labelMap(from, e.child_pos);
+        } else if (labelMap && labelMap[e.child_pos] != null) {
+          label = labelMap[e.child_pos];
+        } else {
+          label = String(e.child_pos);
+        }
+        if (label != null && label !== '') {
+          const dx = fp.x - tp.x;
+          const dy = fp.y - tp.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const perp = 9;
+          const lx = (fp.x + tp.x) / 2 + bow + (-dy / len) * perp;
+          const ly = (fp.y + tp.y) / 2 + ( dx / len) * perp;
+          const tag = svgEl('text', {
+            class: 'edge-pos',
+            x: lx, y: ly,
+            'text-anchor': 'middle', 'dominant-baseline': 'central',
+          });
+          tag.textContent = label;
+          edgeLayer.appendChild(tag);
+        }
       }
     }
     // The pinned-subtree edge highlight lives on `.is-active` classes
@@ -688,11 +852,36 @@
         }
       } else if (node.type === 'value' || node.type === 'agg') {
         html += `<dt>value</dt><dd>${escapeHtml(node.extra)}</dd>`;
+      } else if (node.type === 'mulinput') {
+        // The categorical-mixture form stores the outcome value in
+        // extra; _gateInfos already exposes it as `value`, so the
+        // generic `extra` fallback below would duplicate it.  Skip.
+      } else if (node.type === 'rv') {
+        // extra is "<kind>:<p1>[,<p2>]"; split for readability.
+        const spec = parseDistributionSpec(node.extra);
+        if (spec) {
+          html += `<dt>distribution</dt><dd>${escapeHtml(spec.kind)}</dd>`;
+          spec.params.forEach((p, i) => {
+            // cv-inspector__dt--keep-case opts these rows out of the
+            // inspector's default text-transform: uppercase so the
+            // Greek-letter param names (μ, σ, λ) keep their proper
+            // lowercase form.
+            html += `<dt class="cv-inspector__dt--keep-case">`
+                 + `${escapeHtml(spec.paramNames[i])}</dt>`
+                 + `<dd>${escapeHtml(String(p))}</dd>`;
+          });
+        } else {
+          html += `<dt>distribution</dt><dd>${escapeHtml(node.extra)}</dd>`;
+        }
       } else {
         html += `<dt>extra</dt><dd>${escapeHtml(node.extra)}</dd>`;
       }
     }
     html += '</dl>';
+    if (node.type === 'rv') {
+      const density = renderRvDensity(parseDistributionSpec(node.extra));
+      if (density) html += density;
+    }
     if (node.type === 'input' || node.type === 'mulinput') {
       html += '<p><em>Resolving source row…</em></p>';
     } else if (node.frontier) {
@@ -722,16 +911,17 @@
     }
     const payload = await resp.json();
     const matches = payload.matches || [];
-    if (!matches.length) {
-      replaceLeafBody('<p style="color:var(--fg-muted)">No source row found.</p>');
-      return;
-    }
     // Probability is per-input-gate (the UUID itself), not per-resolved-row.
     // Append it to the gate-metadata <dl> as another <dt>/<dd> row so it
     // sits in the same visual stream as uuid / depth / info1, rather
     // than getting a separate paragraph that breaks the rhythm. The dd
     // is click-to-edit: clicking it swaps the displayed value for a
     // number input, Enter fires POST /api/set_prob, Esc / blur cancels.
+    // We surface the probability BEFORE deciding on the source-row body
+    // so anonymous Bernoullis -- gate_inputs created by
+    // provsql.mixture(p_value, ...) or by hand via create_gate + set_prob
+    // without a tracked source table -- still see their probability
+    // even though no row in any tracked relation references the UUID.
     if (payload.probability != null) {
       const dl = inspectorBody.querySelector('dl');
       if (dl) {
@@ -747,6 +937,15 @@
         if (dd) dd.addEventListener('click', () => editProbability(dd));
       }
     }
+    if (!matches.length) {
+      replaceLeafBody(
+        '<p style="color:var(--fg-muted)">'
+        + (payload.probability != null
+          ? 'Anonymous input gate: no source row maps to this UUID.'
+          : 'No source row found.')
+        + '</p>');
+      return;
+    }
     const items = matches.map(m => {
       const cells = Object.entries(m.row || {}).map(
         ([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v == null ? '' : String(v))}</dd>`
@@ -761,6 +960,44 @@
     const ps = inspectorBody.querySelectorAll('p');
     if (ps.length) ps[ps.length - 1].outerHTML = html;
     else inspectorBody.insertAdjacentHTML('beforeend', html);
+  }
+
+  // After a successful set_prob write, refresh the corresponding
+  // node's in-circle label so the user sees the new value without
+  // having to reload the circuit.  Only applies to ANONYMOUS gate_input
+  // gates (no source row in any tracked relation: hand-minted
+  // Bernoullis like provsql.mixture's p_token, the simplifier's
+  // synthetic dec-in-N anchor for a categorical block, or `create_gate
+  // + set_prob` in user code).  The server stamps `tracked_input` on
+  // each node; we read that directly rather than re-deriving the
+  // catalog lookup client-side.  Inputs tied to a tracked relation
+  // keep their ι glyph regardless of probability -- ι reads as "this
+  // is a variable" and the per-row probability stays one click into
+  // the inspector away.  Mirrors circuit.py's _is_anonymous_input +
+  // _format_prob_label exactly.
+  function updateNodeProbLabel(uuid, p) {
+    if (!state.scene || !Array.isArray(state.scene.nodes)) return;
+    const node = state.scene.nodes.find(n => n.id === uuid);
+    if (!node || node.type !== 'input') return;
+    if (node.tracked_input) return;
+    let newLabel;
+    if (!Number.isFinite(p) || p === 1) {
+      newLabel = 'ι';  // gate-input default glyph (no prob known)
+    } else if (p === 0) {
+      newLabel = '0%';
+    } else {
+      const pct = p * 100;
+      if (pct > 0 && pct < 0.01) {
+        newLabel = pct.toExponential(1) + '%';
+      } else {
+        let s = pct.toFixed(2).replace(/\.?0+$/, '');
+        newLabel = s + '%';
+      }
+    }
+    node.label = newLabel;
+    const labelEl = document.querySelector(
+      `.node-group[data-id="${uuid}"] .node-label`);
+    if (labelEl) labelEl.textContent = newLabel;
   }
 
   function formatProbabilityValue(p) {
@@ -827,6 +1064,7 @@
           return;
         }
         restore(v);
+        updateNodeProbLabel(uuid, v);
       } catch (e) {
         input.disabled = false;
         input.classList.add('is-error');
@@ -1015,6 +1253,47 @@
     return _OPTIONAL_MAPPING.has(v);
   }
 
+  // Gate types whose value is a *scalar* (deterministic constant, random
+  // variable leaf, or arithmetic combination of either) rather than a
+  // Boolean / set-valued provenance gate.  Used by the eval strip to flip
+  // the dropdown between the Boolean-method menu and the scalar-method
+  // menu (distribution profile, PROV-XML).  Picked by inspecting the
+  // eval target's gate type via state.scene.nodes.
+  const _SCALAR_GATE_TYPES = new Set(['rv', 'arith', 'value', 'mixture']);
+  // Options visible when the eval target is scalar.  Everything else in
+  // the <select> gets hidden + disabled for the duration of the scalar
+  // focus.  PROV-XML stays because it accepts any provenance gate.
+  const _SCALAR_TARGET_OPTIONS = new Set([
+    'distribution-profile', 'moment', 'sample', 'prov-xml'
+  ]);
+  // Options visible only on scalar targets.  Hidden + disabled when the
+  // eval target is Boolean / aggregate / etc., so the user can't pick a
+  // semiring whose SQL kernel doesn't accept this gate type.
+  const _SCALAR_ONLY_OPTIONS = new Set([
+    'distribution-profile', 'moment', 'sample'
+  ]);
+  // Semirings that accept an optional "Condition on" gate UUID,
+  // routed to provsql.rv_moment / rv_support / rv_histogram /
+  // rv_sample as the `prov` argument so the result is the conditional
+  // (truncated) distribution rather than the unconditional one.
+  const _CONDITION_OPTIONS = new Set([
+    'distribution-profile', 'moment', 'sample'
+  ]);
+
+  // Lookup the gate type of the current eval target (pinned node, else
+  // the scene root) by walking state.scene.nodes.  Returns null when
+  // the scene isn't loaded yet or the target is outside the rendered
+  // subgraph (which can happen for a circuit that was expanded then
+  // re-rooted; the strip stays runnable but the filter falls back to
+  // showing every option so the user isn't locked out).
+  function currentTargetGateType() {
+    if (!state.scene || !state.scene.nodes) return null;
+    const targetId = state.pinnedNode || state.scene.root;
+    if (!targetId) return null;
+    const node = state.scene.nodes.find(n => n.id === targetId);
+    return node ? node.type : null;
+  }
+
   // PG type names psycopg surfaces as either JS numbers (smallints, ints,
   // floats) or strings (numeric / Decimal). Either way we render with 4
   // decimals for parity with the probability-value formatter.
@@ -1100,6 +1379,11 @@
       const supported = !sv || sv >= spec.minPg;
       opt.hidden = !supported;
       opt.disabled = !supported;
+      // Persist the gate so syncDropdownVisibility's later passes keep
+      // unsupported options hidden even when the target-type filter
+      // would otherwise reveal them.
+      if (supported) delete opt.dataset.pgGated;
+      else opt.dataset.pgGated = '1';
       // If the user had it selected on a stale page, fall back to the
       // first compiled semiring so the strip stays valid.
       if (!supported && sel.value === val) {
@@ -1119,9 +1403,28 @@
     const run    = document.getElementById('eval-run');
     const result = document.getElementById('eval-result');
     if (!sel || !map || !meth || !run) return;
+    // Start hidden: the strip only makes sense once a circuit is
+    // rendered.  refreshEvalTarget toggles it visible/hidden on every
+    // scene change.
+    const strip = document.getElementById('eval-strip');
+    if (strip) strip.hidden = true;
     syncCompiledSemiringAvailability();
 
-    const argControls = Object.values(_PROB_ARG_CONTROL)
+    // Includes the per-probability-method controls, the bins input for
+    // distribution-profile, and the (k, central) pair for moment.
+    // syncControls hides every unrelated input in one sweep, then
+    // unhides whichever the current semiring needs.
+    const argControls = [
+      ...Object.values(_PROB_ARG_CONTROL),
+      'eval-args-bins',
+      'eval-args-moment-k',
+      'eval-args-moment-central',
+      'eval-args-sample-n',
+      // The "Condition on" control is the badge + input wrapped in a
+      // <span>; toggle the wrapper so the badge hides too when no
+      // semiring needs the condition arg.
+      'eval-args-condition-group',
+    ]
       .map(id => document.getElementById(id))
       .filter(Boolean);
 
@@ -1148,14 +1451,100 @@
       }
     }
 
+    // Hide every <option> the current eval target can't drive, and pick
+    // a sensible fallback if the user's existing selection just got
+    // hidden.  Returns true iff the active sel.value was bumped to a
+    // different option, so callers can decide whether to re-run the
+    // full syncControls (which also wipes the result chip).
+    function syncDropdownVisibility() {
+      const gateType = currentTargetGateType();
+      // null = scene not loaded yet (or target outside the rendered
+      // subgraph); leave every option visible so the strip is usable.
+      // Otherwise, scalar gates get the scalar menu, all other gates
+      // get the Boolean menu.
+      const isScalar = gateType != null && _SCALAR_GATE_TYPES.has(gateType);
+      let firstVisible = null;
+      for (const opt of sel.querySelectorAll('option')) {
+        let hide;
+        if (gateType == null) {
+          // Indeterminate: hide nothing target-specific; respect the
+          // existing PG-version gate on compiled options.
+          hide = false;
+        } else if (isScalar) {
+          hide = !_SCALAR_TARGET_OPTIONS.has(opt.value);
+        } else {
+          hide = _SCALAR_ONLY_OPTIONS.has(opt.value);
+        }
+        // PG-version gating on compiled semirings (set by
+        // syncCompiledSemiringAvailability) wins: if the option was
+        // already hidden as unsupported, leave it hidden.  Track that
+        // via `data-pg-gated` so we don't accidentally re-enable it.
+        if (opt.dataset.pgGated === '1') opt.hidden = true;
+        else opt.hidden = hide;
+        opt.disabled = opt.hidden;
+        if (!opt.hidden && !firstVisible) firstVisible = opt.value;
+      }
+      // Collapse optgroups whose options are all hidden so the dropdown
+      // reads cleanly (a `<optgroup>` with zero visible options still
+      // shows its label in some browsers).
+      for (const og of sel.querySelectorAll('optgroup')) {
+        const anyVisible = [...og.querySelectorAll('option')]
+          .some(o => !o.hidden);
+        og.hidden = !anyVisible;
+        og.disabled = !anyVisible;
+      }
+      // If the active selection just got hidden, fall back to the first
+      // still-visible option so the run button stays meaningful.
+      const cur = sel.querySelector(`option[value="${CSS.escape(sel.value)}"]`);
+      if (firstVisible && (!cur || cur.hidden)) {
+        sel.value = firstVisible;
+        return true;
+      }
+      return false;
+    }
+
+    // Wrapper called by refreshEvalTarget on pin change: re-filter the
+    // dropdown, and if the value actually moved (e.g. the user pinned a
+    // gate_rv after running Boolean over the root), re-run syncControls
+    // so the mapping / method / args dispatch matches the new sel.value.
+    // The result chip is intentionally wiped in that case because the
+    // previous evaluation was against a different semiring kind and is
+    // no longer meaningful.  When the value stays put, the chip is
+    // preserved.
+    function refilterForTarget() {
+      const changed = syncDropdownVisibility();
+      if (changed) syncControls();
+    }
+    window.ProvsqlStudio = window.ProvsqlStudio || {};
+    window.ProvsqlStudio.refilterForTarget = refilterForTarget;
+
     function syncControls() {
+      syncDropdownVisibility();
       const v = sel.value;
       map.hidden  = !needsMapping(v);
       meth.hidden = v !== 'probability';
-      // Show only the args control that matches the current probability
-      // method (if any); hide every other one so the row stays compact.
-      const wantedId = (v === 'probability') ? _PROB_ARG_CONTROL[meth.value] : null;
-      for (const ctrl of argControls) ctrl.hidden = (ctrl.id !== wantedId);
+      // Show only the args control(s) that match the current semiring,
+      // hide every other one so the row stays compact.  Most semirings
+      // need at most one control (the per-method picker for
+      // probability, the bins input for distribution-profile); moment
+      // is the exception, with both a k input and a raw/central
+      // selector, so the dispatch returns a set rather than a single id.
+      const wantedIds = new Set();
+      if (v === 'probability') {
+        const id = _PROB_ARG_CONTROL[meth.value];
+        if (id) wantedIds.add(id);
+      } else if (v === 'distribution-profile') {
+        wantedIds.add('eval-args-bins');
+      } else if (v === 'moment') {
+        wantedIds.add('eval-args-moment-k');
+        wantedIds.add('eval-args-moment-central');
+      } else if (v === 'sample') {
+        wantedIds.add('eval-args-sample-n');
+      }
+      if (_CONDITION_OPTIONS.has(v)) {
+        wantedIds.add('eval-args-condition-group');
+      }
+      for (const ctrl of argControls) ctrl.hidden = !wantedIds.has(ctrl.id);
       // Stale once the input shape changes : wipe result + bound +
       // time + the clear button.
       clearEvalResult();
@@ -1361,6 +1750,60 @@
     // its placeholder reads.
     meth.addEventListener('change', syncControls);
     run.addEventListener('click', runEvaluation);
+    // Enter inside a text / number argument field fires Run, matching
+    // the form-submit convention.  Skip <select> controls (e.g. the
+    // compilation method picker) where Enter natively confirms the
+    // current option rather than committing the surrounding form.
+    for (const ctrl of argControls) {
+      if (ctrl.tagName !== 'INPUT') continue;
+      ctrl.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        if (!run.disabled) runEvaluation();
+      });
+    }
+    // Drop the auto-preset marker as soon as the user types into the
+    // "Condition on" input so a subsequent pin change within the same
+    // row doesn't clobber their manual UUID.  Refresh the badge so
+    // its styling flips to the muted/clickable variant (the chip stays
+    // visible as a one-click "restore row prov" affordance).
+    const condInput = document.getElementById('eval-args-condition');
+    if (condInput) {
+      condInput.addEventListener('input', () => {
+        delete condInput.dataset.autoset;
+        updateConditionInputBadge();
+      });
+    }
+    // The "row prov" badge is a toggle:
+    //   * active state  (value matches row prov) -> click clears the
+    //     Condition input.  Useful for switching to the unconditional
+    //     distribution without having to manually empty the field.
+    //   * muted state   (value diverges) -> click restores the row
+    //     prov.  One-click undo for a manual edit, or a re-apply
+    //     after the user clicked Clear.
+    const condBadge = document.getElementById('eval-args-condition-badge');
+    if (condBadge) {
+      condBadge.addEventListener('click', () => {
+        const rowProv = state.rowProv || '';
+        if (!rowProv) return;
+        const cond = document.getElementById('eval-args-condition');
+        if (!cond) return;
+        const isActive =
+          cond.dataset.autoset === '1' && cond.value.trim() === rowProv;
+        if (isActive) {
+          // Clear: the user wants the unconditional answer.
+          cond.value = '';
+          delete cond.dataset.autoset;
+        } else {
+          // Restore: the user pressed the muted chip after editing or
+          // clearing the input.
+          cond.value = rowProv;
+          cond.dataset.autoset = '1';
+          state.lastAutoPresetRow = rowProv;
+        }
+        updateConditionInputBadge();
+      });
+    }
     const clearBtn = document.getElementById('eval-clear');
     if (clearBtn) clearBtn.onclick = clearEvalResult;
     const copyBtn = document.getElementById('eval-copy');
@@ -1451,7 +1894,28 @@
   }
 
   function refreshEvalTarget() {
-    const tgt = document.getElementById('eval-target');
+    const tgt   = document.getElementById('eval-target');
+    const strip = document.getElementById('eval-strip');
+    // Hide the whole strip when there is no scene (initial load,
+    // post-error, post-clearScene).  Evaluating against nothing is
+    // meaningless and the strip's controls take ~50px of vertical
+    // space the user can reclaim for the SVG canvas.  The strip
+    // re-appears on the next successful renderCircuit (which calls
+    // back into refreshEvalTarget).
+    if (strip) strip.hidden = !state.scene;
+    // Re-run the semiring dropdown filter whenever the target changes
+    // (pin / clear pin / scene reload): the new target may have a
+    // different gate type, which flips the menu between the scalar
+    // (distribution-profile + prov-xml) and the Boolean families.
+    // refilterForTarget is hoisted via window.ProvsqlStudio because it
+    // lives inside initEvalStrip's closure.  It re-applies the
+    // scalar-vs-Boolean gate-type filter, and only re-runs syncControls
+    // (which wipes the result chip) when the active selection was
+    // actually bumped — so a pin change between two Boolean nodes
+    // preserves the displayed evaluation.
+    const refilter = window.ProvsqlStudio?.refilterForTarget;
+    if (typeof refilter === 'function') refilter();
+    autoPresetConditionInput();
     if (!tgt) return;
     if (!state.scene) {
       tgt.textContent = '';
@@ -1470,6 +1934,119 @@
       + `<span class="wp-uuid__full">${escapeHtml(id)}</span>`
       + `</span>`;
     tgt.title = `Evaluation runs on the ${label}: ${id}`;
+  }
+
+  // Auto-preset the "Condition on" UUID to the row's provenance gate,
+  // so `Moment` / `Distribution profile` / `Sample` evaluated against
+  // any scalar inside the row's circuit yields a conditional answer
+  // (truncated by the cmps the planner hook lifted out of WHERE)
+  // without the user having to paste the row's provsql UUID.
+  //
+  // Source of truth: state.rowProv, the row's `__prov` (or
+  // user-selected `provsql`) UUID, stashed by renderCircuit from the
+  // data-row-prov attribute the result-table renderer stamps on every
+  // clickable cell.  Falls back to scene.root for the legacy
+  // "click the provsql cell" path (scene root === row's prov).
+  //
+  // Row-context change (clicking a different row's cell) ALWAYS
+  // overwrites, even prior manual edits: a UUID pasted for row A
+  // doesn't generalise to row B.  Within a single row, manual edits
+  // stick (the `input` listener drops dataset.autoset; we don't
+  // re-overwrite while lastAutoPresetRow matches the current row).
+  function autoPresetConditionInput() {
+    const cond = document.getElementById('eval-args-condition');
+    if (!cond) return;
+    if (!state.scene) {
+      // Scene gone; drop any preset and reset row tracking.
+      cond.value = '';
+      delete cond.dataset.autoset;
+      state.lastAutoPresetRow = null;
+      updateConditionInputBadge();
+      return;
+    }
+    // Row context: prefer the row prov stashed at scene load.  When
+    // missing (legacy click path with no data-row-prov attribute, or
+    // a direct loadCircuit call) fall back to scene.root iff a scalar
+    // gate is pinned distinctly from the root; conditioning the
+    // root on itself is meaningless.
+    let target = state.rowProv;
+    if (!target) {
+      const pinned = state.pinnedNode;
+      const root = state.scene.root;
+      const node = pinned ? state.scene.nodes.find(n => n.id === pinned) : null;
+      const isScalarPinned =
+        node != null && _SCALAR_GATE_TYPES.has(node.type) && pinned !== root;
+      if (isScalarPinned) target = root;
+    }
+    if (!target) {
+      // No row context and no scalar pin: drop any prior auto value.
+      if (cond.dataset.autoset === '1') {
+        cond.value = '';
+        delete cond.dataset.autoset;
+      }
+      state.lastAutoPresetRow = null;
+      updateConditionInputBadge();
+      return;
+    }
+    // Same row as the previous auto-preset: leave the value alone
+    // (the user may have typed a manual override, which we want to
+    // honour across pin changes within the same scene).
+    if (state.lastAutoPresetRow === target) {
+      updateConditionInputBadge();
+      return;
+    }
+    // Row context changed: overwrite, regardless of prior autoset
+    // marker.  Manual UUIDs pasted for the previous row would
+    // silently condition the new row on the wrong event.
+    cond.value = target;
+    cond.dataset.autoset = '1';
+    state.lastAutoPresetRow = target;
+    updateConditionInputBadge();
+  }
+
+  // Visual cue that the "Condition on" input was auto-filled from the
+  // row's provenance, with three states:
+  //
+  //   * no row context:           badge hidden (we don't have a row
+  //                               prov to offer in the first place).
+  //   * value matches row prov:   badge shown, "active" styling
+  //                               (purple chip + tint on the input);
+  //                               not clickable since clicking would
+  //                               be a no-op.
+  //   * value diverges from prov: badge shown, "muted" styling
+  //                               (faded chip, no input tint); the
+  //                               chip becomes a clickable button
+  //                               that restores the row prov so the
+  //                               user can revert a manual edit
+  //                               without having to navigate away
+  //                               and back.
+  //
+  // Called from autoPresetConditionInput on every refreshEvalTarget,
+  // and from the input's `input` listener on every keystroke.
+  function updateConditionInputBadge() {
+    const cond = document.getElementById('eval-args-condition');
+    if (!cond) return;
+    const badge = document.getElementById('eval-args-condition-badge');
+    const rowProv = state.rowProv || '';
+    if (!badge) return;
+    if (!rowProv) {
+      // No row context: nothing to offer, hide the chip.
+      badge.hidden = true;
+      badge.classList.remove('cv-eval__cond-badge--muted');
+      cond.classList.remove('is-auto-conditioned');
+      return;
+    }
+    const matches =
+      cond.dataset.autoset === '1' &&
+      cond.value.trim() === rowProv;
+    badge.hidden = false;
+    badge.classList.toggle('cv-eval__cond-badge--muted', !matches);
+    cond.classList.toggle('is-auto-conditioned', matches);
+    // Tooltip updates so the affordance reads correctly in both
+    // states (the badge is a toggle: active -> clear, muted -> restore).
+    badge.title = matches
+      ? 'Click to clear the conditioning (unconditional result).'
+      : 'Click to restore the row provenance (replaces the current value).';
   }
 
   async function runEvaluation() {
@@ -1517,8 +2094,49 @@
         const a = (ctrl?.value || '').trim();
         if (a) body.arguments = a;
       }
+    } else if (semiring === 'distribution-profile') {
+      // The backend reads `arguments` as the histogram bin count.
+      const bins = (document.getElementById('eval-args-bins')?.value || '').trim();
+      if (bins) body.arguments = bins;
+    } else if (semiring === 'moment') {
+      // The backend reads `arguments` as `"k;central"` where k is a
+      // non-negative integer and central is `raw` or `central`.
+      const k = (document.getElementById('eval-args-moment-k')?.value || '').trim();
+      const c = (document.getElementById('eval-args-moment-central')?.value || 'false').trim();
+      body.arguments = `${k};${c === 'true' ? 'central' : 'raw'}`;
+    } else if (semiring === 'sample') {
+      const n = (document.getElementById('eval-args-sample-n')?.value || '').trim();
+      if (n) body.arguments = n;
+    }
+    // Conditioning gate UUID, optional, accepted by every scalar
+    // semiring above.  Splices into the rv_moment / rv_support /
+    // rv_histogram / rv_sample `prov` arg server-side.
+    if (_CONDITION_OPTIONS.has(semiring)) {
+      const cond = (document.getElementById('eval-args-condition')?.value || '').trim();
+      if (cond) body.condition_uuid = cond;
     }
 
+    // Firefox: disabling a focused button moves focus to the document
+    // body, which scrolls the viewport back to the top so the body's
+    // "default focus position" comes into view.  Blur first so the
+    // button loses focus before becoming disabled and Firefox has no
+    // active focus to reassign.  Chrome doesn't exhibit this.
+    if (typeof run.blur === 'function') run.blur();
+    // Belt-and-braces: pin the scroll position across the run.  Even
+    // with the blur above, Firefox occasionally scrolls the viewport
+    // when the result panel grows tall (distribution-profile SVG,
+    // sample list), presumably a focus / scroll-anchoring quirk we
+    // can't isolate further.  Capture scrollY now, restore it once
+    // after the synchronous DOM mutations and once on the next
+    // animation frame to cover async layout passes.  Skip the
+    // restore if the user themselves scrolled in the meantime
+    // (heuristic: their final scrollY differs from ours by more than
+    // a few px), so we don't fight a deliberate viewport change.
+    const _scrollY0 = window.scrollY;
+    const _restoreScroll = () => {
+      const dy = Math.abs(window.scrollY - _scrollY0);
+      if (dy > 4) window.scrollTo(window.scrollX, _scrollY0);
+    };
     run.disabled = true;
     result.textContent = 'evaluating…';
     result.dataset.kind = 'pending';
@@ -1545,7 +2163,14 @@
       const dt = Math.round(performance.now() - t0);
       if (time) time.textContent = `· ${dt} ms`;
       if (!resp.ok) {
-        result.textContent = data.detail || data.error || `HTTP ${resp.status}`;
+        const msg = data.detail || data.error || `HTTP ${resp.status}`;
+        // Render with the same icon + ProvSQL pill + crimson banner
+        // treatment the result-table errors use, instead of a bare
+        // terracotta chip.  Logic mirrors app.js's renderDiag (see
+        // there for the long-message <details> branch); inlined here
+        // because that function lives inside the runQuery closure
+        // and isn't exposed at module-load time.
+        result.innerHTML = renderEvalError(msg, data.sqlstate);
         result.dataset.kind = 'error';
         return;
       }
@@ -1559,6 +2184,72 @@
         result.dataset.kind = 'xml';
         result.dataset.copy = xmlText;
         result.title = 'PROV-XML export';
+      } else if (data.kind === 'distribution-profile') {
+        // Inline-SVG panel: support badge + μ / σ² labels + empirical
+        // histogram of the sampled distribution.  The full JSON payload
+        // goes into dataset.copy so the user can grab it for further
+        // analysis with the existing copy button, and is also re-used
+        // by the PDF / CDF toggle to re-render without a round-trip.
+        result.innerHTML = renderProfilePanel(data.result, 'pdf');
+        result.dataset.kind = 'distribution-profile';
+        result.dataset.copy = JSON.stringify(data.result);
+        result.title = 'Distribution profile';
+        wireProfileInteractions(result, data.result);
+      } else if (data.kind === 'sample') {
+        // Sample renders as a <details> panel with three regions:
+        //   * summary: "N samples [of M]" counter + a comma-separated
+        //              preview of the first PREVIEW_N values.
+        //   * full:    the complete sample array (visible when the
+        //              user opens the panel); monospace + wrapping
+        //              so long n's stay readable.
+        //   * hint:    shown only when MC's conditional acceptance
+        //              rate truncated the run, pointing at the
+        //              provsql.rv_mc_samples GUC.
+        // The clipboard button (cv-eval__copy) is wired through
+        // dataset.copy and copies the full JSON array.
+        const r = data.result || {};
+        const requested = r.n_requested ?? '';
+        const samples = Array.isArray(r.samples) ? r.samples : [];
+        const returned = r.n_returned ?? samples.length;
+        const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+          ? window.ProvsqlStudio.getProbDecimals() : 4;
+        const fmt = v => Number.isFinite(v)
+          ? Number(v.toFixed(Math.min(dec, 4))).toString()
+          : String(v);
+        const PREVIEW_N = 6;
+        const previewVals = samples.slice(0, PREVIEW_N).map(fmt).join(', ');
+        const moreCount = Math.max(0, samples.length - PREVIEW_N);
+        const preview = previewVals
+          ? `[${previewVals}${moreCount > 0 ? ` … +${moreCount} more` : ''}]`
+          : '[]';
+        const countLabel = `${returned} sample${returned === 1 ? '' : 's'}`
+          + (requested && requested !== returned ? ` of ${requested}` : '');
+        const fullList = samples.length
+          ? `[${samples.map(fmt).join(', ')}]`
+          : '[]';
+        const budgetHint = (requested && returned < requested)
+          ? `<div class="cv-sample-hint" role="status">`
+            + `MC accepted ${returned}/${requested}.  `
+            + `Raise <code>provsql.rv_mc_samples</code> in the Config panel `
+            + `to widen the rejection-sampling budget.`
+            + `</div>`
+          : '';
+        result.innerHTML =
+          `<details class="cv-sample-panel">`
+          + `<summary class="cv-sample-summary">`
+          +   `<span class="cv-sample-count">${escapeHtml(countLabel)}</span>`
+          +   `<code class="cv-sample-preview" `
+          +        `title="First ${PREVIEW_N} values; click the chevron `
+          +        `to see all; clipboard icon copies the JSON array.">`
+          +     escapeHtml(preview)
+          +   `</code>`
+          + `</summary>`
+          + `<pre class="cv-sample-full">${escapeHtml(fullList)}</pre>`
+          + budgetHint
+          + `</details>`;
+        result.dataset.kind = 'sample';
+        result.dataset.copy = JSON.stringify(samples);
+        result.title = '';   // panel + per-element titles carry the info
       } else {
       // Show the value verbatim. Probability gets clipped to the configured
       // decimal count (default 4) for readability; the full-precision form
@@ -1628,6 +2319,12 @@
       // worth copying (errors and pending states have no useful text).
       const copy = document.getElementById('eval-copy');
       if (copy) copy.hidden = !result.dataset.copy;
+      // Restore the scroll position captured before the run: once
+      // synchronously and once on the next animation frame, since
+      // Firefox's scroll-jump can fire either during the result
+      // mutation or on the subsequent layout pass.
+      _restoreScroll();
+      requestAnimationFrame(_restoreScroll);
     }
   }
 
@@ -1686,20 +2383,678 @@
       if (node.info1 != null) out.push({ label: 'left attr',  value: node.info1 });
       if (node.info2 != null) out.push({ label: 'right attr', value: node.info2 });
     } else if (t === 'mulinput') {
-      // info1 = the multivalued variable's value.
-      if (node.info1 != null) out.push({ label: 'value', value: node.info1 });
+      // Two shapes share gate_mulinput:
+      //  - repair_key-style: extra is empty, info1 carries the
+      //    multivalued variable's ordinal within its block.
+      //  - categorical-mixture: extra holds the outcome value
+      //    (float8 text), and the ordinal is irrelevant -- the
+      //    mulinputs of a categorical block are unordered.
+      // Surface whichever payload the mulinput actually carries.
+      if (node.extra) {
+        out.push({ label: 'value', value: node.extra });
+      } else if (node.info1 != null) {
+        out.push({ label: 'ordinal', value: node.info1 });
+      }
     } else if (t === 'input' || t === 'update') {
       // info1 = source relation id (already shown as `tbl X` under the
       // node), info2 = column count. Surface column count here so the
       // inspector adds something the canvas doesn't.
       if (node.info1 != null) out.push({ label: 'relation id', value: node.info1 });
       if (node.info2 != null) out.push({ label: 'columns',     value: node.info2 });
+    } else if (t === 'arith') {
+      // info1 = PROVSQL_ARITH_* tag (provsql.circuit_subgraph returns it
+      // as TEXT so the value is a string here); map to a name+glyph so
+      // the user doesn't have to remember enum order.
+      const tag = node.info1 == null ? null : Number(node.info1);
+      const name = Number.isFinite(tag) ? ARITH_OP_NAME[tag] : null;
+      if (name) out.push({ label: 'operator', value: name });
+      else if (node.info1 != null) out.push({ label: 'operator', value: node.info1 });
     } else {
-      // No type-specific translation : fall back to raw fields if set.
-      if (node.info1 != null) out.push({ label: 'info1', value: node.info1 });
-      if (node.info2 != null) out.push({ label: 'info2', value: node.info2 });
+      // No type-specific translation : fall back to raw fields when
+      // the value is meaningfully set. Zero is the universal "unused"
+      // sentinel for these slots (gate_rv, gate_value, gate_plus,
+      // gate_times, ... all leave info1 / info2 as 0), so suppress
+      // the row rather than dumping a noisy "info1: 0" for every
+      // gate that doesn't use those slots.
+      const i1 = node.info1, i2 = node.info2;
+      const meaningful = v => v != null && v !== 0 && v !== '0' && v !== '';
+      if (meaningful(i1)) out.push({ label: 'info1', value: i1 });
+      if (meaningful(i2)) out.push({ label: 'info2', value: i2 });
     }
     return out;
+  }
+
+  // Parse the gate_rv `extra` text encoding into {kind, params, paramNames}.
+  // Mirrors src/RandomVariable.cpp's parse_distribution_spec; returns null
+  // on anything we don't recognise so callers fall back to the raw text.
+  function parseDistributionSpec(s) {
+    if (!s) return null;
+    const m = String(s).match(/^\s*([a-zA-Z]+)\s*(?::(.*))?$/);
+    if (!m) return null;
+    const kind = m[1].toLowerCase();
+    const params = (m[2] || '')
+      .split(',').map(x => Number(x.trim())).filter(x => Number.isFinite(x));
+    const meta = {
+      normal:      { params: 2, names: ['μ', 'σ'] },
+      uniform:     { params: 2, names: ['a', 'b'] },
+      exponential: { params: 1, names: ['λ'] },
+      erlang:      { params: 2, names: ['k', 'λ'] },
+    }[kind];
+    if (!meta || params.length < meta.params) return null;
+    return { kind, params: params.slice(0, meta.params), paramNames: meta.names };
+  }
+
+  // Render the analytical PDF of a parsed distribution spec into a small
+  // inline SVG. Returns an HTML string suitable for insertion into the
+  // inspector body. Returns "" when the spec is unrecognised so callers
+  // can simply skip the preview without a special case.
+  function renderRvDensity(spec) {
+    if (!spec) return '';
+    const W = 240, H = 100, padX = 6, padY = 6;
+    const samples = 120;
+    let lo, hi, pdf;
+    if (spec.kind === 'normal') {
+      const [mu, sigma] = spec.params;
+      if (!(sigma > 0)) return '';
+      lo = mu - 4 * sigma; hi = mu + 4 * sigma;
+      const k = 1 / (sigma * Math.sqrt(2 * Math.PI));
+      pdf = x => k * Math.exp(-0.5 * ((x - mu) / sigma) ** 2);
+    } else if (spec.kind === 'uniform') {
+      const [a, b] = spec.params;
+      if (!(b > a)) return '';
+      const margin = 0.15 * (b - a);
+      lo = a - margin; hi = b + margin;
+      const h = 1 / (b - a);
+      pdf = x => (x >= a && x <= b) ? h : 0;
+    } else if (spec.kind === 'exponential') {
+      const [lam] = spec.params;
+      if (!(lam > 0)) return '';
+      lo = 0; hi = 6 / lam;
+      pdf = x => x < 0 ? 0 : lam * Math.exp(-lam * x);
+    } else if (spec.kind === 'erlang') {
+      const [k, lam] = spec.params;
+      if (!(k >= 1) || !(lam > 0)) return '';
+      lo = 0; hi = Math.max(2 * k / lam, 6 / lam);
+      // (k-1)! via gamma; k is integer in practice but we tolerate float.
+      let fact = 1;
+      for (let i = 2; i < k; i++) fact *= i;
+      const norm = Math.pow(lam, k) / fact;
+      pdf = x => x < 0 ? 0 : norm * Math.pow(x, k - 1) * Math.exp(-lam * x);
+    } else {
+      return '';
+    }
+    const xs = [], ys = [];
+    for (let i = 0; i <= samples; i++) {
+      const x = lo + (hi - lo) * (i / samples);
+      xs.push(x);
+      ys.push(pdf(x));
+    }
+    const yMax = Math.max(...ys, 1e-12);
+    const sx = x => padX + (W - 2 * padX) * (x - lo) / (hi - lo);
+    const sy = y => (H - padY) - (H - 2 * padY) * (y / yMax);
+    const pts = xs.map((x, i) => `${sx(x).toFixed(1)},${sy(ys[i]).toFixed(1)}`).join(' ');
+    const polygon =
+      `${sx(lo).toFixed(1)},${sy(0).toFixed(1)} `
+      + pts + ' '
+      + `${sx(hi).toFixed(1)},${sy(0).toFixed(1)}`;
+    // X-axis ticks at lo / mid / hi. The mean is the natural reference
+    // line for normal / exponential / erlang and the midpoint for
+    // uniform; render it as a faint dashed vertical.
+    let meanLine = '';
+    let mean = null;
+    if (spec.kind === 'normal')      mean = spec.params[0];
+    else if (spec.kind === 'uniform')     mean = (spec.params[0] + spec.params[1]) / 2;
+    else if (spec.kind === 'exponential') mean = 1 / spec.params[0];
+    else if (spec.kind === 'erlang')      mean = spec.params[0] / spec.params[1];
+    if (mean != null && mean >= lo && mean <= hi) {
+      meanLine =
+        `<line x1="${sx(mean).toFixed(1)}" y1="${padY}" `
+        + `x2="${sx(mean).toFixed(1)}" y2="${(H - padY).toFixed(1)}" `
+        + `stroke="var(--terracotta-500)" stroke-width="1" `
+        + `stroke-dasharray="3 3" opacity="0.7" />`;
+    }
+    const tickFmt = v => {
+      if (!Number.isFinite(v)) return '';
+      if (Math.abs(v) >= 1000 || (Math.abs(v) > 0 && Math.abs(v) < 0.01)) return v.toExponential(1);
+      return Number(v.toFixed(3)).toString();
+    };
+    return `<div class="cv-rv-density" aria-label="probability density">`
+      + `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">`
+      + `<polygon points="${polygon}" fill="rgba(112, 82, 184, 0.18)" `
+      + `         stroke="var(--purple-500)" stroke-width="1.4" />`
+      + meanLine
+      + `<text class="cv-rv-tick" x="${padX}" y="${H - 1}">${escapeHtml(tickFmt(lo))}</text>`
+      + `<text class="cv-rv-tick" x="${W / 2}" y="${H - 1}" text-anchor="middle">`
+      + `${escapeHtml(tickFmt((lo + hi) / 2))}</text>`
+      + `<text class="cv-rv-tick" x="${W - padX}" y="${H - 1}" text-anchor="end">`
+      + `${escapeHtml(tickFmt(hi))}</text>`
+      + `</svg></div>`;
+  }
+
+  // Inline-SVG profile panel for the `distribution-profile` evaluation
+  // method.  Mirrors renderRvDensity's geometry / palette but draws an
+  // empirical histogram from the backend's [{bin_lo, bin_hi, count}]
+  // array, with a support badge (which can extend past the sampled
+  // range when the underlying distribution has unbounded support) and
+  // mean / variance labels.
+  // Shared geometry for the distribution-profile SVG.  Lives at module
+  // scope so wireProfileInteractions can convert wheel-cursor positions
+  // into the same data-space the bars are drawn in without duplicating
+  // the constants in two places.
+  const PROFILE_W = 280, PROFILE_H = 160;
+  const PROFILE_PAD_X = 10, PROFILE_PAD_TOP = 6, PROFILE_PAD_BOTTOM = 18;
+  // Zoom factor per wheel notch (1.2× in, 1/1.2× out).  Min visible
+  // span is 1% of the full range so the user can't zoom into nothing.
+  const PROFILE_ZOOM_STEP = 1.2;
+  const PROFILE_MIN_SPAN_FRAC = 0.01;
+
+  function readProfileView(panel) {
+    if (!panel) return null;
+    const lo = Number(panel.dataset.viewLo);
+    const hi = Number(panel.dataset.viewHi);
+    return (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)
+      ? { lo, hi } : null;
+  }
+
+  // Delegated handlers for the distribution-profile panel.  Wheel and
+  // dblclick are registered on `document` in the CAPTURE phase so the
+  // browser sees our preventDefault before any ancestor scroll
+  // listener (or its own auto-scroll path) can claim the gesture --
+  // the prior bubble-phase listener on the inner SVG occasionally let
+  // wheel events leak through into a page scroll when innerHTML
+  // teardown briefly orphaned the listener or the cursor straddled
+  // the SVG bounding rect.  Click for the PDF/CDF toggle stays on
+  // resultEl since it's a discrete interaction with no scroll-side
+  // effects.  Profile payload is parked on `resultEl.__profile` so
+  // subsequent calls can swap data without re-wiring.
+  function wireProfileInteractions(resultEl, profile) {
+    resultEl.__profile = profile;
+    if (!wireProfileInteractions._docWired) {
+      wireProfileInteractions._docWired = true;
+      document.addEventListener('wheel', _onProfileWheel,
+                                { passive: false, capture: true });
+      document.addEventListener('dblclick', _onProfileDblClick,
+                                { capture: true });
+    }
+    if (!resultEl.__profileWired) {
+      resultEl.__profileWired = true;
+      resultEl.addEventListener('click', (ev) => {
+        if (!ev.target.closest('.cv-profile-toggle')) return;
+        ev.stopPropagation();
+        const panel = resultEl.querySelector('.cv-profile-panel');
+        if (!panel) return;
+        const cur = panel.dataset.profileMode || 'pdf';
+        const next = cur === 'cdf' ? 'pdf' : 'cdf';
+        const view = readProfileView(panel);
+        resultEl.innerHTML = renderProfilePanel(
+          resultEl.__profile, next, view);
+      });
+    }
+  }
+
+  function _onProfileWheel(ev) {
+    // Catch wheel over the WHOLE distribution-profile panel, not just
+    // the inner SVG, so brief layout shifts that put the cursor over
+    // the meta row (μ / σ / toggle) during re-render don't let the
+    // page scroll.  Zoom only applies when the cursor is actually
+    // over the SVG -- but preventDefault is unconditional inside the
+    // panel.
+    if (!ev.target.closest) return;
+    const panel = ev.target.closest('.cv-profile-panel');
+    if (!panel) return;
+    ev.preventDefault();
+    const svg = ev.target.closest('.cv-profile-svg svg');
+    if (!svg) return;  /* over meta row: prevent scroll, don't zoom */
+    const resultEl = svg.closest('.cv-eval__result');
+    if (!resultEl || !resultEl.__profile) return;
+    const fullLo = Number(panel.dataset.fullLo);
+    const fullHi = Number(panel.dataset.fullHi);
+    if (!Number.isFinite(fullLo) || !Number.isFinite(fullHi)) return;
+    const view = readProfileView(panel) || { lo: fullLo, hi: fullHi };
+    // Cursor → viewBox X.  getBoundingClientRect returns the CSS
+    // pixel box; scale to PROFILE_W so the data-x lookup is correct
+    // under any CSS scaling of the SVG element.
+    const r = svg.getBoundingClientRect();
+    const cxSvg = ((ev.clientX - r.left) / r.width) * PROFILE_W;
+    const cxClamped = Math.max(PROFILE_PAD_X,
+                                Math.min(PROFILE_W - PROFILE_PAD_X, cxSvg));
+    const t = (cxClamped - PROFILE_PAD_X) /
+              (PROFILE_W - 2 * PROFILE_PAD_X);          /* 0..1 */
+    const dataX = view.lo + (view.hi - view.lo) * t;
+    const factor = ev.deltaY < 0
+      ? 1 / PROFILE_ZOOM_STEP
+      : PROFILE_ZOOM_STEP;
+    const fullSpan = fullHi - fullLo;
+    let newSpan = (view.hi - view.lo) * factor;
+    newSpan = Math.min(newSpan, fullSpan);
+    newSpan = Math.max(newSpan, fullSpan * PROFILE_MIN_SPAN_FRAC);
+    let newLo = dataX - t * newSpan;
+    let newHi = newLo + newSpan;
+    if (newLo < fullLo) { newLo = fullLo; newHi = newLo + newSpan; }
+    if (newHi > fullHi) { newHi = fullHi; newLo = newHi - newSpan; }
+    const mode = panel.dataset.profileMode || 'pdf';
+    resultEl.innerHTML = renderProfilePanel(
+      resultEl.__profile, mode, { lo: newLo, hi: newHi });
+  }
+
+  function _onProfileDblClick(ev) {
+    const svg = ev.target.closest && ev.target.closest('.cv-profile-svg svg');
+    if (!svg) return;
+    ev.preventDefault();
+    const panel = svg.closest('.cv-profile-panel');
+    const resultEl = svg.closest('.cv-eval__result');
+    if (!panel || !resultEl || !resultEl.__profile) return;
+    const mode = panel.dataset.profileMode || 'pdf';
+    resultEl.innerHTML = renderProfilePanel(resultEl.__profile, mode);
+  }
+
+  function renderProfilePanel(profile, mode, view) {
+    if (!profile) return '';
+    const histogram = Array.isArray(profile.histogram) ? profile.histogram : [];
+    const support  = Array.isArray(profile.support) ? profile.support : [null, null];
+    const expected = Number(profile.expected);
+    const variance = Number(profile.variance);
+    const _mode = mode === 'cdf' ? 'cdf' : 'pdf';
+    // Optional viewport for x-axis zoom.  When omitted (initial render
+    // or after reset), the view spans the full histogram range.  The
+    // viewport carries through every re-render -- toggle, zoom, pan --
+    // so the user's chosen zoom level survives mode flips.
+    const _view = (view && Number.isFinite(view.lo) && Number.isFinite(view.hi)
+                   && view.hi > view.lo) ? view : null;
+    // Stats (μ, σ, σ²) obey the panel's "Probability decimals" setting
+    // for parity with the eval strip's plain-float branch.  Falls back
+    // to 4 decimals when the helper isn't available (e.g. circuit.js
+    // loaded standalone in a test harness).  The exponential-fallback
+    // bounds stay fixed: very-small / very-large magnitudes always
+    // round-trip through scientific notation regardless of the user's
+    // chosen decimal count.
+    const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+                ? window.ProvsqlStudio.getProbDecimals() : 4;
+    const fmt = v => {
+      if (v == null || !Number.isFinite(Number(v))) return String(v);
+      const n = Number(v);
+      if (Math.abs(n) >= 1e6 || (Math.abs(n) > 0 && Math.abs(n) < 1e-3)) {
+        return n.toExponential(Math.max(2, dec - 1));
+      }
+      return Number(n.toFixed(dec)).toString();
+    };
+    // Looser formatter for axis tick labels: bin edges of an MC
+    // histogram are random-sampling artefacts (the leftmost and
+    // rightmost draws), so showing four decimals is precision the data
+    // does not carry.  Round to roughly three significant figures
+    // based on magnitude: for |x| ~ 30 that gives one decimal (33.8),
+    // for |x| ~ 0.3 that gives three (0.338), and very small / large
+    // values fall back to scientific notation.
+    const fmtTick = v => {
+      if (v == null || !Number.isFinite(Number(v))) return String(v);
+      const n = Number(v);
+      if (n === 0) return '0';
+      const abs = Math.abs(n);
+      if (abs >= 1e6 || abs < 1e-3) return n.toExponential(2);
+      const dec = Math.max(0, 2 - Math.floor(Math.log10(abs)));
+      return Number(n.toFixed(dec)).toString();
+    };
+    const fmtSupportEnd = v => {
+      // Postgres serialises +/-Infinity as the strings 'Infinity'/'-Infinity'
+      // through the float8 OUT params; psycopg surfaces them as the JSON
+      // numbers Infinity/-Infinity, which JSON.stringify drops to null.
+      // Accept either shape.
+      if (v === null || v === undefined) return '∞';
+      const s = String(v);
+      if (s === 'Infinity' || v === Infinity) return '+∞';
+      if (s === '-Infinity' || v === -Infinity) return '−∞';
+      return fmt(v);
+    };
+    const supportLabel =
+      `[${fmtSupportEnd(support[0])}, ${fmtSupportEnd(support[1])}]`;
+
+    // Histogram geometry.  Width tracks renderRvDensity so the two
+    // sit visually consistent if the user pin-compares; height is
+    // taller (160 vs. the density preview's narrower band) because
+    // the bar chart needs vertical room for the count axis to read,
+    // and the eval strip is full-width below the toolbar anyway.
+    // Constants live at module scope so wireProfileInteractions sees
+    // the same coordinate frame for cursor → data-x conversion.
+    const W = PROFILE_W, H = PROFILE_H, padX = PROFILE_PAD_X;
+    const padTop = PROFILE_PAD_TOP, padBottom = PROFILE_PAD_BOTTOM;
+    let svgInner = '';
+    /* Hoisted so the data-full-lo / data-full-hi panel attrs below
+     * pick up any frame extension done inside the histogram block
+     * (pure-discrete shapes widen to the analytical curves' range).
+     * The zoom handler reads these to clamp newLo/newHi, so without
+     * the hoist a mode toggle or zoom-out would silently snap back
+     * to the raw histogram extent. */
+    let fullLo = 0, fullHi = 0;
+    if (histogram.length) {
+      fullLo = Number(histogram[0].bin_lo);
+      fullHi = Number(histogram[histogram.length - 1].bin_hi);
+      /* Whenever the backend ships an analytical curves payload, take
+       * the union of the histogram extent and the curves' x-range as
+       * the chart frame.  shape_x_range already pads ±10% around the
+       * underlying support (and unions branch ranges for mixtures),
+       * so this:
+       *  - pure-discrete shapes (Dirac, categorical, nested mixtures
+       *    of those): shows the flat staircase before the first and
+       *    after the last stem, which the MC histogram alone collapses
+       *    onto the outermost outcomes;
+       *  - mixed continuous + discrete: shows Dirac discs that sit at
+       *    or past the empirical histogram's edge (e.g. Dirac at 0 in
+       *    a Uniform(0,1) mixture would otherwise be flush against the
+       *    left margin);
+       *  - degenerate histograms (Dirac alone): replaces the zero-
+       *    width frame with a sensible padded window.
+       * Without curves we keep the histogram frame, plus a ±1 fallback
+       * if the histogram is degenerate. */
+      const aCurves = profile.analytical_curves;
+      const cdfArr = aCurves && Array.isArray(aCurves.cdf) ? aCurves.cdf : null;
+      if (cdfArr && cdfArr.length >= 2) {
+        const cLo = Number(cdfArr[0].x);
+        const cHi = Number(cdfArr[cdfArr.length - 1].x);
+        if (Number.isFinite(cLo) && Number.isFinite(cHi) && cLo < cHi) {
+          if (fullLo < fullHi) {
+            fullLo = Math.min(fullLo, cLo);
+            fullHi = Math.max(fullHi, cHi);
+          } else {
+            fullLo = cLo;
+            fullHi = cHi;
+          }
+        }
+      } else if (!(fullLo < fullHi)) {
+        const c = fullLo;
+        fullLo = c - 1;
+        fullHi = c + 1;
+      }
+      const lo = _view ? _view.lo : fullLo;
+      const hi = _view ? _view.hi : fullHi;
+      const span = (hi - lo) || 1;
+      const sx = x => padX + (W - 2 * padX) * (x - lo) / span;
+      const usableH = H - padTop - padBottom;
+      let bars;
+      const total = histogram.reduce(
+        (s, b) => s + (Number(b.count) || 0), 0) || 1;
+      // Hoisted out of the mode dispatch so the analytical-curve overlay
+      // below can scale PDF density to count-scaled bar heights.
+      const maxCount = histogram.reduce(
+        (m, b) => Math.max(m, Number(b.count) || 0), 0) || 1;
+      // Tooltip text per bar.  Same readout shape in both modes:
+      //   x ∈ [lo, hi]
+      //   P(X ∈ bin) = p          (always)
+      //   P(X ≤ hi)  = F          (CDF mode only)
+      // The browser surfaces SVG <title> as a native hover tooltip
+      // with a short delay; together with the .cv-profile-bars rect
+      // hover style the user gets a per-bin readout without needing
+      // a JS-driven overlay.
+      // Per-bin probability tooltip.  The displayed percent uses
+      // `dec - 2` decimals so a "Probability decimals = 4" setting
+      // renders as "12.34%" (i.e. four digits of decimal probability
+      // precision); clamp to 0 so small `dec` doesn't go negative.
+      const pctDec = Math.max(0, dec - 2);
+      const fmtPct = p => {
+        if (!Number.isFinite(p)) return '?';
+        if (p === 0) return '0';
+        if (p < Math.pow(10, -dec)) return p.toExponential(Math.max(2, dec - 1));
+        return (p * 100).toFixed(pctDec) + '%';
+      };
+      const tooltip = (b, cum) => {
+        const lo_ = fmtTick(Number(b.bin_lo));
+        const hi_ = fmtTick(Number(b.bin_hi));
+        const c   = Number(b.count) || 0;
+        const lines = [
+          `x ∈ [${lo_}, ${hi_}]`,
+          `P(X ∈ bin) = ${fmtPct(c / total)}  (n = ${c})`,
+        ];
+        if (_mode === 'cdf') {
+          lines.push(`P(X ≤ ${hi_}) = ${fmtPct(cum / total)}`);
+        }
+        return escapeHtml(lines.join('\n'));
+      };
+      if (_mode === 'cdf') {
+        // Empirical CDF as a staircase of cumulative-count bars.  Each
+        // bar's height is the proportion of samples with value <= that
+        // bar's right edge, so the rightmost bar reaches the top of
+        // the usable area.
+        let cum = 0;
+        bars = histogram.map(b => {
+          cum += Number(b.count) || 0;
+          const x1 = sx(Number(b.bin_lo));
+          const x2 = sx(Number(b.bin_hi));
+          const w  = Math.max(1, x2 - x1 - 1);
+          const h  = (cum / total) * usableH;
+          const y  = (H - padBottom) - h;
+          return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" `
+               + `width="${w.toFixed(1)}" height="${h.toFixed(1)}">`
+               + `<title>${tooltip(b, cum)}</title></rect>`;
+        }).join('');
+      } else {
+        // PDF: bar heights proportional to the per-bin count, scaled so
+        // the tallest bin fills the usable area.  `maxCount` is hoisted
+        // above the dispatch so the analytical-curve overlay can reuse it.
+        let cum = 0;
+        bars = histogram.map(b => {
+          cum += Number(b.count) || 0;
+          const x1 = sx(Number(b.bin_lo));
+          const x2 = sx(Number(b.bin_hi));
+          const w  = Math.max(1, x2 - x1 - 1);
+          const h  = ((Number(b.count) || 0) / maxCount) * usableH;
+          const y  = (H - padBottom) - h;
+          return `<rect x="${x1.toFixed(1)}" y="${y.toFixed(1)}" `
+               + `width="${w.toFixed(1)}" height="${h.toFixed(1)}">`
+               + `<title>${tooltip(b, cum)}</title></rect>`;
+        }).join('');
+      }
+      // Mean reference line, faint dashed terracotta -- same convention
+      // as renderRvDensity's mean line.  In CDF mode the line still
+      // marks the expected value on the x-axis, which is independent
+      // of bar interpretation.
+      let meanLine = '';
+      if (Number.isFinite(expected) && expected >= lo && expected <= hi) {
+        const mx = sx(expected).toFixed(1);
+        meanLine =
+          `<line x1="${mx}" y1="${padTop}" x2="${mx}" y2="${(H - padBottom).toFixed(1)}" `
+          + `stroke="var(--terracotta-500)" stroke-width="1" `
+          + `stroke-dasharray="3 3" opacity="0.75" />`;
+      }
+      // Analytical-curve overlay.  When the backend's rv_analytical_curves
+      // returned a {pdf, cdf} payload (closed-form shape: bare gate_rv with
+      // a recognised family, possibly truncated), draw the matching curve
+      // over the histogram bars.  In PDF mode we scale the density into
+      // the count-axis frame so the curve rides over the bars at the
+      // same scale; in CDF mode we map the cumulative probability into
+      // the staircase's [0, usableH] frame.  Falls back to no overlay
+      // when the payload is absent (NULL on the SQL side -> null here)
+      // so non-closed-form shapes (gate_arith composites, mixtures,
+      // categoricals) render histogram-only without a special case.
+      let overlayPath = '';
+      const curves = profile.analytical_curves;
+      const curveArr = curves
+                       && Array.isArray(curves[_mode === 'cdf' ? 'cdf' : 'pdf'])
+                     ? curves[_mode === 'cdf' ? 'cdf' : 'pdf'] : null;
+      /* Pure-discrete shape (Dirac, categorical, or any nested
+       * mixture of those without a continuous arm): the CDF is a
+       * staircase, not a smooth function.  Render it as horizontal
+       * segments joined by vertical jumps so the jump at each
+       * outcome lands on the stem instead of being interpolated
+       * across the two surrounding x-samples. */
+      const discreteCdf = _mode === 'cdf'
+                       && curves
+                       && !Array.isArray(curves.pdf)
+                       && Array.isArray(curves.stems);
+      if (discreteCdf && Array.isArray(curves.stems) && curves.stems.length) {
+        /* Pure-discrete CDF: build the staircase directly from the
+         * stems so the jumps land exactly on the outcome values
+         * (sampled-cdf rendering would smear each jump across the
+         * surrounding sample interval and the final segment would
+         * stop one sample short of x_hi).  Stems outside the current
+         * viewport still contribute to the cumulative mass — stems
+         * before lo preload `cum` so the path enters the view at the
+         * correct height (matching the empirical bars, which also
+         * track cum across the full histogram, not just the visible
+         * bins); stems after hi are ignored, the staircase exits at
+         * the last in-view cum. */
+        const baseY = (H - padBottom);
+        const allStems = curves.stems.slice()
+          .map(s => ({ x: Number(s.x), p: Number(s.p) }))
+          .filter(s => Number.isFinite(s.x) && Number.isFinite(s.p))
+          .sort((a, b) => a.x - b.x);
+        if (allStems.length) {
+          let cum = 0;
+          for (const st of allStems) if (st.x < lo) cum += st.p;
+          const seg = [];
+          seg.push(
+            `${sx(lo).toFixed(1)},`
+            + `${(baseY - Math.min(1, cum) * usableH).toFixed(1)}`);
+          for (const st of allStems) {
+            if (st.x < lo || st.x > hi) continue;
+            const px = sx(st.x).toFixed(1);
+            const yPrev = (baseY - Math.min(1, cum) * usableH).toFixed(1);
+            seg.push(`${px},${yPrev}`);
+            cum += st.p;
+            const yCur = (baseY - Math.min(1, cum) * usableH).toFixed(1);
+            seg.push(`${px},${yCur}`);
+          }
+          const yEnd = (baseY - Math.min(1, cum) * usableH).toFixed(1);
+          seg.push(`${sx(hi).toFixed(1)},${yEnd}`);
+          overlayPath =
+            `<path class="cv-profile-overlay" d="M${seg.join(' L')}" `
+            + `fill="none" stroke="var(--terracotta-500)" `
+            + `stroke-width="1.5" opacity="0.9" />`;
+        }
+      } else if (curveArr && curveArr.length >= 2) {
+        // Equal-width histogram: bin width = (full range) / nbins.
+        // The backend builds the histogram with constant bin width
+        // (compute_support's lo..hi divided into `bins` cells), so
+        // averaging the first cell's width is equivalent and avoids a
+        // separate reduction.
+        const binW = (Number(histogram[0].bin_hi)
+                      - Number(histogram[0].bin_lo)) || 1;
+        const pts = [];
+        for (const pt of curveArr) {
+          const xv = Number(pt.x);
+          const pv = Number(pt.p);
+          if (!Number.isFinite(xv) || !Number.isFinite(pv)) continue;
+          /* Clip to the current x-axis view so a curve that extends
+           * past the histogram (e.g. unconditional Normal's mu ± 4σ
+           * window vs. a tighter empirical bin range) does not
+           * overhang the SVG. */
+          if (xv < lo || xv > hi) continue;
+          const px = sx(xv);
+          let py;
+          if (_mode === 'cdf') {
+            /* Staircase maps cum/total in [0, 1] to height usableH.
+             * The analytical CDF is already in [0, 1] over the
+             * truncation, so a direct linear map matches. */
+            const c = Math.max(0, Math.min(1, pv));
+            py = (H - padBottom) - c * usableH;
+          } else {
+            /* Bar height is (count / maxCount) * usableH.  The
+             * expected count in a bin of width binW is total · binW
+             * · pdf(midpoint).  Substituting count = total · binW · p:
+             *   bar_h_frac = total · binW · p / maxCount.
+             * Same scale as the bars, so a correctly-modelled
+             * histogram lays right under the curve. */
+            const scaled = (total * binW * pv) / maxCount;
+            py = (H - padBottom) - Math.max(0, scaled) * usableH;
+          }
+          pts.push(`${px.toFixed(1)},${py.toFixed(1)}`);
+        }
+        if (pts.length >= 2) {
+          overlayPath =
+            `<path class="cv-profile-overlay" d="M${pts.join(' L')}" `
+            + `fill="none" stroke="var(--terracotta-500)" `
+            + `stroke-width="1.5" opacity="0.9" />`;
+        }
+      }
+      /* Point-mass overlay.  When the backend payload carries
+       * stems:[{x, p}], render each as a vertical line capped by a
+       * small disc — Dirac (as_random) or categorical roots, or
+       * Dirac arms inside a Bernoulli mixture.  PDF mode only; CDF
+       * mode already conveys the same information through the
+       * staircase jumps that shape_cdf bakes into the curve. */
+      let stemsGroup = '';
+      const stemArr = curves && Array.isArray(curves.stems) ? curves.stems : null;
+      if (stemArr && stemArr.length && _mode !== 'cdf') {
+        const baseY = (H - padBottom);
+        const parts = [];
+        for (const st of stemArr) {
+          const xv = Number(st.x);
+          const pv = Number(st.p);
+          if (!Number.isFinite(xv) || !Number.isFinite(pv)) continue;
+          if (xv < lo || xv > hi) continue;
+          /* Match the bar scale.  Bars are scaled count/maxCount, and
+           * the expected count at a stem's x is pv·total.  Using
+           *   stem_h_frac = pv · total / maxCount
+           * puts the disc at the same height as the bar that the
+           * sampler builds at that x, so a perfectly-modelled
+           * categorical / Dirac has its disc landing right on top
+           * of its bar. */
+          const scaled = (pv * total) / maxCount;
+          const h = Math.max(0, Math.min(1, scaled)) * usableH;
+          const px = sx(xv).toFixed(1);
+          const py = (baseY - h).toFixed(1);
+          const tip = `x = ${escapeHtml(String(xv))}\nP(X = x) = ${fmtPct(pv)}`;
+          parts.push(
+            `<line x1="${px}" y1="${baseY.toFixed(1)}" `
+            + `x2="${px}" y2="${py}" />`
+            + `<circle cx="${px}" cy="${py}" r="4">`
+            + `<title>${tip}</title></circle>`
+          );
+        }
+        if (parts.length) {
+          stemsGroup =
+            `<g class="cv-profile-stems" stroke="var(--terracotta-500)" `
+            + `stroke-width="1.5" fill="var(--terracotta-500)">${parts.join('')}</g>`;
+        }
+      }
+      svgInner = `<g class="cv-profile-bars">${bars}</g>${overlayPath}${stemsGroup}${meanLine}`
+        + `<text class="cv-rv-tick" x="${padX}" y="${H - 4}">${escapeHtml(fmtTick(lo))}</text>`
+        + `<text class="cv-rv-tick" x="${W - padX}" y="${H - 4}" text-anchor="end">`
+        + `${escapeHtml(fmtTick(hi))}</text>`;
+    } else {
+      svgInner = `<text class="cv-rv-tick" x="${W / 2}" y="${H / 2}" text-anchor="middle">`
+        + `no samples</text>`;
+    }
+    const ariaLabel = _mode === 'cdf'
+      ? 'empirical cumulative distribution'
+      : 'empirical histogram';
+    // Inline cursor + touch-action on the SVG itself: the CSS
+    // counterparts live in app.css but the browser's aggressive cache
+    // on /static/app.css can serve a stale copy after a Studio
+    // upgrade; the inline style guarantees the affordance regardless.
+    const svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"`
+      + ` style="cursor:zoom-in;touch-action:none;display:block"`
+      + ` role="img" aria-label="${ariaLabel}">${svgInner}</svg>`;
+    const stddev = (Number.isFinite(variance) && variance >= 0)
+      ? Math.sqrt(variance) : null;
+    // The toggle stores the JSON payload on the panel so the click
+    // handler can re-render without re-fetching from the server.
+    const toggleLabel = _mode === 'cdf' ? 'CDF' : 'PDF';
+    const toggleNext  = _mode === 'cdf' ? 'PDF' : 'CDF';
+    // Data attributes carry the full range and current view so the
+    // wheel / dblclick handlers wired by wireProfileInteractions can
+    // re-render without recomputing from the histogram array.
+    const fullLoAttr = fullLo;
+    const fullHiAttr = fullHi;
+    const viewLoAttr = _view ? _view.lo : fullLoAttr;
+    const viewHiAttr = _view ? _view.hi : fullHiAttr;
+    const zoomedHint = _view ? ' (double-click to reset)' : '';
+    return `<div class="cv-profile-panel" aria-label="distribution profile"`
+      + ` data-profile-mode="${_mode}"`
+      + ` data-full-lo="${fullLoAttr}" data-full-hi="${fullHiAttr}"`
+      + ` data-view-lo="${viewLoAttr}" data-view-hi="${viewHiAttr}"`
+      + ` title="Scroll over the histogram to zoom${zoomedHint}">`
+      + `<div class="cv-profile-meta">`
+      + `<span class="cv-profile-badge" title="support interval">supp ${escapeHtml(supportLabel)}</span>`
+      + `<span class="cv-profile-stat" title="expected value">μ = ${escapeHtml(fmt(expected))}</span>`
+      + (stddev != null
+          ? `<span class="cv-profile-stat"`
+            + ` title="standard deviation (σ² = ${escapeHtml(fmt(variance))})">`
+            + `σ = ${escapeHtml(fmt(stddev))}</span>`
+          : `<span class="cv-profile-stat" title="variance">σ² = ${escapeHtml(fmt(variance))}</span>`)
+      + `<button type="button" class="cv-profile-toggle"`
+      + ` title="Switch to ${toggleNext}">${toggleLabel}</button>`
+      + `</div>`
+      + `<div class="cv-profile-svg cv-rv-density">${svg}</div>`
+      + `</div>`;
   }
 
   // Parse PG's text-encoded ARRAY of two-element ARRAYs ({{1,1},{2,3}}…)
@@ -1729,6 +3084,27 @@
   function escapeHtml(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Render a server error inside the eval-strip with the same icon +
+  // ProvSQL pill + crimson .wp-error panel that the result-table banner
+  // uses.  Strips the "ProvSQL: " prefix and turns it into a brand
+  // badge, the way app.js's renderDiag does.  XX000 is the generic
+  // internal_error SQLSTATE that provsql_error() emits, so we drop it
+  // (it would add noise to every message without telling the user
+  // anything actionable).
+  function renderEvalError(message, sqlstate) {
+    const raw = message || '';
+    const m = raw.match(/^ProvSQL:\s*(.*)$/s);
+    const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
+    const text  = m ? m[1] : raw;
+    const tail  = (sqlstate && sqlstate !== 'XX000')
+      ? ` <code>(SQLSTATE ${escapeHtml(sqlstate)})</code>`
+      : '';
+    return `<div class="wp-error">`
+         + `<i class="fas fa-exclamation-circle"></i> `
+         + `${badge}${escapeHtml(text)}${tail}`
+         + `</div>`;
   }
 
   function shortUuid(u) {

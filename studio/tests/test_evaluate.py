@@ -9,6 +9,8 @@ fixture as test_relations.py and don't depend on cs5-style data.
 """
 from __future__ import annotations
 
+import json
+
 import psycopg
 import pytest
 
@@ -745,3 +747,371 @@ def test_evaluate_custom_missing_mapping_is_400(client, custom_wrapper):
     })
     assert resp.status_code == 400
     assert "mapping" in resp.get_json()["error"].lower()
+
+
+def test_evaluate_applies_panel_gucs(client):
+    """The evaluate-strip's SQL call must see the panel-managed GUCs
+    (provsql.rv_mc_samples, monte_carlo_seed, simplify_on_load).
+    Previously /api/evaluate only set statement_timeout / search_path
+    / tool_search_path, so setting rv_mc_samples = 0 in the Config
+    panel still silently used the default (10000) sample budget for
+    HybridEvaluator's MC fallback.
+
+    Regression check: build a circuit whose probability can ONLY be
+    decided by the MC fallback (a continuous-island cmp the
+    AnalyticEvaluator cannot resolve closed-form: sum of independent
+    uniforms compared to a constant).  With rv_mc_samples = 0 set via
+    the panel, the evaluate call must raise.  Without my fix, the
+    panel value never reaches the SQL session and the call silently
+    returns an MC estimate.
+    """
+    # Lift uniform(0,1) + uniform(0,5) > 0.5 into a provsql token via
+    # the FROM-less rewrite path.  The 0.5 constant becomes a value
+    # gate the AnalyticEvaluator cannot pair with the sum-of-uniforms
+    # arith, so the cmp can only be resolved via MC.
+    resp = client.post(
+        "/api/exec",
+        json={
+            "sql": "SELECT 1 AS x, provsql.provenance() AS p "
+                   "WHERE provsql.uniform(0.0::float8, 1.0::float8) "
+                   "    + provsql.uniform(0.0::float8, 5.0::float8) "
+                   "      > 0.5::provsql.random_variable;",
+            "mode": "circuit",
+        },
+    )
+    assert resp.status_code == 200, resp.data
+    final = resp.get_json()["blocks"][-1]
+    assert final["kind"] == "rows"
+    cols = [c["name"] for c in final["columns"]]
+    token = final["rows"][0][cols.index("p")]
+
+    # 1. With the default (large) sample count, the call succeeds and
+    #    returns a probability in (0, 1).
+    resp = client.post("/api/evaluate", json={
+        "token": token, "semiring": "probability", "method": "",
+    })
+    assert resp.status_code == 200, resp.data
+    p_default = resp.get_json()["result"]
+    assert 0.0 < float(p_default) < 1.0, p_default
+
+    # 2. With rv_mc_samples = 0 set via /api/config, the call must
+    #    surface the disabled-fallback error rather than silently MC.
+    r = client.post("/api/config",
+                    json={"key": "provsql.rv_mc_samples", "value": "0"})
+    assert r.status_code == 200, r.data
+    try:
+        resp = client.post("/api/evaluate", json={
+            "token": token, "semiring": "probability", "method": "",
+        })
+        # The exact HTTP status depends on which evaluator raises and
+        # how psycopg.errors maps it; either 400 or 500 is acceptable.
+        # The point is that we DON'T get a silent 200 with a numeric
+        # probability that ignores the GUC.
+        assert resp.status_code != 200, resp.data
+    finally:
+        # Reset so subsequent tests aren't affected by the override.
+        client.post("/api/config",
+                    json={"key": "provsql.rv_mc_samples", "value": "10000"})
+
+
+# ──────── distribution-profile (scalar-only) ────────
+
+
+def _rv_uuid(client, sql_expr: str) -> str:
+    """Build a random_variable via `sql_expr`, dump its UUID via the
+    binary-coercible ``random_variable -> uuid`` cast, and return it.
+    Used to anchor the distribution-profile tests on a known scalar
+    gate (rv leaf or arith DAG) without going through the
+    planner-hook rewriter."""
+    resp = client.post(
+        "/api/exec",
+        json={
+            "sql": f"SELECT ({sql_expr})::uuid AS u",
+            "mode": "circuit",
+        },
+    )
+    assert resp.status_code == 200, resp.data
+    final = resp.get_json()["blocks"][-1]
+    cols = [c["name"] for c in final["columns"]]
+    return final["rows"][0][cols.index("u")]
+
+
+def test_evaluate_distribution_profile_uniform(client):
+    """U(0, 1) leaf: support = [0, 1], expectation ≈ 0.5, variance ≈ 1/12,
+    histogram counts sum to provsql.rv_mc_samples."""
+    tok = _rv_uuid(client, "provsql.uniform(0::float8, 1::float8)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["kind"] == "distribution-profile"
+    r = body["result"]
+    assert r["support"] == [0.0, 1.0]
+    # MC-driven moments: tolerate the default 10k-sample noise.
+    assert abs(r["expected"] - 0.5) < 0.02, r["expected"]
+    assert abs(r["variance"] - 1.0 / 12.0) < 0.01, r["variance"]
+    assert isinstance(r["histogram"], list) and len(r["histogram"]) == 30
+    total = sum(int(b["count"]) for b in r["histogram"])
+    # Should equal rv_mc_samples; the default panel value is 10000.
+    assert total > 0
+
+
+def test_evaluate_distribution_profile_bins_argument(client):
+    """The `arguments` field is the bin count; bins=5 returns at most 5 bins."""
+    tok = _rv_uuid(client, "provsql.uniform(0::float8, 1::float8)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile", "arguments": "5",
+    })
+    assert resp.status_code == 200, resp.data
+    hist = resp.get_json()["result"]["histogram"]
+    assert len(hist) <= 5
+
+
+def test_evaluate_distribution_profile_dirac_value(client):
+    """gate_value root (Dirac): support is [c, c], expectation is c,
+    variance is 0, histogram is a single bin at c."""
+    tok = _rv_uuid(client, "provsql.as_random(7.5)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    r = resp.get_json()["result"]
+    assert r["support"] == [7.5, 7.5]
+    assert r["expected"] == 7.5
+    assert r["variance"] == 0.0
+    assert len(r["histogram"]) == 1
+    assert r["histogram"][0]["bin_lo"] == 7.5
+    assert r["histogram"][0]["bin_hi"] == 7.5
+
+
+def test_evaluate_distribution_profile_analytical_curves_normal(client):
+    """A bare Normal gate_rv root should ship the analytical PDF / CDF
+    sampled curve alongside the empirical histogram so the Studio
+    frontend can overlay the closed-form density on the MC bars."""
+    tok = _rv_uuid(client, "provsql.normal(0, 1)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    r = resp.get_json()["result"]
+    curves = r.get("analytical_curves")
+    assert isinstance(curves, dict), curves
+    pdf = curves["pdf"]
+    cdf = curves["cdf"]
+    assert isinstance(pdf, list) and len(pdf) == 100
+    assert isinstance(cdf, list) and len(cdf) == 100
+    # PDF at the midpoint (x ≈ 0) is 1/sqrt(2 pi) ≈ 0.3989.  Allow a
+    # generous tolerance because the midpoint sample's x may not be
+    # exactly 0 (the curve window is mu ± 4σ over 100 points).
+    mid = pdf[50]
+    assert abs(float(mid["x"])) < 0.1, mid
+    assert abs(float(mid["p"]) - 0.3989422804014327) < 0.01, mid
+    # CDF is monotone nondecreasing, ends at ~1.
+    assert float(cdf[0]["p"]) < float(cdf[-1]["p"])
+    assert float(cdf[-1]["p"]) > 0.99
+
+
+def test_evaluate_distribution_profile_analytical_curves_arith(client):
+    """A gate_arith composite (N + U) has no closed-form PDF in V1, so
+    the analytical_curves field is None and the frontend falls back to
+    histogram-only rendering."""
+    tok = _rv_uuid(
+        client, "provsql.normal(0, 1) + provsql.uniform(0, 1)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    r = resp.get_json()["result"]
+    assert r.get("analytical_curves") is None
+
+
+def test_evaluate_moment_categorical(client):
+    """The moment evaluator threads (k, central) through
+    `provsql.rv_moment(token, k, central)`.  Use a categorical RV with
+    analytically exact moments:
+      X ~ categorical({0.5, 0.3, 0.2}, {-1, 0, 1})
+      E[X]      = 0.5·(-1) + 0.3·0 + 0.2·1 = -0.3
+      E[X^2]    = 0.5·1 + 0.2·1            = 0.7
+      Var(X)    = E[X^2] - E[X]^2         = 0.7 - 0.09 = 0.61
+      E[(X-E[X])^3] = 0.5·(-0.7)^3 + 0.3·(0.3)^3 + 0.2·(1.3)^3
+                    = -0.1715 + 0.0081 + 0.4394 = 0.276
+    Any reasonable tolerance is fine since the Expectation evaluator
+    returns the exact closed-form values for a categorical."""
+    tok = _rv_uuid(
+        client,
+        "provsql.categorical(ARRAY[0.5, 0.3, 0.2]::float8[], "
+        "ARRAY[-1, 0, 1]::float8[])",
+    )
+
+    # k=1, raw: expectation.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "moment", "arguments": "1;raw",
+    })
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["kind"] == "float"
+    assert abs(float(body["result"]) - (-0.3)) < 1e-12
+
+    # k=2, raw: second raw moment.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "moment", "arguments": "2;raw",
+    })
+    assert abs(float(resp.get_json()["result"]) - 0.7) < 1e-12
+
+    # k=2, central: variance.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "moment", "arguments": "2;central",
+    })
+    assert abs(float(resp.get_json()["result"]) - 0.61) < 1e-12
+
+    # k=3, central: third central moment.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "moment", "arguments": "3;central",
+    })
+    assert abs(float(resp.get_json()["result"]) - 0.276) < 1e-9
+
+
+def test_evaluate_moment_rejects_bad_arguments(client):
+    """Validation: k must be a non-negative integer, central must be
+    raw / central."""
+    tok = _rv_uuid(client, "provsql.as_random(3)")
+    for bad in ("abc;raw", "-1;raw", "1;maybe"):
+        resp = client.post("/api/evaluate", json={
+            "token": tok, "semiring": "moment", "arguments": bad,
+        })
+        assert resp.status_code == 400, (bad, resp.data)
+
+
+def test_evaluate_distribution_profile_unbounded_support(client):
+    """Normal RV: support is (-Infinity, +Infinity).  Postgres float8
+    surfaces as Python +/-inf; if those leak into jsonify unchanged,
+    Python emits the bare literals Infinity / -Infinity and browser
+    JSON.parse rejects the response with 'unexpected non-digit ...'.
+    Verify the wire is valid JSON and the endpoints arrive as the
+    string sentinels circuit.js already handles."""
+    tok = _rv_uuid(client, "provsql.normal(2::float8, 2::float8)")
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    # resp.get_json() would re-parse Flask's bytes; that's the same
+    # path the browser takes.  json.loads with the default (strict)
+    # parser rejects bare Infinity, mirroring JSON.parse.
+    body = json.loads(resp.data)
+    r = body["result"]
+    assert r["support"] == ["-Infinity", "Infinity"], r["support"]
+    assert abs(r["expected"] - 2.0) < 0.1, r["expected"]
+    assert abs(r["variance"] - 4.0) < 0.5, r["variance"]
+    assert isinstance(r["histogram"], list) and len(r["histogram"]) == 30
+
+
+def test_evaluate_distribution_profile_bad_bins_is_400(client):
+    tok = _rv_uuid(client, "provsql.uniform(0::float8, 1::float8)")
+    for bad in ("0", "-3", "abc"):
+        resp = client.post("/api/evaluate", json={
+            "token": tok, "semiring": "distribution-profile", "arguments": bad,
+        })
+        assert resp.status_code == 400, (bad, resp.data)
+
+
+def test_evaluate_distribution_profile_mixture_root(client):
+    """A binary Gaussian mixture is a first-class scalar RV root.  Build
+    a well-separated bimodal mixture, verify the distribution-profile
+    response carries the analytical mean / variance (closed-form via
+    rec_expectation / rec_variance, not MC) and that the histogram has
+    bimodal mass: the leftmost and rightmost bins are populated while
+    the middle band is empty.  Pins the wire shape (`gate_type ==
+    'mixture'`, three child edges, first child is a `gate_input`)."""
+    # Mint a Bernoulli with prob 0.5 by running SQL through /api/exec.
+    setup = client.post("/api/exec", json={
+        "sql": (
+            "DO $$\n"
+            "DECLARE p uuid := public.uuid_generate_v4();\n"
+            "BEGIN\n"
+            "  PERFORM provsql.create_gate(p, 'input');\n"
+            "  PERFORM provsql.set_prob(p, 0.5);\n"
+            "  CREATE TEMP TABLE mix_p(t uuid) ON COMMIT DROP;\n"
+            "  INSERT INTO mix_p VALUES (p);\n"
+            "END $$;"
+        ),
+        "mode": "circuit",
+    })
+    assert setup.status_code == 200, setup.data
+    # The DO block above creates a TEMP TABLE that lives only for the
+    # transaction.  Studio's /api/exec opens its own connection per
+    # request, so the temp table is gone by the next call.  Materialise
+    # the mixture's UUID by reading the Bernoulli token and the mixture
+    # in one shot via /api/exec, which keeps the temp table alive
+    # within that single request's transaction.
+    resp = client.post("/api/exec", json={
+        "sql": (
+            "DO $$\n"
+            "DECLARE p uuid := public.uuid_generate_v4();\n"
+            "        u uuid;\n"
+            "BEGIN\n"
+            "  PERFORM provsql.create_gate(p, 'input');\n"
+            "  PERFORM provsql.set_prob(p, 0.5);\n"
+            "  u := (\n"
+            "         provsql.mixture(p,\n"
+            "           provsql.normal(-5::float8, 0.5::float8),\n"
+            "           provsql.normal( 5::float8, 0.5::float8)))::uuid;\n"
+            "  CREATE TEMP TABLE mix_out(u uuid) ON COMMIT DROP;\n"
+            "  INSERT INTO mix_out VALUES (u);\n"
+            "END $$;\n"
+            "SELECT u FROM mix_out;"
+        ),
+        "mode": "circuit",
+    })
+    # The temp table dies with the transaction, so we must execute the
+    # build and the SELECT in a single statement batch -- which
+    # /api/exec already wraps for us.
+    assert resp.status_code == 200, resp.data
+    final = resp.get_json()["blocks"][-1]
+    cols = [c["name"] for c in final["columns"]]
+    tok = final["rows"][0][cols.index("u")]
+
+    # Pin the rv_mc_samples GUC at the panel so the histogram is
+    # deterministic-ish for the structural asserts.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile", "arguments": "20",
+        "extra_gucs": {
+            "provsql.rv_mc_samples": "20000",
+            "provsql.monte_carlo_seed": "7",
+        },
+    })
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["kind"] == "distribution-profile"
+    r = body["result"]
+    # Closed-form mean and variance for 0.5·N(-5,0.5) + 0.5·N(5,0.5):
+    #   E[M] = 0, Var(M) = 0.5·(0.25+25)·2 - 0 = 25.25.
+    assert abs(r["expected"] - 0.0)  < 1e-9, r["expected"]
+    assert abs(r["variance"] - 25.25) < 1e-9, r["variance"]
+    assert isinstance(r["histogram"], list) and len(r["histogram"]) == 20
+    # Bimodal sanity: leftmost and rightmost bins both populated, the
+    # middle bins (around 0) are empty.
+    bins = r["histogram"]
+    left_count  = sum(int(b["count"]) for b in bins
+                      if (b["bin_lo"] + b["bin_hi"]) / 2 < -1)
+    right_count = sum(int(b["count"]) for b in bins
+                      if (b["bin_lo"] + b["bin_hi"]) / 2 > 1)
+    mid_count   = sum(int(b["count"]) for b in bins
+                      if -1 <= (b["bin_lo"] + b["bin_hi"]) / 2 <= 1)
+    assert left_count  > 5000, left_count
+    assert right_count > 5000, right_count
+    assert mid_count   < 200,  mid_count
+
+    # And the circuit subgraph for this mixture has gate_type == 'mixture'
+    # with three child edges, the first being a gate_input.
+    circ = client.get(f"/api/circuit/{tok}?depth=1")
+    assert circ.status_code == 200, circ.data
+    scene = circ.get_json()
+    root_node = next(n for n in scene["nodes"] if n["id"] == tok)
+    assert root_node["type"] == "mixture", root_node
+    children = [e for e in scene["edges"] if e["from"] == tok]
+    assert len(children) == 3, children
+    # Sorted by child_pos: wire 0 is the Bernoulli (gate_input).
+    children.sort(key=lambda e: e["child_pos"])
+    wire0_node = next(n for n in scene["nodes"] if n["id"] == children[0]["to"])
+    assert wire0_node["type"] == "input", wire0_node

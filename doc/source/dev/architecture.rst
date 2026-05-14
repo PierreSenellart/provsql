@@ -77,8 +77,8 @@ and algorithms are in |cpp|.
 
 *SQL-callable functions*
 
-- :cfile:`provenance.c` -- error stub for the ``provenance()`` SQL
-  function (reached only when a query bypasses the planner hook).
+- :cfile:`provenance.c` -- error stub for the :sqlfunc:`provenance`
+  SQL function (reached only when a query bypasses the planner hook).
 - :cfile:`provenance_evaluate.c` -- SQL-level semiring evaluation
   (user-defined ``plus``/``times``/... functions).
 - :cfile:`aggregation_evaluate.c` -- aggregate evaluation entry point.
@@ -157,7 +157,7 @@ and algorithms are in |cpp|.
 
 *Export and visualization*
 
-- :cfile:`view_circuit.cpp` -- SQL ``view_circuit`` function
+- :cfile:`view_circuit.cpp` -- SQL :sqlfunc:`view_circuit` function
   (renders a DOT graph via ``graph-easy``).
 - :cfile:`to_prov.cpp` -- PROV-XML export.
 - :cfile:`where_provenance.cpp` -- SQL where-provenance output
@@ -296,13 +296,38 @@ defined in :cfile:`provsql_utils.h`:
    * - ``gate_delta``
      - Delta operator (δ-semiring).
    * - ``gate_value``
-     - Scalar constant value.
+     - Scalar constant value. The ``extra`` blob encodes the literal
+       in text form; the *integer* mode (parsed by
+       ``extract_constant_C``) is used in HAVING sub-circuits and
+       the *float8* mode (parsed by ``extract_constant_double``)
+       is used to lift numeric constants into the continuous
+       random-variable surface.
    * - ``gate_mulinput``
      - Multivalued input (for Boolean probability).
    * - ``gate_cmp``
      - Comparison gate used in HAVING sub-circuits (``<``, ``=``, etc.).
    * - ``gate_update``
      - Update-provenance gate.
+   * - ``gate_rv``
+     - Continuous random-variable leaf. The ``extra`` blob encodes
+       the distribution kind and parameters
+       (``normal:μ,σ``, ``uniform:a,b``, ``exponential:λ``,
+       ``erlang:k,λ``).
+   * - ``gate_arith``
+     - ``N``-ary arithmetic over scalar children. The operator tag
+       (``provsql_arith_op``: PLUS / TIMES / MINUS / DIV / NEG) is
+       stored in ``info1``.
+   * - ``gate_mixture``
+     - Probabilistic mixture of scalar random-variable roots gated by
+       a Bernoulli weight. The wire vector is ``[p, x, y]`` for a
+       Bernoulli mixture or ``[key, mul_1, …, mul_n]`` for a
+       categorical block.
+
+The three random-variable gate types (``gate_rv``, ``gate_arith``,
+``gate_mixture``) are appended to the enum before ``gate_invalid``,
+with no renumbering of older values. See
+:doc:`continuous-distributions` for the full architecture of the
+continuous-distribution surface.
 
 Edges (wires) connect parent gates to their children, forming the
 provenance formula for each query result tuple.

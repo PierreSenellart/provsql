@@ -155,7 +155,7 @@
   // explodes on aggregation circuits with "Wrong type of gate".
   window.__provsqlStudio = {
     mode, refreshRelations, escapeHtml, escapeAttr, formatCell,
-    isRightAlignedType, pushHistory,
+    isRightAlignedType, matchesProvType, pushHistory,
   };
 
   if (mode === 'where') setupWhereMode();
@@ -647,6 +647,14 @@
       if (window.ProvsqlStudio.syncCompiledSemiringAvailability) {
         window.ProvsqlStudio.syncCompiledSemiringAvailability();
       }
+      // Footer version chip: ProvSQL extension version (NULL when the
+      // extension is not installed on the connected database) and
+      // Studio package version. Discreet — runs once per /api/conn poll
+      // and is a no-op if the spans aren't present (e.g. tests).
+      const extEl = document.getElementById('version-ext');
+      const studioEl = document.getElementById('version-studio');
+      if (extEl) extEl.textContent = c.extension_version ? `ProvSQL ${c.extension_version}` : '';
+      if (studioEl) studioEl.textContent = c.studio_version ? `Studio ${c.studio_version}` : '';
       el.textContent = `${c.user}@${c.database}`;
       if (c.host) el.title = `host: ${c.host}`;
       if (dot) dot.classList.remove('is-offline');
@@ -786,6 +794,9 @@
     const timeout = document.getElementById('cfg-timeout');
     const sp      = document.getElementById('cfg-search-path');
     const tsp     = document.getElementById('cfg-tool-search-path');
+    const simplify = document.getElementById('cfg-simplify-on-load');
+    const mcSeed   = document.getElementById('cfg-monte-carlo-seed');
+    const rvSamples = document.getElementById('cfg-rv-mc-samples');
 
     async function loadConfig() {
       try {
@@ -796,6 +807,15 @@
         active.checked = (eff['provsql.active'] || 'on') !== 'off';
         verb.value     = eff['provsql.verbose_level'] || '0';
         if (verbOut) verbOut.textContent = verb.value;
+        if (simplify) {
+          simplify.checked = (eff['provsql.simplify_on_load'] || 'on') !== 'off';
+        }
+        if (mcSeed && eff['provsql.monte_carlo_seed'] != null) {
+          mcSeed.value = String(eff['provsql.monte_carlo_seed']);
+        }
+        if (rvSamples && eff['provsql.rv_mc_samples'] != null) {
+          rvSamples.value = String(eff['provsql.rv_mc_samples']);
+        }
         const opts = cfg.options || {};
         if (depth && opts.max_circuit_depth != null) {
           depth.value = String(opts.max_circuit_depth);
@@ -874,6 +894,30 @@
     active.addEventListener('change', () => {
       setGuc('provsql.active', active.checked ? 'on' : 'off');
     });
+    if (simplify) {
+      simplify.addEventListener('change', () => {
+        setGuc('provsql.simplify_on_load', simplify.checked ? 'on' : 'off');
+      });
+    }
+    if (mcSeed) {
+      // -1 means "non-deterministic"; clamp absurd negatives but allow
+      // any non-negative literal seed (including 0).
+      mcSeed.addEventListener('change', () => {
+        const raw = parseInt(mcSeed.value, 10);
+        const n = Number.isFinite(raw) ? Math.max(-1, raw) : -1;
+        mcSeed.value = String(n);
+        setGuc('provsql.monte_carlo_seed', n);
+      });
+    }
+    if (rvSamples) {
+      // 0 is meaningful (disables the MC fallback); clamp negatives.
+      rvSamples.addEventListener('change', () => {
+        const raw = parseInt(rvSamples.value, 10);
+        const n = Number.isFinite(raw) ? Math.max(0, raw) : 10000;
+        rvSamples.value = String(n);
+        setGuc('provsql.rv_mc_samples', n);
+      });
+    }
     // Live-update the value display as the slider drags; only POST on
     // release (`change`) so we don't hammer /api/config every step.
     verb.addEventListener('input', () => {
@@ -1071,8 +1115,30 @@
           // each column name as a clickable span so the user can prefill
           // the corresponding `create_provenance_mapping(...)` call.
           const canMap = r.has_provenance && !r.is_mapping && r.kind === 'table';
+          // ProvSQL-extended column types carry circuit references rather
+          // than plain scalars, so query operators on them are intercepted by
+          // the planner hook. Flag them with a small terracotta pill so the
+          // user can spot them in the schema panel; matchesProvType handles
+          // both the unqualified form (provsql on search_path) and the
+          // qualified one.
+          const colPill = c => {
+            if (matchesProvType(c.type, 'random_variable')) {
+              return `<span class="wp-schema__col-rv" title="random_variable: query operators on this column lift into provenance gates at planning time">rv</span>`;
+            }
+            if (matchesProvType(c.type, 'agg_token')) {
+              return `<span class="wp-schema__col-agg" title="agg_token: each value carries a circuit UUID; click cells to inspect the underlying gate">agg</span>`;
+            }
+            return '';
+          };
           const cols   = visibleCols.map(c => {
-            if (canMap) {
+            const pill = colPill(c);
+            // create_provenance_mapping needs a column whose value tags an
+            // input gate. random_variable / agg_token columns don't carry an
+            // extractable tag value (each row is a circuit gate or composite,
+            // not a scalar), so the click affordance would prefill a
+            // meaningless call. Render the column name as plain text in that
+            // case.
+            if (canMap && !pill) {
               return `<span class="wp-schema__col" data-action="create-mapping"`
                 + ` data-qname="${escapeAttr(qname)}"`
                 + ` data-table="${escapeAttr(r.table)}"`
@@ -1080,7 +1146,7 @@
                 + ` title="Click to create a provenance mapping on ${escapeAttr(c.name)}"`
                 + `>${escapeHtml(c.name)}</span>`;
             }
-            return escapeHtml(c.name);
+            return `${escapeHtml(c.name)}${pill}`;
           }).join(', ');
           // Mapping is the more specific classification: a mapping view
           // typically also carries an implicit provsql column (the planner
@@ -1310,10 +1376,14 @@
 
     // Click handler on result-body for UUID/agg_token cells. We rely on the
     // cell having data-circuit-uuid when it's clickable; set during render.
+    // data-row-prov (also set during render) is forwarded so the eval
+    // strip's "Condition on" auto-preset reflects the row the user just
+    // clicked, including when the target was the row's random_variable
+    // cell (whose scene root is the RV itself, not the row's prov).
     document.getElementById('result-body').addEventListener('click', (e) => {
       const cell = e.target.closest('.wp-result__cell.is-clickable');
       if (!cell || !cell.dataset.circuitUuid) return;
-      loadCircuit(cell.dataset.circuitUuid);
+      loadCircuit(cell.dataset.circuitUuid, { rowProv: cell.dataset.rowProv || '' });
     });
 
     // If a query was carried over (mode switch / preload), run it so the
@@ -1395,7 +1465,9 @@
       return;
     }
     const scene = await resp.json();
-    window.ProvsqlCircuit.renderCircuit(scene);
+    window.ProvsqlCircuit.renderCircuit(scene, {
+      rowProv: (opts && opts.rowProv) || '',
+    });
   }
 
   let _circuitLibPromise = null;
@@ -1470,6 +1542,11 @@
             <optgroup label="Custom Semirings" id="eval-custom-group" hidden>
               <!-- populated lazily from /api/custom_semirings -->
             </optgroup>
+            <optgroup label="Distribution">
+              <option value="distribution-profile">Distribution profile</option>
+              <option value="moment">Moment</option>
+              <option value="sample">Sample</option>
+            </optgroup>
             <optgroup label="Other">
               <option value="probability">Probability</option>
               <option value="prov-xml">PROV-XML export</option>
@@ -1506,6 +1583,32 @@
                  value="0.8;0.2" placeholder="epsilon;delta"
                  autocomplete="off" spellcheck="false"
                  title="WeightMC parameters: epsilon;delta (defaults: 0.8;0.2)">
+          <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
+                 min="1" step="1" placeholder="bins" value="30"
+                 autocomplete="off" title="Histogram bin count for the distribution profile">
+          <input type="number" class="cv-eval__args" id="eval-args-moment-k" hidden
+                 min="0" step="1" placeholder="k" value="2"
+                 autocomplete="off" title="Moment order k (k=1 gives the mean, k=2 with central=on gives the variance)">
+          <select class="cv-eval__args" id="eval-args-moment-central" hidden
+                  title="Raw moment E[X^k] vs central moment E[(X − E[X])^k]">
+            <option value="false">raw</option>
+            <option value="true">central</option>
+          </select>
+          <input type="number" class="cv-eval__args" id="eval-args-sample-n" hidden
+                 min="1" step="1" placeholder="target n" value="100"
+                 autocomplete="off"
+                 title="Target number of samples.  Without conditioning, every draw is kept, so this is just the draw count.  With conditioning, rv_sample uses rejection sampling: draws from the unconditional distribution are accepted only when the event holds, capped at provsql.rv_mc_samples trials.  If the event is rare, you may get fewer accepts than requested.">
+          <span class="cv-eval__args-group" id="eval-args-condition-group" hidden>
+            <span class="cv-eval__args-label">Conditioned by:</span>
+            <span class="cv-eval__cond-badge" id="eval-args-condition-badge" hidden
+                  title="The Condition input was auto-filled with the row's provenance gate, the canonical conditioning event for expected(rv, provenance()).  Edit it to override.">
+              <i class="fas fa-link"></i> row prov
+            </span>
+            <input type="text" class="cv-eval__args" id="eval-args-condition"
+                   placeholder="condition on (UUID)" autocomplete="off"
+                   spellcheck="false" size="20"
+                   title="Optional conditioning gate UUID: the result becomes the conditional distribution X | event.  Auto-filled with the row's provenance when you click into a row's circuit; clear it for the unconditional distribution.">
+          </span>
         </div>
         <div class="cv-eval__action-row">
           <button class="cv-eval__run wp-btn wp-btn--mini" id="eval-run" type="button">
@@ -1543,7 +1646,8 @@
     // display via a body-level CSS class : no re-render needed. The
     // outer span carries the full value as a title so hover always
     // reveals the original even when collapsed.
-    if ((typeName || '').toLowerCase() === 'uuid' && v != null && v !== '') {
+    const lowerType = (typeName || '').toLowerCase();
+    if ((lowerType === 'uuid' || lowerType === 'random_variable') && v != null && v !== '') {
       const s = String(v);
       // Match circuit.js's shortUuid so both views render UUIDs the same
       // way: 4 hex chars + ellipsis is enough for cursory same/different
@@ -1574,11 +1678,22 @@
     'float4', 'float8', 'real',
     'money',
     'agg_token',
+    'random_variable',
     'date', 'time', 'timetz', 'timestamp', 'timestamptz', 'interval',
     'uuid',
   ]);
   function isRightAlignedType(typeName) {
     return RIGHT_ALIGNED_TYPES.has((typeName || '').toLowerCase());
+  }
+
+  // Recognise a ProvSQL-extended column type regardless of search_path:
+  // `random_variable` and `agg_token` may surface either unqualified
+  // (provsql is on the search_path) or qualified (`provsql.random_variable`).
+  // Used by the schema panel's column-list pills and by the result-table
+  // header to flag the same columns once the data is rendered.
+  function matchesProvType(typeName, base) {
+    const s = String(typeName || '').toLowerCase();
+    return s === base || s === `provsql.${base}`;
   }
 
   // Connection-editor popover anchored to the green/red status dot.
@@ -1952,15 +2067,68 @@ async function runQuery(ev) {
         else if (c.name === 'provsql' && isWhere) { /* hidden in where mode */ }
         else displayIdx.push(i);
       });
+      // Pick the row's provenance UUID for the auto-conditioning hint
+      // we stamp on each clickable cell below: prefer the rewriter's
+      // __prov column when present (always set on tracked queries with
+      // provsql.active), otherwise fall back to a user-selected
+      // `provsql` column.  Used by circuit-mode click-through so the
+      // eval strip's "Condition on" input can default to the row's
+      // provenance even when the click target is the `random_variable`
+      // cell (whose scene root is the RV itself, not the row's prov).
+      let rowProvIdx = provIdx;
+      if (rowProvIdx === -1) {
+        const i = allCols.findIndex(c => c.name === 'provsql');
+        if (i !== -1) rowProvIdx = i;
+      }
       const headExtra = (isWhere && wrapped) ? '<th></th>' : '';
+      // Header decoration mirrors the schema-panel column list: every <th>
+      // gets a title attribute with the Postgres type so the user can hover
+      // any column to discover its type, plus a small pill for columns
+      // with ProvSQL semantics:
+      //  - terracotta `rv` for `random_variable` (operators lifted to gates)
+      //  - terracotta `agg` for `agg_token` (UUID + running value)
+      //  - purple `prov` for the `provsql` uuid column (the row's
+      //    provenance gate from add_provenance)
+      // The first two key off type_name; the third keys off the column
+      // name because `provsql` is just `uuid` at the type level.
+      const matches = env.matchesProvType || ((t, b) => String(t || '').toLowerCase() === b);
+      const headerPill = (col) => {
+        const typeName = col.type_name || '';
+        if (matches(typeName, 'random_variable')) {
+          return `<span class="wp-result__col-rv" title="random_variable: query operators on this column lift into provenance gates at planning time">rv</span>`;
+        }
+        if (matches(typeName, 'agg_token')) {
+          return `<span class="wp-result__col-agg" title="agg_token: each value carries a circuit UUID; click cells to inspect the underlying gate">agg</span>`;
+        }
+        if (col.name === 'provsql') {
+          return `<span class="wp-result__col-prov" title="provsql: the row's provenance gate UUID (added by add_provenance)">prov</span>`;
+        }
+        return '';
+      };
       head.innerHTML = displayIdx.map(i => {
-        const alignCls = env.isRightAlignedType(allCols[i].type_name) ? ' is-right' : '';
-        return `<th class="${alignCls.trim()}">${env.escapeHtml(allCols[i].name)}</th>`;
+        const col = allCols[i];
+        const typeName = col.type_name || '';
+        const alignCls = env.isRightAlignedType(typeName) ? ' is-right' : '';
+        const titleAttr = typeName ? ` title="${env.escapeAttr(typeName)}"` : '';
+        // Wrap the column name in its own span so callers that read
+        // header text (e.g. tests, accessibility tooling) can grab the
+        // name independently of the trailing pill.
+        const nameHtml = `<span class="wp-result__col-name">${env.escapeHtml(col.name)}</span>`;
+        return `<th class="${alignCls.trim()}"${titleAttr}>${nameHtml}${headerPill(col)}</th>`;
       }).join('') + headExtra;
       body.innerHTML = final.rows.map(r => {
         const sources = wrapped && wprovIdx >= 0
           ? parseWhereProvenance(r[wprovIdx], displayIdx)
           : null;
+        // Row's provenance UUID, attached to every clickable cell of
+        // this row so circuit-mode click-through can carry the row
+        // context into the eval strip's "Condition on" auto-preset.
+        const rowProv = rowProvIdx >= 0 && r[rowProvIdx]
+          ? String(r[rowProvIdx])
+          : '';
+        const rowProvAttr = rowProv
+          ? ` data-row-prov="${env.escapeAttr(rowProv)}"`
+          : '';
         const cells = displayIdx.map((idx, di) => {
           const col = allCols[idx];
           const typeName = (col.type_name || '').toLowerCase();
@@ -1969,9 +2137,12 @@ async function runQuery(ev) {
           const sourcesAttr = dataSrc ? ` data-sources="${env.escapeAttr(dataSrc)}"` : '';
           let extraCls = '';
           let extraAttr = '';
-          if (isCircuit && typeName === 'uuid' && value) {
+          // random_variable is binary-coercible with uuid and its on-wire
+          // text form is a bare UUID, so it click-throughs the same way
+          // a uuid cell does.
+          if (isCircuit && (typeName === 'uuid' || typeName === 'random_variable') && value) {
             extraCls  = ' is-clickable';
-            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
+            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
           }
           // agg_token cells: their on-wire text is the underlying UUID
           // (because provsql.aggtoken_text_as_uuid is on for studio
@@ -1984,7 +2155,7 @@ async function runQuery(ev) {
           if (typeName === 'agg_token' && value) {
             if (isCircuit) {
               extraCls  = (extraCls + ' is-clickable').trim();
-              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`;
+              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
               if (extraCls.length) extraCls = ' ' + extraCls;
             }
             extraAttr += ` title="${env.escapeAttr(String(value))}"`;
@@ -2009,6 +2180,27 @@ async function runQuery(ev) {
         } else {
           truncated.textContent = '';
           truncated.hidden = true;
+        }
+      }
+      // Auto-render the single clickable UUID: when a circuit-mode
+      // query returns exactly one cell the user could click through
+      // to a DAG, save them the click.  Two+ candidates stay
+      // ambiguous (let the user pick); zero means nothing to render.
+      // A subsequent where-mode-jump preloadCircuit still runs after
+      // this via setupCircuitMode's then() callback and overwrites
+      // the auto-rendered scene with the user-chosen one.
+      //
+      // Implementation: dispatch a synthetic click on the cell so the
+      // existing click handler (wired inside the setupCircuitMode IIFE)
+      // takes care of loadCircuit + ensureCircuitLib + the eval-strip
+      // re-bind.  This file's `renderBlocks` is at module-global
+      // scope and can't reach `loadCircuit` directly, but clicking the
+      // cell DOM element travels through whichever listener was
+      // installed for the current mode.
+      if (isCircuit) {
+        const clickable = body.querySelectorAll('[data-circuit-uuid]');
+        if (clickable.length === 1) {
+          clickable[0].click();
         }
       }
     }

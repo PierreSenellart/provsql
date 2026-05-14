@@ -51,6 +51,9 @@ const char *gate_type_name[] = {
   "value",
   "mulinput",
   "update",
+  "rv",
+  "arith",
+  "mixture",
   "invalid"
 };
 
@@ -248,7 +251,8 @@ static void OperatorGet(
  *
  * @param enumtypoid  OID of the enum type (e.g. @c provenance_gate).
  * @param label       C-string label of the enum value to look up.
- * @return            OID of the enum label's @c pg_enum row.
+ * @return            OID of the enum label's @c pg_enum row, or
+ *                    @c InvalidOid if the label is not present.
  */
 static Oid get_enum_oid(Oid enumtypoid, const char *label)
 {
@@ -258,7 +262,8 @@ static Oid get_enum_oid(Oid enumtypoid, const char *label)
   tup = SearchSysCache2(ENUMTYPOIDNAME,
                         ObjectIdGetDatum(enumtypoid),
                         CStringGetDatum(label));
-  Assert(HeapTupleIsValid(tup));
+  if (!HeapTupleIsValid(tup))
+    return InvalidOid;
 
 #if PG_VERSION_NUM >= 120000
   ret = ((Form_pg_enum) GETSTRUCT(tup))->oid;
@@ -399,6 +404,43 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_AGG_TOKEN_UUID = get_provsql_func_oid("agg_token_uuid");
   CheckOid(OID_FUNCTION_AGG_TOKEN_UUID);
 
+  /* random_variable type and its operator procedures will ship in
+   * 1.5.0.  Older schemas (notably the 1.0.0 baseline used by
+   * extension_upgrade) do not have them.  Treat each lookup as
+   * optional -- if the catalog lacks the symbol, the OID stays
+   * InvalidOid and downstream code (rv_cmp_index, the planner-hook
+   * walker) silently no-ops on such schemas because real OpExpr
+   * funcoids never equal InvalidOid.  Mirrors the
+   * GET_GATE_TYPE_OID_OPTIONAL pattern above. */
+  constants.OID_TYPE_RANDOM_VARIABLE = GetSysCacheOid2(
+    TYPENAMENSP,
+#if PG_VERSION_NUM >= 120000
+    Anum_pg_type_oid,
+#endif
+    CStringGetDatum("random_variable"),
+    ObjectIdGetDatum(constants.OID_SCHEMA_PROVSQL)
+    );
+
+  /* rv_aggregate_semimod helper used by the RV-returning aggregate
+   * rewrite (sum, avg, and any future aggregate whose result type is
+   * random_variable).  The planner-hook routes on aggtype instead of a
+   * per-aggregate OID, so no individual aggregate OID needs to be
+   * cached here; an InvalidOid for this helper just leaves the rewrite
+   * disabled on older schemas that lack the continuous-distribution
+   * surface (1.0.0 baseline used by extension_upgrade). */
+  constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD =
+    get_provsql_func_oid("rv_aggregate_semimod");
+
+  /* random_variable_{eq,ne,le,lt,ge,gt} -- order matches the
+   * ComparisonOperator enum in src/Aggregation.h (EQ=0, NE=1, LE=2,
+   * LT=3, GE=4, GT=5). */
+  constants.OID_FUNCTION_RV_CMP[0] = get_provsql_func_oid("random_variable_eq");
+  constants.OID_FUNCTION_RV_CMP[1] = get_provsql_func_oid("random_variable_ne");
+  constants.OID_FUNCTION_RV_CMP[2] = get_provsql_func_oid("random_variable_le");
+  constants.OID_FUNCTION_RV_CMP[3] = get_provsql_func_oid("random_variable_lt");
+  constants.OID_FUNCTION_RV_CMP[4] = get_provsql_func_oid("random_variable_ge");
+  constants.OID_FUNCTION_RV_CMP[5] = get_provsql_func_oid("random_variable_gt");
+
   OperatorGet("<>", PG_CATALOG_NAMESPACE, constants.OID_TYPE_UUID, constants.OID_TYPE_UUID, &constants.OID_OPERATOR_NOT_EQUAL_UUID, &constants.OID_FUNCTION_NOT_EQUAL_UUID);
   CheckOid(OID_OPERATOR_NOT_EQUAL_UUID);
   CheckOid(OID_FUNCTION_NOT_EQUAL_UUID);
@@ -410,6 +452,25 @@ static constants_t initialize_constants(bool failure_if_not_possible)
               #x); \
             if(constants.GATE_TYPE_TO_OID[gate_ ## x]==InvalidOid) \
             provsql_error("Could not initialize provsql gate type " #x); }
+
+  /** @brief Like @c GET_GATE_TYPE_OID but tolerates a missing enum value.
+   *
+   * Used for gate types added in releases newer than the oldest schema
+   * the @c extension_upgrade test exercises (currently 1.0.0).  An
+   * intermediate state where a 1.0.0 database has been bound to a newer
+   * shared library is possible (e.g. between @c CREATE @c EXTENSION
+   * @c VERSION and @c ALTER @c EXTENSION @c UPDATE) and must not abort
+   * @c get_constants -- the missing OID stays @c InvalidOid and any
+   * attempt to actually create such a gate fails later in
+   * @c create_gate's "Invalid gate type" branch.  When the upgrade
+   * scripts catch up, the lookup succeeds and the gate becomes usable
+   * normally.  No state for @c InvalidOid is stored, so the field
+   * keeps its zero-init value (which is @c InvalidOid).
+   */
+  #define GET_GATE_TYPE_OID_OPTIONAL(x) { \
+            constants.GATE_TYPE_TO_OID[gate_ ## x] = get_enum_oid( \
+              constants.OID_TYPE_GATE_TYPE, \
+              #x); }
 
   GET_GATE_TYPE_OID(input);
   GET_GATE_TYPE_OID(plus);
@@ -426,14 +487,17 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID(value);
   GET_GATE_TYPE_OID(mulinput);
   GET_GATE_TYPE_OID(update);
+  GET_GATE_TYPE_OID_OPTIONAL(rv);
+  GET_GATE_TYPE_OID_OPTIONAL(arith);
+  GET_GATE_TYPE_OID_OPTIONAL(mixture);
 
   constants.ok=true;
 
   return constants;
 }
 
-database_constants_t *constants_cache; ///< Per-database OID constants cache (sorted by database OID)
-unsigned constants_cache_len=0;        ///< Number of valid entries in @c constants_cache
+static database_constants_t *constants_cache; ///< Per-database OID constants cache (sorted by database OID)
+static unsigned constants_cache_len=0;        ///< Number of valid entries in @c constants_cache
 
 constants_t get_constants(bool failure_if_not_possible)
 {

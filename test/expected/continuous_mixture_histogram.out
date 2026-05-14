@@ -1,0 +1,22 @@
+\set ECHO none
+set_prob
+
+(1 row)
+nb_bins
+40
+(1 row)
+range_spans_both_peaks
+t
+(1 row)
+middle_band_near_empty
+t
+(1 row)
+halves_roughly_equal
+t
+(1 row)
+bins_contiguous
+t
+(1 row)
+total_counts_match
+t
+(1 row)

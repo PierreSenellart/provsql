@@ -1,0 +1,107 @@
+\set ECHO none
+sum_two_indep_normals_exact
+t
+(1 row)
+scaled_normal_sum_exact
+t
+(1 row)
+neg_normal_in_closure_exact
+t
+(1 row)
+shared_uuid_plus_collapses_to_2x
+t
+(1 row)
+shared_uuid_plus_mixed_coeffs
+t
+(1 row)
+shared_uuid_plus_cancels_to_zero
+t
+(1 row)
+div_by_constant_folds_through_times
+t
+(1 row)
+erlang_fold_exact
+t
+(1 row)
+mixed_rates_not_folded
+t
+(1 row)
+constant_fold_neg_value
+t
+(1 row)
+identity_drop_unlocks_normal_closure
+t
+(1 row)
+zero_absorber_times
+t
+(1 row)
+cat_lift_scaled_exact
+t
+(1 row)
+cat_lift_shifted_exact
+t
+(1 row)
+cat_lift_neg_scale_exact
+t
+(1 row)
+cat_shared_mixture_plus_aggregate
+t
+(1 row)
+disjoint_islands_inclusion_exclusion
+t
+(1 row)
+shared_island_joint_table_mc
+t
+(1 row)
+shared_island_joint_table_treedec
+t
+(1 row)
+shared_island_disparate_scalars
+t
+(1 row)
+shared_bare_rv_fast_path_exact
+t
+(1 row)
+ERROR:  ProvSQL: probability_evaluate: a comparison over random variables could not be resolved analytically and the hybrid evaluator left it unresolved; call probability_evaluate(..., 'monte-carlo', <n>) directly for an MC estimate
+hybrid_off_falls_through_to_mc
+t
+(1 row)
+double_to_text_shortest_roundtrip
+t
+(1 row)
+neg_normal_folds
+t
+(1 row)
+neg_uniform_folds
+t
+(1 row)
+normal_minus_constant_folds
+t
+(1 row)
+constant_minus_normal_folds
+t
+(1 row)
+uniform_minus_constant_folds
+t
+(1 row)
+constant_minus_uniform_folds
+t
+(1 row)
+uniform_plus_constant_folds
+t
+(1 row)
+neg_exp_stays
+t
+(1 row)
+exp_plus_constant_stays
+t
+(1 row)
+uniform_plus_uniform_stays
+t
+(1 row)
+neg_normal_unlocks_analytic
+t
+(1 row)
+continuous_hybrid_done
+ok
+(1 row)

@@ -81,6 +81,38 @@ def test_schema_marks_views_propagating_provenance(client):
         })
 
 
+def test_schema_surfaces_provsql_column_types(client):
+    """The schema endpoint must report the `random_variable` and
+    `agg_token` types for columns that carry them, so the front-end can
+    render the per-column RV / AGG pills in the schema panel. The
+    fixture's search_path puts `provsql` before `public`, so
+    format_type returns the unqualified form; we accept the qualified
+    form too so the test stays robust to search_path drift."""
+    setup = (
+        "DROP TABLE IF EXISTS rel_test_provtypes;"
+        " CREATE TABLE rel_test_provtypes ("
+        "   id INT,"
+        "   reading random_variable,"
+        "   running agg_token"
+        " );"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    try:
+        rows = client.get("/api/schema").get_json()
+        by_qname = {f"{r['schema']}.{r['table']}": r for r in rows}
+        rel = by_qname["provsql_test.rel_test_provtypes"]
+        col_types = {c["name"]: c["type"] for c in rel["columns"]}
+        assert col_types["id"] == "integer"
+        assert col_types["reading"] in ("random_variable", "provsql.random_variable")
+        assert col_types["running"] in ("agg_token", "provsql.agg_token")
+    finally:
+        client.post(
+            "/api/exec",
+            json={"sql": "DROP TABLE rel_test_provtypes", "mode": "circuit"},
+        )
+
+
 def test_personnel_listed(client):
     resp = client.get("/api/relations")
     assert resp.status_code == 200

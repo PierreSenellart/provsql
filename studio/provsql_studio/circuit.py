@@ -37,6 +37,31 @@ _GATE_LABEL = {
     "value":    "v",
     "mulinput": "⋮",
     "update":   "υ",
+    "rv":       "ξ",
+    "arith":    "α",
+    "mixture":  "Mix",
+}
+
+# PROVSQL_ARITH_* enum tags (src/provsql_utils.h) → in-circle glyph. The
+# unary-minus tag is rendered as a bare minus: with a single child the
+# context is unambiguous, and adding "x" would burn precious circle
+# real estate.
+_ARITH_OP_GLYPH = {
+    0: "+",
+    1: "×",
+    2: "−",
+    3: "÷",
+    4: "−",
+}
+
+# Distribution-kind initials used in the in-circle label for gate_rv.
+# Same logic as gate_value: the full encoding lives in `extra`; the
+# circle just needs a glance-recognisable hint.
+_RV_KIND_INITIAL = {
+    "normal":      "N",
+    "uniform":     "U",
+    "exponential": "Exp",
+    "erlang":      "Erl",
 }
 
 
@@ -68,8 +93,118 @@ def _gate_label(row: dict) -> str:
         # does for the same operators in the editor.
         return _truncate(_CMP_GLYPH.get(row["info1_name"], row["info1_name"]))
     if t == "value" and row.get("extra"):
+        return row["extra"]
+    if t == "mulinput" and row.get("extra"):
+        # Categorical mixture's mulinputs carry the outcome value in
+        # extra (vs repair_key's mulinputs which leave it empty and
+        # encode the value-index in info1).  Render the outcome value
+        # inline so the categorical block's payload is visible at a
+        # glance, mirroring gate_value's treatment.
         return _truncate(row["extra"])
+    if t == "rv" and row.get("extra"):
+        return _format_rv_label(row["extra"])
+    if t == "arith":
+        # circuit_subgraph returns info1 as TEXT (uniform-typed column); coerce
+        # to int before the enum-tag lookup. Anything unparseable falls
+        # through to the generic 'α' glyph below.
+        try:
+            tag = int(row["info1"]) if row.get("info1") is not None else None
+        except (TypeError, ValueError):
+            tag = None
+        glyph = _ARITH_OP_GLYPH.get(tag)
+        if glyph is not None:
+            return glyph
+    if t == "input" and _is_anonymous_input(row):
+        # Anonymous gate_input (no source row in any tracked relation:
+        # provsql.mixture's Bernoulli, the synthetic categorical-block
+        # anchor minted by the simplifier, or any `create_gate(uuid,
+        # 'input') + set_prob` the user mints by hand) renders its
+        # probability as an inline percentage instead of the generic ι
+        # glyph -- gives an at-a-glance hint of the gate's role.  We
+        # always display the prob inline, including the 1.0 case (the
+        # categorical block's anchor-key default), so the synthetic
+        # dec-in-N gates the simplifier mints don't render as a bare ι
+        # next to their dec-mul-N siblings (which carry the actual
+        # outcome value as label).  Inputs tied to a tracked relation
+        # take the other branch (`_is_anonymous_input` -> False) and
+        # keep ι: there `ι` reads as "this is a variable", with the
+        # per-row probability one click into the inspector away.  The
+        # percent sign distinguishes the label from a regular scalar
+        # value displayed on a gate_value circle.
+        prob = row.get("prob")
+        if (prob is not None
+                and isinstance(prob, (int, float))
+                and not (prob != prob)       # NaN guard
+                and prob != 1.0):
+            return _format_prob_label(float(prob))
     return _GATE_LABEL.get(t, t)
+
+
+def _is_anonymous_input(row: dict) -> bool:
+    """An input gate is "anonymous" when no row in any tracked relation
+    references its UUID.
+
+    The discriminator is set by `_fetch_subgraph` via a single bulk
+    catalog scan: it walks every user-schema table that carries a
+    `provsql uuid` column, collects which of the rendered gate UUIDs
+    appear there, and stamps the matching rows with
+    `is_tracked_input=True`.  The Boolean is then mirrored into the
+    per-node JSON returned to the front-end so `circuit.js` can
+    distinguish the two flavours without re-deriving the lookup
+    client-side.
+
+    The historical heuristic (`info1 == 0 / null`) was unsound:
+    `add_provenance` doesn't write into `info1`, so a tracked-table
+    input gate with a user-pinned probability would be misclassified
+    as anonymous and rendered with its percentage instead of ι.  The
+    synthetic `dec-in-N` gates the simplifier mints (jsonb branch)
+    have `info1` literally null and are correctly anonymous; both the
+    bulk lookup and the heuristic agree on those.
+    """
+    return not row.get("is_tracked_input", False)
+
+
+def _format_prob_label(p: float) -> str:
+    """Render a probability for an in-circle label as a compact percent.
+
+    Two decimal places at most, trailing zeros stripped (0.30 → "30%",
+    0.025 → "2.5%", 0.99 → "99%").  Very small probabilities fall back
+    to scientific notation so they don't round to "0%" and disappear."""
+    if p == 0:
+        return "0%"
+    pct = p * 100.0
+    if 0 < pct < 0.01:
+        return f"{pct:.1e}%"
+    s = f"{pct:.2f}".rstrip("0").rstrip(".")
+    return s + "%"
+
+
+def _format_rv_label(extra: str) -> str:
+    """Render the in-circle label for a gate_rv leaf from its extra text.
+
+    Extra is "<kind>:<p1>[,<p2>]" (see src/RandomVariable.{h,cpp}).
+    Numeric parameters are shortened to four significant figures so
+    folded-distribution labels like
+    "normal:23.333333333333336,1.6666666666666667" do not blow the
+    circle wide; the full text is still surfaced by the inspector
+    under the `distribution` row.
+    """
+    s = str(extra).strip()
+    kind, _, params = s.partition(":")
+    label = _RV_KIND_INITIAL.get(kind.strip().lower())
+    if label is None:
+        return s
+    p = params.strip()
+    if not p:
+        return label
+    parts = []
+    for raw in p.split(","):
+        token = raw.strip()
+        try:
+            parts.append(f"{float(token):.4g}")
+        except ValueError:
+            parts.append(token)
+    return f"{label}({','.join(parts)})"
 
 
 def _truncate(s: str, n: int = 6) -> str:
@@ -84,6 +219,11 @@ _CMP_GLYPH = {
     "<>": "≠",
     "!=": "≠",
 }
+
+
+class _SimplifiedNotAvailable(Exception):
+    """Raised by _fetch_subgraph when the running provsql lacks
+    `simplified_circuit_subgraph` (older extension version)."""
 
 
 class CircuitTooLarge(Exception):
@@ -106,6 +246,8 @@ def get_circuit(
     root: str,
     depth: int,
     max_nodes: int,
+    simplified: bool = True,
+    extra_gucs: dict[str, str] | None = None,
 ) -> dict:
     """Return `{nodes, edges, root, depth}` for the BFS-bounded subgraph rooted
     at `root` (a UUID-formatted string). Raises CircuitTooLarge if the cap is
@@ -117,7 +259,16 @@ def get_circuit(
     target is past our render bound). The BFS-depth invariant guarantees
     those parents sit exactly at depth `depth`, so collecting parent UUIDs
     from depth-`depth+1` edge rows yields the frontier set directly."""
-    overshot = _fetch_subgraph(pool, root, depth + 1)
+    try:
+        overshot = _fetch_subgraph(
+            pool, root, depth + 1,
+            simplified=simplified, extra_gucs=extra_gucs)
+    except _SimplifiedNotAvailable:
+        # Older provsql lacks the new accessor; degrade to the
+        # persisted-DAG path so the panel still renders something.
+        overshot = _fetch_subgraph(
+            pool, root, depth + 1,
+            simplified=False, extra_gucs=extra_gucs)
     if not overshot:
         return {"nodes": [], "edges": [], "root": root, "depth": depth}
     raw = [r for r in overshot if r["depth"] <= depth]
@@ -149,7 +300,11 @@ def get_circuit(
     return _layout(raw, root=root, depth=depth, frontier_uuids=has_deeper)
 
 
-def _fetch_subgraph(pool: ConnectionPool, root: str, depth: int) -> list[dict]:
+def _fetch_subgraph(
+    pool: ConnectionPool, root: str, depth: int,
+    *, simplified: bool = False,
+    extra_gucs: dict[str, str] | None = None,
+) -> list[dict]:
     # `%s::int` is required: psycopg may bind small Python ints as smallint,
     # and PG's function-overload resolution then can't reach
     # provsql.circuit_subgraph(uuid, int).
@@ -161,24 +316,95 @@ def _fetch_subgraph(pool: ConnectionPool, root: str, depth: int) -> list[dict]:
     # the in-circle label can read "sum" / "<=" instead of a generic Σ / ≷.
     # The CASE only evaluates the branch matching gate_type, so non-int
     # info1 values are never cast.
-    sql = (
-        "SELECT cs.node::text, cs.parent::text, cs.child_pos, cs.gate_type::text, "
-        "       cs.info1, cs.info2, provsql.get_extra(cs.node)::text AS extra, "
-        "       CASE WHEN cs.gate_type = 'agg' THEN "
-        "              (SELECT proname::text FROM pg_proc WHERE oid = cs.info1::int) "
-        "            WHEN cs.gate_type = 'cmp' THEN "
-        "              (SELECT oprname::text FROM pg_operator WHERE oid = cs.info1::int) "
-        "            ELSE NULL END AS info1_name, "
-        "       CASE WHEN cs.gate_type = 'agg' THEN "
-        "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int) "
-        "            ELSE NULL END AS info2_name, "
-        "       cs.depth "
-        "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
-    )
+    if simplified:
+        # The simplified function returns jsonb (one object per row);
+        # expand it via jsonb_array_elements and project the same
+        # columns as the persisted-DAG query.  `extra` is inlined in
+        # the jsonb (the simplifier may introduce extras not visible
+        # in the persisted store), so we read it from there rather
+        # than calling get_extra (which would hit the mmap).  `prob`
+        # is also inlined (for gate_input / gate_mulinput) so consumers
+        # don't need a separate provsql.get_prob round-trip -- and
+        # crucially, that round-trip would fail on the synthetic
+        # "dec-in-N" / "dec-mul-N" UUIDs the hybrid simplifier mints
+        # for anonymous-key categorical blocks and joint-table inlinings.
+        sql = (
+            "WITH src AS ("
+            "  SELECT (e->>'node')        AS node,"
+            "         (e->>'parent')      AS parent,"
+            "         (e->>'child_pos')::int AS child_pos,"
+            "         (e->>'gate_type')   AS gate_type,"
+            "         (e->>'info1')       AS info1,"
+            "         (e->>'info2')       AS info2,"
+            "         (e->>'extra')       AS extra,"
+            "         (e->>'prob')::float8 AS prob,"
+            "         (e->>'depth')::int  AS depth"
+            "  FROM jsonb_array_elements("
+            "         provsql.simplified_circuit_subgraph(%s::uuid, %s::int)) AS e"
+            ") "
+            "SELECT cs.node, cs.parent, cs.child_pos, cs.gate_type,"
+            "       cs.info1, cs.info2, cs.extra,"
+            "       CASE WHEN cs.gate_type = 'agg' THEN"
+            "              (SELECT proname::text FROM pg_proc WHERE oid = cs.info1::int)"
+            "            WHEN cs.gate_type = 'cmp' THEN"
+            "              (SELECT oprname::text FROM pg_operator WHERE oid = cs.info1::int)"
+            "            ELSE NULL END AS info1_name,"
+            "       CASE WHEN cs.gate_type = 'agg' THEN"
+            "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int)"
+            "            ELSE NULL END AS info2_name,"
+            "       cs.prob,"
+            "       cs.depth "
+            "FROM src cs"
+        )
+    else:
+        sql = (
+            "SELECT cs.node::text, cs.parent::text, cs.child_pos, cs.gate_type::text, "
+            "       cs.info1, cs.info2, provsql.get_extra(cs.node)::text AS extra, "
+            "       CASE WHEN cs.gate_type = 'agg' THEN "
+            "              (SELECT proname::text FROM pg_proc WHERE oid = cs.info1::int) "
+            "            WHEN cs.gate_type = 'cmp' THEN "
+            "              (SELECT oprname::text FROM pg_operator WHERE oid = cs.info1::int) "
+            "            ELSE NULL END AS info1_name, "
+            "       CASE WHEN cs.gate_type = 'agg' THEN "
+            "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int) "
+            "            ELSE NULL END AS info2_name, "
+            "       provsql.get_prob(cs.node)::float8 AS prob, "
+            "       cs.depth "
+            "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
+        )
     out: list[dict] = []
+    import psycopg
+    from psycopg import sql as pg_sql
     with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(sql, (root, depth))
-        for node, parent, child_pos, gate_type, info1, info2, extra, info1_name, info2_name, d in cur.fetchall():
+        # Apply panel-managed GUCs (provsql.simplify_on_load, ...) so
+        # the user's panel choice controls what
+        # simplified_circuit_subgraph returns.  Mirrors evaluate_circuit
+        # / exec_batch; lazy-import the whitelist to avoid a circular
+        # import at module load.
+        if extra_gucs:
+            from . import db as _db
+            for guc_name, guc_val in extra_gucs.items():
+                if guc_name not in _db._PANEL_GUCS:
+                    continue
+                cur.execute(
+                    pg_sql.SQL("SET LOCAL {} = {}").format(
+                        pg_sql.Identifier(*guc_name.split(".")),
+                        pg_sql.Literal(guc_val),
+                    )
+                )
+        try:
+            cur.execute(sql, (root, depth))
+        except psycopg.errors.UndefinedFunction as e:
+            # provsql.simplified_circuit_subgraph wasn't installed on
+            # this database; signal the caller to retry against
+            # circuit_subgraph (the persisted DAG).  Only convert the
+            # specific missing-function diagnostic; everything else
+            # propagates.
+            if simplified and "simplified_circuit_subgraph" in str(e):
+                raise _SimplifiedNotAvailable() from e
+            raise
+        for (node, parent, child_pos, gate_type, info1, info2, extra,
+             info1_name, info2_name, prob, d) in cur.fetchall():
             out.append({
                 "node": node,
                 "parent": parent,
@@ -189,9 +415,91 @@ def _fetch_subgraph(pool: ConnectionPool, root: str, depth: int) -> list[dict]:
                 "extra": extra,
                 "info1_name": info1_name,
                 "info2_name": info2_name,
+                "prob": prob,
                 "depth": d,
             })
+        # Decide which gate_input rows are tracked-table inputs (their
+        # UUID appears as a `provsql` value in some user-schema
+        # relation) vs anonymous (mixture's Bernoulli, simplifier-
+        # minted dec-in-N anchor, hand-minted Bernoulli, ...).  The
+        # label decision in `_gate_label` reads `is_tracked_input`
+        # straight off the row, so this single bulk lookup replaces
+        # what would otherwise be one resolve_input round-trip per
+        # input gate.  Synthetic dec-in-N IDs minted by the hybrid
+        # simplifier never appear as `provsql` values, so they're
+        # naturally classified anonymous without a special case.
+        candidate_uuids = {
+            r["node"] for r in out
+            if r["gate_type"] == "input" and _looks_like_uuid(r["node"])
+        }
+        tracked = _fetch_tracked_input_uuids(cur, candidate_uuids)
+        for r in out:
+            r["is_tracked_input"] = (
+                r["gate_type"] == "input" and r["node"] in tracked)
     return out
+
+
+def _looks_like_uuid(s: object) -> bool:
+    """Cheap shape check: real provsql input UUIDs are 36-char strings
+    of the standard 8-4-4-4-12 hex form.  The simplifier mints synthetic
+    `dec-in-N` / `dec-mul-N` IDs that fail this shape; skipping them
+    keeps the bulk catalog lookup from issuing a no-op `WHERE provsql =
+    ANY(...)` over user tables for IDs that can never match (and that
+    psycopg would otherwise reject when it tries to bind them as uuid)."""
+    if not isinstance(s, str) or len(s) != 36:
+        return False
+    return s[8] == s[13] == s[18] == s[23] == "-"
+
+
+def _fetch_tracked_input_uuids(cur, candidate_uuids):
+    """Return the subset of @p candidate_uuids that appear as `provsql`
+    values in any user-schema tracked relation.
+
+    Single bulk catalog scan + UNION ALL over every relevant table;
+    `provsql.active = off` for the duration so the rewriter doesn't
+    auto-append the provsql column to each branch (which would force
+    further gate creation just to render the label).  The Python set
+    return is consumed by `_fetch_subgraph` to stamp
+    `is_tracked_input` on each row before `_gate_label` runs.
+    """
+    if not candidate_uuids:
+        return set()
+    cur.execute(
+        "SELECT (c.oid::regclass)::text "
+        "FROM pg_attribute a "
+        "  JOIN pg_class c ON a.attrelid = c.oid "
+        "  JOIN pg_namespace ns ON c.relnamespace = ns.oid "
+        "  JOIN pg_type ty ON a.atttypid = ty.oid "
+        "WHERE a.attname = 'provsql' "
+        "  AND ty.typname = 'uuid' "
+        "  AND c.relkind = 'r' "
+        "  AND ns.nspname <> 'provsql' "
+        "  AND a.attnum > 0"
+    )
+    relations = [row[0] for row in cur.fetchall()]
+    if not relations:
+        return set()
+    from psycopg import sql as pg_sql
+    cur.execute("SET LOCAL provsql.active = off")
+    branches = []
+    for rel_text in relations:
+        # `rel_text` came from `c.oid::regclass::text` so it's already
+        # correctly schema-qualified and quoted by PostgreSQL; pass it
+        # through as raw SQL.  The named-parameter %(uu)s binds the
+        # candidate-UUID list once and is reused across every branch.
+        branches.append(
+            pg_sql.SQL("SELECT t.provsql FROM {} t WHERE t.provsql = ANY(%(uu)s)")
+                .format(pg_sql.SQL(rel_text))
+        )
+    final_sql = (
+        pg_sql.SQL("SELECT DISTINCT provsql::text FROM (")
+        + pg_sql.SQL(" UNION ALL ").join(branches)
+        + pg_sql.SQL(") u")
+    )
+    # ANY() needs a list (psycopg binds Python list as PG array of the
+    # column's type).  Pass strings; PG casts to uuid at the comparison.
+    cur.execute(final_sql, {"uu": list(candidate_uuids)})
+    return {row[0] for row in cur.fetchall()}
 
 
 def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]) -> dict:
@@ -230,6 +538,10 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             "x":         pos.get(r["node"], (0, 0))[0],
             "y":         pos.get(r["node"], (0, 0))[1],
             "frontier":  r["node"] in frontier_uuids,
+            # Mirror server-side label dispatch onto the front-end so
+            # the post-set_prob refresh in circuit.js can re-derive the
+            # label without re-querying the bulk catalog scan.
+            "tracked_input": bool(r.get("is_tracked_input")),
         })
     edges = [
         {"from": r["parent"], "to": r["node"], "child_pos": r["child_pos"]}

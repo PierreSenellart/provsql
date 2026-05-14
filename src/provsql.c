@@ -64,12 +64,16 @@ PG_MODULE_MAGIC; ///< Required PostgreSQL extension magic block
  * ------------------------------------------------------------------------- */
 
 bool provsql_interrupted = false;
-bool provsql_active = true; ///< @c true while ProvSQL query rewriting is enabled
+static bool provsql_active = true; ///< @c true while ProvSQL query rewriting is enabled
 bool provsql_where_provenance = false;
-bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
+static bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC
+int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
+int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
+bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
+bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
@@ -147,12 +151,12 @@ typedef struct reduce_varattno_mutator_context {
 
 /**
  * @brief Tree-mutator callback that adjusts Var attribute numbers.
- * @param node     Current expression tree node.
- * @param context  Mutation context carrying varno and offset.
- * @return         Possibly modified node.
+ * @param node  Current expression tree node.
+ * @param ctx   Pointer to a @c reduce_varattno_mutator_context.
+ * @return      Possibly modified node.
  */
-static Node *reduce_varattno_mutator(Node *node,
-                                     reduce_varattno_mutator_context *context) {
+static Node *reduce_varattno_mutator(Node *node, void *ctx) {
+  reduce_varattno_mutator_context *context = (reduce_varattno_mutator_context *)ctx;
   if (node == NULL)
     return NULL;
 
@@ -164,8 +168,7 @@ static Node *reduce_varattno_mutator(Node *node,
     }
   }
 
-  return expression_tree_mutator(node, reduce_varattno_mutator,
-                                 (void *)context);
+  return expression_tree_mutator(node, reduce_varattno_mutator, ctx);
 }
 
 /**
@@ -187,7 +190,7 @@ static void reduce_varattno_by_offset(List *targetList, Index varno,
 
   foreach (lc, targetList) {
     Node *te = lfirst(lc);
-    expression_tree_mutator(te, reduce_varattno_mutator, (void *)&context);
+    expression_tree_mutator(te, reduce_varattno_mutator, &context);
   }
 }
 
@@ -220,13 +223,14 @@ static bool is_target_agg_var(Node *node,
  * window functions, etc.), wraps the Var in an explicit agg_token→original
  * cast so that parent nodes receive the expected type.
  *
- * @param node     Current expression tree node.
- * @param context  Mutation context with varno, varattno, and constants.
- * @return         Possibly modified node.
+ * @param node  Current expression tree node.
+ * @param ctx   Pointer to an @c aggregation_type_mutator_context (varno,
+ *              varattno, and constants).
+ * @return      Possibly modified node.
  */
 static Node *
-aggregation_type_mutator(Node *node,
-                         aggregation_type_mutator_context *context) {
+aggregation_type_mutator(Node *node, void *ctx) {
+  aggregation_type_mutator_context *context = (aggregation_type_mutator_context *)ctx;
   if (node == NULL)
     return NULL;
 
@@ -264,8 +268,7 @@ aggregation_type_mutator(Node *node,
       v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
     }
   }
-  return expression_tree_mutator(node, aggregation_type_mutator,
-                                 (void *)context);
+  return expression_tree_mutator(node, aggregation_type_mutator, ctx);
 }
 
 /**
@@ -762,6 +765,116 @@ static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
 }
 
 /**
+ * @brief Build the per-row provenance token for an aggregate rewrite.
+ *
+ * Used by both @c make_aggregation_expression (for the agg_token /
+ * @c provenance_semimod path) and @c make_rv_aggregate_expression (for
+ * the inline RV-aggregate path).  Combines @p prov_atts via
+ * @c provenance_times (under @c SR_TIMES) or @c provenance_monus
+ * (under @c SR_MONUS); a single @c prov_att is returned as-is.
+ *
+ * @return  An @c Expr returning UUID; never @c NULL.
+ */
+static Expr *combine_prov_atts(const constants_t *constants,
+                               List *prov_atts, semiring_operation op) {
+  FuncExpr *combine;
+
+  if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
+    return (Expr *)linitial(prov_atts);
+
+  combine = makeNode(FuncExpr);
+  if (op == SR_TIMES) {
+    ArrayExpr *array = makeNode(ArrayExpr);
+
+    combine->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+    combine->funcvariadic = true;
+
+    array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+    array->element_typeid = constants->OID_TYPE_UUID;
+    array->elements = prov_atts;
+    array->location = -1;
+
+    combine->args = list_make1(array);
+  } else { // SR_MONUS
+    combine->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
+    combine->args = prov_atts;
+  }
+  combine->funcresulttype = constants->OID_TYPE_UUID;
+  combine->location = -1;
+  return (Expr *)combine;
+}
+
+/**
+ * @brief Inline rewrite of an RV-returning aggregate into the same
+ *        aggregate over provenance-wrapped per-row arguments.
+ *
+ * Originally Phase 1 of the SUM-over-RV story (see @c aggregation-of-rvs.md);
+ * extended to any aggregate whose result type is @c random_variable
+ * (e.g. @c provsql.sum, @c provsql.avg).  Replaces @c agg(@c x) with an
+ * Aggref whose per-row argument is lifted through @c rv_aggregate_semimod
+ * to attach the row's provenance: each row contributes
+ * @c mixture(prov_token, X_i, as_random(0)).  The aggregate itself
+ * (@c aggfnoid) is preserved verbatim, so its SFUNC / FFUNC decide what
+ * gate shape to build from the per-row mixtures.  In particular:
+ *  - @c sum(random_variable) collects the mixtures into a single
+ *    @c gate_arith @c PLUS root, realising
+ *    @f$\mathrm{SUM}(x) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i@f$;
+ *  - @c avg(random_variable) walks each mixture to recover @c prov_i
+ *    and emits @c gate_arith(DIV, @c sum(mixture(p_i,x_i,0)),
+ *    @c sum(mixture(p_i,1,0))), the natural lift of "AVG = SUM / COUNT"
+ *    into the @c random_variable algebra.
+ *
+ * Routing happens at @c make_aggregation_expression on
+ * @c agg_ref->aggtype @c == @c OID_TYPE_RANDOM_VARIABLE, so any future
+ * RV-returning aggregate inherits the same per-row provenance wrap
+ * without further C-side dispatch.
+ *
+ * SR_PLUS (UNION outer level) is handled by the caller; this builder
+ * never runs for SR_PLUS.
+ */
+static Expr *make_rv_aggregate_expression(const constants_t *constants,
+                                          Aggref *agg_ref, List *prov_atts,
+                                          semiring_operation op) {
+  Expr *prov_expr = combine_prov_atts(constants, prov_atts, op);
+  Expr *rv_arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
+  FuncExpr *wrap;
+  Aggref *new_agg;
+  TargetEntry *te;
+
+  /* Wrap the per-row RV in mixture(prov, rv, as_random(0)) via the
+   * rv_aggregate_semimod SQL helper.  Going through the helper avoids
+   * having to look up the specific (uuid, random_variable,
+   * random_variable) overload of mixture and the (double precision)
+   * overload of as_random at OID-cache time. */
+  wrap = makeNode(FuncExpr);
+  wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_SEMIMOD;
+  wrap->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
+  wrap->args = list_make2(prov_expr, rv_arg);
+  wrap->location = -1;
+
+  /* Rebuild an Aggref calling the SAME aggregate (sum_rv, avg_rv, ...),
+   * but with the argument now wrapped.  Inherit the original Aggref's
+   * clause positioning; aggargtypes / aggtype stay random_variable. */
+  te = makeNode(TargetEntry);
+  te->resno = 1;
+  te->expr = (Expr *)wrap;
+
+  new_agg = makeNode(Aggref);
+  new_agg->aggfnoid = agg_ref->aggfnoid;
+  new_agg->aggtype = constants->OID_TYPE_RANDOM_VARIABLE;
+  new_agg->aggargtypes = list_make1_oid(constants->OID_TYPE_RANDOM_VARIABLE);
+  new_agg->aggkind = AGGKIND_NORMAL;
+  new_agg->aggtranstype = InvalidOid;
+  new_agg->args = list_make1(te);
+  new_agg->location = agg_ref->location;
+#if PG_VERSION_NUM >= 140000
+  new_agg->aggno = new_agg->aggtransno = -1;
+#endif
+
+  return (Expr *)new_agg;
+}
+
+/**
  * @brief Build the provenance expression for a single aggregate function.
  *
  * For @c SR_PLUS (union context) returns the first provenance attribute
@@ -795,6 +908,18 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     result = linitial(prov_atts);
   } else {
     Oid aggregation_function = agg_ref->aggfnoid;
+
+    /* Aggregates that return random_variable (sum_rv, avg_rv, and any
+     * future RV-returning aggregate) get a different rewrite: instead
+     * of going through provenance_semimod (which builds a gate_value
+     * from CAST(val AS VARCHAR), nonsensical for an RV), each per-row
+     * argument is wrapped in mixture(prov, rv, as_random(0)) and the
+     * original aggregate's SFUNC / FFUNC decide what gate shape to
+     * build from the resulting mixtures.  See aggregation-of-rvs.md. */
+    if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
+        agg_ref->aggtype == constants->OID_TYPE_RANDOM_VARIABLE) {
+      return make_rv_aggregate_expression(constants, agg_ref, prov_atts, op);
+    }
 
     if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
       expr = linitial(prov_atts);
@@ -880,6 +1005,10 @@ static Expr *make_aggregation_expression(const constants_t *constants,
 /* Forward declaration needed because having_BoolExpr_to_provenance and
  * having_Expr_to_provenance_cmp are mutually recursive. */
 static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *constants, bool negated);
+
+/* Forward declaration: defined alongside the other tree walkers
+ * further down in the file. */
+static bool needs_having_lift(Node *havingQual, const constants_t *constants);
 
 /**
  * @brief Convert a comparison @c OpExpr on aggregate results into a
@@ -1062,6 +1191,263 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
     provsql_error("Unknown structure within Boolean expression");
 }
 
+/* -------------------------------------------------------------------------
+ * Random-variable WHERE-clause rewriting
+ *
+ * Mirror of the HAVING trio above.  An OpExpr whose @c opfuncid matches
+ * one of the @c random_variable_{eq,ne,le,lt,ge,gt} procedures is an
+ * RV comparison; the planner hook lifts it out of @c jointree->quals,
+ * builds an equivalent @c provenance_cmp(left_uuid, op_oid, right_uuid)
+ * @c FuncExpr, and conjoins the resulting UUID into the row's
+ * provenance via @c provenance_times.  The lifted WHERE conjunct is
+ * removed (or the whole WHERE replaced by @c NULL when only RV cmps
+ * were present); what remains is purely Boolean and the executor
+ * evaluates it in the usual way.  The RV-cmp operators themselves are
+ * boolean placeholders -- their procedure raises if reached, which can
+ * happen only when the planner hook is bypassed (e.g. provsql.active
+ * off).
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Test whether @p funcoid is one of the @c random_variable_*
+ *        comparison procedures, and if so return its
+ *        @c ComparisonOperator index.
+ *
+ * @param  constants  Extension OID cache.
+ * @param  funcoid    Procedure OID to test (typically @c OpExpr->opfuncid).
+ * @return Index in @c [0..6) on match, @c -1 otherwise.  Match indices
+ *         line up with @c ComparisonOperator (EQ=0, NE=1, LE=2, LT=3,
+ *         GE=4, GT=5).
+ */
+static int rv_cmp_index(const constants_t *constants, Oid funcoid)
+{
+  for (int i = 0; i < 6; ++i) {
+    if (funcoid == constants->OID_FUNCTION_RV_CMP[i])
+      return i;
+  }
+  return -1;
+}
+
+/**
+ * @brief Wrap an expression returning @c random_variable in a
+ *        binary-coercible cast to @c uuid.
+ *
+ * Operand of the comparison may be a Var, a constant lifted by an
+ * implicit cast, or another OpExpr (e.g. <tt>a + b</tt>).
+ * @c random_variable and @c uuid share the same byte layout, so we
+ * emit a @c RelabelType node -- the planner sees a zero-cost type
+ * relabel, the executor never dispatches through a runtime
+ * conversion function.
+ */
+static Expr *
+wrap_random_variable_uuid(Node *operand, const constants_t *constants)
+{
+  RelabelType *rt = makeNode(RelabelType);
+  rt->arg = (Expr *) operand;
+  rt->resulttype = constants->OID_TYPE_UUID;
+  rt->resulttypmod = -1;
+  rt->resultcollid = InvalidOid;
+  rt->relabelformat = COERCE_IMPLICIT_CAST;
+  rt->location = -1;
+  return (Expr *) rt;
+}
+
+/* Forward declaration: the BoolExpr and Expr walkers below are mutually
+ * recursive (BoolExpr recurses into Expr for each AND/OR child). */
+static FuncExpr *rv_Expr_to_provenance(Expr *expr,
+                                       const constants_t *constants,
+                                       bool negated);
+
+/**
+ * @brief Convert a single RV-comparison @c OpExpr into a
+ *        @c provenance_cmp() FuncExpr returning UUID.
+ *
+ * If @p negated is true the operator OID is replaced by its negator
+ * (so <tt>NOT (a &gt; b)</tt> becomes <tt>a &le; b</tt> at the
+ * provenance level), exactly as @c having_OpExpr_to_provenance_cmp
+ * does.
+ *
+ * @param opExpr    The comparison expression from the WHERE clause.
+ *                  Must satisfy @c rv_cmp_index(opExpr->opfuncid) &ge; 0;
+ *                  callers are responsible for the type check.
+ * @param constants Extension OID cache.
+ * @param negated   Whether the expression appears under a NOT.
+ */
+static FuncExpr *
+rv_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants_t *constants,
+                            bool negated)
+{
+  FuncExpr *cmpExpr;
+  Const    *oid_const;
+  Oid       opno = opExpr->opno;
+  Node     *left = (Node *)linitial(opExpr->args);
+  Node     *right = (Node *)lsecond(opExpr->args);
+
+  if (negated) {
+    opno = get_negator(opno);
+    if (!opno)
+      provsql_error("Missing negator for random_variable comparison");
+  }
+
+  oid_const = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                        sizeof(int32), Int32GetDatum(opno), false, true);
+
+  cmpExpr = makeNode(FuncExpr);
+  cmpExpr->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
+  cmpExpr->funcresulttype = constants->OID_TYPE_UUID;
+  cmpExpr->args = list_make3(
+    wrap_random_variable_uuid(left, constants),
+    oid_const,
+    wrap_random_variable_uuid(right, constants));
+  cmpExpr->location = opExpr->location;
+
+  return cmpExpr;
+}
+
+/**
+ * @brief Convert a Boolean combination of RV comparisons into a
+ *        @c provenance_times / @c provenance_plus expression.
+ *
+ * Same De Morgan handling as @c having_BoolExpr_to_provenance: under
+ * negation, AND ↔ OR (which means PROVENANCE_TIMES ↔ PROVENANCE_PLUS).
+ * NOT flips @c negated and recurses.
+ */
+static FuncExpr *
+rv_BoolExpr_to_provenance(BoolExpr *be, const constants_t *constants,
+                          bool negated)
+{
+  FuncExpr   *result;
+  ArrayExpr  *array;
+  List       *l = NIL;
+  ListCell   *lc;
+
+  if (be->boolop == NOT_EXPR) {
+    Expr *child = (Expr *)linitial(be->args);
+    return rv_Expr_to_provenance(child, constants, !negated);
+  }
+
+  array = makeNode(ArrayExpr);
+  array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+  array->element_typeid = constants->OID_TYPE_UUID;
+  array->location = -1;
+
+  result = makeNode(FuncExpr);
+  result->funcresulttype = constants->OID_TYPE_UUID;
+  result->funcvariadic = true;
+  result->location = be->location;
+  result->args = list_make1(array);
+
+  if ((be->boolop == AND_EXPR && !negated) ||
+      (be->boolop == OR_EXPR  && negated))
+    result->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+  else if ((be->boolop == AND_EXPR && negated) ||
+           (be->boolop == OR_EXPR  && !negated))
+    result->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
+  else
+    provsql_error("Unknown Boolean operator in random_variable WHERE clause");
+
+  foreach (lc, be->args) {
+    FuncExpr *arg = rv_Expr_to_provenance((Expr *)lfirst(lc),
+                                          constants, negated);
+    l = lappend(l, arg);
+  }
+  array->elements = l;
+
+  return result;
+}
+
+/**
+ * @brief Dispatch a WHERE sub-expression to the appropriate RV converter.
+ *
+ * Entry point for the mutual recursion between
+ * @c rv_BoolExpr_to_provenance and @c rv_OpExpr_to_provenance_cmp.
+ */
+static FuncExpr *
+rv_Expr_to_provenance(Expr *expr, const constants_t *constants, bool negated)
+{
+  if (IsA(expr, BoolExpr))
+    return rv_BoolExpr_to_provenance((BoolExpr *)expr, constants, negated);
+  if (IsA(expr, OpExpr)) {
+    OpExpr *opExpr = (OpExpr *)expr;
+    if (rv_cmp_index(constants, opExpr->opfuncid) >= 0)
+      return rv_OpExpr_to_provenance_cmp(opExpr, constants, negated);
+  }
+  provsql_error("Unsupported sub-expression in random_variable WHERE clause "
+                "(only Boolean combinations of RV comparisons are accepted)");
+  return NULL; /* unreachable, silences -Wreturn-type */
+}
+
+/**
+ * @brief Test whether an Expr (sub-)tree contains any RV comparison.
+ *
+ * Used by the WHERE-clause extractor to decide whether a top-level
+ * conjunct mentions any random_variable comparator and therefore
+ * needs lifting (or, if the conjunct mixes RV and non-RV operators
+ * in a way we cannot rewrite, errors).
+ */
+static bool
+expr_contains_rv_cmp(Node *node, const constants_t *constants)
+{
+  if (node == NULL)
+    return false;
+  if (IsA(node, OpExpr)) {
+    OpExpr *opExpr = (OpExpr *)node;
+    if (rv_cmp_index(constants, opExpr->opfuncid) >= 0)
+      return true;
+  }
+  if (IsA(node, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *)node;
+    ListCell *lc;
+    foreach (lc, be->args) {
+      if (expr_contains_rv_cmp(lfirst(lc), constants))
+        return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * @brief Test whether @p expr is a Boolean combination of @em only
+ *        random_variable comparisons (no other leaves allowed).
+ *
+ * Mirrors @c check_expr_on_aggregate / @c check_boolexpr_on_aggregate
+ * for the agg_token WHERE-to-HAVING migration path.  Recursively
+ * accepts:
+ * - @c BoolExpr (AND/OR/NOT) all of whose children pass; and
+ * - @c OpExpr matching one of the @c random_variable_* comparators.
+ *
+ * Anything else (a non-RV @c OpExpr, a @c Var, a @c Const, a non-cmp
+ * @c FuncExpr) makes the expression mixed and unsupportable by the
+ * RV-only walker, so the function returns @c false and the caller
+ * raises a clear error.
+ */
+static bool
+check_expr_on_rv(Expr *expr, const constants_t *constants)
+{
+  if (expr == NULL)
+    return false;
+  if (IsA(expr, OpExpr))
+    return rv_cmp_index(constants, ((OpExpr *)expr)->opfuncid) >= 0;
+  if (IsA(expr, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *)expr;
+    ListCell *lc;
+    foreach (lc, be->args) {
+      if (!check_expr_on_rv((Expr *)lfirst(lc), constants))
+        return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/* The earlier RV-only WHERE walker (@c extract_rv_cmps_from_quals)
+ * has been folded into the unified classifier
+ * @c migrate_probabilistic_quals further down in this file; both the
+ * agg_token and the random_variable migration paths are now special
+ * cases of one walk over @c q->jointree->quals.  See the comment on
+ * @c qual_class for the routing matrix. */
+
 /**
  * @brief Build the combined provenance expression to be added to the SELECT list.
  *
@@ -1164,21 +1550,35 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       result = (Expr *)plus;
     }
 
-    if (aggregation && !q->havingQual) {
-      FuncExpr *deltaExpr = makeNode(FuncExpr);
+    /* HAVING quals come in two flavours.  A qual that references an
+     * agg_token Var or a provenance_aggregate() wrapper must be lifted
+     * into a provenance_cmp gate so the per-group truth value is
+     * carried by the provenance circuit (and the corresponding gate_agg
+     * remains evaluable).  Anything else -- a deterministic scalar
+     * predicate, or one over random_variable aggregates collapsed by
+     * expected() / variance() / moment() to a plain double -- is left
+     * in q->havingQual for PostgreSQL to evaluate natively, and the
+     * per-group provenance still gets a delta wrapper. */
+    {
+      bool lift_having = q->havingQual != NULL &&
+                         needs_having_lift((Node *) q->havingQual, constants);
 
-      // adding the delta gate to the provenance circuit
-      deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
-      deltaExpr->args = list_make1(result);
-      deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
-      deltaExpr->location = -1;
+      if (aggregation && !lift_having) {
+        FuncExpr *deltaExpr = makeNode(FuncExpr);
 
-      result = (Expr *)deltaExpr;
-    }
+        // adding the delta gate to the provenance circuit
+        deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+        deltaExpr->args = list_make1(result);
+        deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
+        deltaExpr->location = -1;
 
-    if (q->havingQual) {
-      result = (Expr*) having_Expr_to_provenance_cmp((Expr*)q->havingQual, constants, false);
-      q->havingQual = NULL;
+        result = (Expr *)deltaExpr;
+      }
+
+      if (lift_having) {
+        result = (Expr*) having_Expr_to_provenance_cmp((Expr*)q->havingQual, constants, false);
+        q->havingQual = NULL;
+      }
     }
   }
 
@@ -1402,7 +1802,8 @@ typedef struct {
 } resolve_group_rte_ctx;
 
 static Node *
-resolve_group_rte_vars_mutator(Node *node, resolve_group_rte_ctx *ctx) {
+resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
+  resolve_group_rte_ctx *ctx = (resolve_group_rte_ctx *)raw_ctx;
   if (node == NULL)
     return NULL;
   if (IsA(node, Var)) {
@@ -1419,8 +1820,7 @@ resolve_group_rte_vars_mutator(Node *node, resolve_group_rte_ctx *ctx) {
       return resolved;
     }
   }
-  return expression_tree_mutator(node, resolve_group_rte_vars_mutator,
-                                 (void *)ctx);
+  return expression_tree_mutator(node, resolve_group_rte_vars_mutator, raw_ctx);
 }
 #endif
 
@@ -1867,12 +2267,13 @@ typedef struct aggregation_mutator_context {
 
 /**
  * @brief Tree-mutator that replaces Aggrefs with provenance-aware aggregates.
- * @param node     Current expression tree node.
- * @param context  Mutation context with prov_atts, op, and constants.
- * @return         Possibly modified node.
+ * @param node  Current expression tree node.
+ * @param ctx   Pointer to an @c aggregation_mutator_context (prov_atts,
+ *              op, and constants).
+ * @return      Possibly modified node.
  */
-static Node *aggregation_mutator(Node *node,
-                                 aggregation_mutator_context *context) {
+static Node *aggregation_mutator(Node *node, void *ctx) {
+  aggregation_mutator_context *context = (aggregation_mutator_context *)ctx;
   if (node == NULL)
     return NULL;
 
@@ -1882,7 +2283,7 @@ static Node *aggregation_mutator(Node *node,
                                                context->prov_atts, context->op);
   }
 
-  return expression_tree_mutator(node, aggregation_mutator, (void *)context);
+  return expression_tree_mutator(node, aggregation_mutator, ctx);
 }
 
 /**
@@ -2109,12 +2510,13 @@ typedef struct provenance_mutator_context {
 
 /**
  * @brief Tree-mutator that replaces provenance() calls with the actual provenance expression.
- * @param node     Current expression tree node.
- * @param context  Mutation context with the provenance expression and constants.
- * @return         Possibly modified node.
+ * @param node  Current expression tree node.
+ * @param ctx   Pointer to a @c provenance_mutator_context (provenance
+ *              expression and constants).
+ * @return      Possibly modified node.
  */
-static Node *provenance_mutator(Node *node,
-                                provenance_mutator_context *context) {
+static Node *provenance_mutator(Node *node, void *ctx) {
+  provenance_mutator_context *context = (provenance_mutator_context *)ctx;
   if (node == NULL)
     return NULL;
 
@@ -2130,7 +2532,7 @@ static Node *provenance_mutator(Node *node,
     return node;
   }
 
-  return expression_tree_mutator(node, provenance_mutator, (void *)context);
+  return expression_tree_mutator(node, provenance_mutator, ctx);
 }
 
 /**
@@ -2417,6 +2819,47 @@ static bool provenance_function_in_group_by(const constants_t *constants,
  * @param data  Pointer to @c constants_t (cast from @c void*).
  * @return      @c true if provenance rewriting is needed for this node.
  */
+/**
+ * @brief Recursive helper for @c has_provenance_walker that detects
+ *        rv_cmp @c OpExpr and @c provenance() @c FuncExpr in
+ *        expression subtrees.
+ *
+ * Stops at Query boundaries: @c SubLink subselects (used as
+ * scalar/array subqueries in expressions) are not rewritten by the
+ * outer planner_hook pass, so a tracked relation inside one must not
+ * cause the OUTER query's gate to engage.  Only the @c testexpr of a
+ * SubLink is followed (it lives in the outer's evaluation scope).
+ */
+static bool has_rv_or_provenance_call(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return false;
+
+  if (IsA(node, OpExpr)) {
+    OpExpr *op = (OpExpr *)node;
+    if (rv_cmp_index(constants, op->opfuncid) >= 0)
+      return true;
+  }
+
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *f = (FuncExpr *)node;
+    if (f->funcid == constants->OID_FUNCTION_PROVENANCE)
+      return true;
+  }
+
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    return has_rv_or_provenance_call((Node *)sl->testexpr, data);
+  }
+
+  /* Query nodes are opaque here; expression_tree_walker returns false
+   * on them.  Explicit short-circuit just makes the intent obvious. */
+  if (IsA(node, Query))
+    return false;
+
+  return expression_tree_walker(node, has_rv_or_provenance_call, data);
+}
+
 static bool has_provenance_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -2426,16 +2869,32 @@ static bool has_provenance_walker(Node *node, void *data) {
     Query *q = (Query *)node;
     ListCell *rc;
 
-    /* Walk into CTE subqueries explicitly, because expression_tree_walker
-     * ignores Query nodes so query_tree_walker's walk of cteList does not
-     * recurse into ctequery */
+    /* Walk into CTE subqueries explicitly: they will be inlined as
+     * subqueries by the rewriter, so a tracked-table inside one (or
+     * an rv_cmp / provenance() call) matters for this query. */
     foreach (rc, q->cteList) {
       CommonTableExpr *cte = (CommonTableExpr *)lfirst(rc);
       if (has_provenance_walker((Node *)cte->ctequery, data))
         return true;
     }
 
-    if (query_tree_walker(q, has_provenance_walker, data, 0))
+    /* Walk this query's own expressions for rv_cmp OpExpr and
+     * provenance() FuncExpr.  Use the SubLink-aware walker so we
+     * don't descend into expression-context subqueries (they get
+     * planned standalone; an rv_cmp inside one matters only to
+     * that planning pass).
+     *
+     * This intentionally replaces a single query_tree_walker call:
+     * that helper recurses with the passed walker into BOTH rtable
+     * RTEs (RTE_SUBQUERY) and SubLink subselects, which would erase
+     * the SubLink/RTE_SUBQUERY distinction we need. */
+    if (has_rv_or_provenance_call((Node *)q->targetList, data))
+      return true;
+    if (has_rv_or_provenance_call((Node *)q->jointree, data))
+      return true;
+    if (has_rv_or_provenance_call((Node *)q->havingQual, data))
+      return true;
+    if (has_rv_or_provenance_call((Node *)q->returningList, data))
       return true;
 
     foreach (rc, q->rtable) {
@@ -2472,11 +2931,23 @@ static bool has_provenance_walker(Node *node, void *data) {
 
           attid += func->funccolcount;
         }
+      } else if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL) {
+        /* A FROM-source subquery contributes its provenance to ours;
+         * process_query recurses on it explicitly, so we must detect
+         * tracked relations / rv_cmp / provenance() inside it. */
+        if (has_provenance_walker((Node *)r->subquery, data))
+          return true;
       }
     }
   }
 
-  return expression_tree_walker(node, provenance_function_walker, data);
+  /* For non-Query nodes, use the expression-only walker.  It detects
+   * rv_cmp OpExpr and provenance() FuncExpr inside arbitrary
+   * sub-expressions (BoolExpr around an rv comparison, RV cmp under
+   * IS-DISTINCT-FROM, ...) but stops at Query boundaries so a sibling
+   * subquery's tracked rtable doesn't make THIS query's gate engage
+   * (subqueries have their own planner_hook pass). */
+  return has_rv_or_provenance_call(node, data);
 }
 
 /**
@@ -2496,11 +2967,12 @@ static bool has_provenance(const constants_t *constants, Query *q) {
 
 /**
  * @brief Tree walker that detects any Var of type agg_token.
- * @param node      Current expression tree node.
- * @param constants Extension OID cache.
- * @return          @c true if an agg_token Var is found in @p node.
+ * @param node  Current expression tree node.
+ * @param data  Pointer to a @c constants_t (extension OID cache).
+ * @return      @c true if an agg_token Var is found in @p node.
  */
-static bool aggtoken_walker(Node *node, const constants_t *constants) {
+static bool aggtoken_walker(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *) data;
   if (node == NULL)
     return false;
 
@@ -2510,7 +2982,7 @@ static bool aggtoken_walker(Node *node, const constants_t *constants) {
       return true;
   }
 
-  return expression_tree_walker(node, aggtoken_walker, (void*) constants);
+  return expression_tree_walker(node, aggtoken_walker, data);
 }
 
 /**
@@ -2525,6 +2997,60 @@ static bool aggtoken_walker(Node *node, const constants_t *constants) {
  */
 static bool has_aggtoken(Node *node, const constants_t *constants) {
   return expression_tree_walker(node, aggtoken_walker, (void*) constants);
+}
+
+/**
+ * @brief Walker for @c needs_having_lift: detect any operand shape that
+ *        the HAVING-lift rewriter (@c having_OpExpr_to_provenance_cmp)
+ *        needs to handle specially.
+ *
+ * Returns @c true on:
+ *   - a @c Var of type @c agg_token; or
+ *   - a @c FuncExpr whose @c funcid is @c provenance_aggregate (the
+ *     wrapper the planner-hook puts around aggregates over tracked
+ *     non-RV columns -- yields @c agg_token).
+ *
+ * Anything else (deterministic scalars, plain @c Const, @c FuncExpr
+ * over @c random_variable like @c expected / @c variance / @c moment,
+ * comparisons of those) is left for PostgreSQL to evaluate natively;
+ * the HAVING-lift never needs to touch it.
+ */
+static bool having_lift_walker(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *) data;
+  if (node == NULL)
+    return false;
+
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->vartype == constants->OID_TYPE_AGG_TOKEN)
+      return true;
+  }
+
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *) node;
+    if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      return true;
+  }
+
+  return expression_tree_walker(node, having_lift_walker, data);
+}
+
+/**
+ * @brief Return true if @p havingQual contains anything the HAVING-lift
+ *        path needs to handle (an @c agg_token Var or a
+ *        @c provenance_aggregate wrapper).  A qual that returns @c false
+ *        is left in place for PostgreSQL to evaluate, while the
+ *        per-group provenance still gets a @c gate_delta wrapper.
+ *
+ * This is what lets a HAVING like @c expected(avg(rv)) > 20 work
+ * directly: @c provsql.avg returns @c random_variable (not
+ * @c agg_token), @c expected collapses to a scalar @c double, and the
+ * surrounding comparison is a plain Boolean that PostgreSQL can filter
+ * groups by without any provenance-side rewriting.
+ */
+static bool needs_having_lift(Node *havingQual, const constants_t *constants) {
+  return expression_tree_walker(havingQual, having_lift_walker,
+                                (void *) constants);
 }
 
 /**
@@ -2621,9 +3147,80 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
     ++attno;
   }
 
-  rte->alias = NULL;
-  rte->eref = NULL;
-  rte->joinaliasvars = NULL;
+  /* Populate the JOIN RTE's eref / joinaliasvars / joinleftcols /
+   * joinrightcols by walking the larg and rarg subqueries' targetLists.
+   * Execution doesn't need these (outer Vars reference the input RTEs
+   * directly), but PostgreSQL's ruleutils deparser walks them when
+   * pg_get_querydef / EXPLAIN VERBOSE traverse the rewritten tree and
+   * segfaults on NULL eref. Non-USING LEFT JOIN: joinmergedcols = 0,
+   * output is left columns followed by right columns. */
+  {
+    RangeTblRef *larg_ref = (RangeTblRef *)setOps->larg;
+    RangeTblRef *rarg_ref = (RangeTblRef *)setOps->rarg;
+    RangeTblEntry *larg_rte =
+      (RangeTblEntry *)list_nth(q->rtable, larg_ref->rtindex - 1);
+    RangeTblEntry *rarg_rte =
+      (RangeTblEntry *)list_nth(q->rtable, rarg_ref->rtindex - 1);
+    List *aliasvars = NIL;
+    List *leftcols = NIL;
+    List *rightcols = NIL;
+    List *colnames = NIL;
+    ListCell *lc_te;
+    int colno;
+
+    colno = 1;
+    foreach (lc_te, larg_rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc_te);
+      if (te->resjunk) {
+        colno++;
+        continue;
+      }
+      aliasvars = lappend(aliasvars,
+                          makeVar(larg_ref->rtindex, colno,
+                                  exprType((Node *)te->expr),
+                                  exprTypmod((Node *)te->expr),
+                                  exprCollation((Node *)te->expr),
+                                  0));
+      leftcols = lappend_int(leftcols, colno);
+      rightcols = lappend_int(rightcols, 0);
+      colnames = lappend(colnames,
+                         makeString(pstrdup(te->resname ? te->resname
+                                                        : "?column?")));
+      colno++;
+    }
+    colno = 1;
+    foreach (lc_te, rarg_rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc_te);
+      if (te->resjunk) {
+        colno++;
+        continue;
+      }
+      aliasvars = lappend(aliasvars,
+                          makeVar(rarg_ref->rtindex, colno,
+                                  exprType((Node *)te->expr),
+                                  exprTypmod((Node *)te->expr),
+                                  exprCollation((Node *)te->expr),
+                                  0));
+      leftcols = lappend_int(leftcols, 0);
+      rightcols = lappend_int(rightcols, colno);
+      colnames = lappend(colnames,
+                         makeString(pstrdup(te->resname ? te->resname
+                                                        : "?column?")));
+      colno++;
+    }
+
+    rte->alias = NULL;
+    rte->eref = makeAlias("unnamed_join", colnames);
+    rte->joinaliasvars = aliasvars;
+#if PG_VERSION_NUM >= 130000
+    rte->joinleftcols = leftcols;
+    rte->joinrightcols = rightcols;
+    rte->joinmergedcols = 0;
+#else
+    (void) leftcols;
+    (void) rightcols;
+#endif
+  }
 
   rte->rtekind = RTE_JOIN;
   rte->jointype = JOIN_LEFT;
@@ -2938,70 +3535,210 @@ static void build_column_map(Query *q, int **columns, int *nbcols) {
 }
 
 /**
- * @brief Move WHERE conditions on aggregate results (@c agg_token) to HAVING.
+ * @brief Categorisation of a top-level WHERE conjunct.
  *
- * Supported patterns (moved to HAVING):
- * - The entire WHERE is a supported agg comparison.
- * - The WHERE is a top-level AND where some conjuncts reference aggregates
- *   (those are extracted individually) and the rest remain in WHERE.
+ * Drives the unified WHERE classifier that replaced the original pair
+ * @c migrate_aggtoken_quals_to_having + @c extract_rv_cmps_from_quals.
+ * Both probabilistic flavours (agg_token's "moved to HAVING" world and
+ * random_variable's "lifted to provenance" world) are special cases of
+ * "this conjunct involves a probabilistic value the executor cannot
+ * evaluate as a Boolean directly, so the planner has to route it to a
+ * different evaluation site".  The classifier reports which site, or
+ * (for unsupported mixes) errors.
+ */
+typedef enum {
+  QUAL_DETERMINISTIC,    /**< no probabilistic value; stays in WHERE        */
+  QUAL_PURE_AGG,         /**< pure agg_token expression; route to HAVING    */
+  QUAL_PURE_RV,          /**< pure random_variable expression; lift to provenance */
+  QUAL_MIXED_AGG_DET,    /**< agg_token mixed with non-agg leaves; error    */
+  QUAL_MIXED_RV_DET,     /**< random_variable mixed with non-RV leaves; error */
+  QUAL_MIXED_AGG_RV      /**< agg_token and random_variable in the same expr; error */
+} qual_class;
+
+/**
+ * @brief Classify @p expr along the @c qual_class axis.
  *
- * Unsupported patterns (e.g., "WHERE x=1 OR c>3") raise an error.
+ * Decision table (the predicates @c has_aggtoken,
+ * @c expr_contains_rv_cmp, @c check_expr_on_aggregate, and
+ * @c check_expr_on_rv each return whether the expression "contains" or
+ * "is purely" the corresponding flavour):
+ *
+ * | aggtoken | rv_cmp | check_agg | check_rv | classification        |
+ * |----------|--------|-----------|----------|-----------------------|
+ * | yes      | yes    |    -      |    -     | QUAL_MIXED_AGG_RV     |
+ * | yes      | no     |   true    |    -     | QUAL_PURE_AGG         |
+ * | yes      | no     |   false   |    -     | QUAL_MIXED_AGG_DET    |
+ * | no       | yes    |    -      |   true   | QUAL_PURE_RV          |
+ * | no       | yes    |    -      |   false  | QUAL_MIXED_RV_DET     |
+ * | no       | no     |    -      |    -     | QUAL_DETERMINISTIC    |
+ */
+static qual_class classify_qual(Expr *expr, const constants_t *constants)
+{
+  bool has_agg = has_aggtoken((Node *)expr, constants);
+  bool has_rv  = expr_contains_rv_cmp((Node *)expr, constants);
+
+  if (has_agg && has_rv)
+    return QUAL_MIXED_AGG_RV;
+  if (has_agg) {
+    if (check_expr_on_aggregate(expr, constants))
+      return QUAL_PURE_AGG;
+    return QUAL_MIXED_AGG_DET;
+  }
+  if (has_rv) {
+    if (check_expr_on_rv(expr, constants))
+      return QUAL_PURE_RV;
+    return QUAL_MIXED_RV_DET;
+  }
+  return QUAL_DETERMINISTIC;
+}
+
+/** @brief Raise the user-facing error appropriate to a mixed @p c.
+ *
+ * Each @c provsql_error call is @c ereport(ERROR), which does not
+ * return; the explicit @c break statements below are present only to
+ * keep @c -Wimplicit-fallthrough happy (PostgreSQL's @c elog macro is
+ * not marked @c noreturn for the compiler's flow analysis). */
+static void error_for_mixed_qual(qual_class c)
+{
+  switch (c) {
+    case QUAL_MIXED_AGG_DET:
+      provsql_error("Complex selection on aggregation results not supported");
+      break;
+    case QUAL_MIXED_RV_DET:
+      provsql_error("WHERE clause mixes random_variable comparisons with "
+                    "other predicates inside the same Boolean expression; "
+                    "split the non-RV part into its own AND conjunct");
+      break;
+    case QUAL_MIXED_AGG_RV:
+      provsql_error("WHERE clause mixes agg_token (HAVING-style) and "
+                    "random_variable (per-tuple) comparisons inside the "
+                    "same Boolean expression; this combination is not "
+                    "supported");
+      break;
+    default:
+      /* QUAL_DETERMINISTIC / QUAL_PURE_AGG / QUAL_PURE_RV: not a mixed case. */
+      break;
+  }
+}
+
+/**
+ * @brief Unified WHERE classifier &ndash; routes each top-level conjunct
+ *        to the right evaluation site in a single pass.
+ *
+ * Replaces and consolidates the original
+ * @c migrate_aggtoken_quals_to_having (agg-only) and
+ * @c extract_rv_cmps_from_quals (rv-only).  The two old functions were
+ * structurally isomorphic: each walked the WHERE clause, classified
+ * each top-level conjunct, and routed pure-X conjuncts somewhere
+ * semantic (HAVING vs the returned rv_cmps list); the deterministic
+ * conjuncts stayed in WHERE.  Doing it in one pass means the rare
+ * conjunct that mixes agg_token and random_variable (which neither old
+ * function would have caught cleanly) gets a deterministic, useful
+ * error message.
+ *
+ * Supported shapes mirror the union of the two predecessors:
+ * - Whole WHERE is a single conjunct: classify and route or error.
+ * - Top-level AND of conjuncts: classify each, route, and (after
+ *   walking) collapse the AND if it has zero or one remaining children
+ *   so downstream code does not see a degenerate Boolean node.
+ * - Top-level OR / NOT containing both deterministic and probabilistic
+ *   leaves: error.
  *
  * @param constants  Extension OID cache.
- * @param q          Query to modify in place (@c jointree->quals and
- *                   @c havingQual may both be updated).
+ * @param q          Query whose @c jointree->quals and @c havingQual
+ *                   may both be mutated in place.
+ * @return List of @c FuncExpr nodes (one per lifted RV conjunct), each
+ *         producing a @c UUID.  The caller conjoins these into
+ *         @c prov_atts before @c make_provenance_expression.
  */
-static void migrate_aggtoken_quals_to_having(const constants_t *constants,
-                                             Query *q) {
+static List *
+migrate_probabilistic_quals(const constants_t *constants, Query *q)
+{
+  List *rv_cmps = NIL;
+  Node *quals;
+
   if (!q->jointree || !q->jointree->quals)
-    return;
+    return NIL;
 
-  if (!has_aggtoken(q->jointree->quals, constants))
-    return;
+  quals = q->jointree->quals;
 
-  /*
-   * We support WHERE clauses that are (possibly trivial) AND conjunctions of:
-   * - Conditions that do not mention aggregates (kept in WHERE).
-   * - Arbitrary Boolean combinations that all refer to aggregates and that
-   *   check_expr_on_aggregate accepts (moved to HAVING).
-   * Other forms (e.g., "WHERE x=1 OR c>3") are not supported.
-   */
-  if (check_expr_on_aggregate((Expr *)q->jointree->quals, constants)) {
-    /* Entire WHERE is an agg comparison — move it wholesale to HAVING */
-    q->havingQual =
-      add_to_havingQual(q->havingQual, (Expr *)q->jointree->quals);
-    q->jointree->quals = NULL;
-  } else if (IsA(q->jointree->quals, BoolExpr)) {
-    BoolExpr *be = (BoolExpr *)q->jointree->quals;
-    if (be->boolop == AND_EXPR) {
-      /* Split the AND: move agg conjuncts to HAVING, leave the rest */
-      ListCell *cell, *prev;
-      for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
-        if (has_aggtoken(lfirst(cell), constants)) {
-          Expr *expr = (Expr *)lfirst(cell);
+  /* Whole WHERE is one conjunct (single OpExpr, or non-AND BoolExpr
+   * which we treat opaquely &ndash; the per-flavour pure checks
+   * @c check_expr_on_aggregate / @c check_expr_on_rv recurse through
+   * the BoolExpr structure themselves). */
+  if (!IsA(quals, BoolExpr) || ((BoolExpr *)quals)->boolop != AND_EXPR) {
+    qual_class c = classify_qual((Expr *)quals, constants);
+    error_for_mixed_qual(c);
 
-          if (check_expr_on_aggregate(expr, constants)) {
-            be->args = my_list_delete_cell(be->args, cell, prev);
-            if (prev)
-              cell = my_lnext(be->args, prev);
-            else
-              cell = list_head(be->args);
+    switch (c) {
+      case QUAL_PURE_AGG:
+        q->havingQual = add_to_havingQual(q->havingQual, (Expr *)quals);
+        q->jointree->quals = NULL;
+        break;
+      case QUAL_PURE_RV:
+        rv_cmps = lappend(rv_cmps,
+                          rv_Expr_to_provenance((Expr *)quals,
+                                                constants, false));
+        q->jointree->quals = NULL;
+        break;
+      case QUAL_DETERMINISTIC:
+        /* Leave WHERE alone. */
+        break;
+      default:
+        /* Errors handled by error_for_mixed_qual. */
+        break;
+    }
+    return rv_cmps;
+  }
 
-            q->havingQual = add_to_havingQual(q->havingQual, expr);
-          } else {
-            provsql_error("Complex selection on aggregation results not supported");
-          }
-        } else {
+  /* Top-level AND: walk conjuncts. */
+  {
+    BoolExpr *be = (BoolExpr *)quals;
+    ListCell *cell, *prev;
+
+    for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
+      Expr *conjunct = (Expr *)lfirst(cell);
+      qual_class c = classify_qual(conjunct, constants);
+
+      error_for_mixed_qual(c);
+
+      switch (c) {
+        case QUAL_PURE_AGG:
+          q->havingQual = add_to_havingQual(q->havingQual, conjunct);
+          be->args = my_list_delete_cell(be->args, cell, prev);
+          if (prev)
+            cell = my_lnext(be->args, prev);
+          else
+            cell = list_head(be->args);
+          break;
+        case QUAL_PURE_RV:
+          rv_cmps = lappend(rv_cmps,
+                            rv_Expr_to_provenance(conjunct,
+                                                  constants, false));
+          be->args = my_list_delete_cell(be->args, cell, prev);
+          if (prev)
+            cell = my_lnext(be->args, prev);
+          else
+            cell = list_head(be->args);
+          break;
+        case QUAL_DETERMINISTIC:
           prev = cell;
           cell = my_lnext(be->args, cell);
-        }
+          break;
+        default:
+          /* Errors handled by error_for_mixed_qual. */
+          break;
       }
-    } else {
-      provsql_error("Complex selection on aggregation results not supported");
     }
-  } else {
-    provsql_error("Unknown structure within Boolean expression");
+
+    /* Collapse degenerate ANDs so downstream code sees a tidy WHERE. */
+    if (be->args == NIL)
+      q->jointree->quals = NULL;
+    else if (list_length(be->args) == 1)
+      q->jointree->quals = (Node *)linitial(be->args);
   }
+
+  return rv_cmps;
 }
 
 /** @brief Context for the @c insert_agg_token_casts_mutator. */
@@ -3177,8 +3914,90 @@ static Query *process_query(const constants_t *constants, Query *q,
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
   if (q->rtable == NULL) {
-    // No FROM clause, we can skip this query
-    return NULL;
+    /* FROM-less SELECT: the rest of the rewriter indexes into
+     * q->rtable, so it can't process anything tied to a base relation.
+     * But a WHERE-on-RV is still meaningful in this shape (e.g.
+     *   SELECT 1 WHERE normal(0,1) > 2)
+     * since the comparison produces a pure-rv gate that's lifted into
+     * a synthesised provsql column on the single result row.  Run only
+     * the qual migration + targetList splice and return; everything
+     * else this function does (column mapping, set-ops, aggregation
+     * rewriting, ...) assumes a non-empty rtable. */
+    List *rv_cmps = migrate_probabilistic_quals(constants, q);
+    if (rv_cmps != NIL) {
+      Expr *provenance;
+      RangeTblEntry *values_rte;
+      RangeTblRef *rtr;
+      Var *v;
+
+      if (list_length(rv_cmps) == 1) {
+        provenance = (Expr *)linitial(rv_cmps);
+      } else {
+        /* Multiple rv conjuncts: combine via provenance_times. */
+        FuncExpr *times = makeNode(FuncExpr);
+        ArrayExpr *array = makeNode(ArrayExpr);
+        times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+        times->funcresulttype = constants->OID_TYPE_UUID;
+        times->funcvariadic = true;
+        times->location = -1;
+        array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+        array->element_typeid = constants->OID_TYPE_UUID;
+        array->elements = rv_cmps;
+        array->location = -1;
+        times->args = list_make1(array);
+        provenance = (Expr *)times;
+      }
+
+      /* Bind the lifted expression to a single evaluation by wrapping
+       * it in a synthesized FROM (VALUES (<expr>)) AS _prov_(provsql).
+       * Without this, multiple references to the same provenance
+       * expression in the outer targetList (the user's provenance()
+       * call, plus the auto-added provsql column) each re-invoke any
+       * rv constructor inside, producing distinct UUIDs per call
+       * because uniform / normal / ... mint a fresh leaf gate each
+       * time.  Wrapping in VALUES gives one evaluation site that all
+       * outer references read from. */
+      values_rte = makeNode(RangeTblEntry);
+      values_rte->rtekind = RTE_VALUES;
+      values_rte->values_lists = list_make1(list_make1(provenance));
+      values_rte->coltypes = list_make1_oid(constants->OID_TYPE_UUID);
+      values_rte->coltypmods = list_make1_int(-1);
+      values_rte->colcollations = list_make1_oid(InvalidOid);
+      values_rte->eref = makeAlias(
+        "_prov_",
+        list_make1(makeString(pstrdup(PROVSQL_COLUMN_NAME))));
+      values_rte->inh = false;
+      values_rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+      values_rte->requiredPerms = 0;
+#endif
+      q->rtable = list_make1(values_rte);
+
+      rtr = makeNode(RangeTblRef);
+      rtr->rtindex = 1;
+      if (q->jointree == NULL) {
+        q->jointree = makeNode(FromExpr);
+      }
+      q->jointree->fromlist = list_make1(rtr);
+
+      v = makeVar(1, 1, constants->OID_TYPE_UUID, -1, InvalidOid, 0);
+
+      /* Substitute any provenance() FuncExpr in the targetList with
+       * a reference to the bound expression. */
+      replace_provenance_function_by_expression(constants, q, (Expr *)v);
+
+      /* Append a provsql column reading the same Var so callers that
+       * expect the auto-added column find it. */
+      {
+        TargetEntry *te = makeTargetEntry(
+          (Expr *)copyObject(v),
+          list_length(q->targetList) + 1,
+          pstrdup(PROVSQL_COLUMN_NAME),
+          false);
+        q->targetList = lappend(q->targetList, te);
+      }
+    }
+    return q;
   }
 
   /* Inline non-recursive CTE references as subqueries so we can track
@@ -3234,8 +4053,25 @@ static Query *process_query(const constants_t *constants, Query *q,
     // by calling process_query
     prov_atts = get_provenance_attributes(constants, q);
 
-    if (prov_atts == NIL)
-      return q;
+    if (prov_atts == NIL) {
+      /* If the WHERE clause contains a random_variable comparison, we
+       * still need to take the rewriting path so the result tuple
+       * carries the comparator's gate_cmp UUID as its provenance.
+       * Synthesize a single gate_one() prov_att; the combination
+       * provenance_times(one, rv_cmp) collapses to rv_cmp downstream
+       * because gate_one is the multiplicative identity. */
+      if (q->jointree && q->jointree->quals &&
+          expr_contains_rv_cmp(q->jointree->quals, constants)) {
+        FuncExpr *one_expr = makeNode(FuncExpr);
+        one_expr->funcid = constants->OID_FUNCTION_GATE_ONE;
+        one_expr->funcresulttype = constants->OID_TYPE_UUID;
+        one_expr->args = NIL;
+        one_expr->location = -1;
+        prov_atts = list_make1(one_expr);
+      } else {
+        return q;
+      }
+    }
 
     if (q->hasSubLinks) {
       provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
@@ -3296,6 +4132,32 @@ static Query *process_query(const constants_t *constants, Query *q,
 
     if (supported) {
       Expr *provenance;
+      List *rv_cmps;
+
+      /* Single unified pass over WHERE: each top-level conjunct is
+       * routed to the right evaluation site (HAVING for agg_token,
+       * the returned rv_cmps list for random_variable, left in WHERE
+       * otherwise).  Mixed shapes raise a clear error.  Replaces the
+       * historical pair migrate_aggtoken_quals_to_having +
+       * extract_rv_cmps_from_quals; see the qual_class doc above for
+       * the routing matrix.
+       *
+       * Must run before replace_aggregations_by_provenance_aggregate
+       * so the lifted RV cmps factor into each row's contribution to
+       * any surrounding agg_token: otherwise the cmp lands at group
+       * level with row-typed Vars the executor cannot resolve, or
+       * gets discarded by the HAVING-replaces-result branch of
+       * make_provenance_expression.
+       *
+       * Skipped for SR_PLUS / SR_MONUS (UNION / EXCEPT outer level):
+       * each branch is rewritten by its own recursive process_query
+       * call, so an outer-level WHERE on RV here is exotic; the
+       * fallback after make_provenance_expression handles it. */
+      rv_cmps = migrate_probabilistic_quals(constants, q);
+      if (rv_cmps != NIL && !has_union && !has_difference) {
+        prov_atts = list_concat(prov_atts, rv_cmps);
+        rv_cmps = NIL;
+      }
 
       if (q->hasAggs) {
         ListCell *lc_sort;
@@ -3323,9 +4185,6 @@ static Query *process_query(const constants_t *constants, Query *q,
         }
       }
 
-      /* Move any WHERE comparisons on aggregate results to HAVING */
-      migrate_aggtoken_quals_to_having(constants, q);
-
       /* Insert casts for agg_token Vars used in arithmetic or window
        * functions, now that WHERE-to-HAVING migration is done */
       insert_agg_token_casts(constants, q);
@@ -3334,6 +4193,24 @@ static Query *process_query(const constants_t *constants, Query *q,
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
         nbcols);
+
+      /* Fallback for the rare set-op outer WHERE case: conjoin via
+       * provenance_times after the aggregation wrappers.  Correct only
+       * when no aggregation collapses rows above this point. */
+      if (rv_cmps != NIL) {
+        FuncExpr *times = makeNode(FuncExpr);
+        ArrayExpr *array = makeNode(ArrayExpr);
+        times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+        times->funcresulttype = constants->OID_TYPE_UUID;
+        times->funcvariadic = true;
+        times->location = -1;
+        array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+        array->element_typeid = constants->OID_TYPE_UUID;
+        array->elements = lcons(provenance, rv_cmps);
+        array->location = -1;
+        times->args = list_make1(array);
+        provenance = (Expr *)times;
+      }
 
       add_to_select(q, provenance);
       replace_provenance_function_by_expression(constants, q, provenance);
@@ -3491,7 +4368,13 @@ static PlannedStmt *provsql_planner(Query *q,
     const constants_t constants = get_constants(false);
     if (constants.ok)
       process_insert_select(&constants, q);
-  } else if (q->commandType == CMD_SELECT && q->rtable) {
+  } else if (q->commandType == CMD_SELECT) {
+    /* No rtable check here: a FROM-less SELECT (e.g.
+     *   SELECT 1 WHERE normal(0,1) > 2)
+     * still needs the hook to engage when the WHERE contains an
+     * rv_cmp.  has_provenance walks the tree and returns false fast
+     * on FROM-less queries that have neither rv_cmp nor provenance(),
+     * so widening the gate costs nothing in the common case. */
     const constants_t constants = get_constants(false);
 
     if (constants.ok && has_provenance(&constants, q)) {
@@ -3514,14 +4397,14 @@ static PlannedStmt *provsql_planner(Query *q,
         provsql_notice("planner time spent=%f",
                        (double)(clock() - begin) / CLOCKS_PER_SEC);
 
+      if (new_query != NULL)
+        q = new_query;
+
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
         provsql_notice("Main query after query rewriting:\n%s\n",
                        pg_get_querydef(q, true));
 #endif
-
-      if (new_query != NULL)
-        q = new_query;
     }
   }
 
@@ -3624,6 +4507,91 @@ void _PG_init(void) {
                              NULL,
                              NULL,
                              NULL);
+  DefineCustomBoolVariable("provsql.simplify_on_load",
+                           "Apply universal cmp-resolution passes when "
+                           "loading a provenance circuit.",
+                           "When on (default), every GenericCircuit returned "
+                           "by getGenericCircuit goes through RangeCheck "
+                           "(and any future universal pass): comparators "
+                           "decidable to certain Boolean values become "
+                           "Bernoulli gate_input gates with probability 0 "
+                           "or 1, transparent to every downstream consumer "
+                           "(semiring evaluators, MC, view_circuit, PROV "
+                           "export). Set off to inspect raw circuit "
+                           "structure (e.g. when debugging gate-creation "
+                           "paths).",
+                           &provsql_simplify_on_load,
+                           true,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  /* Debug-only: hidden from SHOW ALL and postgresql.conf.sample.
+   * On is strictly better for end users (analytic answers where
+   * possible, lower MC variance, more methods usable on continuous
+   * circuits); off only serves developer A/B against pure MC and as
+   * a bisection escape valve if a closure rule misbehaves. */
+  DefineCustomBoolVariable("provsql.hybrid_evaluation",
+                           "Run the hybrid-evaluator simplifier and "
+                           "island decomposer inside probability_evaluate. "
+                           "Debug only.",
+                           "When on (default), probability_evaluate runs "
+                           "the HybridEvaluator peephole simplifier "
+                           "between RangeCheck and AnalyticEvaluator and "
+                           "the per-cmp MC island decomposer after "
+                           "AnalyticEvaluator. Off bypasses both and lets "
+                           "unresolved comparators fall through to "
+                           "whole-circuit MC. End users have no reason "
+                           "to flip this; it exists for developer A/B "
+                           "testing against the unfolded path and as a "
+                           "bisection knob if a closure rule turns out "
+                           "to be unsound on some workload.",
+                           &provsql_hybrid_evaluation,
+                           true,
+                           PGC_USERSET,
+                           GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomIntVariable("provsql.monte_carlo_seed",
+                          "Seed for the Monte Carlo sampler.",
+                          "-1 (default) seeds from std::random_device for "
+                          "non-deterministic sampling. Any other value "
+                          "(including 0) is used as a literal seed for "
+                          "std::mt19937_64, making "
+                          "probability_evaluate(..., 'monte-carlo', n) "
+                          "reproducible across runs and across the Bernoulli "
+                          "and continuous (gate_rv) sampling paths.",
+                          &provsql_monte_carlo_seed,
+                          -1,
+                          -1,
+                          INT_MAX,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
+  DefineCustomIntVariable("provsql.rv_mc_samples",
+                          "Default sample count for analytical-evaluator MC fallbacks.",
+                          "Used when an analytical evaluator (Expectation, "
+                          "future hybrid evaluator, etc.) cannot decompose a "
+                          "sub-circuit and needs to fall back to Monte Carlo. "
+                          "Default 10000. Set to 0 to disable the fallback "
+                          "entirely: callers raise an exception rather than "
+                          "sampling, which is useful when only analytical "
+                          "answers are acceptable. Unrelated to "
+                          "probability_evaluate(..., 'monte-carlo', n) where "
+                          "the sample count is an explicit argument.",
+                          &provsql_rv_mc_samples,
+                          10000,
+                          0,
+                          INT_MAX,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
 
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");

@@ -1,0 +1,79 @@
+name: Install knowledge compilers
+description: >-
+  Build and cache d4, dsharp, weightmc into /usr/local/bin. Each tool is
+  pinned to an upstream SHA (upstream repos build off master, which is
+  fragile) and cached under that SHA so subsequent runs skip the build.
+
+inputs:
+  d4-ref:
+    description: Git SHA for crillab/d4
+    default: 333370cc1e843dd0749c1efe88516e72b5239174
+  dsharp-ref:
+    description: Git SHA for QuMuLab/dsharp
+    default: dacd791f11071d0e8fd02103c84a45c455aced9f
+  weightmc-ref:
+    description: Git SHA for kuldeepmeel/weightmc
+    default: 1745a804da166ccb76e596100bfa338c7fa7a7f6
+
+runs:
+  using: composite
+  steps:
+    - name: Restore d4 cache
+      id: cache-d4
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/bin/d4
+        key: kc-d4-${{ runner.os }}-${{ inputs.d4-ref }}
+
+    - name: Build d4
+      if: steps.cache-d4.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf /tmp/kc-d4
+        git clone https://github.com/crillab/d4.git /tmp/kc-d4
+        cd /tmp/kc-d4
+        git checkout ${{ inputs.d4-ref }}
+        make
+        mv d4 /usr/local/bin/
+
+    - name: Restore dsharp cache
+      id: cache-dsharp
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/bin/dsharp
+        key: kc-dsharp-${{ runner.os }}-${{ inputs.dsharp-ref }}
+
+    - name: Build dsharp
+      if: steps.cache-dsharp.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf /tmp/kc-dsharp
+        git clone https://github.com/QuMuLab/dsharp.git /tmp/kc-dsharp
+        cd /tmp/kc-dsharp
+        git checkout ${{ inputs.dsharp-ref }}
+        mv Makefile_gmp Makefile
+        make
+        mv dsharp /usr/local/bin/
+
+    - name: Restore weightmc cache
+      id: cache-weightmc
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/bin/weightmc
+        key: kc-weightmc-${{ runner.os }}-${{ inputs.weightmc-ref }}
+
+    - name: Build weightmc
+      if: steps.cache-weightmc.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf /tmp/kc-weightmc
+        git clone https://bitbucket.org/kuldeepmeel/weightmc.git /tmp/kc-weightmc
+        cd /tmp/kc-weightmc
+        git checkout ${{ inputs.weightmc-ref }}
+        cd wmc-src
+        ./configure
+        make
+        mv weightmc /usr/local/bin/

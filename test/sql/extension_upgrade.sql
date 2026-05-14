@@ -12,6 +12,19 @@
 --   * the DATA wildcard in Makefile.internal that ships them
 --   * binary stability of the mmap format across versions
 
+-- PostgreSQL < 12 disallows multiple ALTER TYPE ADD VALUE statements
+-- inside a single multi-statement script (which is how an extension
+-- upgrade runs).  The 1.4.0 -> 1.5.0 upgrade adds three new enum
+-- values for the continuous-distribution gate types, so the in-place
+-- upgrade test is skipped on those versions; fresh installs are
+-- unaffected (the assembled install script is run differently).
+-- pg_regress matches against extension_upgrade_1.out on the skip
+-- path.
+SELECT current_setting('server_version_num')::int >= 120000
+  AS pg_supports_enum_upgrade
+\gset
+\if :pg_supports_enum_upgrade
+
 SET client_min_messages = WARNING;
 DROP EXTENSION provsql CASCADE;
 RESET client_min_messages;
@@ -40,3 +53,9 @@ CREATE TABLE upgrade_result AS
   FROM upgrade_smoke;
 SELECT remove_provenance('upgrade_result');
 SELECT * FROM upgrade_result ORDER BY name;
+
+\else
+
+\echo extension_upgrade: skipped on PostgreSQL < 12 (ALTER TYPE ADD VALUE restriction)
+
+\endif

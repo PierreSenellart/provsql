@@ -1,0 +1,25 @@
+\set ECHO none
+nbins|lo_ok|hi_ok|count_ok
+1|t|t|t
+(1 row)
+nbins|total_ok|lo_in_support|hi_in_support
+20|t|t|t
+(1 row)
+deterministic
+t
+(1 row)
+bins_param_respected
+t
+(1 row)
+default_bins_ok
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+continuous_rv_histogram_done
+ok
+(1 row)

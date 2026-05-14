@@ -153,7 +153,17 @@ types that appear:
 * ``project``, ``eq`` – where-provenance gates (column projection and equijoin)
 * ``agg`` – aggregation gate (for aggregate provenance)
 * ``semimod`` – semimodule scalar multiplication (for aggregate provenance)
-* ``value`` – scalar value (for aggregate provenance)
+* ``value`` – scalar value (for aggregate provenance, or numeric
+  constant lifted into a continuous random variable)
 * ``mulinput`` – multivalued input (for Boolean provenance)
+* ``cmp`` – comparison gate (HAVING predicates, and the planner-hook
+  lift of WHERE comparators on ``random_variable`` columns; see
+  :doc:`continuous-distributions`)
 * ``delta`` – δ-semiring operator :cite:`DBLP:conf/pods/AmsterdamerDT11`
 * ``update`` – update operation gate
+* ``rv`` – continuous random-variable leaf (Normal / Uniform /
+  Exponential / Erlang); see :doc:`continuous-distributions`
+* ``arith`` – N-ary arithmetic over scalar children
+  (``+ - * /``, unary ``-``)
+* ``mixture`` – Bernoulli or categorical mixture of scalar
+  random-variable roots

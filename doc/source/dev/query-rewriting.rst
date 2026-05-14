@@ -152,23 +152,27 @@ Step 8: Aggregation Rewriting
 
 If the query has aggregates, :cfunc:`replace_aggregations_by_provenance_aggregate`
 walks the target list and replaces each standard aggregate (e.g.,
-``SUM``, ``COUNT``) with a ``provenance_aggregate`` call that wraps
+``SUM``, ``COUNT``) with a :sqlfunc:`provenance_aggregate` call that wraps
 the original aggregate result and the provenance of the aggregated
 rows.  The provenance of grouped rows is combined with ⊕
 (``provenance_plus``) via ``array_agg`` + ``provenance_plus``.
 
 After aggregation rewriting:
 
-- :cfunc:`migrate_aggtoken_quals_to_having` moves any ``WHERE``
-  comparisons on aggregate results to ``HAVING``, because
-  aggregate-typed values can only be filtered after grouping.
+- :cfunc:`migrate_probabilistic_quals` moves any ``WHERE``
+  comparisons on aggregate results to ``HAVING`` (and lifts
+  ``WHERE`` comparisons on ``random_variable`` columns into the
+  per-tuple provenance), because aggregate-typed and continuous-RV
+  values both need post-classification routing the executor cannot
+  do directly. See :ref:`probabilistic-qual-classifier` below for
+  the routing matrix.
 
 - :cfunc:`insert_agg_token_casts` inserts type casts for
   :cfunc:`agg_token` values used in arithmetic or window functions.
 
 See :doc:`aggregation` for the semantics of the ``agg`` /
 ``semimod`` / ``value`` gates produced here, and for the exact
-shape of the ``provenance_aggregate`` call that replaces each
+shape of the :sqlfunc:`provenance_aggregate` call that replaces each
 ``Aggref``.
 
 Step 9: Expression Building -- ``make_provenance_expression``
@@ -201,11 +205,19 @@ all tuples in each group.
 clause, a ``provenance_delta`` gate is added.  This implements the
 δ-semiring operator that normalizes aggregate provenance.
 
-**HAVING**:  When a ``HAVING`` clause is present,
-:cfunc:`having_Expr_to_provenance_cmp` translates the ``HAVING``
-predicate into a ``provenance_cmp`` gate tree.  The original
+**HAVING**:  When a ``HAVING`` clause is present, the lift is gated
+by the :cfunc:`needs_having_lift` walker, which returns true only
+when the qual references an ``agg_token`` ``Var`` or a
+:sqlfunc:`provenance_aggregate` wrapper. On that path,
+:cfunc:`having_Expr_to_provenance_cmp` translates the predicate
+into a ``provenance_cmp`` gate tree and the original
 ``havingQual`` is removed from the query (its semantics are now
-captured in the provenance circuit).
+captured in the provenance circuit). On the deterministic-outcome
+path (e.g. ``HAVING expected(avg(rv)) > 20``, where the outer
+predicate collapses to a plain Boolean), the qual is left for
+PostgreSQL to evaluate natively on the surviving groups while a
+per-group ``provenance_delta`` wrapper is still emitted, so the
+surviving rows carry the expected provenance shape.
 
 **Where-provenance** (when ``provsql.where_provenance`` is enabled):
 
@@ -229,7 +241,7 @@ Step 11: Replace ``provenance()`` Calls
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 :cfunc:`replace_provenance_function_by_expression` walks the target
-list looking for calls to the ``provenance()`` SQL function.  Each
+list looking for calls to the :sqlfunc:`provenance` SQL function.  Each
 occurrence is replaced with the computed provenance expression, so
 that ``SELECT provenance() FROM ...`` returns the actual provenance
 token.
@@ -290,7 +302,7 @@ target-list rewriting, ``HAVING`` handling, where-provenance...).
      - Aggregation :math:`\gamma`
      - :cfunc:`replace_aggregations_by_provenance_aggregate` walks
        the target list and replaces each ``Aggref`` with a
-       ``provenance_aggregate`` call built by
+       :sqlfunc:`provenance_aggregate` call built by
        :cfunc:`make_aggregation_expression` (which in turn wraps
        arguments in ``provenance_semimod``).  The enclosing
        provenance expression is then wrapped in a
@@ -312,9 +324,9 @@ the paper:
 Formal Verification
 ^^^^^^^^^^^^^^^^^^^
 
-The correctness of rules (R1) and (R2) -- projection and cross
-product -- has a machine-checked proof in the ProvSQL Lean 4
-library.  The main theorem is
+The correctness of rules (R1), (R2), and (R3) -- projection,
+cross product, and duplicate elimination -- has a machine-checked
+proof in the ProvSQL Lean 4 library.  The main theorem is
 `Query.rewriting_valid
 <https://provsql.org/lean-docs/Provenance/QueryRewriting.html#Query.rewriting_valid>`_
 in the ``Provenance.QueryRewriting`` module: for every
@@ -325,4 +337,58 @@ representation yields the same result as evaluating the
 rewritten query against the composite database.  This is the
 formal analogue of the "the rewritten query produces the same
 provenance as the annotated semantics" correctness statement
-from the ICDE paper, for the partial fragment proved.
+from the ICDE paper, for the partial fragment proved (the
+(R4) multiset-difference case is in progress).
+
+.. _probabilistic-qual-classifier:
+
+Probabilistic-Qual Classifier
+-----------------------------
+
+The single walker :cfunc:`migrate_probabilistic_quals` covers both
+the historical *agg_token* HAVING surface and the *random_variable*
+WHERE/JOIN surface introduced by the continuous-distribution work.
+It routes every qual into one of four mutually-exclusive classes
+(the ``qual_class`` enum), plus a short tail of *mixed-error*
+classes that raise a clean diagnostic rather than producing a
+malformed circuit:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - ``qual_class``
+     - Routing
+   * - ``QUAL_PURE_AGG``
+     - The qual is built only from :cfunc:`agg_token` comparators
+       (HAVING on aggregate results). Moved into the HAVING list
+       so :cfunc:`having_Expr_to_provenance_cmp` builds the
+       corresponding ``gate_cmp`` over ``gate_agg``
+       children.
+   * - ``QUAL_PURE_RV``
+     - The qual is built only from ``random_variable``
+       comparators. Each comparator is rewritten into a
+       ``gate_cmp`` whose UUID is conjoined into the row's
+       provenance via ``provenance_times``; the
+       original ``OpExpr`` is dropped from the WHERE clause so the
+       executor never reaches the placeholder procedure that would
+       raise.
+   * - ``QUAL_DETERMINISTIC``
+     - Ordinary SQL, left untouched.
+   * - Mixed-error classes
+     - Quals that conjoin a probabilistic comparator with another
+       in the same node, or that compare an RV against an
+       agg_token, raise a structured error so users see the
+       offending shape rather than a downstream evaluation
+       failure.
+
+For ``QUAL_PURE_RV``, the planner-hook path also covers the
+corner case of ``WHERE rv > 2`` on a FROM-less ``SELECT``: there
+is no row provenance to conjoin into, so the rewriter synthesises
+a single-row FROM-less host so :sqlfunc:`probability_evaluate`
+reads a well-formed circuit. The dispatch in
+:cfunc:`make_aggregation_expression` keys on the aggregate's
+result type (``OID_TYPE_RANDOM_VARIABLE`` vs
+``OID_TYPE_AGG_TOKEN``) so the same path covers any future
+RV-returning aggregate. See :doc:`continuous-distributions` for
+the broader architecture.

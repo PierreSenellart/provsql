@@ -40,7 +40,10 @@ CREATE TYPE provenance_gate AS
     'delta',   -- δ-semiring operator (see Amsterdamer, Deutch, Tannen, PODS 2011)
     'value',   -- Scalar value (for aggregate provenance)
     'mulinput',-- Multivalued input (for Boolean provenance)
-    'update'   -- Update operation
+    'update',  -- Update operation
+    'rv',      -- Continuous random-variable leaf
+    'arith',   -- n-ary arithmetic gate over scalar-valued children
+    'mixture'  -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -435,7 +438,12 @@ DECLARE
 BEGIN
   SELECT array_agg(t) FROM unnest(tokens) t WHERE t IS NOT NULL AND t <> gate_one() INTO filtered_tokens;
 
-  CASE array_length(tokens, 1)
+  -- Dispatch on the FILTERED count: a single survivor short-circuits
+  -- to that token directly (no useless single-child times gate); zero
+  -- survivors collapse to the identity. Using array_length(tokens, 1)
+  -- here would miss the [one, cmp] → [cmp] case, leaving the cmp wrapped
+  -- in a one-child times when its only sibling was gate_one().
+  CASE coalesce(array_length(filtered_tokens, 1), 0)
     WHEN 0 THEN
       times_token:=gate_one();
     WHEN 1 THEN
@@ -602,6 +610,46 @@ BEGIN
   PERFORM create_gate(cmp_token, 'cmp', ARRAY[left_token, right_token]);
   PERFORM set_infos(cmp_token, comparison_op::integer);
   RETURN cmp_token;
+END
+$$ LANGUAGE plpgsql
+  SET search_path=provsql,pg_temp,public
+  SECURITY DEFINER
+  IMMUTABLE
+  PARALLEL SAFE
+  STRICT;
+
+/**
+ * @brief Create an arithmetic gate over scalar-valued provenance children
+ *
+ * Builds a deterministic @c gate_arith from an operator tag and an
+ * ordered list of children.  The tag is one of the @c provsql_arith_op
+ * enum values declared in @c src/provsql_utils.h
+ * (@c PLUS=0, @c TIMES=1, @c MINUS=2, @c DIV=3, @c NEG=4) and is
+ * stored in the gate's @c info1 field.  Children must be UUIDs of
+ * scalar-producing gates (@c gate_rv, @c gate_value, or another
+ * @c gate_arith).  The token UUID is derived deterministically from
+ * @p op and @p children so identical sub-expressions share their gate.
+ *
+ * @param op        Operator tag (@c provsql_arith_op).
+ * @param children  Ordered list of child gate UUIDs.
+ * @return  UUID of the (possibly pre-existing) @c gate_arith.
+ */
+CREATE OR REPLACE FUNCTION provenance_arith(
+  op       INTEGER,
+  children UUID[]
+)
+RETURNS UUID AS
+$$
+DECLARE
+  arith_token UUID;
+BEGIN
+  arith_token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('arith', op::text, children::text)
+  );
+  PERFORM create_gate(arith_token, 'arith', children);
+  PERFORM set_infos(arith_token, op);
+  RETURN arith_token;
 END
 $$ LANGUAGE plpgsql
   SET search_path=provsql,pg_temp,public
@@ -1035,6 +1083,114 @@ $$
 $$ LANGUAGE sql STABLE PARALLEL SAFE;
 
 /**
+ * @brief BFS subgraph of the IN-MEMORY simplified circuit rooted at @p root.
+ *
+ * Same row shape as @ref circuit_subgraph plus an inline @c extra
+ * column, but built from the @c GenericCircuit returned by
+ * @c getGenericCircuit -- i.e. AFTER @c provsql.simplify_on_load
+ * passes (RangeCheck, ...) have rewritten any decidable @c gate_cmp
+ * into Bernoulli @c gate_input / @c gate_zero / @c gate_one leaves.
+ * Lets a renderer show the user what the evaluator actually sees,
+ * without mutating the persisted DAG.
+ *
+ * Returns @c jsonb (an array of objects) rather than @c SETOF record
+ * to keep the C++ implementation free of SRF / @c FuncCallContext
+ * boilerplate; callers either consume the array directly or expand
+ * it via @c jsonb_array_elements.
+ *
+ * @param root      Root provenance token.
+ * @param max_depth Maximum BFS depth (default 8).
+ */
+CREATE OR REPLACE FUNCTION simplified_circuit_subgraph(
+  root UUID, max_depth INT DEFAULT 8) RETURNS jsonb
+  AS 'provsql','simplified_circuit_subgraph'
+  LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Empirical histogram of a scalar sub-circuit
+ *
+ * Returns a jsonb array of @c {bin_lo, bin_hi, count} objects covering
+ * the observed @c [min, max] range of @p bins equal-width samples from
+ * the sub-circuit rooted at @p token.  Sample count is taken from
+ * @c provsql.rv_mc_samples; pinning @c provsql.monte_carlo_seed makes
+ * the result reproducible.
+ *
+ * Accepted root gate types are the scalar ones: @c gate_value (Dirac
+ * at the constant, single bin), @c gate_rv (sampled from the leaf's
+ * distribution), and @c gate_arith (sampled by recursing through the
+ * arithmetic DAG, with shared @c gate_rv leaves correctly correlated
+ * within an iteration).  Any other gate type raises.
+ *
+ * @param token Root provenance token of a scalar sub-circuit.
+ * @param bins  Number of equal-width histogram bins (default 30).
+ * @param prov  Conditioning event (defaults to @c gate_one() = no
+ *              conditioning).  When non-trivial, the histogram is
+ *              over the conditional distribution recovered by
+ *              rejection sampling on the joint circuit with @p token.
+ */
+CREATE OR REPLACE FUNCTION rv_histogram(
+  token UUID, bins INT DEFAULT 30, prov UUID DEFAULT gate_one())
+  RETURNS jsonb
+  AS 'provsql','rv_histogram'
+  LANGUAGE C VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Sample the closed-form PDF and CDF of a (possibly truncated)
+ *        scalar distribution.
+ *
+ * Returns @c {"pdf": [{x, p}, ...], "cdf": [{x, p}, ...]} with @p samples
+ * evenly-spaced points spanning the distribution's natural display
+ * range (intersected with the conditioning event's interval when
+ * @c prov is non-trivial).  Used by ProvSQL Studio's Distribution
+ * profile panel to overlay the analytical curve on the empirical
+ * histogram from :sqlfunc:`rv_histogram` -- the simplifier's
+ * analytical wins (e.g. @c c·Exp(λ) folding to @c Exp(λ/c)) become
+ * visible as a smooth curve riding over the MC-sampled bars.
+ *
+ * Returns @c NULL when the root sub-circuit is not a closed-form
+ * shape (V1: only bare @c gate_rv of Normal / Uniform / Exponential
+ * / integer-Erlang).  The frontend reads @c NULL as "skip overlay"
+ * without erroring, so the caller can dispatch this in parallel with
+ * @c rv_histogram regardless of the underlying shape.
+ *
+ * @param token   Scalar gate token (random_variable's UUID).
+ * @param samples Number of (x, p) points; must be >= 2.
+ * @param prov    Conditioning event (defaults to @c gate_one() = no
+ *                conditioning).  When non-trivial, the curves are
+ *                over the truncated distribution.
+ */
+CREATE OR REPLACE FUNCTION rv_analytical_curves(
+  token UUID, samples INT DEFAULT 100, prov UUID DEFAULT gate_one())
+  RETURNS jsonb
+  AS 'provsql','rv_analytical_curves'
+  LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Draw conditional Monte Carlo samples from a scalar gate.
+ *
+ * Returns up to @c n samples of the scalar value at @c token; when
+ * @c prov is not the trivial @c gate_one() event, draws are accepted
+ * only on iterations where @c prov evaluates true (rejection
+ * sampling).  Shared @c gate_rv leaves between @c token and @c prov
+ * are loaded into a single joint circuit so the indicator's draw
+ * and the value's draw share their per-iteration state.
+ *
+ * @param token  Scalar sub-circuit root.
+ * @param n      Number of accepted samples to attempt.
+ * @param prov   Conditioning event (defaults to @c gate_one() = no
+ *               conditioning).
+ *
+ * Emits a @c NOTICE when the conditional acceptance rate yields fewer
+ * than @c n samples within the @c provsql.rv_mc_samples budget so the
+ * caller can choose to widen the budget.
+ */
+CREATE OR REPLACE FUNCTION rv_sample(
+  token UUID, n integer, prov UUID DEFAULT gate_one())
+  RETURNS SETOF float8
+  AS 'provsql','rv_sample'
+  LANGUAGE C VOLATILE PARALLEL SAFE;
+
+/**
  * @brief Resolve an input gate UUID back to its source row
  *
  * Searches every provenance-tracked relation for a row whose
@@ -1359,6 +1515,1172 @@ CREATE OPERATOR > (
 
 /** @} */
 
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is IMPLICIT so a `provsql`
+ *  column or any random_variable expression flows directly into any
+ *  function expecting a uuid. */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS IMPLICIT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Construct a normal-distribution random variable
+ *
+ * Creates a fresh <tt>gate_rv</tt> with @c "normal:μ,σ" stored in
+ * the gate's @c extra field, and returns a <tt>random_variable</tt>
+ * pointing at it.
+ *
+ * Validation:
+ * - @p mu and @p sigma must be finite (no @c NaN, no @c ±Infinity).
+ * - @p sigma must be non-negative.
+ * - When @p sigma is zero the distribution degenerates to the Dirac
+ *   at @p mu; the call is silently routed through @c as_random(mu),
+ *   producing a @c gate_value rather than a zero-variance @c gate_rv.
+ *   This keeps the sampler / moment / boundcheck paths free of σ=0
+ *   special cases and lets <tt>normal(x, 0)</tt> share its gate with
+ *   <tt>as_random(x)</tt>.
+ *
+ * @warning The <tt>VOLATILE</tt> marking is load-bearing and must
+ * not be weakened.  Each call mints a fresh <tt>uuid_generate_v4</tt>
+ * token because two calls to <tt>normal(0, 1)</tt> are *independent*
+ * random variables; if PostgreSQL were allowed to fold the function
+ * (which it would under <tt>STABLE</tt> / <tt>IMMUTABLE</tt>), two
+ * calls in the same query would share a UUID and collapse into a
+ * single dependent RV, silently breaking the c-table semantics.
+ * Same warning applies to @c uniform and @c exponential below.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Normal_distribution">Wikipedia: Normal distribution</a>
+ */
+CREATE OR REPLACE FUNCTION normal(mu double precision, sigma double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(sigma) THEN
+    RAISE EXCEPTION 'provsql.normal: parameters must be finite (got mu=%, sigma=%)', mu, sigma;
+  END IF;
+  IF sigma < 0 THEN
+    RAISE EXCEPTION 'provsql.normal: sigma must be non-negative (got %)', sigma;
+  END IF;
+  IF sigma = 0 THEN
+    RETURN provsql.as_random(mu);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'normal:' || mu || ',' || sigma);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a uniform-distribution random variable on [a, b]
+ *
+ * Validation:
+ * - @p a and @p b must be finite.
+ * - @p a must be ≤ @p b (reversed bounds are rejected).
+ * - When <tt>a = b</tt> the distribution is the Dirac at @p a; the
+ *   call is silently routed through @c as_random(a) for the same
+ *   reason as @c normal with @p sigma = 0.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Continuous_uniform_distribution">Wikipedia: Continuous uniform distribution</a>
+ */
+CREATE OR REPLACE FUNCTION uniform(a double precision, b double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(a) OR NOT provsql.is_finite_float8(b) THEN
+    RAISE EXCEPTION 'provsql.uniform: bounds must be finite (got a=%, b=%)', a, b;
+  END IF;
+  IF a > b THEN
+    RAISE EXCEPTION 'provsql.uniform: a must be <= b (got a=%, b=%)', a, b;
+  END IF;
+  IF a = b THEN
+    RETURN provsql.as_random(a);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'uniform:' || a || ',' || b);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct an exponential-distribution random variable with rate λ
+ *
+ * Validation:
+ * - @p lambda must be finite and strictly positive.  No degenerate
+ *   form exists for the exponential distribution, so there is no
+ *   silent route through @c as_random.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Exponential_distribution">Wikipedia: Exponential distribution</a>
+ */
+CREATE OR REPLACE FUNCTION exponential(lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.exponential: lambda must be finite (got %)', lambda;
+  END IF;
+  IF lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.exponential: lambda must be strictly positive (got %)', lambda;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'exponential:' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct an Erlang-distribution random variable, sum of
+ *        @p k i.i.d. exponentials with shared rate @p lambda
+ *
+ * The Erlang distribution is the sum of @p k independent
+ * <tt>Exp(λ)</tt> random variables (equivalently the gamma with
+ * integer shape).  It is the natural closure of i.i.d.
+ * exponentials under addition, and is materialised here as a single
+ * <tt>gate_rv</tt> so the analytic CDF and closed-form moments fire
+ * directly (rather than the sampler having to draw and sum @p k
+ * exponential leaves per Monte-Carlo iteration).
+ *
+ * Validation:
+ * - @p k must be ≥ 1.  The degenerate @c k=1 case is silently routed
+ *   through @c exponential so <tt>erlang(1, λ)</tt> shares its gate
+ *   with <tt>exponential(λ)</tt>.
+ * - @p lambda must be finite and strictly positive.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Erlang_distribution">Wikipedia: Erlang distribution</a>
+ */
+CREATE OR REPLACE FUNCTION erlang(k integer, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF k < 1 THEN
+    RAISE EXCEPTION 'provsql.erlang: k must be >= 1 (got %)', k;
+  END IF;
+  IF NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.erlang: lambda must be finite (got %)', lambda;
+  END IF;
+  IF lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.erlang: lambda must be strictly positive (got %)', lambda;
+  END IF;
+  IF k = 1 THEN
+    RETURN provsql.exponential(lambda);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'erlang:' || k || ',' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a probabilistic-mixture random variable.
+ *
+ * Returns a @c random_variable whose distribution is a Bernoulli
+ * mixture of two scalar RV roots: with probability <tt>P(p = true)</tt>
+ * the mixture samples @p x, with the complementary probability it
+ * samples @p y.  The mixing token @p p is a @c gate_input Bernoulli
+ * whose probability has been pinned with @c set_prob, and the same
+ * @p p can be shared with other branches of the circuit -- the
+ * Monte-Carlo sampler's per-iteration cache couples every reference
+ * to the same draw, so users can build joint conditional structures
+ * (e.g. <tt>mixture(p, X1, Y1) + mixture(p, X2, Y2)</tt> samples
+ * X1 + X2 with prob π and Y1 + Y2 with prob 1-π).
+ *
+ * @p x and @p y may be any scalar RV root: a base @c gate_rv
+ * (@c normal / @c uniform / @c exponential / @c erlang), a
+ * @c gate_value Dirac (@c as_random), a @c gate_arith expression, or
+ * another @c mixture.  N-ary mixtures are built by composition --
+ * <tt>mixture(p1, A, mixture(p2, B, C))</tt> realises a 3-component
+ * mixture with effective weights <tt>π1, (1-π1)·π2, (1-π1)·(1-π2)</tt>.
+ *
+ * Validation:
+ * - @p p must point to a Boolean gate (@c input, @c mulinput,
+ *   @c update, @c plus, @c times, @c monus, @c project, @c eq,
+ *   @c cmp, @c zero, @c one).  Compound Boolean gates derive their
+ *   probability from their atoms via the active probability-evaluation
+ *   method; a bare @c gate_input's probability is whatever @c set_prob
+ *   pinned (@c set_prob is responsible for keeping it in [0, 1]).
+ * - @p x and @p y must be scalar RV roots; aggregate / Boolean roots
+ *   are rejected at construction.
+ *
+ * Two calls to @c mixture with the same @c (p, x, y) operands collapse
+ * to the same @c gate_mixture node by v5-hash, exactly like
+ * @c arith(PLUS, X, Y).  Draw independence is controlled by @p p:
+ * sharing @p p couples branch selection across consumers via the
+ * sampler's @c bool_cache_; minting independent Bernoullis (e.g. via
+ * the @c mixture(p_value, …) overload) decouples them.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Mixture_distribution">Wikipedia: Mixture distribution</a>
+ */
+CREATE OR REPLACE FUNCTION mixture(
+  p uuid, x random_variable, y random_variable)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+  p_kind provsql.provenance_gate;
+  x_uuid uuid;
+  y_uuid uuid;
+  x_kind provsql.provenance_gate;
+  y_kind provsql.provenance_gate;
+BEGIN
+  p_kind := provsql.get_gate_type(p);
+  IF p_kind NOT IN ('input','mulinput','update',
+                    'plus','times','monus',
+                    'project','eq','cmp',
+                    'zero','one') THEN
+    RAISE EXCEPTION 'provsql.mixture: p must be a Boolean gate '
+                    '(input/mulinput/update/plus/times/monus/project/eq/cmp/zero/one), got %', p_kind;
+  END IF;
+
+  x_uuid := (x)::uuid;
+  y_uuid := (y)::uuid;
+  x_kind := provsql.get_gate_type(x_uuid);
+  y_kind := provsql.get_gate_type(y_uuid);
+  IF x_kind NOT IN ('rv','value','arith','mixture') THEN
+    RAISE EXCEPTION 'provsql.mixture: x must be a scalar RV root (rv / value / arith / mixture), got %', x_kind;
+  END IF;
+  IF y_kind NOT IN ('rv','value','arith','mixture') THEN
+    RAISE EXCEPTION 'provsql.mixture: y must be a scalar RV root (rv / value / arith / mixture), got %', y_kind;
+  END IF;
+
+  token := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(),
+    concat('mixture', p, x_uuid, y_uuid));
+  PERFORM provsql.create_gate(token, 'mixture', ARRAY[p, x_uuid, y_uuid]);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Ad-hoc mixture constructor that mints a fresh anonymous
+ *        @c gate_input Bernoulli with probability @p p_value.
+ *
+ * Sugar over the @c mixture(uuid, x, y) form: when the caller doesn't
+ * care about reusing the Bernoulli token elsewhere in the circuit
+ * (which is the common case &mdash; "give me a 0.3 / 0.7 weighted GMM,
+ * I don't need to share the coin"), this overload creates the
+ * underlying @c gate_input on the fly with a fresh
+ * @c uuid_generate_v4() token, pins @p p_value via @c set_prob, and
+ * threads everything into the uuid-keyed constructor.
+ *
+ * Each call mints a NEW Bernoulli, so two calls to
+ * <tt>mixture(0.5, X, Y)</tt> are *independent* mixtures whose branch
+ * selections are uncorrelated.  When coupling is desired (e.g. two
+ * mixtures sharing a coin), use the @c mixture(uuid, x, y) form with a
+ * user-managed @c gate_input token.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing for the same reason as
+ * @ref normal and the other RV constructors -- folding under
+ * @c STABLE / @c IMMUTABLE would collapse two independent draws into
+ * one shared gate.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Mixture_distribution">Wikipedia: Mixture distribution</a>
+ */
+CREATE OR REPLACE FUNCTION mixture(
+  p_value double precision,
+  x random_variable,
+  y random_variable)
+  RETURNS random_variable AS
+$$
+DECLARE
+  p_token uuid;
+BEGIN
+  IF p_value IS NULL OR p_value <> p_value OR p_value < 0 OR p_value > 1 THEN
+    RAISE EXCEPTION 'provsql.mixture: probability must be in [0,1] (got %)', p_value;
+  END IF;
+  p_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(p_token, 'input');
+  PERFORM provsql.set_prob(p_token, p_value);
+  RETURN provsql.mixture(p_token, x, y);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Categorical-RV constructor over explicit (probabilities,
+ *        values) arrays.
+ *
+ * Builds a categorical-form @c gate_mixture directly: a fresh
+ * @c gate_input "key" anchor and one @c gate_mulinput per outcome with
+ * positive mass, all sharing the key.  The wires
+ * <tt>[key, mul_1, ..., mul_n]</tt> are what downstream evaluators
+ * (@c Expectation, @c MonteCarloSampler, @c AnalyticEvaluator,
+ * @c RangeCheck) recognise via @c isCategoricalMixture and treat as a
+ * scalar RV with the categorical distribution @p probs over
+ * @p outcomes.
+ *
+ * Validation:
+ * - @p probs and @p outcomes must be non-null, same length, length &ge; 1.
+ * - Each @c probs[i] must be finite, in <tt>[0, 1]</tt>, and the array
+ *   must sum to 1 within @c 1e-9.
+ * - Each @c outcomes[i] must be finite.
+ *
+ * Each call mints a fresh key gate and a fresh set of mulinputs, so
+ * two calls to @c categorical with the same arrays are *independent*
+ * categorical RVs.  The marking is @c VOLATILE accordingly.
+ *
+ * Degenerate case: a categorical with exactly one positive-mass
+ * outcome reduces to @c as_random(v) at construction (the block would
+ * just be a single mulinput, which is operationally a Dirac point
+ * mass).  Two such calls share the @c gate_value UUID via the v5
+ * convention @c as_random already uses.
+ *
+ * @sa @c mixture for the Bernoulli-weighted choice constructor.
+ * @sa <a href="https://en.wikipedia.org/wiki/Categorical_distribution">Wikipedia: Categorical distribution</a>
+ */
+CREATE OR REPLACE FUNCTION categorical(
+  probs    double precision[],
+  outcomes double precision[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  p_sum double precision := 0.0;
+  i integer;
+  key_token uuid;
+  mix_token uuid;
+  mul_token uuid;
+  mul_tokens uuid[] := ARRAY[]::uuid[];
+  mix_wires  uuid[];
+  pi_i double precision;
+  vi_i double precision;
+BEGIN
+  IF probs IS NULL OR outcomes IS NULL THEN
+    RAISE EXCEPTION 'provsql.categorical: probs and outcomes must be non-null';
+  END IF;
+  n := array_length(probs, 1);
+  IF n IS NULL OR n < 1 THEN
+    RAISE EXCEPTION 'provsql.categorical: probs must be non-empty';
+  END IF;
+  IF array_length(outcomes, 1) <> n THEN
+    RAISE EXCEPTION 'provsql.categorical: probs and outcomes must have the same length (got % and %)',
+      n, array_length(outcomes, 1);
+  END IF;
+
+  FOR i IN 1..n LOOP
+    pi_i := probs[i];
+    vi_i := outcomes[i];
+    -- PostgreSQL diverges from IEEE 754: NaN = NaN is TRUE there, so
+    -- the canonical x <> x NaN test doesn't fire.  Compare against the
+    -- literal 'NaN'::float8 instead, and reject ±Infinity for outcomes
+    -- explicitly.
+    IF pi_i IS NULL OR pi_i = 'NaN'::float8 OR pi_i < 0 OR pi_i > 1 THEN
+      RAISE EXCEPTION 'provsql.categorical: probs[%] must be in [0,1] (got %)', i, pi_i;
+    END IF;
+    IF vi_i IS NULL OR vi_i = 'NaN'::float8
+       OR vi_i = 'Infinity'::float8 OR vi_i = '-Infinity'::float8 THEN
+      RAISE EXCEPTION 'provsql.categorical: outcomes[%] must be finite (got %)', i, vi_i;
+    END IF;
+    p_sum := p_sum + pi_i;
+  END LOOP;
+  IF abs(p_sum - 1.0) > 1e-9 THEN
+    RAISE EXCEPTION 'provsql.categorical: probs must sum to 1 within 1e-9 (got %)', p_sum;
+  END IF;
+
+  -- Degenerate case: exactly one positive-mass outcome (the rest are
+  -- zero).  The "categorical" is then a Dirac point mass; skip the
+  -- block-allocation entirely and return @c as_random(v), which yields
+  -- a shared, v5-keyed gate_value -- exactly what downstream
+  -- evaluators (rv_moment, AnalyticEvaluator, rv_support) treat
+  -- specially.  Saves a key gate and a mulinput per call, and lets
+  -- two calls to @c categorical({1.0}, {v}) collide on the same
+  -- gate_value UUID instead of producing distinct anonymous blocks.
+  DECLARE
+    nb_positive integer := 0;
+    only_idx    integer := 0;
+  BEGIN
+    FOR i IN 1..n LOOP
+      IF probs[i] > 0.0 THEN
+        nb_positive := nb_positive + 1;
+        only_idx := i;
+      END IF;
+    END LOOP;
+    IF nb_positive = 1 THEN
+      RETURN provsql.as_random(outcomes[only_idx]);
+    END IF;
+  END;
+
+  -- Mint the block's key anchor.  Probability 1.0 matches the
+  -- joint-table convention: the categorical mass lives on the
+  -- mulinputs, the key just identifies the block.
+  key_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(key_token, 'input');
+  PERFORM provsql.set_prob(key_token, 1.0);
+
+  -- One mulinput per positive-probability outcome.  Zero-probability
+  -- entries contribute no mass and are skipped: the gate_mixture's
+  -- wire vector is otherwise polluted with no-op leaves.
+  FOR i IN 1..n LOOP
+    pi_i := probs[i];
+    IF pi_i <= 0.0 THEN CONTINUE; END IF;
+    mul_token := public.uuid_generate_v4();
+    PERFORM provsql.create_gate(mul_token, 'mulinput', ARRAY[key_token]);
+    PERFORM provsql.set_prob(mul_token, pi_i);
+    PERFORM provsql.set_infos(mul_token, (i - 1));
+    PERFORM provsql.set_extra(mul_token, outcomes[i]::text);
+    mul_tokens := mul_tokens || mul_token;
+  END LOOP;
+
+  mix_wires := ARRAY[key_token] || mul_tokens;
+  mix_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(mix_token, 'mixture', mix_wires);
+  RETURN provsql.random_variable_make(mix_token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Lift a deterministic constant into a random_variable
+ *
+ * Creates a <tt>gate_value</tt> carrying the constant's text form so
+ * that comparisons against a <tt>random_variable</tt> column produce
+ * the same circuit shape regardless of whether the operand is an
+ * actual RV or a literal constant.
+ *
+ * Marked <tt>IMMUTABLE</tt>: the gate UUID is derived deterministically
+ * from the constant via the same v5 convention as <tt>provenance_semimod</tt>'s
+ * inline value gate (<tt>concat('value', CAST(c AS VARCHAR))</tt>), so
+ * <tt>as_random(2)</tt> always resolves to the same gate, and any other
+ * code path that already creates a value gate for the same constant
+ * (e.g. <tt>provenance_semimod</tt>) shares the UUID.
+ * <tt>create_gate</tt> is idempotent on already-mapped tokens, so
+ * repeat invocations are harmless.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Degenerate_distribution">Wikipedia: Degenerate distribution (Dirac point mass)</a>
+ */
+CREATE OR REPLACE FUNCTION as_random(c double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  -- Canonicalise -0.0 to +0.0: IEEE 754 defines x + 0.0 = +0.0 for
+  -- both signed zeros, and is identity for finite, NaN, and ±Infinity.
+  -- Without this, as_random(-0.0) and as_random(+0.0) would produce
+  -- different gate UUIDs (their CAST AS VARCHAR text representations
+  -- differ: '-0' vs '0') even though they denote the same constant.
+  c_canon double precision := c + 0.0;
+  c_text varchar := CAST(c_canon AS VARCHAR);
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('value', c_text));
+BEGIN
+  PERFORM provsql.create_gate(token, 'value');
+  PERFORM provsql.set_extra(token, c_text);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Implicit cast double precision -> random_variable (lifts a
+ *        scalar literal to a constant RV).
+ *
+ * Lets users write <tt>WHERE reading > 2.5::float8</tt> instead of
+ * <tt>WHERE reading > provsql.as_random(2.5)</tt>; the planner-hook
+ * rewriter then sees a uniform <tt>random_variable</tt> on both sides.
+ * Sibling casts below cover @c integer and @c numeric literals so
+ * plain <tt>WHERE reading > 2</tt> and <tt>WHERE reading > 2.5</tt>
+ * also work — PostgreSQL's operator resolution does not chain casts
+ * across more than one step, so each numeric-source type needs its
+ * own direct cast.
+ */
+CREATE CAST (double precision AS random_variable)
+  WITH FUNCTION as_random(double precision) AS IMPLICIT;
+
+/** @brief @c as_random for @c integer (delegates to the @c float8 form). */
+CREATE OR REPLACE FUNCTION as_random(c integer)
+  RETURNS random_variable AS
+$$ SELECT provsql.as_random(c::double precision); $$
+LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE;
+
+/** @brief @c as_random for @c numeric (delegates to the @c float8 form). */
+CREATE OR REPLACE FUNCTION as_random(c numeric)
+  RETURNS random_variable AS
+$$ SELECT provsql.as_random(c::double precision); $$
+LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE;
+
+/** @brief Implicit cast integer -> random_variable. */
+CREATE CAST (integer AS random_variable)
+  WITH FUNCTION as_random(integer) AS IMPLICIT;
+
+/** @brief Implicit cast numeric -> random_variable. */
+CREATE CAST (numeric AS random_variable)
+  WITH FUNCTION as_random(numeric) AS IMPLICIT;
+
+/**
+ * @name Arithmetic and comparison on random_variable
+ *
+ * Each binary operator below is declared on @c (random_variable,
+ * random_variable) only; mixed shapes such as <tt>rv + 2</tt> or
+ * <tt>2.5 > rv</tt> resolve through the implicit casts from
+ * @c integer / @c numeric / @c double @c precision to
+ * @c random_variable declared above.  This avoids the resolution
+ * ambiguity that would arise if both <tt>(rv, numeric)</tt> and
+ * <tt>(rv, rv)</tt> overloads were declared while implicit casts also
+ * existed.
+ *
+ * Arithmetic operators build a @c gate_arith via @c provenance_arith
+ * and return a new @c random_variable wrapping its UUID.
+ *
+ * Comparison operators are placeholders that return @c boolean and
+ * raise if executed -- the @c boolean return type is required so that
+ * PostgreSQL accepts <tt>WHERE rv > 2</tt> at parse-analyze.  The
+ * planner hook intercepts every such @c OpExpr (matched by
+ * @c opfuncid against @c constants_t::OID_FUNCTION_RV_CMP) and rewrites
+ * it into a @c provenance_cmp call whose UUID is conjoined into the
+ * tuple's @c provsql column via @c provenance_times.  Code that needs
+ * a @c gate_cmp UUID directly (without going through the planner hook)
+ * uses the @c rv_cmp_* family below, which call @c provenance_cmp
+ * with the matching float8-comparator OID.
+ *
+ * @{
+ */
+
+/** @brief @c random_variable + @c random_variable (gate_arith PLUS). */
+CREATE OR REPLACE FUNCTION random_variable_plus(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      0,  -- PROVSQL_ARITH_PLUS
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable - @c random_variable (gate_arith MINUS). */
+CREATE OR REPLACE FUNCTION random_variable_minus(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      2,  -- PROVSQL_ARITH_MINUS
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable * @c random_variable (gate_arith TIMES). */
+CREATE OR REPLACE FUNCTION random_variable_times(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      1,  -- PROVSQL_ARITH_TIMES
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c random_variable / @c random_variable (gate_arith DIV). */
+CREATE OR REPLACE FUNCTION random_variable_div(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      3,  -- PROVSQL_ARITH_DIV
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Unary @c -random_variable (gate_arith NEG). */
+CREATE OR REPLACE FUNCTION random_variable_neg(a random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      4,  -- PROVSQL_ARITH_NEG
+      ARRAY[(a)::uuid]));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Internal helper: float8-comparator OID for a given symbol.
+ *
+ * Wraps the @c '&lt;sym&gt;(double precision,double precision)'::regoperator
+ * lookup so the per-comparator functions read uniformly.  Marked
+ * @c IMMUTABLE because the resolved OID is fixed at catalog level
+ * (the float8 comparators are core PG and never re-installed).
+ */
+CREATE OR REPLACE FUNCTION random_variable_cmp_oid(sym text)
+  RETURNS oid AS
+$$
+  SELECT (sym || '(double precision,double precision)')::regoperator::oid;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/* The six @c random_variable_{lt,le,eq,ne,ge,gt} functions below are
+ * boolean placeholders -- they exist only so the @c (rv, rv) operators
+ * can be declared at all (PostgreSQL needs a procedure to bind to the
+ * operator definition, and a procedure returning anything but @c boolean
+ * would be rejected by parse-analyze in a WHERE position).  They MUST
+ * NOT be invoked directly: the planner hook in @c src/provsql.c
+ * intercepts every @c OpExpr whose @c opfuncid matches one of these and
+ * rewrites it into a @c provenance_cmp() call against the row's
+ * provenance.  If the executor ever reaches one of these, it means the
+ * planner hook was bypassed (e.g. @c provsql.active was off), in which
+ * case raising is the right behaviour. */
+
+/** @brief Placeholder body shared by every <tt>random_variable_*</tt>
+ *  comparison procedure.  Raises with a uniform message. */
+CREATE OR REPLACE FUNCTION random_variable_cmp_placeholder(
+  a random_variable, b random_variable)
+  RETURNS boolean AS
+$$
+BEGIN
+  RAISE EXCEPTION 'random_variable comparison must be rewritten by the '
+                  'ProvSQL planner hook (is provsql.active off?)';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_lt(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_le(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_eq(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_ne(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_ge(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_gt(
+  a random_variable, b random_variable) RETURNS boolean AS
+$$ SELECT provsql.random_variable_cmp_placeholder(a, b); $$
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/* Direct UUID constructors -- used by tests and any caller that wants
+ * a @c gate_cmp without going through the planner hook (e.g. building
+ * a circuit fragment in a SELECT list).  Each delegates to
+ * @c provenance_cmp with the matching float8-comparator OID. */
+
+/** @brief Build a @c gate_cmp for <tt>a &lt; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_lt(
+  a random_variable, b random_variable) RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    (a)::uuid,
+    provsql.random_variable_cmp_oid('<'),
+    (b)::uuid);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Build a @c gate_cmp for <tt>a &le; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_le(
+  a random_variable, b random_variable) RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    (a)::uuid,
+    provsql.random_variable_cmp_oid('<='),
+    (b)::uuid);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Build a @c gate_cmp for <tt>a = b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_eq(
+  a random_variable, b random_variable) RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    (a)::uuid,
+    provsql.random_variable_cmp_oid('='),
+    (b)::uuid);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Build a @c gate_cmp for <tt>a &lt;&gt; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_ne(
+  a random_variable, b random_variable) RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    (a)::uuid,
+    provsql.random_variable_cmp_oid('<>'),
+    (b)::uuid);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Build a @c gate_cmp for <tt>a &ge; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_ge(
+  a random_variable, b random_variable) RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    (a)::uuid,
+    provsql.random_variable_cmp_oid('>='),
+    (b)::uuid);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Build a @c gate_cmp for <tt>a &gt; b</tt> and return its UUID. */
+CREATE OR REPLACE FUNCTION rv_cmp_gt(
+  a random_variable, b random_variable) RETURNS uuid AS
+$$
+  SELECT provsql.provenance_cmp(
+    (a)::uuid,
+    provsql.random_variable_cmp_oid('>'),
+    (b)::uuid);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR + (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_plus,
+  COMMUTATOR = +
+);
+
+CREATE OPERATOR - (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_minus
+);
+
+CREATE OPERATOR * (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_times,
+  COMMUTATOR = *
+);
+
+CREATE OPERATOR / (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_div
+);
+
+/** @brief Prefix unary minus on @c random_variable. */
+CREATE OPERATOR - (
+  RIGHTARG  = random_variable,
+  PROCEDURE = random_variable_neg
+);
+
+CREATE OPERATOR < (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_lt,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+CREATE OPERATOR <= (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_le,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+CREATE OPERATOR = (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_eq,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+CREATE OPERATOR <> (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_ne,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+CREATE OPERATOR >= (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_ge,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+CREATE OPERATOR > (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_gt,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/** @} */
+
+/**
+ * @name Aggregates over random_variable
+ *
+ * Phase 1 of the SUM-over-RV story: an overload of the standard
+ * @c sum aggregate that takes a @c random_variable per row and returns
+ * the @c random_variable representing the (provenance-weighted) sum.
+ * Lives in the @c provsql schema so a @c sum(random_variable) call
+ * resolves to it without colliding with the built-in numeric @c sum
+ * overloads in @c pg_catalog.
+ *
+ * Direct calls outside a provenance-tracked query treat each row's
+ * contribution unconditionally (no per-row Boolean selector).  When
+ * the planner hook sees a @c provsql.sum @c Aggref over a
+ * provenance-tracked query, it wraps the per-row argument @c x in
+ * <tt>provsql.mixture(prov_token, x, provsql.as_random(0))</tt> so the
+ * aggregate's effective semantics become
+ * @f$\mathrm{SUM}(x) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i@f$,
+ * the natural extension of semimodule-provenance to RV-valued M.
+ *
+ * The internal state is the array of UUIDs of the per-row mixtures.
+ * The final function builds a single @c gate_arith @c PLUS over them
+ * (or returns @c as_random(0) for an empty group, the additive
+ * identity).  Sharing on @c provenance_arith's v5 hash means two
+ * @c sum invocations over the same set of rows collide on the same
+ * gate.
+ *
+ * @{
+ */
+
+/**
+ * @brief Per-row helper: wrap an RV in @c mixture(prov, rv, as_random(0)).
+ *
+ * Internal helper used by the planner-hook rewriter to lift a
+ * @c sum(random_variable) argument into its provenance-aware form.
+ * Encodes one row's contribution to the SUM as a Bernoulli mixture
+ * over the row's provenance: with probability @c P(prov) the mixture
+ * samples @c rv, otherwise it samples the additive identity
+ * @c as_random(0).  Exposed as a regular SQL function so the planner
+ * can construct a @c FuncExpr by name without needing to disambiguate
+ * @c mixture / @c as_random overloads at OID-lookup time.
+ */
+CREATE OR REPLACE FUNCTION rv_aggregate_semimod(
+  prov uuid, rv random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.mixture(prov, rv, provsql.as_random(0::double precision));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief State-transition function for @c sum(random_variable).
+ *
+ * Appends the input RV's UUID to the running array.  NULL inputs are
+ * skipped (matching standard SUM semantics).  The aggregate's INITCOND
+ * is @c '{}' so the FINALFUNC always runs even on an empty group, which
+ * is what lets us return @c as_random(0) (the additive identity) for
+ * an empty SUM rather than NULL.
+ */
+CREATE OR REPLACE FUNCTION sum_rv_sfunc(
+  state uuid[], rv random_variable)
+  RETURNS uuid[] AS
+$$
+  SELECT CASE
+    WHEN rv IS NULL THEN state
+    ELSE array_append(state, (rv)::uuid)
+  END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Final function for @c sum(random_variable): build a
+ *        @c gate_arith PLUS root.
+ *
+ * Empty group (@c state = @c '{}'): return @c as_random(0), the
+ * additive identity, so SUM over zero rows is the deterministic
+ * scalar 0 -- matches the agg_token convention in @c agg_raw_moment.
+ *
+ * Singleton group: return the single child directly without minting a
+ * useless single-child @c gate_arith.
+ *
+ * Otherwise: build @c gate_arith(PLUS, state) via @c provenance_arith.
+ */
+CREATE OR REPLACE FUNCTION sum_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  arith_token uuid;
+BEGIN
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN provsql.as_random(0::double precision);
+  END IF;
+  IF array_length(state, 1) = 1 THEN
+    RETURN provsql.random_variable_make(state[1]);
+  END IF;
+  arith_token := provsql.provenance_arith(0, state);  -- 0 = PROVSQL_ARITH_PLUS
+  RETURN provsql.random_variable_make(arith_token);
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE sum(random_variable) (
+  SFUNC     = sum_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = sum_rv_ffunc
+);
+
+/**
+ * @brief Final function for @c avg(random_variable).
+ *
+ * Builds the natural lift of @c "AVG = SUM / COUNT" into the
+ * @c random_variable algebra:
+ * @f[
+ *   \mathrm{AVG}(x) \;=\; \frac{\sum_i \mathbf{1}\{\varphi_i\} \cdot X_i}
+ *                                {\sum_i \mathbf{1}\{\varphi_i\}}
+ * @f]
+ * realised as @c gate_arith(DIV, num, denom) where @c num is the
+ * @c sum(random_variable) gate over the per-row mixtures and @c denom
+ * is the @c sum(random_variable) gate over the same provenance gates
+ * weighted by a per-row @c as_random(1) -- exactly the SQL pattern
+ * "@c sum(x) @c / @c sum(as_random(1))" emitted as a single
+ * @c random_variable token.
+ *
+ * Reuses @c sum_rv_sfunc as the state-transition function so the
+ * array of per-row UUIDs is collected identically to
+ * @c sum(random_variable).  In a provenance-tracked query the
+ * planner-hook rewriter routes RV-returning aggregates through
+ * @c make_rv_aggregate_expression, which wraps each per-row argument
+ * in @c mixture(prov_i, x_i, as_random(0)); the FFUNC then recovers
+ * @c prov_i from each mixture's first child to construct the matching
+ * @c mixture(prov_i, as_random(1), as_random(0)) for the denominator.
+ * Outside a tracked query the per-row UUIDs are plain RV roots, in
+ * which case each row contributes an unconditional @c as_random(1)
+ * to the denominator -- the natural extension of "no provenance =
+ * every row counts" used elsewhere in the extension.
+ *
+ * Empty group: returns @c NULL, matching the standard SQL @c AVG
+ * convention.  This differs from @c sum(random_variable), which
+ * returns the additive identity @c as_random(0) for an empty group;
+ * for AVG the multiplicative identity is not the right answer and
+ * the caller has no way to disambiguate "0 rows" from "rows that
+ * sum to 0".
+ */
+CREATE OR REPLACE FUNCTION avg_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  i integer;
+  num_token uuid;
+  denom_token uuid;
+  denom_state uuid[] := '{}';
+  one_uuid uuid;
+  gtype provsql.provenance_gate;
+  children uuid[];
+  prov_i uuid;
+BEGIN
+  IF state IS NULL THEN
+    RETURN NULL;
+  END IF;
+  n := array_length(state, 1);
+  IF n IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  one_uuid := (
+                provsql.as_random(1::double precision))::uuid;
+
+  FOR i IN 1..n LOOP
+    gtype := provsql.get_gate_type(state[i]);
+    IF gtype = 'mixture'::provsql.provenance_gate THEN
+      children := provsql.get_children(state[i]);
+      prov_i := children[1];
+      denom_state := array_append(
+        denom_state,
+        (
+          provsql.rv_aggregate_semimod(
+            prov_i, provsql.as_random(1::double precision)))::uuid);
+    ELSE
+      denom_state := array_append(denom_state, one_uuid);
+    END IF;
+  END LOOP;
+
+  IF n = 1 THEN
+    num_token := state[1];
+    denom_token := denom_state[1];
+  ELSE
+    num_token := provsql.provenance_arith(0, state);          -- 0 = PLUS
+    denom_token := provsql.provenance_arith(0, denom_state);  -- 0 = PLUS
+  END IF;
+
+  RETURN provsql.random_variable_make(
+    provsql.provenance_arith(
+      3,  -- 3 = PROVSQL_ARITH_DIV
+      ARRAY[num_token, denom_token]));
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE avg(random_variable) (
+  SFUNC     = sum_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = avg_rv_ffunc
+);
+
+/**
+ * @brief Final function for @c product(random_variable).
+ *
+ * Multiplicative analogue of @c sum(random_variable):
+ * @f[
+ *   \mathrm{PRODUCT}(x) \;=\; \prod_i \big(\mathbf{1}\{\varphi_i\} \cdot X_i
+ *                                          + \mathbf{1}\{\neg\varphi_i\} \cdot 1\big)
+ *                       \;=\; \prod_{i : \varphi_i} X_i
+ * @f]
+ * realised as @c gate_arith(TIMES, mixtures) over per-row contributions
+ * whose @em else-branch is @c as_random(1) (the multiplicative
+ * identity), so rows whose provenance is false contribute @c 1 to the
+ * product instead of @c 0.
+ *
+ * The C-side wrap shared with @c sum / @c avg always builds
+ * @c mixture(prov_i, X_i, as_random(0)); the PRODUCT FFUNC patches each
+ * mixture's else-branch to @c as_random(1) by reconstructing the
+ * mixture with the corrected else-arg.  Going through
+ * @c provsql.mixture (rather than @c create_gate directly) keeps the
+ * gate v5-hash consistent with any other mixture sharing the same
+ * @c (prov_i, X_i, as_random(1)) triple.
+ *
+ * Reuses @c sum_rv_sfunc as the state-transition function.  Empty
+ * group: returns the multiplicative identity @c as_random(1) -- the
+ * natural counterpart to @c sum(random_variable)'s empty-group
+ * @c as_random(0).
+ *
+ * Singleton group: returns the single patched child directly without
+ * minting a useless single-child @c gate_arith TIMES root.
+ *
+ * Direct (untracked) call: state entries are raw RV uuids rather than
+ * mixtures; pass them through unchanged so PRODUCT degenerates to the
+ * straight RV product over all rows, the natural "no provenance =
+ * every row counts" behaviour.
+ */
+CREATE OR REPLACE FUNCTION product_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  i integer;
+  prod_state uuid[] := '{}';
+  one_rv provsql.random_variable;
+  gtype provsql.provenance_gate;
+  children uuid[];
+  prov_i uuid;
+  x_uuid uuid;
+BEGIN
+  one_rv := provsql.as_random(1::double precision);
+
+  IF state IS NULL THEN
+    RETURN one_rv;
+  END IF;
+  n := array_length(state, 1);
+  IF n IS NULL THEN
+    RETURN one_rv;
+  END IF;
+
+  FOR i IN 1..n LOOP
+    gtype := provsql.get_gate_type(state[i]);
+    IF gtype = 'mixture'::provsql.provenance_gate THEN
+      children := provsql.get_children(state[i]);
+      prov_i := children[1];
+      x_uuid := children[2];
+      prod_state := array_append(
+        prod_state,
+        (
+          provsql.mixture(
+            prov_i,
+            provsql.random_variable_make(x_uuid),
+            one_rv))::uuid);
+    ELSE
+      prod_state := array_append(prod_state, state[i]);
+    END IF;
+  END LOOP;
+
+  IF n = 1 THEN
+    RETURN provsql.random_variable_make(prod_state[1]);
+  END IF;
+  RETURN provsql.random_variable_make(
+    provsql.provenance_arith(1, prod_state));  -- 1 = PROVSQL_ARITH_TIMES
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE product(random_variable) (
+  SFUNC     = sum_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = product_rv_ffunc
+);
+
+/** @} */
+
+/** @} */
+
 /** @defgroup aggregate_provenance Aggregate provenance
  *  Functions for building and evaluating aggregate (GROUP BY) provenance,
  *  including the δ-semiring operator and semimodule multiplication.
@@ -1501,16 +2823,25 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   'provsql','probability_evaluate' LANGUAGE C STABLE;
 
 /**
- * @brief Compute the expected value of an aggregate expression
+ * @brief Compute the expected value of a probabilistic scalar
  *
- * Computes E[input | prov], the expected value of an aggregate result
- * conditioned on a provenance expression. Supports SUM, MIN, and MAX
- * aggregation functions.
+ * Computes E[input | prov] for either an @c agg_token (discrete
+ * SUM/MIN/MAX aggregation over Boolean-input gate_agg circuits, with
+ * @c prov as the Boolean conditioning event) or a @c random_variable
+ * (continuous distribution, traversed by the analytical / MC
+ * evaluator from @c Expectation.cpp).
  *
- * @param input aggregate expression (agg_token) to compute the expected value of
+ * Implementation: thin wrapper over @c moment(input, 1, prov, method,
+ * arguments).  Both branches converge on the same machinery; the
+ * agg_token side computes E[X] as the @f$k=1@f$ instance of the
+ * @f$n^k@f$-tuple enumeration in @c agg_raw_moment, the
+ * random_variable side calls @c compute_expectation through
+ * @c rv_moment.
+ *
+ * @param input aggregate expression or random variable to compute E[·] of
  * @param prov provenance condition (defaults to gate_one(), i.e., unconditional)
- * @param method knowledge compilation method
- * @param arguments additional arguments for the method
+ * @param method knowledge compilation method (agg_token path only)
+ * @param arguments additional arguments for the method (agg_token path only)
  */
 CREATE OR REPLACE FUNCTION expected(
   input ANYELEMENT,
@@ -1518,51 +2849,523 @@ CREATE OR REPLACE FUNCTION expected(
   method text = NULL,
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS $$
+  SELECT moment(input, 1, prov, method, arguments);
+$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Internal: shared C entry point for variance / moment / central_moment.
+ *
+ * The @c expected() SQL function reaches the Expectation evaluator
+ * through @c provenance_evaluate_compiled(..., 'expectation', ...).
+ * The variance / raw-moment / central-moment SQL functions need an
+ * extra @p k integer argument that does not fit that dispatcher's
+ * signature, so they go through this dedicated entry point.  Returns
+ * E[X^k] when @p central is FALSE, or E[(X - E[X])^k] when TRUE.
+ */
+CREATE OR REPLACE FUNCTION rv_moment(
+  token uuid, k integer, central boolean,
+  prov uuid DEFAULT gate_one())
+  RETURNS double precision
+  AS 'provsql','rv_moment' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Compute the raw moment E[X^k | prov] of an agg_token aggregate
+ *
+ * Sister of @c expected() for the agg_token side of the polymorphic
+ * @c moment / @c variance / @c central_moment dispatch.  Supports the
+ * same aggregation functions as @c expected: SUM (which COUNT
+ * normalises to at the gate level via @c Aggregation.cpp:322), MIN,
+ * and MAX.
+ *
+ * Strategy:
+ * - <b>SUM</b>: with X = Σᵢ Iᵢ·vᵢ (Iᵢ the per-row inclusion indicator,
+ *   vᵢ the row's value), expanding X^k and taking expectation gives
+ *   @f$E[X^k] = \sum_{(i_1,\ldots,i_k) \in \{1..n\}^k} v_{i_1}\cdots v_{i_k}
+ *               \cdot P(\bigwedge_{i \in \text{distinct}(i_1..i_k)} I_i)@f$.
+ *   We enumerate the @f$n^k@f$ tuples, conjoin the distinct inclusion
+ *   tokens (and @p prov when conditioning), and evaluate the
+ *   probability via @c probability_evaluate.
+ * - <b>MIN / MAX</b>: replace @c v with @c v^k in the rank-based
+ *   enumeration that @c expected already uses; @c MAX is handled by
+ *   sign-flipping per the existing trick (negate vs.  rerank), with
+ *   the outer multiplier becoming @f$(-1)^k@f$ instead of just @f$-1@f$.
+ *
+ * Cost: SUM is @f$O(n^k)@f$ probability evaluations -- tractable for
+ * small @p k or small @p n; for larger sizes, prefer reaching for the
+ * sampler.  MIN / MAX stay linear in @p n.
+ */
+CREATE OR REPLACE FUNCTION agg_raw_moment(
+  token agg_token,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
 DECLARE
   aggregation_function VARCHAR;
-  token agg_token;
-  result DOUBLE PRECISION;
-  total_probability DOUBLE PRECISION;
+  child_pairs uuid[];
+  pair_children uuid[];
+  n integer;
+  i integer;
+  j integer;
+  vals float8[];
+  toks uuid[];
+  total float8;
+  total_probability float8;
+  tup integer[];
+  d integer;
+  prod_v float8;
+  distinct_tok uuid[];
+  conj_token uuid;
+  prob float8;
+  sign_max float8;
 BEGIN
-  token := input::agg_token;
-  IF token IS NULL THEN
+  IF token IS NULL OR k IS NULL THEN
     RETURN NULL;
   END IF;
+  IF k < 0 THEN
+    RAISE EXCEPTION 'agg_raw_moment(): k must be non-negative (got %)', k;
+  END IF;
   IF get_gate_type(token) <> 'agg' THEN
-    RAISE EXCEPTION USING MESSAGE='Wrong gate type for expected value computation';
+    RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation';
   END IF;
-  SELECT pp.proname::varchar FROM pg_proc pp WHERE oid=(get_infos(token)).info1 INTO aggregation_function;
+  IF k = 0 THEN
+    RETURN 1;
+  END IF;
+
+  SELECT pp.proname::varchar FROM pg_proc pp
+    WHERE oid=(get_infos(token)).info1
+    INTO aggregation_function;
+
+  child_pairs := get_children(token);
+  n := COALESCE(array_length(child_pairs, 1), 0);
+
   IF aggregation_function = 'sum' THEN
-    -- Expected value and summation operators commute
-    SELECT SUM(probability_evaluate((get_children(c))[1], method, arguments) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION))
-    FROM UNNEST(get_children(token)) AS c INTO result;
-  ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
-    -- The entire distribution is of linear size, can be easily computed
-    WITH tok_value AS (
-      SELECT (get_children(c))[1] AS tok, (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
-      FROM UNNEST(get_children(token)) AS c
-    ) SELECT probability_evaluate(provenance_monus(prov, provenance_plus(ARRAY_AGG(tok)))) FROM tok_value INTO total_probability;
-      IF total_probability > epsilon() THEN
-        result := (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST('Infinity' AS DOUBLE PRECISION);
-      ELSE
-        WITH tok_value AS (
-          SELECT (get_children(c))[1] AS tok, (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
-          FROM UNNEST(get_children(token)) AS c
-        ) SELECT
-        (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END) * SUM(p*v) FROM
-          (SELECT t1.v AS v, probability_evaluate(provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),provenance_plus(ARRAY_AGG(t2.tok))), method, arguments) AS p
-          FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
-          GROUP BY t1.v) t INTO result;
+    -- Trivial empty aggregation: SUM = 0, so SUM^k = 0 for k >= 1.
+    -- Note: agg_token semantics treat the "no row included" world as
+    -- SUM = 0, so this stays consistent with k = 1 (= expected()).
+    IF n = 0 THEN
+      RETURN 0;
+    END IF;
+
+    -- Extract per-child token + value arrays.
+    vals := ARRAY[]::float8[];
+    toks := ARRAY[]::uuid[];
+    FOR i IN 1..n LOOP
+      pair_children := get_children(child_pairs[i]);
+      toks := toks || pair_children[1];
+      vals := vals || CAST(get_extra(pair_children[2]) AS float8);
+    END LOOP;
+
+    -- Enumerate all k-tuples (i_1, ..., i_k) in {1..n}^k.  tup is the
+    -- current tuple; we step through them in lexicographic order.
+    total := 0;
+    tup := array_fill(1, ARRAY[k]);
+    LOOP
+      prod_v := 1;
+      FOR j IN 1..k LOOP
+        prod_v := prod_v * vals[tup[j]];
+      END LOOP;
+
+      SELECT array_agg(DISTINCT toks[idx]) INTO distinct_tok
+        FROM unnest(tup) AS idx;
+
+      IF prov <> gate_one() THEN
+        distinct_tok := distinct_tok || prov;
       END IF;
+      conj_token := provenance_times(VARIADIC distinct_tok);
+      prob := probability_evaluate(conj_token, method, arguments);
+
+      total := total + prod_v * prob;
+
+      d := k;
+      WHILE d >= 1 AND tup[d] = n LOOP
+        tup[d] := 1;
+        d := d - 1;
+      END LOOP;
+      EXIT WHEN d = 0;
+      tup[d] := tup[d] + 1;
+    END LOOP;
+  ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+    -- Rank enumeration: per distinct value v, P(MIN = v) is the
+    -- probability that some t_i with v_i=v is true and all t_j with
+    -- smaller v are false.  For MAX we negate values so the same
+    -- "smaller-than" rank logic computes MIN-of-negated, then flip.
+    -- The outer multiplier picks up the right sign for the k-th moment
+    -- of MAX: E[MAX^k] = (-1)^k * E[MIN(-v)^k], so sign_max = (-1)^k.
+    sign_max := CASE
+                  WHEN aggregation_function = 'max'
+                  THEN power(-1::float8, k)
+                  ELSE 1
+                END;
+
+    -- ±Infinity sink: positive probability of "no row included" makes
+    -- MIN = +Inf and MAX = -Inf.  For MIN^k that's +Inf for any k>=1;
+    -- for MAX^k it's (-1)^k * (+Inf) = ±Inf depending on k's parity.
+    WITH tok_value AS (
+      SELECT (get_children(c))[1] AS tok,
+             (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
+               * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
+      FROM UNNEST(child_pairs) AS c
+    ) SELECT probability_evaluate(provenance_monus(prov, provenance_plus(ARRAY_AGG(tok))))
+        FROM tok_value
+        INTO total_probability;
+
+    IF total_probability > epsilon() THEN
+      total := sign_max * 'Infinity'::float8;
+    ELSE
+      WITH tok_value AS (
+        SELECT (get_children(c))[1] AS tok,
+               (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
+                 * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
+        FROM UNNEST(child_pairs) AS c
+      ) SELECT sign_max * SUM(p * power(v, k)) FROM (
+          SELECT t1.v AS v,
+            probability_evaluate(
+              provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                               provenance_plus(ARRAY_AGG(t2.tok))),
+              method, arguments) AS p
+          FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
+          GROUP BY t1.v) tmp
+        INTO total;
+    END IF;
   ELSE
-    RAISE EXCEPTION USING MESSAGE='Cannot compute expected value for aggregation function ' || aggregation_function;
+    RAISE EXCEPTION USING MESSAGE=
+      'Cannot compute moment for aggregation function ' || aggregation_function;
   END IF;
-  IF prov <> gate_one() AND result <> 0. AND result <> 'Infinity' AND result <> '-Infinity' THEN
-    result := result/probability_evaluate(prov, method, arguments);
+
+  -- Conditional normalisation: E[X^k · 1_A] / P(A) = E[X^k | A].
+  IF prov <> gate_one()
+     AND total <> 0
+     AND total <> 'Infinity'::float8
+     AND total <> '-Infinity'::float8 THEN
+    total := total / probability_evaluate(prov, method, arguments);
   END IF;
-  RETURN result;
+
+  RETURN total;
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;;
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Compute the variance Var[X | prov] of a probabilistic scalar
+ *
+ * Polymorphic dispatcher that mirrors @c expected: @c random_variable
+ * inputs go through the analytical / MC evaluator
+ * (@c rv_moment(uuid, 2, true)); @c agg_token inputs go through the
+ * @c agg_raw_moment helper, computing
+ * @f$\mathrm{Var}[X|A] = E[X^2|A] - E[X|A]^2@f$.  Conditioning on
+ * @c prov is supported for @c agg_token (matching @c expected) but
+ * not yet for @c random_variable.
+ */
+CREATE OR REPLACE FUNCTION variance(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  m1 float8;
+  m2 float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- Conditioning on prov is handled inside rv_moment: when prov
+    -- resolves to gate_one() (the default, or load-time
+    -- simplification of any always-true sub-circuit) the
+    -- unconditional analytical path runs unchanged; otherwise the
+    -- joint-circuit loader unifies shared gate_rv leaves between
+    -- input and prov, and the conditional path runs either
+    -- truncated-distribution closed form or MC rejection.
+    RETURN provsql.rv_moment(
+      (input::random_variable)::uuid, 2, true, prov);
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    m1 := agg_raw_moment(input::agg_token, 1, prov, method, arguments);
+    m2 := agg_raw_moment(input::agg_token, 2, prov, method, arguments);
+    IF m1 IS NULL OR m2 IS NULL THEN
+      RETURN NULL;
+    END IF;
+    RETURN m2 - m1 * m1;
+  END IF;
+
+  RAISE EXCEPTION 'variance() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Compute the raw moment E[X^k | prov] of a probabilistic scalar
+ *
+ * @c k must be a non-negative integer.  @c k = 0 returns 1; @c k = 1
+ * is equivalent to @c expected(input).  Polymorphic dispatcher: routes
+ * @c random_variable through @c rv_moment (analytical / MC) and
+ * @c agg_token through @c agg_raw_moment (SUM via tuple enumeration,
+ * MIN / MAX via rank enumeration).
+ */
+CREATE OR REPLACE FUNCTION moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_moment(
+      (input::random_variable)::uuid, k, false, prov);
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    RETURN agg_raw_moment(input::agg_token, k, prov, method, arguments);
+  END IF;
+
+  RAISE EXCEPTION 'moment() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Internal: rv-side support computation
+ *
+ * Lifts @c provsql::compute_support out of @c RangeCheck.cpp -- the
+ * same interval-arithmetic propagation @c runRangeCheck uses to
+ * decide @c gate_cmps.  Returns @c [-Infinity, +Infinity] when the
+ * tightest bound is the conservative all-real interval (e.g. for a
+ * normal RV, or any sub-circuit that mixes a normal in).
+ */
+CREATE OR REPLACE FUNCTION rv_support(
+  token uuid, prov uuid DEFAULT gate_one(),
+  OUT lo float8, OUT hi float8)
+  AS 'provsql','rv_support' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Compute the support interval @c [lo, hi] of a probabilistic
+ *        (or deterministic) scalar
+ *
+ * Polymorphic dispatcher mirroring @c expected / @c variance /
+ * @c moment / @c central_moment, with two extra "free" branches:
+ *
+ * - <b>Plain numeric</b> (@c smallint / @c integer / @c bigint /
+ *   @c numeric / @c real / @c double @c precision): degenerate
+ *   point support @f$[c, c]@f$.  Lets callers ask for the support
+ *   of a literal without round-tripping through @c as_random.
+ * - <b>@c random_variable / bare @c uuid</b> (any provenance gate
+ *   token, including the implicit @c random_variable @c -> @c uuid
+ *   cast): routes to @c rv_support, which propagates distribution
+ *   supports (uniform exact, exponential @c [0,+∞), normal
+ *   @c (-∞,+∞)) through @c gate_arith via interval arithmetic.
+ *   @c gate_value gives the same @f$[c, c]@f$ point support as the
+ *   numeric branch; any non-scalar gate (Boolean gates, aggregates,
+ *   ...) safely falls back to the conservative all-real interval
+ *   without raising.  Conditioning on @c prov is not yet supported.
+ *
+ * - @c agg_token: closed-form per aggregation function:
+ *   - @c SUM : @f$[\sum_i \min(0,v_i), \sum_i \max(0,v_i)]@f$
+ *     (every row is independently in or out of the included set; the
+ *     extreme SUMs are reached by including only positive or only
+ *     negative-valued rows).
+ *   - @c MIN : @f$[\min_i v_i, \max_i v_i]@f$ in the non-empty
+ *     subsets, plus @c +Infinity if the empty subset has positive
+ *     probability under @c prov.
+ *   - @c MAX : symmetric -- @c -Infinity if empty has positive
+ *     probability under @c prov, otherwise @c min_i v_i; @c hi is
+ *     always @c max_i v_i.
+ *
+ * Other aggregation functions raise.
+ *
+ * Returns the composite record @c (lo, hi) via the function's
+ * @c OUT parameters, with @c -Infinity / @c +Infinity marking
+ * unbounded ends.
+ */
+CREATE OR REPLACE FUNCTION support(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL,
+  OUT lo float8,
+  OUT hi float8)
+  AS $$
+DECLARE
+  aggregation_function VARCHAR;
+  child_pairs uuid[];
+  values_arr float8[];
+  total_probability float8;
+BEGIN
+  IF input IS NULL THEN
+    lo := NULL; hi := NULL; RETURN;
+  END IF;
+
+  -- Plain numeric: degenerate point support.  Lets `support(2.5)` /
+  -- `support(42)` / etc.  return (2.5, 2.5) without making the user
+  -- wrap in `as_random`.
+  IF pg_typeof(input) IN (
+       'smallint'::regtype, 'integer'::regtype, 'bigint'::regtype,
+       'numeric'::regtype, 'real'::regtype, 'double precision'::regtype) THEN
+    lo := input::double precision;
+    hi := input::double precision;
+    RETURN;
+  END IF;
+
+  -- random_variable has an IMPLICIT cast to uuid, so a single
+  -- rv_support call covers both shapes.  rv_support handles
+  -- gate_value (point), gate_rv (distribution), gate_arith
+  -- (propagated), and falls back to the conservative all-real
+  -- interval for any other gate kind.  Conditioning on prov is not
+  -- supported (would require restricting the underlying joint
+  -- distribution by the indicator of prov, which has no closed form
+  -- for the basic distributions we ship).
+  IF pg_typeof(input) IN ('random_variable'::regtype, 'uuid'::regtype) THEN
+    -- Conditional support: rv_support folds the AND-conjunct interval
+    -- constraints from prov into the unconditional support.  When
+    -- prov is gate_one() the unconditional support is returned
+    -- unchanged.
+    SELECT r.lo, r.hi INTO lo, hi
+      FROM provsql.rv_support(input::uuid, prov) r;
+    RETURN;
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF get_gate_type(input::agg_token) <> 'agg' THEN
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for support computation';
+    END IF;
+    SELECT pp.proname::varchar FROM pg_proc pp
+      WHERE oid=(get_infos(input::agg_token)).info1
+      INTO aggregation_function;
+    child_pairs := get_children(input::agg_token);
+
+    IF aggregation_function = 'sum' THEN
+      -- Empty agg_token: SUM is identically 0.
+      IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
+        lo := 0; hi := 0; RETURN;
+      END IF;
+      SELECT sum(LEAST(v, 0::float8)), sum(GREATEST(v, 0::float8))
+        INTO lo, hi
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+              FROM unnest(child_pairs) AS c) sub;
+    ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+      -- Empty agg_token: MIN = +Infinity, MAX = -Infinity (the
+      -- empty-set conventions used by `expected`).
+      IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
+        IF aggregation_function = 'min' THEN
+          lo := 'Infinity'::float8; hi := 'Infinity'::float8;
+        ELSE
+          lo := '-Infinity'::float8; hi := '-Infinity'::float8;
+        END IF;
+        RETURN;
+      END IF;
+
+      WITH tok_value AS (
+        SELECT (get_children(c))[1] AS tok,
+               CAST(get_extra((get_children(c))[2]) AS float8) AS v
+        FROM UNNEST(child_pairs) AS c
+      )
+      SELECT min(v), max(v),
+             probability_evaluate(
+               provenance_monus(prov, provenance_plus(ARRAY_AGG(tok))),
+               method, arguments)
+        INTO lo, hi, total_probability
+        FROM tok_value;
+
+      IF total_probability > epsilon() THEN
+        IF aggregation_function = 'min' THEN
+          hi := 'Infinity'::float8;
+        ELSE
+          lo := '-Infinity'::float8;
+        END IF;
+      END IF;
+    ELSE
+      RAISE EXCEPTION USING MESSAGE=
+        'Cannot compute support for aggregation function ' || aggregation_function;
+    END IF;
+    RETURN;
+  END IF;
+
+  RAISE EXCEPTION 'support() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Compute the central moment E[(X - E[X|prov])^k | prov]
+ *
+ * @c k = 0 returns 1; @c k = 1 returns 0; @c k = 2 is equivalent to
+ * @c variance(input, prov, ...).  Polymorphic dispatcher: routes
+ * @c random_variable through @c rv_moment, and @c agg_token through
+ * the binomial expansion
+ * @f$E[(X-\mu)^k|A] = \sum_{i=0}^{k} \binom{k}{i} (-\mu)^{k-i} E[X^i|A]@f$
+ * with @f$\mu = E[X|A]@f$, where each @f$E[X^i|A]@f$ comes from
+ * @c agg_raw_moment.
+ */
+CREATE OR REPLACE FUNCTION central_moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  mu float8;
+  total float8;
+  i integer;
+  raw_i float8;
+  binom float8;
+  -- iterative binomial coefficient C(k, i)
+  k_double float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_moment(
+      (input::random_variable)::uuid, k, true, prov);
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k < 0 THEN
+      RAISE EXCEPTION 'central_moment(): k must be non-negative (got %)', k;
+    END IF;
+    IF k = 0 THEN RETURN 1; END IF;
+    IF k = 1 THEN RETURN 0; END IF;
+
+    mu := agg_raw_moment(input::agg_token, 1, prov, method, arguments);
+    IF mu IS NULL THEN RETURN NULL; END IF;
+    -- mu may be ±Infinity for empty MIN / MAX with positive empty
+    -- probability; central_moment is undefined in that case.
+    IF mu = 'Infinity'::float8 OR mu = '-Infinity'::float8 THEN
+      RETURN mu;
+    END IF;
+
+    total := 0;
+    binom := 1;  -- C(k, 0)
+    k_double := k;
+    FOR i IN 0..k LOOP
+      raw_i := agg_raw_moment(input::agg_token, i, prov, method, arguments);
+      IF raw_i IS NULL THEN RETURN NULL; END IF;
+      total := total + binom * power(-mu, k - i) * raw_i;
+      -- C(k, i+1) = C(k, i) * (k - i) / (i + 1)
+      IF i < k THEN
+        binom := binom * (k_double - i) / (i + 1);
+      END IF;
+    END LOOP;
+    RETURN total;
+  END IF;
+
+  RAISE EXCEPTION 'central_moment() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
  * @brief Compute the Shapley value of an input variable

@@ -153,7 +153,7 @@ expects them to return ordinary scalar types (an ``INT``, a
 ``FLOAT``...).  But the rewritten query needs the aggregate
 result to carry *both* the scalar value and the provenance gate
 that captures how it was computed -- otherwise downstream
-references to ``provenance()`` would have nothing to return.
+references to :sqlfunc:`provenance` would have nothing to return.
 
 ProvSQL solves this by introducing :cfunc:`agg_token`, a
 composite SQL type wrapping a UUID (the root ``agg`` gate) and a
@@ -190,7 +190,7 @@ aggregation at the *pipeline* level: Step 4 calls
 :cfunc:`rewrite_agg_distinct` to lift ``COUNT(DISTINCT ...)``
 into an inner ``GROUP BY``, Step 8 calls
 :cfunc:`replace_aggregations_by_provenance_aggregate` followed
-by :cfunc:`migrate_aggtoken_quals_to_having` and
+by :cfunc:`migrate_probabilistic_quals` and
 :cfunc:`insert_agg_token_casts`, and Step 9 fuses the row-level
 tokens with ``provenance_plus(array_agg(...))`` and wraps the
 result in ``provenance_delta``.  This section only documents the
@@ -200,7 +200,7 @@ out.
 
 The call that :cfunc:`make_aggregation_expression` synthesises to
 replace an ``Aggref`` is a ``FuncExpr`` for
-``provsql.provenance_aggregate`` whose arguments are:
+:sqlfunc:`provenance_aggregate` whose arguments are:
 
 - the OID of the aggregate function;
 - the OID of its result type;
@@ -215,11 +215,11 @@ replace an ``Aggref`` is a ``FuncExpr`` for
 That fourth argument is where the semimodule construction of
 :ref:`the-semimodule-picture` is actually assembled: every
 ``semimod`` gate is one simple tensor :math:`k \star m`, and the
-``agg`` gate at the root of the ``provenance_aggregate`` call is
+``agg`` gate at the root of the :sqlfunc:`provenance_aggregate` call is
 their formal sum :math:`\sum_i (k_i \star m_i)`.
 
 The row-level side of the rewrite is much simpler.  It reuses the
-ordinary ``get_provenance_attributes`` collection, combines the
+ordinary :cfunc:`get_provenance_attributes` collection, combines the
 per-row tokens with ``provenance_plus(array_agg(...))``, and -- for
 queries with aggregation and no ``HAVING`` -- wraps the result in
 ``provenance_delta``.  The row-level token therefore has *no*
@@ -249,6 +249,41 @@ lists the operators currently implemented in |cpp|: ``COUNT``
 ``AVG``, ``AND``, ``OR``, ``CHOOSE``, and ``ARRAY_AGG``.  Adding
 to this list is the topic of the next section.
 
+
+Random-Variable Aggregates
+--------------------------
+
+When the aggregated column has type ``random_variable``
+(see :doc:`continuous-distributions`), the rewriter routes
+through a separate path: instead of producing a
+:sqlfunc:`provenance_aggregate` call that wraps the original
+``Aggref`` in an :cfunc:`agg_token`, it produces an aggregate
+that *returns* a ``random_variable`` root. The aggregate's
+result is the lifted scalar :math:`\sum_i \mathbf{1}\{\varphi_i\}
+\cdot X_i` (or its product / average analogue), realised as a
+single ``gate_arith`` over per-row ``gate_mixture``
+children.
+
+The dispatch in :cfunc:`make_aggregation_expression` keys on
+``aggtype`` (the aggregate's *result type* OID): when
+``aggtype = OID_TYPE_RANDOM_VARIABLE``, the per-row argument
+``X_i`` is wrapped in ``rv_aggregate_semimod``
+(a :sqlfunc:`mixture` over the row's provenance gate and
+the identity for the aggregate) *before* it reaches the SFUNC.
+The aggregate's SFUNC accumulates the wrapped per-row UUIDs;
+the FFUNC builds the final ``gate_arith`` root. The three
+RV-returning aggregates currently shipped –
+:sqlfunc:`sum`, :sqlfunc:`avg`,
+:sqlfunc:`product` – share an
+``INITCOND = '{}'`` so the FFUNC runs even on an empty group,
+with per-aggregate empty-group identities.
+
+This is the *semimodule-of-mixtures* shape: rather than minting a
+new M-polymorphic ``gate_agg`` that would require parallel
+evaluation paths in every analytical evaluator, the rewrite
+composes through the existing ``gate_arith`` /
+``gate_mixture`` rules. See
+:doc:`continuous-distributions` for the FFUNC details.
 
 Step-by-Step: Adding a New Aggregate
 ------------------------------------
@@ -339,7 +374,7 @@ combine the values incrementally.
    section above.
 
 Nothing else needs to change: the query rewriter, the
-``provenance_aggregate`` SQL function, the :cfunc:`agg_token`
+:sqlfunc:`provenance_aggregate` SQL function, the :cfunc:`agg_token`
 composite type, and the :cfunc:`aggregation_evaluate` SQL
 dispatcher all operate on OIDs and metadata, so they pick up new
 aggregates automatically once steps 1--4 are in place.

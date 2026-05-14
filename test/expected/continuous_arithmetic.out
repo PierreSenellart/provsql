@@ -1,0 +1,31 @@
+\set ECHO none
+plus_kind|plus_op|minus_kind|minus_op|times_kind|times_op|div_kind|div_op|neg_kind|neg_op
+arith|0|arith|2|arith|1|arith|3|arith|4
+(1 row)
+plus_children|minus_children_lr|minus_children_rl|neg_children
+t|t|t|t
+(1 row)
+plus_dedup|plus_neq_times|minus_orientation_matters
+t|t|t
+(1 row)
+plus_int|plus_numeric|plus_float8|plus_reversed|gt_int|lt_reversed
+t|t|t|t|t|t
+(1 row)
+lt_kind|le_kind|eq_kind|ne_kind|ge_kind|gt_kind|gt_children
+cmp|cmp|cmp|cmp|cmp|cmp|t
+(1 row)
+lt_sym|le_sym|eq_sym|ne_sym|ge_sym|gt_sym
+<|<=|=|<>|>=|>
+(1 row)
+root_kind|lhs_kind|rhs_kind|lhs_arith_op
+cmp|arith|value|0
+(1 row)
+sum_of_normals_gt_zero
+t
+(1 row)
+sum_of_uniforms_gt_one
+t
+(1 row)
+continuous_arithmetic_done
+ok
+(1 row)

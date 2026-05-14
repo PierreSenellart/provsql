@@ -1,0 +1,93 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|pm25_kind
+1|rv
+3|rv
+4|value
+7|rv
+(4 rows)
+remove_provenance
+
+(1 row)
+id|station_id|prov_kind|pm25_kind
+1|s1|times|rv
+2|s2|times|rv
+3|s3|times|rv
+4|s4|times|value
+5|s1|times|rv
+6|s2|times|rv
+7|s3|times|rv
+8|s4|times|value
+(8 rows)
+remove_provenance
+
+(1 row)
+id|mc_matches_independent
+1|t
+5|t
+(2 rows)
+remove_provenance
+
+(1 row)
+id|mixture_kind|scaled_kind
+1|mixture|arith
+5|mixture|arith
+(2 rows)
+remove_provenance
+
+(1 row)
+district|sum_root|avg_root
+centre|arith|arith
+east|arith|arith
+(2 rows)
+district|total_mean_exact
+centre|t
+east|t
+(2 rows)
+remove_provenance
+
+(1 row)
+station_id|id|prov_kind
+s1|1|plus
+s1|5|plus
+s2|2|plus
+s2|6|plus
+s3|3|plus
+s3|7|plus
+s4|4|plus
+s4|8|plus
+(8 rows)
+remove_provenance
+
+(1 row)
+district|prov_kind
+centre|delta
+east|delta
+(2 rows)
+remove_provenance
+
+(1 row)
+id|ind_equals_td|ind_close_to_mc
+1|t|t
+2|t|t
+3|t|t
+4|t|t
+5|t|t
+6|t|t
+7|t|t
+8|t|t
+(8 rows)

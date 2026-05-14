@@ -155,6 +155,21 @@ your checkout). To upgrade an existing installation:
    become orphans and will not be resolvable against the new
    circuit store.
 
+.. note::
+
+   In-place ``ALTER EXTENSION provsql UPDATE`` is not supported on
+   **PostgreSQL < 12** when crossing the 1.4.0 → 1.5.0 boundary: the
+   1.5.0 release introduces new gate-type enum values via several
+   ``ALTER TYPE ... ADD VALUE`` statements, and PostgreSQL 10 and 11
+   reject more than one such statement inside the single transaction
+   PostgreSQL wraps the upgrade chain in. Fresh installs
+   (``CREATE EXTENSION provsql``) work on every supported PostgreSQL
+   version; the restriction only affects the in-place upgrade path
+   across that one boundary. To move a pre-1.5.0 database forward
+   under PostgreSQL 10 or 11, upgrade to PostgreSQL 12+ first (the
+   provenance store carries over unchanged) and then run
+   ``ALTER EXTENSION provsql UPDATE``.
+
 Testing Your Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
