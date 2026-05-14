@@ -69,14 +69,14 @@ CREATE TABLE historical_readings (
   pm25        random_variable NOT NULL
 );
 INSERT INTO historical_readings (id, station_id, ts, pm25) VALUES
-  (101, 's1', '2026-05-11 08:00', provsql.normal(34.0, 2.5)),
-  (102, 's2', '2026-05-11 08:00', provsql.uniform(15.0, 28.0)),
-  (103, 's3', '2026-05-11 08:00', provsql.exponential(0.03)),
-  (104, 's4', '2026-05-11 08:00', 18.0),
-  (105, 's1', '2026-05-11 09:00', provsql.normal(42.0, 3.0)),
-  (106, 's2', '2026-05-11 09:00', provsql.uniform(20.0, 35.0)),
-  (107, 's3', '2026-05-11 09:00', provsql.erlang(3, 0.08)),
-  (108, 's4', '2026-05-11 09:00', 19.5);
+  (1, 's1', '2026-05-11 08:00', provsql.normal(34.0, 2.5)),
+  (2, 's2', '2026-05-11 08:00', provsql.uniform(15.0, 28.0)),
+  (3, 's3', '2026-05-11 08:00', provsql.exponential(0.03)),
+  (4, 's4', '2026-05-11 08:00', 18.0),
+  (5, 's1', '2026-05-11 09:00', provsql.normal(42.0, 3.0)),
+  (6, 's2', '2026-05-11 09:00', provsql.uniform(20.0, 35.0)),
+  (7, 's3', '2026-05-11 09:00', provsql.erlang(3, 0.08)),
+  (8, 's4', '2026-05-11 09:00', 19.5);
 SELECT add_provenance('historical_readings');
 
 -- ---------------------------------------------------------------------
@@ -191,22 +191,25 @@ SELECT district,
 DROP TABLE result_cs6_agg;
 
 -- ---------------------------------------------------------------------
--- Step 8: UNION ALL across today's batch and the historical batch
--- preserves both branches' provenance via gate_plus.  The pm25 column
--- is forwarded verbatim, so the per-row gate_rv shapes survive.
--- count(*) is computed after remove_provenance so the agg_token shell
--- doesn't render as "4 (*)" / "12 (*)" in the output.
+-- Step 8: UNION across the two batches dedups by (station_id, id) and
+-- combines the two row provenances via gate_plus.  Both batches share
+-- the same id space (1..8), so the keys line up directly.  WHERE pm25
+-- > 35 lifts the comparator into each contributing row's provenance,
+-- so the resulting gate_plus wraps two gate_times(input, gate_cmp)
+-- subtrees.
 -- ---------------------------------------------------------------------
-CREATE TABLE result_cs6_union_raw AS
-    SELECT get_gate_type(pm25::uuid) AS pm25_kind FROM readings
-  UNION ALL
-    SELECT get_gate_type(pm25::uuid) AS pm25_kind FROM historical_readings;
-SELECT remove_provenance('result_cs6_union_raw');
-SELECT pm25_kind, count(*) AS n
-  FROM result_cs6_union_raw
-  GROUP BY pm25_kind
-  ORDER BY pm25_kind;
-DROP TABLE result_cs6_union_raw;
+CREATE TABLE result_cs6_union AS
+SELECT station_id, id, get_gate_type(provenance()) AS prov_kind
+FROM (
+    (SELECT station_id, id FROM readings            WHERE pm25 > 35)
+  UNION
+    (SELECT station_id, id FROM historical_readings WHERE pm25 > 35)
+) t;
+SELECT remove_provenance('result_cs6_union');
+SELECT station_id, id, prov_kind
+  FROM result_cs6_union
+  ORDER BY station_id, id;
+DROP TABLE result_cs6_union;
 
 -- ---------------------------------------------------------------------
 -- Step 9: filter the per-district aggregates by their expected average.

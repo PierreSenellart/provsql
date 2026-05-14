@@ -203,7 +203,45 @@ the result is now identical across runs. Toggle the seed back to
    the constant ``35``. The eval strip below switches to
    ``probability_evaluate`` and exposes the method picker.
 
-Step 3: Calibration via Mixtures
+Step 3: The Simplifier in Action
+---------------------------------
+
+The planner hook emits the comparator as a raw ``gate_cmp``
+regardless of what its operands look like. A *simplifier* pass
+then folds comparators whose answer can be decided from the
+operand support alone — for example, ``U(10, 22) > 35`` is
+universally false because the uniform's upper bound is below the
+threshold. The fold is controlled by ``provsql.simplify_on_load``
+(default on), which the Config panel exposes under *Provenance*.
+
+Click into row 2's auto-added ``provsql`` cell from the Step 2
+result (station ``s2``, ``pm25 ~ U(10, 22)``). With
+``provsql.simplify_on_load`` on, the canvas shows a single
+``𝟘`` (zero) gate: the simplifier resolved the comparator to a
+constant-false leaf and dropped the whole subtree. Toggle the
+GUC off in the Config panel and click the cell again: the canvas
+now shows the raw construction shape, a ``gate_times`` (``⊗``)
+over the row's input token ``ι`` and a ``gate_cmp`` (``>``)
+whose children are the ``U(10, 22)`` leaf and the constant
+``35``. Both views are semantically identical; the simplified
+view is what the semiring evaluators and the Monte-Carlo sampler
+actually consume.
+
+.. figure:: /_static/casestudy6/simplify-before-after.png
+   :alt: Side-by-side: on the left, the raw circuit for row 2's
+         provenance with provsql.simplify_on_load off, showing a
+         gate_times over an input token and a > gate_cmp whose
+         children are U(10,22) and 35; on the right, the same
+         circuit with the GUC on collapsed to a single zero gate.
+
+   Row 2's provenance for ``pm25 > 35`` with
+   ``provsql.simplify_on_load`` toggled off (left) vs on (right).
+   The simplifier recognised that the upper bound of
+   ``U(10, 22)`` is below the threshold, so the comparator is
+   universally false and the whole subtree collapses to the
+   additive identity ``𝟘``.
+
+Step 4: Calibration via Mixtures
 ---------------------------------
 
 Each station has a probability of being mis-calibrated; a
@@ -229,9 +267,17 @@ mixing probability, ``x`` to the in-spec arm, and ``y`` to the
 correction arm.
 
 The same node-inspector panel exposes ``Distribution profile``
-on the mixture root: the histogram becomes bimodal, with the two
-modes corresponding to the in-spec and out-of-spec readings,
-weighted by the calibration probability.
+on the mixture root. Because station ``s1`` is in spec 95% of
+the time, the histogram is dominated by the ``N(28, 2)`` arm and
+the out-of-spec ``N(23.33, 1.667)`` contributes only a small
+left shoulder rather than a visually distinct second mode; the
+panel headline reflects this with a mixture mean slightly below
+28. To see clear bimodality, re-run the query with a larger
+calibration error — e.g. replace ``r.pm25 / 1.2`` with
+``r.pm25 / 2.0`` so the out-of-spec arm folds to ``N(14, 1)``,
+well separated from the in-spec ``N(28, 2)``; the two peaks
+then show up distinctly on the histogram even at the 95%/5%
+weighting.
 
 .. figure:: /_static/casestudy6/mixture-node.png
    :alt: Mix node with three labelled outgoing edges (p, x, y);
@@ -248,7 +294,7 @@ weighted by the calibration probability.
    significant figures; the inspector pinned to either child
    surfaces the full-precision parameters.
 
-Step 4: Aggregation Over Random Variables
+Step 5: Aggregation Over Random Variables
 ------------------------------------------
 
 Compute average :math:`PM_{2.5}` per district:
@@ -285,37 +331,6 @@ the inclusion-weighted mean.
    ``gate_rv`` leaves at the bottom are the per-reading
    distributions; the ``ι`` leaves anchor each row's provenance.
 
-Step 5: The Simplifier in Action
----------------------------------
-
-Toggle ``provsql.simplify_on_load`` off in the Config panel and
-re-load the same ``avg_pm25`` cell. The canvas now shows the
-*raw* gate-creation graph: comparators that are always satisfied
-(e.g. a mixture branch whose calibration probability is ``1`` or
-``0``), single-child arith roots, and ``gate_one`` /
-``gate_zero`` semiring identities are all present unfolded.
-Toggle the GUC back on; the canvas re-renders with the universal
-peephole collapsed (Boolean comparators decidable from the
-propagated support become ``gate_input`` leaves with probability
-``0`` or ``1``; identity gates are dropped). The two views are
-semantically identical; the simplified view is what the semiring
-evaluators and Monte-Carlo sampler actually consume.
-
-.. figure:: /_static/casestudy6/simplify-before-after.png
-   :alt: Side-by-side composite: the raw circuit with
-         provsql.simplify_on_load off on the left, and the
-         simplified circuit on the right;
-         the structure is broadly similar because aggregation queries
-         leave the per-row mixture spine intact.
-
-   The same ``avg(pm25)`` circuit with ``provsql.simplify_on_load``
-   toggled off (left) vs on (right). For the per-district average,
-   the simplifier's peephole pass leaves the per-row mixture spine
-   intact because no mixture probability collapses to ``0`` or
-   ``1``; the contrast is more dramatic on queries with degenerate
-   mixtures or single-child arith roots (try
-   ``provsql.mixture(1.0, X, Y)`` to see the collapse).
-
 Step 6: Conditional Inference
 ------------------------------
 
@@ -335,7 +350,9 @@ underneath the input is active. Pick *Distribution profile* and
 run: the histogram now shows the *truncated* shape, restricted to
 the tail above ``35``. Pick *Moment* with ``k = 1`` and ``raw``:
 the panel returns the closed-form Mills-ratio mean of the
-truncated normal, exactly :math:`\mu + \sigma \cdot
+`truncated normal
+<https://en.wikipedia.org/wiki/Truncated_normal_distribution>`_,
+exactly :math:`\mu + \sigma \cdot
 \frac{\phi(\alpha)}{1 - \Phi(\alpha)}` with
 :math:`\alpha = (35 - \mu)/\sigma`. Click the active badge to
 clear the conditioning; the panel reverts to the unconditional
@@ -374,49 +391,50 @@ conditional distribution. With the same row pinned and the
 shows a six-value inline preview with a "show full list"
 expander; clicking it dumps all 200 samples.
 
-If the conditioning event is so unlikely that fewer than 200
-samples land within the ``provsql.rv_mc_samples`` budget, the
-panel surfaces a hint pointing at the GUC, e.g. *Only 47 samples
-accepted within budget 10000; widen* ``provsql.rv_mc_samples`` *or
-loosen the conditioning*. Re-running with a larger budget (set
-``rv_mc_samples = 50000`` in the Config panel) recovers the full
-batch.
+For shapes that fall outside the closed-form table the sampler
+falls back to rejection sampling at the
+``provsql.rv_mc_samples`` budget; if the conditioning event is
+so unlikely that fewer than ``n`` samples land inside that
+budget, the panel surfaces a hint pointing at the GUC, e.g.
+*Only 47 samples accepted within budget 10000; widen*
+``provsql.rv_mc_samples`` *or loosen the conditioning*.
+Re-running with a larger budget (set ``rv_mc_samples = 50000``
+in the Config panel) recovers the full batch.
 
-.. figure:: /_static/casestudy6/sample-panel-expanded.png
-   :alt: The Sample evaluator panel expanded to a details element
-         showing 1 sample out of 100 accepted, and a hint reading
-         "MC accepted 1/100. Raise provsql.rv_mc_samples in the
-         Config panel to widen the rejection-sampling budget."
+Step 8: Combining Batches via UNION
+------------------------------------
 
-   The *Sample* evaluator on row 1 (``pm25 ∼ N(28, 2)``) under
-   ``pm25 > 35``: the conditioning event lies 3.5 σ above the
-   mean, so only 1 sample is accepted out of the 100-iteration
-   budget. The actionable hint points at the
-   ``provsql.rv_mc_samples`` GUC.
-
-Step 8: Combining Batches via UNION ALL
-----------------------------------------
-
-Combine today's readings with the historical batch:
+Both batches share the same id space (rows ``1`` through ``8``,
+one per ``(station, timestamp)`` slot), so a ``UNION`` (without
+``ALL``) over ``(station_id, id)`` deduplicates a slot to a
+single result row whose provenance combines today's reading and
+yesterday's reading via the semiring addition. With
+``WHERE pm25 > 35`` lifted on each branch, each contributing row
+carries a ``gate_cmp(pm25 > 35)`` of its own:
 
 .. code-block:: postgresql
 
-    (SELECT pm25 FROM readings)
-    UNION ALL
-    (SELECT pm25 FROM historical_readings)
+    (SELECT station_id, id FROM readings            WHERE pm25 > 35)
+    UNION
+    (SELECT station_id, id FROM historical_readings WHERE pm25 > 35)
+    ORDER BY station_id, id
 
-Pick a result row's ``provsql`` cell. Circuit mode shows the
-expected ``gate_plus`` over the two branches' provenance: each
-contributing row's provenance is preserved, and the alternative
-between the two batches is encoded as the semiring addition.
+Pick a result row's ``provsql`` cell: Circuit mode shows a
+``gate_plus`` (``⊕``) over the two contributing inputs (today's
+row and yesterday's row), each carrying its own
+``gate_cmp(pm25 > 35)`` from the lifted ``WHERE``.
 ``probability_evaluate(provenance())`` on the result gives the
-probability that *either* batch produced an in-range reading for
-that station.
+probability that *at least one* of the two days produced an
+Unhealthy reading for that slot. We deliberately keep the
+``random_variable`` ``pm25`` column out of the ``SELECT``: there
+is no duplicate-elimination semantics for ``random_variable``,
+so a ``UNION`` over an RV column would have no well-defined
+meaning.
 
 Step 9: Filtering Grouped Random Variables by Expected Value
 -------------------------------------------------------------
 
-Filter the per-district aggregates from Step 4 by their expected
+Filter the per-district aggregates from Step 5 by their expected
 average. The natural ``HAVING expected(avg(r.pm25)) > 20`` form is
 not yet supported by the planner-hook rewrite (it accepts
 ``provenance_aggregate()`` calls, plain ``agg_token`` columns, and

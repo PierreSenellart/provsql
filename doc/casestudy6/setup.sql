@@ -89,14 +89,14 @@ CREATE TABLE historical_readings (
 );
 
 INSERT INTO historical_readings (id, station_id, ts, pm25) VALUES
-  (101, 's1', '2026-05-11 08:00', provsql.normal(34.0, 2.5)),
-  (102, 's2', '2026-05-11 08:00', provsql.uniform(15.0, 28.0)),
-  (103, 's3', '2026-05-11 08:00', provsql.exponential(0.03)),
-  (104, 's4', '2026-05-11 08:00', 18.0),
-  (105, 's1', '2026-05-11 09:00', provsql.normal(42.0, 3.0)),
-  (106, 's2', '2026-05-11 09:00', provsql.uniform(20.0, 35.0)),
-  (107, 's3', '2026-05-11 09:00', provsql.erlang(3, 0.08)),
-  (108, 's4', '2026-05-11 09:00', 19.5);
+  (1, 's1', '2026-05-11 08:00', provsql.normal(34.0, 2.5)),
+  (2, 's2', '2026-05-11 08:00', provsql.uniform(15.0, 28.0)),
+  (3, 's3', '2026-05-11 08:00', provsql.exponential(0.03)),
+  (4, 's4', '2026-05-11 08:00', 18.0),
+  (5, 's1', '2026-05-11 09:00', provsql.normal(42.0, 3.0)),
+  (6, 's2', '2026-05-11 09:00', provsql.uniform(20.0, 35.0)),
+  (7, 's3', '2026-05-11 09:00', provsql.erlang(3, 0.08)),
+  (8, 's4', '2026-05-11 09:00', 19.5);
 
 SELECT add_provenance('historical_readings');
 
