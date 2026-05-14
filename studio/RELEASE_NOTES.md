@@ -21,10 +21,17 @@ profile / sample / moment / support.
   categorical blocks) and the Bernoulli probability rendered
   inline in the parent circle.
 - **Distribution profile evaluator**: new entry under the
-  *Distribution* optgroup of the eval strip. Header stats
+  *Distribution* group of the eval strip. Header stats
   (`μ`, `σ²`), inline-SVG histogram, PDF/CDF toggle, per-bar
   tooltip with `σ`-markers, wheel zoom. Backed server-side by
-  the new C entry point `rv_histogram`.
+  the new C entry point `rv_histogram`. When the gate has a
+  closed-form, the panel also draws the analytical PDF (or CDF)
+  on top of the histogram as a terracotta SVG path; Bernoulli
+  mixtures, categoricals, and Diracs render as discs on stems
+  in PDF mode and as a staircase in CDF mode. Universally-
+  infeasible truncations short-circuit with an inline message
+  instead of returning empty bars. Backed by the new C entry
+  point `rv_analytical_curves`.
 - **Sample evaluator**: second *Distribution* entry, drawing
   conditional samples via `rv_sample(token, n, prov)`. Renders
   as a `<details>` panel with a six-value inline preview and a
@@ -60,16 +67,24 @@ profile / sample / moment / support.
 - **Categorical and mixture inspector**: node-inspector entries
   for the two new gate shapes; single-outcome categoricals
   collapse to `as_random` in the simplifier.
+- **Footer version readout**: the footer now displays the
+  loaded ProvSQL extension version (read from `pg_extension`)
+  and the Studio package version (`provsql_studio.__version__`)
+  on the right edge, served by `/api/conn`. A new
+  `provsql-studio --version` CLI flag prints the package
+  version and exits.
 
 ### Demo and tests
 
-- `studio/scripts/demo_continuous.{sh,py}` fixture loader for
+- `studio/scripts/demo_continuous.{sql,py}` fixture loader for
   the sensors / air-quality narrative used in
-  `doc/source/user/casestudy6.rst`.
+  `doc/source/user/casestudy6.rst`; a standalone copy is also
+  shipped as `doc/casestudy6/setup.sql` for the rendered docs.
 - Playwright e2e at `studio/tests/e2e/test_continuous.py`
   covering `gate_rv` / `gate_arith` rendering, the
-  *Distribution profile* evaluator, the *Sample* panel, the
-  conditioning auto-preset, and a Monte-Carlo
+  *Distribution profile* evaluator (including the closed-form
+  PDF/CDF overlay over the histogram bars), the *Sample* panel,
+  the conditioning auto-preset, and a Monte-Carlo
   `p ∈ (0, 1)` smoke test on the sensors fixture.
 
 ### Compatibility

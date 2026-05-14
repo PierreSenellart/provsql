@@ -62,13 +62,28 @@ otherwise:
 
 The **`HybridEvaluator`** simplifier folds family-preserving
 combinations (normals close under linear combination; sums of
-i.i.d. exponentials with the same rate fold to Erlang;
-`c·X`-style shifts thread through mixtures and categoricals;
-single-child arith roots and semiring identities collapse). The
-**island decomposer** splits multi-cmp queries into independent
-sub-problems on shared base-RV footprints. Whole-circuit Monte
-Carlo remains as the safety net for anything not analytically
-tractable.
+i.i.d. exponentials with the same rate fold to Erlang; the
+affine shapes `-N`, `-U`, `c+N`, `c-N`, `N-c`, `c-U`, `U-c`,
+`U+c` fold via a `MINUS → PLUS` canonicalisation plus a uniform
+shift-closure rule; `c·X`-style shifts thread through mixtures
+and categoricals; single-child arith roots and semiring
+identities collapse; deterministic `gate_arith` subtrees are
+folded to `gate_value` at load time). The **island decomposer**
+splits multi-cmp queries into independent sub-problems on
+shared base-RV footprints. Whole-circuit Monte Carlo remains as
+the safety net for anything not analytically tractable.
+
+EQ/NE comparators take an analytical path whenever both sides
+have extractable Dirac mass-maps with disjoint random-leaf
+footprints, resolving to a sum-product over the discrete masses;
+the same shortcut also widens to `gate_arith` composites and to
+Bernoulli mixtures whose continuous arm fully covers the
+support, so equality checks against an outcome of a categorical
+or a mixture resolve symbolically.
+
+Symbolic prints in the simplifier use `std::to_chars`
+shortest-roundtrip formatting, so folds like `2 * Exp(0.4)` now
+print `exponential:0.2` instead of `0.20000000000000001`.
 
 `provsql.simplify_on_load` (default `on`) runs the universal
 peephole pass at load time, so every downstream consumer
@@ -82,18 +97,32 @@ The polymorphic moment dispatchers `expected` / `variance` /
 `prov uuid DEFAULT gate_one()` argument; passing `provenance()`
 from inside a tracked query conditions on the row's filter
 event automatically. New companion C entry points
-`rv_sample(token, n, prov)` (SRF over `float8`) and
-`rv_histogram(token, bins, prov)` (returning `jsonb`) expose
-conditional samples and histograms for inspection and downstream
-analytics.
+`rv_sample(token, n, prov)` (SRF over `float8`),
+`rv_histogram(token, bins, prov)` (returning `jsonb`), and
+`rv_analytical_curves(token, prov, n_points)` (SRF returning
+`(x, pdf, cdf)` rows; mass-stems for discrete arms) expose
+conditional samples, histograms, and closed-form PDF/CDF curves
+for inspection and downstream analytics.
 
 Closed-form truncated distributions cover Normal (Mills ratio),
-Uniform (intersected support), and Exponential (memorylessness on
-a lower bound, finite-interval truncation via the lower
-incomplete gamma). Anything outside the closed-form table falls
-back to MC rejection sampling at `provsql.rv_mc_samples`; a
-`NOTICE` (or, for histograms / moments, an error) fires when
-fewer than the requested `n` samples land within the budget.
+Uniform (intersected support), Exponential (memorylessness on a
+lower bound, finite-interval truncation via the lower incomplete
+gamma), and Erlang (via the same regularised incomplete-gamma
+machinery). The truncation pipeline also handles Bernoulli
+mixtures (each arm truncated independently and the surviving mass
+renormalised), categoricals (filtered outcomes plus rescaling),
+and Diracs (kept or dropped against the conditioning event); a
+universally-infeasible truncated subtree short-circuits to a
+`NaN`-typed Dirac so downstream evaluators do not fire MC blindly.
+On top of the moment fast paths, `rv_sample` and `rv_histogram`
+take an inverse-CDF fast path on bare `gate_rv` conditional
+events — Uniform / Exponential by memoryless inverse, Normal by
+Beasley-Springer-Moro — bypassing MC entirely when the gate is a
+single recognised distribution under a closed-form truncation.
+Anything outside the closed-form table falls back to MC
+rejection sampling at `provsql.rv_mc_samples`; a `NOTICE` (or,
+for histograms / moments, an error) fires when fewer than the
+requested `n` samples land within the budget.
 
 ## Aggregation over random variables
 
@@ -118,12 +147,18 @@ over `random_variable` are not yet supported and are deferred.
 ProvSQL Studio 1.1.0 ships in parallel on PyPI as
 `provsql-studio==1.1.0`; minimum required extension version is
 1.5.0. The new Studio features include the distribution-profile
-panel (μ/σ², histogram, PDF/CDF toggle, wheel zoom), the
-`Sample` evaluator with conditional-MC budget hints, the
-`Condition on` row-prov auto-preset, simplified-circuit rendering
-driven by `provsql.simplify_on_load`, and Config-panel rows for
-`monte_carlo_seed`, `rv_mc_samples`, `simplify_on_load`. See
-`studio/RELEASE_NOTES.md` (staging) for details.
+panel (μ/σ², histogram, PDF/CDF toggle, wheel zoom) with a
+closed-form analytical overlay drawn on top of the histogram
+bars (terracotta SVG path for continuous arms, discs-on-stems
+for Bernoulli mixtures / categoricals / Diracs, staircase
+overlay in CDF mode), the `Sample` evaluator with conditional-MC
+budget hints, the `Condition on` row-prov auto-preset,
+simplified-circuit rendering driven by `provsql.simplify_on_load`,
+Config-panel rows for `monte_carlo_seed`, `rv_mc_samples`,
+`simplify_on_load`, and a footer that surfaces both the
+extension and the Studio package versions (plus a new
+`--version` CLI flag). See `studio/RELEASE_NOTES.md` (staging)
+for details.
 
 ## Internal
 
@@ -142,6 +177,40 @@ driven by `provsql.simplify_on_load`, and Config-panel rows for
   BFS so shared `gate_rv` leaves between `input` and `prov` are
   loaded into a single `GenericCircuit` and consequently couple
   correctly under MC rejection sampling.
+- `random_variable` is now a thin wrapper over `pg_uuid_t` with
+  bare-UUID text I/O and a binary-coercible `WITHOUT FUNCTION`
+  cast to / from `uuid`; the planner hook emits a `RelabelType`
+  instead of a `FuncExpr`. The historical cached-scalar field
+  has been removed.
+- `runConstantFold` in the load-time simplifier pass folds any
+  deterministic `gate_arith` subtree to a single `gate_value`
+  (so e.g. `arith(NEG, value:c)` collapses to `value:-c` before
+  `asRvVsConstCmp` looks at the cmp).
+- `matchTruncatedSingleRv` (in `RangeCheck.h`) factors the
+  closed-form single-RV shape detection used by
+  `try_truncated_closed_form` / `try_truncated_closed_form_sample`
+  / `rv_analytical_curves`, keeping the supported-shape set in
+  sync across moments, sampling, and PDF/CDF curves.
+- `HybridEvaluator::double_to_text` uses `std::to_chars` for
+  shortest-roundtrip formatting of folded scalar coefficients.
+
+## Bug fixes
+
+- Backend segfault at `verbose_level >= 20` when deparsing an
+  `EXCEPT`-rewritten tree. `transform_except_into_join` was
+  leaving the synthesised `RTE_JOIN` with `NULL` `eref` /
+  `joinaliasvars` / `joinleftcols` / `joinrightcols`; execution
+  was fine (outer `Var`s reference the inputs directly) but the
+  ruleutils deparser walks the rtable and crashed. All four
+  fields are now populated on supported PostgreSQL versions
+  (`joinleftcols` / `joinrightcols` / `joinmergedcols` are
+  guarded for PG &lt; 13). New regression `verbose_setops`
+  covers `EXCEPT` and non-`ALL` `UNION`.
+- `READM` / `READB` in `provsql_mmap.c` now compare `read()`
+  against `(ssize_t)sizeof(...)` so the size check no longer
+  promotes to unsigned and masks short-read errors. File-local
+  globals are marked `static` and the `-Wmissing-variable-declarations`
+  / `-Wunused-result` warnings are clean.
 
 ## GUCs (user-facing)
 
@@ -171,6 +240,10 @@ end users have no reason to flip it.
 - `gate_type` enum extended (`gate_rv`, `gate_arith`,
   `gate_mixture` appended; no renumbering).
 - mmap format compatible with 1.4.0.
+- `random_variable` text I/O is bare UUID; the type is binary-
+  coercible with `uuid` (cast declared `WITHOUT FUNCTION`), so
+  the on-disk and on-wire representations are identical to
+  `uuid`. The struct is `pg_uuid_t`.
 - `ALTER EXTENSION provsql UPDATE` is sufficient.
 
 ## Out of scope / open follow-ups
