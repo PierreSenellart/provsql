@@ -143,7 +143,7 @@ jobs:
         id: pw-version
         shell: bash
         run: |
-          PW=$(python -c "import playwright; print(playwright.__version__)")
+          PW=$(python -c "from importlib.metadata import version; print(version('playwright'))")
           echo "version=$PW" >> "$GITHUB_OUTPUT"
       # Browser binary is ~112 MiB; cache it keyed on the Playwright
       # release so an upgrade invalidates the cache automatically.
