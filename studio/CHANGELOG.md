@@ -14,6 +14,23 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.1.1]
+
+Patch release fixing a Circuit-mode crash on databases that contain
+temp tables.
+
+### Bug fixes
+
+- **Crash on `/api/circuit` when another session has a temp table.**
+  The tracked-input catalog scan was matching every relation with a
+  `provsql uuid` column, including `pg_temp_NN.<name>` rows that
+  transiently appear in another backend's `pg_class` snapshot before
+  autovacuum cleans them up; the subsequent UNION ALL then dispatched
+  against an unreachable temp relation and raised `UndefinedTable`.
+  The catalog scan now filters `relpersistence <> 't'` and skips
+  `pg_temp%` / `pg_toast%` namespaces, so Circuit mode is robust
+  against any temp-table activity on the target database.
+
 ## [1.1.0]
 
 Companion release for ProvSQL extension 1.5.0. Adds first-class
