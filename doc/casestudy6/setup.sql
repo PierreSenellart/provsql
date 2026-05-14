@@ -1,33 +1,11 @@
--- City air-quality sensor-network fixture for ProvSQL Studio's
--- continuous-distribution demo.  Backs the worked example in
--- doc/source/user/casestudy6.rst (*The City Air-Quality Sensor
--- Network*).
---
--- Exercises every code path the continuous-RV feature touches:
---
---   * gate_rv leaves with all four distribution kinds
---     (normal / uniform / exponential / erlang);
---   * a deterministic reference station that uses the implicit
---     numeric -> random_variable cast (gate_value);
---   * gate_arith (calibration-scaled reading: pm25 * 1.2);
---   * gate_mixture for calibration uncertainty
---     (mixture(p_cal, pm25, pm25 * 1.2));
---   * gate_cmp via WHERE pm25 > 35 (planner-hook rewrite);
---   * UNION ALL across today's batch and the historical batch;
---   * sum / avg over random_variable (semimodule lowering through
---     rv_aggregate_semimod);
---   * HAVING expected(avg(pm25)) > 20 (gate_agg + gate_cmp).
---
--- Run via:
---     psql -d air_quality_demo -f studio/scripts/demo_continuous.sql
--- or, for a one-shot "drop, recreate, load, launch Studio" loader:
---     python3 studio/scripts/demo_continuous.py
+-- Case Study 6: The City Air-Quality Sensor Network
+-- Setup script – load into a fresh PostgreSQL database:
+--   psql -d mydb -f setup.sql
 
-\set ECHO none
-\pset format unaligned
+SET client_encoding = 'UTF8';
 
-CREATE EXTENSION IF NOT EXISTS provsql CASCADE;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS provsql WITH SCHEMA public;
 
 SET search_path TO public, provsql;
 
@@ -122,8 +100,8 @@ INSERT INTO historical_readings (id, station_id, ts, pm25) VALUES
 
 SELECT add_provenance('historical_readings');
 
--- A provenance mapping so the Studio eval-strip's :sqlfunc:`sr_formula`
--- and PROV-XML export can label leaves with station names rather than
+-- A provenance mapping so the Studio eval-strip's sr_formula and
+-- PROV-XML export can label leaves with station names rather than
 -- raw UUIDs.
 DROP TABLE IF EXISTS station_mapping;
 CREATE TABLE station_mapping AS
@@ -131,25 +109,3 @@ CREATE TABLE station_mapping AS
   FROM readings r JOIN stations s ON s.id = r.station_id;
 SELECT remove_provenance('station_mapping');
 CREATE INDEX ON station_mapping(provenance);
-
-\echo ''
-\echo 'Loaded the air-quality sensor fixture.  Open Studio against this'
-\echo 'database, then walk through the case study:'
-\echo ''
-\echo '  doc/source/user/casestudy6.rst -- The City Air-Quality Sensor Network'
-\echo ''
-\echo 'Starter queries (paste into the Studio query box):'
-\echo ''
-\echo '  -- Step 1: inspect a noisy reading'
-\echo '  SELECT id, ts, pm25, provsql FROM readings'
-\echo '   WHERE station_id = ''s1'' ORDER BY ts;'
-\echo ''
-\echo '  -- Step 2: probabilistic threshold (Unhealthy)'
-\echo '  SELECT id, station_id, ts, provsql FROM readings'
-\echo '   WHERE pm25 > 35;'
-\echo ''
-\echo '  -- Step 3: per-district aggregates'
-\echo '  SELECT s.district, avg(r.pm25) AS avg_pm25, sum(r.pm25) AS total_pm25, provsql'
-\echo '    FROM readings r JOIN stations s ON s.id = r.station_id'
-\echo '   GROUP BY s.district;'
-\echo ''

@@ -64,17 +64,16 @@ Setup
 
 This case study assumes a working ProvSQL installation
 (see :doc:`getting-provsql`) and a running ProvSQL Studio
-session pointed at it (see :doc:`studio`). The fixture lives at
-``studio/scripts/demo_continuous.sh`` in the ProvSQL source tree;
-it creates a fresh database, runs the schema below, and seeds the
-random-variable readings via the constructors documented in
-:doc:`continuous-distributions`:
+session pointed at it (see :doc:`studio`). Download
+:download:`setup.sql <../../casestudy6/setup.sql>` and load it
+into a fresh PostgreSQL database::
 
-.. code-block:: bash
+    createdb air_quality_demo
+    psql -d air_quality_demo -f setup.sql
 
-    bash studio/scripts/demo_continuous.sh
-
-The schema is five tables:
+The script creates the schema below and seeds the random-variable
+readings via the constructors documented in
+:doc:`continuous-distributions`. It is five tables:
 
 * ``stations(id, name, district)`` – four monitoring stations
   across two districts, provenance-tracked.

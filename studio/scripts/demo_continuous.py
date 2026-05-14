@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """City Air-Quality Sensor Network demo loader.
 
-Python sibling of ``demo_continuous.sh`` for users who prefer not to
-depend on ``bash`` / ``psql`` shell tooling. Re-creates a fresh
-database, loads the SQL fixture, and (unless ``--no-launch`` is
-passed) starts ProvSQL Studio against it.
+Re-creates a fresh database, loads the SQL fixture, and (unless
+``--no-launch`` is passed) starts ProvSQL Studio against it.
 
 The fixture itself is the SQL file ``demo_continuous.sql`` in this
 directory.  See ``doc/source/user/casestudy6.rst`` for the worked
