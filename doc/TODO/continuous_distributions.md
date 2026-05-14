@@ -46,6 +46,7 @@ The prioritisation uses four labels:
 | 18 | Causal interventions (`do`) | Structural extensions | Research |
 | 19 | Shapley over RV-valued payoffs | Provenance × probability | Research |
 | 20 | Provenance of sampled values | Provenance × probability | Research |
+| 21 | Per-distribution class hierarchy (`src/distributions/`) | Internal architecture | Architectural (prerequisite) |
 
 ---
 
@@ -176,6 +177,15 @@ is the foundation of most frequentist hypothesis tests.
 SELECT provsql.gamma(2.5, 0.4);
 SELECT provsql.chi_squared(3);    -- syntactic sugar for gamma(k/2, 0.5)
 ```
+
+**Sequencing.** Gamma is the natural proof-of-concept for the
+per-distribution refactor in §F.1: under the current layout it lands
+as a coordinated patch across seven `switch`-on-`DistKind` sites; under
+the post-refactor layout it lands as one new file in
+`src/distributions/` plus a single registry entry.  Doing the refactor
+first absorbs the migration of the four existing families with the
+test suite as the regression net, then exercises the new interface
+with Gamma before it has to absorb a wider family set.
 
 ### A.2 Log-normal — **[Quick win]**
 
@@ -322,6 +332,13 @@ SELECT provsql.quantile(posterior, 0.025) AS lower_95,
 FROM model_posteriors WHERE param = 'mu_revenue';
 ```
 
+`quantile` is currently absent from every per-family code path,
+so it is a natural method to land on the abstract `Distribution`
+interface introduced by the §F.1 refactor: the SQL dispatcher
+becomes one virtual call regardless of family, instead of a fresh
+switch on `DistKind` paralleling the existing PDF/CDF/moment
+switches.
+
 ### B.2 RV-vs-RV analytical comparisons — **[Quick win]**
 
 `gate_cmp` handles `X < c` brilliantly. `X < Y` for two RVs goes to MC
@@ -394,6 +411,14 @@ FROM ...;
 The integration point for ML-fitted, simulation-derived, or
 sample-based distributions. Two gate types cover essentially everything;
 specific constructors smooth the common cases.
+
+Under the §F.1 refactor, the empirical gates land as ordinary
+`Distribution` subclasses (`EmpiricalSamples`, `EmpiricalCdf`, `Gmm`)
+alongside the analytical ones — same virtual interface, same
+registry, but the `pdf`/`cdf`/`quantile`/`sample`/moment methods are
+backed by sorted arrays, piecewise-linear tables, or mixture
+dispatch instead of closed forms.  Call sites in the evaluators stay
+oblivious to which storage strategy a given gate uses.
 
 ### C.1 GMM constructor — **[Quick win]**
 
@@ -726,6 +751,124 @@ sample itself.
 
 ---
 
+## F. Internal architecture
+
+Refactors that pay no immediate user-visible dividend but reshape the
+codebase so the feature work in §§A–E lands as additions rather than
+edits to scattered switch statements.  None of them change the gate
+ABI or the on-disk encoding; they are correct iff the existing
+`test/` suite still passes.
+
+### F.1 Per-distribution class hierarchy in `src/distributions/` — **[Architectural, prerequisite for §§A.1–A.5, B.1, B.3–B.5, C.1–C.4]**
+
+**The expression problem, in the small.** The current `gate_rv` family
+set (Normal, Uniform, Exponential, Erlang) is encoded as a `DistKind`
+enum, and every operation that needs to discriminate on it opens a
+`switch` and handles each kind inline:
+
+- analytical PDF, CDF, and the `X < c` decision rule in
+  `AnalyticEvaluator.cpp`,
+- truncation support and bound recovery in `RangeCheck.cpp`,
+- inverse-CDF / direct sampling in `MonteCarloSampler.cpp`,
+- closed-form moments in `Expectation.cpp` and the parsing layer in
+  `RandomVariable.cpp`,
+- plot-range selection in `RvAnalyticalCurves.cpp`,
+- family-closure folding rules in `HybridEvaluator.cpp`.
+
+This is row-major: operations are grouped, families are scattered.  At
+the four families the branch ships with, the pattern is tolerable; at
+the twelve-plus families implied by §§A and C it becomes the dominant
+cost of every feature in §A, and a meaningful share of §§B–C.  Adding
+Gamma under the existing layout is a coordinated patch across seven
+files; the patch is mostly mechanical but has to be reviewed in full
+each time because the cases interleave with non-family-specific logic.
+
+**Proposal.** A `src/distributions/` directory with one
+`<name>.{cpp,h}` per family — Normal, Uniform, Exponential, Erlang
+to start; Gamma, LogNormal, Beta, Poisson, Binomial, Geometric,
+EmpiricalSamples, EmpiricalCdf, Gmm as they land.  Each subclass of an
+abstract `Distribution` interface implements the methods the existing
+call sites need:
+
+- `support()` returning a structured `Support` (whole line, half-line,
+  closed interval, discrete enumeration), encapsulating the bounds
+  that `RangeCheck` currently reconstructs from `DistKind` cases.
+- `pdf(x)`, `cdf(x)`, `log_pdf(x)` for `AnalyticEvaluator`.
+- `quantile(p)` for §B.1, currently absent — landing it on the
+  interface makes the §B.1 dispatcher one virtual call.
+- `mean()`, `variance()`, `raw_moment(k)`, `central_moment(k)` for
+  `Expectation`.
+- `sample(rng)` for `MonteCarloSampler`.
+- `plot_range(quantile_lo, quantile_hi)` for `RvAnalyticalCurves`.
+- `serialise()` plus a registered `parse()` for the on-disk text
+  encoding that `RandomVariable.cpp` currently centralises.
+
+A `DistributionRegistry` keyed on the encoded family name maps to a
+factory.  Adding a new family becomes one new file plus one registry
+entry; no existing file is touched.  The architecture mirrors the
+per-file-per-semiring layout in the companion Lean formalisation
+(`Provenance/Semirings/<name>.lean` in
+[`provenance-lean`](https://github.com/PierreSenellart/provenance-lean)),
+where each concrete provenance semiring lives in its own file and
+exposes the `SemiringWithMonus` instance the rest of the library
+consumes — the same expression-problem pressure, the same answer.
+
+**What the refactor does *not* absorb.** Single-class virtual dispatch
+captures *unary* operations on one distribution.  Pairwise and joint
+behaviour does not fit cleanly, and trying to force it through the
+`Distribution` interface re-creates the row-major coupling the
+refactor was meant to dissolve:
+
+- **Family-closure folds** — Normal + Normal = Normal, Erlang sum
+  closure, fixed-`p` Binomial sum closure, Poisson sum closure,
+  exponential min closure — are intrinsically pairwise on
+  `(DistKind, DistKind)`.  These belong in a separate
+  `ClosureRuleRegistry` consulted by the `HybridEvaluator` simplifier,
+  keyed by family pair and arithmetic operator.  Per-family files can
+  *register* their participation in such rules without owning them.
+- **RV-vs-RV comparators (§B.2)** are similarly pairwise:
+  a `ComparatorRuleRegistry` mapping `(DistKind, op, DistKind)` to a
+  closed-form-probability lambda.
+- **Copulas (§D.2)** are inherently multi-distribution; the
+  `gate_copula` itself is the natural locus, optionally with
+  per-copula-family files in a parallel `src/copulas/` directory if
+  symmetry helps.
+- **Conditioning (§D.1)** wraps a `Distribution` rather than being
+  one; the wrapper delegates to the wrapped family for the easy cases
+  and falls back to a generic rejection path otherwise.
+
+Keeping these in dedicated registries — rather than over-loading the
+`Distribution` interface with multi-dispatch hacks — preserves the
+single-responsibility property that makes the per-distribution files
+worth having in the first place.
+
+**Sequencing.**  The refactor produces no user-visible feature on its
+own, so its payoff is entirely a function of the features it
+unblocks.  Doing it *before* the Quick-wins batch (§A.1 Gamma,
+§A.2 Log-normal, §B.1 quantiles) gives:
+
+1. The four existing families migrate as a behaviour-preserving
+   change, with the existing `test/` suite as the regression net.
+2. Gamma lands as the first proof-of-concept family under the new
+   layout — one file in `src/distributions/`, one registry entry, no
+   edits anywhere else.  Anything missing from the abstract interface
+   surfaces here, while the cost of patching is still small.
+3. Every subsequent family inherits the cleaned-up cost profile.
+
+Doing the refactor *after* Gamma would mean migrating five families
+instead of four, with the same end state.
+
+**Cost.** A mechanical translation of existing `switch` blocks into
+virtual method bodies, plus the closure-rule and comparator
+registries lifted out of `HybridEvaluator.cpp` and the relevant
+`AnalyticEvaluator.cpp` paths.  No new functionality, no changes to
+the gate ABI or the on-disk text encoding.  The hardest design
+choices are the shape of the `Support` value and the boundary between
+`Distribution` methods and registry-held pairwise rules — both are
+internal and revisable.
+
+---
+
 ## Cross-cutting UI design principles
 
 The branch's existing grammar is good. Extensions should preserve it.
@@ -768,27 +911,31 @@ The branch's existing grammar is good. Extensions should preserve it.
 A defensible sequencing that front-loads value and back-loads
 architectural risk:
 
-1. **Quick wins, in parallel.** Gamma (§A.1), Log-normal (§A.2),
-   quantiles (§B.1), RV-vs-RV comparisons (§B.2), GMM constructor
-   (§C.1). All are small, mostly independent, and ship as one minor
-   release.
-2. **Solid mid-term batch.** Beta (§A.3) and the discrete families
+1. **Prerequisite refactor: per-distribution class hierarchy (§F.1).**
+   Behaviour-preserving migration of the four existing families into
+   `src/distributions/`, gated by the existing test suite.  Lands no
+   user-visible feature; cuts the per-family cost of everything below.
+2. **Quick wins, in parallel.** Gamma (§A.1) — the proof-of-concept
+   for the new layout — together with Log-normal (§A.2), quantiles
+   (§B.1), RV-vs-RV comparisons (§B.2), and GMM constructor (§C.1).
+   All are small, mostly independent, and ship as one minor release.
+3. **Solid mid-term batch.** Beta (§A.3) and the discrete families
    (§A.4) round out the parametric set. Function application (§B.3)
    then unlocks the Normal ↔ Log-normal bridge analytically.
    Order-statistic aggregates (§B.4) and information-theoretic
    primitives (§B.5) close the expressivity gap.
-3. **Empirical track.** Samples gate (§C.2) and CDF gate (§C.3), then
-   snapshot (§C.4). Pairs naturally with the moment dispatchers
-   already in place.
-4. **First architectural step: conditioning as a gate (§D.1).** The
+4. **Empirical track.** Samples gate (§C.2) and CDF gate (§C.3), then
+   snapshot (§C.4). Each lands as a `Distribution` subclass under the
+   §F.1 hierarchy, reusing the moment dispatchers already in place.
+5. **First architectural step: conditioning as a gate (§D.1).** The
    most leverage per architectural unit; collapses the existing
    truncation codepath into a general mechanism; unlocks §E.1.
-5. **Second architectural step: correlation (§D.2 + §A.5).** The MVN
+6. **Second architectural step: correlation (§D.2 + §A.5).** The MVN
    constructor lands as a Gaussian-copula special case; copulas land
    simultaneously. Largest expressivity gain in the entire roadmap.
-6. **Third architectural step: stochastic processes (§D.3).** Builds
+7. **Third architectural step: stochastic processes (§D.3).** Builds
    on §D.2.
-7. **Research track in parallel.** Causal interventions (§D.4),
+8. **Research track in parallel.** Causal interventions (§D.4),
    Shapley over RV-valued payoffs (§E.1), and provenance of sampled
-   values (§E.2) can be explored independently of (3)–(6), and would
+   values (§E.2) can be explored independently of (4)–(7), and would
    each plausibly anchor a paper.
