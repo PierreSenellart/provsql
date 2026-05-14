@@ -1434,3 +1434,18 @@ BEGIN
   RAISE EXCEPTION 'support() is not yet supported for input type %', pg_typeof(input);
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+-- ----------------------------------------------------------------------
+-- Final step: invalidate the per-session OID constants cache.
+--
+-- The C side caches the OID of each `provenance_gate` enum value at
+-- session-first-use of get_constants(); the three new values appended
+-- above (`rv`, `arith`, `mixture`) are not in that cache for any
+-- backend that warmed it under 1.4.0.  Without this reset, the first
+-- create_gate(_, 'rv') in the upgrading session raises
+-- "ProvSQL: Invalid gate type".  reset_constants_cache() forces a
+-- fresh look-up on next get_constants(), so the new enum values
+-- become usable immediately after ALTER EXTENSION provsql UPDATE.
+-- ----------------------------------------------------------------------
+
+SELECT reset_constants_cache();
