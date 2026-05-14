@@ -81,9 +81,15 @@ and all other queries remain evaluable.
    :math:`a \le b + c`), ``monus_self``, ``zero_monus``,
    ``monus_add``, ``add_monus`` -- plus the characterisation of
    idempotent m-semirings (``idempotent_iff_add_monus``,
-   ``plus_is_join``).  A contributor adding a new compiled
-   semiring can use that module as a formal reference for what
-   the ``zero`` / ``one`` / ``plus`` / ``times`` / ``monus``
+   ``plus_is_join``).  The typeclass also carries the
+   :math:`\delta` operator as a field, with axioms
+   ``delta_zero`` (:math:`\delta(0) = 0`) and
+   ``delta_natCast_pos``
+   (:math:`\delta(n) = 1` for positive :math:`n`); the derived
+   ``delta_one`` (:math:`\delta(1) = 1`) is exposed at the top
+   level.  A contributor adding a new compiled semiring can use
+   that module as a formal reference for what the ``zero`` /
+   ``one`` / ``plus`` / ``times`` / ``monus`` / ``delta``
    methods are *required* to compute -- the Lean class is the
    ground truth, and the |cpp| overrides should be a faithful
    implementation of it.  The
@@ -91,13 +97,14 @@ and all other queries remain evaluable.
    namespace already contains verified instances for
    ``Bool``, ``Nat`` (counting), ``BoolFunc`` (Boolean
    formulas), ``How`` (the how-provenance universal semiring),
-   ``Why``, ``Which`` (lineage), ``MinMax``, ``Tropical``,
-   ``Lukasiewicz``, ``Viterbi``, and ``IntervalUnion`` (finite
-   unions of intervals over a dense linear order, used for
-   temporal databases), each with a proof of the m-semiring
-   axioms and of any extra properties (absorptivity,
-   idempotence, left-distributivity of multiplication over
-   monus) that matter for optimisation.
+   ``Why``, ``Which`` (lineage), ``MinMax`` (and ``MaxMin`` via
+   ``OrderDual``), ``Tropical``, ``Lukasiewicz``, ``Viterbi``,
+   and ``IntervalUnion`` (finite unions of intervals over a
+   dense linear order, used for temporal databases), each with
+   a proof of the m-semiring axioms, a concrete :math:`\delta`,
+   and any extra properties (absorptivity, idempotence,
+   left-distributivity of multiplication over monus) that
+   matter for optimisation.
 
 .. _semiring-optional-methods:
 

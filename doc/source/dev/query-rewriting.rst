@@ -340,6 +340,24 @@ provenance as the annotated semantics" correctness statement
 from the ICDE paper, for the partial fragment proved (the
 (R4) multiset-difference case is in progress).
 
+A companion theorem,
+`Query.evaluateAnnotated_hom
+<https://provsql.org/lean-docs/Provenance/QueryAnnotatedDatabaseHom.html#Query.evaluateAnnotated_hom>`_
+in the ``Provenance.QueryAnnotatedDatabaseHom`` module, proves
+that query evaluation commutes with m-semiring homomorphisms
+on the non-aggregation fragment (the formal analogue of
+[Green, Karvounarakis & Tannen, *Provenance Semirings*],
+Proposition 3.5, and [Geerts & Poggi, *On database query
+languages for K-relations*], Proposition 1, lifted to
+m-semirings via ``SemiringWithMonusHom``).  This is the
+formal counterpart of ProvSQL's architectural choice: a single
+persistent provenance circuit is kept once, and each ``sr_*``
+semiring evaluator is the realisation of one m-semiring
+homomorphism out of that circuit; the theorem says that
+running the homomorphism on the inputs and then evaluating the
+query yields the same result as evaluating the query first and
+applying the homomorphism to the annotations.
+
 .. _probabilistic-qual-classifier:
 
 Probabilistic-Qual Classifier
