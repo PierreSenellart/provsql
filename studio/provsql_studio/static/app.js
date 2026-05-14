@@ -155,7 +155,7 @@
   // explodes on aggregation circuits with "Wrong type of gate".
   window.__provsqlStudio = {
     mode, refreshRelations, escapeHtml, escapeAttr, formatCell,
-    isRightAlignedType, pushHistory,
+    isRightAlignedType, matchesProvType, pushHistory,
   };
 
   if (mode === 'where') setupWhereMode();
@@ -1118,17 +1118,14 @@
           // ProvSQL-extended column types carry circuit references rather
           // than plain scalars, so query operators on them are intercepted by
           // the planner hook. Flag them with a small terracotta pill so the
-          // user can spot them in the schema panel; match both the unqualified
-          // form (search_path includes provsql) and the qualified one.
-          const matchesType = (t, base) => {
-            const s = String(t || '').toLowerCase();
-            return s === base || s === `provsql.${base}`;
-          };
+          // user can spot them in the schema panel; matchesProvType handles
+          // both the unqualified form (provsql on search_path) and the
+          // qualified one.
           const colPill = c => {
-            if (matchesType(c.type, 'random_variable')) {
+            if (matchesProvType(c.type, 'random_variable')) {
               return `<span class="wp-schema__col-rv" title="random_variable: query operators on this column lift into provenance gates at planning time">rv</span>`;
             }
-            if (matchesType(c.type, 'agg_token')) {
+            if (matchesProvType(c.type, 'agg_token')) {
               return `<span class="wp-schema__col-agg" title="agg_token: each value carries a circuit UUID; click cells to inspect the underlying gate">agg</span>`;
             }
             return '';
@@ -1689,6 +1686,16 @@
     return RIGHT_ALIGNED_TYPES.has((typeName || '').toLowerCase());
   }
 
+  // Recognise a ProvSQL-extended column type regardless of search_path:
+  // `random_variable` and `agg_token` may surface either unqualified
+  // (provsql is on the search_path) or qualified (`provsql.random_variable`).
+  // Used by the schema panel's column-list pills and by the result-table
+  // header to flag the same columns once the data is rendered.
+  function matchesProvType(typeName, base) {
+    const s = String(typeName || '').toLowerCase();
+    return s === base || s === `provsql.${base}`;
+  }
+
   // Connection-editor popover anchored to the green/red status dot.
   // Lets the user paste an arbitrary libpq DSN (host, port, user,
   // password, dbname, options) so they can switch server / role
@@ -2074,9 +2081,40 @@ async function runQuery(ev) {
         if (i !== -1) rowProvIdx = i;
       }
       const headExtra = (isWhere && wrapped) ? '<th></th>' : '';
+      // Header decoration mirrors the schema-panel column list: every <th>
+      // gets a title attribute with the Postgres type so the user can hover
+      // any column to discover its type, plus a small pill for columns
+      // with ProvSQL semantics:
+      //  - terracotta `rv` for `random_variable` (operators lifted to gates)
+      //  - terracotta `agg` for `agg_token` (UUID + running value)
+      //  - purple `prov` for the `provsql` uuid column (the row's
+      //    provenance gate from add_provenance)
+      // The first two key off type_name; the third keys off the column
+      // name because `provsql` is just `uuid` at the type level.
+      const matches = env.matchesProvType || ((t, b) => String(t || '').toLowerCase() === b);
+      const headerPill = (col) => {
+        const typeName = col.type_name || '';
+        if (matches(typeName, 'random_variable')) {
+          return `<span class="wp-result__col-rv" title="random_variable: query operators on this column lift into provenance gates at planning time">rv</span>`;
+        }
+        if (matches(typeName, 'agg_token')) {
+          return `<span class="wp-result__col-agg" title="agg_token: each value carries a circuit UUID; click cells to inspect the underlying gate">agg</span>`;
+        }
+        if (col.name === 'provsql') {
+          return `<span class="wp-result__col-prov" title="provsql: the row's provenance gate UUID (added by add_provenance)">prov</span>`;
+        }
+        return '';
+      };
       head.innerHTML = displayIdx.map(i => {
-        const alignCls = env.isRightAlignedType(allCols[i].type_name) ? ' is-right' : '';
-        return `<th class="${alignCls.trim()}">${env.escapeHtml(allCols[i].name)}</th>`;
+        const col = allCols[i];
+        const typeName = col.type_name || '';
+        const alignCls = env.isRightAlignedType(typeName) ? ' is-right' : '';
+        const titleAttr = typeName ? ` title="${env.escapeAttr(typeName)}"` : '';
+        // Wrap the column name in its own span so callers that read
+        // header text (e.g. tests, accessibility tooling) can grab the
+        // name independently of the trailing pill.
+        const nameHtml = `<span class="wp-result__col-name">${env.escapeHtml(col.name)}</span>`;
+        return `<th class="${alignCls.trim()}"${titleAttr}>${nameHtml}${headerPill(col)}</th>`;
       }).join('') + headExtra;
       body.innerHTML = final.rows.map(r => {
         const sources = wrapped && wprovIdx >= 0

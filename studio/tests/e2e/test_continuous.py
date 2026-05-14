@@ -104,6 +104,40 @@ def test_continuous_circuit_renders_rv_arith_and_runs_probability(
         3,
     )
 
+    # Header decoration: every <th> carries a `title` attribute with the
+    # Postgres type name, and ProvSQL-significant columns additionally
+    # surface a small pill so users can tell at a glance which columns
+    # have non-plain-SQL semantics:
+    #   - terracotta `rv` for random_variable
+    #   - terracotta `agg` for agg_token
+    #   - purple `prov` for the provsql uuid column itself
+    # The `id` column is plain `text`, so only the tooltip applies.
+    id_header = (
+        page.locator("#result-head th")
+        .filter(has=page.locator(".wp-result__col-name", has_text="id"))
+        .first
+    )
+    expect(id_header).to_have_attribute("title", "text")
+    reading_header = (
+        page.locator("#result-head th")
+        .filter(has=page.locator(".wp-result__col-name", has_text="reading"))
+        .first
+    )
+    expect(reading_header).to_have_attribute("title", "random_variable")
+    expect(reading_header.locator(".wp-result__col-rv")).to_be_visible()
+    # `provsql` is the row's provenance UUID column. The renderer keeps it
+    # in circuit mode (this test runs in circuit mode), so the prov pill
+    # should appear on the rightmost header.
+    provsql_header = (
+        page.locator("#result-head th")
+        .filter(
+            has=page.locator(".wp-result__col-name", has_text="provsql")
+        )
+        .first
+    )
+    expect(provsql_header).to_have_attribute("title", "uuid")
+    expect(provsql_header.locator(".wp-result__col-prov")).to_be_visible()
+
     # Pin the s3 row: it's the one that contains a gate_arith on top of a
     # gate_rv, so its sub-DAG is the most informative for the new-gate
     # rendering check.  The provsql column is rendered as the last <td>
@@ -203,8 +237,12 @@ def _open_circuit_and_run_profile(
     # Read the result-table header to find the column index of
     # `click_column` -- robust to future column-order changes in the
     # query.  The header is a flat list of <th>; the table body uses
-    # the same column order.
-    headers = page.locator("#result-head th").all_text_contents()
+    # the same column order.  Query the inner column-name span rather
+    # than the <th> itself so trailing rv / agg / prov pills don't leak
+    # into the column name string.
+    headers = page.locator(
+        "#result-head th .wp-result__col-name"
+    ).all_text_contents()
     try:
         col_idx = headers.index(click_column)
     except ValueError as exc:

@@ -551,7 +551,9 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
    semantics. The two share styling and only differ by label so the user
    can tell which special type they're looking at. */
 .wp-schema__col-rv,
-.wp-schema__col-agg {
+.wp-schema__col-agg,
+.wp-result__col-rv,
+.wp-result__col-agg {
   display: inline-block;
   font-family: var(--font-ui);
   font-size: 0.6rem;
@@ -564,6 +566,37 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   letter-spacing: 0.05em;
   font-weight: 600;
   vertical-align: middle;
+}
+/* In-header variant: result-table <th> uses a tighter typographic
+   weight (.wp-result__hdr) than the schema panel's column list, so
+   nudge the pill up a hair and give it a touch more left margin to
+   keep it visually distinct from the column name.  `vertical-align`
+   overrides the shared `middle` -- with uppercase pill text the
+   optical centre sits noticeably above the box centre, so `middle`
+   reads as "below the baseline"; a small positive offset puts the
+   pill back on the header's optical baseline. */
+.wp-result__col-rv,
+.wp-result__col-agg,
+.wp-result__col-prov {
+  margin-left: 0.3rem;
+  vertical-align: 0.15em;
+}
+/* Purple `prov` pill on the `provsql` uuid column header: same shape as
+   the rv/agg pills but recoloured to match the schema panel's relation-
+   level prov badge, so the two prov affordances read as the same idea.
+   Note: `vertical-align` is set by the in-header override block above
+   (shared with rv/agg) so the three pills line up identically. */
+.wp-result__col-prov {
+  display: inline-block;
+  font-family: var(--font-ui);
+  font-size: 0.6rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--purple-500);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
 }
 .wp-schema__cols {
   display: block;
