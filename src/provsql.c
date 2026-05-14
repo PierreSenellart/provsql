@@ -155,8 +155,8 @@ typedef struct reduce_varattno_mutator_context {
  * @param context  Mutation context carrying varno and offset.
  * @return         Possibly modified node.
  */
-static Node *reduce_varattno_mutator(Node *node,
-                                     reduce_varattno_mutator_context *context) {
+static Node *reduce_varattno_mutator(Node *node, void *ctx) {
+  reduce_varattno_mutator_context *context = (reduce_varattno_mutator_context *)ctx;
   if (node == NULL)
     return NULL;
 
@@ -168,8 +168,7 @@ static Node *reduce_varattno_mutator(Node *node,
     }
   }
 
-  return expression_tree_mutator(node, reduce_varattno_mutator,
-                                 (void *)context);
+  return expression_tree_mutator(node, reduce_varattno_mutator, ctx);
 }
 
 /**
@@ -191,7 +190,7 @@ static void reduce_varattno_by_offset(List *targetList, Index varno,
 
   foreach (lc, targetList) {
     Node *te = lfirst(lc);
-    expression_tree_mutator(te, reduce_varattno_mutator, (void *)&context);
+    expression_tree_mutator(te, reduce_varattno_mutator, &context);
   }
 }
 
@@ -229,8 +228,8 @@ static bool is_target_agg_var(Node *node,
  * @return         Possibly modified node.
  */
 static Node *
-aggregation_type_mutator(Node *node,
-                         aggregation_type_mutator_context *context) {
+aggregation_type_mutator(Node *node, void *ctx) {
+  aggregation_type_mutator_context *context = (aggregation_type_mutator_context *)ctx;
   if (node == NULL)
     return NULL;
 
@@ -268,8 +267,7 @@ aggregation_type_mutator(Node *node,
       v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
     }
   }
-  return expression_tree_mutator(node, aggregation_type_mutator,
-                                 (void *)context);
+  return expression_tree_mutator(node, aggregation_type_mutator, ctx);
 }
 
 /**
@@ -1803,7 +1801,8 @@ typedef struct {
 } resolve_group_rte_ctx;
 
 static Node *
-resolve_group_rte_vars_mutator(Node *node, resolve_group_rte_ctx *ctx) {
+resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
+  resolve_group_rte_ctx *ctx = (resolve_group_rte_ctx *)raw_ctx;
   if (node == NULL)
     return NULL;
   if (IsA(node, Var)) {
@@ -1820,8 +1819,7 @@ resolve_group_rte_vars_mutator(Node *node, resolve_group_rte_ctx *ctx) {
       return resolved;
     }
   }
-  return expression_tree_mutator(node, resolve_group_rte_vars_mutator,
-                                 (void *)ctx);
+  return expression_tree_mutator(node, resolve_group_rte_vars_mutator, raw_ctx);
 }
 #endif
 
@@ -2272,8 +2270,8 @@ typedef struct aggregation_mutator_context {
  * @param context  Mutation context with prov_atts, op, and constants.
  * @return         Possibly modified node.
  */
-static Node *aggregation_mutator(Node *node,
-                                 aggregation_mutator_context *context) {
+static Node *aggregation_mutator(Node *node, void *ctx) {
+  aggregation_mutator_context *context = (aggregation_mutator_context *)ctx;
   if (node == NULL)
     return NULL;
 
@@ -2283,7 +2281,7 @@ static Node *aggregation_mutator(Node *node,
                                                context->prov_atts, context->op);
   }
 
-  return expression_tree_mutator(node, aggregation_mutator, (void *)context);
+  return expression_tree_mutator(node, aggregation_mutator, ctx);
 }
 
 /**
@@ -2514,8 +2512,8 @@ typedef struct provenance_mutator_context {
  * @param context  Mutation context with the provenance expression and constants.
  * @return         Possibly modified node.
  */
-static Node *provenance_mutator(Node *node,
-                                provenance_mutator_context *context) {
+static Node *provenance_mutator(Node *node, void *ctx) {
+  provenance_mutator_context *context = (provenance_mutator_context *)ctx;
   if (node == NULL)
     return NULL;
 
@@ -2531,7 +2529,7 @@ static Node *provenance_mutator(Node *node,
     return node;
   }
 
-  return expression_tree_mutator(node, provenance_mutator, (void *)context);
+  return expression_tree_mutator(node, provenance_mutator, ctx);
 }
 
 /**
@@ -2970,7 +2968,8 @@ static bool has_provenance(const constants_t *constants, Query *q) {
  * @param constants Extension OID cache.
  * @return          @c true if an agg_token Var is found in @p node.
  */
-static bool aggtoken_walker(Node *node, const constants_t *constants) {
+static bool aggtoken_walker(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *) data;
   if (node == NULL)
     return false;
 
@@ -2980,7 +2979,7 @@ static bool aggtoken_walker(Node *node, const constants_t *constants) {
       return true;
   }
 
-  return expression_tree_walker(node, aggtoken_walker, (void*) constants);
+  return expression_tree_walker(node, aggtoken_walker, data);
 }
 
 /**
@@ -3013,7 +3012,8 @@ static bool has_aggtoken(Node *node, const constants_t *constants) {
  * comparisons of those) is left for PostgreSQL to evaluate natively;
  * the HAVING-lift never needs to touch it.
  */
-static bool having_lift_walker(Node *node, const constants_t *constants) {
+static bool having_lift_walker(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *) data;
   if (node == NULL)
     return false;
 
@@ -3029,7 +3029,7 @@ static bool having_lift_walker(Node *node, const constants_t *constants) {
       return true;
   }
 
-  return expression_tree_walker(node, having_lift_walker, (void*) constants);
+  return expression_tree_walker(node, having_lift_walker, data);
 }
 
 /**

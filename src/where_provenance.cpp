@@ -119,7 +119,7 @@ static string where_provenance_internal
           for(auto p : v) {
             infos.push_back(p.first);
           }
-          c.setGateProjection(f, move(infos));
+          c.setGateProjection(f, std::move(infos));
         } else if(type == "eq") {
           vector<pair<int,int> > v = parse_array(std::string("{")+SPI_getvalue(tuple, tupdesc, 6)+"}");
           if(v.size()!=1)

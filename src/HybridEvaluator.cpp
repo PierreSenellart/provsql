@@ -259,48 +259,6 @@ bool try_identity_drop(GenericCircuit &gc, gate_t g)
 }
 
 /**
- * @brief Footprint of base @c gate_rv UUIDs reachable below @p g
- *        through @c gate_arith composition only.
- *
- * Stops at non-arith gates (including @c gate_value, which contribute
- * no RV identity).  Used by the normal-family closure as the
- * independence test between sibling PLUS-wires.
- */
-void collect_rv_footprint(const GenericCircuit &gc, gate_t g,
-                          std::unordered_set<gate_t> &fp,
-                          std::unordered_set<gate_t> &seen)
-{
-  if (!seen.insert(g).second) return;
-  auto t = gc.getGateType(g);
-  if (t == gate_rv) {
-    fp.insert(g);
-    return;
-  }
-  if (t == gate_arith) {
-    for (gate_t c : gc.getWires(g))
-      collect_rv_footprint(gc, c, fp, seen);
-  }
-  if (t == gate_mixture) {
-    /* gate_mixture wires:
-     *  - classic 3-wire [p_token (gate_input), x_token, y_token]:
-     *    the p_token is a Boolean Bernoulli, not a continuous-RV
-     *    identity, so we do NOT include it in the continuous
-     *    footprint -- otherwise two unrelated mixtures sharing a
-     *    base normal would appear disjoint just because their
-     *    p_tokens differ.  Descend only into wires[1] and wires[2]
-     *    to gather the continuous identities.
-     *  - categorical N-wire [key, mul_1, ..., mul_n]: a discrete
-     *    block with no continuous-RV identities to gather.  Stop. */
-    if (gc.isCategoricalMixture(g)) return;
-    const auto &wires = gc.getWires(g);
-    if (wires.size() == 3) {
-      collect_rv_footprint(gc, wires[1], fp, seen);
-      collect_rv_footprint(gc, wires[2], fp, seen);
-    }
-  }
-}
-
-/**
  * @brief Decomposition of a PLUS-wire as @c a*Z + b for the
  *        normal-family closure.
  *
