@@ -151,9 +151,9 @@ typedef struct reduce_varattno_mutator_context {
 
 /**
  * @brief Tree-mutator callback that adjusts Var attribute numbers.
- * @param node     Current expression tree node.
- * @param context  Mutation context carrying varno and offset.
- * @return         Possibly modified node.
+ * @param node  Current expression tree node.
+ * @param ctx   Pointer to a @c reduce_varattno_mutator_context.
+ * @return      Possibly modified node.
  */
 static Node *reduce_varattno_mutator(Node *node, void *ctx) {
   reduce_varattno_mutator_context *context = (reduce_varattno_mutator_context *)ctx;
@@ -223,9 +223,10 @@ static bool is_target_agg_var(Node *node,
  * window functions, etc.), wraps the Var in an explicit agg_token→original
  * cast so that parent nodes receive the expected type.
  *
- * @param node     Current expression tree node.
- * @param context  Mutation context with varno, varattno, and constants.
- * @return         Possibly modified node.
+ * @param node  Current expression tree node.
+ * @param ctx   Pointer to an @c aggregation_type_mutator_context (varno,
+ *              varattno, and constants).
+ * @return      Possibly modified node.
  */
 static Node *
 aggregation_type_mutator(Node *node, void *ctx) {
@@ -2266,9 +2267,10 @@ typedef struct aggregation_mutator_context {
 
 /**
  * @brief Tree-mutator that replaces Aggrefs with provenance-aware aggregates.
- * @param node     Current expression tree node.
- * @param context  Mutation context with prov_atts, op, and constants.
- * @return         Possibly modified node.
+ * @param node  Current expression tree node.
+ * @param ctx   Pointer to an @c aggregation_mutator_context (prov_atts,
+ *              op, and constants).
+ * @return      Possibly modified node.
  */
 static Node *aggregation_mutator(Node *node, void *ctx) {
   aggregation_mutator_context *context = (aggregation_mutator_context *)ctx;
@@ -2508,9 +2510,10 @@ typedef struct provenance_mutator_context {
 
 /**
  * @brief Tree-mutator that replaces provenance() calls with the actual provenance expression.
- * @param node     Current expression tree node.
- * @param context  Mutation context with the provenance expression and constants.
- * @return         Possibly modified node.
+ * @param node  Current expression tree node.
+ * @param ctx   Pointer to a @c provenance_mutator_context (provenance
+ *              expression and constants).
+ * @return      Possibly modified node.
  */
 static Node *provenance_mutator(Node *node, void *ctx) {
   provenance_mutator_context *context = (provenance_mutator_context *)ctx;
@@ -2964,9 +2967,9 @@ static bool has_provenance(const constants_t *constants, Query *q) {
 
 /**
  * @brief Tree walker that detects any Var of type agg_token.
- * @param node      Current expression tree node.
- * @param constants Extension OID cache.
- * @return          @c true if an agg_token Var is found in @p node.
+ * @param node  Current expression tree node.
+ * @param data  Pointer to a @c constants_t (extension OID cache).
+ * @return      @c true if an agg_token Var is found in @p node.
  */
 static bool aggtoken_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *) data;
