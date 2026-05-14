@@ -140,6 +140,16 @@ tunable in `Configuration`_). When more rows are available, the
 result-table footer shows a ``(first 1000; more available)`` marker
 so the truncation is explicit.
 
+Each ``<th>`` carries the column's SQL type name as a tooltip, and
+ProvSQL-significant columns get a small pill next to the column
+name, mirroring the schema-panel pills described under
+:ref:`studio-schema-panel`: terracotta :sc:`rv` for
+``random_variable``, terracotta :sc:`agg` for ``agg_token``, and
+purple :sc:`prov` for the row-provenance ``provsql`` column itself.
+The pills make it obvious which result columns carry circuit
+references (and are therefore clickable in Circuit mode) without
+having to inspect the schema panel.
+
 .. _studio-query-toggles:
 
 Per-query toggles

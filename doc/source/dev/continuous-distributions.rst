@@ -315,6 +315,9 @@ circuit, it runs:
    bare Normal or Uniform (``-N(μ, σ)`` into ``N(-μ, σ)``,
    ``-U(a, b)`` into ``U(-b, -a)``), MINUS-to-PLUS canonicalisation
    so subtraction shapes flow through the same PLUS pipeline,
+   DIV-to-TIMES canonicalisation for division by a constant
+   (``X / c`` rewritten as ``(1/c) · X`` so the existing
+   normal-family and uniform-family scaling rules apply),
    shift-and-scale of a single normal through mixtures and
    categoricals, single-child arith roots, semiring-identity drops
    (``gate_one`` in TIMES, ``gate_zero`` in PLUS, …). The pass is

@@ -87,9 +87,18 @@ Simple ``HAVING`` clauses are supported:
     GROUP BY dept
     HAVING COUNT(*) > 2;
 
-Complex ``HAVING`` conditions that involve provenance-tracked aggregates
-(e.g., a ``HAVING`` on the result of a computation over an aggregate)
-are not fully supported and may produce incorrect results or an error.
+``HAVING`` clauses whose outcome is a deterministic scalar are also
+supported, including conditions that wrap a ``random_variable``
+aggregate in a moment function such as
+``HAVING expected(avg(measurement)) > 20`` (see
+:doc:`continuous-distributions`): the predicate is evaluated by
+PostgreSQL on the surviving groups while ProvSQL still tracks the
+per-group provenance.
+
+Complex ``HAVING`` conditions that build a non-trivial expression on
+top of an ``agg_token`` aggregate result (e.g., arithmetic across
+multiple aggregates) are not fully supported and may produce
+incorrect results or an error.
 
 The ``choose`` Aggregate
 -------------------------

@@ -205,11 +205,19 @@ all tuples in each group.
 clause, a ``provenance_delta`` gate is added.  This implements the
 δ-semiring operator that normalizes aggregate provenance.
 
-**HAVING**:  When a ``HAVING`` clause is present,
-:cfunc:`having_Expr_to_provenance_cmp` translates the ``HAVING``
-predicate into a ``provenance_cmp`` gate tree.  The original
+**HAVING**:  When a ``HAVING`` clause is present, the lift is gated
+by the :cfunc:`needs_having_lift` walker, which returns true only
+when the qual references an ``agg_token`` ``Var`` or a
+``provenance_aggregate`` wrapper. On that path,
+:cfunc:`having_Expr_to_provenance_cmp` translates the predicate
+into a ``provenance_cmp`` gate tree and the original
 ``havingQual`` is removed from the query (its semantics are now
-captured in the provenance circuit).
+captured in the provenance circuit). On the deterministic-outcome
+path (e.g. ``HAVING expected(avg(rv)) > 20``, where the outer
+predicate collapses to a plain Boolean), the qual is left for
+PostgreSQL to evaluate natively on the surviving groups while a
+per-group ``provenance_delta`` wrapper is still emitted, so the
+surviving rows carry the expected provenance shape.
 
 **Where-provenance** (when ``provsql.where_provenance`` is enabled):
 
