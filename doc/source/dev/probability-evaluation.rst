@@ -276,7 +276,7 @@ The canonical way to create such gates from SQL is
 values, allocates one fresh ``input`` gate per key group, and
 turns each member of the group into a ``mulinput`` whose child
 is that block key.  When no probabilities are attached,
-``repair_key`` defaults them to a uniform distribution over the
+:sqlfunc:`repair_key` defaults them to a uniform distribution over the
 block members.
 
 Rewriting Blocks into Independent Booleans
@@ -416,7 +416,7 @@ mirrors that structure:
 the target input gate has been replaced by an ``AND`` /
 ``OR``-with-no-children acting as the constant ``true`` /
 ``false`` respectively.  The private helper
-``dDNNF::shapley_alpha()`` then performs a single bottom-up pass
+:cfunc:`dDNNF::shapley_alpha` then performs a single bottom-up pass
 computing a two-dimensional array
 :math:`\beta^g_{k,\ell}` (called ``result[g]`` in the code) at
 every gate :math:`g`, where :math:`k` is the number of variables
@@ -436,7 +436,7 @@ Algorithm 1 of the paper:
   distributions.  This convolution is the reason AND gates have
   to be binarised before the algorithm runs.
 - A standalone bottom-up pass
-  (``dDNNF::shapley_delta()``) precomputes the :math:`\delta^g_k`
+  (:cfunc:`dDNNF::shapley_delta`) precomputes the :math:`\delta^g_k`
   polynomials, which the algorithm uses at ``NOT`` gates to turn
   negation into a coefficient flip.
 
@@ -452,8 +452,9 @@ complexity is :math:`O(|C| \cdot |V|^5)` arithmetic operations,
 dominated by the double-sum convolution at AND gates over the
 :math:`|V|^2`-sized arrays.
 
-The ``if (isProbabilistic())`` guards inside ``shapley_alpha``
-and ``shapley_delta`` short-circuit the polynomials to a single
+The ``if (isProbabilistic())`` guards inside
+:cfunc:`dDNNF::shapley_alpha` and :cfunc:`dDNNF::shapley_delta`
+short-circuit the polynomials to a single
 top-level coefficient when all input probabilities are 1, so that
 the same code path computes classical (deterministic) Shapley
 values without paying the expected-score overhead.
@@ -472,7 +473,8 @@ The expected Banzhaf value admits a much simpler formula
 where :math:`\mathrm{ENV}(\varphi) = \sum_{Z \subseteq V} \Pi_V(Z)
 \sum_{E \subseteq Z} \varphi(E)` can be computed in a *single*
 linear pass over a smooth d-D circuit without binarising AND
-gates.  :cfunc:`dDNNF::banzhaf` runs ``banzhaf_internal()`` on
+gates.  :cfunc:`dDNNF::banzhaf` runs
+:cfunc:`dDNNF::banzhaf_internal` on
 the two conditioned circuits :math:`C_1` and :math:`C_0` and
 returns the difference times :math:`p_x`; the overall
 complexity is :math:`O(|C| \cdot |V|)`, one factor of :math:`|V|`
@@ -497,12 +499,12 @@ The hybrid evaluator has three passes:
   is tested against the propagated interval, and every comparator
   decidable from the support alone collapses to a Bernoulli
   ``gate_input`` with probability ``0`` or ``1``.
-- **Family-closure simplifier** (``HybridEvaluator::simplify``):
+- **Family-closure simplifier** (:cfunc:`runHybridSimplifier`):
   linear combinations of independent normals fold into a single
   normal; sums of i.i.d. exponentials with the same rate fold
   into an Erlang; identity / single-child arith gates and
   semiring identities collapse.
-- **Island decomposition** (``HybridEvaluator::decompose``):
+- **Island decomposition** (:cfunc:`runHybridDecomposer`):
   the remaining cmps are partitioned by base-RV footprints into
   *islands*; single-cmp islands marginalise via
   ``AnalyticEvaluator``'s closed-form CDF; multi-cmp islands

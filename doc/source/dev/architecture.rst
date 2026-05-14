@@ -77,8 +77,8 @@ and algorithms are in |cpp|.
 
 *SQL-callable functions*
 
-- :cfile:`provenance.c` -- error stub for the ``provenance()`` SQL
-  function (reached only when a query bypasses the planner hook).
+- :cfile:`provenance.c` -- error stub for the :sqlfunc:`provenance`
+  SQL function (reached only when a query bypasses the planner hook).
 - :cfile:`provenance_evaluate.c` -- SQL-level semiring evaluation
   (user-defined ``plus``/``times``/... functions).
 - :cfile:`aggregation_evaluate.c` -- aggregate evaluation entry point.
@@ -157,7 +157,7 @@ and algorithms are in |cpp|.
 
 *Export and visualization*
 
-- :cfile:`view_circuit.cpp` -- SQL ``view_circuit`` function
+- :cfile:`view_circuit.cpp` -- SQL :sqlfunc:`view_circuit` function
   (renders a DOT graph via ``graph-easy``).
 - :cfile:`to_prov.cpp` -- PROV-XML export.
 - :cfile:`where_provenance.cpp` -- SQL where-provenance output

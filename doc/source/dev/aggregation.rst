@@ -153,7 +153,7 @@ expects them to return ordinary scalar types (an ``INT``, a
 ``FLOAT``...).  But the rewritten query needs the aggregate
 result to carry *both* the scalar value and the provenance gate
 that captures how it was computed -- otherwise downstream
-references to ``provenance()`` would have nothing to return.
+references to :sqlfunc:`provenance` would have nothing to return.
 
 ProvSQL solves this by introducing :cfunc:`agg_token`, a
 composite SQL type wrapping a UUID (the root ``agg`` gate) and a
@@ -200,7 +200,7 @@ out.
 
 The call that :cfunc:`make_aggregation_expression` synthesises to
 replace an ``Aggref`` is a ``FuncExpr`` for
-``provsql.provenance_aggregate`` whose arguments are:
+:sqlfunc:`provenance_aggregate` whose arguments are:
 
 - the OID of the aggregate function;
 - the OID of its result type;
@@ -215,11 +215,11 @@ replace an ``Aggref`` is a ``FuncExpr`` for
 That fourth argument is where the semimodule construction of
 :ref:`the-semimodule-picture` is actually assembled: every
 ``semimod`` gate is one simple tensor :math:`k \star m`, and the
-``agg`` gate at the root of the ``provenance_aggregate`` call is
+``agg`` gate at the root of the :sqlfunc:`provenance_aggregate` call is
 their formal sum :math:`\sum_i (k_i \star m_i)`.
 
 The row-level side of the rewrite is much simpler.  It reuses the
-ordinary ``get_provenance_attributes`` collection, combines the
+ordinary :cfunc:`get_provenance_attributes` collection, combines the
 per-row tokens with ``provenance_plus(array_agg(...))``, and -- for
 queries with aggregation and no ``HAVING`` -- wraps the result in
 ``provenance_delta``.  The row-level token therefore has *no*
@@ -256,7 +256,7 @@ Random-Variable Aggregates
 When the aggregated column has type ``random_variable``
 (see :doc:`continuous-distributions`), the rewriter routes
 through a separate path: instead of producing a
-``provenance_aggregate`` call that wraps the original
+:sqlfunc:`provenance_aggregate` call that wraps the original
 ``Aggref`` in an :cfunc:`agg_token`, it produces an aggregate
 that *returns* a ``random_variable`` root. The aggregate's
 result is the lifted scalar :math:`\sum_i \mathbf{1}\{\varphi_i\}
@@ -374,7 +374,7 @@ combine the values incrementally.
    section above.
 
 Nothing else needs to change: the query rewriter, the
-``provenance_aggregate`` SQL function, the :cfunc:`agg_token`
+:sqlfunc:`provenance_aggregate` SQL function, the :cfunc:`agg_token`
 composite type, and the :cfunc:`aggregation_evaluate` SQL
 dispatcher all operate on OIDs and metadata, so they pick up new
 aggregates automatically once steps 1--4 are in place.

@@ -201,7 +201,7 @@ The C functions in :cfile:`circuit_cache.h` that
 - :cfunc:`circuit_cache_create_gate` -- insert a gate into the
   cache.  Returns ``true`` if the gate was *already* cached, in
   which case the caller can skip the IPC write.  This is the
-  fast path for ``create_gate``: if a query allocates the same
+  fast path for :sqlfunc:`create_gate`: if a query allocates the same
   gate twice in the same backend (easy to trigger with shared
   sub-circuits), the second call is a hash-table lookup, not a
   pipe write.

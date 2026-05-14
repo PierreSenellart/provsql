@@ -152,7 +152,7 @@ Step 8: Aggregation Rewriting
 
 If the query has aggregates, :cfunc:`replace_aggregations_by_provenance_aggregate`
 walks the target list and replaces each standard aggregate (e.g.,
-``SUM``, ``COUNT``) with a ``provenance_aggregate`` call that wraps
+``SUM``, ``COUNT``) with a :sqlfunc:`provenance_aggregate` call that wraps
 the original aggregate result and the provenance of the aggregated
 rows.  The provenance of grouped rows is combined with ⊕
 (``provenance_plus``) via ``array_agg`` + ``provenance_plus``.
@@ -164,15 +164,15 @@ After aggregation rewriting:
   ``WHERE`` comparisons on ``random_variable`` columns into the
   per-tuple provenance), because aggregate-typed and continuous-RV
   values both need post-classification routing the executor cannot
-  do directly. See *Probabilistic-qual classifier* below for the
-  routing matrix.
+  do directly. See :ref:`probabilistic-qual-classifier` below for
+  the routing matrix.
 
 - :cfunc:`insert_agg_token_casts` inserts type casts for
   :cfunc:`agg_token` values used in arithmetic or window functions.
 
 See :doc:`aggregation` for the semantics of the ``agg`` /
 ``semimod`` / ``value`` gates produced here, and for the exact
-shape of the ``provenance_aggregate`` call that replaces each
+shape of the :sqlfunc:`provenance_aggregate` call that replaces each
 ``Aggref``.
 
 Step 9: Expression Building -- ``make_provenance_expression``
@@ -208,7 +208,7 @@ clause, a ``provenance_delta`` gate is added.  This implements the
 **HAVING**:  When a ``HAVING`` clause is present, the lift is gated
 by the :cfunc:`needs_having_lift` walker, which returns true only
 when the qual references an ``agg_token`` ``Var`` or a
-``provenance_aggregate`` wrapper. On that path,
+:sqlfunc:`provenance_aggregate` wrapper. On that path,
 :cfunc:`having_Expr_to_provenance_cmp` translates the predicate
 into a ``provenance_cmp`` gate tree and the original
 ``havingQual`` is removed from the query (its semantics are now
@@ -241,7 +241,7 @@ Step 11: Replace ``provenance()`` Calls
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 :cfunc:`replace_provenance_function_by_expression` walks the target
-list looking for calls to the ``provenance()`` SQL function.  Each
+list looking for calls to the :sqlfunc:`provenance` SQL function.  Each
 occurrence is replaced with the computed provenance expression, so
 that ``SELECT provenance() FROM ...`` returns the actual provenance
 token.
@@ -302,7 +302,7 @@ target-list rewriting, ``HAVING`` handling, where-provenance...).
      - Aggregation :math:`\gamma`
      - :cfunc:`replace_aggregations_by_provenance_aggregate` walks
        the target list and replaces each ``Aggref`` with a
-       ``provenance_aggregate`` call built by
+       :sqlfunc:`provenance_aggregate` call built by
        :cfunc:`make_aggregation_expression` (which in turn wraps
        arguments in ``provenance_semimod``).  The enclosing
        provenance expression is then wrapped in a
@@ -339,6 +339,8 @@ formal analogue of the "the rewritten query produces the same
 provenance as the annotated semantics" correctness statement
 from the ICDE paper, for the partial fragment proved (the
 (R4) multiset-difference case is in progress).
+
+.. _probabilistic-qual-classifier:
 
 Probabilistic-Qual Classifier
 -----------------------------

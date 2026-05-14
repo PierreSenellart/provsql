@@ -69,11 +69,13 @@ source of truth, and every downstream evaluator (``MonteCarloSampler``,
 ``HybridEvaluator``) dispatches on the gate it points at, parsing
 the distribution from the gate's ``extra`` blob. Its IO functions
 live in :cfile:`random_variable_type.c`; the C++-side helpers
-(``RandomVariable::parseExtra``, ``RandomVariable::mean``
-and so on) live in :cfile:`RandomVariable.cpp` and are
-the parsers consumed by every downstream evaluator.
+(:cfunc:`parse_distribution_spec`, :cfunc:`analytical_mean`
+and the matching ``analytical_variance`` /
+``analytical_raw_moment`` overloads) live in
+:cfile:`RandomVariable.cpp` and are the parsers consumed by
+every downstream evaluator.
 
-Constructors are plpgsql functions in
+Constructors are PL/pgSQL functions in
 ``sql/provsql.common.sql``:
 :sqlfunc:`normal`, :sqlfunc:`uniform`,
 :sqlfunc:`exponential`, :sqlfunc:`erlang`,
@@ -83,9 +85,17 @@ Constructors are plpgsql functions in
 ``double precision`` form). They validate parameters and mint
 the appropriate gate via :sqlfunc:`create_gate`,
 ``set_extra``, :sqlfunc:`set_prob`,
-``set_infos``. Each constructor is ``VOLATILE`` to
-prevent constant-folding under ``STABLE`` or ``IMMUTABLE`` from
-collapsing two independent draws into a single shared gate.
+``set_infos``. The fresh-randomness constructors
+(:sqlfunc:`normal`, :sqlfunc:`uniform`, :sqlfunc:`exponential`,
+:sqlfunc:`erlang`, :sqlfunc:`categorical`, and the n-array
+:sqlfunc:`mixture` overload that mints an anonymous gate) are
+``VOLATILE`` to prevent constant-folding under ``STABLE`` or
+``IMMUTABLE`` from collapsing two independent draws into a
+single shared gate. The deterministic constructors
+(:sqlfunc:`as_random` and the three-argument
+``mixture(p uuid, x random_variable, y random_variable)``
+overload, both of which mint a v5-derived UUID keyed on their
+inputs) are ``IMMUTABLE``.
 
 Arithmetic operators ``+ - * / -`` on
 ``(random_variable, random_variable)`` resolve to
@@ -155,8 +165,8 @@ Monte Carlo Sampler
 -------------------
 
 The sampler implementation lives in
-:cfile:`MonteCarloSampler.cpp`. A single
-``MonteCarloSampler::run`` runs ``N`` iterations over an
+:cfile:`MonteCarloSampler.cpp`. The entry point
+:cfunc:`monteCarloRV` runs ``N`` iterations over a
 :cfunc:`GenericCircuit`; per iteration it draws every reachable
 ``gate_rv`` leaf once (memoised in ``rv_cache_``) and
 evaluates every reachable ``gate_input`` Bernoulli once
@@ -233,7 +243,8 @@ continuous distributions collapse correctly: ``X = X`` is
 identically true (handled in ``RangeCheck`` as a
 zero-width interval identity), ``X = Y`` for any two sub-circuits
 of which at least one has a continuous distribution is identically
-false. ``RangeCheck::hasOnlyContinuousSupport`` is the predicate
+false. ``hasOnlyContinuousSupport`` (in :cfile:`RangeCheck.cpp`)
+is the predicate
 behind the second case: a recursive walk that returns true on
 ``gate_rv`` leaves, on ``gate_arith`` whose every wire is
 continuous, and on Bernoulli mixtures whose two branches are both
@@ -264,19 +275,28 @@ both sides for the union of ``gate_rv`` + ``gate_input`` leaves
 and the shortcut bails on any overlap (e.g. two mixtures sharing
 a Bernoulli ``p_token``). Bernoulli mixtures whose ``p_token`` is
 a compound Boolean (whose static probability would require a
-recursive ``probability_evaluate`` call) also bail. The
+recursive :sqlfunc:`probability_evaluate` call) also bail. The
 sum-product subsumes the disjoint-Dirac case as its boundary
 (empty intersection ⇒ ``P(X = Y) = 0``).
 
-Expectation Semiring
---------------------
+Analytical Moment Evaluator
+---------------------------
 
-:cfile:`Expectation.cpp` implements the
-``"expectation"`` compiled semiring entry point (registered in
-the FLOAT block of :cfile:`provenance_evaluate_compiled.cpp`;
-add new entries there for sister semirings). It runs analytical
-moment computation per distribution at leaves, then propagates
-through ``gate_arith`` by closed-form rules:
+:cfile:`Expectation.cpp` implements the closed-form moment
+evaluator for continuous-RV circuits. It is *not* a
+``Semiring`` subclass: the
+:cfunc:`provenance_evaluate_compiled_internal` dispatcher
+special-cases ``semiring == "expectation"`` and calls
+:cfunc:`compute_expectation` directly on the
+``GenericCircuit``, bypassing the template-based
+``GenericCircuit::evaluate<S>`` machinery used by the proper
+semirings. The same entry point is reached by
+:sqlfunc:`expected` over a ``random_variable`` and by the
+``rv_moment`` C helper.
+
+The algorithm runs analytical moment computation per distribution
+at leaves, then propagates through ``gate_arith`` by closed-form
+rules:
 
 - ``E[X + Y] = E[X] + E[Y]`` (always),
 - ``E[X − Y] = E[X] − E[Y]`` (always),
@@ -293,11 +313,11 @@ footprints are disjoint are independent; the cache speeds up the
 check from quadratic to linear by sharing the leaf-set
 computation across the recursion.
 
-When no closed form applies, ``Expectation`` falls back to a
-Monte-Carlo estimate using ``MonteCarloSampler``. The sample
-count is ``provsql.rv_mc_samples``; setting it to ``0`` turns the
-fallback into an exception so callers that need analytical
-answers can detect the silent fallback.
+When no closed form applies, :cfunc:`compute_expectation` falls
+back to a Monte-Carlo estimate using ``MonteCarloSampler``. The
+sample count is ``provsql.rv_mc_samples``; setting it to ``0``
+turns the fallback into an exception so callers that need
+analytical answers can detect the silent fallback.
 
 HybridEvaluator
 ---------------
@@ -305,7 +325,7 @@ HybridEvaluator
 :cfile:`HybridEvaluator.cpp` is the orchestrator. Given a
 circuit, it runs:
 
-1. **Universal peephole pass** (``HybridEvaluator::simplify``)
+1. **Universal peephole pass** (:cfunc:`runHybridSimplifier`)
    that folds family-preserving combinations into a single leaf:
    linear combinations of independent normals (``a·X + b·Y + c``
    into a single normal), sums of i.i.d. exponentials with the
@@ -341,7 +361,7 @@ circuit, it runs:
    circuit, and with the island decomposer below, which uses a
    global union-find over base-RV footprints.
 
-2. **Island decomposition** (``HybridEvaluator::decompose``)
+2. **Island decomposition** (:cfunc:`runHybridDecomposer`)
    that splits a multi-cmp query into independent islands
    (connected components on a union-find over base-RV
    footprints). A single-cmp island marginalises to a Bernoulli
@@ -406,9 +426,9 @@ conditioning.
 
 ``matchTruncatedSingleRv`` (in :cfile:`RangeCheck.cpp`) is the
 single-RV shape-detection helper used by the moment surface
-(``Expectation::try_truncated_closed_form``) and the
-rejection-free sampler
-(``MonteCarloSampler::try_truncated_closed_form_sample``). It
+(``try_truncated_closed_form`` in :cfile:`Expectation.cpp`) and
+the rejection-free sampler
+(:cfunc:`try_truncated_closed_form_sample`). It
 runs the four common gates -- ``gate_rv`` root check,
 ``parse_distribution_spec``, ``collectRvConstraints``, and the
 empty-intersection / ``gate_zero`` event guards -- so the
@@ -445,8 +465,8 @@ the conditional-moment dispatcher's pre-MC short-circuit:
 ``gate_zero`` events are detected for every root type, and
 ``gate_rv`` roots additionally surface
 ``collectRvConstraints``-empty intersections. The dispatcher in
-``Expectation::conditional_raw_moment`` /
-``conditional_central_moment`` calls it after
+``conditional_raw_moment`` / ``conditional_central_moment``
+(:cfile:`Expectation.cpp`) calls it after
 ``try_truncated_closed_form`` returns ``nullopt`` and raises a
 "conditioning event is infeasible" error directly when the
 predicate fires, avoiding a 100 000-sample MC round whose
@@ -499,8 +519,8 @@ shape -- all four arms accept a non-trivial conditioning event.
 NULL; the frontend renders histogram-only in those cases.
 
 Before matching, :sqlfunc:`rv_analytical_curves` runs
-``runHybridSimplifier`` so the curves see the same folded tree
-that ``simplified_circuit_subgraph`` exposes to Studio's circuit
+:cfunc:`runHybridSimplifier` so the curves see the same folded tree
+that :sqlfunc:`simplified_circuit_subgraph` exposes to Studio's circuit
 view: ``c·Exp(λ)`` folded to ``Exp(λ/c)``, sums of independent
 normals folded to a single normal, ``c + mixture(p, X, Y)``
 pushed inside the mixture, etc. Without this pass a circuit
@@ -522,7 +542,7 @@ the conditional masses are :math:`p_i \cdot
 A Dirac is invariant under any feasible event.
 
 The load-time pass ``runConstantFold`` (in ``HybridEvaluator.cpp``,
-invoked from ``CircuitFromMMap::applyLoadTimeSimplification``
+invoked from :cfunc:`CircuitFromMMap::applyLoadTimeSimplification`
 alongside ``runRangeCheck`` and ``foldSemiringIdentities``)
 folds deterministic ``gate_arith`` subtrees to ``gate_value``
 at load time. This lifts the common parser shape
@@ -535,7 +555,7 @@ hybrid simplifier, never the family closures or identity drops,
 because the result is always a ``gate_value`` that carries no
 random identity, so no shared-RV coupling is decoupled by the
 rewrite. The family closures stay behind the separate
-``provsql.hybrid_evaluation`` GUC, which gates ``runHybridSimplifier``
+``provsql.hybrid_evaluation`` GUC, which gates :cfunc:`runHybridSimplifier`
 inside the probability and view paths where the simplifier owns
 the rewritten subtree.
 

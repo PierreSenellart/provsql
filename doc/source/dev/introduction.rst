@@ -62,7 +62,7 @@ Chapters
    The :cfunc:`Semiring` interface, walkthroughs of the Boolean and
    Counting semirings, a step-by-step guide for adding a new
    compiled semiring, and notes on symbolic-representation
-   semirings such as ``sr_formula``.
+   semirings such as :sqlfunc:`sr_formula`.
 
 :doc:`probability-evaluation`
    The probability-evaluation dispatcher in

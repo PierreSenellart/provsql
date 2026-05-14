@@ -38,7 +38,7 @@ The GUC and the Big Picture
 The whole subsystem is gated on the ``provsql.update_provenance``
 GUC, declared in :cfile:`provsql.c` and registered in
 :cfunc:`_PG_init`.  When it is ``off`` (the default), the
-``AFTER`` triggers installed by ``add_provenance`` short-circuit
+``AFTER`` triggers installed by :sqlfunc:`add_provenance` short-circuit
 immediately and DML statements behave normally.  When it is
 ``on``, every committed ``INSERT`` / ``UPDATE`` / ``DELETE`` on a
 provenance-tracked table:
@@ -54,7 +54,7 @@ provenance-tracked table:
 
 The end result is that each row's ``provsql`` token is a circuit
 whose leaves include not only the original ``input`` gates from
-``add_provenance`` but also one ``update`` leaf per DML statement
+:sqlfunc:`add_provenance` but also one ``update`` leaf per DML statement
 that ever touched the row.
 
 
@@ -78,7 +78,7 @@ exactly like ``gate_input`` everywhere it matters:
 
 The only thing that distinguishes an ``update`` gate from an
 ``input`` gate is its semantic role -- "this leaf was created by
-DML, not by the original ``add_provenance``" -- and the fact that
+DML, not by the original :sqlfunc:`add_provenance`" -- and the fact that
 the SQL housekeeping records (``update_provenance``) tie its UUID
 back to a concrete statement.
 
@@ -86,7 +86,7 @@ back to a concrete statement.
 The Triggers
 ------------
 
-``add_provenance`` (in ``sql/provsql.14.sql``) installs three
+:sqlfunc:`add_provenance` (in ``sql/provsql.14.sql``) installs three
 ``AFTER`` statement-level triggers on the target table:
 
 .. code-block:: sql
@@ -176,7 +176,7 @@ The implementation is pure PL/pgSQL, in ``sql/provsql.14.sql``.
 
 The trick is that the row tokens already contain the operation's
 gate as a leaf; we just need to *cancel* that leaf inside every
-circuit that references it.  ``undo``:
+circuit that references it.  :sqlfunc:`undo`:
 
 1. Allocates a new ``update`` gate ``u`` and records a
    brand-new ``UNDO`` row in ``update_provenance`` whose

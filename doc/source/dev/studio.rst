@@ -229,6 +229,19 @@ GUC the panel and per-query toggles imply:
 - ``provsql.active`` (panel)
 - ``provsql.verbose_level`` (panel, 0..100)
 - ``provsql.tool_search_path`` (panel)
+- ``provsql.monte_carlo_seed`` (panel; ``-1`` =
+  non-deterministic, any other integer reseeds the shared
+  ``std::mt19937_64`` used by Monte Carlo and continuous
+  sampling)
+- ``provsql.rv_mc_samples`` (panel; sample budget for the
+  analytical-evaluator MC fallback, ``0`` turns the fallback
+  into an exception)
+- ``provsql.simplify_on_load`` (panel; toggles the universal
+  peephole pass at circuit-load time -- changing it invalidates
+  Studio's layout cache because circuit shapes can shift)
+- ``provsql.hybrid_evaluation`` (panel, debug-only; gates the
+  in-evaluator hybrid path. Same cache-invalidation rule as
+  ``simplify_on_load``)
 - ``provsql.where_provenance`` (per-query toggle; locked on in
   Where mode)
 - ``provsql.update_provenance`` (per-query toggle, free in both
@@ -239,6 +252,14 @@ GUC the panel and per-query toggles imply:
 - ``statement_timeout`` (panel, in milliseconds)
 - ``search_path``, with ``provsql`` always pinned at the end (see
   :func:`provsql_studio.db.compose_search_path`)
+
+The four continuous-distribution panel GUCs
+(``monte_carlo_seed``, ``rv_mc_samples``, ``simplify_on_load``,
+``hybrid_evaluation``) are enumerated in ``_PANEL_GUCS`` in
+``studio/provsql_studio/db.py``; ``simplify_on_load`` and
+``hybrid_evaluation`` additionally clear ``layout_cache`` in
+``POST /api/config`` so the next ``/api/circuit`` re-renders a
+circuit whose folded shape may have changed.
 
 ``SET LOCAL`` scopes the change to the transaction so a parallel
 request on the same connection cannot see the override.

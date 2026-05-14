@@ -136,7 +136,7 @@ fragment in three phases on top of the regular semiring expression
    ``0`` -- they have no source cell.
 
 The result is a single token that, when evaluated by
-``where_provenance``, walks the circuit, applies the gate semantics
+:sqlfunc:`where_provenance`, walks the circuit, applies the gate semantics
 above, and returns the per-column locator sets.
 
 
