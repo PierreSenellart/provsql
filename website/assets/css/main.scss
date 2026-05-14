@@ -236,6 +236,27 @@ div.highlight, figure.highlight {
     color: #2A1850;
     font-style: normal;
   }
+
+  // Normalise teaser size across feature-row tiles regardless of the
+  // source image aspect ratio: every teaser is a 16:9 box, the image is
+  // letterboxed (contain), centred horizontally and vertically, with a
+  // matching light-purple backdrop filling any margins.
+  .archive__item-teaser {
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #F4F0FA;
+
+    img {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
+  }
 }
 
 
