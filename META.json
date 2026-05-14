@@ -50,7 +50,20 @@
          "doc/tutorial",
          "doc/demo",
          "doc/aggregation",
-         "doc/temporal_demo"
+         "doc/temporal_demo",
+         "doc/TODO",
+         "doc/doxygen-c",
+         "doc/doxygen-sql",
+         "doc/casestudy1",
+         "doc/casestudy2",
+         "doc/casestudy3",
+         "doc/casestudy4",
+         "doc/casestudy5",
+         "doc/casestudy6",
+         "studio"
+      ],
+      "file": [
+         "TODO.md"
       ]
    },
    "meta-spec": {
