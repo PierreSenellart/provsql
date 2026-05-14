@@ -464,6 +464,12 @@ def _fetch_tracked_input_uuids(cur, candidate_uuids):
     """
     if not candidate_uuids:
         return set()
+    # `c.relpersistence <> 't'` + the `pg_temp%` / `pg_toast%` guards skip
+    # temp tables.  Temp tables created in one backend transiently appear
+    # in another backend's `pg_class` snapshot before autovacuum cleans
+    # them up; without the filter the UNION ALL below dispatches against
+    # a `pg_temp_NN.<name>` relation that the current backend cannot see,
+    # raising UndefinedTable.
     cur.execute(
         "SELECT (c.oid::regclass)::text "
         "FROM pg_attribute a "
@@ -473,7 +479,10 @@ def _fetch_tracked_input_uuids(cur, candidate_uuids):
         "WHERE a.attname = 'provsql' "
         "  AND ty.typname = 'uuid' "
         "  AND c.relkind = 'r' "
+        "  AND c.relpersistence <> 't' "
         "  AND ns.nspname <> 'provsql' "
+        "  AND ns.nspname NOT LIKE 'pg_temp%' "
+        "  AND ns.nspname NOT LIKE 'pg_toast%' "
         "  AND a.attnum > 0"
     )
     relations = [row[0] for row in cur.fetchall()]
