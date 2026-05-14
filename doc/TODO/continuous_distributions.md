@@ -1,681 +1,794 @@
-# Documentation TODO: continuous probability distributions
+# ProvSQL Random Variables — Feature Roadmap
 
-A plan for adding **probabilistic c-tables over continuous random
-variables** (Gaussian, uniform, exponential, ...) to ProvSQL. Anchored
-on a 2022 BSc thesis by Timothy Leong (NUS), supervised by Pierre
-Senellart, Stéphane Bressan, and Frank Stephan, plus a companion
-implementation-notes document by the same author. The thesis lays the
-measure-theoretic foundations (lifting Borel sets in ℝᵏ to instances
-via a bijection), defines a relational query language (σ, π, ×, ∪, −,
-distinct, p̄) on pc-tables with selection predicates that are arbitrary
-∨/∧ of inequalities over arithmetic expressions of random variables and
-constants, proves intensional / possible-world equivalence, and
-specifies four core algorithms: **RangeCheck** (interval support of an
-RV via DAG recursion), **BoundCheck** (MILP-based satisfiability of a
-tuple's condition), **SampleOne** (memoised rejection sampling),
-**EvaluateTupleProbability** (Monte Carlo). A prototype Postgres
-extension was written but never integrated; no trace of it remains in
-ProvSQL today.
+A synthesis of the design discussion around the `continuous_distributions`
+branch of [ProvSQL](https://github.com/PierreSenellart/provsql). The branch
+introduces first-class continuous random-variable columns, a three-stage
+hybrid analytic + Monte Carlo evaluator (`RangeCheck` → `AnalyticEvaluator` →
+`Expectation`, with whole-circuit MC as the safety net), and the
+`HybridEvaluator` simplifier that folds family-preserving combinations.
+This document lists, categorises, and prioritises follow-up features,
+with a focus on **applicability** (does it solve a real user problem?)
+and **user interface** (does it fit the existing `provsql.<name>(...)` /
+infix-operator grammar?).
 
-The intended outcome of this plan: a research prototype on a feature
-branch that brings continuous-distribution support back, integrated
-cleanly into the existing circuit/gate model rather than as a parallel
-system.
+The prioritisation uses four labels:
 
-## Out of scope
+| Label | Meaning |
+|---|---|
+| **[Quick win]** | Small implementation, large user value, fits existing infrastructure cleanly. |
+| **[Mid-term]** | Meaningful implementation effort, high value, mostly local extensions. |
+| **[Architectural]** | Touches the type system, the gate ABI, or core evaluator algorithms. Opens major new capabilities. |
+| **[Research]** | Novel territory, potentially publishable, may need theoretical work first. |
 
-The following are deliberately deferred to a follow-up plan once the
-core lands:
+---
 
-- **EXCEPT and DISTINCT.** The thesis rewrites these into Cartesian
-  product + GROUP BY + AGG_AND. Doable but invasive in the planner
-  hook; defer.
-- **Aggregation over RVs.** Open theoretical question: how does
-  `SUM` over a column of normals interact with the existing
-  aggregation semirings? Out of scope here.
-- **Where-provenance + RVs.** The `where_provenance` mode already adds
-  `eq` / `project` gates; verify with a regression test that adding
-  RV-children to `gate_cmp` does not interfere, but no design work is
-  scheduled.
-- **A new top-level "Continuous mode" in Studio.** The continuous
-  machinery is just richer Circuit-mode rendering; promoting it to a
-  third mode alongside Where and Circuit splits the UI for no
-  functional benefit. See "Studio" below for what *is* in scope.
-- **A distribution editor in Studio** that lets users edit RV
-  parameters in-place. That's a data-modelling tool, not a provenance
-  inspector.
+## At-a-glance summary
 
-## Plan
+| # | Feature | Category | Priority |
+|---|---|---|---|
+| 1 | Gamma (+ Chi-squared) | Parametric distributions | Quick win |
+| 2 | Log-normal | Parametric distributions | Quick win |
+| 3 | Beta | Parametric distributions | Mid-term |
+| 4 | Poisson, Binomial, Geometric | Parametric distributions | Mid-term |
+| 5 | Multivariate Normal | Parametric distributions | Architectural |
+| 6 | Quantiles / inverse CDF | Expressivity completion | Quick win |
+| 7 | RV-vs-RV analytical comparisons | Expressivity completion | Quick win |
+| 8 | Function application (`log`, `exp`, …) | Expressivity completion | Mid-term |
+| 9 | Order-statistic aggregates (`MIN`, `MAX`, percentile) | Expressivity completion | Mid-term |
+| 10 | Information-theoretic primitives (entropy, KL, MI) | Expressivity completion | Mid-term |
+| 11 | Empirical samples gate | Data-driven distributions | Mid-term |
+| 12 | Empirical CDF gate | Data-driven distributions | Mid-term |
+| 13 | GMM constructor | Data-driven distributions | Quick win |
+| 14 | Frozen-distribution snapshots | Data-driven distributions | Mid-term |
+| 15 | Conditioning as a gate | Structural extensions | Architectural |
+| 16 | Correlation / copulas | Structural extensions | Architectural |
+| 17 | Stochastic processes | Structural extensions | Architectural |
+| 18 | Causal interventions (`do`) | Structural extensions | Research |
+| 19 | Shapley over RV-valued payoffs | Provenance × probability | Research |
+| 20 | Provenance of sampled values | Provenance × probability | Research |
 
-### Data model and new gate types
+---
 
-Append to `gate_type` (src/provsql_utils.h:55-73) and to
-`provenance_gate` (sql/provsql.common.sql:27-44). On-disk ABI requires
-that new gate types are added at the end, before `gate_invalid`.
+## Theoretical backbone: base independence and where it strains
 
-| Gate              | Children       | `info1`              | Stored data                                | Purpose                                |
-|-------------------|----------------|----------------------|--------------------------------------------|----------------------------------------|
-| `gate_rv`         | (none)         | (unused)             | `extra` = `"normal:μ,σ"` / `"uniform:a,b"` | Continuous RV leaf                     |
-| `gate_arith`   | ≥ 1 RV children | arith op tag        | (unused)                                   | n-ary arithmetic over RV expressions   |
+The discrete probabilistic-database consensus is well established: base
+tuple-existence events are independent Bernoullis, and arbitrary
+correlations are introduced through query operations (joins, unions,
+selections) that share Boolean variables across provenance formulas.
+The Boolean algebra is closed and clean; weighted model counting handles
+probability computation.
 
-Two new gates total. The full vocabulary covering pc-tables comes from
-combining these with three pre-existing gates:
+The same principle carries over to the continuous setting *in the strict
+mathematical sense*. Sklar's theorem combined with the inverse
+Rosenblatt transformation gives universality: any joint distribution
+over `(X₁, …, X_n)` can be written as a deterministic function of `n`
+independent uniforms. Independent base RVs plus a rich enough operation
+set is therefore universal, exactly as Boolean operations over
+independent Bernoullis are universal in the discrete case.
 
-- `gate_value` for scalar constants in inequalities (`reading > 2`):
-  the literal lives in `extra`, exactly as today; the only follow-on
-  is a tiny parsing tweak (see "value-gate parsing" below).
-- `gate_cmp` for inequality predicates: today it compares
-  `agg` to `value`; generalise so its children may also be RV
-  expressions. The HAVING-clause path
-  (src/having_semantics.cpp) keeps working unchanged.
-- `gate_input` (already present) is unaffected.
+The mechanism of correlation maps cleanly. Two tuples in discrete PDBs
+become correlated when their provenance formulas share a Boolean
+variable; two continuous RVs become correlated when their arithmetic
+expressions share a base `gate_rv`. The branch's `FootprintCache` is
+the continuous analog of "which Boolean variables does this provenance
+formula touch" — it tracks which base RVs each arithmetic subtree
+depends on, and the structural-independence shortcut on
+`gate_arith TIMES` is the continuous version of the disjoint-support
+optimisation in Boolean probability computation.
 
-`info1` for `gate_arith` carries a small local-enum operator tag:
+### Where the analogy strains
 
-```
-PROVSQL_ARITH_PLUS   = 0    // n-ary, sum of children
-PROVSQL_ARITH_TIMES  = 1    // n-ary, product of children
-PROVSQL_ARITH_MINUS  = 2    // binary, child0 - child1
-PROVSQL_ARITH_DIV    = 3    // binary, child0 / child1
-PROVSQL_ARITH_NEG    = 4    // unary,  -child0
-```
+In the discrete case, shared Boolean variables suffice to compute joint
+probabilities by weighted model counting — the algebra is closed and
+clean. In the continuous case, shared base `gate_rv`s give you
+correlation, but whether you can *exploit it analytically* depends on
+the marginal families and the operations involved:
 
-Local enum, not a PostgreSQL operator OID: RV arithmetic in the
-sampler is just C++ doubles, so there's no need to dispatch through
-PG's catalog. Trade-off: these tag values become part of the on-disk
-ABI (they are persisted in `info1`), so they need their own
-"warning, do not renumber" comment alongside the existing one on
-`gate_type`. New tags get appended.
+- For **Gaussian marginals**, the function-of-independents trick is
+  elegant and preserves analytical structure all the way through. A
+  ρ-correlated bivariate Normal is `X = Z₁`, `Y = ρZ₁ + √(1−ρ²) Z₂`
+  with `Z₁, Z₂` independent Normals; the simplifier can recognise this
+  as Gaussian-coupled and fold subsequent linear combinations using the
+  joint covariance. MVN (§A.5) can in principle be a *derived* feature
+  rather than a fundamentally new primitive.
+- For **non-Gaussian marginals coupled by a non-Gaussian copula**, the
+  representation still exists in principle (Sklar + inverse Rosenblatt),
+  but the functions to apply are inverse CDFs of compound special
+  functions. The simplifier loses sight of the joint structure
+  immediately, the analytical paths in `AnalyticEvaluator` do not fire,
+  and evaluation falls back to MC — negating the analytical advantage
+  that motivated base independence in the first place.
 
-**Value-gate parsing.** Today's `extract_constant_C`
-(src/having_semantics.cpp:115) parses an int from `gate_value`'s
-`extra` byte string. Extend it (or add a sibling
-`extract_constant_double`) to accept `float8`. No on-disk change;
-the field is already a free-form string.
+### Architectural choice
 
-**Stale comment cleanup.** The "Currently unused" comment on
-`gate_cmp` in src/provsql_utils.h:66 and sql/provsql.common.sql:39
-has already been refreshed; the matching line in
-sql/fixtures/provsql--1.0.0-common.sql:39 is intentionally left
-alone (the fixture is a frozen snapshot of 1.0.0, where `cmp`
-truly was unused; `provenance_cmp` was added in the 1.1.0 → 1.2.0
-upgrade per sql/upgrades/provsql--1.1.0--1.2.0.sql:48).
+This creates a tension that does not really arise in the discrete case:
 
-### SQL surface
+- **Purist position.** Keep base RVs independent; add only the
+  operations needed (function application from §B.3, plus copulas as
+  syntactic sugar compiling to inverse Rosenblatt). Universal,
+  architecturally clean, faithful to the discrete consensus. Cost: the
+  simplifier must be smart enough to recognise "this `gate_arith`
+  subtree is really a Gaussian copula in disguise" and route it to
+  joint-aware closed forms. That recognition machinery is non-trivial.
+- **Pragmatic position.** Add `gate_copula` (and `gate_mvnormal`) as
+  primitive gate types. The joint distribution lives in the gate with
+  a parametrised family; the simplifier and `AnalyticEvaluator` get
+  explicit hooks per copula family. Cost: a new gate type per axis of
+  expressivity, and base independence is no longer the unique source
+  of correlation.
+- **Hybrid.** Both. `gate_copula` exists as a primitive for ergonomic
+  UI and for cases with direct analytical handling (Gaussian, t,
+  Clayton, Gumbel), but the simplifier can also *decompose* it into
+  operations on independents when that path is cleaner (sampling,
+  arithmetic over components, marginalisation by projection). The gate
+  type acts as a *handle* for the simplifier and as ergonomic surface
+  for the user, not as a fundamentally new primitive.
 
-Introduce a composite SQL type `random_variable` (UUID-backed,
-mirroring how `agg_token` is exposed today). Constructors and
-overloaded operators let user queries read like ordinary SQL:
+### Two independence layers
 
+In discrete PDBs, "independence of base events" refers to
+tuple-existence Bernoullis. In the continuous setting there are *two*
+layers — tuple existence (still Boolean provenance, still independent)
+*and* per-row RV value draws (independently drawn per row from per-row
+parametric distributions). Correlations across rows in the same column
+(autoregressive structure, time series; §D.3) and correlations across
+columns in the same row (joint Normal returns on the same day) are
+both possible and both want first-class expression. The
+function-of-independents argument covers both, but the UI for "AAPL
+and MSFT are correlated within each trading day" is genuinely awkward
+without a primitive — the user has to set up a per-row hidden
+auxiliary `gate_rv` that both columns reference, and the simplifier
+has to learn to recognise that pattern.
+
+### Adopted position
+
+This roadmap takes the **hybrid stance**. The discrete consensus *does*
+carry over in the strict mathematical sense and is worth preserving as
+the architectural backbone, so base `gate_rv` instances stay independent
+and correlation is in principle introduced through operations that share
+them. But `gate_copula` and `gate_mvnormal` (§D.2, §A.5) exist as
+recognised sugar — the gate type serves as a *handle* for the
+simplifier and as ergonomic surface for the user. This preserves the
+discrete consensus philosophically while paying the UI and
+simplifier-engineering cost the continuous setting demands.
+
+---
+
+## A. Parametric distributions
+
+The branch supports Normal, Uniform, Exponential, Erlang, Categorical,
+Mixture, and Dirac. The following extend that set, prioritised by ratio
+of analytical leverage to implementation cost.
+
+### A.1 Gamma (and Chi-squared as a special case) — **[Quick win]**
+
+Erlang is already Gamma with integer shape; the regularised lower
+incomplete gamma CDF is already in the codebase. Relaxing `k` to non-integer
+gives Gamma in full generality, and Chi-squared falls out as `Gamma(k/2, ½)`.
+Sums of Gammas with equal rate close.
+
+**Applicability.** Waiting times, rainfall, financial returns, Bayesian
+posteriors for Poisson rates (Gamma is the conjugate prior). Chi-squared
+is the foundation of most frequentist hypothesis tests.
+
+**UI.**
 ```sql
-CREATE TABLE sensors(id text, reading provsql.random_variable);
-
-INSERT INTO sensors VALUES
-  ('s1', provsql.normal(2.5, 0.5)),
-  ('s2', provsql.uniform(1, 3)),
-  ('s3', provsql.exponential(0.7));
-
--- selection: planner rewrites > into a comparison gate
-SELECT id, reading
-  FROM sensors
- WHERE reading > 2;
-
--- the result has a provsql column carrying the Boolean formula
--- "reading_RV > 2" for each surviving tuple
-SELECT id, probability_evaluate(provsql, 'monte-carlo', '10000') AS p
-  FROM (SELECT id, reading FROM sensors WHERE reading > 2) t;
-
--- arithmetic on RVs: sum of two readings
-SELECT s1.reading + s2.reading AS combined
-  FROM sensors s1, sensors s2 WHERE s1.id = 's1' AND s2.id = 's2';
+SELECT provsql.gamma(2.5, 0.4);
+SELECT provsql.chi_squared(3);    -- syntactic sugar for gamma(k/2, 0.5)
 ```
 
-Internals:
-
-- A `random_variable` value is a row `(token uuid, value float8)`.
-  The UUID indexes a gate in the circuit (input or composite). The
-  value field caches a deterministic literal (used by zero-variance
-  constants).
-- Constructor functions register a fresh `gate_rv` with the
-  distribution serialised into `extra` (e.g. `"normal:2.5,0.5"`),
-  and return a `random_variable` carrying that UUID.
-- Constants (e.g. `as_random(2)` or the literal `2` on the right-hand
-  side of `reading > 2`) become `gate_value` gates with the literal
-  serialised into `extra`, reusing the existing storage convention.
-- Operator overloads `+`, `-`, `*`, `/` on `random_variable ×
-  random_variable` (and `random_variable × numeric`) build
-  `gate_arith` gates with the appropriate `info1` operator tag,
-  and return a new `random_variable`.
-- Operators `<`, `<=`, `=`, `>=`, `>`, `<>` between
-  `random_variable`s (or `random_variable × numeric`) build a
-  `gate_cmp` whose children are RV expressions (or RV vs `value`),
-  and return a `uuid` (a Boolean token). The planner-hook rewriter
-  conjoins it into the tuple's provsql column instead of feeding it
-  to PostgreSQL's WHERE filter.
-
-This addresses the only awkward bit: a regular `WHERE reading > 2`
-would normally be evaluated by PostgreSQL and filter rows out. The
-planner hook recognises comparisons against `random_variable`
-columns, routes them into the provsql token, and defaults `WHERE` to
-`TRUE` so all rows survive (subject to optional BoundCheck pruning).
-This is exactly the spirit of ProvSQL's existing rewriting.
-
-### Planner-hook changes (src/provsql.c)
-
-- **Discovery.** Extend `get_provenance_attributes()` (lines
-  407-515) to recognise both `provsql UUID` columns and
-  `random_variable` columns.
-- **Expression building.** When a comparison node is detected
-  anywhere in the WHERE/SELECT tree (Var of `random_variable`
-  against a constant or another `random_variable`), translate it
-  into a `gate_cmp` in the circuit (reusing `provenance_cmp`,
-  sql/provsql.common.sql:586-611) and conjoin the resulting Boolean
-  token into the tuple's provsql column via `provenance_times`. RV
-  arithmetic in SELECT expressions creates `gate_arith` gates
-  with the right `info1` op tag.
-- **Splice.** Unchanged for the common case. WHERE clauses that
-  the rewriter consumes are replaced by `TRUE` (or by
-  `BoundCheck(provsql)` when the optional solver is enabled).
-
-### Sampler: extend `BooleanCircuit::monteCarlo`
-
-In src/BooleanCircuit.cpp:287-307. Add a per-call
-`unordered_map<uuid, double>` cache that:
-
-- on encountering a `gate_rv`, draws a fresh sample from the
-  distribution serialised in `extra` (memoised by UUID per
-  tuple-MC iteration, per the thesis's SampleOne);
-- on encountering a `gate_arith`, recursively samples its
-  children to produce scalars and combines them per `info1`
-  (PLUS / TIMES n-ary, MINUS / DIV binary, NEG unary);
-- on encountering a `gate_value` with a child path that's reached
-  during RV evaluation, parses the literal from `extra` as
-  `float8`;
-- on encountering a `gate_cmp` whose children are RV expressions,
-  samples both operand sub-DAGs (memoised) and returns the Boolean
-  comparator value;
-- leaves the existing aggregate-vs-constant `gate_cmp` branch
-  unchanged;
-- keeps `plus` (OR), `times` (AND), `monus` (AND-NOT) for the
-  Boolean part of the formula.
-
-Switch from `rand()` to C++ `<random>` (`std::mt19937_64`,
-`std::normal_distribution`, `std::uniform_real_distribution`,
-`std::exponential_distribution`). The Bernoulli path inherits the
-same RNG as a small adjacent improvement. Add a
-`provsql.monte_carlo_seed` GUC for deterministic regression tests.
-
-### Optional BoundCheck (`lp_solve`)
-
-Following the convention of `d4` / `c2d` / `weightmc` (resolved
-through `provsql.tool_search_path`):
-
-- Detect `lp_solve` / `lpsolve55` at configure time
-  (Makefile.internal); guard with `#ifdef HAVE_LPSOLVE`.
-- A new C++ helper `boundCheck(token) -> bool` walks the Boolean
-  part of the circuit, lowers each `gate_cmp` clause whose children
-  are RV expressions into an LP constraint over base RVs, encodes
-  disjoint support intervals via binary indicator variables (per the
-  thesis), and asks the solver for feasibility.
-- Wired in as a planner-hook post-pass on the rewritten WHERE: if
-  BoundCheck returns false for a tuple class, skip the whole
-  branch.
-- Runtime GUC `provsql.use_bound_check = on/off`, defaulting to
-  on if `lp_solve` was detected at build time.
-
-When `lp_solve` is unavailable, queries still work; selectivity is
-just looser (always-false predicates produce zero-probability rows
-that get filtered post-MC by a threshold).
-
-### Expected value and moments
-
-A natural addition that fits ProvSQL's existing aggregation
-machinery. Continuous distributions have well-defined moments, and
-the existing `agg` / `semimod` gates plus the compiled-semiring
-framework (src/semiring/) already give us the right shape for
-"evaluate a scalar function over a circuit".
-
-**SQL surface.** New scalar functions, taking a `random_variable`
-(or a UUID pointing at a circuit) and returning a `float8`:
-
-- `expected_value(rv random_variable) -> float8`
-- `variance(rv random_variable) -> float8`
-- `moment(rv random_variable, k integer) -> float8` (kth raw
-  moment)
-
-Aggregate forms (`expected_value(rv) ... GROUP BY ...`) come for
-free from the existing aggregation pipeline once the scalar form
-exists.
-
-**Two evaluation paths.**
-
-- **Closed-form via a compiled-semiring walk.** A new
-  `src/semiring/Expectation.h` (and its `sr_expectation` SQL
-  binding alongside the existing `sr_*` family) descends the
-  circuit:
-    - `gate_rv` returns the analytical expectation of its
-      distribution (`μ` for normal, `(a+b)/2` for uniform,
-      `1/λ` for exponential, ...).
-    - `gate_value` returns the literal.
-    - `gate_arith`: linearity gives `E[ΣX_i] = ΣE[X_i]`
-      for free; for products, `E[XY] = E[X]E[Y]` *iff* X and Y
-      share no base RV in common (independence detectable
-      structurally from the descendant-UUID footprint of each
-      child). When independence does not hold, fall through to MC
-      on the offending sub-circuit.
-    - `gate_cmp`: `P(comparator)`, i.e. expectation of the
-      Boolean, computable by MC.
-- **MC fallback** (`sr_expectation_mc` or a `monte-carlo`
-  parameter on the same call): same sampler as
-  `probability_evaluate`, just averaging the scalar instead of
-  tallying Boolean outcomes.
-
-**Higher moments.** Same descent with the appropriate algebraic
-identity. Variance via `Var(X+Y) = Var(X) + Var(Y) + 2 Cov(X,Y)`,
-with covariance zero when independent. Higher moments: closed-form
-for the basic distributions, MC otherwise.
-
-**Why this matches ProvSQL's existing shape.** The aggregation
-framework (src/Aggregation.{h,cpp}, src/aggregation_evaluate.c)
-already evaluates scalar functions over circuits and produces
-`agg_token` results carrying running values. A moment-computing
-semiring slots into the same machinery: input is a circuit, output
-is a scalar, evaluation is a semiring fold. The compiled-semiring
-machinery already dispatches on a name string
-(src/provenance_evaluate_compiled.{cpp,hpp}); adding `expectation`
-to the dispatch table is mechanical.
-
-**Independence detection.** A small precomputation per circuit
-walk: for each gate, record the set (or Bloom filter) of base
-`gate_rv` UUIDs reachable below it. Two children of an
-`arith(TIMES, ...)` are independent iff their base-RV sets are
-disjoint. Cheap, structural, and gives correct closed-form
-expectations on the common cases (most analytical workloads).
-
-### Studio
-
-Most of the Studio work fits into the existing Circuit mode by
-enriching the gate renderer and the node inspector, rather than
-adding a new top-level mode (Where and Circuit stay as the two
-top-level modes).
-
-**Render the new gate types.**
-
-- `gate_rv`: distribution name and parameters (e.g.
-  `"normal(2.5, 0.5)"`) with a small PDF thumbnail rendered
-  in-place. Analytical density for normal / uniform /
-  exponential, no sampling required at the leaf.
-- `gate_arith`: operator glyph derived from `info1`
-  (`+`, `-`, `×`, `÷`, `−x`).
-
-Both reuse the JSON-shape conventions of the existing `agg` /
-`value` renderers; pure frontend work.
-
-**Node inspector: distribution preview.** When the pinned node is
-a `gate_rv`, plot its analytical density. When it's a
-`gate_arith` or a `gate_cmp` over RV children, draw an
-empirical histogram from a quick MC pull. This is the answer to
-"do these two distributions overlap" in one click, mirroring the
-Squiggle / @Risk / `bayestestR::overlap()` UX.
-
-**Side-by-side comparison.** Pin two `rv` (or `arith`) nodes
-and overlay their densities, with an estimated `P(X > Y)`
-annotated. Direct UX equivalent of the everyday probabilistic-DB
-question.
-
-**Probability-evaluation strip.** The strip already runs
-`probability_evaluate(token, 'monte-carlo', n)`; once the sampler
-handles continuous inputs, the strip works unchanged for Boolean
-circuits over RVs. Verify with one e2e test rather than write
-code. Same applies to a future `sr_expectation` binding: once
-exposed, the strip picks it up automatically.
-
-**Hover info.** Hovering an `rv` node shows its distribution
-parameters and (when `BoundCheck` is on) its computed support
-interval. This is where RangeCheck surfaces in the UI without
-needing an extra panel.
-
-**Config-panel rows.** Surface the new GUCs once they ship:
-`provsql.monte_carlo_seed` (reproducible MC) and
-`provsql.use_bound_check` (when `lp_solve` is enabled). One row
-each, following the existing Config-panel capture pattern
-(`doc/source/_static/studio/config-panel.png`).
-
-**Demo script.** `studio/scripts/demo_continuous.{sh,py}` loads
-the sensors / two-distribution example, alongside the existing
-demos, so the menu launches the full continuous demo with one
-click.
-
-**Playwright e2e.** Load the demo fixture, run a `WHERE rv > 2`
-query, click into the resulting circuit, verify the strip shows a
-probability in `(0, 1)` and the new gate types render with their
-specific labels.
-
-**User documentation.** A new "Continuous distributions"
-subsection in `doc/source/user/studio.rst`, with one screenshot
-of the circuit panel showing a `gate_rv` node with its preview
-and one of the side-by-side comparison. Capture per the
-`import + convert` flow already in CLAUDE.md.
-
-**Compatibility floor.** The compatibility table in
-`doc/source/user/studio.rst` (`extension >= 1.4.0` today) bumps
-in lockstep with the extension version that ships these gate
-types. CHANGELOG entry at release time only.
-
-### Files
-
-Existing files to modify:
-
-- `src/provsql_utils.h` (gate_type enum: append 2 new tags
-  `gate_rv`, `gate_arith` before `gate_invalid`; bump
-  `gate_type_name[]`; declare the `provsql_arith_op` enum with
-  the same "do not renumber" warning).
-- `sql/provsql.common.sql` (new `random_variable` type and
-  constructors, arithmetic and comparison operators, bump
-  `provenance_gate` enum with the two new values).
-- `src/having_semantics.cpp` (extend `extract_constant_C` or add
-  a sibling `extract_constant_double` so `gate_value`'s
-  `extra` field can be parsed as `float8` in addition to
-  `int`).
-- `src/provsql.c` (planner hook: recognise `random_variable`
-  columns and inequality predicates; splice into provsql).
-- `src/BooleanCircuit.cpp`/`.h` (extend monteCarlo;
-  per-sample memoisation map; switch to `<random>`).
-- `src/CircuitFromMMap.cpp`/`.hpp` (read new gate types into
-  the in-memory circuit).
-- `src/probability_evaluate.cpp` (no API change; routes through
-  the extended sampler).
-- `src/provenance_evaluate_compiled.{cpp,hpp}` (dispatch table:
-  add `expectation` alongside the existing compiled semirings).
-- `Makefile.internal` (optional `HAVE_LPSOLVE` probe; link
-  `-llpsolve55` when found).
-- `test/schedule.common` (add new tests; never edit
-  `test/schedule` directly: it is generated).
-- `doc/source/user/probabilities.rst` and a new
-  `doc/source/user/continuous-distributions.rst` (user manual);
-  `doc/source/user/studio.rst` (new "Continuous distributions"
-  subsection plus compatibility-floor bump);
-  `doc/source/dev/probability-evaluation.rst` (architecture).
-- Studio frontend: the gate-renderer module and the node-inspector
-  panel (under `studio/provsql_studio/static/`), plus
-  `studio/provsql_studio/circuit.py` if the server-side circuit
-  serialiser needs to learn the new gate-type tags.
-
-New files:
-
-- `src/RandomVariable.cpp`/`.h` (C++ helpers for distribution
-  sampling, registry lookup, analytical moments per distribution).
-- `src/random_variable_type.c` (PostgreSQL type IO functions for
-  `random_variable`).
-- `src/semiring/Expectation.h` (compiled-semiring head; computes
-  `E[·]` over a circuit, with structural independence detection on
-  `gate_arith(TIMES, …)`, MC fallback when independence fails).
-- `src/BoundCheck.cpp`/`.h` (optional, gated by `HAVE_LPSOLVE`).
-- `test/sql/continuous_basic.sql`,
-  `continuous_arithmetic.sql`, `continuous_selection.sql`,
-  `continuous_join.sql`, `continuous_union.sql`,
-  `continuous_expectation.sql`, plus `expected/*.out`.
-- `studio/scripts/demo_continuous.{sh,py}` (loads the sensors /
-  two-distribution demo).
-- `studio/tests/e2e/test_continuous.py` (Playwright e2e covering
-  the rendered gate types and the probability-strip path).
-
-## Priorities
-
-Each stage ends with green `make installcheck` and a small demo SQL
-script.
-
-1. **Foundations: type, constructors, value parsing.** Add
-   `random_variable` composite type, IO functions, and
-   constructors `normal / uniform / exponential / as_random` that
-   create `gate_rv` (or `gate_value` for `as_random`) with
-   the distribution serialised into `extra`. Append the 2 new
-   gate-type enumerators and the `provsql_arith_op` enum (in C,
-   in SQL, in `gate_type_name[]`). Extend the `gate_value`
-   parsing helpers in `src/having_semantics.cpp` to accept
-   `float8`. No planner-hook changes yet; constructors and gates
-   round-trip through `MMappedCircuit` and survive a restart.
-
-2. **Sampler: continuous Monte Carlo.** Extend the in-memory
-   circuit to load and recognise the new gate types. Wire
-   `<random>`-based sampling for `gate_rv` per
-   distribution; memoise samples by UUID per tuple-MC iteration.
-   Add the `gate_arith` evaluator that dispatches on the
-   `info1` op tag. Extend `gate_cmp` evaluation: when its
-   children are RV expressions (`rv`, `arith`, or
-   `value` parsed as `float8`), compare two scalar samples;
-   the existing aggregate-vs-constant branch stays. First
-   regression tests at this stage are circuit-level (no SQL
-   rewriting yet).
-
-3. **Operator overloading: arithmetic and inequality.** SQL
-   operators `+ - * /` on `random_variable × random_variable` and
-   `random_variable × numeric` (build `gate_arith` gates with
-   the right `info1` tag, return `random_variable`). SQL
-   comparison operators (returning a Boolean token UUID).
-   SQL-level tests that hand-write the `provsql` column.
-
-4. **Planner hook: SELECT, WHERE, JOIN, UNION on pc-tables.**
-   Detect `random_variable` columns in `get_provenance_attributes`.
-   Detect comparisons against `random_variable` in WHERE (and
-   SELECT list); rewrite them into Boolean tokens conjoined into
-   provsql; replace those WHERE clauses with `TRUE`. Cartesian
-   product / JOIN: conjoin both tuples' provsql tokens (already what
-   `SR_TIMES` does). UNION ALL: project provsql column straight
-   through (already what `SR_PLUS` does). The sensors example
-   above runs end-to-end.
-
-5. **Pruning and exact shortcuts.** Three peephole shortcuts that
-   run before MC, ordered cheapest-first; all are sound and replace
-   a decided `gate_cmp` with a Bernoulli `gate_input` carrying the
-   determined probability, so they help every downstream evaluator
-   (MC, `independent`, `treedec`, `d-DNNF`, `d4`), not just MC.
-   (a) **RangeCheck** (per the thesis): interval arithmetic on
-   `gate_arith`; for `gate_cmp` against a constant whose support
-   bound is strictly above/below, return 0 or 1 exactly. New file
-   `src/RangeCheck.{h,cpp}`. No external dependency.
-   (b) **Analytic CDF**: for `gate_cmp` reducing to `X cmp c` (or
-   `X cmp Y` with X, Y independent normals), return `F(c)` (or `Φ`)
-   from a closed-form CDF. New file `src/AnalyticEvaluator.{h,cpp}`.
-   CDFs are computed inline against `<cmath>` (`std::erf` for the
-   normal, `std::expm1` for the exponential, arithmetic for uniform);
-   no external math dependency.
-   (c) **BoundCheck** (the original Priority 5 scope): behind
-   `--with-lpsolve` (autodetected), build `BoundCheck.cpp`; planner
-   hook wraps the rewritten WHERE in a BoundCheck call. GUC
-   `provsql.use_bound_check`. Used when (a)+(b) cannot decide and
-   joint feasibility across multiple cmps on shared RVs matters.
-   Regression tests in `continuous_boundcheck.sql` cover all three
-   layers.
-
-6. **Expected value and moments.** Add the
-   `src/semiring/Expectation.h` compiled semiring and its
-   `sr_expectation` SQL binding, the scalar functions
-   `expected_value` / `variance` / `moment`, and the
-   independence-detection precomputation on circuits. Closed-form
-   path for the basic distributions; MC fallback otherwise.
-   Aggregate forms come from the existing aggregation pipeline.
-   Regression test in `test/sql/continuous_expectation.sql`
-   covering analytical, structurally-independent, and MC-fallback
-   cases.
-
-7. **Hybrid evaluation: simplifier and island decomposition.**
-   Generalises the Priority 5 peephole pass in two directions, so
-   the existing structural evaluators stay applicable on circuits
-   with continuous comparators.
-   (a) **Simplifier on `gate_arith`** (evaluation-time, never
-   mutates the persisted DAG). Linear combinations of *independent*
-   normals collapse: `aX + bY → N(aμ + bμ', a²σ² + b²σ'²)` iff X
-   and Y reach disjoint base-RV UUIDs (same independence test as
-   Priority 6). Sum of i.i.d. exponentials with the same rate →
-   Erlang. Plus trivial constant folds (`PLUS, 0, X → X` etc.).
-   Skip uniform + uniform (Irwin–Hall, not in our family),
-   normal × normal (product distribution).
-   (b) **Island decomposition.** Factor a circuit into a Boolean
-   wrapper (input/plus/times/monus over `gate_cmp` outcomes and
-   Bernoulli leaves) plus continuous islands — connected components
-   in `arith`/`rv` whose only outward edges leave through `gate_cmp`.
-   Islands feeding a single cmp are marginalised (analytically per
-   5(b) when possible, MC otherwise) and replaced by a Bernoulli
-   `gate_input`; islands feeding multiple cmps inline a 2^k joint
-   table over the k shared comparators. The Boolean wrapper feeds
-   any of MC, `independent`, `treedec`, `d-DNNF`, `d4` unchanged.
-   New file `src/HybridEvaluator.{h,cpp}`. New GUC
-   `provsql.hybrid_evaluation` (bool, default `on`). Regression
-   tests in `test/sql/continuous_hybrid.sql`.
-
-8. **Studio.** Specific renderers for `gate_rv` and
-   `gate_arith`; node-inspector distribution preview (analytical
-   for `rv` leaves, empirical histogram for `arith` and
-   `gate_cmp` over RVs); side-by-side density overlay with
-   estimated `P(X > Y)`; Config-panel rows for the new GUCs;
-   demo script in `studio/scripts/`; Playwright e2e; new
-   "Continuous distributions" subsection in
-   `doc/source/user/studio.rst`. Compatibility-floor bump aligned
-   with the extension version that ships these gate types.
-
-9. **Polish.** Documentation:
-   `doc/source/user/continuous-distributions.rst` (tutorial),
-   `doc/source/dev/probability-evaluation.rst` (arch update,
-   including the Priority 7 hybrid-evaluation architecture).
-   Run `make docs`. Leave `EXCEPT`, `DISTINCT`, `GROUP BY`, and
-   HAVING with RV operands as a clearly-marked TODO.
-
-## Implementation observations
-
-### What ProvSQL already provides
-
-The thesis's "DAG over UUIDs" *is* a ProvSQL circuit, just with a
-wider gate vocabulary. Concretely:
-
-- **Gate vocabulary** (15 gate types in src/provsql_utils.h:55-73):
-  `input`, `plus`, `times`, `monus`, `project`, `zero`, `one`,
-  `eq`, `agg`, `semimod`, `cmp`, `delta`, `value`, `mulinput`,
-  `update`. New gate types must be appended at the end before
-  `gate_invalid`.
-- **Persistent storage** (src/MMappedCircuit.h:59-79): each
-  gate's `GateInformation` carries `type`, `nb_children`, children
-  index, `prob` (double, default 1.0), `info1`/`info2`
-  (unsigned), and a variable-length `extra` byte string. The
-  16-byte file header (magic + version) already exists, so
-  distribution parameters can live in `extra` without breaking the
-  on-disk layout.
-- **Lazy materialisation** (src/MMappedCircuit.cpp:129-139):
-  `setProb` / `set_infos` / `setExtra` lazily create an `input`
-  gate if the UUID is unknown. The same pattern fits a future
-  `set_distribution`.
-- **Boolean circuit + Monte Carlo**
-  (src/BooleanCircuit.cpp:287-307): traverses the gate DAG and
-  samples each `input` independently from Bernoulli with `rand()`;
-  `plus`=OR, `times`=AND. Exactly the structure needed for
-  sampling-based evaluation; only the leaf-sampling step is too
-  narrow.
-- **Three-phase planner hook** in src/provsql.c (~3650 lines):
-  discovery, expression building (`make_provenance_expression`,
-  lines 1101-1392), splice. SR_PLUS=UNION, SR_TIMES=JOIN,
-  SR_MONUS=EXCEPT already wire SQL set ops onto circuit gates.
-  HAVING is pre-evaluated by `having_semantics`. Per-tuple metadata
-  is carried as a single `provsql UUID` column; this contract is
-  preserved.
-- **`add_provenance(regclass)`** (sql/provsql.common.sql:215-221)
-  adds the UUID column and is the natural place to extend for
-  continuous RVs.
-
-### What is missing today
-
-- **No continuous RV inputs.** Leaves are Bernoulli only.
-- **No arithmetic on RVs.** No gate type representing `x+y`,
-  `x-y`, `x*c`, etc., between two scalar RVs.
-- **No inequality predicates between RV expressions.** `gate_cmp`
-  is used today to compare an aggregate-value gate against a
-  constant-value gate (HAVING clauses), not two RV expressions.
-- **No solver, no continuous RNG.** No `<random>`, no
-  `boost::math`, no LP/MILP solver. WeightMC is the only
-  sampling-adjacent external tool.
-
-### `agg_token` and `random_variable`: a unification opportunity
-
-`agg_token` and `random_variable` are two presentations of the
-same algebraic object. Both are UUID-indexed handles on a
-provenance gate; both ride the same six-comparator surface
-(`< <= = <> >= >`); both are turned into `gate_cmp` nodes by the
-planner hook and combined into the row's provenance via
-`provenance_times` / `provenance_plus`. They differ in *how* the
-UUID's value distribution is computed: `agg_token`'s is
-combinatorial (finite worlds enumerated by `provsql_having` over
-the surrounding `gate_agg`'s children); `random_variable`'s is
-continuous (sampled from `<random>` by `monteCarloRV`). They
-differ structurally only in that `agg_token` additionally carries
-a running aggregate value alongside the UUID (used by
-`agg_token_out`'s `value (*)` display), whereas `random_variable`
-is a thin UUID wrapper.
-
-Three concrete unification levers. None is required for any one
-priority, but flagging them here keeps subsequent priorities from
-drifting apart.
-
-1. **Walker dispatch &mdash; landed.** The historical
-   `migrate_aggtoken_quals_to_having` /
-   `check_expr_on_aggregate` family and the priority-4
-   `extract_rv_cmps_from_quals` / `check_expr_on_rv` walker are now
-   consolidated behind a single `migrate_probabilistic_quals` in
-   `src/provsql.c`, driven by a `qual_class` enum
-   (`QUAL_PURE_AGG`, `QUAL_PURE_RV`, `QUAL_DETERMINISTIC`, plus
-   three mixed-error classes). Pure-agg conjuncts route to
-   `q->havingQual`, pure-RV conjuncts route to the returned
-   `rv_cmps` list (later spliced into `prov_atts`), deterministic
-   conjuncts stay in WHERE, and the three mixed cases each get a
-   distinct user-facing error.
-
-2. **Sampler scalar-source dispatch (medium effort, unlocks
-   HAVING+RV).** `monteCarloRV::evalScalar` handles `gate_value`,
-   `gate_rv`, `gate_arith`; `gate_agg` throws. The legacy boolean
-   MC path resolves `gate_cmp(gate_agg, …)` via
-   `provsql_having`'s per-world enumeration in `getBooleanCircuit`
-   (`src/CircuitFromMMap.cpp:101`). Sharing that core (or its
-   priority-7 island-decomposer reincarnation) lets `monteCarloRV`
-   handle aggregate-bearing comparators uniformly with continuous
-   ones — and `WHERE rv > 0 GROUP BY x HAVING count(*) > 1` runs
-   end-to-end under MC. This is the natural intersection of
-   priority 7's island decomposer and the existing HAVING
-   resolution; bake it in there.
-
-3. **Type-level merger (low value).** Tempting algebraically, but
-   the physical layouts differ (117 B `agg_token` vs 24 B
-   `random_variable`), `agg_token`'s GUC-flipped output
-   (`agg_token_out` reading `provsql.aggtoken_text_as_uuid`) does
-   not generalise, and existing on-disk data would need
-   migration. Skip.
-
-The first two together also unlock cross-type comparisons that are
-currently rejected outright: `WHERE rv > avg(other_rvs)`,
-`WHERE count(rv > 0) > 5`, etc.
-
-### Verification
-
-- `make -j$(nproc)` clean (no new warnings).
-- `sudo make install && sudo service postgresql restart && make
-  installcheck`. Regressions in `test/sql/continuous_*.sql`
-  against hand-computed expected output, with Monte Carlo
-  determinism via `provsql.monte_carlo_seed` and large `n`.
-- Manual end-to-end demo:
-
-  ```sql
-  CREATE TABLE sensors(id text, reading provsql.random_variable);
-  INSERT INTO sensors VALUES
-    ('s1', provsql.normal(2.5, 0.5)),
-    ('s2', provsql.uniform(1, 3));
-  SELECT add_provenance('sensors');
-  SELECT id, probability_evaluate(provsql, 'monte-carlo', '10000')
-    FROM (SELECT id, reading FROM sensors WHERE reading > 2) t;
-  -- expected: s1 ~ 0.84, s2 ~ 0.50, within sampling error
-  ```
-
-- Studio (`provsql-studio`): point at the demo DB; the circuit
-  panel renders, even if new gate types show up as plain labels.
-
-### Compatibility floor
-
-Studio's compatibility table (extension >= 1.4.0 today) will need
-a bump when the new gate types ship, in coordination with the
-1.5.0 / Studio release window.
+### A.2 Log-normal — **[Quick win]**
+
+Composes with the existing Normal infrastructure: `log(X)` of a log-normal
+is Normal, so products of log-normals fold via Normal's linear-combination
+closure in log-space. The simplifier gains a multiplicative-closure ruleset
+that mirrors Normal's additive one.
+
+**Applicability.** File sizes, network traffic, biological measurements,
+financial returns (geometric Brownian motion), any positive-valued
+multiplicative process.
+
+**UI.**
+```sql
+SELECT provsql.lognormal(0.0005, 0.02);
+
+-- Compounded multi-day return: PRODUCT of log-normals folds analytically
+SELECT expected(product(daily_return))
+FROM asset_returns WHERE asset = 'AAPL';
+```
+
+### A.3 Beta — **[Mid-term]**
+
+Bounded support on `[0,1]`. CDF is the regularised incomplete beta, dual
+to the Gamma machinery. Conjugate with Bernoulli/binomial, pairing
+naturally with the conditioning-gate work below.
+
+**Applicability.** Click-through rates, conversion rates, estimated
+probabilities, any bounded proportion. A/B testing.
+
+**UI.**
+```sql
+INSERT INTO variant_ctr VALUES
+  ('A', provsql.beta(45, 120)),
+  ('B', provsql.beta(72, 88));
+
+-- P(B beats A) — gate_cmp on two Betas; the closed form requires the
+-- pairwise RV comparator work in §B.2 to stay analytical.
+SELECT probability_evaluate(provenance())
+FROM variant_ctr a, variant_ctr b
+WHERE a.variant = 'A' AND b.variant = 'B' AND b.ctr > a.ctr;
+```
+
+### A.4 Discrete families: Poisson, Binomial, Geometric — **[Mid-term]**
+
+Categorical handles fully-enumerated outcomes; these three are the
+analytical workhorses. Poisson sums close, fixed-`p` Binomial sums
+close, Geometric is the discrete cousin of Exponential and inherits
+memorylessness (the `gate_cmp` truncation path already exploits this for
+Exponential).
+
+**Applicability.** Counts (arrivals, events per interval), success
+counts in fixed trials, waiting-times-in-trials. The bread and butter of
+operational analytics.
+
+**UI.**
+```sql
+INSERT INTO store_traffic VALUES
+  (9,  'mon', provsql.poisson(15.2)),
+  (10, 'mon', provsql.poisson(22.7)),
+  (11, 'mon', provsql.poisson(28.1));
+
+-- Sum-closure of Poisson folds to Poisson(66.0) at simplifier time
+SELECT expected(sum(arrivals))
+FROM store_traffic WHERE day = 'mon' AND hour BETWEEN 9 AND 11;
+```
+
+### A.5 Multivariate Normal — **[Architectural]**
+
+Every operation closes: linear combinations of MVN are MVN, marginals
+are MVN, conditional of MVN given MVN is MVN. Unlocks correlation — the
+single biggest expressive gap in the current setup.
+
+**Framing.** Per the hybrid position in §Theoretical backbone, MVN is
+*derivable* from base independence: the Cholesky decomposition
+`Y = L Z` (with `Z` i.i.d. standard Normals and `L Lᵀ = Σ`) expresses
+any MVN as a linear combination of independent base RVs, and the
+simplifier can recognise that pattern and fold linear combinations
+using the joint covariance. The MVN constructor therefore lands as a
+recognised sugar that compiles to operations on independent base
+`gate_rv`s — a *handle* for the simplifier and ergonomic surface for
+the user, not a fundamentally new primitive.
+
+**Cost.** The `random_variable` type currently scalarises. MVN wants
+vectors and covariance matrices threaded through `gate_arith`, and the
+simplifier needs the Cholesky-recognition rule. The gate ABI should be
+designed knowing this is coming, even if the implementation lands later.
+
+**Applicability.** Portfolio risk, sensor fusion, any physical process
+where variables correlate. The bridge to formal joint modelling.
+
+**UI.** Table-returning constructor that produces one row of named
+`random_variable` columns sharing an internal covariance reference:
+```sql
+INSERT INTO stocks (trade_date, AAPL, MSFT, GOOG)
+SELECT '2026-05-14', AAPL, MSFT, GOOG
+FROM provsql.mvnormal(
+  μ => ARRAY[185.0, 412.0, 178.0],
+  Σ => ARRAY[[2.5, 1.8, 1.6],
+             [1.8, 3.1, 1.9],
+             [1.6, 1.9, 2.2]],
+  names => ARRAY['AAPL', 'MSFT', 'GOOG']
+);
+
+SELECT expected(0.5*AAPL + 0.3*MSFT + 0.2*GOOG),
+       variance(0.5*AAPL + 0.3*MSFT + 0.2*GOOG)
+FROM stocks WHERE trade_date = '2026-05-14';
+```
+
+### Cautions
+
+- **Cauchy and other stable distributions** are tempting (closure
+  under sum is rare) but have undefined moments — breaks the
+  `Expectation` semiring contract. Either make moment evaluation
+  partial or detect-and-error on those subtrees.
+- **Student's t and F** are quotients of RVs; really useful only once
+  the analytical evaluator exploits `gate_arith` division as a
+  first-class case.
+
+---
+
+## B. Expressivity completion
+
+Cases where the analytical machinery has a natural fit but no current
+surface.
+
+### B.1 Quantiles and inverse CDF — **[Quick win]**
+
+Currently only `expected`, `variance`, `moment`, `central_moment`,
+`support` exist. Quantiles are a clear gap. Every closed-form family
+has an analytical inverse CDF (Normal via Beasley-Springer-Moro is
+already in the branch; Exponential and Uniform trivially; Gamma/Beta
+via root-finding on the regularised incomplete special functions).
+Empirical samples just sort and look up.
+
+**Applicability.** Median, percentiles, Value-at-Risk, credible
+intervals — anywhere "what value would I exceed with probability p"
+matters. Required for finance and risk applications.
+
+**UI.** Polymorphic dispatcher alongside `expected`:
+```sql
+SELECT provsql.quantile(posterior, 0.025) AS lower_95,
+       provsql.quantile(posterior, 0.975) AS upper_95
+FROM model_posteriors WHERE param = 'mu_revenue';
+```
+
+### B.2 RV-vs-RV analytical comparisons — **[Quick win]**
+
+`gate_cmp` handles `X < c` brilliantly. `X < Y` for two RVs goes to MC
+even when there's a clean form — Normal-Normal has
+`P(X<Y) = Φ((μ_Y − μ_X) / √(σ_X² + σ_Y²))`, Exponential-Exponential has
+`P(X<Y) = λ_X / (λ_X + λ_Y)`.
+
+**Applicability.** A/B tests, rankings, tournament probabilities, "which
+sensor is reading higher" — any "which is bigger" comparison.
+
+**UI.** No new surface; pairwise RV comparators are intercepted at plan
+time exactly like `X < c`. The work is adding lookup-table entries in
+`AnalyticEvaluator`.
+
+### B.3 Function application beyond +, −, ×, ÷ — **[Mid-term]**
+
+`gate_arith` covers arithmetic. There's no `log`, `exp`, `sqrt`, `abs`,
+`pow`, or general monotonic transform. This bites immediately:
+
+- `log(lognormal) → normal` and `exp(normal) → lognormal` are the
+  natural bridges between the two families; without them the simplifier
+  cannot fold either direction.
+- The probability integral transform `F_X(X) → Uniform(0,1)` has no
+  expression.
+- Box-Cox-style transforms aren't expressible.
+
+**UI.** A `gate_apply(rv, op)` with a whitelist of known-closure
+transforms (MC fallback otherwise). Monotonic transforms preserve CDF
+structure, so `RangeCheck` extends naturally.
+```sql
+SELECT expected(log(asset_return))   -- log of lognormal → Normal
+FROM positions;
+```
+
+### B.4 Order-statistic aggregates — **[Mid-term]**
+
+`MIN`, `MAX`, percentile aggregates over `random_variable` are listed as
+deferred in the 1.5.0 release notes. The theory is clean:
+`P(min < c) = 1 − ∏(1 − F_i(c))` for any family, and exponential-family
+min/max have especially nice closures (min of i.i.d. exponentials is
+exponential at the summed rate).
+
+**Applicability.** Survival analysis (time-to-first-failure), competitive
+events, SLA tail-latency analysis.
+
+**UI.** No new syntax; promotes `MIN`/`MAX`/`percentile_cont` to RV-aware
+versions exactly like the existing `SUM`/`AVG`/`PRODUCT` aggregates.
+
+### B.5 Information-theoretic primitives — **[Mid-term]**
+
+Entropy, KL divergence, mutual information aren't expressible. All have
+closed forms for major families (Normal-Normal KL is famously clean) and
+obvious MC fallbacks.
+
+**Applicability.** Model comparison, variable importance, feature
+selection — the language of ML evaluation.
+
+**UI.**
+```sql
+SELECT provsql.entropy(prior),
+       provsql.kl(posterior, prior),
+       provsql.mutual_information(X, Y)
+FROM ...;
+```
+
+---
+
+## C. Empirical / data-driven distributions
+
+The integration point for ML-fitted, simulation-derived, or
+sample-based distributions. Two gate types cover essentially everything;
+specific constructors smooth the common cases.
+
+### C.1 GMM constructor — **[Quick win]**
+
+Gaussian mixtures decompose internally into `gate_mixture` over
+`gate_rv:normal` children — both already exist. A direct constructor
+just packages the common pattern.
+
+**Applicability.** Output of EM-fitting routines, variational autoencoder
+priors, density estimation. Probably the single most commonly-fitted
+distribution in applied ML.
+
+**UI.**
+```sql
+INSERT INTO customer_ltv VALUES (
+  'segment_A',
+  provsql.gmm(
+    weights => ARRAY[0.3, 0.5, 0.2],
+    μ       => ARRAY[120.0, 380.0, 1200.0],
+    σ       => ARRAY[40.0, 90.0, 250.0]
+  )
+);
+```
+
+### C.2 Empirical samples gate — **[Mid-term]**
+
+A new `gate_empirical_samples(arr float8[])`. CDF via sorted-array
+binary search (compute once during the simplify-on-load pass), PDF via
+KDE on request. Comparisons against a constant become exact Bernoulli
+leaves immediately ("fraction of samples below c") — analytical, not MC,
+for that one variable. Moments come for free from the samples.
+
+**Applicability.** MCMC posteriors, variational inference samples,
+normalising-flow outputs, bootstrap distributions — anything an ML
+pipeline can dump as a sample bundle.
+
+**UI.**
+```sql
+INSERT INTO model_posteriors VALUES (
+  'mu_revenue',
+  provsql.empirical_samples(ARRAY[3.21, 3.18, 3.24, /* ... */])
+);
+
+-- Bulk load via array_agg over a sample table
+INSERT INTO model_posteriors
+SELECT param, provsql.empirical_samples(array_agg(value ORDER BY sample_idx))
+FROM mcmc_chain
+GROUP BY param;
+```
+
+### C.3 Empirical CDF gate — **[Mid-term]**
+
+A new `gate_empirical_cdf(grid float8[], cdf float8[])`. Piecewise-linear
+CDF table. Sampling is one inverse-CDF lookup; moments via numerical
+integration over the grid. Truncation is closed (clip the grid).
+
+**Applicability.** Physical simulation outputs (climate, fluid, particle
+codes), risk-model output tables, expert-elicited CDFs.
+
+**UI.**
+```sql
+INSERT INTO weather_forecast VALUES (
+  'paris', '2026-05-15',
+  provsql.empirical_cdf(
+    grid => ARRAY[0.0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0],
+    cdf  => ARRAY[0.32, 0.51, 0.67, 0.82, 0.94, 0.99, 1.0]
+  )
+);
+```
+
+### C.4 Frozen-distribution snapshots — **[Mid-term]**
+
+`provsql.snapshot(rv, n_samples => 10000)` materialises a complex
+`gate_arith` subtree as a frozen `gate_empirical_samples`. A deliberate
+trade of analytical fidelity for query-time performance. The provenance
+lineage of *which subtree was frozen and when* is preserved naturally —
+a side benefit unique to a provenance-aware system.
+
+**Applicability.** Hot paths where the same expensive composite RV is
+queried repeatedly; ad-hoc exploration; checkpointing.
+
+**UI.**
+```sql
+UPDATE forecasts
+SET demand = provsql.snapshot(demand, n_samples => 10000)
+WHERE expensive_to_evaluate;
+```
+
+### Callback gates — **explicitly not recommended**
+
+A `gate_callback(pl_function_oid)` that dispatches sampling/CDF queries
+to PL/Python or PL/R would buy live PyTorch/JAX/Stan integration, but it
+punctures parallel safety, breaks mmap snapshot semantics (the function
+can be redefined under you), and makes circuits non-portable. Worth
+offering as an escape hatch only; the sample-bundle route should be the
+default.
+
+---
+
+## D. Structural extensions
+
+Larger architectural moves that open new classes of query.
+
+### D.1 Conditioning as a gate — **[Architectural]**
+
+The most architecturally interesting addition, and the closest to "free"
+given the branch's existing infrastructure.
+
+A `gate_conditioned(rv_subcircuit, bool_subcircuit)` meaning "the
+distribution of `rv` restricted to the event where `bool` holds." Self-
+contained: flows through any subsequent operation. Sampling is rejection
+(already the MC fallback's behaviour when `prov` is passed); analytical
+evaluation reuses the existing closed-form paths because they are
+already conditional internally.
+
+**Pipeline placement.**
+
+- **Simplifier** gets `cond(cond(X, A), B) → cond(X, A ∧ B)`,
+  `cond(X, true) → X`, and `cond(X, A) → X` when A is independent of
+  X's footprint (the `FootprintCache` already gives you this).
+- **RangeCheck** treats `cond(X, X ∈ [a,b])` as truncation — the
+  current closed-form-truncated path becomes the *specialisation* of a
+  general `gate_conditioned` rule rather than a parallel codepath.
+  Two near-parallel codepaths collapse into one.
+- **AnalyticEvaluator** picks up conditional CDFs where they exist;
+  conditioning on independent events factors as `P(A) × (unconditional CDF)`.
+- **Expectation** semiring: every dispatcher that takes
+  `prov uuid DEFAULT gate_one()` becomes the special case "no explicit
+  conditioning gate at the root."
+- **FootprintCache** caveat: `cond(X, A)` has effective footprint
+  `footprint(X) ∪ footprint(A)`. The structural-independence shortcut on
+  `gate_arith TIMES` must back off accordingly. *This is the one
+  soundness risk and should land with a regression test that constructs
+  `cond(X, A) * cond(Y, A)` and confirms the shortcut does not fire.*
+
+**New directions it opens.**
+
+- **Materialised conditional tables.** Store `cond(rv, evidence)` in a
+  regular `random_variable` column and drop the source tuples. Solves
+  the "carrying both the distribution and its conditioning" problem.
+- **Sequential Bayesian updates.** Each piece of evidence is another
+  `cond(..., new_event)` wrap; the `A ∧ B` fold avoids depth blow-up.
+- **Truncation generalises** to the canonical degenerate case of
+  same-RV-comparator conditioning.
+- **Shapley over evidence** (see §E.1).
+
+**UI.** A `provsql.condition(rv, event_uuid)` function, plus optionally
+an infix `|` operator reading as "given":
+```sql
+-- Bayesian update with materialisation
+UPDATE patient_risk
+SET risk = provsql.condition(
+             risk,
+             (SELECT provenance() FROM tests
+              WHERE patient_id = 1 AND result = 'positive')
+           )
+WHERE patient_id = 1;
+
+-- Operator sugar — RangeCheck recognises same-RV bool as truncation
+SELECT expected(measurement | (measurement > 0.5))
+FROM sensor_readings;
+
+-- Recursive Bayesian update over an evidence log
+WITH RECURSIVE updates(step, dist) AS (
+  SELECT 0, provsql.normal(0, 10)
+  UNION ALL
+  SELECT step + 1, provsql.condition(dist, e.evidence_token)
+  FROM updates u, evidence_log e
+  WHERE e.confirmed AND e.step_idx = u.step + 1
+)
+SELECT expected(dist), variance(dist)
+FROM updates WHERE step = (SELECT max(step) FROM updates);
+```
+
+### D.2 Correlation / copulas — **[Architectural]**
+
+The biggest expressive hole *practically*, though not theoretically —
+see §Theoretical backbone. The current model treats RVs as independent
+unless they share leaves via `gate_arith`; in principle that is
+universal (Sklar + inverse Rosenblatt), but in practice non-Gaussian
+correlations expressed as functions of independents lose analytical
+tractability immediately. This roadmap takes the hybrid position:
+`gate_copula` exists as a recognised sugar layer over the
+function-of-independents construction, with explicit decomposition
+rules.
+
+**Mechanism.** A `gate_copula` connecting marginal RVs via Gaussian /
+t / Clayton / Gumbel copulas, each carrying:
+
+- a *joint-aware closed form* used by `AnalyticEvaluator` when the
+  query asks for joint CDFs, moments, or comparisons that the family
+  handles directly;
+- a *decomposition rule* rewriting the gate as an arithmetic expression
+  over independent base `gate_rv`s, used by the simplifier whenever the
+  decomposed form is more amenable to subsequent analysis (sampling,
+  marginalisation by projection, composition with operations that
+  don't have a direct joint-aware path).
+
+MVN (§A.5) is the Gaussian-copula special case where marginals are
+also Normal, and its Cholesky decomposition is the same kind of rule.
+
+**Interaction.** Coupled RVs are explicitly dependent — the
+`FootprintCache` structural-independence shortcut backs off, exactly
+as for conditioning. The footprint of a `gate_copula(X, Y, …)` is the
+union of `X`'s and `Y`'s footprints *plus* a shared auxiliary
+footprint representing the copula's hidden dependence, so two
+copula-coupled RVs are correctly recognised as non-independent even
+when their marginal footprints are otherwise disjoint.
+
+**Applicability.** Portfolio risk, sensor fusion, joint physical
+processes. Without this (or a heroic simplifier), real-world joint
+modelling is impractical even though it remains mathematically
+expressible.
+
+**UI.**
+```sql
+-- Couple two already-built marginal RVs
+SELECT provsql.couple(X, Y,
+         copula => 'gaussian',
+         params => ARRAY[0.7]) AS XY
+FROM marginals;
+
+-- Or: full multivariate construction (the MVN route from §A.5)
+```
+
+### D.3 Stochastic processes — **[Architectural]**
+
+Nothing in the current model speaks to AR(1), random walks, Brownian
+motion, Markov chains. Hand-building via recursive CTE + conditioning
+gates is possible but awkward and gives up analytical handling.
+
+**Mechanism.** First-class constructors returning
+`SETOF random_variable` indexed by step. Internally they compile to
+correlated `gate_rv` chains using the §D.2 copula machinery.
+
+**Applicability.** Time-series forecasting, path-dependent financial
+options, queueing models, epidemiological compartment models — the
+provenance circuit already represents the dependency structure; what is
+missing is the language to construct chains compactly.
+
+**UI.**
+```sql
+WITH walk AS (
+  SELECT t, value
+  FROM provsql.brownian(sigma => 1.0, steps => 100)
+)
+SELECT expected(value), variance(value)
+FROM walk WHERE t = 50;
+
+-- AR(1): X_t = φ X_{t-1} + ε_t,  ε_t ~ N(0, σ²)
+SELECT t, value FROM provsql.ar1(phi => 0.85, sigma => 0.2,
+                                  x0 => 0.0, steps => 50);
+```
+
+### D.4 Causal interventions (`do`-calculus) — **[Research]**
+
+ProvSQL is unusually well-positioned here: the provenance circuit *is* a
+DAG, gates are explicit, and severing incoming edges is mechanically
+simple. A `provsql.intervene(rv, value)` gate replaces a sub-circuit
+with a fixed value while leaving downstream consumers in place — giving
+you Pearl's `do(X := x)`.
+
+**Combined with conditioning (§D.1)**, that's observational vs
+interventional probability — the core counterfactual machinery. No
+other relational system offers this, and it places ProvSQL in
+conversation with the causal-inference literature.
+
+**Applicability.** Treatment-effect estimation, what-if analyses,
+policy evaluation, the entire counterfactual-reasoning toolkit.
+
+**UI.**
+```sql
+-- P(Y | do(X = 1))  vs  P(Y | X = 1)
+SELECT probability_evaluate(provenance())
+FROM model
+WHERE provsql.intervene(X, 1.0) AND Y > threshold;
+```
+
+---
+
+## E. Provenance × probability — ProvSQL-specific directions
+
+Capabilities that exploit the provenance circuit specifically. Almost
+no other system can offer them.
+
+### E.1 Shapley over RV-valued payoffs — **[Research]**
+
+The existing Shapley/Banzhaf machinery over Boolean provenance
+generalises directly to "contribution of evidence atom *e* to posterior
+moment *m*". With the conditioning gate (§D.1) plus the existing
+Shapley infrastructure, this is mostly *connecting code*, not new theory.
+
+**Applicability.** Explainable Bayesian inference in a relational
+setting — "which observations most shifted my posterior?" This is a
+publishable angle that builds on existing ProvSQL infrastructure rather
+than competing with PPL systems.
+
+**UI.**
+```sql
+SELECT evidence_id,
+       provsql.shapley(posterior_risk, evidence_id, payoff => 'expected')
+FROM posteriors, evidence_atoms
+WHERE patient_id = 1;
+```
+
+### E.2 Provenance of sampled values — **[Research]**
+
+When MC sampling fires, can a user ask "which gates' draws produced this
+sample"? Currently opaque. A per-sample provenance trace exposed via
+`rv_sample_with_witness(...)` would be unique to a provenance-aware
+system and concretely useful for debugging surprising tail behaviour.
+
+**Applicability.** Debugging unexpected outputs, root-cause analysis on
+risk-model outliers, regulatory explainability ("why did this model
+predict this?").
+
+**UI.**
+```sql
+SELECT value, witness  -- witness is a uuid into the per-sample trace
+FROM provsql.rv_sample_with_witness(loss_distribution, n => 1000)
+WHERE value > 1e6;     -- inspect the gates that drove the tail samples
+```
+
+### E.3 Sampling under constraints with witness extraction — **[Research]**
+
+A close relative of E.2. Rejection sampling already happens for
+conditioning. The bool gate that *accepted* a sample is itself a
+provenance object — returning it alongside the sample lets users inspect
+the rejection witness, which is sometimes more informative than the
+sample itself.
+
+---
+
+## Cross-cutting UI design principles
+
+The branch's existing grammar is good. Extensions should preserve it.
+
+1. **Same constructor pattern.** All new distributions enter as
+   `provsql.<name>(params)` returning `random_variable`. No surface
+   change to insert statements, joins, or aggregations.
+2. **Comparison and arithmetic stay infix.** `gate_cmp` rewriting and
+   `gate_arith` construction happen at plan time. Users never write
+   gate constructors directly.
+3. **Polymorphic dispatchers grow uniformly.** `expected`, `variance`,
+   `moment`, `central_moment`, `support`, and the new `quantile`,
+   `entropy`, `kl`, `mutual_information` all take an optional
+   `prov uuid DEFAULT gate_one()`. Conditioning is *always* a parameter
+   or a `gate_conditioned` wrap, never a separate function.
+4. **One escape hatch per direction.** Empirical samples for arbitrary
+   ML output; copulas for arbitrary dependence; intervention for
+   arbitrary causal structure. Each is a *single* gate type, not a
+   proliferation of one-off constructors.
+5. **MC fallback stays invisible.** Users should only learn the
+   evaluator decomposition exists when they tune GUCs
+   (`rv_mc_samples`, `monte_carlo_seed`) or hit a budget-exhaustion
+   warning. The default behaviour remains: analytical where possible,
+   MC silently when not.
+6. **Base independence as architectural backbone, primitives as
+   handles.** Base `gate_rv` instances are always independent (the
+   continuous analog of the discrete PDB consensus on tuple-existence
+   Bernoullis); correlation enters the system through operations that
+   share base RVs, exactly as discrete provenance correlation enters
+   through shared Boolean variables. Primitives like `gate_copula`,
+   `gate_mvnormal`, and the stochastic-process constructors exist as
+   ergonomic sugar and as recognised simplifier handles, with
+   decomposition rules that rewrite them as operations on independent
+   base RVs when that view is cleaner. See §Theoretical backbone.
+
+---
+
+## Suggested execution order
+
+A defensible sequencing that front-loads value and back-loads
+architectural risk:
+
+1. **Quick wins, in parallel.** Gamma (§A.1), Log-normal (§A.2),
+   quantiles (§B.1), RV-vs-RV comparisons (§B.2), GMM constructor
+   (§C.1). All are small, mostly independent, and ship as one minor
+   release.
+2. **Solid mid-term batch.** Beta (§A.3) and the discrete families
+   (§A.4) round out the parametric set. Function application (§B.3)
+   then unlocks the Normal ↔ Log-normal bridge analytically.
+   Order-statistic aggregates (§B.4) and information-theoretic
+   primitives (§B.5) close the expressivity gap.
+3. **Empirical track.** Samples gate (§C.2) and CDF gate (§C.3), then
+   snapshot (§C.4). Pairs naturally with the moment dispatchers
+   already in place.
+4. **First architectural step: conditioning as a gate (§D.1).** The
+   most leverage per architectural unit; collapses the existing
+   truncation codepath into a general mechanism; unlocks §E.1.
+5. **Second architectural step: correlation (§D.2 + §A.5).** The MVN
+   constructor lands as a Gaussian-copula special case; copulas land
+   simultaneously. Largest expressivity gain in the entire roadmap.
+6. **Third architectural step: stochastic processes (§D.3).** Builds
+   on §D.2.
+7. **Research track in parallel.** Causal interventions (§D.4),
+   Shapley over RV-valued payoffs (§E.1), and provenance of sampled
+   values (§E.2) can be explored independently of (3)–(6), and would
+   each plausibly anchor a paper.
