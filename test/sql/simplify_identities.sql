@@ -19,7 +19,7 @@ CREATE TEMP TABLE sim_q (label text, root_kind text, n_nodes int);
 -- (1) plus(zero, zero) collapses to gate_zero.  Empty sum is the
 -- additive identity.
 DO $$
-DECLARE g uuid := gen_random_uuid();
+DECLARE g uuid := public.uuid_generate_v4();
   rows jsonb;
 BEGIN
   PERFORM provsql.create_gate(g, 'plus',
@@ -34,7 +34,7 @@ END $$;
 -- (2) times(one, one) collapses to gate_one.  Empty product is the
 -- multiplicative identity.
 DO $$
-DECLARE g uuid := gen_random_uuid();
+DECLARE g uuid := public.uuid_generate_v4();
   rows jsonb;
 BEGIN
   PERFORM provsql.create_gate(g, 'times',
@@ -51,9 +51,9 @@ END $$;
 -- collapse to gate_zero, then the outer plus's wires all become
 -- identity and it collapses too.
 DO $$
-DECLARE g     uuid := gen_random_uuid();
-        i1    uuid := gen_random_uuid();
-        i2    uuid := gen_random_uuid();
+DECLARE g     uuid := public.uuid_generate_v4();
+        i1    uuid := public.uuid_generate_v4();
+        i2    uuid := public.uuid_generate_v4();
   rows jsonb;
 BEGIN
   PERFORM provsql.create_gate(i1, 'plus',
@@ -73,9 +73,9 @@ END $$;
 -- Phase 2's gate_times absorber then resolves the outer times to
 -- gate_zero (multiplicative zero is the universal absorber).
 DO $$
-DECLARE g     uuid := gen_random_uuid();
-        i_one uuid := gen_random_uuid();
-        i_zero uuid := gen_random_uuid();
+DECLARE g     uuid := public.uuid_generate_v4();
+        i_one uuid := public.uuid_generate_v4();
+        i_zero uuid := public.uuid_generate_v4();
   rows jsonb;
 BEGIN
   PERFORM provsql.create_gate(i_one, 'times',
@@ -97,11 +97,11 @@ END $$;
 -- driven shape where every UNION branch's gate_cmp is decided false
 -- (e.g. WHERE pm25>35 on uniforms with support [10,22] and [15,28]).
 DO $$
-DECLARE g    uuid := gen_random_uuid();
-        i1   uuid := gen_random_uuid();
-        i2   uuid := gen_random_uuid();
-        in1  uuid := gen_random_uuid();
-        in2  uuid := gen_random_uuid();
+DECLARE g    uuid := public.uuid_generate_v4();
+        i1   uuid := public.uuid_generate_v4();
+        i2   uuid := public.uuid_generate_v4();
+        in1  uuid := public.uuid_generate_v4();
+        in2  uuid := public.uuid_generate_v4();
   rows jsonb;
 BEGIN
   PERFORM provsql.create_gate(in1, 'input');
