@@ -1115,8 +1115,33 @@
           // each column name as a clickable span so the user can prefill
           // the corresponding `create_provenance_mapping(...)` call.
           const canMap = r.has_provenance && !r.is_mapping && r.kind === 'table';
+          // ProvSQL-extended column types carry circuit references rather
+          // than plain scalars, so query operators on them are intercepted by
+          // the planner hook. Flag them with a small terracotta pill so the
+          // user can spot them in the schema panel; match both the unqualified
+          // form (search_path includes provsql) and the qualified one.
+          const matchesType = (t, base) => {
+            const s = String(t || '').toLowerCase();
+            return s === base || s === `provsql.${base}`;
+          };
+          const colPill = c => {
+            if (matchesType(c.type, 'random_variable')) {
+              return `<span class="wp-schema__col-rv" title="random_variable: query operators on this column lift into provenance gates at planning time">rv</span>`;
+            }
+            if (matchesType(c.type, 'agg_token')) {
+              return `<span class="wp-schema__col-agg" title="agg_token: each value carries a circuit UUID; click cells to inspect the underlying gate">agg</span>`;
+            }
+            return '';
+          };
           const cols   = visibleCols.map(c => {
-            if (canMap) {
+            const pill = colPill(c);
+            // create_provenance_mapping needs a column whose value tags an
+            // input gate. random_variable / agg_token columns don't carry an
+            // extractable tag value (each row is a circuit gate or composite,
+            // not a scalar), so the click affordance would prefill a
+            // meaningless call. Render the column name as plain text in that
+            // case.
+            if (canMap && !pill) {
               return `<span class="wp-schema__col" data-action="create-mapping"`
                 + ` data-qname="${escapeAttr(qname)}"`
                 + ` data-table="${escapeAttr(r.table)}"`
@@ -1124,7 +1149,7 @@
                 + ` title="Click to create a provenance mapping on ${escapeAttr(c.name)}"`
                 + `>${escapeHtml(c.name)}</span>`;
             }
-            return escapeHtml(c.name);
+            return `${escapeHtml(c.name)}${pill}`;
           }).join(', ');
           // Mapping is the more specific classification: a mapping view
           // typically also carries an implicit provsql column (the planner

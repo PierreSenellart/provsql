@@ -543,6 +543,28 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   background: var(--purple-100, var(--bg-code));
   color: var(--purple-700);
 }
+/* Per-column ProvSQL-type badges: terracotta pills marking columns whose
+   values are circuit references rather than scalars (random_variable's
+   per-row gate, agg_token's UUID + running value). Distinct from the
+   relation-level purple PROV pill and gold MAPPING pill: this is column-
+   level, and signals that operators on the column don't have plain-SQL
+   semantics. The two share styling and only differ by label so the user
+   can tell which special type they're looking at. */
+.wp-schema__col-rv,
+.wp-schema__col-agg {
+  display: inline-block;
+  font-family: var(--font-ui);
+  font-size: 0.6rem;
+  margin-left: 0.1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--terracotta-500);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  vertical-align: middle;
+}
 .wp-schema__cols {
   display: block;
   font-family: var(--font-mono);

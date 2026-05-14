@@ -95,20 +95,29 @@ Connect Studio to the fixture::
     provsql-studio --dsn postgresql:///air_quality_demo
 
 and open `http://127.0.0.1:8000/ <http://127.0.0.1:8000/>`_ in a
-browser. The schema panel surfaces ``readings.pm25`` with type
-``random_variable``: a visual confirmation that ProvSQL has
-recognised the new column shape.
+browser. The schema panel lists the fixture's six relations: the
+four provenance-tracked tables (``stations``,
+``calibration_status``, ``readings``, ``historical_readings``)
+carry the purple :sc:`prov` pill, ``categories`` is plain, and
+``station_mapping`` is tagged :sc:`mapping`. The ``pm25`` column
+on ``readings`` and ``historical_readings`` is flagged with a
+terracotta :sc:`rv` pill: a heads-up that comparison and
+arithmetic operators on this column are intercepted by the
+planner hook and lifted into provenance gates, so a query like
+``pm25 > 35`` produces a circuit rather than a Boolean.
 
 .. figure:: /_static/casestudy6/schema-panel.png
    :alt: Studio schema panel listing readings, historical_readings,
          calibration_status, stations (all PROV-tagged), categories
          (no provenance), and the station_mapping table, with the
-         pm25 column visible on readings.
+         pm25 column on readings and historical_readings flagged
+         with a small RV pill.
 
    The schema panel opened from the top nav. The four
    provenance-tracked tables carry the purple :sc:`prov` pill;
-   ``readings`` and ``historical_readings`` expose ``pm25`` as a
-   ``random_variable`` column.
+   ``readings`` and ``historical_readings`` list ``pm25`` with a
+   terracotta :sc:`rv` pill marking it as a ``random_variable``
+   column.
 
 Step 1: Inspect a Noisy Reading
 --------------------------------

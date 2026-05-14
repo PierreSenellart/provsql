@@ -532,7 +532,8 @@ Schema panel
 ------------
 
 A button in the top nav opens a searchable popover listing every
-``SELECT``-able relation. Each gets one of two pills:
+``SELECT``-able relation. Each gets one of two relation-level
+pills:
 
 * :sc:`prov` (purple) on a relation whose ``provsql`` column is
   injected by the planner: provenance tracking is active.
@@ -543,10 +544,20 @@ A button in the top nav opens a searchable popover listing every
   injected ``provsql`` column is classified as :sc:`mapping` (the
   more specific category).
 
+Columns whose type is one of ProvSQL's circuit-bearing types
+carry their own terracotta pill next to the column name:
+:sc:`rv` for ``random_variable`` (operators rewrite into
+``gate_cmp`` / ``gate_arith``; see
+:doc:`continuous-distributions`) and :sc:`agg` for ``agg_token``
+(each value is a circuit root with a running aggregate value).
+
 On a tracked table, each column is a click target that prefills
 ``SELECT create_provenance_mapping('<table>_<col>_mapping',
 '<schema>.<table>', '<col>');`` into the query box, so a fresh
-mapping is two clicks away.
+mapping is two clicks away. The click affordance is suppressed
+on :sc:`rv` and :sc:`agg` columns, since their values are circuit
+references rather than scalars and a mapping built from them
+would not label input gates meaningfully.
 
 On any provenance-eligible plain table, :guilabel:`+ prov` and
 :guilabel:`− prov` action chips prefill ``SELECT add_provenance(...)``
