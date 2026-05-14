@@ -92,8 +92,10 @@ and all other queries remain evaluable.
    ``Bool``, ``Nat`` (counting), ``BoolFunc`` (Boolean
    formulas), ``How`` (the how-provenance universal semiring),
    ``Why``, ``Which`` (lineage), ``MinMax``, ``Tropical``,
-   ``Lukasiewicz``, and ``Viterbi``, each with a proof of the
-   m-semiring axioms and of any extra properties (absorptivity,
+   ``Lukasiewicz``, ``Viterbi``, and ``IntervalUnion`` (finite
+   unions of intervals over a dense linear order, used for
+   temporal databases), each with a proof of the m-semiring
+   axioms and of any extra properties (absorptivity,
    idempotence, left-distributivity of multiplication over
    monus) that matter for optimisation.
 

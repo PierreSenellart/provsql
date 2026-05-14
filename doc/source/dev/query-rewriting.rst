@@ -316,9 +316,9 @@ the paper:
 Formal Verification
 ^^^^^^^^^^^^^^^^^^^
 
-The correctness of rules (R1) and (R2) -- projection and cross
-product -- has a machine-checked proof in the ProvSQL Lean 4
-library.  The main theorem is
+The correctness of rules (R1), (R2), and (R3) -- projection,
+cross product, and duplicate elimination -- has a machine-checked
+proof in the ProvSQL Lean 4 library.  The main theorem is
 `Query.rewriting_valid
 <https://provsql.org/lean-docs/Provenance/QueryRewriting.html#Query.rewriting_valid>`_
 in the ``Provenance.QueryRewriting`` module: for every
@@ -329,7 +329,8 @@ representation yields the same result as evaluating the
 rewritten query against the composite database.  This is the
 formal analogue of the "the rewritten query produces the same
 provenance as the annotated semantics" correctness statement
-from the ICDE paper, for the partial fragment proved.
+from the ICDE paper, for the partial fragment proved (the
+(R4) multiset-difference case is in progress).
 
 Probabilistic-Qual Classifier
 -----------------------------

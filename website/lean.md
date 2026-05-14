@@ -15,11 +15,11 @@ for the provenance semiring framework on which ProvSQL is built.
 
 The formalization covers the core algebraic and database-theoretic foundations of provenance:
 
-**Semirings with monus (m-semirings).** The central algebraic structure used by ProvSQL – commutative semirings extended with a monus operator for handling set difference – is formally defined and its properties proved. Concrete instances formalized include Boolean, counting (natural numbers), tropical, Łukasiewicz, min-max, Viterbi, and multivariate polynomial semirings (*How*[*X*]), as well as the lineage-based semirings *Which*[*X*] and *Why*[*X*].
+**Semirings with monus (m-semirings).** The central algebraic structure used by ProvSQL – commutative semirings extended with a monus operator for handling set difference – is formally defined and its properties proved. Concrete instances formalized include Boolean, counting (natural numbers), tropical, Łukasiewicz, min-max, Viterbi, multivariate polynomial semirings (*How*[*X*]), the lineage-based semirings *Which*[*X*] and *Why*[*X*], Boolean-function semirings (*Bool*[*X*]), and interval-union semirings over dense linear orders (used for temporal databases).
 
 **Database foundations.** Formal definitions of tuples, relations, and databases, together with the standard relational algebra operations (selection, projection, join, union, difference).
 
 **Annotated databases and query semantics.** The lifted semantics of relational algebra over annotated databases – showing how each operator propagates provenance annotations through the m-semiring operations – is formally developed and proved correct.
 
-**Query rewriting.** A query rewriting evaluation strategy on annotated relations, with ongoing correctness proofs connecting it to the direct annotated semantics.
+**Query rewriting.** A query rewriting evaluation strategy on annotated relations, implementing rules (R1)–(R5) of the ProvSQL ICDE 2026 paper. Correctness is partially formalized: the cases for projection (R1), cross product (R2), and duplicate elimination (R3) are machine-checked, with the multiset-difference case (R4) in progress.
 
