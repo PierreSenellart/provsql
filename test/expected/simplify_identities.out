@@ -1,7 +1,8 @@
 \set ECHO none
 label|root_kind|n_nodes
 plus_of_two_empty_pluses|zero|1
+plus_of_two_zero_absorbed_times|zero|1
 plus_of_two_zeros|zero|1
 times_of_empty_product_and_empty_sum|zero|1
 times_of_two_ones|one|1
-(4 rows)
+(5 rows)

@@ -90,6 +90,32 @@ BEGIN
      (SELECT COUNT(DISTINCT e->>'node') FROM jsonb_array_elements(rows) e)::int);
 END $$;
 
+-- (5) plus over two times-with-zero-wire children.  Phase 2's
+-- gate_times absorber mutates each inner times to gate_zero, which
+-- then becomes a fresh empty-sum opportunity for the outer plus on a
+-- subsequent iteration of the fixpoint loop.  Models the RangeCheck-
+-- driven shape where every UNION branch's gate_cmp is decided false
+-- (e.g. WHERE pm25>35 on uniforms with support [10,22] and [15,28]).
+DO $$
+DECLARE g    uuid := gen_random_uuid();
+        i1   uuid := gen_random_uuid();
+        i2   uuid := gen_random_uuid();
+        in1  uuid := gen_random_uuid();
+        in2  uuid := gen_random_uuid();
+  rows jsonb;
+BEGIN
+  PERFORM provsql.create_gate(in1, 'input');
+  PERFORM provsql.create_gate(in2, 'input');
+  PERFORM provsql.create_gate(i1, 'times', ARRAY[in1, provsql.gate_zero()]);
+  PERFORM provsql.create_gate(i2, 'times', ARRAY[in2, provsql.gate_zero()]);
+  PERFORM provsql.create_gate(g, 'plus', ARRAY[i1, i2]);
+  rows := provsql.simplified_circuit_subgraph(g, 5);
+  INSERT INTO sim_q VALUES
+    ('plus_of_two_zero_absorbed_times',
+     rows -> 0 ->> 'gate_type',
+     (SELECT COUNT(DISTINCT e->>'node') FROM jsonb_array_elements(rows) e)::int);
+END $$;
+
 SELECT label, root_kind, n_nodes FROM sim_q ORDER BY label;
 
 DROP TABLE sim_q;
