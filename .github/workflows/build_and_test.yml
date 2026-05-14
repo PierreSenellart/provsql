@@ -62,13 +62,14 @@ jobs:
     steps:
       - run: pg-start ${{ matrix.pg }} libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev
       - run: pg_dropcluster ${{ matrix.pg }} main
-      - run: git clone https://github.com/crillab/d4.git && cd d4 && make && mv d4 /usr/local/bin && cd ..
-      - run: git clone https://github.com/QuMuLab/dsharp.git && cd dsharp && mv Makefile_gmp Makefile && make && mv dsharp /usr/local/bin && cd ..
-      - run: git clone https://bitbucket.org/kuldeepmeel/weightmc/src/master/ weightmc && cd weightmc/wmc-src && ./configure && make && mv weightmc /usr/local/bin && cd ../..
+      # Full history + tags are needed so Makefile.internal's
+      # `git describe --tags` resolves LATEST_RELEASE and the
+      # extension_upgrade regression test is included in the schedule.
       - uses: actions/checkout@v6
         with:
           fetch-tags: true
           fetch-depth: 0
+      - uses: ./.github/actions/install-knowledge-compilers
       - run: make -j$(nproc) && make tdkc && make provsql_migrate_mmap && make install
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
