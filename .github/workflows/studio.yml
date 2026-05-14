@@ -150,7 +150,7 @@ jobs:
       # System libs from `--with-deps` are installed apt-side every run,
       # but on a cache hit Playwright skips the chromium download itself.
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /root/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
