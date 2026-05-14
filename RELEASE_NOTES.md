@@ -142,6 +142,17 @@ empty-group identity (`as_random(0)` for `SUM`, SQL `NULL` for
 `MIN`, `MAX`, `stddev`, `covar_pop`, and percentile aggregates
 over `random_variable` are not yet supported and are deferred.
 
+`HAVING` clauses whose outcome collapses to a deterministic
+scalar are supported natively, including the natural shape
+`HAVING expected(avg(rv)) > 20` (and the analogous
+`variance` / `moment` / `central_moment` over an RV
+aggregate). The planner skips the HAVING-lift on such quals
+and lets PostgreSQL filter the surviving groups directly, while
+the per-group `gate_delta` wrapper is still emitted so the
+provenance shape is unchanged. Quals that compute on
+`agg_token` results (the historical HAVING surface) continue
+to route through `having_Expr_to_provenance_cmp`.
+
 ## Studio companion release
 
 ProvSQL Studio 1.1.0 ships in parallel on PyPI as
@@ -211,6 +222,15 @@ for details.
   promotes to unsigned and masks short-read errors. File-local
   globals are marked `static` and the `-Wmissing-variable-declarations`
   / `-Wunused-result` warnings are clean.
+- Tree-mutator / tree-walker callbacks in `src/provsql.c` now
+  take `void *` (PostgreSQL's idiom) so clang's
+  `-Wcast-function-type-strict` no longer fires at every
+  `expression_tree_mutator` / `expression_tree_walker`
+  call site; the dead `collect_rv_footprint` helper in
+  `HybridEvaluator.cpp` is dropped (its job is done by
+  `FootprintCache` in `Expectation.cpp`) and a bare `move()`
+  in `where_provenance.cpp` is qualified as `std::move()`.
+  Both gcc and clang now build clean.
 
 ## GUCs (user-facing)
 

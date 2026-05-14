@@ -73,6 +73,21 @@ profile / sample / moment / support.
   on the right edge, served by `/api/conn`. A new
   `provsql-studio --version` CLI flag prints the package
   version and exits.
+- **Schema-panel column pills**: columns whose type is one of
+  ProvSQL's circuit-bearing types now carry a terracotta
+  column-level pill (`rv` for `random_variable`, `agg` for
+  `agg_token`) next to the column name, mirroring the
+  relation-level `prov` / `mapping` pills. The
+  `create_provenance_mapping` click affordance is suppressed
+  on these columns (their values are circuit references, not
+  scalar tags).
+- **Result-table column-type indicators**: each result-table
+  `<th>` carries the column's SQL type name as a tooltip and,
+  for ProvSQL-significant columns, the same `rv` / `agg`
+  pills as the schema panel plus a purple `prov` pill on the
+  row-provenance `provsql` column itself, so the affordance
+  follows the data into the result without a round-trip to
+  the schema panel.
 
 ### Demo and tests
 
