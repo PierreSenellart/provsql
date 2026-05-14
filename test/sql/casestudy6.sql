@@ -134,17 +134,17 @@ DROP TABLE result_cs6_thresh_prob;
 
 -- ---------------------------------------------------------------------
 -- Step 3: provsql.mixture(p, x, y) returns a gate_mixture; the
--- pm25 * 1.2 arm is a gate_arith(TIMES) over the per-row pm25 and a
--- gate_value.  The constructor result type is random_variable, so
--- ::uuid grabs the gate root.
+-- pm25 / 1.2 arm (the calibration correction) is a gate_arith(DIV)
+-- over the per-row pm25 and a gate_value.  The constructor result
+-- type is random_variable, so ::uuid grabs the gate root.
 -- ---------------------------------------------------------------------
 CREATE TABLE result_cs6_mixture AS
   SELECT r.id,
          get_gate_type(
-           provsql.mixture(cs.p, r.pm25, r.pm25 * 1.2)::uuid
+           provsql.mixture(cs.p, r.pm25, r.pm25 / 1.2)::uuid
          ) AS mixture_kind,
          get_gate_type(
-           (r.pm25 * 1.2)::uuid
+           (r.pm25 / 1.2)::uuid
          ) AS scaled_kind
     FROM readings r JOIN calibration_status cs USING (station_id)
    WHERE r.station_id = 's1';

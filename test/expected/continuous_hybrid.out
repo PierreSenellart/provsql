@@ -17,6 +17,9 @@ t
 shared_uuid_plus_cancels_to_zero
 t
 (1 row)
+div_by_constant_folds_through_times
+t
+(1 row)
 erlang_fold_exact
 t
 (1 row)

@@ -137,8 +137,8 @@ cell carrying the underlying gate UUID. Click into a row's
 ``gate_rv`` leaf with the distribution-kind initial in the circle
 (*N* for a Normal, *U* for Uniform, *Exp* for Exponential, *Erl*
 for Erlang).
-Pick *Distribution profile* under the *Distribution* optgroup of
-the eval strip and click :guilabel:`Run`: the panel returns
+Pick *Distribution profile* from the *Distribution* group of the
+eval strip and click :guilabel:`Run`: the panel returns
 :math:`\mu` and :math:`\sigma^2` headline stats and an inline
 histogram with a PDF/CDF toggle.
 
@@ -150,11 +150,17 @@ pinning ``provsql.monte_carlo_seed`` in the Config panel (under
    :alt: Studio Circuit mode showing the gate_rv N(28,2) leaf at
          the top of the canvas and the Distribution profile
          eval-strip panel below, with mu=28, sigma=2, support
-         (-infinity, +infinity) and an inline histogram.
+         (-infinity, +infinity) and an inline histogram overlaid
+         by a terracotta analytical PDF curve.
 
    The ``gate_rv`` leaf for ``pm25`` on row 1 is a ``N(28, 2)``
    circle; the eval-strip *Distribution profile* panel shows the
    :math:`\mu`, :math:`\sigma`, support, and an inline histogram.
+   When the gate has a closed-form family (here a bare Normal),
+   Studio overlays the analytical PDF on top of the bars; the
+   curve rides the histogram envelope so any mismatch between the
+   sampled histogram and the closed-form shape is immediately
+   visible.
 
 Step 2: A First Probabilistic Threshold
 ----------------------------------------
@@ -168,15 +174,9 @@ the rows whose reading might cross it:
     FROM readings
     WHERE pm25 > 35
 
-Two transformations happen invisibly:
-
-* The :math:`> 35` operator on the ``random_variable`` column
-  resolves to ``random_variable_gt``, which the planner hook
-  intercepts at planning time and rewrites into a ``gate_cmp``
-  conjoined into each row's ``provsql`` column. The procedure
-  body itself is never executed.
-* The implicit ``integer → random_variable`` cast lifts the
-  literal ``35`` into a ``gate_value``.
+Because ``pm25`` is a random variable, the comparison is not a
+yes/no test: it stands for the *event* "this reading exceeds 35",
+and ProvSQL attaches that event to each row's provenance.
 
 Click into a result row's auto-added ``provsql`` cell. Circuit mode shows the
 Boolean wrapper (a ``gate_times`` over the row's input token and
@@ -207,21 +207,26 @@ Step 3: Calibration via Mixtures
 ---------------------------------
 
 Each station has a probability of being mis-calibrated; a
-mis-calibrated unit reports ``pm25 * 1.2`` instead of ``pm25``.
-Express this as a Bernoulli mixture:
+mis-calibrated unit over-reports by 20% (the *reading* it
+records is ``1.2`` times the true value). The corrected estimate
+of the true reading is therefore ``pm25`` with probability ``p``
+(the station is in spec) and ``pm25 / 1.2`` with probability
+``1 - p`` (the report needs to be scaled back). Express this as
+a Bernoulli mixture:
 
 .. code-block:: postgresql
 
     SELECT r.id, r.station_id,
-           provsql.mixture(cs.p, r.pm25, r.pm25 * 1.2) AS pm25_calibrated
+           provsql.mixture(cs.p, r.pm25, r.pm25 / 1.2) AS pm25_calibrated
     FROM readings r JOIN calibration_status cs USING (station_id)
     WHERE r.station_id = 's1'
 
 Click into a result row's ``pm25_calibrated`` cell. Circuit mode
-renders the ``gate_mixture`` with three labelled outgoing edges
-(``p`` / ``x`` / ``y``) matching the SQL constructor's argument
-order. The parent circle renders the Bernoulli probability
-inline.
+renders the ``gate_mixture`` as a ``Mix`` node with three
+labelled outgoing edges (``p`` / ``x`` / ``y``) matching the SQL
+constructor's argument order: ``p`` points to the Bernoulli
+mixing probability, ``x`` to the in-spec arm, and ``y`` to the
+correction arm.
 
 The same node-inspector panel exposes ``Distribution profile``
 on the mixture root: the histogram becomes bimodal, with the two
@@ -230,14 +235,18 @@ weighted by the calibration probability.
 
 .. figure:: /_static/casestudy6/mixture-node.png
    :alt: Mix node with three labelled outgoing edges (p, x, y);
-         the p child renders inline as 95% on the parent circle,
-         and the x and y children are the N(28,2) and the
-         scale-shifted reading respectively.
+         the p child is a 95% Bernoulli, the x child is the
+         N(28,2) reading, and the y child is the back-scaled
+         N(23.33,1.667) folded by the simplifier.
 
-   The ``gate_mixture`` for the calibrated reading. The parent's
-   inline ``95%`` is the Bernoulli probability that station ``s1``
-   is in spec; the three outgoing edges label ``p`` / ``x`` / ``y``
-   to match the SQL constructor argument order.
+   The ``gate_mixture`` for the calibrated reading. The
+   ``95%`` child is the Bernoulli probability that station ``s1``
+   is in spec; the ``x`` arm is the raw reading ``N(28, 2)``; the
+   ``y`` arm is the back-scaled estimate ``pm25 / 1.2``, which the
+   simplifier folded through the Normal affine-shift rule into a
+   single ``gate_rv`` ``N(23.33, 1.667)``. Circle labels show four
+   significant figures; the inspector pinned to either child
+   surfaces the full-precision parameters.
 
 Step 4: Aggregation Over Random Variables
 ------------------------------------------
@@ -360,11 +369,10 @@ Step 7: Diagnostic Sampling
 
 For raw inspection or downstream analytics, draw samples from the
 conditional distribution. With the same row pinned and the
-*Conditioned by* badge active, pick *Sample* under the
-*Distribution* optgroup; set ``n = 200`` and run. The result
-renders as a ``<details>`` panel with a six-value inline preview
-and a "show full list" expander; clicking it dumps all 200
-samples.
+*Conditioned by* badge active, pick *Sample* from the
+*Distribution* group; set ``n = 200`` and run. The result panel
+shows a six-value inline preview with a "show full list"
+expander; clicking it dumps all 200 samples.
 
 If the conditioning event is so unlikely that fewer than 200
 samples land within the ``provsql.rv_mc_samples`` budget, the

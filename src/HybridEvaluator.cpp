@@ -1158,6 +1158,33 @@ unsigned apply_rules(GenericCircuit &gc, gate_t g,
       }
     }
 
+    /* 1c. DIV-by-constant to TIMES-by-reciprocal canonicalisation.
+     *     Rewrites @c arith(DIV, X, value:c) as
+     *     @c arith(TIMES, X, value:1/c) (c != 0) so the existing
+     *     scalar-times-RV closure (@c try_times_scalar_rv) and every
+     *     other downstream TIMES rule fold @c X/c uniformly with
+     *     @c c*X.  DIV-by-non-constant is left alone (no closure to
+     *     apply); fully-constant @c DIV(value, value) is handled by
+     *     the constant fold above so we never see @c c=0 here. */
+    {
+      auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
+      if (op == PROVSQL_ARITH_DIV) {
+        const auto &wires_in = gc.getWires(g);
+        if (wires_in.size() == 2) {
+          const double c = try_eval_constant(gc, wires_in[1]);
+          if (!std::isnan(c) && c != 0.0) {
+            const gate_t x = wires_in[0];
+            const gate_t inv = gc.addAnonymousValueGate(
+                                  double_to_text(1.0 / c));
+            gc.setInfos(g, static_cast<unsigned>(PROVSQL_ARITH_TIMES), 0);
+            gc.setWires(g, {x, inv});
+            ++local;
+            continue;
+          }
+        }
+      }
+    }
+
     /* 2. Identity / absorber drops on PLUS and TIMES. */
     if (try_identity_drop(gc, g)) {
       ++local;

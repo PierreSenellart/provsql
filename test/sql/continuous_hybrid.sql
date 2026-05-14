@@ -91,6 +91,20 @@ SELECT provsql.probability_evaluate(
        AS shared_uuid_plus_cancels_to_zero
 FROM (SELECT provsql.normal(0, 1) AS x) r;
 
+-- (4d) DIV-by-constant canonicalisation: `x / 2` rewrites to
+--     `x * (1/2)` in the DIV-to-TIMES canonicalisation pass, then
+--     folds via try_times_scalar_rv to N(0, 0.5).
+--     P(x/2 > 1) = P(x > 2) = 1 - Phi(2) ≈ 0.0228.  Without the
+--     canonicalisation the DIV gate would stay unfolded, the
+--     analytic path would fail to match a bare gate_rv, and the
+--     evaluator would fall back to MC -- outside the 1e-12
+--     analytical tolerance.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_gt(provsql.normal(0, 1) / 2::random_variable,
+                                1::random_variable),
+             'independent') - 0.022750131948179195) < 1e-12
+       AS div_by_constant_folds_through_times;
+
 -- ---------------------------------------------------------------
 -- Erlang-family closure: PLUS over k i.i.d. Exp(λ) leaves with the
 -- same rate λ and distinct UUIDs folds to a single Erlang(k, λ).

@@ -182,12 +182,12 @@ def _format_prob_label(p: float) -> str:
 def _format_rv_label(extra: str) -> str:
     """Render the in-circle label for a gate_rv leaf from its extra text.
 
-    Extra is "<kind>:<p1>[,<p2>]" (see src/RandomVariable.{h,cpp}). We
-    return the full kind-initial + parenthesised parameter list (e.g.
-    "N(2.5,0.5)") without truncating; the front-end shrinks the
-    font-size to fit so the user keeps the full parameter list rather
-    than seeing an ellipsis. The full text is still surfaced by the
-    inspector under the `distribution` row.
+    Extra is "<kind>:<p1>[,<p2>]" (see src/RandomVariable.{h,cpp}).
+    Numeric parameters are shortened to four significant figures so
+    folded-distribution labels like
+    "normal:23.333333333333336,1.6666666666666667" do not blow the
+    circle wide; the full text is still surfaced by the inspector
+    under the `distribution` row.
     """
     s = str(extra).strip()
     kind, _, params = s.partition(":")
@@ -195,7 +195,16 @@ def _format_rv_label(extra: str) -> str:
     if label is None:
         return s
     p = params.strip()
-    return f"{label}({p})" if p else label
+    if not p:
+        return label
+    parts = []
+    for raw in p.split(","):
+        token = raw.strip()
+        try:
+            parts.append(f"{float(token):.4g}")
+        except ValueError:
+            parts.append(token)
+    return f"{label}({','.join(parts)})"
 
 
 def _truncate(s: str, n: int = 6) -> str:
