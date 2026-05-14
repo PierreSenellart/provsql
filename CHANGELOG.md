@@ -13,7 +13,7 @@ ABI is extended (three new gate types appended; no renumbering of
 older values); the mmap circuit format is otherwise compatible
 and an `ALTER EXTENSION provsql UPDATE` is sufficient.
 
-## First-class random variables
+### First-class random variables
 
 A new `random_variable` type (a thin UUID wrapper,
 binary-coercible with `uuid`) carries a probability distribution
@@ -40,7 +40,7 @@ appended to the `gate_type` enum (with a parallel append to the
 SQL `provenance_gate` enum). `gate_value` gains a float8 mode
 parsed via `extract_constant_double` in `having_semantics.cpp`.
 
-## Hybrid analytic + Monte Carlo evaluation
+### Hybrid analytic + Monte Carlo evaluation
 
 A three-stage evaluator decides every probabilistic query
 analytically where possible and falls back to Monte Carlo
@@ -89,7 +89,7 @@ peephole pass at load time, so every downstream consumer
 (semiring evaluators, MC, `view_circuit`, PROV-XML export,
 Studio) sees the simplified form.
 
-## Conditional inference
+### Conditional inference
 
 The polymorphic moment dispatchers `expected` / `variance` /
 `moment` / `central_moment` / `support` all accept an optional
@@ -123,7 +123,7 @@ rejection sampling at `provsql.rv_mc_samples`; a `NOTICE` (or,
 for histograms / moments, an error) fires when fewer than the
 requested `n` samples land within the budget.
 
-## Aggregation over random variables
+### Aggregation over random variables
 
 Three RV-returning aggregates: `sum`, `avg`, `product`
 (over `random_variable`). They lower to a single `gate_arith`
@@ -149,7 +149,7 @@ provenance shape is unchanged. Quals that compute on
 `agg_token` results (the historical HAVING surface) continue
 to route through `having_Expr_to_provenance_cmp`.
 
-## Studio companion release
+### Studio companion release
 
 ProvSQL Studio 1.1.0 ships in parallel on PyPI as
 `provsql-studio==1.1.0`; minimum required extension version is
@@ -166,7 +166,7 @@ Config-panel rows for `monte_carlo_seed`, `rv_mc_samples`,
 extension and the Studio package versions (plus a new
 `--version` CLI flag). See Studio release notes for details.
 
-## Internal
+### Internal
 
 - Unified `migrate_probabilistic_quals` classifier in
   `src/provsql.c` replaces the historical pair
@@ -200,7 +200,7 @@ extension and the Studio package versions (plus a new
 - `HybridEvaluator::double_to_text` uses `std::to_chars` for
   shortest-roundtrip formatting of folded scalar coefficients.
 
-## Bug fixes
+### Bug fixes
 
 - Backend segfault at `verbose_level >= 20` when deparsing an
   `EXCEPT`-rewritten tree. `transform_except_into_join` was
@@ -227,7 +227,7 @@ extension and the Studio package versions (plus a new
   in `where_provenance.cpp` is qualified as `std::move()`.
   Both gcc and clang now build clean.
 
-## GUCs (user-facing)
+### GUCs (user-facing)
 
 - `provsql.monte_carlo_seed` (default `-1`): pinning seeds the
   MC sampler for reproducibility across runs and across the
@@ -241,7 +241,7 @@ extension and the Studio package versions (plus a new
 `provsql.hybrid_evaluation` is debug-only (`GUC_NO_SHOW_ALL`);
 end users have no reason to flip it.
 
-## New documentation
+### New documentation
 
 - `doc/source/user/continuous-distributions.rst`: full user
   surface.
@@ -250,7 +250,7 @@ end users have no reason to flip it.
 - `doc/source/dev/continuous-distributions.rst`: architecture
   companion.
 
-## ABI / compatibility
+### ABI / compatibility
 
 - `gate_type` enum extended (`gate_rv`, `gate_arith`,
   `gate_mixture` appended; no renumbering).
@@ -269,7 +269,7 @@ expansion of the compiled-semiring family.  The mmap circuit format
 is unchanged from 1.3.0; an `ALTER EXTENSION provsql UPDATE` is
 enough.
 
-## ProvSQL Studio companion release
+### ProvSQL Studio companion release
 
 [**ProvSQL Studio**](https://provsql.org/docs/user/studio.html), a
 self-contained Flask/JS web UI for provenance inspection, ships in
@@ -286,7 +286,7 @@ extension version (1.0.0 ↔ extension 1.4.0+).  The Docker image
 `inriavalda/provsql:1.4.0` bundles both, exposes Studio on port 8000,
 and replaces the legacy Apache + `where_panel` PHP UI.
 
-## New compiled semirings
+### New compiled semirings
 
 Ten new `sr_*` evaluators land alongside the existing
 `sr_formula` / `sr_counting` / `sr_why` / `sr_boolexpr` /
@@ -345,7 +345,7 @@ single circuit traversal and respect circuit caching.
   shorter.  Callers that grep `sr_boolexpr` output for exact
   paren counts will need to adjust.
 
-## Circuit introspection helpers
+### Circuit introspection helpers
 
 Two new SQL-level helpers expose the gate DAG so external tools can
 walk a bounded slice without copying the entire circuit; Studio
@@ -365,7 +365,7 @@ uses them to render Circuit mode:
   provenance-tracked relation.  Returns zero rows for non-input gates
   (`plus`, `times`, `agg`, …).
 
-## `agg_token` rendering and the `aggtoken_text_as_uuid` GUC
+### `agg_token` rendering and the `aggtoken_text_as_uuid` GUC
 
 `agg_token` cells now have two render modes, controlled by a new
 `provsql.aggtoken_text_as_uuid` GUC:
@@ -382,7 +382,7 @@ uses them to render Circuit mode:
 `agg_token_out` is consequently `STABLE` rather than `IMMUTABLE`
 (the chosen output now depends on a session GUC).
 
-## `provsql.tool_search_path` and external-tool robustness
+### `provsql.tool_search_path` and external-tool robustness
 
 A new `provsql.tool_search_path` GUC (colon-separated directories
 prepended to `PATH` when invoking external tools) replaces the
@@ -404,7 +404,7 @@ external-tool dispatch layer also gains:
 - **Private mkdtemp dir**: external tools now run in a per-call
   `mkdtemp` directory, closing a `/tmp` race on shared hosts.
 
-## Bug fixes
+### Bug fixes
 
 - **`provenance_aggregate` UUID collision under concurrent
   aggregation.** `SUM(id)` and `AVG(id)` over the same children
@@ -437,7 +437,7 @@ external-tool dispatch layer also gains:
   stray `s` appended (`<datadir>s` instead of `<datadir>`). Fixed.
   The behaviour of the upgrade itself was unaffected.
 
-## Documentation
+### Documentation
 
 - **Studio user-guide chapter** (`doc/source/user/studio.rst`): a
   full walkthrough of Where mode, Circuit mode, the eval strip, and
@@ -470,7 +470,7 @@ external-tool dispatch layer also gains:
   `studio-v*` tag workflow, and the hand-edited
   `studio/CHANGELOG.md` discipline.
 
-## Infrastructure
+### Infrastructure
 
 - **Studio CI workflow** (`.github/workflows/studio.yml`): Python
   3.10 / 3.11 / 3.12 / 3.13 × PostgreSQL 14 / 15 / 16 matrix
@@ -493,7 +493,7 @@ external-tool dispatch layer also gains:
 - **`where_panel/` removed.**  The legacy PHP where-provenance UI is
   superseded by Studio's Where mode.
 
-## Upgrade procedure
+### Upgrade procedure
 
 ```sh
 make install
@@ -520,7 +520,7 @@ plus a corrected upgrade path from 1.2.3 and documentation additions
 No on-disk format change relative to 1.3.0; an
 `ALTER EXTENSION provsql UPDATE` is enough.
 
-## Upgrade-script corrections
+### Upgrade-script corrections
 
 - **`sql/upgrades/provsql--1.2.3--1.3.0.sql`** shipped with 1.3.0 only
   carried the per-database mmap migration warning and missed two
@@ -543,7 +543,7 @@ No on-disk format change relative to 1.3.0; an
   CREATE OR REPLACE statements match the source already on disk, so
   it is a no-op for them.
 
-## Bug fixes
+### Bug fixes
 
 - **`probability_evaluate(..., 'tree-decomposition')` on circuits
   containing `mulinput` gates.** Input gates produced by `repair_key`
@@ -567,7 +567,7 @@ No on-disk format change relative to 1.3.0; an
   returned meaningless values. They now raise a clear error
   identifying the unsupported gate type.
 
-## Documentation
+### Documentation
 
 - **New Case Study 5: The Wildlife Photo Archive.** A 30-photo /
   13-species / 63-detection synthetic dataset demonstrates the
@@ -597,12 +597,12 @@ No on-disk format change relative to 1.3.0; an
   incompatibility between `sphinx-copybutton` 0.4.0 (the version in
   Ubuntu Noble's apt) and Sphinx 9.
 
-## Infrastructure
+### Infrastructure
 
 - Release tarballs and CI workflows exclude the `studio/`
   subdirectory for future developments.
 
-## Upgrade procedure
+### Upgrade procedure
 
 ```sh
 make install

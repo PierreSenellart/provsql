@@ -286,7 +286,11 @@ sed -i "s/^         \"version\": \"[^\"]*\"/         \"version\": \"$VERSION\"/"
 #    website/_data/releases.yml entry we just added.  The new block
 #    consists of a "## [VERSION] - DATE" heading followed by the
 #    release notes, with any leading "## What's new in VERSION" line
-#    from the notes stripped (it would duplicate the heading).
+#    from the notes stripped (it would duplicate the heading).  Notes
+#    headings are demoted one level so that the user-written ## (which
+#    they think of as the top-of-document) sits below the "## [VERSION]"
+#    release anchor in the merged CHANGELOG; otherwise PGXN flattens
+#    every sibling ## under the release entry.
 
 CHANGELOG_FILE="CHANGELOG.md"
 CHANGELOG_ENTRY=$(mktemp)
@@ -295,7 +299,10 @@ TMP_CHANGELOG=$(mktemp)
 {
   echo "## [$VERSION] - $TODAY"
   echo ""
-  echo "$NOTES" | sed "/^## What's new in /d" | sed -e '/./,$!d'
+  echo "$NOTES" \
+    | sed "/^## What's new in /d" \
+    | sed -E 's/^(#{1,5}) /#\1 /' \
+    | sed -e '/./,$!d'
   echo ""
 } > "$CHANGELOG_ENTRY"
 
