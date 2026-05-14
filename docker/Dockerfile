@@ -123,7 +123,7 @@ USER root
 # Studio has been published (e.g. for the simultaneous-release rehearsal),
 # pass `--build-arg STUDIO_SOURCE=/opt/provsql/studio` to install in
 # editable mode from the source already copied into the image.
-ARG STUDIO_VERSION=1.1.0
+ARG STUDIO_VERSION=1.1.1
 ARG STUDIO_SOURCE=
 
 # Debian bookworm's Python 3.11 enforces PEP 668, so we install Studio
