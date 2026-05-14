@@ -454,13 +454,14 @@ filter in the outer ``WHERE`` instead:
 
 The inner :sqlfunc:`avg` is recognised as a ``random_variable``
 aggregate (gate_arith DIV over per-row gate_mixture children, as
-in Step 4) and surfaces as an ``agg_token`` column in the
+in Step 5) and surfaces as a ``random_variable`` column in the
 subquery's output. :sqlfunc:`expected` then dispatches on
-``agg_token`` and runs the analytical ``rv_moment`` path; the
-``WHERE`` is a plain comparison on the resulting ``double``, so
-the row survives iff its expected average exceeds the threshold.
-For the case-study fixture both districts pass (centre at 25.5,
-east at ≈ 21.6).
+``random_variable`` and collapses the distribution to its mean
+(Monte Carlo here, since the DIV gate has no closed-form
+evaluator); the ``WHERE`` is a plain comparison on the resulting
+``double``, so the row survives iff its expected average exceeds
+the threshold. For the case-study fixture both districts pass
+(centre at ≈ 25.5, east at ≈ 21.6).
 
 Step 10: Independent vs Monte Carlo
 ------------------------------------
