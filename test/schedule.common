@@ -131,5 +131,8 @@ test: continuous_having
 test: continuous_sample_truncated
 test: continuous_analytical_curves
 
+# Case Study 6: City Air-Quality Sensor Network (continuous RVs)
+test: casestudy6
+
 # PROV export
 test: to_provxml

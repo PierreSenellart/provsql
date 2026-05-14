@@ -54,10 +54,10 @@ Your tasks:
 * run conditional inference (``E[reading | reading > 35]``) and
   see the closed-form truncated-distribution mean against the
   unconditional one;
-* mix in ``HAVING`` on grouped random variables, ``UNION ALL`` over
-  historical data, and a side-by-side comparison of probability
-  methods (``'independent'`` vs ``'monte-carlo'`` vs
-  ``'tree-decomposition'``).
+* filter on the expected value of an aggregated random variable,
+  combine today's and yesterday's batches with ``UNION ALL``, and
+  compare probability methods (``'independent'`` vs
+  ``'monte-carlo'`` vs ``'tree-decomposition'``) side by side.
 
 Setup
 -----
@@ -122,18 +122,21 @@ planner hook and lifted into provenance gates, so a query like
 Step 1: Inspect a Noisy Reading
 --------------------------------
 
-In the Studio query box::
+In the Studio query box:
 
-    SELECT id, ts, pm25, provsql
+.. code-block:: postgresql
+
+    SELECT id, ts, pm25
     FROM readings
     WHERE station_id = 's1'
-    ORDER BY ts;
+    ORDER BY ts
 
 The result table renders ``pm25`` as a clickable ``random_variable``
 cell carrying the underlying gate UUID. Click into a row's
 ``pm25``: Studio switches to Circuit mode and renders the
-``gate_rv`` leaf with the distribution-kind glyph (a small *N* for
-a normal, *U* for uniform, *E* for exponential, *Γ* for erlang).
+``gate_rv`` leaf with the distribution-kind initial in the circle
+(*N* for a Normal, *U* for Uniform, *Exp* for Exponential, *Erl*
+for Erlang).
 Pick *Distribution profile* under the *Distribution* optgroup of
 the eval strip and click :guilabel:`Run`: the panel returns
 :math:`\mu` and :math:`\sigma^2` headline stats and an inline
@@ -157,11 +160,13 @@ Step 2: A First Probabilistic Threshold
 ----------------------------------------
 
 The :math:`PM_{2.5}` *Unhealthy* category begins at 35.1. Find
-the rows whose reading might cross it::
+the rows whose reading might cross it:
 
-    SELECT id, station_id, ts, provsql AS prov
+.. code-block:: postgresql
+
+    SELECT id, station_id, ts
     FROM readings
-    WHERE pm25 > 35;
+    WHERE pm25 > 35
 
 Two transformations happen invisibly:
 
@@ -173,7 +178,7 @@ Two transformations happen invisibly:
 * The implicit ``integer → random_variable`` cast lifts the
   literal ``35`` into a ``gate_value``.
 
-Click into a result row's ``prov`` cell. Circuit mode shows the
+Click into a result row's auto-added ``provsql`` cell. Circuit mode shows the
 Boolean wrapper (a ``gate_times`` over the row's input token and
 the ``gate_cmp``); the cmp's child link reaches into the
 ``gate_rv`` from Step 1.
@@ -203,13 +208,14 @@ Step 3: Calibration via Mixtures
 
 Each station has a probability of being mis-calibrated; a
 mis-calibrated unit reports ``pm25 * 1.2`` instead of ``pm25``.
-Express this as a Bernoulli mixture::
+Express this as a Bernoulli mixture:
+
+.. code-block:: postgresql
 
     SELECT r.id, r.station_id,
-           provsql.mixture(cs.p, r.pm25, r.pm25 * 1.2) AS pm25_calibrated,
-           r.provsql
+           provsql.mixture(cs.p, r.pm25, r.pm25 * 1.2) AS pm25_calibrated
     FROM readings r JOIN calibration_status cs USING (station_id)
-    WHERE r.station_id = 's1';
+    WHERE r.station_id = 's1'
 
 Click into a result row's ``pm25_calibrated`` cell. Circuit mode
 renders the ``gate_mixture`` with three labelled outgoing edges
@@ -236,14 +242,15 @@ weighted by the calibration probability.
 Step 4: Aggregation Over Random Variables
 ------------------------------------------
 
-Compute average :math:`PM_{2.5}` per district::
+Compute average :math:`PM_{2.5}` per district:
+
+.. code-block:: postgresql
 
     SELECT s.district,
            avg(r.pm25)  AS avg_pm25,
-           sum(r.pm25)  AS total_pm25,
-           provsql
+           sum(r.pm25)  AS total_pm25
     FROM readings r JOIN stations s ON s.id = r.station_id
-    GROUP BY s.district;
+    GROUP BY s.district
 
 Click into a row's ``avg_pm25`` cell. Circuit mode shows the
 :sqlfunc:`avg` lowering: a ``gate_arith(DIV, num, denom)``
@@ -303,12 +310,14 @@ evaluators and Monte-Carlo sampler actually consume.
 Step 6: Conditional Inference
 ------------------------------
 
-Re-open the filtered query from Step 2::
+Re-open the filtered query from Step 2:
 
-    SELECT id, station_id, ts, pm25, provsql
+.. code-block:: postgresql
+
+    SELECT id, station_id, ts, pm25
     FROM readings
     WHERE pm25 > 35
-      AND station_id = 's1';
+      AND station_id = 's1'
 
 Click a result row's ``pm25`` cell. The eval strip's
 :guilabel:`Condition on` text input auto-presets to the row's
@@ -380,11 +389,13 @@ batch.
 Step 8: Combining Batches via UNION ALL
 ----------------------------------------
 
-Combine today's readings with the historical batch::
+Combine today's readings with the historical batch:
 
-    (SELECT pm25, provsql FROM readings)
+.. code-block:: postgresql
+
+    (SELECT pm25 FROM readings)
     UNION ALL
-    (SELECT pm25, provsql FROM historical_readings);
+    (SELECT pm25 FROM historical_readings)
 
 Pick a result row's ``provsql`` cell. Circuit mode shows the
 expected ``gate_plus`` over the two branches' provenance: each
@@ -394,30 +405,36 @@ between the two batches is encoded as the semiring addition.
 probability that *either* batch produced an in-range reading for
 that station.
 
-Step 9: HAVING on Grouped Random Variables
--------------------------------------------
+Step 9: Filtering Grouped Random Variables by Expected Value
+-------------------------------------------------------------
 
-Filter the per-district aggregates from Step 4 by an expected
-condition::
+Filter the per-district aggregates from Step 4 by their expected
+average. The natural ``HAVING expected(avg(r.pm25)) > 20`` form is
+not yet supported by the planner-hook rewrite (it accepts
+``provenance_aggregate()`` calls, plain ``agg_token`` columns, and
+constants as HAVING operands, but not arbitrary function calls
+over aggregates), so push the aggregate through a subquery and
+filter in the outer ``WHERE`` instead:
 
-    SELECT s.district,
-           avg(r.pm25)              AS avg_pm25,
-           provsql
-    FROM readings r JOIN stations s ON s.id = r.station_id
-    GROUP BY s.district
-    HAVING expected(avg(r.pm25)) > 20;
+.. code-block:: postgresql
 
-The :sqlfunc:`expected` dispatcher recognises the inner ``avg``
-as a ``random_variable`` aggregate and runs the analytical
-``rv_moment`` path; the ``HAVING`` lifts into a ``gate_cmp``
-above a ``gate_agg``. Click a surviving row's ``provsql`` cell;
-Circuit mode shows the cmp / agg layering. Because the
-``gate_delta`` operator is transparent to the random-variable
-event walker, the structural view matches the semantic one.
-Under Monte Carlo, the ``gate_agg`` arm of
-``monteCarloRV::evalScalar`` evaluates the per-group running
-aggregate on each iteration, so ``HAVING`` and continuous
-random variables compose without an extra workaround.
+    SELECT district, avg_pm25
+    FROM (
+      SELECT s.district, avg(r.pm25) AS avg_pm25
+      FROM readings r JOIN stations s ON s.id = r.station_id
+      GROUP BY s.district
+    ) t
+    WHERE expected(avg_pm25) > 20
+
+The inner :sqlfunc:`avg` is recognised as a ``random_variable``
+aggregate (gate_arith DIV over per-row gate_mixture children, as
+in Step 4) and surfaces as an ``agg_token`` column in the
+subquery's output. :sqlfunc:`expected` then dispatches on
+``agg_token`` and runs the analytical ``rv_moment`` path; the
+``WHERE`` is a plain comparison on the resulting ``double``, so
+the row survives iff its expected average exceeds the threshold.
+For the case-study fixture both districts pass (centre at 25.5,
+east at ≈ 21.6).
 
 Step 10: Independent vs Monte Carlo
 ------------------------------------
@@ -434,7 +451,7 @@ Carlo. Compare the three available exact methods against
       probability_evaluate(provenance(), 'independent')         AS p_ind,
       probability_evaluate(provenance(), 'monte-carlo', '10000') AS p_mc,
       probability_evaluate(provenance(), 'tree-decomposition')  AS p_td
-    FROM readings WHERE pm25 > 35;
+    FROM readings WHERE pm25 > 35
 
 Studio's eval strip exposes these methods directly; running each
 method against the same pinned subnode shows the analytic
