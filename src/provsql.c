@@ -1007,6 +1007,10 @@ static Expr *make_aggregation_expression(const constants_t *constants,
  * having_Expr_to_provenance_cmp are mutually recursive. */
 static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *constants, bool negated);
 
+/* Forward declaration: defined alongside the other tree walkers
+ * further down in the file. */
+static bool needs_having_lift(Node *havingQual, const constants_t *constants);
+
 /**
  * @brief Convert a comparison @c OpExpr on aggregate results into a
  *        @c provenance_cmp gate expression.
@@ -1547,21 +1551,35 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       result = (Expr *)plus;
     }
 
-    if (aggregation && !q->havingQual) {
-      FuncExpr *deltaExpr = makeNode(FuncExpr);
+    /* HAVING quals come in two flavours.  A qual that references an
+     * agg_token Var or a provenance_aggregate() wrapper must be lifted
+     * into a provenance_cmp gate so the per-group truth value is
+     * carried by the provenance circuit (and the corresponding gate_agg
+     * remains evaluable).  Anything else -- a deterministic scalar
+     * predicate, or one over random_variable aggregates collapsed by
+     * expected() / variance() / moment() to a plain double -- is left
+     * in q->havingQual for PostgreSQL to evaluate natively, and the
+     * per-group provenance still gets a delta wrapper. */
+    {
+      bool lift_having = q->havingQual != NULL &&
+                         needs_having_lift((Node *) q->havingQual, constants);
 
-      // adding the delta gate to the provenance circuit
-      deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
-      deltaExpr->args = list_make1(result);
-      deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
-      deltaExpr->location = -1;
+      if (aggregation && !lift_having) {
+        FuncExpr *deltaExpr = makeNode(FuncExpr);
 
-      result = (Expr *)deltaExpr;
-    }
+        // adding the delta gate to the provenance circuit
+        deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+        deltaExpr->args = list_make1(result);
+        deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
+        deltaExpr->location = -1;
 
-    if (q->havingQual) {
-      result = (Expr*) having_Expr_to_provenance_cmp((Expr*)q->havingQual, constants, false);
-      q->havingQual = NULL;
+        result = (Expr *)deltaExpr;
+      }
+
+      if (lift_having) {
+        result = (Expr*) having_Expr_to_provenance_cmp((Expr*)q->havingQual, constants, false);
+        q->havingQual = NULL;
+      }
     }
   }
 
@@ -2977,6 +2995,59 @@ static bool aggtoken_walker(Node *node, const constants_t *constants) {
  */
 static bool has_aggtoken(Node *node, const constants_t *constants) {
   return expression_tree_walker(node, aggtoken_walker, (void*) constants);
+}
+
+/**
+ * @brief Walker for @c needs_having_lift: detect any operand shape that
+ *        the HAVING-lift rewriter (@c having_OpExpr_to_provenance_cmp)
+ *        needs to handle specially.
+ *
+ * Returns @c true on:
+ *   - a @c Var of type @c agg_token; or
+ *   - a @c FuncExpr whose @c funcid is @c provenance_aggregate (the
+ *     wrapper the planner-hook puts around aggregates over tracked
+ *     non-RV columns -- yields @c agg_token).
+ *
+ * Anything else (deterministic scalars, plain @c Const, @c FuncExpr
+ * over @c random_variable like @c expected / @c variance / @c moment,
+ * comparisons of those) is left for PostgreSQL to evaluate natively;
+ * the HAVING-lift never needs to touch it.
+ */
+static bool having_lift_walker(Node *node, const constants_t *constants) {
+  if (node == NULL)
+    return false;
+
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->vartype == constants->OID_TYPE_AGG_TOKEN)
+      return true;
+  }
+
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *) node;
+    if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      return true;
+  }
+
+  return expression_tree_walker(node, having_lift_walker, (void*) constants);
+}
+
+/**
+ * @brief Return true if @p havingQual contains anything the HAVING-lift
+ *        path needs to handle (an @c agg_token Var or a
+ *        @c provenance_aggregate wrapper).  A qual that returns @c false
+ *        is left in place for PostgreSQL to evaluate, while the
+ *        per-group provenance still gets a @c gate_delta wrapper.
+ *
+ * This is what lets a HAVING like @c expected(avg(rv)) > 20 work
+ * directly: @c provsql.avg returns @c random_variable (not
+ * @c agg_token), @c expected collapses to a scalar @c double, and the
+ * surrounding comparison is a plain Boolean that PostgreSQL can filter
+ * groups by without any provenance-side rewriting.
+ */
+static bool needs_having_lift(Node *havingQual, const constants_t *constants) {
+  return expression_tree_walker(havingQual, having_lift_walker,
+                                (void *) constants);
 }
 
 /**

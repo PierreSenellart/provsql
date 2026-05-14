@@ -74,9 +74,9 @@ s4|8|plus
 remove_provenance
 
 (1 row)
-district
-centre
-east
+district|prov_kind
+centre|delta
+east|delta
 (2 rows)
 remove_provenance
 

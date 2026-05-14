@@ -435,33 +435,32 @@ Step 9: Filtering Grouped Random Variables by Expected Value
 -------------------------------------------------------------
 
 Filter the per-district aggregates from Step 5 by their expected
-average. The natural ``HAVING expected(avg(r.pm25)) > 20`` form is
-not yet supported by the planner-hook rewrite (it accepts
-``provenance_aggregate()`` calls, plain ``agg_token`` columns, and
-constants as HAVING operands, but not arbitrary function calls
-over aggregates), so push the aggregate through a subquery and
-filter in the outer ``WHERE`` instead:
+average. Because :sqlfunc:`avg` over a ``random_variable`` column
+returns a ``random_variable`` (not an ``agg_token``), and
+:sqlfunc:`expected` collapses it to a plain ``double``, the
+HAVING qual is deterministic from the planner-hook's perspective;
+the rewrite leaves it for PostgreSQL to evaluate natively while
+still adding a ``delta(gate_agg)`` wrapper to each surviving
+group's provenance:
 
 .. code-block:: postgresql
 
-    SELECT district, avg_pm25
-    FROM (
-      SELECT s.district, avg(r.pm25) AS avg_pm25
-      FROM readings r JOIN stations s ON s.id = r.station_id
-      GROUP BY s.district
-    ) t
-    WHERE expected(avg_pm25) > 20
+    SELECT s.district, avg(r.pm25) AS avg_pm25
+    FROM readings r JOIN stations s ON s.id = r.station_id
+    GROUP BY s.district
+    HAVING expected(avg(r.pm25)) > 20
 
 The inner :sqlfunc:`avg` is recognised as a ``random_variable``
 aggregate (gate_arith DIV over per-row gate_mixture children, as
-in Step 5) and surfaces as a ``random_variable`` column in the
-subquery's output. :sqlfunc:`expected` then dispatches on
-``random_variable`` and collapses the distribution to its mean
-(Monte Carlo here, since the DIV gate has no closed-form
-evaluator); the ``WHERE`` is a plain comparison on the resulting
-``double``, so the row survives iff its expected average exceeds
-the threshold. For the case-study fixture both districts pass
-(centre at ≈ 25.5, east at ≈ 21.6).
+in Step 5); :sqlfunc:`expected` collapses the distribution to its
+mean (Monte Carlo here, since the DIV gate has no closed-form
+evaluator); the ``> 20`` is a plain comparison on a ``double``,
+so the row survives iff its expected average exceeds the
+threshold. For the case-study fixture both districts pass
+(centre at ≈ 25.5, east at ≈ 21.6); clicking either result row's
+``provsql`` cell shows the ``delta(gate_agg)`` shape, identical
+to the no-HAVING aggregate from Step 5 but filtered to the
+surviving groups.
 
 Step 10: Independent vs Monte Carlo
 ------------------------------------

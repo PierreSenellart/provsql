@@ -213,24 +213,21 @@ DROP TABLE result_cs6_union;
 
 -- ---------------------------------------------------------------------
 -- Step 9: filter the per-district aggregates by their expected average.
--- The natural form `HAVING expected(avg(r.pm25)) > 20` is not yet
--- supported by the planner hook (it accepts provenance_aggregate /
--- Var / Const as HAVING operands but not arbitrary FuncExprs over
--- aggregates); the working idiom pushes the aggregate through a
--- subquery and filters in the outer WHERE.  E[avg(pm25)] is 102/4 =
--- 25.5 for the centre district and 86.5/4 = 21.625 for east, so both
--- rows should pass the > 20 threshold.
+-- The HAVING qual is deterministic from the planner-hook's perspective
+-- (no agg_token Var, no provenance_aggregate wrapper -- avg(rv)
+-- returns random_variable and expected() collapses it to a double), so
+-- needs_having_lift leaves it for PostgreSQL to evaluate natively while
+-- the per-group provenance still gets a delta(gate_agg) wrapper.
+-- E[avg(pm25)] is 102/4 = 25.5 for centre and 86.5/4 = 21.625 for
+-- east, both above 20.
 -- ---------------------------------------------------------------------
 CREATE TABLE result_cs6_having AS
-  SELECT district
-    FROM (
-      SELECT s.district, avg(r.pm25) AS avg_pm25
-        FROM readings r JOIN stations s ON s.id = r.station_id
-       GROUP BY s.district
-    ) t
-   WHERE expected(avg_pm25) > 20;
+  SELECT s.district, get_gate_type(provenance()) AS prov_kind
+    FROM readings r JOIN stations s ON s.id = r.station_id
+   GROUP BY s.district
+  HAVING expected(avg(r.pm25)) > 20;
 SELECT remove_provenance('result_cs6_having');
-SELECT district FROM result_cs6_having ORDER BY district;
+SELECT district, prov_kind FROM result_cs6_having ORDER BY district;
 DROP TABLE result_cs6_having;
 
 -- ---------------------------------------------------------------------
