@@ -14,6 +14,111 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.1.0]
+
+Companion release for ProvSQL extension 1.5.0. Adds first-class
+rendering and inspection for the continuous-distribution gate
+family, conditional-inference workflow, simplified-circuit
+rendering, and a new evaluator strip group for distribution
+profile / sample / moment / support.
+
+### Highlights
+
+- **New gate-type renderers**: `gate_rv` leaves with
+  distribution-kind glyphs (*N* / *U* / *E* / *Γ*); `gate_arith`
+  with the operator glyph drawn from `info1`; `gate_mixture`
+  with three labelled edges (`p` / `x` / `y` for Bernoulli
+  mixtures, `key` plus one mulinput edge per outcome for
+  categorical blocks) and the Bernoulli probability rendered
+  inline in the parent circle.
+- **Distribution profile evaluator**: new entry under the
+  *Distribution* group of the eval strip. Header stats
+  (`μ`, `σ²`), inline-SVG histogram, PDF/CDF toggle, per-bar
+  tooltip with `σ`-markers, wheel zoom. Backed server-side by
+  the new C entry point `rv_histogram`. When the gate has a
+  closed-form, the panel also draws the analytical PDF (or CDF)
+  on top of the histogram as a terracotta SVG path; Bernoulli
+  mixtures, categoricals, and Diracs render as discs on stems
+  in PDF mode and as a staircase in CDF mode. Universally-
+  infeasible truncations short-circuit with an inline message
+  instead of returning empty bars. Backed by the new C entry
+  point `rv_analytical_curves`.
+- **Sample evaluator**: second *Distribution* entry, drawing
+  conditional samples via `rv_sample(token, n, prov)`. Renders
+  as a `<details>` panel with a six-value inline preview and a
+  "show full list" expander; when the MC acceptance rate
+  truncates the run below the requested `n`, surfaces an
+  actionable hint pointing at `provsql.rv_mc_samples`.
+- **Moment evaluator**: third *Distribution* entry exposing
+  `moment` / `central_moment` with `k` and raw/central
+  selectors.
+- **Support evaluator**: fourth *Distribution* entry showing the
+  closed-form `support` interval (or its conservative
+  all-real fallback).
+- **Conditioning**: `Condition on` text input on the eval strip
+  with row-provenance auto-preset (clicking a result-table cell
+  stamps the row's provenance UUID). Toggleable
+  `Conditioned by:` badge underneath; clicking the active badge
+  clears the conditioning and reverts to the unconditional
+  answer, clicking the muted badge restores the row prov.
+  Manual edits stick within a row and reset on row navigation.
+- **Simplified-circuit rendering**: Circuit mode honours the new
+  `provsql.simplify_on_load` extension GUC and renders the
+  in-memory simplified graph via the
+  `simplified_circuit_subgraph` SRF; the Config-panel toggle
+  switches between the raw, gate-creation view and the
+  simplified, evaluation-time view.
+- **Config-panel rows**: new sliders/toggles for
+  `monte_carlo_seed`, `rv_mc_samples`, and `simplify_on_load`,
+  matching the existing Provenance-section pattern.
+- **Anonymous-input rendering**: anonymous `gate_input`
+  probabilities render as a percentage in the node circle;
+  tracked-table input gates continue to render `ι` per the
+  existing iota convention.
+- **Categorical and mixture inspector**: node-inspector entries
+  for the two new gate shapes; single-outcome categoricals
+  collapse to `as_random` in the simplifier.
+- **Footer version readout**: the footer now displays the
+  loaded ProvSQL extension version (read from `pg_extension`)
+  and the Studio package version (`provsql_studio.__version__`)
+  on the right edge, served by `/api/conn`. A new
+  `provsql-studio --version` CLI flag prints the package
+  version and exits.
+- **Schema-panel column pills**: columns whose type is one of
+  ProvSQL's circuit-bearing types now carry a terracotta
+  column-level pill (`rv` for `random_variable`, `agg` for
+  `agg_token`) next to the column name, mirroring the
+  relation-level `prov` / `mapping` pills. The
+  `create_provenance_mapping` click affordance is suppressed
+  on these columns (their values are circuit references, not
+  scalar tags).
+- **Result-table column-type indicators**: each result-table
+  `<th>` carries the column's SQL type name as a tooltip and,
+  for ProvSQL-significant columns, the same `rv` / `agg`
+  pills as the schema panel plus a purple `prov` pill on the
+  row-provenance `provsql` column itself, so the affordance
+  follows the data into the result without a round-trip to
+  the schema panel.
+
+### Demo and tests
+
+- `studio/scripts/demo_continuous.{sql,py}` fixture loader for
+  the sensors / air-quality narrative used in
+  `doc/source/user/casestudy6.rst`; a standalone copy is also
+  shipped as `doc/casestudy6/setup.sql` for the rendered docs.
+- Playwright e2e at `studio/tests/e2e/test_continuous.py`
+  covering `gate_rv` / `gate_arith` rendering, the
+  *Distribution profile* evaluator (including the closed-form
+  PDF/CDF overlay over the histogram bars), the *Sample* panel,
+  the conditioning auto-preset, and a Monte-Carlo
+  `p ∈ (0, 1)` smoke test on the sensors fixture.
+
+### Compatibility
+
+Minimum required extension version: **1.5.0**. See the
+[compatibility matrix](https://provsql.org/docs/user/studio.html#compatibility)
+in the user guide for the full table.
+
 ## [1.0.0]
 
 First public release. Requires the ProvSQL extension at version 1.4.0
