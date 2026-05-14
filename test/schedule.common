@@ -11,6 +11,7 @@ test: remove_add_provenance
 # Basic checks
 test: provenance_in_from identify_token subquery create_provenance_mapping
 test: circuit_subgraph
+test: simplify_identities
 test: resolve_input
 # Regression for the get_gate_type → get_children cache-poisoning bug:
 # the two tests must run in separate backends (sequential `test:` lines),

@@ -47,19 +47,38 @@ void GenericCircuit::foldSemiringIdentities()
 
   /* Phase 1: drop identity wires in place.  Multiplicative identity
    * is @c gate_one (drop from @c gate_times); additive identity is
-   * @c gate_zero (drop from @c gate_plus). */
-  for (std::size_t i = 0; i < n; ++i) {
-    auto g = static_cast<gate_t>(i);
-    auto t = gc.getGateType(g);
-    if (t != gate_times && t != gate_plus) continue;
-    gate_type identity = (t == gate_times) ? gate_one : gate_zero;
-    auto &wires = gc.getWires(g);
-    std::vector<gate_t> kept;
-    kept.reserve(wires.size());
-    for (gate_t c : wires) {
-      if (gc.getGateType(c) != identity) kept.push_back(c);
+   * @c gate_zero (drop from @c gate_plus).  If every wire of a
+   * @c gate_plus / @c gate_times was the identity, the gate is left
+   * with an empty wire list: collapse it to the identity (empty sum
+   * is @c gate_zero, empty product is @c gate_one) by mutating the
+   * gate type in place.  Iterate to a fixpoint so the empty-sum /
+   * empty-product collapse cascades up the DAG -- @c createGenericCircuit
+   * loads gates in BFS-from-root order, i.e. parents before children,
+   * so a single forward pass would propagate in the wrong direction.
+   * The loop terminates after at most one pass per DAG level. */
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (std::size_t i = 0; i < n; ++i) {
+      auto g = static_cast<gate_t>(i);
+      auto t = gc.getGateType(g);
+      if (t != gate_times && t != gate_plus) continue;
+      gate_type identity = (t == gate_times) ? gate_one : gate_zero;
+      auto &wires = gc.getWires(g);
+      std::vector<gate_t> kept;
+      kept.reserve(wires.size());
+      for (gate_t c : wires) {
+        if (gc.getGateType(c) != identity) kept.push_back(c);
+      }
+      if (kept.size() != wires.size()) {
+        wires = std::move(kept);
+        changed = true;
+      }
+      if (wires.empty()) {
+        gc.setGateType(g, identity);
+        changed = true;
+      }
     }
-    if (kept.size() != wires.size()) wires = std::move(kept);
   }
 
   /* Phase 2: build a substitution map for gates that should be
