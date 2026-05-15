@@ -591,6 +591,48 @@ SELECT b.w, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base17 b JOIN pd_rew17 r ON b.w = r.w
  ORDER BY b.w;
 
+-- (18) Single-atom head Var on a non-first-member grouped atom.
+--      pd_nf_a(x, y), pd_nf_b(x, y, w), pd_nf_c(x).  w is a singleton
+--      on pd_nf_b which is NOT the first member of the inner
+--      {pd_nf_a, pd_nf_b} group (pd_nf_a has the smaller rtindex).
+--      The slot must take the next inner-targetList position past
+--      first_member's slots; the outer Var-remap uses
+--      slot->outer_attno to find it.
+CREATE TABLE pd_nf_a(x int, y int);
+CREATE TABLE pd_nf_b(x int, y int, w int);
+CREATE TABLE pd_nf_c(x int);
+INSERT INTO pd_nf_a VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_nf_b VALUES (1, 10, 100), (1, 11, 100), (1, 10, 200), (2, 20, 300);
+INSERT INTO pd_nf_c VALUES (1), (1), (2);
+SELECT add_provenance('pd_nf_a');
+SELECT add_provenance('pd_nf_b');
+SELECT add_provenance('pd_nf_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_nf_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_nf_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_nf_c;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base18 AS
+  SELECT b.w, probability_evaluate(provenance()) AS p
+    FROM pd_nf_a a, pd_nf_b b, pd_nf_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY b.w;
+SELECT remove_provenance('pd_base18');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew18 AS
+  SELECT b.w, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_nf_a a, pd_nf_b b, pd_nf_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY b.w;
+SELECT remove_provenance('pd_rew18');
+
+SELECT b.w, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base18 b JOIN pd_rew18 r ON b.w = r.w
+ ORDER BY b.w;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -636,4 +678,5 @@ DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_bid_a, pd_bid_b, pd_bid_p, pd_bid_empty,
            pd_mc_a, pd_mc_b, pd_sh_a, pd_sh_b,
            pd_gh_a, pd_gh_b, pd_gh_c,
+           pd_nf_a, pd_nf_b, pd_nf_c,
            pd_d, pd_e, pd_f;

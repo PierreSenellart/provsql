@@ -160,6 +160,7 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
 typedef struct safe_proj_slot {
   AttrNumber  base_attno;
   int         class_id;
+  AttrNumber  outer_attno;  ///< 1-based column in the inner sub-Query's targetList (or per-atom DISTINCT wrap for outer-wrap atoms).  Matches the slot's position in the atom's proj_slots for outer-wrap atoms, for first-member grouped atoms, and for shared slots on non-first-member grouped atoms.  Differs for singleton head Vars on non-first-members: those get the next position in the group's unified inner targetList after all earlier members' slots.
 } safe_proj_slot;
 
 /**
@@ -635,6 +636,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   int    *atom_group = NULL;        /* per-atom group id: -1 = outer-wrap; 0 = inner */
   bool   *in_targetlist = NULL;     /* per-var: appears somewhere in q->targetList */
   int    *first_member_of_group = NULL; /* per-group: smallest atom index in the group */
+  int    *group_singleton_counter = NULL; /* per-group: running outer_attno counter for singleton head Vars on non-first-members */
   bool    have_partial_class = false;
   int     partial_first = -1;       /* repr of the first partial-coverage class seen */
   int     i, j;
@@ -897,8 +899,11 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       if (atom_group[j] >= 0 && atom_group[j] + 1 > ngroups_local)
         ngroups_local = atom_group[j] + 1;
     first_member_of_group = palloc(natoms * sizeof(int));
-    for (g = 0; g < ngroups_local; g++)
+    group_singleton_counter = palloc(natoms * sizeof(int));
+    for (g = 0; g < ngroups_local; g++) {
       first_member_of_group[g] = -1;
+      group_singleton_counter[g] = 0;
+    }
     for (j = 0; j < natoms; j++) {
       int g_loc = atom_group[j];
       if (g_loc >= 0 && first_member_of_group[g_loc] < 0)
@@ -922,18 +927,14 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
         && atom_group[atom_idx] >= 0)
       continue;
     /* Single-atom head Var: only this atom's wrap binds the column,
-     * so the wrap must expose it as an extra projection slot.  For
-     * outer-wrap atoms (@c group_id == -1) the slot lives in the
-     * atom's own DISTINCT wrap; for grouped atoms it must be on
-     * the first member of the group, otherwise the inner sub-Query
-     * (whose targetList is built from first_member->proj_slots)
-     * would not surface it. */
-    if (class_atom_count[c] == 1 && in_targetlist[i]) {
-      if (atom_group[atom_idx] < 0)
-        continue;
-      if (first_member_of_group[atom_group[atom_idx]] == atom_idx)
-        continue;
-    }
+     * so the wrap must expose it as an extra projection slot.
+     * Outer-wrap atoms expose it in their own DISTINCT wrap; grouped
+     * atoms add the slot to the inner sub-Query's targetList -- on
+     * first_member at the natural next position, on non-first-members
+     * at the per-group running counter after all earlier members'
+     * slots (see the proj_slots build below). */
+    if (class_atom_count[c] == 1 && in_targetlist[i])
+      continue;
     if (provsql_verbose >= 30)
       provsql_notice("safe-query rewriter: Var (varno=%u, varattno=%d) "
                      "belongs to a class that does not match any outer or "
@@ -974,8 +975,9 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       goto bail;                          /* impossible if root truly covers all */
 
     root_slot = palloc(sizeof(safe_proj_slot));
-    root_slot->base_attno = sa->root_anchor_attno;
-    root_slot->class_id   = root_class;
+    root_slot->base_attno  = sa->root_anchor_attno;
+    root_slot->class_id    = root_class;
+    root_slot->outer_attno = 1;
     sa->proj_slots = lappend(sa->proj_slots, root_slot);
     for (i = 0; i < nvars; i++) {
       safe_proj_slot *slot;
@@ -986,44 +988,63 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       if (ANCHOR(i, j) == 0)
         continue;
       slot = palloc(sizeof(safe_proj_slot));
-      slot->base_attno = (AttrNumber) ANCHOR(i, j);
-      slot->class_id   = i;
+      slot->base_attno  = (AttrNumber) ANCHOR(i, j);
+      slot->class_id    = i;
+      slot->outer_attno = (AttrNumber) (list_length(sa->proj_slots) + 1);
       sa->proj_slots = lappend(sa->proj_slots, slot);
     }
     /* Single-atom head Vars: expose every body-only Var (singleton
      * class) that appears in the user's targetList as an extra slot.
      * For outer-wrap atoms the slot lives in the per-atom DISTINCT
-     * wrap; for first-member grouped atoms it goes into the inner
-     * sub-Query's @c targetList (which is built from
-     * @c first_member->proj_slots).  Non-first-member grouped atoms
-     * have already been rejected by the per-Var check above. */
-    if (sa->group_id < 0
-        || (sa->group_id >= 0
-            && first_member_of_group[sa->group_id] == j)) {
-      for (i = 0; i < nvars; i++) {
-        safe_proj_slot *slot;
-        ListCell *exlc;
-        bool already_have = false;
-        if (!in_targetlist[i])
-          continue;
-        if (class_atom_count[cls[i]] != 1)
-          continue;
-        if ((int) vars_arr[i]->varno - 1 != j)
-          continue;
-        foreach (exlc, sa->proj_slots) {
-          safe_proj_slot *ex = (safe_proj_slot *) lfirst(exlc);
-          if (ex->base_attno == vars_arr[i]->varattno) {
-            already_have = true;
-            break;
-          }
+     * wrap, and @c outer_attno is the natural position in the
+     * atom's @c proj_slots.  For grouped atoms the slot goes into
+     * the inner sub-Query's @c targetList:
+     *   - on first_member, at the natural next position;
+     *   - on non-first-members, at the position handed out by the
+     *     group's running counter @c group_singleton_counter, which
+     *     picks up after first_member's last slot. */
+    for (i = 0; i < nvars; i++) {
+      safe_proj_slot *slot;
+      ListCell *exlc;
+      bool already_have = false;
+      bool is_first_member;
+      if (!in_targetlist[i])
+        continue;
+      if (class_atom_count[cls[i]] != 1)
+        continue;
+      if ((int) vars_arr[i]->varno - 1 != j)
+        continue;
+      foreach (exlc, sa->proj_slots) {
+        safe_proj_slot *ex = (safe_proj_slot *) lfirst(exlc);
+        if (ex->base_attno == vars_arr[i]->varattno) {
+          already_have = true;
+          break;
         }
-        if (already_have)
-          continue;
-        slot = palloc(sizeof(safe_proj_slot));
-        slot->base_attno = vars_arr[i]->varattno;
-        slot->class_id   = cls[i];
-        sa->proj_slots = lappend(sa->proj_slots, slot);
       }
+      if (already_have)
+        continue;
+      slot = palloc(sizeof(safe_proj_slot));
+      slot->base_attno = vars_arr[i]->varattno;
+      slot->class_id   = cls[i];
+      is_first_member = (sa->group_id >= 0
+                         && first_member_of_group[sa->group_id] == j);
+      if (sa->group_id < 0 || is_first_member) {
+        slot->outer_attno =
+            (AttrNumber) (list_length(sa->proj_slots) + 1);
+      } else {
+        group_singleton_counter[sa->group_id]++;
+        slot->outer_attno =
+            (AttrNumber) group_singleton_counter[sa->group_id];
+      }
+      sa->proj_slots = lappend(sa->proj_slots, slot);
+    }
+    /* For first_member of a group: after its singletons are added,
+     * initialise the group's running counter so non-first-members
+     * pick up just past first_member's last slot. */
+    if (sa->group_id >= 0
+        && first_member_of_group[sa->group_id] == j) {
+      group_singleton_counter[sa->group_id] =
+          list_length(sa->proj_slots);
     }
 
     /* BID alignment: when the atom is BID-tracked, every block_key
@@ -1126,6 +1147,8 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     pfree(in_targetlist);
   if (first_member_of_group)
     pfree(first_member_of_group);
+  if (group_singleton_counter)
+    pfree(group_singleton_counter);
   (void) constants;
   return atoms_out;
 
@@ -1140,6 +1163,8 @@ bail:
     pfree(in_targetlist);
   if (first_member_of_group)
     pfree(first_member_of_group);
+  if (group_singleton_counter)
+    pfree(group_singleton_counter);
   (void) constants;
   *groups_out = NIL;
   return NIL;
@@ -1190,19 +1215,17 @@ static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
         safe_inner_group *gr =
             (safe_inner_group *) list_nth(ctx->groups, sa->group_id);
         ListCell *lc;
-        int slot_idx = 0;
         foreach (lc, sa->proj_slots) {
           safe_proj_slot *slot = (safe_proj_slot *) lfirst(lc);
-          slot_idx++;
           if (slot->base_attno == v->varattno) {
             Var *vv = (Var *) copyObject(v);
             vv->varno = gr->outer_rtindex;
 #if PG_VERSION_NUM >= 130000
             vv->varnosyn = gr->outer_rtindex;
 #endif
-            vv->varattno = (AttrNumber) slot_idx;
+            vv->varattno = slot->outer_attno;
 #if PG_VERSION_NUM >= 130000
-            vv->varattnosyn = (AttrNumber) slot_idx;
+            vv->varattnosyn = slot->outer_attno;
 #endif
             return (Node *) vv;
           }
@@ -1214,19 +1237,17 @@ static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
                       (unsigned) v->varno, (int) v->varattno);
       } else {
         ListCell *lc;
-        int slot_idx = 0;
         foreach (lc, sa->proj_slots) {
           safe_proj_slot *slot = (safe_proj_slot *) lfirst(lc);
-          slot_idx++;
           if (slot->base_attno == v->varattno) {
             Var *vv = (Var *) copyObject(v);
             vv->varno = sa->outer_rtindex;
 #if PG_VERSION_NUM >= 130000
             vv->varnosyn = sa->outer_rtindex;
 #endif
-            vv->varattno = (AttrNumber) slot_idx;
+            vv->varattno = slot->outer_attno;
 #if PG_VERSION_NUM >= 130000
-            vv->varattnosyn = (AttrNumber) slot_idx;
+            vv->varattnosyn = slot->outer_attno;
 #endif
             return (Node *) vv;
           }
@@ -1536,50 +1557,70 @@ static Query *safe_build_group_subquery(Query *outer_src,
 
   inner->targetList = NIL;
   inner->groupClause = NIL;
+  /* Emit one TargetEntry per slot in @c outer_attno order, covering
+   * first_member's slots first, then each non-first-member's
+   * singleton-only slots in member-list order.  Slots with the same
+   * @c outer_attno across members (shared root + fully-covered
+   * classes) are emitted once, attached to the first member that
+   * owns them.  We track which @c outer_attno values have already
+   * been emitted via a Bitmapset. */
   {
-    ListCell *slot_lc;
-    int       slot_idx = 0;
-    foreach (slot_lc, first_member->proj_slots) {
-      safe_proj_slot   *slot = (safe_proj_slot *) lfirst(slot_lc);
-      TargetEntry     *te    = makeNode(TargetEntry);
-      SortGroupClause *sgc   = makeNode(SortGroupClause);
-      Var             *cv;
+    Bitmapset *emitted = NULL;
+    ListCell  *mlc;
+    foreach (mlc, gr->member_atoms) {
+      safe_rewrite_atom *m = (safe_rewrite_atom *) lfirst(mlc);
+      RangeTblEntry *m_rte = (RangeTblEntry *)
+          list_nth(outer_src->rtable, (int) m->rtindex - 1);
+      ListCell *slot_lc;
+      foreach (slot_lc, m->proj_slots) {
+        safe_proj_slot  *slot = (safe_proj_slot *) lfirst(slot_lc);
+        TargetEntry    *te;
+        SortGroupClause *sgc;
+        Var            *cv;
+        if (bms_is_member((int) slot->outer_attno, emitted))
+          continue;
+        emitted = bms_add_member(emitted, (int) slot->outer_attno);
 
-      atttup = SearchSysCache2(ATTNUM,
-                               ObjectIdGetDatum(first_rte->relid),
-                               Int16GetDatum(slot->base_attno));
-      if (!HeapTupleIsValid(atttup))
-        provsql_error("safe-query rewriter: cannot resolve attno %d of "
-                      "relation %u in inner sub-Query",
-                      (int) slot->base_attno, (unsigned) first_rte->relid);
-      attform      = (Form_pg_attribute) GETSTRUCT(atttup);
-      atttypid     = attform->atttypid;
-      atttypmod    = attform->atttypmod;
-      attcollation = attform->attcollation;
-      ReleaseSysCache(atttup);
+        atttup = SearchSysCache2(ATTNUM,
+                                 ObjectIdGetDatum(m_rte->relid),
+                                 Int16GetDatum(slot->base_attno));
+        if (!HeapTupleIsValid(atttup))
+          provsql_error("safe-query rewriter: cannot resolve attno %d of "
+                        "relation %u in inner sub-Query",
+                        (int) slot->base_attno, (unsigned) m_rte->relid);
+        attform      = (Form_pg_attribute) GETSTRUCT(atttup);
+        atttypid     = attform->atttypid;
+        atttypmod    = attform->atttypmod;
+        attcollation = attform->attcollation;
+        ReleaseSysCache(atttup);
 
-      slot_idx++;
-      cv = makeVar((Index) first_member->inner_rtindex,
-                   slot->base_attno,
-                   atttypid, atttypmod, attcollation, 0);
-      te->expr            = (Expr *) cv;
-      te->resno           = (AttrNumber) slot_idx;
-      te->resname         = psprintf("provsql_slot_%d", slot_idx);
-      te->ressortgroupref = (Index) slot_idx;
-      te->resorigtbl      = first_rte->relid;
-      te->resorigcol      = slot->base_attno;
-      te->resjunk         = false;
-      inner->targetList = lappend(inner->targetList, te);
+        te  = makeNode(TargetEntry);
+        sgc = makeNode(SortGroupClause);
+        cv = makeVar((Index) m->inner_rtindex,
+                     slot->base_attno,
+                     atttypid, atttypmod, attcollation, 0);
+        te->expr            = (Expr *) cv;
+        te->resno           = slot->outer_attno;
+        te->resname         = psprintf("provsql_slot_%d",
+                                       (int) slot->outer_attno);
+        te->ressortgroupref = (Index) slot->outer_attno;
+        te->resorigtbl      = m_rte->relid;
+        te->resorigcol      = slot->base_attno;
+        te->resjunk         = false;
+        inner->targetList = lappend(inner->targetList, te);
 
-      sgc->tleSortGroupRef = (Index) slot_idx;
-      get_sort_group_operators(atttypid, true, true, false,
-                               &sgc->sortop, &sgc->eqop, NULL,
-                               &sgc->hashable);
-      sgc->nulls_first     = false;
-      inner->groupClause = lappend(inner->groupClause, sgc);
+        sgc->tleSortGroupRef = (Index) slot->outer_attno;
+        get_sort_group_operators(atttypid, true, true, false,
+                                 &sgc->sortop, &sgc->eqop, NULL,
+                                 &sgc->hashable);
+        sgc->nulls_first     = false;
+        inner->groupClause = lappend(inner->groupClause, sgc);
+      }
     }
+    bms_free(emitted);
   }
 
+  (void) first_member; (void) first_rte;
   pfree(rctx.orig_to_inner);
   return inner;
 }
@@ -1694,16 +1735,13 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
         Query *inner = safe_build_group_subquery(outer, gr, atoms);
         RangeTblEntry *new_rte = makeNode(RangeTblEntry);
         Alias *eref = makeNode(Alias);
-        safe_rewrite_atom *first =
-            (safe_rewrite_atom *) linitial(gr->member_atoms);
-        ListCell *slot_lc;
         int slot_idx = 0;
+        int total_inner_cols = inner->targetList != NIL
+                               ? list_length(inner->targetList) : 0;
 
         eref->aliasname = pstrdup("provsql_group");
         eref->colnames = NIL;
-        foreach (slot_lc, first->proj_slots) {
-          (void) lfirst(slot_lc);
-          slot_idx++;
+        for (slot_idx = 1; slot_idx <= total_inner_cols; slot_idx++) {
           eref->colnames = lappend(eref->colnames,
                                    makeString(psprintf("provsql_slot_%d",
                                                        slot_idx)));
