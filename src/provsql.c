@@ -32,7 +32,11 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
+#if PG_VERSION_NUM >= 120000
 #include "optimizer/optimizer.h"
+#else
+#include "optimizer/clauses.h"          /* contain_volatile_functions */
+#endif
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_oper.h"
