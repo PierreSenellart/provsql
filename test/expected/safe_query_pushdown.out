@@ -196,6 +196,23 @@ add_provenance
 add_provenance
 
 (1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+y|diff_baseline_vs_rewritten
+10|0.000000000
+11|0.000000000
+20|0.000000000
+(3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
 add_provenance
 
 (1 row)

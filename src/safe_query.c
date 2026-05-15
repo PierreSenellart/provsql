@@ -633,6 +633,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   int     root_class = -1;
   List   *atoms_out = NIL;
   int    *atom_group = NULL;        /* per-atom group id: -1 = outer-wrap; 0 = inner */
+  bool   *in_targetlist = NULL;     /* per-var: appears somewhere in q->targetList */
   bool    have_partial_class = false;
   int     partial_first = -1;       /* repr of the first partial-coverage class seen */
   int     i, j;
@@ -717,6 +718,25 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
        * the inner subquery, so mark this class unusable.  Count >
        * natoms is impossible otherwise, so we use this as a sentinel. */
       class_atom_count[c] = natoms + 1;
+    }
+  }
+
+  /* Single-atom head Vars: walk @c q->targetList once to mark every
+   * @c vars_arr index that appears in the user's projection.  Used
+   * below to allow body-only Vars (singleton classes, @c count == 1)
+   * to reach the outer scope as an extra @c proj_slot on their atom's
+   * wrap. */
+  in_targetlist = palloc0(nvars * sizeof(bool));
+  {
+    safe_collect_vars_ctx tlist_ctx = { NIL };
+    ListCell *tlc;
+    expression_tree_walker((Node *) q->targetList,
+                           safe_collect_vars_walker, &tlist_ctx);
+    foreach (tlc, tlist_ctx.vars) {
+      Var *v = (Var *) lfirst(tlc);
+      int idx = safe_var_index(vctx.vars, v->varno, v->varattno);
+      if (idx >= 0)
+        in_targetlist[idx] = true;
     }
   }
 
@@ -877,6 +897,12 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     if (class_atom_count[c] >= 2 && class_atom_count[c] < natoms
         && atom_group[atom_idx] >= 0)
       continue;
+    /* Single-atom head Var: only this atom's wrap binds the column,
+     * so the wrap must expose it as an extra projection slot. */
+    if (class_atom_count[c] == 1
+        && atom_group[atom_idx] < 0
+        && in_targetlist[i])
+      continue;
     if (provsql_verbose >= 30)
       provsql_notice("safe-query rewriter: Var (varno=%u, varattno=%d) "
                      "belongs to a class that does not match any outer or "
@@ -932,6 +958,38 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       slot->base_attno = (AttrNumber) ANCHOR(i, j);
       slot->class_id   = i;
       sa->proj_slots = lappend(sa->proj_slots, slot);
+    }
+    /* Single-atom head Vars: for outer-wrap atoms, expose every
+     * body-only Var (singleton class) that appears in the user's
+     * targetList as an extra slot.  Deduplicate against slots
+     * already added so a Var that is both a slot column and a
+     * targetList projection (impossible for singleton classes, but
+     * cheap to guard) is not added twice. */
+    if (sa->group_id < 0) {
+      for (i = 0; i < nvars; i++) {
+        safe_proj_slot *slot;
+        ListCell *exlc;
+        bool already_have = false;
+        if (!in_targetlist[i])
+          continue;
+        if (class_atom_count[cls[i]] != 1)
+          continue;
+        if ((int) vars_arr[i]->varno - 1 != j)
+          continue;
+        foreach (exlc, sa->proj_slots) {
+          safe_proj_slot *ex = (safe_proj_slot *) lfirst(exlc);
+          if (ex->base_attno == vars_arr[i]->varattno) {
+            already_have = true;
+            break;
+          }
+        }
+        if (already_have)
+          continue;
+        slot = palloc(sizeof(safe_proj_slot));
+        slot->base_attno = vars_arr[i]->varattno;
+        slot->class_id   = cls[i];
+        sa->proj_slots = lappend(sa->proj_slots, slot);
+      }
     }
 
     /* BID alignment: when the atom is BID-tracked, every block_key
@@ -1030,6 +1088,8 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   pfree(vars_arr);
   pfree(cls);
   pfree(atom_group);
+  if (in_targetlist)
+    pfree(in_targetlist);
   (void) constants;
   return atoms_out;
 
@@ -1040,6 +1100,8 @@ bail:
   pfree(cls);
   if (atom_group)
     pfree(atom_group);
+  if (in_targetlist)
+    pfree(in_targetlist);
   (void) constants;
   *groups_out = NIL;
   return NIL;

@@ -513,6 +513,42 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base15 b JOIN pd_rew15 r ON b.x = r.x
  ORDER BY b.x;
 
+-- (16) Single-atom head Var: pd_sh_a(x, y), pd_sh_b(x).  y appears
+--      only in pd_sh_a (singleton class) and shows up in the user's
+--      targetList and GROUP BY.  The rewriter must expose y as an
+--      extra slot in pd_sh_a's wrap (so DISTINCT projects (x, y))
+--      and let the outer GROUP BY y resolve through that slot.
+CREATE TABLE pd_sh_a(x int, y int);
+CREATE TABLE pd_sh_b(x int);
+INSERT INTO pd_sh_a VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_sh_b VALUES (1), (1), (2);
+SELECT add_provenance('pd_sh_a');
+SELECT add_provenance('pd_sh_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_sh_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_sh_b;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base16 AS
+  SELECT a.y, probability_evaluate(provenance()) AS p
+    FROM pd_sh_a a, pd_sh_b b
+   WHERE a.x = b.x
+   GROUP BY a.y;
+SELECT remove_provenance('pd_base16');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew16 AS
+  SELECT a.y, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_sh_a a, pd_sh_b b
+   WHERE a.x = b.x
+   GROUP BY a.y;
+SELECT remove_provenance('pd_rew16');
+
+SELECT b.y, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base16 b JOIN pd_rew16 r ON b.y = r.y
+ ORDER BY b.y;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -556,5 +592,5 @@ DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_n_a, pd_n_b, pd_n_c, pd_n_d,
            pd_dj_a, pd_dj_b, pd_dj_c, pd_dj_d,
            pd_bid_a, pd_bid_b, pd_bid_p, pd_bid_empty,
-           pd_mc_a, pd_mc_b,
+           pd_mc_a, pd_mc_b, pd_sh_a, pd_sh_b,
            pd_d, pd_e, pd_f;
