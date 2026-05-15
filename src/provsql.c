@@ -2256,6 +2256,113 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
 }
 
 /* -------------------------------------------------------------------------
+ * Safe-query optimisation (provsql.boolean_provenance)
+ *
+ * Slot for the hierarchical-CQ rewriter.  When the GUC
+ * provsql.boolean_provenance is on, the planner-hook calls
+ * try_safe_query_rewrite() between the AGG-DISTINCT rewrite and
+ * get_provenance_attributes; if it returns a non-NULL Query, that
+ * Query is fed back into process_query() from the top, exactly the
+ * same recursion pattern as rewrite_agg_distinct().
+ *
+ * For now (initial slice) this function only does the shape and
+ * metadata gates; if every check passes it logs at verbose level 30
+ * and bails (returns NULL).  Subsequent slices add the hierarchy
+ * detector and the actual rewrite.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Walk a Query and reject anything outside the safe-query scope.
+ *
+ * Accepts only:
+ *  - self-join-free conjunctive queries
+ *  - no aggregation, window functions, DISTINCT ON, LIMIT/OFFSET,
+ *    set operations (UCQ deferred to a later slice), sublinks
+ *  - all base relations have a provenance metadata entry, none are
+ *    OPAQUE.  BID atom block-key validation is deferred to the
+ *    rewriter slice (we cannot check it without knowing the
+ *    separator).
+ *
+ * @return @c true iff @p q is a candidate for the safe-query rewrite.
+ */
+static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
+  ListCell *lc, *lc2;
+  List *seen_relids = NIL;
+
+  if (q->setOperations != NULL)
+    return false;                       /* UCQ handled by a later slice */
+  if (q->hasAggs || q->hasWindowFuncs)
+    return false;
+  if (q->limitCount != NULL || q->limitOffset != NULL)
+    return false;
+  if (q->groupingSets != NIL)
+    return false;
+  if (q->hasDistinctOn)
+    return false;
+  if (q->hasSubLinks)
+    return false;
+  if (q->rtable == NIL)
+    return false;                       /* FROM-less; nothing to rewrite */
+
+  /* All FROM entries must be base relations referenced via plain
+   * RangeTblRef (no JoinExpr, no RTE_SUBQUERY / RTE_VALUES / ...).
+   * The fromlist check ensures we are looking at a flat join. */
+  foreach (lc, q->jointree->fromlist) {
+    Node *n = (Node *) lfirst(lc);
+    if (!IsA(n, RangeTblRef))
+      return false;
+  }
+
+  foreach (lc, q->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+    ProvenanceTableInfo info;
+
+    if (rte->rtekind != RTE_RELATION)
+      return false;
+    /* Self-join-free: no two RTEs may share a relid. */
+    foreach (lc2, seen_relids) {
+      if (lfirst_oid(lc2) == rte->relid)
+        return false;
+    }
+    seen_relids = lappend_oid(seen_relids, rte->relid);
+
+    /* Metadata gate.  Tracked relations must not be OPAQUE (unknown
+     * correlations).  Non-tracked relations are accepted: they
+     * contribute deterministic, probability-1 tuples, which behave
+     * as if every row carried a @c gate_one() leaf -- read-once
+     * factoring is unaffected.  TID and BID tracked relations are
+     * both fine; the BID block-key alignment check happens in the
+     * rewriter once the separator is known. */
+    if (provsql_lookup_table_info(rte->relid, &info)
+        && info.kind == PROVSQL_TABLE_OPAQUE)
+      return false;
+  }
+
+  list_free(seen_relids);
+  return true;
+}
+
+/**
+ * @brief Top-level entry point for the safe-query rewrite.
+ *
+ * Returns a rewritten Query that should be re-fed into
+ * @c process_query, or @c NULL to fall through to the existing
+ * pipeline.  Currently (slice 1) only performs the candidate gate
+ * and bails; the hierarchy detector and the actual rewrite are
+ * delivered in subsequent slices.
+ */
+static Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
+  if (!is_safe_query_candidate(constants, q))
+    return NULL;
+
+  if (provsql_verbose >= 30)
+    provsql_notice("safe-query candidate accepted by shape gate; "
+                   "hierarchy detection and rewrite not yet implemented");
+
+  return NULL;
+}
+
+/* -------------------------------------------------------------------------
  * Aggregation replacement mutator
  * ------------------------------------------------------------------------- */
 
@@ -4046,6 +4153,16 @@ static Query *process_query(const constants_t *constants, Query *q,
 
     if (q->hasAggs) {
       Query *rewritten = rewrite_agg_distinct(q, constants);
+      if (rewritten)
+        return process_query(constants, rewritten, removed);
+    }
+
+    /* Opt-in safe-query optimisation slot: when on, try to rewrite
+     * hierarchical conjunctive queries to a read-once form whose
+     * probability is computable in linear time via independent
+     * evaluation.  See try_safe_query_rewrite(). */
+    if (provsql_boolean_provenance) {
+      Query *rewritten = try_safe_query_rewrite(constants, q);
       if (rewritten)
         return process_query(constants, rewritten, removed);
     }
