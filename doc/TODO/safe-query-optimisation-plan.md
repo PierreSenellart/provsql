@@ -1,5 +1,65 @@
 # Safe-Query Optimisation for ProvSQL — Implementation Plan
 
+## 0. Implementation status (branch `safe_queries`)
+
+**Landed**: GUC `provsql.boolean_provenance`; per-table metadata in the
+mmap store with TID / BID / OPAQUE kind plus block-key columns; IPC +
+SQL bindings + relcache-invalidated per-backend cache; planner-hook
+integration; hierarchy detector (`find_hierarchical_root_atoms`) and
+single-level rewriter (`rewrite_hierarchical_cq`) in
+`src/safe_query.{c,h}` (extracted from `src/provsql.c`).
+
+The rewriter currently accepts:
+
+- Self-join-free hierarchical CQs with column pushdown for every
+  fully-covered shared class (root + extras).
+- Atom-local WHERE-qual pushdown (slice 3b): single-atom conjuncts
+  pushed into the inner `SELECT DISTINCT` wrap before the union-find.
+- Multi-level rewrite for partial-coverage shared classes (slice 3c):
+  one big inner sub-Query when there's an outer atom; Choice A
+  re-entry handles nesting.
+- Multi-level + multi-fully-covered class: the inner sub-Query exposes
+  every fully-covered class, not just the root.
+- Disjoint multi-group: when every atom is touched by some partial-
+  coverage class and the signatures partition cleanly (no bridges),
+  one inner sub-Query per distinct signature, joined at the outer
+  on the fully-covered classes.
+- Single-atom head Vars on any atom position (outer-wrap, first-
+  member grouped, non-first-member grouped); the new
+  `safe_proj_slot.outer_attno` decouples the logical inner column
+  from the in-list position.
+- BID block-key alignment: BID atoms whose `block_key` columns are
+  not all in the projection slots are refused (empty block_key
+  refused unconditionally).
+- Multi-component CQs: disconnected FROM (`q :- A(x), B(y)`) split
+  into one inner sub-Query per connected component, Cartesian-
+  product at the outer; covers both Var-carrying and all-constant
+  targetLists (a synthetic `Const(1)` anchor folds Var-less
+  components to one row each).
+- UCQ via top-level UNION ALL and branch-disjoint UNION (DISTINCT) —
+  no extra code needed; recursion into branches plus per-row
+  `independent` evaluation suffices.
+
+**Pinned bails** (regression-tested as deferred):
+
+- The "bridge case" — a partial-coverage class spanning multiple
+  signature groups in a hierarchical CQ (test (22) in
+  `safe_query_pushdown.sql`).
+- Branch-overlapping UNION (DISTINCT) where atoms are shared across
+  branches (test (21)).
+
+**Not yet started**:
+
+- §4.5: root-gate tag + per-semiring `compatibleWithBooleanRewrite`
+  constexpr.  Without it, a tagged circuit can still be passed to a
+  non-absorptive semiring and silently return a wrong answer; this
+  is the gate that lets us recommend the GUC publicly.
+- §7 documentation and release-script discipline (upgrade script
+  `provsql--1.5.0--1.6.0.sql`, user/dev docs, RELEASE_NOTES).
+
+Regression suite is 139/139 green with the GUC off (default) and
+the new tests cover the GUC-on paths above.
+
 ## 1. Goal
 
 For a restricted class of safe conjunctive queries, produce provenance
