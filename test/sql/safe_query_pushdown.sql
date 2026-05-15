@@ -91,7 +91,71 @@ CREATE TEMP TABLE pd_shape AS
 SELECT remove_provenance('pd_shape');
 SELECT x, root, root_nchildren FROM pd_shape ORDER BY x;
 
--- (4) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
+-- (4) Case A: A(x,y), B(x,y), C(x,y,z) with c.z unreferenced
+--     anywhere in the outer query.  PostgreSQL's parser never
+--     materialises a Var for c.z, so the detector only sees x and y
+--     -- both shared classes touch all three atoms.  Slice 3a-min
+--     accepts and the rewritten circuit must be read-once with the
+--     same probability as the baseline.
+CREATE TABLE pd_g(x int, y int, z int);
+INSERT INTO pd_g VALUES (1, 10, 100), (1, 10, 200), (1, 11, 100), (2, 20, 999);
+SELECT add_provenance('pd_g');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.7) FROM pd_g;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base4 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b, pd_g g
+   WHERE a.x = b.x AND a.x = g.x AND a.y = b.y AND a.y = g.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base4');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew4 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b, pd_g g
+   WHERE a.x = b.x AND a.x = g.x AND a.y = b.y AND a.y = g.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew4');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base4 b JOIN pd_rew4 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (5) Case B: A(x,y), B(x,y), C(x,y,z) WHERE c.z > 100.
+--     c.z is a single-atom existential variable that only appears in
+--     a top-level pushable conjunct.  Slice 3b extracts the conjunct
+--     into C's inner wrap (so the wrap becomes
+--     SELECT DISTINCT x, y, provsql FROM pd_g WHERE z > 100), and
+--     the residual outer query no longer references c.z.  The
+--     detector then sees only x and y, both shared classes touching
+--     all three atoms, and accepts.  The rewritten probability must
+--     match the baseline.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base5 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b, pd_g g
+   WHERE a.x = b.x AND a.x = g.x AND a.y = b.y AND a.y = g.y
+     AND g.z > 100
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base5');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew5 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b, pd_g g
+   WHERE a.x = b.x AND a.x = g.x AND a.y = b.y AND a.y = g.y
+     AND g.z > 100
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew5');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base5 b JOIN pd_rew5 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
 --     into the detector); instead we exercise the query and confirm
@@ -130,4 +194,4 @@ BEGIN
 END $$;
 
 SET provsql.boolean_provenance = off;
-DROP TABLE pd_a, pd_b, pd_c, pd_d, pd_e, pd_f;
+DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_d, pd_e, pd_f;

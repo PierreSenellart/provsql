@@ -32,6 +32,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
+#include "optimizer/optimizer.h"
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_oper.h"
@@ -2387,10 +2388,19 @@ typedef struct safe_proj_slot {
  * out of this atom's inner @c SELECT @c DISTINCT.  The root-class slot
  * is always first.  Additional shared classes touching this atom
  * (column pushdown) follow in ascending class-repr order.
+ *
+ * @c pushed_quals is the list of WHERE conjuncts that reference only
+ * this atom (single-atom Vars only) and were extracted from the outer
+ * query before the hierarchy analysis ran.  They are AND-injected into
+ * the inner subquery's WHERE after a @c varno remap from
+ * @c rtindex to @c 1, so the atom-local predicates evaluate before the
+ * @c DISTINCT and the offending single-atom Vars never reach the outer
+ * scope.
  */
 typedef struct safe_rewrite_atom {
   Index       rtindex;
   List       *proj_slots;
+  List       *pushed_quals;
 } safe_rewrite_atom;
 
 /** @brief Walker context for @c safe_collect_vars_walker. */
@@ -2517,6 +2527,159 @@ static void safe_collect_equalities(Node *quals, List **out) {
   }
 }
 
+/** @brief Walker context for @c safe_collect_varnos_walker. */
+typedef struct safe_collect_varnos_ctx {
+  Bitmapset *varnos;  ///< Set of @c varno values seen in base-level Vars
+} safe_collect_varnos_ctx;
+
+/**
+ * @brief Collect the distinct base-level @c varno values referenced by an
+ *        expression sub-tree.
+ *
+ * Used by @c safe_split_quals to decide whether a WHERE conjunct is
+ * "atom-local" (single varno ⇒ pushable) or "cross-atom" (≥ 2 varnos
+ * ⇒ stays in the residual).  Outer Vars (@c varlevelsup > 0) are
+ * ignored; the safe-query candidate gate has already rejected
+ * sublinks, so they cannot legitimately appear here.
+ */
+static bool safe_collect_varnos_walker(Node *node,
+                                       safe_collect_varnos_ctx *ctx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0 && (int) v->varno >= 1)
+      ctx->varnos = bms_add_member(ctx->varnos, (int) v->varno);
+    return false;
+  }
+  return expression_tree_walker(node, safe_collect_varnos_walker, ctx);
+}
+
+/**
+ * @brief Flatten the top-level @c AND tree of a WHERE clause into a flat
+ *        list of conjunct @c Node *.
+ *
+ * Mirrors @c safe_collect_equalities' AND-tree recursion: a top-level
+ * @c List is treated as an implicit AND (as @c FromExpr->quals can be),
+ * a @c BoolExpr with @c AND_EXPR has its @c args recursed into, and any
+ * other node is treated as a single leaf conjunct (including OR /
+ * NOT / NULL-tests / equalities / arbitrary @c OpExpr).  The resulting
+ * list shares pointers with the original tree; callers must
+ * @c copyObject before mutating.
+ */
+static void safe_flatten_and(Node *n, List **out) {
+  if (n == NULL)
+    return;
+  if (IsA(n, List)) {
+    ListCell *lc;
+    foreach (lc, (List *) n)
+      safe_flatten_and((Node *) lfirst(lc), out);
+    return;
+  }
+  if (IsA(n, BoolExpr) && ((BoolExpr *) n)->boolop == AND_EXPR) {
+    ListCell *lc;
+    foreach (lc, ((BoolExpr *) n)->args)
+      safe_flatten_and((Node *) lfirst(lc), out);
+    return;
+  }
+  *out = lappend(*out, n);
+}
+
+/**
+ * @brief Partition top-level WHERE conjuncts into atom-local quals
+ *        (pushed into the matching atom's inner wrap) and the residual
+ *        cross-atom quals (which stay in the outer query).
+ *
+ * @p per_atom_out is an array of length @p natoms (caller-allocated,
+ * zero-initialised) of @c List *.  @p out_residual receives the
+ * residual conjunction, rebuilt as a single @c Node *: @c NULL when no
+ * residual conjuncts remain, the bare conjunct when exactly one, or a
+ * fresh @c BoolExpr(@c AND_EXPR) otherwise.
+ *
+ * A conjunct is pushed when its base-level Vars all reference the same
+ * @c varno and the conjunct contains no volatile function calls.
+ * Volatile predicates are kept in the outer scope because the inner
+ * @c SELECT @c DISTINCT can collapse the evaluation count -- we
+ * deliberately avoid changing the number of times such functions run.
+ *
+ * The pushed conjuncts are still shared with the original
+ * @c q->jointree->quals tree; @c safe_build_inner_wrap @c copyObject's
+ * them before performing the @c varno remap.
+ */
+static void safe_split_quals(Node *quals, int natoms,
+                             List **per_atom_out, Node **out_residual) {
+  List     *conjuncts = NIL;
+  List     *residual  = NIL;
+  ListCell *lc;
+  int       i;
+
+  for (i = 0; i < natoms; i++)
+    per_atom_out[i] = NIL;
+
+  safe_flatten_and(quals, &conjuncts);
+
+  foreach (lc, conjuncts) {
+    Node *qual = (Node *) lfirst(lc);
+    safe_collect_varnos_ctx vctx = { NULL };
+    int nmembers;
+
+    if (contain_volatile_functions(qual)) {
+      residual = lappend(residual, qual);
+      continue;
+    }
+
+    safe_collect_varnos_walker(qual, &vctx);
+    nmembers = bms_num_members(vctx.varnos);
+    if (nmembers == 1) {
+      int v = bms_singleton_member(vctx.varnos);
+      if (v >= 1 && v <= natoms) {
+        per_atom_out[v - 1] = lappend(per_atom_out[v - 1], qual);
+        bms_free(vctx.varnos);
+        continue;
+      }
+    }
+    bms_free(vctx.varnos);
+    residual = lappend(residual, qual);
+  }
+
+  if (residual == NIL)
+    *out_residual = NULL;
+  else if (list_length(residual) == 1)
+    *out_residual = (Node *) linitial(residual);
+  else
+    *out_residual = (Node *) makeBoolExpr(AND_EXPR, residual, -1);
+}
+
+/** @brief Mutator context for @c safe_pushed_remap_mutator. */
+typedef struct safe_pushed_remap_ctx {
+  Index outer_rtindex;  ///< varno in the outer scope to rewrite to 1
+} safe_pushed_remap_ctx;
+
+/**
+ * @brief Rewrite @c Var.varno from the outer atom rtindex to @c 1, the
+ *        sole RTE of the inner wrap subquery.
+ *
+ * Applied to each pushed conjunct before it is AND-injected into the
+ * inner @c Query's @c jointree->quals.  @c varattno is preserved
+ * (the inner subquery's RTE is a fresh clone of the same base
+ * relation).
+ */
+static Node *safe_pushed_remap_mutator(Node *node,
+                                       safe_pushed_remap_ctx *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0 && v->varno == ctx->outer_rtindex) {
+      Var *nv = (Var *) copyObject(v);
+      nv->varno = 1;
+      return (Node *) nv;
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, safe_pushed_remap_mutator, (void *) ctx);
+}
+
 /**
  * @brief Run the hierarchy detector on @p q, returning per-atom rewrite info.
  *
@@ -2542,17 +2705,22 @@ static void safe_collect_equalities(Node *quals, List **out) {
  *    breaking the read-once property; the correct factoring needs a
  *    nested sub-query per non-root shared-class signature, deferred
  *    to a multi-level slice;
- *  - any Var in @c q->targetList or @c q->jointree->quals that
- *    belongs to a single-atom class (head-only projection and local
- *    WHERE-pushdown of single-atom Vars are out of scope for
- *    slice 3a -- TODO).
+ *  - any Var in @c q->targetList or the residual @p quals that
+ *    belongs to a single-atom class (head-only projection is still
+ *    out of scope; atom-local WHERE conjuncts are handled upstream
+ *    by @c safe_split_quals and never reach this function).
  *
  * The shape gate in @c is_safe_query_candidate has already enforced
  * self-join-free, no aggs / windows / sublinks etc.; this function
  * only adds the hierarchy-specific checks.
+ *
+ * @param quals  Residual WHERE quals (post-split): the cross-atom
+ *               conjunction that the union-find must reason about.
+ *               Single-atom conjuncts have been extracted upstream
+ *               and stored separately per atom.
  */
 static List *find_hierarchical_root_atoms(const constants_t *constants,
-                                          Query *q) {
+                                          Query *q, Node *quals) {
   safe_collect_vars_ctx vctx = { NIL };
   List   *eq_pairs = NIL;
   ListCell *lc;
@@ -2572,13 +2740,13 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     return NIL;
 
   /* Collect every distinct base-level Var occurring anywhere in the
-   * query (target list and WHERE quals).  Each becomes a node in the
-   * union-find. */
+   * residual query (target list and the residual WHERE quals,
+   * i.e. cross-atom conjuncts that survive @c safe_split_quals).
+   * Each becomes a node in the union-find. */
   expression_tree_walker((Node *) q->targetList,
                          safe_collect_vars_walker, &vctx);
-  if (q->jointree && q->jointree->quals)
-    expression_tree_walker(q->jointree->quals,
-                           safe_collect_vars_walker, &vctx);
+  if (quals)
+    expression_tree_walker(quals, safe_collect_vars_walker, &vctx);
 
   nvars = list_length(vctx.vars);
   if (nvars == 0)
@@ -2593,12 +2761,13 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     i++;
   }
 
-  /* Union equality-related Vars.  WHERE quals are an implicit
-   * conjunction; q->jointree->quals is the top conjunct.  We only
-   * dig into AND_EXPR, never OR_EXPR / NOT_EXPR, because those would
-   * weaken (not strengthen) the equivalence relation. */
-  if (q->jointree && q->jointree->quals)
-    safe_collect_equalities(q->jointree->quals, &eq_pairs);
+  /* Union equality-related Vars.  We walk only the residual quals
+   * (atom-local conjuncts were already split off); a top-level @c AND
+   * is decomposed conjunct-by-conjunct, but @c OR / @c NOT subtrees
+   * are never traversed because they would weaken, not strengthen,
+   * the equivalence relation. */
+  if (quals)
+    safe_collect_equalities(quals, &eq_pairs);
 
   for (lc = list_head(eq_pairs); lc != NULL; lc = lnext(eq_pairs, lc)) {
     Var *lv, *rv;
@@ -2719,6 +2888,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     safe_rewrite_atom *sa = palloc(sizeof(safe_rewrite_atom));
     sa->rtindex = (Index) (j + 1);
     sa->proj_slots = NIL;
+    sa->pushed_quals = NIL;
     if (ANCHOR(root_class, j) != 0) {
       safe_proj_slot *slot = palloc(sizeof(safe_proj_slot));
       slot->base_attno = (AttrNumber) ANCHOR(root_class, j);
@@ -2828,7 +2998,9 @@ static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
  */
 static Query *safe_build_inner_wrap(Query *outer_src,
                                     RangeTblEntry *base_rte,
-                                    List *proj_slots) {
+                                    List *proj_slots,
+                                    Index outer_rtindex,
+                                    List *pushed_quals) {
   Query           *inner = makeNode(Query);
   RangeTblRef     *rtr   = makeNode(RangeTblRef);
   FromExpr        *jt    = makeNode(FromExpr);
@@ -2911,6 +3083,27 @@ static Query *safe_build_inner_wrap(Query *outer_src,
     inner->distinctClause = lappend(inner->distinctClause, sgc);
   }
 
+  /* Inject the pushed-down atom-local quals.  Each is @c copyObject'd
+   * (so the outer query's residual tree is untouched), then its base-
+   * level @c Var.varno is rewritten from the outer atom's rtindex to
+   * @c 1 -- the only RTE in the inner subquery.  Single conjunct goes
+   * in directly; multiple conjuncts are AND-bundled. */
+  if (pushed_quals != NIL) {
+    safe_pushed_remap_ctx rctx;
+    List     *remapped = NIL;
+    ListCell *qlc;
+    rctx.outer_rtindex = outer_rtindex;
+    foreach (qlc, pushed_quals) {
+      Node *q = (Node *) copyObject(lfirst(qlc));
+      q = safe_pushed_remap_mutator(q, &rctx);
+      remapped = lappend(remapped, q);
+    }
+    if (list_length(remapped) == 1)
+      inner->jointree->quals = (Node *) linitial(remapped);
+    else
+      inner->jointree->quals = (Node *) makeBoolExpr(AND_EXPR, remapped, -1);
+  }
+
   return inner;
 }
 
@@ -2928,7 +3121,7 @@ static Query *safe_build_inner_wrap(Query *outer_src,
  * factoring -- each input leaf appears exactly once.
  */
 static Query *rewrite_hierarchical_cq(const constants_t *constants,
-                                      Query *q, List *atoms) {
+                                      Query *q, List *atoms, Node *residual) {
   Query        *outer = copyObject(q);
   safe_remap_ctx mctx;
   ListCell     *lc;
@@ -2936,11 +3129,20 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
 
   (void) constants;
 
+  /* Replace the outer WHERE with the residual (atom-local conjuncts
+   * were extracted upstream and are carried inside their atom's inner
+   * wrap).  A fresh @c copyObject keeps the outer tree independent
+   * from the inner wraps' versions. */
+  if (outer->jointree)
+    outer->jointree->quals =
+        residual ? (Node *) copyObject(residual) : NULL;
+
   /* Replace each base RTE_RELATION with a wrapping RTE_SUBQUERY. */
   foreach (lc, outer->rtable) {
     RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
     safe_rewrite_atom *sa = (safe_rewrite_atom *) list_nth(atoms, i);
-    Query *inner = safe_build_inner_wrap(outer, rte, sa->proj_slots);
+    Query *inner = safe_build_inner_wrap(outer, rte, sa->proj_slots,
+                                         sa->rtindex, sa->pushed_quals);
     RangeTblEntry *new_rte = makeNode(RangeTblEntry);
     Alias *eref = makeNode(Alias);
     ListCell *slot_lc;
@@ -2983,18 +3185,38 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
         safe_remap_vars_mutator(outer->jointree->quals, &mctx);
 
   if (provsql_verbose >= 30) {
-    int total_slots = 0;
-    int has_pushdown = 0;
+    StringInfoData buf;
+    int total_slots   = 0;
+    int total_pushed  = 0;
+    int has_col_push  = 0;
     foreach (lc, atoms) {
       safe_rewrite_atom *sa = (safe_rewrite_atom *) lfirst(lc);
-      total_slots += list_length(sa->proj_slots);
+      total_slots  += list_length(sa->proj_slots);
+      total_pushed += list_length(sa->pushed_quals);
       if (list_length(sa->proj_slots) > 1)
-        has_pushdown = 1;
+        has_col_push = 1;
     }
-    provsql_notice("safe-query rewrite fired: wrapped %d atoms with "
-                   "SELECT DISTINCT on %d total slot(s)%s",
-                   list_length(atoms), total_slots,
-                   has_pushdown ? " (column pushdown)" : "");
+    initStringInfo(&buf);
+    appendStringInfo(&buf,
+                     "safe-query rewrite fired: wrapped %d atoms with "
+                     "SELECT DISTINCT on %d total slot(s)",
+                     list_length(atoms), total_slots);
+    if (has_col_push || total_pushed > 0) {
+      const char *sep = " (";
+      if (has_col_push) {
+        appendStringInfoString(&buf, sep);
+        appendStringInfoString(&buf, "column pushdown");
+        sep = "; ";
+      }
+      if (total_pushed > 0) {
+        appendStringInfoString(&buf, sep);
+        appendStringInfo(&buf, "%d atom-local qual%s pushed",
+                         total_pushed, total_pushed == 1 ? "" : "s");
+      }
+      appendStringInfoChar(&buf, ')');
+    }
+    provsql_notice("%s", buf.data);
+    pfree(buf.data);
   }
 
   return outer;
@@ -3011,7 +3233,12 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
  * existing pipeline.
  */
 static Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
-  List *atoms;
+  List   *atoms;
+  Node   *residual = NULL;
+  List  **per_atom = NULL;
+  int     natoms;
+  int     i;
+  ListCell *lc;
 
 #if PG_VERSION_NUM >= 180000
   /* Same trick as rewrite_agg_distinct: PG 18's RTE_GROUP virtual
@@ -3027,15 +3254,36 @@ static Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   if (!is_safe_query_candidate(constants, q))
     return NULL;
 
-  atoms = find_hierarchical_root_atoms(constants, q);
+  /* Slice-3b pre-pass: pull out atom-local WHERE conjuncts so the
+   * detector only sees Vars that participate in cross-atom structure.
+   * Single-atom existential Vars hidden inside pushable predicates
+   * (e.g. @c c.z @c > @c 5 in @c A(x,y),B(x,y),C(x,y,z)) thus
+   * disappear from the union-find input and stop tripping the
+   * "every Var in a class touching every atom" check. */
+  natoms = list_length(q->rtable);
+  per_atom = palloc0(natoms * sizeof(List *));
+  safe_split_quals(q->jointree ? q->jointree->quals : NULL,
+                   natoms, per_atom, &residual);
+
+  atoms = find_hierarchical_root_atoms(constants, q, residual);
   if (atoms == NIL) {
     if (provsql_verbose >= 30)
       provsql_notice("safe-query candidate accepted by shape gate but no "
                      "root variable found -- falling through");
+    pfree(per_atom);
     return NULL;
   }
 
-  return rewrite_hierarchical_cq(constants, q, atoms);
+  /* Attach per-atom pushed conjuncts to the rewrite descriptors. */
+  i = 0;
+  foreach (lc, atoms) {
+    safe_rewrite_atom *sa = (safe_rewrite_atom *) lfirst(lc);
+    sa->pushed_quals = per_atom[i];
+    i++;
+  }
+  pfree(per_atom);
+
+  return rewrite_hierarchical_cq(constants, q, atoms, residual);
 }
 
 /* -------------------------------------------------------------------------
