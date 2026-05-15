@@ -1823,6 +1823,58 @@ resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
   }
   return expression_tree_mutator(node, resolve_group_rte_vars_mutator, raw_ctx);
 }
+
+/**
+ * @brief Strip PG 18's virtual @c RTE_GROUP entry from @p q in place.
+ *
+ * @c parseCheckAggregates() appends an @c RTE_GROUP entry at the end of
+ * @c q->rtable whenever the query has a @c GROUP @c BY clause; references
+ * to grouped columns in @c targetList and @c jointree->quals point at that
+ * synthetic RTE rather than the underlying base tables.  ProvSQL's
+ * rewriters need a flat range-table to do their own index arithmetic, so
+ * we remove the @c RTE_GROUP and resolve every @c Var(@c group_rtindex,
+ * @c i) back to its base-table expression before going further.
+ *
+ * Idempotent: when @c q->hasGroupRTE is already false, returns without
+ * doing anything.
+ */
+static void strip_group_rte_pg18(Query *q) {
+  resolve_group_rte_ctx grp_ctx;
+  bool found = false;
+  ListCell *lc;
+  Index idx = 1;
+  int rte_len = 0;
+
+  if (!q->hasGroupRTE)
+    return;
+
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+    if (r->rtekind == RTE_GROUP) {
+      grp_ctx.group_rtindex = idx;
+      grp_ctx.groupexprs    = r->groupexprs;
+      found    = true;
+      rte_len  = idx - 1;
+      break;
+    }
+    idx++;
+  }
+
+  if (!found)
+    return;
+
+  q->rtable      = list_truncate(q->rtable, rte_len);
+  q->hasGroupRTE = false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    te->expr = (Expr *) resolve_group_rte_vars_mutator(
+      (Node *) te->expr, &grp_ctx);
+  }
+  if (q->jointree && q->jointree->quals)
+    q->jointree->quals = resolve_group_rte_vars_mutator(
+      q->jointree->quals, &grp_ctx);
+}
 #endif
 
 /* Forward declaration — defined later but needed by rewrite_agg_distinct */
@@ -2040,42 +2092,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
    *    the WHERE equalities and the inner-query target list are correct.
    * We also resolve the Var(group_rtindex) refs in q's own targetList and
    * WHERE clause so the final query doesn't reference the stripped entry. */
-  if (q->hasGroupRTE) {
-    resolve_group_rte_ctx grp_ctx;
-    bool found = false;
-    ListCell *lc2;
-    Index idx = 1;
-    int rte_len = 0;
-
-    foreach (lc2, q->rtable) {
-      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc2);
-      if (r->rtekind == RTE_GROUP) {
-        grp_ctx.group_rtindex = idx;
-        grp_ctx.groupexprs    = r->groupexprs;
-        found    = true;
-        rte_len  = idx - 1;
-        break;
-      }
-      idx++;
-    }
-
-    if (found) {
-      /* Remove the RTE_GROUP (always last, so truncate is safe) */
-      q->rtable      = list_truncate(q->rtable, rte_len);
-      q->hasGroupRTE = false;
-
-      /* Resolve Var(group_rtindex, i) → underlying base-table expression
-       * throughout the parts of q we will touch below */
-      foreach (lc2, q->targetList) {
-        TargetEntry *te = (TargetEntry *)lfirst(lc2);
-        te->expr = (Expr *)resolve_group_rte_vars_mutator(
-          (Node *)te->expr, &grp_ctx);
-      }
-      if (q->jointree && q->jointree->quals)
-        q->jointree->quals = resolve_group_rte_vars_mutator(
-          q->jointree->quals, &grp_ctx);
-    }
-  }
+  strip_group_rte_pg18(q);
 #endif
 
   /* Extract AGG(DISTINCT) and GROUP BY targets from the target list.
@@ -2265,10 +2282,11 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
  * Query is fed back into process_query() from the top, exactly the
  * same recursion pattern as rewrite_agg_distinct().
  *
- * For now (initial slice) this function only does the shape and
- * metadata gates; if every check passes it logs at verbose level 30
- * and bails (returns NULL).  Subsequent slices add the hierarchy
- * detector and the actual rewrite.
+ * The first pass (is_safe_query_candidate) is a cheap shape /
+ * metadata gate; if it accepts, the second pass
+ * (find_hierarchical_root_atoms) builds the variable-equivalence
+ * relation and decides whether the query has a root variable.  When
+ * both accept, rewrite_hierarchical_cq emits the wrapped Query.
  * ------------------------------------------------------------------------- */
 
 /**
@@ -2277,11 +2295,10 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
  * Accepts only:
  *  - self-join-free conjunctive queries
  *  - no aggregation, window functions, DISTINCT ON, LIMIT/OFFSET,
- *    set operations (UCQ deferred to a later slice), sublinks
+ *    set operations (UCQ -- TODO), sublinks
  *  - all base relations have a provenance metadata entry, none are
  *    OPAQUE.  BID atom block-key validation is deferred to the
- *    rewriter slice (we cannot check it without knowing the
- *    separator).
+ *    rewriter (we cannot check it without knowing the root variable).
  *
  * @return @c true iff @p q is a candidate for the safe-query rewrite.
  */
@@ -2290,7 +2307,7 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
   List *seen_relids = NIL;
 
   if (q->setOperations != NULL)
-    return false;                       /* UCQ handled by a later slice */
+    return false;                       /* TODO: top-level UCQ */
   if (q->hasAggs || q->hasWindowFuncs)
     return false;
   if (q->limitCount != NULL || q->limitOffset != NULL)
@@ -2343,23 +2360,570 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief Per-atom rewrite metadata discovered by the hierarchy detector.
+ *
+ * @c rtindex is the 1-based index into @c q->rtable that matches @c Var.varno.
+ * @c root_attno is the column of the atom that binds the root variable
+ * (the variable that appears in every atom of the query).  In the rewritten
+ * outer query, every reference to this column will read column 1 of the
+ * wrapping subquery.
+ */
+typedef struct safe_rewrite_atom {
+  Index       rtindex;
+  AttrNumber  root_attno;
+} safe_rewrite_atom;
+
+/** @brief Walker context for @c safe_collect_vars_walker. */
+typedef struct safe_collect_vars_ctx {
+  List *vars;  ///< Deduplicated list of distinct base-level Var nodes
+} safe_collect_vars_ctx;
+
+/**
+ * @brief Tree walker that collects every distinct base-level Var node.
+ *
+ * "Base level" means @c varlevelsup == 0; outer references are ignored.
+ * Vars are deduplicated by @c (varno, varattno).
+ */
+static bool safe_collect_vars_walker(Node *node, safe_collect_vars_ctx *ctx) {
+  ListCell *lc;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup != 0)
+      return false;
+    foreach (lc, ctx->vars) {
+      Var *existing = (Var *) lfirst(lc);
+      if (existing->varno == v->varno && existing->varattno == v->varattno)
+        return false;
+    }
+    ctx->vars = lappend(ctx->vars, v);
+    return false;
+  }
+  return expression_tree_walker(node, safe_collect_vars_walker, ctx);
+}
+
+/**
+ * @brief Find the position of a Var inside the @c vars list (matched on
+ *        @c (varno, varattno)).  Returns -1 if not present.
+ */
+static int safe_var_index(List *vars, Index varno, AttrNumber varattno) {
+  ListCell *lc;
+  int i = 0;
+  foreach (lc, vars) {
+    Var *v = (Var *) lfirst(lc);
+    if (v->varno == varno && v->varattno == varattno)
+      return i;
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * @brief Recognise a top-level WHERE conjunct that equates two base Vars.
+ *
+ * Matches @c OpExpr nodes whose operator is the canonical equality for
+ * the two operand types and whose operands strip down to base-level
+ * @c Var nodes (possibly through @c RelabelType wrappers, which carry
+ * binary-coercion casts).  Returns @c true and fills @p *l, @p *r when
+ * matched.
+ */
+static bool safe_is_var_equality(Expr *qual, Var **l, Var **r) {
+  OpExpr *op;
+  Node   *ln, *rn;
+  Var    *lv, *rv;
+  Oid     expected;
+
+  if (!IsA(qual, OpExpr))
+    return false;
+  op = (OpExpr *) qual;
+  if (list_length(op->args) != 2)
+    return false;
+  ln = (Node *) linitial(op->args);
+  rn = (Node *) lsecond(op->args);
+  while (IsA(ln, RelabelType))
+    ln = (Node *) ((RelabelType *) ln)->arg;
+  while (IsA(rn, RelabelType))
+    rn = (Node *) ((RelabelType *) rn)->arg;
+  if (!IsA(ln, Var) || !IsA(rn, Var))
+    return false;
+  lv = (Var *) ln;
+  rv = (Var *) rn;
+  if (lv->varlevelsup != 0 || rv->varlevelsup != 0)
+    return false;
+  expected = find_equality_operator(lv->vartype, rv->vartype);
+  if (expected == InvalidOid || op->opno != expected)
+    return false;
+  *l = lv;
+  *r = rv;
+  return true;
+}
+
+/**
+ * @brief Walk @p quals as a tree of @c AND, collecting equality conjuncts.
+ *
+ * Returns the matched @c (Var *, Var *) pairs as a flat list, with each
+ * pair contributed as two consecutive list entries (left, right).
+ * Non-equality conjuncts are silently ignored (they do not contribute
+ * to the variable equivalence relation but do not prevent the rewrite
+ * either; the detector will fall back to bail if no root variable is
+ * found).  OR / NOT are not traversed -- they are not equijoins, and
+ * accepting them here would be unsound.
+ */
+static void safe_collect_equalities(Node *quals, List **out) {
+  if (quals == NULL)
+    return;
+  if (IsA(quals, List)) {
+    ListCell *lc;
+    foreach (lc, (List *) quals)
+      safe_collect_equalities((Node *) lfirst(lc), out);
+    return;
+  }
+  if (IsA(quals, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *) quals;
+    if (be->boolop == AND_EXPR) {
+      ListCell *lc;
+      foreach (lc, be->args)
+        safe_collect_equalities((Node *) lfirst(lc), out);
+    }
+    return;
+  }
+  {
+    Var *l, *r;
+    if (safe_is_var_equality((Expr *) quals, &l, &r)) {
+      *out = lappend(*out, l);
+      *out = lappend(*out, r);
+    }
+  }
+}
+
+/**
+ * @brief Run the hierarchy detector on @p q, returning per-atom rewrite info.
+ *
+ * Builds the variable equivalence relation induced by WHERE-clause
+ * @c Var = @c Var equalities, then searches for a "root variable":
+ * an equivalence class whose member Vars touch every base RTE.  When
+ * one exists, returns a List of @c safe_rewrite_atom * (one per
+ * @c q->rtable entry, in order).  Returns @c NIL when the query is
+ * not in the currently-supported shape:
+ *
+ *  - fewer than two atoms (single-relation query needs no rewrite);
+ *  - no root variable;
+ *  - an atom whose root binding spans more than one column (the
+ *    rewrite would have to push an inter-column equality into the
+ *    inner subquery -- TODO);
+ *  - a Var anywhere in @c q->targetList or @c q->jointree->quals
+ *    that does not belong to the root class (the current rewrite
+ *    only supports queries that project and filter on the root
+ *    variable alone -- TODO: column pushdown).
+ *
+ * The shape gate in @c is_safe_query_candidate has already enforced
+ * self-join-free, no aggs / windows / sublinks etc.; this function
+ * only adds the hierarchy-specific checks.
+ */
+static List *find_hierarchical_root_atoms(const constants_t *constants,
+                                          Query *q) {
+  safe_collect_vars_ctx vctx = { NIL };
+  List   *eq_pairs = NIL;
+  ListCell *lc;
+  Var   **vars_arr;
+  int    *cls;
+  int     nvars;
+  int     natoms = list_length(q->rtable);
+  int    *class_atom_count;
+  int    *class_atom_anchor_attno;  /* per atom, per class: any one attno */
+  int     root_class = -1;
+  List   *atoms_out = NIL;
+  int     i;
+  Index   varno;
+  bool    ok;
+  Bitmapset *root_class_var_indices;
+  ListCell *lc2;
+
+  if (natoms < 2)
+    return NIL;
+
+  /* Collect every distinct base-level Var occurring anywhere in the
+   * query (target list and WHERE quals).  Each becomes a node in the
+   * union-find. */
+  expression_tree_walker((Node *) q->targetList,
+                         safe_collect_vars_walker, &vctx);
+  if (q->jointree && q->jointree->quals)
+    expression_tree_walker(q->jointree->quals,
+                           safe_collect_vars_walker, &vctx);
+
+  nvars = list_length(vctx.vars);
+  if (nvars == 0)
+    return NIL;
+
+  vars_arr = palloc(nvars * sizeof(Var *));
+  cls = palloc(nvars * sizeof(int));
+  i = 0;
+  foreach (lc, vctx.vars) {
+    vars_arr[i] = (Var *) lfirst(lc);
+    cls[i] = i;
+    i++;
+  }
+
+  /* Union equality-related Vars.  WHERE quals are an implicit
+   * conjunction; q->jointree->quals is the top conjunct.  We only
+   * dig into AND_EXPR, never OR_EXPR / NOT_EXPR, because those would
+   * weaken (not strengthen) the equivalence relation. */
+  if (q->jointree && q->jointree->quals)
+    safe_collect_equalities(q->jointree->quals, &eq_pairs);
+
+  for (lc = list_head(eq_pairs); lc != NULL; lc = lnext(eq_pairs, lc)) {
+    Var *lv, *rv;
+    int  li, ri, ci, cj, k;
+    lv = (Var *) lfirst(lc);
+    lc = lnext(eq_pairs, lc);
+    rv = (Var *) lfirst(lc);
+    li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
+    ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+    if (li < 0 || ri < 0)
+      continue;
+    ci = cls[li];
+    cj = cls[ri];
+    if (ci == cj)
+      continue;
+    for (k = 0; k < nvars; k++)
+      if (cls[k] == cj)
+        cls[k] = ci;
+  }
+
+  /* For each class, count how many distinct atoms (varno values) it
+   * touches.  A class touching all `natoms` is a root variable. */
+  class_atom_count = palloc0(nvars * sizeof(int));
+  class_atom_anchor_attno =
+      palloc0((size_t) nvars * (size_t) natoms * sizeof(int));
+
+#define ANCHOR(c, atom_idx) class_atom_anchor_attno[(c) * natoms + (atom_idx)]
+
+  for (i = 0; i < nvars; i++) {
+    int c = cls[i];
+    int atom_idx;
+    varno = vars_arr[i]->varno;
+    if (varno < 1 || (int) varno > natoms)
+      continue;                       /* shouldn't happen */
+    atom_idx = (int) varno - 1;
+    if (ANCHOR(c, atom_idx) == 0) {
+      class_atom_count[c]++;
+      ANCHOR(c, atom_idx) = vars_arr[i]->varattno;
+    } else if (ANCHOR(c, atom_idx) != vars_arr[i]->varattno) {
+      /* Same class binds two columns of the same atom: the current
+       * rewriter does not push the implied intra-atom equality into
+       * the inner subquery, so mark this class unusable.  Count >
+       * natoms is impossible otherwise, so we use this as a
+       * sentinel below. */
+      class_atom_count[c] = natoms + 1;
+    }
+  }
+
+  for (i = 0; i < nvars; i++) {
+    if (cls[i] != i)
+      continue;                       /* not a class representative */
+    if (class_atom_count[i] == natoms) {
+      root_class = i;
+      break;
+    }
+  }
+
+  if (root_class < 0) {
+    pfree(class_atom_count);
+    pfree(class_atom_anchor_attno);
+    pfree(vars_arr);
+    pfree(cls);
+    return NIL;
+  }
+
+  /* Every Var anywhere in the query must belong to the root class.
+   * If any Var is outside, the rewrite would lose access to its
+   * column (the inner subquery projects only the root binding). */
+  root_class_var_indices = NULL;
+  for (i = 0; i < nvars; i++)
+    if (cls[i] == root_class)
+      root_class_var_indices = bms_add_member(root_class_var_indices, i);
+
+  ok = true;
+  for (i = 0; i < nvars && ok; i++)
+    if (!bms_is_member(i, root_class_var_indices))
+      ok = false;
+  bms_free(root_class_var_indices);
+
+  if (!ok) {
+    pfree(class_atom_count);
+    pfree(class_atom_anchor_attno);
+    pfree(vars_arr);
+    pfree(cls);
+    return NIL;
+  }
+
+  /* Build the per-atom output list in q->rtable order. */
+  i = 1;
+  foreach (lc2, q->rtable) {
+    safe_rewrite_atom *sa;
+    int atom_idx = i - 1;
+    int attno    = ANCHOR(root_class, atom_idx);
+    (void) lfirst(lc2);
+    if (attno == 0) {
+      /* The root class has no Var at this atom -- impossible if
+       * class_atom_count[root_class] == natoms, but guard anyway. */
+      pfree(class_atom_count);
+      pfree(class_atom_anchor_attno);
+      pfree(vars_arr);
+      pfree(cls);
+      return NIL;
+    }
+    sa = palloc(sizeof(safe_rewrite_atom));
+    sa->rtindex    = i;
+    sa->root_attno = (AttrNumber) attno;
+    atoms_out = lappend(atoms_out, sa);
+    i++;
+  }
+
+#undef ANCHOR
+
+  pfree(class_atom_count);
+  pfree(class_atom_anchor_attno);
+  pfree(vars_arr);
+  pfree(cls);
+  (void) constants;
+  return atoms_out;
+}
+
+/**
+ * @brief Mutator context for @c safe_remap_vars_mutator.
+ */
+typedef struct safe_remap_ctx {
+  List *atoms;  ///< List of safe_rewrite_atom *, one per RTE
+} safe_remap_ctx;
+
+/**
+ * @brief Rewrite Var nodes in the outer query after each base RTE has
+ *        been wrapped as a one-column-DISTINCT subquery.
+ *
+ * Every base-level Var that referenced an atom's root-binding column
+ * is remapped to attribute 1 of the wrapping subquery.  Any other Var
+ * indicates the detector accepted a query it shouldn't have; we
+ * @c provsql_error to surface the bug rather than silently emit a
+ * broken plan.
+ */
+static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0
+        && v->varno >= 1 && (int) v->varno <= list_length(ctx->atoms)) {
+      safe_rewrite_atom *sa =
+          (safe_rewrite_atom *) list_nth(ctx->atoms, (int) v->varno - 1);
+      if (v->varattno == sa->root_attno) {
+        Var *vv = (Var *) copyObject(v);
+        vv->varattno = 1;
+#if PG_VERSION_NUM >= 130000
+        vv->varattnosyn = 1;
+#endif
+        return (Node *) vv;
+      }
+      provsql_error("safe-query rewriter: unexpected non-root Var "
+                    "(varno=%u, varattno=%d) referencing atom %u",
+                    (unsigned) v->varno, (int) v->varattno,
+                    (unsigned) v->varno);
+    }
+    return (Node *) v;
+  }
+  return expression_tree_mutator(node, safe_remap_vars_mutator, (void *) ctx);
+}
+
+/**
+ * @brief Build the inner Query that projects @p root_attno of @p base_rte
+ *        with @c DISTINCT.
+ *
+ * The recursive @c process_query call on this Query will discover the
+ * @c provsql column on @p base_rte and append it to the output target
+ * list, so the wrapping outer query gets both the root column at
+ * attno 1 and the provsql column at attno 2.
+ */
+static Query *safe_build_inner_wrap(Query *outer_src,
+                                    RangeTblEntry *base_rte,
+                                    AttrNumber root_attno) {
+  Query           *inner = makeNode(Query);
+  RangeTblRef     *rtr   = makeNode(RangeTblRef);
+  FromExpr        *jt    = makeNode(FromExpr);
+  TargetEntry     *te    = makeNode(TargetEntry);
+  SortGroupClause *sgc   = makeNode(SortGroupClause);
+  RangeTblEntry   *inner_rte;
+  Var             *v;
+  HeapTuple        atttup;
+  Form_pg_attribute attform;
+  Oid              atttypid;
+  int32            atttypmod;
+  Oid              attcollation;
+
+  /* Look up the column's type info on the underlying relation. */
+  atttup = SearchSysCache2(ATTNUM,
+                           ObjectIdGetDatum(base_rte->relid),
+                           Int16GetDatum(root_attno));
+  if (!HeapTupleIsValid(atttup))
+    provsql_error("safe-query rewriter: cannot resolve attno %d of relation %u",
+                  (int) root_attno, (unsigned) base_rte->relid);
+  attform      = (Form_pg_attribute) GETSTRUCT(atttup);
+  atttypid     = attform->atttypid;
+  atttypmod    = attform->atttypmod;
+  attcollation = attform->attcollation;
+  ReleaseSysCache(atttup);
+
+  inner_rte = copyObject(base_rte);
+
+  inner->commandType   = CMD_SELECT;
+  inner->canSetTag     = false;
+  inner->rtable        = list_make1(inner_rte);
+#if PG_VERSION_NUM >= 160000
+  /* The cloned RTE's perminfoindex pointed into the OUTER query's
+   * rteperminfos list; reattach the matching RTEPermissionInfo to
+   * the inner query so the planner finds it under inner->rteperminfos
+   * (otherwise list_nth_node on an empty list segfaults during
+   * post-processing). */
+  if (base_rte->perminfoindex != 0
+      && outer_src && outer_src->rteperminfos != NIL
+      && (int) base_rte->perminfoindex <= list_length(outer_src->rteperminfos)) {
+    RTEPermissionInfo *rpi = list_nth_node(RTEPermissionInfo,
+                                           outer_src->rteperminfos,
+                                           base_rte->perminfoindex - 1);
+    inner->rteperminfos = list_make1(copyObject(rpi));
+    inner_rte->perminfoindex = 1;
+  } else {
+    inner->rteperminfos = NIL;
+    inner_rte->perminfoindex = 0;
+  }
+#endif
+  rtr->rtindex         = 1;
+  jt->fromlist         = list_make1(rtr);
+  jt->quals            = NULL;
+  inner->jointree      = jt;
+
+  v = makeVar(1, root_attno, atttypid, atttypmod, attcollation, 0);
+  te->expr            = (Expr *) v;
+  te->resno           = 1;
+  te->resname         = pstrdup("provsql_root");
+  te->ressortgroupref = 1;
+  te->resorigtbl      = base_rte->relid;
+  te->resorigcol      = root_attno;
+  te->resjunk         = false;
+  inner->targetList   = list_make1(te);
+
+  sgc->tleSortGroupRef = 1;
+  get_sort_group_operators(atttypid, true, true, false,
+                           &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+  sgc->nulls_first     = false;
+  inner->distinctClause = list_make1(sgc);
+  inner->hasDistinctOn  = false;
+
+  return inner;
+}
+
+/**
+ * @brief Apply the single-level hierarchical-CQ rewrite.
+ *
+ * Replaces every base @c RTE_RELATION in @c q->rtable with an
+ * @c RTE_SUBQUERY wrapping a @c SELECT @c DISTINCT on the atom's
+ * root-binding column.  The recursive @c process_query call on each
+ * inner subquery will discover the @c provsql column, propagate it
+ * through the @c DISTINCT (which becomes @c GROUP @c BY via
+ * @c transform_distinct_into_group_by), and emit a @c gate_plus over
+ * the matching @c gate_input children.  The outer query's
+ * @c gate_times across the wrapped atoms then closes a read-once
+ * factoring -- each input leaf appears exactly once.
+ */
+static Query *rewrite_hierarchical_cq(const constants_t *constants,
+                                      Query *q, List *atoms) {
+  Query        *outer = copyObject(q);
+  safe_remap_ctx mctx;
+  ListCell     *lc;
+  int           i = 0;
+
+  (void) constants;
+
+  /* Replace each base RTE_RELATION with a wrapping RTE_SUBQUERY. */
+  foreach (lc, outer->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+    safe_rewrite_atom *sa = (safe_rewrite_atom *) list_nth(atoms, i);
+    Query *inner = safe_build_inner_wrap(outer, rte, sa->root_attno);
+    RangeTblEntry *new_rte = makeNode(RangeTblEntry);
+    Alias *eref = makeNode(Alias);
+
+    eref->aliasname = rte->eref && rte->eref->aliasname
+                      ? pstrdup(rte->eref->aliasname)
+                      : pstrdup("provsql_wrap");
+    eref->colnames  = list_make1(makeString(pstrdup("provsql_root")));
+
+    new_rte->rtekind  = RTE_SUBQUERY;
+    new_rte->subquery = inner;
+    new_rte->alias    = NULL;
+    new_rte->eref     = eref;
+    new_rte->inFromCl = rte->inFromCl;
+    new_rte->lateral  = false;
+#if PG_VERSION_NUM < 160000
+    new_rte->requiredPerms = 0;
+#endif
+
+    lfirst(lc) = new_rte;
+    i++;
+  }
+
+  /* Remap outer Vars: every reference to a root-binding column now
+   * reads column 1 of the wrapping subquery. */
+  mctx.atoms = atoms;
+  outer->targetList = (List *)
+      safe_remap_vars_mutator((Node *) outer->targetList, &mctx);
+  if (outer->jointree && outer->jointree->quals)
+    outer->jointree->quals =
+        safe_remap_vars_mutator(outer->jointree->quals, &mctx);
+
+  if (provsql_verbose >= 30)
+    provsql_notice("safe-query rewrite fired: wrapped %d atoms with "
+                   "SELECT DISTINCT on the root variable",
+                   list_length(atoms));
+
+  return outer;
+}
+
+/**
  * @brief Top-level entry point for the safe-query rewrite.
  *
- * Returns a rewritten Query that should be re-fed into
- * @c process_query, or @c NULL to fall through to the existing
- * pipeline.  Currently (slice 1) only performs the candidate gate
- * and bails; the hierarchy detector and the actual rewrite are
- * delivered in subsequent slices.
+ * Runs the shape gate then the hierarchy detector.  If both accept,
+ * applies the single-level rewrite and returns the rewritten Query;
+ * the caller (@c process_query) feeds it back from the top so that
+ * inner subqueries are themselves re-considered (multi-level
+ * recursion via Choice A).  Returns @c NULL to fall through to the
+ * existing pipeline.
  */
 static Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
+  List *atoms;
+
+#if PG_VERSION_NUM >= 180000
+  /* Same trick as rewrite_agg_distinct: PG 18's RTE_GROUP virtual
+   * entry derails the shape gate ("all rtable entries are
+   * RTE_RELATION") and the union-find ("varno must index q->rtable")
+   * before they can see the underlying base relations.  Strip it
+   * here so the rest of try_safe_query_rewrite (and, on a bail, the
+   * existing pipeline) see a flat range table with the grouped Vars
+   * resolved back to their base-table expressions. */
+  strip_group_rte_pg18(q);
+#endif
+
   if (!is_safe_query_candidate(constants, q))
     return NULL;
 
-  if (provsql_verbose >= 30)
-    provsql_notice("safe-query candidate accepted by shape gate; "
-                   "hierarchy detection and rewrite not yet implemented");
+  atoms = find_hierarchical_root_atoms(constants, q);
+  if (atoms == NIL) {
+    if (provsql_verbose >= 30)
+      provsql_notice("safe-query candidate accepted by shape gate but no "
+                     "root variable found -- falling through");
+    return NULL;
+  }
 
-  return NULL;
+  return rewrite_hierarchical_cq(constants, q, atoms);
 }
 
 /* -------------------------------------------------------------------------

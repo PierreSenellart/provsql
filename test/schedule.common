@@ -140,3 +140,6 @@ test: to_provxml
 
 # Per-table provenance metadata maintenance (safe-query optimisation)
 test: table_info
+
+# Safe-query optimisation: end-to-end hierarchical CQ rewrite
+test: safe_query_basic
