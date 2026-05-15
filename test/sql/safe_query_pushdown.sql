@@ -238,6 +238,59 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base8 b JOIN pd_rew8 r ON b.x = r.x
  ORDER BY b.x;
 
+-- (9) Non-flat (nested) partial-coverage signatures:
+--       pd_n_a(x,y,z), pd_n_b(x,y,z), pd_n_c(x,y), pd_n_d(x)
+--     atoms(x)={A,B,C,D}, atoms(y)={A,B,C}, atoms(z)={A,B}.
+--     Signatures: A:{y,z}, B:{y,z}, C:{y}, D:{}.  Two distinct
+--     non-empty signatures.  D has an empty signature so the
+--     recursion terminates: the outermost peel bundles {A,B,C} into
+--     one inner sub-Query on x; Choice A re-entry then sees y as
+--     fully covered within {A,B,C} and z as the new partial-coverage
+--     class, peeling {A,B} into another inner sub-Query.  Rewritten
+--     probability must match the baseline.
+CREATE TABLE pd_n_a(x int, y int, z int);
+CREATE TABLE pd_n_b(x int, y int, z int);
+CREATE TABLE pd_n_c(x int, y int);
+CREATE TABLE pd_n_d(x int);
+INSERT INTO pd_n_a VALUES (1,10,100),(1,10,101),(1,11,100),(2,20,200);
+INSERT INTO pd_n_b VALUES (1,10,100),(1,10,101),(1,11,100),(2,20,200);
+INSERT INTO pd_n_c VALUES (1,10),(1,11),(2,20);
+INSERT INTO pd_n_d VALUES (1),(2);
+SELECT add_provenance('pd_n_a');
+SELECT add_provenance('pd_n_b');
+SELECT add_provenance('pd_n_c');
+SELECT add_provenance('pd_n_d');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_n_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_n_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_n_c;
+  PERFORM set_prob(provsql, 0.7) FROM pd_n_d;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base9 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_n_a a, pd_n_b b, pd_n_c c, pd_n_d d
+   WHERE a.x = b.x AND a.x = c.x AND a.x = d.x
+     AND a.y = b.y AND a.y = c.y
+     AND a.z = b.z
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base9');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew9 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_n_a a, pd_n_b b, pd_n_c c, pd_n_d d
+   WHERE a.x = b.x AND a.x = c.x AND a.x = d.x
+     AND a.y = b.y AND a.y = c.y
+     AND a.z = b.z
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew9');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base9 b JOIN pd_rew9 r ON b.x = r.x
+ ORDER BY b.x;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -277,4 +330,5 @@ BEGIN
 END $$;
 
 SET provsql.boolean_provenance = off;
-DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r, pd_d, pd_e, pd_f;
+DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
+           pd_n_a, pd_n_b, pd_n_c, pd_n_d, pd_d, pd_e, pd_f;

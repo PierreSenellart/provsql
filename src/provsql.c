@@ -2825,12 +2825,12 @@ static Node *safe_pushed_remap_mutator(Node *node,
  *  - an atom whose root binding spans more than one column (the
  *    rewrite would have to push an intra-atom equality into the
  *    inner subquery -- TODO);
- *  - multiple partial-coverage shared classes that disagree on which
- *    atom subset they cover (non-flat signature; the inner sub-Query
- *    layout would need to nest further);
- *  - a partial-coverage class coexisting with a non-root fully-
- *    covered class (the inner sub-Query would need to expose more
- *    than one output column to the outer scope);
+ *  - at least one partial-coverage class exists but every atom is
+ *    touched by some partial-coverage class.  Bundling all atoms
+ *    into one inner group would re-enter the rewriter with the same
+ *    shape, so we defer disjoint-partial cases such as
+ *    @c A(x,y),B(x,y),C(x,z),D(x,z) where atoms(y) and atoms(z) are
+ *    disjoint;
  *  - any Var in @c q->targetList or the residual @p quals that
  *    belongs to a single-atom class (head-only projection is still
  *    out of scope; atom-local WHERE conjuncts are handled upstream
@@ -2961,20 +2961,25 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   if (root_class < 0)
     goto bail;
 
-  /* Multi-level handling: partial-coverage shared classes (count <
-   * natoms but >= 2) are admitted when they all agree on the same
-   * atom subset S.  Those atoms get folded into a single inner sub-
-   * Query at the outer level; the outer joins the wrap of every atom
-   * outside S with that inner.  In the simplest case
-   * (@c A(x,y),B(x,y),C(x)) S is the set touched by the one
-   * partial-coverage class and the inner sub-Query aggregates the
-   * partial-coverage variable away before the outer join with C. */
+  /* Multi-level handling: any atom touched by at least one partial-
+   * coverage shared class (count >= 2 but < natoms) is bundled into a
+   * single inner sub-Query at this level.  Multiple partial-coverage
+   * classes may touch different subsets of atoms; we fold them all
+   * together at the outermost peel and rely on the recursive call
+   * (via @c process_query / Choice A) to peel further inside.  For
+   * termination, the recursion must make progress at every level:
+   * we require at least one atom with @em empty partial-coverage
+   * signature (no partial-coverage class touches it).  When every
+   * atom is touched by some partial-coverage class but the classes
+   * disagree on which subset they cover (e.g. @c A(x,y),B(x,y),
+   * @c C(x,z),D(x,z) where @c atoms(y) and @c atoms(z) are disjoint),
+   * peeling one big inner group would re-enter the same shape; we
+   * bail in that case and defer disjoint-partial signatures. */
   atom_group = palloc(natoms * sizeof(int));
   for (j = 0; j < natoms; j++)
     atom_group[j] = -1;
 
-  ok = true;
-  for (i = 0; i < nvars && ok; i++) {
+  for (i = 0; i < nvars; i++) {
     int c = cls[i];
     if (c != i)
       continue;
@@ -2985,38 +2990,32 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     if (class_atom_count[c] == natoms)
       continue;                         /* fully-covered: extra outer slot */
     have_partial_class = true;
-    if (partial_first < 0) {
+    if (partial_first < 0)
       partial_first = c;
-      for (j = 0; j < natoms; j++) {
-        if (ANCHOR(c, j) != 0)
-          atom_group[j] = 0;
-      }
-    } else {
-      /* Every further partial-coverage class must cover the exact same
-       * atom-set as the first one; otherwise the per-atom signature is
-       * no longer flat and we need a deeper recursion that this slice
-       * does not implement yet. */
-      for (j = 0; j < natoms && ok; j++) {
-        int hosted = (ANCHOR(c, j) != 0);
-        int wanted = (atom_group[j] == 0);
-        if (hosted != wanted) {
-          if (provsql_verbose >= 30)
-            provsql_notice("safe-query rewriter: partial-coverage shared "
-                           "classes with anchors (varno=%u, varattno=%d) and "
-                           "(varno=%u, varattno=%d) cover different atom "
-                           "subsets -- multi-level rewrite for non-flat "
-                           "signatures is deferred",
-                           (unsigned) vars_arr[partial_first]->varno,
-                           (int) vars_arr[partial_first]->varattno,
-                           (unsigned) vars_arr[c]->varno,
-                           (int) vars_arr[c]->varattno);
-          ok = false;
-        }
-      }
+    for (j = 0; j < natoms; j++) {
+      if (ANCHOR(c, j) != 0)
+        atom_group[j] = 0;
     }
   }
-  if (!ok)
-    goto bail;
+
+  if (have_partial_class) {
+    bool has_outer_atom = false;
+    for (j = 0; j < natoms; j++) {
+      if (atom_group[j] < 0) {
+        has_outer_atom = true;
+        break;
+      }
+    }
+    if (!has_outer_atom) {
+      if (provsql_verbose >= 30)
+        provsql_notice("safe-query rewriter: every atom is touched by a "
+                       "partial-coverage shared class -- the inner group "
+                       "would re-enter with the same shape, deferred");
+      goto bail;
+    }
+  }
+
+  ok = true;
 
   /* Every Var anywhere in the query must belong to a class that
    * either touches every atom (slot at the outer level) or touches
