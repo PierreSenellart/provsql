@@ -263,6 +263,17 @@ extern bool provsql_simplify_on_load;
  * closure rule turns out to be unsound on some workload. */
 extern bool provsql_hybrid_evaluation;
 
+/** @brief Opt-in safe-query optimisation for hierarchical conjunctive
+ *  queries; see the @c provsql.boolean_provenance GUC.
+ *
+ *  When @c true, the planner is permitted to rewrite self-join-free
+ *  hierarchical CQs (and independent UCQs) over TID / BID tables to
+ *  a read-once form whose probability is computable in linear time.
+ *  The rewriter tags the resulting root gate so that semiring
+ *  evaluations incompatible with this rewrite refuse to run on the
+ *  produced circuit. */
+extern bool provsql_boolean_provenance;
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */

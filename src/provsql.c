@@ -74,6 +74,7 @@ int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 mea
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
+bool provsql_boolean_provenance = false; ///< Opt-in safe-query optimisation: when @c true, rewrites hierarchical conjunctive queries to a read-once form whose probability is computable in linear time. The resulting circuit is tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on it. Controlled by the @c provsql.boolean_provenance GUC.
 
 static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
@@ -4551,6 +4552,33 @@ void _PG_init(void) {
                            true,
                            PGC_USERSET,
                            GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.boolean_provenance",
+                           "Opt-in safe-query optimisation for hierarchical conjunctive queries.",
+                           "When on, the planner rewrites self-join-free "
+                           "hierarchical conjunctive queries (and independent "
+                           "UCQs) over TID/BID tables to a read-once form "
+                           "whose probability is computable in linear time "
+                           "via the existing BooleanCircuit independent "
+                           "evaluator. The rewrite preserves the Boolean "
+                           "polynomial of the existential lineage, so any "
+                           "evaluation that factors through a homomorphism "
+                           "from Boolean functions remains sound (notably "
+                           "probability and Shapley / Banzhaf). The "
+                           "resulting root gate is tagged; semiring "
+                           "evaluators are individually marked at compile "
+                           "time as compatible or not with this rewrite, "
+                           "and incompatible evaluators refuse to run on a "
+                           "tagged circuit. Off by default because the "
+                           "rewrite changes the multiset of result rows and "
+                           "is therefore unsound for per-row provenance "
+                           "interrogations and aggregation queries.",
+                           &provsql_boolean_provenance,
+                           false,
+                           PGC_USERSET,
+                           0,
                            NULL,
                            NULL,
                            NULL);

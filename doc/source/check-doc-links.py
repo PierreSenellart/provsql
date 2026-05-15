@@ -90,6 +90,11 @@ INTERNAL_FUNCTIONS = {
     'sub_circuit_for_where', 'sub_circuit_with_desc',
     # Internal gate manipulation (set_* are dangerous for users)
     'set_extra', 'set_infos',
+    # Internal plumbing for the safe-query optimisation: callers go
+    # through add_provenance / remove_provenance / repair_key and the
+    # provsql_cleanup_table_info event trigger.
+    'set_table_info', 'remove_table_info', 'get_table_info',
+    'cleanup_table_info', 'provsql_cleanup_table_info',
     # Transition functions for aggregates
     'choose_function',
     'union_tstzintervals_plus', 'union_tstzintervals_plus_state',

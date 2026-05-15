@@ -49,6 +49,7 @@ MMappedCircuit::MMappedCircuit(Oid db_oid, bool read_only) :
     makePath(db_oid, GATES_FILENAME),
     makePath(db_oid, WIRES_FILENAME),
     makePath(db_oid, EXTRA_FILENAME),
+    makePath(db_oid, TABLE_INFO_FILENAME),
     read_only) {}
 
 void initialize_provsql_mmap()
@@ -383,6 +384,53 @@ void provsql_mmap_main_loop()
       break;
     }
 
+    case 'T':
+    {
+      /* Insert / upsert per-table provenance metadata. */
+      ProvenanceTableInfo info{};
+      if(!READM(info.relid, Oid) || !READM(info.tid, bool)
+         || !READM(info.block_key_n, uint16_t))
+        provsql_error("Cannot read from pipe (message type T)");
+      if(info.block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY)
+        provsql_error("ProvSQL: block key wider than %d columns "
+                      "(message type T)", PROVSQL_TABLE_INFO_MAX_BLOCK_KEY);
+      for(uint16_t i=0; i<info.block_key_n; ++i)
+        if(!READM(info.block_key[i], AttrNumber))
+          provsql_error("Cannot read from pipe (message type T)");
+      circuit->setTableInfo(info);
+      break;
+    }
+
+    case 'D':
+    {
+      /* Delete per-table provenance metadata. */
+      Oid relid;
+      if(!READM(relid, Oid))
+        provsql_error("Cannot read from pipe (message type D)");
+      circuit->removeTableInfo(relid);
+      break;
+    }
+
+    case 's':
+    {
+      /* Look up per-table provenance metadata. */
+      Oid relid;
+      if(!READM(relid, Oid))
+        provsql_error("Cannot read from pipe (message type s)");
+      ProvenanceTableInfo info{};
+      char found = circuit->getTableInfo(relid, info) ? 1 : 0;
+      if(!WRITEB(&found, char))
+        provsql_error("Cannot write response to pipe (message type s)");
+      if(found) {
+        if(!WRITEB(&info.tid, bool) || !WRITEB(&info.block_key_n, uint16_t))
+          provsql_error("Cannot write response to pipe (message type s)");
+        for(uint16_t i=0; i<info.block_key_n; ++i)
+          if(!WRITEB(&info.block_key[i], AttrNumber))
+            provsql_error("Cannot write response to pipe (message type s)");
+      }
+      break;
+    }
+
     case 'j':
     {
       /* Joint-circuit load: BFS from a vector of roots so a shared
@@ -426,6 +474,61 @@ void MMappedCircuit::sync()
   gates.sync();
   wires.sync();
   mapping.sync();
+  extra.sync();
+  tableInfo.sync();
+}
+
+/* The tableInfo vector uses a tombstone scheme: removed entries have
+ * their relid set to InvalidOid and remain in place.  setTableInfo()
+ * reuses tombstone slots before appending.  All readers skip
+ * InvalidOid entries.  This avoids reaching into MMappedVector's
+ * append-only public API, and keeps the file format trivial: a
+ * crash-recovered file is internally consistent without any extra
+ * recovery step.  In practice, churn on this vector is low (one
+ * entry per add_provenance / repair_key / remove_provenance call). */
+
+void MMappedCircuit::setTableInfo(const ProvenanceTableInfo &info)
+{
+  long tombstone = -1;
+  unsigned long n = tableInfo.nbElements();
+  for(unsigned long i=0; i<n; ++i) {
+    if(tableInfo[i].relid == info.relid) {
+      tableInfo[i] = info;
+      return;
+    }
+    if(tombstone < 0 && tableInfo[i].relid == InvalidOid)
+      tombstone = static_cast<long>(i);
+  }
+  if(tombstone >= 0)
+    tableInfo[tombstone] = info;
+  else
+    tableInfo.add(info);
+}
+
+void MMappedCircuit::removeTableInfo(Oid relid)
+{
+  if(relid == InvalidOid)
+    return;
+  unsigned long n = tableInfo.nbElements();
+  for(unsigned long i=0; i<n; ++i) {
+    if(tableInfo[i].relid == relid) {
+      tableInfo[i].relid = InvalidOid;
+      return;
+    }
+  }
+}
+
+bool MMappedCircuit::getTableInfo(Oid relid, ProvenanceTableInfo &out) const
+{
+  if(relid == InvalidOid)
+    return false;
+  for(unsigned long i=0; i<tableInfo.nbElements(); ++i) {
+    if(tableInfo[i].relid == relid) {
+      out = tableInfo[i];
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

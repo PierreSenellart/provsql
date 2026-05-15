@@ -208,6 +208,40 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 
 /**
+ * @brief Record per-relation provenance metadata used by the
+ *        safe-query optimisation.
+ *
+ * Stores a (relid, tid, block_key) tuple in the persistent mmap-backed
+ * table-info store.  Called from add_provenance (tid=true, empty key),
+ * from repair_key (tid=false, key columns), and from the upgrade
+ * script that backfills metadata for pre-existing tables.
+ *
+ * @param relid     pg_class OID of the relation.
+ * @param tid       True iff provenance leaves are independent.
+ * @param block_key Column numbers of the block key (empty for TID).
+ */
+CREATE OR REPLACE FUNCTION set_table_info(
+  relid OID, tid BOOL, block_key INT2[] DEFAULT ARRAY[]::INT2[])
+  RETURNS void AS
+  'provsql','set_table_info' LANGUAGE C PARALLEL SAFE;
+
+/** @brief Remove per-relation provenance metadata.  No-op when missing. */
+CREATE OR REPLACE FUNCTION remove_table_info(relid OID)
+  RETURNS void AS
+  'provsql','remove_table_info' LANGUAGE C PARALLEL SAFE;
+
+/**
+ * @brief Read per-relation provenance metadata.
+ *
+ * Returns NULL if no record exists.  Used by the planner-time
+ * hierarchy detector to gate the safe-query rewrite.
+ */
+CREATE OR REPLACE FUNCTION get_table_info(
+  relid OID, OUT tid BOOL, OUT block_key INT2[])
+  RETURNS record AS
+  'provsql','get_table_info' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
  * @brief Enable provenance tracking on an existing table
  *
  * Adds a <tt>provsql</tt> UUID column to the table. Input gates for
@@ -220,6 +254,7 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
 $$
 BEGIN
   EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  PERFORM provsql.set_table_info(_tbl::oid, true, ARRAY[]::INT2[]);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -235,6 +270,7 @@ CREATE OR REPLACE FUNCTION remove_provenance(_tbl regclass)
 $$
 DECLARE
 BEGIN
+  PERFORM provsql.remove_table_info(_tbl::oid);
   EXECUTE format('ALTER TABLE %s DROP COLUMN provsql', _tbl);
   BEGIN
     EXECUTE format('DROP TRIGGER add_gate on %s', _tbl);
@@ -272,12 +308,33 @@ DECLARE
   ind INTEGER;
   select_key_att TEXT;
   where_condition TEXT;
+  block_key_cols INT2[];
 BEGIN
   IF key_att = '' THEN
     key_att := '()';
     select_key_att := '1';
+    block_key_cols := ARRAY[]::INT2[];
   ELSE
     select_key_att := key_att;
+    -- Resolve the (possibly comma-separated) key_att text into the
+    -- corresponding pg_attribute.attnum values for the safe-query
+    -- metadata.  Names are trimmed; quoting is not supported here
+    -- because repair_key has never supported quoted identifiers in
+    -- its key_att string.
+    SELECT array_agg(a.attnum ORDER BY t.ord)::INT2[]
+      INTO block_key_cols
+      FROM unnest(string_to_array(key_att, ',')) WITH ORDINALITY AS t(name, ord)
+      JOIN pg_attribute a
+        ON a.attrelid = _tbl
+       AND a.attname  = trim(t.name)
+       AND a.attnum   > 0
+       AND NOT a.attisdropped;
+    IF block_key_cols IS NULL OR array_length(block_key_cols, 1) IS NULL THEN
+      RAISE EXCEPTION 'repair_key: could not resolve key columns from "%"', key_att;
+    END IF;
+    IF array_length(block_key_cols, 1) > 16 THEN
+      RAISE EXCEPTION 'repair_key: block key wider than 16 columns is not supported';
+    END IF;
   END IF;
 
   EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
@@ -307,8 +364,39 @@ BEGIN
     END LOOP;
   END LOOP;
   EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
+  PERFORM provsql.set_table_info(_tbl::oid, false, block_key_cols);
 END
 $$ LANGUAGE plpgsql;
+
+/**
+ * @brief Event trigger that purges per-table provenance metadata when
+ *        a tracked relation is dropped outside of remove_provenance().
+ *
+ * Plain DROP TABLE bypasses remove_provenance() and would otherwise
+ * leave a stale entry in the table-info store keyed by a now-recycled
+ * OID, with confusing consequences for the safe-query rewriter the
+ * next time the OID is reused.  This trigger forwards every dropped
+ * relation OID to provsql.remove_table_info(), which is a no-op for
+ * relations that were not tracked.
+ */
+CREATE OR REPLACE FUNCTION cleanup_table_info()
+  RETURNS event_trigger AS
+$$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT objid FROM pg_event_trigger_dropped_objects()
+     WHERE object_type IN ('table', 'foreign table', 'materialized view')
+  LOOP
+    PERFORM provsql.remove_table_info(r.objid);
+  END LOOP;
+END
+$$ LANGUAGE plpgsql;
+
+DROP EVENT TRIGGER IF EXISTS provsql_cleanup_table_info;
+CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
+  EXECUTE FUNCTION provsql.cleanup_table_info();
 
 /**
  * @brief Create a provenance mapping table from an attribute

@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "GenericCircuit.h"
+#include "MMappedTableInfo.h"
 #include "MMappedUUIDHashTable.h"
 #include "MMappedVector.hpp"
 
@@ -92,11 +93,13 @@ MMappedUUIDHashTable mapping;         ///< UUID → gate-index hash table
 MMappedVector<GateInformation> gates; ///< Gate metadata array
 MMappedVector<pg_uuid_t> wires;       ///< Flattened child UUID array
 MMappedVector<char> extra;            ///< Variable-length string data
+MMappedVector<ProvenanceTableInfo> tableInfo; ///< Per-relation TID/BID metadata (safe-query optimisation)
 
 static constexpr const char *GATES_FILENAME="provsql_gates.mmap";     ///< Backing file for @c gates
 static constexpr const char *WIRES_FILENAME="provsql_wires.mmap";     ///< Backing file for @c wires
 static constexpr const char *MAPPING_FILENAME="provsql_mapping.mmap"; ///< Backing file for @c mapping
 static constexpr const char *EXTRA_FILENAME="provsql_extra.mmap";     ///< Backing file for @c extra
+static constexpr const char *TABLE_INFO_FILENAME="provsql_table_info.mmap"; ///< Backing file for @c tableInfo
 
 /** @brief Build the full path for a mmap file under @c $PGDATA/base/\<db_oid\>/. */
 static std::string makePath(Oid db_oid, const char *filename);
@@ -104,11 +107,13 @@ static std::string makePath(Oid db_oid, const char *filename);
 /** @brief Delegating constructor that accepts pre-built paths. */
 MMappedCircuit(const std::string &mp, const std::string &gp,
                const std::string &wp, const std::string &ep,
+               const std::string &tp,
                bool read_only) :
-  mapping(mp.c_str(), read_only, MAGIC_MAPPING),
-  gates  (gp.c_str(), read_only, MAGIC_GATES),
-  wires  (wp.c_str(), read_only, MAGIC_WIRES),
-  extra  (ep.c_str(), read_only, MAGIC_EXTRA) {}
+  mapping  (mp.c_str(), read_only, MAGIC_MAPPING),
+  gates    (gp.c_str(), read_only, MAGIC_GATES),
+  wires    (wp.c_str(), read_only, MAGIC_WIRES),
+  extra    (ep.c_str(), read_only, MAGIC_EXTRA),
+  tableInfo(tp.c_str(), read_only, MAGIC_TABLE_INFO) {}
 
 public:
 /** @brief 8-byte magic constants identifying each mmap file type. */
@@ -124,6 +129,9 @@ static constexpr uint64_t MAGIC_MAPPING =
 static constexpr uint64_t MAGIC_EXTRA =
   uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('E') << 24 |
   uint64_t('x') << 32 | uint64_t('t') << 40 | uint64_t('r') << 48 | uint64_t('a') << 56;
+static constexpr uint64_t MAGIC_TABLE_INFO =
+  uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('T') << 24 |
+  uint64_t('b') << 32 | uint64_t('l') << 40 | uint64_t('I') << 48 | uint64_t('n') << 56;
 
 /**
  * @brief Open all four mmap backing files for the given database.
@@ -221,6 +229,36 @@ std::string getExtra(pg_uuid_t token) const;
 inline unsigned long getNbGates() const {
   return gates.nbElements();
 }
+
+/**
+ * @brief Insert or update per-table provenance metadata.
+ *
+ * If an entry for @p relid already exists, its @c tid and @c block_key
+ * fields are overwritten in place.  Otherwise a fresh record is appended.
+ *
+ * @param info  The record to store; @c info.relid is the primary key.
+ */
+void setTableInfo(const ProvenanceTableInfo &info);
+
+/**
+ * @brief Remove a per-table metadata entry.
+ *
+ * No-op when @p relid is not present.  Removal is done by overwriting
+ * the matching entry with the last entry in the vector and decrementing
+ * the logical count (swap-remove).  Backing-file capacity is not reclaimed.
+ *
+ * @param relid  pg_class OID of the relation whose entry to remove.
+ */
+void removeTableInfo(Oid relid);
+
+/**
+ * @brief Look up per-table metadata.
+ *
+ * @param relid  pg_class OID of the relation to look up.
+ * @param out    On success, filled with the stored record.
+ * @return @c true if a record was found, @c false otherwise.
+ */
+bool getTableInfo(Oid relid, ProvenanceTableInfo &out) const;
 
 /**
  * @brief Build an in-memory @c GenericCircuit rooted at @p token.

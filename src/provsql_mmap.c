@@ -33,6 +33,7 @@
 
 #include "postgres.h"
 #include "postmaster/bgworker.h"
+#include "catalog/pg_type_d.h"
 #include "fmgr.h"
 #include "funcapi.h"
 #include "utils/array.h"
@@ -521,6 +522,169 @@ Datum get_prob(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
   else
     PG_RETURN_FLOAT8(result);
+}
+
+PG_FUNCTION_INFO_V1(set_table_info);
+/**
+ * @brief PostgreSQL-callable wrapper for setTableInfo() over the IPC pipe.
+ *
+ * Stores per-relation provenance metadata used by the safe-query
+ * optimisation.  @p relid is the @c pg_class OID of the relation,
+ * @p tid is @c true iff provenance leaves are independent (TID),
+ * and @p block_key is an @c int2 array (possibly empty) listing the
+ * block-key column numbers when the relation has been routed through
+ * @c repair_key.
+ */
+Datum set_table_info(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  bool tid;
+  ArrayType *block_key;
+  uint16 block_key_n = 0;
+  int16 *block_key_data = NULL;
+  Size payload_size;
+
+  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
+    provsql_error("Invalid NULL value passed to set_table_info");
+
+  relid = PG_GETARG_OID(0);
+  tid   = PG_GETARG_BOOL(1);
+  block_key = PG_ARGISNULL(2) ? NULL : PG_GETARG_ARRAYTYPE_P(2);
+
+  if(block_key) {
+    if(ARR_NDIM(block_key) > 1)
+      provsql_error("Invalid multi-dimensional array passed to set_table_info");
+    else if(ARR_NDIM(block_key) == 1)
+      block_key_n = *ARR_DIMS(block_key);
+    if(block_key_n > 0)
+      block_key_data = (int16 *) ARR_DATA_PTR(block_key);
+  }
+
+  if(block_key_n > 16)
+    provsql_error("set_table_info: block key wider than 16 columns "
+                  "(%u given) is not supported", block_key_n);
+
+  payload_size = sizeof(char) + sizeof(Oid) + sizeof(Oid) + sizeof(bool)
+                 + sizeof(uint16) + block_key_n * sizeof(int16);
+  if(payload_size > PIPE_BUF)
+    provsql_error("set_table_info: IPC payload exceeds PIPE_BUF");
+
+  STARTWRITEM();
+  ADDWRITEM("T", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+  ADDWRITEM(&tid, bool);
+  ADDWRITEM(&block_key_n, uint16);
+  for(uint16 i = 0; i < block_key_n; ++i)
+    ADDWRITEM(&block_key_data[i], int16);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type T)");
+  }
+  provsql_shmem_unlock();
+
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(remove_table_info);
+/** @brief PostgreSQL-callable wrapper for removeTableInfo() over the IPC pipe. */
+Datum remove_table_info(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+
+  if(PG_ARGISNULL(0))
+    provsql_error("Invalid NULL value passed to remove_table_info");
+
+  relid = PG_GETARG_OID(0);
+
+  STARTWRITEM();
+  ADDWRITEM("D", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type D)");
+  }
+  provsql_shmem_unlock();
+
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(get_table_info);
+/**
+ * @brief PostgreSQL-callable wrapper for getTableInfo() over the IPC pipe.
+ *
+ * Returns @c NULL when no record exists for @p relid; otherwise a record
+ * (tid bool, block_key int2[]).
+ */
+Datum get_table_info(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  char found;
+  bool tid = false;
+  uint16 block_key_n = 0;
+  int16 block_key[16];
+  TupleDesc tupdesc;
+  Datum values[2];
+  bool nulls[2] = {false, false};
+  Datum *elems;
+  ArrayType *arr;
+
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  relid = PG_GETARG_OID(0);
+
+  STARTWRITEM();
+  ADDWRITEM("s", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+
+  provsql_shmem_lock_exclusive();
+
+  if(!SENDWRITEM() || !READB(found, char)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot communicate with pipe (message type s)");
+  }
+  if(found) {
+    if(!READB(tid, bool) || !READB(block_key_n, uint16)) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot communicate with pipe (message type s)");
+    }
+    if(block_key_n > 16) {
+      provsql_shmem_unlock();
+      provsql_error("get_table_info: server returned an unexpectedly wide block key");
+    }
+    for(uint16 i = 0; i < block_key_n; ++i)
+      if(!READB(block_key[i], int16)) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot communicate with pipe (message type s)");
+      }
+  }
+
+  provsql_shmem_unlock();
+
+  if(!found)
+    PG_RETURN_NULL();
+
+  if(get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+    provsql_error("get_table_info: expected composite return type");
+  tupdesc = BlessTupleDesc(tupdesc);
+
+  values[0] = BoolGetDatum(tid);
+
+  elems = palloc(block_key_n * sizeof(Datum));
+  for(uint16 i = 0; i < block_key_n; ++i)
+    elems[i] = Int16GetDatum(block_key[i]);
+  arr = construct_array(elems, block_key_n, INT2OID, 2, true, 's');
+  pfree(elems);
+  values[1] = PointerGetDatum(arr);
+
+  PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }
 
 PG_FUNCTION_INFO_V1(get_infos);
