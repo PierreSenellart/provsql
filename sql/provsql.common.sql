@@ -425,8 +425,10 @@ END
 $$ LANGUAGE plpgsql;
 
 DROP EVENT TRIGGER IF EXISTS provsql_cleanup_table_info;
+-- @c EXECUTE @c PROCEDURE (rather than the PG 11+ @c EXECUTE
+-- @c FUNCTION alias) so the extension installs on PG 10 too.
 CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
-  EXECUTE FUNCTION provsql.cleanup_table_info();
+  EXECUTE PROCEDURE provsql.cleanup_table_info();
 
 /**
  * @brief Create a provenance mapping table from an attribute
