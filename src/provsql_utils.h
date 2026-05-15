@@ -274,6 +274,35 @@ extern bool provsql_hybrid_evaluation;
  *  produced circuit. */
 extern bool provsql_boolean_provenance;
 
+#include "MMappedTableInfo.h"
+
+/**
+ * @brief Look up per-table provenance metadata with a backend-local cache.
+ *
+ * Resolves to a cached value when the relation's relcache entry has
+ * not been invalidated since the last fetch; otherwise issues one
+ * @c 's' IPC to the background worker.  The cache is invalidated
+ * via @c CacheRegisterRelcacheCallback, so concurrent
+ * @c add_provenance / @c repair_key / @c remove_provenance in other
+ * backends are reflected here without polling.
+ *
+ * Safe to call from the planner hot path.
+ *
+ * @param relid  pg_class OID of the relation to look up.
+ * @param out    On @c true return, filled with the stored record.
+ * @return @c true if a record exists for @p relid, @c false otherwise.
+ */
+extern bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out);
+
+/**
+ * @brief Raw IPC fetch (no cache).
+ *
+ * Implementation detail of @c provsql_lookup_table_info, exposed only
+ * so the cache layer in @c provsql_utils.c can reach it.  Callers in
+ * the planner hot path should go through @c provsql_lookup_table_info.
+ */
+extern bool provsql_fetch_table_info(Oid relid, ProvenanceTableInfo *out);
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */

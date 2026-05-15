@@ -32,6 +32,9 @@
 #include "parser/parse_func.h"
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
+#include "utils/inval.h"
+
+#include <string.h>
 
 #include "provsql_utils.h"
 
@@ -529,6 +532,144 @@ constants_t get_constants(bool failure_if_not_possible)
   ++constants_cache_len;
 
   return constants_cache[start].constants;
+}
+
+/* -------------------------------------------------------------------------
+ * Per-backend table-info cache
+ *
+ * Sorted array of @c table_info_cache_entry, binary-searched on @c relid.
+ * Used by @c provsql_lookup_table_info to amortise IPC across repeated
+ * lookups during query planning.  Entries are invalidated by
+ * @c invalidate_table_info_cache_callback, which is hooked into
+ * PostgreSQL's relcache invalidation channel and so reacts to local
+ * DDL, cross-backend invalidations broadcast via
+ * @c CacheInvalidateRelcacheByRelid, and explicit "invalidate all"
+ * (relid == InvalidOid) events.
+ * ------------------------------------------------------------------------- */
+
+typedef struct table_info_cache_entry {
+  Oid           relid;                                          ///< pg_class OID (sort key)
+  bool          valid;                                          ///< false => refresh on next access
+  bool          present;                                        ///< when valid: was a record found at the worker?
+  bool          tid;                                            ///< when present: independent leaves?
+  uint16        block_key_n;                                    ///< when present: number of block-key columns
+  AttrNumber    block_key[PROVSQL_TABLE_INFO_MAX_BLOCK_KEY];    ///< when present: block-key column numbers
+} table_info_cache_entry;
+
+static table_info_cache_entry *table_info_cache = NULL; ///< Sorted by @c relid
+static unsigned table_info_cache_len = 0;
+static bool table_info_callback_registered = false;
+
+/** Find @p relid in the cache.  Returns the index on hit; otherwise
+ *  @c -1 and writes the insertion point to @p *insert_at. */
+static int table_info_cache_find(Oid relid, int *insert_at)
+{
+  int start = 0, end = (int)table_info_cache_len - 1;
+  while(end >= start) {
+    int mid = (start + end) / 2;
+    if(table_info_cache[mid].relid < relid)
+      start = mid + 1;
+    else if(table_info_cache[mid].relid > relid)
+      end = mid - 1;
+    else
+      return mid;
+  }
+  if(insert_at) *insert_at = start;
+  return -1;
+}
+
+/** Insert a fresh entry at @p pos (which must be the value returned by
+ *  the most recent @c table_info_cache_find that reported a miss). */
+static void table_info_cache_insert(int pos, Oid relid, bool present,
+                                    const ProvenanceTableInfo *info)
+{
+  table_info_cache_entry *new_buf = calloc(table_info_cache_len + 1,
+                                           sizeof(table_info_cache_entry));
+  for(int i = 0; i < pos; ++i)
+    new_buf[i] = table_info_cache[i];
+  new_buf[pos].relid       = relid;
+  new_buf[pos].valid       = true;
+  new_buf[pos].present     = present;
+  if(present) {
+    new_buf[pos].tid         = info->tid;
+    new_buf[pos].block_key_n = info->block_key_n;
+    memcpy(new_buf[pos].block_key, info->block_key,
+           info->block_key_n * sizeof(AttrNumber));
+  }
+  for(unsigned i = (unsigned)pos; i < table_info_cache_len; ++i)
+    new_buf[i + 1] = table_info_cache[i];
+  free(table_info_cache);
+  table_info_cache = new_buf;
+  ++table_info_cache_len;
+}
+
+/** Relcache callback: PostgreSQL fires this whenever a relation's
+ *  relcache entry is invalidated (locally or via shared invalidation
+ *  from another backend).  @p relid == @c InvalidOid means
+ *  "invalidate everything." */
+static void invalidate_table_info_cache_callback(Datum arg, Oid relid)
+{
+  int pos;
+  (void) arg;
+  if(relid == InvalidOid) {
+    for(unsigned i = 0; i < table_info_cache_len; ++i)
+      table_info_cache[i].valid = false;
+    return;
+  }
+  pos = table_info_cache_find(relid, NULL);
+  if(pos >= 0)
+    table_info_cache[pos].valid = false;
+}
+
+bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out)
+{
+  int insert_at = 0;
+  int pos;
+  ProvenanceTableInfo info;
+  bool present;
+
+  if(!table_info_callback_registered) {
+    CacheRegisterRelcacheCallback(invalidate_table_info_cache_callback,
+                                  (Datum) 0);
+    table_info_callback_registered = true;
+  }
+
+  pos = table_info_cache_find(relid, &insert_at);
+
+  if(pos >= 0 && table_info_cache[pos].valid) {
+    table_info_cache_entry *e = &table_info_cache[pos];
+    if(!e->present)
+      return false;
+    out->relid       = relid;
+    out->tid         = e->tid;
+    out->block_key_n = e->block_key_n;
+    memcpy(out->block_key, e->block_key,
+           e->block_key_n * sizeof(AttrNumber));
+    return true;
+  }
+
+  present = provsql_fetch_table_info(relid, &info);
+
+  if(pos >= 0) {
+    /* Refresh an existing, now-stale slot in place. */
+    table_info_cache_entry *e = &table_info_cache[pos];
+    e->valid   = true;
+    e->present = present;
+    if(present) {
+      e->tid         = info.tid;
+      e->block_key_n = info.block_key_n;
+      memcpy(e->block_key, info.block_key,
+             info.block_key_n * sizeof(AttrNumber));
+    }
+  } else {
+    table_info_cache_insert(insert_at, relid, present, &info);
+  }
+
+  if(present) {
+    *out = info;
+    return true;
+  }
+  return false;
 }
 
 PG_FUNCTION_INFO_V1(reset_constants_cache);

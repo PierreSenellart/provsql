@@ -25,12 +25,14 @@
 #ifndef MMAPPED_TABLE_INFO_H
 #define MMAPPED_TABLE_INFO_H
 
+#ifdef __cplusplus
 #include <cstdint>
+#else
+#include <stdint.h>
+#endif
 
-extern "C" {
 #include "postgres.h"
 #include "access/attnum.h"
-}
 
 /**
  * @brief Cap on the number of block-key columns recorded per relation.

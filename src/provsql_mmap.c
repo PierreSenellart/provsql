@@ -24,6 +24,7 @@
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
+#include "MMappedTableInfo.h"
 
 #include <errno.h>
 #include <unistd.h>
@@ -39,6 +40,8 @@
 #include "utils/array.h"
 #include "access/htup_details.h"
 #include "utils/builtins.h"
+#include "utils/inval.h"
+#include "utils/syscache.h"
 
 #include "circuit_cache.h"
 
@@ -585,6 +588,18 @@ Datum set_table_info(PG_FUNCTION_ARGS)
   }
   provsql_shmem_unlock();
 
+  /* Broadcast a relcache invalidation so every backend re-fetches on
+   * next access.  Standard DDL (the ALTER TABLE in add_provenance and
+   * repair_key) already does this, but set_table_info is also called
+   * from DML paths that do not (INSERT INTO T SELECT, UPDATE under
+   * provsql.update_provenance, ...) and the upgrade-script backfill
+   * runs outside any DDL on the target relation.  Guarded by a
+   * pg_class existence check so the sql_drop event-trigger path,
+   * which calls remove_table_info on a relid that has just been
+   * deleted from pg_class, does not raise "cache lookup failed". */
+  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+    CacheInvalidateRelcacheByRelid(relid);
+
   PG_RETURN_VOID();
 }
 
@@ -611,33 +626,30 @@ Datum remove_table_info(PG_FUNCTION_ARGS)
   }
   provsql_shmem_unlock();
 
+  /* Same guard as set_table_info: skip the broadcast when the relation
+   * is already gone (typical for the sql_drop event-trigger path,
+   * where pg_class no longer has a row for this OID). */
+  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+    CacheInvalidateRelcacheByRelid(relid);
+
   PG_RETURN_VOID();
 }
 
-PG_FUNCTION_INFO_V1(get_table_info);
 /**
- * @brief PostgreSQL-callable wrapper for getTableInfo() over the IPC pipe.
+ * @brief C-callable IPC fetch for per-table provenance metadata.
  *
- * Returns @c NULL when no record exists for @p relid; otherwise a record
- * (tid bool, block_key int2[]).
+ * Sends an @c 's' message to the background worker and reads back the
+ * response.  No caching: every call hits the worker.  Use
+ * @c provsql_lookup_table_info() for the cached, planner-hot-path
+ * variant.
+ *
+ * @param relid  pg_class OID of the relation to look up.
+ * @param out    On success, filled with the stored record.
+ * @return @c true if the worker returned a record, @c false otherwise.
  */
-Datum get_table_info(PG_FUNCTION_ARGS)
+bool provsql_fetch_table_info(Oid relid, ProvenanceTableInfo *out)
 {
-  Oid relid;
   char found;
-  bool tid = false;
-  uint16 block_key_n = 0;
-  int16 block_key[16];
-  TupleDesc tupdesc;
-  Datum values[2];
-  bool nulls[2] = {false, false};
-  Datum *elems;
-  ArrayType *arr;
-
-  if(PG_ARGISNULL(0))
-    PG_RETURN_NULL();
-
-  relid = PG_GETARG_OID(0);
 
   STARTWRITEM();
   ADDWRITEM("s", char);
@@ -651,36 +663,62 @@ Datum get_table_info(PG_FUNCTION_ARGS)
     provsql_error("Cannot communicate with pipe (message type s)");
   }
   if(found) {
-    if(!READB(tid, bool) || !READB(block_key_n, uint16)) {
+    if(!READB(out->tid, bool) || !READB(out->block_key_n, uint16)) {
       provsql_shmem_unlock();
       provsql_error("Cannot communicate with pipe (message type s)");
     }
-    if(block_key_n > 16) {
+    if(out->block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY) {
       provsql_shmem_unlock();
-      provsql_error("get_table_info: server returned an unexpectedly wide block key");
+      provsql_error("provsql_fetch_table_info: server returned an unexpectedly wide block key");
     }
-    for(uint16 i = 0; i < block_key_n; ++i)
-      if(!READB(block_key[i], int16)) {
+    for(uint16 i = 0; i < out->block_key_n; ++i)
+      if(!READB(out->block_key[i], AttrNumber)) {
         provsql_shmem_unlock();
         provsql_error("Cannot communicate with pipe (message type s)");
       }
+    out->relid = relid;
   }
 
   provsql_shmem_unlock();
+  return found != 0;
+}
 
-  if(!found)
+PG_FUNCTION_INFO_V1(get_table_info);
+/**
+ * @brief PostgreSQL-callable wrapper around the cached table-info lookup.
+ *
+ * Returns @c NULL when no record exists for @p relid; otherwise a record
+ * (tid bool, block_key int2[]).  Goes through @c provsql_lookup_table_info
+ * so repeated calls in the same session do not pay for IPC.
+ */
+Datum get_table_info(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  ProvenanceTableInfo info;
+  TupleDesc tupdesc;
+  Datum values[2];
+  bool nulls[2] = {false, false};
+  Datum *elems;
+  ArrayType *arr;
+
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  relid = PG_GETARG_OID(0);
+
+  if(!provsql_lookup_table_info(relid, &info))
     PG_RETURN_NULL();
 
   if(get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
     provsql_error("get_table_info: expected composite return type");
   tupdesc = BlessTupleDesc(tupdesc);
 
-  values[0] = BoolGetDatum(tid);
+  values[0] = BoolGetDatum(info.tid);
 
-  elems = palloc(block_key_n * sizeof(Datum));
-  for(uint16 i = 0; i < block_key_n; ++i)
-    elems[i] = Int16GetDatum(block_key[i]);
-  arr = construct_array(elems, block_key_n, INT2OID, 2, true, 's');
+  elems = palloc(info.block_key_n * sizeof(Datum));
+  for(uint16 i = 0; i < info.block_key_n; ++i)
+    elems[i] = Int16GetDatum(info.block_key[i]);
+  arr = construct_array(elems, info.block_key_n, INT2OID, 2, true, 's');
   pfree(elems);
   values[1] = PointerGetDatum(arr);
 
