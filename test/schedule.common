@@ -143,3 +143,6 @@ test: table_info
 
 # Safe-query optimisation: end-to-end hierarchical CQ rewrite
 test: safe_query_basic
+
+# Refusal of outer SQL aggregate over ProvSQL-aggregated subquery
+test: nested_agg_refuse

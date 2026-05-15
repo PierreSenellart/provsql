@@ -3178,7 +3178,26 @@ static void add_to_select(Query *q, Expr *provenance) {
 typedef struct provenance_mutator_context {
   Expr *provsql;                ///< Provenance expression to substitute for provenance() calls
   const constants_t *constants; ///< Extension OID cache
+  bool provsql_has_aggref;      ///< @c true when @c provsql contains an @c Aggref (set once by @c replace_provenance_function_by_expression).  When @c true, a @c provenance() substitution that lands inside another @c Aggref's argument tree would produce a nested same-level aggregate -- @c parse_agg.c forbids that shape, the planner's @c preprocess_aggrefs_walker does not recurse through @c Aggref boundaries, and the inner @c Aggref's @c aggno stays at the @c -1 sentinel and crashes @c ExecInterpExpr on @c ecxt_aggvalues[-1].
+  bool inside_aggref;           ///< @c true while descending the argument tree of an @c Aggref node.
 } provenance_mutator_context;
+
+/**
+ * @brief @c expression_tree_walker predicate: returns @c true on the first
+ *        @c Aggref it encounters.
+ *
+ * Used to decide whether the provenance expression about to be substituted
+ * would inject a nested aggregate when a @c provenance() call lives inside
+ * another @c Aggref's argument tree.
+ */
+static bool
+expr_contains_aggref_walker(Node *node, void *context) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Aggref))
+    return true;
+  return expression_tree_walker(node, expr_contains_aggref_walker, context);
+}
 
 /**
  * @brief Tree-mutator that replaces provenance() calls with the actual provenance expression.
@@ -3192,10 +3211,33 @@ static Node *provenance_mutator(Node *node, void *ctx) {
   if (node == NULL)
     return NULL;
 
+  if (IsA(node, Aggref)) {
+    /* Descend into the Aggref's arguments with @c inside_aggref set so we
+     * can refuse substitutions that would create a nested same-level
+     * aggregate.  Save and restore the flag so sibling sub-expressions
+     * outside this Aggref see the original value. */
+    bool saved = context->inside_aggref;
+    Node *result;
+    context->inside_aggref = true;
+    result = expression_tree_mutator(node, provenance_mutator, ctx);
+    context->inside_aggref = saved;
+    return result;
+  }
+
   if (IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *)node;
 
     if (f->funcid == context->constants->OID_FUNCTION_PROVENANCE) {
+      if (context->inside_aggref && context->provsql_has_aggref) {
+        provsql_error(
+          "applying an SQL aggregate on top of a ProvSQL-introduced "
+          "aggregation is not supported: the inner provenance() would "
+          "be substituted with an expression containing an aggregate, "
+          "producing a nested same-level aggregate that PostgreSQL "
+          "rejects.  Evaluate the per-row provenance in a subquery "
+          "and aggregate the resulting scalar outside, or drop the "
+          "surrounding aggregate.");
+      }
       return (Node *)copyObject(context->provsql);
     }
   } else if (IsA(node, RangeTblEntry) || IsA(node, RangeTblFunction)) {
@@ -3221,7 +3263,13 @@ static Node *provenance_mutator(Node *node, void *ctx) {
 static void
 replace_provenance_function_by_expression(const constants_t *constants,
                                           Query *q, Expr *provsql) {
-  provenance_mutator_context context = {provsql, constants};
+  provenance_mutator_context context;
+
+  context.provsql = provsql;
+  context.constants = constants;
+  context.provsql_has_aggref =
+    expr_contains_aggref_walker((Node *) provsql, NULL);
+  context.inside_aggref = false;
 
   query_tree_mutator(q, provenance_mutator, &context,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);

@@ -1,0 +1,34 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: applying an SQL aggregate on top of a ProvSQL-introduced aggregation is not supported: the inner provenance() would be substituted with an expression containing an aggregate, producing a nested same-level aggregate that PostgreSQL rejects.  Evaluate the per-row provenance in a subquery and aggregate the resulting scalar outside, or drop the surrounding aggregate.
+WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
+remove_provenance
+
+(1 row)
+rows|sum_p
+2 (*)|1.632000
+(1 row)
+remove_provenance
+
+(1 row)
+rows|prob_positive
+2 (*)|t
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+0|0.816000
+1|0.816000
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
