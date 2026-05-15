@@ -933,6 +933,58 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       slot->class_id   = i;
       sa->proj_slots = lappend(sa->proj_slots, slot);
     }
+
+    /* BID alignment: when the atom is BID-tracked, every block_key
+     * column must appear among the projection slots.  Otherwise the
+     * wrap's @c SELECT @c DISTINCT could collapse rows from the same
+     * block under different projected values into multiple output
+     * rows, replicating the block's @c gate_mulinput in the final
+     * circuit and breaking the read-once property.  An empty
+     * @c block_key (whole table is one block) is even more
+     * restrictive: rows that should stay together can be split by
+     * any slot the wrap projects.  We bail there too rather than
+     * risk an unsound rewrite. */
+    {
+      RangeTblEntry *rte =
+          (RangeTblEntry *) list_nth(q->rtable, j);
+      ProvenanceTableInfo info;
+      if (provsql_lookup_table_info(rte->relid, &info)
+          && info.kind == PROVSQL_TABLE_BID) {
+        if (info.block_key_n == 0) {
+          if (provsql_verbose >= 30)
+            provsql_notice("safe-query rewriter: BID atom (varno=%d) "
+                           "has an empty block_key (whole table is one "
+                           "block); the wrap's DISTINCT could split the "
+                           "block across multiple output rows, deferred",
+                           j + 1);
+          goto bail;
+        } else {
+          int k;
+          for (k = 0; k < info.block_key_n; k++) {
+            AttrNumber bk = info.block_key[k];
+            ListCell *slc;
+            bool found = false;
+            foreach (slc, sa->proj_slots) {
+              safe_proj_slot *slot = (safe_proj_slot *) lfirst(slc);
+              if (slot->base_attno == bk) {
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              if (provsql_verbose >= 30)
+                provsql_notice("safe-query rewriter: BID atom (varno=%d) "
+                               "has block_key column attno=%d outside the "
+                               "projection slots; the wrap would split a "
+                               "block, deferred",
+                               j + 1, (int) bk);
+              goto bail;
+            }
+          }
+        }
+      }
+    }
+
     atoms_out = lappend(atoms_out, sa);
   }
 

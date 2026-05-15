@@ -337,6 +337,94 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base10 b JOIN pd_rew10 r ON b.x = r.x
  ORDER BY b.x;
 
+-- (11) BID block-key alignment.
+--    a. Aligned: pd_bid_a is BID with block_key={x}; the rewriter wraps
+--       it with proj_slots={x}, so block_key is fully covered.  The
+--       rewrite proceeds and the rewritten probability must match the
+--       baseline.  pd_bid_p is duplicated per x so the baseline
+--       circuit shares pd_bid_p's gate_inputs across A-rows at the
+--       same x (independent rejects the unrewritten circuit; the
+--       rewritten one is read-once).
+--    b. Misaligned: pd_bid_b is BID with block_key={y}, y is not
+--       referenced anywhere in the query so it is not in proj_slots.
+--       The rewriter must bail; independent then rejects the
+--       unrewritten circuit because of the same pd_bid_p sharing.
+CREATE TABLE pd_bid_a(x int, y int);
+CREATE TABLE pd_bid_p(x int);
+INSERT INTO pd_bid_a VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_bid_p VALUES (1), (1), (2);
+SELECT repair_key('pd_bid_a', 'x');
+SELECT add_provenance('pd_bid_p');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_bid_p;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_bid_base AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_bid_a a, pd_bid_p p
+   WHERE a.x = p.x
+   GROUP BY a.x;
+SELECT remove_provenance('pd_bid_base');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_bid_rew AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_bid_a a, pd_bid_p p
+   WHERE a.x = p.x
+   GROUP BY a.x;
+SELECT remove_provenance('pd_bid_rew');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_bid_base b JOIN pd_bid_rew r ON b.x = r.x
+ ORDER BY b.x;
+
+CREATE TABLE pd_bid_b(x int, y int);
+INSERT INTO pd_bid_b VALUES (1, 100), (1, 200), (2, 300);
+SELECT repair_key('pd_bid_b', 'y');
+
+SET provsql.boolean_provenance = on;
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent')
+      FROM pd_bid_b b, pd_bid_p p
+     WHERE b.x = p.x
+     GROUP BY b.x;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected ''independent'' to reject the misaligned BID '
+                    'query -- the rewriter should have bailed';
+  END IF;
+END $$;
+
+-- (12) Empty block_key: whole table is one block (all tuples mutually
+--      exclusive).  The wrap's DISTINCT could split that block across
+--      multiple output rows whenever the table has more than one row;
+--      the rewriter must bail conservatively.
+CREATE TABLE pd_bid_empty(x int);
+INSERT INTO pd_bid_empty VALUES (1), (2), (3);
+SELECT repair_key('pd_bid_empty', '');
+
+SET provsql.boolean_provenance = on;
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent')
+      FROM pd_bid_empty a, pd_bid_p p
+     WHERE a.x = p.x
+     GROUP BY a.x;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected ''independent'' to reject the empty-block_key '
+                    'BID query -- the rewriter should have bailed';
+  END IF;
+END $$;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -379,4 +467,5 @@ SET provsql.boolean_provenance = off;
 DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_n_a, pd_n_b, pd_n_c, pd_n_d,
            pd_dj_a, pd_dj_b, pd_dj_c, pd_dj_d,
+           pd_bid_a, pd_bid_b, pd_bid_p, pd_bid_empty,
            pd_d, pd_e, pd_f;
