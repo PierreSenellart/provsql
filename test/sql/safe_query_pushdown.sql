@@ -549,6 +549,48 @@ SELECT b.y, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base16 b JOIN pd_rew16 r ON b.y = r.y
  ORDER BY b.y;
 
+-- (17) Single-atom head Var on a grouped atom.  pd_gh_a(x, y, w)
+--      is the first member of the inner {pd_gh_a, pd_gh_b} group on
+--      partial-coverage class y.  w is a singleton on pd_gh_a and
+--      shows up in the user's targetList.  The rewriter must add w
+--      to pd_gh_a's proj_slots so the inner sub-Query's targetList
+--      (built from first_member->proj_slots) exposes w, and the
+--      outer GROUP BY a.w resolves through it.
+CREATE TABLE pd_gh_a(x int, y int, w int);
+CREATE TABLE pd_gh_b(x int, y int);
+CREATE TABLE pd_gh_c(x int);
+INSERT INTO pd_gh_a VALUES (1, 10, 100), (1, 11, 100), (1, 10, 200), (2, 20, 300);
+INSERT INTO pd_gh_b VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_gh_c VALUES (1), (1), (2);
+SELECT add_provenance('pd_gh_a');
+SELECT add_provenance('pd_gh_b');
+SELECT add_provenance('pd_gh_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_gh_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_gh_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_gh_c;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base17 AS
+  SELECT a.w, probability_evaluate(provenance()) AS p
+    FROM pd_gh_a a, pd_gh_b b, pd_gh_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY a.w;
+SELECT remove_provenance('pd_base17');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew17 AS
+  SELECT a.w, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_gh_a a, pd_gh_b b, pd_gh_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY a.w;
+SELECT remove_provenance('pd_rew17');
+
+SELECT b.w, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base17 b JOIN pd_rew17 r ON b.w = r.w
+ ORDER BY b.w;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -593,4 +635,5 @@ DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_dj_a, pd_dj_b, pd_dj_c, pd_dj_d,
            pd_bid_a, pd_bid_b, pd_bid_p, pd_bid_empty,
            pd_mc_a, pd_mc_b, pd_sh_a, pd_sh_b,
+           pd_gh_a, pd_gh_b, pd_gh_c,
            pd_d, pd_e, pd_f;

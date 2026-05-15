@@ -634,6 +634,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   List   *atoms_out = NIL;
   int    *atom_group = NULL;        /* per-atom group id: -1 = outer-wrap; 0 = inner */
   bool   *in_targetlist = NULL;     /* per-var: appears somewhere in q->targetList */
+  int    *first_member_of_group = NULL; /* per-group: smallest atom index in the group */
   bool    have_partial_class = false;
   int     partial_first = -1;       /* repr of the first partial-coverage class seen */
   int     i, j;
@@ -882,6 +883,29 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     pfree(sig);
   }
 
+  /* For each group, identify the @em first member (smallest
+   * original-rtindex atom belonging to the group).  Head Vars on
+   * grouped atoms are only allowed on the first member: the inner
+   * sub-Query's @c targetList is built from @c first_member->proj_slots,
+   * so a head Var added to a non-first-member atom's @c proj_slots
+   * would not actually surface in the inner output.  Tracking this
+   * here lets the per-Var check and proj_slots build below act
+   * uniformly. */
+  {
+    int g, ngroups_local = 0;
+    for (j = 0; j < natoms; j++)
+      if (atom_group[j] >= 0 && atom_group[j] + 1 > ngroups_local)
+        ngroups_local = atom_group[j] + 1;
+    first_member_of_group = palloc(natoms * sizeof(int));
+    for (g = 0; g < ngroups_local; g++)
+      first_member_of_group[g] = -1;
+    for (j = 0; j < natoms; j++) {
+      int g_loc = atom_group[j];
+      if (g_loc >= 0 && first_member_of_group[g_loc] < 0)
+        first_member_of_group[g_loc] = j;
+    }
+  }
+
   ok = true;
 
   /* Every Var anywhere in the query must belong to a class that
@@ -898,11 +922,18 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
         && atom_group[atom_idx] >= 0)
       continue;
     /* Single-atom head Var: only this atom's wrap binds the column,
-     * so the wrap must expose it as an extra projection slot. */
-    if (class_atom_count[c] == 1
-        && atom_group[atom_idx] < 0
-        && in_targetlist[i])
-      continue;
+     * so the wrap must expose it as an extra projection slot.  For
+     * outer-wrap atoms (@c group_id == -1) the slot lives in the
+     * atom's own DISTINCT wrap; for grouped atoms it must be on
+     * the first member of the group, otherwise the inner sub-Query
+     * (whose targetList is built from first_member->proj_slots)
+     * would not surface it. */
+    if (class_atom_count[c] == 1 && in_targetlist[i]) {
+      if (atom_group[atom_idx] < 0)
+        continue;
+      if (first_member_of_group[atom_group[atom_idx]] == atom_idx)
+        continue;
+    }
     if (provsql_verbose >= 30)
       provsql_notice("safe-query rewriter: Var (varno=%u, varattno=%d) "
                      "belongs to a class that does not match any outer or "
@@ -959,13 +990,16 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       slot->class_id   = i;
       sa->proj_slots = lappend(sa->proj_slots, slot);
     }
-    /* Single-atom head Vars: for outer-wrap atoms, expose every
-     * body-only Var (singleton class) that appears in the user's
-     * targetList as an extra slot.  Deduplicate against slots
-     * already added so a Var that is both a slot column and a
-     * targetList projection (impossible for singleton classes, but
-     * cheap to guard) is not added twice. */
-    if (sa->group_id < 0) {
+    /* Single-atom head Vars: expose every body-only Var (singleton
+     * class) that appears in the user's targetList as an extra slot.
+     * For outer-wrap atoms the slot lives in the per-atom DISTINCT
+     * wrap; for first-member grouped atoms it goes into the inner
+     * sub-Query's @c targetList (which is built from
+     * @c first_member->proj_slots).  Non-first-member grouped atoms
+     * have already been rejected by the per-Var check above. */
+    if (sa->group_id < 0
+        || (sa->group_id >= 0
+            && first_member_of_group[sa->group_id] == j)) {
       for (i = 0; i < nvars; i++) {
         safe_proj_slot *slot;
         ListCell *exlc;
@@ -1090,6 +1124,8 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   pfree(atom_group);
   if (in_targetlist)
     pfree(in_targetlist);
+  if (first_member_of_group)
+    pfree(first_member_of_group);
   (void) constants;
   return atoms_out;
 
@@ -1102,6 +1138,8 @@ bail:
     pfree(atom_group);
   if (in_targetlist)
     pfree(in_targetlist);
+  if (first_member_of_group)
+    pfree(first_member_of_group);
   (void) constants;
   *groups_out = NIL;
   return NIL;
