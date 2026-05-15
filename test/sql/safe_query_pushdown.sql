@@ -767,6 +767,57 @@ BEGIN
   END IF;
 END $$;
 
+-- (22) Bridge case: a hierarchical CQ where a partial-coverage class
+--      spans atoms with different signatures.  pd_br_a, pd_br_b have
+--      signature {y, z}; pd_br_c has signature {y}; pd_br_d, pd_br_e
+--      have signature {w}.  atoms(y)={A,B,C} (partial, bridges) and
+--      atoms(z)={A,B}, atoms(w)={D,E} are disjoint partials nested
+--      under x.  The rewriter currently bails because each inner
+--      sub-Query would need to expose the bridge column y to the
+--      outer for joining {A,B} with C, and that path is deferred.
+--      The unrewritten circuit has shared inputs (multiple per-x
+--      rows due to y) so 'independent' must reject.
+CREATE TABLE pd_br_a(x int, y int, z int);
+CREATE TABLE pd_br_b(x int, y int, z int);
+CREATE TABLE pd_br_c(x int, y int);
+CREATE TABLE pd_br_d(x int, w int);
+CREATE TABLE pd_br_e(x int, w int);
+INSERT INTO pd_br_a VALUES (1, 10, 100), (1, 10, 200), (1, 11, 100), (2, 20, 300);
+INSERT INTO pd_br_b VALUES (1, 10, 100), (1, 10, 200), (1, 11, 100), (2, 20, 300);
+INSERT INTO pd_br_c VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_br_d VALUES (1, 1000), (1, 2000), (2, 3000);
+INSERT INTO pd_br_e VALUES (1, 1000), (1, 2000), (2, 3000);
+SELECT add_provenance('pd_br_a');
+SELECT add_provenance('pd_br_b');
+SELECT add_provenance('pd_br_c');
+SELECT add_provenance('pd_br_d');
+SELECT add_provenance('pd_br_e');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_br_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_br_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_br_c;
+  PERFORM set_prob(provsql, 0.5) FROM pd_br_d;
+  PERFORM set_prob(provsql, 0.4) FROM pd_br_e;
+END $$;
+
+SET provsql.boolean_provenance = on;
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent')
+      FROM pd_br_a a, pd_br_b b, pd_br_c c, pd_br_d d, pd_br_e e
+     WHERE a.x=b.x AND a.x=c.x AND a.x=d.x AND a.x=e.x
+       AND a.y=b.y AND a.y=c.y AND a.z=b.z AND d.w=e.w
+     GROUP BY a.x;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected ''independent'' to reject the bridge-case '
+                    'query -- the rewriter should have bailed';
+  END IF;
+END $$;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -816,4 +867,5 @@ DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_ua_a, pd_ua_b, pd_ua_c, pd_ua_d,
            pd_ud_a, pd_ud_b, pd_ud_c, pd_ud_d,
            pd_uo_a, pd_uo_b, pd_uo_c,
+           pd_br_a, pd_br_b, pd_br_c, pd_br_d, pd_br_e,
            pd_d, pd_e, pd_f;
