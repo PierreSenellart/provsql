@@ -461,6 +461,58 @@ SELECT b.x, b.y, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base13 b JOIN pd_rew13 r ON b.x = r.x AND b.y = r.y
  ORDER BY b.x, b.y;
 
+-- (14) Multi-component + all-constant targetList (Boolean-existence
+--      idiom over disconnected components):
+--        SELECT DISTINCT 1 FROM A, B
+--      where A and B share no variable.  No user TE carries an atom
+--      Var; each component's inner sub-Query gets a synthetic
+--      Const(1) anchor so it still produces one row per "grouping"
+--      (here, one row total).  The outer Cartesian-products the two
+--      one-row inners and the user's DISTINCT keeps the single
+--      output row.  Rewritten probability must match the baseline
+--      (P(non-empty join) = (1 - prod(1 - p_a)) * (1 - prod(1 - p_b))).
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base14 AS
+  SELECT DISTINCT 1 AS one FROM pd_mc_a a, pd_mc_b b;
+CREATE TEMP TABLE pd_base14_p AS
+  SELECT one, ROUND(probability_evaluate(provsql)::numeric, 6) AS p
+    FROM pd_base14;
+SELECT remove_provenance('pd_base14_p');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew14 AS
+  SELECT DISTINCT 1 AS one FROM pd_mc_a a, pd_mc_b b;
+CREATE TEMP TABLE pd_rew14_p AS
+  SELECT one, ROUND(probability_evaluate(provsql, 'independent')::numeric, 6) AS p
+    FROM pd_rew14;
+SELECT remove_provenance('pd_rew14_p');
+
+SELECT b.one, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base14_p b JOIN pd_rew14_p r ON b.one = r.one;
+
+-- (15) Multi-component asymmetric: one component carries a Var in the
+--      user's targetList (a.x), the other one does not.  Per output
+--      row x = x_t:
+--        P(x_t) = P(A has x_t) * P(B is non-empty).
+--      pd_mc_b's inner sub-Query gets a synthetic Const(1) anchor.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base15 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_mc_a a, pd_mc_b b
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base15');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew15 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_mc_a a, pd_mc_b b
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew15');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base15 b JOIN pd_rew15 r ON b.x = r.x
+ ORDER BY b.x;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook

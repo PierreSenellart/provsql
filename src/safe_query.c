@@ -1918,16 +1918,25 @@ static Query *rewrite_multi_component(const constants_t *constants,
     inner_tlists[chosen] = lappend(inner_tlists[chosen], te);
   }
 
-  /* Every component must have at least one Var-carrying TargetEntry
-   * to anchor its inner sub-Query's GROUP BY.  Without one, we'd
-   * need a synthetic Const TE (deferred).  Bail to fall through. */
+  /* A component with no user-Var TargetEntry still needs an anchor
+   * inside its inner sub-Query: without something in the targetList,
+   * the inner has no column to group on and PostgreSQL won't accept
+   * the subquery.  Synthesise a @c Const(1) for those components.
+   * The outer doesn't reference these anchors (no user TE points at
+   * them); they only exist to fold the inner to one row per per-
+   * component grouping (here, one row total since there are no
+   * Vars to group by). */
   for (k = 0; k < ncomp; k++) {
     if (inner_tlists[k] == NIL) {
-      if (provsql_verbose >= 30)
-        provsql_notice("safe-query multi-component rewriter: component "
-                       "%d has no Var-carrying TargetEntry -- deferred",
-                       k);
-      return NULL;
+      TargetEntry *anchor = makeNode(TargetEntry);
+      anchor->expr = (Expr *) makeConst(INT4OID, -1, InvalidOid,
+                                        sizeof(int32),
+                                        Int32GetDatum(1), false, true);
+      anchor->resno           = 1;
+      anchor->resname         = pstrdup("provsql_anchor");
+      anchor->ressortgroupref = 1;
+      anchor->resjunk         = false;
+      inner_tlists[k] = list_make1(anchor);
     }
   }
 
