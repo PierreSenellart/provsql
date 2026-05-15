@@ -2301,6 +2301,9 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
  *  - self-join-free conjunctive queries
  *  - no aggregation, window functions, DISTINCT ON, LIMIT/OFFSET,
  *    set operations (UCQ -- TODO), sublinks
+ *  - an outer @c GROUP @c BY or top-level @c DISTINCT.  Without one,
+ *    the per-atom @c SELECT @c DISTINCT wraps would shrink the user-
+ *    visible row count, so the rewrite would change the result set.
  *  - all base relations have a provenance metadata entry, none are
  *    OPAQUE.  BID atom block-key validation is deferred to the
  *    rewriter (we cannot check it without knowing the root variable).
@@ -2325,6 +2328,16 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
     return false;
   if (q->rtable == NIL)
     return false;                       /* FROM-less; nothing to rewrite */
+  /* The per-atom @c SELECT @c DISTINCT wraps collapse duplicate
+   * source tuples on their projection slots; without an outer
+   * @c GROUP @c BY or top-level @c DISTINCT the user would observe a
+   * shrunken row count compared to the unrewritten query.  Require
+   * one of them so the rewrite is row-count-preserving in the user's
+   * eye.  Both are encoded as @c SortGroupClause lists; either is
+   * enough -- @c transform_distinct_into_group_by promotes the
+   * outer @c DISTINCT to a @c GROUP @c BY downstream of us. */
+  if (q->groupClause == NIL && q->distinctClause == NIL)
+    return false;
 
   /* All FROM entries must be base relations referenced via plain
    * RangeTblRef (no JoinExpr, no RTE_SUBQUERY / RTE_VALUES / ...).

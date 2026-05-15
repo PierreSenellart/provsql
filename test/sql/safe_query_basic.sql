@@ -96,6 +96,25 @@ CREATE TEMP TABLE sqb_shape AS
 SELECT remove_provenance('sqb_shape');
 SELECT id, root, root_nchildren FROM sqb_shape ORDER BY id;
 
+-- (5) The per-atom SELECT DISTINCT wraps collapse duplicate source
+--     tuples on their projection slots, which would shrink the
+--     user-visible row count of a query without an outer GROUP BY or
+--     top-level DISTINCT.  The candidate gate refuses such queries
+--     so the GUC stays observationally transparent.  Cardinality
+--     under the GUC must match the GUC-off baseline: 1 row at id=1
+--     (1x1 self-join) plus 4 rows at id=3 (2x2 self-join) = 5 rows.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE sqb_nogb_off AS
+  SELECT a.id FROM sqb_left a, sqb_right b WHERE a.id = b.id;
+SELECT remove_provenance('sqb_nogb_off');
+SELECT count(*) AS rows_off FROM sqb_nogb_off;
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE sqb_nogb_on AS
+  SELECT a.id FROM sqb_left a, sqb_right b WHERE a.id = b.id;
+SELECT remove_provenance('sqb_nogb_on');
+SELECT count(*) AS rows_on FROM sqb_nogb_on;
+
 SET provsql.boolean_provenance = off;
 DROP TABLE sqb_left;
 DROP TABLE sqb_right;

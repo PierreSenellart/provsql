@@ -26,3 +26,15 @@ id|root|root_nchildren
 1|times|2
 3|times|2
 (2 rows)
+remove_provenance
+
+(1 row)
+rows_off
+5
+(1 row)
+remove_provenance
+
+(1 row)
+rows_on
+5
+(1 row)
