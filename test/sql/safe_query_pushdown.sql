@@ -633,6 +633,140 @@ SELECT b.w, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base18 b JOIN pd_rew18 r ON b.w = r.w
  ORDER BY b.w;
 
+-- (19) UNION ALL of two branch-disjoint hierarchical CQs.  Each
+--      branch is rewritten by its own try_safe_query_rewrite invocation
+--      via the RTE_SUBQUERY recursion in get_provenance_attributes;
+--      UNION ALL just concatenates rows without folding, so per-row
+--      'independent' evaluation is sound by construction.
+CREATE TABLE pd_ua_a(x int);
+CREATE TABLE pd_ua_b(x int);
+CREATE TABLE pd_ua_c(x int);
+CREATE TABLE pd_ua_d(x int);
+INSERT INTO pd_ua_a VALUES (1), (1), (2);
+INSERT INTO pd_ua_b VALUES (1), (1), (2);
+INSERT INTO pd_ua_c VALUES (3), (3), (4);
+INSERT INTO pd_ua_d VALUES (3), (3), (4);
+SELECT add_provenance('pd_ua_a');
+SELECT add_provenance('pd_ua_b');
+SELECT add_provenance('pd_ua_c');
+SELECT add_provenance('pd_ua_d');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_ua_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_ua_b;
+  PERFORM set_prob(provsql, 0.5) FROM pd_ua_c;
+  PERFORM set_prob(provsql, 0.4) FROM pd_ua_d;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base19 AS
+  SELECT x, probability_evaluate(provenance()) AS p FROM (
+    SELECT a.x FROM pd_ua_a a, pd_ua_b b WHERE a.x = b.x GROUP BY a.x
+    UNION ALL
+    SELECT c.x FROM pd_ua_c c, pd_ua_d d WHERE c.x = d.x GROUP BY c.x
+  ) t;
+SELECT remove_provenance('pd_base19');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew19 AS
+  SELECT x, probability_evaluate(provenance(), 'independent') AS p FROM (
+    SELECT a.x FROM pd_ua_a a, pd_ua_b b WHERE a.x = b.x GROUP BY a.x
+    UNION ALL
+    SELECT c.x FROM pd_ua_c c, pd_ua_d d WHERE c.x = d.x GROUP BY c.x
+  ) t;
+SELECT remove_provenance('pd_rew19');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base19 b JOIN pd_rew19 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (20) Branch-disjoint UNION (DISTINCT) of two hierarchical CQs.  Rows
+--      that appear in both branches (here x=2 is in branch 1, x=3 is
+--      in branch 2, and x=2-or-x=3 are deliberately constructed so
+--      pd_ud_a x=2 and pd_ud_c x=2 are both present) get a cross-
+--      branch gate_plus.  The two branches share no relations, so
+--      the combined gate stays read-once and 'independent' must
+--      agree with the baseline.
+CREATE TABLE pd_ud_a(x int);
+CREATE TABLE pd_ud_b(x int);
+CREATE TABLE pd_ud_c(x int);
+CREATE TABLE pd_ud_d(x int);
+INSERT INTO pd_ud_a VALUES (1), (1), (2);
+INSERT INTO pd_ud_b VALUES (1), (1), (2);
+INSERT INTO pd_ud_c VALUES (2), (3), (3);
+INSERT INTO pd_ud_d VALUES (2), (3), (3);
+SELECT add_provenance('pd_ud_a');
+SELECT add_provenance('pd_ud_b');
+SELECT add_provenance('pd_ud_c');
+SELECT add_provenance('pd_ud_d');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_ud_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_ud_b;
+  PERFORM set_prob(provsql, 0.5) FROM pd_ud_c;
+  PERFORM set_prob(provsql, 0.4) FROM pd_ud_d;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base20 AS
+  SELECT x, probability_evaluate(provenance()) AS p FROM (
+    SELECT a.x FROM pd_ud_a a, pd_ud_b b WHERE a.x = b.x GROUP BY a.x
+    UNION
+    SELECT c.x FROM pd_ud_c c, pd_ud_d d WHERE c.x = d.x GROUP BY c.x
+  ) t;
+SELECT remove_provenance('pd_base20');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew20 AS
+  SELECT x, probability_evaluate(provenance(), 'independent') AS p FROM (
+    SELECT a.x FROM pd_ud_a a, pd_ud_b b WHERE a.x = b.x GROUP BY a.x
+    UNION
+    SELECT c.x FROM pd_ud_c c, pd_ud_d d WHERE c.x = d.x GROUP BY c.x
+  ) t;
+SELECT remove_provenance('pd_rew20');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base20 b JOIN pd_rew20 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (21) Branch-overlapping UNION (DISTINCT): both branches reference
+--      pd_uo_a (a tracked relation).  When a row x is produced by
+--      both branches, the cross-branch gate_plus has SHARED leaves
+--      (pd_uo_a's tuples appear in both sub-trees), so the combined
+--      gate is not read-once and 'independent' must reject.  This
+--      pins that the rewriter does NOT silently mis-evaluate a
+--      branch-overlapping UCQ.
+CREATE TABLE pd_uo_a(x int);
+CREATE TABLE pd_uo_b(x int);
+CREATE TABLE pd_uo_c(x int);
+INSERT INTO pd_uo_a VALUES (1), (1), (2);
+INSERT INTO pd_uo_b VALUES (1), (1), (2);
+INSERT INTO pd_uo_c VALUES (1), (1), (2);
+SELECT add_provenance('pd_uo_a');
+SELECT add_provenance('pd_uo_b');
+SELECT add_provenance('pd_uo_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_uo_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_uo_b;
+  PERFORM set_prob(provsql, 0.4) FROM pd_uo_c;
+END $$;
+
+SET provsql.boolean_provenance = on;
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent') FROM (
+      SELECT a.x FROM pd_uo_a a, pd_uo_b b WHERE a.x = b.x GROUP BY a.x
+      UNION
+      SELECT a.x FROM pd_uo_a a, pd_uo_c c WHERE a.x = c.x GROUP BY a.x
+    ) t;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected ''independent'' to reject the branch-overlapping '
+                    'UNION DISTINCT -- pd_uo_a appears in both branches';
+  END IF;
+END $$;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -679,4 +813,7 @@ DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_mc_a, pd_mc_b, pd_sh_a, pd_sh_b,
            pd_gh_a, pd_gh_b, pd_gh_c,
            pd_nf_a, pd_nf_b, pd_nf_c,
+           pd_ua_a, pd_ua_b, pd_ua_c, pd_ua_d,
+           pd_ud_a, pd_ud_b, pd_ud_c, pd_ud_d,
+           pd_uo_a, pd_uo_b, pd_uo_c,
            pd_d, pd_e, pd_f;
