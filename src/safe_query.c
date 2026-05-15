@@ -1704,6 +1704,487 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
 }
 
 /**
+ * @brief Compute atom-level connected components.
+ *
+ * Two atoms belong to the same component iff there is a chain of
+ * equality conjuncts in @p quals that connects one of their Vars to
+ * one of the other's Vars.  Uses a quick atom-level union-find driven
+ * by the equality pairs already extracted by
+ * @c safe_collect_equalities, then compacts representatives into
+ * 0-based component ids written into @p atom_to_comp.
+ *
+ * @return Number of distinct components.
+ */
+static int compute_atom_components(Query *q, Node *quals, int *atom_to_comp) {
+  int       natoms = list_length(q->rtable);
+  int      *dsu    = palloc(natoms * sizeof(int));
+  List     *eq_pairs = NIL;
+  int      *root_to_comp;
+  int       ncomp = 0;
+  int       j;
+  ListCell *lc;
+
+  for (j = 0; j < natoms; j++)
+    dsu[j] = j;
+
+  safe_collect_equalities(quals, &eq_pairs);
+  for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
+    Var *lv, *rv;
+    int  la, ra;
+    lv = (Var *) lfirst(lc);
+    lc = my_lnext(eq_pairs, lc);
+    rv = (Var *) lfirst(lc);
+    la = (int) lv->varno - 1;
+    ra = (int) rv->varno - 1;
+    if (la < 0 || la >= natoms || ra < 0 || ra >= natoms)
+      continue;
+    while (dsu[la] != la) la = dsu[la];
+    while (dsu[ra] != ra) ra = dsu[ra];
+    if (la != ra)
+      dsu[la] = ra;
+  }
+
+  root_to_comp = palloc(natoms * sizeof(int));
+  for (j = 0; j < natoms; j++) {
+    int r = j;
+    int k;
+    bool found = false;
+    while (dsu[r] != r) r = dsu[r];
+    dsu[j] = r;
+    for (k = 0; k < ncomp; k++) {
+      if (root_to_comp[k] == r) {
+        atom_to_comp[j] = k;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      root_to_comp[ncomp] = r;
+      atom_to_comp[j] = ncomp++;
+    }
+  }
+  pfree(root_to_comp);
+  pfree(dsu);
+  return ncomp;
+}
+
+/** @brief Mutator context for @c safe_outer_te_remap_mutator. */
+typedef struct safe_outer_te_remap_ctx {
+  int    *atom_to_comp;            ///< per-atom component id
+  int    *atom_to_inner_attno;     ///< per-atom column position in its component's inner targetList (1-based; 0 = not exposed)
+  Index  *comp_to_outer_rtindex;   ///< per-component outer-rtable position (1-based)
+} safe_outer_te_remap_ctx;
+
+/**
+ * @brief Rewrite Vars in the outer targetList for the multi-component
+ *        rewrite.
+ *
+ * Each base-level Var(varno=v, varattno=a) in the user's targetList is
+ * looked up in @c atom_to_inner_attno[v-1] to find which output column
+ * of the matching component's inner sub-Query carries the Var, then
+ * rewritten to point at that component's @c RTE_SUBQUERY in the outer
+ * rtable.  A Var whose @c atom_to_inner_attno entry is 0 (i.e. the
+ * detector did not pick this column for its inner sub-Query)
+ * indicates a bug or a query the caller should have refused; we
+ * @c provsql_error to surface it.
+ */
+static Node *safe_outer_te_remap_mutator(Node *node,
+                                         safe_outer_te_remap_ctx *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0 && v->varno >= 1) {
+      int atom_idx = (int) v->varno - 1;
+      int comp     = ctx->atom_to_comp[atom_idx];
+      AttrNumber inner_attno =
+          (AttrNumber) ctx->atom_to_inner_attno[atom_idx];
+      Index outer_rtindex = ctx->comp_to_outer_rtindex[comp];
+      Var *vv;
+      if (inner_attno == 0)
+        provsql_error("safe-query multi-component rewriter: Var "
+                      "(varno=%u, varattno=%d) has no exposed column "
+                      "in its component's inner sub-Query",
+                      (unsigned) v->varno, (int) v->varattno);
+      vv = (Var *) copyObject(v);
+      vv->varno     = outer_rtindex;
+      vv->varattno  = inner_attno;
+#if PG_VERSION_NUM >= 130000
+      vv->varnosyn    = outer_rtindex;
+      vv->varattnosyn = inner_attno;
+#endif
+      return (Node *) vv;
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, safe_outer_te_remap_mutator,
+                                 (void *) ctx);
+}
+
+/**
+ * @brief Apply the multi-component rewrite.
+ *
+ * Assumes @p atom_to_comp partitions the @c q->rtable atoms into
+ * @p ncomp connected components (@p ncomp >= 2) and that every
+ * @c TargetEntry in @c q->targetList has all its Vars in a single
+ * component.  Builds one inner @c Query per component, each carrying:
+ *  - the component's atoms as @c RTE_RELATION clones,
+ *  - the cross-atom WHERE conjuncts and atom-local pushed quals
+ *    confined to those atoms,
+ *  - the slice of @c q->targetList referencing this component's
+ *    atoms (fresh @c ressortgroupref) plus matching @c groupClause,
+ * and assembles an outer @c Query whose @c rtable is the list of
+ * inner sub-Queries.  Each output row's provenance is the
+ * @c gate_times of the per-component provsqls; Choice A re-entry
+ * lets the single-component rewriter handle each component
+ * independently.
+ *
+ * Returns @c NULL to fall through when any component has no Var-
+ * carrying @c TargetEntry to anchor its inner sub-Query (the all-
+ * constant case, e.g. @c SELECT @c DISTINCT @c 1 @c FROM @c A,B,
+ * is deferred).
+ */
+static Query *rewrite_multi_component(const constants_t *constants,
+                                      Query *q,
+                                      Node *residual,
+                                      List **per_atom_quals,
+                                      int *atom_to_comp,
+                                      int ncomp) {
+  Query        *outer;
+  int           natoms = list_length(q->rtable);
+  Query       **inner_queries;
+  List        **inner_quals;       /* per-component list of Node* */
+  List        **inner_tlists;      /* per-component list of TargetEntry* (orig) */
+  int          *comp_inner_idx;    /* per-component running rtindex counter */
+  int          *atom_to_inner_idx; /* per-atom 1-based rtindex inside its component */
+  int          *atom_to_inner_attno; /* per-atom 1-based attno of its first targetList exposure */
+  Index        *comp_outer_rtindex;
+  int           k, j;
+  ListCell     *lc;
+  List         *conjuncts = NIL;
+  List         *outer_resid = NIL;
+
+  (void) constants;
+
+  /* Allocate per-component scratch. */
+  inner_quals        = palloc0(ncomp * sizeof(List *));
+  inner_tlists       = palloc0(ncomp * sizeof(List *));
+  comp_inner_idx     = palloc0(ncomp * sizeof(int));
+  atom_to_inner_idx  = palloc0(natoms * sizeof(int));
+  atom_to_inner_attno = palloc0(natoms * sizeof(int));
+  comp_outer_rtindex = palloc0(ncomp * sizeof(Index));
+
+  /* Assign per-component inner rtindexes in original-rtindex order. */
+  for (j = 0; j < natoms; j++) {
+    int c = atom_to_comp[j];
+    comp_inner_idx[c]++;
+    atom_to_inner_idx[j] = comp_inner_idx[c];
+  }
+
+  /* Partition the user's targetList by component.  Reject any TE
+   * whose Vars span more than one component (impossible for a truly
+   * disconnected CQ -- belt-and-braces).  Reject the all-constant
+   * case (a TE with no Vars at all) by returning NULL; we defer
+   * that. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    safe_collect_varnos_ctx vctx = { NULL };
+    int v;
+    int chosen = -1;
+    safe_collect_varnos_walker((Node *) te->expr, &vctx);
+    if (bms_is_empty(vctx.varnos)) {
+      /* No atom Vars: a constant-only or @c provenance()-only TE
+       * (the latter is rewritten downstream).  It stays at the outer
+       * level; nothing to push into any inner sub-Query. */
+      bms_free(vctx.varnos);
+      continue;
+    }
+    v = -1;
+    while ((v = bms_next_member(vctx.varnos, v)) >= 0) {
+      int c;
+      if (v < 1 || v > natoms) {
+        bms_free(vctx.varnos);
+        return NULL;
+      }
+      c = atom_to_comp[v - 1];
+      if (chosen < 0)
+        chosen = c;
+      else if (chosen != c) {
+        bms_free(vctx.varnos);
+        return NULL;                /* cross-component TE; not disconnected */
+      }
+    }
+    bms_free(vctx.varnos);
+    inner_tlists[chosen] = lappend(inner_tlists[chosen], te);
+  }
+
+  /* Every component must have at least one Var-carrying TargetEntry
+   * to anchor its inner sub-Query's GROUP BY.  Without one, we'd
+   * need a synthetic Const TE (deferred).  Bail to fall through. */
+  for (k = 0; k < ncomp; k++) {
+    if (inner_tlists[k] == NIL) {
+      if (provsql_verbose >= 30)
+        provsql_notice("safe-query multi-component rewriter: component "
+                       "%d has no Var-carrying TargetEntry -- deferred",
+                       k);
+      return NULL;
+    }
+  }
+
+  /* Partition the residual cross-atom conjuncts by component.  A
+   * conjunct whose Vars span more than one component stays at the
+   * outer level (shouldn't happen for a truly disconnected CQ but be
+   * defensive). */
+  safe_flatten_and(residual, &conjuncts);
+  foreach (lc, conjuncts) {
+    Node *qual = (Node *) lfirst(lc);
+    safe_collect_varnos_ctx vctx = { NULL };
+    int v;
+    int chosen = -1;
+    bool keep_outer = false;
+    safe_collect_varnos_walker(qual, &vctx);
+    v = -1;
+    while ((v = bms_next_member(vctx.varnos, v)) >= 0) {
+      int c;
+      if (v < 1 || v > natoms) {
+        keep_outer = true;
+        break;
+      }
+      c = atom_to_comp[v - 1];
+      if (chosen < 0)
+        chosen = c;
+      else if (chosen != c) {
+        keep_outer = true;
+        break;
+      }
+    }
+    bms_free(vctx.varnos);
+    if (keep_outer || chosen < 0)
+      outer_resid = lappend(outer_resid, qual);
+    else
+      inner_quals[chosen] = lappend(inner_quals[chosen], qual);
+  }
+
+  /* Build one inner Query per component. */
+  inner_queries = palloc0(ncomp * sizeof(Query *));
+  for (k = 0; k < ncomp; k++) {
+    Query     *inner = makeNode(Query);
+    FromExpr  *jt    = makeNode(FromExpr);
+    int        inner_attno = 0;
+    int        inner_sgr   = 0;
+    int       *orig_to_inner;
+
+    inner->commandType = CMD_SELECT;
+    inner->canSetTag   = false;
+    inner->rtable      = NIL;
+    inner->jointree    = jt;
+    jt->fromlist       = NIL;
+    jt->quals          = NULL;
+#if PG_VERSION_NUM >= 160000
+    inner->rteperminfos = NIL;
+#endif
+
+    orig_to_inner = palloc0((natoms + 1) * sizeof(int));
+
+    /* Clone the component's atoms into the inner rtable. */
+    for (j = 0; j < natoms; j++) {
+      RangeTblEntry *src_rte, *cloned;
+      RangeTblRef   *rtr;
+      int inner_rtindex;
+      if (atom_to_comp[j] != k)
+        continue;
+      src_rte = (RangeTblEntry *) list_nth(q->rtable, j);
+      cloned  = (RangeTblEntry *) copyObject(src_rte);
+#if PG_VERSION_NUM >= 160000
+      if (cloned->perminfoindex != 0
+          && q->rteperminfos != NIL
+          && (int) cloned->perminfoindex <= list_length(q->rteperminfos)) {
+        RTEPermissionInfo *rpi = list_nth_node(RTEPermissionInfo,
+                                               q->rteperminfos,
+                                               cloned->perminfoindex - 1);
+        inner->rteperminfos =
+            lappend(inner->rteperminfos, copyObject(rpi));
+        cloned->perminfoindex = (Index) list_length(inner->rteperminfos);
+      } else {
+        cloned->perminfoindex = 0;
+      }
+#endif
+      inner->rtable = lappend(inner->rtable, cloned);
+      inner_rtindex = list_length(inner->rtable);
+      orig_to_inner[j + 1] = inner_rtindex;
+      rtr = makeNode(RangeTblRef);
+      rtr->rtindex = inner_rtindex;
+      jt->fromlist = lappend(jt->fromlist, rtr);
+    }
+
+    /* Inner WHERE: cross-atom conjuncts within this component + atom-
+     * local pushed quals for this component's atoms.  Var.varno is
+     * rewritten from the original rtindex to the inner rtindex via a
+     * tiny inline remap. */
+    {
+      List *all = NIL;
+      ListCell *qlc;
+      foreach (qlc, inner_quals[k])
+        all = lappend(all, copyObject((Node *) lfirst(qlc)));
+      for (j = 0; j < natoms; j++) {
+        if (atom_to_comp[j] != k)
+          continue;
+        foreach (qlc, per_atom_quals[j])
+          all = lappend(all, copyObject((Node *) lfirst(qlc)));
+      }
+      if (all != NIL) {
+        safe_inner_varno_remap_ctx rctx;
+        List *remapped = NIL;
+        rctx.orig_to_inner = orig_to_inner;
+        rctx.natoms        = natoms;
+        foreach (qlc, all) {
+          Node *qq = (Node *) lfirst(qlc);
+          qq = safe_inner_varno_remap_mutator(qq, &rctx);
+          remapped = lappend(remapped, qq);
+        }
+        if (list_length(remapped) == 1)
+          jt->quals = (Node *) linitial(remapped);
+        else
+          jt->quals = (Node *) makeBoolExpr(AND_EXPR, remapped, -1);
+      }
+    }
+
+    /* Inner targetList: clone the user's TEs that landed in this
+     * component, remap their Vars to the inner rtindexes, assign
+     * fresh resno + ressortgroupref, and synthesise a matching
+     * groupClause that GROUPs BY every slot. */
+    inner->targetList = NIL;
+    inner->groupClause = NIL;
+    {
+      ListCell *tlc;
+      foreach (tlc, inner_tlists[k]) {
+        TargetEntry *src_te = (TargetEntry *) lfirst(tlc);
+        TargetEntry *new_te = (TargetEntry *) copyObject(src_te);
+        safe_inner_varno_remap_ctx rctx;
+        SortGroupClause *sgc = makeNode(SortGroupClause);
+        Oid             expr_type;
+        rctx.orig_to_inner = orig_to_inner;
+        rctx.natoms        = natoms;
+        new_te->expr = (Expr *) safe_inner_varno_remap_mutator(
+            (Node *) new_te->expr, &rctx);
+        inner_attno++;
+        inner_sgr++;
+        new_te->resno           = (AttrNumber) inner_attno;
+        new_te->ressortgroupref = (Index) inner_sgr;
+        new_te->resjunk         = false;
+        /* Track exposure for outer Var remap.  Each user TE keeps
+         * the first atom-Var encountered; for our restricted scope
+         * (every TE has Vars in a single component, and each Var of
+         * a given (varno, varattno) ends up at one inner column) this
+         * gives the right mapping. */
+        {
+          safe_collect_varnos_ctx vctx = { NULL };
+          int v;
+          safe_collect_varnos_walker((Node *) src_te->expr, &vctx);
+          v = -1;
+          while ((v = bms_next_member(vctx.varnos, v)) >= 0) {
+            if (v >= 1 && v <= natoms && atom_to_comp[v - 1] == k)
+              atom_to_inner_attno[v - 1] = inner_attno;
+          }
+          bms_free(vctx.varnos);
+        }
+        inner->targetList = lappend(inner->targetList, new_te);
+
+        expr_type = exprType((Node *) new_te->expr);
+        sgc->tleSortGroupRef = (Index) inner_sgr;
+        get_sort_group_operators(expr_type, true, true, false,
+                                 &sgc->sortop, &sgc->eqop, NULL,
+                                 &sgc->hashable);
+        sgc->nulls_first = false;
+        inner->groupClause = lappend(inner->groupClause, sgc);
+      }
+    }
+
+    inner_queries[k] = inner;
+    pfree(orig_to_inner);
+  }
+
+  /* Build the outer Query: rtable is one RTE_SUBQUERY per
+   * component; jointree.fromlist holds N RangeTblRefs; targetList /
+   * groupClause / distinctClause / etc. are copied from the user's
+   * Query with Vars remapped to the matching component's inner
+   * output column. */
+  outer = copyObject(q);
+  outer->rtable = NIL;
+  outer->jointree->fromlist = NIL;
+  outer->jointree->quals = (outer_resid == NIL) ? NULL
+                          : (list_length(outer_resid) == 1
+                             ? (Node *) linitial(outer_resid)
+                             : (Node *) makeBoolExpr(AND_EXPR,
+                                                     outer_resid, -1));
+#if PG_VERSION_NUM >= 160000
+  outer->rteperminfos = NIL;
+#endif
+  for (k = 0; k < ncomp; k++) {
+    RangeTblEntry *new_rte = makeNode(RangeTblEntry);
+    Alias *eref = makeNode(Alias);
+    ListCell *tlc;
+    int slot_idx = 0;
+
+    eref->aliasname = psprintf("provsql_component_%d", k + 1);
+    eref->colnames = NIL;
+    foreach (tlc, inner_queries[k]->targetList) {
+      TargetEntry *ite = (TargetEntry *) lfirst(tlc);
+      slot_idx++;
+      eref->colnames = lappend(eref->colnames,
+                               makeString(ite->resname
+                                          ? pstrdup(ite->resname)
+                                          : psprintf("col_%d", slot_idx)));
+    }
+
+    new_rte->rtekind  = RTE_SUBQUERY;
+    new_rte->subquery = inner_queries[k];
+    new_rte->alias    = NULL;
+    new_rte->eref     = eref;
+    new_rte->inFromCl = true;
+    new_rte->lateral  = false;
+#if PG_VERSION_NUM < 160000
+    new_rte->requiredPerms = 0;
+#endif
+
+    outer->rtable = lappend(outer->rtable, new_rte);
+    comp_outer_rtindex[k] = (Index) list_length(outer->rtable);
+    {
+      RangeTblRef *rtr = makeNode(RangeTblRef);
+      rtr->rtindex = comp_outer_rtindex[k];
+      outer->jointree->fromlist = lappend(outer->jointree->fromlist, rtr);
+    }
+  }
+
+  /* Remap Vars in the outer targetList and jointree.quals. */
+  {
+    safe_outer_te_remap_ctx tctx;
+    tctx.atom_to_comp        = atom_to_comp;
+    tctx.atom_to_inner_attno = atom_to_inner_attno;
+    tctx.comp_to_outer_rtindex = comp_outer_rtindex;
+    outer->targetList = (List *) safe_outer_te_remap_mutator(
+        (Node *) outer->targetList, &tctx);
+    if (outer->jointree->quals)
+      outer->jointree->quals =
+          safe_outer_te_remap_mutator(outer->jointree->quals, &tctx);
+  }
+
+  if (provsql_verbose >= 30)
+    provsql_notice("safe-query multi-component rewrite fired: split %d "
+                   "atoms into %d disconnected component%s",
+                   natoms, ncomp, ncomp == 1 ? "" : "s");
+
+  pfree(inner_queries);
+  pfree(inner_quals);
+  pfree(inner_tlists);
+  pfree(comp_inner_idx);
+  pfree(atom_to_inner_idx);
+  pfree(atom_to_inner_attno);
+  pfree(comp_outer_rtindex);
+  return outer;
+}
+
+/**
  * @brief Top-level entry point for the safe-query rewrite.
  *
  * Runs the shape gate then the hierarchy detector.  If both accept,
@@ -1747,6 +2228,27 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   per_atom = palloc0(natoms * sizeof(List *));
   safe_split_quals(q->jointree ? q->jointree->quals : NULL,
                    natoms, per_atom, &residual);
+
+  /* Multi-component dispatch: when the atoms split into more than
+   * one connected component (q :- A(x), B(y) with no join), the
+   * single-component detector below can't find a root variable.
+   * Build a Cartesian outer over one inner sub-Query per component
+   * and let Choice A re-entry handle each component on its own. */
+  if (natoms >= 2) {
+    int *atom_to_comp = palloc(natoms * sizeof(int));
+    int  ncomp = compute_atom_components(q, residual, atom_to_comp);
+    if (ncomp > 1) {
+      Query *rewritten = rewrite_multi_component(
+          constants, q, residual, per_atom, atom_to_comp, ncomp);
+      pfree(atom_to_comp);
+      if (rewritten != NULL) {
+        pfree(per_atom);
+        return rewritten;
+      }
+    } else {
+      pfree(atom_to_comp);
+    }
+  }
 
   atoms = find_hierarchical_root_atoms(constants, q, residual, &groups);
   if (atoms == NIL) {

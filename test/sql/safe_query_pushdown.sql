@@ -425,6 +425,42 @@ BEGIN
   END IF;
 END $$;
 
+-- (13) Multi-component (disconnected) CQ:
+--      pd_mc_a(x), pd_mc_b(y), no join condition.  Two independent
+--      components; the rewriter builds one inner sub-Query per
+--      component and Cartesian-products them at the outer.  Each
+--      output row's provsql is gate_times of two per-component
+--      gate_pluses, which is read-once per-row.  Rewritten
+--      probability must match the baseline.
+CREATE TABLE pd_mc_a(x int);
+CREATE TABLE pd_mc_b(y int);
+INSERT INTO pd_mc_a VALUES (1), (1), (2);
+INSERT INTO pd_mc_b VALUES (10), (10), (20);
+SELECT add_provenance('pd_mc_a');
+SELECT add_provenance('pd_mc_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_mc_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_mc_b;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base13 AS
+  SELECT a.x, b.y, probability_evaluate(provenance()) AS p
+    FROM pd_mc_a a, pd_mc_b b
+   GROUP BY a.x, b.y;
+SELECT remove_provenance('pd_base13');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew13 AS
+  SELECT a.x, b.y, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_mc_a a, pd_mc_b b
+   GROUP BY a.x, b.y;
+SELECT remove_provenance('pd_rew13');
+
+SELECT b.x, b.y, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base13 b JOIN pd_rew13 r ON b.x = r.x AND b.y = r.y
+ ORDER BY b.x, b.y;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -468,4 +504,5 @@ DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_n_a, pd_n_b, pd_n_c, pd_n_d,
            pd_dj_a, pd_dj_b, pd_dj_c, pd_dj_d,
            pd_bid_a, pd_bid_b, pd_bid_p, pd_bid_empty,
+           pd_mc_a, pd_mc_b,
            pd_d, pd_e, pd_f;
