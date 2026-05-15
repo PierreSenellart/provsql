@@ -34,7 +34,8 @@
 
 #include "postgres.h"
 #include "postmaster/bgworker.h"
-#include "catalog/pg_type_d.h"
+#include "catalog/pg_type.h"          /* INT2OID etc. -- the _d.h variant
+                                         only exists from PG 11 onwards */
 #include "fmgr.h"
 #include "funcapi.h"
 #include "utils/array.h"
