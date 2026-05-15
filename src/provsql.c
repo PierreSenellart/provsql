@@ -2962,72 +2962,147 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     goto bail;
 
   /* Multi-level handling: any atom touched by at least one partial-
-   * coverage shared class (count >= 2 but < natoms) is bundled into a
-   * single inner sub-Query at this level.  Multiple partial-coverage
-   * classes may touch different subsets of atoms; we fold them all
-   * together at the outermost peel and rely on the recursive call
-   * (via @c process_query / Choice A) to peel further inside.  For
-   * termination, the recursion must make progress at every level:
-   * we require at least one atom with @em empty partial-coverage
-   * signature (no partial-coverage class touches it).  When every
-   * atom is touched by some partial-coverage class but the classes
-   * disagree on which subset they cover (e.g. @c A(x,y),B(x,y),
-   * @c C(x,z),D(x,z) where @c atoms(y) and @c atoms(z) are disjoint),
-   * peeling one big inner group would re-enter the same shape; we
-   * bail in that case and defer disjoint-partial signatures. */
+   * coverage shared class (count >= 2 but < natoms) goes into some
+   * inner sub-Query.  Two grouping strategies, decided per-query:
+   *
+   *  - @em One @em big @em inner @em group: when at least one atom
+   *    has @em empty partial-coverage signature (no partial-coverage
+   *    class touches it), bundle every atom with non-empty signature
+   *    into one inner sub-Query and let the recursive call (via
+   *    @c process_query / Choice A) peel further partial-coverage
+   *    classes inside.  The empty-signature atoms become outer
+   *    wraps; the recursion is guaranteed to make progress at each
+   *    level.
+   *
+   *  - @em Disjoint @em multi-group: when every atom carries a non-
+   *    empty signature, the one-big-group approach would re-enter the
+   *    same shape, so we partition atoms by their @em exact
+   *    signature and build one inner sub-Query per distinct
+   *    signature.  This only works when partial-coverage classes are
+   *    cleanly partitioned: every class @c c must touch atoms that
+   *    all share the same signature.  Otherwise @c c "bridges"
+   *    multiple groups and the outer would need an extra join column;
+   *    we defer that case.
+   */
   atom_group = palloc(natoms * sizeof(int));
   for (j = 0; j < natoms; j++)
     atom_group[j] = -1;
 
-  for (i = 0; i < nvars; i++) {
-    int c = cls[i];
-    if (c != i)
-      continue;
-    if (class_atom_count[c] < 2)
-      continue;                         /* single-atom class checked below */
-    if (class_atom_count[c] > natoms)
-      continue;                         /* sentinel; handled below per-Var */
-    if (class_atom_count[c] == natoms)
-      continue;                         /* fully-covered: extra outer slot */
-    have_partial_class = true;
-    if (partial_first < 0)
-      partial_first = c;
-    for (j = 0; j < natoms; j++) {
-      if (ANCHOR(c, j) != 0)
-        atom_group[j] = 0;
-    }
-  }
+  {
+    Bitmapset **sig = palloc0(natoms * sizeof(Bitmapset *));
+    bool has_outer_atom = true;
 
-  if (have_partial_class) {
-    bool has_outer_atom = false;
-    for (j = 0; j < natoms; j++) {
-      if (atom_group[j] < 0) {
-        has_outer_atom = true;
-        break;
+    for (i = 0; i < nvars; i++) {
+      int c = cls[i];
+      if (c != i)
+        continue;
+      if (class_atom_count[c] < 2)
+        continue;                       /* single-atom class checked below */
+      if (class_atom_count[c] > natoms)
+        continue;                       /* sentinel; handled below per-Var */
+      if (class_atom_count[c] == natoms)
+        continue;                       /* fully-covered: extra outer slot */
+      have_partial_class = true;
+      if (partial_first < 0)
+        partial_first = c;
+      for (j = 0; j < natoms; j++) {
+        if (ANCHOR(c, j) != 0)
+          sig[j] = bms_add_member(sig[j], c);
       }
     }
-    if (!has_outer_atom) {
-      if (provsql_verbose >= 30)
-        provsql_notice("safe-query rewriter: every atom is touched by a "
-                       "partial-coverage shared class -- the inner group "
-                       "would re-enter with the same shape, deferred");
-      goto bail;
+
+    if (have_partial_class) {
+      has_outer_atom = false;
+      for (j = 0; j < natoms; j++) {
+        if (bms_is_empty(sig[j])) {
+          has_outer_atom = true;
+          break;
+        }
+      }
     }
+
+    if (have_partial_class && has_outer_atom) {
+      /* One-big-inner-group: atoms with any partial-coverage class go
+       * into group 0; empty-signature atoms stay as outer wraps. */
+      for (j = 0; j < natoms; j++)
+        atom_group[j] = bms_is_empty(sig[j]) ? -1 : 0;
+    } else if (have_partial_class) {
+      /* Disjoint multi-group: bridge check + distinct-signature
+       * partitioning.  A partial-coverage class @c c bridges if the
+       * atoms it touches do not all share the same signature; that
+       * happens whenever a class spans more than one group, and the
+       * outer would need an extra join column. */
+      bool bridge_exists = false;
+      Bitmapset **group_sigs = NULL;
+      int ngroups = 0;
+      for (i = 0; i < nvars && !bridge_exists; i++) {
+        Bitmapset *first_sig = NULL;
+        int c = cls[i];
+        if (c != i)
+          continue;
+        if (class_atom_count[c] < 2 || class_atom_count[c] >= natoms)
+          continue;
+        for (j = 0; j < natoms; j++) {
+          if (ANCHOR(c, j) == 0)
+            continue;
+          if (first_sig == NULL)
+            first_sig = sig[j];
+          else if (!bms_equal(first_sig, sig[j])) {
+            bridge_exists = true;
+            break;
+          }
+        }
+      }
+      if (bridge_exists) {
+        if (provsql_verbose >= 30)
+          provsql_notice("safe-query rewriter: a partial-coverage shared "
+                         "class spans atoms with different signatures "
+                         "(bridge case) -- multi-group rewrite with bridge "
+                         "join columns is deferred");
+        for (j = 0; j < natoms; j++) bms_free(sig[j]);
+        pfree(sig);
+        goto bail;
+      }
+      /* Assign group_id by signature equality, in order of first
+       * appearance to keep the rewriter output deterministic. */
+      group_sigs = palloc0(natoms * sizeof(Bitmapset *));
+      for (j = 0; j < natoms; j++) {
+        bool found = false;
+        int g;
+        for (g = 0; g < ngroups; g++) {
+          if (bms_equal(group_sigs[g], sig[j])) {
+            atom_group[j] = g;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          atom_group[j] = ngroups;
+          group_sigs[ngroups] = sig[j];
+          ngroups++;
+        }
+      }
+      pfree(group_sigs);
+    }
+
+    for (j = 0; j < natoms; j++) bms_free(sig[j]);
+    pfree(sig);
   }
 
   ok = true;
 
   /* Every Var anywhere in the query must belong to a class that
-   * either touches every atom (slot at the outer level) or touches
-   * exactly the inner-group atom subset (folded into the inner
-   * sub-Query).  A Var whose class touches some other subset would
-   * leak into the outer scope with no wrap to host it. */
+   * either touches every atom (slot at the outer level) or sits
+   * inside the inner-group its atom belongs to.  A Var whose class
+   * touches an atom subset that doesn't match any outer or inner
+   * slot would leak into the outer scope with no wrap to host it. */
   for (i = 0; i < nvars; i++) {
     int c = cls[i];
+    int atom_idx = (int) vars_arr[i]->varno - 1;
     if (class_atom_count[c] == natoms)
       continue;
     if (class_atom_count[c] >= 2 && class_atom_count[c] < natoms
-        && atom_group[(int) vars_arr[i]->varno - 1] == 0)
+        && atom_group[atom_idx] >= 0)
       continue;
     if (provsql_verbose >= 30)
       provsql_notice("safe-query rewriter: Var (varno=%u, varattno=%d) "
@@ -3095,18 +3170,32 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
    * @c outer_rtindex, which the rewriter assigns when it walks the
    * outer rtable. */
   if (have_partial_class) {
-    safe_inner_group *gr = palloc(sizeof(safe_inner_group));
+    int max_gid = -1;
+    int g;
+    safe_inner_group **arr;
     ListCell *alc;
-    gr->group_id = 0;
-    gr->member_atoms = NIL;
-    gr->inner_quals = NIL;
-    gr->outer_rtindex = 0;
     foreach (alc, atoms_out) {
       safe_rewrite_atom *sa = (safe_rewrite_atom *) lfirst(alc);
-      if (sa->group_id == 0)
-        gr->member_atoms = lappend(gr->member_atoms, sa);
+      if (sa->group_id > max_gid)
+        max_gid = sa->group_id;
     }
-    *groups_out = list_make1(gr);
+    arr = palloc0((max_gid + 1) * sizeof(safe_inner_group *));
+    for (g = 0; g <= max_gid; g++) {
+      arr[g] = palloc(sizeof(safe_inner_group));
+      arr[g]->group_id = g;
+      arr[g]->member_atoms = NIL;
+      arr[g]->inner_quals = NIL;
+      arr[g]->outer_rtindex = 0;
+    }
+    foreach (alc, atoms_out) {
+      safe_rewrite_atom *sa = (safe_rewrite_atom *) lfirst(alc);
+      if (sa->group_id >= 0)
+        arr[sa->group_id]->member_atoms =
+            lappend(arr[sa->group_id]->member_atoms, sa);
+    }
+    for (g = 0; g <= max_gid; g++)
+      *groups_out = lappend(*groups_out, arr[g]);
+    pfree(arr);
   }
 
 #undef ANCHOR

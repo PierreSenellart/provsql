@@ -291,6 +291,52 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base9 b JOIN pd_rew9 r ON b.x = r.x
  ORDER BY b.x;
 
+-- (10) Disjoint partial-coverage signatures (multi-group at the same
+--      level): pd_dj_a(x,y), pd_dj_b(x,y), pd_dj_c(x,z), pd_dj_d(x,z).
+--      atoms(y)={A,B}, atoms(z)={C,D}; no atom has an empty signature
+--      but the signatures partition cleanly.  The rewriter must build
+--      TWO inner sub-Queries at the outermost level, joined on x.
+CREATE TABLE pd_dj_a(x int, y int);
+CREATE TABLE pd_dj_b(x int, y int);
+CREATE TABLE pd_dj_c(x int, z int);
+CREATE TABLE pd_dj_d(x int, z int);
+INSERT INTO pd_dj_a VALUES (1,10),(1,11),(2,20),(2,20);
+INSERT INTO pd_dj_b VALUES (1,10),(1,11),(2,20),(2,20);
+INSERT INTO pd_dj_c VALUES (1,100),(1,101),(2,200);
+INSERT INTO pd_dj_d VALUES (1,100),(1,101),(2,200);
+SELECT add_provenance('pd_dj_a');
+SELECT add_provenance('pd_dj_b');
+SELECT add_provenance('pd_dj_c');
+SELECT add_provenance('pd_dj_d');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_dj_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_dj_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_dj_c;
+  PERFORM set_prob(provsql, 0.7) FROM pd_dj_d;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base10 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_dj_a a, pd_dj_b b, pd_dj_c c, pd_dj_d d
+   WHERE a.x = b.x AND a.x = c.x AND a.x = d.x
+     AND a.y = b.y AND c.z = d.z
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base10');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew10 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_dj_a a, pd_dj_b b, pd_dj_c c, pd_dj_d d
+   WHERE a.x = b.x AND a.x = c.x AND a.x = d.x
+     AND a.y = b.y AND c.z = d.z
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew10');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base10 b JOIN pd_rew10 r ON b.x = r.x
+ ORDER BY b.x;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -331,4 +377,6 @@ END $$;
 
 SET provsql.boolean_provenance = off;
 DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
-           pd_n_a, pd_n_b, pd_n_c, pd_n_d, pd_d, pd_e, pd_f;
+           pd_n_a, pd_n_b, pd_n_c, pd_n_d,
+           pd_dj_a, pd_dj_b, pd_dj_c, pd_dj_d,
+           pd_d, pd_e, pd_f;
