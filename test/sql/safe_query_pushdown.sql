@@ -193,6 +193,51 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base7 b JOIN pd_rew7 r ON b.x = r.x
  ORDER BY b.x;
 
+-- (8) Multi-level rewrite + extra fully-covered class.  Atoms
+--     pd_p(x,w,y) and pd_q(x,w,y) share root @c x, fully-covered
+--     non-root @c w, and partial-coverage @c y; pd_r(x,w) is the
+--     outer atom that joins on both @c x and @c w.  The inner sub-
+--     Query must expose @em both @c x @em and @c w in its targetList
+--     and @c GROUP @c BY (x, w), so the outer can join the inner
+--     with pd_r's wrap on (x, w).  Without this, the bare slice-3c
+--     code would either bail or produce a wrong remap.
+CREATE TABLE pd_p(x int, w int, y int);
+CREATE TABLE pd_q(x int, w int, y int);
+CREATE TABLE pd_r(x int, w int);
+INSERT INTO pd_p VALUES (1, 100, 10), (1, 100, 11), (1, 200, 10), (2, 300, 20);
+INSERT INTO pd_q VALUES (1, 100, 10), (1, 100, 11), (1, 200, 11), (2, 300, 20);
+INSERT INTO pd_r VALUES (1, 100), (1, 200), (2, 300);
+SELECT add_provenance('pd_p');
+SELECT add_provenance('pd_q');
+SELECT add_provenance('pd_r');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_p;
+  PERFORM set_prob(provsql, 0.4) FROM pd_q;
+  PERFORM set_prob(provsql, 0.6) FROM pd_r;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base8 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_p a, pd_q b, pd_r c
+   WHERE a.x = b.x AND a.w = b.w AND a.y = b.y
+     AND a.x = c.x AND a.w = c.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base8');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew8 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_p a, pd_q b, pd_r c
+   WHERE a.x = b.x AND a.w = b.w AND a.y = b.y
+     AND a.x = c.x AND a.w = c.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew8');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base8 b JOIN pd_rew8 r ON b.x = r.x
+ ORDER BY b.x;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -232,4 +277,4 @@ BEGIN
 END $$;
 
 SET provsql.boolean_provenance = off;
-DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_d, pd_e, pd_f;
+DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r, pd_d, pd_e, pd_f;
