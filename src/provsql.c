@@ -2360,17 +2360,37 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief One projected column of an atom's wrapping subquery.
+ *
+ * @c base_attno is the column of the base relation that supplies this
+ * slot.  @c class_id is the variable-equivalence-class representative
+ * index from the union-find; slice 3a only emits slots for shared
+ * classes (those touching at least two atoms), of which the root
+ * class is one.
+ *
+ * The output column number of the slot inside the inner @c SELECT
+ * @c DISTINCT is the 1-based position of the slot in its atom's
+ * @c proj_slots list; the root-class slot is always first, so its
+ * output attno is 1 and the slice-2 single-column wrap is a strict
+ * special case of this layout.
+ */
+typedef struct safe_proj_slot {
+  AttrNumber  base_attno;
+  int         class_id;
+} safe_proj_slot;
+
+/**
  * @brief Per-atom rewrite metadata discovered by the hierarchy detector.
  *
  * @c rtindex is the 1-based index into @c q->rtable that matches @c Var.varno.
- * @c root_attno is the column of the atom that binds the root variable
- * (the variable that appears in every atom of the query).  In the rewritten
- * outer query, every reference to this column will read column 1 of the
- * wrapping subquery.
+ * @c proj_slots is the ordered list of @c safe_proj_slot * to project
+ * out of this atom's inner @c SELECT @c DISTINCT.  The root-class slot
+ * is always first.  Additional shared classes touching this atom
+ * (column pushdown) follow in ascending class-repr order.
  */
 typedef struct safe_rewrite_atom {
   Index       rtindex;
-  AttrNumber  root_attno;
+  List       *proj_slots;
 } safe_rewrite_atom;
 
 /** @brief Walker context for @c safe_collect_vars_walker. */
@@ -2501,21 +2521,31 @@ static void safe_collect_equalities(Node *quals, List **out) {
  * @brief Run the hierarchy detector on @p q, returning per-atom rewrite info.
  *
  * Builds the variable equivalence relation induced by WHERE-clause
- * @c Var = @c Var equalities, then searches for a "root variable":
- * an equivalence class whose member Vars touch every base RTE.  When
- * one exists, returns a List of @c safe_rewrite_atom * (one per
- * @c q->rtable entry, in order).  Returns @c NIL when the query is
- * not in the currently-supported shape:
+ * @c Var = @c Var equalities, identifies a "root variable" (a class
+ * whose member Vars touch every base RTE), and verifies every
+ * remaining shared class also touches every atom.  When all checks
+ * pass, returns a List of @c safe_rewrite_atom * (one per
+ * @c q->rtable entry, in @c rtable order), each carrying the ordered
+ * slot list to project from its inner @c SELECT @c DISTINCT.
+ *
+ * Returns @c NIL when the query is not in the currently-supported
+ * shape:
  *
  *  - fewer than two atoms (single-relation query needs no rewrite);
- *  - no root variable;
+ *  - no root variable (multi-component CQ -- deferred to slice 4);
  *  - an atom whose root binding spans more than one column (the
- *    rewrite would have to push an inter-column equality into the
+ *    rewrite would have to push an intra-atom equality into the
  *    inner subquery -- TODO);
- *  - a Var anywhere in @c q->targetList or @c q->jointree->quals
- *    that does not belong to the root class (the current rewrite
- *    only supports queries that project and filter on the root
- *    variable alone -- TODO: column pushdown).
+ *  - some shared class touches only a proper subset of atoms.  The
+ *    flat single-level rewrite would replicate the wrap of an atom
+ *    outside that class across multiple wrap rows of atoms in it,
+ *    breaking the read-once property; the correct factoring needs a
+ *    nested sub-query per non-root shared-class signature, deferred
+ *    to a multi-level slice;
+ *  - any Var in @c q->targetList or @c q->jointree->quals that
+ *    belongs to a single-atom class (head-only projection and local
+ *    WHERE-pushdown of single-atom Vars are out of scope for
+ *    slice 3a -- TODO).
  *
  * The shape gate in @c is_safe_query_candidate has already enforced
  * self-join-free, no aggs / windows / sublinks etc.; this function
@@ -2534,11 +2564,9 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   int    *class_atom_anchor_attno;  /* per atom, per class: any one attno */
   int     root_class = -1;
   List   *atoms_out = NIL;
-  int     i;
+  int     i, j;
   Index   varno;
   bool    ok;
-  Bitmapset *root_class_var_indices;
-  ListCell *lc2;
 
   if (natoms < 2)
     return NIL;
@@ -2613,72 +2641,106 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       /* Same class binds two columns of the same atom: the current
        * rewriter does not push the implied intra-atom equality into
        * the inner subquery, so mark this class unusable.  Count >
-       * natoms is impossible otherwise, so we use this as a
-       * sentinel below. */
+       * natoms is impossible otherwise, so we use this as a sentinel. */
       class_atom_count[c] = natoms + 1;
     }
   }
 
+  /* Root class: a class touching every atom (count == natoms).
+   * Pick the lowest repr index when multiple candidates exist, for
+   * deterministic rewriter output. */
   for (i = 0; i < nvars; i++) {
     if (cls[i] != i)
-      continue;                       /* not a class representative */
+      continue;
     if (class_atom_count[i] == natoms) {
       root_class = i;
       break;
     }
   }
+  if (root_class < 0)
+    goto bail;
 
-  if (root_class < 0) {
-    pfree(class_atom_count);
-    pfree(class_atom_anchor_attno);
-    pfree(vars_arr);
-    pfree(cls);
-    return NIL;
-  }
-
-  /* Every Var anywhere in the query must belong to the root class.
-   * If any Var is outside, the rewrite would lose access to its
-   * column (the inner subquery projects only the root binding). */
-  root_class_var_indices = NULL;
-  for (i = 0; i < nvars; i++)
-    if (cls[i] == root_class)
-      root_class_var_indices = bms_add_member(root_class_var_indices, i);
-
+  /* Slice 3a-min restricts the rewrite to the case where every shared
+   * class (including the root) touches every atom.  Hierarchicality
+   * is then automatic.  When a shared class C has atoms(C) a proper
+   * subset of the atom set, the flat single-level rewrite below would
+   * produce a circuit in which the wraps of atoms outside atoms(C) are
+   * cross-multiplied with multiple atoms(C) wrap rows, breaking the
+   * read-once property -- the correct factoring needs a nested
+   * sub-query grouping atoms by their non-root shared-class signature,
+   * which is deferred to a multi-level slice.  We bail here rather than
+   * silently produce a non-read-once circuit. */
   ok = true;
-  for (i = 0; i < nvars && ok; i++)
-    if (!bms_is_member(i, root_class_var_indices))
+  for (i = 0; i < nvars && ok; i++) {
+    if (cls[i] != i)
+      continue;
+    if (class_atom_count[i] < 2)
+      continue;                         /* single-atom class checked below */
+    if (class_atom_count[i] != natoms) {
+      if (provsql_verbose >= 30)
+        provsql_notice("safe-query rewriter: shared class with anchor "
+                       "(varno=%u, varattno=%d) touches %d of %d atoms -- "
+                       "partial-coverage shared classes need multi-level "
+                       "rewrite, deferred",
+                       (unsigned) vars_arr[i]->varno,
+                       (int) vars_arr[i]->varattno,
+                       class_atom_count[i], natoms);
       ok = false;
-  bms_free(root_class_var_indices);
-
-  if (!ok) {
-    pfree(class_atom_count);
-    pfree(class_atom_anchor_attno);
-    pfree(vars_arr);
-    pfree(cls);
-    return NIL;
-  }
-
-  /* Build the per-atom output list in q->rtable order. */
-  i = 1;
-  foreach (lc2, q->rtable) {
-    safe_rewrite_atom *sa;
-    int atom_idx = i - 1;
-    int attno    = ANCHOR(root_class, atom_idx);
-    (void) lfirst(lc2);
-    if (attno == 0) {
-      /* The root class has no Var at this atom -- impossible if
-       * class_atom_count[root_class] == natoms, but guard anyway. */
-      pfree(class_atom_count);
-      pfree(class_atom_anchor_attno);
-      pfree(vars_arr);
-      pfree(cls);
-      return NIL;
     }
-    sa = palloc(sizeof(safe_rewrite_atom));
-    sa->rtindex    = i;
-    sa->root_attno = (AttrNumber) attno;
+  }
+  if (!ok)
+    goto bail;
+
+  /* Every Var anywhere in the query must belong to a class that
+   * touches every atom.  Single-atom Vars (head-only projection or
+   * single-atom WHERE quals) and partial-coverage shared classes
+   * (handled by the bail above) are deferred. */
+  for (i = 0; i < nvars; i++) {
+    int c = cls[i];
+    if (class_atom_count[c] != natoms) {
+      if (provsql_verbose >= 30)
+        provsql_notice("safe-query rewriter: Var (varno=%u, varattno=%d) "
+                       "belongs to a class that does not touch every atom -- "
+                       "rewrite scope does not yet cover this case",
+                       (unsigned) vars_arr[i]->varno,
+                       (int) vars_arr[i]->varattno);
+      ok = false;
+      break;
+    }
+  }
+  if (!ok)
+    goto bail;
+
+  /* Build proj_slots per atom: root class first (output attno 1),
+   * then other shared classes touching this atom in ascending repr
+   * order.  An atom not touched by the root class -- impossible if
+   * the root class truly has count == natoms -- triggers a bail. */
+  for (j = 0; j < natoms; j++) {
+    safe_rewrite_atom *sa = palloc(sizeof(safe_rewrite_atom));
+    sa->rtindex = (Index) (j + 1);
+    sa->proj_slots = NIL;
+    if (ANCHOR(root_class, j) != 0) {
+      safe_proj_slot *slot = palloc(sizeof(safe_proj_slot));
+      slot->base_attno = (AttrNumber) ANCHOR(root_class, j);
+      slot->class_id   = root_class;
+      sa->proj_slots = lappend(sa->proj_slots, slot);
+    }
+    for (i = 0; i < nvars; i++) {
+      safe_proj_slot *slot;
+      if (cls[i] != i || i == root_class)
+        continue;
+      if (class_atom_count[i] < 2 || class_atom_count[i] > natoms)
+        continue;
+      if (ANCHOR(i, j) == 0)
+        continue;
+      slot = palloc(sizeof(safe_proj_slot));
+      slot->base_attno = (AttrNumber) ANCHOR(i, j);
+      slot->class_id   = i;
+      sa->proj_slots = lappend(sa->proj_slots, slot);
+    }
+    if (sa->proj_slots == NIL)
+      goto bail;
     atoms_out = lappend(atoms_out, sa);
-    i++;
   }
 
 #undef ANCHOR
@@ -2689,6 +2751,14 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   pfree(cls);
   (void) constants;
   return atoms_out;
+
+bail:
+  pfree(class_atom_count);
+  pfree(class_atom_anchor_attno);
+  pfree(vars_arr);
+  pfree(cls);
+  (void) constants;
+  return NIL;
 }
 
 /**
@@ -2700,13 +2770,16 @@ typedef struct safe_remap_ctx {
 
 /**
  * @brief Rewrite Var nodes in the outer query after each base RTE has
- *        been wrapped as a one-column-DISTINCT subquery.
+ *        been wrapped as a DISTINCT subquery projecting one or more
+ *        slot columns.
  *
- * Every base-level Var that referenced an atom's root-binding column
- * is remapped to attribute 1 of the wrapping subquery.  Any other Var
- * indicates the detector accepted a query it shouldn't have; we
- * @c provsql_error to surface the bug rather than silently emit a
- * broken plan.
+ * For each base-level Var (varno, varattno), the matching atom is
+ * @c atoms[varno-1].  We scan its @c proj_slots in order, looking
+ * for a slot with @c base_attno == varattno, and remap the Var to
+ * the 1-based output position of that slot.  A Var with no matching
+ * slot indicates the detector accepted a query it shouldn't have;
+ * we @c provsql_error to surface the bug rather than silently emit
+ * a broken plan.
  */
 static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
   if (node == NULL)
@@ -2717,16 +2790,22 @@ static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
         && v->varno >= 1 && (int) v->varno <= list_length(ctx->atoms)) {
       safe_rewrite_atom *sa =
           (safe_rewrite_atom *) list_nth(ctx->atoms, (int) v->varno - 1);
-      if (v->varattno == sa->root_attno) {
-        Var *vv = (Var *) copyObject(v);
-        vv->varattno = 1;
+      ListCell *lc;
+      int slot_idx = 0;
+      foreach (lc, sa->proj_slots) {
+        safe_proj_slot *slot = (safe_proj_slot *) lfirst(lc);
+        slot_idx++;
+        if (slot->base_attno == v->varattno) {
+          Var *vv = (Var *) copyObject(v);
+          vv->varattno = (AttrNumber) slot_idx;
 #if PG_VERSION_NUM >= 130000
-        vv->varattnosyn = 1;
+          vv->varattnosyn = (AttrNumber) slot_idx;
 #endif
-        return (Node *) vv;
+          return (Node *) vv;
+        }
       }
-      provsql_error("safe-query rewriter: unexpected non-root Var "
-                    "(varno=%u, varattno=%d) referencing atom %u",
+      provsql_error("safe-query rewriter: Var (varno=%u, varattno=%d) "
+                    "has no projection slot in atom %u",
                     (unsigned) v->varno, (int) v->varattno,
                     (unsigned) v->varno);
     }
@@ -2736,42 +2815,26 @@ static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
 }
 
 /**
- * @brief Build the inner Query that projects @p root_attno of @p base_rte
- *        with @c DISTINCT.
+ * @brief Build the inner @c Query that projects every slot in
+ *        @p proj_slots of @p base_rte under @c SELECT @c DISTINCT.
  *
- * The recursive @c process_query call on this Query will discover the
- * @c provsql column on @p base_rte and append it to the output target
- * list, so the wrapping outer query gets both the root column at
- * attno 1 and the provsql column at attno 2.
+ * One @c TargetEntry and one @c SortGroupClause are emitted per slot,
+ * in @p proj_slots order; the root-class slot is conventionally first,
+ * so it always ends up at output attno 1.  The recursive
+ * @c process_query call on this @c Query will discover the @c provsql
+ * column on @p base_rte and append it to the inner target list, so the
+ * wrapping outer query gets the slot columns at attno @c 1..N and the
+ * @c provsql column at attno @c N+1.
  */
 static Query *safe_build_inner_wrap(Query *outer_src,
                                     RangeTblEntry *base_rte,
-                                    AttrNumber root_attno) {
+                                    List *proj_slots) {
   Query           *inner = makeNode(Query);
   RangeTblRef     *rtr   = makeNode(RangeTblRef);
   FromExpr        *jt    = makeNode(FromExpr);
-  TargetEntry     *te    = makeNode(TargetEntry);
-  SortGroupClause *sgc   = makeNode(SortGroupClause);
   RangeTblEntry   *inner_rte;
-  Var             *v;
-  HeapTuple        atttup;
-  Form_pg_attribute attform;
-  Oid              atttypid;
-  int32            atttypmod;
-  Oid              attcollation;
-
-  /* Look up the column's type info on the underlying relation. */
-  atttup = SearchSysCache2(ATTNUM,
-                           ObjectIdGetDatum(base_rte->relid),
-                           Int16GetDatum(root_attno));
-  if (!HeapTupleIsValid(atttup))
-    provsql_error("safe-query rewriter: cannot resolve attno %d of relation %u",
-                  (int) root_attno, (unsigned) base_rte->relid);
-  attform      = (Form_pg_attribute) GETSTRUCT(atttup);
-  atttypid     = attform->atttypid;
-  atttypmod    = attform->atttypmod;
-  attcollation = attform->attcollation;
-  ReleaseSysCache(atttup);
+  ListCell        *lc;
+  int              slot_idx = 0;
 
   inner_rte = copyObject(base_rte);
 
@@ -2802,22 +2865,51 @@ static Query *safe_build_inner_wrap(Query *outer_src,
   jt->quals            = NULL;
   inner->jointree      = jt;
 
-  v = makeVar(1, root_attno, atttypid, atttypmod, attcollation, 0);
-  te->expr            = (Expr *) v;
-  te->resno           = 1;
-  te->resname         = pstrdup("provsql_root");
-  te->ressortgroupref = 1;
-  te->resorigtbl      = base_rte->relid;
-  te->resorigcol      = root_attno;
-  te->resjunk         = false;
-  inner->targetList   = list_make1(te);
-
-  sgc->tleSortGroupRef = 1;
-  get_sort_group_operators(atttypid, true, true, false,
-                           &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
-  sgc->nulls_first     = false;
-  inner->distinctClause = list_make1(sgc);
+  inner->targetList     = NIL;
+  inner->distinctClause = NIL;
   inner->hasDistinctOn  = false;
+
+  foreach (lc, proj_slots) {
+    safe_proj_slot   *slot = (safe_proj_slot *) lfirst(lc);
+    HeapTuple         atttup;
+    Form_pg_attribute attform;
+    Oid               atttypid;
+    int32             atttypmod;
+    Oid               attcollation;
+    Var              *v;
+    TargetEntry      *te = makeNode(TargetEntry);
+    SortGroupClause  *sgc = makeNode(SortGroupClause);
+
+    atttup = SearchSysCache2(ATTNUM,
+                             ObjectIdGetDatum(base_rte->relid),
+                             Int16GetDatum(slot->base_attno));
+    if (!HeapTupleIsValid(atttup))
+      provsql_error("safe-query rewriter: cannot resolve attno %d of "
+                    "relation %u",
+                    (int) slot->base_attno, (unsigned) base_rte->relid);
+    attform      = (Form_pg_attribute) GETSTRUCT(atttup);
+    atttypid     = attform->atttypid;
+    atttypmod    = attform->atttypmod;
+    attcollation = attform->attcollation;
+    ReleaseSysCache(atttup);
+
+    slot_idx++;
+    v = makeVar(1, slot->base_attno, atttypid, atttypmod, attcollation, 0);
+    te->expr            = (Expr *) v;
+    te->resno           = (AttrNumber) slot_idx;
+    te->resname         = psprintf("provsql_slot_%d", slot_idx);
+    te->ressortgroupref = (Index) slot_idx;
+    te->resorigtbl      = base_rte->relid;
+    te->resorigcol      = slot->base_attno;
+    te->resjunk         = false;
+    inner->targetList = lappend(inner->targetList, te);
+
+    sgc->tleSortGroupRef = (Index) slot_idx;
+    get_sort_group_operators(atttypid, true, true, false,
+                             &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+    sgc->nulls_first     = false;
+    inner->distinctClause = lappend(inner->distinctClause, sgc);
+  }
 
   return inner;
 }
@@ -2848,14 +2940,23 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
   foreach (lc, outer->rtable) {
     RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
     safe_rewrite_atom *sa = (safe_rewrite_atom *) list_nth(atoms, i);
-    Query *inner = safe_build_inner_wrap(outer, rte, sa->root_attno);
+    Query *inner = safe_build_inner_wrap(outer, rte, sa->proj_slots);
     RangeTblEntry *new_rte = makeNode(RangeTblEntry);
     Alias *eref = makeNode(Alias);
+    ListCell *slot_lc;
+    int slot_idx = 0;
 
     eref->aliasname = rte->eref && rte->eref->aliasname
                       ? pstrdup(rte->eref->aliasname)
                       : pstrdup("provsql_wrap");
-    eref->colnames  = list_make1(makeString(pstrdup("provsql_root")));
+    eref->colnames = NIL;
+    foreach (slot_lc, sa->proj_slots) {
+      (void) lfirst(slot_lc);
+      slot_idx++;
+      eref->colnames = lappend(eref->colnames,
+                               makeString(psprintf("provsql_slot_%d",
+                                                   slot_idx)));
+    }
 
     new_rte->rtekind  = RTE_SUBQUERY;
     new_rte->subquery = inner;
@@ -2871,8 +2972,9 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
     i++;
   }
 
-  /* Remap outer Vars: every reference to a root-binding column now
-   * reads column 1 of the wrapping subquery. */
+  /* Remap outer Vars: every reference to a shared-class binding column
+   * now reads the matching slot of the wrapping subquery (root class
+   * at attno 1, other shared classes at attno 2..N per atom). */
   mctx.atoms = atoms;
   outer->targetList = (List *)
       safe_remap_vars_mutator((Node *) outer->targetList, &mctx);
@@ -2880,10 +2982,20 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
     outer->jointree->quals =
         safe_remap_vars_mutator(outer->jointree->quals, &mctx);
 
-  if (provsql_verbose >= 30)
+  if (provsql_verbose >= 30) {
+    int total_slots = 0;
+    int has_pushdown = 0;
+    foreach (lc, atoms) {
+      safe_rewrite_atom *sa = (safe_rewrite_atom *) lfirst(lc);
+      total_slots += list_length(sa->proj_slots);
+      if (list_length(sa->proj_slots) > 1)
+        has_pushdown = 1;
+    }
     provsql_notice("safe-query rewrite fired: wrapped %d atoms with "
-                   "SELECT DISTINCT on the root variable",
-                   list_length(atoms));
+                   "SELECT DISTINCT on %d total slot(s)%s",
+                   list_length(atoms), total_slots,
+                   has_pushdown ? " (column pushdown)" : "");
+  }
 
   return outer;
 }
