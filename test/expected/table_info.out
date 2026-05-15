@@ -1,0 +1,43 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+kind|block_key
+tid|{}
+(1 row)
+remove_provenance
+
+(1 row)
+removed
+t
+(1 row)
+repair_key
+
+(1 row)
+kind|block_key
+bid|{1}
+(1 row)
+repair_key
+
+(1 row)
+kind|block_key
+bid|{1,2}
+(1 row)
+repair_key
+
+(1 row)
+kind|block_key
+bid|{}
+(1 row)
+add_provenance
+
+(1 row)
+set_table_info
+
+(1 row)
+kind|block_key
+opaque|{}
+(1 row)
+cleaned_up_by_event_trigger
+t
+(1 row)

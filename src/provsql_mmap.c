@@ -527,21 +527,46 @@ Datum get_prob(PG_FUNCTION_ARGS)
     PG_RETURN_FLOAT8(result);
 }
 
+/** @brief Translate a SQL-side kind label into the persisted enum value. */
+static uint8_t parse_table_kind(const char *label)
+{
+  if(strcmp(label, "tid") == 0) return PROVSQL_TABLE_TID;
+  if(strcmp(label, "bid") == 0) return PROVSQL_TABLE_BID;
+  if(strcmp(label, "opaque") == 0) return PROVSQL_TABLE_OPAQUE;
+  provsql_error("set_table_info: unknown table kind '%s' (expected "
+                "'tid', 'bid', or 'opaque')", label);
+  return PROVSQL_TABLE_TID;  /* unreachable */
+}
+
+/** @brief Inverse of @c parse_table_kind for use by @c get_table_info. */
+static const char *table_kind_label(uint8_t kind)
+{
+  switch(kind) {
+  case PROVSQL_TABLE_TID:    return "tid";
+  case PROVSQL_TABLE_BID:    return "bid";
+  case PROVSQL_TABLE_OPAQUE: return "opaque";
+  }
+  provsql_error("get_table_info: unknown table kind value %u", kind);
+  return NULL;  /* unreachable */
+}
+
 PG_FUNCTION_INFO_V1(set_table_info);
 /**
  * @brief PostgreSQL-callable wrapper for setTableInfo() over the IPC pipe.
  *
  * Stores per-relation provenance metadata used by the safe-query
- * optimisation.  @p relid is the @c pg_class OID of the relation,
- * @p tid is @c true iff provenance leaves are independent (TID),
- * and @p block_key is an @c int2 array (possibly empty) listing the
- * block-key column numbers when the relation has been routed through
- * @c repair_key.
+ * optimisation.  @p relid is the @c pg_class OID of the relation;
+ * @p kind is one of the textual labels @c 'tid' / @c 'bid' /
+ * @c 'opaque' (see @c provsql_table_kind in @c MMappedTableInfo.h);
+ * @p block_key is an @c int2 array (possibly empty) listing the
+ * block-key column numbers when @p kind is @c 'bid'.
  */
 Datum set_table_info(PG_FUNCTION_ARGS)
 {
   Oid relid;
-  bool tid;
+  text *kind_text;
+  char *kind_str;
+  uint8_t kind;
   ArrayType *block_key;
   uint16 block_key_n = 0;
   int16 *block_key_data = NULL;
@@ -550,8 +575,11 @@ Datum set_table_info(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     provsql_error("Invalid NULL value passed to set_table_info");
 
-  relid = PG_GETARG_OID(0);
-  tid   = PG_GETARG_BOOL(1);
+  relid     = PG_GETARG_OID(0);
+  kind_text = PG_GETARG_TEXT_PP(1);
+  kind_str  = text_to_cstring(kind_text);
+  kind      = parse_table_kind(kind_str);
+  pfree(kind_str);
   block_key = PG_ARGISNULL(2) ? NULL : PG_GETARG_ARRAYTYPE_P(2);
 
   if(block_key) {
@@ -563,11 +591,12 @@ Datum set_table_info(PG_FUNCTION_ARGS)
       block_key_data = (int16 *) ARR_DATA_PTR(block_key);
   }
 
-  if(block_key_n > 16)
-    provsql_error("set_table_info: block key wider than 16 columns "
-                  "(%u given) is not supported", block_key_n);
+  if(block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY)
+    provsql_error("set_table_info: block key wider than %d columns "
+                  "(%u given) is not supported",
+                  PROVSQL_TABLE_INFO_MAX_BLOCK_KEY, block_key_n);
 
-  payload_size = sizeof(char) + sizeof(Oid) + sizeof(Oid) + sizeof(bool)
+  payload_size = sizeof(char) + sizeof(Oid) + sizeof(Oid) + sizeof(uint8)
                  + sizeof(uint16) + block_key_n * sizeof(int16);
   if(payload_size > PIPE_BUF)
     provsql_error("set_table_info: IPC payload exceeds PIPE_BUF");
@@ -576,7 +605,7 @@ Datum set_table_info(PG_FUNCTION_ARGS)
   ADDWRITEM("T", char);
   ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(&relid, Oid);
-  ADDWRITEM(&tid, bool);
+  ADDWRITEM(&kind, uint8);
   ADDWRITEM(&block_key_n, uint16);
   for(uint16 i = 0; i < block_key_n; ++i)
     ADDWRITEM(&block_key_data[i], int16);
@@ -663,7 +692,7 @@ bool provsql_fetch_table_info(Oid relid, ProvenanceTableInfo *out)
     provsql_error("Cannot communicate with pipe (message type s)");
   }
   if(found) {
-    if(!READB(out->tid, bool) || !READB(out->block_key_n, uint16)) {
+    if(!READB(out->kind, uint8_t) || !READB(out->block_key_n, uint16)) {
       provsql_shmem_unlock();
       provsql_error("Cannot communicate with pipe (message type s)");
     }
@@ -687,9 +716,11 @@ PG_FUNCTION_INFO_V1(get_table_info);
 /**
  * @brief PostgreSQL-callable wrapper around the cached table-info lookup.
  *
- * Returns @c NULL when no record exists for @p relid; otherwise a record
- * (tid bool, block_key int2[]).  Goes through @c provsql_lookup_table_info
- * so repeated calls in the same session do not pay for IPC.
+ * Returns @c NULL when no record exists for @p relid; otherwise a
+ * record @c (kind text, block_key int2[]) where @c kind is one of
+ * @c 'tid' / @c 'bid' / @c 'opaque'.  Goes through
+ * @c provsql_lookup_table_info so repeated calls in the same session
+ * do not pay for IPC.
  */
 Datum get_table_info(PG_FUNCTION_ARGS)
 {
@@ -713,7 +744,7 @@ Datum get_table_info(PG_FUNCTION_ARGS)
     provsql_error("get_table_info: expected composite return type");
   tupdesc = BlessTupleDesc(tupdesc);
 
-  values[0] = BoolGetDatum(info.tid);
+  values[0] = CStringGetTextDatum(table_kind_label(info.kind));
 
   elems = palloc(info.block_key_n * sizeof(Datum));
   for(uint16 i = 0; i < info.block_key_n; ++i)

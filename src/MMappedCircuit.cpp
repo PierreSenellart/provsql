@@ -388,7 +388,7 @@ void provsql_mmap_main_loop()
     {
       /* Insert / upsert per-table provenance metadata. */
       ProvenanceTableInfo info{};
-      if(!READM(info.relid, Oid) || !READM(info.tid, bool)
+      if(!READM(info.relid, Oid) || !READM(info.kind, uint8_t)
          || !READM(info.block_key_n, uint16_t))
         provsql_error("Cannot read from pipe (message type T)");
       if(info.block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY)
@@ -422,7 +422,7 @@ void provsql_mmap_main_loop()
       if(!WRITEB(&found, char))
         provsql_error("Cannot write response to pipe (message type s)");
       if(found) {
-        if(!WRITEB(&info.tid, bool) || !WRITEB(&info.block_key_n, uint16_t))
+        if(!WRITEB(&info.kind, uint8_t) || !WRITEB(&info.block_key_n, uint16_t))
           provsql_error("Cannot write response to pipe (message type s)");
         for(uint16_t i=0; i<info.block_key_n; ++i)
           if(!WRITEB(&info.block_key[i], AttrNumber))

@@ -137,3 +137,6 @@ test: casestudy6
 
 # PROV export
 test: to_provxml
+
+# Per-table provenance metadata maintenance (safe-query optimisation)
+test: table_info

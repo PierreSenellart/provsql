@@ -211,17 +211,25 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
  * @brief Record per-relation provenance metadata used by the
  *        safe-query optimisation.
  *
- * Stores a (relid, tid, block_key) tuple in the persistent mmap-backed
- * table-info store.  Called from add_provenance (tid=true, empty key),
- * from repair_key (tid=false, key columns), and from the upgrade
- * script that backfills metadata for pre-existing tables.
+ * Stores a @c (relid, kind, block_key) record in the persistent
+ * mmap-backed table-info store.  @p kind is one of:
+ *   - @c 'tid' -- independent input leaves (post-@c add_provenance default)
+ *   - @c 'bid' -- block-correlated leaves; rows sharing the same value
+ *                 of @p block_key are mutually exclusive.  An empty
+ *                 @p block_key means the whole table is one block.
+ *   - @c 'opaque' -- arbitrary correlations from a derived source
+ *                 (CREATE TABLE AS SELECT, INSERT INTO SELECT,
+ *                 UPDATE under provsql.update_provenance); the
+ *                 safe-query rewriter must bail on these.
  *
  * @param relid     pg_class OID of the relation.
- * @param tid       True iff provenance leaves are independent.
- * @param block_key Column numbers of the block key (empty for TID).
+ * @param kind      One of @c 'tid' / @c 'bid' / @c 'opaque'.
+ * @param block_key Block-key column numbers (only meaningful for
+ *                  @c 'bid'; ignored otherwise but conventionally
+ *                  passed empty).
  */
 CREATE OR REPLACE FUNCTION set_table_info(
-  relid OID, tid BOOL, block_key INT2[] DEFAULT ARRAY[]::INT2[])
+  relid OID, kind TEXT, block_key INT2[] DEFAULT ARRAY[]::INT2[])
   RETURNS void AS
   'provsql','set_table_info' LANGUAGE C PARALLEL SAFE;
 
@@ -233,11 +241,14 @@ CREATE OR REPLACE FUNCTION remove_table_info(relid OID)
 /**
  * @brief Read per-relation provenance metadata.
  *
- * Returns NULL if no record exists.  Used by the planner-time
- * hierarchy detector to gate the safe-query rewrite.
+ * Returns NULL if no record exists.  @c kind is one of @c 'tid' /
+ * @c 'bid' / @c 'opaque'; @c block_key is the (possibly empty) array
+ * of block-key column numbers, only meaningful when @c kind = @c 'bid'.
+ * Used by the planner-time hierarchy detector to gate the safe-query
+ * rewrite.
  */
 CREATE OR REPLACE FUNCTION get_table_info(
-  relid OID, OUT tid BOOL, OUT block_key INT2[])
+  relid OID, OUT kind TEXT, OUT block_key INT2[])
   RETURNS record AS
   'provsql','get_table_info' LANGUAGE C STABLE PARALLEL SAFE;
 
@@ -254,7 +265,7 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
 $$
 BEGIN
   EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
-  PERFORM provsql.set_table_info(_tbl::oid, true, ARRAY[]::INT2[]);
+  PERFORM provsql.set_table_info(_tbl::oid, 'tid');
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -300,27 +311,17 @@ CREATE OR REPLACE FUNCTION repair_key(_tbl regclass, key_att text)
   RETURNS void AS
 $$
 DECLARE
-  key RECORD;
-  key_token uuid;
-  token uuid;
-  record RECORD;
-  nb_rows INTEGER;
-  ind INTEGER;
-  select_key_att TEXT;
-  where_condition TEXT;
+  r RECORD;
+  rows_query TEXT;
   block_key_cols INT2[];
 BEGIN
+  -- Resolve the (possibly comma-separated) key_att text into the
+  -- corresponding pg_attribute.attnum values for the safe-query
+  -- metadata.  Names are trimmed; quoting is not supported because
+  -- repair_key has never accepted quoted identifiers in key_att.
   IF key_att = '' THEN
-    key_att := '()';
-    select_key_att := '1';
     block_key_cols := ARRAY[]::INT2[];
   ELSE
-    select_key_att := key_att;
-    -- Resolve the (possibly comma-separated) key_att text into the
-    -- corresponding pg_attribute.attnum values for the safe-query
-    -- metadata.  Names are trimmed; quoting is not supported here
-    -- because repair_key has never supported quoted identifiers in
-    -- its key_att string.
     SELECT array_agg(a.attnum ORDER BY t.ord)::INT2[]
       INTO block_key_cols
       FROM unnest(string_to_array(key_att, ',')) WITH ORDINALITY AS t(name, ord)
@@ -339,32 +340,61 @@ BEGIN
 
   EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
 
-  FOR key IN
-    EXECUTE format('SELECT %s AS key FROM %s GROUP BY %s', select_key_att, _tbl, key_att)
-  LOOP
-    IF key_att = '()' THEN
-      where_condition := '';
-    ELSE
-      where_condition := format('WHERE %s = %L', key_att, key.key);
-    END IF;
+  -- Build a per-group mapping (key columns + a fresh key_token + the
+  -- group size) once, then use it for both the create_gate(key_token,
+  -- 'input') first pass and the per-row mulinput second pass.  Going
+  -- through a temp table avoids re-running uuid_generate_v4() (which
+  -- would produce different UUIDs the second time).  USING (%1$s) on
+  -- the second pass handles the multi-column case uniformly.
+  -- ON COMMIT DROP plus the explicit DROP TABLE at the end of this
+  -- function leave the temp table cleaned up across transactions and
+  -- across repeated calls in the same transaction.
+  IF key_att = '' THEN
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_repair_key_tmp ON COMMIT DROP AS
+         SELECT public.uuid_generate_v4() AS provsql_key_token,
+                COUNT(*) AS provsql_group_size
+           FROM %s', _tbl);
+    rows_query := format(
+      'SELECT t.provsql_temp,
+              k.provsql_key_token AS key_token,
+              ROW_NUMBER() OVER (ORDER BY t.ctid) AS within_group,
+              k.provsql_group_size AS group_size
+         FROM %s t CROSS JOIN provsql_repair_key_tmp k', _tbl);
+  ELSE
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_repair_key_tmp ON COMMIT DROP AS
+         SELECT %1$s,
+                public.uuid_generate_v4() AS provsql_key_token,
+                COUNT(*) AS provsql_group_size
+           FROM %2$s
+       GROUP BY %1$s', key_att, _tbl);
+    rows_query := format(
+      'SELECT t.provsql_temp,
+              k.provsql_key_token AS key_token,
+              ROW_NUMBER() OVER (PARTITION BY k.provsql_key_token
+                                 ORDER BY t.ctid) AS within_group,
+              k.provsql_group_size AS group_size
+         FROM %2$s t
+         JOIN provsql_repair_key_tmp k USING (%1$s)', key_att, _tbl);
+  END IF;
 
-    EXECUTE format('SELECT COUNT(*) FROM %s %s', _tbl, where_condition) INTO nb_rows;
-
-    key_token := public.uuid_generate_v4();
-    PERFORM provsql.create_gate(key_token, 'input');
-    ind := 1;
-    FOR record IN
-      EXECUTE format('SELECT provsql_temp FROM %s %s', _tbl, where_condition)
-    LOOP
-      token:=record.provsql_temp;
-      PERFORM provsql.create_gate(token, 'mulinput', ARRAY[key_token]);
-      PERFORM provsql.set_prob(token, 1./nb_rows);
-      PERFORM provsql.set_infos(token, ind);
-      ind := ind + 1;
-    END LOOP;
+  -- Pass 1: one input gate per group key.
+  FOR r IN SELECT provsql_key_token FROM provsql_repair_key_tmp LOOP
+    PERFORM provsql.create_gate(r.provsql_key_token, 'input');
   END LOOP;
+
+  -- Pass 2: per row, attach a mulinput gate to its group's key token.
+  FOR r IN EXECUTE rows_query LOOP
+    PERFORM provsql.create_gate(r.provsql_temp, 'mulinput', ARRAY[r.key_token]);
+    PERFORM provsql.set_prob(r.provsql_temp, 1./r.group_size);
+    PERFORM provsql.set_infos(r.provsql_temp, r.within_group::int);
+  END LOOP;
+
+  DROP TABLE provsql_repair_key_tmp;
+
   EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
-  PERFORM provsql.set_table_info(_tbl::oid, false, block_key_cols);
+  PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
 END
 $$ LANGUAGE plpgsql;
 

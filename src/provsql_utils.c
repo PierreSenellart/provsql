@@ -551,7 +551,7 @@ typedef struct table_info_cache_entry {
   Oid           relid;                                          ///< pg_class OID (sort key)
   bool          valid;                                          ///< false => refresh on next access
   bool          present;                                        ///< when valid: was a record found at the worker?
-  bool          tid;                                            ///< when present: independent leaves?
+  uint8         kind;                                           ///< when present: provsql_table_kind value
   uint16        block_key_n;                                    ///< when present: number of block-key columns
   AttrNumber    block_key[PROVSQL_TABLE_INFO_MAX_BLOCK_KEY];    ///< when present: block-key column numbers
 } table_info_cache_entry;
@@ -591,7 +591,7 @@ static void table_info_cache_insert(int pos, Oid relid, bool present,
   new_buf[pos].valid       = true;
   new_buf[pos].present     = present;
   if(present) {
-    new_buf[pos].tid         = info->tid;
+    new_buf[pos].kind        = info->kind;
     new_buf[pos].block_key_n = info->block_key_n;
     memcpy(new_buf[pos].block_key, info->block_key,
            info->block_key_n * sizeof(AttrNumber));
@@ -641,7 +641,7 @@ bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out)
     if(!e->present)
       return false;
     out->relid       = relid;
-    out->tid         = e->tid;
+    out->kind        = e->kind;
     out->block_key_n = e->block_key_n;
     memcpy(out->block_key, e->block_key,
            e->block_key_n * sizeof(AttrNumber));
@@ -656,7 +656,7 @@ bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out)
     e->valid   = true;
     e->present = present;
     if(present) {
-      e->tid         = info.tid;
+      e->kind        = info.kind;
       e->block_key_n = info.block_key_n;
       memcpy(e->block_key, info.block_key,
              info.block_key_n * sizeof(AttrNumber));
