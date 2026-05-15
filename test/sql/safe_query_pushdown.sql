@@ -2,17 +2,20 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- Phase-3 slice 3a-min: column pushdown for hierarchical CQs where
--- every shared (multi-atom) equivalence class touches every atom.
--- Each atom's wrap then projects every shared class (root class at
--- output attno 1, other shared classes at 2..N), so the outer cross
--- product per group is one wrap row per atom and the resulting
+-- Safe-query rewriter -- column and atom-local qual pushdown for
+-- hierarchical CQs.
+--
+-- When every shared (multi-atom) equivalence class touches every
+-- atom, each atom's wrap projects every shared class (root class at
+-- output attno 1, other shared classes at 2..N), the outer cross
+-- product per group is one wrap row per atom, and the resulting
 -- circuit stays read-once.
 --
--- Cases where some shared class touches only a strict subset of the
--- atoms (e.g. q :- A(x,y), B(x,y), C(x) with y in {A,B} only) need
--- a nested sub-query per non-root shared-class signature; the
--- detector bails on those for now (deferred to a multi-level slice).
+-- When some shared class touches only a strict subset of the atoms
+-- (e.g. q :- A(x,y), B(x,y), C(x) with y in {A,B} only), the
+-- detector bundles those atoms into an inner sub-Query whose
+-- @c GROUP @c BY folds the partial-coverage variable away before the
+-- outer join.
 
 CREATE TABLE pd_a(x int, y int);
 CREATE TABLE pd_b(x int, y int);
@@ -33,10 +36,10 @@ DO $$ BEGIN
 END $$;
 
 -- (1) Two-atom CQ with two shared classes (x and y both touch
---     {pd_a, pd_b}).  Before slice 3a, the y class would be rejected
---     because it is not the root class.  The rewritten provenance
---     must match the baseline produced by the default evaluator on
---     the unrewritten (shared-input) circuit.
+--     {pd_a, pd_b}).  The wrap of each atom projects both x and y;
+--     the rewritten provenance must match the baseline produced by
+--     the default evaluator on the unrewritten (shared-input)
+--     circuit.
 SET provsql.boolean_provenance = off;
 CREATE TEMP TABLE pd_base1 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
@@ -58,25 +61,29 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
  ORDER BY b.x;
 
 -- (2) Three-atom CQ with a partial-coverage shared class (y only in
---     {pd_a, pd_b}).  Slice 3a-min must bail; the resulting circuit
---     is the unrewritten one, which is not read-once, so
---     'independent' rejects it.
+--     {pd_a, pd_b}).  The multi-level path builds an inner sub-Query
+--     that folds y for {pd_a, pd_b} before joining the outer C-wrap
+--     on x, so the resulting circuit is read-once and the rewritten
+--     probability must match the baseline.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base2 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b, pd_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base2');
+
 SET provsql.boolean_provenance = on;
-DO $$
-DECLARE raised boolean := false;
-BEGIN
-  BEGIN
-    PERFORM probability_evaluate(provenance(), 'independent')
-      FROM pd_a a, pd_b b, pd_c c
-     WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
-     GROUP BY a.x;
-  EXCEPTION WHEN OTHERS THEN raised := true;
-  END;
-  IF NOT raised THEN
-    RAISE EXCEPTION 'expected ''independent'' to reject the partial-coverage '
-                    'CQ -- slice 3a-min should have bailed';
-  END IF;
-END $$;
+CREATE TEMP TABLE pd_rew2 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b, pd_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew2');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base2 b JOIN pd_rew2 r ON b.x = r.x
+ ORDER BY b.x;
 
 -- (3) Rewritten root-gate shape for case (1): for each x, the root
 --     must be gate_times of two gate_plus children (one per atom).
@@ -94,7 +101,7 @@ SELECT x, root, root_nchildren FROM pd_shape ORDER BY x;
 -- (4) Case A: A(x,y), B(x,y), C(x,y,z) with c.z unreferenced
 --     anywhere in the outer query.  PostgreSQL's parser never
 --     materialises a Var for c.z, so the detector only sees x and y
---     -- both shared classes touch all three atoms.  Slice 3a-min
+--     -- both shared classes touch all three atoms.  The rewriter
 --     accepts and the rewritten circuit must be read-once with the
 --     same probability as the baseline.
 CREATE TABLE pd_g(x int, y int, z int);
@@ -126,8 +133,8 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
 
 -- (5) Case B: A(x,y), B(x,y), C(x,y,z) WHERE c.z > 100.
 --     c.z is a single-atom existential variable that only appears in
---     a top-level pushable conjunct.  Slice 3b extracts the conjunct
---     into C's inner wrap (so the wrap becomes
+--     a top-level pushable conjunct.  The atom-local pre-pass
+--     extracts the conjunct into C's inner wrap (so the wrap becomes
 --     SELECT DISTINCT x, y, provsql FROM pd_g WHERE z > 100), and
 --     the residual outer query no longer references c.z.  The
 --     detector then sees only x and y, both shared classes touching
@@ -153,6 +160,37 @@ SELECT remove_provenance('pd_rew5');
 
 SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM pd_base5 b JOIN pd_rew5 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (7) Multi-level rewrite + atom-local qual pushdown on a grouped
+--     atom: same shape as (2) with @c a.y > 10 added.  The y-Var of
+--     pd_a only appears inside the predicate and inside the a.y=b.y
+--     equality; the atom-local pre-pass pushes the @c >10 conjunct
+--     into pd_a's pushed_quals, and the multi-level builder carries
+--     that conjunct into the inner sub-Query's WHERE.  When the
+--     rewriter re-enters on the inner sub-Query, the atom-local
+--     pre-pass re-extracts the conjunct into pd_a's wrap inside the
+--     inner.  Rewritten probability must match the baseline.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base7 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b, pd_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+     AND a.y > 10
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base7');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew7 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b, pd_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+     AND a.y > 10
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew7');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base7 b JOIN pd_rew7 r ON b.x = r.x
  ORDER BY b.x;
 
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
