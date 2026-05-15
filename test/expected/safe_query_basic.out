@@ -38,3 +38,15 @@ remove_provenance
 rows_on
 5
 (1 row)
+remove_provenance
+
+(1 row)
+rows_off|p_off
+1|0.584000
+(1 row)
+remove_provenance
+
+(1 row)
+rows_on|p_on
+1|0.584000
+(1 row)

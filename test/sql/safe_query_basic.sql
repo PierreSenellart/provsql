@@ -115,6 +115,40 @@ CREATE TEMP TABLE sqb_nogb_on AS
 SELECT remove_provenance('sqb_nogb_on');
 SELECT count(*) AS rows_on FROM sqb_nogb_on;
 
+-- (6) SELECT DISTINCT 1 is the standard Boolean-query idiom: project
+--     every body variable out and return a single tuple whose
+--     provenance is the OR over all matching join tuples.  The
+--     rewriter must accept it (distinctClause is non-NIL) and produce
+--     a circuit whose probability matches the baseline.  With
+--     duplicates on both sides (id=3 contributes 2x2 matching
+--     pairs), the baseline circuit shares input gates and the
+--     rewritten one does not, so 'independent' should succeed on the
+--     rewritten circuit while still agreeing with the baseline
+--     probability.  Expected value with p_a=0.5, p_b=0.4:
+--       P(matched at id=1) = 0.5 * 0.4                    = 0.20
+--       P(at least one A-id=3) = 1 - 0.5^2                = 0.75
+--       P(at least one B-id=3) = 1 - 0.6^2                = 0.64
+--       P(matched at id=3) = 0.75 * 0.64                  = 0.48
+--       P(non-empty answer) = 1 - (1-0.20) * (1-0.48)
+--                           = 1 - 0.8 * 0.52              = 0.584
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE sqb_dist1_off AS
+  SELECT DISTINCT 1 AS one FROM sqb_left a, sqb_right b WHERE a.id = b.id;
+CREATE TEMP TABLE sqb_dist1_off_p AS
+  SELECT one, ROUND(probability_evaluate(provsql)::numeric, 6) AS p
+    FROM sqb_dist1_off;
+SELECT remove_provenance('sqb_dist1_off_p');
+SELECT count(*) AS rows_off, p AS p_off FROM sqb_dist1_off_p GROUP BY p;
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE sqb_dist1_on AS
+  SELECT DISTINCT 1 AS one FROM sqb_left a, sqb_right b WHERE a.id = b.id;
+CREATE TEMP TABLE sqb_dist1_on_p AS
+  SELECT one, ROUND(probability_evaluate(provsql, 'independent')::numeric, 6) AS p
+    FROM sqb_dist1_on;
+SELECT remove_provenance('sqb_dist1_on_p');
+SELECT count(*) AS rows_on, p AS p_on FROM sqb_dist1_on_p GROUP BY p;
+
 SET provsql.boolean_provenance = off;
 DROP TABLE sqb_left;
 DROP TABLE sqb_right;
