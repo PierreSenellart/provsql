@@ -125,10 +125,21 @@ that's right for many simple cases but wrong in general.
   detector : a TID base table stays TID under projection, selection,
   and GROUP BY on a TID atom column ; the join of two TID inputs is
   TID when the joint lineage satisfies the hierarchical criterion ;
-  UNION ALL of disjoint TIDs stays TID ; etc.  Exposed as a SQL
-  function (`classify_query(text) -> provsql_table_kind`) so Studio
-  can render the certified kind next to the result and the user
-  sees at a glance why a query is safe.
+  UNION ALL of disjoint TIDs stays TID ; etc.  Initial scope landed
+  in `src/classify_query.{c,h}` and the `provsql.classify_top_level`
+  GUC : when on, the planner hook emits a `NOTICE` of the form
+  `ProvSQL: query result is <KIND> (sources: schema.t1, ...)` for
+  every top-level SELECT, gated on `provsql_executor_depth == 0` so
+  the rewriter's PL/pgSQL helpers (`provenance_times`, ...) do not
+  produce spurious extra NOTICEs.  Studio reads the NOTICE channel.
+  Initial coverage : single base relation under projection /
+  selection (kind inherited verbatim) ; FROM-less or
+  no-tracked-source queries (TID, empty sources) ; everything else
+  conservatively OPAQUE with the sources list still populated.
+  Follow-up : independent-TID join inference, BID block-key
+  preservation check under projection / GROUP BY, UNION ALL of
+  disjoint TIDs, view descent (see slice below), and the transitive
+  base-ancestor set the correlation registry will consume.
 - **CTAS tag inheritance.**
   When a CTAS materialises a query the classifier has tagged TID
   (resp. BID), populate the new table's `provsql_table_info` entry

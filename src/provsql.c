@@ -37,6 +37,7 @@
 #else
 #include "optimizer/clauses.h"          /* contain_volatile_functions */
 #endif
+#include "executor/executor.h"
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_oper.h"
@@ -52,6 +53,7 @@
 #include "catalog/pg_cast.h"
 #include <time.h>
 
+#include "classify_query.h"
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
@@ -4503,6 +4505,18 @@ static void process_insert_select(const constants_t *constants, Query *q) {
  * @param boundParams    Pre-bound parameter values.
  * @return               The planned statement.
  */
+/** @brief Executor nesting depth.
+ *
+ * Tracks how deep we are inside @c Executor invocations.  Incremented
+ * in @c provsql_executor_start, decremented in @c provsql_executor_end.
+ * The classifier @c NOTICE only fires when this is zero, which
+ * corresponds to the user's outermost statement being planned (before
+ * any executor entry).  Plans built for PL/pgSQL function bodies that
+ * the rewriter inserts -- @c provenance_times, @c provenance_plus,
+ * @c provenance_aggregate, ... -- happen during execution of the
+ * user's plan, so they see depth >= 1 and skip the NOTICE. */
+static int provsql_executor_depth = 0;
+
 static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000
                                     const char *query_string,
@@ -4521,6 +4535,24 @@ static PlannedStmt *provsql_planner(Query *q,
      * on FROM-less queries that have neither rv_cmp nor provenance(),
      * so widening the gate costs nothing in the common case. */
     const constants_t constants = get_constants(false);
+
+    /* Query-time TID / BID / OPAQUE classifier.  Emits a NOTICE for
+     * the user's outermost SELECT when the GUC is on.  Runs on the
+     * user's original Query before any provsql rewriting so the
+     * reported kind reflects the SQL the user wrote.  Gating on
+     * @c provsql_executor_depth @c == @c 0 skips the spurious extra
+     * planning calls triggered by PL/pgSQL function bodies the
+     * rewriter inserts (@c provenance_times, ...), whose internal
+     * SELECTs go through the planner hook during execution of the
+     * user's plan. */
+    if (provsql_executor_depth == 0
+        && provsql_classify_top_level
+        && q->rtable != NIL) {
+      ProvSQLClassification cls;
+      provsql_classify_query(q, &cls);
+      provsql_classify_emit_notice(&cls);
+      list_free(cls.source_relids);
+    }
 
     if (constants.ok && has_provenance(&constants, q)) {
       bool *removed = NULL;
@@ -4565,6 +4597,49 @@ static PlannedStmt *provsql_planner(Query *q,
                             query_string,
 #endif
                             cursorOptions, boundParams);
+}
+
+/* -------------------------------------------------------------------------
+ * Executor hooks (depth tracking only)
+ *
+ * We install ExecutorStart / ExecutorEnd hooks solely to maintain
+ * @c provsql_executor_depth, which the classifier in @c provsql_planner
+ * consults to distinguish the user's outermost statement from nested
+ * PL/pgSQL bodies the rewriter calls into.  No other behaviour changes.
+ * ------------------------------------------------------------------------- */
+static ExecutorStart_hook_type prev_ExecutorStart = NULL;
+static ExecutorEnd_hook_type   prev_ExecutorEnd   = NULL;
+
+static void provsql_executor_start(QueryDesc *queryDesc, int eflags) {
+  provsql_executor_depth++;
+  PG_TRY();
+  {
+    if (prev_ExecutorStart)
+      prev_ExecutorStart(queryDesc, eflags);
+    else
+      standard_ExecutorStart(queryDesc, eflags);
+  }
+  PG_CATCH();
+  {
+    provsql_executor_depth--;
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
+}
+
+static void provsql_executor_end(QueryDesc *queryDesc) {
+  PG_TRY();
+  {
+    if (prev_ExecutorEnd)
+      prev_ExecutorEnd(queryDesc);
+    else
+      standard_ExecutorEnd(queryDesc);
+  }
+  PG_FINALLY();
+  {
+    provsql_executor_depth--;
+  }
+  PG_END_TRY();
 }
 
 /**
@@ -4829,6 +4904,8 @@ void _PG_init(void) {
 
   prev_planner = planner_hook;
   prev_shmem_startup = shmem_startup_hook;
+  prev_ExecutorStart = ExecutorStart_hook;
+  prev_ExecutorEnd   = ExecutorEnd_hook;
 #if (PG_VERSION_NUM >= 150000)
   prev_shmem_request = shmem_request_hook;
   shmem_request_hook = provsql_shmem_request;
@@ -4836,8 +4913,10 @@ void _PG_init(void) {
   provsql_shmem_request();
 #endif
 
-  planner_hook = provsql_planner;
-  shmem_startup_hook = provsql_shmem_startup;
+  planner_hook        = provsql_planner;
+  shmem_startup_hook  = provsql_shmem_startup;
+  ExecutorStart_hook  = provsql_executor_start;
+  ExecutorEnd_hook    = provsql_executor_end;
 
   RegisterProvSQLMMapWorker();
 }
@@ -4846,6 +4925,8 @@ void _PG_init(void) {
  * @brief Extension teardown — restores the planner and shmem hooks.
  */
 void _PG_fini(void) {
-  planner_hook = prev_planner;
-  shmem_startup_hook = prev_shmem_startup;
+  planner_hook        = prev_planner;
+  shmem_startup_hook  = prev_shmem_startup;
+  ExecutorStart_hook  = prev_ExecutorStart;
+  ExecutorEnd_hook    = prev_ExecutorEnd;
 }
