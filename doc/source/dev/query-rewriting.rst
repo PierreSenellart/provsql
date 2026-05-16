@@ -32,6 +32,79 @@ text is logged before and after rewriting.  At level ≥ 40, the time
 spent in the rewriter is logged.
 
 
+Query-Time TID / BID Classifier
+-------------------------------
+
+A second, read-only analysis runs from the same planner-hook entry,
+guarded by the :ref:`provsql.classify_top_level <provsql-classify-top-level>`
+GUC.  When on, :cfunc:`provsql_classify_query` (in
+:cfile:`classify_query.c`) inspects the user's parsed ``Query`` and
+emits a ``NOTICE`` certifying the kind of the result relation under
+the existing ``provsql_table_kind`` taxonomy (``TID`` / ``BID`` /
+``OPAQUE``) together with the provenance-tracked base relations the
+query touches.
+
+The classifier runs on the user's original parse tree, before any
+rewriting, so the reported kind reflects the SQL the user wrote.
+It is purely informational: no side effect on the query tree, no
+behavioural change downstream.
+
+**Decision rules (initial scope).**  A shape gate first rejects any
+query carrying any of ``hasSubLinks``, ``hasModifyingCTE``, a
+non-empty ``cteList``, a non-NULL ``setOperations``, or a non-
+``RangeTblRef`` entry in the ``fromlist``.  The range table is then
+walked, collecting ``RTE_RELATION`` entries with
+``provsql_table_info`` metadata as sources; the PostgreSQL 18
+synthetic ``RTE_GROUP`` is skipped transparently; any other rtekind
+trips the shape gate.  The kind is decided as:
+
+* shape failed → ``OPAQUE`` (hidden structure may carry correlations
+  the classifier cannot rule out);
+* shape ok and zero tracked sources → ``TID`` (no provenance
+  involved, trivially deterministic);
+* shape ok and exactly one tracked source → that source's recorded
+  kind;
+* shape ok and two or more tracked sources → ``OPAQUE`` (joins are
+  deferred to a later slice that will infer independent-TID joins
+  via the hierarchical-CQ criterion).
+
+The sources list is populated even when the kind is ``OPAQUE``, so
+the ``NOTICE`` always attributes the result to the relations the
+query touches.  Independent-TID join inference, BID block-key
+preservation under projection / ``GROUP BY``, ``UNION ALL`` of
+disjoint TIDs, view descent, and the transitive base-ancestor
+computation the future correlation registry will consume are all
+explicit follow-ups; see ``TODO.md`` ("TID / BID propagation through
+derived relations").
+
+**Executor-depth gating.**  ProvSQL's rewriter inserts calls to
+PL/pgSQL helpers (``provenance_times``, ``provenance_plus``,
+``provenance_aggregate``, …) into the rewritten query.  Each of
+those helpers contains internal ``SELECT`` statements that PL/pgSQL
+plans on first invocation, and that planning fires the planner hook
+again.  Without a gate, the classifier would emit one extra
+``NOTICE`` per such internal plan.  We track ``Executor`` nesting via
+an ``ExecutorStart_hook`` / ``ExecutorEnd_hook`` pair that
+increments / decrements a file-local depth counter
+(``provsql_executor_depth``); the classifier only emits when
+``provsql_executor_depth == 0`` at planner-hook entry, which
+corresponds to the user's outermost statement (the helper plans run
+during execution, hence at depth ≥ 1).
+
+**NOTICE format.**  Rendered by :cfunc:`provsql_classify_emit_notice`
+with schema-qualified, ``quote_identifier``-quoted relation names:
+
+.. code-block:: text
+
+    ProvSQL: query result is TID (sources: public.personnel)
+    ProvSQL: query result is OPAQUE (sources: public.personnel, public.factories)
+    ProvSQL: query result is TID (no provenance-tracked sources)
+
+ProvSQL Studio enables the GUC automatically and parses the
+``NOTICE`` into a kind-aware pill on the result-table ``provsql``
+column; see :doc:`/user/studio`.
+
+
 ``process_query``: The Main Rewriting Function
 -----------------------------------------------
 

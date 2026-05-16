@@ -150,6 +150,16 @@ The pills make it obvious which result columns carry circuit
 references (and are therefore clickable in Circuit mode) without
 having to inspect the schema panel.
 
+The :sc:`prov` pill is kind-aware: when the planner-side classifier
+(:ref:`provsql.classify_top_level <provsql-classify-top-level>`, which
+Studio enables automatically) certifies the result, the pill becomes
+:sc:`prov-tid` or :sc:`prov-bid` accordingly; an OPAQUE result keeps
+the bare :sc:`prov` label but in a muted tone so the lack of
+certification is visible at a glance.  Hovering the pill surfaces
+the certified kind's meaning plus the list of provenance-tracked
+source relations the query touches, which is the same information
+the underlying ``NOTICE`` carries.
+
 .. _studio-query-toggles:
 
 Per-query toggles
@@ -572,9 +582,11 @@ pills:
   :doc:`probabilities` for the TID vs BID model) : :sc:`PROV-TID`
   for tuple-independent tables registered via
   :sqlfunc:`add_provenance`, :sc:`PROV-BID` for
-  block-independent tables registered via :sqlfunc:`repair_key`.
-  This is the same classification the safe-query rewriter
-  consults to decide whether a query is in scope for
+  block-independent tables registered via :sqlfunc:`repair_key`,
+  and a bare :sc:`prov` in a muted tone for tables marked OPAQUE
+  via ``set_table_info`` (the safe-query rewriter refuses to fire
+  on those).  This is the same classification the safe-query
+  rewriter consults to decide whether a query is in scope for
   ``provsql.boolean_provenance``.
 * :sc:`mapping` (gold) on a relation shaped
   ``(value <T>, provenance uuid)``, including views from
@@ -582,6 +594,11 @@ pills:
   mutually exclusive: a mapping view that also carries a planner-
   injected ``provsql`` column is classified as :sc:`mapping` (the
   more specific category).
+
+Clicking a relation row (or focusing it and pressing Enter / Space)
+replaces the query box with a ready-to-run
+``SELECT * FROM <relation>;`` so the inspected table is one click
+away from being queried.
 
 Columns whose type is one of ProvSQL's circuit-bearing types
 carry their own terracotta pill next to the column name:

@@ -41,6 +41,39 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     :doc:`semirings`.  Queries outside the recognised class pass
     through unchanged.
 
+.. _provsql-classify-top-level:
+
+``provsql.classify_top_level`` (default: ``off``)
+    Emit a ``NOTICE`` for every top-level ``SELECT`` reporting the
+    certified kind of the result relation under the
+    ``provsql_table_kind`` taxonomy (``TID`` / ``BID`` / ``OPAQUE``) and
+    the provenance-tracked base relations it touches:
+
+    .. code-block:: text
+
+        NOTICE:  ProvSQL: query result is TID (sources: public.personnel)
+        NOTICE:  ProvSQL: query result is OPAQUE (sources: public.personnel, public.factories)
+        NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+
+    The classifier runs on the user's parsed ``Query`` before any
+    rewriting and only on the user's outermost statement; PL/pgSQL
+    helpers the rewriter calls into (``provenance_times``,
+    ``provenance_aggregate``, …) do not produce extra notices.
+
+    Initial scope: a single base relation in a flat ``FROM`` list with
+    no subqueries, no modifying CTEs, no set operations, and no joins
+    is certified at the source's recorded kind; an empty
+    provenance-tracked source set is reported as ``TID`` (trivially
+    deterministic); everything else is conservatively reported as
+    ``OPAQUE`` with the list of tracked sources still populated.
+    Independent-TID join inference, BID block-key preservation under
+    projection / ``GROUP BY``, ``UNION ALL`` of disjoint TIDs, and
+    view descent are deferred follow-ups.
+
+    ProvSQL Studio enables this GUC automatically and renders the
+    certified kind on the result-table provenance pill; see
+    :doc:`studio`.
+
 .. _provsql-verbose-level:
 
 ``provsql.verbose_level`` (default: ``0``)
