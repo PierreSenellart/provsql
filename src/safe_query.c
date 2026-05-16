@@ -662,6 +662,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   int    *group_singleton_counter = NULL; /* per-group: running outer_attno counter for singleton head Vars on non-first-members */
   bool    have_partial_class = false;
   int     partial_first = -1;       /* repr of the first partial-coverage class seen */
+  Bitmapset *bridging_classes = NULL; /* repr indices of partial-coverage classes whose touched atoms span more than one group; the bridge variable becomes an extra slot on the first_member of each touched group, and the outer's residual WHERE re-equates the groups' columns through the standard Var remap. */
   int     i, j;
   Index   varno;
   bool    ok;
@@ -846,48 +847,28 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       for (j = 0; j < natoms; j++)
         atom_group[j] = bms_is_empty(sig[j]) ? -1 : 0;
     } else if (have_partial_class) {
-      /* Disjoint multi-group: bridge check + distinct-signature
-       * partitioning.  A partial-coverage class @c c bridges if the
-       * atoms it touches do not all share the same signature; that
-       * happens whenever a class spans more than one group, and the
-       * outer would need an extra join column. */
-      bool bridge_exists = false;
-      Bitmapset **group_sigs = NULL;
+      /* Disjoint multi-group: partition atoms by exact signature,
+       * then merge bridging-connected groups.  A partial-coverage
+       * class whose touched atoms span more than one group is a
+       * "bridge"; rather than threading bridge-join columns through
+       * the outer, we collapse every chain of bridging-connected
+       * groups into one super-group.  The recursive @c process_query
+       * re-entry on the super-group's inner sub-Query then handles
+       * the intra-super-group structure (the bridging class becomes
+       * a fully-covered class inside the inner, and the residual
+       * partial classes peel level by level).  Each super-group
+       * still becomes one outer @c RTE_SUBQUERY, joined with the
+       * others only on the root variable -- so the resulting
+       * circuit is read-once over independent components. */
+      Bitmapset **group_sigs;
       int ngroups = 0;
-      for (i = 0; i < nvars && !bridge_exists; i++) {
-        Bitmapset *first_sig = NULL;
-        int c = cls[i];
-        if (c != i)
-          continue;
-        if (class_atom_count[c] < 2 || class_atom_count[c] >= natoms)
-          continue;
-        for (j = 0; j < natoms; j++) {
-          if (ANCHOR(c, j) == 0)
-            continue;
-          if (first_sig == NULL)
-            first_sig = sig[j];
-          else if (!bms_equal(first_sig, sig[j])) {
-            bridge_exists = true;
-            break;
-          }
-        }
-      }
-      if (bridge_exists) {
-        if (provsql_verbose >= 30)
-          provsql_notice("safe-query rewriter: a partial-coverage shared "
-                         "class spans atoms with different signatures "
-                         "(bridge case) -- multi-group rewrite with bridge "
-                         "join columns is deferred");
-        for (j = 0; j < natoms; j++) bms_free(sig[j]);
-        pfree(sig);
-        goto bail;
-      }
+      int g;
+
       /* Assign group_id by signature equality, in order of first
        * appearance to keep the rewriter output deterministic. */
       group_sigs = palloc0(natoms * sizeof(Bitmapset *));
       for (j = 0; j < natoms; j++) {
         bool found = false;
-        int g;
         for (g = 0; g < ngroups; g++) {
           if (bms_equal(group_sigs[g], sig[j])) {
             atom_group[j] = g;
@@ -902,6 +883,82 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
         }
       }
       pfree(group_sigs);
+
+      /* Identify bridging classes: partial-coverage classes whose
+       * touched atoms span more than one group. */
+      for (i = 0; i < nvars; i++) {
+        int c = cls[i];
+        Bitmapset *touched_groups = NULL;
+        int jj;
+        if (c != i)
+          continue;
+        if (class_atom_count[c] < 2 || class_atom_count[c] >= natoms)
+          continue;
+        for (jj = 0; jj < natoms; jj++) {
+          if (ANCHOR(c, jj) != 0)
+            touched_groups = bms_add_member(touched_groups,
+                                            atom_group[jj]);
+        }
+        if (bms_num_members(touched_groups) > 1)
+          bridging_classes = bms_add_member(bridging_classes, c);
+        bms_free(touched_groups);
+      }
+
+      /* Merge bridging-connected groups via union-find.  After
+       * merging, renumber super-groups densely starting from 0 and
+       * rewrite @c atom_group accordingly. */
+      if (!bms_is_empty(bridging_classes)) {
+        int *parent = palloc(ngroups * sizeof(int));
+        int *super = palloc(ngroups * sizeof(int));
+        int next_super = 0;
+        int c;
+
+        for (g = 0; g < ngroups; g++) {
+          parent[g] = g;
+          super[g] = -1;
+        }
+
+        c = -1;
+        while ((c = bms_next_member(bridging_classes, c)) >= 0) {
+          int first_g = -1;
+          int jj;
+          for (jj = 0; jj < natoms; jj++) {
+            int gj, ra, rb;
+            if (ANCHOR(c, jj) == 0)
+              continue;
+            gj = atom_group[jj];
+            if (first_g < 0) {
+              first_g = gj;
+              continue;
+            }
+            /* Path-compressed find. */
+            ra = first_g;
+            while (parent[ra] != ra) ra = parent[ra];
+            rb = gj;
+            while (parent[rb] != rb) rb = parent[rb];
+            if (ra != rb)
+              parent[rb] = ra;
+          }
+        }
+
+        for (g = 0; g < ngroups; g++) {
+          int r = g;
+          while (parent[r] != r) r = parent[r];
+          if (super[r] < 0)
+            super[r] = next_super++;
+          super[g] = super[r];
+        }
+
+        for (j = 0; j < natoms; j++) {
+          if (atom_group[j] >= 0)
+            atom_group[j] = super[atom_group[j]];
+        }
+
+        pfree(parent);
+        pfree(super);
+        bms_free(bridging_classes);
+        bridging_classes = NULL;
+      }
     }
 
     for (j = 0; j < natoms; j++) bms_free(sig[j]);

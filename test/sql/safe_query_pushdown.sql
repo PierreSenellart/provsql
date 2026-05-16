@@ -772,11 +772,16 @@ END $$;
 --      signature {y, z}; pd_br_c has signature {y}; pd_br_d, pd_br_e
 --      have signature {w}.  atoms(y)={A,B,C} (partial, bridges) and
 --      atoms(z)={A,B}, atoms(w)={D,E} are disjoint partials nested
---      under x.  The rewriter currently bails because each inner
---      sub-Query would need to expose the bridge column y to the
---      outer for joining {A,B} with C, and that path is deferred.
---      The unrewritten circuit has shared inputs (multiple per-x
---      rows due to y) so 'independent' must reject.
+--      under x.
+--
+--      Bridging-group merging: groups touched by a bridging class
+--      collapse into one super-group; the recursive process_query
+--      re-entry on each super-group's inner sub-Query handles the
+--      intra-super-group structure (here, {A,B,C} ends up as one
+--      inner sub-Query and {D,E} as another).  The resulting
+--      circuit is read-once over independent components, so
+--      'independent' must succeed and produce the same probability
+--      as the GUC-off baseline.
 CREATE TABLE pd_br_a(x int, y int, z int);
 CREATE TABLE pd_br_b(x int, y int, z int);
 CREATE TABLE pd_br_c(x int, y int);
@@ -800,23 +805,28 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.4) FROM pd_br_e;
 END $$;
 
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_br_baseline AS
+  SELECT a.x AS x, probability_evaluate(provenance()) AS p
+    FROM pd_br_a a, pd_br_b b, pd_br_c c, pd_br_d d, pd_br_e e
+   WHERE a.x=b.x AND a.x=c.x AND a.x=d.x AND a.x=e.x
+     AND a.y=b.y AND a.y=c.y AND a.z=b.z AND d.w=e.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_br_baseline');
+
 SET provsql.boolean_provenance = on;
-DO $$
-DECLARE raised boolean := false;
-BEGIN
-  BEGIN
-    PERFORM probability_evaluate(provenance(), 'independent')
-      FROM pd_br_a a, pd_br_b b, pd_br_c c, pd_br_d d, pd_br_e e
-     WHERE a.x=b.x AND a.x=c.x AND a.x=d.x AND a.x=e.x
-       AND a.y=b.y AND a.y=c.y AND a.z=b.z AND d.w=e.w
-     GROUP BY a.x;
-  EXCEPTION WHEN OTHERS THEN raised := true;
-  END;
-  IF NOT raised THEN
-    RAISE EXCEPTION 'expected ''independent'' to reject the bridge-case '
-                    'query -- the rewriter should have bailed';
-  END IF;
-END $$;
+CREATE TEMP TABLE pd_br_rew AS
+  SELECT a.x AS x,
+         get_gate_type(provenance()) AS root,
+         probability_evaluate(provenance(), 'independent') AS p_ind
+    FROM pd_br_a a, pd_br_b b, pd_br_c c, pd_br_d d, pd_br_e e
+   WHERE a.x=b.x AND a.x=c.x AND a.x=d.x AND a.x=e.x
+     AND a.y=b.y AND a.y=c.y AND a.z=b.z AND d.w=e.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_br_rew');
+SELECT b.x, r.root, ROUND((b.p - r.p_ind)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_br_baseline b JOIN pd_br_rew r ON b.x = r.x
+ ORDER BY b.x;
 
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"

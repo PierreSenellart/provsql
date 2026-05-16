@@ -318,6 +318,16 @@ add_provenance
 add_provenance
 
 (1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|root|diff_baseline_vs_rewritten
+1|assumed_boolean|0.000000000
+2|assumed_boolean|0.000000000
+(2 rows)
 add_provenance
 
 (1 row)
