@@ -828,6 +828,59 @@ SELECT b.x, r.root, ROUND((b.p - r.p_ind)::numeric, 9) AS diff_baseline_vs_rewri
   FROM pd_br_baseline b JOIN pd_br_rew r ON b.x = r.x
  ORDER BY b.x;
 
+-- (23) Transitive intra-group equalities for fully-covered classes.
+--      Query: A(x), B(x,w), C(x,w).  Atom signatures: A {} (empty,
+--      becomes outer wrap), B {w} and C {w} (grouped on signature
+--      {w}).  The user-written WHERE is `a.x=b.x AND a.x=c.x AND
+--      b.w=c.w`; the transitive `b.x=c.x` is implied but never
+--      appears as a conjunct.  Partition routes `a.x=b.x` and
+--      `a.x=c.x` to the outer (their varnos span groups) and
+--      `b.w=c.w` to group_BC's inner_quals.  Without an explicit
+--      `b.x=c.x` reaching group_BC, the recursive process_query
+--      re-entry would see x as a singleton on each grouped atom and
+--      wrap each member without exposing x, causing C's per-(w)
+--      provenance to aggregate over EVERY x rather than the per-row
+--      x -- the rewritten circuit would then over-count.  The fix
+--      synthesises the missing equalities at group-build time.  The
+--      check is the probability match against the unrewritten
+--      baseline; the bug shows up as a non-zero diff whenever the
+--      data has multiple x values sharing the same w.
+CREATE TABLE pd_tr_a(x int);
+CREATE TABLE pd_tr_b(x int, w int);
+CREATE TABLE pd_tr_c(x int, w int);
+INSERT INTO pd_tr_a VALUES (1), (2);
+INSERT INTO pd_tr_b VALUES (1, 100), (1, 200), (2, 100), (2, 300);
+INSERT INTO pd_tr_c VALUES (1, 100), (1, 200), (2, 100), (2, 300);
+SELECT add_provenance('pd_tr_a');
+SELECT add_provenance('pd_tr_b');
+SELECT add_provenance('pd_tr_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_tr_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_tr_b;
+  PERFORM set_prob(provsql, 0.3) FROM pd_tr_c;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_tr_baseline AS
+  SELECT a.x AS x, probability_evaluate(provenance()) AS p
+    FROM pd_tr_a a, pd_tr_b b, pd_tr_c c
+   WHERE a.x = b.x AND a.x = c.x AND b.w = c.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_tr_baseline');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_tr_rew AS
+  SELECT a.x AS x,
+         get_gate_type(provenance()) AS root,
+         probability_evaluate(provenance(), 'independent') AS p_ind
+    FROM pd_tr_a a, pd_tr_b b, pd_tr_c c
+   WHERE a.x = b.x AND a.x = c.x AND b.w = c.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_tr_rew');
+SELECT b.x, r.root, ROUND((b.p - r.p_ind)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_tr_baseline b JOIN pd_tr_rew r ON b.x = r.x
+ ORDER BY b.x;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook

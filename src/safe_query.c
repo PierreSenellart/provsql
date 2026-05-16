@@ -1211,6 +1211,91 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
         arr[sa->group_id]->member_atoms =
             lappend(arr[sa->group_id]->member_atoms, sa);
     }
+
+    /* Synthesize intra-group equalities for every fully-covered
+     * class touching two or more atoms of the same group.  The user
+     * typically writes such equalities transitively
+     * (e.g. @c a.x=b.x @c AND @c a.x=c.x), and the outer's residual
+     * partitioning routes each transitive conjunct to the outer
+     * because its varnos span groups.  Without an explicit
+     * @c b.x=c.x conjunct landing in the group's @c inner_quals,
+     * the recursive @c process_query re-entry on the inner
+     * sub-Query would see @c b.x and @c c.x as unrelated columns,
+     * leaving @c c.x out of @c proj_slots -- the inner sub-Query
+     * for @c c would then aggregate over @em every value of @c x
+     * instead of the per-row @c x, and the resulting circuit would
+     * over-count.  We add the missing equalities here as @c OpExpr
+     * nodes in original-varno space (the existing inner-build
+     * machinery remaps them to inner varnos). */
+    for (g = 0; g <= max_gid; g++) {
+      for (i = 0; i < nvars; i++) {
+        ListCell  *mlc;
+        safe_rewrite_atom *first_touching = NULL;
+        AttrNumber first_attno = 0;
+        Oid        first_type = InvalidOid;
+        int32      first_typmod = -1;
+        Oid        first_coll = InvalidOid;
+        int        c = cls[i];
+        if (c != i)
+          continue;
+        if (class_atom_count[c] != natoms)
+          continue;                         /* only fully-covered */
+        foreach (mlc, arr[g]->member_atoms) {
+          safe_rewrite_atom *m = (safe_rewrite_atom *) lfirst(mlc);
+          int           atom_idx = (int) m->rtindex - 1;
+          AttrNumber    attno = ANCHOR(c, atom_idx);
+          RangeTblEntry *rte;
+          HeapTuple      atttup;
+          Form_pg_attribute attform;
+          Oid            mtype, mcoll, eqop, eqfunc;
+          int32          mtypmod;
+          Var           *lv, *rv;
+          OpExpr        *eq;
+          if (attno == 0)
+            continue;
+          rte = (RangeTblEntry *) list_nth(q->rtable, atom_idx);
+          atttup = SearchSysCache2(ATTNUM,
+                                   ObjectIdGetDatum(rte->relid),
+                                   Int16GetDatum(attno));
+          if (!HeapTupleIsValid(atttup))
+            continue;
+          attform = (Form_pg_attribute) GETSTRUCT(atttup);
+          mtype   = attform->atttypid;
+          mtypmod = attform->atttypmod;
+          mcoll   = attform->attcollation;
+          ReleaseSysCache(atttup);
+          if (first_touching == NULL) {
+            first_touching = m;
+            first_attno    = attno;
+            first_type     = mtype;
+            first_typmod   = mtypmod;
+            first_coll     = mcoll;
+            continue;
+          }
+          eqop = find_equality_operator(first_type, mtype);
+          if (!OidIsValid(eqop))
+            continue;
+          eqfunc = get_opcode(eqop);
+          if (!OidIsValid(eqfunc))
+            continue;
+          lv = makeVar(first_touching->rtindex, first_attno,
+                       first_type, first_typmod, first_coll, 0);
+          rv = makeVar(m->rtindex, attno, mtype, mtypmod, mcoll, 0);
+          eq = makeNode(OpExpr);
+          eq->opno         = eqop;
+          eq->opfuncid     = eqfunc;
+          eq->opresulttype = BOOLOID;
+          eq->opretset     = false;
+          eq->opcollid     = InvalidOid;
+          eq->inputcollid  = first_coll;
+          eq->args         = list_make2(lv, rv);
+          eq->location     = -1;
+          arr[g]->inner_quals =
+              lappend(arr[g]->inner_quals, eq);
+        }
+      }
+    }
+
     for (g = 0; g <= max_gid; g++)
       *groups_out = lappend(*groups_out, arr[g]);
     pfree(arr);
