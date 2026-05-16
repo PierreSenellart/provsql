@@ -94,11 +94,25 @@ def app(test_dsn: str, tmp_path, monkeypatch):
     before `create_app()` runs because the factory eagerly loads any
     persisted GUC overrides into RUNTIME_GUCS, so we set it here rather
     than in an autouse fixture (whose ordering relative to `app` is
-    fragile)."""
+    fragile).
+
+    Closes the app's connection pool on teardown : create_app opens a
+    psycopg ConnectionPool with min_size=1, so every test that did not
+    explicitly close it would leak at least one PG connection for the
+    rest of the pytest process.  At ~160 tests that's enough to blow
+    past PG's default max_connections."""
     monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "studio_cfg"))
     app = create_app(dsn=f"{test_dsn} options='-c search_path=provsql_test,provsql,public'")
     app.config.update(TESTING=True)
-    yield app
+    try:
+        yield app
+    finally:
+        pool = app.extensions.get("provsql_pool")
+        if pool is not None:
+            try:
+                pool.close()
+            except Exception:
+                pass
 
 
 @pytest.fixture()
