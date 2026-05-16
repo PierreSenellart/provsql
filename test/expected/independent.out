@@ -8,3 +8,9 @@ Berlin|0.82
 New York|0.28
 Paris|0.86
 (3 rows)
+add_provenance
+
+(1 row)
+p_const_shared
+1.000000000
+(1 row)
