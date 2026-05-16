@@ -140,7 +140,7 @@ def test_schema_panel_column_click_prefills_query(
     )
 
 
-def test_circuit_prov_mode_selector_is_interactive(
+def test_circuit_prov_scheme_selector_is_interactive(
     page: Page, studio_url: str
 ) -> None:
     """In Circuit mode, the per-query provenance-flavour selector is free
@@ -151,16 +151,16 @@ def test_circuit_prov_mode_selector_is_interactive(
     page.goto(studio_url + "/circuit")
     expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
 
-    fs = page.locator("#prov-mode-fieldset")
+    fs = page.locator("#prov-scheme-fieldset")
     expect(fs).not_to_have_class("is-locked")
-    where_radio = page.locator('input[name="prov-mode"][value="where"]')
+    where_radio = page.locator('input[name="prov-scheme"][value="where"]')
     page.locator('label[data-mode="where"]').click()
     expect(where_radio).to_be_checked()
 
     _run_query_and_wait(page, "SELECT name FROM personnel LIMIT 3;", 3)
 
 
-def test_circuit_prov_mode_defaults_to_semiring(
+def test_circuit_prov_scheme_defaults_to_semiring(
     page: Page, studio_url: str
 ) -> None:
     """The three-way selector ships with Semiring as the default pick
@@ -168,11 +168,11 @@ def test_circuit_prov_mode_defaults_to_semiring(
     existing users see no functional change until they opt in."""
     page.goto(studio_url + "/circuit")
     expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
-    semiring_radio = page.locator('input[name="prov-mode"][value="semiring"]')
+    semiring_radio = page.locator('input[name="prov-scheme"][value="semiring"]')
     expect(semiring_radio).to_be_checked()
 
 
-def test_where_mode_locks_prov_mode_to_where(
+def test_where_mode_locks_prov_scheme_to_where(
     page: Page, studio_url: str
 ) -> None:
     """The Where UI mode requires where-provenance (the cell-highlight
@@ -183,10 +183,10 @@ def test_where_mode_locks_prov_mode_to_where(
     page.goto(studio_url + "/where")
     expect(page.locator("body")).to_have_class("mode-where", timeout=5000)
 
-    fs = page.locator("#prov-mode-fieldset")
-    expect(fs).to_have_class("wp-prov-mode is-locked")
-    where_radio = page.locator('input[name="prov-mode"][value="where"]')
+    fs = page.locator("#prov-scheme-fieldset")
+    expect(fs).to_have_class("wp-prov-scheme is-locked")
+    where_radio = page.locator('input[name="prov-scheme"][value="where"]')
     expect(where_radio).to_be_checked()
     expect(where_radio).to_be_disabled()
-    boolean_radio = page.locator('input[name="prov-mode"][value="boolean"]')
+    boolean_radio = page.locator('input[name="prov-scheme"][value="boolean"]')
     expect(boolean_radio).to_be_disabled()

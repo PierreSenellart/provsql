@@ -320,13 +320,13 @@ def create_app(
         # In Where UI mode the cell-highlight wrap requires where, so
         # the selector is locked there client-side; if a stale payload
         # arrives anyway we override.
-        prov_mode = (payload.get("prov_mode") or "semiring").lower()
+        prov_scheme = (payload.get("prov_scheme") or "semiring").lower()
         if mode == "where":
-            prov_mode = "where"
-        if prov_mode not in ("boolean", "semiring", "where"):
-            prov_mode = "semiring"
-        where_prov = prov_mode == "where"
-        boolean_prov = prov_mode == "boolean"
+            prov_scheme = "where"
+        if prov_scheme not in ("boolean", "semiring", "where"):
+            prov_scheme = "semiring"
+        where_prov = prov_scheme == "where"
+        boolean_prov = prov_scheme == "boolean"
         # Session-sticky : update the app-level mode flag so subsequent
         # /api/circuit and /api/evaluate calls (which carry their own
         # backend connection from the pool) also run under

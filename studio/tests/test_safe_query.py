@@ -4,10 +4,10 @@ Covers the four points Studio added on top of the C-side rewriter:
 
   * The compiled-semiring registry (``db._COMPILED_SEMIRINGS``) mirrors
     the C++ per-semiring ``compatibleWithBooleanRewrite()`` predicate.
-  * POST /api/exec with ``prov_mode = "boolean"`` sets the GUC such that
+  * POST /api/exec with ``prov_scheme = "boolean"`` sets the GUC such that
     the rewriter actually fires (the per-row provenance UUID points at a
     ``gate_assumed_boolean``).
-  * POST /api/exec with ``prov_mode = "semiring"`` leaves the GUC off
+  * POST /api/exec with ``prov_scheme = "semiring"`` leaves the GUC off
     (no ``gate_assumed_boolean`` produced).
   * GET /api/circuit/<uuid> elides ``gate_assumed_boolean`` wrappers and
     stamps the immediate child with ``boolean_assumed = true`` so the
@@ -90,14 +90,14 @@ def test_compiled_registry_has_boolean_rewrite_flag():
     assert compat == {"boolexpr", "boolean", "formula", "interval-union"}, compat
 
 
-# ──────── prov_mode → planner-hook GUC ────────
+# ──────── prov_scheme → planner-hook GUC ────────
 
 
-def test_prov_mode_boolean_triggers_safe_query_rewrite(client, test_dsn):
-    """A hierarchical CQ run with prov_mode=boolean must produce a
+def test_prov_scheme_boolean_triggers_safe_query_rewrite(client, test_dsn):
+    """A hierarchical CQ run with prov_scheme=boolean must produce a
     per-row provenance whose root is gate_assumed_boolean (the marker
     the rewriter wraps every safe-query output in).  Same query under
-    prov_mode=semiring produces a plain plus/times gate."""
+    prov_scheme=semiring produces a plain plus/times gate."""
     cleanup = _setup_two_tracked_tables(client)
     try:
         sql = ("SELECT a.x, provenance() FROM sq_t_a a, sq_t_b b "
@@ -106,7 +106,7 @@ def test_prov_mode_boolean_triggers_safe_query_rewrite(client, test_dsn):
         resp_b = client.post("/api/exec", json={
             "sql": sql,
             "mode": "circuit",
-            "prov_mode": "boolean",
+            "prov_scheme": "boolean",
         })
         assert resp_b.status_code == 200, resp_b.data
         uuid_b = _provenance_uuid(resp_b.get_json())
@@ -115,7 +115,7 @@ def test_prov_mode_boolean_triggers_safe_query_rewrite(client, test_dsn):
         resp_s = client.post("/api/exec", json={
             "sql": sql,
             "mode": "circuit",
-            "prov_mode": "semiring",
+            "prov_scheme": "semiring",
         })
         assert resp_s.status_code == 200, resp_s.data
         uuid_s = _provenance_uuid(resp_s.get_json())
@@ -128,7 +128,7 @@ def test_prov_mode_boolean_triggers_safe_query_rewrite(client, test_dsn):
         client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})
 
 
-def test_prov_mode_where_keeps_safe_query_off(client, test_dsn):
+def test_prov_scheme_where_keeps_safe_query_off(client, test_dsn):
     """Selecting the Where flavour must not enable boolean_provenance
     (mutually exclusive at the C level)."""
     cleanup = _setup_two_tracked_tables(client)
@@ -138,7 +138,7 @@ def test_prov_mode_where_keeps_safe_query_off(client, test_dsn):
         resp = client.post("/api/exec", json={
             "sql": sql,
             "mode": "circuit",
-            "prov_mode": "where",
+            "prov_scheme": "where",
         })
         assert resp.status_code == 200, resp.data
         uuid_w = _provenance_uuid(resp.get_json())
@@ -164,7 +164,7 @@ def test_circuit_elides_assumed_boolean_wrapper(client, test_dsn):
         resp = client.post("/api/exec", json={
             "sql": sql,
             "mode": "circuit",
-            "prov_mode": "boolean",
+            "prov_scheme": "boolean",
         })
         assert resp.status_code == 200, resp.data
         wrapper_uuid = _provenance_uuid(resp.get_json())
@@ -225,7 +225,7 @@ def test_boolean_mode_is_session_sticky_on_circuit_fetch(client, test_dsn):
         # Flip to Boolean mode via a no-op exec; this is what
         # populates app.config["SESSION_MODES"] on the server.
         resp = client.post("/api/exec", json={
-            "sql": "SELECT 1", "mode": "circuit", "prov_mode": "boolean",
+            "sql": "SELECT 1", "mode": "circuit", "prov_scheme": "boolean",
         })
         assert resp.status_code == 200, resp.data
 
@@ -238,7 +238,7 @@ def test_boolean_mode_is_session_sticky_on_circuit_fetch(client, test_dsn):
         # foldBooleanIdentities does not fire on the next fetch, and
         # the scene comes back without the marker.
         client.post("/api/exec", json={
-            "sql": "SELECT 1", "mode": "circuit", "prov_mode": "semiring",
+            "sql": "SELECT 1", "mode": "circuit", "prov_scheme": "semiring",
         })
         scene2 = client.get(f"/api/circuit/{root}?depth=3").get_json()
         assert not any(n.get("boolean_assumed") for n in scene2["nodes"]), scene2
@@ -258,7 +258,7 @@ def test_circuit_no_marker_when_no_wrapper(client, test_dsn):
         resp = client.post("/api/exec", json={
             "sql": sql,
             "mode": "circuit",
-            "prov_mode": "semiring",
+            "prov_scheme": "semiring",
         })
         assert resp.status_code == 200, resp.data
         uuid_s = _provenance_uuid(resp.get_json())

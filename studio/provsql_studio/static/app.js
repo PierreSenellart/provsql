@@ -1365,17 +1365,17 @@
   }
 
   function setupGucToggles() {
-    const fs = document.getElementById('prov-mode-fieldset');
+    const fs = document.getElementById('prov-scheme-fieldset');
     const up = document.getElementById('opt-update-prov');
     if (!fs || !up) return;
-    const radios = fs.querySelectorAll('input[name="prov-mode"]');
+    const radios = fs.querySelectorAll('input[name="prov-scheme"]');
 
     // Persisted across mode switches. The stored value is the user's
     // last *circuit-mode* pick; Where UI mode locks the selector to
     // `where` but does not overwrite the stored value, so a
     // circuit→where→circuit round-trip preserves the user's pick.
     // `boolean`/`semiring`/`where`; default `semiring`.
-    const savedMode = sessionStorage.getItem('ps.opt.provMode') || 'semiring';
+    const savedMode = sessionStorage.getItem('ps.opt.provScheme') || 'semiring';
     const savedUpdate = sessionStorage.getItem('ps.opt.updateProv') === '1';
 
     const setMode = (m) => {
@@ -1395,8 +1395,8 @@
 
     fs.addEventListener('change', () => {
       if (mode === 'where') return;
-      const picked = fs.querySelector('input[name="prov-mode"]:checked');
-      if (picked) sessionStorage.setItem('ps.opt.provMode', picked.value);
+      const picked = fs.querySelector('input[name="prov-scheme"]:checked');
+      if (picked) sessionStorage.setItem('ps.opt.provScheme', picked.value);
     });
     up.addEventListener('change', () => {
       sessionStorage.setItem('ps.opt.updateProv', up.checked ? '1' : '0');
@@ -1432,7 +1432,7 @@
     // follow-up runs); the radio flip is programmatic so it does not
     // fire `change` and does not get persisted to sessionStorage.
     if (carry) {
-      const r = document.querySelector('input[name="prov-mode"][value="where"]');
+      const r = document.querySelector('input[name="prov-scheme"][value="where"]');
       if (r) r.checked = true;
     }
     // Load circuit.js so its init() can wire the toolbar buttons (zoom,
@@ -1914,7 +1914,7 @@ async function runQuery(ev) {
   }, 100);
 
   const upEl = document.getElementById('opt-update-prov');
-  const provModeEl = document.querySelector('input[name="prov-mode"]:checked');
+  const provSchemeEl = document.querySelector('input[name="prov-scheme"]:checked');
   let resp;
   try {
     resp = await fetch('/api/exec', {
@@ -1923,7 +1923,7 @@ async function runQuery(ev) {
       body: JSON.stringify({
         sql: sqlText,
         mode: env.mode,
-        prov_mode: env.mode === 'where' ? 'where' : (provModeEl ? provModeEl.value : 'semiring'),
+        prov_scheme: env.mode === 'where' ? 'where' : (provSchemeEl ? provSchemeEl.value : 'semiring'),
         update_provenance: upEl ? upEl.checked : false,
         request_id: requestId,
       }),

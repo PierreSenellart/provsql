@@ -1515,7 +1515,7 @@ body.mode-where #sidebar {
    (semantics + keyboard), but appearance:none lets us paint the
    labels as connected segment buttons. The selected segment uses the
    brand purple; the rest are flat ghost buttons. */
-.wp-prov-mode {
+.wp-prov-scheme {
   display: inline-flex;
   align-items: stretch;
   border: 1px solid var(--border-soft);
@@ -1530,7 +1530,7 @@ body.mode-where #sidebar {
 /* The native <legend> sits on the fieldset's top border. Tighten the
    font + padding so the caption visually punches a hole in the border
    right above the segments instead of floating in dead space above. */
-.wp-prov-mode__legend {
+.wp-prov-scheme__legend {
   float: none;
   padding: 0 0.35rem;
   margin-left: 0.5rem;
@@ -1545,15 +1545,15 @@ body.mode-where #sidebar {
    shows it (which is the segment the user is stuck on in Where UI
    mode). Anchored on the active label avoids the dead left-edge gap
    the previous fieldset-level slot reserved. */
-.wp-prov-mode__lock {
+.wp-prov-scheme__lock {
   display: none;
   margin-right: 0.35rem;
   font-size: 0.7em;
 }
-.wp-prov-mode.is-locked .wp-prov-mode__opt:has(input:checked) .wp-prov-mode__lock {
+.wp-prov-scheme.is-locked .wp-prov-scheme__opt:has(input:checked) .wp-prov-scheme__lock {
   display: inline-block;
 }
-.wp-prov-mode__opt {
+.wp-prov-scheme__opt {
   display: inline-flex; align-items: center;
   padding: 0.3rem 0.75rem;
   cursor: pointer;
@@ -1561,10 +1561,10 @@ body.mode-where #sidebar {
   user-select: none;
   transition: background 0.12s, color 0.12s;
 }
-.wp-prov-mode__opt + .wp-prov-mode__opt {
+.wp-prov-scheme__opt + .wp-prov-scheme__opt {
   border-left: 1px solid var(--border-soft);
 }
-.wp-prov-mode__opt input[type="radio"] {
+.wp-prov-scheme__opt input[type="radio"] {
   /* Visually hidden but kept in the accessibility tree and reachable
      via Tab: the segment styling lives on the label so the native
      radio is layered out of sight but never display:none-ed. */
@@ -1577,31 +1577,31 @@ body.mode-where #sidebar {
   white-space: nowrap;
   appearance: none; -webkit-appearance: none;
 }
-.wp-prov-mode__opt:has(input:checked) {
+.wp-prov-scheme__opt:has(input:checked) {
   background: var(--purple-500);
   color: var(--fg-on-dark);
 }
-.wp-prov-mode__opt:hover:not(:has(input:checked)) {
+.wp-prov-scheme__opt:hover:not(:has(input:checked)) {
   background: var(--purple-100);
 }
-.wp-prov-mode__opt input:focus-visible + span {
+.wp-prov-scheme__opt input:focus-visible + span {
   outline: 2px solid var(--gold-500);
   outline-offset: 2px;
   border-radius: 4px;
 }
-.wp-prov-mode.is-locked .wp-prov-mode__opt {
+.wp-prov-scheme.is-locked .wp-prov-scheme__opt {
   cursor: not-allowed;
 }
-.wp-prov-mode.is-locked .wp-prov-mode__opt:has(input:checked) {
+.wp-prov-scheme.is-locked .wp-prov-scheme__opt:has(input:checked) {
   background: var(--purple-300);
   color: var(--fg-on-dark);
   font-style: italic;
 }
-.wp-prov-mode.is-locked .wp-prov-mode__opt:not(:has(input:checked)) {
+.wp-prov-scheme.is-locked .wp-prov-scheme__opt:not(:has(input:checked)) {
   color: var(--fg-muted);
   opacity: 0.55;
 }
-.wp-prov-mode.is-locked .wp-prov-mode__opt:hover:not(:has(input:checked)) {
+.wp-prov-scheme.is-locked .wp-prov-scheme__opt:hover:not(:has(input:checked)) {
   background: transparent;
 }
 
