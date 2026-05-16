@@ -284,6 +284,22 @@ extern bool provsql_simplify_on_load;
  * closure rule turns out to be unsound on some workload. */
 extern bool provsql_hybrid_evaluation;
 
+/** @brief Hidden diagnostic flag for the Poisson-binomial pre-pass
+ *  that resolves HAVING COUNT(*) op C gate_cmps to a Bernoulli
+ *  gate_input ; see the @c provsql.count_cmp_optimisation GUC.
+ *
+ *  When on (default), @c probability_evaluate runs a pre-pass that
+ *  walks @c gate_cmp(gate_agg(COUNT, semimod children), gate_value(C))
+ *  shapes whose K children are distinct single @c gate_input leaves,
+ *  computes @c Pr(B op C) with @c B Poisson-binomial over the child
+ *  marginal probabilities via an @c O(N x C) DP, and replaces the cmp
+ *  with the resulting Bernoulli @c gate_input.  Off bypasses the pass
+ *  and leaves the cmp for @c provsql_having's @c enumerate_valid_worlds
+ *  path (which under absorptive emits @c binom(N, k) minimal-generator
+ *  clauses).  End users have no reason to flip this; exists for
+ *  developer A/B testing and as a bisection escape valve. */
+extern bool provsql_count_cmp_optimisation;
+
 /** @brief Opt-in safe-query optimisation for hierarchical conjunctive
  *  queries; see the @c provsql.boolean_provenance GUC.
  *
