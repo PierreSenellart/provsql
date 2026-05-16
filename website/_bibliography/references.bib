@@ -105,6 +105,28 @@
     computation features.},
 }
 
+@article{DBLP:journals/jacm/DalviS12,
+  author       = {Nilesh N. Dalvi and
+                  Dan Suciu},
+  title        = {The Dichotomy of Probabilistic Inference for Unions of Conjunctive
+                  Queries},
+  journal      = {J. {ACM}},
+  volume       = {59},
+  number       = {6},
+  pages        = {30:1--30:87},
+  year         = {2012},
+  doi          = {10.1145/2395116.2395119},
+  keyword      = {provsql-foundation},
+  annote       = {Establishes the complexity dichotomy for probabilistic query evaluation over
+    tuple-independent databases: every union of conjunctive queries is either in PTIME
+    (computable by a "safe plan" using extensional probability propagation) or
+    #P-hard. The safe class includes hierarchical CQs, which admit a read-once
+    rewriting. ProvSQL's safe-query rewriter (the
+    provsql.boolean_provenance optimisation) implements the read-once rewriting for
+    self-join-free hierarchical CQs and UCQs derived from this theory; circuits it
+    emits are evaluated in linear time by the independent-probability method.},
+}
+
 @inproceedings{DBLP:conf/icdt/DeutchMRT14,
   author       = {Daniel Deutch and
                   Tova Milo and

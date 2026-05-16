@@ -24,6 +24,23 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     Enable provenance tracking for ``INSERT``, ``UPDATE``, and ``DELETE``
     statements (see :doc:`data-modification`). Requires PostgreSQL ≥ 14.
 
+.. _provsql-boolean-provenance:
+
+``provsql.boolean_provenance`` (default: ``off``)
+    Enable the safe-query rewriter that recognises self-join-free
+    hierarchical conjunctive queries (and UCQs of such queries) over
+    TID / BID base tables and rewrites them with per-atom ``DISTINCT``
+    projections so the resulting provenance circuit is read-once.  A
+    read-once circuit is probability-evaluated in linear time by
+    the ``'independent'`` method, replacing the
+    ``'tree-decomposition'`` or ``'compilation'`` fallback that would
+    otherwise be needed.  The root of every rewritten circuit is
+    tagged so that semirings whose algebra is not Boolean-faithful
+    refuse to evaluate it; see :doc:`probabilities` and the
+    :ref:`compatibility note <semiring-boolean-compat>` in
+    :doc:`semirings`.  Queries outside the recognised class pass
+    through unchanged.
+
 .. _provsql-verbose-level:
 
 ``provsql.verbose_level`` (default: ``0``)

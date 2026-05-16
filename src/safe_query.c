@@ -11,6 +11,12 @@
  * would otherwise fall through to the dDNNF / tree-decomposition /
  * external-knowledge-compiler pipeline.
  *
+ * The hierarchical-CQ class and its read-once decomposability are the
+ * "safe queries" of Dalvi and Suciu, "The Dichotomy of Probabilistic
+ * Inference for Unions of Conjunctive Queries", J. ACM 59(6), 2012
+ * (doi:10.1145/2395116.2395119) ; the dichotomy theorem in that paper
+ * is the theoretical foundation for the rewrite this file implements.
+ *
  * Entry point: @c try_safe_query_rewrite (see @c safe_query.h).
  *
  * The bulk of the file is detector + rewriter helpers.  All non-API

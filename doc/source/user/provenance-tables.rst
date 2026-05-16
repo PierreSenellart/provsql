@@ -65,6 +65,17 @@ in the provenance circuit.
 After enabling provenance, every query that reads from ``mytable`` will
 automatically carry provenance annotations in its result set.
 
+The table is recorded as TID (tuple-independent) in ProvSQL's
+per-database metadata store.  :sqlfunc:`repair_key` (see
+:doc:`probabilities`) re-registers it as BID with the chosen
+block-key columns.  This classification is consulted by the
+safe-query rewriter (the ``provsql.boolean_provenance`` opt-in
+optimisation, see :doc:`probabilities`) to verify that any
+projection it introduces preserves the table's block-key alignment.
+Plain users have no reason to interact with the registry directly ;
+the kind tracks ``add_provenance`` / ``repair_key`` / dropping the
+table automatically.
+
 .. note::
 
    :sqlfunc:`add_provenance` must be called on the base table, not on a view.

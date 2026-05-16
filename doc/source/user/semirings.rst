@@ -24,6 +24,49 @@ semiring and a provenance mapping in the dropdown, click :guilabel:`Run`,
 and the result lands inline. The rest of this chapter is the SQL
 reference for the same operations.
 
+.. _semiring-boolean-compat:
+
+Compatibility with Boolean-Provenance Rewriting
+------------------------------------------------
+
+When ``provsql.boolean_provenance`` is ``on`` (see
+:doc:`probabilities`), the planner rewrites hierarchical CQs to a
+read-once form whose probability is computable in linear time, and
+tags the root of the rewritten circuit so that semirings whose
+algebra is not Boolean-faithful refuse to evaluate it.  The refusal
+raises an explicit error rather than silently producing a wrong
+value:
+
+.. code-block:: text
+
+    ERROR: ProvSQL: semiring 'sr_counting' is not compatible with
+           boolean-provenance rewriting; re-run with
+           provsql.boolean_provenance = off
+
+The following compiled semirings are Boolean-faithful and run on
+any circuit, including rewritten ones: :sqlfunc:`sr_boolean`,
+:sqlfunc:`sr_boolexpr`, :sqlfunc:`sr_formula`,
+:sqlfunc:`sr_tropical`, :sqlfunc:`sr_viterbi`,
+:sqlfunc:`sr_lukasiewicz`, :sqlfunc:`sr_minmax`,
+:sqlfunc:`sr_maxmin`, :sqlfunc:`sr_temporal`,
+:sqlfunc:`sr_interval_num`, :sqlfunc:`sr_interval_int`.  The
+following are not, and refuse on rewritten circuits:
+:sqlfunc:`sr_counting`, :sqlfunc:`sr_how`, :sqlfunc:`sr_why`,
+:sqlfunc:`sr_which`.
+
+To run a refused semiring, switch
+``provsql.boolean_provenance`` off (in the current session, or for
+the role / database) and re-evaluate; the next provenance circuit
+built for the query is unrewritten and accepts any semiring.
+
+Custom semirings invoked through :sqlfunc:`provenance_evaluate`
+emit a warning (rather than an error) on rewritten circuits : the
+runtime cannot statically check Boolean-compatibility, so the
+caller is responsible for verifying the semiring's algebra.
+ProvSQL Studio's evaluation strip filters the semiring dropdown to
+hide the refusing semirings whenever the root carries the rewrite
+tag.
+
 Boolean Semiring
 -----------------
 
