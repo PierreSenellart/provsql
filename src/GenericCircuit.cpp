@@ -13,6 +13,8 @@
  */
 #include "GenericCircuit.h"
 
+#include <unordered_set>
+
 gate_t GenericCircuit::setGate(gate_type type)
 {
   auto id = Circuit::setGate(type);
@@ -155,4 +157,70 @@ void GenericCircuit::foldSemiringIdentities()
       changed = true;
     }
   }
+}
+
+void GenericCircuit::foldBooleanIdentities()
+{
+  GenericCircuit &gc = *this;
+
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    const std::size_t n = gc.getNbGates();
+    for (std::size_t i = 0; i < n; ++i) {
+      auto g = static_cast<gate_t>(i);
+      auto t = gc.getGateType(g);
+      if (t != gate_plus && t != gate_times) continue;
+
+      bool any_rule_fired = false;
+
+      /* Rule B1 : idempotence (Boolean-only, unsound in Counting,
+       * Tropical, Viterbi, ...).  Drop repeated child wires
+       * preserving order of first occurrence. */
+      {
+        auto &wires = gc.getWires(g);
+        std::unordered_set<gate_t> seen;
+        std::vector<gate_t> deduped;
+        deduped.reserve(wires.size());
+        for (gate_t c : wires) {
+          if (seen.insert(c).second) deduped.push_back(c);
+        }
+        if (deduped.size() != wires.size()) {
+          wires = std::move(deduped);
+          any_rule_fired = true;
+        }
+      }
+
+      /* Rule B2 : plus-with-one absorber (Boolean-only).  Replace
+       * @c gate_plus(..., @c gate_one, ...) with an empty
+       * @c gate_plus, which the trailing
+       * @c foldSemiringIdentities collapses back to a single
+       * @c gate_one wire ; that gate is then Phase-2-substituted
+       * into @c gate_one in place, preserving @p g's UUID. */
+      if (t == gate_plus) {
+        bool has_one = false;
+        for (gate_t c : gc.getWires(g)) {
+          if (gc.getGateType(c) == gate_one) { has_one = true; break; }
+        }
+        if (has_one) {
+          gc.setGateType(g, gate_one);
+          gc.setWires(g, std::vector<gate_t>{});
+          infos.erase(g);
+          extra.erase(g);
+          any_rule_fired = true;
+        }
+      }
+
+      if (any_rule_fired) {
+        markBooleanAssumed(g);
+        changed = true;
+      }
+    }
+  }
+
+  /* The dedup may leave single-wire plus / times around. Re-run the
+   * semiring-safe pass to collapse them ; that pass mutates gates in
+   * place (Phase 3) and preserves their UUID and -- crucially for
+   * us -- their identity in @c boolean_assumed_gates. */
+  foldSemiringIdentities();
 }

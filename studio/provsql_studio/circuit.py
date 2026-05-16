@@ -338,6 +338,8 @@ def _fetch_subgraph(
             "         (e->>'info2')       AS info2,"
             "         (e->>'extra')       AS extra,"
             "         (e->>'prob')::float8 AS prob,"
+            "         coalesce((e->>'boolean_assumed')::boolean, false)"
+            "                              AS boolean_assumed,"
             "         (e->>'depth')::int  AS depth"
             "  FROM jsonb_array_elements("
             "         provsql.simplified_circuit_subgraph(%s::uuid, %s::int)) AS e"
@@ -353,6 +355,7 @@ def _fetch_subgraph(
             "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int)"
             "            ELSE NULL END AS info2_name,"
             "       cs.prob,"
+            "       cs.boolean_assumed,"
             "       cs.depth "
             "FROM src cs"
         )
@@ -369,6 +372,7 @@ def _fetch_subgraph(
             "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int) "
             "            ELSE NULL END AS info2_name, "
             "       provsql.get_prob(cs.node)::float8 AS prob, "
+            "       false AS boolean_assumed, "
             "       cs.depth "
             "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
         )
@@ -404,7 +408,8 @@ def _fetch_subgraph(
                 raise _SimplifiedNotAvailable() from e
             raise
         for (node, parent, child_pos, gate_type, info1, info2, extra,
-             info1_name, info2_name, prob, d) in cur.fetchall():
+             info1_name, info2_name, prob, boolean_assumed,
+             d) in cur.fetchall():
             out.append({
                 "node": node,
                 "parent": parent,
@@ -416,6 +421,7 @@ def _fetch_subgraph(
                 "info1_name": info1_name,
                 "info2_name": info2_name,
                 "prob": prob,
+                "boolean_assumed": bool(boolean_assumed),
                 "depth": d,
             })
         # Decide which gate_input rows are tracked-table inputs (their
@@ -628,13 +634,20 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             # the post-set_prob refresh in circuit.js can re-derive the
             # label without re-querying the bulk catalog scan.
             "tracked_input": bool(r.get("is_tracked_input")),
-            # Set on the immediate child of a scene-root
-            # gate_assumed_boolean wrapper (the wrapper itself is
-            # elided ; see _elide_assumed_boolean).  The front-end
-            # uses this to draw a dashed frame + B badge marking
-            # "this circuit's root admits a Boolean-rewrite
-            # assumption".
-            "boolean_assumed": r["node"] in boolean_assumed,
+            # Set on every gate whose value is interpreted under a
+            # Boolean-only assumption.  Two sources :
+            #   1. Direct flag from the C side
+            #      (foldBooleanIdentities sets it on gates whose
+            #      wires were Boolean-rewritten in place ;
+            #      simplified_circuit_subgraph forwards it).
+            #   2. Elision of a persistent gate_assumed_boolean
+            #      wrapper above this gate
+            #      (see _elide_assumed_boolean).
+            # Either source draws the dashed frame + B badge.
+            "boolean_assumed": (
+                bool(r.get("boolean_assumed"))
+                or r["node"] in boolean_assumed
+            ),
         })
     edges = [
         {"from": r["parent"], "to": r["node"], "child_pos": r["child_pos"]}

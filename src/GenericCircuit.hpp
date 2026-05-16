@@ -38,6 +38,25 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
   if(it != provenance_mapping.end())
     return it->second;
 
+  /* In-memory Boolean-assumption marker (set by
+   * @c foldBooleanIdentities on gates whose wires were rewritten
+   * under a Boolean-only rule).  Mirrors the @c gate_assumed_boolean
+   * structural-marker check below but applies to gates that keep
+   * their original type (the rule mutated their wires in place ;
+   * the persistent mmap was not touched).  Same compatibility
+   * predicate, same failure mode. */
+  if(isBooleanAssumed(g) && !semiring.compatibleWithBooleanRewrite())
+    throw CircuitException(
+            "The requested semiring does not admit a homomorphism "
+            "from Boolean functions; this gate's wires were rewritten "
+            "under a Boolean-only rule (typically idempotence or "
+            "plus-with-one absorber by foldBooleanIdentities, gated "
+            "on provsql.boolean_provenance = on) and the evaluation "
+            "is unsound under this semiring.  Re-run with "
+            "provsql.boolean_provenance = off, or pick a "
+            "Boolean-compatible semiring (boolean, boolexpr, "
+            "formula, ...).");
+
   auto t = getGateType(g);
 
   switch(t) {
