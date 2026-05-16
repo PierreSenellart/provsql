@@ -180,6 +180,16 @@ which is why ProvSQL caps the treewidth at
 falls back to ``compilation`` with ``d4`` when that bound is
 exceeded.
 
+Both the min-fill elimination loop in
+``TreeDecomposition::TreeDecomposition(const BooleanCircuit &)``
+and the bottom-up d-DNNF construction in
+``dDNNFTreeDecompositionBuilder::builddDNNF`` call
+``CHECK_FOR_INTERRUPTS`` in their hot loops so that
+``statement_timeout`` and ``pg_cancel_backend`` interrupt the
+build promptly when the heuristic struggles on circuits close to
+``MAX_TREEWIDTH``.  The macro is conditionally compiled to a
+no-op in the standalone ``tdkc`` binary via a ``TDKC`` guard.
+
 
 Currently Supported Methods
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -228,6 +238,55 @@ a :cfunc:`dDNNF` has been produced, probability evaluation is a
 single linear-time pass
 (:cfunc:`dDNNF::probabilityEvaluation`), because the d-DNNF
 structure guarantees decomposability and determinism.
+
+Cmp-Probability Pre-Passes
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Before the methods above run, ``probability_evaluate.cpp`` walks
+the circuit through a chain of pre-passes that resolve specific
+``gate_cmp`` shapes to a Bernoulli ``gate_input`` carrying a
+closed-form probability.  Resolving a cmp here shrinks the
+circuit fed to the downstream method ; in the best case the whole
+HAVING comparator collapses to a single leaf, bypassing DNF
+construction entirely.
+
+The chain (in order) :
+
+- ``runRangeCheck`` (also runs at load time when
+  ``provsql.simplify_on_load`` is on) : support-interval propagation
+  through ``gate_arith`` and decision of every ``gate_cmp``
+  decidable from the support alone.  Universal across semirings,
+  so it lives both at load time and inside
+  ``probability_evaluate``.
+- ``runHybridDecomposer`` (gated by ``provsql.hybrid_evaluation``) :
+  base-RV-footprint partitioning + per-island marginalisation for
+  continuous-RV cmps (see the hybrid section below).
+- ``runAnalyticEvaluator`` : closed-form CDF for trivial RV cmp
+  shapes (singleton bare ``gate_rv`` vs ``gate_value``, or two
+  bare normals).  Probability-specific (the resulting
+  ``gate_input`` carries a numeric probability with no semiring
+  meaning), so it runs here and not at load time.
+- ``runCountCmpEvaluator`` (gated by
+  ``provsql.cmp_probability_evaluation``, hidden diagnostic
+  default on) : recognises HAVING
+  ``gate_cmp(gate_agg(COUNT, semimod children), gate_value(C))``
+  whose semimod K children are distinct single ``gate_input``
+  leaves, and replaces the cmp with a Bernoulli carrying the
+  Poisson-binomial CDF ``Pr(B op C)``.  Soundness condition :
+  ``ref_count == 1`` along the entire chain ``K_i -> semimod_i ->
+  gate_agg`` (catches multi-cmp HAVING expressions over a shared
+  COUNT, and any K_i appearing elsewhere in the circuit).  The DP
+  dispatches on the smaller side of ``C`` (lower tail directly,
+  or upper tail via inverted Bernoullis) for ``O(N x min(C, N -
+  C))`` total cost per cmp.  See ``src/CountCmpEvaluator.{h,cpp}``.
+
+Adding another closed-form cmp resolver (MIN / MAX / SUM, future
+discrete-RV distributions…) follows the same shape : a
+``runXxxEvaluator`` function that walks ``gate_cmp`` gates, checks
+shape + independence, computes the probability, calls
+``GenericCircuit::resolveCmpToBernoulli``.  Gate it on
+``provsql.cmp_probability_evaluation`` so all such evaluators
+share one diagnostic switch.
 
 
 .. _bids-and-multivalued-inputs:

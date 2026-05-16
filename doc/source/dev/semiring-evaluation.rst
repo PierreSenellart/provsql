@@ -157,6 +157,87 @@ Idempotent-but-not-absorptive semirings (such as why-provenance and
 which-provenance, where :math:`\mathbb{1} \oplus a \neq \mathbb{1}` in
 general) should leave it at the default ``false``.
 
+Boolean-Rewrite Compatibility
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The safe-query rewriter (see :doc:`query-rewriting` and
+:doc:`../user/probabilities`) emits circuits whose root is wrapped
+in a ``gate_assumed_boolean`` marker, signalling that the rewrite
+preserves only Boolean semantics, not arbitrary semiring
+semantics.  Each semiring declares its compatibility with this
+rewrite via a static ``constexpr`` predicate:
+
+.. code-block:: cpp
+
+   static constexpr bool compatibleWithBooleanRewrite() { return true; }
+
+The predicate is read by
+:cfunc:`provenance_evaluate_compiled_internal`
+(``src/provenance_evaluate_compiled.cpp``) immediately before the
+``evaluate<S>`` template call.  When the root carries the
+``gate_assumed_boolean`` marker and the chosen semiring's
+predicate returns ``false``, the dispatcher raises a structured
+error rather than silently producing an incorrect value.
+
+Compile-time per-semiring decisions :
+
+- ``true`` : ``Boolean``, ``BoolExpr``, ``Formula`` (symbolic
+  serialisation, semantically opaque), ``Tropical``, ``Viterbi``,
+  ``Lukasiewicz``, ``MinMax``, ``Maxmin``, ``IntervalUnion``
+  variants.
+- ``false`` : ``Counting``, ``How``, ``Why``, ``Which`` ; their
+  algebras carry information (multiplicities, monomials, witness
+  sets, lineages) that the Boolean rewrite would silently
+  collapse.
+
+Custom semirings invoked through
+:sqlfunc:`provenance_evaluate` cannot be classified statically, so
+the dispatcher emits a one-shot warning rather than refusing : the
+caller is responsible for ensuring the semiring's algebra is
+Boolean-faithful before evaluating a tagged circuit.  ProvSQL
+Studio mirrors the C++ predicate in
+``studio/provsql_studio/_compiled_semirings.py`` and filters its
+evaluation-strip dropdown to hide the incompatible semirings
+whenever the root carries the marker.
+
+The marker itself is a structural wrapper rather than a per-gate
+flag, so it round-trips through circuit serialisation and is
+visible to every downstream consumer (semiring evaluators,
+PROV-XML export, ``view_circuit``, ProvSQL Studio's circuit
+view).  The wrapping happens at the end of the safe-query
+rewriter via :sqlfunc:`assume_boolean`, which creates a
+single-input ``gate_assumed_boolean`` wrapping the original root.
+The evaluator template treats the wrapper transparently for
+compatible semirings ; only the dispatcher's pre-evaluation check
+distinguishes them.
+
+Boolean-Identity Folding
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+In addition to the universal
+``GenericCircuit::foldSemiringIdentities`` pass (which
+collapses identities and absorbers shared by every semiring),
+ProvSQL runs an opt-in
+``GenericCircuit::foldBooleanIdentities`` pass at circuit-load
+time when ``provsql.boolean_provenance`` is on.  It applies three
+Boolean-specific rewrite rules and wraps each rewritten gate in a
+``gate_assumed_boolean`` marker (same mechanism as the safe-query
+rewriter, so the resulting circuit refuses non-Boolean-compatible
+semirings) :
+
+- **B1, idempotence** : ``plus(x, x, ...) -> x`` after deduplication.
+- **B2, plus-with-one absorber** : ``plus(one, ...) -> one``.
+- **B3, absorption** : ``plus(u, times(u, v)) -> u`` and
+  ``times(u, plus(u, v)) -> u``.
+
+The pass is gated by ``provsql.boolean_provenance`` because the
+rewrites are sound only when evaluated under a Boolean-faithful
+semiring ; the gate-level marker enforces this at evaluation time.
+The B3 absorption rule in particular has a large practical
+effect on UNION-dominated-pair shapes (see
+``test/bench/absorption_bench.sql``) where it collapses
+exponential-sized DNFs to single-OR forms.
+
 
 Example: The Boolean Semiring
 -----------------------------

@@ -243,7 +243,7 @@ The rewriter handles:
   ``mulinput`` block structure is not broken by the rewrite.
 
 Queries that fall outside the recognised class (joins through views,
-non-hierarchical atoms, HAVING / aggregation, …) are passed through
+non-hierarchical atoms, HAVING / aggregation…) are passed through
 unchanged: the GUC enables an opt-in shortcut, never a different
 result.
 

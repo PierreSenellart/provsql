@@ -410,3 +410,86 @@ result type (``OID_TYPE_RANDOM_VARIABLE`` vs
 ``OID_TYPE_AGG_TOKEN``) so the same path covers any future
 RV-returning aggregate. See :doc:`continuous-distributions` for
 the broader architecture.
+
+Safe-Query Rewriter
+-------------------
+
+The safe-query rewriter (``src/safe_query.{c,h}``) is an opt-in
+pre-pass invoked from ``process_query`` in ``provsql.c`` when the
+GUC ``provsql.boolean_provenance`` is on (see
+:doc:`../user/probabilities`).  It recognises the safe class of
+Dalvi and Suciu :cite:`DBLP:journals/jacm/DalviS12`, namely
+self-join-free hierarchical conjunctive queries, and rewrites them
+with per-atom
+``SELECT DISTINCT`` projections so the resulting provenance circuit
+is read-once.  A read-once circuit is probability-evaluated in
+linear time by :cfunc:`BooleanCircuit::independentEvaluation`,
+which replaces the fallback to tree decomposition or external
+knowledge compilation that the unrewritten circuit would require.
+
+Two stages, both static helpers in ``src/safe_query.c``:
+
+1. ``is_safe_query_candidate(q)`` : cheap shape gate.  Rejects
+   ``hasAggs`` / ``hasWindowFuncs`` / ``LIMIT`` / ``OFFSET`` /
+   ``groupingSets`` / sublinks / set operations / explicit
+   ``JoinExpr`` ; rejects any ``RangeTblEntry`` that is not
+   ``RTE_RELATION`` ; requires an outer ``GROUP BY`` or top-level
+   ``DISTINCT`` so the per-atom ``DISTINCT`` wraps do not change
+   the user-visible row count ; requires every tracked base
+   relation to carry a TID or BID classification in the
+   per-database ``provsql_table_info`` registry (OPAQUE relations
+   bail).
+2. ``find_hierarchical_root_atoms(q)`` : variable-equivalence
+   analysis on the surviving atoms.  Walks every equijoin
+   predicate, unions the variables it links via a union-find
+   structure, and looks for a root variable: one whose
+   atom-set covers every atom (or, in the multi-level case, every
+   atom of an inner group whose remaining variables also admit a
+   root).  Cases handled:
+
+   - **Single-component fully covered.**  Every atom has the root
+     variable in a known column.  The rewriter emits one wrapped
+     subquery per atom, joining on the root.
+   - **Multi-level partial coverage.**  Some atoms do not bind
+     the root.  The rewriter groups the missing atoms by the
+     variables they actually share and recurses on each group as
+     an inner wrapped subquery, which on re-entry is rewritten
+     again by the same pipeline (Choice A from the design
+     plan: rely on ``get_provenance_attributes`` re-running
+     ``process_query`` on each subquery, no explicit recursion in
+     the rewriter).
+   - **Disconnected components.**  Atoms decompose into
+     connected components by shared variables ; each component
+     becomes an independent wrapped subquery joined by Cartesian
+     product at the outer level.
+   - **Head variables.**  A head variable that happens to also
+     appear in atoms is propagated through the wrapping.
+     Several positional sub-cases are pinned (single-atom head
+     Vars, head Vars on grouped atoms in or out of first member
+     position).  When the head Var falls on no atom with a
+     defined slot (the **bridge case**), the rewriter currently
+     bails rather than rewriting incorrectly.
+
+3. ``rewrite_hierarchical_cq(q, atoms, groups, residual)`` : the
+   actual surgery.  For every atom in the partition, builds an
+   ``RTE_SUBQUERY`` whose body is
+   ``SELECT DISTINCT <root-binding cols>, provsql FROM A WHERE
+   <atom-local predicates>``, replaces the original
+   ``RTE_RELATION`` in ``q->rtable``, rebuilds the ``jointree``
+   ``fromlist`` accordingly, and rewrites any WHERE / join
+   predicate so Vars refer to the new subqueries' output
+   columns.  The detector's BID block-key alignment check
+   ensures that the chosen root-binding columns in every BID
+   atom are a superset of that atom's block_key, so the
+   ``mulinput`` structure survives the projection.
+
+When the rewriter accepts a query, it returns a new ``Query`` that
+is re-entered into ``process_query`` from the top (same recursion
+pattern as ``rewrite_agg_distinct``).  When it rejects, it returns
+``NULL`` and the planner falls through to the existing pipeline
+unchanged.
+
+The root gate of every rewritten circuit is wrapped in a
+``gate_assumed_boolean`` marker (see :doc:`semiring-evaluation`)
+so that semirings whose algebra is not Boolean-faithful refuse to
+evaluate it at runtime.
