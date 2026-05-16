@@ -155,25 +155,36 @@ having to inspect the schema panel.
 Per-query toggles
 ^^^^^^^^^^^^^^^^^
 
-Two checkboxes next to the query box flip the connection's
-provenance behaviour for the next batch:
+A three-way :guilabel:`Provenance scheme` radio group next to the
+query box selects which provenance behaviour the connection runs
+under for the next batch :
 
-* ``where_provenance`` (``provsql.where_provenance``) enables
-  where-provenance tracking at circuit-build time: when on, the
-  planner adds ``project`` and ``eq`` gates so each output value
-  records the source cell it was copied from (see
-  :doc:`where-provenance`). Where mode locks this toggle on and
-  shows a lock icon next to it (without those gates the
-  hover-to-trace would have nothing to display); Circuit mode
-  leaves the toggle free, useful when you want a circuit that
-  already carries where-provenance.
-* ``update_provenance`` (``provsql.update_provenance``) carries
-  provenance through ``INSERT``, ``UPDATE``, and ``DELETE``
-  statements so the rows they create or modify keep their lineage
-  (see :doc:`data-modification`). The toggle is freely
-  user-controllable in both modes.
+* :guilabel:`Semiring` (default) : standard provenance tracking,
+  no special GUC enabled.  The resulting circuit accepts every
+  compiled and custom semiring.
+* :guilabel:`Where` : enables ``provsql.where_provenance``, so
+  the planner emits ``project`` and ``eq`` gates that record the
+  source cell of each output value (see :doc:`where-provenance`).
+  Where mode (top nav) locks this position on, because the
+  hover-to-trace surface needs the where-provenance gates ; in
+  Circuit mode the choice is free.
+* :guilabel:`Boolean` : enables ``provsql.boolean_provenance``, so
+  the planner runs the safe-query rewriter and tags the resulting
+  root with a Boolean-rewrite marker (see :doc:`probabilities`).
+  Only Boolean-faithful semirings will evaluate the resulting
+  circuit ; the eval-strip semiring picker filters incompatible
+  entries out when the root carries the marker.
 
-Toggle states are sent to the server alongside each query.
+The selected scheme is session-sticky : it persists across
+batches so two queries run with the same scheme without
+re-toggling.  An ``update_provenance`` (``provsql.update_provenance``)
+checkbox next to the radio group carries provenance through
+``INSERT``, ``UPDATE``, and ``DELETE`` statements (see
+:doc:`data-modification`) ; the checkbox is independent of the
+scheme and freely user-controllable.
+
+Both the scheme and the checkbox are sent to the server alongside
+each query.
 
 .. _studio-circuit-mode:
 
@@ -247,6 +258,16 @@ column list for ``input`` and ``update``, and so on.
 probability: clicking the value swaps it for a number input, Enter
 sends a :sqlfunc:`set_prob` to the server, Esc or blur cancels.
 Out-of-range values and ProvSQL errors land inline.
+
+A ``gate_assumed_boolean`` wrapper (added by the safe-query
+rewriter or by the load-time Boolean-identity folding when
+``provsql.boolean_provenance`` is on) is rendered as a small
+:sc:`B` badge stamped on top of its child gate rather than as a
+separate node, since structurally it is a marker rather than a
+distinct operation.  Pinning the child surfaces the badge in the
+inspector and grays out the eval-strip semirings that refuse to
+run on tagged circuits (see :doc:`semirings` for the
+compatibility list).
 
 .. _studio-circuit-eval-strip:
 
@@ -546,7 +567,15 @@ A button in the top nav opens a searchable popover listing every
 pills:
 
 * :sc:`prov` (purple) on a relation whose ``provsql`` column is
-  injected by the planner: provenance tracking is active.
+  injected by the planner: provenance tracking is active.  The
+  pill is sub-classified by the table's metadata kind (see
+  :doc:`probabilities` for the TID vs BID model) : :sc:`PROV-TID`
+  for tuple-independent tables registered via
+  :sqlfunc:`add_provenance`, :sc:`PROV-BID` for
+  block-independent tables registered via :sqlfunc:`repair_key`.
+  This is the same classification the safe-query rewriter
+  consults to decide whether a query is in scope for
+  ``provsql.boolean_provenance``.
 * :sc:`mapping` (gold) on a relation shaped
   ``(value <T>, provenance uuid)``, including views from
   :sqlfunc:`create_provenance_mapping_view`. The two pills are
@@ -691,6 +720,18 @@ extension version.
        :sqlfunc:`simplified_circuit_subgraph`, :sqlfunc:`rv_histogram`
        and :sqlfunc:`rv_sample` C entry points introduced in 1.5.0.
        See :doc:`continuous-distributions`.
+   * - ``1.2.x``
+     - ``≥ 1.6.0``
+     - Adds the three-way :guilabel:`Provenance scheme` selector
+       (Semiring / Where / Boolean), the :sc:`B` badge on
+       ``gate_assumed_boolean`` wrappers, the
+       :sc:`PROV-TID` / :sc:`PROV-BID` schema-panel sub-pills, and
+       the eval-strip semiring filter that hides non-Boolean
+       -compatible semirings whenever the inspected root carries
+       the Boolean-rewrite marker.  Backed by the
+       safe-query rewriter, the ``gate_assumed_boolean`` gate type,
+       and the per-table TID / BID metadata store introduced in
+       1.6.0.  See :doc:`probabilities` and :doc:`provenance-tables`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to

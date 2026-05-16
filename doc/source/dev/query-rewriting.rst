@@ -437,8 +437,12 @@ Two stages, both static helpers in ``src/safe_query.c``:
    ``DISTINCT`` so the per-atom ``DISTINCT`` wraps do not change
    the user-visible row count ; requires every tracked base
    relation to carry a TID or BID classification in the
-   per-database ``provsql_table_info`` registry (OPAQUE relations
-   bail).
+   per-database ``provsql_table_info`` registry.  The OPAQUE
+   classification (which bails the gate) covers tables where the
+   user has bypassed the planner's UUID injection by writing a
+   non-fresh ``provsql`` value directly : the rewriter cannot
+   assume input independence for such tuples, so any query
+   touching them falls through to the standard pipeline.
 2. ``find_hierarchical_root_atoms(q)`` : variable-equivalence
    analysis on the surviving atoms.  Walks every equijoin
    predicate, unions the variables it links via a union-find
