@@ -9,3 +9,4 @@ CREATE TABLE group_by_empty_result AS
 
 SELECT remove_provenance('group_by_empty_result');
 SELECT sr_minmax(provenance,'personnel_level','unclassified'::classification_level) FROM group_by_empty_result;
+DROP TABLE group_by_empty_result;

@@ -136,3 +136,5 @@ SELECT remove_provenance('sqs_t_off');
 SELECT x, get_gate_type(p) AS root_type FROM sqs_t_off ORDER BY x;
 SELECT x, sr_how(p, 'sqs_a_lbl') FROM sqs_t_off ORDER BY x;
 SELECT x, sr_counting(p, 'sqs_a_lbl') FROM sqs_t_off ORDER BY x;
+
+DROP TABLE sqs_a_lbl, sqs_b_lbl, sqs_a, sqs_b;

@@ -98,3 +98,4 @@ FROM (
 SELECT remove_provenance('union_intervals_result');
 SELECT * FROM union_intervals_result;
 DROP TABLE union_intervals_result;
+DROP TABLE time_validity;

@@ -60,6 +60,10 @@ SELECT * FROM upgrade_result ORDER BY name;
 -- polymorphic expected dispatcher landed by this upgrade.
 SELECT expected(provsql.normal(2, 1)) AS expected_normal_mean;
 
+SET client_min_messages = WARNING;
+DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke;
+RESET client_min_messages;
+
 \else
 
 \echo extension_upgrade: skipped on PostgreSQL < 12 (ALTER TYPE ADD VALUE restriction)
