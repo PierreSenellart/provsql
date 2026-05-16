@@ -1299,7 +1299,11 @@
       }
       const rel = e.target.closest('.wp-schema__rel');
       if (!rel || !rel.dataset.qname) return;
-      insertAtCursor(rel.dataset.qname);
+      // Clicking a relation row replaces the textarea with a ready-to-run
+      // SELECT * FROM <relation> ; in practice that is what the user
+      // wants nine times out of ten, so saving the keystrokes wins over
+      // the bare-name insert.
+      replaceQuery(`SELECT * FROM ${rel.dataset.qname};`);
       close();
     });
     // The relation row is now a div role=button (so the inner action
@@ -1310,7 +1314,7 @@
       const rel = e.target.closest('.wp-schema__rel');
       if (!rel || rel !== e.target || !rel.dataset.qname) return;
       e.preventDefault();
-      insertAtCursor(rel.dataset.qname);
+      replaceQuery(`SELECT * FROM ${rel.dataset.qname};`);
       close();
     });
     search.addEventListener('input', () => { if (loaded) render(); });
