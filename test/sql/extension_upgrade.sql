@@ -60,8 +60,33 @@ SELECT * FROM upgrade_result ORDER BY name;
 -- polymorphic expected dispatcher landed by this upgrade.
 SELECT expected(provsql.normal(2, 1)) AS expected_normal_mean;
 
+-- 1.6.0 surface check: a hierarchical CQ rewrite under
+-- provsql.boolean_provenance over two tracked atoms (the rewriter
+-- bails on single-atom shapes for lack of a root variable, so the
+-- smoke needs two).  Exercises the upgrade-script chain that
+-- installs gate_assumed_boolean + provenance_guard + the
+-- per-table metadata seed for the freshly add_provenance'd
+-- tables.  The probe asserts the per-row root is the safe-query
+-- marker, which is only the case if every link in the chain
+-- (enum value, assume_boolean function, set_table_info seed,
+-- detector tightening) is in place.
+CREATE TABLE upgrade_smoke_right (name text);
+INSERT INTO upgrade_smoke_right VALUES ('alice'), ('bob'), ('carol');
+SELECT add_provenance('upgrade_smoke_right');
+SET provsql.boolean_provenance = on;
+CREATE TABLE upgrade_safe_q AS
+  SELECT l.name AS name, provenance() AS prov
+    FROM upgrade_smoke l, upgrade_smoke_right r
+   WHERE l.name = r.name
+   GROUP BY l.name;
+SELECT remove_provenance('upgrade_safe_q');
+SELECT name, get_gate_type(prov) AS root_type
+  FROM upgrade_safe_q ORDER BY name;
+SET provsql.boolean_provenance = off;
+
 SET client_min_messages = WARNING;
-DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke;
+DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
+           upgrade_smoke_right, upgrade_safe_q;
 RESET client_min_messages;
 
 \else

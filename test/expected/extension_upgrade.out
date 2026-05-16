@@ -22,3 +22,14 @@ carol|carol
 expected_normal_mean
 2
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+name|root_type
+alice|assumed_boolean
+bob|assumed_boolean
+carol|assumed_boolean
+(3 rows)
