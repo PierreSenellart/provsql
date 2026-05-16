@@ -1614,6 +1614,24 @@ def exec_batch(
                     "SET LOCAL provsql.boolean_provenance = "
                     + ("on" if boolean_provenance else "off")
                 )
+                # Studio always wants the classifier NOTICE for the
+                # user's outermost SELECT so the result-pane header
+                # can render the certified kind (TID / BID / OPAQUE)
+                # as a prov-* badge. Older extension versions don't
+                # know this GUC ; we wrap the SET LOCAL in a
+                # SAVEPOINT so the "unrecognized configuration
+                # parameter" error doesn't abort the surrounding
+                # transaction (Studio still works against pre-1.6.0
+                # servers, just without the badge).
+                cur.execute("SAVEPOINT classify_guc")
+                try:
+                    cur.execute(
+                        "SET LOCAL provsql.classify_top_level = on"
+                    )
+                except psycopg.errors.UndefinedObject:
+                    cur.execute("ROLLBACK TO SAVEPOINT classify_guc")
+                else:
+                    cur.execute("RELEASE SAVEPOINT classify_guc")
                 # provsql.tool_search_path: prepended to $PATH when
                 # provsql spawns external tools (d4 / c2d / weightmc /
                 # graph-easy). set_config parameterises the value so

@@ -608,6 +608,17 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   letter-spacing: 0.05em;
   font-weight: 600;
 }
+/* prov-tid / prov-bid / prov-opaque kind variants on the header
+   pill, driven by the classifier NOTICE.  TID and BID share the
+   brand-purple base : both are standard tracking modes and the
+   distinction matters mostly for probabilistic evaluation, not at
+   the visual-prominence layer.  OPAQUE drops to the muted tone so
+   the user spots at a glance that the result correlations are not
+   certified. */
+.wp-result__col-prov--opaque {
+  background: var(--fg-muted);
+  color: var(--bg-canvas);
+}
 .wp-schema__cols {
   display: block;
   font-family: var(--font-mono);

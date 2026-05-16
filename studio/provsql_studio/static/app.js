@@ -1858,6 +1858,29 @@
 
 })();
 
+// Per-kind metadata used by the result-table `provsql` column header
+// pill.  Labels deliberately mirror the schema panel's prov-tid /
+// prov-bid / prov-opaque pills so the two affordances read as the
+// same idea.  Lives at module scope rather than inside runQuery so
+// the hoisted renderBlocks function can read it without hitting the
+// const TDZ on the first call.
+const CLASSIFIER_LABELS = {
+  tid:    'prov-tid',
+  bid:    'prov-bid',
+  // OPAQUE falls back to the bare "prov" label : the muted-tone
+  // styling on the pill is enough to signal "kind unknown" and
+  // "prov-opaque" reads as redundant against the explainer tooltip.
+  opaque: 'prov',
+};
+const CLASSIFIER_EXPLAINERS = {
+  tid:    'The query result is independent at the row level (TID): '
+        + 'distinct output rows have disjoint lineages.',
+  bid:    'The query result is block-correlated (BID): rows sharing '
+        + 'a block key value are mutually exclusive.',
+  opaque: 'The query result is opaque: correlations across rows are '
+        + 'not certified by the classifier.',
+};
+
 /* Global runQuery: invoked by the form's inline onsubmit. POSTs to /api/exec
    and renders the response into the result section. */
 async function runQuery(ev) {
@@ -2018,6 +2041,30 @@ async function runQuery(ev) {
     return `<div class="${cls}"><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(text)}${tail}</div>`;
   }
 
+  // Recognises the classifier NOTICE emitted by the planner hook when
+  // provsql.classify_top_level is on. Two shapes :
+  //   "ProvSQL: query result is <KIND> (sources: schema.t1, schema.t2)"
+  //   "ProvSQL: query result is <KIND> (no provenance-tracked sources)"
+  // where <KIND> is TID, BID, or OPAQUE.  Returns { kind, sources } on
+  // a match (sources is an array of identifier strings, possibly
+  // empty), or null otherwise.
+  function parseClassifierNotice(message) {
+    if (!message) return null;
+    const m = String(message).match(
+      /^ProvSQL:\s*query result is (TID|BID|OPAQUE)\s*\((.*)\)\s*$/
+    );
+    if (!m) return null;
+    const kind = m[1].toLowerCase();
+    const tail = m[2].trim();
+    let sources = [];
+    if (tail.startsWith('sources:')) {
+      sources = tail.slice('sources:'.length).split(',')
+                    .map(s => s.trim())
+                    .filter(s => s.length > 0);
+    }
+    return { kind, sources };
+  }
+
   function renderBlocks(blocks, wrapped, notices) {
     // /api/exec returns zero or more error blocks (from earlier failed
     // statements) followed by the final block. We render only the final
@@ -2048,7 +2095,20 @@ async function runQuery(ev) {
       }
     }
     // Server-side notices/warnings + Studio's own INFO observations.
+    // The classifier NOTICE emitted by the provsql.classify_top_level
+    // GUC is hoisted out of the banner stream and used to upgrade the
+    // result-table's `provsql` column header pill from a plain "prov"
+    // to "prov-tid" / "prov-bid" / "prov-opaque" with the sources
+    // surfaced in the hover tooltip.  Last one wins when multiple
+    // statements emit NOTICEs (we surface the user-visible last
+    // SELECT's classification).
+    let classifyInfo = null;
     for (const n of (notices || [])) {
+      const classified = parseClassifierNotice(n.message);
+      if (classified) {
+        classifyInfo = classified;
+        continue;
+      }
       bannerHtml += renderDiag(n.severity, n.message);
     }
     if (banners) banners.innerHTML = bannerHtml;
@@ -2127,6 +2187,28 @@ async function runQuery(ev) {
       // The first two key off type_name; the third keys off the column
       // name because `provsql` is just `uuid` at the type level.
       const matches = env.matchesProvType || ((t, b) => String(t || '').toLowerCase() === b);
+      // The `provsql` column pill is upgraded to a kind-aware variant
+      // (prov-tid / prov-bid / prov-opaque) when the classifier NOTICE
+      // emitted by provsql.classify_top_level identifies the kind of
+      // the user's query result.  Hover surfaces the explainer plus
+      // the list of provenance-tracked source relations.  Without a
+      // classifier NOTICE (older extension, classifier off, no
+      // sources walked) the pill stays the plain "prov" form.
+      const provLabel = classifyInfo
+        ? (CLASSIFIER_LABELS[classifyInfo.kind] || 'prov')
+        : 'prov';
+      const provClassMod = classifyInfo
+        ? ' wp-result__col-prov--' + classifyInfo.kind
+        : '';
+      let provTip = `provsql: the row's provenance gate UUID (added by add_provenance)`;
+      if (classifyInfo) {
+        const explain = CLASSIFIER_EXPLAINERS[classifyInfo.kind]
+                     || 'Query-time provenance classification.';
+        const srcLine = classifyInfo.sources.length
+                      ? 'Sources: ' + classifyInfo.sources.join(', ')
+                      : 'No provenance-tracked sources.';
+        provTip = explain + '\n\n' + srcLine;
+      }
       const headerPill = (col) => {
         const typeName = col.type_name || '';
         if (matches(typeName, 'random_variable')) {
@@ -2136,7 +2218,8 @@ async function runQuery(ev) {
           return `<span class="wp-result__col-agg" title="agg_token: each value carries a circuit UUID; click cells to inspect the underlying gate">agg</span>`;
         }
         if (col.name === 'provsql') {
-          return `<span class="wp-result__col-prov" title="provsql: the row's provenance gate UUID (added by add_provenance)">prov</span>`;
+          return `<span class="wp-result__col-prov${provClassMod}" `
+               + `title="${env.escapeAttr(provTip)}">${provLabel}</span>`;
         }
         return '';
       };
