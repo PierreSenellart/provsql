@@ -186,6 +186,66 @@ def test_circuit_elides_assumed_boolean_wrapper(client, test_dsn):
         client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})
 
 
+def test_boolean_mode_is_session_sticky_on_circuit_fetch(client, test_dsn):
+    """Picking the Boolean flavour in /api/exec must propagate to
+    subsequent /api/circuit fetches : the load-time
+    foldBooleanIdentities pass is what makes the wrapper appear on
+    circuits NOT produced by the safe-query rewriter, and without
+    server-side stickiness it would only fire on the original exec
+    transaction.
+
+    Build a non-hierarchical circuit hand-shaped as times(plus(u,v),
+    plus(u,v)) ; the safe-query rewriter does not handle this shape
+    so no wrapper is persisted to the mmap.  Run /api/exec under
+    Boolean mode (purely to set SESSION_MODES) ; then /api/circuit
+    must return a scene marked boolean_assumed because the
+    load-time fold fires.  Switching back to Semiring must drop the
+    marker on the next fetch.
+    """
+    cleanup = _setup_two_tracked_tables(client)
+    try:
+        with psycopg.connect(
+            f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+        ) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT provsql.provenance_plus(ARRAY["
+                "(SELECT provsql FROM sq_t_a WHERE x=1),"
+                "(SELECT provsql FROM sq_t_b WHERE x=1)])")
+            sub = cur.fetchone()[0]
+            cur.execute(
+                "SELECT public.uuid_generate_v5("
+                "provsql.uuid_ns_provsql(), "
+                "concat('test-shared-sub-', %s::text))", (sub,))
+            root = cur.fetchone()[0]
+            cur.execute(
+                "SELECT provsql.create_gate(%s, 'times', ARRAY[%s, %s])",
+                (root, sub, sub))
+            conn.commit()
+
+        # Flip to Boolean mode via a no-op exec; this is what
+        # populates app.config["SESSION_MODES"] on the server.
+        resp = client.post("/api/exec", json={
+            "sql": "SELECT 1", "mode": "circuit", "prov_mode": "boolean",
+        })
+        assert resp.status_code == 200, resp.data
+
+        # /api/circuit fetch : must see the assumed_boolean wrap on
+        # the descendant of the elided wrapper (depth 0 -> 1).
+        scene = client.get(f"/api/circuit/{root}?depth=3").get_json()
+        assert any(n.get("boolean_assumed") for n in scene["nodes"]), scene
+
+        # Now switch back to Semiring : SESSION_MODES drops the entry,
+        # foldBooleanIdentities does not fire on the next fetch, and
+        # the scene comes back without the marker.
+        client.post("/api/exec", json={
+            "sql": "SELECT 1", "mode": "circuit", "prov_mode": "semiring",
+        })
+        scene2 = client.get(f"/api/circuit/{root}?depth=3").get_json()
+        assert not any(n.get("boolean_assumed") for n in scene2["nodes"]), scene2
+    finally:
+        client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})
+
+
 def test_circuit_no_marker_when_no_wrapper(client, test_dsn):
     """Sanity inverse : a circuit fetched on a UUID produced WITHOUT
     the safe-query rewriter must not have any node with

@@ -1079,7 +1079,7 @@ def evaluate_circuit(
                     (tool_search_path,),
                 )
             for guc_name, guc_val in (extra_gucs or {}).items():
-                if guc_name not in _PANEL_GUCS:
+                if guc_name not in _EXTRA_GUC_WHITELIST:
                     continue
                 cur.execute(
                     sql.SQL("SET LOCAL {} = {}").format(
@@ -1226,7 +1226,7 @@ def evaluate_circuit(
                     (tool_search_path,),
                 )
             for guc_name, guc_val in (extra_gucs or {}).items():
-                if guc_name not in _PANEL_GUCS:
+                if guc_name not in _EXTRA_GUC_WHITELIST:
                     continue
                 cur.execute(
                     sql.SQL("SET LOCAL {} = {}").format(
@@ -1346,7 +1346,7 @@ def evaluate_circuit(
         # rv_mc_samples=0 to disable the MC fallback still gets MC).
         # exec_batch already does this for batched queries; mirror it.
         for guc_name, guc_val in (extra_gucs or {}).items():
-            if guc_name not in _PANEL_GUCS:
+            if guc_name not in _EXTRA_GUC_WHITELIST:
                 continue
             cur.execute(
                 sql.SQL("SET LOCAL {} = {}").format(
@@ -1628,7 +1628,7 @@ def exec_batch(
                 # the rewriter off via the panel without having to remember
                 # it on every query.
                 for guc_name, guc_val in (extra_gucs or {}).items():
-                    if guc_name not in _PANEL_GUCS:
+                    if guc_name not in _EXTRA_GUC_WHITELIST:
                         continue
                     cur.execute(
                         sql.SQL("SET LOCAL {} = {}").format(
@@ -1919,6 +1919,17 @@ _PANEL_GUCS = {
     "provsql.simplify_on_load",
     "provsql.hybrid_evaluation",
 }
+# Session-sticky modes the app keeps in app.config["SESSION_MODES"] and
+# injects into every backend call's extra_gucs.  Distinct from
+# _PANEL_GUCS so they stay invisible to the Config panel API ; the
+# Boolean-mode selector in the toolbar owns the lifecycle.  Allowed
+# through the same SET LOCAL pipeline as the panel GUCs.
+_SESSION_MODE_GUCS = {
+    "provsql.boolean_provenance",
+}
+# Every key accepted as an `extra_gucs` payload (the union the
+# downstream filter functions check).
+_EXTRA_GUC_WHITELIST = _PANEL_GUCS | _SESSION_MODE_GUCS
 _GUC_WHITELIST = _TOGGLE_GUCS | _PANEL_GUCS
 
 

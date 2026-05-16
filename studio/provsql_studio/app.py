@@ -76,6 +76,16 @@ def create_app(
     # Loaded from ~/.config/provsql-studio/config.json so a Studio restart
     # doesn't drop the user's chosen kill-switch / verbosity settings.
     app.config["RUNTIME_GUCS"] = dict(db.load_persisted_gucs())
+    # Session-sticky mode flags. Currently just the Boolean-provenance
+    # selector: when the user picks the Boolean flavour in /api/exec,
+    # this dict gets {"provsql.boolean_provenance": "on"} ; subsequent
+    # /api/circuit and /api/evaluate calls merge it into their
+    # extra_gucs so the load-time foldBooleanIdentities fires there
+    # too.  Picking Semiring / Where in /api/exec drops the entry.
+    # Distinct from RUNTIME_GUCS (which is the Config-panel overlay
+    # the user manages explicitly) so the mode selector stays
+    # invisible to the panel API.
+    app.config["SESSION_MODES"] = {}
     # Studio-level option overrides (Config-panel managed): persisted-on-disk
     # values for max_circuit_depth and statement_timeout. They override the
     # CLI defaults set above so the panel-set values survive restarts.
@@ -111,6 +121,22 @@ def create_app(
     # closures.
     def get_pool():
         return app.extensions["provsql_pool"]
+
+    def _backend_gucs(extra: dict[str, str] | None = None) -> dict[str, str]:
+        """Merge the panel overlay + session-sticky mode flags + any
+        per-call extras into a single dict ready to feed db.exec_batch
+        / circuit_mod.get_circuit / circuit_mod.evaluate_circuit.
+
+        Order : RUNTIME_GUCS (panel) -> SESSION_MODES (sticky) ->
+        per-call extras (highest priority).  The whitelist applied
+        downstream still gates which keys actually fire a SET LOCAL ;
+        this helper just assembles the dict.
+        """
+        out = dict(app.config["RUNTIME_GUCS"])
+        out.update(app.config["SESSION_MODES"])
+        if extra:
+            out.update(extra)
+        return out
 
     # ──────── static + shell routes ────────
 
@@ -301,6 +327,25 @@ def create_app(
             prov_mode = "semiring"
         where_prov = prov_mode == "where"
         boolean_prov = prov_mode == "boolean"
+        # Session-sticky : update the app-level mode flag so subsequent
+        # /api/circuit and /api/evaluate calls (which carry their own
+        # backend connection from the pool) also run under
+        # boolean_provenance=on when the user is in Boolean mode.
+        # Without this the load-time foldBooleanIdentities pass fires
+        # only on the original /api/exec batch ; circuit-mode cell
+        # clicks would then render the unfolded form.
+        prev_bool = app.config["SESSION_MODES"].get("provsql.boolean_provenance")
+        if boolean_prov:
+            app.config["SESSION_MODES"]["provsql.boolean_provenance"] = "on"
+        else:
+            app.config["SESSION_MODES"].pop("provsql.boolean_provenance", None)
+        new_bool = app.config["SESSION_MODES"].get("provsql.boolean_provenance")
+        # The LayoutCache is keyed on (root, depth) only, so a cached
+        # scene from a previous mode would shadow the next /api/circuit
+        # fetch.  Drop the cache on every mode flip so the next fetch
+        # genuinely re-runs the load-time simplifier.
+        if prev_bool != new_bool:
+            layout_cache.clear()
         # The where-mode result wrap is only applied when the user
         # picked the where flavour AND the last statement is a wrappable
         # SELECT (the wrap calls where_provenance(provenance()) which
@@ -328,7 +373,7 @@ def create_app(
                 update_provenance=update_prov,
                 boolean_provenance=boolean_prov,
                 wrap_last=wrap_last,
-                extra_gucs=app.config["RUNTIME_GUCS"],
+                extra_gucs=_backend_gucs(),
                 on_pid=register_pid,
                 search_path=app.config.get("SEARCH_PATH", ""),
                 tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
@@ -408,7 +453,7 @@ def create_app(
             data = circuit_mod.get_circuit(
                 get_pool(), root=root, depth=depth,
                 max_nodes=app.config["MAX_CIRCUIT_NODES"],
-                extra_gucs=app.config["RUNTIME_GUCS"],
+                extra_gucs=_backend_gucs(),
             )
         except circuit_mod.CircuitTooLarge as e:
             return jsonify({
@@ -546,17 +591,18 @@ def create_app(
                 condition_uuid = _coerce_to_uuid(condition_uuid)
             except ValueError:
                 return jsonify({"error": "condition_uuid is not a valid UUID"}), 400
-        # Merge per-request GUC overrides over the panel-managed ones.
-        # The payload's extra_gucs lets tests / Studio's evaluate-strip
-        # pin per-request behaviour (e.g. seed / sample budget for a
-        # distribution-profile invocation) without mutating the
-        # session-wide panel state -- evaluate_circuit validates each
-        # key via the same _PANEL_GUCS whitelist either path uses.
-        merged_gucs = dict(app.config["RUNTIME_GUCS"])
-        payload_gucs = payload.get("extra_gucs") or {}
-        if isinstance(payload_gucs, dict):
-            for k, v in payload_gucs.items():
-                merged_gucs[k] = str(v)
+        # Merge per-request GUC overrides over the panel-managed +
+        # session-sticky ones.  The payload's extra_gucs lets tests
+        # and Studio's evaluate-strip pin per-request behaviour (e.g.
+        # seed / sample budget for a distribution-profile invocation)
+        # without mutating the session-wide panel state ;
+        # evaluate_circuit validates each key via the same whitelist
+        # either path uses.
+        merged_gucs = _backend_gucs(
+            {str(k): str(v) for k, v in (payload.get("extra_gucs") or {}).items()}
+            if isinstance(payload.get("extra_gucs"), dict)
+            else None
+        )
         try:
             data = db.evaluate_circuit(
                 get_pool(),

@@ -384,7 +384,7 @@ def _fetch_subgraph(
         if extra_gucs:
             from . import db as _db
             for guc_name, guc_val in extra_gucs.items():
-                if guc_name not in _db._PANEL_GUCS:
+                if guc_name not in _db._EXTRA_GUC_WHITELIST:
                     continue
                 cur.execute(
                     pg_sql.SQL("SET LOCAL {} = {}").format(
