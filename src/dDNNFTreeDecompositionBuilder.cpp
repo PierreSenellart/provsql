@@ -30,6 +30,20 @@
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "Circuit.hpp"
 
+/* The bottom-up tree-decomposition DP can spend seconds-to-minutes on
+ * non-trivial circuits ; without periodic CHECK_FOR_INTERRUPTS the
+ * backend ignores both statement_timeout and pg_cancel_backend.  In
+ * the standalone tdkc binary CHECK_FOR_INTERRUPTS resolves to a
+ * no-op, so we mirror the guard pattern from BooleanCircuit.cpp. */
+#ifdef TDKC
+#define CHECK_FOR_INTERRUPTS() ((void)0)
+#else
+extern "C" {
+#include "postgres.h"
+#include "miscadmin.h"
+}
+#endif
+
 /* Turn a bounded-treewidth circuit c for which a tree decomposition td
  * is provided into a dNNF rooted at root, following the construction in
  * Section 5.1 of https://doi.org/10.1007/s00224-019-09930-2 */
@@ -292,6 +306,12 @@ dDNNFTreeDecompositionBuilder::gates_to_or_t dDNNFTreeDecompositionBuilder::coll
   gates_to_or_t gates_to_or;
 
   for(auto g: children_gates) {
+    /* Per-bag work can iterate over the cartesian product of
+     * children_gates and partial entries, blowing up well past the
+     * per-bag granularity of the outer builddDNNF loop ; check
+     * cancellation per child-gate so interruption is still
+     * responsive on heavy bags. */
+    CHECK_FOR_INTERRUPTS();
     // We check all suspicious gates are in the bag of the parent
     if(!isConnectible(g.suspicious,td.getBag(bag)))
       continue;
@@ -414,6 +434,13 @@ dDNNFTreeDecompositionBuilder::gate_vector_t<dDNNFTreeDecompositionBuilder::dDNN
   stack.emplace(RecursionParams{td.root});
 
   while(!stack.empty()) {
+    /* Yield to the postgres backend so statement_timeout /
+     * pg_cancel_backend can fire on long-running tree-decomp DPs.
+     * The bottom-up recursion processes one bag per outer-loop
+     * iteration ; per-bag work can itself be heavy but per-bag
+     * granularity is sufficient for cancellation latency in the
+     * sub-second range that matters interactively. */
+    CHECK_FOR_INTERRUPTS();
     RecursionResult result;
 
     if(stack.top().index()==1) { // RecursionResult
