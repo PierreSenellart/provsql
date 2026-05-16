@@ -225,6 +225,46 @@ void GenericCircuit::foldBooleanIdentities()
         }
       }
 
+      /* Rule B3 : absorption (Boolean-only).
+       *   gate_plus (x, gate_times(x, y, ...), ...)  ->  gate_plus (x, ...)
+       *   gate_times(x, gate_plus (x, y, ...), ...)  ->  gate_times(x, ...)
+       * The absorbed times / plus child is dominated by its sibling
+       * @c x present in the parent's children set.  Implemented as a
+       * single pass : build a set view of the parent's children, then
+       * drop every opposite-type child whose wires intersect that set.
+       * The set view captures the wires snapshot ; in case B2 already
+       * mutated @p g into @c gate_one above, @c t still holds the
+       * pre-mutation type so absorption skips correctly via the
+       * type-mismatch check at the top. */
+      if (t == gate_plus || t == gate_times) {
+        const gate_type opposite = (t == gate_plus) ? gate_times : gate_plus;
+        const auto &wires_now = gc.getWires(g);
+        if (wires_now.size() >= 2) {
+          std::unordered_set<gate_t> sibling_set(wires_now.begin(),
+                                                 wires_now.end());
+          std::vector<gate_t> kept;
+          kept.reserve(wires_now.size());
+          bool dropped = false;
+          for (gate_t c : wires_now) {
+            if (gc.getGateType(c) == opposite) {
+              bool absorb = false;
+              for (gate_t w : gc.getWires(c)) {
+                if (w != c && sibling_set.count(w)) {
+                  absorb = true;
+                  break;
+                }
+              }
+              if (absorb) { dropped = true; continue; }
+            }
+            kept.push_back(c);
+          }
+          if (dropped) {
+            gc.setWires(g, std::move(kept));
+            any_rule_fired = true;
+          }
+        }
+      }
+
       if (any_rule_fired) {
         markBooleanAssumed(g);
         changed = true;

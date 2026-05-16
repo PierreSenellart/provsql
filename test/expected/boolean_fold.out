@@ -154,5 +154,44 @@ SELECT round(probability_evaluate(
 zero_root_p_ind
 0.500000000
 (1 row)
+-- ----------------------------------------------------------------------
+-- (4) Absorption (B3, Boolean-only).
+--     gate_plus(x, gate_times(x, y))   -> gate_plus(x)   -> x
+--     gate_times(x, gate_plus(x, y))   -> gate_times(x)  -> x
+--     The absorbed times / plus child is dominated by sibling x.
+--     Sound under Boolean algebra (x OR (x AND y) = x ;
+--     x AND (x OR y) = x) but unsound in general semirings, so the
+--     parent is marked boolean_assumed.
+-- ----------------------------------------------------------------------
+DO $$
+DECLARE u uuid; v uuid; tab uuid; root_plus uuid; root_times uuid;
+BEGIN
+  SELECT provsql INTO u FROM bf_t WHERE id = 1;
+  SELECT provsql INTO v FROM bf_t WHERE id = 2;
+  -- plus(u, times(u, v)) absorbs to u.  P(u) = 0.5.
+  tab := provenance_times(u, v);
+  root_plus := uuid_generate_v5(uuid_ns_provsql(), concat('bf-abs-plus', tab));
+  PERFORM create_gate(root_plus, 'plus', ARRAY[u, tab]);
+  PERFORM set_config('bf.abs_plus_root', root_plus::text, false);
+  -- times(u, plus(u, v)) absorbs to u.  P(u) = 0.5.
+  tab := provenance_plus(ARRAY[u, v]);
+  root_times := uuid_generate_v5(uuid_ns_provsql(), concat('bf-abs-times', tab));
+  PERFORM create_gate(root_times, 'times', ARRAY[u, tab]);
+  PERFORM set_config('bf.abs_times_root', root_times::text, false);
+END $$;
+SET provsql.boolean_provenance = on;
+SELECT round(probability_evaluate(
+                current_setting('bf.abs_plus_root')::uuid, 'independent')
+              ::numeric, 9) AS plus_abs_p_ind;
+plus_abs_p_ind
+0.500000000
+(1 row)
+SELECT round(probability_evaluate(
+                current_setting('bf.abs_times_root')::uuid, 'independent')
+              ::numeric, 9) AS times_abs_p_ind;
+times_abs_p_ind
+0.500000000
+(1 row)
+SET provsql.boolean_provenance = off;
 DROP TABLE bf_t_cnt;
 DROP TABLE bf_t;
