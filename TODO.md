@@ -118,19 +118,48 @@ kind a user set at `add_provenance` / `repair_key` time.  Derived
 relations (CTAS, views) start at the default TID classification ;
 that's right for many simple cases but wrong in general.
 
-- **`propagate_provenance(T regclass, source regclass)` helper.**
-  After a CTAS that's syntactically TID-preserving (projection +
-  filter only, or single-FROM with GROUP BY) the user calls this to
-  copy `source`'s kind into `T`'s entry.  First slice : do not try
-  to auto-detect ; require the user to assert by calling.
-- **Multi-source CTAS classifier.**
-  Run a subset of `safe_query.c`'s detector on the source query to
-  decide TID / BID / OPAQUE automatically.
+- **Query-time TID / BID classifier.**
+  An analysis that runs over an arbitrary Query body and certifies
+  the result relation as TID, BID, or OPAQUE, whether or not it is
+  ever materialised.  Proof rules generalise the safe-query
+  detector : a TID base table stays TID under projection, selection,
+  and GROUP BY on a TID atom column ; the join of two TID inputs is
+  TID when the joint lineage satisfies the hierarchical criterion ;
+  UNION ALL of disjoint TIDs stays TID ; etc.  Exposed as a SQL
+  function (`classify_query(text) -> provsql_table_kind`) so Studio
+  can render the certified kind next to the result and the user
+  sees at a glance why a query is safe.
+- **CTAS tag inheritance.**
+  When a CTAS materialises a query the classifier has tagged TID
+  (resp. BID), populate the new table's `provsql_table_info` entry
+  automatically with the inherited kind ; block-key columns for BID
+  derived from the SELECT list.  No user-side helper required : the
+  classifier is the contract.
+- **Inter-relation correlation registry.**
+  Subtle but unavoidable : the inherited TID tag means the new
+  table's rows are mutually independent *internally*, but the
+  relation is correlated with its source -- each new row is a
+  gate-level function of one or more source rows, so the atom sets
+  overlap.  Same problem for views : a TID view is internally TID
+  but its atoms are exactly its base relations' atoms, so joining
+  the view with one of its base tables (or with another view that
+  shares a base) is unsafe.  A safe-query rewrite whose FROM list
+  references two such correlated relations must refuse, because at
+  the gate level the FROM-list atoms are no longer disjoint.
+  Slice : maintain an ancestry DAG mapping every relation (base
+  table, view, CTAS-derived table) to its set of base ancestors --
+  recorded at materialisation time for CTAS, derived from the view
+  definition for views, the singleton `{self}` for base tables --
+  and have `safe_query.c` reject FROM lists whose ancestor sets are
+  not pairwise disjoint.  Later refinement : when the conservative
+  rule blocks a rewrite, walk the DAG to the base atoms and
+  re-check hierarchical-ness on the union, recovering safe
+  rewrites that the gate-level disjointness check accepts.
 - **View descent in the safe-query detector.**
-  Today the detector treats `RTE_VIEW` / `RTE_SUBQUERY` as opaque.
-  Recursing into the view body and re-classifying inline would let
-  the safe-query rewriter fire on queries that join through simple
-  views.
+  Independent of the correlation question above : today the detector
+  treats `RTE_VIEW` / `RTE_SUBQUERY` as opaque.  Recursing into the
+  view body and re-classifying inline would let the safe-query
+  rewriter fire on queries that join through simple views.
 
 ## HAVING-clause provenance optimisation
 
