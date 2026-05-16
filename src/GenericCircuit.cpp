@@ -128,18 +128,20 @@ void GenericCircuit::foldSemiringIdentities()
     }
 
     /* Phase 3: mutate every substituted gate to carry its target's
-     * type / wires / info / extra.  In-place transformation keeps the
-     * original gate's UUID (so downstream consumers that key on the
-     * caller-supplied root UUID still find it) while every walk from
-     * here sees the target's content.  Mutually-substituted gates all
-     * resolve to the same endpoint (phase 2 above), so the order in
-     * which we apply them within the loop doesn't matter: copying
-     * from the endpoint always yields the correct content. */
+     * type / wires / info / extra / prob / input-set membership.
+     * In-place transformation keeps the original gate's UUID (so
+     * downstream consumers that key on the caller-supplied root UUID
+     * still find it) while every walk from here sees the target's
+     * content.  Mutually-substituted gates all resolve to the same
+     * endpoint (phase 2 above), so the order in which we apply them
+     * within the loop doesn't matter: copying from the endpoint
+     * always yields the correct content. */
     for (const auto &kv : subst) {
       gate_t g = kv.first;
       gate_t target = kv.second;
       if (g == target) continue;
-      gc.setGateType(g, gc.getGateType(target));
+      const auto target_type = gc.getGateType(target);
+      gc.setGateType(g, target_type);
       gc.getWires(g) = gc.getWires(target);
       auto [ti1, ti2] = gc.getInfos(target);
       const unsigned NO_INFO = static_cast<unsigned>(-1);
@@ -153,6 +155,18 @@ void GenericCircuit::foldSemiringIdentities()
         /* target has no extra; leave g's extra as-is (it was already
          * cleared if it was an internal gate; values_t entry persisted
          * for value gates we don't reach here). */
+      }
+      /* Copy the target's probability.  Without this, a substituted
+       * @c gate_plus(x, @c gate_zero) → x where x is a
+       * Bernoulli @c gate_input would lose x's probability:
+       * @c addGate seeds @c prob = 1 for non-input gates, so the
+       * substituted gate would read as an input with @c prob = 1
+       * instead of x's actual probability.  Mirror the @c inputs
+       * set membership too: leaf-typed targets register their
+       * substituted-gate id so probability evaluators see it. */
+      gc.setProb(g, gc.getProb(target));
+      if (target_type == gate_input || target_type == gate_update) {
+        gc.inputs.insert(g);
       }
       changed = true;
     }

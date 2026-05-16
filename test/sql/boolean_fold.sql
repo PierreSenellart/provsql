@@ -121,5 +121,31 @@ SELECT round(probability_evaluate(
               ::numeric, 9) AS one_root_p_ind;
 SET provsql.boolean_provenance = off;
 
+-- ----------------------------------------------------------------------
+-- (3) Phase 3 of foldSemiringIdentities, when chained after the
+--     Boolean dedup, substitutes single-wire plus / times in place.
+--     Pre-fix, that substitution copied target type / wires / infos
+--     / extra but not the target's probability nor its membership in
+--     the inputs set : a substituted gate that landed as a
+--     gate_input with prob 0.5 instead read as an input with the
+--     addGate-default prob 1.
+--
+--     Probe : gate_plus(u, gate_zero()) collapses to u via
+--     Phase 1 (drop the zero wire) then Phase 2 / Phase 3
+--     (singleton substitute).  u has prob 0.5 ; the probability
+--     evaluated on the root must equal 0.5, not 1.
+-- ----------------------------------------------------------------------
+DO $$
+DECLARE u uuid; root uuid;
+BEGIN
+  SELECT provsql INTO u FROM bf_t WHERE id = 1;
+  root := uuid_generate_v5(uuid_ns_provsql(), concat('bf-zero', u));
+  PERFORM create_gate(root, 'plus', ARRAY[u, gate_zero()]);
+  PERFORM set_config('bf.zero_root', root::text, false);
+END $$;
+SELECT round(probability_evaluate(
+                current_setting('bf.zero_root')::uuid, 'independent')
+              ::numeric, 9) AS zero_root_p_ind;
+
 DROP TABLE bf_t_cnt;
 DROP TABLE bf_t;
