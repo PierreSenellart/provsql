@@ -72,7 +72,10 @@ extern int provsql_verbose;             /* declared in provsql.c */
  * Accepts only:
  *  - self-join-free conjunctive queries
  *  - no aggregation, window functions, DISTINCT ON, LIMIT/OFFSET,
- *    set operations (UCQ -- TODO), sublinks
+ *    sublinks, or top-level set operations.  Top-level UCQs
+ *    (UNION / EXCEPT / INTERSECT) are processed branch-by-branch by
+ *    the planner's recursive @c process_query, so each branch reaches
+ *    this gate on its own and the outer set-operation node bails here.
  *  - an outer @c GROUP @c BY or top-level @c DISTINCT.  Without one,
  *    the per-atom @c SELECT @c DISTINCT wraps would shrink the user-
  *    visible row count, so the rewrite would change the result set.
@@ -87,7 +90,9 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
   List *seen_relids = NIL;
 
   if (q->setOperations != NULL)
-    return false;                       /* TODO: top-level UCQ */
+    return false;                       /* UCQ branches handled by
+                                         * recursive process_query
+                                         * re-entry, not here */
   if (q->hasAggs || q->hasWindowFuncs)
     return false;
   if (q->limitCount != NULL || q->limitOffset != NULL)
@@ -617,20 +622,25 @@ static Node *safe_pushed_remap_mutator(Node *node,
  * shape:
  *
  *  - fewer than two atoms (single-relation query needs no rewrite);
- *  - no root variable (multi-component CQ);
- *  - an atom whose root binding spans more than one column (the
- *    rewrite would have to push an intra-atom equality into the
- *    inner subquery -- TODO);
- *  - at least one partial-coverage class exists but every atom is
- *    touched by some partial-coverage class.  Bundling all atoms
- *    into one inner group would re-enter the rewriter with the same
- *    shape, so we defer disjoint-partial cases such as
- *    @c A(x,y),B(x,y),C(x,z),D(x,z) where atoms(y) and atoms(z) are
- *    disjoint;
- *  - any Var in @c q->targetList or the residual @p quals that
- *    belongs to a single-atom class (head-only projection is still
- *    out of scope; atom-local WHERE conjuncts are handled upstream
- *    by @c safe_split_quals and never reach this function).
+ *  - no root variable within the (single) connected component.
+ *    Disconnected components are handled upstream in
+ *    @c try_safe_query_rewrite via @c rewrite_multi_component, so
+ *    this bail covers only the "connected but no variable touches
+ *    every atom" case ;
+ *  - an atom whose root binding spans more than one column.  The
+ *    rewrite would have to push an intra-atom equality (e.g.
+ *    @c A(x,x) when @c x is the root) into the inner subquery ;
+ *    the current rewriter does not synthesise such an equality and
+ *    bails ;
+ *  - a Var in @p quals or @c q->targetList that does not fit any of
+ *    the slot kinds the rewriter knows how to expose : the
+ *    fully-covered class (extra outer slot), a partial-coverage
+ *    class whose atom landed in an inner group (inner-group slot),
+ *    or a single-atom head Var on an atom whose wrap can carry an
+ *    extra projection slot.  Body-only Vars on a single-atom class
+ *    and partial-coverage classes that the multi-group / bridge
+ *    merger cannot route to any group fall outside this set and
+ *    trigger the bail.
  *
  * The shape gate in @c is_safe_query_candidate has already enforced
  * self-join-free, no aggs / windows / sublinks etc.; this function
