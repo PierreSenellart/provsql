@@ -127,16 +127,39 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
     }
     seen_relids = lappend_oid(seen_relids, rte->relid);
 
-    /* Metadata gate.  Tracked relations must not be OPAQUE (unknown
-     * correlations).  Non-tracked relations are accepted: they
-     * contribute deterministic, probability-1 tuples, which behave
-     * as if every row carried a @c gate_one() leaf -- read-once
-     * factoring is unaffected.  TID and BID tracked relations are
-     * both fine; the BID block-key alignment check happens in the
-     * rewriter once the separator is known. */
-    if (provsql_lookup_table_info(rte->relid, &info)
-        && info.kind == PROVSQL_TABLE_OPAQUE)
-      return false;
+    /* Metadata gate.
+     *
+     * - No provsql column on the relation: accepted as deterministic,
+     *   probability-1 tuples (every row behaves as if it carried a
+     *   gate_one() leaf, so read-once factoring is unaffected).
+     *
+     * - provsql column present but no metadata entry: refuse.  This
+     *   covers CREATE TABLE AS SELECT, ALTER TABLE ADD COLUMN
+     *   provsql, and ALTER TABLE RENAME ... TO provsql -- in all
+     *   three the relation has a column ProvSQL would honour at
+     *   evaluation time, but the column's content never passed
+     *   through add_provenance / repair_key, so independence cannot
+     *   be assumed.
+     *
+     * - provsql column present and metadata says OPAQUE: refuse
+     *   (set_table_info, or a provenance_guard fire after a user-
+     *   supplied INSERT / UPDATE).
+     *
+     * - provsql column present and metadata says TID or BID: accept.
+     *   The BID block-key alignment check happens in the rewriter
+     *   once the root variable is known. */
+    {
+      AttrNumber provsql_attno = get_attnum(rte->relid, PROVSQL_COLUMN_NAME);
+      bool has_provsql_col =
+        provsql_attno != InvalidAttrNumber
+        && get_atttype(rte->relid, provsql_attno) == constants->OID_TYPE_UUID;
+      bool has_meta = provsql_lookup_table_info(rte->relid, &info);
+
+      if (has_provsql_col && !has_meta)
+        return false;
+      if (has_meta && info.kind == PROVSQL_TABLE_OPAQUE)
+        return false;
+    }
   }
 
   list_free(seen_relids);

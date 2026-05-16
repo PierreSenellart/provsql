@@ -82,7 +82,6 @@ bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes w
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_boolean_provenance = false; ///< Opt-in safe-query optimisation: when @c true, rewrites hierarchical conjunctive queries to a read-once form whose probability is computable in linear time. The resulting circuit is tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on it. Controlled by the @c provsql.boolean_provenance GUC.
 
-static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
 extern void _PG_init(void);
 extern void _PG_fini(void);
@@ -4432,8 +4431,17 @@ static void process_insert_select(const constants_t *constants, Query *q) {
     }
   }
 
-  if (provsql_te == NULL)
-    return;
+  if (provsql_te == NULL) {
+    /* The target's provsql column is not in the INSERT's targetList
+     * (no DEFAULT on the column since 1.6.0; the user did not name
+     * the column either).  Synthesise a TE here so we have something
+     * to substitute the source provsql Var into below. */
+    provsql_te = makeNode(TargetEntry);
+    provsql_te->resno = provsql_attno;
+    provsql_te->resname = pstrdup(PROVSQL_COLUMN_NAME);
+    /* expr is set to the source Var by the substitution block below. */
+    q->targetList = lappend(q->targetList, provsql_te);
+  }
 
   /* Rewrite the source SELECT to carry provenance */
   {

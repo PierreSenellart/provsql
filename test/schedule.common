@@ -145,6 +145,7 @@ test: table_info
 test: safe_query_basic
 test: safe_query_pushdown
 test: safe_query_semiring
+test: safe_query_opaque
 
 # Refusal of outer SQL aggregate over ProvSQL-aggregated subquery
 test: nested_agg_refuse

@@ -1,0 +1,78 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+scenario|x|rewriter
+S0|1|refused
+S0|2|refused
+(2 rows)
+add_provenance
+
+(1 row)
+scenario|x|rewriter
+S1|1|refused
+S1|2|refused
+(2 rows)
+scenario|x|rewriter
+S2|1|refused
+S2|2|refused
+(2 rows)
+add_provenance
+
+(1 row)
+scenario|x|rewriter
+S3|1|refused
+S3|2|refused
+(2 rows)
+scenario|x|rewriter
+S4|1|refused
+S4|2|refused
+(2 rows)
+scenario|x|rewriter
+S5|1|refused
+S5|2|refused
+(2 rows)
+add_provenance
+
+(1 row)
+set_table_info
+
+(1 row)
+scenario|x|rewriter
+S6|1|refused
+S6|2|refused
+(2 rows)
+add_provenance
+
+(1 row)
+scenario|x|rewriter
+S7|1|refused
+S7|2|refused
+(2 rows)
+add_provenance
+
+(1 row)
+scenario|x|rewriter
+S8|1|refused
+S8|2|refused
+(2 rows)
+repair_key
+
+(1 row)
+scenario|x|rewriter
+S9|1|refused
+S9|2|refused
+(2 rows)
+repair_key
+
+(1 row)
+scenario|x|rewriter
+S10|1|refused
+S10|2|refused
+(2 rows)

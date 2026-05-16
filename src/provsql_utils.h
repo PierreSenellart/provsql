@@ -99,6 +99,16 @@ typedef enum provsql_arith_op {
 /** Names of gate types */
 extern const char *gate_type_name[];
 
+/**
+ * @brief Canonical name of the per-row provenance column installed by
+ *        @c add_provenance / @c repair_key.
+ *
+ * Centralised so the planner-hook entry points (@c src/provsql.c) and
+ * the safe-query detector (@c src/safe_query.c) agree on the literal;
+ * see the @c provenance_guard trigger in @c sql/provsql.common.sql.
+ */
+#define PROVSQL_COLUMN_NAME "provsql"
+
 /** Structure to store the value of various constants. This is needed to
  * uniquely identify types, functions, etc., in PostgreSQL through their
  * Object Identifier Types (OIDs). */

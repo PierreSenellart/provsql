@@ -294,10 +294,53 @@ CREATE OR REPLACE FUNCTION get_table_info(
   'provsql','get_table_info' LANGUAGE C STABLE PARALLEL SAFE;
 
 /**
+ * @brief BEFORE INSERT OR UPDATE OF provsql row trigger installed by
+ *        @c add_provenance.
+ *
+ * Two jobs:
+ *
+ *  1. Fill @c NEW.provsql with a fresh @c uuid_generate_v4 leaf when
+ *     the user did not supply one (this replaces the column DEFAULT
+ *     that @c add_provenance used to install: a real DEFAULT would
+ *     fire before the trigger sees the row, so we could not tell
+ *     "user omitted the column" from "user supplied a value").
+ *  2. When the user does supply a non-NULL @c provsql on @c INSERT,
+ *     or changes it on @c UPDATE, flip the table's per-table
+ *     metadata to @c OPAQUE.  The user is free to write whatever
+ *     UUIDs they want (cross-table reuse, compound tokens minted
+ *     via @c create_gate, ...); the cost is that the safe-query
+ *     rewriter then refuses to fire on this table, because TID
+ *     independence can no longer be assumed.
+ */
+CREATE OR REPLACE FUNCTION provenance_guard()
+  RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.provsql IS NULL THEN
+      NEW.provsql := public.uuid_generate_v4();
+    ELSE
+      PERFORM provsql.set_table_info(TG_RELID, 'opaque');
+    END IF;
+  ELSIF TG_OP = 'UPDATE' THEN
+    IF NEW.provsql IS DISTINCT FROM OLD.provsql THEN
+      PERFORM provsql.set_table_info(TG_RELID, 'opaque');
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER;
+
+/**
  * @brief Enable provenance tracking on an existing table
  *
- * Adds a <tt>provsql</tt> UUID column to the table. Input gates for
- * existing rows are created lazily when first referenced by a query.
+ * Adds a <tt>provsql</tt> UUID column to the table, an index for
+ * fast UUID-keyed lookups, and a BEFORE INSERT/UPDATE row trigger
+ * (@c provenance_guard) that mints a fresh @c uuid_generate_v4
+ * leaf when the user omits the column on INSERT, or flips the
+ * table's metadata to @c OPAQUE when the user supplies their own
+ * value.  Input gates for existing rows are created lazily when
+ * first referenced by a query.
  *
  * @param _tbl the table to add provenance tracking to
  */
@@ -305,7 +348,21 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
-  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  -- No DEFAULT: the guard trigger mints the UUID, so the trigger can
+  -- distinguish "user omitted" (NULL) from "user supplied a value".
+  -- No UNIQUE: we no longer rely on it to keep the table TID -- the
+  -- guard does that semantically -- and a UNIQUE would reject the
+  -- legitimate cross-table UUID copy that just flips the table to
+  -- OPAQUE.  We keep a plain index for fast UUID-keyed lookups.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
+  EXECUTE format(
+    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -323,6 +380,13 @@ $$
 DECLARE
 BEGIN
   PERFORM provsql.remove_table_info(_tbl::oid);
+  -- Drop the BEFORE INSERT/UPDATE guard first: it has a column
+  -- dependency on provsql (via the OF provsql clause), so the
+  -- subsequent DROP COLUMN would otherwise raise.
+  BEGIN
+    EXECUTE format('DROP TRIGGER provenance_guard on %s', _tbl);
+  EXCEPTION WHEN undefined_object THEN
+  END;
   EXECUTE format('ALTER TABLE %s DROP COLUMN provsql', _tbl);
   BEGIN
     EXECUTE format('DROP TRIGGER add_gate on %s', _tbl);
@@ -379,7 +443,13 @@ BEGIN
     END IF;
   END IF;
 
-  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  -- Same column shape as add_provenance: no UNIQUE, no DEFAULT past
+  -- the initial backfill (the guard trigger added after the rename
+  -- takes over both jobs once the column has been renamed to its
+  -- final name).  The DEFAULT is kept here only so the second pass
+  -- below can read provsql_temp from the user-visible rows
+  -- without a separate UPDATE.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID DEFAULT public.uuid_generate_v4()', _tbl);
 
   -- Build a per-group mapping (key columns + a fresh key_token + the
   -- group size) once, then use it for both the create_gate(key_token,
@@ -434,7 +504,13 @@ BEGIN
 
   DROP TABLE provsql_repair_key_tmp;
 
+  EXECUTE format('ALTER TABLE %s ALTER COLUMN provsql_temp DROP DEFAULT', _tbl);
   EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
 END
 $$ LANGUAGE plpgsql;
