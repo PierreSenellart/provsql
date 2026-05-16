@@ -17,6 +17,16 @@ Further down the road:
   for `gate_plus` / `gate_times` whose children have pairwise-disjoint
   leaf supports; evaluate probability componentwise.  Strictly more
   general than `independentEvaluation` on read-once circuits.
+  *Tried MVP-1 (top-level factoring with per-component
+  tree-decomposition fallback) ; benchmark showed it is 3-14x slower
+  than plain tree-decomposition on every disconnected-component shape
+  tested (4-16 components, 80-320 leaves).  The existing d-DNNF
+  builder already factors disconnected components internally, so the
+  outer factoring just adds traversal + virtual-gate overhead.  Any
+  future attempt should target a regime where tree-decomp's
+  heuristic actually struggles on the joint circuit -- e.g. large
+  circuits where the elimination-order heuristic gets confused by
+  top-level cross-talk.*
 - **Read-once recognition (Golumbic-Mintz-Rotics, linear-time).**
   When a Boolean formula has a read-once representation, the same
   probability shortcut as safe-query applies without needing to
