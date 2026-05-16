@@ -881,6 +881,67 @@ SELECT b.x, r.root, ROUND((b.p - r.p_ind)::numeric, 9) AS diff_baseline_vs_rewri
   FROM pd_tr_baseline b JOIN pd_tr_rew r ON b.x = r.x
  ORDER BY b.x;
 
+-- (24) Hierarchical CQ that the rewriter cannot realise must bail
+--      gracefully (return NULL), not raise.  The shape:
+--        atoms(x) = {A,B,C}  (root: in every atom)
+--        atoms(y) = {A,B,C}  (in every atom, nested under x)
+--        atoms(z) = {A,B}    (partial: only A, B; nested under y)
+--      A GROUP BY that includes z makes z a head Var.  The detector
+--      forms group {A,B} for z's partial-coverage class, but the
+--      grouped atom's slot only exposes columns of fully-covered
+--      shared classes within the group.  z is not in a shared class
+--      at the OUTER level (only at the group level), so the outer
+--      Var a.z has no projection slot.  Before the bail fix this
+--      raised "Var (varno=1, varattno=3) references a grouped atom
+--      column with no slot in the inner sub-Query's targetList";
+--      now the rewriter returns NULL and the regular pipeline
+--      computes the same result.  The check is row count + total
+--      probability mass matching the GUC-off baseline.
+CREATE TABLE pd_bail_a(x int, y int, z int);
+CREATE TABLE pd_bail_b(x int, y int, z int);
+CREATE TABLE pd_bail_c(x int, y int);
+INSERT INTO pd_bail_a VALUES (1, 10, 100), (1, 10, 200),
+                             (2, 20, 100), (2, 30, 300);
+INSERT INTO pd_bail_b VALUES (1, 10, 100), (1, 10, 200),
+                             (2, 20, 100), (2, 30, 400);
+INSERT INTO pd_bail_c VALUES (1, 10), (2, 20), (2, 30);
+SELECT add_provenance('pd_bail_a');
+SELECT add_provenance('pd_bail_b');
+SELECT add_provenance('pd_bail_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_bail_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_bail_b;
+  PERFORM set_prob(provsql, 0.3) FROM pd_bail_c;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_bail_baseline AS
+  SELECT a.x AS x, a.z AS z, probability_evaluate(provenance()) AS p
+    FROM pd_bail_a a, pd_bail_b b, pd_bail_c c
+   WHERE a.x = b.x AND a.x = c.x
+     AND a.y = b.y AND a.y = c.y AND a.z = b.z
+   GROUP BY a.x, a.z;
+SELECT remove_provenance('pd_bail_baseline');
+
+-- With GUC on the planner attempts the rewrite, hits the missing
+-- slot for a.z, bails, and falls through to the default pipeline.
+-- The query must succeed (no exception) and produce the same rows.
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_bail_rew AS
+  SELECT a.x AS x, a.z AS z, probability_evaluate(provenance()) AS p
+    FROM pd_bail_a a, pd_bail_b b, pd_bail_c c
+   WHERE a.x = b.x AND a.x = c.x
+     AND a.y = b.y AND a.y = c.y AND a.z = b.z
+   GROUP BY a.x, a.z;
+SELECT remove_provenance('pd_bail_rew');
+
+-- Row count and per-(x,z) probability must match the baseline.
+SELECT (SELECT count(*) FROM pd_bail_baseline) = (SELECT count(*) FROM pd_bail_rew)
+       AS row_counts_match,
+       ROUND(coalesce(SUM(b.p - r.p), 0)::numeric, 9) AS sum_p_diff
+  FROM pd_bail_baseline b JOIN pd_bail_rew r ON b.x = r.x AND b.z = r.z;
+SET provsql.boolean_provenance = off;
+
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
 --     shape).  We do not test the bail directly (no observable hook
@@ -931,4 +992,5 @@ DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_ud_a, pd_ud_b, pd_ud_c, pd_ud_d,
            pd_uo_a, pd_uo_b, pd_uo_c,
            pd_br_a, pd_br_b, pd_br_c, pd_br_d, pd_br_e,
+           pd_bail_a, pd_bail_b, pd_bail_c,
            pd_d, pd_e, pd_f;

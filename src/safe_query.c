@@ -1352,6 +1352,9 @@ bail:
 typedef struct safe_remap_ctx {
   List *atoms;   ///< List of safe_rewrite_atom *, one per RTE
   List *groups;  ///< List of safe_inner_group *
+  bool  bail;    ///< Set when a Var has no slot in its atom's projection;
+                 ///< the caller aborts the rewrite and falls back to the
+                 ///< default pipeline rather than emitting a broken plan.
 } safe_remap_ctx;
 
 /**
@@ -1395,11 +1398,12 @@ static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
             return (Node *) vv;
           }
         }
-        provsql_error("safe-query rewriter: Var (varno=%u, varattno=%d) "
-                      "references a grouped atom column with no slot in "
-                      "the inner sub-Query's targetList -- the column is "
-                      "not in any fully-covered shared class",
-                      (unsigned) v->varno, (int) v->varattno);
+        /* Head/qual Var on a grouped atom that no shared-class slot
+         * covers: the rewrite cannot produce a column the outer query
+         * can reference, but the input SQL is still valid -- bail to
+         * the default pipeline rather than raising. */
+        ctx->bail = true;
+        return (Node *) v;
       } else {
         ListCell *lc;
         foreach (lc, sa->proj_slots) {
@@ -1417,10 +1421,9 @@ static Node *safe_remap_vars_mutator(Node *node, safe_remap_ctx *ctx) {
             return (Node *) vv;
           }
         }
-        provsql_error("safe-query rewriter: Var (varno=%u, varattno=%d) "
-                      "has no projection slot in atom %u",
-                      (unsigned) v->varno, (int) v->varattno,
-                      (unsigned) v->varno);
+        /* Same situation, outer-wrap atom: bail instead of raising. */
+        ctx->bail = true;
+        return (Node *) v;
       }
     }
     return (Node *) v;
@@ -1951,6 +1954,7 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
    * group's inner sub-Query at output column 1. */
   mctx.atoms = atoms;
   mctx.groups = groups;
+  mctx.bail = false;
   outer->targetList = (List *)
       safe_remap_vars_mutator((Node *) outer->targetList, &mctx);
   if (outer->jointree && outer->jointree->quals)
@@ -1959,6 +1963,18 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
 
   if (group_emitted)
     pfree(group_emitted);
+
+  /* A Var with no projection slot means the rewrite cannot honour the
+   * outer query without inventing an output column for it (e.g. a
+   * GROUP BY column on a grouped atom whose value is not shared
+   * across the group's other members).  Bail to the regular pipeline:
+   * the input SQL is still valid, the rewrite just does not apply. */
+  if (mctx.bail) {
+    if (provsql_verbose >= 30)
+      provsql_notice("safe-query rewrite bailed: a Var has no projection "
+                     "slot in its (grouped or outer-wrap) atom");
+    return NULL;
+  }
 
   if (provsql_verbose >= 30) {
     StringInfoData buf;
@@ -2076,6 +2092,7 @@ typedef struct safe_outer_te_remap_ctx {
   int    *atom_to_comp;            ///< per-atom component id
   int    *atom_to_inner_attno;     ///< per-atom column position in its component's inner targetList (1-based; 0 = not exposed)
   Index  *comp_to_outer_rtindex;   ///< per-component outer-rtable position (1-based)
+  bool    bail;                    ///< set when a Var has no exposed inner column; caller falls back to the regular pipeline
 } safe_outer_te_remap_ctx;
 
 /**
@@ -2104,11 +2121,13 @@ static Node *safe_outer_te_remap_mutator(Node *node,
           (AttrNumber) ctx->atom_to_inner_attno[atom_idx];
       Index outer_rtindex = ctx->comp_to_outer_rtindex[comp];
       Var *vv;
-      if (inner_attno == 0)
-        provsql_error("safe-query multi-component rewriter: Var "
-                      "(varno=%u, varattno=%d) has no exposed column "
-                      "in its component's inner sub-Query",
-                      (unsigned) v->varno, (int) v->varattno);
+      if (inner_attno == 0) {
+        /* Same bailout pattern as safe_remap_vars_mutator: signal the
+         * caller to abandon the multi-component rewrite rather than
+         * raise on a valid input the rewriter just cannot handle. */
+        ctx->bail = true;
+        return (Node *) v;
+      }
       vv = (Var *) copyObject(v);
       vv->varno     = outer_rtindex;
       vv->varattno  = inner_attno;
@@ -2474,11 +2493,21 @@ static Query *rewrite_multi_component(const constants_t *constants,
     tctx.atom_to_comp        = atom_to_comp;
     tctx.atom_to_inner_attno = atom_to_inner_attno;
     tctx.comp_to_outer_rtindex = comp_outer_rtindex;
+    tctx.bail                = false;
     outer->targetList = (List *) safe_outer_te_remap_mutator(
         (Node *) outer->targetList, &tctx);
     if (outer->jointree->quals)
       outer->jointree->quals =
           safe_outer_te_remap_mutator(outer->jointree->quals, &tctx);
+    if (tctx.bail) {
+      if (provsql_verbose >= 30)
+        provsql_notice("safe-query multi-component rewrite bailed: a Var "
+                       "has no exposed column in its component's inner "
+                       "sub-Query");
+      pfree(inner_queries);
+      pfree(inner_quals);
+      return NULL;
+    }
   }
 
   if (provsql_verbose >= 30)

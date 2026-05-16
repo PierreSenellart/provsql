@@ -356,3 +356,21 @@ add_provenance
 add_provenance
 
 (1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+row_counts_match|sum_p_diff
+t|0.000000000
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
