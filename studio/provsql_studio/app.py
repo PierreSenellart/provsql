@@ -282,15 +282,30 @@ def create_app(
             return jsonify({"blocks": []})
 
         last = statements[-1]
-        wrap_last = mode == "where" and bool(_WRAPPABLE_RE.match(last))
 
-        # Toggles. In where mode `where_provenance` is forced on because the
-        # wrap calls `provsql.where_provenance(provsql.provenance())` and
-        # would otherwise return zero matches. In circuit mode both are
-        # user-controlled; defaults match the previous fixed behaviour.
-        where_prov = bool(payload.get("where_provenance", mode == "where"))
+        # The provenance-flavour selector is a three-way choice :
+        # `boolean` (provsql.boolean_provenance on, safe-query rewriter
+        # enabled), `semiring` (both flavour GUCs off), `where`
+        # (provsql.where_provenance on, eligible queries get wrapped
+        # with where_provenance(provenance()) for cell-level highlights).
+        # Boolean and where are mutually exclusive at the C level
+        # (where-provenance gates do not survive the safe-query rewrite),
+        # so the front-end's segmented control enforces a single pick.
+        # In Where UI mode the cell-highlight wrap requires where, so
+        # the selector is locked there client-side; if a stale payload
+        # arrives anyway we override.
+        prov_mode = (payload.get("prov_mode") or "semiring").lower()
         if mode == "where":
-            where_prov = True
+            prov_mode = "where"
+        if prov_mode not in ("boolean", "semiring", "where"):
+            prov_mode = "semiring"
+        where_prov = prov_mode == "where"
+        boolean_prov = prov_mode == "boolean"
+        # The where-mode result wrap is only applied when the user
+        # picked the where flavour AND the last statement is a wrappable
+        # SELECT (the wrap calls where_provenance(provenance()) which
+        # would otherwise return zero matches).
+        wrap_last = where_prov and bool(_WRAPPABLE_RE.match(last))
         update_prov = bool(payload.get("update_provenance", False))
 
         inflight = app.extensions["provsql_inflight"]
@@ -311,6 +326,7 @@ def create_app(
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
                 where_provenance=where_prov,
                 update_provenance=update_prov,
+                boolean_provenance=boolean_prov,
                 wrap_last=wrap_last,
                 extra_gucs=app.config["RUNTIME_GUCS"],
                 on_pid=register_pid,

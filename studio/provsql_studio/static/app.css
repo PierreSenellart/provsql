@@ -484,6 +484,16 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   letter-spacing: 0.05em;
   font-weight: 600;
 }
+/* PROV-TID / PROV-BID / PROV-OPAQUE shadings. TID and BID share
+   the plain brand pill (they are both standard tracking modes ;
+   the distinction matters mostly for probabilistic evaluation but
+   does not warrant a visual demotion). OPAQUE goes to a muted tone
+   to flag "the safe-query rewriter will refuse on this table" at a
+   glance. */
+.wp-schema__rel-prov--opaque {
+  background: var(--fg-muted);
+  color: var(--bg-canvas);
+}
 /* Subtle left accent on the relation row so the eye picks up the
    provenance-tracked tables when scrolling the list. */
 .wp-schema__rel--prov {
@@ -1499,6 +1509,101 @@ body.mode-where #sidebar {
   box-shadow: none;
 }
 .wp-toggle.is-locked code { color: var(--fg-muted); font-style: italic; }
+
+/* Provenance-mode selector: segmented three-way switch that replaces
+   the old where_provenance toggle. The native radios stay in the DOM
+   (semantics + keyboard), but appearance:none lets us paint the
+   labels as connected segment buttons. The selected segment uses the
+   brand purple; the rest are flat ghost buttons. */
+.wp-prov-mode {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  padding: 0;
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  overflow: hidden;
+}
+/* The native <legend> sits on the fieldset's top border. Tighten the
+   font + padding so the caption visually punches a hole in the border
+   right above the segments instead of floating in dead space above. */
+.wp-prov-mode__legend {
+  float: none;
+  padding: 0 0.35rem;
+  margin-left: 0.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: var(--bg-elevated);
+}
+/* Lock icon sits inside every segment but stays hidden by default;
+   when the fieldset is locked, only the currently-checked segment
+   shows it (which is the segment the user is stuck on in Where UI
+   mode). Anchored on the active label avoids the dead left-edge gap
+   the previous fieldset-level slot reserved. */
+.wp-prov-mode__lock {
+  display: none;
+  margin-right: 0.35rem;
+  font-size: 0.7em;
+}
+.wp-prov-mode.is-locked .wp-prov-mode__opt:has(input:checked) .wp-prov-mode__lock {
+  display: inline-block;
+}
+.wp-prov-mode__opt {
+  display: inline-flex; align-items: center;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  color: var(--fg-2);
+  user-select: none;
+  transition: background 0.12s, color 0.12s;
+}
+.wp-prov-mode__opt + .wp-prov-mode__opt {
+  border-left: 1px solid var(--border-soft);
+}
+.wp-prov-mode__opt input[type="radio"] {
+  /* Visually hidden but kept in the accessibility tree and reachable
+     via Tab: the segment styling lives on the label so the native
+     radio is layered out of sight but never display:none-ed. */
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  appearance: none; -webkit-appearance: none;
+}
+.wp-prov-mode__opt:has(input:checked) {
+  background: var(--purple-500);
+  color: var(--fg-on-dark);
+}
+.wp-prov-mode__opt:hover:not(:has(input:checked)) {
+  background: var(--purple-100);
+}
+.wp-prov-mode__opt input:focus-visible + span {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.wp-prov-mode.is-locked .wp-prov-mode__opt {
+  cursor: not-allowed;
+}
+.wp-prov-mode.is-locked .wp-prov-mode__opt:has(input:checked) {
+  background: var(--purple-300);
+  color: var(--fg-on-dark);
+  font-style: italic;
+}
+.wp-prov-mode.is-locked .wp-prov-mode__opt:not(:has(input:checked)) {
+  color: var(--fg-muted);
+  opacity: 0.55;
+}
+.wp-prov-mode.is-locked .wp-prov-mode__opt:hover:not(:has(input:checked)) {
+  background: transparent;
+}
 
 /* ───────── result block ───────── */
 .wp-result__hdr {

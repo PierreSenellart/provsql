@@ -454,10 +454,59 @@
 
     // nodes
     for (const n of state.scene.nodes) {
-      const cls = `node-group node--${n.type}` + (n.frontier ? ' is-frontier' : '');
+      const cls = `node-group node--${n.type}`
+                + (n.frontier ? ' is-frontier' : '')
+                + (n.boolean_assumed ? ' is-boolean-assumed' : '');
       const p = nodePos(n);
       const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${p.x},${p.y})` });
       g.appendChild(svgEl('circle', { class: 'node-shape', r: 22 }));
+      // Boolean-rewrite marker : every gate_assumed_boolean wrapper
+      // in the scene was elided server-side, and each wrapper's
+      // single child carries boolean_assumed = true. Paint a dashed
+      // concentric ring + a "B" badge to signal "this gate's value
+      // is interpreted as a Boolean function, only Boolean-compatible
+      // semirings are sound on it" (see C++
+      // semiring::*::compatibleWithBooleanRewrite()).
+      if (n.boolean_assumed) {
+        g.appendChild(svgEl('circle', {
+          class: 'node-boolean-frame',
+          r: 28,
+          fill: 'none',
+          stroke: 'var(--purple-700)',
+          'stroke-width': 1.4,
+          'stroke-dasharray': '3 2',
+        }));
+        // Tooltip lives on a dedicated wrapper <g> so hover anywhere
+        // over the badge surface (ring background + text) triggers it.
+        const badgeGroup = svgEl('g', { class: 'boolean-assumed-marker' });
+        const tip = svgEl('title');
+        tip.textContent =
+          'Boolean-rewrite root: this gate is the head of a '
+          + 'subcircuit produced under provsql.boolean_provenance, '
+          + 'and is to be interpreted as a Boolean function. Only '
+          + 'semirings compatible with Boolean functions (Boolean, '
+          + 'BoolExpr, Formula, Interval-Union) are sound to '
+          + 'evaluate here ; others refuse.';
+        badgeGroup.appendChild(tip);
+        const ba = svgEl('circle', {
+          class: 'boolean-assumed-badge',
+          cx: -16, cy: -18, r: 7,
+          fill: 'var(--purple-700)',
+          stroke: 'var(--purple-900)',
+        });
+        const bt = svgEl('text', {
+          x: -16, y: -18,
+          'text-anchor': 'middle',
+          'dominant-baseline': 'central',
+          'font-size': 9,
+          'font-weight': '700',
+          fill: 'var(--fg-on-dark)',
+        });
+        bt.textContent = 'B';
+        badgeGroup.appendChild(ba);
+        badgeGroup.appendChild(bt);
+        g.appendChild(badgeGroup);
+      }
       const label = svgEl('text', { class: 'node-label', y: -2 });
       label.textContent = n.label || n.type[0];
       g.appendChild(label);
@@ -1178,56 +1227,78 @@
   const _INTERVAL_BASE_TYPES = [
     'tstzmultirange', 'nummultirange', 'int4multirange',
   ];
+  // `booleanCompatible`: mirrors the C++ per-semiring
+  // `compatibleWithBooleanRewrite()` predicate (see src/semiring/*.h)
+  // and Python's `_COMPILED_SEMIRINGS[*].boolean_rewrite_compatible`.
+  // When the eval target carries `boolean_assumed = true` (every
+  // descendant of an elided gate_assumed_boolean wrapper), the
+  // dropdown hides every compiled option whose `booleanCompatible`
+  // is false.  Drift detection lives in
+  // `test/sql/safe_query_semiring.sql` ; if the C++ side ever flips a
+  // value, that test fails and both this dict and the Python mirror
+  // must be updated.
   const _COMPILED_REGISTRY = {
     // Boolean.
     'boolexpr':    { label: 'Boolean expression',        group: 'bool',
                      needsMapping: false, types: null,                hint: null,
-                     optionalMapping: true },
+                     optionalMapping: true, booleanCompatible: true },
     'boolean':     { label: 'Boolean',                    group: 'bool',
-                     needsMapping: true,  types: ['boolean'],         hint: 'Expects boolean values.' },
+                     needsMapping: true,  types: ['boolean'],         hint: 'Expects boolean values.',
+                     booleanCompatible: true },
     // Lineage. `formula` is the canonical free-polynomial expression
     // (Green-Karvounarakis-Tannen) as a circuit pretty-print; `how` is
     // the same algebra collapsed to canonical sum-of-products form,
     // making it suitable for provenance-equivalence checks across
     // syntactically different circuits.
     'formula':     { label: 'Formula',                    group: 'lin',
-                     needsMapping: true,  types: null,                hint: null },
+                     needsMapping: true,  types: null,                hint: null,
+                     booleanCompatible: true },
     'how':         { label: 'How-provenance',             group: 'lin',
                      needsMapping: true,  types: null,
-                     hint: 'Canonical N[X] polynomial; equal circuits collapse to the same string.' },
+                     hint: 'Canonical N[X] polynomial; equal circuits collapse to the same string.',
+                     booleanCompatible: false },
     'why':         { label: 'Why-provenance',             group: 'lin',
-                     needsMapping: true,  types: null,                hint: null },
+                     needsMapping: true,  types: null,                hint: null,
+                     booleanCompatible: false },
     'which':       { label: 'Which-provenance',          group: 'lin',
-                     needsMapping: true,  types: null,                hint: null },
+                     needsMapping: true,  types: null,                hint: null,
+                     booleanCompatible: false },
     // Numeric / scoring. The [0, 1] constraint for Viterbi / Łukasiewicz
     // can't be enforced at type level (no PG type for "numeric in [0, 1]")
     // so the hint flags it; the kernel itself doesn't reject out-of-range
     // values, it just yields nonsense.
     'counting':    { label: 'Counting',                   group: 'num',
-                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values.' },
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values.',
+                     booleanCompatible: false },
     'tropical':    { label: 'Tropical (min-plus)',        group: 'num',
-                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric (cost) values.' },
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric (cost) values.',
+                     booleanCompatible: false },
     'viterbi':     { label: 'Viterbi (max-times)',        group: 'num',
-                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].' },
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].',
+                     booleanCompatible: false },
     'lukasiewicz': { label: 'Łukasiewicz (numeric fuzzy)', group: 'num',
-                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].' },
+                     needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].',
+                     booleanCompatible: false },
     // Intervals. One UI option, three kernels: the backend picks
     // sr_temporal / sr_interval_num / sr_interval_int from the mapping's
     // multirange type. PG14+ because every multirange type was added in 14.
     'interval-union': { label: 'Interval union (multirange)', group: 'iv',
                         needsMapping: true,  types: _INTERVAL_BASE_TYPES,
                         minPg: 140000,
-                        hint: 'Multirange-valued (PostgreSQL 14+); selects sr_temporal / sr_interval_num / sr_interval_int by mapping type.' },
+                        hint: 'Multirange-valued (PostgreSQL 14+); selects sr_temporal / sr_interval_num / sr_interval_int by mapping type.',
+                        booleanCompatible: true },
     // User-enum carrier. The bottom and top come from the enum's
     // pg_enum.enumsortorder; the kernel is polymorphic over any
     // user-defined enum, so the picker filters by `is_enum` rather
     // than a fixed type list.
     'minmax':      { label: 'Min-max (security shape)',   group: 'enum',
                      needsMapping: true,  types: null,    acceptsEnum: true,
-                     hint: 'Expects a user-defined enum carrier; alternatives combine to enum-min, joins to enum-max.' },
+                     hint: 'Expects a user-defined enum carrier; alternatives combine to enum-min, joins to enum-max.',
+                     booleanCompatible: false },
     'maxmin':      { label: 'Max-min (enum fuzzy / trust)', group: 'enum',
                      needsMapping: true,  types: null,    acceptsEnum: true,
-                     hint: 'Expects a user-defined enum carrier; alternatives combine to enum-max, joins to enum-min.' },
+                     hint: 'Expects a user-defined enum carrier; alternatives combine to enum-max, joins to enum-min.',
+                     booleanCompatible: false },
   };
   const _COMPILED_GROUPS = [
     ['bool', 'Boolean'],
@@ -1287,11 +1358,20 @@
   // re-rooted; the strip stays runnable but the filter falls back to
   // showing every option so the user isn't locked out).
   function currentTargetGateType() {
+    return _currentTargetNode()?.type ?? null;
+  }
+  // Whether the current eval target carries a boolean_assumed marker
+  // (the immediate child of an elided gate_assumed_boolean wrapper).
+  // Drives the eval-strip dropdown filter so non-Boolean-compatible
+  // compiled semirings are hidden when the target is Boolean-tainted.
+  function currentTargetBooleanAssumed() {
+    return !!(_currentTargetNode()?.boolean_assumed);
+  }
+  function _currentTargetNode() {
     if (!state.scene || !state.scene.nodes) return null;
     const targetId = state.pinnedNode || state.scene.root;
     if (!targetId) return null;
-    const node = state.scene.nodes.find(n => n.id === targetId);
-    return node ? node.type : null;
+    return state.scene.nodes.find(n => n.id === targetId) || null;
   }
 
   // PG type names psycopg surfaces as either JS numbers (smallints, ints,
@@ -1463,6 +1543,16 @@
       // Otherwise, scalar gates get the scalar menu, all other gates
       // get the Boolean menu.
       const isScalar = gateType != null && _SCALAR_GATE_TYPES.has(gateType);
+      // boolean_assumed targets sit under (the elided shadow of) a
+      // gate_assumed_boolean wrapper. Only semirings with
+      // booleanCompatible=true in the registry are sound to evaluate
+      // there ; the C++ evaluator refuses on the others. We hide the
+      // unsound ones so the user can't pick what's about to error
+      // out. Probability / prov-xml / custom semirings stay : the
+      // first factors through Boolean, the second only serialises,
+      // and custom wrappers run on the SQL side where the user is
+      // assumed to know what their kernel does.
+      const booleanOnly = !isScalar && currentTargetBooleanAssumed();
       let firstVisible = null;
       for (const opt of sel.querySelectorAll('option')) {
         let hide;
@@ -1474,6 +1564,10 @@
           hide = !_SCALAR_TARGET_OPTIONS.has(opt.value);
         } else {
           hide = _SCALAR_ONLY_OPTIONS.has(opt.value);
+        }
+        if (!hide && booleanOnly) {
+          const spec = _COMPILED_REGISTRY[opt.value];
+          if (spec && spec.booleanCompatible === false) hide = true;
         }
         // PG-version gating on compiled semirings (set by
         // syncCompiledSemiringAvailability) wins: if the option was

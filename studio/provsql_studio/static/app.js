@@ -1154,8 +1154,40 @@
           // table), but tagging it as both is noisy. Show only "mapping".
           const showProv = r.has_provenance && !r.is_mapping;
           const provCls   = showProv ? ' wp-schema__rel--prov' : '';
+          // The PROV badge is split into PROV-TID / PROV-BID / PROV-OPAQUE
+          // when the per-relation metadata is known (1.6.0+). Older
+          // schemas leave `prov_kind` null and we fall back to a bare
+          // "prov". The qualified form is discreet on purpose : it
+          // matters most for probabilistic query evaluation (TID =
+          // independent leaves, BID = block-correlated) but is
+          // meaningful in other settings too. OPAQUE warns the user
+          // that the safe-query rewriter will refuse on the table.
+          let provLabel = 'prov';
+          let provTip = 'Provenance-tracked (provsql uuid column)';
+          let provKindCls = '';
+          if (r.prov_kind === 'tid') {
+            provLabel = 'prov-tid';
+            provTip   = 'Provenance-tracked, independent leaves (TID): '
+                      + 'one independent random variable per row, '
+                      + 'standard probabilistic semantics.';
+            provKindCls = ' wp-schema__rel-prov--tid';
+          } else if (r.prov_kind === 'bid') {
+            provLabel = 'prov-bid';
+            provTip   = 'Provenance-tracked, block-correlated (BID): '
+                      + 'rows sharing the same block key are mutually '
+                      + 'exclusive (set via repair_key).';
+            provKindCls = ' wp-schema__rel-prov--bid';
+          } else if (r.prov_kind === 'opaque') {
+            provLabel = 'prov-opaque';
+            provTip   = 'Provenance-tracked, opaque tokens: the table '
+                      + 'carries user-supplied provsql values (or '
+                      + 'shared tokens across rows), so the safe-query '
+                      + 'rewriter refuses to fire on it.';
+            provKindCls = ' wp-schema__rel-prov--opaque';
+          }
           const provBadge = showProv
-            ? `<span class="wp-schema__rel-prov" title="Provenance-tracked (provsql uuid column)">prov</span>`
+            ? `<span class="wp-schema__rel-prov${provKindCls}" `
+              + `title="${escapeAttr(provTip)}">${provLabel}</span>`
             : '';
           const mapBadge = r.is_mapping
             ? `<span class="wp-schema__rel-map" title="Provenance mapping (value + provenance uuid columns)">mapping</span>`
@@ -1333,35 +1365,38 @@
   }
 
   function setupGucToggles() {
-    const wp = document.getElementById('opt-where-prov');
+    const fs = document.getElementById('prov-mode-fieldset');
     const up = document.getElementById('opt-update-prov');
-    if (!wp || !up) return;
+    if (!fs || !up) return;
+    const radios = fs.querySelectorAll('input[name="prov-mode"]');
 
-    // Toggle states persist across mode switches via sessionStorage.
-    // where_provenance: the stored value is the user's circuit-mode choice.
-    // Where mode forces the displayed state to "on" but never overwrites the
-    // stored value, so circuit→where→circuit round-trips preserve the user's
-    // pick. update_provenance: freely toggleable everywhere; persists as-is.
-    const savedWhere  = sessionStorage.getItem('ps.opt.whereProv') === '1';
+    // Persisted across mode switches. The stored value is the user's
+    // last *circuit-mode* pick; Where UI mode locks the selector to
+    // `where` but does not overwrite the stored value, so a
+    // circuit→where→circuit round-trip preserves the user's pick.
+    // `boolean`/`semiring`/`where`; default `semiring`.
+    const savedMode = sessionStorage.getItem('ps.opt.provMode') || 'semiring';
     const savedUpdate = sessionStorage.getItem('ps.opt.updateProv') === '1';
 
+    const setMode = (m) => {
+      radios.forEach((r) => { r.checked = (r.value === m); });
+    };
+
     if (mode === 'where') {
-      wp.checked = true;
-      wp.disabled = true;
-      const wrap = document.getElementById('toggle-where-wrap');
-      wrap.classList.add('is-locked');
-      wrap.title = 'where_provenance is forced on in Where mode (the wrap requires it)';
+      setMode('where');
+      fs.classList.add('is-locked');
+      fs.title = 'Where UI mode requires where-provenance (the cell-highlight wrap depends on it). '
+               + 'Switch to Circuit mode to pick Boolean or Semiring.';
+      radios.forEach((r) => { r.disabled = true; });
     } else {
-      wp.checked = savedWhere;
+      setMode(savedMode === 'where' || savedMode === 'boolean' ? savedMode : 'semiring');
     }
     up.checked = savedUpdate;
 
-    wp.addEventListener('change', () => {
-      // Don't persist while locked: the displayed `on` is mode-forced, not a
-      // user choice we want to remember on top of their circuit-mode pick.
-      if (mode !== 'where') {
-        sessionStorage.setItem('ps.opt.whereProv', wp.checked ? '1' : '0');
-      }
+    fs.addEventListener('change', () => {
+      if (mode === 'where') return;
+      const picked = fs.querySelector('input[name="prov-mode"]:checked');
+      if (picked) sessionStorage.setItem('ps.opt.provMode', picked.value);
     });
     up.addEventListener('change', () => {
       sessionStorage.setItem('ps.opt.updateProv', up.checked ? '1' : '0');
@@ -1393,12 +1428,12 @@
     // was minted by a where-provenance wrap, so the same query must run
     // with where_provenance on here for the resulting circuit to contain
     // the project/eq gates the user is trying to inspect. Force the
-    // toggle on (the user can untick it for follow-up runs); the change
-    // is programmatic so it doesn't fire `change` and doesn't get
-    // persisted to sessionStorage.
+    // selector to the `where` flavour (the user can switch it back for
+    // follow-up runs); the radio flip is programmatic so it does not
+    // fire `change` and does not get persisted to sessionStorage.
     if (carry) {
-      const wp = document.getElementById('opt-where-prov');
-      if (wp) wp.checked = true;
+      const r = document.querySelector('input[name="prov-mode"][value="where"]');
+      if (r) r.checked = true;
     }
     // Load circuit.js so its init() can wire the toolbar buttons (zoom,
     // show-uuids). loadCircuit() also calls this, but only
@@ -1878,8 +1913,8 @@ async function runQuery(ev) {
     if (runBtn)    runBtn.hidden    = true;
   }, 100);
 
-  const wpEl = document.getElementById('opt-where-prov');
   const upEl = document.getElementById('opt-update-prov');
+  const provModeEl = document.querySelector('input[name="prov-mode"]:checked');
   let resp;
   try {
     resp = await fetch('/api/exec', {
@@ -1888,7 +1923,7 @@ async function runQuery(ev) {
       body: JSON.stringify({
         sql: sqlText,
         mode: env.mode,
-        where_provenance: wpEl ? wpEl.checked : (env.mode === 'where'),
+        prov_mode: env.mode === 'where' ? 'where' : (provModeEl ? provModeEl.value : 'semiring'),
         update_provenance: upEl ? upEl.checked : false,
         request_id: requestId,
       }),

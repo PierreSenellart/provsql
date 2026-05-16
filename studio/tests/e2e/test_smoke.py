@@ -140,18 +140,53 @@ def test_schema_panel_column_click_prefills_query(
     )
 
 
-def test_circuit_where_provenance_toggle_is_interactive(
+def test_circuit_prov_mode_selector_is_interactive(
     page: Page, studio_url: str
 ) -> None:
-    """In Circuit mode, the per-query `where_provenance` toggle is free
-    (not locked, unlike Where mode). Toggling it on must not break the
-    next query."""
+    """In Circuit mode, the per-query provenance-flavour selector is free
+    (not locked, unlike Where mode). Switching to the `where` flavour
+    must not break the next query.  The radio inputs are visually
+    hidden (clip-rect trick) so the segmented control can be painted
+    on the wrapping label ; click the label, not the input."""
     page.goto(studio_url + "/circuit")
     expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
 
-    toggle = page.locator("#opt-where-prov")
-    expect(toggle).not_to_be_checked()
-    toggle.check()
-    expect(toggle).to_be_checked()
+    fs = page.locator("#prov-mode-fieldset")
+    expect(fs).not_to_have_class("is-locked")
+    where_radio = page.locator('input[name="prov-mode"][value="where"]')
+    page.locator('label[data-mode="where"]').click()
+    expect(where_radio).to_be_checked()
 
     _run_query_and_wait(page, "SELECT name FROM personnel LIMIT 3;", 3)
+
+
+def test_circuit_prov_mode_defaults_to_semiring(
+    page: Page, studio_url: str
+) -> None:
+    """The three-way selector ships with Semiring as the default pick
+    on Circuit mode : it matches the pre-rewriter behaviour, so
+    existing users see no functional change until they opt in."""
+    page.goto(studio_url + "/circuit")
+    expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
+    semiring_radio = page.locator('input[name="prov-mode"][value="semiring"]')
+    expect(semiring_radio).to_be_checked()
+
+
+def test_where_mode_locks_prov_mode_to_where(
+    page: Page, studio_url: str
+) -> None:
+    """The Where UI mode requires where-provenance (the cell-highlight
+    wrap depends on it).  The selector must be marked locked, the
+    Where segment must be the active pick, and the radio inputs must
+    be disabled so the user can't override the lock from the keyboard.
+    """
+    page.goto(studio_url + "/where")
+    expect(page.locator("body")).to_have_class("mode-where", timeout=5000)
+
+    fs = page.locator("#prov-mode-fieldset")
+    expect(fs).to_have_class("wp-prov-mode is-locked")
+    where_radio = page.locator('input[name="prov-mode"][value="where"]')
+    expect(where_radio).to_be_checked()
+    expect(where_radio).to_be_disabled()
+    boolean_radio = page.locator('input[name="prov-mode"][value="boolean"]')
+    expect(boolean_radio).to_be_disabled()

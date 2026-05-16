@@ -320,7 +320,7 @@ def test_where_provenance_toggle_survives_auto_prepare(client):
         resp = client.post("/api/exec", json={
             "sql": sql,
             "mode": "circuit",
-            "where_provenance": wp,
+            "prov_mode": "where" if wp else "semiring",
         })
         assert resp.status_code == 200, resp.data
         final = resp.get_json()["blocks"][-1]

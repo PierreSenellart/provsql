@@ -317,7 +317,18 @@ SELECT
           AND a.attname = 'provenance'
           AND NOT a.attisdropped
           AND a.atttypid = 'uuid'::regtype
-    )) AS is_mapping
+    )) AS is_mapping,
+    -- Per-relation provenance-tracking metadata recorded by
+    -- add_provenance / repair_key / provenance_guard. NULL when the
+    -- table is not tracked or the database predates the per-table
+    -- store (1.5.0 and earlier). 'tid' = independent leaves,
+    -- 'bid' = block-correlated, 'opaque' = the user supplied custom
+    -- provsql values so the safe-query rewriter must refuse the
+    -- table.  Wrapped in a sub-SELECT so the missing-function path
+    -- (1.5.0 schema before the upgrade has run) degrades to NULL
+    -- instead of erroring the whole query.
+    (SELECT ti.kind
+     FROM provsql.get_table_info(c.oid) ti) AS prov_kind
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -344,9 +355,22 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
     out: list[dict] = []
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(_SCHEMA_QUERY)
+            try:
+                cur.execute(_SCHEMA_QUERY)
+            except psycopg.errors.UndefinedFunction:
+                # `provsql.get_table_info` was added in 1.6.0; on pre-1.6.0
+                # schemas drop the LEFT JOIN and just leave `prov_kind` NULL.
+                conn.rollback()
+                cur.execute(
+                    _SCHEMA_QUERY.replace(
+                        "(SELECT ti.kind\n"
+                        "     FROM provsql.get_table_info(c.oid) ti) AS prov_kind",
+                        "NULL::text AS prov_kind",
+                    )
+                )
             rows = cur.fetchall()
-        for schema, table, kind, cols, types, has_prov, is_mapping in rows:
+        for (schema, table, kind, cols, types,
+             has_prov, is_mapping, prov_kind) in rows:
             propagates = bool(has_prov) or (
                 kind in ("view", "matview")
                 and _view_propagates_provenance(conn, schema, table)
@@ -361,6 +385,11 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                 ],
                 "has_provenance": propagates,
                 "is_mapping": bool(is_mapping),
+                # 'tid' / 'bid' / 'opaque' / None ; surfaced as a
+                # discreet PROV-TID / PROV-BID / PROV-OPAQUE badge in
+                # the schema panel so the user can tell at a glance
+                # which probability-evaluation semantics apply.
+                "prov_kind": prov_kind,
             })
     return out
 
@@ -725,26 +754,48 @@ _INTERVAL_KERNELS = {
     "nummultirange":  "sr_interval_num",
     "int4multirange": "sr_interval_int",
 }
+# `boolean_rewrite_compatible`: mirrors the C++
+# `semiring::*::compatibleWithBooleanRewrite()` predicate (see
+# src/semiring/*.h). When the root of the circuit being evaluated is a
+# `gate_assumed_boolean` (produced by the safe-query rewriter under
+# `provsql.boolean_provenance = on`), `GenericCircuit::evaluate` refuses
+# any semiring whose predicate is false. Studio uses this flag to
+# narrow the eval-strip dropdown in that case so users do not pick a
+# semiring that will throw. Drift detection is handled by
+# `test/sql/safe_query_semiring.sql` (which exercises one tagged token
+# against each semiring) ; if the C++ side ever flips a value, that
+# test will fail and this dict must be updated.
 _COMPILED_SEMIRINGS: dict[str, dict] = {
     # Boolean & symbolic.
-    "boolexpr": {"func": "sr_boolexpr", "needs_mapping": False, "types": None},
-    "boolean":  {"func": "sr_boolean",  "types": ("boolean",)},
-    "formula":  {"func": "sr_formula",  "types": None},
+    "boolexpr": {"func": "sr_boolexpr", "needs_mapping": False, "types": None,
+                 "boolean_rewrite_compatible": True},
+    "boolean":  {"func": "sr_boolean",  "types": ("boolean",),
+                 "boolean_rewrite_compatible": True},
+    "formula":  {"func": "sr_formula",  "types": None,
+                 "boolean_rewrite_compatible": True},
     # Lineage.
-    "why":      {"func": "sr_why",      "types": None},
-    "which":    {"func": "sr_which",    "types": None},
-    "how":      {"func": "sr_how",      "types": None},
+    "why":      {"func": "sr_why",      "types": None,
+                 "boolean_rewrite_compatible": False},
+    "which":    {"func": "sr_which",    "types": None,
+                 "boolean_rewrite_compatible": False},
+    "how":      {"func": "sr_how",      "types": None,
+                 "boolean_rewrite_compatible": False},
     # Numeric / scoring.
-    "counting":    {"func": "sr_counting",    "types": _NUMERIC_TYPES},
-    "tropical":    {"func": "sr_tropical",    "types": _NUMERIC_TYPES},
-    "viterbi":     {"func": "sr_viterbi",     "types": _NUMERIC_TYPES},
-    "lukasiewicz": {"func": "sr_lukasiewicz", "types": _NUMERIC_TYPES},
+    "counting":    {"func": "sr_counting",    "types": _NUMERIC_TYPES,
+                    "boolean_rewrite_compatible": False},
+    "tropical":    {"func": "sr_tropical",    "types": _NUMERIC_TYPES,
+                    "boolean_rewrite_compatible": False},
+    "viterbi":     {"func": "sr_viterbi",     "types": _NUMERIC_TYPES,
+                    "boolean_rewrite_compatible": False},
+    "lukasiewicz": {"func": "sr_lukasiewicz", "types": _NUMERIC_TYPES,
+                    "boolean_rewrite_compatible": False},
     # Interval-valued (PG14+ multirange family). `func` is None: the
     # kernel is picked at evaluation time from the mapping's value type.
     "interval-union": {
         "func": None,
         "types": tuple(_INTERVAL_KERNELS.keys()),
         "min_pg": 140000,
+        "boolean_rewrite_compatible": True,
     },
     # User-enum carrier. `accepts_enum: True` filters to mappings whose
     # `value` column is any user-defined enum (typtype = 'e'); the
@@ -752,8 +803,10 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
     # third arg of `sr_minmax`/`sr_maxmin` is a sample value of that
     # enum, used only for type inference; the dispatch synthesises one
     # via `enum_first(NULL::<base_type>)`.
-    "minmax": {"func": "sr_minmax", "accepts_enum": True},
-    "maxmin": {"func": "sr_maxmin", "accepts_enum": True},
+    "minmax": {"func": "sr_minmax", "accepts_enum": True,
+               "boolean_rewrite_compatible": False},
+    "maxmin": {"func": "sr_maxmin", "accepts_enum": True,
+               "boolean_rewrite_compatible": False},
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
@@ -1431,6 +1484,7 @@ def exec_batch(
     statement_timeout: str,
     where_provenance: bool,
     update_provenance: bool = False,
+    boolean_provenance: bool = False,
     wrap_last: bool,
     extra_gucs: dict[str, str] | None = None,
     on_pid=None,
@@ -1555,6 +1609,10 @@ def exec_batch(
                 cur.execute(
                     "SET LOCAL provsql.update_provenance = "
                     + ("on" if update_provenance else "off")
+                )
+                cur.execute(
+                    "SET LOCAL provsql.boolean_provenance = "
+                    + ("on" if boolean_provenance else "off")
                 )
                 # provsql.tool_search_path: prepended to $PATH when
                 # provsql spawns external tools (d4 / c2d / weightmc /
@@ -1851,6 +1909,7 @@ def _user_error_result(
 _TOGGLE_GUCS = {
     "provsql.where_provenance",
     "provsql.update_provenance",
+    "provsql.boolean_provenance",
 }
 _PANEL_GUCS = {
     "provsql.active",
