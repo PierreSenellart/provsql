@@ -1,0 +1,45 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|root_type|nb_children
+1|assumed_boolean|1
+2|assumed_boolean|1
+(2 rows)
+x|prob
+1|0.200000
+2|0.200000
+(2 rows)
+step3
+compatible semirings ok
+(1 row)
+step4
+incompatible semirings rejected
+(1 row)
+remove_provenance
+
+(1 row)
+x|root_type
+1|times
+2|times
+(2 rows)
+x|sr_how
+1|a1
+2|a2
+(2 rows)
+x|sr_counting
+1|0
+2|0
+(2 rows)

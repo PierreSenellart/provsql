@@ -87,6 +87,27 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     // Where-provenance gates, ignored
     return evaluate<S>(getWires(g)[0], provenance_mapping, semiring);
 
+  case gate_assumed_boolean:
+    /* Structural marker: the wrapped sub-circuit was computed under a
+     * Boolean-provenance assumption (e.g. the safe-query rewrite
+     * collapses derivation multiplicities into a single Boolean
+     * witness).  Identity for semirings whose evaluation factors
+     * through a homomorphism from Boolean functions; fatal for the
+     * rest, since otherwise we would silently return a value the
+     * semiring's semantics does not justify. */
+    if(!semiring.compatibleWithBooleanRewrite())
+      throw CircuitException(
+              "The requested semiring does not admit a homomorphism "
+              "from Boolean functions; the wrapped sub-circuit was "
+              "computed under a Boolean-provenance assumption "
+              "(typically by the safe-query rewrite, "
+              "provsql.boolean_provenance = on) and the evaluation is "
+              "unsound under this semiring.  Re-run the query with "
+              "provsql.boolean_provenance = off, or pick a "
+              "Boolean-compatible semiring (boolean, boolexpr, "
+              "formula, ...).");
+    return evaluate<S>(getWires(g)[0], provenance_mapping, semiring);
+
   case gate_cmp:
   {
     bool ok;

@@ -57,6 +57,7 @@ const char *gate_type_name[] = {
   "rv",
   "arith",
   "mixture",
+  "assumed_boolean",
   "invalid"
 };
 
@@ -434,6 +435,16 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD =
     get_provsql_func_oid("rv_aggregate_semimod");
 
+  /* assume_boolean is installed by the 1.6.0 upgrade script.  Treat
+   * its absence as a soft signal: on older schemas the safe-query
+   * rewriter (gated behind provsql.boolean_provenance) refuses to
+   * fire because it cannot mark the per-row root with a
+   * gate_assumed_boolean for downstream semiring-compatibility
+   * enforcement.  Optional lookup matches the pattern used above for
+   * rv_aggregate_semimod. */
+  constants.OID_FUNCTION_ASSUME_BOOLEAN =
+    get_provsql_func_oid("assume_boolean");
+
   /* random_variable_{eq,ne,le,lt,ge,gt} -- order matches the
    * ComparisonOperator enum in src/Aggregation.h (EQ=0, NE=1, LE=2,
    * LT=3, GE=4, GT=5). */
@@ -493,6 +504,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID_OPTIONAL(rv);
   GET_GATE_TYPE_OID_OPTIONAL(arith);
   GET_GATE_TYPE_OID_OPTIONAL(mixture);
+  GET_GATE_TYPE_OID_OPTIONAL(assumed_boolean);
 
   constants.ok=true;
 

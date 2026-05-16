@@ -106,6 +106,21 @@ value_type delta(value_type x) const override {
 }
 
 /**
+ * @brief No semiring homomorphism @c BoolFunc(Y) →+* Why exists, so
+ *        the safe-query Boolean rewrite is unsound under
+ *        why-provenance.  (Why tracks set-of-witness-sets per
+ *        derivation; the read-once rewrite collapses witnesses in
+ *        general.)  Inherits the @c false default from @c Semiring;
+ *        this override exists for documentation.
+ *
+ * Lean: @c Provenance.Semirings.Why.no_hom_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/Why.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return false;
+}
+
+/**
  * @brief Parse a leaf value into a why-provenance set-of-sets.
  *
  * Accepted input formats (round-trip with @c to_text):

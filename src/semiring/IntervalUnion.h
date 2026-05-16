@@ -111,6 +111,17 @@ virtual value_type delta(value_type x) const override
 virtual bool absorptive() const override {
   return true;
 }
+/**
+ * @brief A semiring homomorphism @c BoolFunc(Y) →+* IntervalUnion exists
+ *        (map each variable to a fixed nonempty interval), so the
+ *        safe-query Boolean rewrite preserves evaluation results.
+ *
+ * Lean: @c Provenance.Semirings.IntervalUnion.homomorphism_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/IntervalUnion.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return true;
+}
 
 /**
  * @brief Parse a multirange text literal to a Datum.

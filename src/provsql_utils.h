@@ -71,6 +71,7 @@ typedef enum gate_type {
   gate_rv,       ///< Continuous random-variable leaf (extra encodes distribution)
   gate_arith,    ///< n-ary arithmetic gate over scalar-valued children (info1 holds operator tag)
   gate_mixture,  ///< Probabilistic mixture: three wires [p_token (gate_input Bernoulli), x_token, y_token]; samples x when p is true, y otherwise
+  gate_assumed_boolean, ///< Structural marker over a single child whose sub-circuit was computed under a Boolean-provenance assumption (e.g. the safe-query rewrite); transparent (identity) for Boolean-compatible evaluators, fatal error for the rest, kept as an explicit node in PROV-XML export
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
@@ -134,6 +135,16 @@ typedef struct constants_t {
   Oid OID_FUNCTION_AGG_TOKEN_UUID; ///< OID of the agg_token_uuid FUNCTION
   Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
+  /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.
+   *
+   *  Installed by the @c 1.5.0--1.6.0 upgrade script.  Wraps its child
+   *  in a fresh @c gate_assumed_boolean and returns the wrapper's UUID.
+   *  When @c InvalidOid the safe-query rewriter (and any other
+   *  Boolean-only rewrite that needs the marker) is effectively
+   *  disabled even if @c provsql.boolean_provenance is on: the
+   *  rewriter refuses to produce unmarked roots on a schema that
+   *  cannot enforce the semiring-compatibility check. */
+  Oid OID_FUNCTION_ASSUME_BOOLEAN;
   /** OIDs of the @c random_variable_{eq,ne,le,lt,ge,gt} comparison
    * procedure functions, indexed by the @c ComparisonOperator enum
    * (@c EQ=0, @c NE=1, @c LE=2, @c LT=3, @c GE=4, @c GT=5; matches the

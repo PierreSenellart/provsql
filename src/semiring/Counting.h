@@ -61,6 +61,21 @@ virtual value_type delta(value_type x) const override
 {
   return x!=0 ? 1 : 0;
 }
+/**
+ * @brief No semiring homomorphism @c BoolFunc(X) →+* ℕ exists: any
+ *        such map would force @c 1 + a = 1 in ℕ (from @c var + 1 = 1
+ *        in @c BoolFunc), contradicting the non-absorptivity of ℕ.
+ *        The safe-query Boolean rewrite is therefore unsound under
+ *        the counting semiring (read-once factoring loses derivation
+ *        multiplicities).  Inherits the @c false default from
+ *        @c Semiring; this override exists for documentation.
+ *
+ * Lean: @c Provenance.Semirings.Nat.no_hom_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/Nat.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return false;
+}
 value_type parse_leaf(const char *v) const {
   return atoi(v);
 }

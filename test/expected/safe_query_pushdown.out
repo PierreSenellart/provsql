@@ -32,8 +32,8 @@ remove_provenance
 
 (1 row)
 x|root|root_nchildren
-1|plus|2
-2|times|2
+1|assumed_boolean|1
+2|assumed_boolean|1
 (2 rows)
 add_provenance
 

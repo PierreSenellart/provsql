@@ -146,6 +146,16 @@ bool Sampler::evalBool(gate_t g)
         throw CircuitException("gate_delta must have exactly one child");
       result = evalBool(wires[0]);
       break;
+    case gate_assumed_boolean:
+      // Structural Boolean-rewrite marker: identity on the Boolean
+      // semiring, so the sampled truth value is the wrapped child's.
+      // The marker exists to refuse non-Boolean-compat evaluation; MC
+      // sampling for probability is always Boolean-compat.
+      if(wires.size() != 1)
+        throw CircuitException(
+                "gate_assumed_boolean must have exactly one child");
+      result = evalBool(wires[0]);
+      break;
     default:
       throw CircuitException(
               "Unsupported gate type in Boolean evaluation: " +

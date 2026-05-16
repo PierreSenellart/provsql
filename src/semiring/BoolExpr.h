@@ -120,6 +120,18 @@ value_type delta(value_type x) const override {
 virtual bool absorptive() const override {
   return true;
 }
+/**
+ * @brief @c BoolExpr is the free Boolean-circuit construction; the
+ *        evaluation map to @c Bool at any valuation is an m-semiring
+ *        homomorphism, so the safe-query Boolean rewrite preserves
+ *        semantics.  Lean: @c BoolFunc is the algebraic counterpart;
+ *        the relevant theorems live in
+ *        @c Provenance.Semirings.BoolFunc and
+ *        @c Provenance.Semirings.Bool.homomorphism_to_BoolFunc.
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return true;
+}
 
 };
 }

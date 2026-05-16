@@ -73,6 +73,19 @@ virtual value_type delta(value_type x) const override
 virtual bool absorptive() const override {
   return true;
 }
+/**
+ * @brief No semiring homomorphism @c BoolFunc(Y) →+* Viterbi exists
+ *        (real multiplication is not idempotent), so the safe-query
+ *        Boolean rewrite is unsound under the Viterbi semiring.
+ *        Inherits the @c false default from @c Semiring; this
+ *        override exists for documentation.
+ *
+ * Lean: @c Provenance.Semirings.Viterbi.no_hom_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/Viterbi.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return false;
+}
 value_type parse_leaf(const char *v) const {
   return atof(v);
 }

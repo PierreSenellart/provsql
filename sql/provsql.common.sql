@@ -43,7 +43,14 @@ CREATE TYPE provenance_gate AS
     'update',  -- Update operation
     'rv',      -- Continuous random-variable leaf
     'arith',   -- n-ary arithmetic gate over scalar-valued children
-    'mixture'  -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
+    'mixture', -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
+    'assumed_boolean' -- Structural marker over a single child: the
+                      -- wrapped sub-circuit was computed under a
+                      -- Boolean-provenance assumption (e.g. the safe-
+                      -- query rewrite).  Transparent for Boolean-
+                      -- compatible evaluators, fatal error for the
+                      -- rest, rendered as an explicit element in
+                      -- PROV-XML export.
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -121,6 +128,40 @@ CREATE OR REPLACE FUNCTION get_infos(
   token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
   'provsql','get_infos' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Wrap @p token in a fresh @c gate_assumed_boolean and return
+ *        the wrapper's UUID.
+ *
+ * Public primitive callable from any rewrite that needs to flag a
+ * sub-circuit as having been computed under a Boolean-provenance
+ * assumption (the safe-query rewriter is the first caller; future
+ * Boolean-only simplifications should reuse this).  The wrapper is
+ * transparent for Boolean-compatible evaluators (probability, the
+ * @c sr_boolean / @c sr_boolexpr / @c sr_formula / @c sr_interval_*
+ * family, where-provenance) and raises a @c CircuitException for the
+ * rest.  Always kept as an explicit node in PROV-XML export.
+ *
+ * The wrapper UUID is content-derived via @c uuid_generate_v5 on the
+ * child, so identical children always wrap to the same outer UUID
+ * (and distinct children always wrap to distinct outer UUIDs).
+ * No-op (returns NULL) on a NULL input.
+ */
+CREATE OR REPLACE FUNCTION assume_boolean(token UUID) RETURNS UUID AS
+$$
+DECLARE
+  wrapped uuid;
+BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
+  wrapped := public.uuid_generate_v5(uuid_ns_provsql(),
+                                     concat('assumed_boolean', token));
+  PERFORM create_gate(wrapped, 'assumed_boolean', ARRAY[token]);
+  RETURN wrapped;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
 
 /**
  * @brief Set extra text information on provenance circuit gate

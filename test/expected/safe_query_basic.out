@@ -23,8 +23,8 @@ remove_provenance
 
 (1 row)
 id|root|root_nchildren
-1|times|2
-3|times|2
+1|assumed_boolean|1
+3|assumed_boolean|1
 (2 rows)
 remove_provenance
 

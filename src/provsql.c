@@ -90,7 +90,8 @@ extern void _PG_fini(void);
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed);
+                            bool **removed, bool wrap_root);
+static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 
 /* -------------------------------------------------------------------------
  * Provenance attribute construction
@@ -441,7 +442,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       int old_targetlist_length =
         r->subquery->targetList ? r->subquery->targetList->length : 0;
       Query *new_subquery =
-        process_query(constants, r->subquery, &inner_removed);
+        process_query(constants, r->subquery, &inner_removed, false);
       if (new_subquery != NULL) {
         int i = 0;
         int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
@@ -1495,7 +1496,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
                                         semiring_operation op, int **columns,
-                                        int nbcols) {
+                                        int nbcols, bool wrap_assumed_boolean) {
   Expr *result;
   ListCell *lc_v;
 
@@ -1794,6 +1795,21 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       pfree(fe);
     }
   }
+
+  /* Wrap the finished per-row root in a @c gate_assumed_boolean when
+   * our caller (the safe-query rewrite path in @c process_query) asks
+   * for it.  Wrapping here -- before @c add_to_select and
+   * @c replace_provenance_function_by_expression -- means every
+   * per-row root reference in the final target list carries the
+   * marker uniformly.  Subqueries that this same Query body opens
+   * (per-atom DISTINCT projections inserted by the rewriter) are
+   * handled by their own deeper @c process_query / @c make_provenance_expression
+   * calls with @c wrap_assumed_boolean = false, so the marker sits
+   * only at the outermost root that surfaces as the user-visible
+   * row provenance. */
+  if (wrap_assumed_boolean &&
+      OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN))
+    result = wrap_in_assume_boolean(constants, result);
 
   return result;
 }
@@ -3973,8 +3989,37 @@ static void insert_agg_token_casts(const constants_t *constants, Query *q) {
  * @return  The (possibly restructured) rewritten query, or @c NULL if the
  *          query has no FROM clause and can be skipped.
  */
+/**
+ * @brief Wrap @p expr in a @c provsql.assume_boolean FuncExpr.
+ *
+ * Used by @c make_provenance_expression when its caller (the
+ * safe-query rewrite path in @c process_query) flagged the result
+ * as needing the @c gate_assumed_boolean structural marker.
+ * Wrapping at expression-build time rather than at splice time
+ * means @c add_to_select and
+ * @c replace_provenance_function_by_expression both consume the
+ * already-wrapped expression, so every per-row root occurrence in
+ * the final target list -- the auto-added @c provsql column and
+ * every substituted user-side @c provenance() call -- carries the
+ * wrapper uniformly.
+ */
+static Expr *wrap_in_assume_boolean(const constants_t *constants,
+                                    Expr *expr) {
+  FuncExpr *wrap = makeNode(FuncExpr);
+  wrap->funcid = constants->OID_FUNCTION_ASSUME_BOOLEAN;
+  wrap->funcresulttype = constants->OID_TYPE_UUID;
+  wrap->funcretset = false;
+  wrap->funcvariadic = false;
+  wrap->funcformat = COERCE_EXPLICIT_CALL;
+  wrap->funccollid = InvalidOid;
+  wrap->inputcollid = InvalidOid;
+  wrap->args = list_make1(expr);
+  wrap->location = -1;
+  return (Expr *) wrap;
+}
+
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed) {
+                            bool **removed, bool wrap_root) {
   List *prov_atts;
   bool has_union = false;
   bool has_difference = false;
@@ -4112,24 +4157,32 @@ static Query *process_query(const constants_t *constants, Query *q,
                           "aggregate results not supported");
         }
         q = rewrite_non_all_into_external_group_by(q);
-        return process_query(constants, q, removed);
+        return process_query(constants, q, removed, wrap_root);
       }
     }
 
     if (q->hasAggs) {
       Query *rewritten = rewrite_agg_distinct(q, constants);
       if (rewritten)
-        return process_query(constants, rewritten, removed);
+        return process_query(constants, rewritten, removed, wrap_root);
     }
 
     /* Opt-in safe-query optimisation slot: when on, try to rewrite
      * hierarchical conjunctive queries to a read-once form whose
      * probability is computable in linear time via independent
-     * evaluation.  See try_safe_query_rewrite(). */
-    if (provsql_boolean_provenance) {
+     * evaluation.  See try_safe_query_rewrite().
+     *
+     * The rewriter is gated on the presence of the assume_boolean()
+     * helper (installed by the 1.6.0 upgrade script).  Without it we
+     * cannot wrap the per-row root in a gate_assumed_boolean, which is
+     * what downstream evaluators inspect to refuse unsound evaluation,
+     * so we refuse to rewrite on schemas that still predate the
+     * helper. */
+    if (provsql_boolean_provenance &&
+        OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN)) {
       Query *rewritten = try_safe_query_rewrite(constants, q);
       if (rewritten)
-        return process_query(constants, rewritten, removed);
+        return process_query(constants, rewritten, removed, true);
     }
 
     // get_provenance_attributes will also recursively process subqueries
@@ -4275,7 +4328,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       provenance = make_provenance_expression(
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
-        nbcols);
+        nbcols, wrap_root);
 
       /* Fallback for the rare set-op outer WHERE case: conjoin via
        * provenance_times after the aggregation wrappers.  Correct only
@@ -4385,7 +4438,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   /* Rewrite the source SELECT to carry provenance */
   {
     bool *removed = NULL;
-    Query *new_subquery = process_query(constants, src_rte->subquery, &removed);
+    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false);
     AttrNumber src_provsql_attno = 0;
 
     if (new_subquery == NULL)
@@ -4474,7 +4527,7 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_verbose >= 40)
         begin = clock();
 
-      new_query = process_query(&constants, q, &removed);
+      new_query = process_query(&constants, q, &removed, false);
 
       if (provsql_verbose >= 40)
         provsql_notice("planner time spent=%f",

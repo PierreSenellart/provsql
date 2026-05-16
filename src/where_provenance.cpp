@@ -106,7 +106,11 @@ static string where_provenance_internal
       } else {
         auto id=c.getGate(f);
 
-        if(type == "times") {
+        if(type == "times" || type == "assumed_boolean") {
+          /* assumed_boolean is a single-child wrapper; a single-wire
+           * TIMES is the identity in WhereCircuit semantics (the
+           * Locator-set union of one child is just that child's), so
+           * funnel both through the same case. */
           c.setGate(f, WhereGate::TIMES);
         } else if(type == "plus") {
           c.setGate(f, WhereGate::PLUS);
