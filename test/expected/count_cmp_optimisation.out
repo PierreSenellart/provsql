@@ -1,0 +1,80 @@
+\set ECHO none
+NOTICE:  table "ccmp_off" does not exist, skipping
+NOTICE:  table "ccmp_on" does not exist, skipping
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+count >= 2|Berlin|0.2800|0.2800|0.000000
+count >= 2|New York|0.0200|0.0200|0.000000
+count >= 2|Paris|0.4500|0.4500|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+count > 1|Berlin|0.2800|0.2800|0.000000
+count > 1|New York|0.0200|0.0200|0.000000
+count > 1|Paris|0.4500|0.4500|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+count <= 2|Berlin|0.8200|0.8200|0.000000
+count <= 2|New York|0.2800|0.2800|0.000000
+count <= 2|Paris|0.7700|0.7700|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+count < 3|Berlin|0.8200|0.8200|0.000000
+count < 3|New York|0.2800|0.2800|0.000000
+count < 3|Paris|0.7700|0.7700|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+count = 2|Berlin|0.2800|0.2800|0.000000
+count = 2|New York|0.0200|0.0200|0.000000
+count = 2|Paris|0.3600|0.3600|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+count <> 2|Berlin|0.5400|0.5400|0.000000
+count <> 2|New York|0.2600|0.2600|0.000000
+count <> 2|Paris|0.5000|0.5000|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+multi-cmp (must match off-path)|Berlin|0.8200|0.8200|0.000000
+multi-cmp (must match off-path)|New York|0.2800|0.2800|0.000000
+multi-cmp (must match off-path)|Paris|0.7700|0.7700|0.000000
+(3 rows)

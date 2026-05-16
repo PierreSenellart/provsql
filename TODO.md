@@ -248,15 +248,32 @@ layer cannot use ; these apply to probability evaluation but not to
 the broader Boolean-fold pipeline :
 
 - **Probabilistic closed forms** for symmetric COUNT / SUM
-  thresholds.  When children are i.i.d. Bernoulli leaves and the
-  predicate is `COUNT(*) op c`, the answer is a binomial CDF in
-  O(N).  When children are independent but not i.i.d., a
-  Poisson-binomial CDF DP gives O(N^2).  Both bypass the DNF
-  construction entirely ; slot into `probability_evaluate.cpp` as a
-  pre-pass next to `runAnalyticEvaluator`, not into
-  `pw_from_cmp_gate` (the closed-form value is a probability, not
-  a polynomial, so it produces a Bernoulli `gate_input` leaf and
-  is sound only for the probability path).
+  thresholds, via the
+  `provsql.cmp_probability_evaluation` umbrella GUC (on by default,
+  hidden diagnostic).
+  - `COUNT(*) op c` over distinct `gate_input` leaves : **landed**
+    as `src/CountCmpEvaluator.{h,cpp}`, the Poisson-binomial DP
+    pre-pass slotted in `probability_evaluate.cpp` between
+    `runAnalyticEvaluator` and `getBooleanCircuit`.  Soundness
+    is certified per cmp by requiring `ref_count == 1` on every
+    gate of the chain `K_i -> semimod_i -> gate_agg`, which
+    guarantees the cmp's input leaves do not appear anywhere
+    outside its subtree.  Partial DP dispatched on the smaller
+    side of `C` (lower-tail directly, or upper-tail via inverted
+    Bernoullis) ; total cost per cmp is
+    `O(N x min(C, N - C))`.
+  - `SUM(a) op c` over distinct deterministic-weighted `gate_input`
+    leaves : same shape, replace the binomial recurrence with a
+    weighted-sum DP.  Not yet implemented.
+  - `MIN(a) / MAX(a) op c` : even simpler closed forms (single
+    `plus` over the satisfying singletons under absorptive ;
+    `1 - prod(1-p_i)` over good / `prod p_i` over good for the
+    probability path).  Not yet implemented.
+  All four bypass the DNF construction entirely ; each lives in
+  `probability_evaluate.cpp` as a pre-pass that produces a
+  Bernoulli `gate_input` and is sound only for the probability
+  path.  Future cmp evaluators should gate on the same
+  `provsql.cmp_probability_evaluation` flag.
 - **Compact threshold-function encodings** (sorting / cardinality
   networks) for the `k ≈ N/2` regime where even the absorptive
   minimal-generator DNF is `m × binom(N, m)`.  O(N log^2 N) Boolean

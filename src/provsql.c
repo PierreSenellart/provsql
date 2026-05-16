@@ -80,7 +80,7 @@ int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 mea
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
-bool provsql_count_cmp_optimisation = true; ///< Run the Poisson-binomial pre-pass that resolves HAVING-COUNT gate_cmps to a Bernoulli @c gate_input inside @c probability_evaluate; controlled by the @c provsql.count_cmp_optimisation GUC
+bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_boolean_provenance = false; ///< Opt-in safe-query optimisation: when @c true, rewrites hierarchical conjunctive queries to a read-once form whose probability is computable in linear time. The resulting circuit is tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on it. Controlled by the @c provsql.boolean_provenance GUC.
 
 
@@ -4700,30 +4700,34 @@ void _PG_init(void) {
                            NULL,
                            NULL);
   /* Debug-only: hidden from SHOW ALL and postgresql.conf.sample.
-   * On is strictly better for end users (Poisson-binomial DP in
-   * O(N x C) replaces a binom(N, k) DNF that the downstream
-   * probability pipeline would otherwise compile or solve).  Off
-   * only serves developer A/B against the unoptimised path. */
-  DefineCustomBoolVariable("provsql.count_cmp_optimisation",
-                           "Run the Poisson-binomial pre-pass that "
-                           "resolves HAVING COUNT(*) op C gate_cmps "
-                           "to a Bernoulli gate_input inside "
+   * Umbrella for closed-form / analytic resolution of gate_cmp
+   * probabilities in probability_evaluate (currently the
+   * Poisson-binomial HAVING-COUNT pre-pass; future MIN / MAX / SUM
+   * pre-passes gate on the same flag).  On is strictly better for
+   * end users (each resolver replaces an exponential DNF
+   * construction with O(N) or O(N x C) arithmetic); off only serves
+   * developer A/B against the unoptimised enumerate_valid_worlds
+   * path and as a bisection escape valve. */
+  DefineCustomBoolVariable("provsql.cmp_probability_evaluation",
+                           "Run closed-form / analytic probability "
+                           "evaluators for gate_cmps inside "
                            "probability_evaluate. Debug only.",
                            "When on (default), probability_evaluate "
-                           "runs a pre-pass that recognises "
-                           "gate_cmp(gate_agg(COUNT, semimod children "
-                           "whose K side is a single distinct "
-                           "gate_input), gate_value(C)) and replaces "
-                           "the cmp with a Bernoulli gate_input "
-                           "carrying Pr(B op C) where B is "
-                           "Poisson-binomial over the child marginals. "
-                           "Off bypasses the pass and lets the cmp "
-                           "fall through to provsql_having's enumerate"
-                           "_valid_worlds path. End users have no "
-                           "reason to flip this; it exists for "
-                           "developer A/B testing and as a bisection "
-                           "escape valve.",
-                           &provsql_count_cmp_optimisation,
+                           "runs pre-passes that recognise specific "
+                           "gate_cmp shapes (currently HAVING COUNT(*) "
+                           "op C over distinct gate_input leaves) and "
+                           "replace each cmp with a Bernoulli "
+                           "gate_input carrying the closed-form "
+                           "probability, bypassing the DNF that "
+                           "provsql_having's enumerate_valid_worlds "
+                           "would otherwise emit. Off forces the cmp "
+                           "to fall through to that enumeration path. "
+                           "Future MIN / MAX / SUM probability "
+                           "evaluators will gate on the same flag. "
+                           "End users have no reason to flip this; it "
+                           "exists for developer A/B testing and as a "
+                           "bisection escape valve.",
+                           &provsql_cmp_probability_evaluation,
                            true,
                            PGC_USERSET,
                            GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
@@ -4751,6 +4755,30 @@ void _PG_init(void) {
                            "is therefore unsound for per-row provenance "
                            "interrogations and aggregation queries.",
                            &provsql_boolean_provenance,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.classify_top_level",
+                           "Emit a NOTICE classifying each top-level SELECT.",
+                           "When on, every top-level SELECT that "
+                           "touches a relation triggers a NOTICE of "
+                           "the form `ProvSQL: query result is "
+                           "<KIND> (sources: ...)` where <KIND> is "
+                           "TID, BID, or OPAQUE under the existing "
+                           "provsql_table_kind taxonomy and the "
+                           "sources list names the provenance-"
+                           "tracked base relations the query touches. "
+                           "Read-only : the classifier does not "
+                           "rewrite the query.  Studio reads the "
+                           "NOTICE to label query results with their "
+                           "certified kind.  See TODO.md for the "
+                           "follow-up slices (CTAS tag inheritance, "
+                           "inter-relation correlation registry, "
+                           "view descent).",
+                           &provsql_classify_top_level,
                            false,
                            PGC_USERSET,
                            0,

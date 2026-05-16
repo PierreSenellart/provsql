@@ -55,7 +55,7 @@ test: possible_worlds monte_carlo
 test: agg_uuid_aggfnoid
 
 # Complex test relying on probabilities
-test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors
+test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation
 
 # Probability computation using external software
 test: d4 dsharp weightmc c2d minic2d
