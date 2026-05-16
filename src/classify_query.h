@@ -5,10 +5,11 @@
  * The classifier is invoked by @c provsql_planner on the top-level
  * @c Query when the @c provsql.classify_top_level GUC is on, and emits a
  * @c NOTICE carrying the certified kind and the set of
- * provenance-tracked base relations the query touches.  See @c TODO.md
- * ("TID / BID propagation through derived relations") for the broader
- * design and follow-up slices (CTAS tag inheritance, inter-relation
- * correlation registry, view descent).
+ * provenance-tracked base relations the query touches.  See
+ * @c doc/TODO/safe-query-followups.md ("TID / BID propagation through
+ * derived relations") for the broader design and follow-up slices
+ * (CTAS tag inheritance, inter-relation correlation registry, view
+ * descent).
  */
 #ifndef CLASSIFY_QUERY_H
 #define CLASSIFY_QUERY_H

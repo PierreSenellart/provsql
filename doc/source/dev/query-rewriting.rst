@@ -74,8 +74,8 @@ query touches.  Independent-TID join inference, BID block-key
 preservation under projection / ``GROUP BY``, ``UNION ALL`` of
 disjoint TIDs, view descent, and the transitive base-ancestor
 computation the future correlation registry will consume are all
-explicit follow-ups; see ``TODO.md`` ("TID / BID propagation through
-derived relations").
+explicit follow-ups; see ``doc/TODO/safe-query-followups.md``
+("TID / BID propagation through derived relations").
 
 **Executor-depth gating.**  ProvSQL's rewriter inserts calls to
 PL/pgSQL helpers (``provenance_times``, ``provenance_plus``,

@@ -10,7 +10,8 @@
  * Initial scope : a single @c RangeTblRef in a flat @c fromlist, no
  * @c SubLinks, no modifying @c CTEs, no set operations, and either
  * zero or one provenance-tracked base relations.  Everything else is
- * reported as OPAQUE.  See @c TODO.md for the follow-up extensions.
+ * reported as OPAQUE.  See @c doc/TODO/safe-query-followups.md for
+ * the follow-up extensions.
  */
 #include "postgres.h"
 

@@ -27,6 +27,12 @@ Each plan document follows a consistent layout:
   cross-referencing every documented user-facing feature against the
   tutorial and case studies. Source of truth for the gaps that
   `case-studies.md` proposes to close.
+- [`safe-query-followups.md`](safe-query-followups.md) : deferred
+  ideas surfaced during the `provsql.boolean_provenance` work --
+  further Boolean-only optimisations (independent-subtree
+  detection, Möbius / Monet, deferred entries), the TID / BID
+  classifier and correlation-registry roadmap, and the layered
+  HAVING-clause optimisation plan.
 - [`studio.md`](studio.md) : plan for ProvSQL Studio work landing
   alongside or after the first PyPI release (`studio-v1.0.0`):
   release plumbing, CI, Docker swap-over, in-app polish, and the
