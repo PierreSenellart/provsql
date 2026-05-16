@@ -1178,7 +1178,10 @@
                       + 'exclusive (set via repair_key).';
             provKindCls = ' wp-schema__rel-prov--bid';
           } else if (r.prov_kind === 'opaque') {
-            provLabel = 'prov-opaque';
+            // OPAQUE keeps the bare "prov" label : the muted-tone
+            // pill is enough to flag "kind not certified" and
+            // "prov-opaque" reads as redundant against the tooltip.
+            // Mirrors the convention used by the result-table pill.
             provTip   = 'Provenance-tracked, opaque tokens: the table '
                       + 'carries user-supplied provsql values (or '
                       + 'shared tokens across rows), so the safe-query '
