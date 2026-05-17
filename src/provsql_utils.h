@@ -343,6 +343,76 @@ extern bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out);
  */
 extern bool provsql_fetch_table_info(Oid relid, ProvenanceTableInfo *out);
 
+/**
+ * @brief Upper bounds for the relation-key cache.
+ *
+ * Each relation contributes at most @c PROVSQL_KEY_CACHE_MAX_KEYS
+ * distinct PRIMARY-KEY / NOT-NULL-UNIQUE column-sets, each over at
+ * most @c PROVSQL_KEY_CACHE_MAX_KEY_COLS columns.  These bounds keep
+ * the cache entry fixed-size (so the backend-local sorted-array
+ * representation can reuse the @c provsql_lookup_table_info pattern
+ * verbatim); relations with more or wider keys silently drop the
+ * overflow, treating the missing keys as if they did not exist
+ * (over-conservative -- the §2 FD-aware detector simply misses an
+ * optimisation, never produces an unsound rewrite).
+ */
+#define PROVSQL_KEY_CACHE_MAX_KEYS      4
+#define PROVSQL_KEY_CACHE_MAX_KEY_COLS  8
+
+/**
+ * @brief One PRIMARY-KEY or NOT-NULL-UNIQUE key on a relation.
+ *
+ * @c col_n is the number of valid entries in @c cols (in
+ * @c pg_index.indkey order, i.e. column position in the key, not
+ * @c pg_attribute.attnum order).  All columns are NOT NULL by
+ * construction: PRIMARY KEY enforces this implicitly, and UNIQUE
+ * constraints are admitted only when @c pg_attribute.attnotnull is
+ * @c true for every constituent column (the §2 soundness trap on
+ * nullable UNIQUE; see the TODO).
+ */
+typedef struct ProvenanceRelationKey {
+  uint16     col_n;
+  AttrNumber cols[PROVSQL_KEY_CACHE_MAX_KEY_COLS];
+} ProvenanceRelationKey;
+
+/**
+ * @brief Per-relation set of PRIMARY-KEY and NOT-NULL-UNIQUE keys.
+ *
+ * Populated by @c provsql_lookup_relation_keys from @c pg_constraint
+ * (filtered by @c contype @c IN @c ('p','u')) joined to
+ * @c pg_index and @c pg_attribute (for the NOT-NULL check).  The
+ * detector's §2 PK-FD pass walks @c keys and, for every key @c K it
+ * recognises among the query's equijoin equivalence classes, tags
+ * the determined columns as functionally fixed inside the relevant
+ * RTE.
+ */
+typedef struct ProvenanceRelationKeys {
+  Oid                    relid;
+  uint16                 key_n;
+  ProvenanceRelationKey  keys[PROVSQL_KEY_CACHE_MAX_KEYS];
+} ProvenanceRelationKeys;
+
+/**
+ * @brief Look up the PRIMARY-KEY and NOT-NULL-UNIQUE keys of a
+ *        relation with a backend-local cache.
+ *
+ * Companion to @c provsql_lookup_table_info.  The cache lives in a
+ * separate backing array with its own relcache-invalidation
+ * callback so that a future @c ALTER @c TABLE that adds / drops a
+ * constraint refreshes the next lookup without polling.  Returns
+ * @c true when the relation has at least one PRIMARY KEY or
+ * NOT-NULL UNIQUE constraint; @c false otherwise (in which case
+ * @p *out is filled with @c key_n @c = @c 0).  Safe to call from
+ * the planner hot path.
+ *
+ * @param relid  pg_class OID of the relation to inspect.
+ * @param out    Filled on return.  @c out->relid is set to @p relid
+ *               regardless of return value; @c out->keys holds up to
+ *               @c PROVSQL_KEY_CACHE_MAX_KEYS keys.
+ */
+extern bool provsql_lookup_relation_keys(Oid relid,
+                                         ProvenanceRelationKeys *out);
+
 #include "provsql_error.h"
 
 #endif /* PROVSQL_UTILS_H */

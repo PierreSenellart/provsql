@@ -740,6 +740,23 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   bool    have_partial_class = false;
   int     partial_first = -1;       /* repr of the first partial-coverage class seen */
   Bitmapset *bridging_classes = NULL; /* repr indices of partial-coverage classes whose touched atoms span more than one group; the bridge variable becomes an extra slot on the first_member of each touched group, and the outer's residual WHERE re-equates the groups' columns through the standard Var remap. */
+  /* §2 PK / NOT-NULL UNIQUE FD support.  @c determined_in[c*natoms+j]
+   * @c == @c true means class @c c is functionally determined inside
+   * RTE @c j (some key whose every column's class is anchored on @c j
+   * exists in @c j's relation, and @c c is anchored on @c j by a
+   * non-key column).  @c class_atom_count_fd[c] is the FD-aware
+   * coverage of class @c c: the count of atoms where @c c is anchored
+   * @em and @em not FD-determined.  @c fd_aware_mode triggers when no
+   * single class is fully covered by the raw (non-FD) atom count but
+   * the FD-aware atom-sets satisfy the textbook pairwise nested-or-
+   * disjoint hierarchicality condition; in that mode the rewriter
+   * uses a per-atom local anchor class (the lowest-repr class
+   * anchored on the atom) instead of a global root, and each atom's
+   * @c proj_slots holds one slot for every class anchored on it. */
+  bool   *determined_in = NULL;
+  int    *class_atom_count_fd = NULL;
+  bool    fd_aware_mode = false;
+  int    *atom_anchor_class = NULL; /* per atom (size natoms): repr of the class chosen as that atom's local "root" in fd_aware_mode */
   int     i, j;
   Index   varno;
   bool    ok;
@@ -829,6 +846,106 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     }
   }
 
+  /* §2 -- Dalvi & Suciu 2007 §5.1 induced FDs from PRIMARY KEYs and
+   * NOT-NULL UNIQUE constraints.  For each base relation in the FROM
+   * list, look up its keys via the per-backend cache; for every key
+   * @c K every of whose columns is anchored on the relation (i.e.
+   * appears in the query as a Var of that RTE), mark every class
+   * anchored on the same RTE by a non-key column as @em FD-determined
+   * within that RTE.  The intuition: under the key, each non-key
+   * column is a function of the key's columns, so the class
+   * containing the non-key column does not contribute an independent
+   * existential to the relation -- exactly the FD-aware atom-set
+   * reduction §2 prescribes.
+   *
+   * Skipped relations:
+   *
+   *   - @c RTE_RELATION entries whose @c relid does not yield any
+   *     PRIMARY KEY / NOT-NULL UNIQUE through
+   *     @c provsql_lookup_relation_keys (no FD to apply);
+   *   - non-@c RTE_RELATION entries (subqueries, joins): the
+   *     candidate gate has already rejected these via the shape
+   *     check at the top of @c is_safe_query_candidate. */
+  determined_in =
+      palloc0((size_t) nvars * (size_t) natoms * sizeof(bool));
+#define DETERMINED(c, atom_idx) determined_in[(c) * natoms + (atom_idx)]
+
+  for (j = 0; j < natoms; j++) {
+    RangeTblEntry         *rte = (RangeTblEntry *) list_nth(q->rtable, j);
+    ProvenanceRelationKeys keys;
+    uint16                 ki;
+    if (rte->rtekind != RTE_RELATION)
+      continue;
+    if (!provsql_lookup_relation_keys(rte->relid, &keys))
+      continue;
+    for (ki = 0; ki < keys.key_n; ki++) {
+      const ProvenanceRelationKey *key = &keys.keys[ki];
+      bool                         all_anchored = true;
+      uint16                       kc;
+      int                          vi;
+      /* Every column of the key must be present in the query @em and
+       * its class must be multi-atom -- i.e. an equijoin link binds
+       * the column to a Var on some other RTE.  A key column in a
+       * singleton class is a "free body existential" that ranges over
+       * every value; under such a free column the FD @c K @c → @c A
+       * does not reduce @c A's atom-set (a different free-column
+       * value would give a different @c A, so @c A is not truly
+       * determined within the RTE).  This is the composite-PK
+       * soundness trap of TODO §2: "partial match (some PK columns
+       * equated, others not) does not give the FD". */
+      for (kc = 0; kc < key->col_n; kc++) {
+        int idx = safe_var_index(vctx.vars,
+                                 (Index) (j + 1),
+                                 key->cols[kc]);
+        if (idx < 0) {
+          all_anchored = false;
+          break;
+        }
+        if (class_atom_count[cls[idx]] < 2
+            || class_atom_count[cls[idx]] > natoms) {
+          all_anchored = false;
+          break;
+        }
+      }
+      if (!all_anchored)
+        continue;
+      /* Apply: every Var on this RTE whose attno is NOT in the key
+       * has its class flagged as FD-determined within @c j. */
+      for (vi = 0; vi < nvars; vi++) {
+        Var *vp = vars_arr[vi];
+        bool is_key_col = false;
+        if (vp->varno != (Index) (j + 1))
+          continue;
+        for (kc = 0; kc < key->col_n; kc++) {
+          if (vp->varattno == key->cols[kc]) {
+            is_key_col = true;
+            break;
+          }
+        }
+        if (is_key_col)
+          continue;
+        DETERMINED(cls[vi], j) = true;
+      }
+    }
+  }
+
+  /* FD-aware atom counts: how many atoms does each class touch that
+   * are not FD-determining the class.  Mirrors @c class_atom_count
+   * but excludes the FD-pinned entries. */
+  class_atom_count_fd = palloc0(nvars * sizeof(int));
+  for (i = 0; i < nvars; i++) {
+    int c;
+    if (cls[i] != i)
+      continue;
+    if (class_atom_count[i] > natoms)
+      continue;                       /* sentinel, leave at 0 */
+    c = i;
+    for (j = 0; j < natoms; j++) {
+      if (ANCHOR(c, j) != 0 && !DETERMINED(c, j))
+        class_atom_count_fd[c]++;
+    }
+  }
+
   /* Single-atom head Vars: walk @c q->targetList once to mark every
    * @c vars_arr index that appears in the user's projection.  Used
    * below to allow body-only Vars (singleton classes, @c count == 1)
@@ -859,8 +976,156 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
       break;
     }
   }
-  if (root_class < 0)
-    goto bail;
+
+  /* §2 fallback: no class touches every atom under the raw count, but
+   * the FD-aware atom-sets might still satisfy pairwise nested-or-
+   * disjoint hierarchicality.  Concretely, we accept the textbook
+   * H-query under a PK on the middle atom (Dalvi & Suciu 2007 §5.1
+   * @c R(x),S(x,y),T(y) with PK on @c S.x): after the FD reduction
+   * @c atoms(B) drops to @c {T}, leaving @c {R,S} and @c {T} as
+   * disjoint atom-sets covering every atom.  In that case there is no
+   * global root, but the rewrite still works: each atom is wrapped in
+   * a flat @c SELECT @c DISTINCT exposing every class anchored on it
+   * as a separate slot, and the outer's residual equijoins resolve
+   * through @c safe_remap_vars_mutator on the matching slot's
+   * @c base_attno.
+   *
+   * Conditions for entering @c fd_aware_mode:
+   *
+   *  1. The standard root-class check failed.
+   *  2. Every atom in @c q->rtable has at least one class anchored on
+   *     it (no orphan atoms -- otherwise the rewriter would have no
+   *     @c provsql column to multiply into the cross product for that
+   *     atom; the existing @c root_anchor_attno check enforces this
+   *     under a global root, and we re-enforce it here).
+   *  3. Every pair of multi-atom classes (count >= 2 under the raw
+   *     count) has FD-aware atom-sets that are nested or disjoint.
+   *     Singleton classes (count @c == @c 1) are tolerated -- they
+   *     surface as single-atom-head Vars in the @em existing
+   *     in-targetlist path further down.
+   *  4. No class has the @c natoms+1 sentinel (intra-atom equalities
+   *     across two columns of the same atom remain unsupported here,
+   *     same as in the non-FD path).
+   *  5. The query has no @em raw partial-coverage classes whose
+   *     FD-aware count is still in @c [2, natoms-1].  Such classes
+   *     would normally route through the multi-level / inner-group
+   *     path, which is not adapted to per-atom anchors yet; the §2
+   *     fd-aware mode therefore demands every multi-atom class to
+   *     either cover all atoms (raw root, handled above) or to land
+   *     on a disjoint pair-block via the FD reduction. */
+  if (root_class < 0) {
+    bool eligible = true;
+    /* Sentinel and orphan-atom checks. */
+    for (i = 0; i < nvars && eligible; i++) {
+      if (cls[i] != i)
+        continue;
+      if (class_atom_count[i] > natoms) {
+        eligible = false;
+        break;
+      }
+    }
+    if (eligible) {
+      bool *atom_covered = palloc0(natoms * sizeof(bool));
+      for (i = 0; i < nvars; i++) {
+        int c = cls[i];
+        Index vn = vars_arr[i]->varno;
+        if (vn < 1 || (int) vn > natoms)
+          continue;
+        if (class_atom_count[c] > natoms)
+          continue;                     /* sentinel */
+        atom_covered[vn - 1] = true;
+      }
+      for (j = 0; j < natoms; j++) {
+        if (!atom_covered[j]) {
+          eligible = false;
+          break;
+        }
+      }
+      pfree(atom_covered);
+    }
+    if (eligible) {
+      /* Pairwise nested-or-disjoint on FD-aware atom-sets, considering
+       * only multi-atom classes (singletons stay as in-targetlist head
+       * Vars and don't constrain pairwise hierarchicality). */
+      Bitmapset **atoms_fd = palloc0(nvars * sizeof(Bitmapset *));
+      int        *class_reprs = palloc(nvars * sizeof(int));
+      int         nreprs = 0;
+      for (i = 0; i < nvars && eligible; i++) {
+        if (cls[i] != i)
+          continue;
+        if (class_atom_count[i] > natoms)
+          continue;
+        if (class_atom_count[i] < 2)
+          continue;                     /* singleton; ignored here */
+        for (j = 0; j < natoms; j++) {
+          if (ANCHOR(i, j) != 0 && !DETERMINED(i, j))
+            atoms_fd[i] = bms_add_member(atoms_fd[i], j);
+        }
+        class_reprs[nreprs++] = i;
+      }
+      for (i = 0; i < nreprs && eligible; i++) {
+        int k;
+        for (k = i + 1; k < nreprs && eligible; k++) {
+          Bitmapset *a = atoms_fd[class_reprs[i]];
+          Bitmapset *b = atoms_fd[class_reprs[k]];
+          bool nested = bms_is_subset(a, b) || bms_is_subset(b, a);
+          bool disjoint = !bms_overlap(a, b);
+          if (!nested && !disjoint) {
+            eligible = false;
+            break;
+          }
+        }
+      }
+      for (i = 0; i < nvars; i++)
+        if (atoms_fd[i])
+          bms_free(atoms_fd[i]);
+      pfree(atoms_fd);
+      pfree(class_reprs);
+    }
+    if (eligible) {
+      /* Per-atom local anchor: the lowest-repr class anchored on the
+       * atom under the FD-aware view (so the slot at output position
+       * 1 of the wrap is the column that the outer residual most
+       * naturally joins on; singletons are skipped here because they
+       * become head-Var extra slots). */
+      atom_anchor_class = palloc(natoms * sizeof(int));
+      for (j = 0; j < natoms; j++)
+        atom_anchor_class[j] = -1;
+      for (i = 0; i < nvars; i++) {
+        int c;
+        if (cls[i] != i)
+          continue;
+        if (class_atom_count[i] > natoms)
+          continue;
+        if (class_atom_count[i] < 2)
+          continue;
+        c = i;
+        for (j = 0; j < natoms; j++) {
+          if (ANCHOR(c, j) != 0 && !DETERMINED(c, j)
+              && atom_anchor_class[j] < 0)
+            atom_anchor_class[j] = c;
+        }
+      }
+      /* An atom with no multi-atom anchor under the FD-aware view
+       * (e.g. only singleton-class head Vars touch it) cannot be
+       * wrapped in @c fd_aware_mode -- it would need a join key from
+       * the outer's residual that no shared class provides.  Bail. */
+      for (j = 0; j < natoms; j++) {
+        if (atom_anchor_class[j] < 0) {
+          eligible = false;
+          break;
+        }
+      }
+    }
+    if (eligible) {
+      fd_aware_mode = true;
+    } else {
+      /* The @c bail block below pfrees @c determined_in,
+       * @c class_atom_count_fd and @c atom_anchor_class itself; just
+       * jump there. */
+      goto bail;
+    }
+  }
 
   /* Multi-level handling: any atom touched by at least one partial-
    * coverage shared class (count >= 2 but < natoms) goes into some
@@ -888,6 +1153,14 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   atom_group = palloc(natoms * sizeof(int));
   for (j = 0; j < natoms; j++)
     atom_group[j] = -1;
+
+  /* In @c fd_aware_mode every atom is an outer wrap (no inner groups);
+   * the partial-coverage path below is bypassed, since the FD-reduced
+   * atom-sets are by construction pairwise nested-or-disjoint and the
+   * per-atom anchor in @c atom_anchor_class already encodes the
+   * single-level wrap structure. */
+  if (fd_aware_mode)
+    goto skip_partial_coverage;
 
   {
     Bitmapset **sig = palloc0(natoms * sizeof(Bitmapset *));
@@ -1046,6 +1319,8 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     pfree(sig);
   }
 
+skip_partial_coverage:
+
   /* For each group, identify the @em first member (smallest
    * original-rtindex atom belonging to the group).  Head Vars on
    * grouped atoms are only allowed on the first member: the inner
@@ -1078,10 +1353,31 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
    * either touches every atom (slot at the outer level) or sits
    * inside the inner-group its atom belongs to.  A Var whose class
    * touches an atom subset that doesn't match any outer or inner
-   * slot would leak into the outer scope with no wrap to host it. */
+   * slot would leak into the outer scope with no wrap to host it.
+   *
+   * In @c fd_aware_mode (§2 multi-anchor), every multi-atom class is
+   * exposed as a slot on every atom it anchors -- so any Var of a
+   * multi-atom class is guaranteed a matching slot in its atom's
+   * @c proj_slots regardless of FD-determined status.  The check
+   * simplifies to "either Var's class touches >= 2 atoms (slot built
+   * below) or Var's class is a singleton with the Var in the
+   * targetList (head-Var slot built below)". */
   for (i = 0; i < nvars; i++) {
     int c = cls[i];
     int atom_idx = (int) vars_arr[i]->varno - 1;
+    if (fd_aware_mode) {
+      if (class_atom_count[c] >= 2 && class_atom_count[c] <= natoms)
+        continue;
+      if (class_atom_count[c] == 1 && in_targetlist[i])
+        continue;
+      if (provsql_verbose >= 30)
+        provsql_notice("safe-query rewriter (§2): Var (varno=%u, varattno=%d) "
+                       "belongs to a class with no outer slot",
+                       (unsigned) vars_arr[i]->varno,
+                       (int) vars_arr[i]->varattno);
+      ok = false;
+      break;
+    }
     if (class_atom_count[c] == natoms)
       continue;
     if (class_atom_count[c] >= 2 && class_atom_count[c] < natoms
@@ -1124,6 +1420,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   for (j = 0; j < natoms; j++) {
     safe_rewrite_atom *sa = palloc(sizeof(safe_rewrite_atom));
     safe_proj_slot *root_slot;
+    int local_root = fd_aware_mode ? atom_anchor_class[j] : root_class;
 
     sa->rtindex      = (Index) (j + 1);
     sa->proj_slots   = NIL;
@@ -1132,21 +1429,30 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     sa->outer_rtindex = 0;
     sa->inner_rtindex = 0;
     sa->is_constant_pinned = false;
-    sa->root_anchor_attno = (AttrNumber) ANCHOR(root_class, j);
+    sa->root_anchor_attno = (AttrNumber) ANCHOR(local_root, j);
     if (sa->root_anchor_attno == 0)
       goto bail;                          /* impossible if root truly covers all */
 
     root_slot = palloc(sizeof(safe_proj_slot));
     root_slot->base_attno  = sa->root_anchor_attno;
-    root_slot->class_id    = root_class;
+    root_slot->class_id    = local_root;
     root_slot->outer_attno = 1;
     sa->proj_slots = lappend(sa->proj_slots, root_slot);
     for (i = 0; i < nvars; i++) {
       safe_proj_slot *slot;
-      if (cls[i] != i || i == root_class)
+      if (cls[i] != i || i == local_root)
         continue;
-      if (class_atom_count[i] != natoms)
+      if (fd_aware_mode) {
+        /* §2 mode: expose every multi-atom class anchored on this
+         * atom, irrespective of FD-determined status -- the slot is
+         * needed for the outer's residual equijoin to resolve via
+         * @c safe_remap_vars_mutator.  Singleton classes still go
+         * through the head-Var path below. */
+        if (class_atom_count[i] < 2 || class_atom_count[i] > natoms)
+          continue;
+      } else if (class_atom_count[i] != natoms) {
         continue;                         /* partial-coverage handled via groups */
+      }
       if (ANCHOR(i, j) == 0)
         continue;
       slot = palloc(sizeof(safe_proj_slot));
@@ -1384,6 +1690,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   }
 
 #undef ANCHOR
+#undef DETERMINED
 
   pfree(class_atom_count);
   pfree(class_atom_anchor_attno);
@@ -1396,6 +1703,12 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     pfree(first_member_of_group);
   if (group_singleton_counter)
     pfree(group_singleton_counter);
+  if (determined_in)
+    pfree(determined_in);
+  if (class_atom_count_fd)
+    pfree(class_atom_count_fd);
+  if (atom_anchor_class)
+    pfree(atom_anchor_class);
   (void) constants;
   return atoms_out;
 
@@ -1412,6 +1725,12 @@ bail:
     pfree(first_member_of_group);
   if (group_singleton_counter)
     pfree(group_singleton_counter);
+  if (determined_in)
+    pfree(determined_in);
+  if (class_atom_count_fd)
+    pfree(class_atom_count_fd);
+  if (atom_anchor_class)
+    pfree(atom_anchor_class);
   (void) constants;
   *groups_out = NIL;
   return NIL;

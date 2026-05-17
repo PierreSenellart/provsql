@@ -20,8 +20,13 @@
  */
 #include "postgres.h"
 #include "access/htup_details.h"
+#include "access/table.h"
+#include "access/genam.h"
 #include "miscadmin.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_attribute.h"
+#include "catalog/pg_constraint.h"
+#include "catalog/pg_index.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_enum.h"
 #include "catalog/pg_namespace.h"
@@ -30,6 +35,7 @@
 #include "fmgr.h"
 #include "nodes/value.h"
 #include "parser/parse_func.h"
+#include "utils/fmgroids.h"
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
 #include "utils/inval.h"
@@ -682,6 +688,228 @@ bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out)
     return true;
   }
   return false;
+}
+
+/* -------------------------------------------------------------------------
+ * Per-backend relation-keys cache (§2 PK-FD support)
+ *
+ * Sibling of the @c table_info_cache above; structurally identical
+ * (sorted-by-relid array, binary search, relcache-invalidated) but
+ * keyed on @c pg_class OIDs of @em arbitrary relations -- not just
+ * provenance-tracked ones -- because the §2 / §3 / §5 detector
+ * passes also need to reason about PRIMARY KEY constraints on
+ * deterministic dimension tables and self-joined relations.
+ *
+ * Each cached entry holds up to @c PROVSQL_KEY_CACHE_MAX_KEYS keys
+ * (PRIMARY KEY plus NOT-NULL UNIQUE constraints from
+ * @c pg_constraint, filtered by @c contype @c IN @c ('p','u')).
+ * The relcache callback uses a separate static flag from the
+ * table-info cache's, so a DROP CONSTRAINT / DROP TABLE invalidates
+ * both caches independently.
+ * ------------------------------------------------------------------------- */
+
+typedef struct key_cache_entry {
+  Oid                    relid;
+  bool                   valid;
+  bool                   has_keys;
+  uint16                 key_n;
+  ProvenanceRelationKey  keys[PROVSQL_KEY_CACHE_MAX_KEYS];
+} key_cache_entry;
+
+static key_cache_entry *key_cache = NULL;
+static unsigned         key_cache_len = 0;
+static bool             key_cache_callback_registered = false;
+
+static int key_cache_find(Oid relid, int *insert_at)
+{
+  int start = 0, end = (int) key_cache_len - 1;
+  while(end >= start) {
+    int mid = (start + end) / 2;
+    if(key_cache[mid].relid < relid)
+      start = mid + 1;
+    else if(key_cache[mid].relid > relid)
+      end = mid - 1;
+    else
+      return mid;
+  }
+  if(insert_at) *insert_at = start;
+  return -1;
+}
+
+static void key_cache_insert(int pos, Oid relid,
+                             const ProvenanceRelationKeys *keys)
+{
+  key_cache_entry *new_buf = calloc(key_cache_len + 1,
+                                    sizeof(key_cache_entry));
+  for(int i = 0; i < pos; ++i)
+    new_buf[i] = key_cache[i];
+  new_buf[pos].relid    = relid;
+  new_buf[pos].valid    = true;
+  new_buf[pos].has_keys = keys->key_n > 0;
+  new_buf[pos].key_n    = keys->key_n;
+  if(keys->key_n > 0)
+    memcpy(new_buf[pos].keys, keys->keys,
+           keys->key_n * sizeof(ProvenanceRelationKey));
+  for(unsigned i = (unsigned)pos; i < key_cache_len; ++i)
+    new_buf[i + 1] = key_cache[i];
+  free(key_cache);
+  key_cache = new_buf;
+  ++key_cache_len;
+}
+
+static void invalidate_key_cache_callback(Datum arg, Oid relid)
+{
+  int pos;
+  (void) arg;
+  if(relid == InvalidOid) {
+    for(unsigned i = 0; i < key_cache_len; ++i)
+      key_cache[i].valid = false;
+    return;
+  }
+  pos = key_cache_find(relid, NULL);
+  if(pos >= 0)
+    key_cache[pos].valid = false;
+}
+
+/**
+ * @brief Read the PRIMARY-KEY and NOT-NULL-UNIQUE keys of @p relid
+ *        from the system catalogs.
+ *
+ * Scans @c pg_constraint for entries with @c conrelid @c = @p relid
+ * and @c contype @c IN @c ('p','u'), then resolves each constraint's
+ * column list via @c pg_index.indkey (the constraint's index is
+ * recorded in @c pg_constraint.conindid).  For UNIQUE constraints,
+ * verifies every constituent column has @c pg_attribute.attnotnull
+ * @c = @c true; UNIQUE-with-NULLABLE constraints are rejected
+ * (UNIQUE allows multiple rows with NULL in PostgreSQL, so the
+ * @c ∅ @c → @c attr FD does not hold without NOT NULL).
+ *
+ * Stores up to @c PROVSQL_KEY_CACHE_MAX_KEYS keys; subsequent keys
+ * are silently dropped.  Skips constraints whose column count
+ * exceeds @c PROVSQL_KEY_CACHE_MAX_KEY_COLS.  Both elisions are
+ * conservatively safe (the §2 detector simply does not see the
+ * dropped FDs).
+ */
+static bool fetch_relation_keys(Oid relid, ProvenanceRelationKeys *out)
+{
+  Relation     conrel;
+  SysScanDesc  scan;
+  ScanKeyData  skey;
+  HeapTuple    htup;
+
+  out->relid = relid;
+  out->key_n = 0;
+
+  conrel = table_open(ConstraintRelationId, AccessShareLock);
+  ScanKeyInit(&skey,
+              Anum_pg_constraint_conrelid,
+              BTEqualStrategyNumber, F_OIDEQ,
+              ObjectIdGetDatum(relid));
+  scan = systable_beginscan(conrel, ConstraintRelidTypidNameIndexId,
+                            true, NULL, 1, &skey);
+
+  while(HeapTupleIsValid(htup = systable_getnext(scan))) {
+    Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(htup);
+    HeapTuple   idxtup;
+    Form_pg_index idx;
+    Oid         indexrelid;
+    int         k;
+    ProvenanceRelationKey *key;
+    bool        ok_not_null = true;
+
+    if(con->contype != CONSTRAINT_PRIMARY && con->contype != CONSTRAINT_UNIQUE)
+      continue;
+    if(out->key_n >= PROVSQL_KEY_CACHE_MAX_KEYS)
+      break;
+
+    indexrelid = con->conindid;
+    if(!OidIsValid(indexrelid))
+      continue;
+    idxtup = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexrelid));
+    if(!HeapTupleIsValid(idxtup))
+      continue;
+    idx = (Form_pg_index) GETSTRUCT(idxtup);
+
+    if(idx->indnatts <= 0 || idx->indnatts > PROVSQL_KEY_CACHE_MAX_KEY_COLS) {
+      ReleaseSysCache(idxtup);
+      continue;
+    }
+
+    key = &out->keys[out->key_n];
+    key->col_n = (uint16) idx->indnatts;
+    for(k = 0; k < idx->indnatts; ++k) {
+      AttrNumber attno = idx->indkey.values[k];
+      key->cols[k] = attno;
+
+      if(con->contype == CONSTRAINT_UNIQUE) {
+        HeapTuple atttup =
+          SearchSysCache2(ATTNUM,
+                          ObjectIdGetDatum(relid),
+                          Int16GetDatum(attno));
+        if(!HeapTupleIsValid(atttup)) {
+          ok_not_null = false;
+          break;
+        } else {
+          Form_pg_attribute attform = (Form_pg_attribute) GETSTRUCT(atttup);
+          if(!attform->attnotnull)
+            ok_not_null = false;
+          ReleaseSysCache(atttup);
+          if(!ok_not_null)
+            break;
+        }
+      }
+    }
+    ReleaseSysCache(idxtup);
+
+    if(!ok_not_null)
+      continue;                       /* nullable UNIQUE -- skip */
+
+    ++out->key_n;
+  }
+
+  systable_endscan(scan);
+  table_close(conrel, AccessShareLock);
+
+  return out->key_n > 0;
+}
+
+bool provsql_lookup_relation_keys(Oid relid, ProvenanceRelationKeys *out)
+{
+  int insert_at = 0;
+  int pos;
+  ProvenanceRelationKeys fresh;
+  bool has_keys;
+
+  if(!key_cache_callback_registered) {
+    CacheRegisterRelcacheCallback(invalidate_key_cache_callback, (Datum) 0);
+    key_cache_callback_registered = true;
+  }
+
+  pos = key_cache_find(relid, &insert_at);
+  if(pos >= 0 && key_cache[pos].valid) {
+    key_cache_entry *e = &key_cache[pos];
+    out->relid = relid;
+    out->key_n = e->key_n;
+    if(e->key_n > 0)
+      memcpy(out->keys, e->keys, e->key_n * sizeof(ProvenanceRelationKey));
+    return e->has_keys;
+  }
+
+  has_keys = fetch_relation_keys(relid, &fresh);
+
+  if(pos >= 0) {
+    key_cache_entry *e = &key_cache[pos];
+    e->valid    = true;
+    e->has_keys = has_keys;
+    e->key_n    = fresh.key_n;
+    if(fresh.key_n > 0)
+      memcpy(e->keys, fresh.keys, fresh.key_n * sizeof(ProvenanceRelationKey));
+  } else {
+    key_cache_insert(insert_at, relid, &fresh);
+  }
+
+  *out = fresh;
+  return has_keys;
 }
 
 PG_FUNCTION_INFO_V1(reset_constants_cache);
