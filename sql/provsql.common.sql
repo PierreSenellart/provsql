@@ -401,7 +401,7 @@ BEGIN
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
   -- Seed the base-ancestor set to {self}: a base TID table's atoms
@@ -554,7 +554,7 @@ BEGIN
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
   -- Base BID tables also have themselves as their sole ancestor.  Same

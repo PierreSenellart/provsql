@@ -186,7 +186,7 @@ BEGIN
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
   PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
@@ -291,7 +291,7 @@ BEGIN
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
   PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
@@ -330,7 +330,7 @@ BEGIN
         EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
         EXECUTE format(
           'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-          'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+          'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
           _tbl);
 
         EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %s REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.insert_statement_trigger()', _tbl);
@@ -446,7 +446,7 @@ BEGIN
     IF NOT has_trg THEN
       EXECUTE format(
         'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-        'ON %I.%I FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+        'ON %I.%I FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
         r.nspname, r.relname);
     END IF;
 

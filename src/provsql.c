@@ -5027,7 +5027,11 @@ static void provsql_ProcessUtility_apply(Node *parsetree,
   appendStringInfo(&trigger_sql,
       "CREATE TRIGGER provenance_guard "
       "BEFORE INSERT OR UPDATE OF provsql ON %s.%s "
-      "FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()",
+      /* "EXECUTE PROCEDURE" is the legacy form, kept as a valid synonym
+       * of "EXECUTE FUNCTION" through PG 18 -- matches the rest of the
+       * codebase and stays PG 10-compatible.  Promote when PG 10 drops
+       * out of the support floor. */
+      "FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()",
       quote_identifier(nspname), quote_identifier(relname));
   if (SPI_connect() != SPI_OK_CONNECT)
     provsql_error("CTAS lineage hook: SPI_connect failed");
