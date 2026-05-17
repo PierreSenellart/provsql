@@ -49,14 +49,20 @@ rewriting, so the reported kind reflects the SQL the user wrote.
 It is purely informational: no side effect on the query tree, no
 behavioural change downstream.
 
-**Decision rules (initial scope).**  A shape gate first rejects any
-query carrying any of ``hasSubLinks``, ``hasModifyingCTE``, a
-non-empty ``cteList``, a non-NULL ``setOperations``, or a non-
-``RangeTblRef`` entry in the ``fromlist``.  The range table is then
-walked, collecting ``RTE_RELATION`` entries with
-``provsql_table_info`` metadata as sources; the PostgreSQL 18
-synthetic ``RTE_GROUP`` is skipped transparently; any other rtekind
-trips the shape gate.  The kind is decided as:
+**Decision rules.**  A shape gate first rejects any query carrying
+any of ``hasSubLinks``, ``hasModifyingCTE``, a non-empty ``cteList``,
+a non-NULL ``setOperations``, or a non-``RangeTblRef`` entry in the
+``fromlist``.  The range table is then walked, collecting
+``RTE_RELATION`` entries with ``provsql_table_info`` metadata as
+sources; ``RTE_SUBQUERY`` entries (the form views take after PG
+rewriting, as well as inline ``FROM``-clause subqueries) are
+descended into recursively under the same shape gate, so a tracked
+base relation reached through any depth of subquery nesting still
+contributes to the accumulator; the PostgreSQL 18 synthetic
+``RTE_GROUP`` is skipped transparently; any other rtekind
+(``RTE_JOIN``, ``RTE_VALUES``, ``RTE_FUNCTION``, ``RTE_CTE``, …)
+trips the shape gate.  The kind is decided from the cumulative
+tracked-source count:
 
 * shape failed → ``OPAQUE`` (hidden structure may carry correlations
   the classifier cannot rule out);
@@ -72,10 +78,10 @@ The sources list is populated even when the kind is ``OPAQUE``, so
 the ``NOTICE`` always attributes the result to the relations the
 query touches.  Independent-TID join inference, BID block-key
 preservation under projection / ``GROUP BY``, ``UNION ALL`` of
-disjoint TIDs, view descent, and the transitive base-ancestor
-computation the future correlation registry will consume are all
-explicit follow-ups; see ``doc/TODO/safe-query-followups.md``
-("TID / BID propagation through derived relations").
+disjoint TIDs, and the transitive base-ancestor computation the
+future correlation registry will consume are all explicit follow-ups;
+see ``doc/TODO/safe-query-followups.md`` ("TID / BID propagation
+through derived relations").
 
 **Executor-depth gating.**  ProvSQL's rewriter inserts calls to
 PL/pgSQL helpers (``provenance_times``, ``provenance_plus``,

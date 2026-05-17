@@ -43,17 +43,20 @@ typedef struct ProvSQLClassification {
 /**
  * @brief Classify the result relation of a parsed top-level @c Query.
  *
- * Initial scope : a single @c RangeTblRef in the @c fromlist pointing
- * at a provenance-tracked base relation, with no @c SubLinks, no
- * modifying @c CTEs, no set operations, and no extra range-table
- * entries beyond the one base @c RTE (the PG 18 virtual @c RTE_GROUP
- * is transparently skipped), preserves the source's recorded kind.
- * A FROM-less query and any query whose accessible base relations
- * carry no provenance metadata are reported as TID (trivially
- * deterministic).  Everything else is reported as OPAQUE.
+ * Initial scope : a flat @c fromlist of @c RangeTblRefs, with no
+ * @c SubLinks, no modifying @c CTEs, no set operations, and either
+ * zero or one provenance-tracked base relation reached either
+ * directly (@c RTE_RELATION) or through any depth of @c RTE_SUBQUERY
+ * entries (view bodies after PG rewriting, and inline @c FROM
+ * subqueries).  The PG 18 virtual @c RTE_GROUP is transparently
+ * skipped.  When a single tracked base relation is reached, the
+ * source's recorded kind is preserved.  A FROM-less query and any
+ * query whose accessible base relations carry no provenance
+ * metadata are reported as TID (trivially deterministic).
+ * Everything else is reported as OPAQUE.
  *
- * Follow-up slices add joins of independent TIDs, UNION ALL, GROUP BY
- * refinement (especially the BID block-key check), view descent, and
+ * Follow-up slices add joins of independent TIDs, UNION ALL,
+ * GROUP BY refinement (especially the BID block-key check), and
  * the transitive ancestor-set computation that the future
  * correlation registry will consume.
  *

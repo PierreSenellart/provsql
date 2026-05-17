@@ -66,6 +66,55 @@ id|k
 1|1
 2|2
 (3 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+1
+2
+(2 rows)
+NOTICE:  ProvSQL: query result is BID (sources: provsql_test.cq_bid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+k
+1
+1
+2
+(3 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+1
+2
+3
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE (sources: provsql_test.cq_tid, provsql_test.cq_bid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id|k
+1|1
+1|1
+2|2
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE (sources: provsql_test.cq_tid, provsql_test.cq_bid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id|k
+1|1
+1|1
+2|2
+(3 rows)
 two
 2
 (1 row)

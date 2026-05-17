@@ -7,11 +7,14 @@
  * the certified kind and the set of provenance-tracked base relations
  * the query touches.
  *
- * Initial scope : a single @c RangeTblRef in a flat @c fromlist, no
+ * Initial scope : a flat @c fromlist of @c RangeTblRefs, no
  * @c SubLinks, no modifying @c CTEs, no set operations, and either
- * zero or one provenance-tracked base relations.  Everything else is
- * reported as OPAQUE.  See @c doc/TODO/safe-query-followups.md for
- * the follow-up extensions.
+ * zero or one provenance-tracked base relations reached either
+ * directly (@c RTE_RELATION) or through any depth of subqueries
+ * (@c RTE_SUBQUERY -- view bodies after rewriting and inline
+ * subqueries in the @c FROM list).  Everything else is reported as
+ * OPAQUE.  See @c doc/TODO/safe-query-followups.md for the follow-up
+ * extensions.
  */
 #include "postgres.h"
 
@@ -38,43 +41,59 @@ static const char *kind_label(provsql_table_kind k) {
   return "?";
 }
 
-void provsql_classify_query(Query *q, ProvSQLClassification *out) {
+/**
+ * @brief Recursive walker shared by the top-level entry point and the
+ *        @c RTE_SUBQUERY descent.
+ *
+ * The shape gate, source enumeration, and recursion live here so the
+ * outer entry point can decide TID / BID / OPAQUE from the cumulative
+ * @c n_meta / @c sole_relid pair after the whole tree has been
+ * walked.  Tracked @c RTE_RELATION entries reachable through any
+ * depth of @c RTE_SUBQUERY (view bodies after PG rewriting, inline
+ * @c FROM-clause subqueries) contribute to the accumulator.
+ *
+ * The recursion is stack-bounded by the SQL parser's own nesting
+ * limit ; no explicit depth cap is needed at this layer.
+ */
+static void classify_walk(Query                 *q,
+                          ProvSQLClassification *out,
+                          bool                  *shape_ok,
+                          int                   *n_meta,
+                          Oid                   *sole_relid) {
   ListCell *lc;
-  bool      shape_ok = true;
-  int       n_meta   = 0;
-  Oid       sole_relid = InvalidOid;
 
-  out->kind          = PROVSQL_TABLE_OPAQUE;
-  out->source_relids = NIL;
-
-  if (q == NULL || q->commandType != CMD_SELECT)
+  if (q == NULL || q->commandType != CMD_SELECT) {
+    *shape_ok = false;
     return;
+  }
 
-  /* Shape gate : reject the structural features the initial scope
-   * does not yet descend into.  A FROM-less @c SELECT (e.g.
-   * @c SELECT @c 1) keeps @c shape_ok @c true because there are no
-   * sub-structures to inspect; it ends up trivially TID below. */
+  /* Shape gate at this level.  A FROM-less @c SELECT (e.g.
+   * @c SELECT @c 1) keeps the gate open because there are no
+   * sub-structures to inspect; it ends up trivially TID at the
+   * outer level. */
   if (q->hasSubLinks
       || q->hasModifyingCTE
       || q->cteList != NIL
       || q->setOperations != NULL)
-    shape_ok = false;
+    *shape_ok = false;
 
-  if (shape_ok && q->jointree != NULL && q->jointree->fromlist != NIL) {
+  if (*shape_ok && q->jointree != NULL && q->jointree->fromlist != NIL) {
     foreach (lc, q->jointree->fromlist) {
       Node *n = (Node *) lfirst(lc);
       if (!IsA(n, RangeTblRef)) {
-        shape_ok = false;
+        *shape_ok = false;
         break;
       }
     }
   }
 
   /* Walk the range table.  RTE_RELATION entries with metadata are
-   * collected as sources; the PG 18 virtual @c RTE_GROUP is skipped
-   * transparently (it carries no atom).  Any other @c rtekind
-   * (RTE_SUBQUERY, RTE_JOIN, RTE_VALUES, RTE_CTE, ...) trips the
-   * shape gate so we conservatively report OPAQUE. */
+   * collected as sources; @c RTE_SUBQUERY recurses (view bodies and
+   * inline subqueries) so the underlying base relations join the
+   * accumulator; the PG 18 virtual @c RTE_GROUP is skipped
+   * transparently.  Any other @c rtekind (@c RTE_JOIN, @c RTE_VALUES,
+   * @c RTE_CTE, @c RTE_FUNCTION, ...) trips the shape gate so we
+   * conservatively report OPAQUE. */
   foreach (lc, q->rtable) {
     RangeTblEntry      *rte = (RangeTblEntry *) lfirst(lc);
     ProvenanceTableInfo info;
@@ -82,15 +101,36 @@ void provsql_classify_query(Query *q, ProvSQLClassification *out) {
     if (rte->rtekind == RTE_RELATION) {
       if (provsql_lookup_table_info(rte->relid, &info)) {
         out->source_relids = lappend_oid(out->source_relids, rte->relid);
-        sole_relid = rte->relid;
-        n_meta++;
+        *sole_relid = rte->relid;
+        (*n_meta)++;
       }
     } else if (rte->rtekind == RTE_GROUP) {
       /* PG 18 virtual entry; skip without invalidating the shape. */
+    } else if (rte->rtekind == RTE_SUBQUERY) {
+      /* Descend.  The same shape gate is applied to the inner
+       * @c Query : a @c SubLink or set operation inside the
+       * subquery propagates opacity to the outer level, while the
+       * visible inner @c RTE_RELATION sources are still added to
+       * the accumulator for diagnostic purposes. */
+      classify_walk(rte->subquery, out, shape_ok, n_meta, sole_relid);
     } else {
-      shape_ok = false;
+      *shape_ok = false;
     }
   }
+}
+
+void provsql_classify_query(Query *q, ProvSQLClassification *out) {
+  bool shape_ok   = true;
+  int  n_meta     = 0;
+  Oid  sole_relid = InvalidOid;
+
+  out->kind          = PROVSQL_TABLE_OPAQUE;
+  out->source_relids = NIL;
+
+  if (q == NULL || q->commandType != CMD_SELECT)
+    return;
+
+  classify_walk(q, out, &shape_ok, &n_meta, &sole_relid);
 
   if (!shape_ok) {
     /* Conservative : when we cannot fully see the query, we cannot

@@ -138,10 +138,13 @@ that's right for many simple cases but wrong in general.
   selection (kind inherited verbatim) ; FROM-less or
   no-tracked-source queries (TID, empty sources) ; everything else
   conservatively OPAQUE with the sources list still populated.
-  Follow-up : independent-TID join inference, BID block-key
-  preservation check under projection / GROUP BY, UNION ALL of
-  disjoint TIDs, view descent (see slice below), and the transitive
-  base-ancestor set the correlation registry will consume.
+  Extended to descend into `RTE_SUBQUERY` (view bodies after PG
+  rewriting and inline FROM subqueries) under the same shape gate,
+  so a single tracked base relation reached through any depth of
+  nesting still classifies as TID / BID.  Follow-up :
+  independent-TID join inference, BID block-key preservation check
+  under projection / GROUP BY, UNION ALL of disjoint TIDs, and the
+  transitive base-ancestor set the correlation registry will consume.
 - **CTAS tag inheritance.**
   When a CTAS materialises a query the classifier has tagged TID
   (resp. BID), populate the new table's `provsql_table_info` entry

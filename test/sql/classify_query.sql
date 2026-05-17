@@ -11,10 +11,12 @@ SET search_path TO provsql_test, provsql;
 --    ProvSQL: query result is <KIND> (no provenance-tracked sources)
 --
 -- where <KIND> is TID, BID, or OPAQUE under the existing
--- provsql_table_kind taxonomy.  Initial scope : single base relation
--- in a flat fromlist with no SubLinks, no modifying CTEs, no set
--- operations, no joins.  Everything outside that gate is reported
--- as OPAQUE.
+-- provsql_table_kind taxonomy.  Initial scope : a flat fromlist of
+-- RangeTblRefs with no SubLinks, no modifying CTEs, no set
+-- operations, and either zero or one provenance-tracked base
+-- relations reached either directly or through any depth of
+-- subqueries (view bodies after rewriting and inline FROM
+-- subqueries).  Everything outside that gate is reported as OPAQUE.
 --
 -- The classifier is gated on the executor not being already entered,
 -- so PL/pgSQL bodies the rewriter calls into (e.g. provenance_times)
@@ -90,11 +92,51 @@ CREATE TEMP TABLE cq_r6 AS
 SELECT remove_provenance('cq_r6');
 SELECT id, k FROM cq_r6 ORDER BY id, k;
 
--- (7) FROM-less SELECT : rtable is empty, so the classifier stays
---     silent (no NOTICE).
+-- (7) Inline subquery over a TID base relation : the classifier
+--     descends through RTE_SUBQUERY, finds cq_tid as the sole
+--     tracked source, and propagates TID.
+CREATE TEMP TABLE cq_r7 AS
+  SELECT id FROM (SELECT id, label FROM cq_tid WHERE id < 3) s;
+SELECT remove_provenance('cq_r7');
+SELECT id FROM cq_r7 ORDER BY id;
+
+-- (8) Inline subquery over a BID base relation : kind preserved
+--     through descent.
+CREATE TEMP TABLE cq_r8 AS
+  SELECT k FROM (SELECT k, v FROM cq_bid) s;
+SELECT remove_provenance('cq_r8');
+SELECT k FROM cq_r8 ORDER BY k;
+
+-- (9) Doubly-nested inline subqueries over a TID base relation :
+--     recursion handles arbitrary depth.
+CREATE TEMP TABLE cq_r9 AS
+  SELECT id FROM (SELECT id FROM (SELECT * FROM cq_tid) s1) s2;
+SELECT remove_provenance('cq_r9');
+SELECT id FROM cq_r9 ORDER BY id;
+
+-- (10) Inline subquery wrapping a two-source join : the inner
+--      sources are both surfaced; the cumulative source count is
+--      two, so the outer classifies as OPAQUE.
+CREATE TEMP TABLE cq_r10 AS
+  SELECT id, k FROM (
+    SELECT a.id, b.k FROM cq_tid a, cq_bid b WHERE a.id = b.k
+  ) s;
+SELECT remove_provenance('cq_r10');
+SELECT id, k FROM cq_r10 ORDER BY id, k;
+
+-- (11) Outer joining an inline subquery with a base relation :
+--      sources from both layers contribute, total > 1, OPAQUE.
+CREATE TEMP TABLE cq_r11 AS
+  SELECT s.id, b.k FROM (SELECT id FROM cq_tid) s, cq_bid b
+  WHERE s.id = b.k;
+SELECT remove_provenance('cq_r11');
+SELECT id, k FROM cq_r11 ORDER BY id, k;
+
+-- (12) FROM-less SELECT : rtable is empty, so the classifier stays
+--      silent (no NOTICE).
 SELECT 1 + 1 AS two;
 
--- (8) GUC off again : no NOTICE.
+-- (13) GUC off again : no NOTICE.
 SET provsql.classify_top_level = off;
 CREATE TEMP TABLE cq_off2 AS SELECT id FROM cq_tid;
 SELECT remove_provenance('cq_off2');
