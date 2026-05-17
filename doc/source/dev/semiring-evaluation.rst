@@ -183,11 +183,12 @@ The safe-query rewriter (see :doc:`query-rewriting` and
 in a ``gate_assumed_boolean`` marker, signalling that the rewrite
 preserves only Boolean semantics, not arbitrary semiring
 semantics.  Each semiring declares its compatibility with this
-rewrite via a static ``constexpr`` predicate:
+rewrite by overriding a virtual predicate inherited from
+:cfunc:`Semiring`:
 
 .. code-block:: cpp
 
-   static constexpr bool compatibleWithBooleanRewrite() { return true; }
+   virtual bool compatibleWithBooleanRewrite() const override { return true; }
 
 The predicate is read by
 :cfunc:`provenance_evaluate_compiled_internal`
@@ -197,26 +198,24 @@ The predicate is read by
 predicate returns ``false``, the dispatcher raises a structured
 error rather than silently producing an incorrect value.
 
-Compile-time per-semiring decisions :
+Per-semiring decisions (see each override under
+``src/semiring/*.h``) :
 
 - ``true`` : ``Boolean``, ``BoolExpr``, ``Formula`` (symbolic
-  serialisation, semantically opaque), ``Tropical``, ``Viterbi``,
-  ``Lukasiewicz``, ``MinMax``, ``Maxmin``, ``IntervalUnion``
-  variants.
-- ``false`` : ``Counting``, ``How``, ``Why``, ``Which`` ; their
-  algebras carry information (multiplicities, monomials, witness
-  sets, lineages) that the Boolean rewrite would silently
-  collapse.
+  serialisation, semantically opaque), ``IntervalUnion`` (covers
+  ``sr_temporal``, ``sr_interval_num``, ``sr_interval_int``).
+- ``false`` : every other compiled semiring (``Counting``,
+  ``How``, ``Why``, ``Which``, ``Tropical``, ``Viterbi``,
+  ``Lukasiewicz``, ``MinMax``) ; their algebras carry information
+  (multiplicities, monomials, witness sets, lineages, costs,
+  weights, graded truth values, extremal elements) that the
+  Boolean rewrite would silently collapse.
 
-Custom semirings invoked through
-:sqlfunc:`provenance_evaluate` cannot be classified statically, so
-the dispatcher emits a one-shot warning rather than refusing : the
-caller is responsible for ensuring the semiring's algebra is
-Boolean-faithful before evaluating a tagged circuit.  ProvSQL
-Studio mirrors the C++ predicate in
-``studio/provsql_studio/_compiled_semirings.py`` and filters its
-evaluation-strip dropdown to hide the incompatible semirings
-whenever the root carries the marker.
+ProvSQL Studio mirrors the C++ predicate via the
+``boolean_rewrite_compatible`` flag of
+``_COMPILED_SEMIRINGS`` in ``studio/provsql_studio/db.py``, and
+filters its evaluation-strip dropdown to hide the incompatible
+semirings whenever the root carries the marker.
 
 The marker itself is a structural wrapper rather than a per-gate
 flag, so it round-trips through circuit serialisation and is

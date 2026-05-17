@@ -515,6 +515,8 @@ result type (``OID_TYPE_RANDOM_VARIABLE`` vs
 RV-returning aggregate. See :doc:`continuous-distributions` for
 the broader architecture.
 
+.. _safe-query-rewriter:
+
 Safe-Query Rewriter
 -------------------
 

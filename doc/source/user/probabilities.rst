@@ -232,20 +232,16 @@ circuit can be probability-evaluated in linear time by the
 ``'independent'`` method, instead of falling through to
 ``'tree-decomposition'`` or external compilation.
 
-The rewriter handles:
-
-- self-join-free hierarchical conjunctive queries over TID or BID
-  base tables;
-- UCQs whose branches range over disjoint relation symbols;
-- multi-level nesting via recursive re-entry on the rewritten
-  subqueries;
-- BID-aware projection that preserves block-key alignment so the
-  ``mulinput`` block structure is not broken by the rewrite.
-
-Queries that fall outside the recognised class (joins through views,
-non-hierarchical atoms, HAVING / aggregation…) are passed through
-unchanged: the GUC enables an opt-in shortcut, never a different
-result.
+The rewriter recognises self-join-free hierarchical conjunctive
+queries over TID or BID base tables, plus a number of extensions
+that recover safety for query shapes the raw hierarchical criterion
+would reject (FD-aware reductions driven by primary keys / NOT-NULL
+UNIQUE constraints, constant selections, transparent deterministic
+relations, certain self-joins, UCQs with disjoint branches, …); see
+:ref:`safe-query-rewriter` in the developer documentation for the
+full set.  Queries outside the
+recognised class are passed through unchanged: the GUC enables an
+opt-in shortcut, never a different result.
 
 .. code-block:: postgresql
 

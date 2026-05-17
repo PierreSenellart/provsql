@@ -72,9 +72,6 @@ block-key columns.  This classification is consulted by the
 safe-query rewriter (the ``provsql.boolean_provenance`` opt-in
 optimisation, see :doc:`probabilities`) to verify that any
 projection it introduces preserves the table's block-key alignment.
-Plain users have no reason to interact with the registry directly ;
-the kind tracks ``add_provenance`` / ``repair_key`` / dropping the
-table automatically.
 
 .. note::
 
