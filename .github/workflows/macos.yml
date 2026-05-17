@@ -70,10 +70,17 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
       - run: make -j$(sysctl -n hw.ncpu) && make tdkc && make provsql_migrate_mmap && make install
-      - run: pg_isready -t 60 || (cat /usr/local/var/log/potgres*.log; false)
+      # pg_isready does a single connection attempt; the -t flag is the
+      # connection timeout, not a retry duration.  When the cluster is
+      # mid-startup or in recovery, pg_isready returns 1 immediately.
+      # A polling loop absorbs that.
+      - run: |
+          timeout 60 bash -c 'until pg_isready -q; do sleep 1; done' \
+            || (cat /usr/local/var/log/postgres*.log /usr/local/var/log/potgres*.log 2>/dev/null; false)
       - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres | xargs)" >> "$GITHUB_ENV"
       - run: echo "shared_preload_libraries = 'provsql'" >> "$POSTGRESQL_CONFIG"
       - run: brew services restart postgresql@${{ matrix.pg }}
-      - run: sleep 2  # brew services restart returns before the server is ready
-      - run: pg_isready -t 60 || (cat /usr/local/var/log/potgres*.log; false)
+      - run: |
+          timeout 60 bash -c 'until pg_isready -q; do sleep 1; done' \
+            || (cat /usr/local/var/log/postgres*.log /usr/local/var/log/potgres*.log 2>/dev/null; false)
       - run: make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
