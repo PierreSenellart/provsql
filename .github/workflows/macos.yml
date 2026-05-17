@@ -75,12 +75,14 @@ jobs:
       # mid-startup or in recovery, pg_isready returns 1 immediately.
       # A polling loop absorbs that.
       - run: |
-          timeout 60 bash -c 'until pg_isready -q; do sleep 1; done' \
-            || (cat /usr/local/var/log/postgres*.log /usr/local/var/log/potgres*.log 2>/dev/null; false)
+          for _ in $(seq 1 60); do pg_isready -q && exit 0; sleep 1; done
+          cat /usr/local/var/log/postgres*.log /usr/local/var/log/potgres*.log 2>/dev/null
+          exit 1
       - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres | xargs)" >> "$GITHUB_ENV"
       - run: echo "shared_preload_libraries = 'provsql'" >> "$POSTGRESQL_CONFIG"
       - run: brew services restart postgresql@${{ matrix.pg }}
       - run: |
-          timeout 60 bash -c 'until pg_isready -q; do sleep 1; done' \
-            || (cat /usr/local/var/log/postgres*.log /usr/local/var/log/potgres*.log 2>/dev/null; false)
+          for _ in $(seq 1 60); do pg_isready -q && exit 0; sleep 1; done
+          cat /usr/local/var/log/postgres*.log /usr/local/var/log/potgres*.log 2>/dev/null
+          exit 1
       - run: make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
