@@ -180,10 +180,10 @@ which is why ProvSQL caps the treewidth at
 falls back to ``compilation`` with ``d4`` when that bound is
 exceeded.
 
-Both the min-fill elimination loop in
-``TreeDecomposition::TreeDecomposition(const BooleanCircuit &)``
-and the bottom-up d-DNNF construction in
-``dDNNFTreeDecompositionBuilder::builddDNNF`` call
+Both the min-fill elimination loop in the
+:cfunc:`TreeDecomposition` constructor and the bottom-up d-DNNF
+construction in
+:cfunc:`dDNNFTreeDecompositionBuilder::builddDNNF` call
 ``CHECK_FOR_INTERRUPTS`` in their hot loops so that
 ``statement_timeout`` and ``pg_cancel_backend`` interrupt the
 build promptly when the heuristic struggles on circuits close to
@@ -224,9 +224,10 @@ Currently Supported Methods
        ``minic2d``) to produce a :cfunc:`dDNNF`, then
        :cfunc:`dDNNF::probabilityEvaluation`.
    * - ``""`` (default)
-     - Fallback chain: try ``independent``, then ``interpretAsDD``
-       (interpret the circuit structure directly as a d-D circuit),
-       then ``tree-decomposition``, then ``compilation`` with ``d4``.
+     - Fallback chain: try ``independent``, then
+       :cfunc:`BooleanCircuit::interpretAsDD` (interpret the circuit
+       structure directly as a d-D circuit), then
+       ``tree-decomposition``, then ``compilation`` with ``d4``.
 
 The branches for ``"compilation"``, ``"tree-decomposition"``, and
 the default all funnel through :cfunc:`BooleanCircuit::makeDD`,
@@ -252,21 +253,21 @@ construction entirely.
 
 The chain (in order) :
 
-- ``runRangeCheck`` (also runs at load time when
+- :cfunc:`runRangeCheck` (also runs at load time when
   ``provsql.simplify_on_load`` is on) : support-interval propagation
   through ``gate_arith`` and decision of every ``gate_cmp``
   decidable from the support alone.  Universal across semirings,
   so it lives both at load time and inside
   ``probability_evaluate``.
-- ``runHybridDecomposer`` (gated by ``provsql.hybrid_evaluation``) :
+- :cfunc:`runHybridDecomposer` (gated by ``provsql.hybrid_evaluation``) :
   base-RV-footprint partitioning + per-island marginalisation for
   continuous-RV cmps (see the hybrid section below).
-- ``runAnalyticEvaluator`` : closed-form CDF for trivial RV cmp
+- :cfunc:`runAnalyticEvaluator` : closed-form CDF for trivial RV cmp
   shapes (singleton bare ``gate_rv`` vs ``gate_value``, or two
   bare normals).  Probability-specific (the resulting
   ``gate_input`` carries a numeric probability with no semiring
   meaning), so it runs here and not at load time.
-- ``runCountCmpEvaluator`` (gated by
+- :cfunc:`runCountCmpEvaluator` (gated by
   ``provsql.cmp_probability_evaluation``, hidden diagnostic
   default on) : recognises HAVING
   ``gate_cmp(gate_agg(COUNT, semimod children), gate_value(C))``
@@ -284,7 +285,7 @@ Adding another closed-form cmp resolver (MIN / MAX / SUM, future
 discrete-RV distributions…) follows the same shape : a
 ``runXxxEvaluator`` function that walks ``gate_cmp`` gates, checks
 shape + independence, computes the probability, calls
-``GenericCircuit::resolveCmpToBernoulli``.  Gate it on
+:cfunc:`GenericCircuit::resolveCmpToBernoulli`.  Gate it on
 ``provsql.cmp_probability_evaluation`` so all such evaluators
 share one diagnostic switch.
 
@@ -553,7 +554,7 @@ Boolean circuit ready for any of the Boolean methods.
 
 The hybrid evaluator has three passes:
 
-- **Peephole pruning** (``RangeCheck``): support intervals
+- **Peephole pruning** (:cfunc:`runRangeCheck`): support intervals
   propagate through ``gate_arith``, every ``gate_cmp``
   is tested against the propagated interval, and every comparator
   decidable from the support alone collapses to a Bernoulli
@@ -566,7 +567,7 @@ The hybrid evaluator has three passes:
 - **Island decomposition** (:cfunc:`runHybridDecomposer`):
   the remaining cmps are partitioned by base-RV footprints into
   *islands*; single-cmp islands marginalise via
-  ``AnalyticEvaluator``'s closed-form CDF; multi-cmp islands
+  :cfunc:`runAnalyticEvaluator`'s closed-form CDF; multi-cmp islands
   with shared base RVs go through the joint table.
 
 See :doc:`continuous-distributions` for the full simplifier rule
@@ -581,7 +582,7 @@ Conditional Evaluation
 that conditions the moment, sample, or histogram on the provenance
 event ``prov``. When ``prov`` resolves to anything other than
 :sqlfunc:`gate_one`, evaluation routes through the joint-circuit
-loader ``getJointCircuit`` (:cfile:`MMappedCircuit.cpp`),
+loader :cfunc:`getJointCircuit` (:cfile:`MMappedCircuit.cpp`),
 which performs a multi-rooted BFS over the union of the reachable
 gates from both ``input`` and ``prov`` so shared ``gate_rv``
 leaves between the two are loaded into a single

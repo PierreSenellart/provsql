@@ -278,6 +278,13 @@ _C_FUNC_MAP = {
     'CircuitFromMMap::applyLoadTimeSimplification': '/doxygen-c/html/CircuitFromMMap_8cpp.html#af118aedd9ef6148318f9ffbc503bb5bc',
     'runHybridSimplifier':                   '/doxygen-c/html/namespaceprovsql.html#aa5ea6b1bb8b2d9726a1f0bc508fa8711',
     'runHybridDecomposer':                   '/doxygen-c/html/namespaceprovsql.html#af4b46c398f275b2dd56a4f6e543ccbb3',
+    'runRangeCheck':                         '/doxygen-c/html/namespaceprovsql.html#a56791cfa12bc119d18cfe076800b7631',
+    'runAnalyticEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#af6f2f8cf7272ec6aea45225c8ce24658',
+    'runCountCmpEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#a202da174e018e993ce6e351f6c7119a1',
+    'GenericCircuit::resolveCmpToBernoulli': '/doxygen-c/html/classGenericCircuit.html#aaeee2a77e24f089ef526797f4b1daff1',
+    'BooleanCircuit::interpretAsDD':         '/doxygen-c/html/classBooleanCircuit.html#a16a0f5a4e7b3c65afd2cee3747cb1c9e',
+    'dDNNFTreeDecompositionBuilder::builddDNNF': '/doxygen-c/html/classdDNNFTreeDecompositionBuilder.html#a576d126fe1e385a20c0522322bec82ef',
+    'getJointCircuit':                       '/doxygen-c/html/CircuitFromMMap_8h.html#aa005f0d1643bf481ed57ee2bc3134f20',
     'shapley_internal':                      '/doxygen-c/html/shapley_8cpp.html#a4703d29e438b3454874017304a945d67',
     # CircuitCache
     'CircuitCache':                          '/doxygen-c/html/classCircuitCache.html',

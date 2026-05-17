@@ -107,8 +107,8 @@ How-Provenance
 
 :sqlfunc:`sr_how` returns the *how-provenance* of a result – the
 canonical polynomial in :math:`\mathbb{N}[X]` over the input-tuple
-labels (Green, Karvounarakis & Tannen, *Provenance Semirings*,
-PODS'07).  Each derivation contributes a monomial; coefficients count
+labels :cite:`DBLP:conf/pods/GreenKT07`.  Each derivation contributes
+a monomial; coefficients count
 distinct derivations of the same monomial:
 
 .. code-block:: postgresql

@@ -412,26 +412,23 @@ Formal Verification
 ^^^^^^^^^^^^^^^^^^^
 
 The correctness of rules (R1)--(R5) is fully machine-checked
-in the ProvSQL Lean 4 library, sorry-free.  For the
-relational-algebra fragment (R1--R4) the main theorem is
-`Query.rewriting_valid
-<https://provsql.org/lean-docs/Provenance/QueryRewriting.html#Query.rewriting_valid>`_
-in the ``Provenance.QueryRewriting`` module: for every
-supported relational-algebra query ``q`` and every annotated
-database ``d``, evaluating ``q`` against the annotated semantics
-and then projecting to the composite (tuple + annotation)
-representation yields the same result as evaluating the
-rewritten query against the composite database.  The
-aggregation rule (R5) requires the V_K interpretation
-(values lifted with their K-semimodule annotation, Definition 7
-of the ICDE 2026 paper), and the unified statement covering
-all five rules is
+in the ProvSQL Lean 4 library.  The unified
+statement covering all five rules is
 `Query.rewriting_valid_full
 <https://provsql.org/lean-docs/Provenance/QueryEvaluateInVK.html#Query.rewriting_valid_full>`_
 in the ``Provenance.QueryEvaluateInVK`` module, stated against
 the V_K-lifted evaluator
 `Query.evaluateAnnotatedFull
-<https://provsql.org/lean-docs/Provenance/QueryEvaluateInVK.html#Query.evaluateAnnotatedFull>`_.
+<https://provsql.org/lean-docs/Provenance/QueryEvaluateInVK.html#Query.evaluateAnnotatedFull>`_:
+for every supported query ``q`` and every annotated database
+``d``, evaluating ``q`` against the annotated semantics and
+then projecting to the composite (tuple + annotation)
+representation yields the same result as evaluating the
+rewritten query against the composite database.  The V_K
+interpretation (values lifted with their K-semimodule
+annotation, Definition 7 of the ICDE 2026 paper) is what makes
+the aggregation rule (R5) statable alongside (R1)--(R4) in a
+single theorem.
 
 A companion theorem,
 `Query.evaluateAnnotatedFull_hom
@@ -439,9 +436,8 @@ A companion theorem,
 in the ``Provenance.QueryEvaluateInVKHom`` module, proves
 that query evaluation commutes with m-semiring homomorphisms
 on the full algebra including aggregation (the formal analogue
-of [Green, Karvounarakis & Tannen, *Provenance Semirings*],
-Proposition 3.5, and [Geerts & Poggi, *On database query
-languages for K-relations*], Proposition 1, lifted to
+of :cite:`DBLP:conf/pods/GreenKT07`, Proposition 3.5, and
+:cite:`DBLP:journals/japll/GeertsP10`, Proposition 1, lifted to
 m-semirings via ``SemiringWithMonusHom`` and extended to
 aggregation via the K-semimodule structure formalised in
 `Provenance.KSemiModule
@@ -564,10 +560,9 @@ Two stages, both static helpers in ``src/safe_query.c``:
      the root.  The rewriter groups the missing atoms by the
      variables they actually share and recurses on each group as
      an inner wrapped subquery, which on re-entry is rewritten
-     again by the same pipeline (Choice A from the design
-     plan: rely on ``get_provenance_attributes`` re-running
-     ``process_query`` on each subquery, no explicit recursion in
-     the rewriter).
+     again by the same pipeline: :cfunc:`get_provenance_attributes`
+     re-runs :cfunc:`process_query` on each subquery, so no
+     explicit recursion is needed in the rewriter itself.
    - **Disconnected components.**  Atoms decompose into
      connected components by shared variables ; each component
      becomes an independent wrapped subquery joined by Cartesian

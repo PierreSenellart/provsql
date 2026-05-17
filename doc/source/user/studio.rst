@@ -291,7 +291,7 @@ custom and "Other" entries below:
   * *Boolean*: ``boolexpr``, ``boolean``.
   * *Lineage*: ``formula``, ``how``, ``why``, ``which``. ``formula``
     pretty-prints the provenance circuit as a symbolic expression
-    (Green-Karvounarakis-Tannen); ``how`` is the same algebra in
+    :cite:`DBLP:conf/pods/GreenKT07`; ``how`` is the same algebra in
     canonical :math:`\mathbb{N}[X]` sum-of-products form, so two
     semantically-equal circuits collapse to identical strings :
     suitable for provenance-aware equivalence checks. ``why`` and
