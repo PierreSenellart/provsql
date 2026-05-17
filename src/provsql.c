@@ -5010,9 +5010,9 @@ static void provsql_ProcessUtility_apply(Node *parsetree,
    * MATERIALIZED @c VIEW changes the contents -- which re-runs the
    * inner SELECT and the freshly-projected rows continue to carry
    * lineage from the same sources). */
-  /* PG 13 renamed CreateTableAsStmt.relkind -> objtype (same ObjectType,
+  /* PG 14 renamed CreateTableAsStmt.relkind -> objtype (same ObjectType,
    * same OBJECT_* values; pure field rename). */
-#if PG_VERSION_NUM >= 130000
+#if PG_VERSION_NUM >= 140000
   if (stmt->objtype == OBJECT_MATVIEW)
 #else
   if (stmt->relkind == OBJECT_MATVIEW)
