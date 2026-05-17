@@ -26,6 +26,8 @@
 #include "fmgr.h"
 #include "pg_config.h"
 #include "access/htup_details.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
 #include "nodes/bitmapset.h"
 #include "nodes/makefuncs.h"
@@ -941,6 +943,93 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     }
   }
 
+  /* §3 -- deterministic-relation transparency (Gatterbauer & Suciu
+   * 2015 dissociation framework; see TODO §3).  A relation that is
+   * not provenance-tracked (no @c provsql column @em and no metadata
+   * entry in the per-table cache) contributes probability-1 tuples:
+   * dissociating tuples in a deterministic relation does not change
+   * the query's probability, so the relation is structurally
+   * transparent -- it filters the cross product but adds nothing to
+   * atom-set membership.  We model that by marking every union-find
+   * class as FD-determined within the deterministic RTE, reusing
+   * the @c DETERMINED matrix the §2 PK-FD pass already populates;
+   * the existing @c fd_aware_mode then drops the deterministic atom
+   * from each class's @c atoms_fd and the pairwise hierarchicality
+   * check accepts star-schema queries that the raw atom-count check
+   * would refuse.
+   *
+   * Soundness guards (TODO §3 + coordination with the Part 2
+   * correlation registry):
+   *
+   *  - @c rte->rtekind @c == @c RTE_RELATION : excluded by the
+   *    candidate gate already.
+   *  - @c has_provsql_col @c == @c false : the relation has no
+   *    @c provsql @c uuid column at all.  A provsql column with no
+   *    metadata entry, or an OPAQUE-tagged provsql column, was
+   *    rejected by the candidate gate at @c is_safe_query_candidate;
+   *    this branch never sees those.
+   *  - @c pg_class.relkind @c == @c RELKIND_RELATION : exclude views
+   *    (@c 'v' / @c 'm'), foreign tables (@c 'f'), partitioned
+   *    parents (@c 'p'), composite types, etc.  A view's body might
+   *    transitively reference the same probabilistic atoms as the
+   *    outer query, breaking the dissociation argument; the safe
+   *    rule is to refuse view descent here and revisit once the
+   *    @c safe-query-followups.md correlation registry materialises.
+   *  - No @c pg_inherits parent : an inheritance child shares its
+   *    parent's storage in PG; tagging it transparent could overlook
+   *    correlated rows in the parent.  Refuse conservatively.
+   *
+   * The CTAS-correlation trap (manual @c CREATE @c TABLE @c foo
+   * @c AS @c SELECT @c FROM @c <tracked>) is NOT caught by these
+   * guards -- the resulting @c foo has @c relkind @c = @c 'r' and no
+   * provsql column.  Until the correlation registry tracks ancestry,
+   * the trap remains documented in the TODO; users who deliberately
+   * strip @c provsql from a CTAS take on the responsibility. */
+  {
+    ProvenanceTableInfo info;
+    for (j = 0; j < natoms; j++) {
+      RangeTblEntry *rte = (RangeTblEntry *) list_nth(q->rtable, j);
+      AttrNumber     provsql_attno;
+      bool           has_provsql_col;
+      bool           has_meta;
+      HeapTuple      class_tup;
+      Form_pg_class  classform;
+      bool           ok_relkind;
+      if (rte->rtekind != RTE_RELATION)
+        continue;
+      provsql_attno = get_attnum(rte->relid, PROVSQL_COLUMN_NAME);
+      has_provsql_col =
+        provsql_attno != InvalidAttrNumber
+        && get_atttype(rte->relid, provsql_attno) == constants->OID_TYPE_UUID;
+      has_meta = provsql_lookup_table_info(rte->relid, &info);
+      if (has_provsql_col || has_meta)
+        continue;                       /* probabilistic / OPAQUE atom */
+
+      class_tup =
+        SearchSysCache1(RELOID, ObjectIdGetDatum(rte->relid));
+      if (!HeapTupleIsValid(class_tup))
+        continue;
+      classform = (Form_pg_class) GETSTRUCT(class_tup);
+      ok_relkind = (classform->relkind == RELKIND_RELATION);
+      ReleaseSysCache(class_tup);
+      if (!ok_relkind)
+        continue;
+
+      if (has_superclass(rte->relid))
+        continue;                       /* inheritance child */
+
+      /* All guards passed: mark every class FD-determined inside @c j.
+       * The existing atom-set construction then excludes @c j from
+       * each class's @c atoms_fd, and the pairwise hierarchicality
+       * check sees the reduced sets. */
+      for (i = 0; i < nvars; i++) {
+        if (cls[i] != i)
+          continue;
+        DETERMINED(i, j) = true;
+      }
+    }
+  }
+
   /* FD-aware atom counts: how many atoms does each class touch that
    * are not FD-determining the class.  Mirrors @c class_atom_count
    * but excludes the FD-pinned entries. */
@@ -1096,10 +1185,23 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     }
     if (eligible) {
       /* Per-atom local anchor: the lowest-repr class anchored on the
-       * atom under the FD-aware view (so the slot at output position
-       * 1 of the wrap is the column that the outer residual most
-       * naturally joins on; singletons are skipped here because they
-       * become head-Var extra slots). */
+       * atom that the outer residual most naturally joins on.  Two
+       * passes:
+       *
+       *   1. FD-aware preference -- pick a class that anchors on the
+       *      atom @em and is not FD-determined there.  This is the
+       *      §2 case: under PK on @c S.x, class @c {S.y, T.y} drops
+       *      its @c S anchor for atom-set purposes, so @c S's local
+       *      root should be the @c {R.x, S.x} class instead.
+       *   2. Fallback -- atoms with every anchored class FD-determined
+       *      (the §3 deterministic-relation case: every class is
+       *      tagged determined inside the deterministic atom) still
+       *      need a slot column for the outer's residual equijoin
+       *      to resolve through.  Use the first anchored class
+       *      regardless of FD status.  The DISTINCT wrap on the slot
+       *      column collapses duplicate keys so each Sales token
+       *      still appears once across the cross product, preserving
+       *      read-once. */
       atom_anchor_class = palloc(natoms * sizeof(int));
       for (j = 0; j < natoms; j++)
         atom_anchor_class[j] = -1;
@@ -1118,10 +1220,24 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
             atom_anchor_class[j] = c;
         }
       }
-      /* An atom with no multi-atom anchor under the FD-aware view
-       * (e.g. only singleton-class head Vars touch it) cannot be
-       * wrapped in @c fd_aware_mode -- it would need a join key from
-       * the outer's residual that no shared class provides.  Bail. */
+      for (j = 0; j < natoms; j++) {
+        if (atom_anchor_class[j] >= 0)
+          continue;
+        for (i = 0; i < nvars; i++) {
+          if (cls[i] != i)
+            continue;
+          if (class_atom_count[i] < 2 || class_atom_count[i] > natoms)
+            continue;
+          if (ANCHOR(i, j) != 0) {
+            atom_anchor_class[j] = i;
+            break;
+          }
+        }
+      }
+      /* An atom with no multi-atom anchor at all (e.g. only singleton-
+       * class head Vars touch it) cannot be wrapped in
+       * @c fd_aware_mode -- it would need a join key from the outer's
+       * residual that no shared class provides.  Bail. */
       for (j = 0; j < natoms; j++) {
         if (atom_anchor_class[j] < 0) {
           eligible = false;

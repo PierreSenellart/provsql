@@ -1,0 +1,34 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|prob_baseline
+1|0.875000
+(1 row)
+remove_provenance
+
+(1 row)
+x|prob_rewritten
+1|0.875000
+(1 row)
+x|diff_baseline_vs_rewritten
+1|0.000000000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|diff_dup_baseline_vs_rewritten
+1|0.000000000
+(1 row)
+add_provenance
+
+(1 row)
+set_table_info
+
+(1 row)
