@@ -1758,7 +1758,6 @@ def exec_batch(
                                 return [], _user_error_result(e2, meta, statement_timeout), meta
                         else:
                             return [], _user_error_result(e, meta, statement_timeout), meta
-                    capture[0] = True
                 else:
                     # No wrap (circuit mode or unwrappable last). The user's
                     # query runs once with capture enabled : its planner-hook
@@ -1768,6 +1767,20 @@ def exec_batch(
                     except psycopg.Error as e:
                         return [], _user_error_result(e, meta, statement_timeout), meta
 
+                # Post-processing pass : silence the notice handler so
+                # Studio-internal lookups (the per-column `_type_name`
+                # pg_type probe behind `_result_from_cursor`, the
+                # `_resolve_agg_display` agg_token name resolution) don't
+                # add their own classifier NOTICEs to the captured stream.
+                # Each of those lookups is a `SELECT ... FROM <tbl>`
+                # against an untracked catalog table, which the planner-
+                # hook classifier (when on) would tag as
+                # "TID (no provenance-tracked sources)". With Studio's
+                # "last NOTICE wins" pill logic, a single user query that
+                # introduced new column types would clobber the user's
+                # OPAQUE / BID verdict with a stale TID until the per-
+                # connection type-name cache warmed up.
+                capture[0] = False
                 final = _result_from_cursor(cur, max_rows=max_result_rows)
                 # If the result has any agg_token columns, resolve their
                 # underlying UUIDs back to "value (*)" display strings in
