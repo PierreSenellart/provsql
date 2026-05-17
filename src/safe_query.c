@@ -3299,6 +3299,389 @@ static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
   pfree(cls);
 }
 
+/** @brief Mutator context for @c safe_unify_remap_mutator. */
+typedef struct safe_unify_remap_ctx {
+  int *old_to_new;     ///< 1-indexed array: original rtindex -> compacted rtindex (after dropping non-keeper RTEs).  Non-keepers map to their keeper's new index; keepers map to their own compacted index.
+  int  natoms;         ///< Length of the original rtable (1-based domain of @c old_to_new).
+} safe_unify_remap_ctx;
+
+/**
+ * @brief Tree mutator that renumbers @c Var.varno and
+ *        @c RangeTblRef.rtindex through the §5 self-join unification
+ *        map.
+ *
+ * Applied to every node of the unified @c Query : the @c targetList,
+ * the @c jointree (which itself contains @c RangeTblRef leaves
+ * referring to surviving RTEs as well as expression subtrees in the
+ * @c quals), the @c havingQual when present, etc.  Vars with
+ * @c varlevelsup @c > @c 0 are outer references and left alone --
+ * the candidate gate has already rejected sublinks, so they cannot
+ * legitimately appear, but the guard keeps the mutator local.
+ *
+ * @c varnosyn / @c varattnosyn (PG 13+ "syntactic" parallel of the
+ * semantic rtindex used by @c ruleutils.c's deparser) are kept in
+ * sync; without that, @c pg_get_querydef on the unified query
+ * stack-overflows because the syntactic dereference and the
+ * semantic one disagree.
+ */
+static Node *safe_unify_remap_mutator(Node *node,
+                                      safe_unify_remap_ctx *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0
+        && v->varno >= 1 && (int) v->varno <= ctx->natoms) {
+      int newno = ctx->old_to_new[v->varno];
+      if (newno > 0 && newno != (int) v->varno) {
+        Var *nv = (Var *) copyObject(v);
+        nv->varno = (Index) newno;
+#if PG_VERSION_NUM >= 130000
+        nv->varnosyn = (Index) newno;
+#endif
+        return (Node *) nv;
+      }
+    }
+    return node;
+  }
+  if (IsA(node, RangeTblRef)) {
+    RangeTblRef *rtr = (RangeTblRef *) node;
+    if (rtr->rtindex >= 1 && rtr->rtindex <= ctx->natoms) {
+      int newno = ctx->old_to_new[rtr->rtindex];
+      if (newno > 0 && newno != rtr->rtindex) {
+        RangeTblRef *nr = (RangeTblRef *) copyObject(rtr);
+        nr->rtindex = newno;
+        return (Node *) nr;
+      }
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, safe_unify_remap_mutator, (void *) ctx);
+}
+
+/**
+ * @brief §5 PK-unifiable self-join detection and unification.
+ *
+ * A query of shape @c R @c r1, @c R @c r2 @c WHERE @c r1.x @c =
+ * @c r2.x with @c PRIMARY @c KEY @c (x) on @c R forces @c r1 and
+ * @c r2 to refer to the same tuple.  The two RTEs collapse to one
+ * single-atom CQ; the safe-query candidate gate's "no two RTEs may
+ * share a relid" bail becomes a missed-opportunity bail when the PK
+ * proves the shared-relid pair is non-self-joining at the tuple
+ * level.
+ *
+ * This pre-pass runs before @c is_safe_query_candidate.  It returns
+ * @c NULL when no unification fires; otherwise it returns a fresh
+ * @c Query in which:
+ *
+ *  - For every group of same-relid RTEs whose pairwise PK columns
+ *    are equated through the union-find closure of the residual
+ *    equijoins, all but one member (the lowest-rtindex survivor)
+ *    are dropped from @c rtable.
+ *  - @c jointree->fromlist's @c RangeTblRef entries are renumbered
+ *    or dropped to match.  Multiple original entries pointing at
+ *    the same survivor are deduplicated.
+ *  - Every @c Var.varno (and parallel @c varnosyn) in @c targetList
+ *    and @c jointree->quals is rewritten to point at the survivor's
+ *    new (compacted) rtindex.
+ *
+ * Soundness traps (TODO §5):
+ *
+ *  - Composite PK requires every column to be equated; the pairwise
+ *    check uses the union-find closure so transitive equijoins
+ *    (e.g. @c r1.x @c = @c r3.x @c AND @c r2.x @c = @c r3.x) suffice.
+ *  - Partial unification (3 RTEs of the same relid where only two
+ *    have their PK columns equated) bails the entire group: the
+ *    candidate gate would otherwise still refuse the surviving
+ *    duplicates.  This matches the TODO's "start with full
+ *    unification or full bail" guidance.
+ *  - NOT-NULL UNIQUE is FD-equivalent to PRIMARY KEY (see §2); the
+ *    same key cache feeds this pass, and the same NOT-NULL guard
+ *    excludes nullable UNIQUEs.
+ */
+static Query *try_pk_self_join_unification(Query *q) {
+  int       natoms = list_length(q->rtable);
+  bool      found_dup;
+  List     *seen_relids;
+  ListCell *lc;
+  safe_collect_vars_ctx vctx = { NIL };
+  List     *eq_pairs = NIL;
+  Var     **vars_arr;
+  int      *cls;
+  int       nvars;
+  int       i, j;
+  int      *keeper;
+  bool      any_unified;
+  Query    *new_q;
+  int      *old_to_new;
+  List     *new_rtable;
+  List     *new_fromlist;
+  int       new_idx;
+  bool     *seen_new;
+  safe_unify_remap_ctx rctx;
+
+  if (natoms < 2)
+    return NULL;
+
+  /* Fast exit when there is no duplicate-relid pair to unify. */
+  found_dup = false;
+  seen_relids = NIL;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+    ListCell *lc2;
+    if (rte->rtekind != RTE_RELATION)
+      continue;
+    foreach (lc2, seen_relids) {
+      if (lfirst_oid(lc2) == rte->relid) {
+        found_dup = true;
+        break;
+      }
+    }
+    if (found_dup)
+      break;
+    seen_relids = lappend_oid(seen_relids, rte->relid);
+  }
+  list_free(seen_relids);
+  if (!found_dup)
+    return NULL;
+
+  /* Build the union-find over base-level Vars referenced in
+   * targetList and jointree->quals.  We deliberately do not consult
+   * @c per_atom_quals here because §5 cares about cross-RTE
+   * equijoins only -- a @c Var @c = @c Const conjunct is atom-local
+   * and pins a single Var, but unification requires Vars on two
+   * distinct RTEs to share a class. */
+  expression_tree_walker((Node *) q->targetList,
+                         safe_collect_vars_walker, &vctx);
+  if (q->jointree && q->jointree->quals)
+    expression_tree_walker(q->jointree->quals,
+                           safe_collect_vars_walker, &vctx);
+  nvars = list_length(vctx.vars);
+  if (nvars == 0)
+    return NULL;
+
+  vars_arr = palloc(nvars * sizeof(Var *));
+  cls = palloc(nvars * sizeof(int));
+  i = 0;
+  foreach (lc, vctx.vars) {
+    vars_arr[i] = (Var *) lfirst(lc);
+    cls[i] = i;
+    i++;
+  }
+  if (q->jointree && q->jointree->quals)
+    safe_collect_equalities(q->jointree->quals, &eq_pairs);
+  for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
+    Var *lv, *rv;
+    int  li, ri, ci, cj, k;
+    lv = (Var *) lfirst(lc);
+    lc = my_lnext(eq_pairs, lc);
+    rv = (Var *) lfirst(lc);
+    li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
+    ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+    if (li < 0 || ri < 0)
+      continue;
+    ci = cls[li];
+    cj = cls[ri];
+    if (ci == cj)
+      continue;
+    for (k = 0; k < nvars; k++)
+      if (cls[k] == cj)
+        cls[k] = ci;
+  }
+
+  /* Group same-relid RTEs and check pairwise PK-unifiability inside
+   * every group.  @c keeper[j] starts as @c j (self-keeper) and gets
+   * pointed at the group's lowest-rtindex survivor when the group
+   * fully unifies. */
+  keeper = palloc(natoms * sizeof(int));
+  for (j = 0; j < natoms; j++)
+    keeper[j] = j;
+
+  any_unified = false;
+  for (j = 0; j < natoms; j++) {
+    RangeTblEntry         *rte_j;
+    ProvenanceRelationKeys keys;
+    List                  *group;
+    bool                   all_pairs_unify;
+    int                    k;
+    ListCell              *lc_a, *lc_b;
+    if (keeper[j] != j)
+      continue;
+    rte_j = (RangeTblEntry *) list_nth(q->rtable, j);
+    if (rte_j->rtekind != RTE_RELATION)
+      continue;
+    if (!provsql_lookup_relation_keys(rte_j->relid, &keys))
+      continue;
+
+    group = list_make1_int(j);
+    for (k = j + 1; k < natoms; k++) {
+      RangeTblEntry *rte_k = (RangeTblEntry *) list_nth(q->rtable, k);
+      if (rte_k->rtekind != RTE_RELATION)
+        continue;
+      if (rte_k->relid != rte_j->relid)
+        continue;
+      group = lappend_int(group, k);
+    }
+    if (list_length(group) < 2) {
+      list_free(group);
+      continue;
+    }
+
+    /* Pairwise check: every pair in the group must share at least
+     * one key whose every column lies in the same union-find class
+     * across the two RTEs.  Any pair that misses bails the entire
+     * group (partial unification is documented in the TODO as a
+     * follow-up). */
+    all_pairs_unify = true;
+    foreach (lc_a, group) {
+      int aa = lfirst_int(lc_a);
+      foreach (lc_b, group) {
+        int bb = lfirst_int(lc_b);
+        bool this_pair_unifies = false;
+        uint16 ki;
+        if (bb <= aa)
+          continue;
+        for (ki = 0; ki < keys.key_n; ki++) {
+          const ProvenanceRelationKey *key = &keys.keys[ki];
+          bool all_pk_equated = true;
+          uint16 kc;
+          for (kc = 0; kc < key->col_n; kc++) {
+            AttrNumber attno = key->cols[kc];
+            int idx_a =
+              safe_var_index(vctx.vars, (Index) (aa + 1), attno);
+            int idx_b =
+              safe_var_index(vctx.vars, (Index) (bb + 1), attno);
+            if (idx_a < 0 || idx_b < 0 || cls[idx_a] != cls[idx_b]) {
+              all_pk_equated = false;
+              break;
+            }
+          }
+          if (all_pk_equated) {
+            this_pair_unifies = true;
+            break;
+          }
+        }
+        if (!this_pair_unifies) {
+          all_pairs_unify = false;
+          break;
+        }
+      }
+      if (!all_pairs_unify)
+        break;
+    }
+
+    if (all_pairs_unify) {
+      foreach (lc_a, group) {
+        int aa = lfirst_int(lc_a);
+        if (aa != j) {
+          keeper[aa] = j;
+          any_unified = true;
+        }
+      }
+    }
+    list_free(group);
+  }
+
+  if (!any_unified) {
+    pfree(keeper);
+    pfree(vars_arr);
+    pfree(cls);
+    return NULL;
+  }
+
+  /* Build the @c old_to_new map.  Keepers get consecutive new
+   * (1-based) indexes; non-keepers reuse their keeper's new index.
+   * Resolution walks @c keeper transitively in case a chain emerged
+   * during the merge loop above. */
+  old_to_new = palloc0((natoms + 1) * sizeof(int));
+  new_idx = 1;
+  for (j = 0; j < natoms; j++) {
+    int root = j;
+    while (keeper[root] != root)
+      root = keeper[root];
+    if (root == j)
+      old_to_new[j + 1] = new_idx++;
+  }
+  for (j = 0; j < natoms; j++) {
+    int root = j;
+    while (keeper[root] != root)
+      root = keeper[root];
+    if (root != j)
+      old_to_new[j + 1] = old_to_new[root + 1];
+  }
+
+  /* Build the compacted rtable: surviving entries in original order. */
+  new_rtable = NIL;
+  for (j = 0; j < natoms; j++) {
+    int root = j;
+    while (keeper[root] != root)
+      root = keeper[root];
+    if (root == j) {
+      RangeTblEntry *rte = (RangeTblEntry *) list_nth(q->rtable, j);
+      new_rtable = lappend(new_rtable, copyObject(rte));
+    }
+  }
+
+  /* Build the compacted fromlist: walk the original fromlist, drop
+   * @c RangeTblRef entries pointing at non-keepers, renumber the
+   * rest, and skip duplicates that arose from co-keepers (every
+   * non-RangeTblRef entry passes through unchanged -- the candidate
+   * gate has already rejected those shapes, but the mutator keeps
+   * its precondition local). */
+  new_fromlist = NIL;
+  seen_new = palloc0((new_idx + 1) * sizeof(bool));
+  if (q->jointree) {
+    foreach (lc, q->jointree->fromlist) {
+      Node *n = (Node *) lfirst(lc);
+      if (IsA(n, RangeTblRef)) {
+        RangeTblRef *rtr = (RangeTblRef *) n;
+        int new_no = old_to_new[rtr->rtindex];
+        RangeTblRef *clone;
+        if (new_no <= 0)
+          continue;
+        if (seen_new[new_no])
+          continue;
+        seen_new[new_no] = true;
+        clone = (RangeTblRef *) copyObject(rtr);
+        clone->rtindex = new_no;
+        new_fromlist = lappend(new_fromlist, clone);
+      } else {
+        new_fromlist = lappend(new_fromlist, copyObject(n));
+      }
+    }
+  }
+  pfree(seen_new);
+
+  /* Assemble the new Query.  @c copyObject the input first so the
+   * planner's original @c Query is left untouched (a downstream
+   * bail must leave the input pristine); the mutator then rewrites
+   * Vars / @c RangeTblRefs in place on the copy. */
+  new_q = (Query *) copyObject(q);
+  new_q->rtable = new_rtable;
+  if (new_q->jointree)
+    new_q->jointree->fromlist = new_fromlist;
+#if PG_VERSION_NUM >= 160000
+  /* @c rteperminfos is left intact; surviving RTEs' @c perminfoindex
+   * still points at the matching record in the original list, and
+   * orphan records are harmless (PG enforces no 1-to-1 invariant). */
+#endif
+
+  rctx.old_to_new = old_to_new;
+  rctx.natoms     = natoms;
+  new_q->targetList = (List *)
+      safe_unify_remap_mutator((Node *) new_q->targetList, &rctx);
+  if (new_q->jointree && new_q->jointree->quals)
+    new_q->jointree->quals =
+        safe_unify_remap_mutator(new_q->jointree->quals, &rctx);
+
+  pfree(old_to_new);
+  pfree(keeper);
+  pfree(vars_arr);
+  pfree(cls);
+
+  return new_q;
+}
+
 /**
  * @brief Top-level entry point for the safe-query rewrite.
  *
@@ -3329,6 +3712,19 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
    * resolved back to their base-table expressions. */
   strip_group_rte_pg18(q);
 #endif
+
+  /* §5 PK-unifiable self-join pre-pass.  When two RTEs over the
+   * same relation have all PRIMARY KEY (or NOT-NULL UNIQUE) columns
+   * equated through the union-find closure, the key proves they
+   * refer to the same tuple; merge the duplicate RTEs into a single
+   * survivor before the shared-relid bail in @c is_safe_query_candidate
+   * rejects the query.  Returns @c NULL when no unification applies,
+   * else a fresh @c Query with the merge baked in. */
+  {
+    Query *unified = try_pk_self_join_unification(q);
+    if (unified != NULL)
+      q = unified;
+  }
 
   if (!is_safe_query_candidate(constants, q))
     return NULL;
