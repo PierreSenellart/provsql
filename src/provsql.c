@@ -5273,11 +5273,7 @@ void _PG_init(void) {
                            "Read-only : the classifier does not "
                            "rewrite the query.  Studio reads the "
                            "NOTICE to label query results with their "
-                           "certified kind.  See "
-                           "doc/TODO/safe-query-followups.md for the "
-                           "follow-up slices (CTAS tag inheritance, "
-                           "inter-relation correlation registry, "
-                           "view descent).",
+                           "certified kind.",
                            &provsql_classify_top_level,
                            false,
                            PGC_USERSET,

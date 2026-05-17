@@ -28,10 +28,11 @@
  *    @c UNION @c DISTINCT, mixed kinds, overlapping leg sources)
  *    falls back to OPAQUE.
  *
- * Everything else is reported as OPAQUE.  See
- * @c doc/TODO/safe-query-followups.md for the follow-up
- * extensions (independent-TID join inference, BID block-key
- * preservation, the correlation registry).
+ * Everything else is reported as OPAQUE.  Independent-TID join
+ * inference, BID block-key preservation under projection and
+ * @c GROUP @c BY, and the per-relation base-ancestor registry the
+ * disjointness check consults all live in this same file ; see
+ * the helpers below.
  */
 #include "postgres.h"
 
@@ -264,9 +265,8 @@ static bool collect_union_all_legs(Node *node, Query *parent,
  * require either certifying disjoint block-key values between
  * legs (not knowable from the query text) or emitting a synthetic
  * composite block key @c (leg_id, k) in the output and recording
- * it in @c provsql_table_info -- both belong with the CTAS-tag-
- * inheritance / correlation-registry slices.  See
- * @c doc/TODO/safe-query-followups.md.
+ * it in @c provsql_table_info ; both paths are documented as
+ * conservative-by-design in the safe-query follow-ups.
  */
 static bool try_classify_union_all(Query *q,
                                    ProvSQLClassification *out) {

@@ -79,7 +79,7 @@ The kind is then decided from the cumulative tracked-source count:
 * shape ok and exactly one tracked source → that source's recorded
   kind, refined by the BID projection check below;
 * shape ok and two or more tracked sources → conservative
-  multi-source TID promotion (see :ref:`multi-source-tid` below)
+  multi-source TID promotion (see below)
   or fall through to ``OPAQUE``.
 
 **BID projection preservation.**  In the single-source BID case,
@@ -106,8 +106,6 @@ sublinks / ``HAVING`` / ``DISTINCT`` / set operations, a single
 extra group columns, no missing keys).  PG 18's synthetic
 ``RTE_GROUP`` entry is resolved through inline by
 :cfunc:`resolve_through_group_rte`.
-
-.. _multi-source-tid:
 
 **Multi-source TID promotion.**  The ``n_meta >= 2`` branch no
 longer collapses to OPAQUE.  :cfunc:`try_classify_multi_source_tid`
@@ -745,9 +743,9 @@ The extensions and their interaction with the base rewriter:
   ``has_superclass = false`` exclude views, foreign tables, and
   inheritance children; the residual CTAS-correlation trap
   (``CREATE TABLE foo AS SELECT * FROM <tracked>`` without
-  ``add_provenance``) is documented in the safe-query follow-ups
-  and closed by the future correlation-registry work in
-  ``doc/TODO/safe-query-followups.md``.  An anchor-fallback pass
+  ``add_provenance``) is closed by the lineage hook (see
+  :ref:`tid-bid-propagation`) and the ancestry-based
+  disjointness gate.  An anchor-fallback pass
   selects any anchored multi-atom class as the local root for
   deterministic atoms (the FD-aware preference for non-determined
   classes leaves them orphan otherwise).  Each deterministic atom's
@@ -766,7 +764,7 @@ The extensions and their interaction with the base rewriter:
   relations: each PK FD is applied once and the FD-aware atom sets
   become disjoint pairwise.  The FD-induced nested rewrite for
   shapes where the single-level wrap is not read-once (the
-  function/free split) is deferred to ``safe-query-followups.md``.
+  function/free split) is deliberately deferred.
 
 - **PK-unifiable self-joins.**  When two (or more) RTEs over the
   same relation have all PK / NOT-NULL UNIQUE columns equated

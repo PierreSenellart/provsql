@@ -5,11 +5,13 @@
  * The classifier is invoked by @c provsql_planner on the top-level
  * @c Query when the @c provsql.classify_top_level GUC is on, and emits a
  * @c NOTICE carrying the certified kind and the set of
- * provenance-tracked base relations the query touches.  See
- * @c doc/TODO/safe-query-followups.md ("TID / BID propagation through
- * derived relations") for the broader design and follow-up slices
- * (CTAS tag inheritance, inter-relation correlation registry, view
- * descent).
+ * provenance-tracked base relations the query touches.  Independent-
+ * TID join inference, BID block-key preservation under projection
+ * and @c GROUP @c BY, transitive ancestor-set computation through
+ * the per-relation registry, view descent, and ANSI @c INNER /
+ * @c CROSS @c JOIN handling all live in this same file's helpers
+ * and the matching propagation pre-passes in
+ * @c src/safe_query.c.
  */
 #ifndef CLASSIFY_QUERY_H
 #define CLASSIFY_QUERY_H
@@ -65,10 +67,19 @@ typedef struct ProvSQLClassification {
  *    TID with an empty source list.
  *  - Everything else is reported as OPAQUE.
  *
- * Follow-up slices add independent-TID join inference, BID
- * block-key preservation under projection / @c GROUP @c BY, and
- * the transitive ancestor-set computation that the future
- * correlation registry will consume.
+ *  - Multi-source TID promotion : @c n_meta @c >= @c 2 promotes
+ *    to TID when every classifier-reported source is TID and the
+ *    registered ancestor sets are pairwise disjoint.
+ *  - BID projection preservation : the single-source BID branch
+ *    walks the outer target list (transitively through any depth
+ *    of @c RTE_SUBQUERY TLE projection) and downgrades to OPAQUE
+ *    when any block-key column is dropped.
+ *  - BID @c GROUP @c BY block-key promotion : a pre-dispatch
+ *    special case promotes @c SELECT @c k @c FROM @c bid_t
+ *    @c GROUP @c BY @c k to TID (each output row is one block).
+ *  - ANSI @c INNER / @c CROSS @c JOIN : the shape gate accepts
+ *    @c JoinExpr fromlist entries when @c jointype @c ==
+ *    @c JOIN_INNER, recursing into both arms.
  *
  * @param q    Parsed @c Query to classify.  Read-only; not mutated.
  * @param out  Output struct.  @c source_relids is built in the current

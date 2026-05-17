@@ -1042,18 +1042,19 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
    *    parents (@c 'p'), composite types, etc.  A view's body might
    *    transitively reference the same probabilistic atoms as the
    *    outer query, breaking the dissociation argument; the safe
-   *    rule is to refuse view descent here and revisit once the
-   *    @c safe-query-followups.md correlation registry materialises.
+   *    rule is to refuse view descent here and let the ancestry-
+   *    disjointness gate downstream catch the cross-relation
+   *    correlation through the per-relation base-ancestor registry.
    *  - No @c pg_inherits parent : an inheritance child shares its
    *    parent's storage in PG; tagging it transparent could overlook
    *    correlated rows in the parent.  Refuse conservatively.
    *
    * The CTAS-correlation trap (manual @c CREATE @c TABLE @c foo
-   * @c AS @c SELECT @c FROM @c <tracked>) is NOT caught by these
-   * guards -- the resulting @c foo has @c relkind @c = @c 'r' and no
-   * provsql column.  Until the correlation registry tracks ancestry,
-   * the trap remains documented in the TODO; users who deliberately
-   * strip @c provsql from a CTAS take on the responsibility. */
+   * @c AS @c SELECT @c FROM @c <tracked>) is closed by the
+   * lineage hook in @c provsql_ProcessUtility plus the
+   * ancestry-based disjointness gate above ; users who manually
+   * strip @c provsql from a CTAS bypass both and take on the
+   * responsibility. */
   {
     ProvenanceTableInfo info;
     for (j = 0; j < natoms; j++) {
@@ -3609,8 +3610,9 @@ static Query *try_pk_self_join_unification(Query *q) {
     /* Pairwise check: every pair in the group must share at least
      * one key whose every column lies in the same union-find class
      * across the two RTEs.  Any pair that misses bails the entire
-     * group (partial unification is documented in the TODO as a
-     * follow-up). */
+     * group (partial unification is a deliberate non-goal: full
+     * unification or full bail keeps the soundness argument
+     * single-pair). */
     all_pairs_unify = true;
     foreach (lc_a, group) {
       int aa = lfirst_int(lc_a);

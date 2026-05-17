@@ -411,7 +411,7 @@ extern bool provsql_fetch_ancestry(Oid relid,
  * construction: PRIMARY KEY enforces this implicitly, and UNIQUE
  * constraints are admitted only when @c pg_attribute.attnotnull is
  * @c true for every constituent column (the §2 soundness trap on
- * nullable UNIQUE; see the TODO).
+ * nullable UNIQUE).
  */
 typedef struct ProvenanceRelationKey {
   uint16     col_n;
