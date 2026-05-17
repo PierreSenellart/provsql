@@ -3257,7 +3257,18 @@ static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
 
   /* Drop residual conjuncts whose every Var is in a constant-pinned
    * class: those equijoins are now redundant (each side carries its
-   * own propagated @c Var @c = @c const filter). */
+   * own propagated @c Var @c = @c const filter).  Crucially, this
+   * also disconnects the constant-pinned atoms from the rest of the
+   * residual, so the multi-component dispatcher splits them off
+   * into their own inner sub-Queries -- which @c process_query then
+   * collapses to a single aggregated @c gate_plus token per atom,
+   * factoring the pinned atom out as an independent @c gate_times
+   * child of the top-level circuit.  That factoring is what
+   * preserves read-once across multiple-match rows on the rest of
+   * the query; leaving the equijoin in place would make the
+   * pinned atom appear as a regular atom in the outer cross
+   * product, duplicating its provsql across the per-row
+   * @c gate_times and breaking the read-once invariant. */
   if (*residual_in_out != NULL) {
     List     *conjuncts = NIL;
     List     *kept = NIL;
