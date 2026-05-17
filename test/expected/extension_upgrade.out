@@ -33,6 +33,12 @@ alice|assumed_boolean
 bob|assumed_boolean
 carol|assumed_boolean
 (3 rows)
-ancestry_seeded_to_self
-t
+set_table_info
+
+(1 row)
+set_ancestors
+
+(1 row)
+post_upgrade_kind|post_upgrade_ancestry_roundtrip
+tid|t
 (1 row)

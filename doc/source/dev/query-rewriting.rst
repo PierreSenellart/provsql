@@ -51,44 +51,83 @@ behavioural change downstream.
 
 **Decision rules.**  A shape gate first rejects any query carrying
 any of ``hasSubLinks``, ``hasModifyingCTE``, a non-empty ``cteList``,
-a non-NULL ``setOperations``, or a non-``RangeTblRef`` entry in the
-``fromlist``.  The range table is then walked, collecting
+a non-NULL ``setOperations``, or a fromlist entry that is neither
+a ``RangeTblRef`` nor an ``INNER`` / ``CROSS`` ``JoinExpr`` (recursed
+into via :cfunc:`classify_fromlist_shape_ok`, which descends
+through each ``JoinExpr``'s two arms to reach the underlying
+``RangeTblRef``\ s).  The range table is then walked, collecting
 ``RTE_RELATION`` entries with ``provsql_table_info`` metadata as
 sources; ``RTE_SUBQUERY`` entries (the form views take after PG
 rewriting, as well as inline ``FROM``-clause subqueries) are
 descended into recursively under the same shape gate, so a tracked
 base relation reached through any depth of subquery nesting still
 contributes to the accumulator; the PostgreSQL 18 synthetic
-``RTE_GROUP`` is skipped transparently; any other rtekind
-(``RTE_JOIN``, ``RTE_VALUES``, ``RTE_FUNCTION``, ``RTE_CTE``, …)
-trips the shape gate.  The kind is decided from the cumulative
-tracked-source count:
+``RTE_GROUP`` and the ``RTE_JOIN`` synthetic alias rows PG appends
+alongside every ``JoinExpr`` are skipped transparently; any other
+rtekind (``RTE_VALUES``, ``RTE_FUNCTION``, ``RTE_CTE`` …) trips
+the shape gate.  Outer joins (``LEFT`` / ``RIGHT`` / ``FULL``)
+stay OPAQUE because their NULL-padding rows break per-row
+independence; ``USING`` and aliased joins are also OPAQUE (they
+would require resolving columns through ``joinaliasvars``).
+
+The kind is then decided from the cumulative tracked-source count:
 
 * shape failed → ``OPAQUE`` (hidden structure may carry correlations
   the classifier cannot rule out);
 * shape ok and zero tracked sources → ``TID`` (no provenance
   involved, trivially deterministic);
 * shape ok and exactly one tracked source → that source's recorded
-  kind;
-* shape ok and two or more tracked sources → ``OPAQUE`` (joins are
-  deferred to a later slice that will infer independent-TID joins
-  via the hierarchical-CQ criterion).
+  kind, refined by the BID projection check below;
+* shape ok and two or more tracked sources → conservative
+  multi-source TID promotion (see :ref:`multi-source-tid` below)
+  or fall through to ``OPAQUE``.
+
+**BID projection preservation.**  In the single-source BID case,
+:cfunc:`bid_block_key_preserved` walks the outer target list and
+requires every block-key column of the source to survive -- matched
+on the underlying ``Var`` (resolved transitively through any depth
+of ``RTE_SUBQUERY`` ``TargetEntry`` projection, ignoring renames)
+rather than on the output column name.  If any block-key column is
+dropped from the projection, the result downgrades to ``OPAQUE``:
+the mutually-exclusive partitioning the user could observe is no
+longer visible in the output.  Whole-table BID
+(``block_key_n == 0``) is trivially preserved.
+
+**GROUP BY block-key promotion.**  A pre-dispatch special case
+recognises queries of shape ``SELECT k FROM bid_t GROUP BY k``
+(and the multi-column-key generalisation): each output row is
+exactly one BID block, and the OR over the block's ``gate_mulinput``
+children reduces to the block's key token (an independent
+``gate_input``), so the output is TID under the cumulative source
+list.  Conservative gate: no aggregates / window functions /
+sublinks / ``HAVING`` / ``DISTINCT`` / set operations, a single
+``RangeTblRef`` fromlist pointing at a BID relation, and the
+``groupClause`` matching the source's block-key set exactly (no
+extra group columns, no missing keys).  PG 18's synthetic
+``RTE_GROUP`` entry is resolved through inline by
+:cfunc:`resolve_through_group_rte`.
+
+.. _multi-source-tid:
+
+**Multi-source TID promotion.**  The ``n_meta >= 2`` branch no
+longer collapses to OPAQUE.  :cfunc:`try_classify_multi_source_tid`
+promotes the result to TID when every classifier-reported source
+is itself TID and the registered ancestor sets (see
+:ref:`tid-bid-propagation` below) are pairwise disjoint.  Any
+failure (a non-TID source, no registry entry, or any pair of
+ancestor sets overlapping) keeps the OPAQUE default.  The
+hierarchical-CQ structure is *not* inspected here -- the
+:ref:`safe-query-rewriter` runs the full check downstream; the
+classifier's job is only to certify the per-row independence the
+user-visible NOTICE pill advertises.
 
 TID and BID NOTICEs carry a complete source list.  OPAQUE NOTICEs
 deliberately omit it: when the shape gate trips on a sublink, set
-operation, ``GROUP BY``, ``DISTINCT``, ``HAVING``, aggregates,
-window functions, or SRFs in the target list, the rtable walk
-only reaches the syntactically visible RTEs, so any list would
-be partial and falsely suggest completeness.  The user already
-has the query text in front of them and can identify the
-involved relations without our help.
-
-Independent-TID join inference, BID block-key preservation under
-projection / ``GROUP BY``, ``UNION ALL`` of compatible BID legs,
-and the transitive base-ancestor computation the future
-correlation registry will consume are all explicit follow-ups;
-see ``doc/TODO/safe-query-followups.md`` ("TID / BID propagation
-through derived relations").
+operation, ``HAVING``, aggregates, window functions, or SRFs in
+the target list, the rtable walk only reaches the syntactically
+visible RTEs, so any list would be partial and falsely suggest
+completeness.  The user already has the query text in front of
+them and can identify the involved relations without our help.
 
 **Executor-depth gating.**  ProvSQL's rewriter inserts calls to
 PL/pgSQL helpers (``provenance_times``, ``provenance_plus``,
@@ -529,17 +568,62 @@ linear time by :cfunc:`BooleanCircuit::independentEvaluation`,
 which replaces the fallback to tree decomposition or external
 knowledge compilation that the unrewritten circuit would require.
 
-Two stages, both static helpers in ``src/safe_query.c``:
+Two normalisation pre-passes run at the head of
+``try_safe_query_rewrite`` so the detector and rewriter see a flat
+fromlist of base ``RTE_RELATION`` entries regardless of how the
+user wrote the query:
+
+- ``try_flatten_inner_joins(q)`` dissolves every ``INNER`` /
+  ``CROSS`` ``JoinExpr`` in any fromlist into flat
+  ``RangeTblRef``\ s plus AND-merged ``ON``-clauses, recursing
+  through ``RTE_SUBQUERY`` bodies so a wrapped INNER JOIN gets
+  flattened in the inner body before the inlining pre-pass picks
+  it up.  Refuses outer joins (NULL-padding rows break per-row
+  independence), aliased joins (``JOIN ... AS j`` would require
+  resolving columns through ``joinaliasvars``), and ``USING``
+  clauses.  Orphaned synthetic ``RTE_JOIN`` entries are dropped
+  via the shared :cfunc:`compact_orphan_rtes` helper.
+- ``try_inline_simple_subqueries(q)`` then inlines every simple
+  ``RTE_SUBQUERY`` fromlist entry (PG-rewritten view bodies,
+  inline ``FROM (SELECT …)`` subqueries) into the outer rtable.
+  A subquery is "simple" when it is a flat conjunctive ``SELECT``
+  with no kind-altering features (no ``DISTINCT`` / ``GROUP BY``
+  / ``HAVING`` / aggregates / window functions / set operations
+  / sublinks / CTEs / ``ORDER BY`` / ``LIMIT`` / ``OFFSET`` /
+  SRFs), no ``LATERAL`` or security-barrier member RTEs, and a
+  target list of plain base-level ``Var``\ s (possibly through
+  ``RelabelType`` wrappers).  Fixed-point loop handles nested
+  views.
+
+The disjoint-base-ancestor property is enforced downstream by the
+candidate gate's existing shared-relid bail (modulo the PK /
+disjoint-constant self-join rescues): two fromlist entries that
+inline to the same base relid produce duplicates the gate
+refuses.  A second, finer-grained check (see
+:ref:`tid-bid-propagation` below) consults the per-relation
+ancestor registry to refuse joins whose registered ancestor sets
+overlap through different relids.
+
+After normalisation, two stages, both static helpers in
+``src/safe_query.c``:
 
 1. ``is_safe_query_candidate(q)`` : cheap shape gate.  Rejects
    ``hasAggs`` / ``hasWindowFuncs`` / ``LIMIT`` / ``OFFSET`` /
    ``groupingSets`` / sublinks / set operations / explicit
    ``JoinExpr`` ; rejects any ``RangeTblEntry`` that is not
-   ``RTE_RELATION`` ; requires an outer ``GROUP BY`` or top-level
-   ``DISTINCT`` so the per-atom ``DISTINCT`` wraps do not change
-   the user-visible row count ; requires every tracked base
-   relation to carry a TID or BID classification in the
-   per-database ``provsql_table_info`` registry.  The OPAQUE
+   ``RTE_RELATION`` (the normalisation pre-passes above remove
+   the legitimate ``RTE_SUBQUERY`` / ``RTE_JOIN`` cases) ;
+   requires an outer ``GROUP BY`` or top-level ``DISTINCT`` so
+   the per-atom ``DISTINCT`` wraps do not change the user-visible
+   row count ; requires every tracked base relation to carry a
+   TID or BID classification in the per-database
+   ``provsql_table_info`` registry ; requires the registered
+   ancestor sets of any two distinct-relid RTEs to be disjoint
+   (catches CTAS-derived TID joined with one of its sources, or
+   two CTAS-derived TIDs sharing a base ancestor through
+   different relids -- same-relid pairs are deliberately exempted,
+   those go through the existing PK-unification /
+   disjoint-constant rescues).  The OPAQUE
    classification (which bails the gate) covers tables where the
    user has bypassed the planner's UUID injection by writing a
    non-fresh ``provsql`` value directly : the rewriter cannot
@@ -688,7 +772,7 @@ The extensions and their interaction with the base rewriter:
   same relation have all PK / NOT-NULL UNIQUE columns equated
   through the union-find closure, the key proves they refer to the
   same tuple.  ``try_pk_self_join_unification`` runs before
-  ``is_safe_query_candidate`` and merges every fully-unifiable
+  :cfunc:`is_safe_query_candidate` and merges every fully-unifiable
   group into a single survivor: ``rtable`` is compacted,
   ``jointree->fromlist`` renumbered, and every Var's ``varno`` (and
   the parallel ``varnosyn`` for ``ruleutils.c``-style deparsing) is
@@ -703,7 +787,7 @@ The extensions and their interaction with the base rewriter:
   their tuple-sets are disjoint and the ``provsql`` tokens never
   overlap.  ``try_disjoint_constant_self_join_split`` runs after
   the PK-unification pass and certifies eligible relids in a
-  ``Bitmapset``; ``is_safe_query_candidate`` consults the set and
+  ``Bitmapset``; :cfunc:`is_safe_query_candidate` consults the set and
   skips the shared-relid bail for those relids.  Pairwise
   disjointness uses ``datumIsEqual`` on matching ``consttype`` to
   prove distinct literals; non-equality predicates and constants on
@@ -713,22 +797,95 @@ The extensions and their interaction with the base rewriter:
   read-once.
 
 The interaction between these extensions and the base rewriter is
-ordered as: PG-18 group-RTE strip → PK self-join unification →
-disjoint-constant certification → candidate gate →
-``safe_split_quals`` → constant-selection pre-pass →
-multi-component dispatch → ``find_hierarchical_root_atoms`` (PK
-FDs, deterministic transparency, ``fd_aware_mode``) →
-``rewrite_hierarchical_cq``.  The detector's ``DETERMINED`` matrix
-accumulates contributions from the PK-FD pass and the
-deterministic-transparency pass; the ``atom_anchor_class``
-selection makes a first FD-aware preference pass followed by a
-fallback for atoms whose every anchored class is FD-determined
-(needed for the deterministic case to land its local-root choice).
+ordered as: PG-18 group-RTE strip → INNER / CROSS JoinExpr
+flattening → simple-subquery inlining → PK self-join unification
+→ disjoint-constant certification → candidate gate (shape /
+metadata / ancestry disjointness) → ``safe_split_quals`` →
+constant-selection pre-pass → multi-component dispatch →
+``find_hierarchical_root_atoms`` (PK FDs, deterministic
+transparency, ``fd_aware_mode``) → ``rewrite_hierarchical_cq``.
+The detector's ``DETERMINED`` matrix accumulates contributions
+from the PK-FD pass and the deterministic-transparency pass; the
+``atom_anchor_class`` selection makes a first FD-aware preference
+pass followed by a fallback for atoms whose every anchored class
+is FD-determined (needed for the deterministic case to land its
+local-root choice).
 
 Each extension's soundness argument is recorded in inline comments
 in :cfile:`safe_query.c` alongside the corresponding block; the
 regression tests live in ``test/sql/safe_query_const_sel.sql``,
 ``safe_query_pk_fd.sql``, ``safe_query_deterministic.sql``,
 ``safe_query_self_join_pk.sql``, ``safe_query_fd_closure.sql``
-(cumulative regression checks for the FD closure), and
-``safe_query_self_join_disjoint.sql``.
+(cumulative regression checks for the FD closure),
+``safe_query_self_join_disjoint.sql``,
+``safe_query_view_descent.sql`` (subquery-inlining pre-pass),
+``safe_query_inner_join.sql`` (JoinExpr flattening), and
+``safe_query_ancestry_disjoint.sql`` (ancestry-based disjointness
+gate).
+
+.. _tid-bid-propagation:
+
+TID / BID Propagation Through Derived Relations
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The per-relation metadata that gates the safe-query rewriter now
+flows through view / CTAS / matview / ``SELECT INTO`` derivations
+so a query that reaches a tracked base relation through any depth
+of indirection is recognised by the rewriter and the classifier.
+
+**Per-table base-ancestor registry.**  The
+``ProvenanceTableInfo`` record (in :cfile:`MMappedTableInfo.h`)
+carries two halves: the kind / block_key half (set by
+``add_provenance`` / ``repair_key`` / ``set_table_info``) and the
+ancestor half ``(ancestor_n, ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS])``
+storing the sorted-deduplicated ``pg_class`` OIDs of the original
+``add_provenance`` / ``repair_key`` relations a derived table's
+atoms ultimately come from.  Base tables seed ``{self}``;
+CTAS-derived tables inherit the transitive union of their source
+ancestor sets via the lineage hook below.  Three IPC opcodes (``A``
+set ancestry, ``a`` get ancestry, ``R`` remove ancestry) and a
+parallel :cfunc:`provsql_lookup_ancestry` backend cache in
+:cfile:`provsql_utils.c` keep the registry off the planner's hot
+path while propagating ``ALTER TABLE`` / ``DROP TABLE`` /
+``add_provenance`` / ``repair_key`` invalidations through the
+existing relcache-invalidation channel.  The SQL surface
+(``set_ancestors`` / ``remove_ancestors`` / ``get_ancestors``)
+mirrors the kind-half API.
+
+**CTAS / SELECT INTO / matview lineage hook.**  A
+``ProcessUtility_hook`` in :cfile:`provsql.c` intercepts every
+``CreateTableAsStmt`` (covering ``CREATE TABLE AS``,
+``CREATE MATERIALIZED VIEW``, and ``SELECT INTO``: PG's parser
+transforms the third into the same statement node).  Pre-pass:
+:cfunc:`provsql_classify_query` runs on the inner ``Query``;
+when the classifier returns TID or BID and the target list
+projects a ``provsql`` column from a tracked, non-OPAQUE source,
+the hook captures the inherited kind plus the transitive ancestor
+union (via :cfunc:`provsql_lookup_ancestry` on each
+classifier-reported source).  After delegating to
+``standard_ProcessUtility``, the post-pass resolves the new
+relation via ``RangeVarGetRelid``, aligns BID block-key columns
+to their output ``resno`` through a target-list walk (demotes to
+TID when any key column is dropped), calls ``set_table_info`` /
+``set_ancestors`` via ``DirectFunctionCall``, and installs
+``provenance_guard`` via SPI.  Matviews skip the trigger install
+(PG forbids triggers on them; matview content only changes
+through ``REFRESH MATERIALIZED VIEW``, which re-runs the inner
+SELECT and carries the same lineage).  The hook fires only when
+the inner SELECT projects a ``provsql`` column from a tracked
+source -- otherwise the new relation has no ``provsql`` column
+and lineage metadata would be operationally pointless.
+
+**Ancestry-based disjointness gate.**  After the existing
+per-RTE metadata gate, :cfunc:`is_safe_query_candidate` computes
+each RTE's ancestor set (registry lookup, fallback to ``{self}``
+on the rare race where the registry has no entry) and rejects
+any pair of RTEs with different relids whose ancestor sets
+overlap.  Catches the case the syntactic shared-relid bail
+misses: a CTAS-derived table joined with one of its source
+tables, or two CTAS-derived tables sharing a base ancestor
+through different relids.  Same-relid pairs are deliberately
+exempted -- those go through the existing PK-unification /
+disjoint-constant rescues, which prove disjointness at the gate
+level on a same-relid basis (a coarser ancestry overlap check
+would undo those rescues).

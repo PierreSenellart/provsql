@@ -157,6 +157,10 @@ _SQL_FUNC_MAP = {
     'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#gaec7d70d0f94f8225861e3377682ce348',
     'rv_analytical_curves':     '/doxygen-sql/html/group__circuit__introspection.html#ga927310c0e7a80b6b092149b66d679ffb',
     'simplified_circuit_subgraph': '/doxygen-sql/html/group__circuit__introspection.html#ga7717079ec6b1f50ecb1a5a9fd5b15531',
+    # Per-table provenance metadata + base-ancestor registry
+    'set_ancestors':            '/doxygen-sql/html/group__table__management.html#ga003841a8da4d0184f7f0bc885fb6418b',
+    'remove_ancestors':         '/doxygen-sql/html/group__table__management.html#gae0acb81b52c0cf93e32e62841955ab16',
+    'get_ancestors':            '/doxygen-sql/html/group__table__management.html#ga73b67254f1e76d209a5c0be90a328b10',
 }
 
 
@@ -193,9 +197,26 @@ _C_FUNC_MAP = {
     'needs_having_lift':         '/doxygen-c/html/provsql_8c.html#ad70fe33958c5308511eaa33071db07ec',
     'add_eq_from_Quals_to_Expr': '/doxygen-c/html/provsql_8c.html#aa5f16ef0c73e1c7d651b02311994605d',
     'add_eq_from_OpExpr_to_Expr':'/doxygen-c/html/provsql_8c.html#abed26c95056d10b1f670bd37d840d989',
-    # classify_query.h — query-time TID/BID/OPAQUE classifier
+    # provsql.c -- ProcessUtility hook (CTAS / SELECT INTO / matview lineage)
+    'provsql_ProcessUtility':       '/doxygen-c/html/provsql_8c.html#ab1ed4f68831024fd2bef99804474c4ff',
+    # classify_query.c -- query-time TID/BID/OPAQUE classifier
     'provsql_classify_query':       '/doxygen-c/html/classify__query_8h.html#aafc42e9a94c5f918f87e000a971edcf1',
     'provsql_classify_emit_notice': '/doxygen-c/html/classify__query_8h.html#a66b72aec3f370db5f259ccd410c09118',
+    'classify_fromlist_shape_ok':   '/doxygen-c/html/classify__query_8c.html#aaab88d2968bf006992c370d037cc4c29',
+    'bid_block_key_preserved':      '/doxygen-c/html/classify__query_8c.html#a664d6fcc2b9196bdc7e3943742d0fd68',
+    'try_classify_multi_source_tid':'/doxygen-c/html/classify__query_8c.html#a4808d385dcf66ea8cdec978fe1fa4b20',
+    'resolve_through_group_rte':    '/doxygen-c/html/classify__query_8c.html#a8eee1d3eb92521c4c5695f06f8e6dab3',
+    # safe_query.c -- safe-query rewriter + propagation pre-passes
+    'is_safe_query_candidate':      '/doxygen-c/html/safe__query_8c.html#ac10316179af1f20b8359d57daf2785d1',
+    'compact_orphan_rtes':          '/doxygen-c/html/safe__query_8c.html#ac4aca5fe259074c262b928cd700f9bb8',
+    # provsql_utils.c -- per-backend caches
+    'provsql_lookup_table_info':    '/doxygen-c/html/provsql__utils_8c.html#a5c4d2df8376ef2146c9fd66b41209ee2',
+    'provsql_lookup_ancestry':      '/doxygen-c/html/provsql__utils_8c.html#a38251c2fff675bfffeef4317ae3e4a84',
+    # MMappedCircuit class members
+    'MMappedCircuit::setTableInfo':     '/doxygen-c/html/classMMappedCircuit.html#a222e276b0139533d807ae9f70b7a7ee9',
+    'MMappedCircuit::setTableAncestry': '/doxygen-c/html/classMMappedCircuit.html#a05f2d145c3f6919954a8c83cb8e17e24',
+    # Per-relation metadata struct
+    'ProvenanceTableInfo':          '/doxygen-c/html/structProvenanceTableInfo.html',
     # provsql_utils.h — OID cache
     'constants_t':               '/doxygen-c/html/structconstants__t.html',
     'get_constants':             '/doxygen-c/html/provsql__utils_8h.html#a75e7d48321cea0156f8ad4c039c877a0',

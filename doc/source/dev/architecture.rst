@@ -35,14 +35,27 @@ When PostgreSQL starts, it calls :cfunc:`_PG_init`, which:
 2. Installs the **planner hook** (:cfunc:`provsql_planner`) by saving
    the previous hook in ``prev_planner`` and replacing ``planner_hook``.
 
-3. Installs **shared-memory hooks** for inter-process coordination
+3. Installs the **ProcessUtility hook**
+   (:cfunc:`provsql_ProcessUtility`) by saving the previous hook in
+   ``prev_ProcessUtility``.  Used by the CTAS / ``SELECT INTO`` /
+   matview lineage propagation path (see
+   :ref:`tid-bid-propagation`).
+
+4. Installs **shared-memory hooks** for inter-process coordination
    (see :doc:`memory`).
 
-4. Launches the **mmap background worker** that manages persistent
+5. Installs **executor hooks** (``ExecutorStart`` / ``ExecutorEnd``)
+   that maintain a nesting depth counter so the
+   :cfunc:`provsql_classify_query` NOTICE fires only on the user's
+   outermost statement (the rewriter's PL/pgSQL helpers replan
+   internally, which would otherwise produce spurious extra
+   NOTICEs).
+
+6. Launches the **mmap background worker** that manages persistent
    circuit storage.
 
 When the server shuts down, :cfunc:`_PG_fini` restores the previous
-planner and shared-memory hooks.
+planner, ``ProcessUtility``, executor, and shared-memory hooks.
 
 
 Component Map
@@ -56,8 +69,21 @@ and algorithms are in |cpp|.
 
 *Planner hook and query rewriting*
 
-- :cfile:`provsql.c` -- planner hook and the bulk of the query
-  rewriting logic (~3400 lines).
+- :cfile:`provsql.c` -- planner hook, ProcessUtility hook
+  (CTAS / ``SELECT INTO`` / matview lineage), executor hooks,
+  and the bulk of the query rewriting logic (~3700 lines).
+- :cfile:`safe_query.c` / :cfile:`safe_query.h` -- safe-query
+  rewriter for hierarchical CQs (Dalvi & Suciu 2012), gated on
+  ``provsql.boolean_provenance`` ; includes the FD-aware
+  extensions (constant-selection elimination, PK FDs,
+  deterministic-relation transparency, PK-unifiable /
+  disjoint-constant self-joins) and the propagation
+  normalisation pre-passes (``INNER`` / ``CROSS`` JoinExpr
+  flattening, simple-subquery inlining).  See
+  :ref:`safe-query-rewriter`.
+- :cfile:`classify_query.c` / :cfile:`classify_query.h` --
+  query-time TID / BID / OPAQUE classifier exposed through the
+  ``provsql.classify_top_level`` GUC.
 
 *Utilities and shared state*
 
@@ -118,6 +144,10 @@ and algorithms are in |cpp|.
   -- open-addressing hash table keyed by UUID, stored in mmap.
 - :cfile:`MMappedVector.h` / :cfile:`MMappedVector.hpp` --
   ``std::vector``-like container over an mmap region.
+- :cfile:`MMappedTableInfo.h` -- the per-relation
+  :cfunc:`ProvenanceTableInfo` record (TID / BID / OPAQUE kind,
+  multi-column BID block-key, base-ancestor set) ; see
+  :ref:`per-table-metadata`.
 
 *Semiring evaluation*
 

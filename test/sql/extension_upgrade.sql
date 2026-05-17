@@ -84,12 +84,21 @@ SELECT name, get_gate_type(prov) AS root_type
   FROM upgrade_safe_q ORDER BY name;
 SET provsql.boolean_provenance = off;
 
--- 1.6.0 surface check: base-ancestor registry.  The per-existing-
--- tracked-table backfill in the 1.5.0 -> 1.6.0 upgrade seeds every
--- tracked relation with @c {self}, so a relation freshly tracked
--- after the upgrade chain ran must round-trip @c get_ancestors.
-SELECT get_ancestors('upgrade_smoke'::regclass::oid)
-       = ARRAY['upgrade_smoke'::regclass::oid] AS ancestry_seeded_to_self;
+-- 1.6.0 surface check: base-ancestor registry round-trip.  The
+-- upgrade does NOT auto-seed metadata for pre-existing tracked
+-- relations (they stay at OPAQUE-by-omission, which is the
+-- conservative outcome; users opt in explicitly via
+-- @c set_table_info / @c set_ancestors).  Here we just exercise
+-- the new SQL surface on upgrade_smoke to confirm the registry
+-- is callable post-upgrade.
+SELECT set_table_info('upgrade_smoke'::regclass::oid, 'tid');
+SELECT set_ancestors('upgrade_smoke'::regclass::oid,
+                     ARRAY['upgrade_smoke'::regclass::oid]);
+SELECT (get_table_info('upgrade_smoke'::regclass::oid)).kind
+         AS post_upgrade_kind,
+       get_ancestors('upgrade_smoke'::regclass::oid)
+       = ARRAY['upgrade_smoke'::regclass::oid]
+         AS post_upgrade_ancestry_roundtrip;
 
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,

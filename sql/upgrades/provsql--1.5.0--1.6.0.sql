@@ -355,19 +355,32 @@ $migrate$;
 --      c. Make sure a plain index on (provsql) exists (the dropped
 --         UNIQUE took its underlying index with it).
 --      d. Install the provenance_guard BEFORE INSERT/UPDATE trigger.
---      e. Seed a TID entry in the per-database table-info store.
 --
---    Users who applied @c repair_key in 1.5.0 are seeded as TID
---    here -- they MUST re-run @c repair_key to restore the BID
---    classification (the script has no way to recover the original
---    block_key columns from the existing mmap circuit).
---      f. Seed the base-ancestor set to {self}.  Base TID/BID tables
---         have themselves as their sole ancestor; CTAS-derived
---         relations the user may have explicitly tracked via
---         @c add_provenance also land at {self} here (a CTAS-source-
---         aware hook is a separate slice -- before it ships, all
---         tracked relations are treated as base for the disjoint-
---         ancestor analysis).
+--    Per-table @c provsql_table_info / ancestor metadata is NOT
+--    auto-seeded here.  Pre-1.6.0 relations land at OPAQUE-by-
+--    omission (the safe-query gate's
+--    @c has_provsql_col @c && @c !has_meta check then refuses to
+--    fire on them, which is the conservative outcome).  To opt a
+--    pre-existing relation back in, the user runs one of:
+--
+--      -- TID (the default for an @c add_provenance'd relation):
+--      SELECT provsql.set_table_info(t::regclass::oid, 'tid');
+--      SELECT provsql.set_ancestors(t::regclass::oid,
+--                                   ARRAY[t::regclass::oid]);
+--
+--      -- BID (for a relation that was @c repair_key'd in 1.5.0):
+--      SELECT provsql.set_table_info(t::regclass::oid, 'bid',
+--                                    ARRAY[<col_attnos>]::int2[]);
+--      SELECT provsql.set_ancestors(t::regclass::oid,
+--                                   ARRAY[t::regclass::oid]);
+--
+--    Re-running @c repair_key is NOT a valid path: it would
+--    rebuild fresh gates for every row, invalidating the existing
+--    UUIDs the table's @c provsql column already carries.
+--    @c set_table_info merely re-registers the kind + block-key
+--    metadata against the existing UUIDs and leaves the gates
+--    untouched.  Any auto-seeded kind in this script would be a
+--    silent semantics call we deliberately avoid.
 -- ----------------------------------------------------------------------
 
 DO $$
@@ -437,12 +450,6 @@ BEGIN
         r.nspname, r.relname);
     END IF;
 
-    -- (e) seed table-info as TID.  Users who repair_key'd in 1.5.0
-    --     must re-run repair_key after the upgrade to restore BID.
-    PERFORM provsql.set_table_info(r.relid, 'tid');
-
-    -- (f) seed the base-ancestor set to {self}.
-    PERFORM provsql.set_ancestors(r.relid, ARRAY[r.relid]);
   END LOOP;
 END $$;
 
