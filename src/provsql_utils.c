@@ -931,7 +931,12 @@ static bool fetch_relation_keys(Oid relid, ProvenanceRelationKeys *out)
               Anum_pg_constraint_conrelid,
               BTEqualStrategyNumber, F_OIDEQ,
               ObjectIdGetDatum(relid));
-  scan = systable_beginscan(conrel, ConstraintRelidTypidNameIndexId,
+  scan = systable_beginscan(conrel,
+#if PG_VERSION_NUM >= 130000
+                            ConstraintRelidTypidNameIndexId,
+#else
+                            ConstraintRelidIndexId,
+#endif
                             true, NULL, 1, &skey);
 
   while(HeapTupleIsValid(htup = systable_getnext(scan))) {

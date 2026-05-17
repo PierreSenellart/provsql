@@ -4642,6 +4642,7 @@ static void provsql_executor_start(QueryDesc *queryDesc, int eflags) {
 }
 
 static void provsql_executor_end(QueryDesc *queryDesc) {
+#if PG_VERSION_NUM >= 130000
   PG_TRY();
   {
     if (prev_ExecutorEnd)
@@ -4654,6 +4655,25 @@ static void provsql_executor_end(QueryDesc *queryDesc) {
     provsql_executor_depth--;
   }
   PG_END_TRY();
+#else
+  /* PG < 13 lacks PG_FINALLY: emulate by running the cleanup on the
+   * error path (via PG_CATCH + PG_RE_THROW) and on the success path
+   * (after PG_END_TRY).  Functionally equivalent. */
+  PG_TRY();
+  {
+    if (prev_ExecutorEnd)
+      prev_ExecutorEnd(queryDesc);
+    else
+      standard_ExecutorEnd(queryDesc);
+  }
+  PG_CATCH();
+  {
+    provsql_executor_depth--;
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
+  provsql_executor_depth--;
+#endif
 }
 
 /* -------------------------------------------------------------------------
@@ -4995,7 +5015,13 @@ static void provsql_ProcessUtility_apply(Node *parsetree,
    * MATERIALIZED @c VIEW changes the contents -- which re-runs the
    * inner SELECT and the freshly-projected rows continue to carry
    * lineage from the same sources). */
+  /* PG 13 renamed CreateTableAsStmt.relkind -> objtype (same ObjectType,
+   * same OBJECT_* values; pure field rename). */
+#if PG_VERSION_NUM >= 130000
   if (stmt->objtype == OBJECT_MATVIEW)
+#else
+  if (stmt->relkind == OBJECT_MATVIEW)
+#endif
     return;
 
   nspname = get_namespace_name(get_rel_namespace(new_relid));
