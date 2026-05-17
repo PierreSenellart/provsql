@@ -151,6 +151,7 @@ test: safe_query_pk_fd
 test: safe_query_deterministic
 test: safe_query_self_join_pk
 test: safe_query_fd_closure
+test: safe_query_self_join_disjoint
 
 # Query-time TID / BID / OPAQUE classifier (NOTICE surface)
 test: classify_query

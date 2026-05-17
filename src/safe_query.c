@@ -41,6 +41,7 @@
 #endif
 #include "parser/parse_oper.h"
 #include "utils/builtins.h"
+#include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -87,7 +88,8 @@ extern int provsql_verbose;             /* declared in provsql.c */
  *
  * @return @c true iff @p q is a candidate for the safe-query rewrite.
  */
-static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
+static bool is_safe_query_candidate(const constants_t *constants, Query *q,
+                                    Bitmapset *approved_self_join_relids) {
   ListCell *lc, *lc2;
   List *seen_relids = NIL;
 
@@ -133,10 +135,21 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q) {
 
     if (rte->rtekind != RTE_RELATION)
       return false;
-    /* Self-join-free: no two RTEs may share a relid. */
+    /* Self-join-free: no two RTEs may share a relid, unless §6
+     * has certified the relid's same-relid group as disjoint via
+     * mutually exclusive @c Var @c = @c Const conjuncts on the
+     * same column.  The §5 PK-unification pre-pass collapses any
+     * unifiable groups before reaching this point, so a duplicate
+     * here means either a non-unifiable group (which §6 may still
+     * rescue) or a group neither §5 nor §6 can resolve (refuse). */
     foreach (lc2, seen_relids) {
-      if (lfirst_oid(lc2) == rte->relid)
+      if (lfirst_oid(lc2) == rte->relid) {
+        if (approved_self_join_relids != NULL
+            && bms_is_member((int) rte->relid,
+                             approved_self_join_relids))
+          continue;
         return false;
+      }
     }
     seen_relids = lappend_oid(seen_relids, rte->relid);
 
@@ -3694,6 +3707,223 @@ static Query *try_pk_self_join_unification(Query *q) {
 }
 
 /**
+ * @brief §6 disjoint-constant self-join certification.
+ *
+ * When two (or more) RTEs over the same relation each carry a
+ * @c Var @c = @c Const conjunct on the same column with
+ * provably-different literals, their tuple-sets are disjoint: a
+ * single base-relation row can satisfy at most one of the constant
+ * predicates, so the @c provsql tokens never overlap across the
+ * RTEs.  The shared-relid bail in @c is_safe_query_candidate then
+ * becomes too conservative -- the standard per-atom @c SELECT
+ * @c DISTINCT wrap on each RTE (with its constant predicate
+ * pushed in) factors the relation into disjoint virtual partitions,
+ * each acting as an independent atom.
+ *
+ * This pre-pass runs after @c try_pk_self_join_unification (§5)
+ * and before @c is_safe_query_candidate.  For each same-relid
+ * group of >1 RTE remaining in @c q->rtable, it checks pairwise
+ * whether every pair has @c Var @c = @c Const conjuncts on the
+ * same @c varattno with @em provably distinct literal values.  When
+ * the entire group satisfies the check, the relid is added to the
+ * returned @c Bitmapset; the candidate gate consults that set and
+ * skips the shared-relid bail for those relids.
+ *
+ * "Provably distinct" uses @c datumIsEqual on the @c Const values
+ * after matching @c consttype: two literals of the same type with
+ * different @c constvalue are guaranteed different at executor
+ * time.  Conservative: when types disagree or when @c datumIsEqual
+ * cannot decide (TOAST'ed varlena where the stored representation
+ * differs from the logical value), the pair is treated as NOT
+ * provably-disjoint -- §6 simply doesn't fire on that group, and
+ * the candidate gate's existing shared-relid bail refuses the
+ * query as before.
+ *
+ * Soundness traps (TODO §6):
+ *
+ *  - Disjointness on the @em same column (@c varattno match).  A
+ *    pair like @c r1.kind @c = @c 'A' @c AND @c r2.color @c = @c
+ *    'B' is NOT disjoint -- an R-tuple with @c kind @c = @c 'A'
+ *    @em and @c color @c = @c 'B' satisfies both.
+ *  - Pairwise across every pair: a 3-RTE group with two disjoint
+ *    pairs but one non-disjoint pair stays @em not certified;
+ *    partial certification would mean the candidate gate still
+ *    finds two RTEs of the same relid that are NOT provably
+ *    disjoint, and the rewrite would be unsound on the rows where
+ *    both predicates can match.
+ *  - Equality-to-literal only: inequalities (@c r.kind @c <> @c
+ *    'A') do not pin a column to a single value and do not
+ *    contribute to provable disjointness.  @c safe_is_var_const_equality
+ *    enforces this through the operator-OID check.
+ *  - Transitive disjointness via FDs (e.g. @c kind @c → @c
+ *    category, with @c r1.category @c = @c 'X' / @c r2.category
+ *    @c = @c 'Y') is deferred to §4's general closure.
+ */
+static Bitmapset *
+try_disjoint_constant_self_join_split(Query *q) {
+  int        natoms = list_length(q->rtable);
+  Bitmapset *approved = NULL;
+  bool      *processed;
+  List     **rte_const_quals;
+  int        j;
+
+  if (natoms < 2)
+    return NULL;
+
+  /* Fast exit when no duplicate-relid pair appears.  Same
+   * structural check as @c try_pk_self_join_unification's gate;
+   * keeps the §6 path off the hot path entirely for the common
+   * self-join-free case. */
+  {
+    bool      found_dup = false;
+    List     *seen      = NIL;
+    ListCell *lc;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+      ListCell      *lc2;
+      if (rte->rtekind != RTE_RELATION)
+        continue;
+      foreach (lc2, seen) {
+        if (lfirst_oid(lc2) == rte->relid) {
+          found_dup = true;
+          break;
+        }
+      }
+      if (found_dup)
+        break;
+      seen = lappend_oid(seen, rte->relid);
+    }
+    list_free(seen);
+    if (!found_dup)
+      return NULL;
+  }
+
+  /* Per-RTE list of @c Var @c = @c Const conjuncts pulled out of
+   * @c q->jointree->quals.  Single-atom conjuncts on RTE @c j land
+   * in @c rte_const_quals[j].  Cross-atom conjuncts (equijoins,
+   * mixed-varno predicates) are ignored -- they don't contribute
+   * disjoint-constant evidence. */
+  processed       = palloc0(natoms * sizeof(bool));
+  rte_const_quals = palloc0(natoms * sizeof(List *));
+  if (q->jointree && q->jointree->quals) {
+    List     *conjuncts = NIL;
+    ListCell *lc;
+    safe_flatten_and(q->jointree->quals, &conjuncts);
+    foreach (lc, conjuncts) {
+      Expr  *e = (Expr *) lfirst(lc);
+      Var   *v;
+      Const *k;
+      if (!safe_is_var_const_equality(e, &v, &k))
+        continue;
+      if (v->varno < 1 || (int) v->varno > natoms)
+        continue;
+      rte_const_quals[v->varno - 1] =
+          lappend(rte_const_quals[v->varno - 1], (void *) e);
+    }
+    list_free(conjuncts);
+  }
+
+  /* Walk RTEs; for each unprocessed RTE @c j, gather every
+   * unprocessed same-relid sibling @c k @c > @c j, then verify
+   * pairwise disjointness across the group. */
+  for (j = 0; j < natoms; j++) {
+    RangeTblEntry *rte_j;
+    List          *group;
+    int            k;
+    bool           all_pairs_disjoint;
+    ListCell      *lc_a, *lc_b;
+
+    if (processed[j])
+      continue;
+    rte_j = (RangeTblEntry *) list_nth(q->rtable, j);
+    if (rte_j->rtekind != RTE_RELATION)
+      continue;
+
+    group = list_make1_int(j);
+    for (k = j + 1; k < natoms; k++) {
+      RangeTblEntry *rte_k = (RangeTblEntry *) list_nth(q->rtable, k);
+      if (processed[k])
+        continue;
+      if (rte_k->rtekind != RTE_RELATION)
+        continue;
+      if (rte_k->relid != rte_j->relid)
+        continue;
+      group = lappend_int(group, k);
+    }
+    if (list_length(group) < 2) {
+      list_free(group);
+      continue;
+    }
+
+    /* Pairwise check.  A pair (@c aa, @c bb) is disjoint when there
+     * exists @em some column @c c such that @c aa carries
+     * @c r.c @c = @c k_a and @c bb carries @c r.c @c = @c k_b with
+     * @c k_a @c ≠ @c k_b (same @c consttype, distinct
+     * @c constvalue). */
+    all_pairs_disjoint = true;
+    foreach (lc_a, group) {
+      int aa = lfirst_int(lc_a);
+      foreach (lc_b, group) {
+        int  bb = lfirst_int(lc_b);
+        bool this_pair_disjoint = false;
+        ListCell *lc_qa;
+        if (bb <= aa)
+          continue;
+        foreach (lc_qa, rte_const_quals[aa]) {
+          Expr  *e_a = (Expr *) lfirst(lc_qa);
+          Var   *v_a;
+          Const *k_a;
+          ListCell *lc_qb;
+          if (!safe_is_var_const_equality(e_a, &v_a, &k_a))
+            continue;
+          foreach (lc_qb, rte_const_quals[bb]) {
+            Expr  *e_b = (Expr *) lfirst(lc_qb);
+            Var   *v_b;
+            Const *k_b;
+            if (!safe_is_var_const_equality(e_b, &v_b, &k_b))
+              continue;
+            if (v_a->varattno != v_b->varattno)
+              continue;
+            if (k_a->consttype != k_b->consttype)
+              continue;
+            if (k_a->constisnull || k_b->constisnull)
+              continue;
+            if (!datumIsEqual(k_a->constvalue, k_b->constvalue,
+                              k_a->constbyval, k_a->constlen)) {
+              this_pair_disjoint = true;
+              break;
+            }
+          }
+          if (this_pair_disjoint)
+            break;
+        }
+        if (!this_pair_disjoint) {
+          all_pairs_disjoint = false;
+          break;
+        }
+      }
+      if (!all_pairs_disjoint)
+        break;
+    }
+
+    if (all_pairs_disjoint) {
+      approved = bms_add_member(approved, (int) rte_j->relid);
+      foreach (lc_a, group)
+        processed[lfirst_int(lc_a)] = true;
+    }
+    list_free(group);
+  }
+
+  pfree(processed);
+  for (j = 0; j < natoms; j++)
+    if (rte_const_quals[j])
+      list_free(rte_const_quals[j]);
+  pfree(rte_const_quals);
+
+  return approved;
+}
+
+/**
  * @brief Top-level entry point for the safe-query rewrite.
  *
  * Runs the shape gate then the hierarchy detector.  If both accept,
@@ -3737,8 +3967,21 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
       q = unified;
   }
 
-  if (!is_safe_query_candidate(constants, q))
-    return NULL;
+  /* §6 disjoint-constant self-join pre-pass.  Same-relid groups
+   * that survive §5 (no PK to collapse them) can still be
+   * rescued when their constant predicates prove their tuple-sets
+   * disjoint.  This call certifies eligible relids; the candidate
+   * gate skips its shared-relid bail for those. */
+  {
+    Bitmapset *approved6 = try_disjoint_constant_self_join_split(q);
+    if (!is_safe_query_candidate(constants, q, approved6)) {
+      if (approved6)
+        bms_free(approved6);
+      return NULL;
+    }
+    if (approved6)
+      bms_free(approved6);
+  }
 
   /* Atom-local pre-pass: pull out atom-local WHERE conjuncts so the
    * detector only sees Vars that participate in cross-atom structure.
