@@ -411,9 +411,9 @@ the paper:
 Formal Verification
 ^^^^^^^^^^^^^^^^^^^
 
-The correctness of rules (R1), (R2), and (R3) -- projection,
-cross product, and duplicate elimination -- has a machine-checked
-proof in the ProvSQL Lean 4 library.  The main theorem is
+The correctness of rules (R1)--(R5) is fully machine-checked
+in the ProvSQL Lean 4 library, sorry-free.  For the
+relational-algebra fragment (R1--R4) the main theorem is
 `Query.rewriting_valid
 <https://provsql.org/lean-docs/Provenance/QueryRewriting.html#Query.rewriting_valid>`_
 in the ``Provenance.QueryRewriting`` module: for every
@@ -421,29 +421,40 @@ supported relational-algebra query ``q`` and every annotated
 database ``d``, evaluating ``q`` against the annotated semantics
 and then projecting to the composite (tuple + annotation)
 representation yields the same result as evaluating the
-rewritten query against the composite database.  This is the
-formal analogue of the "the rewritten query produces the same
-provenance as the annotated semantics" correctness statement
-from the ICDE paper, for the partial fragment proved (the
-(R4) multiset-difference case is in progress).
+rewritten query against the composite database.  The
+aggregation rule (R5) requires the V_K interpretation
+(values lifted with their K-semimodule annotation, Definition 7
+of the ICDE 2026 paper), and the unified statement covering
+all five rules is
+`Query.rewriting_valid_full
+<https://provsql.org/lean-docs/Provenance/QueryEvaluateInVK.html#Query.rewriting_valid_full>`_
+in the ``Provenance.QueryEvaluateInVK`` module, stated against
+the V_K-lifted evaluator ``Query.evaluateAnnotatedFull``.
 
 A companion theorem,
-`Query.evaluateAnnotated_hom
-<https://provsql.org/lean-docs/Provenance/QueryAnnotatedDatabaseHom.html#Query.evaluateAnnotated_hom>`_
-in the ``Provenance.QueryAnnotatedDatabaseHom`` module, proves
+`Query.evaluateAnnotatedFull_hom
+<https://provsql.org/lean-docs/Provenance/QueryEvaluateInVKHom.html#Query.evaluateAnnotatedFull_hom>`_
+in the ``Provenance.QueryEvaluateInVKHom`` module, proves
 that query evaluation commutes with m-semiring homomorphisms
-on the non-aggregation fragment (the formal analogue of
-[Green, Karvounarakis & Tannen, *Provenance Semirings*],
+on the full algebra including aggregation (the formal analogue
+of [Green, Karvounarakis & Tannen, *Provenance Semirings*],
 Proposition 3.5, and [Geerts & Poggi, *On database query
 languages for K-relations*], Proposition 1, lifted to
-m-semirings via ``SemiringWithMonusHom``).  This is the
-formal counterpart of ProvSQL's architectural choice: a single
-persistent provenance circuit is kept once, and each ``sr_*``
-semiring evaluator is the realisation of one m-semiring
-homomorphism out of that circuit; the theorem says that
-running the homomorphism on the inputs and then evaluating the
-query yields the same result as evaluating the query first and
-applying the homomorphism to the annotations.
+m-semirings via ``SemiringWithMonusHom`` and extended to
+aggregation via the K-semimodule structure formalised in
+``Provenance.KSemiModule`` and ``Provenance.LiftedTK``).
+The restriction of this theorem to the non-aggregation
+fragment is
+`Query.evaluateAnnotated_hom
+<https://provsql.org/lean-docs/Provenance/QueryAnnotatedDatabaseHom.html#Query.evaluateAnnotated_hom>`_
+in the ``Provenance.QueryAnnotatedDatabaseHom`` module.
+This is the formal counterpart of ProvSQL's architectural
+choice: a single persistent provenance circuit is kept once,
+and each ``sr_*`` semiring evaluator is the realisation of one
+m-semiring homomorphism out of that circuit; the theorem says
+that running the homomorphism on the inputs and then evaluating
+the query yields the same result as evaluating the query first
+and applying the homomorphism to the annotations.
 
 .. _probabilistic-qual-classifier:
 
