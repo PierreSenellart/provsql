@@ -379,6 +379,62 @@ DROP TABLE cq_derived_b;
 SELECT remove_provenance('cq_tid3');
 DROP TABLE cq_tid3;
 
+-- ---------------------------------------------------------------
+-- BID block-key preservation under projection / GROUP BY.
+-- The classifier now checks that the BID source's block-key
+-- column(s) survive in the outer target list (resolved through
+-- any RTE_SUBQUERY descent); a dropped block-key downgrades to
+-- OPAQUE.  GROUP BY exactly on the source's block-key
+-- (no aggregate, no extra group columns) collapses the relation
+-- to one row per block and reports TID -- the key tokens of
+-- distinct blocks are independent gate_input leaves.
+-- ---------------------------------------------------------------
+
+-- (37) Projection keeps the block-key column k : stays BID.
+CREATE TEMP TABLE cq_r37 AS SELECT k FROM cq_bid;
+SELECT remove_provenance('cq_r37');
+SELECT k FROM cq_r37 ORDER BY k;
+
+-- (38) Projection drops k : downgrades to OPAQUE.
+CREATE TEMP TABLE cq_r38 AS SELECT v FROM cq_bid;
+SELECT remove_provenance('cq_r38');
+SELECT v FROM cq_r38 ORDER BY v;
+
+-- (39) Projection through a subquery still preserves BID when k
+--     transitively traces back to cq_bid.k.
+CREATE TEMP TABLE cq_r39 AS
+  SELECT s.k FROM (SELECT k, v FROM cq_bid) s;
+SELECT remove_provenance('cq_r39');
+SELECT k FROM cq_r39 ORDER BY k;
+
+-- (40) Renamed BID block-key projection : the resolution matches
+--     on the underlying Var, not the output column name.
+CREATE TEMP TABLE cq_r40 AS SELECT k AS block FROM cq_bid;
+SELECT remove_provenance('cq_r40');
+SELECT block FROM cq_r40 ORDER BY block;
+
+-- (41) GROUP BY on the BID block-key column with no aggregate :
+--     output is one row per block, so per-row independent -> TID.
+CREATE TEMP TABLE cq_r41 AS SELECT k FROM cq_bid GROUP BY k;
+SELECT remove_provenance('cq_r41');
+SELECT k FROM cq_r41 ORDER BY k;
+
+-- (42) GROUP BY a non-block-key column : the conditional
+--     promotion refuses ; the generic shape gate then trips on
+--     groupClause and the classifier reports OPAQUE.
+CREATE TEMP TABLE cq_r42 AS SELECT v FROM cq_bid GROUP BY v;
+SELECT remove_provenance('cq_r42');
+SELECT v FROM cq_r42 ORDER BY v;
+
+-- (43) GROUP BY block-key WITH aggregate : the aggregate breaks
+--     per-row independence (each output row is now a composite of
+--     the block's rows under the aggregate), so the promotion
+--     refuses on @c hasAggs and the result is OPAQUE.
+CREATE TEMP TABLE cq_r43 AS
+  SELECT k, count(*) AS c FROM cq_bid GROUP BY k;
+SELECT remove_provenance('cq_r43');
+SELECT k, c FROM cq_r43 ORDER BY k;
+
 -- Cleanup ------------------------------------------------------------
 SELECT remove_provenance('cq_tid');
 SELECT remove_provenance('cq_tid2');

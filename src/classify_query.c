@@ -36,9 +36,11 @@
 #include "postgres.h"
 
 #include "lib/stringinfo.h"
+#include "nodes/bitmapset.h"
 #include "nodes/nodes.h"
 #include "nodes/parsenodes.h"
 #include "nodes/pg_list.h"
+#include "optimizer/optimizer.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 
@@ -382,6 +384,253 @@ static bool try_classify_multi_source_tid(ProvSQLClassification *out) {
   return true;
 }
 
+/**
+ * @brief Resolve a base-level (@p varno, @p attno) pair in @p q
+ *        transitively through @c RTE_SUBQUERY layers until reaching
+ *        the underlying @c RTE_RELATION column.  Returns @c true on
+ *        success and writes the base relid / base attno to
+ *        @p out_relid / @p out_attno.  Returns @c false when any
+ *        intermediate TLE is not a plain @c Var (possibly through
+ *        @c RelabelType wrappers), when an outer-scope reference is
+ *        hit, or when the chain ends on a non-relation rtekind.
+ */
+static bool resolve_var_to_base(Query *q, Index varno, AttrNumber attno,
+                                Oid *out_relid, AttrNumber *out_attno) {
+  RangeTblEntry *rte;
+  if (q == NULL || varno < 1
+      || (int) varno > list_length(q->rtable))
+    return false;
+  rte = (RangeTblEntry *) list_nth(q->rtable, varno - 1);
+  if (rte->rtekind == RTE_RELATION) {
+    *out_relid = rte->relid;
+    *out_attno = attno;
+    return true;
+  }
+  if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL) {
+    Query       *sub = rte->subquery;
+    TargetEntry *te;
+    Node        *e;
+    Var         *v;
+    ListCell    *lc;
+    /* Match by resno : a TLE may carry a Var resjunk-tagged or
+     * reordered, so scan rather than @c list_nth blindly. */
+    te = NULL;
+    foreach (lc, sub->targetList) {
+      TargetEntry *t = (TargetEntry *) lfirst(lc);
+      if (t->resno == attno && !t->resjunk) {
+        te = t;
+        break;
+      }
+    }
+    if (te == NULL)
+      return false;
+    e = (Node *) te->expr;
+    while (e != NULL && IsA(e, RelabelType))
+      e = (Node *) ((RelabelType *) e)->arg;
+    if (e == NULL || !IsA(e, Var))
+      return false;
+    v = (Var *) e;
+    if (v->varlevelsup != 0)
+      return false;
+    return resolve_var_to_base(sub, v->varno, v->varattno,
+                               out_relid, out_attno);
+  }
+  return false;
+}
+
+/**
+ * @brief Decide whether every block-key column of @p info survives
+ *        in @p q's target list -- resolved transitively through
+ *        @c RTE_SUBQUERY descents so the same check works on
+ *        @c SELECT @c k @c FROM @c bid_t and on
+ *        @c SELECT @c k @c FROM @c (SELECT @c k @c FROM @c bid_t).
+ *        Renamed projections (@c SELECT @c k @c AS @c b ...) still
+ *        count as preserving -- the match is on the underlying
+ *        @c Var, not the output column's name.  @c resjunk entries
+ *        in the outer @c targetList are ignored.
+ */
+static bool bid_block_key_preserved(Query *q, Oid source_relid,
+                                    const ProvenanceTableInfo *info) {
+  for (uint16 i = 0; i < info->block_key_n; ++i) {
+    AttrNumber  bk     = info->block_key[i];
+    bool        found  = false;
+    ListCell   *lc;
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *) lfirst(lc);
+      Node        *e  = (Node *) te->expr;
+      Var         *v;
+      Oid          base_relid;
+      AttrNumber   base_attno;
+      if (te->resjunk)
+        continue;
+      while (e != NULL && IsA(e, RelabelType))
+        e = (Node *) ((RelabelType *) e)->arg;
+      if (e == NULL || !IsA(e, Var))
+        continue;
+      v = (Var *) e;
+      if (v->varlevelsup != 0)
+        continue;
+      if (!resolve_var_to_base(q, v->varno, v->varattno,
+                               &base_relid, &base_attno))
+        continue;
+      if (base_relid == source_relid && base_attno == bk) {
+        found = true;
+        break;
+      }
+    }
+    if (!found)
+      return false;
+  }
+  return true;
+}
+
+/**
+ * @brief PG 18+ helper: when @p q has a synthetic @c RTE_GROUP
+ *        entry (set @c parseCheckAggregates() appends it for every
+ *        @c GROUP @c BY query), Vars in @c groupClause's TLE
+ *        expressions point at the @c RTE_GROUP rather than the
+ *        underlying source.  Resolve them through the @c RTE_GROUP's
+ *        @c groupexprs list so the BID-block-key check below sees
+ *        the source Var.  No-op on PG &lt; 18 and on queries without
+ *        @c hasGroupRTE.
+ */
+static Node *resolve_through_group_rte(Query *q, Node *e) {
+#if PG_VERSION_NUM >= 180000
+  ListCell *lc;
+  Index     group_rtindex = 0;
+  Index     idx = 1;
+  List     *groupexprs = NIL;
+  Var      *v;
+
+  if (e == NULL || !q->hasGroupRTE)
+    return e;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+    if (rte->rtekind == RTE_GROUP) {
+      group_rtindex = idx;
+      groupexprs    = rte->groupexprs;
+      break;
+    }
+    idx++;
+  }
+  if (group_rtindex == 0)
+    return e;
+
+  while (e != NULL && IsA(e, RelabelType))
+    e = (Node *) ((RelabelType *) e)->arg;
+  if (e == NULL || !IsA(e, Var))
+    return e;
+  v = (Var *) e;
+  if (v->varlevelsup != 0 || v->varno != group_rtindex)
+    return e;
+  if (v->varattno < 1 || v->varattno > list_length(groupexprs))
+    return e;
+  return (Node *) list_nth(groupexprs, v->varattno - 1);
+#else
+  (void) q;
+  return e;
+#endif
+}
+
+/**
+ * @brief Pre-dispatch special case for @c GROUP @c BY on a single
+ *        BID source's block-key columns.
+ *
+ * The generic shape gate rejects @c groupClause @c != @c NIL up
+ * front, but @c SELECT @c k @c FROM @c bid_t @c GROUP @c BY @c k
+ * (and the multi-column-key generalisation) has a well-defined
+ * per-row provenance : each output row's @c block_key value
+ * uniquely identifies one BID block, and the OR over that block's
+ * mulinput slots reduces to the block's key token (an independent
+ * @c gate_input).  So the output is per-row independent -- TID --
+ * with the cumulative source list narrowed to the single BID
+ * source.
+ *
+ * Conservative: requires no aggregates / window functions /
+ * sublinks / SRFs / CTEs / set operations / HAVING / DISTINCT /
+ * sortClause-with-side-effects, no @c LIMIT / @c OFFSET, a flat
+ * fromlist of exactly one @c RangeTblRef pointing at a BID
+ * @c RTE_RELATION, and a @c groupClause whose resolved Vars match
+ * the source's block-key set exactly (no extra columns, no
+ * missing ones).  When all met, returns @c true with
+ * @p out populated.  Any failure leaves @p out untouched ; the
+ * caller proceeds to the generic dispatcher path.
+ */
+static bool try_classify_groupby_block_key(Query *q,
+                                           ProvSQLClassification *out) {
+  RangeTblRef        *rtr;
+  RangeTblEntry      *rte;
+  ProvenanceTableInfo info;
+  Bitmapset          *resolved = NULL;
+  ListCell           *lc;
+
+  if (q->groupClause == NIL)
+    return false;
+  if (q->hasAggs || q->hasWindowFuncs || q->hasTargetSRFs
+      || q->hasSubLinks || q->hasModifyingCTE || q->hasDistinctOn)
+    return false;
+  if (q->cteList != NIL || q->groupingSets != NIL
+      || q->havingQual != NULL || q->setOperations != NULL
+      || q->distinctClause != NIL)
+    return false;
+  if (q->jointree == NULL
+      || list_length(q->jointree->fromlist) != 1)
+    return false;
+  if (!IsA(linitial(q->jointree->fromlist), RangeTblRef))
+    return false;
+  rtr = (RangeTblRef *) linitial(q->jointree->fromlist);
+  if (rtr->rtindex < 1 || rtr->rtindex > list_length(q->rtable))
+    return false;
+  rte = (RangeTblEntry *) list_nth(q->rtable, rtr->rtindex - 1);
+  if (rte->rtekind != RTE_RELATION)
+    return false;
+  if (!provsql_lookup_table_info(rte->relid, &info))
+    return false;
+  if (info.kind != PROVSQL_TABLE_BID)
+    return false;
+  if (info.block_key_n == 0)
+    return false;  /* whole-table BID : "GROUP BY {}" doesn't exist */
+
+  foreach (lc, q->groupClause) {
+    SortGroupClause *sgc = (SortGroupClause *) lfirst(lc);
+    TargetEntry     *te;
+    Node            *e;
+    Var             *v;
+    bool             attno_in_block_key = false;
+    uint16           i;
+    te = get_sortgroupclause_tle(sgc, q->targetList);
+    if (te == NULL) { bms_free(resolved); return false; }
+    e = (Node *) te->expr;
+    /* On PG 18+, grouped Vars in the targetList point at the
+     * synthetic @c RTE_GROUP entry ; resolve through its
+     * @c groupexprs list back to the source-relation Var. */
+    e = resolve_through_group_rte(q, e);
+    while (e != NULL && IsA(e, RelabelType))
+      e = (Node *) ((RelabelType *) e)->arg;
+    if (e == NULL || !IsA(e, Var)) { bms_free(resolved); return false; }
+    v = (Var *) e;
+    if (v->varlevelsup != 0 || v->varno != rtr->rtindex) {
+      bms_free(resolved); return false;
+    }
+    for (i = 0; i < info.block_key_n; ++i)
+      if (info.block_key[i] == v->varattno) {
+        attno_in_block_key = true; break;
+      }
+    if (!attno_in_block_key) { bms_free(resolved); return false; }
+    resolved = bms_add_member(resolved, v->varattno);
+  }
+  /* Each block-key column must appear exactly once in groupClause. */
+  for (uint16 i = 0; i < info.block_key_n; ++i)
+    if (!bms_is_member(info.block_key[i], resolved)) {
+      bms_free(resolved); return false;
+    }
+  bms_free(resolved);
+
+  out->kind          = PROVSQL_TABLE_TID;
+  out->source_relids = list_make1_oid(rte->relid);
+  return true;
+}
+
 void provsql_classify_query(Query *q, ProvSQLClassification *out) {
   bool shape_ok   = true;
   int  n_meta     = 0;
@@ -404,6 +653,15 @@ void provsql_classify_query(Query *q, ProvSQLClassification *out) {
   if (q->setOperations != NULL && try_classify_union_all(q, out))
     return;
 
+  /* GROUP BY on a single BID source's block-key columns reduces
+   * the output to one row per block ; each row's provenance
+   * collapses to the block's key token (an independent input
+   * gate), so the result is TID.  Handled as a pre-dispatch
+   * special case because the generic shape gate refuses
+   * @c groupClause @c != @c NIL up front. */
+  if (try_classify_groupby_block_key(q, out))
+    return;
+
   classify_walk(q, out, &shape_ok, &n_meta, &sole_relid);
 
   if (!shape_ok) {
@@ -417,8 +675,24 @@ void provsql_classify_query(Query *q, ProvSQLClassification *out) {
     out->kind = PROVSQL_TABLE_TID;
   } else if (n_meta == 1) {
     ProvenanceTableInfo info;
-    if (provsql_lookup_table_info(sole_relid, &info))
-      out->kind = (provsql_table_kind) info.kind;
+    if (provsql_lookup_table_info(sole_relid, &info)) {
+      if (info.kind == PROVSQL_TABLE_BID) {
+        /* BID : the output is BID iff every block-key column of the
+         * source survives in the outer target list (matched by Var
+         * resolution through any @c RTE_SUBQUERY descent, not by
+         * output column name).  Otherwise the mutually-exclusive
+         * partitioning the user could observe is lost -- downgrade
+         * to OPAQUE.  Whole-table BID (@c block_key_n @c == @c 0)
+         * is trivially preserved. */
+        if (info.block_key_n == 0
+            || bid_block_key_preserved(q, sole_relid, &info))
+          out->kind = PROVSQL_TABLE_BID;
+        else
+          out->kind = PROVSQL_TABLE_OPAQUE;
+      } else {
+        out->kind = (provsql_table_kind) info.kind;
+      }
+    }
     /* If the lookup races and disappears between the two calls,
      * fall back to OPAQUE. */
   } else {

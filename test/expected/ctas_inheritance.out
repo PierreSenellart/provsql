@@ -20,8 +20,8 @@ t|t
 t4_kind|t4_block_key|t4_ancestors_correct
 bid|{1}|t
 (1 row)
-t5_kind_demoted|t5_block_key_empty
-tid|{}
+t5_no_metadata|t5_no_ancestry
+t|t
 (1 row)
 t6_kind|t6_ancestors_correct
 tid|t

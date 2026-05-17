@@ -73,13 +73,18 @@ SELECT (get_table_info('ci_t4'::regclass::oid)).kind       AS t4_kind,
        get_ancestors('ci_t4'::regclass::oid)
          = ARRAY['ci_bid'::regclass::oid]                  AS t4_ancestors_correct;
 
--- ---------------------------------------------------------------
--- (5) BID source: target list DROPS the block-key column.  Hook
---     demotes to TID rather than asserting a phantom block key.
+-- (5) BID source: target list DROPS the block-key column.  The
+--     classifier's BID-projection check (the n_meta == 1 branch
+--     resolves outer Vars through subqueries back to base columns)
+--     now reports OPAQUE for this case, so the CTAS hook skips
+--     and no metadata is recorded for the new relation.  The
+--     resulting ci_t5 is untracked -- safer than the previous
+--     "demote to TID" behaviour, which advertised independence
+--     the rows did not actually have under any preserved column.
 -- ---------------------------------------------------------------
 CREATE TABLE ci_t5 AS SELECT v, provsql FROM ci_bid;
-SELECT (get_table_info('ci_t5'::regclass::oid)).kind       AS t5_kind_demoted,
-       (get_table_info('ci_t5'::regclass::oid)).block_key  AS t5_block_key_empty;
+SELECT get_table_info('ci_t5'::regclass::oid) IS NULL  AS t5_no_metadata,
+       get_ancestors('ci_t5'::regclass::oid)  IS NULL  AS t5_no_ancestry;
 
 -- ---------------------------------------------------------------
 -- (6) SELECT INTO: PG's parser transforms this to CreateTableAsStmt;

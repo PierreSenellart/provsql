@@ -364,6 +364,74 @@ id
 remove_provenance
 
 (1 row)
+NOTICE:  ProvSQL: query result is BID (sources: provsql_test.cq_bid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+k
+1
+1
+2
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+v
+x
+y
+z
+(3 rows)
+NOTICE:  ProvSQL: query result is BID (sources: provsql_test.cq_bid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+k
+1
+1
+2
+(3 rows)
+NOTICE:  ProvSQL: query result is BID (sources: provsql_test.cq_bid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+block
+1
+1
+2
+(3 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_bid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+k
+1
+2
+(2 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+v
+x
+y
+z
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+k|c
+1|2 (*)
+2|1 (*)
+(2 rows)
 remove_provenance
 
 (1 row)
