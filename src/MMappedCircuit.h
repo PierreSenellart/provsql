@@ -231,28 +231,63 @@ inline unsigned long getNbGates() const {
 }
 
 /**
- * @brief Insert or update per-table provenance metadata.
+ * @brief Insert or update the @c kind / @c block_key half of a
+ *        per-table metadata record, preserving any existing ancestor
+ *        fields.
  *
- * If an entry for @p relid already exists, its @c tid and @c block_key
- * fields are overwritten in place.  Otherwise a fresh record is appended.
+ * If an entry for @p info.relid already exists, its @c kind and
+ * @c block_key fields are overwritten in place and its @c ancestors
+ * fields are preserved.  Otherwise a fresh record is appended with
+ * @c ancestor_n @c == @c 0.
  *
- * @param info  The record to store; @c info.relid is the primary key.
+ * @param info  The record to store; only @c kind / @c block_key are
+ *              consumed (@c ancestor fields are sourced from the
+ *              existing entry or zeroed for fresh ones).
  */
 void setTableInfo(const ProvenanceTableInfo &info);
 
 /**
- * @brief Remove a per-table metadata entry.
+ * @brief Insert or update the ancestor set of a per-table metadata
+ *        record, preserving any existing @c kind / @c block_key
+ *        fields.
  *
- * No-op when @p relid is not present.  Removal is done by overwriting
- * the matching entry with the last entry in the vector and decrementing
- * the logical count (swap-remove).  Backing-file capacity is not reclaimed.
+ * No-op when @p relid has no existing record: the safe-query
+ * rewriter only consults ancestry for tracked relations, so a
+ * caller setting ancestry on an unknown relation has missed a
+ * @c setTableInfo step.  Callers in this codebase always set
+ * @c kind first.
+ *
+ * @param relid       pg_class OID of the relation to update.
+ * @param ancestor_n  Number of valid entries in @p ancestors
+ *                    (must be @c <= @c PROVSQL_TABLE_INFO_MAX_ANCESTORS).
+ * @param ancestors   Sorted, deduplicated base-relation OIDs.
+ */
+void setTableAncestry(Oid relid, uint16_t ancestor_n,
+                      const Oid *ancestors);
+
+/**
+ * @brief Remove a per-table metadata entry (both halves).
+ *
+ * No-op when @p relid is not present.  Removal is done by
+ * tombstoning the matching entry with @c relid @c == @c InvalidOid;
+ * the next @c setTableInfo over the same @p relid reuses the slot.
  *
  * @param relid  pg_class OID of the relation whose entry to remove.
  */
 void removeTableInfo(Oid relid);
 
 /**
- * @brief Look up per-table metadata.
+ * @brief Clear just the ancestor set of a per-table metadata record,
+ *        preserving @c kind / @c block_key.
+ *
+ * No-op when @p relid has no existing record.  Useful when a
+ * derived relation's source list changes (e.g. a CTAS is re-run)
+ * without disturbing its kind classification.
+ */
+void removeTableAncestry(Oid relid);
+
+/**
+ * @brief Look up the full per-table metadata record (both halves).
  *
  * @param relid  pg_class OID of the relation to look up.
  * @param out    On success, filled with the stored record.

@@ -691,6 +691,132 @@ bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out)
 }
 
 /* -------------------------------------------------------------------------
+ * Per-backend ancestry cache
+ *
+ * Structurally identical to the table-info cache above but keyed on
+ * just the ancestor half of the on-disk record.  The two halves share
+ * the storage (one @c ProvenanceTableInfo per relation) but are
+ * cached separately so a hot-path safe-query lookup that only needs
+ * the kind doesn't pull the ancestor array, and vice versa.  The
+ * relcache callback below reuses the channel of the kind cache so
+ * any @c set_ancestors / @c add_provenance / @c repair_key DDL
+ * broadcast invalidates both caches in lock-step.
+ * ------------------------------------------------------------------------- */
+
+typedef struct ancestry_cache_entry {
+  Oid    relid;                                       ///< pg_class OID (sort key)
+  bool   valid;                                       ///< false => refresh on next access
+  bool   present;                                     ///< when valid: did the worker return any ancestors?
+  uint16 ancestor_n;                                  ///< when present: count
+  Oid    ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS]; ///< when present: ancestor OIDs
+} ancestry_cache_entry;
+
+static ancestry_cache_entry *ancestry_cache = NULL;
+static unsigned ancestry_cache_len = 0;
+static bool ancestry_callback_registered = false;
+
+static int ancestry_cache_find(Oid relid, int *insert_at)
+{
+  int start = 0, end = (int)ancestry_cache_len - 1;
+  while(end >= start) {
+    int mid = (start + end) / 2;
+    if(ancestry_cache[mid].relid < relid)
+      start = mid + 1;
+    else if(ancestry_cache[mid].relid > relid)
+      end = mid - 1;
+    else
+      return mid;
+  }
+  if(insert_at) *insert_at = start;
+  return -1;
+}
+
+static void ancestry_cache_insert(int pos, Oid relid, bool present,
+                                  uint16 ancestor_n, const Oid *ancestors)
+{
+  ancestry_cache_entry *new_buf = calloc(ancestry_cache_len + 1,
+                                         sizeof(ancestry_cache_entry));
+  for(int i = 0; i < pos; ++i)
+    new_buf[i] = ancestry_cache[i];
+  new_buf[pos].relid      = relid;
+  new_buf[pos].valid      = true;
+  new_buf[pos].present    = present;
+  if(present) {
+    new_buf[pos].ancestor_n = ancestor_n;
+    memcpy(new_buf[pos].ancestors, ancestors,
+           ancestor_n * sizeof(Oid));
+  }
+  for(unsigned i = (unsigned)pos; i < ancestry_cache_len; ++i)
+    new_buf[i + 1] = ancestry_cache[i];
+  free(ancestry_cache);
+  ancestry_cache = new_buf;
+  ++ancestry_cache_len;
+}
+
+static void invalidate_ancestry_cache_callback(Datum arg, Oid relid)
+{
+  int pos;
+  (void) arg;
+  if(relid == InvalidOid) {
+    for(unsigned i = 0; i < ancestry_cache_len; ++i)
+      ancestry_cache[i].valid = false;
+    return;
+  }
+  pos = ancestry_cache_find(relid, NULL);
+  if(pos >= 0)
+    ancestry_cache[pos].valid = false;
+}
+
+bool provsql_lookup_ancestry(Oid relid, uint16 *ancestor_n_out,
+                             Oid *ancestors_out)
+{
+  int insert_at = 0;
+  int pos;
+  uint16 n = 0;
+  Oid    ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+  bool   present;
+
+  if(!ancestry_callback_registered) {
+    CacheRegisterRelcacheCallback(invalidate_ancestry_cache_callback,
+                                  (Datum) 0);
+    ancestry_callback_registered = true;
+  }
+
+  pos = ancestry_cache_find(relid, &insert_at);
+
+  if(pos >= 0 && ancestry_cache[pos].valid) {
+    ancestry_cache_entry *e = &ancestry_cache[pos];
+    if(!e->present)
+      return false;
+    *ancestor_n_out = e->ancestor_n;
+    memcpy(ancestors_out, e->ancestors,
+           e->ancestor_n * sizeof(Oid));
+    return true;
+  }
+
+  present = provsql_fetch_ancestry(relid, &n, ancestors);
+
+  if(pos >= 0) {
+    ancestry_cache_entry *e = &ancestry_cache[pos];
+    e->valid   = true;
+    e->present = present;
+    if(present) {
+      e->ancestor_n = n;
+      memcpy(e->ancestors, ancestors, n * sizeof(Oid));
+    }
+  } else {
+    ancestry_cache_insert(insert_at, relid, present, n, ancestors);
+  }
+
+  if(present) {
+    *ancestor_n_out = n;
+    memcpy(ancestors_out, ancestors, n * sizeof(Oid));
+    return true;
+  }
+  return false;
+}
+
+/* -------------------------------------------------------------------------
  * Per-backend relation-keys cache (§2 PK-FD support)
  *
  * Sibling of the @c table_info_cache above; structurally identical

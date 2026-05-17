@@ -88,6 +88,19 @@ CREATE OR REPLACE FUNCTION get_table_info(
   RETURNS record AS
   'provsql','get_table_info' LANGUAGE C STABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION set_ancestors(
+  relid OID, ancestors OID[] DEFAULT ARRAY[]::OID[])
+  RETURNS void AS
+  'provsql','set_ancestors' LANGUAGE C PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION remove_ancestors(relid OID)
+  RETURNS void AS
+  'provsql','remove_ancestors' LANGUAGE C PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION get_ancestors(relid OID)
+  RETURNS OID[] AS
+  'provsql','get_ancestors' LANGUAGE C STABLE PARALLEL SAFE;
+
 -- ----------------------------------------------------------------------
 -- 3. Event trigger that purges per-table metadata when a tracked
 --    relation is dropped without going through remove_provenance.
@@ -176,6 +189,7 @@ BEGIN
     'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -280,6 +294,7 @@ BEGIN
     'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
 END
 $$ LANGUAGE plpgsql;
 
@@ -323,6 +338,7 @@ BEGIN
         EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %s REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.update_statement_trigger()', _tbl);
 
         PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+        PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
       END
       $body$ LANGUAGE plpgsql SECURITY DEFINER;
     $ex$;
@@ -345,6 +361,13 @@ $migrate$;
 --    here -- they MUST re-run @c repair_key to restore the BID
 --    classification (the script has no way to recover the original
 --    block_key columns from the existing mmap circuit).
+--      f. Seed the base-ancestor set to {self}.  Base TID/BID tables
+--         have themselves as their sole ancestor; CTAS-derived
+--         relations the user may have explicitly tracked via
+--         @c add_provenance also land at {self} here (a CTAS-source-
+--         aware hook is a separate slice -- before it ships, all
+--         tracked relations are treated as base for the disjoint-
+--         ancestor analysis).
 -- ----------------------------------------------------------------------
 
 DO $$
@@ -417,6 +440,9 @@ BEGIN
     -- (e) seed table-info as TID.  Users who repair_key'd in 1.5.0
     --     must re-run repair_key after the upgrade to restore BID.
     PERFORM provsql.set_table_info(r.relid, 'tid');
+
+    -- (f) seed the base-ancestor set to {self}.
+    PERFORM provsql.set_ancestors(r.relid, ARRAY[r.relid]);
   END LOOP;
 END $$;
 

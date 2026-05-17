@@ -47,6 +47,7 @@ BEGIN
   EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %s REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.update_statement_trigger()', _tbl);
 
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 /** @endcond */

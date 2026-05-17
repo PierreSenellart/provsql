@@ -294,6 +294,46 @@ CREATE OR REPLACE FUNCTION get_table_info(
   'provsql','get_table_info' LANGUAGE C STABLE PARALLEL SAFE;
 
 /**
+ * @brief Record the base-relation ancestor set of a tracked relation.
+ *
+ * Base tables created with @c add_provenance / @c repair_key carry
+ * @c {self}; CTAS-derived tables inherit the union of their sources'
+ * ancestor sets.  The safe-query rewriter consults the registry to
+ * enforce that joined FROM entries have disjoint base ancestors
+ * before firing the read-once factoring.
+ *
+ * The worker preserves the relation's existing @c kind / @c block_key
+ * half on update; it silently no-ops when no kind record exists for
+ * @p relid (callers should run @c add_provenance / @c repair_key
+ * first).  The ancestor list is capped at 64 entries (clear error if
+ * exceeded).
+ *
+ * @param relid      pg_class OID of the relation.
+ * @param ancestors  Sorted, deduplicated base-relation OIDs.
+ */
+CREATE OR REPLACE FUNCTION set_ancestors(
+  relid OID, ancestors OID[] DEFAULT ARRAY[]::OID[])
+  RETURNS void AS
+  'provsql','set_ancestors' LANGUAGE C PARALLEL SAFE;
+
+/** @brief Clear the ancestor half of a per-relation record (keeps kind/block_key).
+ *  No-op when missing. */
+CREATE OR REPLACE FUNCTION remove_ancestors(relid OID)
+  RETURNS void AS
+  'provsql','remove_ancestors' LANGUAGE C PARALLEL SAFE;
+
+/**
+ * @brief Read the base-relation ancestor set of a tracked relation.
+ *
+ * Returns @c NULL when no ancestor record exists for @p relid (or the
+ * record is empty -- both cases make the safe-query rewriter take
+ * its conservative refuse path, so they collapse here).
+ */
+CREATE OR REPLACE FUNCTION get_ancestors(relid OID)
+  RETURNS OID[] AS
+  'provsql','get_ancestors' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
  * @brief BEFORE INSERT OR UPDATE OF provsql row trigger installed by
  *        @c add_provenance.
  *
@@ -364,6 +404,11 @@ BEGIN
     'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  -- Seed the base-ancestor set to {self}: a base TID table's atoms
+  -- come from itself and no other relation.  CTAS-derived tables
+  -- inherit unions of source ancestor sets; that is handled by the
+  -- CTAS hook (a separate slice), not here.
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -512,6 +557,9 @@ BEGIN
     'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
+  -- Base BID tables also have themselves as their sole ancestor.  Same
+  -- rationale as the @c add_provenance branch above.
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
 END
 $$ LANGUAGE plpgsql;
 

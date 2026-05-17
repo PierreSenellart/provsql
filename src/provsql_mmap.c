@@ -757,6 +757,206 @@ Datum get_table_info(PG_FUNCTION_ARGS)
   PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }
 
+PG_FUNCTION_INFO_V1(set_ancestors);
+/**
+ * @brief PostgreSQL-callable wrapper for setTableAncestry() over the
+ *        IPC pipe.
+ *
+ * Records the base-relation ancestor set of a tracked relation.
+ * @p relid is the @c pg_class OID of the relation; @p ancestors is
+ * an @c oid[] (possibly empty) listing the base @c add_provenance /
+ * @c repair_key relations this one's atoms ultimately come from.
+ * The worker preserves the relation's existing @c kind / @c
+ * block_key half on update.
+ *
+ * Silently no-op on the worker side when @p relid has no kind
+ * record yet -- the safe-query rewriter only consults ancestry
+ * for tracked relations, so callers should run
+ * @c add_provenance / @c repair_key / @c set_table_info first.
+ */
+Datum set_ancestors(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  ArrayType *ancestors;
+  uint16 ancestor_n = 0;
+  Oid *ancestor_data = NULL;
+  Size payload_size;
+
+  if(PG_ARGISNULL(0))
+    provsql_error("Invalid NULL value passed to set_ancestors");
+
+  relid     = PG_GETARG_OID(0);
+  ancestors = PG_ARGISNULL(1) ? NULL : PG_GETARG_ARRAYTYPE_P(1);
+
+  if(ancestors) {
+    if(ARR_NDIM(ancestors) > 1)
+      provsql_error("Invalid multi-dimensional array passed to set_ancestors");
+    else if(ARR_NDIM(ancestors) == 1)
+      ancestor_n = *ARR_DIMS(ancestors);
+    if(ancestor_n > 0)
+      ancestor_data = (Oid *) ARR_DATA_PTR(ancestors);
+  }
+
+  if(ancestor_n > PROVSQL_TABLE_INFO_MAX_ANCESTORS)
+    provsql_error("set_ancestors: ancestor set wider than %d entries "
+                  "(%u given) is not supported",
+                  PROVSQL_TABLE_INFO_MAX_ANCESTORS, ancestor_n);
+
+  payload_size = sizeof(char) + sizeof(Oid) + sizeof(Oid)
+                 + sizeof(uint16) + ancestor_n * sizeof(Oid);
+  if(payload_size > PIPE_BUF)
+    provsql_error("set_ancestors: IPC payload exceeds PIPE_BUF");
+
+  STARTWRITEM();
+  ADDWRITEM("A", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+  ADDWRITEM(&ancestor_n, uint16);
+  for(uint16 i = 0; i < ancestor_n; ++i)
+    ADDWRITEM(&ancestor_data[i], Oid);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type A)");
+  }
+  provsql_shmem_unlock();
+
+  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+    CacheInvalidateRelcacheByRelid(relid);
+
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(remove_ancestors);
+/**
+ * @brief PostgreSQL-callable wrapper for removeTableAncestry() over
+ *        the IPC pipe.
+ *
+ * Clears just the ancestor half of a per-table metadata record,
+ * leaving @c kind / @c block_key intact.  Use @c remove_table_info
+ * to delete the whole record instead.
+ */
+Datum remove_ancestors(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+
+  if(PG_ARGISNULL(0))
+    provsql_error("Invalid NULL value passed to remove_ancestors");
+
+  relid = PG_GETARG_OID(0);
+
+  STARTWRITEM();
+  ADDWRITEM("R", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type R)");
+  }
+  provsql_shmem_unlock();
+
+  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+    CacheInvalidateRelcacheByRelid(relid);
+
+  PG_RETURN_VOID();
+}
+
+/**
+ * @brief C-callable IPC fetch for the ancestor half of a per-table
+ *        metadata record.
+ *
+ * Sends an @c 'a' message to the background worker and reads back
+ * the response.  No caching: every call hits the worker.  Use
+ * @c provsql_lookup_ancestry for the cached, planner-hot-path
+ * variant.
+ *
+ * @param relid           pg_class OID of the relation to look up.
+ * @param ancestor_n_out  On @c true return, count of valid entries.
+ * @param ancestors_out   On @c true return, the ancestor OIDs
+ *                        (caller buffer of
+ *                        @c PROVSQL_TABLE_INFO_MAX_ANCESTORS).
+ * @return @c true if the worker returned a non-zero ancestor count;
+ *         @c false otherwise (no record, or empty ancestor set).
+ */
+bool provsql_fetch_ancestry(Oid relid, uint16 *ancestor_n_out,
+                            Oid *ancestors_out)
+{
+  char found;
+  uint16 n = 0;
+
+  STARTWRITEM();
+  ADDWRITEM("a", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+
+  provsql_shmem_lock_exclusive();
+
+  if(!SENDWRITEM() || !READB(found, char)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot communicate with pipe (message type a)");
+  }
+  if(found) {
+    if(!READB(n, uint16)) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot communicate with pipe (message type a)");
+    }
+    if(n > PROVSQL_TABLE_INFO_MAX_ANCESTORS) {
+      provsql_shmem_unlock();
+      provsql_error("provsql_fetch_ancestry: server returned an "
+                    "unexpectedly wide ancestor set");
+    }
+    for(uint16 i = 0; i < n; ++i)
+      if(!READB(ancestors_out[i], Oid)) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot communicate with pipe (message type a)");
+      }
+  }
+
+  provsql_shmem_unlock();
+  *ancestor_n_out = n;
+  /* "Found but empty" collapses to the same return as "not found":
+   * both make the safe-query rewriter take the conservative path. */
+  return found != 0 && n > 0;
+}
+
+PG_FUNCTION_INFO_V1(get_ancestors);
+/**
+ * @brief PostgreSQL-callable wrapper around the cached ancestry lookup.
+ *
+ * Returns @c NULL when no ancestor record exists (or the record is
+ * empty); otherwise an @c oid[] listing the base-relation OIDs.
+ * Goes through @c provsql_lookup_ancestry so repeated calls in the
+ * same session do not pay for IPC.
+ */
+Datum get_ancestors(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  uint16 ancestor_n;
+  Oid ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+  Datum *elems;
+  ArrayType *arr;
+
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  relid = PG_GETARG_OID(0);
+
+  if(!provsql_lookup_ancestry(relid, &ancestor_n, ancestors))
+    PG_RETURN_NULL();
+
+  elems = palloc(ancestor_n * sizeof(Datum));
+  for(uint16 i = 0; i < ancestor_n; ++i)
+    elems[i] = ObjectIdGetDatum(ancestors[i]);
+  arr = construct_array(elems, ancestor_n, OIDOID,
+                        sizeof(Oid), true, 'i');
+  pfree(elems);
+
+  PG_RETURN_ARRAYTYPE_P(arr);
+}
+
 PG_FUNCTION_INFO_V1(get_infos);
 /** @brief PostgreSQL-callable wrapper for get_infos(). */
 Datum get_infos(PG_FUNCTION_ARGS)

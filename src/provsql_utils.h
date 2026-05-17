@@ -344,6 +344,49 @@ extern bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out);
 extern bool provsql_fetch_table_info(Oid relid, ProvenanceTableInfo *out);
 
 /**
+ * @brief Look up the base-ancestor set of a tracked relation.
+ *
+ * Per-backend cached over IPC.  Returns the ancestor set when
+ * @p relid is tracked and the registry has a non-empty entry for it.
+ * @c false either when @p relid has no metadata record at all (the
+ * relation was never run through @c add_provenance / @c repair_key)
+ * or when the record exists but @c ancestor_n @c == @c 0 (the CTAS
+ * hook hasn't populated the lineage yet, or the registry was
+ * explicitly cleared).  The two failure modes share the false
+ * return because both make the safe-query rewriter take the
+ * conservative refuse path -- there is no use case for treating
+ * them differently.
+ *
+ * Backed by the same per-backend cache as
+ * @c provsql_lookup_table_info and invalidated through the same
+ * relcache-invalidation callback, so concurrent
+ * @c set_ancestors / @c add_provenance / @c repair_key calls in
+ * other backends are reflected here without polling.
+ *
+ * @param relid           pg_class OID of the relation to look up.
+ * @param ancestor_n_out  On @c true return, count of valid entries
+ *                        in @p ancestors_out.
+ * @param ancestors_out   On @c true return, the sorted-deduplicated
+ *                        ancestor OIDs (caller-allocated buffer of
+ *                        @c PROVSQL_TABLE_INFO_MAX_ANCESTORS @c Oid).
+ * @return @c true on a non-empty ancestor set; @c false otherwise.
+ */
+extern bool provsql_lookup_ancestry(Oid relid,
+                                    uint16 *ancestor_n_out,
+                                    Oid *ancestors_out);
+
+/**
+ * @brief Raw IPC fetch for the ancestry half (no cache).
+ *
+ * Implementation detail of @c provsql_lookup_ancestry, exposed so
+ * the cache layer in @c provsql_utils.c can reach it.  Callers in
+ * the planner hot path should go through @c provsql_lookup_ancestry.
+ */
+extern bool provsql_fetch_ancestry(Oid relid,
+                                   uint16 *ancestor_n_out,
+                                   Oid *ancestors_out);
+
+/**
  * @brief Upper bounds for the relation-key cache.
  *
  * Each relation contributes at most @c PROVSQL_KEY_CACHE_MAX_KEYS

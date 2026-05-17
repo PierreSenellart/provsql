@@ -141,6 +141,10 @@ test: to_provxml
 # Per-table provenance metadata maintenance (safe-query optimisation)
 test: table_info
 
+# Per-table base-ancestor registry (correlation tracking for the
+# safe-query rewriter's disjoint-ancestor check)
+test: ancestry
+
 # Safe-query optimisation: end-to-end hierarchical CQ rewrite
 test: safe_query_basic
 test: safe_query_pushdown

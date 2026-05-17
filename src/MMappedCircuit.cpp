@@ -431,6 +431,56 @@ void provsql_mmap_main_loop()
       break;
     }
 
+    case 'A':
+    {
+      /* Insert / upsert the ancestor half of a per-table metadata
+       * record (the kind / block_key half is preserved). */
+      Oid relid;
+      uint16_t ancestor_n;
+      if(!READM(relid, Oid) || !READM(ancestor_n, uint16_t))
+        provsql_error("Cannot read from pipe (message type A)");
+      if(ancestor_n > PROVSQL_TABLE_INFO_MAX_ANCESTORS)
+        provsql_error("ProvSQL: ancestor set wider than %d entries "
+                      "(message type A)",
+                      PROVSQL_TABLE_INFO_MAX_ANCESTORS);
+      Oid ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+      for(uint16_t i=0; i<ancestor_n; ++i)
+        if(!READM(ancestors[i], Oid))
+          provsql_error("Cannot read from pipe (message type A)");
+      circuit->setTableAncestry(relid, ancestor_n, ancestors);
+      break;
+    }
+
+    case 'R':
+    {
+      /* Clear just the ancestor half of a per-table metadata record. */
+      Oid relid;
+      if(!READM(relid, Oid))
+        provsql_error("Cannot read from pipe (message type R)");
+      circuit->removeTableAncestry(relid);
+      break;
+    }
+
+    case 'a':
+    {
+      /* Look up just the ancestor half of a per-table metadata record. */
+      Oid relid;
+      if(!READM(relid, Oid))
+        provsql_error("Cannot read from pipe (message type a)");
+      ProvenanceTableInfo info{};
+      char found = circuit->getTableInfo(relid, info) ? 1 : 0;
+      if(!WRITEB(&found, char))
+        provsql_error("Cannot write response to pipe (message type a)");
+      if(found) {
+        if(!WRITEB(&info.ancestor_n, uint16_t))
+          provsql_error("Cannot write response to pipe (message type a)");
+        for(uint16_t i=0; i<info.ancestor_n; ++i)
+          if(!WRITEB(&info.ancestors[i], Oid))
+            provsql_error("Cannot write response to pipe (message type a)");
+      }
+      break;
+    }
+
     case 'j':
     {
       /* Joint-circuit load: BFS from a vector of roots so a shared
@@ -485,7 +535,17 @@ void MMappedCircuit::sync()
  * append-only public API, and keeps the file format trivial: a
  * crash-recovered file is internally consistent without any extra
  * recovery step.  In practice, churn on this vector is low (one
- * entry per add_provenance / repair_key / remove_provenance call). */
+ * entry per add_provenance / repair_key / remove_provenance call).
+ *
+ * Each record carries two logically independent halves: the kind /
+ * block_key fields (TID / BID classification, set by add_provenance /
+ * repair_key / set_table_info) and the ancestor_n / ancestors fields
+ * (base-relation provenance lineage, set by add_provenance for base
+ * tables and by the CTAS hook for derived tables).  setTableInfo()
+ * updates the kind half and preserves the ancestor half on update;
+ * setTableAncestry() does the converse.  This lets the two halves
+ * evolve independently without the SQL layer having to fetch-and-
+ * round-trip every time. */
 
 void MMappedCircuit::setTableInfo(const ProvenanceTableInfo &info)
 {
@@ -493,16 +553,48 @@ void MMappedCircuit::setTableInfo(const ProvenanceTableInfo &info)
   unsigned long n = tableInfo.nbElements();
   for(unsigned long i=0; i<n; ++i) {
     if(tableInfo[i].relid == info.relid) {
-      tableInfo[i] = info;
+      /* Preserve the existing ancestor half on update. */
+      ProvenanceTableInfo merged = info;
+      merged.ancestor_n = tableInfo[i].ancestor_n;
+      memcpy(merged.ancestors, tableInfo[i].ancestors,
+             merged.ancestor_n * sizeof(Oid));
+      tableInfo[i] = merged;
       return;
     }
     if(tombstone < 0 && tableInfo[i].relid == InvalidOid)
       tombstone = static_cast<long>(i);
   }
+  /* Fresh record: kind half from caller, ancestor half empty. */
+  ProvenanceTableInfo fresh = info;
+  fresh.ancestor_n = 0;
   if(tombstone >= 0)
-    tableInfo[tombstone] = info;
+    tableInfo[tombstone] = fresh;
   else
-    tableInfo.add(info);
+    tableInfo.add(fresh);
+}
+
+void MMappedCircuit::setTableAncestry(Oid relid, uint16_t ancestor_n,
+                                      const Oid *ancestors)
+{
+  if(relid == InvalidOid)
+    return;
+  if(ancestor_n > PROVSQL_TABLE_INFO_MAX_ANCESTORS)
+    return;  /* defensive: caller-side check already rejects this */
+  unsigned long n = tableInfo.nbElements();
+  for(unsigned long i=0; i<n; ++i) {
+    if(tableInfo[i].relid == relid) {
+      ProvenanceTableInfo updated = tableInfo[i];
+      updated.ancestor_n = ancestor_n;
+      memcpy(updated.ancestors, ancestors, ancestor_n * sizeof(Oid));
+      tableInfo[i] = updated;
+      return;
+    }
+  }
+  /* No-op when relid has no kind record: callers should set kind
+   * first (add_provenance / repair_key do this).  Silently
+   * dropping the ancestry payload here matches the existing
+   * removeTableInfo / setTableInfo "missing relid is harmless"
+   * pattern and avoids creating an OPAQUE-by-default record. */
 }
 
 void MMappedCircuit::removeTableInfo(Oid relid)
@@ -513,6 +605,19 @@ void MMappedCircuit::removeTableInfo(Oid relid)
   for(unsigned long i=0; i<n; ++i) {
     if(tableInfo[i].relid == relid) {
       tableInfo[i].relid = InvalidOid;
+      return;
+    }
+  }
+}
+
+void MMappedCircuit::removeTableAncestry(Oid relid)
+{
+  if(relid == InvalidOid)
+    return;
+  unsigned long n = tableInfo.nbElements();
+  for(unsigned long i=0; i<n; ++i) {
+    if(tableInfo[i].relid == relid) {
+      tableInfo[i].ancestor_n = 0;
       return;
     }
   }

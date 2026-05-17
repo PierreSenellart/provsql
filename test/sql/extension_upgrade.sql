@@ -84,6 +84,13 @@ SELECT name, get_gate_type(prov) AS root_type
   FROM upgrade_safe_q ORDER BY name;
 SET provsql.boolean_provenance = off;
 
+-- 1.6.0 surface check: base-ancestor registry.  The per-existing-
+-- tracked-table backfill in the 1.5.0 -> 1.6.0 upgrade seeds every
+-- tracked relation with @c {self}, so a relation freshly tracked
+-- after the upgrade chain ran must round-trip @c get_ancestors.
+SELECT get_ancestors('upgrade_smoke'::regclass::oid)
+       = ARRAY['upgrade_smoke'::regclass::oid] AS ancestry_seeded_to_self;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
            upgrade_smoke_right, upgrade_safe_q;

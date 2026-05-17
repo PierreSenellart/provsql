@@ -33,3 +33,6 @@ alice|assumed_boolean
 bob|assumed_boolean
 carol|assumed_boolean
 (3 rows)
+ancestry_seeded_to_self
+t
+(1 row)

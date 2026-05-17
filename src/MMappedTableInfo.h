@@ -47,6 +47,23 @@
 #define PROVSQL_TABLE_INFO_MAX_BLOCK_KEY 16
 
 /**
+ * @brief Cap on the number of base ancestors recorded per relation.
+ *
+ * The base-ancestor set lists the @c pg_class OIDs of the original
+ * @c add_provenance / @c repair_key relations a derived (CTAS / @c
+ * SELECT @c INTO / @c CREATE @c MATERIALIZED @c VIEW) relation's
+ * provenance ultimately reads from.  Base tables carry @c {self}; the
+ * safe-query rewriter consults the set to enforce that joined FROM
+ * entries have disjoint base ancestors before firing the read-once
+ * factoring.  Sixty-four covers practical CTAS workloads (typical
+ * derivations span 1-10 sources); set-ancestors raises a clear error
+ * if a wider set is requested, in which case the relation should be
+ * left untracked (the safe-query rewriter will then refuse it on the
+ * missing-ancestry conservative path).
+ */
+#define PROVSQL_TABLE_INFO_MAX_ANCESTORS 64
+
+/**
  * @brief How the provenance leaves of a tracked relation are correlated.
  *
  * Three cases need distinguishing for the safe-query rewriter:
@@ -88,12 +105,23 @@ typedef enum provsql_table_kind {
  * lists the column numbers whose tuples partition the table into
  * mutually-exclusive blocks; an empty key means the whole table is
  * one block.  @c block_key is left empty for TID and OPAQUE.
+ * @c ancestors[0..ancestor_n-1] lists the @c pg_class OIDs of the
+ * original @c add_provenance / @c repair_key base relations this
+ * relation's atoms ultimately come from (a sorted, deduplicated set).
+ * Base tables have @c ancestor_n @c == @c 1 with @c ancestors[0]
+ * @c == @c relid; CTAS-derived tables inherit the union of their
+ * sources' ancestor sets.  @c ancestor_n @c == @c 0 means the
+ * registry has no information for this relation -- the safe-query
+ * rewriter then conservatively refuses to fire when ancestry-based
+ * disjointness is required.
  */
 typedef struct ProvenanceTableInfo {
-  Oid relid;                                         ///< pg_class OID of the relation (primary key)
-  uint8_t kind;                                      ///< One of @c provsql_table_kind
-  uint16_t block_key_n;                              ///< Number of valid entries in @c block_key
+  Oid relid;                                              ///< pg_class OID of the relation (primary key)
+  uint8_t kind;                                           ///< One of @c provsql_table_kind
+  uint16_t block_key_n;                                   ///< Number of valid entries in @c block_key
   AttrNumber block_key[PROVSQL_TABLE_INFO_MAX_BLOCK_KEY]; ///< Block-key column numbers
+  uint16_t ancestor_n;                                    ///< Number of valid entries in @c ancestors (0 = no registry info)
+  Oid ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];        ///< Sorted, deduplicated base-relation OIDs
 } ProvenanceTableInfo;
 
 #endif /* MMAPPED_TABLE_INFO_H */
