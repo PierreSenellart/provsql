@@ -1,3 +1,4 @@
+\set ECHO none
 -- Regression coverage for foldBooleanIdentities (the load-time
 -- Boolean-only simplifier gated on provsql.boolean_provenance).
 --
