@@ -111,16 +111,18 @@ SELECT 'S2' AS scenario, * FROM opq_probe('opq_s2');
 
 -- ---------------------------------------------------------------
 -- (S3) CREATE VIEW that joins two tracked tables and projects
--- only one's provsql.  After inlining, opq_s3's "provsql" column
--- carries opq_src.provsql verbatim but each row's existence is
--- also conditioned on opq_aux -- a dependency the rewriter sees
--- nothing of when it looks at the view's projected column.  Even
--- if we taught the detector to flatten trivial subqueries in the
--- future, this view would remain unsafe to rewrite (the lost
--- opq_aux dependency cannot be reconstructed from the projected
--- column alone), so we want it to refuse permanently.
+-- only one's provsql.  PG inlines the view as an RTE_SUBQUERY
+-- before the planner hook sees the outer Query; the safe-query
+-- subquery-inlining pre-pass lifts opq_src and opq_s3_aux back
+-- into the outer rtable, so the opq_aux dependency is reconstructed
+-- and the rewriter sees a 3-atom hierarchical CQ that is safe to
+-- rewrite (opq_src, opq_s3_aux, opq_ref are independently tracked,
+-- their base relids are disjoint, and the @c x variable is the
+-- hierarchical root).  Row probabilities account for all three
+-- atoms regardless of which provsql column the view chose to
+-- project.
 --
--- DESIRED: refuse.
+-- DESIRED: fired.
 -- ---------------------------------------------------------------
 CREATE TABLE opq_s3_aux(x int);
 INSERT INTO opq_s3_aux VALUES (1), (2);

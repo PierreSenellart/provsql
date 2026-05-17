@@ -3923,6 +3923,472 @@ try_disjoint_constant_self_join_split(Query *q) {
   return approved;
 }
 
+/* -------------------------------------------------------------------------
+ * Subquery inlining pre-pass.
+ *
+ * Pull simple @c RTE_SUBQUERY fromlist entries (typically view bodies
+ * after PG's parser-time rewriting, but also inline @c FROM @c (SELECT
+ * ...)  subqueries) up into the outer query so the detector and
+ * rewriter see a single rtable of base @c RTE_RELATION entries.  Runs
+ * before @c try_pk_self_join_unification and the candidate gate.
+ *
+ * A subquery is "simple" -- safe to inline without changing observable
+ * semantics -- when it is a flat conjunctive @c SELECT (no @c DISTINCT,
+ * @c GROUP @c BY, @c HAVING, aggregates, window functions, set
+ * operations, sublinks, CTEs, @c ORDER @c BY, @c LIMIT / @c OFFSET,
+ * SRFs in the target list), its fromlist is plain @c RangeTblRef
+ * entries, every member RTE is either @c RTE_RELATION or another
+ * inlineable @c RTE_SUBQUERY, no member RTE is @c LATERAL or a security
+ * barrier, and every non-@c resjunk target-list entry reduces to a
+ * base-level @c Var (possibly through @c RelabelType wrappers carrying
+ * binary-coercion casts).
+ *
+ * The fixed-point loop iterates one fromlist entry at a time: each
+ * inlining step strictly removes one @c RTE_SUBQUERY reference from
+ * the fromlist, and the body's freshly-promoted entries become
+ * candidates for the next iteration -- so termination is bounded by
+ * the input @c Query's syntactic nesting depth.
+ *
+ * The candidate gate's "no two RTEs may share a relid" check, run
+ * after this pre-pass, enforces the disjoint-base-ancestor property
+ * the propagation design needs: two fromlist entries that ultimately
+ * read the same base relation (a view + base-table mix, or two views
+ * sharing an underlying table) inline to duplicate relids and trip
+ * the shared-relid bail (modulo the PK / disjoint-constant self-join
+ * rescues already in place).
+ * ------------------------------------------------------------------------- */
+
+/** @brief Walker context for @c safe_inline_shift_mutator. */
+typedef struct safe_inline_shift_ctx {
+  int offset;  ///< Added to every base-level @c Var.varno and @c RangeTblRef.rtindex
+} safe_inline_shift_ctx;
+
+/**
+ * @brief Add @c offset to the @c varno of every base-level (@c
+ *        varlevelsup @c == @c 0) @c Var and the @c rtindex of every
+ *        @c RangeTblRef in @p node.  Used when relocating a
+ *        subquery's rtable entries into the tail of the outer
+ *        query's rtable.
+ *
+ * Outer @c Vars (@c varlevelsup @c > @c 0) and outer
+ * @c RangeTblRefs cannot legitimately appear in an inlineable
+ * subquery -- the inlineable predicate refuses LATERAL RTEs and
+ * sublinks -- but we leave them alone defensively.
+ */
+static Node *safe_inline_shift_mutator(Node *node,
+                                       safe_inline_shift_ctx *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0) {
+      Var *nv = (Var *) copyObject(v);
+      nv->varno = (Index) ((int) v->varno + ctx->offset);
+#if PG_VERSION_NUM >= 130000
+      if (nv->varnosyn == v->varno)
+        nv->varnosyn = nv->varno;
+#endif
+      return (Node *) nv;
+    }
+    return node;
+  }
+  if (IsA(node, RangeTblRef)) {
+    RangeTblRef *rtr = (RangeTblRef *) node;
+    RangeTblRef *nr  = (RangeTblRef *) copyObject(rtr);
+    nr->rtindex = rtr->rtindex + ctx->offset;
+    return (Node *) nr;
+  }
+  return expression_tree_mutator(node, safe_inline_shift_mutator,
+                                 (void *) ctx);
+}
+
+/** @brief Walker context for @c safe_inline_subst_mutator. */
+typedef struct safe_inline_subst_ctx {
+  Index  target_rtindex;  ///< rtindex of the inlined subquery in the outer rtable
+  List  *target_list;     ///< Inlined subquery's @c targetList
+  int    outer_offset;    ///< Shift applied to Vars inside substituted TLE expressions
+} safe_inline_subst_ctx;
+
+/**
+ * @brief Replace every outer-scope @c Var pointing at the inlined
+ *        subquery RTE with a shifted copy of the matching target-list
+ *        entry's expression.
+ *
+ * The substituted expression is @c copyObject'd before its base-level
+ * @c Vars / @c RangeTblRefs are renumbered by @c outer_offset, so the
+ * inlined subquery's @c targetList is left intact for any other
+ * outer-scope @c Var still referencing it.
+ */
+static Node *safe_inline_subst_mutator(Node *node,
+                                       safe_inline_subst_ctx *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0 && v->varno == ctx->target_rtindex) {
+      TargetEntry *te;
+      Node *subst;
+      safe_inline_shift_ctx sctx;
+      if (v->varattno < 1
+          || v->varattno > list_length(ctx->target_list))
+        return node;  /* defensive: TLE missing for this attno */
+      te = (TargetEntry *) list_nth(ctx->target_list,
+                                    v->varattno - 1);
+      subst = (Node *) copyObject(te->expr);
+      sctx.offset = ctx->outer_offset;
+      return safe_inline_shift_mutator(subst, &sctx);
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, safe_inline_subst_mutator,
+                                 (void *) ctx);
+}
+
+/**
+ * @brief Decide whether @p sub may be inlined.  See the chapter
+ *        comment above for the predicate; the recursion through
+ *        nested @c RTE_SUBQUERY entries is bounded by the input
+ *        query's syntactic nesting depth.
+ */
+static bool is_inlineable_subquery(Query *sub) {
+  ListCell *lc;
+  if (sub == NULL || sub->commandType != CMD_SELECT)
+    return false;
+  if (sub->setOperations != NULL
+      || sub->hasSubLinks
+      || sub->hasAggs
+      || sub->hasWindowFuncs
+      || sub->hasTargetSRFs
+      || sub->hasModifyingCTE
+      || sub->hasDistinctOn
+      || sub->cteList != NIL
+      || sub->distinctClause != NIL
+      || sub->groupClause != NIL
+      || sub->groupingSets != NIL
+      || sub->havingQual != NULL
+      || sub->sortClause != NIL
+      || sub->limitCount != NULL
+      || sub->limitOffset != NULL)
+    return false;
+  if (sub->jointree == NULL || sub->jointree->fromlist == NIL)
+    return false;
+  foreach (lc, sub->jointree->fromlist) {
+    Node *n = (Node *) lfirst(lc);
+    if (!IsA(n, RangeTblRef))
+      return false;
+  }
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+    if (rte->lateral)
+      return false;
+    if (rte->securityQuals != NIL)
+      return false;
+    if (rte->rtekind == RTE_RELATION)
+      continue;
+    if (rte->rtekind == RTE_SUBQUERY) {
+      if (rte->security_barrier)
+        return false;
+      if (!is_inlineable_subquery(rte->subquery))
+        return false;
+      continue;
+    }
+    return false;
+  }
+  /* Target list entries must reduce to a base-level @c Var
+   * (possibly through @c RelabelType wrappers for binary-coercion
+   * casts).  This keeps the substitution semantics a simple
+   * Var-for-Var swap, avoids expanding the outer query with
+   * function-call or set-returning expressions, and rules out the
+   * outer-scope reference cases (RowExpr, sublink-bearing
+   * expressions, correlated TLEs).  resjunk entries are skipped --
+   * they are never referenced from the outer query. */
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    Node        *e  = (Node *) te->expr;
+    if (te->resjunk)
+      continue;
+    while (e != NULL && IsA(e, RelabelType))
+      e = (Node *) ((RelabelType *) e)->arg;
+    if (e == NULL || !IsA(e, Var))
+      return false;
+    if (((Var *) e)->varlevelsup != 0)
+      return false;
+  }
+  return true;
+}
+
+/**
+ * @brief Inline the subquery RTE at @p target_rti into @p q in place.
+ *        Caller is responsible for compaction (the orphan RTE is left
+ *        in @c q->rtable so other still-pending rtindex references
+ *        don't shift mid-pass).
+ */
+static void inline_one_subquery(Query *q, int target_rti) {
+  RangeTblEntry *target_rte = (RangeTblEntry *)
+      list_nth(q->rtable, target_rti - 1);
+  Query    *sub = target_rte->subquery;
+  int       outer_offset = list_length(q->rtable);
+  ListCell *lc;
+  List     *sub_rtable_copies = NIL;
+  Node     *sub_quals_shifted = NULL;
+  List     *sub_fromlist_shifted = NIL;
+  List     *new_fromlist = NIL;
+  safe_inline_shift_ctx sctx;
+  safe_inline_subst_ctx ictx;
+#if PG_VERSION_NUM >= 160000
+  int       outer_perminfo_count = list_length(q->rteperminfos);
+#endif
+
+  foreach (lc, sub->rtable)
+    sub_rtable_copies =
+        lappend(sub_rtable_copies, copyObject(lfirst(lc)));
+
+#if PG_VERSION_NUM >= 160000
+  /* Migrate the subquery's RTEPermissionInfo records into the outer
+   * query so the planner finds them under @c q->rteperminfos once
+   * the cloned RTEs land in @c q->rtable.  perminfoindex on each
+   * cloned RTE is shifted by the outer's old perminfos count. */
+  foreach (lc, sub->rteperminfos)
+    q->rteperminfos =
+        lappend(q->rteperminfos, copyObject(lfirst(lc)));
+  foreach (lc, sub_rtable_copies) {
+    RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+    if (rte->perminfoindex != 0)
+      rte->perminfoindex = (Index)
+          ((int) rte->perminfoindex + outer_perminfo_count);
+  }
+#endif
+
+  q->rtable = list_concat(q->rtable, sub_rtable_copies);
+
+  sctx.offset = outer_offset;
+  if (sub->jointree && sub->jointree->quals != NULL)
+    sub_quals_shifted = safe_inline_shift_mutator(
+        (Node *) copyObject(sub->jointree->quals), &sctx);
+  if (sub->jointree)
+    sub_fromlist_shifted = (List *)
+        safe_inline_shift_mutator(
+            (Node *) copyObject(sub->jointree->fromlist), &sctx);
+
+  /* Splice the (shifted) subquery fromlist into the outer fromlist
+   * in place of the @c RangeTblRef pointing at @p target_rti.
+   * Other entries pass through. */
+  foreach (lc, q->jointree->fromlist) {
+    Node *n = (Node *) lfirst(lc);
+    if (IsA(n, RangeTblRef)
+        && ((RangeTblRef *) n)->rtindex == target_rti)
+      new_fromlist = list_concat(new_fromlist, sub_fromlist_shifted);
+    else
+      new_fromlist = lappend(new_fromlist, n);
+  }
+  q->jointree->fromlist = new_fromlist;
+
+  if (sub_quals_shifted != NULL) {
+    if (q->jointree->quals == NULL)
+      q->jointree->quals = sub_quals_shifted;
+    else
+      q->jointree->quals = (Node *) makeBoolExpr(
+          AND_EXPR,
+          list_make2(q->jointree->quals, sub_quals_shifted),
+          -1);
+  }
+
+  ictx.target_rtindex = (Index) target_rti;
+  ictx.target_list    = sub->targetList;
+  ictx.outer_offset   = outer_offset;
+  q->targetList = (List *)
+      safe_inline_subst_mutator((Node *) q->targetList, &ictx);
+  q->returningList = (List *)
+      safe_inline_subst_mutator((Node *) q->returningList, &ictx);
+  if (q->jointree)
+    q->jointree->quals =
+        safe_inline_subst_mutator(q->jointree->quals, &ictx);
+  q->limitOffset = safe_inline_subst_mutator(q->limitOffset, &ictx);
+  q->limitCount  = safe_inline_subst_mutator(q->limitCount, &ictx);
+}
+
+/** @brief Walker context for @c safe_inline_compact_mutator. */
+typedef struct safe_inline_compact_ctx {
+  int  old_size;
+  int *old_to_new;  ///< 1-based map; 0 marks dropped (orphan) slots
+} safe_inline_compact_ctx;
+
+/**
+ * @brief Renumber Vars / RangeTblRefs via @c old_to_new.  Slots
+ *        mapped to 0 (the inlined-orphan rtindexes) would signal a
+ *        live reference into a dropped RTE -- defensively, the
+ *        node passes through unchanged so the downstream candidate
+ *        gate notices and refuses the query.
+ */
+static Node *safe_inline_compact_mutator(Node *node,
+                                         safe_inline_compact_ctx *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0
+        && (int) v->varno >= 1
+        && (int) v->varno <= ctx->old_size) {
+      int newno = ctx->old_to_new[v->varno];
+      if (newno > 0 && newno != (int) v->varno) {
+        Var *nv = (Var *) copyObject(v);
+        nv->varno = (Index) newno;
+#if PG_VERSION_NUM >= 130000
+        if (nv->varnosyn == v->varno)
+          nv->varnosyn = (Index) newno;
+#endif
+        return (Node *) nv;
+      }
+    }
+    return node;
+  }
+  if (IsA(node, RangeTblRef)) {
+    RangeTblRef *rtr = (RangeTblRef *) node;
+    if (rtr->rtindex >= 1 && rtr->rtindex <= ctx->old_size) {
+      int newno = ctx->old_to_new[rtr->rtindex];
+      if (newno > 0 && newno != rtr->rtindex) {
+        RangeTblRef *nr = (RangeTblRef *) copyObject(rtr);
+        nr->rtindex = newno;
+        return (Node *) nr;
+      }
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, safe_inline_compact_mutator,
+                                 (void *) ctx);
+}
+
+/**
+ * @brief Drop orphan RTEs (the inlined subquery slots) from
+ *        @c q->rtable and renumber every surviving Var / RangeTblRef.
+ */
+static void compact_orphan_rtes(Query *q, Bitmapset *orphans) {
+  int       old_size = list_length(q->rtable);
+  int      *old_to_new;
+  int       next = 1;
+  int       i;
+  List     *new_rtable = NIL;
+  ListCell *lc;
+  safe_inline_compact_ctx ctx;
+
+  old_to_new = palloc0((old_size + 1) * sizeof(int));
+  for (i = 1; i <= old_size; i++) {
+    if (bms_is_member(i, orphans))
+      old_to_new[i] = 0;
+    else
+      old_to_new[i] = next++;
+  }
+  i = 1;
+  foreach (lc, q->rtable) {
+    if (old_to_new[i] != 0)
+      new_rtable = lappend(new_rtable, lfirst(lc));
+    i++;
+  }
+  q->rtable = new_rtable;
+
+  ctx.old_size   = old_size;
+  ctx.old_to_new = old_to_new;
+  q->targetList = (List *)
+      safe_inline_compact_mutator((Node *) q->targetList, &ctx);
+  q->returningList = (List *)
+      safe_inline_compact_mutator((Node *) q->returningList, &ctx);
+  if (q->jointree) {
+    q->jointree->fromlist = (List *)
+        safe_inline_compact_mutator(
+            (Node *) q->jointree->fromlist, &ctx);
+    q->jointree->quals =
+        safe_inline_compact_mutator(q->jointree->quals, &ctx);
+  }
+  q->limitOffset = safe_inline_compact_mutator(q->limitOffset, &ctx);
+  q->limitCount  = safe_inline_compact_mutator(q->limitCount, &ctx);
+
+  pfree(old_to_new);
+}
+
+/**
+ * @brief Subquery-inlining pre-pass.  See the chapter comment.
+ *        Returns @c NULL when nothing inlined (caller keeps the
+ *        original @p q); else a fresh @c Query with the inlining
+ *        and compaction baked in.
+ */
+static Query *try_inline_simple_subqueries(Query *q) {
+  Query     *new_q;
+  Bitmapset *orphans = NULL;
+  bool       any_inlined = false;
+  ListCell  *lc;
+  bool       found_subq = false;
+
+  if (q->jointree == NULL || q->jointree->fromlist == NIL)
+    return NULL;
+
+  /* Fast exit: no fromlist subquery means nothing to do.  Non-
+   * @c RangeTblRef fromlist entries (raw @c JoinExpr / @c FromExpr)
+   * are passed through so the candidate gate's existing rejector
+   * sees them as before. */
+  foreach (lc, q->jointree->fromlist) {
+    Node          *n = (Node *) lfirst(lc);
+    RangeTblRef   *rtr;
+    RangeTblEntry *rte;
+    if (!IsA(n, RangeTblRef))
+      continue;
+    rtr = (RangeTblRef *) n;
+    if (rtr->rtindex < 1 || rtr->rtindex > list_length(q->rtable))
+      continue;
+    rte = (RangeTblEntry *) list_nth(q->rtable, rtr->rtindex - 1);
+    if (rte->rtekind == RTE_SUBQUERY) {
+      found_subq = true;
+      break;
+    }
+  }
+  if (!found_subq)
+    return NULL;
+
+  new_q = (Query *) copyObject(q);
+
+  /* Fixed-point loop: each iteration inlines one fromlist subquery
+   * (if any remain inlineable); the inlined body's promoted entries
+   * become candidates for the next iteration.  Bounded by the input
+   * query's syntactic nesting depth. */
+  for (;;) {
+    int target_rti = 0;
+    foreach (lc, new_q->jointree->fromlist) {
+      Node          *n = (Node *) lfirst(lc);
+      RangeTblRef   *rtr;
+      RangeTblEntry *rte;
+      if (!IsA(n, RangeTblRef))
+        continue;
+      rtr = (RangeTblRef *) n;
+      if (rtr->rtindex < 1
+          || rtr->rtindex > list_length(new_q->rtable))
+        continue;
+      rte = (RangeTblEntry *)
+          list_nth(new_q->rtable, rtr->rtindex - 1);
+      if (rte->rtekind != RTE_SUBQUERY)
+        continue;
+      if (rte->lateral || rte->security_barrier)
+        continue;
+      if (!is_inlineable_subquery(rte->subquery))
+        continue;
+      target_rti = rtr->rtindex;
+      break;
+    }
+    if (target_rti == 0)
+      break;
+    inline_one_subquery(new_q, target_rti);
+    orphans = bms_add_member(orphans, target_rti);
+    any_inlined = true;
+  }
+
+  if (!any_inlined) {
+    bms_free(orphans);
+    return NULL;
+  }
+
+  compact_orphan_rtes(new_q, orphans);
+  bms_free(orphans);
+  return new_q;
+}
+
 /**
  * @brief Top-level entry point for the safe-query rewrite.
  *
@@ -3953,6 +4419,22 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
    * resolved back to their base-table expressions. */
   strip_group_rte_pg18(q);
 #endif
+
+  /* Subquery-inlining pre-pass.  Pulls simple @c RTE_SUBQUERY
+   * fromlist entries (most commonly view bodies inlined by PG's
+   * parser) up into the outer query so the detector and rewriter
+   * see a single flat rtable of @c RTE_RELATION entries.  Returns
+   * @c NULL when no inlining applied; else a fresh @c Query with
+   * the inlined RTEs, merged WHERE conjuncts, and a compacted
+   * rtable.  Two views (or a view + base table) that ultimately
+   * read the same relation produce duplicate relids after inlining
+   * and trip the candidate gate's shared-relid bail downstream
+   * (modulo the PK / disjoint-constant self-join rescues). */
+  {
+    Query *inlined = try_inline_simple_subqueries(q);
+    if (inlined != NULL)
+      q = inlined;
+  }
 
   /* PK-unifiable self-join pre-pass.  When two RTEs over the same
    * relation have all PRIMARY KEY (or NOT-NULL UNIQUE) columns
