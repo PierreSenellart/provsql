@@ -42,7 +42,10 @@ feature_row:
       Compute tuple-independent probabilities of query answers via
       independent-circuit evaluation, tree decomposition, d-DNNF
       knowledge compilation (d4 / c2d / dsharp / minic2d), Monte
-      Carlo, or weighted model counting.
+      Carlo, or weighted model counting. An opt-in planner-side
+      rewrite recognises hierarchical conjunctive queries (and a
+      family of FD-aware extensions) and routes them through the
+      linear-time independent evaluator.
     url: "/docs/user/probabilities.html"
     btn_label: "Probability docs"
     btn_class: "btn--primary"
