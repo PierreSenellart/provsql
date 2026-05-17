@@ -83,20 +83,29 @@ and all other queries remain evaluable.
    idempotent m-semirings (``idempotent_iff_add_monus``,
    ``plus_is_join``).  The typeclass also carries the
    :math:`\delta` operator as a field, with three axioms --
-   ``delta_zero`` (:math:`\delta(0) = 0`),
-   ``delta_natCast_pos``
+   `delta_zero
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_zero>`_
+   (:math:`\delta(0) = 0`),
+   `delta_natCast_pos
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_natCast_pos>`_
    (:math:`\delta(n) = 1` for positive :math:`n`), and
-   ``delta_regrouping``
+   `delta_regrouping
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_regrouping>`_
    (:math:`\delta\bigl(\sum_i \delta(a_i)\bigr) = \delta\bigl(\sum_i a_i\bigr)`
    for any multiset of annotations).  The third axiom makes
    grouped aggregation invariant under partition coarsening
    and strengthens idempotence; the derived
-   ``delta_one`` (:math:`\delta(1) = 1`) and
-   ``delta_idempotent``
+   `delta_one
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#delta_one>`_
+   (:math:`\delta(1) = 1`) and
+   `delta_idempotent
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#delta_idempotent>`_
    (:math:`\delta(\delta(a)) = \delta(a)`) are exposed at
    the top level.  A commutative variant
-   ``CommSemiringWithMonus`` adds ``mul_comm`` and is the
-   class actually used by the aggregation proofs.  A contributor adding a new compiled semiring can use
+   `CommSemiringWithMonus
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#CommSemiringWithMonus>`_
+   adds ``mul_comm`` and is the class actually used by the
+   aggregation proofs.  A contributor adding a new compiled semiring can use
    that module as a formal reference for what the ``zero`` /
    ``one`` / ``plus`` / ``times`` / ``monus`` / ``delta``
    methods are *required* to compute -- the Lean class is the

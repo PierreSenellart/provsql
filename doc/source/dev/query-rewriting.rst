@@ -429,7 +429,9 @@ all five rules is
 `Query.rewriting_valid_full
 <https://provsql.org/lean-docs/Provenance/QueryEvaluateInVK.html#Query.rewriting_valid_full>`_
 in the ``Provenance.QueryEvaluateInVK`` module, stated against
-the V_K-lifted evaluator ``Query.evaluateAnnotatedFull``.
+the V_K-lifted evaluator
+`Query.evaluateAnnotatedFull
+<https://provsql.org/lean-docs/Provenance/QueryEvaluateInVK.html#Query.evaluateAnnotatedFull>`_.
 
 A companion theorem,
 `Query.evaluateAnnotatedFull_hom
@@ -442,7 +444,11 @@ Proposition 3.5, and [Geerts & Poggi, *On database query
 languages for K-relations*], Proposition 1, lifted to
 m-semirings via ``SemiringWithMonusHom`` and extended to
 aggregation via the K-semimodule structure formalised in
-``Provenance.KSemiModule`` and ``Provenance.LiftedTK``).
+`Provenance.KSemiModule
+<https://provsql.org/lean-docs/Provenance/KSemiModule.html>`_
+and
+`Provenance.LiftedTK
+<https://provsql.org/lean-docs/Provenance/LiftedTK.html>`_).
 The restriction of this theorem to the non-aggregation
 fragment is
 `Query.evaluateAnnotated_hom
