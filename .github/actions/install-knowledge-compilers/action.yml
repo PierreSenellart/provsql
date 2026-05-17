@@ -20,7 +20,7 @@ runs:
   steps:
     - name: Restore d4 cache
       id: cache-d4
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: /usr/local/bin/d4
         key: kc-d4-${{ runner.os }}-${{ inputs.d4-ref }}
@@ -39,7 +39,7 @@ runs:
 
     - name: Restore dsharp cache
       id: cache-dsharp
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: /usr/local/bin/dsharp
         key: kc-dsharp-${{ runner.os }}-${{ inputs.dsharp-ref }}
@@ -59,7 +59,7 @@ runs:
 
     - name: Restore weightmc cache
       id: cache-weightmc
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: /usr/local/bin/weightmc
         key: kc-weightmc-${{ runner.os }}-${{ inputs.weightmc-ref }}
