@@ -40,7 +40,10 @@ SELECT setseed(0.42);
 -- Setup: scratch tables and helper to bench one query shape.
 -- ----------------------------------------------------------------------
 
-DROP TABLE IF EXISTS bench_a, bench_b, bench_c, bench_d, bench_e CASCADE;
+DROP TABLE IF EXISTS bench_a, bench_b, bench_c, bench_d, bench_e,
+                     bench_bid, bench_s_pk, bench_t, bench_a_pk,
+                     bench_tri_r, bench_tri_s, bench_tri_t,
+                     bench_partitioned, bench_dim_p, bench_dim_c CASCADE;
 
 -- Sizes chosen so the unrewritten knowledge-compilation fallback
 -- (d4 / tree-decomposition) stays under ~10 s per shape on a
@@ -87,6 +90,71 @@ CREATE TABLE bench_d AS
 -- bench_e(x, w): mirror of D.
 CREATE TABLE bench_e AS SELECT * FROM bench_d;
 
+-- ------------------------------------------------------------------
+-- Tables for the FD-aware extensions: constant-selection, PK FDs,
+-- deterministic-relation transparency, PK-unifiable self-join, FD
+-- closure (triangle CQ with two PKs), disjoint-constant self-join.
+-- ------------------------------------------------------------------
+
+-- bench_s_pk(x PK, y): middle atom of the textbook H-query under a PK.
+-- x is the PRIMARY KEY, so the FD x -> y lets the rewriter drop S from
+-- atoms(y); the FD-aware atom-sets become {R, S} and {T}, disjoint.
+CREATE TABLE bench_s_pk (x int PRIMARY KEY, y int);
+INSERT INTO bench_s_pk
+  SELECT x, x FROM generate_series(1, :n_x) AS x;
+
+-- bench_t(y): tail atom of the H-query; multiple rows per y to load
+-- the OFF path.
+CREATE TABLE bench_t (y int);
+INSERT INTO bench_t
+  SELECT y FROM generate_series(1, :n_x)        AS y,
+                 generate_series(1, :n_y_per_x);
+
+-- bench_a_pk(x PK, y, z): for the PK-unifiable self-join shape.  One
+-- row per x; r1, r2 over bench_a_pk unify on PK and the remaining
+-- R-S join is hierarchical.
+CREATE TABLE bench_a_pk (x int PRIMARY KEY, y int, z int);
+INSERT INTO bench_a_pk
+  SELECT x, ((x - 1) % :n_y_per_x) + 1, ((x - 1) % :n_z_per_y) + 1
+    FROM generate_series(1, :n_x) AS x;
+
+-- bench_tri_{r,s,t}: triangle CQ with PKs on R(a) and T(c).  PK FDs
+-- on both endpoints make atoms(a) = {R}, atoms(b) = {S},
+-- atoms(c) = {S, T}: pairwise nested-or-disjoint, hierarchical via
+-- the FD closure.
+CREATE TABLE bench_tri_r (a int PRIMARY KEY, b int);
+CREATE TABLE bench_tri_s (b int, c int);
+CREATE TABLE bench_tri_t (c int PRIMARY KEY, a int);
+INSERT INTO bench_tri_r
+  SELECT x, x FROM generate_series(1, :n_x) AS x;
+INSERT INTO bench_tri_s
+  SELECT b, b FROM generate_series(1, :n_x)        AS b,
+                    generate_series(1, :n_y_per_x);
+INSERT INTO bench_tri_t
+  SELECT x, x FROM generate_series(1, :n_x) AS x;
+
+-- bench_partitioned(x, kind): for the disjoint-constant self-join.
+-- Two RTEs over the relation with mutually exclusive @c kind values
+-- carry disjoint tuple-sets, so the rewriter certifies the shared-
+-- relid group and emits each as its own DISTINCT wrap.
+CREATE TABLE bench_partitioned (x int, kind char(1));
+INSERT INTO bench_partitioned
+  SELECT x, k
+    FROM generate_series(1, :n_x)       AS x,
+         (VALUES ('A'), ('B'))          AS kk(k),
+         generate_series(1, :n_y_per_x);
+
+-- bench_dim_p, bench_dim_c: deterministic dimensions for the star-
+-- schema benchmark.  No @c add_provenance call, so the rewriter sees
+-- them as deterministic atoms (transparent under the dissociation
+-- argument) and drops them from every class's FD-aware atom set.
+CREATE TABLE bench_dim_p (pid int PRIMARY KEY, cat text);
+CREATE TABLE bench_dim_c (cid int PRIMARY KEY, region text);
+INSERT INTO bench_dim_p
+  SELECT x, 'A' FROM generate_series(1, :n_x) AS x;
+INSERT INTO bench_dim_c
+  SELECT y, 'EU' FROM generate_series(1, :n_y_per_x) AS y;
+
 -- bench_bid(x, k): block-correlated atom.  add_provenance + then
 -- repair_key on @c x: rows sharing the same @c x form a mulinput
 -- block (mutually exclusive draws), giving a BID atom for the
@@ -103,6 +171,16 @@ SELECT add_provenance('bench_b');
 SELECT add_provenance('bench_c');
 SELECT add_provenance('bench_d');
 SELECT add_provenance('bench_e');
+SELECT add_provenance('bench_s_pk');
+SELECT add_provenance('bench_t');
+SELECT add_provenance('bench_a_pk');
+SELECT add_provenance('bench_tri_r');
+SELECT add_provenance('bench_tri_s');
+SELECT add_provenance('bench_tri_t');
+SELECT add_provenance('bench_partitioned');
+-- Note: bench_dim_p / bench_dim_c are intentionally NOT
+-- provenance-tracked (deterministic-relation transparency relies on
+-- them carrying probability-1 tuples).
 -- bench_bid: block-correlated leaves per x.  repair_key replaces
 -- each row's gate_input with a gate_mulinput pointing at a shared
 -- per-x key gate, so rows with the same x are mutually exclusive
@@ -115,6 +193,13 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, random()) FROM bench_c;
   PERFORM set_prob(provsql, random()) FROM bench_d;
   PERFORM set_prob(provsql, random()) FROM bench_e;
+  PERFORM set_prob(provsql, random()) FROM bench_s_pk;
+  PERFORM set_prob(provsql, random()) FROM bench_t;
+  PERFORM set_prob(provsql, random()) FROM bench_a_pk;
+  PERFORM set_prob(provsql, random()) FROM bench_tri_r;
+  PERFORM set_prob(provsql, random()) FROM bench_tri_s;
+  PERFORM set_prob(provsql, random()) FROM bench_tri_t;
+  PERFORM set_prob(provsql, random()) FROM bench_partitioned;
 END $$;
 
 -- One row per benchmarked query: the OFF and ON output cardinalities
@@ -376,6 +461,82 @@ SELECT bench_one(
     GROUP BY a.x');
 
 -- ----------------------------------------------------------------------
+-- FD-aware extensions: shapes that the textbook hierarchical
+-- detector refuses on raw atom-sets but the FD-induced reductions
+-- (constant-pinning, PK FDs, deterministic-relation transparency,
+-- PK-unifiable / disjoint-constant self-joins) accept.
+-- ----------------------------------------------------------------------
+
+-- (17) Constant selection.  Textbook H-query R(x), S(x,y), T(y) with
+-- a constant-pinned class via @c B.x = 2.  The pre-pass propagates
+-- the literal through the equijoin closure and drops the
+-- now-redundant @c a.x = b.x conjunct, so @c A becomes its own
+-- component and the multi-component path factors it out.
+SELECT bench_one(
+  'const-sel: A(x) ⋈ B(x,y) ⋈ C(y) WHERE B.x = 2',
+  'SELECT 1 AS k, provenance() AS prov
+     FROM bench_a a, bench_b b, bench_c c
+    WHERE a.x = b.x AND b.y = c.y AND b.x = 2
+    GROUP BY 1');
+
+-- (18) PK FD.  Textbook H-query R(x), S(x,y), T(y) with PRIMARY KEY
+-- on @c S.x.  The FD x → y inside S lets the detector drop S from
+-- atoms(y); FD-aware atom-sets become disjoint and the rewriter
+-- emits the read-once shape via per-atom anchors.
+SELECT bench_one(
+  'PK FD: A(x) ⋈ S_PK(x,y) ⋈ T(y)',
+  'SELECT a.x AS x, provenance() AS prov
+     FROM bench_a a, bench_s_pk s, bench_t t
+    WHERE a.x = s.x AND s.y = t.y
+    GROUP BY a.x');
+
+-- (19) Deterministic-relation transparency.  Star schema with a
+-- probabilistic fact (@c bench_a) and two deterministic dimensions
+-- (no @c add_provenance call).  Transparency drops both dimensions
+-- from atom-set membership, collapsing the query to a single
+-- probabilistic atom.
+SELECT bench_one(
+  'deterministic dims: A ⋈ DetP(x=pid) ⋈ DetC(y=cid), filtered',
+  'SELECT a.x AS x, provenance() AS prov
+     FROM bench_a a, bench_dim_p p, bench_dim_c c
+    WHERE a.x = p.pid AND a.y = c.cid
+      AND p.cat = ''A'' AND c.region = ''EU''
+    GROUP BY a.x');
+
+-- (20) PK-unifiable self-join.  Three RTEs where @c r1, @c r2 over
+-- @c bench_a_pk are unified through the PK on @c x; the surviving
+-- single R atom forms a hierarchical join with @c S on (y, z).
+SELECT bench_one(
+  'PK self-join: R_PK r1, r2 ⋈ A on (y, z)',
+  'SELECT r1.x AS x, provenance() AS prov
+     FROM bench_a_pk r1, bench_a_pk r2, bench_a a
+    WHERE r1.x = r2.x AND r1.y = a.y AND r2.z = a.z
+    GROUP BY r1.x');
+
+-- (21) FD closure: triangle CQ with two PKs.  Raw atom-sets are
+-- pairwise neither nested nor disjoint -- the textbook check
+-- bails.  Applying both PK FDs (a → b in R and c → a in T) yields
+-- atoms_fd(a) = {R}, atoms_fd(b) = {S}, atoms_fd(c) = {S, T}:
+-- pairwise nested-or-disjoint, hierarchical via per-atom anchors.
+SELECT bench_one(
+  'FD closure: triangle CQ R(a PK,b) ⋈ S(b,c) ⋈ T(c PK,a)',
+  'SELECT 1 AS k, provenance() AS prov
+     FROM bench_tri_r r, bench_tri_s s, bench_tri_t t
+    WHERE r.b = s.b AND s.c = t.c AND t.a = r.a
+    GROUP BY 1');
+
+-- (22) Disjoint-constant self-join.  Two RTEs over @c bench_partitioned
+-- with mutually exclusive @c kind values.  Their tuple-sets are
+-- disjoint, the rewriter certifies the shared-relid group and emits
+-- each as its own DISTINCT wrap.
+SELECT bench_one(
+  'disjoint const self-join: R(x,kind) r1 (kind=A) ⋈ r2 (kind=B) on x',
+  'SELECT 1 AS k, provenance() AS prov
+     FROM bench_partitioned r1, bench_partitioned r2
+    WHERE r1.kind = ''A'' AND r2.kind = ''B'' AND r1.x = r2.x
+    GROUP BY 1');
+
+-- ----------------------------------------------------------------------
 -- Report.
 -- ----------------------------------------------------------------------
 
@@ -398,4 +559,7 @@ ORDER BY shape;
 
 -- Cleanup.
 DROP FUNCTION bench_one(text, text);
-DROP TABLE bench_a, bench_b, bench_c, bench_d, bench_e, bench_bid;
+DROP TABLE bench_a, bench_b, bench_c, bench_d, bench_e, bench_bid,
+           bench_s_pk, bench_t, bench_a_pk,
+           bench_tri_r, bench_tri_s, bench_tri_t,
+           bench_partitioned, bench_dim_p, bench_dim_c;
