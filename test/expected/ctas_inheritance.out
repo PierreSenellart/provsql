@@ -1,0 +1,43 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+repair_key
+
+(1 row)
+t1_kind|t1_ancestors_correct
+tid|t
+(1 row)
+t2_no_metadata_yet|t2_no_ancestry_yet
+t|t
+(1 row)
+t3_no_metadata|t3_no_ancestry
+t|t
+(1 row)
+t4_kind|t4_block_key|t4_ancestors_correct
+bid|{1}|t
+(1 row)
+t5_kind_demoted|t5_block_key_empty
+tid|{}
+(1 row)
+t6_kind|t6_ancestors_correct
+tid|t
+(1 row)
+mv_kind|mv_ancestors_correct
+tid|t
+(1 row)
+t8_kind|t8_ancestors_correct
+tid|t
+(1 row)
+tgname
+provenance_guard
+(1 row)
+t1_kind_after_user_insert
+opaque
+(1 row)
+t4_cleaned_up|t4_ancestry_cleaned_up
+t|t
+(1 row)

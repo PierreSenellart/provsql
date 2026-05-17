@@ -100,11 +100,15 @@ SELECT 'S1' AS scenario, * FROM opq_probe('opq_s1');
 
 -- ---------------------------------------------------------------
 -- (S2) CREATE TABLE AS SELECT from a tracked table.  The new
--- table has a provsql column populated with opq_src's UUIDs but
--- no entry in provsql_table_info.mmap.
+-- table has a provsql column populated with opq_src's UUIDs.
+-- The CTAS lineage hook classifies the inner SELECT as TID over a
+-- single source (opq_src), inherits opq_src's kind into the new
+-- relation's metadata, records ancestors = {opq_src}, and installs
+-- the provenance_guard trigger -- so the safe-query rewriter sees
+-- opq_s2 as a tracked TID atom with disjoint ancestry from the
+-- opq_ref join partner, and the rewrite fires.
 --
--- DESIRED: refuse (the table has a provsql column but no TID/BID
---          classification: the detector cannot prove independence).
+-- DESIRED: fired.
 -- ---------------------------------------------------------------
 CREATE TABLE opq_s2 AS SELECT x, provsql FROM opq_src;
 SELECT 'S2' AS scenario, * FROM opq_probe('opq_s2');

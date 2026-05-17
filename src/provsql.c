@@ -50,7 +50,11 @@
 #include "utils/lsyscache.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_cast.h"
+#include "commands/createas.h"
+#include "executor/spi.h"
+#include "tcop/utility.h"
 #include <time.h>
 
 #include "classify_query.h"
@@ -4652,6 +4656,416 @@ static void provsql_executor_end(QueryDesc *queryDesc) {
   PG_END_TRY();
 }
 
+/* -------------------------------------------------------------------------
+ * ProcessUtility hook: CTAS lineage inheritance.
+ *
+ * When a @c CREATE @c TABLE @c AS (or @c CREATE @c MATERIALIZED @c VIEW,
+ * or @c SELECT @c INTO -- PG's parser transforms all three into
+ * @c CreateTableAsStmt) projects a @c provsql column lifted verbatim
+ * from a tracked source, the resulting relation's atoms are not freshly
+ * minted UUIDs but lineage tokens of one or more base @c
+ * add_provenance / @c repair_key relations.  The hook intercepts the
+ * utility statement, classifies the inner @c SELECT via
+ * @c provsql_classify_query, lets PG run the CTAS, then populates
+ * @c provsql_table_info (with the inherited @c kind / BID @c block_key)
+ * and the ancestor registry (with the transitive union of source
+ * ancestor sets) on the just-created relation.  A @c provenance_guard
+ * trigger is installed on the new table so any subsequent INSERT /
+ * UPDATE that supplies a non-NULL @c provsql still flips the table to
+ * OPAQUE the standard way.
+ *
+ * The hook deliberately fires only when the inner @c SELECT projects
+ * a @c provsql column from a tracked source -- otherwise the new
+ * relation has no @c provsql column and the lineage metadata would be
+ * operationally pointless.  Users who want a tracked CTAS-derived
+ * table without inherited lineage still call @c add_provenance on it
+ * afterwards (that path seeds @c {self} and overrides whatever this
+ * hook may have recorded).
+ * ------------------------------------------------------------------------- */
+
+static ProcessUtility_hook_type prev_ProcessUtility = NULL;
+
+/** @brief State captured by the pre-execution pass for the post-execution one. */
+typedef struct ProvSQLCtasCapture {
+  bool                fire;             ///< true when the post-pass should run
+  Query              *inner_query;      ///< cloned for safety; freed by pfree on completion
+  provsql_table_kind  inherited_kind;
+  uint16              ancestor_n;
+  Oid                 ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+  Oid                 source_relid;     ///< Single source whose block_key we want to align (BID only)
+  uint16              source_block_key_n;
+  AttrNumber          source_block_key[PROVSQL_TABLE_INFO_MAX_BLOCK_KEY];
+} ProvSQLCtasCapture;
+
+/**
+ * @brief Decide whether @p parsetree is a CTAS that should trigger
+ *        the ancestry hook, and if so populate @p cap with the inner
+ *        classification, the (single) source's block-key columns, and
+ *        the transitive ancestor union.
+ *
+ * Fires only when the inner @c SELECT's target list projects a base-
+ * level @c Var (possibly through @c RelabelType wrappers) that
+ * resolves to the @c provsql column of an @c RTE_RELATION whose
+ * metadata is non-OPAQUE.  Anything else (no @c provsql in the
+ * projection, classifier says OPAQUE, the projected source is itself
+ * OPAQUE) leaves @c cap->fire false and the post-pass becomes a
+ * no-op.
+ */
+static void provsql_ProcessUtility_capture(Node *parsetree,
+                                           ProvSQLCtasCapture *cap) {
+  CreateTableAsStmt    *stmt;
+  Query                *qry;
+  ProvSQLClassification cls;
+  ListCell             *lc;
+  AttrNumber            prov_resno = InvalidAttrNumber;
+  Oid                   source_relid = InvalidOid;
+  ProvenanceTableInfo   source_info;
+  Bitmapset            *ancestor_bms = NULL;
+  int                   bms_member;
+  uint16                ancestor_n;
+
+  cap->fire = false;
+  if (!provsql_active)
+    return;
+  if (parsetree == NULL || !IsA(parsetree, CreateTableAsStmt))
+    return;
+  stmt = (CreateTableAsStmt *) parsetree;
+  if (stmt->query == NULL || !IsA(stmt->query, Query))
+    return;
+  qry = (Query *) stmt->query;
+  if (qry->commandType != CMD_SELECT)
+    return;
+
+  provsql_classify_query(qry, &cls);
+  if (cls.kind == PROVSQL_TABLE_OPAQUE) {
+    list_free(cls.source_relids);
+    return;
+  }
+
+  /* Walk the inner target list for a TLE whose Var resolves to the
+   * provsql column of a tracked, non-OPAQUE source.  First match wins
+   * (CTAS preserves the TLE's column name verbatim in the new
+   * table, so a single provsql TLE is the normal case). */
+  foreach (lc, qry->targetList) {
+    TargetEntry   *te = (TargetEntry *) lfirst(lc);
+    Node          *e  = (Node *) te->expr;
+    Var           *v;
+    RangeTblEntry *rte;
+    AttrNumber     prov_attno;
+
+    if (te->resjunk)
+      continue;
+    while (e != NULL && IsA(e, RelabelType))
+      e = (Node *) ((RelabelType *) e)->arg;
+    if (e == NULL || !IsA(e, Var))
+      continue;
+    v = (Var *) e;
+    if (v->varlevelsup != 0)
+      continue;
+    if (v->varno < 1 || (int) v->varno > list_length(qry->rtable))
+      continue;
+    rte = (RangeTblEntry *) list_nth(qry->rtable, v->varno - 1);
+    if (rte->rtekind != RTE_RELATION)
+      continue;
+    prov_attno = get_attnum(rte->relid, PROVSQL_COLUMN_NAME);
+    if (prov_attno == InvalidAttrNumber || v->varattno != prov_attno)
+      continue;
+    if (!provsql_lookup_table_info(rte->relid, &source_info))
+      continue;
+    if (source_info.kind == PROVSQL_TABLE_OPAQUE)
+      continue;
+    prov_resno   = te->resno;
+    source_relid = rte->relid;
+    break;
+  }
+  if (prov_resno == InvalidAttrNumber) {
+    list_free(cls.source_relids);
+    return;
+  }
+
+  /* Transitive ancestor union: lookup each classifier-reported source's
+   * registered ancestry, fall back to {source} when none recorded
+   * (defensive: the SQL add_provenance / repair_key seed should always
+   * give us a non-empty set).  Bitmapset dedupes; we then walk it in
+   * ascending order to get the sorted Oid array the registry stores. */
+  foreach (lc, cls.source_relids) {
+    Oid src_relid = lfirst_oid(lc);
+    uint16 src_n;
+    Oid    src_ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+    if (provsql_lookup_ancestry(src_relid, &src_n, src_ancestors)) {
+      for (uint16 i = 0; i < src_n; ++i)
+        ancestor_bms = bms_add_member(ancestor_bms, (int) src_ancestors[i]);
+    } else {
+      ancestor_bms = bms_add_member(ancestor_bms, (int) src_relid);
+    }
+  }
+  list_free(cls.source_relids);
+
+  ancestor_n = 0;
+  bms_member = -1;
+  while ((bms_member = bms_next_member(ancestor_bms, bms_member)) >= 0) {
+    if (ancestor_n >= PROVSQL_TABLE_INFO_MAX_ANCESTORS) {
+      /* Cap exceeded: refuse to fire rather than truncate the ancestor
+       * set silently (a partial set would let the safe-query
+       * disjointness check accept a join that shouldn't be safe). */
+      bms_free(ancestor_bms);
+      return;
+    }
+    cap->ancestors[ancestor_n++] = (Oid) bms_member;
+  }
+  bms_free(ancestor_bms);
+
+  cap->fire               = true;
+  cap->inner_query        = qry;
+  cap->inherited_kind     = (provsql_table_kind) cls.kind;
+  cap->ancestor_n         = ancestor_n;
+  cap->source_relid       = source_relid;
+  cap->source_block_key_n = source_info.block_key_n;
+  memcpy(cap->source_block_key, source_info.block_key,
+         source_info.block_key_n * sizeof(AttrNumber));
+}
+
+/** @brief Map @c provsql_table_kind to its textual label
+ *  (@c set_table_info accepts text). */
+static const char *provsql_ctas_kind_label(provsql_table_kind k) {
+  switch (k) {
+    case PROVSQL_TABLE_TID:    return "tid";
+    case PROVSQL_TABLE_BID:    return "bid";
+    case PROVSQL_TABLE_OPAQUE: return "opaque";
+  }
+  return "opaque";
+}
+
+/** @brief Forward declaration of the C SQL entry points. */
+extern Datum set_table_info(PG_FUNCTION_ARGS);
+extern Datum set_ancestors(PG_FUNCTION_ARGS);
+
+/**
+ * @brief Apply @p cap to the freshly-created relation @c stmt->into->rel.
+ *
+ * For BID sources: walks the inner query's target list to align each
+ * source block-key column to its output @c resno.  If any block-key
+ * column is missing from the projection (the CTAS dropped it), the
+ * new relation cannot honour the BID invariant under that column --
+ * the hook demotes to TID rather than asserting a now-stale block
+ * key.
+ *
+ * Installs @c provenance_guard via SPI so subsequent INSERT /
+ * UPDATE OF provsql on the new relation flip its kind to OPAQUE
+ * through the standard guard path.
+ */
+static void provsql_ProcessUtility_apply(Node *parsetree,
+                                         ProvSQLCtasCapture *cap) {
+  CreateTableAsStmt *stmt;
+  Oid                new_relid;
+  AttrNumber         prov_attno;
+  provsql_table_kind eff_kind;
+  uint16             eff_block_key_n = 0;
+  AttrNumber         eff_block_key[PROVSQL_TABLE_INFO_MAX_BLOCK_KEY];
+  Datum              kind_datum;
+  Datum              block_key_datum;
+  Datum              ancestors_datum;
+  Datum             *block_key_elems;
+  Datum             *ancestor_elems;
+  ArrayType         *block_key_arr;
+  ArrayType         *ancestors_arr;
+  const char        *nspname;
+  const char        *relname;
+  StringInfoData     trigger_sql;
+
+  if (!cap->fire)
+    return;
+  stmt = (CreateTableAsStmt *) parsetree;
+
+  new_relid = RangeVarGetRelid(stmt->into->rel, NoLock, true);
+  if (new_relid == InvalidOid)
+    return;
+
+  /* Confirm the new relation actually has a @c provsql @c uuid column.
+   * CTAS preserves TLE column names, so this is essentially the
+   * post-execution verification of what the pre-pass already
+   * required. */
+  prov_attno = get_attnum(new_relid, PROVSQL_COLUMN_NAME);
+  if (prov_attno == InvalidAttrNumber)
+    return;
+  if (get_atttype(new_relid, prov_attno) != UUIDOID)
+    return;
+
+  /* BID block-key alignment: each source block-key column must
+   * survive in the inner-query target list.  When all do, the new
+   * relation's effective block key is the corresponding output
+   * resno.  When any is missing, demote to TID (a partial block
+   * key would falsely advertise mutual exclusion the rows no
+   * longer have). */
+  eff_kind = cap->inherited_kind;
+  if (eff_kind == PROVSQL_TABLE_BID) {
+    bool ok = true;
+    for (uint16 i = 0; i < cap->source_block_key_n; ++i) {
+      AttrNumber src_attno = cap->source_block_key[i];
+      ListCell  *lc;
+      bool       found = false;
+      foreach (lc, cap->inner_query->targetList) {
+        TargetEntry   *te = (TargetEntry *) lfirst(lc);
+        Node          *e  = (Node *) te->expr;
+        Var           *v;
+        RangeTblEntry *rte;
+        if (te->resjunk)
+          continue;
+        while (e != NULL && IsA(e, RelabelType))
+          e = (Node *) ((RelabelType *) e)->arg;
+        if (e == NULL || !IsA(e, Var))
+          continue;
+        v = (Var *) e;
+        if (v->varlevelsup != 0)
+          continue;
+        if (v->varno < 1
+            || (int) v->varno > list_length(cap->inner_query->rtable))
+          continue;
+        rte = (RangeTblEntry *)
+            list_nth(cap->inner_query->rtable, v->varno - 1);
+        if (rte->rtekind != RTE_RELATION)
+          continue;
+        if (rte->relid == cap->source_relid
+            && v->varattno == src_attno) {
+          if (eff_block_key_n >= PROVSQL_TABLE_INFO_MAX_BLOCK_KEY) {
+            ok = false;
+            break;
+          }
+          eff_block_key[eff_block_key_n++] = te->resno;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      eff_kind        = PROVSQL_TABLE_TID;
+      eff_block_key_n = 0;
+    }
+  }
+
+  /* Marshal arguments and invoke the SQL-level helpers via
+   * DirectFunctionCall: this reaches the worker through the same IPC
+   * path the user-facing SQL functions use, including the relcache
+   * invalidation broadcast on the way out. */
+  kind_datum = CStringGetTextDatum(provsql_ctas_kind_label(eff_kind));
+  if (eff_block_key_n == 0) {
+    block_key_arr = construct_empty_array(INT2OID);
+  } else {
+    block_key_elems = palloc(eff_block_key_n * sizeof(Datum));
+    for (uint16 i = 0; i < eff_block_key_n; ++i)
+      block_key_elems[i] = Int16GetDatum(eff_block_key[i]);
+    block_key_arr = construct_array(block_key_elems, eff_block_key_n,
+                                    INT2OID, 2, true, 's');
+    pfree(block_key_elems);
+  }
+  block_key_datum = PointerGetDatum(block_key_arr);
+  DirectFunctionCall3(set_table_info,
+                      ObjectIdGetDatum(new_relid),
+                      kind_datum,
+                      block_key_datum);
+
+  if (cap->ancestor_n == 0) {
+    ancestors_arr = construct_empty_array(OIDOID);
+  } else {
+    ancestor_elems = palloc(cap->ancestor_n * sizeof(Datum));
+    for (uint16 i = 0; i < cap->ancestor_n; ++i)
+      ancestor_elems[i] = ObjectIdGetDatum(cap->ancestors[i]);
+    ancestors_arr = construct_array(ancestor_elems, cap->ancestor_n,
+                                    OIDOID, sizeof(Oid), true, 'i');
+    pfree(ancestor_elems);
+  }
+  ancestors_datum = PointerGetDatum(ancestors_arr);
+  DirectFunctionCall2(set_ancestors,
+                      ObjectIdGetDatum(new_relid),
+                      ancestors_datum);
+
+  /* Install the provenance_guard trigger via SPI.  Users who later
+   * INSERT / UPDATE OF provsql with a non-NULL value will then
+   * trigger the standard kind flip to OPAQUE; users who omit the
+   * column on INSERT get a fresh @c uuid_generate_v4 leaf (which
+   * already disconnects the row from the inherited lineage, but the
+   * guard prevents the more dangerous shared-UUID aliasing path).
+   *
+   * Materialized views are exempt: PG forbids triggers on them, and
+   * they cannot be modified through DML anyway (only @c REFRESH @c
+   * MATERIALIZED @c VIEW changes the contents -- which re-runs the
+   * inner SELECT and the freshly-projected rows continue to carry
+   * lineage from the same sources). */
+  if (stmt->objtype == OBJECT_MATVIEW)
+    return;
+
+  nspname = get_namespace_name(get_rel_namespace(new_relid));
+  relname = get_rel_name(new_relid);
+  if (nspname == NULL || relname == NULL)
+    return;
+  initStringInfo(&trigger_sql);
+  appendStringInfo(&trigger_sql,
+      "CREATE TRIGGER provenance_guard "
+      "BEFORE INSERT OR UPDATE OF provsql ON %s.%s "
+      "FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()",
+      quote_identifier(nspname), quote_identifier(relname));
+  if (SPI_connect() != SPI_OK_CONNECT)
+    provsql_error("CTAS lineage hook: SPI_connect failed");
+  if (SPI_exec(trigger_sql.data, 0) != SPI_OK_UTILITY)
+    provsql_error("CTAS lineage hook: failed to install provenance_guard "
+                  "on %s.%s", nspname, relname);
+  SPI_finish();
+  pfree(trigger_sql.data);
+}
+
+static void provsql_ProcessUtility(
+    PlannedStmt *pstmt,
+    const char *queryString,
+#if PG_VERSION_NUM >= 140000
+    bool readOnlyTree,
+#endif
+    ProcessUtilityContext context,
+    ParamListInfo params,
+    QueryEnvironment *queryEnv,
+    DestReceiver *dest,
+#if PG_VERSION_NUM >= 130000
+    QueryCompletion *qc
+#else
+    char *completionTag
+#endif
+    ) {
+  Node              *parsetree = pstmt ? pstmt->utilityStmt : NULL;
+  ProvSQLCtasCapture cap = {0};
+
+  provsql_ProcessUtility_capture(parsetree, &cap);
+
+  if (prev_ProcessUtility)
+    prev_ProcessUtility(pstmt, queryString,
+#if PG_VERSION_NUM >= 140000
+                        readOnlyTree,
+#endif
+                        context, params, queryEnv, dest,
+#if PG_VERSION_NUM >= 130000
+                        qc
+#else
+                        completionTag
+#endif
+                        );
+  else
+    standard_ProcessUtility(pstmt, queryString,
+#if PG_VERSION_NUM >= 140000
+                            readOnlyTree,
+#endif
+                            context, params, queryEnv, dest,
+#if PG_VERSION_NUM >= 130000
+                            qc
+#else
+                            completionTag
+#endif
+                            );
+
+  provsql_ProcessUtility_apply(parsetree, &cap);
+}
+
 /**
  * @brief Extension initialization – called once when the shared library is loaded.
  *
@@ -4917,6 +5331,7 @@ void _PG_init(void) {
   prev_shmem_startup = shmem_startup_hook;
   prev_ExecutorStart = ExecutorStart_hook;
   prev_ExecutorEnd   = ExecutorEnd_hook;
+  prev_ProcessUtility = ProcessUtility_hook;
 #if (PG_VERSION_NUM >= 150000)
   prev_shmem_request = shmem_request_hook;
   shmem_request_hook = provsql_shmem_request;
@@ -4928,6 +5343,7 @@ void _PG_init(void) {
   shmem_startup_hook  = provsql_shmem_startup;
   ExecutorStart_hook  = provsql_executor_start;
   ExecutorEnd_hook    = provsql_executor_end;
+  ProcessUtility_hook = provsql_ProcessUtility;
 
   RegisterProvSQLMMapWorker();
 }
@@ -4940,4 +5356,5 @@ void _PG_fini(void) {
   shmem_startup_hook  = prev_shmem_startup;
   ExecutorStart_hook  = prev_ExecutorStart;
   ExecutorEnd_hook    = prev_ExecutorEnd;
+  ProcessUtility_hook = prev_ProcessUtility;
 }

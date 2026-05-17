@@ -20,8 +20,8 @@ S1|1|refused
 S1|2|refused
 (2 rows)
 scenario|x|rewriter
-S2|1|refused
-S2|2|refused
+S2|1|fired
+S2|2|fired
 (2 rows)
 add_provenance
 

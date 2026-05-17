@@ -145,6 +145,9 @@ test: table_info
 # safe-query rewriter's disjoint-ancestor check)
 test: ancestry
 
+# CTAS / SELECT INTO / CREATE MATERIALIZED VIEW lineage inheritance
+test: ctas_inheritance
+
 # Safe-query optimisation: end-to-end hierarchical CQ rewrite
 test: safe_query_basic
 test: safe_query_pushdown
