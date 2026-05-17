@@ -190,6 +190,61 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q,
   }
 
   list_free(seen_relids);
+
+  /* Ancestry-disjointness check.  For every pair of RTEs with
+   * DIFFERENT relids, verify their registered base-ancestor sets
+   * don't overlap; reject the candidate when any pair does.
+   * Same-relid pairs are deliberately exempted: those are already
+   * handled by the syntactic shared-relid bail above and its PK-
+   * unification / disjoint-constant rescues, which prove disjointness
+   * at the gate level on a same-relid basis -- a coarser ancestry
+   * overlap check would undo those rescues.
+   *
+   * The fallback "no registry entry => self ancestor" branch covers
+   * the deterministic (no provsql column) case and any future RTE
+   * that slips through without ancestry: a base relid never appears
+   * in another RTE's ancestry register, so a singleton {self} set
+   * cannot cause a false positive against an unrelated derived
+   * table -- conservative on the safe side. */
+  {
+    int      natoms = list_length(q->rtable);
+    uint16  *anc_n  = palloc0(natoms * sizeof(uint16));
+    Oid    (*anc)[PROVSQL_TABLE_INFO_MAX_ANCESTORS]
+                    = palloc(natoms * sizeof(*anc));
+    int      i      = 0;
+    int      j1, j2;
+    bool     overlap = false;
+    ListCell *lc3;
+
+    foreach (lc3, q->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc3);
+      if (!provsql_lookup_ancestry(rte->relid, &anc_n[i], anc[i])) {
+        anc[i][0] = rte->relid;
+        anc_n[i] = 1;
+      }
+      i++;
+    }
+
+    for (j1 = 0; !overlap && j1 < natoms; j1++) {
+      RangeTblEntry *r1 = (RangeTblEntry *) list_nth(q->rtable, j1);
+      for (j2 = j1 + 1; !overlap && j2 < natoms; j2++) {
+        RangeTblEntry *r2 = (RangeTblEntry *) list_nth(q->rtable, j2);
+        uint16 a, b;
+        if (r1->relid == r2->relid)
+          continue;  /* handled by syntactic bail + approvals above */
+        for (a = 0; !overlap && a < anc_n[j1]; a++)
+          for (b = 0; !overlap && b < anc_n[j2]; b++)
+            if (anc[j1][a] == anc[j2][b])
+              overlap = true;
+      }
+    }
+
+    pfree(anc);
+    pfree(anc_n);
+    if (overlap)
+      return false;
+  }
+
   return true;
 }
 
