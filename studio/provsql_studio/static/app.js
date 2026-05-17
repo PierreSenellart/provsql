@@ -1198,10 +1198,15 @@
           const titleSuffix =
               (showProv ? ' · provenance-tracked' : '')
             + (r.is_mapping ? ' · provenance mapping' : '');
-          // Column count for the tooltip mirrors what's actually listed
-          // (provsql column hidden when has_provenance), so the tooltip
-          // and the comma-separated list don't disagree.
-          const visibleCount = r.has_provenance ? r.columns.length - 1 : r.columns.length;
+          // Column count for the tooltip mirrors the comma-separated
+          // list rendered above: `visibleCols` is the post-filter view
+          // (hiding the bookkeeping `provsql` column when present), so
+          // its length is authoritative.  Naive `r.columns.length - 1`
+          // would undercount views by one : views' planner-injected
+          // `provsql` column never lands in pg_attribute, so it isn't
+          // in `r.columns` to begin with, and the subtraction would
+          // remove a non-existent entry.
+          const visibleCount = visibleCols.length;
           // add/remove_provenance only target plain tables (the underlying
           // ALTER TABLE rejects views/matviews); mappings already serve a
           // separate purpose so we don't offer the toggle on them.
