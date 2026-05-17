@@ -573,6 +573,14 @@ A button in the top nav opens a searchable pop-up panel listing every
 ``SELECT``-able relation. Each gets one of two relation-level
 pills:
 
+.. figure:: /_static/studio/schema-panel.png
+   :alt: The Schema-panel pop-up listing a candidate_witness table
+         tagged PROV-BID and a personnel table tagged PROV-TID, both
+         with their column lists below the row.
+
+   Schema panel: TID and BID sub-pills annotate each
+   provenance-tracked relation.
+
 * :sc:`prov` (purple) on a relation whose ``provsql`` column is
   injected by the planner: provenance tracking is active.  The
   pill is sub-classified by the relation's certified kind (see
