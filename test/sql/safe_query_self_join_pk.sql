@@ -2,17 +2,18 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- §5 PK-unifiable self-joins.
+-- PK-unifiable self-joins.
 --
 -- When two RTEs over the same relation have all PRIMARY KEY (or
 -- NOT-NULL UNIQUE) columns equated through the union-find closure
 -- of the residual equijoins, the key proves they refer to the same
--- tuple.  The §5 pre-pass collapses the duplicate RTEs into a single
--- survivor, renumbering @c Var.varno and @c RangeTblRef.rtindex
--- through the rewriter's compacted @c rtable so the candidate
--- gate's "no two RTEs may share a relid" bail no longer fires.
+-- tuple.  The PK-unification pre-pass collapses the duplicate RTEs
+-- into a single survivor, renumbering @c Var.varno and
+-- @c RangeTblRef.rtindex through the rewriter's compacted
+-- @c rtable so the candidate gate's "no two RTEs may share a relid"
+-- bail no longer fires.
 --
--- The motivating shape (TODO §5):
+-- The motivating shape:
 --
 --   q :- R(x PK, y, z) r1, R r2 WHERE r1.x = r2.x AND r1.y = c1
 --                                 AND r2.z = c2.
@@ -21,12 +22,12 @@ SET search_path TO provsql_test, provsql;
 -- @c c1 @c AND @c z @c = @c c2 already produces a read-once
 -- circuit through the standard provenance rewrite (the @c
 -- gate_times dedup folds the duplicated @c provsql Var pairs to a
--- single leaf).  The §5 unification matters when the @em unified
--- query still has @em multiple atoms whose hierarchical structure
--- the raw shape gate refused: that's the (R, R, S) shape below.
+-- single leaf).  The unification matters when the @em unified query
+-- still has @em multiple atoms whose hierarchical structure the raw
+-- shape gate refused: that's the (R, R, S) shape below.
 
 -- ---------------------------------------------------------------------
--- (1) Three-atom case where §5 unification turns a non-hierarchical
+-- (1) Three-atom case where PK-unification turns a non-hierarchical
 --     query into a hierarchical one: r1, r2 share PK on x and
 --     unify to a single R atom; the remaining (R, S) join on (y, z)
 --     is a standard hierarchical CQ with class @c {R.y, S.y} and
@@ -58,8 +59,8 @@ CREATE TEMP TABLE sjp_baseline AS
 SELECT remove_provenance('sjp_baseline');
 SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM sjp_baseline;
 
--- §5 path: 'independent' on the rewritten read-once circuit must
--- match.
+-- PK-unification path: 'independent' on the rewritten read-once
+-- circuit must match.
 SET provsql.boolean_provenance = on;
 CREATE TEMP TABLE sjp_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
@@ -74,10 +75,10 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM sjp_baseline b JOIN sjp_rewritten r ON b.x = r.x;
 
 -- ---------------------------------------------------------------------
--- (2) NOT-NULL UNIQUE is FD-equivalent to a PRIMARY KEY (the §2
---     cache feeds the same single recogniser): the same query shape
---     over a NOT-NULL-UNIQUE relation must produce the same
---     probability as the PK case.
+-- (2) NOT-NULL UNIQUE is FD-equivalent to a PRIMARY KEY (the
+--     PK / NOT-NULL UNIQUE cache feeds the same single recogniser):
+--     the same query shape over a NOT-NULL-UNIQUE relation must
+--     produce the same probability as the PK case.
 -- ---------------------------------------------------------------------
 CREATE TABLE sjp_r_nnu (x int NOT NULL UNIQUE, y int, z int);
 INSERT INTO sjp_r_nnu VALUES (1, 5, 7), (2, 6, 8);
@@ -96,15 +97,15 @@ SELECT b.x, ROUND((b.p - n.p)::numeric, 9) AS diff_pk_vs_nnu
   FROM sjp_rewritten b JOIN sjp_nnu n ON b.x = n.x;
 
 -- ---------------------------------------------------------------------
--- (3) Pure two-RTE self-join (the TODO §5 motivating shape).  After
---     unification the query has only one atom; the safe-query
---     hierarchical detector bails on @c natoms @c < @c 2 and the
---     query falls through to the standard provenance rewrite, which
---     produces a read-once circuit on its own (the @c gate_times
---     dedup folds the duplicated @c r1.provsql / @c r2.provsql
---     leaves to a single input).  The probability must still match
---     the baseline -- this case is a regression check that §5's
---     unified-single-atom path doesn't break the existing rewrite.
+-- (3) Pure two-RTE self-join.  After unification the query has only
+--     one atom; the safe-query hierarchical detector bails on
+--     @c natoms @c < @c 2 and the query falls through to the
+--     standard provenance rewrite, which produces a read-once
+--     circuit on its own (the @c gate_times dedup folds the
+--     duplicated @c r1.provsql / @c r2.provsql leaves to a single
+--     input).  The probability must still match the baseline -- this
+--     case is a regression check that the unified-single-atom path
+--     doesn't break the existing rewrite.
 -- ---------------------------------------------------------------------
 SET provsql.boolean_provenance = off;
 CREATE TEMP TABLE sjp_self_baseline AS

@@ -2,7 +2,7 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- §3 Deterministic-relation transparency (Gatterbauer & Suciu 2015,
+-- Deterministic-relation transparency (Gatterbauer & Suciu 2015,
 -- dissociation framework).  A relation that is not provenance-tracked
 -- (no @c provsql column and no metadata entry) carries
 -- probability-1 tuples: under dissociation, factoring such a relation
@@ -18,17 +18,18 @@ SET search_path TO provsql_test, provsql;
 --
 --   q :- Sales(p, c), Products(p), Customers(c).
 --
--- Without §3: atoms(p) = {Sales, Products}, atoms(c) = {Sales,
--- Customers}.  Neither nested nor disjoint -- non-hierarchical, the
--- detector falls through to the generic provenance_plus(array_agg)
--- shape.  With §3: Products and Customers transparent -> atoms_fd(p)
--- = atoms_fd(c) = {Sales}.  Both classes touch only Sales; the
--- rewrite emits Sales as the lone probabilistic atom (one row per
--- (product_id, customer_id) binding) with the two dimensions as
--- DISTINCT-wrapped filters in the outer cross product.
+-- Without the transparency pass: atoms(p) = {Sales, Products},
+-- atoms(c) = {Sales, Customers}.  Neither nested nor disjoint --
+-- non-hierarchical, the detector falls through to the generic
+-- provenance_plus(array_agg) shape.  With the pass: Products and
+-- Customers transparent -> atoms_fd(p) = atoms_fd(c) = {Sales}.
+-- Both classes touch only Sales; the rewrite emits Sales as the lone
+-- probabilistic atom (one row per (product_id, customer_id) binding)
+-- with the two dimensions as DISTINCT-wrapped filters in the outer
+-- cross product.
 
 CREATE TABLE sd_sales (product_id int, customer_id int);
--- Dimensions: no @c add_provenance call, so deterministic by §3.
+-- Dimensions: no @c add_provenance call, so deterministic atoms.
 CREATE TABLE sd_products (product_id int PRIMARY KEY, category text);
 CREATE TABLE sd_customers (customer_id int PRIMARY KEY, region text);
 
@@ -58,8 +59,8 @@ SELECT remove_provenance('sd_baseline');
 SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM sd_baseline;
 
 -- ---------------------------------------------------------------------
--- (2) §3 path: 'independent' on the rewritten read-once circuit must
---     match the baseline within numerical noise.
+-- (2) Transparency path: 'independent' on the rewritten read-once
+--     circuit must match the baseline within numerical noise.
 -- ---------------------------------------------------------------------
 SET provsql.boolean_provenance = on;
 CREATE TEMP TABLE sd_rewritten AS
@@ -114,12 +115,12 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_dup_baseline_vs_rewritten
   FROM sd_dup_baseline b JOIN sd_dup_rewritten r ON b.x = r.x;
 
 -- ---------------------------------------------------------------------
--- (4) The OPAQUE-tag case from the candidate gate is unchanged by §3:
---     a relation whose @c provsql column was tagged OPAQUE by the
---     @c provenance_guard trigger (e.g. after a manual @c UPDATE
---     touching @c provsql) is refused at the shape gate, never
---     reaching the §3 detection.  Cross-check that the gate still
---     fires.  (Simple-view dimensions are out of scope here: the
+-- (4) The OPAQUE-tag case from the candidate gate is unchanged by
+--     the transparency pass: a relation whose @c provsql column was
+--     tagged OPAQUE by the @c provenance_guard trigger (e.g. after
+--     a manual @c UPDATE touching @c provsql) is refused at the
+--     shape gate, never reaching the transparency detection.
+--     Cross-check that the gate still fires.  (Simple-view dimensions are out of scope here: the
 --     rewriter inlines simple views before the planner hook runs,
 --     so they reach the detector as their underlying base RTE; the
 --     @c relkind @c == @c 'r' guard fires only for non-inlinable

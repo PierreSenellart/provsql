@@ -2,27 +2,27 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- §6 Disjoint-constant self-joins.
+-- Disjoint-constant self-joins.
 --
 -- Two (or more) RTEs over the same relation, each carrying a
 -- @c Var @c = @c Const conjunct on the @em same column with
 -- provably distinct literal values, range over disjoint tuple-sets
 -- of the underlying relation: a single base row can satisfy at most
 -- one of the constant predicates, so their @c provsql tokens never
--- overlap.  The §6 pre-pass certifies such groups; the candidate
--- gate's shared-relid bail then skips them, and the standard
--- per-atom DISTINCT wrap (with the constant predicate pushed in)
--- produces a read-once circuit -- the disjoint partition guarantees
--- each token appears in at most one wrap.
+-- overlap.  The disjoint-constant pre-pass certifies such groups;
+-- the candidate gate's shared-relid bail then skips them, and the
+-- standard per-atom DISTINCT wrap (with the constant predicate
+-- pushed in) produces a read-once circuit -- the disjoint partition
+-- guarantees each token appears in at most one wrap.
 --
--- The canonical motivating shape (TODO §6):
+-- The canonical motivating shape:
 --
 --   q :- R(x, kind) r1, R r2  WHERE r1.kind = 'A' AND r2.kind = 'B'
 --                               AND r1.x = r2.x.
 
 -- ---------------------------------------------------------------------
--- (1) The TODO §6 motivating example.  Two RTEs of @c R distinguished
---     by mutually exclusive @c kind values; their tuple-sets are
+-- (1) The motivating example.  Two RTEs of @c R distinguished by
+--     mutually exclusive @c kind values; their tuple-sets are
 --     disjoint, the rewrite emits each as its own DISTINCT wrap.
 -- ---------------------------------------------------------------------
 CREATE TABLE sjd_r (x int, kind char(1));
@@ -47,7 +47,8 @@ CREATE TEMP TABLE sjd_baseline AS
 SELECT remove_provenance('sjd_baseline');
 SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM sjd_baseline;
 
--- §6 path: 'independent' on the rewritten circuit must match.
+-- Disjoint-constant path: 'independent' on the rewritten circuit
+-- must match.
 SET provsql.boolean_provenance = on;
 CREATE TEMP TABLE sjd_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
@@ -82,10 +83,11 @@ SELECT remove_provenance('sjd_three');
 SELECT x, ROUND(p::numeric, 6) AS prob_three FROM sjd_three;
 
 -- ---------------------------------------------------------------------
--- (3) Same constant on both sides: not disjoint, §6 must not
---     certify, the rewrite must fall back to the generic provenance
---     path.  The probability under @c boolean_provenance = on must
---     still match the default evaluator (i.e. nothing else broke).
+-- (3) Same constant on both sides: not disjoint, the
+--     disjoint-constant pass must not certify, the rewrite must
+--     fall back to the generic provenance path.  The probability
+--     under @c boolean_provenance = on must still match the default
+--     evaluator (i.e. nothing else broke).
 --
 -- ---------------------------------------------------------------------
 SET provsql.boolean_provenance = off;
@@ -111,9 +113,9 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_same_baseline_vs_rewritten
 
 -- ---------------------------------------------------------------------
 -- (4) Constants on different columns: an R-tuple can satisfy both
---     predicates simultaneously, so §6 must not certify.
---     Probability under both GUC modes must match the default
---     evaluator.
+--     predicates simultaneously, so the disjoint-constant pass must
+--     not certify.  Probability under both GUC modes must match the
+--     default evaluator.
 -- ---------------------------------------------------------------------
 CREATE TABLE sjd_r2 (x int, kind char(1), y int);
 INSERT INTO sjd_r2 VALUES (1, 'A', 10), (2, 'A', 20), (1, 'B', 30);

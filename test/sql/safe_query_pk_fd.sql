@@ -2,7 +2,7 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- §2 PK / NOT-NULL UNIQUE induced FDs (Dalvi & Suciu 2007 §5.1).
+-- PK / NOT-NULL UNIQUE induced FDs (Dalvi & Suciu 2007 §5.1).
 --
 -- A relation @c R with PRIMARY KEY @c K (or NOT NULL UNIQUE on @c K)
 -- carries the FD @c K @c → @c A for every non-key attribute @c A.
@@ -16,12 +16,13 @@ SET search_path TO provsql_test, provsql;
 --
 --   q :- R(x), S(x, y), T(y),  with PRIMARY KEY (x) on S.
 --
--- Without §2: atoms(x)={R,S}, atoms(y)={S,T} — neither nested nor
--- disjoint — non-hierarchical → bail.  With §2: the PK on @c S.x
--- induces @c S.x @c → @c S.y, so @c S drops from atoms(y); the
--- FD-aware atom-sets are @c {R,S} and @c {T}, disjoint — hierarchical
--- via a per-atom anchor (@c R and @c S anchor on class @c x, @c T on
--- class @c y; the rewriter exposes both classes as slots on @c S).
+-- Without the PK-FD pass: atoms(x)={R,S}, atoms(y)={S,T} — neither
+-- nested nor disjoint — non-hierarchical → bail.  With the PK-FD
+-- pass: the PK on @c S.x induces @c S.x @c → @c S.y, so @c S drops
+-- from atoms(y); the FD-aware atom-sets are @c {R,S} and @c {T},
+-- disjoint — hierarchical via a per-atom anchor (@c R and @c S
+-- anchor on class @c x, @c T on class @c y; the rewriter exposes
+-- both classes as slots on @c S).
 
 -- ---------------------------------------------------------------------
 -- (1) The PK case: PRIMARY KEY on S(x).
@@ -56,7 +57,7 @@ CREATE TEMP TABLE pk_baseline_pk AS
 SELECT remove_provenance('pk_baseline_pk');
 SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM pk_baseline_pk;
 
--- §2 path: 'independent' on the rewritten circuit must match.
+-- PK-FD path: 'independent' on the rewritten circuit must match.
 SET provsql.boolean_provenance = on;
 CREATE TEMP TABLE pk_rewritten_pk AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
@@ -121,7 +122,7 @@ BEGIN
   END;
   IF NOT raised THEN
     RAISE EXCEPTION 'expected ''independent'' to reject the H-query '
-                    'under a nullable UNIQUE (no §2 FD applies)';
+                    'under a nullable UNIQUE (no PK FD applies)';
   END IF;
 END $$;
 
@@ -129,15 +130,16 @@ END $$;
 -- (4) Composite PK partial coverage: PRIMARY KEY @c (a, b) on the
 --     middle atom requires the query to equate @em both @c a and
 --     @c b to the outer atoms before the FD applies.  Equating only
---     @c a leaves the H-shape non-hierarchical; §2 must NOT fire.
+--     @c a leaves the H-shape non-hierarchical; the PK-FD pass must
+--     NOT fire.
 -- ---------------------------------------------------------------------
 
 CREATE TABLE pk_r_comp (a int);
 CREATE TABLE pk_s_comp (a int, b int, y int, PRIMARY KEY (a, b));
 CREATE TABLE pk_t_comp (y int);
--- Duplicate R rows on a=1 make the circuit non-read-once without §2:
--- r1 and r3 both join the same (s, t) pair, so the (s, t) tokens appear
--- in multiple rows of the cross product.
+-- Duplicate R rows on a=1 make the circuit non-read-once without
+-- the PK-FD pass: r1 and r3 both join the same (s, t) pair, so the
+-- (s, t) tokens appear in multiple rows of the cross product.
 INSERT INTO pk_r_comp VALUES (1), (2), (1);
 INSERT INTO pk_s_comp VALUES (1, 1, 5), (2, 2, 6);
 INSERT INTO pk_t_comp VALUES (5), (6), (7);

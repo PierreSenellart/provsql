@@ -2,30 +2,31 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- §4-A General FD-closure (Stage A: no rewriter change).
+-- General FD closure (detector-only; no rewriter change).
 --
--- The TODO §4 envisions a fixpoint over the @c DETERMINED matrix:
--- collect every FD in Γ_p(q) (constant-selection FDs from §1, PK
--- FDs from §2, deterministic-relation FDs from §3) and iteratively
--- apply each FD until no new FD-determined-in-RTE tags are set.
--- Stage A then runs the existing single-level rewriter on the
--- FD-reduced atom-sets.
+-- The textbook framework (Dalvi & Suciu 2007 §5.1) envisions a
+-- fixpoint over the @c DETERMINED matrix: collect every FD in
+-- Γ_p(q) (constant-selection FDs, PK FDs, deterministic-relation
+-- FDs) and iteratively apply each FD until no new
+-- FD-determined-in-RTE tags are set.  The hierarchicality check
+-- then runs on the FD-reduced atom-sets.
 --
 -- In the current rule set (constant-pinning + schema PK/UNIQUE +
 -- deterministic transparency), every FD application is
--- @em independent: my §2 PK-FD pass already fires every FD in a
--- single walk over the RTE list, and §1 + §3 act through
--- orthogonal mechanisms (residual-cleanup multi-component for §1,
--- @c DETERMINED-all-classes for §3).  No iteration unlocks a new
--- tag.  The §4-A fixpoint reduces to a no-op on the cases the
--- TODO motivates -- the triangle CQ with two PKs on different
--- relations.  Stage B's nested rewrite (FD-induced function/free
--- split) is required to compose §1's constant-pinning with §2's
--- PK FD on the same relation; that is explicitly deferred per the
--- plan.
+-- @em independent: the PK-FD pass already fires every FD in a
+-- single walk over the RTE list, and constant-selection and
+-- deterministic transparency act through orthogonal mechanisms
+-- (residual-cleanup multi-component for constant pinning,
+-- @c DETERMINED-all-classes for deterministic atoms).  No
+-- iteration unlocks a new tag.  The fixpoint reduces to a no-op on
+-- the canonical motivating case -- the triangle CQ with two PKs on
+-- different relations.  An FD-induced nested rewrite
+-- (function/free split) is required to compose constant-pinning
+-- with a PK on the same relation; that is documented in
+-- @c doc/TODO/safe-query-followups.md and deferred.
 --
--- This file regression-tests the canonical TODO §4-A example to
--- confirm the cumulative slices 1-4 deliver the Stage A guarantee:
+-- This file regression-tests the canonical triangle example to
+-- confirm the cumulative passes deliver the closure guarantee:
 -- "accept any query whose FD-reduced atom sets are hierarchical
 -- and whose existing single-level wrap is read-once".
 
@@ -78,13 +79,14 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
   FROM fdc_baseline b JOIN fdc_rewritten r ON b.x = r.x;
 
 -- ---------------------------------------------------------------------
--- (2) §2 + §3 composition (star schema with PKs on every dimension).
---     §3 transparency drops the dimension atoms from atom-set
---     membership; the PK on each dimension is then irrelevant (the
---     dimension's FDs would have been redundant once it became
---     transparent), but the rewrite still uses §2's PK FD on the
---     fact table if one is present.  Cross-check that this case
---     already worked in slice 3 and didn't regress here.
+-- (2) PK-FD + deterministic-transparency composition (star schema
+--     with PKs on every dimension).  Transparency drops the
+--     dimension atoms from atom-set membership; the PK on each
+--     dimension is then irrelevant (the dimension's FDs would have
+--     been redundant once it became transparent), but the rewrite
+--     still uses the PK FD on the fact table if one is present.
+--     Cross-check that this composition works and that no FD
+--     interaction regression occurs.
 -- ---------------------------------------------------------------------
 CREATE TABLE fdc_fact (pid int, cid int);
 CREATE TABLE fdc_dim_p (pid int PRIMARY KEY, cat text);

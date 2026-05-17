@@ -40,6 +40,43 @@ The rewriter currently accepts:
   no extra code needed; recursion into branches plus per-row
   `independent` evaluation suffices.
 
+The FD-aware extensions (see the *Safe-Query Rewriter* dev-doc
+section in `doc/source/dev/query-rewriting.rst` and inline comments
+in `src/safe_query.c`) layer additional acceptance on top of the
+base detector:
+
+- Constant-selection elimination (`apply_constant_selection_fd_pass`):
+  pre-pass that propagates `Var = Const` literals through the
+  equijoin-closure union-find and drops the redundant equijoin
+  conjuncts, so constant-pinned atoms route through the
+  multi-component path and factor out at the top.
+- Primary-key / NOT-NULL UNIQUE FDs: a separate per-backend cache
+  (`provsql_lookup_relation_keys` in `src/provsql_utils.c`) scans
+  `pg_constraint`, joins `pg_index`, and verifies NOT-NULL on every
+  UNIQUE column.  The detector applies each FD once and tags
+  non-key columns' classes as FD-determined inside the relation.
+- Deterministic-relation transparency: relations with no `provsql`
+  column and no metadata are tagged FD-determined on every class,
+  modelling Gatterbauer & Suciu 2015's dissociation argument.
+  Soundness guards on `pg_class.relkind = 'r'` and
+  `has_superclass = false`.
+- FD-aware atom-set hierarchicality (`fd_aware_mode`): when no
+  single class touches every atom under the raw count but the
+  FD-reduced atom-sets are pairwise nested-or-disjoint, the
+  detector emits a per-atom local-root anchor (with a fallback for
+  atoms whose every anchored class is FD-determined) and the
+  rewriter produces a multi-anchor shape.
+- PK-unifiable self-joins (`try_pk_self_join_unification`): a
+  pre-pass before `is_safe_query_candidate` that collapses
+  same-relid RTE groups whose PK / NOT-NULL UNIQUE columns are all
+  equated through the union-find closure into a single survivor,
+  renumbering Vars and RangeTblRefs through `safe_unify_remap_mutator`.
+- Disjoint-constant self-joins (`try_disjoint_constant_self_join_split`):
+  certifies same-relid groups whose `Var = Const` predicates on the
+  same column have provably distinct literals (via `datumIsEqual`)
+  in a `Bitmapset`; `is_safe_query_candidate` consults the set and
+  skips the shared-relid bail for those relids.
+
 **Pinned bails** (regression-tested as deferred):
 
 - The "bridge case" — a partial-coverage class spanning multiple
@@ -50,15 +87,23 @@ The rewriter currently accepts:
 
 **Not yet started**:
 
-- §4.5: root-gate tag + per-semiring `compatibleWithBooleanRewrite`
-  constexpr.  Without it, a tagged circuit can still be passed to a
-  non-absorptive semiring and silently return a wrong answer; this
-  is the gate that lets us recommend the GUC publicly.
-- §7 documentation and release-script discipline (upgrade script
-  `provsql--1.5.0--1.6.0.sql`, user/dev docs, RELEASE_NOTES).
+- §7 release-script discipline (upgrade script
+  `provsql--1.5.0--1.6.0.sql`, RELEASE_NOTES); user-doc surface for
+  the FD-aware extensions if their public visibility ever changes
+  (they currently fire transparently behind the
+  `provsql.boolean_provenance` GUC).
 
-Regression suite is 139/139 green with the GUC off (default) and
-the new tests cover the GUC-on paths above.
+Further follow-ups (FD-induced nested rewrite, soft keys, view
+descent for FD chases, data-safe plans, self-joins without PK or
+constant rescue) are tracked in
+[`safe-query-followups.md`](safe-query-followups.md) under
+"Hierarchical-detector follow-ups".
+
+Regression suite is 150 tests green; the new files
+`safe_query_const_sel.sql`, `safe_query_pk_fd.sql`,
+`safe_query_deterministic.sql`, `safe_query_self_join_pk.sql`,
+`safe_query_fd_closure.sql`, and `safe_query_self_join_disjoint.sql`
+cover the FD-aware paths.
 
 ## 1. Goal
 

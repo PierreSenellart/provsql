@@ -2,7 +2,7 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- §1 constant-selection elimination (Dalvi & Suciu 2007 §5.1).
+-- Constant-selection elimination (Dalvi & Suciu 2007 §5.1).
 --
 -- A WHERE clause @c Var @c = @c Const induces @c ∅ @c → @c Var.attno,
 -- and the equijoin-closure union-find extends this FD to every Var in
@@ -12,23 +12,25 @@ SET search_path TO provsql_test, provsql;
 -- redundant cross-atom equijoin conjuncts.  Constant-pinned atoms then
 -- show up as separate components for the multi-component path, which
 -- emits an independent gate_plus(atom_rows) factor at the top
--- @c gate_times -- exactly the read-once factoring §1 prescribes.
+-- @c gate_times -- exactly the read-once factoring constant-pinning
+-- prescribes.
 --
--- The canonical motivating example (TODO §1) is the textbook H-shape:
+-- The canonical motivating example is the textbook H-shape:
 --
 --   SELECT DISTINCT 1
 --     FROM R(x), S(x, y), T(y)
 --    WHERE R.x = S.x AND S.y = T.y AND S.x = 42;
 --
--- Without §1: atoms(x)={R,S}, atoms(y)={S,T}, no class touches every
--- atom -> bail.  With §1: S.x=42 pins class {R.x, S.x}; the equijoin
--- R.x=S.x is dropped from the residual; R becomes its own connected
--- component (no remaining cross-atom links); the multi-component path
--- emits one inner sub-Query per component, joined by gate_times at
--- the outer.  R contributes gate_plus(r.provsql) over its matching
--- rows; the (S,T) component contributes the standard hierarchical
--- read-once shape gate_plus(S.y * T.y) -- both factors share no
--- leaves with each other.
+-- Without the pass: atoms(x)={R,S}, atoms(y)={S,T}, no class touches
+-- every atom -> bail.  With the pass: S.x=42 pins class {R.x, S.x};
+-- the equijoin R.x=S.x is dropped from the residual; R becomes its
+-- own connected component (no remaining cross-atom links); the
+-- multi-component path emits one inner sub-Query per component,
+-- joined by gate_times at the outer.  R contributes
+-- gate_plus(r.provsql) over its matching rows; the (S,T) component
+-- contributes the standard hierarchical read-once shape
+-- gate_plus(S.y * T.y) -- both factors share no leaves with each
+-- other.
 
 CREATE TABLE sq_const_r (x int);
 CREATE TABLE sq_const_s (x int, y int);
@@ -82,10 +84,10 @@ CREATE TEMP TABLE sq_const_baseline AS
 SELECT remove_provenance('sq_const_baseline');
 SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM sq_const_baseline;
 
--- (2) With §1 active: the H-query is rewritten to a read-once shape,
---     and 'independent' succeeds.  Expected probability matches the
---     baseline within numerical noise (both methods are exact on this
---     small instance).
+-- (2) With the rewrite active: the H-query is rewritten to a
+--     read-once shape, and 'independent' succeeds.  Expected
+--     probability matches the baseline within numerical noise (both
+--     methods are exact on this small instance).
 SET provsql.boolean_provenance = on;
 CREATE TEMP TABLE sq_const_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
@@ -121,9 +123,9 @@ SELECT b.x,
   FROM sq_const_rewritten b JOIN sq_const_other_side r ON b.x = r.x;
 
 -- (5) Inequality predicate (Var > Const) does NOT induce @c ∅ @c →
---     @c Var.attno, so §1 must NOT fire.  The H-query is still
---     non-hierarchical; the rewriter falls through.
---     'independent' rejects the resulting circuit.
+--     @c Var.attno, so the constant-selection pass must NOT fire.
+--     The H-query is still non-hierarchical; the rewriter falls
+--     through.  'independent' rejects the resulting circuit.
 SET provsql.boolean_provenance = on;
 DO $$
 DECLARE raised boolean := false;
@@ -139,7 +141,7 @@ BEGIN
   END;
   IF NOT raised THEN
     RAISE EXCEPTION 'expected ''independent'' to reject the H-query '
-                    'under an inequality predicate (no §1 pinning)';
+                    'under an inequality predicate (no constant pinning)';
   END IF;
 END $$;
 

@@ -31,8 +31,10 @@ Each plan document follows a consistent layout:
   ideas surfaced during the `provsql.boolean_provenance` work --
   further Boolean-only optimisations (independent-subtree
   detection, Möbius / Monet, deferred entries), the TID / BID
-  classifier and correlation-registry roadmap, and the layered
-  HAVING-clause optimisation plan.
+  classifier and correlation-registry roadmap, the layered
+  HAVING-clause optimisation plan, and the hierarchical-detector
+  follow-ups (FD-induced nested rewrite, soft keys, view-descent
+  FD chases, data-safe plans).
 - [`studio.md`](studio.md) : plan for ProvSQL Studio work landing
   alongside or after the first PyPI release (`studio-v1.0.0`):
   release plumbing, CI, Docker swap-over, in-app polish, and the

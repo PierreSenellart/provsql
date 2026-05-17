@@ -584,3 +584,137 @@ The root gate of every rewritten circuit is wrapped in a
 ``gate_assumed_boolean`` marker (see :doc:`semiring-evaluation`)
 so that semirings whose algebra is not Boolean-faithful refuse to
 evaluate it at runtime.
+
+FD-Aware Extensions
+^^^^^^^^^^^^^^^^^^^
+
+Six extensions layered onto the base detector recover safety for
+query shapes that the raw ``atom-set covers every atom`` criterion
+refuses.  All operate through the same ``DETERMINED`` matrix and
+the per-atom ``atom_anchor_class`` selection in the ``fd_aware_mode``
+branch of ``find_hierarchical_root_atoms``; the theoretical
+framework is the induced-FD construction Γ\ :sub:`p`\ (q) of Dalvi
+and Suciu :cite:`DBLP:journals/vldb/DalviS07`, the dissociation
+framework of Gatterbauer and Suciu
+:cite:`DBLP:journals/pvldb/GatterbauerS15`, and the textbook
+treatment in :cite:`DBLP:series/synthesis/2011Suciu` (Chapter 4).
+
+The extensions and their interaction with the base rewriter:
+
+- **Constant-selection elimination.**  A WHERE conjunct of shape
+  ``Var = Const`` induces the FD ``∅ → Var.attno``; the equijoin
+  closure propagates the literal to every variable in the same
+  union-find class.  Implemented as ``apply_constant_selection_fd_pass``
+  (a pre-pass between ``safe_split_quals`` and the multi-component
+  dispatcher), which propagates synthesised ``Var = const`` conjuncts
+  to every atom touched by the class and drops the now-redundant
+  equijoin conjuncts from the residual.  Atoms whose every Var is
+  in a constant class become disconnected from the rest of the
+  residual and route through the multi-component path, which emits
+  them as independent ``gate_plus`` subqueries Cartesian-joined at
+  the outer level.  That factoring is what preserves read-once
+  across multiple-match rows on the rest of the query.
+
+- **Primary-key / NOT-NULL UNIQUE FDs.**  A relation with primary
+  key ``K`` carries ``K → A`` for every non-key attribute ``A``;
+  NOT-NULL UNIQUE is FD-equivalent.  A separate per-backend cache
+  (``provsql_lookup_relation_keys`` in :cfile:`provsql_utils.c`)
+  scans ``pg_constraint`` filtered to ``contype IN ('p','u')``,
+  joins ``pg_index`` for column lists, and verifies
+  ``pg_attribute.attnotnull`` on every UNIQUE column.  Invalidation
+  hooks into ``CacheRegisterRelcacheCallback`` with its own
+  registration flag so ``ALTER TABLE ADD/DROP CONSTRAINT`` refreshes
+  the next lookup without polling.  The detector applies each FD
+  once: when every key column's union-find class is multi-atom (the
+  determinant is pinned by some equijoin to a Var on another RTE),
+  every non-key column's class is tagged ``DETERMINED(c, rte)`` and
+  drops from the class's FD-aware atom set.  Composite PKs require
+  every column to satisfy the multi-atom check (the soundness trap
+  on partial coverage).  When no single class covers every atom
+  under the raw count but the FD-reduced atom sets are pairwise
+  nested-or-disjoint, the rewriter falls into ``fd_aware_mode`` and
+  uses a per-atom local-root anchor instead of a global root.
+
+- **Deterministic-relation transparency.**  A relation that is not
+  provenance-tracked (no ``provsql`` column and no metadata entry)
+  contributes probability-1 tuples; dissociating tuples in it does
+  not change the query's probability
+  :cite:`DBLP:journals/pvldb/GatterbauerS15`.  The detector treats
+  such atoms as structurally transparent for atom-set purposes by
+  setting ``DETERMINED(c, rte)`` for *every* union-find class on
+  the deterministic RTE, so each class drops the atom from its
+  FD-aware set.  Soundness guards on ``pg_class.relkind = 'r'`` and
+  ``has_superclass = false`` exclude views, foreign tables, and
+  inheritance children; the residual CTAS-correlation trap
+  (``CREATE TABLE foo AS SELECT * FROM <tracked>`` without
+  ``add_provenance``) is documented in the safe-query follow-ups
+  and closed by the future correlation-registry work in
+  ``doc/TODO/safe-query-followups.md``.  An anchor-fallback pass
+  selects any anchored multi-atom class as the local root for
+  deterministic atoms (the FD-aware preference for non-determined
+  classes leaves them orphan otherwise).  Each deterministic atom's
+  wrap uses the standard ``SELECT DISTINCT slots FROM dim WHERE
+  <filter>`` shape with no ``provsql`` column; ``process_query``'s
+  recursion finds no provenance to add, and the outer
+  ``gate_times`` simply skips the missing entry.
+
+- **FD closure.**  Detector-only: accept any query whose FD-reduced
+  atom-sets are pairwise nested-or-disjoint *and* whose existing
+  single-level wrap is read-once.  Delivered by the cumulative
+  constant-selection + PK-FD + deterministic-transparency passes
+  -- each FD application in the current rule set is independent of
+  the others, so no fixpoint iteration is needed.  The canonical
+  example is the triangle CQ with PKs on two of its three
+  relations: each PK FD is applied once and the FD-aware atom sets
+  become disjoint pairwise.  The FD-induced nested rewrite for
+  shapes where the single-level wrap is not read-once (the
+  function/free split) is deferred to ``safe-query-followups.md``.
+
+- **PK-unifiable self-joins.**  When two (or more) RTEs over the
+  same relation have all PK / NOT-NULL UNIQUE columns equated
+  through the union-find closure, the key proves they refer to the
+  same tuple.  ``try_pk_self_join_unification`` runs before
+  ``is_safe_query_candidate`` and merges every fully-unifiable
+  group into a single survivor: ``rtable`` is compacted,
+  ``jointree->fromlist`` renumbered, and every Var's ``varno`` (and
+  the parallel ``varnosyn`` for ``ruleutils.c``-style deparsing) is
+  rewritten through ``safe_unify_remap_mutator``.  Partial
+  unification (a 3-RTE group with one outlier) bails the entire
+  group: full unification or full bail.  The candidate gate's
+  shared-relid bail then sees one RTE per surviving relid and
+  accepts.
+
+- **Disjoint-constant self-joins.**  When two same-relid RTEs carry
+  mutually exclusive ``Var = Const`` conjuncts on the same column,
+  their tuple-sets are disjoint and the ``provsql`` tokens never
+  overlap.  ``try_disjoint_constant_self_join_split`` runs after
+  the PK-unification pass and certifies eligible relids in a
+  ``Bitmapset``; ``is_safe_query_candidate`` consults the set and
+  skips the shared-relid bail for those relids.  Pairwise
+  disjointness uses ``datumIsEqual`` on matching ``consttype`` to
+  prove distinct literals; non-equality predicates and constants on
+  different columns do not contribute.  The rewriter is unchanged:
+  each RTE becomes its own ``SELECT DISTINCT slots FROM R WHERE
+  <filter>`` wrap, with the disjoint partition guaranteeing
+  read-once.
+
+The interaction between these extensions and the base rewriter is
+ordered as: PG-18 group-RTE strip → PK self-join unification →
+disjoint-constant certification → candidate gate →
+``safe_split_quals`` → constant-selection pre-pass →
+multi-component dispatch → ``find_hierarchical_root_atoms`` (PK
+FDs, deterministic transparency, ``fd_aware_mode``) →
+``rewrite_hierarchical_cq``.  The detector's ``DETERMINED`` matrix
+accumulates contributions from the PK-FD pass and the
+deterministic-transparency pass; the ``atom_anchor_class``
+selection makes a first FD-aware preference pass followed by a
+fallback for atoms whose every anchored class is FD-determined
+(needed for the deterministic case to land its local-root choice).
+
+Each extension's soundness argument is recorded in inline comments
+in :cfile:`safe_query.c` alongside the corresponding block; the
+regression tests live in ``test/sql/safe_query_const_sel.sql``,
+``safe_query_pk_fd.sql``, ``safe_query_deterministic.sql``,
+``safe_query_self_join_pk.sql``, ``safe_query_fd_closure.sql``
+(cumulative regression checks for the FD closure), and
+``safe_query_self_join_disjoint.sql``.

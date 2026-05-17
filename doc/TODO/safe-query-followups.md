@@ -287,3 +287,82 @@ not apply.  The work composes with Layer C : the Poisson-binomial CDF
 that Layer C would compute for symmetric COUNT over Bernoulli leaves
 is exactly the closed form the discrete-RV analytic evaluator would
 deliver generically.
+
+## Hierarchical-detector follow-ups
+
+The FD-aware safe-query rewriter currently lands six extensions on top
+of the base hierarchical-CQ detector : constant-selection elimination,
+PK / NOT-NULL UNIQUE FDs from the catalog, deterministic-relation
+transparency, PK-unifiable self-joins, FD closure on the union-find
+(detector-only), and disjoint-constant self-joins.  See
+:cfile:`src/safe_query.c` and the dev-doc *Safe-Query Rewriter* section
+for the implementation; the foundational papers (Dalvi & Suciu 2007 ;
+Gatterbauer & Suciu 2015 ; Suciu, Olteanu, Ré & Koch 2011) are linked
+from the website's *Foundational Works* listing.
+
+The items below were surfaced during that work and deliberately deferred
+for a future slice.
+
+- **FD-induced nested rewrite (function/free split).**  The current
+  FD closure accepts every query whose FD-reduced atom-sets are
+  pairwise nested-or-disjoint *and* whose existing single-level wrap
+  is already read-once.  When the FD closure splits the atoms into a
+  *function layer* (PK-determined relations) and a *free layer* (no
+  FD on them) and the function layer indexes into the free layer,
+  the single-level wrap duplicates each function-layer atom's
+  `provsql` across the per-row `gate_times`, breaking the read-once
+  invariant.  The canonical motivating case is the composition of
+  constant-selection elimination with a PK on the same relation :
+  a constant pinning combined with a PK that determines another
+  column collapses an atom that neither pass handles in isolation.
+  The nested rewrite would emit function-layer atoms as independent
+  `gate_plus` subqueries Cartesian-joined with the free-layer at the
+  top, factoring each function-layer token out as a single OR'd
+  input.  *Deferred per the cost/payoff ordering : the
+  triangle-with-two-PKs pattern is real but not common, the
+  implementation cost is meaningful (250+ lines of rewriter surgery,
+  careful interaction-testing with multi-component and inner-group
+  paths), and the existing FD closure already lands the most common
+  shapes through the constant-selection pass's multi-component
+  routing for pinned atoms.  Revisit only after a real workload
+  surfaces a triangle-with-two-PKs pattern that the existing rewrite
+  cannot handle.*
+
+- **Self-joins without PK or constant rescue.**  Symmetric closure
+  `R(x, y), R(y, x)`, path-of-length-2 `R(x, y), R(y, z)`, and similar
+  shapes remain hard.  Neither the PK-unification pass nor the
+  disjoint-constant certification fires : there is no key whose
+  columns are equated pairwise, and the constant predicates either
+  don't exist or aren't pairwise disjoint.  Resolving the read-once
+  question for these shapes requires either Monet-style intensional
+  dDNNF construction (see the Möbius / Monet entry above) or proper
+  handling of the full Dalvi & Suciu 2012 JACM dichotomy for UCQs
+  (which subsumes self-joins implicitly via the lattice-of-valuations
+  criterion).  *Deferred : both directions are larger projects than
+  the FD-aware extensions combined, and the workloads where the
+  symmetric-closure / path shapes show up tend to be recursive-query
+  territory that ProvSQL's CQ-only rewriter already excludes.*
+
+- **Soft keys.**  Functional dependencies that hold probabilistically
+  rather than absolutely, per Jha, Rastogi & Suciu (PODS 2008).  Separate
+  axis from schema FDs : the rewrite would have to weight each FD's
+  consequent by its observed reliability rather than assume it holds in
+  every world.  *Deferred ; revisit if a real workload makes the case.*
+
+- **FD chases through views and CTAS-derived relations.**  The PK-FD
+  pass is currently restricted to FROM lists of base relations.
+  Extending it through views and `CREATE TABLE AS` -derived tables
+  needs the TID/BID classifier in the TID/BID-propagation section
+  above to mature (in particular : independent-TID join inference,
+  view descent, and the inter-relation correlation registry that
+  tracks ancestry to refuse unsafe FROM lists).  *Deferred until that
+  work lands ; the CTAS-correlation trap on deterministic atoms
+  (`CREATE TABLE foo AS SELECT * FROM <tracked>` without
+  `add_provenance`) is the most visible symptom.*
+
+- **Data-safe plans.**  FDs that hold on the *instance* but not in the
+  schema, per Jha, Olteanu & Suciu (EDBT 2010).  Larger project ; the
+  rewrite would need to certify the FD against the actual data before
+  trusting it.  Separate from the schema-FD-aware analysis the FD
+  closure currently implements.  *Deferred ; revisit only with a
+  clearly-motivated use case.*

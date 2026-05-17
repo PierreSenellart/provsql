@@ -135,13 +135,14 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q,
 
     if (rte->rtekind != RTE_RELATION)
       return false;
-    /* Self-join-free: no two RTEs may share a relid, unless §6
-     * has certified the relid's same-relid group as disjoint via
-     * mutually exclusive @c Var @c = @c Const conjuncts on the
-     * same column.  The §5 PK-unification pre-pass collapses any
-     * unifiable groups before reaching this point, so a duplicate
-     * here means either a non-unifiable group (which §6 may still
-     * rescue) or a group neither §5 nor §6 can resolve (refuse). */
+    /* Self-join-free: no two RTEs may share a relid, unless the
+     * disjoint-constant pre-pass has certified the relid's same-
+     * relid group as disjoint via mutually exclusive @c Var @c =
+     * @c Const conjuncts on the same column.  The PK-unification
+     * pre-pass collapses any unifiable groups before reaching this
+     * point, so a duplicate here means either a non-unifiable group
+     * (which the disjoint-constant pre-pass may still rescue) or a
+     * group neither pre-pass can resolve (refuse). */
     foreach (lc2, seen_relids) {
       if (lfirst_oid(lc2) == rte->relid) {
         if (approved_self_join_relids != NULL
@@ -237,7 +238,7 @@ typedef struct safe_rewrite_atom {
   Index       outer_rtindex;   ///< Assigned by the rewriter: this atom's slot in the rebuilt outer rtable.  Grouped atoms all share their group's outer_rtindex.
   Index       inner_rtindex;   ///< Assigned by the rewriter for grouped atoms only: position inside the inner sub-Query's rtable (1-based).  0 for outer-wrap atoms.
   AttrNumber  root_anchor_attno; ///< For grouped atoms: base @c attno of the root-class binding column inside this atom.  Used by the outer Var remap to recognise root-class references that should resolve to the inner sub-Query's single output column.
-  bool        is_constant_pinned; ///< Reserved for future §1 follow-up work; currently never set (§1 constant-pinned atoms are routed through the multi-component path before this struct is built, so each atom in @c rewrite_hierarchical_cq is unconditionally a regular hierarchical-component atom).
+  bool        is_constant_pinned; ///< Reserved for future constant-selection follow-up work; currently never set (constant-pinned atoms are routed through the multi-component path before this struct is built, so each atom in @c rewrite_hierarchical_cq is unconditionally a regular hierarchical-component atom).
 } safe_rewrite_atom;
 
 /**
@@ -352,7 +353,7 @@ static bool safe_is_var_equality(Expr *qual, Var **l, Var **r) {
  * Mirrors @c safe_is_var_equality but matches an equality between a
  * base-level @c Var and a planner-time @c Const literal (in either argument
  * order), again stripping @c RelabelType wrappers to see through binary-
- * coercion casts.  This is the recogniser used by the §1 constant-selection
+ * coercion casts.  This is the recogniser used by the constant-selection
  * elimination pass (Dalvi & Suciu 2007 §5.1, induced FD @c ∅ @c → @c R.a)
  * to flag union-find roots as pinned to a literal.  Volatile predicates
  * never reach this point: @c safe_split_quals routes them to the residual,
@@ -767,7 +768,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   bool    have_partial_class = false;
   int     partial_first = -1;       /* repr of the first partial-coverage class seen */
   Bitmapset *bridging_classes = NULL; /* repr indices of partial-coverage classes whose touched atoms span more than one group; the bridge variable becomes an extra slot on the first_member of each touched group, and the outer's residual WHERE re-equates the groups' columns through the standard Var remap. */
-  /* §2 PK / NOT-NULL UNIQUE FD support.  @c determined_in[c*natoms+j]
+  /* PK / NOT-NULL UNIQUE FD support.  @c determined_in[c*natoms+j]
    * @c == @c true means class @c c is functionally determined inside
    * RTE @c j (some key whose every column's class is anchored on @c j
    * exists in @c j's relation, and @c c is anchored on @c j by a
@@ -789,7 +790,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   bool    ok;
 
   *groups_out = NIL;
-  /* The §1 constant-selection elimination is handled upstream by
+  /* The constant-selection elimination is handled upstream by
    * @c apply_constant_selection_fd_pass, so @p quals already has
    * the redundant within-class equijoins dropped by the time this
    * function is reached. */
@@ -873,17 +874,17 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     }
   }
 
-  /* §2 -- Dalvi & Suciu 2007 §5.1 induced FDs from PRIMARY KEYs and
-   * NOT-NULL UNIQUE constraints.  For each base relation in the FROM
-   * list, look up its keys via the per-backend cache; for every key
-   * @c K every of whose columns is anchored on the relation (i.e.
-   * appears in the query as a Var of that RTE), mark every class
-   * anchored on the same RTE by a non-key column as @em FD-determined
-   * within that RTE.  The intuition: under the key, each non-key
-   * column is a function of the key's columns, so the class
-   * containing the non-key column does not contribute an independent
-   * existential to the relation -- exactly the FD-aware atom-set
-   * reduction §2 prescribes.
+  /* PK-FD pass -- Dalvi & Suciu 2007 §5.1 induced FDs from PRIMARY
+   * KEYs and NOT-NULL UNIQUE constraints.  For each base relation in
+   * the FROM list, look up its keys via the per-backend cache; for
+   * every key @c K every of whose columns is anchored on the
+   * relation (i.e. appears in the query as a Var of that RTE), mark
+   * every class anchored on the same RTE by a non-key column as
+   * @em FD-determined within that RTE.  The intuition: under the
+   * key, each non-key column is a function of the key's columns, so
+   * the class containing the non-key column does not contribute an
+   * independent existential to the relation -- the FD-aware atom-set
+   * reduction the project-safety condition prescribes.
    *
    * Skipped relations:
    *
@@ -917,9 +918,9 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
        * every value; under such a free column the FD @c K @c → @c A
        * does not reduce @c A's atom-set (a different free-column
        * value would give a different @c A, so @c A is not truly
-       * determined within the RTE).  This is the composite-PK
-       * soundness trap of TODO §2: "partial match (some PK columns
-       * equated, others not) does not give the FD". */
+       * determined within the RTE).  Composite-PK soundness trap:
+       * a partial match (some PK columns equated, others not) does
+       * not give the FD. */
       for (kc = 0; kc < key->col_n; kc++) {
         int idx = safe_var_index(vctx.vars,
                                  (Index) (j + 1),
@@ -956,23 +957,23 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     }
   }
 
-  /* §3 -- deterministic-relation transparency (Gatterbauer & Suciu
-   * 2015 dissociation framework; see TODO §3).  A relation that is
-   * not provenance-tracked (no @c provsql column @em and no metadata
-   * entry in the per-table cache) contributes probability-1 tuples:
-   * dissociating tuples in a deterministic relation does not change
-   * the query's probability, so the relation is structurally
-   * transparent -- it filters the cross product but adds nothing to
-   * atom-set membership.  We model that by marking every union-find
-   * class as FD-determined within the deterministic RTE, reusing
-   * the @c DETERMINED matrix the §2 PK-FD pass already populates;
-   * the existing @c fd_aware_mode then drops the deterministic atom
+  /* Deterministic-relation transparency (Gatterbauer & Suciu 2015
+   * dissociation framework).  A relation that is not provenance-
+   * tracked (no @c provsql column @em and no metadata entry in the
+   * per-table cache) contributes probability-1 tuples: dissociating
+   * tuples in a deterministic relation does not change the query's
+   * probability, so the relation is structurally transparent -- it
+   * filters the cross product but adds nothing to atom-set
+   * membership.  We model that by marking every union-find class
+   * as FD-determined within the deterministic RTE, reusing the
+   * @c DETERMINED matrix the PK-FD pass already populates; the
+   * existing @c fd_aware_mode then drops the deterministic atom
    * from each class's @c atoms_fd and the pairwise hierarchicality
    * check accepts star-schema queries that the raw atom-count check
    * would refuse.
    *
-   * Soundness guards (TODO §3 + coordination with the Part 2
-   * correlation registry):
+   * Soundness guards (in coordination with the correlation-registry
+   * follow-up):
    *
    *  - @c rte->rtekind @c == @c RTE_RELATION : excluded by the
    *    candidate gate already.
@@ -1091,17 +1092,18 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     }
   }
 
-  /* §2 fallback: no class touches every atom under the raw count, but
-   * the FD-aware atom-sets might still satisfy pairwise nested-or-
-   * disjoint hierarchicality.  Concretely, we accept the textbook
-   * H-query under a PK on the middle atom (Dalvi & Suciu 2007 §5.1
-   * @c R(x),S(x,y),T(y) with PK on @c S.x): after the FD reduction
-   * @c atoms(B) drops to @c {T}, leaving @c {R,S} and @c {T} as
-   * disjoint atom-sets covering every atom.  In that case there is no
-   * global root, but the rewrite still works: each atom is wrapped in
-   * a flat @c SELECT @c DISTINCT exposing every class anchored on it
-   * as a separate slot, and the outer's residual equijoins resolve
-   * through @c safe_remap_vars_mutator on the matching slot's
+  /* FD-aware-mode fallback: no class touches every atom under the
+   * raw count, but the FD-aware atom-sets might still satisfy
+   * pairwise nested-or-disjoint hierarchicality.  Concretely, we
+   * accept the textbook H-query under a PK on the middle atom
+   * (Dalvi & Suciu 2007 §5.1 @c R(x),S(x,y),T(y) with PK on @c S.x):
+   * after the FD reduction @c atoms(B) drops to @c {T}, leaving
+   * @c {R,S} and @c {T} as disjoint atom-sets covering every atom.
+   * In that case there is no global root, but the rewrite still
+   * works: each atom is wrapped in a flat @c SELECT @c DISTINCT
+   * exposing every class anchored on it as a separate slot, and the
+   * outer's residual equijoins resolve through
+   * @c safe_remap_vars_mutator on the matching slot's
    * @c base_attno.
    *
    * Conditions for entering @c fd_aware_mode:
@@ -1123,8 +1125,8 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
    *  5. The query has no @em raw partial-coverage classes whose
    *     FD-aware count is still in @c [2, natoms-1].  Such classes
    *     would normally route through the multi-level / inner-group
-   *     path, which is not adapted to per-atom anchors yet; the §2
-   *     fd-aware mode therefore demands every multi-atom class to
+   *     path, which is not adapted to per-atom anchors yet; the
+   *     FD-aware mode therefore demands every multi-atom class to
    *     either cover all atoms (raw root, handled above) or to land
    *     on a disjoint pair-block via the FD reduction. */
   if (root_class < 0) {
@@ -1203,18 +1205,17 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
        *
        *   1. FD-aware preference -- pick a class that anchors on the
        *      atom @em and is not FD-determined there.  This is the
-       *      §2 case: under PK on @c S.x, class @c {S.y, T.y} drops
-       *      its @c S anchor for atom-set purposes, so @c S's local
-       *      root should be the @c {R.x, S.x} class instead.
+       *      PK-FD case: under PK on @c S.x, class @c {S.y, T.y}
+       *      drops its @c S anchor for atom-set purposes, so @c S's
+       *      local root should be the @c {R.x, S.x} class instead.
        *   2. Fallback -- atoms with every anchored class FD-determined
-       *      (the §3 deterministic-relation case: every class is
-       *      tagged determined inside the deterministic atom) still
-       *      need a slot column for the outer's residual equijoin
-       *      to resolve through.  Use the first anchored class
-       *      regardless of FD status.  The DISTINCT wrap on the slot
-       *      column collapses duplicate keys so each Sales token
-       *      still appears once across the cross product, preserving
-       *      read-once. */
+       *      (the deterministic-relation case: every class is tagged
+       *      determined inside the deterministic atom) still need a
+       *      slot column for the outer's residual equijoin to resolve
+       *      through.  Use the first anchored class regardless of FD
+       *      status.  The DISTINCT wrap on the slot column collapses
+       *      duplicate keys so each probabilistic token still appears
+       *      once across the cross product, preserving read-once. */
       atom_anchor_class = palloc(natoms * sizeof(int));
       for (j = 0; j < natoms; j++)
         atom_anchor_class[j] = -1;
@@ -1496,7 +1497,7 @@ skip_partial_coverage:
    * touches an atom subset that doesn't match any outer or inner
    * slot would leak into the outer scope with no wrap to host it.
    *
-   * In @c fd_aware_mode (§2 multi-anchor), every multi-atom class is
+   * In @c fd_aware_mode (multi-anchor), every multi-atom class is
    * exposed as a slot on every atom it anchors -- so any Var of a
    * multi-atom class is guaranteed a matching slot in its atom's
    * @c proj_slots regardless of FD-determined status.  The check
@@ -1512,7 +1513,7 @@ skip_partial_coverage:
       if (class_atom_count[c] == 1 && in_targetlist[i])
         continue;
       if (provsql_verbose >= 30)
-        provsql_notice("safe-query rewriter (§2): Var (varno=%u, varattno=%d) "
+        provsql_notice("safe-query rewriter (fd-aware): Var (varno=%u, varattno=%d) "
                        "belongs to a class with no outer slot",
                        (unsigned) vars_arr[i]->varno,
                        (int) vars_arr[i]->varattno);
@@ -1584,11 +1585,11 @@ skip_partial_coverage:
       if (cls[i] != i || i == local_root)
         continue;
       if (fd_aware_mode) {
-        /* §2 mode: expose every multi-atom class anchored on this
-         * atom, irrespective of FD-determined status -- the slot is
-         * needed for the outer's residual equijoin to resolve via
-         * @c safe_remap_vars_mutator.  Singleton classes still go
-         * through the head-Var path below. */
+        /* FD-aware mode: expose every multi-atom class anchored on
+         * this atom, irrespective of FD-determined status -- the
+         * slot is needed for the outer's residual equijoin to
+         * resolve via @c safe_remap_vars_mutator.  Singleton classes
+         * still go through the head-Var path below. */
         if (class_atom_count[i] < 2 || class_atom_count[i] > natoms)
           continue;
       } else if (class_atom_count[i] != natoms) {
@@ -3075,7 +3076,7 @@ static Query *rewrite_multi_component(const constants_t *constants,
 }
 
 /**
- * @brief §1 constant-selection elimination pre-pass.
+ * @brief Constant-selection elimination pre-pass.
  *
  * Implements Dalvi & Suciu 2007 §5.1's induced-FD construction
  * (@c ∅ @c → @c R.a from a @c R.a @c = @c c conjunct), specialised
@@ -3112,9 +3113,9 @@ static Query *rewrite_multi_component(const constants_t *constants,
  * @c process_query re-entry then collapses each constant-pinned
  * atom to a single aggregated @c gate_plus token, while the
  * remaining atoms keep the standard single-component hierarchical
- * shape.  This is the read-once factoring §1 prescribes -- the
- * pinned atom's contribution factors out as an independent
- * @c gate_times child of the result.
+ * shape.  This is the read-once factoring constant-pinning
+ * prescribes -- the pinned atom's contribution factors out as an
+ * independent @c gate_times child of the result.
  */
 static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
                                              Node **residual_in_out) {
@@ -3331,7 +3332,7 @@ typedef struct safe_unify_remap_ctx {
 
 /**
  * @brief Tree mutator that renumbers @c Var.varno and
- *        @c RangeTblRef.rtindex through the §5 self-join unification
+ *        @c RangeTblRef.rtindex through the PK-unifiable self-join
  *        map.
  *
  * Applied to every node of the unified @c Query : the @c targetList,
@@ -3384,7 +3385,7 @@ static Node *safe_unify_remap_mutator(Node *node,
 }
 
 /**
- * @brief §5 PK-unifiable self-join detection and unification.
+ * @brief PK-unifiable self-join detection and unification.
  *
  * A query of shape @c R @c r1, @c R @c r2 @c WHERE @c r1.x @c =
  * @c r2.x with @c PRIMARY @c KEY @c (x) on @c R forces @c r1 and
@@ -3409,7 +3410,7 @@ static Node *safe_unify_remap_mutator(Node *node,
  *    and @c jointree->quals is rewritten to point at the survivor's
  *    new (compacted) rtindex.
  *
- * Soundness traps (TODO §5):
+ * Soundness traps:
  *
  *  - Composite PK requires every column to be equated; the pairwise
  *    check uses the union-find closure so transitive equijoins
@@ -3417,11 +3418,10 @@ static Node *safe_unify_remap_mutator(Node *node,
  *  - Partial unification (3 RTEs of the same relid where only two
  *    have their PK columns equated) bails the entire group: the
  *    candidate gate would otherwise still refuse the surviving
- *    duplicates.  This matches the TODO's "start with full
- *    unification or full bail" guidance.
- *  - NOT-NULL UNIQUE is FD-equivalent to PRIMARY KEY (see §2); the
- *    same key cache feeds this pass, and the same NOT-NULL guard
- *    excludes nullable UNIQUEs.
+ *    duplicates.  Full unification or full bail.
+ *  - NOT-NULL UNIQUE is FD-equivalent to PRIMARY KEY (the PK-FD pass
+ *    above treats them identically); the same key cache feeds this
+ *    pass, and the same NOT-NULL guard excludes nullable UNIQUEs.
  */
 static Query *try_pk_self_join_unification(Query *q) {
   int       natoms = list_length(q->rtable);
@@ -3471,10 +3471,10 @@ static Query *try_pk_self_join_unification(Query *q) {
 
   /* Build the union-find over base-level Vars referenced in
    * targetList and jointree->quals.  We deliberately do not consult
-   * @c per_atom_quals here because §5 cares about cross-RTE
-   * equijoins only -- a @c Var @c = @c Const conjunct is atom-local
-   * and pins a single Var, but unification requires Vars on two
-   * distinct RTEs to share a class. */
+   * @c per_atom_quals here because PK unification cares about
+   * cross-RTE equijoins only -- a @c Var @c = @c Const conjunct is
+   * atom-local and pins a single Var, but unification requires Vars
+   * on two distinct RTEs to share a class. */
   expression_tree_walker((Node *) q->targetList,
                          safe_collect_vars_walker, &vctx);
   if (q->jointree && q->jointree->quals)
@@ -3707,7 +3707,7 @@ static Query *try_pk_self_join_unification(Query *q) {
 }
 
 /**
- * @brief §6 disjoint-constant self-join certification.
+ * @brief Disjoint-constant self-join certification.
  *
  * When two (or more) RTEs over the same relation each carry a
  * @c Var @c = @c Const conjunct on the same column with
@@ -3720,8 +3720,8 @@ static Query *try_pk_self_join_unification(Query *q) {
  * pushed in) factors the relation into disjoint virtual partitions,
  * each acting as an independent atom.
  *
- * This pre-pass runs after @c try_pk_self_join_unification (§5)
- * and before @c is_safe_query_candidate.  For each same-relid
+ * This pre-pass runs after @c try_pk_self_join_unification and
+ * before @c is_safe_query_candidate.  For each same-relid
  * group of >1 RTE remaining in @c q->rtable, it checks pairwise
  * whether every pair has @c Var @c = @c Const conjuncts on the
  * same @c varattno with @em provably distinct literal values.  When
@@ -3735,11 +3735,11 @@ static Query *try_pk_self_join_unification(Query *q) {
  * time.  Conservative: when types disagree or when @c datumIsEqual
  * cannot decide (TOAST'ed varlena where the stored representation
  * differs from the logical value), the pair is treated as NOT
- * provably-disjoint -- §6 simply doesn't fire on that group, and
- * the candidate gate's existing shared-relid bail refuses the
- * query as before.
+ * provably-disjoint -- the certification simply doesn't fire on
+ * that group, and the candidate gate's existing shared-relid bail
+ * refuses the query as before.
  *
- * Soundness traps (TODO §6):
+ * Soundness traps:
  *
  *  - Disjointness on the @em same column (@c varattno match).  A
  *    pair like @c r1.kind @c = @c 'A' @c AND @c r2.color @c = @c
@@ -3757,7 +3757,7 @@ static Query *try_pk_self_join_unification(Query *q) {
  *    enforces this through the operator-OID check.
  *  - Transitive disjointness via FDs (e.g. @c kind @c → @c
  *    category, with @c r1.category @c = @c 'X' / @c r2.category
- *    @c = @c 'Y') is deferred to §4's general closure.
+ *    @c = @c 'Y') is deferred to the general FD closure follow-up.
  */
 static Bitmapset *
 try_disjoint_constant_self_join_split(Query *q) {
@@ -3772,8 +3772,8 @@ try_disjoint_constant_self_join_split(Query *q) {
 
   /* Fast exit when no duplicate-relid pair appears.  Same
    * structural check as @c try_pk_self_join_unification's gate;
-   * keeps the §6 path off the hot path entirely for the common
-   * self-join-free case. */
+   * keeps the certification path off the hot path entirely for the
+   * common self-join-free case. */
   {
     bool      found_dup = false;
     List     *seen      = NIL;
@@ -3954,8 +3954,8 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   strip_group_rte_pg18(q);
 #endif
 
-  /* §5 PK-unifiable self-join pre-pass.  When two RTEs over the
-   * same relation have all PRIMARY KEY (or NOT-NULL UNIQUE) columns
+  /* PK-unifiable self-join pre-pass.  When two RTEs over the same
+   * relation have all PRIMARY KEY (or NOT-NULL UNIQUE) columns
    * equated through the union-find closure, the key proves they
    * refer to the same tuple; merge the duplicate RTEs into a single
    * survivor before the shared-relid bail in @c is_safe_query_candidate
@@ -3967,20 +3967,20 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
       q = unified;
   }
 
-  /* §6 disjoint-constant self-join pre-pass.  Same-relid groups
-   * that survive §5 (no PK to collapse them) can still be
-   * rescued when their constant predicates prove their tuple-sets
-   * disjoint.  This call certifies eligible relids; the candidate
-   * gate skips its shared-relid bail for those. */
+  /* Disjoint-constant self-join pre-pass.  Same-relid groups that
+   * survive the PK-unification step (no PK to collapse them) can
+   * still be rescued when their constant predicates prove their
+   * tuple-sets disjoint.  This call certifies eligible relids; the
+   * candidate gate skips its shared-relid bail for those. */
   {
-    Bitmapset *approved6 = try_disjoint_constant_self_join_split(q);
-    if (!is_safe_query_candidate(constants, q, approved6)) {
-      if (approved6)
-        bms_free(approved6);
+    Bitmapset *approved = try_disjoint_constant_self_join_split(q);
+    if (!is_safe_query_candidate(constants, q, approved)) {
+      if (approved)
+        bms_free(approved);
       return NULL;
     }
-    if (approved6)
-      bms_free(approved6);
+    if (approved)
+      bms_free(approved);
   }
 
   /* Atom-local pre-pass: pull out atom-local WHERE conjuncts so the
@@ -3994,16 +3994,16 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   safe_split_quals(q->jointree ? q->jointree->quals : NULL,
                    natoms, per_atom, &residual);
 
-  /* §1 constant-selection elimination pre-pass.  Identifies
-   * union-find classes pinned to a literal by some @c Var @c =
-   * @c Const conjunct, propagates the literal to every Var in the
-   * class (atom-local synthesised conjuncts), and drops the redundant
+  /* Constant-selection elimination pre-pass.  Identifies union-find
+   * classes pinned to a literal by some @c Var @c = @c Const
+   * conjunct, propagates the literal to every Var in the class
+   * (atom-local synthesised conjuncts), and drops the redundant
    * cross-atom equijoins.  The multi-component dispatch immediately
-   * below then sees constant-pinned atoms as separate components and
-   * routes them through the existing per-component subquery shape,
-   * which produces the read-once @c gate_times factoring §1 needs
-   * (each pinned atom becomes its own @c gate_plus child of the top
-   * @c gate_times). */
+   * below then sees constant-pinned atoms as separate components
+   * and routes them through the existing per-component subquery
+   * shape, which produces the read-once @c gate_times factoring
+   * constant-pinning needs (each pinned atom becomes its own
+   * @c gate_plus child of the top @c gate_times). */
   apply_constant_selection_fd_pass(q, per_atom, &residual);
 
   /* Multi-component dispatch: when the atoms split into more than
@@ -4036,8 +4036,8 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
     return NULL;
   }
 
-  /* Attach per-atom pushed conjuncts to the rewrite descriptors.  The
-   * §1 constant-selection pre-pass above may have appended
+  /* Attach per-atom pushed conjuncts to the rewrite descriptors.
+   * The constant-selection pre-pass above may have appended
    * synthesised @c Var @c = @c const conjuncts to some atoms' lists
    * (the propagated literals from constant-pinned classes); they
    * follow the same atom-local pushdown path as user-written
