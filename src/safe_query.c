@@ -656,6 +656,18 @@ static Node *safe_pushed_remap_mutator(Node *node,
     if (v->varlevelsup == 0 && v->varno == ctx->outer_rtindex) {
       Var *nv = (Var *) copyObject(v);
       nv->varno = 1;
+#if PG_VERSION_NUM >= 130000
+      /* PG 13+ keeps a parallel @c varnosyn / @c varattnosyn for
+       * @c ruleutils.c-style query deparsing.  Updating only
+       * @c varno here leaves @c varnosyn pointing at the outer atom's
+       * (now-stale) rtindex; @c pg_get_querydef then dereferences a
+       * Var whose syntactic-rtindex slot resolves through a different
+       * RTE than the semantic one, recurses into that RTE's
+       * subquery, and (because the syntactic dereference always finds
+       * its way back to the same Var) stack-overflows.  Mirror the
+       * semantic remap on the syntactic side. */
+      nv->varnosyn = 1;
+#endif
       return (Node *) nv;
     }
     return node;
