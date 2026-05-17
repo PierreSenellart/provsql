@@ -537,6 +537,56 @@ SELECT bench_one(
     GROUP BY 1');
 
 -- ----------------------------------------------------------------------
+-- Propagation extensions: view descent, INNER / CROSS JoinExpr
+-- flattening, CTAS-derived TID inheritance.  Each of these turns
+-- a query shape the OFF-path baseline still handles into an ON-path
+-- read-once rewrite that used to be refused.
+-- ----------------------------------------------------------------------
+
+-- View + CTAS-derived fixtures shared by the propagation shapes.
+CREATE VIEW bench_v_a AS SELECT * FROM bench_a;
+CREATE TABLE bench_derived_a AS SELECT x, y, z, provsql FROM bench_a;
+
+-- (23) View descent : the subquery-inlining pre-pass lifts a simple
+-- view body into the outer rtable so the safe-query rewriter sees
+-- a flat join over base relations.  Same gate factoring as the
+-- 2-atom textbook shape (1), just reached through a view.
+SELECT bench_one(
+  'view descent: VIEW(A)(x) ⋈ B(x), GROUP BY x',
+  'SELECT a.x AS x, provenance() AS prov
+     FROM bench_v_a a, bench_b b WHERE a.x = b.x GROUP BY a.x');
+
+-- (24) ANSI INNER JOIN syntax : the JoinExpr-flattening pre-pass
+-- dissolves the INNER JOIN into a flat fromlist + AND-merged ON
+-- clause so the candidate gate sees the same shape as the
+-- comma-style FROM A, B WHERE A.x = B.x counterpart.
+SELECT bench_one(
+  'INNER JOIN: A(x) JOIN B(x) ON, GROUP BY x',
+  'SELECT a.x AS x, provenance() AS prov
+     FROM bench_a a INNER JOIN bench_b b ON a.x = b.x
+    GROUP BY a.x');
+
+-- (25) ANSI INNER JOIN inside a subquery : flattening recurses
+-- through RTE_SUBQUERY bodies before inlining, so a wrapped
+-- INNER JOIN gets flattened in the inner body, then the inlining
+-- pre-pass lifts the now-flat subquery into the outer rtable.
+SELECT bench_one(
+  'wrapped INNER JOIN: SELECT ... FROM (A JOIN B ON), GROUP BY x',
+  'SELECT s.x AS x, provenance() AS prov FROM (
+     SELECT a.x, a.provsql FROM bench_a a INNER JOIN bench_b b
+       ON a.x = b.x
+   ) s GROUP BY s.x');
+
+-- (26) CTAS-derived TID join : bench_derived_a inherited TID +
+-- ancestors = {bench_a} from the lineage hook ; joining it with
+-- bench_b (ancestors = {bench_b}) clears the ancestry-disjointness
+-- gate and the rewriter fires.
+SELECT bench_one(
+  'CTAS-derived: derived(A) ⋈ B on x, GROUP BY x',
+  'SELECT d.x AS x, provenance() AS prov
+     FROM bench_derived_a d, bench_b b WHERE d.x = b.x GROUP BY d.x');
+
+-- ----------------------------------------------------------------------
 -- Report.
 -- ----------------------------------------------------------------------
 
@@ -559,7 +609,9 @@ ORDER BY shape;
 
 -- Cleanup.
 DROP FUNCTION bench_one(text, text);
+DROP VIEW bench_v_a;
 DROP TABLE bench_a, bench_b, bench_c, bench_d, bench_e, bench_bid,
            bench_s_pk, bench_t, bench_a_pk,
            bench_tri_r, bench_tri_s, bench_tri_t,
-           bench_partitioned, bench_dim_p, bench_dim_c;
+           bench_partitioned, bench_dim_p, bench_dim_c,
+           bench_derived_a;
