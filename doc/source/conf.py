@@ -193,6 +193,9 @@ _C_FUNC_MAP = {
     'needs_having_lift':         '/doxygen-c/html/provsql_8c.html#ad70fe33958c5308511eaa33071db07ec',
     'add_eq_from_Quals_to_Expr': '/doxygen-c/html/provsql_8c.html#aa5f16ef0c73e1c7d651b02311994605d',
     'add_eq_from_OpExpr_to_Expr':'/doxygen-c/html/provsql_8c.html#abed26c95056d10b1f670bd37d840d989',
+    # classify_query.h — query-time TID/BID/OPAQUE classifier
+    'provsql_classify_query':       '/doxygen-c/html/classify__query_8h.html#aafc42e9a94c5f918f87e000a971edcf1',
+    'provsql_classify_emit_notice': '/doxygen-c/html/classify__query_8h.html#a66b72aec3f370db5f259ccd410c09118',
     # provsql_utils.h — OID cache
     'constants_t':               '/doxygen-c/html/structconstants__t.html',
     'get_constants':             '/doxygen-c/html/provsql__utils_8h.html#a75e7d48321cea0156f8ad4c039c877a0',

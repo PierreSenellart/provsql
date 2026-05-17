@@ -121,10 +121,17 @@ static void classify_walk(Query                 *q,
   /* Walk the range table.  RTE_RELATION entries with metadata are
    * collected as sources; @c RTE_SUBQUERY recurses (view bodies and
    * inline subqueries) so the underlying base relations join the
-   * accumulator; the PG 18 virtual @c RTE_GROUP is skipped
-   * transparently.  Any other @c rtekind (@c RTE_JOIN, @c RTE_VALUES,
-   * @c RTE_CTE, @c RTE_FUNCTION, ...) trips the shape gate so we
-   * conservatively report OPAQUE. */
+   * accumulator.  Any other @c rtekind (@c RTE_JOIN, @c RTE_VALUES,
+   * @c RTE_CTE, @c RTE_FUNCTION, the PG 18 synthetic @c RTE_GROUP,
+   * ...) trips the shape gate so we conservatively report OPAQUE.
+   * @c RTE_GROUP appears alongside the user RTEs when @c q->groupClause
+   * is non-empty -- our shape gate already rejects @c groupClause
+   * upstream, so by the time control reaches this loop on a GROUP BY
+   * query @c *shape_ok is already false and the catch-all here is
+   * just re-asserting it without enumerating @c RTE_GROUP as a
+   * source.  Treating it as a generic non-source rtekind keeps the
+   * file source-compatible across PG 12-18+ without a version
+   * guard. */
   foreach (lc, q->rtable) {
     RangeTblEntry      *rte = (RangeTblEntry *) lfirst(lc);
     ProvenanceTableInfo info;
@@ -135,8 +142,6 @@ static void classify_walk(Query                 *q,
         *sole_relid = rte->relid;
         (*n_meta)++;
       }
-    } else if (rte->rtekind == RTE_GROUP) {
-      /* PG 18 virtual entry; skip without invalidating the shape. */
     } else if (rte->rtekind == RTE_SUBQUERY) {
       /* Descend.  The same shape gate is applied to the inner
        * @c Query : a @c SubLink or set operation inside the
