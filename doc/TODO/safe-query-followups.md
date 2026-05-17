@@ -355,13 +355,18 @@ for a future slice.
 - **FD chases through views and CTAS-derived relations.**  The PK-FD
   pass is currently restricted to FROM lists of base relations.
   Extending it through views and `CREATE TABLE AS` -derived tables
-  needs the TID/BID classifier in the TID/BID-propagation section
-  above to mature (in particular : independent-TID join inference,
-  view descent, and the inter-relation correlation registry that
-  tracks ancestry to refuse unsafe FROM lists).  *Deferred until that
-  work lands ; the CTAS-correlation trap on deterministic atoms
-  (`CREATE TABLE foo AS SELECT * FROM <tracked>` without
-  `add_provenance`) is the most visible symptom.*
+  was blocked on the TID/BID-propagation work that landed in the
+  `safe_queries` branch (view descent in the safe-query rewriter,
+  CTAS lineage hook, ancestry-based disjointness gate,
+  independent-TID join inference, BID block-key preservation under
+  projection / GROUP BY).  The propagation prerequisites are now in
+  place ; the remaining work is to teach the PK-FD pass itself to
+  follow the lineage rather than stopping at view / CTAS-derived
+  RTEs.  *Still deferred ; the CTAS-correlation trap on
+  deterministic atoms (`CREATE TABLE foo AS SELECT * FROM
+  <tracked>` without `add_provenance`) is the most visible
+  symptom, but in practice it's covered by the CTAS hook seeding
+  ancestry on lineage-bearing CTAS now.*
 
 - **Data-safe plans.**  FDs that hold on the *instance* but not in the
   schema, per Jha, Olteanu & Suciu (EDBT 2010).  Larger project ; the
@@ -369,3 +374,47 @@ for a future slice.
   trusting it.  Separate from the schema-FD-aware analysis the FD
   closure currently implements.  *Deferred ; revisit only with a
   clearly-motivated use case.*
+
+## TID / BID propagation follow-ups
+
+The TID / BID propagation roadmap shipped in full on the
+`safe_queries` branch with one exception, deliberately deferred for
+the tradeoff described below.
+
+- **`UNION ALL` of compatible BID legs (was "Slice E").**  The
+  classifier reports OPAQUE on a `UNION ALL` whose legs are BID
+  under the same block-key column at the same target-list position,
+  and the CTAS lineage hook propagates that as no metadata recorded
+  for the derived relation.  This is correct (no false TID / BID
+  classifications), just a missed optimisation.
+
+  *Why not implemented.* A row from leg A and a row from leg B with
+  the same block-key value are independent (different source
+  relations), not mutually exclusive, so the union is not BID under
+  the natural key.  Recovering BID-ness would require synthesising
+  a composite block-key column `(leg_id, k)` and surfacing it on
+  the derived relation -- which changes the user-visible schema in
+  a non-obvious way (the user wrote `CREATE TABLE t AS SELECT k
+  FROM bid_a UNION ALL SELECT k FROM bid_b` and would end up with a
+  table whose schema has a column they didn't ask for).  The
+  tradeoff between automatic BID coverage and surprising-column
+  injection didn't favour the synthesis path.
+
+  *Two future paths.*
+
+  1. **Disjoint-range certification** : when the legs' block-key
+     value ranges are provably disjoint (e.g., a leg with
+     `WHERE k < 100` UNION ALL with another with `WHERE k >= 100`),
+     the natural `k` column suffices as the block key and no
+     synthesis is needed.  The CTAS hook could be taught to
+     recognise such patterns, possibly via the same
+     `safe_is_var_const_equality`-style detector the
+     disjoint-constant self-join pass in :cfile:`src/safe_query.c`
+     uses.  ~100-150 LOC, no schema impact.
+  2. **Opt-in synthesis via a GUC** :
+     `provsql.synthesize_union_leg_id = off` by default ; `on`
+     adds `__provsql_leg_id` to derived tables that would otherwise
+     miss the BID promotion.  Documented as an advanced option ;
+     only fires when the user requests it.  ~200-300 LOC including
+     parse-tree surgery for the new column and the composite
+     block-key recording on the worker side.
