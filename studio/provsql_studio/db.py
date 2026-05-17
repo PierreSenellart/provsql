@@ -328,7 +328,17 @@ SELECT
     -- (1.5.0 schema before the upgrade has run) degrades to NULL
     -- instead of erroring the whole query.
     (SELECT ti.kind
-     FROM provsql.get_table_info(c.oid) ti) AS prov_kind
+     FROM provsql.get_table_info(c.oid) ti) AS prov_kind,
+    -- True when an unqualified reference to this relation in the
+    -- current session's search_path would resolve to this exact OID.
+    -- Used by the schema panel : a click on the row prefills
+    -- `SELECT * FROM <relname>;` only when it would actually find
+    -- the relation we showed; otherwise it qualifies with the
+    -- schema.  to_regclass(quote_ident(...)) does the same lookup
+    -- the parser would, so case-sensitive and special-character
+    -- names are handled correctly.
+    (to_regclass(quote_ident(c.relname))::oid
+     IS NOT DISTINCT FROM c.oid) AS bare_resolves
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -370,7 +380,7 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                 )
             rows = cur.fetchall()
         for (schema, table, kind, cols, types,
-             has_prov, is_mapping, prov_kind) in rows:
+             has_prov, is_mapping, prov_kind, bare_resolves) in rows:
             propagates = bool(has_prov) or (
                 kind in ("view", "matview")
                 and _view_propagates_provenance(conn, schema, table)
@@ -390,6 +400,12 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                 # the schema panel so the user can tell at a glance
                 # which probability-evaluation semantics apply.
                 "prov_kind": prov_kind,
+                # True when an unqualified reference to the table name
+                # would resolve to this exact relation under the current
+                # search_path. Drives the schema-panel click handler's
+                # choice between `SELECT * FROM staff` and
+                # `SELECT * FROM view_demo.staff`.
+                "bare_resolves": bool(bare_resolves),
             })
     return out
 

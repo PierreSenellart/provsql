@@ -1044,10 +1044,6 @@
 
     let loaded = false;
     let entries = [];
-    // True when every relation lives in the same schema, so we can insert
-    // the bare table name on click instead of the qualified schema.table
-    // form. Multi-schema databases keep the qualified form to disambiguate.
-    let singleSchema = true;
 
     async function load() {
       body.innerHTML = '<p class="wp-schema__empty">Loading…</p>';
@@ -1055,7 +1051,6 @@
         const resp = await fetch('/api/schema');
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         entries = await resp.json();
-        singleSchema = new Set(entries.map(r => r.schema)).size <= 1;
         loaded = true;
         // Successful reload : clear the dirty flag so subsequent opens
         // reuse the cache until the next exec.
@@ -1106,7 +1101,12 @@
         html += `<h5 class="wp-schema__schema">${escapeHtml(schemaName)}</h5>`;
         for (const r of rels) {
           const qname  = `${r.schema}.${r.table}`;
-          const insert = singleSchema ? r.table : qname;
+          // `bare_resolves` is the Python side's authoritative answer to
+          // "would `SELECT ... FROM <bare>` find this exact relation
+          // under the current search_path?". Use the bare name only when
+          // the answer is yes; otherwise qualify so the click prefill
+          // actually executes against the relation the user clicked.
+          const insert = r.bare_resolves ? r.table : qname;
           // Hide the bookkeeping `provsql` uuid column from the user-visible
           // column list : its presence is what the PROV pill already signals.
           const visibleCols = r.columns.filter(c => c.name !== 'provsql');
