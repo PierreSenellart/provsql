@@ -4444,6 +4444,25 @@ static Query *try_inline_simple_subqueries(Query *q) {
     return NULL;
   }
 
+  /* PG 14 and 15 leave OLD / NEW rule-placeholder RTEs (relkind =
+   * RELKIND_VIEW, inFromCl = false) in any view body's rtable;
+   * @c inline_one_subquery copies the whole sub-rtable up so those
+   * placeholders land in @c new_q->rtable.  They share the view's
+   * relid (so the candidate gate's self-join check would mistakenly
+   * fire on them) and are never referenced from the jointree, so
+   * mark them as orphans for @c compact_orphan_rtes to drop. */
+  {
+    int idx = 1;
+    foreach (lc, new_q->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+      if (rte->rtekind == RTE_RELATION
+          && rte->relkind == RELKIND_VIEW
+          && !rte->inFromCl)
+        orphans = bms_add_member(orphans, idx);
+      idx++;
+    }
+  }
+
   compact_orphan_rtes(new_q, orphans);
   bms_free(orphans);
   return new_q;

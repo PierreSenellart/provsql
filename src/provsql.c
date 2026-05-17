@@ -25,6 +25,7 @@
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_class.h"           /* RELKIND_VIEW */
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
@@ -425,6 +426,16 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
     if (r->rtekind == RTE_RELATION) {
       ListCell *lc;
       AttrNumber attid = 1;
+
+      /* PG 14 and 15 leave the OLD/NEW rule-placeholder RTEs (relkind
+       * = RELKIND_VIEW, inFromCl = false) in the rewritten range table
+       * for any view body.  PG 16+ removes them.  They are never
+       * scanned and the planner does not build a RelOptInfo for them,
+       * so any Var we point at them later fails find_base_rel().
+       * Filter them out here; any post-rewrite RTE_RELATION whose
+       * relkind is still a view is one of these artifacts. */
+      if (r->relkind == RELKIND_VIEW)
+        continue;
 
       foreach (lc, r->eref->colnames) {
         const char *v = strVal(lfirst(lc));
