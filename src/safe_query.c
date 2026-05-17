@@ -222,6 +222,7 @@ typedef struct safe_rewrite_atom {
   Index       outer_rtindex;   ///< Assigned by the rewriter: this atom's slot in the rebuilt outer rtable.  Grouped atoms all share their group's outer_rtindex.
   Index       inner_rtindex;   ///< Assigned by the rewriter for grouped atoms only: position inside the inner sub-Query's rtable (1-based).  0 for outer-wrap atoms.
   AttrNumber  root_anchor_attno; ///< For grouped atoms: base @c attno of the root-class binding column inside this atom.  Used by the outer Var remap to recognise root-class references that should resolve to the inner sub-Query's single output column.
+  bool        is_constant_pinned; ///< Reserved for future §1 follow-up work; currently never set (§1 constant-pinned atoms are routed through the multi-component path before this struct is built, so each atom in @c rewrite_hierarchical_cq is unconditionally a regular hierarchical-component atom).
 } safe_rewrite_atom;
 
 /**
@@ -327,6 +328,66 @@ static bool safe_is_var_equality(Expr *qual, Var **l, Var **r) {
     return false;
   *l = lv;
   *r = rv;
+  return true;
+}
+
+/**
+ * @brief Recognise @c OpExpr nodes of shape @c Var @c = @c Const.
+ *
+ * Mirrors @c safe_is_var_equality but matches an equality between a
+ * base-level @c Var and a planner-time @c Const literal (in either argument
+ * order), again stripping @c RelabelType wrappers to see through binary-
+ * coercion casts.  This is the recogniser used by the §1 constant-selection
+ * elimination pass (Dalvi & Suciu 2007 §5.1, induced FD @c ∅ @c → @c R.a)
+ * to flag union-find roots as pinned to a literal.  Volatile predicates
+ * never reach this point: @c safe_split_quals routes them to the residual,
+ * and the constant-selection scan walks both @c per_atom and the residual
+ * but stops at any @c OpExpr that is not a plain @c Var/@c Const equality.
+ *
+ * On match, @p *var receives the base-level @c Var and @p *konst the
+ * literal; on no match, returns @c false without touching them.  NULL
+ * constants (@c constisnull) do not yield an FD -- equality to NULL is
+ * never satisfied in standard SQL semantics, so the planner would have
+ * already short-circuited the row at executor time, but a @c Var @c = @c
+ * NULL conjunct is still SQL-legal and we conservatively reject it as
+ * non-FD-inducing.
+ */
+static bool safe_is_var_const_equality(Expr *qual, Var **var, Const **konst) {
+  OpExpr *op;
+  Node   *ln, *rn;
+  Var    *v;
+  Const  *k;
+  Oid     expected;
+
+  if (!IsA(qual, OpExpr))
+    return false;
+  op = (OpExpr *) qual;
+  if (list_length(op->args) != 2)
+    return false;
+  ln = (Node *) linitial(op->args);
+  rn = (Node *) lsecond(op->args);
+  while (IsA(ln, RelabelType))
+    ln = (Node *) ((RelabelType *) ln)->arg;
+  while (IsA(rn, RelabelType))
+    rn = (Node *) ((RelabelType *) rn)->arg;
+  if (IsA(ln, Var) && IsA(rn, Const)) {
+    v = (Var *) ln;
+    k = (Const *) rn;
+  } else if (IsA(ln, Const) && IsA(rn, Var)) {
+    k = (Const *) ln;
+    v = (Var *) rn;
+  } else {
+    return false;
+  }
+  if (v->varlevelsup != 0)
+    return false;
+  if (k->constisnull)
+    return false;
+  expected = find_equality_operator(v->vartype, k->consttype);
+  if (expected == InvalidOid || op->opno != expected)
+    return false;
+  *var   = v;
+  *konst = k;
   return true;
 }
 
@@ -684,6 +745,10 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
   bool    ok;
 
   *groups_out = NIL;
+  /* The §1 constant-selection elimination is handled upstream by
+   * @c apply_constant_selection_fd_pass, so @p quals already has
+   * the redundant within-class equijoins dropped by the time this
+   * function is reached. */
 
   if (natoms < 2)
     return NIL;
@@ -1066,6 +1131,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     sa->group_id     = atom_group[j];
     sa->outer_rtindex = 0;
     sa->inner_rtindex = 0;
+    sa->is_constant_pinned = false;
     sa->root_anchor_attno = (AttrNumber) ANCHOR(root_class, j);
     if (sa->root_anchor_attno == 0)
       goto bail;                          /* impossible if root truly covers all */
@@ -1967,7 +2033,14 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
 
   /* Remap outer Vars: outer-wrap atoms resolve to their slot's column
    * of their atom's wrapping subquery; grouped atoms resolve to the
-   * group's inner sub-Query at output column 1. */
+   * group's inner sub-Query at output column 1; constant-pinned atoms
+   * expose only the synthesised anchor (the per-atom @c pushed_quals
+   * are already AND-injected into the inner subquery by
+   * @c safe_build_inner_wrap), so a Var referencing a pinned atom
+   * here would have no slot to resolve to -- the residual-cleanup
+   * pass should have dropped any such Var.  If one slips through,
+   * @c safe_remap_vars_mutator's pinned-atom branch raises @c bail
+   * and the rewriter falls back to the regular pipeline. */
   mctx.atoms = atoms;
   mctx.groups = groups;
   mctx.bail = false;
@@ -2542,6 +2615,244 @@ static Query *rewrite_multi_component(const constants_t *constants,
 }
 
 /**
+ * @brief §1 constant-selection elimination pre-pass.
+ *
+ * Implements Dalvi & Suciu 2007 §5.1's induced-FD construction
+ * (@c ∅ @c → @c R.a from a @c R.a @c = @c c conjunct), specialised
+ * to the safe-query rewriter's representation:
+ *
+ *  - Build a Var-level union-find from the equijoin conjuncts in
+ *    @p *residual_in_out.  Every pair of Vars that share an
+ *    equijoin (transitively, through the closure) lands in the same
+ *    equivalence class.
+ *  - Scan @p per_atom_quals[i] (atom-local conjuncts) and
+ *    @p *residual_in_out (cross-atom conjuncts) for @c Var @c = @c
+ *    Const matches.  Mark the matched Var's class repr as constant-
+ *    pinned, recording one of the literals for propagation.
+ *  - For every Var in a constant-pinned class, synthesise the
+ *    corresponding @c Var @c = @c const conjunct on the Var's atom's
+ *    @p per_atom_quals list (when not already present, dedup'd by
+ *    @c (varno,varattno)).  After this step every atom touching the
+ *    class carries the local filter, so the standard atom-local
+ *    pushdown path materialises it in the wrap.
+ *  - Drop top-level @c AND conjuncts of @p *residual_in_out whose
+ *    every base-level Var is in a constant-pinned class.  These are
+ *    the equijoin conjuncts that brought constant atoms together
+ *    (e.g. @c R.x @c = @c S.x under @c S.x @c = @c 42); after
+ *    propagation each side carries its own @c Var @c = @c const
+ *    filter, so the original equijoin is redundant and would only
+ *    prevent the rewriter from resolving columns the constant-pinned
+ *    atoms' wraps no longer project.
+ *
+ * Effect on the rest of @c try_safe_query_rewrite: with cross-atom
+ * equijoin links to constant-pinned atoms removed, those atoms
+ * become their own connected components, and the existing
+ * multi-component path in @c try_safe_query_rewrite handles them by
+ * emitting a separate inner sub-Query per component.  The recursive
+ * @c process_query re-entry then collapses each constant-pinned
+ * atom to a single aggregated @c gate_plus token, while the
+ * remaining atoms keep the standard single-component hierarchical
+ * shape.  This is the read-once factoring §1 prescribes -- the
+ * pinned atom's contribution factors out as an independent
+ * @c gate_times child of the result.
+ */
+static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
+                                             Node **residual_in_out) {
+  int     natoms = list_length(q->rtable);
+  safe_collect_vars_ctx vctx = { NIL };
+  List   *eq_pairs = NIL;
+  Var   **vars_arr;
+  int    *cls;
+  int     nvars;
+  int     i;
+  ListCell *lc;
+  bool   *is_constant_class;
+  Const **class_const_value;
+  List   *all_const_conjuncts = NIL;
+
+  if (natoms < 2)
+    return;
+
+  /* Collect distinct base-level Vars from targetList, residual,
+   * and every per-atom-quals list.  All of these may carry the
+   * Vars whose classes the equijoin closure will merge. */
+  expression_tree_walker((Node *) q->targetList,
+                         safe_collect_vars_walker, &vctx);
+  if (*residual_in_out)
+    expression_tree_walker(*residual_in_out,
+                           safe_collect_vars_walker, &vctx);
+  if (per_atom_quals != NULL) {
+    int j;
+    for (j = 0; j < natoms; j++) {
+      ListCell *qlc;
+      foreach (qlc, per_atom_quals[j])
+        expression_tree_walker((Node *) lfirst(qlc),
+                               safe_collect_vars_walker, &vctx);
+    }
+  }
+  nvars = list_length(vctx.vars);
+  if (nvars == 0)
+    return;
+
+  vars_arr = palloc(nvars * sizeof(Var *));
+  cls      = palloc(nvars * sizeof(int));
+  i = 0;
+  foreach (lc, vctx.vars) {
+    vars_arr[i] = (Var *) lfirst(lc);
+    cls[i] = i;
+    i++;
+  }
+
+  /* Union-find on residual equijoin conjuncts. */
+  if (*residual_in_out)
+    safe_collect_equalities(*residual_in_out, &eq_pairs);
+  for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
+    Var *lv, *rv;
+    int  li, ri, ci, cj, k;
+    lv = (Var *) lfirst(lc);
+    lc = my_lnext(eq_pairs, lc);
+    rv = (Var *) lfirst(lc);
+    li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
+    ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+    if (li < 0 || ri < 0)
+      continue;
+    ci = cls[li];
+    cj = cls[ri];
+    if (ci == cj)
+      continue;
+    for (k = 0; k < nvars; k++)
+      if (cls[k] == cj)
+        cls[k] = ci;
+  }
+
+  /* Scan per_atom + residual for @c Var @c = @c Const conjuncts;
+   * mark the matched Var's class as constant-pinned. */
+  is_constant_class = palloc0(nvars * sizeof(bool));
+  class_const_value = palloc0(nvars * sizeof(Const *));
+  if (per_atom_quals != NULL) {
+    int j;
+    for (j = 0; j < natoms; j++) {
+      ListCell *qlc;
+      foreach (qlc, per_atom_quals[j])
+        all_const_conjuncts = lappend(all_const_conjuncts, lfirst(qlc));
+    }
+  }
+  if (*residual_in_out)
+    safe_flatten_and(*residual_in_out, &all_const_conjuncts);
+
+  {
+    ListCell *qlc;
+    foreach (qlc, all_const_conjuncts) {
+      Expr  *e = (Expr *) lfirst(qlc);
+      Var   *v;
+      Const *k;
+      int    idx, root;
+      if (!safe_is_var_const_equality(e, &v, &k))
+        continue;
+      idx = safe_var_index(vctx.vars, v->varno, v->varattno);
+      if (idx < 0)
+        continue;
+      root = cls[idx];
+      if (!is_constant_class[root]) {
+        is_constant_class[root] = true;
+        class_const_value[root] = k;
+      }
+    }
+  }
+  list_free(all_const_conjuncts);
+
+  /* Propagate: for every Var in a constant-pinned class, ensure
+   * @c Var @c = @c const sits in the Var's atom's pushdown list. */
+  if (per_atom_quals != NULL) {
+    for (i = 0; i < nvars; i++) {
+      int    root = cls[i];
+      Var   *vp   = vars_arr[i];
+      Const *k    = class_const_value[root];
+      int    atom_idx;
+      bool   already = false;
+      ListCell *qlc;
+      OpExpr  *new_op;
+      Oid      eqop;
+      Var     *v_existing;
+      Const   *k_existing;
+      if (!is_constant_class[root] || k == NULL)
+        continue;
+      if (vp->varno < 1 || (int) vp->varno > natoms)
+        continue;
+      atom_idx = (int) vp->varno - 1;
+      foreach (qlc, per_atom_quals[atom_idx]) {
+        if (safe_is_var_const_equality((Expr *) lfirst(qlc),
+                                       &v_existing, &k_existing)
+            && v_existing->varno == vp->varno
+            && v_existing->varattno == vp->varattno) {
+          already = true;
+          break;
+        }
+      }
+      if (already)
+        continue;
+      eqop = find_equality_operator(vp->vartype, k->consttype);
+      if (eqop == InvalidOid)
+        continue;
+      new_op = (OpExpr *) makeNode(OpExpr);
+      new_op->opno         = eqop;
+      new_op->opfuncid     = InvalidOid;
+      new_op->opresulttype = BOOLOID;
+      new_op->opretset     = false;
+      new_op->opcollid     = InvalidOid;
+      new_op->inputcollid  = vp->varcollid;
+      new_op->args         = list_make2(copyObject(vp), copyObject(k));
+      new_op->location     = -1;
+      per_atom_quals[atom_idx] =
+          lappend(per_atom_quals[atom_idx], new_op);
+    }
+  }
+
+  /* Drop residual conjuncts whose every Var is in a constant-pinned
+   * class: those equijoins are now redundant (each side carries its
+   * own propagated @c Var @c = @c const filter). */
+  if (*residual_in_out != NULL) {
+    List     *conjuncts = NIL;
+    List     *kept = NIL;
+    ListCell *qlc;
+    safe_flatten_and(*residual_in_out, &conjuncts);
+    foreach (qlc, conjuncts) {
+      Node *cj = (Node *) lfirst(qlc);
+      safe_collect_vars_ctx cv = { NIL };
+      ListCell *vlc;
+      bool all_constant = true;
+      bool any_var = false;
+      expression_tree_walker(cj, safe_collect_vars_walker, &cv);
+      foreach (vlc, cv.vars) {
+        Var *v = (Var *) lfirst(vlc);
+        int idx = safe_var_index(vctx.vars, v->varno, v->varattno);
+        any_var = true;
+        if (idx < 0 || !is_constant_class[cls[idx]]) {
+          all_constant = false;
+          break;
+        }
+      }
+      list_free(cv.vars);
+      if (any_var && all_constant)
+        continue;
+      kept = lappend(kept, cj);
+    }
+    if (kept == NIL)
+      *residual_in_out = NULL;
+    else if (list_length(kept) == 1)
+      *residual_in_out = (Node *) linitial(kept);
+    else
+      *residual_in_out = (Node *) makeBoolExpr(AND_EXPR, kept, -1);
+    list_free(conjuncts);
+  }
+
+  pfree(is_constant_class);
+  pfree(class_const_value);
+  pfree(vars_arr);
+  pfree(cls);
+}
+
+/**
  * @brief Top-level entry point for the safe-query rewrite.
  *
  * Runs the shape gate then the hierarchy detector.  If both accept,
@@ -2586,6 +2897,18 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   safe_split_quals(q->jointree ? q->jointree->quals : NULL,
                    natoms, per_atom, &residual);
 
+  /* §1 constant-selection elimination pre-pass.  Identifies
+   * union-find classes pinned to a literal by some @c Var @c =
+   * @c Const conjunct, propagates the literal to every Var in the
+   * class (atom-local synthesised conjuncts), and drops the redundant
+   * cross-atom equijoins.  The multi-component dispatch immediately
+   * below then sees constant-pinned atoms as separate components and
+   * routes them through the existing per-component subquery shape,
+   * which produces the read-once @c gate_times factoring §1 needs
+   * (each pinned atom becomes its own @c gate_plus child of the top
+   * @c gate_times). */
+  apply_constant_selection_fd_pass(q, per_atom, &residual);
+
   /* Multi-component dispatch: when the atoms split into more than
    * one connected component (q :- A(x), B(y) with no join), the
    * single-component detector below can't find a root variable.
@@ -2616,7 +2939,13 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
     return NULL;
   }
 
-  /* Attach per-atom pushed conjuncts to the rewrite descriptors. */
+  /* Attach per-atom pushed conjuncts to the rewrite descriptors.  The
+   * §1 constant-selection pre-pass above may have appended
+   * synthesised @c Var @c = @c const conjuncts to some atoms' lists
+   * (the propagated literals from constant-pinned classes); they
+   * follow the same atom-local pushdown path as user-written
+   * single-atom conjuncts and end up in the inner DISTINCT wrap's
+   * @c WHERE. */
   i = 0;
   foreach (lc, atoms) {
     safe_rewrite_atom *sa = (safe_rewrite_atom *) lfirst(lc);

@@ -146,6 +146,7 @@ test: safe_query_basic
 test: safe_query_pushdown
 test: safe_query_semiring
 test: safe_query_opaque
+test: safe_query_const_sel
 
 # Query-time TID / BID / OPAQUE classifier (NOTICE surface)
 test: classify_query
