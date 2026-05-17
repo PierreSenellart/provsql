@@ -154,7 +154,7 @@ def test_circuit_prov_scheme_selector_is_interactive(
     fs = page.locator("#prov-scheme-fieldset")
     expect(fs).not_to_have_class("is-locked")
     where_radio = page.locator('input[name="prov-scheme"][value="where"]')
-    page.locator('label[data-mode="where"]').click()
+    page.locator('label[data-scheme="where"]').click()
     expect(where_radio).to_be_checked()
 
     _run_query_and_wait(page, "SELECT name FROM personnel LIMIT 3;", 3)
