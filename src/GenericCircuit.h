@@ -297,7 +297,7 @@ void foldBooleanIdentities();
 
 /**
  * @brief Mark gate @p g as Boolean-assumed (in-memory side band).
- *        Visited by every @c evaluate<S> traversal : if @p g is in
+ *        Visited by every @c evaluate\<S\> traversal : if @p g is in
  *        the set, the visit checks @c S::compatibleWithBooleanRewrite
  *        and throws a @c CircuitException otherwise.
  */

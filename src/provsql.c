@@ -1492,6 +1492,9 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
  *                         numbers (see @c build_column_map() for the
  *                         rationale).
  * @param nbcols           Total number of non-provenance output columns.
+ * @param wrap_assumed_boolean If true, wrap the result in
+ *                         @c provenance_assumed_boolean so downstream
+ *                         probability evaluators may treat it as Boolean.
  * @return  The provenance @c Expr to be appended to the target list.
  */
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
@@ -3967,6 +3970,39 @@ static void insert_agg_token_casts(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief Wrap @p expr in a @c provsql.assume_boolean FuncExpr.
+ *
+ * Used by @c make_provenance_expression when its caller (the
+ * safe-query rewrite path in @c process_query) flagged the result
+ * as needing the @c gate_assumed_boolean structural marker.
+ * Wrapping at expression-build time rather than at splice time
+ * means @c add_to_select and
+ * @c replace_provenance_function_by_expression both consume the
+ * already-wrapped expression, so every per-row root occurrence in
+ * the final target list -- the auto-added @c provsql column and
+ * every substituted user-side @c provenance() call -- carries the
+ * wrapper uniformly.
+ *
+ * @param constants  Extension OID cache.
+ * @param expr       Provenance expression to wrap.
+ * @return  A @c FuncExpr applying @c provsql.assume_boolean to @p expr.
+ */
+static Expr *wrap_in_assume_boolean(const constants_t *constants,
+                                    Expr *expr) {
+  FuncExpr *wrap = makeNode(FuncExpr);
+  wrap->funcid = constants->OID_FUNCTION_ASSUME_BOOLEAN;
+  wrap->funcresulttype = constants->OID_TYPE_UUID;
+  wrap->funcretset = false;
+  wrap->funcvariadic = false;
+  wrap->funcformat = COERCE_EXPLICIT_CALL;
+  wrap->funccollid = InvalidOid;
+  wrap->inputcollid = InvalidOid;
+  wrap->args = list_make1(expr);
+  wrap->location = -1;
+  return (Expr *) wrap;
+}
+
+/**
  * @brief Rewrite a single SELECT query to carry provenance.
  *
  * This is the recursive entry point for the provenance rewriter.  It is
@@ -3988,38 +4024,12 @@ static void insert_agg_token_casts(const constants_t *constants, Query *q) {
  * @param removed    Out-param: boolean array indicating which original target
  *                   list entries were provenance columns and were removed.
  *                   May be @c NULL if the caller does not need this info.
+ * @param wrap_root  If true, mark this query's provenance expression as a
+ *                   safe-query root that must be wrapped in
+ *                   @c provsql.assume_boolean before splicing.
  * @return  The (possibly restructured) rewritten query, or @c NULL if the
  *          query has no FROM clause and can be skipped.
  */
-/**
- * @brief Wrap @p expr in a @c provsql.assume_boolean FuncExpr.
- *
- * Used by @c make_provenance_expression when its caller (the
- * safe-query rewrite path in @c process_query) flagged the result
- * as needing the @c gate_assumed_boolean structural marker.
- * Wrapping at expression-build time rather than at splice time
- * means @c add_to_select and
- * @c replace_provenance_function_by_expression both consume the
- * already-wrapped expression, so every per-row root occurrence in
- * the final target list -- the auto-added @c provsql column and
- * every substituted user-side @c provenance() call -- carries the
- * wrapper uniformly.
- */
-static Expr *wrap_in_assume_boolean(const constants_t *constants,
-                                    Expr *expr) {
-  FuncExpr *wrap = makeNode(FuncExpr);
-  wrap->funcid = constants->OID_FUNCTION_ASSUME_BOOLEAN;
-  wrap->funcresulttype = constants->OID_TYPE_UUID;
-  wrap->funcretset = false;
-  wrap->funcvariadic = false;
-  wrap->funcformat = COERCE_EXPLICIT_CALL;
-  wrap->funccollid = InvalidOid;
-  wrap->inputcollid = InvalidOid;
-  wrap->args = list_make1(expr);
-  wrap->location = -1;
-  return (Expr *) wrap;
-}
-
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root) {
   List *prov_atts;
