@@ -285,6 +285,55 @@ two
 remove_provenance
 
 (1 row)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid, provsql_test.cq_tid2)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+(0 rows)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid, provsql_test.cq_tid2, provsql_test.cq_tid3)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+(0 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+1
+1
+2
+(3 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid2)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_derived_a, provsql_test.cq_derived_b)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+(0 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+1
+2
+3
+(3 rows)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

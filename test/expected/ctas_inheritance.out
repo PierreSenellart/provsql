@@ -11,8 +11,8 @@ repair_key
 t1_kind|t1_ancestors_correct
 tid|t
 (1 row)
-t2_no_metadata_yet|t2_no_ancestry_yet
-t|t
+t2_kind|t2_ancestors_correct
+tid|t
 (1 row)
 t3_no_metadata|t3_no_ancestry
 t|t

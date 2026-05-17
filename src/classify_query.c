@@ -271,6 +271,77 @@ static bool try_classify_union_all(Query *q,
   return true;
 }
 
+/**
+ * @brief Conservative multi-source promotion: when every tracked
+ *        source in @p out->source_relids is TID and the registered
+ *        ancestor sets are pairwise disjoint, promote the
+ *        classification to TID.
+ *
+ * Mirrors the disjointness check the safe-query rewriter runs in
+ * @c is_safe_query_candidate, just at the classifier layer so a
+ * multi-source query no longer collapses to OPAQUE before the
+ * rewriter even sees it.  The hierarchical-CQ structure is NOT
+ * inspected here -- the rewriter runs the full check downstream,
+ * and the classifier's job is only to certify the per-row
+ * independence the user-visible NOTICE pill advertises.
+ *
+ * Returns @c true and sets @c out->kind on success.  On failure
+ * (any source non-TID, no registry entry, or any pair of ancestor
+ * sets overlapping), returns @c false and leaves @p out unchanged
+ * so the caller falls through to OPAQUE.
+ */
+static bool try_classify_multi_source_tid(ProvSQLClassification *out) {
+  ListCell *lc;
+  int       i, j, n;
+  uint16   *anc_n;
+  Oid     (*anc)[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+
+  n = list_length(out->source_relids);
+  if (n < 2)
+    return false;
+
+  anc_n = palloc0(n * sizeof(uint16));
+  anc   = palloc(n * sizeof(*anc));
+
+  i = 0;
+  foreach (lc, out->source_relids) {
+    Oid                 relid = lfirst_oid(lc);
+    ProvenanceTableInfo info;
+    if (!provsql_lookup_table_info(relid, &info)
+        || info.kind != PROVSQL_TABLE_TID) {
+      pfree(anc);
+      pfree(anc_n);
+      return false;
+    }
+    if (!provsql_lookup_ancestry(relid, &anc_n[i], anc[i])) {
+      /* Defensive : add_provenance / repair_key seed {self} eagerly,
+       * so a tracked relation should always have a non-empty
+       * registry entry.  If somehow missing, fall back to {self}
+       * (matches the safe-query rewriter's same fallback). */
+      anc[i][0] = relid;
+      anc_n[i]  = 1;
+    }
+    i++;
+  }
+
+  for (i = 0; i < n; i++)
+    for (j = i + 1; j < n; j++) {
+      uint16 a, b;
+      for (a = 0; a < anc_n[i]; a++)
+        for (b = 0; b < anc_n[j]; b++)
+          if (anc[i][a] == anc[j][b]) {
+            pfree(anc);
+            pfree(anc_n);
+            return false;
+          }
+    }
+
+  pfree(anc);
+  pfree(anc_n);
+  out->kind = PROVSQL_TABLE_TID;
+  return true;
+}
+
 void provsql_classify_query(Query *q, ProvSQLClassification *out) {
   bool shape_ok   = true;
   int  n_meta     = 0;
@@ -311,9 +382,13 @@ void provsql_classify_query(Query *q, ProvSQLClassification *out) {
     /* If the lookup races and disappears between the two calls,
      * fall back to OPAQUE. */
   } else {
-    /* Multiple tracked sources : joins are deferred to a later
-     * slice (independent-TID join inference). */
-    out->kind = PROVSQL_TABLE_OPAQUE;
+    /* Multiple tracked sources : promote to TID when every source
+     * is TID and the registered ancestor sets are pairwise
+     * disjoint.  Any failure (non-TID source, missing registry
+     * entry, ancestor overlap) leaves @c out->kind at OPAQUE,
+     * which is the conservative default already set above. */
+    if (!try_classify_multi_source_tid(out))
+      out->kind = PROVSQL_TABLE_OPAQUE;
   }
 }
 

@@ -296,6 +296,66 @@ CREATE TEMP TABLE cq_off2 AS SELECT id FROM cq_tid;
 SELECT remove_provenance('cq_off2');
 DROP TABLE cq_off2;
 
+-- ---------------------------------------------------------------
+-- Multi-source TID promotion (independent-TID join inference).
+-- The classifier no longer collapses n_meta>=2 to OPAQUE: when
+-- every tracked source is TID and the registered ancestor sets are
+-- pairwise disjoint, the result is promoted to TID with the
+-- cumulative source list.
+-- ---------------------------------------------------------------
+SET provsql.classify_top_level = on;
+
+-- (29) Two-atom TID join over disjoint base relations.  Was OPAQUE
+--      before the multi-source promotion ; now TID.
+CREATE TEMP TABLE cq_r29 AS
+  SELECT a.id FROM cq_tid a, cq_tid2 b WHERE a.id = b.n;
+SELECT remove_provenance('cq_r29');
+SELECT id FROM cq_r29 ORDER BY id;
+
+-- (30) Three-atom TID join over disjoint base relations.  Still
+--      TID under the conservative promotion (pairwise-disjoint
+--      ancestor sets).
+CREATE TABLE cq_tid3 (k int);
+INSERT INTO cq_tid3 VALUES (1), (2);
+SELECT add_provenance('cq_tid3');
+CREATE TEMP TABLE cq_r30 AS
+  SELECT a.id
+    FROM cq_tid a, cq_tid2 b, cq_tid3 c
+   WHERE a.id = b.n AND a.id = c.k;
+SELECT remove_provenance('cq_r30');
+SELECT id FROM cq_r30 ORDER BY id;
+
+-- (31) TID + BID is NOT promoted : every source must be TID.  Stays
+--      OPAQUE.
+CREATE TEMP TABLE cq_r31 AS
+  SELECT a.id FROM cq_tid a, cq_bid b WHERE a.id = b.k;
+SELECT remove_provenance('cq_r31');
+SELECT id FROM cq_r31 ORDER BY id;
+
+-- (32) Two derived TIDs with disjoint ancestry : ancestor sets
+--      {cq_tid} and {cq_tid2} are disjoint, so promoted to TID.
+CREATE TABLE cq_derived_a AS
+  SELECT id, provsql FROM cq_tid;
+CREATE TABLE cq_derived_b AS
+  SELECT n AS id, provsql FROM cq_tid2;
+CREATE TEMP TABLE cq_r32 AS
+  SELECT a.id FROM cq_derived_a a, cq_derived_b b WHERE a.id = b.id;
+SELECT remove_provenance('cq_r32');
+SELECT id FROM cq_r32 ORDER BY id;
+
+-- (33) Derived TID joined with one of its source tables : ancestor
+--      sets overlap on cq_tid, so the conservative gate refuses
+--      promotion and the result is OPAQUE.
+CREATE TEMP TABLE cq_r33 AS
+  SELECT a.id FROM cq_derived_a a, cq_tid b WHERE a.id = b.id;
+SELECT remove_provenance('cq_r33');
+SELECT id FROM cq_r33 ORDER BY id;
+
+DROP TABLE cq_derived_a;
+DROP TABLE cq_derived_b;
+SELECT remove_provenance('cq_tid3');
+DROP TABLE cq_tid3;
+
 -- Cleanup ------------------------------------------------------------
 SELECT remove_provenance('cq_tid');
 SELECT remove_provenance('cq_tid2');

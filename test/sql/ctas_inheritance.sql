@@ -38,17 +38,20 @@ SELECT (get_table_info('ci_t1'::regclass::oid)).kind  AS t1_kind,
 
 -- ---------------------------------------------------------------
 -- (2) Multi-source TID CTAS (join over two disjoint TID sources)
---     projecting one source's provsql: inherits kind=TID,
---     ancestors={ci_src_a, ci_src_b}.  The classifier currently
---     reports OPAQUE for n_meta>=2, so this case does NOT fire the
---     hook -- the new relation has no inherited metadata.  This is
---     the "independent-TID joins" follow-up slice; pinned here so
---     the test surface tracks the contract.
+--     projecting one source's provsql: classifier promotes to TID
+--     (every source TID, ancestor sets {ci_src_a} and {ci_src_b}
+--     pairwise disjoint).  The CTAS hook fires and records
+--     kind=TID, ancestors=union({ci_src_a, ci_src_b}).
 -- ---------------------------------------------------------------
 CREATE TABLE ci_t2 AS
   SELECT a.x, a.provsql FROM ci_src_a a, ci_src_b b WHERE a.x = b.x;
-SELECT get_table_info('ci_t2'::regclass::oid) IS NULL AS t2_no_metadata_yet,
-       get_ancestors('ci_t2'::regclass::oid) IS NULL  AS t2_no_ancestry_yet;
+SELECT (get_table_info('ci_t2'::regclass::oid)).kind  AS t2_kind,
+       (SELECT array_agg(o ORDER BY o)
+          FROM unnest(get_ancestors('ci_t2'::regclass::oid)) o)
+       = (SELECT array_agg(o ORDER BY o)
+            FROM unnest(ARRAY['ci_src_a'::regclass::oid,
+                              'ci_src_b'::regclass::oid]) o)
+                                                       AS t2_ancestors_correct;
 
 -- ---------------------------------------------------------------
 -- (3) CTAS without projecting provsql: the new relation has no
