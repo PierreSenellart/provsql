@@ -14,6 +14,78 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.2.0] - 2026-05-17
+
+Companion release for ProvSQL extension 1.6.0. Surfaces the new
+**safe-query rewriter** (Boolean-provenance mode) and the new
+**TID / BID / OPAQUE classifier** through dedicated UI affordances:
+a third selector value on the provenance-scheme widget, a
+session-sticky toggle, per-result prov pills on the result-table
+header, and per-relation prov sub-pills on the schema panel.
+
+### Highlights
+
+- **Boolean-provenance scheme integration**. A third value
+  (`Boolean`) joins the existing provenance-scheme selector
+  (Semiring / Where). When selected, Studio sets
+  `provsql.boolean_provenance = on` on the backend for the
+  duration of the session and the extension's safe-query
+  rewriter fires on every accepted hierarchical-CQ query. The
+  toggle is session-sticky: Studio retains the selected scheme
+  across query executions, schema-panel clicks, and circuit-mode
+  navigation, matching the existing Default / Where behaviour.
+- **Result-pane classifier pill**. The `provsql` column header of
+  every query result carries a per-query pill reflecting the classifier's
+  verdict on the just-executed query, labelled `prov-tid` /
+  `prov-bid` (TID and BID share the brand pill: the distinction matters
+  for probabilistic evaluation but does not warrant a visual demotion) or
+  bare `prov` with a muted tone for OPAQUE. The pill source is the
+  `provsql.classify_top_level` NOTICE Studio captures from each query
+  execution; the tooltip explains the kind in prose.
+- **Schema-panel prov pills**. The per-relation PROV pill on each
+  schema-panel row now carries a kind-aware label (`prov-tid` /
+  `prov-bid` for tracked relations whose kind the classifier has
+  certified, bare `prov` with a muted tone for OPAQUE, bare
+  `prov` with the brand pill for relations on an older extension
+  that does not surface a `prov_kind`). The kind is populated at
+  schema-load time by probing the classifier on a
+  `SELECT * FROM <relation>` query inside a SAVEPOINT-wrapped
+  transaction; view bodies are probed identically (the classifier
+  descends through `RTE_SUBQUERY`).
+- **Schema-panel row-click**. Clicking a relation row in the
+  schema panel now inserts `SELECT * FROM <rel>` into the
+  query box (replacing the previous behaviour of typing the
+  relation name without a SELECT). Bare-name click insertion is
+  schema-qualified when the bare name does not resolve in the
+  current search_path, so `public.foo` and `myschema.foo` both
+  work after a single click.
+- **Schema-panel column-count tooltip fix**. Views now report
+  the actual number of columns of the underlying query in the
+  hover tooltip, not the count of `pg_attribute` rows (which
+  undercounted views with computed columns).
+
+### Internal
+
+- **Catalog scan filter**: the tracked-input enumeration now
+  filters temp / toast schemas, so the schema panel only lists
+  user-visible tracked relations.
+- **Psycopg pool teardown**: the e2e test fixture closes the
+  psycopg connection pool cleanly on Playwright shutdown,
+  avoiding a "FATAL: terminating connection due to
+  administrator command" trail in the test output.
+
+### Compatibility
+
+Minimum required extension version: **1.6.0**. See the
+[compatibility matrix](https://provsql.org/docs/user/studio.html#compatibility)
+in the user guide for the full table.
+
+The Boolean-provenance mode selector and the TID / BID schema /
+result pills are inactive on extensions older than 1.6.0: the
+provenance-scheme selector falls back to the Default / Where
+two-way picker, and the result/schema pills omit the per-relation
+classifier sub-pill.
+
 ## [1.1.1]
 
 Patch release fixing a Circuit-mode crash on databases that contain
