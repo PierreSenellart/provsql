@@ -19,3 +19,4 @@ FROM
     tvalues
 ORDER BY
     id;
+DROP TABLE tvalues;

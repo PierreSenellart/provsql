@@ -14,3 +14,4 @@ SELECT remove_provenance('subquery_result');
 
 SELECT * FROM subquery_result
 ORDER BY name1, name2;
+DROP TABLE subquery_result;

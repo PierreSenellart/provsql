@@ -276,11 +276,28 @@
         </div>
       </div>
       <div class="wp-form__actions">
-        <label class="wp-toggle" id="toggle-where-wrap" title="provsql.where_provenance: track where-provenance for the next query">
-          <i class="fas fa-lock wp-toggle__lock" aria-hidden="true"></i>
-          <input type="checkbox" id="opt-where-prov">
-          <code>where_provenance</code>
-        </label>
+        <fieldset class="wp-prov-scheme" id="prov-scheme-fieldset"
+                  title="Pick the provenance flavour the next query is evaluated under. The three choices are mutually exclusive ; Where is also incompatible with Boolean.">
+          <legend class="wp-prov-scheme__legend">Provenance scheme</legend>
+          <label class="wp-prov-scheme__opt" data-scheme="boolean"
+                 title="Interpret query results as Boolean functions; ProvSQL is then free to apply Boolean-only optimisations (such as the safe-query rewriter for hierarchical CQs). In exchange, only semirings compatible with Boolean functions may be evaluated.">
+            <input type="radio" name="prov-scheme" value="boolean">
+            <i class="fas fa-lock wp-prov-scheme__lock" aria-hidden="true"></i>
+            <span>Boolean</span>
+          </label>
+          <label class="wp-prov-scheme__opt" data-scheme="semiring"
+                 title="Default ProvSQL behaviour: full m-semiring provenance, every semiring available.">
+            <input type="radio" name="prov-scheme" value="semiring" checked>
+            <i class="fas fa-lock wp-prov-scheme__lock" aria-hidden="true"></i>
+            <span>Semiring</span>
+          </label>
+          <label class="wp-prov-scheme__opt" data-scheme="where"
+                 title="Cell-level where-provenance tracking: every output cell records the source cells it was computed from.">
+            <input type="radio" name="prov-scheme" value="where">
+            <i class="fas fa-lock wp-prov-scheme__lock" aria-hidden="true"></i>
+            <span>Where</span>
+          </label>
+        </fieldset>
         <label class="wp-toggle" id="toggle-update-wrap" title="provsql.update_provenance: carry provenance through INSERT / UPDATE / DELETE statements">
           <input type="checkbox" id="opt-update-prov">
           <code>update_provenance</code>

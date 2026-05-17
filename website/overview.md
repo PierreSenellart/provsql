@@ -54,8 +54,8 @@ contributed to each output value.
 ## Lean Formalization {#lean}
 
 Key parts of the algebraic framework underlying ProvSQL – m-semirings,
-annotated databases, and relational algebra semantics – have been formally
-verified in Lean 4.
+annotated databases, relational algebra semantics, and aggregation – have
+been formally verified in Lean 4.
 See the [Lean formalization](/lean/) page for details.
 
 ## Archival and Citation {#archival}

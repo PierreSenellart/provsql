@@ -1414,8 +1414,9 @@ matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
     }
 
     /* Classic Bernoulli mixture: 3 wires, [p_token, x_token, y_token]
-     * with p_token a bare gate_input (compound Boolean p bails per
-     * the TODO scope). */
+     * with p_token a bare gate_input; compound Boolean p bails (the
+     * generic path would need a probability-over-Boolean-circuit
+     * pre-pass we deliberately do not run here). */
     if (w.size() != 3) return std::nullopt;
     if (gc.getGateType(w[0]) != gate_input) return std::nullopt;
     double p = gc.getProb(w[0]);

@@ -165,6 +165,20 @@ virtual value_type delta(value_type x) const override
 virtual bool absorptive() const override {
   return true;
 }
+/**
+ * @brief No semiring homomorphism @c BoolFunc(Y) →+* MinMax exists
+ *        (the enum-min / enum-max structure cannot model the
+ *        Boolean-functions semiring), so the safe-query Boolean
+ *        rewrite is unsound under MinMax / MaxMin.  Inherits the
+ *        @c false default from @c Semiring; this override exists for
+ *        documentation.
+ *
+ * Lean: @c Provenance.Semirings.TVL.no_hom_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/MinMax.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return false;
+}
 
 /**
  * @brief Parse an enum text literal to a Datum.

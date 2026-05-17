@@ -43,7 +43,14 @@ CREATE TYPE provenance_gate AS
     'update',  -- Update operation
     'rv',      -- Continuous random-variable leaf
     'arith',   -- n-ary arithmetic gate over scalar-valued children
-    'mixture'  -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
+    'mixture', -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
+    'assumed_boolean' -- Structural marker over a single child: the
+                      -- wrapped sub-circuit was computed under a
+                      -- Boolean-provenance assumption (e.g. the safe-
+                      -- query rewrite).  Transparent for Boolean-
+                      -- compatible evaluators, fatal error for the
+                      -- rest, rendered as an explicit element in
+                      -- PROV-XML export.
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -121,6 +128,40 @@ CREATE OR REPLACE FUNCTION get_infos(
   token UUID, OUT info1 INT, OUT info2 INT)
   RETURNS record AS
   'provsql','get_infos' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Wrap @p token in a fresh @c gate_assumed_boolean and return
+ *        the wrapper's UUID.
+ *
+ * Public primitive callable from any rewrite that needs to flag a
+ * sub-circuit as having been computed under a Boolean-provenance
+ * assumption (the safe-query rewriter is the first caller; future
+ * Boolean-only simplifications should reuse this).  The wrapper is
+ * transparent for Boolean-compatible evaluators (probability, the
+ * @c sr_boolean / @c sr_boolexpr / @c sr_formula / @c sr_interval_*
+ * family, where-provenance) and raises a @c CircuitException for the
+ * rest.  Always kept as an explicit node in PROV-XML export.
+ *
+ * The wrapper UUID is content-derived via @c uuid_generate_v5 on the
+ * child, so identical children always wrap to the same outer UUID
+ * (and distinct children always wrap to distinct outer UUIDs).
+ * No-op (returns NULL) on a NULL input.
+ */
+CREATE OR REPLACE FUNCTION assume_boolean(token UUID) RETURNS UUID AS
+$$
+DECLARE
+  wrapped uuid;
+BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
+  wrapped := public.uuid_generate_v5(uuid_ns_provsql(),
+                                     concat('assumed_boolean', token));
+  PERFORM create_gate(wrapped, 'assumed_boolean', ARRAY[token]);
+  RETURN wrapped;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
 
 /**
  * @brief Set extra text information on provenance circuit gate
@@ -208,10 +249,138 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 
 /**
+ * @brief Record per-relation provenance metadata used by the
+ *        safe-query optimisation.
+ *
+ * Stores a @c (relid, kind, block_key) record in the persistent
+ * mmap-backed table-info store.  @p kind is one of:
+ *   - @c 'tid' -- independent input leaves (post-@c add_provenance default)
+ *   - @c 'bid' -- block-correlated leaves; rows sharing the same value
+ *                 of @p block_key are mutually exclusive.  An empty
+ *                 @p block_key means the whole table is one block.
+ *   - @c 'opaque' -- arbitrary correlations from a derived source
+ *                 (CREATE TABLE AS SELECT, INSERT INTO SELECT,
+ *                 UPDATE under provsql.update_provenance); the
+ *                 safe-query rewriter must bail on these.
+ *
+ * @param relid     pg_class OID of the relation.
+ * @param kind      One of @c 'tid' / @c 'bid' / @c 'opaque'.
+ * @param block_key Block-key column numbers (only meaningful for
+ *                  @c 'bid'; ignored otherwise but conventionally
+ *                  passed empty).
+ */
+CREATE OR REPLACE FUNCTION set_table_info(
+  relid OID, kind TEXT, block_key INT2[] DEFAULT ARRAY[]::INT2[])
+  RETURNS void AS
+  'provsql','set_table_info' LANGUAGE C PARALLEL SAFE;
+
+/** @brief Remove per-relation provenance metadata.  No-op when missing. */
+CREATE OR REPLACE FUNCTION remove_table_info(relid OID)
+  RETURNS void AS
+  'provsql','remove_table_info' LANGUAGE C PARALLEL SAFE;
+
+/**
+ * @brief Read per-relation provenance metadata.
+ *
+ * Returns NULL if no record exists.  @c kind is one of @c 'tid' /
+ * @c 'bid' / @c 'opaque'; @c block_key is the (possibly empty) array
+ * of block-key column numbers, only meaningful when @c kind = @c 'bid'.
+ * Used by the planner-time hierarchy detector to gate the safe-query
+ * rewrite.
+ */
+CREATE OR REPLACE FUNCTION get_table_info(
+  relid OID, OUT kind TEXT, OUT block_key INT2[])
+  RETURNS record AS
+  'provsql','get_table_info' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Record the base-relation ancestor set of a tracked relation.
+ *
+ * Base tables created with @c add_provenance / @c repair_key carry
+ * @c {self}; CTAS-derived tables inherit the union of their sources'
+ * ancestor sets.  The safe-query rewriter consults the registry to
+ * enforce that joined FROM entries have disjoint base ancestors
+ * before firing the read-once factoring.
+ *
+ * The worker preserves the relation's existing @c kind / @c block_key
+ * half on update; it silently no-ops when no kind record exists for
+ * @p relid (callers should run @c add_provenance / @c repair_key
+ * first).  The ancestor list is capped at 64 entries (clear error if
+ * exceeded).
+ *
+ * @param relid      pg_class OID of the relation.
+ * @param ancestors  Sorted, deduplicated base-relation OIDs.
+ */
+CREATE OR REPLACE FUNCTION set_ancestors(
+  relid OID, ancestors OID[] DEFAULT ARRAY[]::OID[])
+  RETURNS void AS
+  'provsql','set_ancestors' LANGUAGE C PARALLEL SAFE;
+
+/** @brief Clear the ancestor half of a per-relation record (keeps kind/block_key).
+ *  No-op when missing. */
+CREATE OR REPLACE FUNCTION remove_ancestors(relid OID)
+  RETURNS void AS
+  'provsql','remove_ancestors' LANGUAGE C PARALLEL SAFE;
+
+/**
+ * @brief Read the base-relation ancestor set of a tracked relation.
+ *
+ * Returns @c NULL when no ancestor record exists for @p relid (or the
+ * record is empty -- both cases make the safe-query rewriter take
+ * its conservative refuse path, so they collapse here).
+ */
+CREATE OR REPLACE FUNCTION get_ancestors(relid OID)
+  RETURNS OID[] AS
+  'provsql','get_ancestors' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief BEFORE INSERT OR UPDATE OF provsql row trigger installed by
+ *        @c add_provenance.
+ *
+ * Two jobs:
+ *
+ *  1. Fill @c NEW.provsql with a fresh @c uuid_generate_v4 leaf when
+ *     the user did not supply one (this replaces the column DEFAULT
+ *     that @c add_provenance used to install: a real DEFAULT would
+ *     fire before the trigger sees the row, so we could not tell
+ *     "user omitted the column" from "user supplied a value").
+ *  2. When the user does supply a non-NULL @c provsql on @c INSERT,
+ *     or changes it on @c UPDATE, flip the table's per-table
+ *     metadata to @c OPAQUE.  The user is free to write whatever
+ *     UUIDs they want (cross-table reuse, compound tokens minted
+ *     via @c create_gate, ...); the cost is that the safe-query
+ *     rewriter then refuses to fire on this table, because TID
+ *     independence can no longer be assumed.
+ */
+CREATE OR REPLACE FUNCTION provenance_guard()
+  RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.provsql IS NULL THEN
+      NEW.provsql := public.uuid_generate_v4();
+    ELSE
+      PERFORM provsql.set_table_info(TG_RELID, 'opaque');
+    END IF;
+  ELSIF TG_OP = 'UPDATE' THEN
+    IF NEW.provsql IS DISTINCT FROM OLD.provsql THEN
+      PERFORM provsql.set_table_info(TG_RELID, 'opaque');
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER;
+
+/**
  * @brief Enable provenance tracking on an existing table
  *
- * Adds a <tt>provsql</tt> UUID column to the table. Input gates for
- * existing rows are created lazily when first referenced by a query.
+ * Adds a <tt>provsql</tt> UUID column to the table, an index for
+ * fast UUID-keyed lookups, and a BEFORE INSERT/UPDATE row trigger
+ * (@c provenance_guard) that mints a fresh @c uuid_generate_v4
+ * leaf when the user omits the column on INSERT, or flips the
+ * table's metadata to @c OPAQUE when the user supplies their own
+ * value.  Input gates for existing rows are created lazily when
+ * first referenced by a query.
  *
  * @param _tbl the table to add provenance tracking to
  */
@@ -219,7 +388,27 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
-  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  -- No DEFAULT: the guard trigger mints the UUID, so the trigger can
+  -- distinguish "user omitted" (NULL) from "user supplied a value".
+  -- No UNIQUE: we no longer rely on it to keep the table TID -- the
+  -- guard does that semantically -- and a UNIQUE would reject the
+  -- legitimate cross-table UUID copy that just flips the table to
+  -- OPAQUE.  We keep a plain index for fast UUID-keyed lookups.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
+  EXECUTE format(
+    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    _tbl);
+  PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  -- Seed the base-ancestor set to {self}: a base TID table's atoms
+  -- come from itself and no other relation.  CTAS-derived tables
+  -- inherit unions of source ancestor sets; that is handled by the
+  -- CTAS hook (a separate slice), not here.
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -235,6 +424,14 @@ CREATE OR REPLACE FUNCTION remove_provenance(_tbl regclass)
 $$
 DECLARE
 BEGIN
+  PERFORM provsql.remove_table_info(_tbl::oid);
+  -- Drop the BEFORE INSERT/UPDATE guard first: it has a column
+  -- dependency on provsql (via the OF provsql clause), so the
+  -- subsequent DROP COLUMN would otherwise raise.
+  BEGIN
+    EXECUTE format('DROP TRIGGER provenance_guard on %s', _tbl);
+  EXCEPTION WHEN undefined_object THEN
+  END;
   EXECUTE format('ALTER TABLE %s DROP COLUMN provsql', _tbl);
   BEGIN
     EXECUTE format('DROP TRIGGER add_gate on %s', _tbl);
@@ -264,51 +461,139 @@ CREATE OR REPLACE FUNCTION repair_key(_tbl regclass, key_att text)
   RETURNS void AS
 $$
 DECLARE
-  key RECORD;
-  key_token uuid;
-  token uuid;
-  record RECORD;
-  nb_rows INTEGER;
-  ind INTEGER;
-  select_key_att TEXT;
-  where_condition TEXT;
+  r RECORD;
+  rows_query TEXT;
+  block_key_cols INT2[];
 BEGIN
+  -- Resolve the (possibly comma-separated) key_att text into the
+  -- corresponding pg_attribute.attnum values for the safe-query
+  -- metadata.  Names are trimmed; quoting is not supported because
+  -- repair_key has never accepted quoted identifiers in key_att.
   IF key_att = '' THEN
-    key_att := '()';
-    select_key_att := '1';
+    block_key_cols := ARRAY[]::INT2[];
   ELSE
-    select_key_att := key_att;
+    SELECT array_agg(a.attnum ORDER BY t.ord)::INT2[]
+      INTO block_key_cols
+      FROM unnest(string_to_array(key_att, ',')) WITH ORDINALITY AS t(name, ord)
+      JOIN pg_attribute a
+        ON a.attrelid = _tbl
+       AND a.attname  = trim(t.name)
+       AND a.attnum   > 0
+       AND NOT a.attisdropped;
+    IF block_key_cols IS NULL OR array_length(block_key_cols, 1) IS NULL THEN
+      RAISE EXCEPTION 'repair_key: could not resolve key columns from "%"', key_att;
+    END IF;
+    IF array_length(block_key_cols, 1) > 16 THEN
+      RAISE EXCEPTION 'repair_key: block key wider than 16 columns is not supported';
+    END IF;
   END IF;
 
-  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  -- Same column shape as add_provenance: no UNIQUE, no DEFAULT past
+  -- the initial backfill (the guard trigger added after the rename
+  -- takes over both jobs once the column has been renamed to its
+  -- final name).  The DEFAULT is kept here only so the second pass
+  -- below can read provsql_temp from the user-visible rows
+  -- without a separate UPDATE.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID DEFAULT public.uuid_generate_v4()', _tbl);
 
-  FOR key IN
-    EXECUTE format('SELECT %s AS key FROM %s GROUP BY %s', select_key_att, _tbl, key_att)
-  LOOP
-    IF key_att = '()' THEN
-      where_condition := '';
-    ELSE
-      where_condition := format('WHERE %s = %L', key_att, key.key);
-    END IF;
+  -- Build a per-group mapping (key columns + a fresh key_token + the
+  -- group size) once, then use it for both the create_gate(key_token,
+  -- 'input') first pass and the per-row mulinput second pass.  Going
+  -- through a temp table avoids re-running uuid_generate_v4() (which
+  -- would produce different UUIDs the second time).  USING (%1$s) on
+  -- the second pass handles the multi-column case uniformly.
+  -- ON COMMIT DROP plus the explicit DROP TABLE at the end of this
+  -- function leave the temp table cleaned up across transactions and
+  -- across repeated calls in the same transaction.
+  IF key_att = '' THEN
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_repair_key_tmp ON COMMIT DROP AS
+         SELECT public.uuid_generate_v4() AS provsql_key_token,
+                COUNT(*) AS provsql_group_size
+           FROM %s', _tbl);
+    rows_query := format(
+      'SELECT t.provsql_temp,
+              k.provsql_key_token AS key_token,
+              ROW_NUMBER() OVER (ORDER BY t.ctid) AS within_group,
+              k.provsql_group_size AS group_size
+         FROM %s t CROSS JOIN provsql_repair_key_tmp k', _tbl);
+  ELSE
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_repair_key_tmp ON COMMIT DROP AS
+         SELECT %1$s,
+                public.uuid_generate_v4() AS provsql_key_token,
+                COUNT(*) AS provsql_group_size
+           FROM %2$s
+       GROUP BY %1$s', key_att, _tbl);
+    rows_query := format(
+      'SELECT t.provsql_temp,
+              k.provsql_key_token AS key_token,
+              ROW_NUMBER() OVER (PARTITION BY k.provsql_key_token
+                                 ORDER BY t.ctid) AS within_group,
+              k.provsql_group_size AS group_size
+         FROM %2$s t
+         JOIN provsql_repair_key_tmp k USING (%1$s)', key_att, _tbl);
+  END IF;
 
-    EXECUTE format('SELECT COUNT(*) FROM %s %s', _tbl, where_condition) INTO nb_rows;
-
-    key_token := public.uuid_generate_v4();
-    PERFORM provsql.create_gate(key_token, 'input');
-    ind := 1;
-    FOR record IN
-      EXECUTE format('SELECT provsql_temp FROM %s %s', _tbl, where_condition)
-    LOOP
-      token:=record.provsql_temp;
-      PERFORM provsql.create_gate(token, 'mulinput', ARRAY[key_token]);
-      PERFORM provsql.set_prob(token, 1./nb_rows);
-      PERFORM provsql.set_infos(token, ind);
-      ind := ind + 1;
-    END LOOP;
+  -- Pass 1: one input gate per group key.
+  FOR r IN SELECT provsql_key_token FROM provsql_repair_key_tmp LOOP
+    PERFORM provsql.create_gate(r.provsql_key_token, 'input');
   END LOOP;
+
+  -- Pass 2: per row, attach a mulinput gate to its group's key token.
+  FOR r IN EXECUTE rows_query LOOP
+    PERFORM provsql.create_gate(r.provsql_temp, 'mulinput', ARRAY[r.key_token]);
+    PERFORM provsql.set_prob(r.provsql_temp, 1./r.group_size);
+    PERFORM provsql.set_infos(r.provsql_temp, r.within_group::int);
+  END LOOP;
+
+  DROP TABLE provsql_repair_key_tmp;
+
+  EXECUTE format('ALTER TABLE %s ALTER COLUMN provsql_temp DROP DEFAULT', _tbl);
   EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    _tbl);
+  PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
+  -- Base BID tables also have themselves as their sole ancestor.  Same
+  -- rationale as the @c add_provenance branch above.
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
 END
 $$ LANGUAGE plpgsql;
+
+/**
+ * @brief Event trigger that purges per-table provenance metadata when
+ *        a tracked relation is dropped outside of remove_provenance().
+ *
+ * Plain DROP TABLE bypasses remove_provenance() and would otherwise
+ * leave a stale entry in the table-info store keyed by a now-recycled
+ * OID, with confusing consequences for the safe-query rewriter the
+ * next time the OID is reused.  This trigger forwards every dropped
+ * relation OID to provsql.remove_table_info(), which is a no-op for
+ * relations that were not tracked.
+ */
+CREATE OR REPLACE FUNCTION cleanup_table_info()
+  RETURNS event_trigger AS
+$$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT objid FROM pg_event_trigger_dropped_objects()
+     WHERE object_type IN ('table', 'foreign table', 'materialized view')
+  LOOP
+    PERFORM provsql.remove_table_info(r.objid);
+  END LOOP;
+END
+$$ LANGUAGE plpgsql;
+
+DROP EVENT TRIGGER IF EXISTS provsql_cleanup_table_info;
+-- @c EXECUTE @c PROCEDURE (rather than the PG 11+ @c EXECUTE
+-- @c FUNCTION alias) so the extension installs on PG 10 too.
+CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
+  EXECUTE PROCEDURE provsql.cleanup_table_info();
 
 /**
  * @brief Create a provenance mapping table from an attribute

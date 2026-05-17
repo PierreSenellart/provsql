@@ -71,6 +71,7 @@ typedef enum gate_type {
   gate_rv,       ///< Continuous random-variable leaf (extra encodes distribution)
   gate_arith,    ///< n-ary arithmetic gate over scalar-valued children (info1 holds operator tag)
   gate_mixture,  ///< Probabilistic mixture: three wires [p_token (gate_input Bernoulli), x_token, y_token]; samples x when p is true, y otherwise
+  gate_assumed_boolean, ///< Structural marker over a single child whose sub-circuit was computed under a Boolean-provenance assumption (e.g. the safe-query rewrite); transparent (identity) for Boolean-compatible evaluators, fatal error for the rest, kept as an explicit node in PROV-XML export
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
@@ -97,6 +98,16 @@ typedef enum provsql_arith_op {
 
 /** Names of gate types */
 extern const char *gate_type_name[];
+
+/**
+ * @brief Canonical name of the per-row provenance column installed by
+ *        @c add_provenance / @c repair_key.
+ *
+ * Centralised so the planner-hook entry points (@c src/provsql.c) and
+ * the safe-query detector (@c src/safe_query.c) agree on the literal;
+ * see the @c provenance_guard trigger in @c sql/provsql.common.sql.
+ */
+#define PROVSQL_COLUMN_NAME "provsql"
 
 /** Structure to store the value of various constants. This is needed to
  * uniquely identify types, functions, etc., in PostgreSQL through their
@@ -134,6 +145,16 @@ typedef struct constants_t {
   Oid OID_FUNCTION_AGG_TOKEN_UUID; ///< OID of the agg_token_uuid FUNCTION
   Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
+  /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.
+   *
+   *  Installed by the @c 1.5.0--1.6.0 upgrade script.  Wraps its child
+   *  in a fresh @c gate_assumed_boolean and returns the wrapper's UUID.
+   *  When @c InvalidOid the safe-query rewriter (and any other
+   *  Boolean-only rewrite that needs the marker) is effectively
+   *  disabled even if @c provsql.boolean_provenance is on: the
+   *  rewriter refuses to produce unmarked roots on a schema that
+   *  cannot enforce the semiring-compatibility check. */
+  Oid OID_FUNCTION_ASSUME_BOOLEAN;
   /** OIDs of the @c random_variable_{eq,ne,le,lt,ge,gt} comparison
    * procedure functions, indexed by the @c ComparisonOperator enum
    * (@c EQ=0, @c NE=1, @c LE=2, @c LT=3, @c GE=4, @c GT=5; matches the
@@ -262,6 +283,178 @@ extern bool provsql_simplify_on_load;
  * path against the raw MC path and as a bisection knob if a
  * closure rule turns out to be unsound on some workload. */
 extern bool provsql_hybrid_evaluation;
+
+/** @brief Hidden diagnostic flag for the family of closed-form /
+ *  analytic probability evaluators that resolve @c gate_cmps inside
+ *  @c probability_evaluate ; see the
+ *  @c provsql.cmp_probability_evaluation GUC.
+ *
+ *  When on (default), @c probability_evaluate runs pre-passes that
+ *  recognise specific @c gate_cmp shapes and replace each cmp with
+ *  a Bernoulli @c gate_input carrying the closed-form probability,
+ *  bypassing the DNF that @c provsql_having's
+ *  @c enumerate_valid_worlds would otherwise emit.  The first
+ *  implementation in this family is the Poisson-binomial pre-pass
+ *  for HAVING @c COUNT(*) @c op @c C over distinct @c gate_input
+ *  leaves (see @c CountCmpEvaluator.h) ; future MIN / MAX / SUM
+ *  evaluators will gate on the same flag.  Off forces every cmp to
+ *  fall through to the enumeration path.  End users have no reason
+ *  to flip this ; exists for developer A/B testing and as a
+ *  bisection escape valve. */
+extern bool provsql_cmp_probability_evaluation;
+
+/** @brief Opt-in safe-query optimisation for hierarchical conjunctive
+ *  queries; see the @c provsql.boolean_provenance GUC.
+ *
+ *  When @c true, the planner is permitted to rewrite self-join-free
+ *  hierarchical CQs (and independent UCQs) over TID / BID tables to
+ *  a read-once form whose probability is computable in linear time.
+ *  The rewriter tags the resulting root gate so that semiring
+ *  evaluations incompatible with this rewrite refuse to run on the
+ *  produced circuit. */
+extern bool provsql_boolean_provenance;
+
+#include "MMappedTableInfo.h"
+
+/**
+ * @brief Look up per-table provenance metadata with a backend-local cache.
+ *
+ * Resolves to a cached value when the relation's relcache entry has
+ * not been invalidated since the last fetch; otherwise issues one
+ * @c 's' IPC to the background worker.  The cache is invalidated
+ * via @c CacheRegisterRelcacheCallback, so concurrent
+ * @c add_provenance / @c repair_key / @c remove_provenance in other
+ * backends are reflected here without polling.
+ *
+ * Safe to call from the planner hot path.
+ *
+ * @param relid  pg_class OID of the relation to look up.
+ * @param out    On @c true return, filled with the stored record.
+ * @return @c true if a record exists for @p relid, @c false otherwise.
+ */
+extern bool provsql_lookup_table_info(Oid relid, ProvenanceTableInfo *out);
+
+/**
+ * @brief Raw IPC fetch (no cache).
+ *
+ * Implementation detail of @c provsql_lookup_table_info, exposed only
+ * so the cache layer in @c provsql_utils.c can reach it.  Callers in
+ * the planner hot path should go through @c provsql_lookup_table_info.
+ */
+extern bool provsql_fetch_table_info(Oid relid, ProvenanceTableInfo *out);
+
+/**
+ * @brief Look up the base-ancestor set of a tracked relation.
+ *
+ * Per-backend cached over IPC.  Returns the ancestor set when
+ * @p relid is tracked and the registry has a non-empty entry for it.
+ * @c false either when @p relid has no metadata record at all (the
+ * relation was never run through @c add_provenance / @c repair_key)
+ * or when the record exists but @c ancestor_n @c == @c 0 (the CTAS
+ * hook hasn't populated the lineage yet, or the registry was
+ * explicitly cleared).  The two failure modes share the false
+ * return because both make the safe-query rewriter take the
+ * conservative refuse path -- there is no use case for treating
+ * them differently.
+ *
+ * Backed by the same per-backend cache as
+ * @c provsql_lookup_table_info and invalidated through the same
+ * relcache-invalidation callback, so concurrent
+ * @c set_ancestors / @c add_provenance / @c repair_key calls in
+ * other backends are reflected here without polling.
+ *
+ * @param relid           pg_class OID of the relation to look up.
+ * @param ancestor_n_out  On @c true return, count of valid entries
+ *                        in @p ancestors_out.
+ * @param ancestors_out   On @c true return, the sorted-deduplicated
+ *                        ancestor OIDs (caller-allocated buffer of
+ *                        @c PROVSQL_TABLE_INFO_MAX_ANCESTORS @c Oid).
+ * @return @c true on a non-empty ancestor set; @c false otherwise.
+ */
+extern bool provsql_lookup_ancestry(Oid relid,
+                                    uint16 *ancestor_n_out,
+                                    Oid *ancestors_out);
+
+/**
+ * @brief Raw IPC fetch for the ancestry half (no cache).
+ *
+ * Implementation detail of @c provsql_lookup_ancestry, exposed so
+ * the cache layer in @c provsql_utils.c can reach it.  Callers in
+ * the planner hot path should go through @c provsql_lookup_ancestry.
+ */
+extern bool provsql_fetch_ancestry(Oid relid,
+                                   uint16 *ancestor_n_out,
+                                   Oid *ancestors_out);
+
+/**
+ * @brief Upper bounds for the relation-key cache.
+ *
+ * Each relation contributes at most @c PROVSQL_KEY_CACHE_MAX_KEYS
+ * distinct PRIMARY-KEY / NOT-NULL-UNIQUE column-sets, each over at
+ * most @c PROVSQL_KEY_CACHE_MAX_KEY_COLS columns.  These bounds keep
+ * the cache entry fixed-size (so the backend-local sorted-array
+ * representation can reuse the @c provsql_lookup_table_info pattern
+ * verbatim); relations with more or wider keys silently drop the
+ * overflow, treating the missing keys as if they did not exist
+ * (over-conservative -- the §2 FD-aware detector simply misses an
+ * optimisation, never produces an unsound rewrite).
+ */
+#define PROVSQL_KEY_CACHE_MAX_KEYS      4
+#define PROVSQL_KEY_CACHE_MAX_KEY_COLS  8
+
+/**
+ * @brief One PRIMARY-KEY or NOT-NULL-UNIQUE key on a relation.
+ *
+ * @c col_n is the number of valid entries in @c cols (in
+ * @c pg_index.indkey order, i.e. column position in the key, not
+ * @c pg_attribute.attnum order).  All columns are NOT NULL by
+ * construction: PRIMARY KEY enforces this implicitly, and UNIQUE
+ * constraints are admitted only when @c pg_attribute.attnotnull is
+ * @c true for every constituent column (the §2 soundness trap on
+ * nullable UNIQUE).
+ */
+typedef struct ProvenanceRelationKey {
+  uint16     col_n;
+  AttrNumber cols[PROVSQL_KEY_CACHE_MAX_KEY_COLS];
+} ProvenanceRelationKey;
+
+/**
+ * @brief Per-relation set of PRIMARY-KEY and NOT-NULL-UNIQUE keys.
+ *
+ * Populated by @c provsql_lookup_relation_keys from @c pg_constraint
+ * (filtered by @c contype @c IN @c ('p','u')) joined to
+ * @c pg_index and @c pg_attribute (for the NOT-NULL check).  The
+ * detector's §2 PK-FD pass walks @c keys and, for every key @c K it
+ * recognises among the query's equijoin equivalence classes, tags
+ * the determined columns as functionally fixed inside the relevant
+ * RTE.
+ */
+typedef struct ProvenanceRelationKeys {
+  Oid                    relid;
+  uint16                 key_n;
+  ProvenanceRelationKey  keys[PROVSQL_KEY_CACHE_MAX_KEYS];
+} ProvenanceRelationKeys;
+
+/**
+ * @brief Look up the PRIMARY-KEY and NOT-NULL-UNIQUE keys of a
+ *        relation with a backend-local cache.
+ *
+ * Companion to @c provsql_lookup_table_info.  The cache lives in a
+ * separate backing array with its own relcache-invalidation
+ * callback so that a future @c ALTER @c TABLE that adds / drops a
+ * constraint refreshes the next lookup without polling.  Returns
+ * @c true when the relation has at least one PRIMARY KEY or
+ * NOT-NULL UNIQUE constraint; @c false otherwise (in which case
+ * @p *out is filled with @c key_n @c = @c 0).  Safe to call from
+ * the planner hot path.
+ *
+ * @param relid  pg_class OID of the relation to inspect.
+ * @param out    Filled on return.  @c out->relid is set to @p relid
+ *               regardless of return value; @c out->keys holds up to
+ *               @c PROVSQL_KEY_CACHE_MAX_KEYS keys.
+ */
+extern bool provsql_lookup_relation_keys(Oid relid,
+                                         ProvenanceRelationKeys *out);
 
 #include "provsql_error.h"
 

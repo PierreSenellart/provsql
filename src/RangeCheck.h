@@ -211,9 +211,8 @@ using ClosedFormShape = std::variant<TruncatedSingleRv,
  * would require a recursive @c probability_evaluate call, out of
  * scope for the static predicate).  @c left and @c right recursively
  * match the two arms; either may itself be a mixture, a bare RV, a
- * Dirac, or a categorical — but always unconditional (truncation
- * under a mixture is deferred until a real query needs it; see
- * @c TODO2.md / Item 6a).
+ * Dirac, or a categorical, but always unconditional (truncation
+ * under a mixture is deferred until a real query needs it).
  */
 struct BernoulliMixtureShape {
   double p;

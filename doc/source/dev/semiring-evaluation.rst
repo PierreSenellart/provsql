@@ -82,12 +82,30 @@ and all other queries remain evaluable.
    ``monus_add``, ``add_monus`` -- plus the characterisation of
    idempotent m-semirings (``idempotent_iff_add_monus``,
    ``plus_is_join``).  The typeclass also carries the
-   :math:`\delta` operator as a field, with axioms
-   ``delta_zero`` (:math:`\delta(0) = 0`) and
-   ``delta_natCast_pos``
-   (:math:`\delta(n) = 1` for positive :math:`n`); the derived
-   ``delta_one`` (:math:`\delta(1) = 1`) is exposed at the top
-   level.  A contributor adding a new compiled semiring can use
+   :math:`\delta` operator as a field, with three axioms --
+   `delta_zero
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_zero>`_
+   (:math:`\delta(0) = 0`),
+   `delta_natCast_pos
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_natCast_pos>`_
+   (:math:`\delta(n) = 1` for positive :math:`n`), and
+   `delta_regrouping
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_regrouping>`_
+   (:math:`\delta\bigl(\sum_i \delta(a_i)\bigr) = \delta\bigl(\sum_i a_i\bigr)`
+   for any multiset of annotations).  The third axiom makes
+   grouped aggregation invariant under partition coarsening
+   and strengthens idempotence; the derived
+   `delta_one
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#delta_one>`_
+   (:math:`\delta(1) = 1`) and
+   `delta_idempotent
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#delta_idempotent>`_
+   (:math:`\delta(\delta(a)) = \delta(a)`) are exposed at
+   the top level.  A commutative variant
+   `CommSemiringWithMonus
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#CommSemiringWithMonus>`_
+   adds ``mul_comm`` and is the class actually used by the
+   aggregation proofs.  A contributor adding a new compiled semiring can use
    that module as a formal reference for what the ``zero`` /
    ``one`` / ``plus`` / ``times`` / ``monus`` / ``delta``
    methods are *required* to compute -- the Lean class is the
@@ -156,6 +174,86 @@ multiplicative identity, which can significantly improve performance.
 Idempotent-but-not-absorptive semirings (such as why-provenance and
 which-provenance, where :math:`\mathbb{1} \oplus a \neq \mathbb{1}` in
 general) should leave it at the default ``false``.
+
+Boolean-Rewrite Compatibility
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The safe-query rewriter (see :doc:`query-rewriting` and
+:doc:`../user/probabilities`) emits circuits whose root is wrapped
+in a ``gate_assumed_boolean`` marker, signalling that the rewrite
+preserves only Boolean semantics, not arbitrary semiring
+semantics.  Each semiring declares its compatibility with this
+rewrite by overriding a virtual predicate inherited from
+:cfunc:`Semiring`:
+
+.. code-block:: cpp
+
+   virtual bool compatibleWithBooleanRewrite() const override { return true; }
+
+The predicate is read by
+:cfunc:`provenance_evaluate_compiled_internal`
+(``src/provenance_evaluate_compiled.cpp``) immediately before the
+``evaluate<S>`` template call.  When the root carries the
+``gate_assumed_boolean`` marker and the chosen semiring's
+predicate returns ``false``, the dispatcher raises a structured
+error rather than silently producing an incorrect value.
+
+Per-semiring decisions (see each override under
+``src/semiring/*.h``) :
+
+- ``true`` : ``Boolean``, ``BoolExpr``, ``Formula`` (symbolic
+  serialisation, semantically opaque), ``IntervalUnion`` (covers
+  ``sr_temporal``, ``sr_interval_num``, ``sr_interval_int``).
+- ``false`` : every other compiled semiring (``Counting``,
+  ``How``, ``Why``, ``Which``, ``Tropical``, ``Viterbi``,
+  ``Lukasiewicz``, ``MinMax``) ; their algebras carry information
+  (multiplicities, monomials, witness sets, lineages, costs,
+  weights, graded truth values, extremal elements) that the
+  Boolean rewrite would silently collapse.
+
+ProvSQL Studio mirrors the C++ predicate via the
+``boolean_rewrite_compatible`` flag of
+``_COMPILED_SEMIRINGS`` in ``studio/provsql_studio/db.py``, and
+filters its evaluation-strip dropdown to hide the incompatible
+semirings whenever the root carries the marker.
+
+The marker itself is a structural wrapper rather than a per-gate
+flag, so it round-trips through circuit serialisation and is
+visible to every downstream consumer (semiring evaluators,
+PROV-XML export, ``view_circuit``, ProvSQL Studio's circuit
+view).  The wrapping happens at the end of the safe-query
+rewriter via :sqlfunc:`assume_boolean`, which creates a
+single-input ``gate_assumed_boolean`` wrapping the original root.
+The evaluator template treats the wrapper transparently for
+compatible semirings ; only the dispatcher's pre-evaluation check
+distinguishes them.
+
+Boolean-Identity Folding
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+In addition to the universal
+``GenericCircuit::foldSemiringIdentities`` pass (which
+collapses identities and absorbers shared by every semiring),
+ProvSQL runs an opt-in
+``GenericCircuit::foldBooleanIdentities`` pass at circuit-load
+time when ``provsql.boolean_provenance`` is on.  It applies three
+Boolean-specific rewrite rules and wraps each rewritten gate in a
+``gate_assumed_boolean`` marker (same mechanism as the safe-query
+rewriter, so the resulting circuit refuses non-Boolean-compatible
+semirings) :
+
+- **B1, idempotence** : ``plus(x, x, ...) -> x`` after deduplication.
+- **B2, plus-with-one absorber** : ``plus(one, ...) -> one``.
+- **B3, absorption** : ``plus(u, times(u, v)) -> u`` and
+  ``times(u, plus(u, v)) -> u``.
+
+The pass is gated by ``provsql.boolean_provenance`` because the
+rewrites are sound only when evaluated under a Boolean-faithful
+semiring ; the gate-level marker enforces this at evaluation time.
+The B3 absorption rule in particular has a large practical
+effect on UNION-dominated-pair shapes (see
+``test/bench/absorption_bench.sql``) where it collapses
+exponential-sized DNFs to single-OR forms.
 
 
 Example: The Boolean Semiring

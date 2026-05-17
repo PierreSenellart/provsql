@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -317,7 +318,28 @@ SELECT
           AND a.attname = 'provenance'
           AND NOT a.attisdropped
           AND a.atttypid = 'uuid'::regtype
-    )) AS is_mapping
+    )) AS is_mapping,
+    -- Per-relation provenance-tracking metadata recorded by
+    -- add_provenance / repair_key / provenance_guard. NULL when the
+    -- table is not tracked or the database predates the per-table
+    -- store (1.5.0 and earlier). 'tid' = independent leaves,
+    -- 'bid' = block-correlated, 'opaque' = the user supplied custom
+    -- provsql values so the safe-query rewriter must refuse the
+    -- table.  Wrapped in a sub-SELECT so the missing-function path
+    -- (1.5.0 schema before the upgrade has run) degrades to NULL
+    -- instead of erroring the whole query.
+    (SELECT ti.kind
+     FROM provsql.get_table_info(c.oid) ti) AS prov_kind,
+    -- True when an unqualified reference to this relation in the
+    -- current session's search_path would resolve to this exact OID.
+    -- Used by the schema panel : a click on the row prefills
+    -- `SELECT * FROM <relname>;` only when it would actually find
+    -- the relation we showed; otherwise it qualifies with the
+    -- schema.  to_regclass(quote_ident(...)) does the same lookup
+    -- the parser would, so case-sensitive and special-character
+    -- names are handled correctly.
+    (to_regclass(quote_ident(c.relname))::oid
+     IS NOT DISTINCT FROM c.oid) AS bare_resolves
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -344,13 +366,37 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
     out: list[dict] = []
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(_SCHEMA_QUERY)
+            try:
+                cur.execute(_SCHEMA_QUERY)
+            except psycopg.errors.UndefinedFunction:
+                # `provsql.get_table_info` was added in 1.6.0; on pre-1.6.0
+                # schemas drop the LEFT JOIN and just leave `prov_kind` NULL.
+                conn.rollback()
+                cur.execute(
+                    _SCHEMA_QUERY.replace(
+                        "(SELECT ti.kind\n"
+                        "     FROM provsql.get_table_info(c.oid) ti) AS prov_kind",
+                        "NULL::text AS prov_kind",
+                    )
+                )
             rows = cur.fetchall()
-        for schema, table, kind, cols, types, has_prov, is_mapping in rows:
-            propagates = bool(has_prov) or (
-                kind in ("view", "matview")
-                and _view_propagates_provenance(conn, schema, table)
-            )
+        for (schema, table, kind, cols, types,
+             has_prov, is_mapping, prov_kind, bare_resolves) in rows:
+            propagates = bool(has_prov)
+            # Views and matviews don't have a `provsql_table_info` entry,
+            # so the SQL-level `prov_kind` is always NULL for them. We
+            # probe the rewritten plan instead : the probe simultaneously
+            # detects propagation (provsql column in the plan output) and
+            # captures the classifier NOTICE on the view body to set the
+            # kind. Tables keep their authoritative `provsql.get_table_info`
+            # value (set at add_provenance / repair_key time) verbatim.
+            if kind in ("view", "matview"):
+                view_propagates, view_kind = _probe_view_provenance(
+                    conn, schema, table)
+                if view_propagates:
+                    propagates = True
+                    if view_kind is not None:
+                        prov_kind = view_kind
             out.append({
                 "schema": schema,
                 "table": table,
@@ -361,30 +407,98 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                 ],
                 "has_provenance": propagates,
                 "is_mapping": bool(is_mapping),
+                # 'tid' / 'bid' / 'opaque' / None ; surfaced as a
+                # discreet PROV-TID / PROV-BID / PROV-OPAQUE badge in
+                # the schema panel so the user can tell at a glance
+                # which probability-evaluation semantics apply.
+                "prov_kind": prov_kind,
+                # True when an unqualified reference to the table name
+                # would resolve to this exact relation under the current
+                # search_path. Drives the schema-panel click handler's
+                # choice between `SELECT * FROM staff` and
+                # `SELECT * FROM view_demo.staff`.
+                "bare_resolves": bool(bare_resolves),
             })
     return out
 
 
 _UUID_OID = 2950  # `'uuid'::regtype::oid` is stable across PG versions.
 
+# Matches the NOTICE the planner-hook classifier emits when
+# `provsql.classify_top_level` is on (see src/classify_query.c).
+_CLASSIFY_NOTICE_RE = re.compile(
+    r"^ProvSQL: query result is (TID|BID|OPAQUE)\b"
+)
 
-def _view_propagates_provenance(conn, schema: str, table: str) -> bool:
-    """Probe whether a `SELECT * FROM <schema>.<table> LIMIT 0` plan
-    carries a provsql uuid column. The probe runs inside a savepoint so a
-    broken view (or one whose plan errors for any reason) doesn't taint
-    the schema-listing transaction."""
+
+def _probe_view_provenance(
+    conn, schema: str, table: str
+) -> tuple[bool, str | None]:
+    """Probe a view (or matview) once and return
+    ``(propagates_provenance, prov_kind)``.
+
+    * ``propagates_provenance`` is True iff
+      ``SELECT * FROM <schema>.<table> LIMIT 0`` exposes a ``provsql uuid``
+      column. Views/matviews never carry a literal `provsql` column in
+      `pg_attribute` even when the ProvSQL planner hook adds one to their
+      rewritten output (CS2's ``f`` and ``f_replicated`` are the canonical
+      case), so this column-list probe is the only source of truth.
+    * ``prov_kind`` is the planner-hook classifier's verdict
+      (``'tid'`` / ``'bid'`` / ``'opaque'``) on the view body, captured
+      via the ``NOTICE`` it emits when ``provsql.classify_top_level`` is
+      on.  ``None`` when the classifier didn't certify (e.g. older
+      extension without the GUC, or no NOTICE fired).  The schema-panel
+      pill uses this to upgrade the bare ``prov`` label on a view to
+      ``prov-tid`` / ``prov-bid`` so the user sees what kind of
+      uncertainty the view actually carries, computed live from its
+      body rather than from a recorded tag (views have no
+      ``provsql_table_info`` entry).
+
+    The probe runs inside a transaction with ``force_rollback=True`` so
+    the GUC change and any side effects (the probe is read-only, but
+    PG still opens a real transaction) don't leak.  The GUC ``SET LOCAL``
+    is itself wrapped in a savepoint so older databases without the
+    1.6.0-dev GUC degrade to ``(propagates_only, None)`` instead of
+    aborting.
+    """
     qname = sql.Identifier(schema, table)
+    notices: list[str] = []
+
+    def collect(diag):
+        msg = diag.message_primary or ""
+        if msg.startswith("ProvSQL: query result is "):
+            notices.append(msg)
+
+    propagates = False
     try:
-        with conn.transaction(force_rollback=False):
+        with conn.transaction(force_rollback=True):
             with conn.cursor() as cur:
-                cur.execute(sql.SQL("SELECT * FROM {} LIMIT 0").format(qname))
-                desc = cur.description or []
-                for col in desc:
-                    if col.name == "provsql" and col.type_code == _UUID_OID:
-                        return True
-                return False
+                cur.execute("SAVEPOINT classify_guc")
+                try:
+                    cur.execute("SET LOCAL provsql.classify_top_level = on")
+                except psycopg.errors.UndefinedObject:
+                    cur.execute("ROLLBACK TO SAVEPOINT classify_guc")
+                else:
+                    cur.execute("RELEASE SAVEPOINT classify_guc")
+            conn.add_notice_handler(collect)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(sql.SQL("SELECT * FROM {} LIMIT 0").format(qname))
+                    desc = cur.description or []
+                    for col in desc:
+                        if col.name == "provsql" and col.type_code == _UUID_OID:
+                            propagates = True
+                            break
+            finally:
+                conn.remove_notice_handler(collect)
     except Exception:
-        return False
+        return False, None
+
+    for msg in notices:
+        m = _CLASSIFY_NOTICE_RE.match(msg)
+        if m:
+            return propagates, m.group(1).lower()
+    return propagates, None
 
 
 @dataclass
@@ -725,26 +839,48 @@ _INTERVAL_KERNELS = {
     "nummultirange":  "sr_interval_num",
     "int4multirange": "sr_interval_int",
 }
+# `boolean_rewrite_compatible`: mirrors the C++
+# `semiring::*::compatibleWithBooleanRewrite()` predicate (see
+# src/semiring/*.h). When the root of the circuit being evaluated is a
+# `gate_assumed_boolean` (produced by the safe-query rewriter under
+# `provsql.boolean_provenance = on`), `GenericCircuit::evaluate` refuses
+# any semiring whose predicate is false. Studio uses this flag to
+# narrow the eval-strip dropdown in that case so users do not pick a
+# semiring that will throw. Drift detection is handled by
+# `test/sql/safe_query_semiring.sql` (which exercises one tagged token
+# against each semiring) ; if the C++ side ever flips a value, that
+# test will fail and this dict must be updated.
 _COMPILED_SEMIRINGS: dict[str, dict] = {
     # Boolean & symbolic.
-    "boolexpr": {"func": "sr_boolexpr", "needs_mapping": False, "types": None},
-    "boolean":  {"func": "sr_boolean",  "types": ("boolean",)},
-    "formula":  {"func": "sr_formula",  "types": None},
+    "boolexpr": {"func": "sr_boolexpr", "needs_mapping": False, "types": None,
+                 "boolean_rewrite_compatible": True},
+    "boolean":  {"func": "sr_boolean",  "types": ("boolean",),
+                 "boolean_rewrite_compatible": True},
+    "formula":  {"func": "sr_formula",  "types": None,
+                 "boolean_rewrite_compatible": True},
     # Lineage.
-    "why":      {"func": "sr_why",      "types": None},
-    "which":    {"func": "sr_which",    "types": None},
-    "how":      {"func": "sr_how",      "types": None},
+    "why":      {"func": "sr_why",      "types": None,
+                 "boolean_rewrite_compatible": False},
+    "which":    {"func": "sr_which",    "types": None,
+                 "boolean_rewrite_compatible": False},
+    "how":      {"func": "sr_how",      "types": None,
+                 "boolean_rewrite_compatible": False},
     # Numeric / scoring.
-    "counting":    {"func": "sr_counting",    "types": _NUMERIC_TYPES},
-    "tropical":    {"func": "sr_tropical",    "types": _NUMERIC_TYPES},
-    "viterbi":     {"func": "sr_viterbi",     "types": _NUMERIC_TYPES},
-    "lukasiewicz": {"func": "sr_lukasiewicz", "types": _NUMERIC_TYPES},
+    "counting":    {"func": "sr_counting",    "types": _NUMERIC_TYPES,
+                    "boolean_rewrite_compatible": False},
+    "tropical":    {"func": "sr_tropical",    "types": _NUMERIC_TYPES,
+                    "boolean_rewrite_compatible": False},
+    "viterbi":     {"func": "sr_viterbi",     "types": _NUMERIC_TYPES,
+                    "boolean_rewrite_compatible": False},
+    "lukasiewicz": {"func": "sr_lukasiewicz", "types": _NUMERIC_TYPES,
+                    "boolean_rewrite_compatible": False},
     # Interval-valued (PG14+ multirange family). `func` is None: the
     # kernel is picked at evaluation time from the mapping's value type.
     "interval-union": {
         "func": None,
         "types": tuple(_INTERVAL_KERNELS.keys()),
         "min_pg": 140000,
+        "boolean_rewrite_compatible": True,
     },
     # User-enum carrier. `accepts_enum: True` filters to mappings whose
     # `value` column is any user-defined enum (typtype = 'e'); the
@@ -752,8 +888,10 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
     # third arg of `sr_minmax`/`sr_maxmin` is a sample value of that
     # enum, used only for type inference; the dispatch synthesises one
     # via `enum_first(NULL::<base_type>)`.
-    "minmax": {"func": "sr_minmax", "accepts_enum": True},
-    "maxmin": {"func": "sr_maxmin", "accepts_enum": True},
+    "minmax": {"func": "sr_minmax", "accepts_enum": True,
+               "boolean_rewrite_compatible": False},
+    "maxmin": {"func": "sr_maxmin", "accepts_enum": True,
+               "boolean_rewrite_compatible": False},
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
@@ -1026,7 +1164,7 @@ def evaluate_circuit(
                     (tool_search_path,),
                 )
             for guc_name, guc_val in (extra_gucs or {}).items():
-                if guc_name not in _PANEL_GUCS:
+                if guc_name not in _EXTRA_GUC_WHITELIST:
                     continue
                 cur.execute(
                     sql.SQL("SET LOCAL {} = {}").format(
@@ -1173,7 +1311,7 @@ def evaluate_circuit(
                     (tool_search_path,),
                 )
             for guc_name, guc_val in (extra_gucs or {}).items():
-                if guc_name not in _PANEL_GUCS:
+                if guc_name not in _EXTRA_GUC_WHITELIST:
                     continue
                 cur.execute(
                     sql.SQL("SET LOCAL {} = {}").format(
@@ -1293,7 +1431,7 @@ def evaluate_circuit(
         # rv_mc_samples=0 to disable the MC fallback still gets MC).
         # exec_batch already does this for batched queries; mirror it.
         for guc_name, guc_val in (extra_gucs or {}).items():
-            if guc_name not in _PANEL_GUCS:
+            if guc_name not in _EXTRA_GUC_WHITELIST:
                 continue
             cur.execute(
                 sql.SQL("SET LOCAL {} = {}").format(
@@ -1431,6 +1569,7 @@ def exec_batch(
     statement_timeout: str,
     where_provenance: bool,
     update_provenance: bool = False,
+    boolean_provenance: bool = False,
     wrap_last: bool,
     extra_gucs: dict[str, str] | None = None,
     on_pid=None,
@@ -1556,6 +1695,28 @@ def exec_batch(
                     "SET LOCAL provsql.update_provenance = "
                     + ("on" if update_provenance else "off")
                 )
+                cur.execute(
+                    "SET LOCAL provsql.boolean_provenance = "
+                    + ("on" if boolean_provenance else "off")
+                )
+                # Studio always wants the classifier NOTICE for the
+                # user's outermost SELECT so the result-pane header
+                # can render the certified kind (TID / BID / OPAQUE)
+                # as a prov-* badge. Older extension versions don't
+                # know this GUC ; we wrap the SET LOCAL in a
+                # SAVEPOINT so the "unrecognized configuration
+                # parameter" error doesn't abort the surrounding
+                # transaction (Studio still works against pre-1.6.0
+                # servers, just without the badge).
+                cur.execute("SAVEPOINT classify_guc")
+                try:
+                    cur.execute(
+                        "SET LOCAL provsql.classify_top_level = on"
+                    )
+                except psycopg.errors.UndefinedObject:
+                    cur.execute("ROLLBACK TO SAVEPOINT classify_guc")
+                else:
+                    cur.execute("RELEASE SAVEPOINT classify_guc")
                 # provsql.tool_search_path: prepended to $PATH when
                 # provsql spawns external tools (d4 / c2d / weightmc /
                 # graph-easy). set_config parameterises the value so
@@ -1570,7 +1731,7 @@ def exec_batch(
                 # the rewriter off via the panel without having to remember
                 # it on every query.
                 for guc_name, guc_val in (extra_gucs or {}).items():
-                    if guc_name not in _PANEL_GUCS:
+                    if guc_name not in _EXTRA_GUC_WHITELIST:
                         continue
                     cur.execute(
                         sql.SQL("SET LOCAL {} = {}").format(
@@ -1666,7 +1827,6 @@ def exec_batch(
                                 return [], _user_error_result(e2, meta, statement_timeout), meta
                         else:
                             return [], _user_error_result(e, meta, statement_timeout), meta
-                    capture[0] = True
                 else:
                     # No wrap (circuit mode or unwrappable last). The user's
                     # query runs once with capture enabled : its planner-hook
@@ -1676,6 +1836,20 @@ def exec_batch(
                     except psycopg.Error as e:
                         return [], _user_error_result(e, meta, statement_timeout), meta
 
+                # Post-processing pass : silence the notice handler so
+                # Studio-internal lookups (the per-column `_type_name`
+                # pg_type probe behind `_result_from_cursor`, the
+                # `_resolve_agg_display` agg_token name resolution) don't
+                # add their own classifier NOTICEs to the captured stream.
+                # Each of those lookups is a `SELECT ... FROM <tbl>`
+                # against an untracked catalog table, which the planner-
+                # hook classifier (when on) would tag as
+                # "TID (no provenance-tracked sources)". With Studio's
+                # "last NOTICE wins" pill logic, a single user query that
+                # introduced new column types would clobber the user's
+                # OPAQUE / BID verdict with a stale TID until the per-
+                # connection type-name cache warmed up.
+                capture[0] = False
                 final = _result_from_cursor(cur, max_rows=max_result_rows)
                 # If the result has any agg_token columns, resolve their
                 # underlying UUIDs back to "value (*)" display strings in
@@ -1851,6 +2025,7 @@ def _user_error_result(
 _TOGGLE_GUCS = {
     "provsql.where_provenance",
     "provsql.update_provenance",
+    "provsql.boolean_provenance",
 }
 _PANEL_GUCS = {
     "provsql.active",
@@ -1860,6 +2035,17 @@ _PANEL_GUCS = {
     "provsql.simplify_on_load",
     "provsql.hybrid_evaluation",
 }
+# Session-sticky modes the app keeps in app.config["SESSION_MODES"] and
+# injects into every backend call's extra_gucs.  Distinct from
+# _PANEL_GUCS so they stay invisible to the Config panel API ; the
+# Boolean-mode selector in the toolbar owns the lifecycle.  Allowed
+# through the same SET LOCAL pipeline as the panel GUCs.
+_SESSION_MODE_GUCS = {
+    "provsql.boolean_provenance",
+}
+# Every key accepted as an `extra_gucs` payload (the union the
+# downstream filter functions check).
+_EXTRA_GUC_WHITELIST = _PANEL_GUCS | _SESSION_MODE_GUCS
 _GUC_WHITELIST = _TOGGLE_GUCS | _PANEL_GUCS
 
 

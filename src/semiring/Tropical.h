@@ -72,6 +72,19 @@ virtual value_type delta(value_type x) const override
 {
   return x==zero() ? zero() : one();
 }
+/**
+ * @brief No semiring homomorphism @c BoolFunc(Y) →+* Tropical exists
+ *        (the min-plus structure cannot be made Boolean-functions
+ *        compatible), so the safe-query Boolean rewrite is unsound
+ *        under the tropical semiring.  Inherits the @c false default
+ *        from @c Semiring; this override exists for documentation.
+ *
+ * Lean: @c Provenance.Semirings.TropicalN.no_hom_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/Tropical.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return false;
+}
 value_type parse_leaf(const char *v) const {
   return atof(v);
 }

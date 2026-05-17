@@ -206,6 +206,28 @@ virtual ~Semiring() = default;
 virtual bool absorptive() const {
   return false;
 }
+
+/**
+ * @brief Return @c true if a semiring homomorphism @c BoolFunc(X)
+ *        →+* @c S exists, so the safe-query (Boolean-rewrite)
+ *        optimisation produces circuits that are semantically faithful
+ *        when evaluated under this semiring.
+ *
+ * The compiled-semiring dispatcher consults this predicate before
+ * evaluating a circuit whose root gate carries
+ * @c PROVSQL_ROOT_TAG_BOOLEAN_REWRITE.  Returning @c false on a tagged
+ * circuit raises @c CircuitException.
+ *
+ * Defaults to @c false: a new semiring whose author has not yet
+ * verified the homomorphism is fail-closed by construction.
+ * Subclasses with a verified homomorphism (currently @c Boolean,
+ * @c BoolExpr, @c Formula, and @c IntervalUnion) override to return
+ * @c true.  The justification (Lean-proof reference) belongs in a
+ * comment next to each override; see the @c src/semiring/ headers.
+ */
+virtual bool compatibleWithBooleanRewrite() const {
+  return false;
+}
 };
 
 

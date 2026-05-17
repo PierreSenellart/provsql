@@ -31,6 +31,21 @@
 #include "PermutationStrategy.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 
+/* The min-fill elimination loop below can grind for tens of seconds
+ * on circuits whose treewidth approaches MAX_TREEWIDTH ; without
+ * periodic CHECK_FOR_INTERRUPTS the backend ignores both
+ * statement_timeout and pg_cancel_backend.  Guard pattern mirrors
+ * BooleanCircuit.cpp's : in the standalone tdkc binary the macro
+ * resolves to a no-op. */
+#ifdef TDKC
+#define CHECK_FOR_INTERRUPTS() ((void)0)
+#else
+extern "C" {
+#include "postgres.h"
+#include "miscadmin.h"
+}
+#endif
+
 TreeDecomposition::TreeDecomposition(std::istream &in)
 {
   in >> *this;
@@ -301,6 +316,11 @@ TreeDecomposition::TreeDecomposition(const BooleanCircuit &bc)
   //we stop when the maximum bag has the same width as the remaining graph
   //or when we achive the partial decomposition condition
   while(max_width<graph.number_nodes() && !strategy.empty()){
+    /* Yield to the postgres backend ; the min-fill elimination loop
+     * dominates the runtime of the tree-decomposition construction
+     * on circuits near MAX_TREEWIDTH, so per-iteration cancellation
+     * is the right granularity. */
+    CHECK_FOR_INTERRUPTS();
     //getting the next node
     unsigned long node = strategy.get_next();
     //removing the node from the graph and getting its neighbours

@@ -24,6 +24,75 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     Enable provenance tracking for ``INSERT``, ``UPDATE``, and ``DELETE``
     statements (see :doc:`data-modification`). Requires PostgreSQL ≥ 14.
 
+.. _provsql-boolean-provenance:
+
+``provsql.boolean_provenance`` (default: ``off``)
+    Umbrella switch for every optimisation that is sound only when
+    provenance is interpreted in the Boolean semiring.  When on, two
+    independent layers activate:
+
+    * **Planner-level safe-query rewriting.**  Self-join-free
+      hierarchical conjunctive queries (and UCQs of such queries) over
+      TID / BID base tables are rewritten with per-atom ``DISTINCT``
+      projections so the resulting provenance circuit is read-once.  A
+      read-once circuit is probability-evaluated in linear time by the
+      ``'independent'`` method, replacing the ``'tree-decomposition'``
+      or ``'compilation'`` fallback that would otherwise be needed.
+      Queries outside the recognised class pass through unchanged.
+
+    * **Load-time Boolean-only circuit simplification.**  When a
+      circuit is loaded from the mmap store, ``foldBooleanIdentities``
+      applies rewrites that hold in the Boolean semiring but not in
+      counting / tropical / Viterbi / …: idempotence (drop repeated
+      child wires of ``plus`` / ``times``), plus-with-one absorption
+      (``plus(…, one, …) → one``), and absorption
+      (``plus(x, times(x, y, …), …) → plus(x, …)`` and dually for
+      ``times``).  This is independent of
+      :ref:`provsql.simplify_on_load <provsql-simplify-on-load>`:
+      disabling the universal passes does not disable the
+      Boolean-only ones.
+
+    In both cases the rewritten gates are tagged (persistently for the
+    rewriter, in a side-band set for the load-time simplifier) so that
+    semirings whose algebra is not Boolean-faithful refuse to evaluate
+    them; see :doc:`probabilities` and the
+    :ref:`compatibility note <semiring-boolean-compat>` in
+    :doc:`semirings`.  Off by default because the rewrites change the
+    multiset of result rows / the underlying polynomial and are
+    therefore unsound for per-row provenance interrogations and for
+    non-Boolean-faithful semirings.
+
+.. _provsql-classify-top-level:
+
+``provsql.classify_top_level`` (default: ``off``)
+    Emit a ``NOTICE`` for every top-level ``SELECT`` reporting the
+    certified kind of the result relation under the
+    ``provsql_table_kind`` taxonomy (``TID`` / ``BID`` / ``OPAQUE``) and
+    the provenance-tracked base relations it touches:
+
+    .. code-block:: text
+
+        NOTICE:  ProvSQL: query result is TID (sources: public.personnel)
+        NOTICE:  ProvSQL: query result is OPAQUE
+        NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+
+    The source list is reported for ``TID`` and ``BID`` results
+    (including the explicit ``no provenance-tracked sources`` marker
+    for the deterministic case) but omitted for ``OPAQUE`` results:
+    when the shape gate trips on a sublink, a set operation, a
+    ``GROUP BY``, etc., the rtable walk only reaches the syntactically
+    visible sources, so a printed list would be partial and
+    misleadingly suggest completeness.
+
+    The classifier runs on the user's parsed ``Query`` before any
+    rewriting and only on the user's outermost statement; PL/pgSQL
+    helpers the rewriter calls into (``provenance_times``,
+    ``provenance_aggregate``, …) do not produce extra notices.
+
+    ProvSQL Studio enables this GUC automatically and renders the
+    certified kind on the result-table provenance pill; see
+    :doc:`studio`.
+
 .. _provsql-verbose-level:
 
 ``provsql.verbose_level`` (default: ``0``)

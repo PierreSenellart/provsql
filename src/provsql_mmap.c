@@ -24,6 +24,7 @@
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
+#include "MMappedTableInfo.h"
 
 #include <errno.h>
 #include <unistd.h>
@@ -33,11 +34,15 @@
 
 #include "postgres.h"
 #include "postmaster/bgworker.h"
+#include "catalog/pg_type.h"          /* INT2OID etc. -- the _d.h variant
+                                         only exists from PG 11 onwards */
 #include "fmgr.h"
 #include "funcapi.h"
 #include "utils/array.h"
 #include "access/htup_details.h"
 #include "utils/builtins.h"
+#include "utils/inval.h"
+#include "utils/syscache.h"
 
 #include "circuit_cache.h"
 
@@ -521,6 +526,435 @@ Datum get_prob(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
   else
     PG_RETURN_FLOAT8(result);
+}
+
+/** @brief Translate a SQL-side kind label into the persisted enum value. */
+static uint8_t parse_table_kind(const char *label)
+{
+  if(strcmp(label, "tid") == 0) return PROVSQL_TABLE_TID;
+  if(strcmp(label, "bid") == 0) return PROVSQL_TABLE_BID;
+  if(strcmp(label, "opaque") == 0) return PROVSQL_TABLE_OPAQUE;
+  provsql_error("set_table_info: unknown table kind '%s' (expected "
+                "'tid', 'bid', or 'opaque')", label);
+  return PROVSQL_TABLE_TID;  /* unreachable */
+}
+
+/** @brief Inverse of @c parse_table_kind for use by @c get_table_info. */
+static const char *table_kind_label(uint8_t kind)
+{
+  switch(kind) {
+  case PROVSQL_TABLE_TID:    return "tid";
+  case PROVSQL_TABLE_BID:    return "bid";
+  case PROVSQL_TABLE_OPAQUE: return "opaque";
+  }
+  provsql_error("get_table_info: unknown table kind value %u", kind);
+  return NULL;  /* unreachable */
+}
+
+PG_FUNCTION_INFO_V1(set_table_info);
+/**
+ * @brief PostgreSQL-callable wrapper for setTableInfo() over the IPC pipe.
+ *
+ * Stores per-relation provenance metadata used by the safe-query
+ * optimisation.  @p relid is the @c pg_class OID of the relation;
+ * @p kind is one of the textual labels @c 'tid' / @c 'bid' /
+ * @c 'opaque' (see @c provsql_table_kind in @c MMappedTableInfo.h);
+ * @p block_key is an @c int2 array (possibly empty) listing the
+ * block-key column numbers when @p kind is @c 'bid'.
+ */
+Datum set_table_info(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  text *kind_text;
+  char *kind_str;
+  uint8_t kind;
+  ArrayType *block_key;
+  uint16 block_key_n = 0;
+  int16 *block_key_data = NULL;
+  Size payload_size;
+
+  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
+    provsql_error("Invalid NULL value passed to set_table_info");
+
+  relid     = PG_GETARG_OID(0);
+  kind_text = PG_GETARG_TEXT_PP(1);
+  kind_str  = text_to_cstring(kind_text);
+  kind      = parse_table_kind(kind_str);
+  pfree(kind_str);
+  block_key = PG_ARGISNULL(2) ? NULL : PG_GETARG_ARRAYTYPE_P(2);
+
+  if(block_key) {
+    if(ARR_NDIM(block_key) > 1)
+      provsql_error("Invalid multi-dimensional array passed to set_table_info");
+    else if(ARR_NDIM(block_key) == 1)
+      block_key_n = *ARR_DIMS(block_key);
+    if(block_key_n > 0)
+      block_key_data = (int16 *) ARR_DATA_PTR(block_key);
+  }
+
+  if(block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY)
+    provsql_error("set_table_info: block key wider than %d columns "
+                  "(%u given) is not supported",
+                  PROVSQL_TABLE_INFO_MAX_BLOCK_KEY, block_key_n);
+
+  payload_size = sizeof(char) + sizeof(Oid) + sizeof(Oid) + sizeof(uint8)
+                 + sizeof(uint16) + block_key_n * sizeof(int16);
+  if(payload_size > PIPE_BUF)
+    provsql_error("set_table_info: IPC payload exceeds PIPE_BUF");
+
+  STARTWRITEM();
+  ADDWRITEM("T", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+  ADDWRITEM(&kind, uint8);
+  ADDWRITEM(&block_key_n, uint16);
+  for(uint16 i = 0; i < block_key_n; ++i)
+    ADDWRITEM(&block_key_data[i], int16);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type T)");
+  }
+  provsql_shmem_unlock();
+
+  /* Broadcast a relcache invalidation so every backend re-fetches on
+   * next access.  Standard DDL (the ALTER TABLE in add_provenance and
+   * repair_key) already does this, but set_table_info is also called
+   * from DML paths that do not (INSERT INTO T SELECT, UPDATE under
+   * provsql.update_provenance, ...) and the upgrade-script backfill
+   * runs outside any DDL on the target relation.  Guarded by a
+   * pg_class existence check so the sql_drop event-trigger path,
+   * which calls remove_table_info on a relid that has just been
+   * deleted from pg_class, does not raise "cache lookup failed". */
+  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+    CacheInvalidateRelcacheByRelid(relid);
+
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(remove_table_info);
+/** @brief PostgreSQL-callable wrapper for removeTableInfo() over the IPC pipe. */
+Datum remove_table_info(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+
+  if(PG_ARGISNULL(0))
+    provsql_error("Invalid NULL value passed to remove_table_info");
+
+  relid = PG_GETARG_OID(0);
+
+  STARTWRITEM();
+  ADDWRITEM("D", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type D)");
+  }
+  provsql_shmem_unlock();
+
+  /* Same guard as set_table_info: skip the broadcast when the relation
+   * is already gone (typical for the sql_drop event-trigger path,
+   * where pg_class no longer has a row for this OID). */
+  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+    CacheInvalidateRelcacheByRelid(relid);
+
+  PG_RETURN_VOID();
+}
+
+/**
+ * @brief C-callable IPC fetch for per-table provenance metadata.
+ *
+ * Sends an @c 's' message to the background worker and reads back the
+ * response.  No caching: every call hits the worker.  Use
+ * @c provsql_lookup_table_info() for the cached, planner-hot-path
+ * variant.
+ *
+ * @param relid  pg_class OID of the relation to look up.
+ * @param out    On success, filled with the stored record.
+ * @return @c true if the worker returned a record, @c false otherwise.
+ */
+bool provsql_fetch_table_info(Oid relid, ProvenanceTableInfo *out)
+{
+  char found;
+
+  STARTWRITEM();
+  ADDWRITEM("s", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+
+  provsql_shmem_lock_exclusive();
+
+  if(!SENDWRITEM() || !READB(found, char)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot communicate with pipe (message type s)");
+  }
+  if(found) {
+    if(!READB(out->kind, uint8_t) || !READB(out->block_key_n, uint16)) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot communicate with pipe (message type s)");
+    }
+    if(out->block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY) {
+      provsql_shmem_unlock();
+      provsql_error("provsql_fetch_table_info: server returned an unexpectedly wide block key");
+    }
+    for(uint16 i = 0; i < out->block_key_n; ++i)
+      if(!READB(out->block_key[i], AttrNumber)) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot communicate with pipe (message type s)");
+      }
+    out->relid = relid;
+  }
+
+  provsql_shmem_unlock();
+  return found != 0;
+}
+
+PG_FUNCTION_INFO_V1(get_table_info);
+/**
+ * @brief PostgreSQL-callable wrapper around the cached table-info lookup.
+ *
+ * Returns @c NULL when no record exists for @p relid; otherwise a
+ * record @c (kind text, block_key int2[]) where @c kind is one of
+ * @c 'tid' / @c 'bid' / @c 'opaque'.  Goes through
+ * @c provsql_lookup_table_info so repeated calls in the same session
+ * do not pay for IPC.
+ */
+Datum get_table_info(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  ProvenanceTableInfo info;
+  TupleDesc tupdesc;
+  Datum values[2];
+  bool nulls[2] = {false, false};
+  Datum *elems;
+  ArrayType *arr;
+
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  relid = PG_GETARG_OID(0);
+
+  if(!provsql_lookup_table_info(relid, &info))
+    PG_RETURN_NULL();
+
+  if(get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+    provsql_error("get_table_info: expected composite return type");
+  tupdesc = BlessTupleDesc(tupdesc);
+
+  values[0] = CStringGetTextDatum(table_kind_label(info.kind));
+
+  elems = palloc(info.block_key_n * sizeof(Datum));
+  for(uint16 i = 0; i < info.block_key_n; ++i)
+    elems[i] = Int16GetDatum(info.block_key[i]);
+  arr = construct_array(elems, info.block_key_n, INT2OID, 2, true, 's');
+  pfree(elems);
+  values[1] = PointerGetDatum(arr);
+
+  PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+PG_FUNCTION_INFO_V1(set_ancestors);
+/**
+ * @brief PostgreSQL-callable wrapper for setTableAncestry() over the
+ *        IPC pipe.
+ *
+ * Records the base-relation ancestor set of a tracked relation.
+ * @p relid is the @c pg_class OID of the relation; @p ancestors is
+ * an @c oid[] (possibly empty) listing the base @c add_provenance /
+ * @c repair_key relations this one's atoms ultimately come from.
+ * The worker preserves the relation's existing @c kind / @c
+ * block_key half on update.
+ *
+ * Silently no-op on the worker side when @p relid has no kind
+ * record yet -- the safe-query rewriter only consults ancestry
+ * for tracked relations, so callers should run
+ * @c add_provenance / @c repair_key / @c set_table_info first.
+ */
+Datum set_ancestors(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  ArrayType *ancestors;
+  uint16 ancestor_n = 0;
+  Oid *ancestor_data = NULL;
+  Size payload_size;
+
+  if(PG_ARGISNULL(0))
+    provsql_error("Invalid NULL value passed to set_ancestors");
+
+  relid     = PG_GETARG_OID(0);
+  ancestors = PG_ARGISNULL(1) ? NULL : PG_GETARG_ARRAYTYPE_P(1);
+
+  if(ancestors) {
+    if(ARR_NDIM(ancestors) > 1)
+      provsql_error("Invalid multi-dimensional array passed to set_ancestors");
+    else if(ARR_NDIM(ancestors) == 1)
+      ancestor_n = *ARR_DIMS(ancestors);
+    if(ancestor_n > 0)
+      ancestor_data = (Oid *) ARR_DATA_PTR(ancestors);
+  }
+
+  if(ancestor_n > PROVSQL_TABLE_INFO_MAX_ANCESTORS)
+    provsql_error("set_ancestors: ancestor set wider than %d entries "
+                  "(%u given) is not supported",
+                  PROVSQL_TABLE_INFO_MAX_ANCESTORS, ancestor_n);
+
+  payload_size = sizeof(char) + sizeof(Oid) + sizeof(Oid)
+                 + sizeof(uint16) + ancestor_n * sizeof(Oid);
+  if(payload_size > PIPE_BUF)
+    provsql_error("set_ancestors: IPC payload exceeds PIPE_BUF");
+
+  STARTWRITEM();
+  ADDWRITEM("A", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+  ADDWRITEM(&ancestor_n, uint16);
+  for(uint16 i = 0; i < ancestor_n; ++i)
+    ADDWRITEM(&ancestor_data[i], Oid);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type A)");
+  }
+  provsql_shmem_unlock();
+
+  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+    CacheInvalidateRelcacheByRelid(relid);
+
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(remove_ancestors);
+/**
+ * @brief PostgreSQL-callable wrapper for removeTableAncestry() over
+ *        the IPC pipe.
+ *
+ * Clears just the ancestor half of a per-table metadata record,
+ * leaving @c kind / @c block_key intact.  Use @c remove_table_info
+ * to delete the whole record instead.
+ */
+Datum remove_ancestors(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+
+  if(PG_ARGISNULL(0))
+    provsql_error("Invalid NULL value passed to remove_ancestors");
+
+  relid = PG_GETARG_OID(0);
+
+  STARTWRITEM();
+  ADDWRITEM("R", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type R)");
+  }
+  provsql_shmem_unlock();
+
+  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+    CacheInvalidateRelcacheByRelid(relid);
+
+  PG_RETURN_VOID();
+}
+
+/**
+ * @brief C-callable IPC fetch for the ancestor half of a per-table
+ *        metadata record.
+ *
+ * Sends an @c 'a' message to the background worker and reads back
+ * the response.  No caching: every call hits the worker.  Use
+ * @c provsql_lookup_ancestry for the cached, planner-hot-path
+ * variant.
+ *
+ * @param relid           pg_class OID of the relation to look up.
+ * @param ancestor_n_out  On @c true return, count of valid entries.
+ * @param ancestors_out   On @c true return, the ancestor OIDs
+ *                        (caller buffer of
+ *                        @c PROVSQL_TABLE_INFO_MAX_ANCESTORS).
+ * @return @c true if the worker returned a non-zero ancestor count;
+ *         @c false otherwise (no record, or empty ancestor set).
+ */
+bool provsql_fetch_ancestry(Oid relid, uint16 *ancestor_n_out,
+                            Oid *ancestors_out)
+{
+  char found;
+  uint16 n = 0;
+
+  STARTWRITEM();
+  ADDWRITEM("a", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(&relid, Oid);
+
+  provsql_shmem_lock_exclusive();
+
+  if(!SENDWRITEM() || !READB(found, char)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot communicate with pipe (message type a)");
+  }
+  if(found) {
+    if(!READB(n, uint16)) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot communicate with pipe (message type a)");
+    }
+    if(n > PROVSQL_TABLE_INFO_MAX_ANCESTORS) {
+      provsql_shmem_unlock();
+      provsql_error("provsql_fetch_ancestry: server returned an "
+                    "unexpectedly wide ancestor set");
+    }
+    for(uint16 i = 0; i < n; ++i)
+      if(!READB(ancestors_out[i], Oid)) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot communicate with pipe (message type a)");
+      }
+  }
+
+  provsql_shmem_unlock();
+  *ancestor_n_out = n;
+  /* "Found but empty" collapses to the same return as "not found":
+   * both make the safe-query rewriter take the conservative path. */
+  return found != 0 && n > 0;
+}
+
+PG_FUNCTION_INFO_V1(get_ancestors);
+/**
+ * @brief PostgreSQL-callable wrapper around the cached ancestry lookup.
+ *
+ * Returns @c NULL when no ancestor record exists (or the record is
+ * empty); otherwise an @c oid[] listing the base-relation OIDs.
+ * Goes through @c provsql_lookup_ancestry so repeated calls in the
+ * same session do not pay for IPC.
+ */
+Datum get_ancestors(PG_FUNCTION_ARGS)
+{
+  Oid relid;
+  uint16 ancestor_n;
+  Oid ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+  Datum *elems;
+  ArrayType *arr;
+
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  relid = PG_GETARG_OID(0);
+
+  if(!provsql_lookup_ancestry(relid, &ancestor_n, ancestors))
+    PG_RETURN_NULL();
+
+  elems = palloc(ancestor_n * sizeof(Datum));
+  for(uint16 i = 0; i < ancestor_n; ++i)
+    elems[i] = ObjectIdGetDatum(ancestors[i]);
+  arr = construct_array(elems, ancestor_n, OIDOID,
+                        sizeof(Oid), true, 'i');
+  pfree(elems);
+
+  PG_RETURN_ARRAYTYPE_P(arr);
 }
 
 PG_FUNCTION_INFO_V1(get_infos);

@@ -67,6 +67,19 @@ virtual value_type delta(value_type x) const override
 virtual bool absorptive() const override {
   return true;
 }
+/**
+ * @brief The identity map @c BoolFunc(X) →+* Bool (evaluating a free
+ *        Boolean function at a valuation) is an m-semiring
+ *        homomorphism, so the safe-query Boolean rewrite preserves
+ *        evaluation results in this semiring.
+ *
+ * Lean: @c Provenance.Semirings.Bool.homomorphism_to_BoolFunc and
+ * @c Bool.homomorphism_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/Bool.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return true;
+}
 value_type parse_leaf(const char *v) const {
   return *v != 'f' && *v != '0';
 }

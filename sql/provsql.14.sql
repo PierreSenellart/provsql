@@ -29,12 +29,25 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
-  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID UNIQUE DEFAULT public.uuid_generate_v4()', _tbl);
+  -- See the common-version body for the rationale of dropping the
+  -- column DEFAULT and UNIQUE in favour of provenance_guard + a
+  -- plain index.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
+  EXECUTE format(
+    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    _tbl);
 
   EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %s REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.insert_statement_trigger()', _tbl);
   EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %s REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
   EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %s REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.update_statement_trigger()', _tbl);
 
+  PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
 END
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 /** @endcond */

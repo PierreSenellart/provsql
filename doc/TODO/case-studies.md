@@ -1,10 +1,10 @@
 # Documentation TODO: case-study coverage
 
 `feature-coverage.md` (in this directory) lists user-guide features that
-are not exercised by the tutorial or any of the five existing case
+are not exercised by the tutorial or any of the six existing case
 studies. This file plans how to close that gap, by extending CS1-CS5
-where the existing scenario fits, and by sketching a new CS6 around
-upcoming ProvSQL features.
+where the existing scenario fits. CS6 (City Air-Quality Sensor Network)
+already covers the continuous-distribution surface end-to-end.
 
 ## Out of scope
 
@@ -69,7 +69,7 @@ case-study real estate:
   high-confidence filter, showing that inserted rows inherit source
   provenance rather than fresh tokens.
 
-### CS6: Upcoming features (new case study, blocked on implementation)
+### Future case study (CS7), blocked on upstream features
 
 A new case study to be written once the corresponding ProvSQL features
 land. Targets:
@@ -92,5 +92,5 @@ land. Targets:
 2. **Larger CS2 / CS4 extensions** : CS2 grows by five bullets and CS4
    adds a UPDATE / `undo` round-trip. These are the biggest single-CS
    coverage wins.
-3. **CS6** : blocked on the upstream features (UDFs, aggregate joins,
+3. **CS7** : blocked on the upstream features (UDFs, aggregate joins,
    `choose`) landing in ProvSQL; revisit when those ship.

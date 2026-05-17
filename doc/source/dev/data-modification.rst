@@ -86,7 +86,11 @@ back to a concrete statement.
 The Triggers
 ------------
 
-:sqlfunc:`add_provenance` (in ``sql/provsql.14.sql``) installs three
+:sqlfunc:`add_provenance` (in ``sql/provsql.14.sql``) installs the
+:sqlfunc:`provenance_guard` ``BEFORE INSERT OR UPDATE OF provsql``
+row-level trigger (which ensures every newly inserted or updated
+row carries a valid provenance UUID, falling back to a fresh leaf
+when the application supplies ``NULL``) and three
 ``AFTER`` statement-level triggers on the target table:
 
 .. code-block:: sql

@@ -1,0 +1,46 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+auto_seeded_to_self
+t
+(1 row)
+repair_key
+
+(1 row)
+bid_seeded_to_self
+t
+(1 row)
+set_ancestors
+
+(1 row)
+anc_a_ancestor_count|anc_a_kind_unchanged
+2|tid
+(1 row)
+remove_ancestors
+
+(1 row)
+ancestors_cleared|kind_still_present
+t|tid
+(1 row)
+remove_table_info
+
+(1 row)
+both_cleared|table_info_cleared
+t|t
+(1 row)
+untracked_returns_null
+t
+(1 row)
+set_ancestors
+
+(1 row)
+still_no_record
+t
+(1 row)
+add_provenance
+
+(1 row)
+dropped_relid_has_no_ancestors
+t
+(1 row)

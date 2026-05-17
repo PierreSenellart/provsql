@@ -288,7 +288,8 @@ def interval_tstz_mapping(client, test_dsn):
 def interval_num_mapping(client, test_dsn):
     """A (value::nummultirange, provenance) mapping where every personnel
     row is tagged with the same numeric validity range `[3.2, 7.8)`.
-    Mirrors the sensor-fusion use case in doc/TODO/compiled-semirings.md."""
+    Mirrors the sensor-fusion use case from the compiled-semirings
+    design notes."""
     _requires_pg14(test_dsn)
     _interval_mapping_fixture(
         client, "personnel_num_validity",

@@ -126,6 +126,21 @@ value_type delta(value_type x) const override {
 }
 
 /**
+ * @brief No semiring homomorphism @c BoolFunc(Y) →+* ℕ[X] exists, so
+ *        the safe-query Boolean rewrite is unsound under
+ *        how-provenance (which is sensitive to derivation
+ *        multiplicities and monomial structure that the read-once
+ *        rewrite collapses).  Inherits the @c false default from
+ *        @c Semiring; this override exists for documentation.
+ *
+ * Lean: @c Provenance.Semirings.How.no_hom_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/How.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return false;
+}
+
+/**
  * @brief Parse a leaf value into a how-provenance polynomial.
  *
  * Accepted input formats (round-trip with @c to_text):

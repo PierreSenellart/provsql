@@ -41,6 +41,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "CircuitFromMMap.h"
 #include "GenericCircuit.h"
 #include "AnalyticEvaluator.h"
+#include "CountCmpEvaluator.h"
 #include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
@@ -160,6 +161,22 @@ static Datum probability_evaluate_internal
   // meaningful only on this path (not in getGenericCircuit, which
   // is shared with semiring evaluators).
   provsql::runAnalyticEvaluator(gc);
+
+  /* Closed-form cmp-probability evaluators.  First implementation
+   * is the Poisson-binomial pre-pass for HAVING COUNT(*) op C over
+   * distinct gate_input leaves ; future MIN / MAX / SUM resolvers
+   * will run from the same hook.  Each replaces a matched gate_cmp
+   * with a Bernoulli gate_input carrying the closed-form probability,
+   * so the surrounding circuit can skip the DNF that
+   * provsql_having's enumerate_valid_worlds would otherwise build.
+   * Same probability-side sound-only caveat as runAnalyticEvaluator :
+   * the gate_input carries a fractional probability so the rewrite
+   * lives here, not in getGenericCircuit.  Hidden behind
+   * provsql.cmp_probability_evaluation for developer A/B testing ;
+   * on by default. */
+  if (provsql_cmp_probability_evaluation) {
+    provsql::runCountCmpEvaluator(gc);
+  }
 
   /* After every resolution pass has run, any gate_rv left in the
    * circuit reaches the BoolExpr translation in getBooleanCircuit

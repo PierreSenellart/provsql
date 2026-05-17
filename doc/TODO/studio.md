@@ -59,7 +59,7 @@ plus per-cell click affordances.
   (sessionStorage `ps.sql` carry-over + the History dropdown). The
   remaining work is a "Download .sql" button next to the History
   dropdown that exports the recent buffer, and a file-picker that
-  imports back into the textarea. About 30 lines of front-end.
+  imports back into the query box. About 30 lines of front-end.
 
 ### Larger features
 

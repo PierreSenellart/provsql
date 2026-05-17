@@ -1,0 +1,996 @@
+\set ECHO none
+\pset format unaligned
+SET search_path TO provsql_test, provsql;
+
+-- Safe-query rewriter -- column and atom-local qual pushdown for
+-- hierarchical CQs.
+--
+-- When every shared (multi-atom) equivalence class touches every
+-- atom, each atom's wrap projects every shared class (root class at
+-- output attno 1, other shared classes at 2..N), the outer cross
+-- product per group is one wrap row per atom, and the resulting
+-- circuit stays read-once.
+--
+-- When some shared class touches only a strict subset of the atoms
+-- (e.g. q :- A(x,y), B(x,y), C(x) with y in {A,B} only), the
+-- detector bundles those atoms into an inner sub-Query whose
+-- @c GROUP @c BY folds the partial-coverage variable away before the
+-- outer join.
+
+CREATE TABLE pd_a(x int, y int);
+CREATE TABLE pd_b(x int, y int);
+CREATE TABLE pd_c(x int);
+
+INSERT INTO pd_a VALUES (1, 10), (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_b VALUES (1, 10), (1, 11), (1, 11), (2, 20);
+INSERT INTO pd_c VALUES (1), (1), (2);
+
+SELECT add_provenance('pd_a');
+SELECT add_provenance('pd_b');
+SELECT add_provenance('pd_c');
+
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_c;
+END $$;
+
+-- (1) Two-atom CQ with two shared classes (x and y both touch
+--     {pd_a, pd_b}).  The wrap of each atom projects both x and y;
+--     the rewritten provenance must match the baseline produced by
+--     the default evaluator on the unrewritten (shared-input)
+--     circuit.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base1 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b
+   WHERE a.x = b.x AND a.y = b.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base1');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew1 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b
+   WHERE a.x = b.x AND a.y = b.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew1');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base1 b JOIN pd_rew1 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (2) Three-atom CQ with a partial-coverage shared class (y only in
+--     {pd_a, pd_b}).  The multi-level path builds an inner sub-Query
+--     that folds y for {pd_a, pd_b} before joining the outer C-wrap
+--     on x, so the resulting circuit is read-once and the rewritten
+--     probability must match the baseline.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base2 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b, pd_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base2');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew2 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b, pd_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew2');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base2 b JOIN pd_rew2 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (3) Rewritten root-gate shape for case (1): for each x, the root
+--     must be gate_times of two gate_plus children (one per atom).
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_shape AS
+  SELECT a.x,
+         get_gate_type(provenance())                  AS root,
+         array_length(get_children(provenance()), 1)  AS root_nchildren
+    FROM pd_a a, pd_b b
+   WHERE a.x = b.x AND a.y = b.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_shape');
+SELECT x, root, root_nchildren FROM pd_shape ORDER BY x;
+
+-- (4) Case A: A(x,y), B(x,y), C(x,y,z) with c.z unreferenced
+--     anywhere in the outer query.  PostgreSQL's parser never
+--     materialises a Var for c.z, so the detector only sees x and y
+--     -- both shared classes touch all three atoms.  The rewriter
+--     accepts and the rewritten circuit must be read-once with the
+--     same probability as the baseline.
+CREATE TABLE pd_g(x int, y int, z int);
+INSERT INTO pd_g VALUES (1, 10, 100), (1, 10, 200), (1, 11, 100), (2, 20, 999);
+SELECT add_provenance('pd_g');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.7) FROM pd_g;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base4 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b, pd_g g
+   WHERE a.x = b.x AND a.x = g.x AND a.y = b.y AND a.y = g.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base4');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew4 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b, pd_g g
+   WHERE a.x = b.x AND a.x = g.x AND a.y = b.y AND a.y = g.y
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew4');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base4 b JOIN pd_rew4 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (5) Case B: A(x,y), B(x,y), C(x,y,z) WHERE c.z > 100.
+--     c.z is a single-atom existential variable that only appears in
+--     a top-level pushable conjunct.  The atom-local pre-pass
+--     extracts the conjunct into C's inner wrap (so the wrap becomes
+--     SELECT DISTINCT x, y, provsql FROM pd_g WHERE z > 100), and
+--     the residual outer query no longer references c.z.  The
+--     detector then sees only x and y, both shared classes touching
+--     all three atoms, and accepts.  The rewritten probability must
+--     match the baseline.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base5 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b, pd_g g
+   WHERE a.x = b.x AND a.x = g.x AND a.y = b.y AND a.y = g.y
+     AND g.z > 100
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base5');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew5 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b, pd_g g
+   WHERE a.x = b.x AND a.x = g.x AND a.y = b.y AND a.y = g.y
+     AND g.z > 100
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew5');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base5 b JOIN pd_rew5 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (7) Multi-level rewrite + atom-local qual pushdown on a grouped
+--     atom: same shape as (2) with @c a.y > 10 added.  The y-Var of
+--     pd_a only appears inside the predicate and inside the a.y=b.y
+--     equality; the atom-local pre-pass pushes the @c >10 conjunct
+--     into pd_a's pushed_quals, and the multi-level builder carries
+--     that conjunct into the inner sub-Query's WHERE.  When the
+--     rewriter re-enters on the inner sub-Query, the atom-local
+--     pre-pass re-extracts the conjunct into pd_a's wrap inside the
+--     inner.  Rewritten probability must match the baseline.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base7 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_a a, pd_b b, pd_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+     AND a.y > 10
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base7');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew7 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_a a, pd_b b, pd_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+     AND a.y > 10
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew7');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base7 b JOIN pd_rew7 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (8) Multi-level rewrite + extra fully-covered class.  Atoms
+--     pd_p(x,w,y) and pd_q(x,w,y) share root @c x, fully-covered
+--     non-root @c w, and partial-coverage @c y; pd_r(x,w) is the
+--     outer atom that joins on both @c x and @c w.  The inner sub-
+--     Query must expose @em both @c x @em and @c w in its targetList
+--     and @c GROUP @c BY (x, w), so the outer can join the inner
+--     with pd_r's wrap on (x, w).  Without this, the bare slice-3c
+--     code would either bail or produce a wrong remap.
+CREATE TABLE pd_p(x int, w int, y int);
+CREATE TABLE pd_q(x int, w int, y int);
+CREATE TABLE pd_r(x int, w int);
+INSERT INTO pd_p VALUES (1, 100, 10), (1, 100, 11), (1, 200, 10), (2, 300, 20);
+INSERT INTO pd_q VALUES (1, 100, 10), (1, 100, 11), (1, 200, 11), (2, 300, 20);
+INSERT INTO pd_r VALUES (1, 100), (1, 200), (2, 300);
+SELECT add_provenance('pd_p');
+SELECT add_provenance('pd_q');
+SELECT add_provenance('pd_r');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_p;
+  PERFORM set_prob(provsql, 0.4) FROM pd_q;
+  PERFORM set_prob(provsql, 0.6) FROM pd_r;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base8 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_p a, pd_q b, pd_r c
+   WHERE a.x = b.x AND a.w = b.w AND a.y = b.y
+     AND a.x = c.x AND a.w = c.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base8');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew8 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_p a, pd_q b, pd_r c
+   WHERE a.x = b.x AND a.w = b.w AND a.y = b.y
+     AND a.x = c.x AND a.w = c.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew8');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base8 b JOIN pd_rew8 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (9) Non-flat (nested) partial-coverage signatures:
+--       pd_n_a(x,y,z), pd_n_b(x,y,z), pd_n_c(x,y), pd_n_d(x)
+--     atoms(x)={A,B,C,D}, atoms(y)={A,B,C}, atoms(z)={A,B}.
+--     Signatures: A:{y,z}, B:{y,z}, C:{y}, D:{}.  Two distinct
+--     non-empty signatures.  D has an empty signature so the
+--     recursion terminates: the outermost peel bundles {A,B,C} into
+--     one inner sub-Query on x; Choice A re-entry then sees y as
+--     fully covered within {A,B,C} and z as the new partial-coverage
+--     class, peeling {A,B} into another inner sub-Query.  Rewritten
+--     probability must match the baseline.
+CREATE TABLE pd_n_a(x int, y int, z int);
+CREATE TABLE pd_n_b(x int, y int, z int);
+CREATE TABLE pd_n_c(x int, y int);
+CREATE TABLE pd_n_d(x int);
+INSERT INTO pd_n_a VALUES (1,10,100),(1,10,101),(1,11,100),(2,20,200);
+INSERT INTO pd_n_b VALUES (1,10,100),(1,10,101),(1,11,100),(2,20,200);
+INSERT INTO pd_n_c VALUES (1,10),(1,11),(2,20);
+INSERT INTO pd_n_d VALUES (1),(2);
+SELECT add_provenance('pd_n_a');
+SELECT add_provenance('pd_n_b');
+SELECT add_provenance('pd_n_c');
+SELECT add_provenance('pd_n_d');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_n_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_n_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_n_c;
+  PERFORM set_prob(provsql, 0.7) FROM pd_n_d;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base9 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_n_a a, pd_n_b b, pd_n_c c, pd_n_d d
+   WHERE a.x = b.x AND a.x = c.x AND a.x = d.x
+     AND a.y = b.y AND a.y = c.y
+     AND a.z = b.z
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base9');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew9 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_n_a a, pd_n_b b, pd_n_c c, pd_n_d d
+   WHERE a.x = b.x AND a.x = c.x AND a.x = d.x
+     AND a.y = b.y AND a.y = c.y
+     AND a.z = b.z
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew9');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base9 b JOIN pd_rew9 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (10) Disjoint partial-coverage signatures (multi-group at the same
+--      level): pd_dj_a(x,y), pd_dj_b(x,y), pd_dj_c(x,z), pd_dj_d(x,z).
+--      atoms(y)={A,B}, atoms(z)={C,D}; no atom has an empty signature
+--      but the signatures partition cleanly.  The rewriter must build
+--      TWO inner sub-Queries at the outermost level, joined on x.
+CREATE TABLE pd_dj_a(x int, y int);
+CREATE TABLE pd_dj_b(x int, y int);
+CREATE TABLE pd_dj_c(x int, z int);
+CREATE TABLE pd_dj_d(x int, z int);
+INSERT INTO pd_dj_a VALUES (1,10),(1,11),(2,20),(2,20);
+INSERT INTO pd_dj_b VALUES (1,10),(1,11),(2,20),(2,20);
+INSERT INTO pd_dj_c VALUES (1,100),(1,101),(2,200);
+INSERT INTO pd_dj_d VALUES (1,100),(1,101),(2,200);
+SELECT add_provenance('pd_dj_a');
+SELECT add_provenance('pd_dj_b');
+SELECT add_provenance('pd_dj_c');
+SELECT add_provenance('pd_dj_d');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_dj_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_dj_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_dj_c;
+  PERFORM set_prob(provsql, 0.7) FROM pd_dj_d;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base10 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_dj_a a, pd_dj_b b, pd_dj_c c, pd_dj_d d
+   WHERE a.x = b.x AND a.x = c.x AND a.x = d.x
+     AND a.y = b.y AND c.z = d.z
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base10');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew10 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_dj_a a, pd_dj_b b, pd_dj_c c, pd_dj_d d
+   WHERE a.x = b.x AND a.x = c.x AND a.x = d.x
+     AND a.y = b.y AND c.z = d.z
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew10');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base10 b JOIN pd_rew10 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (11) BID block-key alignment.
+--    a. Aligned: pd_bid_a is BID with block_key={x}; the rewriter wraps
+--       it with proj_slots={x}, so block_key is fully covered.  The
+--       rewrite proceeds and the rewritten probability must match the
+--       baseline.  pd_bid_p is duplicated per x so the baseline
+--       circuit shares pd_bid_p's gate_inputs across A-rows at the
+--       same x (independent rejects the unrewritten circuit; the
+--       rewritten one is read-once).
+--    b. Misaligned: pd_bid_b is BID with block_key={y}, y is not
+--       referenced anywhere in the query so it is not in proj_slots.
+--       The rewriter must bail; independent then rejects the
+--       unrewritten circuit because of the same pd_bid_p sharing.
+CREATE TABLE pd_bid_a(x int, y int);
+CREATE TABLE pd_bid_p(x int);
+INSERT INTO pd_bid_a VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_bid_p VALUES (1), (1), (2);
+SELECT repair_key('pd_bid_a', 'x');
+SELECT add_provenance('pd_bid_p');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_bid_p;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_bid_base AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_bid_a a, pd_bid_p p
+   WHERE a.x = p.x
+   GROUP BY a.x;
+SELECT remove_provenance('pd_bid_base');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_bid_rew AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_bid_a a, pd_bid_p p
+   WHERE a.x = p.x
+   GROUP BY a.x;
+SELECT remove_provenance('pd_bid_rew');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_bid_base b JOIN pd_bid_rew r ON b.x = r.x
+ ORDER BY b.x;
+
+CREATE TABLE pd_bid_b(x int, y int);
+INSERT INTO pd_bid_b VALUES (1, 100), (1, 200), (2, 300);
+SELECT repair_key('pd_bid_b', 'y');
+
+SET provsql.boolean_provenance = on;
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent')
+      FROM pd_bid_b b, pd_bid_p p
+     WHERE b.x = p.x
+     GROUP BY b.x;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected ''independent'' to reject the misaligned BID '
+                    'query -- the rewriter should have bailed';
+  END IF;
+END $$;
+
+-- (12) Empty block_key: whole table is one block (all tuples mutually
+--      exclusive).  The wrap's DISTINCT could split that block across
+--      multiple output rows whenever the table has more than one row;
+--      the rewriter must bail conservatively.
+CREATE TABLE pd_bid_empty(x int);
+INSERT INTO pd_bid_empty VALUES (1), (2), (3);
+SELECT repair_key('pd_bid_empty', '');
+
+SET provsql.boolean_provenance = on;
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent')
+      FROM pd_bid_empty a, pd_bid_p p
+     WHERE a.x = p.x
+     GROUP BY a.x;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected ''independent'' to reject the empty-block_key '
+                    'BID query -- the rewriter should have bailed';
+  END IF;
+END $$;
+
+-- (13) Multi-component (disconnected) CQ:
+--      pd_mc_a(x), pd_mc_b(y), no join condition.  Two independent
+--      components; the rewriter builds one inner sub-Query per
+--      component and Cartesian-products them at the outer.  Each
+--      output row's provsql is gate_times of two per-component
+--      gate_pluses, which is read-once per-row.  Rewritten
+--      probability must match the baseline.
+CREATE TABLE pd_mc_a(x int);
+CREATE TABLE pd_mc_b(y int);
+INSERT INTO pd_mc_a VALUES (1), (1), (2);
+INSERT INTO pd_mc_b VALUES (10), (10), (20);
+SELECT add_provenance('pd_mc_a');
+SELECT add_provenance('pd_mc_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_mc_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_mc_b;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base13 AS
+  SELECT a.x, b.y, probability_evaluate(provenance()) AS p
+    FROM pd_mc_a a, pd_mc_b b
+   GROUP BY a.x, b.y;
+SELECT remove_provenance('pd_base13');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew13 AS
+  SELECT a.x, b.y, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_mc_a a, pd_mc_b b
+   GROUP BY a.x, b.y;
+SELECT remove_provenance('pd_rew13');
+
+SELECT b.x, b.y, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base13 b JOIN pd_rew13 r ON b.x = r.x AND b.y = r.y
+ ORDER BY b.x, b.y;
+
+-- (14) Multi-component + all-constant targetList (Boolean-existence
+--      idiom over disconnected components):
+--        SELECT DISTINCT 1 FROM A, B
+--      where A and B share no variable.  No user TE carries an atom
+--      Var; each component's inner sub-Query gets a synthetic
+--      Const(1) anchor so it still produces one row per "grouping"
+--      (here, one row total).  The outer Cartesian-products the two
+--      one-row inners and the user's DISTINCT keeps the single
+--      output row.  Rewritten probability must match the baseline
+--      (P(non-empty join) = (1 - prod(1 - p_a)) * (1 - prod(1 - p_b))).
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base14 AS
+  SELECT DISTINCT 1 AS one FROM pd_mc_a a, pd_mc_b b;
+CREATE TEMP TABLE pd_base14_p AS
+  SELECT one, ROUND(probability_evaluate(provsql)::numeric, 6) AS p
+    FROM pd_base14;
+SELECT remove_provenance('pd_base14_p');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew14 AS
+  SELECT DISTINCT 1 AS one FROM pd_mc_a a, pd_mc_b b;
+CREATE TEMP TABLE pd_rew14_p AS
+  SELECT one, ROUND(probability_evaluate(provsql, 'independent')::numeric, 6) AS p
+    FROM pd_rew14;
+SELECT remove_provenance('pd_rew14_p');
+
+SELECT b.one, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base14_p b JOIN pd_rew14_p r ON b.one = r.one;
+
+-- (15) Multi-component asymmetric: one component carries a Var in the
+--      user's targetList (a.x), the other one does not.  Per output
+--      row x = x_t:
+--        P(x_t) = P(A has x_t) * P(B is non-empty).
+--      pd_mc_b's inner sub-Query gets a synthetic Const(1) anchor.
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base15 AS
+  SELECT a.x, probability_evaluate(provenance()) AS p
+    FROM pd_mc_a a, pd_mc_b b
+   GROUP BY a.x;
+SELECT remove_provenance('pd_base15');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew15 AS
+  SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_mc_a a, pd_mc_b b
+   GROUP BY a.x;
+SELECT remove_provenance('pd_rew15');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base15 b JOIN pd_rew15 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (16) Single-atom head Var: pd_sh_a(x, y), pd_sh_b(x).  y appears
+--      only in pd_sh_a (singleton class) and shows up in the user's
+--      targetList and GROUP BY.  The rewriter must expose y as an
+--      extra slot in pd_sh_a's wrap (so DISTINCT projects (x, y))
+--      and let the outer GROUP BY y resolve through that slot.
+CREATE TABLE pd_sh_a(x int, y int);
+CREATE TABLE pd_sh_b(x int);
+INSERT INTO pd_sh_a VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_sh_b VALUES (1), (1), (2);
+SELECT add_provenance('pd_sh_a');
+SELECT add_provenance('pd_sh_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_sh_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_sh_b;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base16 AS
+  SELECT a.y, probability_evaluate(provenance()) AS p
+    FROM pd_sh_a a, pd_sh_b b
+   WHERE a.x = b.x
+   GROUP BY a.y;
+SELECT remove_provenance('pd_base16');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew16 AS
+  SELECT a.y, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_sh_a a, pd_sh_b b
+   WHERE a.x = b.x
+   GROUP BY a.y;
+SELECT remove_provenance('pd_rew16');
+
+SELECT b.y, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base16 b JOIN pd_rew16 r ON b.y = r.y
+ ORDER BY b.y;
+
+-- (17) Single-atom head Var on a grouped atom.  pd_gh_a(x, y, w)
+--      is the first member of the inner {pd_gh_a, pd_gh_b} group on
+--      partial-coverage class y.  w is a singleton on pd_gh_a and
+--      shows up in the user's targetList.  The rewriter must add w
+--      to pd_gh_a's proj_slots so the inner sub-Query's targetList
+--      (built from first_member->proj_slots) exposes w, and the
+--      outer GROUP BY a.w resolves through it.
+CREATE TABLE pd_gh_a(x int, y int, w int);
+CREATE TABLE pd_gh_b(x int, y int);
+CREATE TABLE pd_gh_c(x int);
+INSERT INTO pd_gh_a VALUES (1, 10, 100), (1, 11, 100), (1, 10, 200), (2, 20, 300);
+INSERT INTO pd_gh_b VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_gh_c VALUES (1), (1), (2);
+SELECT add_provenance('pd_gh_a');
+SELECT add_provenance('pd_gh_b');
+SELECT add_provenance('pd_gh_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_gh_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_gh_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_gh_c;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base17 AS
+  SELECT a.w, probability_evaluate(provenance()) AS p
+    FROM pd_gh_a a, pd_gh_b b, pd_gh_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY a.w;
+SELECT remove_provenance('pd_base17');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew17 AS
+  SELECT a.w, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_gh_a a, pd_gh_b b, pd_gh_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY a.w;
+SELECT remove_provenance('pd_rew17');
+
+SELECT b.w, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base17 b JOIN pd_rew17 r ON b.w = r.w
+ ORDER BY b.w;
+
+-- (18) Single-atom head Var on a non-first-member grouped atom.
+--      pd_nf_a(x, y), pd_nf_b(x, y, w), pd_nf_c(x).  w is a singleton
+--      on pd_nf_b which is NOT the first member of the inner
+--      {pd_nf_a, pd_nf_b} group (pd_nf_a has the smaller rtindex).
+--      The slot must take the next inner-targetList position past
+--      first_member's slots; the outer Var-remap uses
+--      slot->outer_attno to find it.
+CREATE TABLE pd_nf_a(x int, y int);
+CREATE TABLE pd_nf_b(x int, y int, w int);
+CREATE TABLE pd_nf_c(x int);
+INSERT INTO pd_nf_a VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_nf_b VALUES (1, 10, 100), (1, 11, 100), (1, 10, 200), (2, 20, 300);
+INSERT INTO pd_nf_c VALUES (1), (1), (2);
+SELECT add_provenance('pd_nf_a');
+SELECT add_provenance('pd_nf_b');
+SELECT add_provenance('pd_nf_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_nf_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_nf_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_nf_c;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base18 AS
+  SELECT b.w, probability_evaluate(provenance()) AS p
+    FROM pd_nf_a a, pd_nf_b b, pd_nf_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY b.w;
+SELECT remove_provenance('pd_base18');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew18 AS
+  SELECT b.w, probability_evaluate(provenance(), 'independent') AS p
+    FROM pd_nf_a a, pd_nf_b b, pd_nf_c c
+   WHERE a.x = b.x AND a.x = c.x AND a.y = b.y
+   GROUP BY b.w;
+SELECT remove_provenance('pd_rew18');
+
+SELECT b.w, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base18 b JOIN pd_rew18 r ON b.w = r.w
+ ORDER BY b.w;
+
+-- (19) UNION ALL of two branch-disjoint hierarchical CQs.  Each
+--      branch is rewritten by its own try_safe_query_rewrite invocation
+--      via the RTE_SUBQUERY recursion in get_provenance_attributes;
+--      UNION ALL just concatenates rows without folding, so per-row
+--      'independent' evaluation is sound by construction.
+CREATE TABLE pd_ua_a(x int);
+CREATE TABLE pd_ua_b(x int);
+CREATE TABLE pd_ua_c(x int);
+CREATE TABLE pd_ua_d(x int);
+INSERT INTO pd_ua_a VALUES (1), (1), (2);
+INSERT INTO pd_ua_b VALUES (1), (1), (2);
+INSERT INTO pd_ua_c VALUES (3), (3), (4);
+INSERT INTO pd_ua_d VALUES (3), (3), (4);
+SELECT add_provenance('pd_ua_a');
+SELECT add_provenance('pd_ua_b');
+SELECT add_provenance('pd_ua_c');
+SELECT add_provenance('pd_ua_d');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_ua_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_ua_b;
+  PERFORM set_prob(provsql, 0.5) FROM pd_ua_c;
+  PERFORM set_prob(provsql, 0.4) FROM pd_ua_d;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base19 AS
+  SELECT x, probability_evaluate(provenance()) AS p FROM (
+    SELECT a.x FROM pd_ua_a a, pd_ua_b b WHERE a.x = b.x GROUP BY a.x
+    UNION ALL
+    SELECT c.x FROM pd_ua_c c, pd_ua_d d WHERE c.x = d.x GROUP BY c.x
+  ) t;
+SELECT remove_provenance('pd_base19');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew19 AS
+  SELECT x, probability_evaluate(provenance(), 'independent') AS p FROM (
+    SELECT a.x FROM pd_ua_a a, pd_ua_b b WHERE a.x = b.x GROUP BY a.x
+    UNION ALL
+    SELECT c.x FROM pd_ua_c c, pd_ua_d d WHERE c.x = d.x GROUP BY c.x
+  ) t;
+SELECT remove_provenance('pd_rew19');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base19 b JOIN pd_rew19 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (20) Branch-disjoint UNION (DISTINCT) of two hierarchical CQs.  Rows
+--      that appear in both branches (here x=2 is in branch 1, x=3 is
+--      in branch 2, and x=2-or-x=3 are deliberately constructed so
+--      pd_ud_a x=2 and pd_ud_c x=2 are both present) get a cross-
+--      branch gate_plus.  The two branches share no relations, so
+--      the combined gate stays read-once and 'independent' must
+--      agree with the baseline.
+CREATE TABLE pd_ud_a(x int);
+CREATE TABLE pd_ud_b(x int);
+CREATE TABLE pd_ud_c(x int);
+CREATE TABLE pd_ud_d(x int);
+INSERT INTO pd_ud_a VALUES (1), (1), (2);
+INSERT INTO pd_ud_b VALUES (1), (1), (2);
+INSERT INTO pd_ud_c VALUES (2), (3), (3);
+INSERT INTO pd_ud_d VALUES (2), (3), (3);
+SELECT add_provenance('pd_ud_a');
+SELECT add_provenance('pd_ud_b');
+SELECT add_provenance('pd_ud_c');
+SELECT add_provenance('pd_ud_d');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_ud_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_ud_b;
+  PERFORM set_prob(provsql, 0.5) FROM pd_ud_c;
+  PERFORM set_prob(provsql, 0.4) FROM pd_ud_d;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_base20 AS
+  SELECT x, probability_evaluate(provenance()) AS p FROM (
+    SELECT a.x FROM pd_ud_a a, pd_ud_b b WHERE a.x = b.x GROUP BY a.x
+    UNION
+    SELECT c.x FROM pd_ud_c c, pd_ud_d d WHERE c.x = d.x GROUP BY c.x
+  ) t;
+SELECT remove_provenance('pd_base20');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_rew20 AS
+  SELECT x, probability_evaluate(provenance(), 'independent') AS p FROM (
+    SELECT a.x FROM pd_ud_a a, pd_ud_b b WHERE a.x = b.x GROUP BY a.x
+    UNION
+    SELECT c.x FROM pd_ud_c c, pd_ud_d d WHERE c.x = d.x GROUP BY c.x
+  ) t;
+SELECT remove_provenance('pd_rew20');
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_base20 b JOIN pd_rew20 r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (21) Branch-overlapping UNION (DISTINCT): both branches reference
+--      pd_uo_a (a tracked relation).  When a row x is produced by
+--      both branches, the cross-branch gate_plus has SHARED leaves
+--      (pd_uo_a's tuples appear in both sub-trees), so the combined
+--      gate is not read-once and 'independent' must reject.  This
+--      pins that the rewriter does NOT silently mis-evaluate a
+--      branch-overlapping UCQ.
+CREATE TABLE pd_uo_a(x int);
+CREATE TABLE pd_uo_b(x int);
+CREATE TABLE pd_uo_c(x int);
+INSERT INTO pd_uo_a VALUES (1), (1), (2);
+INSERT INTO pd_uo_b VALUES (1), (1), (2);
+INSERT INTO pd_uo_c VALUES (1), (1), (2);
+SELECT add_provenance('pd_uo_a');
+SELECT add_provenance('pd_uo_b');
+SELECT add_provenance('pd_uo_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_uo_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_uo_b;
+  PERFORM set_prob(provsql, 0.4) FROM pd_uo_c;
+END $$;
+
+SET provsql.boolean_provenance = on;
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent') FROM (
+      SELECT a.x FROM pd_uo_a a, pd_uo_b b WHERE a.x = b.x GROUP BY a.x
+      UNION
+      SELECT a.x FROM pd_uo_a a, pd_uo_c c WHERE a.x = c.x GROUP BY a.x
+    ) t;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected ''independent'' to reject the branch-overlapping '
+                    'UNION DISTINCT -- pd_uo_a appears in both branches';
+  END IF;
+END $$;
+
+-- (22) Bridge case: a hierarchical CQ where a partial-coverage class
+--      spans atoms with different signatures.  pd_br_a, pd_br_b have
+--      signature {y, z}; pd_br_c has signature {y}; pd_br_d, pd_br_e
+--      have signature {w}.  atoms(y)={A,B,C} (partial, bridges) and
+--      atoms(z)={A,B}, atoms(w)={D,E} are disjoint partials nested
+--      under x.
+--
+--      Bridging-group merging: groups touched by a bridging class
+--      collapse into one super-group; the recursive process_query
+--      re-entry on each super-group's inner sub-Query handles the
+--      intra-super-group structure (here, {A,B,C} ends up as one
+--      inner sub-Query and {D,E} as another).  The resulting
+--      circuit is read-once over independent components, so
+--      'independent' must succeed and produce the same probability
+--      as the GUC-off baseline.
+CREATE TABLE pd_br_a(x int, y int, z int);
+CREATE TABLE pd_br_b(x int, y int, z int);
+CREATE TABLE pd_br_c(x int, y int);
+CREATE TABLE pd_br_d(x int, w int);
+CREATE TABLE pd_br_e(x int, w int);
+INSERT INTO pd_br_a VALUES (1, 10, 100), (1, 10, 200), (1, 11, 100), (2, 20, 300);
+INSERT INTO pd_br_b VALUES (1, 10, 100), (1, 10, 200), (1, 11, 100), (2, 20, 300);
+INSERT INTO pd_br_c VALUES (1, 10), (1, 11), (2, 20);
+INSERT INTO pd_br_d VALUES (1, 1000), (1, 2000), (2, 3000);
+INSERT INTO pd_br_e VALUES (1, 1000), (1, 2000), (2, 3000);
+SELECT add_provenance('pd_br_a');
+SELECT add_provenance('pd_br_b');
+SELECT add_provenance('pd_br_c');
+SELECT add_provenance('pd_br_d');
+SELECT add_provenance('pd_br_e');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_br_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_br_b;
+  PERFORM set_prob(provsql, 0.6) FROM pd_br_c;
+  PERFORM set_prob(provsql, 0.5) FROM pd_br_d;
+  PERFORM set_prob(provsql, 0.4) FROM pd_br_e;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_br_baseline AS
+  SELECT a.x AS x, probability_evaluate(provenance()) AS p
+    FROM pd_br_a a, pd_br_b b, pd_br_c c, pd_br_d d, pd_br_e e
+   WHERE a.x=b.x AND a.x=c.x AND a.x=d.x AND a.x=e.x
+     AND a.y=b.y AND a.y=c.y AND a.z=b.z AND d.w=e.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_br_baseline');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_br_rew AS
+  SELECT a.x AS x,
+         get_gate_type(provenance()) AS root,
+         probability_evaluate(provenance(), 'independent') AS p_ind
+    FROM pd_br_a a, pd_br_b b, pd_br_c c, pd_br_d d, pd_br_e e
+   WHERE a.x=b.x AND a.x=c.x AND a.x=d.x AND a.x=e.x
+     AND a.y=b.y AND a.y=c.y AND a.z=b.z AND d.w=e.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_br_rew');
+SELECT b.x, r.root, ROUND((b.p - r.p_ind)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_br_baseline b JOIN pd_br_rew r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (23) Transitive intra-group equalities for fully-covered classes.
+--      Query: A(x), B(x,w), C(x,w).  Atom signatures: A {} (empty,
+--      becomes outer wrap), B {w} and C {w} (grouped on signature
+--      {w}).  The user-written WHERE is `a.x=b.x AND a.x=c.x AND
+--      b.w=c.w`; the transitive `b.x=c.x` is implied but never
+--      appears as a conjunct.  Partition routes `a.x=b.x` and
+--      `a.x=c.x` to the outer (their varnos span groups) and
+--      `b.w=c.w` to group_BC's inner_quals.  Without an explicit
+--      `b.x=c.x` reaching group_BC, the recursive process_query
+--      re-entry would see x as a singleton on each grouped atom and
+--      wrap each member without exposing x, causing C's per-(w)
+--      provenance to aggregate over EVERY x rather than the per-row
+--      x -- the rewritten circuit would then over-count.  The fix
+--      synthesises the missing equalities at group-build time.  The
+--      check is the probability match against the unrewritten
+--      baseline; the bug shows up as a non-zero diff whenever the
+--      data has multiple x values sharing the same w.
+CREATE TABLE pd_tr_a(x int);
+CREATE TABLE pd_tr_b(x int, w int);
+CREATE TABLE pd_tr_c(x int, w int);
+INSERT INTO pd_tr_a VALUES (1), (2);
+INSERT INTO pd_tr_b VALUES (1, 100), (1, 200), (2, 100), (2, 300);
+INSERT INTO pd_tr_c VALUES (1, 100), (1, 200), (2, 100), (2, 300);
+SELECT add_provenance('pd_tr_a');
+SELECT add_provenance('pd_tr_b');
+SELECT add_provenance('pd_tr_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_tr_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_tr_b;
+  PERFORM set_prob(provsql, 0.3) FROM pd_tr_c;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_tr_baseline AS
+  SELECT a.x AS x, probability_evaluate(provenance()) AS p
+    FROM pd_tr_a a, pd_tr_b b, pd_tr_c c
+   WHERE a.x = b.x AND a.x = c.x AND b.w = c.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_tr_baseline');
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_tr_rew AS
+  SELECT a.x AS x,
+         get_gate_type(provenance()) AS root,
+         probability_evaluate(provenance(), 'independent') AS p_ind
+    FROM pd_tr_a a, pd_tr_b b, pd_tr_c c
+   WHERE a.x = b.x AND a.x = c.x AND b.w = c.w
+   GROUP BY a.x;
+SELECT remove_provenance('pd_tr_rew');
+SELECT b.x, r.root, ROUND((b.p - r.p_ind)::numeric, 9) AS diff_baseline_vs_rewritten
+  FROM pd_tr_baseline b JOIN pd_tr_rew r ON b.x = r.x
+ ORDER BY b.x;
+
+-- (24) Hierarchical CQ that the rewriter cannot realise must bail
+--      gracefully (return NULL), not raise.  The shape:
+--        atoms(x) = {A,B,C}  (root: in every atom)
+--        atoms(y) = {A,B,C}  (in every atom, nested under x)
+--        atoms(z) = {A,B}    (partial: only A, B; nested under y)
+--      A GROUP BY that includes z makes z a head Var.  The detector
+--      forms group {A,B} for z's partial-coverage class, but the
+--      grouped atom's slot only exposes columns of fully-covered
+--      shared classes within the group.  z is not in a shared class
+--      at the OUTER level (only at the group level), so the outer
+--      Var a.z has no projection slot.  Before the bail fix this
+--      raised "Var (varno=1, varattno=3) references a grouped atom
+--      column with no slot in the inner sub-Query's targetList";
+--      now the rewriter returns NULL and the regular pipeline
+--      computes the same result.  The check is row count + total
+--      probability mass matching the GUC-off baseline.
+CREATE TABLE pd_bail_a(x int, y int, z int);
+CREATE TABLE pd_bail_b(x int, y int, z int);
+CREATE TABLE pd_bail_c(x int, y int);
+INSERT INTO pd_bail_a VALUES (1, 10, 100), (1, 10, 200),
+                             (2, 20, 100), (2, 30, 300);
+INSERT INTO pd_bail_b VALUES (1, 10, 100), (1, 10, 200),
+                             (2, 20, 100), (2, 30, 400);
+INSERT INTO pd_bail_c VALUES (1, 10), (2, 20), (2, 30);
+SELECT add_provenance('pd_bail_a');
+SELECT add_provenance('pd_bail_b');
+SELECT add_provenance('pd_bail_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_bail_a;
+  PERFORM set_prob(provsql, 0.4) FROM pd_bail_b;
+  PERFORM set_prob(provsql, 0.3) FROM pd_bail_c;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pd_bail_baseline AS
+  SELECT a.x AS x, a.z AS z, probability_evaluate(provenance()) AS p
+    FROM pd_bail_a a, pd_bail_b b, pd_bail_c c
+   WHERE a.x = b.x AND a.x = c.x
+     AND a.y = b.y AND a.y = c.y AND a.z = b.z
+   GROUP BY a.x, a.z;
+SELECT remove_provenance('pd_bail_baseline');
+
+-- With GUC on the planner attempts the rewrite, hits the missing
+-- slot for a.z, bails, and falls through to the default pipeline.
+-- The query must succeed (no exception) and produce the same rows.
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pd_bail_rew AS
+  SELECT a.x AS x, a.z AS z, probability_evaluate(provenance()) AS p
+    FROM pd_bail_a a, pd_bail_b b, pd_bail_c c
+   WHERE a.x = b.x AND a.x = c.x
+     AND a.y = b.y AND a.y = c.y AND a.z = b.z
+   GROUP BY a.x, a.z;
+SELECT remove_provenance('pd_bail_rew');
+
+-- Row count and per-(x,z) probability must match the baseline.
+SELECT (SELECT count(*) FROM pd_bail_baseline) = (SELECT count(*) FROM pd_bail_rew)
+       AS row_counts_match,
+       ROUND(coalesce(SUM(b.p - r.p), 0)::numeric, 9) AS sum_p_diff
+  FROM pd_bail_baseline b JOIN pd_bail_rew r ON b.x = r.x AND b.z = r.z;
+SET provsql.boolean_provenance = off;
+
+-- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
+--     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
+--     shape).  We do not test the bail directly (no observable hook
+--     into the detector); instead we exercise the query and confirm
+--     that 'independent' rejects the unrewritten circuit -- meaning
+--     the rewriter did not produce a read-once factoring.
+CREATE TABLE pd_d(x int, y int);
+CREATE TABLE pd_e(x int, y int);
+CREATE TABLE pd_f(x int, y int);
+INSERT INTO pd_d VALUES (1, 10), (1, 11);
+INSERT INTO pd_e VALUES (10, 100), (11, 100);
+INSERT INTO pd_f VALUES (1, 100), (1, 200);
+SELECT add_provenance('pd_d');
+SELECT add_provenance('pd_e');
+SELECT add_provenance('pd_f');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pd_d;
+  PERFORM set_prob(provsql, 0.4) FROM pd_e;
+  PERFORM set_prob(provsql, 0.6) FROM pd_f;
+END $$;
+
+SET provsql.boolean_provenance = on;
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent')
+      FROM pd_d d, pd_e e, pd_f f
+     WHERE d.y = e.x AND d.x = f.x AND e.y = f.y
+     GROUP BY d.x;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected ''independent'' to reject the non-hierarchical '
+                    'CQ -- the safe-query rewriter should have bailed';
+  END IF;
+END $$;
+
+SET provsql.boolean_provenance = off;
+DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
+           pd_n_a, pd_n_b, pd_n_c, pd_n_d,
+           pd_dj_a, pd_dj_b, pd_dj_c, pd_dj_d,
+           pd_bid_a, pd_bid_b, pd_bid_p, pd_bid_empty,
+           pd_mc_a, pd_mc_b, pd_sh_a, pd_sh_b,
+           pd_gh_a, pd_gh_b, pd_gh_c,
+           pd_nf_a, pd_nf_b, pd_nf_c,
+           pd_ua_a, pd_ua_b, pd_ua_c, pd_ua_d,
+           pd_ud_a, pd_ud_b, pd_ud_c, pd_ud_d,
+           pd_uo_a, pd_uo_b, pd_uo_c,
+           pd_br_a, pd_br_b, pd_br_c, pd_br_d, pd_br_e,
+           pd_bail_a, pd_bail_b, pd_bail_c,
+           pd_d, pd_e, pd_f;

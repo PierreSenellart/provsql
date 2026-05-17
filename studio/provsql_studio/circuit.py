@@ -338,6 +338,8 @@ def _fetch_subgraph(
             "         (e->>'info2')       AS info2,"
             "         (e->>'extra')       AS extra,"
             "         (e->>'prob')::float8 AS prob,"
+            "         coalesce((e->>'boolean_assumed')::boolean, false)"
+            "                              AS boolean_assumed,"
             "         (e->>'depth')::int  AS depth"
             "  FROM jsonb_array_elements("
             "         provsql.simplified_circuit_subgraph(%s::uuid, %s::int)) AS e"
@@ -353,6 +355,7 @@ def _fetch_subgraph(
             "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int)"
             "            ELSE NULL END AS info2_name,"
             "       cs.prob,"
+            "       cs.boolean_assumed,"
             "       cs.depth "
             "FROM src cs"
         )
@@ -369,6 +372,7 @@ def _fetch_subgraph(
             "              (SELECT typname::text FROM pg_type WHERE oid = cs.info2::int) "
             "            ELSE NULL END AS info2_name, "
             "       provsql.get_prob(cs.node)::float8 AS prob, "
+            "       false AS boolean_assumed, "
             "       cs.depth "
             "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
         )
@@ -384,7 +388,7 @@ def _fetch_subgraph(
         if extra_gucs:
             from . import db as _db
             for guc_name, guc_val in extra_gucs.items():
-                if guc_name not in _db._PANEL_GUCS:
+                if guc_name not in _db._EXTRA_GUC_WHITELIST:
                     continue
                 cur.execute(
                     pg_sql.SQL("SET LOCAL {} = {}").format(
@@ -404,7 +408,8 @@ def _fetch_subgraph(
                 raise _SimplifiedNotAvailable() from e
             raise
         for (node, parent, child_pos, gate_type, info1, info2, extra,
-             info1_name, info2_name, prob, d) in cur.fetchall():
+             info1_name, info2_name, prob, boolean_assumed,
+             d) in cur.fetchall():
             out.append({
                 "node": node,
                 "parent": parent,
@@ -416,6 +421,7 @@ def _fetch_subgraph(
                 "info1_name": info1_name,
                 "info2_name": info2_name,
                 "prob": prob,
+                "boolean_assumed": bool(boolean_assumed),
                 "depth": d,
             })
         # Decide which gate_input rows are tracked-table inputs (their
@@ -511,9 +517,86 @@ def _fetch_tracked_input_uuids(cur, candidate_uuids):
     return {row[0] for row in cur.fetchall()}
 
 
+def _elide_assumed_boolean(
+    rows: list[dict], root: str
+) -> tuple[list[dict], str, set[str]]:
+    """Drop gate_assumed_boolean wrappers from the displayed scene.
+
+    Any Boolean-only optimisation enabled under
+    @c provsql.boolean_provenance (the safe-query rewriter is the
+    first such optimisation ; more may follow) wraps the root of
+    each subcircuit it produces with a single-child
+    @c gate_assumed_boolean marker.  The wrapper carries no semiring
+    semantics ; rendering it as its own circle would push the actual
+    gate one level down and add a Latin-letter circle the user has
+    to interpret.  Strategy : elide every wrapper occurrence, rewire
+    its parents straight to its single child, and stamp every such
+    child with @c boolean_assumed=True so the front-end can badge it.
+
+    Marking every wrapped node (not just the scene-root one) is the
+    most faithful rendering : a non-Boolean-compatible semiring
+    refuses on any wrapper anywhere in the circuit, not only the
+    root, so each marker stands for a sub-piece the user can no
+    longer evaluate with the unsafe semirings.
+
+    Returns the rewritten row list, the new scene root, and the set
+    of node ids that should carry the boolean_assumed marker.
+    """
+    by_id = {r["node"]: r for r in rows}
+    wrappers = {nid: None for nid, r in by_id.items()
+                if r["gate_type"] == "assumed_boolean"}
+    if not wrappers:
+        return rows, root, set()
+    # Wrapper's unique outgoing child (gate_assumed_boolean is
+    # single-child by construction).
+    for r in rows:
+        if r["parent"] in wrappers:
+            wrappers[r["parent"]] = r["node"]
+    wrappers = {k: v for k, v in wrappers.items() if v is not None}
+
+    # Mark every wrapper's child.  Chains of wrappers (wrapper of
+    # wrapper) collapse onto the deepest non-wrapper descendant.
+    def unwind(nid: str) -> str:
+        while nid in wrappers:
+            nid = wrappers[nid]
+        return nid
+
+    marked: set[str] = {unwind(child) for child in wrappers.values()}
+    new_root = unwind(root) if root in wrappers else root
+
+    # Collect each wrapper's incoming edges (grandparents).  Multiple
+    # parents happen when the wrapper is shared; zero parents when it
+    # is the scene root.
+    grandparents: dict[str, list[tuple[str | None, int | None]]] = {
+        w: [] for w in wrappers
+    }
+    rest: list[dict] = []
+    for r in rows:
+        if r["node"] in wrappers:
+            grandparents[r["node"]].append((r["parent"], r["child_pos"]))
+            continue
+        rest.append(r)
+    # Replace any (parent == wrapper) edge with one (parent ==
+    # grandparent) edge per recorded grandparent ; collapses to a
+    # single NULL-parent row when the wrapper was the scene root.
+    out: list[dict] = []
+    for r in rest:
+        if r["parent"] in wrappers:
+            gp_list = grandparents[r["parent"]]
+            if not gp_list:
+                out.append({**r, "parent": None, "child_pos": None})
+            else:
+                for gp_id, gp_pos in gp_list:
+                    out.append({**r, "parent": gp_id, "child_pos": gp_pos})
+        else:
+            out.append(r)
+    return out, new_root, marked
+
+
 def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]) -> dict:
     """Run dot to assign x/y per node, then translate into the JSON shape
     consumed by the front-end."""
+    rows, root, boolean_assumed = _elide_assumed_boolean(rows, root)
     dot_src = _to_dot(rows)
     layout = _run_dot(dot_src)
     pos = {obj["name"]: _parse_pos(obj["pos"]) for obj in layout.get("objects", []) if "pos" in obj}
@@ -551,6 +634,20 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             # the post-set_prob refresh in circuit.js can re-derive the
             # label without re-querying the bulk catalog scan.
             "tracked_input": bool(r.get("is_tracked_input")),
+            # Set on every gate whose value is interpreted under a
+            # Boolean-only assumption.  Two sources :
+            #   1. Direct flag from the C side
+            #      (foldBooleanIdentities sets it on gates whose
+            #      wires were Boolean-rewritten in place ;
+            #      simplified_circuit_subgraph forwards it).
+            #   2. Elision of a persistent gate_assumed_boolean
+            #      wrapper above this gate
+            #      (see _elide_assumed_boolean).
+            # Either source draws the dashed frame + B badge.
+            "boolean_assumed": (
+                bool(r.get("boolean_assumed"))
+                or r["node"] in boolean_assumed
+            ),
         })
     edges = [
         {"from": r["parent"], "to": r["node"], "child_pos": r["child_pos"]}

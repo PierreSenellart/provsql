@@ -25,6 +25,7 @@
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_class.h"           /* RELKIND_VIEW */
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
@@ -32,6 +33,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
+#include "executor/executor.h"
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_oper.h"
@@ -44,12 +46,18 @@
 #include "utils/lsyscache.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_cast.h"
+#include "commands/createas.h"
+#include "executor/spi.h"
+#include "tcop/utility.h"
 #include <time.h>
 
+#include "classify_query.h"
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
+#include "safe_query.h"
 
 #if PG_VERSION_NUM < 100000
 #error "ProvSQL requires PostgreSQL version 10 or later"
@@ -74,8 +82,9 @@ int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 mea
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
+bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
+bool provsql_boolean_provenance = false; ///< Opt-in safe-query optimisation: when @c true, rewrites hierarchical conjunctive queries to a read-once form whose probability is computable in linear time. The resulting circuit is tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on it. Controlled by the @c provsql.boolean_provenance GUC.
 
-static const char *PROVSQL_COLUMN_NAME = "provsql"; ///< Name of the provenance column added to tracked tables
 
 extern void _PG_init(void);
 extern void _PG_fini(void);
@@ -83,7 +92,8 @@ extern void _PG_fini(void);
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed);
+                            bool **removed, bool wrap_root);
+static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 
 /* -------------------------------------------------------------------------
  * Provenance attribute construction
@@ -417,6 +427,16 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       ListCell *lc;
       AttrNumber attid = 1;
 
+      /* PG 14 and 15 leave the OLD/NEW rule-placeholder RTEs (relkind
+       * = RELKIND_VIEW, inFromCl = false) in the rewritten range table
+       * for any view body.  PG 16+ removes them.  They are never
+       * scanned and the planner does not build a RelOptInfo for them,
+       * so any Var we point at them later fails find_base_rel().
+       * Filter them out here; any post-rewrite RTE_RELATION whose
+       * relkind is still a view is one of these artifacts. */
+      if (r->relkind == RELKIND_VIEW)
+        continue;
+
       foreach (lc, r->eref->colnames) {
         const char *v = strVal(lfirst(lc));
 
@@ -434,7 +454,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       int old_targetlist_length =
         r->subquery->targetList ? r->subquery->targetList->length : 0;
       Query *new_subquery =
-        process_query(constants, r->subquery, &inner_removed);
+        process_query(constants, r->subquery, &inner_removed, false);
       if (new_subquery != NULL) {
         int i = 0;
         int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
@@ -1482,13 +1502,16 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
  *                         numbers (see @c build_column_map() for the
  *                         rationale).
  * @param nbcols           Total number of non-provenance output columns.
+ * @param wrap_assumed_boolean If true, wrap the result in
+ *                         @c provenance_assumed_boolean so downstream
+ *                         probability evaluators may treat it as Boolean.
  * @return  The provenance @c Expr to be appended to the target list.
  */
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
                                         semiring_operation op, int **columns,
-                                        int nbcols) {
+                                        int nbcols, bool wrap_assumed_boolean) {
   Expr *result;
   ListCell *lc_v;
 
@@ -1788,6 +1811,21 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     }
   }
 
+  /* Wrap the finished per-row root in a @c gate_assumed_boolean when
+   * our caller (the safe-query rewrite path in @c process_query) asks
+   * for it.  Wrapping here -- before @c add_to_select and
+   * @c replace_provenance_function_by_expression -- means every
+   * per-row root reference in the final target list carries the
+   * marker uniformly.  Subqueries that this same Query body opens
+   * (per-atom DISTINCT projections inserted by the rewriter) are
+   * handled by their own deeper @c process_query / @c make_provenance_expression
+   * calls with @c wrap_assumed_boolean = false, so the marker sits
+   * only at the outermost root that surfaces as the user-visible
+   * row provenance. */
+  if (wrap_assumed_boolean &&
+      OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN))
+    result = wrap_in_assume_boolean(constants, result);
+
   return result;
 }
 
@@ -1821,6 +1859,58 @@ resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
     }
   }
   return expression_tree_mutator(node, resolve_group_rte_vars_mutator, raw_ctx);
+}
+
+/**
+ * @brief Strip PG 18's virtual @c RTE_GROUP entry from @p q in place.
+ *
+ * @c parseCheckAggregates() appends an @c RTE_GROUP entry at the end of
+ * @c q->rtable whenever the query has a @c GROUP @c BY clause; references
+ * to grouped columns in @c targetList and @c jointree->quals point at that
+ * synthetic RTE rather than the underlying base tables.  ProvSQL's
+ * rewriters need a flat range-table to do their own index arithmetic, so
+ * we remove the @c RTE_GROUP and resolve every @c Var(@c group_rtindex,
+ * @c i) back to its base-table expression before going further.
+ *
+ * Idempotent: when @c q->hasGroupRTE is already false, returns without
+ * doing anything.
+ */
+void strip_group_rte_pg18(Query *q) {
+  resolve_group_rte_ctx grp_ctx;
+  bool found = false;
+  ListCell *lc;
+  Index idx = 1;
+  int rte_len = 0;
+
+  if (!q->hasGroupRTE)
+    return;
+
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+    if (r->rtekind == RTE_GROUP) {
+      grp_ctx.group_rtindex = idx;
+      grp_ctx.groupexprs    = r->groupexprs;
+      found    = true;
+      rte_len  = idx - 1;
+      break;
+    }
+    idx++;
+  }
+
+  if (!found)
+    return;
+
+  q->rtable      = list_truncate(q->rtable, rte_len);
+  q->hasGroupRTE = false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    te->expr = (Expr *) resolve_group_rte_vars_mutator(
+      (Node *) te->expr, &grp_ctx);
+  }
+  if (q->jointree && q->jointree->quals)
+    q->jointree->quals = resolve_group_rte_vars_mutator(
+      q->jointree->quals, &grp_ctx);
 }
 #endif
 
@@ -2039,42 +2129,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
    *    the WHERE equalities and the inner-query target list are correct.
    * We also resolve the Var(group_rtindex) refs in q's own targetList and
    * WHERE clause so the final query doesn't reference the stripped entry. */
-  if (q->hasGroupRTE) {
-    resolve_group_rte_ctx grp_ctx;
-    bool found = false;
-    ListCell *lc2;
-    Index idx = 1;
-    int rte_len = 0;
-
-    foreach (lc2, q->rtable) {
-      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc2);
-      if (r->rtekind == RTE_GROUP) {
-        grp_ctx.group_rtindex = idx;
-        grp_ctx.groupexprs    = r->groupexprs;
-        found    = true;
-        rte_len  = idx - 1;
-        break;
-      }
-      idx++;
-    }
-
-    if (found) {
-      /* Remove the RTE_GROUP (always last, so truncate is safe) */
-      q->rtable      = list_truncate(q->rtable, rte_len);
-      q->hasGroupRTE = false;
-
-      /* Resolve Var(group_rtindex, i) → underlying base-table expression
-       * throughout the parts of q we will touch below */
-      foreach (lc2, q->targetList) {
-        TargetEntry *te = (TargetEntry *)lfirst(lc2);
-        te->expr = (Expr *)resolve_group_rte_vars_mutator(
-          (Node *)te->expr, &grp_ctx);
-      }
-      if (q->jointree && q->jointree->quals)
-        q->jointree->quals = resolve_group_rte_vars_mutator(
-          q->jointree->quals, &grp_ctx);
-    }
-  }
+  strip_group_rte_pg18(q);
 #endif
 
   /* Extract AGG(DISTINCT) and GROUP BY targets from the target list.
@@ -2253,6 +2308,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
     }
   }
 }
+
 
 /* -------------------------------------------------------------------------
  * Aggregation replacement mutator
@@ -2506,7 +2562,26 @@ static void add_to_select(Query *q, Expr *provenance) {
 typedef struct provenance_mutator_context {
   Expr *provsql;                ///< Provenance expression to substitute for provenance() calls
   const constants_t *constants; ///< Extension OID cache
+  bool provsql_has_aggref;      ///< @c true when @c provsql contains an @c Aggref (set once by @c replace_provenance_function_by_expression).  When @c true, a @c provenance() substitution that lands inside another @c Aggref's argument tree would produce a nested same-level aggregate -- @c parse_agg.c forbids that shape, the planner's @c preprocess_aggrefs_walker does not recurse through @c Aggref boundaries, and the inner @c Aggref's @c aggno stays at the @c -1 sentinel and crashes @c ExecInterpExpr on @c ecxt_aggvalues[-1].
+  bool inside_aggref;           ///< @c true while descending the argument tree of an @c Aggref node.
 } provenance_mutator_context;
+
+/**
+ * @brief @c expression_tree_walker predicate: returns @c true on the first
+ *        @c Aggref it encounters.
+ *
+ * Used to decide whether the provenance expression about to be substituted
+ * would inject a nested aggregate when a @c provenance() call lives inside
+ * another @c Aggref's argument tree.
+ */
+static bool
+expr_contains_aggref_walker(Node *node, void *context) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Aggref))
+    return true;
+  return expression_tree_walker(node, expr_contains_aggref_walker, context);
+}
 
 /**
  * @brief Tree-mutator that replaces provenance() calls with the actual provenance expression.
@@ -2520,10 +2595,33 @@ static Node *provenance_mutator(Node *node, void *ctx) {
   if (node == NULL)
     return NULL;
 
+  if (IsA(node, Aggref)) {
+    /* Descend into the Aggref's arguments with @c inside_aggref set so we
+     * can refuse substitutions that would create a nested same-level
+     * aggregate.  Save and restore the flag so sibling sub-expressions
+     * outside this Aggref see the original value. */
+    bool saved = context->inside_aggref;
+    Node *result;
+    context->inside_aggref = true;
+    result = expression_tree_mutator(node, provenance_mutator, ctx);
+    context->inside_aggref = saved;
+    return result;
+  }
+
   if (IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *)node;
 
     if (f->funcid == context->constants->OID_FUNCTION_PROVENANCE) {
+      if (context->inside_aggref && context->provsql_has_aggref) {
+        provsql_error(
+          "applying an SQL aggregate on top of a ProvSQL-introduced "
+          "aggregation is not supported: the inner provenance() would "
+          "be substituted with an expression containing an aggregate, "
+          "producing a nested same-level aggregate that PostgreSQL "
+          "rejects.  Evaluate the per-row provenance in a subquery "
+          "and aggregate the resulting scalar outside, or drop the "
+          "surrounding aggregate.");
+      }
       return (Node *)copyObject(context->provsql);
     }
   } else if (IsA(node, RangeTblEntry) || IsA(node, RangeTblFunction)) {
@@ -2549,7 +2647,13 @@ static Node *provenance_mutator(Node *node, void *ctx) {
 static void
 replace_provenance_function_by_expression(const constants_t *constants,
                                           Query *q, Expr *provsql) {
-  provenance_mutator_context context = {provsql, constants};
+  provenance_mutator_context context;
+
+  context.provsql = provsql;
+  context.constants = constants;
+  context.provsql_has_aggref =
+    expr_contains_aggref_walker((Node *) provsql, NULL);
+  context.inside_aggref = false;
 
   query_tree_mutator(q, provenance_mutator, &context,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
@@ -3876,6 +3980,39 @@ static void insert_agg_token_casts(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief Wrap @p expr in a @c provsql.assume_boolean FuncExpr.
+ *
+ * Used by @c make_provenance_expression when its caller (the
+ * safe-query rewrite path in @c process_query) flagged the result
+ * as needing the @c gate_assumed_boolean structural marker.
+ * Wrapping at expression-build time rather than at splice time
+ * means @c add_to_select and
+ * @c replace_provenance_function_by_expression both consume the
+ * already-wrapped expression, so every per-row root occurrence in
+ * the final target list -- the auto-added @c provsql column and
+ * every substituted user-side @c provenance() call -- carries the
+ * wrapper uniformly.
+ *
+ * @param constants  Extension OID cache.
+ * @param expr       Provenance expression to wrap.
+ * @return  A @c FuncExpr applying @c provsql.assume_boolean to @p expr.
+ */
+static Expr *wrap_in_assume_boolean(const constants_t *constants,
+                                    Expr *expr) {
+  FuncExpr *wrap = makeNode(FuncExpr);
+  wrap->funcid = constants->OID_FUNCTION_ASSUME_BOOLEAN;
+  wrap->funcresulttype = constants->OID_TYPE_UUID;
+  wrap->funcretset = false;
+  wrap->funcvariadic = false;
+  wrap->funcformat = COERCE_EXPLICIT_CALL;
+  wrap->funccollid = InvalidOid;
+  wrap->inputcollid = InvalidOid;
+  wrap->args = list_make1(expr);
+  wrap->location = -1;
+  return (Expr *) wrap;
+}
+
+/**
  * @brief Rewrite a single SELECT query to carry provenance.
  *
  * This is the recursive entry point for the provenance rewriter.  It is
@@ -3897,11 +4034,14 @@ static void insert_agg_token_casts(const constants_t *constants, Query *q) {
  * @param removed    Out-param: boolean array indicating which original target
  *                   list entries were provenance columns and were removed.
  *                   May be @c NULL if the caller does not need this info.
+ * @param wrap_root  If true, mark this query's provenance expression as a
+ *                   safe-query root that must be wrapped in
+ *                   @c provsql.assume_boolean before splicing.
  * @return  The (possibly restructured) rewritten query, or @c NULL if the
  *          query has no FROM clause and can be skipped.
  */
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed) {
+                            bool **removed, bool wrap_root) {
   List *prov_atts;
   bool has_union = false;
   bool has_difference = false;
@@ -4039,14 +4179,32 @@ static Query *process_query(const constants_t *constants, Query *q,
                           "aggregate results not supported");
         }
         q = rewrite_non_all_into_external_group_by(q);
-        return process_query(constants, q, removed);
+        return process_query(constants, q, removed, wrap_root);
       }
     }
 
     if (q->hasAggs) {
       Query *rewritten = rewrite_agg_distinct(q, constants);
       if (rewritten)
-        return process_query(constants, rewritten, removed);
+        return process_query(constants, rewritten, removed, wrap_root);
+    }
+
+    /* Opt-in safe-query optimisation slot: when on, try to rewrite
+     * hierarchical conjunctive queries to a read-once form whose
+     * probability is computable in linear time via independent
+     * evaluation.  See try_safe_query_rewrite().
+     *
+     * The rewriter is gated on the presence of the assume_boolean()
+     * helper (installed by the 1.6.0 upgrade script).  Without it we
+     * cannot wrap the per-row root in a gate_assumed_boolean, which is
+     * what downstream evaluators inspect to refuse unsound evaluation,
+     * so we refuse to rewrite on schemas that still predate the
+     * helper. */
+    if (provsql_boolean_provenance &&
+        OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN)) {
+      Query *rewritten = try_safe_query_rewrite(constants, q);
+      if (rewritten)
+        return process_query(constants, rewritten, removed, true);
     }
 
     // get_provenance_attributes will also recursively process subqueries
@@ -4192,7 +4350,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       provenance = make_provenance_expression(
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
-        nbcols);
+        nbcols, wrap_root);
 
       /* Fallback for the rare set-op outer WHERE case: conjoin via
        * provenance_times after the aggregation wrappers.  Correct only
@@ -4296,13 +4454,22 @@ static void process_insert_select(const constants_t *constants, Query *q) {
     }
   }
 
-  if (provsql_te == NULL)
-    return;
+  if (provsql_te == NULL) {
+    /* The target's provsql column is not in the INSERT's targetList
+     * (no DEFAULT on the column since 1.6.0; the user did not name
+     * the column either).  Synthesise a TE here so we have something
+     * to substitute the source provsql Var into below. */
+    provsql_te = makeNode(TargetEntry);
+    provsql_te->resno = provsql_attno;
+    provsql_te->resname = pstrdup(PROVSQL_COLUMN_NAME);
+    /* expr is set to the source Var by the substitution block below. */
+    q->targetList = lappend(q->targetList, provsql_te);
+  }
 
   /* Rewrite the source SELECT to carry provenance */
   {
     bool *removed = NULL;
-    Query *new_subquery = process_query(constants, src_rte->subquery, &removed);
+    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false);
     AttrNumber src_provsql_attno = 0;
 
     if (new_subquery == NULL)
@@ -4358,6 +4525,18 @@ static void process_insert_select(const constants_t *constants, Query *q) {
  * @param boundParams    Pre-bound parameter values.
  * @return               The planned statement.
  */
+/** @brief Executor nesting depth.
+ *
+ * Tracks how deep we are inside @c Executor invocations.  Incremented
+ * in @c provsql_executor_start, decremented in @c provsql_executor_end.
+ * The classifier @c NOTICE only fires when this is zero, which
+ * corresponds to the user's outermost statement being planned (before
+ * any executor entry).  Plans built for PL/pgSQL function bodies that
+ * the rewriter inserts -- @c provenance_times, @c provenance_plus,
+ * @c provenance_aggregate, ... -- happen during execution of the
+ * user's plan, so they see depth >= 1 and skip the NOTICE. */
+static int provsql_executor_depth = 0;
+
 static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000
                                     const char *query_string,
@@ -4377,6 +4556,24 @@ static PlannedStmt *provsql_planner(Query *q,
      * so widening the gate costs nothing in the common case. */
     const constants_t constants = get_constants(false);
 
+    /* Query-time TID / BID / OPAQUE classifier.  Emits a NOTICE for
+     * the user's outermost SELECT when the GUC is on.  Runs on the
+     * user's original Query before any provsql rewriting so the
+     * reported kind reflects the SQL the user wrote.  Gating on
+     * @c provsql_executor_depth @c == @c 0 skips the spurious extra
+     * planning calls triggered by PL/pgSQL function bodies the
+     * rewriter inserts (@c provenance_times, ...), whose internal
+     * SELECTs go through the planner hook during execution of the
+     * user's plan. */
+    if (provsql_executor_depth == 0
+        && provsql_classify_top_level
+        && q->rtable != NIL) {
+      ProvSQLClassification cls;
+      provsql_classify_query(q, &cls);
+      provsql_classify_emit_notice(&cls);
+      list_free(cls.source_relids);
+    }
+
     if (constants.ok && has_provenance(&constants, q)) {
       bool *removed = NULL;
       Query *new_query;
@@ -4391,7 +4588,7 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_verbose >= 40)
         begin = clock();
 
-      new_query = process_query(&constants, q, &removed);
+      new_query = process_query(&constants, q, &removed, false);
 
       if (provsql_verbose >= 40)
         provsql_notice("planner time spent=%f",
@@ -4420,6 +4617,489 @@ static PlannedStmt *provsql_planner(Query *q,
                             query_string,
 #endif
                             cursorOptions, boundParams);
+}
+
+/* -------------------------------------------------------------------------
+ * Executor hooks (depth tracking only)
+ *
+ * We install ExecutorStart / ExecutorEnd hooks solely to maintain
+ * @c provsql_executor_depth, which the classifier in @c provsql_planner
+ * consults to distinguish the user's outermost statement from nested
+ * PL/pgSQL bodies the rewriter calls into.  No other behaviour changes.
+ * ------------------------------------------------------------------------- */
+static ExecutorStart_hook_type prev_ExecutorStart = NULL;
+static ExecutorEnd_hook_type   prev_ExecutorEnd   = NULL;
+
+static void provsql_executor_start(QueryDesc *queryDesc, int eflags) {
+  provsql_executor_depth++;
+  PG_TRY();
+  {
+    if (prev_ExecutorStart)
+      prev_ExecutorStart(queryDesc, eflags);
+    else
+      standard_ExecutorStart(queryDesc, eflags);
+  }
+  PG_CATCH();
+  {
+    provsql_executor_depth--;
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
+}
+
+static void provsql_executor_end(QueryDesc *queryDesc) {
+#if PG_VERSION_NUM >= 130000
+  PG_TRY();
+  {
+    if (prev_ExecutorEnd)
+      prev_ExecutorEnd(queryDesc);
+    else
+      standard_ExecutorEnd(queryDesc);
+  }
+  PG_FINALLY();
+  {
+    provsql_executor_depth--;
+  }
+  PG_END_TRY();
+#else
+  /* PG < 13 lacks PG_FINALLY: emulate by running the cleanup on the
+   * error path (via PG_CATCH + PG_RE_THROW) and on the success path
+   * (after PG_END_TRY).  Functionally equivalent. */
+  PG_TRY();
+  {
+    if (prev_ExecutorEnd)
+      prev_ExecutorEnd(queryDesc);
+    else
+      standard_ExecutorEnd(queryDesc);
+  }
+  PG_CATCH();
+  {
+    provsql_executor_depth--;
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
+  provsql_executor_depth--;
+#endif
+}
+
+/* -------------------------------------------------------------------------
+ * ProcessUtility hook: CTAS lineage inheritance.
+ *
+ * When a @c CREATE @c TABLE @c AS (or @c CREATE @c MATERIALIZED @c VIEW,
+ * or @c SELECT @c INTO -- PG's parser transforms all three into
+ * @c CreateTableAsStmt) projects a @c provsql column lifted verbatim
+ * from a tracked source, the resulting relation's atoms are not freshly
+ * minted UUIDs but lineage tokens of one or more base @c
+ * add_provenance / @c repair_key relations.  The hook intercepts the
+ * utility statement, classifies the inner @c SELECT via
+ * @c provsql_classify_query, lets PG run the CTAS, then populates
+ * @c provsql_table_info (with the inherited @c kind / BID @c block_key)
+ * and the ancestor registry (with the transitive union of source
+ * ancestor sets) on the just-created relation.  A @c provenance_guard
+ * trigger is installed on the new table so any subsequent INSERT /
+ * UPDATE that supplies a non-NULL @c provsql still flips the table to
+ * OPAQUE the standard way.
+ *
+ * The hook deliberately fires only when the inner @c SELECT projects
+ * a @c provsql column from a tracked source -- otherwise the new
+ * relation has no @c provsql column and the lineage metadata would be
+ * operationally pointless.  Users who want a tracked CTAS-derived
+ * table without inherited lineage still call @c add_provenance on it
+ * afterwards (that path seeds @c {self} and overrides whatever this
+ * hook may have recorded).
+ * ------------------------------------------------------------------------- */
+
+static ProcessUtility_hook_type prev_ProcessUtility = NULL;
+
+/** @brief State captured by the pre-execution pass for the post-execution one. */
+typedef struct ProvSQLCtasCapture {
+  bool                fire;             ///< true when the post-pass should run
+  Query              *inner_query;      ///< cloned for safety; freed by pfree on completion
+  provsql_table_kind  inherited_kind;
+  uint16              ancestor_n;
+  Oid                 ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+  Oid                 source_relid;     ///< Single source whose block_key we want to align (BID only)
+  uint16              source_block_key_n;
+  AttrNumber          source_block_key[PROVSQL_TABLE_INFO_MAX_BLOCK_KEY];
+} ProvSQLCtasCapture;
+
+/**
+ * @brief Decide whether @p parsetree is a CTAS that should trigger
+ *        the ancestry hook, and if so populate @p cap with the inner
+ *        classification, the (single) source's block-key columns, and
+ *        the transitive ancestor union.
+ *
+ * Fires only when the inner @c SELECT's target list projects a base-
+ * level @c Var (possibly through @c RelabelType wrappers) that
+ * resolves to the @c provsql column of an @c RTE_RELATION whose
+ * metadata is non-OPAQUE.  Anything else (no @c provsql in the
+ * projection, classifier says OPAQUE, the projected source is itself
+ * OPAQUE) leaves @c cap->fire false and the post-pass becomes a
+ * no-op.
+ */
+static void provsql_ProcessUtility_capture(Node *parsetree,
+                                           ProvSQLCtasCapture *cap) {
+  CreateTableAsStmt    *stmt;
+  Query                *qry;
+  ProvSQLClassification cls;
+  ListCell             *lc;
+  AttrNumber            prov_resno = InvalidAttrNumber;
+  Oid                   source_relid = InvalidOid;
+  ProvenanceTableInfo   source_info;
+  Bitmapset            *ancestor_bms = NULL;
+  int                   bms_member;
+  uint16                ancestor_n;
+
+  cap->fire = false;
+  if (!provsql_active)
+    return;
+  if (parsetree == NULL || !IsA(parsetree, CreateTableAsStmt))
+    return;
+  stmt = (CreateTableAsStmt *) parsetree;
+  if (stmt->query == NULL || !IsA(stmt->query, Query))
+    return;
+  qry = (Query *) stmt->query;
+  if (qry->commandType != CMD_SELECT)
+    return;
+
+  provsql_classify_query(qry, &cls);
+  if (cls.kind == PROVSQL_TABLE_OPAQUE) {
+    list_free(cls.source_relids);
+    return;
+  }
+
+  /* Walk the inner target list for a TLE whose Var resolves to the
+   * provsql column of a tracked, non-OPAQUE source.  First match wins
+   * (CTAS preserves the TLE's column name verbatim in the new
+   * table, so a single provsql TLE is the normal case). */
+  foreach (lc, qry->targetList) {
+    TargetEntry   *te = (TargetEntry *) lfirst(lc);
+    Node          *e  = (Node *) te->expr;
+    Var           *v;
+    RangeTblEntry *rte;
+    AttrNumber     prov_attno;
+
+    if (te->resjunk)
+      continue;
+    while (e != NULL && IsA(e, RelabelType))
+      e = (Node *) ((RelabelType *) e)->arg;
+    if (e == NULL || !IsA(e, Var))
+      continue;
+    v = (Var *) e;
+    if (v->varlevelsup != 0)
+      continue;
+    if (v->varno < 1 || (int) v->varno > list_length(qry->rtable))
+      continue;
+    rte = (RangeTblEntry *) list_nth(qry->rtable, v->varno - 1);
+    if (rte->rtekind != RTE_RELATION)
+      continue;
+    prov_attno = get_attnum(rte->relid, PROVSQL_COLUMN_NAME);
+    if (prov_attno == InvalidAttrNumber || v->varattno != prov_attno)
+      continue;
+    if (!provsql_lookup_table_info(rte->relid, &source_info))
+      continue;
+    if (source_info.kind == PROVSQL_TABLE_OPAQUE)
+      continue;
+    prov_resno   = te->resno;
+    source_relid = rte->relid;
+    break;
+  }
+  if (prov_resno == InvalidAttrNumber) {
+    list_free(cls.source_relids);
+    return;
+  }
+
+  /* Transitive ancestor union: lookup each classifier-reported source's
+   * registered ancestry, fall back to {source} when none recorded
+   * (defensive: the SQL add_provenance / repair_key seed should always
+   * give us a non-empty set).  Bitmapset dedupes; we then walk it in
+   * ascending order to get the sorted Oid array the registry stores. */
+  foreach (lc, cls.source_relids) {
+    Oid src_relid = lfirst_oid(lc);
+    uint16 src_n;
+    Oid    src_ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+    if (provsql_lookup_ancestry(src_relid, &src_n, src_ancestors)) {
+      for (uint16 i = 0; i < src_n; ++i)
+        ancestor_bms = bms_add_member(ancestor_bms, (int) src_ancestors[i]);
+    } else {
+      ancestor_bms = bms_add_member(ancestor_bms, (int) src_relid);
+    }
+  }
+  list_free(cls.source_relids);
+
+  ancestor_n = 0;
+  bms_member = -1;
+  while ((bms_member = bms_next_member(ancestor_bms, bms_member)) >= 0) {
+    if (ancestor_n >= PROVSQL_TABLE_INFO_MAX_ANCESTORS) {
+      /* Cap exceeded: refuse to fire rather than truncate the ancestor
+       * set silently (a partial set would let the safe-query
+       * disjointness check accept a join that shouldn't be safe). */
+      bms_free(ancestor_bms);
+      return;
+    }
+    cap->ancestors[ancestor_n++] = (Oid) bms_member;
+  }
+  bms_free(ancestor_bms);
+
+  cap->fire               = true;
+  cap->inner_query        = qry;
+  cap->inherited_kind     = (provsql_table_kind) cls.kind;
+  cap->ancestor_n         = ancestor_n;
+  cap->source_relid       = source_relid;
+  cap->source_block_key_n = source_info.block_key_n;
+  memcpy(cap->source_block_key, source_info.block_key,
+         source_info.block_key_n * sizeof(AttrNumber));
+}
+
+/** @brief Map @c provsql_table_kind to its textual label
+ *  (@c set_table_info accepts text). */
+static const char *provsql_ctas_kind_label(provsql_table_kind k) {
+  switch (k) {
+    case PROVSQL_TABLE_TID:    return "tid";
+    case PROVSQL_TABLE_BID:    return "bid";
+    case PROVSQL_TABLE_OPAQUE: return "opaque";
+  }
+  return "opaque";
+}
+
+/** @brief Forward declaration of the C SQL entry points. */
+extern Datum set_table_info(PG_FUNCTION_ARGS);
+extern Datum set_ancestors(PG_FUNCTION_ARGS);
+
+/**
+ * @brief Apply @p cap to the freshly-created relation @c stmt->into->rel.
+ *
+ * For BID sources: walks the inner query's target list to align each
+ * source block-key column to its output @c resno.  If any block-key
+ * column is missing from the projection (the CTAS dropped it), the
+ * new relation cannot honour the BID invariant under that column --
+ * the hook demotes to TID rather than asserting a now-stale block
+ * key.
+ *
+ * Installs @c provenance_guard via SPI so subsequent INSERT /
+ * UPDATE OF provsql on the new relation flip its kind to OPAQUE
+ * through the standard guard path.
+ */
+static void provsql_ProcessUtility_apply(Node *parsetree,
+                                         ProvSQLCtasCapture *cap) {
+  CreateTableAsStmt *stmt;
+  Oid                new_relid;
+  AttrNumber         prov_attno;
+  provsql_table_kind eff_kind;
+  uint16             eff_block_key_n = 0;
+  AttrNumber         eff_block_key[PROVSQL_TABLE_INFO_MAX_BLOCK_KEY];
+  Datum              kind_datum;
+  Datum              block_key_datum;
+  Datum              ancestors_datum;
+  Datum             *block_key_elems;
+  Datum             *ancestor_elems;
+  ArrayType         *block_key_arr;
+  ArrayType         *ancestors_arr;
+  const char        *nspname;
+  const char        *relname;
+  StringInfoData     trigger_sql;
+
+  if (!cap->fire)
+    return;
+  stmt = (CreateTableAsStmt *) parsetree;
+
+  new_relid = RangeVarGetRelid(stmt->into->rel, NoLock, true);
+  if (new_relid == InvalidOid)
+    return;
+
+  /* Confirm the new relation actually has a @c provsql @c uuid column.
+   * CTAS preserves TLE column names, so this is essentially the
+   * post-execution verification of what the pre-pass already
+   * required. */
+  prov_attno = get_attnum(new_relid, PROVSQL_COLUMN_NAME);
+  if (prov_attno == InvalidAttrNumber)
+    return;
+  if (get_atttype(new_relid, prov_attno) != UUIDOID)
+    return;
+
+  /* BID block-key alignment: each source block-key column must
+   * survive in the inner-query target list.  When all do, the new
+   * relation's effective block key is the corresponding output
+   * resno.  When any is missing, demote to TID (a partial block
+   * key would falsely advertise mutual exclusion the rows no
+   * longer have). */
+  eff_kind = cap->inherited_kind;
+  if (eff_kind == PROVSQL_TABLE_BID) {
+    bool ok = true;
+    for (uint16 i = 0; i < cap->source_block_key_n; ++i) {
+      AttrNumber src_attno = cap->source_block_key[i];
+      ListCell  *lc;
+      bool       found = false;
+      foreach (lc, cap->inner_query->targetList) {
+        TargetEntry   *te = (TargetEntry *) lfirst(lc);
+        Node          *e  = (Node *) te->expr;
+        Var           *v;
+        RangeTblEntry *rte;
+        if (te->resjunk)
+          continue;
+        while (e != NULL && IsA(e, RelabelType))
+          e = (Node *) ((RelabelType *) e)->arg;
+        if (e == NULL || !IsA(e, Var))
+          continue;
+        v = (Var *) e;
+        if (v->varlevelsup != 0)
+          continue;
+        if (v->varno < 1
+            || (int) v->varno > list_length(cap->inner_query->rtable))
+          continue;
+        rte = (RangeTblEntry *)
+            list_nth(cap->inner_query->rtable, v->varno - 1);
+        if (rte->rtekind != RTE_RELATION)
+          continue;
+        if (rte->relid == cap->source_relid
+            && v->varattno == src_attno) {
+          if (eff_block_key_n >= PROVSQL_TABLE_INFO_MAX_BLOCK_KEY) {
+            ok = false;
+            break;
+          }
+          eff_block_key[eff_block_key_n++] = te->resno;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      eff_kind        = PROVSQL_TABLE_TID;
+      eff_block_key_n = 0;
+    }
+  }
+
+  /* Marshal arguments and invoke the SQL-level helpers via
+   * DirectFunctionCall: this reaches the worker through the same IPC
+   * path the user-facing SQL functions use, including the relcache
+   * invalidation broadcast on the way out. */
+  kind_datum = CStringGetTextDatum(provsql_ctas_kind_label(eff_kind));
+  if (eff_block_key_n == 0) {
+    block_key_arr = construct_empty_array(INT2OID);
+  } else {
+    block_key_elems = palloc(eff_block_key_n * sizeof(Datum));
+    for (uint16 i = 0; i < eff_block_key_n; ++i)
+      block_key_elems[i] = Int16GetDatum(eff_block_key[i]);
+    block_key_arr = construct_array(block_key_elems, eff_block_key_n,
+                                    INT2OID, 2, true, 's');
+    pfree(block_key_elems);
+  }
+  block_key_datum = PointerGetDatum(block_key_arr);
+  DirectFunctionCall3(set_table_info,
+                      ObjectIdGetDatum(new_relid),
+                      kind_datum,
+                      block_key_datum);
+
+  if (cap->ancestor_n == 0) {
+    ancestors_arr = construct_empty_array(OIDOID);
+  } else {
+    ancestor_elems = palloc(cap->ancestor_n * sizeof(Datum));
+    for (uint16 i = 0; i < cap->ancestor_n; ++i)
+      ancestor_elems[i] = ObjectIdGetDatum(cap->ancestors[i]);
+    ancestors_arr = construct_array(ancestor_elems, cap->ancestor_n,
+                                    OIDOID, sizeof(Oid), true, 'i');
+    pfree(ancestor_elems);
+  }
+  ancestors_datum = PointerGetDatum(ancestors_arr);
+  DirectFunctionCall2(set_ancestors,
+                      ObjectIdGetDatum(new_relid),
+                      ancestors_datum);
+
+  /* Install the provenance_guard trigger via SPI.  Users who later
+   * INSERT / UPDATE OF provsql with a non-NULL value will then
+   * trigger the standard kind flip to OPAQUE; users who omit the
+   * column on INSERT get a fresh @c uuid_generate_v4 leaf (which
+   * already disconnects the row from the inherited lineage, but the
+   * guard prevents the more dangerous shared-UUID aliasing path).
+   *
+   * Materialized views are exempt: PG forbids triggers on them, and
+   * they cannot be modified through DML anyway (only @c REFRESH @c
+   * MATERIALIZED @c VIEW changes the contents -- which re-runs the
+   * inner SELECT and the freshly-projected rows continue to carry
+   * lineage from the same sources). */
+  /* PG 14 renamed CreateTableAsStmt.relkind -> objtype (same ObjectType,
+   * same OBJECT_* values; pure field rename). */
+#if PG_VERSION_NUM >= 140000
+  if (stmt->objtype == OBJECT_MATVIEW)
+#else
+  if (stmt->relkind == OBJECT_MATVIEW)
+#endif
+    return;
+
+  nspname = get_namespace_name(get_rel_namespace(new_relid));
+  relname = get_rel_name(new_relid);
+  if (nspname == NULL || relname == NULL)
+    return;
+  initStringInfo(&trigger_sql);
+  appendStringInfo(&trigger_sql,
+      "CREATE TRIGGER provenance_guard "
+      "BEFORE INSERT OR UPDATE OF provsql ON %s.%s "
+      /* "EXECUTE PROCEDURE" is the legacy form, kept as a valid synonym
+       * of "EXECUTE FUNCTION" through PG 18 -- matches the rest of the
+       * codebase and stays PG 10-compatible.  Promote when PG 10 drops
+       * out of the support floor. */
+      "FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()",
+      quote_identifier(nspname), quote_identifier(relname));
+  if (SPI_connect() != SPI_OK_CONNECT)
+    provsql_error("CTAS lineage hook: SPI_connect failed");
+  if (SPI_exec(trigger_sql.data, 0) != SPI_OK_UTILITY)
+    provsql_error("CTAS lineage hook: failed to install provenance_guard "
+                  "on %s.%s", nspname, relname);
+  SPI_finish();
+  pfree(trigger_sql.data);
+}
+
+static void provsql_ProcessUtility(
+    PlannedStmt *pstmt,
+    const char *queryString,
+#if PG_VERSION_NUM >= 140000
+    bool readOnlyTree,
+#endif
+    ProcessUtilityContext context,
+    ParamListInfo params,
+    QueryEnvironment *queryEnv,
+    DestReceiver *dest,
+#if PG_VERSION_NUM >= 130000
+    QueryCompletion *qc
+#else
+    char *completionTag
+#endif
+    ) {
+  Node              *parsetree = pstmt ? pstmt->utilityStmt : NULL;
+  ProvSQLCtasCapture cap = {0};
+
+  provsql_ProcessUtility_capture(parsetree, &cap);
+
+  if (prev_ProcessUtility)
+    prev_ProcessUtility(pstmt, queryString,
+#if PG_VERSION_NUM >= 140000
+                        readOnlyTree,
+#endif
+                        context, params, queryEnv, dest,
+#if PG_VERSION_NUM >= 130000
+                        qc
+#else
+                        completionTag
+#endif
+                        );
+  else
+    standard_ProcessUtility(pstmt, queryString,
+#if PG_VERSION_NUM >= 140000
+                            readOnlyTree,
+#endif
+                            context, params, queryEnv, dest,
+#if PG_VERSION_NUM >= 130000
+                            qc
+#else
+                            completionTag
+#endif
+                            );
+
+  provsql_ProcessUtility_apply(parsetree, &cap);
 }
 
 /**
@@ -4554,6 +5234,89 @@ void _PG_init(void) {
                            NULL,
                            NULL,
                            NULL);
+  /* Debug-only: hidden from SHOW ALL and postgresql.conf.sample.
+   * Umbrella for closed-form / analytic resolution of gate_cmp
+   * probabilities in probability_evaluate (currently the
+   * Poisson-binomial HAVING-COUNT pre-pass; future MIN / MAX / SUM
+   * pre-passes gate on the same flag).  On is strictly better for
+   * end users (each resolver replaces an exponential DNF
+   * construction with O(N) or O(N x C) arithmetic); off only serves
+   * developer A/B against the unoptimised enumerate_valid_worlds
+   * path and as a bisection escape valve. */
+  DefineCustomBoolVariable("provsql.cmp_probability_evaluation",
+                           "Run closed-form / analytic probability "
+                           "evaluators for gate_cmps inside "
+                           "probability_evaluate. Debug only.",
+                           "When on (default), probability_evaluate "
+                           "runs pre-passes that recognise specific "
+                           "gate_cmp shapes (currently HAVING COUNT(*) "
+                           "op C over distinct gate_input leaves) and "
+                           "replace each cmp with a Bernoulli "
+                           "gate_input carrying the closed-form "
+                           "probability, bypassing the DNF that "
+                           "provsql_having's enumerate_valid_worlds "
+                           "would otherwise emit. Off forces the cmp "
+                           "to fall through to that enumeration path. "
+                           "Future MIN / MAX / SUM probability "
+                           "evaluators will gate on the same flag. "
+                           "End users have no reason to flip this; it "
+                           "exists for developer A/B testing and as a "
+                           "bisection escape valve.",
+                           &provsql_cmp_probability_evaluation,
+                           true,
+                           PGC_USERSET,
+                           GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.boolean_provenance",
+                           "Opt-in safe-query optimisation for hierarchical conjunctive queries.",
+                           "When on, the planner rewrites self-join-free "
+                           "hierarchical conjunctive queries (and independent "
+                           "UCQs) over TID/BID tables to a read-once form "
+                           "whose probability is computable in linear time "
+                           "via the existing BooleanCircuit independent "
+                           "evaluator. The rewrite preserves the Boolean "
+                           "polynomial of the existential lineage, so any "
+                           "evaluation that factors through a homomorphism "
+                           "from Boolean functions remains sound (notably "
+                           "probability and Shapley / Banzhaf). The "
+                           "resulting root gate is tagged; semiring "
+                           "evaluators are individually marked at compile "
+                           "time as compatible or not with this rewrite, "
+                           "and incompatible evaluators refuse to run on a "
+                           "tagged circuit. Off by default because the "
+                           "rewrite changes the multiset of result rows and "
+                           "is therefore unsound for per-row provenance "
+                           "interrogations and aggregation queries.",
+                           &provsql_boolean_provenance,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.classify_top_level",
+                           "Emit a NOTICE classifying each top-level SELECT.",
+                           "When on, every top-level SELECT that "
+                           "touches a relation triggers a NOTICE of "
+                           "the form `ProvSQL: query result is "
+                           "<KIND> (sources: ...)` where <KIND> is "
+                           "TID, BID, or OPAQUE under the existing "
+                           "provsql_table_kind taxonomy and the "
+                           "sources list names the provenance-"
+                           "tracked base relations the query touches. "
+                           "Read-only : the classifier does not "
+                           "rewrite the query.  Studio reads the "
+                           "NOTICE to label query results with their "
+                           "certified kind.",
+                           &provsql_classify_top_level,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
   DefineCustomIntVariable("provsql.monte_carlo_seed",
                           "Seed for the Monte Carlo sampler.",
                           "-1 (default) seeds from std::random_device for "
@@ -4598,6 +5361,9 @@ void _PG_init(void) {
 
   prev_planner = planner_hook;
   prev_shmem_startup = shmem_startup_hook;
+  prev_ExecutorStart = ExecutorStart_hook;
+  prev_ExecutorEnd   = ExecutorEnd_hook;
+  prev_ProcessUtility = ProcessUtility_hook;
 #if (PG_VERSION_NUM >= 150000)
   prev_shmem_request = shmem_request_hook;
   shmem_request_hook = provsql_shmem_request;
@@ -4605,8 +5371,11 @@ void _PG_init(void) {
   provsql_shmem_request();
 #endif
 
-  planner_hook = provsql_planner;
-  shmem_startup_hook = provsql_shmem_startup;
+  planner_hook        = provsql_planner;
+  shmem_startup_hook  = provsql_shmem_startup;
+  ExecutorStart_hook  = provsql_executor_start;
+  ExecutorEnd_hook    = provsql_executor_end;
+  ProcessUtility_hook = provsql_ProcessUtility;
 
   RegisterProvSQLMMapWorker();
 }
@@ -4615,6 +5384,9 @@ void _PG_init(void) {
  * @brief Extension teardown — restores the planner and shmem hooks.
  */
 void _PG_fini(void) {
-  planner_hook = prev_planner;
-  shmem_startup_hook = prev_shmem_startup;
+  planner_hook        = prev_planner;
+  shmem_startup_hook  = prev_shmem_startup;
+  ExecutorStart_hook  = prev_ExecutorStart;
+  ExecutorEnd_hook    = prev_ExecutorEnd;
+  ProcessUtility_hook = prev_ProcessUtility;
 }

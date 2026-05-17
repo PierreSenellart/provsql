@@ -55,7 +55,7 @@ test: possible_worlds monte_carlo
 test: agg_uuid_aggfnoid
 
 # Complex test relying on probabilities
-test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors
+test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation
 
 # Probability computation using external software
 test: d4 dsharp weightmc c2d minic2d
@@ -137,3 +137,37 @@ test: casestudy6
 
 # PROV export
 test: to_provxml
+
+# Per-table provenance metadata maintenance (safe-query optimisation)
+test: table_info
+
+# Per-table base-ancestor registry (correlation tracking for the
+# safe-query rewriter's disjoint-ancestor check)
+test: ancestry
+
+# CTAS / SELECT INTO / CREATE MATERIALIZED VIEW lineage inheritance
+test: ctas_inheritance
+
+# Safe-query optimisation: end-to-end hierarchical CQ rewrite
+test: safe_query_basic
+test: safe_query_pushdown
+test: safe_query_semiring
+test: safe_query_opaque
+test: safe_query_const_sel
+test: safe_query_pk_fd
+test: safe_query_deterministic
+test: safe_query_self_join_pk
+test: safe_query_fd_closure
+test: safe_query_self_join_disjoint
+test: safe_query_view_descent
+test: safe_query_ancestry_disjoint
+test: safe_query_inner_join
+
+# Query-time TID / BID / OPAQUE classifier (NOTICE surface)
+test: classify_query
+
+# Load-time Boolean-identity folding (idempotence + plus-with-one absorber)
+test: boolean_fold
+
+# Refusal of outer SQL aggregate over ProvSQL-aggregated subquery
+test: nested_agg_refuse

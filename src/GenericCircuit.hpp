@@ -38,6 +38,25 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
   if(it != provenance_mapping.end())
     return it->second;
 
+  /* In-memory Boolean-assumption marker (set by
+   * @c foldBooleanIdentities on gates whose wires were rewritten
+   * under a Boolean-only rule).  Mirrors the @c gate_assumed_boolean
+   * structural-marker check below but applies to gates that keep
+   * their original type (the rule mutated their wires in place ;
+   * the persistent mmap was not touched).  Same compatibility
+   * predicate, same failure mode. */
+  if(isBooleanAssumed(g) && !semiring.compatibleWithBooleanRewrite())
+    throw CircuitException(
+            "The requested semiring does not admit a homomorphism "
+            "from Boolean functions; this gate's wires were rewritten "
+            "under a Boolean-only rule (typically idempotence or "
+            "plus-with-one absorber by foldBooleanIdentities, gated "
+            "on provsql.boolean_provenance = on) and the evaluation "
+            "is unsound under this semiring.  Re-run with "
+            "provsql.boolean_provenance = off, or pick a "
+            "Boolean-compatible semiring (boolean, boolexpr, "
+            "formula, ...).");
+
   auto t = getGateType(g);
 
   switch(t) {
@@ -85,6 +104,27 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
   case gate_project:
   case gate_eq:
     // Where-provenance gates, ignored
+    return evaluate<S>(getWires(g)[0], provenance_mapping, semiring);
+
+  case gate_assumed_boolean:
+    /* Structural marker: the wrapped sub-circuit was computed under a
+     * Boolean-provenance assumption (e.g. the safe-query rewrite
+     * collapses derivation multiplicities into a single Boolean
+     * witness).  Identity for semirings whose evaluation factors
+     * through a homomorphism from Boolean functions; fatal for the
+     * rest, since otherwise we would silently return a value the
+     * semiring's semantics does not justify. */
+    if(!semiring.compatibleWithBooleanRewrite())
+      throw CircuitException(
+              "The requested semiring does not admit a homomorphism "
+              "from Boolean functions; the wrapped sub-circuit was "
+              "computed under a Boolean-provenance assumption "
+              "(typically by the safe-query rewrite, "
+              "provsql.boolean_provenance = on) and the evaluation is "
+              "unsound under this semiring.  Re-run the query with "
+              "provsql.boolean_provenance = off, or pick a "
+              "Boolean-compatible semiring (boolean, boolexpr, "
+              "formula, ...).");
     return evaluate<S>(getWires(g)[0], provenance_mapping, semiring);
 
   case gate_cmp:

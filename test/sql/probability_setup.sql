@@ -14,3 +14,4 @@ SELECT get_prob(provenance()) AS value FROM personnel;
 SELECT remove_provenance('probs');
 
 SELECT * FROM probs ORDER BY value;
+DROP TABLE probs;

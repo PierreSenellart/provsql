@@ -111,6 +111,23 @@ value_type delta(value_type x) const override {
 }
 
 /**
+ * @brief No semiring homomorphism @c BoolFunc(Y) →+* Which exists, so
+ *        the safe-query Boolean rewrite is unsound under
+ *        which-provenance.  (Lineage tracks the union of contributing
+ *        labels per derivation; the read-once rewrite collapses
+ *        alternative derivations to a single shared label set, which
+ *        is not in general the union produced by the original
+ *        circuit.)  Inherits the @c false default from @c Semiring;
+ *        this override exists for documentation.
+ *
+ * Lean: @c Provenance.Semirings.Which.no_hom_from_BoolFunc
+ * (provenance-lean/Provenance/Semirings/Which.lean).
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return false;
+}
+
+/**
  * @brief Parse a leaf value into a which-provenance set.
  *
  * Accepted input formats (round-trip with @c to_text):

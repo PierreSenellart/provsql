@@ -1,12 +1,12 @@
 # ProvSQL Random Variables — Feature Roadmap
 
-A synthesis of the design discussion around the `continuous_distributions`
-branch of [ProvSQL](https://github.com/PierreSenellart/provsql). The branch
-introduces first-class continuous random-variable columns, a three-stage
-hybrid analytic + Monte Carlo evaluator (`RangeCheck` → `AnalyticEvaluator` →
-`Expectation`, with whole-circuit MC as the safety net), and the
-`HybridEvaluator` simplifier that folds family-preserving combinations.
-This document lists, categorises, and prioritises follow-up features,
+A synthesis of the design discussion around the continuous random-variable
+surface shipped in ProvSQL 1.5.0: first-class `random_variable` columns,
+a three-stage hybrid analytic + Monte Carlo evaluator (`RangeCheck` →
+`AnalyticEvaluator` → `Expectation`, with whole-circuit MC as the safety
+net), and the `HybridEvaluator` simplifier that folds family-preserving
+combinations. This document lists, categorises, and prioritises follow-up
+features,
 with a focus on **applicability** (does it solve a real user problem?)
 and **user interface** (does it fit the existing `provsql.<name>(...)` /
 infix-operator grammar?).

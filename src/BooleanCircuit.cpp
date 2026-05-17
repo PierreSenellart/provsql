@@ -796,11 +796,27 @@ double BooleanCircuit::independentEvaluationInternal(
     break;
 
   case BooleanGate::IN:
+  {
+    /* A leaf with probability 0 or 1 is a constant : it carries no
+     * Boolean variable that can collide with another occurrence of
+     * itself.  Skip the seen-set bookkeeping so circuits where the
+     * shared subgraphs are all constants (e.g. RangeCheck-resolved
+     * comparators flowing through a non-tree structure, or
+     * user-flipped Bernoullis pinned to 0 / 1) stay evaluable under
+     * the read-once `independent` method.  Anything strictly between
+     * 0 and 1 is a real Bernoulli variable and must remain
+     * read-once. */
+    const double p = getProb(g);
+    if (p == 0.0 || p == 1.0) {
+      result = p;
+      break;
+    }
     if(seen.find(g)!=seen.end())
       throw CircuitException("Not an independent circuit");
     seen.insert(g);
-    result=getProb(g);
-    break;
+    result=p;
+  }
+  break;
 
   case BooleanGate::MULIN:
   {

@@ -52,6 +52,7 @@ std::map<gate_t, std::pair<unsigned,unsigned> > infos; ///< Per-gate (info1, inf
 std::map<gate_t, std::string> extra;                   ///< Per-gate string extras
 std::set<gate_t> inputs;                               ///< Set of input (leaf) gate IDs
 std::vector<double> prob;                              ///< Per-gate probability values
+std::set<gate_t> boolean_assumed_gates;                ///< Side-band Boolean-assumption marker set by @c foldBooleanIdentities ; an evaluator visiting a gate in this set refuses to proceed under a semiring that does not admit a homomorphism from Boolean functions.  In-memory only ; never persisted to mmap.  Distinct from the @c gate_assumed_boolean enum (used by the safe-query rewriter to encode the same restriction at the persistent layer).
 
 public:
 /**
@@ -268,6 +269,44 @@ void resolveToRv(gate_t g, const std::string &s) {
  * @c provsql.simplify_on_load.
  */
 void foldSemiringIdentities();
+
+/**
+ * @brief Apply Boolean-only simplification rules to @c gate_plus and
+ *        @c gate_times.  Each rule fires by mutating the gate's
+ *        wires in place AND adding the gate to
+ *        @c boolean_assumed_gates so semiring evaluators that do
+ *        not admit a homomorphism from Boolean functions refuse to
+ *        proceed.
+ *
+ * Rules :
+ *   - @b Idempotence  : @c gate_plus(a, a, b) → @c gate_plus(a, b),
+ *     @c gate_times(a, a, b) → @c gate_times(a, b).  Child dedup by
+ *     gate id ; preserves first-occurrence order.
+ *   - @b Plus-with-one @b absorber  :
+ *     @c gate_plus(..., @c gate_one, ...) → @c gate_one (rewires to
+ *     an empty plus then collapses to @c gate_one).
+ *
+ * Operates on the in-memory @c GenericCircuit only ; the persistent
+ * mmap store is never mutated, and the gate's UUID-to-@c gate_t
+ * mapping survives so callers indexing by the original UUID still
+ * find it.  Re-runs @c foldSemiringIdentities at the end to collapse
+ * single-wire @c gate_plus / @c gate_times residues the dedup may
+ * have left behind.
+ */
+void foldBooleanIdentities();
+
+/**
+ * @brief Mark gate @p g as Boolean-assumed (in-memory side band).
+ *        Visited by every @c evaluate\<S\> traversal : if @p g is in
+ *        the set, the visit checks @c S::compatibleWithBooleanRewrite
+ *        and throws a @c CircuitException otherwise.
+ */
+void markBooleanAssumed(gate_t g) { boolean_assumed_gates.insert(g); }
+
+/** @brief Report whether @p g carries the Boolean-assumption flag. */
+bool isBooleanAssumed(gate_t g) const {
+  return boolean_assumed_gates.count(g) > 0;
+}
 
 /**
  * @brief Replace the wires of @p g with @p w.

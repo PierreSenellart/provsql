@@ -105,6 +105,28 @@
     computation features.},
 }
 
+@article{DBLP:journals/jacm/DalviS12,
+  author       = {Nilesh N. Dalvi and
+                  Dan Suciu},
+  title        = {The Dichotomy of Probabilistic Inference for Unions of Conjunctive
+                  Queries},
+  journal      = {J. {ACM}},
+  volume       = {59},
+  number       = {6},
+  pages        = {30:1--30:87},
+  year         = {2012},
+  doi          = {10.1145/2395116.2395119},
+  keyword      = {provsql-foundation},
+  annote       = {Establishes the complexity dichotomy for probabilistic query evaluation over
+    tuple-independent databases: every union of conjunctive queries is either in PTIME
+    (computable by a "safe plan" using extensional probability propagation) or
+    #P-hard. The safe class includes hierarchical CQs, which admit a read-once
+    rewriting. ProvSQL's safe-query rewriter (the
+    provsql.boolean_provenance optimisation) implements the read-once rewriting for
+    self-join-free hierarchical CQs and UCQs derived from this theory; circuits it
+    emits are evaluated in linear time by the independent-probability method.},
+}
+
 @inproceedings{DBLP:conf/icdt/DeutchMRT14,
   author       = {Daniel Deutch and
                   Tova Milo and
@@ -143,6 +165,97 @@
     provenance through data-modification operations in an equivalence-invariant manner.
     This work provides the theoretical foundation for ProvSQL's update provenance
     support.},
+}
+
+@article{DBLP:journals/vldb/DalviS07,
+  author       = {Nilesh N. Dalvi and
+                  Dan Suciu},
+  title        = {Efficient query evaluation on probabilistic databases},
+  journal      = {{VLDB} J.},
+  volume       = {16},
+  number       = {4},
+  pages        = {523--544},
+  year         = {2007},
+  doi          = {10.1007/s00778-006-0004-3},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces the safe-plan framework for probabilistic query evaluation: a
+    syntactic characterisation of conjunctive queries whose probability is computable in
+    PTIME by an extensional plan, together with the induced functional dependencies set
+    Gamma_p(q) that lets the framework recognise more queries as safe. Constant selections
+    induce empty-determinant FDs (used by ProvSQL's constant-selection elimination) and
+    primary keys induce schema FDs (used by the PK-FD pass). The textbook treatment is in
+    Suciu, Olteanu, Re and Koch 2011, chapter 4. ProvSQL's FD-aware safe-query rewriter
+    implements the project-safety condition of this paper, with the union-find-based
+    hierarchicality check operating on the FD closure.},
+}
+
+@article{DBLP:journals/pvldb/GatterbauerS15,
+  author       = {Wolfgang Gatterbauer and
+                  Dan Suciu},
+  title        = {Approximate Lifted Inference with Probabilistic Databases},
+  journal      = {Proc. {VLDB} Endow.},
+  volume       = {8},
+  number       = {5},
+  pages        = {629--640},
+  year         = {2015},
+  doi          = {10.14778/2735479.2735494},
+  keyword      = {provsql-foundation},
+  annote       = {Develops the dissociation framework for probabilistic query evaluation:
+    dissociating tuples in an atom (replacing a single shared input with multiple
+    independent copies) gives an upper bound on the query's probability, and dissociating
+    in a deterministic relation leaves the probability unchanged. The latter observation
+    grounds ProvSQL's deterministic-relation transparency pass: a relation whose rows
+    carry no provenance can be made transparent for atom-set analysis without affecting
+    soundness. The journal version (VLDB J. 26(1):31-59, 2017,
+    doi:10.1007/s00778-016-0434-5) extends the framework with propagation.},
+}
+
+@book{DBLP:series/synthesis/2011Suciu,
+  author       = {Dan Suciu and
+                  Dan Olteanu and
+                  Christopher R{\'{e}} and
+                  Christoph Koch},
+  title        = {Probabilistic Databases},
+  series       = {Synthesis Lectures on Data Management},
+  publisher    = {Morgan {\&} Claypool Publishers},
+  year         = {2011},
+  doi          = {10.2200/S00362ED1V01Y201105DTM016},
+  isbn         = {978-3-031-00751-4},
+  keyword      = {provsql-foundation},
+  annote       = {Textbook treatment of probabilistic databases. Chapter 4 covers the safe-plan
+    framework and the FD-aware extensions (constant-selection FDs, primary-key FDs,
+    deterministic-relation transparency, the FD-closure on the union-find) that ProvSQL's
+    safe-query rewriter implements. The textbook is the most accessible reference for
+    the framework's correctness arguments.},
+}
+
+@inproceedings{DBLP:conf/pods/JhaRS08,
+  author       = {Abhay Kumar Jha and
+                  Vibhor Rastogi and
+                  Dan Suciu},
+  title        = {Query evaluation with soft-key constraints},
+  booktitle    = {Proceedings of the Twenty-Seventh {ACM} {SIGMOD-SIGACT-SIGART} Symposium
+                  on Principles of Database Systems, {PODS} 2008, June 9-11, 2008,
+                  Vancouver, BC, Canada},
+  pages        = {119--128},
+  publisher    = {{ACM}},
+  year         = {2008},
+  doi          = {10.1145/1376916.1376934},
+}
+
+@inproceedings{DBLP:conf/edbt/JhaOS10,
+  author       = {Abhay Kumar Jha and
+                  Dan Olteanu and
+                  Dan Suciu},
+  title        = {Bridging the gap between intensional and extensional query evaluation
+                  in probabilistic databases},
+  booktitle    = {{EDBT} 2010, 13th International Conference on Extending Database Technology,
+                  Lausanne, Switzerland, March 22-26, 2010, Proceedings},
+  series       = {{ACM} International Conference Proceeding Series},
+  pages        = {323--334},
+  publisher    = {{ACM}},
+  year         = {2010},
+  doi          = {10.1145/1739041.1739082},
 }
 
 % ---------------------------------------------------------------------------

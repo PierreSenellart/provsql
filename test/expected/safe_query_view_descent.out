@@ -1,0 +1,42 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+scenario|x|rewriter|p_rew|p_base
+V1|1|fired|0.300000|0.300000
+V1|2|fired|0.320000|0.320000
+(2 rows)
+scenario|x|rewriter|p_rew|p_base
+V2|1|fired|0.300000|0.300000
+V2|2|fired|0.320000|0.320000
+(2 rows)
+scenario|x|rewriter|p_rew|p_base
+V3|1|fired|0.300000|0.300000
+V3|2|fired|0.320000|0.320000
+(2 rows)
+scenario|x|rewriter|p_rew|p_base
+V4|1|fired|0.300000|0.300000
+V4|2|fired|0.320000|0.320000
+(2 rows)
+scenario|x|rewriter|p_rew|p_base
+V5|1|fired|0.300000|0.300000
+V5|2|fired|0.320000|0.320000
+(2 rows)
+scenario|x|rewriter|p_rew|p_base
+V6|1|fired|0.252000|0.252000
+V6|2|fired|0.192000|0.192000
+(2 rows)
+scenario|x|rewriter|p_rew|p_base
+V7|1|refused|0.300000|0.300000
+V7|2|refused|0.320000|0.320000
+(2 rows)
+scenario|x|rewriter|p_rew|p_base
+V8|1|refused|0.750000|0.750000
+V8|2|refused|0.500000|0.500000
+(2 rows)

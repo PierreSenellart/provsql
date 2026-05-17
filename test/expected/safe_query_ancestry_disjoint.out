@@ -1,0 +1,28 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+dfb_kind|dfb_ancestors_correct
+tid|t
+(1 row)
+dfo_kind|dfo_ancestors_correct
+tid|t
+(1 row)
+scenario|result
+derived + its base|refused
+(1 row)
+scenario|result
+derived + derived (shared)|refused
+(1 row)
+scenario|result
+derived + unrelated base|fired
+(1 row)
+scenario|result
+derived + derived (disjoint)|fired
+(1 row)
+scenario|result
+base + base (unrelated)|fired
+(1 row)

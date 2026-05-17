@@ -134,6 +134,15 @@ emit_node_row(std::ostringstream &out,
     if (p != p)         /* NaN */ out << "null";
     else                          out << p;
   }
+  /* In-memory Boolean-assumption marker (set by
+   * foldBooleanIdentities) -- emit a JSON true so Studio can stamp
+   * the same B badge on a flag-marked gate as it does on a
+   * persistent gate_assumed_boolean wrapper.  Default true is
+   * suppressed by only emitting the field when the flag is set, so
+   * the wire size stays unchanged for the common case. */
+  if (gc.isBooleanAssumed(g)) {
+    out << ",\"boolean_assumed\":true";
+  }
   out << ",\"depth\":" << depth;
   out << '}';
 }

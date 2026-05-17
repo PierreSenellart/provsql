@@ -1044,10 +1044,6 @@
 
     let loaded = false;
     let entries = [];
-    // True when every relation lives in the same schema, so we can insert
-    // the bare table name on click instead of the qualified schema.table
-    // form. Multi-schema databases keep the qualified form to disambiguate.
-    let singleSchema = true;
 
     async function load() {
       body.innerHTML = '<p class="wp-schema__empty">Loading…</p>';
@@ -1055,7 +1051,6 @@
         const resp = await fetch('/api/schema');
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         entries = await resp.json();
-        singleSchema = new Set(entries.map(r => r.schema)).size <= 1;
         loaded = true;
         // Successful reload : clear the dirty flag so subsequent opens
         // reuse the cache until the next exec.
@@ -1106,7 +1101,12 @@
         html += `<h5 class="wp-schema__schema">${escapeHtml(schemaName)}</h5>`;
         for (const r of rels) {
           const qname  = `${r.schema}.${r.table}`;
-          const insert = singleSchema ? r.table : qname;
+          // `bare_resolves` is the Python side's authoritative answer to
+          // "would `SELECT ... FROM <bare>` find this exact relation
+          // under the current search_path?". Use the bare name only when
+          // the answer is yes; otherwise qualify so the click prefill
+          // actually executes against the relation the user clicked.
+          const insert = r.bare_resolves ? r.table : qname;
           // Hide the bookkeeping `provsql` uuid column from the user-visible
           // column list : its presence is what the PROV pill already signals.
           const visibleCols = r.columns.filter(c => c.name !== 'provsql');
@@ -1154,8 +1154,50 @@
           // table), but tagging it as both is noisy. Show only "mapping".
           const showProv = r.has_provenance && !r.is_mapping;
           const provCls   = showProv ? ' wp-schema__rel--prov' : '';
+          // The PROV badge is split into PROV-TID / PROV-BID / PROV-OPAQUE
+          // when the per-relation metadata is known (1.6.0+). Older
+          // schemas leave `prov_kind` null and we fall back to a bare
+          // "prov". The qualified form is discreet on purpose : it
+          // matters most for probabilistic query evaluation (TID =
+          // independent leaves, BID = block-correlated) but is
+          // meaningful in other settings too. OPAQUE warns the user
+          // that the safe-query rewriter will refuse on the table.
+          let provLabel = 'prov';
+          let provTip = 'Provenance-tracked (provsql uuid column)';
+          let provKindCls = '';
+          if (r.prov_kind === 'tid') {
+            provLabel = 'prov-tid';
+            provTip   = 'Provenance-tracked, independent leaves (TID): '
+                      + 'one independent random variable per row, '
+                      + 'standard probabilistic semantics.';
+            provKindCls = ' wp-schema__rel-prov--tid';
+          } else if (r.prov_kind === 'bid') {
+            provLabel = 'prov-bid';
+            provTip   = 'Provenance-tracked, block-correlated (BID): '
+                      + 'rows sharing the same block key are mutually '
+                      + 'exclusive (set via repair_key).';
+            provKindCls = ' wp-schema__rel-prov--bid';
+          } else if (r.prov_kind === 'opaque') {
+            // OPAQUE keeps the bare "prov" label : the muted-tone
+            // pill is enough to flag "kind not certified" and
+            // "prov-opaque" reads as redundant against the tooltip.
+            // Mirrors the convention used by the result-table pill.
+            // Wording covers both flavours of opaque : tables marked
+            // opaque via user-supplied provsql values (set_table_info
+            // or the provenance_guard trigger), and views whose body
+            // the planner-hook classifier cannot certify TID / BID
+            // (e.g. multi-source join, sublink).
+            provTip   = 'Provenance-tracked, opaque kind: the relation '
+                      + 'either carries user-supplied or shared provsql '
+                      + 'tokens, or its body has structure the classifier '
+                      + 'cannot certify TID / BID (multi-source join, '
+                      + 'sublink). The safe-query rewriter refuses to '
+                      + 'fire on it.';
+            provKindCls = ' wp-schema__rel-prov--opaque';
+          }
           const provBadge = showProv
-            ? `<span class="wp-schema__rel-prov" title="Provenance-tracked (provsql uuid column)">prov</span>`
+            ? `<span class="wp-schema__rel-prov${provKindCls}" `
+              + `title="${escapeAttr(provTip)}">${provLabel}</span>`
             : '';
           const mapBadge = r.is_mapping
             ? `<span class="wp-schema__rel-map" title="Provenance mapping (value + provenance uuid columns)">mapping</span>`
@@ -1163,10 +1205,15 @@
           const titleSuffix =
               (showProv ? ' · provenance-tracked' : '')
             + (r.is_mapping ? ' · provenance mapping' : '');
-          // Column count for the tooltip mirrors what's actually listed
-          // (provsql column hidden when has_provenance), so the tooltip
-          // and the comma-separated list don't disagree.
-          const visibleCount = r.has_provenance ? r.columns.length - 1 : r.columns.length;
+          // Column count for the tooltip mirrors the comma-separated
+          // list rendered above: `visibleCols` is the post-filter view
+          // (hiding the bookkeeping `provsql` column when present), so
+          // its length is authoritative.  Naive `r.columns.length - 1`
+          // would undercount views by one : views' planner-injected
+          // `provsql` column never lands in pg_attribute, so it isn't
+          // in `r.columns` to begin with, and the subtraction would
+          // remove a non-existent entry.
+          const visibleCount = visibleCols.length;
           // add/remove_provenance only target plain tables (the underlying
           // ALTER TABLE rejects views/matviews); mappings already serve a
           // separate purpose so we don't offer the toggle on them.
@@ -1267,7 +1314,11 @@
       }
       const rel = e.target.closest('.wp-schema__rel');
       if (!rel || !rel.dataset.qname) return;
-      insertAtCursor(rel.dataset.qname);
+      // Clicking a relation row replaces the textarea with a ready-to-run
+      // SELECT * FROM <relation> ; in practice that is what the user
+      // wants nine times out of ten, so saving the keystrokes wins over
+      // the bare-name insert.
+      replaceQuery(`SELECT * FROM ${rel.dataset.qname};`);
       close();
     });
     // The relation row is now a div role=button (so the inner action
@@ -1278,7 +1329,7 @@
       const rel = e.target.closest('.wp-schema__rel');
       if (!rel || rel !== e.target || !rel.dataset.qname) return;
       e.preventDefault();
-      insertAtCursor(rel.dataset.qname);
+      replaceQuery(`SELECT * FROM ${rel.dataset.qname};`);
       close();
     });
     search.addEventListener('input', () => { if (loaded) render(); });
@@ -1333,35 +1384,38 @@
   }
 
   function setupGucToggles() {
-    const wp = document.getElementById('opt-where-prov');
+    const fs = document.getElementById('prov-scheme-fieldset');
     const up = document.getElementById('opt-update-prov');
-    if (!wp || !up) return;
+    if (!fs || !up) return;
+    const radios = fs.querySelectorAll('input[name="prov-scheme"]');
 
-    // Toggle states persist across mode switches via sessionStorage.
-    // where_provenance: the stored value is the user's circuit-mode choice.
-    // Where mode forces the displayed state to "on" but never overwrites the
-    // stored value, so circuit→where→circuit round-trips preserve the user's
-    // pick. update_provenance: freely toggleable everywhere; persists as-is.
-    const savedWhere  = sessionStorage.getItem('ps.opt.whereProv') === '1';
+    // Persisted across mode switches. The stored value is the user's
+    // last *circuit-mode* pick; Where UI mode locks the selector to
+    // `where` but does not overwrite the stored value, so a
+    // circuit→where→circuit round-trip preserves the user's pick.
+    // `boolean`/`semiring`/`where`; default `semiring`.
+    const savedMode = sessionStorage.getItem('ps.opt.provScheme') || 'semiring';
     const savedUpdate = sessionStorage.getItem('ps.opt.updateProv') === '1';
 
+    const setMode = (m) => {
+      radios.forEach((r) => { r.checked = (r.value === m); });
+    };
+
     if (mode === 'where') {
-      wp.checked = true;
-      wp.disabled = true;
-      const wrap = document.getElementById('toggle-where-wrap');
-      wrap.classList.add('is-locked');
-      wrap.title = 'where_provenance is forced on in Where mode (the wrap requires it)';
+      setMode('where');
+      fs.classList.add('is-locked');
+      fs.title = 'Where UI mode requires where-provenance (the cell-highlight wrap depends on it). '
+               + 'Switch to Circuit mode to pick Boolean or Semiring.';
+      radios.forEach((r) => { r.disabled = true; });
     } else {
-      wp.checked = savedWhere;
+      setMode(savedMode === 'where' || savedMode === 'boolean' ? savedMode : 'semiring');
     }
     up.checked = savedUpdate;
 
-    wp.addEventListener('change', () => {
-      // Don't persist while locked: the displayed `on` is mode-forced, not a
-      // user choice we want to remember on top of their circuit-mode pick.
-      if (mode !== 'where') {
-        sessionStorage.setItem('ps.opt.whereProv', wp.checked ? '1' : '0');
-      }
+    fs.addEventListener('change', () => {
+      if (mode === 'where') return;
+      const picked = fs.querySelector('input[name="prov-scheme"]:checked');
+      if (picked) sessionStorage.setItem('ps.opt.provScheme', picked.value);
     });
     up.addEventListener('change', () => {
       sessionStorage.setItem('ps.opt.updateProv', up.checked ? '1' : '0');
@@ -1393,12 +1447,12 @@
     // was minted by a where-provenance wrap, so the same query must run
     // with where_provenance on here for the resulting circuit to contain
     // the project/eq gates the user is trying to inspect. Force the
-    // toggle on (the user can untick it for follow-up runs); the change
-    // is programmatic so it doesn't fire `change` and doesn't get
-    // persisted to sessionStorage.
+    // selector to the `where` flavour (the user can switch it back for
+    // follow-up runs); the radio flip is programmatic so it does not
+    // fire `change` and does not get persisted to sessionStorage.
     if (carry) {
-      const wp = document.getElementById('opt-where-prov');
-      if (wp) wp.checked = true;
+      const r = document.querySelector('input[name="prov-scheme"][value="where"]');
+      if (r) r.checked = true;
     }
     // Load circuit.js so its init() can wire the toolbar buttons (zoom,
     // show-uuids). loadCircuit() also calls this, but only
@@ -1823,6 +1877,29 @@
 
 })();
 
+// Per-kind metadata used by the result-table `provsql` column header
+// pill.  Labels deliberately mirror the schema panel's prov-tid /
+// prov-bid / prov-opaque pills so the two affordances read as the
+// same idea.  Lives at module scope rather than inside runQuery so
+// the hoisted renderBlocks function can read it without hitting the
+// const TDZ on the first call.
+const CLASSIFIER_LABELS = {
+  tid:    'prov-tid',
+  bid:    'prov-bid',
+  // OPAQUE falls back to the bare "prov" label : the muted-tone
+  // styling on the pill is enough to signal "kind unknown" and
+  // "prov-opaque" reads as redundant against the explainer tooltip.
+  opaque: 'prov',
+};
+const CLASSIFIER_EXPLAINERS = {
+  tid:    'The query result is independent at the row level (TID): '
+        + 'distinct output rows have disjoint lineages.',
+  bid:    'The query result is block-correlated (BID): rows sharing '
+        + 'a block key value are mutually exclusive.',
+  opaque: 'The query result is opaque: correlations across rows are '
+        + 'not certified by the classifier.',
+};
+
 /* Global runQuery: invoked by the form's inline onsubmit. POSTs to /api/exec
    and renders the response into the result section. */
 async function runQuery(ev) {
@@ -1878,8 +1955,8 @@ async function runQuery(ev) {
     if (runBtn)    runBtn.hidden    = true;
   }, 100);
 
-  const wpEl = document.getElementById('opt-where-prov');
   const upEl = document.getElementById('opt-update-prov');
+  const provSchemeEl = document.querySelector('input[name="prov-scheme"]:checked');
   let resp;
   try {
     resp = await fetch('/api/exec', {
@@ -1888,7 +1965,7 @@ async function runQuery(ev) {
       body: JSON.stringify({
         sql: sqlText,
         mode: env.mode,
-        where_provenance: wpEl ? wpEl.checked : (env.mode === 'where'),
+        prov_scheme: env.mode === 'where' ? 'where' : (provSchemeEl ? provSchemeEl.value : 'semiring'),
         update_provenance: upEl ? upEl.checked : false,
         request_id: requestId,
       }),
@@ -1983,6 +2060,34 @@ async function runQuery(ev) {
     return `<div class="${cls}"><i class="fas ${icon}"></i> ${badge}${env.escapeHtml(text)}${tail}</div>`;
   }
 
+  // Recognises the classifier NOTICE emitted by the planner hook when
+  // provsql.classify_top_level is on. Three shapes :
+  //   "ProvSQL: query result is <KIND> (sources: schema.t1, schema.t2)"
+  //   "ProvSQL: query result is <KIND> (no provenance-tracked sources)"
+  //   "ProvSQL: query result is OPAQUE"
+  // The OPAQUE form omits the parenthetical because the source list
+  // is only partial when the shape gate trips (a SubLink, set
+  // operation, GROUP BY ... hides relations from the rtable walk),
+  // and surfacing partial sources would falsely suggest completeness.
+  // Returns { kind, sources } on a match (sources is an array of
+  // identifier strings, possibly empty), or null otherwise.
+  function parseClassifierNotice(message) {
+    if (!message) return null;
+    const m = String(message).match(
+      /^ProvSQL:\s*query result is (TID|BID|OPAQUE)(?:\s*\((.*)\))?\s*$/
+    );
+    if (!m) return null;
+    const kind = m[1].toLowerCase();
+    const tail = (m[2] || '').trim();
+    let sources = [];
+    if (tail.startsWith('sources:')) {
+      sources = tail.slice('sources:'.length).split(',')
+                    .map(s => s.trim())
+                    .filter(s => s.length > 0);
+    }
+    return { kind, sources };
+  }
+
   function renderBlocks(blocks, wrapped, notices) {
     // /api/exec returns zero or more error blocks (from earlier failed
     // statements) followed by the final block. We render only the final
@@ -2013,7 +2118,20 @@ async function runQuery(ev) {
       }
     }
     // Server-side notices/warnings + Studio's own INFO observations.
+    // The classifier NOTICE emitted by the provsql.classify_top_level
+    // GUC is hoisted out of the banner stream and used to upgrade the
+    // result-table's `provsql` column header pill from a plain "prov"
+    // to "prov-tid" / "prov-bid" / "prov-opaque" with the sources
+    // surfaced in the hover tooltip.  Last one wins when multiple
+    // statements emit NOTICEs (we surface the user-visible last
+    // SELECT's classification).
+    let classifyInfo = null;
     for (const n of (notices || [])) {
+      const classified = parseClassifierNotice(n.message);
+      if (classified) {
+        classifyInfo = classified;
+        continue;
+      }
       bannerHtml += renderDiag(n.severity, n.message);
     }
     if (banners) banners.innerHTML = bannerHtml;
@@ -2092,6 +2210,34 @@ async function runQuery(ev) {
       // The first two key off type_name; the third keys off the column
       // name because `provsql` is just `uuid` at the type level.
       const matches = env.matchesProvType || ((t, b) => String(t || '').toLowerCase() === b);
+      // The `provsql` column pill is upgraded to a kind-aware variant
+      // (prov-tid / prov-bid / prov-opaque) when the classifier NOTICE
+      // emitted by provsql.classify_top_level identifies the kind of
+      // the user's query result.  Hover surfaces the explainer plus
+      // the list of provenance-tracked source relations.  Without a
+      // classifier NOTICE (older extension, classifier off, no
+      // sources walked) the pill stays the plain "prov" form.
+      const provLabel = classifyInfo
+        ? (CLASSIFIER_LABELS[classifyInfo.kind] || 'prov')
+        : 'prov';
+      const provClassMod = classifyInfo
+        ? ' wp-result__col-prov--' + classifyInfo.kind
+        : '';
+      let provTip = `provsql: the row's provenance gate UUID (added by add_provenance)`;
+      if (classifyInfo) {
+        const explain = CLASSIFIER_EXPLAINERS[classifyInfo.kind]
+                     || 'Query-time provenance classification.';
+        // OPAQUE NOTICEs no longer carry a sources list (the
+        // partial form they used to emit was misleading), so we
+        // omit the "Sources: ..." line for OPAQUE entirely.
+        let srcLine = '';
+        if (classifyInfo.kind !== 'opaque') {
+          srcLine = classifyInfo.sources.length
+                  ? 'Sources: ' + classifyInfo.sources.join(', ')
+                  : 'No provenance-tracked sources.';
+        }
+        provTip = srcLine ? explain + '\n\n' + srcLine : explain;
+      }
       const headerPill = (col) => {
         const typeName = col.type_name || '';
         if (matches(typeName, 'random_variable')) {
@@ -2101,7 +2247,8 @@ async function runQuery(ev) {
           return `<span class="wp-result__col-agg" title="agg_token: each value carries a circuit UUID; click cells to inspect the underlying gate">agg</span>`;
         }
         if (col.name === 'provsql') {
-          return `<span class="wp-result__col-prov" title="provsql: the row's provenance gate UUID (added by add_provenance)">prov</span>`;
+          return `<span class="wp-result__col-prov${provClassMod}" `
+               + `title="${env.escapeAttr(provTip)}">${provLabel}</span>`;
         }
         return '';
       };

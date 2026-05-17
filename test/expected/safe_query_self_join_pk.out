@@ -1,0 +1,40 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|prob_baseline
+1|0.250000
+(1 row)
+remove_provenance
+
+(1 row)
+x|prob_rewritten
+1|0.250000
+(1 row)
+x|diff_baseline_vs_rewritten
+1|0.000000000
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|diff_pk_vs_nnu
+1|0.000000000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|diff_pure_self_join
+1|0.000000000
+(1 row)

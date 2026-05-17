@@ -270,6 +270,16 @@ value_type parse_leaf(const char *v) const {
   return std::string(v);
 }
 /**
+ * @brief Special case: @c Formula serialises the circuit structure as
+ *        a string rather than computing a semantic value, so a
+ *        safe-query-rewritten circuit renders to its (rewritten)
+ *        structural formula and remains a faithful description.  The
+ *        homomorphism question does not arise.
+ */
+virtual bool compatibleWithBooleanRewrite() const override {
+  return true;
+}
+/**
  * @brief Serialise a Formula evaluation as text.
  *
  * Drops the cosmetic outer paren pair that @c plus / @c times / @c monus

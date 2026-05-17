@@ -212,6 +212,76 @@ key value into independent, mutually-exclusive alternatives.
            ROUND(probability_evaluate(provenance())::numeric, 3) AS prob
     FROM (SELECT ground FROM weather GROUP BY ground) t;
 
+Boolean-Provenance Optimisations
+---------------------------------
+
+Probability evaluation routes through the Boolean-circuit pipeline
+(``getBooleanCircuit`` then one of the methods above).  Two
+optimisations exploit Boolean-specific structure to make this faster,
+sometimes by orders of magnitude.
+
+Safe-query rewriting (``provsql.boolean_provenance``)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When the GUC ``provsql.boolean_provenance`` is ``on`` (off by
+default), the planner recognises the *safe* hierarchical
+conjunctive-query subclass of Dalvi-Suciu :cite:`DBLP:journals/jacm/DalviS12`
+and rewrites such queries with per-atom ``DISTINCT`` projections so
+that the resulting provenance circuit is *read-once*.  A read-once
+circuit can be probability-evaluated in linear time by the
+``'independent'`` method, instead of falling through to
+``'tree-decomposition'`` or external compilation.
+
+The rewriter recognises self-join-free hierarchical conjunctive
+queries over TID or BID base tables, plus a number of extensions
+that recover safety for query shapes the raw hierarchical criterion
+would reject (FD-aware reductions driven by primary keys / NOT-NULL
+UNIQUE constraints, constant selections, transparent deterministic
+relations, certain self-joins, UCQs with disjoint branches, …); see
+:ref:`safe-query-rewriter` in the developer documentation for the
+full set.  Queries outside the
+recognised class are passed through unchanged: the GUC enables an
+opt-in shortcut, never a different result.
+
+.. code-block:: postgresql
+
+    SET provsql.boolean_provenance = on;
+
+    SELECT person, ROUND(probability_evaluate(provenance())::numeric, 4)
+    FROM suspects, witnesses
+    WHERE suspects.case_id = witnesses.case_id;
+
+**Trade-off.**  The rewriter tags the root gate so that semiring
+evaluators incompatible with Boolean rewriting refuse to run on the
+result (see :doc:`semirings` for the compatibility list).  In
+practice this means: turn the GUC on for probability-heavy
+workloads on hierarchical CQs, turn it off (or re-evaluate in a
+fresh session) before running ``sr_counting``, ``sr_how``,
+``sr_why`` on the same circuit.
+
+HAVING-COUNT closed-form shortcut
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For queries of the form
+``GROUP BY g HAVING COUNT(*) op c`` (where ``op`` is one of
+``>=``, ``>``, ``<=``, ``<``, ``=``, ``<>``) ProvSQL recognises the
+HAVING comparator as a Poisson-binomial CDF over the per-row
+Bernoulli indicators and computes its probability directly, in
+``O(N × min(C, N-C))`` per group, where ``N`` is the per-group row
+count.  This replaces the binomial-coefficient-sized DNF that the
+general HAVING evaluator would otherwise construct, so HAVING-COUNT
+probability queries that previously hit ``'tree-decomposition'`` or
+``'compilation'`` now resolve in milliseconds.
+
+The shortcut fires automatically when its soundness preconditions
+are met: each per-row provenance must be a single ``gate_input``
+leaf and the group-level aggregate must not be shared with any
+other comparator.  It is transparent to the user; no GUC needs to
+be set.  Queries outside the supported shape (HAVING-SUM,
+HAVING-MIN/MAX, multi-cmp HAVING such as
+``COUNT(*) >= a AND COUNT(*) <= b``, or non-trivial per-row
+provenance from joins) fall through to the general HAVING path.
+
 Continuous Random Variables
 ----------------------------
 

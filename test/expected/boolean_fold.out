@@ -1,0 +1,35 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+shared_root_p_ind
+0.750000000
+(1 row)
+shared_root_simplified_type|shared_root_boolean_assumed
+plus|true
+(1 row)
+one_root_simplified_type|one_root_boolean_assumed
+one|true
+(1 row)
+one_root_p_ind
+1.000000000
+(1 row)
+zero_root_p_ind
+0.500000000
+(1 row)
+plus_abs_p_ind
+0.500000000
+(1 row)
+times_abs_p_ind
+0.500000000
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|p_independent
+Berlin|0.840000
+Paris|0.936000
+(2 rows)
