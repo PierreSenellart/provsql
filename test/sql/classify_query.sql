@@ -351,6 +351,29 @@ CREATE TEMP TABLE cq_r33 AS
 SELECT remove_provenance('cq_r33');
 SELECT id FROM cq_r33 ORDER BY id;
 
+-- (34) ANSI INNER JOIN syntax : the fromlist contains a JoinExpr
+--      rather than two flat RangeTblRefs, but the classifier
+--      descends into JOIN_INNER nodes and still recognises the
+--      two underlying sources.  Promotes to TID with both
+--      sources listed.
+CREATE TEMP TABLE cq_r34 AS
+  SELECT a.id FROM cq_tid a INNER JOIN cq_tid2 b ON a.id = b.n;
+SELECT remove_provenance('cq_r34');
+SELECT id FROM cq_r34 ORDER BY id;
+
+-- (35) CROSS JOIN syntax (also JOIN_INNER in PG) : same behaviour.
+CREATE TEMP TABLE cq_r35 AS
+  SELECT a.id FROM cq_tid a CROSS JOIN cq_tid2 b;
+SELECT remove_provenance('cq_r35');
+SELECT id FROM cq_r35 ORDER BY id;
+
+-- (36) LEFT OUTER JOIN : NULL-padding rows break per-row TID, so
+--      the classifier stays OPAQUE on outer joins.
+CREATE TEMP TABLE cq_r36 AS
+  SELECT a.id FROM cq_tid a LEFT JOIN cq_tid2 b ON a.id = b.n;
+SELECT remove_provenance('cq_r36');
+SELECT id FROM cq_r36 ORDER BY id;
+
 DROP TABLE cq_derived_a;
 DROP TABLE cq_derived_b;
 SELECT remove_provenance('cq_tid3');

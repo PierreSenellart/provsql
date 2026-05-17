@@ -59,6 +59,39 @@ static const char *kind_label(provsql_table_kind k) {
 }
 
 /**
+ * @brief Decide whether a @c jointree fromlist entry has a shape the
+ *        classifier can certify : a plain @c RangeTblRef, or a
+ *        @c JoinExpr with @c jointype @c == @c JOIN_INNER whose
+ *        @c larg and @c rarg recursively satisfy the same predicate.
+ *
+ * ANSI-syntax inner joins (@c INNER @c JOIN, @c CROSS @c JOIN; PG
+ * normalises both to @c JOIN_INNER) preserve TID per-row independence
+ * because every output row corresponds to exactly one pair of source
+ * rows -- the row's provenance is the AND of the two tokens.  Outer
+ * joins (@c LEFT / @c RIGHT / @c FULL) introduce NULL-padding rows
+ * whose provenance is the negation of the inner-match disjunction, so
+ * they break the per-row TID property and stay OPAQUE.  Semi / anti
+ * joins are also rejected (the planner uses @c JOIN_SEMI / @c JOIN_ANTI
+ * for sublink-driven joins, which our @c hasSubLinks shape gate has
+ * already filtered out upstream, but the explicit check here keeps
+ * the predicate self-contained).
+ */
+static bool classify_fromlist_shape_ok(Node *n) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, RangeTblRef))
+    return true;
+  if (IsA(n, JoinExpr)) {
+    JoinExpr *je = (JoinExpr *) n;
+    if (je->jointype != JOIN_INNER)
+      return false;
+    return classify_fromlist_shape_ok(je->larg)
+        && classify_fromlist_shape_ok(je->rarg);
+  }
+  return false;
+}
+
+/**
  * @brief Recursive walker shared by the top-level entry point and the
  *        @c RTE_SUBQUERY descent.
  *
@@ -110,8 +143,7 @@ static void classify_walk(Query                 *q,
 
   if (*shape_ok && q->jointree != NULL && q->jointree->fromlist != NIL) {
     foreach (lc, q->jointree->fromlist) {
-      Node *n = (Node *) lfirst(lc);
-      if (!IsA(n, RangeTblRef)) {
+      if (!classify_fromlist_shape_ok((Node *) lfirst(lc))) {
         *shape_ok = false;
         break;
       }
@@ -121,7 +153,12 @@ static void classify_walk(Query                 *q,
   /* Walk the range table.  RTE_RELATION entries with metadata are
    * collected as sources; @c RTE_SUBQUERY recurses (view bodies and
    * inline subqueries) so the underlying base relations join the
-   * accumulator.  Any other @c rtekind (@c RTE_JOIN, @c RTE_VALUES,
+   * accumulator.  @c RTE_JOIN entries (one per @c JoinExpr in the
+   * fromlist) are synthetic union-aliases over the join's combined
+   * column list ; they carry no source on their own and pass through.
+   * The fromlist shape gate above already constrains them to
+   * @c JOIN_INNER, so seeing one here does not change the
+   * per-row independence story.  Any other @c rtekind (@c RTE_VALUES,
    * @c RTE_CTE, @c RTE_FUNCTION, the PG 18 synthetic @c RTE_GROUP,
    * ...) trips the shape gate so we conservatively report OPAQUE.
    * @c RTE_GROUP appears alongside the user RTEs when @c q->groupClause
@@ -149,6 +186,9 @@ static void classify_walk(Query                 *q,
        * visible inner @c RTE_RELATION sources are still added to
        * the accumulator for diagnostic purposes. */
       classify_walk(rte->subquery, out, shape_ok, n_meta, sole_relid);
+    } else if (rte->rtekind == RTE_JOIN) {
+      /* Synthetic RTE for a JoinExpr; the underlying source RTEs
+       * appear separately in the same rtable.  No-op here. */
     } else {
       *shape_ok = false;
     }
