@@ -43,20 +43,30 @@ typedef struct ProvSQLClassification {
 /**
  * @brief Classify the result relation of a parsed top-level @c Query.
  *
- * Initial scope : a flat @c fromlist of @c RangeTblRefs, with no
- * @c SubLinks, no modifying @c CTEs, no set operations, and either
- * zero or one provenance-tracked base relation reached either
- * directly (@c RTE_RELATION) or through any depth of @c RTE_SUBQUERY
- * entries (view bodies after PG rewriting, and inline @c FROM
- * subqueries).  The PG 18 virtual @c RTE_GROUP is transparently
- * skipped.  When a single tracked base relation is reached, the
- * source's recorded kind is preserved.  A FROM-less query and any
- * query whose accessible base relations carry no provenance
- * metadata are reported as TID (trivially deterministic).
- * Everything else is reported as OPAQUE.
+ * Scope :
  *
- * Follow-up slices add joins of independent TIDs, UNION ALL,
- * GROUP BY refinement (especially the BID block-key check), and
+ *  - Single-source classification : a flat @c fromlist of
+ *    @c RangeTblRefs, with no kind-altering features (@c SubLinks,
+ *    modifying @c CTEs, @c cteList, @c DISTINCT, @c GROUP @c BY,
+ *    @c HAVING, aggregates, window functions, set-returning
+ *    functions in the target list).  Zero or one provenance-tracked
+ *    base relation reached either directly (@c RTE_RELATION) or
+ *    through any depth of @c RTE_SUBQUERY entries (view bodies
+ *    after PG rewriting, inline @c FROM subqueries).  The PG 18
+ *    virtual @c RTE_GROUP is skipped transparently.  When a single
+ *    tracked base relation is reached, the source's recorded kind
+ *    is preserved verbatim.  @c ORDER @c BY, @c LIMIT, @c OFFSET
+ *    do not change row lineages and are therefore transparent.
+ *  - @c UNION @c ALL specialisation : a fully-UNION-ALL tree of
+ *    subquery legs each of which classifies as TID over a base-
+ *    relid set that is disjoint from every other leg's promotes
+ *    to TID with the cumulative source list.
+ *  - Zero tracked sources : trivially deterministic, reported as
+ *    TID with an empty source list.
+ *  - Everything else is reported as OPAQUE.
+ *
+ * Follow-up slices add independent-TID join inference, BID
+ * block-key preservation under projection / @c GROUP @c BY, and
  * the transitive ancestor-set computation that the future
  * correlation registry will consume.
  *
@@ -72,9 +82,15 @@ extern void provsql_classify_query(Query *q, ProvSQLClassification *out);
  * Formats :
  * @verbatim
  *   ProvSQL: query result is TID (sources: schema.t1, schema.t2)
- *   ProvSQL: query result is OPAQUE (sources: schema.t1)
+ *   ProvSQL: query result is BID (sources: schema.t1)
  *   ProvSQL: query result is TID (no provenance-tracked sources)
+ *   ProvSQL: query result is OPAQUE
  * @endverbatim
+ *
+ * The OPAQUE form omits the parenthetical because the rtable
+ * walk only reaches syntactically visible sources : when the
+ * shape gate trips on a sublink, set operation, GROUP BY, ...
+ * the list would be partial and falsely suggest completeness.
  */
 extern void provsql_classify_emit_notice(const ProvSQLClassification *c);
 

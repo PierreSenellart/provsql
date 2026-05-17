@@ -2061,20 +2061,24 @@ async function runQuery(ev) {
   }
 
   // Recognises the classifier NOTICE emitted by the planner hook when
-  // provsql.classify_top_level is on. Two shapes :
+  // provsql.classify_top_level is on. Three shapes :
   //   "ProvSQL: query result is <KIND> (sources: schema.t1, schema.t2)"
   //   "ProvSQL: query result is <KIND> (no provenance-tracked sources)"
-  // where <KIND> is TID, BID, or OPAQUE.  Returns { kind, sources } on
-  // a match (sources is an array of identifier strings, possibly
-  // empty), or null otherwise.
+  //   "ProvSQL: query result is OPAQUE"
+  // The OPAQUE form omits the parenthetical because the source list
+  // is only partial when the shape gate trips (a SubLink, set
+  // operation, GROUP BY ... hides relations from the rtable walk),
+  // and surfacing partial sources would falsely suggest completeness.
+  // Returns { kind, sources } on a match (sources is an array of
+  // identifier strings, possibly empty), or null otherwise.
   function parseClassifierNotice(message) {
     if (!message) return null;
     const m = String(message).match(
-      /^ProvSQL:\s*query result is (TID|BID|OPAQUE)\s*\((.*)\)\s*$/
+      /^ProvSQL:\s*query result is (TID|BID|OPAQUE)(?:\s*\((.*)\))?\s*$/
     );
     if (!m) return null;
     const kind = m[1].toLowerCase();
-    const tail = m[2].trim();
+    const tail = (m[2] || '').trim();
     let sources = [];
     if (tail.startsWith('sources:')) {
       sources = tail.slice('sources:'.length).split(',')
@@ -2223,10 +2227,16 @@ async function runQuery(ev) {
       if (classifyInfo) {
         const explain = CLASSIFIER_EXPLAINERS[classifyInfo.kind]
                      || 'Query-time provenance classification.';
-        const srcLine = classifyInfo.sources.length
-                      ? 'Sources: ' + classifyInfo.sources.join(', ')
-                      : 'No provenance-tracked sources.';
-        provTip = explain + '\n\n' + srcLine;
+        // OPAQUE NOTICEs no longer carry a sources list (the
+        // partial form they used to emit was misleading), so we
+        // omit the "Sources: ..." line for OPAQUE entirely.
+        let srcLine = '';
+        if (classifyInfo.kind !== 'opaque') {
+          srcLine = classifyInfo.sources.length
+                  ? 'Sources: ' + classifyInfo.sources.join(', ')
+                  : 'No provenance-tracked sources.';
+        }
+        provTip = srcLine ? explain + '\n\n' + srcLine : explain;
       }
       const headerPill = (col) => {
         const typeName = col.type_name || '';

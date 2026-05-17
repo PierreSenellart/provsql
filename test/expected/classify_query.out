@@ -2,6 +2,9 @@
 add_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
 repair_key
 
 (1 row)
@@ -42,7 +45,7 @@ k|v
 1|y
 2|z
 (3 rows)
-NOTICE:  ProvSQL: query result is OPAQUE (sources: provsql_test.cq_opaque)
+NOTICE:  ProvSQL: query result is OPAQUE
 remove_provenance
 
 (1 row)
@@ -56,7 +59,7 @@ NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
 id
 100
 (1 row)
-NOTICE:  ProvSQL: query result is OPAQUE (sources: provsql_test.cq_tid, provsql_test.cq_bid)
+NOTICE:  ProvSQL: query result is OPAQUE
 remove_provenance
 
 (1 row)
@@ -95,7 +98,7 @@ id
 2
 3
 (3 rows)
-NOTICE:  ProvSQL: query result is OPAQUE (sources: provsql_test.cq_tid, provsql_test.cq_bid)
+NOTICE:  ProvSQL: query result is OPAQUE
 remove_provenance
 
 (1 row)
@@ -105,7 +108,7 @@ id|k
 1|1
 2|2
 (3 rows)
-NOTICE:  ProvSQL: query result is OPAQUE (sources: provsql_test.cq_tid, provsql_test.cq_bid)
+NOTICE:  ProvSQL: query result is OPAQUE
 remove_provenance
 
 (1 row)
@@ -115,8 +118,172 @@ id|k
 1|1
 2|2
 (3 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+1
+2
+3
+(3 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+1
+2
+(2 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+2
+3
+(2 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+label
+a
+b
+c
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+label
+a
+b
+c
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+label|c
+a|1 (*)
+b|1 (*)
+c|1 (*)
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id|rn
+1|1
+2|2
+3|3
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+g
+1
+1
+1
+2
+2
+2
+(6 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid, provsql_test.cq_tid2)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+x
+1
+2
+3
+10
+20
+(5 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+id
+1
+2
+(2 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+x
+1
+2
+3
+10
+20
+(5 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+x
+1
+2
+3
+(3 rows)
+NOTICE:  ProvSQL: query result is OPAQUE
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+x
+1
+1
+1
+2
+2
+3
+(6 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+x
+1
+2
+3
+100
+(4 rows)
+NOTICE:  ProvSQL: query result is TID (sources: provsql_test.cq_tid, provsql_test.cq_tid2)
+remove_provenance
+
+(1 row)
+NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
+x
+1
+2
+3
+10
+20
+100
+(6 rows)
 two
 2
+(1 row)
+remove_provenance
+
 (1 row)
 remove_provenance
 

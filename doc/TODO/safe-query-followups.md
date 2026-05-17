@@ -141,10 +141,31 @@ that's right for many simple cases but wrong in general.
   Extended to descend into `RTE_SUBQUERY` (view bodies after PG
   rewriting and inline FROM subqueries) under the same shape gate,
   so a single tracked base relation reached through any depth of
-  nesting still classifies as TID / BID.  Follow-up :
-  independent-TID join inference, BID block-key preservation check
-  under projection / GROUP BY, UNION ALL of disjoint TIDs, and the
-  transitive base-ancestor set the correlation registry will consume.
+  nesting still classifies as TID / BID.  Shape gate tightened to
+  reject kind-altering features that the original scope passed
+  through silently (`DISTINCT`, `GROUP BY`, `HAVING`, aggregates,
+  window functions, set-returning functions in the target list ;
+  `ORDER BY` / `LIMIT` / `OFFSET` remain transparent).  UNION ALL
+  of disjoint TID legs now promotes to TID with the cumulative
+  source list ; the BID counterpart is deliberately deferred (see
+  the dedicated bullet below).  Follow-up : independent-TID join
+  inference, BID block-key preservation check under projection /
+  GROUP BY, and the transitive base-ancestor set the correlation
+  registry will consume.
+- **UNION ALL of compatible BID legs.**
+  Currently OPAQUE even when every leg is BID with the same
+  block-key column projected at the same target-list position.
+  The problem : the output's "rows sharing a block-key value" set
+  spans both legs, but a row from leg A and a row from leg B with
+  the same block-key value are independent (different relations),
+  not mutually exclusive, so the result is not BID under that
+  column.  Promotion would need either (a) certifying that the
+  block-key value ranges of the legs are disjoint (not knowable
+  from the query text alone), or (b) emitting a synthetic
+  composite block key `(leg_id, k)` and recording it in
+  `provsql_table_info`.  Belongs with CTAS tag inheritance, where
+  the materialised relation can carry the derived block-key
+  metadata.
 - **CTAS tag inheritance.**
   When a CTAS materialises a query the classifier has tagged TID
   (resp. BID), populate the new table's `provsql_table_info` entry

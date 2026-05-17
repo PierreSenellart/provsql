@@ -74,12 +74,19 @@ tracked-source count:
   deferred to a later slice that will infer independent-TID joins
   via the hierarchical-CQ criterion).
 
-The sources list is populated even when the kind is ``OPAQUE``, so
-the ``NOTICE`` always attributes the result to the relations the
-query touches.  Independent-TID join inference, BID block-key
-preservation under projection / ``GROUP BY``, ``UNION ALL`` of
-disjoint TIDs, and the transitive base-ancestor computation the
-future correlation registry will consume are all explicit follow-ups;
+TID and BID NOTICEs carry a complete source list.  OPAQUE NOTICEs
+deliberately omit it: when the shape gate trips on a sublink, set
+operation, ``GROUP BY``, ``DISTINCT``, ``HAVING``, aggregates,
+window functions, or SRFs in the target list, the rtable walk
+only reaches the syntactically visible RTEs, so any list would
+be partial and falsely suggest completeness.  The user already
+has the query text in front of them and can identify the
+involved relations without our help.
+
+Independent-TID join inference, BID block-key preservation under
+projection / ``GROUP BY``, ``UNION ALL`` of compatible BID legs,
+and the transitive base-ancestor computation the future
+correlation registry will consume are all explicit follow-ups;
 see ``doc/TODO/safe-query-followups.md`` ("TID / BID propagation
 through derived relations").
 
@@ -103,8 +110,9 @@ with schema-qualified, ``quote_identifier``-quoted relation names:
 .. code-block:: text
 
     ProvSQL: query result is TID (sources: public.personnel)
-    ProvSQL: query result is OPAQUE (sources: public.personnel, public.factories)
+    ProvSQL: query result is BID (sources: public.personnel)
     ProvSQL: query result is TID (no provenance-tracked sources)
+    ProvSQL: query result is OPAQUE
 
 ProvSQL Studio enables the GUC automatically and parses the
 ``NOTICE`` into a kind-aware pill on the result-table ``provsql``
