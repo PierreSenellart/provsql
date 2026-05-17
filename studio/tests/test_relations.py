@@ -81,6 +81,44 @@ def test_schema_marks_views_propagating_provenance(client):
         })
 
 
+def test_schema_classifies_view_prov_kind(client):
+    """Views have no ``provsql_table_info`` entry; ``prov_kind`` for a
+    view comes from the planner-hook classifier (NOTICE on the view body
+    captured by a LIMIT 0 probe).  A view that wraps a TID base table
+    inherits TID ; a view over a BID base table inherits BID ; a view
+    over a multi-source join classifies as OPAQUE."""
+    setup = (
+        "DROP VIEW IF EXISTS vk_over_tid;"
+        " DROP VIEW IF EXISTS vk_over_bid;"
+        " DROP VIEW IF EXISTS vk_over_join;"
+        " DROP TABLE IF EXISTS vk_bid;"
+        " CREATE TABLE vk_bid (k int, lbl text);"
+        " SELECT repair_key('vk_bid', 'k');"
+        " CREATE VIEW vk_over_tid  AS SELECT * FROM personnel;"
+        " CREATE VIEW vk_over_bid  AS SELECT * FROM vk_bid;"
+        " CREATE VIEW vk_over_join AS"
+        "   SELECT p.id, b.k FROM personnel p, vk_bid b WHERE p.id = b.k;"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    try:
+        rows = client.get("/api/schema").get_json()
+        by_qname = {f"{r['schema']}.{r['table']}": r for r in rows}
+        assert by_qname["provsql_test.vk_over_tid"]["prov_kind"]  == "tid"
+        assert by_qname["provsql_test.vk_over_bid"]["prov_kind"]  == "bid"
+        assert by_qname["provsql_test.vk_over_join"]["prov_kind"] == "opaque"
+    finally:
+        client.post("/api/exec", json={
+            "sql": (
+                "DROP VIEW IF EXISTS vk_over_tid;"
+                " DROP VIEW IF EXISTS vk_over_bid;"
+                " DROP VIEW IF EXISTS vk_over_join;"
+                " DROP TABLE IF EXISTS vk_bid;"
+            ),
+            "mode": "circuit",
+        })
+
+
 def test_schema_surfaces_per_relation_prov_kind(client):
     """add_provenance / repair_key / provenance_guard write a per-table
     record into provsql_table_info marking each tracked relation as

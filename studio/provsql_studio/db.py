@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -381,10 +382,21 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
             rows = cur.fetchall()
         for (schema, table, kind, cols, types,
              has_prov, is_mapping, prov_kind, bare_resolves) in rows:
-            propagates = bool(has_prov) or (
-                kind in ("view", "matview")
-                and _view_propagates_provenance(conn, schema, table)
-            )
+            propagates = bool(has_prov)
+            # Views and matviews don't have a `provsql_table_info` entry,
+            # so the SQL-level `prov_kind` is always NULL for them. We
+            # probe the rewritten plan instead : the probe simultaneously
+            # detects propagation (provsql column in the plan output) and
+            # captures the classifier NOTICE on the view body to set the
+            # kind. Tables keep their authoritative `provsql.get_table_info`
+            # value (set at add_provenance / repair_key time) verbatim.
+            if kind in ("view", "matview"):
+                view_propagates, view_kind = _probe_view_provenance(
+                    conn, schema, table)
+                if view_propagates:
+                    propagates = True
+                    if view_kind is not None:
+                        prov_kind = view_kind
             out.append({
                 "schema": schema,
                 "table": table,
@@ -412,24 +424,81 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
 
 _UUID_OID = 2950  # `'uuid'::regtype::oid` is stable across PG versions.
 
+# Matches the NOTICE the planner-hook classifier emits when
+# `provsql.classify_top_level` is on (see src/classify_query.c).
+_CLASSIFY_NOTICE_RE = re.compile(
+    r"^ProvSQL: query result is (TID|BID|OPAQUE)\b"
+)
 
-def _view_propagates_provenance(conn, schema: str, table: str) -> bool:
-    """Probe whether a `SELECT * FROM <schema>.<table> LIMIT 0` plan
-    carries a provsql uuid column. The probe runs inside a savepoint so a
-    broken view (or one whose plan errors for any reason) doesn't taint
-    the schema-listing transaction."""
+
+def _probe_view_provenance(
+    conn, schema: str, table: str
+) -> tuple[bool, str | None]:
+    """Probe a view (or matview) once and return
+    ``(propagates_provenance, prov_kind)``.
+
+    * ``propagates_provenance`` is True iff
+      ``SELECT * FROM <schema>.<table> LIMIT 0`` exposes a ``provsql uuid``
+      column. Views/matviews never carry a literal `provsql` column in
+      `pg_attribute` even when the ProvSQL planner hook adds one to their
+      rewritten output (CS2's ``f`` and ``f_replicated`` are the canonical
+      case), so this column-list probe is the only source of truth.
+    * ``prov_kind`` is the planner-hook classifier's verdict
+      (``'tid'`` / ``'bid'`` / ``'opaque'``) on the view body, captured
+      via the ``NOTICE`` it emits when ``provsql.classify_top_level`` is
+      on.  ``None`` when the classifier didn't certify (e.g. older
+      extension without the GUC, or no NOTICE fired).  The schema-panel
+      pill uses this to upgrade the bare ``prov`` label on a view to
+      ``prov-tid`` / ``prov-bid`` so the user sees what kind of
+      uncertainty the view actually carries, computed live from its
+      body rather than from a recorded tag (views have no
+      ``provsql_table_info`` entry).
+
+    The probe runs inside a transaction with ``force_rollback=True`` so
+    the GUC change and any side effects (the probe is read-only, but
+    PG still opens a real transaction) don't leak.  The GUC ``SET LOCAL``
+    is itself wrapped in a savepoint so older databases without the
+    1.6.0-dev GUC degrade to ``(propagates_only, None)`` instead of
+    aborting.
+    """
     qname = sql.Identifier(schema, table)
+    notices: list[str] = []
+
+    def collect(diag):
+        msg = diag.message_primary or ""
+        if msg.startswith("ProvSQL: query result is "):
+            notices.append(msg)
+
+    propagates = False
     try:
-        with conn.transaction(force_rollback=False):
+        with conn.transaction(force_rollback=True):
             with conn.cursor() as cur:
-                cur.execute(sql.SQL("SELECT * FROM {} LIMIT 0").format(qname))
-                desc = cur.description or []
-                for col in desc:
-                    if col.name == "provsql" and col.type_code == _UUID_OID:
-                        return True
-                return False
+                cur.execute("SAVEPOINT classify_guc")
+                try:
+                    cur.execute("SET LOCAL provsql.classify_top_level = on")
+                except psycopg.errors.UndefinedObject:
+                    cur.execute("ROLLBACK TO SAVEPOINT classify_guc")
+                else:
+                    cur.execute("RELEASE SAVEPOINT classify_guc")
+            conn.add_notice_handler(collect)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(sql.SQL("SELECT * FROM {} LIMIT 0").format(qname))
+                    desc = cur.description or []
+                    for col in desc:
+                        if col.name == "provsql" and col.type_code == _UUID_OID:
+                            propagates = True
+                            break
+            finally:
+                conn.remove_notice_handler(collect)
     except Exception:
-        return False
+        return False, None
+
+    for msg in notices:
+        m = _CLASSIFY_NOTICE_RE.match(msg)
+        if m:
+            return propagates, m.group(1).lower()
+    return propagates, None
 
 
 @dataclass

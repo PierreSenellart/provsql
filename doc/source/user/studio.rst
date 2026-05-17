@@ -578,14 +578,20 @@ pills:
 
 * :sc:`prov` (purple) on a relation whose ``provsql`` column is
   injected by the planner: provenance tracking is active.  The
-  pill is sub-classified by the table's metadata kind (see
+  pill is sub-classified by the relation's certified kind (see
   :doc:`probabilities` for the TID vs BID model) : :sc:`PROV-TID`
   for tuple-independent tables registered via
   :sqlfunc:`add_provenance`, :sc:`PROV-BID` for
   block-independent tables registered via :sqlfunc:`repair_key`,
-  and a bare :sc:`prov` in a muted tone for tables marked OPAQUE
-  via ``set_table_info`` (the safe-query rewriter refuses to fire
-  on those).  This is the same classification the safe-query
+  and a bare :sc:`prov` in a muted tone for relations whose kind
+  is opaque (tables marked OPAQUE via ``set_table_info`` or
+  carrying user-supplied / shared ``provsql`` values; views
+  whose body the planner-hook classifier cannot certify TID / BID,
+  e.g. multi-source joins, sublinks).  Views have no
+  ``provsql_table_info`` entry, so their pill kind is computed
+  live by probing the view body via the
+  :ref:`provsql.classify_top_level <provsql-classify-top-level>`
+  classifier.  This is the same classification the safe-query
   rewriter consults to decide whether a query is in scope for
   ``provsql.boolean_provenance``.
 * :sc:`mapping` (gold) on a relation shaped

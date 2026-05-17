@@ -1182,10 +1182,17 @@
             // pill is enough to flag "kind not certified" and
             // "prov-opaque" reads as redundant against the tooltip.
             // Mirrors the convention used by the result-table pill.
-            provTip   = 'Provenance-tracked, opaque tokens: the table '
-                      + 'carries user-supplied provsql values (or '
-                      + 'shared tokens across rows), so the safe-query '
-                      + 'rewriter refuses to fire on it.';
+            // Wording covers both flavours of opaque : tables marked
+            // opaque via user-supplied provsql values (set_table_info
+            // or the provenance_guard trigger), and views whose body
+            // the planner-hook classifier cannot certify TID / BID
+            // (e.g. multi-source join, sublink).
+            provTip   = 'Provenance-tracked, opaque kind: the relation '
+                      + 'either carries user-supplied or shared provsql '
+                      + 'tokens, or its body has structure the classifier '
+                      + 'cannot certify TID / BID (multi-source join, '
+                      + 'sublink). The safe-query rewriter refuses to '
+                      + 'fire on it.';
             provKindCls = ' wp-schema__rel-prov--opaque';
           }
           const provBadge = showProv
