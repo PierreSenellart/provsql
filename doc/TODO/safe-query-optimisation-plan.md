@@ -85,14 +85,6 @@ base detector:
 - Branch-overlapping UNION (DISTINCT) where atoms are shared across
   branches (test (21)).
 
-**Not yet started**:
-
-- §7 release-script discipline (upgrade script
-  `provsql--1.5.0--1.6.0.sql`, RELEASE_NOTES); user-doc surface for
-  the FD-aware extensions if their public visibility ever changes
-  (they currently fire transparently behind the
-  `provsql.boolean_provenance` GUC).
-
 Further follow-ups (FD-induced nested rewrite, soft keys, view
 descent for FD chases, data-safe plans, self-joins without PK or
 constant rescue) are tracked in
@@ -294,18 +286,22 @@ At evaluation time:
 
 - `probability_evaluate`, `shapley`, `banzhaf`: tag is ignored
   (work with Boolean expressions).
-- Compiled semirings for which no homomorphsim from Boolean functions
-  exist: refuse
-  with a clear error when the tag is set, naming the GUC as the cause.
-- Custom semirings via `provenance_evaluate`: cannot be statically
-  classified; emit a warning when the tag is set, and rely on the user
-  to know what they are doing.
+- Compiled semirings for which no homomorphism from Boolean functions
+  exists: refuse with a clear error when the tag is set, naming the
+  GUC as the cause.
+- Custom semirings via `provenance_evaluate`: the PL/pgSQL fallback
+  has no `assumed_boolean` arm, so calling it on a tagged circuit
+  errors with the generic "use compiled semirings instead" message.
+  (The original intent was a one-shot warning that lets the user
+  proceed under their own responsibility; that path is not
+  implemented and a real warning hook would need to live closer to
+  the dispatcher.)
 
 The tag is the safety mechanism for the user-facing promise. The GUC
 on its own would let a user toggle Boolean mode, run a query, toggle
 it back off, and then evaluate a non-absorptive semiring on the
 resulting circuit with no signal that something is wrong. The tag
-prevents that. (Or add to the custom semiring interface a Boolean)
+prevents that.
 
 ## 5. Soundness conditions, restated
 
@@ -353,53 +349,7 @@ the tree-decomposition code, or the external-tool integration.
 - **GUC-off non-regression.** The entire existing test suite must pass
   unchanged with the GUC off.
 
-### 7.2 Empirical questions we have not answered
-
-- Whether `independentEvaluation` succeeds on every rewritten circuit
-  in the in-scope class without throwing `CircuitException`. The
-  expectation is yes by construction, but the construction goes
-  through ProvSQL's existing aggregate-DISTINCT rewriter, whose
-  detailed gate emission has not been audited for this purpose.
-- Whether the BID path actually evaluates correctly without
-  `rewriteMultivaluedGates` running. The dev docs state that
-  `independentEvaluation` handles `mulinput` gates natively; this
-  needs to be confirmed against the code and exercised by tests.
-- Performance characterisation. We expect a large win on
-  hierarchical-CQ workloads where the current default chain falls all
-  the way through to `d4` — but the workload distribution where this
-  actually matters in practice is not characterised. A benchmark
-  comparing the new path against `tree-decomposition` and
-  `compilation` on hierarchical CQs over realistic data should be part
-  of v1.
-
-### 7.3 Semiring inventory to audit
-
-A parallel effore in the provenance-lean/ repository classifies semirings
-according to existence of homomorphisms.
-
-These classifications should be verified case by case rather than
-trusted from this document.
-
-## 8. Open design questions
-
-- **Where exactly to slot the detector and rewriter in
-  `process_query`.** Currently described as "between step 1 and step
-  5." The interaction with the existing aggregate-DISTINCT rewrite
-  (step 4) and unsupported-feature checks (step 6) needs to be
-  inspected.
-- **Tag storage mechanism.** Per-gate bit vs. side table. The bit is
-  cheaper at lookup but costs an ABI bump.
-- **Recursive rewrite of multi-level hierarchies.** The single-level
-  case is straightforward. The recursive case needs care to handle
-  variable scoping in the generated Query nodes correctly; this is the
-  most likely source of implementation bugs.
-- **Catalog-cleanup story when the `sql_drop` event trigger fires for
-  a table whose gates are still referenced by other tables' tokens.**
-  The current ProvSQL behaviour in this case has not been audited as
-  part of this plan; the new metadata cleanup needs to be consistent
-  with whatever ProvSQL already does (or doesn't) for the gate store.
-
-## 9. Non-goals
+## 8. Non-goals
 
 - This is not a replacement for the existing fallback chain. The
   chain (`independent` → `interpretAsDD` → `tree-decomposition` →

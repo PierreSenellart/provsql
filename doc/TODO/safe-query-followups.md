@@ -7,10 +7,13 @@ which covers the work already landed.
 
 ## Boolean-only optimisations
 
-Currently implemented: hierarchical-CQ safe-query rewriter
-(`src/safe_query.c`), Boolean-folded gate marker (`gate_assumed_boolean`).
-Next up: `foldBooleanIdentities` (idempotence, absorption,
-plus-with-one absorber) as a new phase of `foldSemiringIdentities`.
+Currently implemented (all gated on `provsql.boolean_provenance`):
+the hierarchical-CQ safe-query rewriter (`src/safe_query.c`) with the
+six FD-aware extensions, the persistent `gate_assumed_boolean` marker
+emitted at the rewritten root, and the load-time
+`foldBooleanIdentities` peephole (idempotence, plus-with-one
+absorber, absorption) with its in-memory side-band Boolean-assumption
+set.
 
 Further down the road:
 
