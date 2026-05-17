@@ -41,7 +41,11 @@
 #include "nodes/nodes.h"
 #include "nodes/parsenodes.h"
 #include "nodes/pg_list.h"
-#include "optimizer/optimizer.h"
+#if PG_VERSION_NUM >= 120000
+#include "optimizer/optimizer.h"        /* get_sortgroupclause_tle */
+#else
+#include "optimizer/tlist.h"            /* get_sortgroupclause_tle (PG <12) */
+#endif
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 

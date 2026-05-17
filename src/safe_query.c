@@ -28,6 +28,9 @@
 #include "access/htup_details.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_inherits.h"
+#if PG_VERSION_NUM < 110000
+#include "catalog/pg_inherits_fn.h"     /* has_superclass moved to pg_inherits.h in PG 11 */
+#endif
 #include "catalog/pg_type.h"
 #include "nodes/bitmapset.h"
 #include "nodes/makefuncs.h"

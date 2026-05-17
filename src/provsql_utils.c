@@ -20,9 +20,16 @@
  */
 #include "postgres.h"
 #include "access/htup_details.h"
-#include "access/table.h"
+#if PG_VERSION_NUM >= 120000
+#include "access/table.h"               /* table_open / table_close */
+#else
+#include "access/heapam.h"              /* heap_open / heap_close (PG <12) */
+#define table_open(r, l)  heap_open((r), (l))
+#define table_close(r, l) heap_close((r), (l))
+#endif
 #include "access/genam.h"
 #include "miscadmin.h"
+#include "catalog/indexing.h"           /* ConstraintRelidTypidNameIndexId */
 #include "catalog/namespace.h"
 #include "catalog/pg_attribute.h"
 #include "catalog/pg_constraint.h"
@@ -932,10 +939,10 @@ static bool fetch_relation_keys(Oid relid, ProvenanceRelationKeys *out)
               BTEqualStrategyNumber, F_OIDEQ,
               ObjectIdGetDatum(relid));
   scan = systable_beginscan(conrel,
-#if PG_VERSION_NUM >= 130000
+#if PG_VERSION_NUM >= 110000
                             ConstraintRelidTypidNameIndexId,
 #else
-                            ConstraintRelidIndexId,
+                            ConstraintRelidIndexId,  /* PG 10 name */
 #endif
                             true, NULL, 1, &skey);
 
