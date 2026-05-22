@@ -20,6 +20,7 @@
 #include "Circuit.hpp"
 
 #include <unordered_map>
+#include <set>
 #include <stack>
 #include <variant>
 #include <cassert>
@@ -729,9 +730,10 @@ std::string dDNNF::toDot() const
       << "  graph [rankdir=BT];\n"
       << "  node [fontname=\"Helvetica\"];\n";
 
-  // Collect reachable gates from the root, ignoring unset placeholders.
+  // Collect reachable gates from the root in deterministic gate-id
+  // order (std::set ordering) so the output is stable across runs.
   std::stack<gate_t> stk;
-  std::unordered_set<gate_t, hash_gate_t> seen;
+  std::set<gate_t> seen;
   stk.push(root);
   while(!stk.empty()) {
     gate_t g = stk.top();
