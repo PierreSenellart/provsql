@@ -67,6 +67,10 @@ test: treedec_simple treedec treedec_mulinput default_probability_evaluate indep
 test: expected
 test: large_circuit
 
+# Knowledge-compilation demo helpers (DOT/CNF surfaces +
+# probability_benchmark)
+test: tseytin_cnf tree_decomposition_dot compile_to_ddnnf_dot probability_benchmark
+
 # Expected Shapley and Banzhaf value computation
 test: shapley
 test: banzhaf

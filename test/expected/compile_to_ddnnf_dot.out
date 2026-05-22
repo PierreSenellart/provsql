@@ -1,0 +1,7 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+has_digraph_header|in_leaf_count|has_internal|marks_root
+t|3|t|t
+(1 row)

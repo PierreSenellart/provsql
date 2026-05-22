@@ -1,0 +1,10 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+treewidth_comment
+// treewidth=1
+(1 row)
+has_digraph_header|has_closing_brace|bag_count
+t|t|6
+(1 row)
