@@ -1904,7 +1904,236 @@
     if (copyBtn) copyBtn.onclick = copyEvalResult;
     result.addEventListener('click', flipEvalResult);
     loadCustomSemirings();
+    wireKcStrip();
     syncControls();
+  }
+
+  /* ──────── Knowledge-compilation inspectors ──────── */
+
+  // Hook up the four KC buttons in the eval-strip footer to their
+  // /api/kc/* endpoints. Each button resolves the active token the same
+  // way the regular eval-run button does (pinned node ▸ scene root) and
+  // displays the response in the .kc-modal overlay. The renderer is
+  // payload-shape aware: text -> <pre>; SVG strings -> innerHTML (the
+  // server already ran dot -Tsvg so we can inline without a JS Graphviz
+  // dep); benchmark rows -> a small table.
+  function wireKcStrip() {
+    const cnfBtn   = document.getElementById('kc-cnf-btn');
+    const ddnnfBtn = document.getElementById('kc-ddnnf-btn');
+    const tdBtn    = document.getElementById('kc-td-btn');
+    const benchBtn = document.getElementById('kc-bench-btn');
+    if (cnfBtn)   cnfBtn.addEventListener('click', () => runKcCnf());
+    if (ddnnfBtn) ddnnfBtn.addEventListener('click', () => runKcDdnnf());
+    if (tdBtn)    tdBtn.addEventListener('click', () => runKcTd());
+    if (benchBtn) benchBtn.addEventListener('click', () => runKcBenchmark());
+
+    const close = document.getElementById('kc-modal-close');
+    const backdrop = document.getElementById('kc-modal-backdrop');
+    const copyBtn = document.getElementById('kc-modal-copy');
+    if (close) close.addEventListener('click', closeKcModal);
+    if (backdrop) backdrop.addEventListener('click', closeKcModal);
+    if (copyBtn) copyBtn.addEventListener('click', copyKcModalPayload);
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && !document.getElementById('kc-modal').hidden) {
+        closeKcModal();
+      }
+    });
+  }
+
+  function _kcActiveToken() {
+    if (!state.scene) return null;
+    return state.pinnedNode || state.scene.root;
+  }
+
+  function _kcBusy(buttonId, busy) {
+    const btn = document.getElementById(buttonId);
+    if (!btn) return;
+    btn.disabled = !!busy;
+    btn.classList.toggle('is-busy', !!busy);
+  }
+
+  function _kcOpenModal({ title, meta, bodyHtml, copyPayload }) {
+    const modal = document.getElementById('kc-modal');
+    document.getElementById('kc-modal-title').textContent = title || '';
+    document.getElementById('kc-modal-meta').textContent  = meta  || '';
+    document.getElementById('kc-modal-body').innerHTML    = bodyHtml || '';
+    const copyBtn = document.getElementById('kc-modal-copy');
+    if (copyBtn) {
+      if (copyPayload != null) {
+        copyBtn.hidden = false;
+        copyBtn.dataset.payload = copyPayload;
+      } else {
+        copyBtn.hidden = true;
+        delete copyBtn.dataset.payload;
+      }
+    }
+    modal.hidden = false;
+  }
+
+  function closeKcModal() {
+    const modal = document.getElementById('kc-modal');
+    if (modal) modal.hidden = true;
+  }
+
+  async function copyKcModalPayload() {
+    const btn = document.getElementById('kc-modal-copy');
+    const text = btn?.dataset.payload;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch {}
+      ta.remove();
+    }
+  }
+
+  function _kcEscape(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function _kcShortToken(t) {
+    return (typeof t === 'string' && t.length > 8) ? t.slice(0, 8) + '…' : t;
+  }
+
+  function _kcErrorHtml(data, fallback) {
+    const msg = (data && (data.detail || data.error)) || fallback;
+    const hint = data && data.hint;
+    return `<div class="kc-error">${_kcEscape(msg)}${hint ? '\n\n' + _kcEscape(hint) : ''}</div>`;
+  }
+
+  async function runKcCnf() {
+    const token = _kcActiveToken();
+    if (!token) return;
+    _kcBusy('kc-cnf-btn', true);
+    try {
+      const resp = await fetch(`/api/kc/cnf?token=${encodeURIComponent(token)}&weighted=true`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        _kcOpenModal({
+          title: 'Tseytin CNF',
+          meta: _kcShortToken(token),
+          bodyHtml: _kcErrorHtml(data, `HTTP ${resp.status}`),
+        });
+        return;
+      }
+      _kcOpenModal({
+        title: 'Tseytin CNF',
+        meta: `${_kcShortToken(token)} · weighted`,
+        bodyHtml: `<pre>${_kcEscape(data.cnf)}</pre>`,
+        copyPayload: data.cnf,
+      });
+    } finally {
+      _kcBusy('kc-cnf-btn', false);
+    }
+  }
+
+  async function runKcDdnnf() {
+    const token = _kcActiveToken();
+    if (!token) return;
+    const compiler = document.getElementById('kc-compiler')?.value || 'd4';
+    _kcBusy('kc-ddnnf-btn', true);
+    try {
+      const resp = await fetch(
+        `/api/kc/ddnnf?token=${encodeURIComponent(token)}&compiler=${encodeURIComponent(compiler)}`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        _kcOpenModal({
+          title: `Compiled d-DNNF (${compiler})`,
+          meta: _kcShortToken(token),
+          bodyHtml: _kcErrorHtml(data, `HTTP ${resp.status}`),
+        });
+        return;
+      }
+      _kcOpenModal({
+        title: `Compiled d-DNNF (${data.compiler || compiler})`,
+        meta: _kcShortToken(token),
+        bodyHtml: data.svg || '',
+        copyPayload: data.dot,
+      });
+    } finally {
+      _kcBusy('kc-ddnnf-btn', false);
+    }
+  }
+
+  async function runKcTd() {
+    const token = _kcActiveToken();
+    if (!token) return;
+    _kcBusy('kc-td-btn', true);
+    try {
+      const resp = await fetch(`/api/kc/td?token=${encodeURIComponent(token)}`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        _kcOpenModal({
+          title: 'Tree decomposition',
+          meta: _kcShortToken(token),
+          bodyHtml: _kcErrorHtml(data, `HTTP ${resp.status}`),
+        });
+        return;
+      }
+      const tw = (data.treewidth != null) ? `treewidth = ${data.treewidth}` : '';
+      _kcOpenModal({
+        title: 'Tree decomposition',
+        meta: `${_kcShortToken(token)}${tw ? ' · ' + tw : ''}`,
+        bodyHtml: data.svg || '',
+        copyPayload: data.dot,
+      });
+    } finally {
+      _kcBusy('kc-td-btn', false);
+    }
+  }
+
+  async function runKcBenchmark() {
+    const token = _kcActiveToken();
+    if (!token) return;
+    const samples = document.getElementById('kc-samples')?.value || '10000';
+    const compiler = document.getElementById('kc-compiler')?.value || 'd4';
+    _kcBusy('kc-bench-btn', true);
+    try {
+      const resp = await fetch(
+        `/api/kc/benchmark?token=${encodeURIComponent(token)}`
+        + `&samples=${encodeURIComponent(samples)}`
+        + `&compilers=${encodeURIComponent(compiler)}`);
+      const data = await resp.json();
+      if (!resp.ok) {
+        _kcOpenModal({
+          title: 'Probability benchmark',
+          meta: _kcShortToken(token),
+          bodyHtml: _kcErrorHtml(data, `HTTP ${resp.status}`),
+        });
+        return;
+      }
+      const rows = data.rows || [];
+      let body = '<table><thead><tr>'
+        + '<th>method</th><th>args</th>'
+        + '<th class="num">probability</th>'
+        + '<th class="num">ms</th>'
+        + '<th>error</th></tr></thead><tbody>';
+      for (const r of rows) {
+        body += '<tr>'
+          + `<td>${_kcEscape(r.method)}</td>`
+          + `<td>${_kcEscape(r.args ?? '')}</td>`
+          + `<td class="num">${r.probability == null ? '—' : Number(r.probability).toFixed(4)}</td>`
+          + `<td class="num">${r.milliseconds == null ? '—' : Number(r.milliseconds).toFixed(2)}</td>`
+          + `<td>${_kcEscape(r.error ?? '')}</td>`
+          + '</tr>';
+      }
+      body += '</tbody></table>';
+      _kcOpenModal({
+        title: 'Probability benchmark',
+        meta: `${_kcShortToken(token)} · samples=${samples}`,
+        bodyHtml: body,
+      });
+    } finally {
+      _kcBusy('kc-bench-btn', false);
+    }
   }
 
   // Toggle the displayed precision of a probability result : the rounded

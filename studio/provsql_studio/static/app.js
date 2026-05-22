@@ -1680,6 +1680,31 @@
           <span class="cv-eval__bound"  id="eval-bound"></span>
           <span class="cv-eval__time"   id="eval-time"></span>
         </div>
+        <div class="cv-kc" id="kc-strip">
+          <h4 class="cv-kc__label" title="Knowledge-compilation inspectors: surface the Tseytin CNF, the compiled d-DNNF, the tree decomposition, and a side-by-side timing of every probability_evaluate method.">KC</h4>
+          <button type="button" class="cv-kc__btn wp-btn wp-btn--mini" id="kc-cnf-btn"
+                  title="Tseytin CNF (DIMACS) for the current circuit"><i class="fas fa-file-code"></i> CNF</button>
+          <span class="cv-kc__compose">
+            <button type="button" class="cv-kc__btn wp-btn wp-btn--mini" id="kc-ddnnf-btn"
+                    title="Compile to d-DNNF with the selected external knowledge compiler"><i class="fas fa-microchip"></i> d-DNNF</button>
+            <select class="cv-kc__compiler" id="kc-compiler"
+                    title="Knowledge compiler to invoke for d-DNNF / benchmark">
+              <option value="d4">d4</option>
+              <option value="c2d">c2d</option>
+              <option value="minic2d">minic2d</option>
+              <option value="dsharp">dsharp</option>
+            </select>
+          </span>
+          <button type="button" class="cv-kc__btn wp-btn wp-btn--mini" id="kc-td-btn"
+                  title="Min-fill tree decomposition of the circuit primal graph"><i class="fas fa-sitemap"></i> Tree decomposition</button>
+          <span class="cv-kc__compose">
+            <button type="button" class="cv-kc__btn wp-btn wp-btn--mini" id="kc-bench-btn"
+                    title="Run every probability_evaluate method against the circuit and report wall-clock"><i class="fas fa-stopwatch"></i> Benchmark</button>
+            <input type="number" class="cv-kc__samples" id="kc-samples"
+                   min="1" step="1" value="10000"
+                   title="Monte-Carlo sample count for the benchmark">
+          </span>
+        </div>
       </footer>
     `;
   }
