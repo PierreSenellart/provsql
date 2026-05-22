@@ -727,7 +727,7 @@ std::string dDNNF::toDot() const
 {
   std::ostringstream out;
   out << "digraph dDNNF {\n"
-      << "  graph [rankdir=BT];\n"
+      << "  graph [rankdir=TB];\n"
       << "  node [fontname=\"Helvetica\"];\n";
 
   // Collect reachable gates from the root in deterministic gate-id
