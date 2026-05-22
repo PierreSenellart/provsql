@@ -166,6 +166,15 @@ INTERNAL_FUNCTIONS = {
     'rv_aggregate_semimod',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
+    # Knowledge-compilation demo helpers (compile_to_ddnnf_dot,
+    # tseytin_cnf, tree_decomposition_dot, probability_benchmark and
+    # its internal _probability_benchmark_one). Promote to
+    # _SQL_FUNC_MAP once the dedicated user-manual page lands.
+    'compile_to_ddnnf_dot', 'tseytin_cnf', 'tree_decomposition_dot',
+    'probability_benchmark', '_probability_benchmark_one',
+    # @param names from the helpers above that Doxygen surfaces as
+    # 'provsql.<name>' anchors. Not callable.
+    'compilers', 'monte_carlo_samples', 'in_args', 'in_method', 'in_token',
 }
 
 if DOXYGEN_SQL_HTML.exists():
