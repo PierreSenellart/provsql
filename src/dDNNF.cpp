@@ -25,6 +25,8 @@
 #include <cassert>
 #include <algorithm>
 #include <numeric>
+#include <sstream>
+#include <iomanip>
 
 std::unordered_set<gate_t> dDNNF::vars(gate_t root) const
 {
@@ -718,4 +720,87 @@ void dDNNF::simplify() {
   for(auto &w: wires)
     for(size_t i=0; i<w.size(); ++i)
       w[i]=relabel[static_cast<size_t>(w[i])];
+}
+
+std::string dDNNF::toDot() const
+{
+  std::ostringstream out;
+  out << "digraph dDNNF {\n"
+      << "  graph [rankdir=BT];\n"
+      << "  node [fontname=\"Helvetica\"];\n";
+
+  // Collect reachable gates from the root, ignoring unset placeholders.
+  std::stack<gate_t> stk;
+  std::unordered_set<gate_t, hash_gate_t> seen;
+  stk.push(root);
+  while(!stk.empty()) {
+    gate_t g = stk.top();
+    stk.pop();
+    if(seen.count(g))
+      continue;
+    seen.insert(g);
+    if(getGateType(g) == BooleanGate::UNDETERMINED)
+      continue;
+    for(auto c : getWires(g))
+      stk.push(c);
+  }
+
+  for(auto g : seen) {
+    auto type = getGateType(g);
+    if(type == BooleanGate::UNDETERMINED)
+      continue;
+
+    auto id = static_cast<std::underlying_type<gate_t>::type>(g);
+    std::string label;
+    std::string shape = "circle";
+    std::string fill;
+    switch(type) {
+    case BooleanGate::AND:
+      label = "∧";  // ∧
+      break;
+    case BooleanGate::OR:
+      label = "∨";  // ∨
+      break;
+    case BooleanGate::NOT:
+      label = "¬";  // ¬
+      break;
+    case BooleanGate::IN: {
+      shape = "box";
+      fill = ", style=filled, fillcolor=\"#e6f0fa\"";
+      std::string u;
+      auto it = id2uuid.find(g);
+      if(it != id2uuid.end())
+        u = it->second;
+      std::string sh = u.size() > 8 ? u.substr(0, 8) : u;
+      std::ostringstream lab;
+      lab << sh << "\\np=" << std::fixed << std::setprecision(3) << prob[id];
+      label = lab.str();
+      break;
+    }
+    default:
+      continue;
+    }
+
+    out << "  n" << id << " [label=\"" << label << "\", shape=" << shape
+        << fill;
+    if(g == root)
+      out << ", penwidth=2";
+    out << "];\n";
+  }
+
+  for(auto g : seen) {
+    auto type = getGateType(g);
+    if(type == BooleanGate::IN || type == BooleanGate::UNDETERMINED)
+      continue;
+    auto id = static_cast<std::underlying_type<gate_t>::type>(g);
+    for(auto c : getWires(g)) {
+      if(!seen.count(c))
+        continue;
+      auto cid = static_cast<std::underlying_type<gate_t>::type>(c);
+      out << "  n" << id << " -> n" << cid << ";\n";
+    }
+  }
+
+  out << "}\n";
+  return out.str();
 }

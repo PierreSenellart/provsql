@@ -3729,6 +3729,22 @@ CREATE OR REPLACE FUNCTION view_circuit(
   'provsql','view_circuit' LANGUAGE C;
 
 /**
+ * @brief Return a DOT visualisation of the d-DNNF compiled from the
+ * provenance circuit
+ *
+ * Runs the requested external knowledge compiler and renders the
+ * resulting d-DNNF as a GraphViz digraph.
+ *
+ * @param token root provenance token
+ * @param compiler external compiler to invoke (d4, c2d, minic2d, dsharp)
+ */
+CREATE OR REPLACE FUNCTION compile_to_ddnnf_dot(
+  token UUID,
+  compiler TEXT = 'd4')
+  RETURNS TEXT AS
+  'provsql','compile_to_ddnnf_dot' LANGUAGE C;
+
+/**
  * @brief Return an XML representation of the provenance circuit
  *
  * @param token root provenance token

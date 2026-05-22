@@ -214,6 +214,19 @@ double shapley(gate_t var) const;
  */
 double banzhaf(gate_t var) const;
 
+/**
+ * @brief Return a GraphViz DOT representation of the d-DNNF.
+ *
+ * Walks gates reachable from @c root and emits a @c digraph with one
+ * node per gate (AND as @c "∧", OR as @c "∨", NOT as
+ * @c "¬", IN labelled by the short prefix of its UUID and its
+ * probability). The root node is rendered with a thicker border.
+ * Unreachable or unset gates are skipped.
+ *
+ * @return DOT source as a string.
+ */
+std::string toDot() const;
+
 friend dDNNFTreeDecompositionBuilder; ///< Allowed to construct and populate this d-DNNF
 friend dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const; ///< Allowed to access internal d-DNNF state
 };
