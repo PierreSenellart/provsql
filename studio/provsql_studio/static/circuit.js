@@ -188,6 +188,8 @@
     document.getElementById('tool-zoom-in').onclick  = () => { state.zoom = Math.min(2.5, state.zoom * 1.2); fitView(); };
     document.getElementById('tool-zoom-out').onclick = () => { state.zoom = Math.max(0.4, state.zoom / 1.2); fitView(); };
     document.getElementById('tool-zoom-fit').onclick = () => { state.zoom = 1; state.pan = { x: 0, y: 0 }; fitView(); };
+    const kcBackBtn = document.getElementById('tool-kc-back');
+    if (kcBackBtn) kcBackBtn.onclick = restoreKcScene;
     const uBtn = document.getElementById('tool-show-uuids');
     // Sync body class with the initial pressed state so query-result UUID
     // cells (rendered by formatCell with paired short/full spans) start
@@ -519,9 +521,10 @@
       // the "Show UUIDs" toggle: leaves are dense enough that the full
       // UUID would overflow neighbouring nodes.
       const isLeafGate = n.type === 'input' || n.type === 'update';
+      const isKcInput = n.type === 'kc-input';
       const metaText = isLeafGate
         ? (n.info1 ? `tbl ${n.info1}` : shortUuid(n.id))
-        : '';
+        : (isKcInput ? (n.info1 || '') : '');
       if (metaText) {
         const meta = svgEl('text', { class: 'node-meta', y: 38 });
         meta.textContent = metaText;
@@ -573,19 +576,32 @@
 
     fitView();
 
-    if (titleEl) titleEl.textContent = 'Provenance Circuit';
+    if (titleEl) titleEl.textContent = state.scene.title || 'Provenance Circuit';
     if (subEl) {
-      // Emit the root UUID as a short/full pair so the toolbar's "Show
-      // UUIDs" button toggles its display via the body-level CSS class
-      // (no need to rerun the painter on toggle).
-      const root = state.scene.root;
-      subEl.innerHTML =
-        `${state.scene.nodes.length} gates · root `
-        + `<span class="wp-uuid">`
-        + `<span class="wp-uuid__short">${escapeHtml(shortUuid(root))}</span>`
-        + `<span class="wp-uuid__full">${escapeHtml(root)}</span>`
-        + `</span>`;
+      if (state.scene.subtitle) {
+        // KC scenes (compiled d-DNNF, tree decomposition) carry a
+        // ready-to-paint subtitle that names the visualisation and any
+        // structural metric (treewidth, compiler, ...). Trust it as-is.
+        subEl.innerHTML = state.scene.subtitle;
+      } else {
+        // Provenance circuit: emit the root UUID as a short/full pair so
+        // the toolbar's "Show UUIDs" button toggles its display via the
+        // body-level CSS class (no need to rerun the painter on toggle).
+        const root = state.scene.root;
+        subEl.innerHTML =
+          `${state.scene.nodes.length} gates · root `
+          + `<span class="wp-uuid">`
+          + `<span class="wp-uuid__short">${escapeHtml(shortUuid(root))}</span>`
+          + `<span class="wp-uuid__full">${escapeHtml(root)}</span>`
+          + `</span>`;
+      }
     }
+    // KC scenes hijack the canvas — surface a back button so the
+    // user can return to the original provenance circuit. Visible
+    // iff a saved scene exists (set by the KC dispatch in
+    // runEvaluation; cleared by restoreKcScene).
+    const kcBackBtn = document.getElementById('tool-kc-back');
+    if (kcBackBtn) kcBackBtn.hidden = !state.kcSavedScene;
   }
 
   function fitView() {
@@ -1638,6 +1654,16 @@
       if (_CONDITION_OPTIONS.has(v)) {
         wantedIds.add('eval-args-condition-group');
       }
+      // Knowledge-compilation inspectors: kc-ddnnf reuses the existing
+      // compilation-compiler picker; kc-benchmark also surfaces the
+      // monte-carlo samples input, since the benchmark drives every
+      // method (including MC). kc-cnf / kc-td take no args.
+      if (v === 'kc-ddnnf') {
+        wantedIds.add('eval-args-compiler');
+      } else if (v === 'kc-benchmark') {
+        wantedIds.add('eval-args-mc');
+        wantedIds.add('eval-args-compiler');
+      }
       for (const ctrl of argControls) ctrl.hidden = !wantedIds.has(ctrl.id);
       // Stale once the input shape changes : wipe result + bound +
       // time + the clear button.
@@ -1904,212 +1930,120 @@
     if (copyBtn) copyBtn.onclick = copyEvalResult;
     result.addEventListener('click', flipEvalResult);
     loadCustomSemirings();
-    wireKcStrip();
     syncControls();
   }
 
   /* ──────── Knowledge-compilation inspectors ──────── */
 
-  // Hook up the four KC buttons in the eval-strip footer to their
-  // /api/kc/* endpoints. Each button resolves the active token the same
-  // way the regular eval-run button does (pinned node ▸ scene root) and
-  // displays the response in the .kc-modal overlay. The renderer is
-  // payload-shape aware: text -> <pre>; SVG strings -> innerHTML (the
-  // server already ran dot -Tsvg so we can inline without a JS Graphviz
-  // dep); benchmark rows -> a small table.
-  function wireKcStrip() {
-    const cnfBtn   = document.getElementById('kc-cnf-btn');
-    const ddnnfBtn = document.getElementById('kc-ddnnf-btn');
-    const tdBtn    = document.getElementById('kc-td-btn');
-    const benchBtn = document.getElementById('kc-bench-btn');
-    if (cnfBtn)   cnfBtn.addEventListener('click', () => runKcCnf());
-    if (ddnnfBtn) ddnnfBtn.addEventListener('click', () => runKcDdnnf());
-    if (tdBtn)    tdBtn.addEventListener('click', () => runKcTd());
-    if (benchBtn) benchBtn.addEventListener('click', () => runKcBenchmark());
+  // The four KC options (kc-cnf, kc-ddnnf, kc-td, kc-benchmark) share
+  // the regular Evaluate Run button. runEvaluation routes them to
+  // /api/kc/* (instead of /api/evaluate) and renders the payload
+  // straight into #eval-result, alongside the existing data-kinds
+  // (xml, distribution-profile, sample, ok / float).
+  //
+  // Args reuse the existing eval-strip controls:
+  //   * kc-cnf       : no args, weighted=true.
+  //   * kc-ddnnf     : eval-args-compiler.
+  //   * kc-td        : no args.
+  //   * kc-benchmark : eval-args-mc (samples) + eval-args-compiler.
 
-    const close = document.getElementById('kc-modal-close');
-    const backdrop = document.getElementById('kc-modal-backdrop');
-    const copyBtn = document.getElementById('kc-modal-copy');
-    if (close) close.addEventListener('click', closeKcModal);
-    if (backdrop) backdrop.addEventListener('click', closeKcModal);
-    if (copyBtn) copyBtn.addEventListener('click', copyKcModalPayload);
-    document.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Escape' && !document.getElementById('kc-modal').hidden) {
-        closeKcModal();
-      }
-    });
-  }
-
-  function _kcActiveToken() {
-    if (!state.scene) return null;
-    return state.pinnedNode || state.scene.root;
-  }
-
-  function _kcBusy(buttonId, busy) {
-    const btn = document.getElementById(buttonId);
-    if (!btn) return;
-    btn.disabled = !!busy;
-    btn.classList.toggle('is-busy', !!busy);
-  }
-
-  function _kcOpenModal({ title, meta, bodyHtml, copyPayload }) {
-    const modal = document.getElementById('kc-modal');
-    document.getElementById('kc-modal-title').textContent = title || '';
-    document.getElementById('kc-modal-meta').textContent  = meta  || '';
-    document.getElementById('kc-modal-body').innerHTML    = bodyHtml || '';
-    const copyBtn = document.getElementById('kc-modal-copy');
-    if (copyBtn) {
-      if (copyPayload != null) {
-        copyBtn.hidden = false;
-        copyBtn.dataset.payload = copyPayload;
-      } else {
-        copyBtn.hidden = true;
-        delete copyBtn.dataset.payload;
-      }
+  // Swap the main canvas to a KC-built scene (compiled d-DNNF / TD).
+  // Save the existing scene + drag offsets so restoreKcScene can put
+  // the user back where they were. Setting `state.kcSavedScene` before
+  // calling renderCircuit lets the very first paint reveal the
+  // back-to-circuit toolbar button (paint() reads the flag).
+  function swapToKcScene(scene) {
+    if (!state.kcSavedScene) {
+      state.kcSavedScene = state.scene;
+      state.kcSavedDragOffsets = state.dragOffsets;
+      state.kcSavedPin = state.pinnedNode;
     }
-    modal.hidden = false;
+    renderCircuit(scene);
   }
 
-  function closeKcModal() {
-    const modal = document.getElementById('kc-modal');
-    if (modal) modal.hidden = true;
-  }
-
-  async function copyKcModalPayload() {
-    const btn = document.getElementById('kc-modal-copy');
-    const text = btn?.dataset.payload;
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.setAttribute('readonly', '');
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand('copy'); } catch {}
-      ta.remove();
+  // Pop back to the saved provenance scene. Clearing kcSavedScene
+  // hides the back button on the next paint.
+  function restoreKcScene() {
+    const prev = state.kcSavedScene;
+    if (!prev) return;
+    const prevOffsets = state.kcSavedDragOffsets;
+    const prevPin = state.kcSavedPin;
+    state.kcSavedScene = null;
+    state.kcSavedDragOffsets = null;
+    state.kcSavedPin = null;
+    renderCircuit(prev);
+    // renderCircuit zeroes dragOffsets + pinnedNode; restore them so
+    // the user's prior drag arrangement and inspector pin survive the
+    // round-trip into KC view and back.
+    if (prevOffsets) state.dragOffsets = prevOffsets;
+    if (prevPin) {
+      state.pinnedNode = prevPin;
+      paint();
+      refreshEvalTarget();
     }
   }
 
-  function _kcEscape(s) {
-    return String(s ?? '')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  function _kcShortToken(t) {
-    return (typeof t === 'string' && t.length > 8) ? t.slice(0, 8) + '…' : t;
-  }
-
-  function _kcErrorHtml(data, fallback) {
-    const msg = (data && (data.detail || data.error)) || fallback;
-    const hint = data && data.hint;
-    return `<div class="kc-error">${_kcEscape(msg)}${hint ? '\n\n' + _kcEscape(hint) : ''}</div>`;
-  }
-
-  async function runKcCnf() {
-    const token = _kcActiveToken();
-    if (!token) return;
-    _kcBusy('kc-cnf-btn', true);
-    try {
-      const resp = await fetch(`/api/kc/cnf?token=${encodeURIComponent(token)}&weighted=true`);
-      const data = await resp.json();
-      if (!resp.ok) {
-        _kcOpenModal({
-          title: 'Tseytin CNF',
-          meta: _kcShortToken(token),
-          bodyHtml: _kcErrorHtml(data, `HTTP ${resp.status}`),
-        });
-        return;
-      }
-      _kcOpenModal({
-        title: 'Tseytin CNF',
-        meta: `${_kcShortToken(token)} · weighted`,
-        bodyHtml: `<pre>${_kcEscape(data.cnf)}</pre>`,
-        copyPayload: data.cnf,
-      });
-    } finally {
-      _kcBusy('kc-cnf-btn', false);
+  function _kcRequestUrl(kind, token) {
+    const enc = encodeURIComponent;
+    if (kind === 'kc-cnf') {
+      return `/api/kc/cnf?token=${enc(token)}&weighted=true`;
     }
-  }
-
-  async function runKcDdnnf() {
-    const token = _kcActiveToken();
-    if (!token) return;
-    const compiler = document.getElementById('kc-compiler')?.value || 'd4';
-    _kcBusy('kc-ddnnf-btn', true);
-    try {
-      const resp = await fetch(
-        `/api/kc/ddnnf?token=${encodeURIComponent(token)}&compiler=${encodeURIComponent(compiler)}`);
-      const data = await resp.json();
-      if (!resp.ok) {
-        _kcOpenModal({
-          title: `Compiled d-DNNF (${compiler})`,
-          meta: _kcShortToken(token),
-          bodyHtml: _kcErrorHtml(data, `HTTP ${resp.status}`),
-        });
-        return;
-      }
-      _kcOpenModal({
-        title: `Compiled d-DNNF (${data.compiler || compiler})`,
-        meta: _kcShortToken(token),
-        bodyHtml: data.svg || '',
-        copyPayload: data.dot,
-      });
-    } finally {
-      _kcBusy('kc-ddnnf-btn', false);
+    if (kind === 'kc-ddnnf') {
+      const compiler = document.getElementById('eval-args-compiler')?.value || 'd4';
+      return `/api/kc/ddnnf?token=${enc(token)}&compiler=${enc(compiler)}`;
     }
-  }
-
-  async function runKcTd() {
-    const token = _kcActiveToken();
-    if (!token) return;
-    _kcBusy('kc-td-btn', true);
-    try {
-      const resp = await fetch(`/api/kc/td?token=${encodeURIComponent(token)}`);
-      const data = await resp.json();
-      if (!resp.ok) {
-        _kcOpenModal({
-          title: 'Tree decomposition',
-          meta: _kcShortToken(token),
-          bodyHtml: _kcErrorHtml(data, `HTTP ${resp.status}`),
-        });
-        return;
-      }
-      const tw = (data.treewidth != null) ? `treewidth = ${data.treewidth}` : '';
-      _kcOpenModal({
-        title: 'Tree decomposition',
-        meta: `${_kcShortToken(token)}${tw ? ' · ' + tw : ''}`,
-        bodyHtml: data.svg || '',
-        copyPayload: data.dot,
-      });
-    } finally {
-      _kcBusy('kc-td-btn', false);
+    if (kind === 'kc-td') {
+      return `/api/kc/td?token=${enc(token)}`;
     }
+    if (kind === 'kc-benchmark') {
+      const samples  = document.getElementById('eval-args-mc')?.value       || '10000';
+      const compiler = document.getElementById('eval-args-compiler')?.value || 'd4';
+      return `/api/kc/benchmark?token=${enc(token)}`
+        + `&samples=${enc(samples)}&compilers=${enc(compiler)}`;
+    }
+    return null;
   }
 
-  async function runKcBenchmark() {
-    const token = _kcActiveToken();
-    if (!token) return;
-    const samples = document.getElementById('kc-samples')?.value || '10000';
-    const compiler = document.getElementById('kc-compiler')?.value || 'd4';
-    _kcBusy('kc-bench-btn', true);
-    try {
-      const resp = await fetch(
-        `/api/kc/benchmark?token=${encodeURIComponent(token)}`
-        + `&samples=${encodeURIComponent(samples)}`
-        + `&compilers=${encodeURIComponent(compiler)}`);
-      const data = await resp.json();
-      if (!resp.ok) {
-        _kcOpenModal({
-          title: 'Probability benchmark',
-          meta: _kcShortToken(token),
-          bodyHtml: _kcErrorHtml(data, `HTTP ${resp.status}`),
-        });
-        return;
-      }
+  // Render a successful KC payload into #eval-result. Mirrors the
+  // result-mutation contract of the regular data.kind branches:
+  // sets innerHTML + dataset.kind + dataset.copy + title. The kind
+  // string also drives the block-level CSS treatment in app.css.
+  function _renderKcInto(resultEl, kind, data) {
+    if (kind === 'kc-cnf') {
+      const cnf = data.cnf == null ? '' : String(data.cnf);
+      resultEl.innerHTML =
+        `<div class="cv-kc-panel"><pre>${escapeHtml(cnf)}</pre></div>`;
+      resultEl.dataset.kind = 'kc-cnf';
+      resultEl.dataset.copy = cnf;
+      resultEl.title = 'Tseytin CNF (DIMACS), weighted';
+      return;
+    }
+    if (kind === 'kc-ddnnf') {
+      // Hijack the main provenance-circuit canvas: paint the compiled
+      // d-DNNF with the same pan / zoom / drag / inspector affordances
+      // as the original circuit. The back button in the toolbar
+      // restores the saved scene. The result chip stays empty (the
+      // canvas is the result); the · N ms time chip is enough.
+      const compiler = data.compiler || '';
+      const scene = data.scene || {};
+      scene.title = `Compiled d-DNNF (${compiler})`;
+      scene.subtitle =
+        `${(scene.nodes || []).length} gates · compiled with `
+        + `<strong>${escapeHtml(compiler)}</strong>`;
+      swapToKcScene(scene);
+      return;
+    }
+    if (kind === 'kc-td') {
+      const tw = (data.treewidth != null) ? data.treewidth : null;
+      const scene = data.scene || {};
+      scene.title = 'Tree decomposition';
+      scene.subtitle =
+        `${(scene.nodes || []).length} bags`
+        + (tw != null ? ` · treewidth <strong>${tw}</strong>` : '');
+      swapToKcScene(scene);
+      return;
+    }
+    if (kind === 'kc-benchmark') {
       const rows = data.rows || [];
       let body = '<table><thead><tr>'
         + '<th>method</th><th>args</th>'
@@ -2118,21 +2052,31 @@
         + '<th>error</th></tr></thead><tbody>';
       for (const r of rows) {
         body += '<tr>'
-          + `<td>${_kcEscape(r.method)}</td>`
-          + `<td>${_kcEscape(r.args ?? '')}</td>`
+          + `<td>${escapeHtml(r.method)}</td>`
+          + `<td>${escapeHtml(r.args ?? '')}</td>`
           + `<td class="num">${r.probability == null ? '—' : Number(r.probability).toFixed(4)}</td>`
           + `<td class="num">${r.milliseconds == null ? '—' : Number(r.milliseconds).toFixed(2)}</td>`
-          + `<td>${_kcEscape(r.error ?? '')}</td>`
+          + `<td>${escapeHtml(r.error ?? '')}</td>`
           + '</tr>';
       }
       body += '</tbody></table>';
-      _kcOpenModal({
-        title: 'Probability benchmark',
-        meta: `${_kcShortToken(token)} · samples=${samples}`,
-        bodyHtml: body,
-      });
-    } finally {
-      _kcBusy('kc-bench-btn', false);
+      resultEl.innerHTML = `<div class="cv-kc-panel">${body}</div>`;
+      resultEl.dataset.kind = 'kc-benchmark';
+      // Copy as TSV so users can paste it straight into a spreadsheet
+      // or Markdown table without hand-cleanup.
+      const tsvHeader = 'method\targs\tprobability\tms\terror';
+      const tsvBody = rows.map(r =>
+        [
+          r.method,
+          r.args ?? '',
+          r.probability == null ? '' : r.probability,
+          r.milliseconds == null ? '' : r.milliseconds,
+          r.error ?? '',
+        ].join('\t')
+      ).join('\n');
+      resultEl.dataset.copy = tsvHeader + '\n' + tsvBody;
+      resultEl.title = 'Probability benchmark (TSV-copy)';
+      return;
     }
   }
 
@@ -2389,13 +2333,17 @@
     }
     const token = state.pinnedNode || state.scene.root;
     const selValue = sel.value;
+    // Knowledge-compilation inspectors hit /api/kc/* instead of
+    // /api/evaluate; their args (compiler / samples) are read directly
+    // from the shared eval-strip controls inside _kcRequestUrl.
+    const isKc = selValue.startsWith('kc-');
     // `custom:<schema>.<name>` packs the wrapper identity into the option
     // value; unpack here so the request shape stays {semiring, function}.
-    const isCustom = selValue.startsWith('custom:');
-    const semiring = isCustom ? 'custom' : selValue;
-    const body = { token, semiring };
-    if (isCustom) body.function = selValue.slice('custom:'.length);
-    if (needsMapping(selValue)) {
+    const isCustom = !isKc && selValue.startsWith('custom:');
+    const semiring = isKc ? selValue : (isCustom ? 'custom' : selValue);
+    const body = isKc ? null : { token, semiring };
+    if (!isKc && isCustom) body.function = selValue.slice('custom:'.length);
+    if (!isKc && needsMapping(selValue)) {
       const m = map.value || '';
       if (!m && !mappingOptional(selValue)) {
         result.textContent = 'pick a provenance mapping';
@@ -2404,7 +2352,7 @@
       }
       if (m) body.mapping = m;
     }
-    if (semiring === 'probability') {
+    if (!isKc && semiring === 'probability') {
       body.method = meth.value || '';
       // Pull the argument from whichever per-method control is wired up
       // (number field for monte-carlo, compiler dropdown for
@@ -2477,11 +2425,13 @@
     // cost across methods (e.g. monte-carlo vs tree-decomposition).
     const t0 = performance.now();
     try {
-      const resp = await fetch('/api/evaluate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const resp = isKc
+        ? await fetch(_kcRequestUrl(selValue, token))
+        : await fetch('/api/evaluate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
       const data = await resp.json();
       const dt = Math.round(performance.now() - t0);
       if (time) time.textContent = `· ${dt} ms`;
@@ -2497,6 +2447,13 @@
         result.dataset.kind = 'error';
         return;
       }
+      // Knowledge-compilation inspectors render into the same chip as
+      // every other multi-line evaluator (PROV-XML, distribution-
+      // profile, sample). _renderKcInto picks the right body shape per
+      // sub-kind and sets dataset.copy so the existing copy button works.
+      if (isKc) {
+        _renderKcInto(result, selValue, data);
+      } else
       // PROV-XML is a multi-line export, not a scalar : render it inside
       // a scrollable <pre> instead of the inline `= value` chip. Same
       // styling as multi-line text cells in the result table.
@@ -2616,7 +2573,7 @@
       // The bound is distribution-free and only depends on the sample
       // count, so we read it back from the args input. Other methods are
       // exact (or have their own internal bounds), so no annotation.
-      if (semiring === 'probability' && body.method === 'monte-carlo') {
+      if (!isKc && semiring === 'probability' && body.method === 'monte-carlo') {
         const n = parseInt(body.arguments || '', 10);
         if (Number.isFinite(n) && n > 0) {
           const eps = Math.sqrt(Math.log(40) / (2 * n));

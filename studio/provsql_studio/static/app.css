@@ -2465,112 +2465,33 @@ body.mode-where #sidebar {
 }
 .wp-help i { vertical-align: middle; }
 
-/* ───────── KC inspector strip (knowledge-compilation demo helpers)
-   Sits inside the circuit-mode evaluation footer, below the regular
-   action row. Surfaces the Tseytin CNF, the compiled d-DNNF, the tree
-   decomposition, and the side-by-side method benchmark. Each button
-   opens the .kc-modal overlay defined below with the inspector's
-   payload (text / inline SVG / table). */
-.cv-kc {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.5rem;
-  margin-top: 0.4rem;
-  padding-top: 0.4rem;
-  border-top: 1px dashed var(--border-soft, rgba(0, 0, 0, 0.1));
-}
-.cv-kc__label {
-  margin: 0 0.2rem 0 0;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-}
-.cv-kc__compose {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-}
-.cv-kc__compiler,
-.cv-kc__samples {
-  padding: 2px 6px;
-  font-size: 0.85em;
-  border: 1px solid var(--border-soft, rgba(0, 0, 0, 0.18));
-  border-radius: 4px;
-  background: var(--bg-elev, #fff);
-}
-.cv-kc__samples { width: 6rem; }
-
-/* ───────── KC result modal
-   Full-page overlay (backdrop + centred panel). The panel scrolls
-   internally so even a large d-DNNF SVG or a wide benchmark table
-   stay contained. */
-.kc-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.kc-modal[hidden] { display: none; }
-.kc-modal__backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(20, 18, 24, 0.45);
-  backdrop-filter: blur(2px);
-}
-.kc-modal__panel {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: min(90vw, 1100px);
-  max-height: 88vh;
-  background: var(--bg-elev, #fff);
-  border-radius: 8px;
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.25);
-  overflow: hidden;
-}
-.kc-modal__hdr {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.55rem 0.8rem;
-  border-bottom: 1px solid var(--border-soft, rgba(0, 0, 0, 0.1));
-  background: var(--bg-soft, #f7f4ef);
-}
-.kc-modal__title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-}
-.kc-modal__meta {
-  font-size: 0.85em;
-  color: var(--fg-muted);
-  font-family: ui-monospace, "Fira Code", monospace;
-}
-.kc-modal__spacer { flex: 1; }
-.kc-modal__icon {
+/* ───────── KC inspector result panels
+   The four KC options in the Evaluate dropdown (kc-cnf, kc-ddnnf,
+   kc-td, kc-benchmark) inject their payload (CNF text, compiled
+   d-DNNF as inline SVG, tree decomposition as inline SVG, benchmark
+   as table) directly into the regular #eval-result element. We use
+   the same block-level chip treatment as PROV-XML / distribution-
+   profile / sample so each takes its own row across the strip. */
+.cv-eval__result[data-kind="kc-cnf"],
+.cv-eval__result[data-kind="kc-ddnnf"],
+.cv-eval__result[data-kind="kc-td"],
+.cv-eval__result[data-kind="kc-benchmark"] {
   background: transparent;
-  border: 0;
-  padding: 0.3rem 0.45rem;
-  font-size: 1em;
-  color: var(--fg-muted);
-  cursor: pointer;
+  padding: 0;
+  display: block;
+  flex-basis: 100%;
+  font-weight: 400;
+}
+.cv-kc-panel {
+  margin: 0.25rem 0 0;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid rgba(125, 65, 153, 0.18);
   border-radius: 4px;
-}
-.kc-modal__icon:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--fg, #222);
-}
-.kc-modal__body {
-  flex: 1;
+  background: rgba(125, 65, 153, 0.04);
+  max-height: 60vh;
   overflow: auto;
-  padding: 0.8rem;
 }
-.kc-modal__body pre {
+.cv-kc-panel pre {
   margin: 0;
   font-family: ui-monospace, "Fira Code", monospace;
   font-size: 0.85em;
@@ -2578,39 +2499,38 @@ body.mode-where #sidebar {
   white-space: pre;
   overflow-x: auto;
 }
-.kc-modal__body svg {
+.cv-kc-panel svg {
   display: block;
   max-width: 100%;
   height: auto;
+  margin: 0 auto;
 }
-.kc-modal__body table {
+.cv-kc-panel table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9em;
+  font-size: 0.85em;
+  font-family: var(--font-ui, inherit);
 }
-.kc-modal__body th,
-.kc-modal__body td {
-  padding: 0.35rem 0.6rem;
-  border-bottom: 1px solid var(--border-soft, rgba(0, 0, 0, 0.08));
+.cv-kc-panel th,
+.cv-kc-panel td {
+  padding: 0.3rem 0.55rem;
+  border-bottom: 1px solid rgba(125, 65, 153, 0.12);
   text-align: left;
 }
-.kc-modal__body th {
-  background: var(--bg-soft, #f7f4ef);
+.cv-kc-panel th {
   font-weight: 600;
-  font-size: 0.85em;
-  letter-spacing: 0.03em;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--purple-700, #4d369e);
 }
-.kc-modal__body td.num {
+.cv-kc-panel td.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.kc-modal__body .kc-error {
-  margin: 0.4rem 0;
-  padding: 0.55rem 0.7rem;
-  border-radius: 5px;
-  background: rgba(220, 60, 60, 0.12);
-  color: var(--terracotta-700, #a13030);
+.cv-kc-panel__meta {
+  margin: 0 0 0.4rem;
   font-family: ui-monospace, "Fira Code", monospace;
-  font-size: 0.85em;
-  white-space: pre-wrap;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
 }

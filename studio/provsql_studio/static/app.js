@@ -1548,6 +1548,7 @@
         <button class="cv-tool" id="tool-reset-layout" title="Reset node positions (undo any drag-to-move)"><i class="fas fa-undo"></i></button>
         <button class="cv-tool cv-tool--toggle" id="tool-show-uuids" aria-pressed="false" title="Show UUIDs"><i class="fas fa-fingerprint"></i></button>
         <button class="cv-tool cv-tool--toggle" id="tool-fullscreen" aria-pressed="false" title="Fullscreen circuit (Esc to exit)"><i class="fas fa-expand-arrows-alt"></i></button>
+        <button class="cv-tool cv-tool--kc-back" id="tool-kc-back" title="Back to the original provenance circuit" aria-label="Back to the original provenance circuit" hidden><i class="fas fa-arrow-left"></i></button>
         <span id="circuit-title" hidden>Provenance Circuit</span>
         <span class="cv-toolbar__info" id="circuit-sub">Click a UUID cell to render.</span>
       </div>
@@ -1601,8 +1602,16 @@
               <option value="moment">Moment</option>
               <option value="sample">Sample</option>
             </optgroup>
+            <optgroup label="Probability">
+              <option value="probability">Marginal probability</option>
+              <option value="kc-benchmark">Probability benchmark</option>
+            </optgroup>
+            <optgroup label="Knowledge compilation">
+              <option value="kc-cnf">Tseytin CNF</option>
+              <option value="kc-ddnnf">Compiled d-DNNF</option>
+              <option value="kc-td">Tree decomposition</option>
+            </optgroup>
             <optgroup label="Other">
-              <option value="probability">Probability</option>
               <option value="prov-xml">PROV-XML export</option>
             </optgroup>
           </select>
@@ -1679,31 +1688,6 @@
           <span class="cv-eval__result" id="eval-result"></span>
           <span class="cv-eval__bound"  id="eval-bound"></span>
           <span class="cv-eval__time"   id="eval-time"></span>
-        </div>
-        <div class="cv-kc" id="kc-strip">
-          <h4 class="cv-kc__label" title="Knowledge-compilation inspectors: surface the Tseytin CNF, the compiled d-DNNF, the tree decomposition, and a side-by-side timing of every probability_evaluate method.">KC</h4>
-          <button type="button" class="cv-kc__btn wp-btn wp-btn--mini" id="kc-cnf-btn"
-                  title="Tseytin CNF (DIMACS) for the current circuit"><i class="fas fa-file-code"></i> CNF</button>
-          <span class="cv-kc__compose">
-            <button type="button" class="cv-kc__btn wp-btn wp-btn--mini" id="kc-ddnnf-btn"
-                    title="Compile to d-DNNF with the selected external knowledge compiler"><i class="fas fa-microchip"></i> d-DNNF</button>
-            <select class="cv-kc__compiler" id="kc-compiler"
-                    title="Knowledge compiler to invoke for d-DNNF / benchmark">
-              <option value="d4">d4</option>
-              <option value="c2d">c2d</option>
-              <option value="minic2d">minic2d</option>
-              <option value="dsharp">dsharp</option>
-            </select>
-          </span>
-          <button type="button" class="cv-kc__btn wp-btn wp-btn--mini" id="kc-td-btn"
-                  title="Min-fill tree decomposition of the circuit primal graph"><i class="fas fa-sitemap"></i> Tree decomposition</button>
-          <span class="cv-kc__compose">
-            <button type="button" class="cv-kc__btn wp-btn wp-btn--mini" id="kc-bench-btn"
-                    title="Run every probability_evaluate method against the circuit and report wall-clock"><i class="fas fa-stopwatch"></i> Benchmark</button>
-            <input type="number" class="cv-kc__samples" id="kc-samples"
-                   min="1" step="1" value="10000"
-                   title="Monte-Carlo sample count for the benchmark">
-          </span>
         </div>
       </footer>
     `;
