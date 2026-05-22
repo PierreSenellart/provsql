@@ -453,7 +453,10 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   } else if(compiler=="c2d") {
     cmdline+="-in "+filename+" -silent";
   } else if(compiler=="minic2d") {
-    cmdline+="-in "+filename;
+    // miniC2D 1.0.0's getopt uses -c (--cnf) for the input CNF, not
+    // -in like c2d. The NNF is written to <filename>.nnf, which
+    // matches the outfilename convention we use below.
+    cmdline+="-c "+filename;
   } else if(compiler=="dsharp") {
     cmdline+="-q -Fnnf "+outfilename+" "+filename;
   } else {
