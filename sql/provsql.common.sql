@@ -3816,35 +3816,42 @@ $$ LANGUAGE plpgsql;
 /**
  * @brief Time every probability-evaluation method on a single circuit token
  *
- * Runs @c probability_evaluate against @c independent,
- * @c tree-decomposition, @c monte-carlo (with @c monte_carlo_samples
- * samples), and each entry of @c compilers as the @c args argument to
- * the @c compilation method. Errors are captured per row so the
- * comparison table is always complete.
+ * Runs @c probability_evaluate against every method ProvSQL exposes:
+ * @c independent, @c possible-worlds, @c tree-decomposition,
+ * @c monte-carlo (with @c monte_carlo_samples samples), each of the
+ * four external compilers (@c d4 / @c c2d / @c minic2d / @c dsharp)
+ * via the @c compilation method, and @c weightmc with
+ * @c weightmc_args. Errors (uninstalled compiler, non-independent
+ * circuit, treewidth blowup, ...) are captured per row through the
+ * @c _probability_benchmark_one helper so the comparison table is
+ * always complete and the caller never has to surround the call
+ * with @c BEGIN / @c EXCEPTION.
  *
- * @param token  root provenance token
+ * @param token                root provenance token
  * @param monte_carlo_samples  Monte-Carlo sample count
- * @param compilers external compilers to invoke under @c compilation
+ * @param weightmc_args        epsilon;delta forwarded to @c weightmc
  */
+DROP FUNCTION IF EXISTS probability_benchmark(UUID, INT, TEXT[]);
 CREATE OR REPLACE FUNCTION probability_benchmark(
   token UUID,
   monte_carlo_samples INT = 10000,
-  compilers TEXT[] = ARRAY['d4'])
+  weightmc_args TEXT = '0.8;0.2')
 RETURNS TABLE (
   method TEXT, args TEXT,
   probability DOUBLE PRECISION,
   milliseconds DOUBLE PRECISION,
   error TEXT) AS $$
-DECLARE
-  c TEXT;
 BEGIN
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'independent');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'possible-worlds');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'tree-decomposition');
-  FOREACH c IN ARRAY compilers LOOP
-    RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', c);
-  END LOOP;
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
     token, 'monte-carlo', monte_carlo_samples::text);
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'd4');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'c2d');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'minic2d');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'dsharp');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'weightmc', weightmc_args);
 END;
 $$ LANGUAGE plpgsql;
 

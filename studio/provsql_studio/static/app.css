@@ -2109,6 +2109,24 @@ body.mode-where #sidebar {
   font-family: var(--font-mono);
   min-width: 14ch;
 }
+/* The monte-carlo / benchmark sample-count input only ever holds a
+   short integer (10000 by default; users sometimes bump to 1000000
+   but never past 8 chars), so tighten its min-width override to keep
+   the strip compact. Hide the native number-input spinner buttons so
+   the 8ch is all glyph width; content-box so the padding doesn't
+   shrink the visible field below the 8ch we asked for. */
+#eval-args-mc {
+  min-width: 7ch;
+  width: 7ch;
+  box-sizing: content-box;
+  -moz-appearance: textfield;
+  text-align: right;
+}
+#eval-args-mc::-webkit-outer-spin-button,
+#eval-args-mc::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
 /* "Condition on" group: badge + input rendered inline so the badge
    reads as a left-side label on the input rather than a separate
    floating chip.  The whole group is hidden/shown by the eval-strip's
@@ -2523,11 +2541,27 @@ body.mode-where #sidebar {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--purple-700, #4d369e);
+  white-space: nowrap;
 }
+.cv-kc-panel th.num,
 .cv-kc-panel td.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+/* Method / args / prob / time cells never benefit from line wrapping
+   (compiler names, numbers, single-word methods); only the trailing
+   error cell wraps when a long ProvSQL banner needs the room. */
+.cv-kc-panel td { white-space: nowrap; }
+.cv-kc-panel td:last-child { white-space: normal; }
+/* Benchmark error column: same wp-error chrome the result-table uses
+   (ProvSQL pill + crimson banner) but shrunk to fit a per-row cell. */
+.cv-kc-panel .wp-error {
+  margin: 0;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.78em;
+  line-height: 1.25;
+}
+.cv-kc-panel .wp-error i { font-size: 0.95em; }
 .cv-kc-panel__meta {
   margin: 0 0 0.4rem;
   font-family: ui-monospace, "Fira Code", monospace;

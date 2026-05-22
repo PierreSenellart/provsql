@@ -304,9 +304,14 @@ def probability_benchmark(
     pool: ConnectionPool,
     token: str,
     samples: int,
-    compilers: list[str],
 ) -> list[dict]:
     """Run ``probability_benchmark`` and return the rows as JSON.
+
+    ``probability_benchmark`` (in @c sql/provsql.common.sql) runs every
+    method ProvSQL exposes (independent, possible-worlds, tree-
+    decomposition, monte-carlo, compilation × {d4, c2d, minic2d,
+    dsharp}, weightmc) and captures per-row errors so an uninstalled
+    compiler or a non-independent circuit doesn't abort the call.
 
     The planner-hook rewriter does not (yet) support ``RETURNS TABLE``
     functions with multiple output columns, so we ``SET LOCAL
@@ -316,9 +321,9 @@ def probability_benchmark(
         cur.execute("SET LOCAL provsql.active = off")
         cur.execute(
             "SELECT method, args, probability, milliseconds, error "
-            "FROM provsql.probability_benchmark(%s::uuid, %s, %s) "
+            "FROM provsql.probability_benchmark(%s::uuid, %s) "
             "ORDER BY method, args NULLS FIRST",
-            (token, samples, compilers),
+            (token, samples),
         )
         rows = cur.fetchall()
     return [

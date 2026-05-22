@@ -1655,14 +1655,39 @@
         wantedIds.add('eval-args-condition-group');
       }
       // Knowledge-compilation inspectors: kc-ddnnf reuses the existing
-      // compilation-compiler picker; kc-benchmark also surfaces the
-      // monte-carlo samples input, since the benchmark drives every
-      // method (including MC). kc-cnf / kc-td take no args.
+      // compilation-compiler picker; kc-benchmark exposes only the
+      // monte-carlo samples input since the benchmark always runs
+      // every method ProvSQL knows (one row per d4 / c2d / minic2d /
+      // dsharp / tree-decomposition / independent / possible-worlds /
+      // monte-carlo / weightmc). kc-cnf / kc-td take no args.
       if (v === 'kc-ddnnf') {
         wantedIds.add('eval-args-compiler');
       } else if (v === 'kc-benchmark') {
         wantedIds.add('eval-args-mc');
-        wantedIds.add('eval-args-compiler');
+      }
+      // Compiler dropdown: only kc-ddnnf accepts the three in-process
+      // routes (tree-decomposition / interpret-as-dd / default).
+      // probability_evaluate's "compilation" method requires an
+      // external compiler, and kc-benchmark already includes
+      // tree-decomposition / independent / monte-carlo as their own
+      // rows so listing them under "compilers" would be confusing.
+      const compilerExtended = (v === 'kc-ddnnf');
+      const compilerEl = document.getElementById('eval-args-compiler');
+      if (compilerEl) {
+        for (const opt of compilerEl.querySelectorAll('option')) {
+          const ext = opt.value === 'tree-decomposition'
+                   || opt.value === 'interpret-as-dd'
+                   || opt.value === 'default';
+          opt.hidden = ext && !compilerExtended;
+          opt.disabled = opt.hidden;
+        }
+        // If the selected value just got hidden (user was on
+        // tree-decomposition in kc-ddnnf and switched to kc-benchmark),
+        // fall back to the first visible (external) compiler so the
+        // request stays valid.
+        const cur = compilerEl.querySelector(
+          `option[value="${CSS.escape(compilerEl.value)}"]`);
+        if (!cur || cur.hidden) compilerEl.value = 'd4';
       }
       for (const ctrl of argControls) ctrl.hidden = !wantedIds.has(ctrl.id);
       // Stale once the input shape changes : wipe result + bound +
@@ -1996,10 +2021,8 @@
       return `/api/kc/td?token=${enc(token)}`;
     }
     if (kind === 'kc-benchmark') {
-      const samples  = document.getElementById('eval-args-mc')?.value       || '10000';
-      const compiler = document.getElementById('eval-args-compiler')?.value || 'd4';
-      return `/api/kc/benchmark?token=${enc(token)}`
-        + `&samples=${enc(samples)}&compilers=${enc(compiler)}`;
+      const samples = document.getElementById('eval-args-mc')?.value || '10000';
+      return `/api/kc/benchmark?token=${enc(token)}&samples=${enc(samples)}`;
     }
     return null;
   }
@@ -2046,17 +2069,19 @@
     if (kind === 'kc-benchmark') {
       const rows = data.rows || [];
       let body = '<table><thead><tr>'
-        + '<th>method</th><th>args</th>'
-        + '<th class="num">probability</th>'
-        + '<th class="num">ms</th>'
-        + '<th>error</th></tr></thead><tbody>';
+        + '<th>method</th>'
+        + '<th class="num">args</th>'
+        + '<th class="num">prob.</th>'
+        + '<th class="num">time (ms)</th>'
+        + '<th></th></tr></thead><tbody>';
       for (const r of rows) {
+        const errHtml = r.error ? renderEvalError(r.error) : '';
         body += '<tr>'
           + `<td>${escapeHtml(r.method)}</td>`
-          + `<td>${escapeHtml(r.args ?? '')}</td>`
+          + `<td class="num">${escapeHtml(r.args ?? '')}</td>`
           + `<td class="num">${r.probability == null ? '—' : Number(r.probability).toFixed(4)}</td>`
           + `<td class="num">${r.milliseconds == null ? '—' : Number(r.milliseconds).toFixed(2)}</td>`
-          + `<td>${escapeHtml(r.error ?? '')}</td>`
+          + `<td>${errHtml}</td>`
           + '</tr>';
       }
       body += '</tbody></table>';

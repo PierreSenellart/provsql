@@ -18,9 +18,15 @@ SELECT remove_provenance('probability_benchmark_q');
 -- output stays deterministic.
 SET provsql.active = off;
 SET provsql.monte_carlo_seed = 42;
+-- probability_benchmark always runs every method; restrict the
+-- displayed subset to the ones that are guaranteed-available on the
+-- d4-gated CI hosts (the rest are exercised in the Studio backend
+-- tests where missing compilers surface as per-row errors).
 SELECT method, args, ROUND(probability::numeric, 3) AS prob, error
 FROM probability_benchmark_q t, LATERAL provsql.probability_benchmark(
-       t.prov, 10000, ARRAY['d4']) pb
+       t.prov, 10000) pb
+WHERE method IN ('independent', 'tree-decomposition', 'possible-worlds', 'monte-carlo')
+   OR (method = 'compilation' AND args = 'd4')
 ORDER BY method, args NULLS FIRST;
 SET provsql.monte_carlo_seed = -1;
 SET provsql.active = on;

@@ -752,18 +752,8 @@ def create_app(
             return jsonify({"error": "samples must be an integer"}), 400
         if samples <= 0:
             return jsonify({"error": "samples must be a positive integer"}), 400
-        raw_compilers = request.args.get("compilers", "d4")
-        compilers = [c.strip() for c in raw_compilers.split(",") if c.strip()]
-        bad = [c for c in compilers if c not in _KC_COMPILERS_WHITELIST]
-        if bad:
-            return jsonify({
-                "error": f"unknown compiler(s): {bad}",
-                "hint": f"choose from: {sorted(_KC_COMPILERS_WHITELIST)}",
-            }), 400
         try:
-            rows = kc_mod.probability_benchmark(
-                get_pool(), token, samples, compilers,
-            )
+            rows = kc_mod.probability_benchmark(get_pool(), token, samples)
         except psycopg.errors.UndefinedFunction as e:
             return _kc_unavailable(e)
         except psycopg.Error as e:
@@ -771,7 +761,7 @@ def create_app(
                 "error": "probability_benchmark failed",
                 "detail": str(e).strip(),
             }), 500
-        return jsonify({"rows": rows, "samples": samples, "compilers": compilers})
+        return jsonify({"rows": rows, "samples": samples})
 
     _OPTION_KEYS = {
         "max_circuit_depth",
