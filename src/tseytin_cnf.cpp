@@ -11,7 +11,9 @@
 extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
+#if PG_VERSION_NUM >= 160000
 #include "varatt.h"
+#endif
 #include "catalog/pg_type.h"
 #include "utils/uuid.h"
 #include "provsql_shmem.h"
