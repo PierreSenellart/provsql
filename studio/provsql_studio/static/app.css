@@ -2483,6 +2483,28 @@ body.mode-where #sidebar {
 }
 .wp-help i { vertical-align: middle; }
 
+/* ───────── click-to-sort table headers ─────────
+   The site-wide click handler in app.js sorts any <thead> column on
+   click and toggles a data-sort attribute (asc / desc). These rules
+   give a clickable cursor + arrow indicator. Numeric columns (.num)
+   sort numerically; the indicator is the same for both. */
+table thead th {
+  cursor: pointer;
+  user-select: none;
+}
+table thead th[data-sort="asc"]::after {
+  content: " ▲";
+  opacity: 0.55;
+  font-size: 0.78em;
+  font-weight: 400;
+}
+table thead th[data-sort="desc"]::after {
+  content: " ▼";
+  opacity: 0.55;
+  font-size: 0.78em;
+  font-weight: 400;
+}
+
 /* ───────── KC inspector result panels
    The four KC options in the Evaluate dropdown (kc-cnf, kc-ddnnf,
    kc-td, kc-benchmark) inject their payload (CNF text, compiled

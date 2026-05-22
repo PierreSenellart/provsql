@@ -49,6 +49,52 @@
       carryQueryForSwitch();
     });
   });
+
+  // Site-wide click-to-sort on any <thead> column header. Numeric
+  // columns (marked with class="num") sort numerically; everything else
+  // sorts by localeCompare on the cell's textContent. Click cycles
+  // ascending → descending. Event delegation: this single listener
+  // covers every table ever rendered into the DOM, including the ones
+  // dynamically injected into #eval-result (KC benchmark) and the
+  // query-result table that runQuery rewrites on each batch.
+  document.addEventListener('click', (ev) => {
+    const th = ev.target.closest('thead th');
+    if (!th) return;
+    const table = th.closest('table');
+    if (!table) return;
+    const tbody = table.querySelector(':scope > tbody');
+    if (!tbody) return;
+    const headerRow = th.parentElement;
+    const idx = Array.from(headerRow.children).indexOf(th);
+    if (idx < 0) return;
+    const isNum = th.classList.contains('num');
+    // Toggle: ascending on first click of a fresh header, then flip.
+    const next = th.dataset.sort === 'asc' ? 'desc' : 'asc';
+    for (const h of headerRow.children) delete h.dataset.sort;
+    th.dataset.sort = next;
+    const rows = Array.from(tbody.querySelectorAll(':scope > tr'));
+    const keyFor = (row) => row.children[idx]?.textContent.trim() ?? '';
+    rows.sort((a, b) => {
+      const av = keyFor(a);
+      const bv = keyFor(b);
+      if (isNum) {
+        const an = parseFloat(av);
+        const bn = parseFloat(bv);
+        const aNaN = Number.isNaN(an);
+        const bNaN = Number.isNaN(bn);
+        // Empty / non-numeric cells (e.g. "—" for a failed row) sink
+        // to the bottom irrespective of direction; they aren't
+        // meaningful entries on a numeric column.
+        if (aNaN && bNaN) return 0;
+        if (aNaN) return 1;
+        if (bNaN) return -1;
+        return next === 'asc' ? an - bn : bn - an;
+      }
+      return next === 'asc'
+        ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    for (const r of rows) tbody.appendChild(r);
+  });
   // Restore the carried-over query if there is one. carriedRan controls
   // auto-replay; it's set only when the carried query had actually been
   // run in the previous mode.
