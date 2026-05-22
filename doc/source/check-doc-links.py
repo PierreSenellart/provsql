@@ -175,6 +175,7 @@ INTERNAL_FUNCTIONS = {
     # @param names from the helpers above that Doxygen surfaces as
     # 'provsql.<name>' anchors. Not callable.
     'compilers', 'monte_carlo_samples', 'in_args', 'in_method', 'in_token',
+    'weightmc_args',
 }
 
 if DOXYGEN_SQL_HTML.exists():

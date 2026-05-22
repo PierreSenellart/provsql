@@ -6,5 +6,6 @@ method|args|prob|error
 compilation|d4|0.210|
 independent||0.210|
 monte-carlo|10000|0.208|
+possible-worlds||0.210|
 tree-decomposition||0.210|
-(4 rows)
+(5 rows)
