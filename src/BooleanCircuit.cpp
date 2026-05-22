@@ -355,7 +355,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
   return totalp;
 }
 
-std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
+std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob) const {
   std::vector<std::vector<int> > clauses;
 
   // Tseytin transformation
@@ -404,6 +404,24 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   }
   clauses.push_back({(int)g+1});
 
+  std::ostringstream oss;
+  oss << "p cnf " << gates.size() << " " << clauses.size() << "\n";
+  for(unsigned i=0; i<clauses.size(); ++i) {
+    for(int x : clauses[i]) {
+      oss << x << " ";
+    }
+    oss << "0\n";
+  }
+  if(display_prob) {
+    for(gate_t in: inputs) {
+      oss << "w " << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << getProb(in) << "\n";
+      oss << "w -" << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << (1. - getProb(in)) << "\n";
+    }
+  }
+  return oss.str();
+}
+
+std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   // Use a private 0700 directory rather than a bare mkstemp file so the
   // sibling output paths (.nnf / .out, derived deterministically from
   // this base) cannot be raced by a local user pre-creating a symlink
@@ -414,24 +432,8 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   }
   std::string filename=std::string(cdir)+"/input";
   std::ofstream ofs(filename.c_str());
-
-  ofs << "p cnf " << gates.size() << " " << clauses.size() << "\n";
-
-  for(unsigned i=0; i<clauses.size(); ++i) {
-    for(int x : clauses[i]) {
-      ofs << x << " ";
-    }
-    ofs << "0\n";
-  }
-  if(display_prob) {
-    for(gate_t in: inputs) {
-      ofs << "w " << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << getProb(in) << "\n";
-      ofs << "w -" << (static_cast<std::underlying_type<gate_t>::type>(in)+1) << " " << (1. - getProb(in)) << "\n";
-    }
-  }
-
+  ofs << TseytinCNF(g, display_prob);
   ofs.close();
-
   return filename;
 }
 

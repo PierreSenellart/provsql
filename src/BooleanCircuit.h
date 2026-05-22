@@ -85,14 +85,15 @@ private:
 bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
 
 /**
- * @brief Generate a Tseytin transformation of the sub-circuit at @p g.
+ * @brief Write a Tseytin transformation of the sub-circuit at @p g to a temp file.
  *
  * Produces a CNF/DIMACS-style encoding suitable for input to model
- * counters such as @c weightmc or @c d4.
+ * counters such as @c weightmc or @c d4, in a freshly-created 0700
+ * temp directory. Used by @c compilation() and @c WeightMC().
  *
  * @param g            Root gate.
  * @param display_prob Include probability weights in the output.
- * @return             DIMACS string.
+ * @return             Path of the written DIMACS file.
  */
 std::string Tseytin(gate_t g, bool display_prob) const;
 
@@ -367,6 +368,20 @@ public:
  * @return   Circuit description string.
  */
 std::string exportCircuit(gate_t g) const;
+
+/**
+ * @brief Return the Tseytin transformation of the sub-circuit at @p g as a DIMACS string.
+ *
+ * Same encoding as the private @c Tseytin file-emitting overload, but
+ * returned in memory without any file I/O. Useful for surfacing the
+ * CNF to a user or to a knowledge-compilation tool over stdin.
+ *
+ * @param g            Root gate.
+ * @param display_prob Include @c w lines listing each input's
+ *                     probability (and its complement).
+ * @return             DIMACS CNF as a string.
+ */
+std::string TseytinCNF(gate_t g, bool display_prob) const;
 
 /**
  * @brief Boost serialisation support.

@@ -3745,6 +3745,22 @@ CREATE OR REPLACE FUNCTION compile_to_ddnnf_dot(
   'provsql','compile_to_ddnnf_dot' LANGUAGE C;
 
 /**
+ * @brief Return the DIMACS CNF (Tseytin transformation) of the provenance circuit
+ *
+ * Returns the same encoding the extension writes to a temp file before
+ * invoking d4 / c2d / minic2d / dsharp. With @c weighted true (the
+ * default), per-input probability weights are appended as @c w lines.
+ *
+ * @param token root provenance token
+ * @param weighted include probability weights when true
+ */
+CREATE OR REPLACE FUNCTION tseytin_cnf(
+  token UUID,
+  weighted BOOLEAN = TRUE)
+  RETURNS TEXT AS
+  'provsql','tseytin_cnf' LANGUAGE C;
+
+/**
  * @brief Return an XML representation of the provenance circuit
  *
  * @param token root provenance token
