@@ -56,7 +56,27 @@ Datum compile_to_ddnnf_dot(PG_FUNCTION_ARGS)
     BooleanCircuit c = getBooleanCircuit(*token, root);
     c.rewriteMultivaluedGates();
 
-    dDNNF d = c.compilation(root, compiler);
+    // The compiler argument selects how the d-D circuit is obtained.
+    // Beyond the four external compilers handled by `compilation()`
+    // (d4 / c2d / minic2d / dsharp), three in-process routes are
+    // available:
+    //   * "tree-decomposition" – min-fill TD + d-DNNF construction
+    //     (dDNNFTreeDecompositionBuilder), through makeDD.
+    //   * "interpret-as-dd"    – direct reading of the Boolean circuit
+    //     as a d-D, when its structure already satisfies decomposability
+    //     + determinism (no compilation; possibly non-NNF).
+    //   * "default"            – the makeDD fallback chain
+    //     (interpretAsDD → tree-decomposition → d4).
+    dDNNF d;
+    if (compiler == "tree-decomposition") {
+      d = c.makeDD(root, "tree-decomposition", "");
+    } else if (compiler == "interpret-as-dd") {
+      d = c.interpretAsDD(root);
+    } else if (compiler == "default") {
+      d = c.makeDD(root, "default", "");
+    } else {
+      d = c.compilation(root, compiler);
+    }
     string dot = d.toDot();
 
     text *result = (text *) palloc(VARHDRSZ + dot.size());

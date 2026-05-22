@@ -648,7 +648,17 @@ def create_app(
     # + SVG), the tree decomposition (DOT + SVG + treewidth), and a
     # side-by-side timing of every probability_evaluate method.
 
-    _KC_COMPILERS_WHITELIST = {"d4", "c2d", "minic2d", "dsharp"}
+    _KC_COMPILERS_WHITELIST = {
+        # External knowledge compilers (`BooleanCircuit::compilation`).
+        "d4", "c2d", "minic2d", "dsharp",
+        # In-process: min-fill TD + dDNNFTreeDecompositionBuilder.
+        "tree-decomposition",
+        # In-process: direct reading of the Boolean circuit as a d-D
+        # (decomposable + deterministic, possibly non-NNF).
+        "interpret-as-dd",
+        # makeDD fallback chain: interpretAsDD -> tree-decomposition -> d4.
+        "default",
+    }
 
     def _kc_token():
         try:

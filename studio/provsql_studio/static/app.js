@@ -1608,7 +1608,7 @@
             </optgroup>
             <optgroup label="Knowledge compilation">
               <option value="kc-cnf">Tseytin CNF</option>
-              <option value="kc-ddnnf">Compiled d-DNNF</option>
+              <option value="kc-ddnnf">Compiled d-D circuit</option>
               <option value="kc-td">Tree decomposition</option>
             </optgroup>
             <optgroup label="Other">
@@ -1636,11 +1636,14 @@
                  min="1" step="1" placeholder="samples" value="10000"
                  autocomplete="off" title="Monte-Carlo sample count">
           <select class="cv-eval__args" id="eval-args-compiler" hidden
-                  title="Knowledge compiler ProvSQL will invoke">
+                  title="How to obtain the d-D circuit: an external compiler (d4 / c2d / minic2d / dsharp), the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → d4)">
             <option value="d4">d4</option>
             <option value="c2d">c2d</option>
             <option value="minic2d">minic2d</option>
             <option value="dsharp">dsharp</option>
+            <option value="tree-decomposition">tree-decomposition</option>
+            <option value="interpret-as-dd">interpret as d-D</option>
+            <option value="default">default (fallback chain)</option>
           </select>
           <input type="text" class="cv-eval__args" id="eval-args-wmc" hidden
                  value="0.8;0.2" placeholder="epsilon;delta"

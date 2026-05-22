@@ -2026,7 +2026,7 @@
       // canvas is the result); the · N ms time chip is enough.
       const compiler = data.compiler || '';
       const scene = data.scene || {};
-      scene.title = `Compiled d-DNNF (${compiler})`;
+      scene.title = `Compiled d-D circuit (${compiler})`;
       scene.subtitle =
         `${(scene.nodes || []).length} gates · compiled with `
         + `<strong>${escapeHtml(compiler)}</strong>`;
