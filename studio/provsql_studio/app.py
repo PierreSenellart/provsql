@@ -12,12 +12,17 @@ Routes:
   GET  /api/circuit/<uuid> – BFS subgraph + dot-layout for a circuit root.
   POST /api/circuit/<uuid>/expand – fetch a sub-DAG rooted at a frontier node.
   GET  /api/leaf/<uuid>    – resolve an input gate back to its source row.
+  GET  /api/kc/cnf         – Tseytin CNF (DIMACS) for a provenance circuit.
+  GET  /api/kc/ddnnf       – compiled d-DNNF (DOT + SVG) via an external compiler.
+  GET  /api/kc/td          – tree decomposition (DOT + SVG + treewidth).
+  GET  /api/kc/benchmark   – time every probability_evaluate method.
   GET  /api/config         – read the four whitelisted GUCs.
   POST /api/config         – write one whitelisted GUC.
 """
 from __future__ import annotations
 
 import re
+import subprocess
 import threading
 import uuid as uuid_mod
 from pathlib import Path
@@ -30,6 +35,7 @@ from flask import Flask, jsonify, redirect, request, send_from_directory
 from . import __version__ as STUDIO_VERSION
 from . import circuit as circuit_mod
 from . import db
+from . import kc as kc_mod
 
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -635,6 +641,127 @@ def create_app(
                 "detail": str(e).strip(),
             }), 500
         return jsonify(data)
+
+    # ── Knowledge-compilation demo helpers ────────────────────────────
+    # Four read-only inspectors that surface the new SQL helpers added
+    # in extension 1.7.0: the Tseytin CNF, the compiled d-DNNF (as DOT
+    # + SVG), the tree decomposition (DOT + SVG + treewidth), and a
+    # side-by-side timing of every probability_evaluate method.
+
+    _KC_COMPILERS_WHITELIST = {"d4", "c2d", "minic2d", "dsharp"}
+
+    def _kc_token():
+        try:
+            return _coerce_to_uuid(request.args.get("token", ""))
+        except ValueError:
+            return None
+
+    def _kc_unavailable(e: Exception):
+        return jsonify({
+            "error": "knowledge-compilation helpers unavailable on this database",
+            "detail": str(e).splitlines()[0],
+            "hint": (
+                "Upgrade the extension to 1.7.0+ "
+                "(ALTER EXTENSION provsql UPDATE) or switch databases."
+            ),
+        }), 501
+
+    @app.get("/api/kc/cnf")
+    def api_kc_cnf():
+        import psycopg
+        token = _kc_token()
+        if token is None:
+            return jsonify({"error": "token is not a valid UUID"}), 400
+        weighted = (request.args.get("weighted", "true").lower() != "false")
+        try:
+            cnf = kc_mod.tseytin_cnf(get_pool(), token, weighted)
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        except psycopg.Error as e:
+            return jsonify({"error": "tseytin_cnf failed", "detail": str(e).strip()}), 500
+        return jsonify({"cnf": cnf, "weighted": weighted})
+
+    @app.get("/api/kc/ddnnf")
+    def api_kc_ddnnf():
+        import psycopg
+        token = _kc_token()
+        if token is None:
+            return jsonify({"error": "token is not a valid UUID"}), 400
+        compiler = request.args.get("compiler", "d4")
+        if compiler not in _KC_COMPILERS_WHITELIST:
+            return jsonify({
+                "error": f"unknown compiler '{compiler}'",
+                "hint": f"choose one of: {sorted(_KC_COMPILERS_WHITELIST)}",
+            }), 400
+        try:
+            data = kc_mod.compile_to_ddnnf(get_pool(), token, compiler)
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        except psycopg.Error as e:
+            return jsonify({
+                "error": f"compile_to_ddnnf_dot({compiler}) failed",
+                "detail": str(e).strip(),
+            }), 500
+        except subprocess.CalledProcessError as e:
+            return jsonify({
+                "error": "dot -Tsvg failed", "detail": str(e),
+            }), 500
+        data["compiler"] = compiler
+        return jsonify(data)
+
+    @app.get("/api/kc/td")
+    def api_kc_td():
+        import psycopg
+        token = _kc_token()
+        if token is None:
+            return jsonify({"error": "token is not a valid UUID"}), 400
+        try:
+            data = kc_mod.tree_decomposition(get_pool(), token)
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        except psycopg.Error as e:
+            return jsonify({
+                "error": "tree_decomposition_dot failed",
+                "detail": str(e).strip(),
+            }), 500
+        except subprocess.CalledProcessError as e:
+            return jsonify({
+                "error": "dot -Tsvg failed", "detail": str(e),
+            }), 500
+        return jsonify(data)
+
+    @app.get("/api/kc/benchmark")
+    def api_kc_benchmark():
+        import psycopg
+        token = _kc_token()
+        if token is None:
+            return jsonify({"error": "token is not a valid UUID"}), 400
+        try:
+            samples = int(request.args.get("samples", "10000"))
+        except ValueError:
+            return jsonify({"error": "samples must be an integer"}), 400
+        if samples <= 0:
+            return jsonify({"error": "samples must be a positive integer"}), 400
+        raw_compilers = request.args.get("compilers", "d4")
+        compilers = [c.strip() for c in raw_compilers.split(",") if c.strip()]
+        bad = [c for c in compilers if c not in _KC_COMPILERS_WHITELIST]
+        if bad:
+            return jsonify({
+                "error": f"unknown compiler(s): {bad}",
+                "hint": f"choose from: {sorted(_KC_COMPILERS_WHITELIST)}",
+            }), 400
+        try:
+            rows = kc_mod.probability_benchmark(
+                get_pool(), token, samples, compilers,
+            )
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        except psycopg.Error as e:
+            return jsonify({
+                "error": "probability_benchmark failed",
+                "detail": str(e).strip(),
+            }), 500
+        return jsonify({"rows": rows, "samples": samples, "compilers": compilers})
 
     _OPTION_KEYS = {
         "max_circuit_depth",
