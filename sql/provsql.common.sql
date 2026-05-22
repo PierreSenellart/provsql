@@ -3761,6 +3761,21 @@ CREATE OR REPLACE FUNCTION tseytin_cnf(
   'provsql','tseytin_cnf' LANGUAGE C;
 
 /**
+ * @brief Return a DOT visualisation of the tree decomposition of the
+ * provenance circuit
+ *
+ * Computes the min-fill decomposition used by the in-process
+ * knowledge compiler. The first line of the output is a comment of
+ * the form @c "// treewidth=<n>".
+ *
+ * @param token root provenance token
+ */
+CREATE OR REPLACE FUNCTION tree_decomposition_dot(
+  token UUID)
+  RETURNS TEXT AS
+  'provsql','tree_decomposition_dot' LANGUAGE C;
+
+/**
  * @brief Return an XML representation of the provenance circuit
  *
  * @param token root provenance token
