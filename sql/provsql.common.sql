@@ -3776,6 +3776,79 @@ CREATE OR REPLACE FUNCTION tree_decomposition_dot(
   'provsql','tree_decomposition_dot' LANGUAGE C;
 
 /**
+ * @brief Time a single probability_evaluate call and return one row
+ *
+ * Helper for @c probability_benchmark. Returns the wall-clock
+ * duration of one @c probability_evaluate invocation along with its
+ * result; on error, fills @c probability with NULL and @c error with
+ * SQLERRM.
+ */
+CREATE OR REPLACE FUNCTION _probability_benchmark_one(
+  in_token UUID, in_method TEXT, in_args TEXT = NULL)
+RETURNS TABLE (
+  method TEXT, args TEXT,
+  probability DOUBLE PRECISION,
+  milliseconds DOUBLE PRECISION,
+  error TEXT) AS $$
+DECLARE
+  t0 TIMESTAMPTZ;
+  p DOUBLE PRECISION;
+BEGIN
+  t0 := clock_timestamp();
+  BEGIN
+    p := provsql.probability_evaluate(in_token, in_method, in_args);
+    method := in_method;
+    args := in_args;
+    probability := p;
+    milliseconds := EXTRACT(EPOCH FROM clock_timestamp() - t0) * 1000;
+    error := NULL;
+  EXCEPTION WHEN OTHERS THEN
+    method := in_method;
+    args := in_args;
+    probability := NULL;
+    milliseconds := EXTRACT(EPOCH FROM clock_timestamp() - t0) * 1000;
+    error := SQLERRM;
+  END;
+  RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+/**
+ * @brief Time every probability-evaluation method on a single circuit token
+ *
+ * Runs @c probability_evaluate against @c independent,
+ * @c tree-decomposition, @c monte-carlo (with @c monte_carlo_samples
+ * samples), and each entry of @c compilers as the @c args argument to
+ * the @c compilation method. Errors are captured per row so the
+ * comparison table is always complete.
+ *
+ * @param token  root provenance token
+ * @param monte_carlo_samples  Monte-Carlo sample count
+ * @param compilers external compilers to invoke under @c compilation
+ */
+CREATE OR REPLACE FUNCTION probability_benchmark(
+  token UUID,
+  monte_carlo_samples INT = 10000,
+  compilers TEXT[] = ARRAY['d4'])
+RETURNS TABLE (
+  method TEXT, args TEXT,
+  probability DOUBLE PRECISION,
+  milliseconds DOUBLE PRECISION,
+  error TEXT) AS $$
+DECLARE
+  c TEXT;
+BEGIN
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'independent');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'tree-decomposition');
+  FOREACH c IN ARRAY compilers LOOP
+    RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', c);
+  END LOOP;
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
+    token, 'monte-carlo', monte_carlo_samples::text);
+END;
+$$ LANGUAGE plpgsql;
+
+/**
  * @brief Return an XML representation of the provenance circuit
  *
  * @param token root provenance token
