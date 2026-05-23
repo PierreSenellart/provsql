@@ -397,35 +397,74 @@ def probability_benchmark(
     pool: ConnectionPool,
     token: str,
     samples: int,
-) -> list[dict]:
-    """Run ``probability_benchmark`` and return the rows as JSON.
+) -> dict:
+    """Run ``probability_benchmark`` and return rows + captured notices.
 
     ``probability_benchmark`` (in @c sql/provsql.common.sql) runs every
     method ProvSQL exposes (independent, possible-worlds, tree-
-    decomposition, monte-carlo, compilation × {d4, c2d, minic2d,
-    dsharp}, weightmc) and captures per-row errors so an uninstalled
-    compiler or a non-independent circuit doesn't abort the call.
+    decomposition, monte-carlo, compilation × {d4, d4v2, c2d, minic2d,
+    dsharp, panini-*}, wmc × {ganak, sharpsat-td, dpmc, weightmc})
+    and captures per-row errors so an uninstalled compiler or a
+    non-independent circuit doesn't abort the call.
+
+    Notices emitted by ProvSQL during any of the inner
+    ``probability_evaluate`` calls (typically the "gate_cmp shortcut
+    by probability-side pre-pass" warning) are collected via the
+    connection's notice handler and returned alongside the rows.
 
     The planner-hook rewriter does not (yet) support ``RETURNS TABLE``
     functions with multiple output columns, so we ``SET LOCAL
     provsql.active = off`` for the duration of the call.
     """
+    notices: list[str] = []
+    def _on_notice(diag):
+        msg = diag.message_primary or ""
+        if "__prov" in msg or "__wprov" in msg:
+            return
+        notices.append(msg)
     with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute("SET LOCAL provsql.active = off")
-        cur.execute(
-            "SELECT method, args, probability, milliseconds, error "
-            "FROM provsql.probability_benchmark(%s::uuid, %s) "
-            "ORDER BY method, args NULLS FIRST",
-            (token, samples),
-        )
-        rows = cur.fetchall()
-    return [
-        {
-            "method": method,
-            "args": args,
-            "probability": probability,
-            "milliseconds": milliseconds,
-            "error": error,
-        }
-        for method, args, probability, milliseconds, error in rows
-    ]
+        conn.add_notice_handler(_on_notice)
+        try:
+            cur.execute("SET LOCAL provsql.active = off")
+            # Same verbose-level floor as evaluate_circuit: guarantee
+            # that level-5 informational notices (e.g. shortcut
+            # warnings) reach the client even when the user has
+            # silenced ProvSQL via verbose_level=0.
+            cur.execute(
+                "SELECT set_config('provsql.verbose_level', "
+                "GREATEST(5, current_setting('provsql.verbose_level', true)::int)::text, true)"
+            )
+            cur.execute(
+                "SELECT method, args, probability, milliseconds, error "
+                "FROM provsql.probability_benchmark(%s::uuid, %s) "
+                "ORDER BY method, args NULLS FIRST",
+                (token, samples),
+            )
+            rows = cur.fetchall()
+        finally:
+            try:
+                conn.remove_notice_handler(_on_notice)
+            except Exception:
+                pass
+    # Deduplicate identical notices — each method emits the same
+    # shortcut notice, so the same line repeats once per benchmark row.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for msg in notices:
+        if msg in seen:
+            continue
+        seen.add(msg)
+        uniq.append(msg)
+    return {
+        "rows": [
+            {
+                "method": method,
+                "args": args,
+                "probability": probability,
+                "milliseconds": milliseconds,
+                "error": error,
+            }
+            for method, args, probability, milliseconds, error in rows
+        ],
+        "notices": uniq,
+    }

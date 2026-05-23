@@ -3859,7 +3859,11 @@ BEGIN
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-decdnnf');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-r2d2');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-ccdd');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'weightmc', weightmc_args);
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
+    token, 'wmc', 'weightmc;' || weightmc_args);
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'wmc', 'ganak');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'wmc', 'sharpsat-td');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'wmc', 'dpmc');
 END;
 $$ LANGUAGE plpgsql;
 

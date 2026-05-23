@@ -34,6 +34,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 
 #include "c_cpp_compatibility.h"
 #include <set>
+#include <stack>
 #include <cmath>
 #include <csignal>
 
@@ -160,7 +161,22 @@ static Datum probability_evaluate_internal
   // evaluation; produces fractional probabilities so it is
   // meaningful only on this path (not in getGenericCircuit, which
   // is shared with semiring evaluators).
-  provsql::runAnalyticEvaluator(gc);
+  // Count gates reachable from the root before / after the
+  // probability-side pre-pass, so the user can see how much the
+  // shortcut shrank the circuit the downstream method actually sees.
+  auto count_reachable = [&](gate_t r) {
+    std::set<gate_t> seen;
+    std::stack<gate_t> stk;
+    stk.push(r);
+    while (!stk.empty()) {
+      gate_t g = stk.top(); stk.pop();
+      if (!seen.insert(g).second) continue;
+      for (gate_t c : gc.getWires(g)) stk.push(c);
+    }
+    return seen.size();
+  };
+  size_t gates_before = count_reachable(gc_root);
+  unsigned analytic_resolved = provsql::runAnalyticEvaluator(gc);
 
   /* Closed-form cmp-probability evaluators.  First implementation
    * is the Poisson-binomial pre-pass for HAVING COUNT(*) op C over
@@ -174,8 +190,34 @@ static Datum probability_evaluate_internal
    * lives here, not in getGenericCircuit.  Hidden behind
    * provsql.cmp_probability_evaluation for developer A/B testing ;
    * on by default. */
+  unsigned count_cmp_resolved = 0;
   if (provsql_cmp_probability_evaluation) {
-    provsql::runCountCmpEvaluator(gc);
+    count_cmp_resolved = provsql::runCountCmpEvaluator(gc);
+  }
+
+  /* If either probability-side pre-pass replaced any cmp with a
+   * closed-form Bernoulli, the formula the downstream tool sees is
+   * not the formula the user wrote: it has had part (or all) of its
+   * comparison structure folded into Bernoulli leaves before any
+   * d-DNNF compiler / weighted model counter is invoked. Emit a
+   * NOTICE (gated on provsql.verbose_level >= 5) so the user knows
+   * the requested method's reported timing and structure may not
+   * reflect work on the original formula. */
+  if (analytic_resolved + count_cmp_resolved > 0 && provsql_verbose >= 5) {
+    size_t gates_after = count_reachable(gc_root);
+    std::string breakdown;
+    if (analytic_resolved > 0 && count_cmp_resolved > 0) {
+      breakdown = std::to_string(analytic_resolved) + " analytic + "
+                + std::to_string(count_cmp_resolved) + " Poisson-binomial";
+    } else if (analytic_resolved > 0) {
+      breakdown = std::to_string(analytic_resolved) + " analytic";
+    } else {
+      breakdown = std::to_string(count_cmp_resolved) + " Poisson-binomial";
+    }
+    provsql_notice(
+      "gate_cmp expression was shortcut by probability-side pre-pass "
+      "(%s): provenance circuit reduced from %zu to %zu gates",
+      breakdown.c_str(), gates_before, gates_after);
   }
 
   /* After every resolution pass has run, any gate_rv left in the
@@ -275,7 +317,26 @@ static Datum probability_evaluate_internal
 
           result = c.possibleWorlds(gate);
         } else if(method=="weightmc") {
+          // Backward-compatible alias for the wmc/weightmc path.
           result = c.WeightMC(gate, args);
+        } else if(method=="wmc") {
+          // 'args' = "tool[;tool_args]". 'tool' selects which weighted
+          // model counter to invoke. 'tool_args' (optional, ';'-prefixed)
+          // is passed through to the tool's wrapper.
+          auto sep = args.find(';');
+          std::string tool = (sep == std::string::npos) ? args : args.substr(0, sep);
+          std::string tool_args = (sep == std::string::npos) ? std::string() : args.substr(sep + 1);
+          if(tool == "weightmc") {
+            result = c.WeightMC(gate, tool_args);
+          } else if(tool == "ganak") {
+            result = c.Ganak(gate, tool_args);
+          } else if(tool == "sharpsat-td") {
+            result = c.SharpSATTD(gate, tool_args);
+          } else if(tool == "dpmc") {
+            result = c.DPMC(gate, tool_args);
+          } else {
+            provsql_error("Unknown wmc tool: '%s'", tool.c_str());
+          }
         } else if(method=="compilation" || method=="tree-decomposition" || method=="") {
           auto dd = c.makeDD(gate, method, args);
           result = dd.probabilityEvaluation();

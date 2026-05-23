@@ -977,6 +977,272 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   return dnnf;
 }
 
+double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
+  // Ganak (meelgroup/ganak): exact weighted model counter using the
+  // MCC 2024 input format. We append our weight lines after the
+  // standard Tseytin CNF in the format `c p weight <lit> <w> 0`.
+  char cdir[] = "/tmp/provsqlXXXXXX";
+  if(mkdtemp(cdir) == NULL)
+    throw CircuitException("Cannot create temporary directory");
+  std::string filename = std::string(cdir) + "/input";
+  {
+    std::ofstream ofs(filename);
+    ofs << "c t wmc\n";
+    ofs << TseytinCNF(g, false);
+    for(gate_t in : inputs) {
+      int id = static_cast<int>(in) + 1;
+      ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
+      ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
+    }
+  }
+
+  if(find_external_tool("ganak").empty())
+    throw CircuitException(
+            "ganak not found on PATH; install it or add its "
+            "directory to provsql.tool_search_path");
+
+  std::string outfilename = filename + ".out";
+  // --mode 7: MPFR float (weighted floating-point counting). The
+  // exact line we parse is `c s exact quadruple float <value>`.
+  std::string cmdline = "ganak --mode 7 " + filename
+                      + " > " + outfilename + " 2>&1";
+
+  int retvalue = run_external_tool(cmdline);
+#ifndef TDKC
+  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+  }
+#endif
+  CHECK_FOR_INTERRUPTS();
+  if(retvalue)
+    throw CircuitException(format_external_tool_status(retvalue, "ganak"));
+
+  std::ifstream ifs(outfilename);
+  std::string line, value;
+  while(std::getline(ifs, line)) {
+    // Look for `c s exact arb frac <value>`, `c s exact arb int <value>`,
+    // or `c s exact quadruple float <value>`. The value is the last
+    // whitespace-separated token on the line.
+    if(line.rfind("c s exact", 0) == 0) {
+      std::stringstream ss(line);
+      std::string tok;
+      while(ss >> tok) value = tok;
+    }
+  }
+  ifs.close();
+  if(value.empty())
+    throw CircuitException("ganak: could not find 'c s exact' line in output");
+
+  // Output may be `<num>/<den>` for fractions (mode 1) or scientific
+  // notation for floats; std::stod handles the latter, parse the
+  // former by hand.
+  double ret;
+  auto slash = value.find('/');
+  if(slash != std::string::npos) {
+    double num = std::stod(value.substr(0, slash));
+    double den = std::stod(value.substr(slash + 1));
+    ret = (den == 0.0) ? 0.0 : num / den;
+  } else {
+    ret = std::stod(value);
+  }
+
+  if(provsql_verbose < 20) {
+    if(unlink(filename.c_str()))
+      throw CircuitException("Error removing " + filename);
+    if(unlink(outfilename.c_str()))
+      throw CircuitException("Error removing " + outfilename);
+    std::string dirname = filename.substr(0, filename.rfind('/'));
+    if(rmdir(dirname.c_str()))
+      throw CircuitException("Error removing temp directory " + dirname);
+  }
+
+  return ret;
+}
+
+double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
+  // SharpSAT-TD (Korhonen & Järvisalo, CP 2021): tree-decomposition
+  // guided exact weighted model counter. Same MCC 2024 weighted
+  // DIMACS input as Ganak. The binary is invoked from a freshly
+  // mkdtemp'd directory because it writes flowcutter scratch files
+  // into `--tmpdir` and we want them cleaned up afterwards.
+  char cdir[] = "/tmp/provsqlXXXXXX";
+  if(mkdtemp(cdir) == NULL)
+    throw CircuitException("Cannot create temporary directory");
+  std::string dirname  = cdir;
+  std::string filename = dirname + "/input";
+  {
+    std::ofstream ofs(filename);
+    ofs << "c t wmc\n";
+    ofs << TseytinCNF(g, false);
+    for(gate_t in : inputs) {
+      int id = static_cast<int>(in) + 1;
+      ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
+      ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
+    }
+  }
+
+  if(find_external_tool("sharpsat-td").empty())
+    throw CircuitException(
+            "sharpsat-td not found on PATH; install it (binary name "
+            "'sharpsat-td', with the flow_cutter_pace17 helper also "
+            "on PATH) or add the directory to provsql.tool_search_path");
+
+  std::string outfilename = filename + ".out";
+  // Flags:
+  //  -WE        enable weighted MC with arbitrary precision floats
+  //  -decot 1   run flowcutter for at most 1s (demo-friendly; for
+  //             larger instances bump via tool-specific args)
+  //  -decow 100 weight of the TD in branching heuristic
+  //  -tmpdir    where flowcutter writes scratch files
+  //  -cs 3500   cache size limit in MB
+  //  -prec 20   digits of precision in the printed weighted count
+  //
+  // sharpsat-td invokes its FlowCutter helper via the relative path
+  // `./flow_cutter_pace17`, so we `cd` into the directory where that
+  // helper lives before launching the counter. The Tseytin file
+  // (-tmpdir, input) is passed as an absolute path so the cwd change
+  // doesn't break it.
+  std::string cmdline =
+      "cd \"$(dirname \"$(command -v flow_cutter_pace17)\")\" && "
+      "sharpsat-td -WE -decot 1 -decow 100 -tmpdir " + dirname
+      + " -cs 3500 -prec 20 " + filename
+      + " > " + outfilename + " 2>&1";
+
+  int retvalue = run_external_tool(cmdline);
+#ifndef TDKC
+  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+  }
+#endif
+  CHECK_FOR_INTERRUPTS();
+  if(retvalue)
+    throw CircuitException(format_external_tool_status(retvalue, "sharpsat-td"));
+
+  // Parse: `c s exact arb float <value>` per MCC 2024 weighted output.
+  std::ifstream ifs(outfilename);
+  std::string line, value;
+  while(std::getline(ifs, line)) {
+    if(line.rfind("c s exact", 0) == 0) {
+      std::stringstream ss(line);
+      std::string tok;
+      while(ss >> tok) value = tok;
+    }
+  }
+  ifs.close();
+  if(value.empty())
+    throw CircuitException("sharpsat-td: could not find 'c s exact' line");
+
+  double ret;
+  auto slash = value.find('/');
+  if(slash != std::string::npos) {
+    double num = std::stod(value.substr(0, slash));
+    double den = std::stod(value.substr(slash + 1));
+    ret = (den == 0.0) ? 0.0 : num / den;
+  } else {
+    ret = std::stod(value);
+  }
+
+  if(provsql_verbose < 20) {
+    if(unlink(filename.c_str()))
+      throw CircuitException("Error removing " + filename);
+    if(unlink(outfilename.c_str()))
+      throw CircuitException("Error removing " + outfilename);
+    // flowcutter may have left additional scratch files in dirname;
+    // we ignore rmdir failures here since the directory is /tmp and
+    // garbage collection will catch any leftovers anyway.
+    rmdir(dirname.c_str());
+  }
+  return ret;
+}
+
+double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
+  // DPMC (Dudek, Phan, Vardi, CP 2020): two-stage pipeline.
+  //   1. htb (planner) reads CNF + weights, emits a project-join tree
+  //   2. dmc  (executor) consumes the tree + CNF, returns the count
+  // We assume both binaries are installed as `htb` and `dmc` on PATH,
+  // and pipe the planner's stdout into dmc's stdin.
+  char cdir[] = "/tmp/provsqlXXXXXX";
+  if(mkdtemp(cdir) == NULL)
+    throw CircuitException("Cannot create temporary directory");
+  std::string dirname  = cdir;
+  std::string filename = dirname + "/input.cnf";
+  {
+    std::ofstream ofs(filename);
+    ofs << "c t wmc\n";
+    ofs << TseytinCNF(g, false);
+    for(gate_t in : inputs) {
+      int id = static_cast<int>(in) + 1;
+      ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
+      ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
+    }
+  }
+
+  if(find_external_tool("htb").empty() || find_external_tool("dmc").empty())
+    throw CircuitException(
+            "DPMC needs 'htb' (planner) and 'dmc' (executor) on PATH; "
+            "install both from vardigroup/DPMC or add their directory "
+            "to provsql.tool_search_path");
+
+  std::string outfilename = filename + ".out";
+  // htb emits a project-join tree on stdout; dmc reads it from stdin
+  // (no flag for the join-tree input — the help line says explicitly
+  // "Diagram Model Counter (reads join tree from stdin)").
+  std::string cmdline =
+      "htb --cf=" + filename + " | dmc --cf=" + filename
+      + " > " + outfilename + " 2>&1";
+
+  int retvalue = run_external_tool(cmdline);
+#ifndef TDKC
+  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+  }
+#endif
+  CHECK_FOR_INTERRUPTS();
+  if(retvalue)
+    throw CircuitException(format_external_tool_status(retvalue, "dpmc"));
+
+  // DMC's output format: look for `s wmc ...` or `c s ...` lines.
+  // The actual line shape varies by version; we accept either the
+  // MCC `c s exact arb float <value>` form or DMC's older `s wmc N`
+  // form. The line we want has a parseable last token.
+  std::ifstream ifs(outfilename);
+  std::string line, value;
+  while(std::getline(ifs, line)) {
+    if(line.rfind("c s exact", 0) == 0
+       || line.rfind("s wmc", 0) == 0
+       || line.rfind("s SATISFIABLE", 0) == 0) {
+      std::stringstream ss(line);
+      std::string tok;
+      while(ss >> tok) value = tok;
+    }
+  }
+  ifs.close();
+  if(value.empty() || value == "SATISFIABLE" || value == "UNSATISFIABLE")
+    throw CircuitException("dpmc: could not find a parseable count line");
+
+  double ret;
+  auto slash = value.find('/');
+  if(slash != std::string::npos) {
+    double num = std::stod(value.substr(0, slash));
+    double den = std::stod(value.substr(slash + 1));
+    ret = (den == 0.0) ? 0.0 : num / den;
+  } else {
+    ret = std::stod(value);
+  }
+
+  if(provsql_verbose < 20) {
+    if(unlink(filename.c_str()))
+      throw CircuitException("Error removing " + filename);
+    if(unlink(outfilename.c_str()))
+      throw CircuitException("Error removing " + outfilename);
+    rmdir(dirname.c_str());
+  }
+  return ret;
+}
+
 double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   std::string filename=BooleanCircuit::Tseytin(g, true);
 

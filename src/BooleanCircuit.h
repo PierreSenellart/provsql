@@ -273,6 +273,47 @@ double monteCarlo(gate_t g, unsigned samples) const;
 double WeightMC(gate_t g, std::string opt) const;
 
 /**
+ * @brief Exact weighted model counting via Ganak (meelgroup/ganak),
+ *        the current Model Counting Competition champion.
+ *
+ * Tseytin-CNFs the sub-circuit at @p g, writes the result in MCC 2024
+ * weighted-DIMACS format (with @c "c p weight <lit> <w> 0" lines for
+ * each input gate), invokes the @c ganak binary in MPFR-float mode
+ * (--mode 7), and parses the @c "c s exact ..." line of its stdout.
+ *
+ * @p opt is reserved for tool-specific flags; currently unused.
+ *
+ * @param g    Root gate of the sub-circuit.
+ * @param opt  Extra options (unused).
+ * @return     The weighted model count = P(formula).
+ */
+double Ganak(gate_t g, std::string opt) const;
+
+/**
+ * @brief Exact weighted model counting via SharpSAT-TD
+ *        (Korhonen & Järvisalo, CP 2021).
+ *
+ * SharpSAT-TD uses tree-decomposition guided decision heuristics
+ * inside a SAT-style branching counter. We invoke it in arbitrary
+ * precision floating-point mode (@c -WE flag) and parse its stdout.
+ *
+ * @p opt is reserved for tool-specific flags; currently unused.
+ */
+double SharpSATTD(gate_t g, std::string opt) const;
+
+/**
+ * @brief Exact weighted model counting via DPMC (Dudek, Phan, Vardi,
+ *        CP 2020).
+ *
+ * DPMC is a pipeline: an HTB planner emits a project-join tree from
+ * the CNF, then the DMC executor traverses the tree using ADDs to
+ * compute the weighted count.
+ *
+ * @p opt is reserved for tool-specific flags; currently unused.
+ */
+double DPMC(gate_t g, std::string opt) const;
+
+/**
  * @brief Compute the probability exactly when inputs are independent.
  *
  * Applicable when the circuit has no shared input gate (i.e., each

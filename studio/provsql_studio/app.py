@@ -756,7 +756,7 @@ def create_app(
         if samples <= 0:
             return jsonify({"error": "samples must be a positive integer"}), 400
         try:
-            rows = kc_mod.probability_benchmark(get_pool(), token, samples)
+            payload = kc_mod.probability_benchmark(get_pool(), token, samples)
         except psycopg.errors.UndefinedFunction as e:
             return _kc_unavailable(e)
         except psycopg.Error as e:
@@ -764,7 +764,11 @@ def create_app(
                 "error": "probability_benchmark failed",
                 "detail": str(e).strip(),
             }), 500
-        return jsonify({"rows": rows, "samples": samples})
+        return jsonify({
+            "rows":     payload.get("rows", []),
+            "notices":  payload.get("notices", []),
+            "samples":  samples,
+        })
 
     _OPTION_KEYS = {
         "max_circuit_depth",

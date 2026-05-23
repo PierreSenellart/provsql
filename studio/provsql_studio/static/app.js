@@ -1673,10 +1673,10 @@
               <option value="possible-worlds">possible-worlds</option>
               <option value="tree-decomposition">tree-decomposition</option>
               <option value="compilation">compilation</option>
+              <option value="wmc">wmc (weighted model counting)</option>
             </optgroup>
             <optgroup label="Approximate">
               <option value="monte-carlo">monte-carlo</option>
-              <option value="weightmc">weightmc</option>
             </optgroup>
           </select>
           <input type="number" class="cv-eval__args" id="eval-args-mc" hidden
@@ -1698,10 +1698,13 @@
             <option value="interpret-as-dd">interpret as d-D</option>
             <option value="default">default (fallback chain)</option>
           </select>
-          <input type="text" class="cv-eval__args" id="eval-args-wmc" hidden
-                 value="0.8;0.2" placeholder="epsilon;delta"
-                 autocomplete="off" spellcheck="false"
-                 title="WeightMC parameters: epsilon;delta (defaults: 0.8;0.2)">
+          <select class="cv-eval__args" id="eval-args-wmc-tool" hidden
+                  title="Which weighted model counter to invoke. Ganak, SharpSAT-TD, and DPMC are exact; WeightMC is approximate (ε=0.8, δ=0.2 by default).">
+            <option value="ganak">Ganak (exact, MCC 2024+2025 winner)</option>
+            <option value="sharpsat-td">SharpSAT-TD (exact, TD-guided)</option>
+            <option value="dpmc">DPMC (exact, project-join trees + ADDs)</option>
+            <option value="weightmc;0.8;0.2">WeightMC (approximate, ε=0.8 δ=0.2)</option>
+          </select>
           <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
                  min="1" step="1" placeholder="bins" value="30"
                  autocomplete="off" title="Histogram bin count for the distribution profile">
@@ -1745,6 +1748,7 @@
           <span class="cv-eval__bound"  id="eval-bound"></span>
           <span class="cv-eval__time"   id="eval-time"></span>
         </div>
+        <div class="cv-eval__notice" id="eval-notice" hidden></div>
       </footer>
     `;
   }

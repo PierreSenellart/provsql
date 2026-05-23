@@ -895,9 +895,10 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
-# requires a compiler name (d4 / c2d / minic2d / dsharp); `weightmc` takes a
-# weightmc-specific args string. The others ignore `arguments` (and warn on
-# `possible-worlds` if one is given).
+# requires a compiler name (d4 / d4v2 / c2d / minic2d / dsharp / panini-*);
+# `wmc` takes a tool name ("ganak" / "sharpsat-td" / "dpmc" /
+# "weightmc[;ε;δ]"); legacy `weightmc` takes "ε;δ". The rest ignore
+# `arguments` (and warn on `possible-worlds` if one is given).
 _PROBABILITY_METHODS = {
     "",                   # let provsql pick (independent → tree-decomposition → d4)
     "independent",
@@ -905,7 +906,8 @@ _PROBABILITY_METHODS = {
     "possible-worlds",
     "monte-carlo",
     "compilation",
-    "weightmc",
+    "wmc",
+    "weightmc",           # legacy alias for wmc/weightmc
 }
 
 
@@ -1395,57 +1397,85 @@ def evaluate_circuit(
     else:
         raise ValueError(f"unknown semiring: {semiring!r}")
 
+    notices: list[str] = []
+    def _on_notice(diag):
+        msg = diag.message_primary or ""
+        if "__prov" in msg or "__wprov" in msg:
+            return
+        notices.append(msg)
     with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            sql.SQL("SET LOCAL statement_timeout = {}").format(
-                sql.Literal(statement_timeout)
-            )
-        )
-        # Custom-semiring wrappers commonly call `provenance_evaluate`
-        # unqualified (every case-study wrapper does), so pin `provsql` on
-        # the search_path the same way exec_batch does. Mirrors the
-        # composition rules: explicit Studio override otherwise the
-        # session default, with `provsql` appended when missing.
-        if (search_path or "").strip():
-            target_path = compose_search_path(search_path, "")
-        else:
-            cur.execute("SHOW search_path")
-            target_path = compose_search_path("", cur.fetchone()[0])
-        cur.execute(
-            "SELECT set_config('search_path', %s, true)",
-            (target_path,),
-        )
-        # Probability methods (compilation, weightmc) and PROV-XML export
-        # may shell out to d4 / c2d / minic2d / dsharp / weightmc /
-        # graph-easy. provsql.tool_search_path lets the user point
-        # ProvSQL at a non-default install location for those binaries.
-        if (tool_search_path or "").strip():
+        conn.add_notice_handler(_on_notice)
+        try:
             cur.execute(
-                "SELECT set_config('provsql.tool_search_path', %s, true)",
-                (tool_search_path,),
-            )
-        # Panel-managed GUCs (provsql.rv_mc_samples,
-        # provsql.monte_carlo_seed, provsql.simplify_on_load, ...) must
-        # apply here too, otherwise the evaluate-strip's probability
-        # call ignores the user's panel overrides (e.g. setting
-        # rv_mc_samples=0 to disable the MC fallback still gets MC).
-        # exec_batch already does this for batched queries; mirror it.
-        for guc_name, guc_val in (extra_gucs or {}).items():
-            if guc_name not in _EXTRA_GUC_WHITELIST:
-                continue
-            cur.execute(
-                sql.SQL("SET LOCAL {} = {}").format(
-                    sql.Identifier(*guc_name.split(".")),
-                    sql.Literal(guc_val),
+                sql.SQL("SET LOCAL statement_timeout = {}").format(
+                    sql.Literal(statement_timeout)
                 )
             )
-        cur.execute(sql_stmt, params)
-        row = cur.fetchone()
+            # Custom-semiring wrappers commonly call `provenance_evaluate`
+            # unqualified (every case-study wrapper does), so pin `provsql` on
+            # the search_path the same way exec_batch does. Mirrors the
+            # composition rules: explicit Studio override otherwise the
+            # session default, with `provsql` appended when missing.
+            if (search_path or "").strip():
+                target_path = compose_search_path(search_path, "")
+            else:
+                cur.execute("SHOW search_path")
+                target_path = compose_search_path("", cur.fetchone()[0])
+            cur.execute(
+                "SELECT set_config('search_path', %s, true)",
+                (target_path,),
+            )
+            # Probability methods (compilation, wmc) and PROV-XML export
+            # may shell out to d4 / d4v2 / c2d / minic2d / dsharp / Panini /
+            # ganak / sharpsat-td / dmc / weightmc / graph-easy.
+            # provsql.tool_search_path lets the user point ProvSQL at a
+            # non-default install location for those binaries.
+            if (tool_search_path or "").strip():
+                cur.execute(
+                    "SELECT set_config('provsql.tool_search_path', %s, true)",
+                    (tool_search_path,),
+                )
+            # Panel-managed GUCs (provsql.rv_mc_samples,
+            # provsql.monte_carlo_seed, provsql.simplify_on_load, ...) must
+            # apply here too, otherwise the evaluate-strip's probability
+            # call ignores the user's panel overrides (e.g. setting
+            # rv_mc_samples=0 to disable the MC fallback still gets MC).
+            # exec_batch already does this for batched queries; mirror it.
+            for guc_name, guc_val in (extra_gucs or {}).items():
+                if guc_name not in _EXTRA_GUC_WHITELIST:
+                    continue
+                cur.execute(
+                    sql.SQL("SET LOCAL {} = {}").format(
+                        sql.Identifier(*guc_name.split(".")),
+                        sql.Literal(guc_val),
+                    )
+                )
+            # AFTER applying the user's runtime_gucs, ensure
+            # provsql.verbose_level is at least 5 so the eval-strip's
+            # probability calls surface the level-5 informational
+            # notices (e.g., "gate_cmp shortcut by probability-side
+            # pre-pass"). The user's own GUC still wins when it is
+            # *higher* than 5 (so verbose=100 keeps everything
+            # chatty), but a panel-configured silence (verbose=0)
+            # gets bumped up to 5 here.
+            cur.execute(
+                "SELECT set_config('provsql.verbose_level', "
+                "GREATEST(5, current_setting('provsql.verbose_level', true)::int)::text, true)"
+            )
+            cur.execute(sql_stmt, params)
+            row = cur.fetchone()
+        finally:
+            try:
+                conn.remove_notice_handler(_on_notice)
+            except Exception:
+                pass
     value = row[0] if row else None
     out = {
         "result": _to_jsonable(value),
         "kind": _result_kind(semiring),
     }
+    if notices:
+        out["notices"] = notices
     if semiring == "custom":
         out["function"] = function
         out["type_name"] = rettype

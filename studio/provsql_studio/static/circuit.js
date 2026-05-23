@@ -1441,7 +1441,7 @@
   const _PROB_ARG_CONTROL = {
     'monte-carlo': 'eval-args-mc',
     'compilation': 'eval-args-compiler',
-    'weightmc':    'eval-args-wmc',
+    'wmc':         'eval-args-wmc-tool',
   };
 
   // Build the "Compiled Semirings" sub-optgroups from the registry and
@@ -2128,6 +2128,15 @@
     }
     if (kind === 'kc-benchmark') {
       const rows = data.rows || [];
+      // Notices from any inner probability_evaluate are aggregated and
+      // returned at the response level (the SQL function doesn't know
+      // which row produced which notice). When present, surface them
+      // as a banner above the table — typically the "gate_cmp shortcut
+      // by ProvSQL's probability-side pre-pass" warning that tells
+      // the reader that the named methods may not have run on the
+      // full original formula.
+      const notices = Array.isArray(data.notices) ? data.notices : [];
+      const noticeHtml = notices.length ? renderEvalNotice(notices) : '';
       let body = '<table><thead><tr>'
         + '<th>method</th>'
         + '<th class="num">args</th>'
@@ -2145,7 +2154,7 @@
           + '</tr>';
       }
       body += '</tbody></table>';
-      resultEl.innerHTML = `<div class="cv-kc-panel">${body}</div>`;
+      resultEl.innerHTML = `<div class="cv-kc-panel">${noticeHtml}${body}</div>`;
       resultEl.dataset.kind = 'kc-benchmark';
       // Copy as TSV so users can paste it straight into a spreadsheet
       // or Markdown table without hand-cleanup.
@@ -2241,6 +2250,12 @@
     }
     if (bound)  bound.textContent  = '';
     if (time)   time.textContent   = '';
+    const notice = document.getElementById('eval-notice');
+    if (notice) {
+      notice.textContent = '';
+      notice.title = '';
+      notice.hidden = true;
+    }
     if (clear)  clear.hidden = true;
     if (copy)   copy.hidden  = true;
   }
@@ -2652,6 +2667,20 @@
           ? `${data.function} → ${data.type_name}`
           : `${data.kind} value`;
       }
+      }
+      // Surface any NOTICE messages the backend captured during this
+      // evaluation. ProvSQL emits one when its probability-side
+      // pre-pass shortcuts a gate_cmp before the requested method's
+      // tool ever sees it (so the reported method may have run on a
+      // pre-decided circuit). The notice block uses the same ProvSQL
+      // badge as error banners but with a warning icon + goldenrod
+      // background; rendered inline under the result chip.
+      if (!isKc && Array.isArray(data.notices) && data.notices.length) {
+        const notice = document.getElementById('eval-notice');
+        if (notice) {
+          notice.innerHTML = renderEvalNotice(data.notices);
+          notice.hidden = false;
+        }
       }
       // Monte-Carlo: append a Hoeffding-style 95% absolute-error bound
       // ε = sqrt(ln(2/α) / (2N))  (α = 0.05)
@@ -3469,6 +3498,25 @@
     return `<div class="wp-error">`
          + `<i class="fas fa-exclamation-circle"></i> `
          + `${badge}${escapeHtml(text)}${tail}`
+         + `</div>`;
+  }
+
+  // Notice variant of renderEvalError: same badge logic, but a warning
+  // icon + the goldenrod `cv-kc-notice` background instead of the
+  // crimson `wp-error`. Used for ProvSQL-side informational notices
+  // (level-5 verbose), notably the shortcut announcement when the
+  // probability-side pre-pass collapsed a gate_cmp.
+  function renderEvalNotice(messages) {
+    const list = Array.isArray(messages) ? messages : [messages];
+    const formatted = list.map(raw => {
+      const m = (raw || '').match(/^ProvSQL:\s*(.*)$/s);
+      const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
+      const text  = m ? m[1] : (raw || '');
+      return `${badge}${escapeHtml(text)}`;
+    }).join('<br>');
+    return `<div class="cv-kc-notice">`
+         + `<i class="fas fa-exclamation-triangle"></i> `
+         + `${formatted}`
          + `</div>`;
   }
 

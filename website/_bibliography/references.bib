@@ -433,10 +433,83 @@
     five through the 'panini-obdd' / 'panini-obdd-and' / 'panini-decdnnf'
     / 'panini-r2d2' / 'panini-ccdd' compiler options of
     @c probability_evaluate and the Studio compile dropdown. Decisions
-    on Tseytin-auxiliary variables in Panini's output are kept in the
-    translated d-DNNF using phantom (1, 1)-weight literals so that the
-    weighted model count over input variables matches the original
-    probability.},
+    on input variables are translated to the standard d-DNNF
+    @c OR(AND(v, t), AND(NOT v, f)) shape; decisions on Tseytin
+    auxiliaries are projected to @c OR(t, f) (the two branches have
+    disjoint input-support by Tseytin determinism, so the
+    input-projected OR stays sound under
+    @c dDNNF::probabilityEvaluation).},
+}
+
+@inproceedings{DBLP:conf/ijcai/SharmaRSM19,
+  author       = {Shubham Sharma and
+                  Subhajit Roy and
+                  Mate Soos and
+                  Kuldeep S. Meel},
+  title        = {{GANAK:} {A} Scalable Probabilistic Exact Model Counter},
+  booktitle    = {Proceedings of the Twenty-Eighth International Joint Conference on
+                  Artificial Intelligence, {IJCAI} 2019, Macao, China, August 10-16,
+                  2019},
+  pages        = {1169--1176},
+  publisher    = {ijcai.org},
+  year         = {2019},
+  doi          = {10.24963/IJCAI.2019/163},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces Ganak, an exact (probabilistically-cached)
+    model counter that won every track of the 2024 and 2025 Model
+    Counting Competitions. Ganak reads weighted DIMACS in the {MCC}
+    2024 format (@c "c p weight <lit> <w> 0" lines) and reports the
+    count on @c "c s exact ..." lines. ProvSQL invokes Ganak via
+    @c probability_evaluate(..., 'wmc', 'ganak'), with Tseytin'd CNF +
+    appended weight lines for each input gate.},
+}
+
+@inproceedings{DBLP:conf/cp/KorhonenJ21,
+  author       = {Tuukka Korhonen and
+                  Matti J{\"{a}}rvisalo},
+  title        = {Integrating Tree Decompositions into Decision Heuristics
+                  of Propositional Model Counters (Short Paper)},
+  booktitle    = {27th International Conference on Principles and Practice
+                  of Constraint Programming, {CP} 2021, Montpellier, France
+                  (Virtual Conference), October 25-29, 2021},
+  series       = {LIPIcs},
+  pages        = {8:1--8:11},
+  publisher    = {Schloss Dagstuhl - Leibniz-Zentrum f{\"{u}}r Informatik},
+  year         = {2021},
+  doi          = {10.4230/LIPICS.CP.2021.8},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces SharpSAT-TD: an exact (weighted) model counter
+    built on SharpSAT that uses tree-decomposition guided decision
+    heuristics. Conceptually parallel to ProvSQL's in-process
+    tree-decomposition d-DNNF builder, but as a stand-alone SOTA exact
+    counter. ProvSQL invokes it via @c probability_evaluate(..., 'wmc',
+    'sharpsat-td'), with the @c sharpsat-td and @c flow_cutter_pace17
+    binaries on @c PATH.},
+}
+
+@inproceedings{DBLP:conf/cp/DudekPV20,
+  author       = {Jeffrey M. Dudek and
+                  Vu H. N. Phan and
+                  Moshe Y. Vardi},
+  title        = {{DPMC:} Weighted Model Counting by Dynamic Programming on
+                  Project-Join Trees},
+  booktitle    = {Principles and Practice of Constraint Programming - 26th
+                  International Conference, {CP} 2020, Louvain-la-Neuve,
+                  Belgium, September 7-11, 2020, Proceedings},
+  series       = {Lecture Notes in Computer Science},
+  pages        = {211--230},
+  publisher    = {Springer},
+  year         = {2020},
+  doi          = {10.1007/978-3-030-58475-7\_13},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces DPMC: an exact weighted model counter that
+    runs as a two-stage pipeline. A planner (@c htb) produces a
+    project-join tree from the {CNF}; an executor (@c dmc) traverses
+    the tree using Algebraic Decision Diagrams ({ADDs}) to compute the
+    count. Algorithmically distinct from the search-based exact
+    counters (Ganak / SharpSAT-TD), giving the benchmark table a
+    third axis. ProvSQL exposes it via @c probability_evaluate(..., 'wmc',
+    'dpmc').},
 }
 
 % ---------------------------------------------------------------------------

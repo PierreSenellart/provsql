@@ -2418,6 +2418,21 @@ body.mode-where #sidebar {
 .cv-eval__time:empty,
 .cv-eval__bound:empty { display: none; }
 .cv-eval__bound { font-style: italic; }
+.cv-eval__notice {
+  margin-top: 0.4rem;
+}
+.cv-eval__notice:empty { display: none; }
+.cv-kc-notice {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--gold-700, #b16a00);
+  background: var(--gold-50, #fff8e6);
+  border-left: 3px solid var(--gold-500, #d49b00);
+  padding: 0.3rem 0.5rem;
+  margin-bottom: 0.4rem;
+  white-space: pre-wrap;
+  cursor: help;
+}
 /* Tiny dismiss button next to the result; revealed only after a run.
    Keeps the result row tidy when no value is shown. */
 /* Slim framed icon buttons : the visual matches sphinx-copybutton (the
