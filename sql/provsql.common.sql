@@ -3785,7 +3785,7 @@ CREATE OR REPLACE FUNCTION tree_decomposition_dot(
  * sharpsat-td / dpmc via htb+dmc / weightmc), and visualisation
  * wrappers (graph-easy, dot) themselves consult, so the result
  * reflects exactly what a subsequent @c probability_evaluate or
- * @c view_circuit call would see — including the
+ * @c view_circuit call would see, including the
  * @c provsql.tool_search_path GUC prepended to @c $PATH.
  *
  * Names with a slash are treated as paths and tested directly via
@@ -3855,7 +3855,6 @@ $$ LANGUAGE plpgsql;
  * @param monte_carlo_samples  Monte-Carlo sample count
  * @param weightmc_args        epsilon;delta forwarded to @c weightmc
  */
-DROP FUNCTION IF EXISTS probability_benchmark(UUID, INT, TEXT[]);
 CREATE OR REPLACE FUNCTION probability_benchmark(
   token UUID,
   monte_carlo_samples INT = 10000,
