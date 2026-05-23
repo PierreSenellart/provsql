@@ -1160,6 +1160,46 @@
     if (tip) li.title = tip;
   }
 
+  // Append the source relation/tuple of one "c input" CNF line, looked
+  // up via /api/leaf. Same shape as fetchBagInputRow; degrades silently
+  // to muted "anonymous" / "?" so one un-resolvable input does not blank
+  // the rest of the panel.
+  async function resolveCnfMapRow(el) {
+    const uuid = el.dataset.cnfUuid;
+    const slot = el.querySelector('.cv-kc-map__src');
+    if (!uuid || !slot) return;
+    let payload = null;
+    try {
+      const resp = await fetch(`/api/leaf/${encodeURIComponent(uuid)}`);
+      if (resp.ok) payload = await resp.json();
+    } catch {
+      slot.textContent = '?';
+      return;
+    }
+    const matches = (payload && payload.matches) || [];
+    if (!matches.length) {
+      slot.textContent = 'anonymous';
+      slot.classList.add('cv-kc-map__src--muted');
+      return;
+    }
+    const m = matches[0];
+    const values = Object.values(m.row || {});
+    let hint = m.relation;
+    if (values.length > 0) {
+      const head = values.slice(0, 2).map(v => v == null ? '' : String(v));
+      const more = values.length > 2 ? ', …' : '';
+      hint = `${m.relation}(${head.join(', ')}${more})`;
+    }
+    slot.textContent = hint;
+    const tip = matches.map(mm => {
+      const pairs = Object.entries(mm.row || {})
+        .map(([k, v]) => `${k}=${v == null ? '' : v}`)
+        .join(', ');
+      return `${mm.relation}${pairs ? ': ' + pairs : ''}`;
+    }).join('\n');
+    if (tip) el.title = tip;
+  }
+
   function replaceLeafBody(html) {
     // Replace the placeholder paragraph at the bottom of the inspector body.
     const ps = inspectorBody.querySelectorAll('p');
@@ -1549,7 +1589,7 @@
   // method, including ones that handle agg internally, and Studio
   // can't second-guess the wrapper's contract.
   const _AGG_INCOMPATIBLE_OPTIONS = new Set([
-    'probability', 'kc-cnf', 'kc-ddnnf', 'kc-td', 'kc-benchmark',
+    'probability', 'kc-cnf', 'kc-ddnnf', 'kc-nnf', 'kc-td', 'kc-benchmark',
   ]);
 
   // Lookup the gate type of the current eval target (pinned node, else
@@ -1877,18 +1917,18 @@
       // every method ProvSQL knows (one row per d4 / c2d / minic2d /
       // dsharp / tree-decomposition / independent / possible-worlds /
       // monte-carlo / weightmc). kc-cnf / kc-td take no args.
-      if (v === 'kc-ddnnf') {
+      if (v === 'kc-ddnnf' || v === 'kc-nnf') {
         wantedIds.add('eval-args-compiler');
       } else if (v === 'kc-benchmark') {
         wantedIds.add('eval-args-mc');
       }
-      // Compiler dropdown: only kc-ddnnf accepts the three in-process
-      // routes (tree-decomposition / interpret-as-dd / default).
-      // probability_evaluate's "compilation" method requires an
-      // external compiler, and kc-benchmark already includes
+      // Compiler dropdown: kc-ddnnf and kc-nnf accept the three
+      // in-process routes (tree-decomposition / interpret-as-dd /
+      // default) too. probability_evaluate's "compilation" method
+      // requires an external compiler, and kc-benchmark already includes
       // tree-decomposition / independent / monte-carlo as their own
       // rows so listing them under "compilers" would be confusing.
-      const compilerExtended = (v === 'kc-ddnnf');
+      const compilerExtended = (v === 'kc-ddnnf' || v === 'kc-nnf');
       const compilerEl = document.getElementById('eval-args-compiler');
       if (compilerEl) {
         for (const opt of compilerEl.querySelectorAll('option')) {
@@ -2234,6 +2274,10 @@
       const compiler = document.getElementById('eval-args-compiler')?.value || 'd4';
       return `/api/kc/ddnnf?token=${enc(token)}&compiler=${enc(compiler)}`;
     }
+    if (kind === 'kc-nnf') {
+      const compiler = document.getElementById('eval-args-compiler')?.value || 'd4';
+      return `/api/kc/nnf?token=${enc(token)}&compiler=${enc(compiler)}`;
+    }
     if (kind === 'kc-td') {
       return `/api/kc/td?token=${enc(token)}`;
     }
@@ -2254,9 +2298,14 @@
     'c2d':             'c2d',
     'minic2d':         'miniC2D',
     'dsharp':          'Dsharp',
-    'panini-obdd':     'Panini → OBDD',
-    'panini-obdd-and': 'Panini → OBDD[AND]',
-    'panini-decdnnf':  'Panini → Decision-DNNF',
+    // The target language is already shown in parentheses after the
+    // tool name (the cv-kc-class chip), so we keep just "Panini" here.
+    'panini-obdd':     'Panini',
+    'panini-obdd-and': 'Panini',
+    'panini-decdnnf':  'Panini',
+    // In-process route: abbreviated to keep the canvas subtitle short
+    // (the class chip already reads "(d-SDNNF)").
+    'tree-decomposition': 'tree-dec.',
   };
 
   const KC_CIRCUIT_CLASS = {
@@ -2280,11 +2329,51 @@
   function _renderKcInto(resultEl, kind, data) {
     if (kind === 'kc-cnf') {
       const cnf = data.cnf == null ? '' : String(data.cnf);
-      resultEl.innerHTML =
-        `<div class="cv-kc-panel"><pre>${escapeHtml(cnf)}</pre></div>`;
+      // Render the DIMACS as-is, but enrich each self-documenting
+      // "c input <var> <uuid> <prob>" comment line: the UUID becomes the
+      // standard short/full widget (global "Show UUIDs" toggle) and the
+      // input's source tuple, resolved via /api/leaf, is appended muted.
+      // The copy payload stays the raw DIMACS -- the tuple is a
+      // Studio-side lookup, not part of the CNF a counter consumes.
+      const CINPUT = /^c input (\d+) (\S+) (\S+)$/;
+      const body = cnf.split('\n').map(line => {
+        const m = line.match(CINPUT);
+        if (!m) return escapeHtml(line);
+        const [, varNo, uuid, prob] = m;
+        const known = uuid !== '?';
+        const uuidCell = known
+          ? `<span class="wp-uuid">`
+            + `<span class="wp-uuid__short">${escapeHtml(shortUuid(uuid))}</span>`
+            + `<span class="wp-uuid__full">${escapeHtml(uuid)}</span></span>`
+          : '?';
+        const tag = known ? ` data-cnf-uuid="${escapeHtml(uuid)}"` : '';
+        return `<span class="cv-kc-cinput"${tag}>c input ${escapeHtml(varNo)} `
+          + `${uuidCell} ${escapeHtml(prob)}`
+          + `  <span class="cv-kc-map__src"></span></span>`;
+      }).join('\n');
+      resultEl.innerHTML = `<div class="cv-kc-panel"><pre>${body}</pre></div>`;
       resultEl.dataset.kind = 'kc-cnf';
       resultEl.dataset.copy = cnf;
-      resultEl.title = 'Tseytin CNF (DIMACS), weighted';
+      resultEl.title = 'Tseytin CNF (DIMACS)'
+        + (data.weighted === false ? '' : ', weighted');
+      resultEl.querySelectorAll('span[data-cnf-uuid]')
+              .forEach(resolveCnfMapRow);
+      return;
+    }
+    if (kind === 'kc-nnf') {
+      // Compiled d-DNNF in c2d/d4 NNF text format. A plain text panel
+      // like the CNF one; the eval-strip copy button yields the .nnf so
+      // it can be fed to an external d-DNNF tool. Variable numbering
+      // matches the Tseytin CNF (same circuit), so a .cnf and a .nnf
+      // cross-reference.
+      const nnf = data.nnf == null ? '' : String(data.nnf);
+      const toolName = KC_TOOL_NAME[data.compiler] || data.compiler || '';
+      resultEl.innerHTML =
+        `<div class="cv-kc-panel"><pre>${escapeHtml(nnf)}</pre></div>`;
+      resultEl.dataset.kind = 'kc-nnf';
+      resultEl.dataset.copy = nnf;
+      resultEl.title = 'Compiled d-DNNF (NNF format)'
+        + (toolName ? `, ${toolName}` : '');
       return;
     }
     if (kind === 'kc-ddnnf') {
@@ -2302,8 +2391,18 @@
         ? ` (<span class="cv-kc-class" title="${escapeHtml(cls.full)}">`
           + `${escapeHtml(cls.abbr)}</span>)`
         : '';
+      // Size summary, derived from the parsed scene (no extra compile):
+      // gates, edges, and longest-path depth. Lets the reader compare
+      // what successive compilers produce on the same circuit; the
+      // full structural stats (smooth, treewidth, compile time) are a
+      // ddnnf_stats() call away, and the benchmark tabulates size
+      // across all methods at once.
+      const nGates = (scene.nodes || []).length;
+      const nEdges = (scene.edges || []).length;
+      const maxDepth = (scene.nodes || []).reduce(
+        (d, n) => Math.max(d, n.depth || 0), 0);
       scene.subtitle =
-        `${(scene.nodes || []).length} gates · `
+        `${nGates} gates · ${nEdges} edges · depth ${maxDepth} · `
         + `<strong>${escapeHtml(toolName)}</strong>${clsHtml}`;
       swapToKcScene(scene);
       return;
@@ -2334,7 +2433,16 @@
         + '<th class="num">args</th>'
         + '<th class="num">prob.</th>'
         + '<th class="num">time (ms)</th>'
+        + '<th class="num" title="compiled d-DNNF size: nodes / edges">'
+        + 'd-DNNF (n/e)</th>'
         + '<th></th></tr></thead><tbody>';
+      // d-DNNF size only applies to methods that build one
+      // (tree-decomposition, compilation-*); WMC / independent /
+      // possible-worlds / monte-carlo leave it null and render "–".
+      const sizeCell = r =>
+        (r.nodes == null && r.edges == null)
+          ? '–'
+          : `${r.nodes == null ? '?' : r.nodes} / ${r.edges == null ? '?' : r.edges}`;
       for (const r of rows) {
         const errHtml = r.error ? renderEvalError(r.error) : '';
         body += '<tr>'
@@ -2342,6 +2450,7 @@
           + `<td class="num">${escapeHtml(r.args ?? '')}</td>`
           + `<td class="num">${r.probability == null ? '–' : Number(r.probability).toFixed(4)}</td>`
           + `<td class="num">${r.milliseconds == null ? '–' : Number(r.milliseconds).toFixed(2)}</td>`
+          + `<td class="num">${escapeHtml(sizeCell(r))}</td>`
           + `<td>${errHtml}</td>`
           + '</tr>';
       }
@@ -2350,13 +2459,15 @@
       resultEl.dataset.kind = 'kc-benchmark';
       // Copy as TSV so users can paste it straight into a spreadsheet
       // or Markdown table without hand-cleanup.
-      const tsvHeader = 'method\targs\tprobability\tms\terror';
+      const tsvHeader = 'method\targs\tprobability\tms\tnodes\tedges\terror';
       const tsvBody = rows.map(r =>
         [
           r.method,
           r.args ?? '',
           r.probability == null ? '' : r.probability,
           r.milliseconds == null ? '' : r.milliseconds,
+          r.nodes == null ? '' : r.nodes,
+          r.edges == null ? '' : r.edges,
           r.error ?? '',
         ].join('\t')
       ).join('\n');

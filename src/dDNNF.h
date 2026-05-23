@@ -30,6 +30,7 @@
 #ifndef DDNNF_H
 #define DDNNF_H
 
+#include <functional>
 #include <string>
 #include <unordered_set>
 
@@ -215,6 +216,31 @@ double shapley(gate_t var) const;
 double banzhaf(gate_t var) const;
 
 /**
+ * @brief Structural statistics of a compiled d-DNNF.
+ *
+ * Counts are over the gates reachable from @c root. @c depth is the
+ * longest path (in gates) from the root; @c smooth is true iff every
+ * OR gate's children mention the same set of variables (the property
+ * @c makeSmooth() establishes, required by @c probabilityEvaluation).
+ */
+struct Stats {
+  std::size_t nodes = 0;      ///< Total reachable gates.
+  std::size_t edges = 0;      ///< Total wires among reachable gates.
+  std::size_t and_gates = 0;  ///< AND (decomposition) gates.
+  std::size_t or_gates = 0;   ///< OR (decision) gates.
+  std::size_t not_gates = 0;  ///< NOT gates.
+  std::size_t inputs = 0;     ///< IN (variable) leaves.
+  bool smooth = true;         ///< Every OR gate's children share their variable set.
+  int depth = 0;              ///< Longest path (in gates) from the root.
+};
+
+/**
+ * @brief Compute structural statistics over the gates reachable from @c root.
+ * @return Filled @c Stats.
+ */
+Stats nodeStats() const;
+
+/**
  * @brief Return a GraphViz DOT representation of the d-DNNF.
  *
  * Walks gates reachable from @c root and emits a @c digraph with one
@@ -226,6 +252,32 @@ double banzhaf(gate_t var) const;
  * @return DOT source as a string.
  */
 std::string toDot() const;
+
+/**
+ * @brief Serialise the d-DNNF in the c2d / d4 @c ".nnf" text format.
+ *
+ * Header @c "nnf <#nodes> <#edges> <#vars>", then one line per node in
+ * an order where children precede parents:
+ * - @c "L <lit>" --literal leaf: an IN gate is @c +var, a NOT over an
+ *   input is @c -var.
+ * - @c "A <k> <c1>..<ck>" --AND over @c k earlier nodes (@c "A 0" is
+ *   constant true).
+ * - @c "O <j> <k> <c1>..<ck>" --OR; @c j is the decision variable or
+ *   @c 0 when none is recorded. ProvSQL does not track it, so @c j is
+ *   always @c 0 (@c "O 0 0" is constant false).
+ *
+ * @param var_of_uuid optional map from an input's original-circuit UUID
+ *        to its variable index. When supplied, input variables use this
+ *        numbering (so a @c .nnf and the @c tseytin_cnf of the same
+ *        circuit cross-reference, even when an external compiler
+ *        renumbered the variables internally); a UUID it does not know,
+ *        or an empty callback, falls back to the d-DNNF's own gate id.
+ * @return NNF text.
+ * @throws CircuitException if a NOT gate is not directly over an input
+ *         (the circuit is then not in negation normal form).
+ */
+std::string toNNF(
+  const std::function<int(const std::string &)> &var_of_uuid = {}) const;
 
 friend dDNNFTreeDecompositionBuilder; ///< Allowed to construct and populate this d-DNNF
 friend dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const; ///< Allowed to access internal d-DNNF state

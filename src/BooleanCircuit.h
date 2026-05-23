@@ -341,6 +341,28 @@ dDNNF interpretAsDD(gate_t g) const;
  */
 dDNNF makeDD(gate_t g, const std::string &method, const std::string &args) const;
 
+/**
+ * @brief Build a @c dDNNF from a single compiler/route name.
+ *
+ * Resolves the name the way a user (or Studio) thinks of it, with no
+ * separate @c method / @c args split:
+ * - the in-process meta-routes @c "tree-decomposition",
+ *   @c "interpret-as-dd", @c "default" (and the empty string) go
+ *   through @c makeDD;
+ * - any other name is an external compiler (@c "d4", @c "d4v2",
+ *   @c "c2d", @c "minic2d", @c "dsharp", @c "panini-*") and is passed
+ *   straight to @c compilation.
+ *
+ * This is the single dispatch point shared by @c compile_to_ddnnf_dot,
+ * @c compile_to_ddnnf (NNF) and @c ddnnf_stats, so they cannot drift on
+ * which names they accept.
+ *
+ * @param g     Root gate.
+ * @param name  Compiler or meta-route name.
+ * @return      The constructed @c dDNNF.
+ */
+dDNNF makeDDByName(gate_t g, const std::string &name) const;
+
 /** @copydoc Circuit::toString() */
 virtual std::string toString(gate_t g) const override;
 
@@ -407,9 +429,37 @@ std::string exportCircuit(gate_t g) const;
  * @param g            Root gate.
  * @param display_prob Include @c w lines listing each input's
  *                     probability (and its complement).
+ * @param mapping      Prepend @c "c input <var> <uuid> <prob>" comment
+ *                     lines, one per input gate, so the emitted DIMACS
+ *                     is self-documenting (the comments are ignored by
+ *                     every model counter / compiler).
  * @return             DIMACS CNF as a string.
  */
-std::string TseytinCNF(gate_t g, bool display_prob) const;
+std::string TseytinCNF(gate_t g, bool display_prob, bool mapping = false) const;
+
+/**
+ * @brief One row of the Tseytin variable mapping.
+ *
+ * Ties a DIMACS variable index back to the provenance input it stands
+ * for, so an external model count / satisfying assignment can be read
+ * against the original circuit.
+ */
+struct CNFInputMapping {
+  int variable;        ///< DIMACS variable index (= gate id + 1).
+  std::string uuid;    ///< Original-circuit UUID (empty if unknown).
+  double probability;  ///< Probability assigned to the input gate.
+};
+
+/**
+ * @brief Map each input gate to its DIMACS variable, UUID, probability.
+ *
+ * The variable numbering matches @c TseytinCNF (and @c dDNNF::toNNF):
+ * variable = gate id + 1. Inputs are listed in gate-id order so the
+ * mapping is deterministic.
+ *
+ * @return One @c CNFInputMapping per input gate.
+ */
+std::vector<CNFInputMapping> tseytinVariableMapping() const;
 
 /**
  * @brief Compile via Panini (from KCBox) and return the result as a

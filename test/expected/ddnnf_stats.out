@@ -1,0 +1,10 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+stats
+{"or": 0, "and": 2, "not": 0, "depth": 2, "edges": 4, "nodes": 5, "inputs": 3, "smooth": true, "compiler": "tree-decomposition", "treewidth": 1}
+(1 row)
+has_compile_ms|compile_ms_nonneg
+t|t
+(1 row)

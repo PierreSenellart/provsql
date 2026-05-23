@@ -77,6 +77,48 @@ weights separately:
     SELECT tseytin_cnf(provenance(), weighted => false)
     FROM suspects WHERE id = 1;
 
+Reading a model back: the variable mapping
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A DIMACS variable is just an integer, so a satisfying assignment or
+weighted count returned by an external tool is meaningless until you
+know which provenance input each variable stands for. By default
+:sqlfunc:`tseytin_cnf` makes the CNF self-documenting: it prepends one
+``c input`` comment line per input variable, recording its UUID and
+probability::
+
+    c input 1 7f3a2b1c-… 0.5
+    c input 2 9b2c4d5e-… 0.6
+    p cnf 6 7
+    -4 0
+    ...
+
+Model counters and compilers ignore ``c`` comment lines, so the file
+stays valid DIMACS; pass ``mapping => false`` to omit them. Only input
+variables appear (the auxiliary Tseytin variables, one per gate, are
+not provenance inputs).
+
+The same information is available as a table through
+:sqlfunc:`tseytin_cnf_mapping`, which is what you want when reading a
+tool's output back programmatically. Like :sqlfunc:`probability_benchmark`
+it is a set-returning function, so run it with the rewriter standing
+back (``provsql.active`` off, or on a token materialised in a plain
+table):
+
+.. code-block:: postgresql
+
+    SET provsql.active = off;
+    SELECT * FROM tseytin_cnf_mapping(
+      '00000000-0000-0000-0000-000000000000');
+    SET provsql.active = on;
+
+The ``variable`` column matches the DIMACS numbering, ``gate`` is the
+original-circuit input UUID, and ``probability`` its weight. In ProvSQL
+Studio, the Tseytin CNF panel goes one step further and annotates each
+``c input`` line with the *source tuple* the variable came from
+(resolved from the tracked relations), so you can see at a glance that,
+say, variable 3 is ``suspects(5, …)``.
+
 From CNF to d-DNNF
 ------------------
 
@@ -147,6 +189,65 @@ query, compiled by different tools, yields different d-DNNFs for the
 same Boolean function: comparing their size and sharing is instructive,
 and is one of the things the Studio knowledge-compilation panel makes
 visual.
+
+Exporting the d-DNNF as text
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:sqlfunc:`compile_to_ddnnf_dot` is for the eye. To get the compiled
+circuit as a machine-readable artifact -- to feed it to an external
+d-DNNF reasoner or verifier, or to archive it -- :sqlfunc:`compile_to_ddnnf`
+returns the same circuit in the standard c2d / d4 ``.nnf`` text format:
+
+.. code-block:: postgresql
+
+    SELECT compile_to_ddnnf(provenance(), 'd4')
+    FROM suspects WHERE id = 1;
+
+The output opens with an ``nnf <#nodes> <#edges> <#vars>`` header, then
+one line per node: ``L <lit>`` for a literal leaf, ``A <k> …`` for an
+AND over ``k`` earlier nodes, ``O <j> <k> …`` for an OR (``j`` is the
+decision variable, ``0`` when ProvSQL records none). It accepts the same
+compiler / meta-route names as :sqlfunc:`compile_to_ddnnf_dot`.
+
+The literal variables use the **same numbering as**
+:sqlfunc:`tseytin_cnf`, even when an external compiler renumbered them
+internally, so a ``.cnf`` and a ``.nnf`` of the same circuit
+cross-reference and :sqlfunc:`tseytin_cnf_mapping` interprets both. In
+Studio the *Compiled d-D (NNF text)* eval-strip option shows the NNF and
+the copy button yields it verbatim.
+
+Measuring the compiled d-DNNF
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To make that comparison quantitative rather than visual,
+:sqlfunc:`ddnnf_stats` returns the structural statistics of the d-DNNF a
+given compiler produces, as a jsonb object:
+
+.. code-block:: postgresql
+
+    SELECT jsonb_pretty(ddnnf_stats(provenance(), 'd4'))
+    FROM suspects WHERE id = 1;
+
+The object reports ``nodes`` and ``edges``, the ``and`` / ``or`` /
+``not`` / ``inputs`` gate-type split, whether the result is ``smooth``
+(every OR gate's children share their variable set), the longest-path
+``depth``, the circuit ``treewidth`` (``null`` when it exceeds the
+supported limit), and the ``compile_ms`` wall-clock compile time. It
+accepts the same compiler names as :sqlfunc:`compile_to_ddnnf_dot`,
+including the in-process ``tree-decomposition`` route, so a single
+string change re-measures a different compiler on the same circuit::
+
+    {
+        "and": 3, "or": 4, "not": 0, "inputs": 5,
+        "nodes": 12, "edges": 14, "depth": 6,
+        "smooth": true, "treewidth": 3,
+        "compiler": "d4", "compile_ms": 1.83
+    }
+
+In Studio, the compiled-d-DNNF canvas shows a gates / edges / depth
+summary in its subtitle, and the probability benchmark (below) adds a
+``d-DNNF (n/e)`` column so the size of every compiler's output sits
+beside its run time in one table.
 
 The in-process route: tree decomposition
 -----------------------------------------

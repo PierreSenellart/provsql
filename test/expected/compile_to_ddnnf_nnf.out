@@ -1,0 +1,16 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+nnf
+nnf 5 4 3
+L 1
+L 3
+L 2
+A 2 1 2
+A 2 0 3
+
+(1 row)
+cnf_variables
+{1,2,3}
+(1 row)

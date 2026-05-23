@@ -98,6 +98,15 @@ def test_benchmark_filters_missing_tools(app, monkeypatch):
     ):
         assert absent not in method_args, f"row for missing tool slipped through: {absent}"
 
+    # d-DNNF-producing methods carry a size (nodes / edges); methods that
+    # build no d-DNNF leave both null.
+    by_key = {(r["method"], r["args"]): r for r in out["rows"]}
+    td = by_key[("tree-decomposition", None)]
+    assert td["error"] is None
+    assert td["nodes"] is not None and td["edges"] is not None
+    ind = by_key[("independent", None)]
+    assert ind["nodes"] is None and ind["edges"] is None
+
 
 def test_tool_available_sql_function(app):
     """The C-side provsql.tool_available agrees with the registered
@@ -138,7 +147,12 @@ def test_kc_cnf_happy_path(client, personnel_token):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["weighted"] is True
-    assert data["cnf"].startswith("p cnf")
+    # The panel CNF is self-documenting: "c input <var> <uuid> <prob>"
+    # comment lines travel with the text so a copied DIMACS carries the
+    # variable mapping (the panel parses them to annotate source tuples;
+    # psql users get the same via provsql.tseytin_cnf_mapping).
+    assert data["cnf"].lstrip().startswith(("c input", "p cnf"))
+    assert "c input" in data["cnf"]
     resp = client.get(f"/api/kc/cnf?token={personnel_token}&weighted=false")
     assert resp.status_code == 200
     assert resp.get_json()["weighted"] is False
@@ -173,6 +187,41 @@ def test_kc_ddnnf_returns_501_for_missing_compiler(client, personnel_token, monk
     assert resp.status_code == 501
     data = resp.get_json()
     assert "d4" in data["missing_tools"]
+
+
+def test_kc_nnf_rejects_invalid_uuid(client):
+    resp = client.get("/api/kc/nnf?token=not-a-uuid&compiler=tree-decomposition")
+    assert resp.status_code == 400
+
+
+def test_kc_nnf_rejects_unknown_compiler(client, personnel_token):
+    resp = client.get(
+        f"/api/kc/nnf?token={personnel_token}&compiler=not-a-real-compiler"
+    )
+    assert resp.status_code == 400
+    assert "unknown compiler" in resp.get_json()["error"]
+
+
+def test_kc_nnf_happy_path(client, personnel_token):
+    # tree-decomposition needs no external tool, so this is deterministic.
+    resp = client.get(
+        f"/api/kc/nnf?token={personnel_token}&compiler=tree-decomposition"
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["compiler"] == "tree-decomposition"
+    assert data["nnf"].startswith("nnf ")
+
+
+def test_kc_nnf_returns_501_for_missing_compiler(client, personnel_token, monkeypatch):
+    from provsql_studio import kc
+    monkeypatch.setattr(
+        kc, "missing_tools_for_compiler",
+        lambda pool, compiler: ("d4",),
+    )
+    resp = client.get(f"/api/kc/nnf?token={personnel_token}&compiler=d4")
+    assert resp.status_code == 501
+    assert "d4" in resp.get_json()["missing_tools"]
 
 
 def test_kc_td_returns_501_when_dot_missing(client, personnel_token, monkeypatch):

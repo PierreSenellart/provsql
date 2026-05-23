@@ -1,0 +1,15 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+variable|probability|has_uuid
+1|0.5|t
+2|0.6|t
+3|0.7|t
+(3 rows)
+default_has_mapping|nomap_has_mapping
+t|f
+(1 row)
+mapping_rows|min_p|max_p
+3|0.5|0.7
+(1 row)

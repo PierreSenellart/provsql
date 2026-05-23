@@ -56,25 +56,13 @@ Datum compile_to_ddnnf_dot(PG_FUNCTION_ARGS)
     BooleanCircuit c = getBooleanCircuit(*token, root);
     c.rewriteMultivaluedGates();
 
-    // The compiler argument selects how the d-D circuit is obtained.
-    // Beyond the external compilers handled by `compilation()`
-    // (d4 / c2d / minic2d / dsharp / panini-*), three in-process
-    // routes are available, all dispatched through `makeDD`:
-    //   * "tree-decomposition" : min-fill TD + d-DNNF construction
-    //     (dDNNFTreeDecompositionBuilder).
-    //   * "interpret-as-dd"    : direct reading of the Boolean circuit
-    //     as a d-D, when its structure already satisfies decomposability
-    //     + determinism (no compilation; possibly non-NNF).
-    //   * "default" (or "")    : the makeDD fallback chain
-    //     (interpretAsDD then tree-decomposition then d4).
-    dDNNF d;
-    if (compiler == "tree-decomposition"
-        || compiler == "interpret-as-dd"
-        || compiler == "default") {
-      d = c.makeDD(root, compiler == "default" ? std::string() : compiler, "");
-    } else {
-      d = c.compilation(root, compiler);
-    }
+    // The compiler argument selects how the d-D circuit is obtained:
+    // an external compiler (d4 / d4v2 / c2d / minic2d / dsharp /
+    // panini-*) or one of the in-process meta-routes
+    // ("tree-decomposition", "interpret-as-dd", "default"). The single
+    // dispatch point makeDDByName resolves both, shared with
+    // compile_to_ddnnf (NNF) and ddnnf_stats so they cannot drift.
+    dDNNF d = c.makeDDByName(root, compiler);
     string dot = d.toDot();
 
     text *result = (text *) palloc(VARHDRSZ + dot.size());

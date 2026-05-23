@@ -337,10 +337,13 @@ def _td_scene_from_dot(dot_src: str, treewidth: int | None, *, original_token: s
     return out
 
 
-def tseytin_cnf(pool: ConnectionPool, token: str, weighted: bool) -> str:
+def tseytin_cnf(
+    pool: ConnectionPool, token: str, weighted: bool, mapping: bool = False,
+) -> str:
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT provsql.tseytin_cnf(%s::uuid, %s)", (token, weighted),
+            "SELECT provsql.tseytin_cnf(%s::uuid, %s, %s)",
+            (token, weighted, mapping),
         )
         (cnf,) = cur.fetchone()
     return cnf
@@ -364,6 +367,22 @@ def compile_to_ddnnf(pool: ConnectionPool, token: str, compiler: str) -> dict:
         "dot": dot,
         "scene": _ddnnf_scene_from_dot(dot, original_token=token),
     }
+
+
+def compile_to_ddnnf_nnf(pool: ConnectionPool, token: str, compiler: str) -> str:
+    """Return the compiled d-DNNF as c2d/d4 ".nnf" text.
+
+    The text companion to ``compile_to_ddnnf`` (which returns DOT for the
+    canvas): this is the machine-readable interchange form, with variable
+    numbering matching ``tseytin_cnf``.
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT provsql.compile_to_ddnnf(%s::uuid, %s)",
+            (token, compiler),
+        )
+        (nnf,) = cur.fetchone()
+    return nnf
 
 
 def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
@@ -687,11 +706,40 @@ def probability_benchmark(
                             or str(e).strip()
                         error = msg.splitlines()[0] if msg else "unknown error"
                     ms = (time.perf_counter() - t0) * 1000.0
+                    # For methods that build a d-DNNF, attach its size so
+                    # the table compares structure alongside time. Done
+                    # AFTER the timer (a second compile via ddnnf_stats)
+                    # so it never inflates the reported milliseconds.
+                    nodes = edges = None
+                    if error is None:
+                        compiler = None
+                        if method == "tree-decomposition":
+                            compiler = "tree-decomposition"
+                        elif method == "compilation":
+                            compiler = call_args
+                        if compiler is not None:
+                            try:
+                                with conn.transaction():
+                                    with conn.cursor() as cur:
+                                        cur.execute(
+                                            sql.SQL("SET LOCAL statement_timeout = {}")
+                                            .format(sql.Literal(statement_timeout)))
+                                        cur.execute(
+                                            "SELECT provsql.ddnnf_stats(%s::uuid, %s)",
+                                            (token, compiler))
+                                        st = cur.fetchone()[0]
+                                if st:
+                                    nodes = st.get("nodes")
+                                    edges = st.get("edges")
+                            except (psycopg.Error, KeyError, TypeError):
+                                pass
                     rows.append({
                         "method": method,
                         "args": call_args,
                         "probability": probability,
                         "milliseconds": ms,
+                        "nodes": nodes,
+                        "edges": edges,
                         "error": error,
                     })
         finally:

@@ -60,6 +60,9 @@ for func, url in sorted(sql_map_entries.items()):
 
 # 6. Check: every Doxygen SQL function is in the map (or explicitly excluded)
 INTERNAL_FUNCTIONS = {
+    # jsonb backing function for the tseytin_cnf_mapping SRF; users call
+    # tseytin_cnf_mapping (which is in _SQL_FUNC_MAP), not this directly.
+    'tseytin_cnf_mapping_json',
     # Triggers
     'insert_statement_trigger',
     'update_statement_trigger', 'delete_statement_trigger',

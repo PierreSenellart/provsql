@@ -1759,6 +1759,7 @@
             <optgroup label="Knowledge compilation">
               <option value="kc-cnf">Tseytin CNF</option>
               <option value="kc-ddnnf">Compiled d-D circuit</option>
+              <option value="kc-nnf">Compiled d-D (NNF text)</option>
               <option value="kc-td">Tree decomposition</option>
             </optgroup>
             <optgroup label="Other">
