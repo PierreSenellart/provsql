@@ -421,6 +421,72 @@ std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob) const {
   return oss.str();
 }
 
+std::string BooleanCircuit::toBC(gate_t g, bool display_prob) const {
+  // BC-S1.2 native circuit format read by d4v2 with --input-type=circuit.
+  // Gates emitted in gate-index order and named "g<i>" (letter-prefixed,
+  // since d4v2's BC parser interprets bare numeric names ambiguously and
+  // crashes on circuits with more than a handful of pure-numeric vars).
+  // The order-by-index emit keeps d4v2's LitNameMap mapping
+  // "g<i>" -> var (i+1), matching what our NNF parser then dereferences
+  // as gates[var-1].
+  std::ostringstream oss;
+  oss << "c BC-S1.2\n";
+
+  auto name = [](gate_t i) {
+    return std::string("g") +
+           std::to_string(static_cast<std::underlying_type<gate_t>::type>(i));
+  };
+
+  // Inputs first.
+  for(gate_t i{0}; i<gates.size(); ++i) {
+    if(getGateType(i) == BooleanGate::IN) {
+      oss << "I " << name(i) << "\n";
+    }
+  }
+
+  // Gate definitions in index order (AND/OR/NOT).
+  for(gate_t i{0}; i<gates.size(); ++i) {
+    switch(getGateType(i)) {
+    case BooleanGate::AND:
+      oss << "G " << name(i) << " := A";
+      for(auto child : getWires(i))
+        oss << " " << name(child);
+      oss << "\n";
+      break;
+    case BooleanGate::OR:
+      oss << "G " << name(i) << " := O";
+      for(auto child : getWires(i))
+        oss << " " << name(child);
+      oss << "\n";
+      break;
+    case BooleanGate::NOT:
+      oss << "G " << name(i) << " := I -"
+          << name(*getWires(i).begin()) << "\n";
+      break;
+    case BooleanGate::MULIN:
+      throw CircuitException("Multivalued inputs should have been removed by then.");
+    case BooleanGate::MULVAR:
+    case BooleanGate::IN:
+    case BooleanGate::UNDETERMINED:
+      // Inputs already emitted above; MULVAR/UNDETERMINED skipped.
+      ;
+    }
+  }
+
+  // Target gate (root of the sub-circuit we want compiled).
+  oss << "T " << name(g) << "\n";
+
+  // Weights (in BC-S1.2, weight lines are `c w <name> <weight>` comments).
+  if(display_prob) {
+    for(gate_t in : inputs) {
+      oss << "c w "  << name(in)  << " " << getProb(in)        << "\n";
+      oss << "c w -" << name(in)  << " " << (1.0 - getProb(in))<< "\n";
+    }
+  }
+
+  return oss.str();
+}
+
 std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   // Use a private 0700 directory rather than a bare mkstemp file so the
   // sibling output paths (.nnf / .out, derived deterministically from
@@ -449,6 +515,16 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string cmdline=compiler+" ";
   if(compiler=="d4") {
     cmdline+="-dDNNF "+filename+" -out="+outfilename;
+    new_d4 = true;
+  } else if(compiler=="d4v2") {
+    // d4v2 (crillab/d4v2): rewritten d4 with library-first architecture
+    // and tree-decomposition-guided branching by default. We feed it
+    // the same Tseytin CNF the other compilers use; its --input-type
+    // circuit mode (BC-S1.2) would in principle let us skip Tseytin,
+    // but d4v2's BC parser ignores `I` declarations (TODO in upstream)
+    // so the resulting variable numbering does not match our gate
+    // indices and the parser cannot map decisions back to inputs.
+    cmdline+="-i "+filename+" --dump-file "+outfilename;
     new_d4 = true;
   } else if(compiler=="c2d") {
     cmdline+="-in "+filename+" -silent";
@@ -540,9 +616,11 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   getline(ifs,line);
 
   if(line.rfind("nnf", 0) != 0) {
-    // New d4 does not include this magic line
+    // New d4 / d4v2 do not include this magic line; any other compiler
+    // that omits it has produced an unsatisfiable formula (its NNF file
+    // is empty, so we get end-of-stream here).
 
-    if(compiler != "d4") {
+    if(compiler != "d4" && compiler != "d4v2") {
       // unsatisfiable formula
       return dDNNF();
     }
@@ -628,7 +706,12 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       while(ss >> decision) {
         if(decision==0)
           break;
-        if(gates[abs(decision)-1]==BooleanGate::IN)
+        // d4v2 may introduce internal Tseytin aux variables beyond
+        // our gate count when given a circuit input. They appear as
+        // decision literals on edges; treat them as non-IN (skipped),
+        // matching how we handle the auxiliaries from our own Tseytin.
+        size_t idx = static_cast<size_t>(abs(decision)) - 1;
+        if(idx < gates.size() && gates[idx]==BooleanGate::IN)
           decisions.push_back(decision);
       }
 

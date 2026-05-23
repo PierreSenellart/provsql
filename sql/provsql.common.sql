@@ -3848,6 +3848,7 @@ BEGIN
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
     token, 'monte-carlo', monte_carlo_samples::text);
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'd4');
+  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'd4v2');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'c2d');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'minic2d');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'dsharp');

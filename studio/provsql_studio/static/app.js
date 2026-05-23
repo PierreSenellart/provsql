@@ -1683,8 +1683,9 @@
                  min="1" step="1" placeholder="samples" value="10000"
                  autocomplete="off" title="Monte-Carlo sample count">
           <select class="cv-eval__args" id="eval-args-compiler" hidden
-                  title="How to obtain the d-D circuit: an external compiler (d4 / c2d / minic2d / dsharp), the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → d4)">
+                  title="How to obtain the d-D circuit: an external compiler (d4 / d4v2 / c2d / minic2d / dsharp), the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → d4)">
             <option value="d4">d4</option>
+            <option value="d4v2">d4v2</option>
             <option value="c2d">c2d</option>
             <option value="minic2d">minic2d</option>
             <option value="dsharp">dsharp</option>

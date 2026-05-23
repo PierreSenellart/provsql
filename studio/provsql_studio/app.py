@@ -650,7 +650,7 @@ def create_app(
 
     _KC_COMPILERS_WHITELIST = {
         # External knowledge compilers (`BooleanCircuit::compilation`).
-        "d4", "c2d", "minic2d", "dsharp",
+        "d4", "d4v2", "c2d", "minic2d", "dsharp",
         # In-process: min-fill TD + dDNNFTreeDecompositionBuilder.
         "tree-decomposition",
         # In-process: direct reading of the Boolean circuit as a d-D

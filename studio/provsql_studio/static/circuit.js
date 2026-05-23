@@ -2033,6 +2033,7 @@
   // label rendered next to the tool; full is the tooltip.
   const KC_CIRCUIT_CLASS = {
     'd4':                 { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
+    'd4v2':               { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
     'c2d':                { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
     'minic2d':            { abbr: 'SDD',      full: 'sentential decision diagram' },
     'dsharp':             { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
