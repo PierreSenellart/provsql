@@ -69,7 +69,7 @@ test: large_circuit
 
 # Knowledge-compilation demo helpers (DOT/CNF surfaces +
 # probability_benchmark)
-test: tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 probability_benchmark tool_available circuit_subgraph_depth fallback_compiler_guc
+test: tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 ddnnf_stats probability_benchmark tool_available circuit_subgraph_depth fallback_compiler_guc
 
 # Expected Shapley and Banzhaf value computation
 test: shapley

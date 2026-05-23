@@ -98,6 +98,15 @@ def test_benchmark_filters_missing_tools(app, monkeypatch):
     ):
         assert absent not in method_args, f"row for missing tool slipped through: {absent}"
 
+    # d-DNNF-producing methods carry a size (nodes / edges); methods that
+    # build no d-DNNF leave both null.
+    by_key = {(r["method"], r["args"]): r for r in out["rows"]}
+    td = by_key[("tree-decomposition", None)]
+    assert td["error"] is None
+    assert td["nodes"] is not None and td["edges"] is not None
+    ind = by_key[("independent", None)]
+    assert ind["nodes"] is None and ind["edges"] is None
+
 
 def test_tool_available_sql_function(app):
     """The C-side provsql.tool_available agrees with the registered

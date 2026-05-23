@@ -25,6 +25,7 @@
 #include <variant>
 #include <cassert>
 #include <algorithm>
+#include <functional>
 #include <numeric>
 #include <sstream>
 #include <iomanip>
@@ -731,6 +732,73 @@ void dDNNF::simplify() {
   for(auto &w: wires)
     for(size_t i=0; i<w.size(); ++i)
       w[i]=relabel[static_cast<size_t>(w[i])];
+}
+
+dDNNF::Stats dDNNF::nodeStats() const
+{
+  Stats s;
+
+  // Reachable gates from the root (same traversal as toDot).
+  std::set<gate_t> seen;
+  {
+    std::stack<gate_t> stk;
+    stk.push(root);
+    while(!stk.empty()) {
+      gate_t g = stk.top();
+      stk.pop();
+      if(seen.count(g))
+        continue;
+      seen.insert(g);
+      if(getGateType(g) == BooleanGate::UNDETERMINED)
+        continue;
+      for(auto c : getWires(g))
+        stk.push(c);
+    }
+  }
+
+  for(gate_t g : seen) {
+    auto type = getGateType(g);
+    if(type == BooleanGate::UNDETERMINED)
+      continue;
+    ++s.nodes;
+    switch(type) {
+    case BooleanGate::AND: ++s.and_gates; break;
+    case BooleanGate::OR:  ++s.or_gates;  break;
+    case BooleanGate::NOT: ++s.not_gates; break;
+    case BooleanGate::IN:  ++s.inputs;    break;
+    default: break;
+    }
+    for(gate_t c : getWires(g))
+      if(seen.count(c))
+        ++s.edges;
+    // Smoothness: every OR gate's children must mention the same set of
+    // variables.  Cheap enough for an introspection call (vars() is a
+    // reachability set per child).
+    if(type == BooleanGate::OR && s.smooth) {
+      const auto &children = getWires(g);
+      for(std::size_t i = 1; i < children.size() && s.smooth; ++i)
+        if(vars(children[i]) != vars(children[0]))
+          s.smooth = false;
+    }
+  }
+
+  // Longest path (in gates) from the root over the reachable DAG,
+  // memoised: depth(g) = 0 for a leaf, else 1 + max child depth.
+  std::unordered_map<gate_t, int, hash_gate_t> depth;
+  std::function<int(gate_t)> longest = [&](gate_t g) -> int {
+    auto it = depth.find(g);
+    if(it != depth.end())
+      return it->second;
+    int d = 0;
+    for(gate_t c : getWires(g))
+      if(seen.count(c))
+        d = std::max(d, 1 + longest(c));
+    depth[g] = d;
+    return d;
+  };
+  s.depth = seen.empty() ? 0 : longest(root);
+
+  return s;
 }
 
 std::string dDNNF::toDot() const

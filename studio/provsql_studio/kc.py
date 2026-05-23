@@ -690,11 +690,40 @@ def probability_benchmark(
                             or str(e).strip()
                         error = msg.splitlines()[0] if msg else "unknown error"
                     ms = (time.perf_counter() - t0) * 1000.0
+                    # For methods that build a d-DNNF, attach its size so
+                    # the table compares structure alongside time. Done
+                    # AFTER the timer (a second compile via ddnnf_stats)
+                    # so it never inflates the reported milliseconds.
+                    nodes = edges = None
+                    if error is None:
+                        compiler = None
+                        if method == "tree-decomposition":
+                            compiler = "tree-decomposition"
+                        elif method == "compilation":
+                            compiler = call_args
+                        if compiler is not None:
+                            try:
+                                with conn.transaction():
+                                    with conn.cursor() as cur:
+                                        cur.execute(
+                                            sql.SQL("SET LOCAL statement_timeout = {}")
+                                            .format(sql.Literal(statement_timeout)))
+                                        cur.execute(
+                                            "SELECT provsql.ddnnf_stats(%s::uuid, %s)",
+                                            (token, compiler))
+                                        st = cur.fetchone()[0]
+                                if st:
+                                    nodes = st.get("nodes")
+                                    edges = st.get("edges")
+                            except (psycopg.Error, KeyError, TypeError):
+                                pass
                     rows.append({
                         "method": method,
                         "args": call_args,
                         "probability": probability,
                         "milliseconds": ms,
+                        "nodes": nodes,
+                        "edges": edges,
                         "error": error,
                     })
         finally:

@@ -215,6 +215,31 @@ double shapley(gate_t var) const;
 double banzhaf(gate_t var) const;
 
 /**
+ * @brief Structural statistics of a compiled d-DNNF.
+ *
+ * Counts are over the gates reachable from @c root. @c depth is the
+ * longest path (in gates) from the root; @c smooth is true iff every
+ * OR gate's children mention the same set of variables (the property
+ * @c makeSmooth() establishes, required by @c probabilityEvaluation).
+ */
+struct Stats {
+  std::size_t nodes = 0;      ///< Total reachable gates.
+  std::size_t edges = 0;      ///< Total wires among reachable gates.
+  std::size_t and_gates = 0;  ///< AND (decomposition) gates.
+  std::size_t or_gates = 0;   ///< OR (decision) gates.
+  std::size_t not_gates = 0;  ///< NOT gates.
+  std::size_t inputs = 0;     ///< IN (variable) leaves.
+  bool smooth = true;         ///< Every OR gate's children share their variable set.
+  int depth = 0;              ///< Longest path (in gates) from the root.
+};
+
+/**
+ * @brief Compute structural statistics over the gates reachable from @c root.
+ * @return Filled @c Stats.
+ */
+Stats nodeStats() const;
+
+/**
  * @brief Return a GraphViz DOT representation of the d-DNNF.
  *
  * Walks gates reachable from @c root and emits a @c digraph with one

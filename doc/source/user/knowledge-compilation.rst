@@ -190,6 +190,39 @@ same Boolean function: comparing their size and sharing is instructive,
 and is one of the things the Studio knowledge-compilation panel makes
 visual.
 
+Measuring the compiled d-DNNF
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To make that comparison quantitative rather than visual,
+:sqlfunc:`ddnnf_stats` returns the structural statistics of the d-DNNF a
+given compiler produces, as a jsonb object:
+
+.. code-block:: postgresql
+
+    SELECT jsonb_pretty(ddnnf_stats(provenance(), 'd4'))
+    FROM suspects WHERE id = 1;
+
+The object reports ``nodes`` and ``edges``, the ``and`` / ``or`` /
+``not`` / ``inputs`` gate-type split, whether the result is ``smooth``
+(every OR gate's children share their variable set), the longest-path
+``depth``, the circuit ``treewidth`` (``null`` when it exceeds the
+supported limit), and the ``compile_ms`` wall-clock compile time. It
+accepts the same compiler names as :sqlfunc:`compile_to_ddnnf_dot`,
+including the in-process ``tree-decomposition`` route, so a single
+string change re-measures a different compiler on the same circuit::
+
+    {
+        "and": 3, "or": 4, "not": 0, "inputs": 5,
+        "nodes": 12, "edges": 14, "depth": 6,
+        "smooth": true, "treewidth": 3,
+        "compiler": "d4", "compile_ms": 1.83
+    }
+
+In Studio, the compiled-d-DNNF canvas shows a gates / edges / depth
+summary in its subtitle, and the probability benchmark (below) adds a
+``d-DNNF (n/e)`` column so the size of every compiler's output sits
+beside its run time in one table.
+
 The in-process route: tree decomposition
 -----------------------------------------
 

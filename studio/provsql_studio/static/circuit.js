@@ -2294,9 +2294,14 @@
     'c2d':             'c2d',
     'minic2d':         'miniC2D',
     'dsharp':          'Dsharp',
-    'panini-obdd':     'Panini → OBDD',
-    'panini-obdd-and': 'Panini → OBDD[AND]',
-    'panini-decdnnf':  'Panini → Decision-DNNF',
+    // The target language is already shown in parentheses after the
+    // tool name (the cv-kc-class chip), so we keep just "Panini" here.
+    'panini-obdd':     'Panini',
+    'panini-obdd-and': 'Panini',
+    'panini-decdnnf':  'Panini',
+    // In-process route: abbreviated to keep the canvas subtitle short
+    // (the class chip already reads "(d-SDNNF)").
+    'tree-decomposition': 'tree-dec.',
   };
 
   const KC_CIRCUIT_CLASS = {
@@ -2366,8 +2371,18 @@
         ? ` (<span class="cv-kc-class" title="${escapeHtml(cls.full)}">`
           + `${escapeHtml(cls.abbr)}</span>)`
         : '';
+      // Size summary, derived from the parsed scene (no extra compile):
+      // gates, edges, and longest-path depth. Lets the reader compare
+      // what successive compilers produce on the same circuit; the
+      // full structural stats (smooth, treewidth, compile time) are a
+      // ddnnf_stats() call away, and the benchmark tabulates size
+      // across all methods at once.
+      const nGates = (scene.nodes || []).length;
+      const nEdges = (scene.edges || []).length;
+      const maxDepth = (scene.nodes || []).reduce(
+        (d, n) => Math.max(d, n.depth || 0), 0);
       scene.subtitle =
-        `${(scene.nodes || []).length} gates · `
+        `${nGates} gates · ${nEdges} edges · depth ${maxDepth} · `
         + `<strong>${escapeHtml(toolName)}</strong>${clsHtml}`;
       swapToKcScene(scene);
       return;
@@ -2398,7 +2413,16 @@
         + '<th class="num">args</th>'
         + '<th class="num">prob.</th>'
         + '<th class="num">time (ms)</th>'
+        + '<th class="num" title="compiled d-DNNF size: nodes / edges">'
+        + 'd-DNNF (n/e)</th>'
         + '<th></th></tr></thead><tbody>';
+      // d-DNNF size only applies to methods that build one
+      // (tree-decomposition, compilation-*); WMC / independent /
+      // possible-worlds / monte-carlo leave it null and render "–".
+      const sizeCell = r =>
+        (r.nodes == null && r.edges == null)
+          ? '–'
+          : `${r.nodes == null ? '?' : r.nodes} / ${r.edges == null ? '?' : r.edges}`;
       for (const r of rows) {
         const errHtml = r.error ? renderEvalError(r.error) : '';
         body += '<tr>'
@@ -2406,6 +2430,7 @@
           + `<td class="num">${escapeHtml(r.args ?? '')}</td>`
           + `<td class="num">${r.probability == null ? '–' : Number(r.probability).toFixed(4)}</td>`
           + `<td class="num">${r.milliseconds == null ? '–' : Number(r.milliseconds).toFixed(2)}</td>`
+          + `<td class="num">${escapeHtml(sizeCell(r))}</td>`
           + `<td>${errHtml}</td>`
           + '</tr>';
       }
@@ -2414,13 +2439,15 @@
       resultEl.dataset.kind = 'kc-benchmark';
       // Copy as TSV so users can paste it straight into a spreadsheet
       // or Markdown table without hand-cleanup.
-      const tsvHeader = 'method\targs\tprobability\tms\terror';
+      const tsvHeader = 'method\targs\tprobability\tms\tnodes\tedges\terror';
       const tsvBody = rows.map(r =>
         [
           r.method,
           r.args ?? '',
           r.probability == null ? '' : r.probability,
           r.milliseconds == null ? '' : r.milliseconds,
+          r.nodes == null ? '' : r.nodes,
+          r.edges == null ? '' : r.edges,
           r.error ?? '',
         ].join('\t')
       ).join('\n');

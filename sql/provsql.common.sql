@@ -3747,6 +3747,26 @@ CREATE OR REPLACE FUNCTION compile_to_ddnnf_dot(
   'provsql','compile_to_ddnnf_dot' LANGUAGE C;
 
 /**
+ * @brief Structural statistics of the d-DNNF a compiler produces for a
+ * provenance circuit.
+ *
+ * Compiles the circuit with the given compiler / meta-route (same names
+ * as compile_to_ddnnf_dot: d4, d4v2, c2d, minic2d, dsharp, panini-*,
+ * tree-decomposition, interpret-as-dd, default) and returns a jsonb
+ * object: nodes, edges, and / or / not / inputs counts, smooth, depth
+ * (longest path), treewidth (null when not computable), and compile_ms.
+ * Lets clients compare what each compiler produces on the same circuit.
+ *
+ * @param token root provenance token
+ * @param compiler compiler or in-process meta-route to use
+ */
+CREATE OR REPLACE FUNCTION ddnnf_stats(
+  token UUID,
+  compiler TEXT = 'd4')
+  RETURNS jsonb AS
+  'provsql','ddnnf_stats' LANGUAGE C;
+
+/**
  * @brief Return the DIMACS CNF (Tseytin transformation) of the provenance circuit
  *
  * Returns the same encoding the extension writes to a temp file before
