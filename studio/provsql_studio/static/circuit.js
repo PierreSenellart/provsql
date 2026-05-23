@@ -602,6 +602,8 @@
     // runEvaluation; cleared by restoreKcScene).
     const kcBackBtn = document.getElementById('tool-kc-back');
     if (kcBackBtn) kcBackBtn.hidden = !state.kcSavedScene;
+    const kcBackSep = document.getElementById('tool-kc-back-sep');
+    if (kcBackSep) kcBackSep.hidden = !state.kcSavedScene;
   }
 
   function fitView() {

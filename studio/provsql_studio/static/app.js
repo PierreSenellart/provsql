@@ -1594,6 +1594,7 @@
         <button class="cv-tool" id="tool-reset-layout" title="Reset node positions (undo any drag-to-move)"><i class="fas fa-undo"></i></button>
         <button class="cv-tool cv-tool--toggle" id="tool-show-uuids" aria-pressed="false" title="Show UUIDs"><i class="fas fa-fingerprint"></i></button>
         <button class="cv-tool cv-tool--toggle" id="tool-fullscreen" aria-pressed="false" title="Fullscreen circuit (Esc to exit)"><i class="fas fa-expand-arrows-alt"></i></button>
+        <span class="cv-tool__sep" id="tool-kc-back-sep" hidden></span>
         <button class="cv-tool cv-tool--kc-back" id="tool-kc-back" title="Back to the original provenance circuit" aria-label="Back to the original provenance circuit" hidden><i class="fas fa-arrow-left"></i></button>
         <span id="circuit-title" hidden>Provenance Circuit</span>
         <span class="cv-toolbar__info" id="circuit-sub">Click a UUID cell to render.</span>
