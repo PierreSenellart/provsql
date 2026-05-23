@@ -466,7 +466,19 @@
                 + (n.boolean_assumed ? ' is-boolean-assumed' : '');
       const p = nodePos(n);
       const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${p.x},${p.y})` });
-      g.appendChild(svgEl('circle', { class: 'node-shape', r: 22 }));
+      const shape = svgEl('circle', { class: 'node-shape', r: 22 });
+      // Tree-decomposition bag: tint the fill by bag width so the user
+      // sees at a glance which bag is the bottleneck.  Pale → warm
+      // (terracotta-500) as width approaches treewidth+1 (the maximum
+      // bag size, by definition of treewidth).  Width=1 stays white;
+      // anything wider gets a proportional alpha so the eye is drawn
+      // to the wider end of the tree.  Inline style wins over the
+      // .node-shape CSS rule.
+      if (n.type === 'kc-bag') {
+        const tint = _bagTint(_bagWidth(n.label), state.scene?.treewidth);
+        if (tint) shape.style.fill = tint;
+      }
+      g.appendChild(shape);
       // Boolean-rewrite marker : every gate_assumed_boolean wrapper
       // in the scene was elided server-side, and each wrapper's
       // single child carries boolean_assumed = true. Paint a dashed
@@ -968,6 +980,49 @@
       const density = renderRvDensity(parseDistributionSpec(node.extra));
       if (density) html += density;
     }
+    if (node.type === 'kc-bag') {
+      // Bag variables: BooleanCircuit gate indices, split into two
+      // classes by the `bag_inputs` map the server attaches when an
+      // index corresponds to a tracked input leaf.  Inputs get a
+      // resolvable chip with the short UUID + placeholder for the
+      // source-row label (filled in by fetchBagInputRow below);
+      // auxiliary Tseytin variables stay as bare indices.
+      const vars = _bagVariables(node.label);
+      const inputs = state.scene?.bag_inputs || {};
+      if (vars.length) {
+        const items = vars.map(v => {
+          const uuid = inputs[v];
+          if (uuid) {
+            // The data-bag-uuid attribute lets the post-render
+            // resolver attach a "tbl/row" hint without re-walking
+            // the dl; the .wp-uuid pair (short / full) hooks into
+            // the existing body.show-uuids CSS toggle so flipping
+            // the toolbar "Show UUIDs" button expands the bag chip
+            // alongside every other UUID on the page.
+            return `<li class="cv-inspector__bag-vars__input"`
+                 + ` data-bag-uuid="${escapeHtml(uuid)}"`
+                 + ` title="${escapeHtml(uuid)}">`
+                 + `<code>${escapeHtml(v)}</code>`
+                 + ` <span class="cv-inspector__bag-vars__uuid wp-uuid">`
+                 +   `<span class="wp-uuid__short">`
+                 +     escapeHtml(shortUuid(uuid))
+                 +   `</span>`
+                 +   `<span class="wp-uuid__full">`
+                 +     escapeHtml(uuid)
+                 +   `</span>`
+                 + `</span>`
+                 + ` <span class="cv-inspector__bag-vars__row">…</span>`
+                 + `</li>`;
+          }
+          return `<li class="cv-inspector__bag-vars__aux"`
+               + ` title="post-Tseytin auxiliary gate">`
+               + `<code>${escapeHtml(v)}</code>`
+               + `</li>`;
+        }).join('');
+        html += `<p class="cv-inspector__bag-vars-label">variables</p>`
+             +  `<ul class="cv-inspector__bag-vars">${items}</ul>`;
+      }
+    }
     if (node.type === 'input' || node.type === 'mulinput' || node.type === 'kc-input') {
       html += '<p><em>Resolving source row…</em></p>';
     } else if (node.frontier) {
@@ -977,6 +1032,16 @@
 
     if (node.type === 'input' || node.type === 'mulinput' || node.type === 'kc-input') {
       fetchLeafRow(node.id);
+    }
+    if (node.type === 'kc-bag') {
+      // Async-resolve every input-leaf chip's source row.  Each chip
+      // carries data-bag-uuid; the helper updates the inline "…"
+      // placeholder with the first matching relation + primary key,
+      // or replaces it with the "anonymous" / "no source" diagnostic
+      // when /api/leaf doesn't return a match.
+      inspectorBody.querySelectorAll(
+        '.cv-inspector__bag-vars__input[data-bag-uuid]'
+      ).forEach(li => fetchBagInputRow(li));
     }
   }
 
@@ -1039,6 +1104,60 @@
       return `<p><strong>${escapeHtml(m.relation)}</strong></p><dl>${cells}</dl>`;
     }).join('<hr>');
     replaceLeafBody(items);
+  }
+
+  // Light-weight leaf-row resolver for the kc-bag inspector: hits
+  // /api/leaf once per input chip and rewrites the inline "…" span
+  // with a "<relation> · <pk-or-row-summary>" hint.  Unlike
+  // fetchLeafRow this does not touch the dl, set up probability
+  // editing, or replace the inspector body -- it just enriches a
+  // single chip.  Failures degrade silently to "?" so a single
+  // un-resolvable input doesn't blank out the rest of the chip list.
+  async function fetchBagInputRow(li) {
+    const uuid = li.dataset.bagUuid;
+    const slot = li.querySelector('.cv-inspector__bag-vars__row');
+    if (!uuid || !slot) return;
+    let payload = null;
+    try {
+      const resp = await fetch(`/api/leaf/${encodeURIComponent(uuid)}`);
+      if (resp.ok) payload = await resp.json();
+    } catch {
+      slot.textContent = '?';
+      return;
+    }
+    const matches = (payload && payload.matches) || [];
+    if (!matches.length) {
+      slot.textContent = payload?.probability != null
+        ? 'anonymous'
+        : 'unknown';
+      slot.classList.add('cv-inspector__bag-vars__row--muted');
+      return;
+    }
+    // Pick the first match and render it tuple-style:
+    //   relation(v1, v2, …)
+    // showing the first two column values with an ellipsis when the
+    // row carries more.  Single-column rows lose the ellipsis; an
+    // empty row falls back to the bare relation name.  The full
+    // tuple lives in the tooltip below.
+    const m = matches[0];
+    const values = Object.values(m.row || {});
+    let hint = m.relation;
+    if (values.length > 0) {
+      const head = values.slice(0, 2)
+                         .map(v => v == null ? '' : String(v));
+      const more = values.length > 2 ? ', …' : '';
+      hint = `${m.relation}(${head.join(', ')}${more})`;
+    }
+    slot.textContent = hint;
+    // Capture all match locations + the full row in the title so a
+    // tooltip exposes the rest without inflating the chip.
+    const tip = matches.map(mm => {
+      const pairs = Object.entries(mm.row || {})
+        .map(([k, v]) => `${k}=${v == null ? '' : v}`)
+        .join(', ');
+      return `${mm.relation}${pairs ? ': ' + pairs : ''}`;
+    }).join('\n');
+    if (tip) li.title = tip;
   }
 
   function replaceLeafBody(html) {
@@ -2860,6 +2979,28 @@
       // inspector adds something the canvas doesn't.
       if (node.info1 != null) out.push({ label: 'relation id', value: node.info1 });
       if (node.info2 != null) out.push({ label: 'columns',     value: node.info2 });
+    } else if (t === 'kc-bag') {
+      // Tree-decomposition bag: surface bag width (= |bag|) alongside
+      // the global treewidth so the user can see how close this bag
+      // sits to the maximum.  The variable indices themselves come
+      // from the bag's label and are listed verbatim below the dl in
+      // openInspector -- they're opaque post-rewrite identifiers, so
+      // a count is more actionable than the raw set.  Parent and
+      // children counts use the scene's edge list directly: TD edges
+      // are parent → child.
+      const width = _bagWidth(node.label);
+      const tw = state.scene?.treewidth;
+      if (width > 0) {
+        const wTxt = (Number.isFinite(tw) && tw >= 0)
+                   ? `${width}/${tw + 1}`
+                   : String(width);
+        out.push({ label: 'width', value: wTxt });
+      }
+      const edges = state.scene?.edges || [];
+      const parent = edges.find(e => e.to === node.id);
+      if (parent) out.push({ label: 'parent', value: parent.from });
+      // childCount is already pushed at the top of _gateInfos via the
+      // generic edge.from === node.id count; skip a duplicate.
     } else if (t === 'arith') {
       // info1 = PROVSQL_ARITH_* tag (provsql.circuit_subgraph returns it
       // as TEXT so the value is a string here); map to a name+glyph so
@@ -3514,6 +3655,44 @@
       + `</div>`
       + `<div class="cv-profile-svg cv-rv-density">${svg}</div>`
       + `</div>`;
+  }
+
+  // Parse the literal "{0,1,3}" body a tree-decomposition bag carries
+  // in its label into a list of variable index strings.  Returns []
+  // for the empty-bag edge case "{}", so callers can branch on size.
+  function _bagVariables(label) {
+    if (!label) return [];
+    const m = String(label).match(/^\{(.*)\}$/);
+    if (!m) return [];
+    const inner = m[1].trim();
+    if (!inner) return [];
+    return inner.split(',').map(s => s.trim()).filter(Boolean);
+  }
+
+  function _bagWidth(label) {
+    return _bagVariables(label).length;
+  }
+
+  // Map a bag's width to an inline fill.  Pale → terracotta-500 as
+  // width approaches treewidth+1 (the maximum bag size by definition
+  // of treewidth).  Returns null when there's nothing to encode
+  // (singleton-bag TD, missing treewidth) so paint() leaves the
+  // .node-shape CSS default in place.
+  function _bagTint(width, treewidth) {
+    if (!Number.isFinite(width) || width < 1) return null;
+    const maxBag = (Number.isFinite(treewidth) && treewidth >= 0)
+                 ? (treewidth + 1)
+                 : null;
+    if (!maxBag || maxBag <= 1) return null;
+    // ratio in [0, 1]; width=1 → 0 (no tint), width=maxBag → 1.
+    const ratio = Math.max(0, Math.min(1, (width - 1) / (maxBag - 1)));
+    // Cap alpha at 0.55 so the in-circle glyph stays readable even
+    // for the widest bag.
+    const alpha = (ratio * 0.55).toFixed(3);
+    // terracotta-500 = rgb(196, 102, 74); same shade ProvSQL Studio
+    // reserves for "warning / pay attention" elsewhere (pinned node
+    // outline, active button states).
+    return `rgba(196, 102, 74, ${alpha})`;
   }
 
   // Parse PG's text-encoded ARRAY of two-element ARRAYs ({{1,1},{2,3}}…)

@@ -52,7 +52,28 @@ Datum tree_decomposition_dot(PG_FUNCTION_ARGS)
 
     try {
       TreeDecomposition td(c);
+      // Two preamble lines before the digraph body:
+      //
+      //   // treewidth=<n>
+      //   // inputs: <idx>=<uuid> <idx>=<uuid> ...
+      //
+      // The second line maps BooleanCircuit gate indices (the same
+      // indices that appear inside each bag's `{...}` label) back to
+      // the original provenance UUID, when the gate is a tracked input
+      // leaf.  Bag indices not present in the map are post-Tseytin
+      // auxiliary gates with no source row.  The Studio reads this map
+      // to enrich the bag inspector: input variables get a clickable
+      // chip pointing at /api/leaf/<uuid>, auxiliaries stay opaque.
+      string inputs_line = "// inputs:";
+      for (gate_t in : c.getInputs()) {
+        const string &uuid = c.getUUID(in);
+        if (uuid.empty()) continue;
+        inputs_line += " " + to_string(in) + "=" + uuid;
+      }
+      inputs_line += "\n";
+
       string dot = "// treewidth=" + to_string(td.getTreewidth()) + "\n"
+                   + inputs_line
                    + td.toDot();
       text *result = (text *) palloc(VARHDRSZ + dot.size());
       SET_VARSIZE(result, VARHDRSZ + dot.size());

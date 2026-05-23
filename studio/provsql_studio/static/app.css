@@ -2058,6 +2058,72 @@ body.mode-where #sidebar {
 }
 .cv-inspector__mapping li { margin: 0.05rem 0; }
 
+/* Bag-variables list: wrapped chips of post-rewrite gate indices.
+   Each <code> chip is small and discrete so a high-treewidth bag
+   (10+ variables) still fits the inspector column without scrolling
+   off into the canvas. */
+.cv-inspector__bag-vars-label {
+  margin: 0.6rem 0 0.25rem !important;
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cv-inspector__bag-vars {
+  margin: 0; padding: 0; list-style: none;
+  display: flex; flex-wrap: wrap; gap: 0.25rem;
+}
+.cv-inspector__bag-vars li code {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  background: var(--bg-code, rgba(196, 102, 74, 0.10));
+  color: var(--purple-700);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+/* Two flavours of bag-variable chip: input-leaf chips wrap their
+   index + short UUID + (async-filled) row hint in a single padded
+   pill, so the three pieces stay glued together when the list
+   wraps; auxiliary chips stay as a bare `<code>` index. */
+.cv-inspector__bag-vars__input {
+  display: inline-flex; align-items: baseline; gap: 0.25rem;
+  padding: 0.05rem 0.45rem 0.05rem 0.2rem;
+  background: rgba(80, 32, 132, 0.06);
+  border: 1px solid rgba(80, 32, 132, 0.15);
+  border-radius: 4px;
+}
+.cv-inspector__bag-vars__input code {
+  background: transparent;
+  padding: 0;
+}
+.cv-inspector__bag-vars__uuid {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+.cv-inspector__bag-vars__row {
+  color: var(--purple-700);
+  font-size: 0.74rem;
+  font-style: italic;
+}
+.cv-inspector__bag-vars__row--muted {
+  color: var(--fg-muted);
+  font-style: normal;
+}
+.cv-inspector__bag-vars__aux {
+  /* Transparent border + matching padding so the auxiliary chip's
+     box has the same height as a sibling input chip, even though
+     it carries no UUID / row hint -- otherwise the wrapped flex
+     row drifts baselines when the two kinds are mixed.  The
+     opacity nudge is what visually distinguishes the two. */
+  display: inline-flex; align-items: baseline;
+  padding: 0.05rem 0.45rem 0.05rem 0.2rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  opacity: 0.7;
+}
+
 /* Analytical PDF preview rendered under the gate_rv inspector dl.
    The SVG fits the inspector body (~248px wide after padding); a
    muted purple fill under a darker purple stroke matches the leaf

@@ -372,26 +372,54 @@ def compile_to_ddnnf(pool: ConnectionPool, token: str, compiler: str) -> dict:
 def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
     """Return ``{"dot", "scene", "treewidth"}`` for the tree decomposition.
 
-    The first line of ``provsql.tree_decomposition_dot`` is a
-    ``// treewidth=<n>`` comment we tack on top of GraphViz's body;
-    we surface the parsed treewidth alongside the scene payload so
-    the front-end can show it in the canvas subtitle.
+    The DOT body produced by ``provsql.tree_decomposition_dot`` is
+    prefixed by two comment lines:
+
+      // treewidth=<n>
+      // inputs: <idx>=<uuid> <idx>=<uuid> ...
+
+    The treewidth is surfaced on the scene payload so the canvas
+    subtitle can show it; the inputs map associates each
+    BooleanCircuit gate index that survives as an input leaf with its
+    original provenance UUID, so the front-end can resolve "what row
+    is variable 4?" via the existing /api/leaf endpoint.  Indices
+    absent from the map are post-Tseytin auxiliary gates with no
+    source row.
     """
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT provsql.tree_decomposition_dot(%s::uuid)", (token,),
         )
         (full,) = cur.fetchone()
-    first, _, body = full.partition("\n")
-    tw = None
-    if first.startswith("// treewidth="):
-        try:
-            tw = int(first.removeprefix("// treewidth="))
-        except ValueError:
-            tw = None
+    lines = full.split("\n")
+    tw: int | None = None
+    bag_inputs: dict[str, str] = {}
+    body_start = 0
+    for i, line in enumerate(lines):
+        if line.startswith("// treewidth="):
+            try:
+                tw = int(line.removeprefix("// treewidth="))
+            except ValueError:
+                tw = None
+            body_start = i + 1
+        elif line.startswith("// inputs:"):
+            payload = line.removeprefix("// inputs:").strip()
+            for tok in payload.split():
+                idx, eq, uuid = tok.partition("=")
+                if eq and idx and uuid:
+                    bag_inputs[idx] = uuid
+            body_start = i + 1
+        else:
+            break
+    body = "\n".join(lines[body_start:])
+    scene = _td_scene_from_dot(body, tw, original_token=token)
+    # Attach the BC-index → UUID map so the front-end can resolve
+    # input-leaf variables back to source rows in the bag inspector.
+    if bag_inputs:
+        scene["bag_inputs"] = bag_inputs
     return {
         "dot": body,
-        "scene": _td_scene_from_dot(body, tw, original_token=token),
+        "scene": scene,
         "treewidth": tw,
     }
 
