@@ -756,7 +756,10 @@ def create_app(
         if samples <= 0:
             return jsonify({"error": "samples must be a positive integer"}), 400
         try:
-            payload = kc_mod.probability_benchmark(get_pool(), token, samples)
+            payload = kc_mod.probability_benchmark(
+                get_pool(), token, samples,
+                statement_timeout=app.config["STATEMENT_TIMEOUT"],
+            )
         except psycopg.errors.UndefinedFunction as e:
             return _kc_unavailable(e)
         except psycopg.Error as e:

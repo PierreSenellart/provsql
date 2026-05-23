@@ -17,7 +17,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 
+import psycopg
+from psycopg import sql
 from psycopg_pool import ConnectionPool
 
 
@@ -393,59 +396,146 @@ def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
     }
 
 
+# Methods and per-method arguments exercised by the benchmark.  Mirrors
+# the body of ``provsql.probability_benchmark`` in
+# ``sql/provsql.common.sql`` but lives here because we drive the loop
+# from Python: each method needs its own ``SET LOCAL
+# statement_timeout`` to get a per-row time budget, and PL/pgSQL's
+# ``WHEN OTHERS`` does not catch ``query_canceled`` (57014) so a
+# timeout inside the SQL helper aborts the whole table instead of
+# producing one timeout row.
+_BENCHMARK_METHODS: tuple[tuple[str, str | None], ...] = (
+    ("independent",        None),
+    ("possible-worlds",    None),
+    ("tree-decomposition", None),
+    ("monte-carlo",        None),       # samples filled in per call
+    ("compilation",        "d4"),
+    ("compilation",        "d4v2"),
+    ("compilation",        "c2d"),
+    ("compilation",        "minic2d"),
+    ("compilation",        "dsharp"),
+    ("compilation",        "panini-obdd"),
+    ("compilation",        "panini-obdd-and"),
+    ("compilation",        "panini-decdnnf"),
+    ("compilation",        "panini-r2d2"),
+    ("compilation",        "panini-ccdd"),
+    ("wmc",                "weightmc;0.8;0.2"),
+    ("wmc",                "ganak"),
+    ("wmc",                "sharpsat-td"),
+    ("wmc",                "dpmc"),
+)
+
+
 def probability_benchmark(
     pool: ConnectionPool,
     token: str,
     samples: int,
+    statement_timeout: str = "30s",
 ) -> dict:
-    """Run ``probability_benchmark`` and return rows + captured notices.
+    """Time every probability-evaluation method and return rows + notices.
 
-    ``probability_benchmark`` (in @c sql/provsql.common.sql) runs every
-    method ProvSQL exposes (independent, possible-worlds, tree-
-    decomposition, monte-carlo, compilation × {d4, d4v2, c2d, minic2d,
-    dsharp, panini-*}, wmc × {ganak, sharpsat-td, dpmc, weightmc})
-    and captures per-row errors so an uninstalled compiler or a
-    non-independent circuit doesn't abort the call.
+    Mirrors the surface of ``provsql.probability_benchmark`` (see
+    ``sql/provsql.common.sql``) but drives the loop from Python so each
+    method gets its own ``SET LOCAL statement_timeout`` budget.  Two
+    PL/pgSQL limitations make per-row enforcement impossible from the
+    SQL helper: ``SET LOCAL statement_timeout`` inside a function does
+    not reset PG's per-statement timer, and ``EXCEPTION WHEN OTHERS``
+    does not catch ``query_canceled`` (57014), so the SQL version
+    aborts the whole table instead of recording one timeout row.
+
+    Each method runs inside its own savepoint so a per-method
+    ``SET LOCAL statement_timeout`` and any error (timeout, missing
+    compiler, non-independent circuit, …) stay scoped to that method;
+    the next iteration continues with a fresh budget.
 
     Notices emitted by ProvSQL during any of the inner
     ``probability_evaluate`` calls (typically the "gate_cmp shortcut
     by probability-side pre-pass" warning) are collected via the
-    connection's notice handler and returned alongside the rows.
-
-    The planner-hook rewriter does not (yet) support ``RETURNS TABLE``
-    functions with multiple output columns, so we ``SET LOCAL
-    provsql.active = off`` for the duration of the call.
+    connection's notice handler and deduplicated before being returned
+    alongside the rows.
     """
     notices: list[str] = []
+
     def _on_notice(diag):
         msg = diag.message_primary or ""
         if "__prov" in msg or "__wprov" in msg:
             return
         notices.append(msg)
-    with pool.connection() as conn, conn.cursor() as cur:
+
+    rows: list[dict] = []
+    with pool.connection() as conn:
         conn.add_notice_handler(_on_notice)
         try:
-            cur.execute("SET LOCAL provsql.active = off")
-            # Same verbose-level floor as evaluate_circuit: guarantee
-            # that level-5 informational notices (e.g. shortcut
-            # warnings) reach the client even when the user has
-            # silenced ProvSQL via verbose_level=0.
-            cur.execute(
-                "SELECT set_config('provsql.verbose_level', "
-                "GREATEST(5, current_setting('provsql.verbose_level', true)::int)::text, true)"
-            )
-            cur.execute(
-                "SELECT method, args, probability, milliseconds, error "
-                "FROM provsql.probability_benchmark(%s::uuid, %s) "
-                "ORDER BY method, args NULLS FIRST",
-                (token, samples),
-            )
-            rows = cur.fetchall()
+            # Outer transaction: GUCs that should hold for the whole
+            # benchmark, applied once with SET LOCAL so they revert when
+            # the connection returns to the pool.  Each method below
+            # opens a savepoint inside this transaction.
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute("SET LOCAL provsql.active = off")
+                    # Same verbose-level floor as evaluate_circuit:
+                    # guarantee that level-5 informational notices (e.g.
+                    # shortcut warnings) reach the client even when the
+                    # user has silenced ProvSQL via verbose_level=0.
+                    cur.execute(
+                        "SELECT set_config('provsql.verbose_level', "
+                        "GREATEST(5, current_setting('provsql.verbose_level', "
+                        "true)::int)::text, true)"
+                    )
+                for method, args in _BENCHMARK_METHODS:
+                    call_args = str(samples) if method == "monte-carlo" else args
+                    t0 = time.perf_counter()
+                    probability: float | None = None
+                    error: str | None = None
+                    try:
+                        # Nested transaction => SAVEPOINT.  SET LOCAL
+                        # statement_timeout is rolled back with the
+                        # savepoint on timeout, so the next method
+                        # starts from a clean GUC state.
+                        with conn.transaction():
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    sql.SQL(
+                                        "SET LOCAL statement_timeout = {}"
+                                    ).format(sql.Literal(statement_timeout))
+                                )
+                                cur.execute(
+                                    "SELECT provsql.probability_evaluate("
+                                    "%s::uuid, %s, %s)",
+                                    (token, method, call_args),
+                                )
+                                row = cur.fetchone()
+                                if row is not None and row[0] is not None:
+                                    probability = float(row[0])
+                    except psycopg.errors.QueryCanceled:
+                        error = (
+                            f"canceling statement due to statement timeout "
+                            f"(> {statement_timeout})"
+                        )
+                    except psycopg.Error as e:
+                        # Mirror SQLERRM: a single-line summary so the
+                        # error column stays compact in the table.
+                        diag = getattr(e, "diag", None)
+                        msg = (diag.message_primary if diag else None) \
+                            or str(e).strip()
+                        error = msg.splitlines()[0] if msg else "unknown error"
+                    ms = (time.perf_counter() - t0) * 1000.0
+                    rows.append({
+                        "method": method,
+                        "args": call_args,
+                        "probability": probability,
+                        "milliseconds": ms,
+                        "error": error,
+                    })
         finally:
             try:
                 conn.remove_notice_handler(_on_notice)
             except Exception:
                 pass
+
+    # Match the old SQL ORDER BY method, args NULLS FIRST.
+    rows.sort(key=lambda r: (r["method"], r["args"] is not None, r["args"] or ""))
+
     # Deduplicate identical notices — each method emits the same
     # shortcut notice, so the same line repeats once per benchmark row.
     seen: set[str] = set()
@@ -455,16 +545,4 @@ def probability_benchmark(
             continue
         seen.add(msg)
         uniq.append(msg)
-    return {
-        "rows": [
-            {
-                "method": method,
-                "args": args,
-                "probability": probability,
-                "milliseconds": milliseconds,
-                "error": error,
-            }
-            for method, args, probability, milliseconds, error in rows
-        ],
-        "notices": uniq,
-    }
+    return {"rows": rows, "notices": uniq}
