@@ -1274,14 +1274,25 @@
   // `test/sql/safe_query_semiring.sql` ; if the C++ side ever flips a
   // value, that test fails and both this dict and the Python mirror
   // must be updated.
+  //
+  // `aggCompatible`: mirrors which semirings override
+  // `Semiring::agg()` (and `Semiring::semimod()`) in src/semiring/*.h.
+  // The base class throws "This semiring does not support agg gates"
+  // and the same for semimod, so when the pinned eval target is a
+  // gate_agg or gate_semimod we hide every compiled option whose
+  // `aggCompatible` is false to spare the user a guaranteed-error
+  // round-trip. Only Formula overrides both (`semimod` is the scalar-
+  // child variant of `agg`, so any semiring handling one handles the
+  // other; we collapse them into a single flag here).
   const _COMPILED_REGISTRY = {
     // Boolean.
     'boolexpr':    { label: 'Boolean expression',        group: 'bool',
                      needsMapping: false, types: null,                hint: null,
-                     optionalMapping: true, booleanCompatible: true },
+                     optionalMapping: true, booleanCompatible: true,
+                     aggCompatible: false },
     'boolean':     { label: 'Boolean',                    group: 'bool',
                      needsMapping: true,  types: ['boolean'],         hint: 'Expects boolean values.',
-                     booleanCompatible: true },
+                     booleanCompatible: true, aggCompatible: false },
     // Lineage. `formula` is the canonical free-polynomial expression
     // (Green-Karvounarakis-Tannen) as a circuit pretty-print; `how` is
     // the same algebra collapsed to canonical sum-of-products form,
@@ -1289,33 +1300,33 @@
     // syntactically different circuits.
     'formula':     { label: 'Formula',                    group: 'lin',
                      needsMapping: true,  types: null,                hint: null,
-                     booleanCompatible: true },
+                     booleanCompatible: true, aggCompatible: true },
     'how':         { label: 'How-provenance',             group: 'lin',
                      needsMapping: true,  types: null,
                      hint: 'Canonical N[X] polynomial; equal circuits collapse to the same string.',
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
     'why':         { label: 'Why-provenance',             group: 'lin',
                      needsMapping: true,  types: null,                hint: null,
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
     'which':       { label: 'Which-provenance',          group: 'lin',
                      needsMapping: true,  types: null,                hint: null,
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
     // Numeric / scoring. The [0, 1] constraint for Viterbi / Łukasiewicz
     // can't be enforced at type level (no PG type for "numeric in [0, 1]")
     // so the hint flags it; the kernel itself doesn't reject out-of-range
     // values, it just yields nonsense.
     'counting':    { label: 'Counting',                   group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values.',
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
     'tropical':    { label: 'Tropical (min-plus)',        group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric (cost) values.',
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
     'viterbi':     { label: 'Viterbi (max-times)',        group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].',
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
     'lukasiewicz': { label: 'Łukasiewicz (numeric fuzzy)', group: 'num',
                      needsMapping: true,  types: _NUMERIC_BASE_TYPES, hint: 'Expects numeric values in [0, 1].',
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
     // Intervals. One UI option, three kernels: the backend picks
     // sr_temporal / sr_interval_num / sr_interval_int from the mapping's
     // multirange type. PG14+ because every multirange type was added in 14.
@@ -1323,7 +1334,7 @@
                         needsMapping: true,  types: _INTERVAL_BASE_TYPES,
                         minPg: 140000,
                         hint: 'Multirange-valued (PostgreSQL 14+); selects sr_temporal / sr_interval_num / sr_interval_int by mapping type.',
-                        booleanCompatible: true },
+                        booleanCompatible: true, aggCompatible: false },
     // User-enum carrier. The bottom and top come from the enum's
     // pg_enum.enumsortorder; the kernel is polymorphic over any
     // user-defined enum, so the picker filters by `is_enum` rather
@@ -1331,11 +1342,11 @@
     'minmax':      { label: 'Min-max (security shape)',   group: 'enum',
                      needsMapping: true,  types: null,    acceptsEnum: true,
                      hint: 'Expects a user-defined enum carrier; alternatives combine to enum-min, joins to enum-max.',
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
     'maxmin':      { label: 'Max-min (enum fuzzy / trust)', group: 'enum',
                      needsMapping: true,  types: null,    acceptsEnum: true,
                      hint: 'Expects a user-defined enum carrier; alternatives combine to enum-max, joins to enum-min.',
-                     booleanCompatible: false },
+                     booleanCompatible: false, aggCompatible: false },
   };
   const _COMPILED_GROUPS = [
     ['bool', 'Boolean'],
@@ -1386,6 +1397,19 @@
   // (truncated) distribution rather than the unconditional one.
   const _CONDITION_OPTIONS = new Set([
     'distribution-profile', 'moment', 'sample'
+  ]);
+  // Non-_COMPILED_REGISTRY options that are also meaningless on
+  // gate_agg / gate_semimod.  Probability and every KC helper need to
+  // build a BooleanCircuit first (via the BoolExpr semiring), and
+  // BoolExpr does not override agg() / semimod() / value() -- so the
+  // call errors out with "does not support agg gates" (or "value
+  // gates" once the agg's value children kick in).  prov-xml stays:
+  // it walks the gate graph verbatim and is always sound.  Custom
+  // semirings stay: their wrappers can target any provenance_evaluate
+  // method, including ones that handle agg internally, and Studio
+  // can't second-guess the wrapper's contract.
+  const _AGG_INCOMPATIBLE_OPTIONS = new Set([
+    'probability', 'kc-cnf', 'kc-ddnnf', 'kc-td', 'kc-benchmark',
   ]);
 
   // Lookup the gate type of the current eval target (pinned node, else
@@ -1575,11 +1599,22 @@
     // full syncControls (which also wipes the result chip).
     function syncDropdownVisibility() {
       const gateType = currentTargetGateType();
+      // d-DNNF / TD canvas swap: scene.root carries the original
+      // provenance token forward (so the eval-strip still evaluates
+      // against the source circuit), but that UUID is not a node in
+      // the KC scene -- its nodes are kc-and / kc-or / kc-not / kc-
+      // input / kc-bag -- and the gate-type lookup falls back to null.
+      // d-DNNF / TD only make sense for Boolean (probabilistic)
+      // circuits, so we force the non-scalar menu in that view: the
+      // scalar-only Distribution / Moment / Sample options are hidden.
+      const inKcView = !!state.kcSavedScene;
       // null = scene not loaded yet (or target outside the rendered
       // subgraph); leave every option visible so the strip is usable.
       // Otherwise, scalar gates get the scalar menu, all other gates
       // get the Boolean menu.
-      const isScalar = gateType != null && _SCALAR_GATE_TYPES.has(gateType);
+      const isScalar = !inKcView
+        && gateType != null
+        && _SCALAR_GATE_TYPES.has(gateType);
       // boolean_assumed targets sit under (the elided shadow of) a
       // gate_assumed_boolean wrapper. Only semirings with
       // booleanCompatible=true in the registry are sound to evaluate
@@ -1590,10 +1625,20 @@
       // and custom wrappers run on the SQL side where the user is
       // assumed to know what their kernel does.
       const booleanOnly = !isScalar && currentTargetBooleanAssumed();
+      // gate_agg and gate_semimod cause every Semiring whose `agg()` /
+      // `semimod()` overrides are missing to throw "does not support
+      // agg gates" / "does not support semimod gates" (see
+      // src/semiring/Semiring.h).  Only Formula overrides both, so
+      // the rest of the compiled registry is hidden when an
+      // aggregation gate is in focus.  Non-registry options
+      // (probability, prov-xml, KC helpers, custom wrappers) stay
+      // visible: their dispatchers handle agg / semimod through the
+      // Boolean rewrite or by serialising the structure verbatim.
+      const aggTarget = gateType === 'agg' || gateType === 'semimod';
       let firstVisible = null;
       for (const opt of sel.querySelectorAll('option')) {
         let hide;
-        if (gateType == null) {
+        if (gateType == null && !inKcView) {
           // Indeterminate: hide nothing target-specific; respect the
           // existing PG-version gate on compiled options.
           hide = false;
@@ -1605,6 +1650,11 @@
         if (!hide && booleanOnly) {
           const spec = _COMPILED_REGISTRY[opt.value];
           if (spec && spec.booleanCompatible === false) hide = true;
+        }
+        if (!hide && aggTarget) {
+          const spec = _COMPILED_REGISTRY[opt.value];
+          if (spec && spec.aggCompatible === false) hide = true;
+          else if (_AGG_INCOMPATIBLE_OPTIONS.has(opt.value)) hide = true;
         }
         // PG-version gating on compiled semirings (set by
         // syncCompiledSemiringAvailability) wins: if the option was
