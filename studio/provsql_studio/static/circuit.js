@@ -28,6 +28,11 @@
     rv:       'Random variable: continuous distribution leaf',
     arith:    'Arithmetic gate: scalar operation over child gates',
     mixture:  'Mixture (Mix): Bernoulli-weighted choice between two scalar RV branches, or a categorical block (key + N mulinput outcomes)',
+    'kc-and':   'AND gate',
+    'kc-or':    'OR gate',
+    'kc-not':   'NOT gate',
+    'kc-input': 'Input gate (ι): base tuple',
+    'kc-bag':   'Bag: tree-decomposition node',
   };
 
   // gate_arith info1 holds a PROVSQL_ARITH_* tag (src/provsql_utils.h).
@@ -520,11 +525,15 @@
       // when info1 is set, otherwise an abbreviated UUID) regardless of
       // the "Show UUIDs" toggle: leaves are dense enough that the full
       // UUID would overflow neighbouring nodes.
-      const isLeafGate = n.type === 'input' || n.type === 'update';
-      const isKcInput = n.type === 'kc-input';
+      // kc-input nodes carry the original provenance UUID as their id
+      // (rewritten server-side from the DOT tooltip) and behave like
+      // gate_input leaves: same ι glyph, same short-UUID meta line,
+      // same source-row resolution in the inspector.
+      const isLeafGate = n.type === 'input' || n.type === 'update'
+                      || n.type === 'kc-input';
       const metaText = isLeafGate
         ? (n.info1 ? `tbl ${n.info1}` : shortUuid(n.id))
-        : (isKcInput ? (n.info1 || '') : '');
+        : '';
       if (metaText) {
         const meta = svgEl('text', { class: 'node-meta', y: 38 });
         meta.textContent = metaText;
@@ -889,8 +898,18 @@
     // value only when the "Show UUIDs" toggle is pressed. The title
     // attribute keeps the full string available on hover for the
     // collapsed form.
-    const uuidText = state.showUuids ? node.id : shortUuid(node.id);
-    html += `<dt>uuid</dt><dd title="${escapeHtml(node.id)}">${escapeHtml(uuidText)}</dd>`;
+    // Internal d-DNNF / tree-decomposition gates (kc-and / kc-or /
+    // kc-not / kc-bag) carry a synthetic id assigned by the
+    // visualisation layer, not a real provenance UUID, so we suppress
+    // the uuid row for them.
+    const isKcInternal = node.type === 'kc-and'
+                      || node.type === 'kc-or'
+                      || node.type === 'kc-not'
+                      || node.type === 'kc-bag';
+    if (!isKcInternal) {
+      const uuidText = state.showUuids ? node.id : shortUuid(node.id);
+      html += `<dt>uuid</dt><dd title="${escapeHtml(node.id)}">${escapeHtml(uuidText)}</dd>`;
+    }
     html += `<dt>depth</dt><dd>${node.depth}</dd>`;
     // info1 / info2 are gate-type-specific integers in the raw schema
     // (see provsql.set_infos doc). Translate to a human-readable form
@@ -949,14 +968,14 @@
       const density = renderRvDensity(parseDistributionSpec(node.extra));
       if (density) html += density;
     }
-    if (node.type === 'input' || node.type === 'mulinput') {
+    if (node.type === 'input' || node.type === 'mulinput' || node.type === 'kc-input') {
       html += '<p><em>Resolving source row…</em></p>';
     } else if (node.frontier) {
       html += '<p>Frontier node: click again to expand its subtree.</p>';
     }
     inspectorBody.innerHTML = html;
 
-    if (node.type === 'input' || node.type === 'mulinput') {
+    if (node.type === 'input' || node.type === 'mulinput' || node.type === 'kc-input') {
       fetchLeafRow(node.id);
     }
   }

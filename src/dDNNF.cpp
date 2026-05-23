@@ -756,6 +756,7 @@ std::string dDNNF::toDot() const
     std::string label;
     std::string shape = "circle";
     std::string fill;
+    std::string tooltip;
     switch(type) {
     case BooleanGate::AND:
       label = "∧";  // ∧
@@ -777,6 +778,12 @@ std::string dDNNF::toDot() const
       std::ostringstream lab;
       lab << sh << "\\np=" << std::fixed << std::setprecision(3) << prob[id];
       label = lab.str();
+      // Surface the full original-circuit UUID through a `tooltip`
+      // attribute so the Studio renderer can look the source row up
+      // via /api/leaf/<uuid> (same behaviour as input gates in the
+      // provenance circuit). The short prefix on the label is purely
+      // for the in-circle text.
+      tooltip = u;
       break;
     }
     default:
@@ -785,6 +792,8 @@ std::string dDNNF::toDot() const
 
     out << "  n" << id << " [label=\"" << label << "\", shape=" << shape
         << fill;
+    if(!tooltip.empty())
+      out << ", tooltip=\"" << tooltip << "\"";
     if(g == root)
       out << ", penwidth=2";
     out << "];\n";

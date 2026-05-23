@@ -57,6 +57,12 @@ def _run_dot_json(dot_src: str) -> dict:
 _DOT_NODE_RE = re.compile(
     r'^\s*([A-Za-z_][\w]*|\d+)\s*\[label="([^"]*)"', re.MULTILINE
 )
+# Tooltip attribute on IN nodes: `tooltip="<full-uuid>"`. dDNNF::toDot()
+# emits this so we can map the in-DOT synthetic node id back to the
+# original provenance circuit's UUID and resolve the source row.
+_DOT_TOOLTIP_RE = re.compile(
+    r'^\s*([A-Za-z_][\w]*|\d+)\s*\[[^\]]*tooltip="([^"]*)"', re.MULTILINE
+)
 # Regex over a single DOT edge line:
 #   <src> -> <dst>;
 _DOT_EDGE_RE = re.compile(
@@ -72,10 +78,12 @@ def _classify_ddnnf_node(label: str) -> tuple[str, str, str | None]:
       * ``∨`` for OR gates,
       * ``¬`` for NOT gates,
       * ``<uuid8>\\np=0.500`` for IN leaves.
-    We collapse the leaf label to the UUID short prefix and surface the
-    probability through ``info1`` so the front-end can render it on the
-    meta line under the node circle, matching how IN leaves of the
-    provenance circuit display their source row id.
+    AND / OR / NOT nodes are mapped to their math glyphs, IN leaves to
+    the ``ι`` glyph used by the provenance-circuit renderer for
+    @c gate_input. The leaf's @c info1 is left empty; the front-end
+    treats kc-input nodes as regular provenance input leaves and
+    surfaces the probability + source row via the same
+    @c fetchLeafRow path as for @c input gates.
     """
     if label == "∧":
         return ("kc-and", "∧", None)
@@ -83,12 +91,11 @@ def _classify_ddnnf_node(label: str) -> tuple[str, str, str | None]:
         return ("kc-or", "∨", None)
     if label == "¬":
         return ("kc-not", "¬", None)
-    # IN leaf: "<uuid8>\np=0.500". Use a distinct type so the provenance
-    # circuit's meta-line dispatch (which formats provenance INPUT
-    # leaves as "tbl ...") doesn't fire on these probabilistic literals.
-    first, _, rest = label.partition("\\n")
-    info1 = rest.strip() if rest else None
-    return ("kc-input", first.strip(), info1)
+    # IN leaf: "<uuid8>\np=0.500". Drop the probability text from the
+    # label and from info1 — the inspector fetches it (and the source
+    # row) via /api/leaf/<uuid>, matching the provenance circuit's
+    # input-gate behaviour.
+    return ("kc-input", "ι", None)
 
 
 def _ddnnf_scene_from_dot(dot_src: str, *, original_token: str) -> dict:
@@ -119,6 +126,15 @@ def _ddnnf_scene_from_dot(dot_src: str, *, original_token: str) -> dict:
         max_y = max(y for _, y in pos.values())
         pos = {k: (x, max_y - y) for k, (x, y) in pos.items()}
 
+    # Pre-extract the per-IN-node tooltip mapping so we can rewrite
+    # kc-input synthetic ids to the full provenance UUID. The synthetic
+    # id (`n3`, etc.) is only used by the DOT itself; the front-end
+    # treats the UUID as the gate identity and uses it to resolve the
+    # source row via /api/leaf/<uuid>.
+    syn_to_uuid: dict[str, str] = {
+        m.group(1): m.group(2) for m in _DOT_TOOLTIP_RE.finditer(dot_src)
+    }
+
     # Parse the DOT source for nodes (more reliable than the json
     # `objects` label for the SVG-escaped ∧ ∨ ¬ glyphs) and edges.
     nodes_seen: set[str] = set()
@@ -131,8 +147,11 @@ def _ddnnf_scene_from_dot(dot_src: str, *, original_token: str) -> dict:
         nodes_seen.add(nid)
         type_, display, info1 = _classify_ddnnf_node(label)
         x, y = pos.get(nid, (0.0, 0.0))
+        node_id = nid
+        if type_ == "kc-input" and nid in syn_to_uuid:
+            node_id = syn_to_uuid[nid]
         nodes.append({
-            "id":    nid,
+            "id":    node_id,
             "type":  type_,
             "label": display,
             "info1": info1,
@@ -149,7 +168,18 @@ def _ddnnf_scene_from_dot(dot_src: str, *, original_token: str) -> dict:
         })
     edges = []
     for m in _DOT_EDGE_RE.finditer(dot_src):
-        edges.append({"from": m.group(1), "to": m.group(2), "child_pos": None})
+        # Remap edge endpoints to the UUID for kc-input nodes so the
+        # canvas wiring matches the rewritten node ids above.
+        edges.append({
+            "from": syn_to_uuid.get(m.group(1), m.group(1)),
+            "to":   syn_to_uuid.get(m.group(2), m.group(2)),
+            "child_pos": None,
+        })
+
+    # Remap the root marker in the (rare) case the root is itself an
+    # IN leaf, so kc_root_id refers to the same id the canvas uses.
+    if root_id is not None and root_id in syn_to_uuid:
+        root_id = syn_to_uuid[root_id]
 
     # Fallback root marker: the first node in source order if no
     # penwidth=2 hint came through (older / future DOT emitters that
@@ -160,6 +190,37 @@ def _ddnnf_scene_from_dot(dot_src: str, *, original_token: str) -> dict:
     # canvas swap.
     if root_id is None and nodes:
         root_id = nodes[0]["id"]
+
+    # Longest-path depth from the root (the canonical circuit-depth
+    # notion), computed via Kahn's-style topological relaxation: each
+    # node is finalised once all its in-edges have contributed a
+    # candidate `parent_depth + 1`, and we keep the max.
+    if root_id is not None:
+        adj: dict[str, list[str]] = {n["id"]: [] for n in nodes}
+        for e in edges:
+            if e["from"] in adj:
+                adj[e["from"]].append(e["to"])
+        indeg: dict[str, int] = {n["id"]: 0 for n in nodes}
+        for e in edges:
+            if e["to"] in indeg and e["from"] in adj:
+                indeg[e["to"]] += 1
+        depth_of: dict[str, int] = {root_id: 0}
+        frontier: list[str] = [root_id]
+        while frontier:
+            nxt: list[str] = []
+            for n in frontier:
+                d = depth_of[n]
+                for c in adj.get(n, []):
+                    cand = d + 1
+                    if depth_of.get(c, -1) < cand:
+                        depth_of[c] = cand
+                    indeg[c] -= 1
+                    if indeg[c] == 0:
+                        nxt.append(c)
+            frontier = nxt
+        for n in nodes:
+            if n["id"] in depth_of:
+                n["depth"] = depth_of[n["id"]]
 
     return {
         "nodes": nodes,
@@ -231,6 +292,38 @@ def _td_scene_from_dot(dot_src: str, treewidth: int | None, *, original_token: s
             break
     if root_id is None and nodes:
         root_id = nodes[0]["id"]
+
+    # Longest-path depth from the TD root, mirroring the d-DNNF scene
+    # path. The TD bag DAG is in practice a tree, so longest and
+    # shortest coincide; we use the same Kahn's-style relaxation as the
+    # d-DNNF case for code symmetry and to stay correct if a future TD
+    # exporter ever shares bags.
+    if root_id is not None:
+        adj: dict[str, list[str]] = {n["id"]: [] for n in nodes}
+        for e in edges:
+            if e["from"] in adj:
+                adj[e["from"]].append(e["to"])
+        indeg: dict[str, int] = {n["id"]: 0 for n in nodes}
+        for e in edges:
+            if e["to"] in indeg and e["from"] in adj:
+                indeg[e["to"]] += 1
+        depth_of: dict[str, int] = {root_id: 0}
+        frontier: list[str] = [root_id]
+        while frontier:
+            nxt: list[str] = []
+            for n in frontier:
+                d = depth_of[n]
+                for c in adj.get(n, []):
+                    cand = d + 1
+                    if depth_of.get(c, -1) < cand:
+                        depth_of[c] = cand
+                    indeg[c] -= 1
+                    if indeg[c] == 0:
+                        nxt.append(c)
+            frontier = nxt
+        for n in nodes:
+            if n["id"] in depth_of:
+                n["depth"] = depth_of[n["id"]]
 
     out = {
         "nodes": nodes,

@@ -1340,11 +1340,13 @@ $$
       WITH ORDINALITY AS c(t, idx)
     WHERE b.depth < max_depth
   ),
-  -- Each node's canonical depth is its shortest-path distance from the root.
-  -- Tie-breaking on child_pos is irrelevant for the depth value but kept so
-  -- the (now informational) row order is stable.
+  -- Each node's canonical depth is its longest-path distance from the
+  -- root (the standard circuit-depth notion: the longest chain of
+  -- gates separating the node from the output). The recursive CTE
+  -- enumerates paths up to @c max_depth, so MAX over those is the
+  -- longest path of length at most @c max_depth.
   node_depth AS (
-    SELECT node, MIN(depth) AS depth FROM bfs GROUP BY node
+    SELECT node, MAX(depth) AS depth FROM bfs GROUP BY node
   ),
   -- All distinct (parent, child, child_pos) triples seen during the BFS.
   -- A child reached from k parents within the bound contributes k rows.

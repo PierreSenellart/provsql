@@ -189,22 +189,50 @@ simplified_circuit_subgraph(PG_FUNCTION_ARGS)
       provsql::runHybridSimplifier(gc);
     }
 
-    /* BFS to compute the canonical (shortest-path) depth of each
-     * reachable gate. */
+    /* Longest-path depth of each reachable gate from the root: the
+     * canonical circuit-depth notion. We do a BFS to discover the
+     * reachable set, then a Kahn's-style topological relaxation over
+     * those nodes to compute the longest path. Bounded by max_depth:
+     * a node only enters the result if some path of length at most
+     * max_depth reaches it (matching the SQL @c circuit_subgraph CTE
+     * semantics). */
+    std::unordered_set<gate_t> reachable;
+    {
+      std::queue<gate_t> q;
+      reachable.insert(root_gate);
+      q.push(root_gate);
+      while (!q.empty()) {
+        gate_t g = q.front(); q.pop();
+        for (gate_t c : gc.getWires(g)) {
+          if (reachable.insert(c).second) q.push(c);
+        }
+      }
+    }
+    /* Indegree restricted to the reachable subgraph, so the relaxation
+     * processes each node only after all its predecessors. */
+    std::unordered_map<gate_t, int> indeg;
+    for (gate_t g : reachable) indeg[g] = 0;
+    for (gate_t g : reachable) {
+      for (gate_t c : gc.getWires(g)) {
+        if (reachable.count(c)) indeg[c]++;
+      }
+    }
     std::unordered_map<gate_t, int> depth_of;
-    std::queue<gate_t> bfs;
     depth_of[root_gate] = 0;
+    std::queue<gate_t> bfs;
     bfs.push(root_gate);
     while (!bfs.empty()) {
       gate_t g = bfs.front(); bfs.pop();
       int d = depth_of[g];
       if (d >= max_depth) continue;
       for (gate_t c : gc.getWires(g)) {
+        if (!reachable.count(c)) continue;
         auto it = depth_of.find(c);
-        if (it == depth_of.end()) {
-          depth_of[c] = d + 1;
-          bfs.push(c);
+        int candidate = d + 1;
+        if (it == depth_of.end() || it->second < candidate) {
+          depth_of[c] = candidate;
         }
+        if (--indeg[c] == 0) bfs.push(c);
       }
     }
 
