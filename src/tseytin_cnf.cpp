@@ -59,9 +59,9 @@ Datum tseytin_cnf(PG_FUNCTION_ARGS)
     memcpy((void *) VARDATA(result), cnf.c_str(), cnf.size());
     PG_RETURN_TEXT_P(result);
   } catch(const std::exception &e) {
-    provsql_error("tseytin_cnf: %s", e.what());
+    provsql_error("%s", e.what());
   } catch(...) {
-    provsql_error("tseytin_cnf: Unknown exception");
+    provsql_error("Unknown exception");
   }
   PG_RETURN_NULL();
 }

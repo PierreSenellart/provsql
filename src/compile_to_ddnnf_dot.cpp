@@ -84,9 +84,9 @@ Datum compile_to_ddnnf_dot(PG_FUNCTION_ARGS)
     memcpy((void *) VARDATA(result), dot.c_str(), dot.size());
     PG_RETURN_TEXT_P(result);
   } catch(const std::exception &e) {
-    provsql_error("compile_to_ddnnf_dot: %s", e.what());
+    provsql_error("%s", e.what());
   } catch(...) {
-    provsql_error("compile_to_ddnnf_dot: Unknown exception");
+    provsql_error("Unknown exception");
   }
   PG_RETURN_NULL();
 }

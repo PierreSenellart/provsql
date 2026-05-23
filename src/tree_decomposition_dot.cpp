@@ -60,13 +60,12 @@ Datum tree_decomposition_dot(PG_FUNCTION_ARGS)
       PG_RETURN_TEXT_P(result);
     } catch(TreeDecompositionException &) {
       provsql_error(
-        "tree_decomposition_dot: circuit treewidth exceeds the supported "
-        "limit (MAX_TREEWIDTH)");
+        "circuit treewidth exceeds the supported limit (MAX_TREEWIDTH)");
     }
   } catch(const std::exception &e) {
-    provsql_error("tree_decomposition_dot: %s", e.what());
+    provsql_error("%s", e.what());
   } catch(...) {
-    provsql_error("tree_decomposition_dot: Unknown exception");
+    provsql_error("Unknown exception");
   }
   PG_RETURN_NULL();
 }

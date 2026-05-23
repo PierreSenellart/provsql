@@ -671,6 +671,15 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   dnnf.setRoot(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
 
+  // External NNF writers (c2d, minic2d, dsharp) leave TRUE constants
+  // (empty AND gates) and FALSE constants (empty OR gates) embedded in
+  // the structure, because their target formats (Decision-DNNF, SDD)
+  // require every variable to be "covered" even when its value is
+  // forced by the CNF. Run the standard peephole so the d-DNNF returned
+  // to callers is in canonical form, matching the tree-decomposition
+  // builder which already simplifies.
+  dnnf.simplify();
+
   return dnnf;
 }
 
