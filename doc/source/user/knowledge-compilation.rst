@@ -108,7 +108,37 @@ The second argument names the compiler. ProvSQL ships bindings for:
     DPLL-style compiler built on sharpSAT :cite:`DBLP:conf/ai/MuiseMBH12`.
 ``'panini-obdd'``, ``'panini-obdd-and'``, ``'panini-decdnnf'``, ``'panini-r2d2'``, ``'panini-ccdd'``
     The five target languages of KCBox's Panini compiler
-    :cite:`KCBoxPanini`.
+    :cite:`KCBoxPanini`:
+
+    * ``OBDD`` is the canonical ordered Boolean decision diagram, a strict
+      subset of d-DNNF whose decisions are restricted to a global variable
+      order.
+    * ``OBDD[AND]`` augments OBDD with internal AND nodes
+      :cite:`DBLP:journals/jair/LaiLY17`, recovering a more compact
+      representation while keeping polynomial Apply.
+    * ``Decision-DNNF`` drops the variable order, retaining only the
+      decomposability + determinism of d-DNNF; it is the canonical
+      target of ``d4``.
+    * ``R2-D2`` and ``CCDD`` :cite:`DBLP:journals/corr/abs-2202-10025`
+      are recent super-languages of Decision-DNNF that admit further
+      structural sharing.
+
+    The languages are listed in increasing succinctness: a smaller
+    representation is usually obtainable as the target language gets
+    more general, at the cost of fewer tractable queries on the
+    compiled form (probability evaluation, however, stays tractable on
+    all five).
+
+``'d4'`` versus ``'d4v2'``
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``d4`` is the original 2017 Decision-DNNF compiler with backtracking
+:cite:`DBLP:conf/ijcai/LagniezM17`. ``d4v2`` is a 2021 rewrite
+:cite:`LagniezM21d4v2` with the same target language, often (but not
+always) faster on heavier formulas. Both share the same DIMACS CNF
+input and the same NNF output format, so :sqlfunc:`compile_to_ddnnf_dot`
+and :sqlfunc:`probability_evaluate` accept them interchangeably; the
+two binaries are typically installed side by side.
 
 Each compiler must be installed and reachable on the PostgreSQL
 server's ``PATH``, or in a directory listed in the
@@ -139,6 +169,68 @@ carrying the treewidth::
     SELECT tree_decomposition_dot(provenance())
     FROM suspects WHERE id = 1;
 
+Weighted model counters: the ``wmc`` umbrella
+---------------------------------------------
+
+The ``wmc`` method dispatches to a family of exact weighted model
+counters, each consuming the same DIMACS CNF emitted by
+:sqlfunc:`tseytin_cnf` (with the literal-weight ``c p weight`` lines
+required by the MCC 2024 input format):
+
+``'ganak'``
+    A projected weighted model counter from the meelgroup
+    :cite:`DBLP:conf/ijcai/SharmaRSM19`. Compact and self-contained;
+    requires a single ``ganak`` binary on ``PATH``.
+
+``'sharpsat-td'``
+    Tree-decomposition-guided exact counter
+    :cite:`DBLP:conf/cp/KorhonenJ21`. Needs the ``flow_cutter_pace17``
+    helper alongside ``sharpsat-td`` so the counter can shell out to
+    its tree-decomposer.
+
+``'dpmc'``
+    Two-stage planner + executor pipeline :cite:`DBLP:conf/cp/DudekPV20`:
+    ``htb`` builds a project-join tree, ``dmc`` consumes it. Both
+    binaries must be installed.
+
+``'weightmc'``
+    The approximate ApproxMC variant (kept under the umbrella for
+    discoverability; see :doc:`probabilities` for its
+    ``epsilon;delta`` knob).
+
+Invocation goes through :sqlfunc:`probability_evaluate`:
+
+.. code-block:: postgresql
+
+    SELECT probability_evaluate(provenance(), 'wmc', 'ganak')
+    FROM suspects WHERE id = 1;
+
+Switching between counters is a single-string change, which is what the
+benchmark below exploits to compare them on the same circuit.
+
+Inspecting the in-memory circuit
+--------------------------------
+
+Before any compilation runs, the ``provsql.simplify_on_load`` GUC may
+have already rewritten parts of the circuit: identity / absorber
+collapses, ``gate_cmp`` resolutions for circuits over random variables,
+hybrid-evaluator simplifications (see :doc:`probabilities`).
+:sqlfunc:`simplified_circuit_subgraph` returns the post-simplification
+DAG, rooted at the given token, as a JSON adjacency list. This is the
+exact shape the probability evaluators traverse:
+
+.. code-block:: postgresql
+
+    SELECT jsonb_pretty(simplified_circuit_subgraph(provenance()))
+    FROM suspects WHERE id = 1;
+
+Each node carries its gate type, an inline ``extra`` field for typed
+leaves (random variables, ``cmp`` thresholds), and the longest-path
+depth from the root. The longest path is the canonical
+circuit-depth notion: it tracks the deepest chain of operators between
+the node and the output, which is what governs evaluation cost and
+matches the depth a renderer would draw.
+
 Comparing probability methods
 -----------------------------
 
@@ -146,14 +238,14 @@ Comparing probability methods
 method on a single circuit token and returns one row per method with
 its wall-clock duration and result. It runs ``independent``,
 ``possible-worlds``, ``tree-decomposition``, ``monte-carlo``, each
-external compiler through the ``compilation`` method, and the weighted
-model counters under the ``wmc`` umbrella. Methods that cannot apply
+external compiler through the ``compilation`` method, and each weighted
+model counter under the ``wmc`` umbrella. Methods that cannot apply
 (an uninstalled compiler, a non-independent circuit, a treewidth
 blow-up, …) are captured per row in an ``error`` column rather than
 aborting the whole comparison.
 
 ``probability_benchmark`` returns a table, a shape the planner hook
-does not rewrite, so call it with the rewriter standing back — either
+does not rewrite, so call it with the rewriter standing back, either
 on a token materialised in a plain (non-provenance) table, or with
 ``provsql.active`` temporarily off:
 
@@ -182,8 +274,8 @@ Checking tool availability
 
 Because the compilers and model counters are optional external
 binaries, :sqlfunc:`tool_available` reports whether a given tool
-resolves to an executable on the backend's effective ``PATH`` —
-including the ``provsql.tool_search_path`` prefix — exactly as a
+resolves to an executable on the backend's effective ``PATH``,
+including the ``provsql.tool_search_path`` prefix, exactly as a
 subsequent ``compilation`` or ``view_circuit`` call would see it:
 
 .. code-block:: postgresql

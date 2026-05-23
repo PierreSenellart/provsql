@@ -365,6 +365,21 @@ and a one-click :guilabel:`Benchmark` that times every method
 the server are filtered out of the picker (via :sqlfunc:`tool_available`).
 See :doc:`knowledge-compilation` for the full pipeline.
 
+The d-DNNF and tree-decomposition canvases pin and inspect like the
+provenance circuit, with two refinements specific to those views:
+
+* In the **tree-decomposition** canvas, each bag is coloured by its
+  index in the elimination order and clicking the bag focuses the
+  inspector on its members. The inspector resolves each member's
+  source row (provenance UUID → table / row), so the user can trace
+  back which tuple a given variable came from.
+* When a tree-decomposition bag or an internal d-DNNF gate
+  (:guilabel:`AND` / :guilabel:`OR` / :guilabel:`NOT`) is pinned, the
+  evaluation strip hides itself: those nodes are intermediate
+  artifacts of the compilation, not roots of a probabilistic
+  sub-circuit, so the usual semiring / probability surface does not
+  apply.
+
 .. _studio-circuit-oversized:
 
 Oversized circuits

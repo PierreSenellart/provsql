@@ -98,7 +98,12 @@ Computation Methods
 ``'compilation'``
     Exact computation by first compiling the circuit to a d-DNNF using an
     external tool, then evaluating the d-DNNF. The third argument names the
-    tool: ``'d4'`` (by default), ``'c2d'``, ``'dsharp'``, or ``'minic2d'``:
+    tool: ``'d4'`` (default), ``'d4v2'``, ``'c2d'``, ``'dsharp'``,
+    ``'minic2d'``, or one of the five Panini target languages from KCBox
+    :cite:`DBLP:journals/corr/abs-2202-10025`,
+    ``'panini-obdd'``, ``'panini-obdd-and'``
+    :cite:`DBLP:journals/jair/LaiLY17`, ``'panini-decdnnf'``,
+    ``'panini-r2d2'``, ``'panini-ccdd'``:
 
     .. code-block:: postgresql
 
@@ -107,13 +112,27 @@ Computation Methods
 
     The tool must be installed and accessible in the PostgreSQL server's
     PATH, or in a directory listed in the ``provsql.tool_search_path`` GUC
-    (see :doc:`configuration`). The CNF handed to the compiler and the
+    (see :doc:`configuration`); :sqlfunc:`tool_available` reports the
+    backend's view of a given tool. The CNF handed to the compiler and the
     resulting d-DNNF can both be inspected; see
     :doc:`knowledge-compilation`.
 
+``'wmc'``
+    Exact (umbrella for weighted model counters) computation. The third
+    argument is ``tool[;tool_args]`` and selects the counter:
+    ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`, ``'sharpsat-td'``
+    :cite:`DBLP:conf/cp/KorhonenJ21`, ``'dpmc'``
+    :cite:`DBLP:conf/cp/DudekPV20`, or ``'weightmc'``. Same PATH /
+    ``provsql.tool_search_path`` considerations as ``'compilation'``:
+
+    .. code-block:: postgresql
+
+        SELECT probability_evaluate(provenance(), 'wmc', 'ganak')
+        FROM suspects;
+
 ``'weightmc'``
     Approximate weighted model counting using the external ``weightmc``
-    tool:
+    tool (alias for ``'wmc'``, ``'weightmc;...'``):
 
     .. code-block:: postgresql
 

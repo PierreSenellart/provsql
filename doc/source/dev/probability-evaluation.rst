@@ -137,6 +137,52 @@ and the d4-extended dialects.  The result is a
 returned to the caller and walked by
 :cfunc:`dDNNF::probabilityEvaluation`.
 
+The Panini compiler from KCBox ships with five target-language
+modes (``OBDD``, ``OBDD[AND]``, ``Decision-DNNF``, ``R2-D2``,
+``CCDD``) selected by the ``--lang`` flag.  Its output is not the
+NNF text format but a CDD-style DOT-like syntax; the dedicated
+parser in :cfunc:`BooleanCircuit::paniniCompile` translates each
+``C`` / ``D`` / ``K`` line into a decomposable AND and each
+``v ? t : f`` decision into an explicit OR-of-AND-NOT structure
+over the corresponding input gate.
+
+After any external-compiler call, :cfunc:`dDNNF::simplify` runs a
+single canonical pass over the result: empty-constant folding,
+short-circuiting on opposite-type empty children, and single-child
+AND / OR collapse.  The same pass is run on the in-process
+tree-decomposition route and on :cfunc:`BooleanCircuit::interpretAsDD`,
+so callers see a structurally canonical d-DNNF regardless of which
+backend produced it.
+
+Helper Surfaces (Studio and SQL Introspection)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Four small SQL helpers expose intermediate pipeline artifacts to
+the user and to Studio:
+
+- :cfile:`tseytin_cnf.cpp` (:sqlfunc:`tseytin_cnf`) returns the
+  DIMACS CNF that the external compilers would otherwise receive.
+- :cfile:`tree_decomposition_dot.cpp`
+  (:sqlfunc:`tree_decomposition_dot`) renders the min-fill tree
+  decomposition as GraphViz DOT, with the treewidth and a per-bag
+  input map embedded as comment lines so consumers can resolve a
+  bag variable back to its provenance UUID.
+- :cfile:`compile_to_ddnnf_dot.cpp`
+  (:sqlfunc:`compile_to_ddnnf_dot`) goes one step further: it runs
+  the requested compiler (or the meta-routes ``tree-decomposition``,
+  ``interpret-as-dd``, ``default`` -- all dispatched through
+  :cfunc:`BooleanCircuit::makeDD`) and returns the resulting d-DNNF
+  itself as DOT.
+- :cfile:`tool_available.cpp` (:sqlfunc:`tool_available`) is a thin
+  wrapper around :cfunc:`find_external_tool` so a SQL client can
+  check whether a given tool resolves on the backend's PATH plus
+  ``provsql.tool_search_path`` -- used by Studio to grey out
+  unselectable compilers in the picker.
+
+None of these helpers participate in the probability dispatcher;
+they are purely introspection surfaces sharing the same Tseytin /
+NNF / tree-decomposition primitives as the production methods.
+
 WeightMC: Approximate Weighted Model Counting
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

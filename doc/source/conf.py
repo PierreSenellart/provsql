@@ -161,7 +161,7 @@ _SQL_FUNC_MAP = {
     'tseytin_cnf':              '/doxygen-sql/html/group__provenance__output.html#gab0879def9508c30103d7ff4f990db959',
     'compile_to_ddnnf_dot':     '/doxygen-sql/html/group__provenance__output.html#ga9ba06ef2743dee623c15186c50d5c726',
     'tree_decomposition_dot':   '/doxygen-sql/html/group__provenance__output.html#gafecf32e35b73af9cc4070973bcd98ead',
-    'probability_benchmark':    '/doxygen-sql/html/group__provenance__output.html#ga97ca4a837aa2493190912c1b6c161ceb',
+    'probability_benchmark':    '/doxygen-sql/html/group__provenance__output.html#ga8806396aee44a75849e74ba50c5a0eca',
     'tool_available':           '/doxygen-sql/html/group__provenance__output.html#ga4ae4f9f7a08be9333e78028fe10bd6cc',
     # Per-table provenance metadata + base-ancestor registry
     'set_ancestors':            '/doxygen-sql/html/group__table__management.html#ga003841a8da4d0184f7f0bc885fb6418b',
@@ -310,6 +310,8 @@ _C_FUNC_MAP = {
     'runCountCmpEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#a202da174e018e993ce6e351f6c7119a1',
     'GenericCircuit::resolveCmpToBernoulli': '/doxygen-c/html/classGenericCircuit.html#aaeee2a77e24f089ef526797f4b1daff1',
     'BooleanCircuit::interpretAsDD':         '/doxygen-c/html/classBooleanCircuit.html#a16a0f5a4e7b3c65afd2cee3747cb1c9e',
+    'BooleanCircuit::paniniCompile':         '/doxygen-c/html/classBooleanCircuit.html#aa8dd062bf9e8ab44ae119dac85f2be87',
+    'dDNNF::simplify':                       '/doxygen-c/html/classdDNNF.html#a6cfc6e47106f1a7a2c7149933f01f6de',
     'dDNNFTreeDecompositionBuilder::builddDNNF': '/doxygen-c/html/classdDNNFTreeDecompositionBuilder.html#a576d126fe1e385a20c0522322bec82ef',
     'getJointCircuit':                       '/doxygen-c/html/CircuitFromMMap_8h.html#aa005f0d1643bf481ed57ee2bc3134f20',
     'shapley_internal':                      '/doxygen-c/html/shapley_8cpp.html#a4703d29e438b3454874017304a945d67',
