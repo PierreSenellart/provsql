@@ -166,7 +166,8 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
        * the scalar unchanged in every world, so the interval of the
        * semimod equals the interval of its value child.  Other
        * semimod shapes (non-trivial k_gate) keep the conservative
-       * all-real default. */
+       * all-real default here; @c support_intervalOf widens it to
+       * a sampling-time support for rv_* callers. */
       const auto &wires = gc.getWires(g);
       if (wires.size() == 2 && gc.getGateType(wires[0]) == gate_one)
         result = intervalOf(gc, wires[1], cache);
@@ -1060,12 +1061,116 @@ unsigned runRangeCheck(GenericCircuit &gc)
   return resolved;
 }
 
+namespace {
+
+/* Sampling-time support for aggregation gates.  Unlike @c intervalOf
+ * (shared with the @c runRangeCheck cmp dispatcher, which must stay
+ * conservative on agg to respect SQL NULL semantics), this widens
+ * gate_agg and non-trivial gate_semimod to the actual range of
+ * scalar MC samples @c MonteCarloSampler::evalScalar can produce.
+ * Used only by @c compute_support, called from rv_support /
+ * rv_histogram / rv_moment fallbacks, so the cmp decider remains
+ * untouched.
+ *
+ * Empty-group convention (see test/sql/continuous_aggregation §5):
+ * COUNT and SUM yield 0; MIN / MAX / AVG yield NaN.  NaN sits
+ * outside any real interval, so callers binning samples drop those
+ * worlds automatically; the moment averagers in
+ * Expectation::mc_raw_moment also skip them.
+ */
+Interval aggSupportOf(const GenericCircuit &gc, gate_t root,
+                      std::unordered_map<gate_t, Interval> &cache)
+{
+  const auto type = gc.getGateType(root);
+  if (type == gate_semimod) {
+    const auto &wires = gc.getWires(root);
+    if (wires.size() != 2) return Interval::all();
+    Interval vi = intervalOf(gc, wires[1], cache);
+    if (gc.getGateType(wires[0]) == gate_one) return vi;
+    /* Boolean k child: per-iteration scalar is value · 1_{k fires},
+     * so the support is the union of {0} and the value's range. */
+    return Interval{std::min(0.0, vi.lo), std::max(0.0, vi.hi)};
+  }
+  if (type != gate_agg) return intervalOf(gc, root, cache);
+
+  const auto &wires = gc.getWires(root);
+  AggregationOperator op =
+    getAggregationOperator(gc.getInfos(root).first);
+
+  std::vector<gate_t> sm_children;
+  sm_children.reserve(wires.size());
+  for (gate_t c : wires)
+    if (gc.getGateType(c) == gate_semimod) sm_children.push_back(c);
+
+  auto child_value_iv = [&](gate_t sm) -> Interval {
+    const auto &sw = gc.getWires(sm);
+    if (sw.size() != 2) return Interval::all();
+    return intervalOf(gc, sw[1], cache);
+  };
+  auto child_always_fires = [&](gate_t sm) -> bool {
+    const auto &sw = gc.getWires(sm);
+    return sw.size() == 2 && gc.getGateType(sw[0]) == gate_one;
+  };
+
+  const auto inf = std::numeric_limits<double>::infinity();
+  switch (op) {
+    case AggregationOperator::COUNT:
+      /* [0, n_rows].  Each semimod contributes 0 or 1 to the count. */
+      return Interval{0.0, static_cast<double>(sm_children.size())};
+    case AggregationOperator::SUM: {
+      /* Per row, contribution is value if k fires, else 0; sum the
+       * per-row support intervals.  Always-firing rows contribute
+       * their value interval verbatim; possibly-firing rows
+       * contribute [min(0, v.lo), max(0, v.hi)]. */
+      double lo = 0.0, hi = 0.0;
+      for (gate_t sm : sm_children) {
+        Interval vi = child_value_iv(sm);
+        if (vi.isAll()) return Interval::all();
+        if (child_always_fires(sm)) {
+          lo += vi.lo;
+          hi += vi.hi;
+        } else {
+          lo += std::min(0.0, vi.lo);
+          hi += std::max(0.0, vi.hi);
+        }
+      }
+      return Interval{lo, hi};
+    }
+    case AggregationOperator::MIN:
+    case AggregationOperator::MAX: {
+      /* MIN / MAX of values where k_i fires.  The actual MIN (or MAX)
+       * is some value from one of the firing rows, so the support is
+       * the union of the children's value intervals.  Empty-group
+       * worlds finalise to NaN, which sits outside the real
+       * interval. */
+      if (sm_children.empty()) return Interval::all();
+      double lo =  inf;
+      double hi = -inf;
+      for (gate_t sm : sm_children) {
+        Interval vi = child_value_iv(sm);
+        if (vi.isAll()) return Interval::all();
+        lo = std::min(lo, vi.lo);
+        hi = std::max(hi, vi.hi);
+      }
+      if (lo > hi) return Interval::all();
+      return Interval{lo, hi};
+    }
+    default:
+      /* AVG: ratio depends on the world's row count.  AND / OR /
+       * CHOOSE / ARRAY_AGG: not numeric carriers rv_* surfaces.
+       * Keep the conservative all-real default. */
+      return Interval::all();
+  }
+}
+
+}  // namespace
+
 std::pair<double, double>
 compute_support(const GenericCircuit &gc, gate_t root,
                 std::optional<gate_t> event_root)
 {
   std::unordered_map<gate_t, Interval> cache;
-  Interval iv = intervalOf(gc, root, cache);
+  Interval iv = aggSupportOf(gc, root, cache);
 
   /* Conditional path: intersect with the event's AND-conjunct
    * constraints on @p root.  Walks event_root collecting `rv op c`

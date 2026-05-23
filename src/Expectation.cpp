@@ -204,9 +204,19 @@ double mc_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
 {
   auto samples = monteCarloScalarSamples(gc, g, mc_samples_or_throw(what));
   if (samples.empty()) return 0.0;
+  // NaN samples come from sampling-undefined worlds, e.g. an
+  // agg(SUM/AVG/MIN/MAX) over an empty group (SQL NULL).  Treat them
+  // as missing observations of the moment rather than poisoning the
+  // mean; only return NaN if every sample was undefined.
   double total = 0.0;
-  for (double x : samples) total += std::pow(x, static_cast<double>(k));
-  return total / static_cast<double>(samples.size());
+  std::size_t finite_count = 0;
+  for (double x : samples) {
+    if (std::isnan(x)) continue;
+    total += std::pow(x, static_cast<double>(k));
+    ++finite_count;
+  }
+  if (finite_count == 0) return std::numeric_limits<double>::quiet_NaN();
+  return total / static_cast<double>(finite_count);
 }
 
 double mc_central_moment(const GenericCircuit &gc, gate_t g, unsigned k,
@@ -215,11 +225,15 @@ double mc_central_moment(const GenericCircuit &gc, gate_t g, unsigned k,
   auto samples = monteCarloScalarSamples(gc, g, mc_samples_or_throw(what));
   if (samples.empty()) return 0.0;
   double total = 0.0;
+  std::size_t finite_count = 0;
   for (double x : samples) {
+    if (std::isnan(x)) continue;
     const double d = x - mu;
     total += std::pow(d, static_cast<double>(k));
+    ++finite_count;
   }
-  return total / static_cast<double>(samples.size());
+  if (finite_count == 0) return std::numeric_limits<double>::quiet_NaN();
+  return total / static_cast<double>(finite_count);
 }
 
 /// Minimum accepted-sample count for conditional MC moments.  Below
@@ -264,9 +278,18 @@ double mc_conditional_raw_moment(const GenericCircuit &gc, gate_t g,
   auto cs = monteCarloConditionalScalarSamples(
               gc, g, event_root, mc_samples_or_throw(what));
   check_acceptance_or_throw(cs, what);
+  // Mirror the unconditional path: NaN observations (sampling-
+  // undefined worlds, typically empty-group SQL NULLs from
+  // gate_agg) are excluded from the mean.
   double total = 0.0;
-  for (double x : cs.accepted) total += std::pow(x, static_cast<double>(k));
-  return total / static_cast<double>(cs.accepted.size());
+  std::size_t finite_count = 0;
+  for (double x : cs.accepted) {
+    if (std::isnan(x)) continue;
+    total += std::pow(x, static_cast<double>(k));
+    ++finite_count;
+  }
+  if (finite_count == 0) return std::numeric_limits<double>::quiet_NaN();
+  return total / static_cast<double>(finite_count);
 }
 
 double mc_conditional_central_moment(const GenericCircuit &gc, gate_t g,
@@ -278,11 +301,15 @@ double mc_conditional_central_moment(const GenericCircuit &gc, gate_t g,
               gc, g, event_root, mc_samples_or_throw(what));
   check_acceptance_or_throw(cs, what);
   double total = 0.0;
+  std::size_t finite_count = 0;
   for (double x : cs.accepted) {
+    if (std::isnan(x)) continue;
     const double d = x - mu;
     total += std::pow(d, static_cast<double>(k));
+    ++finite_count;
   }
-  return total / static_cast<double>(cs.accepted.size());
+  if (finite_count == 0) return std::numeric_limits<double>::quiet_NaN();
+  return total / static_cast<double>(finite_count);
 }
 
 double binomial(unsigned n, unsigned k)

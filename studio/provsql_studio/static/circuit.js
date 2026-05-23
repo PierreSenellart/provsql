@@ -1379,6 +1379,15 @@
   // menu (distribution profile, PROV-XML).  Picked by inspecting the
   // eval target's gate type via state.scene.nodes.
   const _SCALAR_GATE_TYPES = new Set(['rv', 'arith', 'value', 'mixture']);
+  // Aggregation gates also produce a scalar at evaluation time
+  // (counting / summing / averaging / min-maxing the per-row
+  // contributions), but they additionally carry the Boolean lineage
+  // of which rows were aggregated.  The eval strip therefore keeps
+  // both menus visible for these: distribution-profile / moment /
+  // sample go through MonteCarloSampler::evalScalar's gate_agg /
+  // gate_semimod arms, while formula and prov-xml stay reachable for
+  // lineage inspection.
+  const _AGG_SCALAR_GATE_TYPES = new Set(['agg', 'semimod']);
   // Options visible when the eval target is scalar.  Everything else in
   // the <select> gets hidden + disabled for the duration of the scalar
   // focus.  PROV-XML stays because it accepts any provenance gate.
@@ -1630,11 +1639,12 @@
       // agg gates" / "does not support semimod gates" (see
       // src/semiring/Semiring.h).  Only Formula overrides both, so
       // the rest of the compiled registry is hidden when an
-      // aggregation gate is in focus.  Non-registry options
-      // (probability, prov-xml, KC helpers, custom wrappers) stay
-      // visible: their dispatchers handle agg / semimod through the
-      // Boolean rewrite or by serialising the structure verbatim.
-      const aggTarget = gateType === 'agg' || gateType === 'semimod';
+      // aggregation gate is in focus.  Non-registry options also fail
+      // on agg/semimod: Probability and KC helpers need a Boolean
+      // rewrite first, which itself throws.  Distribution profile /
+      // moment / sample _do_ work, going through
+      // MonteCarloSampler::evalScalar's gate_agg / gate_semimod arms.
+      const aggTarget = _AGG_SCALAR_GATE_TYPES.has(gateType);
       let firstVisible = null;
       for (const opt of sel.querySelectorAll('option')) {
         let hide;
@@ -1644,6 +1654,11 @@
           hide = false;
         } else if (isScalar) {
           hide = !_SCALAR_TARGET_OPTIONS.has(opt.value);
+        } else if (aggTarget) {
+          // Start with the full menu visible; the agg-compat filters
+          // below strip the options that would throw on agg/semimod.
+          // distribution-profile / moment / sample stay reachable.
+          hide = false;
         } else {
           hide = _SCALAR_ONLY_OPTIONS.has(opt.value);
         }

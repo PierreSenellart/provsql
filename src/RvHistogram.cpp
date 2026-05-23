@@ -27,11 +27,18 @@
  *     Bernoulli (gate_input) wire and the selected scalar branch,
  *     reusing per-iteration caches so a shared p_token across the
  *     circuit produces coupled draws.
+ *   - @c gate_agg: sampled per Monte Carlo iteration by walking the
+ *     gate_semimod children, applying their Boolean filter, and
+ *     finalising the chosen aggregator (COUNT / SUM / AVG / MIN /
+ *     MAX).  Same machinery probability evaluation uses for HAVING
+ *     under MC; see @c MonteCarloSampler::evalScalar.
+ *   - @c gate_semimod: a bare per-row contribution interpreted as
+ *     value · 1_{k fires}, i.e. zero in worlds where the row's
+ *     Boolean filter does not fire and the scalar value otherwise.
  *
- * Any other gate type raises: probability of a Boolean-valued gate is
- * a scalar that the existing @c probability_evaluate dispatch covers,
- * and aggregation roots have their own moment family in
- * @c agg_raw_moment.
+ * Any other gate type still raises: Boolean-valued gates fall under
+ * @c probability_evaluate, and unsupported scalar shapes (delta, …)
+ * have no defined sampling semantics.
  */
 extern "C" {
 #include "postgres.h"
@@ -127,7 +134,8 @@ rv_histogram(PG_FUNCTION_ARGS)
                          ? static_cast<unsigned>(provsql_rv_mc_samples)
                          : 1u;
       emit_bin(out, first, v, v, n);
-    } else if (t == gate_rv || t == gate_arith || t == gate_mixture) {
+    } else if (t == gate_rv || t == gate_arith || t == gate_mixture
+               || t == gate_agg || t == gate_semimod) {
       if (provsql_rv_mc_samples <= 0)
         provsql_error(
           "rv_histogram: provsql.rv_mc_samples = 0 disables sampling; "
@@ -213,7 +221,8 @@ rv_histogram(PG_FUNCTION_ARGS)
                               ? gate_type_name[t] : "invalid";
       provsql_error(
         "rv_histogram: root gate type '%s' is not a scalar "
-        "(expected gate_value, gate_rv, gate_arith, or gate_mixture)",
+        "(expected gate_value, gate_rv, gate_arith, gate_mixture, "
+        "gate_agg, or gate_semimod)",
         type_name);
     }
   } catch (const std::exception &e) {

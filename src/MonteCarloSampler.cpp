@@ -295,12 +295,45 @@ double Sampler::evalScalar(gate_t g)
           result = std::get<double>(r.v);
           break;
         case ValueType::NONE:
-          result = std::numeric_limits<double>::quiet_NaN();
+          // ProvSQL convention diverges from standard SQL here: COUNT
+          // and SUM over an empty group both yield the additive
+          // identity 0 (see test/sql/continuous_aggregation.sql §5 --
+          // empty-group SUM returns as_random(0) as a deterministic
+          // Dirac).  MC sampling mirrors that so an iteration where
+          // every semimod's Boolean filter was false produces 0.0
+          // rather than poisoning the moment estimator with NaN.
+          // MIN / MAX / AVG over empty groups stay NaN: there is no
+          // natural identity for those, and the moment averagers in
+          // Expectation::mc_raw_moment / mc_central_moment skip NaN
+          // samples so the estimator is conditional on non-empty
+          // worlds.
+          result = (op == AggregationOperator::COUNT
+                    || op == AggregationOperator::SUM)
+                   ? 0.0
+                   : std::numeric_limits<double>::quiet_NaN();
           break;
         default:
           throw CircuitException(
                   "gate_agg: unsupported aggregate result ValueType in MC");
       }
+      break;
+    }
+    case gate_semimod:
+    {
+      // Bare semimod root (the user pinned one of an agg's per-row
+      // contributions): interpret as a Bernoulli-weighted scalar
+      // value · 1_{k fires}.  When the Boolean k child does not fire
+      // in this world, the row contributes nothing -- return 0.0
+      // (the additive identity), which matches the per-iteration
+      // role semimod plays inside gate_agg above.  This makes
+      // semimod a legal scalar root for rv_sample / rv_moment /
+      // rv_histogram alongside agg.
+      const auto &wires = gc_.getWires(g);
+      if(wires.size() != 2)
+        throw CircuitException(
+                "gate_semimod must have exactly two children "
+                "[k_gate, value_gate]");
+      result = evalBool(wires[0]) ? evalScalar(wires[1]) : 0.0;
       break;
     }
     case gate_mixture:
