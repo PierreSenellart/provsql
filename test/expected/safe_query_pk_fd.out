@@ -44,3 +44,27 @@ add_provenance
 add_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|prob_baseline_coll
+1|0.354010
+(1 row)
+remove_provenance
+
+(1 row)
+x|prob_rewritten_coll
+1|0.354010
+(1 row)
+x|diff_baseline_vs_rewritten_coll
+1|0.000000000
+(1 row)

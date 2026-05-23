@@ -1151,6 +1151,158 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     }
   }
 
+  /* ------------------------------------------------------------------
+   * FD bridging-group rewrite (read-once safe plan under a key).
+   *
+   * The textbook hard query R(x), S(x,y), T(y) becomes safe under a key
+   * on S.x (Dalvi & Suciu 2007, VLDB Journal 16(4) sec 5.1): the FD
+   * x -> y lets the safe plan project x out of {R,S} *grouped by y*
+   * (an independent project, valid because x is determined by every
+   * relation in the {R,S} subquery), then join T(y), then project y.
+   * The result is the read-once factorisation
+   *   OR_y  T(y) AND (OR_{x: S(x,y)} R(x) AND S(x,y)).
+   *
+   * The flat fd_aware wrap further below would instead cross-join the
+   * three atoms on the residual equijoins, sharing the T(y) leaf across
+   * every x that collides on the same y -- not read-once unless y is
+   * injective.  This path produces the grouped factorisation by folding
+   * the *determining* component {R,S} into one inner sub-Query that
+   * GROUPs on the *determined* class y (aggregating x away); the outer
+   * then has y as its root, covering the group and T.
+   *
+   * Conservative match (anything else falls through to the existing
+   * fd_aware / literal handling, which stays sound):
+   *   - no global root;
+   *   - exactly two join (multi-atom) classes XDET, YDET;
+   *   - YDET is FD-determined on the single atom S where the two
+   *     co-anchor (the key on S whose columns are XDET's determines the
+   *     non-key column YDET -- exactly what the PK-FD pass recorded);
+   *   - every atom anchors XDET or YDET, and only S anchors both;
+   *   - no base-table head Vars (handle the Boolean / existence shape
+   *     first; a real projected column would need a head slot threaded
+   *     through the extra grouping level).
+   * ------------------------------------------------------------------ */
+  if (root_class < 0 && determined_in != NULL) {
+    int  multi[3];
+    int  nmulti = 0;
+    bool ok_fd  = true;
+
+    for (i = 0; i < nvars; i++) {
+      int c = cls[i];
+      if (c != i)
+        continue;
+      if (class_atom_count[c] >= 2 && class_atom_count[c] <= natoms) {
+        if (nmulti < 2)
+          multi[nmulti] = c;
+        nmulti++;
+      }
+    }
+    if (nmulti != 2)
+      ok_fd = false;
+
+    if (ok_fd)
+      for (i = 0; i < nvars; i++)
+        if (in_targetlist[i]) { ok_fd = false; break; }   /* head Vars: defer */
+
+    if (ok_fd) {
+      int ca = multi[0], cb = multi[1];
+      int ydet = -1, xdet = -1, satom = -1;
+
+      /* The determined-bridge class is the one FD-determined on the atom
+       * where both classes co-anchor (that atom is S).  Require a unique
+       * such co-anchor atom. */
+      for (j = 0; j < natoms; j++) {
+        if (ANCHOR(ca, j) != 0 && ANCHOR(cb, j) != 0) {
+          int yd = -1, xd = -1;
+          if (DETERMINED(ca, j)) { yd = ca; xd = cb; }
+          else if (DETERMINED(cb, j)) { yd = cb; xd = ca; }
+          if (yd < 0) { ok_fd = false; break; }   /* co-anchor without FD */
+          if (ydet >= 0) { ok_fd = false; break; }/* more than one S: defer */
+          ydet = yd; xdet = xd; satom = j;
+        }
+      }
+      if (ydet < 0)
+        ok_fd = false;
+
+      /* Coverage: every atom anchors XDET or YDET, and S is the only
+       * atom anchoring both (so the determining side {anchors XDET} and
+       * the real side {anchors YDET only} partition the atoms). */
+      if (ok_fd)
+        for (j = 0; j < natoms; j++) {
+          bool hx = ANCHOR(xdet, j) != 0;
+          bool hy = ANCHOR(ydet, j) != 0;
+          if (!hx && !hy)            { ok_fd = false; break; }
+          if (hx && hy && j != satom){ ok_fd = false; break; }
+        }
+
+      if (ok_fd) {
+        /* Build the inverted FD group: members = the determining side
+         * (atoms anchoring XDET, incl. S); the group exposes YDET via S
+         * and aggregates XDET.  Real-side atoms (YDET only) are outer
+         * wraps exposing YDET, which is the outer root.  The residual
+         * partition pass routes the intra-{R,S} equijoin into the
+         * group's inner_quals and leaves the S.y = T.y equijoin outside,
+         * where the Var remap rewrites it onto the group's / wrap's
+         * single YDET slot. */
+        safe_inner_group *gr = palloc(sizeof(safe_inner_group));
+        gr->group_id      = 0;
+        gr->member_atoms  = NIL;
+        gr->inner_quals   = NIL;
+        gr->outer_rtindex = 0;
+
+        atoms_out = NIL;
+        for (j = 0; j < natoms; j++) {
+          safe_rewrite_atom *sa = palloc(sizeof(safe_rewrite_atom));
+          bool hx = ANCHOR(xdet, j) != 0;
+
+          sa->rtindex            = (Index) (j + 1);
+          sa->proj_slots         = NIL;
+          sa->pushed_quals       = NIL;
+          sa->outer_rtindex      = 0;
+          sa->inner_rtindex      = 0;
+          sa->is_constant_pinned = false;
+          sa->root_anchor_attno  = 0;
+
+          /* The atom exposes YDET iff it anchors it (S on the
+           * determining side, every real-side atom otherwise). */
+          if (ANCHOR(ydet, j) != 0) {
+            safe_proj_slot *slot = palloc(sizeof(safe_proj_slot));
+            slot->base_attno  = (AttrNumber) ANCHOR(ydet, j);
+            slot->class_id    = ydet;
+            slot->outer_attno = 1;
+            sa->proj_slots = lappend(sa->proj_slots, slot);
+            sa->root_anchor_attno = (AttrNumber) ANCHOR(ydet, j);
+          }
+
+          if (hx) {
+            sa->group_id     = 0;
+            gr->member_atoms = lappend(gr->member_atoms, sa);
+          } else {
+            sa->group_id = -1;
+          }
+          atoms_out = lappend(atoms_out, sa);
+        }
+        *groups_out = list_make1(gr);
+
+        if (provsql_verbose >= 30)
+          provsql_notice("safe-query rewriter: FD bridging-group rewrite "
+                         "fired (grouped %d-atom determining side on the "
+                         "determined value)",
+                         list_length(gr->member_atoms));
+
+        pfree(class_atom_count);
+        pfree(class_atom_anchor_attno);
+        pfree(vars_arr);
+        pfree(cls);
+        if (in_targetlist)       pfree(in_targetlist);
+        if (determined_in)       pfree(determined_in);
+        if (class_atom_count_fd) pfree(class_atom_count_fd);
+        (void) constants;
+        return atoms_out;
+      }
+    }
+  }
+
   /* FD-aware-mode fallback: no class touches every atom under the
    * raw count, but the FD-aware atom-sets might still satisfy
    * pairwise nested-or-disjoint hierarchicality.  Concretely, we

@@ -172,5 +172,62 @@ BEGIN
   END IF;
 END $$;
 
+-- ---------------------------------------------------------------------
+-- (5) Collision on the FD-determined value: PRIMARY KEY (x) on S still
+--     holds (x -> y is a function) but y is NOT injective -- several x
+--     map to the same y.  The query is genuinely read-once via the
+--     y-grouped factorisation
+--       OR_y  T(y) AND (OR_{x: S(x,y)} R(x) AND S(x,y)),
+--     so 'independent' on the rewritten circuit must match the exact
+--     baseline.  The earlier cases all used injective y, where the flat
+--     per-atom wrap happens to be read-once; this case exercises the
+--     FD bridging-group rewrite that GROUPs the determining side {R,S}
+--     on the determined value y.  Regression for the gap where the flat
+--     wrap shared the T(y) leaf across colliding keys.
+-- ---------------------------------------------------------------------
+
+CREATE TABLE pk_r_coll (x int);
+CREATE TABLE pk_s_coll (x int PRIMARY KEY, y int);
+CREATE TABLE pk_t_coll (y int);
+-- x=1 and x=2 both map to y=5 (collision); x=3 maps to y=6.  Duplicate
+-- R rows on x=1 too, so neither side is read-once without the rewrite.
+INSERT INTO pk_r_coll VALUES (1), (2), (3), (1);
+INSERT INTO pk_s_coll VALUES (1, 5), (2, 5), (3, 6);
+INSERT INTO pk_t_coll VALUES (5), (6), (7);
+
+SELECT add_provenance('pk_r_coll');
+SELECT add_provenance('pk_s_coll');
+SELECT add_provenance('pk_t_coll');
+
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.4) FROM pk_r_coll;
+  PERFORM set_prob(provsql, 0.6) FROM pk_s_coll;
+  PERFORM set_prob(provsql, 0.5) FROM pk_t_coll;
+END $$;
+
+SET provsql.boolean_provenance = off;
+CREATE TEMP TABLE pk_baseline_coll AS
+  SELECT q.x, probability_evaluate(provenance()) AS p
+    FROM (SELECT DISTINCT 1 AS x
+            FROM pk_r_coll r, pk_s_coll s, pk_t_coll t
+           WHERE r.x = s.x AND s.y = t.y) q
+   GROUP BY q.x;
+SELECT remove_provenance('pk_baseline_coll');
+SELECT x, ROUND(p::numeric, 6) AS prob_baseline_coll FROM pk_baseline_coll;
+
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE pk_rewritten_coll AS
+  SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
+    FROM (SELECT DISTINCT 1 AS x
+            FROM pk_r_coll r, pk_s_coll s, pk_t_coll t
+           WHERE r.x = s.x AND s.y = t.y) q
+   GROUP BY q.x;
+SELECT remove_provenance('pk_rewritten_coll');
+SELECT x, ROUND(p::numeric, 6) AS prob_rewritten_coll FROM pk_rewritten_coll;
+
+SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten_coll
+  FROM pk_baseline_coll b JOIN pk_rewritten_coll r ON b.x = r.x;
+
 DROP TABLE pk_r_pk, pk_s_pk, pk_t_pk, pk_s_nnu, pk_s_nullable,
-           pk_r_comp, pk_s_comp, pk_t_comp CASCADE;
+           pk_r_comp, pk_s_comp, pk_t_comp,
+           pk_r_coll, pk_s_coll, pk_t_coll CASCADE;
