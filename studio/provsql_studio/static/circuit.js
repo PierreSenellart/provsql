@@ -1498,6 +1498,18 @@
   // menu (distribution profile, PROV-XML).  Picked by inspecting the
   // eval target's gate type via state.scene.nodes.
   const _SCALAR_GATE_TYPES = new Set(['rv', 'arith', 'value', 'mixture']);
+  // KC scene "interior" nodes -- TD bags and d-DNNF AND/OR/NOT --
+  // carry synthetic DOT-numbered ids that don't map to any
+  // provenance gate.  Pinning one is fine for inspection (the
+  // inspector shows the bag's contents / the operator) but evaluating
+  // against the synthetic id would fail at the server, so we hide
+  // the entire eval strip in that case.  kc-input is _not_ in this
+  // set: it carries the original provenance UUID (rewritten from the
+  // DOT tooltip in kc.py) and behaves like a regular input leaf.
+  const _NON_EVAL_NODE_TYPES = new Set([
+    'kc-bag', 'kc-and', 'kc-or', 'kc-not',
+  ]);
+
   // Aggregation gates also produce a scalar at evaluation time
   // (counting / summing / averaging / min-maxing the per-row
   // contributions), but they additionally carry the Boolean lineage
@@ -2453,7 +2465,19 @@
     // space the user can reclaim for the SVG canvas.  The strip
     // re-appears on the next successful renderCircuit (which calls
     // back into refreshEvalTarget).
-    if (strip) strip.hidden = !state.scene;
+    // Hide the eval strip when:
+    //  (a) no scene is loaded (the original guard);
+    //  (b) the pinned target is a TD bag or d-DNNF internal node
+    //      (kc-bag / kc-and / kc-or / kc-not) -- those carry synthetic
+    //      DOT-numbered ids, not real provenance UUIDs, so any
+    //      evaluation against them would fail at the server.  kc-input
+    //      keeps the original provenance UUID and stays evaluable.
+    const pinnedNode = state.pinnedNode
+      ? state.scene?.nodes?.find(n => n.id === state.pinnedNode)
+      : null;
+    const pinnedNonEval =
+      pinnedNode && _NON_EVAL_NODE_TYPES.has(pinnedNode.type);
+    if (strip) strip.hidden = !state.scene || pinnedNonEval;
     // Re-run the semiring dropdown filter whenever the target changes
     // (pin / clear pin / scene reload): the new target may have a
     // different gate type, which flips the menu between the scalar
