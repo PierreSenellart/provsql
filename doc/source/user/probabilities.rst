@@ -102,8 +102,7 @@ Computation Methods
     ``'minic2d'``, or one of the five Panini target languages from KCBox
     :cite:`DBLP:journals/corr/abs-2202-10025`,
     ``'panini-obdd'``, ``'panini-obdd-and'``
-    :cite:`DBLP:journals/jair/LaiLY17`, ``'panini-decdnnf'``,
-    ``'panini-r2d2'``, ``'panini-ccdd'``:
+    :cite:`DBLP:journals/jair/LaiLY17`, ``'panini-decdnnf'``:
 
     .. code-block:: postgresql
 

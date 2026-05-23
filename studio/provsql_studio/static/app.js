@@ -1775,7 +1775,7 @@
                  min="1" step="1" placeholder="samples" value="10000"
                  autocomplete="off" title="Monte-Carlo sample count">
           <select class="cv-eval__args" id="eval-args-compiler" hidden
-                  title="How to obtain the d-D circuit: an external compiler (d4 / d4v2 / c2d / miniC2D / Dsharp / Panini in 5 target languages), the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → d4)">
+                  title="How to obtain the d-D circuit: an external compiler (d4 / d4v2 / c2d / miniC2D / Dsharp / Panini in 3 target languages), the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → d4)">
             <option value="d4">d4</option>
             <option value="d4v2">d4v2</option>
             <option value="c2d">c2d</option>
@@ -1784,8 +1784,6 @@
             <option value="panini-obdd">Panini → OBDD</option>
             <option value="panini-obdd-and">Panini → OBDD[AND]</option>
             <option value="panini-decdnnf">Panini → Decision-DNNF</option>
-            <option value="panini-r2d2">Panini → R2-D2</option>
-            <option value="panini-ccdd">Panini → CCDD</option>
             <option value="tree-decomposition">tree-decomposition</option>
             <option value="interpret-as-dd">interpret as d-D</option>
             <option value="default">default (fallback chain)</option>

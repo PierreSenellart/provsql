@@ -651,9 +651,11 @@ def create_app(
     _KC_COMPILERS_WHITELIST = {
         # External knowledge compilers (`BooleanCircuit::compilation`).
         "d4", "d4v2", "c2d", "minic2d", "dsharp",
-        # Panini (KCBox) with selectable target language.
+        # Panini (KCBox) with selectable target language. R2-D2 and
+        # CCDD are intentionally omitted: both emit K (kernelize)
+        # nodes encoding literal-equivalence constraints over a
+        # shared kernel variable, which break decomposability.
         "panini-obdd", "panini-obdd-and", "panini-decdnnf",
-        "panini-r2d2", "panini-ccdd",
         # In-process: min-fill TD + dDNNFTreeDecompositionBuilder.
         "tree-decomposition",
         # In-process: direct reading of the Boolean circuit as a d-D

@@ -325,7 +325,7 @@ _C_FUNC_MAP = {
     'probability_evaluate_internal': '/doxygen-c/html/probability__evaluate_8cpp.html#aea39f7b497660c1c1e384b1e090d7db9',
     'BooleanCircuit::rewriteMultivaluedGates': '/doxygen-c/html/classBooleanCircuit.html#a90ff865c9963480f00000d62c6c37c2f',
     'BooleanCircuit::rewriteMultivaluedGatesRec': '/doxygen-c/html/classBooleanCircuit.html#a3f6c1d03227119c7f4886cbf34090022',
-    'BooleanCircuit::Tseytin':   '/doxygen-c/html/classBooleanCircuit.html#a63c58e27582f0e598fae1d0c9329f53f',
+    'BooleanCircuit::TseytinCNF':   '/doxygen-c/html/classBooleanCircuit.html#ae9ac45747df55edec62175dcf0000e6f',
     'GenericCircuit::evaluate':  '/doxygen-c/html/classGenericCircuit.html#a3ff1b0c90156515393986082def83900',
     'TreeDecomposition::MAX_TREEWIDTH': '/doxygen-c/html/classTreeDecomposition.html#ab09a529b1ef0e64fecf2260345c795d3',
     'TreeDecomposition::makeFriendly': '/doxygen-c/html/classTreeDecomposition.html#ad4ddde20abe4dae4f282945c3b666b05',

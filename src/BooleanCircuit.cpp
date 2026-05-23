@@ -425,16 +425,17 @@ std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob) const {
 
 dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
   // Validate / map the language token to Panini's `--lang` argument.
-  // Five target classes supported by Panini at the CLI:
+  // Three target classes ProvSQL exposes:
   //   OBDD             unstructured / structured BDD
   //   OBDD[AND]        OBDD augmented with conjunctive decomposition
   //   Decision-DNNF    decomposable + decision-deterministic NNF
-  //   R2-D2            restricted Decision-DNNF (Panini-specific)
-  //   CCDD             constrained conjunction + decision diagram
-  // The K (kernelize) node that CCDD may emit is not yet translated;
-  // it surfaces as an explicit error rather than a silent wrong answer.
-  if (lang != "OBDD" && lang != "OBDD[AND]" && lang != "Decision-DNNF"
-      && lang != "R2-D2" && lang != "CCDD") {
+  // R2-D2 and CCDD are intentionally omitted: both emit Panini K
+  // (kernelize) nodes encoding literal-equivalence constraints over a
+  // shared kernel variable, which cannot be expressed as a
+  // decomposable AND. Until we case-split the K's kernel variables
+  // into a proper decision structure, the probabilities those two
+  // languages produce are silently wrong.
+  if (lang != "OBDD" && lang != "OBDD[AND]" && lang != "Decision-DNNF") {
     throw CircuitException("Unknown Panini target language: " + lang);
   }
 
@@ -518,15 +519,14 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
     } else if (first == "T") {
       // TRUE terminal: empty AND.
       this_gate = dnnf.setGate(BooleanGate::AND);
-    } else if (first == "C" || first == "D" || first == "K") {
-      // C (CONJOIN), D (DECOMPOSE), K (KERNELIZE) are all
-      // decomposable conjunctions in Panini's CDD format; OR is only
-      // ever expressed implicitly by the (v ? t : f) decision nodes.
-      // K nodes additionally encode literal-equivalence constraints
-      // (the CCDD "constrained conjunction"), but those constraints
-      // are redundant w.r.t. probability evaluation under our
-      // input-projection scheme; the CCDD compiler has already used
-      // them to derive the structure we see here.
+    } else if (first == "C" || first == "D") {
+      // C (CONJOIN), D (DECOMPOSE) are decomposable conjunctions in
+      // Panini's CDD format; OR is only ever expressed implicitly by
+      // the (v ? t : f) decision nodes. K (KERNELIZE) nodes encode
+      // literal-equivalence constraints over a shared kernel
+      // variable and break decomposability; we refuse the only two
+      // target languages that emit them (R2-D2 and CCDD) upstream,
+      // so seeing K here is an upstream-Panini surprise.
       this_gate = dnnf.setGate(BooleanGate::AND);
       int child;
       while (ss >> child) {
@@ -537,6 +537,11 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
                   + std::to_string(child));
         dnnf.addWire(this_gate, id_to_gate[child]);
       }
+    } else if (first == "K") {
+      throw CircuitException(
+              "Panini output: unexpected K (kernelize) node; ProvSQL "
+              "does not support Panini target languages that emit K "
+              "nodes (R2-D2, CCDD).");
     } else {
       // Decision node: <var> <false_child> <true_child> [0]
       // (Panini's CDD::Display emits children in ch[0]/ch[1] order;
@@ -623,8 +628,6 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     if      (suffix == "obdd")     lang = "OBDD";
     else if (suffix == "obdd-and") lang = "OBDD[AND]";
     else if (suffix == "decdnnf")  lang = "Decision-DNNF";
-    else if (suffix == "r2d2")     lang = "R2-D2";
-    else if (suffix == "ccdd")     lang = "CCDD";
     else
       throw CircuitException("Unknown Panini variant: " + compiler);
     return paniniCompile(g, lang);

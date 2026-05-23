@@ -106,8 +106,8 @@ The second argument names the compiler. ProvSQL ships bindings for:
     Top-down CNF-to-SDD compiler :cite:`DBLP:conf/ijcai/OztokD15`.
 ``'dsharp'``
     DPLL-style compiler built on sharpSAT :cite:`DBLP:conf/ai/MuiseMBH12`.
-``'panini-obdd'``, ``'panini-obdd-and'``, ``'panini-decdnnf'``, ``'panini-r2d2'``, ``'panini-ccdd'``
-    The five target languages of KCBox's Panini compiler
+``'panini-obdd'``, ``'panini-obdd-and'``, ``'panini-decdnnf'``
+    Three target languages of KCBox's Panini compiler
     :cite:`KCBoxPanini`:
 
     * ``OBDD`` is the canonical ordered Boolean decision diagram, a strict
@@ -119,15 +119,15 @@ The second argument names the compiler. ProvSQL ships bindings for:
     * ``Decision-DNNF`` drops the variable order, retaining only the
       decomposability + determinism of d-DNNF; it is the canonical
       target of ``d4``.
-    * ``R2-D2`` and ``CCDD`` :cite:`DBLP:journals/corr/abs-2202-10025`
-      are recent super-languages of Decision-DNNF that admit further
-      structural sharing.
 
-    The languages are listed in increasing succinctness: a smaller
-    representation is usually obtainable as the target language gets
-    more general, at the cost of fewer tractable queries on the
-    compiled form (probability evaluation, however, stays tractable on
-    all five).
+    Panini also ships ``R2-D2`` and ``CCDD`` target languages
+    :cite:`DBLP:journals/corr/abs-2202-10025`. ProvSQL does **not**
+    expose them: both emit ``K`` (kernelize) nodes encoding
+    literal-equivalence constraints over a shared kernel variable,
+    which break the decomposability invariant of a d-DNNF. A direct
+    AND-translation gives silently-wrong probabilities; a correct
+    translation requires case-splitting on the kernel variables and
+    is not yet implemented.
 
 ``'d4'`` versus ``'d4v2'``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

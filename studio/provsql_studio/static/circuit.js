@@ -2257,8 +2257,6 @@
     'panini-obdd':     'Panini → OBDD',
     'panini-obdd-and': 'Panini → OBDD[AND]',
     'panini-decdnnf':  'Panini → Decision-DNNF',
-    'panini-r2d2':     'Panini → R2-D2',
-    'panini-ccdd':     'Panini → CCDD',
   };
 
   const KC_CIRCUIT_CLASS = {
@@ -2270,8 +2268,6 @@
     'panini-obdd':        { abbr: 'OBDD',     full: 'ordered binary decision diagram' },
     'panini-obdd-and':    { abbr: 'OBDD[AND]', full: 'ordered binary decision diagram with conjunctive decomposition' },
     'panini-decdnnf':     { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
-    'panini-r2d2':        { abbr: 'R2-D2',    full: 'restricted decision diagram (KCBox R2-D2 language)' },
-    'panini-ccdd':        { abbr: 'CCDD',     full: 'constrained conjunction and decision diagram' },
     'tree-decomposition': { abbr: 'd-SDNNF',  full: 'structured deterministic decomposable negation normal form' },
     'interpret-as-dd':    { abbr: 'd-D',      full: 'deterministic decomposable circuit, possibly not in negation normal form' },
     'default':            { abbr: 'd-D',      full: 'deterministic decomposable circuit' }

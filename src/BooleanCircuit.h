@@ -416,7 +416,11 @@ std::string TseytinCNF(gate_t g, bool display_prob) const;
  *        ProvSQL d-DNNF.
  *
  * @p lang selects Panini's @c --lang flag, one of @c "OBDD",
- * @c "OBDD[AND]", @c "Decision-DNNF", @c "R2-D2", or @c "CCDD".
+ * @c "OBDD[AND]", or @c "Decision-DNNF". @c "R2-D2" and @c "CCDD"
+ * are intentionally rejected: both emit K (kernelize) nodes
+ * encoding literal-equivalence constraints over a shared kernel
+ * variable, which break the decomposability invariant of the
+ * resulting d-DNNF.
  * Panini's BDD/DD output is over the variables of our Tseytin CNF.
  * Decisions on input variables are translated to the corresponding
  * @c IN gates; decisions on Tseytin auxiliaries are dropped (their

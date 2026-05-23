@@ -83,7 +83,9 @@ External knowledge compilers (``d4``, ``c2d``, ``dsharp``,
 ``minic2d``) and the ``weightmc`` model counter all consume
 Boolean formulas in **DIMACS CNF** format.  Producing CNF from a
 ProvSQL Boolean circuit is the job of
-:cfunc:`BooleanCircuit::Tseytin` (in :cfile:`BooleanCircuit.cpp`).
+:cfunc:`BooleanCircuit::TseytinCNF` (in :cfile:`BooleanCircuit.cpp`),
+whose string output each caller writes into its own
+@c provsql::ScopedTempDir before invoking the tool.
 
 The Tseytin transformation introduces one fresh variable per
 internal gate of the circuit, then writes a small set of clauses
@@ -139,12 +141,17 @@ returned to the caller and walked by
 
 The Panini compiler from KCBox ships with five target-language
 modes (``OBDD``, ``OBDD[AND]``, ``Decision-DNNF``, ``R2-D2``,
-``CCDD``) selected by the ``--lang`` flag.  Its output is not the
-NNF text format but a CDD-style DOT-like syntax; the dedicated
-parser in :cfunc:`BooleanCircuit::paniniCompile` translates each
-``C`` / ``D`` / ``K`` line into a decomposable AND and each
-``v ? t : f`` decision into an explicit OR-of-AND-NOT structure
-over the corresponding input gate.
+``CCDD``) selected by the ``--lang`` flag. ProvSQL exposes the
+first three; the ``R2-D2`` and ``CCDD`` languages are rejected
+upstream because both emit ``K`` (kernelize) nodes encoding
+literal-equivalence constraints over a shared kernel variable,
+breaking the decomposability invariant of the resulting d-DNNF.
+Panini's output is not the NNF text format but a CDD-style
+DOT-like syntax; the dedicated parser in
+:cfunc:`BooleanCircuit::paniniCompile` translates each ``C`` /
+``D`` line into a decomposable AND and each ``v ? t : f`` decision
+into an explicit OR-of-AND-NOT structure over the corresponding
+input gate. A ``K`` node, if seen, raises an explicit error.
 
 After any external-compiler call, :cfunc:`dDNNF::simplify` runs a
 single canonical pass over the result: empty-constant folding,

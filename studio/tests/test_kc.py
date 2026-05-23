@@ -29,7 +29,6 @@ def test_tools_endpoint_shape(client):
     expected_compilers = {
         "d4", "d4v2", "c2d", "minic2d", "dsharp",
         "panini-obdd", "panini-obdd-and", "panini-decdnnf",
-        "panini-r2d2", "panini-ccdd",
         "tree-decomposition", "interpret-as-dd", "default",
     }
     assert set(data["options"]["compilation"]) == expected_compilers
@@ -94,8 +93,6 @@ def test_benchmark_filters_missing_tools(app, monkeypatch):
         ("compilation", "panini-obdd"),
         ("compilation", "panini-obdd-and"),
         ("compilation", "panini-decdnnf"),
-        ("compilation", "panini-r2d2"),
-        ("compilation", "panini-ccdd"),
         ("wmc", "dpmc"),
         ("wmc", "weightmc;0.8;0.2"),
     ):

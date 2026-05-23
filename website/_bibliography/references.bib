@@ -411,8 +411,11 @@
     ({CCDDs}): a tractable KC language that combines Decision-{DNNF}
     structure with kernelized conjunctions encoding literal
     equivalences. Used as the target language of {ExactMC} and {FastUS}
-    in the KCBox toolbox. ProvSQL exposes {CCDD} compilation through
-    Panini under the 'panini-ccdd' compiler option.},
+    in the KCBox toolbox. ProvSQL does not expose {CCDD} compilation:
+    the kernelize ({K}) nodes encode literal equivalences over a
+    shared kernel variable that break the decomposability invariant
+    of the d-DNNF used by @c dDNNF::probabilityEvaluation, so a
+    direct {AND}-translation gives silently-wrong probabilities.},
 }
 
 @misc{KCBoxPanini,
@@ -429,15 +432,16 @@
   annote       = {Panini is the knowledge-compilation tool in the {KCBox}
     toolbox developed by the Meel group. It compiles {CNF} formulas into
     one of five target languages: {OBDD}, {OBDD[AND]}, Decision-{DNNF},
-    R2-D2 (a restricted Decision-{DNNF}), or {CCDD}. ProvSQL exposes all
-    five through the 'panini-obdd' / 'panini-obdd-and' / 'panini-decdnnf'
-    / 'panini-r2d2' / 'panini-ccdd' compiler options of
-    @c probability_evaluate and the Studio compile dropdown. Decisions
-    on input variables are translated to the standard d-DNNF
-    @c OR(AND(v, t), AND(NOT v, f)) shape; decisions on Tseytin
-    auxiliaries are projected to @c OR(t, f) (the two branches have
-    disjoint input-support by Tseytin determinism, so the
-    input-projected OR stays sound under
+    R2-D2 (a restricted Decision-{DNNF}), or {CCDD}. ProvSQL exposes
+    the first three through the 'panini-obdd' / 'panini-obdd-and' /
+    'panini-decdnnf' compiler options of @c probability_evaluate and
+    the Studio compile dropdown; R2-D2 and {CCDD} are intentionally
+    omitted because both emit {K} (kernelize) nodes that break
+    decomposability. Decisions on input variables are translated to
+    the standard d-DNNF @c OR(AND(v, t), AND(NOT v, f)) shape;
+    decisions on Tseytin auxiliaries are projected to @c OR(t, f)
+    (the two branches have disjoint input-support by Tseytin
+    determinism, so the input-projected OR stays sound under
     @c dDNNF::probabilityEvaluation).},
 }
 

@@ -3878,8 +3878,6 @@ BEGIN
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-obdd');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-obdd-and');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-decdnnf');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-r2d2');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-ccdd');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
     token, 'wmc', 'weightmc;' || weightmc_args);
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'wmc', 'ganak');
