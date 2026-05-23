@@ -2111,7 +2111,7 @@
           + `${escapeHtml(cls.abbr)}</span>)`
         : '';
       scene.subtitle =
-        `${(scene.nodes || []).length} gates · compiled with `
+        `${(scene.nodes || []).length} gates · `
         + `<strong>${escapeHtml(toolName)}</strong>${clsHtml}`;
       swapToKcScene(scene);
       return;
