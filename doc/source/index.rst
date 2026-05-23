@@ -67,6 +67,7 @@ This documentation is organized into four parts:
    :maxdepth: 2
    :caption: Case Studies
 
+   user/casestudies
    user/casestudy1
    user/casestudy2
    user/casestudy3

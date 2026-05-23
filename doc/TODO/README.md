@@ -23,10 +23,11 @@ Each plan document follows a consistent layout:
   for adding continuous probability distributions (Gaussian, uniform,
   exponential, ...) to ProvSQL's pc-table model, anchored on Timothy
   Leong's 2022 BSc thesis (NUS).
-- [`feature-coverage.md`](feature-coverage.md) : reference matrix
-  cross-referencing every documented user-facing feature against the
-  tutorial and case studies. Source of truth for the gaps that
-  `case-studies.md` proposes to close.
+- [`feature-coverage.md`](feature-coverage.md) : pointer stub. The
+  reference matrix cross-referencing every documented user-facing
+  feature against the tutorial and case studies has moved into the
+  rendered user guide (`doc/source/user/casestudies.rst`), which is now
+  its source of truth; this file just records where it went.
 - [`safe-query-followups.md`](safe-query-followups.md) : deferred
   ideas surfaced during the `provsql.boolean_provenance` work --
   further Boolean-only optimisations beyond the hierarchical-CQ
