@@ -759,6 +759,24 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   outline: 2px solid var(--gold-500);
   outline-offset: 1px;
 }
+/* Single-select dropdown for a config row (currently the
+   provsql.fallback_compiler picker). Sized to fit the long Panini
+   option labels on one line; lives inside a wp-config__row--col so
+   it sits on its own line under the GUC name. */
+.wp-config__sel {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--purple-700);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  background: #fff;
+}
+.wp-config__sel:focus {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 1px;
+}
 .wp-config__unit {
   font-family: var(--font-mono);
   font-size: 0.82rem;

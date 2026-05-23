@@ -104,6 +104,32 @@ def test_config_rv_mc_samples_rejects_negative(client):
     assert resp.status_code == 400
 
 
+def test_config_fallback_compiler_round_trip(client):
+    """`provsql.fallback_compiler` accepts each compiler name in the
+    documented whitelist, persists through /api/config GET, and is
+    seen by the backend via show_panel_gucs."""
+    for compiler in ("d4", "d4v2", "c2d", "minic2d", "dsharp",
+                     "panini-obdd", "panini-obdd-and", "panini-decdnnf"):
+        resp = client.post("/api/config",
+                           json={"key": "provsql.fallback_compiler",
+                                 "value": compiler})
+        assert resp.status_code == 200, (compiler, resp.get_json())
+        cfg = client.get("/api/config").get_json()
+        assert cfg["effective"]["provsql.fallback_compiler"] == compiler
+
+
+def test_config_fallback_compiler_rejects_unknown(client):
+    """Names outside the whitelist (including R2-D2 / CCDD, which we
+    refuse upstream because their K nodes break decomposability) yield
+    a 400 from /api/config."""
+    for bad in ("panini-r2d2", "panini-ccdd", "not-a-real-compiler", "",
+                "D4"):  # case-sensitive
+        resp = client.post("/api/config",
+                           json={"key": "provsql.fallback_compiler",
+                                 "value": bad})
+        assert resp.status_code == 400, (bad, resp.get_json())
+
+
 def test_config_post_rejects_non_panel_guc(client):
     # `provsql.where_provenance` is whitelisted overall but is owned by the
     # per-query toggle; the panel must not accept it.

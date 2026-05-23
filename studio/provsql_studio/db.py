@@ -2064,7 +2064,16 @@ _PANEL_GUCS = {
     "provsql.rv_mc_samples",
     "provsql.simplify_on_load",
     "provsql.hybrid_evaluation",
+    "provsql.fallback_compiler",
 }
+
+# Compiler names accepted by provsql.fallback_compiler. Mirrors the
+# `BooleanCircuit::compilation` whitelist in src/BooleanCircuit.cpp
+# (R2-D2 and CCDD are intentionally excluded; see paniniCompile).
+_FALLBACK_COMPILERS = frozenset({
+    "d4", "d4v2", "c2d", "minic2d", "dsharp",
+    "panini-obdd", "panini-obdd-and", "panini-decdnnf",
+})
 # Session-sticky modes the app keeps in app.config["SESSION_MODES"] and
 # injects into every backend call's extra_gucs.  Distinct from
 # _PANEL_GUCS so they stay invisible to the Config panel API ; the
@@ -2149,6 +2158,18 @@ def validate_panel_guc(name: str, value: str) -> str:
         if v in ("off", "false", "0", "no"):
             return "off"
         raise ValueError(f"{name} must be on or off")
+    if name == "provsql.fallback_compiler":
+        # Compare against the canonical compiler-name list, not the
+        # lower-cased v: Panini variants are always lowercase so the
+        # match is stable, and the SQL function accepts whatever the
+        # GUC value is verbatim.
+        raw = (value or "").strip()
+        if raw not in _FALLBACK_COMPILERS:
+            raise ValueError(
+                "provsql.fallback_compiler must be one of: "
+                + ", ".join(sorted(_FALLBACK_COMPILERS))
+            )
+        return raw
     raise ValueError(f"GUC not user-configurable: {name}")
 
 

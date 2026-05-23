@@ -919,6 +919,7 @@
     const simplify = document.getElementById('cfg-simplify-on-load');
     const mcSeed   = document.getElementById('cfg-monte-carlo-seed');
     const rvSamples = document.getElementById('cfg-rv-mc-samples');
+    const fallback  = document.getElementById('cfg-fallback-compiler');
 
     async function loadConfig() {
       try {
@@ -937,6 +938,13 @@
         }
         if (rvSamples && eff['provsql.rv_mc_samples'] != null) {
           rvSamples.value = String(eff['provsql.rv_mc_samples']);
+        }
+        if (fallback && eff['provsql.fallback_compiler']) {
+          // If the server reports a value we don't have an option for
+          // (e.g. a compiler added in a later release), the assignment
+          // silently fails to match — leave the picker at its default
+          // 'd4' so the user can still pick something valid.
+          fallback.value = String(eff['provsql.fallback_compiler']);
         }
         const opts = cfg.options || {};
         if (depth && opts.max_circuit_depth != null) {
@@ -1038,6 +1046,11 @@
         const n = Number.isFinite(raw) ? Math.max(0, raw) : 10000;
         rvSamples.value = String(n);
         setGuc('provsql.rv_mc_samples', n);
+      });
+    }
+    if (fallback) {
+      fallback.addEventListener('change', () => {
+        setGuc('provsql.fallback_compiler', fallback.value);
       });
     }
     // Live-update the value display as the slider drags; only POST on

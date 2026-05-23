@@ -138,6 +138,24 @@
               <input type="number" class="wp-config__num" id="cfg-rv-mc-samples" min="0" step="100" value="10000">
             </span>
           </label>
+
+          <label class="wp-config__row wp-config__row--col">
+            <span class="wp-config__name"><code>provsql.fallback_compiler</code><a class="wp-help"
+                href="https://provsql.org/docs/user/configuration.html#provsql-fallback-compiler"
+                target="_blank" rel="noopener"
+                title="Compiler invoked as the final fallback in probability_evaluate (with the empty or 'default' method) when neither interpret-as-d-DNNF nor the in-process tree-decomposition builder succeeds."
+                aria-label="Help: provsql.fallback_compiler"><i class="fas fa-question-circle"></i></a></span>
+            <select class="wp-config__sel" id="cfg-fallback-compiler">
+              <option value="d4">d4</option>
+              <option value="d4v2">d4v2</option>
+              <option value="c2d">c2d</option>
+              <option value="minic2d">miniC2D</option>
+              <option value="dsharp">Dsharp</option>
+              <option value="panini-obdd">Panini → OBDD</option>
+              <option value="panini-obdd-and">Panini → OBDD[AND]</option>
+              <option value="panini-decdnnf">Panini → Decision-DNNF</option>
+            </select>
+          </label>
         </section>
 
         <section class="wp-config__group">
