@@ -1024,13 +1024,16 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
 /* ───────── shell ───────── */
 .wp-shell {
   display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  /* Even 50/50 split: the left column carries the dense content (the
+     provenance-table list in where mode, and the circuit canvas +
+     inspector + evaluation strip in circuit mode), while the right
+     column is just the query and its (usually simple) result, so the
+     left should get at least as much room as the right. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1.5rem;
   /* No outer max-width: on wide screens the schema/result panes get
      more horizontal room (more columns visible, less wrapping). The
-     internal column ratio still keeps the sidebar:main proportions
-     comfortable; the page padding prevents content from hugging the
-     viewport edges. */
+     page padding prevents content from hugging the viewport edges. */
   margin: 0 auto;
   padding: 1.5rem;
   align-items: start;  /* allow the sidebar to be shorter than the result card */
