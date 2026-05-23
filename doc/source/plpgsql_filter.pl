@@ -76,7 +76,7 @@ s{
     # Strip LANGUAGE clause that leaks in for "LANGUAGE lang AS $$" style functions
     $return =~ s/\s*\bLANGUAGE\s+\w+.*$//s;
     $return =~ s/\s+$//;
-    $return =~ s/TABLE\(.*?\)/TABLE/g;
+    $return =~ s/TABLE\s*\(.*?\)/TABLE/gs;
     # Use void when there is no explicit return type (OUT-parameter-only functions)
     $return ||= 'void';
 

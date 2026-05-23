@@ -6,7 +6,7 @@
  * The check uses the same @c find_external_tool() helper that the
  * compilers / WMC counters / GraphViz wrappers themselves consult, so
  * the result reflects exactly what a subsequent
- * @c probability_evaluate('compilation', '<tool>') call would see,
+ * @c probability_evaluate('compilation', '\<tool\>') call would see,
  * including the @c provsql.tool_search_path GUC prepended to @c $PATH.
  *
  * Used by Studio (and any other client) to filter the list of usable
