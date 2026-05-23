@@ -1,0 +1,38 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|boolean_expression|probability
+1|𝟙|1.000000
+2|e12|0.900000
+3|e13 ⊕ (e23 ⊗ e12)|0.860000
+4|(e34 ⊗ (e13 ⊕ (e23 ⊗ e12))) ⊕ (e24 ⊗ e12)|0.801800
+(4 rows)
+remove_provenance
+
+(1 row)
+node|boolean_expression
+4|(e34 ⊗ (e13 ⊕ (e23 ⊗ e12))) ⊕ (e24 ⊗ e12)
+(1 row)
+add_provenance
+
+(1 row)
+ERROR:  eval_recursive: no fixpoint after 3 rounds (cyclic data?)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|reliability|exact
+1|1.000000|1.000000
+2|0.900000|0.900000
+3|0.720000|0.720000
+4|0.741600|0.741600
+(4 rows)

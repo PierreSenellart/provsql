@@ -870,6 +870,127 @@ END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
 /**
+ * @brief Driver for provenance over recursive queries (WITH RECURSIVE).
+ *
+ * Invoked by the planner hook (@c lower_recursive_cte in @c provsql.c) when it
+ * lowers a recursive CTE whose body touches provenance-tracked relations.  The
+ * hook deparses the CTE body to SQL and calls this function, which runs naive
+ * bottom-up (fixpoint) evaluation: each round re-evaluates the body
+ * @c base @c UNION @c recursive over a tracked working table until the
+ * provenance tokens stop changing.  Every round goes through ProvSQL's normal
+ * rewriting, so the recursive join yields @c times gates, the untracked base
+ * branch yields @c gate_one, and the @c UNION yields the @c plus merge of
+ * alternative derivations -- no provenance is plumbed by hand here.  The result
+ * is left in a tracked temp table named @p work_name, which the hook then scans
+ * in place of the CTE.
+ *
+ * The working tables (@p work_name and a scratch @c _new) are created once and
+ * reused across rounds (TRUNCATE + INSERT), so the round count never
+ * accumulates relation locks.  Because content-addressed gate UUIDs make
+ * structurally identical sub-circuits share, the fixpoint test is an exact
+ * relational @c EXCEPT and the circuit stays the shared (polynomial) form.
+ *
+ * Scope: UNION (set) recursion.  On *acyclic* input the structural fixpoint is
+ * reached and the resulting circuit is the universal provenance, sound for any
+ * semiring.  On *cyclic* input the circuit never stabilises structurally; when
+ * @c provsql.boolean_provenance is on (an absorptive setting) we instead stop
+ * at the value-fixpoint bound (number of derivable tuples) and return a circuit
+ * that is sound only under absorptive evaluation; otherwise cyclic input trips
+ * the @p max_iter guard.
+ *
+ * This function has no @c SET @c search_path on purpose: @p body_sql is the
+ * caller's deparsed query and must resolve relation names in the caller's path.
+ *
+ * @param body_sql   the recursive CTE body, e.g.
+ *                   @c 'SELECT 1 UNION SELECT e.dst FROM edge e JOIN reach r ON e.src=r.node'
+ * @param work_name  the working relation name @p body_sql references (the CTE name)
+ * @param colnames   comma-separated user columns, e.g. @c 'node'
+ * @param coldef     column definitions for the working table, e.g. @c 'node integer'
+ * @param max_iter   safety bound on fixpoint rounds (non-termination guard)
+ */
+CREATE OR REPLACE FUNCTION eval_recursive(
+  body_sql  text,
+  work_name text,
+  colnames  text,
+  coldef    text,
+  max_iter  int DEFAULT 1000)
+  RETURNS void AS
+$$
+DECLARE
+  changed   boolean;        -- circuit changed structurally this round
+  set_stable boolean;       -- user-column tuple set unchanged this round
+  iters     int := 0;
+  new_count int;            -- rows in _new this round (INSERT ROW_COUNT)
+  -- Under an absorptive semiring (guaranteed by provsql.boolean_provenance,
+  -- which is strictly stronger) the provenance *value* converges on cyclic data
+  -- even though the circuit keeps growing structurally.  A minimal derivation
+  -- cannot repeat a tuple, so it has depth <= (number of derivable tuples);
+  -- after that many naive rounds the value equals the least fixpoint, and the
+  -- surplus (longer, cyclic) derivations are absorbed at evaluation time.  We
+  -- learn that bound from the tuple-set fixpoint and stop there, returning a
+  -- circuit that is sound for absorptive evaluation only.
+  boolean_mode boolean :=
+    coalesce(current_setting('provsql.boolean_provenance', true)::bool, false);
+  ntuples   int := NULL;    -- the bound above, set once the tuple set stabilises
+BEGIN
+  EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
+  DROP TABLE IF EXISTS _new;
+
+  -- Tracked working table (carries provsql), initially empty, plus a scratch
+  -- table of the same shape; both reused across rounds.
+  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+  EXECUTE format('CREATE TEMP TABLE _new (LIKE %I)', work_name);
+
+  LOOP
+    iters := iters + 1;
+    -- Hard safety bound (also catches genuinely unbounded recursion, e.g. an
+    -- unbounded counter, where even the tuple set never stabilises).
+    IF iters > max_iter THEN
+      RAISE EXCEPTION 'eval_recursive: no fixpoint after % rounds (cyclic data?)', max_iter;
+    END IF;
+
+    -- One round of naive evaluation: re-run the CTE body over the current
+    -- working table.  INSERT targets a tracked table, so ProvSQL fills provsql.
+    -- Take the row count from the INSERT itself (counting _new directly would be
+    -- an aggregate over a provenance-tracked table -> an agg_token).
+    EXECUTE 'TRUNCATE _new';
+    EXECUTE format('INSERT INTO _new(%s) %s', colnames, body_sql);
+    GET DIAGNOSTICS new_count = ROW_COUNT;
+
+    -- Exact structural fixpoint test (content-addressed tokens => set equality).
+    EXECUTE format(
+      'SELECT EXISTS((TABLE _new EXCEPT TABLE %1$I) UNION ALL (TABLE %1$I EXCEPT TABLE _new))',
+      work_name) INTO changed;
+
+    -- In Boolean mode, learn the round bound from the tuple-set fixpoint (the
+    -- set always stabilises after finitely many rounds, even on cyclic data).
+    IF boolean_mode AND ntuples IS NULL THEN
+      EXECUTE format(
+        'SELECT NOT EXISTS('
+        || '(SELECT %2$s FROM _new EXCEPT SELECT %2$s FROM %1$I) UNION ALL '
+        || '(SELECT %2$s FROM %1$I EXCEPT SELECT %2$s FROM _new))',
+        work_name, colnames) INTO set_stable;
+      IF set_stable THEN
+        ntuples := new_count;
+      END IF;
+    END IF;
+
+    -- Copy _new into the working table (tracked -> tracked carries the tokens).
+    EXECUTE format('TRUNCATE %I', work_name);
+    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM _new', work_name, colnames);
+
+    -- Structural fixpoint: done (acyclic / fully converged) -- sound for any
+    -- semiring.
+    EXIT WHEN NOT changed;
+
+    -- Boolean mode on cyclic data: once the value-fixpoint bound is reached we
+    -- stop, even though the circuit is not structurally stable.
+    EXIT WHEN boolean_mode AND ntuples IS NOT NULL AND iters >= ntuples;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+/**
  * @brief Create a comparison gate for HAVING clause provenance
  *
  * @param left_token provenance token for the left operand

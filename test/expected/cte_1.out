@@ -46,4 +46,4 @@ Nancy|Paris|1
 Paul|New York|1
 Susan|Berlin|1
 (7 rows)
-ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
+ERROR:  ProvSQL: Recursive CTEs not supported

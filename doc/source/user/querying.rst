@@ -31,6 +31,15 @@ The following SQL constructs are supported with full provenance tracking:
 * ``JOIN`` (inner joins, outer joins, natural joins)
 * ``LATERAL`` subqueries
 * Non-recursive CTEs (``WITH`` clauses)
+* Recursive CTEs (``WITH RECURSIVE``) using ``UNION`` (set semantics) over
+  provenance-tracked relations, on PostgreSQL 15+: the recursive CTE is
+  transparently evaluated to a fixpoint and the result carries provenance like
+  any other query (e.g. the provenance of s–t reachability is the disjunction
+  over the s–t paths).  On **acyclic** data this works for any semiring.  On
+  **cyclic** data it requires ``provsql.boolean_provenance`` (an absorptive
+  setting, under which the value converges); the resulting circuit is then
+  sound only for absorptive evaluation (probability / Boolean), not for
+  multiplicity-counting semirings
 * Subqueries in the ``FROM`` clause (including deeply nested)
 * ``GROUP BY``
 * ``SELECT DISTINCT`` (set semantics)
@@ -56,7 +65,9 @@ will either raise an error or may cause incorrect provenance tracking:
 
 * **Subqueries outside FROM:** ``EXISTS``, ``NOT EXISTS``,
   ``IN``/``NOT IN`` subqueries, scalar subqueries in ``SELECT``
-* **Recursive CTEs** (``WITH RECURSIVE``)
+* **Recursive CTEs** (``WITH RECURSIVE``) using ``UNION ALL`` (bag
+  semantics), over cyclic data *without* ``provsql.boolean_provenance``, or on
+  PostgreSQL versions before 15
 * ``INTERSECT``
 * ``DISTINCT ON``
 * ``GROUPING SETS``, ``CUBE``, ``ROLLUP``

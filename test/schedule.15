@@ -1,0 +1,7 @@
+# Provenance for recursive queries (WITH RECURSIVE).
+#
+# PG15+ only: the planner-hook lowering uses pg_get_querydef (exported from
+# ruleutils.h only since PG15) and pg_analyze_and_rewrite_fixedparams (PG15).
+# On earlier majors recursive CTEs over tracked relations keep raising
+# "Recursive CTEs not supported", so this test is gated to PG15+.
+test: recursive

@@ -51,6 +51,7 @@
 #include "commands/createas.h"
 #include "executor/spi.h"
 #include "tcop/utility.h"
+#include "tcop/tcopprot.h"             /* pg_parse_query, pg_analyze_and_rewrite_fixedparams */
 #include <time.h>
 
 #include "classify_query.h"
@@ -345,6 +346,102 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
   }
 }
 
+#if PG_VERSION_NUM >= 150000
+/**
+ * @brief Lower a recursive CTE to a provenance-aware fixpoint (PROTOTYPE).
+ *
+ * ProvSQL cannot rewrite @c WITH @c RECURSIVE in place: the recursive term
+ * forbids the aggregate that provenance-merging needs.  Instead, for a recursive
+ * CTE whose body touches provenance-tracked relations, we deparse the body to
+ * SQL, run @c provsql.eval_recursive over SPI now (at plan time) -- it evaluates
+ * @c base @c UNION @c recursive to a fixpoint, letting ProvSQL's own rewriting
+ * compute the join @c times gates, the untracked base branch's @c gate_one, and
+ * the @c UNION @c plus merge -- and leaves a tracked temp table named after the
+ * CTE holding @c (cols..., @c provsql).  We then rewrite this CTE reference into
+ * a plain scan of that table, which the rest of @c process_query handles as an
+ * ordinary tracked relation.
+ *
+ * Returns @c true on success, @c false if the shape is unsupported (the caller
+ * falls back to the historical error).  Boolean provenance, acyclic data, and
+ * UNION (set) recursion only; the driver guards non-termination.  This is a
+ * feasibility prototype: it performs SPI work and temp-table creation during
+ * planning, and recognises only the linear/UNION shape.  See poc/recursive/.
+ */
+static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
+  Query         *cteq = (Query *) cte->ctequery;
+  char          *body_text;
+  StringInfoData cols, coldef, call, scan;
+  ListCell      *lcn, *lct;
+  bool           first = true;
+  int            rc;
+
+  if (cteq == NULL || !IsA(cteq, Query))
+    return false;
+
+  /* Only UNION (set) recursion is in scope.  Reject UNION ALL (bag semantics,
+   * which the set-fixpoint driver does not model -- and which is unbounded on a
+   * graph with several paths) and anything that is not a plain UNION; the
+   * caller then raises the usual "Recursive CTEs not supported". */
+  if (cteq->setOperations == NULL ||
+      !IsA(cteq->setOperations, SetOperationStmt) ||
+      ((SetOperationStmt *) cteq->setOperations)->op != SETOP_UNION ||
+      ((SetOperationStmt *) cteq->setOperations)->all)
+    return false;
+
+  /* Deparse the whole recursive CTE body to SQL.  It references the working
+   * relation by the CTE name; the driver creates a temp table of that name. */
+  body_text = pg_get_querydef(cteq, false);
+
+  /* User column names (comma list) and column definitions (name type). */
+  initStringInfo(&cols);
+  initStringInfo(&coldef);
+  forboth(lcn, cte->ctecolnames, lct, cte->ctecoltypes) {
+    char *name = strVal(lfirst(lcn));
+    Oid   typid = lfirst_oid(lct);
+    if (!first) {
+      appendStringInfoString(&cols, ", ");
+      appendStringInfoString(&coldef, ", ");
+    }
+    first = false;
+    appendStringInfoString(&cols, quote_identifier(name));
+    appendStringInfo(&coldef, "%s %s", quote_identifier(name), format_type_be(typid));
+  }
+
+  if (provsql_verbose >= 20)
+    provsql_notice("Lowering recursive CTE '%s':\n body   = %s\n coldef = %s",
+                   cte->ctename, body_text, coldef.data);
+
+  /* Drive the fixpoint now, leaving a tracked temp table `ctename`. */
+  initStringInfo(&call);
+  appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",
+                   quote_literal_cstr(body_text),
+                   quote_literal_cstr(cte->ctename),
+                   quote_literal_cstr(cols.data),
+                   quote_literal_cstr(coldef.data));
+  if ((rc = SPI_connect()) != SPI_OK_CONNECT)
+    provsql_error("Recursive CTE lowering: SPI_connect failed (%d)", rc);
+  rc = SPI_execute(call.data, false, 0);
+  SPI_finish();
+  if (rc < 0)
+    provsql_error("Recursive CTE lowering: eval_recursive failed (%d)", rc);
+
+  /* Replace the CTE reference with a scan of the populated table. */
+  initStringInfo(&scan);
+  appendStringInfo(&scan, "SELECT %s FROM %s",
+                   cols.data, quote_identifier(cte->ctename));
+  {
+    List *raw = pg_parse_query(scan.data);
+    List *analyzed = pg_analyze_and_rewrite_fixedparams(
+                       linitial_node(RawStmt, raw), scan.data, NULL, 0, NULL);
+    r->rtekind  = RTE_SUBQUERY;
+    r->subquery = linitial_node(Query, analyzed);
+    r->ctename  = NULL;
+    r->ctelevelsup = 0;
+  }
+  return true;
+}
+#endif
+
 /**
  * @brief Inline CTE references as subqueries within a query.
  *
@@ -366,7 +463,14 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList) {
         CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc2);
         if (strcmp(cte->ctename, r->ctename) == 0) {
           if (cte->cterecursive) {
+#if PG_VERSION_NUM >= 150000
+            /* Lower supported (UNION-set) recursion to a provenance fixpoint;
+             * unsupported shapes (e.g. UNION ALL) are rejected. */
+            if (!lower_recursive_cte(cte, r))
+              provsql_error("Recursive CTEs not supported (unsupported recursion shape)");
+#else
             provsql_error("Recursive CTEs not supported");
+#endif
           } else {
             r->rtekind = RTE_SUBQUERY;
             r->subquery = copyObject((Query *)cte->ctequery);

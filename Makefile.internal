@@ -148,6 +148,9 @@ test/schedule: $(wildcard test/schedule.*)
 	if [ $(PGVER_MAJOR) -ge 14 ]; then \
 		cat test/schedule.14 >> test/schedule; \
 	fi
+	if [ $(PGVER_MAJOR) -ge 15 ]; then \
+		cat test/schedule.15 >> test/schedule; \
+	fi
 ifneq ($(SKIP_UPGRADE_TEST),yes)
 	echo "test: extension_upgrade" >> test/schedule
 endif
