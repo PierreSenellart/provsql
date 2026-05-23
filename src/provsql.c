@@ -497,6 +497,32 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
             break;
         }
 
+        /* In a UNION, every branch must expose a provsql column so the set
+         * operation's columns line up.  A branch with no provenance source
+         * (constant rows, or an untracked relation) is returned unchanged by
+         * process_query above and has no provsql column; such rows are present
+         * unconditionally, so their provenance is the multiplicative identity.
+         * Append a gate_one() provsql column.  Set-operation branches never
+         * carry resjunk entries (those are rejected by the planner), so the
+         * column lands last -- the same ordinal position as the provsql column
+         * the provenance-bearing branches get. */
+        if (cell == NULL && q->setOperations != NULL &&
+            IsA(q->setOperations, SetOperationStmt) &&
+            ((SetOperationStmt *)q->setOperations)->op == SETOP_UNION) {
+          FuncExpr *one_expr = makeNode(FuncExpr);
+          TargetEntry *one_te;
+          one_expr->funcid = constants->OID_FUNCTION_GATE_ONE;
+          one_expr->funcresulttype = constants->OID_TYPE_UUID;
+          one_expr->args = NIL;
+          one_expr->location = -1;
+          one_te = makeTargetEntry((Expr *)one_expr,
+                                   list_length(new_subquery->targetList) + 1,
+                                   pstrdup(PROVSQL_COLUMN_NAME), false);
+          new_subquery->targetList = lappend(new_subquery->targetList, one_te);
+          varattnoprovsql = list_length(new_subquery->targetList);
+          cell = list_tail(new_subquery->targetList);
+        }
+
         if (cell != NULL) {
           r->eref->colnames = list_insert_nth(r->eref->colnames, varattnoprovsql-1,
                                               makeString(pstrdup(PROVSQL_COLUMN_NAME)));
