@@ -369,6 +369,22 @@ def compile_to_ddnnf(pool: ConnectionPool, token: str, compiler: str) -> dict:
     }
 
 
+def compile_to_ddnnf_nnf(pool: ConnectionPool, token: str, compiler: str) -> str:
+    """Return the compiled d-DNNF as c2d/d4 ".nnf" text.
+
+    The text companion to ``compile_to_ddnnf`` (which returns DOT for the
+    canvas): this is the machine-readable interchange form, with variable
+    numbering matching ``tseytin_cnf``.
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT provsql.compile_to_ddnnf(%s::uuid, %s)",
+            (token, compiler),
+        )
+        (nnf,) = cur.fetchone()
+    return nnf
+
+
 def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
     """Return ``{"dot", "scene", "treewidth"}`` for the tree decomposition.
 

@@ -3747,6 +3747,24 @@ CREATE OR REPLACE FUNCTION compile_to_ddnnf_dot(
   'provsql','compile_to_ddnnf_dot' LANGUAGE C;
 
 /**
+ * @brief Return the compiled d-DNNF of a provenance circuit in the
+ * c2d / d4 ".nnf" text interchange format.
+ *
+ * Companion to compile_to_ddnnf_dot (DOT, for viewing): this is the
+ * machine-readable form, suitable for feeding to an external d-DNNF
+ * reasoner / verifier or saving next to tseytin_cnf (same variable
+ * numbering). Accepts the same compiler / meta-route names.
+ *
+ * @param token root provenance token
+ * @param compiler compiler or in-process meta-route to use
+ */
+CREATE OR REPLACE FUNCTION compile_to_ddnnf(
+  token UUID,
+  compiler TEXT = 'd4')
+  RETURNS TEXT AS
+  'provsql','compile_to_ddnnf' LANGUAGE C;
+
+/**
  * @brief Structural statistics of the d-DNNF a compiler produces for a
  * provenance circuit.
  *

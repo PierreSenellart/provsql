@@ -190,6 +190,32 @@ same Boolean function: comparing their size and sharing is instructive,
 and is one of the things the Studio knowledge-compilation panel makes
 visual.
 
+Exporting the d-DNNF as text
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:sqlfunc:`compile_to_ddnnf_dot` is for the eye. To get the compiled
+circuit as a machine-readable artifact -- to feed it to an external
+d-DNNF reasoner or verifier, or to archive it -- :sqlfunc:`compile_to_ddnnf`
+returns the same circuit in the standard c2d / d4 ``.nnf`` text format:
+
+.. code-block:: postgresql
+
+    SELECT compile_to_ddnnf(provenance(), 'd4')
+    FROM suspects WHERE id = 1;
+
+The output opens with an ``nnf <#nodes> <#edges> <#vars>`` header, then
+one line per node: ``L <lit>`` for a literal leaf, ``A <k> …`` for an
+AND over ``k`` earlier nodes, ``O <j> <k> …`` for an OR (``j`` is the
+decision variable, ``0`` when ProvSQL records none). It accepts the same
+compiler / meta-route names as :sqlfunc:`compile_to_ddnnf_dot`.
+
+The literal variables use the **same numbering as**
+:sqlfunc:`tseytin_cnf`, even when an external compiler renumbered them
+internally, so a ``.cnf`` and a ``.nnf`` of the same circuit
+cross-reference and :sqlfunc:`tseytin_cnf_mapping` interprets both. In
+Studio the *Compiled d-D (NNF text)* eval-strip option shows the NNF and
+the copy button yields it verbatim.
+
 Measuring the compiled d-DNNF
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -1589,7 +1589,7 @@
   // method, including ones that handle agg internally, and Studio
   // can't second-guess the wrapper's contract.
   const _AGG_INCOMPATIBLE_OPTIONS = new Set([
-    'probability', 'kc-cnf', 'kc-ddnnf', 'kc-td', 'kc-benchmark',
+    'probability', 'kc-cnf', 'kc-ddnnf', 'kc-nnf', 'kc-td', 'kc-benchmark',
   ]);
 
   // Lookup the gate type of the current eval target (pinned node, else
@@ -1917,18 +1917,18 @@
       // every method ProvSQL knows (one row per d4 / c2d / minic2d /
       // dsharp / tree-decomposition / independent / possible-worlds /
       // monte-carlo / weightmc). kc-cnf / kc-td take no args.
-      if (v === 'kc-ddnnf') {
+      if (v === 'kc-ddnnf' || v === 'kc-nnf') {
         wantedIds.add('eval-args-compiler');
       } else if (v === 'kc-benchmark') {
         wantedIds.add('eval-args-mc');
       }
-      // Compiler dropdown: only kc-ddnnf accepts the three in-process
-      // routes (tree-decomposition / interpret-as-dd / default).
-      // probability_evaluate's "compilation" method requires an
-      // external compiler, and kc-benchmark already includes
+      // Compiler dropdown: kc-ddnnf and kc-nnf accept the three
+      // in-process routes (tree-decomposition / interpret-as-dd /
+      // default) too. probability_evaluate's "compilation" method
+      // requires an external compiler, and kc-benchmark already includes
       // tree-decomposition / independent / monte-carlo as their own
       // rows so listing them under "compilers" would be confusing.
-      const compilerExtended = (v === 'kc-ddnnf');
+      const compilerExtended = (v === 'kc-ddnnf' || v === 'kc-nnf');
       const compilerEl = document.getElementById('eval-args-compiler');
       if (compilerEl) {
         for (const opt of compilerEl.querySelectorAll('option')) {
@@ -2274,6 +2274,10 @@
       const compiler = document.getElementById('eval-args-compiler')?.value || 'd4';
       return `/api/kc/ddnnf?token=${enc(token)}&compiler=${enc(compiler)}`;
     }
+    if (kind === 'kc-nnf') {
+      const compiler = document.getElementById('eval-args-compiler')?.value || 'd4';
+      return `/api/kc/nnf?token=${enc(token)}&compiler=${enc(compiler)}`;
+    }
     if (kind === 'kc-td') {
       return `/api/kc/td?token=${enc(token)}`;
     }
@@ -2354,6 +2358,22 @@
         + (data.weighted === false ? '' : ', weighted');
       resultEl.querySelectorAll('span[data-cnf-uuid]')
               .forEach(resolveCnfMapRow);
+      return;
+    }
+    if (kind === 'kc-nnf') {
+      // Compiled d-DNNF in c2d/d4 NNF text format. A plain text panel
+      // like the CNF one; the eval-strip copy button yields the .nnf so
+      // it can be fed to an external d-DNNF tool. Variable numbering
+      // matches the Tseytin CNF (same circuit), so a .cnf and a .nnf
+      // cross-reference.
+      const nnf = data.nnf == null ? '' : String(data.nnf);
+      const toolName = KC_TOOL_NAME[data.compiler] || data.compiler || '';
+      resultEl.innerHTML =
+        `<div class="cv-kc-panel"><pre>${escapeHtml(nnf)}</pre></div>`;
+      resultEl.dataset.kind = 'kc-nnf';
+      resultEl.dataset.copy = nnf;
+      resultEl.title = 'Compiled d-DNNF (NNF format)'
+        + (toolName ? `, ${toolName}` : '');
       return;
     }
     if (kind === 'kc-ddnnf') {

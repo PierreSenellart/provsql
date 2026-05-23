@@ -189,6 +189,41 @@ def test_kc_ddnnf_returns_501_for_missing_compiler(client, personnel_token, monk
     assert "d4" in data["missing_tools"]
 
 
+def test_kc_nnf_rejects_invalid_uuid(client):
+    resp = client.get("/api/kc/nnf?token=not-a-uuid&compiler=tree-decomposition")
+    assert resp.status_code == 400
+
+
+def test_kc_nnf_rejects_unknown_compiler(client, personnel_token):
+    resp = client.get(
+        f"/api/kc/nnf?token={personnel_token}&compiler=not-a-real-compiler"
+    )
+    assert resp.status_code == 400
+    assert "unknown compiler" in resp.get_json()["error"]
+
+
+def test_kc_nnf_happy_path(client, personnel_token):
+    # tree-decomposition needs no external tool, so this is deterministic.
+    resp = client.get(
+        f"/api/kc/nnf?token={personnel_token}&compiler=tree-decomposition"
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["compiler"] == "tree-decomposition"
+    assert data["nnf"].startswith("nnf ")
+
+
+def test_kc_nnf_returns_501_for_missing_compiler(client, personnel_token, monkeypatch):
+    from provsql_studio import kc
+    monkeypatch.setattr(
+        kc, "missing_tools_for_compiler",
+        lambda pool, compiler: ("d4",),
+    )
+    resp = client.get(f"/api/kc/nnf?token={personnel_token}&compiler=d4")
+    assert resp.status_code == 501
+    assert "d4" in resp.get_json()["missing_tools"]
+
+
 def test_kc_td_returns_501_when_dot_missing(client, personnel_token, monkeypatch):
     """`/api/kc/td` needs `dot` to render the DOT to SVG; if absent, the
     route 501s ahead of the SQL call rather than letting the

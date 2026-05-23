@@ -758,6 +758,36 @@ def create_app(
         data["compiler"] = compiler
         return jsonify(data)
 
+    @app.get("/api/kc/nnf")
+    def api_kc_nnf():
+        import psycopg
+        token = _kc_token()
+        if token is None:
+            return jsonify({"error": "token is not a valid UUID"}), 400
+        compiler = request.args.get("compiler", "d4")
+        if compiler not in _KC_COMPILERS_WHITELIST:
+            return jsonify({
+                "error": f"unknown compiler '{compiler}'",
+                "hint": f"choose one of: {sorted(_KC_COMPILERS_WHITELIST)}",
+            }), 400
+        # Only the compiler is needed here (no dot: this is text output).
+        try:
+            missing = kc_mod.missing_tools_for_compiler(get_pool(), compiler)
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        if missing:
+            return _tool_unavailable(missing)
+        try:
+            nnf = kc_mod.compile_to_ddnnf_nnf(get_pool(), token, compiler)
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        except psycopg.Error as e:
+            return jsonify({
+                "error": f"compile_to_ddnnf({compiler}) failed",
+                "detail": str(e).strip(),
+            }), 500
+        return jsonify({"nnf": nnf, "compiler": compiler})
+
     @app.get("/api/kc/td")
     def api_kc_td():
         import psycopg

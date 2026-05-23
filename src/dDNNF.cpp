@@ -801,6 +801,98 @@ dDNNF::Stats dDNNF::nodeStats() const
   return s;
 }
 
+std::string dDNNF::toNNF(
+  const std::function<int(const std::string &)> &var_of_uuid) const
+{
+  // Emit nodes in post-order so a child's NNF index is always smaller
+  // than its parent's; memoise gate -> assigned NNF node index.
+  std::vector<std::string> lines;
+  std::unordered_map<gate_t, int, hash_gate_t> idx;
+  std::size_t edges = 0;
+  int max_var = 0;
+
+  // Variable index of an input gate: the caller-supplied numbering (by
+  // original UUID) when available, else the d-DNNF's own gate id + 1.
+  auto var_of = [&](gate_t g) -> int {
+    if(var_of_uuid) {
+      auto u = id2uuid.find(g);
+      if(u != id2uuid.end()) {
+        int v = var_of_uuid(u->second);
+        if(v > 0)
+          return v;
+      }
+    }
+    return static_cast<int>(
+      static_cast<std::underlying_type<gate_t>::type>(g)) + 1;
+  };
+
+  std::function<int(gate_t)> emit = [&](gate_t g) -> int {
+    auto found = idx.find(g);
+    if(found != idx.end())
+      return found->second;
+
+    std::string line;
+    switch(getGateType(g)) {
+    case BooleanGate::IN: {
+      int v = var_of(g);
+      max_var = std::max(max_var, v);
+      line = "L " + std::to_string(v);
+      break;
+    }
+    case BooleanGate::NOT: {
+      // A literal: NOT must sit directly over an input in NNF. The IN
+      // child is not emitted as a node of its own here -- the negative
+      // literal is the leaf.
+      gate_t c = *getWires(g).begin();
+      if(getGateType(c) != BooleanGate::IN)
+        throw CircuitException(
+          "toNNF: NOT over a non-input gate (circuit not in negation normal form)");
+      int v = var_of(c);
+      max_var = std::max(max_var, v);
+      line = "L -" + std::to_string(v);
+      break;
+    }
+    case BooleanGate::AND: {
+      std::vector<int> ch;
+      for(gate_t c : getWires(g))
+        ch.push_back(emit(c));
+      edges += ch.size();
+      line = "A " + std::to_string(ch.size());
+      for(int i : ch)
+        line += " " + std::to_string(i);
+      break;
+    }
+    case BooleanGate::OR: {
+      std::vector<int> ch;
+      for(gate_t c : getWires(g))
+        ch.push_back(emit(c));
+      edges += ch.size();
+      // j (decision variable) is 0: ProvSQL's OR gates do not record
+      // which variable the branches split on.
+      line = "O 0 " + std::to_string(ch.size());
+      for(int i : ch)
+        line += " " + std::to_string(i);
+      break;
+    }
+    default:
+      throw CircuitException("toNNF: unexpected gate type in d-DNNF");
+    }
+
+    int my = static_cast<int>(lines.size());
+    lines.push_back(std::move(line));
+    idx[g] = my;
+    return my;
+  };
+
+  emit(root);
+
+  std::ostringstream out;
+  out << "nnf " << lines.size() << " " << edges << " " << max_var << "\n";
+  for(const auto &l : lines)
+    out << l << "\n";
+  return out.str();
+}
+
 std::string dDNNF::toDot() const
 {
   std::ostringstream out;
