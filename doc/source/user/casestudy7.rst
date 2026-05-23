@@ -11,24 +11,22 @@ d-DNNF, and the method comparison all sit side by side.
 
 The headline is a single pair of queries over the **same data**: one is
 *safe* (its lineage is read-once, probability is trivial), the other is
-its *unsafe* sibling (its lineage is genuinely entangled, probability is
-:math:`\#P`-hard in general). No recursion is involved anywhere; the
+its *unsafe* sibling (its lineage is genuinely entangled, probability
+computation is :math:`\#P`-hard in general). No recursion is involved anywhere; the
 difference is entirely in the join pattern, and -- as we will see -- in
 which keys the schema declares.
 
 The Scenario
 ------------
 
-A conference-reviewing setup, with three uncertain relations:
+A conference-reviewing setup, with three uncertain relations (alongside
+deterministic dimension tables ``reviewers`` / ``papers`` / ``topics``,
+and one block-correlated table ``assignment`` used at the end):
 
 * ``bid(reviewer, paper)`` -- a reviewer offered to review a paper; the
   confidence is how firm the bid is (availability, willingness).
 * ``expertise(reviewer, topic)`` -- the reviewer's area of competence.
 * ``topic_of(paper, topic)`` -- the paper is about a topic.
-
-plus deterministic dimension tables (``reviewers``, ``papers``,
-``topics``) and one block-correlated table, ``assignment``, used at the
-end.
 
 The data is seeded so that paper ``p1`` is the interesting one: three
 reviewers bid on it, two of them (Alice and Bob) share the same area of
@@ -52,17 +50,18 @@ fresh database::
     createdb peer_review_demo
     psql -d peer_review_demo -f setup.sql
 
-Assign confidences are seeded by the script (a per-row ``conf`` column
+Confidences are seeded by the script (a per-row ``conf`` column
 fed to :sqlfunc:`set_prob`). Connect Studio to the fixture::
 
     provsql-studio --dsn postgresql:///peer_review_demo
 
 and open `http://127.0.0.1:8000/ <http://127.0.0.1:8000/>`_. The schema
-panel lists the three provenance-tracked relations (``bid``,
-``expertise``, ``topic_of``) with the purple :sc:`prov` pill, the three
-plain dimension tables, and ``assignment`` (also provenance-tracked, via
-``repair_key``). The ``*_label`` mappings let the eval strip's
-``sr_formula`` / ``sr_why`` / ``sr_how`` name the leaves.
+panel tags ``bid``, ``expertise`` and ``topic_of`` (added with
+:sqlfunc:`add_provenance`) with a :sc:`prov-tid` pill -- their tuples are
+independent -- and ``assignment`` (set up with :sqlfunc:`repair_key`)
+with a :sc:`prov-bid` pill, marking it block-correlated; the three
+dimension tables are plain. The ``*_label`` mappings let the eval
+strip's ``sr_formula`` / ``sr_why`` / ``sr_how`` name the leaves.
 
 Step 1: A Safe Query
 --------------------
@@ -111,7 +110,7 @@ one of the paper's own topics?"
 
 This is the canonical **non-hierarchical** query :math:`H_0` (a
 three-atom cycle over ``reviewer``, ``paper``, ``topic``); its
-probability problem is :math:`\#P`-hard in general
+probability computation is :math:`\#P`-hard in general
 :cite:`DBLP:journals/jacm/DalviS12`. On our data the entanglement is
 concrete: Alice and Bob both bid on ``p1`` and are both expert in
 ``databases``, and ``p1`` is about ``databases`` -- so the single tuple

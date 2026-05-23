@@ -112,10 +112,18 @@ INSERT INTO assignment(reviewer, paper) VALUES
 SELECT repair_key('assignment', 'reviewer');
 
 -- Label mappings so the Studio eval-strip's sr_formula / sr_why / sr_how
--- and PROV-XML export name the leaves instead of showing raw UUIDs.
+-- and PROV-XML export name the leaves instead of showing raw UUIDs. The
+-- `lbl` columns exist only to feed create_provenance_mapping, which copies
+-- their values into standalone (value, provenance) tables.
 SELECT create_provenance_mapping('bid_label',      'bid',      'lbl');
 SELECT create_provenance_mapping('expertise_label','expertise','lbl');
 SELECT create_provenance_mapping('topic_of_label', 'topic_of', 'lbl');
+
+-- `conf` only fed set_prob and `lbl` only fed create_provenance_mapping;
+-- both jobs are now done, so drop the artifact columns from the base tables.
+ALTER TABLE bid       DROP COLUMN conf, DROP COLUMN lbl;
+ALTER TABLE expertise DROP COLUMN conf, DROP COLUMN lbl;
+ALTER TABLE topic_of  DROP COLUMN conf, DROP COLUMN lbl;
 
 \echo
 \echo '----------------------------------------------------------------------'
