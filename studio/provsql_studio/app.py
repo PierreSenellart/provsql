@@ -743,6 +743,26 @@ def create_app(
             }), 500
         return jsonify(data)
 
+    @app.get("/api/kc/tools")
+    def api_kc_tools():
+        # External-tool availability map, queried through
+        # provsql.tool_available so the answer reflects the backend's
+        # resolved PATH plus the provsql.tool_search_path GUC.  The
+        # front-end caches this and uses it to hide unselectable
+        # entries from the compilation / wmc dropdowns; the
+        # probability benchmark consults the same map server-side so
+        # rows for absent tools are not even submitted.
+        import psycopg
+        try:
+            return jsonify(kc_mod.tools_status(get_pool()))
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        except psycopg.Error as e:
+            return jsonify({
+                "error": "tool_available query failed",
+                "detail": str(e).strip(),
+            }), 500
+
     @app.get("/api/kc/benchmark")
     def api_kc_benchmark():
         import psycopg

@@ -3778,6 +3778,28 @@ CREATE OR REPLACE FUNCTION tree_decomposition_dot(
   'provsql','tree_decomposition_dot' LANGUAGE C;
 
 /**
+ * @brief Report whether an external tool is on the backend's resolved PATH
+ *
+ * Uses the same @c find_external_tool() helper that the compilers
+ * (d4 / c2d / minic2d / dsharp / panini), model counters (ganak /
+ * sharpsat-td / dpmc via htb+dmc / weightmc), and visualisation
+ * wrappers (graph-easy, dot) themselves consult, so the result
+ * reflects exactly what a subsequent @c probability_evaluate or
+ * @c view_circuit call would see — including the
+ * @c provsql.tool_search_path GUC prepended to @c $PATH.
+ *
+ * Names with a slash are treated as paths and tested directly via
+ * @c access(X_OK); bare names are resolved through @c /bin/sh's
+ * @c command -v under the backend's PATH.
+ *
+ * @param name bare executable (e.g. @c 'd4') or an absolute path
+ * @return true iff the tool resolves to an executable file
+ */
+CREATE OR REPLACE FUNCTION tool_available(name TEXT)
+  RETURNS BOOLEAN AS
+  'provsql','tool_available' LANGUAGE C STRICT;
+
+/**
  * @brief Time a single probability_evaluate call and return one row
  *
  * Helper for @c probability_benchmark. Returns the wall-clock

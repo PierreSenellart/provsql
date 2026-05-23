@@ -20,14 +20,90 @@
     schemaDirty:   true,
     mappingsDirty: true,
     customsDirty:  true,
+    // /api/kc/tools cache: which external knowledge compilers and
+    // model counters the backend can actually reach (PATH +
+    // provsql.tool_search_path). Consumed by the circuit-mode eval
+    // strip to hide unselectable options. `null` until the first
+    // successful fetch; the dirty flag is set by invalidateAll so the
+    // refresh button forces a re-fetch (e.g. after installing a
+    // missing tool or editing the tool_search_path GUC).
+    toolsDirty:    true,
+    toolsCache:    null,
     invalidateAll() {
       this.schemaDirty   = true;
       this.mappingsDirty = true;
       this.customsDirty  = true;
+      this.toolsDirty    = true;
+      this.toolsCache    = null;
     },
   };
   window.ProvsqlStudio = window.ProvsqlStudio || {};
   window.ProvsqlStudio.metadata = Metadata;
+
+  // Hide eval-strip options whose external tool is missing on the
+  // backend. The map comes from /api/kc/tools (one round-trip per
+  // refresh) and lists which `eval-args-compiler` and
+  // `eval-args-wmc-tool` values are reachable through the backend's
+  // resolved PATH (plus the provsql.tool_search_path GUC). Already-
+  // selected options that became unavailable are reset to the first
+  // surviving entry so the eval strip never lands the user on an
+  // option that's guaranteed to error out.
+  //
+  // Soft-fail: 501 (extension too old) or a network error leaves
+  // every option visible. That degrades to today's behaviour where
+  // an absent tool surfaces as a probability_evaluate error at run
+  // time, which is acceptable when the discovery surface itself is
+  // not installed.
+  async function refreshToolAvailability() {
+    if (!Metadata.toolsDirty && Metadata.toolsCache) {
+      applyToolAvailability(Metadata.toolsCache);
+      return Metadata.toolsCache;
+    }
+    let data = null;
+    try {
+      const resp = await fetch('/api/kc/tools');
+      if (resp.ok) data = await resp.json();
+    } catch (_e) {
+      // network failure: leave dropdowns untouched.
+    }
+    Metadata.toolsCache = data;
+    Metadata.toolsDirty = false;
+    if (data) applyToolAvailability(data);
+    return data;
+  }
+
+  function applyToolAvailability(data) {
+    const opts = (data && data.options) || {};
+    const compSel = document.getElementById('eval-args-compiler');
+    const wmcSel  = document.getElementById('eval-args-wmc-tool');
+    if (compSel && opts.compilation) _filterSelectByMap(compSel, opts.compilation);
+    if (wmcSel  && opts.wmc)         _filterSelectByMap(wmcSel,  opts.wmc);
+  }
+
+  function _filterSelectByMap(selectEl, availMap) {
+    let firstVisible = null;
+    let activeStillValid = false;
+    for (const opt of selectEl.options) {
+      // Default to "visible" for any option the API didn't report on
+      // (forward-compat: new options arriving before the API knows
+      // about them stay reachable rather than silently disappear).
+      const isAvail = availMap[opt.value] !== false;
+      opt.hidden = !isAvail;
+      opt.disabled = !isAvail;
+      if (isAvail && firstVisible === null) firstVisible = opt.value;
+      if (isAvail && selectEl.value === opt.value) activeStillValid = true;
+    }
+    if (!activeStillValid && firstVisible !== null) {
+      selectEl.value = firstVisible;
+      // Fire `change` so any listeners (e.g. an eval-args visibility
+      // toggle) see the new value.
+      selectEl.dispatchEvent(new Event('change'));
+    }
+  }
+
+  // Expose so circuit.js (which renders the eval strip on circuit-mode
+  // entry) can prime the cache after wiring the dropdowns.
+  window.ProvsqlStudio.refreshToolAvailability = refreshToolAvailability;
 
   // Carry the textarea + a per-mode preload UUID across navigation.
   // The active-tab highlight is driven by CSS off <body class="mode-X">
@@ -1425,6 +1501,14 @@
           setTimeout(() => icon.classList.remove('fa-spin'), 600);
         }
         if (!panel.hidden) load();
+        // Re-fetch the tool-availability map so newly-installed (or
+        // newly-removed) compilers are reflected in the eval-strip
+        // dropdowns immediately. invalidateAll above already cleared
+        // the cache; this triggers the actual round-trip and
+        // re-applies the filter to the live <select> elements.
+        if (window.ProvsqlStudio?.refreshToolAvailability) {
+          window.ProvsqlStudio.refreshToolAvailability();
+        }
       });
     }
   }
@@ -1471,6 +1555,12 @@
   function setupCircuitMode() {
     document.getElementById('sidebar-title').textContent = 'Provenance Circuit';
     document.getElementById('sidebar-body').innerHTML = circuitSidebarHtml();
+    // Hide eval-args options for missing external tools.  Fire-and-
+    // forget: by the time the user opens the Compilation / wmc
+    // dropdowns the fetch is usually back; if it isn't, the dropdown
+    // briefly shows every option and is filtered when the response
+    // lands.
+    refreshToolAvailability();
     document.getElementById('result-legend').innerHTML =
       '<span class="wp-legend-swatch" style="background:var(--purple-500)"></span> Click a UUID / agg_token cell in the result to inspect its circuit.';
 

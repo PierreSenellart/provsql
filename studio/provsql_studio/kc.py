@@ -396,6 +396,34 @@ def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
     }
 
 
+# External-tool dependency of every benchmark method.  Empty tuple
+# means the method is fully in-process and always available; a non-
+# empty tuple lists the bare executable names looked up through
+# ``provsql.tool_available`` (which honours ``provsql.tool_search_path``
+# and the backend's resolved ``PATH``).  ``dpmc`` is the only entry
+# with two dependencies: the kernel needs both ``htb`` (tree-
+# decomposition) and ``dmc`` (DPMC's project-join solver) on PATH.
+_METHOD_TOOL_DEPS: dict[tuple[str, str | None], tuple[str, ...]] = {
+    ("independent",        None): (),
+    ("possible-worlds",    None): (),
+    ("tree-decomposition", None): (),
+    ("monte-carlo",        None): (),
+    ("compilation", "d4"):              ("d4",),
+    ("compilation", "d4v2"):            ("d4v2",),
+    ("compilation", "c2d"):             ("c2d",),
+    ("compilation", "minic2d"):         ("minic2d",),
+    ("compilation", "dsharp"):          ("dsharp",),
+    ("compilation", "panini-obdd"):     ("panini",),
+    ("compilation", "panini-obdd-and"): ("panini",),
+    ("compilation", "panini-decdnnf"):  ("panini",),
+    ("compilation", "panini-r2d2"):     ("panini",),
+    ("compilation", "panini-ccdd"):     ("panini",),
+    ("wmc", "weightmc;0.8;0.2"):        ("weightmc",),
+    ("wmc", "ganak"):                   ("ganak",),
+    ("wmc", "sharpsat-td"):             ("sharpsat-td",),
+    ("wmc", "dpmc"):                    ("htb", "dmc"),
+}
+
 # Methods and per-method arguments exercised by the benchmark.  Mirrors
 # the body of ``provsql.probability_benchmark`` in
 # ``sql/provsql.common.sql`` but lives here because we drive the loop
@@ -404,26 +432,94 @@ def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
 # ``WHEN OTHERS`` does not catch ``query_canceled`` (57014) so a
 # timeout inside the SQL helper aborts the whole table instead of
 # producing one timeout row.
-_BENCHMARK_METHODS: tuple[tuple[str, str | None], ...] = (
-    ("independent",        None),
-    ("possible-worlds",    None),
-    ("tree-decomposition", None),
-    ("monte-carlo",        None),       # samples filled in per call
-    ("compilation",        "d4"),
-    ("compilation",        "d4v2"),
-    ("compilation",        "c2d"),
-    ("compilation",        "minic2d"),
-    ("compilation",        "dsharp"),
-    ("compilation",        "panini-obdd"),
-    ("compilation",        "panini-obdd-and"),
-    ("compilation",        "panini-decdnnf"),
-    ("compilation",        "panini-r2d2"),
-    ("compilation",        "panini-ccdd"),
-    ("wmc",                "weightmc;0.8;0.2"),
-    ("wmc",                "ganak"),
-    ("wmc",                "sharpsat-td"),
-    ("wmc",                "dpmc"),
-)
+_BENCHMARK_METHODS: tuple[tuple[str, str | None], ...] = tuple(_METHOD_TOOL_DEPS.keys())
+
+# Compiler values offered by the Studio eval-strip "Compilation"
+# dropdown.  Includes options outside the benchmark surface
+# (``tree-decomposition``, ``interpret-as-dd``, ``default``) so the
+# /api/kc/tools payload covers every dropdown entry in one shot.
+_COMPILER_TOOL_DEPS: dict[str, tuple[str, ...]] = {
+    "d4":                 ("d4",),
+    "d4v2":               ("d4v2",),
+    "c2d":                ("c2d",),
+    "minic2d":            ("minic2d",),
+    "dsharp":             ("dsharp",),
+    "panini-obdd":        ("panini",),
+    "panini-obdd-and":    ("panini",),
+    "panini-decdnnf":     ("panini",),
+    "panini-r2d2":        ("panini",),
+    "panini-ccdd":        ("panini",),
+    "tree-decomposition": (),
+    "interpret-as-dd":    (),
+    "default":            (),
+}
+
+# WMC-tool values offered by the eval-strip "wmc" dropdown.  The
+# ``weightmc;ε;δ`` form embeds default arguments; the tool itself is
+# just ``weightmc``.
+_WMC_TOOL_DEPS: dict[str, tuple[str, ...]] = {
+    "ganak":            ("ganak",),
+    "sharpsat-td":      ("sharpsat-td",),
+    "dpmc":             ("htb", "dmc"),
+    "weightmc;0.8;0.2": ("weightmc",),
+}
+
+# Every distinct tool name any dropdown / benchmark row can depend on.
+# Queried in a single SQL round-trip via ``provsql.tool_available``.
+_KNOWN_TOOLS: tuple[str, ...] = tuple(sorted({
+    tool
+    for deps in (
+        *_METHOD_TOOL_DEPS.values(),
+        *_COMPILER_TOOL_DEPS.values(),
+        *_WMC_TOOL_DEPS.values(),
+    )
+    for tool in deps
+}))
+
+
+def query_tool_availability(pool: ConnectionPool) -> dict[str, bool]:
+    """Return ``{tool_name: available}`` for every external tool the KC
+    demo helpers and probability benchmark can dispatch to.
+
+    Uses ``provsql.tool_available`` so the result reflects the
+    backend's resolved ``PATH`` plus the ``provsql.tool_search_path``
+    GUC, not Studio's process environment.
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, provsql.tool_available(name) "
+            "FROM unnest(%s::text[]) AS name",
+            (list(_KNOWN_TOOLS),),
+        )
+        return {name: bool(avail) for name, avail in cur.fetchall()}
+
+
+def tools_status(pool: ConnectionPool) -> dict:
+    """Structured payload for the Studio ``/api/kc/tools`` endpoint.
+
+    Mirrors the option lists of the eval-strip dropdowns so the JS
+    side can hide unavailable entries without replicating the
+    method → tool mapping.  ``tools`` is the raw map (one entry per
+    distinct tool); ``options.compilation`` / ``options.wmc`` are the
+    per-dropdown derived maps; ``methods`` is keyed by
+    ``"<method>|<args>"`` (args ``""`` for None) and used by both
+    the probability benchmark filter and a hypothetical future
+    ``probability_evaluate`` UI gate.
+    """
+    tools = query_tool_availability(pool)
+    def _avail(deps: tuple[str, ...]) -> bool:
+        return all(tools.get(t, False) for t in deps)
+    return {
+        "tools": tools,
+        "options": {
+            "compilation": {opt: _avail(deps) for opt, deps in _COMPILER_TOOL_DEPS.items()},
+            "wmc":         {opt: _avail(deps) for opt, deps in _WMC_TOOL_DEPS.items()},
+        },
+        "methods": {
+            f"{method}|{args or ''}": _avail(deps)
+            for (method, args), deps in _METHOD_TOOL_DEPS.items()
+        },
+    }
 
 
 def probability_benchmark(
@@ -462,6 +558,17 @@ def probability_benchmark(
             return
         notices.append(msg)
 
+    # Skip methods whose external tools are missing on the backend.
+    # The benchmark would otherwise spend ~ms per row reproducing the
+    # same "X not found on PATH" error.  Methods with no dependency
+    # (independent / possible-worlds / tree-decomposition / monte-
+    # carlo) always survive the filter.
+    tools = query_tool_availability(pool)
+    runnable = [
+        (m, a) for (m, a) in _BENCHMARK_METHODS
+        if all(tools.get(t, False) for t in _METHOD_TOOL_DEPS[(m, a)])
+    ]
+
     rows: list[dict] = []
     with pool.connection() as conn:
         conn.add_notice_handler(_on_notice)
@@ -482,7 +589,7 @@ def probability_benchmark(
                         "GREATEST(5, current_setting('provsql.verbose_level', "
                         "true)::int)::text, true)"
                     )
-                for method, args in _BENCHMARK_METHODS:
+                for method, args in runnable:
                     call_args = str(samples) if method == "monte-carlo" else args
                     t0 = time.perf_counter()
                     probability: float | None = None
