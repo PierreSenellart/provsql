@@ -258,6 +258,102 @@
   doi          = {10.1145/1739041.1739082},
 }
 
+@inproceedings{DBLP:conf/ecai/Darwiche04,
+  author       = {Adnan Darwiche},
+  title        = {New Advances in Compiling {CNF} into Decomposable Negation Normal
+                  Form},
+  booktitle    = {Proceedings of the 16th Eureopean Conference on Artificial Intelligence,
+                  {ECAI}'2004, including Prestigious Applicants of Intelligent Systems,
+                  {PAIS} 2004, Valencia, Spain, August 22-27, 2004},
+  pages        = {328--332},
+  publisher    = {{IOS} Press},
+  year         = {2004},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces the c2d compiler, which translates {CNF} formulas into
+    deterministic decomposable {NNF} (specifically, Decision-{DNNF}) under the guidance
+    of a decomposition tree (dtree). ProvSQL invokes c2d as one of the external
+    knowledge compilers behind @c probability_evaluate(..., 'compilation', 'c2d') and
+    behind the Studio "Compile" feature.},
+}
+
+@inproceedings{DBLP:conf/ijcai/Darwiche11,
+  author       = {Adnan Darwiche},
+  title        = {{SDD:} {A} New Canonical Representation of Propositional Knowledge
+                  Bases},
+  booktitle    = {{IJCAI} 2011, Proceedings of the 22nd International Joint Conference
+                  on Artificial Intelligence, Barcelona, Catalonia, Spain, July 16-22,
+                  2011},
+  pages        = {819--826},
+  publisher    = {{IJCAI/AAAI}},
+  year         = {2011},
+  doi          = {10.5591/978-1-57735-516-8/IJCAI11-143},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces Sentential Decision Diagrams ({SDDs}), a canonical
+    representation of propositional knowledge bases structured by a fixed v-tree.
+    SDDs generalise {OBDDs}, support polynomial Apply, and underlie ProvSQL's
+    miniC2D-based compilation route. The Decision-{SDD} variant on which miniC2D
+    is built is a structural specialisation of this language.},
+}
+
+@inproceedings{DBLP:conf/ai/MuiseMBH12,
+  author       = {Christian J. Muise and
+                  Sheila A. McIlraith and
+                  J. Christopher Beck and
+                  Eric I. Hsu},
+  title        = {{Dsharp:} Fast d-{DNNF} Compilation with sharp{SAT}},
+  booktitle    = {Advances in Artificial Intelligence - 25th Canadian Conference on
+                  Artificial Intelligence, Canadian {AI} 2012, Toronto, ON, Canada,
+                  May 28-30, 2012. Proceedings},
+  series       = {Lecture Notes in Computer Science},
+  volume       = {7310},
+  pages        = {356--361},
+  publisher    = {Springer},
+  year         = {2012},
+  doi          = {10.1007/978-3-642-30353-1\_36},
+  keyword      = {provsql-foundation},
+  annote       = {The Dsharp compiler: a top-down {DPLL}-style {CNF} to Decision-{DNNF}
+    compiler built on the sharp{SAT} model counter, with component caching as the
+    key efficiency mechanism. ProvSQL exposes Dsharp as one of the external compilers
+    behind @c probability_evaluate(..., 'compilation', 'dsharp').},
+}
+
+@inproceedings{DBLP:conf/ijcai/OztokD15,
+  author       = {Umut Oztok and
+                  Adnan Darwiche},
+  title        = {A Top-Down Compiler for Sentential Decision Diagrams},
+  booktitle    = {Proceedings of the Twenty-Fourth International Joint Conference on
+                  Artificial Intelligence, {IJCAI} 2015, Buenos Aires, Argentina,
+                  July 25-31, 2015},
+  pages        = {3141--3148},
+  publisher    = {{AAAI} Press},
+  year         = {2015},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces miniC2D, a top-down {CNF}-to-{SDD} compiler. The paper
+    isolates a subclass of {SDDs} called Decision-{SDDs} that admit a top-down
+    compilation strategy analogous to that of c2d / Dsharp. ProvSQL invokes miniC2D
+    as the structural-target external compiler in its probability evaluation pipeline.},
+}
+
+@inproceedings{DBLP:conf/ijcai/LagniezM17,
+  author       = {Jean{-}Marie Lagniez and
+                  Pierre Marquis},
+  title        = {An Improved Decision-{DNNF} Compiler},
+  booktitle    = {Proceedings of the Twenty-Sixth International Joint Conference on
+                  Artificial Intelligence, {IJCAI} 2017, Melbourne, Australia, August
+                  19-25, 2017},
+  pages        = {667--673},
+  publisher    = {ijcai.org},
+  year         = {2017},
+  doi          = {10.24963/ijcai.2017/93},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces d4, a top-down {CNF}-to-Decision-{DNNF} compiler with
+    dynamic hypergraph decomposition, component caching and conflict-driven
+    backtracking. The paper unifies the descriptions of c2d, Dsharp and d4 as
+    Decision-{DNNF} compilers and reports significant size and runtime improvements
+    over its predecessors. ProvSQL uses d4 as the default external compiler behind
+    @c probability_evaluate(..., 'compilation') and in the @c makeDD fallback chain.},
+}
+
 % ---------------------------------------------------------------------------
 % Papers about ProvSQL
 % ---------------------------------------------------------------------------

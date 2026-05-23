@@ -2029,6 +2029,18 @@
     return null;
   }
 
+  // Compilation-target circuit class per method. abbr is the short
+  // label rendered next to the tool; full is the tooltip.
+  const KC_CIRCUIT_CLASS = {
+    'd4':                 { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
+    'c2d':                { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
+    'minic2d':            { abbr: 'SDD',      full: 'sentential decision diagram' },
+    'dsharp':             { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
+    'tree-decomposition': { abbr: 'd-SDNNF',  full: 'structured deterministic decomposable negation normal form' },
+    'interpret-as-dd':    { abbr: 'd-D',      full: 'deterministic decomposable circuit, possibly not in negation normal form' },
+    'default':            { abbr: 'd-D',      full: 'deterministic decomposable circuit' }
+  };
+
   // Render a successful KC payload into #eval-result. Mirrors the
   // result-mutation contract of the regular data.kind branches:
   // sets innerHTML + dataset.kind + dataset.copy + title. The kind
@@ -2052,9 +2064,14 @@
       const compiler = data.compiler || '';
       const scene = data.scene || {};
       scene.title = `Compiled d-D circuit (${compiler})`;
+      const cls = KC_CIRCUIT_CLASS[compiler];
+      const clsHtml = cls
+        ? ` (<span class="cv-kc-class" title="${escapeHtml(cls.full)}">`
+          + `${escapeHtml(cls.abbr)}</span>)`
+        : '';
       scene.subtitle =
         `${(scene.nodes || []).length} gates · compiled with `
-        + `<strong>${escapeHtml(compiler)}</strong>`;
+        + `<strong>${escapeHtml(compiler)}</strong>${clsHtml}`;
       swapToKcScene(scene);
       return;
     }

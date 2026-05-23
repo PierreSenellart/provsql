@@ -84,6 +84,10 @@ body.mode-circuit #sidebar-body .cv-toolbar__info {
   text-overflow: ellipsis;
   min-width: 0;
 }
+.cv-kc-class {
+  border-bottom: 1px dotted currentColor;
+  cursor: help;
+}
 body.mode-circuit #sidebar-body .cv-eval {
   display: flex; flex-direction: column; gap: 0.4rem;
   font-size: 0.85rem;
