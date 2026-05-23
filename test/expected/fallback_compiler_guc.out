@@ -1,0 +1,13 @@
+\set ECHO none
+name|setting|vartype|context
+provsql.fallback_compiler|d4|string|user
+(1 row)
+provsql.fallback_compiler
+c2d
+(1 row)
+provsql.fallback_compiler
+d4
+(1 row)
+provsql.fallback_compiler
+
+(1 row)
