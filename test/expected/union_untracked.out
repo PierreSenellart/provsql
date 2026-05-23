@@ -1,0 +1,38 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+name|formula
+CONSTANT|𝟙
+Dave|Dave
+Magdalen|Magdalen
+Nancy|Nancy
+(4 rows)
+remove_provenance
+
+(1 row)
+name|formula
+CONSTANT|𝟙
+Dave|Dave
+Magdalen|Magdalen
+Nancy|Nancy
+(4 rows)
+remove_provenance
+
+(1 row)
+name|formula
+Dave|Dave
+Magdalen|Magdalen
+Nancy|Nancy
+Xavier|𝟙
+Yara|𝟙
+(5 rows)
+remove_provenance
+
+(1 row)
+name|formula
+CONSTANT|𝟙
+Dave|Dave
+Magdalen|Magdalen
+Nancy|Nancy
+(4 rows)
