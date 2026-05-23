@@ -759,6 +759,11 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   outline: 2px solid var(--gold-500);
   outline-offset: 1px;
 }
+/* The seed field only ever holds short values (-1 for non-deterministic,
+   or an mt19937_64 literal seed users typically pick from a small set);
+   the default .wp-config__num width is wider than it needs to be and
+   competes with the GUC name for the row. */
+#cfg-monte-carlo-seed { width: 3.5rem; }
 /* Single-select dropdown for a config row (currently the
    provsql.fallback_compiler picker). Sized to fit the long Panini
    option labels on one line; lives inside a wp-config__row--col so
