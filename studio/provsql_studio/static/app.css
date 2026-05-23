@@ -2683,6 +2683,12 @@ table thead th[data-sort="desc"]::after {
    error cell wraps when a long ProvSQL banner needs the room. */
 .cv-kc-panel td { white-space: nowrap; }
 .cv-kc-panel td:last-child { white-space: normal; }
+/* Inline source-tuple annotation appended to each "c input" comment
+   line in the CNF panel (resolved via /api/leaf). Muted so it reads as
+   Studio-side enrichment rather than part of the DIMACS the counter
+   consumes. */
+.cv-kc-cinput .cv-kc-map__src { color: #8a93a0; }
+.cv-kc-cinput .cv-kc-map__src--muted { font-style: italic; }
 /* Benchmark error column: same wp-error chrome the result-table uses
    (ProvSQL pill + crimson banner) but shrunk to fit a per-row cell. */
 .cv-kc-panel .wp-error {

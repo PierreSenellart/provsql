@@ -138,7 +138,12 @@ def test_kc_cnf_happy_path(client, personnel_token):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["weighted"] is True
-    assert data["cnf"].startswith("p cnf")
+    # The panel CNF is self-documenting: "c input <var> <uuid> <prob>"
+    # comment lines travel with the text so a copied DIMACS carries the
+    # variable mapping (the panel parses them to annotate source tuples;
+    # psql users get the same via provsql.tseytin_cnf_mapping).
+    assert data["cnf"].lstrip().startswith(("c input", "p cnf"))
+    assert "c input" in data["cnf"]
     resp = client.get(f"/api/kc/cnf?token={personnel_token}&weighted=false")
     assert resp.status_code == 200
     assert resp.get_json()["weighted"] is False

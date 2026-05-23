@@ -337,10 +337,13 @@ def _td_scene_from_dot(dot_src: str, treewidth: int | None, *, original_token: s
     return out
 
 
-def tseytin_cnf(pool: ConnectionPool, token: str, weighted: bool) -> str:
+def tseytin_cnf(
+    pool: ConnectionPool, token: str, weighted: bool, mapping: bool = False,
+) -> str:
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT provsql.tseytin_cnf(%s::uuid, %s)", (token, weighted),
+            "SELECT provsql.tseytin_cnf(%s::uuid, %s, %s)",
+            (token, weighted, mapping),
         )
         (cnf,) = cur.fetchone()
     return cnf

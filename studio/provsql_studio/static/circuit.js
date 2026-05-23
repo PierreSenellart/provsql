@@ -1160,6 +1160,46 @@
     if (tip) li.title = tip;
   }
 
+  // Append the source relation/tuple of one "c input" CNF line, looked
+  // up via /api/leaf. Same shape as fetchBagInputRow; degrades silently
+  // to muted "anonymous" / "?" so one un-resolvable input does not blank
+  // the rest of the panel.
+  async function resolveCnfMapRow(el) {
+    const uuid = el.dataset.cnfUuid;
+    const slot = el.querySelector('.cv-kc-map__src');
+    if (!uuid || !slot) return;
+    let payload = null;
+    try {
+      const resp = await fetch(`/api/leaf/${encodeURIComponent(uuid)}`);
+      if (resp.ok) payload = await resp.json();
+    } catch {
+      slot.textContent = '?';
+      return;
+    }
+    const matches = (payload && payload.matches) || [];
+    if (!matches.length) {
+      slot.textContent = 'anonymous';
+      slot.classList.add('cv-kc-map__src--muted');
+      return;
+    }
+    const m = matches[0];
+    const values = Object.values(m.row || {});
+    let hint = m.relation;
+    if (values.length > 0) {
+      const head = values.slice(0, 2).map(v => v == null ? '' : String(v));
+      const more = values.length > 2 ? ', …' : '';
+      hint = `${m.relation}(${head.join(', ')}${more})`;
+    }
+    slot.textContent = hint;
+    const tip = matches.map(mm => {
+      const pairs = Object.entries(mm.row || {})
+        .map(([k, v]) => `${k}=${v == null ? '' : v}`)
+        .join(', ');
+      return `${mm.relation}${pairs ? ': ' + pairs : ''}`;
+    }).join('\n');
+    if (tip) el.title = tip;
+  }
+
   function replaceLeafBody(html) {
     // Replace the placeholder paragraph at the bottom of the inspector body.
     const ps = inspectorBody.querySelectorAll('p');
@@ -2280,11 +2320,35 @@
   function _renderKcInto(resultEl, kind, data) {
     if (kind === 'kc-cnf') {
       const cnf = data.cnf == null ? '' : String(data.cnf);
-      resultEl.innerHTML =
-        `<div class="cv-kc-panel"><pre>${escapeHtml(cnf)}</pre></div>`;
+      // Render the DIMACS as-is, but enrich each self-documenting
+      // "c input <var> <uuid> <prob>" comment line: the UUID becomes the
+      // standard short/full widget (global "Show UUIDs" toggle) and the
+      // input's source tuple, resolved via /api/leaf, is appended muted.
+      // The copy payload stays the raw DIMACS -- the tuple is a
+      // Studio-side lookup, not part of the CNF a counter consumes.
+      const CINPUT = /^c input (\d+) (\S+) (\S+)$/;
+      const body = cnf.split('\n').map(line => {
+        const m = line.match(CINPUT);
+        if (!m) return escapeHtml(line);
+        const [, varNo, uuid, prob] = m;
+        const known = uuid !== '?';
+        const uuidCell = known
+          ? `<span class="wp-uuid">`
+            + `<span class="wp-uuid__short">${escapeHtml(shortUuid(uuid))}</span>`
+            + `<span class="wp-uuid__full">${escapeHtml(uuid)}</span></span>`
+          : '?';
+        const tag = known ? ` data-cnf-uuid="${escapeHtml(uuid)}"` : '';
+        return `<span class="cv-kc-cinput"${tag}>c input ${escapeHtml(varNo)} `
+          + `${uuidCell} ${escapeHtml(prob)}`
+          + `  <span class="cv-kc-map__src"></span></span>`;
+      }).join('\n');
+      resultEl.innerHTML = `<div class="cv-kc-panel"><pre>${body}</pre></div>`;
       resultEl.dataset.kind = 'kc-cnf';
       resultEl.dataset.copy = cnf;
-      resultEl.title = 'Tseytin CNF (DIMACS), weighted';
+      resultEl.title = 'Tseytin CNF (DIMACS)'
+        + (data.weighted === false ? '' : ', weighted');
+      resultEl.querySelectorAll('span[data-cnf-uuid]')
+              .forEach(resolveCnfMapRow);
       return;
     }
     if (kind === 'kc-ddnnf') {

@@ -3755,12 +3755,39 @@ CREATE OR REPLACE FUNCTION compile_to_ddnnf_dot(
  *
  * @param token root provenance token
  * @param weighted include probability weights when true
+ * @param mapping prepend "c input <var> <uuid> <prob>" comment lines
+ *        documenting which provenance input each variable stands for
  */
 CREATE OR REPLACE FUNCTION tseytin_cnf(
   token UUID,
-  weighted BOOLEAN = TRUE)
+  weighted BOOLEAN = TRUE,
+  mapping BOOLEAN = TRUE)
   RETURNS TEXT AS
   'provsql','tseytin_cnf' LANGUAGE C;
+
+/**
+ * @brief Map each DIMACS variable of tseytin_cnf back to its
+ *        provenance input.
+ *
+ * Returns one row per input gate: the variable index (matching
+ * tseytin_cnf and compile_to_ddnnf's NNF), the original-circuit UUID
+ * of that input, and its probability. Lets a satisfying assignment or
+ * weighted model count obtained from an external tool be read against
+ * the provenance circuit.
+ *
+ * @param token root provenance token
+ */
+CREATE OR REPLACE FUNCTION tseytin_cnf_mapping_json(token UUID)
+  RETURNS jsonb AS
+  'provsql','tseytin_cnf_mapping_json' LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION tseytin_cnf_mapping(token UUID)
+  RETURNS TABLE(variable INT, gate UUID, probability FLOAT8) AS $$
+  SELECT variable, gate, probability
+  FROM jsonb_to_recordset(tseytin_cnf_mapping_json(token))
+       AS x(variable INT, gate UUID, probability FLOAT8)
+  ORDER BY variable
+$$ LANGUAGE SQL STABLE;
 
 /**
  * @brief Return a DOT visualisation of the tree decomposition of the

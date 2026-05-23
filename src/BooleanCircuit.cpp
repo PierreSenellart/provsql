@@ -407,7 +407,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
   return totalp;
 }
 
-std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob) const {
+std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob, bool mapping) const {
   std::vector<std::vector<int> > clauses;
 
   // Tseytin transformation
@@ -457,6 +457,17 @@ std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob) const {
   clauses.push_back({(int)g+1});
 
   std::ostringstream oss;
+  // Optional self-documenting mapping, emitted as DIMACS comments
+  // before the problem line so a saved CNF records which provenance
+  // input each variable stands for. Comments are ignored by every
+  // model counter / compiler, so the file stays valid DIMACS.
+  if(mapping) {
+    for(const auto &m : tseytinVariableMapping()) {
+      oss << "c input " << m.variable << " "
+          << (m.uuid.empty() ? "?" : m.uuid) << " "
+          << m.probability << "\n";
+    }
+  }
   oss << "p cnf " << gates.size() << " " << clauses.size() << "\n";
   for(unsigned i=0; i<clauses.size(); ++i) {
     for(int x : clauses[i]) {
@@ -471,6 +482,22 @@ std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob) const {
     }
   }
   return oss.str();
+}
+
+std::vector<BooleanCircuit::CNFInputMapping>
+BooleanCircuit::tseytinVariableMapping() const {
+  std::vector<CNFInputMapping> mapping;
+  // `inputs` is a std::set<gate_t>, so iteration is in gate-id order
+  // and the variable indices (id + 1) come out sorted and stable.
+  for(gate_t in : inputs) {
+    auto id = static_cast<std::underlying_type<gate_t>::type>(in);
+    std::string u;
+    auto it = id2uuid.find(in);
+    if(it != id2uuid.end())
+      u = it->second;
+    mapping.push_back({static_cast<int>(id) + 1, u, getProb(in)});
+  }
+  return mapping;
 }
 
 dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
@@ -1529,4 +1556,18 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
 
     return dd;
   }
+}
+
+dDNNF BooleanCircuit::makeDDByName(gate_t g, const std::string &name) const
+{
+  // In-process meta-routes are dispatched through makeDD; the empty
+  // string and "default" both select makeDD's fallback chain. Any
+  // other name is an external compiler and goes straight to
+  // compilation() -- makeDD would otherwise ignore a bare compiler
+  // name and fall through to the fallback chain.
+  if(name.empty() || name=="default"
+     || name=="tree-decomposition" || name=="interpret-as-dd") {
+    return makeDD(g, name=="default" ? std::string() : name, "");
+  }
+  return compilation(g, name);
 }

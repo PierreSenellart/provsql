@@ -77,6 +77,48 @@ weights separately:
     SELECT tseytin_cnf(provenance(), weighted => false)
     FROM suspects WHERE id = 1;
 
+Reading a model back: the variable mapping
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A DIMACS variable is just an integer, so a satisfying assignment or
+weighted count returned by an external tool is meaningless until you
+know which provenance input each variable stands for. By default
+:sqlfunc:`tseytin_cnf` makes the CNF self-documenting: it prepends one
+``c input`` comment line per input variable, recording its UUID and
+probability::
+
+    c input 1 7f3a2b1c-… 0.5
+    c input 2 9b2c4d5e-… 0.6
+    p cnf 6 7
+    -4 0
+    ...
+
+Model counters and compilers ignore ``c`` comment lines, so the file
+stays valid DIMACS; pass ``mapping => false`` to omit them. Only input
+variables appear (the auxiliary Tseytin variables, one per gate, are
+not provenance inputs).
+
+The same information is available as a table through
+:sqlfunc:`tseytin_cnf_mapping`, which is what you want when reading a
+tool's output back programmatically. Like :sqlfunc:`probability_benchmark`
+it is a set-returning function, so run it with the rewriter standing
+back (``provsql.active`` off, or on a token materialised in a plain
+table):
+
+.. code-block:: postgresql
+
+    SET provsql.active = off;
+    SELECT * FROM tseytin_cnf_mapping(
+      '00000000-0000-0000-0000-000000000000');
+    SET provsql.active = on;
+
+The ``variable`` column matches the DIMACS numbering, ``gate`` is the
+original-circuit input UUID, and ``probability`` its weight. In ProvSQL
+Studio, the Tseytin CNF panel goes one step further and annotates each
+``c input`` line with the *source tuple* the variable came from
+(resolved from the tracked relations), so you can see at a glance that,
+say, variable 3 is ``suspects(5, …)``.
+
 From CNF to d-DNNF
 ------------------
 

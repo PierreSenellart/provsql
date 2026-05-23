@@ -706,7 +706,12 @@ def create_app(
             return jsonify({"error": "token is not a valid UUID"}), 400
         weighted = (request.args.get("weighted", "true").lower() != "false")
         try:
-            cnf = kc_mod.tseytin_cnf(get_pool(), token, weighted)
+            # Self-documenting DIMACS (mapping=True): the "c input" comment
+            # lines travel with the text so a copied CNF records which
+            # provenance input each variable is. The Studio panel parses
+            # those lines to annotate each input with its source tuple;
+            # psql users get the same data from provsql.tseytin_cnf_mapping.
+            cnf = kc_mod.tseytin_cnf(get_pool(), token, weighted, mapping=True)
         except psycopg.errors.UndefinedFunction as e:
             return _kc_unavailable(e)
         except psycopg.Error as e:
