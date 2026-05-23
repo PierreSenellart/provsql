@@ -1499,9 +1499,16 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
         if(provsql_verbose>=20)
           provsql_notice("dD obtained by tree decomposition, %ld gates", dd.getNbGates());
       } catch(TreeDecompositionException &) {
-        dd = compilation(g, "d4");
+        // Compiler name comes from the provsql.fallback_compiler GUC
+        // (default "d4"). The empty / NULL string is also treated as
+        // "d4" for safety, in case the GUC was unset somewhere.
+        const char *fallback = (provsql_fallback_compiler != NULL
+                                && provsql_fallback_compiler[0] != '\0')
+                               ? provsql_fallback_compiler : "d4";
+        dd = compilation(g, fallback);
         if(provsql_verbose>=20)
-          provsql_notice("dD obtained by compilation using d4, %ld gates", dd.getNbGates());
+          provsql_notice("dD obtained by compilation using %s, %ld gates",
+                         fallback, dd.getNbGates());
       }
     }
 

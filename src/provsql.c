@@ -78,6 +78,7 @@ static bool provsql_update_provenance = false; ///< @c true when provenance trac
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC
+char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit::makeDD as the final fallback after @c interpretAsDD and tree-decomposition both fail; controlled by the @c provsql.fallback_compiler GUC (default @c "d4")
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
@@ -5182,6 +5183,24 @@ void _PG_init(void) {
                              "Empty (default) means rely on the server's PATH alone.",
                              &provsql_tool_search_path,
                              "",
+                             PGC_USERSET,
+                             0,
+                             NULL,
+                             NULL,
+                             NULL);
+  DefineCustomStringVariable("provsql.fallback_compiler",
+                             "Compiler used by makeDD's final fallback when both "
+                             "interpretAsDD and tree-decomposition fail.",
+                             "Name of the external compiler invoked by "
+                             "BooleanCircuit::makeDD after interpretAsDD raises "
+                             "(non-independent or non-NNF circuit) and the "
+                             "tree-decomposition builder raises (treewidth above "
+                             "the supported bound). Accepts any value supported "
+                             "by BooleanCircuit::compilation: d4, d4v2, c2d, "
+                             "minic2d, dsharp, panini-obdd, panini-obdd-and, "
+                             "panini-decdnnf. Default: d4.",
+                             &provsql_fallback_compiler,
+                             "d4",
                              PGC_USERSET,
                              0,
                              NULL,

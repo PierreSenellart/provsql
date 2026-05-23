@@ -171,5 +171,18 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
         SET provsql.tool_search_path = '/opt/d4:/home/postgres/bin';
 
+``provsql.fallback_compiler`` (default: ``d4``)
+    Name of the external compiler ProvSQL invokes as the **final fallback**
+    in :sqlfunc:`probability_evaluate` (with the empty or ``'default'``
+    method) when neither the direct interpret-as-d-DNNF reading nor the
+    in-process tree-decomposition builder succeeds. Accepts any compiler
+    name :sqlfunc:`probability_evaluate` accepts under the ``'compilation'``
+    method: ``d4`` (default), ``d4v2``, ``c2d``, ``minic2d``, ``dsharp``,
+    ``panini-obdd``, ``panini-obdd-and``, ``panini-decdnnf``. Useful on
+    hosts where ``d4`` is not installed but another compiler is, or where
+    you want benchmarks to converge on a single fallback. Example::
+
+        SET provsql.fallback_compiler = 'c2d';
+
 All variables above have user-level scope: any user can change them for their
 own session without superuser privileges.

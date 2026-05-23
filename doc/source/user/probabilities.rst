@@ -147,8 +147,10 @@ Default strategy (no second argument)
     1. **Independent evaluation** – used if the circuit is independent.
     2. **Tree decomposition** – used if the treewidth is within the
        supported limit.
-    3. **Compilation with** ``d4`` – used as a final fallback; requires
-       ``d4`` to be installed.
+    3. **Compilation** with the compiler named by
+       ``provsql.fallback_compiler`` (default ``'d4'``) – used as a
+       final fallback; requires that compiler to be installed. See
+       :doc:`configuration`.
 
 To time every method on one circuit and compare results side by side,
 use :sqlfunc:`probability_benchmark`; see :doc:`knowledge-compilation`.

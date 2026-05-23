@@ -227,6 +227,14 @@ extern bool provsql_aggtoken_text_as_uuid;
  * NULL or empty means rely on the server's PATH alone. */
 extern char *provsql_tool_search_path;
 
+/** Compiler invoked as the final fallback in BooleanCircuit::makeDD when
+ * both interpretAsDD() and the in-process tree-decomposition path fail
+ * (the latter typically on treewidth blow-up). Defaults to "d4"; set by
+ * the provsql.fallback_compiler run-time configuration parameter to any
+ * compiler accepted by BooleanCircuit::compilation (d4 / d4v2 / c2d /
+ * minic2d / dsharp / panini-*). */
+extern char *provsql_fallback_compiler;
+
 /** Seed for the Monte Carlo sampler, set by the provsql.monte_carlo_seed
  * run-time configuration parameter.  -1 (default) means seed from
  * std::random_device for non-deterministic sampling; any other value
