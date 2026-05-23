@@ -85,19 +85,6 @@ private:
 bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
 
 /**
- * @brief Write a Tseytin transformation of the sub-circuit at @p g to a temp file.
- *
- * Produces a CNF/DIMACS-style encoding suitable for input to model
- * counters such as @c weightmc or @c d4, in a freshly-created 0700
- * temp directory. Used by @c compilation() and @c WeightMC().
- *
- * @param g            Root gate.
- * @param display_prob Include probability weights in the output.
- * @return             Path of the written DIMACS file.
- */
-std::string Tseytin(gate_t g, bool display_prob) const;
-
-/**
  * @brief Recursive helper for @c interpretAsDD().
  * @param g     Current gate to process.
  * @param seen  Set of gates already visited (prevents re-processing).

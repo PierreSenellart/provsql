@@ -11,7 +11,7 @@
  *   @c makeDD() (dispatcher).
  * - @c rewriteMultivaluedGates(): replaces MULVAR/MULIN clusters with
  *   standard AND/OR/NOT circuits.
- * - @c Tseytin(): DIMACS/weighted CNF generation for model counters.
+ * - @c TseytinCNF(): DIMACS/weighted CNF generation for model counters.
  * - @c exportCircuit(): serialisation in the @c tdkc text format.
  * - @c toString(): human-readable gate description.
  *
@@ -61,6 +61,8 @@ extern "C" {
 }
 #endif
 #include "provsql_error.h"
+#include "scoped_tempdir.h"
+using provsql::ScopedTempDir;
 
 gate_t BooleanCircuit::setGate(BooleanGate type)
 {
@@ -422,9 +424,6 @@ std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob) const {
 }
 
 dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
-  std::string filename = Tseytin(g, false);
-  std::string outfilename = filename + ".out";
-
   // Validate / map the language token to Panini's `--lang` argument.
   // Five target classes supported by Panini at the CLI:
   //   OBDD             unstructured / structured BDD
@@ -443,6 +442,14 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
     throw CircuitException(
             "panini not found on PATH; install KCBox/Panini or add "
             "its directory to provsql.tool_search_path");
+
+  ScopedTempDir tmp;
+  std::string filename    = tmp.file("input");
+  std::string outfilename = tmp.file("input.out");
+  {
+    std::ofstream ofs(filename);
+    ofs << TseytinCNF(g, false);
+  }
 
   if (provsql_verbose >= 20) {
     provsql_notice("Tseytin circuit in %s", filename.c_str());
@@ -466,11 +473,6 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
 
   if (retvalue)
     throw CircuitException(format_external_tool_status(retvalue, "panini"));
-
-  if (provsql_verbose < 20) {
-    if (unlink(filename.c_str()))
-      throw CircuitException("Error removing " + filename);
-  }
 
   std::ifstream ifs(outfilename.c_str());
   if (!ifs)
@@ -595,13 +597,8 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
 
   ifs.close();
 
-  if (provsql_verbose < 20) {
-    if (unlink(outfilename.c_str()))
-      throw CircuitException("Error removing " + outfilename);
-    std::string dirname = filename.substr(0, filename.rfind('/'));
-    if (rmdir(dirname.c_str()))
-      throw CircuitException("Error removing temp directory " + dirname);
-  } else {
+  if (provsql_verbose >= 20) {
+    tmp.keep();
     provsql_notice("Compiled Panini %s in %s",
                    lang.c_str(), outfilename.c_str());
   }
@@ -614,22 +611,6 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
 
   dnnf.simplify();
   return dnnf;
-}
-
-std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
-  // Use a private 0700 directory rather than a bare mkstemp file so the
-  // sibling output paths (.nnf / .out, derived deterministically from
-  // this base) cannot be raced by a local user pre-creating a symlink
-  // before the external tool opens them.
-  char cdir[] = "/tmp/provsqlXXXXXX";
-  if(mkdtemp(cdir) == NULL) {
-    throw CircuitException("Cannot create temporary directory");
-  }
-  std::string filename=std::string(cdir)+"/input";
-  std::ofstream ofs(filename.c_str());
-  ofs << TseytinCNF(g, display_prob);
-  ofs.close();
-  return filename;
 }
 
 dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
@@ -649,8 +630,24 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     return paniniCompile(g, lang);
   }
 
-  std::string filename=BooleanCircuit::Tseytin(g);
-  std::string outfilename=filename+".nnf";
+  // Validate the compiler name before any temp-dir or CNF work; that
+  // keeps the unknown-compiler error path lean and leak-free.
+  if(compiler!="d4" && compiler!="d4v2" && compiler!="c2d"
+     && compiler!="minic2d" && compiler!="dsharp") {
+    throw CircuitException("Unknown compiler '"+compiler+"'");
+  }
+  if(find_external_tool(compiler).empty())
+    throw CircuitException(
+            compiler + " not found on PATH; install it or add its "
+            "directory to provsql.tool_search_path");
+
+  ScopedTempDir tmp;
+  std::string filename    = tmp.file("input");
+  std::string outfilename = tmp.file("input.nnf");
+  {
+    std::ofstream ofs(filename);
+    ofs << TseytinCNF(g, false);
+  }
 
   if(provsql_verbose>=20) {
     provsql_notice("Tseytin circuit in %s", filename.c_str());
@@ -678,16 +675,9 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     // -in like c2d. The NNF is written to <filename>.nnf, which
     // matches the outfilename convention we use below.
     cmdline+="-c "+filename;
-  } else if(compiler=="dsharp") {
+  } else /* dsharp */ {
     cmdline+="-q -Fnnf "+outfilename+" "+filename;
-  } else {
-    throw CircuitException("Unknown compiler '"+compiler+"'");
   }
-
-  if(find_external_tool(compiler).empty())
-    throw CircuitException(
-            compiler + " not found on PATH; install it or add its "
-            "directory to provsql.tool_search_path");
 
   int retvalue=run_external_tool(cmdline);
 
@@ -748,12 +738,6 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   if(retvalue)
     throw CircuitException(format_external_tool_status(retvalue, compiler));
-
-  if(provsql_verbose<20) {
-    if(unlink(filename.c_str())) {
-      throw CircuitException("Error removing "+filename);
-    }
-  }
 
   std::ifstream ifs(outfilename.c_str());
 
@@ -886,16 +870,10 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   ifs.close();
 
-  if(provsql_verbose<20) {
-    if(unlink(outfilename.c_str())) {
-      throw CircuitException("Error removing "+outfilename);
-    }
-    std::string dirname=filename.substr(0, filename.rfind('/'));
-    if(rmdir(dirname.c_str())) {
-      throw CircuitException("Error removing temp directory "+dirname);
-    }
-  } else
+  if(provsql_verbose>=20) {
+    tmp.keep();
     provsql_notice("Compiled d-DNNF in %s", outfilename.c_str());
+  }
 
   dnnf.setRoot(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
 
@@ -915,10 +893,14 @@ double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
   // Ganak (meelgroup/ganak): exact weighted model counter using the
   // MCC 2024 input format. We append our weight lines after the
   // standard Tseytin CNF in the format `c p weight <lit> <w> 0`.
-  char cdir[] = "/tmp/provsqlXXXXXX";
-  if(mkdtemp(cdir) == NULL)
-    throw CircuitException("Cannot create temporary directory");
-  std::string filename = std::string(cdir) + "/input";
+  if(find_external_tool("ganak").empty())
+    throw CircuitException(
+            "ganak not found on PATH; install it or add its "
+            "directory to provsql.tool_search_path");
+
+  ScopedTempDir tmp;
+  std::string filename    = tmp.file("input");
+  std::string outfilename = tmp.file("input.out");
   {
     std::ofstream ofs(filename);
     ofs << "c t wmc\n";
@@ -929,13 +911,6 @@ double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
       ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
     }
   }
-
-  if(find_external_tool("ganak").empty())
-    throw CircuitException(
-            "ganak not found on PATH; install it or add its "
-            "directory to provsql.tool_search_path");
-
-  std::string outfilename = filename + ".out";
   // --mode 7: MPFR float (weighted floating-point counting). The
   // exact line we parse is `c s exact quadruple float <value>`.
   std::string cmdline = "ganak --mode 7 " + filename
@@ -981,15 +956,8 @@ double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
     ret = std::stod(value);
   }
 
-  if(provsql_verbose < 20) {
-    if(unlink(filename.c_str()))
-      throw CircuitException("Error removing " + filename);
-    if(unlink(outfilename.c_str()))
-      throw CircuitException("Error removing " + outfilename);
-    std::string dirname = filename.substr(0, filename.rfind('/'));
-    if(rmdir(dirname.c_str()))
-      throw CircuitException("Error removing temp directory " + dirname);
-  }
+  if(provsql_verbose >= 20)
+    tmp.keep();
 
   return ret;
 }
@@ -1000,22 +968,6 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
   // DIMACS input as Ganak. The binary is invoked from a freshly
   // mkdtemp'd directory because it writes flowcutter scratch files
   // into `--tmpdir` and we want them cleaned up afterwards.
-  char cdir[] = "/tmp/provsqlXXXXXX";
-  if(mkdtemp(cdir) == NULL)
-    throw CircuitException("Cannot create temporary directory");
-  std::string dirname  = cdir;
-  std::string filename = dirname + "/input";
-  {
-    std::ofstream ofs(filename);
-    ofs << "c t wmc\n";
-    ofs << TseytinCNF(g, false);
-    for(gate_t in : inputs) {
-      int id = static_cast<int>(in) + 1;
-      ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
-      ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
-    }
-  }
-
   if(find_external_tool("sharpsat-td").empty())
     throw CircuitException(
             "sharpsat-td not found on PATH; install it (binary name "
@@ -1028,7 +980,20 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
             "via the relative path ./flow_cutter_pace17) or add the "
             "directory to provsql.tool_search_path");
 
-  std::string outfilename = filename + ".out";
+  ScopedTempDir tmp;
+  const std::string &dirname = tmp.path();
+  std::string filename    = tmp.file("input");
+  std::string outfilename = tmp.file("input.out");
+  {
+    std::ofstream ofs(filename);
+    ofs << "c t wmc\n";
+    ofs << TseytinCNF(g, false);
+    for(gate_t in : inputs) {
+      int id = static_cast<int>(in) + 1;
+      ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
+      ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
+    }
+  }
   // Flags:
   //  -WE        enable weighted MC with arbitrary precision floats
   //  -decot 1   run flowcutter for at most 1s (demo-friendly; for
@@ -1084,16 +1049,12 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
     ret = std::stod(value);
   }
 
-  if(provsql_verbose < 20) {
-    if(unlink(filename.c_str()))
-      throw CircuitException("Error removing " + filename);
-    if(unlink(outfilename.c_str()))
-      throw CircuitException("Error removing " + outfilename);
-    // flowcutter may have left additional scratch files in dirname;
-    // we ignore rmdir failures here since the directory is /tmp and
-    // garbage collection will catch any leftovers anyway.
-    rmdir(dirname.c_str());
-  }
+  // flowcutter may have left additional scratch files in dirname;
+  // rmdir failures inside the ScopedTempDir destructor are silently
+  // swallowed.
+  if(provsql_verbose >= 20)
+    tmp.keep();
+  (void)dirname;
   return ret;
 }
 
@@ -1103,11 +1064,15 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
   //   2. dmc  (executor) consumes the tree + CNF, returns the count
   // We assume both binaries are installed as `htb` and `dmc` on PATH,
   // and pipe the planner's stdout into dmc's stdin.
-  char cdir[] = "/tmp/provsqlXXXXXX";
-  if(mkdtemp(cdir) == NULL)
-    throw CircuitException("Cannot create temporary directory");
-  std::string dirname  = cdir;
-  std::string filename = dirname + "/input.cnf";
+  if(find_external_tool("htb").empty() || find_external_tool("dmc").empty())
+    throw CircuitException(
+            "DPMC needs 'htb' (planner) and 'dmc' (executor) on PATH; "
+            "install both from vardigroup/DPMC or add their directory "
+            "to provsql.tool_search_path");
+
+  ScopedTempDir tmp;
+  std::string filename    = tmp.file("input.cnf");
+  std::string outfilename = tmp.file("input.cnf.out");
   {
     std::ofstream ofs(filename);
     ofs << "c t wmc\n";
@@ -1118,14 +1083,6 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
       ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
     }
   }
-
-  if(find_external_tool("htb").empty() || find_external_tool("dmc").empty())
-    throw CircuitException(
-            "DPMC needs 'htb' (planner) and 'dmc' (executor) on PATH; "
-            "install both from vardigroup/DPMC or add their directory "
-            "to provsql.tool_search_path");
-
-  std::string outfilename = filename + ".out";
   // htb emits a project-join tree on stdout; dmc reads it from stdin
   // (no flag for the join-tree input; the help line says explicitly
   // "Diagram Model Counter (reads join tree from stdin)").
@@ -1173,19 +1130,12 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
     ret = std::stod(value);
   }
 
-  if(provsql_verbose < 20) {
-    if(unlink(filename.c_str()))
-      throw CircuitException("Error removing " + filename);
-    if(unlink(outfilename.c_str()))
-      throw CircuitException("Error removing " + outfilename);
-    rmdir(dirname.c_str());
-  }
+  if(provsql_verbose >= 20)
+    tmp.keep();
   return ret;
 }
 
 double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
-  std::string filename=BooleanCircuit::Tseytin(g, true);
-
   //opt of the form 'delta;epsilon'
   std::stringstream ssopt(opt);
   std::string delta_s, epsilon_s;
@@ -1217,7 +1167,15 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
             "weightmc not found on PATH; install it or add its "
             "directory to provsql.tool_search_path");
 
-  std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+filename+".out";
+  ScopedTempDir tmp;
+  std::string filename    = tmp.file("input");
+  std::string outfilename = tmp.file("input.out");
+  {
+    std::ofstream ofs(filename);
+    ofs << TseytinCNF(g, true);
+  }
+
+  std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+outfilename;
 
   int retvalue=run_external_tool(cmdline);
   if(retvalue) {
@@ -1225,7 +1183,7 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   }
 
   //parsing
-  std::ifstream ifs((filename+".out").c_str());
+  std::ifstream ifs(outfilename.c_str());
   std::string line, prev_line;
   while(getline(ifs,line))
     prev_line=line;
@@ -1243,18 +1201,8 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   double exponent=stod(exp);
   double ret=value*(pow(2.0,exponent));
 
-  if(unlink(filename.c_str())) {
-    throw CircuitException("Error removing "+filename);
-  }
-
-  if(unlink((filename+".out").c_str())) {
-    throw CircuitException("Error removing "+filename+".out");
-  }
-
-  std::string dirname=filename.substr(0, filename.rfind('/'));
-  if(rmdir(dirname.c_str())) {
-    throw CircuitException("Error removing temp directory "+dirname);
-  }
+  if(provsql_verbose >= 20)
+    tmp.keep();
 
   return ret;
 }

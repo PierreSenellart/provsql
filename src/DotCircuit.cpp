@@ -14,6 +14,7 @@
  */
 #include "DotCircuit.h"
 #include "external_tool.h"
+#include "scoped_tempdir.h"
 #include <type_traits>
 
 extern "C"
@@ -143,42 +144,31 @@ std::string DotCircuit::toString(gate_t) const
 }
 
 std::string DotCircuit::render() const {
-  // Use a private 0700 directory rather than a bare mkstemp file so
-  // the deterministically-derived sibling output path (.out) cannot
-  // be raced by a local user pre-creating a symlink before
-  // graph-easy opens it.
-  char cdir[] = "/tmp/provsqlXXXXXX";
-  if(mkdtemp(cdir) == NULL) {
-    throw CircuitException("Cannot create temporary directory");
-  }
-  std::string filename=std::string(cdir)+"/dot", outfilename=filename+".out";
-
-  std::ofstream ofs(filename.c_str());
-  ofs << toString(gate_t{0});
-  ofs.close();
-
   //Executing the Graphviz dot renderer through graph-easy for ASCII
   //output
   if(find_external_tool("graph-easy").empty()) {
-    // best-effort cleanup; ignore failures
-    unlink(filename.c_str());
-    std::string dirname=filename.substr(0, filename.rfind('/'));
-    rmdir(dirname.c_str());
     throw CircuitException(
             "graph-easy not found on PATH; install it or add its "
             "directory to provsql.tool_search_path");
   }
 
+  // Private 0700 directory rather than a bare mkstemp file so the
+  // deterministically-derived sibling output path (.out) cannot be
+  // raced by a local user pre-creating a symlink before graph-easy
+  // opens it. The RAII guard unlinks both files and rmdirs at scope
+  // exit even when the body throws.
+  provsql::ScopedTempDir tmp;
+  std::string filename    = tmp.file("dot");
+  std::string outfilename = tmp.file("dot.out");
+
+  {
+    std::ofstream ofs(filename);
+    ofs << toString(gate_t{0});
+  }
+
   std::string cmdline="graph-easy --as=boxart --output="+outfilename+" "+filename;
 
   int retvalue = run_external_tool(cmdline);
-
-  if(provsql_verbose<20) {
-    if(unlink(filename.c_str())) {
-      throw CircuitException("Error removing "+filename);
-    }
-  }
-
   if(retvalue)
     throw CircuitException(format_external_tool_status(retvalue, "graph-easy"));
 
@@ -186,15 +176,8 @@ std::string DotCircuit::render() const {
   std::string str((std::istreambuf_iterator<char>(ifs)),
                   std::istreambuf_iterator<char>());
 
-  if(provsql_verbose<20) {
-    if(unlink(outfilename.c_str())) {
-      throw CircuitException("Error removing "+outfilename);
-    }
-    std::string dirname=filename.substr(0, filename.rfind('/'));
-    if(rmdir(dirname.c_str())) {
-      throw CircuitException("Error removing temp directory "+dirname);
-    }
-  }
+  if(provsql_verbose>=20)
+    tmp.keep();
 
   return str;
 }
