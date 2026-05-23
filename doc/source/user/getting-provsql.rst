@@ -49,11 +49,25 @@ Prerequisites
 5. **(Optional) Knowledge-compilation tools** for probability computation:
 
    * `c2d <http://reasoning.cs.ucla.edu/c2d/download.php>`_
-   * `d4 <https://github.com/crillab/d4>`_
+   * `d4 <https://github.com/crillab/d4>`_ and its rewrite
+     `d4v2 <https://github.com/crillab/d4v2>`_
    * `dsharp <https://github.com/QuMuLab/dsharp>`_
    * `minic2d <http://reasoning.cs.ucla.edu/minic2d/>`_ (also requires
      ``hgr2htree``)
-   * `weightmc <https://bitbucket.org/kuldeepmeel/weightmc/src/master/>`_
+   * `Panini (KCBox) <https://github.com/meelgroup/KCBox>`_
+   * `weightmc <https://bitbucket.org/kuldeepmeel/weightmc/src/master/>`_,
+     `Ganak <https://github.com/meelgroup/ganak>`_,
+     `SharpSAT-TD <https://github.com/Laakeri/sharpsat-td>`_,
+     `DPMC <https://github.com/vardigroup/DPMC>`_ (weighted model counters)
+
+   All of these are optional: ProvSQL ships with an in-process
+   tree-decomposition compiler that needs no external binary. One of
+   the compilers is, however, the **final-fallback compiler** for
+   :sqlfunc:`probability_evaluate` (default ``d4``, configurable via
+   ``provsql.fallback_compiler``; see :doc:`configuration`): if you
+   install only one knowledge compiler, install that one so the
+   fallback step in the default-strategy chain has something to
+   invoke.
 
    Each tool must be installed as an executable reachable in the PATH of
    the PostgreSQL server process (e.g., ``/usr/local/bin/``). If the tools
