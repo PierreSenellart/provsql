@@ -498,6 +498,45 @@ _KNOWN_TOOLS: tuple[str, ...] = tuple(sorted({
 }))
 
 
+def missing_tools_for_compiler(
+    pool: ConnectionPool, compiler: str
+) -> tuple[str, ...]:
+    """Return the tuple of external tools this compiler needs but that
+    ``provsql.tool_available`` reports as missing on the backend.
+
+    Empty tuple ⇒ ready to run (no external deps, or all present).
+    Used by the /api/kc/ddnnf route to return a clean 501 before
+    invoking the SQL function would 500 on a missing binary.
+    """
+    deps = _COMPILER_TOOL_DEPS.get(compiler, ())
+    if not deps:
+        return ()
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name FROM unnest(%s::text[]) AS name "
+            "WHERE NOT provsql.tool_available(name)",
+            (list(deps),),
+        )
+        return tuple(row[0] for row in cur.fetchall())
+
+
+def missing_tools_for_names(
+    pool: ConnectionPool, names: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Same shape as `missing_tools_for_compiler`, but takes raw tool
+    names directly. Used by routes that depend on a fixed tool
+    (e.g. ``dot`` for the tree-decomposition DOT renderer)."""
+    if not names:
+        return ()
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name FROM unnest(%s::text[]) AS name "
+            "WHERE NOT provsql.tool_available(name)",
+            (list(names),),
+        )
+        return tuple(row[0] for row in cur.fetchall())
+
+
 def query_tool_availability(pool: ConnectionPool) -> dict[str, bool]:
     """Return ``{tool_name: available}`` for every external tool the KC
     demo helpers and probability benchmark can dispatch to.

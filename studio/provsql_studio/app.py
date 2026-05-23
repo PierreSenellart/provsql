@@ -681,6 +681,23 @@ def create_app(
             ),
         }), 501
 
+    def _tool_unavailable(missing: tuple[str, ...]):
+        # 501 Not Implemented: the route is well-formed, but the
+        # backend lacks an external prerequisite it cannot install
+        # itself. Distinct from a 500 server error (which would
+        # imply something broke server-side); Studio's UI grays out
+        # unavailable compilers up front via /api/kc/tools, so this
+        # path only fires for hand-crafted GETs.
+        names = ", ".join(missing)
+        return jsonify({
+            "error": f"external tool not available: {names}",
+            "missing_tools": list(missing),
+            "hint": (
+                "Install the listed tool(s) on the PostgreSQL server's "
+                "PATH or add their directory to provsql.tool_search_path."
+            ),
+        }), 501
+
     @app.get("/api/kc/cnf")
     def api_kc_cnf():
         import psycopg
@@ -708,6 +725,18 @@ def create_app(
                 "error": f"unknown compiler '{compiler}'",
                 "hint": f"choose one of: {sorted(_KC_COMPILERS_WHITELIST)}",
             }), 400
+        # Tool gating: the compiler itself (if any), plus `dot` since
+        # kc_mod.compile_to_ddnnf shells out to it to produce the SVG.
+        try:
+            compiler_missing = kc_mod.missing_tools_for_compiler(
+                get_pool(), compiler)
+            dot_missing = kc_mod.missing_tools_for_names(
+                get_pool(), ("dot",))
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        missing = compiler_missing + dot_missing
+        if missing:
+            return _tool_unavailable(missing)
         try:
             data = kc_mod.compile_to_ddnnf(get_pool(), token, compiler)
         except psycopg.errors.UndefinedFunction as e:
@@ -730,6 +759,12 @@ def create_app(
         token = _kc_token()
         if token is None:
             return jsonify({"error": "token is not a valid UUID"}), 400
+        try:
+            missing = kc_mod.missing_tools_for_names(get_pool(), ("dot",))
+        except psycopg.errors.UndefinedFunction as e:
+            return _kc_unavailable(e)
+        if missing:
+            return _tool_unavailable(missing)
         try:
             data = kc_mod.tree_decomposition(get_pool(), token)
         except psycopg.errors.UndefinedFunction as e:

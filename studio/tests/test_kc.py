@@ -159,6 +159,36 @@ def test_kc_ddnnf_rejects_unknown_compiler(client, personnel_token):
     assert "hint" in data
 
 
+def test_kc_ddnnf_returns_501_for_missing_compiler(client, personnel_token, monkeypatch):
+    """A hand-crafted GET picking a compiler whose binary is absent gets a
+    clean 501 (with the missing-tool list) instead of a generic 500."""
+    from provsql_studio import kc
+    monkeypatch.setattr(
+        kc, "missing_tools_for_compiler",
+        lambda pool, compiler: ("d4",),
+    )
+    resp = client.get(
+        f"/api/kc/ddnnf?token={personnel_token}&compiler=d4"
+    )
+    assert resp.status_code == 501
+    data = resp.get_json()
+    assert "d4" in data["missing_tools"]
+
+
+def test_kc_td_returns_501_when_dot_missing(client, personnel_token, monkeypatch):
+    """`/api/kc/td` needs `dot` to render the DOT to SVG; if absent, the
+    route 501s ahead of the SQL call rather than letting the
+    subprocess.CalledProcessError surface as a 500."""
+    from provsql_studio import kc
+    monkeypatch.setattr(
+        kc, "missing_tools_for_names",
+        lambda pool, names: tuple(names),
+    )
+    resp = client.get(f"/api/kc/td?token={personnel_token}")
+    assert resp.status_code == 501
+    assert "dot" in resp.get_json()["missing_tools"]
+
+
 def test_kc_ddnnf_happy_path_tree_decomposition(client, personnel_token):
     """The tree-decomposition compiler is fully in-process (no external
     tool dependency), so the happy-path assertions are stable on any host."""
