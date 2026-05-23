@@ -337,8 +337,12 @@ static Datum probability_evaluate_internal
           } else {
             provsql_error("Unknown wmc tool: '%s'", tool.c_str());
           }
-        } else if(method=="compilation" || method=="tree-decomposition" || method=="") {
-          auto dd = c.makeDD(gate, method, args);
+        } else if(method=="compilation" || method=="tree-decomposition"
+                  || method=="interpret-as-dd" || method=="default"
+                  || method=="") {
+          auto dd = c.makeDD(gate,
+                             method=="default" ? std::string() : method,
+                             args);
           result = dd.probabilityEvaluation();
         } else {
           provsql_error("Wrong method '%s' for probability evaluation", method.c_str());

@@ -425,30 +425,10 @@ std::string exportCircuit(gate_t g) const;
 std::string TseytinCNF(gate_t g, bool display_prob) const;
 
 /**
- * @brief Return a native circuit (BC-S1.2) representation of the
- *        sub-circuit at @p g.
- *
- * No Tseytin involved: this emits the AND/OR/NOT gate structure
- * directly, in d4v2's BC-S1.2 input format. Used by d4v2 with
- * @c --input-type @c circuit so the compiler reads the gate structure
- * itself and applies its own internal translation. Variable names are
- * @c gate_index+1 so that the variable numbering in d4v2's output NNF
- * matches our own gates array; the parser bounds-checks before
- * dereferencing so any internal aux variables d4v2 introduces beyond
- * our gate count are skipped harmlessly.
- *
- * @param g            Root gate.
- * @param display_prob Include @c "c w <lit> <w>" lines listing each
- *                     input's probability.
- * @return             BC-S1.2 circuit as a string.
- */
-std::string toBC(gate_t g, bool display_prob) const;
-
-/**
  * @brief Compile via Panini (from KCBox) and return the result as a
  *        ProvSQL d-DNNF.
  *
- * @p lang selects Panini's @c --lang flag — one of @c "OBDD",
+ * @p lang selects Panini's @c --lang flag, one of @c "OBDD",
  * @c "OBDD[AND]", @c "Decision-DNNF", @c "R2-D2", or @c "CCDD".
  * Panini's BDD/DD output is over the variables of our Tseytin CNF.
  * Decisions on input variables are translated to the corresponding

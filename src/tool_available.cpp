@@ -6,7 +6,7 @@
  * The check uses the same @c find_external_tool() helper that the
  * compilers / WMC counters / GraphViz wrappers themselves consult, so
  * the result reflects exactly what a subsequent
- * @c probability_evaluate('compilation', '<tool>') call would see —
+ * @c probability_evaluate('compilation', '<tool>') call would see,
  * including the @c provsql.tool_search_path GUC prepended to @c $PATH.
  *
  * Used by Studio (and any other client) to filter the list of usable
@@ -31,8 +31,8 @@ PG_FUNCTION_INFO_V1(tool_available);
 /**
  * @brief PostgreSQL-callable entry point.
  *
- * Argument: @c name (text) — bare executable name (e.g. @c "d4") or an
- * absolute path. Names with a slash bypass the PATH walk and are
+ * Argument: @c name (text), a bare executable name (e.g. @c "d4") or
+ * an absolute path. Names with a slash bypass the PATH walk and are
  * tested directly with @c access(X_OK).
  *
  * Returns: @c true iff @c find_external_tool returns a non-empty

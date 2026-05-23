@@ -421,72 +421,6 @@ std::string BooleanCircuit::TseytinCNF(gate_t g, bool display_prob) const {
   return oss.str();
 }
 
-std::string BooleanCircuit::toBC(gate_t g, bool display_prob) const {
-  // BC-S1.2 native circuit format read by d4v2 with --input-type=circuit.
-  // Gates emitted in gate-index order and named "g<i>" (letter-prefixed,
-  // since d4v2's BC parser interprets bare numeric names ambiguously and
-  // crashes on circuits with more than a handful of pure-numeric vars).
-  // The order-by-index emit keeps d4v2's LitNameMap mapping
-  // "g<i>" -> var (i+1), matching what our NNF parser then dereferences
-  // as gates[var-1].
-  std::ostringstream oss;
-  oss << "c BC-S1.2\n";
-
-  auto name = [](gate_t i) {
-    return std::string("g") +
-           std::to_string(static_cast<std::underlying_type<gate_t>::type>(i));
-  };
-
-  // Inputs first.
-  for(gate_t i{0}; i<gates.size(); ++i) {
-    if(getGateType(i) == BooleanGate::IN) {
-      oss << "I " << name(i) << "\n";
-    }
-  }
-
-  // Gate definitions in index order (AND/OR/NOT).
-  for(gate_t i{0}; i<gates.size(); ++i) {
-    switch(getGateType(i)) {
-    case BooleanGate::AND:
-      oss << "G " << name(i) << " := A";
-      for(auto child : getWires(i))
-        oss << " " << name(child);
-      oss << "\n";
-      break;
-    case BooleanGate::OR:
-      oss << "G " << name(i) << " := O";
-      for(auto child : getWires(i))
-        oss << " " << name(child);
-      oss << "\n";
-      break;
-    case BooleanGate::NOT:
-      oss << "G " << name(i) << " := I -"
-          << name(*getWires(i).begin()) << "\n";
-      break;
-    case BooleanGate::MULIN:
-      throw CircuitException("Multivalued inputs should have been removed by then.");
-    case BooleanGate::MULVAR:
-    case BooleanGate::IN:
-    case BooleanGate::UNDETERMINED:
-      // Inputs already emitted above; MULVAR/UNDETERMINED skipped.
-      ;
-    }
-  }
-
-  // Target gate (root of the sub-circuit we want compiled).
-  oss << "T " << name(g) << "\n";
-
-  // Weights (in BC-S1.2, weight lines are `c w <name> <weight>` comments).
-  if(display_prob) {
-    for(gate_t in : inputs) {
-      oss << "c w "  << name(in)  << " " << getProb(in)        << "\n";
-      oss << "c w -" << name(in)  << " " << (1.0 - getProb(in))<< "\n";
-    }
-  }
-
-  return oss.str();
-}
-
 dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
   std::string filename = Tseytin(g, false);
   std::string outfilename = filename + ".out";
@@ -589,7 +523,7 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
       // K nodes additionally encode literal-equivalence constraints
       // (the CCDD "constrained conjunction"), but those constraints
       // are redundant w.r.t. probability evaluation under our
-      // input-projection scheme — the CCDD compiler has already used
+      // input-projection scheme; the CCDD compiler has already used
       // them to derive the structure we see here.
       this_gate = dnnf.setGate(BooleanGate::AND);
       int child;
@@ -1087,6 +1021,12 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
             "sharpsat-td not found on PATH; install it (binary name "
             "'sharpsat-td', with the flow_cutter_pace17 helper also "
             "on PATH) or add the directory to provsql.tool_search_path");
+  if(find_external_tool("flow_cutter_pace17").empty())
+    throw CircuitException(
+            "sharpsat-td's flow_cutter_pace17 helper not found on PATH; "
+            "install it alongside sharpsat-td (the counter invokes it "
+            "via the relative path ./flow_cutter_pace17) or add the "
+            "directory to provsql.tool_search_path");
 
   std::string outfilename = filename + ".out";
   // Flags:
@@ -1187,7 +1127,7 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
 
   std::string outfilename = filename + ".out";
   // htb emits a project-join tree on stdout; dmc reads it from stdin
-  // (no flag for the join-tree input — the help line says explicitly
+  // (no flag for the join-tree input; the help line says explicitly
   // "Diagram Model Counter (reads join tree from stdin)").
   std::string cmdline =
       "htb --cf=" + filename + " | dmc --cf=" + filename
@@ -1571,6 +1511,12 @@ dDNNF BooleanCircuit::interpretAsDD(gate_t g) const
 
   dd.setRoot(interpretAsDDInternal(g, seen, dd));
 
+  // The OR-as-NOT(AND(NOT, ...)) De Morgan rewriting above introduces
+  // many redundant NOT-NOT pairs and single-child AND/OR gates that the
+  // canonical simplify pass folds away; matches what the external-KC
+  // and tree-decomposition paths already do.
+  dd.simplify();
+
   return dd;
 }
 
@@ -1586,6 +1532,8 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
     } catch(TreeDecompositionException &) {
       provsql_error("Treewidth greater than %u", TreeDecomposition::MAX_TREEWIDTH);
     }
+  } else if(method=="interpret-as-dd") {
+    return interpretAsDD(g);
   } else {
     dDNNF dd;
     try {

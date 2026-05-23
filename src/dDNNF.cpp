@@ -608,9 +608,31 @@ void dDNNF::simplify() {
 
     case BooleanGate::AND:
     case BooleanGate::OR:
-      if(w.size()==0)
+      // First, drop same-type empty children (AND of TRUE = TRUE; OR
+      // of FALSE = FALSE) and short-circuit on opposite-type empty
+      // children (AND of FALSE = FALSE; OR of TRUE = TRUE). May leave
+      // `w` with 0 or 1 entry, which the second block then collapses.
+      if(w.size()>1) {
+        bool shorted = false;
+        for(auto c=w.begin(); c!=w.end();) {
+          if(getGateType(*c)==getGateType(node) && getWires(*c).size()==0) {
+            c = w.erase(c);
+          } else if(getGateType(*c)==(getGateType(node)==BooleanGate::AND?BooleanGate::OR:BooleanGate::AND)
+                    && getWires(*c).size()==0) {
+            setGateType(node, getGateType(*c));
+            probability_cache[node] = getGateType(*c)==BooleanGate::AND?1.:0.;
+            w.clear();
+            shorted = true;
+            break;
+          } else {
+            ++c;
+          }
+        }
+        if(shorted) break;
+      }
+      if(w.size()==0) {
         probability_cache[node]=(getGateType(node)==BooleanGate::AND?1.:0.);
-      else if(w.size()==1) {
+      } else if(w.size()==1) {
         if(node==getRoot()) {
           root=w[0];
         } else {
@@ -618,18 +640,6 @@ void dDNNF::simplify() {
             std::replace(wires[static_cast<size_t>(p)].begin(), wires[static_cast<size_t>(p)].end(), node, w[0]);
         }
         w.clear();
-      } else {
-        for(auto c=w.begin(); c!=w.end();) {
-          if(getGateType(*c)==getGateType(node) && getWires(*c).size()==0)
-            c = w.erase(c);
-          else if(getGateType(*c)==(getGateType(node)==BooleanGate::AND?BooleanGate::OR:BooleanGate::AND) && getWires(*c).size()==0) {
-            setGateType(node, getGateType(*c));
-            probability_cache[node] = getGateType(*c)==BooleanGate::AND?1.:0.;
-            w.clear();
-            break;
-          } else
-            ++c;
-        }
       }
       break;
 
