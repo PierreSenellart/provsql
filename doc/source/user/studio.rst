@@ -355,6 +355,16 @@ The probability cell click-toggles between rounded (per the panel's
 :guilabel:`Probability decimals` setting) and full double-precision; copies
 always carry the full-precision form.
 
+When a probability method is selected, the strip also surfaces the
+**knowledge-compilation pipeline** behind it: the DIMACS CNF
+(:sqlfunc:`tseytin_cnf`), the compiled d-DNNF rendered beside the
+original circuit (:sqlfunc:`compile_to_ddnnf_dot`), the tree
+decomposition with its treewidth (:sqlfunc:`tree_decomposition_dot`),
+and a one-click :guilabel:`Benchmark` that times every method
+(:sqlfunc:`probability_benchmark`). Compilers that are not installed on
+the server are filtered out of the picker (via :sqlfunc:`tool_available`).
+See :doc:`knowledge-compilation` for the full pipeline.
+
 .. _studio-circuit-oversized:
 
 Oversized circuits

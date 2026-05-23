@@ -103,7 +103,7 @@ INTERNAL_FUNCTIONS = {
     # Temporal internals
     'update_provenance',
     # GUC variables (not functions)
-    'aggtoken_text_as_uuid',
+    'aggtoken_text_as_uuid', 'tool_search_path',
     # random_variable type internals (I/O, internal builder,
     # parameter-validation helper)
     'random_variable_in', 'random_variable_out',
@@ -166,14 +166,14 @@ INTERNAL_FUNCTIONS = {
     'rv_aggregate_semimod',
     # Doxygen artefacts (not actual functions)
     'org', 'sql', 'html',
-    # Knowledge-compilation demo helpers (compile_to_ddnnf_dot,
-    # tseytin_cnf, tree_decomposition_dot, probability_benchmark and
-    # its internal _probability_benchmark_one). Promote to
-    # _SQL_FUNC_MAP once the dedicated user-manual page lands.
-    'compile_to_ddnnf_dot', 'tseytin_cnf', 'tree_decomposition_dot',
-    'probability_benchmark', '_probability_benchmark_one',
-    # @param names from the helpers above that Doxygen surfaces as
-    # 'provsql.<name>' anchors. Not callable.
+    # Internal per-method timing helper behind probability_benchmark
+    # (the user-facing helpers compile_to_ddnnf_dot, tseytin_cnf,
+    # tree_decomposition_dot, probability_benchmark, tool_available are
+    # now in _SQL_FUNC_MAP, referenced from the knowledge-compilation
+    # user-manual page).
+    '_probability_benchmark_one',
+    # @param names from the knowledge-compilation helpers that Doxygen
+    # surfaces as 'provsql.<name>' anchors. Not callable.
     'compilers', 'monte_carlo_samples', 'in_args', 'in_method', 'in_token',
     'weightmc_args',
 }

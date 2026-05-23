@@ -51,6 +51,7 @@ This documentation is organized into four parts:
    user/aggregation
    user/semirings
    user/probabilities
+   user/knowledge-compilation
    user/continuous-distributions
    user/shapley
    user/where-provenance

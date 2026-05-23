@@ -157,6 +157,12 @@ _SQL_FUNC_MAP = {
     'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#gaec7d70d0f94f8225861e3377682ce348',
     'rv_analytical_curves':     '/doxygen-sql/html/group__circuit__introspection.html#ga927310c0e7a80b6b092149b66d679ffb',
     'simplified_circuit_subgraph': '/doxygen-sql/html/group__circuit__introspection.html#ga7717079ec6b1f50ecb1a5a9fd5b15531',
+    # Knowledge-compilation pipeline surface
+    'tseytin_cnf':              '/doxygen-sql/html/group__provenance__output.html#gab0879def9508c30103d7ff4f990db959',
+    'compile_to_ddnnf_dot':     '/doxygen-sql/html/group__provenance__output.html#ga9ba06ef2743dee623c15186c50d5c726',
+    'tree_decomposition_dot':   '/doxygen-sql/html/group__provenance__output.html#gafecf32e35b73af9cc4070973bcd98ead',
+    'probability_benchmark':    '/doxygen-sql/html/group__provenance__output.html#ga97ca4a837aa2493190912c1b6c161ceb',
+    'tool_available':           '/doxygen-sql/html/group__provenance__output.html#ga4ae4f9f7a08be9333e78028fe10bd6cc',
     # Per-table provenance metadata + base-ancestor registry
     'set_ancestors':            '/doxygen-sql/html/group__table__management.html#ga003841a8da4d0184f7f0bc885fb6418b',
     'remove_ancestors':         '/doxygen-sql/html/group__table__management.html#gae0acb81b52c0cf93e32e62841955ab16',

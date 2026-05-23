@@ -107,7 +107,9 @@ Computation Methods
 
     The tool must be installed and accessible in the PostgreSQL server's
     PATH, or in a directory listed in the ``provsql.tool_search_path`` GUC
-    (see :doc:`configuration`).
+    (see :doc:`configuration`). The CNF handed to the compiler and the
+    resulting d-DNNF can both be inspected; see
+    :doc:`knowledge-compilation`.
 
 ``'weightmc'``
     Approximate weighted model counting using the external ``weightmc``
@@ -129,6 +131,9 @@ Default strategy (no second argument)
        supported limit.
     3. **Compilation with** ``d4`` – used as a final fallback; requires
        ``d4`` to be installed.
+
+To time every method on one circuit and compare results side by side,
+use :sqlfunc:`probability_benchmark`; see :doc:`knowledge-compilation`.
 
 Expected Values of Aggregates
 -------------------------------
