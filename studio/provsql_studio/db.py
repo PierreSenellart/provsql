@@ -339,7 +339,27 @@ SELECT
     -- the parser would, so case-sensitive and special-character
     -- names are handled correctly.
     (to_regclass(quote_ident(c.relname))::oid
-     IS NOT DISTINCT FROM c.oid) AS bare_resolves
+     IS NOT DISTINCT FROM c.oid) AS bare_resolves,
+    -- Primary-key column names, so the schema panel can underline the
+    -- key attributes (keys decide query safety; see case study 7).
+    coalesce((
+        SELECT array_agg(a.attname)
+        FROM pg_index i
+        JOIN pg_attribute a
+          ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = c.oid AND i.indisprimary
+    ), '{}'::text[]) AS pk_columns,
+    -- Repair_key ("BID") grouping-key column names, so the schema panel
+    -- can mark them with a dotted underline, distinct from the primary
+    -- key. get_table_info().block_key is an attnum array (empty for
+    -- non-BID tables); resolve it to names, preserving key-column order.
+    coalesce((
+        SELECT array_agg(a.attname ORDER BY k.ord)
+        FROM provsql.get_table_info(c.oid) ti,
+             LATERAL unnest(ti.block_key) WITH ORDINALITY AS k(attnum, ord)
+        JOIN pg_attribute a
+          ON a.attrelid = c.oid AND a.attnum = k.attnum
+    ), '{}'::text[]) AS block_key_columns
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -377,11 +397,21 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                         "(SELECT ti.kind\n"
                         "     FROM provsql.get_table_info(c.oid) ti) AS prov_kind",
                         "NULL::text AS prov_kind",
+                    ).replace(
+                        "coalesce((\n"
+                        "        SELECT array_agg(a.attname ORDER BY k.ord)\n"
+                        "        FROM provsql.get_table_info(c.oid) ti,\n"
+                        "             LATERAL unnest(ti.block_key) WITH ORDINALITY AS k(attnum, ord)\n"
+                        "        JOIN pg_attribute a\n"
+                        "          ON a.attrelid = c.oid AND a.attnum = k.attnum\n"
+                        "    ), '{}'::text[]) AS block_key_columns",
+                        "'{}'::text[] AS block_key_columns",
                     )
                 )
             rows = cur.fetchall()
         for (schema, table, kind, cols, types,
-             has_prov, is_mapping, prov_kind, bare_resolves) in rows:
+             has_prov, is_mapping, prov_kind, bare_resolves,
+             pk_cols, block_key_cols) in rows:
             propagates = bool(has_prov)
             # Views and matviews don't have a `provsql_table_info` entry,
             # so the SQL-level `prov_kind` is always NULL for them. We
@@ -402,7 +432,9 @@ def list_schema(pool: ConnectionPool) -> list[dict]:
                 "table": table,
                 "kind": kind,
                 "columns": [
-                    {"name": n, "type": t}
+                    {"name": n, "type": t,
+                     "pk": n in (pk_cols or []),
+                     "bidkey": n in (block_key_cols or [])}
                     for n, t in zip(cols or [], types or [])
                 ],
                 "has_provenance": propagates,

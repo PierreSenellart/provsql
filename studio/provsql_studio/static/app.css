@@ -557,6 +557,21 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
   background: var(--purple-100, var(--bg-code));
   color: var(--purple-700);
 }
+/* Primary-key attributes: underlined (the relational-schema convention),
+   so the key that decides a query's safety is visible at a glance. */
+.wp-schema__pk {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+/* Repair_key ("BID") grouping-key attributes: dotted underline, distinct
+   from the primary key's solid one. Rows sharing this key are mutually
+   exclusive across possible worlds. */
+.wp-schema__bidkey {
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
 /* Per-column ProvSQL-type badges: terracotta pills marking columns whose
    values are circuit references rather than scalars (random_variable's
    per-row gate, agg_token's UUID + running value). Distinct from the

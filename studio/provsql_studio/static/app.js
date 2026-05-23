@@ -1245,6 +1245,26 @@
           // Hide the bookkeeping `provsql` uuid column from the user-visible
           // column list : its presence is what the PROV pill already signals.
           const visibleCols = r.columns.filter(c => c.name !== 'provsql');
+          // A column in a composite (multi-attribute) key is only *part of*
+          // the key; a lone key column is the whole key. Two key kinds get
+          // distinct decoration: the primary key (solid underline, the
+          // relational-schema convention) and a repair_key "BID" grouping
+          // key (dotted underline), whose rows are mutually exclusive across
+          // possible worlds. See case study 7.
+          const pkWord = visibleCols.filter(c => c.pk).length > 1
+            ? 'part of the primary key' : 'primary key';
+          const bidWord = visibleCols.filter(c => c.bidkey).length > 1
+            ? 'part of the grouping key' : 'grouping key';
+          // Key decoration for a column, or null when it is in neither key.
+          const keyDecor = c => {
+            if (c.pk)
+              return { cls: 'wp-schema__pk', word: pkWord, tip: pkWord };
+            if (c.bidkey)
+              return { cls: 'wp-schema__bidkey', word: bidWord,
+                tip: bidWord + ' (repair_key: rows sharing it are '
+                  + 'mutually exclusive across possible worlds)' };
+            return null;
+          };
           // Provenance-tracked tables (not mappings, not views) can have
           // a provenance mapping created on any of their columns. Render
           // each column name as a clickable span so the user can prefill
@@ -1273,15 +1293,23 @@
             // not a scalar), so the click affordance would prefill a
             // meaningless call. Render the column name as plain text in that
             // case.
+            // Underline the column when it is part of a key (solid for the
+            // primary key, dotted for a repair_key grouping key).
+            const key = keyDecor(c);
+            const keyCls = key ? ` ${key.cls}` : '';
+            const keyTitle = key ? ` (${key.word})` : '';
             if (canMap && !pill) {
-              return `<span class="wp-schema__col" data-action="create-mapping"`
+              return `<span class="wp-schema__col${keyCls}" data-action="create-mapping"`
                 + ` data-qname="${escapeAttr(qname)}"`
                 + ` data-table="${escapeAttr(r.table)}"`
                 + ` data-col="${escapeAttr(c.name)}"`
-                + ` title="Click to create a provenance mapping on ${escapeAttr(c.name)}"`
+                + ` title="Click to create a provenance mapping on ${escapeAttr(c.name)}${keyTitle}"`
                 + `>${escapeHtml(c.name)}</span>`;
             }
-            return `${escapeHtml(c.name)}${pill}`;
+            const nameHtml = key
+              ? `<span class="${key.cls}" title="${escapeAttr(key.tip)}">${escapeHtml(c.name)}</span>`
+              : escapeHtml(c.name);
+            return `${nameHtml}${pill}`;
           }).join(', ');
           // Mapping is the more specific classification: a mapping view
           // typically also carries an implicit provsql column (the planner
