@@ -50,6 +50,9 @@ extern "C" {
 constexpr bool provsql_interrupted = false;
 constexpr int provsql_verbose = 0;
 constexpr int provsql_monte_carlo_seed = -1;
+// makeDD's final fallback uses this GUC in the extension build; the
+// standalone tdkc tool has no GUC layer, so default it to "d4".
+constexpr const char *provsql_fallback_compiler = "d4";
 enum levels {ERROR, NOTICE};
 #define elog(level, ...) {fprintf(stderr, __VA_ARGS__); if(level==ERROR) exit(EXIT_FAILURE);}
 #define CHECK_FOR_INTERRUPTS() ((void)0)
