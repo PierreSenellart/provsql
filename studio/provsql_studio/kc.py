@@ -95,7 +95,7 @@ def _classify_ddnnf_node(label: str) -> tuple[str, str, str | None]:
     if label == "¬":
         return ("kc-not", "¬", None)
     # IN leaf: "<uuid8>\np=0.500". Drop the probability text from the
-    # label and from info1 — the inspector fetches it (and the source
+    # label and from info1; the inspector fetches it (and the source
     # row) via /api/leaf/<uuid>, matching the provenance circuit's
     # input-gate behaviour.
     return ("kc-input", "ι", None)
@@ -123,7 +123,7 @@ def _ddnnf_scene_from_dot(dot_src: str, *, original_token: str) -> dict:
             pos[name] = (float(x_str), float(y_str))
         if "label" in obj and name:
             raw_labels[name] = obj["label"]
-    # Flip y so root sits at the top (smaller y) — matches the
+    # Flip y so root sits at the top (smaller y), matching the
     # provenance-circuit convention.
     if pos:
         max_y = max(y for _, y in pos.values())
@@ -180,17 +180,16 @@ def _ddnnf_scene_from_dot(dot_src: str, *, original_token: str) -> dict:
         })
 
     # Remap the root marker in the (rare) case the root is itself an
-    # IN leaf, so kc_root_id refers to the same id the canvas uses.
+    # IN leaf, so the depth computation below uses the canvas id.
     if root_id is not None and root_id in syn_to_uuid:
         root_id = syn_to_uuid[root_id]
 
     # Fallback root marker: the first node in source order if no
     # penwidth=2 hint came through (older / future DOT emitters that
-    # drop the marker). Used to highlight the d-DNNF root in the
-    # rendered scene (stashed under `kc_root_id` so the front-end can
-    # find it). The scene's `root` proper is the original provenance
-    # UUID so the eval-strip's target stays meaningful after the
-    # canvas swap.
+    # drop the marker). The scene's `root` proper is the original
+    # provenance UUID so the eval-strip's target stays meaningful after
+    # the canvas swap; `root_id` here is only used to seed the
+    # longest-path depth pass below.
     if root_id is None and nodes:
         root_id = nodes[0]["id"]
 
@@ -229,7 +228,6 @@ def _ddnnf_scene_from_dot(dot_src: str, *, original_token: str) -> dict:
         "nodes": nodes,
         "edges": edges,
         "root": original_token,
-        "kc_root_id": root_id,
         "depth": 0,
     }
 
@@ -332,7 +330,6 @@ def _td_scene_from_dot(dot_src: str, treewidth: int | None, *, original_token: s
         "nodes": nodes,
         "edges": edges,
         "root": original_token,
-        "kc_root_id": root_id,
         "depth": 0,
     }
     if treewidth is not None:
@@ -671,7 +668,7 @@ def probability_benchmark(
     # Match the old SQL ORDER BY method, args NULLS FIRST.
     rows.sort(key=lambda r: (r["method"], r["args"] is not None, r["args"] or ""))
 
-    # Deduplicate identical notices — each method emits the same
+    # Deduplicate identical notices: each method emits the same
     # shortcut notice, so the same line repeats once per benchmark row.
     seen: set[str] = set()
     uniq: list[str] = []

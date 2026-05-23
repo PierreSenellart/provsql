@@ -617,7 +617,7 @@
           + `</span>`;
       }
     }
-    // KC scenes hijack the canvas — surface a back button so the
+    // KC scenes hijack the canvas; surface a back button so the
     // user can return to the original provenance circuit. Visible
     // iff a saved scene exists (set by the KC dispatch in
     // runEvaluation; cleared by restoreKcScene).
@@ -2327,7 +2327,7 @@
       // Notices from any inner probability_evaluate are aggregated and
       // returned at the response level (the SQL function doesn't know
       // which row produced which notice). When present, surface them
-      // as a banner above the table — typically the "gate_cmp shortcut
+      // as a banner above the table; typically the "gate_cmp shortcut
       // by ProvSQL's probability-side pre-pass" warning that tells
       // the reader that the named methods may not have run on the
       // full original formula.
@@ -2344,8 +2344,8 @@
         body += '<tr>'
           + `<td>${escapeHtml(r.method)}</td>`
           + `<td class="num">${escapeHtml(r.args ?? '')}</td>`
-          + `<td class="num">${r.probability == null ? '—' : Number(r.probability).toFixed(4)}</td>`
-          + `<td class="num">${r.milliseconds == null ? '—' : Number(r.milliseconds).toFixed(2)}</td>`
+          + `<td class="num">${r.probability == null ? '–' : Number(r.probability).toFixed(4)}</td>`
+          + `<td class="num">${r.milliseconds == null ? '–' : Number(r.milliseconds).toFixed(2)}</td>`
           + `<td>${errHtml}</td>`
           + '</tr>';
       }
@@ -2486,7 +2486,7 @@
     // lives inside initEvalStrip's closure.  It re-applies the
     // scalar-vs-Boolean gate-type filter, and only re-runs syncControls
     // (which wipes the result chip) when the active selection was
-    // actually bumped — so a pin change between two Boolean nodes
+    // actually bumped, so a pin change between two Boolean nodes
     // preserves the displayed evaluation.
     const refilter = window.ProvsqlStudio?.refilterForTarget;
     if (typeof refilter === 'function') refilter();
@@ -3509,7 +3509,7 @@
          * (sampled-cdf rendering would smear each jump across the
          * surrounding sample interval and the final segment would
          * stop one sample short of x_hi).  Stems outside the current
-         * viewport still contribute to the cumulative mass — stems
+         * viewport still contribute to the cumulative mass: stems
          * before lo preload `cum` so the path enters the view at the
          * correct height (matching the empirical bars, which also
          * track cum across the full histogram, not just the visible
@@ -3590,7 +3590,7 @@
       }
       /* Point-mass overlay.  When the backend payload carries
        * stems:[{x, p}], render each as a vertical line capped by a
-       * small disc — Dirac (as_random) or categorical roots, or
+       * small disc: Dirac (as_random) or categorical roots, or
        * Dirac arms inside a Bernoulli mixture.  PDF mode only; CDF
        * mode already conveys the same information through the
        * staircase jumps that shape_cdf bakes into the curve. */

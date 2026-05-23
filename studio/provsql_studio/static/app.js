@@ -158,7 +158,7 @@
         const bn = parseFloat(bv);
         const aNaN = Number.isNaN(an);
         const bNaN = Number.isNaN(bn);
-        // Empty / non-numeric cells (e.g. "—" for a failed row) sink
+        // Empty / non-numeric cells (e.g. "–" for a failed row) sink
         // to the bottom irrespective of direction; they aren't
         // meaningful entries on a numeric column.
         if (aNaN && bNaN) return 0;
@@ -771,7 +771,7 @@
       }
       // Footer version chip: ProvSQL extension version (NULL when the
       // extension is not installed on the connected database) and
-      // Studio package version. Discreet — runs once per /api/conn poll
+      // Studio package version. Discreet: runs once per /api/conn poll
       // and is a no-op if the spans aren't present (e.g. tests).
       const extEl = document.getElementById('version-ext');
       const studioEl = document.getElementById('version-studio');
@@ -1763,7 +1763,9 @@
               <option value="possible-worlds">possible-worlds</option>
               <option value="tree-decomposition">tree-decomposition</option>
               <option value="compilation">compilation</option>
-              <option value="wmc">wmc (weighted model counting)</option>
+            </optgroup>
+            <optgroup label="Weighted model counting">
+              <option value="wmc" title="Exact (Ganak / SharpSAT-TD / DPMC) or approximate (WeightMC), depending on the tool picked in the next dropdown.">wmc</option>
             </optgroup>
             <optgroup label="Approximate">
               <option value="monte-carlo">monte-carlo</option>
@@ -1790,10 +1792,14 @@
           </select>
           <select class="cv-eval__args" id="eval-args-wmc-tool" hidden
                   title="Which weighted model counter to invoke. Ganak, SharpSAT-TD, and DPMC are exact; WeightMC is approximate (ε=0.8, δ=0.2 by default).">
-            <option value="ganak">Ganak (exact, MCC 2024+2025 winner)</option>
-            <option value="sharpsat-td">SharpSAT-TD (exact, TD-guided)</option>
-            <option value="dpmc">DPMC (exact, project-join trees + ADDs)</option>
-            <option value="weightmc;0.8;0.2">WeightMC (approximate, ε=0.8 δ=0.2)</option>
+            <optgroup label="Exact">
+              <option value="ganak">Ganak (MCC 2024+2025 winner)</option>
+              <option value="sharpsat-td">SharpSAT-TD (TD-guided)</option>
+              <option value="dpmc">DPMC (project-join trees + ADDs)</option>
+            </optgroup>
+            <optgroup label="Approximate">
+              <option value="weightmc;0.8;0.2">WeightMC (ε=0.8 δ=0.2)</option>
+            </optgroup>
           </select>
           <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
                  min="1" step="1" placeholder="bins" value="30"
