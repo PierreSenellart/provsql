@@ -64,6 +64,56 @@ extern "C" {
 #include "scoped_tempdir.h"
 using provsql::ScopedTempDir;
 
+namespace {
+
+/**
+ * @brief Best-effort parse of a model counter's "result line".
+ *
+ * Ganak, SharpSAT-TD, and DPMC each emit their final count on a
+ * line like @c "c s exact arb float 0.4350..." or
+ * @c "c s exact arb int 12345" (and DPMC also accepts the older
+ * @c "s wmc N" shape). Historically we kept the right-most
+ * whitespace-separated token and fed it to @c std::stod; that
+ * relies on the value always being last on the line, which the
+ * DPMC source itself notes is not stable across versions (a
+ * trailing @c "(cputime ...)" suffix would silently corrupt the
+ * parse).
+ *
+ * This helper scans tokens right-to-left and returns the
+ * right-most one that parses as a @c double or as a
+ * @c <num>/<den> rational. Throws a clear
+ * @c "<tool>: could not parse '<line>'" instead of letting
+ * @c std::stod's @c std::invalid_argument leak through.
+ */
+double parse_wmc_value(const std::string &line, const char *tool) {
+  std::vector<std::string> tokens;
+  std::stringstream ss(line);
+  std::string tok;
+  while(ss >> tok) tokens.push_back(tok);
+
+  for(auto it = tokens.rbegin(); it != tokens.rend(); ++it) {
+    const std::string &t = *it;
+    try {
+      auto slash = t.find('/');
+      if(slash != std::string::npos) {
+        size_t pn = 0, pd = 0;
+        double num = std::stod(t.substr(0, slash), &pn);
+        double den = std::stod(t.substr(slash + 1), &pd);
+        if(pn != slash || pd != t.size() - slash - 1) continue;
+        return (den == 0.0) ? 0.0 : num / den;
+      }
+      size_t p = 0;
+      double v = std::stod(t, &p);
+      if(p == t.size()) return v;
+    } catch(const std::exception &) {
+      // Not a number; try the next token to the left.
+    }
+  }
+  throw CircuitException(std::string(tool) + ": could not parse '" + line + "'");
+}
+
+}  // anonymous namespace
+
 gate_t BooleanCircuit::setGate(BooleanGate type)
 {
   auto id = Circuit::setGate(type);
@@ -725,7 +775,10 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   CHECK_FOR_INTERRUPTS();
 
   if(retvalue && compiler=="d4") {
-    // Temporary support for older version of d4
+    // Temporary support for an older d4 CLI: retry with the
+    // pre-`-dDNNF` syntax. Not extended to d4v2, whose CLI has been
+    // stable since release; d4v2 failures short-circuit to the
+    // throw below.
     new_d4 = false;
     cmdline = "d4 "+filename+" -out="+outfilename;
     retvalue=run_external_tool(cmdline);
@@ -931,33 +984,19 @@ double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
     throw CircuitException(format_external_tool_status(retvalue, "ganak"));
 
   std::ifstream ifs(outfilename);
-  std::string line, value;
+  std::string line, matched;
   while(std::getline(ifs, line)) {
-    // Look for `c s exact arb frac <value>`, `c s exact arb int <value>`,
-    // or `c s exact quadruple float <value>`. The value is the last
-    // whitespace-separated token on the line.
-    if(line.rfind("c s exact", 0) == 0) {
-      std::stringstream ss(line);
-      std::string tok;
-      while(ss >> tok) value = tok;
-    }
+    // Ganak emits `c s exact arb frac <value>`, `c s exact arb int
+    // <value>`, or `c s exact quadruple float <value>` depending on
+    // mode. Remember the last matching line (later lines refine the
+    // earlier ones for some output shapes).
+    if(line.rfind("c s exact", 0) == 0) matched = line;
   }
   ifs.close();
-  if(value.empty())
+  if(matched.empty())
     throw CircuitException("ganak: could not find 'c s exact' line in output");
 
-  // Output may be `<num>/<den>` for fractions (mode 1) or scientific
-  // notation for floats; std::stod handles the latter, parse the
-  // former by hand.
-  double ret;
-  auto slash = value.find('/');
-  if(slash != std::string::npos) {
-    double num = std::stod(value.substr(0, slash));
-    double den = std::stod(value.substr(slash + 1));
-    ret = (den == 0.0) ? 0.0 : num / den;
-  } else {
-    ret = std::stod(value);
-  }
+  double ret = parse_wmc_value(matched, "ganak");
 
   if(provsql_verbose >= 20)
     tmp.keep();
@@ -1030,27 +1069,15 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
 
   // Parse: `c s exact arb float <value>` per MCC 2024 weighted output.
   std::ifstream ifs(outfilename);
-  std::string line, value;
+  std::string line, matched;
   while(std::getline(ifs, line)) {
-    if(line.rfind("c s exact", 0) == 0) {
-      std::stringstream ss(line);
-      std::string tok;
-      while(ss >> tok) value = tok;
-    }
+    if(line.rfind("c s exact", 0) == 0) matched = line;
   }
   ifs.close();
-  if(value.empty())
+  if(matched.empty())
     throw CircuitException("sharpsat-td: could not find 'c s exact' line");
 
-  double ret;
-  auto slash = value.find('/');
-  if(slash != std::string::npos) {
-    double num = std::stod(value.substr(0, slash));
-    double den = std::stod(value.substr(slash + 1));
-    ret = (den == 0.0) ? 0.0 : num / den;
-  } else {
-    ret = std::stod(value);
-  }
+  double ret = parse_wmc_value(matched, "sharpsat-td");
 
   // flowcutter may have left additional scratch files in dirname;
   // rmdir failures inside the ScopedTempDir destructor are silently
@@ -1104,34 +1131,22 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
   if(retvalue)
     throw CircuitException(format_external_tool_status(retvalue, "dpmc"));
 
-  // DMC's output format: look for `s wmc ...` or `c s ...` lines.
-  // The actual line shape varies by version; we accept either the
-  // MCC `c s exact arb float <value>` form or DMC's older `s wmc N`
-  // form. The line we want has a parseable last token.
+  // DMC's output format: look for `s wmc ...` or `c s exact ...` lines.
+  // The line shape varies by version, so `parse_wmc_value` scans the
+  // line right-to-left and accepts the right-most parseable token,
+  // not just the last one (any trailing diagnostic suffix is
+  // tolerated).
   std::ifstream ifs(outfilename);
-  std::string line, value;
+  std::string line, matched;
   while(std::getline(ifs, line)) {
-    if(line.rfind("c s exact", 0) == 0
-       || line.rfind("s wmc", 0) == 0
-       || line.rfind("s SATISFIABLE", 0) == 0) {
-      std::stringstream ss(line);
-      std::string tok;
-      while(ss >> tok) value = tok;
-    }
+    if(line.rfind("c s exact", 0) == 0 || line.rfind("s wmc", 0) == 0)
+      matched = line;
   }
   ifs.close();
-  if(value.empty() || value == "SATISFIABLE" || value == "UNSATISFIABLE")
+  if(matched.empty())
     throw CircuitException("dpmc: could not find a parseable count line");
 
-  double ret;
-  auto slash = value.find('/');
-  if(slash != std::string::npos) {
-    double num = std::stod(value.substr(0, slash));
-    double den = std::stod(value.substr(slash + 1));
-    ret = (den == 0.0) ? 0.0 : num / den;
-  } else {
-    ret = std::stod(value);
-  }
+  double ret = parse_wmc_value(matched, "dpmc");
 
   if(provsql_verbose >= 20)
     tmp.keep();
