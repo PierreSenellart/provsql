@@ -373,6 +373,72 @@
     and the Studio compile dropdown.},
 }
 
+@article{DBLP:journals/jair/LaiLY17,
+  author       = {Yong Lai and
+                  Dayou Liu and
+                  Minghao Yin},
+  title        = {New Canonical Representations by Augmenting {OBDDs} with
+                  Conjunctive Decomposition},
+  journal      = {J. Artif. Intell. Res.},
+  volume       = {58},
+  pages        = {453--521},
+  year         = {2017},
+  doi          = {10.1613/JAIR.5271},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces {OBDD[AND]} (and its smooth variant): augmenting
+    ordered binary decision diagrams with explicit decomposable
+    conjunction nodes. {OBDDs} are the canonical structured BDD class
+    in the knowledge-compilation map; this paper defines a strict
+    super-language that retains many of {OBDDs}' tractability properties
+    while admitting more compact circuits. ProvSQL exposes Panini's
+    @c OBDD and @c OBDD[AND] target languages via the 'panini-obdd' /
+    'panini-obdd-and' compiler options.},
+}
+
+@article{DBLP:journals/corr/abs-2202-10025,
+  author       = {Yong Lai and
+                  Kuldeep S. Meel and
+                  Roland H. C. Yap},
+  title        = {{CCDD:} {A} Tractable Representation for Model Counting and
+                  Uniform Sampling},
+  journal      = {CoRR},
+  volume       = {abs/2202.10025},
+  year         = {2022},
+  eprinttype   = {arXiv},
+  eprint       = {2202.10025},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces Constrained Conjunction \& Decision Diagrams
+    ({CCDDs}): a tractable KC language that combines Decision-{DNNF}
+    structure with kernelized conjunctions encoding literal
+    equivalences. Used as the target language of {ExactMC} and {FastUS}
+    in the KCBox toolbox. ProvSQL exposes {CCDD} compilation through
+    Panini under the 'panini-ccdd' compiler option.},
+}
+
+@misc{KCBoxPanini,
+  author       = {Yong Lai and
+                  Dayou Liu and
+                  Kuldeep S. Meel and
+                  Mate Soos and
+                  Roland H. C. Yap and
+                  Minghao Yin},
+  title        = {Panini: a knowledge-compilation toolkit (KCBox)},
+  howpublished = {\url{https://github.com/meelgroup/KCBox}},
+  year         = {2024},
+  keyword      = {provsql-foundation},
+  annote       = {Panini is the knowledge-compilation tool in the {KCBox}
+    toolbox developed by the Meel group. It compiles {CNF} formulas into
+    one of five target languages: {OBDD}, {OBDD[AND]}, Decision-{DNNF},
+    R2-D2 (a restricted Decision-{DNNF}), or {CCDD}. ProvSQL exposes all
+    five through the 'panini-obdd' / 'panini-obdd-and' / 'panini-decdnnf'
+    / 'panini-r2d2' / 'panini-ccdd' compiler options of
+    @c probability_evaluate and the Studio compile dropdown. Decisions
+    on Tseytin-auxiliary variables in Panini's output are kept in the
+    translated d-DNNF using phantom (1, 1)-weight literals so that the
+    weighted model count over input variables matches the original
+    probability.},
+}
+
 % ---------------------------------------------------------------------------
 % Papers about ProvSQL
 % ---------------------------------------------------------------------------

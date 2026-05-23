@@ -404,6 +404,25 @@ std::string TseytinCNF(gate_t g, bool display_prob) const;
 std::string toBC(gate_t g, bool display_prob) const;
 
 /**
+ * @brief Compile via Panini (from KCBox) and return the result as a
+ *        ProvSQL d-DNNF.
+ *
+ * @p lang selects Panini's @c --lang flag — one of @c "OBDD",
+ * @c "OBDD[AND]", @c "Decision-DNNF", @c "R2-D2", or @c "CCDD".
+ * Panini's BDD/DD output is over the variables of our Tseytin CNF.
+ * Decisions on input variables are translated to the corresponding
+ * @c IN gates; decisions on Tseytin auxiliaries are dropped (their
+ * branches are mutually exclusive over input assignments by Tseytin
+ * determinism, so the input-projection is still a sound d-DNNF and
+ * @c dDNNF::probabilityEvaluation gives the correct probability).
+ *
+ * @param g     Root gate of the sub-circuit to compile.
+ * @param lang  Panini target language (see above).
+ * @return      The compiled d-DNNF.
+ */
+dDNNF paniniCompile(gate_t g, const std::string &lang) const;
+
+/**
  * @brief Boost serialisation support.
  * @param ar       Boost archive (input or output).
  * @param version  Archive version (unused).

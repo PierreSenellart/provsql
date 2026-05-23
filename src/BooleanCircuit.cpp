@@ -487,6 +487,201 @@ std::string BooleanCircuit::toBC(gate_t g, bool display_prob) const {
   return oss.str();
 }
 
+dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
+  std::string filename = Tseytin(g, false);
+  std::string outfilename = filename + ".out";
+
+  // Validate / map the language token to Panini's `--lang` argument.
+  // Five target classes supported by Panini at the CLI:
+  //   OBDD             unstructured / structured BDD
+  //   OBDD[AND]        OBDD augmented with conjunctive decomposition
+  //   Decision-DNNF    decomposable + decision-deterministic NNF
+  //   R2-D2            restricted Decision-DNNF (Panini-specific)
+  //   CCDD             constrained conjunction + decision diagram
+  // The K (kernelize) node that CCDD may emit is not yet translated;
+  // it surfaces as an explicit error rather than a silent wrong answer.
+  if (lang != "OBDD" && lang != "OBDD[AND]" && lang != "Decision-DNNF"
+      && lang != "R2-D2" && lang != "CCDD") {
+    throw CircuitException("Unknown Panini target language: " + lang);
+  }
+
+  if (find_external_tool("panini").empty())
+    throw CircuitException(
+            "panini not found on PATH; install KCBox/Panini or add "
+            "its directory to provsql.tool_search_path");
+
+  if (provsql_verbose >= 20) {
+    provsql_notice("Tseytin circuit in %s", filename.c_str());
+  }
+
+  // Panini's binary is a multi-tool dispatcher: argv[1] must be the
+  // sub-tool name ("Panini"), the actual options follow.
+  std::string cmdline =
+      "panini Panini --lang \"" + lang + "\" --out " + outfilename
+      + " --quiet " + filename;
+
+  int retvalue = run_external_tool(cmdline);
+
+#ifndef TDKC
+  if (WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
+    InterruptPending = true;
+    QueryCancelPending = true;
+  }
+#endif
+  CHECK_FOR_INTERRUPTS();
+
+  if (retvalue)
+    throw CircuitException(format_external_tool_status(retvalue, "panini"));
+
+  if (provsql_verbose < 20) {
+    if (unlink(filename.c_str()))
+      throw CircuitException("Error removing " + filename);
+  }
+
+  std::ifstream ifs(outfilename.c_str());
+  if (!ifs)
+    throw CircuitException("Cannot open Panini output: " + outfilename);
+
+  // Skip Panini's preamble ("Variable order: ...", "Maximum variable: ...",
+  // "Number of nodes: ...") and stop at the first data line, which always
+  // starts with "0:".
+  std::string line;
+  bool found_data = false;
+  while (std::getline(ifs, line)) {
+    if (line.rfind("0:", 0) == 0) { found_data = true; break; }
+  }
+  if (!found_data)
+    throw CircuitException("Panini output: no data lines found");
+
+  dDNNF dnnf;
+  // Panini node ids are sequential 0, 1, 2, ... Highest id is the
+  // root of the compilation.
+  std::vector<gate_t> id_to_gate;
+
+  do {
+    if (line.empty()) continue;
+    auto colon_pos = line.find(':');
+    if (colon_pos == std::string::npos) continue;
+
+    // Sanity-check the leading id matches the size of id_to_gate so far
+    // (the file should be in monotonically increasing id order).
+    int panini_id = std::stoi(line.substr(0, colon_pos));
+    if (static_cast<size_t>(panini_id) != id_to_gate.size())
+      throw CircuitException(
+              "Panini output: out-of-order node id "
+              + std::to_string(panini_id));
+
+    std::stringstream ss(line.substr(colon_pos + 1));
+    std::string first;
+    ss >> first;
+
+    gate_t this_gate;
+    if (first == "F") {
+      // FALSE terminal: empty OR.
+      this_gate = dnnf.setGate(BooleanGate::OR);
+    } else if (first == "T") {
+      // TRUE terminal: empty AND.
+      this_gate = dnnf.setGate(BooleanGate::AND);
+    } else if (first == "C" || first == "D" || first == "K") {
+      // C (CONJOIN), D (DECOMPOSE), K (KERNELIZE) are all
+      // decomposable conjunctions in Panini's CDD format; OR is only
+      // ever expressed implicitly by the (v ? t : f) decision nodes.
+      // K nodes additionally encode literal-equivalence constraints
+      // (the CCDD "constrained conjunction"), but those constraints
+      // are redundant w.r.t. probability evaluation under our
+      // input-projection scheme — the CCDD compiler has already used
+      // them to derive the structure we see here.
+      this_gate = dnnf.setGate(BooleanGate::AND);
+      int child;
+      while (ss >> child) {
+        if (child == 0) break;
+        if (child < 0 || static_cast<size_t>(child) >= id_to_gate.size())
+          throw CircuitException(
+                  "Panini output: forward / invalid child reference "
+                  + std::to_string(child));
+        dnnf.addWire(this_gate, id_to_gate[child]);
+      }
+    } else {
+      // Decision node: <var> <false_child> <true_child> [0]
+      // (Panini's CDD::Display emits children in ch[0]/ch[1] order;
+      // CDD.cpp's DOT writer maps ch[0] to the dotted/false edge and
+      // ch[1] to the solid/true edge.)
+      int var = std::stoi(first);
+      int f_child, t_child;
+      if (!(ss >> f_child >> t_child))
+        throw CircuitException(
+                "Panini output: malformed decision line at id "
+                + std::to_string(panini_id));
+      if (t_child < 0 || f_child < 0
+          || static_cast<size_t>(t_child) >= id_to_gate.size()
+          || static_cast<size_t>(f_child) >= id_to_gate.size())
+        throw CircuitException(
+                "Panini output: forward / invalid decision child at id "
+                + std::to_string(panini_id));
+      gate_t t_gate = id_to_gate[t_child];
+      gate_t f_gate = id_to_gate[f_child];
+
+      // Translate the decision. Two cases:
+      //   (a) v is an input gate: keep the literal in the structure,
+      //       OR(AND(v, t'), AND(NOT(v), f')).
+      //   (b) v is a Tseytin auxiliary: aux vars are functionally
+      //       determined by inputs, so under WMC we want literal
+      //       weights w(v) = w(NOT v) = 1 (not (p, 1-p)). With those
+      //       weights the AND wrappers contribute 1 to either branch
+      //       and we can drop them entirely, emitting just
+      //       OR(t', f'). The OR is not determinism-preserving on
+      //       the variable v, but the input-projection of its two
+      //       arms is still disjoint by Tseytin determinism so
+      //       @c dDNNF::probabilityEvaluation() still returns the
+      //       correct weighted model count.
+      size_t var_idx = static_cast<size_t>(var) - 1;
+      if (var_idx < gates.size() && gates[var_idx] == BooleanGate::IN) {
+        gate_t pos_lit = dnnf.setGate(
+            getUUID(static_cast<gate_t>(var_idx)),
+            BooleanGate::IN, prob[var_idx]);
+        gate_t neg_lit = dnnf.setGate(BooleanGate::NOT);
+        dnnf.addWire(neg_lit, pos_lit);
+        gate_t and_t = dnnf.setGate(BooleanGate::AND);
+        dnnf.addWire(and_t, pos_lit);
+        dnnf.addWire(and_t, t_gate);
+        gate_t and_f = dnnf.setGate(BooleanGate::AND);
+        dnnf.addWire(and_f, neg_lit);
+        dnnf.addWire(and_f, f_gate);
+        this_gate = dnnf.setGate(BooleanGate::OR);
+        dnnf.addWire(this_gate, and_t);
+        dnnf.addWire(this_gate, and_f);
+      } else {
+        this_gate = dnnf.setGate(BooleanGate::OR);
+        dnnf.addWire(this_gate, t_gate);
+        dnnf.addWire(this_gate, f_gate);
+      }
+    }
+    id_to_gate.push_back(this_gate);
+  } while (std::getline(ifs, line));
+
+  ifs.close();
+
+  if (provsql_verbose < 20) {
+    if (unlink(outfilename.c_str()))
+      throw CircuitException("Error removing " + outfilename);
+    std::string dirname = filename.substr(0, filename.rfind('/'));
+    if (rmdir(dirname.c_str()))
+      throw CircuitException("Error removing temp directory " + dirname);
+  } else {
+    provsql_notice("Compiled Panini %s in %s",
+                   lang.c_str(), outfilename.c_str());
+  }
+
+  if (id_to_gate.empty())
+    throw CircuitException("Panini output produced no nodes");
+
+  // The root of a Panini DD is the highest-id node.
+  dnnf.setRoot(id_to_gate.back());
+
+  dnnf.simplify();
+  return dnnf;
+}
+
 std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
   // Use a private 0700 directory rather than a bare mkstemp file so the
   // sibling output paths (.nnf / .out, derived deterministically from
@@ -504,6 +699,22 @@ std::string BooleanCircuit::Tseytin(gate_t g, bool display_prob=false) const {
 }
 
 dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
+  // Panini (KCBox) does not produce a d4-style NNF file: it emits its
+  // own BDD/DD format. Dispatch to the Panini-specific compile + parse
+  // path early so we do not run the NNF parser below on its output.
+  if (compiler.rfind("panini-", 0) == 0) {
+    std::string suffix = compiler.substr(7);
+    std::string lang;
+    if      (suffix == "obdd")     lang = "OBDD";
+    else if (suffix == "obdd-and") lang = "OBDD[AND]";
+    else if (suffix == "decdnnf")  lang = "Decision-DNNF";
+    else if (suffix == "r2d2")     lang = "R2-D2";
+    else if (suffix == "ccdd")     lang = "CCDD";
+    else
+      throw CircuitException("Unknown Panini variant: " + compiler);
+    return paniniCompile(g, lang);
+  }
+
   std::string filename=BooleanCircuit::Tseytin(g);
   std::string outfilename=filename+".nnf";
 

@@ -2050,12 +2050,32 @@
 
   // Compilation-target circuit class per method. abbr is the short
   // label rendered next to the tool; full is the tooltip.
+  // Display names matching how each tool's authors write their tool's
+  // name (CLI / repo / paper conventions): miniC2D, Dsharp, Panini.
+  const KC_TOOL_NAME = {
+    'd4':              'd4',
+    'd4v2':            'd4v2',
+    'c2d':             'c2d',
+    'minic2d':         'miniC2D',
+    'dsharp':          'Dsharp',
+    'panini-obdd':     'Panini → OBDD',
+    'panini-obdd-and': 'Panini → OBDD[AND]',
+    'panini-decdnnf':  'Panini → Decision-DNNF',
+    'panini-r2d2':     'Panini → R2-D2',
+    'panini-ccdd':     'Panini → CCDD',
+  };
+
   const KC_CIRCUIT_CLASS = {
     'd4':                 { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
     'd4v2':               { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
     'c2d':                { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
     'minic2d':            { abbr: 'SDD',      full: 'sentential decision diagram' },
     'dsharp':             { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
+    'panini-obdd':        { abbr: 'OBDD',     full: 'ordered binary decision diagram' },
+    'panini-obdd-and':    { abbr: 'OBDD[AND]', full: 'ordered binary decision diagram with conjunctive decomposition' },
+    'panini-decdnnf':     { abbr: 'dec-DNNF', full: 'decision decomposable negation normal form' },
+    'panini-r2d2':        { abbr: 'R2-D2',    full: 'restricted decision diagram (KCBox R2-D2 language)' },
+    'panini-ccdd':        { abbr: 'CCDD',     full: 'constrained conjunction and decision diagram' },
     'tree-decomposition': { abbr: 'd-SDNNF',  full: 'structured deterministic decomposable negation normal form' },
     'interpret-as-dd':    { abbr: 'd-D',      full: 'deterministic decomposable circuit, possibly not in negation normal form' },
     'default':            { abbr: 'd-D',      full: 'deterministic decomposable circuit' }
@@ -2082,8 +2102,9 @@
       // restores the saved scene. The result chip stays empty (the
       // canvas is the result); the · N ms time chip is enough.
       const compiler = data.compiler || '';
+      const toolName = KC_TOOL_NAME[compiler] || compiler;
       const scene = data.scene || {};
-      scene.title = `Compiled d-D circuit (${compiler})`;
+      scene.title = `Compiled d-D circuit (${toolName})`;
       const cls = KC_CIRCUIT_CLASS[compiler];
       const clsHtml = cls
         ? ` (<span class="cv-kc-class" title="${escapeHtml(cls.full)}">`
@@ -2091,7 +2112,7 @@
         : '';
       scene.subtitle =
         `${(scene.nodes || []).length} gates · compiled with `
-        + `<strong>${escapeHtml(compiler)}</strong>${clsHtml}`;
+        + `<strong>${escapeHtml(toolName)}</strong>${clsHtml}`;
       swapToKcScene(scene);
       return;
     }
