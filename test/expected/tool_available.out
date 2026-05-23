@@ -1,0 +1,16 @@
+\set ECHO none
+tool_available
+f
+(1 row)
+tool_available
+f
+(1 row)
+null_in_null_out
+t
+(1 row)
+tool_available
+f
+(1 row)
+tool_available
+t
+(1 row)

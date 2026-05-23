@@ -112,3 +112,101 @@ def test_tool_available_sql_function(app):
         assert cur.fetchone()[0] is False
         cur.execute("SELECT provsql.tool_available('sh')")
         assert cur.fetchone()[0] is True
+
+
+# ---------------------------------------------------------------------------
+# HTTP-layer coverage for /api/kc/{cnf,ddnnf,td,benchmark}: the kc_* helpers
+# themselves are exercised through other tests in this file; here we pin the
+# Flask route's input validation, status codes, and happy-path payload shape.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def personnel_token(app):
+    """Provenance UUID for the first row of the personnel test fixture."""
+    pool = app.extensions["provsql_pool"]
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.provenance() FROM personnel WHERE id = 1")
+        return str(cur.fetchone()[0])
+
+
+def test_kc_cnf_rejects_invalid_uuid(client):
+    resp = client.get("/api/kc/cnf?token=not-a-uuid")
+    assert resp.status_code == 400
+    assert "UUID" in resp.get_json()["error"]
+
+
+def test_kc_cnf_happy_path(client, personnel_token):
+    resp = client.get(f"/api/kc/cnf?token={personnel_token}")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["weighted"] is True
+    assert data["cnf"].startswith("p cnf")
+    resp = client.get(f"/api/kc/cnf?token={personnel_token}&weighted=false")
+    assert resp.status_code == 200
+    assert resp.get_json()["weighted"] is False
+
+
+def test_kc_ddnnf_rejects_invalid_uuid(client):
+    resp = client.get("/api/kc/ddnnf?token=not-a-uuid&compiler=tree-decomposition")
+    assert resp.status_code == 400
+
+
+def test_kc_ddnnf_rejects_unknown_compiler(client, personnel_token):
+    resp = client.get(
+        f"/api/kc/ddnnf?token={personnel_token}&compiler=not-a-real-compiler"
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "unknown compiler" in data["error"]
+    assert "hint" in data
+
+
+def test_kc_ddnnf_happy_path_tree_decomposition(client, personnel_token):
+    """The tree-decomposition compiler is fully in-process (no external
+    tool dependency), so the happy-path assertions are stable on any host."""
+    resp = client.get(
+        f"/api/kc/ddnnf?token={personnel_token}&compiler=tree-decomposition"
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["compiler"] == "tree-decomposition"
+    assert "dot" in data and data["dot"].lstrip().startswith("digraph")
+    assert "scene" in data
+    assert {"nodes", "edges", "root"} <= set(data["scene"].keys())
+
+
+def test_kc_td_rejects_invalid_uuid(client):
+    resp = client.get("/api/kc/td?token=not-a-uuid")
+    assert resp.status_code == 400
+
+
+def test_kc_td_happy_path(client, personnel_token):
+    resp = client.get(f"/api/kc/td?token={personnel_token}")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "dot" in data
+    assert "scene" in data
+    assert "treewidth" in data["scene"]
+
+
+def test_kc_benchmark_rejects_invalid_uuid(client):
+    resp = client.get("/api/kc/benchmark?token=not-a-uuid")
+    assert resp.status_code == 400
+
+
+def test_kc_benchmark_rejects_non_integer_samples(client, personnel_token):
+    resp = client.get(
+        f"/api/kc/benchmark?token={personnel_token}&samples=abc"
+    )
+    assert resp.status_code == 400
+    assert "integer" in resp.get_json()["error"]
+
+
+@pytest.mark.parametrize("samples", ["0", "-1", "-100"])
+def test_kc_benchmark_rejects_non_positive_samples(client, personnel_token, samples):
+    resp = client.get(
+        f"/api/kc/benchmark?token={personnel_token}&samples={samples}"
+    )
+    assert resp.status_code == 400
+    assert "positive" in resp.get_json()["error"]
