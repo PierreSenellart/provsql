@@ -43,7 +43,7 @@ are all supported over provenance-tracked tables.
 Arithmetic on Aggregate Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Arithmetic, explicit casts, window functions, and other expressions
+Arithmetic, explicit casts, and other expressions
 (``COALESCE``, ``GREATEST``, etc.) on aggregate results are supported,
 both in the same query and over subquery results:
 
@@ -53,7 +53,6 @@ both in the same query and over subquery results:
     SELECT dept, SUM(salary) + 1000 FROM employees GROUP BY dept;
     SELECT dept, string_agg(name, ', ') || ' (team)' FROM employees GROUP BY dept;
     SELECT cnt::numeric FROM (SELECT COUNT(*) AS cnt FROM employees GROUP BY dept) t;
-    SELECT dept, cnt, SUM(cnt) OVER () FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
     SELECT dept, COALESCE(cnt, 0) FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
     SELECT dept, GREATEST(cnt, 3) FROM (SELECT dept, COUNT(*) AS cnt FROM employees GROUP BY dept) t;
 
@@ -63,6 +62,12 @@ return type (e.g., ``bigint`` for ``COUNT``, ``numeric`` for ``AVG``).
 A warning is emitted to indicate that the provenance information is lost
 in the conversion. The provenance of the aggregate group itself is still
 tracked in the ``provsql`` column.
+
+Window functions over aggregate results (e.g. ``SUM(cnt) OVER ()``)
+execute but are **not** provenance-aware: the aggregate argument is cast
+back to its base type before the window computation, so the windowed
+value is an opaque scalar and a ``WARNING`` is emitted. See
+:doc:`querying` for the general limitation on window functions.
 
 Random-Variable Aggregates
 ---------------------------

@@ -50,9 +50,6 @@ The following SQL constructs are supported with full provenance tracking:
   ``COUNT(DISTINCT …)``, ``string_agg``, ``array_agg``)
 * ``HAVING`` (non-matching groups receive zero provenance ``𝟘``
   rather than being filtered out)
-* `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
-  (``ROW_NUMBER``, ``RANK``, ``SUM OVER``, ``LAG``, ``LEAD``, etc.;
-  provenance stays per-row)
 * ``FILTER`` clause on aggregates
 * ``INSERT … SELECT`` (provenance propagated when target table is
   provenance-tracked)
@@ -75,6 +72,14 @@ will either raise an error or may cause incorrect provenance tracking:
   elimination:** ``DISTINCT`` on aggregates, ``UNION``/``EXCEPT``
   (non-ALL) with aggregates, ``ORDER BY`` or ``GROUP BY`` on aggregate
   results from a subquery
+* `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
+  (``ROW_NUMBER``, ``RANK``, ``SUM`` ``OVER``, ``LAG``, ``LEAD``, etc.):
+  the query still executes and each output row carries the tuple
+  provenance of its single input row, but the windowed computation
+  itself has no aggregate-provenance semantics (``SUM(x) OVER (…)`` is an
+  opaque scalar, not an aggregation over the frame). A ``WARNING`` is
+  emitted whenever a window function appears in a provenance-tracked
+  query
 
 For negation or exclusion, use ``EXCEPT`` rather than ``NOT IN``.
 For correlated subqueries, ``LATERAL`` can be used as a workaround.

@@ -96,6 +96,7 @@ Berlin|3
 New York|3
 Paris|4
 (3 rows)
+WARNING:  ProvSQL: window functions are not supported; provenance is tracked per input row only, and the windowed computation is treated as an opaque scalar
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
