@@ -333,8 +333,8 @@ The chain (in order) :
   ``Pr(B op C)`` over the per-row contributor marginals.  Each semimod's
   K child is that row's contributor sub-circuit -- a single
   ``gate_input``, or (for a join) a ``times`` / ``plus`` / ``monus`` of
-  several leaves; :cfunc:`contributorProb` computes its read-once
-  probability.  Soundness condition : every structural gate inside a
+  several leaves; a small read-once recursion (``contributorProb``)
+  computes its probability.  Soundness condition : every structural gate inside a
   contributor (``input`` / ``times`` / ``plus`` / ``monus``) has
   ``ref_count == 1`` -- a single check that makes the contributors' leaf
   sets pairwise disjoint, unshared with the rest of the circuit, and
