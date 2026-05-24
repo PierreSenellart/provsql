@@ -1,10 +1,12 @@
 # Documentation TODO: case-study coverage
 
-`feature-coverage.md` (in this directory) lists user-guide features that
-are not exercised by the tutorial or any of the six existing case
-studies. This file plans how to close that gap, by extending CS1-CS5
-where the existing scenario fits. CS6 (City Air-Quality Sensor Network)
-already covers the continuous-distribution surface end-to-end.
+The feature-coverage matrix in the rendered user guide
+(`doc/source/user/casestudies.rst`, section *Feature coverage matrix*)
+lists user-guide features that are not exercised by the tutorial or any
+of the six existing case studies. This file plans how to close that gap,
+by extending CS1-CS5 where the existing scenario fits. CS6 (City
+Air-Quality Sensor Network) already covers the continuous-distribution
+surface end-to-end.
 
 ## Out of scope
 
@@ -87,8 +89,8 @@ land. Targets:
 
 1. **Quick wins on existing case studies** : the single-bullet
    additions to CS1 and CS3, and the small CS5 additions, can land
-   independently and immediately close coverage gaps in
-   `feature-coverage.md`.
+   independently and immediately close coverage gaps in the
+   feature-coverage matrix.
 2. **Larger CS2 / CS4 extensions** : CS2 grows by five bullets and CS4
    adds a UPDATE / `undo` round-trip. These are the biggest single-CS
    coverage wins.

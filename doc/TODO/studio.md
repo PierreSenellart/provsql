@@ -15,8 +15,7 @@ this file have both been retired into git history.
 The following are documented elsewhere and do not need a TODO entry:
 
 - Compiled-semiring proposals: covered by `compiled-semirings.md`.
-- Tutorial / case-study coverage gaps: covered by `case-studies.md`
-  and `feature-coverage.md`.
+- Tutorial / case-study coverage gaps: covered by `case-studies.md`.
 
 ## Beyond v1.0
 
