@@ -247,9 +247,15 @@ s{
     : ""
 }sigxe;
 
+# Strip top-level SELECT statements (e.g. reset_constants_cache(), the
+# zero/one gate bootstrap).  Anchor to the start of a line so a SELECT that
+# appears inside a Doxygen example string (e.g. @c 'SELECT 1 UNION ...') is
+# left intact: comment lines start with " * ", never with SELECT, and eating
+# such a SELECT would devour the comment terminator and the following
+# declaration up to the next semicolon.
 s{
-  \bSELECT\b[^;]*;
-}{}sigxg;
+  ^SELECT\b[^;]*;
+}{}sigxmg;
 
 s{
   SETOF\s+([^\s]+)
