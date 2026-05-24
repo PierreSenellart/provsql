@@ -48,6 +48,12 @@
 
   // ─── state ────────────────────────────────────────────────────────────
 
+  // Zoom clamp, shared by the toolbar buttons and wheel-to-zoom. The max
+  // is generous so that dense circuits (where fit-to-screen leaves each
+  // node tiny) can still be magnified enough to read individual gates.
+  const ZOOM_MIN = 0.4;
+  const ZOOM_MAX = 8;
+
   let state = {
     scene: null,        // {nodes, edges, root, depth} from /api/circuit
     showUuids: false,
@@ -190,8 +196,8 @@
     inspectorBody = document.getElementById('inspector-body');
 
     // Toolbar.
-    document.getElementById('tool-zoom-in').onclick  = () => { state.zoom = Math.min(2.5, state.zoom * 1.2); fitView(); };
-    document.getElementById('tool-zoom-out').onclick = () => { state.zoom = Math.max(0.4, state.zoom / 1.2); fitView(); };
+    document.getElementById('tool-zoom-in').onclick  = () => { state.zoom = Math.min(ZOOM_MAX, state.zoom * 1.2); fitView(); };
+    document.getElementById('tool-zoom-out').onclick = () => { state.zoom = Math.max(ZOOM_MIN, state.zoom / 1.2); fitView(); };
     document.getElementById('tool-zoom-fit').onclick = () => { state.zoom = 1; state.pan = { x: 0, y: 0 }; fitView(); };
     const kcBackBtn = document.getElementById('tool-kc-back');
     if (kcBackBtn) kcBackBtn.onclick = restoreKcScene;
@@ -269,15 +275,14 @@
       if (state.pinnedNode) clearPin();
     });
 
-    // Wheel-to-zoom. Same clamp as the toolbar buttons (0.4..2.5) but
-    // a smaller per-tick factor so successive notches feel smooth. We
-    // need passive: false to call preventDefault : otherwise the
-    // browser also scrolls the page while the user is zooming the
-    // canvas.
+    // Wheel-to-zoom. Same clamp as the toolbar buttons but a smaller
+    // per-tick factor so successive notches feel smooth. We need
+    // passive: false to call preventDefault : otherwise the browser
+    // also scrolls the page while the user is zooming the canvas.
     svg.addEventListener('wheel', (e) => {
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      state.zoom = Math.max(0.4, Math.min(2.5, state.zoom * factor));
+      state.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, state.zoom * factor));
       fitView();
     }, { passive: false });
 
