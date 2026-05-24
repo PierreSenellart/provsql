@@ -1,5 +1,5 @@
-Case Study: The Intelligence Agency
-=====================================
+Case Study: Intelligence Agency
+===============================
 
 This case study, largely extending the scenario introduced in
 :cite:`DBLP:journals/pvldb/SenellartJMR18`, demonstrates ProvSQL's

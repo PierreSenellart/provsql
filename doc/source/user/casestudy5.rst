@@ -1,5 +1,5 @@
-Case Study: The Wildlife Photo Archive
-========================================
+Case Study: Wildlife Photo Archive
+==================================
 
 This case study, loosely inspired by a ProvSQL demonstration at EDBT 2025
 :cite:`DBLP:conf/edbt/YunusKSAB25`, applies ProvSQL to a database of wildlife

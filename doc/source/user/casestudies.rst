@@ -25,7 +25,7 @@ find which study demonstrates a given feature.
 What each case study covers
 ---------------------------
 
-:doc:`Case study 1 -- The Intelligence Agency <casestudy1>`
+:doc:`Case study 1 -- Intelligence Agency <casestudy1>`
     The broadest single tour of provenance *evaluation*. A
     security-classification scenario over seven agents drives a custom
     min-clearance semiring, where-provenance, circuit export
@@ -34,7 +34,7 @@ What each case study covers
     knowledge compilation through ``d4`` / ``c2d`` / ``dsharp`` /
     ``minic2d``). Start here for a panoramic view.
 
-:doc:`Case study 2 -- The Open Science Database <casestudy2>`
+:doc:`Case study 2 -- Open Science Database <casestudy2>`
     Evidence synthesis over a (fictional) biomedical literature corpus:
     single-source vs. replicated claims, contradictory findings, and
     strength-of-evidence ranking. This is the home of **Shapley and
@@ -57,14 +57,14 @@ What each case study covers
     timeslice, and an ``INSERT`` / ``DELETE`` round-trip that is then
     rolled back with ``undo``.
 
-:doc:`Case study 5 -- The Wildlife Photo Archive <casestudy5>`
+:doc:`Case study 5 -- Wildlife Photo Archive <casestudy5>`
     Uncertainty that comes out of a machine-learning detector. Candidate
     species per bounding box are modelled with :sqlfunc:`repair_key` and
     the ``mulinput`` gate (block-correlated alternatives); the study
     contrasts probabilistic ranking against naive confidence
     thresholding, and computes :sqlfunc:`expected` species counts.
 
-:doc:`Case study 6 -- The City Air-Quality Sensor Network <casestudy6>`
+:doc:`Case study 6 -- City Air-Quality Sensor Network <casestudy6>`
     The **continuous-distribution** surface, end to end: ``random_variable``
     columns (Normal / Uniform / Exponential / Erlang / categorical /
     mixture), arithmetic and comparison on them, analytic moments and
@@ -91,19 +91,16 @@ Feature coverage matrix
 
 The tables below cross-reference every user-facing feature documented
 under the User Guide against the tutorial and the seven case studies.
-They are the single source of truth for *which example exercises what*;
-when adding a feature, extend the relevant table, and when extending the
-tutorial or a case study, mark the additional cells.
 
 Columns:
 
 - **T** -- :doc:`Tutorial <tutorial>` (*Who Killed Daphine?*)
-- **1** -- :doc:`Case study 1 <casestudy1>` (*The Intelligence Agency*)
-- **2** -- :doc:`Case study 2 <casestudy2>` (*The Open Science Database*)
+- **1** -- :doc:`Case study 1 <casestudy1>` (*Intelligence Agency*)
+- **2** -- :doc:`Case study 2 <casestudy2>` (*Open Science Database*)
 - **3** -- :doc:`Case study 3 <casestudy3>` (*Île-de-France Public Transit*)
 - **4** -- :doc:`Case study 4 <casestudy4>` (*Government Ministers Over Time*)
-- **5** -- :doc:`Case study 5 <casestudy5>` (*The Wildlife Photo Archive*)
-- **6** -- :doc:`Case study 6 <casestudy6>` (*The City Air-Quality Sensor Network*)
+- **5** -- :doc:`Case study 5 <casestudy5>` (*Wildlife Photo Archive*)
+- **6** -- :doc:`Case study 6 <casestudy6>` (*City Air-Quality Sensor Network*)
 - **7** -- :doc:`Case study 7 <casestudy7>` (*Peer-Review Assignment and Knowledge Compilation*)
 
 Cells: ``✓`` the feature is exercised; ``(✓)`` it is mentioned in

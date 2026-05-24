@@ -1,5 +1,5 @@
-Case Study: The Open Science Database
-======================================
+Case Study: Open Science Database
+=================================
 
 This tutorial introduces a broader set of ProvSQL features through a
 realistic scientific literature analysis scenario.

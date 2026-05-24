@@ -1,5 +1,5 @@
-Case Study: The City Air-Quality Sensor Network
-=================================================
+Case Study: City Air-Quality Sensor Network
+===========================================
 
 This case study demonstrates ProvSQL's continuous-distribution
 surface (see :doc:`continuous-distributions`) end-to-end through
