@@ -264,6 +264,15 @@ void resolveToRv(gate_t g, const std::string &s) {
  * unconditionally would silently change the semantics for
  * @c Counting / @c Formula / etc.
  *
+ * A collapsed gate is not mutated to carry its target's content;
+ * instead every parent wire is rewired straight to the target and the
+ * UUID-to-@c gate_t map is re-pointed so a gate resolved by UUID
+ * (notably the caller-supplied root) follows the collapse.  This keeps
+ * a shared leaf a single gate: copying a shared @c gate_input's
+ * content into the collapsed gate under a fresh UUID would mint an
+ * independent duplicate of that Bernoulli variable and over-count the
+ * probability of any non-read-once circuit.
+ *
  * Operates on the in-memory circuit only; the persistent mmap store
  * is never touched.  Gated alongside @c RangeCheck by
  * @c provsql.simplify_on_load.

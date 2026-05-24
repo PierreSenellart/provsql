@@ -48,15 +48,29 @@ void GenericCircuit::foldSemiringIdentities()
   const std::size_t n = gc.getNbGates();
 
   /* Wrap the three phases in an outer fixpoint loop.  Phase 3's
-   * substitutions can mutate a gate into @c gate_zero / @c gate_one
-   * (multiplicative absorber, single-wire collapse), which is a fresh
-   * identity-wire opportunity for any parent that referenced the
-   * mutated gate.  @c createGenericCircuit loads gates in BFS-from-
-   * root order (parents before children), so a single pass through
-   * Phase 1 would propagate identity-collapse in the wrong direction
-   * anyway -- the outer loop handles both effects with the same
-   * machinery.  Terminates after at most one iteration per DAG
-   * level. */
+   * substitutions can re-expose identity wires to a parent that
+   * referenced the collapsed gate (a single-wire @c gate_times / plus
+   * whose sole wire was itself collapsed, a @c gate_zero absorber, …),
+   * which is a fresh Phase-1 opportunity.  @c createGenericCircuit
+   * loads gates in BFS-from-root order (parents before children), so a
+   * single pass through Phase 1 would propagate identity-collapse in
+   * the wrong direction anyway -- the outer loop handles both effects
+   * with the same machinery.  Terminates after at most one iteration
+   * per DAG level. */
+
+  /* Cumulative @c gate -> final-target redirection accumulated across
+   * iterations.  We do NOT mutate a collapsed gate to carry its
+   * target's content (the historical Phase 3): for a target that is a
+   * shared @c gate_input that would duplicate the Bernoulli variable
+   * into an independent copy under the wrong UUID, over-counting the
+   * probability of every non-read-once circuit (a single shared edge
+   * in a recursive reachability lineage, say).  Instead we rewire each
+   * parent's wire straight to the target, leaving the collapsed gate
+   * orphaned, and -- after the loop -- patch the UUID map so a gate
+   * resolved by UUID (notably the caller-supplied root) follows the
+   * collapse rather than landing on the orphan. */
+  std::unordered_map<gate_t, gate_t> redirect;
+
   bool changed = true;
   while (changed) {
     changed = false;
@@ -99,10 +113,12 @@ void GenericCircuit::foldSemiringIdentities()
      * The plus-with-one absorber rewrite is intentionally omitted:
      * @c gate_one is the additive absorber only in idempotent
      * semirings (Boolean, MinMax) and would silently change the
-     * semantics for @c Counting / @c Formula / etc. */
+     * semantics for @c Counting / @c Formula / etc.  Already-redirected
+     * (orphaned) gates are skipped so the fixpoint terminates. */
     std::unordered_map<gate_t, gate_t> subst;
     for (std::size_t i = 0; i < n; ++i) {
       auto g = static_cast<gate_t>(i);
+      if (redirect.count(g)) continue;
       auto t = gc.getGateType(g);
       if (t != gate_times && t != gate_plus) continue;
       const auto &wires = gc.getWires(g);
@@ -120,55 +136,51 @@ void GenericCircuit::foldSemiringIdentities()
       if (wires.size() == 1) subst[g] = wires[0];
     }
     /* Resolve transitively so a chain of singleton wrappers maps to
-     * its bottom endpoint in one lookup. */
+     * its bottom endpoint in one lookup, chasing both this iteration's
+     * substitutions and earlier ones recorded in @c redirect. */
     for (auto &kv : subst) {
       gate_t cur = kv.second;
-      while (subst.count(cur)) cur = subst[cur];
+      while (subst.count(cur) || redirect.count(cur))
+        cur = subst.count(cur) ? subst[cur] : redirect[cur];
       kv.second = cur;
     }
 
-    /* Phase 3: mutate every substituted gate to carry its target's
-     * type / wires / info / extra / prob / input-set membership.
-     * In-place transformation keeps the original gate's UUID (so
-     * downstream consumers that key on the caller-supplied root UUID
-     * still find it) while every walk from here sees the target's
-     * content.  Mutually-substituted gates all resolve to the same
-     * endpoint (phase 2 above), so the order in which we apply them
-     * within the loop doesn't matter: copying from the endpoint
-     * always yields the correct content. */
-    for (const auto &kv : subst) {
-      gate_t g = kv.first;
-      gate_t target = kv.second;
-      if (g == target) continue;
-      const auto target_type = gc.getGateType(target);
-      gc.setGateType(g, target_type);
-      gc.getWires(g) = gc.getWires(target);
-      auto [ti1, ti2] = gc.getInfos(target);
-      const unsigned NO_INFO = static_cast<unsigned>(-1);
-      if (ti1 != NO_INFO || ti2 != NO_INFO) {
-        gc.setInfos(g, ti1, ti2);
+    /* Phase 3: rewire every gate's wires through @c subst so parents
+     * point straight at the collapse target.  Shared leaves stay a
+     * single gate (no content-copy, no UUID-aliased duplicate in the
+     * @c inputs set), so probability evaluators see the correct number
+     * of independent variables.  Collapsed gates are left orphaned. */
+    if (!subst.empty()) {
+      for (std::size_t i = 0; i < n; ++i) {
+        auto &wires = gc.getWires(static_cast<gate_t>(i));
+        for (gate_t &w : wires) {
+          auto it = subst.find(w);
+          if (it != subst.end()) {
+            w = it->second;
+            changed = true;
+          }
+        }
       }
-      try {
-        const std::string e = gc.getExtra(target);
-        gc.setExtra(g, e);
-      } catch (const CircuitException &) {
-        /* target has no extra; leave g's extra as-is (it was already
-         * cleared if it was an internal gate; values_t entry persisted
-         * for value gates we don't reach here). */
-      }
-      /* Copy the target's probability.  Without this, a substituted
-       * @c gate_plus(x, @c gate_zero) → x where x is a
-       * Bernoulli @c gate_input would lose x's probability:
-       * @c addGate seeds @c prob = 1 for non-input gates, so the
-       * substituted gate would read as an input with @c prob = 1
-       * instead of x's actual probability.  Mirror the @c inputs
-       * set membership too: leaf-typed targets register their
-       * substituted-gate id so probability evaluators see it. */
-      gc.setProb(g, gc.getProb(target));
-      if (target_type == gate_input || target_type == gate_update) {
-        gc.inputs.insert(g);
-      }
-      changed = true;
+      for (const auto &kv : subst) redirect[kv.first] = kv.second;
+    }
+  }
+
+  /* Patch the UUID map and the Boolean-assumption set so a gate
+   * resolved by UUID (Circuit::getGate, used for the root and the
+   * joint-circuit roots) follows the collapse instead of landing on an
+   * orphaned wrapper, and so a non-Boolean semiring still refuses on a
+   * circuit whose marked gate was collapsed away. */
+  if (!redirect.empty()) {
+    for (auto &kv : redirect) {
+      gate_t cur = kv.second;
+      while (redirect.count(cur)) cur = redirect[cur];
+      kv.second = cur;
+    }
+    for (const auto &kv : redirect) {
+      gate_t g = kv.first, target = kv.second;
+      auto uit = id2uuid.find(g);
+      if (uit != id2uuid.end()) uuid2id[uit->second] = target;
+      if (boolean_assumed_gates.count(g)) boolean_assumed_gates.insert(target);
     }
   }
 }

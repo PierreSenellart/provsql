@@ -123,13 +123,12 @@ SELECT round(probability_evaluate(
 SET provsql.boolean_provenance = off;
 
 -- ----------------------------------------------------------------------
--- (3) Phase 3 of foldSemiringIdentities, when chained after the
---     Boolean dedup, substitutes single-wire plus / times in place.
---     Pre-fix, that substitution copied target type / wires / infos
---     / extra but not the target's probability nor its membership in
---     the inputs set : a substituted gate that landed as a
---     gate_input with prob 0.5 instead read as an input with the
---     addGate-default prob 1.
+-- (3) foldSemiringIdentities collapses a single-wire plus / times to
+--     its lone child.  Phase 3 rewires parents straight to the target
+--     and re-points the root UUID, so the probability of the target
+--     leaf is preserved verbatim (an earlier in-place content-copy had
+--     to special-case copying the target's probability; see case (6)
+--     for the shared-leaf hazard that copy created).
 --
 --     Probe : gate_plus(u, gate_zero()) collapses to u via
 --     Phase 1 (drop the zero wire) then Phase 2 / Phase 3
@@ -256,6 +255,44 @@ SELECT city, round(p::numeric, 6) AS p_independent
 DROP TABLE bf_abs_demo;
 SET provsql.boolean_provenance = off;
 DROP TABLE bf_personnel;
+
+-- ----------------------------------------------------------------------
+-- (6) Phase 3 single-wire collapse must PRESERVE SHARING of the target
+--     leaf -- not mint an independent duplicate of it.
+--
+--     times(x, gate_one()) collapses to x (Phase 1 drops the one wire,
+--     Phase 2/3 substitute the singleton).  When x is ALSO referenced
+--     elsewhere in the same circuit, the pre-fix Phase 3 copied x's
+--     content (type / prob / inputs-set membership) into the collapsed
+--     gate under a fresh UUID, so the shared Bernoulli variable became
+--     two independent copies -- over-counting every non-read-once
+--     circuit (this is what corrupted cyclic recursive reachability
+--     reliabilities under boolean_provenance: the gate_one recursion
+--     seed produces exactly this times(shared_edge, one) shape).
+--
+--     root = plus(times(x, a), times(x, gate_one())).
+--     Boolean function = (x AND a) OR x = x, so the exact probability
+--     is P(x) = 0.5.  Pre-fix the duplicated x evaluated as
+--     1 - (1 - 0.5*0.5)*(1 - 0.5) = 0.625.  possible-worlds is exact
+--     and tolerates the (non-read-once) shared leaf.
+-- ----------------------------------------------------------------------
+DO $$
+DECLARE x uuid; a uuid; tab uuid; t1 uuid; root uuid;
+BEGIN
+  SELECT provsql INTO x FROM bf_t WHERE id = 1;
+  SELECT provsql INTO a FROM bf_t WHERE id = 2;
+  tab  := provenance_times(x, a);
+  t1   := uuid_generate_v5(uuid_ns_provsql(), concat('bf-share-one', x));
+  PERFORM create_gate(t1, 'times', ARRAY[x, gate_one()]);
+  root := uuid_generate_v5(uuid_ns_provsql(), concat('bf-share-root', x));
+  PERFORM create_gate(root, 'plus', ARRAY[tab, t1]);
+  PERFORM set_config('bf.share_root', root::text, false);
+END $$;
+SET provsql.boolean_provenance = on;
+SELECT round(probability_evaluate(
+                current_setting('bf.share_root')::uuid, 'possible-worlds')
+              ::numeric, 9) AS shared_leaf_collapse_p;
+SET provsql.boolean_provenance = off;
 
 DROP TABLE bf_t_cnt;
 DROP TABLE bf_t;

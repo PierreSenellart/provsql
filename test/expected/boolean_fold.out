@@ -33,3 +33,6 @@ city|p_independent
 Berlin|0.840000
 Paris|0.936000
 (2 rows)
+shared_leaf_collapse_p
+0.500000000
+(1 row)
