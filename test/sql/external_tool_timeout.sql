@@ -10,20 +10,24 @@ SET search_path TO provsql_test, provsql;
 -- before that fix such a tool ran to completion and the timeout was
 -- silently ignored.
 --
--- The test plants a fake "d4" that just sleeps and points
+-- We plant a fake "d4" that just sleeps and point
 -- provsql.tool_search_path at it, so the compile reliably hangs and the
 -- 2s statement_timeout always fires -- a deterministic cancel,
 -- independent of machine speed and of whether a real d4 is installed.
 --
--- Portability: the fake tool lives under /tmp (accessible to the backend
--- user on both Linux -- where it may be a separate `postgres` user -- and
--- macOS, where /tmp is the world-accessible /private/tmp); it is chmod
--- 755 so the backend can exec it, and uses /bin/sh + sleep, both present
--- everywhere.  tool_search_path is prepended to PATH, so the fake d4 wins
--- over any real one.
+-- Portability: the fake tool lives under /tmp and is chmod 755 so the
+-- backend (possibly a separate `postgres` user) can exec it.  On a
+-- runner where /tmp is mounted noexec (some WSL setups), exec fails
+-- before the tool runs, so the cancellation path cannot be exercised;
+-- we probe for that and skip (matching the expected_1 output).
 
-\! rm -rf /tmp/provsql_extcancel && mkdir -p /tmp/provsql_extcancel && printf '#!/bin/sh\nexec sleep 30\n' > /tmp/provsql_extcancel/d4 && chmod 755 /tmp/provsql_extcancel /tmp/provsql_extcancel/d4
+\! rm -rf /tmp/provsql_extcancel && mkdir -p /tmp/provsql_extcancel && printf '#!/bin/sh\ncase "$1" in --provsql-probe) exit 0 ;; *) exec sleep 30 ;; esac\n' > /tmp/provsql_extcancel/d4 && chmod 755 /tmp/provsql_extcancel /tmp/provsql_extcancel/d4
 
+-- Can the backend actually execute the fake tool here?  (Runs it as the
+-- same OS user the backend uses; fails on a noexec /tmp.)
+\set CANEXEC `/tmp/provsql_extcancel/d4 --provsql-probe >/dev/null 2>&1 && echo true || echo false`
+
+\if :CANEXEC
 CREATE TABLE extc (x int);
 INSERT INTO extc VALUES (1), (2), (3), (4);
 SELECT add_provenance('extc');
@@ -56,4 +60,8 @@ RESET statement_timeout;
 RESET provsql.tool_search_path;
 SELECT remove_provenance('extc');
 DROP TABLE extc;
+\else
+\echo 'SKIPPING external_tool_timeout: fake compiler not executable here (noexec /tmp?)'
+\endif
+
 \! rm -rf /tmp/provsql_extcancel

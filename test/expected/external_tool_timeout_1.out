@@ -1,0 +1,2 @@
+\set ECHO none
+SKIPPING external_tool_timeout: fake compiler not executable here (noexec /tmp?)
