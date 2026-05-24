@@ -355,14 +355,20 @@ The probability cell click-toggles between rounded (per the panel's
 :guilabel:`Probability decimals` setting) and full double-precision; copies
 always carry the full-precision form.
 
-When a probability method is selected, the strip also surfaces the
-**knowledge-compilation pipeline** behind it: the DIMACS CNF
-(:sqlfunc:`tseytin_cnf`), the compiled d-DNNF rendered beside the
-original circuit (:sqlfunc:`compile_to_ddnnf_dot`), the tree
-decomposition with its treewidth (:sqlfunc:`tree_decomposition_dot`),
-and a one-click :guilabel:`Benchmark` that times every method
-(:sqlfunc:`probability_benchmark`). Compilers that are not installed on
-the server are filtered out of the picker (via :sqlfunc:`tool_available`).
+The same evaluation picker also exposes the **knowledge-compilation
+pipeline**, not as a side-effect of a probability run but as its own
+standalone entries: a *Knowledge compilation* group offers the DIMACS
+CNF (:sqlfunc:`tseytin_cnf`), the compiled d-D circuit
+(:sqlfunc:`compile_to_ddnnf_dot`), the same d-D in NNF text form, and
+the tree decomposition with its treewidth
+(:sqlfunc:`tree_decomposition_dot`); the *Probability* group adds a
+:guilabel:`Probability benchmark` that times every method
+(:sqlfunc:`probability_benchmark`). Selecting one and pressing
+:guilabel:`Run` produces the artifact directly: the d-D circuit and the
+tree decomposition take over the main canvas (a toolbar :guilabel:`back`
+button restores the original provenance circuit), while the CNF and NNF
+render as text panels. Compilers that are not installed on the server
+are filtered out of the compiler picker (via :sqlfunc:`tool_available`).
 See :doc:`knowledge-compilation` for the full pipeline.
 
 The d-DNNF and tree-decomposition canvases pin and inspect like the
