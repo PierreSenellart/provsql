@@ -140,8 +140,8 @@ Supported SQL constructs
    "SELECT-FROM-WHERE / inner JOIN", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
    "Self-join", "✓", "✓", "", "✓", "", "✓", "", ""
    "Subqueries in FROM / nested", "", "✓", "✓", "", "", "✓", "", ""
-   "GROUP BY", "", "✓", "✓", "", "✓", "✓", "✓", "✓"
-   "SELECT DISTINCT", "✓", "✓", "", "✓", "", "", "", ""
+   "GROUP BY", "", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
+   "SELECT DISTINCT", "✓", "✓", "", "✓", "", "✓", "", "✓"
    "EXCEPT (monus)", "✓", "✓", "", "", "", "✓", "", ""
    "UNION / UNION ALL", "", "", "", "", "", "", "✓", "✓"
    "HAVING", "", "", "✓", "", "", "", "✓", "✓"
@@ -151,7 +151,7 @@ Supported SQL constructs
    "LATERAL", "", "", "", "", "", "", "✓", ""
    "Window functions", "", "", "", "", "", "", "", ""
    "FILTER clause on aggregates", "", "", "", "", "", "", "", ""
-   "CREATE TABLE AS SELECT", "✓", "", "", "✓", "", "✓", "", ""
+   "CREATE TABLE AS SELECT", "✓", "", "", "✓", "✓", "✓", "", ""
    "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", ""
    "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "", "", ""
 
@@ -163,7 +163,7 @@ Aggregation
    :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7"
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "COUNT / SUM / MIN / MAX / AVG", "", "✓", "✓", "✓", "✓", "✓", "", "✓"
+   "COUNT / SUM / MIN / MAX / AVG", "", "", "✓", "✓", "", "✓", "", "✓"
    "``sum`` / ``avg`` / ``product`` over ``random_variable``", "", "", "", "", "", "", "✓", ""
    "``string_agg`` / ``array_agg``", "", "", "", "", "", "", "", ""
    "``COUNT(DISTINCT …)``", "", "", "", "", "", "", "", ""
@@ -224,12 +224,11 @@ Semiring evaluation
    "``sr_tropical``", "", "", "", "", "", "", "", ""
    "``sr_viterbi``", "", "", "", "", "", "", "", ""
    "``sr_lukasiewicz``", "", "", "", "", "", "", "", ""
-   "``sr_minmax``", "", "✓", "", "", "", "", "", ""
-   "``sr_maxmin``", "", "", "", "", "", "", "", ""
+   "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", ""
    "``sr_temporal``", "", "", "", "", "✓", "", "", ""
    "``sr_interval_num``", "", "", "", "", "", "", "", ""
    "``sr_interval_int``", "", "", "", "", "", "", "", ""
-   "Custom semiring via ``provenance_evaluate``", "", "✓", "✓", "", "", "", "", ""
+   "Custom semiring via ``provenance_evaluate``", "", "", "✓", "", "", "", "", ""
    "``aggregation_evaluate``", "", "", "", "", "", "", "", ""
 
 Probabilities
@@ -240,8 +239,8 @@ Probabilities
    :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7"
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``set_prob``", "✓", "✓", "✓", "", "", "✓", "✓", "✓"
-   "``get_prob``", "", "", "", "", "", "", "✓", ""
+   "``set_prob``", "✓", "✓", "✓", "", "", "✓", "", "✓"
+   "``get_prob``", "", "", "", "", "", "", "", ""
    "``probability_evaluate`` (default fallback)", "", "✓", "✓", "", "", "✓", "", "✓"
    "``'independent'`` method", "", "", "", "", "", "", "✓", "✓"
    "``'possible-worlds'`` method", "✓", "✓", "", "", "", "", "", ""
@@ -272,7 +271,7 @@ Continuous random variables
    "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", ""
    "Comparison ``< <= = <> >= >`` (planner-hook rewrite)", "", "", "", "", "", "", "✓", ""
    "``expected(random_variable)`` (unconditional)", "", "", "", "", "", "", "✓", ""
-   "``variance(random_variable)``", "", "", "", "", "", "", "✓", ""
+   "``variance(random_variable)``", "", "", "", "", "", "", "", ""
    "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", ""
    "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", ""
    "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", ""
@@ -340,5 +339,5 @@ Export and visualisation
 
    "``to_provxml``", "", "✓", "", "", "", "", "", ""
    "``view_circuit`` (graph-easy)", "", "✓", "", "", "", "", "", ""
-   "``provsql.verbose_level``", "", "", "", "", "", "", "", "✓"
+   "``provsql.verbose_level``", "", "", "", "", "", "", "", "(✓)"
    "ProvSQL Studio (Circuit mode + Where mode)", "", "", "", "", "", "", "✓", "✓"
