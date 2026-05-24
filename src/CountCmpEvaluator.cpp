@@ -180,9 +180,9 @@ static double cdfForOperator(const std::vector<double> &p,
 /* Try to match @c cmp against the first-slice scope.  On success,
  * fill @p agg_out (the gate_agg child, exposed to the caller for the
  * downstream "no shared gate_agg across cmps" check), @p children
- * (the K side of each semimod, after verifying it is a single
- * @c gate_input), @p op (already flipped if the agg sits on the
- * right), and @p C.  Returns @c false (and leaves outputs untouched)
+ * (the K side of each semimod : the per-row contributor sub-circuit
+ * root, single leaf or product), @p op (already flipped if the agg
+ * sits on the right), and @p C.  Returns @c false (and leaves outputs untouched)
  * for any shape mismatch.  Cheap to call : no allocation beyond the
  * @p children push_back. */
 static bool matchCountCmp(GenericCircuit &gc,
@@ -247,7 +247,10 @@ static bool matchCountCmp(GenericCircuit &gc,
      * non-unit weight means the aggregate is a real SUM and this
      * pre-pass should not fire. */
     if (m != 1) return false;
-    if (gc.getGateType(k_gate) != gate_input) return false;
+    /* The K side is the per-row contributor sub-circuit root.  It need
+     * not be a single gate_input : a SELECT-FROM-WHERE group row is
+     * typically a @c times of the joined tuples' leaves.  The caller
+     * certifies independence and computes the contributor's marginal. */
     semimods_out.push_back(ch);
     ks.push_back(k_gate);
   }
@@ -272,6 +275,74 @@ static std::vector<unsigned> computeRefCounts(const GenericCircuit &gc)
     }
   }
   return ref;
+}
+
+/* Marginal probability of one count contributor (the K side of a
+ * semimod), computed by a read-once recursion over the contributor's
+ * sub-circuit.  This is exact precisely when the sub-circuit is a
+ * private read-once tree, which is what the caller certifies: every
+ * structural (randomness-bearing) gate it visits must have reference
+ * count 1, so it has a single parent inside this contributor and is
+ * shared neither with another contributor nor with the rest of the
+ * circuit.  That single condition gives all three properties the
+ * Poisson-binomial needs -- pairwise-disjoint leaf sets across
+ * contributors, no reuse outside the cmp, and read-once-ness within a
+ * contributor -- so the contributors are independent and each marginal
+ * is its read-once probability.
+ *
+ * Supported gate types are the ones a SELECT-FROM-WHERE (-EXCEPT) group
+ * row can carry: @c input (Bernoulli leaf), @c times (independent AND),
+ * @c plus (independent OR over alternative derivations), @c monus
+ * (@c a @c AND @c NOT @c b, i.e. Pr(a)(1-Pr(b)) for independent a, b),
+ * and the constants @c one / @c zero.  Constants bear no randomness, so
+ * their reference counts are not constrained (they may be
+ * cached/shared).  Any other gate type (@c value, @c mulinput, @c agg,
+ * @c cmp, @c rv, ...) means the contributor is outside this pre-pass's
+ * scope; @p ok is cleared and the caller skips the whole cmp. */
+static double contributorProb(const GenericCircuit &gc, gate_t g,
+                              const std::vector<unsigned> &ref, bool &ok)
+{
+  switch (gc.getGateType(g)) {
+    case gate_one:  return 1.0;
+    case gate_zero: return 0.0;
+    case gate_input:
+      if (ref[static_cast<std::size_t>(g)] != 1) { ok = false; return 0.0; }
+      return gc.getProb(g);
+    case gate_times: {
+      if (ref[static_cast<std::size_t>(g)] != 1) { ok = false; return 0.0; }
+      double pr = 1.0;
+      for (gate_t c : gc.getWires(g)) {
+        pr *= contributorProb(gc, c, ref, ok);
+        if (!ok) return 0.0;
+      }
+      return pr;
+    }
+    case gate_plus: {
+      if (ref[static_cast<std::size_t>(g)] != 1) { ok = false; return 0.0; }
+      double q = 1.0;
+      for (gate_t c : gc.getWires(g)) {
+        q *= (1.0 - contributorProb(gc, c, ref, ok));
+        if (!ok) return 0.0;
+      }
+      return 1.0 - q;
+    }
+    case gate_monus: {
+      /* a (-) b = a AND NOT b ; with disjoint private leaves a and b
+       * are independent, so Pr = Pr(a) * (1 - Pr(b)).  Children are
+       * [minuend, subtrahend] (see GenericCircuit evaluate<S>). */
+      if (ref[static_cast<std::size_t>(g)] != 1) { ok = false; return 0.0; }
+      const auto &w = gc.getWires(g);
+      if (w.size() != 2) { ok = false; return 0.0; }
+      double pa = contributorProb(gc, w[0], ref, ok);
+      if (!ok) return 0.0;
+      double pb = contributorProb(gc, w[1], ref, ok);
+      if (!ok) return 0.0;
+      return pa * (1.0 - pb);
+    }
+    default:
+      ok = false;
+      return 0.0;
+  }
 }
 
 }  // namespace
@@ -309,50 +380,51 @@ unsigned runCountCmpEvaluator(GenericCircuit &gc)
     if (!matchCountCmp(gc, cmp, agg, semimods, ks, op, C))
       continue;
 
-    /* Independence certification.  The soundness condition we want
-     * is "the cmp's input leaves K_i appear nowhere else in the
-     * circuit" ; equivalently, the chain
+    /* Independence certification.  The contributors are independent
+     * Bernoulli trials -- the precondition for the Poisson-binomial --
+     * exactly when each contributor's sub-circuit
      *
      *     K_i -> semimod_i -> gate_agg -> cmp
      *
-     * must be private to this cmp.  Checking ref_count == 1 at every
-     * link along that chain (other than cmp itself, which is the
-     * gate we are replacing) is sufficient :
+     * is a private read-once tree, sharing no randomness with another
+     * contributor or with the rest of the circuit.  We check:
      *
-     *  1. ref_count[gate_agg] == 1 : the aggregate is consumed by
-     *     this cmp alone (catches HAVING COUNT(*) >= a AND
-     *     COUNT(*) <= b style multi-cmp expressions over a shared
-     *     count, which would couple the two cmps through the agg).
+     *  1. ref_count[gate_agg] == 1 : the aggregate is consumed by this
+     *     cmp alone (catches HAVING COUNT(*) >= a AND COUNT(*) <= b
+     *     over a shared count, which would couple the cmps).
      *  2. ref_count[semimod_i] == 1 : the wrapper is consumed by
-     *     gate_agg alone (catches the unusual case of a cached
-     *     semimod shared with something outside this cmp).
-     *  3. ref_count[K_i] == 1 : the leaf is consumed by its
-     *     wrapping semimod alone (catches K_i appearing in any
-     *     other part of the circuit, in particular other cmps over
-     *     the same row).
-     *  4. The K_i's are pairwise distinct (catches the same leaf
-     *     appearing twice in the same agg via two different
-     *     semimods, which would still be inside the subtree but
-     *     would double-count the row).
+     *     gate_agg alone.
+     *  3. Every randomness-bearing gate inside K_i has ref_count == 1
+     *     (verified by @c contributorProb as it recurses).  A single
+     *     condition that simultaneously gives: leaf sets pairwise
+     *     disjoint across contributors (a shared gate would have
+     *     ref >= 2), no reuse outside the cmp (an external parent would
+     *     push ref >= 2), and read-once-ness within a contributor (a
+     *     leaf used twice would have ref >= 2) -- so the contributor's
+     *     marginal is its read-once probability and the contributors
+     *     are mutually independent.  Generalises the previous
+     *     "K_i is a single gate_input" rule to arbitrary products /
+     *     sums of private leaves (e.g. the bid * expertise row of a
+     *     join), and bails (leaving the cmp for provsql_having) on any
+     *     unsupported gate type.
      *
      * Constants on the path (semimod's M = gate_value(1), the
-     * const_side semimod's gate_one + gate_value(C)) carry no
-     * randomness, so their ref counts are irrelevant. */
+     * const_side gate_one + gate_value(C), and any gate_one / gate_zero
+     * inside a contributor) carry no randomness, so their ref counts
+     * are not constrained. */
     if (ref[static_cast<std::size_t>(agg)] != 1) continue;
-    std::unordered_set<gate_t> seen;
     bool sound = true;
+    std::vector<double> p;
+    p.reserve(ks.size());
     for (std::size_t i = 0; i < ks.size(); ++i) {
       if (ref[static_cast<std::size_t>(semimods[i])] != 1) { sound = false; break; }
-      if (ref[static_cast<std::size_t>(ks[i])] != 1)       { sound = false; break; }
-      if (!seen.insert(ks[i]).second)                      { sound = false; break; }
+      double pi = contributorProb(gc, ks[i], ref, sound);
+      if (!sound) break;
+      p.push_back(pi);
     }
     if (!sound) continue;
 
-    /* Gather marginals and run the smaller-side dispatch. */
-    std::vector<double> p;
-    p.reserve(ks.size());
-    for (gate_t k : ks) p.push_back(gc.getProb(k));
-
+    /* Run the smaller-side dispatch over the contributor marginals. */
     double pr = cdfForOperator(p, op, C);
 
     /* Defensive clamp against floating-point roundoff. */

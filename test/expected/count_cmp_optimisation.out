@@ -78,3 +78,42 @@ multi-cmp (must match off-path)|Berlin|0.8200|0.8200|0.000000
 multi-cmp (must match off-path)|New York|0.2800|0.2800|0.000000
 multi-cmp (must match off-path)|Paris|0.7700|0.7700|0.000000
 (3 rows)
+NOTICE:  table "ccmp_r" does not exist, skipping
+NOTICE:  table "ccmp_s" does not exist, skipping
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+product contributors|1|0.2160|0.2160|0.000000
+product contributors|2|0.0900|0.0900|0.000000
+(2 rows)
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 Poisson-binomial): provenance circuit reduced from 18 to 1 gates
+remove_provenance
+
+(1 row)
+p_fires
+0.2160
+(1 row)
+NOTICE:  table "ccmp_one" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+shared leaf (must match off-path)|1|0.3500|0.3500|0.000000
+shared leaf (must match off-path)|2|0.1750|0.1750|0.000000
+(2 rows)
