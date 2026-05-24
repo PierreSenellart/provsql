@@ -851,6 +851,9 @@ def create_app(
             payload = kc_mod.probability_benchmark(
                 get_pool(), token, samples,
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
+                boolean_provenance=(
+                    app.config["SESSION_MODES"].get(
+                        "provsql.boolean_provenance") == "on"),
             )
         except psycopg.errors.UndefinedFunction as e:
             return _kc_unavailable(e)

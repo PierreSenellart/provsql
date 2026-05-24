@@ -606,6 +606,7 @@ def probability_benchmark(
     token: str,
     samples: int,
     statement_timeout: str = "30s",
+    boolean_provenance: bool = False,
 ) -> dict:
     """Time every probability-evaluation method and return rows + notices.
 
@@ -659,6 +660,16 @@ def probability_benchmark(
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL provsql.active = off")
+                    # Evaluate the stored circuit under the same
+                    # boolean_provenance state the user is in: the
+                    # load-time Boolean fold (foldBooleanIdentities) is
+                    # gated on this GUC, so the benchmark must match the
+                    # Marginal-probability / circuit-view path to report
+                    # the same circuit the user sees.
+                    cur.execute(
+                        "SET LOCAL provsql.boolean_provenance = "
+                        + ("on" if boolean_provenance else "off")
+                    )
                     # Same verbose-level floor as evaluate_circuit:
                     # guarantee that level-5 informational notices (e.g.
                     # shortcut warnings) reach the client even when the
