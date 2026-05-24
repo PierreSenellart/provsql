@@ -248,13 +248,15 @@ six:
   weighted model counter; the ``graph-easy`` DOT renderer). The
   helper :cfunc:`run_external_tool` in :cfile:`external_tool.cpp`
   reads this GUC, ``setenv``\ s ``PATH`` for the duration of the
-  ``system()`` call, and restores it afterwards. Two companion
-  helpers handle the surrounding error reporting:
+  call, and restores it afterwards; it runs the tool in its own
+  process group so that a query cancel / ``statement_timeout`` can
+  ``SIGKILL`` it mid-run rather than waiting for it to finish. Two
+  companion helpers handle the surrounding error reporting:
   :cfunc:`find_external_tool` pre-flights tool availability by
   delegating to ``/bin/sh -c 'command -v ...'`` (so it sees the same
   PATH resolution that the eventual invocation will), and
-  :cfunc:`format_external_tool_status` decodes the @c system() return
-  value -- distinguishing exit 127 (not found), exit 126 (not
+  :cfunc:`format_external_tool_status` decodes the tool's wait
+  status -- distinguishing exit 127 (not found), exit 126 (not
   executable), termination by signal, and plain nonzero exit -- into
   a single human-readable message used by the throws in
   :cfunc:`BooleanCircuit::compilation`,

@@ -108,8 +108,13 @@ The output is dumped to a temporary file under ``/tmp``;
 compiler with that file and reads the result back. The invocation
 goes through :cfunc:`run_external_tool` (:cfile:`external_tool.cpp`),
 which honours the ``provsql.tool_search_path`` GUC by prepending
-its value to ``PATH`` for the duration of the ``system()`` call.
-Before composing the command line, the same call site pre-flights
+its value to ``PATH`` for the duration of the call.  The tool runs
+via ``/bin/sh -c`` in its **own process group**: while it runs the
+backend polls for a pending cancel, and on ``statement_timeout`` /
+``pg_cancel_backend`` it ``SIGKILL``\ s the whole group (so a tool
+that ignores ``SIGINT`` or forks a worker into another process group,
+as KCBox/Panini does, is still stopped) and then raises the interrupt
+via ``CHECK_FOR_INTERRUPTS``.  Before composing the command line, the same call site pre-flights
 the binary with :cfunc:`find_external_tool`, so a missing tool
 fails with an actionable error rather than letting the shell return
 exit 127. After the call, the wait status is decoded by
@@ -323,13 +328,19 @@ The chain (in order) :
 - :cfunc:`runCountCmpEvaluator` (gated by
   ``provsql.cmp_probability_evaluation``, hidden diagnostic
   default on) : recognises HAVING
-  ``gate_cmp(gate_agg(COUNT, semimod children), gate_value(C))``
-  whose semimod K children are distinct single ``gate_input``
-  leaves, and replaces the cmp with a Bernoulli carrying the
-  Poisson-binomial CDF ``Pr(B op C)``.  Soundness condition :
-  ``ref_count == 1`` along the entire chain ``K_i -> semimod_i ->
-  gate_agg`` (catches multi-cmp HAVING expressions over a shared
-  COUNT, and any K_i appearing elsewhere in the circuit).  The DP
+  ``gate_cmp(gate_agg(COUNT, semimod children), gate_value(C))`` and
+  replaces the cmp with a Bernoulli carrying the Poisson-binomial CDF
+  ``Pr(B op C)`` over the per-row contributor marginals.  Each semimod's
+  K child is that row's contributor sub-circuit -- a single
+  ``gate_input``, or (for a join) a ``times`` / ``plus`` / ``monus`` of
+  several leaves; :cfunc:`contributorProb` computes its read-once
+  probability.  Soundness condition : every structural gate inside a
+  contributor (``input`` / ``times`` / ``plus`` / ``monus``) has
+  ``ref_count == 1`` -- a single check that makes the contributors' leaf
+  sets pairwise disjoint, unshared with the rest of the circuit, and
+  read-once, so the Poisson-binomial trials are independent (plus
+  ``ref_count(gate_agg) == 1``, catching multi-cmp HAVING over a shared
+  COUNT).  The DP
   dispatches on the smaller side of ``C`` (lower tail directly,
   or upper tail via inverted Bernoullis) for ``O(N x min(C, N -
   C))`` total cost per cmp.  See ``src/CountCmpEvaluator.{h,cpp}``.

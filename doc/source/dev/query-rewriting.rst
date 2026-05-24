@@ -729,7 +729,17 @@ The extensions and their interaction with the base rewriter:
   on partial coverage).  When no single class covers every atom
   under the raw count but the FD-reduced atom sets are pairwise
   nested-or-disjoint, the rewriter falls into ``fd_aware_mode`` and
-  uses a per-atom local-root anchor instead of a global root.
+  uses a per-atom local-root anchor instead of a global root.  For the
+  canonical ``R(x), S(x,y), T(y)`` shape (two join classes, ``S``'s key
+  determining ``y``) the flat per-atom wrap is read-once only when the
+  determined value ``y`` is distinct across keys; when several keys
+  collide on one ``y`` it would reuse the shared ``T(y)`` leaf.  The
+  detector recognises this and instead folds the determining component
+  ``{R, S}`` into an inner sub-query **grouped on the determined value**
+  ``y`` (projecting ``x`` out), so the shared leaf factors out and the
+  lineage is read-once for all data -- the Dalvi-Suciu safe plan that
+  applies the independent project to ``{R, S}`` before joining ``T``.
+  Exercised by the collision case in ``test/sql/safe_query_pk_fd.sql``.
 
 - **Deterministic-relation transparency.**  A relation that is not
   provenance-tracked (no ``provsql`` column and no metadata entry)
