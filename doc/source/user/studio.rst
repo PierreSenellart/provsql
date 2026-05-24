@@ -239,7 +239,10 @@ Ask for the distinct cities mentioned in ``personnel``:
 The result table shows one row per city with a ``provsql`` UUID
 column. Clicking a UUID cell renders the corresponding circuit: a
 single ``⊕`` (``plus``) gate over the input gates of the underlying
-``personnel`` rows.
+``personnel`` rows. Clicking a column header sorts the table by that
+column (ascending, then descending on the next click; numeric columns
+sort numerically, with blank cells sinking to the bottom). This works
+on every Studio table, including the knowledge-compilation benchmark.
 
 .. _studio-circuit-frontier:
 
@@ -371,6 +374,18 @@ render as text panels. Compilers that are not installed on the server
 are filtered out of the compiler picker (via :sqlfunc:`tool_available`).
 See :doc:`knowledge-compilation` for the full pipeline.
 
+.. figure:: /_static/studio/kc-compiled-ddnnf.png
+   :alt: The Studio circuit canvas showing a provenance circuit
+         compiled to a Decision-DNNF by d4, with AND / OR / NOT and
+         input gates, and the evaluation strip set to "Compiled d-D
+         circuit / d4".
+
+   Knowledge compilation in Circuit mode: the provenance circuit of a
+   self-join, compiled to a d-DNNF by ``d4`` (here 13 gates / 18 edges
+   / depth 6). The canvas subtitle reports the compiled size and target
+   language; the :guilabel:`back` arrow in the toolbar restores the
+   original provenance circuit.
+
 The d-DNNF and tree-decomposition canvases pin and inspect like the
 provenance circuit, with two refinements specific to those views:
 
@@ -385,6 +400,12 @@ provenance circuit, with two refinements specific to those views:
   artifacts of the compilation, not roots of a probabilistic
   sub-circuit, so the usual semiring / probability surface does not
   apply.
+
+When the pinned node is instead an ``agg_token`` or ``semimod`` gate
+over random variables, the strip extends the moment / distribution-
+profile / sample surface (otherwise offered on ``random_variable``
+leaves; see :doc:`continuous-distributions`) to the aggregated value,
+and hides the eval-strip options that do not apply to such a target.
 
 .. _studio-circuit-oversized:
 
@@ -605,12 +626,14 @@ A button in the top nav opens a searchable pop-up panel listing every
 pills:
 
 .. figure:: /_static/studio/schema-panel.png
-   :alt: The Schema-panel pop-up listing a candidate_witness table
-         tagged PROV-BID and a personnel table tagged PROV-TID, both
-         with their column lists below the row.
+   :alt: The Schema-panel pop-up listing an assignment table tagged
+         PROV-BID, with a dotted underline on its reviewer grouping
+         key, above bid / coreview / expertise / extends / topic_of
+         tables tagged PROV-TID with solid-underlined primary keys.
 
-   Schema panel: TID and BID sub-pills annotate each
-   provenance-tracked relation.
+   Schema panel: TID and BID sub-pills annotate each provenance-tracked
+   relation; primary-key columns are solid-underlined and ``repair_key``
+   (BID) grouping keys dotted-underlined.
 
 * :sc:`prov` (purple) on a relation whose ``provsql`` column is
   injected by the planner: provenance tracking is active.  The
@@ -642,6 +665,12 @@ carry their own terracotta pill next to the column name:
 :doc:`continuous-distributions`) and :sc:`agg` for ``agg_token``
 (each value is a circuit root with a running aggregate value).
 
+Key columns are underlined, following the relational-schema
+convention: a **solid** underline marks a primary-key column, and a
+**dotted** underline marks a ``repair_key`` (BID) grouping key, the
+attribute whose value defines a block of mutually-exclusive rows (see
+the TID vs BID model in :doc:`probabilities`).
+
 On a tracked table, each column is a click target that prefills
 ``SELECT create_provenance_mapping('<table>_<col>_mapping',
 '<schema>.<table>', '<col>');`` into the query box, so a fresh
@@ -662,7 +691,7 @@ relation kinds, and on mappings.
 Configuration
 -------------
 
-The Config panel groups its options into three sections:
+The Config panel groups its options into four sections:
 
 * **Provenance** mirrors the user-level configuration parameters
   documented in :doc:`configuration`:
@@ -674,6 +703,13 @@ The Config panel groups its options into three sections:
   Studio also forces ``provsql.aggtoken_text_as_uuid = on`` for the
   whole session: clickable ``agg_token`` cells in the result table
   need that.
+* **Probabilities** gathers the GUCs that steer probability and
+  random-variable evaluation: ``provsql.simplify_on_load``,
+  ``provsql.monte_carlo_seed``, ``provsql.rv_mc_samples`` (all
+  documented in :doc:`configuration`), and a
+  ``provsql.fallback_compiler`` dropdown selecting the d-DNNF compiler
+  ``makeDD`` falls back to (see :doc:`knowledge-compilation`), its
+  choices validated against the compilers resolvable on the server.
 * **Session** wraps the per-request session state: the
   ``statement_timeout`` applied to every batch, and the visible part
   of ``search_path`` (``provsql`` is always pinned at the end).
@@ -685,10 +721,10 @@ The Config panel groups its options into three sections:
   decimals in the eval-strip's probability display).
 
 .. figure:: /_static/studio/config-panel.png
-   :alt: Studio Config panel with the three section headings
-         (Provenance, Session, Display limits) visible.
+   :alt: Studio Config panel with the four section headings
+         (Provenance, Probabilities, Session, Display limits) visible.
 
-   The Config panel: three section headings above the per-row
+   The Config panel: four section headings above the per-row
    options.
 
 All values persist on disk in ``provsql-studio/config.json`` under
@@ -784,6 +820,21 @@ extension version.
        safe-query rewriter, the ``gate_assumed_boolean`` gate type,
        and the per-table TID / BID metadata store introduced in
        1.6.0.  See :doc:`probabilities` and :doc:`provenance-tables`.
+   * - ``1.3.x``
+     - ``≥ 1.7.0``
+     - Adds the knowledge-compilation strip (the DIMACS CNF with its
+       variable-to-source-tuple mapping, the compiled d-DNNF and
+       tree-decomposition canvases, the ``.nnf`` text export, and the
+       multi-backend :guilabel:`Probability benchmark`), the
+       ``provsql.fallback_compiler`` row in the Config panel, the
+       moment / distribution-profile / sample surface on ``agg_token``
+       and ``semimod`` targets, and tool-availability filtering of the
+       compiler / counter pickers. Backed by the knowledge-compilation
+       SQL surface (:sqlfunc:`tseytin_cnf`, :sqlfunc:`compile_to_ddnnf`,
+       :sqlfunc:`ddnnf_stats`, :sqlfunc:`tree_decomposition_dot`,
+       :sqlfunc:`probability_benchmark`, :sqlfunc:`tool_available`) and
+       the ``provsql.fallback_compiler`` GUC introduced in 1.7.0.
+       See :doc:`knowledge-compilation`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to

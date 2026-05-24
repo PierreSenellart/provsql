@@ -228,6 +228,16 @@ satisfying assignment or a weighted count from an external tool and read
 it back against the reviewing data. The same mapping is available as a
 table through :sqlfunc:`tseytin_cnf_mapping`.
 
+.. figure:: /_static/casestudy7/cnf-mapping.png
+   :alt: The Tseytin CNF panel: one "c input" comment line per DIMACS
+         variable, each annotated with the source tuple it resolves to,
+         such as bid(p6, r14) and expertise(r14, t3).
+
+   The Tseytin CNF panel for the hard query. Studio annotates each
+   ``c input`` line with the source tuple the variable stands for
+   (``bid(p6, r14)``, ``expertise(r14, t3)``, …), so a model or weighted
+   count returned by an external tool reads back against the data.
+
 Step 5: Compile, Measure, Compare
 ---------------------------------
 
@@ -247,6 +257,19 @@ its confidence band; ``independent`` shows its error. To export the
 compiled circuit itself, pick *Compiled d-D (NNF text)*: the copy button
 yields a c2d/d4 ``.nnf`` file whose variable numbering matches the CNF
 from Step 4.
+
+.. figure:: /_static/casestudy7/probability-benchmark.png
+   :alt: The probability-benchmark table on the hard circuit, one row
+         per method, with method, args, probability, time, and the
+         compiled d-DNNF node/edge sizes; the compilation tools and WMC
+         counters all return 0.8818, independent shows a "not an
+         independent circuit" error, and two backends time out.
+
+   The probability benchmark on the hard circuit. Every exact
+   backend (each compiler, ``tree-decomposition``, the WMC counters)
+   agrees on ``0.8818``; the ``d-DNNF (N/E)`` column shows how the
+   compiled size varies by compiler, ``monte-carlo`` lands in its band,
+   and ``independent`` reports the circuit is not independent.
 
 Step 6: A Shortcut Before Compilation
 -------------------------------------
@@ -276,6 +299,16 @@ gates the circuit shrank by. All probability methods (even,
 
 Step 7: Correlation via ``repair_key``
 --------------------------------------
+
+.. figure:: /_static/casestudy7/schema-keys.png
+   :alt: Schema-panel detail: the assignment table (PROV-BID) with a
+         dotted underline on its reviewer grouping key, above the bid
+         table (PROV-TID) whose reviewer and paper primary-key columns
+         are solid-underlined.
+
+   The schema panel distinguishes key kinds: ``assignment`` is BID
+   (``repair_key`` on ``reviewer``, dotted underline), while the TID
+   tables carry solid-underlined primary keys.
 
 Finally, the ``assignment`` table lists, per reviewer, the papers they
 *could* be assigned to, made mutually exclusive by ``repair_key`` on
