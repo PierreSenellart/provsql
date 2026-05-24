@@ -14,6 +14,54 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.3.0] - 2026-05-24
+
+Companion release for ProvSQL extension 1.7.0. Brings the extension's
+new **knowledge-compilation surface** into Studio: a dedicated
+inspector for compiled d-DNNFs, CNF, and tree decompositions, a
+multi-compiler / multi-counter probability benchmark, and
+tool-availability awareness throughout the UI. Requires extension
+**>= 1.7.0**.
+
+### Highlights
+
+- **Knowledge-compilation inspector.** New `/api/kc/*` endpoints back
+  a KC strip folded into the Evaluate strip: compile a circuit's
+  Boolean provenance with any available compiler and inspect the
+  result. Compiled d-DNNF circuits render directly in the circuit
+  canvas (root at the top), with a result modal and a d-DNNF
+  structural-statistics summary (the `ddnnf_stats` size column /
+  canvas size summary). A `kc-nnf` panel shows the `.nnf` text export,
+  and the CNF view is annotated with the `tseytin_cnf`
+  variable-to-input mapping. The compiled circuit is labelled with its
+  KC class, and the KC compilers are credited in the bibliography.
+- **Tree-decomposition view.** Bags are coloured, clickable to
+  inspect, and resolve back to their source rows; pinning a TD bag or
+  a d-DNNF internal node hides the (inapplicable) evaluation strip.
+- **Multi-backend probability benchmark.** The benchmark table runs
+  every method the extension exposes, gains a compiled-size column,
+  enforces a per-method `statement_timeout`, and runs under the
+  session's `provsql.boolean_provenance` so its numbers match the
+  marginal-probability path.
+- **Tool-availability awareness.** Compiler / counter dropdowns and
+  the benchmark are filtered to tools actually resolvable on the
+  backend; `/api/kc/{ddnnf,td}` return `501 Not Implemented` (rather
+  than `500`) when the required tool is absent, and missing-tool
+  shortcuts surface as notices. WMC backends move to their own
+  option group.
+- **`provsql.fallback_compiler` in the Config panel.** A new dropdown
+  with validation exposes the extension's fallback-compiler GUC.
+- **Aggregated random variables.** The evaluation strip offers the
+  distribution profile / moment / sample surface on `agg` and
+  `semimod` gate targets, and hides the eval-strip options that do not
+  apply to KC / agg / semimod targets.
+- **UI polish.** Even 50/50 shell split so the dense left column
+  matches the query / result pane; schema-panel key columns underlined
+  (solid for primary keys, dotted for `repair_key` / BID grouping
+  keys); circuit-canvas maximum zoom raised from 2.5 to 8 for dense
+  circuits; result-table column sorting; trimmed Monte-Carlo seed input
+  width.
+
 ## [1.2.0] - 2026-05-17
 
 Companion release for ProvSQL extension 1.6.0. Surfaces the new
