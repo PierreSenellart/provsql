@@ -316,7 +316,7 @@ void provsql_mmap_main_loop()
       if(!WRITEB(&nb_children, unsigned))
         provsql_error("Cannot write response to pipe (message type c)");
 
-      if(write(provsql_shared_state->pipembw, &children[0], nb_children*sizeof(pg_uuid_t))==-1)
+      if(write(provsql_shared_state->pipembw, children.data(), nb_children*sizeof(pg_uuid_t))==-1)
         provsql_error("Cannot write response to pipe (message type c)");
       break;
     }
