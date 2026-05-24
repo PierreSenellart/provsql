@@ -3,28 +3,41 @@
 Knowledge Compilation
 =====================
 
-ProvSQL rewrites SQL queries into **Boolean provenance circuits**
-transparently, through its planner hook. For a knowledge-compilation
-audience this is a convenient front-end: realistic, structured SQL
-workloads become Boolean formulas you would otherwise have to
-synthesise by hand. This chapter follows the full pipeline behind
+ProvSQL builds **provenance circuits** from SQL queries transparently,
+through its planner hook. When Boolean provenance is required, whether
+for probability evaluation, for Shapley value computation, or simply at
+the user's request, a Boolean circuit of a particularly convenient form
+is obtained. This chapter follows the full pipeline behind
 :doc:`probability evaluation <probabilities>` and shows how to inspect
 every intermediate artifact:
 
 .. code-block:: text
 
-    SQL query  ─►  provenance circuit  ─►  CNF  ─►  d-DNNF  ─►  probability
+    SQL query  →  provenance circuit  →  CNF  →  d-DNNF  →  probability
 
 Each arrow is exposed by a SQL function, and each artifact can be
-rendered as GraphViz DOT or printed as DIMACS text. The same surfaces
-drive the knowledge-compilation panels of :doc:`ProvSQL Studio
-<studio>`.
+rendered as `GraphViz DOT <https://graphviz.org/doc/info/lang/>`_ or
+printed as `DIMACS
+<https://jix.github.io/varisat/manual/0.2.0/formats/dimacs.html>`_ text.
+The same surfaces drive the knowledge-compilation panels of
+:doc:`ProvSQL Studio <studio>`.
+
+.. note::
+
+   Because this chapter is entirely about knowledge compilation over
+   Boolean provenance, you will usually want ProvSQL's Boolean-only
+   optimisations switched on for the whole session. They are gated
+   behind the :ref:`provsql.boolean_provenance
+   <provsql-boolean-provenance>` GUC (off by default): issue ``SET
+   provsql.boolean_provenance = on;``, or pick :guilabel:`Boolean` on
+   ProvSQL Studio's :guilabel:`Provenance scheme` switch next to the
+   query box.
 
 The circuit
 -----------
 
 Every probabilistic query result carries a provenance token (a UUID)
-naming the root of its Boolean circuit (see :doc:`provenance-tables`
+naming the root of its provenance circuit (see :doc:`provenance-tables`
 and :doc:`querying`). The circuit is a DAG over ``input`` leaves and
 ``plus`` / ``times`` / ``monus`` gates. :sqlfunc:`view_circuit` renders
 it as DOT; Studio's :ref:`circuit mode <studio-circuit-mode>` renders
@@ -42,7 +55,10 @@ From circuit to CNF
 -------------------
 
 Before invoking an external compiler, ProvSQL encodes the Boolean
-circuit into a CNF formula by the **Tseytin transformation**: one fresh
+circuit into a `CNF
+<https://en.wikipedia.org/wiki/Conjunctive_normal_form>`_ formula by the
+`Tseytin transformation
+<https://en.wikipedia.org/wiki/Tseytin_transformation>`_: one fresh
 variable per gate, plus clauses asserting that each gate variable is
 equivalent to the Boolean combination of its inputs. This is the exact
 encoding the extension streams to ``d4`` / ``c2d`` / ``minic2d`` /
@@ -53,11 +69,17 @@ text instead:
 
     SELECT tseytin_cnf(provenance()) FROM suspects WHERE id = 1;
 
-The output is DIMACS, opening with a ``p cnf <variables> <clauses>``
-header. With the default ``weighted => true``, the literal-weight lines
-required by weighted model counters are appended, one per input
-literal::
+The output is DIMACS. With the default ``mapping => true`` it opens with
+one ``c input`` comment line per input variable, the self-documenting
+variable mapping described :ref:`below <tseytin-cnf-mapping>`; the
+``p cnf <variables> <clauses>`` header and the clauses follow. With the
+default ``weighted => true``, the literal-weight lines required by
+`weighted model counters <https://en.wikipedia.org/wiki/Model_counting>`_
+are appended, one per input literal::
 
+    c input 1 7f3a2b1c-… 0.5
+    c input 2 9b2c4d5e-… 0.6
+    c input 3 a1b2c3d4-… 0.7
     p cnf 6 7
     -4 0
     5 0
@@ -77,40 +99,38 @@ weights separately:
     SELECT tseytin_cnf(provenance(), weighted => false)
     FROM suspects WHERE id = 1;
 
+.. _tseytin-cnf-mapping:
+
 Reading a model back: the variable mapping
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A DIMACS variable is just an integer, so a satisfying assignment or
 weighted count returned by an external tool is meaningless until you
-know which provenance input each variable stands for. By default
-:sqlfunc:`tseytin_cnf` makes the CNF self-documenting: it prepends one
-``c input`` comment line per input variable, recording its UUID and
-probability::
-
-    c input 1 7f3a2b1c-… 0.5
-    c input 2 9b2c4d5e-… 0.6
-    p cnf 6 7
-    -4 0
-    ...
-
-Model counters and compilers ignore ``c`` comment lines, so the file
-stays valid DIMACS; pass ``mapping => false`` to omit them. Only input
-variables appear (the auxiliary Tseytin variables, one per gate, are
-not provenance inputs).
+know which provenance input each variable stands for. This is what the
+``c input`` lines at the top of the output above record, one per input
+variable: its DIMACS number, the originating provenance UUID, and its
+probability. They make the CNF self-documenting at no cost to the
+solver: model counters and compilers ignore ``c`` comment lines, so the
+file stays valid DIMACS. Pass ``mapping => false`` to omit them. Only
+input variables appear (the auxiliary Tseytin variables, one per gate,
+are not provenance inputs).
 
 The same information is available as a table through
 :sqlfunc:`tseytin_cnf_mapping`, which is what you want when reading a
-tool's output back programmatically. Like :sqlfunc:`probability_benchmark`
-it is a set-returning function, so run it with the rewriter standing
-back (``provsql.active`` off, or on a token materialised in a plain
-table):
+tool's output back programmatically:
 
 .. code-block:: postgresql
 
-    SET provsql.active = off;
     SELECT * FROM tseytin_cnf_mapping(
       '00000000-0000-0000-0000-000000000000');
-    SET provsql.active = on;
+
+Feed it a concrete token, either a literal UUID or one materialised in a
+plain table. You cannot pull the token inline from a provenance-tracked
+relation in the same statement (``FROM suspects s,
+tseytin_cnf_mapping(s.provsql) m``): while ``provsql.active`` is on the
+planner hook refuses to rewrite a multi-column function applied to a
+tracked relation (*FROM function with multiple output attributes not
+supported*). Set ``provsql.active`` off for that pattern.
 
 The ``variable`` column matches the DIMACS numbering, ``gate`` is the
 original-circuit input UUID, and ``probability`` its weight. In ProvSQL
@@ -123,7 +143,8 @@ From CNF to d-DNNF
 ------------------
 
 An external **knowledge compiler** turns the CNF into a
-deterministic, decomposable negation normal form (d-DNNF), on which
+deterministic, decomposable `negation normal form
+<https://en.wikipedia.org/wiki/Negation_normal_form>`_ (d-DNNF), on which
 weighted model counting (hence probability) is linear-time.
 :sqlfunc:`compile_to_ddnnf_dot` runs the requested compiler and returns
 the resulting d-DNNF as a GraphViz digraph over ``AND`` / ``OR`` /
@@ -152,7 +173,8 @@ The second argument names the compiler. ProvSQL ships bindings for:
     Three target languages of KCBox's Panini compiler
     :cite:`KCBoxPanini`:
 
-    * ``OBDD`` is the canonical ordered Boolean decision diagram, a strict
+    * ``OBDD`` is the canonical `ordered Boolean decision diagram
+      <https://en.wikipedia.org/wiki/Binary_decision_diagram>`_, a strict
       subset of d-DNNF whose decisions are restricted to a global variable
       order.
     * ``OBDD[AND]`` augments OBDD with internal AND nodes
@@ -170,17 +192,6 @@ The second argument names the compiler. ProvSQL ships bindings for:
     AND-translation gives silently-wrong probabilities; a correct
     translation requires case-splitting on the kernel variables and
     is not yet implemented.
-
-``'d4'`` versus ``'d4v2'``
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-``d4`` is the original 2017 Decision-DNNF compiler with backtracking
-:cite:`DBLP:conf/ijcai/LagniezM17`. ``d4v2`` is a 2021 rewrite
-:cite:`LagniezM21d4v2` with the same target language, often (but not
-always) faster on heavier formulas. Both share the same DIMACS CNF
-input and the same NNF output format, so :sqlfunc:`compile_to_ddnnf_dot`
-and :sqlfunc:`probability_evaluate` accept them interchangeably; the
-two binaries are typically installed side by side.
 
 Each compiler must be installed and reachable on the PostgreSQL
 server's ``PATH``, or in a directory listed in the
@@ -234,8 +245,9 @@ The object reports ``nodes`` and ``edges``, the ``and`` / ``or`` /
 ``depth``, the circuit ``treewidth`` (``null`` when it exceeds the
 supported limit), and the ``compile_ms`` wall-clock compile time. It
 accepts the same compiler names as :sqlfunc:`compile_to_ddnnf_dot`,
-including the in-process ``tree-decomposition`` route, so a single
-string change re-measures a different compiler on the same circuit::
+including the in-process ``interpret-as-dd`` and ``tree-decomposition``
+routes, so a single string change re-measures a different compiler on
+the same circuit::
 
     {
         "and": 3, "or": 4, "not": 0, "inputs": 5,
@@ -249,14 +261,36 @@ summary in its subtitle, and the probability benchmark (below) adds a
 ``d-DNNF (n/e)`` column so the size of every compiler's output sits
 beside its run time in one table.
 
-The in-process route: tree decomposition
------------------------------------------
+The in-process routes
+---------------------
 
-ProvSQL also has a **built-in** compiler that needs no external tool:
-it builds a tree decomposition of the Boolean circuit and compiles it
-to a d-DNNF in time linear in the circuit and singly-exponential in the
-treewidth :cite:`DBLP:journals/mst/AmarilliCMS20`. This is the
-``tree-decomposition`` probability method.
+ProvSQL also ships two **built-in** compilers that need no external
+tool. Both are accepted wherever a compiler name is, by
+:sqlfunc:`compile_to_ddnnf_dot`, :sqlfunc:`compile_to_ddnnf`,
+:sqlfunc:`ddnnf_stats`, and the matching :sqlfunc:`probability_evaluate`
+methods.
+
+``interpret-as-dd`` reinterprets the provenance circuit *directly* as a
+d-DNNF, with no compilation step, reading each ``times`` as an AND of
+independent children and each ``plus`` as an *independent* OR, the
+latter rewritten by De Morgan into a ``NOT`` over an AND of ``NOT``\ s
+(``¬(¬a ∧ ¬b ∧ …)``) so the result stays a genuine d-DNNF. It is
+therefore exact only on circuits whose gates are genuinely independent,
+the shape an independent or read-once query produces; it does not try to
+certify that ``plus`` gates are deterministic (mutually exclusive),
+which would be expensive to assert. Gate types it cannot read this way
+raise an unsupported-gate error. It is the cheapest route, and the one
+the default method tries first.
+
+``tree-decomposition`` is the structural fallback: it builds a `tree
+decomposition <https://en.wikipedia.org/wiki/Tree_decomposition>`_ of
+the Boolean circuit and compiles it to a d-DNNF in time linear in the
+circuit and singly-exponential in the `treewidth
+<https://en.wikipedia.org/wiki/Treewidth>`_
+:cite:`DBLP:journals/mst/AmarilliCMS20`. It fails, raising a *Treewidth
+greater than N* error, when the treewidth exceeds the supported limit;
+the default method then falls through to an external compiler (the
+``provsql.fallback_compiler`` GUC, default ``d4``).
 
 :sqlfunc:`tree_decomposition_dot` exposes the underlying min-fill
 decomposition as DOT, so the variable-elimination order that yields the
@@ -345,14 +379,14 @@ model counter under the ``wmc`` umbrella. Methods that cannot apply
 blow-up, …) are captured per row in an ``error`` column rather than
 aborting the whole comparison.
 
-``probability_benchmark`` returns a table, a shape the planner hook
-does not rewrite, so call it with the rewriter standing back, either
-on a token materialised in a plain (non-provenance) table, or with
-``provsql.active`` temporarily off:
+``probability_benchmark`` takes a concrete token, so feed it a literal
+UUID or one materialised in a plain table, exactly like
+:sqlfunc:`tseytin_cnf_mapping` above (and with the same restriction: do
+not call it inline over a provenance-tracked relation while
+``provsql.active`` is on):
 
 .. code-block:: postgresql
 
-    SET provsql.active = off;
     SET provsql.monte_carlo_seed = 42;   -- reproducible Monte-Carlo row
 
     SELECT method, args,
@@ -361,8 +395,6 @@ on a token materialised in a plain (non-provenance) table, or with
            error
     FROM probability_benchmark('00000000-0000-0000-0000-000000000000')
     ORDER BY method, args NULLS FIRST;
-
-    SET provsql.active = on;
 
 The exact methods agree to numerical precision; the approximate ones
 (``monte-carlo``, ``weightmc``) land within their confidence band. The
@@ -396,7 +428,11 @@ the same artifacts surface as inline panels: the DIMACS CNF, the
 compiled d-DNNF rendered beside the original circuit, the tree
 decomposition with its treewidth, and a one-click benchmark across all
 probability methods. Compilers that :sqlfunc:`tool_available` reports
-as missing are filtered out of the pickers.
+as missing are filtered out of the pickers, and the Studio benchmark
+skips those methods altogether: unlike the SQL
+:sqlfunc:`probability_benchmark`, which still emits a row per method and
+records the failure in its ``error`` column, their rows simply do not
+appear.
 
 .. seealso::
 
