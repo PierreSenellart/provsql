@@ -212,7 +212,7 @@
     - **Partial-coverage groups** -- when some shared class touches
       only a subset of atoms, the detector folds those atoms into an
       inner `GROUP BY` sub-Query that aggregates the partial-coverage
-      variables away ; the outer `Choice A` re-entry then handles the
+      variables away; the outer `Choice A` re-entry then handles the
       inner Query on its own.
     - **Column pushdown** -- every fully-covered class is exposed as
       an extra slot in each atom's wrap targetList, so the rewriter
@@ -233,8 +233,8 @@
       component rewriter synthesises the missing intra-group
       equality so the inner wraps preserve per-x granularity.
     - **Refuse unsound semirings** -- semirings that do not admit a
-      homomorphism from Boolean functions (counting, formula, …)
-      raise on `assumed_boolean` -rooted circuits ; `boolean`,
+      homomorphism from Boolean functions (counting, formula…)
+      raise on `assumed_boolean` -rooted circuits; `boolean`,
       `boolexpr`, `which`, `why`, `how`, the tropical / Viterbi /
       Łukasiewicz / min-max / interval-union evaluators are allowed.
     
@@ -251,7 +251,7 @@
     
     Six extensions on top of the base hierarchical-CQ detector, each
     recognising a query class the textbook check refuses but the
-    gate-level circuit is still read-once :
+    gate-level circuit is still read-once:
     
     1. **Constant-selection elimination.** A `B.x = 2` conjunct pins
        the entire union-find class for `x` to a literal, drops the
@@ -264,7 +264,7 @@
        has a PK on `x`.
     3. **Deterministic-relation transparency.** Relations without a
        `provsql` column carry probability-1 tuples and contribute
-       nothing to the gate-level circuit ; the detector treats them
+       nothing to the gate-level circuit; the detector treats them
        as transparent, factoring queries like `A ⋈ DimP ⋈ DimC`
        that are hierarchical modulo the deterministic dimensions.
     4. **FD closure on the union-find.** A triangle CQ with PKs on
@@ -274,7 +274,7 @@
        closure and accepts the query via per-atom anchors.
     5. **PK-unifiable self-joins.** Two RTEs over the same relation
        whose PK columns are pairwise equated through the union-find
-       refer to the same tuple ; the rewriter collapses the
+       refer to the same tuple; the rewriter collapses the
        duplicate RTEs into a single atom before the candidate gate's
        shared-relid bail.
     6. **Disjoint-constant self-joins.** When two RTEs over the same
@@ -290,7 +290,7 @@
     GUC (default `off`). When enabled, the planner-hook emits a
     per-query `NOTICE` of the form
     `ProvSQL: query result is <kind> (sources: <relations>)` where
-    `<kind>` is one of TID / BID / OPAQUE. Scope includes :
+    `<kind>` is one of TID / BID / OPAQUE. Scope includes:
     
     - **Single source through `RTE_SUBQUERY` descent** -- view bodies
       inlined by PG's parser and inline `FROM (SELECT …)` subqueries
@@ -361,10 +361,10 @@
       source) populates the new relation's kind + transitive
       ancestor union and installs `provenance_guard` via SPI.
       Matviews skip the trigger install (PG forbids triggers on
-      them ; matview content only changes through `REFRESH
+      them; matview content only changes through `REFRESH
       MATERIALIZED VIEW`, which re-runs the inner SELECT). BID
       block-key columns are aligned to their output `resno` via
-      target-list walk ; demotes to TID if any key column is
+      target-list walk; demotes to TID if any key column is
       dropped.
     - **Ancestry-based disjointness gate.** The safe-query
       candidate gate now rejects any pair of RTEs with different
@@ -379,18 +379,18 @@
     A new probability-evaluation pre-pass handles `HAVING COUNT(*)
     > k` -style cmps analytically via the Poisson-binomial DP rather
       than enumerating possible worlds. Gated on the hidden
-      `provsql.cmp_probability_evaluation` GUC (default `on` ;
+      `provsql.cmp_probability_evaluation` GUC (default `on`;
       unregistered name space, mostly intended for benchmark A/B).
     
     ### Boolean-identity peephole
     
     A new `foldBooleanIdentities` pass runs at circuit-load time when
-    `provsql.boolean_provenance` is on. Three rules :
+    `provsql.boolean_provenance` is on. Three rules:
     
-    - **Idempotence** : `gate_plus(x, x, …) → gate_plus(x, …)`.
-    - **Plus-with-one absorber** : a `gate_plus` whose children
+    - **Idempotence**: `gate_plus(x, x, …) → gate_plus(x, …)`.
+    - **Plus-with-one absorber**: a `gate_plus` whose children
       include the Boolean `one` collapses to `one`.
-    - **Absorption** : `gate_plus(x, gate_times(x, …)) → x` on the
+    - **Absorption**: `gate_plus(x, gate_times(x, …)) → x` on the
       UNION-dominated-pair pattern.
     
     The pass leaves a per-gate flag so consumers know which gates
@@ -403,14 +403,14 @@
     A new fifth mmap file per database (`provsql_table_info.mmap`)
     stores per-relation TID / BID / OPAQUE classification plus
     multi-column BID block-key columns and the new ancestor set.
-    SQL surface :
+    SQL surface:
     
     - `set_table_info(relid, kind, block_key)` -- set or upsert a
-      relation's kind ; preserves the ancestor half.
+      relation's kind; preserves the ancestor half.
     - `remove_table_info(relid)` -- tombstone the whole record.
     - `get_table_info(relid)` -- return `(kind, block_key)` or NULL.
     - `set_ancestors(relid, ancestors)` -- set or upsert the
-      ancestor half ; preserves the kind half.
+      ancestor half; preserves the kind half.
     - `remove_ancestors(relid)` -- clear the ancestor half.
     - `get_ancestors(relid)` -- return `oid[]` or NULL.
     
@@ -429,7 +429,7 @@
     ### Studio companion release
     
     ProvSQL Studio 1.2.0 ships in parallel on PyPI as
-    `provsql-studio==1.2.0` ; minimum required extension version is
+    `provsql-studio==1.2.0`; minimum required extension version is
     1.6.0. The new Studio features include the Boolean-provenance
     mode toggle (session-sticky across the Studio backend), the
     TID / BID / OPAQUE result pill on the result-table `provsql`
@@ -576,8 +576,8 @@
     `NaN`-typed Dirac so downstream evaluators do not fire MC blindly.
     On top of the moment fast paths, `rv_sample` and `rv_histogram`
     take an inverse-CDF fast path on bare `gate_rv` conditional
-    events — Uniform / Exponential by memoryless inverse, Normal by
-    Beasley-Springer-Moro — bypassing MC entirely when the gate is a
+    events -- Uniform / Exponential by memoryless inverse, Normal by
+    Beasley-Springer-Moro -- bypassing MC entirely when the gate is a
     single recognised distribution under a closed-form truncation.
     Anything outside the closed-form table falls back to MC
     rejection sampling at `provsql.rv_mc_samples`; a `NOTICE` (or,
@@ -828,7 +828,7 @@
       `(relation regclass, row_data jsonb)` for the source row whose
       `provsql` column equals `uuid`, by enumerating every
       provenance-tracked relation.  Returns zero rows for non-input gates
-      (`plus`, `times`, `agg`, …).
+      (`plus`, `times`, `agg`…).
     
     ## `agg_token` rendering and the `aggtoken_text_as_uuid` GUC
     
@@ -1320,7 +1320,7 @@
       GitHub now shows a **Cite this repository** button that emits
       BibTeX and APA for the ICDE 2026 paper.
     
-    - **Software Heritage** archival is active — the full repository
+    - **Software Heritage** archival is active -- the full repository
       history is continuously preserved at archive.softwareheritage.org.
     
     - **Zenodo integration** enabled: starting with this release, every
