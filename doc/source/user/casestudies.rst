@@ -128,6 +128,7 @@ Setup and basics
    "``create_provenance_mapping_view``", "", "", "", "", "✓", "", "", ""
    "Hand-built mapping table", "", "", "", "", "", "✓", "", ""
    "``provsql.active`` GUC", "", "", "", "", "", "", "", ""
+   "``gate_one`` / ``gate_zero`` (semiring constants)", "", "", "", "", "", "", "", ""
 
 Supported SQL constructs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -168,6 +169,7 @@ Aggregation
    "``string_agg`` / ``array_agg``", "", "", "", "", "", "", "", ""
    "``COUNT(DISTINCT …)``", "", "", "", "", "", "", "", ""
    "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", ""
+   "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", ""
    "``choose`` aggregate", "", "", "", "", "", "", "", ""
 
 Circuit inspection
@@ -205,6 +207,8 @@ Knowledge compilation and safe queries
    "``tree_decomposition_dot``", "", "", "", "", "", "", "", "✓"
    "``tool_available`` (compiler-picker filter)", "", "", "", "", "", "", "", "✓"
    "``HAVING`` Poisson-binomial pre-pass", "", "", "", "", "", "", "", "✓"
+   "``provsql.fallback_compiler`` GUC", "", "", "", "", "", "", "", ""
+   "``provsql.tool_search_path`` GUC", "", "", "", "", "", "", "", ""
 
 Semiring evaluation
 ~~~~~~~~~~~~~~~~~~~
@@ -269,7 +273,7 @@ Continuous random variables
    "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", ""
    "Comparison ``< <= = <> >= >`` (planner-hook rewrite)", "", "", "", "", "", "", "✓", ""
    "``expected(random_variable)`` (unconditional)", "", "", "", "", "", "", "✓", ""
-   "``variance(random_variable)``", "", "", "", "", "", "", "", ""
+   "``variance(random_variable)``", "", "", "", "", "", "", "✓", ""
    "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", ""
    "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", ""
    "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", ""
