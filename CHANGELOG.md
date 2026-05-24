@@ -5,6 +5,144 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.7.0] - 2026-05-24
+
+Major release headlining two additions: a **knowledge-compilation
+surface** that opens up ProvSQL's probability backend to a wide
+range of external compilers and model counters with full
+introspection of every intermediate artifact, and **provenance for
+recursive queries** (`WITH RECURSIVE`) lowered transparently to a
+provenance fixpoint on PostgreSQL 15+.
+
+This is a pure SQL-surface release on the upgrade path: no new gate
+types (the persisted `provenance_gate` enum is unchanged), no mmap
+circuit-format change, and no in-place migration of existing tracked
+relations. `ALTER EXTENSION provsql UPDATE` from 1.6.0 only installs
+the new functions and replaces the body of the `circuit_subgraph`
+introspection helper.
+
+#### Knowledge compilation
+
+A new family of functions exposes every stage of the pipeline behind
+`probability_evaluate`, so a query's Boolean provenance can be
+compiled, inspected, and round-tripped against external tools:
+
+- **CNF / d-DNNF introspection.** `tseytin_cnf(token)` returns the
+  exact DIMACS CNF (Tseytin transformation) the extension feeds to
+  external counters, with optional weight lines and `c input`
+  comments; `tseytin_cnf_mapping` / `tseytin_cnf_mapping_json` map
+  each DIMACS variable back to its provenance input.
+  `compile_to_ddnnf(token, compiler)` returns the compiled d-DNNF in
+  the c2d / d4 `.nnf` interchange format (same variable numbering as
+  the CNF), `compile_to_ddnnf_dot` renders it as GraphViz DOT, and
+  `ddnnf_stats` reports its structural statistics (node / edge / gate
+  counts, smoothness, depth, treewidth, compile time) as `jsonb`.
+- **Tree-decomposition introspection.** `tree_decomposition_dot(token)`
+  renders the min-fill decomposition used by the in-process compiler,
+  annotated with its treewidth.
+- **More compilers and counting backends.** New external d-DNNF
+  compilers `d4v2` and **Panini** (KCBox) with target languages OBDD,
+  OBDD[AND], and Decision-DNNF (R2-D2 / CCDD were evaluated and
+  dropped: their kernelize nodes break d-DNNF decomposability). New
+  weighted-model-counting backends **Ganak**, **SharpSAT-TD**, and
+  **DPMC** join `weightmc` under the `wmc` umbrella. In-process
+  production routes `tree-decomposition`, `interpret-as-dd`, and
+  `default` round out the choices.
+- **`provsql.fallback_compiler` GUC.** Selects the compiler `makeDD`
+  falls back to after `interpretAsDD` and tree-decomposition both
+  decline (default `d4`).
+- **`tool_available(name)`.** Reports whether an external tool
+  resolves on the backend's PATH, honouring `provsql.tool_search_path`
+  and using the same resolver the compilers and counters consult, so
+  the answer matches what a subsequent `probability_evaluate` would
+  see.
+- **`probability_benchmark(token)`.** Times every probability-
+  evaluation method on one circuit (independent, possible-worlds,
+  tree-decomposition, Monte-Carlo, each compiler, each WMC backend),
+  capturing per-method errors so the comparison table is always
+  complete.
+- **Backend hardening.** The compiled d-DNNF is simplified after
+  external compilation, gates are iterated in a deterministic order,
+  WMC result-line parsing scans right-to-left to tolerate trailing
+  diagnostics, and `circuit_subgraph` now reports the longest-path
+  (canonical circuit) depth rather than the shortest-path distance.
+
+#### Recursive queries (`WITH RECURSIVE`)
+
+The planner hook now lowers a recursive CTE whose body touches
+provenance-tracked relations into a naive bottom-up provenance
+fixpoint (the `eval_recursive` driver), evaluated through ProvSQL's
+normal rewriting so the recursive join yields `times`, the untracked
+base yields `gate_one`, and the `UNION` yields the `plus` merge of
+alternative derivations.
+
+- On **acyclic** input the structural fixpoint is reached and the
+  circuit is the universal provenance, sound for any semiring.
+- On **cyclic** input under `provsql.boolean_provenance` (an
+  absorptive setting) evaluation stops at the value-fixpoint bound,
+  yielding a circuit sound for absorptive evaluation; otherwise a
+  `max_iter` guard trips.
+- Gated to PostgreSQL 15+ (the lowering uses `pg_get_querydef` and
+  `pg_analyze_and_rewrite_fixedparams`); on earlier majors recursive
+  CTEs over tracked relations keep raising the unsupported error.
+- Unsupported recursion shapes are rejected cleanly: a recursive term
+  carrying a set-returning function in its target list now raises the
+  unsupported error instead of crashing the planner.
+
+#### Correctness and robustness fixes
+
+- **MMap worker out-of-bounds.** The background worker's
+  `getChildren` handler took `&children[0]` on a leaf gate's empty
+  child vector (undefined behaviour, fatal under a libstdc++
+  assertions build); it now uses `children.data()`.
+- **`foldSemiringIdentities` single-wire collapse.** Parents are
+  rewired instead of duplicating a shared input leaf, fixing
+  over-counting of non-read-once probabilities under
+  `provsql.boolean_provenance`.
+- **Safe-query PK-FD key collision.** PK-FD safe queries now group on
+  the FD-determined value, so colliding keys stay read-once.
+- **UNION mixing untracked and tracked branches.** The untracked
+  branch synthesises `gate_one()` instead of raising.
+- **`count_cmp` Poisson-binomial pre-pass** generalised to product /
+  monus contributors with disjoint private leaves, not just single
+  input leaves.
+- **External-tool cancellation.** Tools run in their own process
+  group and are `SIGKILL`ed on cancel, so `statement_timeout` is
+  honoured; an RAII guard removes the temp directory on throw (no
+  `/tmp` leak).
+
+#### Continuous random variables
+
+`expected` / `variance` / `moment` / `central_moment` / `support` /
+`rv_sample` now also apply to `agg` and `semimod` gates, extending the
+moment / sample / profile surface over aggregated random variables.
+
+#### Window functions (documented limitation)
+
+Window functions remain **unsupported**: they execute and carry tuple
+provenance through, but the windowed computation gets no aggregate-
+provenance semantics. `process_query` now emits a warning once per
+rewritten query level that uses window functions over tracked
+relations, and a top-level window function forces the
+`classify_top_level` verdict to OPAQUE.
+
+#### Documentation
+
+New **knowledge-compilation** user-manual chapter walking the full
+`SQL → circuit → CNF → d-DNNF → probability` pipeline, and **Case
+Study 7** (peer-review assignment and knowledge compilation, with a
+PG15+ recursive-reachability section) with a pg_regress fixture. A
+case-study overview page surfaces the up-to-date feature-coverage
+matrix.
+
+#### Upgrade
+
+`ALTER EXTENSION provsql UPDATE` from 1.6.0 installs the new functions
+and replaces `circuit_subgraph`; no enum or mmap-format change, and no
+metadata migration. The `extension_upgrade` regression canary now
+exercises the 1.7.0 surface (`tseytin_cnf_mapping`, `tool_available`)
+on the full 1.0.0 → 1.7.0 upgrade chain.
+
 ## [1.6.0] - 2026-05-17
 
 Major release headlining the **safe-query rewriter for hierarchical
