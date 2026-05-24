@@ -5,3 +5,7 @@
 # On earlier majors recursive CTEs over tracked relations keep raising
 # "Recursive CTEs not supported", so this test is gated to PG15+.
 test: recursive
+
+# Case Study 7 (peer-review / knowledge compilation): its recursive
+# reachability section is PG15+, so the whole case study is gated here.
+test: casestudy7

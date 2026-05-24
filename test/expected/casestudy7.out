@@ -1,0 +1,87 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+repair_key
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+paper|p_indep
+p1|0.665965
+p2|0.460800
+p3|0.441210
+p4|0.557987
+p5|0.575290
+p6|0.346050
+p7|0.328106
+(7 rows)
+remove_provenance
+
+(1 row)
+p1_indep|p1_exact
+0.425869|0.425869
+(1 row)
+remove_provenance
+
+(1 row)
+hard_exact
+0.881791
+(1 row)
+remove_provenance
+
+(1 row)
+paper|p_having
+p1|0.242257
+p2|0.090400
+p3|0.081093
+p4|0.157007
+p5|0.169143
+p6|0.036450
+p7|0.031894
+(7 rows)
+remove_provenance
+
+(1 row)
+paper|p_indep|p_exact
+p1|0.875000|0.875000
+p2|0.750000|0.750000
+p3|0.500000|0.500000
+p4|0.500000|0.500000
+p5|0.500000|0.500000
+(5 rows)
+remove_provenance
+
+(1 row)
+paper|lineage|prob
+p1|ext(p4,p1) ⊗ ext(p6,p4)|0.720000
+p2|ext(p5,p2) ⊗ ext(p6,p5)|0.490000
+p3|ext(p5,p3) ⊗ ext(p6,p5)|0.420000
+p4|ext(p6,p4)|0.900000
+p5|ext(p6,p5)|0.700000
+(5 rows)
+remove_provenance
+
+(1 row)
+node|reliability
+r2|0.875040
+r3|0.800160
+r4|0.585600
+r5|0.549600
+(4 rows)

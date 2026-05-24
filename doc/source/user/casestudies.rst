@@ -225,9 +225,7 @@ Semiring evaluation
    "``sr_viterbi``", "", "", "", "", "", "", "", ""
    "``sr_lukasiewicz``", "", "", "", "", "", "", "", ""
    "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", ""
-   "``sr_temporal``", "", "", "", "", "✓", "", "", ""
-   "``sr_interval_num``", "", "", "", "", "", "", "", ""
-   "``sr_interval_int``", "", "", "", "", "", "", "", ""
+   "``sr_temporal`` / ``sr_interval_num`` / ``sr_interval_int``", "", "", "", "", "✓", "", "", ""
    "Custom semiring via ``provenance_evaluate``", "", "", "✓", "", "", "", "", ""
    "``aggregation_evaluate``", "", "", "", "", "", "", "", ""
 
@@ -240,7 +238,7 @@ Probabilities
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4
 
    "``set_prob``", "✓", "✓", "✓", "", "", "✓", "", "✓"
-   "``get_prob``", "", "", "", "", "", "", "", ""
+   "``get_prob``", "", "", "", "", "", "", "✓", "✓"
    "``probability_evaluate`` (default fallback)", "", "✓", "✓", "", "", "✓", "", "✓"
    "``'independent'`` method", "", "", "", "", "", "", "✓", "✓"
    "``'possible-worlds'`` method", "✓", "✓", "", "", "", "", "", ""
