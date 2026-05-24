@@ -100,9 +100,25 @@ SELECT (get_table_info('upgrade_smoke'::regclass::oid)).kind
        = ARRAY['upgrade_smoke'::regclass::oid]
          AS post_upgrade_ancestry_roundtrip;
 
+-- 1.7.0 surface check: the knowledge-compilation introspection surface
+-- and the external-tool probe.  A SELECT DISTINCT collapses two tracked
+-- rows into one plus over two input gates; tseytin_cnf_mapping (backed
+-- by the new tseytin_cnf_mapping_json C binding) returns one row per
+-- input, so the count is the number of provenance inputs (2).  This
+-- exercises the new Tseytin-CNF surface in process, with no external
+-- compiler.  tool_available('...') on a name that never resolves is the
+-- env-independent probe for the new resolver binding.
+CREATE TABLE upgrade_kc AS
+  SELECT provenance() AS prov
+  FROM (SELECT DISTINCT 1 AS one FROM upgrade_smoke WHERE name IN ('alice','bob')) t;
+SELECT remove_provenance('upgrade_kc');
+SELECT count(*) AS tseytin_input_vars
+  FROM upgrade_kc, LATERAL tseytin_cnf_mapping(prov);
+SELECT tool_available('provsql-no-such-tool') AS bogus_tool_available;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
-           upgrade_smoke_right, upgrade_safe_q;
+           upgrade_smoke_right, upgrade_safe_q, upgrade_kc;
 RESET client_min_messages;
 
 \else

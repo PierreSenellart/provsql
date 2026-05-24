@@ -42,3 +42,12 @@ set_ancestors
 post_upgrade_kind|post_upgrade_ancestry_roundtrip
 tid|t
 (1 row)
+remove_provenance
+
+(1 row)
+tseytin_input_vars
+2
+(1 row)
+bogus_tool_available
+f
+(1 row)
