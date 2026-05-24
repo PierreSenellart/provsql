@@ -36,3 +36,7 @@ node|reliability|exact
 3|0.720000|0.720000
 4|0.741600|0.741600
 (4 rows)
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)

@@ -92,3 +92,22 @@ SELECT * FROM cyc_result ORDER BY node;
 DROP TABLE cyc_result;
 DROP TABLE cyc_edge;
 SET provsql.boolean_provenance = off;
+
+-- A recursive term with a set-returning function in its target list
+-- (e.g. SELECT unnest(...)) is rejected with the usual unsupported-shape
+-- error rather than crashing the backend.  The driver would otherwise build
+-- a per-round INSERT ... SELECT ... UNION SELECT srf(...) whose planning
+-- leaves a NULL expr in PostgreSQL's PathTarget (a SIGSEGV in
+-- get_expr_width); lower_recursive_cte bails out on the SRF instead.
+CREATE TABLE srf_edge(src int, dst int);
+INSERT INTO srf_edge VALUES (1, 2), (2, 3);
+SELECT add_provenance('srf_edge');
+\set VERBOSITY terse
+WITH RECURSIVE reach(node) AS (
+    SELECT 1
+  UNION
+    SELECT unnest(ARRAY[e.dst]) FROM srf_edge e JOIN reach r ON e.src = r.node
+)
+SELECT node FROM reach ORDER BY node;
+\set VERBOSITY default
+DROP TABLE srf_edge;

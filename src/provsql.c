@@ -388,6 +388,23 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
       ((SetOperationStmt *) cteq->setOperations)->all)
     return false;
 
+  /* Reject a term whose target list contains a set-returning function
+   * (e.g. SELECT unnest(...)).  Such a CTE is not a provenance fixpoint we
+   * can lower, and -- more importantly -- the per-round
+   * INSERT ... SELECT ... UNION SELECT srf(...) the driver would build
+   * crashes PostgreSQL's planner: the SRF tlist split leaves a NULL expr
+   * in the PathTarget, which get_expr_width then dereferences.  Bail out so
+   * the caller raises the usual "Recursive CTEs not supported" error. */
+  {
+    ListCell *lc;
+    foreach(lc, cteq->rtable) {
+      RangeTblEntry *sub = (RangeTblEntry *) lfirst(lc);
+      if (sub->rtekind == RTE_SUBQUERY && sub->subquery != NULL &&
+          sub->subquery->hasTargetSRFs)
+        return false;
+    }
+  }
+
   /* Deparse the whole recursive CTE body to SQL.  It references the working
    * relation by the CTE name; the driver creates a temp table of that name. */
   body_text = pg_get_querydef(cteq, false);
@@ -4422,6 +4439,17 @@ static Query *process_query(const constants_t *constants, Query *q,
     if (supported) {
       Expr *provenance;
       List *rv_cmps;
+
+      /* Window functions are not supported: their per-row result has no
+       * aggregate-provenance semantics.  The query still executes and each
+       * output row carries its input row's tuple provenance, but the
+       * windowed computation itself (e.g. SUM() OVER ...) is an opaque
+       * scalar, not an agg_token.  Warn once per rewritten query level that
+       * actually involves provenance-tracked relations. */
+      if (q->hasWindowFuncs)
+        provsql_warning("window functions are not supported; provenance is "
+                        "tracked per input row only, and the windowed "
+                        "computation is treated as an opaque scalar");
 
       /* Single unified pass over WHERE: each top-level conjunct is
        * routed to the right evaluation site (HAVING for agg_token,
