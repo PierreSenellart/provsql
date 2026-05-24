@@ -80,6 +80,10 @@ INTERNAL_FUNCTIONS = {
     'numeric_lt_agg_token', 'numeric_le_agg_token',
     'numeric_gt_agg_token', 'numeric_ge_agg_token',
     'numeric_comp_agg_token',
+    # Recursive-CTE fixpoint driver: invoked by the planner hook
+    # (lower_recursive_cte) when lowering a WITH RECURSIVE query, never
+    # called directly by users.
+    'eval_recursive',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',
