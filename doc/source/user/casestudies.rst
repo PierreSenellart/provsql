@@ -187,6 +187,7 @@ Circuit inspection
    "``get_nb_gates``", "", "✓", "", "", "", "", "", ""
    "``get_infos``", "", "", "", "", "", "", "✓", ""
    "``get_extra``", "", "", "", "", "", "", "✓", ""
+   "``circuit_subgraph`` / ``resolve_input`` (Studio circuit mode)", "", "", "", "", "", "", "✓", "✓"
    "``simplified_circuit_subgraph``", "", "", "", "", "", "", "(✓)", "✓"
 
 Knowledge compilation and safe queries
@@ -198,10 +199,14 @@ Knowledge compilation and safe queries
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4
 
    "``provsql.boolean_provenance`` GUC", "", "", "", "", "", "", "", "✓"
+   "``provsql.classify_top_level`` GUC (TID/BID pills)", "", "", "", "", "", "", "", "✓"
    "Safe-query rewriter (hierarchical / read-once)", "", "", "", "", "", "", "", "✓"
    "Tseytin CNF export (DIMACS)", "", "", "", "", "", "", "", "✓"
    "``tseytin_cnf`` / ``tseytin_cnf_mapping``", "", "", "", "", "", "", "", "✓"
    "``ddnnf_stats``", "", "", "", "", "", "", "", "✓"
+   "``compile_to_ddnnf`` / ``compile_to_ddnnf_dot``", "", "", "", "", "", "", "", "✓"
+   "``tree_decomposition_dot``", "", "", "", "", "", "", "", "✓"
+   "``tool_available`` (compiler-picker filter)", "", "", "", "", "", "", "", "✓"
    "``HAVING`` Poisson-binomial pre-pass", "", "", "", "", "", "", "", "✓"
 
 Semiring evaluation
@@ -247,6 +252,7 @@ Probabilities
    "``'tree-decomposition'`` method", "(✓)", "✓", "", "", "", "✓", "✓", "✓"
    "``'compilation'`` (d4 / c2d / dsharp / minic2d)", "(✓)", "✓", "", "", "", "", "", "✓"
    "``'weightmc'`` method", "", "", "", "", "", "", "", "✓"
+   "``probability_benchmark``", "", "", "", "", "", "", "", "✓"
    "``expected(COUNT/SUM/MIN/MAX)``", "", "", "", "", "", "✓", "✓", ""
    "``repair_key`` (block-independent, ``mulinput``)", "", "", "", "", "", "✓", "", "✓"
    "``provsql.monte_carlo_seed`` GUC", "", "", "", "", "", "", "✓", ""
@@ -273,6 +279,7 @@ Continuous random variables
    "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", ""
    "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", ""
    "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", ""
+   "``rv_analytical_curves`` (PDF/CDF overlay)", "", "", "", "", "", "", "✓", ""
 
 Shapley and Banzhaf values
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
