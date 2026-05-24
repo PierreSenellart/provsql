@@ -106,7 +106,7 @@ INTERNAL_FUNCTIONS = {
     # Temporal internals
     'update_provenance',
     # GUC variables (not functions)
-    'aggtoken_text_as_uuid', 'tool_search_path',
+    'aggtoken_text_as_uuid', 'tool_search_path', 'boolean_provenance',
     # random_variable type internals (I/O, internal builder,
     # parameter-validation helper)
     'random_variable_in', 'random_variable_out',
@@ -167,8 +167,10 @@ INTERNAL_FUNCTIONS = {
     'avg_rv_ffunc', 'sum_rv_sfunc', 'sum_rv_ffunc', 'product_rv_ffunc',
     # Internal C entry point behind the random_variable aggregates above.
     'rv_aggregate_semimod',
-    # Doxygen artefacts (not actual functions)
-    'org', 'sql', 'html',
+    # Doxygen artefacts (not actual functions): 'org'/'sql'/'html' from
+    # URLs, 'c' from `@c provsql.c` / `@c src/provsql.c` filename references
+    # in the recursive-CTE lowering doc comments.
+    'org', 'sql', 'html', 'c',
     # Internal per-method timing helper behind probability_benchmark
     # (the user-facing helpers compile_to_ddnnf_dot, tseytin_cnf,
     # tree_decomposition_dot, probability_benchmark, tool_available are
