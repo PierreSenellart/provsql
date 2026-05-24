@@ -531,7 +531,7 @@ constants_t get_constants(bool failure_if_not_possible)
 {
   int start=0, end=constants_cache_len-1;
   database_constants_t *constants_cache2;
-
+  constants_t constants;
 
   while(end>=start) {
     unsigned mid=(start+end)/2;
@@ -543,12 +543,26 @@ constants_t get_constants(bool failure_if_not_possible)
       return constants_cache[mid].constants;
   }
 
+  constants=initialize_constants(failure_if_not_possible);
+
+  /* Only memoize successful lookups.  A failed lookup (ok==false) means
+   * the provsql extension was not fully visible to this backend at this
+   * point -- e.g. the connection's first planned query ran before
+   * CREATE EXTENSION, or during a DROP/CREATE/ALTER EXTENSION ... UPDATE
+   * window.  Caching that failure would permanently disable provenance
+   * tracking on the backend: a long-lived pooled connection would never
+   * recover, silently dropping the provsql column on every query until
+   * reset_constants_cache() is called by hand.  Returning without
+   * caching lets the next call retry until the extension is available. */
+  if(!constants.ok)
+    return constants;
+
   constants_cache2=calloc(constants_cache_len+1, sizeof(database_constants_t));
   for(unsigned i=0; i<start; ++i)
     constants_cache2[i]=constants_cache[i];
 
   constants_cache2[start].database=MyDatabaseId;
-  constants_cache2[start].constants=initialize_constants(failure_if_not_possible);
+  constants_cache2[start].constants=constants;
 
   for(unsigned i=start; i<constants_cache_len; ++i)
     constants_cache2[i+1]=constants_cache[i];
