@@ -2,11 +2,13 @@
  * @file external_tool.h
  * @brief Helpers for invoking external command-line tools.
  *
- * @c run_external_tool() wraps @c system() so that the @c provsql.tool_search_path
- * GUC, if set, is prepended to @c $PATH for the duration of the call. The
- * server's pre-existing @c PATH is restored afterwards. Used by the d-DNNF
- * compilers (d4, c2d, minic2d, dsharp), the WeightMC model counter, and the
- * graph-easy DOT renderer.
+ * @c run_external_tool() runs a shell command line with the
+ * @c provsql.tool_search_path GUC, if set, prepended to @c $PATH for the
+ * duration of the call (the server's pre-existing @c PATH is restored
+ * afterwards).  The command runs in its own process group so that a
+ * statement_timeout / pg_cancel_backend can stop it: on a pending cancel
+ * the whole group is @c SIGKILLed.  Used by the d-DNNF compilers (d4, c2d,
+ * minic2d, dsharp), the model counters, and the graph-easy DOT renderer.
  *
  * @c find_external_tool() walks the same locations and reports whether a
  * given binary is present and executable, so callers can fail with an
@@ -40,13 +42,19 @@ inline std::string format_external_tool_status(int, const std::string &tool) {
 }
 #else
 /**
- * @brief Run a shell command line, optionally extending @c PATH.
+ * @brief Run a shell command line in its own process group, optionally
+ *        extending @c PATH, interruptible by query cancel / statement_timeout.
  *
  * If @c provsql_tool_search_path is non-empty, it is prepended (with @c :)
- * to @c $PATH before @c system() is called and restored afterwards.
+ * to @c $PATH for the duration and restored afterwards.  The command runs
+ * via @c /bin/sh @c -c as a process-group leader; while it runs the parent
+ * polls for a pending cancel/terminate and, if one fires, @c SIGKILLs the
+ * whole group (reaching tools that fork workers) and lets
+ * @c CHECK_FOR_INTERRUPTS raise it.
  *
  * @param cmdline  Shell command line, passed verbatim to @c /bin/sh -c.
- * @return         The raw return value of @c system().
+ * @return         A @c wait(2) status (decode with @c WIFEXITED etc., as a
+ *                 @c system() return), or -1 if @c fork failed.
  */
 int run_external_tool(const std::string &cmdline);
 

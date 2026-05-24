@@ -67,11 +67,10 @@ using namespace std;
  * That makes a SIGINT delivered to the backend (e.g. via
  * @c pg_cancel_backend) outside of a @c system() wait turn into a
  * proper 57014 cancel at the next @c CHECK_FOR_INTERRUPTS instead of
- * being silently absorbed.  (The matching case where @c system() is
- * blocked when the timer's @c kill(-MyProcPid, SIGINT) fires is
- * handled in @c BooleanCircuit::compilation, since glibc @c system()
- * temporarily @c SIG_IGNs SIGINT in the parent so this handler does
- * not run for it.)
+ * being silently absorbed.  (The matching case where an external
+ * compiler is running is handled in @c run_external_tool, which runs the
+ * tool in its own process group and @c SIGKILLs that group on a pending
+ * cancel, then lets @c CHECK_FOR_INTERRUPTS raise it.)
  */
 static void provsql_sigint_handler (int)
 {

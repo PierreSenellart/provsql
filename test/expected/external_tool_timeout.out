@@ -1,0 +1,8 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+NOTICE:  hanging external tool interrupted by statement_timeout
+remove_provenance
+
+(1 row)

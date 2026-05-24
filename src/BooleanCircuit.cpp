@@ -544,12 +544,10 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
 
   int retvalue = run_external_tool(cmdline);
 
-#ifndef TDKC
-  if (WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
-    InterruptPending = true;
-    QueryCancelPending = true;
-  }
-#endif
+  /* run_external_tool runs the child in its own process group and raises
+   * any pending cancel/terminate itself (after killing the child), so a
+   * cancel surfaces as 57014 here rather than as a "killed by signal"
+   * CircuitException below. */
   CHECK_FOR_INTERRUPTS();
 
   if (retvalue)
@@ -764,44 +762,12 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   int retvalue=run_external_tool(cmdline);
 
-  // PG's StatementTimeoutHandler (and pg_cancel_backend, etc.) sends
-  // SIGINT to the whole process group via kill(-MyProcPid, SIGINT).
-  // The child compiler in our group dies on default SIGINT, but
-  // glibc system() temporarily SIG_IGNs SIGINT in the parent for the
-  // duration of the wait, so the same signal is silently discarded
-  // here and InterruptPending / QueryCancelPending are never set.
-  // Translate that wstatus into a proper PG cancel so the
-  // CHECK_FOR_INTERRUPTS below raises 57014 instead of us either
-  // throwing "Error executing", or falling through to the legacy
-  // d4-syntax retry on the corpse (which then mis-parses an empty
-  // .nnf as "Unreadable d-DNNF" XX000).
-#ifndef TDKC
-  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
-    InterruptPending = true;
-    QueryCancelPending = true;
-  }
-#endif
-
-  CHECK_FOR_INTERRUPTS();
-
-  // PG's StatementTimeoutHandler (and pg_cancel_backend, etc.) sends
-  // SIGINT to the whole process group via kill(-MyProcPid, SIGINT).
-  // The child compiler in our group dies on default SIGINT, but
-  // glibc system() temporarily SIG_IGNs SIGINT in the parent for the
-  // duration of the wait, so the same signal is silently discarded
-  // here and InterruptPending / QueryCancelPending are never set.
-  // Translate that wstatus into a proper PG cancel so the
-  // CHECK_FOR_INTERRUPTS below raises 57014 instead of us either
-  // throwing "Error executing", or falling through to the legacy
-  // d4-syntax retry on the corpse (which then mis-parses an empty
-  // .nnf as "Unreadable d-DNNF" XX000).
-#ifndef TDKC
-  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
-    InterruptPending = true;
-    QueryCancelPending = true;
-  }
-#endif
-
+  // run_external_tool runs the compiler in its own process group and
+  // raises any pending cancel/terminate itself (after killing the child),
+  // so a statement_timeout / pg_cancel_backend surfaces as 57014 here
+  // rather than being masked by the "killed by signal" throw -- or by the
+  // legacy d4-syntax retry below mis-parsing a half-written .nnf as
+  // "Unreadable d-DNNF" (XX000).
   CHECK_FOR_INTERRUPTS();
 
   if(retvalue && compiler=="d4") {
@@ -812,12 +778,6 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     new_d4 = false;
     cmdline = "d4 "+filename+" -out="+outfilename;
     retvalue=run_external_tool(cmdline);
-#ifndef TDKC
-    if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
-      InterruptPending = true;
-      QueryCancelPending = true;
-    }
-#endif
   }
 
   CHECK_FOR_INTERRUPTS();
@@ -1003,12 +963,6 @@ double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
                       + " > " + outfilename + " 2>&1";
 
   int retvalue = run_external_tool(cmdline);
-#ifndef TDKC
-  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
-    InterruptPending = true;
-    QueryCancelPending = true;
-  }
-#endif
   CHECK_FOR_INTERRUPTS();
   if(retvalue)
     throw CircuitException(format_external_tool_status(retvalue, "ganak"));
@@ -1087,12 +1041,6 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
       + " > " + outfilename + " 2>&1";
 
   int retvalue = run_external_tool(cmdline);
-#ifndef TDKC
-  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
-    InterruptPending = true;
-    QueryCancelPending = true;
-  }
-#endif
   CHECK_FOR_INTERRUPTS();
   if(retvalue)
     throw CircuitException(format_external_tool_status(retvalue, "sharpsat-td"));
@@ -1151,12 +1099,6 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
       + " > " + outfilename + " 2>&1";
 
   int retvalue = run_external_tool(cmdline);
-#ifndef TDKC
-  if(WIFSIGNALED(retvalue) && WTERMSIG(retvalue) == SIGINT) {
-    InterruptPending = true;
-    QueryCancelPending = true;
-  }
-#endif
   CHECK_FOR_INTERRUPTS();
   if(retvalue)
     throw CircuitException(format_external_tool_status(retvalue, "dpmc"));

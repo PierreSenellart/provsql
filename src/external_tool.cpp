@@ -13,6 +13,8 @@ extern "C" {
 
 #include <signal.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/wait.h>
 }
@@ -30,6 +32,72 @@ extern "C" {
 // and bash's default on macOS.
 static const char *DEFAULT_PATH =
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/*
+ * Run @p cmdline via @c /bin/sh @c -c in its OWN process group, polling for
+ * a query cancel / backend termination while it runs.  Returns a wait(2)
+ * status (so @c WIFEXITED / @c WIFSIGNALED / @c WEXITSTATUS decode exactly
+ * as the old @c system() return did), or -1 if @c fork failed.
+ *
+ * Why not @c system(): it runs the child in the BACKEND's process group,
+ * and statement_timeout / pg_cancel_backend deliver SIGINT to that group
+ * (PostgreSQL backends @c setsid, and @c StatementTimeoutHandler does
+ * @c kill(-MyProcPid, SIGINT)).  A well-behaved tool dies on it, but a tool
+ * that catches/ignores SIGINT -- or that forks a worker into another
+ * process group, as KCBox/Panini does -- survives, so the timeout is
+ * silently not honoured (a single long OBDD compile runs unbounded).  Here
+ * the child leads its own process group, and when a cancel/terminate is
+ * pending we @c SIGKILL that whole group: uncatchable, and it reaches any
+ * forked workers.  The pending interrupt is then raised by the
+ * @c CHECK_FOR_INTERRUPTS() in @c run_external_tool, with the child reaped.
+ */
+static int run_in_own_pgroup(const std::string &cmdline)
+{
+  fflush(NULL);                       /* flush stdio before fork, like system() */
+
+  pid_t child = fork();
+  if (child < 0)
+    return -1;                        /* mirror system()'s failure return */
+
+  if (child == 0) {
+    /* Child: lead a new process group so a later killpg targets this whole
+     * subtree (including tools that fork their own workers) and never the
+     * backend.  exec resets caught signals to default, so SIGINT / SIGTERM
+     * / SIGKILL terminate the tool normally. */
+    setpgid(0, 0);
+    execl("/bin/sh", "sh", "-c", cmdline.c_str(), (char *) NULL);
+    _exit(127);                       /* exec failed: shell-style "not found" */
+  }
+
+  /* Parent: close the setpgid race (whichever process runs first wins). */
+  setpgid(child, child);
+
+  int status = 0;
+  for (;;) {
+    pid_t w = waitpid(child, &status, WNOHANG);
+    if (w == child)
+      break;                          /* tool finished; status is set */
+    if (w < 0 && errno != EINTR) {
+      status = -1;                    /* unexpected; surface as failure */
+      break;
+    }
+    /* A pending query cancel (statement_timeout, pg_cancel_backend) or
+     * backend termination (pg_terminate_backend / SIGTERM) must stop the
+     * tool now.  Kill its whole process group hard and reap it.  We do NOT
+     * call CHECK_FOR_INTERRUPTS() while the child is alive: a throw there
+     * would leak the running child as an orphan -- the very bug being
+     * fixed.  The caller's CHECK_FOR_INTERRUPTS() (below) raises the
+     * pending interrupt once the child is reaped. */
+    if (QueryCancelPending || ProcDiePending) {
+      killpg(child, SIGKILL);
+      pid_t r;
+      do { r = waitpid(child, &status, 0); } while (r < 0 && errno == EINTR);
+      break;
+    }
+    pg_usleep(10000);                 /* 10 ms; an arriving signal wakes us via EINTR */
+  }
+  return status;
+}
 
 int run_external_tool(const std::string &cmdline) {
   bool override_path = (provsql_tool_search_path != NULL
@@ -49,7 +117,7 @@ int run_external_tool(const std::string &cmdline) {
     setenv("PATH", new_path.c_str(), 1);
   }
 
-  int rv = system(cmdline.c_str());
+  int rv = run_in_own_pgroup(cmdline);
 
   if (override_path) {
     if (had_path)
@@ -57,6 +125,13 @@ int run_external_tool(const std::string &cmdline) {
     else
       unsetenv("PATH");
   }
+
+  /* If a cancel/terminate fired while the tool ran, run_in_own_pgroup has
+   * already killed and reaped it; raise the interrupt now (cleanly, with no
+   * child left running) so it surfaces as query-cancelled rather than being
+   * masked by a downstream "tool killed by signal" error.  A no-op when no
+   * interrupt is pending. */
+  CHECK_FOR_INTERRUPTS();
 
   return rv;
 }
@@ -77,21 +152,10 @@ std::string find_external_tool(const std::string &name) {
   // five tool names provsql actually uses ("d4", "c2d", "minic2d",
   // "dsharp", "weightmc", "graph-easy") contain none.
   std::string check = "command -v '" + name + "' >/dev/null 2>&1";
+  // run_external_tool runs the probe in its own process group and raises
+  // any pending statement_timeout / cancel itself (so it does not surface
+  // as a spurious "tool not found").
   int rv = run_external_tool(check);
-
-  // If statement_timeout (or any cancel) fired while command -v was
-  // running, the SIGINT kills the child but glibc's system() SIG_IGNs it
-  // in the parent, leaving InterruptPending unset. Without this
-  // translation, the empty return below would surface as "tool not
-  // found on PATH" (XX000), which the d4_timeout test's
-  // EXCEPTION WHEN query_canceled clause cannot catch. Mirrors the
-  // post-system() recovery pattern used after the actual compiler call
-  // in BooleanCircuit::compilation.
-  if (WIFSIGNALED(rv) && WTERMSIG(rv) == SIGINT) {
-    InterruptPending = true;
-    QueryCancelPending = true;
-    CHECK_FOR_INTERRUPTS();
-  }
 
   return rv == 0 ? name : "";
 }
