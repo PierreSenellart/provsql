@@ -1,3 +1,11 @@
+# Force LF for the regression suite regardless of the checkout host's
+# core.autocrlf: pg_regress compares against LF results from the Unix
+# backend, and psql's `\!` shell escapes (external_tool_timeout,
+# tool_search_path) break if the command line carries a trailing CR
+# (the CR attaches to the last shell token, e.g. a redirect target).
+test/sql/*.sql        text eol=lf
+test/expected/*.out   text eol=lf
+
 # Exclude from git archive (release tarballs)
 .github/        export-ignore
 branding/       export-ignore
