@@ -19,8 +19,9 @@ feature_row:
     image_path: /assets/images/query-rewriting.png
     alt: "Diagram of a query Q rewritten into Q-hat by ProvSQL's planner hook, then evaluated by PostgreSQL with provenance UUIDs in the result."
     excerpt: >
-      SQL queries are automatically rewritten to track provenance circuits.
-      No changes to your schema or application code required.
+      SQL queries are automatically rewritten to track provenance circuits,
+      across joins, aggregation, set operations, CTEs, and recursive queries
+      (`WITH RECURSIVE`). No changes to your schema or application code required.
     url: "/overview/#query-rewriting"
     btn_label: "Learn more"
     btn_class: "btn--primary"
@@ -41,11 +42,13 @@ feature_row:
     excerpt: >
       Compute tuple-independent probabilities of query answers via
       independent-circuit evaluation, tree decomposition, d-DNNF
-      knowledge compilation (d4 / c2d / dsharp / minic2d), Monte
-      Carlo, or weighted model counting. An opt-in planner-side
-      rewrite recognises hierarchical conjunctive queries (and a
-      family of FD-aware extensions) and routes them through the
-      linear-time independent evaluator.
+      knowledge compilation (d4, d4v2, c2d, dsharp, minic2d, Panini),
+      Monte Carlo, or weighted model counting (weightMC, Ganak,
+      SharpSAT-TD, DPMC). Inspect every intermediate artifact (CNF,
+      compiled d-DNNF, tree decomposition) or benchmark all methods at
+      once. An opt-in planner-side rewrite recognises hierarchical
+      conjunctive queries (and a family of FD-aware extensions) and
+      routes them through the linear-time independent evaluator.
     url: "/docs/user/probabilities.html"
     btn_label: "Probability docs"
     btn_class: "btn--primary"

@@ -34,6 +34,7 @@ The rewriter handles:
 - GROUP BY, SELECT DISTINCT
 - UNION / UNION ALL / EXCEPT
 - VALUES
+- Common table expressions (`WITH`), including `WITH RECURSIVE` on PostgreSQL 15+
 - UPDATE / INSERT / DELETE (when `provsql.update_provenance` is enabled)
 
 Semiring evaluations, probability computation, and Shapley/Banzhaf values
