@@ -5,6 +5,16 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.7.1] - 2026-05-24
+
+- Fix a bug where a backend that first planned a query before the
+  provsql extension was fully available (e.g. a pooled connection
+  predating `CREATE EXTENSION`, or one active during `ALTER EXTENSION …
+  UPDATE`) could permanently stop tracking provenance, silently returning
+  results without the provsql column for the rest of the session. Failed
+  constant-cache lookups are no longer memoized, so affected backends
+  recover automatically.
+
 ## [1.7.0] - 2026-05-24
 
 Major release headlining two additions: a **knowledge-compilation
