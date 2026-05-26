@@ -22,6 +22,7 @@ extern "C" {
 #include "external_tool.h"
 
 #include <string>
+#include <unordered_map>
 
 // PATH that /bin/sh resolves binaries against when the environment has no
 // PATH set. PostgreSQL backends inherit no PATH from systemd, so
@@ -142,6 +143,25 @@ std::string find_external_tool(const std::string &name) {
   if (name.find('/') != std::string::npos)
     return access(name.c_str(), X_OK) == 0 ? name : "";
 
+  // Per-session positive-result cache, keyed on (tool_search_path, name).
+  // find_external_tool runs on every compilation() / Ganak() / ... call and
+  // each miss forks /bin/sh for `command -v`; memoizing the (common)
+  // successful lookups removes that fork on the hot path. Keying on the
+  // current provsql.tool_search_path means a runtime change to that
+  // PGC_USERSET GUC simply misses and re-probes -- no explicit invalidation.
+  // We cache positives only and re-probe on miss, mirroring the deliberate
+  // "don't cache failed lookups so pooled backends self-heal" choice for
+  // get_constants(): a tool installed mid-session is picked up on the next
+  // call rather than being remembered as absent. The embedded '\0' separates
+  // the two fields unambiguously (a C-string GUC value cannot contain it).
+  static std::unordered_map<std::string, std::string> tool_cache;
+  std::string key =
+    std::string(provsql_tool_search_path ? provsql_tool_search_path : "")
+    + '\0' + name;
+  auto cached = tool_cache.find(key);
+  if (cached != tool_cache.end())
+    return cached->second;
+
   // Delegate the search to /bin/sh via `command -v`, routed through
   // run_external_tool() so the GUC override is honoured. This reuses
   // exactly the PATH resolution that the eventual tool invocation will
@@ -157,7 +177,11 @@ std::string find_external_tool(const std::string &name) {
   // as a spurious "tool not found").
   int rv = run_external_tool(check);
 
-  return rv == 0 ? name : "";
+  if (rv == 0) {
+    tool_cache[key] = name;
+    return name;
+  }
+  return "";
 }
 
 std::string format_external_tool_status(int rv, const std::string &tool) {
