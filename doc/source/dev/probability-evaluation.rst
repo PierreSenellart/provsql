@@ -203,7 +203,9 @@ Weighted Model Counting
 
 :cfunc:`BooleanCircuit::wmcCount` drives every weighted model
 counter through one registry-selected path: it looks the named tool
-up in the external-tool registry, writes the weighted CNF in the
+up in the external-tool registry (or, with no tool named, picks the
+highest-preference counter whose binary resolves on PATH), writes
+the weighted CNF in the
 dialect the record's ``parser`` implies, runs the record's command
 template, and reads the count back the same way.  Two conventions
 are understood: MCC-2024 weighted DIMACS with a ``c s exact`` result
@@ -274,7 +276,8 @@ Currently Supported Methods
      - :cfunc:`BooleanCircuit::wmcCount` -- weighted model counting
        via the registered counter named in the argument
        (``tool[;tool_args]``: ``ganak``, ``sharpsat-td``, ``dpmc``,
-       ``weightmc``, or any registered ``wmc`` tool).
+       ``weightmc``, or any registered ``wmc`` tool).  With no tool
+       named it selects the highest-preference available counter.
    * - ``"weightmc"``
      - Backward-compatible alias for ``"wmc"`` with the ``weightmc``
        tool; takes ``delta;epsilon`` as argument.
@@ -292,7 +295,10 @@ Currently Supported Methods
      - Fallback chain: try ``independent``, then
        :cfunc:`BooleanCircuit::interpretAsDD` (interpret the circuit
        structure directly as a d-D circuit), then
-       ``tree-decomposition``, then ``compilation`` with ``d4``.
+       ``tree-decomposition``, then ``compilation`` with the
+       preference-ranked fallback compiler
+       (``provsql.fallback_compiler`` when available, otherwise the
+       highest-preference compiler whose binary resolves on PATH).
 
 The branches for ``"compilation"``, ``"tree-decomposition"``, and
 the default all funnel through :cfunc:`BooleanCircuit::makeDD`,
