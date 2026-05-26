@@ -212,10 +212,14 @@ will have correlated tuples.
 
 A common case of correlated data is a *block-independent database*, where
 tuples are grouped into mutually-exclusive blocks (exactly one tuple per
-block is assumed to be true). :sqlfunc:`repair_key` restructures the
-provenance circuit to enforce this mutual exclusivity: it takes a table
-and a key attribute, and rewrites each group of tuples sharing the same
-key value into independent, mutually-exclusive alternatives.
+block is assumed to be true). :sqlfunc:`repair_key` sets up provenance
+to enforce this mutual exclusivity: it takes a table and a key
+attribute, and makes each group of tuples sharing the same key value
+into mutually-exclusive alternatives, with the groups independent of
+one another.  Call :sqlfunc:`repair_key` directly on a table without
+provenance, as in the example below; it adds the ``provsql`` column
+itself and is used *instead of* :sqlfunc:`add_provenance`, not after
+it.
 
 .. code-block:: postgresql
 

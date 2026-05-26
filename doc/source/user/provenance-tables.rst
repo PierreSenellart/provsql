@@ -66,10 +66,14 @@ After enabling provenance, every query that reads from ``mytable`` will
 automatically carry provenance annotations in its result set.
 
 The table is recorded as TID (tuple-independent) in ProvSQL's
-per-database metadata store.  :sqlfunc:`repair_key` (see
-:doc:`probabilities`) re-registers it as BID with the chosen
-block-key columns.  This classification is consulted by the
-safe-query rewriter (the ``provsql.boolean_provenance`` opt-in
+per-database metadata store.  To set up a table as BID
+(block-independent) instead, use :sqlfunc:`repair_key` (see
+:doc:`probabilities`) on a table that does *not* yet have
+provenance: it adds the ``provsql`` column itself and registers the
+table as BID with the chosen block-key columns.  Do not call
+:sqlfunc:`add_provenance` first; :sqlfunc:`repair_key` is an
+alternative to it, not a follow-up.  This classification is consulted
+by the safe-query rewriter (the ``provsql.boolean_provenance`` opt-in
 optimisation, see :doc:`probabilities`) to verify that any
 projection it introduces preserves the table's block-key alignment.
 
