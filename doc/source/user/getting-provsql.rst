@@ -50,7 +50,7 @@ Prerequisites
 
    * `c2d <http://reasoning.cs.ucla.edu/c2d/download.php>`_
    * `d4 <https://github.com/crillab/d4>`_ and its rewrite
-     `d4v2 <https://github.com/crillab/d4v2>`_
+     `d4v2 <https://github.com/jm62300/d4>`_
    * `dsharp <https://github.com/QuMuLab/dsharp>`_
    * `minic2d <http://reasoning.cs.ucla.edu/minic2d/>`_ (also requires
      ``hgr2htree``)
