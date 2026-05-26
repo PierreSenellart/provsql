@@ -2,7 +2,11 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
--- The registry is seeded per backend with every external tool ProvSQL can
+-- Start from a clean slate: the overrides table persists across sessions, so
+-- a previous run (or another test) must not bias the seed listing below.
+DELETE FROM tool_overrides;
+
+-- The registry is seeded (in C) with every external tool ProvSQL can
 -- invoke: the d-DNNF compilers (d4, d4v2, c2d, minic2d, dsharp), the three
 -- Panini variants (all running the 'panini' binary), the weighted model
 -- counters (sharpsat-td, ganak, weightmc, dpmc), and the graph-easy ASCII
@@ -28,6 +32,9 @@ SELECT register_tool('acme-kc', executable => '/opt/acme/akc',
 SELECT name, executable, operations, input_formats, output_format, parser,
        argtpl, preference
   FROM tools WHERE name='acme-kc';
+-- The registration is persisted (an override row, not a tombstone), so it
+-- survives across sessions / backends and dump-restore.
+SELECT name, removed FROM tool_overrides WHERE name='acme-kc';
 
 -- Re-registering the same name replaces the record (no duplicate row).
 SELECT register_tool('acme-kc', executable => '/usr/bin/akc',
@@ -96,3 +103,7 @@ SELECT
   has_function_privilege('public', 'provsql.unregister_tool(text)', 'EXECUTE') AS unregister,
   has_function_privilege('public', 'provsql.set_tool_enabled(text,boolean)', 'EXECUTE') AS set_enabled,
   has_function_privilege('public', 'provsql.set_tool_preference(text,int)', 'EXECUTE') AS set_preference;
+
+-- This test persists overrides; reset so the seed is restored for any later
+-- test sharing the regression database.
+DELETE FROM tool_overrides;

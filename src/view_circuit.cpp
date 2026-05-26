@@ -25,6 +25,7 @@ PG_FUNCTION_INFO_V1(view_circuit);
 }
 
 #include "DotCircuit.h"
+#include "tool_registry_sync.h"
 #include <csignal>
 #include <utility>
 #include <sstream>
@@ -181,6 +182,7 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
 /** @brief PostgreSQL-callable wrapper for view_circuit(). */
 Datum view_circuit(PG_FUNCTION_ARGS)
 {
+  provsql_sync_tool_registry();  // honour persisted tool-registry overrides
   try
   {
     Datum token = PG_GETARG_DATUM(0);

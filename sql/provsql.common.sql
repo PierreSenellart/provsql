@@ -3995,18 +3995,47 @@ CREATE OR REPLACE FUNCTION tool_available(name TEXT)
 /* ----------------------------------------------------------------------
  * External-tool registry
  *
- * An in-memory catalog of the external tools ProvSQL can invoke (the
- * knowledge compilers, weighted model counters, and the graph-easy DOT
- * renderer).  It is seeded at first use with exactly the tools ProvSQL has
- * always known about and their current invocations, so out-of-the-box
- * behaviour is unchanged.  Administrators may add / repoint / reorder /
- * disable tools at run time.
+ * A catalog of the external tools ProvSQL can invoke (the knowledge
+ * compilers, weighted model counters, and the graph-easy DOT renderer).
+ * The default tools and their invocations are compiled in (seeded in C), so
+ * out-of-the-box behaviour is unchanged with no configuration.
  *
- * The catalog is per-backend and transient: a registration is visible only
- * in the session that made it and is reset when the session ends.  The
- * mutators are superuser-only because a tool record names an executable run
- * as the PostgreSQL OS user (the same trust level as provsql.tool_search_path).
+ * Administrators may add / repoint / reorder / disable tools at run time;
+ * those changes are persisted in the @c provsql.tool_overrides table below
+ * and overlaid on the compiled seed, so they survive across sessions and
+ * backends (and dump/restore).  An empty overrides table means exactly the
+ * compiled defaults.  The mutators are superuser-only because a tool record
+ * names an executable run as the PostgreSQL OS user (the same trust level as
+ * provsql.tool_search_path).
  * ---------------------------------------------------------------------- */
+
+/**
+ * @brief Persistent overrides overlaid on the compiled-in tool seed.
+ *
+ * Each row is the complete desired record for a tool (added or modified) keyed
+ * by logical @c name, or a tombstone (@c removed = true) hiding a seeded
+ * default.  The effective registry is the compiled seed with tombstoned names
+ * removed and the remaining rows upserted over it.  Written only by the
+ * superuser-only register_tool / unregister_tool / set_tool_* functions;
+ * read back into each backend's in-memory registry on demand.  Marked as a
+ * configuration table so pg_dump carries an operator's registrations.
+ */
+CREATE TABLE IF NOT EXISTS tool_overrides(
+  name           TEXT PRIMARY KEY,
+  removed        BOOLEAN NOT NULL DEFAULT false,
+  kind           TEXT,
+  executable     TEXT,
+  operations     TEXT[],
+  input_formats  TEXT[],
+  output_format  TEXT,
+  parser         TEXT,
+  preference     INT,
+  enabled        BOOLEAN,
+  dependencies   TEXT[],
+  argtpl         TEXT,
+  argtpl_circuit TEXT
+);
+SELECT pg_catalog.pg_extension_config_dump('tool_overrides', '');
 
 /**
  * @brief Set-returning listing backing the @c provsql.tools view.

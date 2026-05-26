@@ -29,6 +29,7 @@ PG_FUNCTION_INFO_V1(compile_to_ddnnf);
 #include "CircuitFromMMap.h"
 #include "dDNNF.h"
 #include "provsql_utils_cpp.h"
+#include "tool_registry_sync.h"
 
 #include <string>
 #include <unordered_map>
@@ -43,6 +44,7 @@ using namespace std;
  */
 Datum compile_to_ddnnf(PG_FUNCTION_ARGS)
 {
+  provsql_sync_tool_registry();  // honour persisted tool-registry overrides
   try {
     if(PG_ARGISNULL(0))
       PG_RETURN_NULL();

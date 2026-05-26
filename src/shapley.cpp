@@ -37,6 +37,7 @@ PG_FUNCTION_INFO_V1(shapley_all_vars);
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "CircuitFromMMap.h"
+#include "tool_registry_sync.h"
 #include <fstream>
 
 using namespace std;
@@ -83,6 +84,7 @@ static double shapley_internal
 /** @brief PostgreSQL-callable wrapper for shapley() and banzhaf(). */
 Datum shapley(PG_FUNCTION_ARGS)
 {
+  provsql_sync_tool_registry();  // honour persisted tool-registry overrides
   try {
     if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
       PG_RETURN_NULL();

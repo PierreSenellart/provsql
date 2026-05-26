@@ -33,6 +33,7 @@ PG_FUNCTION_INFO_V1(ddnnf_stats);
 #include "dDNNF.h"
 #include "TreeDecomposition.h"
 #include "provsql_utils_cpp.h"
+#include "tool_registry_sync.h"
 
 #include <chrono>
 #include <sstream>
@@ -48,6 +49,7 @@ using namespace std;
  */
 Datum ddnnf_stats(PG_FUNCTION_ARGS)
 {
+  provsql_sync_tool_registry();  // honour persisted tool-registry overrides
   try {
     if(PG_ARGISNULL(0))
       PG_RETURN_NULL();

@@ -19,15 +19,21 @@
  * the read-only listing is unrestricted, like @c tool_available.
  *
  * @par Lifetime
- * The registry is per-backend and transient (see @ref ToolRegistry.h):
- * a registration is visible only in the session that made it and is lost
- * when the session ends.
+ * @par Persistence
+ * The compiled-in defaults live in C (@ref ToolRegistry.h); admin changes are
+ * persisted in the @c provsql.tool_overrides table and overlaid on the seed
+ * by @ref provsql_sync_tool_registry, which every registry-consuming SQL
+ * function calls so changes are seen across sessions and backends.  An empty
+ * overrides table is exactly the compiled defaults; the table being absent
+ * (an extension older than 1.8.0) is treated the same way.
  */
 extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "executor/spi.h"
+#include "catalog/pg_type.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #if PG_VERSION_NUM >= 160000
@@ -42,9 +48,11 @@ PG_FUNCTION_INFO_V1(tool_registry_set_preference);
 }
 
 #include "ToolRegistry.h"
+#include "tool_registry_sync.h"
 #include "external_tool.h"
 #include "provsql_error.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -112,7 +120,135 @@ bool tool_available(const provsql::ToolRecord &rec)
   return true;
 }
 
+// ---- provsql.tool_overrides persistence (caller manages SPI_connect) ----
+
+/// Read a text[] column of the current SPI tuple as a vector<string>.
+std::vector<std::string> spi_text_array(HeapTuple t, TupleDesc td, int col)
+{
+  bool isnull;
+  Datum d = SPI_getbinval(t, td, col, &isnull);
+  if (isnull)
+    return {};
+  return text_array_to_string_vector(DatumGetArrayTypeP(d));
+}
+
+/// Read a text column of the current SPI tuple ("" when NULL).
+std::string spi_text(HeapTuple t, TupleDesc td, int col)
+{
+  char *s = SPI_getvalue(t, td, col);
+  return s ? std::string(s) : std::string();
+}
+
+/// True iff provsql.tool_overrides exists (an extension < 1.8.0 lacks it).
+/// to_regclass returns NULL rather than erroring on a missing relation.
+bool overrides_table_exists()
+{
+  if (SPI_execute("SELECT to_regclass('provsql.tool_overrides') IS NOT NULL",
+                  true, 1) != SPI_OK_SELECT || SPI_processed != 1)
+    return false;
+  bool isnull;
+  Datum d = SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc,
+                          1, &isnull);
+  return !isnull && DatumGetBool(d);
+}
+
+/// Upsert a complete record (removed=false) into provsql.tool_overrides.
+void upsert_override(const provsql::ToolRecord &rec)
+{
+  Oid types[12] = {TEXTOID, TEXTOID, TEXTOID, TEXTARRAYOID, TEXTARRAYOID,
+                   TEXTOID, TEXTOID, INT4OID, BOOLOID, TEXTARRAYOID,
+                   TEXTOID, TEXTOID};
+  Datum vals[12] = {
+    CStringGetTextDatum(rec.name.c_str()),
+    CStringGetTextDatum(rec.kind.c_str()),
+    CStringGetTextDatum(rec.binary.c_str()),
+    string_vector_to_text_array(rec.operations),
+    string_vector_to_text_array(rec.input_formats),
+    CStringGetTextDatum(rec.output_format.c_str()),
+    CStringGetTextDatum(rec.parser.c_str()),
+    Int32GetDatum(rec.preference),
+    BoolGetDatum(rec.enabled),
+    string_vector_to_text_array(rec.dependencies),
+    CStringGetTextDatum(rec.argtpl.c_str()),
+    CStringGetTextDatum(rec.argtpl_circuit.c_str()),
+  };
+  SPI_execute_with_args(
+    "INSERT INTO provsql.tool_overrides "
+    "(name, removed, kind, executable, operations, input_formats, "
+    " output_format, parser, preference, enabled, dependencies, argtpl, "
+    " argtpl_circuit) "
+    "VALUES ($1, false, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) "
+    "ON CONFLICT (name) DO UPDATE SET "
+    "  removed=false, kind=$2, executable=$3, operations=$4, "
+    "  input_formats=$5, output_format=$6, parser=$7, preference=$8, "
+    "  enabled=$9, dependencies=$10, argtpl=$11, argtpl_circuit=$12",
+    12, types, vals, NULL, false, 0);
+}
+
+/// Tombstone a name (removed=true) so the seeded default, if any, is hidden.
+void tombstone_override(const std::string &name)
+{
+  Oid types[1] = {TEXTOID};
+  Datum vals[1] = {CStringGetTextDatum(name.c_str())};
+  SPI_execute_with_args(
+    "INSERT INTO provsql.tool_overrides (name, removed) VALUES ($1, true) "
+    "ON CONFLICT (name) DO UPDATE SET removed=true, kind=NULL, "
+    "  executable=NULL, operations=NULL, input_formats=NULL, "
+    "  output_format=NULL, parser=NULL, preference=NULL, enabled=NULL, "
+    "  dependencies=NULL, argtpl=NULL, argtpl_circuit=NULL",
+    1, types, vals, NULL, false, 0);
+}
+
 } // namespace
+
+/**
+ * @brief Rebuild the in-memory registry as "compiled seed overlaid with the
+ *        provsql.tool_overrides rows".  See @ref tool_registry_sync.h.
+ */
+void provsql_sync_tool_registry()
+{
+  provsql::ToolRegistry &reg = provsql::tool_registry();
+  reg.reset();  // back to the compiled-in defaults
+
+  if (SPI_connect() != SPI_OK_CONNECT)
+    return;  // cannot read; the seed stands
+  if (overrides_table_exists()) {
+    if (SPI_execute(
+          "SELECT name, removed, kind, executable, operations, input_formats, "
+          " output_format, parser, preference, enabled, dependencies, argtpl, "
+          " argtpl_circuit FROM provsql.tool_overrides", true, 0)
+        == SPI_OK_SELECT) {
+      TupleDesc td = SPI_tuptable->tupdesc;
+      for (uint64 i = 0; i < SPI_processed; ++i) {
+        HeapTuple t = SPI_tuptable->vals[i];
+        std::string name = spi_text(t, td, 1);
+        bool isnull;
+        Datum rd = SPI_getbinval(t, td, 2, &isnull);
+        if (!isnull && DatumGetBool(rd)) {  // tombstone
+          reg.remove(name);
+          continue;
+        }
+        provsql::ToolRecord rec;
+        rec.name          = name;
+        rec.kind          = spi_text(t, td, 3);
+        rec.binary        = spi_text(t, td, 4);
+        rec.operations    = spi_text_array(t, td, 5);
+        rec.input_formats = spi_text_array(t, td, 6);
+        rec.output_format = spi_text(t, td, 7);
+        rec.parser        = spi_text(t, td, 8);
+        Datum pd = SPI_getbinval(t, td, 9, &isnull);
+        rec.preference = isnull ? 0 : DatumGetInt32(pd);
+        Datum ed = SPI_getbinval(t, td, 10, &isnull);
+        rec.enabled = isnull ? true : DatumGetBool(ed);
+        rec.dependencies   = spi_text_array(t, td, 11);
+        rec.argtpl         = spi_text(t, td, 12);
+        rec.argtpl_circuit = spi_text(t, td, 13);
+        reg.upsert(rec);
+      }
+    }
+  }
+  SPI_finish();
+}
 
 /**
  * @brief Set-returning listing of the registry, one row per record.
@@ -129,6 +265,9 @@ bool tool_available(const provsql::ToolRecord &rec)
 extern "C" Datum
 tool_registry_list(PG_FUNCTION_ARGS)
 {
+  // Reflect any persisted overrides (from this or another backend).
+  provsql_sync_tool_registry();
+
   ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 
   MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
@@ -230,7 +369,11 @@ tool_registry_register(PG_FUNCTION_ARGS)
     if (rec.name.empty())
       provsql_error("register_tool: name must not be empty");
 
-    provsql::tool_registry().upsert(rec);
+    // Persist the full record (create or replace) in the overrides table.
+    if (SPI_connect() != SPI_OK_CONNECT)
+      provsql_error("register_tool: SPI_connect failed");
+    upsert_override(rec);
+    SPI_finish();
   } catch (const std::exception &e) {
     provsql_error("register_tool: %s", e.what());
   }
@@ -239,18 +382,44 @@ tool_registry_register(PG_FUNCTION_ARGS)
 }
 
 /**
- * @brief Remove a tool record.  Errors if no tool of that name is
- * registered, so a typo fails loudly rather than silently doing nothing.
+ * @brief Remove a tool record.  Errors if no tool of that name is currently
+ * effective, so a typo fails loudly rather than silently doing nothing.
+ * A removed seeded default is recorded as a tombstone; the change persists.
  */
 extern "C" Datum
 tool_registry_unregister(PG_FUNCTION_ARGS)
 {
   require_superuser("unregister_tool");
   std::string name = text_to_string(PG_GETARG_TEXT_PP(0));
-  if (!provsql::tool_registry().remove(name))
+
+  provsql_sync_tool_registry();
+  if (provsql::tool_registry().find(name) == nullptr)
     provsql_error("unregister_tool: no tool named '%s' is registered",
                   name.c_str());
+
+  if (SPI_connect() != SPI_OK_CONNECT)
+    provsql_error("unregister_tool: SPI_connect failed");
+  tombstone_override(name);
+  SPI_finish();
   PG_RETURN_VOID();
+}
+
+/// Persist a single-field change to an existing tool: load the effective
+/// record, apply @p mutate, and write the full record back.  Errors on an
+/// unknown tool name.
+static void persist_tool_change(const char *fn, const std::string &name,
+                                const std::function<void(provsql::ToolRecord&)> &mutate)
+{
+  provsql_sync_tool_registry();
+  const provsql::ToolRecord *cur = provsql::tool_registry().find(name);
+  if (cur == nullptr)
+    provsql_error("%s: no tool named '%s' is registered", fn, name.c_str());
+  provsql::ToolRecord rec = *cur;
+  mutate(rec);
+  if (SPI_connect() != SPI_OK_CONNECT)
+    provsql_error("%s: SPI_connect failed", fn);
+  upsert_override(rec);
+  SPI_finish();
 }
 
 /** @brief Enable or disable a tool.  Errors on an unknown tool name. */
@@ -260,9 +429,8 @@ tool_registry_set_enabled(PG_FUNCTION_ARGS)
   require_superuser("set_tool_enabled");
   std::string name = text_to_string(PG_GETARG_TEXT_PP(0));
   bool enabled = PG_GETARG_BOOL(1);
-  if (!provsql::tool_registry().setEnabled(name, enabled))
-    provsql_error("set_tool_enabled: no tool named '%s' is registered",
-                  name.c_str());
+  persist_tool_change("set_tool_enabled", name,
+                      [enabled](provsql::ToolRecord &r) { r.enabled = enabled; });
   PG_RETURN_VOID();
 }
 
@@ -273,8 +441,7 @@ tool_registry_set_preference(PG_FUNCTION_ARGS)
   require_superuser("set_tool_preference");
   std::string name = text_to_string(PG_GETARG_TEXT_PP(0));
   int preference = PG_GETARG_INT32(1);
-  if (!provsql::tool_registry().setPreference(name, preference))
-    provsql_error("set_tool_preference: no tool named '%s' is registered",
-                  name.c_str());
+  persist_tool_change("set_tool_preference", name,
+                      [preference](provsql::ToolRecord &r) { r.preference = preference; });
   PG_RETURN_VOID();
 }

@@ -50,6 +50,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "having_semantics.hpp"
 #include "provsql_mmap.h"
 #include "provsql_utils_cpp.h"
+#include "tool_registry_sync.h"
 #include "semiring/BoolExpr.h"
 
 using namespace std;
@@ -358,6 +359,7 @@ static Datum probability_evaluate_internal
 /** @brief PostgreSQL-callable wrapper for probability_evaluate(). */
 Datum probability_evaluate(PG_FUNCTION_ARGS)
 {
+  provsql_sync_tool_registry();  // honour persisted tool-registry overrides
   try {
     Datum token = PG_GETARG_DATUM(0);
     string method;
