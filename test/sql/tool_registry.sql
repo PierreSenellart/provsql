@@ -72,6 +72,13 @@ SELECT probability_evaluate(provsql, 'compilation', 'panini-obdd') FROM tr_r;
 SELECT probability_evaluate(provsql, 'wmc', 'no-such-counter') FROM tr_r;
 SELECT set_tool_enabled('ganak', false);
 SELECT probability_evaluate(provsql, 'wmc', 'ganak') FROM tr_r;
+-- With no tool named, 'wmc' picks the highest-preference available counter
+-- (preference-ranked selection); with every counter disabled there is none,
+-- a host-independent error.
+SELECT set_tool_enabled('sharpsat-td', false);
+SELECT set_tool_enabled('weightmc', false);
+SELECT set_tool_enabled('dpmc', false);
+SELECT probability_evaluate(provsql, 'wmc') FROM tr_r;
 DROP TABLE tr_r;
 
 -- The mutators are superuser-only: execute is revoked from PUBLIC.

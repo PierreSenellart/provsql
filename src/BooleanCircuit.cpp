@@ -742,6 +742,39 @@ dDNNF BooleanCircuit::parsePaniniDD(const std::string &outfilename) const {
   return dnnf;
 }
 
+// True iff a tool's binary (when it has one) and all its dependencies resolve
+// on the backend's PATH right now.
+static bool toolAvailable(const provsql::ToolRecord *r) {
+  if(!r->binary.empty() && find_external_tool(r->binary).empty())
+    return false;
+  for(const std::string &dep : r->dependencies)
+    if(find_external_tool(dep).empty())
+      return false;
+  return true;
+}
+
+// Preference-ranked tool selection for @p operation: honour the explicitly
+// @p preferred tool when it is enabled, advertises the operation, and is
+// available; otherwise return the highest-preference enabled tool advertising
+// the operation whose binary and dependencies resolve on PATH.  Returns "" if
+// none is available, so a dispatcher can fall back or raise a clear error.
+// This replaces the old "if d4 else c2d ..." chains: an admin reorders or
+// disables tools (or bumps provsql.fallback_compiler, honoured via @p
+// preferred) and selection follows.
+static std::string selectTool(const std::string &operation,
+                              const std::string &preferred = "") {
+  if(!preferred.empty()) {
+    const provsql::ToolRecord *r = provsql::tool_registry().find(preferred);
+    if(r != nullptr && r->enabled && r->hasOperation(operation)
+       && toolAvailable(r))
+      return preferred;
+  }
+  for(const provsql::ToolRecord *r : provsql::tool_registry().byOperation(operation))
+    if(toolAvailable(r))
+      return r->name;
+  return "";
+}
+
 dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   // Validate the compiler against the registry before any temp-dir or CNF
   // work.  A name that is not a registered, enabled 'compile' tool is
@@ -1020,8 +1053,20 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 //   wmc-line  MCC-2024 weighted DIMACS in ("c t wmc" + "c p weight" lines);
 //             the count on a "c s exact" / "s wmc" line out.
 //   weightmc  weightmc's own weighted DIMACS in; a "mantissa x 2^exp" out.
-double BooleanCircuit::wmcCount(gate_t g, const std::string &tool,
+double BooleanCircuit::wmcCount(gate_t g, const std::string &requested,
                                 const std::string &opt) const {
+  // An empty tool name means "pick the best available counter" (highest
+  // preference whose binary + dependencies resolve on PATH).
+  std::string tool = requested;
+  if(tool.empty()) {
+    tool = selectTool("wmc");
+    if(tool.empty())
+      throw CircuitException(
+              "no weighted model counter is available; install one (ganak, "
+              "sharpsat-td, dpmc, weightmc) or add its directory to "
+              "provsql.tool_search_path");
+  }
+
   const provsql::ToolRecord *rec = provsql::tool_registry().find(tool);
   if(rec == nullptr || !rec->hasOperation("wmc"))
     throw CircuitException("Unknown wmc tool '" + tool + "'");
@@ -1417,16 +1462,21 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
         if(provsql_verbose>=20)
           provsql_notice("dD obtained by tree decomposition, %ld gates", dd.getNbGates());
       } catch(TreeDecompositionException &) {
-        // Compiler name comes from the provsql.fallback_compiler GUC
-        // (default "d4"). The empty / NULL string is also treated as
-        // "d4" for safety, in case the GUC was unset somewhere.
+        // Preference-ranked fallback: prefer provsql.fallback_compiler
+        // (default "d4") when it is available, otherwise the highest-
+        // preference compiler whose binary resolves on PATH.  If none is
+        // available, keep the configured fallback so compilation() raises
+        // its actionable "<tool> not found" error.
         const char *fallback = (provsql_fallback_compiler != NULL
                                 && provsql_fallback_compiler[0] != '\0')
                                ? provsql_fallback_compiler : "d4";
-        dd = compilation(g, fallback);
+        std::string chosen = selectTool("compile", fallback);
+        if(chosen.empty())
+          chosen = fallback;
+        dd = compilation(g, chosen);
         if(provsql_verbose>=20)
           provsql_notice("dD obtained by compilation using %s, %ld gates",
-                         fallback, dd.getNbGates());
+                         chosen.c_str(), dd.getNbGates());
       }
     }
 

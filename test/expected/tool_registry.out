@@ -73,6 +73,16 @@ set_tool_enabled
 
 (1 row)
 ERROR:  ProvSQL: Tool 'ganak' is disabled in the tool registry
+set_tool_enabled
+
+(1 row)
+set_tool_enabled
+
+(1 row)
+set_tool_enabled
+
+(1 row)
+ERROR:  ProvSQL: no weighted model counter is available; install one (ganak, sharpsat-td, dpmc, weightmc) or add its directory to provsql.tool_search_path
 register|unregister|set_enabled|set_preference
 f|f|f|f
 (1 row)
