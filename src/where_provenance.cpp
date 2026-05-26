@@ -99,7 +99,12 @@ static string where_provenance_internal
       string f = SPI_getvalue(tuple, tupdesc, 1);
       string type = SPI_getvalue(tuple, tupdesc, 3);
       if(type == "input") {
-        string table = SPI_getvalue(tuple, tupdesc, 4);
+        char *table = SPI_getvalue(tuple, tupdesc, 4);
+        if(table == nullptr)
+          provsql_error(
+            "where_provenance: input gate %s could not be traced back to a "
+            "provenance-tracked relation (it may belong to a table that was "
+            "dropped, or to one outside the search_path)", f.c_str());
         int nb_columns = stoi(SPI_getvalue(tuple, tupdesc, 5));
 
         c.setGateInput(f, table, nb_columns);

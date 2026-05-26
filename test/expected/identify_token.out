@@ -11,3 +11,13 @@ identify_token
 (personnel,5)
 (personnel,5)
 (7 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+identify_token
+(identify_null,3)
+(identify_null,3)
+(2 rows)

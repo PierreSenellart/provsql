@@ -1392,7 +1392,11 @@ BEGIN
                                      AND attname='provsql'
   LOOP
     EXECUTE format('SELECT * FROM %I WHERE provsql=%L',t.relname,token) INTO result;
-    IF result IS NOT NULL THEN
+    -- Test result.provsql rather than the whole record: "RECORD IS NOT NULL"
+    -- is true only when every field is non-null, so a matched row that has any
+    -- NULL data column would be wrongly skipped. The provsql column is the
+    -- (non-null) token we matched on, so it is set iff a row was found.
+    IF result.provsql IS NOT NULL THEN
       table_name:=t.relname;
       nb_columns:=t.c;
       EXIT;

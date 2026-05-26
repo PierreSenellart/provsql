@@ -13,3 +13,21 @@ l3|r2|l2|wprov
 20|two|b|{[wpj_left::3],[wpj_right::2],[wpj_left::2],[]}
 30|three|c|{[wpj_left::3],[wpj_right::2],[wpj_left::2],[]}
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|v|wprov
+1|one|{[wpn::1;wpn_other::1],[wpn_other::2],[]}
+2|two|{[wpn::1;wpn_other::1],[wpn_other::2],[]}
+3|three|{[wpn::1;wpn_other::1],[wpn_other::2],[]}
+(3 rows)
+create_gate
+
+(1 row)
+ERROR:  ProvSQL: where_provenance: input gate 41b5fe1d-598a-5f97-8a1a-a9078b853678 could not be traced back to a provenance-tracked relation (it may belong to a table that was dropped, or to one outside the search_path)
