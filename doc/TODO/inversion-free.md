@@ -135,10 +135,36 @@ validated the core bet on the `n×n` witness, against ProvSQL's own
   a hand-factored circuit.
 
 This de-risks the construction half (see risk #1): the bounded-frontier
-recursion is correct and linear. Still unbuilt and ahead: the detector
-(query-level recognition + order recipe), the annotation-gate carrier, and
-materialising the structured d-DNNF through `dDNNF::probabilityEvaluation` (the
-spike computed the probability inline rather than emitting a d-DNNF).
+recursion is correct and linear.
+
+**Phase 3 builder finding (in-process `StructuredDNNF`).** A first in-process
+builder compiles the lineage to a reduced OBDD via standard bottom-up *apply*
+given an explicit variable order. Validated on the witness: under the
+query-derived order the reachable OBDD is **linear in the lineage** (~`6.8·n²`
+nodes: n=2→20, n=20→2720) with probabilities matching the spike DP / brute
+force; under a bad order it is **exponential** (n=4: 655 358 nodes vs 96). So
+the *result* size is linear with the right order — but the *apply work* (total
+nodes created) is `~n⁵`, super-linear: ORing the flat `n³` terms one-by-one,
+each apply `O(n²)`. It still handles n=20 (1200 vars) where d4 / tree-decomposition
+die at n≈6, but it does not build in linear time.
+
+**Decision: build via the structured top-down construction, not bottom-up
+apply.** To get linear *build* time, construct top-down following the query
+hierarchy — separator decisions on shared variables, decomposable AND on the
+now-independent residual, memoised on the **bounded atom-frontier** state (the
+spike's `(ySat,zSat)` generalised to one partial-match slot per atom, `2^g`
+states) — so each of the `O(|lineage|)` frontier states is built once. This is
+the plan's §4 construction; the apply builder is kept only as a reference
+oracle. The frontier is defined over the per-atom structure, so this is
+**co-designed with task 11 (per-input order keys)**: the keys give each input
+its `(root-value, secondary, atom)` coordinates, which both order the variables
+and identify the frontier slots. Risk #1 (memo key correctness) and risk #4
+(key/order = Prop. 4.5) are the live risks for this step.
+
+Still unbuilt and ahead: the structured (linear-build) construction + its
+frontier memo (next), the per-input order keys (task 11, co-designed with it),
+and materialising the result through `dDNNF::probabilityEvaluation` wired into
+the probability dispatcher behind `provsql.inversion_free`.
 
 **Future benchmark (read-once overlap).** Hierarchical self-join-free queries
 over TID are *both* read-once and inversion-free, so both the existing
