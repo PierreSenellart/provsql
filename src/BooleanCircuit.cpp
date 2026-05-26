@@ -846,7 +846,8 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   // the aux-variable reconciliation in the parse-back.  Requires a parser
   // that honours `I` declarations; on a gate shape BC-S1.2 cannot express, we
   // fall back to the Tseytin CNF path below.  (Today only d4v2 advertises it.)
-  bool circuit_input = rec->acceptsInput("circuit-bcs12");
+  bool circuit_input = rec->acceptsInput("circuit-bcs12")
+                       && !rec->argtpl_circuit.empty();
   if(find_external_tool(compiler_binary).empty())
     throw CircuitException(
             compiler_binary + " not found on PATH; install it or add its "
@@ -879,22 +880,18 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     provsql_notice("Tseytin circuit in %s", filename.c_str());
   }
 
+  // The command line is the registry argtpl with {in}/{out} (and {binary})
+  // substituted -- so a newly-registered compiler runs with its own
+  // invocation, no per-name branch here.  When the BC-S1.2 circuit input is
+  // in use, the record's argtpl_circuit is used instead (it pairs with the
+  // circuit input written above and the circuit-mode variable resolution in
+  // the parse-back).
   std::string cmdline;
-  if(circuit_input) {
-    // d4v2 native circuit input from the BC-S1.2 file.
-    // `-t pcnf` projects the gate variables out so the compiled d-DNNF
-    // branches only on the input (`I`) variables; without it d4 branches on
-    // gate variables and the d-DNNF cannot be soundly projected onto inputs.
-    // This native fast path pairs with the BC-S1.2 input written above and
-    // the circuit-mode variable resolution in the parse-back.
-    cmdline = compiler_binary
-            + " -i "+filename+" --input-type circuit -t pcnf --dump-file "+outfilename;
-  } else {
-    // CNF path: the command line is the registry argtpl with {in}/{out}
-    // (and {binary}) substituted -- so a newly-registered compiler runs with
-    // its own invocation, no per-name branch here.
+  if(circuit_input)
+    cmdline = provsql::expandCommandTemplate(rec->argtpl_circuit,
+                                             compiler_binary, filename, outfilename);
+  else
     cmdline = rec->buildCommand(filename, outfilename, compiler_binary);
-  }
 
   int retvalue=run_external_tool(cmdline);
 

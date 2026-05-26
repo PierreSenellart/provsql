@@ -14,6 +14,9 @@ panini-obdd-and|panini|{compile}|{dimacs-cnf}|panini-dd|panini-dd
 sharpsat-td|sharpsat-td|{wmc}|{dimacs-cnf}|decimal|wmc-line
 weightmc|weightmc|{wmc}|{dimacs-cnf}|decimal|weightmc
 (13 rows)
+name|argtpl_circuit
+d4v2|-i {in} --input-type circuit -t pcnf --dump-file {out}
+(1 row)
 register_tool
 
 (1 row)

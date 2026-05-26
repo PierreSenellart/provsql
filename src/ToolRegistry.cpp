@@ -52,9 +52,12 @@ void ToolRegistry::seed()
                       "ddnnf-nnf", "nnf", 100, true, {}, "-dDNNF {in} -out={out}"});
   // d4v2 also accepts a BC-S1.2 circuit (native, structure-preserving): it is
   // listed first so the dispatcher prefers it, falling back to dimacs-cnf.
+  // argtpl is the CNF command; argtpl_circuit the native-circuit one (`-t
+  // pcnf` projects gate variables out so the d-DNNF branches only on inputs).
   records_.push_back({"d4v2",    "cli", "d4v2",    {"compile"},
                       {"circuit-bcs12", "dimacs-cnf"},
-                      "ddnnf-nnf", "nnf", 90, true, {}, "-i {in} --dump-file {out}"});
+                      "ddnnf-nnf", "nnf", 90, true, {}, "-i {in} --dump-file {out}",
+                      "-i {in} --input-type circuit -t pcnf --dump-file {out}"});
   records_.push_back({"c2d",     "cli", "c2d",     {"compile"}, {"dimacs-cnf"},
                       "ddnnf-nnf", "nnf", 80, true, {}, "-in {in} -silent"});
   records_.push_back({"minic2d", "cli", "minic2d", {"compile"}, {"dimacs-cnf"},

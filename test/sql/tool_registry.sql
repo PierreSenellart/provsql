@@ -14,6 +14,9 @@ SET search_path TO provsql_test,provsql;
 -- not selected.
 SELECT name, executable, operations, input_formats, output_format, parser
   FROM tools ORDER BY name;
+-- Only a tool that accepts the BC-S1.2 circuit input carries a circuit
+-- command (argtpl_circuit); today that is d4v2.
+SELECT name, argtpl_circuit FROM tools WHERE argtpl_circuit <> '' ORDER BY name;
 
 -- register_tool (named args): a new compiler added without recompiling, with
 -- its KCMCP triple, parser and command template.
@@ -73,7 +76,7 @@ DROP TABLE tr_r;
 
 -- The mutators are superuser-only: execute is revoked from PUBLIC.
 SELECT
-  has_function_privilege('public', 'provsql.register_tool(text,text,text,text[],text[],text,text,text,int,boolean)', 'EXECUTE') AS register,
+  has_function_privilege('public', 'provsql.register_tool(text,text,text,text[],text[],text,text,text,text,int,boolean)', 'EXECUTE') AS register,
   has_function_privilege('public', 'provsql.unregister_tool(text)', 'EXECUTE') AS unregister,
   has_function_privilege('public', 'provsql.set_tool_enabled(text,boolean)', 'EXECUTE') AS set_enabled,
   has_function_privilege('public', 'provsql.set_tool_preference(text,int)', 'EXECUTE') AS set_preference;

@@ -115,19 +115,23 @@ inline std::string expandCommandTemplate(
  *
  * @c parser is **CLI-only** -- it says how to decode this tool's raw output
  * into @c output_format, a job a KCMCP server does on the wire and so leaves
- * empty: @c "nnf-d4" (d4-family NNF, no magic line) and @c "nnf-classic"
- * (c2d / minic2d / dsharp NNF) both yield @c output_format @c "ddnnf-nnf";
- * @c "wmc-line" (the @c "c s exact" line) and @c "weightmc" (mantissa x 2^e)
- * both yield @c "decimal".  @c "panini-dd" and @c "ascii" are their own.
+ * empty: the single tolerant @c "nnf" reader yields @c output_format
+ * @c "ddnnf-nnf" (it auto-detects the c2d/d4 magic header, covering both the
+ * d4-family and classic forms); @c "wmc-line" (the @c "c s exact" line) and
+ * @c "weightmc" (mantissa x 2^e) both yield @c "decimal"; @c "panini-dd" and
+ * @c "ascii" are their own.
  *
  * @c argtpl is the command the dispatcher runs, with @c {in} / @c {out}
  * substituted by the input/output temp files and a few tool-specific
  * placeholders (@c {binary}, @c {tmpdir}, @c {pivotAC}).  When @c argtpl
  * contains no @c {binary}, the resolved @c binary is prepended; otherwise
  * the template is the whole command (used by the @c dpmc pipeline and the
- * @c sharpsat-td @c cd-prefix).  Together these make a CLI tool's whole
- * invocation data: a new tool whose output is a known parser/format can be
- * registered without recompiling.
+ * @c sharpsat-td @c cd-prefix).  @c argtpl_circuit is the alternative command
+ * used when the @c "circuit-bcs12" input is selected (the input is then a
+ * BC-S1.2 circuit rather than a Tseytin CNF); only a tool that accepts that
+ * input needs it.  Together these make a CLI tool's whole invocation data: a
+ * new tool whose output is a known parser/format can be registered without
+ * recompiling.
  */
 struct ToolRecord {
   std::string name;
@@ -141,6 +145,7 @@ struct ToolRecord {
   bool enabled = true;
   std::vector<std::string> dependencies;
   std::string argtpl;
+  std::string argtpl_circuit;
 
   bool hasOperation(const std::string &op) const;
   bool acceptsInput(const std::string &fmt) const;

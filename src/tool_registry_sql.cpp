@@ -119,7 +119,8 @@ bool tool_available(const provsql::ToolRecord &rec)
  *
  * Columns: name, kind, binary, operations (text[]), input_formats (text[]),
  * output_format (text), parser (text), preference (int), enabled (bool),
- * argtpl (text), available (bool).  @c operations / @c input_formats /
+ * argtpl (text), argtpl_circuit (text), available (bool).  @c operations /
+ * @c input_formats /
  * @c output_format use the KCMCP registry names; @c parser is the CLI-only
  * decode tag.  @c available is true iff @c binary (when set) and every
  * dependency resolve via @c find_external_tool, so the view reflects what a
@@ -148,9 +149,9 @@ tool_registry_list(PG_FUNCTION_ARGS)
 
   try {
     for (const provsql::ToolRecord &rec : provsql::tool_registry().records()) {
-      Datum values[11];
-      bool nulls[11] = {false, false, false, false, false, false, false,
-                        false, false, false, false};
+      Datum values[12];
+      bool nulls[12] = {false, false, false, false, false, false, false,
+                        false, false, false, false, false};
 
       values[0] = PointerGetDatum(cstring_to_text_with_len(rec.name.data(),
                                                            rec.name.size()));
@@ -168,7 +169,9 @@ tool_registry_list(PG_FUNCTION_ARGS)
       values[8] = BoolGetDatum(rec.enabled);
       values[9] = PointerGetDatum(cstring_to_text_with_len(rec.argtpl.data(),
                                                            rec.argtpl.size()));
-      values[10] = BoolGetDatum(tool_available(rec));
+      values[10] = PointerGetDatum(cstring_to_text_with_len(
+                     rec.argtpl_circuit.data(), rec.argtpl_circuit.size()));
+      values[11] = BoolGetDatum(tool_available(rec));
 
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
@@ -189,10 +192,10 @@ tool_registry_list(PG_FUNCTION_ARGS)
  *
  * Args (in order): name text, executable text, kind text, operations text[],
  * input_formats text[], output_format text, parser text, argtpl text,
- * preference int, enabled bool.  A NULL @c executable defaults to @c name; a
- * NULL @c kind defaults to @c 'cli'; NULL arrays are empty; NULL text fields
- * default to empty; NULL @c preference is 0 and NULL @c enabled is true.
- * Superuser-only.
+ * argtpl_circuit text, preference int, enabled bool.  A NULL @c executable
+ * defaults to @c name; a NULL @c kind defaults to @c 'cli'; NULL arrays are
+ * empty; NULL text fields default to empty; NULL @c preference is 0 and NULL
+ * @c enabled is true.  Superuser-only.
  */
 extern "C" Datum
 tool_registry_register(PG_FUNCTION_ARGS)
@@ -219,8 +222,10 @@ tool_registry_register(PG_FUNCTION_ARGS)
       rec.parser = text_to_string(PG_GETARG_TEXT_PP(6));
     if (!PG_ARGISNULL(7))
       rec.argtpl = text_to_string(PG_GETARG_TEXT_PP(7));
-    rec.preference = PG_ARGISNULL(8) ? 0 : PG_GETARG_INT32(8);
-    rec.enabled = PG_ARGISNULL(9) ? true : PG_GETARG_BOOL(9);
+    if (!PG_ARGISNULL(8))
+      rec.argtpl_circuit = text_to_string(PG_GETARG_TEXT_PP(8));
+    rec.preference = PG_ARGISNULL(9) ? 0 : PG_GETARG_INT32(9);
+    rec.enabled = PG_ARGISNULL(10) ? true : PG_GETARG_BOOL(10);
 
     if (rec.name.empty())
       provsql_error("register_tool: name must not be empty");

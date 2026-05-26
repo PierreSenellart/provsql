@@ -4019,7 +4019,7 @@ CREATE OR REPLACE FUNCTION tool_registry_list()
   RETURNS TABLE(name TEXT, kind TEXT, executable TEXT, operations TEXT[],
                 input_formats TEXT[], output_format TEXT, parser TEXT,
                 preference INT, enabled BOOLEAN, argtpl TEXT,
-                available BOOLEAN) AS
+                argtpl_circuit TEXT, available BOOLEAN) AS
   'provsql','tool_registry_list' LANGUAGE C STABLE;
 
 /**
@@ -4027,7 +4027,7 @@ CREATE OR REPLACE FUNCTION tool_registry_list()
  */
 CREATE OR REPLACE VIEW tools AS
   SELECT name, kind, executable, operations, input_formats, output_format,
-         parser, preference, enabled, argtpl, available
+         parser, preference, enabled, argtpl, argtpl_circuit, available
   FROM tool_registry_list();
 
 /**
@@ -4053,6 +4053,9 @@ CREATE OR REPLACE VIEW tools AS
  * @param argtpl        command template; placeholders @c {in} / @c {out}
  *                      (and @c {binary} / @c {tmpdir} / @c {pivotAC}).  When
  *                      it omits @c {binary}, the executable is prepended.
+ * @param argtpl_circuit command used when the @c 'circuit-bcs12' input is
+ *                      selected (a BC-S1.2 circuit rather than a CNF); only a
+ *                      tool accepting that input needs it
  * @param preference    ordering within an operation (higher first)
  * @param enabled       whether the dispatchers may select it
  *
@@ -4068,6 +4071,7 @@ CREATE OR REPLACE FUNCTION register_tool(
   output_format TEXT DEFAULT NULL,
   parser TEXT DEFAULT NULL,
   argtpl TEXT DEFAULT NULL,
+  argtpl_circuit TEXT DEFAULT NULL,
   preference INT DEFAULT 0,
   enabled BOOLEAN DEFAULT true)
   RETURNS void AS
@@ -4090,7 +4094,7 @@ CREATE OR REPLACE FUNCTION set_tool_preference(name TEXT, preference INT)
 
 -- The mutators guard at the C level too, but revoke from PUBLIC so the
 -- superuser requirement is visible in the catalog.
-REVOKE ALL ON FUNCTION register_tool(TEXT, TEXT, TEXT, TEXT[], TEXT[], TEXT, TEXT, TEXT, INT, BOOLEAN) FROM PUBLIC;
+REVOKE ALL ON FUNCTION register_tool(TEXT, TEXT, TEXT, TEXT[], TEXT[], TEXT, TEXT, TEXT, TEXT, INT, BOOLEAN) FROM PUBLIC;
 REVOKE ALL ON FUNCTION unregister_tool(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION set_tool_enabled(TEXT, BOOLEAN) FROM PUBLIC;
 REVOKE ALL ON FUNCTION set_tool_preference(TEXT, INT) FROM PUBLIC;
