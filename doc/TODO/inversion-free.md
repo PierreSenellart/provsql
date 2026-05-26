@@ -140,6 +140,15 @@ recursion is correct and linear. Still unbuilt and ahead: the detector
 materialising the structured d-DNNF through `dDNNF::probabilityEvaluation` (the
 spike computed the probability inline rather than emitting a d-DNNF).
 
+**Future benchmark (read-once overlap).** Hierarchical self-join-free queries
+over TID are *both* read-once and inversion-free, so both the existing
+safe-query plan (`independentEvaluation` on the rewritten read-once lineage) and
+the new structured-d-DNNF path can evaluate them. Eventually benchmark the two
+head-to-head on that overlap: it tells us whether the structured path is
+competitive where both apply, and therefore whether routing read-once-eligible
+queries through it (instead of, or before, the read-once rewrite) is ever
+worthwhile, or whether the two paths should stay strictly partitioned by class.
+
 ## Design anchors (verified against the code)
 
 - **Probability model: independent inputs only.** The decision variables are
