@@ -76,13 +76,39 @@ jobs:
       # A polling loop absorbs that.
       - run: |
           for _ in $(seq 1 60); do pg_isready -q && exit 0; sleep 1; done
-          cat /usr/local/var/log/postgres*.log /usr/local/var/log/potgres*.log 2>/dev/null
+          cat "$(brew --prefix)"/var/log/postgresql@${{ matrix.pg }}.log 2>/dev/null
           exit 1
       - run: echo "POSTGRESQL_CONFIG=$(psql -t -c 'SHOW config_file' postgres | xargs)" >> "$GITHUB_ENV"
       - run: echo "shared_preload_libraries = 'provsql'" >> "$POSTGRESQL_CONFIG"
       - run: brew services restart postgresql@${{ matrix.pg }}
       - run: |
           for _ in $(seq 1 60); do pg_isready -q && exit 0; sleep 1; done
-          cat /usr/local/var/log/postgres*.log /usr/local/var/log/potgres*.log 2>/dev/null
+          cat "$(brew --prefix)"/var/log/postgresql@${{ matrix.pg }}.log 2>/dev/null
           exit 1
-      - run: make installcheck || bash -c "shopt -s nullglob; cat /tmp/tmp.provsql*/regression.diffs && for i in /tmp/provsql*; do echo $i && cat $i; done; false"
+      - name: Run regression tests
+        run: |
+          make installcheck && exit 0
+          # Test run failed: surface everything needed to diagnose a
+          # crash.  A backend SIGSEGV shows up here as "server closed the
+          # connection unexpectedly", after which every later test fails
+          # with "the database system is in recovery mode".  The signal
+          # line lives in the server log; the symbolicated backtrace lives
+          # in the macOS crash report.
+          shopt -s nullglob
+          echo "::group::regression.diffs"
+          cat /tmp/tmp.provsql*/regression.diffs
+          echo "::endgroup::"
+          echo "::group::provsql_migrate_mmap dumps"
+          for i in /tmp/provsql*; do echo "== $i =="; cat "$i"; done
+          echo "::endgroup::"
+          echo "::group::PostgreSQL server log"
+          cat "$(brew --prefix)"/var/log/postgresql@${{ matrix.pg }}.log 2>/dev/null
+          echo "::endgroup::"
+          echo "::group::macOS crash reports (postgres)"
+          for d in "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
+            for f in "$d"/postgres*.ips "$d"/postgres*.crash; do
+              echo "== $f =="; cat "$f"; echo
+            done
+          done
+          echo "::endgroup::"
+          exit 1
