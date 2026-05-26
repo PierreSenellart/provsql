@@ -5087,7 +5087,8 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
 #undef CCLASS
 }
 
-Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
+Query *try_safe_query_rewrite(const constants_t *constants, Query *q,
+                              char **inv_cert_out) {
   List   *atoms;
   List   *groups = NIL;
   Node   *residual = NULL;
@@ -5096,6 +5097,9 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   int     natoms;
   int     i;
   ListCell *lc;
+
+  if (inv_cert_out)
+    *inv_cert_out = NULL;
 
 #if PG_VERSION_NUM >= 180000
   /* Same trick as rewrite_agg_distinct: PG 18's RTE_GROUP virtual
@@ -5165,15 +5169,20 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
       if (approved)
         bms_free(approved);
       /* The read-once candidate gate refused (most often an un-rescued
-       * self-join).  Try the inversion-free detector as a sibling.  Phase 1:
-       * the certificate is produced but not attached or consumed -- we only
-       * emit a diagnostic NOTICE and leave the lineage intact (return NULL),
-       * so query evaluation is unchanged. */
-      {
+       * self-join).  Try the inversion-free detector as a sibling.  We do not
+       * rewrite the query (the lineage is left intact); instead we hand the
+       * serialised certificate back to the caller, which wraps the per-row
+       * provenance root in an annotation gate carrying it.  Only attempted
+       * when the caller asked for it (@p inv_cert_out non-NULL) -- i.e. at the
+       * top-level query root, never on a nested subquery / UNION-branch root. */
+      if (inv_cert_out != NULL) {
         SafeCert *cert = detect_inversion_free(constants, q);
-        if (cert != NULL && provsql_verbose >= 1)
-          provsql_notice("%s [certificate produced, unused in phase 1]",
-                         safe_cert_describe(cert));
+        if (cert != NULL) {
+          if (provsql_verbose >= 1)
+            provsql_notice("%s [certificate attached]", safe_cert_describe(cert));
+          if (OidIsValid(constants->OID_FUNCTION_ANNOTATE))
+            *inv_cert_out = safe_cert_serialise(cert);
+        }
       }
       return NULL;
     }

@@ -41,15 +41,24 @@ DO $$ BEGIN
 END $$;
 
 -- (1) Witness: S(x,y),A(x,y),S(x,z),B(x,z) -- self-join on S through root x.
---     Expect a NOTICE that the inversion-free certificate was produced, and
---     the row count to be unchanged (only x=1 qualifies -> 1 row).
+--     Expect a NOTICE that the certificate was attached (planner side).  The
+--     certificate then round-trips to the evaluator: probability_evaluate reads
+--     it back from the annotated root (a second NOTICE) and -- because the
+--     annotation is transparent -- still returns the correct probability
+--     (one derivation of four independent p=0.5 inputs => 0.5^4 = 0.0625).
+--     Cardinality is preserved (only x=1 qualifies -> 1 row).
+-- Capture the per-row provenance token (the annotated root) into an explicit
+-- column p, then drop provenance tracking so the probability read below is not
+-- itself rewritten (no non-deterministic provsql column on its output).
 CREATE TEMP TABLE ifr_witness AS
-  SELECT s1.x AS x
+  SELECT s1.x AS x, provenance() AS p
     FROM ifr_s s1, ifr_a a, ifr_s s2, ifr_b b
    WHERE s1.x = a.x AND s1.c2 = a.c2     -- S(x,y), A(x,y)
      AND s1.x = s2.x                     -- both S occurrences share the root x
      AND s2.x = b.x AND s2.c2 = b.c2;    -- S(x,z), B(x,z)
 SELECT remove_provenance('ifr_witness');
+SELECT round(probability_evaluate(p)::numeric, 6) AS witness_prob
+  FROM ifr_witness ORDER BY 1;
 SELECT count(*) AS witness_rows FROM ifr_witness;
 
 -- (2) Rejection -- symmetric closure R(x,y),R(y,x): the root class sits at two

@@ -49,6 +49,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "having_semantics.hpp"
 #include "provsql_mmap.h"
+#include "safe_query_cert.h"
 #include "provsql_utils_cpp.h"
 #include "semiring/BoolExpr.h"
 
@@ -102,6 +103,22 @@ static Datum probability_evaluate_internal
   // peephole-pruned for any "always true / always false" comparator.
   GenericCircuit gc = getGenericCircuit(token);
   gate_t gc_root = gc.getGate(uuid2string(token));
+
+  // Inversion-free tractability certificate: the planner wraps the per-row
+  // provenance root in a transparent annotation gate carrying the serialised
+  // SafeCert recipe.  Phase 2 reads it back and logs it (proving the recipe
+  // round-trips planner -> mmap -> evaluator); acting on it (routing to the
+  // structured-d-DNNF builder, skipping tree-decomposition) is a later phase.
+  {
+    std::string ex = gc.getExtra(gc_root);
+    if (!ex.empty() && ex[0] == SAFE_CERT_EXTRA_PREFIX_RECIPE) {
+      SafeCert *cert = safe_cert_parse(ex.c_str());
+      if (cert != nullptr && provsql_verbose >= 1)
+        provsql_notice("inversion-free certificate read back from circuit "
+                       "root: %d atoms, %d classes, root_class=%d",
+                       cert->natoms, cert->nclasses, cert->root_class);
+    }
+  }
 
   // Hybrid-evaluator simplifier: constant-fold gate_arith subtrees,
   // drop identity wires (0 from PLUS, 1 from TIMES), and collapse

@@ -33,9 +33,15 @@ extern bool provsql_boolean_provenance;
  * @param q          Input @c Query, modified in place by side-effect-free
  *                   helpers but @em not consumed; the rewriter
  *                   @c copyObject's it before mutating.
+ * @param inv_cert_out  Out: when the query is not rewritten but is recognised
+ *                   as inversion-free @c UCQ(OBDD), set to a palloc'd,
+ *                   @c C-prefixed serialised @c SafeCert recipe (the caller
+ *                   wraps the per-row provenance root in @c annotate with it);
+ *                   set to @c NULL otherwise.  May be @c NULL to opt out.
  * @return A fresh rewritten @c Query, or @c NULL to fall through.
  */
-extern Query *try_safe_query_rewrite(const constants_t *constants, Query *q);
+extern Query *try_safe_query_rewrite(const constants_t *constants, Query *q,
+                                     char **inv_cert_out);
 
 /**
  * @brief PG 18 helper: strip the synthetic @c RTE_GROUP entry from

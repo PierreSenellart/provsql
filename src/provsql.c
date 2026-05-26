@@ -94,8 +94,10 @@ extern void _PG_fini(void);
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed, bool wrap_root);
+                            bool **removed, bool wrap_root, bool top_level);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
+static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
+                              const char *cert);
 
 /* -------------------------------------------------------------------------
  * Provenance attribute construction
@@ -625,7 +627,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       int old_targetlist_length =
         r->subquery->targetList ? r->subquery->targetList->length : 0;
       Query *new_subquery =
-        process_query(constants, r->subquery, &inner_removed, false);
+        process_query(constants, r->subquery, &inner_removed, false, false);
       if (new_subquery != NULL) {
         int i = 0;
         int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
@@ -1702,13 +1704,20 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
  * @param wrap_assumed_boolean If true, wrap the result in
  *                         @c provenance_assumed_boolean so downstream
  *                         probability evaluators may treat it as Boolean.
+ * @param inv_cert         If non-NULL, a serialised inversion-free certificate
+ *                         to attach to the per-row root via @c provsql.annotate
+ *                         (transparent for every evaluator; read back by the
+ *                         probability dispatcher).  Mutually compatible with
+ *                         @c wrap_assumed_boolean only in principle -- the
+ *                         inversion-free path never sets the latter.
  * @return  The provenance @c Expr to be appended to the target list.
  */
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
                                         semiring_operation op, int **columns,
-                                        int nbcols, bool wrap_assumed_boolean) {
+                                        int nbcols, bool wrap_assumed_boolean,
+                                        const char *inv_cert) {
   Expr *result;
   ListCell *lc_v;
 
@@ -2022,6 +2031,13 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
   if (wrap_assumed_boolean &&
       OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN))
     result = wrap_in_assume_boolean(constants, result);
+
+  /* Attach the inversion-free tractability certificate to the per-row root.
+   * The annotation gate is transparent for every evaluator; the probability
+   * dispatcher reads the certificate back from its extra. */
+  if (inv_cert != NULL &&
+      OidIsValid(constants->OID_FUNCTION_ANNOTATE))
+    result = wrap_in_annotate(constants, result, inv_cert);
 
   return result;
 }
@@ -4210,6 +4226,33 @@ static Expr *wrap_in_assume_boolean(const constants_t *constants,
 }
 
 /**
+ * @brief Wrap @p expr in a @c provsql.annotate(uuid, text) FuncExpr carrying
+ *        @p cert.
+ *
+ * Used by @c make_provenance_expression to attach the inversion-free
+ * tractability certificate to the per-row provenance root: the resulting
+ * annotation gate is transparent for every evaluator and carries @p cert in
+ * its @c extra (and folded into its UUID).  @p cert is copied into a text
+ * @c Const.
+ */
+static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
+                              const char *cert) {
+  FuncExpr *wrap = makeNode(FuncExpr);
+  Const *ce = makeConst(TEXTOID, -1, DEFAULT_COLLATION_OID, -1,
+                        CStringGetTextDatum(cert), false, false);
+  wrap->funcid = constants->OID_FUNCTION_ANNOTATE;
+  wrap->funcresulttype = constants->OID_TYPE_UUID;
+  wrap->funcretset = false;
+  wrap->funcvariadic = false;
+  wrap->funcformat = COERCE_EXPLICIT_CALL;
+  wrap->funccollid = InvalidOid;
+  wrap->inputcollid = DEFAULT_COLLATION_OID;
+  wrap->args = list_make2(expr, (Expr *) ce);
+  wrap->location = -1;
+  return (Expr *) wrap;
+}
+
+/**
  * @brief Rewrite a single SELECT query to carry provenance.
  *
  * This is the recursive entry point for the provenance rewriter.  It is
@@ -4238,7 +4281,7 @@ static Expr *wrap_in_assume_boolean(const constants_t *constants,
  *          query has no FROM clause and can be skipped.
  */
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed, bool wrap_root) {
+                            bool **removed, bool wrap_root, bool top_level) {
   List *prov_atts;
   bool has_union = false;
   bool has_difference = false;
@@ -4247,6 +4290,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   int nbcols = 0;
   int **columns;
   unsigned i = 0;
+  char *inv_cert = NULL;            /* serialised inversion-free certificate */
   if (provsql_verbose >= 50)
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
@@ -4381,14 +4425,14 @@ static Query *process_query(const constants_t *constants, Query *q,
                           "aggregate results not supported");
         }
         q = rewrite_non_all_into_external_group_by(q);
-        return process_query(constants, q, removed, wrap_root);
+        return process_query(constants, q, removed, wrap_root, top_level);
       }
     }
 
     if (q->hasAggs) {
       Query *rewritten = rewrite_agg_distinct(q, constants);
       if (rewritten)
-        return process_query(constants, rewritten, removed, wrap_root);
+        return process_query(constants, rewritten, removed, wrap_root, top_level);
     }
 
     /* Opt-in safe-query optimisation slot: when on, try to rewrite
@@ -4404,9 +4448,18 @@ static Query *process_query(const constants_t *constants, Query *q,
      * helper. */
     if (provsql_boolean_provenance &&
         OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN)) {
-      Query *rewritten = try_safe_query_rewrite(constants, q);
+      /* Only capture / attach the inversion-free certificate at the outermost
+       * (top-level) query root, the one the user evaluates: wrapping a nested
+       * subquery / UNION-branch root would be both pointless and harmful (the
+       * annotation gate, though transparent for evaluation, changes circuit
+       * structure and would block the outer foldBooleanIdentities absorption
+       * the read-once `independent` path relies on). */
+      Query *rewritten =
+        try_safe_query_rewrite(constants, q, top_level ? &inv_cert : NULL);
       if (rewritten)
-        return process_query(constants, rewritten, removed, true);
+        return process_query(constants, rewritten, removed, true, top_level);
+      /* No read-once rewrite; inv_cert may now hold an inversion-free
+       * certificate to attach to this query's per-row provenance root. */
     }
 
     // get_provenance_attributes will also recursively process subqueries
@@ -4563,7 +4616,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       provenance = make_provenance_expression(
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
-        nbcols, wrap_root);
+        nbcols, wrap_root, inv_cert);
 
       /* Fallback for the rare set-op outer WHERE case: conjoin via
        * provenance_times after the aggregation wrappers.  Correct only
@@ -4686,7 +4739,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   /* Rewrite the source SELECT to carry provenance */
   {
     bool *removed = NULL;
-    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false);
+    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false, false);
     AttrNumber src_provsql_attno = 0;
 
     if (new_subquery == NULL)
@@ -4810,7 +4863,7 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_verbose >= 40)
         begin = clock();
 
-      new_query = process_query(&constants, q, &removed, false);
+      new_query = process_query(&constants, q, &removed, false, true);
 
       if (provsql_verbose >= 40)
         provsql_notice("planner time spent=%f",

@@ -8,9 +8,13 @@ add_provenance
 add_provenance
 
 (1 row)
-NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 4 atoms, 3 classes, root=0, order=[0,1,2] [certificate produced, unused in phase 1]
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 4 atoms, 3 classes, root=0, order=[0,1,2] [certificate attached]
 remove_provenance
 
+(1 row)
+NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 4 atoms, 3 classes, root_class=0
+witness_prob
+0.062500
 (1 row)
 witness_rows
 1

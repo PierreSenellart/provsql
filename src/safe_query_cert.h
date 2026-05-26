@@ -60,6 +60,20 @@ typedef struct SafeCert {
 #define SAFE_CERT_EXTRA_PREFIX_RECIPE 'C'  ///< Root: serialised SafeCert recipe.
 #define SAFE_CERT_EXTRA_PREFIX_KEY    'K'  ///< Input: per-variable order key.
 
+/**
+ * @brief Serialise a @c SafeCert recipe to a compact, @c C-prefixed string
+ *        (palloc'd in the current memory context).  Inverse of @c safe_cert_parse.
+ */
+extern char *safe_cert_serialise(const SafeCert *cert);
+
+/**
+ * @brief Parse a @c C-prefixed recipe string (as produced by
+ *        @c safe_cert_serialise and read back from an annotation gate's
+ *        @c extra) into a palloc'd @c SafeCert.  Returns NULL if @p str is
+ *        NULL, not @c C-prefixed, or malformed.
+ */
+extern SafeCert *safe_cert_parse(const char *str);
+
 #ifdef __cplusplus
 }
 #endif
