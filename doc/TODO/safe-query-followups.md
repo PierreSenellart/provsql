@@ -1,9 +1,9 @@
 # Safe-Query Follow-Ups
 
 Ideas surfaced during the safe-query / `provsql.boolean_provenance`
-discussion that are deferred but worth coming back to. Complements
-[`safe-query-optimisation-plan.md`](safe-query-optimisation-plan.md),
-which covers the work already landed.
+discussion that are deferred but worth coming back to. The work that
+has already landed is described in the *Safe-Query Rewriter* section
+of `doc/source/dev/query-rewriting.rst`.
 
 ## Boolean-only optimisations
 
