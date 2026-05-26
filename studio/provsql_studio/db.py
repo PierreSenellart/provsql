@@ -706,13 +706,33 @@ def conn_info(pool: ConnectionPool) -> dict:
             "       coalesce(inet_server_addr()::text, ''), "
             "       coalesce(inet_server_port()::text, ''), "
             "       array_to_string(current_schemas(false), ', '), "
-            "       (SELECT extversion FROM pg_extension WHERE extname = 'provsql')"
+            "       (SELECT extversion FROM pg_extension WHERE extname = 'provsql'), "
+            "       current_setting('is_superuser')::bool"
         )
-        user, database, host, port, search_path, ext_version = cur.fetchone()
+        (user, database, host, port, search_path, ext_version,
+         is_superuser) = cur.fetchone()
         # Numeric server version, e.g. 130000 for PG 13, 140000 for PG 14.
         # Surfaced so the UI can gate features that depend on PG-version-
         # specific objects (currently `tstzmultirange` for sr_temporal).
         server_version = conn.info.server_version
+        # provsql.tool_search_path is PGC_SUSET (superuser-only) since the
+        # security hardening: only a superuser -- or, on PG 15+, a role
+        # GRANTed SET on the parameter -- may set it. Surface whether this
+        # session can, so the Config panel marks the field read-only /
+        # admin-managed instead of letting set_config fail at query time.
+        tool_search_path_settable = bool(is_superuser)
+        if not tool_search_path_settable and server_version >= 150000:
+            cur.execute("SAVEPOINT _tsp_priv")
+            try:
+                cur.execute(
+                    "SELECT has_parameter_privilege("
+                    "'provsql.tool_search_path', 'SET')"
+                )
+                tool_search_path_settable = bool(cur.fetchone()[0])
+                cur.execute("RELEASE SAVEPOINT _tsp_priv")
+            except psycopg.Error:
+                cur.execute("ROLLBACK TO SAVEPOINT _tsp_priv")
+                cur.execute("RELEASE SAVEPOINT _tsp_priv")
     return {
         "user": user,
         "database": database,
@@ -721,7 +741,35 @@ def conn_info(pool: ConnectionPool) -> dict:
         "search_path": search_path,
         "server_version": server_version,
         "extension_version": ext_version or None,
+        "tool_search_path_settable": tool_search_path_settable,
     }
+
+
+def apply_tool_search_path(cur, tool_search_path: str) -> bool:
+    """Apply provsql.tool_search_path for the current batch, if non-empty.
+
+    provsql.tool_search_path is PGC_SUSET (superuser-only) since the
+    security hardening, so a non-superuser session cannot set it and
+    set_config raises insufficient_privilege. We run it inside a
+    SAVEPOINT and swallow that error, so the user's query still executes:
+    the path is then simply admin-managed (the session falls back to the
+    server PATH, or to a value an admin pinned via ALTER ROLE ... SET).
+    Returns True iff the value was applied. Mirrors the _aggtok_guc
+    savepoint pattern used for the other PGC_SUSET GUCs."""
+    if not (tool_search_path or "").strip():
+        return False
+    cur.execute("SAVEPOINT _tsp_guc")
+    try:
+        cur.execute(
+            "SELECT set_config('provsql.tool_search_path', %s, true)",
+            (tool_search_path,),
+        )
+        cur.execute("RELEASE SAVEPOINT _tsp_guc")
+        return True
+    except psycopg.errors.InsufficientPrivilege:
+        cur.execute("ROLLBACK TO SAVEPOINT _tsp_guc")
+        cur.execute("RELEASE SAVEPOINT _tsp_guc")
+        return False
 
 
 def list_relations(pool: ConnectionPool, *, max_rows: int = 100) -> list[dict]:
@@ -1192,11 +1240,7 @@ def evaluate_circuit(
                 "SELECT set_config('search_path', %s, true)",
                 (target_path,),
             )
-            if (tool_search_path or "").strip():
-                cur.execute(
-                    "SELECT set_config('provsql.tool_search_path', %s, true)",
-                    (tool_search_path,),
-                )
+            apply_tool_search_path(cur, tool_search_path)
             for guc_name, guc_val in (extra_gucs or {}).items():
                 if guc_name not in _EXTRA_GUC_WHITELIST:
                     continue
@@ -1339,11 +1383,7 @@ def evaluate_circuit(
                 "SELECT set_config('search_path', %s, true)",
                 (target_path,),
             )
-            if (tool_search_path or "").strip():
-                cur.execute(
-                    "SELECT set_config('provsql.tool_search_path', %s, true)",
-                    (tool_search_path,),
-                )
+            apply_tool_search_path(cur, tool_search_path)
             for guc_name, guc_val in (extra_gucs or {}).items():
                 if guc_name not in _EXTRA_GUC_WHITELIST:
                     continue
@@ -1462,11 +1502,7 @@ def evaluate_circuit(
             # ganak / sharpsat-td / dmc / weightmc / graph-easy.
             # provsql.tool_search_path lets the user point ProvSQL at a
             # non-default install location for those binaries.
-            if (tool_search_path or "").strip():
-                cur.execute(
-                    "SELECT set_config('provsql.tool_search_path', %s, true)",
-                    (tool_search_path,),
-                )
+            apply_tool_search_path(cur, tool_search_path)
             # Panel-managed GUCs (provsql.rv_mc_samples,
             # provsql.monte_carlo_seed, provsql.simplify_on_load, ...) must
             # apply here too, otherwise the evaluate-strip's probability
@@ -1783,11 +1819,7 @@ def exec_batch(
                 # provsql spawns external tools (d4 / c2d / weightmc /
                 # graph-easy). set_config parameterises the value so
                 # the user-supplied portion never reaches PG as raw SQL.
-                if (tool_search_path or "").strip():
-                    cur.execute(
-                        "SELECT set_config('provsql.tool_search_path', %s, true)",
-                        (tool_search_path,),
-                    )
+                apply_tool_search_path(cur, tool_search_path)
                 # Config-panel GUCs (provsql.active, provsql.verbose_level)
                 # apply on top of the per-query toggles so the user can keep
                 # the rewriter off via the panel without having to remember

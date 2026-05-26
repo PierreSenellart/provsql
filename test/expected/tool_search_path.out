@@ -15,3 +15,8 @@ NOTICE:  graph-easy exit 42 surfaces as structured error
 provsql.tool_search_path
 
 (1 row)
+NOTICE:  tool_search_path SET refused for non-superuser
+NOTICE:  tool_search_path set_config refused for non-superuser
+provsql.fallback_compiler
+c2d
+(1 row)

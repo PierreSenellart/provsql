@@ -78,7 +78,7 @@ bool provsql_where_provenance = false;
 static bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
-char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC
+char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC. Superuser-only (@c PGC_SUSET): it dictates which directories the postgres OS user searches for executables, so a non-privileged role must not be able to point it at an attacker-controlled binary.
 char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit::makeDD as the final fallback after @c interpretAsDD and tree-decomposition both fail; controlled by the @c provsql.fallback_compiler GUC (default @c "d4")
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
@@ -5394,13 +5394,16 @@ void _PG_init(void) {
                           NULL,
                           NULL);
   DefineCustomStringVariable("provsql.tool_search_path",
-                             "Directories prepended to PATH when ProvSQL spawns external tools.",
+                             "Directories prepended to PATH when ProvSQL spawns external tools (superuser-only).",
                              "Colon-separated list of directories searched before the server's PATH "
                              "when locating d4, c2d, minic2d, dsharp, weightmc, or graph-easy. "
-                             "Empty (default) means rely on the server's PATH alone.",
+                             "Empty (default) means rely on the server's PATH alone. "
+                             "Restricted to superusers (PGC_SUSET): it controls which directories the "
+                             "postgres OS user searches for executables, so a non-privileged role must "
+                             "not be able to redirect it to an attacker-controlled binary.",
                              &provsql_tool_search_path,
                              "",
-                             PGC_USERSET,
+                             PGC_SUSET,
                              0,
                              NULL,
                              NULL,

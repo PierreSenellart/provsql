@@ -171,6 +171,16 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
         SET provsql.tool_search_path = '/opt/d4:/home/postgres/bin';
 
+    **Superuser only.** This parameter dictates which directories the
+    PostgreSQL server's operating-system user searches for executables, so
+    letting an unprivileged role change it would let that role have an
+    arbitrary binary run under the server account. It therefore has
+    ``SUSET`` scope: only a superuser (or, on PostgreSQL 15 and later, a
+    role explicitly granted ``SET`` on the parameter) may change it. A
+    non-superuser session uses whatever value an administrator pins for it
+    (for example with ``ALTER ROLE ... SET provsql.tool_search_path``) or
+    the server's default ``PATH``.
+
 ``provsql.fallback_compiler`` (default: ``d4``)
     Name of the external compiler ProvSQL invokes as the **final fallback**
     in :sqlfunc:`probability_evaluate` (with the empty or ``'default'``
@@ -184,5 +194,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
         SET provsql.fallback_compiler = 'c2d';
 
-All variables above have user-level scope: any user can change them for their
-own session without superuser privileges.
+All variables above **except** ``provsql.tool_search_path`` have user-level
+scope: any user can change them for their own session without superuser
+privileges. ``provsql.tool_search_path`` is superuser-only, for the security
+reason given in its entry above.

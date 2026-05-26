@@ -769,6 +769,15 @@
       if (window.ProvsqlStudio.syncCompiledSemiringAvailability) {
         window.ProvsqlStudio.syncCompiledSemiringAvailability();
       }
+      // provsql.tool_search_path is superuser-only (PGC_SUSET): record
+      // whether this session may set it, so the Config panel can present
+      // the field as admin-managed instead of letting the write fail.
+      // Missing (older server) is treated as settable for back-compat.
+      window.ProvsqlStudio.toolSearchPathSettable =
+        (c.tool_search_path_settable !== false);
+      if (window.ProvsqlStudio.applyToolSearchPathPolicy) {
+        window.ProvsqlStudio.applyToolSearchPathPolicy();
+      }
       // Footer version chip: ProvSQL extension version (NULL when the
       // extension is not installed on the connected database) and
       // Studio package version. Discreet: runs once per /api/conn poll
@@ -921,6 +930,30 @@
     const rvSamples = document.getElementById('cfg-rv-mc-samples');
     const fallback  = document.getElementById('cfg-fallback-compiler');
 
+    // provsql.tool_search_path is superuser-only (PGC_SUSET). For a
+    // non-superuser session the field is read-only / admin-managed: the
+    // server swallows any write, so present it as such rather than
+    // letting the user think their edit took effect. Driven by the flag
+    // /api/conn publishes on window.ProvsqlStudio.toolSearchPathSettable;
+    // re-applied whenever the connection poll refreshes it.
+    function applyToolSearchPathPolicy() {
+      if (!tsp) return;
+      const settable =
+        (window.ProvsqlStudio.toolSearchPathSettable !== false);
+      tsp.readOnly = !settable;
+      tsp.classList.toggle('is-admin-managed', !settable);
+      tsp.style.opacity = settable ? '' : '0.6';
+      tsp.style.cursor = settable ? '' : 'not-allowed';
+      tsp.placeholder = settable ? '(server PATH)' : '(admin-managed)';
+      tsp.title = settable
+        ? ''
+        : 'provsql.tool_search_path is superuser-only; its value is '
+          + 'managed by the database administrator and cannot be changed '
+          + 'from a non-superuser session.';
+    }
+    window.ProvsqlStudio.applyToolSearchPathPolicy =
+      applyToolSearchPathPolicy;
+
     async function loadConfig() {
       try {
         const resp = await fetch('/api/config');
@@ -969,6 +1002,7 @@
         if (tsp && opts.tool_search_path != null) {
           tsp.value = opts.tool_search_path;
         }
+        applyToolSearchPathPolicy();
         loaded = true;
         showStatus('');
       } catch (e) {
@@ -1131,6 +1165,10 @@
       // provsql.tool_search_path: same blur-and-Enter commit pattern as
       // search_path. Empty string falls back to the server's PATH.
       const commitTsp = () => {
+        // Superuser-only GUC: a non-superuser session can't set it, and
+        // the field is read-only in that case, so don't round-trip a
+        // write the server would only swallow.
+        if (window.ProvsqlStudio.toolSearchPathSettable === false) return;
         const v = (tsp.value || '').trim();
         tsp.value = v;
         setGuc('tool_search_path', v);

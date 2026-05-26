@@ -61,4 +61,37 @@ END $$;
 RESET provsql.tool_search_path;
 SHOW provsql.tool_search_path;
 
+-- 7. provsql.tool_search_path is superuser-only (PGC_SUSET): a
+--    non-superuser must not be able to redirect where the backend
+--    searches for tool binaries, since that is arbitrary code execution
+--    as the postgres OS user.  provsql.fallback_compiler stays
+--    user-settable: it only picks among a hard-coded name whitelist and
+--    cannot point at an arbitrary binary.  The DO/EXCEPTION wrappers key
+--    on the SQLSTATE so the expectation is locale-independent (the core
+--    "permission denied" message is translated).
+CREATE ROLE provsql_tsp_unpriv NOSUPERUSER;
+SET ROLE provsql_tsp_unpriv;
+
+DO $$
+BEGIN
+  SET provsql.tool_search_path = '/tmp/evil';
+  RAISE NOTICE 'BUG: SET tool_search_path succeeded for a non-superuser';
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'tool_search_path SET refused for non-superuser';
+END $$;
+
+DO $$
+BEGIN
+  PERFORM set_config('provsql.tool_search_path', '/tmp/evil', false);
+  RAISE NOTICE 'BUG: set_config tool_search_path succeeded for a non-superuser';
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'tool_search_path set_config refused for non-superuser';
+END $$;
+
+SET provsql.fallback_compiler = 'c2d';
+SHOW provsql.fallback_compiler;
+
+RESET ROLE;
+DROP ROLE provsql_tsp_unpriv;
+
 \! rm -rf /tmp/provsql_tsp_test

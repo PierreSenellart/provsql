@@ -697,6 +697,11 @@ The Config panel groups its options into four sections:
   documented in :doc:`configuration`:
   ``provsql.active``, ``provsql.verbose_level``, and
   ``provsql.tool_search_path``.
+  ``provsql.tool_search_path`` is superuser-only (see
+  :doc:`configuration`); when Studio is connected as a non-superuser
+  role, its field is shown read-only and labelled *(admin-managed)*,
+  reflecting the value an administrator pinned (or the server's default
+  ``PATH``) rather than letting an edit silently have no effect.
   ``provsql.where_provenance`` and ``provsql.update_provenance`` live
   next to the query box instead (see `Per-query toggles`_), since
   they are typically flipped per query rather than per session.
