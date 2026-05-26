@@ -1,0 +1,138 @@
+/**
+ * @file ToolRegistry.h
+ * @brief In-memory catalog of the external tools ProvSQL can invoke.
+ *
+ * ProvSQL shells out to several knowledge compilers / model counters /
+ * visualisers (@c d4, @c d4v2, @c c2d, @c minic2d, @c dsharp, @c ganak,
+ * @c weightmc, @c graph-easy).  Historically the set of tools, their
+ * executable names, and which one is preferred for a given operation were
+ * compiled in as string literals scattered across a dozen call sites.  This
+ * registry turns that into a single in-memory table of @ref ToolRecord, so
+ * the dispatchers query metadata instead of testing literals.
+ *
+ * The registry is seeded at first use with exactly the tools ProvSQL has
+ * always known about, with their current invocations and a default
+ * preference order, so the out-of-the-box behaviour is unchanged: a fresh
+ * backend behaves identically with no registration call.  An administrator
+ * may then add / repoint / reorder / disable tools at run time through the
+ * SQL surface (@c provsql.register_tool, @c provsql.unregister_tool,
+ * @c provsql.set_tool_enabled, @c provsql.set_tool_preference, and the
+ * read-only @c provsql.tools view).
+ *
+ * @par Lifetime
+ * The catalog is process-local (one copy per PostgreSQL backend), seeded
+ * from compiled-in defaults and mutated in memory.  It is therefore
+ * **per-session and transient**: registrations are visible only within the
+ * backend that made them and are reset when the session ends.  This is the
+ * deliberate first-stage backing; a future stage may back it with a shared
+ * catalog table without changing this interface.
+ *
+ * @par Standalone tdkc
+ * The standalone @c tdkc tool deliberately uses no external tool, so it does
+ * not link this registry: every reference to it in @c BooleanCircuit.cpp is
+ * guarded by @c \#ifndef @c TDKC.  Keep this header free of any PostgreSQL or
+ * external-tool dependency so it stays a self-contained piece of metadata.
+ */
+#ifndef PROVSQL_TOOL_REGISTRY_H
+#define PROVSQL_TOOL_REGISTRY_H
+
+#include <string>
+#include <vector>
+
+namespace provsql {
+
+/**
+ * @brief One registered external tool.
+ *
+ * @c name is the logical id used by the dispatchers and the
+ * @c provsql.fallback_compiler GUC (e.g. @c "d4").  @c binary is the
+ * executable resolved through @c find_external_tool; it defaults to
+ * @c name but may be repointed (e.g. an absolute path to a specific build)
+ * without changing the logical id.  Distinct logical ids may share one
+ * @c binary: the three @c panini-* compiler variants all run @c "panini"
+ * with a different @c --lang.  @c operations advertises what the tool can
+ * do: @c "compile" (knowledge compilation to a d-DNNF / NNF the
+ * @c compilation() parser reads), @c "wmc" (weighted model counting), or
+ * @c "render" (DOT visualisation); a record with no operation would be
+ * unselectable, so every record advertises at least one.  @c preference
+ * orders candidates within an operation (higher first); @c enabled lets an
+ * admin keep a record but stop the dispatchers from selecting it.
+ *
+ * @c dependencies lists extra executables the tool needs at run time beyond
+ * @c binary: @c sharpsat-td needs @c flow_cutter_pace17, and @c dpmc is a
+ * two-binary pipeline (@c htb @c | @c dmc) with an empty @c binary and
+ * @c dependencies @c = @c {htb, dmc}.  A tool is "available" iff @c binary
+ * (when non-empty) and every dependency resolve on PATH.
+ */
+struct ToolRecord {
+  std::string name;
+  std::string kind;                      ///< "cli" today; "kcmcp" later.
+  std::string binary;
+  std::vector<std::string> operations;
+  int preference = 0;
+  bool enabled = true;
+  std::vector<std::string> dependencies;
+
+  bool hasOperation(const std::string &op) const;
+};
+
+/**
+ * @brief The process-local registry singleton.
+ *
+ * Not thread-safe; PostgreSQL backends are single-threaded, which is the
+ * only context that touches it.
+ */
+class ToolRegistry {
+public:
+  /// Access the per-process registry, seeding it on first use.
+  static ToolRegistry &instance();
+
+  /// Find a record by logical name, or @c nullptr if none is registered.
+  const ToolRecord *find(const std::string &name) const;
+
+  /// True iff a record named @p name exists, is enabled, and advertises @p op.
+  bool provides(const std::string &name, const std::string &op) const;
+
+  /**
+   * @brief Enabled tools advertising @p op, ordered by descending
+   *        preference then name.
+   */
+  std::vector<const ToolRecord *> byOperation(const std::string &op) const;
+
+  /// All records, in registration order (used by the @c provsql.tools view).
+  const std::vector<ToolRecord> &records() const {
+    return records_;
+  }
+
+  /// Register a new tool or replace the record with the same name.
+  void upsert(const ToolRecord &rec);
+
+  /// Remove the record named @p name; returns false if none existed.
+  bool remove(const std::string &name);
+
+  /// Flip the @c enabled flag of @p name; returns false if none existed.
+  bool setEnabled(const std::string &name, bool enabled);
+
+  /// Set the @c preference of @p name; returns false if none existed.
+  bool setPreference(const std::string &name, int preference);
+
+  /// Discard all records and re-seed the compiled-in defaults.
+  void reset();
+
+private:
+  ToolRegistry() {
+    seed();
+  }
+  void seed();
+
+  std::vector<ToolRecord> records_;
+};
+
+/// Shorthand for @c ToolRegistry::instance().
+inline ToolRegistry &tool_registry() {
+  return ToolRegistry::instance();
+}
+
+} // namespace provsql
+
+#endif

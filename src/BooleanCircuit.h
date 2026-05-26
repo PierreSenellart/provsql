@@ -504,11 +504,14 @@ std::string BCS12(gate_t g, std::vector<gate_t> &inputOrder) const;
  * determinism, so the input-projection is still a sound d-DNNF and
  * @c dDNNF::probabilityEvaluation gives the correct probability).
  *
- * @param g     Root gate of the sub-circuit to compile.
- * @param lang  Panini target language (see above).
- * @return      The compiled d-DNNF.
+ * @param g       Root gate of the sub-circuit to compile.
+ * @param lang    Panini target language (see above).
+ * @param binary  Executable to invoke (the registry-resolved binary for the
+ *                selected @c panini-* variant; defaults to @c "panini").
+ * @return        The compiled d-DNNF.
  */
-dDNNF paniniCompile(gate_t g, const std::string &lang) const;
+dDNNF paniniCompile(gate_t g, const std::string &lang,
+                    const std::string &binary = "panini") const;
 
 /**
  * @brief Boost serialisation support.

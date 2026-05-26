@@ -14,6 +14,7 @@
  */
 #include "DotCircuit.h"
 #include "external_tool.h"
+#include "ToolRegistry.h"
 #include "scoped_tempdir.h"
 #include <type_traits>
 
@@ -145,10 +146,22 @@ std::string DotCircuit::toString(gate_t) const
 
 std::string DotCircuit::render() const {
   //Executing the Graphviz dot renderer through graph-easy for ASCII
-  //output
-  if(find_external_tool("graph-easy").empty()) {
+  //output. The executable and its enabled flag come from the tool
+  //registry (logical name "graph-easy"); a record absent from the
+  //registry resolves to itself.
+  std::string render_bin = "graph-easy";
+  {
+    const provsql::ToolRecord *rec = provsql::tool_registry().find("graph-easy");
+    if(rec != nullptr) {
+      if(!rec->enabled)
+        throw CircuitException(
+                "Tool 'graph-easy' is disabled in the tool registry");
+      render_bin = rec->binary;
+    }
+  }
+  if(find_external_tool(render_bin).empty()) {
     throw CircuitException(
-            "graph-easy not found on PATH; install it or add its "
+            render_bin + " not found on PATH; install it or add its "
             "directory to provsql.tool_search_path");
   }
 
@@ -166,7 +179,7 @@ std::string DotCircuit::render() const {
     ofs << toString(gate_t{0});
   }
 
-  std::string cmdline="graph-easy --as=boxart --output="+outfilename+" "+filename;
+  std::string cmdline=render_bin+" --as=boxart --output="+outfilename+" "+filename;
 
   int retvalue = run_external_tool(cmdline);
   if(retvalue)

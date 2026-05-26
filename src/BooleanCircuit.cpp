@@ -45,6 +45,13 @@ extern "C" {
 
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "external_tool.h"
+#ifndef TDKC
+// The tool registry is an extension-only concept: tdkc deliberately
+// invokes no external tool, so it neither links nor consults it.  Every
+// registry reference below is guarded by #ifndef TDKC and falls back to the
+// historical literal behaviour on the tdkc side.
+#include "ToolRegistry.h"
+#endif
 
 // "provsql_utils.h"
 #ifdef TDKC
@@ -577,7 +584,8 @@ std::string BooleanCircuit::BCS12(gate_t g, std::vector<gate_t> &inputOrder) con
   return oss.str();
 }
 
-dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
+dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang,
+                                    const std::string &binary) const {
   // Validate / map the language token to Panini's `--lang` argument.
   // Three target classes ProvSQL exposes:
   //   OBDD             unstructured / structured BDD
@@ -593,9 +601,9 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
     throw CircuitException("Unknown Panini target language: " + lang);
   }
 
-  if (find_external_tool("panini").empty())
+  if (find_external_tool(binary).empty())
     throw CircuitException(
-            "panini not found on PATH; install KCBox/Panini or add "
+            binary + " not found on PATH; install KCBox/Panini or add "
             "its directory to provsql.tool_search_path");
 
   ScopedTempDir tmp;
@@ -613,7 +621,7 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
   // Panini's binary is a multi-tool dispatcher: argv[1] must be the
   // sub-tool name ("Panini"), the actual options follow.
   std::string cmdline =
-      "panini Panini --lang \"" + lang + "\" --out " + outfilename
+      binary + " Panini --lang \"" + lang + "\" --out " + outfilename
       + " --quiet " + filename;
 
   int retvalue = run_external_tool(cmdline);
@@ -770,6 +778,29 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
   return dnnf;
 }
 
+#ifndef TDKC
+// Resolve a registered tool's logical name to the executable to invoke,
+// enforcing the registry's enabled flag.  @p fallback_binary is returned
+// when the name is absent from the registry (preserving the historical
+// literal behaviour for any tool not seeded); when empty, an absent name
+// resolves to itself.  Throws on a disabled tool.
+static std::string resolveToolBinary(const std::string &name,
+                                     const std::string &fallback_binary = "") {
+  const provsql::ToolRecord *rec = provsql::tool_registry().find(name);
+  if(rec == nullptr)
+    return fallback_binary.empty() ? name : fallback_binary;
+  if(!rec->enabled)
+    throw CircuitException("Tool '"+name+"' is disabled in the tool registry");
+  return rec->binary;
+}
+#else
+// tdkc invokes no external tool; the registry is not linked.
+static std::string resolveToolBinary(const std::string &name,
+                                     const std::string &fallback_binary = "") {
+  return fallback_binary.empty() ? name : fallback_binary;
+}
+#endif
+
 dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   // Panini (KCBox) does not produce a d4-style NNF file: it emits its
   // own BDD/DD format. Dispatch to the Panini-specific compile + parse
@@ -782,15 +813,35 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     else if (suffix == "decdnnf")  lang = "Decision-DNNF";
     else
       throw CircuitException("Unknown Panini variant: " + compiler);
-    return paniniCompile(g, lang);
+    // The panini-* variants are registry records (sharing one binary):
+    // honour the enabled flag and the resolved executable.  resolveToolBinary
+    // returns "panini" when the variant is absent from the registry.
+    return paniniCompile(g, lang, resolveToolBinary(compiler, "panini"));
   }
 
   // Validate the compiler name before any temp-dir or CNF work; that
-  // keeps the unknown-compiler error path lean and leak-free.
+  // keeps the unknown-compiler error path lean and leak-free.  In the
+  // extension build the set of valid compilers and the executable each
+  // resolves to come from the tool registry; tdkc keeps the historical
+  // literal whitelist (and never reaches a successful external compile,
+  // since its find_external_tool is a no-op).
+  std::string compiler_binary = compiler;
+#ifndef TDKC
+  {
+    const provsql::ToolRecord *rec = provsql::tool_registry().find(compiler);
+    if(rec == nullptr || !rec->hasOperation("compile"))
+      throw CircuitException("Unknown compiler '"+compiler+"'");
+    if(!rec->enabled)
+      throw CircuitException(
+              "Compiler '"+compiler+"' is disabled in the tool registry");
+    compiler_binary = rec->binary;
+  }
+#else
   if(compiler!="d4" && compiler!="d4v2" && compiler!="c2d"
      && compiler!="minic2d" && compiler!="dsharp") {
     throw CircuitException("Unknown compiler '"+compiler+"'");
   }
+#endif
 
   // d4v2 is driven with native circuit input (BC-S1.2, --input-type circuit):
   // the Boolean circuit is sent directly instead of a Tseytin CNF, skipping
@@ -798,9 +849,9 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   // Requires a d4v2 whose BC parser honours `I` declarations; on a gate shape
   // BC-S1.2 cannot express, we fall back to the Tseytin CNF path below.
   bool circuit_input = (compiler == "d4v2");
-  if(find_external_tool(compiler).empty())
+  if(find_external_tool(compiler_binary).empty())
     throw CircuitException(
-            compiler + " not found on PATH; install it or add its "
+            compiler_binary + " not found on PATH; install it or add its "
             "directory to provsql.tool_search_path");
 
   ScopedTempDir tmp;
@@ -831,7 +882,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   }
 
   bool new_d4 {false};
-  std::string cmdline=compiler+" ";
+  std::string cmdline=compiler_binary+" ";
   if(circuit_input) {
     // d4v2 native circuit input from the BC-S1.2 file.
     // `-t pcnf` projects the gate variables out so the compiled d-DNNF
@@ -879,7 +930,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     // stable since release; d4v2 failures short-circuit to the
     // throw below.
     new_d4 = false;
-    cmdline = "d4 "+filename+" -out="+outfilename;
+    cmdline = compiler_binary+" "+filename+" -out="+outfilename;
     retvalue=run_external_tool(cmdline);
   }
 
@@ -1061,9 +1112,10 @@ double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
   // Ganak (meelgroup/ganak): exact weighted model counter using the
   // MCC 2024 input format. We append our weight lines after the
   // standard Tseytin CNF in the format `c p weight <lit> <w> 0`.
-  if(find_external_tool("ganak").empty())
+  std::string ganak_bin = resolveToolBinary("ganak");
+  if(find_external_tool(ganak_bin).empty())
     throw CircuitException(
-            "ganak not found on PATH; install it or add its "
+            ganak_bin + " not found on PATH; install it or add its "
             "directory to provsql.tool_search_path");
 
   ScopedTempDir tmp;
@@ -1081,7 +1133,7 @@ double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
   }
   // --mode 7: MPFR float (weighted floating-point counting). The
   // exact line we parse is `c s exact quadruple float <value>`.
-  std::string cmdline = "ganak --mode 7 " + filename
+  std::string cmdline = ganak_bin + " --mode 7 " + filename
                       + " > " + outfilename + " 2>&1";
 
   int retvalue = run_external_tool(cmdline);
@@ -1116,9 +1168,10 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
   // DIMACS input as Ganak. The binary is invoked from a freshly
   // mkdtemp'd directory because it writes flowcutter scratch files
   // into `--tmpdir` and we want them cleaned up afterwards.
-  if(find_external_tool("sharpsat-td").empty())
+  std::string sharpsat_bin = resolveToolBinary("sharpsat-td");
+  if(find_external_tool(sharpsat_bin).empty())
     throw CircuitException(
-            "sharpsat-td not found on PATH; install it (binary name "
+            sharpsat_bin + " not found on PATH; install it (binary name "
             "'sharpsat-td', with the flow_cutter_pace17 helper also "
             "on PATH) or add the directory to provsql.tool_search_path");
   if(find_external_tool("flow_cutter_pace17").empty())
@@ -1158,7 +1211,7 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
   // doesn't break it.
   std::string cmdline =
       "cd \"$(dirname \"$(command -v flow_cutter_pace17)\")\" && "
-      "sharpsat-td -WE -decot 1 -decow 100 -tmpdir " + dirname
+      + sharpsat_bin + " -WE -decot 1 -decow 100 -tmpdir " + dirname
       + " -cs 3500 -prec 20 " + filename
       + " > " + outfilename + " 2>&1";
 
@@ -1194,11 +1247,28 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
   //   2. dmc  (executor) consumes the tree + CNF, returns the count
   // We assume both binaries are installed as `htb` and `dmc` on PATH,
   // and pipe the planner's stdout into dmc's stdin.
-  if(find_external_tool("htb").empty() || find_external_tool("dmc").empty())
+  // dpmc has no single binary; honour the registry record's enabled flag
+  // and read its two pipeline binaries from the record's dependencies
+  // (defaulting to htb / dmc when the record is absent).
+  std::string htb_bin = "htb", dmc_bin = "dmc";
+#ifndef TDKC
+  {
+    const provsql::ToolRecord *rec = provsql::tool_registry().find("dpmc");
+    if(rec != nullptr) {
+      if(!rec->enabled)
+        throw CircuitException("Tool 'dpmc' is disabled in the tool registry");
+      if(rec->dependencies.size() >= 2) {
+        htb_bin = rec->dependencies[0];
+        dmc_bin = rec->dependencies[1];
+      }
+    }
+  }
+#endif
+  if(find_external_tool(htb_bin).empty() || find_external_tool(dmc_bin).empty())
     throw CircuitException(
-            "DPMC needs 'htb' (planner) and 'dmc' (executor) on PATH; "
-            "install both from vardigroup/DPMC or add their directory "
-            "to provsql.tool_search_path");
+            "DPMC needs '" + htb_bin + "' (planner) and '" + dmc_bin
+            + "' (executor) on PATH; install both from vardigroup/DPMC or "
+            "add their directory to provsql.tool_search_path");
 
   ScopedTempDir tmp;
   std::string filename    = tmp.file("input.cnf");
@@ -1217,7 +1287,7 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
   // (no flag for the join-tree input; the help line says explicitly
   // "Diagram Model Counter (reads join tree from stdin)").
   std::string cmdline =
-      "htb --cf=" + filename + " | dmc --cf=" + filename
+      htb_bin + " --cf=" + filename + " | " + dmc_bin + " --cf=" + filename
       + " > " + outfilename + " 2>&1";
 
   int retvalue = run_external_tool(cmdline);
@@ -1274,9 +1344,10 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
   //calcul pivotAC
   const double pivotAC=2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
 
-  if(find_external_tool("weightmc").empty())
+  std::string weightmc_bin = resolveToolBinary("weightmc");
+  if(find_external_tool(weightmc_bin).empty())
     throw CircuitException(
-            "weightmc not found on PATH; install it or add its "
+            weightmc_bin + " not found on PATH; install it or add its "
             "directory to provsql.tool_search_path");
 
   ScopedTempDir tmp;
@@ -1287,7 +1358,7 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
     ofs << TseytinCNF(g, true);
   }
 
-  std::string cmdline="weightmc --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+outfilename;
+  std::string cmdline=weightmc_bin+" --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+outfilename;
 
   int retvalue=run_external_tool(cmdline);
   if(retvalue) {

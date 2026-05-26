@@ -1,0 +1,70 @@
+\set ECHO none
+name|kind|executable|operations|preference|enabled
+c2d|cli|c2d|{compile}|80|t
+d4|cli|d4|{compile}|100|t
+d4v2|cli|d4v2|{compile}|90|t
+dpmc|cli||{wmc}|60|t
+dsharp|cli|dsharp|{compile}|60|t
+ganak|cli|ganak|{wmc}|80|t
+graph-easy|cli|graph-easy|{render}|100|t
+minic2d|cli|minic2d|{compile}|70|t
+panini-decdnnf|cli|panini|{compile}|50|t
+panini-obdd|cli|panini|{compile}|52|t
+panini-obdd-and|cli|panini|{compile}|51|t
+sharpsat-td|cli|sharpsat-td|{wmc}|90|t
+weightmc|cli|weightmc|{wmc}|70|t
+(13 rows)
+register_tool
+
+(1 row)
+name|kind|executable|operations|preference|enabled
+acme-kc|cli|/opt/acme/akc|{compile}|120|t
+(1 row)
+register_tool
+
+(1 row)
+rows|pref|enabled
+1|5|f
+(1 row)
+register_tool
+
+(1 row)
+executable|kind
+baretool|cli
+(1 row)
+set_tool_enabled
+
+(1 row)
+enabled
+f
+(1 row)
+set_tool_preference
+
+(1 row)
+preference
+7
+(1 row)
+ERROR:  ProvSQL: set_tool_enabled: no tool named 'no-such-tool' is registered
+ERROR:  ProvSQL: set_tool_preference: no tool named 'no-such-tool' is registered
+unregister_tool
+
+(1 row)
+count
+0
+(1 row)
+ERROR:  ProvSQL: unregister_tool: no tool named 'acme-kc' is registered
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: Unknown compiler 'no-such-compiler'
+set_tool_enabled
+
+(1 row)
+ERROR:  ProvSQL: Compiler 'dsharp' is disabled in the tool registry
+set_tool_enabled
+
+(1 row)
+ERROR:  ProvSQL: Tool 'panini-obdd' is disabled in the tool registry
+register|unregister|set_enabled|set_preference
+f|f|f|f
+(1 row)

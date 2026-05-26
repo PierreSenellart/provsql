@@ -3989,6 +3989,86 @@ CREATE OR REPLACE FUNCTION tool_available(name TEXT)
   RETURNS BOOLEAN AS
   'provsql','tool_available' LANGUAGE C STRICT;
 
+/* ----------------------------------------------------------------------
+ * External-tool registry
+ *
+ * An in-memory catalog of the external tools ProvSQL can invoke (the
+ * knowledge compilers, weighted model counters, and the graph-easy DOT
+ * renderer).  It is seeded at first use with exactly the tools ProvSQL has
+ * always known about and their current invocations, so out-of-the-box
+ * behaviour is unchanged.  Administrators may add / repoint / reorder /
+ * disable tools at run time.
+ *
+ * The catalog is per-backend and transient: a registration is visible only
+ * in the session that made it and is reset when the session ends.  The
+ * mutators are superuser-only because a tool record names an executable run
+ * as the PostgreSQL OS user (the same trust level as provsql.tool_search_path).
+ * ---------------------------------------------------------------------- */
+
+/**
+ * @brief Set-returning listing backing the @c provsql.tools view.
+ *
+ * @c available is true iff @c executable currently resolves on the
+ * backend's PATH (via the same @c find_external_tool the dispatchers use).
+ */
+CREATE OR REPLACE FUNCTION tool_registry_list()
+  RETURNS TABLE(name TEXT, kind TEXT, executable TEXT, operations TEXT[],
+                preference INT, enabled BOOLEAN, available BOOLEAN) AS
+  'provsql','tool_registry_list' LANGUAGE C STABLE;
+
+/**
+ * @brief Read-only view of the registered tools.
+ */
+CREATE OR REPLACE VIEW tools AS
+  SELECT name, kind, executable, operations, preference, enabled, available
+  FROM tool_registry_list();
+
+/**
+ * @brief Register a tool, or replace the record with the same logical name.
+ *
+ * @param name        logical id (e.g. @c 'd4-jm62300'); also the value
+ *                    @c provsql.fallback_compiler / the wmc tool selector use
+ * @param executable  executable to resolve on PATH (defaults to @c name)
+ * @param operations  advertised capabilities: @c 'compile', @c 'wmc', @c 'render'
+ * @param preference  ordering within an operation (higher first)
+ * @param enabled     whether the dispatchers may select it
+ * @param kind        @c 'cli' (the only supported kind today)
+ *
+ * Superuser-only: a CLI record runs an arbitrary command as the PostgreSQL
+ * OS user.
+ */
+CREATE OR REPLACE FUNCTION register_tool(
+  name TEXT,
+  executable TEXT DEFAULT NULL,
+  operations TEXT[] DEFAULT NULL,
+  preference INT DEFAULT 0,
+  enabled BOOLEAN DEFAULT true,
+  kind TEXT DEFAULT 'cli')
+  RETURNS void AS
+  'provsql','tool_registry_register' LANGUAGE C;
+
+/** @brief Unregister a tool; errors on an unknown tool name. Superuser-only. */
+CREATE OR REPLACE FUNCTION unregister_tool(name TEXT)
+  RETURNS void AS
+  'provsql','tool_registry_unregister' LANGUAGE C STRICT;
+
+/** @brief Enable/disable a tool; errors on an unknown tool name. Superuser-only. */
+CREATE OR REPLACE FUNCTION set_tool_enabled(name TEXT, enabled BOOLEAN)
+  RETURNS void AS
+  'provsql','tool_registry_set_enabled' LANGUAGE C STRICT;
+
+/** @brief Set a tool's preference; errors on an unknown tool name. Superuser-only. */
+CREATE OR REPLACE FUNCTION set_tool_preference(name TEXT, preference INT)
+  RETURNS void AS
+  'provsql','tool_registry_set_preference' LANGUAGE C STRICT;
+
+-- The mutators guard at the C level too, but revoke from PUBLIC so the
+-- superuser requirement is visible in the catalog.
+REVOKE ALL ON FUNCTION register_tool(TEXT, TEXT, TEXT[], INT, BOOLEAN, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION unregister_tool(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION set_tool_enabled(TEXT, BOOLEAN) FROM PUBLIC;
+REVOKE ALL ON FUNCTION set_tool_preference(TEXT, INT) FROM PUBLIC;
+
 /**
  * @brief Time a single probability_evaluate call and return one row
  *

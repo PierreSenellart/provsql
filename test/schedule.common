@@ -83,6 +83,9 @@ test: view_circuit_multiple
 # External-tool PATH override (provsql.tool_search_path GUC)
 test: tool_search_path
 
+# External-tool registry (catalog SQL surface + registry-gated dispatch)
+test: tool_registry
+
 # Tables with keywords as name
 test: keyword_table
 
