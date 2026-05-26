@@ -250,10 +250,27 @@ semirings) :
 The pass is gated by ``provsql.boolean_provenance`` because the
 rewrites are sound only when evaluated under a Boolean-faithful
 semiring ; the gate-level marker enforces this at evaluation time.
+
+B3 only fires when the dominating literal ``u`` is a *direct* sibling
+of the parent, and that literal is frequently exposed only **after** a
+single-wire collapse (a diagonal ``times(x, x)`` deduped by B1 to a
+single-wire ``times`` that ``foldSemiringIdentities`` then rewrites to
+``x``).  ``foldBooleanIdentities`` therefore runs the Boolean rule
+sweep and ``foldSemiringIdentities`` to a **joint fixpoint** --
+alternating the two until neither changes the circuit -- rather than
+iterating B1-B3 alone and collapsing only once at the end, which would
+leave such absorptions undone.  Every rule strictly removes a wire or
+gate (and none adds one), so the alternation terminates ; collapses
+propagate one DAG level per iteration, giving an ``O(depth x circuit)``
+bound, and the result is a circuit on which no rule applies.
+
 The B3 absorption rule in particular has a large practical
 effect on UNION-dominated-pair shapes (see
 ``test/bench/absorption_bench.sql``) where it collapses
-exponential-sized DNFs to single-OR forms.
+exponential-sized DNFs to single-OR forms ; with the joint fixpoint
+this also covers cross-product / high-degree self-join lineages
+(e.g. ``SELECT DISTINCT 1 FROM e a, e b``), whose ``Theta(|I|)``-treewidth
+sum-of-products collapses to a single OR of treewidth 1.
 
 
 Example: The Boolean Semiring

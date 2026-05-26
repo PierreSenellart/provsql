@@ -36,3 +36,9 @@ Paris|0.936000
 shared_leaf_collapse_p
 0.500000000
 (1 row)
+interleave_root_p_ind
+0.500000000
+(1 row)
+interleave_root_simplified_type
+input
+(1 row)

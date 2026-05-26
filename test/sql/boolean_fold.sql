@@ -294,5 +294,62 @@ SELECT round(probability_evaluate(
               ::numeric, 9) AS shared_leaf_collapse_p;
 SET provsql.boolean_provenance = off;
 
+-- ----------------------------------------------------------------------
+-- (7) Joint-fixpoint interleave of absorption (B3) and the single-wire
+--     collapse (foldSemiringIdentities).
+--
+--     root = plus(times(x, x), times(x, y)).
+--     B1 dedups times(x, x) to a single-wire times(x) ; the dominating
+--     literal x is exposed as a direct sibling of the plus only once
+--     foldSemiringIdentities rewrites that wrapper to x.  The historical
+--     "B-rules to fixpoint, THEN collapse once" order surfaced x too
+--     late and left plus(x, times(x, y)) -- not read-once, so
+--     independent refused even with boolean_provenance on.  Interleaving
+--     the two passes to a joint fixpoint absorbs times(x, y) and
+--     collapses the whole circuit to the single leaf x.
+--
+--     Boolean function = (x AND x) OR (x AND y) = x, so the exact
+--     probability is P(x) = 0.5 and the folded root is the input x.
+-- ----------------------------------------------------------------------
+DO $$
+DECLARE x uuid; y uuid; diag uuid; off_diag uuid; root uuid;
+BEGIN
+  SELECT provsql INTO x FROM bf_t WHERE id = 1;
+  SELECT provsql INTO y FROM bf_t WHERE id = 2;
+  diag := uuid_generate_v5(uuid_ns_provsql(), concat('bf-interleave-diag', x));
+  PERFORM create_gate(diag, 'times', ARRAY[x, x]);
+  off_diag := provenance_times(x, y);
+  root := uuid_generate_v5(uuid_ns_provsql(), concat('bf-interleave', x));
+  PERFORM create_gate(root, 'plus', ARRAY[diag, off_diag]);
+  PERFORM set_config('bf.interleave_root', root::text, false);
+END $$;
+
+-- Without folding the shared x leaves the circuit non-read-once and
+-- independent refuses.
+SET provsql.boolean_provenance = off;
+DO $$ DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(
+      current_setting('bf.interleave_root')::uuid, 'independent');
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected independent to refuse the unfolded interleave '
+                    'circuit with boolean_provenance = off';
+  END IF;
+END $$;
+
+-- With the interleaved joint fixpoint the circuit collapses to x :
+-- independent yields P(x) = 0.5 and the folded root is the input gate.
+SET provsql.boolean_provenance = on;
+SELECT round(probability_evaluate(
+                current_setting('bf.interleave_root')::uuid, 'independent')
+              ::numeric, 9) AS interleave_root_p_ind;
+SELECT (simplified_circuit_subgraph(
+          current_setting('bf.interleave_root')::uuid, 1)
+         ->0->>'gate_type') AS interleave_root_simplified_type;
+SET provsql.boolean_provenance = off;
+
 DROP TABLE bf_t_cnt;
 DROP TABLE bf_t;

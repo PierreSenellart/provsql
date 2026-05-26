@@ -276,8 +276,11 @@ void resolveToRv(gate_t g, const std::string &s) {
  * Operates on the in-memory circuit only; the persistent mmap store
  * is never touched.  Gated alongside @c RangeCheck by
  * @c provsql.simplify_on_load.
+ *
+ * @return @c true if any phase mutated the circuit (so callers, notably
+ *         @c foldBooleanIdentities, can drive a joint fixpoint).
  */
-void foldSemiringIdentities();
+bool foldSemiringIdentities();
 
 /**
  * @brief Apply Boolean-only simplification rules to @c gate_plus and
@@ -298,11 +301,27 @@ void foldSemiringIdentities();
  * Operates on the in-memory @c GenericCircuit only ; the persistent
  * mmap store is never mutated, and the gate's UUID-to-@c gate_t
  * mapping survives so callers indexing by the original UUID still
- * find it.  Re-runs @c foldSemiringIdentities at the end to collapse
- * single-wire @c gate_plus / @c gate_times residues the dedup may
- * have left behind.
+ * find it.  Interleaves the Boolean rule sweep
+ * (@c applyBooleanRuleSweep) with @c foldSemiringIdentities to a JOINT
+ * fixpoint, so an absorption whose dominating literal is only exposed
+ * by a single-wire collapse still fires; the result is a circuit on
+ * which no Boolean-or-semiring identity rule applies.
  */
 void foldBooleanIdentities();
+
+/**
+ * @brief One pass of the Boolean-only rules (idempotence, plus-with-one,
+ *        absorption) over every @c gate_plus / @c gate_times.
+ *
+ * Helper for @c foldBooleanIdentities' joint-fixpoint loop : applies
+ * each rule in place, marking touched gates Boolean-assumed, and reports
+ * whether any rule fired so the caller knows whether to iterate.  Not a
+ * fixpoint on its own (it does a single sweep) ; the caller re-runs it,
+ * interleaved with @c foldSemiringIdentities, until neither changes.
+ *
+ * @return @c true if any rule fired during the sweep.
+ */
+bool applyBooleanRuleSweep();
 
 /**
  * @brief Mark gate @p g as Boolean-assumed (in-memory side band).

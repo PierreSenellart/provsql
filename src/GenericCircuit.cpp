@@ -42,10 +42,11 @@ gate_t GenericCircuit::addGate()
 
 #include <unordered_map>
 
-void GenericCircuit::foldSemiringIdentities()
+bool GenericCircuit::foldSemiringIdentities()
 {
   GenericCircuit &gc = *this;
   const std::size_t n = gc.getNbGates();
+  bool ever = false;        ///< Whether any phase mutated the circuit.
 
   /* Wrap the three phases in an outer fixpoint loop.  Phase 3's
    * substitutions can re-expose identity wires to a parent that
@@ -163,6 +164,7 @@ void GenericCircuit::foldSemiringIdentities()
       }
       for (const auto &kv : subst) redirect[kv.first] = kv.second;
     }
+    ever |= changed;
   }
 
   /* Patch the UUID map and the Boolean-assumption set so a gate
@@ -183,110 +185,131 @@ void GenericCircuit::foldSemiringIdentities()
       if (boolean_assumed_gates.count(g)) boolean_assumed_gates.insert(target);
     }
   }
+
+  return ever;
+}
+
+bool GenericCircuit::applyBooleanRuleSweep()
+{
+  GenericCircuit &gc = *this;
+  bool fired = false;
+  const std::size_t n = gc.getNbGates();
+  for (std::size_t i = 0; i < n; ++i) {
+    auto g = static_cast<gate_t>(i);
+    auto t = gc.getGateType(g);
+    if (t != gate_plus && t != gate_times) continue;
+
+    bool any_rule_fired = false;
+
+    /* Rule B1 : idempotence (Boolean-only, unsound in Counting,
+     * Tropical, Viterbi, ...).  Drop repeated child wires
+     * preserving order of first occurrence. */
+    {
+      auto &wires = gc.getWires(g);
+      std::unordered_set<gate_t> seen;
+      std::vector<gate_t> deduped;
+      deduped.reserve(wires.size());
+      for (gate_t c : wires) {
+        if (seen.insert(c).second) deduped.push_back(c);
+      }
+      if (deduped.size() != wires.size()) {
+        wires = std::move(deduped);
+        any_rule_fired = true;
+      }
+    }
+
+    /* Rule B2 : plus-with-one absorber (Boolean-only).  Collapse
+     * @c gate_plus(..., @c gate_one, ...) directly to @c gate_one,
+     * preserving @p g's UUID. */
+    if (t == gate_plus) {
+      bool has_one = false;
+      for (gate_t c : gc.getWires(g)) {
+        if (gc.getGateType(c) == gate_one) { has_one = true; break; }
+      }
+      if (has_one) {
+        gc.setGateType(g, gate_one);
+        gc.setWires(g, std::vector<gate_t>{});
+        infos.erase(g);
+        extra.erase(g);
+        any_rule_fired = true;
+      }
+    }
+
+    /* Rule B3 : absorption (Boolean-only).
+     *   gate_plus (x, gate_times(x, y, ...), ...)  ->  gate_plus (x, ...)
+     *   gate_times(x, gate_plus (x, y, ...), ...)  ->  gate_times(x, ...)
+     * The absorbed times / plus child is dominated by its sibling
+     * @c x present in the parent's children set.  Implemented as a
+     * single pass : build a set view of the parent's children, then
+     * drop every opposite-type child whose wires intersect that set.
+     * The set view captures the wires snapshot ; in case B2 already
+     * mutated @p g into @c gate_one above, @c t still holds the
+     * pre-mutation type so absorption skips correctly via the
+     * type-mismatch check at the top.  The dominating literal @c x is
+     * often only exposed as a direct sibling after a single-wire
+     * collapse (a diagonal @c gate_times(x, x) deduped by B1 then
+     * rewritten to @c x by @c foldSemiringIdentities) : the joint
+     * fixpoint in @c foldBooleanIdentities re-runs this sweep after
+     * each collapse so the exposed literal is seen on the next pass. */
+    if (t == gate_plus || t == gate_times) {
+      const gate_type opposite = (t == gate_plus) ? gate_times : gate_plus;
+      const auto &wires_now = gc.getWires(g);
+      if (wires_now.size() >= 2) {
+        std::unordered_set<gate_t> sibling_set(wires_now.begin(),
+                                               wires_now.end());
+        std::vector<gate_t> kept;
+        kept.reserve(wires_now.size());
+        bool dropped = false;
+        for (gate_t c : wires_now) {
+          if (gc.getGateType(c) == opposite) {
+            bool absorb = false;
+            for (gate_t w : gc.getWires(c)) {
+              if (w != c && sibling_set.count(w)) {
+                absorb = true;
+                break;
+              }
+            }
+            if (absorb) { dropped = true; continue; }
+          }
+          kept.push_back(c);
+        }
+        if (dropped) {
+          gc.setWires(g, std::move(kept));
+          any_rule_fired = true;
+        }
+      }
+    }
+
+    if (any_rule_fired) {
+      markBooleanAssumed(g);
+      fired = true;
+    }
+  }
+  return fired;
 }
 
 void GenericCircuit::foldBooleanIdentities()
 {
-  GenericCircuit &gc = *this;
-
+  /* Interleave the Boolean rule sweep with the semiring-safe collapse
+   * to a JOINT fixpoint.  Running the Boolean rules to their own
+   * fixpoint and only THEN collapsing once (the historical order)
+   * missed absorptions whose dominating literal is exposed by a
+   * collapse: a diagonal @c gate_times(x, x) is deduped to a
+   * single-wire @c gate_times by B1, but only @c foldSemiringIdentities
+   * rewrites that wrapper to @c x, so a later B3 pass never saw @c x as
+   * a sibling.  Alternating until neither pass changes anything closes
+   * that gap and leaves a circuit on which no rule applies.
+   *
+   * Termination: every rule (idempotence, plus-with-one, absorption,
+   * identity-drop, single-wire / empty collapse, zero-absorber) strictly
+   * removes at least one wire or gate and none ever adds one, so the
+   * well-founded (gates, wires) measure decreases; the loop exits only
+   * when both passes report no change, i.e. no rule applies to any gate.
+   * Collapses propagate one DAG level per iteration, so the sweep count
+   * is O(circuit depth) and each sweep is linear in the circuit size. */
   bool changed = true;
   while (changed) {
-    changed = false;
-    const std::size_t n = gc.getNbGates();
-    for (std::size_t i = 0; i < n; ++i) {
-      auto g = static_cast<gate_t>(i);
-      auto t = gc.getGateType(g);
-      if (t != gate_plus && t != gate_times) continue;
-
-      bool any_rule_fired = false;
-
-      /* Rule B1 : idempotence (Boolean-only, unsound in Counting,
-       * Tropical, Viterbi, ...).  Drop repeated child wires
-       * preserving order of first occurrence. */
-      {
-        auto &wires = gc.getWires(g);
-        std::unordered_set<gate_t> seen;
-        std::vector<gate_t> deduped;
-        deduped.reserve(wires.size());
-        for (gate_t c : wires) {
-          if (seen.insert(c).second) deduped.push_back(c);
-        }
-        if (deduped.size() != wires.size()) {
-          wires = std::move(deduped);
-          any_rule_fired = true;
-        }
-      }
-
-      /* Rule B2 : plus-with-one absorber (Boolean-only).  Replace
-       * @c gate_plus(..., @c gate_one, ...) with an empty
-       * @c gate_plus, which the trailing
-       * @c foldSemiringIdentities collapses back to a single
-       * @c gate_one wire ; that gate is then Phase-2-substituted
-       * into @c gate_one in place, preserving @p g's UUID. */
-      if (t == gate_plus) {
-        bool has_one = false;
-        for (gate_t c : gc.getWires(g)) {
-          if (gc.getGateType(c) == gate_one) { has_one = true; break; }
-        }
-        if (has_one) {
-          gc.setGateType(g, gate_one);
-          gc.setWires(g, std::vector<gate_t>{});
-          infos.erase(g);
-          extra.erase(g);
-          any_rule_fired = true;
-        }
-      }
-
-      /* Rule B3 : absorption (Boolean-only).
-       *   gate_plus (x, gate_times(x, y, ...), ...)  ->  gate_plus (x, ...)
-       *   gate_times(x, gate_plus (x, y, ...), ...)  ->  gate_times(x, ...)
-       * The absorbed times / plus child is dominated by its sibling
-       * @c x present in the parent's children set.  Implemented as a
-       * single pass : build a set view of the parent's children, then
-       * drop every opposite-type child whose wires intersect that set.
-       * The set view captures the wires snapshot ; in case B2 already
-       * mutated @p g into @c gate_one above, @c t still holds the
-       * pre-mutation type so absorption skips correctly via the
-       * type-mismatch check at the top. */
-      if (t == gate_plus || t == gate_times) {
-        const gate_type opposite = (t == gate_plus) ? gate_times : gate_plus;
-        const auto &wires_now = gc.getWires(g);
-        if (wires_now.size() >= 2) {
-          std::unordered_set<gate_t> sibling_set(wires_now.begin(),
-                                                 wires_now.end());
-          std::vector<gate_t> kept;
-          kept.reserve(wires_now.size());
-          bool dropped = false;
-          for (gate_t c : wires_now) {
-            if (gc.getGateType(c) == opposite) {
-              bool absorb = false;
-              for (gate_t w : gc.getWires(c)) {
-                if (w != c && sibling_set.count(w)) {
-                  absorb = true;
-                  break;
-                }
-              }
-              if (absorb) { dropped = true; continue; }
-            }
-            kept.push_back(c);
-          }
-          if (dropped) {
-            gc.setWires(g, std::move(kept));
-            any_rule_fired = true;
-          }
-        }
-      }
-
-      if (any_rule_fired) {
-        markBooleanAssumed(g);
-        changed = true;
-      }
-    }
+    changed = applyBooleanRuleSweep();
+    changed |= foldSemiringIdentities();
   }
-
-  /* The dedup may leave single-wire plus / times around. Re-run the
-   * semiring-safe pass to collapse them ; that pass mutates gates in
-   * place (Phase 3) and preserves their UUID and -- crucially for
-   * us -- their identity in @c boolean_assumed_gates. */
-  foldSemiringIdentities();
 }
