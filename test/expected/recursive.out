@@ -40,3 +40,22 @@ add_provenance
 
 (1 row)
 ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
+add_provenance
+
+(1 row)
+count
+3
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|f
+2|a
+4|c ⊗ b ⊗ a
+(2 rows)

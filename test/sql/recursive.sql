@@ -111,3 +111,45 @@ WITH RECURSIVE reach(node) AS (
 SELECT node FROM reach ORDER BY node;
 \set VERBOSITY default
 DROP TABLE srf_edge;
+
+-- Regression (crash): with provsql.active = off the planner hook must stand
+-- back and let a WITH RECURSIVE over a tracked relation plan as ordinary SQL.
+-- It must not drive the fixpoint (eval_recursive): that runs SPI / temp-table
+-- creation at plan time and its per-round INSERT ... SELECT formerly crashed
+-- the backend under active = off (a synthesized provsql target entry left with
+-- a NULL expr that the planner dereferenced).
+CREATE TABLE aedge(src int, dst int);
+INSERT INTO aedge VALUES (1,2),(2,3),(3,4);
+SELECT add_provenance('aedge');
+SET provsql.active = off;
+WITH RECURSIVE r(node) AS (
+    SELECT dst FROM aedge WHERE src = 1
+  UNION
+    SELECT e.dst FROM aedge e JOIN r ON e.src = r.node
+)
+SELECT count(*) FROM r;
+SET provsql.active = on;
+DROP TABLE aedge;
+
+-- Regression (error): a recursive CTE referenced in two arms of a top-level
+-- UNION, each requesting provenance(), must be lowered -- and its fixpoint
+-- temp table created -- exactly once.  Re-lowering per arm DROPped and
+-- recreated the temp table, leaving the first arm's already-analyzed scan
+-- bound to a stale OID ("could not open relation with OID ...").
+CREATE TABLE dedge(src int, dst int, label text);
+INSERT INTO dedge(src,dst,label) VALUES (1,2,'a'), (2,3,'b'), (3,4,'c');
+SELECT add_provenance('dedge');
+SELECT create_provenance_mapping('dedge_labels', 'dedge', 'label');
+CREATE TABLE twoarm_result AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM dedge e JOIN reach r ON e.src = r.node
+  )
+    SELECT node, sr_formula(provenance(),'dedge_labels') AS f FROM reach WHERE node = 4
+  UNION
+    SELECT node, sr_formula(provenance(),'dedge_labels') AS f FROM reach WHERE node = 2;
+SELECT remove_provenance('twoarm_result');
+SELECT * FROM twoarm_result ORDER BY node;
+DROP TABLE twoarm_result;
+DROP TABLE dedge;

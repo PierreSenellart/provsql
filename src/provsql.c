@@ -346,6 +346,32 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
   }
 }
 
+/**
+ * @brief Memo entry mapping a recursive-CTE name to its lowered scan subquery.
+ *
+ * A recursive CTE referenced more than once (e.g. in two arms of a top-level
+ * UNION) must be lowered -- and its backing temp table created by
+ * @c eval_recursive -- exactly once: re-running the fixpoint would
+ * @c DROP @c TABLE the temp table that an earlier reference's analyzed scan
+ * already bound to by OID, yielding "could not open relation with OID ...".
+ * @c inline_ctes_in_rtable records each lowering here and reuses it for
+ * subsequent references to the same CTE.
+ */
+typedef struct LoweredCte {
+  const char *name;
+  Query      *subquery;
+} LoweredCte;
+
+static Query *lookup_lowered_cte(List *lowered, const char *name) {
+  ListCell *lc;
+  foreach (lc, lowered) {
+    LoweredCte *e = (LoweredCte *)lfirst(lc);
+    if (strcmp(e->name, name) == 0)
+      return e->subquery;
+  }
+  return NULL;
+}
+
 #if PG_VERSION_NUM >= 150000
 /**
  * @brief Lower a recursive CTE to a provenance-aware fixpoint (PROTOTYPE).
@@ -470,7 +496,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
  * @param rtable   Range table to scan for RTE_CTE entries.
  * @param cteList  CTE definitions to look up names in.
  */
-static void inline_ctes_in_rtable(List *rtable, List *cteList) {
+static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
   ListCell *lc;
   foreach (lc, rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
@@ -481,10 +507,28 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList) {
         if (strcmp(cte->ctename, r->ctename) == 0) {
           if (cte->cterecursive) {
 #if PG_VERSION_NUM >= 150000
-            /* Lower supported (UNION-set) recursion to a provenance fixpoint;
-             * unsupported shapes (e.g. UNION ALL) are rejected. */
-            if (!lower_recursive_cte(cte, r))
+            /* A recursive CTE referenced more than once (e.g. once per
+             * UNION arm) must be lowered exactly once: re-running
+             * eval_recursive would DROP and recreate its temp table,
+             * invalidating the OID the first reference's analyzed scan
+             * bound to.  Reuse the earlier lowering when we have it. */
+            Query *memo = lookup_lowered_cte(*lowered, cte->ctename);
+            if (memo != NULL) {
+              r->rtekind = RTE_SUBQUERY;
+              r->subquery = copyObject(memo);
+              r->ctename = NULL;
+              r->ctelevelsup = 0;
+            } else if (lower_recursive_cte(cte, r)) {
+              /* Lowering succeeded; remember the scan subquery so any
+               * further reference to this CTE reuses it. */
+              LoweredCte *e = (LoweredCte *)palloc(sizeof(LoweredCte));
+              e->name = pstrdup(cte->ctename);
+              e->subquery = copyObject(r->subquery);
+              *lowered = lappend(*lowered, e);
+            } else {
+              /* Unsupported recursion shape (e.g. UNION ALL). */
               provsql_error("Recursive CTEs not supported (unsupported recursion shape)");
+            }
 #else
             provsql_error("Recursive CTEs not supported");
 #endif
@@ -495,7 +539,7 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList) {
             r->ctelevelsup = 0;
             /* Recurse: the inlined subquery may reference other CTEs
              * from the same cteList */
-            inline_ctes_in_rtable(r->subquery->rtable, cteList);
+            inline_ctes_in_rtable(r->subquery->rtable, cteList, lowered);
           }
           break;
         }
@@ -503,7 +547,7 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList) {
     } else if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL) {
       /* Recurse into existing subqueries (e.g., UNION branches) to
        * inline CTE references they may contain */
-      inline_ctes_in_rtable(r->subquery->rtable, cteList);
+      inline_ctes_in_rtable(r->subquery->rtable, cteList, lowered);
     }
   }
 }
@@ -512,9 +556,10 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList) {
  * @brief Inline all CTE references in @p q as subqueries.
  */
 static void inline_ctes(Query *q) {
+  List *lowered = NIL;
   if (q->cteList == NIL)
     return;
-  inline_ctes_in_rtable(q->rtable, q->cteList);
+  inline_ctes_in_rtable(q->rtable, q->cteList, &lowered);
   q->cteList = NIL;
 }
 
@@ -4290,8 +4335,13 @@ static Query *process_query(const constants_t *constants, Query *q,
 
   /* Inline non-recursive CTE references as subqueries so we can track
    * provenance through them. Must happen before set operation handling
-   * since UNION/EXCEPT branches may reference CTEs. */
-  inline_ctes(q);
+   * since UNION/EXCEPT branches may reference CTEs.  Gated on
+   * provsql.active: when provenance tracking is off the hook must stand
+   * back and let the query plan as ordinary SQL -- it must not, in
+   * particular, drive the recursive-CTE fixpoint (eval_recursive), which
+   * runs SPI and creates temp tables at plan time. */
+  if (provsql_active)
+    inline_ctes(q);
 
   {
     Bitmapset *removed_sortgrouprefs = NULL;
@@ -4569,6 +4619,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   RangeTblEntry *tgt_rte;
   AttrNumber provsql_attno = 0;
   TargetEntry *provsql_te = NULL;
+  bool provsql_te_is_new = false;
 
   /* Find the source SELECT subquery with provenance */
   foreach (lc, q->rtable) {
@@ -4616,13 +4667,16 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   if (provsql_te == NULL) {
     /* The target's provsql column is not in the INSERT's targetList
      * (no DEFAULT on the column since 1.6.0; the user did not name
-     * the column either).  Synthesise a TE here so we have something
-     * to substitute the source provsql Var into below. */
+     * the column either).  Synthesise a TE so we have something to
+     * substitute the source provsql Var into below.  Do NOT append it
+     * to the targetList yet: its expr is only known once the source
+     * Var has been resolved, and an early return before that point
+     * would leave a NULL-expr TargetEntry the planner later
+     * dereferences (segfault). */
     provsql_te = makeNode(TargetEntry);
     provsql_te->resno = provsql_attno;
     provsql_te->resname = pstrdup(PROVSQL_COLUMN_NAME);
-    /* expr is set to the source Var by the substitution block below. */
-    q->targetList = lappend(q->targetList, provsql_te);
+    provsql_te_is_new = true;
   }
 
   /* Rewrite the source SELECT to carry provenance */
@@ -4660,6 +4714,11 @@ static void process_insert_select(const constants_t *constants, Query *q) {
       v->location = -1;
       provsql_te->expr = (Expr *)v;
     }
+
+    /* Now that its expr is set, splice a freshly synthesised provsql
+     * target entry into the INSERT's targetList. */
+    if (provsql_te_is_new)
+      q->targetList = lappend(q->targetList, provsql_te);
 
     /* Update the subquery RTE's column names to include provsql */
     src_rte->eref->colnames = lappend(src_rte->eref->colnames,
@@ -4702,7 +4761,7 @@ static PlannedStmt *provsql_planner(Query *q,
 #endif
                                     int cursorOptions,
                                     ParamListInfo boundParams) {
-  if (q->commandType == CMD_INSERT && q->rtable) {
+  if (q->commandType == CMD_INSERT && q->rtable && provsql_active) {
     const constants_t constants = get_constants(false);
     if (constants.ok)
       process_insert_select(&constants, q);
