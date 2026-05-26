@@ -19,6 +19,12 @@ bool ToolRecord::hasOperation(const std::string &op) const
          != operations.end();
 }
 
+bool ToolRecord::acceptsInput(const std::string &fmt) const
+{
+  return std::find(input_formats.begin(), input_formats.end(), fmt)
+         != input_formats.end();
+}
+
 std::string ToolRecord::buildCommand(
     const std::string &in, const std::string &out,
     const std::string &binary_override,
@@ -31,63 +37,72 @@ void ToolRegistry::seed()
 {
   records_.clear();
 
-  // Knowledge compilers whose output the compilation() NNF parser reads.
-  // Preference order reproduces the historical "d4 is the default" bias;
-  // it is only a default the admin can override, not behaviour today (no
-  // dispatcher currently walks a multi-compiler preference chain).
+  // Fields: name, kind, binary, operations, input_formats, output_format,
+  //         parser, preference, enabled, dependencies, argtpl.
+  // operations / input_formats / output_format use the KCMCP shared-registry
+  // names so CLI and (future) kcmcp-server records are comparable; `parser`
+  // is the CLI-only "how to decode this tool's raw output" tag (a kcmcp
+  // server returns output_format directly, so its records leave parser "").
   //
-  // Fields: name, kind, binary, operations, preference, enabled,
-  //         dependencies, argtpl, output_format.
-  // The argtpl is the CNF-mode command (d4v2's native-circuit fast path is a
-  // compiled d4v2-only optimisation, not data).  {in}/{out} are the Tseytin
-  // CNF and the NNF output file.
-  records_.push_back({"d4",      "cli", "d4",      {"compile"}, 100, true, {},
-                      "-dDNNF {in} -out={out}", "nnf-d4"});
-  records_.push_back({"d4v2",    "cli", "d4v2",    {"compile"},  90, true, {},
-                      "-i {in} --dump-file {out}", "nnf-d4"});
-  records_.push_back({"c2d",     "cli", "c2d",     {"compile"},  80, true, {},
-                      "-in {in} -silent", "nnf-classic"});
-  records_.push_back({"minic2d", "cli", "minic2d", {"compile"},  70, true, {},
-                      "-c {in}", "nnf-classic"});
-  records_.push_back({"dsharp",  "cli", "dsharp",  {"compile"},  60, true, {},
-                      "-q -Fnnf {out} {in}", "nnf-classic"});
+  // Knowledge compilers reading a Tseytin DIMACS CNF and emitting a d-DNNF.
+  // The single tolerant `nnf` parser auto-detects the c2d/d4 magic header,
+  // so it reads both the d4-family (header-less) and classic forms.
+  // Preference reproduces the historical "d4 is the default" bias.
+  records_.push_back({"d4",      "cli", "d4",      {"compile"}, {"dimacs-cnf"},
+                      "ddnnf-nnf", "nnf", 100, true, {}, "-dDNNF {in} -out={out}"});
+  // d4v2 also accepts a BC-S1.2 circuit (native, structure-preserving): it is
+  // listed first so the dispatcher prefers it, falling back to dimacs-cnf.
+  records_.push_back({"d4v2",    "cli", "d4v2",    {"compile"},
+                      {"circuit-bcs12", "dimacs-cnf"},
+                      "ddnnf-nnf", "nnf", 90, true, {}, "-i {in} --dump-file {out}"});
+  records_.push_back({"c2d",     "cli", "c2d",     {"compile"}, {"dimacs-cnf"},
+                      "ddnnf-nnf", "nnf", 80, true, {}, "-in {in} -silent"});
+  records_.push_back({"minic2d", "cli", "minic2d", {"compile"}, {"dimacs-cnf"},
+                      "ddnnf-nnf", "nnf", 70, true, {}, "-c {in}"});
+  records_.push_back({"dsharp",  "cli", "dsharp",  {"compile"}, {"dimacs-cnf"},
+                      "ddnnf-nnf", "nnf", 60, true, {}, "-q -Fnnf {out} {in}"});
 
   // Panini (KCBox): one binary, three logical variants selected by the
-  // --lang argument baked into each template.  They are the compiler names
-  // provsql.fallback_compiler and the 'compilation' method already accept.
-  records_.push_back({"panini-obdd",     "cli", "panini", {"compile"}, 52, true,
-                      {}, "Panini --lang \"OBDD\" --out {out} --quiet {in}",
-                      "panini-dd"});
-  records_.push_back({"panini-obdd-and", "cli", "panini", {"compile"}, 51, true,
-                      {}, "Panini --lang \"OBDD[AND]\" --out {out} --quiet {in}",
-                      "panini-dd"});
-  records_.push_back({"panini-decdnnf",  "cli", "panini", {"compile"}, 50, true,
-                      {}, "Panini --lang \"Decision-DNNF\" --out {out} --quiet {in}",
-                      "panini-dd"});
+  // --lang argument baked into each template.  Its compiled form is its own
+  // DD format (no KCMCP code), so output_format/parser are the local
+  // "panini-dd"; paniniCompile() reads it.
+  records_.push_back({"panini-obdd",     "cli", "panini", {"compile"}, {"dimacs-cnf"},
+                      "panini-dd", "panini-dd", 52, true, {},
+                      "Panini --lang \"OBDD\" --out {out} --quiet {in}"});
+  records_.push_back({"panini-obdd-and", "cli", "panini", {"compile"}, {"dimacs-cnf"},
+                      "panini-dd", "panini-dd", 51, true, {},
+                      "Panini --lang \"OBDD[AND]\" --out {out} --quiet {in}"});
+  records_.push_back({"panini-decdnnf",  "cli", "panini", {"compile"}, {"dimacs-cnf"},
+                      "panini-dd", "panini-dd", 50, true, {},
+                      "Panini --lang \"Decision-DNNF\" --out {out} --quiet {in}"});
 
-  // Weighted model counters.  sharpsat-td additionally needs the
-  // flow_cutter_pace17 helper (invoked by relative path, hence the cd into
-  // its directory) and a scratch {tmpdir}; dpmc is a two-binary pipeline
-  // (htb | dmc) with no single binary of its own.  weightmc takes a computed
-  // {pivotAC} and parses its own output format.
-  records_.push_back({"sharpsat-td", "cli", "sharpsat-td", {"wmc"}, 90, true,
-                      {"flow_cutter_pace17"},
+  // Weighted model counters: read a (weighted) DIMACS CNF and return a number
+  // (KCMCP output_format "decimal").  sharpsat-td needs the flow_cutter_pace17
+  // helper (invoked by relative path, hence the cd) and a scratch {tmpdir};
+  // dpmc is a two-binary pipeline (htb | dmc) with no single binary of its
+  // own.  The `wmc-line` parser scrapes the "c s exact" line; weightmc's
+  // mantissa x 2^e output needs its own `weightmc` parser.
+  records_.push_back({"sharpsat-td", "cli", "sharpsat-td", {"wmc"}, {"dimacs-cnf"},
+                      "decimal", "wmc-line", 90, true, {"flow_cutter_pace17"},
                       "cd \"$(dirname \"$(command -v flow_cutter_pace17)\")\" && "
                       "{binary} -WE -decot 1 -decow 100 -tmpdir {tmpdir} "
-                      "-cs 3500 -prec 20 {in} > {out} 2>&1",
-                      "wmc-line"});
-  records_.push_back({"ganak",       "cli", "ganak",       {"wmc"}, 80, true, {},
-                      "--mode 7 {in} > {out} 2>&1", "wmc-line"});
-  records_.push_back({"weightmc",    "cli", "weightmc",    {"wmc"}, 70, true, {},
+                      "-cs 3500 -prec 20 {in} > {out} 2>&1"});
+  records_.push_back({"ganak",       "cli", "ganak",       {"wmc"}, {"dimacs-cnf"},
+                      "decimal", "wmc-line", 80, true, {},
+                      "--mode 7 {in} > {out} 2>&1"});
+  records_.push_back({"weightmc",    "cli", "weightmc",    {"wmc"}, {"dimacs-cnf"},
+                      "decimal", "weightmc", 70, true, {},
                       "--startIteration=0 --gaussuntil=400 --verbosity=0 "
-                      "--pivotAC={pivotAC} {in} > {out}", "weightmc"});
-  records_.push_back({"dpmc",        "cli", "",            {"wmc"}, 60, true,
-                      {"htb", "dmc"},
-                      "htb --cf={in} | dmc --cf={in} > {out} 2>&1", "wmc-line"});
+                      "--pivotAC={pivotAC} {in} > {out}"});
+  records_.push_back({"dpmc",        "cli", "",            {"wmc"}, {"dimacs-cnf"},
+                      "decimal", "wmc-line", 60, true, {"htb", "dmc"},
+                      "htb --cf={in} | dmc --cf={in} > {out} 2>&1"});
 
-  // Visualisation: graph-easy's ASCII output is returned verbatim.
-  records_.push_back({"graph-easy", "cli", "graph-easy", {"render"}, 100, true,
-                      {}, "--as=boxart --output={out} {in}", "ascii"});
+  // Visualisation: a ProvSQL-local operation (no KCMCP counterpart); reads a
+  // GraphViz DOT and returns graph-easy's ASCII art verbatim.
+  records_.push_back({"graph-easy", "cli", "graph-easy", {"render"}, {"dot"},
+                      "ascii", "ascii", 100, true, {},
+                      "--as=boxart --output={out} {in}"});
 }
 
 void ToolRegistry::reset()

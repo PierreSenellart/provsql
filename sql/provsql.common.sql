@@ -4008,23 +4008,26 @@ CREATE OR REPLACE FUNCTION tool_available(name TEXT)
 /**
  * @brief Set-returning listing backing the @c provsql.tools view.
  *
- * @c argtpl is the command template ({in}/{out}/... placeholders) and
- * @c output_format names the result parser.  @c available is true iff
- * @c executable (when set) and every dependency currently resolve on the
- * backend's PATH (via the same @c find_external_tool the dispatchers use).
+ * @c operations / @c input_formats / @c output_format use the KCMCP
+ * shared-registry names (see the KCMCP server protocol), so a CLI record and
+ * a future kcmcp-server record are comparable; @c parser is the CLI-only tag
+ * for how to decode the tool's raw output.  @c argtpl is the command template
+ * ({in}/{out}/... placeholders).  @c available is true iff @c executable
+ * (when set) and every dependency currently resolve on the backend's PATH.
  */
 CREATE OR REPLACE FUNCTION tool_registry_list()
   RETURNS TABLE(name TEXT, kind TEXT, executable TEXT, operations TEXT[],
+                input_formats TEXT[], output_format TEXT, parser TEXT,
                 preference INT, enabled BOOLEAN, argtpl TEXT,
-                output_format TEXT, available BOOLEAN) AS
+                available BOOLEAN) AS
   'provsql','tool_registry_list' LANGUAGE C STABLE;
 
 /**
  * @brief Read-only view of the registered tools.
  */
 CREATE OR REPLACE VIEW tools AS
-  SELECT name, kind, executable, operations, preference, enabled,
-         argtpl, output_format, available
+  SELECT name, kind, executable, operations, input_formats, output_format,
+         parser, preference, enabled, argtpl, available
   FROM tool_registry_list();
 
 /**
@@ -4035,13 +4038,23 @@ CREATE OR REPLACE VIEW tools AS
  * @param executable  executable to resolve on PATH (defaults to @c name)
  * @param operations  advertised capabilities: @c 'compile', @c 'wmc', @c 'render'
  * @param preference  ordering within an operation (higher first)
- * @param enabled     whether the dispatchers may select it
- * @param kind        @c 'cli' (the only supported kind today)
- * @param argtpl      command template; placeholders @c {in} / @c {out} (and
- *                    @c {binary} / @c {tmpdir} / @c {pivotAC}).  When it omits
- *                    @c {binary}, the executable is prepended.
- * @param output_format  result parser: @c 'nnf-d4', @c 'nnf-classic',
- *                    @c 'panini-dd', @c 'wmc-line', @c 'weightmc', @c 'ascii'.
+ * @param kind          @c 'cli' (the only supported kind today)
+ * @param operations    capabilities (KCMCP names): @c 'compile' / @c 'wmc'
+ *                      (and ProvSQL-local @c 'render')
+ * @param input_formats accepted inputs (KCMCP names): @c 'dimacs-cnf',
+ *                      @c 'circuit-bcs12' (listing @c 'circuit-bcs12' enables
+ *                      the native-circuit fast path)
+ * @param output_format result encoding (KCMCP names): @c 'ddnnf-nnf',
+ *                      @c 'decimal', @c 'rational', ... (local @c 'panini-dd'
+ *                      / @c 'ascii' where KCMCP has no code)
+ * @param parser        CLI-only decode tag: @c 'nnf' (the tolerant d4 / c2d
+ *                      NNF reader), @c 'panini-dd', @c 'wmc-line',
+ *                      @c 'weightmc', @c 'ascii'
+ * @param argtpl        command template; placeholders @c {in} / @c {out}
+ *                      (and @c {binary} / @c {tmpdir} / @c {pivotAC}).  When
+ *                      it omits @c {binary}, the executable is prepended.
+ * @param preference    ordering within an operation (higher first)
+ * @param enabled       whether the dispatchers may select it
  *
  * Superuser-only: a CLI record runs an arbitrary command as the PostgreSQL
  * OS user.
@@ -4049,12 +4062,14 @@ CREATE OR REPLACE VIEW tools AS
 CREATE OR REPLACE FUNCTION register_tool(
   name TEXT,
   executable TEXT DEFAULT NULL,
-  operations TEXT[] DEFAULT NULL,
-  preference INT DEFAULT 0,
-  enabled BOOLEAN DEFAULT true,
   kind TEXT DEFAULT 'cli',
+  operations TEXT[] DEFAULT NULL,
+  input_formats TEXT[] DEFAULT NULL,
+  output_format TEXT DEFAULT NULL,
+  parser TEXT DEFAULT NULL,
   argtpl TEXT DEFAULT NULL,
-  output_format TEXT DEFAULT NULL)
+  preference INT DEFAULT 0,
+  enabled BOOLEAN DEFAULT true)
   RETURNS void AS
   'provsql','tool_registry_register' LANGUAGE C;
 
@@ -4075,7 +4090,7 @@ CREATE OR REPLACE FUNCTION set_tool_preference(name TEXT, preference INT)
 
 -- The mutators guard at the C level too, but revoke from PUBLIC so the
 -- superuser requirement is visible in the catalog.
-REVOKE ALL ON FUNCTION register_tool(TEXT, TEXT, TEXT[], INT, BOOLEAN, TEXT, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION register_tool(TEXT, TEXT, TEXT, TEXT[], TEXT[], TEXT, TEXT, TEXT, INT, BOOLEAN) FROM PUBLIC;
 REVOKE ALL ON FUNCTION unregister_tool(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION set_tool_enabled(TEXT, BOOLEAN) FROM PUBLIC;
 REVOKE ALL ON FUNCTION set_tool_preference(TEXT, INT) FROM PUBLIC;

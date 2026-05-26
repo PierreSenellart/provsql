@@ -1,24 +1,24 @@
 \set ECHO none
-name|kind|executable|operations|preference|enabled|output_format
-c2d|cli|c2d|{compile}|80|t|nnf-classic
-d4|cli|d4|{compile}|100|t|nnf-d4
-d4v2|cli|d4v2|{compile}|90|t|nnf-d4
-dpmc|cli||{wmc}|60|t|wmc-line
-dsharp|cli|dsharp|{compile}|60|t|nnf-classic
-ganak|cli|ganak|{wmc}|80|t|wmc-line
-graph-easy|cli|graph-easy|{render}|100|t|ascii
-minic2d|cli|minic2d|{compile}|70|t|nnf-classic
-panini-decdnnf|cli|panini|{compile}|50|t|panini-dd
-panini-obdd|cli|panini|{compile}|52|t|panini-dd
-panini-obdd-and|cli|panini|{compile}|51|t|panini-dd
-sharpsat-td|cli|sharpsat-td|{wmc}|90|t|wmc-line
-weightmc|cli|weightmc|{wmc}|70|t|weightmc
+name|executable|operations|input_formats|output_format|parser
+c2d|c2d|{compile}|{dimacs-cnf}|ddnnf-nnf|nnf
+d4|d4|{compile}|{dimacs-cnf}|ddnnf-nnf|nnf
+d4v2|d4v2|{compile}|{circuit-bcs12,dimacs-cnf}|ddnnf-nnf|nnf
+dpmc||{wmc}|{dimacs-cnf}|decimal|wmc-line
+dsharp|dsharp|{compile}|{dimacs-cnf}|ddnnf-nnf|nnf
+ganak|ganak|{wmc}|{dimacs-cnf}|decimal|wmc-line
+graph-easy|graph-easy|{render}|{dot}|ascii|ascii
+minic2d|minic2d|{compile}|{dimacs-cnf}|ddnnf-nnf|nnf
+panini-decdnnf|panini|{compile}|{dimacs-cnf}|panini-dd|panini-dd
+panini-obdd|panini|{compile}|{dimacs-cnf}|panini-dd|panini-dd
+panini-obdd-and|panini|{compile}|{dimacs-cnf}|panini-dd|panini-dd
+sharpsat-td|sharpsat-td|{wmc}|{dimacs-cnf}|decimal|wmc-line
+weightmc|weightmc|{wmc}|{dimacs-cnf}|decimal|weightmc
 (13 rows)
 register_tool
 
 (1 row)
-name|kind|executable|operations|preference|enabled|argtpl|output_format
-acme-kc|cli|/opt/acme/akc|{compile}|120|t|-dDNNF {in} -out={out}|nnf-d4
+name|executable|operations|input_formats|output_format|parser|argtpl|preference
+acme-kc|/opt/acme/akc|{compile}|{dimacs-cnf}|ddnnf-nnf|nnf|-dDNNF {in} -out={out}|120
 (1 row)
 register_tool
 

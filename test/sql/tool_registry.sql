@@ -7,20 +7,29 @@ SET search_path TO provsql_test,provsql;
 -- Panini variants (all running the 'panini' binary), the weighted model
 -- counters (sharpsat-td, ganak, weightmc, dpmc), and the graph-easy ASCII
 -- renderer. dpmc has no single binary (it is the htb | dmc pipeline), so its
--- executable is empty. The host-dependent `available` column is not selected.
-SELECT name, kind, executable, operations, preference, enabled, output_format
+-- executable is empty. The capability triple operations / input_formats /
+-- output_format uses the KCMCP registry names; `parser` is the CLI decode
+-- tag (the compilers share the single tolerant `nnf` parser; d4v2 also
+-- advertises circuit-bcs12 input). The host-dependent `available` column is
+-- not selected.
+SELECT name, executable, operations, input_formats, output_format, parser
   FROM tools ORDER BY name;
 
--- register_tool: a new logical id with an explicit executable, command
--- template and output format -- i.e. a tool added without recompiling.
-SELECT register_tool('acme-kc', '/opt/acme/akc', ARRAY['compile'], 120, true,
-                     'cli', '-dDNNF {in} -out={out}', 'nnf-d4');
-SELECT name, kind, executable, operations, preference, enabled,
-       argtpl, output_format
+-- register_tool (named args): a new compiler added without recompiling, with
+-- its KCMCP triple, parser and command template.
+SELECT register_tool('acme-kc', executable => '/opt/acme/akc',
+                     operations => ARRAY['compile'],
+                     input_formats => ARRAY['dimacs-cnf'],
+                     output_format => 'ddnnf-nnf', parser => 'nnf',
+                     argtpl => '-dDNNF {in} -out={out}', preference => 120);
+SELECT name, executable, operations, input_formats, output_format, parser,
+       argtpl, preference
   FROM tools WHERE name='acme-kc';
 
 -- Re-registering the same name replaces the record (no duplicate row).
-SELECT register_tool('acme-kc', '/usr/bin/akc', ARRAY['compile','wmc'], 5, false);
+SELECT register_tool('acme-kc', executable => '/usr/bin/akc',
+                     operations => ARRAY['compile','wmc'], preference => 5,
+                     enabled => false);
 SELECT count(*) AS rows, max(preference) AS pref, bool_or(enabled) AS enabled
   FROM tools WHERE name='acme-kc';
 
@@ -58,7 +67,7 @@ DROP TABLE tr_r;
 
 -- The mutators are superuser-only: execute is revoked from PUBLIC.
 SELECT
-  has_function_privilege('public', 'provsql.register_tool(text,text,text[],int,boolean,text,text,text)', 'EXECUTE') AS register,
+  has_function_privilege('public', 'provsql.register_tool(text,text,text,text[],text[],text,text,text,int,boolean)', 'EXECUTE') AS register,
   has_function_privilege('public', 'provsql.unregister_tool(text)', 'EXECUTE') AS unregister,
   has_function_privilege('public', 'provsql.set_tool_enabled(text,boolean)', 'EXECUTE') AS set_enabled,
   has_function_privilege('public', 'provsql.set_tool_preference(text,int)', 'EXECUTE') AS set_preference;

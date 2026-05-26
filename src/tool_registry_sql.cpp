@@ -117,11 +117,13 @@ bool tool_available(const provsql::ToolRecord &rec)
 /**
  * @brief Set-returning listing of the registry, one row per record.
  *
- * Columns: name, kind, binary, operations (text[]), preference (int),
- * enabled (bool), argtpl (text), output_format (text), available (bool).
- * @c available is true iff @c binary (when set) and every dependency resolve
- * via @c find_external_tool, so the view reflects what a subsequent dispatch
- * would actually find on the backend's PATH.
+ * Columns: name, kind, binary, operations (text[]), input_formats (text[]),
+ * output_format (text), parser (text), preference (int), enabled (bool),
+ * argtpl (text), available (bool).  @c operations / @c input_formats /
+ * @c output_format use the KCMCP registry names; @c parser is the CLI-only
+ * decode tag.  @c available is true iff @c binary (when set) and every
+ * dependency resolve via @c find_external_tool, so the view reflects what a
+ * subsequent dispatch would actually find on the backend's PATH.
  */
 extern "C" Datum
 tool_registry_list(PG_FUNCTION_ARGS)
@@ -146,9 +148,9 @@ tool_registry_list(PG_FUNCTION_ARGS)
 
   try {
     for (const provsql::ToolRecord &rec : provsql::tool_registry().records()) {
-      Datum values[9];
-      bool nulls[9] = {false, false, false, false, false, false, false,
-                       false, false};
+      Datum values[11];
+      bool nulls[11] = {false, false, false, false, false, false, false,
+                        false, false, false, false};
 
       values[0] = PointerGetDatum(cstring_to_text_with_len(rec.name.data(),
                                                            rec.name.size()));
@@ -157,13 +159,16 @@ tool_registry_list(PG_FUNCTION_ARGS)
       values[2] = PointerGetDatum(cstring_to_text_with_len(rec.binary.data(),
                                                            rec.binary.size()));
       values[3] = string_vector_to_text_array(rec.operations);
-      values[4] = Int32GetDatum(rec.preference);
-      values[5] = BoolGetDatum(rec.enabled);
-      values[6] = PointerGetDatum(cstring_to_text_with_len(rec.argtpl.data(),
-                                                           rec.argtpl.size()));
-      values[7] = PointerGetDatum(cstring_to_text_with_len(
+      values[4] = string_vector_to_text_array(rec.input_formats);
+      values[5] = PointerGetDatum(cstring_to_text_with_len(
                     rec.output_format.data(), rec.output_format.size()));
-      values[8] = BoolGetDatum(tool_available(rec));
+      values[6] = PointerGetDatum(cstring_to_text_with_len(rec.parser.data(),
+                                                           rec.parser.size()));
+      values[7] = Int32GetDatum(rec.preference);
+      values[8] = BoolGetDatum(rec.enabled);
+      values[9] = PointerGetDatum(cstring_to_text_with_len(rec.argtpl.data(),
+                                                           rec.argtpl.size()));
+      values[10] = BoolGetDatum(tool_available(rec));
 
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
@@ -182,11 +187,12 @@ tool_registry_list(PG_FUNCTION_ARGS)
 /**
  * @brief Register a tool, or replace the record with the same name.
  *
- * Args: name text, binary text, operations text[], preference int,
- * enabled bool, kind text, argtpl text, output_format text.  A NULL
- * @c binary defaults to @c name; a NULL @c kind defaults to @c 'cli'; NULL
- * @c operations is treated as empty; @c argtpl / @c output_format default to
- * empty.  Superuser-only.
+ * Args (in order): name text, executable text, kind text, operations text[],
+ * input_formats text[], output_format text, parser text, argtpl text,
+ * preference int, enabled bool.  A NULL @c executable defaults to @c name; a
+ * NULL @c kind defaults to @c 'cli'; NULL arrays are empty; NULL text fields
+ * default to empty; NULL @c preference is 0 and NULL @c enabled is true.
+ * Superuser-only.
  */
 extern "C" Datum
 tool_registry_register(PG_FUNCTION_ARGS)
@@ -201,16 +207,20 @@ tool_registry_register(PG_FUNCTION_ARGS)
     rec.name = text_to_string(PG_GETARG_TEXT_PP(0));
     rec.binary = PG_ARGISNULL(1) ? rec.name
                                  : text_to_string(PG_GETARG_TEXT_PP(1));
-    if (!PG_ARGISNULL(2))
-      rec.operations = text_array_to_string_vector(PG_GETARG_ARRAYTYPE_P(2));
-    rec.preference = PG_ARGISNULL(3) ? 0 : PG_GETARG_INT32(3);
-    rec.enabled = PG_ARGISNULL(4) ? true : PG_GETARG_BOOL(4);
-    rec.kind = PG_ARGISNULL(5) ? std::string("cli")
-                               : text_to_string(PG_GETARG_TEXT_PP(5));
+    rec.kind = PG_ARGISNULL(2) ? std::string("cli")
+                               : text_to_string(PG_GETARG_TEXT_PP(2));
+    if (!PG_ARGISNULL(3))
+      rec.operations = text_array_to_string_vector(PG_GETARG_ARRAYTYPE_P(3));
+    if (!PG_ARGISNULL(4))
+      rec.input_formats = text_array_to_string_vector(PG_GETARG_ARRAYTYPE_P(4));
+    if (!PG_ARGISNULL(5))
+      rec.output_format = text_to_string(PG_GETARG_TEXT_PP(5));
     if (!PG_ARGISNULL(6))
-      rec.argtpl = text_to_string(PG_GETARG_TEXT_PP(6));
+      rec.parser = text_to_string(PG_GETARG_TEXT_PP(6));
     if (!PG_ARGISNULL(7))
-      rec.output_format = text_to_string(PG_GETARG_TEXT_PP(7));
+      rec.argtpl = text_to_string(PG_GETARG_TEXT_PP(7));
+    rec.preference = PG_ARGISNULL(8) ? 0 : PG_GETARG_INT32(8);
+    rec.enabled = PG_ARGISNULL(9) ? true : PG_GETARG_BOOL(9);
 
     if (rec.name.empty())
       provsql_error("register_tool: name must not be empty");

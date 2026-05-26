@@ -102,17 +102,31 @@ inline std::string expandCommandTemplate(
  * @c dependencies @c = @c {htb, dmc}.  A tool is "available" iff @c binary
  * (when non-empty) and every dependency resolve on PATH.
  *
+ * The capability triple @c operations / @c input_formats / @c output_format
+ * uses the **KCMCP shared registry names** (see
+ * doc/source/dev/kc-server-protocol.rst), so a CLI record and a future
+ * @c kind="kcmcp" server record are directly comparable: @c operations is
+ * @c "compile" / @c "wmc" (the ProvSQL-local @c "render" has no KCMCP
+ * counterpart); @c input_formats is drawn from @c "dimacs-cnf" /
+ * @c "circuit-bcs12"; @c output_format from @c "ddnnf-nnf" / @c "decimal" /
+ * @c "rational" (with ProvSQL-local @c "panini-dd" / @c "ascii" where KCMCP
+ * has no code).  A KCMCP server *discovers* this triple at the handshake; a
+ * CLI tool *declares* it here.
+ *
+ * @c parser is **CLI-only** -- it says how to decode this tool's raw output
+ * into @c output_format, a job a KCMCP server does on the wire and so leaves
+ * empty: @c "nnf-d4" (d4-family NNF, no magic line) and @c "nnf-classic"
+ * (c2d / minic2d / dsharp NNF) both yield @c output_format @c "ddnnf-nnf";
+ * @c "wmc-line" (the @c "c s exact" line) and @c "weightmc" (mantissa x 2^e)
+ * both yield @c "decimal".  @c "panini-dd" and @c "ascii" are their own.
+ *
  * @c argtpl is the command the dispatcher runs, with @c {in} / @c {out}
  * substituted by the input/output temp files and a few tool-specific
  * placeholders (@c {binary}, @c {tmpdir}, @c {pivotAC}).  When @c argtpl
  * contains no @c {binary}, the resolved @c binary is prepended; otherwise
  * the template is the whole command (used by the @c dpmc pipeline and the
- * @c sharpsat-td @c cd-prefix).  @c output_format selects the result parser:
- * @c "nnf-d4" (d4-family NNF, no magic line), @c "nnf-classic" (c2d /
- * minic2d / dsharp NNF), @c "panini-dd", @c "wmc-line" (the @c "c s exact"
- * model-count line), @c "weightmc" (WeightMC's own format), or @c "ascii"
- * (graph-easy, returned verbatim).  Together they make a CLI tool's whole
- * invocation data: a new compiler whose output is a known format can be
+ * @c sharpsat-td @c cd-prefix).  Together these make a CLI tool's whole
+ * invocation data: a new tool whose output is a known parser/format can be
  * registered without recompiling.
  */
 struct ToolRecord {
@@ -120,13 +134,16 @@ struct ToolRecord {
   std::string kind;                      ///< "cli" today; "kcmcp" later.
   std::string binary;
   std::vector<std::string> operations;
+  std::vector<std::string> input_formats;
+  std::string output_format;
+  std::string parser;
   int preference = 0;
   bool enabled = true;
   std::vector<std::string> dependencies;
   std::string argtpl;
-  std::string output_format;
 
   bool hasOperation(const std::string &op) const;
+  bool acceptsInput(const std::string &fmt) const;
 
   /**
    * @brief Build the command line for this tool.

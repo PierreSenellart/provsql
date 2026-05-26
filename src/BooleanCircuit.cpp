@@ -834,32 +834,32 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     return paniniCompile(g, panini_binary, panini_argtpl);
   }
 
-  // Validate the compiler name before any temp-dir or CNF work; that
-  // keeps the unknown-compiler error path lean and leak-free.  In the
-  // extension build the set of valid compilers and the executable each
-  // resolves to come from the tool registry; tdkc keeps the historical
-  // literal whitelist (and never reaches a successful external compile,
-  // since its find_external_tool is a no-op).
-  // Validate the compiler against the registry; the executable and the
-  // output_format (which selects the NNF parser below: "nnf-d4" -- d4-family,
-  // no magic line -- vs "nnf-classic" for c2d / minic2d / dsharp) both come
-  // from the record.  A name that is not a registered 'compile' tool, or a
-  // disabled one, is rejected before any temp-dir or CNF work.
+  // Validate the compiler against the registry before any temp-dir or CNF
+  // work.  A name that is not a registered, enabled 'compile' tool is
+  // rejected here.  This function implements the tolerant `nnf` parser
+  // (which reads both the d4-family header-less NNF and the c2d-style header
+  // form); a compile tool advertising any other parser is not something we
+  // can read back, so reject it rather than mis-parse (Panini is dispatched
+  // by its own branch above, before this point).
   const provsql::ToolRecord *rec = provsql::tool_registry().find(compiler);
   if(rec == nullptr || !rec->hasOperation("compile"))
     throw CircuitException("Unknown compiler '"+compiler+"'");
   if(!rec->enabled)
     throw CircuitException(
             "Compiler '"+compiler+"' is disabled in the tool registry");
+  if(rec->parser != "nnf")
+    throw CircuitException(
+            "Compiler '"+compiler+"' uses output parser '"+rec->parser
+            +"', which compilation() does not implement");
   const std::string compiler_binary = rec->binary;
-  const std::string output_format = rec->output_format;
 
-  // d4v2 is driven with native circuit input (BC-S1.2, --input-type circuit):
-  // the Boolean circuit is sent directly instead of a Tseytin CNF, skipping
-  // the CNF transform and the aux-variable reconciliation in the parse-back.
-  // Requires a d4v2 whose BC parser honours `I` declarations; on a gate shape
-  // BC-S1.2 cannot express, we fall back to the Tseytin CNF path below.
-  bool circuit_input = (compiler == "d4v2");
+  // A compiler that advertises the BC-S1.2 circuit input (KCMCP
+  // "circuit-bcs12") is driven with native circuit input: the Boolean circuit
+  // is sent directly instead of a Tseytin CNF, skipping the CNF transform and
+  // the aux-variable reconciliation in the parse-back.  Requires a parser
+  // that honours `I` declarations; on a gate shape BC-S1.2 cannot express, we
+  // fall back to the Tseytin CNF path below.  (Today only d4v2 advertises it.)
+  bool circuit_input = rec->acceptsInput("circuit-bcs12");
   if(find_external_tool(compiler_binary).empty())
     throw CircuitException(
             compiler_binary + " not found on PATH; install it or add its "
@@ -892,20 +892,16 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     provsql_notice("Tseytin circuit in %s", filename.c_str());
   }
 
-  // new_d4: the d4-family NNF has no "nnf" magic line and roots at gate "1".
-  bool new_d4 = (output_format == "nnf-d4");
   std::string cmdline;
   if(circuit_input) {
     // d4v2 native circuit input from the BC-S1.2 file.
     // `-t pcnf` projects the gate variables out so the compiled d-DNNF
     // branches only on the input (`I`) variables; without it d4 branches on
     // gate variables and the d-DNNF cannot be soundly projected onto inputs.
-    // This native fast path is a d4v2-specific optimisation, not registry
-    // data (it pairs with the BC-S1.2 input written above and the
-    // circuit-mode variable resolution in the parse-back).
+    // This native fast path pairs with the BC-S1.2 input written above and
+    // the circuit-mode variable resolution in the parse-back.
     cmdline = compiler_binary
             + " -i "+filename+" --input-type circuit -t pcnf --dump-file "+outfilename;
-    new_d4 = true;
   } else {
     // CNF path: the command line is the registry argtpl with {in}/{out}
     // (and {binary}) substituted -- so a newly-registered compiler runs with
@@ -927,8 +923,8 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     // Temporary support for an older d4 CLI: retry with the
     // pre-`-dDNNF` syntax. Not extended to d4v2, whose CLI has been
     // stable since release; d4v2 failures short-circuit to the
-    // throw below.
-    new_d4 = false;
+    // throw below.  (The old CLI emits the classic header form, which the
+    // parser below detects on its own.)
     cmdline = compiler_binary+" "+filename+" -out="+outfilename;
     retvalue=run_external_tool(cmdline);
   }
@@ -943,16 +939,22 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   std::string line;
   getline(ifs,line);
 
+  // Tolerant NNF detection (the single `nnf` parser): the classic c2d/d4
+  // form opens with an "nnf <nodes> <edges> <vars>" magic line and roots at
+  // the last node; the d4-family form has no magic line and roots at gate
+  // "1".  A classic compiler emits the header iff satisfiable, so a missing
+  // header on an empty file is an unsatisfiable formula; a missing header on
+  // a non-empty file is the d4-family form.  (The d4v2 native-circuit path
+  // also produces the header-less d4 form.)
+  bool new_d4;
   if(line.rfind("nnf", 0) != 0) {
-    // New d4 / d4v2 do not include this magic line; any other compiler
-    // that omits it has produced an unsatisfiable formula (its NNF file
-    // is empty, so we get end-of-stream here).
-
-    if(output_format != "nnf-d4") {
-      // unsatisfiable formula
+    if(line.empty()) {
+      // unsatisfiable formula (empty output)
       return dDNNF();
     }
+    new_d4 = true;
   } else {
+    new_d4 = false;
     std::string nnf;
     unsigned nb_nodes, nb_edges, nb_variables;
 
