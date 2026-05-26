@@ -4985,7 +4985,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     if (class_atom_count[i] == natoms) { root_class = i; break; }
   if (root_class < 0) {
     if (provsql_verbose >= 5)
-      provsql_notice("ProvSQL: not inversion-free: no root variable (non-hierarchical)");
+      provsql_notice("not inversion-free: no root variable (non-hierarchical)");
     return NULL;
   }
 
@@ -5005,7 +5005,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
       col_pos_of_class[rrank * nclasses + c] = pos;
     else if (col_pos_of_class[rrank * nclasses + c] != pos) {
       if (provsql_verbose >= 5)
-        provsql_notice("ProvSQL: not inversion-free: class at inconsistent column "
+        provsql_notice("not inversion-free: class at inconsistent column "
                        "positions within one relation (inversion / self-equality)");
       return NULL;
     }
@@ -5053,7 +5053,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
   }
   if (ntopo != nclasses) {
     if (provsql_verbose >= 5)
-      provsql_notice("ProvSQL: not inversion-free: cyclic precedence graph "
+      provsql_notice("not inversion-free: cyclic precedence graph "
                      "(inversion, e.g. symmetric closure R(x,y),R(y,x))");
     return NULL;
   }
@@ -5172,7 +5172,7 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
       {
         SafeCert *cert = detect_inversion_free(constants, q);
         if (cert != NULL && provsql_verbose >= 1)
-          provsql_notice("ProvSQL: %s [certificate produced, unused in phase 1]",
+          provsql_notice("%s [certificate produced, unused in phase 1]",
                          safe_cert_describe(cert));
       }
       return NULL;
