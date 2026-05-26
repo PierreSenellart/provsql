@@ -161,10 +161,36 @@ its `(root-value, secondary, atom)` coordinates, which both order the variables
 and identify the frontier slots. Risk #1 (memo key correctness) and risk #4
 (key/order = Prop. 4.5) are the live risks for this step.
 
-Still unbuilt and ahead: the structured (linear-build) construction + its
-frontier memo (next), the per-input order keys (task 11, co-designed with it),
-and materialising the result through `dDNNF::probabilityEvaluation` wired into
-the probability dispatcher behind `provsql.inversion_free`.
+**AND-decomposition built: `StructuredDNNFBuilder` (the §4 construction).**
+`src/StructuredDNNF.{h,cpp}` now carries, alongside the apply oracle, the
+top-down structured builder that **materialises a real ProvSQL `dDNNF`** (not a
+literal OBDD): expand the monotone lineage to a DNF, then recurse —
+decomposable `AND` where the residual is an exact product of variable-disjoint
+factors (the A-part / B-part once the shared self-join separator is fixed, and
+every pure product term), deterministic decision `OR(AND(v,hi),AND(¬v,lo))` on
+the lowest-rank remaining variable otherwise — with a component cache sharing
+equal sub-d-DNNFs. The product test is sound (a verified cross-product
+`|T| == ∏ |proj_b|`, so every emitted `AND` is genuinely decomposable; on a
+near-miss it declines to split rather than risk a wrong answer). Validated on
+the `n×n` witness against the apply oracle and brute force: probabilities match
+exactly (n=2..10 in the harness; n=2 also vs brute force), and the result is a
+**well-formed d-DNNF node-by-node** — every `AND` decomposable, every `OR`
+deterministic — carrying genuine decomposable-AND nodes (n=10: 1123 AND / 654
+OR, `~24·n²` gates, linear in the lineage). Disposes of risk #1's
+*materialisation* worry: determinism/decomposability hold per node.
+
+Residual gap on this builder: it is correct and linear in *output* size, but
+its DNF-explicit recursion still does `~n⁵` *build* work (large residuals copied
+/ canonicalised many times — the same super-linear ceiling as the apply oracle,
+expected). Linear **build** time needs the bounded atom-frontier memo (replacing
+the explicit-DNF cache key with the `2^g` frontier state), co-designed with task
+11; that is the next step on this builder.
+
+Still unbuilt and ahead: the **linear-build** frontier memo over the structured
+construction (next), the per-input order keys (task 11, co-designed with it; the
+order is currently derived in the harness, not from per-input markers), and
+wiring `StructuredDNNFBuilder` + `dDNNF::probabilityEvaluation` into the
+probability dispatcher behind `provsql.inversion_free`.
 
 **Future benchmark (read-once overlap).** Hierarchical self-join-free queries
 over TID are *both* read-once and inversion-free, so both the existing

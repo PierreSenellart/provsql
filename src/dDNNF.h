@@ -38,6 +38,7 @@
 
 // Forward declaration for friend
 class dDNNFTreeDecompositionBuilder;
+class StructuredDNNFBuilder;
 
 /**
  * @brief @c std::hash functor for @c gate_t.
@@ -280,6 +281,7 @@ std::string toNNF(
   const std::function<int(const std::string &)> &var_of_uuid = {}) const;
 
 friend dDNNFTreeDecompositionBuilder; ///< Allowed to construct and populate this d-DNNF
+friend StructuredDNNFBuilder; ///< Inversion-free structured builder: constructs and populates this d-DNNF
 friend dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const; ///< Allowed to access internal d-DNNF state
 };
 
