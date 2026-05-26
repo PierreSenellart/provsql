@@ -299,6 +299,93 @@ resulting bounded-treewidth circuit to the existing d-DNNF builder.
   a workload defeats the lighter factoring, against the same
   d4-on-natural-lineage cost-benefit that deferred Monet's construction in
   [`safe-query-followups.md`](safe-query-followups.md).
+- *Prior art -- a standalone prototype already exists.* Mikaël Monet's MPRI M2
+  internship (2015, supervised by Senellart), *Probabilistic Evaluation of MSO
+  Queries on Bounded Treewidth Instances*, implements this exact pipeline in
+  Java: the `libtw`
+  (`nl.uu.cs.treewidth`) tree-decomposition of the instance's Gaifman graph,
+  the `lethal` tree-automata library, an on-the-fly automaton run that emits a
+  Boolean provenance circuit, circuit-shrinking optimisations (final-state
+  collapse, fact-irrelevance detection), linear-time probability evaluation,
+  and a head-to-head benchmark against MayBMS. Its `tree/FunctionAutom*.java`
+  are hand-written per-query automata (one per query in its `queries` file) and
+  `tree/SFC.java` is a hand-coded MSO connectivity automaton -- the MSO-only
+  case MayBMS cannot express. The report's own stated limits independently
+  corroborate this study: (i) MSO-to-automaton compilation is non-elementary
+  and *was done by hand* (no implemented compiler), exactly the "genuinely new
+  hard core" below; (ii) "treewidth quickly becomes a limiting factor", echoing
+  §1's cap findings. It is a reusable design reference (especially the
+  on-the-fly automaton and the propagator-state trick that keeps the circuit
+  linear) rather than something to port, but it means Route A is not a
+  from-scratch research bet.
+
+#### What the automaton looks like (the §1 pathologies, worked)
+
+The §1 explosions become transparent once cast as tree automata, and the
+exercise shows precisely the circuit shape ProvSQL fails to emit. A bottom-up
+automaton `A = (Q, delta, F)` runs over a tree encoding: bag elements carry
+names `1..k+1`, and a node may carry one fact `R(i1, ...)` over active names
+whose provenance annotation `x_t` is a Boolean input. The provenance circuit is
+then mechanical -- a gate `g[nu,q]` per node `nu` and state `q` ("the subtree at
+`nu` evaluates bottom-up to `q`", as a function of the `x_t` below it):
+
+- leaf carrying fact `t` (present `-> q+`, absent `-> q-`): `g[nu,q+] = x_t`,
+  `g[nu,q-] = NOT x_t`;
+- internal node, children `l`, `r`:
+  `g[nu,q] = OR over {delta(q1,q2,a)=q} of (g[l,q1] AND g[r,q2] AND chi_a)`;
+- output: `OR over q in F of g[root,q]`.
+
+Size is `O(|Q|^2 * |E|)` (linear in the instance); **treewidth is `O(|Q|)`,
+independent of `|I|`**, because wires only ever connect a node's gates to its
+children's -- the circuit's primal graph is the encoding tree with each node
+fattened to `|Q|` gates. So the **state count *is* the treewidth bound**, and
+"what the automaton looks like" reduces to "how few states it needs". Monet's
+prototype realises exactly this scheme: a state in `FunctionAutom1` (its query
+`R(x) AND S(x)`) is the pair of element-sets `(N_R, N_S)` seen in an R-/S-fact,
+*filtered to the current bag* (forgetting drops them), with a sentinel final
+state and a "propagator" don't-care state that keeps the emitted circuit linear.
+
+The three §1 queries each need a **constant** number of states:
+
+- `selfcart` (`exists x exists y E(x,y)`, collapses to `OR e_i`). Names are
+  irrelevant; 2 states `{q0, q1}`, with `q1` sticky once any present edge is
+  seen below. Recurrence `g[nu,q1] = g[l,q1] OR g[r,q1] (OR x_t)` -- a balanced
+  OR-tree, **treewidth 1**, built directly. ProvSQL reaches the same `OR e_i`
+  only after the joint-fixpoint absorption fold (`boolean_fold` case 7); the
+  automaton never forms the products in the first place.
+- `costar` (`exists d exists x exists y (x != y AND E(x,d) AND E(y,d))`, "some
+  vertex has in-degree `>= 2`"). State = a `done` flag plus, per active name, an
+  in-degree count capped at `{0, 1, >=2}`; forgetting a name with count `>= 2`
+  sets `done`; combine sums the per-name counts (capped). Constant states
+  (`2 * 3^(k+1)`). On the in-star (`tw = 1`, centre a cut vertex present in
+  every bag) the encoding is a caterpillar whose spine carries the centre, and
+  the circuit becomes a **running counter capped at 2** -- three gates per spine
+  node, each wired only to the previous node's three:
+  ```
+  g[nu,0]   = g[prev,0] AND NOT e_i
+  g[nu,1]   = (g[prev,1] AND NOT e_i) OR (g[prev,0] AND e_i)
+  g[nu,>=2] = g[prev,>=2] OR (g[prev,1] AND e_i)
+  ```
+  output `g[root,>=2]`. This is the textbook linear-size, **treewidth-~3**
+  sequential-threshold circuit for "at least two of `n`", computing the same
+  function as ProvSQL's `OR_{i<j} e_i AND e_j` whose primal graph is
+  `Theta(n)`. The whole win is two moves a relational-plan builder has no
+  analogue for: **restrict the state to the active bag** (forget = drop) and
+  **cap the summary** (in-degree at 2). This is also why the fold cannot rescue
+  `costar` (no literal dominates a product, so B3 is inapplicable in principle):
+  it is a different construction, not a peephole the fold could reach.
+- `cart` (`(exists x R(x)) AND (exists y S(y))`). Two independent copies of the
+  `selfcart` automaton, `Q = {0,1}^2`, `F = {(1,1)}`; circuit
+  `(OR r_x) AND (OR s_y)`, treewidth 1. This is the §1 (a') case ProvSQL
+  *already* factors optimally -- the automaton merely confirms the optimum the
+  plan happens to hit when the two sides share no element.
+
+Takeaway: the §1 pathologies are all constant-state automata, so the ABS
+circuit is constant-treewidth *by construction*; the recurrences above are the
+optimal circuits ProvSQL fails to emit for `selfcart` / `costar`. This is the
+concrete case for Route C (a decomposition-aligned construction) over more
+folding, and it shows the bound is genuinely a property of *how* the circuit is
+built, not of the query fragment.
 
 ### 5. Route B -- post-hoc refactor of the existing circuit
 
@@ -329,6 +416,66 @@ over the graph's tree decomposition would instead give recursion on cyclic data
 a principled, tractable, linear-size provenance circuit, and extends to general
 semirings. It is the relational study's natural sequel and dovetails with the
 in-flight recursive-query work rather than standing alone.
+
+#### Candidate query family: two-terminal reachability / network reliability
+
+The concrete anchor -- the family that *motivates* the automaton, as opposed to
+the relational pathologies that are better served by cheaper factoring -- is
+**`s`-`t` reachability (network reliability) on a bounded-treewidth
+probabilistic graph**:
+
+```sql
+WITH RECURSIVE reach(v) AS (
+    SELECT $s                                    -- source
+  UNION
+    SELECT e.dst FROM reach r, edge e WHERE e.src = r.v
+)
+SELECT count(*) > 0 FROM reach WHERE v = $t;     -- is t reachable from s?
+```
+
+over a probabilistic `edge(src, dst)` whose graph has bounded treewidth:
+series-parallel networks (`tw = 2`), outerplanar graphs, transit / utility
+networks, workflow / process graphs.
+
+Why this family and not the §1 relational pathologies:
+
+- *Genuine capability gap, not a speedup.* `Pr[t reachable from s]` is
+  two-terminal network reliability -- `#P`-hard in general (Valiant), but
+  linear-time on bounded treewidth. Competing PDBs (MayBMS) cannot express it
+  once connectivity is needed (MSO, not FO -- the limit Monet's report hit).
+- *ProvSQL cannot do it tractably today.* `eval_recursive` is acyclic / Boolean
+  only and emits a strictly-DAG circuit of unbounded size on cyclic data; §1 (b)
+  confirmed reachability treewidth *grows with `|I|`* and crosses the cap even
+  at constant `tw(I)`. This is the one place the gap is intrinsic and
+  `|I|`-driven.
+- *The cheap levers do not apply.* It is recursive, so the Boolean fold (a
+  peephole on a flat lineage) and the route-3 threshold / factoring recogniser
+  cannot reach it. Only a decomposition-aligned (cycluit) construction helps.
+
+And the automaton is small. For directed `s -> t` reachability the state at a
+bag is just the subset of currently-active vertices already known reachable from
+`s`, plus a "reached `t`" flag:
+
+```
+introduce s                : R = {s}
+edge (u,v) present, u in R : R := R ∪ {v}        ( gated by x_e )
+forget w                   : if w = t and w in R, set done; drop w from R
+combine (join bag)         : R := R1 ∪ R2 ;  done := done1 OR done2
+final                      : done (or t in R at the root)
+```
+
+`2^(k+1)` states (`* 2` for the flag) -- for series-parallel data (`tw = 2`) a
+handful -- so the ABS circuit has constant treewidth `O(2^k)` and feeds the
+existing `dDNNFTreeDecompositionBuilder` unchanged for exact linear-time
+probability. Undirected connectivity is the same idea with a *partition* of the
+bag in place of a subset (`Bell(k+1)` states).
+
+The minimal seed: take `tw(I) = 1` outright -- **probabilistic tree / forest
+data** (XML / JSON, taxonomies, phylogenies, org charts), the original ABS
+"trees" case. The tree decomposition is the document itself (no min-fill), tree
+patterns map to tree automata natively, and ancestor / reachability queries
+collapse to a 2-3 state automaton. It ties into the probabilistic-XML line and
+makes a clean first prototype before general bounded-treewidth graphs.
 
 ### 7. Semiring threads (investigated separately)
 
@@ -366,6 +513,13 @@ Genuinely new (the hard core):
 - The provenance-emitting automaton run (a gate per transition), including, for
   Route C, the cyclic-provenance (cycluit) semantics that the strictly-DAG
   circuit framework does not currently support.
+
+Monet's 2015 Java prototype (see §4, *Prior art*) is a worked, end-to-end
+reference for the first three of these in the relational (acyclic) case --
+tree encoding, hand-built per-query automata, and the on-the-fly
+provenance-emitting run with a propagator-state trick for linearity -- so the
+design space is mapped even where the code is not directly portable. Only the
+cyclic-provenance (cycluit) semantics for Route C is genuinely uncharted.
 
 ## Priorities
 
