@@ -46,7 +46,7 @@ Datum compile_to_ddnnf_dot(PG_FUNCTION_ARGS)
       PG_RETURN_NULL();
     pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
 
-    string compiler = "d4";
+    string compiler = "";  // empty => preference-ranked best available compiler
     if(!PG_ARGISNULL(1)) {
       text *t = PG_GETARG_TEXT_P(1);
       compiler = string(VARDATA(t), VARSIZE(t)-VARHDRSZ);

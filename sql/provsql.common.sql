@@ -3863,11 +3863,12 @@ CREATE OR REPLACE FUNCTION view_circuit(
  * resulting d-DNNF as a GraphViz digraph.
  *
  * @param token root provenance token
- * @param compiler external compiler to invoke (d4, c2d, minic2d, dsharp)
+ * @param compiler external compiler or in-process meta-route to invoke;
+ *   empty (the default) picks the highest-preference available compiler
  */
 CREATE OR REPLACE FUNCTION compile_to_ddnnf_dot(
   token UUID,
-  compiler TEXT = 'd4')
+  compiler TEXT = '')
   RETURNS TEXT AS
   'provsql','compile_to_ddnnf_dot' LANGUAGE C;
 
@@ -3881,11 +3882,12 @@ CREATE OR REPLACE FUNCTION compile_to_ddnnf_dot(
  * numbering). Accepts the same compiler / meta-route names.
  *
  * @param token root provenance token
- * @param compiler compiler or in-process meta-route to use
+ * @param compiler compiler or in-process meta-route to use; empty (the
+ *   default) picks the highest-preference available compiler
  */
 CREATE OR REPLACE FUNCTION compile_to_ddnnf(
   token UUID,
-  compiler TEXT = 'd4')
+  compiler TEXT = '')
   RETURNS TEXT AS
   'provsql','compile_to_ddnnf' LANGUAGE C;
 
@@ -3901,11 +3903,12 @@ CREATE OR REPLACE FUNCTION compile_to_ddnnf(
  * Lets clients compare what each compiler produces on the same circuit.
  *
  * @param token root provenance token
- * @param compiler compiler or in-process meta-route to use
+ * @param compiler compiler or in-process meta-route to use; empty (the
+ *   default) picks the highest-preference available compiler
  */
 CREATE OR REPLACE FUNCTION ddnnf_stats(
   token UUID,
-  compiler TEXT = 'd4')
+  compiler TEXT = '')
   RETURNS jsonb AS
   'provsql','ddnnf_stats' LANGUAGE C;
 

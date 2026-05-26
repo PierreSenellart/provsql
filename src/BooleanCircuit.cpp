@@ -1506,15 +1506,13 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
 
 dDNNF BooleanCircuit::makeDDByName(gate_t g, const std::string &name) const
 {
-  // In-process meta-routes are dispatched through makeDD; the empty
-  // string and "default" both select makeDD's fallback chain. Any
-  // other name is an external compiler and goes straight to
-  // compilation() -- makeDD would otherwise ignore a bare compiler
-  // name and fall through to the fallback chain.
-  if(name.empty() || name=="default"
-     || name=="tree-decomposition" || name=="interpret-as-dd") {
+  // In-process meta-routes are dispatched through makeDD: "default" runs the
+  // whole fallback chain, "tree-decomposition" / "interpret-as-dd" the single
+  // route.  Everything else goes to compilation(); the empty string there
+  // means "pick the highest-preference available compiler" (so a no-compiler
+  // request uses the registry instead of a hardcoded d4).
+  if(name=="default" || name=="tree-decomposition" || name=="interpret-as-dd")
     return makeDD(g, name=="default" ? std::string() : name, "");
-  }
   return compilation(g, name);
 }
 #endif // makeDD / makeDDByName (excluded from tdkc)
