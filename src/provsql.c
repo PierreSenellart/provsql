@@ -495,6 +495,10 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
  *
  * @param rtable   Range table to scan for RTE_CTE entries.
  * @param cteList  CTE definitions to look up names in.
+ * @param lowered  In/out memo of recursive CTEs already lowered (name ->
+ *                 scan subquery), so a recursive CTE referenced more than
+ *                 once is lowered exactly once and later references reuse
+ *                 the first lowering instead of recreating its temp table.
  */
 static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
   ListCell *lc;
