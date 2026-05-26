@@ -185,15 +185,16 @@ INTERNAL_FUNCTIONS = {
     # surfaces as 'provsql.<name>' anchors. Not callable.
     'compilers', 'monte_carlo_samples', 'in_args', 'in_method', 'in_token',
     'weightmc_args',
-    # External-tool registry (register_tool / unregister_tool /
-    # set_tool_enabled / set_tool_preference / the tool_registry_list SRF /
-    # the `tools` view) and the @param / view-column names Doxygen surfaces as
-    # 'provsql.<name>' anchors. Excluded until the registry user-manual chapter
-    # is written, when the user-facing functions move to _SQL_FUNC_MAP.
-    'register_tool', 'unregister_tool', 'set_tool_enabled',
-    'set_tool_preference', 'tool_registry_list', 'tools',
+    # External-tool registry internals: the tool_registry_list SRF (users go
+    # through the `tools` view), the `tools` view and `tool_overrides` table
+    # themselves, and the @param / column names Doxygen surfaces as
+    # 'provsql.<name>' anchors.  The user-facing register_tool /
+    # unregister_tool / set_tool_enabled / set_tool_preference are in
+    # _SQL_FUNC_MAP, referenced from doc/source/user/tool-registry.rst.
+    'tool_registry_list', 'tools', 'tool_overrides',
     'executable', 'input_formats', 'output_format', 'parser', 'argtpl',
     'argtpl_circuit', 'operations', 'preference', 'enabled', 'kind', 'name',
+    'removed', 'dependencies', 'available',
     # GUC referenced by name in the registry doc comments.
     'fallback_compiler',
 }

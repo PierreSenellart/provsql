@@ -60,6 +60,7 @@ This documentation is organized into four parts:
    user/export
    user/studio
    user/configuration
+   user/tool-registry
 
 .. _case-studies:
 
