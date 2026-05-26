@@ -38,6 +38,7 @@ extern "C" {
 #include <random>
 #include <vector>
 #include <stack>
+#include <functional>
 
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
@@ -503,6 +504,79 @@ BooleanCircuit::tseytinVariableMapping() const {
   return mapping;
 }
 
+std::string BooleanCircuit::BCS12(gate_t g, std::vector<gate_t> &inputOrder) const {
+  inputOrder.clear();
+  auto idOf = [](gate_t x) {
+    return static_cast<std::underlying_type<gate_t>::type>(x);
+  };
+
+  std::set<gate_t> seenInputs;
+  std::set<gate_t> internalGates;   // AND/OR gates to emit, ordered by id
+
+  // Resolve a wire to a BC-S1.2 literal, inlining NOT chains as sign flips.
+  std::function<std::string(gate_t)> lit = [&](gate_t w) -> std::string {
+    switch(getGateType(w)) {
+    case BooleanGate::IN:
+      return "in" + std::to_string(idOf(w));
+    case BooleanGate::AND:
+    case BooleanGate::OR:
+      return "g" + std::to_string(idOf(w));
+    case BooleanGate::NOT: {
+      std::string inner = lit(*getWires(w).begin());
+      return inner[0]=='-' ? inner.substr(1) : "-"+inner;
+    }
+    default:
+      throw CircuitException("BC-S1.2 export: unsupported gate type");
+    }
+  };
+
+  // DFS collecting input gates (in first-seen order, fixing their d4
+  // variable numbers) and the AND/OR gates to define; NOT gates are
+  // traversed but never named.
+  std::function<void(gate_t)> collect = [&](gate_t w) {
+    switch(getGateType(w)) {
+    case BooleanGate::IN:
+      if(seenInputs.insert(w).second)
+        inputOrder.push_back(w);
+      break;
+    case BooleanGate::NOT:
+      collect(*getWires(w).begin());
+      break;
+    case BooleanGate::AND:
+    case BooleanGate::OR:
+      if(internalGates.insert(w).second)
+        for(gate_t c : getWires(w))
+          collect(c);
+      break;
+    default:
+      throw CircuitException("BC-S1.2 export: unsupported gate type");
+    }
+  };
+  collect(g);
+
+  std::ostringstream oss;
+  oss << "c BC-S1.2\n";
+  // Inputs first: d4 numbers them 1..k in this order (see header doc).
+  for(gate_t in : inputOrder)
+    oss << "I in" << idOf(in) << "\n";
+  for(gate_t w : internalGates) {
+    const auto &ch = getWires(w);
+    if(ch.empty())
+      throw CircuitException("BC-S1.2 export: nullary gate");
+    oss << "G g" << idOf(w) << " := ";
+    // BC-S1.2 requires >= 2 literals for A/O; a unary AND/OR is the identity.
+    if(ch.size()==1)
+      oss << "I";
+    else
+      oss << (getGateType(w)==BooleanGate::AND ? "A" : "O");
+    for(gate_t c : ch)
+      oss << " " << lit(c);
+    oss << "\n";
+  }
+  oss << "T " << lit(g) << "\n";
+  return oss.str();
+}
+
 dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang) const {
   // Validate / map the language token to Panini's `--lang` argument.
   // Three target classes ProvSQL exposes:
@@ -717,6 +791,13 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
      && compiler!="minic2d" && compiler!="dsharp") {
     throw CircuitException("Unknown compiler '"+compiler+"'");
   }
+
+  // d4v2 is driven with native circuit input (BC-S1.2, --input-type circuit):
+  // the Boolean circuit is sent directly instead of a Tseytin CNF, skipping
+  // the CNF transform and the aux-variable reconciliation in the parse-back.
+  // Requires a d4v2 whose BC parser honours `I` declarations; on a gate shape
+  // BC-S1.2 cannot express, we fall back to the Tseytin CNF path below.
+  bool circuit_input = (compiler == "d4v2");
   if(find_external_tool(compiler).empty())
     throw CircuitException(
             compiler + " not found on PATH; install it or add its "
@@ -725,9 +806,24 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   ScopedTempDir tmp;
   std::string filename    = tmp.file("input");
   std::string outfilename = tmp.file("input.nnf");
+  // In circuit mode, inputOrder[v-1] is the IN gate for d4 variable v
+  // (1-based); empty in CNF mode.
+  std::vector<gate_t> inputOrder;
+  std::string content;
+  if(circuit_input) {
+    try {
+      content = BCS12(g, inputOrder);
+    } catch(const CircuitException &) {
+      // A gate shape BC-S1.2 cannot express: fall back to the CNF path.
+      circuit_input = false;
+      inputOrder.clear();
+    }
+  }
+  if(!circuit_input)
+    content = TseytinCNF(g, false);
   {
     std::ofstream ofs(filename);
-    ofs << TseytinCNF(g, false);
+    ofs << content;
   }
 
   if(provsql_verbose>=20) {
@@ -736,7 +832,14 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   bool new_d4 {false};
   std::string cmdline=compiler+" ";
-  if(compiler=="d4") {
+  if(circuit_input) {
+    // d4v2 native circuit input from the BC-S1.2 file.
+    // `-t pcnf` projects the gate variables out so the compiled d-DNNF
+    // branches only on the input (`I`) variables; without it d4 branches on
+    // gate variables and the d-DNNF cannot be soundly projected onto inputs.
+    cmdline+="-i "+filename+" --input-type circuit -t pcnf --dump-file "+outfilename;
+    new_d4 = true;
+  } else if(compiler=="d4") {
     cmdline+="-dDNNF "+filename+" -out="+outfilename;
     new_d4 = true;
   } else if(compiler=="d4v2") {
@@ -814,6 +917,24 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   dDNNF dnnf;
 
+  // Map a d-DNNF literal's variable to the IN gate it stands for, if any.
+  // CNF mode: variable = gate id + 1, real only for IN gates (every other
+  // variable is a Tseytin auxiliary to skip). Circuit mode: variables 1..k
+  // are the inputs in BCS12's declaration order, everything above k is an
+  // internal-gate variable to skip.
+  size_t k = inputOrder.size();
+  auto resolveVar = [&](int v) -> std::pair<bool, gate_t> {
+    unsigned idx = static_cast<unsigned>(abs(v));
+    if(circuit_input) {
+      if(idx>=1 && idx<=k)
+        return {true, inputOrder[idx-1]};
+      return {false, gate_t{}};
+    }
+    if(idx>=1 && (idx-1) < gates.size() && gates[idx-1]==BooleanGate::IN)
+      return {true, static_cast<gate_t>(idx-1)};
+    return {false, gate_t{}};
+  };
+
   unsigned i=0;
   do {
     std::stringstream ss(line);
@@ -845,14 +966,15 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       int leaf;
       ss >> leaf;
       auto and_gate=dnnf.setGate(std::to_string(i), BooleanGate::AND);
-      if(gates[abs(leaf)-1]==BooleanGate::IN) {
+      auto [is_in, in_gate] = resolveVar(leaf);
+      if(is_in) {
+        auto pid = static_cast<std::underlying_type<gate_t>::type>(in_gate);
+        auto leaf_gate = dnnf.setGate(getUUID(in_gate), BooleanGate::IN, prob[pid]);
         if(leaf<0) {
-          auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(-leaf-1)), BooleanGate::IN, prob[-leaf-1]);
           auto not_gate = dnnf.setGate(BooleanGate::NOT);
           dnnf.addWire(not_gate, leaf_gate);
           dnnf.addWire(and_gate, not_gate);
         } else {
-          auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(leaf-1)), BooleanGate::IN, prob[leaf-1]);
           dnnf.addWire(and_gate, leaf_gate);
         }
       } else {
@@ -881,12 +1003,11 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       while(ss >> decision) {
         if(decision==0)
           break;
-        // d4v2 may introduce internal Tseytin aux variables beyond
-        // our gate count when given a circuit input. They appear as
-        // decision literals on edges; treat them as non-IN (skipped),
-        // matching how we handle the auxiliaries from our own Tseytin.
-        size_t idx = static_cast<size_t>(abs(decision)) - 1;
-        if(idx < gates.size() && gates[idx]==BooleanGate::IN)
+        // Edges carry decision literals over both real inputs and internal
+        // variables (Tseytin auxiliaries in CNF mode, gate variables in
+        // circuit mode). Keep only the input literals; the rest are
+        // functionally determined and projected out (sound for probability).
+        if(resolveVar(decision).first)
           decisions.push_back(decision);
       }
 
@@ -897,13 +1018,14 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
         dnnf.addWire(dnnf.getGate(c), and_gate);
         dnnf.addWire(and_gate, id2);
         for(auto leaf : decisions) {
+          auto in_gate = resolveVar(leaf).second;
+          auto pid = static_cast<std::underlying_type<gate_t>::type>(in_gate);
+          auto leaf_gate = dnnf.setGate(getUUID(in_gate), BooleanGate::IN, prob[pid]);
           if(leaf<0) {
-            auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(-leaf-1)), BooleanGate::IN, prob[-leaf-1]);
             auto not_gate = dnnf.setGate(BooleanGate::NOT);
             dnnf.addWire(not_gate, leaf_gate);
             dnnf.addWire(and_gate, not_gate);
           } else {
-            auto leaf_gate = dnnf.setGate(getUUID(static_cast<gate_t>(leaf-1)), BooleanGate::IN, prob[leaf-1]);
             dnnf.addWire(and_gate, leaf_gate);
           }
         }

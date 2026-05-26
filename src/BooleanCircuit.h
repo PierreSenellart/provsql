@@ -462,6 +462,32 @@ struct CNFInputMapping {
 std::vector<CNFInputMapping> tseytinVariableMapping() const;
 
 /**
+ * @brief Serialise the sub-circuit at @p g in d4's BC-S1.2 circuit format.
+ *
+ * Emits the Boolean circuit directly (inputs as @c "I" declarations,
+ * AND/OR gates as @c "G name := A|O …" definitions, the root as @c "T"),
+ * inlining @c NOT gates as literal sign flips. This is the input consumed by
+ * d4v2's @c --input-type @c circuit mode, letting us skip the Tseytin
+ * transform.
+ *
+ * Inputs are emitted first, so d4 (which numbers literals from 1 in
+ * first-seen order) assigns them variables 1..k in declaration order;
+ * every variable above k is an internal-gate variable. @p inputOrder is
+ * filled so that d4 variable @c v (1-based) corresponds to input gate
+ * @c inputOrder[v-1], which the d-DNNF parse-back uses to map decision
+ * literals to the right @c IN gate.
+ *
+ * Throws @c CircuitException on a gate shape BC-S1.2 cannot express
+ * (a nullary AND/OR, or a non-AND/OR/NOT/IN gate); the caller falls back
+ * to the Tseytin CNF path.
+ *
+ * @param g          Root gate of the sub-circuit.
+ * @param inputOrder Output: input gate for each d4 variable (1-based).
+ * @return           BC-S1.2 circuit description as a string.
+ */
+std::string BCS12(gate_t g, std::vector<gate_t> &inputOrder) const;
+
+/**
  * @brief Compile via Panini (from KCBox) and return the result as a
  *        ProvSQL d-DNNF.
  *
