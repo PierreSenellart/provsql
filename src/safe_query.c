@@ -52,6 +52,7 @@
 #include "provsql_mmap.h"
 #include "provsql_utils.h"
 #include "safe_query.h"
+#include "safe_query_cert.h"
 
 extern int provsql_verbose;             /* declared in provsql.c */
 
@@ -4823,6 +4824,269 @@ static Query *try_flatten_inner_joins(Query *q) {
  * recursion via Choice A).  Returns @c NULL to fall through to the
  * existing pipeline.
  */
+/* -------------------------------------------------------------------------
+ * Inversion-free UCQ(OBDD) detector (sibling of find_hierarchical_root_atoms)
+ *
+ * Phase 1: recognises the inversion-free, tuple-independent self-join class
+ * (the consistent-unification self-joins the read-once rewriter bails on) and
+ * builds the SafeCert order recipe.  It does NOT rewrite the query or attach
+ * the certificate yet (cert produced but unused); it only emits a diagnostic
+ * NOTICE.  See doc/TODO/inversion-free.md.
+ *
+ * Unlike find_hierarchical_root_atoms, this pass keeps the per-occurrence
+ * column-position information (it iterates the raw (varno, varattno, class)
+ * triples rather than the collapsed ANCHOR map), because positional
+ * consistency and the precedence graph G_prec both need it.
+ * ------------------------------------------------------------------------- */
+
+/** @brief Human-readable one-line summary of a SafeCert, for the NOTICE. */
+static char *safe_cert_describe(const SafeCert *cert) {
+  StringInfoData s;
+  int i;
+  initStringInfo(&s);
+  appendStringInfo(&s, "inversion-free UCQ(OBDD): %d atoms, %d classes, root=%d, order=[",
+                   cert->natoms, cert->nclasses, cert->root_class);
+  for (i = 0; i < cert->nclasses; i++)
+    appendStringInfo(&s, "%s%d", i ? "," : "", cert->class_topo_order[i]);
+  appendStringInfoString(&s, "]");
+  return s.data;
+}
+
+/**
+ * @brief Recognise an inversion-free UCQ(OBDD) over tuple-independent inputs.
+ *
+ * Sound under-approximation (documented as such): requires the four
+ * preconditions of the plan -- hierarchical, per-relation positional
+ * consistency, precedence-graph (G_prec) acyclicity, and all-atoms-TID.
+ * Returns a palloc'd @c SafeCert recipe on success, NULL otherwise.  Reasons
+ * for rejection are logged at @c provsql_verbose >= 5 once the query is past
+ * the cheap shape/metadata gate and a self-join is present.
+ */
+static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
+  ListCell *lc;
+  int natoms = list_length(q->rtable);
+  Oid *atom_relid;
+  int *atom_rank;                 /* per atom: relation-symbol rank */
+  int  nranks = 0;
+  bool has_self_join = false;
+  safe_collect_vars_ctx vctx = { NIL };
+  List *eq_pairs = NIL;
+  Var **vars_arr;
+  int  *cls;
+  int   nvars, i, j;
+  int  *class_compact;            /* repr -> compact id, or -1 */
+  int   nclasses = 0;
+  int  *class_atom_count;         /* compacted: distinct atoms touched */
+  int   root_class = -1;
+  int  *col_pos_of_class;         /* per (relid-rank, class): column position, or 0 */
+  int  *prec;                     /* nclasses*nclasses adjacency (G_prec) */
+  int  *indeg;
+  int  *topo;
+  int   ntopo = 0;
+  SafeCert *cert;
+
+  (void) constants;
+
+  /* --- 0. cheap shape gate (self-contained; the read-once candidate gate may
+   * have bailed for an unrelated reason, so re-check what we rely on) ------- */
+  if (q->setOperations || q->hasAggs || q->hasWindowFuncs || q->limitCount
+      || q->limitOffset || q->groupingSets || q->hasDistinctOn
+      || q->hasSubLinks || q->rtable == NIL)
+    return NULL;
+  if (natoms < 2)
+    return NULL;
+  foreach (lc, q->jointree->fromlist)
+    if (!IsA((Node *) lfirst(lc), RangeTblRef))
+      return NULL;
+
+  /* --- 1. metadata gate: every atom a base RTE classified strictly TID;
+   * count relation-symbol occurrences to find self-joins and assign ranks --- */
+  atom_relid = palloc(natoms * sizeof(Oid));
+  atom_rank  = palloc(natoms * sizeof(int));
+  i = 0;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+    ProvenanceTableInfo info;
+    if (rte->rtekind != RTE_RELATION) { pfree(atom_relid); pfree(atom_rank); return NULL; }
+    if (!provsql_lookup_table_info(rte->relid, &info)
+        || info.kind != PROVSQL_TABLE_TID) {
+      /* BID / OPAQUE / no-metadata / deterministic: out of scope for the
+       * independent-Bernoulli OBDD model. */
+      pfree(atom_relid); pfree(atom_rank);
+      return NULL;
+    }
+    atom_relid[i] = rte->relid;
+    /* relation-symbol rank: dense id per distinct relid, first-seen order */
+    atom_rank[i] = -1;
+    for (j = 0; j < i; j++)
+      if (atom_relid[j] == rte->relid) { atom_rank[i] = atom_rank[j]; has_self_join = true; break; }
+    if (atom_rank[i] < 0) atom_rank[i] = nranks++;
+    i++;
+  }
+  if (!has_self_join) {
+    /* No self-join: inversion-free coincides with read-once here, which the
+     * existing rewriter already handles -- do not steal it. */
+    pfree(atom_relid); pfree(atom_rank);
+    return NULL;
+  }
+
+  /* --- 2. union-find over (varno, varattno) Vars via the WHERE equalities --- */
+  expression_tree_walker((Node *) q->targetList, safe_collect_vars_walker, &vctx);
+  if (q->jointree && q->jointree->quals)
+    expression_tree_walker(q->jointree->quals, safe_collect_vars_walker, &vctx);
+  nvars = list_length(vctx.vars);
+  if (nvars == 0) { pfree(atom_relid); pfree(atom_rank); return NULL; }
+
+  vars_arr = palloc(nvars * sizeof(Var *));
+  cls = palloc(nvars * sizeof(int));
+  i = 0;
+  foreach (lc, vctx.vars) { vars_arr[i] = (Var *) lfirst(lc); cls[i] = i; i++; }
+
+  if (q->jointree && q->jointree->quals)
+    safe_collect_equalities(q->jointree->quals, &eq_pairs);
+  for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
+    Var *lv = (Var *) lfirst(lc); int li, ri, ci, cj, k;
+    lc = my_lnext(eq_pairs, lc);
+    {
+      Var *rv = (Var *) lfirst(lc);
+      li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
+      ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+    }
+    if (li < 0 || ri < 0) continue;
+    ci = cls[li]; cj = cls[ri];
+    if (ci == cj) continue;
+    for (k = 0; k < nvars; k++) if (cls[k] == cj) cls[k] = ci;
+  }
+
+  /* compact class reprs to 0..nclasses-1 */
+  class_compact = palloc(nvars * sizeof(int));
+  for (i = 0; i < nvars; i++) class_compact[i] = -1;
+  for (i = 0; i < nvars; i++) {
+    int r = cls[i];
+    if (class_compact[r] < 0) class_compact[r] = nclasses++;
+  }
+#define CCLASS(varidx) (class_compact[cls[(varidx)]])
+
+  /* --- 3. hierarchical: class_atom_count[c] = #distinct atoms touched ------ */
+  class_atom_count = palloc0(nclasses * sizeof(int));
+  {
+    int *seen = palloc0((size_t) nclasses * (size_t) natoms * sizeof(int));
+    for (i = 0; i < nvars; i++) {
+      int c = CCLASS(i);
+      Index vno = vars_arr[i]->varno;
+      int a;
+      if (vno < 1 || (int) vno > natoms) continue;
+      a = (int) vno - 1;
+      if (!seen[c * natoms + a]) { seen[c * natoms + a] = 1; class_atom_count[c]++; }
+    }
+    pfree(seen);
+  }
+  for (i = 0; i < nclasses; i++)
+    if (class_atom_count[i] == natoms) { root_class = i; break; }
+  if (root_class < 0) {
+    if (provsql_verbose >= 5)
+      provsql_notice("ProvSQL: not inversion-free: no root variable (non-hierarchical)");
+    return NULL;
+  }
+
+  /* --- 4. positional consistency: each class occupies a single column
+   * position within each relation symbol (rank).  Catches the path
+   * R(x,y),R(y,z) and the intra-atom A(x,x). ------------------------------- */
+  col_pos_of_class = palloc0((size_t) nranks * (size_t) nclasses * sizeof(int));
+  for (i = 0; i < nvars; i++) {
+    int c = CCLASS(i);
+    Index vno = vars_arr[i]->varno;
+    int a, rrank, pos;
+    if (vno < 1 || (int) vno > natoms) continue;
+    a = (int) vno - 1;
+    rrank = atom_rank[a];
+    pos = (int) vars_arr[i]->varattno;     /* relation column position */
+    if (col_pos_of_class[rrank * nclasses + c] == 0)
+      col_pos_of_class[rrank * nclasses + c] = pos;
+    else if (col_pos_of_class[rrank * nclasses + c] != pos) {
+      if (provsql_verbose >= 5)
+        provsql_notice("ProvSQL: not inversion-free: class at inconsistent column "
+                       "positions within one relation (inversion / self-equality)");
+      return NULL;
+    }
+  }
+
+  /* --- 5. precedence graph G_prec over classes: within each atom, column
+   * order induces class(earlier) -> class(later) for all pairs.  Reject on a
+   * cycle; the topological order is the class-order seed (Prop. 4.5). ------- */
+  prec = palloc0((size_t) nclasses * (size_t) nclasses * sizeof(int));
+  for (i = 0; i < nvars; i++) {
+    int ci = CCLASS(i);
+    int posi = (int) vars_arr[i]->varattno;
+    Index vno = vars_arr[i]->varno;
+    for (j = 0; j < nvars; j++) {
+      int cj, posj;
+      if (vars_arr[j]->varno != vno) continue;     /* same atom only */
+      cj = CCLASS(j);
+      posj = (int) vars_arr[j]->varattno;
+      if (posi < posj) prec[ci * nclasses + cj] = 1;
+      else if (posi == posj && ci != cj) prec[ci * nclasses + cj] = 1; /* shouldn't happen */
+    }
+  }
+  /* Kahn topological sort */
+  indeg = palloc0(nclasses * sizeof(int));
+  for (i = 0; i < nclasses; i++)
+    for (j = 0; j < nclasses; j++)
+      if (i != j && prec[i * nclasses + j]) indeg[j]++;
+  topo = palloc(nclasses * sizeof(int));
+  {
+    bool *done = palloc0(nclasses * sizeof(bool));
+    int picked;
+    do {
+      picked = -1;
+      /* prefer the root class first when it is available */
+      if (!done[root_class] && indeg[root_class] == 0) picked = root_class;
+      for (i = 0; picked < 0 && i < nclasses; i++)
+        if (!done[i] && indeg[i] == 0) picked = i;
+      if (picked >= 0) {
+        done[picked] = true; topo[ntopo++] = picked;
+        for (j = 0; j < nclasses; j++)
+          if (!done[j] && prec[picked * nclasses + j]) indeg[j]--;
+      }
+    } while (picked >= 0);
+    pfree(done);
+  }
+  if (ntopo != nclasses) {
+    if (provsql_verbose >= 5)
+      provsql_notice("ProvSQL: not inversion-free: cyclic precedence graph "
+                     "(inversion, e.g. symmetric closure R(x,y),R(y,x))");
+    return NULL;
+  }
+
+  /* --- 6. build the SafeCert recipe ------------------------------------- */
+  cert = (SafeCert *) palloc0(sizeof(SafeCert));
+  cert->kind = CERT_INVERSION_FREE;
+  cert->nclasses = nclasses;
+  cert->root_class = root_class;
+  cert->natoms = natoms;
+  cert->class_topo_order = topo;
+  cert->atom_relation_rank = atom_rank;
+  cert->maxarity = 0;
+  /* atom_col_class: flattened [natoms][maxarity] (1-based column -> class) */
+  for (i = 0; i < nvars; i++) {
+    int pos = (int) vars_arr[i]->varattno;
+    if (pos > cert->maxarity) cert->maxarity = pos;
+  }
+  cert->atom_col_class = palloc(natoms * cert->maxarity * sizeof(int));
+  for (i = 0; i < natoms * cert->maxarity; i++) cert->atom_col_class[i] = -1;
+  for (i = 0; i < nvars; i++) {
+    Index vno = vars_arr[i]->varno;
+    int a, pos;
+    if (vno < 1 || (int) vno > natoms) continue;
+    a = (int) vno - 1;
+    pos = (int) vars_arr[i]->varattno;
+    cert->atom_col_class[a * cert->maxarity + (pos - 1)] = CCLASS(i);
+  }
+
+  return cert;
+#undef CCLASS
+}
+
 Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   List   *atoms;
   List   *groups = NIL;
@@ -4900,6 +5164,17 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
     if (!is_safe_query_candidate(constants, q, approved)) {
       if (approved)
         bms_free(approved);
+      /* The read-once candidate gate refused (most often an un-rescued
+       * self-join).  Try the inversion-free detector as a sibling.  Phase 1:
+       * the certificate is produced but not attached or consumed -- we only
+       * emit a diagnostic NOTICE and leave the lineage intact (return NULL),
+       * so query evaluation is unchanged. */
+      {
+        SafeCert *cert = detect_inversion_free(constants, q);
+        if (cert != NULL && provsql_verbose >= 1)
+          provsql_notice("ProvSQL: %s [certificate produced, unused in phase 1]",
+                         safe_cert_describe(cert));
+      }
       return NULL;
     }
     if (approved)
