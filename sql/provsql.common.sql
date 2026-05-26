@@ -44,13 +44,20 @@ CREATE TYPE provenance_gate AS
     'rv',      -- Continuous random-variable leaf
     'arith',   -- n-ary arithmetic gate over scalar-valued children
     'mixture', -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
-    'assumed_boolean' -- Structural marker over a single child: the
+    'assumed_boolean', -- Structural marker over a single child: the
                       -- wrapped sub-circuit was computed under a
                       -- Boolean-provenance assumption (e.g. the safe-
                       -- query rewrite).  Transparent for Boolean-
                       -- compatible evaluators, fatal error for the
                       -- rest, rendered as an explicit element in
                       -- PROV-XML export.
+    'annotation'      -- Transparent single-child wrapper carrying a
+                      -- query-level annotation string in @c extra
+                      -- (e.g. the inversion-free tractability
+                      -- certificate / per-input order key).  Identity
+                      -- for EVERY evaluator; its UUID folds in @c extra
+                      -- so distinct annotations over the same child are
+                      -- distinct gates.
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -159,6 +166,36 @@ BEGIN
                                      concat('assumed_boolean', token));
   PERFORM create_gate(wrapped, 'assumed_boolean', ARRAY[token]);
   RETURN wrapped;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Wrap @p token in a fresh transparent @c gate_annotation carrying
+ *        @p extra, and return the wrapper's UUID.
+ *
+ * Unlike every other gate, the annotation wrapper's UUID folds in @p extra
+ * (not just the child): @c uuid_generate_v5 over @c concat('annotation',
+ * token, extra).  This is deliberate -- two annotations over the same child
+ * with different @p extra must be distinct gates (e.g. the same input tuple
+ * carrying different per-occurrence order keys, or two queries attaching
+ * different certificates to a shared root).  The wrapper is transparent
+ * (identity) for EVERY evaluator; @p extra is inert metadata read only by the
+ * code that placed it.  No-op (returns NULL) on a NULL input.
+ */
+CREATE OR REPLACE FUNCTION annotate(token UUID, extra TEXT) RETURNS UUID AS
+$$
+DECLARE
+  annotated uuid;
+BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
+  annotated := public.uuid_generate_v5(uuid_ns_provsql(),
+                                       concat('annotation', token, extra));
+  PERFORM create_gate(annotated, 'annotation', ARRAY[token]);
+  PERFORM set_extra(annotated, extra);
+  RETURN annotated;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;

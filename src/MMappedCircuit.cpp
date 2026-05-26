@@ -695,7 +695,7 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
     }
 
     if(type==gate_project || type==gate_value || type==gate_agg
-       || type==gate_rv || type==gate_mulinput) {
+       || type==gate_rv || type==gate_mulinput || type==gate_annotation) {
       auto extra = getExtra(uuid);
       result.setExtra(id, extra);
     }

@@ -105,13 +105,13 @@ static std::string view_circuit_internal(Datum token, Datum token2prob, Datum is
       } else {
         auto id=c.getGate(f);
 
-        if (type == "times" || type == "assumed_boolean")
+        if (type == "times" || type == "assumed_boolean" || type == "annotation")
         {
-          /* assumed_boolean is a single-child structural wrapper.
-           * A single-wire TIMES renders as identity in the DOT
-           * output, which is what we want here; rendering a
-           * distinct node would clutter the graph for no semantic
-           * gain.  PROV-XML export keeps the wrapper explicit. */
+          /* assumed_boolean and annotation are single-child structural
+           * wrappers.  A single-wire TIMES renders as identity in the DOT
+           * output, which is what we want here; rendering a distinct node
+           * would clutter the graph for no semantic gain.  PROV-XML export
+           * keeps the wrapper explicit. */
           c.setGate(f, DotGate::OTIMES);
         }
         else if (type == "plus")

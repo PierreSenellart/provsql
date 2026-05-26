@@ -72,6 +72,7 @@ typedef enum gate_type {
   gate_arith,    ///< n-ary arithmetic gate over scalar-valued children (info1 holds operator tag)
   gate_mixture,  ///< Probabilistic mixture: three wires [p_token (gate_input Bernoulli), x_token, y_token]; samples x when p is true, y otherwise
   gate_assumed_boolean, ///< Structural marker over a single child whose sub-circuit was computed under a Boolean-provenance assumption (e.g. the safe-query rewrite); transparent (identity) for Boolean-compatible evaluators, fatal error for the rest, kept as an explicit node in PROV-XML export
+  gate_annotation, ///< Transparent single-child wrapper carrying a query-level annotation in @c extra (inversion-free certificate / per-input order key); identity for EVERY evaluator, and -- unlike the children-only convention -- its UUID folds in @c extra so distinct annotations over the same child are distinct gates.
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
@@ -155,6 +156,14 @@ typedef struct constants_t {
    *  rewriter refuses to produce unmarked roots on a schema that
    *  cannot enforce the semiring-compatibility check. */
   Oid OID_FUNCTION_ASSUME_BOOLEAN;
+  /** @brief OID of @c provsql.annotate(uuid,text)->uuid.
+   *
+   *  Wraps its child in a fresh transparent @c gate_annotation whose UUID
+   *  folds in the @c extra text, and returns the wrapper's UUID.  Used to
+   *  attach the inversion-free tractability certificate (on the root) and the
+   *  per-input order keys.  @c InvalidOid on a schema predating the gate
+   *  (the inversion-free carrier is then disabled). */
+  Oid OID_FUNCTION_ANNOTATE;
   /** OIDs of the @c random_variable_{eq,ne,le,lt,ge,gt} comparison
    * procedure functions, indexed by the @c ComparisonOperator enum
    * (@c EQ=0, @c NE=1, @c LE=2, @c LT=3, @c GE=4, @c GT=5; matches the

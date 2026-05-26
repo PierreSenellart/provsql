@@ -103,7 +103,10 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
 
   case gate_project:
   case gate_eq:
-    // Where-provenance gates, ignored
+  case gate_annotation:
+    // Where-provenance gates and the transparent annotation wrapper: evaluate
+    // straight through to the single child (identity for every semiring).  The
+    // annotation's extra string is inert metadata at evaluation time.
     return evaluate<S>(getWires(g)[0], provenance_mapping, semiring);
 
   case gate_assumed_boolean:

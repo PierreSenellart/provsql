@@ -156,6 +156,13 @@ bool Sampler::evalBool(gate_t g)
                 "gate_assumed_boolean must have exactly one child");
       result = evalBool(wires[0]);
       break;
+    case gate_annotation:
+      // Transparent annotation wrapper (inversion-free certificate / order
+      // key): identity, so the sampled truth value is the wrapped child's.
+      if(wires.size() != 1)
+        throw CircuitException("gate_annotation must have exactly one child");
+      result = evalBool(wires[0]);
+      break;
     default:
       throw CircuitException(
               "Unsupported gate type in Boolean evaluation: " +

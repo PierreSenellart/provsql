@@ -1,0 +1,22 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+ann_type|child_is_root
+annotation|t
+(1 row)
+equal_extra_coincide|diff_extra_distinct
+t|t
+(1 row)
+prob_transparent
+t
+(1 row)
+counting_transparent|boolean_transparent|why_transparent
+t|t|t
+(1 row)
+provxml_ok
+t
+(1 row)
