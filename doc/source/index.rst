@@ -92,6 +92,7 @@ This documentation is organized into four parts:
    dev/aggregation
    dev/semiring-evaluation
    dev/probability-evaluation
+   dev/kc-server-protocol
    dev/continuous-distributions
    dev/coding-conventions
    dev/testing

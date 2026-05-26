@@ -394,9 +394,39 @@ def setup(app):
     def sc_role(name, rawtext, text, lineno, inliner, options=None, content=None):
         return [nodes.inline(rawtext, text, classes=['smallcaps'])], []
 
+    # :msg:`HELLO` -- a KCMCP message-type name, rendered as monospace
+    # (like a literal) and hyperlinked to the section describing that
+    # message type.  Same-page fragment links to the `.. _kcmcp-...:`
+    # targets defined in dev/kc-server-protocol.rst (whose explicit labels
+    # produce stable `id="kcmcp-..."` anchors).  We build the reference
+    # directly -- as the cfunc/cfile roles do -- rather than via a
+    # std :ref:, because an explicit :ref: drops the literal child and
+    # loses the monospace styling.
+    _MSG_LABELS = {
+        'HELLO':    'kcmcp-hello',
+        'REQUEST':  'kcmcp-request',
+        'RESULT':   'kcmcp-result',
+        'ERROR':    'kcmcp-error',
+        'PROGRESS': 'kcmcp-progress',
+        'CANCEL':   'kcmcp-cancel',
+        'PING':     'kcmcp-liveness',
+        'PONG':     'kcmcp-liveness',
+        'BYE':      'kcmcp-liveness',
+    }
+
+    def msg_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+        lit = nodes.literal(text, text)
+        label = _MSG_LABELS.get(text)
+        if not label:
+            return [lit], []
+        ref = nodes.reference('', '', internal=True, refuri='#' + label)
+        ref += lit
+        return [ref], []
+
     app.add_role('sqlfunc', sqlfunc_role)
     app.add_role('cfunc', cfunc_role)
     app.add_role('cfile', cfile_role)
     app.add_role('sqlfile', sqlfile_role)
     app.add_role('sc', sc_role)
+    app.add_role('msg', msg_role)
     return {'version': '0.1', 'parallel_read_safe': True}
