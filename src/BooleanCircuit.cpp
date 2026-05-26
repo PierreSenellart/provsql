@@ -596,47 +596,15 @@ std::string BooleanCircuit::BCS12(gate_t g, std::vector<gate_t> &inputOrder) con
 // ---------------------------------------------------------------------------
 #ifndef TDKC
 
-dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &binary,
-                                    const std::string &argtpl) const {
-  // The target language (OBDD / OBDD[AND] / Decision-DNNF) is baked into
-  // @p argtpl by the caller, which already rejected unknown panini-*
-  // variants. R2-D2 and CCDD are intentionally not exposed: both emit Panini
-  // K (kernelize) nodes encoding literal-equivalence constraints over a
-  // shared kernel variable, which cannot be expressed as a decomposable AND,
-  // so the probabilities they produce would be silently wrong.
-  if (find_external_tool(binary).empty())
-    throw CircuitException(
-            binary + " not found on PATH; install KCBox/Panini or add "
-            "its directory to provsql.tool_search_path");
-
-  ScopedTempDir tmp;
-  std::string filename    = tmp.file("input");
-  std::string outfilename = tmp.file("input.out");
-  {
-    std::ofstream ofs(filename);
-    ofs << TseytinCNF(g, false);
-  }
-
-  if (provsql_verbose >= 20) {
-    provsql_notice("Tseytin circuit in %s", filename.c_str());
-  }
-
-  // Panini's binary is a multi-tool dispatcher: argv[1] must be the
-  // sub-tool name ("Panini"), which the template carries.
-  std::string cmdline =
-      provsql::expandCommandTemplate(argtpl, binary, filename, outfilename);
-
-  int retvalue = run_external_tool(cmdline);
-
-  /* run_external_tool runs the child in its own process group and raises
-   * any pending cancel/terminate itself (after killing the child), so a
-   * cancel surfaces as 57014 here rather than as a "killed by signal"
-   * CircuitException below. */
-  CHECK_FOR_INTERRUPTS();
-
-  if (retvalue)
-    throw CircuitException(format_external_tool_status(retvalue, "panini"));
-
+// Parse a Panini (KCBox) DD output file into a d-DNNF: this is the
+// `panini-dd` output parser, selected by compilation() for the panini-*
+// records (which run the generic compile path -- write a Tseytin CNF, run the
+// record's argtpl -- and differ only in this parse-back).  Panini emits its
+// own DD format (sequential node ids; "F"/"T" terminals; "C"/"D" decomposable
+// conjunctions; decision nodes), not the c2d/d4 NNF the `nnf` parser reads.
+// R2-D2 and CCDD emit "K" (kernelize) nodes that break decomposability, so
+// ProvSQL does not register the variants that produce them.
+dDNNF BooleanCircuit::parsePaniniDD(const std::string &outfilename) const {
   std::ifstream ifs(outfilename.c_str());
   if (!ifs)
     throw CircuitException("Cannot open Panini output: " + outfilename);
@@ -764,12 +732,6 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &binary,
 
   ifs.close();
 
-  if (provsql_verbose >= 20) {
-    tmp.keep();
-    provsql_notice("Compiled Panini (%s) in %s",
-                   cmdline.c_str(), outfilename.c_str());
-  }
-
   if (id_to_gate.empty())
     throw CircuitException("Panini output produced no nodes");
 
@@ -780,61 +742,21 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &binary,
   return dnnf;
 }
 
-// Resolve a registered tool's logical name to the executable to invoke,
-// enforcing the registry's enabled flag.  @p fallback_binary is returned
-// when the name is absent from the registry (preserving the historical
-// literal behaviour for any tool not seeded); when empty, an absent name
-// resolves to itself.  Throws on a disabled tool.
-static std::string resolveToolBinary(const std::string &name,
-                                     const std::string &fallback_binary = "") {
-  const provsql::ToolRecord *rec = provsql::tool_registry().find(name);
-  if(rec == nullptr)
-    return fallback_binary.empty() ? name : fallback_binary;
-  if(!rec->enabled)
-    throw CircuitException("Tool '"+name+"' is disabled in the tool registry");
-  return rec->binary;
-}
-
 dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
-  // Panini (KCBox) does not produce a d4-style NNF file: it emits its
-  // own BDD/DD format. Dispatch to the Panini-specific compile + parse
-  // path early so we do not run the NNF parser below on its output.
-  if (compiler.rfind("panini-", 0) == 0) {
-    std::string suffix = compiler.substr(7);
-    std::string lang;
-    if      (suffix == "obdd")     lang = "OBDD";
-    else if (suffix == "obdd-and") lang = "OBDD[AND]";
-    else if (suffix == "decdnnf")  lang = "Decision-DNNF";
-    else
-      throw CircuitException("Unknown Panini variant: " + compiler);
-    // The panini-* variants are registry records sharing one binary: honour
-    // the enabled flag and resolved executable, and take the command (with
-    // the --lang baked in) from the record's template.  resolveToolBinary
-    // returns "panini" when the variant is absent from the registry; the
-    // lang-derived template below is the fallback used by tdkc (no registry)
-    // and matches the seeded record.
-    std::string panini_binary = resolveToolBinary(compiler, "panini");
-    std::string panini_argtpl =
-        "Panini --lang \"" + lang + "\" --out {out} --quiet {in}";
-    if(const provsql::ToolRecord *prec = provsql::tool_registry().find(compiler))
-      panini_argtpl = prec->argtpl;
-    return paniniCompile(g, panini_binary, panini_argtpl);
-  }
-
   // Validate the compiler against the registry before any temp-dir or CNF
   // work.  A name that is not a registered, enabled 'compile' tool is
-  // rejected here.  This function implements the tolerant `nnf` parser
-  // (which reads both the d4-family header-less NNF and the c2d-style header
-  // form); a compile tool advertising any other parser is not something we
-  // can read back, so reject it rather than mis-parse (Panini is dispatched
-  // by its own branch above, before this point).
+  // rejected here.  compilation() implements two output parsers: the tolerant
+  // `nnf` reader (both the d4-family header-less NNF and the c2d-style header
+  // form) and the `panini-dd` reader (Panini's own DD format); a compile tool
+  // advertising any other parser is something we cannot read back, so reject
+  // it rather than mis-parse.
   const provsql::ToolRecord *rec = provsql::tool_registry().find(compiler);
   if(rec == nullptr || !rec->hasOperation("compile"))
     throw CircuitException("Unknown compiler '"+compiler+"'");
   if(!rec->enabled)
     throw CircuitException(
             "Compiler '"+compiler+"' is disabled in the tool registry");
-  if(rec->parser != "nnf")
+  if(rec->parser != "nnf" && rec->parser != "panini-dd")
     throw CircuitException(
             "Compiler '"+compiler+"' uses output parser '"+rec->parser
             +"', which compilation() does not implement");
@@ -907,6 +829,11 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
 
   if(retvalue)
     throw CircuitException(format_external_tool_status(retvalue, compiler));
+
+  // Read the result back with the parser the record advertises.  Panini's DD
+  // format has its own reader; everything else is the tolerant NNF parser.
+  if(rec->parser == "panini-dd")
+    return parsePaniniDD(outfilename);
 
   std::ifstream ifs(outfilename.c_str());
 

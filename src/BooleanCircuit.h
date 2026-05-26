@@ -459,31 +459,24 @@ std::vector<CNFInputMapping> tseytinVariableMapping() const;
 std::string BCS12(gate_t g, std::vector<gate_t> &inputOrder) const;
 
 /**
- * @brief Compile via Panini (from KCBox) and return the result as a
- *        ProvSQL d-DNNF.
+ * @brief Parse a Panini (KCBox) DD output file into a ProvSQL d-DNNF.
  *
- * @p lang selects Panini's @c --lang flag, one of @c "OBDD",
- * @c "OBDD[AND]", or @c "Decision-DNNF". @c "R2-D2" and @c "CCDD"
- * are intentionally rejected: both emit K (kernelize) nodes
- * encoding literal-equivalence constraints over a shared kernel
- * variable, which break the decomposability invariant of the
- * resulting d-DNNF.
- * Panini's BDD/DD output is over the variables of our Tseytin CNF.
- * Decisions on input variables are translated to the corresponding
- * @c IN gates; decisions on Tseytin auxiliaries are dropped (their
- * branches are mutually exclusive over input assignments by Tseytin
- * determinism, so the input-projection is still a sound d-DNNF and
- * @c dDNNF::probabilityEvaluation gives the correct probability).
+ * The @c panini-dd output parser, selected by @c compilation() for the
+ * @c panini-* records.  Those records run the generic compile path (a Tseytin
+ * CNF written to the input, the record's @c argtpl run, the @c --lang carried
+ * in the template); they differ from the @c nnf compilers only in this
+ * parse-back.  Panini's DD output is over the variables of our Tseytin CNF:
+ * decisions on input variables are translated to the corresponding @c IN
+ * gates; decisions on Tseytin auxiliaries are dropped (their branches are
+ * mutually exclusive over input assignments by Tseytin determinism, so the
+ * input-projection is still a sound d-DNNF).  @c "R2-D2" / @c "CCDD" emit
+ * @c K (kernelize) nodes that break decomposability, so those variants are
+ * not registered and a @c K node here is an error.
  *
- * @param g       Root gate of the sub-circuit to compile.
- * @param binary  Executable to invoke (the registry-resolved binary for the
- *                selected @c panini-* variant).
- * @param argtpl  Command template (carries the variant's @c --lang); expanded
- *                with @c {in} / @c {out} / @c {binary}.
- * @return        The compiled d-DNNF.
+ * @param outfilename  Path to Panini's DD output file.
+ * @return             The compiled d-DNNF.
  */
-dDNNF paniniCompile(gate_t g, const std::string &binary,
-                    const std::string &argtpl) const;
+dDNNF parsePaniniDD(const std::string &outfilename) const;
 
 /**
  * @brief Boost serialisation support.

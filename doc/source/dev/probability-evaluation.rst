@@ -120,8 +120,8 @@ fails with an actionable error rather than letting the shell return
 exit 127. After the call, the wait status is decoded by
 :cfunc:`format_external_tool_status` to distinguish "not found",
 "killed by signal", and "ran and exited nonzero". The same trio
-is used by :cfunc:`BooleanCircuit::WeightMC` for ``weightmc`` and
-by :cfunc:`DotCircuit::render` for ``graph-easy``.
+is used by :cfunc:`BooleanCircuit::wmcCount` for the weighted model
+counters and by :cfunc:`DotCircuit::render` for ``graph-easy``.
 
 Knowledge Compilers and the NNF Format
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -152,11 +152,14 @@ upstream because both emit ``K`` (kernelize) nodes encoding
 literal-equivalence constraints over a shared kernel variable,
 breaking the decomposability invariant of the resulting d-DNNF.
 Panini's output is not the NNF text format but a CDD-style
-DOT-like syntax; the dedicated parser in
-:cfunc:`BooleanCircuit::paniniCompile` translates each ``C`` /
-``D`` line into a decomposable AND and each ``v ? t : f`` decision
-into an explicit OR-of-AND-NOT structure over the corresponding
-input gate. A ``K`` node, if seen, raises an explicit error.
+DOT-like syntax; the ``panini-* `` registry records run the same
+generic compile path as the other compilers but tag their output
+``panini-dd``, so :cfunc:`BooleanCircuit::compilation` reads them
+back with :cfunc:`BooleanCircuit::parsePaniniDD` instead of the NNF
+parser. It translates each ``C`` / ``D`` line into a decomposable AND
+and each ``v ? t : f`` decision into an explicit OR-of-AND-NOT
+structure over the corresponding input gate. A ``K`` node, if seen,
+raises an explicit error.
 
 After any external-compiler call, :cfunc:`dDNNF::simplify` runs a
 single canonical pass over the result: empty-constant folding,
@@ -195,21 +198,21 @@ None of these helpers participate in the probability dispatcher;
 they are purely introspection surfaces sharing the same Tseytin /
 NNF / tree-decomposition primitives as the production methods.
 
-WeightMC: Approximate Weighted Model Counting
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Weighted Model Counting
+^^^^^^^^^^^^^^^^^^^^^^^^
 
-:cfunc:`BooleanCircuit::WeightMC` uses a different external tool:
-the *WeightMC* approximate weighted model counter.  Unlike a
-knowledge compiler it does not produce a d-DNNF; instead it
-returns a single approximate probability with statistical
-guarantees.  The user passes the desired precision as a
-``"delta;epsilon"`` string, which is parsed and turned into a
-``--pivotAC`` argument that controls how many random hash
-constraints WeightMC will sample.
-
-The input is again the Tseytin CNF (with weights); the output is
-a single line that the function parses and returns as a
-``double``.
+:cfunc:`BooleanCircuit::wmcCount` drives every weighted model
+counter through one registry-selected path: it looks the named tool
+up in the external-tool registry, writes the weighted CNF in the
+dialect the record's ``parser`` implies, runs the record's command
+template, and reads the count back the same way.  Two conventions
+are understood: MCC-2024 weighted DIMACS with a ``c s exact`` result
+line (``ganak``, ``sharpsat-td``, ``dpmc``), and the *WeightMC*
+approximate counter's own dialect, whose ``"delta;epsilon"``
+precision argument is turned into a ``--pivotAC`` value controlling
+how many random hash constraints it samples.  Unlike a knowledge
+compiler none of these produce a d-DNNF; each returns a single
+probability the function parses as a ``double``.
 
 Tree Decomposition
 ^^^^^^^^^^^^^^^^^^
@@ -267,19 +270,23 @@ Currently Supported Methods
    * - ``"monte-carlo"``
      - :cfunc:`BooleanCircuit::monteCarlo` -- approximate via random
        sampling; takes sample count as argument.
+   * - ``"wmc"``
+     - :cfunc:`BooleanCircuit::wmcCount` -- weighted model counting
+       via the registered counter named in the argument
+       (``tool[;tool_args]``: ``ganak``, ``sharpsat-td``, ``dpmc``,
+       ``weightmc``, or any registered ``wmc`` tool).
    * - ``"weightmc"``
-     - :cfunc:`BooleanCircuit::WeightMC` -- approximate weighted
-       model counting via the external ``weightmc`` tool; takes
-       ``delta;epsilon`` as argument.
+     - Backward-compatible alias for ``"wmc"`` with the ``weightmc``
+       tool; takes ``delta;epsilon`` as argument.
    * - ``"tree-decomposition"``
      - Builds a :cfunc:`TreeDecomposition` (bounded by
        :cfunc:`TreeDecomposition::MAX_TREEWIDTH`) and uses
        :cfunc:`dDNNFTreeDecompositionBuilder` to construct a
        d-DNNF, then calls :cfunc:`dDNNF::probabilityEvaluation`.
    * - ``"compilation"``
-     - :cfunc:`BooleanCircuit::compilation` -- invokes an external
-       knowledge compiler (``d4``, ``c2d``, ``dsharp``, or
-       ``minic2d``) to produce a :cfunc:`dDNNF`, then
+     - :cfunc:`BooleanCircuit::compilation` -- invokes a registered
+       knowledge compiler (``d4``, ``d4v2``, ``c2d``, ``minic2d``,
+       ``dsharp``, ``panini-*``) to produce a :cfunc:`dDNNF`, then
        :cfunc:`dDNNF::probabilityEvaluation`.
    * - ``""`` (default)
      - Fallback chain: try ``independent``, then
@@ -291,8 +298,9 @@ The branches for ``"compilation"``, ``"tree-decomposition"``, and
 the default all funnel through :cfunc:`BooleanCircuit::makeDD`,
 which dispatches further on the d-DNNF construction strategy.
 
-The external-compiler choice inside ``compilation`` is itself a
-string dispatch inside :cfunc:`BooleanCircuit::compilation`.  Once
+The external-compiler choice inside ``compilation`` resolves the
+named tool against the external-tool registry, which supplies its
+executable, command template and output parser.  Once
 a :cfunc:`dDNNF` has been produced, probability evaluation is a
 single linear-time pass
 (:cfunc:`dDNNF::probabilityEvaluation`), because the d-DNNF

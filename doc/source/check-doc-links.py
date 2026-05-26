@@ -185,6 +185,17 @@ INTERNAL_FUNCTIONS = {
     # surfaces as 'provsql.<name>' anchors. Not callable.
     'compilers', 'monte_carlo_samples', 'in_args', 'in_method', 'in_token',
     'weightmc_args',
+    # External-tool registry (register_tool / unregister_tool /
+    # set_tool_enabled / set_tool_preference / the tool_registry_list SRF /
+    # the `tools` view) and the @param / view-column names Doxygen surfaces as
+    # 'provsql.<name>' anchors. Excluded until the registry user-manual chapter
+    # is written, when the user-facing functions move to _SQL_FUNC_MAP.
+    'register_tool', 'unregister_tool', 'set_tool_enabled',
+    'set_tool_preference', 'tool_registry_list', 'tools',
+    'executable', 'input_formats', 'output_format', 'parser', 'argtpl',
+    'argtpl_circuit', 'operations', 'preference', 'enabled', 'kind', 'name',
+    # GUC referenced by name in the registry doc comments.
+    'fallback_compiler',
 }
 
 if DOXYGEN_SQL_HTML.exists():

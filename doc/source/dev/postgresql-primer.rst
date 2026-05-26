@@ -260,7 +260,7 @@ six:
   executable), termination by signal, and plain nonzero exit -- into
   a single human-readable message used by the throws in
   :cfunc:`BooleanCircuit::compilation`,
-  :cfunc:`BooleanCircuit::WeightMC`, and :cfunc:`DotCircuit::render`.
+  :cfunc:`BooleanCircuit::wmcCount`, and :cfunc:`DotCircuit::render`.
 
 GUCs can be set in ``postgresql.conf``, with ``ALTER SYSTEM``,
 per-session with ``SET``, or per-transaction with ``SET LOCAL``.
