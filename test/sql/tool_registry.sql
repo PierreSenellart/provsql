@@ -63,6 +63,12 @@ SELECT set_tool_enabled('dsharp', false);
 SELECT probability_evaluate(provsql, 'compilation', 'dsharp') FROM tr_r;
 SELECT set_tool_enabled('panini-obdd', false);
 SELECT probability_evaluate(provsql, 'compilation', 'panini-obdd') FROM tr_r;
+-- The weighted-model-counting dispatch is generic too (one wmcCount runner):
+-- an unknown wmc tool and a disabled one both fail in the registry, before
+-- any PATH lookup.
+SELECT probability_evaluate(provsql, 'wmc', 'no-such-counter') FROM tr_r;
+SELECT set_tool_enabled('ganak', false);
+SELECT probability_evaluate(provsql, 'wmc', 'ganak') FROM tr_r;
 DROP TABLE tr_r;
 
 -- The mutators are superuser-only: execute is revoked from PUBLIC.

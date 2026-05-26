@@ -317,25 +317,16 @@ static Datum probability_evaluate_internal
           result = c.possibleWorlds(gate);
         } else if(method=="weightmc") {
           // Backward-compatible alias for the wmc/weightmc path.
-          result = c.WeightMC(gate, args);
+          result = c.wmcCount(gate, "weightmc", args);
         } else if(method=="wmc") {
-          // 'args' = "tool[;tool_args]". 'tool' selects which weighted
-          // model counter to invoke. 'tool_args' (optional, ';'-prefixed)
-          // is passed through to the tool's wrapper.
+          // 'args' = "tool[;tool_args]". 'tool' selects which weighted model
+          // counter to invoke (any registered wmc tool); 'tool_args'
+          // (optional, ';'-prefixed) is forwarded.  wmcCount validates the
+          // tool against the registry, so there is no per-tool branch here.
           auto sep = args.find(';');
           std::string tool = (sep == std::string::npos) ? args : args.substr(0, sep);
           std::string tool_args = (sep == std::string::npos) ? std::string() : args.substr(sep + 1);
-          if(tool == "weightmc") {
-            result = c.WeightMC(gate, tool_args);
-          } else if(tool == "ganak") {
-            result = c.Ganak(gate, tool_args);
-          } else if(tool == "sharpsat-td") {
-            result = c.SharpSATTD(gate, tool_args);
-          } else if(tool == "dpmc") {
-            result = c.DPMC(gate, tool_args);
-          } else {
-            provsql_error("Unknown wmc tool: '%s'", tool.c_str());
-          }
+          result = c.wmcCount(gate, tool, tool_args);
         } else if(method=="compilation" || method=="tree-decomposition"
                   || method=="interpret-as-dd" || method=="default"
                   || method=="") {

@@ -795,19 +795,6 @@ static std::string resolveToolBinary(const std::string &name,
   return rec->binary;
 }
 
-// Build a tool's command line from its registry argtpl (expanding {in}/{out}
-// and @p extra placeholders), falling back to @p fallback_tpl if the record
-// was removed mid-session.  @p binary is the resolved executable.
-static std::string toolCommand(
-    const std::string &name, const std::string &binary,
-    const std::string &in, const std::string &out,
-    const std::string &fallback_tpl,
-    const std::vector<std::pair<std::string, std::string>> &extra = {}) {
-  const provsql::ToolRecord *rec = provsql::tool_registry().find(name);
-  const std::string &tpl = (rec != nullptr) ? rec->argtpl : fallback_tpl;
-  return provsql::expandCommandTemplate(tpl, binary, in, out, extra);
-}
-
 dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   // Panini (KCBox) does not produce a d4-style NNF file: it emits its
   // own BDD/DD format. Dispatch to the Panini-specific compile + parse
@@ -1099,78 +1086,39 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   return dnnf;
 }
 
-double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
-  // Ganak (meelgroup/ganak): exact weighted model counter using the
-  // MCC 2024 input format. We append our weight lines after the
-  // standard Tseytin CNF in the format `c p weight <lit> <w> 0`.
-  std::string ganak_bin = resolveToolBinary("ganak");
-  if(find_external_tool(ganak_bin).empty())
+// Generic weighted-model-counting runner.  Selects the counter from the
+// registry by logical name, checks its binary and dependencies resolve,
+// writes the weighted CNF in the convention its `parser` implies, runs the
+// record's argtpl and reads the count back the same way -- so the four
+// historical per-counter methods (ganak, sharpsat-td, dpmc, weightmc) become
+// one, and a new wmc tool speaking a known convention is registrable without
+// code.  The two conventions, keyed by `parser`:
+//   wmc-line  MCC-2024 weighted DIMACS in ("c t wmc" + "c p weight" lines);
+//             the count on a "c s exact" / "s wmc" line out.
+//   weightmc  weightmc's own weighted DIMACS in; a "mantissa x 2^exp" out.
+double BooleanCircuit::wmcCount(gate_t g, const std::string &tool,
+                                const std::string &opt) const {
+  const provsql::ToolRecord *rec = provsql::tool_registry().find(tool);
+  if(rec == nullptr || !rec->hasOperation("wmc"))
+    throw CircuitException("Unknown wmc tool '" + tool + "'");
+  if(!rec->enabled)
+    throw CircuitException("Tool '" + tool + "' is disabled in the tool registry");
+
+  // The binary (when the tool has one of its own) and every dependency must
+  // resolve on PATH.  dpmc has no binary of its own -- it is the htb | dmc
+  // pipeline named entirely in its template -- so its components are its
+  // dependencies.
+  if(!rec->binary.empty() && find_external_tool(rec->binary).empty())
     throw CircuitException(
-            ganak_bin + " not found on PATH; install it or add its "
+            rec->binary + " not found on PATH; install it or add its "
             "directory to provsql.tool_search_path");
+  for(const std::string &dep : rec->dependencies)
+    if(find_external_tool(dep).empty())
+      throw CircuitException(
+              tool + " needs '" + dep + "' on PATH; install it or add its "
+              "directory to provsql.tool_search_path");
 
-  ScopedTempDir tmp;
-  std::string filename    = tmp.file("input");
-  std::string outfilename = tmp.file("input.out");
-  {
-    std::ofstream ofs(filename);
-    ofs << "c t wmc\n";
-    ofs << TseytinCNF(g, false);
-    for(gate_t in : inputs) {
-      int id = static_cast<int>(in) + 1;
-      ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
-      ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
-    }
-  }
-  // --mode 7: MPFR float (weighted floating-point counting). The
-  // exact line we parse is `c s exact quadruple float <value>`.
-  std::string cmdline = toolCommand("ganak", ganak_bin, filename, outfilename,
-                                    "--mode 7 {in} > {out} 2>&1");
-
-  int retvalue = run_external_tool(cmdline);
-  CHECK_FOR_INTERRUPTS();
-  if(retvalue)
-    throw CircuitException(format_external_tool_status(retvalue, "ganak"));
-
-  std::ifstream ifs(outfilename);
-  std::string line, matched;
-  while(std::getline(ifs, line)) {
-    // Ganak emits `c s exact arb frac <value>`, `c s exact arb int
-    // <value>`, or `c s exact quadruple float <value>` depending on
-    // mode. Remember the last matching line (later lines refine the
-    // earlier ones for some output shapes).
-    if(line.rfind("c s exact", 0) == 0) matched = line;
-  }
-  ifs.close();
-  if(matched.empty())
-    throw CircuitException("ganak: could not find 'c s exact' line in output");
-
-  double ret = parse_wmc_value(matched, "ganak");
-
-  if(provsql_verbose >= 20)
-    tmp.keep();
-
-  return ret;
-}
-
-double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
-  // SharpSAT-TD (Korhonen & Järvisalo, CP 2021): tree-decomposition
-  // guided exact weighted model counter. Same MCC 2024 weighted
-  // DIMACS input as Ganak. The binary is invoked from a freshly
-  // mkdtemp'd directory because it writes flowcutter scratch files
-  // into `--tmpdir` and we want them cleaned up afterwards.
-  std::string sharpsat_bin = resolveToolBinary("sharpsat-td");
-  if(find_external_tool(sharpsat_bin).empty())
-    throw CircuitException(
-            sharpsat_bin + " not found on PATH; install it (binary name "
-            "'sharpsat-td', with the flow_cutter_pace17 helper also "
-            "on PATH) or add the directory to provsql.tool_search_path");
-  if(find_external_tool("flow_cutter_pace17").empty())
-    throw CircuitException(
-            "sharpsat-td's flow_cutter_pace17 helper not found on PATH; "
-            "install it alongside sharpsat-td (the counter invokes it "
-            "via the relative path ./flow_cutter_pace17) or add the "
-            "directory to provsql.tool_search_path");
+  const bool weightmc_io = (rec->parser == "weightmc");
 
   ScopedTempDir tmp;
   const std::string &dirname = tmp.path();
@@ -1178,210 +1126,76 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
   std::string outfilename = tmp.file("input.out");
   {
     std::ofstream ofs(filename);
-    ofs << "c t wmc\n";
-    ofs << TseytinCNF(g, false);
-    for(gate_t in : inputs) {
-      int id = static_cast<int>(in) + 1;
-      ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
-      ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
-    }
-  }
-  // Flags:
-  //  -WE        enable weighted MC with arbitrary precision floats
-  //  -decot 1   run flowcutter for at most 1s (demo-friendly; for
-  //             larger instances bump via tool-specific args)
-  //  -decow 100 weight of the TD in branching heuristic
-  //  -tmpdir    where flowcutter writes scratch files
-  //  -cs 3500   cache size limit in MB
-  //  -prec 20   digits of precision in the printed weighted count
-  //
-  // sharpsat-td invokes its FlowCutter helper via the relative path
-  // `./flow_cutter_pace17`, so we `cd` into the directory where that
-  // helper lives before launching the counter. The Tseytin file
-  // (-tmpdir, input) is passed as an absolute path so the cwd change
-  // doesn't break it.
-  std::string cmdline = toolCommand(
-      "sharpsat-td", sharpsat_bin, filename, outfilename,
-      "cd \"$(dirname \"$(command -v flow_cutter_pace17)\")\" && "
-      "{binary} -WE -decot 1 -decow 100 -tmpdir {tmpdir} -cs 3500 -prec 20 "
-      "{in} > {out} 2>&1",
-      {{"tmpdir", dirname}});
-
-  int retvalue = run_external_tool(cmdline);
-  CHECK_FOR_INTERRUPTS();
-  if(retvalue)
-    throw CircuitException(format_external_tool_status(retvalue, "sharpsat-td"));
-
-  // Parse: `c s exact arb float <value>` per MCC 2024 weighted output.
-  std::ifstream ifs(outfilename);
-  std::string line, matched;
-  while(std::getline(ifs, line)) {
-    if(line.rfind("c s exact", 0) == 0) matched = line;
-  }
-  ifs.close();
-  if(matched.empty())
-    throw CircuitException("sharpsat-td: could not find 'c s exact' line");
-
-  double ret = parse_wmc_value(matched, "sharpsat-td");
-
-  // flowcutter may have left additional scratch files in dirname;
-  // rmdir failures inside the ScopedTempDir destructor are silently
-  // swallowed.
-  if(provsql_verbose >= 20)
-    tmp.keep();
-  (void)dirname;
-  return ret;
-}
-
-double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
-  // DPMC (Dudek, Phan, Vardi, CP 2020): two-stage pipeline.
-  //   1. htb (planner) reads CNF + weights, emits a project-join tree
-  //   2. dmc  (executor) consumes the tree + CNF, returns the count
-  // We assume both binaries are installed as `htb` and `dmc` on PATH,
-  // and pipe the planner's stdout into dmc's stdin.
-  // dpmc has no single binary; honour the registry record's enabled flag
-  // and read its two pipeline binaries from the record's dependencies
-  // (defaulting to htb / dmc when the record is absent).
-  std::string htb_bin = "htb", dmc_bin = "dmc";
-#ifndef TDKC
-  {
-    const provsql::ToolRecord *rec = provsql::tool_registry().find("dpmc");
-    if(rec != nullptr) {
-      if(!rec->enabled)
-        throw CircuitException("Tool 'dpmc' is disabled in the tool registry");
-      if(rec->dependencies.size() >= 2) {
-        htb_bin = rec->dependencies[0];
-        dmc_bin = rec->dependencies[1];
+    if(weightmc_io) {
+      // weightmc reads weights inline, in its own weighted-DIMACS dialect.
+      ofs << TseytinCNF(g, true);
+    } else {
+      // MCC 2024 weighted DIMACS: a plain CNF plus per-input weight lines.
+      ofs << "c t wmc\n";
+      ofs << TseytinCNF(g, false);
+      for(gate_t in : inputs) {
+        int id = static_cast<int>(in) + 1;
+        ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
+        ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
       }
     }
   }
-#endif
-  if(find_external_tool(htb_bin).empty() || find_external_tool(dmc_bin).empty())
-    throw CircuitException(
-            "DPMC needs '" + htb_bin + "' (planner) and '" + dmc_bin
-            + "' (executor) on PATH; install both from vardigroup/DPMC or "
-            "add their directory to provsql.tool_search_path");
 
-  ScopedTempDir tmp;
-  std::string filename    = tmp.file("input.cnf");
-  std::string outfilename = tmp.file("input.cnf.out");
+  // {tmpdir} (sharpsat-td's flowcutter scratch) and {pivotAC} (weightmc's
+  // approximation tolerance, from opt='delta;epsilon') are offered as
+  // template placeholders; a tool that does not reference one ignores it.
+  double epsilon = 0.8;
   {
-    std::ofstream ofs(filename);
-    ofs << "c t wmc\n";
-    ofs << TseytinCNF(g, false);
-    for(gate_t in : inputs) {
-      int id = static_cast<int>(in) + 1;
-      ofs << "c p weight " << id << ' ' << getProb(in)        << " 0\n";
-      ofs << "c p weight -" << id << ' ' << (1.0 - getProb(in)) << " 0\n";
-    }
+    std::stringstream ssopt(opt);
+    std::string delta_s, epsilon_s;
+    getline(ssopt, delta_s, ';');
+    getline(ssopt, epsilon_s, ';');
+    try { double e = stod(epsilon_s); if(e != 0) epsilon = e; }
+    catch(const std::exception &) {}
   }
-  // htb emits a project-join tree on stdout; dmc reads it from stdin
-  // (no flag for the join-tree input; the help line says explicitly
-  // "Diagram Model Counter (reads join tree from stdin)").  dpmc has no
-  // single binary, so the (literal) pipeline lives entirely in the template.
-  std::string cmdline = toolCommand("dpmc", "", filename, outfilename,
-      "htb --cf={in} | dmc --cf={in} > {out} 2>&1");
+  const double pivotAC = 2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
+
+  std::string cmdline = rec->buildCommand(
+      filename, outfilename, rec->binary,
+      {{"tmpdir", dirname}, {"pivotAC", std::to_string(pivotAC)}});
 
   int retvalue = run_external_tool(cmdline);
   CHECK_FOR_INTERRUPTS();
   if(retvalue)
-    throw CircuitException(format_external_tool_status(retvalue, "dpmc"));
+    throw CircuitException(format_external_tool_status(retvalue, tool));
 
-  // DMC's output format: look for `s wmc ...` or `c s exact ...` lines.
-  // The line shape varies by version, so `parse_wmc_value` scans the
-  // line right-to-left and accepts the right-most parseable token,
-  // not just the last one (any trailing diagnostic suffix is
-  // tolerated).
-  std::ifstream ifs(outfilename);
-  std::string line, matched;
-  while(std::getline(ifs, line)) {
-    if(line.rfind("c s exact", 0) == 0 || line.rfind("s wmc", 0) == 0)
-      matched = line;
-  }
-  ifs.close();
-  if(matched.empty())
-    throw CircuitException("dpmc: could not find a parseable count line");
-
-  double ret = parse_wmc_value(matched, "dpmc");
-
-  if(provsql_verbose >= 20)
-    tmp.keep();
-  return ret;
-}
-
-double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
-  //opt of the form 'delta;epsilon'
-  std::stringstream ssopt(opt);
-  std::string delta_s, epsilon_s;
-  getline(ssopt, delta_s, ';');
-  getline(ssopt, epsilon_s, ';');
-
-  double delta = 0;
-  try {
-    delta=stod(delta_s);
-  } catch (std::invalid_argument &) {
-    delta=0;
-  }
-  double epsilon = 0;
-  try {
-    epsilon=stod(epsilon_s);
-  } catch (std::invalid_argument &) {
-    epsilon=0;
-  }
-  if(delta == 0) delta=0.2;
-  if(epsilon == 0) epsilon=0.8;
-
-  //TODO calcul numIterations
-
-  //calcul pivotAC
-  const double pivotAC=2*ceil(exp(3./2)*(1+1/epsilon)*(1+1/epsilon));
-
-  std::string weightmc_bin = resolveToolBinary("weightmc");
-  if(find_external_tool(weightmc_bin).empty())
-    throw CircuitException(
-            weightmc_bin + " not found on PATH; install it or add its "
-            "directory to provsql.tool_search_path");
-
-  ScopedTempDir tmp;
-  std::string filename    = tmp.file("input");
-  std::string outfilename = tmp.file("input.out");
-  {
-    std::ofstream ofs(filename);
-    ofs << TseytinCNF(g, true);
-  }
-
-  std::string cmdline = toolCommand("weightmc", weightmc_bin, filename, outfilename,
-      "--startIteration=0 --gaussuntil=400 --verbosity=0 "
-      "--pivotAC={pivotAC} {in} > {out}",
-      {{"pivotAC", std::to_string(pivotAC)}});
-
-  int retvalue=run_external_tool(cmdline);
-  if(retvalue) {
-    throw CircuitException(format_external_tool_status(retvalue, "weightmc"));
-  }
-
-  //parsing
   std::ifstream ifs(outfilename.c_str());
-  std::string line, prev_line;
-  while(getline(ifs,line))
-    prev_line=line;
-
-  std::stringstream ss(prev_line);
-  std::string result;
-  ss >> result >> result >> result >> result >> result;
-
-  std::istringstream iss(result);
-  std::string val, exp;
-  getline(iss, val, 'x');
-  getline(iss, exp);
-  double value=stod(val);
-  exp=exp.substr(2);
-  double exponent=stod(exp);
-  double ret=value*(pow(2.0,exponent));
+  double ret;
+  if(weightmc_io) {
+    // weightmc prints the count as "<mantissa> x 2^<exp>" on its last line.
+    std::string line, prev_line;
+    while(getline(ifs, line)) prev_line = line;
+    std::stringstream ss(prev_line);
+    std::string result;
+    ss >> result >> result >> result >> result >> result;
+    std::istringstream iss(result);
+    std::string val, exp;
+    getline(iss, val, 'x');
+    getline(iss, exp);
+    if(exp.size() < 2)
+      throw CircuitException("weightmc: could not parse '" + prev_line + "'");
+    double value = stod(val);
+    double exponent = stod(exp.substr(2));
+    ret = value * pow(2.0, exponent);
+  } else {
+    // The count is on the last "c s exact ..." (or "s wmc ...") line;
+    // parse_wmc_value tolerates the per-tool token layout on that line.
+    std::string line, matched;
+    while(getline(ifs, line))
+      if(line.rfind("c s exact", 0) == 0 || line.rfind("s wmc", 0) == 0)
+        matched = line;
+    if(matched.empty())
+      throw CircuitException(tool + ": could not find a count line in output");
+    ret = parse_wmc_value(matched, tool.c_str());
+  }
 
   if(provsql_verbose >= 20)
     tmp.keep();
-
   return ret;
 }
 

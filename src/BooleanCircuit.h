@@ -251,54 +251,25 @@ dDNNF compilation(gate_t g, std::string compiler) const;
 double monteCarlo(gate_t g, unsigned samples) const;
 
 /**
- * @brief Compute the probability using the @c weightmc model counter.
+ * @brief Weighted model counting through a registered external counter.
  *
- * @param g    Root gate.
- * @param opt  Additional command-line options forwarded to @c weightmc.
- * @return     Probability estimate returned by @c weightmc.
+ * Generic over the counter: @p tool names a registry record with the @c "wmc"
+ * operation (today @c weightmc, @c ganak, @c sharpsat-td, @c dpmc, or any
+ * tool an administrator registers).  The record's @c binary, @c dependencies,
+ * @c argtpl and @c parser drive the whole call -- which weighted-CNF dialect
+ * to write, the command to run, and how to read the count back -- so there is
+ * no per-counter code path.  Two output/input conventions are understood, by
+ * @c parser: @c "wmc-line" (MCC-2024 weighted DIMACS in, a @c "c s exact" /
+ * @c "s wmc" count line out) and @c "weightmc" (weightmc's own dialect in, a
+ * @c "mantissa x 2^exp" line out).
+ *
+ * @param g     Root gate of the sub-circuit.
+ * @param tool  Logical name of the wmc tool to use.
+ * @param opt   Tool options; for the approximate counters of the form
+ *              @c "delta;epsilon" (drives the @c {pivotAC} placeholder).
+ * @return      The weighted model count = P(formula).
  */
-double WeightMC(gate_t g, std::string opt) const;
-
-/**
- * @brief Exact weighted model counting via Ganak (meelgroup/ganak),
- *        the current Model Counting Competition champion.
- *
- * Tseytin-CNFs the sub-circuit at @p g, writes the result in MCC 2024
- * weighted-DIMACS format (with @c "c p weight <lit> <w> 0" lines for
- * each input gate), invokes the @c ganak binary in MPFR-float mode
- * (--mode 7), and parses the @c "c s exact ..." line of its stdout.
- *
- * @p opt is reserved for tool-specific flags; currently unused.
- *
- * @param g    Root gate of the sub-circuit.
- * @param opt  Extra options (unused).
- * @return     The weighted model count = P(formula).
- */
-double Ganak(gate_t g, std::string opt) const;
-
-/**
- * @brief Exact weighted model counting via SharpSAT-TD
- *        (Korhonen & Järvisalo, CP 2021).
- *
- * SharpSAT-TD uses tree-decomposition guided decision heuristics
- * inside a SAT-style branching counter. We invoke it in arbitrary
- * precision floating-point mode (@c -WE flag) and parse its stdout.
- *
- * @p opt is reserved for tool-specific flags; currently unused.
- */
-double SharpSATTD(gate_t g, std::string opt) const;
-
-/**
- * @brief Exact weighted model counting via DPMC (Dudek, Phan, Vardi,
- *        CP 2020).
- *
- * DPMC is a pipeline: an HTB planner emits a project-join tree from
- * the CNF, then the DMC executor traverses the tree using ADDs to
- * compute the weighted count.
- *
- * @p opt is reserved for tool-specific flags; currently unused.
- */
-double DPMC(gate_t g, std::string opt) const;
+double wmcCount(gate_t g, const std::string &tool, const std::string &opt) const;
 
 /**
  * @brief Compute the probability exactly when inputs are independent.
