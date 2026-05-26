@@ -258,6 +258,30 @@
   doi          = {10.1145/1739041.1739082},
 }
 
+@inproceedings{DBLP:conf/icdt/JhaS11,
+  author       = {Abhay Kumar Jha and
+                  Dan Suciu},
+  title        = {Knowledge Compilation Meets Database Theory: Compiling Queries
+                  to Decision Diagrams},
+  booktitle    = {Database Theory - {ICDT} 2011, 14th International Conference,
+                  Uppsala, Sweden, March 21-24, 2011, Proceedings},
+  pages        = {162--173},
+  publisher    = {{ACM}},
+  year         = {2011},
+  doi          = {10.1145/1938551.1938574},
+  pdf          = {https://openproceedings.org/2011/conf/icdt/JhaS11.pdf},
+  annote       = {Maps the lineage of a UCQ to four compilation targets of strictly
+    increasing power -- read-once, OBDD, FBDD, d-DNNF -- and shows that over UCQ
+    (unlike self-join-free CQ, where Olteanu-Huang collapse them all to read-once)
+    they form a strict hierarchy. Gives exact syntactic characterisations of the
+    first two: UCQ(OBDD) is precisely the inversion-free queries (with a linear-size
+    OBDD construction using a query-derived variable order), and UCQ(RO) the
+    inversion-free queries in which every relation symbol occurs at most once.
+    Relevant to ProvSQL because it explains why a knowledge compiler working on the
+    materialized circuit alone cannot in general recover the tractability a
+    query-level analysis exposes.},
+}
+
 @inproceedings{DBLP:conf/ecai/Darwiche04,
   author       = {Adnan Darwiche},
   title        = {New Advances in Compiling {CNF} into Decomposable Negation Normal
