@@ -72,32 +72,62 @@
     return data;
   }
 
-  function applyToolAvailability(data) {
-    const opts = (data && data.options) || {};
-    const compSel = document.getElementById('eval-args-compiler');
-    const wmcSel  = document.getElementById('eval-args-wmc-tool');
-    if (compSel && opts.compilation) _filterSelectByMap(compSel, opts.compilation);
-    if (wmcSel  && opts.wmc)         _filterSelectByMap(wmcSel,  opts.wmc);
+  // Friendly display labels for the tools ProvSQL ships with; any tool an
+  // administrator registers later falls back to its bare registry name.
+  const TOOL_LABELS = {
+    'd4': 'd4', 'd4v2': 'd4v2', 'c2d': 'c2d', 'minic2d': 'miniC2D',
+    'dsharp': 'Dsharp',
+    'panini-obdd': 'Panini → OBDD', 'panini-obdd-and': 'Panini → OBDD[AND]',
+    'panini-decdnnf': 'Panini → Decision-DNNF',
+    'ganak': 'Ganak', 'sharpsat-td': 'SharpSAT-TD', 'dpmc': 'DPMC',
+    'weightmc': 'WeightMC',
+    'tree-decomposition': 'tree-decomposition',
+    'interpret-as-dd': 'interpret as d-D', 'default': 'default (fallback chain)',
+  };
+  const _toolLabel = (name) => TOOL_LABELS[name] || name;
+
+  // Rebuild a <select> from catalog entries [{name, available}].  An
+  // unavailable tool stays listed but disabled (and labelled "not on PATH")
+  // so it is discoverable yet not selectable; the selection is kept if still
+  // available, else moved to the first available option.  A `change` event
+  // fires so dependent UI updates.
+  function _rebuildSelect(selectEl, entries) {
+    const prev = selectEl.value;
+    selectEl.replaceChildren();
+    let firstAvail = null;
+    let prevStillAvail = false;
+    for (const e of entries) {
+      const opt = document.createElement('option');
+      opt.value = e.name;
+      opt.textContent = e.available ? _toolLabel(e.name)
+                                    : `${_toolLabel(e.name)} (not on PATH)`;
+      if (!e.available) opt.disabled = true;
+      else if (firstAvail === null) firstAvail = e.name;
+      if (e.name === prev && e.available) prevStillAvail = true;
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = prevStillAvail ? prev
+      : (firstAvail !== null ? firstAvail
+         : (entries.length ? entries[0].name : ''));
+    selectEl.dispatchEvent(new Event('change'));
   }
 
-  function _filterSelectByMap(selectEl, availMap) {
-    let firstVisible = null;
-    let activeStillValid = false;
-    for (const opt of selectEl.options) {
-      // Default to "visible" for any option the API didn't report on
-      // (forward-compat: new options arriving before the API knows
-      // about them stay reachable rather than silently disappear).
-      const isAvail = availMap[opt.value] !== false;
-      opt.hidden = !isAvail;
-      opt.disabled = !isAvail;
-      if (isAvail && firstVisible === null) firstVisible = opt.value;
-      if (isAvail && selectEl.value === opt.value) activeStillValid = true;
+  function applyToolAvailability(data) {
+    if (!data) return;
+    const compSel = document.getElementById('eval-args-compiler');
+    const wmcSel  = document.getElementById('eval-args-wmc-tool');
+    if (compSel) {
+      // Registered external compilers (preference order from the API),
+      // then the always-available in-process meta-routes.
+      const entries = (data.compile || []).map(
+        (t) => ({ name: t.name, available: t.available }));
+      for (const name of (data.inprocess_compilers || []))
+        entries.push({ name, available: true });
+      _rebuildSelect(compSel, entries);
     }
-    if (!activeStillValid && firstVisible !== null) {
-      selectEl.value = firstVisible;
-      // Fire `change` so any listeners (e.g. an eval-args visibility
-      // toggle) see the new value.
-      selectEl.dispatchEvent(new Event('change'));
+    if (wmcSel) {
+      _rebuildSelect(wmcSel,
+        (data.wmc || []).map((t) => ({ name: t.name, available: t.available })));
     }
   }
 
@@ -972,12 +1002,27 @@
         if (rvSamples && eff['provsql.rv_mc_samples'] != null) {
           rvSamples.value = String(eff['provsql.rv_mc_samples']);
         }
-        if (fallback && eff['provsql.fallback_compiler']) {
-          // If the server reports a value we don't have an option for
-          // (e.g. a compiler added in a later release), the assignment
-          // silently fails to match — leave the picker at its default
-          // 'd4' so the user can still pick something valid.
-          fallback.value = String(eff['provsql.fallback_compiler']);
+        if (fallback) {
+          // Populate from the live registry's compile tools (no hardcoded
+          // list); unavailable ones are listed but disabled.
+          const cat = await refreshToolAvailability();
+          const compile = (cat && cat.compile) || [];
+          if (compile.length) {
+            fallback.replaceChildren();
+            for (const t of compile) {
+              const opt = document.createElement('option');
+              opt.value = t.name;
+              opt.textContent = t.available ? _toolLabel(t.name)
+                                            : `${_toolLabel(t.name)} (not on PATH)`;
+              if (!t.available) opt.disabled = true;
+              fallback.appendChild(opt);
+            }
+          }
+          // Reflect the current GUC value even if it is an option we just
+          // disabled (a compiler the admin set but that is not installed).
+          if (eff['provsql.fallback_compiler']) {
+            fallback.value = String(eff['provsql.fallback_compiler']);
+          }
         }
         const opts = cfg.options || {};
         if (depth && opts.max_circuit_depth != null) {
@@ -1855,30 +1900,13 @@
                  min="1" step="1" placeholder="samples" value="10000"
                  autocomplete="off" title="Monte-Carlo sample count">
           <select class="cv-eval__args" id="eval-args-compiler" hidden
-                  title="How to obtain the d-D circuit: an external compiler (d4 / d4v2 / c2d / miniC2D / Dsharp / Panini in 3 target languages), the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → d4)">
-            <option value="d4">d4</option>
-            <option value="d4v2">d4v2</option>
-            <option value="c2d">c2d</option>
-            <option value="minic2d">miniC2D</option>
-            <option value="dsharp">Dsharp</option>
-            <option value="panini-obdd">Panini → OBDD</option>
-            <option value="panini-obdd-and">Panini → OBDD[AND]</option>
-            <option value="panini-decdnnf">Panini → Decision-DNNF</option>
+                  title="How to obtain the d-D circuit: a registered external compiler, the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → fallback compiler). The external compilers are populated from the live tool registry; the in-process routes below always apply.">
             <option value="tree-decomposition">tree-decomposition</option>
             <option value="interpret-as-dd">interpret as d-D</option>
             <option value="default">default (fallback chain)</option>
           </select>
           <select class="cv-eval__args" id="eval-args-wmc-tool" hidden
-                  title="Which weighted model counter to invoke. Ganak, SharpSAT-TD, and DPMC are exact; WeightMC is approximate (ε=0.8, δ=0.2 by default).">
-            <optgroup label="Exact">
-              <option value="ganak">Ganak (MCC 2024+2025 winner)</option>
-              <option value="sharpsat-td">SharpSAT-TD (TD-guided)</option>
-              <option value="dpmc">DPMC (project-join trees + ADDs)</option>
-            </optgroup>
-            <optgroup label="Approximate">
-              <option value="weightmc;0.8;0.2">WeightMC (ε=0.8 δ=0.2)</option>
-            </optgroup>
-          </select>
+                  title="Which weighted model counter to invoke (populated from the live tool registry); leave unset to let ProvSQL pick the highest-preference available one."></select>
           <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
                  min="1" step="1" placeholder="bins" value="30"
                  autocomplete="off" title="Histogram bin count for the distribution profile">

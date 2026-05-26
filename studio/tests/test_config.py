@@ -105,9 +105,9 @@ def test_config_rv_mc_samples_rejects_negative(client):
 
 
 def test_config_fallback_compiler_round_trip(client):
-    """`provsql.fallback_compiler` accepts each compiler name in the
-    documented whitelist, persists through /api/config GET, and is
-    seen by the backend via show_panel_gucs."""
+    """`provsql.fallback_compiler` accepts each registered compile tool
+    (validated against the live provsql.tools catalog), persists through
+    /api/config GET, and is seen by the backend via show_panel_gucs."""
     for compiler in ("d4", "d4v2", "c2d", "minic2d", "dsharp",
                      "panini-obdd", "panini-obdd-and", "panini-decdnnf"):
         resp = client.post("/api/config",
@@ -119,9 +119,9 @@ def test_config_fallback_compiler_round_trip(client):
 
 
 def test_config_fallback_compiler_rejects_unknown(client):
-    """Names outside the whitelist (including R2-D2 / CCDD, which we
-    refuse upstream because their K nodes break decomposability) yield
-    a 400 from /api/config."""
+    """Names not in the registry (including R2-D2 / CCDD, which we refuse
+    upstream because their K nodes break decomposability) yield a 400
+    from /api/config."""
     for bad in ("panini-r2d2", "panini-ccdd", "not-a-real-compiler", "",
                 "D4"):  # case-sensitive
         resp = client.post("/api/config",

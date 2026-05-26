@@ -1944,12 +1944,16 @@
           opt.disabled = opt.hidden;
         }
         // If the selected value just got hidden (user was on
-        // tree-decomposition in kc-ddnnf and switched to kc-benchmark),
-        // fall back to the first visible (external) compiler so the
+        // tree-decomposition in kc-ddnnf and switched to kc-benchmark) or is
+        // unavailable, fall back to the first selectable compiler so the
         // request stays valid.
         const cur = compilerEl.querySelector(
           `option[value="${CSS.escape(compilerEl.value)}"]`);
-        if (!cur || cur.hidden) compilerEl.value = 'd4';
+        if (!cur || cur.hidden || cur.disabled) {
+          const firstOk = compilerEl.querySelector(
+            'option:not([hidden]):not([disabled])');
+          if (firstOk) compilerEl.value = firstOk.value;
+        }
       }
       for (const ctrl of argControls) ctrl.hidden = !wantedIds.has(ctrl.id);
       // Stale once the input shape changes : wipe result + bound +

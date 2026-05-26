@@ -648,23 +648,6 @@ def create_app(
     # + SVG), the tree decomposition (DOT + SVG + treewidth), and a
     # side-by-side timing of every probability_evaluate method.
 
-    _KC_COMPILERS_WHITELIST = {
-        # External knowledge compilers (`BooleanCircuit::compilation`).
-        "d4", "d4v2", "c2d", "minic2d", "dsharp",
-        # Panini (KCBox) with selectable target language. R2-D2 and
-        # CCDD are intentionally omitted: both emit K (kernelize)
-        # nodes encoding literal-equivalence constraints over a
-        # shared kernel variable, which break decomposability.
-        "panini-obdd", "panini-obdd-and", "panini-decdnnf",
-        # In-process: min-fill TD + dDNNFTreeDecompositionBuilder.
-        "tree-decomposition",
-        # In-process: direct reading of the Boolean circuit as a d-D
-        # (decomposable + deterministic, possibly non-NNF).
-        "interpret-as-dd",
-        # makeDD fallback chain: interpretAsDD -> tree-decomposition -> d4.
-        "default",
-    }
-
     def _kc_token():
         try:
             return _coerce_to_uuid(request.args.get("token", ""))
@@ -725,19 +708,21 @@ def create_app(
         if token is None:
             return jsonify({"error": "token is not a valid UUID"}), 400
         compiler = request.args.get("compiler", "d4")
-        if compiler not in _KC_COMPILERS_WHITELIST:
-            return jsonify({
-                "error": f"unknown compiler '{compiler}'",
-                "hint": f"choose one of: {sorted(_KC_COMPILERS_WHITELIST)}",
-            }), 400
         # Tool gating: the compiler itself (if any), plus `dot` since
         # kc_mod.compile_to_ddnnf shells out to it to produce the SVG.
         try:
+            known = kc_mod.known_compilers(get_pool())
+            if compiler not in known:
+                return jsonify({
+                    "error": f"unknown compiler '{compiler}'",
+                    "hint": f"choose one of: {sorted(known)}",
+                }), 400
             compiler_missing = kc_mod.missing_tools_for_compiler(
                 get_pool(), compiler)
             dot_missing = kc_mod.missing_tools_for_names(
                 get_pool(), ("dot",))
-        except psycopg.errors.UndefinedFunction as e:
+        except (psycopg.errors.UndefinedFunction,
+                psycopg.errors.UndefinedTable) as e:
             return _kc_unavailable(e)
         missing = compiler_missing + dot_missing
         if missing:
@@ -765,15 +750,17 @@ def create_app(
         if token is None:
             return jsonify({"error": "token is not a valid UUID"}), 400
         compiler = request.args.get("compiler", "d4")
-        if compiler not in _KC_COMPILERS_WHITELIST:
-            return jsonify({
-                "error": f"unknown compiler '{compiler}'",
-                "hint": f"choose one of: {sorted(_KC_COMPILERS_WHITELIST)}",
-            }), 400
         # Only the compiler is needed here (no dot: this is text output).
         try:
+            known = kc_mod.known_compilers(get_pool())
+            if compiler not in known:
+                return jsonify({
+                    "error": f"unknown compiler '{compiler}'",
+                    "hint": f"choose one of: {sorted(known)}",
+                }), 400
             missing = kc_mod.missing_tools_for_compiler(get_pool(), compiler)
-        except psycopg.errors.UndefinedFunction as e:
+        except (psycopg.errors.UndefinedFunction,
+                psycopg.errors.UndefinedTable) as e:
             return _kc_unavailable(e)
         if missing:
             return _tool_unavailable(missing)
@@ -827,11 +814,12 @@ def create_app(
         import psycopg
         try:
             return jsonify(kc_mod.tools_status(get_pool()))
-        except psycopg.errors.UndefinedFunction as e:
+        except (psycopg.errors.UndefinedFunction,
+                psycopg.errors.UndefinedTable) as e:
             return _kc_unavailable(e)
         except psycopg.Error as e:
             return jsonify({
-                "error": "tool_available query failed",
+                "error": "tool registry query failed",
                 "detail": str(e).strip(),
             }), 500
 
@@ -855,7 +843,8 @@ def create_app(
                     app.config["SESSION_MODES"].get(
                         "provsql.boolean_provenance") == "on"),
             )
-        except psycopg.errors.UndefinedFunction as e:
+        except (psycopg.errors.UndefinedFunction,
+                psycopg.errors.UndefinedTable) as e:
             return _kc_unavailable(e)
         except psycopg.Error as e:
             return jsonify({
@@ -957,8 +946,19 @@ def create_app(
             db.save_persisted_options(_current_options())
             return jsonify({"ok": True, "key": key, "value": canonical})
         # Otherwise treat as a GUC override.
+        import psycopg
+        fallback_compilers = None
+        if name == "provsql.fallback_compiler":
+            # Validate against the live registry (registered compile tools);
+            # if the catalog cannot be read, accept any non-empty value.
+            try:
+                fallback_compilers = frozenset(
+                    t["name"] for t in kc_mod.query_catalog(get_pool())["compile"])
+            except psycopg.Error:
+                fallback_compilers = None
         try:
-            canonical = db.validate_panel_guc(name, value)
+            canonical = db.validate_panel_guc(
+                name, value, fallback_compilers=fallback_compilers)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         app.config["RUNTIME_GUCS"][name] = canonical

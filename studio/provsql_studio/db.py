@@ -2131,13 +2131,6 @@ _PANEL_GUCS = {
     "provsql.fallback_compiler",
 }
 
-# Compiler names accepted by provsql.fallback_compiler. Mirrors the
-# `BooleanCircuit::compilation` whitelist in src/BooleanCircuit.cpp
-# (R2-D2 and CCDD are intentionally excluded; see paniniCompile).
-_FALLBACK_COMPILERS = frozenset({
-    "d4", "d4v2", "c2d", "minic2d", "dsharp",
-    "panini-obdd", "panini-obdd-and", "panini-decdnnf",
-})
 # Session-sticky modes the app keeps in app.config["SESSION_MODES"] and
 # injects into every backend call's extra_gucs.  Distinct from
 # _PANEL_GUCS so they stay invisible to the Config panel API ; the
@@ -2177,9 +2170,16 @@ def show_panel_gucs(pool: ConnectionPool, runtime: dict[str, str]) -> dict[str, 
     return out
 
 
-def validate_panel_guc(name: str, value: str) -> str:
+def validate_panel_guc(
+    name: str, value: str, fallback_compilers: frozenset[str] | None = None
+) -> str:
     """Validate (name, value) for the Config panel and return the canonical
-    value as it should be stored. Raises ValueError on rejection."""
+    value as it should be stored. Raises ValueError on rejection.
+
+    ``fallback_compilers``, when given, is the live set of registered
+    compile-tool names (from provsql.tools) used to validate
+    ``provsql.fallback_compiler``; when ``None`` the value is accepted as
+    long as it is non-empty (the catalog could not be consulted)."""
     if name not in _PANEL_GUCS:
         raise ValueError(f"GUC not user-configurable: {name}")
     v = (value or "").strip().lower()
@@ -2223,15 +2223,18 @@ def validate_panel_guc(name: str, value: str) -> str:
             return "off"
         raise ValueError(f"{name} must be on or off")
     if name == "provsql.fallback_compiler":
-        # Compare against the canonical compiler-name list, not the
-        # lower-cased v: Panini variants are always lowercase so the
-        # match is stable, and the SQL function accepts whatever the
-        # GUC value is verbatim.
+        # Validate against the live registry (the caller passes the
+        # registered compile-tool names from provsql.tools), not a
+        # hardcoded list, so an admin-registered compiler is accepted.
+        # Compare the raw value, not the lower-cased v: the SQL GUC takes
+        # whatever string verbatim and tool names are already lowercase.
         raw = (value or "").strip()
-        if raw not in _FALLBACK_COMPILERS:
+        if not raw:
+            raise ValueError("provsql.fallback_compiler must not be empty")
+        if fallback_compilers is not None and raw not in fallback_compilers:
             raise ValueError(
                 "provsql.fallback_compiler must be one of: "
-                + ", ".join(sorted(_FALLBACK_COMPILERS))
+                + ", ".join(sorted(fallback_compilers))
             )
         return raw
     raise ValueError(f"GUC not user-configurable: {name}")

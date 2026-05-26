@@ -440,111 +440,88 @@ def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
     }
 
 
-# External-tool dependency of every benchmark method.  Empty tuple
-# means the method is fully in-process and always available; a non-
-# empty tuple lists the bare executable names looked up through
-# ``provsql.tool_available`` (which honours ``provsql.tool_search_path``
-# and the backend's resolved ``PATH``).  ``dpmc`` is the only entry
-# with two dependencies: the kernel needs both ``htb`` (tree-
-# decomposition) and ``dmc`` (DPMC's project-join solver) on PATH.
-_METHOD_TOOL_DEPS: dict[tuple[str, str | None], tuple[str, ...]] = {
-    ("independent",        None): (),
-    ("possible-worlds",    None): (),
-    ("tree-decomposition", None): (),
-    ("monte-carlo",        None): (),
-    ("compilation", "d4"):              ("d4",),
-    ("compilation", "d4v2"):            ("d4v2",),
-    ("compilation", "c2d"):             ("c2d",),
-    ("compilation", "minic2d"):         ("minic2d",),
-    ("compilation", "dsharp"):          ("dsharp",),
-    ("compilation", "panini-obdd"):     ("panini",),
-    ("compilation", "panini-obdd-and"): ("panini",),
-    ("compilation", "panini-decdnnf"):  ("panini",),
-    ("wmc", "weightmc;0.8;0.2"):        ("weightmc",),
-    ("wmc", "ganak"):                   ("ganak",),
-    ("wmc", "sharpsat-td"):             ("sharpsat-td",),
-    ("wmc", "dpmc"):                    ("htb", "dmc"),
-}
+# Probability-evaluation methods that run fully in-process (no external
+# tool), so they are always available.  These are *methods*, not tools, so
+# they are not in ``provsql.tools``; the benchmark lists them alongside the
+# external compilers / counters the registry advertises.
+_INPROCESS_METHODS: tuple[tuple[str, str | None], ...] = (
+    ("independent",        None),
+    ("possible-worlds",    None),
+    ("tree-decomposition", None),
+    ("monte-carlo",        None),
+)
 
-# Methods and per-method arguments exercised by the benchmark.  Mirrors
-# the body of ``provsql.probability_benchmark`` in
-# ``sql/provsql.common.sql`` but lives here because we drive the loop
-# from Python: each method needs its own ``SET LOCAL
-# statement_timeout`` to get a per-row time budget, and PL/pgSQL's
-# ``WHEN OTHERS`` does not catch ``query_canceled`` (57014) so a
-# timeout inside the SQL helper aborts the whole table instead of
-# producing one timeout row.
-_BENCHMARK_METHODS: tuple[tuple[str, str | None], ...] = tuple(_METHOD_TOOL_DEPS.keys())
+# In-process meta-routes offered in the compilation dropdown beyond the
+# registered external compilers (all dispatched through makeDD); always
+# available since they invoke no external tool.
+_INPROCESS_COMPILERS: tuple[str, ...] = (
+    "tree-decomposition", "interpret-as-dd", "default",
+)
 
-# Compiler values offered by the Studio eval-strip "Compilation"
-# dropdown.  Includes options outside the benchmark surface
-# (``tree-decomposition``, ``interpret-as-dd``, ``default``) so the
-# /api/kc/tools payload covers every dropdown entry in one shot.
-_COMPILER_TOOL_DEPS: dict[str, tuple[str, ...]] = {
-    "d4":                 ("d4",),
-    "d4v2":               ("d4v2",),
-    "c2d":                ("c2d",),
-    "minic2d":            ("minic2d",),
-    "dsharp":             ("dsharp",),
-    "panini-obdd":        ("panini",),
-    "panini-obdd-and":    ("panini",),
-    "panini-decdnnf":     ("panini",),
-    "tree-decomposition": (),
-    "interpret-as-dd":    (),
-    "default":            (),
-}
 
-# WMC-tool values offered by the eval-strip "wmc" dropdown.  The
-# ``weightmc;ε;δ`` form embeds default arguments; the tool itself is
-# just ``weightmc``.
-_WMC_TOOL_DEPS: dict[str, tuple[str, ...]] = {
-    "ganak":            ("ganak",),
-    "sharpsat-td":      ("sharpsat-td",),
-    "dpmc":             ("htb", "dmc"),
-    "weightmc;0.8;0.2": ("weightmc",),
-}
+def query_catalog(pool: ConnectionPool) -> dict[str, list[dict]]:
+    """The external-tool catalog from ``provsql.tools`` (extension >=
+    1.8.0), grouped by the operations Studio dispatches to.
 
-# Every distinct tool name any dropdown / benchmark row can depend on.
-# Queried in a single SQL round-trip via ``provsql.tool_available``.
-_KNOWN_TOOLS: tuple[str, ...] = tuple(sorted({
-    tool
-    for deps in (
-        *_METHOD_TOOL_DEPS.values(),
-        *_COMPILER_TOOL_DEPS.values(),
-        *_WMC_TOOL_DEPS.values(),
-    )
-    for tool in deps
-}))
+    Returns ``{"compile": [...], "wmc": [...]}`` where each entry is
+    ``{"name", "available", "preference"}``.  Disabled tools are omitted
+    (an administrator has turned them off); the rows are ordered by
+    descending preference, the registry's own selection order.
+    ``available`` reflects the backend's resolved ``PATH`` plus
+    ``provsql.tool_search_path`` (and, for multi-binary tools like dpmc,
+    every dependency).
+    """
+    compile_tools: list[dict] = []
+    wmc_tools: list[dict] = []
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, operations, available, preference "
+            "FROM provsql.tools WHERE enabled "
+            "ORDER BY preference DESC, name"
+        )
+        for name, operations, available, preference in cur.fetchall():
+            entry = {
+                "name": name,
+                "available": bool(available),
+                "preference": preference,
+            }
+            if "compile" in operations:
+                compile_tools.append(entry)
+            if "wmc" in operations:
+                wmc_tools.append(entry)
+    return {"compile": compile_tools, "wmc": wmc_tools}
 
 
 def missing_tools_for_compiler(
     pool: ConnectionPool, compiler: str
 ) -> tuple[str, ...]:
-    """Return the tuple of external tools this compiler needs but that
-    ``provsql.tool_available`` reports as missing on the backend.
+    """Return ``(compiler,)`` if the named compiler is not currently
+    usable, else ``()``.
 
-    Empty tuple ⇒ ready to run (no external deps, or all present).
-    Used by the /api/kc/ddnnf route to return a clean 501 before
-    invoking the SQL function would 500 on a missing binary.
+    In-process meta-routes are always usable.  An external compiler is
+    usable iff it is registered, enabled, and ``provsql.tools`` reports it
+    as available (binary + any dependencies on PATH).  Used by the
+    /api/kc/ddnnf route to return a clean 501 before invoking the SQL
+    function would 500 on a missing binary.
     """
-    deps = _COMPILER_TOOL_DEPS.get(compiler, ())
-    if not deps:
+    if compiler in _INPROCESS_COMPILERS:
         return ()
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT name FROM unnest(%s::text[]) AS name "
-            "WHERE NOT provsql.tool_available(name)",
-            (list(deps),),
+            "SELECT available FROM provsql.tools "
+            "WHERE name = %s AND enabled AND 'compile' = ANY(operations)",
+            (compiler,),
         )
-        return tuple(row[0] for row in cur.fetchall())
+        row = cur.fetchone()
+    return () if (row is not None and row[0]) else (compiler,)
 
 
 def missing_tools_for_names(
     pool: ConnectionPool, names: tuple[str, ...]
 ) -> tuple[str, ...]:
-    """Same shape as `missing_tools_for_compiler`, but takes raw tool
-    names directly. Used by routes that depend on a fixed tool
-    (e.g. ``dot`` for the tree-decomposition DOT renderer)."""
+    """Tools among ``names`` that ``provsql.tool_available`` reports as
+    missing.  Used by routes that depend on a bare binary outside the
+    registry (e.g. ``dot`` for the tree-decomposition DOT renderer)."""
     if not names:
         return ()
     with pool.connection() as conn, conn.cursor() as cur:
@@ -556,49 +533,36 @@ def missing_tools_for_names(
         return tuple(row[0] for row in cur.fetchall())
 
 
-def query_tool_availability(pool: ConnectionPool) -> dict[str, bool]:
-    """Return ``{tool_name: available}`` for every external tool the KC
-    demo helpers and probability benchmark can dispatch to.
+def tools_status(pool: ConnectionPool) -> dict:
+    """Payload for the Studio ``/api/kc/tools`` endpoint.
 
-    Uses ``provsql.tool_available`` so the result reflects the
-    backend's resolved ``PATH`` plus the ``provsql.tool_search_path``
-    GUC, not Studio's process environment.
+    Returns the live external-tool catalog (``compile`` and ``wmc``
+    lists from ``provsql.tools``, each entry carrying ``available``) plus
+    the always-available in-process meta-routes, so the JS builds the
+    compiler / wmc dropdowns and the benchmark directly from the
+    registry -- a newly registered tool appears with no Studio change.
+    Requires ``provsql.tools`` (extension >= 1.8.0).
     """
+    cat = query_catalog(pool)
+    return {
+        "compile": cat["compile"],
+        "wmc": cat["wmc"],
+        "inprocess_compilers": list(_INPROCESS_COMPILERS),
+    }
+
+
+def known_compilers(pool: ConnectionPool) -> set[str]:
+    """Every compiler name the ``compilation`` method accepts: the
+    in-process meta-routes plus the enabled external compile tools in
+    ``provsql.tools``.  Used to 400 an unknown compiler before dispatch."""
+    names = set(_INPROCESS_COMPILERS)
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT name, provsql.tool_available(name) "
-            "FROM unnest(%s::text[]) AS name",
-            (list(_KNOWN_TOOLS),),
+            "SELECT name FROM provsql.tools "
+            "WHERE enabled AND 'compile' = ANY(operations)"
         )
-        return {name: bool(avail) for name, avail in cur.fetchall()}
-
-
-def tools_status(pool: ConnectionPool) -> dict:
-    """Structured payload for the Studio ``/api/kc/tools`` endpoint.
-
-    Mirrors the option lists of the eval-strip dropdowns so the JS
-    side can hide unavailable entries without replicating the
-    method → tool mapping.  ``tools`` is the raw map (one entry per
-    distinct tool); ``options.compilation`` / ``options.wmc`` are the
-    per-dropdown derived maps; ``methods`` is keyed by
-    ``"<method>|<args>"`` (args ``""`` for None) and used by both
-    the probability benchmark filter and a hypothetical future
-    ``probability_evaluate`` UI gate.
-    """
-    tools = query_tool_availability(pool)
-    def _avail(deps: tuple[str, ...]) -> bool:
-        return all(tools.get(t, False) for t in deps)
-    return {
-        "tools": tools,
-        "options": {
-            "compilation": {opt: _avail(deps) for opt, deps in _COMPILER_TOOL_DEPS.items()},
-            "wmc":         {opt: _avail(deps) for opt, deps in _WMC_TOOL_DEPS.items()},
-        },
-        "methods": {
-            f"{method}|{args or ''}": _avail(deps)
-            for (method, args), deps in _METHOD_TOOL_DEPS.items()
-        },
-    }
+        names.update(row[0] for row in cur.fetchall())
+    return names
 
 
 def probability_benchmark(
@@ -638,16 +602,16 @@ def probability_benchmark(
             return
         notices.append(msg)
 
-    # Skip methods whose external tools are missing on the backend.
-    # The benchmark would otherwise spend ~ms per row reproducing the
-    # same "X not found on PATH" error.  Methods with no dependency
-    # (independent / possible-worlds / tree-decomposition / monte-
-    # carlo) always survive the filter.
-    tools = query_tool_availability(pool)
-    runnable = [
-        (m, a) for (m, a) in _BENCHMARK_METHODS
-        if all(tools.get(t, False) for t in _METHOD_TOOL_DEPS[(m, a)])
-    ]
+    # The benchmark lists every available tool: the in-process methods
+    # (always runnable) plus each enabled, available compiler (as the
+    # "compilation" method) and weighted model counter (as "wmc"), taken
+    # live from provsql.tools.  Unavailable tools are skipped so the
+    # benchmark does not spend a row reproducing "X not found on PATH".
+    cat = query_catalog(pool)
+    runnable: list[tuple[str, str | None]] = list(_INPROCESS_METHODS)
+    runnable += [("compilation", t["name"]) for t in cat["compile"]
+                 if t["available"]]
+    runnable += [("wmc", t["name"]) for t in cat["wmc"] if t["available"]]
 
     rows: list[dict] = []
     with pool.connection() as conn:

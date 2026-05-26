@@ -1,11 +1,12 @@
 """Smoke tests for the knowledge-compilation demo helpers.
 
 Focuses on the parts that are robust to missing external tools:
-* /api/kc/tools always returns a structured payload.
-* probability_benchmark drops rows whose tool dependencies are absent.
+* /api/kc/tools always returns the live external-tool catalog from
+  provsql.tools.
+* probability_benchmark lists every available tool and drops the rest.
 
-The benchmark unit test monkey-patches ``query_tool_availability`` so
-the path under test is the per-row filter, not the actual availability
+The benchmark unit test monkey-patches ``query_catalog`` so the path
+under test is the per-row availability filter, not the actual presence
 of d4 / panini / weightmc / … on the CI host.
 """
 from __future__ import annotations
@@ -16,56 +17,58 @@ from provsql_studio import kc
 
 
 def test_tools_endpoint_shape(client):
-    """``/api/kc/tools`` returns the three-section payload the Studio
-    front-end and ``probability_benchmark`` both consume."""
+    """``/api/kc/tools`` returns the live external-tool catalog (from
+    provsql.tools) that the Studio front-end and ``probability_benchmark``
+    both consume."""
     resp = client.get("/api/kc/tools")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert set(data.keys()) >= {"tools", "options", "methods"}
+    assert set(data.keys()) >= {"compile", "wmc", "inprocess_compilers"}
 
-    # Every dropdown option from the eval strip must be a key in the
-    # respective availability map (so the front-end can decide
-    # visibility without falling back on "missing key = available").
-    expected_compilers = {
-        "d4", "d4v2", "c2d", "minic2d", "dsharp",
-        "panini-obdd", "panini-obdd-and", "panini-decdnnf",
-        "tree-decomposition", "interpret-as-dd", "default",
-    }
-    assert set(data["options"]["compilation"]) == expected_compilers
+    # Each catalog entry carries a name, an availability flag, and a
+    # preference (the order the registry would select in).
+    for entry in data["compile"] + data["wmc"]:
+        assert set(entry) >= {"name", "available", "preference"}
+        assert isinstance(entry["available"], bool)
 
-    expected_wmc = {"ganak", "sharpsat-td", "dpmc", "weightmc;0.8;0.2"}
-    assert set(data["options"]["wmc"]) == expected_wmc
+    # The compilers / counters ProvSQL ships with appear in the catalog
+    # (an admin-registered tool would appear too, with no Studio change).
+    compile_names = {e["name"] for e in data["compile"]}
+    assert {"d4", "d4v2", "c2d", "minic2d", "dsharp",
+            "panini-obdd", "panini-obdd-and", "panini-decdnnf"} <= compile_names
+    wmc_names = {e["name"] for e in data["wmc"]}
+    assert {"ganak", "sharpsat-td", "dpmc", "weightmc"} <= wmc_names
 
-    # In-process methods (no external dependency) must always be
-    # reported as available, regardless of which tools are installed.
-    for inproc in ("independent", "possible-worlds",
-                   "tree-decomposition", "monte-carlo"):
-        key = f"{inproc}|"
-        assert data["methods"][key] is True
+    # In-process meta-routes (no external tool, always available) are
+    # listed separately so the front-end appends them to the compiler picker.
+    assert set(data["inprocess_compilers"]) == {
+        "tree-decomposition", "interpret-as-dd", "default"}
 
 
-def test_tools_endpoint_invalid_compiler_unaffected(client):
-    """Sanity-check: the tools_status payload's dpmc availability
-    requires BOTH htb and dmc; either-missing implies False."""
+def test_tools_endpoint_dpmc_single_entry(client):
+    """The two-binary dpmc pipeline (htb | dmc) appears as one wmc entry
+    with a boolean availability flag; the C view ANDs its dependencies."""
     data = client.get("/api/kc/tools").get_json()
-    tools = data["tools"]
-    dpmc_avail = data["options"]["wmc"]["dpmc"]
-    assert dpmc_avail == (tools.get("htb", False) and tools.get("dmc", False))
+    dpmc = [e for e in data["wmc"] if e["name"] == "dpmc"]
+    assert len(dpmc) == 1
+    assert isinstance(dpmc[0]["available"], bool)
 
 
 def test_benchmark_filters_missing_tools(app, monkeypatch):
-    """probability_benchmark drops rows whose tool dependency is
-    flagged missing; in-process methods always survive."""
-    real = kc.query_tool_availability
+    """probability_benchmark lists every available tool and drops the
+    unavailable ones; in-process methods always survive."""
+    real = kc.query_catalog
 
     def fake(pool):
-        avail = real(pool)
-        for tool in ("panini", "htb", "dmc", "weightmc"):
-            if tool in avail:
-                avail[tool] = False
-        return avail
+        cat = real(pool)
+        # Mark the Panini variants, dpmc and weightmc unavailable.
+        for entry in cat["compile"] + cat["wmc"]:
+            if entry["name"] in ("panini-obdd", "panini-obdd-and",
+                                  "panini-decdnnf", "dpmc", "weightmc"):
+                entry["available"] = False
+        return cat
 
-    monkeypatch.setattr(kc, "query_tool_availability", fake)
+    monkeypatch.setattr(kc, "query_catalog", fake)
 
     pool = app.extensions["provsql_pool"]
 
@@ -88,13 +91,13 @@ def test_benchmark_filters_missing_tools(app, monkeypatch):
     assert ("tree-decomposition", None) in method_args
     assert ("monte-carlo", "100") in method_args
 
-    # Missing-tool rows are gone.
+    # Unavailable-tool rows are gone.
     for absent in (
         ("compilation", "panini-obdd"),
         ("compilation", "panini-obdd-and"),
         ("compilation", "panini-decdnnf"),
         ("wmc", "dpmc"),
-        ("wmc", "weightmc;0.8;0.2"),
+        ("wmc", "weightmc"),
     ):
         assert absent not in method_args, f"row for missing tool slipped through: {absent}"
 
