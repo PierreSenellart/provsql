@@ -45,11 +45,10 @@ extern "C" {
 
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "external_tool.h"
+// The tool registry drives external-tool selection and invocation, all of
+// which lives in #ifndef TDKC blocks (tdkc invokes no external tool), so the
+// registry is needed only in the extension build.
 #ifndef TDKC
-// The tool registry is an extension-only concept: tdkc deliberately
-// invokes no external tool, so it neither links nor consults it.  Every
-// registry reference below is guarded by #ifndef TDKC and falls back to the
-// historical literal behaviour on the tdkc side.
 #include "ToolRegistry.h"
 #endif
 
@@ -96,6 +95,7 @@ namespace {
  * @c "<tool>: could not parse '<line>'" instead of letting
  * @c std::stod's @c std::invalid_argument leak through.
  */
+#ifndef TDKC  // external model-counter output parser; tdkc runs no counter
 double parse_wmc_value(const std::string &line, const char *tool) {
   std::vector<std::string> tokens;
   std::stringstream ss(line);
@@ -122,6 +122,7 @@ double parse_wmc_value(const std::string &line, const char *tool) {
   }
   throw CircuitException(std::string(tool) + ": could not parse '" + line + "'");
 }
+#endif
 
 }  // anonymous namespace
 
@@ -584,23 +585,25 @@ std::string BooleanCircuit::BCS12(gate_t g, std::vector<gate_t> &inputOrder) con
   return oss.str();
 }
 
-dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang,
-                                    const std::string &binary) const {
-  // Validate / map the language token to Panini's `--lang` argument.
-  // Three target classes ProvSQL exposes:
-  //   OBDD             unstructured / structured BDD
-  //   OBDD[AND]        OBDD augmented with conjunctive decomposition
-  //   Decision-DNNF    decomposable + decision-deterministic NNF
-  // R2-D2 and CCDD are intentionally omitted: both emit Panini K
-  // (kernelize) nodes encoding literal-equivalence constraints over a
-  // shared kernel variable, which cannot be expressed as a
-  // decomposable AND. Until we case-split the K's kernel variables
-  // into a proper decision structure, the probabilities those two
-  // languages produce are silently wrong.
-  if (lang != "OBDD" && lang != "OBDD[AND]" && lang != "Decision-DNNF") {
-    throw CircuitException("Unknown Panini target language: " + lang);
-  }
+// ---------------------------------------------------------------------------
+// External-tool knowledge compilation and weighted model counting.
+//
+// The standalone tdkc tool deliberately invokes NO external tool (it compiles
+// purely via tree decomposition), so this whole block -- the knowledge
+// compilers, the Panini wrapper, the weighted model counters, and the
+// makeDD/makeDDByName dispatchers that fall back to them -- is excluded from
+// the tdkc build.  The registry is therefore used unconditionally here.
+// ---------------------------------------------------------------------------
+#ifndef TDKC
 
+dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &binary,
+                                    const std::string &argtpl) const {
+  // The target language (OBDD / OBDD[AND] / Decision-DNNF) is baked into
+  // @p argtpl by the caller, which already rejected unknown panini-*
+  // variants. R2-D2 and CCDD are intentionally not exposed: both emit Panini
+  // K (kernelize) nodes encoding literal-equivalence constraints over a
+  // shared kernel variable, which cannot be expressed as a decomposable AND,
+  // so the probabilities they produce would be silently wrong.
   if (find_external_tool(binary).empty())
     throw CircuitException(
             binary + " not found on PATH; install KCBox/Panini or add "
@@ -619,10 +622,9 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang,
   }
 
   // Panini's binary is a multi-tool dispatcher: argv[1] must be the
-  // sub-tool name ("Panini"), the actual options follow.
+  // sub-tool name ("Panini"), which the template carries.
   std::string cmdline =
-      binary + " Panini --lang \"" + lang + "\" --out " + outfilename
-      + " --quiet " + filename;
+      provsql::expandCommandTemplate(argtpl, binary, filename, outfilename);
 
   int retvalue = run_external_tool(cmdline);
 
@@ -764,8 +766,8 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang,
 
   if (provsql_verbose >= 20) {
     tmp.keep();
-    provsql_notice("Compiled Panini %s in %s",
-                   lang.c_str(), outfilename.c_str());
+    provsql_notice("Compiled Panini (%s) in %s",
+                   cmdline.c_str(), outfilename.c_str());
   }
 
   if (id_to_gate.empty())
@@ -778,7 +780,6 @@ dDNNF BooleanCircuit::paniniCompile(gate_t g, const std::string &lang,
   return dnnf;
 }
 
-#ifndef TDKC
 // Resolve a registered tool's logical name to the executable to invoke,
 // enforcing the registry's enabled flag.  @p fallback_binary is returned
 // when the name is absent from the registry (preserving the historical
@@ -793,13 +794,19 @@ static std::string resolveToolBinary(const std::string &name,
     throw CircuitException("Tool '"+name+"' is disabled in the tool registry");
   return rec->binary;
 }
-#else
-// tdkc invokes no external tool; the registry is not linked.
-static std::string resolveToolBinary(const std::string &name,
-                                     const std::string &fallback_binary = "") {
-  return fallback_binary.empty() ? name : fallback_binary;
+
+// Build a tool's command line from its registry argtpl (expanding {in}/{out}
+// and @p extra placeholders), falling back to @p fallback_tpl if the record
+// was removed mid-session.  @p binary is the resolved executable.
+static std::string toolCommand(
+    const std::string &name, const std::string &binary,
+    const std::string &in, const std::string &out,
+    const std::string &fallback_tpl,
+    const std::vector<std::pair<std::string, std::string>> &extra = {}) {
+  const provsql::ToolRecord *rec = provsql::tool_registry().find(name);
+  const std::string &tpl = (rec != nullptr) ? rec->argtpl : fallback_tpl;
+  return provsql::expandCommandTemplate(tpl, binary, in, out, extra);
 }
-#endif
 
 dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   // Panini (KCBox) does not produce a d4-style NNF file: it emits its
@@ -813,10 +820,18 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     else if (suffix == "decdnnf")  lang = "Decision-DNNF";
     else
       throw CircuitException("Unknown Panini variant: " + compiler);
-    // The panini-* variants are registry records (sharing one binary):
-    // honour the enabled flag and the resolved executable.  resolveToolBinary
-    // returns "panini" when the variant is absent from the registry.
-    return paniniCompile(g, lang, resolveToolBinary(compiler, "panini"));
+    // The panini-* variants are registry records sharing one binary: honour
+    // the enabled flag and resolved executable, and take the command (with
+    // the --lang baked in) from the record's template.  resolveToolBinary
+    // returns "panini" when the variant is absent from the registry; the
+    // lang-derived template below is the fallback used by tdkc (no registry)
+    // and matches the seeded record.
+    std::string panini_binary = resolveToolBinary(compiler, "panini");
+    std::string panini_argtpl =
+        "Panini --lang \"" + lang + "\" --out {out} --quiet {in}";
+    if(const provsql::ToolRecord *prec = provsql::tool_registry().find(compiler))
+      panini_argtpl = prec->argtpl;
+    return paniniCompile(g, panini_binary, panini_argtpl);
   }
 
   // Validate the compiler name before any temp-dir or CNF work; that
@@ -825,23 +840,19 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   // resolves to come from the tool registry; tdkc keeps the historical
   // literal whitelist (and never reaches a successful external compile,
   // since its find_external_tool is a no-op).
-  std::string compiler_binary = compiler;
-#ifndef TDKC
-  {
-    const provsql::ToolRecord *rec = provsql::tool_registry().find(compiler);
-    if(rec == nullptr || !rec->hasOperation("compile"))
-      throw CircuitException("Unknown compiler '"+compiler+"'");
-    if(!rec->enabled)
-      throw CircuitException(
-              "Compiler '"+compiler+"' is disabled in the tool registry");
-    compiler_binary = rec->binary;
-  }
-#else
-  if(compiler!="d4" && compiler!="d4v2" && compiler!="c2d"
-     && compiler!="minic2d" && compiler!="dsharp") {
+  // Validate the compiler against the registry; the executable and the
+  // output_format (which selects the NNF parser below: "nnf-d4" -- d4-family,
+  // no magic line -- vs "nnf-classic" for c2d / minic2d / dsharp) both come
+  // from the record.  A name that is not a registered 'compile' tool, or a
+  // disabled one, is rejected before any temp-dir or CNF work.
+  const provsql::ToolRecord *rec = provsql::tool_registry().find(compiler);
+  if(rec == nullptr || !rec->hasOperation("compile"))
     throw CircuitException("Unknown compiler '"+compiler+"'");
-  }
-#endif
+  if(!rec->enabled)
+    throw CircuitException(
+            "Compiler '"+compiler+"' is disabled in the tool registry");
+  const std::string compiler_binary = rec->binary;
+  const std::string output_format = rec->output_format;
 
   // d4v2 is driven with native circuit input (BC-S1.2, --input-type circuit):
   // the Boolean circuit is sent directly instead of a Tseytin CNF, skipping
@@ -881,37 +892,25 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     provsql_notice("Tseytin circuit in %s", filename.c_str());
   }
 
-  bool new_d4 {false};
-  std::string cmdline=compiler_binary+" ";
+  // new_d4: the d4-family NNF has no "nnf" magic line and roots at gate "1".
+  bool new_d4 = (output_format == "nnf-d4");
+  std::string cmdline;
   if(circuit_input) {
     // d4v2 native circuit input from the BC-S1.2 file.
     // `-t pcnf` projects the gate variables out so the compiled d-DNNF
     // branches only on the input (`I`) variables; without it d4 branches on
     // gate variables and the d-DNNF cannot be soundly projected onto inputs.
-    cmdline+="-i "+filename+" --input-type circuit -t pcnf --dump-file "+outfilename;
+    // This native fast path is a d4v2-specific optimisation, not registry
+    // data (it pairs with the BC-S1.2 input written above and the
+    // circuit-mode variable resolution in the parse-back).
+    cmdline = compiler_binary
+            + " -i "+filename+" --input-type circuit -t pcnf --dump-file "+outfilename;
     new_d4 = true;
-  } else if(compiler=="d4") {
-    cmdline+="-dDNNF "+filename+" -out="+outfilename;
-    new_d4 = true;
-  } else if(compiler=="d4v2") {
-    // d4v2 (crillab/d4v2): rewritten d4 with library-first architecture
-    // and tree-decomposition-guided branching by default. We feed it
-    // the same Tseytin CNF the other compilers use; its --input-type
-    // circuit mode (BC-S1.2) would in principle let us skip Tseytin,
-    // but d4v2's BC parser ignores `I` declarations (TODO in upstream)
-    // so the resulting variable numbering does not match our gate
-    // indices and the parser cannot map decisions back to inputs.
-    cmdline+="-i "+filename+" --dump-file "+outfilename;
-    new_d4 = true;
-  } else if(compiler=="c2d") {
-    cmdline+="-in "+filename+" -silent";
-  } else if(compiler=="minic2d") {
-    // miniC2D 1.0.0's getopt uses -c (--cnf) for the input CNF, not
-    // -in like c2d. The NNF is written to <filename>.nnf, which
-    // matches the outfilename convention we use below.
-    cmdline+="-c "+filename;
-  } else /* dsharp */ {
-    cmdline+="-q -Fnnf "+outfilename+" "+filename;
+  } else {
+    // CNF path: the command line is the registry argtpl with {in}/{out}
+    // (and {binary}) substituted -- so a newly-registered compiler runs with
+    // its own invocation, no per-name branch here.
+    cmdline = rec->buildCommand(filename, outfilename, compiler_binary);
   }
 
   int retvalue=run_external_tool(cmdline);
@@ -949,7 +948,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     // that omits it has produced an unsatisfiable formula (its NNF file
     // is empty, so we get end-of-stream here).
 
-    if(compiler != "d4" && compiler != "d4v2") {
+    if(output_format != "nnf-d4") {
       // unsatisfiable formula
       return dDNNF();
     }
@@ -1133,8 +1132,8 @@ double BooleanCircuit::Ganak(gate_t g, std::string /*opt*/) const {
   }
   // --mode 7: MPFR float (weighted floating-point counting). The
   // exact line we parse is `c s exact quadruple float <value>`.
-  std::string cmdline = ganak_bin + " --mode 7 " + filename
-                      + " > " + outfilename + " 2>&1";
+  std::string cmdline = toolCommand("ganak", ganak_bin, filename, outfilename,
+                                    "--mode 7 {in} > {out} 2>&1");
 
   int retvalue = run_external_tool(cmdline);
   CHECK_FOR_INTERRUPTS();
@@ -1209,11 +1208,12 @@ double BooleanCircuit::SharpSATTD(gate_t g, std::string /*opt*/) const {
   // helper lives before launching the counter. The Tseytin file
   // (-tmpdir, input) is passed as an absolute path so the cwd change
   // doesn't break it.
-  std::string cmdline =
+  std::string cmdline = toolCommand(
+      "sharpsat-td", sharpsat_bin, filename, outfilename,
       "cd \"$(dirname \"$(command -v flow_cutter_pace17)\")\" && "
-      + sharpsat_bin + " -WE -decot 1 -decow 100 -tmpdir " + dirname
-      + " -cs 3500 -prec 20 " + filename
-      + " > " + outfilename + " 2>&1";
+      "{binary} -WE -decot 1 -decow 100 -tmpdir {tmpdir} -cs 3500 -prec 20 "
+      "{in} > {out} 2>&1",
+      {{"tmpdir", dirname}});
 
   int retvalue = run_external_tool(cmdline);
   CHECK_FOR_INTERRUPTS();
@@ -1285,10 +1285,10 @@ double BooleanCircuit::DPMC(gate_t g, std::string /*opt*/) const {
   }
   // htb emits a project-join tree on stdout; dmc reads it from stdin
   // (no flag for the join-tree input; the help line says explicitly
-  // "Diagram Model Counter (reads join tree from stdin)").
-  std::string cmdline =
-      htb_bin + " --cf=" + filename + " | " + dmc_bin + " --cf=" + filename
-      + " > " + outfilename + " 2>&1";
+  // "Diagram Model Counter (reads join tree from stdin)").  dpmc has no
+  // single binary, so the (literal) pipeline lives entirely in the template.
+  std::string cmdline = toolCommand("dpmc", "", filename, outfilename,
+      "htb --cf={in} | dmc --cf={in} > {out} 2>&1");
 
   int retvalue = run_external_tool(cmdline);
   CHECK_FOR_INTERRUPTS();
@@ -1358,7 +1358,10 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
     ofs << TseytinCNF(g, true);
   }
 
-  std::string cmdline=weightmc_bin+" --startIteration=0 --gaussuntil=400 --verbosity=0 --pivotAC="+std::to_string(pivotAC)+ " "+filename+" > "+outfilename;
+  std::string cmdline = toolCommand("weightmc", weightmc_bin, filename, outfilename,
+      "--startIteration=0 --gaussuntil=400 --verbosity=0 "
+      "--pivotAC={pivotAC} {in} > {out}",
+      {{"pivotAC", std::to_string(pivotAC)}});
 
   int retvalue=run_external_tool(cmdline);
   if(retvalue) {
@@ -1389,6 +1392,8 @@ double BooleanCircuit::WeightMC(gate_t g, std::string opt) const {
 
   return ret;
 }
+
+#endif // external-tool compilation / counting (excluded from tdkc)
 
 double BooleanCircuit::independentEvaluationInternal(
   gate_t g, std::set<gate_t> &seen) const
@@ -1651,6 +1656,9 @@ dDNNF BooleanCircuit::interpretAsDD(gate_t g) const
   return dd;
 }
 
+// makeDD / makeDDByName fall back to the external compilers, so they too are
+// excluded from the external-tool-free tdkc build.
+#ifndef TDKC
 dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::string &args) const
 {
   if(method=="compilation") {
@@ -1709,3 +1717,4 @@ dDNNF BooleanCircuit::makeDDByName(gate_t g, const std::string &name) const
   }
   return compilation(g, name);
 }
+#endif // makeDD / makeDDByName (excluded from tdkc)

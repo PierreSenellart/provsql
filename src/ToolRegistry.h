@@ -37,9 +37,47 @@
 #define PROVSQL_TOOL_REGISTRY_H
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace provsql {
+
+/**
+ * @brief Expand a command template into a runnable shell command line.
+ *
+ * Replaces @c {binary} / @c {in} / @c {out} and any @p extra placeholders
+ * (e.g. @c {tmpdir}, @c {pivotAC}) in @p tpl.  When @p tpl contains no
+ * @c {binary} placeholder, a non-empty @p binary is prepended (the common
+ * "<binary> <args>" shape); a template that places the binaries itself (the
+ * @c dpmc pipeline) is returned as-is.
+ *
+ * Header-only and dependency-free on purpose, so the standalone @c tdkc
+ * build can expand a template without linking the registry.
+ */
+inline std::string expandCommandTemplate(
+    const std::string &tpl, const std::string &binary,
+    const std::string &in, const std::string &out,
+    const std::vector<std::pair<std::string, std::string>> &extra = {})
+{
+  auto sub = [](std::string &s, const std::string &key,
+                const std::string &value) {
+    const std::string token = "{" + key + "}";
+    std::string::size_type pos = 0;
+    while ((pos = s.find(token, pos)) != std::string::npos) {
+      s.replace(pos, token.size(), value);
+      pos += value.size();
+    }
+  };
+  std::string cmd = tpl;
+  sub(cmd, "binary", binary);
+  sub(cmd, "in", in);
+  sub(cmd, "out", out);
+  for (const auto &kv : extra)
+    sub(cmd, kv.first, kv.second);
+  if (tpl.find("{binary}") == std::string::npos && !binary.empty())
+    return binary + " " + cmd;
+  return cmd;
+}
 
 /**
  * @brief One registered external tool.
@@ -63,6 +101,19 @@ namespace provsql {
  * two-binary pipeline (@c htb @c | @c dmc) with an empty @c binary and
  * @c dependencies @c = @c {htb, dmc}.  A tool is "available" iff @c binary
  * (when non-empty) and every dependency resolve on PATH.
+ *
+ * @c argtpl is the command the dispatcher runs, with @c {in} / @c {out}
+ * substituted by the input/output temp files and a few tool-specific
+ * placeholders (@c {binary}, @c {tmpdir}, @c {pivotAC}).  When @c argtpl
+ * contains no @c {binary}, the resolved @c binary is prepended; otherwise
+ * the template is the whole command (used by the @c dpmc pipeline and the
+ * @c sharpsat-td @c cd-prefix).  @c output_format selects the result parser:
+ * @c "nnf-d4" (d4-family NNF, no magic line), @c "nnf-classic" (c2d /
+ * minic2d / dsharp NNF), @c "panini-dd", @c "wmc-line" (the @c "c s exact"
+ * model-count line), @c "weightmc" (WeightMC's own format), or @c "ascii"
+ * (graph-easy, returned verbatim).  Together they make a CLI tool's whole
+ * invocation data: a new compiler whose output is a known format can be
+ * registered without recompiling.
  */
 struct ToolRecord {
   std::string name;
@@ -72,8 +123,24 @@ struct ToolRecord {
   int preference = 0;
   bool enabled = true;
   std::vector<std::string> dependencies;
+  std::string argtpl;
+  std::string output_format;
 
   bool hasOperation(const std::string &op) const;
+
+  /**
+   * @brief Build the command line for this tool.
+   *
+   * Expands @c {in} / @c {out} (and @p extra placeholders, e.g.
+   * @c {tmpdir}, @c {pivotAC}) in @c argtpl.  @p binary_override is the
+   * executable to use (the registry-resolved @c binary, possibly repointed);
+   * when @c argtpl references @c {binary} it is substituted inline, otherwise
+   * a non-empty binary is prepended.
+   */
+  std::string buildCommand(
+      const std::string &in, const std::string &out,
+      const std::string &binary_override,
+      const std::vector<std::pair<std::string, std::string>> &extra = {}) const;
 };
 
 /**

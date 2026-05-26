@@ -19,6 +19,14 @@ bool ToolRecord::hasOperation(const std::string &op) const
          != operations.end();
 }
 
+std::string ToolRecord::buildCommand(
+    const std::string &in, const std::string &out,
+    const std::string &binary_override,
+    const std::vector<std::pair<std::string, std::string>> &extra) const
+{
+  return expandCommandTemplate(argtpl, binary_override, in, out, extra);
+}
+
 void ToolRegistry::seed()
 {
   records_.clear();
@@ -27,31 +35,59 @@ void ToolRegistry::seed()
   // Preference order reproduces the historical "d4 is the default" bias;
   // it is only a default the admin can override, not behaviour today (no
   // dispatcher currently walks a multi-compiler preference chain).
-  records_.push_back({"d4",      "cli", "d4",      {"compile"}, 100, true});
-  records_.push_back({"d4v2",    "cli", "d4v2",    {"compile"},  90, true});
-  records_.push_back({"c2d",     "cli", "c2d",     {"compile"},  80, true});
-  records_.push_back({"minic2d", "cli", "minic2d", {"compile"},  70, true});
-  records_.push_back({"dsharp",  "cli", "dsharp",  {"compile"},  60, true});
+  //
+  // Fields: name, kind, binary, operations, preference, enabled,
+  //         dependencies, argtpl, output_format.
+  // The argtpl is the CNF-mode command (d4v2's native-circuit fast path is a
+  // compiled d4v2-only optimisation, not data).  {in}/{out} are the Tseytin
+  // CNF and the NNF output file.
+  records_.push_back({"d4",      "cli", "d4",      {"compile"}, 100, true, {},
+                      "-dDNNF {in} -out={out}", "nnf-d4"});
+  records_.push_back({"d4v2",    "cli", "d4v2",    {"compile"},  90, true, {},
+                      "-i {in} --dump-file {out}", "nnf-d4"});
+  records_.push_back({"c2d",     "cli", "c2d",     {"compile"},  80, true, {},
+                      "-in {in} -silent", "nnf-classic"});
+  records_.push_back({"minic2d", "cli", "minic2d", {"compile"},  70, true, {},
+                      "-c {in}", "nnf-classic"});
+  records_.push_back({"dsharp",  "cli", "dsharp",  {"compile"},  60, true, {},
+                      "-q -Fnnf {out} {in}", "nnf-classic"});
 
   // Panini (KCBox): one binary, three logical variants selected by the
-  // --lang argument.  They are the compiler names provsql.fallback_compiler
-  // and the 'compilation' method already accept.
-  records_.push_back({"panini-obdd",     "cli", "panini", {"compile"}, 52, true});
-  records_.push_back({"panini-obdd-and", "cli", "panini", {"compile"}, 51, true});
-  records_.push_back({"panini-decdnnf",  "cli", "panini", {"compile"}, 50, true});
+  // --lang argument baked into each template.  They are the compiler names
+  // provsql.fallback_compiler and the 'compilation' method already accept.
+  records_.push_back({"panini-obdd",     "cli", "panini", {"compile"}, 52, true,
+                      {}, "Panini --lang \"OBDD\" --out {out} --quiet {in}",
+                      "panini-dd"});
+  records_.push_back({"panini-obdd-and", "cli", "panini", {"compile"}, 51, true,
+                      {}, "Panini --lang \"OBDD[AND]\" --out {out} --quiet {in}",
+                      "panini-dd"});
+  records_.push_back({"panini-decdnnf",  "cli", "panini", {"compile"}, 50, true,
+                      {}, "Panini --lang \"Decision-DNNF\" --out {out} --quiet {in}",
+                      "panini-dd"});
 
   // Weighted model counters.  sharpsat-td additionally needs the
-  // flow_cutter_pace17 helper; dpmc is a two-binary pipeline (htb | dmc)
-  // with no single binary of its own.
+  // flow_cutter_pace17 helper (invoked by relative path, hence the cd into
+  // its directory) and a scratch {tmpdir}; dpmc is a two-binary pipeline
+  // (htb | dmc) with no single binary of its own.  weightmc takes a computed
+  // {pivotAC} and parses its own output format.
   records_.push_back({"sharpsat-td", "cli", "sharpsat-td", {"wmc"}, 90, true,
-                      {"flow_cutter_pace17"}});
-  records_.push_back({"ganak",       "cli", "ganak",       {"wmc"}, 80, true});
-  records_.push_back({"weightmc",    "cli", "weightmc",    {"wmc"}, 70, true});
+                      {"flow_cutter_pace17"},
+                      "cd \"$(dirname \"$(command -v flow_cutter_pace17)\")\" && "
+                      "{binary} -WE -decot 1 -decow 100 -tmpdir {tmpdir} "
+                      "-cs 3500 -prec 20 {in} > {out} 2>&1",
+                      "wmc-line"});
+  records_.push_back({"ganak",       "cli", "ganak",       {"wmc"}, 80, true, {},
+                      "--mode 7 {in} > {out} 2>&1", "wmc-line"});
+  records_.push_back({"weightmc",    "cli", "weightmc",    {"wmc"}, 70, true, {},
+                      "--startIteration=0 --gaussuntil=400 --verbosity=0 "
+                      "--pivotAC={pivotAC} {in} > {out}", "weightmc"});
   records_.push_back({"dpmc",        "cli", "",            {"wmc"}, 60, true,
-                      {"htb", "dmc"}});
+                      {"htb", "dmc"},
+                      "htb --cf={in} | dmc --cf={in} > {out} 2>&1", "wmc-line"});
 
-  // Visualisation.
-  records_.push_back({"graph-easy", "cli", "graph-easy", {"render"}, 100, true});
+  // Visualisation: graph-easy's ASCII output is returned verbatim.
+  records_.push_back({"graph-easy", "cli", "graph-easy", {"render"}, 100, true,
+                      {}, "--as=boxart --output={out} {in}", "ascii"});
 }
 
 void ToolRegistry::reset()

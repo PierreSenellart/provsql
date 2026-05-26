@@ -505,13 +505,14 @@ std::string BCS12(gate_t g, std::vector<gate_t> &inputOrder) const;
  * @c dDNNF::probabilityEvaluation gives the correct probability).
  *
  * @param g       Root gate of the sub-circuit to compile.
- * @param lang    Panini target language (see above).
  * @param binary  Executable to invoke (the registry-resolved binary for the
- *                selected @c panini-* variant; defaults to @c "panini").
+ *                selected @c panini-* variant).
+ * @param argtpl  Command template (carries the variant's @c --lang); expanded
+ *                with @c {in} / @c {out} / @c {binary}.
  * @return        The compiled d-DNNF.
  */
-dDNNF paniniCompile(gate_t g, const std::string &lang,
-                    const std::string &binary = "panini") const;
+dDNNF paniniCompile(gate_t g, const std::string &binary,
+                    const std::string &argtpl) const;
 
 /**
  * @brief Boost serialisation support.

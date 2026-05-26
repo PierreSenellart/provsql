@@ -118,9 +118,10 @@ bool tool_available(const provsql::ToolRecord &rec)
  * @brief Set-returning listing of the registry, one row per record.
  *
  * Columns: name, kind, binary, operations (text[]), preference (int),
- * enabled (bool), available (bool).  @c available is true iff @c binary
- * currently resolves via @c find_external_tool, so the view reflects what a
- * subsequent dispatch would actually find on the backend's PATH.
+ * enabled (bool), argtpl (text), output_format (text), available (bool).
+ * @c available is true iff @c binary (when set) and every dependency resolve
+ * via @c find_external_tool, so the view reflects what a subsequent dispatch
+ * would actually find on the backend's PATH.
  */
 extern "C" Datum
 tool_registry_list(PG_FUNCTION_ARGS)
@@ -145,8 +146,9 @@ tool_registry_list(PG_FUNCTION_ARGS)
 
   try {
     for (const provsql::ToolRecord &rec : provsql::tool_registry().records()) {
-      Datum values[7];
-      bool nulls[7] = {false, false, false, false, false, false, false};
+      Datum values[9];
+      bool nulls[9] = {false, false, false, false, false, false, false,
+                       false, false};
 
       values[0] = PointerGetDatum(cstring_to_text_with_len(rec.name.data(),
                                                            rec.name.size()));
@@ -157,7 +159,11 @@ tool_registry_list(PG_FUNCTION_ARGS)
       values[3] = string_vector_to_text_array(rec.operations);
       values[4] = Int32GetDatum(rec.preference);
       values[5] = BoolGetDatum(rec.enabled);
-      values[6] = BoolGetDatum(tool_available(rec));
+      values[6] = PointerGetDatum(cstring_to_text_with_len(rec.argtpl.data(),
+                                                           rec.argtpl.size()));
+      values[7] = PointerGetDatum(cstring_to_text_with_len(
+                    rec.output_format.data(), rec.output_format.size()));
+      values[8] = BoolGetDatum(tool_available(rec));
 
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
@@ -177,9 +183,10 @@ tool_registry_list(PG_FUNCTION_ARGS)
  * @brief Register a tool, or replace the record with the same name.
  *
  * Args: name text, binary text, operations text[], preference int,
- * enabled bool, kind text.  A NULL @c binary defaults to @c name; a NULL
- * @c kind defaults to @c 'cli'; NULL @c operations is treated as empty.
- * Superuser-only.
+ * enabled bool, kind text, argtpl text, output_format text.  A NULL
+ * @c binary defaults to @c name; a NULL @c kind defaults to @c 'cli'; NULL
+ * @c operations is treated as empty; @c argtpl / @c output_format default to
+ * empty.  Superuser-only.
  */
 extern "C" Datum
 tool_registry_register(PG_FUNCTION_ARGS)
@@ -200,6 +207,10 @@ tool_registry_register(PG_FUNCTION_ARGS)
     rec.enabled = PG_ARGISNULL(4) ? true : PG_GETARG_BOOL(4);
     rec.kind = PG_ARGISNULL(5) ? std::string("cli")
                                : text_to_string(PG_GETARG_TEXT_PP(5));
+    if (!PG_ARGISNULL(6))
+      rec.argtpl = text_to_string(PG_GETARG_TEXT_PP(6));
+    if (!PG_ARGISNULL(7))
+      rec.output_format = text_to_string(PG_GETARG_TEXT_PP(7));
 
     if (rec.name.empty())
       provsql_error("register_tool: name must not be empty");

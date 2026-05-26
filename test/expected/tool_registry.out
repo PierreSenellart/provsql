@@ -1,24 +1,24 @@
 \set ECHO none
-name|kind|executable|operations|preference|enabled
-c2d|cli|c2d|{compile}|80|t
-d4|cli|d4|{compile}|100|t
-d4v2|cli|d4v2|{compile}|90|t
-dpmc|cli||{wmc}|60|t
-dsharp|cli|dsharp|{compile}|60|t
-ganak|cli|ganak|{wmc}|80|t
-graph-easy|cli|graph-easy|{render}|100|t
-minic2d|cli|minic2d|{compile}|70|t
-panini-decdnnf|cli|panini|{compile}|50|t
-panini-obdd|cli|panini|{compile}|52|t
-panini-obdd-and|cli|panini|{compile}|51|t
-sharpsat-td|cli|sharpsat-td|{wmc}|90|t
-weightmc|cli|weightmc|{wmc}|70|t
+name|kind|executable|operations|preference|enabled|output_format
+c2d|cli|c2d|{compile}|80|t|nnf-classic
+d4|cli|d4|{compile}|100|t|nnf-d4
+d4v2|cli|d4v2|{compile}|90|t|nnf-d4
+dpmc|cli||{wmc}|60|t|wmc-line
+dsharp|cli|dsharp|{compile}|60|t|nnf-classic
+ganak|cli|ganak|{wmc}|80|t|wmc-line
+graph-easy|cli|graph-easy|{render}|100|t|ascii
+minic2d|cli|minic2d|{compile}|70|t|nnf-classic
+panini-decdnnf|cli|panini|{compile}|50|t|panini-dd
+panini-obdd|cli|panini|{compile}|52|t|panini-dd
+panini-obdd-and|cli|panini|{compile}|51|t|panini-dd
+sharpsat-td|cli|sharpsat-td|{wmc}|90|t|wmc-line
+weightmc|cli|weightmc|{wmc}|70|t|weightmc
 (13 rows)
 register_tool
 
 (1 row)
-name|kind|executable|operations|preference|enabled
-acme-kc|cli|/opt/acme/akc|{compile}|120|t
+name|kind|executable|operations|preference|enabled|argtpl|output_format
+acme-kc|cli|/opt/acme/akc|{compile}|120|t|-dDNNF {in} -out={out}|nnf-d4
 (1 row)
 register_tool
 

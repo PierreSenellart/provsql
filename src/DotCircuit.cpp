@@ -150,6 +150,7 @@ std::string DotCircuit::render() const {
   //registry (logical name "graph-easy"); a record absent from the
   //registry resolves to itself.
   std::string render_bin = "graph-easy";
+  std::string render_argtpl = "--as=boxart --output={out} {in}";
   {
     const provsql::ToolRecord *rec = provsql::tool_registry().find("graph-easy");
     if(rec != nullptr) {
@@ -157,6 +158,7 @@ std::string DotCircuit::render() const {
         throw CircuitException(
                 "Tool 'graph-easy' is disabled in the tool registry");
       render_bin = rec->binary;
+      render_argtpl = rec->argtpl;
     }
   }
   if(find_external_tool(render_bin).empty()) {
@@ -179,7 +181,8 @@ std::string DotCircuit::render() const {
     ofs << toString(gate_t{0});
   }
 
-  std::string cmdline=render_bin+" --as=boxart --output="+outfilename+" "+filename;
+  std::string cmdline=provsql::expandCommandTemplate(
+      render_argtpl, render_bin, filename, outfilename);
 
   int retvalue = run_external_tool(cmdline);
   if(retvalue)
