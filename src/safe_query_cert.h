@@ -6,7 +6,7 @@
  * certificate from a query-level analysis) and the C++ evaluation side
  * (@c src/probability_evaluate.cpp, which will, in a later phase, read it back
  * from the annotation gate's @c extra and route probability evaluation through
- * the structured-d-DNNF builder).  See @c doc/TODO/inversion-free.md.
+ * the structured-d-DNNF builder).
  *
  * Phase 1 produces the certificate (the @c SafeCert "recipe") from the detector
  * but does not yet attach or consume it; only the struct/enum and the @c extra

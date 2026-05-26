@@ -12,7 +12,7 @@ SET search_path TO provsql_test, provsql;
 --
 -- The lineage must be built by the real planner (real tables + the SQL query),
 -- never a hand-factored circuit: a hand-factored circuit is low-treewidth and
--- would silently skip the hard case (see doc/TODO/inversion-free.md).
+-- would silently skip the hard case.
 --
 -- Detection fires while the CREATE TEMP TABLE AS planner-rewrites its SELECT;
 -- the temp table's provsql column carries non-deterministic input-token UUIDs,

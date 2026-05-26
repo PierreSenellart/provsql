@@ -4831,7 +4831,7 @@ static Query *try_flatten_inner_joins(Query *q) {
  * (the consistent-unification self-joins the read-once rewriter bails on) and
  * builds the SafeCert order recipe.  It does NOT rewrite the query or attach
  * the certificate yet (cert produced but unused); it only emits a diagnostic
- * NOTICE.  See doc/TODO/inversion-free.md.
+ * NOTICE.
  *
  * Unlike find_hierarchical_root_atoms, this pass keeps the per-occurrence
  * column-position information (it iterates the raw (varno, varattno, class)
