@@ -914,21 +914,11 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
   // run_external_tool runs the compiler in its own process group and
   // raises any pending cancel/terminate itself (after killing the child),
   // so a statement_timeout / pg_cancel_backend surfaces as 57014 here
-  // rather than being masked by the "killed by signal" throw -- or by the
-  // legacy d4-syntax retry below mis-parsing a half-written .nnf as
-  // "Unreadable d-DNNF" (XX000).
-  CHECK_FOR_INTERRUPTS();
-
-  if(retvalue && compiler=="d4") {
-    // Temporary support for an older d4 CLI: retry with the
-    // pre-`-dDNNF` syntax. Not extended to d4v2, whose CLI has been
-    // stable since release; d4v2 failures short-circuit to the
-    // throw below.  (The old CLI emits the classic header form, which the
-    // parser below detects on its own.)
-    cmdline = compiler_binary+" "+filename+" -out="+outfilename;
-    retvalue=run_external_tool(cmdline);
-  }
-
+  // rather than being masked by the "killed by signal" throw.
+  //
+  // (The pre-`-dDNNF` d4 CLI is no longer retried as a compiled-in special
+  // case: a deployment still on it can register a tool with the old argtpl,
+  // e.g. register_tool('d4-old', argtpl => '{in} -out={out}', ...).)
   CHECK_FOR_INTERRUPTS();
 
   if(retvalue)
