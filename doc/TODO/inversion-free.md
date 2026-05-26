@@ -100,6 +100,46 @@ still linear in the tuple count. The independence obligation then reads
 is the documented next widening of the admissible class (and `gate_mulinput`
 stays excluded — BID is a *disjoint*, not independent, annotation).
 
+## Validation (proof-of-concept spike)
+
+Before building the detector, a throwaway standalone harness (the `tdkc`
+`-DTDKC` source set plus a spike `main`; built and run, kept uncommitted)
+validated the core bet on the `n×n` witness, against ProvSQL's own
+`BooleanCircuit` and its tree-decomposition d-DNNF builder:
+
+| n | #vars | tree-decomposition | structured query-order |
+|---|------:|---|---|
+| 2 | 12 | tw=3, 0.001s | match, ~10µs (also = brute force) |
+| 6 | 108 | tw=7, 0.46s | match, ~10µs |
+| 8 | 192 | tw=9, ~12–18s | match, ~10µs |
+| 10 | 300 | blows up (tw > MAX=10) | ~10µs |
+| 100 | 30000 | blows up | 0.32ms |
+
+- **Correctness.** The structured value exactly matches tree-decomposition at
+  every `n≤8` and brute force at `n=2`, over non-trivial probabilities
+  (~`1e-5` … `0.6`).
+- **The gain is real.** Tree-decomposition treewidth grows with `n` (3→9), its
+  runtime is super-linear (~12–18s at `n=8`), and it exceeds
+  `MAX_TREEWIDTH=10` at `n=10`; the structured computation is ~10µs through
+  `n=8` and 0.32ms at `n=100` (30k variables) — linear, realising the bounded
+  atom-frontier recursion (width `2^g`, `g=2`).
+- **Lineage-shape lesson (load-bearing for the builder *and* the tests).** The
+  faithful ProvSQL lineage is the **flat** `OR_{i,j,k} (t1_ij AND t2_ik)` with
+  shared join-intermediates `t1_ij = S_ij∧A_ij`, `t2_ik = S_ik∧B_ik`; its
+  treewidth grows with `n`. The **factored** `(OR_j t1_ij) ∧ (OR_k t2_ik)` is
+  low-treewidth (`tw=2`) and tree-decomposition solves it instantly — the spike
+  initially mis-built this and saw no blow-up. So a test that *hand-builds* the
+  factored circuit would not exercise the hard case at all; re-discovering that
+  factorisation from the flat lineage is precisely the approach's job, and the
+  verification suite must drive the lineage through the **real planner**, never
+  a hand-factored circuit.
+
+This de-risks the construction half (see risk #1): the bounded-frontier
+recursion is correct and linear. Still unbuilt and ahead: the detector
+(query-level recognition + order recipe), the annotation-gate carrier, and
+materialising the structured d-DNNF through `dDNNF::probabilityEvaluation` (the
+spike computed the probability inline rather than emitting a d-DNNF).
+
 ## Design anchors (verified against the code)
 
 - **Probability model: independent inputs only.** The decision variables are
@@ -440,7 +480,11 @@ branches come from a decision on the same separator variable — see risk #1.
 
 New `test/sql/safe_query_inversion_free.sql` (+ expected output), registered in
 `test/schedule.common` (per CLAUDE.md, never edit `test/schedule`), in the
-style of the existing `safe_query_*` tests:
+style of the existing `safe_query_*` tests. **The witness lineage must be built
+by the real planner** (actual `s`/`a_rel`/`b_rel` tables + the SQL query), never
+a hand-factored circuit via `create_gate` — per the spike's lineage-shape
+lesson, a hand-factored circuit is low-treewidth and would silently skip the
+hard case the feature exists for.
 
 1. **Witness acceptance + correctness.** Tables `s`, `a_rel`, `b_rel` with
    TID provenance; the `S(x,y),A(x,y),S(x,z),B(x,z)` query. On `n=2,3`
@@ -478,6 +522,10 @@ Build / run loop (per `CLAUDE.local.md`):
    construction replaces the OBDD's atom-frontier memo with explicit structural
    recursion, so the *polynomial-size* worry is largely dissolved (size is
    `O(|lineage|)` by construction; the size guard still backstops). The
+   proof-of-concept spike (see *Validation*) already confirms the bounded-
+   frontier recursion is correct and linear on the witness — but it computed the
+   probability *inline*; the residual risk is the *materialised* d-DNNF
+   preserving determinism/decomposability node-by-node. The
    correctness obligation it inherits is twofold: every `AND` must be genuinely
    **decomposable** (children variable-disjoint — i.e. `independent_split` is
    sound, never grouping correlated parts), and every `OR` must be genuinely
