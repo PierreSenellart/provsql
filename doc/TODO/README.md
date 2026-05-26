@@ -16,6 +16,19 @@ Each plan document follows a consistent layout:
 
 ## Contents
 
+- [`bounded-treewidth-data.md`](bounded-treewidth-data.md) :
+  feasibility study for exploiting bounded treewidth of the input data
+  (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017),
+  with empirical probes. Findings: it is not a free lunch (a fixed
+  two-atom self-join already inflates circuit treewidth to `Theta(|I|)`
+  on treewidth-1 data), but the explosions are confined to high-degree
+  self-joins / cross-products, while local UCQs stay bounded and
+  recursive reachability on grids grows past the cap. d4 overtakes the
+  in-process tree-decomposition compiler at treewidth ~8-9. Concludes:
+  treewidth-conditioned dispatch (not a higher cap), extend
+  independent-product factoring for the relational pathologies, and a
+  decomposition-aligned (cycluit) construction for the recursive
+  fragment.
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
   case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.
