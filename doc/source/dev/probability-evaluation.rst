@@ -287,9 +287,11 @@ Currently Supported Methods
        :cfunc:`dDNNFTreeDecompositionBuilder` to construct a
        d-DNNF, then calls :cfunc:`dDNNF::probabilityEvaluation`.
    * - ``"compilation"``
-     - :cfunc:`BooleanCircuit::compilation` -- invokes a registered
-       knowledge compiler (``d4``, ``d4v2``, ``c2d``, ``minic2d``,
-       ``dsharp``, ``panini-*``) to produce a :cfunc:`dDNNF`, then
+     - :cfunc:`BooleanCircuit::compilation` -- invokes the registered
+       knowledge compiler named in the argument (``d4``, ``d4v2``,
+       ``c2d``, ``minic2d``, ``dsharp``, ``panini-*``), or, with no
+       compiler named, the highest-preference available one, to
+       produce a :cfunc:`dDNNF`, then
        :cfunc:`dDNNF::probabilityEvaluation`.
    * - ``""`` (default)
      - Fallback chain: try ``independent``, then

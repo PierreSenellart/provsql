@@ -68,6 +68,25 @@ set_tool_enabled
 
 (1 row)
 ERROR:  ProvSQL: Compiler 'panini-obdd' is disabled in the tool registry
+set_tool_enabled
+
+(1 row)
+set_tool_enabled
+
+(1 row)
+set_tool_enabled
+
+(1 row)
+set_tool_enabled
+
+(1 row)
+set_tool_enabled
+
+(1 row)
+set_tool_enabled
+
+(1 row)
+ERROR:  ProvSQL: no knowledge compiler is available; install one (d4, d4v2, c2d, minic2d, dsharp) or add its directory to provsql.tool_search_path
 ERROR:  ProvSQL: Unknown wmc tool 'no-such-counter'
 set_tool_enabled
 

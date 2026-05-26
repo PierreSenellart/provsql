@@ -66,6 +66,15 @@ SELECT set_tool_enabled('dsharp', false);
 SELECT probability_evaluate(provsql, 'compilation', 'dsharp') FROM tr_r;
 SELECT set_tool_enabled('panini-obdd', false);
 SELECT probability_evaluate(provsql, 'compilation', 'panini-obdd') FROM tr_r;
+-- With no compiler named, 'compilation' picks the highest-preference available
+-- one; with every compiler disabled there is none, a host-independent error.
+SELECT set_tool_enabled('d4', false);
+SELECT set_tool_enabled('d4v2', false);
+SELECT set_tool_enabled('c2d', false);
+SELECT set_tool_enabled('minic2d', false);
+SELECT set_tool_enabled('panini-obdd-and', false);
+SELECT set_tool_enabled('panini-decdnnf', false);
+SELECT probability_evaluate(provsql, 'compilation') FROM tr_r;
 -- The weighted-model-counting dispatch is generic too (one wmcCount runner):
 -- an unknown wmc tool and a disabled one both fail in the registry, before
 -- any PATH lookup.

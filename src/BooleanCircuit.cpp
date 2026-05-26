@@ -775,7 +775,34 @@ static std::string selectTool(const std::string &operation,
   return "";
 }
 
+// The compiler for makeDD's last-resort fallback route: prefer
+// provsql.fallback_compiler (default "d4") when available, otherwise the
+// highest-preference compiler whose binary resolves on PATH.  Falls back to
+// the configured name when nothing is available, so compilation() raises its
+// actionable error.  (The GUC governs only this fallback route; an explicit
+// no-argument compilation() request just takes the best available compiler --
+// symmetric with the no-tool wmc path.)
+static std::string chooseCompiler() {
+  const char *fb = (provsql_fallback_compiler != NULL
+                    && provsql_fallback_compiler[0] != '\0')
+                   ? provsql_fallback_compiler : "d4";
+  std::string chosen = selectTool("compile", fb);
+  return chosen.empty() ? std::string(fb) : chosen;
+}
+
 dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
+  // No compiler named: pick the highest-preference available one (symmetric
+  // with the no-tool wmc path).  provsql.fallback_compiler is deliberately
+  // not consulted here -- it governs only makeDD's last-resort fallback route.
+  if(compiler.empty()) {
+    compiler = selectTool("compile");
+    if(compiler.empty())
+      throw CircuitException(
+              "no knowledge compiler is available; install one (d4, d4v2, "
+              "c2d, minic2d, dsharp) or add its directory to "
+              "provsql.tool_search_path");
+  }
+
   // Validate the compiler against the registry before any temp-dir or CNF
   // work.  A name that is not a registered, enabled 'compile' tool is
   // rejected here.  compilation() implements two output parsers: the tolerant
@@ -1462,17 +1489,10 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
         if(provsql_verbose>=20)
           provsql_notice("dD obtained by tree decomposition, %ld gates", dd.getNbGates());
       } catch(TreeDecompositionException &) {
-        // Preference-ranked fallback: prefer provsql.fallback_compiler
-        // (default "d4") when it is available, otherwise the highest-
-        // preference compiler whose binary resolves on PATH.  If none is
-        // available, keep the configured fallback so compilation() raises
-        // its actionable "<tool> not found" error.
-        const char *fallback = (provsql_fallback_compiler != NULL
-                                && provsql_fallback_compiler[0] != '\0')
-                               ? provsql_fallback_compiler : "d4";
-        std::string chosen = selectTool("compile", fallback);
-        if(chosen.empty())
-          chosen = fallback;
+        // Last-resort fallback: chooseCompiler() prefers
+        // provsql.fallback_compiler when available, else the highest-
+        // preference compiler on PATH.
+        std::string chosen = chooseCompiler();
         dd = compilation(g, chosen);
         if(provsql_verbose>=20)
           provsql_notice("dD obtained by compilation using %s, %ld gates",
