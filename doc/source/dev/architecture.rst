@@ -352,10 +352,23 @@ defined in :cfile:`provsql_utils.h`:
        a Bernoulli weight. The wire vector is ``[p, x, y]`` for a
        Bernoulli mixture or ``[key, mul_1, …, mul_n]`` for a
        categorical block.
+   * - ``gate_assumed_boolean``
+     - Transparent single-child marker wrapping a per-row root, added by
+       the safe-query rewriter to record that the rewrite assumed a
+       Boolean semiring. Inert (identity) for every evaluator; see
+       :doc:`semiring-evaluation`.
+   * - ``gate_annotation``
+     - Transparent single-child marker carrying an ``extra`` payload
+       (the inversion-free certificate on a per-row root, or a per-input
+       order key on an input). Unlike every other gate its UUID folds in
+       ``extra`` (so two annotations over the same child with different
+       ``extra`` are distinct gates); inert (identity) for every
+       evaluator. See :ref:`inversion-free-path`.
 
 The three random-variable gate types (``gate_rv``, ``gate_arith``,
-``gate_mixture``) are appended to the enum before ``gate_invalid``,
-with no renumbering of older values. See
+``gate_mixture``) and the two transparent marker gates
+(``gate_assumed_boolean``, ``gate_annotation``) are appended to the enum
+before ``gate_invalid``, with no renumbering of older values. See
 :doc:`continuous-distributions` for the full architecture of the
 continuous-distribution surface.
 

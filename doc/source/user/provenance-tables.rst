@@ -192,6 +192,17 @@ Three additional gate types support continuous random variables
 - ``mixture``: Bernoulli or categorical mixture of scalar
   random-variable roots
 
+Two *transparent marker* gates wrap a single child without changing its
+value, recording metadata for a later stage (a circuit carrying them
+evaluates identically to one without):
+
+- ``assumed_boolean``: added by the safe-query rewriter (and load-time
+  Boolean-identity folding) when ``provsql.boolean_provenance`` is on, to
+  record that only Boolean semantics are preserved.
+- ``annotation``: carries the inversion-free certificate on a result root,
+  or a per-input order key, for the ``'inversion-free'`` probability
+  method (see :doc:`probabilities`).
+
 The following functions let you navigate and inspect the circuit:
 
 - :sqlfunc:`get_gate_type` -- returns the type of a gate.

@@ -95,6 +95,23 @@ Computation Methods
         SELECT probability_evaluate(provenance(), 'tree-decomposition')
         FROM suspects;
 
+``'inversion-free'``
+    Exact computation for the *inversion-free* ``UCQ(OBDD)`` class
+    :cite:`DBLP:conf/edbt/JhaOS10`: hierarchical, tuple-independent queries
+    (possibly with self-joins) whose lineage admits a polynomial-size OBDD.
+    The path builds a structured d-DNNF over a query-derived variable order,
+    staying linear in the lineage where ``'tree-decomposition'`` would blow
+    up. It requires that the planner certified the query as inversion-free
+    (a certificate is attached to the provenance root); it errors otherwise.
+    The default strategy already takes this path automatically when a
+    certificate is present (see below), so calling the method explicitly is
+    mainly useful for testing:
+
+    .. code-block:: postgresql
+
+        SELECT probability_evaluate(provenance(), 'inversion-free')
+        FROM suspects;
+
 ``'compilation'``
     Exact computation by first compiling the circuit to a d-DNNF using an
     external tool, then evaluating the d-DNNF. The third argument names the
@@ -145,9 +162,12 @@ Default strategy (no second argument)
     ProvSQL tries each method in order until one succeeds:
 
     1. **Independent evaluation** – used if the circuit is independent.
-    2. **Tree decomposition** – used if the treewidth is within the
+    2. **Inversion-free** – used if the query carries an inversion-free
+       certificate (see the ``'inversion-free'`` method above). Controlled
+       by the ``provsql.inversion_free`` GUC (on by default).
+    3. **Tree decomposition** – used if the treewidth is within the
        supported limit.
-    3. **Compilation** with the compiler named by
+    4. **Compilation** with the compiler named by
        ``provsql.fallback_compiler`` (default ``'d4'``) – used as a
        final fallback; requires that compiler to be installed. See
        :doc:`configuration`.

@@ -658,6 +658,102 @@ ratio), Uniform (intersected support), and Exponential
 at ``provsql.rv_mc_samples`` budget. See
 :doc:`continuous-distributions` for depth.
 
+.. _inversion-free-path:
+
+The Inversion-Free ``UCQ(OBDD)`` Path
+-------------------------------------
+
+The ``'inversion-free'`` method (and the default-chain rung that follows
+``independent``) evaluates the *inversion-free* class of Jha, Olteanu and
+Suciu :cite:`DBLP:conf/edbt/JhaOS10`: hierarchical, tuple-independent
+queries -- including self-joins -- whose lineage admits a polynomial-size
+OBDD. On these the generic ``'tree-decomposition'`` / compilation
+fallbacks can blow up (the lineage is not low-treewidth), yet a
+*structured* d-DNNF built over a query-derived variable order stays
+linear in the lineage.
+
+This path is a sibling of the :ref:`safe-query-rewriter`, and the two are
+complementary:
+
+- The safe-query rewriter (``provsql.boolean_provenance`` on) restructures
+  the *query* so the planner emits a read-once *circuit*, which
+  ``independent`` then evaluates almost for free. It applies only to the
+  read-once (safe) class and changes the produced circuit.
+- The inversion-free path leaves the lineage intact and evaluates the
+  *naive* circuit -- which, even for a safe query, is generally **not**
+  read-once (e.g. ``q(x) :- B(x), A(x,y)`` yields ``⋁_y (B(x) ∧ A(x,y))``,
+  repeating ``B(x)``), so ``independent`` rejects it. It also covers the
+  strictly larger inversion-free-but-not-read-once self-join class. It is
+  decoupled from ``boolean_provenance`` and gated on its own GUC,
+  ``provsql.inversion_free`` (on by default).
+
+The pipeline has four stages.
+
+Detection (``src/safe_query.c``)
+   :cfunc:`detect_inversion_free` checks the four preconditions
+   (hierarchical, strictly tuple-independent atoms, positional
+   consistency, acyclic precedence) and, on success, builds a
+   :cfunc:`SafeCert` recipe describing the query-derived (Prop. 4.5)
+   variable order. It reuses the candidate gate and union-find machinery
+   of the safe-query rewriter but is *not* gated on
+   ``boolean_provenance``: :cfunc:`process_query` runs it on the lineage
+   query whenever ``provsql.inversion_free`` is on, after (and only when)
+   the read-once rewrite did not already fire. On PostgreSQL 18 a
+   ``GROUP BY`` query carries a synthetic ``RTE_GROUP`` that hides the
+   base atoms, so detection runs on a stripped copy while the lineage is
+   built on the original query.
+
+Certificate and per-input markers (``src/safe_query_cert.{h,c}``)
+   The recipe and the order are carried into the circuit on transparent
+   ``gate_annotation`` gates (see :doc:`architecture`):
+
+   - the serialised :cfunc:`SafeCert` is stamped on the per-row root as a
+     ``C``-prefixed ``extra`` payload;
+   - each certified atom's input is wrapped (via :sqlfunc:`annotate`) in an
+     annotation carrying a ``K``-prefixed *order key* ``(root, sec, factor)``
+     (:cfunc:`SafeCertKey`), emitted by the planner
+     (:cfunc:`build_inversion_free_marker` in ``src/provsql.c``) via the
+     :sqlfunc:`inversion_free_key` SQL function. An atom binding only the
+     head class is *root-only* (no secondary column); a relation whose
+     occurrences span two or more secondary classes is the shared
+     self-join *guard* (``factor = SAFE_CERT_GUARD_FACTOR``).
+
+   Both markers are inert at evaluation: the annotation gate is identity
+   for every evaluator, so a query carrying them evaluates identically
+   whether or not the analysis ran.
+
+Structured d-DNNF builder (``src/StructuredDNNF.{h,cpp}``)
+   :cfunc:`StructuredDNNFBuilder` compiles the monotone lineage top-down
+   into a ProvSQL :cfunc:`dDNNF`: it expands the circuit to a canonical
+   DNF and recurses with **decomposable AND** at independence points
+   (variable-disjoint factors) and **deterministic OR** at Shannon
+   decisions on the supplied variable order, threading a *false-sink*
+   through OR-chains and sharing equal sub-d-DNNFs through a component
+   cache. The order affects only the d-DNNF *size*, never correctness, so
+   the builder is sound on any monotone lineage; the Prop. 4.5 order is
+   what keeps it polynomial on the certified class. Multivalued (BID) and
+   ``NOT`` gates are out of scope and rejected with a
+   :cfunc:`CircuitException`.
+
+Dispatch (``src/probability_evaluate.cpp``)
+   :cfunc:`collect_inversion_free_keys` walks the circuit for the
+   ``K``-marker annotations and maps each wrapped input to its
+   :cfunc:`InputKey`; :cfunc:`inversion_free_rank` flattens those keys
+   into a total rank (root value, then secondary value, then
+   guard-before-payload, then factor) for the order-only builder. The
+   explicit ``'inversion-free'`` method requires the certificate and
+   errors without it; the default chain takes this rung only when a
+   certificate is present and ``provsql.inversion_free`` is on, after
+   ``independent`` and before tree-decomposition, catching
+   :cfunc:`CircuitException` to fall through.
+
+Atoms the analysis does not model (a BID/``gate_mulinput`` atom, a
+derived/view atom, which is not an ``RTE_RELATION``) cause detection to
+decline (no certificate), and a malformed ``C``-prefixed payload fails to
+parse and is treated as an inert annotation; in every case evaluation
+falls back to the normal chain and stays correct. These declines are
+covered by ``test/sql/safe_query_inversion_free.sql``.
+
 .. _adding-new-probability-method:
 
 Step-by-Step: Adding a New Probability Evaluation Method
