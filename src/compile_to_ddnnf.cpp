@@ -71,7 +71,12 @@ Datum compile_to_ddnnf(PG_FUNCTION_ARGS)
       return it == uuid2var.end() ? -1 : it->second;
     };
 
-    dDNNF d = c.makeDDByName(root, compiler);
+    // "inversion-free" builds the structured d-DNNF over the order keys on the
+    // generic circuit (see buildInversionFreeDDNNF); its input leaves carry the
+    // same UUIDs as c, so var_of_uuid still aligns the NNF with the CNF.
+    dDNNF d = (compiler == "inversion-free")
+      ? buildInversionFreeDDNNF(*token)
+      : c.makeDDByName(root, compiler);
     string nnf = d.toNNF(var_of_uuid);
 
     text *result = (text *) palloc(VARHDRSZ + nnf.size());

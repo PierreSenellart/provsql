@@ -184,6 +184,30 @@ static std::map<gate_t, int> inversion_free_rank(
   return rank;
 }
 
+dDNNF buildInversionFreeDDNNF(pg_uuid_t token)
+{
+  // Compile a query certified inversion-free to its structured d-DNNF (the
+  // same artefact the 'inversion-free' probability method builds), so the KC
+  // surface can render / measure it.  Mirrors the dispatch in
+  // probability_evaluate_internal: the per-input order keys live on the
+  // GenericCircuit's annotation markers, so we go through the generic circuit
+  // rather than getBooleanCircuit(token, ...) directly.
+  GenericCircuit gc = getGenericCircuit(token);
+  gate_t gc_root = gc.getGate(uuid2string(token));
+  std::string ex = gc.getExtra(gc_root);
+  if (ex.empty() || ex[0] != SAFE_CERT_EXTRA_PREFIX_RECIPE)
+    throw CircuitException("compile 'inversion-free': the provenance root "
+                           "carries no inversion-free certificate");
+  gate_t root;
+  std::unordered_map<gate_t, gate_t> gc_to_bc;
+  BooleanCircuit c = getBooleanCircuit(gc, token, root, gc_to_bc);
+  std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
+  if (!collect_inversion_free_keys(gc, gc_root, gc_to_bc, c, root, keys))
+    throw CircuitException("compile 'inversion-free': the certificate's inputs "
+                           "lack per-input order markers");
+  return StructuredDNNFBuilder(c, root, inversion_free_rank(keys)).dnnf();
+}
+
 /**
  * @brief Core implementation of probability evaluation for a circuit token.
  * @param token   UUID of the root provenance gate.

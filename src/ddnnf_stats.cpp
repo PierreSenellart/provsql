@@ -64,9 +64,15 @@ Datum ddnnf_stats(PG_FUNCTION_ARGS)
     c.rewriteMultivaluedGates();
 
     // Time only the compilation: the treewidth probe below is a
-    // separate, untimed introspection step.
+    // separate, untimed introspection step.  "inversion-free" builds the
+    // structured d-DNNF over the generic circuit's order keys (see
+    // buildInversionFreeDDNNF) rather than the BooleanCircuit dispatch; the
+    // treewidth probe below still runs on c, which is the point -- it shows the
+    // structured d-DNNF stays small even where the treewidth is large.
     auto t0 = std::chrono::steady_clock::now();
-    dDNNF d = c.makeDDByName(root, compiler);
+    dDNNF d = (compiler == "inversion-free")
+      ? buildInversionFreeDDNNF(*token)
+      : c.makeDDByName(root, compiler);
     auto t1 = std::chrono::steady_clock::now();
     double compile_ms =
       std::chrono::duration<double, std::milli>(t1 - t0).count();

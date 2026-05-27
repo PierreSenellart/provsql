@@ -279,7 +279,9 @@ gate_t StructuredDNNFBuilder::newGate(BooleanGate type)
 gate_t StructuredDNNFBuilder::mkLit(Var v)
 {
   if (in_gate_[(std::size_t) v] == NO_GATE)
-    in_gate_[(std::size_t) v] = dd_.setGate(BooleanGate::IN, prob_[(std::size_t) v]);
+    in_gate_[(std::size_t) v] = uuid_[(std::size_t) v].empty()
+      ? dd_.setGate(BooleanGate::IN, prob_[(std::size_t) v])
+      : dd_.setGate(uuid_[(std::size_t) v], BooleanGate::IN, prob_[(std::size_t) v]);
   return in_gate_[(std::size_t) v];
 }
 
@@ -419,12 +421,17 @@ StructuredDNNFBuilder::StructuredDNNFBuilder(const BooleanCircuit &bc,
 
   std::size_t ninputs = input_rank.size();
   prob_.assign(ninputs, 0.0);
+  uuid_.assign(ninputs, std::string());
   in_gate_.assign(ninputs, NO_GATE);
   not_gate_.assign(ninputs, NO_GATE);
   for (const auto &kv : input_rank) {
     if (kv.second < 0 || (std::size_t) kv.second >= ninputs)
       throw CircuitException("StructuredDNNFBuilder: input rank out of range");
     prob_[(std::size_t) kv.second] = bc.getProb(kv.first);
+    // Carry the source UUID onto each rank so the built d-DNNF's input leaves
+    // are identifiable (DOT labels, NNF variable mapping), like every other
+    // d-DNNF builder; the structured recursion itself only uses the rank.
+    uuid_[(std::size_t) kv.second] = bc.getUUID(kv.first);
   }
 
   true_gate_  = dd_.setGate(BooleanGate::AND);   /* empty AND  = TRUE  */

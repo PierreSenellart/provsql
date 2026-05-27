@@ -29,7 +29,7 @@ def test_tools_endpoint_shape(client):
     expected_compilers = {
         "d4", "d4v2", "c2d", "minic2d", "dsharp",
         "panini-obdd", "panini-obdd-and", "panini-decdnnf",
-        "tree-decomposition", "interpret-as-dd", "default",
+        "tree-decomposition", "interpret-as-dd", "inversion-free", "default",
     }
     assert set(data["options"]["compilation"]) == expected_compilers
 

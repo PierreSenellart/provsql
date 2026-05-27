@@ -495,6 +495,7 @@ _COMPILER_TOOL_DEPS: dict[str, tuple[str, ...]] = {
     "panini-decdnnf":     ("panini",),
     "tree-decomposition": (),
     "interpret-as-dd":    (),
+    "inversion-free":     (),
     "default":            (),
 }
 

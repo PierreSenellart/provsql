@@ -20,6 +20,7 @@
 #include "dDNNF.h"
 
 #include <map>
+#include <string>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -112,6 +113,7 @@ private:
   std::size_t max_nodes_;
 
   std::vector<double> prob_;        ///< prob_[rank] = P(variable)
+  std::vector<std::string> uuid_;   ///< rank -> source input UUID (for labels)
   std::vector<gate_t> in_gate_;     ///< rank -> shared dDNNF IN gate
   std::vector<gate_t> not_gate_;    ///< rank -> shared dDNNF NOT(IN) gate (lazy)
   gate_t true_gate_, false_gate_;   ///< empty AND / empty OR terminals

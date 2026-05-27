@@ -1869,6 +1869,9 @@
             <option value="panini-decdnnf">Panini → Decision-DNNF</option>
             <option value="tree-decomposition">tree-decomposition</option>
             <option value="interpret-as-dd">interpret as d-D</option>
+            <!-- shown only when the root carries an inversion-free
+                 certificate; toggled in syncDropdownVisibility -->
+            <option value="inversion-free" hidden>inversion-free</option>
             <option value="default">default (fallback chain)</option>
           </select>
           <select class="cv-eval__args" id="eval-args-wmc-tool" hidden

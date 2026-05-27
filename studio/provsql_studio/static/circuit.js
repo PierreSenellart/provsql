@@ -1935,17 +1935,24 @@
         og.hidden = !anyVisible;
         og.disabled = !anyVisible;
       }
-      // The 'inversion-free' probability method only applies to a root that
-      // carries the certificate (any scene node with if_cert -- the elided
-      // annotation's child).  Offer it only then; otherwise hide it and bump
-      // a stale selection back to the default method.
+      // The 'inversion-free' probability method and d-D compiler only apply to
+      // a root that carries the certificate (any scene node with if_cert -- the
+      // elided annotation's child).  Offer them only then; otherwise hide and
+      // bump a stale selection back to the default.
+      const sceneIsIf = !!(state.scene && state.scene.nodes
+        && state.scene.nodes.some(n => n.if_cert));
       const ifOpt = meth.querySelector('option[value="inversion-free"]');
       if (ifOpt) {
-        const sceneIsIf = !!(state.scene && state.scene.nodes
-          && state.scene.nodes.some(n => n.if_cert));
         ifOpt.hidden = !sceneIsIf;
         ifOpt.disabled = ifOpt.hidden;
         if (ifOpt.hidden && meth.value === 'inversion-free') meth.value = '';
+      }
+      const comp = document.getElementById('eval-args-compiler');
+      const ifComp = comp && comp.querySelector('option[value="inversion-free"]');
+      if (ifComp) {
+        ifComp.hidden = !sceneIsIf;
+        ifComp.disabled = ifComp.hidden;
+        if (ifComp.hidden && comp.value === 'inversion-free') comp.value = 'd4';
       }
       // If the active selection just got hidden, fall back to the first
       // still-visible option so the run button stays meaningful.

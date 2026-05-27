@@ -661,6 +661,9 @@ def create_app(
         # In-process: direct reading of the Boolean circuit as a d-D
         # (decomposable + deterministic, possibly non-NNF).
         "interpret-as-dd",
+        # In-process: structured d-DNNF over the query-derived order; only on a
+        # circuit certified inversion-free (buildInversionFreeDDNNF).
+        "inversion-free",
         # makeDD fallback chain: interpretAsDD -> tree-decomposition -> d4.
         "default",
     }
