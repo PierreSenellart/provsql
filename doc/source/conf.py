@@ -163,7 +163,7 @@ _SQL_FUNC_MAP = {
     'compile_to_ddnnf_dot':     '/doxygen-sql/html/group__provenance__output.html#ga867eeefc907a992781979db997501ecb',
     'compile_to_ddnnf':         '/doxygen-sql/html/group__provenance__output.html#gaca26373346a0fc0a821b61a9589cada4',
     'ddnnf_stats':              '/doxygen-sql/html/group__provenance__output.html#gadbc6c13ecd968c3a24906e40c8e0e707',
-    'register_tool':            '/doxygen-sql/html/group__provenance__output.html#gae2709b5c210d56c9172cbb79ba92bfce',
+    'register_tool':            '/doxygen-sql/html/group__provenance__output.html#ga029f6c6fe1da2115ef059ff37581aeb4',
     'unregister_tool':          '/doxygen-sql/html/group__provenance__output.html#ga95d76e5745f90ae4eed4ec350dca5ff3',
     'set_tool_enabled':         '/doxygen-sql/html/group__provenance__output.html#ga64d2d1cecb8ea3dfbb24cad224c8c017',
     'set_tool_preference':      '/doxygen-sql/html/group__provenance__output.html#ga8dc5a0956b0f64ae75a74130a73075f9',

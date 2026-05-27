@@ -194,7 +194,7 @@ INTERNAL_FUNCTIONS = {
     'tool_registry_list', 'tools', 'tool_overrides',
     'executable', 'input_formats', 'output_format', 'parser', 'argtpl',
     'argtpl_circuit', 'operations', 'preference', 'enabled', 'kind', 'name',
-    'removed', 'dependencies', 'available',
+    'removed', 'dependencies', 'available', 'endpoint',
     # GUC referenced by name in the registry doc comments.
     'fallback_compiler',
 }
