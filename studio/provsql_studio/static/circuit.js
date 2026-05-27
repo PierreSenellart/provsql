@@ -1950,7 +1950,11 @@
       const comp = document.getElementById('eval-args-compiler');
       const ifComp = comp && comp.querySelector('option[value="inversion-free"]');
       if (ifComp) {
-        ifComp.hidden = !sceneIsIf;
+        // inversion-free is a d-D-construction route (kc-ddnnf / kc-nnf),
+        // not an external compiler for probability's "compilation" method;
+        // mirror the gate applied in syncControls so the two never disagree.
+        const inDDMode = sel.value === 'kc-ddnnf' || sel.value === 'kc-nnf';
+        ifComp.hidden = !sceneIsIf || !inDDMode;
         ifComp.disabled = ifComp.hidden;
         if (ifComp.hidden && comp.value === 'inversion-free') comp.value = 'd4';
       }
@@ -2023,13 +2027,23 @@
       // tree-decomposition / independent / monte-carlo as their own
       // rows so listing them under "compilers" would be confusing.
       const compilerExtended = (v === 'kc-ddnnf' || v === 'kc-nnf');
+      const sceneIsIf = !!(state.scene && state.scene.nodes
+        && state.scene.nodes.some(n => n.if_cert));
       const compilerEl = document.getElementById('eval-args-compiler');
       if (compilerEl) {
         for (const opt of compilerEl.querySelectorAll('option')) {
-          const ext = opt.value === 'tree-decomposition'
-                   || opt.value === 'interpret-as-dd'
-                   || opt.value === 'default';
-          opt.hidden = ext && !compilerExtended;
+          // In-process d-D routes (tree-decomposition / interpret-as-dd /
+          // default / inversion-free) build the d-D in the d-D-construction
+          // views (kc-ddnnf / kc-nnf) only; probability's "compilation"
+          // method needs an external compiler, so they are hidden there.
+          // inversion-free is additionally gated on the root's certificate,
+          // exactly like the matching exact method.
+          const inproc = opt.value === 'tree-decomposition'
+                      || opt.value === 'interpret-as-dd'
+                      || opt.value === 'default'
+                      || opt.value === 'inversion-free';
+          opt.hidden = (inproc && !compilerExtended)
+                    || (opt.value === 'inversion-free' && !sceneIsIf);
           opt.disabled = opt.hidden;
         }
         // If the selected value just got hidden (user was on
