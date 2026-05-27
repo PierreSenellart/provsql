@@ -17,8 +17,8 @@ default:
 %:
 	$(MAKE) -f $(INTERNAL) $@ $(ARGS)
 
-test:
-	bash -c "set -o pipefail && make installcheck 2>&1 | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
+test: tdkc
+	bash -c "set -o pipefail && bash test/kcmcp/with-tdkc.sh make installcheck 2>&1 | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
 
 docs: sql/provsql.sql
 	cd doc/source && make html

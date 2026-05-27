@@ -89,7 +89,7 @@ jobs:
           exit 1
       - name: Run regression tests
         run: |
-          make installcheck && exit 0
+          bash test/kcmcp/with-tdkc.sh make installcheck && exit 0
           # Test run failed: surface everything needed to diagnose a
           # crash.  A backend SIGSEGV shows up here as "server closed the
           # connection unexpectedly", after which every later test fails

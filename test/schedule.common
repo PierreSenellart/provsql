@@ -86,6 +86,11 @@ test: tool_search_path
 # External-tool registry (catalog SQL surface + registry-gated dispatch)
 test: tool_registry
 
+# KCMCP client: compile over a socket to a warm server, in endpoint and
+# managed modes (skip unless test/kcmcp/with-tdkc.sh provisioned a server).
+test: kcmcp_client_endpoint
+test: kcmcp_client_managed
+
 # Tables with keywords as name
 test: keyword_table
 

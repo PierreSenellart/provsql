@@ -1,0 +1,24 @@
+\set ECHO none
+pg_reload_conf
+t
+(1 row)
+pg_sleep
+
+(1 row)
+register_tool
+
+(1 row)
+remove_provenance
+
+(1 row)
+city|matches
+Berlin|t
+New York|t
+Paris|t
+(3 rows)
+unregister_tool
+
+(1 row)
+pg_reload_conf
+t
+(1 row)
