@@ -617,6 +617,208 @@ StructuredDNNFBuilder::StructuredDNNFBuilder(const BooleanCircuit &bc,
   dd_.simplify();
 }
 
+/* ----- factored (clause-set) linear-build path ------------------------- */
+
+bool StructuredDNNFBuilder::CSKey::operator==(const CSKey &o) const
+{
+  return fs == o.fs && cs == o.cs;
+}
+
+std::size_t StructuredDNNFBuilder::CSKeyHash::operator()(const CSKey &k) const
+{
+  std::size_t h = 1469598103934665603ull;
+  auto mix = [&](std::size_t x){ h ^= x + 0x9e3779b97f4a7c15ull + (h<<6) + (h>>2); };
+  for (const auto &c : k.cs) {
+    for (const auto &t : c) { for (int v : t) mix((std::size_t)(unsigned) v); mix(0xffffffffull); }
+    mix(0xeeeeeeeeull);                              // clause separator
+  }
+  mix((std::size_t) k.fs);
+  return h;
+}
+
+StructuredDNNFBuilder::ClauseSet
+StructuredDNNFBuilder::condition(const ClauseSet &cs, Var v, bool value,
+                                 bool &is_false)
+{
+  /* condition each clause; a clause -> TRUE is dropped, a clause -> FALSE makes
+   * the whole conjunction FALSE */
+  is_false = false;
+  ClauseSet out;
+  out.reserve(cs.size());
+  for (const auto &c : cs) {
+    DNF cc = condition(c, v, value);              // reuses the DNF conditioner
+    if (cc.empty()) { is_false = true; return {}; }
+    if (cc.size() == 1 && cc[0].empty()) continue; /* clause satisfied */
+    out.push_back(std::move(cc));
+  }
+  return out;
+}
+
+std::vector<StructuredDNNFBuilder::ClauseSet>
+StructuredDNNFBuilder::csAndDecompose(const ClauseSet &cs) const
+{
+  if (cs.size() <= 1) return { cs };
+  /* variable set of each clause */
+  std::vector<std::set<int>> cvars(cs.size());
+  for (std::size_t i = 0; i < cs.size(); ++i)
+    for (const auto &t : cs[i]) for (int v : t) cvars[i].insert(v);
+
+  std::vector<int> uf(cs.size());
+  for (std::size_t i = 0; i < uf.size(); ++i) uf[i] = (int) i;
+  std::function<int(int)> find = [&](int x){ while (uf[x]!=x){ uf[x]=uf[uf[x]]; x=uf[x]; } return x; };
+  for (std::size_t i = 0; i < cs.size(); ++i)
+    for (std::size_t j = i + 1; j < cs.size(); ++j) {
+      bool share = false;
+      for (int v : cvars[i]) if (cvars[j].count(v)) { share = true; break; }
+      if (share) { int a = find((int)i), b = find((int)j); if (a!=b) uf[a]=b; }
+    }
+  std::map<int, ClauseSet> groups;
+  for (std::size_t i = 0; i < cs.size(); ++i) groups[find((int)i)].push_back(cs[i]);
+  if (groups.size() <= 1) return { cs };
+  std::vector<ClauseSet> out;
+  for (auto &kv : groups) out.push_back(std::move(kv.second));
+  return out;
+}
+
+gate_t StructuredDNNFBuilder::buildBlock(const ClauseSet &csraw, gate_t false_sink)
+{
+  /* canonicalise: drop satisfied clauses, detect a falsified one */
+  ClauseSet cs;
+  cs.reserve(csraw.size());
+  for (const auto &c : csraw) {
+    DNF cc = canonical(c);
+    if (cc.empty())                       return false_sink;   /* clause FALSE */
+    if (cc.size() == 1 && cc[0].empty())  continue;            /* clause TRUE  */
+    cs.push_back(std::move(cc));
+  }
+  if (cs.empty())        return true_gate_;        /* every clause satisfied */
+  if (cs.size() == 1)    return build(cs[0], false_sink);  /* single factor: flat */
+
+  CSKey key{ cs, false_sink };
+  auto it = csCache_.find(key);
+  if (it != csCache_.end()) return it->second;
+
+  gate_t res;
+
+  /* decomposable AND over variable-disjoint clause groups (only with no pending
+   * OR tail, as in build) */
+  std::vector<ClauseSet> parts = (false_sink == false_gate_)
+                                   ? csAndDecompose(cs) : std::vector<ClauseSet>{ cs };
+  if (parts.size() > 1) {
+    std::vector<gate_t> ch;
+    ch.reserve(parts.size());
+    for (const auto &p : parts) ch.push_back(buildBlock(p, false_gate_));
+    res = mkAnd(ch);
+  } else {
+    /* Shannon-decide the lowest-rank variable present in any clause */
+    Var v = INT_MAX;
+    for (const auto &c : cs) for (const auto &t : c) if (t.front() < v) v = t.front();
+    bool f1 = false, f0 = false;
+    ClauseSet hiCs = condition(cs, v, true, f1);
+    ClauseSet loCs = condition(cs, v, false, f0);
+    gate_t ghi = f1 ? false_sink : buildBlock(hiCs, false_sink);
+    gate_t glo = f0 ? false_sink : buildBlock(loCs, false_sink);
+    if (ghi == glo) {
+      res = ghi;
+    } else {
+      gate_t andHi = mkAnd({ mkLit(v), ghi });
+      gate_t andLo = mkAnd({ mkNeg(v), glo });
+      gate_t orG = newGate(BooleanGate::OR);
+      if (andHi != false_gate_) dd_.addWire(orG, andHi);
+      if (andLo != false_gate_) dd_.addWire(orG, andLo);
+      res = orG;
+    }
+  }
+
+  csCache_.emplace(CSKey{ std::move(cs), false_sink }, res);
+  return res;
+}
+
+StructuredDNNFBuilder::StructuredDNNFBuilder(const BooleanCircuit &bc,
+                                             gate_t root,
+                                             const std::map<gate_t, InputKey> &keys,
+                                             std::size_t max_nodes)
+  : max_nodes_(max_nodes)
+{
+  (void) root;
+  if (bc.hasMultivaluedGates())
+    throw CircuitException("StructuredDNNFBuilder: multivalued inputs (BID) are "
+                           "out of scope for the inversion-free path");
+
+  /* Total order (Prop. 4.5): root value, then secondary value, then guard
+   * before payload, then factor.  Assign each gate a dense rank in that order. */
+  std::vector<std::pair<std::tuple<int,int,int,int>, gate_t>> ord;
+  ord.reserve(keys.size());
+  for (const auto &kv : keys) {
+    const InputKey &k = kv.second;
+    int guard_first = (k.factor == GUARD_FACTOR) ? 0 : 1;
+    ord.push_back({ std::make_tuple(k.root, k.sec, guard_first, k.factor), kv.first });
+  }
+  std::sort(ord.begin(), ord.end(),
+            [](const auto &a, const auto &b){ return a.first < b.first; });
+
+  std::size_t ninputs = ord.size();
+  prob_.assign(ninputs, 0.0);
+  in_gate_.assign(ninputs, NO_GATE);
+  not_gate_.assign(ninputs, NO_GATE);
+  std::map<gate_t, int> rank;
+  for (std::size_t i = 0; i < ninputs; ++i) {
+    rank[ord[i].second] = (int) i;
+    prob_[i] = bc.getProb(ord[i].second);
+  }
+
+  true_gate_  = dd_.setGate(BooleanGate::AND);
+  false_gate_ = dd_.setGate(BooleanGate::OR);
+
+  /* Reconstruct the factored hierarchy from the keys:
+   *   block(root) -> tile(sec) -> { guard ranks } + { factor -> payload rank }
+   * clause(factor) = OR over tiles of ( guards AND that factor's payload ). */
+  struct Tile { std::vector<Var> guards; std::map<int, Var> payload; };
+  std::map<int, std::map<int, Tile>> blocks;     /* root -> sec -> Tile */
+  std::map<int, std::set<int>> block_factors;    /* root -> factor ids */
+  for (const auto &kv : keys) {
+    const InputKey &k = kv.second;
+    Var r = rank[kv.first];
+    Tile &tl = blocks[k.root][k.sec];
+    if (k.factor == GUARD_FACTOR)
+      tl.guards.push_back(r);
+    else {
+      tl.payload[k.factor] = r;
+      block_factors[k.root].insert(k.factor);
+    }
+  }
+
+  /* OR-chain the blocks by ascending root value; each block's FALSE leaf is the
+   * node for the later blocks, so inert blocks are never expanded into terms. */
+  std::vector<int> roots;
+  for (const auto &b : blocks) roots.push_back(b.first);
+  std::sort(roots.begin(), roots.end());
+
+  gate_t tail = false_gate_;
+  for (auto rit = roots.rbegin(); rit != roots.rend(); ++rit) {
+    const auto &tiles = blocks[*rit];
+    const auto &factors = block_factors[*rit];
+    ClauseSet cs;
+    for (int f : factors) {
+      DNF clause;
+      for (const auto &sv : tiles) {                 /* sec ascending */
+        const Tile &tl = sv.second;
+        auto pit = tl.payload.find(f);
+        if (pit == tl.payload.end()) continue;       /* factor absent at this tile */
+        Term term = tl.guards;                       /* shared self-join guards */
+        term.push_back(pit->second);                 /* factor's payload */
+        clause.push_back(std::move(term));
+      }
+      if (!clause.empty()) cs.push_back(std::move(clause));
+    }
+    tail = buildBlock(cs, tail);
+  }
+
+  root_ = tail;
+  dd_.root = root_;
+  dd_.simplify();
+}
+
 std::size_t StructuredDNNFBuilder::size() const
 {
   std::set<gate_t> seen;

@@ -196,19 +196,46 @@ gates): build drops from `~n⁵` to `~n^3.7`, e.g. **n=20: 142 s → 0.7 s**, an
 n=50 (7 500 vars) now completes (~20 s) where the generic compilers die at
 `n≈6`.
 
-Residual gap to *true* linear build: each block is still **flattened** to its
-`n²` cross-terms in the DNF (so `~n⁴` memory, the current limiter at ~1 GB by
-n=50). Linear build needs the per-block cofactors kept **factored**
-(`(⋁ⱼ t1)∧(⋁ₖ t2)`, `O(n)` per block) under the bounded atom-frontier — i.e. the
-`2^g` frontier state replacing the flattened-DNF cache key. That factored
-frontier is the part genuinely **co-designed with task 11** (per-input order
-keys give the per-atom coordinates the frontier slots are keyed on).
+**Near-linear build: the factored clause-set frontier (co-designed with task
+11).** The OR-chained builder still **flattened** each block to its `n²`
+cross-terms, so `~n⁴` memory. The remaining factor is removed by a second
+constructor that keeps each block **factored**, driven by structured per-input
+keys (the task-11 key shape, derived in the harness for now): every input
+carries `InputKey{root, sec, factor}` — root-class value (independent block),
+secondary value (tile within block), and which quantified factor its atom
+belongs to, or `GUARD_FACTOR` for the self-join atom shared across a tile's
+factors. From the keys the builder reconstructs each block as an **AND of
+clauses** `⋀_f (⋁_v guards∧payload_{f,v})` (one clause per factor, `O(n)` terms,
+*never* cross-multiplied), OR-chains the blocks without a flat top DNF at all,
+and recurses with `buildBlock`: drop satisfied clauses, decomposable `AND` over
+variable-disjoint clause groups, else Shannon-decide the lowest-rank variable.
+The **bounded atom-frontier now falls out of caching these compact clause-set
+cofactors** (`O(n)` each) instead of flattened `n²` DNFs — the cache *discovers*
+the `2^g` frontier rather than it being hand-coded. Validated against the apply
+oracle and brute force, including `g = 2,3,4` factors (not witness-overfit):
+identical probabilities and the same `~24.9·n²` d-DNNF, well-formed node-by-node.
+Scaling on the witness:
 
-Still unbuilt and ahead: the **factored** bounded-frontier representation for
-true linear build (next), the per-input order keys (task 11, co-designed with
-it; the order is currently derived in the harness, not from per-input markers),
-and wiring `StructuredDNNFBuilder` + `dDNNF::probabilityEvaluation` into the
-probability dispatcher behind `provsql.inversion_free`.
+| n | #vars | d-DNNF gates | build | memory |
+|---:|---:|---:|---:|---:|
+| 20  | 1 200   | 9 764     | 0.04 s | 11 MB |
+| 50  | 7 500   | 61 934    | 0.6 s  | 83 MB |
+| 100 | 30 000  | 248 884   | 6.9 s  | 562 MB |
+| 200 | 120 000 | 997 784   | 78 s   | 4.2 GB |
+
+Output stays `Θ(n²)` and **memory is `Θ(n³) = Θ(|lineage|)` — linear in the
+lineage**; build time is `~n^3.4` (near-linear-in-lineage, down from the
+original `~n⁵`; n=20: 142 s → 0.04 s). The flat OR-chained path is kept as the
+key-free fallback; the factored path is selected when structured keys are
+available.
+
+Still unbuilt and ahead: shaving the last `~n^0.4` of build time (the clause
+`canonical`/`condition`/hash are `O(n)` per frontier state — an incremental
+frontier signature would make each `O(1)`); the per-input order keys as
+persisted **markers** (task 11 proper — the structure is in place, only the
+key *source* is still the harness, not annotation-gate `extra`); and wiring
+`StructuredDNNFBuilder` + `dDNNF::probabilityEvaluation` into the probability
+dispatcher behind `provsql.inversion_free`.
 
 **Future benchmark (read-once overlap).** Hierarchical self-join-free queries
 over TID are *both* read-once and inversion-free, so both the existing

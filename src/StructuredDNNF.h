@@ -120,6 +120,39 @@ public:
                         const std::map<gate_t, int> &input_rank,
                         std::size_t max_nodes = 0);
 
+  /**
+   * @brief Structured per-input order key (the task-11 key, derived by the
+   *        caller for now).
+   *
+   * Locates an input variable in the query hierarchy of a consistent-unification
+   * self-join: @c root is the root-class value (one independent block per
+   * value), @c sec the secondary-class value (one tile per value within a
+   * block), and @c factor which quantified factor (clause) the variable's atom
+   * belongs to, or @c GUARD_FACTOR for a self-join atom shared by every factor
+   * of its tile.  For the witness @c S(x,y),A(x,y),S(x,z),B(x,z): the @c S tuple
+   * is @c {a,v,GUARD}, @c A is @c {a,v,0}, @c B is @c {a,v,1}.
+   */
+  struct InputKey { int root; int sec; int factor; };
+  static constexpr int GUARD_FACTOR = -1;
+
+  /**
+   * @brief Linear-build constructor over the factored (clause-set) hierarchy.
+   *
+   * Uses the structured keys to keep each block factored as an AND of clauses
+   * (one disjunction per factor, sharing the self-join guard), OR-chained across
+   * blocks without ever flattening to the @f$n^2@f$ cross-terms.  The bounded
+   * atom-frontier then falls out of caching the compact clause-set cofactors, so
+   * build time is linear in the lineage for fixed query.  Same d-DNNF output
+   * contract as the order-only constructor.
+   *
+   * @param keys  One @c InputKey per IN gate reachable from @p root.
+   * @throws CircuitException as the order-only constructor, plus on a key set
+   *         that does not describe a well-formed block/tile/factor hierarchy.
+   */
+  StructuredDNNFBuilder(const BooleanCircuit &bc, gate_t root,
+                        const std::map<gate_t, InputKey> &keys,
+                        std::size_t max_nodes = 0);
+
   /** @brief The constructed d-DNNF (root set, simplified). */
   const dDNNF &dnnf() const { return dd_; }
 
@@ -136,6 +169,7 @@ private:
   using Var  = int;                 ///< Variable rank in @c [0,ninputs).
   using Term = std::vector<Var>;    ///< A product: sorted, duplicate-free vars.
   using DNF  = std::vector<Term>;   ///< A sum of products: canonicalised.
+  using ClauseSet = std::vector<DNF>; ///< A conjunction of clauses (each a DNF).
 
   dDNNF dd_;
   gate_t root_;
@@ -153,6 +187,11 @@ private:
   struct CacheKey { DNF d; gate_t fs; bool operator==(const CacheKey &o) const; };
   struct CacheKeyHash { std::size_t operator()(const CacheKey &k) const; };
   std::unordered_map<CacheKey, gate_t, CacheKeyHash> cache_;
+
+  /* Clause-set cofactor cache for the factored (linear-build) path. */
+  struct CSKey { ClauseSet cs; gate_t fs; bool operator==(const CSKey &o) const; };
+  struct CSKeyHash { std::size_t operator()(const CSKey &k) const; };
+  std::unordered_map<CSKey, gate_t, CSKeyHash> csCache_;
 
   /* Expand the circuit's function under @p root into a canonical monotone DNF,
    * memoised per gate. */
@@ -184,6 +223,15 @@ private:
    * each disjoint component against the node for "the rest of the disjunction",
    * so the inert components are not dragged through the residual DNF. */
   gate_t build(const DNF &d, gate_t false_sink);
+
+  /* Factored path (keyed constructor).  Compile a conjunction of clauses with
+   * FALSE leaf @p false_sink.  Clauses are kept small (one factor each) so the
+   * cofactor cache realises the bounded atom-frontier, giving linear build. */
+  gate_t buildBlock(const ClauseSet &cs, gate_t false_sink);
+  static ClauseSet condition(const ClauseSet &cs, Var v, bool value, bool &is_false);
+  /* Partition clauses into variable-disjoint groups (decomposable AND over the
+   * conjunction); @c {cs} if they all share variables transitively. */
+  std::vector<ClauseSet> csAndDecompose(const ClauseSet &cs) const;
 };
 
 #endif /* STRUCTURED_DNNF_H */
