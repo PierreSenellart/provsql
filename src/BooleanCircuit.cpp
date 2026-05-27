@@ -392,7 +392,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
   if(inputs.size()>=8*sizeof(unsigned long long))
     throw CircuitException("Too many possible worlds to iterate over");
 
-  unsigned long long nb=(1<<inputs.size());
+  unsigned long long nb=(1ULL<<inputs.size());
   double totalp=0.;
 
   for(unsigned long long i=0; i < nb; ++i) {
@@ -401,7 +401,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
 
     unsigned j=0;
     for(gate_t in : inputs) {
-      if(i & (1 << j)) {
+      if(i & (1ULL << j)) {
         s.insert(in);
         p*=getProb(in);
       } else {
