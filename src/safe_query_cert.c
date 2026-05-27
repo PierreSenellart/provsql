@@ -13,8 +13,11 @@
  *     <atom_relation_rank[0..natoms-1]>
  *     <atom_col_class[0..natoms*maxarity-1]>
  *
- * Both functions are pure (no SPI / no catalog access) so the parser is safe to
- * call from the C++ evaluation side.
+ * A per-input order key uses the sibling @c SAFE_CERT_EXTRA_PREFIX_KEY ('K')
+ * form @c "K<root> <sec> <factor>" (see @c safe_cert_key_serialise).
+ *
+ * All functions are pure (no SPI / no catalog access) so the parsers are safe
+ * to call from the C++ evaluation side.
  */
 #include "postgres.h"
 #include "lib/stringinfo.h"
@@ -101,4 +104,37 @@ SafeCert *safe_cert_parse(const char *str)
 #undef READ_INT
 
   return cert;
+}
+
+char *safe_cert_key_serialise(long root, long sec, int factor)
+{
+  StringInfoData s;
+  initStringInfo(&s);
+  appendStringInfoChar(&s, SAFE_CERT_EXTRA_PREFIX_KEY);
+  appendStringInfo(&s, "%ld %ld %d", root, sec, factor);
+  return s.data;
+}
+
+bool safe_cert_key_parse(const char *str, SafeCertKey *out)
+{
+  const char *p;
+  char *end;
+  SafeCertKey k;
+
+  if (str == NULL || str[0] != SAFE_CERT_EXTRA_PREFIX_KEY)
+    return false;
+
+  p = str + 1;
+  k.root = strtol(p, &end, 10);
+  if (end == p) return false;
+  p = end;
+  k.sec = strtol(p, &end, 10);
+  if (end == p) return false;
+  p = end;
+  k.factor = (int) strtol(p, &end, 10);
+  if (end == p) return false;
+
+  if (out != NULL)
+    *out = k;
+  return true;
 }

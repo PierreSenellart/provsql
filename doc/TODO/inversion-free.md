@@ -229,13 +229,42 @@ original `~n⁵`; n=20: 142 s → 0.04 s). The flat OR-chained path is kept as t
 key-free fallback; the factored path is selected when structured keys are
 available.
 
-Still unbuilt and ahead: shaving the last `~n^0.4` of build time (the clause
+**Task 11 (per-input markers): wire format landed; production/consumption need
+the cluster.** The shared contract is in place — `SafeCertKey` plus
+`safe_cert_key_serialise` / `safe_cert_key_parse` (`safe_query_cert.{h,c}`), the
+`K`-prefixed sibling of the `C`-recipe, mirroring `StructuredDNNFBuilder`'s
+`InputKey{root,sec,factor}` (phase-1 keys carry the values as `long`, the
+witness's int domain; arbitrary value domains want a comparable text/value-id
+encoding — a documented follow-up). The two remaining halves are entirely
+server-coupled and cannot be developed in the sandbox (no sudo → no
+`make install` / cluster restart / `installcheck`):
+
+- **Production (planner).** Wrap each certified atom's provenance column in
+  `annotate(prov, key_expr)`, where `key_expr` builds the `K`-string per row
+  from the tuple's root- and secondary-class column values (recipe
+  `atom_col_class`) and the atom's factor. **Open design issue found here:**
+  the certified path computes the recipe on the *flattened/inlined* `q` inside
+  `try_safe_query_rewrite`, then returns `NULL`, so `process_query` rebuilds the
+  lineage from the **original** `q` — per-atom↔RTE indices need not align once a
+  flatten/inline/PK pre-pass has fired. The root cert tolerates this (it is
+  structure-agnostic and only logged today); per-input markers do **not**, so
+  either re-derive the recipe on the lineage-building `q`, or attach markers
+  only on the alignment-safe flat-`FROM` case (the witness) and skip otherwise
+  (markers absent → safe fallback). The marker is a transparent annotation gate,
+  so attaching it never changes an existing result — blast radius is nil until
+  dispatch consumes it.
+- **Consumption (evaluator).** At the dispatch site (where `getBooleanCircuit`
+  yields `gc_to_bc`), walk `gc` for `K`-annotation gates whose child is a
+  `gate_input`, parse the key, map the child to its Boolean variable via
+  `gc_to_bc`, and feed `StructuredDNNFBuilder`'s keyed constructor. Naturally
+  bundled with the dispatch wiring (it needs the `BooleanCircuit` + `gc_to_bc`,
+  which the cert-read point does not yet have).
+
+Also still ahead: shaving the last `~n^0.4` of build time (the clause
 `canonical`/`condition`/hash are `O(n)` per frontier state — an incremental
-frontier signature would make each `O(1)`); the per-input order keys as
-persisted **markers** (task 11 proper — the structure is in place, only the
-key *source* is still the harness, not annotation-gate `extra`); and wiring
-`StructuredDNNFBuilder` + `dDNNF::probabilityEvaluation` into the probability
-dispatcher behind `provsql.inversion_free`.
+frontier signature would make each `O(1)`); and wiring `StructuredDNNFBuilder`
++ `dDNNF::probabilityEvaluation` into the probability dispatcher behind
+`provsql.inversion_free`.
 
 **Future benchmark (read-once overlap).** Hierarchical self-join-free queries
 over TID are *both* read-once and inversion-free, so both the existing
