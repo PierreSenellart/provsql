@@ -5,6 +5,9 @@
 # (the CR attaches to the last shell token, e.g. a redirect target).
 test/sql/*.sql        text eol=lf
 test/expected/*.out   text eol=lf
+# Test helper shell scripts must stay LF: bash refuses a CRLF script
+# (`set -u\r` -> "invalid option", `cleanup() {\r` -> syntax error).
+test/kcmcp/*.sh       text eol=lf
 
 # Exclude from git archive (release tarballs)
 .github/        export-ignore

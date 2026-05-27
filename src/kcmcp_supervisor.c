@@ -37,6 +37,13 @@
 #include "provsql_shmem.h"
 #include "provsql_error.h"
 
+#if PG_VERSION_NUM < 120000
+/* WL_EXIT_ON_PM_DEATH (have WaitLatch exit on postmaster death) was introduced
+ * in PostgreSQL 12; on PG 10/11 fall back to the older WL_POSTMASTER_DEATH and
+ * leave the supervise loop ourselves when WaitLatch reports it (see kcmcp_wait). */
+#define WL_EXIT_ON_PM_DEATH WL_POSTMASTER_DEATH
+#endif
+
 static volatile sig_atomic_t got_sigterm = false;
 static volatile sig_atomic_t got_sighup = false;
 
@@ -122,6 +129,22 @@ static void kill_server(pid_t child)
   do { r = waitpid(child, &status, 0); } while (r < 0 && errno == EINTR);
 }
 
+/* Wait on the latch (and an optional timeout), resetting it.  Returns true if
+ * the postmaster died: on PG >= 12 WL_EXIT_ON_PM_DEATH makes WaitLatch exit the
+ * process itself (so this never returns true); on PG 10/11 it degrades to
+ * WL_POSTMASTER_DEATH and WaitLatch returns with that bit set, which the caller
+ * turns into a clean exit from the supervise loop. */
+static bool kcmcp_wait(long timeout_ms)
+{
+  int events = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH;
+  int rc;
+  if (timeout_ms >= 0)
+    events |= WL_TIMEOUT;
+  rc = WaitLatch(MyLatch, events, timeout_ms, PG_WAIT_EXTENSION);
+  ResetLatch(MyLatch);
+  return (rc & WL_POSTMASTER_DEATH) != 0;
+}
+
 PGDLLEXPORT void provsql_kcmcp_worker(Datum ignored);
 
 void provsql_kcmcp_worker(Datum ignored)
@@ -163,9 +186,8 @@ void provsql_kcmcp_worker(Datum ignored)
         child = -1;
         publish_endpoint("");
       }
-      WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, -1,
-                PG_WAIT_EXTENSION);
-      ResetLatch(MyLatch);
+      if (kcmcp_wait(-1))
+        break;
       continue;
     }
 
@@ -174,9 +196,8 @@ void provsql_kcmcp_worker(Datum ignored)
       if (cmd == NULL) {
         provsql_warning("provsql.kcmcp_server has no {endpoint} placeholder; "
                         "not launching the managed KCMCP server");
-        WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, -1,
-                  PG_WAIT_EXTENSION);
-        ResetLatch(MyLatch);
+        if (kcmcp_wait(-1))
+          break;
         continue;
       }
       child = launch_server(cmd);
@@ -192,9 +213,8 @@ void provsql_kcmcp_worker(Datum ignored)
 
     /* Supervise: wake on the child's exit (SIGCHLD interrupts the wait), a
      * signal, or the 1 s timeout, then reap non-blockingly. */
-    WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, 1000,
-              PG_WAIT_EXTENSION);
-    ResetLatch(MyLatch);
+    if (kcmcp_wait(1000))
+      break;
 
     if (child > 0) {
       int status;
