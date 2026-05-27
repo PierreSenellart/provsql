@@ -85,3 +85,47 @@ x|sjf_default|sjf_if|sjf_pw
 2|0.200000|0.200000|0.200000
 3|0.200000|0.200000|0.200000
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|root_type|prob
+1|times|0.200000
+2|times|0.200000
+(2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+repair_key
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|root_type|prob_default|prob_pw
+1|plus|0.700000|0.700000
+2|mulinput|0.500000|0.500000
+(2 rows)
+bid_check
+BID: explicit inversion-free declines; default sound
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|prob_plain|prob_badcert
+1|0.200000|0.200000
+(1 row)

@@ -158,5 +158,87 @@ SELECT x,
        round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS sjf_pw
   FROM ifr_sjf ORDER BY x;
 
+-- (6) Decline / robustness cases: the analysis must keep clear of atoms it does
+--     not model, and the evaluator must treat a malformed certificate as inert.
+--     In each the lineage still evaluates correctly through the normal chain.
+
+-- (6a) Derived (view) atom: a view is an RTE_SUBQUERY, not an RTE_RELATION, so
+--      the detector declines (root is not a certificate-carrying annotation) and
+--      the read-once lineage is evaluated as usual.
+CREATE TABLE ifr_va(x int);
+INSERT INTO ifr_va VALUES (1),(2);
+SELECT add_provenance('ifr_va');
+CREATE TABLE ifr_vb(x int);
+INSERT INTO ifr_vb VALUES (1),(2);
+SELECT add_provenance('ifr_vb');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifr_va;
+  PERFORM set_prob(provsql, 0.4) FROM ifr_vb;
+END $$;
+CREATE VIEW ifr_vbv AS SELECT x FROM ifr_vb;
+CREATE TEMP TABLE ifr_vt AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifr_va a, ifr_vbv b WHERE a.x = b.x GROUP BY a.x;
+SELECT remove_provenance('ifr_vt');
+SELECT x, get_gate_type(p) AS root_type,
+       round(probability_evaluate(p)::numeric, 6) AS prob
+  FROM ifr_vt ORDER BY x;
+
+-- (6b) BID atom: a repair_key relation contributes gate_mulinput leaves.  The
+--      detector declines (no certificate), so the default chain evaluates the
+--      block soundly (x=1: disjoint 0.3+0.4 = 0.7; x=2: 0.5) and the explicit
+--      'inversion-free' method declines rather than mis-evaluating it.
+CREATE TABLE ifr_bid(x int, v int, conf float);
+INSERT INTO ifr_bid VALUES (1,100,0.3),(1,200,0.4),(2,300,0.5);
+SELECT add_provenance('ifr_bid');
+SELECT remove_provenance('ifr_bid');
+SELECT repair_key('ifr_bid', 'x');
+DO $$ BEGIN PERFORM set_prob(provsql, conf) FROM ifr_bid; END $$;
+CREATE TEMP TABLE ifr_bt AS SELECT x, provenance() AS p FROM ifr_bid GROUP BY x;
+SELECT remove_provenance('ifr_bt');
+SELECT x, get_gate_type(p) AS root_type,
+       round(probability_evaluate(p)::numeric, 6)                    AS prob_default,
+       round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS prob_pw
+  FROM ifr_bt ORDER BY x;
+DO $$
+DECLARE tok uuid; declined boolean := false;
+BEGIN
+  SELECT p INTO tok FROM ifr_bt WHERE x = 1;
+  BEGIN PERFORM probability_evaluate(tok, 'inversion-free');
+  EXCEPTION WHEN OTHERS THEN
+    declined := (SQLERRM ~ 'requires an inversion-free certificate');
+  END;
+  IF NOT declined THEN
+    RAISE EXCEPTION 'explicit inversion-free should have declined on a BID block';
+  END IF;
+END $$;
+SELECT 'BID: explicit inversion-free declines; default sound' AS bid_check;
+
+-- (6c) Malformed certificate: a stray 'C'-prefixed annotation that is not a
+--      valid SafeCert recipe must be read as inert (transparent passthrough),
+--      so evaluation falls back to the wrapped circuit and stays correct.  Build
+--      the token with the analysis off so the only certificate present is the
+--      garbage one we attach by hand.
+SET provsql.inversion_free = off;
+CREATE TABLE ifr_ma(x int);
+INSERT INTO ifr_ma VALUES (1);
+SELECT add_provenance('ifr_ma');
+CREATE TABLE ifr_mb(x int);
+INSERT INTO ifr_mb VALUES (1);
+SELECT add_provenance('ifr_mb');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifr_ma;
+  PERFORM set_prob(provsql, 0.4) FROM ifr_mb;
+END $$;
+CREATE TEMP TABLE ifr_mt AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifr_ma a, ifr_mb b WHERE a.x = b.x GROUP BY a.x;
+SELECT remove_provenance('ifr_mt');
+SET provsql.inversion_free = on;
+SELECT x, round(probability_evaluate(p)::numeric, 6) AS prob_plain,
+          round(probability_evaluate(
+                  annotate(p, 'Cgarbage-not-a-recipe'))::numeric, 6) AS prob_badcert
+  FROM ifr_mt ORDER BY x;
+
 RESET provsql.boolean_provenance;
 RESET provsql.verbose_level;
