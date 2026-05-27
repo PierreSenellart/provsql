@@ -106,7 +106,7 @@ Subcircuit Introspection
 For programmatic exploration of a circuit (rather than a flat formula or
 ASCII diagram), :sqlfunc:`circuit_subgraph` returns a BFS expansion of
 the DAG rooted at a token, capped at a configurable depth. Each row
-describes one ``(parent, node)`` edge — gate type, ``info1`` / ``info2``
+describes one ``(parent, node)`` edge: gate type, ``info1`` / ``info2``
 payload and BFS depth come along on the same row. The root is reported
 once with ``parent`` and ``child_pos`` ``NULL``; a node with several
 parents within the bound is reported once per incoming edge (callers

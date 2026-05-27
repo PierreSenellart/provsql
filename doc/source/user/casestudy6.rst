@@ -209,7 +209,7 @@ Step 3: The Simplifier in Action
 The planner hook emits the comparator as a raw ``gate_cmp``
 regardless of what its operands look like. A *simplifier* pass
 then folds comparators whose answer can be decided from the
-operand support alone — for example, ``U(10, 22) > 35`` is
+operand support alone, for example, ``U(10, 22) > 35`` is
 universally false because the uniform's upper bound is below the
 threshold. The fold is controlled by ``provsql.simplify_on_load``
 (default on), which the Config panel exposes under *Provenance*.
@@ -273,7 +273,7 @@ the out-of-spec ``N(23.33, 1.667)`` contributes only a small
 left shoulder rather than a visually distinct second mode; the
 panel headline reflects this with a mixture mean slightly below
 28. To see clear bimodality, re-run the query with a larger
-calibration error — e.g. replace ``r.pm25 / 1.2`` with
+calibration error, e.g. replace ``r.pm25 / 1.2`` with
 ``r.pm25 / 2.0`` so the out-of-spec arm folds to ``N(14, 1)``,
 well separated from the in-spec ``N(28, 2)``; the two peaks
 then show up distinctly on the histogram even at the 95%/5%

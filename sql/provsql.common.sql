@@ -2467,7 +2467,7 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
  * rewriter then sees a uniform <tt>random_variable</tt> on both sides.
  * Sibling casts below cover @c integer and @c numeric literals so
  * plain <tt>WHERE reading > 2</tt> and <tt>WHERE reading > 2.5</tt>
- * also work — PostgreSQL's operator resolution does not chain casts
+ * also work; PostgreSQL's operator resolution does not chain casts
  * across more than one step, so each numeric-source type needs its
  * own direct cast.
  */
