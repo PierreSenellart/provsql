@@ -852,14 +852,6 @@ extension version.
        :sqlfunc:`probability_benchmark`, :sqlfunc:`tool_available`) and
        the ``provsql.fallback_compiler`` GUC introduced in 1.7.0.
        See :doc:`knowledge-compilation`.
-   * - ``1.4.x``
-     - ``≥ 1.8.0``
-     - Adds the :sc:`IF` badge on ``gate_annotation`` wrappers (the
-       inversion-free certificate / per-input order key), with the
-       inspector surfacing the certificate's variable-block order and each
-       certified leaf's order key and rank. Backed by the inversion-free
-       ``UCQ(OBDD)`` probability path and the ``gate_annotation`` gate type
-       introduced in 1.8.0. See :doc:`probabilities`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to
