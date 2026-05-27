@@ -592,6 +592,32 @@ branches come from a decision on the same separator variable — see risk #1.
   on it stays a defensible *performance* default — a knob, not a soundness
   requirement. Decide in phase 1 whether to run always or keep the cost-gate.
 
+**Decoupled (done).** Detection moved out of the `boolean_provenance` block in
+`process_query` and is gated on its own `provsql.inversion_free` (default on),
+run on the lineage query itself; a cheap self-join pre-check in
+`detect_inversion_free` bails before any catalog lookup when no relation
+repeats, so the always-on analysis is nearly free on non-self-joins. On PG 18 a
+`GROUP BY` query is detected on a stripped copy (`strip_group_rte_pg18`) while
+the lineage is built on the original, so its circuit is unchanged. Two
+incompatibilities surfaced and were handled: the interpreted `provenance_evaluate`
+now treats `annotation` transparently (like `project`); and detection is skipped
+when `provsql.where_provenance` is on, because column-level where-provenance is a
+different provenance regime that the markers perturb.
+
+**Latent where-provenance bug the markers expose (to fix).** `where_provenance`
+builds its sub-circuit from `sub_circuit_for_where`, whose recursive CTE (`UNION
+ALL`) emits a *duplicate (parent,child) edge each time it reaches a shared
+non-input gate via a different path*; `where_provenance.cpp` adds a wire per
+edge, so a shared single-child gate is wired to its child `k` times (`k` =
+number of parent paths).  Inputs dodge this (de-duplicated via a separate
+`DISTINCT` union); the content-addressed per-input markers are the first
+commonly-shared *non-input single-child* gates, and since `annotation` is
+evaluated as a column-concatenating `TIMES`, the child's columns repeat `k`
+times — where-provenance multiplies by `k` (verified: 3 persons → 2 pairs each →
+×2; 4 → 3 → ×3).  Fix is to make `where_provenance` robust to shared gates (dedup
+edges / wires, preserving child order); the `where_provenance`-mode skip is a
+stopgap until then.
+
 ## Critical files
 
 - `src/safe_query.c` – `detect_inversion_free` (4 preconditions incl.

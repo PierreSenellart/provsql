@@ -1264,6 +1264,14 @@ BEGIN
       token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
       INTO result;
 
+  ELSIF gate_type = 'annotation' THEN
+    -- Transparent single-child wrapper (carries the inversion-free certificate
+    -- / per-input order keys in extra, inert for every semiring): evaluate
+    -- through to the child, like 'project'.
+    EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO result;
+
   ELSE
     RAISE EXCEPTION USING MESSAGE='provenance_evaluate cannot be called on formulas using ' || gate_type || ' gates; use compiled semirings instead';
   END IF;

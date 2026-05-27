@@ -4899,6 +4899,29 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     if (!IsA((Node *) lfirst(lc), RangeTblRef))
       return NULL;
 
+  /* --- 0b. cheap self-join pre-check: a self-join (a repeated relation) is
+   * necessary for the inversion-free class, so bail here -- before any catalog
+   * lookup -- when no relation repeats.  This keeps the analysis nearly free on
+   * the common (non-self-join) case now that it runs decoupled from
+   * boolean_provenance (relids come straight from the parse tree). ---------- */
+  {
+    Oid *relids = palloc(natoms * sizeof(Oid));
+    bool found_self_join = false;
+    int a, b;
+    i = 0;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+      if (rte->rtekind != RTE_RELATION) { pfree(relids); return NULL; }
+      relids[i++] = rte->relid;
+    }
+    for (a = 0; a < natoms && !found_self_join; a++)
+      for (b = a + 1; b < natoms; b++)
+        if (relids[a] == relids[b]) { found_self_join = true; break; }
+    pfree(relids);
+    if (!found_self_join)
+      return NULL;
+  }
+
   /* --- 1. metadata gate: every atom a base RTE classified strictly TID;
    * count relation-symbol occurrences to find self-joins and assign ranks --- */
   atom_relid = palloc(natoms * sizeof(Oid));

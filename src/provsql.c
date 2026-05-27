@@ -4554,23 +4554,54 @@ static Query *process_query(const constants_t *constants, Query *q,
      * helper. */
     if (provsql_boolean_provenance &&
         OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN)) {
-      /* Only capture / attach the inversion-free certificate at the outermost
-       * (top-level) query root, the one the user evaluates: wrapping a nested
-       * subquery / UNION-branch root would be both pointless and harmful (the
-       * annotation gate, though transparent for evaluation, changes circuit
-       * structure and would block the outer foldBooleanIdentities absorption
-       * the read-once `independent` path relies on). */
+      /* Read-once rewrite (an operation-mode change: it rewrites the query and
+       * changes the produced circuit), so it is gated on boolean_provenance. */
       Query *rewritten = try_safe_query_rewrite(constants, q);
       if (rewritten)
         return process_query(constants, rewritten, removed, true, top_level);
-      /* No read-once rewrite.  Analyse THIS query (the one whose lineage we are
-       * about to build) for the inversion-free path: the certificate (per-row
-       * root) and the per-input order markers then align with the lineage by
-       * construction, independent of the read-once pre-passes above.  Only at
-       * the top-level root the user evaluates. */
-      if (top_level)
+    }
+
+    /* Inversion-free analysis is *not* an operation-mode change: it leaves the
+     * lineage intact and only attaches a transparent certificate + per-input
+     * order markers, read back at probability evaluation.  So it is decoupled
+     * from boolean_provenance and gated on its own knob (provsql.inversion_free,
+     * default on), run on THIS query — the one whose lineage we build — so the
+     * certificate and markers align with the lineage by construction.  Only at
+     * the outermost (top-level) root the user evaluates; never when the
+     * read-once rewrite above already fired (that path returns early). */
+    /* Not when where-provenance is on: it builds finer, column-level
+     * provenance, which the (semiring-transparent) annotation markers perturb
+     * -- the two are incompatible provenance regimes, and where-provenance is
+     * not the probability regime the markers serve. */
+    if (top_level && provsql_inversion_free && !provsql_where_provenance
+        && OidIsValid(constants->OID_FUNCTION_ANNOTATE)) {
+      /* On PG 18 a GROUP BY query carries a synthetic RTE_GROUP that hides the
+       * base atoms from the detector (and a GROUP BY witness is how the
+       * non-read-once block forms).  Probe on a *stripped copy* so the detector
+       * sees the flat base atoms, and commit the strip to the real query only
+       * if it certifies -- leaving non-certified GROUP BY queries untouched (no
+       * restructuring of unrelated lineage).  Without a group RTE this is just
+       * a direct analysis (no copy). */
+      bool has_group_rte = false;
+#if PG_VERSION_NUM >= 180000
+      has_group_rte = q->hasGroupRTE;
+#endif
+      if (has_group_rte) {
+        /* Detect on a *stripped copy* so the shape gate sees flat base atoms,
+         * but build the lineage on the original (unstripped) q so its circuit
+         * is unchanged -- only transparent markers are added.  The synthetic
+         * RTE_GROUP is appended after the base atoms, so the marker specs
+         * (indexed by base-atom range-table position) apply to q unchanged.
+         * (The size-bounded mismatch backstop in the evaluator declines if a
+         * marker ever fails to land on its input.) */
+        Query *probe = (Query *) copyObject(q);
+        strip_group_rte_pg18(probe);
+        inversion_free_analyze(constants, probe, &inv_cert, &inv_markers,
+                               &inv_natoms);
+      } else {
         inversion_free_analyze(constants, q, &inv_cert, &inv_markers,
                                &inv_natoms);
+      }
     }
 
     // get_provenance_attributes will also recursively process subqueries
