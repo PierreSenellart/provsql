@@ -85,6 +85,7 @@ int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-eval
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
+bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
 bool provsql_boolean_provenance = false; ///< Opt-in safe-query optimisation: when @c true, rewrites hierarchical conjunctive queries to a read-once form whose probability is computable in linear time. The resulting circuit is tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on it. Controlled by the @c provsql.boolean_provenance GUC.
 
 
@@ -5559,6 +5560,34 @@ void _PG_init(void) {
                            "exists for developer A/B testing and as a "
                            "bisection escape valve.",
                            &provsql_cmp_probability_evaluation,
+                           true,
+                           PGC_USERSET,
+                           GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                           NULL,
+                           NULL,
+                           NULL);
+  /* Kill-switch for the automatic inversion-free path in the default
+   * probability chain.  The path only fires when the query carries an
+   * inversion-free certificate (attached by the planner only to certified
+   * queries), so it is self-gating and safe on by default; off is for A/B
+   * testing against the tree-decomposition / d4 fallback.  The explicit
+   * 'inversion-free' method bypasses this flag. */
+  DefineCustomBoolVariable("provsql.inversion_free",
+                           "Use the inversion-free structured-d-DNNF "
+                           "probability path when available.",
+                           "When on (default), probability_evaluate, on a "
+                           "query whose provenance root carries an "
+                           "inversion-free tractability certificate, tries the "
+                           "structured-d-DNNF builder after the read-once "
+                           "independent evaluator and before the "
+                           "tree-decomposition / external-compiler fallback. "
+                           "Off disables only this automatic insertion; the "
+                           "explicit probability_evaluate(token, "
+                           "'inversion-free') method always runs and errors "
+                           "without a certificate. The path is gated on the "
+                           "certificate, attached only to certified queries, "
+                           "so on is safe; off serves developer A/B testing.",
+                           &provsql_inversion_free,
                            true,
                            PGC_USERSET,
                            GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,

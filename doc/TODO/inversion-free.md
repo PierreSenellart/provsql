@@ -241,34 +241,32 @@ the cluster.** The shared contract is in place — `SafeCertKey` plus
 `K`-prefixed sibling of the `C`-recipe, mirroring `StructuredDNNFBuilder`'s
 `InputKey{root,sec,factor}` (phase-1 keys carry the values as `long`, the
 witness's int domain; arbitrary value domains want a comparable text/value-id
-encoding — a documented follow-up). The two remaining halves are entirely
-server-coupled and cannot be developed in the sandbox (no sudo → no
-`make install` / cluster restart / `installcheck`):
+encoding — a documented follow-up).
 
-- **Production (planner).** Wrap each certified atom's provenance column in
-  `annotate(prov, key_expr)`, where `key_expr` builds the `K`-string per row
-  from the tuple's root- and secondary-class column values (recipe
-  `atom_col_class`) and the atom's factor. **Open design issue found here:**
-  the certified path computes the recipe on the *flattened/inlined* `q` inside
-  `try_safe_query_rewrite`, then returns `NULL`, so `process_query` rebuilds the
-  lineage from the **original** `q` — per-atom↔RTE indices need not align once a
-  flatten/inline/PK pre-pass has fired. The root cert tolerates this (it is
-  structure-agnostic and only logged today); per-input markers do **not**, so
-  either re-derive the recipe on the lineage-building `q`, or attach markers
-  only on the alignment-safe flat-`FROM` case (the witness) and skip otherwise
-  (markers absent → safe fallback). The marker is a transparent annotation gate,
-  so attaching it never changes an existing result — blast radius is nil until
-  dispatch consumes it.
-- **Consumption (evaluator).** At the dispatch site (where `getBooleanCircuit`
-  yields `gc_to_bc`), walk `gc` for `K`-annotation gates whose child is a
-  `gate_input`, parse the key, map the child to its Boolean variable via
-  `gc_to_bc`, and feed `StructuredDNNFBuilder`'s keyed constructor. Naturally
-  bundled with the dispatch wiring (it needs the `BooleanCircuit` + `gc_to_bc`,
-  which the cert-read point does not yet have).
+**Consumption (evaluator): done.** `collect_inversion_free_keys`
+(`probability_evaluate.cpp`) walks the `GenericCircuit` for `K`-annotation gates
+over `gate_input` children, parses each key, maps the input to its
+`BooleanCircuit` variable via `gc_to_bc`, and (requiring every Boolean input to
+be ordered) feeds `StructuredDNNFBuilder`'s keyed constructor — wired into both
+the explicit `inversion-free` method and the cert-gated default rung (see §5).
 
-Also still ahead: wiring `StructuredDNNFBuilder` + `dDNNF::probabilityEvaluation`
-into the probability dispatcher behind `provsql.inversion_free` (the build-time
-gap is closed — the frontier sweep is already `Θ(output)`).
+**Production (planner): the remaining piece, server-coupled.** Wrap each
+certified atom's provenance column in `annotate(prov, key_expr)`, where
+`key_expr` builds the `K`-string per row from the tuple's root- and
+secondary-class column values (recipe `atom_col_class`) and the atom's factor.
+**Open design issue:** the certified path computes the recipe on the
+*flattened/inlined* `q` inside `try_safe_query_rewrite`, then returns `NULL`, so
+`process_query` rebuilds the lineage from the **original** `q` — per-atom↔RTE
+indices need not align once a flatten/inline/PK pre-pass has fired. The root
+cert tolerates this (structure-agnostic, only logged today); per-input markers
+do **not**, so either re-derive the recipe on the lineage-building `q`, or
+attach markers only on the alignment-safe flat-`FROM` case (the witness) and
+skip otherwise (markers absent → the consumer declines / errors, a safe
+fallback). The marker is a transparent annotation gate, so attaching it never
+changes an existing result. Until production lands, the explicit method errors
+("inputs lack per-input order markers") and the default rung falls through —
+both inert, awaiting the markers. This is the last step to make the path live,
+and it wants the cluster (`make install` + restart + `installcheck`).
 
 **Future benchmark (read-once overlap).** Hierarchical self-join-free queries
 over TID are *both* read-once and inversion-free, so both the existing
@@ -547,16 +545,30 @@ branches come from a decision on the same separator variable — see risk #1.
 
 ### 5. Integration & guards
 
+- **A named `inversion-free` method, plus a cert-gated default-chain rung
+  (implemented).** Two entry points in `probability_evaluate_internal`:
+  - **Explicit** `probability_evaluate(token,'inversion-free')`: **errors**
+    without an `CERT_INVERSION_FREE` certificate on the root, and errors if the
+    inputs lack per-input order markers; otherwise builds the structured
+    d-DNNF and returns `probabilityEvaluation()`.  Ignores the GUC (an explicit
+    request is always honoured).
+  - **Default** (`method==""`): after `independentEvaluation` (so a read-once
+    query still takes the cheaper path first), *if a certificate is present and
+    the GUC is on*, try the structured d-DNNF **before** `makeDD`
+    (tree-decomposition / d4); on `CircuitException` fall through to the
+    existing chain.  This is a new rung after `independent`, not a hook inside
+    its catch.
 - New GUC `provsql.inversion_free` (bool, `PGC_USERSET`,
   `GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE`), modelled on
-  `provsql.cmp_probability_evaluation`. **Default off in phase 1.**
-- Dispatch block in `probability_evaluate_internal`, in the
-  `independentEvaluation` catch before `makeDD`:
-  `if (GUC on && method in {"",default} && cert.kind==INVERSION_FREE)`,
-  build the structured d-DNNF, `result = dd.probabilityEvaluation()`, mark
-  processed; on
-  `CircuitException` (TID guard, size guard, malformed cert) fall through to
-  the existing chain.
+  `provsql.cmp_probability_evaluation`, **default on** as a kill-switch (the
+  path is self-gating on the certificate, attached only to certified queries,
+  so on is safe; off is for A/B testing and gates only the automatic default
+  rung, never the explicit method).
+- Per-input keys are collected at the dispatch point by
+  `collect_inversion_free_keys`: walk the `GenericCircuit` for `K`-annotation
+  gates over `gate_input` children, parse each key, map the input to its
+  `BooleanCircuit` variable via `gc_to_bc`, and require every Boolean input to
+  be ordered (else the structured path is declined / errors).
 - Probability-path only: semiring evaluators ignore the annotation `extra` as
   inert metadata, and the annotation gate is identity for them.
 - **Detection is decoupled from `provsql.boolean_provenance`.** Unlike the

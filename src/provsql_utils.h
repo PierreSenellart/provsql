@@ -320,6 +320,18 @@ extern bool provsql_hybrid_evaluation;
  *  bisection escape valve. */
 extern bool provsql_cmp_probability_evaluation;
 
+/** @brief Kill-switch for the inversion-free structured-d-DNNF probability
+ *  path; see the @c provsql.inversion_free GUC.
+ *
+ *  When on (default), @c probability_evaluate, on a query carrying an
+ *  inversion-free tractability certificate, tries the structured-d-DNNF
+ *  builder after @c independentEvaluation and before tree-decomposition / d4.
+ *  Off disables only that automatic insertion (for A/B testing); the explicit
+ *  @c probability_evaluate(token,'inversion-free') method ignores this flag.
+ *  The path is self-gating on the certificate, which is attached only to
+ *  certified queries, so leaving it on is safe. */
+extern bool provsql_inversion_free;
+
 /** @brief Opt-in safe-query optimisation for hierarchical conjunctive
  *  queries; see the @c provsql.boolean_provenance GUC.
  *
