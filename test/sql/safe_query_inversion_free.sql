@@ -536,5 +536,58 @@ SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t2_if
           round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t2_pw
   FROM ifm2_t ORDER BY x;
 
+-- (11) Nested subqueries / views (a subquery whose FROM contains another).  The
+--      flattener recurses, collapsing views-over-views to base atoms before
+--      inlining, and composes the slot path so markers reach the base input
+--      through the nested rewrite.  boolean_provenance is off.
+CREATE TABLE ifn_a(x int); INSERT INTO ifn_a VALUES (1),(2),(3);
+SELECT add_provenance('ifn_a');
+CREATE TABLE ifn_b(x int); INSERT INTO ifn_b VALUES (1),(2),(3);
+SELECT add_provenance('ifn_b');
+CREATE TABLE ifn_c(x int); INSERT INTO ifn_c VALUES (1),(2),(3);
+SELECT add_provenance('ifn_c');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifn_a;
+  PERFORM set_prob(provsql, 0.4) FROM ifn_b;
+  PERFORM set_prob(provsql, 0.3) FROM ifn_c;
+END $$;
+
+-- (11a) view over a view (two levels) joined with a base: V2 := SELECT x FROM
+--       V1, V1 := SELECT x FROM A.  Flattens through both levels to A; joined
+--       with B on x.  Matches pw (0.5 * 0.4).
+CREATE VIEW ifn_v1 AS SELECT x FROM ifn_a;
+CREATE VIEW ifn_v2 AS SELECT x FROM ifn_v1;
+CREATE TEMP TABLE ifn_t1 AS
+  SELECT v.x AS x, provenance() AS p
+    FROM ifn_v2 v, ifn_b b WHERE v.x = b.x GROUP BY v.x;
+SELECT remove_provenance('ifn_t1');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t1_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t1_pw
+  FROM ifn_t1 ORDER BY x;
+
+-- (11b) a *multi-relation* inner view nested inside an outer view: the path
+--       composes through a multi-base level.  Inner V := A(x) JOIN B(x) on x,
+--       outer wraps it, joined with C on x -> flat A(x),B(x),C(x) sharing root
+--       x.  Matches pw (0.5 * 0.4 * 0.3).
+CREATE VIEW ifn_in AS SELECT a.x AS x FROM ifn_a a, ifn_b b WHERE a.x = b.x;
+CREATE VIEW ifn_out AS SELECT x FROM ifn_in;
+CREATE TEMP TABLE ifn_t2 AS
+  SELECT o.x AS x, provenance() AS p
+    FROM ifn_out o, ifn_c c WHERE o.x = c.x GROUP BY o.x;
+SELECT remove_provenance('ifn_t2');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t2_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t2_pw
+  FROM ifn_t2 ORDER BY x;
+
+-- (11c) inline nested derived tables (no views): FROM (SELECT FROM (SELECT FROM A)).
+CREATE TEMP TABLE ifn_t3 AS
+  SELECT s2.x AS x, provenance() AS p
+    FROM (SELECT x FROM (SELECT x FROM ifn_a) s1) s2, ifn_b b
+   WHERE s2.x = b.x GROUP BY s2.x;
+SELECT remove_provenance('ifn_t3');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t3_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t3_pw
+  FROM ifn_t3 ORDER BY x;
+
 RESET provsql.boolean_provenance;
 RESET provsql.verbose_level;

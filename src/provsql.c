@@ -4374,11 +4374,19 @@ static void wrap_inversion_free_markers(const constants_t *constants, Query *q,
  * Inversion-free: conjunctive flattening of SPJ subqueries/views
  * ------------------------------------------------------------------------- */
 
-/** @brief Where a flattened base atom came from, for mapping markers back. */
+/**
+ * @brief Where a flattened base atom came from, for mapping markers back.
+ *
+ * A slot @em path from the top lineage query down to the base relation: each
+ * element is a 1-based range-table slot, and the last element is the base's
+ * position within the innermost subquery.  @c depth @c == @c 1 (@c path @c ==
+ * @c [s]) is a base/kept relation directly at top slot @c s; deeper paths step
+ * through one nested SPJ subquery per element, so views-over-views map back to
+ * the right input through the recursive subquery rewrite.
+ */
 typedef struct FlatAtomOrigin {
-  int parent_slot;   /* 1-based original (pre-flatten) parent range-table slot */
-  int sub_base;      /* 1-based base position within that subquery, or -1 when
-                        the parent slot was itself a direct/kept relation */
+  int  depth;
+  int *path;         /* palloc'd, length depth (1-based slot indices) */
 } FlatAtomOrigin;
 
 /** @brief Context for @c flatten_mut (a multi-relation conjunctive inliner). */
@@ -4442,6 +4450,30 @@ static Node *flatten_mut(Node *node, void *cp) {
   return expression_tree_mutator(node, flatten_mut, cp);
 }
 
+/** @brief A depth-1 origin path @c [slot]. */
+static FlatAtomOrigin *flat_origin1(int slot) {
+  FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
+  o->depth = 1;
+  o->path = (int *) palloc(sizeof(int));
+  o->path[0] = slot;
+  return o;
+}
+
+/** @brief Prepend @p slot to @p sub's path, for an atom inlined one level up. */
+static FlatAtomOrigin *flat_origin_prepend(int slot, const FlatAtomOrigin *sub) {
+  FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
+  int d;
+  o->depth = sub->depth + 1;
+  o->path = (int *) palloc(o->depth * sizeof(int));
+  o->path[0] = slot;
+  for (d = 0; d < sub->depth; d++)
+    o->path[d + 1] = sub->path[d];
+  return o;
+}
+
+/* Forward declaration: the flattener recurses into nested subqueries. */
+static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out);
+
 /**
  * @brief In place, inline every SPJ subquery/view of @p probe into its base
  *        relations, flattening to one conjunction of base atoms.
@@ -4492,20 +4524,20 @@ static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out) {
   /* Layout pass: decide which slots inline, append base atoms / kept slots to
    * new_rtable, and record each new position's origin. */
   for (i = 1; parent_flat && i <= N; i++) {
-    RangeTblEntry *rte = list_nth_node(RangeTblEntry, probe->rtable, i - 1);
-    Query         *sq;
-    bool           ok;
-    int            maxres = 0, b;
-    ListCell      *lc2;
-    Var          **tl;
+    RangeTblEntry  *rte = list_nth_node(RangeTblEntry, probe->rtable, i - 1);
+    Query          *sq;
+    bool            ok;
+    int             maxres = 0, b;
+    ListCell       *lc2;
+    Var           **tl;
+    FlatAtomOrigin *sub_origins = NULL;
+    int             sub_n = 0;
 
     if (!(rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL && !rte->lateral)) {
-      FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
       newpos++;
       new_rtable = lappend(new_rtable, rte);
       c.parent_newpos[i] = newpos;
-      o->parent_slot = i; o->sub_base = -1;
-      origins_l = lappend(origins_l, o);
+      origins_l = lappend(origins_l, flat_origin1(i));
       continue;
     }
     sq = rte->subquery;
@@ -4518,6 +4550,13 @@ static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out) {
     if (ok)
       foreach (lc2, sq->jointree->fromlist)
         if (!IsA((Node *) lfirst(lc2), RangeTblRef)) { ok = false; break; }
+    /* Recursively flatten this subquery's own SPJ subqueries first, so a
+     * view-over-views collapses to base atoms before we inline it.  Mutates
+     * sq (a node in the throwaway probe) in place; sub_origins maps sq's
+     * flattened positions back to paths within sq, which we prepend our slot to
+     * so the marker reaches the right base input through the nested rewrite. */
+    if (ok)
+      sub_origins = flatten_spj_subqueries(sq, &sub_n);
     /* every range-table entry a real base relation or a view artifact */
     if (ok) {
       int realbase = 0;
@@ -4559,13 +4598,11 @@ static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out) {
 
     if (!ok) {
       /* not flattenable: keep the slot as-is (detector will reject it) */
-      FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
       if (tl) pfree(tl);
       newpos++;
       new_rtable = lappend(new_rtable, rte);
       c.parent_newpos[i] = newpos;
-      o->parent_slot = i; o->sub_base = -1;
-      origins_l = lappend(origins_l, o);
+      origins_l = lappend(origins_l, flat_origin1(i));
       continue;
     }
 
@@ -4580,12 +4617,16 @@ static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out) {
       RangeTblEntry *br = (RangeTblEntry *) lfirst(lc2);
       ++b;
       if (br->rtekind == RTE_RELATION && br->relkind != RELKIND_VIEW) {
-        FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
         newpos++;
         new_rtable = lappend(new_rtable, copyObject(br));
         c.sub_newpos[i][b] = newpos;
-        o->parent_slot = i; o->sub_base = b;
-        origins_l = lappend(origins_l, o);
+        /* compose: our slot, then the base's path within the (already
+         * recursively flattened) subquery -- so nested views map all the way
+         * down to the base input. */
+        origins_l = lappend(origins_l,
+                            (sub_origins != NULL && b - 1 < sub_n)
+                              ? flat_origin_prepend(i, &sub_origins[b - 1])
+                              : flat_origin1(i));
       }
     }
     any_flat = true;
@@ -4635,10 +4676,14 @@ static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out) {
   }
 
   /* Nothing flattened (no flattenable subquery, or a non-flat parent FROM):
-   * leave probe untouched and return an identity map. */
+   * leave probe untouched and return an identity map (one depth-1 path per slot). */
   *nflat_out = N;
   origins = (FlatAtomOrigin *) palloc(N * sizeof(FlatAtomOrigin));
-  for (i = 0; i < N; i++) { origins[i].parent_slot = i + 1; origins[i].sub_base = -1; }
+  for (i = 0; i < N; i++) {
+    origins[i].depth = 1;
+    origins[i].path = (int *) palloc(sizeof(int));
+    origins[i].path[0] = i + 1;
+  }
   return origins;
 }
 
@@ -4698,41 +4743,55 @@ static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
   ctx->natoms  = N;
   ctx->markers = (InvFreeMarker *) palloc0((size_t) N * sizeof(InvFreeMarker));
   ctx->sub     = (InvFreeMarkerCtx **) palloc0((size_t) N * sizeof(InvFreeMarkerCtx *));
-  /* Map each flattened atom's marker back to q.  With no flattening, flattened
-   * position == q slot (the synthetic group RTE, if any, sits after the base
-   * atoms, so the prefix aligns).  With flattening, the origins map gives the
-   * parent slot and, for an inlined subquery, the base position within it. */
+  /* Map each flattened atom's marker back to q by walking its origin slot path
+   * down the *original* (un-flattened) query tree, creating/sizing a nested
+   * child context at each subquery hop, so the recursive subquery rewrite later
+   * threads the marker to the right base input.  With no flattening, position
+   * == q slot (the synthetic group RTE, if any, sits after the base atoms, so
+   * the prefix aligns), i.e. an implicit depth-1 path. */
   for (p = 0; p < nflat; p++) {
-    int slot, base;
+    int               tmp_path[1];
+    int              *path;
+    int               depth, d, base;
+    InvFreeMarkerCtx *cur = ctx;
+    Query            *qcur = q;
     if (!flat[p].valid)
       continue;
     if (origins != NULL) {
       if (p >= norigins) continue;
-      slot = origins[p].parent_slot;       /* 1-based q slot */
-      base = origins[p].sub_base;           /* 1-based subquery base, or -1 */
+      path  = origins[p].path;
+      depth = origins[p].depth;
     } else {
-      slot = p + 1;
-      base = -1;
+      tmp_path[0] = p + 1;
+      path  = tmp_path;
+      depth = 1;
     }
-    if (slot < 1 || slot > N)
-      continue;
-    if (base < 0) {
-      ctx->markers[slot - 1] = flat[p];                /* direct base atom */
-    } else {
-      RangeTblEntry *rte = list_nth_node(RangeTblEntry, q->rtable, slot - 1);
-      InvFreeMarkerCtx *child = ctx->sub[slot - 1];
-      int sublen = (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL)
-                     ? list_length(rte->subquery->rtable) : 0;
+    /* descend all but the last path element (the nested subquery slots) */
+    for (d = 0; d + 1 < depth && cur != NULL; d++) {
+      int               slot = path[d];
+      RangeTblEntry    *rte;
+      InvFreeMarkerCtx *child;
+      int               sublen;
+      if (slot < 1 || slot > qcur->rtable->length) { cur = NULL; break; }
+      rte = list_nth_node(RangeTblEntry, qcur->rtable, slot - 1);
+      if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL) { cur = NULL; break; }
+      sublen = list_length(rte->subquery->rtable);
+      child = cur->sub[slot - 1];
       if (child == NULL) {
         child = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
         child->natoms  = sublen;
         child->markers = (InvFreeMarker *) palloc0((size_t) sublen * sizeof(InvFreeMarker));
         child->sub     = (InvFreeMarkerCtx **) palloc0((size_t) sublen * sizeof(InvFreeMarkerCtx *));
-        ctx->sub[slot - 1] = child;
+        cur->sub[slot - 1] = child;
       }
-      if (base - 1 < child->natoms)
-        child->markers[base - 1] = flat[p];            /* marker on the inlined base atom */
+      cur  = child;
+      qcur = rte->subquery;
     }
+    if (cur == NULL)
+      continue;
+    base = path[depth - 1];                              /* base slot at the leaf */
+    if (base >= 1 && base - 1 < cur->natoms)
+      cur->markers[base - 1] = flat[p];
   }
   return ctx;
 }
