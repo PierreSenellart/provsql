@@ -201,6 +201,21 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;
 
 /**
+ * @brief Build a per-input order-key string for the inversion-free path.
+ *
+ * Emitted by the planner per certified atom: @c K-prefixed
+ * @c "K<root> <sec> <factor>", parsed back at evaluation by
+ * @c safe_cert_key_parse.  @p root / @p sec are the tuple's root- and
+ * secondary-class column values (text-cast by the caller); @p factor is the
+ * atom's factor id (or -1 for the shared self-join guard).  @c IMMUTABLE so the
+ * planner can fold it and the marker dedups by content-addressing.
+ */
+CREATE OR REPLACE FUNCTION inversion_free_key(root TEXT, sec TEXT, factor INT)
+  RETURNS TEXT AS
+$$ SELECT 'K' || root || ' ' || sec || ' ' || factor::text $$
+  LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/**
  * @brief Set extra text information on provenance circuit gate
  *
  * This function sets text-encoded data associated to a circuit gate, used in

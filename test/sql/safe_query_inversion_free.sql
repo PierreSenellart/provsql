@@ -85,11 +85,46 @@ CREATE TEMP TABLE ifr_path AS
 SELECT remove_provenance('ifr_path');
 SELECT count(*) AS path_rows FROM ifr_path;
 
--- TODO (phase-1 follow-up, after the basics verify): BID-atom and derived/view
--- atom rejections (both are metadata-gate refusals -> no certificate, no
--- acceptance NOTICE), and a correctness cross-check of the witness probability
--- against monte_carlo / possible_worlds once the certificate is consumed
--- (phase 4).
+-- (4) Live path correctness on a NON-read-once witness.  Richer data gives the
+--     root x=1 several (y,z) derivations; GROUP BY x OR-aggregates them into one
+--     provenance token, the inversion-free block
+--       (S(1,10)A(1,10) v S(1,20)A(1,20)) ^ (S(1,20)B(1,20) v S(1,30)B(1,30))
+--     which shares S(1,20), so it is NOT read-once: independentEvaluation
+--     rejects and the default chain takes the inversion-free structured-d-DNNF
+--     rung (markers attached on the certified path, read back at eval).  Its
+--     value must equal exact possible_worlds.  Distinct per-tuple probabilities
+--     make the agreement a real check (hand value 0.2203).
+CREATE TABLE ifr_s2(x int, c2 int);
+INSERT INTO ifr_s2 VALUES (1,10),(1,20),(1,30);
+SELECT add_provenance('ifr_s2');
+CREATE TABLE ifr_a2(x int, c2 int);
+INSERT INTO ifr_a2 VALUES (1,10),(1,20);
+SELECT add_provenance('ifr_a2');
+CREATE TABLE ifr_b2(x int, c2 int);
+INSERT INTO ifr_b2 VALUES (1,20),(1,30);
+SELECT add_provenance('ifr_b2');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifr_s2;
+  PERFORM set_prob(provsql, 0.4) FROM ifr_a2 WHERE c2 = 10;
+  PERFORM set_prob(provsql, 0.6) FROM ifr_a2 WHERE c2 = 20;
+  PERFORM set_prob(provsql, 0.3) FROM ifr_b2 WHERE c2 = 20;
+  PERFORM set_prob(provsql, 0.7) FROM ifr_b2 WHERE c2 = 30;
+END $$;
+
+CREATE TEMP TABLE ifr_block AS
+  SELECT s1.x AS x, provenance() AS p
+    FROM ifr_s2 s1, ifr_a2 a, ifr_s2 s2, ifr_b2 b
+   WHERE s1.x = a.x AND s1.c2 = a.c2
+     AND s1.x = s2.x
+     AND s2.x = b.x AND s2.c2 = b.c2
+   GROUP BY s1.x;
+SELECT remove_provenance('ifr_block');
+SELECT count(*) AS block_rows FROM ifr_block;
+-- default chain (inversion-free rung) vs explicit method vs exact oracle: equal.
+SELECT round(probability_evaluate(p)::numeric, 8)                   AS block_default,
+       round(probability_evaluate(p, 'inversion-free')::numeric, 8) AS block_if,
+       round(probability_evaluate(p, 'possible-worlds')::numeric, 8) AS block_pw
+  FROM ifr_block;
 
 RESET provsql.boolean_provenance;
 RESET provsql.verbose_level;

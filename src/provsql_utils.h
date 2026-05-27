@@ -164,6 +164,13 @@ typedef struct constants_t {
    *  per-input order keys.  @c InvalidOid on a schema predating the gate
    *  (the inversion-free carrier is then disabled). */
   Oid OID_FUNCTION_ANNOTATE;
+  /** @brief OID of @c provsql.inversion_free_key(text,text,int)->text.
+   *
+   *  Builds the @c K-prefixed per-input order-key string the planner attaches
+   *  (via @c annotate) to each certified atom's provenance on the
+   *  inversion-free path.  @c InvalidOid on a schema predating it (markers are
+   *  then not attached; the path declines and falls back). */
+  Oid OID_FUNCTION_INVERSION_FREE_KEY;
   /** OIDs of the @c random_variable_{eq,ne,le,lt,ge,gt} comparison
    * procedure functions, indexed by the @c ComparisonOperator enum
    * (@c EQ=0, @c NE=1, @c LE=2, @c LT=3, @c GE=4, @c GT=5; matches the

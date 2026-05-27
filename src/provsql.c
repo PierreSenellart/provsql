@@ -4253,6 +4253,109 @@ static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
   return (Expr *) wrap;
 }
 
+/** @brief Mark column @p attno of RTE @p r as selected (read permission). */
+static void mark_col_selected(Query *q, RangeTblEntry *r, AttrNumber attno) {
+#if PG_VERSION_NUM >= 160000
+  if (r->perminfoindex != 0) {
+    RTEPermissionInfo *rpi =
+      list_nth_node(RTEPermissionInfo, q->rteperminfos, r->perminfoindex - 1);
+    rpi->selectedCols = bms_add_member(
+      rpi->selectedCols, attno - FirstLowInvalidHeapAttributeNumber);
+  }
+#else
+  r->selectedCols = bms_add_member(r->selectedCols,
+                                   attno - FirstLowInvalidHeapAttributeNumber);
+#endif
+}
+
+/** @brief A @c Var for column @p attno of RTE @p relid, with the column's
+ *         actual type/typmod/collation, marking the column selected. */
+static Var *make_column_var(Query *q, RangeTblEntry *r, Index relid,
+                            AttrNumber attno) {
+  Oid typid; int32 typmod; Oid coll;
+  Var *v;
+  get_atttypetypmodcoll(r->relid, attno, &typid, &typmod, &coll);
+  v = makeVar(relid, attno, typid, typmod, coll, 0);
+  v->location = -1;
+  mark_col_selected(q, r, attno);
+  return v;
+}
+
+/** @brief Coerce @p arg to @c text via its output function (any type -> text). */
+static Expr *coerce_via_io_to_text(Expr *arg) {
+  CoerceViaIO *c = makeNode(CoerceViaIO);
+  c->arg = arg;
+  c->resulttype = TEXTOID;
+  c->resultcollid = DEFAULT_COLLATION_OID;
+  c->coerceformat = COERCE_IMPLICIT_CAST;
+  c->location = -1;
+  return (Expr *) c;
+}
+
+/**
+ * @brief Wrap an atom's provenance @c Var in the inversion-free per-input
+ *        order marker: @c annotate(prov, inversion_free_key(root, sec, factor)).
+ *
+ * @p prov_var is a @c Var on the atom's provsql column (its @c varno is the
+ * range-table index of the atom); @p m gives the root- and secondary-class
+ * columns and the factor for that atom.
+ */
+static Expr *build_inversion_free_marker(const constants_t *constants, Query *q,
+                                         Var *prov_var, const InvFreeMarker *m) {
+  Index relid = prov_var->varno;
+  RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, relid - 1);
+  Var *rootv = make_column_var(q, r, relid, m->root_col);
+  Var *secv  = make_column_var(q, r, relid, m->sec_col);
+  Const *factorc = makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                             Int32GetDatum(m->factor), false, true);
+  FuncExpr *keyf = makeNode(FuncExpr);
+  FuncExpr *ann = makeNode(FuncExpr);
+
+  keyf->funcid = constants->OID_FUNCTION_INVERSION_FREE_KEY;
+  keyf->funcresulttype = TEXTOID;
+  keyf->funcretset = false;
+  keyf->funcvariadic = false;
+  keyf->funcformat = COERCE_EXPLICIT_CALL;
+  keyf->funccollid = DEFAULT_COLLATION_OID;
+  keyf->inputcollid = DEFAULT_COLLATION_OID;
+  keyf->args = list_make3(coerce_via_io_to_text((Expr *) rootv),
+                          coerce_via_io_to_text((Expr *) secv),
+                          (Expr *) factorc);
+  keyf->location = -1;
+
+  ann->funcid = constants->OID_FUNCTION_ANNOTATE;
+  ann->funcresulttype = constants->OID_TYPE_UUID;
+  ann->funcretset = false;
+  ann->funcvariadic = false;
+  ann->funcformat = COERCE_EXPLICIT_CALL;
+  ann->funccollid = InvalidOid;
+  ann->inputcollid = DEFAULT_COLLATION_OID;
+  ann->args = list_make2((Expr *) prov_var, (Expr *) keyf);
+  ann->location = -1;
+  return (Expr *) ann;
+}
+
+/**
+ * @brief Replace each certified atom's provenance @c Var in @p prov_atts with
+ *        its per-input-marker-wrapped form (in place).
+ */
+static void wrap_inversion_free_markers(const constants_t *constants, Query *q,
+                                        List *prov_atts,
+                                        const InvFreeMarker *markers,
+                                        int natoms) {
+  ListCell *lc;
+  foreach (lc, prov_atts) {
+    Node *n = (Node *) lfirst(lc);
+    if (IsA(n, Var)) {
+      Var *pv = (Var *) n;
+      if (pv->varno >= 1 && (int) pv->varno <= natoms
+          && markers[pv->varno - 1].valid)
+        lfirst(lc) = build_inversion_free_marker(constants, q, pv,
+                                                 &markers[pv->varno - 1]);
+    }
+  }
+}
+
 /**
  * @brief Rewrite a single SELECT query to carry provenance.
  *
@@ -4292,6 +4395,8 @@ static Query *process_query(const constants_t *constants, Query *q,
   int **columns;
   unsigned i = 0;
   char *inv_cert = NULL;            /* serialised inversion-free certificate */
+  InvFreeMarker *inv_markers = NULL;/* per-atom inversion-free order markers */
+  int inv_natoms = 0;               /* length of inv_markers */
   if (provsql_verbose >= 50)
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
@@ -4455,17 +4560,30 @@ static Query *process_query(const constants_t *constants, Query *q,
        * annotation gate, though transparent for evaluation, changes circuit
        * structure and would block the outer foldBooleanIdentities absorption
        * the read-once `independent` path relies on). */
-      Query *rewritten =
-        try_safe_query_rewrite(constants, q, top_level ? &inv_cert : NULL);
+      Query *rewritten = try_safe_query_rewrite(constants, q);
       if (rewritten)
         return process_query(constants, rewritten, removed, true, top_level);
-      /* No read-once rewrite; inv_cert may now hold an inversion-free
-       * certificate to attach to this query's per-row provenance root. */
+      /* No read-once rewrite.  Analyse THIS query (the one whose lineage we are
+       * about to build) for the inversion-free path: the certificate (per-row
+       * root) and the per-input order markers then align with the lineage by
+       * construction, independent of the read-once pre-passes above.  Only at
+       * the top-level root the user evaluates. */
+      if (top_level)
+        inversion_free_analyze(constants, q, &inv_cert, &inv_markers,
+                               &inv_natoms);
     }
 
     // get_provenance_attributes will also recursively process subqueries
     // by calling process_query
     prov_atts = get_provenance_attributes(constants, q);
+
+    /* Inversion-free path: wrap each certified atom's provenance token in its
+     * per-input order marker.  prov_atts are base-relation Vars (the certified
+     * class has only RTE_RELATION atoms and no agg/distinct/set-op restructuring,
+     * so each Var's varno is still the atom's range-table index). */
+    if (inv_markers != NULL)
+      wrap_inversion_free_markers(constants, q, prov_atts, inv_markers,
+                                  inv_natoms);
 
     if (prov_atts == NIL) {
       /* If the WHERE clause contains a random_variable comparison, we

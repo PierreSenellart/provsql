@@ -33,15 +33,43 @@ extern bool provsql_boolean_provenance;
  * @param q          Input @c Query, modified in place by side-effect-free
  *                   helpers but @em not consumed; the rewriter
  *                   @c copyObject's it before mutating.
- * @param inv_cert_out  Out: when the query is not rewritten but is recognised
- *                   as inversion-free @c UCQ(OBDD), set to a palloc'd,
- *                   @c C-prefixed serialised @c SafeCert recipe (the caller
- *                   wraps the per-row provenance root in @c annotate with it);
- *                   set to @c NULL otherwise.  May be @c NULL to opt out.
  * @return A fresh rewritten @c Query, or @c NULL to fall through.
  */
-extern Query *try_safe_query_rewrite(const constants_t *constants, Query *q,
-                                     char **inv_cert_out);
+extern Query *try_safe_query_rewrite(const constants_t *constants, Query *q);
+
+/**
+ * @brief Per-atom marker spec for the inversion-free path.
+ *
+ * One entry per range-table atom (indexed by @c relid-1).  When @c valid, the
+ * planner wraps that atom's provenance token in
+ * @c annotate(prov, inversion_free_key(root_col, sec_col, factor)) — a
+ * per-input order key built from the tuple's root- and secondary-class column
+ * values and its factor (@c SAFE_CERT_GUARD_FACTOR for the shared self-join
+ * guard, else a per-factor id).
+ */
+typedef struct InvFreeMarker {
+  bool       valid;
+  AttrNumber root_col;   /* 1-based root-class column */
+  AttrNumber sec_col;    /* 1-based secondary-class column */
+  int        factor;     /* SAFE_CERT_GUARD_FACTOR, or a factor id */
+} InvFreeMarker;
+
+/**
+ * @brief Inversion-free analysis of the lineage query @p q.
+ *
+ * Runs the detector on @p q itself (the query whose provenance lineage is being
+ * built), so the certificate and the per-atom marker specs align with the
+ * lineage by construction — independent of any read-once pre-pass.  On success
+ * sets @p cert_out to a palloc'd @c C-prefixed serialised @c SafeCert recipe
+ * (for the per-row root) and, when the marker model applies, @p markers_out to
+ * a palloc'd array of @c *natoms_out @c InvFreeMarker (one per atom); otherwise
+ * leaves them @c NULL.
+ *
+ * @return @c true if @p q is certified inversion-free (cert produced).
+ */
+extern bool inversion_free_analyze(const constants_t *constants, Query *q,
+                                   char **cert_out, InvFreeMarker **markers_out,
+                                   int *natoms_out);
 
 /**
  * @brief PG 18 helper: strip the synthetic @c RTE_GROUP entry from

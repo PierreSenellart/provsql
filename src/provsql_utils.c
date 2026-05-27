@@ -465,6 +465,12 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_ANNOTATE =
     get_provsql_func_oid("annotate");
 
+  /* inversion_free_key(text,text,int) -- builds the per-input order-key string
+   * for the inversion-free path.  Optional: InvalidOid on an older schema
+   * disables per-input markers (the path then declines and falls back). */
+  constants.OID_FUNCTION_INVERSION_FREE_KEY =
+    get_provsql_func_oid("inversion_free_key");
+
   /* random_variable_{eq,ne,le,lt,ge,gt} -- order matches the
    * ComparisonOperator enum in src/Aggregation.h (EQ=0, NE=1, LE=2,
    * LT=3, GE=4, GT=5). */

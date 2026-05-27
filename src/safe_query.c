@@ -5087,8 +5087,98 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
 #undef CCLASS
 }
 
-Query *try_safe_query_rewrite(const constants_t *constants, Query *q,
-                              char **inv_cert_out) {
+/**
+ * @brief Derive per-atom marker specs from a SafeCert recipe.
+ *
+ * Phase-1 consistent-unification self-join model: exactly one self-join (guard)
+ * relation; every atom binds the root class at one column and exactly one
+ * secondary class at one column; each secondary class has at most one payload
+ * (non-guard) atom (one payload per factor).  Sets @p m[a] for every atom on
+ * success.  Returns @c false when @p cert is outside this model (the caller
+ * then attaches no markers and the inversion-free path declines at evaluation).
+ */
+static bool compute_inversion_free_markers(const SafeCert *cert, InvFreeMarker *m)
+{
+  int  natoms = cert->natoms, ma = cert->maxarity, a, col;
+  int  maxrank = 0, nguard = 0;
+  int *rank_count;
+  int *payload_class_seen;
+
+  for (a = 0; a < natoms; a++)
+    if (cert->atom_relation_rank[a] > maxrank) maxrank = cert->atom_relation_rank[a];
+  rank_count = palloc0((maxrank + 1) * sizeof(int));
+  for (a = 0; a < natoms; a++) rank_count[cert->atom_relation_rank[a]]++;
+  for (a = 0; a <= maxrank; a++) if (rank_count[a] >= 2) nguard++;
+  if (nguard != 1) { pfree(rank_count); return false; }   /* one guard relation */
+
+  payload_class_seen = palloc0((cert->nclasses > 0 ? cert->nclasses : 1) * sizeof(int));
+  for (a = 0; a < natoms; a++) {
+    int  root_col = -1, sec_col = -1, sec_class = -1, nsec = 0;
+    bool is_guard = (rank_count[cert->atom_relation_rank[a]] >= 2);
+    for (col = 0; col < ma; col++) {
+      int cl = cert->atom_col_class[a * ma + col];
+      if (cl < 0) continue;
+      if (cl == cert->root_class) {
+        if (root_col >= 0) { pfree(rank_count); pfree(payload_class_seen); return false; }
+        root_col = col + 1;
+      } else {
+        sec_col = col + 1; sec_class = cl; nsec++;
+      }
+    }
+    if (root_col < 0 || nsec != 1) { pfree(rank_count); pfree(payload_class_seen); return false; }
+    m[a].valid = true;
+    m[a].root_col = (AttrNumber) root_col;
+    m[a].sec_col = (AttrNumber) sec_col;
+    if (is_guard) {
+      m[a].factor = SAFE_CERT_GUARD_FACTOR;
+    } else {
+      if (payload_class_seen[sec_class]) { pfree(rank_count); pfree(payload_class_seen); return false; }
+      payload_class_seen[sec_class] = 1;
+      m[a].factor = sec_class;
+    }
+  }
+  pfree(rank_count); pfree(payload_class_seen);
+  return true;
+}
+
+bool inversion_free_analyze(const constants_t *constants, Query *q,
+                            char **cert_out, InvFreeMarker **markers_out,
+                            int *natoms_out)
+{
+  SafeCert *cert;
+
+  if (cert_out)    *cert_out = NULL;
+  if (markers_out) *markers_out = NULL;
+  if (natoms_out)  *natoms_out = 0;
+
+  cert = detect_inversion_free(constants, q);
+  if (cert == NULL)
+    return false;
+
+  if (provsql_verbose >= 1)
+    provsql_notice("%s [certificate attached]", safe_cert_describe(cert));
+
+  if (cert_out && OidIsValid(constants->OID_FUNCTION_ANNOTATE))
+    *cert_out = safe_cert_serialise(cert);
+
+  /* Per-input markers: only when the carrier and the key builder both exist and
+   * the cert fits the phase-1 marker model; otherwise the cert is still
+   * attached (root) but the path declines at evaluation and falls back. */
+  if (markers_out
+      && OidIsValid(constants->OID_FUNCTION_ANNOTATE)
+      && OidIsValid(constants->OID_FUNCTION_INVERSION_FREE_KEY)) {
+    InvFreeMarker *m = (InvFreeMarker *) palloc0(cert->natoms * sizeof(InvFreeMarker));
+    if (compute_inversion_free_markers(cert, m)) {
+      *markers_out = m;
+      if (natoms_out) *natoms_out = cert->natoms;
+    } else {
+      pfree(m);
+    }
+  }
+  return true;
+}
+
+Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   List   *atoms;
   List   *groups = NIL;
   Node   *residual = NULL;
@@ -5097,9 +5187,6 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q,
   int     natoms;
   int     i;
   ListCell *lc;
-
-  if (inv_cert_out)
-    *inv_cert_out = NULL;
 
 #if PG_VERSION_NUM >= 180000
   /* Same trick as rewrite_agg_distinct: PG 18's RTE_GROUP virtual
@@ -5169,21 +5256,10 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q,
       if (approved)
         bms_free(approved);
       /* The read-once candidate gate refused (most often an un-rescued
-       * self-join).  Try the inversion-free detector as a sibling.  We do not
-       * rewrite the query (the lineage is left intact); instead we hand the
-       * serialised certificate back to the caller, which wraps the per-row
-       * provenance root in an annotation gate carrying it.  Only attempted
-       * when the caller asked for it (@p inv_cert_out non-NULL) -- i.e. at the
-       * top-level query root, never on a nested subquery / UNION-branch root. */
-      if (inv_cert_out != NULL) {
-        SafeCert *cert = detect_inversion_free(constants, q);
-        if (cert != NULL) {
-          if (provsql_verbose >= 1)
-            provsql_notice("%s [certificate attached]", safe_cert_describe(cert));
-          if (OidIsValid(constants->OID_FUNCTION_ANNOTATE))
-            *inv_cert_out = safe_cert_serialise(cert);
-        }
-      }
+       * self-join).  The inversion-free path is handled separately by
+       * @c inversion_free_analyze, run by @c process_query on the lineage query
+       * itself (so the certificate and per-input markers align with the lineage
+       * regardless of the read-once pre-passes above). */
       return NULL;
     }
     if (approved)

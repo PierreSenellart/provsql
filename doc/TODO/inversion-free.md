@@ -250,23 +250,34 @@ over `gate_input` children, parses each key, maps the input to its
 be ordered) feeds `StructuredDNNFBuilder`'s keyed constructor — wired into both
 the explicit `inversion-free` method and the cert-gated default rung (see §5).
 
-**Production (planner): the remaining piece, server-coupled.** Wrap each
-certified atom's provenance column in `annotate(prov, key_expr)`, where
-`key_expr` builds the `K`-string per row from the tuple's root- and
-secondary-class column values (recipe `atom_col_class`) and the atom's factor.
-**Open design issue:** the certified path computes the recipe on the
-*flattened/inlined* `q` inside `try_safe_query_rewrite`, then returns `NULL`, so
-`process_query` rebuilds the lineage from the **original** `q` — per-atom↔RTE
-indices need not align once a flatten/inline/PK pre-pass has fired. The root
-cert tolerates this (structure-agnostic, only logged today); per-input markers
-do **not**, so either re-derive the recipe on the lineage-building `q`, or
-attach markers only on the alignment-safe flat-`FROM` case (the witness) and
-skip otherwise (markers absent → the consumer declines / errors, a safe
-fallback). The marker is a transparent annotation gate, so attaching it never
-changes an existing result. Until production lands, the explicit method errors
-("inputs lack per-input order markers") and the default rung falls through —
-both inert, awaiting the markers. This is the last step to make the path live,
-and it wants the cluster (`make install` + restart + `installcheck`).
+**Production (planner): done — the path is live.** Detection moved out of
+`try_safe_query_rewrite` into `process_query` (`inversion_free_analyze`), run on
+the **lineage query itself** — so the certificate and the per-input marker specs
+align with the lineage by construction, with no dependence on the read-once
+pre-passes (which operate on a throwaway copy for their own candidate check).
+This dissolves the earlier flattened-`q`/original-`q` alignment issue. From the
+cert's `atom_col_class` / `root_class`, `compute_inversion_free_markers` derives
+per atom its `(root_col, sec_col, factor)` — `SAFE_CERT_GUARD_FACTOR` for the
+self-join relation (≥2 occurrences), else the secondary class as the factor id
+(one payload per factor enforced; out-of-model cases skip markers and fall
+back). `process_query` then wraps each certified atom's provenance Var in
+`annotate(prov, inversion_free_key(root_col::text, sec_col::text, factor))`
+(new `IMMUTABLE` SQL helper in `provsql.common.sql`), the columns coerced via
+output-function casts. Scope: the flat-`FROM` conjunctive class (the witness);
+inner-join/view forms — which never had working markers — are a later extension
+(flatten/inline the lineage `q` before analysing). Phase-1 keys carry int-domain
+column values; other value domains parse-fail gracefully → markers ignored →
+fallback.
+
+**End-to-end validation (on the cluster).** `make installcheck` green (172/172,
+no regression). On a *genuinely non-read-once* witness —
+`SELECT s1.x, provenance() … GROUP BY s1.x` over the shared-`S` self-join, whose
+block `(S₁₀A₁₀∨S₂₀A₂₀)∧(S₂₀B₂₀∨S₃₀B₃₀)` shares `S(1,20)` so
+`independentEvaluation` rejects — the default chain takes the inversion-free rung
+and the structured d-DNNF returns `0.22030000`, matching exact `possible-worlds`
+and `monte-carlo` (and a hand computation). With `provsql.inversion_free` off the
+default chain falls back to tree-decomposition (same `0.2203`); the explicit
+`inversion-free` method ignores the GUC and still computes it.
 
 **Future benchmark (read-once overlap).** Hierarchical self-join-free queries
 over TID are *both* read-once and inversion-free, so both the existing
