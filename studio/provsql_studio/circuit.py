@@ -543,18 +543,32 @@ def _parse_if_cert(extra: str | None) -> dict | None:
 
 
 def _parse_if_key(extra: str | None) -> dict | None:
-    """Parse a 'K'-prefixed per-input order key ``K<root> <sec> <factor>``.
-
-    ``factor == -1`` marks the shared self-join guard
-    (``SAFE_CERT_GUARD_FACTOR``); other values are the secondary class.
+    """Parse a 'K'-prefixed per-input order key
+    ``K<factor> <root_len>:<root><sec_len>:<sec>`` (byte length-prefixed so the
+    root / secondary class values may be of any column type -- including text
+    with spaces, colons or digits -- not just integers).  ``root`` / ``sec`` are
+    returned as their value text.  ``factor == -1`` marks the shared self-join
+    guard (``SAFE_CERT_GUARD_FACTOR``); other values index the secondary class.
     """
     if not extra or extra[:1] != "K":
         return None
     try:
-        root, sec, factor = (int(x) for x in extra[1:].split())
-    except ValueError:
+        raw = extra[1:].encode("utf-8")
+        factor_b, raw = raw.split(b" ", 1)
+        factor = int(factor_b)
+        root_len_b, raw = raw.split(b":", 1)
+        root_len = int(root_len_b)
+        root, raw = raw[:root_len], raw[root_len:]
+        sec_len_b, raw = raw.split(b":", 1)
+        sec_len = int(sec_len_b)
+        sec = raw[:sec_len]
+    except (ValueError, IndexError):
         return None
-    return {"root": root, "sec": sec, "factor": factor}
+    return {
+        "root": root.decode("utf-8", "replace"),
+        "sec": sec.decode("utf-8", "replace"),
+        "factor": factor,
+    }
 
 
 def _elide_markers(

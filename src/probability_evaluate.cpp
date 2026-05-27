@@ -118,14 +118,16 @@ static bool collect_inversion_free_keys(
     gate_t g = st.top(); st.pop();
     if (!seen.insert(g).second) continue;
     if (gc.getGateType(g) == gate_annotation) {
+      std::string ex = gc.getExtra(g);   // must outlive the parse (k points into it)
       SafeCertKey k;
-      if (safe_cert_key_parse(gc.getExtra(g).c_str(), &k)) {
+      if (safe_cert_key_parse(ex.c_str(), &k)) {
         const auto &w = gc.getWires(g);
         if (!w.empty() && gc.getGateType(w[0]) == gate_input) {
           auto it = gc_to_bc.find(w[0]);
           if (it != gc_to_bc.end())
             out[it->second] = StructuredDNNFBuilder::InputKey{
-              (int) k.root, (int) k.sec, k.factor };
+              std::string(k.root, k.root_len),
+              std::string(k.sec, k.sec_len), k.factor };
         }
       }
     }

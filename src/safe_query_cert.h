@@ -16,6 +16,8 @@
 #ifndef SAFE_QUERY_CERT_H
 #define SAFE_QUERY_CERT_H
 
+#include <stddef.h>  /* size_t */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -85,32 +87,41 @@ extern SafeCert *safe_cert_parse(const char *str);
  * factor of its tile.  This is the wire form of @c StructuredDNNFBuilder's
  * @c InputKey.
  *
- * @c root and @c sec are the tuple's physical column values; phase-1 keys carry
- * them as @c long (the canonical-int domain of the witness).  Generalising to
- * arbitrary value domains (a comparable text / value-id encoding) is a
- * documented follow-up: grouping needs exact value identity, ordering only a
- * consistent total order.
+ * @c root and @c sec are the tuple's column values as text (the canonical output
+ * of the column type's I/O function), carried verbatim so the key works for any
+ * column type, not just integers.  The builder uses them only for grouping
+ * (equal text => same block / tile) and a consistent total order, so an exact,
+ * type-faithful text rendering is all that is required; @c root / @c sec point
+ * into the parsed wire string and are @em not NUL-terminated (use the lengths).
  */
 #define SAFE_CERT_GUARD_FACTOR (-1)  /* factor of a shared self-join guard */
 
 typedef struct SafeCertKey {
-  long root;    /* root-class value (block) */
-  long sec;     /* secondary-class value (tile) */
-  int  factor;  /* factor id, or SAFE_CERT_GUARD_FACTOR for a shared guard */
+  const char *root;     /* root-class value text (block); root_len bytes */
+  size_t      root_len;
+  const char *sec;      /* secondary-class value text (tile); sec_len bytes */
+  size_t      sec_len;
+  int         factor;   /* factor id, or SAFE_CERT_GUARD_FACTOR for a shared guard */
 } SafeCertKey;
 
 /**
  * @brief Serialise a per-input order key to a compact @c K-prefixed string
- *        (palloc'd).  Wire form: @c "K<root> <sec> <factor>".  Inverse of
+ *        (palloc'd).  Wire form:
+ *        @c "K<factor> <root_len>:<root><sec_len>:<sec>" -- the byte-length
+ *        prefixes keep arbitrary value text unambiguous.  Inverse of
  *        @c safe_cert_key_parse.  (The planner builds the equivalent string per
- *        row from the tuple's column values; this C form is for the evaluator
- *        and tests.)
+ *        row via @c inversion_free_key; this C form is for the evaluator and
+ *        tests.)
  */
-extern char *safe_cert_key_serialise(long root, long sec, int factor);
+extern char *safe_cert_key_serialise(const char *root, size_t root_len,
+                                     const char *sec, size_t sec_len,
+                                     int factor);
 
 /**
- * @brief Parse a @c K-prefixed order-key string into @p out.  Returns @c false
- *        if @p str is NULL, not @c K-prefixed, or malformed (@p out untouched).
+ * @brief Parse a @c K-prefixed order-key string into @p out.  On success
+ *        @c out->root / @c out->sec point into @p str (valid for its lifetime).
+ *        Returns @c false if @p str is NULL, not @c K-prefixed, or malformed
+ *        (@p out untouched).
  */
 extern bool safe_cert_key_parse(const char *str, SafeCertKey *out);
 

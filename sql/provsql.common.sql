@@ -203,16 +203,20 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
 /**
  * @brief Build a per-input order-key string for the inversion-free path.
  *
- * Emitted by the planner per certified atom: @c K-prefixed
- * @c "K<root> <sec> <factor>", parsed back at evaluation by
- * @c safe_cert_key_parse.  @p root / @p sec are the tuple's root- and
- * secondary-class column values (text-cast by the caller); @p factor is the
- * atom's factor id (or -1 for the shared self-join guard).  @c IMMUTABLE so the
- * planner can fold it and the marker dedups by content-addressing.
+ * Emitted by the planner per certified atom: @c K-prefixed, length-prefixed
+ * @c "K<factor> <octet_length(root)>:<root><octet_length(sec)>:<sec>", parsed
+ * back at evaluation by @c safe_cert_key_parse.  @p root / @p sec are the
+ * tuple's root- and secondary-class column values (text-cast by the caller);
+ * the byte-length prefixes keep the values unambiguous for @em any column type,
+ * including text containing spaces, colons or digits.  @p factor is the atom's
+ * factor id (or -1 for the shared self-join guard).  @c IMMUTABLE so the planner
+ * can fold it and the marker dedups by content-addressing.
  */
 CREATE OR REPLACE FUNCTION inversion_free_key(root TEXT, sec TEXT, factor INT)
   RETURNS TEXT AS
-$$ SELECT 'K' || root || ' ' || sec || ' ' || factor::text $$
+$$ SELECT 'K' || factor::text || ' '
+       || octet_length(root) || ':' || root
+       || octet_length(sec)  || ':' || sec $$
   LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 /**

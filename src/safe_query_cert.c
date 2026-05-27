@@ -14,7 +14,8 @@
  *     <atom_col_class[0..natoms*maxarity-1]>
  *
  * A per-input order key uses the sibling @c SAFE_CERT_EXTRA_PREFIX_KEY ('K')
- * form @c "K<root> <sec> <factor>" (see @c safe_cert_key_serialise).
+ * form @c "K<factor> <root_len>:<root><sec_len>:<sec>", length-prefixed so the
+ * class values may be arbitrary text (see @c safe_cert_key_serialise).
  *
  * All functions are pure (no SPI / no catalog access) so the parsers are safe
  * to call from the C++ evaluation side.
@@ -26,6 +27,7 @@
 #include "safe_query_cert.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 char *safe_cert_serialise(const SafeCert *cert)
 {
@@ -106,33 +108,53 @@ SafeCert *safe_cert_parse(const char *str)
   return cert;
 }
 
-char *safe_cert_key_serialise(long root, long sec, int factor)
+char *safe_cert_key_serialise(const char *root, size_t root_len,
+                              const char *sec, size_t sec_len, int factor)
 {
   StringInfoData s;
   initStringInfo(&s);
   appendStringInfoChar(&s, SAFE_CERT_EXTRA_PREFIX_KEY);
-  appendStringInfo(&s, "%ld %ld %d", root, sec, factor);
+  appendStringInfo(&s, "%d %zu:", factor, root_len);
+  appendBinaryStringInfo(&s, root, (int) root_len);
+  appendStringInfo(&s, "%zu:", sec_len);
+  appendBinaryStringInfo(&s, sec, (int) sec_len);
   return s.data;
 }
 
 bool safe_cert_key_parse(const char *str, SafeCertKey *out)
 {
-  const char *p;
+  const char *p, *limit;
   char *end;
   SafeCertKey k;
+  long n;
 
   if (str == NULL || str[0] != SAFE_CERT_EXTRA_PREFIX_KEY)
     return false;
 
   p = str + 1;
-  k.root = strtol(p, &end, 10);
-  if (end == p) return false;
-  p = end;
-  k.sec = strtol(p, &end, 10);
-  if (end == p) return false;
-  p = end;
+  limit = p + strlen(p);
+
+  /* factor, then a single separating space */
   k.factor = (int) strtol(p, &end, 10);
-  if (end == p) return false;
+  if (end == p || *end != ' ') return false;
+  p = end + 1;
+
+  /* root: <byte-length>:<bytes> */
+  n = strtol(p, &end, 10);
+  if (end == p || n < 0 || *end != ':') return false;
+  p = end + 1;
+  if ((size_t)(limit - p) < (size_t) n) return false;
+  k.root = p;
+  k.root_len = (size_t) n;
+  p += n;
+
+  /* sec: <byte-length>:<bytes> */
+  n = strtol(p, &end, 10);
+  if (end == p || n < 0 || *end != ':') return false;
+  p = end + 1;
+  if ((size_t)(limit - p) < (size_t) n) return false;
+  k.sec = p;
+  k.sec_len = (size_t) n;
 
   if (out != NULL)
     *out = k;

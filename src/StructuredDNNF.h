@@ -88,7 +88,7 @@ public:
    * order-only constructor above; the struct is the carrier between the marker
    * collection and that flattening.
    */
-  struct InputKey { int root; int sec; int factor; };
+  struct InputKey { std::string root; std::string sec; int factor; };
   static constexpr int GUARD_FACTOR = -1;
 
   /** @brief The constructed d-DNNF (root set, simplified). */
