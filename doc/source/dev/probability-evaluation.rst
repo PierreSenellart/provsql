@@ -680,8 +680,8 @@ The Inversion-Free ``UCQ(OBDD)`` Path
 -------------------------------------
 
 The ``'inversion-free'`` method (and the default-chain rung that follows
-``independent``) evaluates the *inversion-free* class of Jha, Olteanu and
-Suciu :cite:`DBLP:conf/edbt/JhaOS10`: hierarchical, tuple-independent
+``independent``) evaluates the *inversion-free* class of Jha and
+Suciu :cite:`DBLP:conf/icdt/JhaS11`: hierarchical, tuple-independent
 queries -- including self-joins -- whose lineage admits a polynomial-size
 OBDD. On these the generic ``'tree-decomposition'`` / compilation
 fallbacks can blow up (the lineage is not low-treewidth), yet a

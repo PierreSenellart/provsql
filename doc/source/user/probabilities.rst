@@ -97,7 +97,7 @@ Computation Methods
 
 ``'inversion-free'``
     Exact computation for the *inversion-free* ``UCQ(OBDD)`` class
-    :cite:`DBLP:conf/edbt/JhaOS10`: hierarchical, tuple-independent queries
+    :cite:`DBLP:conf/icdt/JhaS11`: hierarchical, tuple-independent queries
     (possibly with self-joins) whose lineage admits a polynomial-size OBDD.
     The path builds a structured d-DNNF over a query-derived variable order,
     staying linear in the lineage where ``'tree-decomposition'`` would blow
