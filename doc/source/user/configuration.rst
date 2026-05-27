@@ -198,7 +198,30 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
         SET provsql.fallback_compiler = 'c2d';
 
-All variables above **except** ``provsql.tool_search_path`` have user-level
-scope: any user can change them for their own session without superuser
-privileges. ``provsql.tool_search_path`` is superuser-only, for the security
-reason given in its entry above.
+.. _provsql-kcmcp-server:
+
+``provsql.kcmcp_server`` (default: empty)
+    Launch command for a **managed** KCMCP knowledge-compiler server (see
+    :doc:`the KCMCP server protocol </dev/kc-server-protocol>`). When
+    non-empty, a ProvSQL supervisor background worker runs this command to
+    start a warm server, supervises it (restarting it if it exits), and
+    publishes its address in shared memory; a registry tool of
+    ``kind = 'kcmcp'`` whose ``endpoint`` is ``'managed'`` then compiles over
+    that server instead of spawning a CLI process per call. The literal
+    ``{endpoint}`` is replaced by a Unix-socket path the worker chooses (it
+    already carries the ``unix:`` scheme). Empty (default) launches no server.
+    Example::
+
+        ALTER SYSTEM SET provsql.kcmcp_server = 'tdkc --kcmcp {endpoint}';
+        SELECT pg_reload_conf();
+
+    Configured in the configuration file or with ``ALTER SYSTEM`` and applied
+    on reload (``PGC_SIGHUP``): it runs an arbitrary command as the PostgreSQL
+    operating-system user, so like ``provsql.tool_search_path`` it is not
+    settable per session.
+
+All variables above **except** ``provsql.tool_search_path`` and
+``provsql.kcmcp_server`` have user-level scope: any user can change them for
+their own session without superuser privileges. ``provsql.tool_search_path``
+is superuser-only and ``provsql.kcmcp_server`` is config-file/reload-only, for
+the security reasons given in their entries above.

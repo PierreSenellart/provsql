@@ -930,6 +930,48 @@ cancellation are all independent of whether the backend counts or
 compiles, and of which engine implements it.
 
 
+ProvSQL's client and managed server
+-----------------------------------
+
+ProvSQL is a KCMCP *client*: when a knowledge-compilation request selects a
+tool registered with ``kind = 'kcmcp'`` (see :doc:`the tool registry
+</user/tool-registry>`), ``BooleanCircuit::compilation()`` compiles over a
+socket through the in-extension client (``kcmcp_client.cpp``) instead of
+spawning a CLI process.  It serialises the problem exactly as the CLI path does
+(a Tseytin CNF, or a BC-S1.2 circuit when the record advertises
+``circuit-bcs12``), sends one ``compile`` :msg:`REQUEST`, and parses the
+``ddnnf-nnf`` :msg:`RESULT` back with the same ``parseDDNNF`` the temp-file path
+uses -- so results are identical and any failure (connect, protocol, server
+:msg:`ERROR`) falls back to the CLI path.
+
+The client honours the protocol's **connection-for-life** rule: it keeps one
+connection per backend, keyed by endpoint, reusing it across compilations so a
+warm server's cross-query cache is not discarded (today it also just saves the
+per-compile connect + handshake).  A *reused* connection that has gone stale
+(the server respawned, or an idle link dropped) is transparently reconnected
+once; a query cancel or ``statement_timeout`` closes the socket so the server
+abandons the job, mirroring the cancel discipline of the CLI path; and an
+``on_proc_exit`` hook sends :msg:`BYE` at backend exit.
+
+A ``kcmcp`` record's ``endpoint`` is either a fixed address (``unix:/path`` or
+``host:port`` -- *endpoint mode*, a server operated out of band) or the literal
+``managed``, resolved at compile time to the address of a server ProvSQL itself
+runs.
+
+**Managed server.**  A dedicated supervisor background worker
+(``kcmcp_supervisor.c``, registered alongside the mmap worker) owns the managed
+server's lifecycle.  When :ref:`provsql.kcmcp_server <provsql-kcmcp-server>` is
+non-empty it is a shell command with a ``{endpoint}`` placeholder; the worker
+substitutes a Unix-socket path it chooses, forks/execs the command in its own
+process group, publishes the endpoint in shared memory (read by the client for
+an ``endpoint = 'managed'`` record), and supervises it -- relaunching on exit,
+restarting a changed command on ``SIGHUP``, idling on its latch when the GUC is
+empty, and killing the process group on shutdown.  The worker needs only
+``BGWORKER_SHMEM_ACCESS`` (no database): the command is a process-global GUC and
+the endpoint lives in the shared segment, which is why a cluster-level GUC -- not
+a per-database registry column -- carries it.
+
+
 Design notes and non-goals
 --------------------------
 
