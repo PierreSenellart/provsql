@@ -468,7 +468,8 @@
     for (const n of state.scene.nodes) {
       const cls = `node-group node--${n.type}`
                 + (n.frontier ? ' is-frontier' : '')
-                + (n.boolean_assumed ? ' is-boolean-assumed' : '');
+                + (n.boolean_assumed ? ' is-boolean-assumed' : '')
+                + (n.inversion_free ? ' is-inversion-free' : '');
       const p = nodePos(n);
       const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${p.x},${p.y})` });
       const shape = svgEl('circle', { class: 'node-shape', r: 22 });
@@ -530,6 +531,52 @@
         badgeGroup.appendChild(ba);
         badgeGroup.appendChild(bt);
         g.appendChild(badgeGroup);
+      }
+      // Inversion-free marker : every gate_annotation wrapper in the scene
+      // was elided server-side, and its single child carries
+      // inversion_free = true (plus if_cert on a certified result root, or
+      // if_key on a certified input leaf). Paint a teal dashed ring -
+      // concentric *outside* the Boolean ring when a node carries both - and
+      // an "IF" badge bottom-left, so a node can show B and IF together. The
+      // inspector renders the certificate order / per-input key + rank.
+      if (n.inversion_free) {
+        g.appendChild(svgEl('circle', {
+          class: 'node-inversion-free-frame',
+          r: n.boolean_assumed ? 31 : 28,
+          fill: 'none',
+          stroke: 'var(--teal-600)',
+          'stroke-width': 1.4,
+          'stroke-dasharray': '2 2',
+        }));
+        const ifGroup = svgEl('g', { class: 'inversion-free-marker' });
+        const tip = svgEl('title');
+        tip.textContent = n.if_cert
+          ? 'Inversion-free certificate root: this subcircuit is certified '
+            + 'inversion-free (UCQ(OBDD)), so probability_evaluate can compile '
+            + 'it to a structured d-DNNF in time linear in the lineage. The '
+            + 'inspector shows the variable-block order.'
+          : 'Inversion-free order marker: this input carries a per-input '
+            + 'order key fixing its place in the query-derived (Prop. 4.5) '
+            + 'order. The inspector shows its key and rank.';
+        ifGroup.appendChild(tip);
+        const ic = svgEl('circle', {
+          class: 'inversion-free-badge',
+          cx: -16, cy: 18, r: 8,
+          fill: 'var(--teal-600)',
+          stroke: 'var(--teal-800)',
+        });
+        const itx = svgEl('text', {
+          x: -16, y: 18,
+          'text-anchor': 'middle',
+          'dominant-baseline': 'central',
+          'font-size': 7,
+          'font-weight': '700',
+          fill: 'var(--fg-on-dark)',
+        });
+        itx.textContent = 'IF';
+        ifGroup.appendChild(ic);
+        ifGroup.appendChild(itx);
+        g.appendChild(ifGroup);
       }
       const label = svgEl('text', { class: 'node-label', y: -2 });
       label.textContent = n.label || n.type[0];
@@ -979,6 +1026,32 @@
       } else {
         html += `<dt>extra</dt><dd>${escapeHtml(node.extra)}</dd>`;
       }
+    }
+    // Inversion-free detail, carried up from an elided gate_annotation
+    // wrapper. if_cert (a certified result root) shows the certificate
+    // header + variable-block order; if_key (a certified input leaf) shows
+    // the per-input order key and its rank within the shown scene.
+    if (node.if_cert) {
+      const c = node.if_cert;
+      html += `<dt>inversion-free</dt><dd>certified — `
+           + `${escapeHtml(String(c.natoms))} atoms, `
+           + `${escapeHtml(String(c.nclasses))} classes</dd>`;
+      html += `<dt>variable order</dt><dd>root class `
+           + `${escapeHtml(String(c.root_class))}`
+           + (c.class_order && c.class_order.length
+              ? `; classes [${escapeHtml(c.class_order.join(', '))}]` : '')
+           + `</dd>`;
+    }
+    if (node.if_key) {
+      const k = node.if_key;
+      const factor = k.factor === -1
+        ? 'guard (shared self-join)' : String(k.factor);
+      if (k.rank != null) {
+        html += `<dt>order rank</dt><dd>${escapeHtml(String(k.rank))}`
+             + ` <span class="cv-inspector__hint">(within shown scene)</span></dd>`;
+      }
+      html += `<dt>order key</dt><dd>root ${escapeHtml(String(k.root))}, `
+           + `sec ${escapeHtml(String(k.sec))}, factor ${escapeHtml(factor)}</dd>`;
     }
     html += '</dl>';
     if (node.type === 'rv') {

@@ -279,6 +279,17 @@ rewriter or by the load-time Boolean-identity folding when
 separate node, since structurally it is a marker rather than a
 distinct operation.
 
+A ``gate_annotation`` wrapper (the inversion-free certificate, see
+:doc:`probabilities`) is likewise elided and rendered as a teal
+:sc:`IF` badge on its child, with a teal dashed ring concentric
+*outside* the Boolean ring so a gate that is both Boolean-assumed
+and inversion-free shows both badges at once. Pinning the badged
+gate surfaces the marker's detail in the inspector: on a certified
+result root, the certificate header (atom / class counts) and the
+variable-block order; on a certified input leaf, that input's
+per-input order key (root value, secondary value, factor -- or the
+shared self-join *guard*) and its rank within the shown scene.
+
 .. _studio-circuit-eval-strip:
 
 Semiring evaluation strip
@@ -840,6 +851,14 @@ extension version.
        :sqlfunc:`probability_benchmark`, :sqlfunc:`tool_available`) and
        the ``provsql.fallback_compiler`` GUC introduced in 1.7.0.
        See :doc:`knowledge-compilation`.
+   * - ``1.4.x``
+     - ``≥ 1.8.0``
+     - Adds the :sc:`IF` badge on ``gate_annotation`` wrappers (the
+       inversion-free certificate / per-input order key), with the
+       inspector surfacing the certificate's variable-block order and each
+       certified leaf's order key and rank. Backed by the inversion-free
+       ``UCQ(OBDD)`` probability path and the ``gate_annotation`` gate type
+       introduced in 1.8.0. See :doc:`probabilities`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to

@@ -34,6 +34,10 @@
   --terracotta-300:   #E0937A;
   --terracotta-500:   #C4664A;   /* danger / link-hover / + gate */
 
+  /* Teal — inversion-free (IF) circuit marker, distinct from the purple B */
+  --teal-600:         #2E7D8A;   /* IF badge / dashed ring */
+  --teal-800:         #1F5660;   /* IF badge border */
+
   /* Foreground / muted */
   --fg-1:             #2A1850;   /* primary text */
   --fg-2:             #5A3E8C;   /* secondary text on light bg */
