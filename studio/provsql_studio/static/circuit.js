@@ -469,7 +469,7 @@
       const cls = `node-group node--${n.type}`
                 + (n.frontier ? ' is-frontier' : '')
                 + (n.boolean_assumed ? ' is-boolean-assumed' : '')
-                + (n.inversion_free ? ' is-inversion-free' : '');
+                + (n.if_cert ? ' is-inversion-free' : '');
       const p = nodePos(n);
       const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${p.x},${p.y})` });
       const shape = svgEl('circle', { class: 'node-shape', r: 22 });
@@ -532,14 +532,14 @@
         badgeGroup.appendChild(bt);
         g.appendChild(badgeGroup);
       }
-      // Inversion-free marker : every gate_annotation wrapper in the scene
-      // was elided server-side, and its single child carries
-      // inversion_free = true (plus if_cert on a certified result root, or
-      // if_key on a certified input leaf). Paint a teal dashed ring -
-      // concentric *outside* the Boolean ring when a node carries both - and
-      // an "IF" badge bottom-left, so a node can show B and IF together. The
-      // inspector renders the certificate order / per-input key + rank.
-      if (n.inversion_free) {
+      // Inversion-free marker : the gate_annotation carrying the certificate
+      // (on the certified result root) is elided server-side and its child
+      // carries if_cert. Badge only that root - a teal dashed ring (concentric
+      // *outside* the Boolean ring when the node carries both) plus an "IF"
+      // badge bottom-left, so a node can show B and IF together. The certified
+      // input leaves are NOT badged (it would clutter the canvas); their
+      // per-input order key + rank live in the inspector instead.
+      if (n.if_cert) {
         g.appendChild(svgEl('circle', {
           class: 'node-inversion-free-frame',
           r: n.boolean_assumed ? 31 : 28,
@@ -550,14 +550,11 @@
         }));
         const ifGroup = svgEl('g', { class: 'inversion-free-marker' });
         const tip = svgEl('title');
-        tip.textContent = n.if_cert
-          ? 'Inversion-free certificate root: this subcircuit is certified '
-            + 'inversion-free (UCQ(OBDD)), so probability_evaluate can compile '
-            + 'it to a structured d-DNNF in time linear in the lineage. The '
-            + 'inspector shows the variable-block order.'
-          : 'Inversion-free order marker: this input carries a per-input '
-            + 'order key fixing its place in the query-derived (Prop. 4.5) '
-            + 'order. The inspector shows its key and rank.';
+        tip.textContent =
+          'Inversion-free certificate root: this subcircuit is certified '
+          + 'inversion-free (UCQ(OBDD)), so probability_evaluate can compile '
+          + 'it to a structured d-DNNF in time linear in the lineage. The '
+          + 'inspector shows the variable-block order.';
         ifGroup.appendChild(tip);
         const ic = svgEl('circle', {
           class: 'inversion-free-badge',

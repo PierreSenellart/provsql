@@ -279,16 +279,17 @@ rewriter or by the load-time Boolean-identity folding when
 separate node, since structurally it is a marker rather than a
 distinct operation.
 
-A ``gate_annotation`` wrapper (the inversion-free certificate, see
-:doc:`probabilities`) is likewise elided and rendered as a teal
-:sc:`IF` badge on its child, with a teal dashed ring concentric
-*outside* the Boolean ring so a gate that is both Boolean-assumed
-and inversion-free shows both badges at once. Pinning the badged
-gate surfaces the marker's detail in the inspector: on a certified
-result root, the certificate header (atom / class counts) and the
-variable-block order; on a certified input leaf, that input's
-per-input order key (root value, secondary value, factor -- or the
-shared self-join *guard*) and its rank within the shown scene.
+The inversion-free certificate (a ``gate_annotation`` wrapper on a
+certified result root, see :doc:`probabilities`) is likewise elided
+and rendered as a teal :sc:`IF` badge on its child, with a teal
+dashed ring concentric *outside* the Boolean ring so a gate that is
+both Boolean-assumed and inversion-free shows both badges at once.
+Pinning that root shows the certificate header (atom / class counts)
+and the variable-block order in the inspector. The certified input
+leaves are *not* badged -- that would crowd the canvas; instead,
+pinning a certified leaf surfaces its per-input order key (root
+value, secondary value, factor -- or the shared self-join *guard*)
+and its rank within the shown scene in the inspector.
 
 .. _studio-circuit-eval-strip:
 
