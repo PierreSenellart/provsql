@@ -250,6 +250,20 @@ SELECT create_provenance_mapping('topic_of_label', 'topic_of', 'lbl');
 SELECT create_provenance_mapping('extends_label',  'extends',  'lbl');
 SELECT create_provenance_mapping('coreview_label', 'coreview', 'lbl');
 
+-- A single `label` mapping: the union of every per-tuple label above, so a
+-- text-based semiring (sr_formula / sr_why / sr_how) can name the leaves of
+-- a query spanning several relations through one mapping argument, rather
+-- than picking the relation-specific mapping each time.
+CREATE TABLE label AS
+            SELECT value, provenance FROM bid_label
+  UNION ALL SELECT value, provenance FROM expertise_label
+  UNION ALL SELECT value, provenance FROM topic_of_label
+  UNION ALL SELECT value, provenance FROM extends_label
+  UNION ALL SELECT value, provenance FROM coreview_label
+  UNION ALL SELECT value, provenance FROM recommend_label
+  UNION ALL SELECT value, provenance FROM champion_label;
+CREATE INDEX ON label(provenance);
+
 -- `conf` only fed set_prob and `lbl` only fed create_provenance_mapping;
 -- both jobs are now done, so drop the artifact columns from the base tables.
 ALTER TABLE bid       DROP COLUMN conf, DROP COLUMN lbl;

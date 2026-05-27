@@ -18,35 +18,41 @@ asked three ways over the **same data**:
 * asked about **one paper**, where it is genuinely entangled yet still
   **read-once thanks to a key** (the primary key on ``expertise``);
 * asked about the **whole program**, where it is genuinely
-  :math:`\#P`-hard and a real compiler earns its keep.
+  `#P-hard <https://en.wikipedia.org/wiki/%E2%99%AFP>`__ and a real
+  compiler earns its keep.
 
-The first queries involve no recursion; the difference is entirely in the
-join pattern and in which keys the schema declares. A closing section
-then turns to **recursive** reachability, where provenance becomes
-network reliability.
+These three are the first rungs of a ladder, none recursive. The chapter
+then climbs the rest, all over the same instance: a ``HAVING count(*)``
+query that a probability-side pre-pass resolves before any compiler runs;
+a self-join that is **inversion-free** -- hard to every circuit-level
+method, yet linear-time from a query-derived variable order; and a
+``repair_key`` table whose block correlation stays tractable too. A
+closing section then turns to **recursive** reachability, where
+provenance becomes network reliability.
 
 The Scenario
 ------------
 
-A conference-reviewing setup, with five uncertain (tuple-independent)
-relations alongside deterministic dimension tables ``reviewers`` /
-``papers`` / ``topics`` and one block-correlated table ``assignment``
-(used in Step 8). Three relations drive the coverage queries, and two
-more are graphs queried recursively in Step 9:
+We consider a conference-reviewing setup. Eight relations carry
+uncertainty -- seven tuple-independent, plus the block-correlated
+``assignment`` -- alongside the deterministic dimension tables
+``reviewers`` / ``papers`` / ``topics``. Three tuple-independent
+relations make up the core instance and drive the coverage queries; the
+rest are introduced where they are first used -- two graphs queried
+recursively in Step 9, ``recommend`` / ``champion`` in Step 7, and
+``assignment`` in Step 8:
 
 * ``bid(reviewer, paper)`` -- a reviewer offered to review a paper; the
   confidence is how firm the bid is (availability, willingness).
 * ``expertise(reviewer, topic)`` -- the reviewer's area of competence.
 * ``topic_of(paper, topic)`` -- the paper is about a topic.
-* ``extends(citing, cited)`` -- a paper builds on an earlier paper
-  (a directed **acyclic** citation graph; Step 9).
-* ``coreview(a, b)`` -- two reviewers have served on a committee together
-  (a **symmetric**, hence cyclic, collaboration graph; Step 9).
 
 The instance has 14 reviewers, 4 topics and 7 papers. A key modelling
 choice drives the whole study: ``expertise`` is declared with a
 **primary key on** ``reviewer`` -- each reviewer has exactly one area.
-That single functional dependency, ``reviewer`` :math:`\to` ``topic``, is
+That single `functional dependency
+<https://en.wikipedia.org/wiki/Functional_dependency>`__, ``reviewer``
+:math:`\to` ``topic``, is
 what makes the per-paper coverage query safe, as we will see. Several
 reviewers deliberately **share** each area (five are database experts,
 including Alice, Bob and Judy), so a paper's coverage lineage is
@@ -75,14 +81,12 @@ Confidences are seeded by the script (a per-row ``conf`` column fed to
     provsql-studio --dsn postgresql:///peer_review_demo
 
 and open `http://127.0.0.1:8000/ <http://127.0.0.1:8000/>`_. The schema
-panel tags the five tracked relations (``bid``, ``expertise``,
-``topic_of``, ``extends``, ``coreview``, all added with
-:sqlfunc:`add_provenance`) with a :sc:`prov-tid` pill -- their tuples are
-independent -- and ``assignment`` (set up with :sqlfunc:`repair_key`)
-with a :sc:`prov-bid` pill, marking it block-correlated; the three
-dimension tables (``reviewers``, ``papers``, ``topics``) are plain. Key
-columns are underlined in the panel:
-solid for a primary key, dotted for a ``repair_key`` grouping key (so
+panel tags every relation added with :sqlfunc:`add_provenance` with a
+:sc:`prov-tid` pill -- their tuples are independent -- ``assignment``
+(set up with :sqlfunc:`repair_key`) with a :sc:`prov-bid` pill marking it
+block-correlated, and leaves the dimension tables (``reviewers``,
+``papers``, ``topics``) plain. Key columns are underlined: solid for a
+primary key, dotted for a ``repair_key`` grouping key (so
 ``assignment``'s ``reviewer`` shows the dotted underline). The
 ``*_label`` mappings let the eval strip's ``sr_formula`` / ``sr_why`` /
 ``sr_how`` name the leaves.
@@ -107,11 +111,11 @@ expertise?"
 
 .. code-block:: postgresql
 
-    SELECT b.paper
-    FROM bid b, expertise e
-    WHERE b.reviewer = e.reviewer
-    GROUP BY b.paper
-    ORDER BY b.paper
+    SELECT p.id, p.title
+    FROM bid b, expertise e, papers p
+    WHERE b.reviewer = e.reviewer AND b.paper = p.id
+    GROUP BY p.id, p.title
+    ORDER BY p.id
 
 This query is **hierarchical** -- among its existential variables, the
 atoms mentioning ``topic`` (just ``expertise``) are a subset of those
@@ -122,14 +126,25 @@ paper's lineage is ``OR`` over reviewers of ``bid ∧ (the reviewer has
 some expertise)``, with nothing shared.
 
 Click into ``p1``'s ``provsql`` cell. In Circuit mode the circuit is a
-shallow ``⊕`` of ``⊗`` pairs, nothing shared. In the eval strip, pick
+shallow ``⊕`` of ``⊗`` pairs, nothing shared -- the shape ProvSQL's
+default evaluation order happens to build for this query. That read-once
+shape is not guaranteed in general: the literal circuit a plan
+materialises can reuse leaves and stop being read-once -- as the very
+next step shows -- which is what motivates the rewriter and the compilers
+of the steps that follow. In the eval strip, pick
 :guilabel:`Marginal probability` with the ``independent`` method: it returns
 ``≈ 0.666`` **exactly and instantly**, because ``independent`` is
-applicable precisely to read-once circuits. Pick *Tree decomposition*
-from the knowledge-compilation group: the treewidth is **1**, and the
-compiled d-DNNF (the *Compiled d-D circuit* option) is a handful of
-gates (a few dozen nodes, the exact count depending on the compiler).
-This works the same with ``boolean_provenance`` off or on.
+applicable precisely to read-once circuits. The same structure also
+compiles for free: pick *Compiled d-D circuit* with the *interpret as
+d-D* route and ProvSQL reads the Boolean circuit straight into a d-D --
+no `tree decomposition <https://en.wikipedia.org/wiki/Tree_decomposition>`__,
+no external compiler -- a handful of gates,
+because a read-once circuit can be read off as a d-D in a single
+structural pass, with no search. *Tree decomposition* reaches the
+same place from the other side (`treewidth
+<https://en.wikipedia.org/wiki/Treewidth>`__ **1**, a similarly small
+d-DNNF), as does any external compiler. This works the same with
+``boolean_provenance`` off or on.
 
 Step 2: Safe by a Key
 ---------------------
@@ -146,13 +161,26 @@ reviewer an expert in one of ``p1``'s own topics?"
       AND e.topic    = t.topic
       AND b.paper = 'p1' AND t.paper = 'p1'
 
-For the fixed paper ``p1``, this is the canonical non-hierarchical
-pattern :math:`H_0` over ``reviewer`` and ``topic`` (one atom on each, and
-``expertise`` on both). On our data the entanglement is concrete: Alice,
-Bob and Judy are all database experts who bid on ``p1``, and ``p1`` is
-about ``databases`` (topic ``t1``) -- so the single tuple
-``topic_of(p1, t1)`` sits in *three* different disjuncts of ``p1``'s
-coverage.
+For the fixed paper ``p1``, this is the opposite of Step 1's shape:
+``bid`` mentions only ``reviewer``, ``topic_of`` only ``topic``, and
+``expertise`` mentions both, so neither variable's atoms nest inside the
+other's -- the query is **non-hierarchical**, the hard case. On our data
+the entanglement is concrete: Alice, Bob and Judy are all database
+experts who bid on ``p1``, and ``p1`` is
+about ``databases`` (topic ``t1``), so the single tuple
+``topic_of(p1, t1)`` is shared across *three* of ``p1``'s coverage
+disjuncts. (A fourth disjunct, Carol via ``logic`` -- ``p1``'s other
+topic ``t2`` -- reuses ``topic_of(p1, t2)`` the same way.)
+
+The fixture ships a single ``label`` mapping -- the union of every
+relation's per-tuple labels -- so a text-based `semiring
+<https://en.wikipedia.org/wiki/Semiring>`__ can name the
+leaves of a query spanning several relations through one mapping
+argument. In the eval strip, ``sr_formula`` with the ``label`` mapping
+prints ``p1``'s coverage as a disjunction of four
+``bid ⊗ exp ⊗ topof`` products, with ``topof(p1,t1)`` written out in
+three of them -- the shared leaf, in plain sight; ``sr_why`` and
+``sr_how`` read the same mapping.
 
 Run it with ``boolean_provenance`` **off** and ``independent``: it
 **errors** -- *"Not an independent circuit"*. The literal circuit
@@ -175,10 +203,24 @@ experts by topic and factor the shared** ``topic_of`` **leaf out**:
 Each leaf now appears once: the lineage *is* read-once, and the rewriter
 emits exactly this factorisation. This is the case study's first lesson:
 **safety is a property of the query and the integrity constraints
-together**, not of the query alone. Relax ``expertise``'s key to
-``(reviewer, topic)`` -- letting a reviewer span several areas -- and the
-functional dependency is gone: the same question becomes a genuine
-:math:`H_0`, and even ``boolean_provenance`` cannot make it read-once.
+together**, not of the query alone.
+
+To watch the key do the work, drop it and re-run the coverage query's
+``independent`` evaluation under ``boolean_provenance`` **on**:
+
+.. code-block:: postgresql
+
+    ALTER TABLE expertise DROP CONSTRAINT expertise_pkey;
+
+With the functional dependency ``reviewer`` :math:`\to` ``topic`` gone, a
+reviewer may span several areas, the question becomes genuinely
+non-hierarchical, and ``independent`` **errors again** -- even with
+``boolean_provenance`` on, the rewriter can no longer factor the shared
+``topic_of`` leaf out. Add the key back to restore safety:
+
+.. code-block:: postgresql
+
+    ALTER TABLE expertise ADD PRIMARY KEY (reviewer);
 
 Step 3: Genuinely Hard
 ----------------------
@@ -196,8 +238,8 @@ program** and it does not:
 
 "Is **any** paper competently covered?" Here ``paper`` is no longer
 fixed: it is a third existential variable, and ``bid`` and ``topic_of``
-both mention it. This is the three-atom cycle :math:`H_0` over
-``reviewer``, ``paper``, ``topic``, whose probability is
+both mention it. Now the three variables ``reviewer``, ``paper`` and
+``topic`` form a cycle with no nesting anywhere, whose probability is
 :math:`\#P`-hard in general :cite:`DBLP:journals/jacm/DalviS12`. The
 primary key on ``expertise`` does **not** save it: under the FD the topic
 is still shared across papers, so after the FD reduction the query
@@ -209,7 +251,8 @@ it does with the GUC off. (Raising ``provsql.verbose_level`` would log
 the rewriter falling through, but by default you simply observe that the
 circuit, and the error, are the same.)
 
-Click into the result's ``provsql`` cell. The circuit is visibly bushy.
+The result is a single row, so Studio displays its circuit automatically:
+it is visibly bushy.
 Run :guilabel:`Marginal probability` with ``tree-decomposition`` (or any
 external compiler): it succeeds, returning ``≈ 0.8818``. The treewidth is
 **4** (a property of the circuit, not the compiler), against **1** for
@@ -224,11 +267,13 @@ Step 4: From Circuit to CNF, and Back
 
 Pin the hard query's provenance and pick *Tseytin CNF* from the
 knowledge-compilation group of the eval strip. The panel shows the
-DIMACS encoding ProvSQL streams to an external compiler, with one
+DIMACS `CNF <https://en.wikipedia.org/wiki/Conjunctive_normal_form>`__
+ProvSQL streams to an external compiler, with one
 ``c input`` comment line per variable recording which provenance input
 it stands for; Studio annotates each with the source tuple it resolves
-to (``bid(r1,p1)``, ``topof(p1,t1)``, …). This is what lets you take a
-satisfying assignment or a weighted count from an external tool and read
+to. This is what lets you take a
+satisfying assignment or a `weighted count
+<https://en.wikipedia.org/wiki/Sharp-SAT>`__ from an external tool and read
 it back against the reviewing data. The same mapping is available as a
 table through :sqlfunc:`tseytin_cnf_mapping`.
 
@@ -255,9 +300,11 @@ compared quantitatively rather than by eye.
 For the whole picture at once, pick *Probability benchmark*: it times
 every probability method on the hard circuit, one row each, and its
 ``d-DNNF (n/e)`` column shows the compiled size next to the run time.
-The exact methods (``tree-decomposition``, each ``compilation`` tool,
-each ``wmc`` counter) agree to full precision; ``monte-carlo`` lands in
-its confidence band; ``independent`` shows its error. To export the
+The exact methods that finish (``tree-decomposition``, the
+``compilation`` tools, the model counters) agree to full precision;
+``monte-carlo`` lands in its confidence band; ``independent`` shows its
+error; and backends that do not scale to this circuit -- such as
+``possible-worlds`` enumeration -- hit the ``statement_timeout``. To export the
 compiled circuit itself, pick *Compiled d-D (NNF text)*: the copy button
 yields a c2d/d4 ``.nnf`` file whose variable numbering matches the CNF
 from Step 4.
@@ -265,15 +312,19 @@ from Step 4.
 .. figure:: /_static/casestudy7/probability-benchmark.png
    :alt: The probability-benchmark table on the hard circuit, one row
          per method, with method, args, probability, time, and the
-         compiled d-DNNF node/edge sizes; the compilation tools and WMC
-         counters all return 0.8818, independent shows a "not an
-         independent circuit" error, and two backends time out.
+         compiled d-DNNF node/edge sizes; the compilers, tree-decomposition
+         and the model counters that finish return 0.8818, monte-carlo
+         returns 0.8822, independent shows a "not an independent circuit"
+         error, and possible-worlds and the weightmc counter hit the
+         statement timeout.
 
-   The probability benchmark on the hard circuit. Every exact
-   backend (each compiler, ``tree-decomposition``, the WMC counters)
-   agrees on ``0.8818``; the ``d-DNNF (N/E)`` column shows how the
-   compiled size varies by compiler, ``monte-carlo`` lands in its band,
-   and ``independent`` reports the circuit is not independent.
+   The probability benchmark on the hard circuit. The compilers,
+   ``tree-decomposition`` and the model counters that finish all agree on
+   ``0.8818`` (the ``d-DNNF (N/E)`` column shows how the compiled size
+   varies by compiler); ``monte-carlo`` lands in its band; ``independent``
+   reports the circuit is not independent; and ``possible-worlds`` and
+   ``weightmc`` hit the ``statement_timeout`` with the same cancellation
+   message.
 
 Which compilers and counters appear in those pickers depends on what is
 installed. The **Tools** panel (the wrench icon in the top nav) lists the
@@ -293,21 +344,22 @@ papers with at least two bidding experts:
 
 .. code-block:: postgresql
 
-    SELECT b.paper
-    FROM bid b, expertise e
-    WHERE b.reviewer = e.reviewer
-    GROUP BY b.paper
+    SELECT p.id, p.title
+    FROM bid b, expertise e, papers p
+    WHERE b.reviewer = e.reviewer AND b.paper = p.id
+    GROUP BY p.id, p.title
     HAVING count(*) >= 2
-    ORDER BY b.paper
+    ORDER BY p.id
 
 The ``HAVING count(*) >= 2`` clause becomes a comparison gate over the
 group's contributing rows. When computing the probability of query
 results, before any d-DNNF compiler runs, :sqlfunc:`probability_evaluate`
-folds the provenance with a closed-form Poisson-binomial evaluation,
+folds the provenance with a closed-form `Poisson-binomial
+<https://en.wikipedia.org/wiki/Poisson_binomial_distribution>`__ evaluation,
 replacing the entire provenance with a Bernoulli gate. Compute the
 probability for one of the papers (say, ``p1``): ProvSQL emits a NOTICE
 reporting that the ``gate_cmp`` was shortcut by the pre-pass and how many
-gates the circuit shrank by. All probability methods (even,
+gates the circuit shrank by. All probability methods (even
 ``independent``) compute the probability easily.
 
 Step 7: Hard-Looking, Secretly Linear
@@ -317,28 +369,29 @@ Steps 3-5 sent a :math:`\#P`-hard query to a compiler; Step 6 skipped the
 compiler with a count-threshold shortcut. Here is a third escape: a query
 whose lineage is **not** read-once -- so ``independent`` rejects it, and a
 generic compiler treats it as hard -- yet whose *shape* admits a
-linear-size OBDD. ProvSQL recognises this **inversion-free** class (the
-``inversion-free`` method in :doc:`probabilities`) at planning time and
+linear-size `OBDD <https://en.wikipedia.org/wiki/Binary_decision_diagram>`__.
+ProvSQL recognises this **inversion-free** class
+:cite:`DBLP:conf/icdt/JhaS11` (the ``inversion-free`` method in
+:doc:`probabilities`) at planning time and
 evaluates it with a structured d-DNNF built over a query-derived variable
 order, instead of reaching for a compiler.
 
 For this step the fixture adds one prolific bidder, **Olga** (``r15``),
-who skimmed a 24-paper submission batch (``q01``..``q24``), and two
+who skimmed a 24-paper submission batch (``q01`` to ``q24``), and two
 post-review signals: ``recommend(reviewer, paper)`` -- she recommended the
 paper for acceptance -- and ``champion(reviewer, paper)`` -- she would
-champion it at the PC meeting. (Olga has no ``expertise`` row and the
-submission papers carry no ``topic_of``, so none of this perturbs the
-coverage queries above.) Ask for a reviewer whose bids overlap **both** a
-recommendation **and** a championing:
+champion it at the PC meeting. Ask for a reviewer whose bids overlap
+**both** a recommendation **and** a championing:
 
 .. code-block:: postgresql
 
-    SELECT b1.reviewer
-    FROM bid b1, recommend a, bid b2, champion c
+    SELECT r.id, r.name
+    FROM bid b1, recommend a, bid b2, champion c, reviewers r
     WHERE b1.reviewer = a.reviewer AND b1.paper = a.paper
       AND b1.reviewer = b2.reviewer
       AND b2.reviewer = c.reviewer AND b2.paper = c.paper
-    GROUP BY b1.reviewer
+      AND b1.reviewer = r.id
+    GROUP BY r.id, r.name
 
 Grouping on the reviewer ``OR``\ s the two evidence sides over all of
 Olga's papers, and both sides **share** the ``bid(r15, *)`` leaves -- so
@@ -359,8 +412,11 @@ method, which takes the inversion-free rung automatically once the
 certificate is present -- returns ``0.975314`` in milliseconds. The query
 *looks* as hard as Step 3 to every circuit-level method, but its
 tractability is visible in the query, not in the materialised circuit:
-only the planner's query-derived order recovers it. (Shrink the batch and
-``possible-worlds`` agrees to full precision, pinning the value.)
+only the planner's query-derived order recovers it. To see that order
+made concrete, pick *Compiled d-D circuit* with the *inversion-free*
+route: the d-DNNF it builds is strikingly **deep** -- a long chain of
+decisions following the query-derived variable order, the shape of an
+OBDD rather than the bushy d-DNNF a treewidth-based compiler produces.
 
 Step 8: Correlation via ``repair_key``
 --------------------------------------
@@ -383,10 +439,10 @@ which papers get an assigned reviewer:
 
 .. code-block:: postgresql
 
-    SELECT paper
-    FROM assignment
-    GROUP BY paper
-    ORDER BY paper
+    SELECT p.id, p.title
+    FROM assignment a JOIN papers p ON a.paper = p.id
+    GROUP BY p.id, p.title
+    ORDER BY p.id
 
 Click a result row's ``provsql`` cell: the circuit carries the
 mutual-exclusion structure (a reviewer's candidate papers cannot both be
@@ -411,9 +467,12 @@ Every query so far has been a single conjunctive block. ProvSQL also
 tracks provenance through ``WITH RECURSIVE`` (set semantics): the
 recursive CTE is transparently evaluated to a fixpoint, and the result
 carries provenance like any other query -- the provenance of a
-reachability answer is the disjunction over the paths that reach it. The
-two graphs introduced above exercise the two regimes: ``extends`` is
-acyclic, ``coreview`` is cyclic.
+reachability answer is the disjunction over the paths that reach it. Two
+more tuple-independent relations exercise the two recursive regimes:
+``extends(citing, cited)`` -- a paper builds on an earlier one -- is a
+directed **acyclic** citation graph, while ``coreview(a, b)`` -- two
+reviewers served on a committee together -- is **symmetric**, hence
+cyclic.
 
 **Acyclic data works for any semiring.** Ask what paper ``p6``
 transitively builds on:
@@ -425,7 +484,9 @@ transitively builds on:
       UNION
         SELECT e.cited FROM extends e JOIN anc a ON e.citing = a.paper
     )
-    SELECT paper FROM anc WHERE paper <> 'p6' ORDER BY paper
+    SELECT p.id, p.title
+    FROM anc JOIN papers p ON anc.paper = p.id
+    WHERE anc.paper <> 'p6' ORDER BY p.id
 
 In the eval strip, ``sr_formula`` (with the ``extends_label`` mapping)
 shows each ancestor's lineage as the conjunction along the path -- ``p1``
@@ -445,7 +506,9 @@ just probability.
       UNION
         SELECT e.b FROM coreview e JOIN conn c ON e.a = c.node
     )
-    SELECT node FROM conn WHERE node <> 'r1' ORDER BY node
+    SELECT r.id, r.name
+    FROM conn JOIN reviewers r ON conn.node = r.id
+    WHERE conn.node <> 'r1' ORDER BY r.id
 
 Evaluate the probability with ``boolean_provenance`` **off** and the
 fixpoint never stabilises -- ProvSQL stops with *"no fixpoint after N
