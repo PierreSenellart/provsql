@@ -47,6 +47,7 @@ The prioritisation uses four labels:
 | 19 | Shapley over RV-valued payoffs | Provenance × probability | Research |
 | 20 | Provenance of sampled values | Provenance × probability | Research |
 | 21 | Per-distribution class hierarchy (`src/distributions/`) | Internal architecture | Architectural (prerequisite) |
+| 22 | Probabilistic-circuit subsystem (distribution-valued gates) | Structural extensions | Research (low priority) |
 
 ---
 
@@ -696,6 +697,74 @@ FROM model
 WHERE provsql.intervene(X, 1.0) AND Y > threshold;
 ```
 
+### D.5 Probabilistic-circuit subsystem (distribution-valued gates) — **[Research, low priority]**
+
+The gate DAG plus the `gate_mixture` node make ProvSQL look one step away
+from hosting **probabilistic circuits** (PCs: arithmetic circuits / SPNs /
+PSDDs, in the Darwiche / Vergari–Choi–Peharz–Van den Broeck sense) — a
+mixture is a PC sum node, so surely we just add a product node and we have
+PCs. The reality is sharper, and worth recording so the analogy is not
+misused.
+
+**ProvSQL's native circuit is not a PC, and need not become one.** A PC
+*is* a distribution `p(x)`: its weights and leaf parameters are the model,
+and a feed-forward pass answers density-at-a-point (EVI), marginals (MAR),
+and MAP in time linear in the circuit, *because* the circuit is built to be
+smooth, decomposable, and (for MAP) deterministic. ProvSQL's circuit is
+**provenance**: a semiring-generic symbolic object carrying no
+probabilities, where probability is one *downstream* interpretation that
+first needs **knowledge compilation** to a d-DNNF (tree-decomposition / d4).
+The two families meet only at ProvSQL's *output of compilation*: the
+compiled d-DNNF already **is** a deterministic, decomposable arithmetic
+circuit, and `dDNNF::probabilityEvaluation` already **is** the PC
+sum-product pass. On the discrete side, therefore, the "PC product" already
+exists — it is `gate_times` over disjoint variable scopes — and there is
+nothing to add.
+
+**Where a product node is genuinely new is the continuous value layer, and
+there it is a *type* change, not a gate.** The value layer's invariant is
+that every token evaluates to **one scalar random variable**. `gate_mixture`
+fits because a mixture of two scalars is still a scalar (`rec_expectation`
+evaluates it as `π·E[x] + (1−π)·E[y]`). `gate_arith TIMES` also exists, but
+it is **scalar multiplication** `X·Y` (a new RV, density via Mellin
+convolution), *not* a PC product. A PC product `p(X)·p(Y)` is a
+**factorization over disjoint scopes**: its value is a *joint distribution
+over a vector*, not a number — which the scalar-per-token typing cannot
+express. This is the same wall MVN (§A.5) and copulas (§D.2) hit:
+representing a *joint* rather than a draw.
+
+**And a gate is not a PC without the matching evaluation mode.** What makes
+a PC a PC is the query it answers — point density, marginals, MAP, via
+sum-product over its structural invariants. ProvSQL's RV layer answers a
+*different* set: moments and `P(event)` via `Expectation` /
+`HybridEvaluator` / Monte Carlo. It never evaluates a joint density at an
+assignment or marginalizes by circuit recursion. A product gate without
+such an evaluator only gives the sampler independent children to draw — not
+PC inference.
+
+So hosting PCs is a coherent **subsystem**, not a one-gate add. It needs:
+1. **scope-typed, distribution-valued gates** (a gate as `c: assignment →
+   ℝ≥0` over a scope), alongside the existing scalar-RV typing — the same
+   architectural move §A.5 / §D.2 require;
+2. **normalized leaves** evaluable both at a point and by integration —
+   `gate_rv` is most of the way there, and the GMM (§C.1) and
+   empirical-distribution gates (§C.2–C.3) are exactly these leaves;
+3. a **third evaluation mode** — point/marginal evaluation, distinct from
+   both `evaluate<S>` (semiring, no assignment) and `Expectation` (moments).
+
+Then *sum (have it) + disjoint-scope product + normalized leaves* = a PC,
+and a GMM is the smallest instance.
+
+**Two caveats that should gate the work.** First, this is a **parallel
+inference engine** sharing the gate store, not a unification with
+provenance: the Boolean-WMC path and the PC path stay separate computations.
+Second, decide it by *which query it newly answers*: if the goal is
+marginals / MAP / density of a **learned joint** (GMM, copula, empirical),
+PCs are the right tool and the path above is clean; if it is still moments
+of transformed RVs, the existing algebra already covers it and a product
+node buys nothing. Hence: low priority, and most naturally a by-product of
+§§A.5/C.1/D.2 rather than a goal in itself.
+
 ---
 
 ## E. Provenance × probability — ProvSQL-specific directions
@@ -938,4 +1007,6 @@ architectural risk:
 8. **Research track in parallel.** Causal interventions (§D.4),
    Shapley over RV-valued payoffs (§E.1), and provenance of sampled
    values (§E.2) can be explored independently of (4)–(7), and would
-   each plausibly anchor a paper.
+   each plausibly anchor a paper.  The probabilistic-circuit subsystem
+   (§D.5) is lowest priority and most naturally falls out of §§A.5/C.1/D.2
+   rather than being pursued on its own.
