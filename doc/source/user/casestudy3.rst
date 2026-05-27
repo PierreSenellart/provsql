@@ -40,7 +40,9 @@ Extract the archive; you will need the four text files
 
 **Load the schema and data.**  Download
 :download:`setup.sql <../../casestudy3/setup.sql>`
-and run it from the directory containing the four GTFS files::
+and run it from the directory containing the four GTFS files:
+
+.. code-block:: bash
 
     cd /path/to/gtfs-files
     psql -d mydb -f /path/to/setup.sql
@@ -192,7 +194,9 @@ the ``Paul Bert`` stop on route 391 as an example:
     LIMIT 1;
 
 The formula shows which token carries a ``0`` wheelchair value,
-pinpointing the accessibility barrier.  For example::
+pinpointing the accessibility barrier.  For example:
+
+.. code-block:: text
 
     stop_name | formula
     ----------+-----------------

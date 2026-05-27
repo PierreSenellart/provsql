@@ -39,7 +39,9 @@ Setup
 
 This tutorial assumes a working ProvSQL installation (see
 :doc:`getting-provsql`). Download :download:`setup.sql <../../tutorial/setup.sql>`
-and load it into a fresh PostgreSQL database::
+and load it into a fresh PostgreSQL database:
+
+.. code-block:: bash
 
     psql -d mydb -f setup.sql
 

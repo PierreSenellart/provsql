@@ -169,7 +169,9 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     (``weightmc``), and the GraphViz ASCII renderer (``graph-easy``). The
     server's ``PATH`` is searched as a fallback, so an entry here only needs
     to be set when a tool lives outside the server's default ``PATH`` (e.g.
-    in ``$HOME/local/bin``, a Conda environment, ``/opt/...``). Example::
+    in ``$HOME/local/bin``, a Conda environment, ``/opt/...``). Example:
+
+    .. code-block:: postgresql
 
         SET provsql.tool_search_path = '/opt/d4:/home/postgres/bin';
 
@@ -194,7 +196,9 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     method: ``d4`` (default), ``d4v2``, ``c2d``, ``minic2d``, ``dsharp``,
     ``panini-obdd``, ``panini-obdd-and``, ``panini-decdnnf``. Useful on
     hosts where ``d4`` is not installed but another compiler is, or where
-    you want benchmarks to converge on a single fallback. Example::
+    you want benchmarks to converge on a single fallback. Example:
+
+    .. code-block:: postgresql
 
         SET provsql.fallback_compiler = 'c2d';
 
@@ -210,7 +214,9 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     that server instead of spawning a CLI process per call. The literal
     ``{endpoint}`` is replaced by a Unix-socket path the worker chooses (it
     already carries the ``unix:`` scheme). Empty (default) launches no server.
-    Example::
+    Example:
+
+    .. code-block:: postgresql
 
         ALTER SYSTEM SET provsql.kcmcp_server = 'tdkc --kcmcp {endpoint}';
         SELECT pg_reload_conf();

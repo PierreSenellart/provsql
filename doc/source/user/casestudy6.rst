@@ -66,7 +66,9 @@ This case study assumes a working ProvSQL installation
 (see :doc:`getting-provsql`) and a running ProvSQL Studio
 session pointed at it (see :doc:`studio`). Download
 :download:`setup.sql <../../casestudy6/setup.sql>` and load it
-into a fresh PostgreSQL database::
+into a fresh PostgreSQL database:
+
+.. code-block:: bash
 
     createdb air_quality_demo
     psql -d air_quality_demo -f setup.sql
@@ -90,7 +92,9 @@ readings via the constructors documented in
 * ``historical_readings(...)`` – same shape as ``readings``,
   populated from yesterday's batch.
 
-Connect Studio to the fixture::
+Connect Studio to the fixture:
+
+.. code-block:: bash
 
     provsql-studio --dsn postgresql:///air_quality_demo
 

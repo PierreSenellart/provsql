@@ -33,7 +33,9 @@ Setup
 This case study assumes a working ProvSQL installation on PostgreSQL 14 or
 later (see :doc:`getting-provsql`).  The data files are included in the
 ProvSQL source distribution under ``doc/casestudy4/data/``.  Run the setup script from that
-directory::
+directory:
+
+.. code-block:: bash
 
     cd /path/to/provsql/doc/casestudy4/data
     psql -d mydb -f ../setup.sql

@@ -60,13 +60,17 @@ This case study assumes a working ProvSQL installation
 (see :doc:`getting-provsql`) and a running ProvSQL Studio session
 (see :doc:`studio`). Download
 :download:`setup.sql <../../casestudy7/setup.sql>` and load it into a
-fresh database::
+fresh database:
+
+.. code-block:: bash
 
     createdb peer_review_demo
     psql -d peer_review_demo -f setup.sql
 
 Confidences are seeded by the script (a per-row ``conf`` column fed to
-:sqlfunc:`set_prob`). Connect Studio to the fixture::
+:sqlfunc:`set_prob`). Connect Studio to the fixture:
+
+.. code-block:: bash
 
     provsql-studio --dsn postgresql:///peer_review_demo
 

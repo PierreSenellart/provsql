@@ -25,7 +25,9 @@ and on the `GitHub releases page
 The source repository is hosted at
 `<https://github.com/PierreSenellart/provsql>`_.
 
-To clone the development version directly::
+To clone the development version directly:
+
+.. code-block:: bash
 
     git clone https://github.com/PierreSenellart/provsql.git
 
@@ -82,24 +84,32 @@ Prerequisites
 Installation
 ^^^^^^^^^^^^
 
-1. Compile::
+1. Compile:
+
+   .. code-block:: bash
 
        make
 
    To select a specific PostgreSQL installation, adjust the ``pg_config``
    path in ``Makefile.internal``.
 
-2. Install (as a user with write access to the PostgreSQL directories)::
+2. Install (as a user with write access to the PostgreSQL directories):
+
+   .. code-block:: bash
 
        make install
 
 3. Enable the extension hook. Add the following line to
    `postgresql.conf <https://www.postgresql.org/docs/current/config-setting.html>`_
-   (typically ``/etc/postgresql/VERSION/main/postgresql.conf`` on Linux)::
+   (typically ``/etc/postgresql/VERSION/main/postgresql.conf`` on Linux):
+
+   .. code-block:: ini
 
        shared_preload_libraries = 'provsql'
 
-   Then restart the PostgreSQL server::
+   Then restart the PostgreSQL server:
+
+   .. code-block:: bash
 
        service postgresql restart
 
@@ -110,7 +120,9 @@ Installation
       queries transparently; without it the extension loads but provenance
       tracking is silently disabled.
 
-4. In each database where you want to use ProvSQL, load the extension::
+4. In each database where you want to use ProvSQL, load the extension:
+
+   .. code-block:: postgresql
 
        CREATE EXTENSION provsql CASCADE;
 
@@ -126,7 +138,9 @@ scripts covering every released version from ``1.0.0`` onwards (see
 your checkout). To upgrade an existing installation:
 
 1. Check out the new source, build, and install (as a user with write
-   access to the PostgreSQL directories)::
+   access to the PostgreSQL directories):
+
+   .. code-block:: bash
 
        make
        make install
@@ -138,7 +152,9 @@ your checkout). To upgrade an existing installation:
    ``$PGDATA/base/<db_oid>/`` with a versioned header. Build and run
    the bundled migration tool as the ``postgres`` system user with
    the server stopped (adjust the connection string for your
-   socket directory if different)::
+   socket directory if different):
+
+   .. code-block:: bash
 
        make provsql_migrate_mmap
        sudo -u postgres ./provsql_migrate_mmap -D $PGDATA -c "host=/var/run/postgresql"
@@ -146,11 +162,15 @@ your checkout). To upgrade an existing installation:
    The tool removes the old flat files on success. Skip this step
    when upgrading between 1.3.0+ releases.
 
-3. Restart PostgreSQL so the new shared library is loaded::
+3. Restart PostgreSQL so the new shared library is loaded:
+
+   .. code-block:: bash
 
        service postgresql restart
 
-4. In each database where ``provsql`` is already installed, issue::
+4. In each database where ``provsql`` is already installed, issue:
+
+   .. code-block:: postgresql
 
        ALTER EXTENSION provsql UPDATE;
 
@@ -187,7 +207,9 @@ your checkout). To upgrade an existing installation:
 Testing Your Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Run the full regression suite as a PostgreSQL superuser::
+Run the full regression suite as a PostgreSQL superuser:
+
+.. code-block:: bash
 
     make test
 
@@ -217,7 +239,7 @@ tool is not found in ``$PATH``.
 Uninstalling
 ^^^^^^^^^^^^
 
-::
+.. code-block:: bash
 
     make uninstall
 
@@ -231,7 +253,9 @@ ProvSQL is distributed on the `PostgreSQL Extension Network
 <https://pgxn.org/dist/provsql/>`_.  If you have the
 `pgxnclient <https://pgxn.github.io/pgxnclient/>`_ tool installed,
 a single command (run as a user with write access to the PostgreSQL
-directories) downloads, builds, and installs the extension::
+directories) downloads, builds, and installs the extension:
+
+.. code-block:: bash
 
     pgxn install provsql
 
@@ -242,7 +266,9 @@ to ``shared_preload_libraries`` in ``postgresql.conf`` and restart
 the server afterwards -- ``pgxn install`` wraps the source build but
 does not modify your server configuration.
 
-To install a specific version::
+To install a specific version:
+
+.. code-block:: bash
 
     pgxn install provsql=X.Y.Z
 
@@ -254,11 +280,15 @@ Docker Container
 
 For a quick trial without any local installation, a demonstration Docker
 container is available. It is full-featured except for ``c2d`` and
-``minic2d`` support::
+``minic2d`` support:
+
+.. code-block:: bash
 
     docker run inriavalda/provsql
 
-To use a specific release version::
+To use a specific release version:
+
+.. code-block:: bash
 
     docker run inriavalda/provsql:X.Y.Z
 

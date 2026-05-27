@@ -33,7 +33,9 @@ Setup
 
 This case study assumes a working ProvSQL installation (see
 :doc:`getting-provsql`). Download :download:`setup.sql <../../casestudy5/setup.sql>`
-and load it into a fresh PostgreSQL database::
+and load it into a fresh PostgreSQL database:
+
+.. code-block:: bash
 
     psql -d mydb -f setup.sql
 

@@ -9,7 +9,9 @@ to a value in a chosen semiring by:
    ``monus`` gates for m-semirings :cite:`DBLP:journals/japll/GeertsP10`)
    according to the semiring operations.
 
-The built-in evaluation functions all follow the same calling convention::
+The built-in evaluation functions all follow the same calling convention:
+
+.. code-block:: postgresql
 
     sr_<name>(provenance(), 'mapping_name')
 

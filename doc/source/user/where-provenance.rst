@@ -15,7 +15,9 @@ Where-provenance is disabled by default. Enable it for a session with:
 
     SET provsql.where_provenance = on;
 
-Or enable it permanently in ``postgresql.conf``::
+Or enable it permanently in ``postgresql.conf``:
+
+.. code-block:: ini
 
     provsql.where_provenance = on
 

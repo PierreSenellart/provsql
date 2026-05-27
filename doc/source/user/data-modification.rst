@@ -18,7 +18,9 @@ Update-provenance tracking is disabled by default. Enable it for a session:
 
     SET provsql.update_provenance = on;
 
-Or permanently in ``postgresql.conf``::
+Or permanently in ``postgresql.conf``:
+
+.. code-block:: ini
 
     provsql.update_provenance = on
 

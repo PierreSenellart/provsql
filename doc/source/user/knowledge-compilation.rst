@@ -75,7 +75,9 @@ variable mapping described :ref:`below <tseytin-cnf-mapping>`; the
 ``p cnf <variables> <clauses>`` header and the clauses follow. With the
 default ``weighted => true``, the literal-weight lines required by
 `weighted model counters <https://en.wikipedia.org/wiki/Model_counting>`_
-are appended, one per input literal::
+are appended, one per input literal:
+
+.. code-block:: text
 
     c input 1 7f3a2b1c-… 0.5
     c input 2 9b2c4d5e-… 0.6
@@ -247,7 +249,9 @@ supported limit), and the ``compile_ms`` wall-clock compile time. It
 accepts the same compiler names as :sqlfunc:`compile_to_ddnnf_dot`,
 including the in-process ``interpret-as-dd`` and ``tree-decomposition``
 routes, so a single string change re-measures a different compiler on
-the same circuit::
+the same circuit:
+
+.. code-block:: json
 
     {
         "and": 3, "or": 4, "not": 0, "inputs": 5,
@@ -295,7 +299,9 @@ the default method then falls through to an external compiler (the
 :sqlfunc:`tree_decomposition_dot` exposes the underlying min-fill
 decomposition as DOT, so the variable-elimination order that yields the
 in-process d-DNNF is itself inspectable. Its first line is a comment
-carrying the treewidth::
+carrying the treewidth:
+
+.. code-block:: text
 
     // treewidth=3
 
