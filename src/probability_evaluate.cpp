@@ -523,6 +523,13 @@ static Datum probability_evaluate_internal
       }
     }
   } catch(CircuitException &e) {
+    // If the exception was raised because a query cancel or statement
+    // timeout is pending (the in-process loops throw "Interrupted" off the
+    // provsql_interrupted flag rather than longjmp through their C++ stack),
+    // let PG report its native 57014 with the specific reason instead of the
+    // generic "Interrupted".  For any other CircuitException no cancel is
+    // pending, so CHECK_FOR_INTERRUPTS is a no-op and we report it as-is.
+    CHECK_FOR_INTERRUPTS();
     provsql_error("%s", e.what());
   }
 
