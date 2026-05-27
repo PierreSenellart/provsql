@@ -56,6 +56,18 @@ p5|0.169143
 p6|0.036450
 p7|0.031894
 (7 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+p_if|p_pw|p_default
+0.322511|0.322511|0.322511
+(1 row)
 remove_provenance
 
 (1 row)
@@ -85,3 +97,8 @@ r3|0.800160
 r4|0.585600
 r5|0.549600
 (4 rows)
+NOTICE:  drop cascades to 4 other objects
+DETAIL:  drop cascades to constraint recommend_paper_fkey on table recommend
+drop cascades to constraint champion_paper_fkey on table champion
+drop cascades to constraint recommend_reviewer_fkey on table recommend
+drop cascades to constraint champion_reviewer_fkey on table champion

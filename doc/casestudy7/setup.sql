@@ -188,6 +188,58 @@ INSERT INTO assignment(reviewer, paper) VALUES
   ('r4','p2'), ('r4','p5');
 SELECT repair_key('assignment', 'reviewer');
 
+-- Inversion-free demo fixture (Step 7).  A self-join witness that is NOT
+-- read-once yet is inversion-free, so a single global variable order
+-- compiles it in linear time while a generic compiler / tree decomposition
+-- chokes.  Olga (r15) is a prolific bidder who skimmed a 24-paper
+-- submission batch (q01..q24); `recommend` and `champion` are two
+-- post-review signals (she recommended a paper for acceptance, and would
+-- champion it at the PC meeting).  The witness query asks for a reviewer
+-- whose bids overlap both a recommendation and a championing; grouping on
+-- the reviewer shares the bid(r15,*) leaves between the two sides, so the
+-- lineage is not read-once but stays inversion-free (root = reviewer, a
+-- consistent-unification self-join on `bid`).
+--
+-- Kept isolated from the core instance so Steps 1-6 and 8 are unchanged:
+-- Olga has no `expertise` row and the submission papers carry no
+-- `topic_of`, so none of this data reaches the coverage / recursive
+-- queries (which all join through expertise / topic_of / the graphs).
+INSERT INTO reviewers VALUES ('r15','Olga');
+INSERT INTO papers SELECT 'q'||to_char(g,'FM00'), format('Submission %s', g)
+  FROM generate_series(1,24) g;
+INSERT INTO bid(reviewer, paper, conf, lbl)
+  SELECT 'r15', p.id, 0.5, format('bid(r15,%s)', p.id)
+  FROM papers p WHERE p.id LIKE 'q%';
+SELECT set_prob(provenance(), 0.5) FROM bid WHERE reviewer = 'r15';
+
+CREATE TABLE recommend (
+  reviewer TEXT NOT NULL REFERENCES reviewers(id),
+  paper    TEXT NOT NULL REFERENCES papers(id),
+  lbl      TEXT,
+  PRIMARY KEY (reviewer, paper)
+);
+INSERT INTO recommend(reviewer, paper, lbl)
+  SELECT 'r15', p.id, format('rec(r15,%s)', p.id)
+  FROM papers p WHERE p.id LIKE 'q%';
+SELECT add_provenance('recommend');
+SELECT set_prob(provenance(), 0.4) FROM recommend;
+SELECT create_provenance_mapping('recommend_label', 'recommend', 'lbl');
+ALTER TABLE recommend DROP COLUMN lbl;
+
+CREATE TABLE champion (
+  reviewer TEXT NOT NULL REFERENCES reviewers(id),
+  paper    TEXT NOT NULL REFERENCES papers(id),
+  lbl      TEXT,
+  PRIMARY KEY (reviewer, paper)
+);
+INSERT INTO champion(reviewer, paper, lbl)
+  SELECT 'r15', p.id, format('champ(r15,%s)', p.id)
+  FROM papers p WHERE p.id LIKE 'q%';
+SELECT add_provenance('champion');
+SELECT set_prob(provenance(), 0.3) FROM champion;
+SELECT create_provenance_mapping('champion_label', 'champion', 'lbl');
+ALTER TABLE champion DROP COLUMN lbl;
+
 -- Label mappings so the Studio eval-strip's sr_formula / sr_why / sr_how
 -- and PROV-XML export name the leaves instead of showing raw UUIDs. The
 -- `lbl` columns exist only to feed create_provenance_mapping, which copies

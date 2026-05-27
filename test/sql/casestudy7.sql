@@ -232,6 +232,69 @@ SELECT paper, p_having FROM cs7_having ORDER BY paper;
 DROP TABLE cs7_having;
 
 -- ---------------------------------------------------------------------
+-- Step 7 (inversion-free): a prolific bidder's bid/recommend/champion
+-- self-join.  The literal circuit is NOT read-once (independent rejects),
+-- yet the query is inversion-free, so the structured-d-DNNF builder
+-- evaluates it exactly -- cross-checked here against possible-worlds at a
+-- small size, and matched by the default chain (which takes the
+-- inversion-free rung).  doc/casestudy7/setup.sql ships the same shape
+-- scaled to 24 papers, where the generic compilers / tree decomposition
+-- blow up while the inversion-free path stays linear.
+-- ---------------------------------------------------------------------
+INSERT INTO reviewers VALUES ('r15','Olga');
+INSERT INTO papers SELECT 'q'||g, format('Submission %s', g) FROM generate_series(1,4) g;
+INSERT INTO bid(reviewer, paper) SELECT 'r15', 'q'||g FROM generate_series(1,4) g;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM bid WHERE reviewer = 'r15'; END $$;
+CREATE TABLE recommend (
+  reviewer text NOT NULL REFERENCES reviewers(id),
+  paper    text NOT NULL REFERENCES papers(id),
+  PRIMARY KEY (reviewer, paper)
+);
+INSERT INTO recommend SELECT 'r15', 'q'||g FROM generate_series(1,4) g;
+SELECT add_provenance('recommend');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.4) FROM recommend; END $$;
+CREATE TABLE champion (
+  reviewer text NOT NULL REFERENCES reviewers(id),
+  paper    text NOT NULL REFERENCES papers(id),
+  PRIMARY KEY (reviewer, paper)
+);
+INSERT INTO champion SELECT 'r15', 'q'||g FROM generate_series(1,4) g;
+SELECT add_provenance('champion');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.3) FROM champion; END $$;
+
+-- Build the witness as a top-level query so the planner attaches the
+-- inversion-free certificate to its per-row root.
+CREATE TABLE cs7_if_w AS
+  SELECT b1.reviewer AS reviewer, provenance() AS p
+  FROM bid b1, recommend a, bid b2, champion c
+  WHERE b1.reviewer = a.reviewer AND b1.paper = a.paper
+    AND b1.reviewer = b2.reviewer
+    AND b2.reviewer = c.reviewer AND b2.paper = c.paper
+  GROUP BY b1.reviewer;
+SELECT remove_provenance('cs7_if_w');
+
+DO $$
+DECLARE tok uuid; raised boolean := false;
+BEGIN
+  SELECT p INTO tok FROM cs7_if_w;
+  BEGIN PERFORM probability_evaluate(tok, 'independent');
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected inversion-free witness to reject independent (not read-once)';
+  END IF;
+END $$;
+
+CREATE TABLE cs7_if AS
+  SELECT round(probability_evaluate(p, 'inversion-free')::numeric,6)  AS p_if,
+         round(probability_evaluate(p, 'possible-worlds')::numeric,6) AS p_pw,
+         round(probability_evaluate(p)::numeric,6)                    AS p_default
+  FROM cs7_if_w;
+SELECT p_if, p_pw, p_default FROM cs7_if;
+DROP TABLE cs7_if;
+DROP TABLE cs7_if_w;
+
+-- ---------------------------------------------------------------------
 -- Step 7: correlation via repair_key.  Exact methods are correct;
 -- independent would be wrong (correlated by construction).
 -- ---------------------------------------------------------------------

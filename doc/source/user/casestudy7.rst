@@ -31,17 +31,17 @@ The Scenario
 A conference-reviewing setup, with five uncertain (tuple-independent)
 relations alongside deterministic dimension tables ``reviewers`` /
 ``papers`` / ``topics`` and one block-correlated table ``assignment``
-(used in Step 7). Three relations drive the coverage queries, and two
-more are graphs queried recursively in Step 8:
+(used in Step 8). Three relations drive the coverage queries, and two
+more are graphs queried recursively in Step 9:
 
 * ``bid(reviewer, paper)`` -- a reviewer offered to review a paper; the
   confidence is how firm the bid is (availability, willingness).
 * ``expertise(reviewer, topic)`` -- the reviewer's area of competence.
 * ``topic_of(paper, topic)`` -- the paper is about a topic.
 * ``extends(citing, cited)`` -- a paper builds on an earlier paper
-  (a directed **acyclic** citation graph; Step 8).
+  (a directed **acyclic** citation graph; Step 9).
 * ``coreview(a, b)`` -- two reviewers have served on a committee together
-  (a **symmetric**, hence cyclic, collaboration graph; Step 8).
+  (a **symmetric**, hence cyclic, collaboration graph; Step 9).
 
 The instance has 14 reviewers, 4 topics and 7 papers. A key modelling
 choice drives the whole study: ``expertise`` is declared with a
@@ -275,6 +275,15 @@ from Step 4.
    compiled size varies by compiler, ``monte-carlo`` lands in its band,
    and ``independent`` reports the circuit is not independent.
 
+Which compilers and counters appear in those pickers depends on what is
+installed. The **Tools** panel (the wrench icon in the top nav) lists the
+external-tool registry -- every ``compile`` and ``wmc`` tool ProvSQL
+knows, each flagged whether it is *available* on your backend (its binary
+resolves on the server's ``PATH``) and *enabled* -- read live from
+``provsql.tools`` (see :doc:`/user/tool-registry`). The compiler dropdown
+and the benchmark offer only the available, enabled ones, so the rows you
+see reflect your machine.
+
 Step 6: A Shortcut Before Compilation
 -------------------------------------
 
@@ -301,7 +310,59 @@ reporting that the ``gate_cmp`` was shortcut by the pre-pass and how many
 gates the circuit shrank by. All probability methods (even,
 ``independent``) compute the probability easily.
 
-Step 7: Correlation via ``repair_key``
+Step 7: Hard-Looking, Secretly Linear
+-------------------------------------
+
+Steps 3-5 sent a :math:`\#P`-hard query to a compiler; Step 6 skipped the
+compiler with a count-threshold shortcut. Here is a third escape: a query
+whose lineage is **not** read-once -- so ``independent`` rejects it, and a
+generic compiler treats it as hard -- yet whose *shape* admits a
+linear-size OBDD. ProvSQL recognises this **inversion-free** class (the
+``inversion-free`` method in :doc:`probabilities`) at planning time and
+evaluates it with a structured d-DNNF built over a query-derived variable
+order, instead of reaching for a compiler.
+
+For this step the fixture adds one prolific bidder, **Olga** (``r15``),
+who skimmed a 24-paper submission batch (``q01``..``q24``), and two
+post-review signals: ``recommend(reviewer, paper)`` -- she recommended the
+paper for acceptance -- and ``champion(reviewer, paper)`` -- she would
+champion it at the PC meeting. (Olga has no ``expertise`` row and the
+submission papers carry no ``topic_of``, so none of this perturbs the
+coverage queries above.) Ask for a reviewer whose bids overlap **both** a
+recommendation **and** a championing:
+
+.. code-block:: postgresql
+
+    SELECT b1.reviewer
+    FROM bid b1, recommend a, bid b2, champion c
+    WHERE b1.reviewer = a.reviewer AND b1.paper = a.paper
+      AND b1.reviewer = b2.reviewer
+      AND b2.reviewer = c.reviewer AND b2.paper = c.paper
+    GROUP BY b1.reviewer
+
+Grouping on the reviewer ``OR``\ s the two evidence sides over all of
+Olga's papers, and both sides **share** the ``bid(r15, *)`` leaves -- so
+the lineage is not read-once and ``independent`` rejects it. But it is a
+*consistent-unification self-join* on ``bid`` with a single root variable
+(``reviewer``), which is exactly the inversion-free condition. In Circuit
+mode the per-row root carries a teal :sc:`IF` badge (the inversion-free
+certificate); pin it to read the certificate header and the
+variable-block order.
+
+Now compare methods on that one row. ``tree-decomposition`` gives up
+(*"Treewidth greater than 10"*); ``possible-worlds`` refuses (the witness
+has more than 64 inputs); and a real compiler does not finish -- with a
+``statement_timeout`` set, ``d4`` is cut off on the 24-paper instance,
+exactly as the hard query of Step 3 was. Yet :guilabel:`Marginal
+probability` with the ``inversion-free`` method -- and the **default**
+method, which takes the inversion-free rung automatically once the
+certificate is present -- returns ``0.975314`` in milliseconds. The query
+*looks* as hard as Step 3 to every circuit-level method, but its
+tractability is visible in the query, not in the materialised circuit:
+only the planner's query-derived order recovers it. (Shrink the batch and
+``possible-worlds`` agrees to full precision, pinning the value.)
+
+Step 8: Correlation via ``repair_key``
 --------------------------------------
 
 .. figure:: /_static/casestudy7/schema-keys.png
@@ -339,7 +400,7 @@ within a block rather than multiplying), so this kind of block
 correlation, unlike the non-hierarchical cycle of Step 3, stays
 tractable without a compiler.
 
-Step 8: Recursive Lineage -- Reachability and Reliability
+Step 9: Recursive Lineage -- Reachability and Reliability
 ---------------------------------------------------------
 
 .. note::
