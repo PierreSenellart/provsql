@@ -219,7 +219,11 @@ static Datum probability_evaluate_internal
       SafeCert *cert = safe_cert_parse(ex.c_str());
       if (cert != nullptr && cert->kind == CERT_INVERSION_FREE) {
         inv_free_cert = true;
-        if (provsql_verbose >= 1)
+        // Internal per-evaluation diagnostic (the certificate round-trips from
+        // the planner), not a result-comprehension message: keep it at the
+        // detector's debug-trace level (>= 30) so it stays out of the level-5
+        // floor the Studio eval strip applies.
+        if (provsql_verbose >= 30)
           provsql_notice("inversion-free certificate read back from circuit "
                          "root: %d atoms, %d classes, root_class=%d",
                          cert->natoms, cert->nclasses, cert->root_class);

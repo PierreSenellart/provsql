@@ -12,7 +12,6 @@ NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 4 atoms, 3 classes, root=0, order=[0
 remove_provenance
 
 (1 row)
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 4 atoms, 3 classes, root_class=0
 witness_prob
 0.062500
 (1 row)
@@ -52,9 +51,6 @@ remove_provenance
 block_rows
 1
 (1 row)
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 4 atoms, 3 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 4 atoms, 3 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 4 atoms, 3 classes, root_class=0
 block_default|block_if|block_pw
 0.22030000|0.22030000|0.22030000
 (1 row)
@@ -71,15 +67,6 @@ remove_provenance
 sjf_rows
 3
 (1 row)
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
-NOTICE:  ProvSQL: inversion-free certificate read back from circuit root: 2 atoms, 1 classes, root_class=0
 x|sjf_default|sjf_if|sjf_pw
 1|0.200000|0.200000|0.200000
 2|0.200000|0.200000|0.200000
