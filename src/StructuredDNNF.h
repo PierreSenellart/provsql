@@ -1,17 +1,15 @@
 /**
  * @file StructuredDNNF.h
- * @brief In-process reduced-OBDD construction over a query-derived variable
+ * @brief In-process structured-d-DNNF construction over a query-derived variable
  *        order, for the inversion-free UCQ(OBDD) probability path.
  *
- * Given a @c BooleanCircuit (AND / OR / NOT / IN over independent inputs) and a
- * total order on its input variables, build a reduced OBDD of the function and
- * read off its probability (inputs independent Bernoulli).  For an
- * inversion-free query the query-derived (Prop. 4.5) order yields an OBDD of
+ * Given a @c BooleanCircuit (monotone AND / OR / IN over independent inputs) and
+ * a total order on its input variables, compile the function into a ProvSQL
+ * @c dDNNF and read off its probability (inputs independent Bernoulli).  For an
+ * inversion-free query the query-derived (Prop. 4.5) order yields a d-DNNF of
  * size linear in the lineage, where the generic methods (tree-decomposition,
  * d4) blow up.
  *
- * This phase validates the construction (size + probability); emitting the
- * result as a ProvSQL @c dDNNF for the in-server evaluator is a later phase.
  * Pure C++ (BooleanCircuit + STL, no PostgreSQL headers) so it builds both in
  * the extension and the standalone @c -DTDKC harness.
  */
@@ -26,51 +24,6 @@
 #include <unordered_map>
 #include <vector>
 #include <cstddef>
-
-class StructuredDNNF {
-public:
-  /**
-   * @param bc          Boolean circuit (no multivalued inputs).
-   * @param root        Root gate of the function to compile.
-   * @param input_rank  Maps every IN gate reachable from @p root to a distinct
-   *                    rank in @c [0,ninputs).  Lower rank = tested earlier
-   *                    (nearer the OBDD root).
-   * @throws CircuitException if @p bc has multivalued gates, or a reachable
-   *         input lacks a rank, or an unsupported gate type is met.
-   */
-  StructuredDNNF(const BooleanCircuit &bc, gate_t root,
-                 const std::map<gate_t, int> &input_rank);
-
-  /** @brief Probability that the function is true (independent inputs). */
-  double probability() const;
-
-  /** @brief Decision nodes reachable from the root (the reduced-OBDD size). */
-  std::size_t size() const;
-
-  /** @brief Total decision nodes created during apply (work proxy, >= size()). */
-  std::size_t workSize() const { return nodes_.size() >= 2 ? nodes_.size() - 2 : 0; }
-
-private:
-  /* OBDD node table.  Index 0 = FALSE terminal, 1 = TRUE terminal, >=2 =
-   * decision node.  @c var is the variable rank (terminals use a +inf
-   * sentinel so they sort below every variable). */
-  struct Node { int var; int lo; int hi; };
-  std::vector<Node> nodes_;
-
-  std::map<std::tuple<int,int,int>, int> unique_;       // (var,lo,hi) -> node
-  std::map<std::tuple<int,int,int>, int> apply_cache_;  // (op,f,g)    -> node (op:0=AND,1=OR)
-  std::map<int,int> negate_cache_;                      // f -> ¬f
-  std::vector<double> prob_by_rank_;                    // P(variable) per rank
-
-  int root_;
-
-  int varOf(int node) const;
-  int mk(int var, int lo, int hi);
-  int applyOp(int op, int f, int g);
-  int negate(int f);
-  int build(const BooleanCircuit &bc, gate_t g,
-            const std::map<gate_t,int> &rank, std::map<gate_t,int> &memo);
-};
 
 /**
  * @brief Top-down structured-d-DNNF builder over a query-derived variable order.
@@ -121,37 +74,21 @@ public:
                         std::size_t max_nodes = 0);
 
   /**
-   * @brief Structured per-input order key (the task-11 key, derived by the
-   *        caller for now).
+   * @brief Structured per-input order key carried by the planner's markers.
    *
-   * Locates an input variable in the query hierarchy of a consistent-unification
-   * self-join: @c root is the root-class value (one independent block per
-   * value), @c sec the secondary-class value (one tile per value within a
-   * block), and @c factor which quantified factor (clause) the variable's atom
-   * belongs to, or @c GUARD_FACTOR for a self-join atom shared by every factor
-   * of its tile.  For the witness @c S(x,y),A(x,y),S(x,z),B(x,z): the @c S tuple
-   * is @c {a,v,GUARD}, @c A is @c {a,v,0}, @c B is @c {a,v,1}.
+   * Locates an input variable in the query hierarchy: @c root is the root-class
+   * value (one independent block per value), @c sec the secondary-class value
+   * (one tile per value within a block), and @c factor which quantified factor
+   * (clause) the variable's atom belongs to, or @c GUARD_FACTOR for a self-join
+   * atom shared by every factor of its tile.  For the witness
+   * @c S(x,y),A(x,y),S(x,z),B(x,z): the @c S tuple is @c {a,v,GUARD}, @c A is
+   * @c {a,v,0}, @c B is @c {a,v,1}.  The caller flattens these keys into a total
+   * rank (root, then sec, then guard-before-payload, then factor) for the
+   * order-only constructor above; the struct is the carrier between the marker
+   * collection and that flattening.
    */
   struct InputKey { int root; int sec; int factor; };
   static constexpr int GUARD_FACTOR = -1;
-
-  /**
-   * @brief Linear-build constructor over the factored (clause-set) hierarchy.
-   *
-   * Uses the structured keys to keep each block factored as an AND of clauses
-   * (one disjunction per factor, sharing the self-join guard), OR-chained across
-   * blocks without ever flattening to the @f$n^2@f$ cross-terms.  The bounded
-   * atom-frontier then falls out of caching the compact clause-set cofactors, so
-   * build time is linear in the lineage for fixed query.  Same d-DNNF output
-   * contract as the order-only constructor.
-   *
-   * @param keys  One @c InputKey per IN gate reachable from @p root.
-   * @throws CircuitException as the order-only constructor, plus on a key set
-   *         that does not describe a well-formed block/tile/factor hierarchy.
-   */
-  StructuredDNNFBuilder(const BooleanCircuit &bc, gate_t root,
-                        const std::map<gate_t, InputKey> &keys,
-                        std::size_t max_nodes = 0);
 
   /** @brief The constructed d-DNNF (root set, simplified). */
   const dDNNF &dnnf() const { return dd_; }
@@ -218,28 +155,6 @@ private:
    * so the inert components are not dragged through the residual DNF. */
   gate_t build(const DNF &d, gate_t false_sink);
 
-  /* Factored linear-build path (keyed constructor): an explicit bounded
-   * atom-frontier sweep.  A block is a sequence of tiles in secondary order;
-   * each tile has shared self-join @c guards and, per factor, a @c payload
-   * variable.  The block function is @c AND_f(OR_t guards_t & payload_{f,t}).
-   * The sweep carries the compact state @c (tile,unsat-factor-bitmask) and
-   * memoises on it, so each of the @c O(tiles * 2^g) frontier states is built
-   * once in @c O(2^g) time -- linear in the output for fixed query. */
-  struct SweepTile {
-    std::vector<Var> guards;                       ///< shared guard vars (all must hold)
-    std::vector<std::pair<int, Var>> payload;      ///< (factor bit, payload var)
-  };
-  struct SweepCtx {
-    const std::vector<SweepTile> *tiles;
-    int g;                                          ///< number of factors (frontier width)
-    gate_t false_sink;
-    std::unordered_map<unsigned long, gate_t> *memo;
-  };
-  gate_t sweepTile(const SweepCtx &cx, std::size_t t, unsigned unsat);
-  gate_t sweepFire(const SweepCtx &cx, std::size_t t, unsigned unsat,
-                   const std::vector<std::pair<int, Var>> &relevant, std::size_t ri);
-  gate_t sweepGuards(const SweepCtx &cx, const std::vector<Var> &guards,
-                     std::size_t gi, gate_t fire, gate_t nofire);
 };
 
 #endif /* STRUCTURED_DNNF_H */
