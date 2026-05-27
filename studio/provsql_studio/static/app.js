@@ -40,6 +40,25 @@
   window.ProvsqlStudio = window.ProvsqlStudio || {};
   window.ProvsqlStudio.metadata = Metadata;
 
+  // The top-nav popovers (Schema, Config, Tools) are mutually exclusive:
+  // opening one closes the others.  Each calls this from its open() before
+  // showing itself (their own click handlers stopPropagation, so the others'
+  // outside-click handlers never fire on their own).
+  const NAV_PANELS = [
+    { panel: 'schema-panel', btn: 'schema-btn' },
+    { panel: 'config-panel', btn: 'config-btn' },
+    { panel: 'tools-panel',  btn: 'tools-btn' },
+  ];
+  function closeOtherNavPanels(exceptPanelId) {
+    for (const { panel, btn } of NAV_PANELS) {
+      if (panel === exceptPanelId) continue;
+      const p = document.getElementById(panel);
+      const b = document.getElementById(btn);
+      if (p) p.hidden = true;
+      if (b) b.setAttribute('aria-expanded', 'false');
+    }
+  }
+
   // Hide eval-strip options whose external tool is missing on the
   // backend. The map comes from /api/kc/tools (one round-trip per
   // refresh) and lists which `eval-args-compiler` and
@@ -245,6 +264,7 @@
   setInterval(fetchConnInfo, 5000);
   setupConfigPanel();
   setupSchemaPanel();
+  setupToolsPanel();
 
   // ⌘ / Ctrl+Enter submits the query form. Alt+↑/Alt+↓ steps through the
   // saved query history without opening the dropdown.
@@ -1085,6 +1105,7 @@
     }
 
     function open() {
+      closeOtherNavPanels('config-panel');
       panel.hidden = false;
       btn.setAttribute('aria-expanded', 'true');
       if (!loaded) loadConfig();
@@ -1246,6 +1267,287 @@
     return Number.isFinite(n) && n >= 0 && n <= 15 ? n : 4;
   }
   window.ProvsqlStudio.getProbDecimals = getProbDecimals;
+
+  /* ──────── Tools panel: the external-tool registry (provsql.tools) ──────── */
+
+  function setupToolsPanel() {
+    const btn      = document.getElementById('tools-btn');
+    const panel    = document.getElementById('tools-panel');
+    const body     = document.getElementById('tools-body');
+    const status   = document.getElementById('tools-status');
+    const readonly = document.getElementById('tools-readonly');
+    if (!btn || !panel || !body) return;
+
+    const listView = document.getElementById('tools-list-view');
+    const formView = document.getElementById('tools-form-view');
+    const formTitle = document.getElementById('tools-form-title');
+    const addBtn   = document.getElementById('tools-add-btn');
+    const backBtn  = document.getElementById('tools-form-back');
+    const registerBtn = document.getElementById('tool-register-btn');
+    const nameInput = document.getElementById('tool-name');
+    const kindSel  = document.getElementById('tool-kind');
+    const execField = document.getElementById('tool-exec-field');
+    const argtplField = document.getElementById('tool-argtpl-field');
+    const argtplcField = document.getElementById('tool-argtplc-field');
+    const connField = document.getElementById('tool-conn-field');
+    const connSel  = document.getElementById('tool-conn');
+    const endpointField = document.getElementById('tool-endpoint-field');
+    const infmtBox = document.getElementById('tool-infmt');
+    const outSel   = document.getElementById('tool-outfmt');
+    const parserSel = document.getElementById('tool-parser');
+    let canManage = false;
+
+    // Operation -> the input / output / parser values that make sense and are
+    // implemented (mirrors the seeded registry in src/ToolRegistry.cpp), so the
+    // form offers only valid choices.
+    const PRESETS = {
+      compile: { inputs: ['dimacs-cnf', 'circuit-bcs12'], outputs: ['ddnnf-nnf', 'panini-dd'], parsers: ['nnf', 'panini-dd'] },
+      wmc:     { inputs: ['dimacs-cnf'], outputs: ['decimal'], parsers: ['wmc-line', 'weightmc'] },
+      render:  { inputs: ['dot'], outputs: ['ascii'], parsers: ['ascii'] },
+    };
+    const OP_LABEL = { compile: 'Compilation', wmc: 'Weighted counting', render: 'Rendering' };
+    const OP_ORDER = ['compile', 'wmc', 'render'];
+    const KIND_TITLE = {
+      cli: 'cli: ProvSQL spawns this binary once per call.',
+      kcmcp: 'kcmcp: a warm socket server, reached over the KCMCP protocol.',
+    };
+
+    function showStatus(msg, isError) {
+      if (!status) return;
+      status.textContent = msg || '';
+      status.hidden = !msg;
+      status.classList.toggle('is-error', !!isError);
+    }
+    async function postJSON(url, bodyObj) {
+      const resp = await fetch(url, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyObj) });
+      let data = {};
+      try { data = await resp.json(); } catch { /* non-JSON */ }
+      return { ok: resp.ok, status: resp.status, data };
+    }
+    const errOf = (r) => (r.data && (r.data.detail || r.data.error)) || ('HTTP ' + r.status);
+
+    function selectedOps() {
+      return Array.from(document.querySelectorAll('.tool-op:checked')).map((c) => c.value);
+    }
+    function unionPreset(key) {
+      const out = [];
+      selectedOps().forEach((op) => (PRESETS[op] ? PRESETS[op][key] : [])
+        .forEach((v) => { if (!out.includes(v)) out.push(v); }));
+      return out;
+    }
+    function refreshPresets() {
+      const inputs = unionPreset('inputs');
+      const checked = new Set(Array.from(infmtBox.querySelectorAll('input:checked')).map((c) => c.value));
+      infmtBox.textContent = '';
+      inputs.forEach((fmt, idx) => {
+        const lab = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.className = 'tool-infmt'; cb.value = fmt;
+        cb.checked = checked.has(fmt) || (checked.size === 0 && idx === 0);
+        lab.appendChild(cb); lab.appendChild(document.createTextNode(' ' + fmt));
+        infmtBox.appendChild(lab);
+      });
+      const fill = (sel, vals) => {
+        const cur = sel.value;
+        sel.textContent = '';
+        vals.forEach((v) => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+        if (vals.includes(cur)) sel.value = cur;
+      };
+      fill(outSel, unionPreset('outputs'));
+      fill(parserSel, unionPreset('parsers'));
+    }
+    function applyConnFields() {
+      endpointField.hidden = !(kindSel.value === 'kcmcp' && connSel.value === 'endpoint');
+    }
+    function applyKindFields() {
+      const kcmcp = kindSel.value === 'kcmcp';
+      execField.hidden = kcmcp;
+      argtplField.hidden = kcmcp;
+      argtplcField.hidden = kcmcp;
+      connField.hidden = !kcmcp;
+      applyConnFields();
+    }
+    kindSel.addEventListener('change', applyKindFields);
+    connSel.addEventListener('change', applyConnFields);
+    document.querySelectorAll('.tool-op').forEach((c) => c.addEventListener('change', refreshPresets));
+
+    function badge(text, cls, title) {
+      const b = document.createElement('span');
+      b.className = 'wp-tools__badge' + (cls ? ' ' + cls : '');
+      b.textContent = text;
+      if (title) b.title = title;
+      return b;
+    }
+    function renderRow(t) {
+      const row = document.createElement('div');
+      row.className = 'wp-tools__row';
+      const dot = document.createElement('span');
+      dot.className = 'wp-tools__dot ' + (t.available ? 'wp-tools__dot--ok' : 'wp-tools__dot--no');
+      dot.title = t.available ? 'available' : 'unavailable';
+      row.appendChild(dot);
+      const name = document.createElement('span');
+      name.className = 'wp-tools__rname';
+      name.textContent = t.name;
+      if (!t.enabled) name.classList.add('is-disabled');
+      row.appendChild(name);
+      row.appendChild(badge(t.kind, 'wp-tools__badge--' + t.kind, KIND_TITLE[t.kind]));
+      const target = document.createElement('span');
+      target.className = 'wp-tools__target';
+      target.textContent = t.kind === 'kcmcp' ? t.endpoint : t.executable;
+      target.title = target.textContent;
+      row.appendChild(target);
+      if (canManage) {
+        const pref = document.createElement('input');
+        pref.type = 'number'; pref.className = 'wp-tools__pref'; pref.value = t.preference; pref.step = '1';
+        pref.title = 'preference (higher is selected first)';
+        pref.addEventListener('change', async () => {
+          const v = parseInt(pref.value, 10);
+          if (Number.isNaN(v) || v === t.preference) return;
+          const r = await postJSON('/api/kc/registry/preference', { name: t.name, preference: v });
+          if (r.ok) afterMutation(); else { showStatus(errOf(r), true); pref.value = t.preference; }
+        });
+        row.appendChild(pref);
+        const en = document.createElement('input');
+        en.type = 'checkbox'; en.className = 'wp-tools__en'; en.checked = t.enabled; en.title = 'enabled';
+        en.addEventListener('change', async () => {
+          const r = await postJSON('/api/kc/registry/enable', { name: t.name, enabled: en.checked });
+          if (r.ok) afterMutation(); else { showStatus(errOf(r), true); en.checked = t.enabled; }
+        });
+        row.appendChild(en);
+        const edit = document.createElement('button');
+        edit.type = 'button'; edit.className = 'wp-tools__edit'; edit.title = 'edit';
+        edit.innerHTML = '<i class="fas fa-pen"></i>';
+        edit.addEventListener('click', () => showForm(t));
+        row.appendChild(edit);
+        const del = document.createElement('button');
+        del.type = 'button'; del.className = 'wp-tools__del'; del.title = 'unregister';
+        del.innerHTML = '<i class="fas fa-times"></i>';
+        del.addEventListener('click', async () => {
+          if (!window.confirm('Unregister tool "' + t.name + '"?')) return;
+          const r = await postJSON('/api/kc/registry/unregister', { name: t.name });
+          if (r.ok) afterMutation(); else showStatus(errOf(r), true);
+        });
+        row.appendChild(del);
+      } else {
+        const pref = document.createElement('span');
+        pref.className = 'wp-tools__pref-ro'; pref.textContent = t.preference;
+        row.appendChild(pref);
+        const en = document.createElement('span');
+        en.className = 'wp-tools__en-ro'; en.textContent = t.enabled ? 'on' : 'off';
+        row.appendChild(en);
+      }
+      return row;
+    }
+    function render(tools) {
+      body.textContent = '';
+      if (!tools.length) {
+        const p = document.createElement('p'); p.className = 'wp-tools__empty';
+        p.textContent = 'No tools registered.'; body.appendChild(p); return;
+      }
+      OP_ORDER.forEach((op) => {
+        const inOp = tools.filter((t) => (t.operations || []).includes(op));
+        if (!inOp.length) return;
+        const h = document.createElement('h5');
+        h.className = 'wp-tools__grouphdr'; h.textContent = OP_LABEL[op];
+        body.appendChild(h);
+        inOp.forEach((t) => body.appendChild(renderRow(t)));
+      });
+    }
+
+    function showList() { formView.hidden = true; listView.hidden = false; showStatus(''); }
+    function showForm(tool) {
+      formTitle.textContent = tool ? ('Edit ' + tool.name) : 'Register a tool';
+      nameInput.value = tool ? tool.name : '';
+      nameInput.readOnly = !!tool;   // name identifies the record; fixed when editing
+      const ops = tool ? (tool.operations.length ? tool.operations : ['compile']) : ['compile'];
+      document.querySelectorAll('.tool-op').forEach((c) => { c.checked = ops.includes(c.value); });
+      kindSel.value = tool ? tool.kind : 'cli';
+      document.getElementById('tool-exec').value = tool ? tool.executable : '';
+      document.getElementById('tool-argtpl').value = tool ? tool.argtpl : '';
+      document.getElementById('tool-argtplc').value = tool ? tool.argtpl_circuit : '';
+      const ep = tool ? tool.endpoint : '';
+      connSel.value = (tool && tool.kind === 'kcmcp' && ep && ep !== 'managed') ? 'endpoint' : 'managed';
+      document.getElementById('tool-endpoint').value = (ep && ep !== 'managed') ? ep : '';
+      document.getElementById('tool-pref').value = tool ? tool.preference : 0;
+      refreshPresets();
+      if (tool) {
+        infmtBox.querySelectorAll('input').forEach((cb) => { cb.checked = (tool.input_formats || []).includes(cb.value); });
+        if (Array.from(outSel.options).some((o) => o.value === tool.output_format)) outSel.value = tool.output_format;
+        if (Array.from(parserSel.options).some((o) => o.value === tool.parser)) parserSel.value = tool.parser;
+      }
+      applyKindFields();
+      listView.hidden = true; formView.hidden = false; showStatus('');
+      nameInput.focus();
+    }
+    if (addBtn) addBtn.addEventListener('click', () => showForm(null));
+    if (backBtn) backBtn.addEventListener('click', showList);
+
+    async function load() {
+      try {
+        const resp = await fetch('/api/kc/registry');
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          body.textContent = '';
+          const p = document.createElement('p'); p.className = 'wp-tools__empty';
+          p.textContent = data.hint || data.error || ('HTTP ' + resp.status);
+          body.appendChild(p);
+          if (addBtn) addBtn.hidden = true;
+          return;
+        }
+        canManage = !!data.can_manage;
+        if (readonly) readonly.hidden = canManage;
+        if (addBtn) addBtn.hidden = !canManage;
+        render(data.tools || []);
+      } catch (e) { showStatus(e.message, true); }
+    }
+
+    // Reload the panel after a change, and invalidate the /api/kc/tools cache
+    // so the circuit-mode eval strip's compiler / wmc dropdowns pick the
+    // change up too (a newly registered or re-enabled tool, a dropped one).
+    function afterMutation() {
+      load();
+      Metadata.toolsDirty = true;
+      Metadata.toolsCache = null;
+      if (window.ProvsqlStudio.refreshToolAvailability)
+        window.ProvsqlStudio.refreshToolAvailability();
+    }
+
+    if (registerBtn) registerBtn.addEventListener('click', async () => {
+      const ops = selectedOps();
+      const kcmcp = kindSel.value === 'kcmcp';
+      const spec = {
+        name: (nameInput.value || '').trim(),
+        kind: kindSel.value,
+        operations: ops,
+        executable: kcmcp ? '' : (document.getElementById('tool-exec').value || '').trim(),
+        argtpl: kcmcp ? '' : (document.getElementById('tool-argtpl').value || '').trim(),
+        argtpl_circuit: kcmcp ? '' : (document.getElementById('tool-argtplc').value || '').trim(),
+        endpoint: kcmcp ? (connSel.value === 'managed' ? 'managed'
+                           : (document.getElementById('tool-endpoint').value || '').trim()) : '',
+        input_formats: Array.from(infmtBox.querySelectorAll('input:checked')).map((c) => c.value),
+        output_format: outSel.value,
+        parser: parserSel.value,
+        preference: parseInt(document.getElementById('tool-pref').value, 10) || 0,
+        enabled: true,
+      };
+      if (!spec.name) { showStatus('name is required', true); return; }
+      if (!ops.length) { showStatus('select at least one operation', true); return; }
+      if (kcmcp && connSel.value === 'endpoint' && !spec.endpoint) {
+        showStatus('an endpoint address is required', true); return;
+      }
+      const r = await postJSON('/api/kc/registry/register', spec);
+      if (r.ok) { showList(); afterMutation(); } else { showStatus(errOf(r), true); }
+    });
+
+    function open() { closeOtherNavPanels('tools-panel'); panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); showList(); load(); }
+    function close() { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
+    btn.addEventListener('click', (e) => { e.stopPropagation(); if (panel.hidden) open(); else close(); });
+    document.addEventListener('click', (e) => {
+      if (!panel.hidden && !panel.contains(e.target) && e.target !== btn) close();
+    });
+  }
+
 
   // Schema browser: top-nav button opening a popover that lists every
   // SELECT-able relation grouped by schema, with a search box and click
@@ -1584,6 +1886,7 @@
     });
 
     function open() {
+      closeOtherNavPanels('schema-panel');
       panel.hidden = false;
       btn.setAttribute('aria-expanded', 'true');
       // Re-fetch on open if either we never loaded, or an exec since the

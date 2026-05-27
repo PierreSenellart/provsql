@@ -289,3 +289,58 @@ def test_kc_benchmark_rejects_non_positive_samples(client, personnel_token, samp
     )
     assert resp.status_code == 400
     assert "positive" in resp.get_json()["error"]
+
+
+def _registry_or_skip(client):
+    """GET the full registry, or skip when the extension predates it."""
+    resp = client.get("/api/kc/registry")
+    if resp.status_code == 501:
+        pytest.skip("tool registry unavailable (extension < 1.8.0)")
+    assert resp.status_code == 200
+    return resp.get_json()
+
+
+def test_registry_endpoint_shape(client):
+    """``/api/kc/registry`` returns every tool with full columns plus
+    whether the connected role may edit it (Tools panel data)."""
+    data = _registry_or_skip(client)
+    assert set(data) >= {"tools", "can_manage"}
+    assert isinstance(data["can_manage"], bool)
+    for t in data["tools"]:
+        assert set(t) >= {"name", "kind", "operations", "endpoint",
+                          "executable", "preference", "enabled", "available"}
+        assert isinstance(t["operations"], list)
+    assert "d4" in {t["name"] for t in data["tools"]}  # a seeded compiler
+
+
+def test_registry_management_roundtrip(client):
+    """register_tool / set_tool_preference / set_tool_enabled / unregister_tool
+    are reachable through the Tools-panel routes and round-trip a kcmcp tool."""
+    data = _registry_or_skip(client)
+    if not data["can_manage"]:
+        pytest.skip("connected role is not a superuser")
+    name = "studio-test-kcmcp"
+    r = client.post("/api/kc/registry/register", json={
+        "name": name, "kind": "kcmcp", "operations": ["compile"],
+        "input_formats": ["dimacs-cnf"], "output_format": "ddnnf-nnf",
+        "parser": "nnf", "endpoint": "unix:/tmp/studio-test.sock",
+    })
+    assert r.status_code == 200, r.get_json()
+    try:
+        tools = {t["name"]: t for t in
+                 client.get("/api/kc/registry").get_json()["tools"]}
+        assert name in tools
+        assert tools[name]["kind"] == "kcmcp"
+        assert tools[name]["endpoint"] == "unix:/tmp/studio-test.sock"
+        assert client.post("/api/kc/registry/preference",
+                           json={"name": name, "preference": 7}).status_code == 200
+        assert client.post("/api/kc/registry/enable",
+                           json={"name": name, "enabled": False}).status_code == 200
+        t = {x["name"]: x for x in
+             client.get("/api/kc/registry").get_json()["tools"]}[name]
+        assert t["preference"] == 7 and t["enabled"] is False
+    finally:
+        assert client.post("/api/kc/registry/unregister",
+                           json={"name": name}).status_code == 200
+    assert name not in {t["name"] for t in
+                        client.get("/api/kc/registry").get_json()["tools"]}

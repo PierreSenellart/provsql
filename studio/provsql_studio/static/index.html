@@ -63,6 +63,83 @@
     </span>
     <button type="button" class="wp-nav__link wp-nav__refresh" id="metadata-refresh-btn" title="Refresh schema, provenance mappings, and custom semirings" aria-label="Refresh metadata"><i class="fas fa-sync"></i></button>
     <span class="wp-nav__configwrap">
+      <button type="button" class="wp-nav__link wp-nav__refresh" id="tools-btn"
+              aria-haspopup="dialog" aria-expanded="false"
+              title="External-tool registry" aria-label="Tools"><i class="fas fa-tools"></i></button>
+      <div class="wp-nav__configpanel wp-tools__panel" id="tools-panel" role="dialog" hidden>
+        <h4 class="wp-nav__configtitle">External-tool registry<a class="wp-help"
+            href="https://provsql.org/docs/user/tool-registry.html"
+            target="_blank" rel="noopener"
+            aria-label="Help: tool registry"><i class="fas fa-question-circle"></i></a></h4>
+
+        <div id="tools-list-view">
+          <p class="wp-tools__lead">Knowledge compilers, model counters, and KCMCP
+            servers ProvSQL can use, grouped by operation.
+            <span class="wp-tools__legend"><span class="wp-tools__dot wp-tools__dot--ok"></span>available
+            <span class="wp-tools__dot wp-tools__dot--no"></span>unavailable</span></p>
+          <div class="wp-tools__listhead">
+            <button type="button" class="wp-btn wp-btn--mini" id="tools-add-btn"><i class="fas fa-plus"></i> Register a tool</button>
+          </div>
+          <div class="wp-tools__body" id="tools-body" aria-live="polite">
+            <p class="wp-tools__empty">Loading…</p>
+          </div>
+          <p class="wp-tools__note" id="tools-readonly" hidden>Connect as a superuser to edit the registry.</p>
+        </div>
+
+        <div id="tools-form-view" hidden>
+          <div class="wp-tools__formhead">
+            <button type="button" class="wp-tools__back" id="tools-form-back" title="Back to the list" aria-label="Back to the list"><i class="fas fa-arrow-left"></i></button>
+            <span class="wp-tools__formtitle" id="tools-form-title">Register a tool</span>
+          </div>
+          <div class="wp-tools__form">
+            <label class="wp-tools__field"><span>Name</span>
+              <input type="text" id="tool-name" autocomplete="off" spellcheck="false" placeholder="my-compiler"></label>
+            <label class="wp-tools__field"><span>Kind
+              <i class="fas fa-question-circle wp-tools__hint" title="cli: ProvSQL spawns this binary once per call.&#10;kcmcp: a warm socket server ProvSQL talks to over the KCMCP protocol."></i></span>
+              <select id="tool-kind">
+                <option value="cli">cli &mdash; spawn a binary per call</option>
+                <option value="kcmcp">kcmcp &mdash; warm socket server</option>
+              </select></label>
+            <div class="wp-tools__field"><span>Operations
+              <i class="fas fa-question-circle wp-tools__hint" title="compile: knowledge compilation to a d-DNNF.&#10;wmc: weighted model counting.&#10;render: ASCII circuit drawing."></i></span>
+              <span class="wp-tools__ops">
+                <label title="knowledge compilation to a d-DNNF"><input type="checkbox" class="tool-op" value="compile" checked> compile</label>
+                <label title="weighted model counting"><input type="checkbox" class="tool-op" value="wmc"> wmc</label>
+                <label title="ASCII circuit rendering"><input type="checkbox" class="tool-op" value="render"> render</label>
+              </span></div>
+            <label class="wp-tools__field" id="tool-exec-field"><span>Executable</span>
+              <input type="text" id="tool-exec" autocomplete="off" spellcheck="false" placeholder="(defaults to name)"></label>
+            <label class="wp-tools__field" id="tool-argtpl-field"><span>Command template
+              <i class="fas fa-question-circle wp-tools__hint" title="Shell template; {in}/{out} are the input/output temp files (also {binary}/{tmpdir}/{pivotAC})."></i></span>
+              <input type="text" id="tool-argtpl" autocomplete="off" spellcheck="false" placeholder="-dDNNF {in} -out={out}"></label>
+            <label class="wp-tools__field" id="tool-argtplc-field"><span>Native-circuit command (optional)</span>
+              <input type="text" id="tool-argtplc" autocomplete="off" spellcheck="false" placeholder="(used when circuit-bcs12 input is selected)"></label>
+            <label class="wp-tools__field" id="tool-conn-field" hidden><span>Connection
+              <i class="fas fa-question-circle wp-tools__hint" title="Managed: ProvSQL launches and supervises the server (provsql.kcmcp_server).&#10;Endpoint: connect to a server you run."></i></span>
+              <select id="tool-conn">
+                <option value="managed">Managed &mdash; ProvSQL launches the server</option>
+                <option value="endpoint">Endpoint &mdash; connect to a running server</option>
+              </select></label>
+            <label class="wp-tools__field" id="tool-endpoint-field" hidden><span>Address</span>
+              <input type="text" id="tool-endpoint" autocomplete="off" spellcheck="false" placeholder="unix:/path or host:port"></label>
+            <div class="wp-tools__field"><span>Input formats</span>
+              <span class="wp-tools__checks" id="tool-infmt"></span></div>
+            <label class="wp-tools__field"><span>Output format</span>
+              <select id="tool-outfmt"></select></label>
+            <label class="wp-tools__field"><span>Parser</span>
+              <select id="tool-parser"></select></label>
+            <label class="wp-tools__field"><span>Preference</span>
+              <input type="number" id="tool-pref" value="0" step="1"></label>
+            <div class="wp-tools__addactions">
+              <button type="button" class="wp-btn wp-btn--mini" id="tool-register-btn"><i class="fas fa-check"></i> Save</button>
+            </div>
+          </div>
+        </div>
+
+        <p class="wp-tools__status" id="tools-status" hidden></p>
+      </div>
+    </span>
+    <span class="wp-nav__configwrap">
       <button type="button" class="wp-nav__link wp-nav__refresh" id="config-btn" aria-haspopup="dialog" aria-expanded="false" title="Config" aria-label="Config"><i class="fas fa-cog"></i></button>
       <div class="wp-nav__configpanel" id="config-panel" role="dialog" hidden>
         <section class="wp-config__group">

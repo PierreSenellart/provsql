@@ -492,6 +492,103 @@ def query_catalog(pool: ConnectionPool) -> dict[str, list[dict]]:
     return {"compile": compile_tools, "wmc": wmc_tools}
 
 
+def query_registry(pool: ConnectionPool) -> list[dict]:
+    """Every row of ``provsql.tools`` (extension >= 1.8.0), full columns,
+    for the Studio Tools panel.
+
+    Unlike :func:`query_catalog` (which feeds the dropdowns and lists only
+    enabled tools by name/availability), this returns the whole registry --
+    disabled tools included -- so the panel can manage it.  Ordered by
+    descending preference then name, the registry's own selection order.
+    """
+    rows: list[dict] = []
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, kind, executable, operations, input_formats, "
+            "       output_format, parser, preference, enabled, endpoint, "
+            "       argtpl, argtpl_circuit, available "
+            "FROM provsql.tools ORDER BY preference DESC, name"
+        )
+        for (name, kind, executable, operations, input_formats, output_format,
+             parser, preference, enabled, endpoint, argtpl, argtpl_circuit,
+             available) in cur.fetchall():
+            rows.append({
+                "name": name,
+                "kind": kind,
+                "executable": executable or "",
+                "operations": list(operations or []),
+                "input_formats": list(input_formats or []),
+                "output_format": output_format or "",
+                "parser": parser or "",
+                "preference": preference,
+                "enabled": bool(enabled),
+                "endpoint": endpoint or "",
+                "argtpl": argtpl or "",
+                "argtpl_circuit": argtpl_circuit or "",
+                "available": bool(available),
+            })
+    return rows
+
+
+def can_manage_tools(pool: ConnectionPool) -> bool:
+    """True iff the connected role may edit the registry: the mutators are
+    superuser-only, so the panel disables its controls otherwise."""
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT current_setting('is_superuser') = 'on'")
+        return bool(cur.fetchone()[0])
+
+
+def set_tool_enabled(pool: ConnectionPool, name: str, enabled: bool) -> None:
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.set_tool_enabled(%s, %s)", (name, enabled))
+
+
+def set_tool_preference(pool: ConnectionPool, name: str, preference: int) -> None:
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.set_tool_preference(%s, %s)",
+                    (name, preference))
+
+
+def unregister_tool(pool: ConnectionPool, name: str) -> None:
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.unregister_tool(%s)", (name,))
+
+
+def register_tool(pool: ConnectionPool, spec: dict) -> None:
+    """Create or replace a registry tool from a Studio form ``spec``.
+
+    Empty strings for the optional text fields are passed as SQL NULL so the
+    ``register_tool`` defaults apply (e.g. executable defaults to the name);
+    empty arrays stay empty arrays.
+    """
+    def _t(key):                       # text field, "" -> NULL
+        v = (spec.get(key) or "").strip()
+        return v or None
+
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT provsql.register_tool("
+            "  name => %s, executable => %s, kind => %s, operations => %s, "
+            "  input_formats => %s, output_format => %s, parser => %s, "
+            "  argtpl => %s, argtpl_circuit => %s, preference => %s, "
+            "  enabled => %s, endpoint => %s)",
+            (
+                (spec.get("name") or "").strip(),
+                _t("executable"),
+                (spec.get("kind") or "cli").strip(),
+                list(spec.get("operations") or []),
+                list(spec.get("input_formats") or []),
+                _t("output_format"),
+                _t("parser"),
+                _t("argtpl"),
+                _t("argtpl_circuit"),
+                int(spec.get("preference") or 0),
+                bool(spec.get("enabled", True)),
+                _t("endpoint"),
+            ),
+        )
+
+
 def missing_tools_for_compiler(
     pool: ConnectionPool, compiler: str
 ) -> tuple[str, ...]:

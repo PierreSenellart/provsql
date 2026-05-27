@@ -823,6 +823,92 @@ def create_app(
                 "detail": str(e).strip(),
             }), 500
 
+    @app.get("/api/kc/registry")
+    def api_kc_registry():
+        # Full external-tool registry (every provsql.tools row, disabled
+        # included) plus whether the connected role may edit it, for the
+        # Tools panel's management view.
+        import psycopg
+        try:
+            return jsonify({
+                "tools": kc_mod.query_registry(get_pool()),
+                "can_manage": kc_mod.can_manage_tools(get_pool()),
+            })
+        except (psycopg.errors.UndefinedFunction,
+                psycopg.errors.UndefinedTable) as e:
+            return _kc_unavailable(e)
+        except psycopg.Error as e:
+            return jsonify({
+                "error": "tool registry query failed",
+                "detail": str(e).strip(),
+            }), 500
+
+    def _registry_write(fn):
+        # Run a registry mutator, mapping PG errors to clean HTTP codes: a
+        # missing function/view (old extension) -> 501; the superuser-only
+        # REVOKE or the C-level guard -> 403; anything else (e.g. an invalid
+        # parser/operation rejected by register_tool) -> 400 with the message.
+        import psycopg
+        try:
+            fn()
+        except (psycopg.errors.UndefinedFunction,
+                psycopg.errors.UndefinedTable) as e:
+            return _kc_unavailable(e)
+        except psycopg.errors.InsufficientPrivilege as e:
+            diag = getattr(e, "diag", None)
+            return jsonify({
+                "error": "must be a superuser to edit the tool registry",
+                "detail": (diag.message_primary if diag else str(e)) or str(e),
+            }), 403
+        except psycopg.Error as e:
+            diag = getattr(e, "diag", None)
+            return jsonify({
+                "error": "registry update failed",
+                "detail": (diag.message_primary if diag else str(e)) or str(e),
+                "sqlstate": diag.sqlstate if diag else None,
+            }), 400
+        return jsonify({"ok": True})
+
+    @app.post("/api/kc/registry/enable")
+    def api_kc_registry_enable():
+        p = request.get_json(silent=True) or {}
+        name = (p.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        return _registry_write(
+            lambda: kc_mod.set_tool_enabled(get_pool(), name,
+                                            bool(p.get("enabled", True))))
+
+    @app.post("/api/kc/registry/preference")
+    def api_kc_registry_preference():
+        p = request.get_json(silent=True) or {}
+        name = (p.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        try:
+            pref = int(p.get("preference"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "preference must be an integer"}), 400
+        return _registry_write(
+            lambda: kc_mod.set_tool_preference(get_pool(), name, pref))
+
+    @app.post("/api/kc/registry/unregister")
+    def api_kc_registry_unregister():
+        p = request.get_json(silent=True) or {}
+        name = (p.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        return _registry_write(lambda: kc_mod.unregister_tool(get_pool(), name))
+
+    @app.post("/api/kc/registry/register")
+    def api_kc_registry_register():
+        p = request.get_json(silent=True) or {}
+        if not (p.get("name") or "").strip():
+            return jsonify({"error": "name required"}), 400
+        if not (p.get("operations") or []):
+            return jsonify({"error": "at least one operation required"}), 400
+        return _registry_write(lambda: kc_mod.register_tool(get_pool(), p))
+
     @app.get("/api/kc/benchmark")
     def api_kc_benchmark():
         import psycopg

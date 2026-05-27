@@ -2722,3 +2722,76 @@ table thead th[data-sort="desc"]::after {
   font-size: 0.78rem;
   color: var(--fg-muted);
 }
+
+/* ───────── tools panel: external-tool registry (provsql.tools) ───────── */
+/* The base .wp-nav__configpanel already caps height and scrolls; the tools
+   panel scrolls as one unit (list view OR form view shown, never both), so the
+   register form never crowds the list. */
+.wp-tools__panel { width: 540px; }
+.wp-tools__lead { margin: 0 0 0.55rem; font-size: 0.78rem; color: var(--fg-muted); }
+.wp-tools__legend { display: inline-flex; align-items: center; gap: 0.2rem; margin-left: 0.3rem; white-space: nowrap; }
+.wp-tools__dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.wp-tools__dot--ok { background: #4a9d5f; }
+.wp-tools__dot--no { background: var(--terracotta-500); }
+.wp-tools__legend .wp-tools__dot { margin: 0 0.1rem 0 0.4rem; }
+
+.wp-tools__body { min-height: 2rem; }
+.wp-tools__grouphdr { margin: 0.7rem 0 0.25rem; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--purple-500); border-bottom: 1px solid var(--border-soft); padding-bottom: 0.15rem; }
+.wp-tools__grouphdr:first-child { margin-top: 0.2rem; }
+.wp-tools__listhead { margin: 0.2rem 0 0.4rem; }
+.wp-tools__edit { flex: none; border: none; background: none; color: var(--purple-500); cursor: pointer; padding: 0.1rem 0.3rem; border-radius: 3px; }
+.wp-tools__edit:hover { background: var(--purple-100); }
+.wp-tools__formhead { display: flex; align-items: center; gap: 0.4rem; margin: 0.2rem 0 0.5rem; }
+.wp-tools__back { border: none; background: none; color: var(--purple-500); cursor: pointer; font-size: 0.9rem; padding: 0.1rem 0.3rem; border-radius: 3px; }
+.wp-tools__back:hover { background: var(--purple-100); }
+.wp-tools__formtitle { font-weight: 700; font-size: 0.9rem; color: var(--purple-900); }
+.wp-tools__hint { color: var(--fg-muted); font-size: 0.7rem; margin-left: 0.25rem; cursor: help; }
+.wp-tools__checks { display: flex; flex-wrap: wrap; gap: 0.6rem; font-size: 0.82rem; }
+.wp-tools__checks label { display: inline-flex; align-items: center; gap: 0.2rem; font-weight: 500; }
+.wp-tools__empty { font-size: 0.82rem; color: var(--fg-muted); margin: 0.4rem 0; }
+
+.wp-tools__row {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.32rem 0.1rem; border-bottom: 1px solid var(--border-soft);
+  font-size: 0.82rem;
+}
+.wp-tools__rname { font-weight: 600; white-space: nowrap; }
+.wp-tools__rname.is-disabled { color: var(--fg-muted); text-decoration: line-through; font-weight: 500; }
+.wp-tools__target {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--fg-2); font-family: monospace; font-size: 0.74rem;
+}
+.wp-tools__badge {
+  display: inline-block; padding: 0.05rem 0.35rem; border-radius: 3px;
+  font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em;
+  background: var(--bg-code); color: var(--purple-700); white-space: nowrap; flex: none;
+}
+.wp-tools__badge--kcmcp { background: var(--gold-300); color: var(--purple-900); }
+.wp-tools__opchips { display: inline-flex; gap: 0.2rem; flex: none; }
+.wp-tools__op { background: transparent; border: 1px solid var(--border-soft); color: var(--fg-2); font-weight: 600; }
+.wp-tools__pref { width: 3.2rem; font: inherit; font-size: 0.78rem; padding: 0.1rem 0.25rem; border: 1px solid var(--border-soft); border-radius: 3px; flex: none; }
+.wp-tools__pref-ro { width: 3.2rem; text-align: right; color: var(--fg-muted); flex: none; }
+.wp-tools__en { flex: none; }
+.wp-tools__en-ro { font-size: 0.72rem; color: var(--fg-muted); width: 2rem; text-align: center; flex: none; }
+.wp-tools__del { flex: none; border: none; background: none; color: var(--terracotta-500); cursor: pointer; padding: 0.1rem 0.3rem; border-radius: 3px; }
+.wp-tools__del:hover { background: var(--terracotta-300); color: #fff; }
+
+.wp-tools__form { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; }
+.wp-tools__form select { font: inherit; font-size: 0.82rem; padding: 0.3rem 0.45rem; border: 1px solid var(--border-soft); border-radius: 4px; outline: none; background: #fff; }
+.wp-tools__form select:focus { border-color: var(--purple-500); }
+.wp-tools__field { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.76rem; color: var(--fg-2); }
+/* the explicit display above would otherwise defeat the [hidden] attribute
+   that the kind switch toggles on the cli-only / kcmcp-only fields */
+.wp-tools__field[hidden] { display: none; }
+.wp-tools__field > span { font-weight: 600; }
+.wp-tools__field input, .wp-tools__field select {
+  font: inherit; font-size: 0.82rem; padding: 0.3rem 0.45rem;
+  border: 1px solid var(--border-soft); border-radius: 4px; outline: none;
+}
+.wp-tools__field input:focus, .wp-tools__field select:focus { border-color: var(--purple-500); }
+.wp-tools__ops { display: flex; gap: 0.7rem; font-weight: 500; }
+.wp-tools__ops label { display: inline-flex; align-items: center; gap: 0.2rem; }
+.wp-tools__addactions { margin-top: 0.3rem; }
+.wp-tools__status { margin: 0.5rem 0 0; font-size: 0.78rem; color: var(--purple-500); }
+.wp-tools__status.is-error { color: var(--terracotta-500); }
+.wp-tools__note { margin: 0.5rem 0 0; font-size: 0.76rem; color: var(--fg-muted); font-style: italic; }
