@@ -982,6 +982,7 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
 _PROBABILITY_METHODS = {
     "",                   # let provsql pick (independent → tree-decomposition → d4)
     "independent",
+    "inversion-free",     # exact, requires an inversion-free certificate on the root
     "tree-decomposition",
     "possible-worlds",
     "monte-carlo",

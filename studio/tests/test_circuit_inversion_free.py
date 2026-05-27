@@ -69,6 +69,36 @@ def test_circuit_inversion_free_leaves_carry_order_keys(client, test_dsn):
     factors = {n["if_key"]["factor"] for n in keyed}
     assert -1 in factors and any(f >= 0 for f in factors)
 
+def test_circuit_eval_root_is_the_certificate_token(client, test_dsn):
+    """The scene's display root is the elided annotation's child, but eval_root
+    keeps the original (certificate-bearing) token so the eval strip / benchmark
+    still route through the inversion-free path."""
+    root = _inversion_free_witness(test_dsn)
+    data = client.get(f"/api/circuit/{root}").get_json()
+    # display root is the elided child (not the requested annotation token)
+    assert data["root"] != root
+    assert all(n["type"] != "annotation" for n in data["nodes"])
+    # eval_root is the original token, and it carries the certificate
+    assert data["eval_root"] == root
+    # evaluating eval_root with the explicit method routes through IF
+    resp = client.post("/api/evaluate", json={
+        "token": data["eval_root"],
+        "semiring": "probability",
+        "method": "inversion-free",
+    })
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body.get("kind") != "error", body
+    # evaluating the elided display root instead would fail (no certificate)
+    resp_bad = client.post("/api/evaluate", json={
+        "token": data["root"],
+        "semiring": "probability",
+        "method": "inversion-free",
+    })
+    bad = resp_bad.get_json()
+    assert resp_bad.status_code != 200 or bad.get("kind") == "error"
+
+
 # NB: the renderer's ability to stack a B and an IF badge on one surviving node
 # (when both wrapper kinds elide onto it) is covered by the pure-row unit test
 # test_elide_markers_stacks_b_and_if_on_one_node in test_circuit_markers.py.  We

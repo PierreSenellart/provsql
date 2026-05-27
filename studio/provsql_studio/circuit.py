@@ -270,7 +270,8 @@ def get_circuit(
             pool, root, depth + 1,
             simplified=False, extra_gucs=extra_gucs)
     if not overshot:
-        return {"nodes": [], "edges": [], "root": root, "depth": depth}
+        return {"nodes": [], "edges": [], "root": root,
+                "eval_root": root, "depth": depth}
     raw = [r for r in overshot if r["depth"] <= depth]
     # circuit_subgraph emits one row per (parent, node) edge, so the cap
     # is on the count of distinct nodes within the kept depth, not on
@@ -666,6 +667,13 @@ def _elide_markers(
 def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]) -> dict:
     """Run dot to assign x/y per node, then translate into the JSON shape
     consumed by the front-end."""
+    # The token actually evaluated by the eval strip / benchmark.  Eliding a
+    # transparent wrapper moves the displayed scene root onto the wrapper's
+    # child, but that child does not carry the wrapper's payload -- notably the
+    # inversion-free certificate, which probability_evaluate keys off the exact
+    # root token.  So preserve the originally requested token as `eval_root`
+    # for evaluation, while `root` drives the (elided) display.
+    eval_root = root
     rows, root, node_markers = _elide_markers(rows, root)
     # Assign each certified leaf its order rank among the leaves shown in this
     # scene: the Prop. 4.5 order is (root value, then secondary value, then the
@@ -744,7 +752,8 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
         for r in rows
         if r["parent"] is not None
     ]
-    return {"nodes": nodes, "edges": edges, "root": root, "depth": depth}
+    return {"nodes": nodes, "edges": edges, "root": root,
+            "eval_root": eval_root, "depth": depth}
 
 
 def _to_dot(rows: list[dict]) -> str:

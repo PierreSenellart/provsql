@@ -1935,6 +1935,18 @@
         og.hidden = !anyVisible;
         og.disabled = !anyVisible;
       }
+      // The 'inversion-free' probability method only applies to a root that
+      // carries the certificate (any scene node with if_cert -- the elided
+      // annotation's child).  Offer it only then; otherwise hide it and bump
+      // a stale selection back to the default method.
+      const ifOpt = meth.querySelector('option[value="inversion-free"]');
+      if (ifOpt) {
+        const sceneIsIf = !!(state.scene && state.scene.nodes
+          && state.scene.nodes.some(n => n.if_cert));
+        ifOpt.hidden = !sceneIsIf;
+        ifOpt.disabled = ifOpt.hidden;
+        if (ifOpt.hidden && meth.value === 'inversion-free') meth.value = '';
+      }
       // If the active selection just got hidden, fall back to the first
       // still-visible option so the run button stays meaningful.
       const cur = sel.querySelector(`option[value="${CSS.escape(sel.value)}"]`);
@@ -2821,7 +2833,11 @@
       result.dataset.kind = 'error';
       return;
     }
-    const token = state.pinnedNode || state.scene.root;
+    // Evaluate the pinned node if any, else the scene's eval_root -- the
+    // originally requested token, which (unlike the elided display root) still
+    // carries a transparent wrapper's payload such as the inversion-free
+    // certificate that probability_evaluate / the benchmark key off.
+    const token = state.pinnedNode || state.scene.eval_root || state.scene.root;
     const selValue = sel.value;
     // Knowledge-compilation inspectors hit /api/kc/* instead of
     // /api/evaluate; their args (compiler / samples) are read directly

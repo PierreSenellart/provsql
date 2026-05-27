@@ -1841,6 +1841,9 @@
               <option value="">(default)</option>
               <option value="independent">independent</option>
               <option value="possible-worlds">possible-worlds</option>
+              <!-- shown only when the root carries an inversion-free
+                   certificate; toggled in syncDropdownVisibility -->
+              <option value="inversion-free" hidden>inversion-free</option>
               <option value="tree-decomposition">tree-decomposition</option>
               <option value="compilation">compilation</option>
             </optgroup>
