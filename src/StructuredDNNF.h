@@ -169,7 +169,6 @@ private:
   using Var  = int;                 ///< Variable rank in @c [0,ninputs).
   using Term = std::vector<Var>;    ///< A product: sorted, duplicate-free vars.
   using DNF  = std::vector<Term>;   ///< A sum of products: canonicalised.
-  using ClauseSet = std::vector<DNF>; ///< A conjunction of clauses (each a DNF).
 
   dDNNF dd_;
   gate_t root_;
@@ -187,11 +186,6 @@ private:
   struct CacheKey { DNF d; gate_t fs; bool operator==(const CacheKey &o) const; };
   struct CacheKeyHash { std::size_t operator()(const CacheKey &k) const; };
   std::unordered_map<CacheKey, gate_t, CacheKeyHash> cache_;
-
-  /* Clause-set cofactor cache for the factored (linear-build) path. */
-  struct CSKey { ClauseSet cs; gate_t fs; bool operator==(const CSKey &o) const; };
-  struct CSKeyHash { std::size_t operator()(const CSKey &k) const; };
-  std::unordered_map<CSKey, gate_t, CSKeyHash> csCache_;
 
   /* Expand the circuit's function under @p root into a canonical monotone DNF,
    * memoised per gate. */
@@ -224,14 +218,28 @@ private:
    * so the inert components are not dragged through the residual DNF. */
   gate_t build(const DNF &d, gate_t false_sink);
 
-  /* Factored path (keyed constructor).  Compile a conjunction of clauses with
-   * FALSE leaf @p false_sink.  Clauses are kept small (one factor each) so the
-   * cofactor cache realises the bounded atom-frontier, giving linear build. */
-  gate_t buildBlock(const ClauseSet &cs, gate_t false_sink);
-  static ClauseSet condition(const ClauseSet &cs, Var v, bool value, bool &is_false);
-  /* Partition clauses into variable-disjoint groups (decomposable AND over the
-   * conjunction); @c {cs} if they all share variables transitively. */
-  std::vector<ClauseSet> csAndDecompose(const ClauseSet &cs) const;
+  /* Factored linear-build path (keyed constructor): an explicit bounded
+   * atom-frontier sweep.  A block is a sequence of tiles in secondary order;
+   * each tile has shared self-join @c guards and, per factor, a @c payload
+   * variable.  The block function is @c AND_f(OR_t guards_t & payload_{f,t}).
+   * The sweep carries the compact state @c (tile,unsat-factor-bitmask) and
+   * memoises on it, so each of the @c O(tiles * 2^g) frontier states is built
+   * once in @c O(2^g) time -- linear in the output for fixed query. */
+  struct SweepTile {
+    std::vector<Var> guards;                       ///< shared guard vars (all must hold)
+    std::vector<std::pair<int, Var>> payload;      ///< (factor bit, payload var)
+  };
+  struct SweepCtx {
+    const std::vector<SweepTile> *tiles;
+    int g;                                          ///< number of factors (frontier width)
+    gate_t false_sink;
+    std::unordered_map<unsigned long, gate_t> *memo;
+  };
+  gate_t sweepTile(const SweepCtx &cx, std::size_t t, unsigned unsat);
+  gate_t sweepFire(const SweepCtx &cx, std::size_t t, unsigned unsat,
+                   const std::vector<std::pair<int, Var>> &relevant, std::size_t ri);
+  gate_t sweepGuards(const SweepCtx &cx, const std::vector<Var> &guards,
+                     std::size_t gi, gate_t fire, gate_t nofire);
 };
 
 #endif /* STRUCTURED_DNNF_H */

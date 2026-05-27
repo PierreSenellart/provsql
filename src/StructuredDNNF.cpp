@@ -617,120 +617,77 @@ StructuredDNNFBuilder::StructuredDNNFBuilder(const BooleanCircuit &bc,
   dd_.simplify();
 }
 
-/* ----- factored (clause-set) linear-build path ------------------------- */
+/* ----- factored linear-build path: explicit bounded atom-frontier ------- */
 
-bool StructuredDNNFBuilder::CSKey::operator==(const CSKey &o) const
+gate_t StructuredDNNFBuilder::sweepGuards(const SweepCtx &cx,
+                                          const std::vector<Var> &guards,
+                                          std::size_t gi, gate_t fire, gate_t nofire)
 {
-  return fs == o.fs && cs == o.cs;
+  /* The tile fires only if every guard holds: a decision chain whose every
+   * "guard false" branch lands on @p nofire, and whose all-true tip is @p fire.*/
+  if (gi == guards.size())
+    return fire;
+  gate_t rest = sweepGuards(cx, guards, gi + 1, fire, nofire);
+  if (rest == nofire)                 /* this guard cannot change the outcome */
+    return nofire;
+  Var gv = guards[gi];
+  gate_t andT = mkAnd({ mkLit(gv), rest });
+  gate_t andF = mkAnd({ mkNeg(gv), nofire });
+  gate_t orG = newGate(BooleanGate::OR);
+  if (andT != false_gate_) dd_.addWire(orG, andT);
+  if (andF != false_gate_) dd_.addWire(orG, andF);
+  return orG;
 }
 
-std::size_t StructuredDNNFBuilder::CSKeyHash::operator()(const CSKey &k) const
+gate_t StructuredDNNFBuilder::sweepFire(const SweepCtx &cx, std::size_t t,
+                                        unsigned unsat,
+                                        const std::vector<std::pair<int, Var>> &relevant,
+                                        std::size_t ri)
 {
-  std::size_t h = 1469598103934665603ull;
-  auto mix = [&](std::size_t x){ h ^= x + 0x9e3779b97f4a7c15ull + (h<<6) + (h>>2); };
-  for (const auto &c : k.cs) {
-    for (const auto &t : c) { for (int v : t) mix((std::size_t)(unsigned) v); mix(0xffffffffull); }
-    mix(0xeeeeeeeeull);                              // clause separator
-  }
-  mix((std::size_t) k.fs);
-  return h;
+  /* Guards held: decide the still-pending factors' payloads at this tile.  They
+   * are independent (distinct vars); each true clears its factor's bit. */
+  if (ri == relevant.size())
+    return sweepTile(cx, t + 1, unsat);
+  int  bit = relevant[ri].first;
+  Var  pv  = relevant[ri].second;
+  gate_t hi = sweepFire(cx, t, unsat & ~(1u << bit), relevant, ri + 1);
+  gate_t lo = sweepFire(cx, t, unsat,                relevant, ri + 1);
+  if (hi == lo)
+    return hi;
+  gate_t andHi = mkAnd({ mkLit(pv), hi });
+  gate_t andLo = mkAnd({ mkNeg(pv), lo });
+  gate_t orG = newGate(BooleanGate::OR);
+  if (andHi != false_gate_) dd_.addWire(orG, andHi);
+  if (andLo != false_gate_) dd_.addWire(orG, andLo);
+  return orG;
 }
 
-StructuredDNNFBuilder::ClauseSet
-StructuredDNNFBuilder::condition(const ClauseSet &cs, Var v, bool value,
-                                 bool &is_false)
+gate_t StructuredDNNFBuilder::sweepTile(const SweepCtx &cx, std::size_t t,
+                                        unsigned unsat)
 {
-  /* condition each clause; a clause -> TRUE is dropped, a clause -> FALSE makes
-   * the whole conjunction FALSE */
-  is_false = false;
-  ClauseSet out;
-  out.reserve(cs.size());
-  for (const auto &c : cs) {
-    DNF cc = condition(c, v, value);              // reuses the DNF conditioner
-    if (cc.empty()) { is_false = true; return {}; }
-    if (cc.size() == 1 && cc[0].empty()) continue; /* clause satisfied */
-    out.push_back(std::move(cc));
-  }
-  return out;
-}
+  if (unsat == 0)                  return true_gate_;     /* all factors satisfied */
+  if (t == cx.tiles->size())       return cx.false_sink;  /* tiles exhausted       */
 
-std::vector<StructuredDNNFBuilder::ClauseSet>
-StructuredDNNFBuilder::csAndDecompose(const ClauseSet &cs) const
-{
-  if (cs.size() <= 1) return { cs };
-  /* variable set of each clause */
-  std::vector<std::set<int>> cvars(cs.size());
-  for (std::size_t i = 0; i < cs.size(); ++i)
-    for (const auto &t : cs[i]) for (int v : t) cvars[i].insert(v);
+  unsigned long key = ((unsigned long) t << cx.g) | unsat;
+  auto it = cx.memo->find(key);
+  if (it != cx.memo->end()) return it->second;
 
-  std::vector<int> uf(cs.size());
-  for (std::size_t i = 0; i < uf.size(); ++i) uf[i] = (int) i;
-  std::function<int(int)> find = [&](int x){ while (uf[x]!=x){ uf[x]=uf[uf[x]]; x=uf[x]; } return x; };
-  for (std::size_t i = 0; i < cs.size(); ++i)
-    for (std::size_t j = i + 1; j < cs.size(); ++j) {
-      bool share = false;
-      for (int v : cvars[i]) if (cvars[j].count(v)) { share = true; break; }
-      if (share) { int a = find((int)i), b = find((int)j); if (a!=b) uf[a]=b; }
-    }
-  std::map<int, ClauseSet> groups;
-  for (std::size_t i = 0; i < cs.size(); ++i) groups[find((int)i)].push_back(cs[i]);
-  if (groups.size() <= 1) return { cs };
-  std::vector<ClauseSet> out;
-  for (auto &kv : groups) out.push_back(std::move(kv.second));
-  return out;
-}
-
-gate_t StructuredDNNFBuilder::buildBlock(const ClauseSet &csraw, gate_t false_sink)
-{
-  /* canonicalise: drop satisfied clauses, detect a falsified one */
-  ClauseSet cs;
-  cs.reserve(csraw.size());
-  for (const auto &c : csraw) {
-    DNF cc = canonical(c);
-    if (cc.empty())                       return false_sink;   /* clause FALSE */
-    if (cc.size() == 1 && cc[0].empty())  continue;            /* clause TRUE  */
-    cs.push_back(std::move(cc));
-  }
-  if (cs.empty())        return true_gate_;        /* every clause satisfied */
-  if (cs.size() == 1)    return build(cs[0], false_sink);  /* single factor: flat */
-
-  CSKey key{ cs, false_sink };
-  auto it = csCache_.find(key);
-  if (it != csCache_.end()) return it->second;
+  const SweepTile &tile = (*cx.tiles)[t];
+  /* factors still pending that this tile can satisfy */
+  std::vector<std::pair<int, Var>> relevant;
+  for (const auto &pf : tile.payload)
+    if (unsat & (1u << pf.first))
+      relevant.push_back(pf);
 
   gate_t res;
-
-  /* decomposable AND over variable-disjoint clause groups (only with no pending
-   * OR tail, as in build) */
-  std::vector<ClauseSet> parts = (false_sink == false_gate_)
-                                   ? csAndDecompose(cs) : std::vector<ClauseSet>{ cs };
-  if (parts.size() > 1) {
-    std::vector<gate_t> ch;
-    ch.reserve(parts.size());
-    for (const auto &p : parts) ch.push_back(buildBlock(p, false_gate_));
-    res = mkAnd(ch);
+  if (relevant.empty()) {
+    res = sweepTile(cx, t + 1, unsat);     /* tile (and its guards) irrelevant here */
   } else {
-    /* Shannon-decide the lowest-rank variable present in any clause */
-    Var v = INT_MAX;
-    for (const auto &c : cs) for (const auto &t : c) if (t.front() < v) v = t.front();
-    bool f1 = false, f0 = false;
-    ClauseSet hiCs = condition(cs, v, true, f1);
-    ClauseSet loCs = condition(cs, v, false, f0);
-    gate_t ghi = f1 ? false_sink : buildBlock(hiCs, false_sink);
-    gate_t glo = f0 ? false_sink : buildBlock(loCs, false_sink);
-    if (ghi == glo) {
-      res = ghi;
-    } else {
-      gate_t andHi = mkAnd({ mkLit(v), ghi });
-      gate_t andLo = mkAnd({ mkNeg(v), glo });
-      gate_t orG = newGate(BooleanGate::OR);
-      if (andHi != false_gate_) dd_.addWire(orG, andHi);
-      if (andLo != false_gate_) dd_.addWire(orG, andLo);
-      res = orG;
-    }
+    gate_t nofire = sweepTile(cx, t + 1, unsat);
+    gate_t fire   = sweepFire(cx, t, unsat, relevant, 0);
+    res = sweepGuards(cx, tile.guards, 0, fire, nofire);
   }
-
-  csCache_.emplace(CSKey{ std::move(cs), false_sink }, res);
+  cx.memo->emplace(key, res);
   return res;
 }
 
@@ -771,8 +728,7 @@ StructuredDNNFBuilder::StructuredDNNFBuilder(const BooleanCircuit &bc,
   false_gate_ = dd_.setGate(BooleanGate::OR);
 
   /* Reconstruct the factored hierarchy from the keys:
-   *   block(root) -> tile(sec) -> { guard ranks } + { factor -> payload rank }
-   * clause(factor) = OR over tiles of ( guards AND that factor's payload ). */
+   *   block(root) -> tile(sec) -> { guard ranks } + { factor -> payload rank }. */
   struct Tile { std::vector<Var> guards; std::map<int, Var> payload; };
   std::map<int, std::map<int, Tile>> blocks;     /* root -> sec -> Tile */
   std::map<int, std::set<int>> block_factors;    /* root -> factor ids */
@@ -789,29 +745,41 @@ StructuredDNNFBuilder::StructuredDNNFBuilder(const BooleanCircuit &bc,
   }
 
   /* OR-chain the blocks by ascending root value; each block's FALSE leaf is the
-   * node for the later blocks, so inert blocks are never expanded into terms. */
+   * node for the later blocks (the chain tail), so inert blocks are one shared
+   * node, never re-expanded.  Each block is compiled by the bounded-frontier
+   * sweep over its tiles. */
   std::vector<int> roots;
   for (const auto &b : blocks) roots.push_back(b.first);
   std::sort(roots.begin(), roots.end());
 
   gate_t tail = false_gate_;
   for (auto rit = roots.rbegin(); rit != roots.rend(); ++rit) {
-    const auto &tiles = blocks[*rit];
+    const auto &tilemap = blocks[*rit];
     const auto &factors = block_factors[*rit];
-    ClauseSet cs;
-    for (int f : factors) {
-      DNF clause;
-      for (const auto &sv : tiles) {                 /* sec ascending */
-        const Tile &tl = sv.second;
-        auto pit = tl.payload.find(f);
-        if (pit == tl.payload.end()) continue;       /* factor absent at this tile */
-        Term term = tl.guards;                       /* shared self-join guards */
-        term.push_back(pit->second);                 /* factor's payload */
-        clause.push_back(std::move(term));
-      }
-      if (!clause.empty()) cs.push_back(std::move(clause));
+
+    /* compact factor ids -> dense bit positions (frontier width g) */
+    int g = 0;
+    std::map<int, int> factor_bit;
+    for (int f : factors) factor_bit[f] = g++;
+    if (g > 30)
+      throw CircuitException("StructuredDNNFBuilder: too many factors for the "
+                             "bounded atom-frontier (2^g state)");
+
+    /* tiles in secondary order, payloads keyed by factor bit */
+    std::vector<SweepTile> tiles;
+    tiles.reserve(tilemap.size());
+    for (const auto &sv : tilemap) {           /* sec ascending */
+      const Tile &tl = sv.second;
+      SweepTile st;
+      st.guards = tl.guards;
+      for (const auto &pf : tl.payload)
+        st.payload.push_back({ factor_bit[pf.first], pf.second });
+      tiles.push_back(std::move(st));
     }
-    tail = buildBlock(cs, tail);
+
+    std::unordered_map<unsigned long, gate_t> memo;
+    SweepCtx cx{ &tiles, g, tail, &memo };
+    tail = sweepTile(cx, 0, (g >= 31 ? 0u : ((1u << g) - 1u)));
   }
 
   root_ = tail;
