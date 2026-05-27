@@ -32,6 +32,7 @@
 #include <set>
 #include <map>
 #include <vector>
+#include <iosfwd>
 
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/unordered_map.hpp>
@@ -240,6 +241,24 @@ double possibleWorlds(gate_t g) const;
  * @return          The compiled @c dDNNF.
  */
 dDNNF compilation(gate_t g, std::string compiler) const;
+
+/**
+ * @brief Parse a c2d/d4 NNF stream into a @c dDNNF over this circuit's input
+ *        gates.
+ *
+ * Shared by the CLI @c compilation() path and the KCMCP client: both obtain
+ * the same NNF text (from a temp file or a socket @c RESULT) and parse it
+ * identically.  @p inputOrder maps d4 circuit-mode variables (1..k) to IN
+ * gates; an empty vector means CNF mode, where d-DNNF variable @c v stands
+ * for gate id @c v-1 (real only for IN gates, every other being a Tseytin
+ * auxiliary that is projected out).
+ *
+ * @param in          NNF text stream.
+ * @param inputOrder  Circuit-mode input-variable to IN-gate map (empty = CNF).
+ * @return            The compiled @c dDNNF (empty if the formula is unsat).
+ */
+dDNNF parseDDNNF(std::istream &in,
+                 const std::vector<gate_t> &inputOrder) const;
 
 /**
  * @brief Estimate the probability via Monte Carlo sampling.

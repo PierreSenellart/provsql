@@ -896,9 +896,25 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     return parsePaniniDD(outfilename);
 
   std::ifstream ifs(outfilename.c_str());
+  dDNNF dnnf = parseDDNNF(ifs, inputOrder);
+  ifs.close();
+
+  if(provsql_verbose>=20) {
+    tmp.keep();
+    provsql_notice("Compiled d-DNNF in %s", outfilename.c_str());
+  }
+
+  return dnnf;
+}
+
+// Parse a c2d/d4 NNF stream into a dDNNF over this circuit's input gates.
+// Shared by the CLI compilation() path and the KCMCP client; see the header.
+dDNNF BooleanCircuit::parseDDNNF(std::istream &in,
+                                 const std::vector<gate_t> &inputOrder) const {
+  const bool circuit_input = !inputOrder.empty();
 
   std::string line;
-  getline(ifs,line);
+  getline(in,line);
 
   // Tolerant NNF detection (the single `nnf` parser): the classic c2d/d4
   // form opens with an "nnf <nodes> <edges> <vars>" magic line and roots at
@@ -925,7 +941,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     if(nb_variables!=gates.size())
       throw CircuitException("Unreadable d-DNNF (wrong number of variables: " + std::to_string(nb_variables) +" vs " + std::to_string(gates.size()) + ")");
 
-    getline(ifs,line);
+    getline(in,line);
   }
 
   dDNNF dnnf;
@@ -1047,14 +1063,7 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
       throw CircuitException(std::string("Unreadable d-DNNF (unknown node type: ")+c+")");
 
     ++i;
-  } while(getline(ifs, line));
-
-  ifs.close();
-
-  if(provsql_verbose>=20) {
-    tmp.keep();
-    provsql_notice("Compiled d-DNNF in %s", outfilename.c_str());
-  }
+  } while(getline(in, line));
 
   dnnf.setRoot(dnnf.getGate(new_d4?"1":std::to_string(i-1)));
 

@@ -3,14 +3,13 @@ EXTVERSION = $(shell grep default_version $(EXTENSION).common.control | \
            sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 
 MODULE_big = provsql
-# The standalone tdkc tool (TreeDecompositionKnowledgeCompiler, holding its
-# main(), and the KCMCP reference server it now drives: kcmcp_*, dimacs_cnf)
-# has no role in the in-process extension -- it is a separate binary and a
-# socket server -- so it is filtered out of the extension's OBJS (like the
-# provsql_migrate_mmap migration tool).  TreeDecompositionKnowledgeCompiler.o
-# in particular references kcmcp_serve(), which is excluded, so leaving it in
-# would break the provsql.so link.
-OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(filter-out src/provsql_migrate_mmap.o src/TreeDecompositionKnowledgeCompiler.o src/kcmcp_protocol.o src/kcmcp_server.o src/dimacs_cnf.o,$(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp)))
+# The KCMCP wire codec (kcmcp_protocol) is shared: the in-extension client
+# (kcmcp_client) and the standalone tdkc server both use it, so it stays in the
+# extension OBJS.  What is tdkc-only -- the server (kcmcp_server), the DIMACS
+# reader (dimacs_cnf), and the tdkc main (TreeDecompositionKnowledgeCompiler,
+# which calls kcmcp_serve()) -- is filtered out, like the provsql_migrate_mmap
+# tool; leaving the tdkc main in would make provsql.so reference kcmcp_serve.
+OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(filter-out src/provsql_migrate_mmap.o src/TreeDecompositionKnowledgeCompiler.o src/kcmcp_server.o src/dimacs_cnf.o,$(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp)))
 
 DOCS = $(wildcard doc/*.md)
 UPGRADE_SCRIPTS = $(wildcard sql/upgrades/$(EXTENSION)--*--*.sql)
