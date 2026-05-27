@@ -746,6 +746,45 @@ Each option is also exposed on the CLI as a flag
 ``--max-circuit-nodes``, ``--search-path``, ``--tool-search-path``);
 the CLI wins on startup, the panel writes back to the JSON.
 
+.. _studio-tools-panel:
+
+Tools panel
+-----------
+
+A tools button (the wrench-and-screwdriver icon) in the top nav, left of the
+Config cog, opens the **external-tool registry** -- the same ``provsql.tools``
+catalog the compilation and weighted-counting dropdowns draw from (see
+:doc:`/user/tool-registry`). It needs ProvSQL >= 1.8.0; on an older extension
+the panel shows an upgrade hint.
+
+Tools are **grouped by operation** (Compilation, Weighted counting,
+Rendering). Each row shows a tool's availability (a green dot when its binary
+and dependencies resolve on the backend's ``PATH``, or, for a socket server,
+when its endpoint is configured), its name, a ``cli`` / ``kcmcp`` badge, and
+its endpoint or executable.
+
+A superuser may manage the registry in place: edit a tool's preference
+(higher is selected first), toggle it on or off, **edit** it (the pencil
+reopens the form pre-filled), or unregister it (the cross). **Register a
+tool** opens the same form. Picking the *Kind* swaps the relevant fields: a
+``cli`` tool takes an executable and a command template; a ``kcmcp`` tool (a
+warm :doc:`KCMCP </dev/kc-server-protocol>` server) takes a *Connection* --
+either *Managed* (ProvSQL launches and supervises it via
+:ref:`provsql.kcmcp_server <provsql-kcmcp-server>`) or an *Endpoint* address
+(``unix:/path`` or ``host:port``). The input formats, output format, and
+parser are offered as the values that make sense for the chosen operation.
+The registry's mutators are superuser-only, so a non-superuser session sees
+the panel read-only.
+
+.. figure:: /_static/studio/tools-panel.png
+   :alt: Studio Tools panel: the external-tool registry grouped by operation,
+         each tool with an availability dot, cli/kcmcp badge, preference,
+         enable toggle, and edit/unregister actions.
+
+   The Tools panel: the registry grouped by operation, each tool with its
+   availability, kind, preference, enable toggle, and edit / unregister
+   actions (here a ``kcmcp`` compile server at the top of Compilation).
+
 .. _studio-mode-switching:
 
 Mode-switching
