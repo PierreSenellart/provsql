@@ -44,7 +44,7 @@ void provsql_shmem_startup(void)
 
   provsql_shared_state = ShmemInitStruct(
     "provsql",
-    sizeof(provsql_shared_state),
+    sizeof(provsqlSharedState),
     &found);
 
   if(!found) {
@@ -64,6 +64,7 @@ void provsql_shmem_startup(void)
   provsql_shared_state->pipebmw=pipes_b_to_m[1];
   provsql_shared_state->pipembr=pipes_m_to_b[0];
   provsql_shared_state->pipembw=pipes_m_to_b[1];
+  provsql_shared_state->kcmcp_endpoint[0]='\0';
 }
 
 Size provsql_memsize(void)

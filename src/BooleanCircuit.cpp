@@ -832,8 +832,18 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
     }
     if(content.empty())
       content = TseytinCNF(g, false);  // inputOrder stays empty => CNF mode
+    // Resolve the server address: a literal 'managed' endpoint defers to the
+    // live address the supervisor worker published in shared memory; anything
+    // else is a fixed endpoint (unix:/path or host:port).
+    std::string endpoint = rec->endpoint;
+    if(endpoint == "managed")
+      endpoint = provsql_kcmcp_managed_endpoint();
+    if(endpoint.empty())
+      throw CircuitException(
+              "KCMCP tool '"+compiler+"' has no endpoint (managed server not "
+              "running, or provsql.kcmcp_server unset)");
     try {
-      std::string nnf = provsql::kcmcp_compile(rec->endpoint, input_format, content);
+      std::string nnf = provsql::kcmcp_compile(endpoint, input_format, content);
       std::istringstream iss(nnf);
       return parseDDNNF(iss, inputOrder);
     } catch(const CircuitException &) {

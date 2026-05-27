@@ -78,6 +78,9 @@ typedef struct provsqlSharedState
   long pipebmw;           ///< Background-to-main pipe: write end (worker writes)
   long pipembr;           ///< Main-to-background pipe: read end (worker reads)
   long pipembw;           ///< Main-to-background pipe: write end (backend writes)
+  char kcmcp_endpoint[256]; ///< Live endpoint of the managed KCMCP server
+                            ///< ("" when none): written by the supervisor
+                            ///< worker, read by the in-extension client.
 } provsqlSharedState;
 
 /** @brief Pointer to the ProvSQL shared-memory segment (set in @c provsql_shmem_startup). */

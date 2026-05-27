@@ -235,6 +235,21 @@ extern char *provsql_tool_search_path;
  * minic2d / dsharp / panini-*). */
 extern char *provsql_fallback_compiler;
 
+/** Launch command for the managed KCMCP knowledge-compiler server, set by
+ * the provsql.kcmcp_server run-time configuration parameter (PGC_SIGHUP).
+ * The literal substring "{endpoint}" is replaced by the Unix-socket path the
+ * supervisor background worker chooses, e.g. "tdkc --kcmcp unix:{endpoint}".
+ * NULL or empty means no managed server is launched. */
+extern char *provsql_kcmcp_server;
+
+/** Read the live endpoint of the managed KCMCP server from shared memory
+ * (e.g. "unix:/tmp/..."), or an empty string when none is running. */
+const char *provsql_kcmcp_managed_endpoint(void);
+
+/** Register the supervisor background worker that launches and supervises the
+ * managed KCMCP server; called from _PG_init alongside the mmap worker. */
+void RegisterProvSQLKCMCPWorker(void);
+
 /** Seed for the Monte Carlo sampler, set by the provsql.monte_carlo_seed
  * run-time configuration parameter.  -1 (default) means seed from
  * std::random_device for non-deterministic sampling; any other value

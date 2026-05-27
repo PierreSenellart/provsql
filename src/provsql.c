@@ -80,6 +80,7 @@ int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.ve
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC. Superuser-only (@c PGC_SUSET): it dictates which directories the postgres OS user searches for executables, so a non-privileged role must not be able to point it at an attacker-controlled binary.
 char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit::makeDD as the final fallback after @c interpretAsDD and tree-decomposition both fail; controlled by the @c provsql.fallback_compiler GUC (default @c "d4")
+char *provsql_kcmcp_server = NULL; ///< Launch command for the managed KCMCP server (with a @c {endpoint} placeholder); controlled by the @c provsql.kcmcp_server GUC. Empty means no managed server is launched.
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
@@ -5430,6 +5431,25 @@ void _PG_init(void) {
                              NULL,
                              NULL,
                              NULL);
+  DefineCustomStringVariable("provsql.kcmcp_server",
+                             "Launch command for the managed KCMCP knowledge-compiler server.",
+                             "Shell command the supervisor background worker runs to start a "
+                             "warm KCMCP server (see the KC server protocol). The literal "
+                             "{endpoint} is replaced by a Unix-socket path the worker picks "
+                             "and publishes for the in-extension client to reach (a registry "
+                             "record of kind 'kcmcp' with endpoint 'managed' uses it). {endpoint} "
+                             "already carries the scheme (e.g. unix:/path). Empty (default) "
+                             "launches no server. Example: 'tdkc --kcmcp {endpoint}'. "
+                             "PGC_SIGHUP (config file / ALTER SYSTEM + reload): it runs an "
+                             "arbitrary command as the postgres OS user, so like "
+                             "provsql.tool_search_path it is not settable per session.",
+                             &provsql_kcmcp_server,
+                             "",
+                             PGC_SIGHUP,
+                             0,
+                             NULL,
+                             NULL,
+                             NULL);
   DefineCustomBoolVariable("provsql.simplify_on_load",
                            "Apply universal cmp-resolution passes when "
                            "loading a provenance circuit.",
@@ -5621,6 +5641,7 @@ void _PG_init(void) {
   ProcessUtility_hook = provsql_ProcessUtility;
 
   RegisterProvSQLMMapWorker();
+  RegisterProvSQLKCMCPWorker();
 }
 
 /**
