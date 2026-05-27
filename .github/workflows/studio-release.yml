@@ -121,6 +121,11 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A duplicate or concurrent run (e.g. a single tag push that
+          # spawns two runs) would otherwise 400 on the already-uploaded
+          # files; treat an existing version as a successful no-op.
+          skip-existing: true
 
   # ----------------------------------------------------------------------
   # Step 4: GitHub Release with the sdist + wheel attached. The auto-
@@ -202,7 +207,17 @@ jobs:
 
           [ProvSQL Studio user manual](https://provsql.org/docs/user/studio.html)
           EOF
-          gh release create "$TAG" \
-            --title "ProvSQL Studio $TAG" \
-            --notes-file "$NOTES_FILE" \
-            dist/*
+          # Idempotent: a duplicate run updates the existing release
+          # (refreshing notes, clobbering assets) instead of failing
+          # because a release for this tag already exists.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "ProvSQL Studio $TAG" \
+              --notes-file "$NOTES_FILE"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "ProvSQL Studio $TAG" \
+              --notes-file "$NOTES_FILE" \
+              dist/*
+          fi
