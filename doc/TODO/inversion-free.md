@@ -179,17 +179,35 @@ deterministic — carrying genuine decomposable-AND nodes (n=10: 1123 AND / 654
 OR, `~24·n²` gates, linear in the lineage). Disposes of risk #1's
 *materialisation* worry: determinism/decomposability hold per node.
 
-Residual gap on this builder: it is correct and linear in *output* size, but
-its DNF-explicit recursion still does `~n⁵` *build* work (large residuals copied
-/ canonicalised many times — the same super-linear ceiling as the apply oracle,
-expected). Linear **build** time needs the bounded atom-frontier memo (replacing
-the explicit-DNF cache key with the `2^g` frontier state), co-designed with task
-11; that is the next step on this builder.
+**Build-time: OR-decomposition chaining (the first big lever).** The first cut
+dragged the whole flat DNF (every undecided block, `~n³` terms) through each
+Shannon decision — correct and linear in *output* size, but `~n⁵` *build* work
+(the apply oracle's ceiling). Since the lineage top is `⋁_i block_i` over
+variable-disjoint blocks, `build` now **OR-decomposes** and chains: it compiles
+each component against a *shared tail node* (the component's FALSE leaf
+redirected to "the OR of the later components"), so an inert block is one shared
+node, never copied into the residual. This is the standard OBDD chaining of
+disjoint components and keeps the result a valid d-DNNF (each chain link is a
+decision whose `¬v` branch points at the tail — still deterministic, still
+decomposable). The decomposable-AND split is taken only when there is no pending
+tail (the global FALSE sink), since `(∏ factors) ∨ tail` is not a clean
+decomposable AND. Measured on the witness (same linear-size result, `~24.7·n²`
+gates): build drops from `~n⁵` to `~n^3.7`, e.g. **n=20: 142 s → 0.7 s**, and
+n=50 (7 500 vars) now completes (~20 s) where the generic compilers die at
+`n≈6`.
 
-Still unbuilt and ahead: the **linear-build** frontier memo over the structured
-construction (next), the per-input order keys (task 11, co-designed with it; the
-order is currently derived in the harness, not from per-input markers), and
-wiring `StructuredDNNFBuilder` + `dDNNF::probabilityEvaluation` into the
+Residual gap to *true* linear build: each block is still **flattened** to its
+`n²` cross-terms in the DNF (so `~n⁴` memory, the current limiter at ~1 GB by
+n=50). Linear build needs the per-block cofactors kept **factored**
+(`(⋁ⱼ t1)∧(⋁ₖ t2)`, `O(n)` per block) under the bounded atom-frontier — i.e. the
+`2^g` frontier state replacing the flattened-DNF cache key. That factored
+frontier is the part genuinely **co-designed with task 11** (per-input order
+keys give the per-atom coordinates the frontier slots are keyed on).
+
+Still unbuilt and ahead: the **factored** bounded-frontier representation for
+true linear build (next), the per-input order keys (task 11, co-designed with
+it; the order is currently derived in the harness, not from per-input markers),
+and wiring `StructuredDNNFBuilder` + `dDNNF::probabilityEvaluation` into the
 probability dispatcher behind `provsql.inversion_free`.
 
 **Future benchmark (read-once overlap).** Hierarchical self-join-free queries

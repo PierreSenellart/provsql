@@ -146,10 +146,13 @@ private:
   std::vector<gate_t> not_gate_;    ///< rank -> shared dDNNF NOT(IN) gate (lazy)
   gate_t true_gate_, false_gate_;   ///< empty AND / empty OR terminals
 
-  /* Component cache: residual -> gate.  Hashed so a lookup costs one O(|d|)
+  /* Component cache: (residual, false-sink) -> gate.  The sink is part of the
+   * key because the same residual built against a different OR-chain tail (§
+   * @c build) yields a different node.  Hashed so a lookup costs one O(|d|)
    * fingerprint rather than O(log N) comparisons of large DNF keys. */
-  struct DNFHash { std::size_t operator()(const DNF &d) const; };
-  std::unordered_map<DNF, gate_t, DNFHash> cache_;
+  struct CacheKey { DNF d; gate_t fs; bool operator==(const CacheKey &o) const; };
+  struct CacheKeyHash { std::size_t operator()(const CacheKey &k) const; };
+  std::unordered_map<CacheKey, gate_t, CacheKeyHash> cache_;
 
   /* Expand the circuit's function under @p root into a canonical monotone DNF,
    * memoised per gate. */
@@ -159,6 +162,12 @@ private:
 
   static DNF canonical(DNF d);                 ///< sort, dedup, drop supersets
   static DNF condition(const DNF &d, Var v, bool value);
+
+  /* Split @p d into variable-disjoint OR-components (terms sharing a variable,
+   * transitively, stay together), ordered by least variable; @c {d} if the
+   * co-occurrence graph is connected.  These are OR'd, so they are chained, not
+   * AND'd -- see @c build. */
+  std::vector<DNF> orDecompose(const DNF &d) const;
 
   /* If @p d is a product of variable-disjoint sub-DNFs, return the factors
    * (size > 1); otherwise return @c {d}.  Sound: only splits when an exact
@@ -170,7 +179,11 @@ private:
   gate_t mkNeg(Var v);                         ///< shared negative literal NOT(IN)
   gate_t newGate(BooleanGate type);            ///< setGate + size guard
 
-  gate_t build(const DNF &d);
+  /* Compile @p d into a d-DNNF node whose FALSE leaf is @p false_sink (rather
+   * than the global FALSE terminal).  Threading a sink lets an OR-chain build
+   * each disjoint component against the node for "the rest of the disjunction",
+   * so the inert components are not dragged through the residual DNF. */
+  gate_t build(const DNF &d, gate_t false_sink);
 };
 
 #endif /* STRUCTURED_DNNF_H */

@@ -212,7 +212,7 @@ constexpr std::size_t DECOMP_VAR_LIMIT  = 1024;       // skip pairwise above thi
  * paired matters for soundness -- the cross-product verification assumes the
  * term set is subsumption-free.  Large residuals near the top are handled by
  * Shannon decisions alone (correct, linear under the query order via caching). */
-constexpr std::size_t DECOMP_TERM_LIMIT = 4096;
+constexpr std::size_t DECOMP_TERM_LIMIT = 512;
 
 inline bool contains(const std::vector<int> &term, int v)
 {
@@ -225,15 +225,21 @@ constexpr gate_t NO_GATE = gate_t{~std::size_t{0}};
 
 }  // namespace
 
-std::size_t StructuredDNNFBuilder::DNFHash::operator()(const DNF &d) const
+bool StructuredDNNFBuilder::CacheKey::operator==(const CacheKey &o) const
+{
+  return fs == o.fs && d == o.d;
+}
+
+std::size_t StructuredDNNFBuilder::CacheKeyHash::operator()(const CacheKey &k) const
 {
   /* order-sensitive fold; DNF keys are canonical so equal DNFs hash equal */
   std::size_t h = 1469598103934665603ull;          // FNV-ish basis
   auto mix = [&](std::size_t x){ h ^= x + 0x9e3779b97f4a7c15ull + (h<<6) + (h>>2); };
-  for (const auto &t : d) {
+  for (const auto &t : k.d) {
     for (int v : t) mix((std::size_t) (unsigned) v);
     mix(0xffffffffull);                             // term separator
   }
+  mix((std::size_t) k.fs);
   return h;
 }
 
@@ -481,45 +487,102 @@ gate_t StructuredDNNFBuilder::mkAnd(const std::vector<gate_t> &children)
   return g;
 }
 
-gate_t StructuredDNNFBuilder::build(const DNF &draw)
+std::vector<StructuredDNNFBuilder::DNF>
+StructuredDNNFBuilder::orDecompose(const DNF &d) const
+{
+  /* variables present, with a dense index for union-find */
+  std::set<int> vset;
+  for (const auto &t : d) for (int v : t) vset.insert(v);
+  if (vset.size() <= 1) return { d };
+  std::vector<int> vars(vset.begin(), vset.end());
+  std::map<int,int> idx;
+  for (std::size_t i = 0; i < vars.size(); ++i) idx[vars[i]] = (int) i;
+
+  std::vector<int> uf(vars.size());
+  for (std::size_t i = 0; i < uf.size(); ++i) uf[i] = (int) i;
+  std::function<int(int)> find = [&](int x){ while (uf[x]!=x){ uf[x]=uf[uf[x]]; x=uf[x]; } return x; };
+  /* variables co-occurring in a term are connected (the disjunct couples them) */
+  for (const auto &t : d)
+    for (std::size_t a = 1; a < t.size(); ++a) {
+      int r0 = find(idx[t[0]]), ra = find(idx[t[a]]);
+      if (r0 != ra) uf[r0] = ra;
+    }
+
+  /* group terms by their component (all of a term's vars share one root) */
+  std::map<int, DNF> comp;
+  for (const auto &t : d) comp[find(idx[t[0]])].push_back(t);
+  if (comp.size() <= 1) return { d };
+
+  /* order components by least variable, so the chain follows the order */
+  std::vector<std::pair<int,DNF>> ordered;
+  for (auto &kv : comp) {
+    int mn = INT_MAX;
+    for (const auto &t : kv.second) mn = std::min(mn, t.front());
+    ordered.push_back({ mn, std::move(kv.second) });
+  }
+  std::sort(ordered.begin(), ordered.end(),
+            [](const auto &a, const auto &b){ return a.first < b.first; });
+  std::vector<DNF> out;
+  out.reserve(ordered.size());
+  for (auto &pr : ordered) out.push_back(std::move(pr.second));
+  return out;
+}
+
+gate_t StructuredDNNFBuilder::build(const DNF &draw, gate_t false_sink)
 {
   DNF d = canonical(draw);
-  if (d.empty())                                return false_gate_;
+  if (d.empty())                                return false_sink;
   if (d.size() == 1 && d[0].empty())            return true_gate_;
 
-  auto cit = cache_.find(d);
+  CacheKey key{ d, false_sink };
+  auto cit = cache_.find(key);
   if (cit != cache_.end()) return cit->second;
 
   gate_t res;
 
-  /* (1) decomposable AND: residual is a product of variable-disjoint factors.
-   * This also fully splits a single multi-variable term into a flat AND of
-   * literal leaves (each variable is its own factor). */
-  std::vector<DNF> parts = andDecompose(d);
-  if (parts.size() > 1) {
-    std::vector<gate_t> ch;
-    ch.reserve(parts.size());
-    for (const auto &p : parts) ch.push_back(build(p));
-    res = mkAnd(ch);
+  /* (1) OR-chain over variable-disjoint components.  d = c0 ∨ c1 ∨ … ∨ sink, the
+   * cᵢ ordered by least variable.  Build right to left: each component's FALSE
+   * leaf is the node for "everything later", so an inert component is one shared
+   * node, never copied into the residual DNF. */
+  std::vector<DNF> comps = orDecompose(d);
+  if (comps.size() > 1) {
+    gate_t tail = false_sink;
+    for (auto it = comps.rbegin(); it != comps.rend(); ++it)
+      tail = build(*it, tail);
+    res = tail;
   } else {
-    /* (2) deterministic OR: Shannon-decide the lowest-rank variable present. */
-    Var v = d[0][0];
-    for (const auto &t : d) if (t[0] < v) v = t[0];
-    gate_t ghi = build(condition(d, v, true));
-    gate_t glo = build(condition(d, v, false));
-    if (ghi == glo) {
-      res = ghi;
+    /* (2) decomposable AND: residual is a product of variable-disjoint factors.
+     * Only when there is no pending OR tail (false_sink is the global FALSE):
+     * with a tail, the function is (∏ factors) ∨ tail, which is not a clean
+     * decomposable AND.  This also splits a single multi-variable term into a
+     * flat AND of literal leaves. */
+    std::vector<DNF> parts = (false_sink == false_gate_)
+                               ? andDecompose(d) : std::vector<DNF>{ d };
+    if (parts.size() > 1) {
+      std::vector<gate_t> ch;
+      ch.reserve(parts.size());
+      for (const auto &p : parts) ch.push_back(build(p, false_gate_));
+      res = mkAnd(ch);
     } else {
-      gate_t andHi = mkAnd({ mkLit(v), ghi });
-      gate_t andLo = mkAnd({ mkNeg(v), glo });
-      gate_t orG = newGate(BooleanGate::OR);
-      if (andHi != false_gate_) dd_.addWire(orG, andHi);
-      if (andLo != false_gate_) dd_.addWire(orG, andLo);
-      res = orG;
+      /* (3) deterministic OR: Shannon-decide the lowest-rank variable present. */
+      Var v = d[0][0];
+      for (const auto &t : d) if (t[0] < v) v = t[0];
+      gate_t ghi = build(condition(d, v, true), false_sink);
+      gate_t glo = build(condition(d, v, false), false_sink);
+      if (ghi == glo) {
+        res = ghi;
+      } else {
+        gate_t andHi = mkAnd({ mkLit(v), ghi });
+        gate_t andLo = mkAnd({ mkNeg(v), glo });
+        gate_t orG = newGate(BooleanGate::OR);
+        if (andHi != false_gate_) dd_.addWire(orG, andHi);
+        if (andLo != false_gate_) dd_.addWire(orG, andLo);
+        res = orG;
+      }
     }
   }
 
-  cache_.emplace(std::move(d), res);
+  cache_.emplace(CacheKey{ std::move(d), false_sink }, res);
   return res;
 }
 
@@ -549,7 +612,7 @@ StructuredDNNFBuilder::StructuredDNNFBuilder(const BooleanCircuit &bc,
   std::map<gate_t, DNF> memo;
   DNF top = extract(bc, root, input_rank, memo);
 
-  root_ = build(top);
+  root_ = build(top, false_gate_);
   dd_.root = root_;
   dd_.simplify();
 }
