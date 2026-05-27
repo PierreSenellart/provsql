@@ -4068,8 +4068,6 @@ CREATE OR REPLACE VIEW tools AS
  * @param name        logical id (e.g. @c 'd4-jm62300'); also the value
  *                    @c provsql.fallback_compiler / the wmc tool selector use
  * @param executable  executable to resolve on PATH (defaults to @c name)
- * @param operations  advertised capabilities: @c 'compile', @c 'wmc', @c 'render'
- * @param preference  ordering within an operation (higher first)
  * @param kind          @c 'cli' (the only supported kind today)
  * @param operations    capabilities (KCMCP names): @c 'compile' / @c 'wmc'
  *                      (and ProvSQL-local @c 'render')

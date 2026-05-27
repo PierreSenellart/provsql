@@ -89,4 +89,12 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define F_SUM_INT4 2108
 #endif
 
+#if PG_VERSION_NUM < 130000
+/** @brief @c int alignment code for the array routines (@c construct_array /
+ * @c deconstruct_array).  The @c TYPALIGN_* macros (in @c catalog/pg_type.h)
+ * were introduced in PostgreSQL 13; on PG 10-12 the alignment is passed as
+ * the historical @c 'i' character. */
+#define TYPALIGN_INT 'i'
+#endif
+
 #endif /* COMPATIBILITY_H */

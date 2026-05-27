@@ -160,6 +160,8 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     gate-creation paths). See :doc:`continuous-distributions` for
     the broader hybrid-evaluation context.
 
+.. _provsql-tool-search-path:
+
 ``provsql.tool_search_path`` (default: empty)
     Colon-separated list of directories prepended to ``PATH`` when ProvSQL
     spawns external command-line tools: the d-DNNF compilers (``d4``,
@@ -180,6 +182,8 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     non-superuser session uses whatever value an administrator pins for it
     (for example with ``ALTER ROLE ... SET provsql.tool_search_path``) or
     the server's default ``PATH``.
+
+.. _provsql-fallback-compiler:
 
 ``provsql.fallback_compiler`` (default: ``d4``)
     Name of the external compiler ProvSQL invokes as the **final fallback**

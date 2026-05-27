@@ -34,6 +34,7 @@ extern "C" {
 
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "Circuit.hpp"
+#include "kcmcp_server.h"
 
 /**
  * @brief Return the current time as a floating-point number of seconds.
@@ -53,8 +54,16 @@ static double get_timestamp ()
  * @return      0 on success, non-zero on error.
  */
 int main(int argc, char **argv) {
+  // KCMCP reference-server mode: speak the Knowledge Compiler / Model Counter
+  // Protocol on a Unix or TCP endpoint (see kcmcp_server.h).
+  if(argc == 3 && std::string(argv[1]) == "--kcmcp")
+    return kcmcp_serve(argv[2]);
+
   if(argc != 2) {
-    std::cerr << "Usage: " << argv[0] << " circuit" << std::endl;
+    std::cerr << "Usage: " << argv[0] << " circuit\n"
+              << "       " << argv[0]
+              << " --kcmcp unix:/path|host:port   (KCMCP reference server)"
+              << std::endl;
     exit(1);
   }
 

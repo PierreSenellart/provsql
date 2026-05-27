@@ -62,7 +62,7 @@ jobs:
       - uses: Vampire/setup-wsl@v7.0.0
       - run: sed -i '/bullseye-backports/d' /etc/apt/sources.list # Temporary fix for https://github.com/Vampire/setup-wsl/issues/76
       - run: apt update
-      - run: apt -y install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all
+      - run: apt -y install postgresql libgraph-easy-perl libboost-dev libboost-serialization-dev unzip zlib1g-dev libgmp-dev git build-essential postgresql-server-dev-all python3
       # d4 / dsharp / weightmc are exercised by the Linux matrix; the WSL
       # job's signal is "does the extension build and run under WSL", so
       # tests that need those binaries skip cleanly here.
@@ -74,6 +74,8 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
       - run: make -j$(nproc) && make tdkc && make provsql_migrate_mmap && make install
+      - name: KCMCP protocol conformance (tdkc)
+        run: make kcmcp-tdkc-test
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/*/*/postgresql.conf
       - run: service postgresql restart
       - run: perl -i -pe 's/\r//g unless /\\set ECHO none/' test/expected/*.out

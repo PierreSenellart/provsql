@@ -3,7 +3,14 @@ EXTVERSION = $(shell grep default_version $(EXTENSION).common.control | \
            sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 
 MODULE_big = provsql
-OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(filter-out src/provsql_migrate_mmap.o,$(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp)))
+# The standalone tdkc tool (TreeDecompositionKnowledgeCompiler, holding its
+# main(), and the KCMCP reference server it now drives: kcmcp_*, dimacs_cnf)
+# has no role in the in-process extension -- it is a separate binary and a
+# socket server -- so it is filtered out of the extension's OBJS (like the
+# provsql_migrate_mmap migration tool).  TreeDecompositionKnowledgeCompiler.o
+# in particular references kcmcp_serve(), which is excluded, so leaving it in
+# would break the provsql.so link.
+OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(filter-out src/provsql_migrate_mmap.o src/TreeDecompositionKnowledgeCompiler.o src/kcmcp_protocol.o src/kcmcp_server.o src/dimacs_cnf.o,$(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp)))
 
 DOCS = $(wildcard doc/*.md)
 UPGRADE_SCRIPTS = $(wildcard sql/upgrades/$(EXTENSION)--*--*.sql)
@@ -172,8 +179,13 @@ installcheck: test/schedule
 installcheck-todo:
 	$(MAKE) installcheck REGRESS_OPTS="--load-extension=plpgsql --inputdir=test/todo --outputdir=$(shell mktemp -d /tmp/tmp.provsql-todoXXXX) --schedule test/todo/schedule"
 
-tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/Circuit.hpp src/dDNNF.h src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.h src/dDNNFTreeDecompositionBuilder.cpp src/Circuit.h src/Graph.h src/PermutationStrategy.h src/TreeDecompositionKnowledgeCompiler.cpp
-	$(CXX) $(PRECXXFLAGS) -DTDKC -W -Wall -o tdkc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp
+tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/Circuit.hpp src/dDNNF.h src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.h src/dDNNFTreeDecompositionBuilder.cpp src/Circuit.h src/Graph.h src/PermutationStrategy.h src/TreeDecompositionKnowledgeCompiler.cpp src/kcmcp_protocol.cpp src/kcmcp_protocol.h src/kcmcp_server.cpp src/kcmcp_server.h src/dimacs_cnf.cpp src/dimacs_cnf.h src/tdkc_interrupt.h
+	$(CXX) $(PRECXXFLAGS) -DTDKC -W -Wall -o tdkc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp src/kcmcp_protocol.cpp src/kcmcp_server.cpp src/dimacs_cnf.cpp
+
+# Build tdkc and run the KCMCP protocol conformance check against it.
+.PHONY: kcmcp-tdkc-test
+kcmcp-tdkc-test: tdkc
+	python3 test/kcmcp/conformance.py ./tdkc
 
 provsql_migrate_mmap: src/provsql_migrate_mmap.cpp
 	$(CXX) $(PRECXXFLAGS) -W -Wall \

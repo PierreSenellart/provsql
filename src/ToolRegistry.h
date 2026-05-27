@@ -7,7 +7,7 @@
  * @c weightmc, @c graph-easy).  Historically the set of tools, their
  * executable names, and which one is preferred for a given operation were
  * compiled in as string literals scattered across a dozen call sites.  This
- * registry turns that into a single in-memory table of @ref ToolRecord, so
+ * registry turns that into a single in-memory table of @ref provsql::ToolRecord, so
  * the dispatchers query metadata instead of testing literals.
  *
  * The registry is seeded at first use with exactly the tools ProvSQL has

@@ -36,7 +36,10 @@
  * the standalone tdkc binary CHECK_FOR_INTERRUPTS resolves to a
  * no-op, so we mirror the guard pattern from BooleanCircuit.cpp. */
 #ifdef TDKC
-#define CHECK_FOR_INTERRUPTS() ((void)0)
+// In tdkc the hot-loop interrupt check services any active KCMCP session and
+// aborts the build on CANCEL / timeout (a no-op in command-line mode).
+#include "tdkc_interrupt.h"
+#define CHECK_FOR_INTERRUPTS() provsql_tdkc_poll()
 #else
 extern "C" {
 #include "postgres.h"

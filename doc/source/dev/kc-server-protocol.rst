@@ -26,6 +26,19 @@ and capability negotiation.  It is the protocol ProvSQL aims to converge
 on; it does not depend on, and is not derived from, the wire format of
 any server that exists today.
 
+.. note::
+
+   The standalone :program:`tdkc` tool is a **reference implementation** of
+   the server side.  Run it with ``tdkc --kcmcp unix:/path/to.sock`` or
+   ``tdkc --kcmcp host:port``; it advertises ``compile`` (to ``ddnnf-nnf``)
+   and ``wmc`` (to ``decimal``) over ``dimacs-cnf`` input, serving each
+   request through ProvSQL's in-process tree decomposition, and implements
+   the ``cancel`` and ``progress`` features.  It exists to exercise and pin
+   the protocol; ProvSQL itself keeps tree decomposition in process rather
+   than talking to it over a socket.  ``test/kcmcp/conformance.py`` drives it
+   through a handshake, ``compile``/``wmc`` requests, ``PING``/``PONG``, and
+   error cases (``make kcmcp-tdkc-test``).
+
 
 Design goals
 ------------
@@ -232,6 +245,17 @@ receiver's limit -- the advertised ``max_payload``, or the 1 MiB floor
 for a peer that advertises none (i.e. the client) -- and splits anything
 larger across ``MORE``-flagged frames within that limit.
 
+KCMCP v1 negotiates no payload compression, so a receiver need not support
+the ``COMPRESSED`` flag (bit 1).  A sender MAY nonetheless set it
+optimistically: a receiver that cannot decode the payload drains it -- its
+length is bounded by ``max_payload``, so the stream stays synchronised --
+and replies with an :msg:`ERROR` of code ``9`` on the same connection,
+rather than mis-reading the bytes as plain.  The sender then retries the
+frame uncompressed; the :msg:`ERROR` is the fallback signal, so the
+exchange doubles as a (coarse) compression negotiation.  A future revision
+may instead advertise compression support as a ``feature``, letting a
+client skip the trial.
+
 Message types
 ^^^^^^^^^^^^^
 
@@ -338,6 +362,11 @@ Server ``HELLO`` fields (the capability descriptor):
      - **Required.** The major protocol version the server selected for
        this connection; never greater than the client's ``major``. A
        client that cannot speak it closes the connection and falls back.
+       Because a ``major`` bump is a breaking change, there is no shared
+       version when the client's ``major`` *exceeds* every ``major`` the
+       server implements: the server does **not** silently downgrade but
+       replies with an :msg:`ERROR` of code ``8`` and closes, and the client
+       falls back.
    * - ``engine``
      - string, ``name/version`` or bare ``name``
      - *Optional.* Identifies the **backend** knowledge compiler / model
@@ -455,6 +484,13 @@ The basic members, which every implementation interprets identically:
      - Wall-clock budget in milliseconds for the job. ``0`` or absent
        means no limit. On exceeding it the server stops and returns an
        :msg:`ERROR` of code ``4``.
+   * - ``progress_every_ms``
+     - integer
+     - servers advertising ``progress``
+     - Minimum interval in milliseconds between :msg:`PROGRESS` frames for
+       the job. ``0`` emits one on every internal progress check; absent
+       leaves the cadence to the server. Ignored by a server that does not
+       advertise the ``progress`` feature.
    * - ``seed``
      - integer
      - randomised operations
@@ -717,9 +753,29 @@ Payload: ``u16 code`` followed by a UTF-8 message.  Defined codes:
      - internal engine error
    * - ``7``
      - payload over ``max_payload`` / out of memory
+   * - ``8``
+     - unsupported protocol version (client requires a ``major`` the server
+       does not implement; see *Handshake*)
+   * - ``9``
+     - ``COMPRESSED`` payload the server cannot decode (compression is not
+       negotiated in v1)
 
-Crucially, after sending an :msg:`ERROR` the server **stays up** and keeps
-serving the connection; a bad request never terminates the process.
+Crucially, sending an :msg:`ERROR` never terminates the **process**: the
+``accept`` loop keeps running for new connections.  Whether the **same
+connection** survives depends on the error's level:
+
+- **Recoverable** errors leave the byte stream synchronised, so the server
+  returns the :msg:`ERROR` and keeps serving the connection.  These are a
+  malformed or unsupported :msg:`REQUEST` (codes ``1``--``6``, the offending
+  frame having been read in full) and a ``COMPRESSED`` payload the server
+  cannot decode (code ``9``): its length is bounded by ``max_payload``, so
+  the server drains it and the peer retries uncompressed in-band.
+- **Fatal** (framing- or handshake-level) errors leave the stream
+  unresynchronisable, so the server MAY return the :msg:`ERROR` and then
+  close that connection: a frame larger than ``max_payload`` (code ``7``,
+  undrainable by definition), an unsupported protocol version (code ``8``,
+  at the handshake), or any otherwise unreadable / desynchronised frame.
+  The client then reconnects and re-handshakes.
 
 .. _kcmcp-cancel:
 
