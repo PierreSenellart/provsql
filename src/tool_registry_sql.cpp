@@ -4,11 +4,11 @@
  *
  * Exposes the in-memory catalog to SQL:
  *
- * - @c tool_registry_list() — set-returning, backs the read-only
+ * - @c tool_registry_list(): set-returning, backs the read-only
  *   @c provsql.tools view; reports each record plus an @c available flag
  *   computed with the same @c find_external_tool the dispatchers use.
  * - @c tool_registry_register() / @c tool_registry_unregister() /
- *   @c tool_registry_set_enabled() / @c tool_registry_set_preference() —
+ *   @c tool_registry_set_enabled() / @c tool_registry_set_preference():
  *   mutators, **superuser-only**.
  *
  * @par Security

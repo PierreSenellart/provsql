@@ -61,12 +61,12 @@ Columns:
 Selection
 ---------
 
-When you name a tool explicitly — ``probability_evaluate(t, 'compilation',
-'d4')`` or ``probability_evaluate(t, 'wmc', 'ganak')`` — ProvSQL uses it, or
+When you name a tool explicitly (``probability_evaluate(t, 'compilation',
+'d4')`` or ``probability_evaluate(t, 'wmc', 'ganak')``), ProvSQL uses it, or
 raises a clear error if it is unknown, disabled, or not on ``PATH``.
 
-When you do **not** name one — the ``'compilation'`` method with no compiler,
-or the ``'wmc'`` method with no counter — ProvSQL picks the **highest-
+When you do **not** name one (the ``'compilation'`` method with no compiler,
+or the ``'wmc'`` method with no counter), ProvSQL picks the **highest-
 preference enabled tool whose binary resolves on ``PATH``** for that
 operation. :ref:`provsql.fallback_compiler <provsql-fallback-compiler>`
 governs only the final fallback route of the default probability method.
