@@ -108,6 +108,46 @@ def test_benchmark_filters_missing_tools(app, monkeypatch):
     assert ind["nodes"] is None and ind["edges"] is None
 
 
+def test_benchmark_includes_inversion_free_only_when_certified(app):
+    """The 'inversion-free' row is offered only when the root carries the
+    inversion-free certificate; a plain (uncertified) token omits it."""
+    pool = app.extensions["provsql_pool"]
+
+    # (a) a bare personnel input is not certified -> no inversion-free row
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.provenance() FROM personnel WHERE id = 1")
+        plain = str(cur.fetchone()[0])
+    assert not kc._root_is_inversion_free(pool, plain)
+    out = kc.probability_benchmark(pool, plain, samples=50, statement_timeout="10s")
+    assert ("inversion-free", None) not in {(r["method"], r["args"]) for r in out["rows"]}
+
+    # (b) a certified self-join-free hierarchical circuit -> row present + sound
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SET provsql.inversion_free = on")
+        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("DROP TABLE IF EXISTS bm_a, bm_b CASCADE")
+        cur.execute("CREATE TABLE bm_a(x int)")
+        cur.execute("CREATE TABLE bm_b(x int)")
+        cur.execute("INSERT INTO bm_a VALUES (1),(2)")
+        cur.execute("INSERT INTO bm_b VALUES (1),(2)")
+        cur.execute("SELECT add_provenance('bm_a')")
+        cur.execute("SELECT add_provenance('bm_b')")
+        cur.execute("DO $$ BEGIN PERFORM set_prob(provsql,0.5) FROM bm_a; "
+                    "PERFORM set_prob(provsql,0.5) FROM bm_b; END $$")
+        # NB: no LIMIT -- a LIMIT clause makes the query a non-pure-UCQ and
+        # the inversion-free analysis (correctly) declines it; fetchone() takes
+        # the first of the per-group tokens instead.
+        cur.execute("SELECT provsql.provenance() FROM bm_a a, bm_b b "
+                    "WHERE a.x = b.x GROUP BY a.x")
+        cert = str(cur.fetchone()[0])
+    assert kc._root_is_inversion_free(pool, cert)
+    out = kc.probability_benchmark(pool, cert, samples=50, statement_timeout="10s")
+    by_key = {(r["method"], r["args"]): r for r in out["rows"]}
+    assert ("inversion-free", None) in by_key
+    row = by_key[("inversion-free", None)]
+    assert row["error"] is None and row["probability"] is not None
+
+
 def test_tool_available_sql_function(app):
     """The C-side provsql.tool_available agrees with the registered
     behaviour: a definitely-absent name returns false; a bare 'sh'

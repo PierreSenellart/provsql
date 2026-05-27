@@ -450,6 +450,10 @@ def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
 _METHOD_TOOL_DEPS: dict[tuple[str, str | None], tuple[str, ...]] = {
     ("independent",        None): (),
     ("possible-worlds",    None): (),
+    # In-process, but only meaningful on a query certified inversion-free
+    # (its root carries the certificate); the benchmark filters it out
+    # otherwise, since the explicit method errors without a certificate.
+    ("inversion-free",     None): (),
     ("tree-decomposition", None): (),
     ("monte-carlo",        None): (),
     ("compilation", "d4"):              ("d4",),
@@ -601,6 +605,24 @@ def tools_status(pool: ConnectionPool) -> dict:
     }
 
 
+def _root_is_inversion_free(pool: ConnectionPool, token: str) -> bool:
+    """True when @p token's root is an inversion-free certificate carrier.
+
+    The planner stamps the serialised certificate as a ``C``-prefixed ``extra``
+    on a transparent ``gate_annotation`` root; that is exactly the case where
+    the ``'inversion-free'`` probability method applies, so the benchmark uses
+    it to decide whether to include that method's row.
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT provsql.get_gate_type(%(t)s::uuid) = 'annotation' "
+            "AND left(provsql.get_extra(%(t)s::uuid), 1) = 'C'",
+            {"t": token},
+        )
+        row = cur.fetchone()
+    return bool(row and row[0])
+
+
 def probability_benchmark(
     pool: ConnectionPool,
     token: str,
@@ -642,11 +664,15 @@ def probability_benchmark(
     # The benchmark would otherwise spend ~ms per row reproducing the
     # same "X not found on PATH" error.  Methods with no dependency
     # (independent / possible-worlds / tree-decomposition / monte-
-    # carlo) always survive the filter.
+    # carlo) always survive the filter.  'inversion-free' additionally
+    # requires the root to carry the inversion-free certificate; the
+    # explicit method errors without one, so drop the row otherwise.
     tools = query_tool_availability(pool)
+    if_certified = _root_is_inversion_free(pool, token)
     runnable = [
         (m, a) for (m, a) in _BENCHMARK_METHODS
         if all(tools.get(t, False) for t in _METHOD_TOOL_DEPS[(m, a)])
+        and (m != "inversion-free" or if_certified)
     ]
 
     rows: list[dict] = []

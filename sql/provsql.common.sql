@@ -4129,6 +4129,13 @@ RETURNS TABLE (
 BEGIN
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'independent');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'possible-worlds');
+  -- Only on a query certified inversion-free (its root carries the
+  -- certificate as a 'C'-prefixed annotation): the explicit method errors
+  -- otherwise, so we skip the row rather than record a spurious error.
+  IF provsql.get_gate_type(token) = 'annotation'
+     AND left(provsql.get_extra(token), 1) = 'C' THEN
+    RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'inversion-free');
+  END IF;
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'tree-decomposition');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
     token, 'monte-carlo', monte_carlo_samples::text);
