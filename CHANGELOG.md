@@ -5,6 +5,96 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.8.0] - 2026-05-27
+
+ProvSQL 1.8.0 expands the knowledge-compilation backend with an
+inversion-free compilation path and warm compiler servers, makes the
+external-tool set fully data-driven through a registry, and fixes
+several correctness and robustness issues.
+
+#### Knowledge compilation
+
+- **Inversion-free compilation.** ProvSQL now recognises the
+  inversion-free class of queries (Jha & Suciu, ICDT 2011) and compiles
+  their provenance directly to a structured d-DNNF in linear time,
+  bypassing a general knowledge compiler for probability evaluation. The
+  certified class covers non-integer order keys, deterministic
+  (non-tracked) relations, and SPJ / nested-view flattening. It is
+  exposed as the `inversion-free` probability method, taken automatically
+  by the default method once the root is certified, and surfaced by the
+  new SQL `annotate(uuid, text)` / `inversion_free_key(text, text, int)`
+  and a transparent `annotation` provenance gate carrying the
+  tractability certificate.
+
+- **Warm knowledge-compiler servers (KCMCP).** External compilers and
+  model counters can now run as long-lived server processes that ProvSQL
+  reaches over a socket, avoiding per-call process startup. A tool
+  registered with `kind = 'kcmcp'` is reached at a fixed `unix:` /
+  `host:port` endpoint, or ProvSQL launches and supervises the server
+  itself (`managed` mode) through a background worker and the new
+  `provsql.kcmcp_server` setting. The framed wire protocol (compile and
+  weighted model counting over DIMACS CNF, with cancellation, progress,
+  and version / compression negotiation) is documented in the developer
+  manual; `tdkc --kcmcp` is a reference server.
+
+- **Automatic compiler selection.** `compilation()` can be called with no
+  argument and picks the highest-preference compiler currently available
+  on the backend; the compile fallback and the no-argument weighted
+  model-counting path select tools the same way. d4 (d4v2) can compile
+  directly from ProvSQL's native circuit (BC-S1.2) rather than a Tseytin
+  CNF.
+
+- **Stronger circuit simplification.** The on-load identity folding
+  (`provsql.simplify_on_load`) now folds Boolean absorption and semiring
+  identities to a joint fixpoint, alternating the two until the circuit
+  stops changing rather than collapsing once at the end. This exposes
+  absorptions that surface only after a single-wire collapse, so
+  cross-product / high-degree self-join lineages (e.g. `SELECT DISTINCT 1
+  FROM e a, e b`) whose sum-of-products would otherwise be exponential
+  collapse to a single OR, making them tractable to evaluate.
+
+#### External-tool registry
+
+- **Registry.** External compilers, model counters and KCMCP servers are
+  managed through a first-class registry exposed as the `provsql.tools`
+  view, with superuser-only mutators `register_tool`, `unregister_tool`,
+  `set_tool_enabled` and `set_tool_preference`. A tool is fully
+  data-driven (operations, input/output formats, command template),
+  so the probability dispatchers carry no per-tool code. Registrations
+  persist in a `pg_dump`-carried configuration table and survive
+  dump/restore.
+
+- **Security.** `provsql.tool_search_path` is now superuser-only
+  (`PGC_SUSET`): since it dictates where the server's OS user looks for
+  tool executables, a non-superuser setting it would amount to arbitrary
+  code execution as the server account.
+
+#### Bug fixes
+
+- **`possible-worlds` overflow.** The method used a 32-bit shift
+  (`1 << n`) when enumerating worlds, which overflowed and returned a
+  wrong probability for circuits with 32 or more inputs; the shift is now
+  64-bit.
+
+- **`WITH RECURSIVE`.** Fix a planner-hook crash on a recursive query
+  when `provsql.active` is off, and an OID error when a recursive CTE is
+  referenced in two `UNION` arms.
+
+- **Where-provenance with NULLs.** Fix where-provenance on relations with
+  NULL-valued columns, and give a clearer error for untraceable input
+  gates.
+
+- **Cancellation / timeout messages.** An interrupted probability
+  computation now surfaces PostgreSQL's native cancellation / statement
+  timeout message instead of a generic “Interrupted”.
+
+#### Studio
+
+- **Studio 1.4.0.** The companion ProvSQL Studio release adds a Tools
+  panel managing the new registry, drives every tool picker from
+  `provsql.tools`, and renders the inversion-free certificate as an
+  **IF** badge.
+
 ## [1.7.1] - 2026-05-24
 
 - Fix a bug where a backend that first planned a query before the
