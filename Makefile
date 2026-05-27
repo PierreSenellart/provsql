@@ -34,10 +34,13 @@ website: docs
 	# Copy generated docs into Jekyll source tree so jekyll serve also sees them.
 	# rsync --delete so files removed upstream (e.g. retired sql/index.rst)
 	# don't linger as stale, half-styled artifacts under website/docs/.
+	# --omit-dir-times: setting a directory's mtime needs ownership, not just
+	# write access, so it fails when the staging dirs are owned by another user
+	# sharing the repo (group-writable); file times are still preserved.
 	mkdir -p website/docs website/doxygen-sql/html website/doxygen-c/html
-	rsync -a --delete doc/source/_build/html/ website/docs/
-	rsync -a --delete doc/doxygen-sql/html/   website/doxygen-sql/html/
-	rsync -a --delete doc/doxygen-c/html/     website/doxygen-c/html/
+	rsync -a --omit-dir-times --delete doc/source/_build/html/ website/docs/
+	rsync -a --omit-dir-times --delete doc/doxygen-sql/html/   website/doxygen-sql/html/
+	rsync -a --omit-dir-times --delete doc/doxygen-c/html/     website/doxygen-c/html/
 	cd website && bundle exec jekyll build
 
 deploy: website
