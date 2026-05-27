@@ -491,5 +491,50 @@ SELECT x, round(probability_evaluate(p)::numeric, 6)                    AS t4_de
   FROM ifv_t4 ORDER BY x;
 SET provsql.boolean_provenance = off;
 
+-- (10) Multi-relation SPJ views (a join *inside* the view).  The flattener
+--      expands one subquery slot into all its base atoms, pulling the view's
+--      join condition up into the flat conjunction; markers are threaded to each
+--      base input.  boolean_provenance is off.
+
+-- (10a) view joins A(x,k), B(k,z) on the internal key k and projects x: the
+--       flattened conjunction A(x,k), B(k,z) has root k (touches both atoms).
+--       Certifies and matches pw (0.5 * 0.4).
+CREATE TABLE ifm_a(x int, k int); INSERT INTO ifm_a VALUES (1,10),(2,20);
+SELECT add_provenance('ifm_a');
+CREATE TABLE ifm_b(k int, z int); INSERT INTO ifm_b VALUES (10,100),(20,200);
+SELECT add_provenance('ifm_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifm_a;
+  PERFORM set_prob(provsql, 0.4) FROM ifm_b;
+END $$;
+CREATE VIEW ifm_v AS SELECT a.x AS x, b.z AS z FROM ifm_a a, ifm_b b WHERE a.k = b.k;
+CREATE TEMP TABLE ifm_t1 AS
+  SELECT v.x AS x, provenance() AS p FROM ifm_v v GROUP BY v.x;
+SELECT remove_provenance('ifm_t1');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t1_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t1_pw
+  FROM ifm_t1 ORDER BY x;
+
+-- (10b) a join-on-x view V(x) := A(x), B(x) referenced *twice* -> a structured
+--       self-join through a multi-relation view, flattening to A,B,A,B all
+--       sharing the root x.  Certifies; A(x)&B(x) repeated collapses
+--       idempotently, so the value is P(A(x) & B(x)) = 0.5*0.4 = 0.2.
+CREATE TABLE ifm2_a(x int); INSERT INTO ifm2_a VALUES (1),(2),(3);
+SELECT add_provenance('ifm2_a');
+CREATE TABLE ifm2_b(x int); INSERT INTO ifm2_b VALUES (1),(2),(3);
+SELECT add_provenance('ifm2_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifm2_a;
+  PERFORM set_prob(provsql, 0.4) FROM ifm2_b;
+END $$;
+CREATE VIEW ifm2_v AS SELECT a.x AS x FROM ifm2_a a, ifm2_b b WHERE a.x = b.x;
+CREATE TEMP TABLE ifm2_t AS
+  SELECT v1.x AS x, provenance() AS p
+    FROM ifm2_v v1, ifm2_v v2 WHERE v1.x = v2.x GROUP BY v1.x;
+SELECT remove_provenance('ifm2_t');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t2_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t2_pw
+  FROM ifm2_t ORDER BY x;
+
 RESET provsql.boolean_provenance;
 RESET provsql.verbose_level;

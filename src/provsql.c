@@ -4371,186 +4371,275 @@ static void wrap_inversion_free_markers(const constants_t *constants, Query *q,
 }
 
 /* -------------------------------------------------------------------------
- * Inversion-free: conjunctive flattening of single-base SPJ subqueries/views
+ * Inversion-free: conjunctive flattening of SPJ subqueries/views
  * ------------------------------------------------------------------------- */
 
-/** @brief Context for @c flatten_subst_mutator. */
-typedef struct flatten_subst_ctx {
-  Index  subq_varno;        /* parent range-table slot of the subquery (1-based) */
-  Index  base_varno_in_sub; /* the base relation's varno inside the subquery */
-  Var  **outcol_to_base;    /* 1-based by output resno: subquery TL Var on the base */
-  int    noutcols;
-  bool   in_subquery_quals; /* true while remapping the subquery's own WHERE */
-} flatten_subst_ctx;
+/** @brief Where a flattened base atom came from, for mapping markers back. */
+typedef struct FlatAtomOrigin {
+  int parent_slot;   /* 1-based original (pre-flatten) parent range-table slot */
+  int sub_base;      /* 1-based base position within that subquery, or -1 when
+                        the parent slot was itself a direct/kept relation */
+} FlatAtomOrigin;
+
+/** @brief Context for @c flatten_mut (a multi-relation conjunctive inliner). */
+typedef struct flatten_ctx {
+  int     N;               /* original parent range-table length */
+  bool   *slot_flat;       /* [1..N]: parent slot is an inlined subquery */
+  int    *parent_newpos;   /* [1..N]: new varno of a kept (non-inlined) slot */
+  int   **sub_newpos;      /* [1..N] -> [1..sub_rtlen]: new varno of a subquery base */
+  int    *sub_rtlen;       /* [1..N]: that subquery's range-table length */
+  Var  ***sub_tl;          /* [1..N] -> [1..sub_tl_n]: subquery TL base Var by resno */
+  int    *sub_tl_n;        /* [1..N] */
+  bool    quals_mode;      /* true while remapping a subquery's pulled-up WHERE */
+  int     quals_slot;      /* the inlined parent slot whose WHERE is being remapped */
+} flatten_ctx;
 
 /**
- * @brief Tree mutator for in-place inlining of a single-base subquery.
+ * @brief Tree mutator implementing the conjunctive inlining of SPJ subqueries.
  *
- * Two modes.  When @c in_subquery_quals is false (rewriting the parent), a
- * @c Var referencing the subquery's output column @c a (varno @c subq_varno)
- * becomes the base @c Var that the subquery's target list maps @c a to, kept at
- * @c subq_varno (the slot the base relation will occupy).  When true (pulling
- * the subquery's own WHERE up into the parent), a base @c Var (varno
- * @c base_varno_in_sub inside the subquery) is renumbered to @c subq_varno.
- * Every other @c Var is copied unchanged; outer references (varlevelsup > 0)
- * are never touched.
+ * Parent mode (@c quals_mode false): a @c Var on an inlined subquery slot is
+ * replaced by the base @c Var its target list maps the column to, renumbered to
+ * that base's new flat position; a @c Var on a kept slot is renumbered to the
+ * slot's new position.  Subquery-WHERE mode (@c quals_mode true): a base @c Var
+ * inside subquery @c quals_slot is renumbered to its new flat position.  Outer
+ * references (@c varlevelsup > 0) are never touched.
  */
-static Node *flatten_subst_mutator(Node *node, void *ctxp) {
-  flatten_subst_ctx *c = (flatten_subst_ctx *) ctxp;
+static Node *flatten_mut(Node *node, void *cp) {
+  flatten_ctx *c = (flatten_ctx *) cp;
   if (node == NULL)
     return NULL;
   if (IsA(node, Var)) {
     Var *v = (Var *) node;
     if (v->varlevelsup == 0) {
-      if (c->in_subquery_quals) {
-        if (v->varno == c->base_varno_in_sub) {
+      if (c->quals_mode) {
+        int i = c->quals_slot;
+        if ((int) v->varno >= 1 && (int) v->varno <= c->sub_rtlen[i]
+            && c->sub_newpos[i][v->varno] > 0) {
           Var *nv = (Var *) copyObject(v);
-          nv->varno = c->subq_varno;
+          nv->varno = c->sub_newpos[i][v->varno];
           return (Node *) nv;
         }
-      } else if (v->varno == c->subq_varno) {
-        if (v->varattno >= 1 && v->varattno <= c->noutcols
-            && c->outcol_to_base[v->varattno] != NULL) {
-          Var *nv = (Var *) copyObject(c->outcol_to_base[v->varattno]);
-          nv->varno = c->subq_varno;
-          nv->varlevelsup = 0;
+      } else if ((int) v->varno >= 1 && (int) v->varno <= c->N) {
+        int i = (int) v->varno;
+        if (c->slot_flat[i]) {
+          if (v->varattno >= 1 && v->varattno <= c->sub_tl_n[i]
+              && c->sub_tl[i][v->varattno] != NULL) {
+            Var *base = c->sub_tl[i][v->varattno];
+            Var *nv = (Var *) copyObject(base);
+            nv->varno = c->sub_newpos[i][base->varno];
+            nv->varlevelsup = 0;
+            return (Node *) nv;
+          }
+        } else {
+          Var *nv = (Var *) copyObject(v);
+          nv->varno = c->parent_newpos[i];
           return (Node *) nv;
         }
       }
     }
     return (Node *) copyObject(v);
   }
-  return expression_tree_mutator(node, flatten_subst_mutator, ctxp);
+  return expression_tree_mutator(node, flatten_mut, cp);
 }
 
 /**
- * @brief In place, inline every single-base SPJ subquery/view of @p probe into
- *        its base relation, preserving range-table positions.
+ * @brief In place, inline every SPJ subquery/view of @p probe into its base
+ *        relations, flattening to one conjunction of base atoms.
  *
- * A range-table entry is inlined when it is a non-lateral @c RTE_SUBQUERY whose
- * subquery is a plain SELECT with no aggregation, grouping, DISTINCT, set
- * operation, sublink, CTE or LIMIT, whose @c FROM is a single base
- * @c RTE_RELATION (PG 14/15 view OLD/NEW placeholders ignored), and whose
- * (non-junk) target list entries are all plain @c Vars on that base.  Such a
- * subquery is a pure projection+selection over one relation: replacing the slot
- * with the base relation, remapping the parent's column references and pulling
- * the subquery's WHERE up yields an equivalent flat conjunction.  Because slots
- * are replaced in place, a base atom's flattened position equals the parent
- * slot it came from, so the detector's per-atom markers map straight back.
+ * A range-table slot is inlined when it is a non-lateral @c RTE_SUBQUERY whose
+ * subquery is a plain SELECT (no aggregation, grouping, DISTINCT, set
+ * operation, sublink, CTE or LIMIT), whose @c FROM is flat @c RangeTblRefs over
+ * base @c RTE_RELATIONs (PG 14/15 view OLD/NEW placeholders ignored; one or
+ * more bases -- a view with a join inside is fine), and whose non-junk target
+ * list entries are all plain @c Vars on those bases.  Such a subquery is a pure
+ * SPJ over base relations: its bases are appended in place of the slot, the
+ * parent's column references are substituted by the corresponding base columns,
+ * and the subquery's WHERE is pulled up, yielding an equivalent flat
+ * conjunction.  The parent's own @c FROM must already be flat @c RangeTblRefs
+ * (the detector requires this too); an explicit @c JoinExpr there carries
+ * ON-conditions a fromlist rebuild would drop, so flattening is declined.
  *
- * @return a palloc'd array of @c list_length(probe->rtable) ints: entry @c i is
- * the base relation's 1-based varno inside the subquery that was inlined at slot
- * @c i, or @c -1 if slot @c i was not an inlined subquery.
+ * @param nflat_out  set to the flattened range-table length.
+ * @return a palloc'd @c FlatAtomOrigin per flattened position, mapping it back
+ * to the parent slot (and, for an inlined subquery, the base position within
+ * it) so the detector's per-atom markers can be threaded to the right input.
  */
-static int *flatten_single_base_subqueries(Query *probe) {
-  int       N = list_length(probe->rtable);
-  int      *fmap = (int *) palloc(N * sizeof(int));
-  List     *merged_quals = NIL;
-  int       i;
+static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out) {
+  int             N = list_length(probe->rtable);
+  flatten_ctx     c;
+  List           *new_rtable = NIL;
+  List           *origins_l = NIL;
+  List           *merged_quals = NIL;
+  bool            any_flat = false, parent_flat = (probe->jointree != NULL);
+  int             i, newpos = 0;
+  ListCell       *lc;
+  FlatAtomOrigin *origins;
 
-  for (i = 0; i < N; i++)
-    fmap[i] = -1;
+  c.N            = N;
+  c.slot_flat     = (bool *)  palloc0((N + 1) * sizeof(bool));
+  c.parent_newpos = (int *)   palloc0((N + 1) * sizeof(int));
+  c.sub_newpos    = (int **)  palloc0((N + 1) * sizeof(int *));
+  c.sub_rtlen     = (int *)   palloc0((N + 1) * sizeof(int));
+  c.sub_tl        = (Var ***) palloc0((N + 1) * sizeof(Var **));
+  c.sub_tl_n      = (int *)   palloc0((N + 1) * sizeof(int));
+  c.quals_mode    = false;
+  c.quals_slot    = 0;
 
-  for (i = 0; i < N; i++) {
-    RangeTblEntry *rte = list_nth_node(RangeTblEntry, probe->rtable, i);
+  if (parent_flat)
+    foreach (lc, probe->jointree->fromlist)
+      if (!IsA((Node *) lfirst(lc), RangeTblRef)) { parent_flat = false; break; }
+
+  /* Layout pass: decide which slots inline, append base atoms / kept slots to
+   * new_rtable, and record each new position's origin. */
+  for (i = 1; parent_flat && i <= N; i++) {
+    RangeTblEntry *rte = list_nth_node(RangeTblEntry, probe->rtable, i - 1);
     Query         *sq;
-    RangeTblEntry *base = NULL;
-    int            base_pos = -1, real_base = 0, noutcols = 0, j;
-    bool           ok = true;
-    ListCell      *lc;
-    Var          **outcol_to_base;
+    bool           ok;
+    int            maxres = 0, b;
+    ListCell      *lc2;
+    Var          **tl;
 
-    if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || rte->lateral)
+    if (!(rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL && !rte->lateral)) {
+      FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
+      newpos++;
+      new_rtable = lappend(new_rtable, rte);
+      c.parent_newpos[i] = newpos;
+      o->parent_slot = i; o->sub_base = -1;
+      origins_l = lappend(origins_l, o);
       continue;
+    }
     sq = rte->subquery;
-    if (sq->commandType != CMD_SELECT
-        || sq->setOperations || sq->hasAggs || sq->hasWindowFuncs
-        || sq->groupingSets || sq->groupClause || sq->havingQual
-        || sq->distinctClause || sq->hasDistinctOn || sq->hasSubLinks
-        || sq->limitCount || sq->limitOffset || sq->cteList
-        || sq->jointree == NULL)
-      continue;
-    foreach (lc, sq->jointree->fromlist)
-      if (!IsA((Node *) lfirst(lc), RangeTblRef)) { ok = false; break; }
-    if (!ok)
-      continue;
-    /* exactly one real base relation (ignore PG 14/15 view OLD/NEW artifacts) */
-    j = 0;
-    foreach (lc, sq->rtable) {
-      RangeTblEntry *br = (RangeTblEntry *) lfirst(lc);
-      ++j;
-      if (br->rtekind == RTE_RELATION && br->relkind == RELKIND_VIEW)
-        continue;                       /* placeholder artifact */
-      if (br->rtekind == RTE_RELATION) { base = br; base_pos = j; ++real_base; }
-      else { ok = false; }              /* a join / nested subquery inside */
+    ok = !(sq->commandType != CMD_SELECT
+           || sq->setOperations || sq->hasAggs || sq->hasWindowFuncs
+           || sq->groupingSets || sq->groupClause || sq->havingQual
+           || sq->distinctClause || sq->hasDistinctOn || sq->hasSubLinks
+           || sq->limitCount || sq->limitOffset || sq->cteList
+           || sq->jointree == NULL);
+    if (ok)
+      foreach (lc2, sq->jointree->fromlist)
+        if (!IsA((Node *) lfirst(lc2), RangeTblRef)) { ok = false; break; }
+    /* every range-table entry a real base relation or a view artifact */
+    if (ok) {
+      int realbase = 0;
+      foreach (lc2, sq->rtable) {
+        RangeTblEntry *br = (RangeTblEntry *) lfirst(lc2);
+        if (br->rtekind == RTE_RELATION && br->relkind == RELKIND_VIEW)
+          continue;                          /* OLD/NEW placeholder */
+        else if (br->rtekind == RTE_RELATION) realbase++;
+        else { ok = false; break; }          /* join / nested subquery inside */
+      }
+      if (realbase < 1) ok = false;
     }
-    if (!ok || real_base != 1)
+    /* non-junk target list entries all plain Vars on a base relation */
+    if (ok)
+      foreach (lc2, sq->targetList) {
+        TargetEntry *te = (TargetEntry *) lfirst(lc2);
+        if (!te->resjunk && te->resno > maxres) maxres = te->resno;
+      }
+    tl = ok ? (Var **) palloc0((maxres + 1) * sizeof(Var *)) : NULL;
+    if (ok) {
+      foreach (lc2, sq->targetList) {
+        TargetEntry   *te = (TargetEntry *) lfirst(lc2);
+        Var           *v;
+        RangeTblEntry *br;
+        if (te->resjunk) continue;
+        if (!IsA(te->expr, Var)) { ok = false; break; }
+        v = (Var *) te->expr;
+        if (v->varlevelsup != 0
+            || (int) v->varno < 1 || (int) v->varno > list_length(sq->rtable)) {
+          ok = false; break;
+        }
+        br = list_nth_node(RangeTblEntry, sq->rtable, v->varno - 1);
+        if (!(br->rtekind == RTE_RELATION && br->relkind != RELKIND_VIEW)) {
+          ok = false; break;
+        }
+        tl[te->resno] = v;
+      }
+    }
+
+    if (!ok) {
+      /* not flattenable: keep the slot as-is (detector will reject it) */
+      FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
+      if (tl) pfree(tl);
+      newpos++;
+      new_rtable = lappend(new_rtable, rte);
+      c.parent_newpos[i] = newpos;
+      o->parent_slot = i; o->sub_base = -1;
+      origins_l = lappend(origins_l, o);
       continue;
-    /* target list: every non-junk entry a plain Var on the base relation */
-    foreach (lc, sq->targetList) {
-      TargetEntry *te = (TargetEntry *) lfirst(lc);
-      if (te->resjunk) continue;
-      if (te->resno > noutcols) noutcols = te->resno;
     }
-    outcol_to_base = (Var **) palloc0((noutcols + 1) * sizeof(Var *));
-    foreach (lc, sq->targetList) {
-      TargetEntry *te = (TargetEntry *) lfirst(lc);
-      Var *v;
-      if (te->resjunk) continue;
-      if (!IsA(te->expr, Var)) { ok = false; break; }
-      v = (Var *) te->expr;
-      if (v->varlevelsup != 0 || v->varno != (Index) base_pos) { ok = false; break; }
-      outcol_to_base[te->resno] = v;
+
+    /* inline: append each real base, assigning it a new flat position */
+    c.slot_flat[i]  = true;
+    c.sub_rtlen[i]  = list_length(sq->rtable);
+    c.sub_newpos[i] = (int *) palloc0((c.sub_rtlen[i] + 1) * sizeof(int));
+    c.sub_tl[i]     = tl;
+    c.sub_tl_n[i]   = maxres;
+    b = 0;
+    foreach (lc2, sq->rtable) {
+      RangeTblEntry *br = (RangeTblEntry *) lfirst(lc2);
+      ++b;
+      if (br->rtekind == RTE_RELATION && br->relkind != RELKIND_VIEW) {
+        FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
+        newpos++;
+        new_rtable = lappend(new_rtable, copyObject(br));
+        c.sub_newpos[i][b] = newpos;
+        o->parent_slot = i; o->sub_base = b;
+        origins_l = lappend(origins_l, o);
+      }
     }
-    if (!ok) { pfree(outcol_to_base); continue; }
+    any_flat = true;
+  }
 
-    /* All checks passed: inline this subquery slot. */
-    {
-      flatten_subst_ctx c;
-      RangeTblEntry    *newrte;
-      ListCell         *slot;
-      c.subq_varno        = (Index) (i + 1);
-      c.base_varno_in_sub = (Index) base_pos;
-      c.outcol_to_base    = outcol_to_base;
-      c.noutcols          = noutcols;
-
-      /* (1) parent references to the subquery's output -> base columns */
-      c.in_subquery_quals = false;
-      probe->targetList =
-        (List *) flatten_subst_mutator((Node *) probe->targetList, &c);
-      if (probe->jointree && probe->jointree->quals)
-        probe->jointree->quals =
-          flatten_subst_mutator(probe->jointree->quals, &c);
-
-      /* (2) pull the subquery's own WHERE up, remapping base varno -> slot */
-      if (sq->jointree && sq->jointree->quals) {
-        c.in_subquery_quals = true;
+  if (parent_flat && any_flat) {
+    /* (1) remap the parent's target list and WHERE */
+    probe->targetList = (List *) flatten_mut((Node *) probe->targetList, &c);
+    if (probe->jointree->quals)
+      merged_quals = lappend(merged_quals, flatten_mut(probe->jointree->quals, &c));
+    /* (2) pull every inlined subquery's WHERE up, remapping base varnos */
+    for (i = 1; i <= N; i++) {
+      RangeTblEntry *rte;
+      if (!c.slot_flat[i]) continue;
+      rte = list_nth_node(RangeTblEntry, probe->rtable, i - 1);
+      if (rte->subquery->jointree && rte->subquery->jointree->quals) {
+        c.quals_mode = true; c.quals_slot = i;
         merged_quals =
           lappend(merged_quals,
-                  flatten_subst_mutator((Node *) copyObject(sq->jointree->quals),
-                                        &c));
+                  flatten_mut((Node *) copyObject(rte->subquery->jointree->quals),
+                              &c));
+        c.quals_mode = false;
       }
-
-      /* (3) replace the subquery slot with the base relation (same position) */
-      newrte = (RangeTblEntry *) copyObject(base);
-      slot = list_nth_cell(probe->rtable, i);
-      lfirst(slot) = newrte;
-      fmap[i] = base_pos;
     }
-    pfree(outcol_to_base);
+    /* (3) commit the flattened range table, a flat fromlist and combined WHERE */
+    probe->rtable = new_rtable;
+    {
+      List *fl = NIL;
+      for (i = 1; i <= newpos; i++) {
+        RangeTblRef *r = makeNode(RangeTblRef);
+        r->rtindex = i;
+        fl = lappend(fl, r);
+      }
+      probe->jointree->fromlist = fl;
+    }
+    probe->jointree->quals =
+      (merged_quals == NIL) ? NULL
+      : (list_length(merged_quals) == 1) ? (Node *) linitial(merged_quals)
+      : (Node *) makeBoolExpr(AND_EXPR, merged_quals, -1);
+
+    *nflat_out = newpos;
+    origins = (FlatAtomOrigin *) palloc(newpos * sizeof(FlatAtomOrigin));
+    i = 0;
+    foreach (lc, origins_l)
+      origins[i++] = *(FlatAtomOrigin *) lfirst(lc);
+    return origins;
   }
 
-  /* AND every pulled-up subquery WHERE into the parent's. */
-  if (merged_quals != NIL) {
-    List *all = NIL;
-    if (probe->jointree->quals)
-      all = lappend(all, probe->jointree->quals);
-    all = list_concat(all, merged_quals);
-    probe->jointree->quals =
-      (list_length(all) == 1) ? (Node *) linitial(all)
-                              : (Node *) makeBoolExpr(AND_EXPR, all, -1);
-  }
-  return fmap;
+  /* Nothing flattened (no flattenable subquery, or a non-flat parent FROM):
+   * leave probe untouched and return an identity map. */
+  *nflat_out = N;
+  origins = (FlatAtomOrigin *) palloc(N * sizeof(FlatAtomOrigin));
+  for (i = 0; i < N; i++) { origins[i].parent_slot = i + 1; origins[i].sub_base = -1; }
+  return origins;
 }
 
 /**
@@ -4567,14 +4656,14 @@ static int *flatten_single_base_subqueries(Query *probe) {
  */
 static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
                                                   Query *q, char **cert_out) {
-  bool           has_subq = false, has_group = false;
-  Query         *probe;
-  int           *fmap = NULL;
-  InvFreeMarker *flat = NULL;
-  int            nflat = 0, N, i;
-  char          *cert = NULL;
+  bool            has_subq = false, has_group = false;
+  Query          *probe;
+  FlatAtomOrigin *origins = NULL;
+  InvFreeMarker  *flat = NULL;
+  int             nflat = 0, norigins = 0, N, p;
+  char           *cert = NULL;
   InvFreeMarkerCtx *ctx;
-  ListCell      *lc;
+  ListCell       *lc;
 
   foreach (lc, q->rtable)
     if (((RangeTblEntry *) lfirst(lc))->rtekind == RTE_SUBQUERY) has_subq = true;
@@ -4582,8 +4671,9 @@ static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
   has_group = q->hasGroupRTE;
 #endif
 
-  /* No subqueries and no synthetic group RTE: analyse q in place (read-only).
-   * Otherwise work on a copy: strip the PG 18 group RTE, then flatten. */
+  /* No subqueries and no synthetic group RTE: analyse q in place (read-only),
+   * positions equal q's slots.  Otherwise work on a copy: strip the PG 18 group
+   * RTE, then flatten SPJ subqueries (origins map flattened positions back). */
   if (!has_subq && !has_group) {
     probe = q;
   } else {
@@ -4593,47 +4683,57 @@ static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
       strip_group_rte_pg18(probe);
 #endif
     if (has_subq)
-      fmap = flatten_single_base_subqueries(probe);
+      origins = flatten_spj_subqueries(probe, &norigins);
   }
 
-  if (!inversion_free_analyze(constants, probe, &cert, &flat, &nflat)) {
-    if (fmap) pfree(fmap);
+  if (!inversion_free_analyze(constants, probe, &cert, &flat, &nflat))
     return NULL;
-  }
   if (cert_out)
     *cert_out = cert;
-  if (flat == NULL) {            /* certified but no marker model: decline */
-    if (fmap) pfree(fmap);
+  if (flat == NULL)              /* certified but no marker model: decline */
     return NULL;
-  }
 
   N = list_length(q->rtable);
   ctx = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
   ctx->natoms  = N;
   ctx->markers = (InvFreeMarker *) palloc0((size_t) N * sizeof(InvFreeMarker));
   ctx->sub     = (InvFreeMarkerCtx **) palloc0((size_t) N * sizeof(InvFreeMarkerCtx *));
-  /* The synthetic group RTE (if any) sits after the base atoms, and flattening
-   * keeps slots in place, so flattened positions 0..nflat-1 align with q's. */
-  for (i = 0; i < N && i < nflat; i++) {
-    RangeTblEntry *rte;
-    if (!flat[i].valid)
+  /* Map each flattened atom's marker back to q.  With no flattening, flattened
+   * position == q slot (the synthetic group RTE, if any, sits after the base
+   * atoms, so the prefix aligns).  With flattening, the origins map gives the
+   * parent slot and, for an inlined subquery, the base position within it. */
+  for (p = 0; p < nflat; p++) {
+    int slot, base;
+    if (!flat[p].valid)
       continue;
-    rte = list_nth_node(RangeTblEntry, q->rtable, i);
-    if (rte->rtekind == RTE_RELATION) {
-      ctx->markers[i] = flat[i];                       /* direct base atom */
-    } else if (rte->rtekind == RTE_SUBQUERY && fmap != NULL && fmap[i] >= 1
-               && rte->subquery != NULL) {
-      int sublen = list_length(rte->subquery->rtable);
-      InvFreeMarkerCtx *child = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
-      child->natoms  = sublen;
-      child->markers = (InvFreeMarker *) palloc0((size_t) sublen * sizeof(InvFreeMarker));
-      child->sub     = (InvFreeMarkerCtx **) palloc0((size_t) sublen * sizeof(InvFreeMarkerCtx *));
-      if (fmap[i] - 1 < sublen)
-        child->markers[fmap[i] - 1] = flat[i];         /* marker on the inlined base atom */
-      ctx->sub[i] = child;
+    if (origins != NULL) {
+      if (p >= norigins) continue;
+      slot = origins[p].parent_slot;       /* 1-based q slot */
+      base = origins[p].sub_base;           /* 1-based subquery base, or -1 */
+    } else {
+      slot = p + 1;
+      base = -1;
+    }
+    if (slot < 1 || slot > N)
+      continue;
+    if (base < 0) {
+      ctx->markers[slot - 1] = flat[p];                /* direct base atom */
+    } else {
+      RangeTblEntry *rte = list_nth_node(RangeTblEntry, q->rtable, slot - 1);
+      InvFreeMarkerCtx *child = ctx->sub[slot - 1];
+      int sublen = (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL)
+                     ? list_length(rte->subquery->rtable) : 0;
+      if (child == NULL) {
+        child = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
+        child->natoms  = sublen;
+        child->markers = (InvFreeMarker *) palloc0((size_t) sublen * sizeof(InvFreeMarker));
+        child->sub     = (InvFreeMarkerCtx **) palloc0((size_t) sublen * sizeof(InvFreeMarkerCtx *));
+        ctx->sub[slot - 1] = child;
+      }
+      if (base - 1 < child->natoms)
+        child->markers[base - 1] = flat[p];            /* marker on the inlined base atom */
     }
   }
-  if (fmap) pfree(fmap);
   return ctx;
 }
 
