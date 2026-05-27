@@ -116,6 +116,17 @@ SELECT count(*) AS tseytin_input_vars
   FROM upgrade_kc, LATERAL tseytin_cnf_mapping(prov);
 SELECT tool_available('provsql-no-such-tool') AS bogus_tool_available;
 
+-- 1.8.0 surface check: the inversion-free annotation wrapper and the
+-- external-tool registry, the two headline additions.  annotate() creates
+-- a gate of the new 'annotation' enum value; round-tripping it through
+-- get_gate_type confirms the upgrade reset the constants cache so the
+-- freshly-added value resolves (otherwise create_gate raises "Invalid gate
+-- type").  count(*) on the tools view confirms the compiled tool seed is
+-- queryable post-upgrade (the seed is env-independent, so the > 0 probe is
+-- deterministic regardless of which compilers happen to be installed).
+SELECT get_gate_type(annotate(gate_one(), 'cert')) AS annotation_gate_type;
+SELECT count(*) > 0 AS tool_registry_seeded FROM tools;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
            upgrade_smoke_right, upgrade_safe_q, upgrade_kc;

@@ -51,3 +51,9 @@ tseytin_input_vars
 bogus_tool_available
 f
 (1 row)
+annotation_gate_type
+annotation
+(1 row)
+tool_registry_seeded
+t
+(1 row)
