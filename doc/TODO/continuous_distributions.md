@@ -40,7 +40,7 @@ The prioritisation uses four labels:
 | 12 | Empirical CDF gate | Data-driven distributions | Mid-term |
 | 13 | GMM constructor | Data-driven distributions | Quick win |
 | 14 | Frozen-distribution snapshots | Data-driven distributions | Mid-term |
-| 15 | Conditioning as a gate | Structural extensions | Architectural |
+| 15 | Conditioning as a gate (now [`conditioning.md`](conditioning.md)) | Structural extensions | Architectural |
 | 16 | Correlation / copulas | Structural extensions | Architectural |
 | 17 | Stochastic processes | Structural extensions | Architectural |
 | 18 | Causal interventions (`do`) | Structural extensions | Research |
@@ -522,76 +522,15 @@ default.
 
 Larger architectural moves that open new classes of query.
 
-### D.1 Conditioning as a gate — **[Architectural]**
+### D.1 Conditioning as a gate — **[Architectural]** — *moved*
 
-The most architecturally interesting addition, and the closest to "free"
-given the branch's existing infrastructure.
-
-A `gate_conditioned(rv_subcircuit, bool_subcircuit)` meaning "the
-distribution of `rv` restricted to the event where `bool` holds." Self-
-contained: flows through any subsequent operation. Sampling is rejection
-(already the MC fallback's behaviour when `prov` is passed); analytical
-evaluation reuses the existing closed-form paths because they are
-already conditional internally.
-
-**Pipeline placement.**
-
-- **Simplifier** gets `cond(cond(X, A), B) → cond(X, A ∧ B)`,
-  `cond(X, true) → X`, and `cond(X, A) → X` when A is independent of
-  X's footprint (the `FootprintCache` already gives you this).
-- **RangeCheck** treats `cond(X, X ∈ [a,b])` as truncation — the
-  current closed-form-truncated path becomes the *specialisation* of a
-  general `gate_conditioned` rule rather than a parallel codepath.
-  Two near-parallel codepaths collapse into one.
-- **AnalyticEvaluator** picks up conditional CDFs where they exist;
-  conditioning on independent events factors as `P(A) × (unconditional CDF)`.
-- **Expectation** semiring: every dispatcher that takes
-  `prov uuid DEFAULT gate_one()` becomes the special case "no explicit
-  conditioning gate at the root."
-- **FootprintCache** caveat: `cond(X, A)` has effective footprint
-  `footprint(X) ∪ footprint(A)`. The structural-independence shortcut on
-  `gate_arith TIMES` must back off accordingly. *This is the one
-  soundness risk and should land with a regression test that constructs
-  `cond(X, A) * cond(Y, A)` and confirms the shortcut does not fire.*
-
-**New directions it opens.**
-
-- **Materialised conditional tables.** Store `cond(rv, evidence)` in a
-  regular `random_variable` column and drop the source tuples. Solves
-  the "carrying both the distribution and its conditioning" problem.
-- **Sequential Bayesian updates.** Each piece of evidence is another
-  `cond(..., new_event)` wrap; the `A ∧ B` fold avoids depth blow-up.
-- **Truncation generalises** to the canonical degenerate case of
-  same-RV-comparator conditioning.
-- **Shapley over evidence** (see §E.1).
-
-**UI.** A `provsql.condition(rv, event_uuid)` function, plus optionally
-an infix `|` operator reading as "given":
-```sql
--- Bayesian update with materialisation
-UPDATE patient_risk
-SET risk = provsql.condition(
-             risk,
-             (SELECT provenance() FROM tests
-              WHERE patient_id = 1 AND result = 'positive')
-           )
-WHERE patient_id = 1;
-
--- Operator sugar — RangeCheck recognises same-RV bool as truncation
-SELECT expected(measurement | (measurement > 0.5))
-FROM sensor_readings;
-
--- Recursive Bayesian update over an evidence log
-WITH RECURSIVE updates(step, dist) AS (
-  SELECT 0, provsql.normal(0, 10)
-  UNION ALL
-  SELECT step + 1, provsql.condition(dist, e.evidence_token)
-  FROM updates u, evidence_log e
-  WHERE e.confirmed AND e.step_idx = u.step + 1
-)
-SELECT expected(dist), variance(dist)
-FROM updates WHERE step = (SELECT max(step) FROM updates);
-```
+Conditioning grew large enough, and turned out to share enough with the
+discrete (MarkoViews) setting, that it now has its own plan:
+[`conditioning.md`](conditioning.md). It covers the
+`gate_conditioned(rv_subcircuit, bool_subcircuit)` design, its pipeline
+placement (simplifier, RangeCheck, AnalyticEvaluator, Expectation,
+`FootprintCache` caveat), soft/weighted conditioning, and concrete use
+cases. Referenced below as "the conditioning gate" and from §E.1.
 
 ### D.2 Correlation / copulas — **[Architectural]**
 

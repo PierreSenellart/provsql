@@ -29,6 +29,15 @@ Each plan document follows a consistent layout:
   independent-product factoring for the relational pathologies, and a
   decomposition-aligned (cycluit) construction for the recursive
   fragment.
+- [`conditioning.md`](conditioning.md) : plan for a conditioning
+  primitive, unifying discrete tuple-correlation (MarkoViews, Jha &
+  Suciu PVLDB 2012) and continuous random variables as one operation at
+  two carriers. Extracts the conditioning-as-a-gate design from
+  `continuous_distributions.md` §D.1, folds in what MarkoViews teaches
+  (conditioning on a constraint circuit; the exact `P(Q ∧ C)/P(C)`
+  formula needing no discrete gate; exact-only under negative weights;
+  safety re-checked on the conditioned circuit), adds soft/weighted
+  conditioning, and grounds it all in concrete use cases.
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
   case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.
