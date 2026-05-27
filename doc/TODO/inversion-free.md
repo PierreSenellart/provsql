@@ -748,3 +748,55 @@ Build / run loop (per `CLAUDE.local.md`):
    queries. Document as such; verify against the paper that the
    column-determined key is a Prop. 4.5-consistent total order over the whole
    certified class before claiming "exactly `UCQ(OBDD)`".
+
+## Benchmark results
+
+Measured on PostgreSQL 18, `provsql.so` of the `inversion-free` branch, a fresh
+extension DB. Build time = the `SELECT provenance()` that constructs the
+circuit; eval time = `probability_evaluate(token)` on the default chain.
+`statement_timeout = 30s`; the tree-decomposition fallback OOM-crashes the
+backend on the witness beyond `n ≈ 10`, so its cells stop early.
+
+**Scenario 1a — non-read-once self-join witness** `S(x,y),A(x,y),S(x,z),B(x,z)`
+(`n` distinct second-attribute values per part; the lineage shares `S(x,k)`
+across the two parts, so it is hierarchical and inversion-free but *not*
+read-once). The read-once rewriter cannot rewrite it, so `boolean_provenance`
+makes no difference; only the inversion-free path helps. Eval time (ms):
+
+| `n` | `if=off` (tree-decomp) | `if=on` (structured d-DNNF) |
+|----:|-----------------------:|----------------------------:|
+|   5 |                  ~47   |                       ~1.0  |
+|   8 |                ~1650   |                       ~3    |
+|  10 |          OOM / timeout |                       ~4.7  |
+|  20 |          OOM / timeout |                      ~48    |
+|  40 |          OOM / timeout |                     ~227    |
+
+Probabilities agree exactly where both complete (`n=5`: 0.62075…, `n=8`:
+0.82305…). `bp` on/off is within noise of each other in both columns. This is
+the case the feature exists for: orders of magnitude, and tractable where the
+fallback dies.
+
+**Scenario 1b — read-once self-join-free hierarchical** `q :- A(x),B(x)`.
+Genuinely independent, so `independentEvaluation` (tried first on the default
+chain) handles every combination in well under 1 ms up to `n=100`; the
+inversion-free certificate, when attached, is inert here. All four `bp×if`
+combinations agree and IF adds no measurable overhead — confirming it coexists
+with the read-once rewriter rather than competing.
+
+**Scenario 2 — non-hierarchical (not inversion-free)** `q :- R(x),S(x,y),T(y)`.
+The detector declines (no certificate), and `if=off` vs `if=on` give identical
+probabilities and eval times (e.g. `n=5`: 0.87652…, ~8 ms both): the
+inversion-free path declines cleanly with no effect on the fallback.
+
+**Scenario 3 — IF-analysis overhead on a non-inversion-free query.** Build time
+(best of 5) of the Scenario-2 query with `provsql.inversion_free` off vs on:
+
+| `n` | `if=off` build (ms) | `if=on` build (ms) |
+|----:|--------------------:|-------------------:|
+|  20 |                 8.3 |                7.6 |
+|  40 |                31.6 |               29.6 |
+|  60 |                68.2 |               69.7 |
+
+Within noise: the cheap shape gates (RTE kinds, hierarchy, positional
+consistency) bail before any expensive work on queries that are not
+inversion-free, so the always-on default carries no meaningful cost.
