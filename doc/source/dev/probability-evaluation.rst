@@ -152,7 +152,7 @@ upstream because both emit ``K`` (kernelize) nodes encoding
 literal-equivalence constraints over a shared kernel variable,
 breaking the decomposability invariant of the resulting d-DNNF.
 Panini's output is not the NNF text format but a CDD-style
-DOT-like syntax; the ``panini-* `` registry records run the same
+DOT-like syntax; the ``panini-*`` registry records run the same
 generic compile path as the other compilers but tag their output
 ``panini-dd``, so :cfunc:`BooleanCircuit::compilation` reads them
 back with :cfunc:`BooleanCircuit::parsePaniniDD` instead of the NNF
@@ -294,7 +294,10 @@ Currently Supported Methods
        produce a :cfunc:`dDNNF`, then
        :cfunc:`dDNNF::probabilityEvaluation`.
    * - ``""`` (default)
-     - Fallback chain: try ``independent``, then
+     - Fallback chain: try ``independent``; then, when the root carries an
+       inversion-free certificate and ``provsql.inversion_free`` is on, the
+       ``inversion-free`` structured-d-DNNF builder (see
+       :ref:`inversion-free-path`); then
        :cfunc:`BooleanCircuit::interpretAsDD` (interpret the circuit
        structure directly as a d-D circuit), then
        ``tree-decomposition``, then ``compilation`` with the

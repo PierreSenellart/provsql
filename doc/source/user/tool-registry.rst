@@ -12,16 +12,17 @@ it can do, and which is preferred **data** rather than compiled-in constants.
 An administrator can register a new tool, repoint one at a different binary,
 reorder preferences, or disable one, all at run time and without recompiling.
 
-Out of the box the registry is seeded with exactly the tools ProvSQL has
-always known about and their usual invocations, so nothing needs to be
-configured: a fresh database behaves identically to before the registry
-existed.
+Out of the box the registry is seeded with exactly the tools ProvSQL knows
+about and their usual invocations, so nothing needs to be configured: a
+fresh database behaves identically to before the registry existed.
 
 The catalog: ``provsql.tools``
 ------------------------------
 
 The read-only view :sqlfunc:`tool_available`'s companion, ``provsql.tools``,
-lists every registered tool::
+lists every registered tool:
+
+.. code-block:: postgresql
 
     SELECT name, operations, executable, available, preference, enabled
     FROM provsql.tools ORDER BY preference DESC, name;
@@ -55,6 +56,13 @@ Columns:
     …).
 ``parser``
     How ProvSQL decodes the tool's raw output (an internal tag).
+``argtpl`` / ``argtpl_circuit``
+    The command template for a ``cli`` tool: ``argtpl`` for a ``dimacs-cnf``
+    input, ``argtpl_circuit`` for the native ``circuit-bcs12`` fast path (set
+    only on a tool that accepts that input). Placeholders ``{in}`` / ``{out}``
+    (and ``{binary}`` / ``{tmpdir}`` / ``{pivotAC}``) are filled in at call
+    time; the executable is prepended when ``{binary}`` is absent. Empty for a
+    ``kcmcp`` tool.
 ``preference``
     Selection order within an operation (higher first).
 ``enabled``
@@ -74,9 +82,9 @@ When you name a tool explicitly (``probability_evaluate(t, 'compilation',
 raises a clear error if it is unknown, disabled, or not on ``PATH``.
 
 When you do **not** name one (the ``'compilation'`` method with no compiler,
-or the ``'wmc'`` method with no counter), ProvSQL picks the **highest-
-preference enabled tool whose binary resolves on ``PATH``** for that
-operation. :ref:`provsql.fallback_compiler <provsql-fallback-compiler>`
+or the ``'wmc'`` method with no counter), ProvSQL picks the
+**highest-preference enabled tool whose binary resolves on** ``PATH`` for
+that operation. :ref:`provsql.fallback_compiler <provsql-fallback-compiler>`
 governs only the final fallback route of the default probability method.
 
 Managing tools
@@ -85,15 +93,14 @@ Managing tools
 Four superuser-only functions edit the registry:
 
 :sqlfunc:`register_tool` adds a tool, or replaces the record with the same
-name. Its capability triple uses the KCMCP names; ``argtpl`` is the command
-template, with ``{in}`` / ``{out}`` substituted by the input/output temporary
-files (and ``{binary}`` / ``{tmpdir}`` / ``{pivotAC}`` where a tool needs
-them). For example, registering a second build of ``d4`` kept under a
-specific path::
+name. Its capability triple uses the KCMCP names. For example, registering a
+second build of ``d4`` kept under a specific path:
+
+.. code-block:: postgresql
 
     SELECT provsql.register_tool(
-      'd4-jm62300',
-      executable    => '/opt/d4-jm62300/d4',
+      'd4-custom',
+      executable    => '/opt/d4-custom/d4',
       operations    => ARRAY['compile'],
       input_formats => ARRAY['dimacs-cnf'],
       output_format => 'ddnnf-nnf',
@@ -101,14 +108,18 @@ specific path::
       argtpl        => '-dDNNF {in} -out={out}',
       preference    => 120);
 
-That compiler is then usable immediately::
+That compiler is then usable immediately:
 
-    SELECT probability_evaluate(t, 'compilation', 'd4-jm62300') FROM …;
+.. code-block:: postgresql
+
+    SELECT probability_evaluate(t, 'compilation', 'd4-custom') FROM mytable;
 
 :sqlfunc:`unregister_tool` removes a tool (a seeded default becomes hidden);
 :sqlfunc:`set_tool_enabled` turns a tool off or on without forgetting its
 configuration; :sqlfunc:`set_tool_preference` reorders it. Each errors on an
-unknown name rather than silently doing nothing::
+unknown name rather than silently doing nothing:
+
+.. code-block:: postgresql
 
     SELECT provsql.set_tool_enabled('dsharp', false);  -- stop offering dsharp
     SELECT provsql.set_tool_preference('c2d', 95);     -- prefer c2d over d4v2
@@ -129,7 +140,9 @@ server is unreachable.
 There are two ways to point a ``kcmcp`` tool at a server.
 
 **Endpoint mode** — connect to a server you run and supervise yourself, at a
-fixed address (a local Unix socket, or ``host:port`` for a remote server)::
+fixed address (a local Unix socket, or ``host:port`` for a remote server):
+
+.. code-block:: postgresql
 
     SELECT provsql.register_tool(
       'kc-server', kind => 'kcmcp',
@@ -138,13 +151,15 @@ fixed address (a local Unix socket, or ``host:port`` for a remote server)::
       output_format => 'ddnnf-nnf',
       parser        => 'nnf',
       endpoint      => 'unix:/run/provsql/kc.sock');
-    SELECT probability_evaluate(t, 'compilation', 'kc-server') FROM …;
+    SELECT probability_evaluate(t, 'compilation', 'kc-server') FROM mytable;
 
 **Managed mode** — let ProvSQL launch and supervise the server. Set
 :ref:`provsql.kcmcp_server <provsql-kcmcp-server>` to the launch command (with
 a ``{endpoint}`` placeholder); a supervisor background worker starts it,
 publishes its address, and restarts it if it exits. Register a tool whose
-``endpoint`` is the literal ``managed``::
+``endpoint`` is the literal ``managed``:
+
+.. code-block:: postgresql
 
     -- in postgresql.conf, or:
     ALTER SYSTEM SET provsql.kcmcp_server = 'tdkc --kcmcp {endpoint}';
@@ -187,9 +202,7 @@ into a directory on it. Consequently:
   :sqlfunc:`set_tool_enabled` and :sqlfunc:`set_tool_preference` are
   **superuser-only**. A non-superuser can read ``provsql.tools`` and *select*
   among the already-registered tools, but cannot add one or repoint a binary,
-  so gains no command execution it did not already have. This is no new
-  exposure: anyone able to register a tool could already place a binary on the
-  server's ``PATH``.
+  so gains no command execution it did not already have.
 - Keep tool binaries somewhere the PostgreSQL user can reach but ordinary
   users cannot tamper with. In particular, do **not** put binaries the server
   runs under a ``$HOME``-reachable, user-writable path.

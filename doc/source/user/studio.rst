@@ -285,11 +285,10 @@ and rendered as a teal :sc:`IF` badge on its child. Its dashed ring
 is drawn concentric *outside* the Boolean ring, so that on the rare
 gate marked both ways the two rings stay distinguishable rather than
 overlapping. Pinning that root shows the certificate header (atom / class counts)
-and the variable-block order in the inspector. The certified input
-leaves are *not* badged -- that would crowd the canvas; instead,
-pinning a certified leaf surfaces its per-input order key (root
-value, secondary value, factor -- or the shared self-join *guard*)
-and its rank within the shown scene in the inspector.
+and the variable-block order in the inspector. Pinning a certified
+leaf surfaces its per-input order key (root value, secondary value,
+factor -- or the shared self-join *guard*) and its rank within the
+shown scene in the inspector.
 
 .. _studio-circuit-eval-strip:
 
@@ -766,8 +765,7 @@ Tools panel
 A tools button (the wrench-and-screwdriver icon) in the top nav, left of the
 Config cog, opens the **external-tool registry** -- the same ``provsql.tools``
 catalog the compilation and weighted-counting dropdowns draw from (see
-:doc:`/user/tool-registry`). It needs ProvSQL >= 1.8.0; on an older extension
-the panel shows an upgrade hint.
+:doc:`/user/tool-registry`).
 
 Tools are **grouped by operation** (Compilation, Weighted counting,
 Rendering). Each row shows a tool's availability (a green dot when its binary
@@ -903,6 +901,17 @@ extension version.
        ``register_tool`` / ``unregister_tool`` / ``set_tool_*`` SQL surface
        and the ``provsql.kcmcp_server`` GUC introduced in 1.8.0.
        See :doc:`/user/tool-registry`.
+
+       Also renders the **inversion-free** certificate: a teal :sc:`IF`
+       badge on a certified result root (coexisting with the Boolean
+       :sc:`B` badge), with the certificate header and variable-block
+       order in the inspector and the per-input order key plus rank on
+       certified leaves, and offers the ``inversion-free`` method in the
+       eval strip and :guilabel:`Probability benchmark` when the root is
+       certified. Backed by the ``gate_annotation`` gate type, the
+       :sqlfunc:`annotate` / :sqlfunc:`inversion_free_key` SQL surface,
+       and the ``inversion-free`` probability method introduced in 1.8.0.
+       See :doc:`probabilities`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to
