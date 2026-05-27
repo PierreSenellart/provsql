@@ -349,23 +349,35 @@ def tseytin_cnf(
     return cnf
 
 
-def compile_to_ddnnf(pool: ConnectionPool, token: str, compiler: str) -> dict:
-    """Return ``{"dot", "scene"}`` for the compiled d-DNNF.
+def compile_to_ddnnf(
+    pool: ConnectionPool, token: str, compiler: str,
+    statement_timeout: str = "30s",
+) -> dict:
+    """Return ``{"dot", "scene", "milliseconds"}`` for the compiled d-DNNF.
 
     ``scene`` matches the shape of ``circuit_mod.get_circuit`` (nodes /
     edges / root / depth) so the Studio canvas renderer can paint it
     with the same pan / zoom / drag / inspector affordances as the
-    provenance circuit.
+    provenance circuit.  The compilation runs under @p statement_timeout
+    (a long external compiler or a structured-d-DNNF build is bounded like
+    any other evaluation) and its server-side wall-clock is reported.
     """
-    with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT provsql.compile_to_ddnnf_dot(%s::uuid, %s)",
-            (token, compiler),
-        )
-        (dot,) = cur.fetchone()
+    with pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(sql.SQL("SET LOCAL statement_timeout = {}").format(
+                    sql.Literal(statement_timeout)))
+                t0 = time.perf_counter()
+                cur.execute(
+                    "SELECT provsql.compile_to_ddnnf_dot(%s::uuid, %s)",
+                    (token, compiler),
+                )
+                (dot,) = cur.fetchone()
+                ms = (time.perf_counter() - t0) * 1000.0
     return {
         "dot": dot,
         "scene": _ddnnf_scene_from_dot(dot, original_token=token),
+        "milliseconds": ms,
     }
 
 

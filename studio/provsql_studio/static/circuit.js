@@ -2495,9 +2495,14 @@
       const nEdges = (scene.edges || []).length;
       const maxDepth = (scene.nodes || []).reduce(
         (d, n) => Math.max(d, n.depth || 0), 0);
+      // Server-side compile wall-clock (the canvas swap clears the eval-strip
+      // round-trip chip, so surface it in the subtitle that travels with the
+      // scene).
+      const ms = (data.milliseconds == null)
+        ? '' : ` · ${Number(data.milliseconds).toFixed(2)} ms`;
       scene.subtitle =
         `${nGates} gates · ${nEdges} edges · depth ${maxDepth} · `
-        + `<strong>${escapeHtml(toolName)}</strong>${clsHtml}`;
+        + `<strong>${escapeHtml(toolName)}</strong>${clsHtml}${ms}`;
       swapToKcScene(scene);
       return;
     }
