@@ -776,12 +776,49 @@ Probabilities agree exactly where both complete (`n=5`: 0.62075…, `n=8`:
 the case the feature exists for: orders of magnitude, and tractable where the
 fallback dies.
 
-**Scenario 1b — read-once self-join-free hierarchical** `q :- A(x),B(x)`.
-Genuinely independent, so `independentEvaluation` (tried first on the default
-chain) handles every combination in well under 1 ms up to `n=100`; the
-inversion-free certificate, when attached, is inert here. All four `bp×if`
-combinations agree and IF adds no measurable overhead — confirming it coexists
-with the read-once rewriter rather than competing.
+**Scenario 1b — self-join-free hierarchical** `q(x) :- B(x),A(x,y)`. The *query*
+is safe (read-once class), but ProvSQL's naive lineage under `boolean_provenance`
+off is the flat sum of products `⋁_y (B(x) ∧ A(x,y))`, in which `B(x)` is
+repeated once per `y` — **not** a read-once *circuit*. So `independentEvaluation`
+on the raw circuit fails ("Not an independent circuit"), confirmed by an explicit
+probe. (This is exactly why safe-query rewriting exists: it restructures the
+*query* so the planner emits the read-once circuit `B(x) ∧ ⋁_y A(x,y)`.) This
+query also exercises the mixed root-only `B` + secondary `A` marker case. Both
+mechanisms reach the same probability; the comparison is which circuit each
+builds and how it is evaluated. Times (ms), root gate in brackets:
+
+| `n`  | `bp=off`, `if=on` (independent fails → IF) | `bp=on` (rewriter → read-once → independent) | `bp=off`, `if=off` (independent fails → tree-decomp) |
+|-----:|------------------:|-----------------:|-----------------:|
+|      | build / eval `[annotation]` | build / eval `[assumed_boolean]` | build / eval `[plus]` |
+|  100 |   9.9 / 2.2  |   0.6 / 0.4  |   3.7 / 3.2  |
+| 1000 |  72   / 17   |   0.9 / 3.4  |  35   / 36   |
+| 5000 | 349   / 102  |   3.1 / 19   | timeout / OOM |
+
+Readings:
+
+- With `bp=off` the naive circuit is **not** independent, so the default chain
+  cannot use `independentEvaluation` — IF is the mechanism that evaluates it
+  (root `annotation`); turning IF off (`if=off`) drops to the tree-decomposition
+  fallback. On this shape the fallback is actually *faster total* at small `n`
+  (`n=100`: 6.9 ms vs IF's 12.1 ms; `n=1000`: 71 vs 89 ms), with the crossover
+  between `n=1000` and `n=5000` where it OOMs. Two effects: IF pays a build-time
+  cost the fallback does not (the per-input marker annotation gates inflate the
+  constructed circuit — IF's *eval* alone is faster everywhere, 2.2/17/102 vs
+  3.2/36/OOM ms); and the tree-decomposition cost tracks the lineage's treewidth,
+  which depends on the *data*, not just the query, so which path wins is hard to
+  predict a priori. IF's value here is therefore **predictability**, not raw
+  speed at small `n`: its cost is bounded by the structured-d-DNNF size for the
+  whole certified class regardless of treewidth, where the fallback is often good
+  but sometimes catastrophic (Scenario 1a) with no cheap signal for which; and
+  its lower eval cost amortises the build overhead under repeated evaluation.
+- The **safe-query rewriter wins decisively** when it applies: it rewrites the
+  SQL so the planner emits a compact read-once circuit (the `⋁_y A(x,y)`
+  collapses into an aggregate, `B(x)` appears once), which `independent` then
+  evaluates almost for free. This is why "for Boolean provenance we most likely
+  do not need IF". But the rewriter requires `boolean_provenance` (an
+  operation-mode change). When the actual lineage is wanted (`bp=off`), IF is the
+  path that keeps exact probability tractable — and on the non-read-once
+  Scenario 1a, the only tractable path at all.
 
 **Scenario 2 — non-hierarchical (not inversion-free)** `q :- R(x),S(x,y),T(y)`.
 The detector declines (no certificate), and `if=off` vs `if=on` give identical
