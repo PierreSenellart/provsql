@@ -37,8 +37,35 @@ The rewriter handles:
 - Common table expressions (`WITH`), including `WITH RECURSIVE` on PostgreSQL 15+
 - UPDATE / INSERT / DELETE (when `provsql.update_provenance` is enabled)
 
-Semiring evaluations, probability computation, and Shapley/Banzhaf values
-are described in the [user documentation](/docs/).
+## Semiring Evaluation {#semirings}
+
+Once a query carries provenance, its circuit can be evaluated in any
+commutative **(m-)semiring** through a single compiled-evaluation path:
+Boolean provenance, tuple counting, why-, how-, and which-provenance,
+symbolic formulas, and the tropical, Viterbi, Łukasiewicz, and
+min-max / max-min semirings, among others. The same circuit also drives
+**where-provenance** – which source cells contributed to each output
+value – and **Shapley / Banzhaf values** that quantify each input
+tuple's contribution to an answer, both computed in a single traversal.
+See the [semiring documentation](/docs/user/semirings.html).
+
+## Probability Evaluation {#probabilities}
+
+ProvSQL is also a **probabilistic database**: attach a probability to
+each input tuple with `set_prob()`, and the provenance circuit becomes
+the lineage formula whose probability is the marginal probability of the
+query answer. ProvSQL computes it exactly (by independent-circuit
+evaluation, tree decomposition, or d-DNNF knowledge compilation through
+an external compiler) or approximately (by Monte Carlo sampling or
+weighted model counting). Because exact probability computation is
+#P-hard in general, an opt-in planner-side rewrite recognises tractable
+query classes – hierarchical conjunctive queries, a family of FD-aware
+extensions, and the broader inversion-free class – and evaluates them in
+linear time. Inputs may also be [continuous random
+variables](/docs/user/continuous-distributions.html) (Normal, Uniform,
+Exponential, Erlang, and mixtures), with expectations and moments
+computed analytically or by Monte Carlo. See the
+[probability documentation](/docs/user/probabilities.html).
 
 ## ProvSQL Studio {#studio}
 

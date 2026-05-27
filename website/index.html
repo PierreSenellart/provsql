@@ -42,13 +42,14 @@ feature_row:
     excerpt: >
       Compute tuple-independent probabilities of query answers via
       independent-circuit evaluation, tree decomposition, d-DNNF
-      knowledge compilation (d4, d4v2, c2d, dsharp, minic2d, Panini),
-      Monte Carlo, or weighted model counting (weightMC, Ganak,
-      SharpSAT-TD, DPMC). Inspect every intermediate artifact (CNF,
-      compiled d-DNNF, tree decomposition) or benchmark all methods at
-      once. An opt-in planner-side rewrite recognises hierarchical
+      knowledge compilation, Monte Carlo, or weighted model counting.
+      Inspect every intermediate artifact (CNF, compiled d-DNNF, tree
+      decomposition) or benchmark all methods at once. An opt-in
+      planner-side rewrite recognises hierarchical
       conjunctive queries (and a family of FD-aware extensions) and
-      routes them through the linear-time independent evaluator.
+      routes them through the linear-time independent evaluator; the
+      inversion-free class of queries compiles directly to a
+      linear-size d-DNNF.
     url: "/docs/user/probabilities.html"
     btn_label: "Probability docs"
     btn_class: "btn--primary"
