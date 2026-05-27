@@ -240,5 +240,95 @@ SELECT x, round(probability_evaluate(p)::numeric, 6) AS prob_plain,
                   annotate(p, 'Cgarbage-not-a-recipe'))::numeric, 6) AS prob_badcert
   FROM ifr_mt ORDER BY x;
 
+-- (7) Non-integer key columns.  The per-input order markers carry the root and
+--     secondary class values as length-prefixed value text, so any scalar type
+--     whose output function is injective works.  These shapes are structurally
+--     identical to the integer-keyed ones above; only the key column types
+--     change.  The certified path must fire (acceptance NOTICE) and the
+--     structured-d-DNNF value must equal exact possible_worlds -- which proves
+--     the text codec round-tripped the keys (a mis-parse would mis-group and
+--     change the probability).
+
+-- (7a) text root AND text secondary, on the self-join block of case (4).  One
+--      root value contains a space, exercising the byte-length prefix that keeps
+--      arbitrary text unambiguous.  Probabilities mirror case (4) (0.5 for each
+--      S; A: 0.4/0.6; B: 0.3/0.7), so the block value is the same 0.2203.
+SET provsql.boolean_provenance = on;
+CREATE TABLE ifr_ts(x text, c2 text);
+INSERT INTO ifr_ts VALUES ('grp one','a'),('grp one','b'),('grp one','c');
+SELECT add_provenance('ifr_ts');
+CREATE TABLE ifr_ta(x text, c2 text);
+INSERT INTO ifr_ta VALUES ('grp one','a'),('grp one','b');
+SELECT add_provenance('ifr_ta');
+CREATE TABLE ifr_tb(x text, c2 text);
+INSERT INTO ifr_tb VALUES ('grp one','b'),('grp one','c');
+SELECT add_provenance('ifr_tb');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifr_ts;
+  PERFORM set_prob(provsql, 0.4) FROM ifr_ta WHERE c2 = 'a';
+  PERFORM set_prob(provsql, 0.6) FROM ifr_ta WHERE c2 = 'b';
+  PERFORM set_prob(provsql, 0.3) FROM ifr_tb WHERE c2 = 'b';
+  PERFORM set_prob(provsql, 0.7) FROM ifr_tb WHERE c2 = 'c';
+END $$;
+CREATE TEMP TABLE ifr_tblock AS
+  SELECT s1.x AS x, provenance() AS p
+    FROM ifr_ts s1, ifr_ta a, ifr_ts s2, ifr_tb b
+   WHERE s1.x = a.x AND s1.c2 = a.c2
+     AND s1.x = s2.x
+     AND s2.x = b.x AND s2.c2 = b.c2
+   GROUP BY s1.x;
+SELECT remove_provenance('ifr_tblock');
+SELECT count(*) AS tblock_rows FROM ifr_tblock;
+SELECT round(probability_evaluate(p)::numeric, 8)                   AS tblock_default,
+       round(probability_evaluate(p, 'inversion-free')::numeric, 8) AS tblock_if,
+       round(probability_evaluate(p, 'possible-worlds')::numeric, 8) AS tblock_pw
+  FROM ifr_tblock;
+
+-- (7b) uuid root, self-join-free hierarchical q(x) :- A(x), B(x).  The join /
+--      group key is a uuid; its canonical text rendering is the order key.
+SET provsql.boolean_provenance = off;
+CREATE TABLE ifr_ua(x uuid);
+INSERT INTO ifr_ua VALUES
+  ('11111111-1111-1111-1111-111111111111'),
+  ('22222222-2222-2222-2222-222222222222');
+SELECT add_provenance('ifr_ua');
+CREATE TABLE ifr_ub(x uuid);
+INSERT INTO ifr_ub VALUES
+  ('11111111-1111-1111-1111-111111111111'),
+  ('22222222-2222-2222-2222-222222222222');
+SELECT add_provenance('ifr_ub');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifr_ua;
+  PERFORM set_prob(provsql, 0.4) FROM ifr_ub;
+END $$;
+CREATE TEMP TABLE ifr_ut AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifr_ua a, ifr_ub b WHERE a.x = b.x GROUP BY a.x;
+SELECT remove_provenance('ifr_ut');
+SELECT count(*) AS ut_rows FROM ifr_ut;
+SELECT round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS ut_if,
+       round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS ut_pw
+  FROM ifr_ut;
+
+-- (7c) date root, same self-join-free shape; key text is 'YYYY-MM-DD'.
+CREATE TABLE ifr_da(x date);
+INSERT INTO ifr_da VALUES ('2026-01-01'),('2026-02-02');
+SELECT add_provenance('ifr_da');
+CREATE TABLE ifr_db(x date);
+INSERT INTO ifr_db VALUES ('2026-01-01'),('2026-02-02');
+SELECT add_provenance('ifr_db');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifr_da;
+  PERFORM set_prob(provsql, 0.4) FROM ifr_db;
+END $$;
+CREATE TEMP TABLE ifr_dt AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifr_da a, ifr_db b WHERE a.x = b.x GROUP BY a.x;
+SELECT remove_provenance('ifr_dt');
+SELECT count(*) AS dt_rows FROM ifr_dt;
+SELECT round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS dt_if,
+       round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS dt_pw
+  FROM ifr_dt;
+
 RESET provsql.boolean_provenance;
 RESET provsql.verbose_level;

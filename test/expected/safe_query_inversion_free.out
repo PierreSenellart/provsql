@@ -116,3 +116,56 @@ remove_provenance
 x|prob_plain|prob_badcert
 1|0.200000|0.200000
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 4 atoms, 3 classes, root=0, order=[0,1,2] [certificate attached]
+remove_provenance
+
+(1 row)
+tblock_rows
+1
+(1 row)
+tblock_default|tblock_if|tblock_pw
+0.22030000|0.22030000|0.22030000
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 2 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+ut_rows
+2
+(1 row)
+ut_if|ut_pw
+0.200000|0.200000
+0.200000|0.200000
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 2 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+dt_rows
+2
+(1 row)
+dt_if|dt_pw
+0.200000|0.200000
+0.200000|0.200000
+(2 rows)

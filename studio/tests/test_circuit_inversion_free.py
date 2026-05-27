@@ -41,6 +41,52 @@ def _inversion_free_witness(test_dsn: str) -> str:
     return row[0]
 
 
+def _inversion_free_text_witness(test_dsn: str) -> str:
+    """Same self-join witness, but keyed on text columns -- one root value
+    containing a space -- to exercise the length-prefixed key codec end to end.
+    """
+    dsn = f"{test_dsn} options='-c search_path=public,provsql'"
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute("SET provsql.inversion_free = on")
+        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("DROP TABLE IF EXISTS ifwt_s, ifwt_a, ifwt_b CASCADE")
+        cur.execute("CREATE TABLE ifwt_s(x text, c2 text)")
+        cur.execute("CREATE TABLE ifwt_a(x text, c2 text)")
+        cur.execute("CREATE TABLE ifwt_b(x text, c2 text)")
+        cur.execute("INSERT INTO ifwt_s VALUES "
+                    "('grp one','a'),('grp one','b'),('grp one','c')")
+        cur.execute("INSERT INTO ifwt_a VALUES ('grp one','a'),('grp one','b')")
+        cur.execute("INSERT INTO ifwt_b VALUES ('grp one','b'),('grp one','c')")
+        for t in ("ifwt_s", "ifwt_a", "ifwt_b"):
+            cur.execute("SELECT add_provenance(%s)", (t,))
+        cur.execute("DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM ifwt_s; "
+                    "PERFORM set_prob(provsql, 0.5) FROM ifwt_a; "
+                    "PERFORM set_prob(provsql, 0.5) FROM ifwt_b; END $$")
+        cur.execute(
+            "SELECT provenance()::text "
+            "FROM ifwt_s s1, ifwt_a a, ifwt_s s2, ifwt_b b "
+            "WHERE s1.x=a.x AND s1.c2=a.c2 AND s1.x=s2.x "
+            "  AND s2.x=b.x AND s2.c2=b.c2 GROUP BY s1.x")
+        row = cur.fetchone()
+    assert row, "text witness produced no row"
+    return row[0]
+
+
+def test_circuit_inversion_free_text_keys_round_trip(client, test_dsn):
+    """The order keys are returned as value text: the space-containing root
+    'grp one' and the single-character secondary values survive the
+    length-prefixed codec unmangled."""
+    root = _inversion_free_text_witness(test_dsn)
+    data = client.get(f"/api/circuit/{root}").get_json()
+    keyed = [n for n in data["nodes"] if n.get("if_key")]
+    assert keyed, "expected certified leaves with order keys"
+    # every key's root is the (space-containing) group value, verbatim
+    assert {n["if_key"]["root"] for n in keyed} == {"grp one"}
+    # payload leaves (factor >= 0) carry the text secondary values
+    secs = {n["if_key"]["sec"] for n in keyed if n["if_key"]["factor"] >= 0}
+    assert secs <= {"a", "b", "c"} and secs
+
+
 def test_circuit_inversion_free_root_carries_certificate(client, test_dsn):
     root = _inversion_free_witness(test_dsn)
     data = client.get(f"/api/circuit/{root}").get_json()
