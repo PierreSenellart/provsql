@@ -44,13 +44,20 @@ CREATE TYPE provenance_gate AS
     'rv',      -- Continuous random-variable leaf
     'arith',   -- n-ary arithmetic gate over scalar-valued children
     'mixture', -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
-    'assumed_boolean' -- Structural marker over a single child: the
+    'assumed_boolean', -- Structural marker over a single child: the
                       -- wrapped sub-circuit was computed under a
                       -- Boolean-provenance assumption (e.g. the safe-
                       -- query rewrite).  Transparent for Boolean-
                       -- compatible evaluators, fatal error for the
                       -- rest, rendered as an explicit element in
                       -- PROV-XML export.
+    'annotation'      -- Transparent single-child wrapper carrying a
+                      -- query-level annotation string in @c extra
+                      -- (e.g. the inversion-free tractability
+                      -- certificate / per-input order key).  Identity
+                      -- for EVERY evaluator; its UUID folds in @c extra
+                      -- so distinct annotations over the same child are
+                      -- distinct gates.
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -162,6 +169,55 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Wrap @p token in a fresh transparent @c gate_annotation carrying
+ *        @p extra, and return the wrapper's UUID.
+ *
+ * Unlike every other gate, the annotation wrapper's UUID folds in @p extra
+ * (not just the child): @c uuid_generate_v5 over @c concat('annotation',
+ * token, extra).  This is deliberate -- two annotations over the same child
+ * with different @p extra must be distinct gates (e.g. the same input tuple
+ * carrying different per-occurrence order keys, or two queries attaching
+ * different certificates to a shared root).  The wrapper is transparent
+ * (identity) for EVERY evaluator; @p extra is inert metadata read only by the
+ * code that placed it.  No-op (returns NULL) on a NULL input.
+ */
+CREATE OR REPLACE FUNCTION annotate(token UUID, extra TEXT) RETURNS UUID AS
+$$
+DECLARE
+  annotated uuid;
+BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
+  annotated := public.uuid_generate_v5(uuid_ns_provsql(),
+                                       concat('annotation', token, extra));
+  PERFORM create_gate(annotated, 'annotation', ARRAY[token]);
+  PERFORM set_extra(annotated, extra);
+  RETURN annotated;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Build a per-input order-key string for the inversion-free path.
+ *
+ * Emitted by the planner per certified atom: @c K-prefixed, length-prefixed
+ * @c "K<factor> <octet_length(root)>:<root><octet_length(sec)>:<sec>", parsed
+ * back at evaluation by @c safe_cert_key_parse.  @p root / @p sec are the
+ * tuple's root- and secondary-class column values (text-cast by the caller);
+ * the byte-length prefixes keep the values unambiguous for @em any column type,
+ * including text containing spaces, colons or digits.  @p factor is the atom's
+ * factor id (or -1 for the shared self-join guard).  @c IMMUTABLE so the planner
+ * can fold it and the marker dedups by content-addressing.
+ */
+CREATE OR REPLACE FUNCTION inversion_free_key(root TEXT, sec TEXT, factor INT)
+  RETURNS TEXT AS
+$$ SELECT 'K' || factor::text || ' '
+       || octet_length(root) || ':' || root
+       || octet_length(sec)  || ':' || sec $$
+  LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 /**
  * @brief Set extra text information on provenance circuit gate
@@ -1212,6 +1268,14 @@ BEGIN
       token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
       INTO result;
 
+  ELSIF gate_type = 'annotation' THEN
+    -- Transparent single-child wrapper (carries the inversion-free certificate
+    -- / per-input order keys in extra, inert for every semiring): evaluate
+    -- through to the child, like 'project'.
+    EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO result;
+
   ELSE
     RAISE EXCEPTION USING MESSAGE='provenance_evaluate cannot be called on formulas using ' || gate_type || ' gates; use compiled semirings instead';
   END IF;
@@ -1419,12 +1483,24 @@ $$
         UNION ALL
       SELECT p1.t,u,id,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) WITH ORDINALITY AS a(u, id)
     ) SELECT f, t, gate_type, table_name, nb_columns, ARRAY[(get_infos(f)).info1, (get_infos(f)).info2], get_extra(f) FROM (
-      SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
+      -- One row per distinct (parent, child, child-position) edge.  The
+      -- recursive closure (UNION ALL) re-emits a gate's outgoing edges once per
+      -- path that reaches it, so a *shared* non-input gate would otherwise be
+      -- reported with duplicate edges; DISTINCT on the (f,t,idx) triple
+      -- collapses those while keeping genuine repeated children (same f,t,
+      -- different idx, e.g. a self-product).  Without this, a shared
+      -- single-child gate (notably an inversion-free order-marker annotation)
+      -- gets its child wired k times in the where-circuit -> the locator sets
+      -- are duplicated k-fold.
+      SELECT DISTINCT f, t::uuid, idx, gate_type, NULL::regclass AS table_name, NULL::integer AS nb_columns FROM transitive_closure
       UNION ALL
         SELECT DISTINCT t, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
       UNION ALL
         SELECT DISTINCT $1, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
       ) t
+    -- order each parent's edges by child position so the where-circuit's TIMES
+    -- concatenation reproduces the column order (input rows have idx NULL).
+    ORDER BY f, idx
 $$
 LANGUAGE sql;
 
@@ -4203,6 +4279,13 @@ RETURNS TABLE (
 BEGIN
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'independent');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'possible-worlds');
+  -- Only on a query certified inversion-free (its root carries the
+  -- certificate as a 'C'-prefixed annotation): the explicit method errors
+  -- otherwise, so we skip the row rather than record a spurious error.
+  IF provsql.get_gate_type(token) = 'annotation'
+     AND left(provsql.get_extra(token), 1) = 'C' THEN
+    RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'inversion-free');
+  END IF;
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'tree-decomposition');
   RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
     token, 'monte-carlo', monte_carlo_samples::text);

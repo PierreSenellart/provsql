@@ -11,6 +11,7 @@ of d4 / panini / weightmc / … on the CI host.
 """
 from __future__ import annotations
 
+import psycopg
 import pytest
 
 from provsql_studio import kc
@@ -41,8 +42,9 @@ def test_tools_endpoint_shape(client):
 
     # In-process meta-routes (no external tool, always available) are
     # listed separately so the front-end appends them to the compiler picker.
+    # 'inversion-free' is in-process too (offered only for a certified root).
     assert set(data["inprocess_compilers"]) == {
-        "tree-decomposition", "interpret-as-dd", "default"}
+        "tree-decomposition", "interpret-as-dd", "inversion-free", "default"}
 
 
 def test_tools_endpoint_dpmc_single_entry(client):
@@ -109,6 +111,80 @@ def test_benchmark_filters_missing_tools(app, monkeypatch):
     assert td["nodes"] is not None and td["edges"] is not None
     ind = by_key[("independent", None)]
     assert ind["nodes"] is None and ind["edges"] is None
+
+
+def test_benchmark_includes_inversion_free_only_when_certified(app):
+    """The 'inversion-free' row is offered only when the root carries the
+    inversion-free certificate; a plain (uncertified) token omits it."""
+    pool = app.extensions["provsql_pool"]
+
+    # (a) a bare personnel input is not certified -> no inversion-free row
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.provenance() FROM personnel WHERE id = 1")
+        plain = str(cur.fetchone()[0])
+    assert not kc._root_is_inversion_free(pool, plain)
+    out = kc.probability_benchmark(pool, plain, samples=50, statement_timeout="10s")
+    assert ("inversion-free", None) not in {(r["method"], r["args"]) for r in out["rows"]}
+
+    # (b) a certified self-join-free hierarchical circuit -> row present + sound
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SET provsql.inversion_free = on")
+        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("DROP TABLE IF EXISTS bm_a, bm_b CASCADE")
+        cur.execute("CREATE TABLE bm_a(x int)")
+        cur.execute("CREATE TABLE bm_b(x int)")
+        cur.execute("INSERT INTO bm_a VALUES (1),(2)")
+        cur.execute("INSERT INTO bm_b VALUES (1),(2)")
+        cur.execute("SELECT add_provenance('bm_a')")
+        cur.execute("SELECT add_provenance('bm_b')")
+        cur.execute("DO $$ BEGIN PERFORM set_prob(provsql,0.5) FROM bm_a; "
+                    "PERFORM set_prob(provsql,0.5) FROM bm_b; END $$")
+        # NB: no LIMIT -- a LIMIT clause makes the query a non-pure-UCQ and
+        # the inversion-free analysis (correctly) declines it; fetchone() takes
+        # the first of the per-group tokens instead.
+        cur.execute("SELECT provsql.provenance() FROM bm_a a, bm_b b "
+                    "WHERE a.x = b.x GROUP BY a.x")
+        cert = str(cur.fetchone()[0])
+    assert kc._root_is_inversion_free(pool, cert)
+    out = kc.probability_benchmark(pool, cert, samples=50, statement_timeout="10s")
+    by_key = {(r["method"], r["args"]): r for r in out["rows"]}
+    assert ("inversion-free", None) in by_key
+    row = by_key[("inversion-free", None)]
+    assert row["error"] is None and row["probability"] is not None
+
+
+def test_compile_to_ddnnf_inversion_free(app):
+    """The 'inversion-free' d-D compiler builds the structured d-DNNF (DOT +
+    scene + server-side compile time) for a certified circuit, and errors on an
+    uncertified one."""
+    pool = app.extensions["provsql_pool"]
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SET provsql.inversion_free = on")
+        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("DROP TABLE IF EXISTS cd_a, cd_b CASCADE")
+        cur.execute("CREATE TABLE cd_a(x int)")
+        cur.execute("CREATE TABLE cd_b(x int)")
+        cur.execute("INSERT INTO cd_a VALUES (1),(2)")
+        cur.execute("INSERT INTO cd_b VALUES (1),(2)")
+        cur.execute("SELECT add_provenance('cd_a')")
+        cur.execute("SELECT add_provenance('cd_b')")
+        cur.execute("DO $$ BEGIN PERFORM set_prob(provsql,0.5) FROM cd_a; "
+                    "PERFORM set_prob(provsql,0.5) FROM cd_b; END $$")
+        cur.execute("SELECT provsql.provenance() FROM cd_a a, cd_b b "
+                    "WHERE a.x = b.x GROUP BY a.x")
+        cert = str(cur.fetchone()[0])
+
+    out = kc.compile_to_ddnnf(pool, cert, "inversion-free", statement_timeout="10s")
+    assert out["dot"].lstrip().startswith("digraph")
+    assert out["scene"]["nodes"]
+    assert isinstance(out["milliseconds"], float) and out["milliseconds"] >= 0
+
+    # an uncertified token has no inversion-free certificate -> SQL errors
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.provenance() FROM personnel WHERE id = 1")
+        plain = str(cur.fetchone()[0])
+    with pytest.raises(psycopg.Error):
+        kc.compile_to_ddnnf(pool, plain, "inversion-free", statement_timeout="10s")
 
 
 def test_tool_available_sql_function(app):

@@ -2189,6 +2189,9 @@
               <option value="">(default)</option>
               <option value="independent">independent</option>
               <option value="possible-worlds">possible-worlds</option>
+              <!-- shown only when the root carries an inversion-free
+                   certificate; toggled in syncDropdownVisibility -->
+              <option value="inversion-free" hidden>inversion-free</option>
               <option value="tree-decomposition">tree-decomposition</option>
               <option value="compilation">compilation</option>
             </optgroup>
@@ -2206,6 +2209,9 @@
                   title="How to obtain the d-D circuit: a registered external compiler, the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → fallback compiler). The external compilers are populated from the live tool registry; the in-process routes below always apply.">
             <option value="tree-decomposition">tree-decomposition</option>
             <option value="interpret-as-dd">interpret as d-D</option>
+            <!-- shown only when the root carries an inversion-free
+                 certificate; toggled in syncDropdownVisibility -->
+            <option value="inversion-free" hidden>inversion-free</option>
             <option value="default">default (fallback chain)</option>
           </select>
           <select class="cv-eval__args" id="eval-args-wmc-tool" hidden

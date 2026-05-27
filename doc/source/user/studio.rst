@@ -279,6 +279,18 @@ rewriter or by the load-time Boolean-identity folding when
 separate node, since structurally it is a marker rather than a
 distinct operation.
 
+The inversion-free certificate (a ``gate_annotation`` wrapper on a
+certified result root, see :doc:`probabilities`) is likewise elided
+and rendered as a teal :sc:`IF` badge on its child. Its dashed ring
+is drawn concentric *outside* the Boolean ring, so that on the rare
+gate marked both ways the two rings stay distinguishable rather than
+overlapping. Pinning that root shows the certificate header (atom / class counts)
+and the variable-block order in the inspector. The certified input
+leaves are *not* badged -- that would crowd the canvas; instead,
+pinning a certified leaf surfaces its per-input order key (root
+value, secondary value, factor -- or the shared self-join *guard*)
+and its rank within the shown scene in the inspector.
+
 .. _studio-circuit-eval-strip:
 
 Semiring evaluation strip

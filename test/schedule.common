@@ -13,6 +13,7 @@ test: provenance_in_from identify_token subquery create_provenance_mapping
 test: circuit_subgraph
 test: simplify_identities
 test: resolve_input
+test: annotation_gate
 # Regression for the get_gate_type → get_children cache-poisoning bug:
 # the two tests must run in separate backends (sequential `test:` lines),
 # so the cache for gate_cache_consistency starts empty.
@@ -175,6 +176,7 @@ test: safe_query_self_join_disjoint
 test: safe_query_view_descent
 test: safe_query_ancestry_disjoint
 test: safe_query_inner_join
+test: safe_query_inversion_free
 
 # Query-time TID / BID / OPAQUE classifier (NOTICE surface)
 test: classify_query

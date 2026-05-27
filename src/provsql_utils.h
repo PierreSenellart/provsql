@@ -72,6 +72,7 @@ typedef enum gate_type {
   gate_arith,    ///< n-ary arithmetic gate over scalar-valued children (info1 holds operator tag)
   gate_mixture,  ///< Probabilistic mixture: three wires [p_token (gate_input Bernoulli), x_token, y_token]; samples x when p is true, y otherwise
   gate_assumed_boolean, ///< Structural marker over a single child whose sub-circuit was computed under a Boolean-provenance assumption (e.g. the safe-query rewrite); transparent (identity) for Boolean-compatible evaluators, fatal error for the rest, kept as an explicit node in PROV-XML export
+  gate_annotation, ///< Transparent single-child wrapper carrying a query-level annotation in @c extra (inversion-free certificate / per-input order key); identity for EVERY evaluator, and -- unlike the children-only convention -- its UUID folds in @c extra so distinct annotations over the same child are distinct gates.
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
@@ -155,6 +156,21 @@ typedef struct constants_t {
    *  rewriter refuses to produce unmarked roots on a schema that
    *  cannot enforce the semiring-compatibility check. */
   Oid OID_FUNCTION_ASSUME_BOOLEAN;
+  /** @brief OID of @c provsql.annotate(uuid,text)->uuid.
+   *
+   *  Wraps its child in a fresh transparent @c gate_annotation whose UUID
+   *  folds in the @c extra text, and returns the wrapper's UUID.  Used to
+   *  attach the inversion-free tractability certificate (on the root) and the
+   *  per-input order keys.  @c InvalidOid on a schema predating the gate
+   *  (the inversion-free carrier is then disabled). */
+  Oid OID_FUNCTION_ANNOTATE;
+  /** @brief OID of @c provsql.inversion_free_key(text,text,int)->text.
+   *
+   *  Builds the @c K-prefixed per-input order-key string the planner attaches
+   *  (via @c annotate) to each certified atom's provenance on the
+   *  inversion-free path.  @c InvalidOid on a schema predating it (markers are
+   *  then not attached; the path declines and falls back). */
+  Oid OID_FUNCTION_INVERSION_FREE_KEY;
   /** OIDs of the @c random_variable_{eq,ne,le,lt,ge,gt} comparison
    * procedure functions, indexed by the @c ComparisonOperator enum
    * (@c EQ=0, @c NE=1, @c LE=2, @c LT=3, @c GE=4, @c GT=5; matches the
@@ -325,6 +341,18 @@ extern bool provsql_hybrid_evaluation;
  *  to flip this ; exists for developer A/B testing and as a
  *  bisection escape valve. */
 extern bool provsql_cmp_probability_evaluation;
+
+/** @brief Kill-switch for the inversion-free structured-d-DNNF probability
+ *  path; see the @c provsql.inversion_free GUC.
+ *
+ *  When on (default), @c probability_evaluate, on a query carrying an
+ *  inversion-free tractability certificate, tries the structured-d-DNNF
+ *  builder after @c independentEvaluation and before tree-decomposition / d4.
+ *  Off disables only that automatic insertion (for A/B testing); the explicit
+ *  @c probability_evaluate(token,'inversion-free') method ignores this flag.
+ *  The path is self-gating on the certificate, which is attached only to
+ *  certified queries, so leaving it on is safe. */
+extern bool provsql_inversion_free;
 
 /** @brief Opt-in safe-query optimisation for hierarchical conjunctive
  *  queries; see the @c provsql.boolean_provenance GUC.

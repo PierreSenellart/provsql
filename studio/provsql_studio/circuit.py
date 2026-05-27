@@ -270,7 +270,8 @@ def get_circuit(
             pool, root, depth + 1,
             simplified=False, extra_gucs=extra_gucs)
     if not overshot:
-        return {"nodes": [], "edges": [], "root": root, "depth": depth}
+        return {"nodes": [], "edges": [], "root": root,
+                "eval_root": root, "depth": depth}
     raw = [r for r in overshot if r["depth"] <= depth]
     # circuit_subgraph emits one row per (parent, node) edge, so the cap
     # is on the count of distinct nodes within the kept depth, not on
@@ -517,86 +518,189 @@ def _fetch_tracked_input_uuids(cur, candidate_uuids):
     return {row[0] for row in cur.fetchall()}
 
 
-def _elide_assumed_boolean(
-    rows: list[dict], root: str
-) -> tuple[list[dict], str, set[str]]:
-    """Drop gate_assumed_boolean wrappers from the displayed scene.
+def _parse_if_cert(extra: str | None) -> dict | None:
+    """Parse a 'C'-prefixed inversion-free certificate recipe for display.
 
-    Any Boolean-only optimisation enabled under
-    @c provsql.boolean_provenance (the safe-query rewriter is the
-    first such optimisation ; more may follow) wraps the root of
-    each subcircuit it produces with a single-child
-    @c gate_assumed_boolean marker.  The wrapper carries no semiring
-    semantics ; rendering it as its own circle would push the actual
-    gate one level down and add a Latin-letter circle the user has
-    to interpret.  Strategy : elide every wrapper occurrence, rewire
-    its parents straight to its single child, and stamp every such
-    child with @c boolean_assumed=True so the front-end can badge it.
-
-    Marking every wrapped node (not just the scene-root one) is the
-    most faithful rendering : a non-Boolean-compatible semiring
-    refuses on any wrapper anywhere in the circuit, not only the
-    root, so each marker stands for a sub-piece the user can no
-    longer evaluate with the unsafe semirings.
-
-    Returns the rewritten row list, the new scene root, and the set
-    of node ids that should carry the boolean_assumed marker.
+    Wire format (``safe_cert_serialise``): ``C<kind> <nclasses> <root_class>
+    <natoms> <maxarity> <class_topo_order...> <atom_relation_rank...>
+    <atom_col_class...>``.  Only the header and the class topological order
+    (the variable-block order) are surfaced to the inspector.
     """
-    by_id = {r["node"]: r for r in rows}
-    wrappers = {nid: None for nid, r in by_id.items()
-                if r["gate_type"] == "assumed_boolean"}
-    if not wrappers:
-        return rows, root, set()
-    # Wrapper's unique outgoing child (gate_assumed_boolean is
-    # single-child by construction).
-    for r in rows:
-        if r["parent"] in wrappers:
-            wrappers[r["parent"]] = r["node"]
-    wrappers = {k: v for k, v in wrappers.items() if v is not None}
+    if not extra or extra[:1] != "C":
+        return None
+    try:
+        parts = extra[1:].split()
+        _kind, nclasses, root_class, natoms, _maxarity = (int(parts[i]) for i in range(5))
+        class_order = [int(x) for x in parts[5:5 + nclasses]]
+    except (ValueError, IndexError):
+        return None
+    return {
+        "natoms": natoms,
+        "nclasses": nclasses,
+        "root_class": root_class,
+        "class_order": class_order,
+    }
 
-    # Mark every wrapper's child.  Chains of wrappers (wrapper of
-    # wrapper) collapse onto the deepest non-wrapper descendant.
+
+def _parse_if_key(extra: str | None) -> dict | None:
+    """Parse a 'K'-prefixed per-input order key
+    ``K<factor> <root_len>:<root><sec_len>:<sec>`` (byte length-prefixed so the
+    root / secondary class values may be of any column type -- including text
+    with spaces, colons or digits -- not just integers).  ``root`` / ``sec`` are
+    returned as their value text.  ``factor == -1`` marks the shared self-join
+    guard (``SAFE_CERT_GUARD_FACTOR``); other values index the secondary class.
+    """
+    if not extra or extra[:1] != "K":
+        return None
+    try:
+        raw = extra[1:].encode("utf-8")
+        factor_b, raw = raw.split(b" ", 1)
+        factor = int(factor_b)
+        root_len_b, raw = raw.split(b":", 1)
+        root_len = int(root_len_b)
+        root, raw = raw[:root_len], raw[root_len:]
+        sec_len_b, raw = raw.split(b":", 1)
+        sec_len = int(sec_len_b)
+        sec = raw[:sec_len]
+    except (ValueError, IndexError):
+        return None
+    return {
+        "root": root.decode("utf-8", "replace"),
+        "sec": sec.decode("utf-8", "replace"),
+        "factor": factor,
+    }
+
+
+def _elide_markers(
+    rows: list[dict], root: str
+) -> tuple[list[dict], str, dict[str, dict]]:
+    """Drop the transparent single-child marker wrappers
+    (``gate_assumed_boolean`` and ``gate_annotation``) from the displayed
+    scene, rewiring parents straight to the surviving descendant and recording
+    which markers that descendant carries so the front-end can badge it.
+
+    ``gate_assumed_boolean`` records a Boolean-only assumption (B badge), added
+    by the safe-query rewriter / Boolean-identity folding.  A
+    ``gate_annotation`` carries the inversion-free certificate on a result root
+    (``C``-prefixed ``extra``) or a per-input order key on a leaf
+    (``K``-prefixed) -- the IF badge plus inspector detail.  Either kind is a
+    no-op for evaluation; rendering it as its own circle would only push the
+    real gate down and add a letter the user must interpret.
+
+    A surviving node may sit under wrappers of *both* kinds, in any order (e.g.
+    an ``assumed_boolean`` over an ``annotation`` over the real root), so it can
+    carry both badges; chains collapse onto the deepest non-wrapper descendant.
+
+    Returns the rewritten rows, the new scene root, and a
+    ``{node_id: marker dict}`` map, where the marker dict may hold
+    ``boolean_assumed``, ``inversion_free``, ``if_cert`` and ``if_key``.
+    """
+    WRAP = ("assumed_boolean", "annotation")
+    by_id = {r["node"]: r for r in rows}
+    wrapper_kind = {nid: r["gate_type"] for nid, r in by_id.items()
+                    if r["gate_type"] in WRAP}
+    if not wrapper_kind:
+        return rows, root, {}
+
+    child_of: dict[str, str] = {}
+    parents_of: dict[str, list[tuple[str | None, int | None]]] = {
+        w: [] for w in wrapper_kind
+    }
+    for r in rows:
+        if r["parent"] in wrapper_kind:
+            child_of[r["parent"]] = r["node"]
+        if r["node"] in wrapper_kind:
+            parents_of[r["node"]].append((r["parent"], r["child_pos"]))
+
+    # Deepest non-wrapper descendant of a (chain of) wrapper(s).
     def unwind(nid: str) -> str:
-        while nid in wrappers:
-            nid = wrappers[nid]
+        seen: set[str] = set()
+        while nid in wrapper_kind and nid in child_of and nid not in seen:
+            seen.add(nid)
+            nid = child_of[nid]
         return nid
 
-    marked: set[str] = {unwind(child) for child in wrappers.values()}
-    new_root = unwind(root) if root in wrappers else root
-
-    # Collect each wrapper's incoming edges (grandparents).  Multiple
-    # parents happen when the wrapper is shared; zero parents when it
-    # is the scene root.
-    grandparents: dict[str, list[tuple[str | None, int | None]]] = {
-        w: [] for w in wrappers
-    }
-    rest: list[dict] = []
-    for r in rows:
-        if r["node"] in wrappers:
-            grandparents[r["node"]].append((r["parent"], r["child_pos"]))
+    # Accumulate each wrapper's marker onto its surviving descendant.
+    markers: dict[str, dict] = {}
+    for w, kind in wrapper_kind.items():
+        child = child_of.get(w)
+        if child is None:
             continue
-        rest.append(r)
-    # Replace any (parent == wrapper) edge with one (parent ==
-    # grandparent) edge per recorded grandparent ; collapses to a
-    # single NULL-parent row when the wrapper was the scene root.
-    out: list[dict] = []
-    for r in rest:
-        if r["parent"] in wrappers:
-            gp_list = grandparents[r["parent"]]
-            if not gp_list:
-                out.append({**r, "parent": None, "child_pos": None})
+        surv = unwind(child)
+        m = markers.setdefault(surv, {})
+        if kind == "assumed_boolean":
+            m["boolean_assumed"] = True
+        else:
+            m["inversion_free"] = True
+            extra = by_id[w].get("extra")
+            cert = _parse_if_cert(extra)
+            key = _parse_if_key(extra)
+            if cert is not None:
+                m["if_cert"] = cert
+            elif key is not None:
+                m["if_key"] = key
+
+    new_root = unwind(root)
+
+    # Surviving (non-wrapper) ancestors of a wrapper, climbing through any
+    # wrapper chain and fanning out on shared wrappers.  The position carried
+    # is the child_pos of the topmost wrapper of the chain within that ancestor
+    # (the whole single-child chain occupies one slot).
+    def surviving_ancestors(w: str) -> list[tuple[str | None, int | None]]:
+        out_a: list[tuple[str | None, int | None]] = []
+        seen: set[str] = set()
+        stack = list(parents_of.get(w, []))
+        if not stack:
+            return [(None, None)]
+        while stack:
+            pid, pos = stack.pop()
+            if pid is None:
+                out_a.append((None, None))
+            elif pid in wrapper_kind:
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                up = parents_of.get(pid, [])
+                stack.extend(up if up else [(None, None)])
             else:
-                for gp_id, gp_pos in gp_list:
-                    out.append({**r, "parent": gp_id, "child_pos": gp_pos})
+                out_a.append((pid, pos))
+        return out_a
+
+    out: list[dict] = []
+    for r in rows:
+        if r["node"] in wrapper_kind:
+            continue
+        if r["parent"] in wrapper_kind:
+            for gp_id, gp_pos in surviving_ancestors(r["parent"]):
+                out.append({**r, "parent": gp_id, "child_pos": gp_pos})
         else:
             out.append(r)
-    return out, new_root, marked
+    return out, new_root, markers
 
 
 def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]) -> dict:
     """Run dot to assign x/y per node, then translate into the JSON shape
     consumed by the front-end."""
-    rows, root, boolean_assumed = _elide_assumed_boolean(rows, root)
+    # The token actually evaluated by the eval strip / benchmark.  Eliding a
+    # transparent wrapper moves the displayed scene root onto the wrapper's
+    # child, but that child does not carry the wrapper's payload -- notably the
+    # inversion-free certificate, which probability_evaluate keys off the exact
+    # root token.  So preserve the originally requested token as `eval_root`
+    # for evaluation, while `root` drives the (elided) display.
+    eval_root = root
+    rows, root, node_markers = _elide_markers(rows, root)
+    # Assign each certified leaf its order rank among the leaves shown in this
+    # scene: the Prop. 4.5 order is (root value, then secondary value, then the
+    # self-join guard before payloads, then factor), with the node id as a
+    # deterministic final tie-break.  The rank is relative to the visible scene
+    # (a depth-limited view shows a contiguous prefix of one block's leaves).
+    keyed = [(nid, m["if_key"]) for nid, m in node_markers.items()
+             if m.get("if_key") is not None]
+    keyed.sort(key=lambda it: (
+        it[1]["root"], it[1]["sec"],
+        0 if it[1]["factor"] == -1 else 1, it[1]["factor"], it[0]))
+    for rank, (nid, _k) in enumerate(keyed):
+        node_markers[nid]["if_key"]["rank"] = rank
     dot_src = _to_dot(rows)
     layout = _run_dot(dot_src)
     pos = {obj["name"]: _parse_pos(obj["pos"]) for obj in layout.get("objects", []) if "pos" in obj}
@@ -642,19 +746,28 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             #      simplified_circuit_subgraph forwards it).
             #   2. Elision of a persistent gate_assumed_boolean
             #      wrapper above this gate
-            #      (see _elide_assumed_boolean).
+            #      (see _elide_markers).
             # Either source draws the dashed frame + B badge.
             "boolean_assumed": (
                 bool(r.get("boolean_assumed"))
-                or r["node"] in boolean_assumed
+                or node_markers.get(r["node"], {}).get("boolean_assumed", False)
             ),
+            # Inversion-free marker: an elided gate_annotation wrapper above this
+            # gate (IF badge).  if_cert is the certificate recipe summary on a
+            # result root; if_key is the per-input order key + scene rank on a
+            # certified leaf.  Independent of boolean_assumed -- a node may carry
+            # both (see _elide_markers).
+            "inversion_free": node_markers.get(r["node"], {}).get("inversion_free", False),
+            "if_cert": node_markers.get(r["node"], {}).get("if_cert"),
+            "if_key": node_markers.get(r["node"], {}).get("if_key"),
         })
     edges = [
         {"from": r["parent"], "to": r["node"], "child_pos": r["child_pos"]}
         for r in rows
         if r["parent"] is not None
     ]
-    return {"nodes": nodes, "edges": edges, "root": root, "depth": depth}
+    return {"nodes": nodes, "edges": edges, "root": root,
+            "eval_root": eval_root, "depth": depth}
 
 
 def _to_dot(rows: list[dict]) -> str:

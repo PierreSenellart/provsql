@@ -54,17 +54,24 @@ Datum compile_to_ddnnf_dot(PG_FUNCTION_ARGS)
       compiler = string(VARDATA(t), VARSIZE(t)-VARHDRSZ);
     }
 
-    gate_t root;
-    BooleanCircuit c = getBooleanCircuit(*token, root);
-    c.rewriteMultivaluedGates();
-
     // The compiler argument selects how the d-D circuit is obtained:
     // an external compiler (d4 / d4v2 / c2d / minic2d / dsharp /
     // panini-*) or one of the in-process meta-routes
     // ("tree-decomposition", "interpret-as-dd", "default"). The single
     // dispatch point makeDDByName resolves both, shared with
     // compile_to_ddnnf (NNF) and ddnnf_stats so they cannot drift.
-    dDNNF d = c.makeDDByName(root, compiler);
+    // "inversion-free" is special: it needs the per-input order keys on the
+    // generic circuit's annotation markers, so it goes through
+    // buildInversionFreeDDNNF rather than the BooleanCircuit dispatch.
+    dDNNF d;
+    if(compiler == "inversion-free") {
+      d = buildInversionFreeDDNNF(*token);
+    } else {
+      gate_t root;
+      BooleanCircuit c = getBooleanCircuit(*token, root);
+      c.rewriteMultivaluedGates();
+      d = c.makeDDByName(root, compiler);
+    }
     string dot = d.toDot();
 
     text *result = (text *) palloc(VARHDRSZ + dot.size());

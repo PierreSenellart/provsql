@@ -71,6 +71,18 @@ BooleanCircuit getBooleanCircuit(
  */
 GenericCircuit getGenericCircuit(pg_uuid_t token);
 
+class dDNNF;
+/**
+ * @brief Compile a query certified inversion-free to its structured d-DNNF.
+ *
+ * Builds the same structured d-DNNF the @c 'inversion-free' probability method
+ * uses (over the query-derived Prop. 4.5 order carried on the circuit's
+ * annotation markers), for the knowledge-compilation surface (DOT / NNF /
+ * stats).  Throws @c CircuitException if @p token's root carries no
+ * inversion-free certificate.  Defined in @c probability_evaluate.cpp.
+ */
+dDNNF buildInversionFreeDDNNF(pg_uuid_t token);
+
 /**
  * @brief Build a @c GenericCircuit containing the closures of two
  *        roots, with shared subgraphs unified.

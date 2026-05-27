@@ -150,7 +150,8 @@ public:
       s.insert(g);
     } else if (type == gate_plus || type == gate_times || type == gate_monus
             || type == gate_project || type == gate_eq
-            || type == gate_cmp || type == gate_update) {
+            || type == gate_cmp || type == gate_update
+            || type == gate_annotation) {
       // Boolean gates: footprint is the union of children's footprints.
       // Lets a compound `p` wire feeding a mixture propagate its atom
       // dependencies to FootprintCache for the disjoint-children

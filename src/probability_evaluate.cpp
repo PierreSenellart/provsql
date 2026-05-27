@@ -12,6 +12,10 @@
  * - @c "weightmc": approximate using the @c weightmc model counter.
  * - @c "tree-decomposition": exact via tree-decomposition-based d-DNNF.
  * - @c "independent": exact evaluation for disconnected circuits.
+ * - @c "inversion-free": exact via the structured-d-DNNF builder over the
+ *   query-derived order; errors unless the root carries an inversion-free
+ *   certificate.  The default method also tries it (after @c "independent")
+ *   when a certificate is present.
  * - Any external compiler name (@c "d4", @c "c2d", @c "minic2d", @c "dsharp").
  *
  * A SIGINT signal sets a process-local flag that causes the evaluation
@@ -35,6 +39,9 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "c_cpp_compatibility.h"
 #include <set>
 #include <stack>
+#include <map>
+#include <vector>
+#include <algorithm>
 #include <cmath>
 #include <csignal>
 
@@ -47,8 +54,10 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
 #include "dDNNFTreeDecompositionBuilder.h"
+#include "StructuredDNNF.h"
 #include "having_semantics.hpp"
 #include "provsql_mmap.h"
+#include "safe_query_cert.h"
 #include "provsql_utils_cpp.h"
 #include "tool_registry_sync.h"
 #include "semiring/BoolExpr.h"
@@ -85,6 +94,124 @@ static void provsql_sigint_handler (int)
 }
 
 /**
+ * @brief Collect the inversion-free per-input order keys for the structured
+ *        builder.
+ *
+ * Walks the @c GenericCircuit @p gc for @c K-prefixed annotation gates whose
+ * child is a @c gate_input (the per-input order markers attached by the planner
+ * on the certified path), parses each key, and maps the wrapped input to its
+ * @c BooleanCircuit variable via @p gc_to_bc.  Returns @c true only if every
+ * @c BooleanCircuit input reachable from @p bc_root carries a key (the
+ * structured builder needs a total order over all variables); a missing marker
+ * means the certified markers are absent / incomplete and the caller must not
+ * use the structured path.
+ */
+static bool collect_inversion_free_keys(
+  const GenericCircuit &gc, gate_t gc_root,
+  const std::unordered_map<gate_t, gate_t> &gc_to_bc,
+  const BooleanCircuit &c, gate_t bc_root,
+  std::map<gate_t, StructuredDNNFBuilder::InputKey> &out)
+{
+  std::set<gate_t> seen;
+  std::stack<gate_t> st;
+  st.push(gc_root);
+  while (!st.empty()) {
+    gate_t g = st.top(); st.pop();
+    if (!seen.insert(g).second) continue;
+    if (gc.getGateType(g) == gate_annotation) {
+      std::string ex = gc.getExtra(g);   // must outlive the parse (k points into it)
+      SafeCertKey k;
+      if (safe_cert_key_parse(ex.c_str(), &k)) {
+        const auto &w = gc.getWires(g);
+        if (!w.empty() && gc.getGateType(w[0]) == gate_input) {
+          auto it = gc_to_bc.find(w[0]);
+          if (it != gc_to_bc.end())
+            out[it->second] = StructuredDNNFBuilder::InputKey{
+              std::string(k.root, k.root_len),
+              std::string(k.sec, k.sec_len), k.factor };
+        }
+      }
+    }
+    for (gate_t ch : gc.getWires(g)) st.push(ch);
+  }
+
+  /* every Boolean input must be ordered */
+  std::set<gate_t> bseen;
+  std::stack<gate_t> bst;
+  bst.push(bc_root);
+  while (!bst.empty()) {
+    gate_t g = bst.top(); bst.pop();
+    if (!bseen.insert(g).second) continue;
+    if (c.getGateType(g) == BooleanGate::IN) {
+      if (out.find(g) == out.end())
+        return false;
+    } else {
+      for (gate_t ch : c.getWires(g)) bst.push(ch);
+    }
+  }
+  return true;
+}
+
+/**
+ * @brief Flatten the per-input order keys into a total rank for the structured
+ *        builder's order-only constructor.
+ *
+ * Sorts the certified inputs into a Prop. 4.5-consistent order -- root-class
+ * value first (one independent block per value), then secondary-class value
+ * (one tile per value within a block), then the shared self-join guard before
+ * the payloads of its tile, then by factor -- and assigns consecutive ranks.
+ * Ties (two inputs with identical keys) keep a deterministic order via the
+ * input gate id, so distinct variables always get distinct ranks.  Unlike the
+ * keyed (factored-sweep) constructor this makes no single-secondary-axis /
+ * one-payload-per-tile assumption, so it certifies every hierarchical
+ * inversion-free lineage, including the self-join-free case.
+ */
+static std::map<gate_t, int> inversion_free_rank(
+  const std::map<gate_t, StructuredDNNFBuilder::InputKey> &keys)
+{
+  std::vector<std::pair<gate_t, StructuredDNNFBuilder::InputKey>> v(
+    keys.begin(), keys.end());
+  std::sort(v.begin(), v.end(), [](const auto &a, const auto &b) {
+    const auto &ka = a.second, &kb = b.second;
+    if (ka.root != kb.root) return ka.root < kb.root;
+    if (ka.sec  != kb.sec)  return ka.sec  < kb.sec;
+    int ga = (ka.factor == StructuredDNNFBuilder::GUARD_FACTOR) ? 0 : 1;
+    int gb = (kb.factor == StructuredDNNFBuilder::GUARD_FACTOR) ? 0 : 1;
+    if (ga != gb) return ga < gb;
+    if (ka.factor != kb.factor) return ka.factor < kb.factor;
+    return a.first < b.first;
+  });
+  std::map<gate_t, int> rank;
+  int r = 0;
+  for (const auto &p : v) rank[p.first] = r++;
+  return rank;
+}
+
+dDNNF buildInversionFreeDDNNF(pg_uuid_t token)
+{
+  // Compile a query certified inversion-free to its structured d-DNNF (the
+  // same artefact the 'inversion-free' probability method builds), so the KC
+  // surface can render / measure it.  Mirrors the dispatch in
+  // probability_evaluate_internal: the per-input order keys live on the
+  // GenericCircuit's annotation markers, so we go through the generic circuit
+  // rather than getBooleanCircuit(token, ...) directly.
+  GenericCircuit gc = getGenericCircuit(token);
+  gate_t gc_root = gc.getGate(uuid2string(token));
+  std::string ex = gc.getExtra(gc_root);
+  if (ex.empty() || ex[0] != SAFE_CERT_EXTRA_PREFIX_RECIPE)
+    throw CircuitException("compile 'inversion-free': the provenance root "
+                           "carries no inversion-free certificate");
+  gate_t root;
+  std::unordered_map<gate_t, gate_t> gc_to_bc;
+  BooleanCircuit c = getBooleanCircuit(gc, token, root, gc_to_bc);
+  std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
+  if (!collect_inversion_free_keys(gc, gc_root, gc_to_bc, c, root, keys))
+    throw CircuitException("compile 'inversion-free': the certificate's inputs "
+                           "lack per-input order markers");
+  return StructuredDNNFBuilder(c, root, inversion_free_rank(keys)).dnnf();
+}
+
+/**
  * @brief Core implementation of probability evaluation for a circuit token.
  * @param token   UUID of the root provenance gate.
  * @param method  Evaluation method name (e.g. "independent", "monte-carlo").
@@ -103,6 +230,33 @@ static Datum probability_evaluate_internal
   // peephole-pruned for any "always true / always false" comparator.
   GenericCircuit gc = getGenericCircuit(token);
   gate_t gc_root = gc.getGate(uuid2string(token));
+
+  // Inversion-free tractability certificate: the planner wraps the per-row
+  // provenance root in a transparent annotation gate carrying the serialised
+  // SafeCert recipe.  Its presence routes the default probability chain through
+  // the structured-d-DNNF builder (after independentEvaluation, before
+  // tree-decomposition) and is required by the explicit 'inversion-free'
+  // method.  The recipe is read here (early, before the simplifier passes); the
+  // per-input order keys are collected at the dispatch point, where the
+  // GenericCircuit->BooleanCircuit mapping is available.
+  bool inv_free_cert = false;
+  {
+    std::string ex = gc.getExtra(gc_root);
+    if (!ex.empty() && ex[0] == SAFE_CERT_EXTRA_PREFIX_RECIPE) {
+      SafeCert *cert = safe_cert_parse(ex.c_str());
+      if (cert != nullptr && cert->kind == CERT_INVERSION_FREE) {
+        inv_free_cert = true;
+        // Internal per-evaluation diagnostic (the certificate round-trips from
+        // the planner), not a result-comprehension message: keep it at the
+        // detector's debug-trace level (>= 30) so it stays out of the level-5
+        // floor the Studio eval strip applies.
+        if (provsql_verbose >= 30)
+          provsql_notice("inversion-free certificate read back from circuit "
+                         "root: %d atoms, %d classes, root_class=%d",
+                         cert->natoms, cert->nclasses, cert->root_class);
+      }
+    }
+  }
 
   // Hybrid-evaluator simplifier: constant-fold gate_arith subtrees,
   // drop identity wires (0 from PLUS, 1 from TIMES), and collapse
@@ -285,13 +439,41 @@ static Datum probability_evaluate_internal
       if(method=="independent") {
         result = c.independentEvaluation(gate);
         processed = true;
+      } else if(method=="inversion-free") {
+        // Explicit inversion-free method: requires the certificate, errors
+        // otherwise (and ignores the provsql.inversion_free kill-switch).  The
+        // structured builder throws on multivalued inputs (BID) and on a
+        // variable left unordered by collect_inversion_free_keys.
+        if(!inv_free_cert)
+          provsql_error("method 'inversion-free' requires an inversion-free "
+                        "certificate on the provenance root");
+        std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
+        if(!collect_inversion_free_keys(gc, gc_root, gc_to_bc, c, gate, keys))
+          provsql_error("method 'inversion-free': the provenance root carries "
+                        "a certificate but its inputs lack per-input order "
+                        "markers");
+        result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
+                   .probability();
+        processed = true;
       } else if(method=="") {
-        // Default evaluation, use independent, tree-decomposition, and
-        // compilation in order until one works
+        // Default evaluation: independent, then (when an inversion-free
+        // certificate is present) the structured-d-DNNF builder, then
+        // tree-decomposition / compilation, in order until one works.
         try {
           result = c.independentEvaluation(gate);
           processed = true;
         } catch(CircuitException &) {}
+
+        if(!processed && inv_free_cert && provsql_inversion_free) {
+          try {
+            std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
+            if(collect_inversion_free_keys(gc, gc_root, gc_to_bc, c, gate, keys)) {
+              result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
+                         .probability();
+              processed = true;
+            }
+          } catch(CircuitException &) {}   // fall through to tree-decomposition
+        }
       }
 
       if(!processed) {

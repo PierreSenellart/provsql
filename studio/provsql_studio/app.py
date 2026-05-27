@@ -728,7 +728,9 @@ def create_app(
         if missing:
             return _tool_unavailable(missing)
         try:
-            data = kc_mod.compile_to_ddnnf(get_pool(), token, compiler)
+            data = kc_mod.compile_to_ddnnf(
+                get_pool(), token, compiler,
+                statement_timeout=app.config["STATEMENT_TIMEOUT"])
         except psycopg.errors.UndefinedFunction as e:
             return _kc_unavailable(e)
         except psycopg.Error as e:

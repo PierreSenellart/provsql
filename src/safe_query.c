@@ -52,6 +52,7 @@
 #include "provsql_mmap.h"
 #include "provsql_utils.h"
 #include "safe_query.h"
+#include "safe_query_cert.h"
 
 extern int provsql_verbose;             /* declared in provsql.c */
 
@@ -4823,6 +4824,447 @@ static Query *try_flatten_inner_joins(Query *q) {
  * recursion via Choice A).  Returns @c NULL to fall through to the
  * existing pipeline.
  */
+/* -------------------------------------------------------------------------
+ * Inversion-free UCQ(OBDD) detector (sibling of find_hierarchical_root_atoms)
+ *
+ * Recognises the inversion-free, tuple-independent self-join class (the
+ * consistent-unification self-joins the read-once rewriter bails on) and builds
+ * the SafeCert order recipe.  It does not rewrite the query: it leaves the
+ * lineage intact and only attaches the transparent certificate and per-input
+ * order markers, read back at probability evaluation.
+ *
+ * Unlike find_hierarchical_root_atoms, this pass keeps the per-occurrence
+ * column-position information (it iterates the raw (varno, varattno, class)
+ * triples rather than the collapsed ANCHOR map), because positional
+ * consistency and the precedence graph G_prec both need it.
+ * ------------------------------------------------------------------------- */
+
+/** @brief Human-readable one-line summary of a SafeCert, for the NOTICE. */
+static char *safe_cert_describe(const SafeCert *cert) {
+  StringInfoData s;
+  int i;
+  initStringInfo(&s);
+  appendStringInfo(&s, "inversion-free UCQ(OBDD): %d atoms, %d classes, root=%d, order=[",
+                   cert->natoms, cert->nclasses, cert->root_class);
+  for (i = 0; i < cert->nclasses; i++)
+    appendStringInfo(&s, "%s%d", i ? "," : "", cert->class_topo_order[i]);
+  appendStringInfoString(&s, "]");
+  return s.data;
+}
+
+/**
+ * @brief Recognise an inversion-free UCQ(OBDD) over tuple-independent inputs.
+ *
+ * Sound under-approximation (documented as such): requires the four
+ * preconditions of the plan -- hierarchical, per-relation positional
+ * consistency, precedence-graph (G_prec) acyclicity, and all-atoms-TID.
+ * Returns a palloc'd @c SafeCert recipe on success, NULL otherwise.  Reasons
+ * for rejection are logged at @c provsql_verbose >= 5 once the query is past
+ * the cheap shape/metadata gate and a self-join is present.
+ */
+static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
+  ListCell *lc;
+  int natoms = list_length(q->rtable);
+  Oid *atom_relid;
+  int *atom_rank;                 /* per atom: relation-symbol rank */
+  bool *atom_det;                 /* per atom: deterministic (non-tracked), erased */
+  int  nranks = 0;
+  int  n_tracked = 0;             /* number of non-deterministic (TID) atoms */
+  bool has_self_join = false;
+  safe_collect_vars_ctx vctx = { NIL };
+  List *eq_pairs = NIL;
+  Var **vars_arr;
+  int  *cls;
+  int   nvars, i, j;
+  int  *class_compact;            /* repr -> compact id, or -1 */
+  int   nclasses = 0;
+  int  *class_atom_count;         /* compacted: distinct atoms touched */
+  int   root_class = -1;
+  int  *col_pos_of_class;         /* per (relid-rank, class): column position, or 0 */
+  int  *prec;                     /* nclasses*nclasses adjacency (G_prec) */
+  int  *indeg;
+  int  *topo;
+  int   ntopo = 0;
+  SafeCert *cert;
+
+  (void) constants;
+
+  /* --- 0. cheap shape gate (self-contained; the read-once candidate gate may
+   * have bailed for an unrelated reason, so re-check what we rely on) ------- */
+  if (q->setOperations || q->hasAggs || q->hasWindowFuncs || q->limitCount
+      || q->limitOffset || q->groupingSets || q->hasDistinctOn
+      || q->hasSubLinks || q->rtable == NIL)
+    return NULL;
+  if (natoms < 2)
+    return NULL;
+  foreach (lc, q->jointree->fromlist)
+    if (!IsA((Node *) lfirst(lc), RangeTblRef))
+      return NULL;
+
+  /* --- 1. metadata gate: every probabilistic atom a base RTE classified
+   * strictly TID.  A non-tracked base relation (no provsql column and no
+   * metadata) is deterministic: it contributes only probability-1 tuples and
+   * anchors no provenance variable, so it is *erased* from the inversion
+   * analysis.  Its join equalities still merge classes in step 2 (it filters
+   * the cross product), but it is skipped by the root, positional-consistency,
+   * precedence and marker passes.  Erasing an atom can only remove precedence
+   * edges, so it strictly enlarges the certified class and stays sound -- the
+   * structured builder is correct on any lineage; the order only bounds size.
+   * This mirrors the read-once path's deterministic-relation transparency
+   * (Gatterbauer & Suciu dissociation), with the same soundness guards.  BID /
+   * OPAQUE / matview / foreign / inheritance-child atoms remain out of scope
+   * and reject.  Tracked relation-symbol occurrences are counted to find
+   * self-joins and assign ranks; deterministic atoms get rank -1 (unused). --- */
+  atom_relid = palloc(natoms * sizeof(Oid));
+  atom_rank  = palloc(natoms * sizeof(int));
+  atom_det   = palloc0(natoms * sizeof(bool));
+  i = 0;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+    ProvenanceTableInfo info;
+    AttrNumber provsql_attno;
+    bool has_provsql_col, has_meta;
+    if (rte->rtekind != RTE_RELATION) {
+      pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL;
+    }
+    provsql_attno = get_attnum(rte->relid, PROVSQL_COLUMN_NAME);
+    has_provsql_col = provsql_attno != InvalidAttrNumber
+      && get_atttype(rte->relid, provsql_attno) == constants->OID_TYPE_UUID;
+    has_meta = provsql_lookup_table_info(rte->relid, &info);
+    if (!has_provsql_col && !has_meta) {
+      /* Candidate deterministic atom: same soundness guards as the read-once
+       * dissociation pass -- a plain table (not a matview / foreign table /
+       * partitioned parent) with no inheritance parent that could hide
+       * correlated rows.  If a guard fails, the atom is non-tracked yet not
+       * safely erasable: reject rather than risk an unsound certificate. */
+      HeapTuple class_tup = SearchSysCache1(RELOID, ObjectIdGetDatum(rte->relid));
+      bool ok_relkind = false;
+      if (HeapTupleIsValid(class_tup)) {
+        ok_relkind =
+          ((Form_pg_class) GETSTRUCT(class_tup))->relkind == RELKIND_RELATION;
+        ReleaseSysCache(class_tup);
+      }
+      if (!ok_relkind || has_superclass(rte->relid)) {
+        pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL;
+      }
+      atom_det[i]   = true;
+      atom_relid[i] = InvalidOid;
+      atom_rank[i]  = -1;
+      i++;
+      continue;
+    }
+    if (!has_meta || info.kind != PROVSQL_TABLE_TID) {
+      /* BID / OPAQUE / provsql column without metadata: out of scope for the
+       * independent-Bernoulli OBDD model. */
+      pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL;
+    }
+    atom_relid[i] = rte->relid;
+    /* relation-symbol rank: dense id per distinct relid among tracked atoms,
+     * first-seen order */
+    atom_rank[i] = -1;
+    for (j = 0; j < i; j++)
+      if (!atom_det[j] && atom_relid[j] == rte->relid) {
+        atom_rank[i] = atom_rank[j]; has_self_join = true; break;
+      }
+    if (atom_rank[i] < 0) atom_rank[i] = nranks++;
+    n_tracked++;
+    i++;
+  }
+  if (n_tracked < 1) {
+    pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL;
+  }
+  /* Self-join-free hierarchical queries are inversion-free too (they coincide
+   * with the read-once class) and are certified here as well: the structured
+   * d-DNNF path applies whenever the read-once rewrite is not (e.g.
+   * boolean_provenance off), where the raw flat lineage is not low-treewidth.
+   * Under boolean_provenance the read-once rewriter fires independently and
+   * takes precedence -- process_query recurses on its rewrite before the
+   * inversion-free analysis runs. */
+  (void) has_self_join;
+
+  /* --- 2. union-find over (varno, varattno) Vars via the WHERE equalities --- */
+  expression_tree_walker((Node *) q->targetList, safe_collect_vars_walker, &vctx);
+  if (q->jointree && q->jointree->quals)
+    expression_tree_walker(q->jointree->quals, safe_collect_vars_walker, &vctx);
+  nvars = list_length(vctx.vars);
+  if (nvars == 0) { pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL; }
+
+  vars_arr = palloc(nvars * sizeof(Var *));
+  cls = palloc(nvars * sizeof(int));
+  i = 0;
+  foreach (lc, vctx.vars) { vars_arr[i] = (Var *) lfirst(lc); cls[i] = i; i++; }
+
+  if (q->jointree && q->jointree->quals)
+    safe_collect_equalities(q->jointree->quals, &eq_pairs);
+  for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
+    Var *lv = (Var *) lfirst(lc); int li, ri, ci, cj, k;
+    lc = my_lnext(eq_pairs, lc);
+    {
+      Var *rv = (Var *) lfirst(lc);
+      li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
+      ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+    }
+    if (li < 0 || ri < 0) continue;
+    ci = cls[li]; cj = cls[ri];
+    if (ci == cj) continue;
+    for (k = 0; k < nvars; k++) if (cls[k] == cj) cls[k] = ci;
+  }
+
+  /* compact class reprs to 0..nclasses-1 */
+  class_compact = palloc(nvars * sizeof(int));
+  for (i = 0; i < nvars; i++) class_compact[i] = -1;
+  for (i = 0; i < nvars; i++) {
+    int r = cls[i];
+    if (class_compact[r] < 0) class_compact[r] = nclasses++;
+  }
+#define CCLASS(varidx) (class_compact[cls[(varidx)]])
+
+  /* --- 3. hierarchical: class_atom_count[c] = #distinct atoms touched ------ */
+  class_atom_count = palloc0(nclasses * sizeof(int));
+  {
+    int *seen = palloc0((size_t) nclasses * (size_t) natoms * sizeof(int));
+    for (i = 0; i < nvars; i++) {
+      int c = CCLASS(i);
+      Index vno = vars_arr[i]->varno;
+      int a;
+      if (vno < 1 || (int) vno > natoms) continue;
+      a = (int) vno - 1;
+      if (atom_det[a]) continue;                  /* erased: anchors no class */
+      if (!seen[c * natoms + a]) { seen[c * natoms + a] = 1; class_atom_count[c]++; }
+    }
+    pfree(seen);
+  }
+  /* The root class touches every *tracked* atom (deterministic atoms are
+   * erased, so they are not required to carry the root variable). */
+  for (i = 0; i < nclasses; i++)
+    if (class_atom_count[i] == n_tracked) { root_class = i; break; }
+  if (root_class < 0) {
+    if (provsql_verbose >= 5)
+      provsql_notice("not inversion-free: no root variable (non-hierarchical)");
+    return NULL;
+  }
+
+  /* --- 4. positional consistency: each class occupies a single column
+   * position within each relation symbol (rank).  Catches the path
+   * R(x,y),R(y,z) and the intra-atom A(x,x). ------------------------------- */
+  col_pos_of_class = palloc0((size_t) nranks * (size_t) nclasses * sizeof(int));
+  for (i = 0; i < nvars; i++) {
+    int c = CCLASS(i);
+    Index vno = vars_arr[i]->varno;
+    int a, rrank, pos;
+    if (vno < 1 || (int) vno > natoms) continue;
+    a = (int) vno - 1;
+    if (atom_det[a]) continue;             /* erased: no positional constraint */
+    rrank = atom_rank[a];
+    pos = (int) vars_arr[i]->varattno;     /* relation column position */
+    if (col_pos_of_class[rrank * nclasses + c] == 0)
+      col_pos_of_class[rrank * nclasses + c] = pos;
+    else if (col_pos_of_class[rrank * nclasses + c] != pos) {
+      if (provsql_verbose >= 5)
+        provsql_notice("not inversion-free: class at inconsistent column "
+                       "positions within one relation (inversion / self-equality)");
+      return NULL;
+    }
+  }
+
+  /* --- 5. precedence graph G_prec over classes: within each atom, column
+   * order induces class(earlier) -> class(later) for all pairs.  Reject on a
+   * cycle; the topological order is the class-order seed (Prop. 4.5). ------- */
+  prec = palloc0((size_t) nclasses * (size_t) nclasses * sizeof(int));
+  for (i = 0; i < nvars; i++) {
+    int ci = CCLASS(i);
+    int posi = (int) vars_arr[i]->varattno;
+    Index vno = vars_arr[i]->varno;
+    if (vno >= 1 && (int) vno <= natoms && atom_det[vno - 1])
+      continue;                            /* erased: imposes no precedence */
+    for (j = 0; j < nvars; j++) {
+      int cj, posj;
+      if (vars_arr[j]->varno != vno) continue;     /* same atom only */
+      cj = CCLASS(j);
+      posj = (int) vars_arr[j]->varattno;
+      if (posi < posj) prec[ci * nclasses + cj] = 1;
+      else if (posi == posj && ci != cj) prec[ci * nclasses + cj] = 1; /* shouldn't happen */
+    }
+  }
+  /* Kahn topological sort */
+  indeg = palloc0(nclasses * sizeof(int));
+  for (i = 0; i < nclasses; i++)
+    for (j = 0; j < nclasses; j++)
+      if (i != j && prec[i * nclasses + j]) indeg[j]++;
+  topo = palloc(nclasses * sizeof(int));
+  {
+    bool *done = palloc0(nclasses * sizeof(bool));
+    int picked;
+    do {
+      picked = -1;
+      /* prefer the root class first when it is available */
+      if (!done[root_class] && indeg[root_class] == 0) picked = root_class;
+      for (i = 0; picked < 0 && i < nclasses; i++)
+        if (!done[i] && indeg[i] == 0) picked = i;
+      if (picked >= 0) {
+        done[picked] = true; topo[ntopo++] = picked;
+        for (j = 0; j < nclasses; j++)
+          if (!done[j] && prec[picked * nclasses + j]) indeg[j]--;
+      }
+    } while (picked >= 0);
+    pfree(done);
+  }
+  if (ntopo != nclasses) {
+    if (provsql_verbose >= 5)
+      provsql_notice("not inversion-free: cyclic precedence graph "
+                     "(inversion, e.g. symmetric closure R(x,y),R(y,x))");
+    return NULL;
+  }
+
+  /* --- 6. build the SafeCert recipe ------------------------------------- */
+  cert = (SafeCert *) palloc0(sizeof(SafeCert));
+  cert->kind = CERT_INVERSION_FREE;
+  cert->nclasses = nclasses;
+  cert->root_class = root_class;
+  cert->natoms = natoms;
+  cert->class_topo_order = topo;
+  cert->atom_relation_rank = atom_rank;
+  cert->maxarity = 0;
+  /* atom_col_class: flattened [natoms][maxarity] (1-based column -> class) */
+  for (i = 0; i < nvars; i++) {
+    int pos = (int) vars_arr[i]->varattno;
+    if (pos > cert->maxarity) cert->maxarity = pos;
+  }
+  cert->atom_col_class = palloc(natoms * cert->maxarity * sizeof(int));
+  for (i = 0; i < natoms * cert->maxarity; i++) cert->atom_col_class[i] = -1;
+  for (i = 0; i < nvars; i++) {
+    Index vno = vars_arr[i]->varno;
+    int a, pos;
+    if (vno < 1 || (int) vno > natoms) continue;
+    a = (int) vno - 1;
+    if (atom_det[a]) continue;   /* erased atom: its row stays all -1 (no marker) */
+    pos = (int) vars_arr[i]->varattno;
+    cert->atom_col_class[a * cert->maxarity + (pos - 1)] = CCLASS(i);
+  }
+
+  return cert;
+#undef CCLASS
+}
+
+/**
+ * @brief Derive per-atom marker specs from a SafeCert recipe.
+ *
+ * Each atom binds the root class at one column and at most one secondary class
+ * at another.  Its @c factor is the secondary class, except that a relation
+ * whose occurrences span two or more distinct secondary classes (the
+ * consistent-unification self-join) is the shared guard, whose atoms take
+ * @c SAFE_CERT_GUARD_FACTOR.  An atom binding only the root class is root-only:
+ * it has no secondary column (@c sec_col 0) and its @c factor is its relation
+ * rank, so the relations of one block stay distinguished.  This covers the
+ * self-join witness (guard @c S spanning @c y and @c z, payloads @c A on @c y
+ * and @c B on @c z), the self-join-free hierarchical case grouped by secondary
+ * class, and the pure conjunction @c q(x):-A(x),B(x) (all atoms root-only).
+ * Returns @c false when an atom lacks a root column or binds two or more
+ * secondary classes (outside this shape); the caller then attaches no markers
+ * and the inversion-free path declines at evaluation.
+ *
+ * The specs give the structured builder a Prop. 4.5 order (root value, then
+ * secondary value, then guard-before-payload, then factor).  Order affects only
+ * the d-DNNF size, never correctness, so a builder fed these specs is sound on
+ * any lineage; the order is what keeps it polynomial on the certified class.
+ */
+static bool compute_inversion_free_markers(const SafeCert *cert, InvFreeMarker *m)
+{
+  int  natoms = cert->natoms, ma = cert->maxarity, a, col, r;
+  int  maxrank = 0;
+  int *atom_sec_class;          /* secondary class of each atom, -1 if root-only */
+  int *rank_first_sec;
+  bool *rank_spans;
+
+  for (a = 0; a < natoms; a++)
+    if (cert->atom_relation_rank[a] > maxrank) maxrank = cert->atom_relation_rank[a];
+
+  /* pass 1: root column + the (single, optional) secondary class of each atom */
+  atom_sec_class = palloc(natoms * sizeof(int));
+  for (a = 0; a < natoms; a++) {
+    int root_col = -1, sec_col = 0, sec_class = -1, nsec = 0, nset = 0;
+    for (col = 0; col < ma; col++) {
+      int cl = cert->atom_col_class[a * ma + col];
+      if (cl < 0) continue;
+      nset++;
+      if (cl == cert->root_class) {
+        if (root_col >= 0) { pfree(atom_sec_class); return false; }
+        root_col = col + 1;
+      } else {
+        sec_col = col + 1; sec_class = cl; nsec++;
+      }
+    }
+    /* An atom with no class-anchored column is an erased deterministic atom
+     * (a tracked atom always carries the root-class column by construction):
+     * it gets no marker and is skipped below. */
+    if (nset == 0) { m[a].valid = false; atom_sec_class[a] = -1; continue; }
+    if (root_col < 0 || nsec > 1) { pfree(atom_sec_class); return false; }
+    m[a].valid = true;
+    m[a].root_col = (AttrNumber) root_col;
+    m[a].sec_col = (AttrNumber) sec_col;          /* 0 when root-only */
+    atom_sec_class[a] = (nsec == 1) ? sec_class : -1;
+  }
+
+  /* pass 2: a relation spans iff its atoms touch >= 2 distinct (real) secondary
+   * classes -- that relation is the shared self-join guard. */
+  rank_first_sec = palloc((maxrank + 1) * sizeof(int));
+  rank_spans = palloc0((maxrank + 1) * sizeof(bool));
+  for (r = 0; r <= maxrank; r++) rank_first_sec[r] = -2;   /* -2: unseen (classes >= 0) */
+  for (a = 0; a < natoms; a++) {
+    int rk = cert->atom_relation_rank[a];
+    if (atom_sec_class[a] < 0) continue;                  /* root-only never spans */
+    if (rank_first_sec[rk] == -2) rank_first_sec[rk] = atom_sec_class[a];
+    else if (rank_first_sec[rk] != atom_sec_class[a]) rank_spans[rk] = true;
+  }
+  for (a = 0; a < natoms; a++) {
+    int rk;
+    if (!m[a].valid) continue;            /* erased deterministic atom: no factor */
+    rk = cert->atom_relation_rank[a];
+    if (rank_spans[rk])              m[a].factor = SAFE_CERT_GUARD_FACTOR;
+    else if (atom_sec_class[a] >= 0) m[a].factor = atom_sec_class[a];
+    else                             m[a].factor = rk;     /* root-only: by relation */
+  }
+  pfree(rank_first_sec); pfree(rank_spans); pfree(atom_sec_class);
+  return true;
+}
+
+bool inversion_free_analyze(const constants_t *constants, Query *q,
+                            char **cert_out, InvFreeMarker **markers_out,
+                            int *natoms_out)
+{
+  SafeCert *cert;
+
+  if (cert_out)    *cert_out = NULL;
+  if (markers_out) *markers_out = NULL;
+  if (natoms_out)  *natoms_out = 0;
+
+  cert = detect_inversion_free(constants, q);
+  if (cert == NULL)
+    return false;
+
+  if (provsql_verbose >= 1)
+    provsql_notice("%s [certificate attached]", safe_cert_describe(cert));
+
+  if (cert_out && OidIsValid(constants->OID_FUNCTION_ANNOTATE))
+    *cert_out = safe_cert_serialise(cert);
+
+  /* Per-input markers: only when the carrier and the key builder both exist and
+   * the cert fits the marker model; otherwise the cert is still attached (root)
+   * but the path declines at evaluation and falls back. */
+  if (markers_out
+      && OidIsValid(constants->OID_FUNCTION_ANNOTATE)
+      && OidIsValid(constants->OID_FUNCTION_INVERSION_FREE_KEY)) {
+    InvFreeMarker *m = (InvFreeMarker *) palloc0(cert->natoms * sizeof(InvFreeMarker));
+    if (compute_inversion_free_markers(cert, m)) {
+      *markers_out = m;
+      if (natoms_out) *natoms_out = cert->natoms;
+    } else {
+      pfree(m);
+    }
+  }
+  return true;
+}
+
 Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
   List   *atoms;
   List   *groups = NIL;
@@ -4900,6 +5342,11 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
     if (!is_safe_query_candidate(constants, q, approved)) {
       if (approved)
         bms_free(approved);
+      /* The read-once candidate gate refused (most often an un-rescued
+       * self-join).  The inversion-free path is handled separately by
+       * @c inversion_free_analyze, run by @c process_query on the lineage query
+       * itself (so the certificate and per-input markers align with the lineage
+       * regardless of the read-once pre-passes above). */
       return NULL;
     }
     if (approved)

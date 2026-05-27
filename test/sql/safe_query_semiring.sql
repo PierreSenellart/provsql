@@ -120,10 +120,14 @@ SELECT 'incompatible semirings rejected' AS step4;
 
 -- (5) Cross-check: the same conceptual circuit evaluated without the
 --     rewrite has no gate_assumed_boolean wrapper, so the same
---     incompatible semirings succeed.  The OFF-path root is a
---     gate_times whose UUID differs from the ON-path's
---     gate_assumed_boolean UUID, so no shared persistent state
---     leaks between the two runs.
+--     incompatible semirings succeed.  This query is hierarchical and
+--     self-join-free, so the inversion-free analysis certifies it and
+--     wraps the root in a transparent gate_annotation (the read-once
+--     rewrite that would otherwise take precedence is disabled here);
+--     that wrapper is passed through by every semiring, hence the
+--     incompatible ones still succeed.  Its UUID differs from the
+--     ON-path's gate_assumed_boolean UUID, so no shared persistent
+--     state leaks between the two runs.
 SET provsql.boolean_provenance = off;
 
 CREATE TEMP TABLE sqs_t_off AS

@@ -86,6 +86,7 @@ int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-eval
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
+bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
 bool provsql_boolean_provenance = false; ///< Opt-in safe-query optimisation: when @c true, rewrites hierarchical conjunctive queries to a read-once form whose probability is computable in linear time. The resulting circuit is tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on it. Controlled by the @c provsql.boolean_provenance GUC.
 
 
@@ -95,8 +96,11 @@ extern void _PG_fini(void);
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed, bool wrap_root);
+                            bool **removed, bool wrap_root, bool top_level,
+                            const InvFreeMarkerCtx *inv_ctx);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
+static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
+                              const char *cert);
 
 /* -------------------------------------------------------------------------
  * Provenance attribute construction
@@ -586,10 +590,15 @@ static void inline_ctes(Query *q) {
  * @param constants  Extension OID cache.
  * @param q          Query whose range table is scanned (subquery RTEs are
  *                   modified in place by the recursive call).
+ * @param inv_ctx    Inversion-free marker context for @p q, or @c NULL; its
+ *                   per-subquery child context is threaded into each recursive
+ *                   @c process_query call so a flattened view's base inputs
+ *                   receive their order markers.
  * @return  List of @c Var nodes, one per provenance source; @c NIL if the
  *          query has no provenance-bearing relation.
  */
-static List *get_provenance_attributes(const constants_t *constants, Query *q) {
+static List *get_provenance_attributes(const constants_t *constants, Query *q,
+                                       const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts = NIL;
 
   for(Index rteid = 1; rteid <= q->rtable->length; ++rteid) {
@@ -626,7 +635,9 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       int old_targetlist_length =
         r->subquery->targetList ? r->subquery->targetList->length : 0;
       Query *new_subquery =
-        process_query(constants, r->subquery, &inner_removed, false);
+        process_query(constants, r->subquery, &inner_removed, false, false,
+                      (inv_ctx && rteid - 1 < (Index) inv_ctx->natoms)
+                        ? inv_ctx->sub[rteid - 1] : NULL);
       if (new_subquery != NULL) {
         int i = 0;
         int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
@@ -1703,13 +1714,20 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
  * @param wrap_assumed_boolean If true, wrap the result in
  *                         @c provenance_assumed_boolean so downstream
  *                         probability evaluators may treat it as Boolean.
+ * @param inv_cert         If non-NULL, a serialised inversion-free certificate
+ *                         to attach to the per-row root via @c provsql.annotate
+ *                         (transparent for every evaluator; read back by the
+ *                         probability dispatcher).  Mutually compatible with
+ *                         @c wrap_assumed_boolean only in principle -- the
+ *                         inversion-free path never sets the latter.
  * @return  The provenance @c Expr to be appended to the target list.
  */
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
                                         semiring_operation op, int **columns,
-                                        int nbcols, bool wrap_assumed_boolean) {
+                                        int nbcols, bool wrap_assumed_boolean,
+                                        const char *inv_cert) {
   Expr *result;
   ListCell *lc_v;
 
@@ -2023,6 +2041,13 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
   if (wrap_assumed_boolean &&
       OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN))
     result = wrap_in_assume_boolean(constants, result);
+
+  /* Attach the inversion-free tractability certificate to the per-row root.
+   * The annotation gate is transparent for every evaluator; the probability
+   * dispatcher reads the certificate back from its extra. */
+  if (inv_cert != NULL &&
+      OidIsValid(constants->OID_FUNCTION_ANNOTATE))
+    result = wrap_in_annotate(constants, result, inv_cert);
 
   return result;
 }
@@ -4211,6 +4236,573 @@ static Expr *wrap_in_assume_boolean(const constants_t *constants,
 }
 
 /**
+ * @brief Wrap @p expr in a @c provsql.annotate(uuid, text) FuncExpr carrying
+ *        @p cert.
+ *
+ * Used by @c make_provenance_expression to attach the inversion-free
+ * tractability certificate to the per-row provenance root: the resulting
+ * annotation gate is transparent for every evaluator and carries @p cert in
+ * its @c extra (and folded into its UUID).  @p cert is copied into a text
+ * @c Const.
+ */
+static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
+                              const char *cert) {
+  FuncExpr *wrap = makeNode(FuncExpr);
+  Const *ce = makeConst(TEXTOID, -1, DEFAULT_COLLATION_OID, -1,
+                        CStringGetTextDatum(cert), false, false);
+  wrap->funcid = constants->OID_FUNCTION_ANNOTATE;
+  wrap->funcresulttype = constants->OID_TYPE_UUID;
+  wrap->funcretset = false;
+  wrap->funcvariadic = false;
+  wrap->funcformat = COERCE_EXPLICIT_CALL;
+  wrap->funccollid = InvalidOid;
+  wrap->inputcollid = DEFAULT_COLLATION_OID;
+  wrap->args = list_make2(expr, (Expr *) ce);
+  wrap->location = -1;
+  return (Expr *) wrap;
+}
+
+/** @brief Mark column @p attno of RTE @p r as selected (read permission). */
+static void mark_col_selected(Query *q, RangeTblEntry *r, AttrNumber attno) {
+#if PG_VERSION_NUM >= 160000
+  if (r->perminfoindex != 0) {
+    RTEPermissionInfo *rpi =
+      list_nth_node(RTEPermissionInfo, q->rteperminfos, r->perminfoindex - 1);
+    rpi->selectedCols = bms_add_member(
+      rpi->selectedCols, attno - FirstLowInvalidHeapAttributeNumber);
+  }
+#else
+  r->selectedCols = bms_add_member(r->selectedCols,
+                                   attno - FirstLowInvalidHeapAttributeNumber);
+#endif
+}
+
+/** @brief A @c Var for column @p attno of RTE @p relid, with the column's
+ *         actual type/typmod/collation, marking the column selected. */
+static Var *make_column_var(Query *q, RangeTblEntry *r, Index relid,
+                            AttrNumber attno) {
+  Oid typid; int32 typmod; Oid coll;
+  Var *v;
+  get_atttypetypmodcoll(r->relid, attno, &typid, &typmod, &coll);
+  v = makeVar(relid, attno, typid, typmod, coll, 0);
+  v->location = -1;
+  mark_col_selected(q, r, attno);
+  return v;
+}
+
+/** @brief Coerce @p arg to @c text via its output function (any type -> text). */
+static Expr *coerce_via_io_to_text(Expr *arg) {
+  CoerceViaIO *c = makeNode(CoerceViaIO);
+  c->arg = arg;
+  c->resulttype = TEXTOID;
+  c->resultcollid = DEFAULT_COLLATION_OID;
+  c->coerceformat = COERCE_IMPLICIT_CAST;
+  c->location = -1;
+  return (Expr *) c;
+}
+
+/**
+ * @brief Wrap an atom's provenance @c Var in the inversion-free per-input
+ *        order marker: @c annotate(prov, inversion_free_key(root, sec, factor)).
+ *
+ * @p prov_var is a @c Var on the atom's provsql column (its @c varno is the
+ * range-table index of the atom); @p m gives the root- and secondary-class
+ * columns and the factor for that atom.
+ */
+static Expr *build_inversion_free_marker(const constants_t *constants, Query *q,
+                                         Var *prov_var, const InvFreeMarker *m) {
+  Index relid = prov_var->varno;
+  RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, relid - 1);
+  Var *rootv = make_column_var(q, r, relid, m->root_col);
+  Const *factorc = makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                             Int32GetDatum(m->factor), false, true);
+  FuncExpr *keyf = makeNode(FuncExpr);
+  FuncExpr *ann = makeNode(FuncExpr);
+  Expr *secarg;
+
+  /* A root-only atom (no secondary class, e.g. a self-join-free hierarchical
+   * query's atoms all binding only the head variable) carries a constant
+   * secondary key: every such input shares the single tile of its block. */
+  if (m->sec_col == 0)
+    secarg = (Expr *) makeConst(TEXTOID, -1, DEFAULT_COLLATION_OID, -1,
+                                CStringGetTextDatum("0"), false, false);
+  else
+    secarg = coerce_via_io_to_text(
+               (Expr *) make_column_var(q, r, relid, m->sec_col));
+
+  keyf->funcid = constants->OID_FUNCTION_INVERSION_FREE_KEY;
+  keyf->funcresulttype = TEXTOID;
+  keyf->funcretset = false;
+  keyf->funcvariadic = false;
+  keyf->funcformat = COERCE_EXPLICIT_CALL;
+  keyf->funccollid = DEFAULT_COLLATION_OID;
+  keyf->inputcollid = DEFAULT_COLLATION_OID;
+  keyf->args = list_make3(coerce_via_io_to_text((Expr *) rootv),
+                          secarg,
+                          (Expr *) factorc);
+  keyf->location = -1;
+
+  ann->funcid = constants->OID_FUNCTION_ANNOTATE;
+  ann->funcresulttype = constants->OID_TYPE_UUID;
+  ann->funcretset = false;
+  ann->funcvariadic = false;
+  ann->funcformat = COERCE_EXPLICIT_CALL;
+  ann->funccollid = InvalidOid;
+  ann->inputcollid = DEFAULT_COLLATION_OID;
+  ann->args = list_make2((Expr *) prov_var, (Expr *) keyf);
+  ann->location = -1;
+  return (Expr *) ann;
+}
+
+/**
+ * @brief Replace each certified atom's provenance @c Var in @p prov_atts with
+ *        its per-input-marker-wrapped form (in place).
+ */
+static void wrap_inversion_free_markers(const constants_t *constants, Query *q,
+                                        List *prov_atts,
+                                        const InvFreeMarker *markers,
+                                        int natoms) {
+  ListCell *lc;
+  foreach (lc, prov_atts) {
+    Node *n = (Node *) lfirst(lc);
+    if (IsA(n, Var)) {
+      Var *pv = (Var *) n;
+      if (pv->varno >= 1 && (int) pv->varno <= natoms
+          && markers[pv->varno - 1].valid)
+        lfirst(lc) = build_inversion_free_marker(constants, q, pv,
+                                                 &markers[pv->varno - 1]);
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * Inversion-free: conjunctive flattening of SPJ subqueries/views
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Where a flattened base atom came from, for mapping markers back.
+ *
+ * A slot @em path from the top lineage query down to the base relation: each
+ * element is a 1-based range-table slot, and the last element is the base's
+ * position within the innermost subquery.  @c depth @c == @c 1 (@c path @c ==
+ * @c [s]) is a base/kept relation directly at top slot @c s; deeper paths step
+ * through one nested SPJ subquery per element, so views-over-views map back to
+ * the right input through the recursive subquery rewrite.
+ */
+typedef struct FlatAtomOrigin {
+  int  depth;
+  int *path;         /* palloc'd, length depth (1-based slot indices) */
+} FlatAtomOrigin;
+
+/** @brief Context for @c flatten_mut (a multi-relation conjunctive inliner). */
+typedef struct flatten_ctx {
+  int     N;               /* original parent range-table length */
+  bool   *slot_flat;       /* [1..N]: parent slot is an inlined subquery */
+  int    *parent_newpos;   /* [1..N]: new varno of a kept (non-inlined) slot */
+  int   **sub_newpos;      /* [1..N] -> [1..sub_rtlen]: new varno of a subquery base */
+  int    *sub_rtlen;       /* [1..N]: that subquery's range-table length */
+  Var  ***sub_tl;          /* [1..N] -> [1..sub_tl_n]: subquery TL base Var by resno */
+  int    *sub_tl_n;        /* [1..N] */
+  bool    quals_mode;      /* true while remapping a subquery's pulled-up WHERE */
+  int     quals_slot;      /* the inlined parent slot whose WHERE is being remapped */
+} flatten_ctx;
+
+/**
+ * @brief Tree mutator implementing the conjunctive inlining of SPJ subqueries.
+ *
+ * Parent mode (@c quals_mode false): a @c Var on an inlined subquery slot is
+ * replaced by the base @c Var its target list maps the column to, renumbered to
+ * that base's new flat position; a @c Var on a kept slot is renumbered to the
+ * slot's new position.  Subquery-WHERE mode (@c quals_mode true): a base @c Var
+ * inside subquery @c quals_slot is renumbered to its new flat position.  Outer
+ * references (@c varlevelsup > 0) are never touched.
+ */
+static Node *flatten_mut(Node *node, void *cp) {
+  flatten_ctx *c = (flatten_ctx *) cp;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0) {
+      if (c->quals_mode) {
+        int i = c->quals_slot;
+        if ((int) v->varno >= 1 && (int) v->varno <= c->sub_rtlen[i]
+            && c->sub_newpos[i][v->varno] > 0) {
+          Var *nv = (Var *) copyObject(v);
+          nv->varno = c->sub_newpos[i][v->varno];
+          return (Node *) nv;
+        }
+      } else if ((int) v->varno >= 1 && (int) v->varno <= c->N) {
+        int i = (int) v->varno;
+        if (c->slot_flat[i]) {
+          if (v->varattno >= 1 && v->varattno <= c->sub_tl_n[i]
+              && c->sub_tl[i][v->varattno] != NULL) {
+            Var *base = c->sub_tl[i][v->varattno];
+            Var *nv = (Var *) copyObject(base);
+            nv->varno = c->sub_newpos[i][base->varno];
+            nv->varlevelsup = 0;
+            return (Node *) nv;
+          }
+        } else {
+          Var *nv = (Var *) copyObject(v);
+          nv->varno = c->parent_newpos[i];
+          return (Node *) nv;
+        }
+      }
+    }
+    return (Node *) copyObject(v);
+  }
+  return expression_tree_mutator(node, flatten_mut, cp);
+}
+
+/** @brief A depth-1 origin path @c [slot]. */
+static FlatAtomOrigin *flat_origin1(int slot) {
+  FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
+  o->depth = 1;
+  o->path = (int *) palloc(sizeof(int));
+  o->path[0] = slot;
+  return o;
+}
+
+/** @brief Prepend @p slot to @p sub's path, for an atom inlined one level up. */
+static FlatAtomOrigin *flat_origin_prepend(int slot, const FlatAtomOrigin *sub) {
+  FlatAtomOrigin *o = (FlatAtomOrigin *) palloc(sizeof(FlatAtomOrigin));
+  int d;
+  o->depth = sub->depth + 1;
+  o->path = (int *) palloc(o->depth * sizeof(int));
+  o->path[0] = slot;
+  for (d = 0; d < sub->depth; d++)
+    o->path[d + 1] = sub->path[d];
+  return o;
+}
+
+/* Forward declaration: the flattener recurses into nested subqueries. */
+static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out);
+
+/**
+ * @brief In place, inline every SPJ subquery/view of @p probe into its base
+ *        relations, flattening to one conjunction of base atoms.
+ *
+ * A range-table slot is inlined when it is a non-lateral @c RTE_SUBQUERY whose
+ * subquery is a plain SELECT (no aggregation, grouping, DISTINCT, set
+ * operation, sublink, CTE or LIMIT), whose @c FROM is flat @c RangeTblRefs over
+ * base @c RTE_RELATIONs (PG 14/15 view OLD/NEW placeholders ignored; one or
+ * more bases -- a view with a join inside is fine), and whose non-junk target
+ * list entries are all plain @c Vars on those bases.  Such a subquery is a pure
+ * SPJ over base relations: its bases are appended in place of the slot, the
+ * parent's column references are substituted by the corresponding base columns,
+ * and the subquery's WHERE is pulled up, yielding an equivalent flat
+ * conjunction.  The parent's own @c FROM must already be flat @c RangeTblRefs
+ * (the detector requires this too); an explicit @c JoinExpr there carries
+ * ON-conditions a fromlist rebuild would drop, so flattening is declined.
+ *
+ * @param probe      the (throwaway) query copy to flatten in place.
+ * @param nflat_out  set to the flattened range-table length.
+ * @return a palloc'd @c FlatAtomOrigin per flattened position, mapping it back
+ * to the parent slot (and, for an inlined subquery, the base position within
+ * it) so the detector's per-atom markers can be threaded to the right input.
+ */
+static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out) {
+  int             N = list_length(probe->rtable);
+  flatten_ctx     c;
+  List           *new_rtable = NIL;
+  List           *origins_l = NIL;
+  List           *merged_quals = NIL;
+  bool            any_flat = false, parent_flat = (probe->jointree != NULL);
+  int             i, newpos = 0;
+  ListCell       *lc;
+  FlatAtomOrigin *origins;
+
+  c.N            = N;
+  c.slot_flat     = (bool *)  palloc0((N + 1) * sizeof(bool));
+  c.parent_newpos = (int *)   palloc0((N + 1) * sizeof(int));
+  c.sub_newpos    = (int **)  palloc0((N + 1) * sizeof(int *));
+  c.sub_rtlen     = (int *)   palloc0((N + 1) * sizeof(int));
+  c.sub_tl        = (Var ***) palloc0((N + 1) * sizeof(Var **));
+  c.sub_tl_n      = (int *)   palloc0((N + 1) * sizeof(int));
+  c.quals_mode    = false;
+  c.quals_slot    = 0;
+
+  if (parent_flat)
+    foreach (lc, probe->jointree->fromlist)
+      if (!IsA((Node *) lfirst(lc), RangeTblRef)) { parent_flat = false; break; }
+
+  /* Layout pass: decide which slots inline, append base atoms / kept slots to
+   * new_rtable, and record each new position's origin. */
+  for (i = 1; parent_flat && i <= N; i++) {
+    RangeTblEntry  *rte = list_nth_node(RangeTblEntry, probe->rtable, i - 1);
+    Query          *sq;
+    bool            ok;
+    int             maxres = 0, b;
+    ListCell       *lc2;
+    Var           **tl;
+    FlatAtomOrigin *sub_origins = NULL;
+    int             sub_n = 0;
+
+    if (!(rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL && !rte->lateral)) {
+      newpos++;
+      new_rtable = lappend(new_rtable, rte);
+      c.parent_newpos[i] = newpos;
+      origins_l = lappend(origins_l, flat_origin1(i));
+      continue;
+    }
+    sq = rte->subquery;
+    ok = !(sq->commandType != CMD_SELECT
+           || sq->setOperations || sq->hasAggs || sq->hasWindowFuncs
+           || sq->groupingSets || sq->groupClause || sq->havingQual
+           || sq->distinctClause || sq->hasDistinctOn || sq->hasSubLinks
+           || sq->limitCount || sq->limitOffset || sq->cteList
+           || sq->jointree == NULL);
+    if (ok)
+      foreach (lc2, sq->jointree->fromlist)
+        if (!IsA((Node *) lfirst(lc2), RangeTblRef)) { ok = false; break; }
+    /* Recursively flatten this subquery's own SPJ subqueries first, so a
+     * view-over-views collapses to base atoms before we inline it.  Mutates
+     * sq (a node in the throwaway probe) in place; sub_origins maps sq's
+     * flattened positions back to paths within sq, which we prepend our slot to
+     * so the marker reaches the right base input through the nested rewrite. */
+    if (ok)
+      sub_origins = flatten_spj_subqueries(sq, &sub_n);
+    /* every range-table entry a real base relation or a view artifact */
+    if (ok) {
+      int realbase = 0;
+      foreach (lc2, sq->rtable) {
+        RangeTblEntry *br = (RangeTblEntry *) lfirst(lc2);
+        if (br->rtekind == RTE_RELATION && br->relkind == RELKIND_VIEW)
+          continue;                          /* OLD/NEW placeholder */
+        else if (br->rtekind == RTE_RELATION) realbase++;
+        else { ok = false; break; }          /* join / nested subquery inside */
+      }
+      if (realbase < 1) ok = false;
+    }
+    /* non-junk target list entries all plain Vars on a base relation */
+    if (ok)
+      foreach (lc2, sq->targetList) {
+        TargetEntry *te = (TargetEntry *) lfirst(lc2);
+        if (!te->resjunk && te->resno > maxres) maxres = te->resno;
+      }
+    tl = ok ? (Var **) palloc0((maxres + 1) * sizeof(Var *)) : NULL;
+    if (ok) {
+      foreach (lc2, sq->targetList) {
+        TargetEntry   *te = (TargetEntry *) lfirst(lc2);
+        Var           *v;
+        RangeTblEntry *br;
+        if (te->resjunk) continue;
+        if (!IsA(te->expr, Var)) { ok = false; break; }
+        v = (Var *) te->expr;
+        if (v->varlevelsup != 0
+            || (int) v->varno < 1 || (int) v->varno > list_length(sq->rtable)) {
+          ok = false; break;
+        }
+        br = list_nth_node(RangeTblEntry, sq->rtable, v->varno - 1);
+        if (!(br->rtekind == RTE_RELATION && br->relkind != RELKIND_VIEW)) {
+          ok = false; break;
+        }
+        tl[te->resno] = v;
+      }
+    }
+
+    if (!ok) {
+      /* not flattenable: keep the slot as-is (detector will reject it) */
+      if (tl) pfree(tl);
+      newpos++;
+      new_rtable = lappend(new_rtable, rte);
+      c.parent_newpos[i] = newpos;
+      origins_l = lappend(origins_l, flat_origin1(i));
+      continue;
+    }
+
+    /* inline: append each real base, assigning it a new flat position */
+    c.slot_flat[i]  = true;
+    c.sub_rtlen[i]  = list_length(sq->rtable);
+    c.sub_newpos[i] = (int *) palloc0((c.sub_rtlen[i] + 1) * sizeof(int));
+    c.sub_tl[i]     = tl;
+    c.sub_tl_n[i]   = maxres;
+    b = 0;
+    foreach (lc2, sq->rtable) {
+      RangeTblEntry *br = (RangeTblEntry *) lfirst(lc2);
+      ++b;
+      if (br->rtekind == RTE_RELATION && br->relkind != RELKIND_VIEW) {
+        newpos++;
+        new_rtable = lappend(new_rtable, copyObject(br));
+        c.sub_newpos[i][b] = newpos;
+        /* compose: our slot, then the base's path within the (already
+         * recursively flattened) subquery -- so nested views map all the way
+         * down to the base input. */
+        origins_l = lappend(origins_l,
+                            (sub_origins != NULL && b - 1 < sub_n)
+                              ? flat_origin_prepend(i, &sub_origins[b - 1])
+                              : flat_origin1(i));
+      }
+    }
+    any_flat = true;
+  }
+
+  if (parent_flat && any_flat) {
+    /* (1) remap the parent's target list and WHERE */
+    probe->targetList = (List *) flatten_mut((Node *) probe->targetList, &c);
+    if (probe->jointree->quals)
+      merged_quals = lappend(merged_quals, flatten_mut(probe->jointree->quals, &c));
+    /* (2) pull every inlined subquery's WHERE up, remapping base varnos */
+    for (i = 1; i <= N; i++) {
+      RangeTblEntry *rte;
+      if (!c.slot_flat[i]) continue;
+      rte = list_nth_node(RangeTblEntry, probe->rtable, i - 1);
+      if (rte->subquery->jointree && rte->subquery->jointree->quals) {
+        c.quals_mode = true; c.quals_slot = i;
+        merged_quals =
+          lappend(merged_quals,
+                  flatten_mut((Node *) copyObject(rte->subquery->jointree->quals),
+                              &c));
+        c.quals_mode = false;
+      }
+    }
+    /* (3) commit the flattened range table, a flat fromlist and combined WHERE */
+    probe->rtable = new_rtable;
+    {
+      List *fl = NIL;
+      for (i = 1; i <= newpos; i++) {
+        RangeTblRef *r = makeNode(RangeTblRef);
+        r->rtindex = i;
+        fl = lappend(fl, r);
+      }
+      probe->jointree->fromlist = fl;
+    }
+    probe->jointree->quals =
+      (merged_quals == NIL) ? NULL
+      : (list_length(merged_quals) == 1) ? (Node *) linitial(merged_quals)
+      : (Node *) makeBoolExpr(AND_EXPR, merged_quals, -1);
+
+    *nflat_out = newpos;
+    origins = (FlatAtomOrigin *) palloc(newpos * sizeof(FlatAtomOrigin));
+    i = 0;
+    foreach (lc, origins_l)
+      origins[i++] = *(FlatAtomOrigin *) lfirst(lc);
+    return origins;
+  }
+
+  /* Nothing flattened (no flattenable subquery, or a non-flat parent FROM):
+   * leave probe untouched and return an identity map (one depth-1 path per slot). */
+  *nflat_out = N;
+  origins = (FlatAtomOrigin *) palloc(N * sizeof(FlatAtomOrigin));
+  for (i = 0; i < N; i++) {
+    origins[i].depth = 1;
+    origins[i].path = (int *) palloc(sizeof(int));
+    origins[i].path[0] = i + 1;
+  }
+  return origins;
+}
+
+/**
+ * @brief Build the inversion-free marker context for top-level query @p q.
+ *
+ * Runs the detector on a flattened, group-RTE-stripped copy of @p q so that
+ * single-base SPJ subqueries/views are recognised as base atoms.  On success
+ * sets @p *cert_out to the serialised root certificate and returns a context
+ * tree mirroring @p q's range table: a direct base atom's marker at its slot,
+ * a flattened subquery's marker in a one-entry child context at its slot.
+ * Returns NULL (declining) when @p q is not certified or carries no markers;
+ * @p *cert_out may still be set (the cert attaches even without markers, and
+ * the path then declines at evaluation and falls back).
+ */
+static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
+                                                  Query *q, char **cert_out) {
+  bool            has_subq = false, has_group = false;
+  Query          *probe;
+  FlatAtomOrigin *origins = NULL;
+  InvFreeMarker  *flat = NULL;
+  int             nflat = 0, norigins = 0, N, p;
+  char           *cert = NULL;
+  InvFreeMarkerCtx *ctx;
+  ListCell       *lc;
+
+  foreach (lc, q->rtable)
+    if (((RangeTblEntry *) lfirst(lc))->rtekind == RTE_SUBQUERY) has_subq = true;
+#if PG_VERSION_NUM >= 180000
+  has_group = q->hasGroupRTE;
+#endif
+
+  /* No subqueries and no synthetic group RTE: analyse q in place (read-only),
+   * positions equal q's slots.  Otherwise work on a copy: strip the PG 18 group
+   * RTE, then flatten SPJ subqueries (origins map flattened positions back). */
+  if (!has_subq && !has_group) {
+    probe = q;
+  } else {
+    probe = (Query *) copyObject(q);
+#if PG_VERSION_NUM >= 180000
+    if (has_group)
+      strip_group_rte_pg18(probe);
+#endif
+    if (has_subq)
+      origins = flatten_spj_subqueries(probe, &norigins);
+  }
+
+  if (!inversion_free_analyze(constants, probe, &cert, &flat, &nflat))
+    return NULL;
+  if (cert_out)
+    *cert_out = cert;
+  if (flat == NULL)              /* certified but no marker model: decline */
+    return NULL;
+
+  N = list_length(q->rtable);
+  ctx = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
+  ctx->natoms  = N;
+  ctx->markers = (InvFreeMarker *) palloc0((size_t) N * sizeof(InvFreeMarker));
+  ctx->sub     = (InvFreeMarkerCtx **) palloc0((size_t) N * sizeof(InvFreeMarkerCtx *));
+  /* Map each flattened atom's marker back to q by walking its origin slot path
+   * down the *original* (un-flattened) query tree, creating/sizing a nested
+   * child context at each subquery hop, so the recursive subquery rewrite later
+   * threads the marker to the right base input.  With no flattening, position
+   * == q slot (the synthetic group RTE, if any, sits after the base atoms, so
+   * the prefix aligns), i.e. an implicit depth-1 path. */
+  for (p = 0; p < nflat; p++) {
+    int               tmp_path[1];
+    int              *path;
+    int               depth, d, base;
+    InvFreeMarkerCtx *cur = ctx;
+    Query            *qcur = q;
+    if (!flat[p].valid)
+      continue;
+    if (origins != NULL) {
+      if (p >= norigins) continue;
+      path  = origins[p].path;
+      depth = origins[p].depth;
+    } else {
+      tmp_path[0] = p + 1;
+      path  = tmp_path;
+      depth = 1;
+    }
+    /* descend all but the last path element (the nested subquery slots) */
+    for (d = 0; d + 1 < depth && cur != NULL; d++) {
+      int               slot = path[d];
+      RangeTblEntry    *rte;
+      InvFreeMarkerCtx *child;
+      int               sublen;
+      if (slot < 1 || slot > qcur->rtable->length) { cur = NULL; break; }
+      rte = list_nth_node(RangeTblEntry, qcur->rtable, slot - 1);
+      if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL) { cur = NULL; break; }
+      sublen = list_length(rte->subquery->rtable);
+      child = cur->sub[slot - 1];
+      if (child == NULL) {
+        child = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
+        child->natoms  = sublen;
+        child->markers = (InvFreeMarker *) palloc0((size_t) sublen * sizeof(InvFreeMarker));
+        child->sub     = (InvFreeMarkerCtx **) palloc0((size_t) sublen * sizeof(InvFreeMarkerCtx *));
+        cur->sub[slot - 1] = child;
+      }
+      cur  = child;
+      qcur = rte->subquery;
+    }
+    if (cur == NULL)
+      continue;
+    base = path[depth - 1];                              /* base slot at the leaf */
+    if (base >= 1 && base - 1 < cur->natoms)
+      cur->markers[base - 1] = flat[p];
+  }
+  return ctx;
+}
+
+/**
  * @brief Rewrite a single SELECT query to carry provenance.
  *
  * This is the recursive entry point for the provenance rewriter.  It is
@@ -4235,11 +4827,18 @@ static Expr *wrap_in_assume_boolean(const constants_t *constants,
  * @param wrap_root  If true, mark this query's provenance expression as a
  *                   safe-query root that must be wrapped in
  *                   @c provsql.assume_boolean before splicing.
+ * @param top_level  True for the outermost query the user evaluates; gates the
+ *                   inversion-free analysis (run only at the top).
+ * @param inv_ctx    Inversion-free marker context supplied by a parent that
+ *                   flattened this query as a subquery, or @c NULL; when set,
+ *                   this query applies the supplied per-input markers instead of
+ *                   running its own analysis or read-once rewrite.
  * @return  The (possibly restructured) rewritten query, or @c NULL if the
  *          query has no FROM clause and can be skipped.
  */
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed, bool wrap_root) {
+                            bool **removed, bool wrap_root, bool top_level,
+                            const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts;
   bool has_union = false;
   bool has_difference = false;
@@ -4248,6 +4847,8 @@ static Query *process_query(const constants_t *constants, Query *q,
   int nbcols = 0;
   int **columns;
   unsigned i = 0;
+  char *inv_cert = NULL;            /* serialised inversion-free certificate (root) */
+  const InvFreeMarkerCtx *local_inv_ctx = NULL; /* this query's marker context */
   if (provsql_verbose >= 50)
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
@@ -4382,14 +4983,15 @@ static Query *process_query(const constants_t *constants, Query *q,
                           "aggregate results not supported");
         }
         q = rewrite_non_all_into_external_group_by(q);
-        return process_query(constants, q, removed, wrap_root);
+        return process_query(constants, q, removed, wrap_root, top_level, inv_ctx);
       }
     }
 
     if (q->hasAggs) {
       Query *rewritten = rewrite_agg_distinct(q, constants);
       if (rewritten)
-        return process_query(constants, rewritten, removed, wrap_root);
+        return process_query(constants, rewritten, removed, wrap_root, top_level,
+                             inv_ctx);
     }
 
     /* Opt-in safe-query optimisation slot: when on, try to rewrite
@@ -4403,16 +5005,57 @@ static Query *process_query(const constants_t *constants, Query *q,
      * what downstream evaluators inspect to refuse unsound evaluation,
      * so we refuse to rewrite on schemas that still predate the
      * helper. */
-    if (provsql_boolean_provenance &&
+    if (provsql_boolean_provenance && inv_ctx == NULL &&
         OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN)) {
+      /* Read-once rewrite (an operation-mode change: it rewrites the query and
+       * changes the produced circuit), so it is gated on boolean_provenance.
+       * Skipped when @c inv_ctx is supplied: this query is an inlined subquery
+       * whose base inputs must receive the parent's transparent order markers
+       * (a no-op rewrite for the single-base projection it then is), not a
+       * circuit-changing read-once rewrite that would bypass them. */
       Query *rewritten = try_safe_query_rewrite(constants, q);
       if (rewritten)
-        return process_query(constants, rewritten, removed, true);
+        return process_query(constants, rewritten, removed, true, top_level,
+                             inv_ctx);
+    }
+
+    /* Inversion-free analysis is *not* an operation-mode change: it leaves the
+     * lineage intact and only attaches a transparent certificate + per-input
+     * order markers, read back at probability evaluation.  So it is decoupled
+     * from boolean_provenance and gated on its own knob (provsql.inversion_free,
+     * default on), run on THIS query — the one whose lineage we build — so the
+     * certificate and markers align with the lineage by construction.  Only at
+     * the outermost (top-level) root the user evaluates; never when the
+     * read-once rewrite above already fired (that path returns early). */
+    if (inv_ctx != NULL) {
+      /* This query is an inlined subquery: the parent's flattened analysis
+       * already produced our base-atom markers.  Apply them as-is; attach no
+       * certificate here (the cert lives on the parent's per-row root). */
+      local_inv_ctx = inv_ctx;
+    } else if (top_level && provsql_inversion_free
+               && OidIsValid(constants->OID_FUNCTION_ANNOTATE)) {
+      /* Build the inversion-free marker context tree.  The detector runs on a
+       * flattened copy (single-base SPJ subqueries / views inlined to their
+       * base relation in place; on PG 18 the synthetic RTE_GROUP is stripped),
+       * so the certificate and per-input order markers align with the lineage
+       * by construction; the original q is left intact (only transparent
+       * markers + a root certificate are added, read back at probability
+       * evaluation).  The evaluator's size-bounded mismatch backstop declines
+       * if any marker fails to land on its input. */
+      local_inv_ctx = build_inversion_free_ctx(constants, q, &inv_cert);
     }
 
     // get_provenance_attributes will also recursively process subqueries
-    // by calling process_query
-    prov_atts = get_provenance_attributes(constants, q);
+    // by calling process_query (threading each subquery's marker sub-context)
+    prov_atts = get_provenance_attributes(constants, q, local_inv_ctx);
+
+    /* Inversion-free path: wrap each certified atom's provenance token in its
+     * per-input order marker.  prov_atts are base-relation Vars (the certified
+     * class has only RTE_RELATION atoms and no agg/distinct/set-op restructuring,
+     * so each Var's varno is still the atom's range-table index). */
+    if (local_inv_ctx != NULL && local_inv_ctx->markers != NULL)
+      wrap_inversion_free_markers(constants, q, prov_atts,
+                                  local_inv_ctx->markers, local_inv_ctx->natoms);
 
     if (prov_atts == NIL) {
       /* If the WHERE clause contains a random_variable comparison, we
@@ -4564,7 +5207,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       provenance = make_provenance_expression(
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
-        nbcols, wrap_root);
+        nbcols, wrap_root, inv_cert);
 
       /* Fallback for the rare set-op outer WHERE case: conjoin via
        * provenance_times after the aggregation wrappers.  Correct only
@@ -4687,7 +5330,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   /* Rewrite the source SELECT to carry provenance */
   {
     bool *removed = NULL;
-    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false);
+    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false, false, NULL);
     AttrNumber src_provsql_attno = 0;
 
     if (new_subquery == NULL)
@@ -4811,7 +5454,7 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_verbose >= 40)
         begin = clock();
 
-      new_query = process_query(&constants, q, &removed, false);
+      new_query = process_query(&constants, q, &removed, false, true, NULL);
 
       if (provsql_verbose >= 40)
         provsql_notice("planner time spent=%f",
@@ -5526,6 +6169,34 @@ void _PG_init(void) {
                            "exists for developer A/B testing and as a "
                            "bisection escape valve.",
                            &provsql_cmp_probability_evaluation,
+                           true,
+                           PGC_USERSET,
+                           GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
+                           NULL,
+                           NULL,
+                           NULL);
+  /* Kill-switch for the automatic inversion-free path in the default
+   * probability chain.  The path only fires when the query carries an
+   * inversion-free certificate (attached by the planner only to certified
+   * queries), so it is self-gating and safe on by default; off is for A/B
+   * testing against the tree-decomposition / d4 fallback.  The explicit
+   * 'inversion-free' method bypasses this flag. */
+  DefineCustomBoolVariable("provsql.inversion_free",
+                           "Use the inversion-free structured-d-DNNF "
+                           "probability path when available.",
+                           "When on (default), probability_evaluate, on a "
+                           "query whose provenance root carries an "
+                           "inversion-free tractability certificate, tries the "
+                           "structured-d-DNNF builder after the read-once "
+                           "independent evaluator and before the "
+                           "tree-decomposition / external-compiler fallback. "
+                           "Off disables only this automatic insertion; the "
+                           "explicit probability_evaluate(token, "
+                           "'inversion-free') method always runs and errors "
+                           "without a certificate. The path is gated on the "
+                           "certificate, attached only to certified queries, "
+                           "so on is safe; off serves developer A/B testing.",
+                           &provsql_inversion_free,
                            true,
                            PGC_USERSET,
                            GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,

@@ -349,23 +349,35 @@ def tseytin_cnf(
     return cnf
 
 
-def compile_to_ddnnf(pool: ConnectionPool, token: str, compiler: str) -> dict:
-    """Return ``{"dot", "scene"}`` for the compiled d-DNNF.
+def compile_to_ddnnf(
+    pool: ConnectionPool, token: str, compiler: str,
+    statement_timeout: str = "30s",
+) -> dict:
+    """Return ``{"dot", "scene", "milliseconds"}`` for the compiled d-DNNF.
 
     ``scene`` matches the shape of ``circuit_mod.get_circuit`` (nodes /
     edges / root / depth) so the Studio canvas renderer can paint it
     with the same pan / zoom / drag / inspector affordances as the
-    provenance circuit.
+    provenance circuit.  The compilation runs under @p statement_timeout
+    (a long external compiler or a structured-d-DNNF build is bounded like
+    any other evaluation) and its server-side wall-clock is reported.
     """
-    with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT provsql.compile_to_ddnnf_dot(%s::uuid, %s)",
-            (token, compiler),
-        )
-        (dot,) = cur.fetchone()
+    with pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(sql.SQL("SET LOCAL statement_timeout = {}").format(
+                    sql.Literal(statement_timeout)))
+                t0 = time.perf_counter()
+                cur.execute(
+                    "SELECT provsql.compile_to_ddnnf_dot(%s::uuid, %s)",
+                    (token, compiler),
+                )
+                (dot,) = cur.fetchone()
+                ms = (time.perf_counter() - t0) * 1000.0
     return {
         "dot": dot,
         "scene": _ddnnf_scene_from_dot(dot, original_token=token),
+        "milliseconds": ms,
     }
 
 
@@ -443,7 +455,10 @@ def tree_decomposition(pool: ConnectionPool, token: str) -> dict:
 # Probability-evaluation methods that run fully in-process (no external
 # tool), so they are always available.  These are *methods*, not tools, so
 # they are not in ``provsql.tools``; the benchmark lists them alongside the
-# external compilers / counters the registry advertises.
+# external compilers / counters the registry advertises.  ``inversion-free``
+# is in-process too but only meaningful on a query certified inversion-free
+# (its root carries the certificate), so the benchmark adds it conditionally
+# rather than listing it here.
 _INPROCESS_METHODS: tuple[tuple[str, str | None], ...] = (
     ("independent",        None),
     ("possible-worlds",    None),
@@ -453,11 +468,14 @@ _INPROCESS_METHODS: tuple[tuple[str, str | None], ...] = (
 
 # In-process meta-routes offered in the compilation dropdown beyond the
 # registered external compilers (all dispatched through makeDD); always
-# available since they invoke no external tool.
+# available since they invoke no external tool.  ``inversion-free`` builds the
+# structured d-DNNF over the query-derived order (buildInversionFreeDDNNF); it
+# only succeeds on a circuit certified inversion-free, so the front-end offers
+# it only when the root carries the certificate, but it is a known in-process
+# compiler so the registry / route validation accepts it.
 _INPROCESS_COMPILERS: tuple[str, ...] = (
-    "tree-decomposition", "interpret-as-dd", "default",
+    "tree-decomposition", "interpret-as-dd", "inversion-free", "default",
 )
-
 
 def query_catalog(pool: ConnectionPool) -> dict[str, list[dict]]:
     """The external-tool catalog from ``provsql.tools`` (extension >=
@@ -662,6 +680,24 @@ def known_compilers(pool: ConnectionPool) -> set[str]:
     return names
 
 
+def _root_is_inversion_free(pool: ConnectionPool, token: str) -> bool:
+    """True when @p token's root is an inversion-free certificate carrier.
+
+    The planner stamps the serialised certificate as a ``C``-prefixed ``extra``
+    on a transparent ``gate_annotation`` root; that is exactly the case where
+    the ``'inversion-free'`` probability method applies, so the benchmark uses
+    it to decide whether to include that method's row.
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT provsql.get_gate_type(%(t)s::uuid) = 'annotation' "
+            "AND left(provsql.get_extra(%(t)s::uuid), 1) = 'C'",
+            {"t": token},
+        )
+        row = cur.fetchone()
+    return bool(row and row[0])
+
+
 def probability_benchmark(
     pool: ConnectionPool,
     token: str,
@@ -704,8 +740,13 @@ def probability_benchmark(
     # "compilation" method) and weighted model counter (as "wmc"), taken
     # live from provsql.tools.  Unavailable tools are skipped so the
     # benchmark does not spend a row reproducing "X not found on PATH".
+    # 'inversion-free' is in-process but only meaningful when the root
+    # carries the inversion-free certificate (the explicit method errors
+    # otherwise), so it is added only then.
     cat = query_catalog(pool)
     runnable: list[tuple[str, str | None]] = list(_INPROCESS_METHODS)
+    if _root_is_inversion_free(pool, token):
+        runnable.append(("inversion-free", None))
     runnable += [("compilation", t["name"]) for t in cat["compile"]
                  if t["available"]]
     runnable += [("wmc", t["name"]) for t in cat["wmc"] if t["available"]]

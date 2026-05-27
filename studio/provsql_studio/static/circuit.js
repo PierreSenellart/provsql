@@ -468,7 +468,8 @@
     for (const n of state.scene.nodes) {
       const cls = `node-group node--${n.type}`
                 + (n.frontier ? ' is-frontier' : '')
-                + (n.boolean_assumed ? ' is-boolean-assumed' : '');
+                + (n.boolean_assumed ? ' is-boolean-assumed' : '')
+                + (n.if_cert ? ' is-inversion-free' : '');
       const p = nodePos(n);
       const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${p.x},${p.y})` });
       const shape = svgEl('circle', { class: 'node-shape', r: 22 });
@@ -530,6 +531,49 @@
         badgeGroup.appendChild(ba);
         badgeGroup.appendChild(bt);
         g.appendChild(badgeGroup);
+      }
+      // Inversion-free marker : the gate_annotation carrying the certificate
+      // (on the certified result root) is elided server-side and its child
+      // carries if_cert. Badge only that root - a teal dashed ring (concentric
+      // *outside* the Boolean ring when the node carries both) plus an "IF"
+      // badge bottom-left, so a node can show B and IF together. The certified
+      // input leaves are NOT badged (it would clutter the canvas); their
+      // per-input order key + rank live in the inspector instead.
+      if (n.if_cert) {
+        g.appendChild(svgEl('circle', {
+          class: 'node-inversion-free-frame',
+          r: n.boolean_assumed ? 31 : 28,
+          fill: 'none',
+          stroke: 'var(--teal-600)',
+          'stroke-width': 1.4,
+          'stroke-dasharray': '2 2',
+        }));
+        const ifGroup = svgEl('g', { class: 'inversion-free-marker' });
+        const tip = svgEl('title');
+        tip.textContent =
+          'Inversion-free certificate root: this subcircuit is certified '
+          + 'inversion-free (UCQ(OBDD)), so probability_evaluate can compile '
+          + 'it to a structured d-DNNF in time linear in the lineage. The '
+          + 'inspector shows the variable-block order.';
+        ifGroup.appendChild(tip);
+        const ic = svgEl('circle', {
+          class: 'inversion-free-badge',
+          cx: -16, cy: 18, r: 8,
+          fill: 'var(--teal-600)',
+          stroke: 'var(--teal-800)',
+        });
+        const itx = svgEl('text', {
+          x: -16, y: 18,
+          'text-anchor': 'middle',
+          'dominant-baseline': 'central',
+          'font-size': 7,
+          'font-weight': '700',
+          fill: 'var(--fg-on-dark)',
+        });
+        itx.textContent = 'IF';
+        ifGroup.appendChild(ic);
+        ifGroup.appendChild(itx);
+        g.appendChild(ifGroup);
       }
       const label = svgEl('text', { class: 'node-label', y: -2 });
       label.textContent = n.label || n.type[0];
@@ -979,6 +1023,32 @@
       } else {
         html += `<dt>extra</dt><dd>${escapeHtml(node.extra)}</dd>`;
       }
+    }
+    // Inversion-free detail, carried up from an elided gate_annotation
+    // wrapper. if_cert (a certified result root) shows the certificate
+    // header + variable-block order; if_key (a certified input leaf) shows
+    // the per-input order key and its rank within the shown scene.
+    if (node.if_cert) {
+      const c = node.if_cert;
+      html += `<dt>inversion-free</dt><dd>certified — `
+           + `${escapeHtml(String(c.natoms))} atoms, `
+           + `${escapeHtml(String(c.nclasses))} classes</dd>`;
+      html += `<dt>variable order</dt><dd>root class `
+           + `${escapeHtml(String(c.root_class))}`
+           + (c.class_order && c.class_order.length
+              ? `; classes [${escapeHtml(c.class_order.join(', '))}]` : '')
+           + `</dd>`;
+    }
+    if (node.if_key) {
+      const k = node.if_key;
+      const factor = k.factor === -1
+        ? 'guard (shared self-join)' : String(k.factor);
+      if (k.rank != null) {
+        html += `<dt>order rank</dt><dd>${escapeHtml(String(k.rank))}`
+             + ` <span class="cv-inspector__hint">(within shown scene)</span></dd>`;
+      }
+      html += `<dt>order key</dt><dd>root ${escapeHtml(String(k.root))}, `
+           + `sec ${escapeHtml(String(k.sec))}, factor ${escapeHtml(factor)}</dd>`;
     }
     html += '</dl>';
     if (node.type === 'rv') {
@@ -1865,6 +1935,25 @@
         og.hidden = !anyVisible;
         og.disabled = !anyVisible;
       }
+      // The 'inversion-free' probability method and d-D compiler only apply to
+      // a root that carries the certificate (any scene node with if_cert -- the
+      // elided annotation's child).  Offer them only then; otherwise hide and
+      // bump a stale selection back to the default.
+      const sceneIsIf = !!(state.scene && state.scene.nodes
+        && state.scene.nodes.some(n => n.if_cert));
+      const ifOpt = meth.querySelector('option[value="inversion-free"]');
+      if (ifOpt) {
+        ifOpt.hidden = !sceneIsIf;
+        ifOpt.disabled = ifOpt.hidden;
+        if (ifOpt.hidden && meth.value === 'inversion-free') meth.value = '';
+      }
+      const comp = document.getElementById('eval-args-compiler');
+      const ifComp = comp && comp.querySelector('option[value="inversion-free"]');
+      if (ifComp) {
+        ifComp.hidden = !sceneIsIf;
+        ifComp.disabled = ifComp.hidden;
+        if (ifComp.hidden && comp.value === 'inversion-free') comp.value = 'd4';
+      }
       // If the active selection just got hidden, fall back to the first
       // still-visible option so the run button stays meaningful.
       const cur = sel.querySelector(`option[value="${CSS.escape(sel.value)}"]`);
@@ -2410,9 +2499,14 @@
       const nEdges = (scene.edges || []).length;
       const maxDepth = (scene.nodes || []).reduce(
         (d, n) => Math.max(d, n.depth || 0), 0);
+      // Server-side compile wall-clock (the canvas swap clears the eval-strip
+      // round-trip chip, so surface it in the subtitle that travels with the
+      // scene).
+      const ms = (data.milliseconds == null)
+        ? '' : ` · ${Number(data.milliseconds).toFixed(2)} ms`;
       scene.subtitle =
         `${nGates} gates · ${nEdges} edges · depth ${maxDepth} · `
-        + `<strong>${escapeHtml(toolName)}</strong>${clsHtml}`;
+        + `<strong>${escapeHtml(toolName)}</strong>${clsHtml}${ms}`;
       swapToKcScene(scene);
       return;
     }
@@ -2755,7 +2849,11 @@
       result.dataset.kind = 'error';
       return;
     }
-    const token = state.pinnedNode || state.scene.root;
+    // Evaluate the pinned node if any, else the scene's eval_root -- the
+    // originally requested token, which (unlike the elided display root) still
+    // carries a transparent wrapper's payload such as the inversion-free
+    // certificate that probability_evaluate / the benchmark key off.
+    const token = state.pinnedNode || state.scene.eval_root || state.scene.root;
     const selValue = sel.value;
     // Knowledge-compilation inspectors hit /api/kc/* instead of
     // /api/evaluate; their args (compiler / samples) are read directly
