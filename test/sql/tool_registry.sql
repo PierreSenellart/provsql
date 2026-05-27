@@ -99,7 +99,7 @@ DROP TABLE tr_r;
 
 -- The mutators are superuser-only: execute is revoked from PUBLIC.
 SELECT
-  has_function_privilege('public', 'provsql.register_tool(text,text,text,text[],text[],text,text,text,text,int,boolean)', 'EXECUTE') AS register,
+  has_function_privilege('public', 'provsql.register_tool(text,text,text,text[],text[],text,text,text,text,int,boolean,text)', 'EXECUTE') AS register,
   has_function_privilege('public', 'provsql.unregister_tool(text)', 'EXECUTE') AS unregister,
   has_function_privilege('public', 'provsql.set_tool_enabled(text,boolean)', 'EXECUTE') AS set_enabled,
   has_function_privilege('public', 'provsql.set_tool_preference(text,int)', 'EXECUTE') AS set_preference;

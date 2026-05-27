@@ -4033,7 +4033,8 @@ CREATE TABLE IF NOT EXISTS tool_overrides(
   enabled        BOOLEAN,
   dependencies   TEXT[],
   argtpl         TEXT,
-  argtpl_circuit TEXT
+  argtpl_circuit TEXT,
+  endpoint       TEXT
 );
 SELECT pg_catalog.pg_extension_config_dump('tool_overrides', '');
 
@@ -4051,7 +4052,7 @@ CREATE OR REPLACE FUNCTION tool_registry_list()
   RETURNS TABLE(name TEXT, kind TEXT, executable TEXT, operations TEXT[],
                 input_formats TEXT[], output_format TEXT, parser TEXT,
                 preference INT, enabled BOOLEAN, argtpl TEXT,
-                argtpl_circuit TEXT, available BOOLEAN) AS
+                argtpl_circuit TEXT, endpoint TEXT, available BOOLEAN) AS
   'provsql','tool_registry_list' LANGUAGE C STABLE;
 
 /**
@@ -4059,7 +4060,8 @@ CREATE OR REPLACE FUNCTION tool_registry_list()
  */
 CREATE OR REPLACE VIEW tools AS
   SELECT name, kind, executable, operations, input_formats, output_format,
-         parser, preference, enabled, argtpl, argtpl_circuit, available
+         parser, preference, enabled, argtpl, argtpl_circuit, endpoint,
+         available
   FROM tool_registry_list();
 
 /**
@@ -4068,7 +4070,8 @@ CREATE OR REPLACE VIEW tools AS
  * @param name        logical id (e.g. @c 'd4-jm62300'); also the value
  *                    @c provsql.fallback_compiler / the wmc tool selector use
  * @param executable  executable to resolve on PATH (defaults to @c name)
- * @param kind          @c 'cli' (the only supported kind today)
+ * @param kind          @c 'cli' (spawn @c executable) or @c 'kcmcp' (talk to
+ *                      the KCMCP server at @c endpoint)
  * @param operations    capabilities (KCMCP names): @c 'compile' / @c 'wmc'
  *                      (and ProvSQL-local @c 'render')
  * @param input_formats accepted inputs (KCMCP names): @c 'dimacs-cnf',
@@ -4088,9 +4091,11 @@ CREATE OR REPLACE VIEW tools AS
  *                      tool accepting that input needs it
  * @param preference    ordering within an operation (higher first)
  * @param enabled       whether the dispatchers may select it
+ * @param endpoint      for a @c 'kcmcp' record, the server address:
+ *                      @c 'unix:/path' or @c 'host:port'
  *
  * Superuser-only: a CLI record runs an arbitrary command as the PostgreSQL
- * OS user.
+ * OS user, and a kcmcp record names a socket the server connects to.
  */
 CREATE OR REPLACE FUNCTION register_tool(
   name TEXT,
@@ -4103,7 +4108,8 @@ CREATE OR REPLACE FUNCTION register_tool(
   argtpl TEXT DEFAULT NULL,
   argtpl_circuit TEXT DEFAULT NULL,
   preference INT DEFAULT 0,
-  enabled BOOLEAN DEFAULT true)
+  enabled BOOLEAN DEFAULT true,
+  endpoint TEXT DEFAULT NULL)
   RETURNS void AS
   'provsql','tool_registry_register' LANGUAGE C;
 
@@ -4124,7 +4130,7 @@ CREATE OR REPLACE FUNCTION set_tool_preference(name TEXT, preference INT)
 
 -- The mutators guard at the C level too, but revoke from PUBLIC so the
 -- superuser requirement is visible in the catalog.
-REVOKE ALL ON FUNCTION register_tool(TEXT, TEXT, TEXT, TEXT[], TEXT[], TEXT, TEXT, TEXT, TEXT, INT, BOOLEAN) FROM PUBLIC;
+REVOKE ALL ON FUNCTION register_tool(TEXT, TEXT, TEXT, TEXT[], TEXT[], TEXT, TEXT, TEXT, TEXT, INT, BOOLEAN, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION unregister_tool(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION set_tool_enabled(TEXT, BOOLEAN) FROM PUBLIC;
 REVOKE ALL ON FUNCTION set_tool_preference(TEXT, INT) FROM PUBLIC;

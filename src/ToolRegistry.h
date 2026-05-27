@@ -135,7 +135,8 @@ inline std::string expandCommandTemplate(
  */
 struct ToolRecord {
   std::string name;
-  std::string kind;                      ///< "cli" today; "kcmcp" later.
+  std::string kind;                      ///< "cli" (spawn a binary) or "kcmcp"
+                                         ///< (talk to a socket server at @c endpoint).
   std::string binary;
   std::vector<std::string> operations;
   std::vector<std::string> input_formats;
@@ -146,6 +147,8 @@ struct ToolRecord {
   std::vector<std::string> dependencies;
   std::string argtpl;
   std::string argtpl_circuit;
+  std::string endpoint;                  ///< KCMCP server address for kind
+                                         ///< "kcmcp": "unix:/path" or "host:port".
 
   bool hasOperation(const std::string &op) const;
   bool acceptsInput(const std::string &fmt) const;

@@ -85,6 +85,20 @@ std::string find_external_tool(const std::string &name);
  *              itself failing.
  */
 std::string format_external_tool_status(int rv, const std::string &tool);
+
+namespace provsql { struct ToolRecord; }
+
+/**
+ * @brief True iff a registry tool can currently be used.
+ *
+ * A @c kcmcp record needs a configured @c endpoint (no live connect probe,
+ * mirroring how a CLI tool only needs its binary on PATH).  A @c cli record
+ * needs its @c binary (when set) and every dependency to resolve on the
+ * backend's PATH via @c find_external_tool.  This is the single availability
+ * predicate consulted both by the compile/wmc tool selection and by the
+ * @c provsql.tools view.
+ */
+bool toolAvailable(const provsql::ToolRecord &rec);
 #endif
 
 #endif

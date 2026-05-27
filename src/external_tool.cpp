@@ -20,6 +20,7 @@ extern "C" {
 }
 
 #include "external_tool.h"
+#include "ToolRegistry.h"
 
 #include <string>
 #include <unordered_map>
@@ -203,4 +204,15 @@ std::string format_external_tool_status(int rv, const std::string &tool) {
     return tool + " exited with status " + std::to_string(code);
   }
   return tool + " failed with raw status " + std::to_string(rv);
+}
+
+bool toolAvailable(const provsql::ToolRecord &rec) {
+  if (rec.kind == "kcmcp")
+    return !rec.endpoint.empty();
+  if (!rec.binary.empty() && find_external_tool(rec.binary).empty())
+    return false;
+  for (const std::string &dep : rec.dependencies)
+    if (find_external_tool(dep).empty())
+      return false;
+  return true;
 }

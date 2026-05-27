@@ -50,6 +50,7 @@ extern "C" {
 // registry is needed only in the extension build.
 #ifndef TDKC
 #include "ToolRegistry.h"
+#include "kcmcp_client.h"
 #endif
 
 // "provsql_utils.h"
@@ -742,17 +743,6 @@ dDNNF BooleanCircuit::parsePaniniDD(const std::string &outfilename) const {
   return dnnf;
 }
 
-// True iff a tool's binary (when it has one) and all its dependencies resolve
-// on the backend's PATH right now.
-static bool toolAvailable(const provsql::ToolRecord *r) {
-  if(!r->binary.empty() && find_external_tool(r->binary).empty())
-    return false;
-  for(const std::string &dep : r->dependencies)
-    if(find_external_tool(dep).empty())
-      return false;
-  return true;
-}
-
 // Preference-ranked tool selection for @p operation: honour the explicitly
 // @p preferred tool when it is enabled, advertises the operation, and is
 // available; otherwise return the highest-preference enabled tool advertising
@@ -766,11 +756,11 @@ static std::string selectTool(const std::string &operation,
   if(!preferred.empty()) {
     const provsql::ToolRecord *r = provsql::tool_registry().find(preferred);
     if(r != nullptr && r->enabled && r->hasOperation(operation)
-       && toolAvailable(r))
+       && toolAvailable(*r))
       return preferred;
   }
   for(const provsql::ToolRecord *r : provsql::tool_registry().byOperation(operation))
-    if(toolAvailable(r))
+    if(toolAvailable(*r))
       return r->name;
   return "";
 }
@@ -821,6 +811,38 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
             "Compiler '"+compiler+"' uses output parser '"+rec->parser
             +"', which compilation() does not implement");
   const std::string compiler_binary = rec->binary;
+
+  // KCMCP backend: compile over a warm socket server instead of spawning a
+  // CLI tool.  The problem is sent as a native BC-S1.2 circuit when the record
+  // advertises that input, else as a Tseytin CNF; the RESULT's d-DNNF text is
+  // parsed by the same parseDDNNF() the CLI path uses.  Any failure (connect,
+  // protocol, server ERROR) raises, so makeDD's fallback can try another tool.
+  if(rec->kind == "kcmcp") {
+    std::vector<gate_t> inputOrder;
+    std::string content;
+    uint8_t input_format = 0;  // dimacs-cnf
+    if(rec->acceptsInput("circuit-bcs12")) {
+      try {
+        content = BCS12(g, inputOrder);
+        input_format = 1;  // circuit-bcs12
+      } catch(const CircuitException &) {
+        inputOrder.clear();
+        content.clear();
+      }
+    }
+    if(content.empty())
+      content = TseytinCNF(g, false);  // inputOrder stays empty => CNF mode
+    try {
+      std::string nnf = provsql::kcmcp_compile(rec->endpoint, input_format, content);
+      std::istringstream iss(nnf);
+      return parseDDNNF(iss, inputOrder);
+    } catch(const CircuitException &) {
+      throw;
+    } catch(const std::exception &e) {
+      throw CircuitException(std::string("KCMCP compile via '")+compiler
+                             +"' failed: "+e.what());
+    }
+  }
 
   // A compiler that advertises the BC-S1.2 circuit input (KCMCP
   // "circuit-bcs12") is driven with native circuit input: the Boolean circuit

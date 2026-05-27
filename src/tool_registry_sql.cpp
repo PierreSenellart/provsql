@@ -110,18 +110,6 @@ void require_superuser(const char *fn)
                   "commands as the PostgreSQL OS user)", fn);
 }
 
-/// A tool is available iff its binary (when set) and every dependency
-/// resolve on the backend's PATH.
-bool tool_available(const provsql::ToolRecord &rec)
-{
-  if (!rec.binary.empty() && find_external_tool(rec.binary).empty())
-    return false;
-  for (const std::string &dep : rec.dependencies)
-    if (find_external_tool(dep).empty())
-      return false;
-  return true;
-}
-
 // ---- provsql.tool_overrides persistence (caller manages SPI_connect) ----
 
 /// Read a text[] column of the current SPI tuple as a vector<string>.
@@ -157,10 +145,10 @@ bool overrides_table_exists()
 /// Upsert a complete record (removed=false) into provsql.tool_overrides.
 void upsert_override(const provsql::ToolRecord &rec)
 {
-  Oid types[12] = {TEXTOID, TEXTOID, TEXTOID, TEXTARRAYOID, TEXTARRAYOID,
+  Oid types[13] = {TEXTOID, TEXTOID, TEXTOID, TEXTARRAYOID, TEXTARRAYOID,
                    TEXTOID, TEXTOID, INT4OID, BOOLOID, TEXTARRAYOID,
-                   TEXTOID, TEXTOID};
-  Datum vals[12] = {
+                   TEXTOID, TEXTOID, TEXTOID};
+  Datum vals[13] = {
     CStringGetTextDatum(rec.name.c_str()),
     CStringGetTextDatum(rec.kind.c_str()),
     CStringGetTextDatum(rec.binary.c_str()),
@@ -173,18 +161,20 @@ void upsert_override(const provsql::ToolRecord &rec)
     string_vector_to_text_array(rec.dependencies),
     CStringGetTextDatum(rec.argtpl.c_str()),
     CStringGetTextDatum(rec.argtpl_circuit.c_str()),
+    CStringGetTextDatum(rec.endpoint.c_str()),
   };
   SPI_execute_with_args(
     "INSERT INTO provsql.tool_overrides "
     "(name, removed, kind, executable, operations, input_formats, "
     " output_format, parser, preference, enabled, dependencies, argtpl, "
-    " argtpl_circuit) "
-    "VALUES ($1, false, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) "
+    " argtpl_circuit, endpoint) "
+    "VALUES ($1, false, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) "
     "ON CONFLICT (name) DO UPDATE SET "
     "  removed=false, kind=$2, executable=$3, operations=$4, "
     "  input_formats=$5, output_format=$6, parser=$7, preference=$8, "
-    "  enabled=$9, dependencies=$10, argtpl=$11, argtpl_circuit=$12",
-    12, types, vals, NULL, false, 0);
+    "  enabled=$9, dependencies=$10, argtpl=$11, argtpl_circuit=$12, "
+    "  endpoint=$13",
+    13, types, vals, NULL, false, 0);
 }
 
 /// Tombstone a name (removed=true) so the seeded default, if any, is hidden.
@@ -197,7 +187,7 @@ void tombstone_override(const std::string &name)
     "ON CONFLICT (name) DO UPDATE SET removed=true, kind=NULL, "
     "  executable=NULL, operations=NULL, input_formats=NULL, "
     "  output_format=NULL, parser=NULL, preference=NULL, enabled=NULL, "
-    "  dependencies=NULL, argtpl=NULL, argtpl_circuit=NULL",
+    "  dependencies=NULL, argtpl=NULL, argtpl_circuit=NULL, endpoint=NULL",
     1, types, vals, NULL, false, 0);
 }
 
@@ -218,7 +208,7 @@ void provsql_sync_tool_registry()
     if (SPI_execute(
           "SELECT name, removed, kind, executable, operations, input_formats, "
           " output_format, parser, preference, enabled, dependencies, argtpl, "
-          " argtpl_circuit FROM provsql.tool_overrides", true, 0)
+          " argtpl_circuit, endpoint FROM provsql.tool_overrides", true, 0)
         == SPI_OK_SELECT) {
       TupleDesc td = SPI_tuptable->tupdesc;
       for (uint64 i = 0; i < SPI_processed; ++i) {
@@ -245,6 +235,7 @@ void provsql_sync_tool_registry()
         rec.dependencies   = spi_text_array(t, td, 11);
         rec.argtpl         = spi_text(t, td, 12);
         rec.argtpl_circuit = spi_text(t, td, 13);
+        rec.endpoint       = spi_text(t, td, 14);
         reg.upsert(rec);
       }
     }
@@ -290,9 +281,9 @@ tool_registry_list(PG_FUNCTION_ARGS)
 
   try {
     for (const provsql::ToolRecord &rec : provsql::tool_registry().records()) {
-      Datum values[12];
-      bool nulls[12] = {false, false, false, false, false, false, false,
-                        false, false, false, false, false};
+      Datum values[13];
+      bool nulls[13] = {false, false, false, false, false, false, false,
+                        false, false, false, false, false, false};
 
       values[0] = PointerGetDatum(cstring_to_text_with_len(rec.name.data(),
                                                            rec.name.size()));
@@ -312,7 +303,9 @@ tool_registry_list(PG_FUNCTION_ARGS)
                                                            rec.argtpl.size()));
       values[10] = PointerGetDatum(cstring_to_text_with_len(
                      rec.argtpl_circuit.data(), rec.argtpl_circuit.size()));
-      values[11] = BoolGetDatum(tool_available(rec));
+      values[11] = PointerGetDatum(cstring_to_text_with_len(
+                     rec.endpoint.data(), rec.endpoint.size()));
+      values[12] = BoolGetDatum(toolAvailable(rec));
 
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
@@ -333,10 +326,11 @@ tool_registry_list(PG_FUNCTION_ARGS)
  *
  * Args (in order): name text, executable text, kind text, operations text[],
  * input_formats text[], output_format text, parser text, argtpl text,
- * argtpl_circuit text, preference int, enabled bool.  A NULL @c executable
- * defaults to @c name; a NULL @c kind defaults to @c 'cli'; NULL arrays are
- * empty; NULL text fields default to empty; NULL @c preference is 0 and NULL
- * @c enabled is true.  Superuser-only.
+ * argtpl_circuit text, preference int, enabled bool, endpoint text.  A NULL
+ * @c executable defaults to @c name; a NULL @c kind defaults to @c 'cli';
+ * NULL arrays are empty; NULL text fields default to empty; NULL
+ * @c preference is 0 and NULL @c enabled is true; @c endpoint is the KCMCP
+ * server address for a @c 'kcmcp' record.  Superuser-only.
  */
 extern "C" Datum
 tool_registry_register(PG_FUNCTION_ARGS)
@@ -367,6 +361,8 @@ tool_registry_register(PG_FUNCTION_ARGS)
       rec.argtpl_circuit = text_to_string(PG_GETARG_TEXT_PP(8));
     rec.preference = PG_ARGISNULL(9) ? 0 : PG_GETARG_INT32(9);
     rec.enabled = PG_ARGISNULL(10) ? true : PG_GETARG_BOOL(10);
+    if (!PG_ARGISNULL(11))
+      rec.endpoint = text_to_string(PG_GETARG_TEXT_PP(11));
 
     if (rec.name.empty())
       provsql_error("register_tool: name must not be empty");
