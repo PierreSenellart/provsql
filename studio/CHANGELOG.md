@@ -14,6 +14,40 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.4.0] - 2026-05-27
+
+Companion release for ProvSQL extension 1.8.0. Brings the extension's
+two new surfaces into Studio: the **external-tool registry** (a panel
+to manage compilers / counters / KCMCP servers, with every tool picker
+now driven by the registry) and **inversion-free** d-DNNF compilation
+(a certificate badge, per-input order keys, and a new compilation /
+benchmark target). Requires extension **>= 1.8.0**.
+
+### Highlights
+
+- **Tools panel.** A new panel manages the extension's external-tool
+  registry (`provsql.tools`): tools are grouped by operation, and can be
+  enabled / disabled, re-prioritised, edited, registered and
+  unregistered inline, covering both CLI tools (executable + command
+  template) and KCMCP servers (endpoint or managed). Nav popovers are
+  mutually exclusive, and a registry change refreshes the Evaluate
+  strip's compiler dropdowns immediately.
+- **Registry-driven tool selection.** The compiler / counter pickers and
+  the probability benchmark are now populated from `provsql.tools`
+  rather than hardcoded lists, and only tools that currently resolve on
+  the backend are selectable.
+- **Inversion-free integration.** Studio renders the inversion-free
+  `gate_annotation` as an **IF** badge on the certificate root
+  (coexisting with the safe-query **B** badge); the inspector shows the
+  certificate order and each input's per-input order key and rank.
+  When the root carries a certificate, inversion-free is offered both as
+  a d-DNNF compilation target in the compiler picker and as a method in
+  the probability benchmark (routed through the elided root's original
+  token).
+- **Compiled d-DNNF timing.** Compiling a circuit to a d-DNNF (`kc-ddnnf`)
+  runs under the session's `statement_timeout`, and the canvas subtitle
+  reports the server-side compile time.
+
 ## [1.3.0] - 2026-05-24
 
 Companion release for ProvSQL extension 1.7.0. Brings the extension's
