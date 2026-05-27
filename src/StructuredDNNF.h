@@ -49,7 +49,7 @@
  * sub-d-DNNFs, which is what keeps the result linear in the lineage under the
  * Prop. 4.5 order (and bounds the work).  The function is taken as a monotone
  * DNF expanded from the @c BooleanCircuit (AND distributes, OR unions, IN is a
- * single literal; @c NOT and multivalued inputs are rejected — out of scope for
+ * single literal; @c NOT and multivalued inputs are rejected, out of scope for
  * the TID inversion-free path).
  *
  * Output is a finished @c dDNNF (root set, @c simplify() applied) ready for

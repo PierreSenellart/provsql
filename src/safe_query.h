@@ -42,7 +42,7 @@ extern Query *try_safe_query_rewrite(const constants_t *constants, Query *q);
  *
  * One entry per range-table atom (indexed by @c relid-1).  When @c valid, the
  * planner wraps that atom's provenance token in
- * @c annotate(prov, inversion_free_key(root_col, sec_col, factor)) — a
+ * @c annotate(prov, inversion_free_key(root_col, sec_col, factor)): a
  * per-input order key built from the tuple's root- and secondary-class column
  * values and its factor (@c SAFE_CERT_GUARD_FACTOR for the shared self-join
  * guard, else a per-factor id).
@@ -81,7 +81,7 @@ struct InvFreeMarkerCtx {
  *
  * Runs the detector on @p q itself (the query whose provenance lineage is being
  * built), so the certificate and the per-atom marker specs align with the
- * lineage by construction — independent of any read-once pre-pass.  On success
+ * lineage by construction, independent of any read-once pre-pass.  On success
  * sets @p cert_out to a palloc'd @c C-prefixed serialised @c SafeCert recipe
  * (for the per-row root) and, when the marker model applies, @p markers_out to
  * a palloc'd array of @c *natoms_out @c InvFreeMarker (one per atom); otherwise

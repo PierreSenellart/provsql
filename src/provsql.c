@@ -589,6 +589,10 @@ static void inline_ctes(Query *q) {
  * @param constants  Extension OID cache.
  * @param q          Query whose range table is scanned (subquery RTEs are
  *                   modified in place by the recursive call).
+ * @param inv_ctx    Inversion-free marker context for @p q, or @c NULL; its
+ *                   per-subquery child context is threaded into each recursive
+ *                   @c process_query call so a flattened view's base inputs
+ *                   receive their order markers.
  * @return  List of @c Var nodes, one per provenance source; @c NIL if the
  *          query has no provenance-bearing relation.
  */
@@ -4491,6 +4495,7 @@ static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out);
  * (the detector requires this too); an explicit @c JoinExpr there carries
  * ON-conditions a fromlist rebuild would drop, so flattening is declined.
  *
+ * @param probe      the (throwaway) query copy to flatten in place.
  * @param nflat_out  set to the flattened range-table length.
  * @return a palloc'd @c FlatAtomOrigin per flattened position, mapping it back
  * to the parent slot (and, for an inlined subquery, the base position within
@@ -4821,6 +4826,12 @@ static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
  * @param wrap_root  If true, mark this query's provenance expression as a
  *                   safe-query root that must be wrapped in
  *                   @c provsql.assume_boolean before splicing.
+ * @param top_level  True for the outermost query the user evaluates; gates the
+ *                   inversion-free analysis (run only at the top).
+ * @param inv_ctx    Inversion-free marker context supplied by a parent that
+ *                   flattened this query as a subquery, or @c NULL; when set,
+ *                   this query applies the supplied per-input markers instead of
+ *                   running its own analysis or read-once rewrite.
  * @return  The (possibly restructured) rewritten query, or @c NULL if the
  *          query has no FROM clause and can be skipped.
  */

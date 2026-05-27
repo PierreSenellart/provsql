@@ -2,13 +2,14 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- Inversion-free UCQ(OBDD) detector (phase 1).
+-- Inversion-free UCQ(OBDD) detector.
 --
 -- The detector is a sibling pass to the read-once rewriter: it recognises the
 -- inversion-free, tuple-independent self-join class (the consistent-unification
 -- self-joins the read-once path bails on), builds the SafeCert order recipe,
--- and -- in phase 1 -- only emits a diagnostic NOTICE without changing query
--- evaluation (certificate produced but unused).
+-- emits a diagnostic NOTICE, and attaches a transparent certificate plus
+-- per-input order markers to the lineage (read back at probability evaluation;
+-- the lineage itself is left intact).
 --
 -- The lineage must be built by the real planner (real tables + the SQL query),
 -- never a hand-factored circuit: a hand-factored circuit is low-treewidth and

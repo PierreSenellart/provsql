@@ -4,14 +4,13 @@
  *
  * Shared between the C planner side (@c src/safe_query.c, which builds the
  * certificate from a query-level analysis) and the C++ evaluation side
- * (@c src/probability_evaluate.cpp, which will, in a later phase, read it back
- * from the annotation gate's @c extra and route probability evaluation through
- * the structured-d-DNNF builder).
+ * (@c src/probability_evaluate.cpp, which reads it back from the annotation
+ * gate's @c extra and routes probability evaluation through the
+ * structured-d-DNNF builder).
  *
- * Phase 1 produces the certificate (the @c SafeCert "recipe") from the detector
- * but does not yet attach or consume it; only the struct/enum and the @c extra
- * discriminator prefixes are needed here.  The compact serialise / parse helpers
- * for the annotation-gate carrier are added in phase 2.
+ * The planner produces the certificate (the @c SafeCert "recipe") from the
+ * detector and stamps it on the per-row provenance root; the compact serialise
+ * / parse helpers below are the annotation-gate carrier the evaluator reads.
  */
 #ifndef SAFE_QUERY_CERT_H
 #define SAFE_QUERY_CERT_H
@@ -57,7 +56,7 @@ typedef struct SafeCert {
  *
  * One transparent annotation gate type carries both roles, disambiguated by the
  * first byte of @c extra: a serialised @c SafeCert recipe on the root, and a
- * per-input order key on each certified input leaf.  (Used from phase 2 on.)
+ * per-input order key on each certified input leaf.
  */
 #define SAFE_CERT_EXTRA_PREFIX_RECIPE 'C'  ///< Root: serialised SafeCert recipe.
 #define SAFE_CERT_EXTRA_PREFIX_KEY    'K'  ///< Input: per-variable order key.

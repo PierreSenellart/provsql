@@ -4827,11 +4827,11 @@ static Query *try_flatten_inner_joins(Query *q) {
 /* -------------------------------------------------------------------------
  * Inversion-free UCQ(OBDD) detector (sibling of find_hierarchical_root_atoms)
  *
- * Phase 1: recognises the inversion-free, tuple-independent self-join class
- * (the consistent-unification self-joins the read-once rewriter bails on) and
- * builds the SafeCert order recipe.  It does NOT rewrite the query or attach
- * the certificate yet (cert produced but unused); it only emits a diagnostic
- * NOTICE.
+ * Recognises the inversion-free, tuple-independent self-join class (the
+ * consistent-unification self-joins the read-once rewriter bails on) and builds
+ * the SafeCert order recipe.  It does not rewrite the query: it leaves the
+ * lineage intact and only attaches the transparent certificate and per-input
+ * order markers, read back at probability evaluation.
  *
  * Unlike find_hierarchical_root_atoms, this pass keeps the per-occurrence
  * column-position information (it iterates the raw (varno, varattno, class)
@@ -5249,8 +5249,8 @@ bool inversion_free_analyze(const constants_t *constants, Query *q,
     *cert_out = safe_cert_serialise(cert);
 
   /* Per-input markers: only when the carrier and the key builder both exist and
-   * the cert fits the phase-1 marker model; otherwise the cert is still
-   * attached (root) but the path declines at evaluation and falls back. */
+   * the cert fits the marker model; otherwise the cert is still attached (root)
+   * but the path declines at evaluation and falls back. */
   if (markers_out
       && OidIsValid(constants->OID_FUNCTION_ANNOTATE)
       && OidIsValid(constants->OID_FUNCTION_INVERSION_FREE_KEY)) {

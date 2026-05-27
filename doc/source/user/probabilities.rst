@@ -103,6 +103,16 @@ Computation Methods
     staying linear in the lineage where ``'tree-decomposition'`` would blow
     up. It requires that the planner certified the query as inversion-free
     (a certificate is attached to the provenance root); it errors otherwise.
+
+    The certifier handles join/group keys of **any scalar type** (not just
+    integers), lets a **non-tracked relation** be used as a transparent
+    filter, and **flattens SPJ subqueries and views** -- including a join
+    inside the view, a view referenced several times (a structured
+    self-join), and views-over-views -- before checking the class. An
+    aggregating or ``UNION`` view, a correlated subquery, or a query that
+    is genuinely non-hierarchical after flattening is not certified and
+    falls back to another method.
+
     The default strategy already takes this path automatically when a
     certificate is present (see below), so calling the method explicitly is
     mainly useful for testing:

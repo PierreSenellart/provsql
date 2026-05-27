@@ -698,10 +698,32 @@ Detection (``src/safe_query.c``)
    of the safe-query rewriter but is *not* gated on
    ``boolean_provenance``: :cfunc:`process_query` runs it on the lineage
    query whenever ``provsql.inversion_free`` is on, after (and only when)
-   the read-once rewrite did not already fire. On PostgreSQL 18 a
-   ``GROUP BY`` query carries a synthetic ``RTE_GROUP`` that hides the
-   base atoms, so detection runs on a stripped copy while the lineage is
-   built on the original query.
+   the read-once rewrite did not already fire.
+
+   A non-tracked base relation (no ``provsql`` column and no metadata
+   entry) is **deterministic**: it contributes only probability-1 tuples
+   and anchors no provenance variable, so the detector *erases* it from
+   the root, positional, precedence and marker passes while keeping its
+   join equalities (it still filters the cross product). This mirrors the
+   read-once path's dissociation transparency, with the same soundness
+   guards (a plain table, not a matview / foreign table / partitioned
+   parent / inheritance child), and only enlarges the certified class.
+
+Flattening pre-pass (``src/provsql.c``)
+   :cfunc:`build_inversion_free_ctx` runs the detector on a flattened
+   *copy* of the lineage query so that **SPJ subqueries and views** are
+   recognised. :cfunc:`flatten_spj_subqueries` inlines every non-lateral
+   SPJ subquery slot (no aggregation, grouping, ``DISTINCT``, set
+   operation, sublink, CTE or ``LIMIT``; flat ``RangeTblRef`` ``FROM``
+   over base relations; target list all plain base ``Var``\ s) into its
+   base atoms -- substituting the parent's column references, pulling the
+   subquery ``WHERE`` up and rebuilding a flat ``FROM`` -- and recurses,
+   so a view-over-view or nested derived table collapses to base atoms
+   first. A view referenced *k* times inlines to *k* copies of its base
+   atoms: a structured self-join the inversion-free path handles natively.
+   On PostgreSQL 18 the synthetic ``RTE_GROUP`` of a ``GROUP BY`` query is
+   stripped from the copy first. The original query is left intact; only
+   transparent markers and a root certificate are added.
 
 Certificate and per-input markers (``src/safe_query_cert.{h,c}``)
    The recipe and the order are carried into the circuit on transparent
@@ -717,6 +739,19 @@ Certificate and per-input markers (``src/safe_query_cert.{h,c}``)
      head class is *root-only* (no secondary column); a relation whose
      occurrences span two or more secondary classes is the shared
      self-join *guard* (``factor = SAFE_CERT_GUARD_FACTOR``).
+
+     The ``root`` and ``sec`` class values are carried as length-prefixed
+     **value text** (the column type's I/O output), so the key works for
+     any scalar key column -- ``text`` (including spaces / colons),
+     ``uuid``, ``date``, ``numeric`` … -- not just integers. The builder
+     uses them only for grouping (equal text ⇒ same block / tile) and a
+     consistent total order, both of which any injective type rendering
+     satisfies.
+
+   For a view inlined by the flattening pre-pass the markers wrap the base
+   inputs *inside* the subquery, threaded down through the recursive
+   rewrite by a per-query :cfunc:`InvFreeMarkerCtx` context tree (the
+   certificate stays on the parent's per-row root).
 
    Both markers are inert at evaluation: the annotation gate is identity
    for every evaluator, so a query carrying them evaluates identically
@@ -747,12 +782,17 @@ Dispatch (``src/probability_evaluate.cpp``)
    ``independent`` and before tree-decomposition, catching
    :cfunc:`CircuitException` to fall through.
 
-Atoms the analysis does not model (a BID/``gate_mulinput`` atom, a
-derived/view atom, which is not an ``RTE_RELATION``) cause detection to
-decline (no certificate), and a malformed ``C``-prefixed payload fails to
-parse and is treated as an inert annotation; in every case evaluation
-falls back to the normal chain and stays correct. These declines are
-covered by ``test/sql/safe_query_inversion_free.sql``.
+Shapes the analysis does not model cause detection to decline (no
+certificate): a BID/``gate_mulinput`` atom, a subquery the flattening
+pre-pass cannot inline (an *aggregating* view, a set-operation / ``UNION``
+view, a correlated or ``LATERAL`` subquery), or a flattened conjunction
+that is genuinely non-hierarchical (the H-query ``R(x),S(x,y),T(y)``). A
+malformed ``C``-prefixed payload fails to parse and is treated as an inert
+annotation. In every case evaluation falls back to the normal chain and
+stays correct. These declines -- and the positive cases (self-joins,
+non-integer key columns, deterministic-relation filters, single- and
+multi-relation SPJ views, views-over-views) -- are covered by
+``test/sql/safe_query_inversion_free.sql``.
 
 .. _adding-new-probability-method:
 

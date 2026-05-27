@@ -185,9 +185,9 @@ _C_FUNC_MAP = {
     '_PG_init':                  '/doxygen-c/html/provsql_8c.html#a29e1a0b0688ac19dbde93824e4ae1a59',
     '_PG_fini':                  '/doxygen-c/html/provsql_8c.html#a7192e52d759211f57ad66638304ea072',
     'provsql_planner':           '/doxygen-c/html/provsql_8c.html#aa8f430f67b70c269c4ba8cc5225b8a84',
-    'process_query':             '/doxygen-c/html/provsql_8c.html#a501a47d6ea4b1e45cef52188781fe9f4',
+    'process_query':             '/doxygen-c/html/provsql_8c.html#acfb70bb175f3c89435076507fef9bb70',
     'has_provenance':            '/doxygen-c/html/provsql_8c.html#af9a93235f73a9ae63ab01cf094d30372',
-    'get_provenance_attributes': '/doxygen-c/html/provsql_8c.html#a468eafaad0a1eabc3988d6ab0b824abe',
+    'get_provenance_attributes': '/doxygen-c/html/provsql_8c.html#a0a178ec35f9a6d7a7476fe2291fb71e5',
     'make_provenance_expression':'/doxygen-c/html/provsql_8c.html#ace8a11f142b441b57b8753c8ad1290e1',
     'make_aggregation_expression': '/doxygen-c/html/provsql_8c.html#abaae0dcfec89c61c6af4c309eb61c8b4',
     'add_to_select':             '/doxygen-c/html/provsql_8c.html#a6fe52ea4c7f2cc8eb924135ebf239d85',
@@ -223,11 +223,14 @@ _C_FUNC_MAP = {
     # safe_query.c / provsql.c / probability_evaluate.cpp -- inversion-free path
     'detect_inversion_free':        '/doxygen-c/html/safe__query_8c.html#aca9d89ad57555f7370ff4ed6b2da3156',
     'build_inversion_free_marker':  '/doxygen-c/html/provsql_8c.html#a879a9faa9dfff10058519146779b9b81',
+    'build_inversion_free_ctx':     '/doxygen-c/html/provsql_8c.html#a64938014e4b430635dded08a3aaa04cf',
+    'flatten_spj_subqueries':       '/doxygen-c/html/provsql_8c.html#a608a128b6f1163d24084d84921ae17b9',
     'collect_inversion_free_keys':  '/doxygen-c/html/probability__evaluate_8cpp.html#ad6aecf20efa24056c8aaa8916f0aa0cf',
     'inversion_free_rank':          '/doxygen-c/html/probability__evaluate_8cpp.html#a4af7498c19280bf9922d972376add212',
     # safe_query_cert.h / StructuredDNNF.h -- inversion-free certificate + builder types
     'SafeCert':                     '/doxygen-c/html/structSafeCert.html',
     'SafeCertKey':                  '/doxygen-c/html/structSafeCertKey.html',
+    'InvFreeMarkerCtx':             '/doxygen-c/html/structInvFreeMarkerCtx.html',
     'StructuredDNNFBuilder':        '/doxygen-c/html/classStructuredDNNFBuilder.html',
     'InputKey':                     '/doxygen-c/html/structStructuredDNNFBuilder_1_1InputKey.html',
     # provsql_utils.c -- per-backend caches
