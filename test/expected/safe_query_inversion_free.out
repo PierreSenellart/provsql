@@ -169,3 +169,51 @@ dt_if|dt_pw
 0.200000|0.200000
 0.200000|0.200000
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 3 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+ifd_rows
+2
+(1 row)
+x|ifd_if|ifd_pw
+1|0.200000|0.200000
+2|0.200000|0.200000
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 3 atoms, 2 classes, root=0, order=[0,1] [certificate attached]
+remove_provenance
+
+(1 row)
+x|ifd2_if|ifd2_pw
+1|0.320000|0.320000
+2|0.200000|0.200000
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: not inversion-free: no root variable (non-hierarchical)
+remove_provenance
+
+(1 row)
+x|ifd3_default|ifd3_pw
+1|0.112800|0.112800
+2|0.060000|0.060000
+(2 rows)

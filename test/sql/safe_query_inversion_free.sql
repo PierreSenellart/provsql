@@ -330,5 +330,98 @@ SELECT round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS dt_if,
        round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS dt_pw
   FROM ifr_dt;
 
+-- (8) Deterministic (non-tracked) relations.  A relation with no provsql column
+--     and no metadata contributes only probability-1 tuples and anchors no
+--     provenance variable: the detector *erases* it before the root /
+--     positional / precedence / marker passes (it still filters the cross
+--     product through its join equalities).  Erasing only removes precedence
+--     edges, so it enlarges the certified class soundly.  boolean_provenance is
+--     off here (from 7b), so the explicit 'inversion-free' method compiles the
+--     structured d-DNNF and the read-once rewriter does not pre-empt the NOTICE.
+
+-- (8a) self-join-free q(x) :- A(x), B(x) with a deterministic filter D(x).  D
+--      excludes x=3 but adds no variable; the query still certifies (root x
+--      touches both *tracked* atoms) and matches possible worlds (0.5*0.4).
+CREATE TABLE ifd_a(x int); INSERT INTO ifd_a VALUES (1),(2),(3);
+SELECT add_provenance('ifd_a');
+CREATE TABLE ifd_b(x int); INSERT INTO ifd_b VALUES (1),(2),(3);
+SELECT add_provenance('ifd_b');
+CREATE TABLE ifd_d(x int); INSERT INTO ifd_d VALUES (1),(2);   -- deterministic
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifd_a;
+  PERFORM set_prob(provsql, 0.4) FROM ifd_b;
+END $$;
+CREATE TEMP TABLE ifd_t AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifd_a a, ifd_b b, ifd_d d
+   WHERE a.x = b.x AND a.x = d.x GROUP BY a.x;
+SELECT remove_provenance('ifd_t');
+SELECT count(*) AS ifd_rows FROM ifd_t;
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS ifd_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS ifd_pw
+  FROM ifd_t ORDER BY x;
+
+-- (8b) the deterministic atom anchors the *secondary* class: q(x) :- A(x),
+--      B(x,y), D(y).  Were D tracked, neither class {x} (in A,B) nor {y} (in
+--      B,D) would touch all three atoms -> no root -> reject (this is h0, the
+--      canonical non-hierarchical query).  Erasing deterministic D leaves {x}
+--      touching both tracked atoms, so it certifies; value matches possible
+--      worlds (x=1 has two y-derivations sharing nothing: 0.5*(1-0.6^2)=0.32).
+CREATE TABLE ifd2_a(x int);        INSERT INTO ifd2_a VALUES (1),(2);
+SELECT add_provenance('ifd2_a');
+CREATE TABLE ifd2_b(x int, y int); INSERT INTO ifd2_b VALUES (1,10),(1,20),(2,30);
+SELECT add_provenance('ifd2_b');
+CREATE TABLE ifd2_d(y int);        INSERT INTO ifd2_d VALUES (10),(20),(30); -- deterministic
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifd2_a;
+  PERFORM set_prob(provsql, 0.4) FROM ifd2_b;
+END $$;
+CREATE TEMP TABLE ifd2_t AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifd2_a a, ifd2_b b, ifd2_d d
+   WHERE a.x = b.x AND b.y = d.y GROUP BY a.x;
+SELECT remove_provenance('ifd2_t');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS ifd2_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS ifd2_pw
+  FROM ifd2_t ORDER BY x;
+
+-- (8c) near-miss: the same shape but the third relation is provenance-*tracked*.
+--      Erasure must not over-fire -- a tracked atom is never erased, so the
+--      genuine non-hierarchy (h0) is still caught: the detector rejects and the
+--      explicit 'inversion-free' method declines, while the default chain
+--      evaluates the block soundly through the fallback (matches possible
+--      worlds: x=1: 0.5*(1-(1-0.4*0.3)^2)=0.5*0.2256=0.1128; x=2: 0.5*0.4*0.3).
+CREATE TABLE ifd3_a(x int);        INSERT INTO ifd3_a VALUES (1),(2);
+SELECT add_provenance('ifd3_a');
+CREATE TABLE ifd3_b(x int, y int); INSERT INTO ifd3_b VALUES (1,10),(1,20),(2,30);
+SELECT add_provenance('ifd3_b');
+CREATE TABLE ifd3_d(y int);        INSERT INTO ifd3_d VALUES (10),(20),(30);
+SELECT add_provenance('ifd3_d');   -- tracked: creates the inversion
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifd3_a;
+  PERFORM set_prob(provsql, 0.4) FROM ifd3_b;
+  PERFORM set_prob(provsql, 0.3) FROM ifd3_d;
+END $$;
+CREATE TEMP TABLE ifd3_t AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifd3_a a, ifd3_b b, ifd3_d d
+   WHERE a.x = b.x AND b.y = d.y GROUP BY a.x;
+SELECT remove_provenance('ifd3_t');
+DO $$
+DECLARE tok uuid; declined boolean := false;
+BEGIN
+  SELECT p INTO tok FROM ifd3_t WHERE x = 1;
+  BEGIN PERFORM probability_evaluate(tok, 'inversion-free');
+  EXCEPTION WHEN OTHERS THEN
+    declined := (SQLERRM ~ 'requires an inversion-free certificate');
+  END;
+  IF NOT declined THEN
+    RAISE EXCEPTION 'tracked third relation (h0) should have declined inversion-free';
+  END IF;
+END $$;
+SELECT x, round(probability_evaluate(p)::numeric, 6)                    AS ifd3_default,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS ifd3_pw
+  FROM ifd3_t ORDER BY x;
+
 RESET provsql.boolean_provenance;
 RESET provsql.verbose_level;

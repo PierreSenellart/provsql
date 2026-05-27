@@ -4867,7 +4867,9 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
   int natoms = list_length(q->rtable);
   Oid *atom_relid;
   int *atom_rank;                 /* per atom: relation-symbol rank */
+  bool *atom_det;                 /* per atom: deterministic (non-tracked), erased */
   int  nranks = 0;
+  int  n_tracked = 0;             /* number of non-deterministic (TID) atoms */
   bool has_self_join = false;
   safe_collect_vars_ctx vctx = { NIL };
   List *eq_pairs = NIL;
@@ -4899,29 +4901,77 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     if (!IsA((Node *) lfirst(lc), RangeTblRef))
       return NULL;
 
-  /* --- 1. metadata gate: every atom a base RTE classified strictly TID;
-   * count relation-symbol occurrences to find self-joins and assign ranks --- */
+  /* --- 1. metadata gate: every probabilistic atom a base RTE classified
+   * strictly TID.  A non-tracked base relation (no provsql column and no
+   * metadata) is deterministic: it contributes only probability-1 tuples and
+   * anchors no provenance variable, so it is *erased* from the inversion
+   * analysis.  Its join equalities still merge classes in step 2 (it filters
+   * the cross product), but it is skipped by the root, positional-consistency,
+   * precedence and marker passes.  Erasing an atom can only remove precedence
+   * edges, so it strictly enlarges the certified class and stays sound -- the
+   * structured builder is correct on any lineage; the order only bounds size.
+   * This mirrors the read-once path's deterministic-relation transparency
+   * (Gatterbauer & Suciu dissociation), with the same soundness guards.  BID /
+   * OPAQUE / matview / foreign / inheritance-child atoms remain out of scope
+   * and reject.  Tracked relation-symbol occurrences are counted to find
+   * self-joins and assign ranks; deterministic atoms get rank -1 (unused). --- */
   atom_relid = palloc(natoms * sizeof(Oid));
   atom_rank  = palloc(natoms * sizeof(int));
+  atom_det   = palloc0(natoms * sizeof(bool));
   i = 0;
   foreach (lc, q->rtable) {
     RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
     ProvenanceTableInfo info;
-    if (rte->rtekind != RTE_RELATION) { pfree(atom_relid); pfree(atom_rank); return NULL; }
-    if (!provsql_lookup_table_info(rte->relid, &info)
-        || info.kind != PROVSQL_TABLE_TID) {
-      /* BID / OPAQUE / no-metadata / deterministic: out of scope for the
+    AttrNumber provsql_attno;
+    bool has_provsql_col, has_meta;
+    if (rte->rtekind != RTE_RELATION) {
+      pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL;
+    }
+    provsql_attno = get_attnum(rte->relid, PROVSQL_COLUMN_NAME);
+    has_provsql_col = provsql_attno != InvalidAttrNumber
+      && get_atttype(rte->relid, provsql_attno) == constants->OID_TYPE_UUID;
+    has_meta = provsql_lookup_table_info(rte->relid, &info);
+    if (!has_provsql_col && !has_meta) {
+      /* Candidate deterministic atom: same soundness guards as the read-once
+       * dissociation pass -- a plain table (not a matview / foreign table /
+       * partitioned parent) with no inheritance parent that could hide
+       * correlated rows.  If a guard fails, the atom is non-tracked yet not
+       * safely erasable: reject rather than risk an unsound certificate. */
+      HeapTuple class_tup = SearchSysCache1(RELOID, ObjectIdGetDatum(rte->relid));
+      bool ok_relkind = false;
+      if (HeapTupleIsValid(class_tup)) {
+        ok_relkind =
+          ((Form_pg_class) GETSTRUCT(class_tup))->relkind == RELKIND_RELATION;
+        ReleaseSysCache(class_tup);
+      }
+      if (!ok_relkind || has_superclass(rte->relid)) {
+        pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL;
+      }
+      atom_det[i]   = true;
+      atom_relid[i] = InvalidOid;
+      atom_rank[i]  = -1;
+      i++;
+      continue;
+    }
+    if (!has_meta || info.kind != PROVSQL_TABLE_TID) {
+      /* BID / OPAQUE / provsql column without metadata: out of scope for the
        * independent-Bernoulli OBDD model. */
-      pfree(atom_relid); pfree(atom_rank);
-      return NULL;
+      pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL;
     }
     atom_relid[i] = rte->relid;
-    /* relation-symbol rank: dense id per distinct relid, first-seen order */
+    /* relation-symbol rank: dense id per distinct relid among tracked atoms,
+     * first-seen order */
     atom_rank[i] = -1;
     for (j = 0; j < i; j++)
-      if (atom_relid[j] == rte->relid) { atom_rank[i] = atom_rank[j]; has_self_join = true; break; }
+      if (!atom_det[j] && atom_relid[j] == rte->relid) {
+        atom_rank[i] = atom_rank[j]; has_self_join = true; break;
+      }
     if (atom_rank[i] < 0) atom_rank[i] = nranks++;
+    n_tracked++;
     i++;
+  }
+  if (n_tracked < 1) {
+    pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL;
   }
   /* Self-join-free hierarchical queries are inversion-free too (they coincide
    * with the read-once class) and are certified here as well: the structured
@@ -4937,7 +4987,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
   if (q->jointree && q->jointree->quals)
     expression_tree_walker(q->jointree->quals, safe_collect_vars_walker, &vctx);
   nvars = list_length(vctx.vars);
-  if (nvars == 0) { pfree(atom_relid); pfree(atom_rank); return NULL; }
+  if (nvars == 0) { pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL; }
 
   vars_arr = palloc(nvars * sizeof(Var *));
   cls = palloc(nvars * sizeof(int));
@@ -4979,12 +5029,15 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
       int a;
       if (vno < 1 || (int) vno > natoms) continue;
       a = (int) vno - 1;
+      if (atom_det[a]) continue;                  /* erased: anchors no class */
       if (!seen[c * natoms + a]) { seen[c * natoms + a] = 1; class_atom_count[c]++; }
     }
     pfree(seen);
   }
+  /* The root class touches every *tracked* atom (deterministic atoms are
+   * erased, so they are not required to carry the root variable). */
   for (i = 0; i < nclasses; i++)
-    if (class_atom_count[i] == natoms) { root_class = i; break; }
+    if (class_atom_count[i] == n_tracked) { root_class = i; break; }
   if (root_class < 0) {
     if (provsql_verbose >= 5)
       provsql_notice("not inversion-free: no root variable (non-hierarchical)");
@@ -5001,6 +5054,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     int a, rrank, pos;
     if (vno < 1 || (int) vno > natoms) continue;
     a = (int) vno - 1;
+    if (atom_det[a]) continue;             /* erased: no positional constraint */
     rrank = atom_rank[a];
     pos = (int) vars_arr[i]->varattno;     /* relation column position */
     if (col_pos_of_class[rrank * nclasses + c] == 0)
@@ -5021,6 +5075,8 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     int ci = CCLASS(i);
     int posi = (int) vars_arr[i]->varattno;
     Index vno = vars_arr[i]->varno;
+    if (vno >= 1 && (int) vno <= natoms && atom_det[vno - 1])
+      continue;                            /* erased: imposes no precedence */
     for (j = 0; j < nvars; j++) {
       int cj, posj;
       if (vars_arr[j]->varno != vno) continue;     /* same atom only */
@@ -5081,6 +5137,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     int a, pos;
     if (vno < 1 || (int) vno > natoms) continue;
     a = (int) vno - 1;
+    if (atom_det[a]) continue;   /* erased atom: its row stays all -1 (no marker) */
     pos = (int) vars_arr[i]->varattno;
     cert->atom_col_class[a * cert->maxarity + (pos - 1)] = CCLASS(i);
   }
@@ -5125,10 +5182,11 @@ static bool compute_inversion_free_markers(const SafeCert *cert, InvFreeMarker *
   /* pass 1: root column + the (single, optional) secondary class of each atom */
   atom_sec_class = palloc(natoms * sizeof(int));
   for (a = 0; a < natoms; a++) {
-    int root_col = -1, sec_col = 0, sec_class = -1, nsec = 0;
+    int root_col = -1, sec_col = 0, sec_class = -1, nsec = 0, nset = 0;
     for (col = 0; col < ma; col++) {
       int cl = cert->atom_col_class[a * ma + col];
       if (cl < 0) continue;
+      nset++;
       if (cl == cert->root_class) {
         if (root_col >= 0) { pfree(atom_sec_class); return false; }
         root_col = col + 1;
@@ -5136,6 +5194,10 @@ static bool compute_inversion_free_markers(const SafeCert *cert, InvFreeMarker *
         sec_col = col + 1; sec_class = cl; nsec++;
       }
     }
+    /* An atom with no class-anchored column is an erased deterministic atom
+     * (a tracked atom always carries the root-class column by construction):
+     * it gets no marker and is skipped below. */
+    if (nset == 0) { m[a].valid = false; atom_sec_class[a] = -1; continue; }
     if (root_col < 0 || nsec > 1) { pfree(atom_sec_class); return false; }
     m[a].valid = true;
     m[a].root_col = (AttrNumber) root_col;
@@ -5155,7 +5217,9 @@ static bool compute_inversion_free_markers(const SafeCert *cert, InvFreeMarker *
     else if (rank_first_sec[rk] != atom_sec_class[a]) rank_spans[rk] = true;
   }
   for (a = 0; a < natoms; a++) {
-    int rk = cert->atom_relation_rank[a];
+    int rk;
+    if (!m[a].valid) continue;            /* erased deterministic atom: no factor */
+    rk = cert->atom_relation_rank[a];
     if (rank_spans[rk])              m[a].factor = SAFE_CERT_GUARD_FACTOR;
     else if (atom_sec_class[a] >= 0) m[a].factor = atom_sec_class[a];
     else                             m[a].factor = rk;     /* root-only: by relation */
