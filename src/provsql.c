@@ -95,7 +95,8 @@ extern void _PG_fini(void);
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed, bool wrap_root, bool top_level);
+                            bool **removed, bool wrap_root, bool top_level,
+                            const InvFreeMarkerCtx *inv_ctx);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
                               const char *cert);
@@ -591,7 +592,8 @@ static void inline_ctes(Query *q) {
  * @return  List of @c Var nodes, one per provenance source; @c NIL if the
  *          query has no provenance-bearing relation.
  */
-static List *get_provenance_attributes(const constants_t *constants, Query *q) {
+static List *get_provenance_attributes(const constants_t *constants, Query *q,
+                                       const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts = NIL;
 
   for(Index rteid = 1; rteid <= q->rtable->length; ++rteid) {
@@ -628,7 +630,9 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q) {
       int old_targetlist_length =
         r->subquery->targetList ? r->subquery->targetList->length : 0;
       Query *new_subquery =
-        process_query(constants, r->subquery, &inner_removed, false, false);
+        process_query(constants, r->subquery, &inner_removed, false, false,
+                      (inv_ctx && rteid - 1 < (Index) inv_ctx->natoms)
+                        ? inv_ctx->sub[rteid - 1] : NULL);
       if (new_subquery != NULL) {
         int i = 0;
         int *offset = (int *)palloc(old_targetlist_length * sizeof(int));
@@ -4366,6 +4370,273 @@ static void wrap_inversion_free_markers(const constants_t *constants, Query *q,
   }
 }
 
+/* -------------------------------------------------------------------------
+ * Inversion-free: conjunctive flattening of single-base SPJ subqueries/views
+ * ------------------------------------------------------------------------- */
+
+/** @brief Context for @c flatten_subst_mutator. */
+typedef struct flatten_subst_ctx {
+  Index  subq_varno;        /* parent range-table slot of the subquery (1-based) */
+  Index  base_varno_in_sub; /* the base relation's varno inside the subquery */
+  Var  **outcol_to_base;    /* 1-based by output resno: subquery TL Var on the base */
+  int    noutcols;
+  bool   in_subquery_quals; /* true while remapping the subquery's own WHERE */
+} flatten_subst_ctx;
+
+/**
+ * @brief Tree mutator for in-place inlining of a single-base subquery.
+ *
+ * Two modes.  When @c in_subquery_quals is false (rewriting the parent), a
+ * @c Var referencing the subquery's output column @c a (varno @c subq_varno)
+ * becomes the base @c Var that the subquery's target list maps @c a to, kept at
+ * @c subq_varno (the slot the base relation will occupy).  When true (pulling
+ * the subquery's own WHERE up into the parent), a base @c Var (varno
+ * @c base_varno_in_sub inside the subquery) is renumbered to @c subq_varno.
+ * Every other @c Var is copied unchanged; outer references (varlevelsup > 0)
+ * are never touched.
+ */
+static Node *flatten_subst_mutator(Node *node, void *ctxp) {
+  flatten_subst_ctx *c = (flatten_subst_ctx *) ctxp;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup == 0) {
+      if (c->in_subquery_quals) {
+        if (v->varno == c->base_varno_in_sub) {
+          Var *nv = (Var *) copyObject(v);
+          nv->varno = c->subq_varno;
+          return (Node *) nv;
+        }
+      } else if (v->varno == c->subq_varno) {
+        if (v->varattno >= 1 && v->varattno <= c->noutcols
+            && c->outcol_to_base[v->varattno] != NULL) {
+          Var *nv = (Var *) copyObject(c->outcol_to_base[v->varattno]);
+          nv->varno = c->subq_varno;
+          nv->varlevelsup = 0;
+          return (Node *) nv;
+        }
+      }
+    }
+    return (Node *) copyObject(v);
+  }
+  return expression_tree_mutator(node, flatten_subst_mutator, ctxp);
+}
+
+/**
+ * @brief In place, inline every single-base SPJ subquery/view of @p probe into
+ *        its base relation, preserving range-table positions.
+ *
+ * A range-table entry is inlined when it is a non-lateral @c RTE_SUBQUERY whose
+ * subquery is a plain SELECT with no aggregation, grouping, DISTINCT, set
+ * operation, sublink, CTE or LIMIT, whose @c FROM is a single base
+ * @c RTE_RELATION (PG 14/15 view OLD/NEW placeholders ignored), and whose
+ * (non-junk) target list entries are all plain @c Vars on that base.  Such a
+ * subquery is a pure projection+selection over one relation: replacing the slot
+ * with the base relation, remapping the parent's column references and pulling
+ * the subquery's WHERE up yields an equivalent flat conjunction.  Because slots
+ * are replaced in place, a base atom's flattened position equals the parent
+ * slot it came from, so the detector's per-atom markers map straight back.
+ *
+ * @return a palloc'd array of @c list_length(probe->rtable) ints: entry @c i is
+ * the base relation's 1-based varno inside the subquery that was inlined at slot
+ * @c i, or @c -1 if slot @c i was not an inlined subquery.
+ */
+static int *flatten_single_base_subqueries(Query *probe) {
+  int       N = list_length(probe->rtable);
+  int      *fmap = (int *) palloc(N * sizeof(int));
+  List     *merged_quals = NIL;
+  int       i;
+
+  for (i = 0; i < N; i++)
+    fmap[i] = -1;
+
+  for (i = 0; i < N; i++) {
+    RangeTblEntry *rte = list_nth_node(RangeTblEntry, probe->rtable, i);
+    Query         *sq;
+    RangeTblEntry *base = NULL;
+    int            base_pos = -1, real_base = 0, noutcols = 0, j;
+    bool           ok = true;
+    ListCell      *lc;
+    Var          **outcol_to_base;
+
+    if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || rte->lateral)
+      continue;
+    sq = rte->subquery;
+    if (sq->commandType != CMD_SELECT
+        || sq->setOperations || sq->hasAggs || sq->hasWindowFuncs
+        || sq->groupingSets || sq->groupClause || sq->havingQual
+        || sq->distinctClause || sq->hasDistinctOn || sq->hasSubLinks
+        || sq->limitCount || sq->limitOffset || sq->cteList
+        || sq->jointree == NULL)
+      continue;
+    foreach (lc, sq->jointree->fromlist)
+      if (!IsA((Node *) lfirst(lc), RangeTblRef)) { ok = false; break; }
+    if (!ok)
+      continue;
+    /* exactly one real base relation (ignore PG 14/15 view OLD/NEW artifacts) */
+    j = 0;
+    foreach (lc, sq->rtable) {
+      RangeTblEntry *br = (RangeTblEntry *) lfirst(lc);
+      ++j;
+      if (br->rtekind == RTE_RELATION && br->relkind == RELKIND_VIEW)
+        continue;                       /* placeholder artifact */
+      if (br->rtekind == RTE_RELATION) { base = br; base_pos = j; ++real_base; }
+      else { ok = false; }              /* a join / nested subquery inside */
+    }
+    if (!ok || real_base != 1)
+      continue;
+    /* target list: every non-junk entry a plain Var on the base relation */
+    foreach (lc, sq->targetList) {
+      TargetEntry *te = (TargetEntry *) lfirst(lc);
+      if (te->resjunk) continue;
+      if (te->resno > noutcols) noutcols = te->resno;
+    }
+    outcol_to_base = (Var **) palloc0((noutcols + 1) * sizeof(Var *));
+    foreach (lc, sq->targetList) {
+      TargetEntry *te = (TargetEntry *) lfirst(lc);
+      Var *v;
+      if (te->resjunk) continue;
+      if (!IsA(te->expr, Var)) { ok = false; break; }
+      v = (Var *) te->expr;
+      if (v->varlevelsup != 0 || v->varno != (Index) base_pos) { ok = false; break; }
+      outcol_to_base[te->resno] = v;
+    }
+    if (!ok) { pfree(outcol_to_base); continue; }
+
+    /* All checks passed: inline this subquery slot. */
+    {
+      flatten_subst_ctx c;
+      RangeTblEntry    *newrte;
+      ListCell         *slot;
+      c.subq_varno        = (Index) (i + 1);
+      c.base_varno_in_sub = (Index) base_pos;
+      c.outcol_to_base    = outcol_to_base;
+      c.noutcols          = noutcols;
+
+      /* (1) parent references to the subquery's output -> base columns */
+      c.in_subquery_quals = false;
+      probe->targetList =
+        (List *) flatten_subst_mutator((Node *) probe->targetList, &c);
+      if (probe->jointree && probe->jointree->quals)
+        probe->jointree->quals =
+          flatten_subst_mutator(probe->jointree->quals, &c);
+
+      /* (2) pull the subquery's own WHERE up, remapping base varno -> slot */
+      if (sq->jointree && sq->jointree->quals) {
+        c.in_subquery_quals = true;
+        merged_quals =
+          lappend(merged_quals,
+                  flatten_subst_mutator((Node *) copyObject(sq->jointree->quals),
+                                        &c));
+      }
+
+      /* (3) replace the subquery slot with the base relation (same position) */
+      newrte = (RangeTblEntry *) copyObject(base);
+      slot = list_nth_cell(probe->rtable, i);
+      lfirst(slot) = newrte;
+      fmap[i] = base_pos;
+    }
+    pfree(outcol_to_base);
+  }
+
+  /* AND every pulled-up subquery WHERE into the parent's. */
+  if (merged_quals != NIL) {
+    List *all = NIL;
+    if (probe->jointree->quals)
+      all = lappend(all, probe->jointree->quals);
+    all = list_concat(all, merged_quals);
+    probe->jointree->quals =
+      (list_length(all) == 1) ? (Node *) linitial(all)
+                              : (Node *) makeBoolExpr(AND_EXPR, all, -1);
+  }
+  return fmap;
+}
+
+/**
+ * @brief Build the inversion-free marker context for top-level query @p q.
+ *
+ * Runs the detector on a flattened, group-RTE-stripped copy of @p q so that
+ * single-base SPJ subqueries/views are recognised as base atoms.  On success
+ * sets @p *cert_out to the serialised root certificate and returns a context
+ * tree mirroring @p q's range table: a direct base atom's marker at its slot,
+ * a flattened subquery's marker in a one-entry child context at its slot.
+ * Returns NULL (declining) when @p q is not certified or carries no markers;
+ * @p *cert_out may still be set (the cert attaches even without markers, and
+ * the path then declines at evaluation and falls back).
+ */
+static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
+                                                  Query *q, char **cert_out) {
+  bool           has_subq = false, has_group = false;
+  Query         *probe;
+  int           *fmap = NULL;
+  InvFreeMarker *flat = NULL;
+  int            nflat = 0, N, i;
+  char          *cert = NULL;
+  InvFreeMarkerCtx *ctx;
+  ListCell      *lc;
+
+  foreach (lc, q->rtable)
+    if (((RangeTblEntry *) lfirst(lc))->rtekind == RTE_SUBQUERY) has_subq = true;
+#if PG_VERSION_NUM >= 180000
+  has_group = q->hasGroupRTE;
+#endif
+
+  /* No subqueries and no synthetic group RTE: analyse q in place (read-only).
+   * Otherwise work on a copy: strip the PG 18 group RTE, then flatten. */
+  if (!has_subq && !has_group) {
+    probe = q;
+  } else {
+    probe = (Query *) copyObject(q);
+#if PG_VERSION_NUM >= 180000
+    if (has_group)
+      strip_group_rte_pg18(probe);
+#endif
+    if (has_subq)
+      fmap = flatten_single_base_subqueries(probe);
+  }
+
+  if (!inversion_free_analyze(constants, probe, &cert, &flat, &nflat)) {
+    if (fmap) pfree(fmap);
+    return NULL;
+  }
+  if (cert_out)
+    *cert_out = cert;
+  if (flat == NULL) {            /* certified but no marker model: decline */
+    if (fmap) pfree(fmap);
+    return NULL;
+  }
+
+  N = list_length(q->rtable);
+  ctx = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
+  ctx->natoms  = N;
+  ctx->markers = (InvFreeMarker *) palloc0((size_t) N * sizeof(InvFreeMarker));
+  ctx->sub     = (InvFreeMarkerCtx **) palloc0((size_t) N * sizeof(InvFreeMarkerCtx *));
+  /* The synthetic group RTE (if any) sits after the base atoms, and flattening
+   * keeps slots in place, so flattened positions 0..nflat-1 align with q's. */
+  for (i = 0; i < N && i < nflat; i++) {
+    RangeTblEntry *rte;
+    if (!flat[i].valid)
+      continue;
+    rte = list_nth_node(RangeTblEntry, q->rtable, i);
+    if (rte->rtekind == RTE_RELATION) {
+      ctx->markers[i] = flat[i];                       /* direct base atom */
+    } else if (rte->rtekind == RTE_SUBQUERY && fmap != NULL && fmap[i] >= 1
+               && rte->subquery != NULL) {
+      int sublen = list_length(rte->subquery->rtable);
+      InvFreeMarkerCtx *child = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
+      child->natoms  = sublen;
+      child->markers = (InvFreeMarker *) palloc0((size_t) sublen * sizeof(InvFreeMarker));
+      child->sub     = (InvFreeMarkerCtx **) palloc0((size_t) sublen * sizeof(InvFreeMarkerCtx *));
+      if (fmap[i] - 1 < sublen)
+        child->markers[fmap[i] - 1] = flat[i];         /* marker on the inlined base atom */
+      ctx->sub[i] = child;
+    }
+  }
+  if (fmap) pfree(fmap);
+  return ctx;
+}
+
 /**
  * @brief Rewrite a single SELECT query to carry provenance.
  *
@@ -4395,7 +4666,8 @@ static void wrap_inversion_free_markers(const constants_t *constants, Query *q,
  *          query has no FROM clause and can be skipped.
  */
 static Query *process_query(const constants_t *constants, Query *q,
-                            bool **removed, bool wrap_root, bool top_level) {
+                            bool **removed, bool wrap_root, bool top_level,
+                            const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts;
   bool has_union = false;
   bool has_difference = false;
@@ -4404,9 +4676,8 @@ static Query *process_query(const constants_t *constants, Query *q,
   int nbcols = 0;
   int **columns;
   unsigned i = 0;
-  char *inv_cert = NULL;            /* serialised inversion-free certificate */
-  InvFreeMarker *inv_markers = NULL;/* per-atom inversion-free order markers */
-  int inv_natoms = 0;               /* length of inv_markers */
+  char *inv_cert = NULL;            /* serialised inversion-free certificate (root) */
+  const InvFreeMarkerCtx *local_inv_ctx = NULL; /* this query's marker context */
   if (provsql_verbose >= 50)
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
@@ -4541,14 +4812,15 @@ static Query *process_query(const constants_t *constants, Query *q,
                           "aggregate results not supported");
         }
         q = rewrite_non_all_into_external_group_by(q);
-        return process_query(constants, q, removed, wrap_root, top_level);
+        return process_query(constants, q, removed, wrap_root, top_level, inv_ctx);
       }
     }
 
     if (q->hasAggs) {
       Query *rewritten = rewrite_agg_distinct(q, constants);
       if (rewritten)
-        return process_query(constants, rewritten, removed, wrap_root, top_level);
+        return process_query(constants, rewritten, removed, wrap_root, top_level,
+                             inv_ctx);
     }
 
     /* Opt-in safe-query optimisation slot: when on, try to rewrite
@@ -4562,13 +4834,18 @@ static Query *process_query(const constants_t *constants, Query *q,
      * what downstream evaluators inspect to refuse unsound evaluation,
      * so we refuse to rewrite on schemas that still predate the
      * helper. */
-    if (provsql_boolean_provenance &&
+    if (provsql_boolean_provenance && inv_ctx == NULL &&
         OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN)) {
       /* Read-once rewrite (an operation-mode change: it rewrites the query and
-       * changes the produced circuit), so it is gated on boolean_provenance. */
+       * changes the produced circuit), so it is gated on boolean_provenance.
+       * Skipped when @c inv_ctx is supplied: this query is an inlined subquery
+       * whose base inputs must receive the parent's transparent order markers
+       * (a no-op rewrite for the single-base projection it then is), not a
+       * circuit-changing read-once rewrite that would bypass them. */
       Query *rewritten = try_safe_query_rewrite(constants, q);
       if (rewritten)
-        return process_query(constants, rewritten, removed, true, top_level);
+        return process_query(constants, rewritten, removed, true, top_level,
+                             inv_ctx);
     }
 
     /* Inversion-free analysis is *not* an operation-mode change: it leaves the
@@ -4579,48 +4856,35 @@ static Query *process_query(const constants_t *constants, Query *q,
      * certificate and markers align with the lineage by construction.  Only at
      * the outermost (top-level) root the user evaluates; never when the
      * read-once rewrite above already fired (that path returns early). */
-    if (top_level && provsql_inversion_free
-        && OidIsValid(constants->OID_FUNCTION_ANNOTATE)) {
-      /* On PG 18 a GROUP BY query carries a synthetic RTE_GROUP that hides the
-       * base atoms from the detector (and a GROUP BY witness is how the
-       * non-read-once block forms).  Probe on a *stripped copy* so the detector
-       * sees the flat base atoms, and commit the strip to the real query only
-       * if it certifies -- leaving non-certified GROUP BY queries untouched (no
-       * restructuring of unrelated lineage).  Without a group RTE this is just
-       * a direct analysis (no copy). */
-      bool has_group_rte = false;
-#if PG_VERSION_NUM >= 180000
-      has_group_rte = q->hasGroupRTE;
-#endif
-      if (has_group_rte) {
-        /* Detect on a *stripped copy* so the shape gate sees flat base atoms,
-         * but build the lineage on the original (unstripped) q so its circuit
-         * is unchanged -- only transparent markers are added.  The synthetic
-         * RTE_GROUP is appended after the base atoms, so the marker specs
-         * (indexed by base-atom range-table position) apply to q unchanged.
-         * (The size-bounded mismatch backstop in the evaluator declines if a
-         * marker ever fails to land on its input.) */
-        Query *probe = (Query *) copyObject(q);
-        strip_group_rte_pg18(probe);
-        inversion_free_analyze(constants, probe, &inv_cert, &inv_markers,
-                               &inv_natoms);
-      } else {
-        inversion_free_analyze(constants, q, &inv_cert, &inv_markers,
-                               &inv_natoms);
-      }
+    if (inv_ctx != NULL) {
+      /* This query is an inlined subquery: the parent's flattened analysis
+       * already produced our base-atom markers.  Apply them as-is; attach no
+       * certificate here (the cert lives on the parent's per-row root). */
+      local_inv_ctx = inv_ctx;
+    } else if (top_level && provsql_inversion_free
+               && OidIsValid(constants->OID_FUNCTION_ANNOTATE)) {
+      /* Build the inversion-free marker context tree.  The detector runs on a
+       * flattened copy (single-base SPJ subqueries / views inlined to their
+       * base relation in place; on PG 18 the synthetic RTE_GROUP is stripped),
+       * so the certificate and per-input order markers align with the lineage
+       * by construction; the original q is left intact (only transparent
+       * markers + a root certificate are added, read back at probability
+       * evaluation).  The evaluator's size-bounded mismatch backstop declines
+       * if any marker fails to land on its input. */
+      local_inv_ctx = build_inversion_free_ctx(constants, q, &inv_cert);
     }
 
     // get_provenance_attributes will also recursively process subqueries
-    // by calling process_query
-    prov_atts = get_provenance_attributes(constants, q);
+    // by calling process_query (threading each subquery's marker sub-context)
+    prov_atts = get_provenance_attributes(constants, q, local_inv_ctx);
 
     /* Inversion-free path: wrap each certified atom's provenance token in its
      * per-input order marker.  prov_atts are base-relation Vars (the certified
      * class has only RTE_RELATION atoms and no agg/distinct/set-op restructuring,
      * so each Var's varno is still the atom's range-table index). */
-    if (inv_markers != NULL)
-      wrap_inversion_free_markers(constants, q, prov_atts, inv_markers,
-                                  inv_natoms);
+    if (local_inv_ctx != NULL && local_inv_ctx->markers != NULL)
+      wrap_inversion_free_markers(constants, q, prov_atts,
+                                  local_inv_ctx->markers, local_inv_ctx->natoms);
 
     if (prov_atts == NIL) {
       /* If the WHERE clause contains a random_variable comparison, we
@@ -4895,7 +5159,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   /* Rewrite the source SELECT to carry provenance */
   {
     bool *removed = NULL;
-    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false, false);
+    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false, false, NULL);
     AttrNumber src_provsql_attno = 0;
 
     if (new_subquery == NULL)
@@ -5019,7 +5283,7 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_verbose >= 40)
         begin = clock();
 
-      new_query = process_query(&constants, q, &removed, false, true);
+      new_query = process_query(&constants, q, &removed, false, true, NULL);
 
       if (provsql_verbose >= 40)
         provsql_notice("planner time spent=%f",

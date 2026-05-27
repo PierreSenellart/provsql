@@ -55,6 +55,28 @@ typedef struct InvFreeMarker {
 } InvFreeMarker;
 
 /**
+ * @brief Per-query marker context for the inversion-free path, threaded through
+ *        the recursive query rewrite to reach base inputs nested in subqueries.
+ *
+ * The detector runs on a *flattened* copy of the lineage query (single-base SPJ
+ * subqueries / views inlined to their base relation in place, so range-table
+ * positions are preserved).  The resulting per-atom markers are organised into
+ * a context tree mirroring the *original* (un-flattened) query: for range-table
+ * position @c i (0-based), @c markers[i] is the order marker for a base relation
+ * sitting directly at @c i, while @c sub[i] is the child context for a flattened
+ * subquery at @c i (whose own base atom carries the marker).  Exactly one of
+ * @c markers[i].valid and @c sub[i]!=NULL holds for a certified atom.  A query
+ * rewritten with a non-NULL context applies @c markers to its own base prov
+ * Vars and passes @c sub[i] down when recursing into the subquery at @c i.
+ */
+typedef struct InvFreeMarkerCtx InvFreeMarkerCtx;
+struct InvFreeMarkerCtx {
+  int                natoms;    /* this query's range-table length */
+  InvFreeMarker     *markers;   /* size natoms: direct base-atom markers */
+  InvFreeMarkerCtx **sub;       /* size natoms: child ctx per flattened subquery, or NULL */
+};
+
+/**
  * @brief Inversion-free analysis of the lineage query @p q.
  *
  * Runs the detector on @p q itself (the query whose provenance lineage is being

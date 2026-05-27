@@ -81,9 +81,9 @@ add_provenance
 remove_provenance
 
 (1 row)
-x|root_type|prob
-1|times|0.200000
-2|times|0.200000
+x|declined|prob
+1|t|0.200000
+2|t|0.200000
 (2 rows)
 add_provenance
 
@@ -217,3 +217,44 @@ x|ifd3_default|ifd3_pw
 1|0.112800|0.112800
 2|0.060000|0.060000
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 2 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+x|t1_if|t1_pw
+1|0.200000|0.200000
+2|0.200000|0.200000
+3|0.200000|0.200000
+(3 rows)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 2 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+x|t2_if|t2_pw
+1|0.500000|0.500000
+2|0.500000|0.500000
+3|0.500000|0.500000
+(3 rows)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 2 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+x|t3_if|t3_pw
+1|0.200000|0.200000
+2|0.200000|0.200000
+(2 rows)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 2 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+x|t4_default|t4_pw
+1|0.500000|0.500000
+2|0.500000|0.500000
+3|0.500000|0.500000
+(3 rows)

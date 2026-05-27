@@ -162,9 +162,12 @@ SELECT x,
 --     not model, and the evaluator must treat a malformed certificate as inert.
 --     In each the lineage still evaluates correctly through the normal chain.
 
--- (6a) Derived (view) atom: a view is an RTE_SUBQUERY, not an RTE_RELATION, so
---      the detector declines (root is not a certificate-carrying annotation) and
---      the read-once lineage is evaluated as usual.
+-- (6a) Aggregating view: a GROUP BY / aggregate inside the view turns its
+--      provenance into a semiring sum over groups, outside the monotone-DNF
+--      model.  The flattener refuses it (hasAggs / groupClause), so the detector
+--      still sees an RTE_SUBQUERY and declines; the lineage evaluates correctly
+--      through the normal chain.  (Plain SPJ views ARE flattened and certify --
+--      see section 9.)
 CREATE TABLE ifr_va(x int);
 INSERT INTO ifr_va VALUES (1),(2);
 SELECT add_provenance('ifr_va');
@@ -175,12 +178,12 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM ifr_va;
   PERFORM set_prob(provsql, 0.4) FROM ifr_vb;
 END $$;
-CREATE VIEW ifr_vbv AS SELECT x FROM ifr_vb;
+CREATE VIEW ifr_vbv AS SELECT x, count(*) AS c FROM ifr_vb GROUP BY x;
 CREATE TEMP TABLE ifr_vt AS
   SELECT a.x AS x, provenance() AS p
     FROM ifr_va a, ifr_vbv b WHERE a.x = b.x GROUP BY a.x;
 SELECT remove_provenance('ifr_vt');
-SELECT x, get_gate_type(p) AS root_type,
+SELECT x, (get_gate_type(p) <> 'annotation') AS declined,
        round(probability_evaluate(p)::numeric, 6) AS prob
   FROM ifr_vt ORDER BY x;
 
@@ -422,6 +425,71 @@ END $$;
 SELECT x, round(probability_evaluate(p)::numeric, 6)                    AS ifd3_default,
           round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS ifd3_pw
   FROM ifd3_t ORDER BY x;
+
+-- (9) Single-base SPJ views / subqueries.  Inversion-freeness is a property of
+--     the *flattened* query: the detector runs on a copy where each single-base
+--     SPJ subquery/view is inlined to its base relation in place, so the markers
+--     map straight back and are threaded into each subquery's recursive rewrite
+--     (transparent annotations on the base inputs, so query results and the
+--     circuit are unchanged).  boolean_provenance is off here.
+
+-- (9a) view + base, hierarchical self-join-free: q(x) :- Av(x), B(x) where Av is
+--      the projection view SELECT x FROM A.  Certifies and matches pw (0.5*0.4).
+CREATE TABLE ifv_a(x int); INSERT INTO ifv_a VALUES (1),(2),(3);
+SELECT add_provenance('ifv_a');
+CREATE TABLE ifv_b(x int); INSERT INTO ifv_b VALUES (1),(2),(3);
+SELECT add_provenance('ifv_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifv_a;
+  PERFORM set_prob(provsql, 0.4) FROM ifv_b;
+END $$;
+CREATE VIEW ifv_av AS SELECT x FROM ifv_a;
+CREATE TEMP TABLE ifv_t1 AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifv_av a, ifv_b b WHERE a.x = b.x GROUP BY a.x;
+SELECT remove_provenance('ifv_t1');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t1_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t1_pw
+  FROM ifv_t1 ORDER BY x;
+
+-- (9b) the view referenced *twice* -> a structured self-join through the view,
+--      which inlines to a self-join on the base A.  The read-once path rejects
+--      self-joins; inversion-free certifies it.  A(x) AND A(x) collapses
+--      idempotently, so the probability is P(A(x)) = 0.5.
+CREATE TEMP TABLE ifv_t2 AS
+  SELECT v1.x AS x, provenance() AS p
+    FROM ifv_av v1, ifv_av v2 WHERE v1.x = v2.x GROUP BY v1.x;
+SELECT remove_provenance('ifv_t2');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t2_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t2_pw
+  FROM ifv_t2 ORDER BY x;
+
+-- (9c) selection view (a WHERE inside the view): SELECT x FROM B WHERE x <= 2.
+--      The view's selection is pulled up into the flattened conjunction, so x=3
+--      is filtered; the certified shape matches pw on the surviving groups.
+CREATE VIEW ifv_bv AS SELECT x FROM ifv_b WHERE x <= 2;
+CREATE TEMP TABLE ifv_t3 AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifv_a a, ifv_bv b WHERE a.x = b.x GROUP BY a.x;
+SELECT remove_provenance('ifv_t3');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t3_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t3_pw
+  FROM ifv_t3 ORDER BY x;
+
+-- (9d) same structured self-join through the view, but with boolean_provenance
+--      ON: the parent is not read-once (self-join), so it still reaches the
+--      inversion-free analysis; each inlined subquery is rewritten with the
+--      parent-supplied markers (the read-once rewrite is skipped for them so the
+--      transparent markers are not bypassed).  Default chain matches pw.
+SET provsql.boolean_provenance = on;
+CREATE TEMP TABLE ifv_t4 AS
+  SELECT v1.x AS x, provenance() AS p
+    FROM ifv_av v1, ifv_av v2 WHERE v1.x = v2.x GROUP BY v1.x;
+SELECT remove_provenance('ifv_t4');
+SELECT x, round(probability_evaluate(p)::numeric, 6)                    AS t4_default,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t4_pw
+  FROM ifv_t4 ORDER BY x;
+SET provsql.boolean_provenance = off;
 
 RESET provsql.boolean_provenance;
 RESET provsql.verbose_level;
