@@ -879,6 +879,18 @@ extension version.
        :sqlfunc:`probability_benchmark`, :sqlfunc:`tool_available`) and
        the ``provsql.fallback_compiler`` GUC introduced in 1.7.0.
        See :doc:`knowledge-compilation`.
+   * - ``1.4.x``
+     - ``≥ 1.8.0``
+     - Adds the :ref:`Tools panel <studio-tools-panel>`: an in-app view of
+       the ``provsql.tools`` external-tool registry, grouped by operation,
+       with per-tool availability, ``cli`` / ``kcmcp`` kind, and (for a
+       superuser) in-place register / edit / enable / preference /
+       unregister management, including warm
+       :doc:`KCMCP </dev/kc-server-protocol>` servers reached by a managed
+       or explicit endpoint. Backed by the ``provsql.tools`` view and the
+       ``register_tool`` / ``unregister_tool`` / ``set_tool_*`` SQL surface
+       and the ``provsql.kcmcp_server`` GUC introduced in 1.8.0.
+       See :doc:`/user/tool-registry`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to
