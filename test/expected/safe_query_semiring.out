@@ -32,8 +32,8 @@ remove_provenance
 
 (1 row)
 x|root_type
-1|times
-2|times
+1|annotation
+2|annotation
 (2 rows)
 x|sr_how
 1|a1

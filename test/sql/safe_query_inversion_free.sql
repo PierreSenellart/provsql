@@ -126,5 +126,37 @@ SELECT round(probability_evaluate(p)::numeric, 8)                   AS block_def
        round(probability_evaluate(p, 'possible-worlds')::numeric, 8) AS block_pw
   FROM ifr_block;
 
+-- (5) Self-join-free hierarchical query q(x) :- A(x), B(x).  With no self-join
+--     the inversion-free class coincides with the read-once class, but the
+--     analysis is not gated on self-joins: it still certifies the query and
+--     attaches per-input order markers.  With boolean_provenance OFF (so the
+--     read-once rewriter does not pre-empt it) the explicit 'inversion-free'
+--     method compiles the structured d-DNNF over those markers; its value
+--     matches the default chain (here independentEvaluation already suffices)
+--     and exact possible worlds (0.5*0.4 = 0.2 at each x).
+SET provsql.boolean_provenance = off;
+CREATE TABLE ifr_sjf_a(x int);
+INSERT INTO ifr_sjf_a VALUES (1),(2),(3);
+SELECT add_provenance('ifr_sjf_a');
+CREATE TABLE ifr_sjf_b(x int);
+INSERT INTO ifr_sjf_b VALUES (1),(2),(3);
+SELECT add_provenance('ifr_sjf_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifr_sjf_a;
+  PERFORM set_prob(provsql, 0.4) FROM ifr_sjf_b;
+END $$;
+CREATE TEMP TABLE ifr_sjf AS
+  SELECT a.x AS x, provenance() AS p
+    FROM ifr_sjf_a a, ifr_sjf_b b
+   WHERE a.x = b.x
+   GROUP BY a.x;
+SELECT remove_provenance('ifr_sjf');
+SELECT count(*) AS sjf_rows FROM ifr_sjf;
+SELECT x,
+       round(probability_evaluate(p)::numeric, 6)                    AS sjf_default,
+       round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS sjf_if,
+       round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS sjf_pw
+  FROM ifr_sjf ORDER BY x;
+
 RESET provsql.boolean_provenance;
 RESET provsql.verbose_level;

@@ -4305,11 +4305,21 @@ static Expr *build_inversion_free_marker(const constants_t *constants, Query *q,
   Index relid = prov_var->varno;
   RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, relid - 1);
   Var *rootv = make_column_var(q, r, relid, m->root_col);
-  Var *secv  = make_column_var(q, r, relid, m->sec_col);
   Const *factorc = makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
                              Int32GetDatum(m->factor), false, true);
   FuncExpr *keyf = makeNode(FuncExpr);
   FuncExpr *ann = makeNode(FuncExpr);
+  Expr *secarg;
+
+  /* A root-only atom (no secondary class, e.g. a self-join-free hierarchical
+   * query's atoms all binding only the head variable) carries a constant
+   * secondary key: every such input shares the single tile of its block. */
+  if (m->sec_col == 0)
+    secarg = (Expr *) makeConst(TEXTOID, -1, DEFAULT_COLLATION_OID, -1,
+                                CStringGetTextDatum("0"), false, false);
+  else
+    secarg = coerce_via_io_to_text(
+               (Expr *) make_column_var(q, r, relid, m->sec_col));
 
   keyf->funcid = constants->OID_FUNCTION_INVERSION_FREE_KEY;
   keyf->funcresulttype = TEXTOID;
@@ -4319,7 +4329,7 @@ static Expr *build_inversion_free_marker(const constants_t *constants, Query *q,
   keyf->funccollid = DEFAULT_COLLATION_OID;
   keyf->inputcollid = DEFAULT_COLLATION_OID;
   keyf->args = list_make3(coerce_via_io_to_text((Expr *) rootv),
-                          coerce_via_io_to_text((Expr *) secv),
+                          secarg,
                           (Expr *) factorc);
   keyf->location = -1;
 

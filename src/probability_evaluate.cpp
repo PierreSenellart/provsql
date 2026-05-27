@@ -39,6 +39,9 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "c_cpp_compatibility.h"
 #include <set>
 #include <stack>
+#include <map>
+#include <vector>
+#include <algorithm>
 #include <cmath>
 #include <csignal>
 
@@ -144,6 +147,41 @@ static bool collect_inversion_free_keys(
     }
   }
   return true;
+}
+
+/**
+ * @brief Flatten the per-input order keys into a total rank for the structured
+ *        builder's order-only constructor.
+ *
+ * Sorts the certified inputs into a Prop. 4.5-consistent order -- root-class
+ * value first (one independent block per value), then secondary-class value
+ * (one tile per value within a block), then the shared self-join guard before
+ * the payloads of its tile, then by factor -- and assigns consecutive ranks.
+ * Ties (two inputs with identical keys) keep a deterministic order via the
+ * input gate id, so distinct variables always get distinct ranks.  Unlike the
+ * keyed (factored-sweep) constructor this makes no single-secondary-axis /
+ * one-payload-per-tile assumption, so it certifies every hierarchical
+ * inversion-free lineage, including the self-join-free case.
+ */
+static std::map<gate_t, int> inversion_free_rank(
+  const std::map<gate_t, StructuredDNNFBuilder::InputKey> &keys)
+{
+  std::vector<std::pair<gate_t, StructuredDNNFBuilder::InputKey>> v(
+    keys.begin(), keys.end());
+  std::sort(v.begin(), v.end(), [](const auto &a, const auto &b) {
+    const auto &ka = a.second, &kb = b.second;
+    if (ka.root != kb.root) return ka.root < kb.root;
+    if (ka.sec  != kb.sec)  return ka.sec  < kb.sec;
+    int ga = (ka.factor == StructuredDNNFBuilder::GUARD_FACTOR) ? 0 : 1;
+    int gb = (kb.factor == StructuredDNNFBuilder::GUARD_FACTOR) ? 0 : 1;
+    if (ga != gb) return ga < gb;
+    if (ka.factor != kb.factor) return ka.factor < kb.factor;
+    return a.first < b.first;
+  });
+  std::map<gate_t, int> rank;
+  int r = 0;
+  for (const auto &p : v) rank[p.first] = r++;
+  return rank;
 }
 
 /**
@@ -383,7 +421,8 @@ static Datum probability_evaluate_internal
           provsql_error("method 'inversion-free': the provenance root carries "
                         "a certificate but its inputs lack per-input order "
                         "markers");
-        result = StructuredDNNFBuilder(c, gate, keys).probability();
+        result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
+                   .probability();
         processed = true;
       } else if(method=="") {
         // Default evaluation: independent, then (when an inversion-free
@@ -398,7 +437,8 @@ static Datum probability_evaluate_internal
           try {
             std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
             if(collect_inversion_free_keys(gc, gc_root, gc_to_bc, c, gate, keys)) {
-              result = StructuredDNNFBuilder(c, gate, keys).probability();
+              result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
+                         .probability();
               processed = true;
             }
           } catch(CircuitException &) {}   // fall through to tree-decomposition

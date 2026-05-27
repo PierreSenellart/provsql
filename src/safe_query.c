@@ -4899,29 +4899,6 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     if (!IsA((Node *) lfirst(lc), RangeTblRef))
       return NULL;
 
-  /* --- 0b. cheap self-join pre-check: a self-join (a repeated relation) is
-   * necessary for the inversion-free class, so bail here -- before any catalog
-   * lookup -- when no relation repeats.  This keeps the analysis nearly free on
-   * the common (non-self-join) case now that it runs decoupled from
-   * boolean_provenance (relids come straight from the parse tree). ---------- */
-  {
-    Oid *relids = palloc(natoms * sizeof(Oid));
-    bool found_self_join = false;
-    int a, b;
-    i = 0;
-    foreach (lc, q->rtable) {
-      RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
-      if (rte->rtekind != RTE_RELATION) { pfree(relids); return NULL; }
-      relids[i++] = rte->relid;
-    }
-    for (a = 0; a < natoms && !found_self_join; a++)
-      for (b = a + 1; b < natoms; b++)
-        if (relids[a] == relids[b]) { found_self_join = true; break; }
-    pfree(relids);
-    if (!found_self_join)
-      return NULL;
-  }
-
   /* --- 1. metadata gate: every atom a base RTE classified strictly TID;
    * count relation-symbol occurrences to find self-joins and assign ranks --- */
   atom_relid = palloc(natoms * sizeof(Oid));
@@ -4946,12 +4923,14 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
     if (atom_rank[i] < 0) atom_rank[i] = nranks++;
     i++;
   }
-  if (!has_self_join) {
-    /* No self-join: inversion-free coincides with read-once here, which the
-     * existing rewriter already handles -- do not steal it. */
-    pfree(atom_relid); pfree(atom_rank);
-    return NULL;
-  }
+  /* Self-join-free hierarchical queries are inversion-free too (they coincide
+   * with the read-once class) and are certified here as well: the structured
+   * d-DNNF path applies whenever the read-once rewrite is not (e.g.
+   * boolean_provenance off), where the raw flat lineage is not low-treewidth.
+   * Under boolean_provenance the read-once rewriter fires independently and
+   * takes precedence -- process_query recurses on its rewrite before the
+   * inversion-free analysis runs. */
+  (void) has_self_join;
 
   /* --- 2. union-find over (varno, varattno) Vars via the WHERE equalities --- */
   expression_tree_walker((Node *) q->targetList, safe_collect_vars_walker, &vctx);
@@ -5113,54 +5092,75 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
 /**
  * @brief Derive per-atom marker specs from a SafeCert recipe.
  *
- * Phase-1 consistent-unification self-join model: exactly one self-join (guard)
- * relation; every atom binds the root class at one column and exactly one
- * secondary class at one column; each secondary class has at most one payload
- * (non-guard) atom (one payload per factor).  Sets @p m[a] for every atom on
- * success.  Returns @c false when @p cert is outside this model (the caller
- * then attaches no markers and the inversion-free path declines at evaluation).
+ * Each atom binds the root class at one column and at most one secondary class
+ * at another.  Its @c factor is the secondary class, except that a relation
+ * whose occurrences span two or more distinct secondary classes (the
+ * consistent-unification self-join) is the shared guard, whose atoms take
+ * @c SAFE_CERT_GUARD_FACTOR.  An atom binding only the root class is root-only:
+ * it has no secondary column (@c sec_col 0) and its @c factor is its relation
+ * rank, so the relations of one block stay distinguished.  This covers the
+ * self-join witness (guard @c S spanning @c y and @c z, payloads @c A on @c y
+ * and @c B on @c z), the self-join-free hierarchical case grouped by secondary
+ * class, and the pure conjunction @c q(x):-A(x),B(x) (all atoms root-only).
+ * Returns @c false when an atom lacks a root column or binds two or more
+ * secondary classes (outside this shape); the caller then attaches no markers
+ * and the inversion-free path declines at evaluation.
+ *
+ * The specs give the structured builder a Prop. 4.5 order (root value, then
+ * secondary value, then guard-before-payload, then factor).  Order affects only
+ * the d-DNNF size, never correctness, so a builder fed these specs is sound on
+ * any lineage; the order is what keeps it polynomial on the certified class.
  */
 static bool compute_inversion_free_markers(const SafeCert *cert, InvFreeMarker *m)
 {
-  int  natoms = cert->natoms, ma = cert->maxarity, a, col;
-  int  maxrank = 0, nguard = 0;
-  int *rank_count;
-  int *payload_class_seen;
+  int  natoms = cert->natoms, ma = cert->maxarity, a, col, r;
+  int  maxrank = 0;
+  int *atom_sec_class;          /* secondary class of each atom, -1 if root-only */
+  int *rank_first_sec;
+  bool *rank_spans;
 
   for (a = 0; a < natoms; a++)
     if (cert->atom_relation_rank[a] > maxrank) maxrank = cert->atom_relation_rank[a];
-  rank_count = palloc0((maxrank + 1) * sizeof(int));
-  for (a = 0; a < natoms; a++) rank_count[cert->atom_relation_rank[a]]++;
-  for (a = 0; a <= maxrank; a++) if (rank_count[a] >= 2) nguard++;
-  if (nguard != 1) { pfree(rank_count); return false; }   /* one guard relation */
 
-  payload_class_seen = palloc0((cert->nclasses > 0 ? cert->nclasses : 1) * sizeof(int));
+  /* pass 1: root column + the (single, optional) secondary class of each atom */
+  atom_sec_class = palloc(natoms * sizeof(int));
   for (a = 0; a < natoms; a++) {
-    int  root_col = -1, sec_col = -1, sec_class = -1, nsec = 0;
-    bool is_guard = (rank_count[cert->atom_relation_rank[a]] >= 2);
+    int root_col = -1, sec_col = 0, sec_class = -1, nsec = 0;
     for (col = 0; col < ma; col++) {
       int cl = cert->atom_col_class[a * ma + col];
       if (cl < 0) continue;
       if (cl == cert->root_class) {
-        if (root_col >= 0) { pfree(rank_count); pfree(payload_class_seen); return false; }
+        if (root_col >= 0) { pfree(atom_sec_class); return false; }
         root_col = col + 1;
       } else {
         sec_col = col + 1; sec_class = cl; nsec++;
       }
     }
-    if (root_col < 0 || nsec != 1) { pfree(rank_count); pfree(payload_class_seen); return false; }
+    if (root_col < 0 || nsec > 1) { pfree(atom_sec_class); return false; }
     m[a].valid = true;
     m[a].root_col = (AttrNumber) root_col;
-    m[a].sec_col = (AttrNumber) sec_col;
-    if (is_guard) {
-      m[a].factor = SAFE_CERT_GUARD_FACTOR;
-    } else {
-      if (payload_class_seen[sec_class]) { pfree(rank_count); pfree(payload_class_seen); return false; }
-      payload_class_seen[sec_class] = 1;
-      m[a].factor = sec_class;
-    }
+    m[a].sec_col = (AttrNumber) sec_col;          /* 0 when root-only */
+    atom_sec_class[a] = (nsec == 1) ? sec_class : -1;
   }
-  pfree(rank_count); pfree(payload_class_seen);
+
+  /* pass 2: a relation spans iff its atoms touch >= 2 distinct (real) secondary
+   * classes -- that relation is the shared self-join guard. */
+  rank_first_sec = palloc((maxrank + 1) * sizeof(int));
+  rank_spans = palloc0((maxrank + 1) * sizeof(bool));
+  for (r = 0; r <= maxrank; r++) rank_first_sec[r] = -2;   /* -2: unseen (classes >= 0) */
+  for (a = 0; a < natoms; a++) {
+    int rk = cert->atom_relation_rank[a];
+    if (atom_sec_class[a] < 0) continue;                  /* root-only never spans */
+    if (rank_first_sec[rk] == -2) rank_first_sec[rk] = atom_sec_class[a];
+    else if (rank_first_sec[rk] != atom_sec_class[a]) rank_spans[rk] = true;
+  }
+  for (a = 0; a < natoms; a++) {
+    int rk = cert->atom_relation_rank[a];
+    if (rank_spans[rk])              m[a].factor = SAFE_CERT_GUARD_FACTOR;
+    else if (atom_sec_class[a] >= 0) m[a].factor = atom_sec_class[a];
+    else                             m[a].factor = rk;     /* root-only: by relation */
+  }
+  pfree(rank_first_sec); pfree(rank_spans); pfree(atom_sec_class);
   return true;
 }
 
