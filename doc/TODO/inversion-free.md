@@ -600,23 +600,27 @@ repeats, so the always-on analysis is nearly free on non-self-joins. On PG 18 a
 `GROUP BY` query is detected on a stripped copy (`strip_group_rte_pg18`) while
 the lineage is built on the original, so its circuit is unchanged. Two
 incompatibilities surfaced and were handled: the interpreted `provenance_evaluate`
-now treats `annotation` transparently (like `project`); and detection is skipped
-when `provsql.where_provenance` is on, because column-level where-provenance is a
-different provenance regime that the markers perturb.
+now treats `annotation` transparently (like `project`); and a latent
+where-provenance bug (below) was fixed so the markers coexist with
+`provsql.where_provenance` — no regime gate is needed.
 
-**Latent where-provenance bug the markers expose (to fix).** `where_provenance`
+**Latent where-provenance bug the markers exposed (fixed).** `where_provenance`
 builds its sub-circuit from `sub_circuit_for_where`, whose recursive CTE (`UNION
 ALL`) emits a *duplicate (parent,child) edge each time it reaches a shared
 non-input gate via a different path*; `where_provenance.cpp` adds a wire per
-edge, so a shared single-child gate is wired to its child `k` times (`k` =
-number of parent paths).  Inputs dodge this (de-duplicated via a separate
+edge, so a shared single-child gate was wired to its child `k` times (`k` =
+number of parent paths).  Inputs dodged this (de-duplicated via a separate
 `DISTINCT` union); the content-addressed per-input markers are the first
 commonly-shared *non-input single-child* gates, and since `annotation` is
-evaluated as a column-concatenating `TIMES`, the child's columns repeat `k`
-times — where-provenance multiplies by `k` (verified: 3 persons → 2 pairs each →
-×2; 4 → 3 → ×3).  Fix is to make `where_provenance` robust to shared gates (dedup
-edges / wires, preserving child order); the `where_provenance`-mode skip is a
-stopgap until then.
+evaluated as a column-concatenating `TIMES`, the child's columns repeated `k`
+times — where-provenance multiplied by `k` (verified: 3 persons → 2 pairs each →
+×2; 4 → 3 → ×3).  **Fix:** `sub_circuit_for_where` now `SELECT DISTINCT`s the
+`(f,t,idx)` edge triple (collapsing path-duplicates while keeping genuine
+repeated children at distinct `idx`) and `ORDER BY f, idx` so each parent's
+children stay in position order for the `TIMES` concatenation.  This makes
+where-provenance robust to *any* shared gate, not just the markers; with it in
+place the markers are attached unconditionally (the `where_provenance`-mode skip
+was removed).
 
 ## Critical files
 

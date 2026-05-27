@@ -1479,12 +1479,24 @@ $$
         UNION ALL
       SELECT p1.t,u,id,provsql.get_gate_type(p1.t) FROM transitive_closure p1, unnest(provsql.get_children(p1.t)) WITH ORDINALITY AS a(u, id)
     ) SELECT f, t, gate_type, table_name, nb_columns, ARRAY[(get_infos(f)).info1, (get_infos(f)).info2], get_extra(f) FROM (
-      SELECT f, t::uuid, idx, gate_type, NULL AS table_name, NULL AS nb_columns FROM transitive_closure
+      -- One row per distinct (parent, child, child-position) edge.  The
+      -- recursive closure (UNION ALL) re-emits a gate's outgoing edges once per
+      -- path that reaches it, so a *shared* non-input gate would otherwise be
+      -- reported with duplicate edges; DISTINCT on the (f,t,idx) triple
+      -- collapses those while keeping genuine repeated children (same f,t,
+      -- different idx, e.g. a self-product).  Without this, a shared
+      -- single-child gate (notably an inversion-free order-marker annotation)
+      -- gets its child wired k times in the where-circuit -> the locator sets
+      -- are duplicated k-fold.
+      SELECT DISTINCT f, t::uuid, idx, gate_type, NULL::regclass AS table_name, NULL::integer AS nb_columns FROM transitive_closure
       UNION ALL
         SELECT DISTINCT t, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM transitive_closure JOIN (SELECT t AS prov, provsql.identify_token(t) as id FROM transitive_closure WHERE t NOT IN (SELECT f FROM transitive_closure)) temp ON t=prov
       UNION ALL
         SELECT DISTINCT $1, NULL::uuid, NULL::int, 'input'::provenance_gate, (id).table_name, (id).nb_columns FROM (SELECT provsql.identify_token($1) AS id WHERE $1 NOT IN (SELECT f FROM transitive_closure)) temp
       ) t
+    -- order each parent's edges by child position so the where-circuit's TIMES
+    -- concatenation reproduces the column order (input rows have idx NULL).
+    ORDER BY f, idx
 $$
 LANGUAGE sql;
 

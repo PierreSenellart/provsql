@@ -4569,11 +4569,7 @@ static Query *process_query(const constants_t *constants, Query *q,
      * certificate and markers align with the lineage by construction.  Only at
      * the outermost (top-level) root the user evaluates; never when the
      * read-once rewrite above already fired (that path returns early). */
-    /* Not when where-provenance is on: it builds finer, column-level
-     * provenance, which the (semiring-transparent) annotation markers perturb
-     * -- the two are incompatible provenance regimes, and where-provenance is
-     * not the probability regime the markers serve. */
-    if (top_level && provsql_inversion_free && !provsql_where_provenance
+    if (top_level && provsql_inversion_free
         && OidIsValid(constants->OID_FUNCTION_ANNOTATE)) {
       /* On PG 18 a GROUP BY query carries a synthetic RTE_GROUP that hides the
        * base atoms from the detector (and a GROUP BY witness is how the
