@@ -28,8 +28,9 @@ def test_parse_if_cert_rejects_non_recipe():
 
 
 def test_parse_if_key_reads_triple_and_guard():
-    assert circuit._parse_if_key("K5 12 0") == {"root": 5, "sec": 12, "factor": 0}
-    assert circuit._parse_if_key("K5 12 -1") == {"root": 5, "sec": 12, "factor": -1}
+    # K<factor> <root_len>:<root><sec_len>:<sec>; root/sec come back as value text.
+    assert circuit._parse_if_key("K0 1:52:12") == {"root": "5", "sec": "12", "factor": 0}
+    assert circuit._parse_if_key("K-1 1:52:12") == {"root": "5", "sec": "12", "factor": -1}
     assert circuit._parse_if_key("C1 1 0 1 1 0") is None
     assert circuit._parse_if_key("Kbad") is None
 
@@ -47,7 +48,7 @@ def test_elide_markers_stacks_b_and_if_on_one_node():
         _row("wb", None, None, "assumed_boolean"),
         _row("wc", "wb", 0, "annotation", "C1 1 0 2 1 0"),
         _row("t", "wc", 0, "times"),
-        _row("wk", "t", 0, "annotation", "K5 12 -1"),
+        _row("wk", "t", 0, "annotation", "K-1 1:52:12"),
         _row("i1", "wk", 0, "input"),
         _row("i2", "t", 1, "input"),
     ]
@@ -66,7 +67,7 @@ def test_elide_markers_stacks_b_and_if_on_one_node():
 
     # the wrapped input carries the IF order key (rank is added later, in _layout)
     assert markers["i1"]["inversion_free"] is True
-    assert markers["i1"]["if_key"] == {"root": 5, "sec": 12, "factor": -1}
+    assert markers["i1"]["if_key"] == {"root": "5", "sec": "12", "factor": -1}
     assert "boolean_assumed" not in markers["i1"]
     # the unwrapped input carries nothing
     assert "i2" not in markers
