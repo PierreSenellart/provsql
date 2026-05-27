@@ -281,10 +281,10 @@ distinct operation.
 
 The inversion-free certificate (a ``gate_annotation`` wrapper on a
 certified result root, see :doc:`probabilities`) is likewise elided
-and rendered as a teal :sc:`IF` badge on its child, with a teal
-dashed ring concentric *outside* the Boolean ring so a gate that is
-both Boolean-assumed and inversion-free shows both badges at once.
-Pinning that root shows the certificate header (atom / class counts)
+and rendered as a teal :sc:`IF` badge on its child. Its dashed ring
+is drawn concentric *outside* the Boolean ring, so that on the rare
+gate marked both ways the two rings stay distinguishable rather than
+overlapping. Pinning that root shows the certificate header (atom / class counts)
 and the variable-block order in the inspector. The certified input
 leaves are *not* badged -- that would crowd the canvas; instead,
 pinning a certified leaf surfaces its per-input order key (root

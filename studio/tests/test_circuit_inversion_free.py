@@ -69,17 +69,9 @@ def test_circuit_inversion_free_leaves_carry_order_keys(client, test_dsn):
     factors = {n["if_key"]["factor"] for n in keyed}
     assert -1 in factors and any(f >= 0 for f in factors)
 
-
-def test_circuit_node_can_carry_both_b_and_if(client, test_dsn):
-    token = _inversion_free_witness(test_dsn)
-    dsn = f"{test_dsn} options='-c search_path=public,provsql'"
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute("SELECT assume_boolean(%s::uuid)::text", (token,))
-        both_root = cur.fetchone()[0]
-    data = client.get(f"/api/circuit/{both_root}").get_json()
-    # the assume_boolean wrapper and the annotation wrapper both elide onto the
-    # same surviving child, which then carries both badges
-    dual = [n for n in data["nodes"]
-            if n.get("boolean_assumed") and n.get("inversion_free")]
-    assert dual, "expected a node carrying both the B and IF markers"
-    assert any(n.get("if_cert") for n in dual)
+# NB: the renderer's ability to stack a B and an IF badge on one surviving node
+# (when both wrapper kinds elide onto it) is covered by the pure-row unit test
+# test_elide_markers_stacks_b_and_if_on_one_node in test_circuit_markers.py.  We
+# do not build such a circuit live here: the only way to force one is
+# assume_boolean() over a non-read-once token, which falsely asserts a safe
+# (read-once) rewrite on a circuit that is not independent.
