@@ -349,24 +349,38 @@ static Datum probability_evaluate_internal
     count_cmp_resolved = provsql::runCountCmpEvaluator(gc);
   }
 
-  /* If either probability-side pre-pass replaced any cmp with a
-   * closed-form Bernoulli, the formula the downstream tool sees is
-   * not the formula the user wrote: it has had part (or all) of its
-   * comparison structure folded into Bernoulli leaves before any
-   * d-DNNF compiler / weighted model counter is invoked. Emit a
-   * NOTICE (gated on provsql.verbose_level >= 5) so the user knows
-   * the requested method's reported timing and structure may not
-   * reflect work on the original formula. */
-  if (analytic_resolved + count_cmp_resolved > 0 && provsql_verbose >= 5) {
+  /* Always-true HAVING rewrite (runs regardless of the Poisson-binomial
+   * GUC): catches @c COUNT <= K with @c K >= N (and dual cases for
+   * other aggregators) by rewriting the cmp to @c gate_plus over the
+   * agg's K-gates -- the "group is non-empty" indicator.  This is the
+   * sound TRUE-decision arm that @c runRangeCheck deliberately leaves
+   * undone (gate_one would credit the empty world); restricting it to
+   * the probability-evaluate path keeps the absorptive-semiring
+   * precondition satisfied. */
+  unsigned always_true_resolved = provsql::runHavingAlwaysTrueRewriter(gc);
+
+  /* If any probability-side pre-pass replaced a cmp with a closed-form
+   * Bernoulli or an OR rewrite, the formula the downstream tool sees
+   * is not the formula the user wrote: it has had part (or all) of its
+   * comparison structure folded before any d-DNNF compiler / weighted
+   * model counter is invoked. Emit a NOTICE (gated on
+   * provsql.verbose_level >= 5) so the user knows the requested
+   * method's reported timing and structure may not reflect work on
+   * the original formula. */
+  if (analytic_resolved + count_cmp_resolved + always_true_resolved > 0
+      && provsql_verbose >= 5) {
     size_t gates_after = count_reachable(gc_root);
+    std::vector<std::string> parts;
+    if (analytic_resolved > 0)
+      parts.push_back(std::to_string(analytic_resolved) + " analytic");
+    if (count_cmp_resolved > 0)
+      parts.push_back(std::to_string(count_cmp_resolved) + " Poisson-binomial");
+    if (always_true_resolved > 0)
+      parts.push_back(std::to_string(always_true_resolved) + " always-true");
     std::string breakdown;
-    if (analytic_resolved > 0 && count_cmp_resolved > 0) {
-      breakdown = std::to_string(analytic_resolved) + " analytic + "
-                + std::to_string(count_cmp_resolved) + " Poisson-binomial";
-    } else if (analytic_resolved > 0) {
-      breakdown = std::to_string(analytic_resolved) + " analytic";
-    } else {
-      breakdown = std::to_string(count_cmp_resolved) + " Poisson-binomial";
+    for (size_t i = 0; i < parts.size(); ++i) {
+      if (i > 0) breakdown += " + ";
+      breakdown += parts[i];
     }
     provsql_notice(
       "gate_cmp expression was shortcut by probability-side pre-pass "

@@ -189,6 +189,39 @@ void resolveCmpToBernoulli(gate_t g, double p) {
 }
 
 /**
+ * @brief Replace a @c gate_cmp by a @c gate_plus over the given
+ *        per-row K-gates (the OR of the agg's row-presence
+ *        indicators).
+ *
+ * Used by the probability-side always-true HAVING rewriter
+ * (@c runHavingAlwaysTrueRewriter): when a HAVING predicate is
+ * provably true on the agg's value-interval, the cmp value equals
+ * "the group is non-empty" -- the OR over the agg's K-gates -- not
+ * @c gate_one, which would over-credit the empty world (see
+ * @c decideAggVsConstCmp's doc comment).
+ *
+ * Sound for absorptive semirings where @c gate_plus is idempotent
+ * OR (probability, Boolean, formula, why, which, max-min, max-max);
+ * the call site lives in the probability-evaluate pre-pass for
+ * that reason, mirroring @c resolveCmpToBernoulli with a fractional
+ * probability.
+ *
+ * Same wire/info/extra clearing as @c resolveCmpToBernoulli.  No
+ * special-casing for @c ks of size 1: a single-child @c gate_plus is
+ * structurally redundant but semantically equivalent to that child
+ * in every semiring.
+ */
+void resolveCmpToPlusOfKGates(gate_t g, const std::vector<gate_t> &ks) {
+  setGateType(g, gate_plus);
+  auto &w = getWires(g);
+  w.clear();
+  w.reserve(ks.size());
+  for (gate_t k : ks) w.push_back(k);
+  infos.erase(g);
+  extra.erase(g);
+}
+
+/**
  * @brief Replace an arbitrary gate (typically @c gate_times) by
  *        @c gate_zero.
  *

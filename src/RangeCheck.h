@@ -260,6 +260,22 @@ matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
  */
 unsigned runRangeCheck(GenericCircuit &gc);
 
+/**
+ * @brief Probability-side pre-pass that rewrites @c gate_cmp gates
+ *        provably true on the agg's value-interval to a @c gate_plus
+ *        over the agg's per-row K-gates.
+ *
+ * Catches the always-true HAVING case (e.g. @c COUNT <= K with
+ * @c K >= N) that @c runRangeCheck deliberately leaves alone (the
+ * universally-sound @c gate_one rewrite would credit the empty
+ * world).  Sound only in absorptive semirings; restricted to the
+ * probability-evaluate path.
+ *
+ * @return Number of comparators rewritten.  See the implementation
+ *         doc comment in @c RangeCheck.cpp for the full contract.
+ */
+unsigned runHavingAlwaysTrueRewriter(GenericCircuit &gc);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_RANGE_CHECK_H

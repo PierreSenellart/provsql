@@ -293,7 +293,8 @@ double decideCmp(const Interval &diff, ComparisonOperator op)
  */
 double decideAggVsConstCmp(const GenericCircuit &gc, gate_t agg_gate,
                            ComparisonOperator op, double const_val,
-                           bool agg_on_lhs)
+                           bool agg_on_lhs,
+                           bool *out_always_true = nullptr)
 {
   AggregationOperator aop = getAggregationOperator(gc.getInfos(agg_gate).first);
 
@@ -348,11 +349,17 @@ double decideAggVsConstCmp(const GenericCircuit &gc, gate_t agg_gate,
   Interval diff = sub(lhs, rhs);
   double p = decideCmp(diff, op);
 
-  /* Only FALSE decisions are sound (see doc comment).  TRUE
-   * decisions, if accepted, would replace the cmp with gate_one
-   * and credit probability to the empty subset, which provsql_having
-   * deliberately excludes from valid worlds. */
+  /* Only FALSE decisions are universally sound (see doc comment).
+   * gate_one would over-credit the empty subset, which provsql_having
+   * deliberately excludes from valid worlds; the safe TRUE rewrite
+   * is "the group is non-empty" = OR over the agg's K-gates, and is
+   * sound only in absorptive semirings.  The TRUE signal is therefore
+   * reported via @p out_always_true rather than the return value;
+   * the universal load-time @c runRangeCheck caller ignores it,
+   * while the probability-side @c runHavingAlwaysTrueRewriter caller
+   * acts on it. */
   if (p == 0.0) return 0.0;
+  if (p == 1.0 && out_always_true != nullptr) *out_always_true = true;
   return std::numeric_limits<double>::quiet_NaN();
 }
 
@@ -1056,6 +1063,103 @@ unsigned runRangeCheck(GenericCircuit &gc)
       gc.resolveGateToZero(t);
       ++resolved;
     }
+  }
+
+  return resolved;
+}
+
+/**
+ * @brief Probability-side pre-pass: rewrite HAVING-style @c gate_cmp
+ *        gates that are provably TRUE on the agg's value-interval
+ *        into an OR over the agg's per-row K-gates.
+ *
+ * Companion to @c runCountCmpEvaluator's Poisson-binomial pre-pass:
+ * where that one resolves @c COUNT op C to a closed-form Bernoulli,
+ * this one catches the always-true sub-case (e.g. @c COUNT <= K with
+ * @c K >= N inputs, or any aggregator whose value-interval entirely
+ * satisfies the predicate) and replaces the cmp with @c gate_plus
+ * over the agg's K-gates -- the "group is non-empty" indicator.
+ *
+ * Why a separate pass: @c runRangeCheck deliberately blocks TRUE
+ * decisions because @c gate_one is universally unsound for HAVING
+ * (it would credit the empty world).  The safe TRUE rewrite
+ * "OR of K-gates" requires absorptive @c gate_plus semantics
+ * (probability, Boolean, formula, why, which, max-min, max-max), so
+ * the pass is restricted to the probability-evaluate path where
+ * absorption is guaranteed by the downstream BoolExpr translation.
+ *
+ * Fires regardless of @c provsql.cmp_probability_evaluation: when
+ * the Poisson-binomial path is disabled (developer A/B testing),
+ * this lighter shortcut still catches the always-true case and
+ * spares the d-DNNF compiler the 2^N-clause DNF that
+ * @c provsql_having's @c enumerate_valid_worlds would otherwise emit.
+ *
+ * Same matching contract as @c decideAggVsConstCmp for the agg side:
+ * cmp wires must be {gate_agg, scalar-const-encoded-as-semimod}, the
+ * agg's children must all be @c gate_semimod, and the agg kind must
+ * be one of COUNT / SUM / MIN / MAX (the only kinds with an
+ * interval).  Mismatches leave the cmp untouched.
+ *
+ * @param gc  Circuit to mutate in place.
+ * @return    Number of comparators rewritten to gate_plus.
+ */
+unsigned runHavingAlwaysTrueRewriter(GenericCircuit &gc)
+{
+  unsigned resolved = 0;
+  const auto nb = gc.getNbGates();
+
+  std::vector<gate_t> cmps;
+  cmps.reserve(nb / 8);  /* rough guess */
+  for (std::size_t i = 0; i < nb; ++i) {
+    auto g = static_cast<gate_t>(i);
+    if (gc.getGateType(g) == gate_cmp)
+      cmps.push_back(g);
+  }
+
+  for (gate_t c : cmps) {
+    if (gc.getGateType(c) != gate_cmp) continue;  /* defensive */
+
+    bool ok = false;
+    ComparisonOperator op = cmpOpFromOid(gc.getInfos(c).first, ok);
+    if (!ok) continue;
+
+    const auto &wires = gc.getWires(c);
+    if (wires.size() != 2) continue;
+
+    bool lhs_is_agg = gc.getGateType(wires[0]) == gate_agg;
+    bool rhs_is_agg = gc.getGateType(wires[1]) == gate_agg;
+    if (lhs_is_agg == rhs_is_agg) continue;  /* both agg or neither */
+
+    gate_t agg_side   = lhs_is_agg ? wires[0] : wires[1];
+    gate_t const_side = lhs_is_agg ? wires[1] : wires[0];
+
+    double const_val = extractScalarConst(gc, const_side);
+    if (std::isnan(const_val)) continue;
+
+    bool always_true = false;
+    double p = decideAggVsConstCmp(gc, agg_side, op, const_val,
+                                   lhs_is_agg, &always_true);
+    if (!always_true) {
+      /* p might be 0.0 (already handled by runRangeCheck at load time
+       * if simplify_on_load is on); skip either way. */
+      (void)p;
+      continue;
+    }
+
+    /* Gather the per-row K-gates from the agg's semimod children. */
+    std::vector<gate_t> ks;
+    bool shape_ok = true;
+    ks.reserve(gc.getWires(agg_side).size());
+    for (gate_t ch : gc.getWires(agg_side)) {
+      if (gc.getGateType(ch) != gate_semimod) { shape_ok = false; break; }
+      const auto &sw = gc.getWires(ch);
+      if (sw.size() != 2) { shape_ok = false; break; }
+      ks.push_back(sw[0]);  /* K side; M side is sw[1] = gate_value */
+    }
+    if (!shape_ok || ks.empty()) continue;
+
+    gc.resolveCmpToPlusOfKGates(c, ks);
+    ++resolved;
   }
 
   return resolved;
