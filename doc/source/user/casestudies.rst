@@ -77,12 +77,17 @@ What each case study covers
     How the **shape of a query, together with the keys the schema
     declares**, fixes the shape of the Boolean provenance circuit and
     thereby which probability method is cheap. A peer-reviewing scenario
-    asks one coverage question three ways -- safe by shape, safe by a
-    key, and genuinely :math:`\#P`-hard -- and exposes the
+    opens with one coverage question asked three ways -- safe by shape,
+    safe by a key, and genuinely :math:`\#P`-hard -- exposing the
     knowledge-compilation pipeline (Tseytin CNF, d-DNNF compilation,
-    :sqlfunc:`ddnnf_stats`, the ``provsql.boolean_provenance`` rewriter)
-    before closing on **recursive** reachability as network reliability.
-    Also driven through Studio.
+    :sqlfunc:`ddnnf_stats`, the ``provsql.boolean_provenance`` rewriter,
+    the external-tool registry). It then climbs three further rungs
+    that escape the hard case in different ways: a ``HAVING count(*)``
+    Poisson-binomial shortcut, an **inversion-free** self-join that is
+    linear-time from a query-derived variable order, and a
+    :sqlfunc:`repair_key` table whose block correlation stays tractable.
+    A closing section turns to **recursive** reachability as network
+    reliability. Also driven through Studio.
 
 .. _case-study-coverage:
 
@@ -139,7 +144,7 @@ Supported SQL constructs
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4
 
    "SELECT-FROM-WHERE / inner JOIN", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
-   "Self-join", "✓", "✓", "", "✓", "", "✓", "", ""
+   "Self-join", "✓", "✓", "", "✓", "", "✓", "", "✓"
    "Subqueries in FROM / nested", "", "✓", "✓", "", "", "✓", "", ""
    "GROUP BY", "", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
    "SELECT DISTINCT", "✓", "✓", "", "✓", "", "✓", "", "✓"
@@ -207,8 +212,11 @@ Knowledge compilation and safe queries
    "``tree_decomposition_dot``", "", "", "", "", "", "", "", "✓"
    "``tool_available`` (compiler-picker filter)", "", "", "", "", "", "", "", "✓"
    "``HAVING`` Poisson-binomial pre-pass", "", "", "", "", "", "", "", "✓"
+   "Inversion-free certificate (``annotate`` / ``inversion_free_key`` / Studio IF badge)", "", "", "", "", "", "", "", "✓"
+   "External-tool registry (``provsql.tools``, ``register_tool``, ``set_tool_preference``)", "", "", "", "", "", "", "", "(✓)"
    "``provsql.fallback_compiler`` GUC", "", "", "", "", "", "", "", ""
    "``provsql.tool_search_path`` GUC", "", "", "", "", "", "", "", ""
+   "``provsql.kcmcp_server`` GUC (managed KCMCP server)", "", "", "", "", "", "", "", ""
 
 Semiring evaluation
 ~~~~~~~~~~~~~~~~~~~
@@ -249,6 +257,7 @@ Probabilities
    "``'monte-carlo'`` method", "(✓)", "✓", "", "", "", "", "✓", "✓"
    "``'tree-decomposition'`` method", "(✓)", "✓", "", "", "", "✓", "✓", "✓"
    "``'compilation'`` (d4 / c2d / dsharp / minic2d)", "(✓)", "✓", "", "", "", "", "", "✓"
+   "``'inversion-free'`` method", "", "", "", "", "", "", "", "✓"
    "``'weightmc'`` method", "", "", "", "", "", "", "", "✓"
    "``probability_benchmark``", "", "", "", "", "", "", "", "✓"
    "``expected(COUNT/SUM/MIN/MAX)``", "", "", "", "", "", "✓", "✓", ""
