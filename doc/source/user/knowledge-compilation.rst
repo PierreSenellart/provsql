@@ -186,9 +186,8 @@ The second argument names the compiler. ProvSQL ships bindings for:
       decomposability + determinism of d-DNNF; it is the canonical
       target of ``d4``.
 
-    Panini also ships ``R2-D2`` and ``CCDD`` target languages
-    :cite:`DBLP:journals/corr/abs-2202-10025`. ProvSQL does **not**
-    expose them: both emit ``K`` (kernelize) nodes encoding
+    Panini also ships ``R2-D2`` and ``CCDD`` target languages.
+    ProvSQL does **not** expose them: both emit ``K`` (kernelize) nodes encoding
     literal-equivalence constraints over a shared kernel variable,
     which break the decomposability invariant of a d-DNNF. A direct
     AND-translation gives silently-wrong probabilities; a correct

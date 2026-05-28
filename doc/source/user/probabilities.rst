@@ -125,8 +125,8 @@ Computation Methods
     Exact computation by first compiling the circuit to a d-DNNF using an
     external tool, then evaluating the d-DNNF. The third argument names the
     tool: ``'d4'`` (default), ``'d4v2'``, ``'c2d'``, ``'dsharp'``,
-    ``'minic2d'``, or one of the five Panini target languages from KCBox
-    :cite:`DBLP:journals/corr/abs-2202-10025`,
+    ``'minic2d'``, or one of the Panini target languages from KCBox
+    :cite:`KCBoxPanini`,
     ``'panini-obdd'``, ``'panini-obdd-and'``
     :cite:`DBLP:journals/jair/LaiLY17`, ``'panini-decdnnf'``:
 

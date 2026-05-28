@@ -419,29 +419,6 @@
     'panini-obdd-and' compiler options.},
 }
 
-@article{DBLP:journals/corr/abs-2202-10025,
-  author       = {Yong Lai and
-                  Kuldeep S. Meel and
-                  Roland H. C. Yap},
-  title        = {{CCDD:} {A} Tractable Representation for Model Counting and
-                  Uniform Sampling},
-  journal      = {CoRR},
-  volume       = {abs/2202.10025},
-  year         = {2022},
-  eprinttype   = {arXiv},
-  eprint       = {2202.10025},
-  keyword      = {provsql-foundation},
-  annote       = {Introduces Constrained Conjunction \& Decision Diagrams
-    ({CCDDs}): a tractable KC language that combines Decision-{DNNF}
-    structure with kernelized conjunctions encoding literal
-    equivalences. Used as the target language of {ExactMC} and {FastUS}
-    in the KCBox toolbox. ProvSQL does not expose {CCDD} compilation:
-    the kernelize ({K}) nodes encode literal equivalences over a
-    shared kernel variable that break the decomposability invariant
-    of the d-DNNF used by @c dDNNF::probabilityEvaluation, so a
-    direct {AND}-translation gives silently-wrong probabilities.},
-}
-
 @misc{KCBoxPanini,
   author       = {Yong Lai and
                   Dayou Liu and
