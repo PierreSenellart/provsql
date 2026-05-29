@@ -392,6 +392,15 @@ plane (circuits) stays client-side; only the NP-hard compile is offloaded.
 - Add a `wasm` goal that builds `provsql` with Emscripten against the
   **same Postgres WASM headers/ABI PGlite uses** (mirror PGlite's Docker
   SDK; pin a PGlite version — its extension API is explicitly unstable).
+  Concretely (PGlite 0.4.6): the target is **PostgreSQL 17.5,
+  `wasm32-unknown-linux-gnu`** — *not* the local PG18 dev cluster, so
+  the extension must build against PG17 server headers as patched for
+  WASM. The build is **Docker-based**: add the extension as a submodule
+  under `postgres-pglite/pglite/other_extensions`, append its folder to
+  that directory's `Makefile` `SUBDIRS`, and run `pnpm build:all`; the
+  output is a `.tar.gz` of the `.so` + `.control` + `--.sql`. ProvSQL is
+  the documented "unhappy path" (Boost must be compiled for WASM; some
+  symbols may need explicit exporting), so expect iteration there.
 - Toolchain: `em++`, `-std=c++17` (already required), `with_llvm=no`
   (already forced — correct for WASM). `-fPIC` stays.
 - No `-pthread` needed (ProvSQL uses no threads); PGlite itself may want a
@@ -401,14 +410,21 @@ plane (circuits) stays client-side; only the NP-hard compile is offloaded.
   `provsql.14.sql`) + `provsql.control`, with `module_pathname` pointing
   at the `.wasm`. PGlite stages control+SQL under `$sharedir` and fetches
   the `.wasm` on `CREATE EXTENSION provsql`.
-- **Validate planner-hook timing early.** ProvSQL installs `prev_planner`
-  (the transparent-rewrite hook); it must be live before the first
-  provenance query. Confirm whether PGlite honours a
-  `shared_preload_libraries`-style preload for the extension, or whether
-  the hook is only installed at `CREATE EXTENSION` time. **De-risk this
-  with a ~30-line throwaway planner-hook extension in PGlite before
-  porting ProvSQL** (milestone M0). This is the highest-uncertainty
-  unknown in the whole effort.
+- **Planner-hook timing — resolved (M0).** ProvSQL installs
+  `prev_planner` (the transparent-rewrite hook) in `_PG_init`; it must be
+  live before the first provenance query. Confirmed: PGlite's loader
+  (`extensionUtils.ts`) untars the bundle into the WASM sharedir,
+  preloads each `.so` for `dlopen`, and `CREATE EXTENSION` then loads the
+  library — running `_PG_init`, which sets the global `planner_hook`
+  pointer that covers *every subsequent query* in the (single) backend.
+  No `shared_preload_libraries` is needed, which is fortunate because
+  (a) PGlite's loader has no `shared_preload_libraries` plumbing and
+  (b) the WASM build deletes the background worker, the only native
+  reason preload was required. If a provenance query could run before any
+  provsql C function has loaded the `.so`, force the load from PGlite's
+  extension `init()` callback (run `CREATE EXTENSION provsql` there). The
+  hook mechanism itself was validated natively (see Implementation
+  observations).
 
 ### 9. ProvSQL Studio: static TS port (`studio/web/`)
 
@@ -437,9 +453,13 @@ static Studio servable from `file://` or a CDN, no Python at runtime.
 
 Ship-when ordering; each milestone is independently demonstrable.
 
-- [ ] **M0 — host spike:** trivial planner-hook C extension loads in
+- [~] **M0 — host spike:** trivial planner-hook C extension loads in
       PGlite and rewrites a query (validates §8 packaging + hook timing).
-      This de-risks the two biggest unknowns before touching ProvSQL.
+      *Partly done:* the hook mechanism is validated natively and the
+      PGlite packaging/loader + boot are confirmed (see Implementation
+      observations); the remaining step — building the spike `.so` to a
+      PGlite-loadable `.wasm` and loading it live — needs Docker / the
+      PGlite builder image and is the handoff that unblocks M4.
 - [ ] **M1 — in-process transport (native):** §1 + §2 behind
       `PROVSQL_INPROCESS_STORE`; FIFO loopback; bgworker/shmem compiled
       out; `make CPPFLAGS=-DPROVSQL_INPROCESS_STORE && make test` green.
@@ -485,4 +505,43 @@ client-side, no server — already a teaching artefact before Studio lands.
   bounded by the in-process tree-decomposition compiler's reach
   (d4 only wins ≈ treewidth 8–9, per `bounded-treewidth-data.md`); be
   explicit in docs about exact-vs-Monte-Carlo and the WS-KCMCP escape.
+
+## Implementation observations
+
+### M0 host spike — what was established (and what is blocked)
+
+Findings from the M0 spike, recorded so the next attempt does not
+re-derive them:
+
+- **Planner-hook mechanism (validated natively).** A minimal
+  `MODULES = …` extension whose `_PG_init` chains `planner_hook` was
+  built with the stock PGXS toolchain and `LOAD`ed into a throwaway
+  PostgreSQL cluster. Result: queries issued *before* the load are not
+  hooked; the `LOAD` runs `_PG_init` (confirmed in the server log); and
+  *every* query after it fires the hook and chains into
+  `standard_planner`. This is exactly the contract ProvSQL's
+  transparent-rewrite hook needs, and it holds without
+  `shared_preload_libraries`.
+- **PGlite packaging/loader (read from source, `extensionUtils.ts`).** An
+  extension is a `.tar.gz` untarred into `WASM_PREFIX` (the WASM
+  sharedir); `.so` entries are registered with Emscripten's WASM preload
+  plugin so `dlopen` finds the pre-compiled module, and `.control` /
+  `--.sql` files are copied verbatim. The TS side is an `Extension`
+  object whose `setup()` returns a `bundlePath` URL to the tarball, plus
+  an optional `init()` that runs after Postgres starts (the right place
+  to force `CREATE EXTENSION provsql`).
+- **PGlite runtime (booted in-sandbox).** Prebuilt `@electric-sql/pglite`
+  0.4.6 boots in Node and runs queries here; it reports **PostgreSQL
+  17.5 on `wasm32-unknown-linux-gnu`**. This is the Node half of the
+  eventual browser test harness, and pins the build target to PG17.
+- **Blocked without Docker.** Building *any* extension (even the 30-line
+  spike) into a PGlite-loadable `.wasm` requires the PGlite builder image
+  (`builder/Dockerfile`) and the `postgres-pglite` submodule tree — i.e.
+  Docker. The development sandbox has no Docker access, so the live
+  "load the spike in PGlite and watch the hook fire in-browser" step is a
+  **handoff**: run the Docker-based build once (M4 plumbing), after which
+  the spike `.so`→`.wasm` confirms the loader path end-to-end and M4 can
+  proceed with the real extension. The native validation above is the
+  in-sandbox stand-in and is sufficient to de-risk the *mechanism*; only
+  the *toolchain path* remains to be exercised.
 ```
