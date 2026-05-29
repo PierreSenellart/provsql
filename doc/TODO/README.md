@@ -64,6 +64,35 @@ Each plan document follows a consistent layout:
   optimisation plan, and the hierarchical-detector follow-ups
   (FD-induced nested rewrite, soft keys, view-descent FD chases,
   data-safe plans).
+- [`wasm-browser-deployment.md`](wasm-browser-deployment.md) :
+  feasibility study and staged plan for running PostgreSQL + ProvSQL
+  (and Studio) entirely client-side in the browser by compiling to
+  WebAssembly via Emscripten, hosted in PGlite. Key finding: ProvSQL's
+  core (semirings, in-process tree-decomposition compiler, Monte Carlo,
+  continuous RVs, where-provenance) ports cleanly, but its
+  multi-backend process architecture (background worker, IPC pipe,
+  shared memory + LWLocks, Boost-serialized circuit transfer,
+  `fork`/`exec` of external solvers) does not. PGlite is single-process
+  by construction, which lets that whole layer be *deleted* (collapsed
+  into one in-process store behind a `PROVSQL_INPROCESS_STORE` macro)
+  rather than emulated. The one real Emscripten wall is
+  `mmap(MAP_SHARED)` write-back, solved with a malloc-buffer +
+  explicit-`write()` storage backend that PGlite's file-level flush
+  persists to IndexedDB/OPFS. External CLI compilers (d4/c2d/…) are out
+  of scope; probability stays exact-where-feasible via the in-process
+  paths, with an optional remote-KCMCP-over-WebSocket escape hatch.
+  Studio becomes a static TS port of `db.py`/`circuit.py` over an
+  in-page PGlite instance. Includes the code-level implementation plan:
+  the central design is to keep the backend↔worker message protocol and
+  both endpoints unchanged and swap only the transport -- replace the
+  pipe with an in-memory FIFO and run the server dispatch synchronously
+  inline from `SENDWRITEM`, all behind the single
+  `PROVSQL_INPROCESS_STORE` flag -- with the FIFO macros, the
+  per-message dispatch extraction from `provsql_mmap_main_loop`, the
+  `mmap(MAP_SHARED)` -> buffer+explicit-`write()` storage backend, the
+  `fork`/`exec`/socket compile-guards, native validation via
+  `make CPPFLAGS=-DPROVSQL_INPROCESS_STORE && make test` before any
+  Emscripten work, the WASM/PGlite build target, and an M0-M7 checklist.
 - [`studio.md`](studio.md) : plan for ProvSQL Studio work landing
   alongside or after the first PyPI release (`studio-v1.0.0`):
   release plumbing, CI, Docker swap-over, in-app polish, and the
