@@ -34,6 +34,23 @@ principle throughout is **maximise the shared code path with the native
 build**: every change is gated by a single compile flag and validated on
 native *first*, so the WASM build inherits already-green code.
 
+> **Implementation discipline (read before writing any code).** This
+> document, its section numbers (§1, §2, …), its "phase 1 / phase 2"
+> wording, and its M0–M7 milestones are **planning scaffolding only**.
+> They must never leak into the codebase. As you implement: do not cite
+> `doc/TODO/*` (this file included) from any comment, commit message,
+> source, SQL, or test; and do not name things after the plan's
+> sequencing. No `/* phase 1 */`, no `wasm_phase2_*` symbols, no
+> "for now / temporary / will be removed in M7" comments. Comments and
+> identifiers must be **timeless** — they describe what the code *is* and
+> *does*, not when it was added or which step of a plan produced it. A
+> compile flag like `PROVSQL_INPROCESS_STORE` is a real, durable name
+> describing a build configuration and is fine; `PROVSQL_PHASE1_STORE`
+> is not. When this plan says "keep X for phase 1, drop it later", the
+> intermediate state still gets a self-explanatory, plan-free comment
+> (e.g. "circuit transfer goes through the FIFO so the same code serves
+> the native worker path"), never "kept until phase 2".
+
 This document is anchored on a porting-surface audit of `src/` (cited
 inline as `file:line`), the PGlite v0.4 architecture and filesystem
 docs, and the known Emscripten limitations on `mmap(MAP_SHARED)`,
