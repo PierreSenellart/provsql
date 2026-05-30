@@ -93,6 +93,10 @@ jobs:
     environment: master_branch
     runs-on: ubuntu-latest
     steps:
+      # build-push-action builds from the remote Git context, but the
+      # dockerhub-description step below reads docker/README.md from the
+      # workspace, so the job needs a checkout.
+      - uses: actions/checkout@v6
       - name: Determine version
         id: version
         run: |
