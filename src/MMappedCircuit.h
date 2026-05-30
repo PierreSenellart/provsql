@@ -329,5 +329,19 @@ GenericCircuit createGenericCircuit(
     const std::vector<pg_uuid_t> &roots) const;
 };
 
+#ifdef PROVSQL_INPROCESS_STORE
+/**
+ * @brief Build a @c GenericCircuit rooted at @p token directly from the
+ *        current backend's store.
+ *
+ * Single-process replacement for the @c 'g' IPC round-trip: there is no
+ * worker/backend boundary to ship a Boost-serialised copy across, so the
+ * backend constructs the circuit in place.
+ */
+GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token);
+/** @brief Multi-root variant (single-process replacement for @c 'j'). */
+GenericCircuit provsql_inproc_joint_circuit(pg_uuid_t root, pg_uuid_t event);
+#endif
+
 
 #endif /* MMAPPED_CIRCUIT_H */

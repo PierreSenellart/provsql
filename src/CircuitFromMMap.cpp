@@ -19,6 +19,7 @@
 #include <boost/iostreams/stream.hpp>
 
 #include "CircuitFromMMap.h"
+#include "MMappedCircuit.h"
 #include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "having_semantics.hpp"
@@ -148,7 +149,11 @@ static void applyLoadTimeSimplification(GenericCircuit &gc)
 
 GenericCircuit getGenericCircuit(pg_uuid_t token)
 {
+#ifdef PROVSQL_INPROCESS_STORE
+  GenericCircuit gc = provsql_inproc_generic_circuit(token);
+#else
   GenericCircuit gc = getCircuitFromMMap<GenericCircuit>(token, 'g');
+#endif
 
   /* Apply universal cmp-resolution passes (currently RangeCheck) at
    * load time so every downstream consumer -- semiring evaluators,
@@ -179,6 +184,9 @@ GenericCircuit getGenericCircuit(pg_uuid_t token)
 static GenericCircuit getJointCircuitFromMMap(
     pg_uuid_t root_token, pg_uuid_t event_token)
 {
+#ifdef PROVSQL_INPROCESS_STORE
+  return provsql_inproc_joint_circuit(root_token, event_token);
+#else
   char message_char = 'j';
   unsigned nb_roots = 2;
   STARTWRITEM();
@@ -212,6 +220,7 @@ static GenericCircuit getJointCircuitFromMMap(
   delete [] buf;
 
   return c;
+#endif /* PROVSQL_INPROCESS_STORE */
 }
 
 GenericCircuit getJointCircuit(

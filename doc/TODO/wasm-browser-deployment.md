@@ -533,7 +533,17 @@ Ship-when ordering; each milestone is independently demonstrable.
       Shapley + continuous-RV evaluators verified client-side.
 - [ ] **M6 — Studio web build:** §9 static Studio over in-page PGlite;
       Playwright e2e green.
-- [ ] **M7 (optional)** — Boost-drop (§6 phase 2) and WS-KCMCP (§7).
+- [x] **§6 phase 2 — Boost-drop: done (brought forward).** Under the
+      flag, `getGenericCircuit`/`getJointCircuit` call
+      `provsql_inproc_generic_circuit`/`provsql_inproc_joint_circuit`
+      (direct `createGenericCircuit` on this process's store) instead of
+      the `'g'`/`'j'` serialize→FIFO→deserialize round-trip; the `'g'`/`'j'`
+      dispatch handlers are guarded out. The flag-combo `.so` has **no
+      undefined `boost::archive` symbols** (so the WASM build needs no
+      compiled `libboost_serialization`), is smaller, and the serial
+      suite is unchanged (same 12 external-tool failures, all probability/
+      semiring readback green). Native keeps the Boost round-trip.
+- [ ] **M7 (optional)** — WS-KCMCP (§7).
 
 A compelling public demo exists at M5: one static HTML page that boots
 Postgres+ProvSQL and computes provenance + probabilities entirely

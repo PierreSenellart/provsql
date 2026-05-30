@@ -204,6 +204,24 @@ static MMappedCircuit *getCircuit(Oid db_oid)
   return it->second;
 }
 
+#ifdef PROVSQL_INPROCESS_STORE
+/* Single-process build: the backend builds the in-memory circuit directly
+   from this process's store, instead of round-tripping a Boost-serialised
+   copy through the FIFO (which only existed to cross the worker/backend
+   process boundary).  This is also what lets the WASM build avoid the
+   compiled libboost_serialization dependency. */
+GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token)
+{
+  return getCircuit(MyDatabaseId)->createGenericCircuit(token);
+}
+
+GenericCircuit provsql_inproc_joint_circuit(pg_uuid_t root, pg_uuid_t event)
+{
+  return getCircuit(MyDatabaseId)->createGenericCircuit(
+    std::vector<pg_uuid_t>{root, event});
+}
+#endif
+
 extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
 {
     MMappedCircuit *circuit = getCircuit(db_oid);
@@ -364,6 +382,11 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
       if(!READM(token, pg_uuid_t))
         provsql_error("Cannot read from pipe (message type g)");
 
+#ifdef PROVSQL_INPROCESS_STORE
+      /* Unreachable: the backend calls provsql_inproc_generic_circuit
+         directly instead of issuing the 'g' message. */
+      provsql_error("message type g is not used by the in-process store");
+#else
       std::stringstream ss;
       boost::archive::binary_oarchive oa(ss);
       oa << circuit->createGenericCircuit(token);
@@ -374,6 +397,7 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
 
       if(!WRITEB(&size, unsigned long) || !WRITEB_BYTES(ss.str().data(), size))
         provsql_error("Cannot write to pipe (message type g)");
+#endif
       break;
     }
 
@@ -490,6 +514,11 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
         if(!READM(roots[i], pg_uuid_t))
           provsql_error("Cannot read from pipe (message type j)");
 
+#ifdef PROVSQL_INPROCESS_STORE
+      /* Unreachable: the backend calls provsql_inproc_joint_circuit
+         directly instead of issuing the 'j' message. */
+      provsql_error("message type j is not used by the in-process store");
+#else
       std::stringstream ss;
       boost::archive::binary_oarchive oa(ss);
       oa << circuit->createGenericCircuit(roots);
@@ -500,6 +529,7 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
 
       if(!WRITEB(&size, unsigned long) || !WRITEB_BYTES(ss.str().data(), size))
         provsql_error("Cannot write to pipe (message type j)");
+#endif
       break;
     }
 
