@@ -74,7 +74,8 @@ docs, and the known Emscripten limitations on `mmap(MAP_SHARED)`,
   ASCII path is simply unavailable in the WASM build.
 - **Multi-tenant / concurrent-backend semantics**: the browser build is
   single-user single-connection by nature; we do not try to reproduce
-  cross-backend coordination.
+  cross-backend coordination. This is not a restriction the port adds —
+  it is inherent to PGlite (see Concurrency model below).
 - **Persisting to a real `$PGDATA` on a server disk**: persistence is
   PGlite's (IndexedDB / OPFS / in-memory), see §3.
 
@@ -107,6 +108,32 @@ backend/worker boundary**: in PGlite there is exactly one PostgreSQL
 process and one backend, so the worker that today owns the
 `MMappedCircuit` becomes "the same process", and every backend→worker
 pipe message becomes a direct, synchronous, in-process call.
+
+### Concurrency model (why single-backend is free, not a sacrifice)
+
+PGlite runs PostgreSQL in **single-user mode** (no postmaster, no backend
+forking) in a single WASM instance built with `-sUSE_PTHREADS=0`. So the
+target is single-process, single-connection, single-threaded *by
+construction*:
+
+- there is never more than one backend, so two backends can never touch
+  the store at once — the in-process store's single-backend assumption is
+  satisfied automatically;
+- no intra-query parallel workers (they need forked processes; Emscripten
+  has none) and no background workers — which is exactly why M1 deletes
+  the worker;
+- application-level "concurrent" queries (`Promise.all` over
+  `pg.query`) are serialized through PGlite's single I/O pathway and run
+  one at a time;
+- even multi-tab PGlite routes all execution through one leader instance.
+
+Consequently the native pg_regress parallel-group failure under the flag
+(M1) is an artifact of **native** multi-process PostgreSQL, a mode that
+does not exist under PGlite; native flag testing therefore runs serially
+(`--max-connections=1`) at every milestone. M2's per-backend buffer store
+does **not** enable concurrency — it makes each backend's store fully
+independent, which is correct precisely because the real target never has
+a second backend. We lose nothing relative to what PGlite itself can do.
 
 ### The central design decision: swap the transport, not the protocol
 
