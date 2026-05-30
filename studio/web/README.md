@@ -133,6 +133,15 @@ reboots the tab; the DB is therefore persisted to IndexedDB so its provenance
 circuit survives the reload (a token carried across a switch — e.g.
 jump-to-circuit — must still resolve).
 
+### Shareable links
+
+A view is fully captured in the URL query string:
+`?mode=circuit|where&db=<database>&q=<url-encoded SQL>`. Opening such a link
+lands on that database and mode with the query pre-filled and auto-run;
+studio-boot feeds the query into the same sessionStorage channel app.js uses
+for its mode-switch carry. The **Link** button in the nav copies the current
+database + mode + query box as one of these URLs.
+
 ## CI/CD
 
 - The `wasm` job in [`.github/workflows/wasm.yml`](../../.github/workflows/wasm.yml)

@@ -97,20 +97,25 @@ def _boot(page, url: str) -> None:
         raise
 
 
+_CLIPBOARD = ["clipboard-read", "clipboard-write"]
+
+
 @pytest.fixture()
 def open_studio(browser, web_server):
     """Factory: open a freshly-booted Studio page (isolated storage). Pass a
-    database name to land on it directly (sets ps.activeDb before load)."""
+    database name to land on it directly (sets ps.activeDb before load), or a
+    `path` (e.g. a "?mode=&db=&q=" deep link) to open verbatim."""
     contexts = []
 
-    def _open(db: str | None = None):
-        ctx = browser.new_context()
+    def _open(db: str | None = None, path: str = "/"):
+        ctx = browser.new_context(permissions=_CLIPBOARD)
         if db:
             ctx.add_init_script(
                 "try{localStorage.setItem('ps.activeDb', %r)}catch(e){}" % db)
         contexts.append(ctx)
         page = ctx.new_page()
-        _boot(page, web_server)
+        page.goto(web_server + path, wait_until="domcontentloaded")
+        page.wait_for_selector("#studio-boot-status", state="hidden", timeout=BOOT_TIMEOUT)
         return page
 
     yield _open
@@ -122,7 +127,7 @@ def open_studio(browser, web_server):
 def cs7_page(browser, web_server):
     """A page booted once on cs7 (provenance-tracked, with probabilities) for
     the read-only assertions, so they don't each pay a fresh boot."""
-    ctx = browser.new_context()
+    ctx = browser.new_context(permissions=_CLIPBOARD)
     ctx.add_init_script("try{localStorage.setItem('ps.activeDb','cs7')}catch(e){}")
     page = ctx.new_page()
     _boot(page, web_server)

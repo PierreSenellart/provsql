@@ -7,7 +7,7 @@ the in-browser API surface, database switching, and the Reset button.
 """
 from __future__ import annotations
 
-from urllib.parse import quote
+from urllib.parse import quote, unquote_plus
 
 from playwright.sync_api import Page, expect
 
@@ -86,6 +86,28 @@ def test_circuit_and_tree_decomposition_endpoints(cs7_page: Page) -> None:
     td = _api(cs7_page, "GET", f"/api/kc/td?token={enc}")
     assert td["status"] == 200
     assert "scene" in td["json"] and "treewidth" in td["json"]
+
+
+def test_copy_link_captures_db_mode_query(cs7_page: Page) -> None:
+    """The Copy-link button puts a ?mode=&db=&q= URL on the clipboard."""
+    cs7_page.locator("#request").fill("SELECT reviewer FROM bid LIMIT 1;")
+    cs7_page.locator("#share-link-btn").click()
+    expect(cs7_page.locator("#share-link-btn")).to_contain_text("Copied", timeout=5000)
+    link = cs7_page.evaluate("navigator.clipboard.readText()")
+    assert "mode=circuit" in link and "db=cs7" in link
+    assert "bid" in unquote_plus(link)  # the query round-trips
+
+
+def test_deep_link_applies_db_mode_and_query(open_studio) -> None:
+    """Opening a ?mode=&db=&q= link lands on that database and mode with the
+    query pre-filled and auto-run."""
+    sql = "SELECT name, classification FROM personnel ORDER BY id LIMIT 2"
+    page = open_studio(path="/?mode=circuit&db=cs1&q=" + quote(sql))
+    expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
+    assert _api(page, "GET", "/api/conn")["json"]["database"] == "cs1"
+    expect(page.locator("#request")).to_have_value(sql, timeout=10000)
+    # auto-ran: the result table shows the two rows.
+    expect(page.locator("#result-count")).to_have_text("2", timeout=20000)
 
 
 def test_database_switch(open_studio) -> None:

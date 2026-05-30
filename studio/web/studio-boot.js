@@ -13,11 +13,20 @@ const PKG = ['__init__.py', 'db.py', 'app.py', 'circuit.py', 'kc.py']
 // Resolve sibling assets against this module's URL, not the document's, so the
 // page can be served from any path (the mode routes redirect to /?mode=...).
 const asset = (p) => new URL(p, import.meta.url)
-// Mode is carried in the query string: the server only has to redirect the
-// clean /circuit and /where paths (that app.js navigates to) onto ?mode=...,
-// which keeps it a plain static host with no per-route HTML rewriting.
-const mode = new URLSearchParams(location.search).get('mode') === 'where' ? 'where' : 'circuit'
+// Shareable deep links carry the whole view in the query string:
+//   ?mode=circuit|where  &db=<database>  &q=<url-encoded SQL>
+// `mode` also doubles as the redirect target for the clean /circuit and
+// /where paths (so the static host needs no per-route HTML rewriting).
+const params = new URLSearchParams(location.search)
+const mode = params.get('mode') === 'where' ? 'where' : 'circuit'
 document.body.className = 'mode-' + mode
+// A linked query is handed to app.js through the same sessionStorage channel
+// its mode-switch "carry" uses: ps.sql fills the box, ps.sql.ran replays it.
+const linkedQuery = params.get('q')
+if (linkedQuery != null) {
+  sessionStorage.setItem('ps.sql', linkedQuery)
+  sessionStorage.setItem('ps.sql.ran', '1')
+}
 // Hide UI that cannot apply to a single in-page database:
 //  - Config rows for GUCs that only govern external tools the browser cannot
 //    spawn: tool_search_path (a $PATH for subprocesses) and fallback_compiler
@@ -122,8 +131,13 @@ async function switchDb(name) {
   // boot must reopen the same database rather than snap back to the default.
   localStorage.setItem('ps.activeDb', name)
 }
+// A ?db= in the link wins, then the last-used database, then the default.
+const _urlDb = params.get('db')
 const _saved = localStorage.getItem('ps.activeDb')
-await switchDb(manifest.some((m) => m.name === _saved) ? _saved : DEFAULT_DB)
+await switchDb(
+  manifest.some((m) => m.name === _urlDb) ? _urlDb
+  : manifest.some((m) => m.name === _saved) ? _saved
+  : DEFAULT_DB)
 
 // async PGlite bridge (the shim's run_sync target) -> the active database.
 globalThis.pgQuery = async (sql, params) => {
@@ -236,6 +250,38 @@ await new Promise((resolve) => {
 // tool-backed methods on its own (every tool reports available:false).
 document.getElementById('tools-btn')?.remove()
 document.getElementById('tools-panel')?.remove()
+
+// WASM-only: a Copy-link button. Builds a shareable URL capturing the current
+// database, mode and query box, which studio-boot replays on open. (The mode
+// tabs route through /circuit|/where, so the link uses ?mode= directly.)
+{
+  const nav = document.querySelector('.wp-nav__meta')
+  if (nav) {
+    const link = document.createElement('button')
+    link.type = 'button'
+    link.id = 'share-link-btn'
+    link.className = 'wp-nav__link'
+    link.title = 'Copy a shareable link to this database, mode and query'
+    const idle = '<i class="fas fa-link"></i> Link'
+    link.innerHTML = idle
+    link.addEventListener('click', async () => {
+      const u = new URL(location.origin + location.pathname)
+      u.searchParams.set('mode', document.body.classList.contains('mode-where') ? 'where' : 'circuit')
+      if (activeDb) u.searchParams.set('db', activeDb)
+      const sql = (document.getElementById('request')?.value || '').trim()
+      if (sql) u.searchParams.set('q', sql)
+      const href = u.toString()
+      try {
+        await navigator.clipboard.writeText(href)
+        link.innerHTML = '<i class="fas fa-check"></i> Copied'
+        setTimeout(() => { link.innerHTML = idle }, 1500)
+      } catch (_e) {
+        window.prompt('Copy this link:', href)   // e.g. clipboard blocked on plain http
+      }
+    })
+    nav.appendChild(link)
+  }
+}
 
 // WASM-only: a Reset button (the browser build persists every edit to
 // IndexedDB, so without this the only way back to the pristine data is the
