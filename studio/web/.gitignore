@@ -1,0 +1,5 @@
+# Assembled WASM assets (built via ../../wasm/, not committed — large binaries)
+/pglite/
+/provsql.tar.gz
+/static/
+/index.html

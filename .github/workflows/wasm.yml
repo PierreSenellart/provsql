@@ -1,0 +1,100 @@
+name: WASM / in-process store
+
+# Two jobs:
+#  - inprocess-store: cheap, per-PR. Builds the extension with the
+#    single-process store forced on and runs the regression suite serially
+#    (the in-process store is single-backend; pg_regress parallel groups
+#    are not its target). Guards M1/M2/M3 against drift.
+#  - wasm: heavy, opt-in (workflow_dispatch). Reproduces the full
+#    browser/PGlite build (provsql.so + a matched pglite.wasm) and runs the
+#    headless Node smoke test asserting correct provenance + probability.
+
+on:
+  push:
+    paths: ['src/**', 'sql/**', 'wasm/**', '.github/workflows/wasm.yml']
+  pull_request:
+    paths: ['src/**', 'sql/**', 'wasm/**', '.github/workflows/wasm.yml']
+  workflow_dispatch:
+
+jobs:
+  inprocess-store:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL + Boost
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql postgresql-server-dev-all \
+            libboost-dev libboost-serialization-dev uuid-dev
+      - name: Build with PROVSQL_INPROCESS_STORE and install
+        run: |
+          make -j$(nproc) PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g'
+          sudo make install
+      - name: Configure a cluster (preloaded; no shared memory / bgworker)
+        run: |
+          PGBIN=$(pg_config --bindir)
+          sudo -u postgres "$PGBIN/initdb" -D "$RUNNER_TEMP/pgdata" -U runner --locale=C --encoding=UTF8
+          {
+            echo "lc_messages='C'"
+            echo "shared_preload_libraries='provsql'"
+          } | sudo -u postgres tee -a "$RUNNER_TEMP/pgdata/postgresql.conf"
+          sudo -u postgres "$PGBIN/pg_ctl" -D "$RUNNER_TEMP/pgdata" \
+            -o "-p 55432 -k /tmp -c listen_addresses=''" -l "$RUNNER_TEMP/pg.log" -w start
+      - name: Run the suite serially (one test per line)
+        run: |
+          make test/schedule
+          awk '/^test:/{$1="";n=split($0,a," ");for(i=1;i<=n;i++)if(a[i]!="")print "test: "a[i];next}{print}' \
+            test/schedule > /tmp/schedule.serial
+          OUT=$(mktemp -d)
+          make installcheck \
+            REGRESS_OPTS="--load-extension=plpgsql --inputdir=test --outputdir=$OUT --schedule /tmp/schedule.serial --dbname=contrib_regression" \
+            EXTRA_REGRESS_OPTS="--host=/tmp --port=55432 --user=runner --max-connections=1" \
+          || { cat "$OUT"/regression.diffs; exit 1; }
+
+  # Heavy and opt-in. Reproduces the browser build end to end; the exact
+  # PGlite-core build invocation may need first-run tuning (it offloads to
+  # PGlite's own build, which pins submodules + the builder image).
+  wasm:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      IMG: docker.io/electricsql/pglite-builder:3.1.74-5-postgis-libicu-min
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: provsql }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Generate the extension SQL (native make)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-server-dev-all libboost-dev uuid-dev
+          make -C provsql sql/provsql.sql
+      - name: Build the WASM Postgres tree + extension + matched pglite
+        run: |
+          docker pull "$IMG"
+          git clone --recurse-submodules https://github.com/electric-sql/pglite
+          cd pglite && git submodule update --init --depth 1 postgres-pglite
+          PG=$PWD/postgres-pglite
+          docker run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" ./build-pglite.sh
+          mkdir -p "$PG/provsql-wasm"
+          cp -r "$GITHUB_WORKSPACE/provsql/src" "$PG/provsql-wasm/src"
+          cp "$GITHUB_WORKSPACE"/provsql/sql/provsql--*.sql "$PG/provsql-wasm/"
+          cp "$GITHUB_WORKSPACE/provsql/provsql.control" "$PG/provsql-wasm/"
+          cp "$GITHUB_WORKSPACE"/provsql/wasm/build-extension.sh \
+             "$GITHUB_WORKSPACE"/provsql/wasm/build-pglite.sh "$PG/"
+          docker run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" \
+            -v /usr/include/boost:/boostinc/boost:ro "$IMG" ./build-extension.sh
+          docker run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" ./build-pglite.sh
+      - name: Build the PGlite TS package + headless smoke test
+        run: |
+          cd pglite
+          PG=$PWD/postgres-pglite
+          cp "$PG"/dist/bin/pglite.wasm "$PG"/dist/bin/pglite.data "$PG"/dist/bin/pglite.js packages/pglite/release/
+          cp "$PG"/dist/extensions/*.tar.gz packages/pglite/release/ 2>/dev/null || true
+          corepack pnpm install --filter "@electric-sql/pglite..."
+          corepack pnpm --filter @electric-sql/pglite-utils run build
+          corepack pnpm --filter @electric-sql/pglite      run build:js
+          PGLITE_DIST=$PWD/packages/pglite/dist \
+          PROVSQL_TARBALL=$PG/provsql-wasm/provsql.tar.gz \
+            node "$GITHUB_WORKSPACE/provsql/wasm/test-node.mjs"

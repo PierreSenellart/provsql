@@ -541,8 +541,20 @@ Ship-when ordering; each milestone is independently demonstrable.
       via the in-process tree-decomposition compiler (no external solver).
       Broader coverage (Monte Carlo, Shapley, continuous RVs in-browser)
       remains to be exercised explicitly.
-- [ ] **M6 — Studio web build:** §9 static Studio over in-page PGlite;
-      Playwright e2e green.
+- [~] **M6 — Studio web build: scaffold + seed + CI/CD.** Architecture
+      decided and scaffolded in `studio/web/` (a `fetch`-shim that answers
+      `/api/*` from in-page PGlite so the existing ~7000-line frontend is
+      reused unchanged; endpoint port-list documented). Working seed
+      `studio/web/demo.html` boots PGlite+ProvSQL and runs query →
+      provenance → probability (the e2e smoke target). The full `/api/*`
+      shim port (`db.exec_batch`, circuit, evaluate, where) remains.
+- [x] **CI/CD foundation.** `wasm/` holds the reproducible build
+      (scripts + libc++ patch + headless Node smoke test + README);
+      `.github/workflows/wasm.yml` runs a cheap per-PR job (in-process
+      store built natively, suite run serially — guards M1/M2/M3) and an
+      opt-in heavy job (full WASM build + headless assertion of correct
+      provenance/probability). Studio-web e2e = Playwright over the static
+      `demo.html` (headless Chromium, no Postgres service).
 - [x] **§6 phase 2 — Boost-drop: done (brought forward).** Under the
       flag, `getGenericCircuit`/`getJointCircuit` call
       `provsql_inproc_generic_circuit`/`provsql_inproc_joint_circuit`

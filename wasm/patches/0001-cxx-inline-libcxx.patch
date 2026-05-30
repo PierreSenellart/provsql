@@ -1,0 +1,23 @@
+Scope PG_FORCE_DISABLE_INLINE to C so it does not break libc++.
+
+PGlite's emscripten port defines PG_FORCE_DISABLE_INLINE (in
+pg_config_os.h), which makes c.h do `#define inline` (empty).  That is
+fine for PostgreSQL's C, but for C++ it turns libc++'s
+`inline namespace __2 { ... }` into a plain namespace, so `std::__declval`,
+`std::filesystem`, etc. resolve to the wrong scope and every C++
+translation unit fails to compile.  Disabling `inline` is unnecessary for
+C++ (emscripten's clang supports it), so restrict the override to C.
+
+This blocks ANY C++ extension under PGlite, not just ProvSQL; the proper
+home for the fix is upstream in electric-sql/postgres-pglite.
+
+In src/include/c.h, change
+
+    #ifdef PG_FORCE_DISABLE_INLINE
+
+to
+
+    #if defined(PG_FORCE_DISABLE_INLINE) && !defined(__cplusplus)
+
+build-pglite.sh applies this idempotently with sed against the installed
+server header (dist/include/postgresql/server/c.h).

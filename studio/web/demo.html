@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ProvSQL in the browser (PGlite WASM)</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 900px; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.05rem; margin-top: 1.5rem; }
+  #log { white-space: pre-wrap; background: #0f1115; color: #d7dae0; padding: 1rem; border-radius: 8px; font-family: ui-monospace, monospace; font-size: 12.5px; min-height: 6rem; }
+  .ok { color: #57d977; } .err { color: #ff6b6b; } .note { color: #9aa4b2; }
+  textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 13px; padding: .6rem; border-radius: 6px; border: 1px solid #ccc; }
+  button { font-size: 14px; padding: .45rem 1rem; border-radius: 6px; border: 0; background: #2d6cdf; color: #fff; cursor: pointer; margin-top: .5rem; }
+  table { border-collapse: collapse; margin: .5rem 0; } td, th { border: 1px solid #ccc; padding: 2px 8px; text-align: left; }
+  small { color: #666; }
+</style>
+</head>
+<body>
+<h1>ProvSQL, entirely in your browser</h1>
+<p><small>PostgreSQL + ProvSQL compiled to WebAssembly (PGlite). No server, no network — everything below runs in this tab.
+Assets (<code>pglite/</code>, <code>provsql.tar.gz</code>) come from <code>wasm/</code> — see the README.</small></p>
+
+<h2>Boot &amp; self-test log</h2>
+<div id="log">loading…</div>
+
+<h2>Try a query</h2>
+<p><small>Provenance-tracked table <code>r(a int, b int)</code> with rows (1,2),(3,4),(1,5), each input probability 0.5.
+<code>search_path</code> includes <code>provsql</code>.</small></p>
+<textarea id="sql" rows="3">SELECT a, round(probability_evaluate(provenance())::numeric,4) AS prob
+FROM r GROUP BY a ORDER BY a;</textarea>
+<button id="runbtn" disabled>Run</button>
+<div id="out"></div>
+
+<script type="module">
+import { PGlite } from './pglite/index.js'
+import { uuid_ossp } from './pglite/contrib/uuid_ossp.js'
+
+const logEl = document.getElementById('log')
+const L = (msg, cls='') => { logEl.innerHTML += `\n<span class="${cls}">${msg}</span>` }
+logEl.innerHTML = ''
+
+const provsql = {
+  name: 'provsql',
+  setup: async (_pg, emscriptenOpts) => ({
+    emscriptenOpts,
+    bundlePath: new URL('./provsql.tar.gz', import.meta.url),
+  }),
+}
+
+let pg
+try {
+  const t0 = performance.now()
+  L('• instantiating PGlite (WASM Postgres) …', 'note')
+  pg = await PGlite.create({ extensions: { uuid_ossp, provsql } })
+  const v = (await pg.query('select version()')).rows[0].version.split(',')[0]
+  L('✓ ' + v + `  (${Math.round(performance.now()-t0)} ms)`, 'ok')
+
+  L('• CREATE EXTENSION provsql CASCADE …', 'note')
+  await pg.exec('CREATE EXTENSION provsql CASCADE')
+  const ext = (await pg.query("select extname from pg_extension where extname in ('provsql','uuid-ossp') order by extname")).rows.map(r=>r.extname)
+  L('✓ extensions installed: ' + ext.join(', '), 'ok')
+
+  await pg.exec('SET search_path TO provsql, public')
+  await pg.exec('CREATE TABLE r(a int, b int); INSERT INTO r VALUES (1,2),(3,4),(1,5)')
+  await pg.query("SELECT add_provenance('r'::regclass)")
+  L('✓ add_provenance(r): planner hook now rewrites queries', 'ok')
+
+  const rows = (await pg.query('SELECT a, b, provenance() IS NOT NULL AS has_prov FROM r ORDER BY a,b')).rows
+  L('✓ provenance tokens attached to every row:', 'ok')
+  L('    ' + JSON.stringify(rows))
+
+  await pg.query('SELECT set_prob(provenance(), 0.5) FROM r')
+  const pr = (await pg.query('SELECT a, round(probability_evaluate(provenance())::numeric,4) AS prob FROM r GROUP BY a ORDER BY a')).rows
+  L('✓ probability_evaluate (in-process tree-decomposition compiler):', 'ok')
+  L('    ' + JSON.stringify(pr) + '   — a=1 is two independent tuples → 1-0.5·0.5 = 0.75', 'ok')
+
+  L('\nReady — edit the query below and hit Run.', 'ok')
+  document.getElementById('runbtn').disabled = false
+} catch (e) {
+  L('✗ ' + (e && e.message ? e.message : e), 'err')
+  console.error(e)
+}
+
+const out = document.getElementById('out')
+const render = (res) => {
+  if (!res || !res.rows || !res.rows.length) { out.innerHTML = '<small>(no rows)</small>'; return }
+  const cols = res.fields ? res.fields.map(f=>f.name) : Object.keys(res.rows[0])
+  out.innerHTML = '<table><tr>' + cols.map(c=>`<th>${c}</th>`).join('') +
+    '</tr>' + res.rows.map(r=>'<tr>'+cols.map(c=>`<td>${r[c]===null?'∅':r[c]}</td>`).join('')+'</tr>').join('') + '</table>'
+}
+document.getElementById('runbtn').addEventListener('click', async () => {
+  out.innerHTML = '<small>running…</small>'
+  try { render(await pg.query(document.getElementById('sql').value)) }
+  catch (e) { out.innerHTML = `<span class="err">${e.message}</span>` }
+})
+</script>
+</body>
+</html>
