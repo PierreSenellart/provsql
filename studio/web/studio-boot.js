@@ -95,12 +95,25 @@ const PREP = [
 // Create every database once (cheap, metadata only); seeding is lazy, on first
 // open. PGlite is single-database per connection, so each database is a real
 // database in the shared cluster, reached by reopening with {database}.
-let _bootstrap = await PGlite.create({ dataDir: DATADIR, extensions: EXT })
-const _have = (await _bootstrap.query('SELECT datname FROM pg_database')).rows.map((r) => r.datname)
-for (const m of manifest) {
-  if (!_have.includes(m.name)) await _bootstrap.exec(`CREATE DATABASE ${m.name}`)
+//
+// Opening this bootstrap connection is itself a full PGlite instantiation, paid
+// on every page load (a mode or database switch reloads the page). Once the
+// cluster matches the manifest there is nothing to create, so we record the
+// manifest signature in localStorage and skip the bootstrap on later boots.
+// switchDb falls back to ensureCluster() if a target database turns out to be
+// absent (the IndexedDB store was cleared while the signature lingered, or the
+// manifest grew), so the skip is safe even when the two stores disagree.
+const CLUSTER_SIG = manifest.map((m) => m.name).sort().join(',')
+async function ensureCluster() {
+  const boot = await PGlite.create({ dataDir: DATADIR, extensions: EXT })
+  const have = (await boot.query('SELECT datname FROM pg_database')).rows.map((r) => r.datname)
+  for (const m of manifest) {
+    if (!have.includes(m.name)) await boot.exec(`CREATE DATABASE ${m.name}`)
+  }
+  await boot.close()
+  localStorage.setItem('ps.clusterReady', CLUSTER_SIG)
 }
-await _bootstrap.close()
+if (localStorage.getItem('ps.clusterReady') !== CLUSTER_SIG) await ensureCluster()
 
 // The currently-open database. PGlite holds one connection at a time, so
 // switching closes the active instance and reopens on the target.
@@ -109,7 +122,15 @@ let activePg = null
 async function switchDb(name) {
   if (name === activeDb) return
   if (activePg) { await activePg.close(); activePg = null }
-  const inst = await PGlite.create({ dataDir: DATADIR, database: name, extensions: EXT })
+  let inst
+  try {
+    inst = await PGlite.create({ dataDir: DATADIR, database: name, extensions: EXT })
+  } catch (_e) {
+    // The signature claimed the cluster was ready but this database is missing;
+    // rebuild the cluster and retry once.
+    await ensureCluster()
+    inst = await PGlite.create({ dataDir: DATADIR, database: name, extensions: EXT })
+  }
   for (const s of PREP) await inst.exec(s)
   // "Seeded" is recorded as a database comment, not a table, so nothing shows
   // up in the schema panel. (oldtable migrates away the marker table an
@@ -312,6 +333,7 @@ document.getElementById('tools-panel')?.remove()
       for (const m of manifest) await admin.exec(`DROP DATABASE IF EXISTS ${m.name}`)
       await admin.close()                 // flush the drops before the reload
       localStorage.removeItem('ps.activeDb')
+      localStorage.removeItem('ps.clusterReady')   // force ensureCluster() on the next boot
       location.reload()
     }))
     nav.appendChild(btn)
