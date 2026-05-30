@@ -23,6 +23,7 @@ extern "C" {
 
 #include "kcmcp_client.h"
 #include "kcmcp_protocol.h"
+#include "provsql_config.h"
 
 #include <stdexcept>
 #include <string>
@@ -41,6 +42,14 @@ constexpr uint32_t CLIENT_SEND_MAX = 1u * 1024 * 1024;
 // Connect to "unix:/path" or "host:port"; returns a connected fd or -1.
 int connect_endpoint(const std::string &endpoint)
 {
+#ifdef PROVSQL_NO_SUBPROCESS
+  /* No sockets in the WASM sandbox: report "no connection" so the KCMCP
+     path falls back to the CLI compilers (also absent) and ultimately to
+     the in-process tree-decomposition compiler.  A remote KCMCP-over-
+     WebSocket transport is a separate, opt-in addition. */
+  (void) endpoint;
+  return -1;
+#else
   if (endpoint.rfind("unix:", 0) == 0) {
     std::string path = endpoint.substr(5);
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
@@ -83,6 +92,7 @@ int connect_endpoint(const std::string &endpoint)
   }
   freeaddrinfo(res);
   return fd;
+#endif /* PROVSQL_NO_SUBPROCESS */
 }
 
 uint16_t get_u16(const std::string &s, size_t off)

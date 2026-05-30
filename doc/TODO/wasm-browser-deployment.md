@@ -336,8 +336,14 @@ is simplest; if slow, track a dirty high-water mark and write only
 
 ### 4. Disable the process-spawning / socket paths (compile-guard)
 
-All of these are `#if !defined(PROVSQL_INPROCESS_STORE)` (or made to
-fail-soft):
+All of these are guarded by `PROVSQL_NO_SUBPROCESS` (defined in
+`provsql_config.h` under `__EMSCRIPTEN__`), made to fail-soft so callers
+fall back to the in-process compiler. The guard is tied to the platform
+(`__EMSCRIPTEN__`), *not* to `PROVSQL_INPROCESS_STORE`, so a native build —
+even one forcing the in-process store for testing — keeps the
+subprocess/socket paths and stays a faithful 176/176 regression baseline;
+the guarded branches are compile-checked by forcing the flags on native
+and exercised for real by the WASM build:
 
 - **External CLI solvers** — `src/external_tool.cpp:56-102`
   (`run_in_own_pgroup`: `fork`/`setpgid`/`execl`/`waitpid`/`killpg`) and
@@ -510,8 +516,16 @@ Ship-when ordering; each milestone is independently demonstrable.
       observations — the heap-buffer store is single-backend, and
       `--max-connections=1` alone does not serialise pg_regress parallel
       groups tightly enough; one test per line does).
-- [ ] **M3 — guards:** §4 process/socket paths compiled out; confirm
-      probability via tree-dec / MC / safe-query still green natively.
+- [x] **M3 — guards: done.** §4 process/socket paths compiled out under
+      `PROVSQL_NO_SUBPROCESS` (auto under `__EMSCRIPTEN__`): the
+      `run_in_own_pgroup` fork/exec, the KCMCP supervisor fork/exec, and
+      the KCMCP `connect_endpoint` socket. Guards compile both natively
+      and under the full WASM flag combo. With the combo forced on native,
+      only the 12 external-tool-specific tests fail (d4/c2d/minic2d/
+      dsharp/weightmc + their timeouts, compile-to-ddnnf-via-tool,
+      probability_benchmark, graph-easy view_circuit, tool_search_path) —
+      all 164 others pass, confirming probability falls back to the
+      in-process tree-decomposition compiler / Monte Carlo / safe-query.
 - [ ] **M4 — first WASM build:** §8 + §6-phase1 (Boost built for WASM);
       `CREATE EXTENSION provsql` in PGlite; `add_provenance`, a
       provenance SELECT, `sr_boolean`/`sr_counting`, `view_circuit` DOT.

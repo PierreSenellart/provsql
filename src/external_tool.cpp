@@ -21,6 +21,7 @@ extern "C" {
 
 #include "external_tool.h"
 #include "ToolRegistry.h"
+#include "provsql_config.h"
 
 #include <string>
 #include <unordered_map>
@@ -55,6 +56,13 @@ static const char *DEFAULT_PATH =
  */
 static int run_in_own_pgroup(const std::string &cmdline)
 {
+#ifdef PROVSQL_NO_SUBPROCESS
+  /* No subprocesses in the WASM sandbox.  Mirror fork()'s failure return
+     so find_external_tool() reports "not found" and callers fall back to
+     the in-process compiler. */
+  (void) cmdline;
+  return -1;
+#else
   fflush(NULL);                       /* flush stdio before fork, like system() */
 
   pid_t child = fork();
@@ -99,6 +107,7 @@ static int run_in_own_pgroup(const std::string &cmdline)
     pg_usleep(10000);                 /* 10 ms; an arriving signal wakes us via EINTR */
   }
   return status;
+#endif /* PROVSQL_NO_SUBPROCESS */
 }
 
 int run_external_tool(const std::string &cmdline) {

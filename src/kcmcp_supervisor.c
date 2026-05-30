@@ -36,6 +36,7 @@
 #include "provsql_utils.h"
 #include "provsql_shmem.h"
 #include "provsql_error.h"
+#include "provsql_config.h"
 
 #if PG_VERSION_NUM < 120000
 /* WL_EXIT_ON_PM_DEATH (have WaitLatch exit on postmaster death) was introduced
@@ -105,6 +106,10 @@ static char *build_server_command(const char *tmpl, const char *endpoint)
  * pid, or -1 on failure. */
 static pid_t launch_server(const char *cmd)
 {
+#ifdef PROVSQL_NO_SUBPROCESS
+  (void) cmd;
+  return -1;                          /* no subprocesses in the WASM sandbox */
+#else
   pid_t child;
   fflush(NULL);
   child = fork();
@@ -117,16 +122,21 @@ static pid_t launch_server(const char *cmd)
   }
   setpgid(child, child);
   return child;
+#endif
 }
 
 static void kill_server(pid_t child)
 {
+#ifdef PROVSQL_NO_SUBPROCESS
+  (void) child;
+#else
   int status;
   pid_t r;
   if (child <= 0)
     return;
   killpg(child, SIGKILL);
   do { r = waitpid(child, &status, 0); } while (r < 0 && errno == EINTR);
+#endif
 }
 
 /* Wait on the latch (and an optional timeout), resetting it.  Returns true if
@@ -218,7 +228,12 @@ void provsql_kcmcp_worker(Datum ignored)
 
     if (child > 0) {
       int status;
-      pid_t w = waitpid(child, &status, WNOHANG);
+      pid_t w;
+#ifdef PROVSQL_NO_SUBPROCESS
+      w = -1; (void) status;          /* unreachable: launch_server returns -1 */
+#else
+      w = waitpid(child, &status, WNOHANG);
+#endif
       if (w == child) {
         publish_endpoint("");
         provsql_log("managed KCMCP server (pid %d) exited; relaunching",
