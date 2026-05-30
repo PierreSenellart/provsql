@@ -63,7 +63,7 @@ Architecture
   the Flask code assumes a private connection per request.
 * **Graphviz** (``@hpcc-js/wasm-graphviz``) replaces the ``dot``
   subprocess the circuit/tree-decomposition renderers shell out to.
-* External knowledge compilers (d4, c2d, weightmc, ...) cannot run (no
+* External knowledge compilers (d4, c2d, weightmc…) cannot run (no
   subprocesses), so the tool registry is disabled; probability uses the
   in-process tree-decomposition compiler.
 

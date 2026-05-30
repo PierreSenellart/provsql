@@ -134,7 +134,7 @@ frontend path-portable by rewriting the few root-absolute paths in the copied
 `app.js` (`/static/circuit.js` and the `/circuit` / `/where` mode navigation)
 to **relative** URLs (`static/circuit.js`, `?mode=…`). `studio-boot.js` reads
 `?mode=` (default `circuit`), sets the `<body>` mode class before injecting
-`app.js`, and resolves all its sibling assets against its own module URL — so
+`app.js`, and resolves all its sibling assets against its own module URL, so
 the whole thing works unchanged at the server root or under a sub-path
 (`https://host/playground/`). PGlite is single-threaded, so no COOP/COEP
 headers are needed; the only server nicety is the WASM MIME type, supplied by a
