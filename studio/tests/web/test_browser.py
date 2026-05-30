@@ -43,10 +43,26 @@ def test_fully_self_hosted(browser, web_server) -> None:
     ctx.route("**/*", handle)
     page = ctx.new_page()
     try:
-        page.goto(web_server + "/", wait_until="domcontentloaded")
+        page.goto(web_server + "/app.html", wait_until="domcontentloaded")
         page.wait_for_selector("#studio-boot-status", state="hidden", timeout=240000)
         assert page.locator("#request").count() == 1   # the UI booted
         assert not blocked, f"unexpected off-origin requests: {blocked[:8]}"
+    finally:
+        ctx.close()
+
+
+def test_landing_gates_on_jspi(browser, web_server) -> None:
+    """A bare visit hits the landing (not the app): it explains the JSPI
+    requirement and links to app.html."""
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    try:
+        page.goto(web_server + "/", wait_until="domcontentloaded")
+        assert page.locator("#studio-boot-status").count() == 0   # not the app
+        assert page.locator("#launch").get_attribute("href") == "app.html"
+        body = page.locator("body").inner_text()
+        assert "JSPI" in body and "Firefox" in body
+        assert not page.locator("#jspi-warn").is_visible()        # headless Chromium has JSPI
     finally:
         ctx.close()
 
@@ -60,7 +76,7 @@ def test_portable_under_subpath(browser, subpath_server) -> None:
     responses: dict[str, int] = {}
     page.on("response", lambda r: responses.__setitem__(r.url, r.status))
     try:
-        page.goto(subpath_server + "/", wait_until="domcontentloaded")
+        page.goto(subpath_server + "/app.html", wait_until="domcontentloaded")
         page.wait_for_selector("#studio-boot-status", state="hidden", timeout=240000)
         # circuit.js was loaded from /playground/static/ (the relativised path).
         circ = [u for u, s in responses.items()
@@ -70,7 +86,7 @@ def test_portable_under_subpath(browser, subpath_server) -> None:
         # The mode anchor is relative and resolves under /playground/.
         where = page.locator("#modeswitch [data-mode='where']")
         assert where.get_attribute("href") == "?mode=where"
-        assert "/playground/?mode=where" in where.evaluate("e => e.href")
+        assert "/playground/app.html?mode=where" in where.evaluate("e => e.href")
     finally:
         ctx.close()
 

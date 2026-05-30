@@ -113,9 +113,10 @@ def subpath_server() -> str:
 
 
 def _boot(page, url: str) -> None:
-    """Wait until studio-boot.js finishes (it hides the status bar) or fails
-    (it turns the bar red and leaves it visible)."""
-    page.goto(url + "/", wait_until="domcontentloaded")
+    """Boot the app (app.html, not the landing index.html) and wait until
+    studio-boot.js finishes (it hides the status bar) or fails (it turns the
+    bar red and leaves it visible)."""
+    page.goto(url + "/app.html", wait_until="domcontentloaded")
     try:
         page.wait_for_selector("#studio-boot-status", state="hidden", timeout=BOOT_TIMEOUT)
     except Exception:
@@ -135,7 +136,7 @@ def open_studio(browser, web_server):
     `path` (e.g. a "?mode=&db=&q=" deep link) to open verbatim."""
     contexts = []
 
-    def _open(db: str | None = None, path: str = "/"):
+    def _open(db: str | None = None, path: str = "/app.html"):
         ctx = browser.new_context(permissions=_CLIPBOARD)
         if db:
             ctx.add_init_script(

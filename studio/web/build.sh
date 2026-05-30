@@ -81,12 +81,14 @@ for old, new in subs:
 open(p, "w", encoding="utf-8").write(s)
 PY
 
-# 2. Boot-shell index.html: swap the canonical direct <script src="app.js">
+# 2. Boot shell (app.html): swap the canonical direct <script src="app.js">
 #    (which would run before the in-page backend exists) for the boot-status
 #    bar plus the studio-boot module that brings PGlite + Pyodide up and then
 #    injects app.js. Default the body to circuit mode (studio-boot overrides
-#    it from ?mode= anyway, but this avoids a flash of the wrong mode).
-python3 - "$STATIC/index.html" index.html <<'PY'
+#    it from ?mode= anyway, but this avoids a flash of the wrong mode). The
+#    landing page (index.html, below) is what bare visits hit; it gates on JSPI
+#    and links here.
+python3 - "$STATIC/index.html" app.html <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 html = open(src, encoding="utf-8").read()
@@ -117,6 +119,11 @@ html = re.sub(r'https://use\.fontawesome\.com/releases/v[0-9.]+/css/all\.css',
               'fontawesome/css/all.min.css', html)
 open(dst, "w", encoding="utf-8").write(html)
 PY
+
+# 2b. The landing page (index.html, what bare visits hit): explains the JSPI
+#     requirement + browser support, and forwards shared deep links to app.html
+#     when JSPI is present. Tracked source, copied verbatim.
+cp landing.html index.html
 
 # 3. The two absolute /static/ paths the unmodified frontend hard-codes
 #    (app.js -> /static/circuit.js, circuit.js -> /static/app.css).
@@ -209,18 +216,14 @@ licenses = sorted(f for f in os.listdir("licenses"))
 with open("THIRD-PARTY.html", "w", encoding="utf-8") as f:
     f.write("""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ProvSQL Playground – third-party components</title>
-<style>
- body{font:15px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#1b1f24}
- h1{font-size:1.5rem} a{color:#1a6}
- .back{display:inline-block;margin-bottom:1.5rem;font-weight:600;text-decoration:none}
- table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:14px}
- th,td{border:1px solid #d7dae0;padding:.4rem .6rem;text-align:left;vertical-align:top}
- th{background:#f4f6f8} code{background:#f4f6f8;padding:0 .2em;border-radius:3px}
- .note{color:#555}
-</style></head><body>
-<a class="back" href="./" onclick="if(history.length>1){history.back();return false}">&larr; Back to ProvSQL Playground</a>
-<h1>Third-party components</h1>
+<title>ProvSQL Playground: third-party components</title>
+<link rel="icon" href="img/favicon.ico">
+<link rel="stylesheet" href="/assets/css/main.css">
+</head><body class="layout--single">
+<div class="initial-content"><div id="main" role="main"><article class="page"><div class="page__inner-wrap">
+<header><h1 class="page__title">Third-party components</h1></header>
+<section class="page__content">
+<p><a class="btn btn--small" href="./" onclick="if(history.length>1){history.back();return false}">&larr; Back to ProvSQL Playground</a></p>
 <p>ProvSQL Playground is fully self-hosted: it loads nothing from a CDN at run
 time. The components below are redistributed with it; full license texts are in
 <code>licenses/</code> (and <code>fontawesome/</code>, <code>fonts/</code>).</p>
@@ -231,35 +234,28 @@ time. The components below are redistributed with it; full license texts are in
                          for i in lic_ids)
         f.write("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n"
                 % (_h.escape(name), lic, _h.escape(role), who_html))
-    f.write("</tbody></table>\n<p class='note'>License texts: "
+    f.write("</tbody></table>\n<p><small>License texts: "
             + ", ".join('<a href="licenses/%s">%s</a>' % (_h.escape(x), _h.escape(x)) for x in licenses)
-            + ".</p>\n")
-    f.write("<p class='note'>The optional external knowledge-compiler tools "
+            + ".</small></p>\n")
+    f.write("<p><small>The optional external knowledge-compiler tools "
             "(d4, c2d, miniC2D, dsharp, weightmc…) are <strong>not</strong> "
             "bundled: the browser cannot spawn subprocesses, so the tool "
             "registry is disabled and none of their (often research-only) "
-            "licenses apply.</p>\n</body></html>\n")
+            "licenses apply.</small></p>\n"
+            "</section></div></article></div></div>\n</body></html>\n")
 print("  THIRD-PARTY.html +", len(licenses), "license texts")
 PY
 
 # 9. .htaccess for Apache static hosting (e.g. provsql.org/playground/). The
-#    build is path-portable, so no rewriting is required to function; this
-#    supplies (1) the WASM MIME type Apache does not serve by default (a wrong
-#    type breaks WebAssembly instantiation) and a couple of related types, and
-#    (2) belt-and-suspenders redirects for path-style mode URLs (internal
-#    navigation already uses ?mode=). RewriteRule paths are relative to this
-#    directory, so it works at any deploy prefix. Needs AllowOverride FileInfo.
+#    build is path-portable and uses only relative URLs, so no rewriting is
+#    needed; this only supplies the WASM MIME type Apache does not serve by
+#    default (a wrong type breaks WebAssembly instantiation) and a couple of
+#    related types. Needs AllowOverride FileInfo to take effect.
 cat > .htaccess <<'HT'
 AddType application/wasm .wasm
 AddType text/javascript .mjs
 AddType application/octet-stream .data
 AddType application/gzip .tar.gz
-
-<IfModule mod_rewrite.c>
-  RewriteEngine On
-  RewriteRule ^circuit$ ?mode=circuit [R=302,L,QSA]
-  RewriteRule ^where$   ?mode=where   [R=302,L,QSA]
-</IfModule>
 HT
 
 echo "build.sh: assembled doc-root in $HERE"

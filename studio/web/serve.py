@@ -1,13 +1,11 @@
 import http.server
 import socketserver
 
-# Dev server for the static browser build. It does nothing a plain static
-# host (e.g. Apache, no CGI) could not: it serves files and issues two fixed
-# redirects for the clean mode paths. The production equivalent is two lines:
-#   Redirect /circuit /?mode=circuit
-#   Redirect /where   /?mode=where
-REDIRECTS = {'/circuit': '/?mode=circuit', '/where': '/?mode=where'}
-
+# Dev server for the static browser build. It does nothing a plain static host
+# (e.g. Apache, no CGI) could not: it just serves files with the right MIME
+# types (notably application/wasm). The build is path-portable and uses only
+# relative URLs, so no rewriting/redirects are needed; / serves the landing
+# page (index.html), which links to the app (app.html).
 http.server.SimpleHTTPRequestHandler.extensions_map.update({
     '.wasm': 'application/wasm', '.js': 'text/javascript',
     '.mjs': 'text/javascript', '.data': 'application/octet-stream',
@@ -19,15 +17,6 @@ class H(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
         super().end_headers()
-
-    def do_GET(self):
-        target = REDIRECTS.get(self.path.split('?', 1)[0])
-        if target is not None:
-            self.send_response(302)
-            self.send_header('Location', target)
-            self.end_headers()
-            return
-        return super().do_GET()
 
 
 # Threaded: a browser opens many parallel/keep-alive connections (WASM,

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProvSQL Playground</title>
+<link rel="icon" href="img/favicon.ico">
+<!-- The site's compiled stylesheet (same origin on provsql.org): the landing
+     matches the rest of the website. Font Awesome is the vendored copy. -->
+<link rel="stylesheet" href="/assets/css/main.css">
+<link rel="stylesheet" href="fontawesome/css/all.min.css">
+<style> #jspi-warn { display: none; } </style>
+</head>
+<body class="layout--single">
+  <div class="masthead">
+    <div class="masthead__inner-wrap">
+      <div class="masthead__menu">
+        <nav id="site-nav" class="greedy-nav" aria-label="Primary navigation">
+          <a class="site-logo" href="https://provsql.org/"><img src="img/logo.png" alt="ProvSQL"></a>
+          <a class="site-title" href="https://provsql.org/">ProvSQL
+            <span class="site-subtitle">Provenance for PostgreSQL</span></a>
+          <ul class="visible-links">
+            <li class="masthead__menu-item"><a href="https://provsql.org/overview/">Overview</a></li>
+            <li class="masthead__menu-item"><a href="https://provsql.org/docs/">Documentation</a></li>
+            <li class="masthead__menu-item"><a href="https://github.com/PierreSenellart/provsql"><i class="fab fa-fw fa-github" aria-hidden="true"></i> Source</a></li>
+          </ul>
+        </nav>
+      </div>
+    </div>
+  </div>
+
+  <div class="initial-content">
+    <div id="main" role="main">
+      <article class="page">
+        <div class="page__inner-wrap">
+          <header><h1 class="page__title">ProvSQL Playground</h1></header>
+          <section class="page__content">
+
+            <p>ProvSQL Studio running entirely in your browser: PostgreSQL with
+            the ProvSQL provenance extension, compiled to WebAssembly. No
+            install, no server, no account; everything runs on this page, on
+            demo databases.</p>
+
+            <div class="notice--warning" id="jspi-warn">
+              <strong>Your browser does not support JSPI.</strong> The
+              Playground needs WebAssembly JavaScript Promise Integration, which
+              your browser does not appear to enable, so it will not run here
+              as-is. See the supported browsers below. (You can still try, but
+              it will likely hang.)
+            </div>
+
+            <p><a class="btn btn--primary btn--large" id="launch" href="app.html">Launch the Playground</a></p>
+            <p><small>First load fetches a few megabytes (PostgreSQL and Python,
+            as WebAssembly) and takes a few seconds; it is then cached.</small></p>
+
+            <h2>Browser support</h2>
+            <p>The Playground relies on <strong>JSPI</strong> (WebAssembly
+            JavaScript Promise Integration), so it needs a recent browser:</p>
+            <table>
+              <thead><tr><th>Browser</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Chrome / Edge</strong> 137+</td><td>Works out of the box.</td></tr>
+                <tr><td><strong>Firefox</strong></td><td>Works once JSPI is enabled (one-time flag, below).</td></tr>
+                <tr><td><strong>Safari</strong></td><td>Not supported yet (no JSPI).</td></tr>
+              </tbody>
+            </table>
+
+            <h2>Enabling JSPI in Firefox</h2>
+            <ol>
+              <li>Open <code>about:config</code> (accept the warning).</li>
+              <li>Search for <code>javascript.options.wasm_js_promise_integration</code>.</li>
+              <li>Set it to <code>true</code>, then reload this page.</li>
+            </ol>
+
+            <p>Prefer a real install? ProvSQL and ProvSQL Studio run on any
+            PostgreSQL: see the
+            <a href="https://provsql.org/docs/">documentation</a>.</p>
+
+          </section>
+        </div>
+      </article>
+    </div>
+  </div>
+
+  <div class="page__footer">
+    <footer>
+      <a href="https://provsql.org/">Home</a> &middot;
+      <a href="https://provsql.org/docs/">Documentation</a> &middot;
+      <a href="https://github.com/PierreSenellart/provsql">Source</a> &middot;
+      <a href="THIRD-PARTY.html">Licenses</a>
+    </footer>
+  </div>
+
+<script>
+  // JSPI feature detection. Shared deep links (?mode/?db/?q) go straight to the
+  // app when JSPI is available; otherwise we always show this page so the user
+  // sees the requirement instead of a silent hang.
+  var jspi = typeof WebAssembly !== 'undefined' && typeof WebAssembly.Suspending === 'function';
+  var hasAppParams = /[?&](mode|db|q)=/.test(location.search);
+  if (jspi && hasAppParams) {
+    location.replace('app.html' + location.search);
+  } else if (!jspi) {
+    document.getElementById('jspi-warn').style.display = 'block';
+    document.getElementById('launch').textContent = 'Launch anyway';
+  }
+</script>
+</body>
+</html>

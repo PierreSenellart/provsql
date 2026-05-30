@@ -86,7 +86,9 @@ doc-root:
 
 ```
 studio/web/                  # this dir is itself the doc-root
-  index.html                 # GENERATED entry: boot-status bar + studio-boot.js
+  index.html                 # GENERATED landing (= landing.html): JSPI gate + Launch
+  landing.html               # the landing source (tracked)
+  app.html                   # GENERATED app entry: boot-status bar + studio-boot.js
   studio-boot.js             # boots PGlite + Pyodide + the shims, injects app.js
   psycopg_pglite.py          # the fake psycopg / psycopg_pool / subprocess module
   build.sh serve.py          # assembler + dev static server (tracked)
@@ -115,28 +117,32 @@ transaction, which breaks the `ON COMMIT DROP` temp table
 front and seeds each lazily on first switch. `casestudy3` is omitted: it loads
 a multi-megabyte GTFS dataset that must be downloaded separately.
 
+### Landing page and JSPI gate
+
+A bare visit hits **index.html**, a small static landing that explains the
+**JSPI requirement** (the browser list, and the Firefox `about:config` flag)
+and links to the app (**app.html**). It feature-detects JSPI: shared deep
+links (`?mode=`/`?db=`/`?q=`) are forwarded straight to the app when JSPI is
+present, and otherwise the landing is shown so the user sees the requirement
+instead of a silent hang.
+
 ### Designed for a dumb static host
 
 The build runs on a plain file server (Apache with no CGI, a CDN, `file://`):
-no per-request HTML rewriting, no app server. The only server cooperation is
-**two redirects**, for the clean mode paths the unmodified `app.js` navigates
-to:
-
-```apache
-Redirect /circuit /?mode=circuit
-Redirect /where   /?mode=where
-```
-
-`studio-boot.js` reads `?mode=` (default `circuit`), sets the `<body>` mode
-class before injecting `app.js`, and resolves all its sibling assets against
-its own module URL – so the single real page at `/` is what every mode route
-lands on. The two `/static/<f>` paths above are the only absolute asset URLs
-hard-coded in the unmodified frontend, so they exist as real files. PGlite is
-single-threaded, so no COOP/COEP headers are needed.
+no per-request rewriting, no app server, **no redirects**. `build.sh` makes the
+frontend path-portable by rewriting the few root-absolute paths in the copied
+`app.js` (`/static/circuit.js` and the `/circuit` / `/where` mode navigation)
+to **relative** URLs (`static/circuit.js`, `?mode=…`). `studio-boot.js` reads
+`?mode=` (default `circuit`), sets the `<body>` mode class before injecting
+`app.js`, and resolves all its sibling assets against its own module URL — so
+the whole thing works unchanged at the server root or under a sub-path
+(`https://host/playground/`). PGlite is single-threaded, so no COOP/COEP
+headers are needed; the only server nicety is the WASM MIME type, supplied by a
+shipped `.htaccess` (`AddType application/wasm .wasm`).
 
 `serve.py` is a dev server that does exactly this and nothing more (threaded
-static file serving + those two redirects); it is the local mirror of the
-Apache config above, not a runtime dependency.
+static file serving + the WASM MIME types); it is the local mirror of the
+hosting requirements, not a runtime dependency.
 
 Mode switching is a full-page navigation (the frontend is path-routed), which
 reboots the tab; the DB is therefore persisted to IndexedDB so its provenance
