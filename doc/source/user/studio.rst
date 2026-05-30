@@ -17,6 +17,20 @@ through two complementary inspection modes:
 A schema panel, a configuration panel, and a mode-switcher round out
 the UI; all three are described below.
 
+.. tip::
+
+   **Try it in your browser, no install:** the same Studio UI, with
+   PostgreSQL and ProvSQL compiled to WebAssembly, runs entirely
+   client-side as the **ProvSQL Playground** at
+   `provsql.org/playground/ <https://provsql.org/playground/>`_, on the
+   tutorial and case-study databases. It needs a browser with WebAssembly
+   JSPI (Chrome/Edge 137+ out of the box; Firefox behind a flag; not
+   Safari yet); the landing page explains the requirement. Because the
+   browser cannot launch external programs, the external knowledge
+   compilers (d4, c2d, miniC2D, dsharp, weightmc) and graph-easy are not
+   available there: probability uses the built-in tree-decomposition
+   compiler, and everything else works.
+
 Studio is a query-and-inspect tool, not a database loader. Bulk
 fixture loads (``psql -d mydb -f setup.sql``) still go through
 ``psql``; Studio takes over once the data is in place.

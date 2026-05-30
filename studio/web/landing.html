@@ -53,6 +53,18 @@
             <p><small>First load fetches a few megabytes (PostgreSQL and Python,
             as WebAssembly) and takes a few seconds; it is then cached.</small></p>
 
+            <div class="notice--info">
+              <strong>Everything runs in-process; external tools are not
+              available.</strong> The browser cannot launch helper programs, so
+              the external knowledge compilers (d4, c2d, miniC2D, dsharp,
+              weightmc) and graph-easy are absent, and options that rely on them
+              do not appear. Probability is computed with ProvSQL's built-in
+              tree-decomposition compiler. Everything else works: semiring
+              evaluation, where-provenance, Shapley and Banzhaf values,
+              continuous random variables, and circuit / tree-decomposition
+              rendering (via a WebAssembly Graphviz).
+            </div>
+
             <h2>Browser support</h2>
             <p>The Playground relies on <strong>JSPI</strong> (WebAssembly
             JavaScript Promise Integration), so it needs a recent browser:</p>

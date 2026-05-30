@@ -5,6 +5,9 @@ main:
     url: /docs/
   - title: "Studio"
     url: /docs/user/studio.html
+  - title: "Playground"
+    url: /playground/
+    description: "Try ProvSQL in your browser, no install"
   - title: "Publications"
     url: /publications/
   - title: "Contributors"

@@ -100,6 +100,7 @@ This documentation is organized into four parts:
    dev/debugging
    dev/build-system
    dev/studio
+   dev/playground
 
 .. _api-ref:
 

@@ -1,6 +1,15 @@
 Getting ProvSQL
 ===============
 
+.. tip::
+
+   Just want to try ProvSQL without installing anything? The **ProvSQL
+   Playground** runs PostgreSQL, ProvSQL and ProvSQL Studio entirely in
+   your browser (WebAssembly) at
+   `provsql.org/playground/ <https://provsql.org/playground/>`_, on demo
+   databases. It needs a JSPI-capable browser (Chrome/Edge 137+; Firefox
+   behind a flag). For real use, install locally as below.
+
 There are three ways to run ProvSQL:
 
 * `Installing from Source`_ (recommended) – full-featured, suitable for
