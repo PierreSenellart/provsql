@@ -38,12 +38,20 @@ while [ $# -gt 0 ]; do
 done
 
 die() { echo "build.sh: $*" >&2; exit 2; }
-[ -n "$PGLITE_DIST" ]   || die "set --pglite <dir> (the built @electric-sql/pglite dist with index.js)"
-[ -n "$PROVSQL_TARGZ" ] || die "set --provsql <file> (provsql.tar.gz from ../../wasm/)"
-[ -f "$PGLITE_DIST/index.js" ] || die "no index.js under $PGLITE_DIST -- not a pglite dist"
-[ -f "$PROVSQL_TARGZ" ]        || die "no such file: $PROVSQL_TARGZ"
-
 cd "$HERE"
+
+# The WASM artifacts (the matched PGlite dist + provsql.tar.gz) are the only
+# heavy inputs. Pass both --pglite/--provsql to (re)import them; pass neither to
+# reuse the copies a previous build already placed here -- so re-assembling
+# after a Studio-source change needs no WASM rebuild.
+if [ -n "$PGLITE_DIST" ] || [ -n "$PROVSQL_TARGZ" ]; then
+  [ -n "$PGLITE_DIST" ] && [ -n "$PROVSQL_TARGZ" ] || \
+    die "pass both --pglite and --provsql, or neither (to reuse the in-place artifacts)"
+  [ -f "$PGLITE_DIST/index.js" ] || die "no index.js under $PGLITE_DIST -- not a pglite dist"
+  [ -f "$PROVSQL_TARGZ" ]        || die "no such file: $PROVSQL_TARGZ"
+elif [ ! -f pglite/index.js ] || [ ! -f provsql.tar.gz ]; then
+  die "no in-place WASM artifacts; first run with --pglite <dist> --provsql <provsql.tar.gz> (see ../../wasm/README.md)"
+fi
 
 # 1. Frontend assets, copied unmodified. -L dereferences the fonts /
 #    fonts-face.css symlinks (they point into ../../branding) so the doc-root
@@ -121,10 +129,13 @@ rm -rf pkg
 mkdir pkg
 cp "$PKGSRC"/*.py pkg/
 
-# 5. The WASM artifacts from ../../wasm/.
-rm -rf pglite
-cp -RL "$PGLITE_DIST" pglite
-cp "$PROVSQL_TARGZ" provsql.tar.gz
+# 5. The WASM artifacts from ../../wasm/ (only when (re)imported; otherwise the
+#    in-place pglite/ + provsql.tar.gz from a previous build are kept).
+if [ -n "$PGLITE_DIST" ]; then
+  rm -rf pglite
+  cp -RL "$PGLITE_DIST" pglite
+  cp "$PROVSQL_TARGZ" provsql.tar.gz
+fi
 
 # 6. The tutorial / case-study databases (converted from doc/*/setup.sql to
 #    statement lists studio-boot.js loads into one PGlite database each).
