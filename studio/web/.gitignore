@@ -1,5 +1,15 @@
-# Assembled WASM assets (built via ../../wasm/, not committed — large binaries)
+# Built/copied assets assembled for serving (see studio-boot.js + README) —
+# large binaries or copies of provsql_studio/static and the package sources.
 /pglite/
 /provsql.tar.gz
-/static/
+/pkg/
+/studio.html
+# copies of provsql_studio/static/* (the canonical source lives there)
 /index.html
+/app.js
+/circuit.js
+/app.css
+/colors_and_type.css
+/fonts-face.css
+/fonts/
+/img/
