@@ -6,53 +6,55 @@ with no Flask server and no database connection. The PyPI `provsql-studio`
 package remains the canonical server product; this build shares its
 frontend assets.
 
-Status: **scaffold + working seed**. `demo.html` is a self-contained page
-that boots PGlite + ProvSQL and runs the core flow (query → provenance
-tokens → probability) — it is the e2e smoke target. The full UI port is in
-progress; the architecture and plan are below.
+Status: **scaffold + working seed; full-Studio approach validated.**
+`demo.html` is a self-contained page that boots PGlite + ProvSQL and runs
+the core flow (query → provenance → probability). The full Studio UI runs
+via Pyodide (below); the sync/async bridge is proven, the build remains.
 
-## Architecture: a fetch-shim, not a rewrite
+## Architecture: reuse the real Python via Pyodide (no parallel port)
 
-Studio's frontend (`provsql_studio/static/app.js` + `circuit.js`, ~7000
-lines) already runs in the browser and talks to the Flask backend over
-`fetch('/api/...')`. The Flask backend (`app.py` routes + `db.py` +
-`circuit.py`) is the only server-side piece. To go static we **keep the
-frontend unchanged** and replace the HTTP backend with an **in-page
-`fetch` interceptor** that answers `/api/*` from an in-page PGlite:
+Goal: the **full Studio**, client-side, with **no separate JS/TS
+reimplementation to maintain** — Studio feature changes must flow through
+untouched. Efficiency is irrelevant (it's a demo; real users install
+locally). So we run the **unmodified `provsql_studio` Python** in
+**[Pyodide](https://pyodide.org)** (CPython→WASM) beside PGlite:
 
 ```
-static/app.js  ──fetch('/api/exec')──►  shim.js (window.fetch override)
-                                          │  ports db.py / app.py logic
-                                          ▼
-                                        PGlite + provsql  (WASM, this tab)
+static/app.js ─fetch('/api/exec')→ shim (window.fetch override, JS)
+                                     │  enters Python via PyProxy.callPromising()
+                                     ▼
+   Pyodide:  app.py (Flask app.test_client) → db.py → fake psycopg
+                                     │  cursor.execute → run_sync(pg.query(...))
+                                     ▼
+                          PGlite + provsql  (WASM, this tab)
 ```
 
-This avoids reimplementing the 7000-line UI; the work is porting the
-backend request/response contracts (the `/api/*` handlers) to JS over
-`pg.query`. PGlite is single-connection, so the pool/PID-cancellation
-machinery collapses to a single backend.
+- **Unchanged:** `app.py`, `db.py`, `circuit.py`, and `static/` — the whole
+  Studio. The only new, stable code is the **fake `psycopg`** module + a
+  ~30-line `fetch`→`test_client` bridge.
+- **psycopg shim surface** (all `db.py` uses): `ConnectionPool.connection()`
+  → `conn.cursor()` → `execute` / `fetch{all,one,many}` / `description` /
+  `rowcount`; `sql.SQL` / `sql.Identifier.format()`; `psycopg.errors.*`
+  (`UndefinedFunction`, `UndefinedObject`, `InsufficientPrivilege`) and
+  `psycopg.Error`; SAVEPOINT / `SET LOCAL` / rollback. Each maps onto
+  PGlite; the pool/PID-cancel/`subprocess`(kc)/`threading` parts collapse
+  (single connection, no external tools).
+- **`flask` + `sqlparse`** install via micropip (pure-Python).
+- **Sync→async bridge (validated):** `db.py` is synchronous; PGlite is
+  async. The shim's `cursor.execute` does `run_sync(pg.query(...))`. This
+  needs JSPI (WASM stack-switching) and a JSPI-aware entry: the fetch-shim
+  calls the Python request handler via `PyProxy.callPromising()`. Confirmed
+  working (sync Python synchronously awaiting an async JS call).
 
-## Endpoint inventory (the port work-list)
+**Browser support:** JSPI ships in recent **Chrome/Edge** (and Node with
+`--experimental-wasm-stack-switching`); Firefox/Safari are partial/flagged.
+The Pyodide-Studio demo is therefore Chromium-only for now (acceptable for
+a demo; an Atomics+worker bridge would lift that at the cost of COOP/COEP +
+a worker). `demo.html` itself (plain PGlite, no Pyodide) has no such
+constraint.
 
-From `provsql_studio/app.py`. `[trivial]` = constant/single-DB in the
-browser; `[core]` = needed for query + provenance; `[viz]` = circuit mode;
-`[n/a]` = no external tools in the browser (return empty/disabled).
-
-| Endpoint | role | port |
-|---|---|---|
-| `/api/conn`, `/api/databases`, `/api/config` | connection/config | [trivial] |
-| `/api/relations`, `/api/schema` | sidebar | [core] `db.list_relations`/`list_schema` |
-| `/api/exec` | run SQL + provenance | [core] `db.exec_batch` (where/boolean/semiring, wrap_last) |
-| `/api/set_prob`, `/api/provenance_mappings`, `/api/custom_semirings` | inputs to eval | [core] |
-| `/api/circuit/<t>`, `/circuit/<t>/expand`, `/api/leaf/<t>` | circuit DAG | [viz] `circuit.py` |
-| `/api/evaluate` | semiring / probability | [core] |
-| `/api/kc/*` (tools, registry, cnf/ddnnf/td, benchmark) | external compilers | [n/a] empty/disabled |
-| `/api/cancel/<id>` | query cancel | [trivial] (single backend) |
-
-Port order: trivial → exec + relations/schema (a working query console with
-provenance) → evaluate + set_prob (semirings/probability) → circuit viz →
-where-mode highlights. `kc/*` return "no tools" (the registry-driven
-pickers already tolerate an empty CLI-tool set in-browser).
+`/api/kc/*` (external knowledge-compiler tools) return "no tools" in the
+browser — the registry-driven pickers already tolerate an empty CLI set.
 
 ## Build & serve
 

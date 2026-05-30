@@ -541,13 +541,16 @@ Ship-when ordering; each milestone is independently demonstrable.
       via the in-process tree-decomposition compiler (no external solver).
       Broader coverage (Monte Carlo, Shapley, continuous RVs in-browser)
       remains to be exercised explicitly.
-- [~] **M6 — Studio web build: scaffold + seed + CI/CD.** Architecture
-      decided and scaffolded in `studio/web/` (a `fetch`-shim that answers
-      `/api/*` from in-page PGlite so the existing ~7000-line frontend is
-      reused unchanged; endpoint port-list documented). Working seed
-      `studio/web/demo.html` boots PGlite+ProvSQL and runs query →
-      provenance → probability (the e2e smoke target). The full `/api/*`
-      shim port (`db.exec_batch`, circuit, evaluate, where) remains.
+- [~] **M6 — Studio web build (Pyodide route): approach validated.**
+      Goal: the *full* Studio client-side with **no parallel JS/TS port to
+      maintain** — run the unmodified `provsql_studio` Python in Pyodide
+      beside PGlite, shimming `psycopg` onto PGlite and routing `/api/*`
+      into Flask's in-process `test_client` (see `studio/web/README.md`).
+      The one hard part — synchronous Python awaiting async PGlite — is
+      **proven** (`run_sync` + `PyProxy.callPromising`, JSPI). Remaining:
+      build the psycopg shim + bridge, mount the Studio package, wire the
+      page. Caveat: JSPI ⇒ Chromium-only for now. Working seed
+      `studio/web/demo.html` (plain PGlite, no Pyodide) needs no JSPI.
 - [x] **CI/CD foundation.** `wasm/` holds the reproducible build
       (scripts + libc++ patch + headless Node smoke test + README);
       `.github/workflows/wasm.yml` runs a cheap per-PR job (in-process
