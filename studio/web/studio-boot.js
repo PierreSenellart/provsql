@@ -101,14 +101,21 @@ async function switchDb(name) {
   if (activePg) { await activePg.close(); activePg = null }
   const inst = await PGlite.create({ dataDir: DATADIR, database: name, extensions: EXT })
   for (const s of PREP) await inst.exec(s)
-  const seeded = await inst.query("SELECT to_regclass('public.__provsql_seeded') IS NOT NULL AS e")
-  if (!seeded.rows[0].e) {
+  // "Seeded" is recorded as a database comment, not a table, so nothing shows
+  // up in the schema panel. (oldtable migrates away the marker table an
+  // earlier build created in public.)
+  const mark = (await inst.query(
+    "SELECT coalesce(shobj_description(d.oid, 'pg_database'), '') = 'provsql-studio-seeded' AS commented,"
+    + " to_regclass('public.__provsql_seeded') IS NOT NULL AS oldtable"
+    + " FROM pg_database d WHERE d.datname = current_database()")).rows[0]
+  if (!mark.commented && !mark.oldtable) {
     say(`loading ${name}…`)
     const entry = manifest.find((m) => m.name === name)
     const stmts = await (await fetch(asset(`./casestudies/${entry.file}`))).json()
     for (const s of stmts) await inst.exec(s)         // one stmt per exec: see build-casestudies.py
-    await inst.exec('CREATE TABLE public.__provsql_seeded()')
   }
+  if (mark.oldtable) await inst.exec('DROP TABLE public.__provsql_seeded')
+  if (!mark.commented) await inst.exec(`COMMENT ON DATABASE ${name} IS 'provsql-studio-seeded'`)
   activeDb = name
   activePg = inst
 }
