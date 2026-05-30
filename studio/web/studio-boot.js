@@ -118,8 +118,12 @@ async function switchDb(name) {
   if (!mark.commented) await inst.exec(`COMMENT ON DATABASE ${name} IS 'provsql-studio-seeded'`)
   activeDb = name
   activePg = inst
+  // Persist the choice: a DB switch (and a mode switch) reloads the page, and
+  // boot must reopen the same database rather than snap back to the default.
+  localStorage.setItem('ps.activeDb', name)
 }
-await switchDb(DEFAULT_DB)
+const _saved = localStorage.getItem('ps.activeDb')
+await switchDb(manifest.some((m) => m.name === _saved) ? _saved : DEFAULT_DB)
 
 // async PGlite bridge (the shim's run_sync target) -> the active database.
 globalThis.pgQuery = async (sql, params) => {
