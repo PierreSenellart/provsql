@@ -153,7 +153,9 @@ A single compile flag selects transport:
 #if defined(__EMSCRIPTEN__) && !defined(PROVSQL_MULTIPROCESS)
 #  define PROVSQL_INPROCESS_STORE 1
 #endif
-/* Forceable on native for testing: make CPPFLAGS=-DPROVSQL_INPROCESS_STORE */
+/* Forceable on native for testing:
+   make PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g'
+   (PG_CPPFLAGS, not CPPFLAGS, so PGXS still adds the server include path) */
 ```
 
 ## Implementation
@@ -344,9 +346,12 @@ anywhere in ProvSQL — one fewer WASM headache.
 Before any Emscripten work, prove the in-process store is behaviourally
 identical to the worker-based one **on native**:
 
-1. Add a build variant: `make CPPFLAGS=-DPROVSQL_INPROCESS_STORE`. It
-   compiles the same extension with the FIFO transport, no bgworker, no
-   shmem, and the buffer-backed storage backend.
+1. Add a build variant: `make PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE
+   -O0 -g'` (`PG_CPPFLAGS`, not `CPPFLAGS`, so PGXS keeps the server
+   include path). It compiles the same extension with the FIFO
+   transport, no bgworker, no shmem, and the buffer-backed storage
+   backend. Run pg_regress with `--max-connections=1` (see Implementation
+   observations: the flag's per-backend mmap store is single-backend).
 2. Run the full `make test` (~106 pg_regress files) against it. Because
    single-user-mode concurrency is absent, *every* test that does not
    rely on a second backend must pass identically. Triage any diff: the
@@ -459,9 +464,15 @@ Ship-when ordering; each milestone is independently demonstrable.
       questions are now settled end-to-end (see Implementation
       observations for the build recipe and the ABI-compatibility result
       that informs M4).
-- [ ] **M1 — in-process transport (native):** §1 + §2 behind
-      `PROVSQL_INPROCESS_STORE`; FIFO loopback; bgworker/shmem compiled
-      out; `make CPPFLAGS=-DPROVSQL_INPROCESS_STORE && make test` green.
+- [x] **M1 — in-process transport (native): done.** §1 + §2 behind
+      `PROVSQL_INPROCESS_STORE` (FIFO loopback + synchronous dispatch,
+      bgworker/shmem/LWLock compiled out). Built with
+      `make PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g'`; native build
+      unchanged. All 176 pg_regress tests pass against a self-managed
+      cluster (staged install + `extension_control_path`, provsql
+      preloaded by absolute path) **when run serially**
+      (`--max-connections=1`); see Implementation observations for why
+      serial is required and the validation recipe.
 - [ ] **M2 — buffer storage (native):** §3 buffer+write-back backend;
       re-run `make test` green; add CI job for the variant (§5).
 - [ ] **M3 — guards:** §4 process/socket paths compiled out; confirm
@@ -506,6 +517,48 @@ client-side, no server — already a teaching artefact before Studio lands.
   explicit in docs about exact-vs-Monte-Carlo and the WS-KCMCP escape.
 
 ## Implementation observations
+
+### M1 in-process transport — what was established
+
+- **The transport swap is correct.** With `PROVSQL_INPROCESS_STORE`, the
+  whole backend↔worker pipe layer is replaced by two in-memory FIFOs
+  (`req`/`resp` in `provsqlSharedState`), `SENDWRITEM` appends the
+  message and runs `provsql_mmap_dispatch` once inline, and the existing
+  client/worker code is otherwise untouched (the worker `switch` was
+  lifted verbatim out of `provsql_mmap_main_loop` into
+  `provsql_mmap_dispatch`). The five raw pipe-IO sites became
+  `READB_BYTES`/`READM_BYTES`/`WRITEB_BYTES` macros (FIFO pop/push under
+  the flag, a looping `provsql_read_all` / `write` natively).
+  `create_gate` is forced down its single-message path (the FIFO has no
+  `PIPE_BUF` limit) and the IPC buffer becomes heap-growable. Locks are
+  no-ops; the workers are not registered; `_PG_init` calls
+  `provsql_inproc_init` instead. All 176 regression tests pass.
+- **Native build is unaffected.** The `#else` branches preserve the
+  pipe/shmem/worker code byte-for-byte; a plain `make` still produces a
+  worker-based extension and passes all 176 tests.
+- **Native flag testing must be serial (`--max-connections=1`).** Under
+  the flag there is no single-writer worker: each backend maps the
+  shared `provsql_*.mmap` files itself (the §3 buffer-backed store is
+  still M2 to-do). pg_regress *parallel groups* (e.g. schedule line with
+  `probability_having` and five siblings) then run several backends that
+  grow and read the same mmap files concurrently, and a grow in one
+  backend leaves another's mapping stale — surfacing as a sporadic
+  failure such as `probability_having`'s "semiring does not support
+  value gates". This is the documented single-backend limitation, not a
+  transport bug: the same suite is 176/176 green serially, and 176/176
+  on the native worker build run in parallel. The genuinely
+  single-process WASM target has no concurrent backends, so this is moot
+  there; the native CI job for the flag (§5) should pass
+  `--max-connections=1`.
+- **Validation recipe (no root needed, PG18).** `make install
+  DESTDIR=<stage>`; edit the staged `provsql.control` `module_pathname`
+  to the absolute staged `.so`; `initdb` a private cluster; in
+  `postgresql.conf` set `shared_preload_libraries='<abs .so>'`,
+  `extension_control_path='<stage ext dir>:$system'`, `lc_messages='C'`;
+  then `make installcheck EXTRA_REGRESS_OPTS="--host=<sock> --port=<p>
+  --user=<me> --max-connections=1"`. Preloading the flag build is valid
+  because its `_PG_init` only installs hooks + `provsql_inproc_init`
+  (no worker/shmem), and it arms the planner hook in every backend.
 
 ### M0 host spike — what was established (and what is blocked)
 

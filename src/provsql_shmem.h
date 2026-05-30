@@ -24,6 +24,8 @@
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
 
+#include "provsql_config.h"
+
 /** @brief Saved pointer to the previous @c shmem_startup_hook, for chaining. */
 extern shmem_startup_hook_type prev_shmem_startup;
 #if (PG_VERSION_NUM >= 150000) || defined(DOXYGEN)
@@ -71,6 +73,42 @@ void provsql_shmem_request(void);
  * - @c pipembr / @c pipembw: main-backend → background (write end in main)
  * - @c pipebmr / @c pipebmw: background → main-backend (write end in worker)
  */
+#ifdef PROVSQL_INPROCESS_STORE
+
+/**
+ * @brief Growable byte FIFO backing the in-process request/response channel.
+ *
+ * Replaces the inter-process pipes when there is a single PostgreSQL
+ * process (browser/WASM target).  Bytes are appended at @c tail and
+ * consumed from @c head; the buffer is reclaimed (head reset to 0) once
+ * fully drained and grown on demand.
+ */
+typedef struct provsql_fifo
+{
+  unsigned char *buf;     ///< Backing storage (NULL until first push)
+  size_t head;            ///< Read offset
+  size_t tail;            ///< Write offset (== valid bytes once head is 0)
+  size_t cap;             ///< Allocated capacity
+} provsql_fifo;
+
+/** @brief Append @p n bytes from @p src to @p f, growing as needed. */
+bool provsql_fifo_push(provsql_fifo *f, const void *src, size_t n);
+/** @brief Pop @p n bytes from @p f into @p dst; @c false on underflow. */
+bool provsql_fifo_pop(provsql_fifo *f, void *dst, size_t n);
+
+typedef struct provsqlSharedState
+{
+  provsql_fifo req;       ///< Request channel: backend → in-process dispatch
+  provsql_fifo resp;      ///< Response channel: dispatch → backend
+  char kcmcp_endpoint[256]; ///< Live endpoint of the managed KCMCP server
+                            ///< ("" when none).
+} provsqlSharedState;
+
+/** @brief Point @c provsql_shared_state at the process-local state. */
+void provsql_inproc_init(void);
+
+#else
+
 typedef struct provsqlSharedState
 {
   LWLock *lock;           ///< Mutual-exclusion lock for pipe writes
@@ -82,6 +120,8 @@ typedef struct provsqlSharedState
                             ///< ("" when none): written by the supervisor
                             ///< worker, read by the in-extension client.
 } provsqlSharedState;
+
+#endif /* PROVSQL_INPROCESS_STORE */
 
 /** @brief Pointer to the ProvSQL shared-memory segment (set in @c provsql_shmem_startup). */
 extern provsqlSharedState *provsql_shared_state;

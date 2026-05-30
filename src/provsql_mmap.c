@@ -46,8 +46,45 @@
 
 #include "circuit_cache.h"
 
+#ifdef PROVSQL_INPROCESS_STORE
+
+char *buffer = NULL; // flawfinder: ignore
+unsigned bufferpos = 0;
+size_t buffercap = 0;
+
+void provsql_buffer_ensure(size_t need)
+{
+  if(need > buffercap) {
+    size_t newcap = buffercap ? buffercap * 2 : 4096;
+    while(newcap < need)
+      newcap *= 2;
+    buffer = realloc(buffer, newcap);
+    if(!buffer)
+      provsql_error("ProvSQL: out of memory growing the IPC buffer");
+    buffercap = newcap;
+  }
+}
+
+/* No background worker in the single-process build. */
+
+#else
+
 char buffer[PIPE_BUF]={}; // flawfinder: ignore
 unsigned bufferpos=0;
+
+bool provsql_read_all(int fd, void *dst, size_t n)
+{
+  char *p = dst;
+  size_t remaining = n;
+  while(remaining > 0) {
+    ssize_t r = read(fd, p, remaining); // flawfinder: ignore
+    if(r <= 0)
+      return false;
+    remaining -= r;
+    p += r;
+  }
+  return true;
+}
 
 PGDLLEXPORT void provsql_mmap_worker(Datum ignored)
 {
@@ -86,6 +123,8 @@ void RegisterProvSQLMMapWorker(void)
 
   RegisterBackgroundWorker(&worker);
 }
+
+#endif /* PROVSQL_INPROCESS_STORE */
 
 PG_FUNCTION_INFO_V1(get_gate_type);
 /** @brief PostgreSQL-callable wrapper for get_gate_type().
@@ -142,20 +181,10 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
     }
 
     if(nb_children > 0) {
-      char *p;
-      ssize_t actual_read, remaining_size;
-
       children = calloc(nb_children, sizeof(pg_uuid_t));
-      p = (char*)children;
-      remaining_size = nb_children * sizeof(pg_uuid_t);
-      while((actual_read = read(provsql_shared_state->pipembr, p, remaining_size)) < remaining_size) {
-        if(actual_read <= 0) {
-          provsql_shmem_unlock();
-          provsql_error("Cannot read children from pipe (during get_gate_type)");
-        } else {
-          remaining_size -= actual_read;
-          p += actual_read;
-        }
+      if(!READB_BYTES(children, nb_children * sizeof(pg_uuid_t))) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot read children from pipe (during get_gate_type)");
       }
     }
   }
@@ -229,7 +258,13 @@ Datum create_gate(PG_FUNCTION_ARGS)
   ADDWRITEM(&type, gate_type);
   ADDWRITEM(&nb_children, unsigned);
 
+#ifdef PROVSQL_INPROCESS_STORE
+  /* The in-memory FIFO has no PIPE_BUF atomicity limit: always send the
+     gate and all its children as a single message. */
+  if(1) {
+#else
   if(PIPE_BUF-bufferpos>nb_children*sizeof(pg_uuid_t)) {
+#endif
     // Enough space in the buffer for an atomic write, no need of
     // exclusive locks
 
@@ -242,7 +277,9 @@ Datum create_gate(PG_FUNCTION_ARGS)
       provsql_error("Cannot write to pipe (message type C)");
     }
     provsql_shmem_unlock();
-  } else {
+  }
+#ifndef PROVSQL_INPROCESS_STORE
+  else {
     // Not enough space in buffer, pipe write won't be atomic, we need to
     // make several writes and use locks
     unsigned children_per_batch = PIPE_BUF/sizeof(pg_uuid_t);
@@ -269,6 +306,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
 
     provsql_shmem_unlock();
   }
+#endif
 
   PG_RETURN_VOID();
 }
@@ -349,7 +387,11 @@ Datum set_extra(PG_FUNCTION_ARGS)
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&len, unsigned);
 
+#ifdef PROVSQL_INPROCESS_STORE
+  provsql_buffer_ensure(bufferpos+len);
+#else
   assert(PIPE_BUF-bufferpos>len);
+#endif
   memcpy(buffer+bufferpos, str, len), bufferpos+=len;
   pfree(str);
 
@@ -389,7 +431,7 @@ Datum get_extra(PG_FUNCTION_ARGS)
   result = palloc(len + VARHDRSZ);
   SET_VARSIZE(result, VARHDRSZ + len);
 
-  if(read(provsql_shared_state->pipembr, VARDATA(result), len)<len) {
+  if(!READB_BYTES(VARDATA(result), len)) {
     provsql_shmem_unlock();
     provsql_error("Cannot communicate with pipe (message type e)");
   }
@@ -457,18 +499,9 @@ Datum get_children(PG_FUNCTION_ARGS)
 
     children=calloc(nb_children, sizeof(pg_uuid_t));
 
-    {
-      char *p = (char*)children;
-      ssize_t actual_read, remaining_size=nb_children*sizeof(pg_uuid_t);
-      while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
-        if(actual_read<=0) {
-          provsql_shmem_unlock();
-          provsql_error("Cannot read from pipe (message type c)");
-        } else {
-          remaining_size-=actual_read;
-          p+=actual_read;
-        }
-      }
+    if(!READB_BYTES(children, nb_children*sizeof(pg_uuid_t))) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot read from pipe (message type c)");
     }
     provsql_shmem_unlock();
 

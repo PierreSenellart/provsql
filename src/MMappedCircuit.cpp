@@ -204,15 +204,8 @@ static MMappedCircuit *getCircuit(Oid db_oid)
   return it->second;
 }
 
-void provsql_mmap_main_loop()
+extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
 {
-  char c;
-
-  while(READM(c, char)) {
-    Oid db_oid;
-    if(!READM(db_oid, Oid))
-      provsql_error("Cannot read database OID from pipe");
-
     MMappedCircuit *circuit = getCircuit(db_oid);
 
     switch(c) {
@@ -272,7 +265,7 @@ void provsql_mmap_main_loop()
 
       if(len>0) {
         char *data = new char[len];
-        if(read(provsql_shared_state->pipebmr, data, len)<len)
+        if(!READM_BYTES(data, len))
           provsql_error("Cannot read from pipe (message type E)");
 
         circuit->setExtra(token, std::string(data, len));
@@ -316,7 +309,7 @@ void provsql_mmap_main_loop()
       if(!WRITEB(&nb_children, unsigned))
         provsql_error("Cannot write response to pipe (message type c)");
 
-      if(write(provsql_shared_state->pipembw, children.data(), nb_children*sizeof(pg_uuid_t))==-1)
+      if(!WRITEB_BYTES(children.data(), nb_children*sizeof(pg_uuid_t)))
         provsql_error("Cannot write response to pipe (message type c)");
       break;
     }
@@ -359,7 +352,7 @@ void provsql_mmap_main_loop()
       auto str = circuit->getExtra(token);
       unsigned len = str.size();
 
-      if(!WRITEB(&len, unsigned) || write(provsql_shared_state->pipembw, str.data(), len)==-1)
+      if(!WRITEB(&len, unsigned) || !WRITEB_BYTES(str.data(), len))
         provsql_error("Cannot write response to pipe (message type e)");
       break;
     }
@@ -379,7 +372,7 @@ void provsql_mmap_main_loop()
       unsigned long size = ss.tellg();
       ss.seekg(0, std::ios::beg);
 
-      if(!WRITEB(&size, unsigned long) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
+      if(!WRITEB(&size, unsigned long) || !WRITEB_BYTES(ss.str().data(), size))
         provsql_error("Cannot write to pipe (message type g)");
       break;
     }
@@ -505,7 +498,7 @@ void provsql_mmap_main_loop()
       unsigned long size = ss.tellg();
       ss.seekg(0, std::ios::beg);
 
-      if(!WRITEB(&size, unsigned long) || write(provsql_shared_state->pipembw, ss.str().data(), size)==-1)
+      if(!WRITEB(&size, unsigned long) || !WRITEB_BYTES(ss.str().data(), size))
         provsql_error("Cannot write to pipe (message type j)");
       break;
     }
@@ -513,11 +506,24 @@ void provsql_mmap_main_loop()
     default:
       provsql_error("Wrong message type: %c", c);
     }
+}
+
+#ifndef PROVSQL_INPROCESS_STORE
+void provsql_mmap_main_loop()
+{
+  char c;
+
+  while(READM(c, char)) {
+    Oid db_oid;
+    if(!READM(db_oid, Oid))
+      provsql_error("Cannot read database OID from pipe");
+    provsql_mmap_dispatch(c, db_oid);
   }
 
   int e = errno;
   provsql_error("Reading from pipe: %s", strerror(e));
 }
+#endif
 
 void MMappedCircuit::sync()
 {

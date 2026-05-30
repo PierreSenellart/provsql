@@ -6298,7 +6298,12 @@ void _PG_init(void) {
   prev_ExecutorStart = ExecutorStart_hook;
   prev_ExecutorEnd   = ExecutorEnd_hook;
   prev_ProcessUtility = ProcessUtility_hook;
-#if (PG_VERSION_NUM >= 150000)
+#ifdef PROVSQL_INPROCESS_STORE
+  /* Single-process store: no shared memory to request and no background
+     worker; the circuit lives in this process behind an in-memory
+     dispatch. */
+  provsql_inproc_init();
+#elif (PG_VERSION_NUM >= 150000)
   prev_shmem_request = shmem_request_hook;
   shmem_request_hook = provsql_shmem_request;
 #else
@@ -6306,13 +6311,17 @@ void _PG_init(void) {
 #endif
 
   planner_hook        = provsql_planner;
+#ifndef PROVSQL_INPROCESS_STORE
   shmem_startup_hook  = provsql_shmem_startup;
+#endif
   ExecutorStart_hook  = provsql_executor_start;
   ExecutorEnd_hook    = provsql_executor_end;
   ProcessUtility_hook = provsql_ProcessUtility;
 
+#ifndef PROVSQL_INPROCESS_STORE
   RegisterProvSQLMMapWorker();
   RegisterProvSQLKCMCPWorker();
+#endif
 }
 
 /**

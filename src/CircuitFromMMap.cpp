@@ -57,17 +57,11 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
   if(!READB(size, unsigned long))
     provsql_error("Cannot read from pipe (message type %c)", message_char);
 
-  char *buf = new char[size], *p = buf;
-  ssize_t actual_read, remaining_size=size;
-  while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
-    if(actual_read<=0) {
-      provsql_shmem_unlock();
-      delete [] buf;
-      provsql_error("Cannot read from pipe (message type %c)", message_char);
-    } else {
-      remaining_size-=actual_read;
-      p+=actual_read;
-    }
+  char *buf = new char[size];
+  if(!READB_BYTES(buf, size)) {
+    provsql_shmem_unlock();
+    delete [] buf;
+    provsql_error("Cannot read from pipe (message type %c)", message_char);
   }
   provsql_shmem_unlock();
 
@@ -202,17 +196,11 @@ static GenericCircuit getJointCircuitFromMMap(
   if(!READB(size, unsigned long))
     provsql_error("Cannot read from pipe (message type j)");
 
-  char *buf = new char[size], *p = buf;
-  ssize_t actual_read, remaining_size=size;
-  while((actual_read=read(provsql_shared_state->pipembr, p, remaining_size))<remaining_size) {
-    if(actual_read<=0) {
-      provsql_shmem_unlock();
-      delete [] buf;
-      provsql_error("Cannot read from pipe (message type j)");
-    } else {
-      remaining_size-=actual_read;
-      p+=actual_read;
-    }
+  char *buf = new char[size];
+  if(!READB_BYTES(buf, size)) {
+    provsql_shmem_unlock();
+    delete [] buf;
+    provsql_error("Cannot read from pipe (message type j)");
   }
   provsql_shmem_unlock();
 

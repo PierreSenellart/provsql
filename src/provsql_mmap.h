@@ -21,9 +21,11 @@
 #define PROVSQL_MMAP_H
 
 #include "limits.h"
+#include <unistd.h>
 
 #include "postgres.h"
 #include "provsql_utils.h"
+#include "provsql_config.h"
 
 /**
  * @brief Entry point for the ProvSQL mmap background worker.
@@ -68,6 +70,53 @@ void destroy_provsql_mmap(void);
  */
 void provsql_mmap_main_loop(void);
 
+/**
+ * @brief Handle a single IPC message: read its payload and write its reply.
+ *
+ * The opcode @p c and database OID @p db_oid have already been consumed by
+ * the caller.  Shared by the background-worker main loop (multi-process
+ * build) and the synchronous in-process dispatcher.
+ */
+void provsql_mmap_dispatch(char c, Oid db_oid);
+
+#ifdef PROVSQL_INPROCESS_STORE
+
+/**
+ * @brief In-process replacement for a pipe write of a complete request.
+ *
+ * Appends the message in @p buf (@p len bytes) to the request FIFO and runs
+ * @c provsql_mmap_dispatch once, leaving any reply in the response FIFO for
+ * the caller's @c READB / @c READB_BYTES to consume.
+ */
+bool provsql_inproc_send(const char *buf, size_t len);
+
+/** Growable shared write buffer used with @c STARTWRITEM / @c ADDWRITEM. */
+extern char *buffer;
+/** Current write position within @c buffer. */
+extern unsigned bufferpos;
+/** Allocated capacity of @c buffer. */
+extern size_t buffercap;
+/** @brief Ensure @c buffer can hold at least @p need bytes. */
+void provsql_buffer_ensure(size_t need);
+
+#define READM(var, type)   provsql_fifo_pop (&provsql_shared_state->req,  &(var), sizeof(type))
+#define READB(var, type)   provsql_fifo_pop (&provsql_shared_state->resp, &(var), sizeof(type))
+#define WRITEB(pvar, type) provsql_fifo_push(&provsql_shared_state->resp, (pvar), sizeof(type))
+#define WRITEM(pvar, type) provsql_fifo_push(&provsql_shared_state->req,  (pvar), sizeof(type))
+
+#define READB_BYTES(ptr, n) provsql_fifo_pop (&provsql_shared_state->resp, (ptr), (n))
+#define READM_BYTES(ptr, n) provsql_fifo_pop (&provsql_shared_state->req,  (ptr), (n))
+#define WRITEB_BYTES(ptr, n) provsql_fifo_push(&provsql_shared_state->resp, (ptr), (n))
+
+#define STARTWRITEM() (bufferpos=0)
+#define ADDWRITEM(pvar, type) (provsql_buffer_ensure(bufferpos+sizeof(type)), memcpy(buffer+bufferpos, pvar, sizeof(type)), bufferpos+=sizeof(type))
+#define SENDWRITEM() provsql_inproc_send(buffer, bufferpos)
+
+#else
+
+/** @brief Read exactly @p n bytes from @p fd into @p dst; @c false on EOF/error. */
+bool provsql_read_all(int fd, void *dst, size_t n);
+
 /** Shared write buffer used with @c STARTWRITEM / @c ADDWRITEM / @c SENDWRITEM. */
 extern char buffer[PIPE_BUF];
 /** Current write position within @c buffer. */
@@ -82,11 +131,20 @@ extern unsigned bufferpos;
 /** @brief Write one value of @p type to the background-to-main pipe. */
 #define WRITEM(pvar, type) (write(provsql_shared_state->pipebmw, pvar, sizeof(type))!=-1)
 
+/** @brief Read exactly @p n bytes of a reply from the main-to-background pipe. */
+#define READB_BYTES(ptr, n) provsql_read_all(provsql_shared_state->pipembr, (ptr), (n)) // flawfinder: ignore
+/** @brief Read exactly @p n bytes of a request from the background-to-main pipe. */
+#define READM_BYTES(ptr, n) provsql_read_all(provsql_shared_state->pipebmr, (ptr), (n)) // flawfinder: ignore
+/** @brief Write @p n reply bytes to the main-to-background pipe. */
+#define WRITEB_BYTES(ptr, n) (write(provsql_shared_state->pipembw, (ptr), (n))!=-1)
+
 /** @brief Reset the shared write buffer for a new batched write. */
 #define STARTWRITEM() (bufferpos=0)
 /** @brief Append one value of @p type to the shared write buffer. */
 #define ADDWRITEM(pvar, type) (memcpy(buffer+bufferpos, pvar, sizeof(type)), bufferpos+=sizeof(type))
 /** @brief Flush the shared write buffer to the background-to-main pipe atomically. */
 #define SENDWRITEM() (write(provsql_shared_state->pipebmw, buffer, bufferpos)!=-1)
+
+#endif /* PROVSQL_INPROCESS_STORE */
 
 #endif /* PROVSQL_COLUMN_NAME */

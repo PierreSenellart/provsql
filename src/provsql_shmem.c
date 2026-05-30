@@ -28,6 +28,80 @@ shmem_request_hook_type prev_shmem_request = NULL;
 
 provsqlSharedState *provsql_shared_state = NULL;
 
+#ifdef PROVSQL_INPROCESS_STORE
+
+/* Single-process build: the circuit store lives in this process, reached
+   through two in-memory FIFOs instead of pipes + a background worker.
+   There is one backend and no shared memory, so the locks are no-ops. */
+
+static provsqlSharedState inproc_state;
+
+void provsql_inproc_init(void)
+{
+  memset(&inproc_state, 0, sizeof(inproc_state));
+  provsql_shared_state = &inproc_state;
+}
+
+bool provsql_fifo_push(provsql_fifo *f, const void *src, size_t n)
+{
+  if(f->tail + n > f->cap) {
+    /* Reclaim already-consumed bytes before growing. */
+    if(f->head > 0) {
+      memmove(f->buf, f->buf + f->head, f->tail - f->head);
+      f->tail -= f->head;
+      f->head = 0;
+    }
+    if(f->tail + n > f->cap) {
+      size_t newcap = f->cap ? f->cap * 2 : 4096;
+      while(newcap < f->tail + n)
+        newcap *= 2;
+      f->buf = realloc(f->buf, newcap);
+      if(!f->buf)
+        provsql_error("ProvSQL: out of memory growing in-process FIFO");
+      f->cap = newcap;
+    }
+  }
+  memcpy(f->buf + f->tail, src, n);
+  f->tail += n;
+  return true;
+}
+
+bool provsql_fifo_pop(provsql_fifo *f, void *dst, size_t n)
+{
+  if(f->tail - f->head < n)
+    return false;
+  memcpy(dst, f->buf + f->head, n);
+  f->head += n;
+  if(f->head == f->tail)
+    f->head = f->tail = 0;
+  return true;
+}
+
+bool provsql_inproc_send(const char *buf, size_t len)
+{
+  char c;
+  Oid db_oid;
+
+  provsql_fifo_push(&provsql_shared_state->req, buf, len);
+
+  if(!READM(c, char) || !READM(db_oid, Oid))
+    return false;
+  provsql_mmap_dispatch(c, db_oid);
+  return true;
+}
+
+/* No shared memory and no background worker to set up. */
+void provsql_shmem_startup(void) {}
+Size provsql_memsize(void) { return 0; }
+void provsql_shmem_request(void) {}
+
+/* One backend: nothing to serialise. */
+void provsql_shmem_lock_exclusive(void) {}
+void provsql_shmem_lock_shared(void) {}
+void provsql_shmem_unlock(void) {}
+
+#else
+
 void provsql_shmem_startup(void)
 {
   bool found;
@@ -98,3 +172,5 @@ void provsql_shmem_unlock(void)
 {
   LWLockRelease(provsql_shared_state->lock);
 }
+
+#endif /* PROVSQL_INPROCESS_STORE */
