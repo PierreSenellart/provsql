@@ -453,13 +453,12 @@ static Studio servable from `file://` or a CDN, no Python at runtime.
 
 Ship-when ordering; each milestone is independently demonstrable.
 
-- [~] **M0 — host spike:** trivial planner-hook C extension loads in
-      PGlite and rewrites a query (validates §8 packaging + hook timing).
-      *Partly done:* the hook mechanism is validated natively and the
-      PGlite packaging/loader + boot are confirmed (see Implementation
-      observations); the remaining step — building the spike `.so` to a
-      PGlite-loadable `.wasm` and loading it live — needs Docker / the
-      PGlite builder image and is the handoff that unblocks M4.
+- [x] **M0 — host spike: done.** A trivial planner-hook C extension was
+      built to WASM and loaded live into PGlite; its `_PG_init` hook fires
+      for subsequent queries and returns correct results. Both M0
+      questions are now settled end-to-end (see Implementation
+      observations for the build recipe and the ABI-compatibility result
+      that informs M4).
 - [ ] **M1 — in-process transport (native):** §1 + §2 behind
       `PROVSQL_INPROCESS_STORE`; FIFO loopback; bgworker/shmem compiled
       out; `make CPPFLAGS=-DPROVSQL_INPROCESS_STORE && make test` green.
@@ -534,14 +533,43 @@ re-derive them:
   0.4.6 boots in Node and runs queries here; it reports **PostgreSQL
   17.5 on `wasm32-unknown-linux-gnu`**. This is the Node half of the
   eventual browser test harness, and pins the build target to PG17.
-- **Blocked without Docker.** Building *any* extension (even the 30-line
-  spike) into a PGlite-loadable `.wasm` requires the PGlite builder image
-  (`builder/Dockerfile`) and the `postgres-pglite` submodule tree — i.e.
-  Docker. The development sandbox has no Docker access, so the live
-  "load the spike in PGlite and watch the hook fire in-browser" step is a
-  **handoff**: run the Docker-based build once (M4 plumbing), after which
-  the spike `.so`→`.wasm` confirms the loader path end-to-end and M4 can
-  proceed with the real extension. The native validation above is the
-  in-sandbox stand-in and is sufficient to de-risk the *mechanism*; only
-  the *toolchain path* remains to be exercised.
+- **Toolchain (resolved with rootless podman; no Docker daemon needed).**
+  Building an extension to a PGlite-loadable `.wasm` uses the published
+  builder image `electricsql/pglite-builder:3.1.74-5-postgis-libicu-min`
+  (pinned Emscripten 3.1.74 + zlib/libxml2/libxslt/openssl/ossp-uuid/ICU
+  pre-compiled to WASM under `/install/libs`). It runs fine under
+  **rootless `podman`** as the unprivileged sandbox user — no daemon, no
+  `docker` group. Recipe that worked:
+  1. clone `pglite` + init the `postgres-pglite` submodule (pinned
+     commit; ~150 MB);
+  2. add the extension as a normal PGXS dir under
+     `pglite/other_extensions/<name>/` (`MODULES`/`EXTENSION`/`DATA` +
+     `.control` + `--<ver>.sql`);
+  3. run a trimmed `build-pglite.sh`: the `emconfigure ./configure
+     --host wasm32-unknown-linux-gnu …` block + `emmake make` +
+     `emmake make install` (builds Postgres core to WASM), then
+     `emmake make -C pglite/other_extensions SUBDIRS=<name> <name>.tar.gz`
+     (skip contrib / postgis / the final pglite link for a fast
+     extension-only build);
+  4. `podman run --rm -v $PWD:$PWD:rw -v $PWD/dist:/pglite:rw <image>
+     ./build-pglite-trimmed.sh`.
+  The output `<name>.tar.gz` has exactly the loader layout
+  (`lib/postgresql/<name>.so`, `share/postgresql/extension/<name>.control`
+  + `--<ver>.sql`); the `.so` is a real `\0asm` SIDE_MODULE.
+- **Live load confirmed (the actual M0 result).** Wired the tarball as a
+  PGlite `Extension` (`{ name, setup → { bundlePath } }`) and loaded it in
+  Node. Queries before `CREATE EXTENSION` are un-hooked; `CREATE
+  EXTENSION` + one call to the module's C function force-loads the `.so`
+  (running `_PG_init`); and every query afterwards fires the planner hook
+  and returns correct rows. `onNotice` (constructor or per-query) is how
+  the JS side observes server `NOTICE`s — relevant for Studio surfacing
+  ProvSQL notices.
+- **ABI compatibility → M4 simplification.** The extension was built
+  against the `postgres-pglite` **submodule HEAD** yet loaded cleanly into
+  the **prebuilt npm `@electric-sql/pglite` 0.4.6** (both PostgreSQL 17.5
+  / `wasm32`). So M4 can likely ship ProvSQL as a standalone extension
+  bundle against stock PGlite, without rebuilding `pglite.wasm` itself —
+  provided the symbols ProvSQL needs are in PGlite's exported set (verify
+  per-symbol during M4; `-sERROR_ON_UNDEFINED_SYMBOLS=0` means missing
+  ones surface only at `dlopen`/run time).
 ```
