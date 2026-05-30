@@ -114,10 +114,11 @@ Build, test, deploy
 Browser support
 ---------------
 
-JSPI ships in **Chrome/Edge 137+** (out of the box) and in **Firefox**
-behind ``javascript.options.wasm_js_promise_integration`` in
-``about:config``; **Safari** does not support it yet. The landing page
-states this and detects it.
+The Playground requires a browser with WebAssembly JSPI. The landing
+page (``studio/web/landing.html``) is the single maintained source of
+truth for current browser support (which versions, and the Firefox
+flag); it also feature-detects JSPI at load. Keep that list there only,
+since it drifts as browsers ship JSPI.
 
 The full WASM build recipe (the Emscripten toolchain, the matched PGlite
 core, the libc++ ``inline`` patch) is documented in ``wasm/README.md``.
