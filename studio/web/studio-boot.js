@@ -208,13 +208,17 @@ window.fetch = async (input, init = {}) => {
                           { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
     if (path.split('?')[0] === '/api/conn' && method === 'POST') {
+      // The frontend reloads the page right after this returns ok. Don't open
+      // the target here: opening + seeding it and then immediately reloading
+      // races the IndexedDB flush (the teardown can abort a half-written
+      // seed). Just record the choice; boot reopens it cleanly on the fresh
+      // page. Return the current conn_info so the caller sees a 200.
       let target = null
       try { target = JSON.parse(String(body) || '{}').database } catch (_e) { /* ignore */ }
-      const out = JSON.parse(await enqueue(async () => {
-        if (target && manifest.some((m) => m.name === target)) await switchDb(target)
-        return handle.callPromising('GET', '/api/conn', '')   // conn_info for the now-active db
-      }))
-      return reply(out)
+      if (target && manifest.some((m) => m.name === target)) {
+        localStorage.setItem('ps.activeDb', target)
+      }
+      return reply(JSON.parse(await callBackend('GET', '/api/conn', '')))
     }
     return reply(JSON.parse(await callBackend(method, path, body ? String(body) : '')))
   }
