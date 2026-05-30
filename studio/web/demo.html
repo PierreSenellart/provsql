@@ -17,8 +17,8 @@
 </head>
 <body>
 <h1>ProvSQL, entirely in your browser</h1>
-<p><small>PostgreSQL + ProvSQL compiled to WebAssembly (PGlite). No server, no network — everything below runs in this tab.
-Assets (<code>pglite/</code>, <code>provsql.tar.gz</code>) come from <code>wasm/</code> — see the README.</small></p>
+<p><small>PostgreSQL + ProvSQL compiled to WebAssembly (PGlite). No server, no network – everything below runs in this tab.
+Assets (<code>pglite/</code>, <code>provsql.tar.gz</code>) come from <code>wasm/</code> – see the README.</small></p>
 
 <h2>Boot &amp; self-test log</h2>
 <div id="log">loading…</div>
@@ -72,9 +72,9 @@ try {
   await pg.query('SELECT set_prob(provenance(), 0.5) FROM r')
   const pr = (await pg.query('SELECT a, round(probability_evaluate(provenance())::numeric,4) AS prob FROM r GROUP BY a ORDER BY a')).rows
   L('✓ probability_evaluate (in-process tree-decomposition compiler):', 'ok')
-  L('    ' + JSON.stringify(pr) + '   — a=1 is two independent tuples → 1-0.5·0.5 = 0.75', 'ok')
+  L('    ' + JSON.stringify(pr) + '   – a=1 is two independent tuples → 1-0.5·0.5 = 0.75', 'ok')
 
-  L('\nReady — edit the query below and hit Run.', 'ok')
+  L('\nReady – edit the query below and hit Run.', 'ok')
   document.getElementById('runbtn').disabled = false
 } catch (e) {
   L('✗ ' + (e && e.message ? e.message : e), 'err')

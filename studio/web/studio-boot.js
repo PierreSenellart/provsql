@@ -72,10 +72,10 @@ const manifest = await (await fetch(asset('./casestudies/manifest.json'))).json(
 
 // Per-database preparation, idempotent, re-run on every open: the extension,
 // the session search_path, and the browser-specific tool handling. External
-// knowledge compilers (d4, c2d, …) need subprocesses the browser cannot spawn,
+// knowledge compilers (d4, c2d…) need subprocesses the browser cannot spawn,
 // so every registry entry is disabled (they never appear as eval-strip
 // options); tool_available is redefined to report only `dot`, which is real
-// here — supplied as WASM Graphviz through the subprocess shim, and gated on
+// here – supplied as WASM Graphviz through the subprocess shim, and gated on
 // by the tree-decomposition / d-DNNF image endpoints.
 const PREP = [
   'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"',
@@ -249,7 +249,7 @@ await new Promise((resolve) => {
   const s = document.createElement('script')
   s.src = asset('./app.js'); s.onload = resolve; document.body.appendChild(s)
 })
-// External knowledge-compiler tools (d4, c2d, …) need subprocesses, which the
+// External knowledge-compiler tools (d4, c2d…) need subprocesses, which the
 // browser has no way to run, so drop the tool-registry UI rather than offer an
 // editor for tools that can never be available. The eval-strip already hides
 // tool-backed methods on its own (every tool reports available:false).

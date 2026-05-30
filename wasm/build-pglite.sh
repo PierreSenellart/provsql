@@ -38,7 +38,7 @@ PGLITE_CFLAGS="-m32 -sWASM_BIGINT -fpic -sENVIRONMENT=node,web,worker -sSUPPORT_
 emmake make PORTNAME=emscripten -C src/backend pglite-exported-functions 2>&1 | tail -2
 echo "exported_functions.txt: $(wc -l < /install/pglite/exported_functions.txt) symbols"
 
-# (3) relink exactly as upstream: MAIN_MODULE=2 (NOT 1 — that breaks
+# (3) relink exactly as upstream: MAIN_MODULE=2 (NOT 1 – that breaks
 # initdb), the full EXPORTED_FUNCTIONS list, the same preloads.
 PGROOT=/pglite; W=$(pwd)
 PGPRELOAD="--preload-file $W/pglite/static/PGPASSFILE@/home/postgres/.pgpass \

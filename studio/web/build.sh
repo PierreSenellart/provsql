@@ -134,11 +134,11 @@ REPO = "https://github.com/PierreSenellart/provsql"
 PALLETS = '<a href="https://palletsprojects.com/">Pallets</a>'
 rows = [
  ("ProvSQL + ProvSQL Studio", ["MIT"], "shipped",
-  f'Pierre Senellart — <a href="{REPO}">repository</a>'),
+  f'Pierre Senellart – <a href="{REPO}">repository</a>'),
  ("PostgreSQL (compiled to WASM)", ["PostgreSQL"], "shipped",
   '<a href="https://www.postgresql.org/">PostgreSQL Global Development Group</a>'),
  ("@electric-sql/pglite", ["Apache-2.0"], "shipped",
-  '<a href="https://github.com/electric-sql/pglite">ElectricSQL</a> — <a href="licenses/PGlite-LICENSE">PGlite-LICENSE</a>'),
+  '<a href="https://github.com/electric-sql/pglite">ElectricSQL</a> – <a href="licenses/PGlite-LICENSE">PGlite-LICENSE</a>'),
  ("Boost (linked into provsql.so)", ["BSL-1.0"], "shipped",
   '<a href="https://www.boost.org/">Boost authors</a>'),
  ("Pyodide", ["MPL-2.0"], "shipped (vendored)",
@@ -146,7 +146,7 @@ rows = [
  ("CPython (in Pyodide)", ["PSF-2.0"], "shipped (vendored)",
   '<a href="https://www.python.org/">Python Software Foundation</a>'),
  ("Graphviz (via @hpcc-js/wasm-graphviz)", ["EPL-1.0"], "shipped (vendored)",
-  'Graphviz authors — source: <a href="https://gitlab.com/graphviz/graphviz">gitlab.com/graphviz/graphviz</a>'),
+  'Graphviz authors – source: <a href="https://gitlab.com/graphviz/graphviz">gitlab.com/graphviz/graphviz</a>'),
  ("@hpcc-js/wasm-graphviz wrapper", ["Apache-2.0"], "shipped (vendored)",
   '<a href="https://github.com/hpcc-systems/hpcc-js-wasm">HPCC Systems</a>'),
  ("Flask " + ver("flask"), ["BSD-3-Clause"], "shipped (wheel)", PALLETS),
@@ -160,7 +160,7 @@ rows = [
  ("sqlparse " + ver("sqlparse"), ["BSD-3-Clause"], "shipped (wheel)",
   '<a href="https://github.com/andialbrecht/sqlparse">Andi Albrecht</a>'),
  ("Font Awesome 5 Free", ["MIT", "CC-BY-4.0", "OFL-1.1"], "shipped (vendored)",
-  '<a href="https://fontawesome.com/">Fonticons, Inc.</a> — <a href="fontawesome/LICENSE.txt">fontawesome/LICENSE.txt</a>'),
+  '<a href="https://fontawesome.com/">Fonticons, Inc.</a> – <a href="fontawesome/LICENSE.txt">fontawesome/LICENSE.txt</a>'),
  ("EB Garamond, Jost, Fira Code (brand fonts)", ["OFL-1.1"], "shipped",
   '<a href="fonts/OFL-EBGaramond.txt">EBGaramond</a>, '
   '<a href="fonts/OFL-Jost.txt">Jost</a>, '
@@ -175,7 +175,7 @@ licenses = sorted(f for f in os.listdir("licenses"))
 with open("THIRD-PARTY.html", "w", encoding="utf-8") as f:
     f.write("""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ProvSQL Playground — third-party components</title>
+<title>ProvSQL Playground – third-party components</title>
 <style>
  body{font:15px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#1b1f24}
  h1{font-size:1.5rem} a{color:#1a6}
@@ -201,7 +201,7 @@ time. The components below are redistributed with it; full license texts are in
             + ", ".join('<a href="licenses/%s">%s</a>' % (_h.escape(x), _h.escape(x)) for x in licenses)
             + ".</p>\n")
     f.write("<p class='note'>The optional external knowledge-compiler tools "
-            "(d4, c2d, miniC2D, dsharp, weightmc, …) are <strong>not</strong> "
+            "(d4, c2d, miniC2D, dsharp, weightmc…) are <strong>not</strong> "
             "bundled: the browser cannot spawn subprocesses, so the tool "
             "registry is disabled and none of their (often research-only) "
             "licenses apply.</p>\n</body></html>\n")

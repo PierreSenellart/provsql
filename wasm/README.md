@@ -2,8 +2,8 @@
 
 This directory builds ProvSQL as a WebAssembly extension that loads into
 **[PGlite](https://pglite.dev/)** (PostgreSQL compiled to WASM), so the
-whole stack — provenance rewriting, the circuit store, semirings, and
-probability — runs **client-side in a browser**, with no server.
+whole stack – provenance rewriting, the circuit store, semirings, and
+probability – runs **client-side in a browser**, with no server.
 
 See [`doc/TODO/wasm-browser-deployment.md`](../doc/TODO/wasm-browser-deployment.md)
 for the design and milestones. The extension itself builds from the normal
@@ -18,7 +18,7 @@ compiled `libboost_serialization`.
   pinned builder image `electricsql/pglite-builder:3.1.74-5-postgis-libicu-min`
   (Emscripten 3.1.74 + WASM-built deps).
 - **Node 20+** and **pnpm** (via `corepack`) to build the PGlite TS package.
-- Host **Boost headers** (`/usr/include/boost`; header-only — ProvSQL needs
+- Host **Boost headers** (`/usr/include/boost`; header-only – ProvSQL needs
   no compiled Boost in this build).
 
 ## Recipe
@@ -55,9 +55,9 @@ podman run --rm --workdir="$PG" -v "$PG:$PG:rw" -v "$PG/dist:/pglite:rw" "$IMG" 
 # 5. Build the PGlite TS package against the matched wasm, bundling the
 #    contrib tarballs (uuid-ossp, ...) ProvSQL's CASCADE needs.
 cp "$PG"/dist/bin/pglite.{wasm,data,js} packages/pglite/release/
-# Contrib tarballs (uuid-ossp, …) that `CREATE EXTENSION provsql CASCADE`
-# needs: from the full build's dist/extensions, or — if you only built the
-# core — copy them from the published npm package (ABI-compatible, same
+# Contrib tarballs (uuid-ossp…) that `CREATE EXTENSION provsql CASCADE`
+# needs: from the full build's dist/extensions, or – if you only built the
+# core – copy them from the published npm package (ABI-compatible, same
 # tree): `cp node_modules/@electric-sql/pglite/dist/*.tar.gz packages/pglite/release/`
 corepack pnpm install --filter "@electric-sql/pglite..."
 corepack pnpm --filter @electric-sql/pglite-utils run build
@@ -84,7 +84,7 @@ The artifacts are the **matched pair**: `packages/pglite/dist/pglite.wasm`
   PGlite-Postgres bug that blocks any C++ extension; ideally upstreamed to
   `electric-sql/postgres-pglite`.
 - Loading the compiled `provsql.so` into *stock npm* PGlite is **not**
-  possible — its export set is too narrow. A matched build is required.
+  possible – its export set is too narrow. A matched build is required.
 - PGlite's extension API is not yet stable; this targets PGlite 0.4.x /
   PostgreSQL 17.5, built from the `postgres-pglite` commit pinned by the
   PGlite release used.

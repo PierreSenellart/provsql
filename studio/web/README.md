@@ -1,10 +1,10 @@
-# ProvSQL Playground — ProvSQL Studio in the browser
+# ProvSQL Playground – ProvSQL Studio in the browser
 
 **ProvSQL Playground** is a second distribution target for Studio: the same UI
 running **fully client-side** over an in-page PGlite (PostgreSQL + ProvSQL in
 WebAssembly), with no Flask server and no database connection. The PyPI
 `provsql-studio` package remains the canonical server product; this build
-shares its frontend assets and rebrands the wordmark to "ProvSQL Playground".
+shares its frontend assets and rebrands the wordmark to “ProvSQL Playground”.
 
 Status: **scaffold + working seed; full-Studio approach validated.**
 `demo.html` is a self-contained page that boots PGlite + ProvSQL and runs
@@ -14,7 +14,7 @@ via Pyodide (below); the sync/async bridge is proven, the build remains.
 ## Architecture: reuse the real Python via Pyodide (no parallel port)
 
 Goal: the **full Studio**, client-side, with **no separate JS/TS
-reimplementation to maintain** — Studio feature changes must flow through
+reimplementation to maintain** – Studio feature changes must flow through
 untouched. Efficiency is irrelevant (it's a demo; real users install
 locally). So we run the **unmodified `provsql_studio` Python** in
 **[Pyodide](https://pyodide.org)** (CPython→WASM) beside PGlite:
@@ -29,7 +29,7 @@ static/app.js ─fetch('/api/exec')→ shim (window.fetch override, JS)
                           PGlite + provsql  (WASM, this tab)
 ```
 
-- **Unchanged:** `app.py`, `db.py`, `circuit.py`, and `static/` — the whole
+- **Unchanged:** `app.py`, `db.py`, `circuit.py`, and `static/` – the whole
   Studio. The only new, stable code is the **fake `psycopg`** module + a
   ~30-line `fetch`→`test_client` bridge.
 - **psycopg shim surface** (all `db.py` uses): `ConnectionPool.connection()`
@@ -63,8 +63,8 @@ guarantee it. Because these are now redistributed, `build.sh` bundles their
 license texts under `licenses/` and writes `THIRD-PARTY.html` (linked from the
 footer); see the licensing summary there.
 
-`/api/kc/*` (external knowledge-compiler tools) return "no tools" in the
-browser — the registry-driven pickers already tolerate an empty CLI set.
+`/api/kc/*` (external knowledge-compiler tools) return “no tools” in the
+browser – the registry-driven pickers already tolerate an empty CLI set.
 
 ## Build & serve
 
@@ -129,7 +129,7 @@ Redirect /where   /?mode=where
 
 `studio-boot.js` reads `?mode=` (default `circuit`), sets the `<body>` mode
 class before injecting `app.js`, and resolves all its sibling assets against
-its own module URL — so the single real page at `/` is what every mode route
+its own module URL – so the single real page at `/` is what every mode route
 lands on. The two `/static/<f>` paths above are the only absolute asset URLs
 hard-coded in the unmodified frontend, so they exist as real files. PGlite is
 single-threaded, so no COOP/COEP headers are needed.
@@ -140,8 +140,8 @@ Apache config above, not a runtime dependency.
 
 Mode switching is a full-page navigation (the frontend is path-routed), which
 reboots the tab; the DB is therefore persisted to IndexedDB so its provenance
-circuit survives the reload (a token carried across a switch — e.g.
-jump-to-circuit — must still resolve).
+circuit survives the reload (a token carried across a switch – e.g.
+jump-to-circuit – must still resolve).
 
 ### Shareable links
 

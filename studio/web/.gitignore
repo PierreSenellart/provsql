@@ -1,4 +1,4 @@
-# Built/copied assets assembled for serving (see studio-boot.js + README) —
+# Built/copied assets assembled for serving (see studio-boot.js + README) –
 # large binaries or copies of provsql_studio/static and the package sources.
 /pglite/
 /provsql.tar.gz

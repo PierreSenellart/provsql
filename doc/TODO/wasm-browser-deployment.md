@@ -12,7 +12,7 @@ realistic vehicle is **[PGlite](https://pglite.dev/)**
 Emscripten and run in PostgreSQL's *single-user mode* (not a Linux VM),
 packaged as a TypeScript library that instantiates Postgres in-process
 inside the JS runtime. PGlite already supports dynamically-loaded C
-extensions (pgvector, PostGIS, Apache AGE, pg_uuidv7, …) fetched as
+extensions (pgvector, PostGIS, Apache AGE, pg_uuidv7…) fetched as
 `.tar.gz` bundles and loaded via `CREATE EXTENSION`, so it is the
 natural host for a WASM ProvSQL.
 
@@ -35,14 +35,14 @@ build**: every change is gated by a single compile flag and validated on
 native *first*, so the WASM build inherits already-green code.
 
 > **Implementation discipline (read before writing any code).** This
-> document, its section numbers (§1, §2, …), its "phase 1 / phase 2"
+> document, its section numbers (§1, §2…), its "phase 1 / phase 2"
 > wording, and its M0–M7 milestones are **planning scaffolding only**.
 > They must never leak into the codebase. As you implement: do not cite
 > `doc/TODO/*` (this file included) from any comment, commit message,
 > source, SQL, or test; and do not name things after the plan's
 > sequencing. No `/* phase 1 */`, no `wasm_phase2_*` symbols, no
 > "for now / temporary / will be removed in M7" comments. Comments and
-> identifiers must be **timeless** — they describe what the code *is* and
+> identifiers must be **timeless** – they describe what the code *is* and
 > *does*, not when it was added or which step of a plan produced it. A
 > compile flag like `PROVSQL_INPROCESS_STORE` is a real, durable name
 > describing a build configuration and is fine; `PROVSQL_PHASE1_STORE`
@@ -74,7 +74,7 @@ docs, and the known Emscripten limitations on `mmap(MAP_SHARED)`,
   ASCII path is simply unavailable in the WASM build.
 - **Multi-tenant / concurrent-backend semantics**: the browser build is
   single-user single-connection by nature; we do not try to reproduce
-  cross-backend coordination. This is not a restriction the port adds —
+  cross-backend coordination. This is not a restriction the port adds –
   it is inherent to PGlite (see Concurrency model below).
 - **Persisting to a real `$PGDATA` on a server disk**: persistence is
   PGlite's (IndexedDB / OPFS / in-memory), see §3.
@@ -117,10 +117,10 @@ target is single-process, single-connection, single-threaded *by
 construction*:
 
 - there is never more than one backend, so two backends can never touch
-  the store at once — the in-process store's single-backend assumption is
+  the store at once – the in-process store's single-backend assumption is
   satisfied automatically;
 - no intra-query parallel workers (they need forked processes; Emscripten
-  has none) and no background workers — which is exactly why M1 deletes
+  has none) and no background workers – which is exactly why M1 deletes
   the worker;
 - application-level "concurrent" queries (`Promise.all` over
   `pg.query`) are serialized through PGlite's single I/O pathway and run
@@ -131,7 +131,7 @@ Consequently the native pg_regress parallel-group failure under the flag
 (M1) is an artifact of **native** multi-process PostgreSQL, a mode that
 does not exist under PGlite; native flag testing therefore runs serially
 (`--max-connections=1`) at every milestone. M2's per-backend buffer store
-does **not** enable concurrency — it makes each backend's store fully
+does **not** enable concurrency – it makes each backend's store fully
 independent, which is correct precisely because the real target never has
 a second backend. We lose nothing relative to what PGlite itself can do.
 
@@ -140,12 +140,12 @@ a second backend. We lose nothing relative to what PGlite itself can do.
 ProvSQL's backend↔worker layer is a request/response **message
 protocol** (one-byte opcode + `MyDatabaseId` + payload), with:
 
-- a **client side** in `src/provsql_mmap.c` — each SQL-callable function
+- a **client side** in `src/provsql_mmap.c` – each SQL-callable function
   (`create_gate`, `get_gate_type`, `set_prob`, `get_children`,
-  `set_table_info`, …) builds a message with `STARTWRITEM`/`ADDWRITEM`,
+  `set_table_info`…) builds a message with `STARTWRITEM`/`ADDWRITEM`,
   `SENDWRITEM`s it down the pipe, and reads the reply with `READB` /
   raw `read(pipembr,…)`;
-- a **server side** — `provsql_mmap_main_loop()` in `src/MMappedCircuit.cpp`
+- a **server side** – `provsql_mmap_main_loop()` in `src/MMappedCircuit.cpp`
   (`while(READM(c,char)) { switch(c) { case 'C': … } }`,
   `MMappedCircuit.cpp:207`) that consumes a message with `READM` and
   writes the reply with `WRITEM`, dispatching to a process-global
@@ -236,8 +236,8 @@ the *same* client and server source compiles against the FIFO:
 `provsql_inproc_send(buf,len)` pushes `len` bytes onto `req` then calls
 `provsql_mmap_dispatch_one()` (see 2c). The few raw
 `read(provsql_shared_state->pipembr,…)` sites that read variable-length
-replies — `get_gate_type` children (`provsql_mmap.c:151`), `get_children`
-(`:463`), `get_extra` (`:392`) — must also pop from `resp`. Introduce a
+replies – `get_gate_type` children (`provsql_mmap.c:151`), `get_children`
+(`:463`), `get_extra` (`:392`) – must also pop from `resp`. Introduce a
 `READB_BYTES(ptr,len)` macro (`read(pipembr,…)` natively, `provsql_fifo_pop`
 in-process) and replace those three raw `read` calls with it. Mirror with
 `WRITEM_BYTES(ptr,len)` for the server's raw byte writes (the Boost
@@ -250,7 +250,7 @@ so an arbitrarily large message is built before one `SENDWRITEM`.
 **2b. Force the single-message `create_gate` path** (`provsql_mmap.c:232-271`):
 the `else` branch exists only to keep each pipe `write` ≤ `PIPE_BUF`. The
 FIFO has no such limit. Under the flag, always take the contiguous path so
-every client op is *exactly one* complete message before any reply read —
+every client op is *exactly one* complete message before any reply read –
 the precondition that makes synchronous inline dispatch correct.
 
 **2c. Extract the per-message dispatch** from
@@ -327,7 +327,7 @@ which is all single-process correctness needs. The 16-byte header
 (`magic|version|elem_size|reserved`), the four/five file names
 (`MMappedCircuit.h:98-102`), `makePath` = `DataDir + "/base/" + oid`
 (`MMappedCircuit.cpp:43`), and the on-disk ABI (`GateInformation`,
-hash-table slots) are **all preserved** — so `provsql_migrate_mmap` and
+hash-table slots) are **all preserved** – so `provsql_migrate_mmap` and
 `ALTER EXTENSION … UPDATE` are unaffected.
 
 *Tuning (defer until profiled):* whole-region write-back on every `sync()`
@@ -339,40 +339,40 @@ is simplest; if slow, track a dirty high-water mark and write only
 All of these are guarded by `PROVSQL_NO_SUBPROCESS` (defined in
 `provsql_config.h` under `__EMSCRIPTEN__`), made to fail-soft so callers
 fall back to the in-process compiler. The guard is tied to the platform
-(`__EMSCRIPTEN__`), *not* to `PROVSQL_INPROCESS_STORE`, so a native build —
-even one forcing the in-process store for testing — keeps the
+(`__EMSCRIPTEN__`), *not* to `PROVSQL_INPROCESS_STORE`, so a native build –
+even one forcing the in-process store for testing – keeps the
 subprocess/socket paths and stays a faithful 176/176 regression baseline;
 the guarded branches are compile-checked by forcing the flags on native
 and exercised for real by the WASM build:
 
-- **External CLI solvers** — `src/external_tool.cpp:56-102`
+- **External CLI solvers** – `src/external_tool.cpp:56-102`
   (`run_in_own_pgroup`: `fork`/`setpgid`/`execl`/`waitpid`/`killpg`) and
   `find_external_tool` (`:141-186`). Under the flag, `find_external_tool`
   returns "not found" without forking; `run_external_tool` is never
   reached. `ToolRegistry` (`src/ToolRegistry.cpp:51-107`) ships **no**
   `cli`/`kcmcp` tools by default in-process.
-- **KCMCP supervisor + client** — `src/kcmcp_supervisor.c` (whole file,
+- **KCMCP supervisor + client** – `src/kcmcp_supervisor.c` (whole file,
   `fork`/`execl`, `:106-120,236-252`) compiled out; `src/kcmcp_client.cpp`
   (`socket(AF_UNIX/…)`, `connect`, `:46-79`) compiled out. The
   `compilation()` dispatcher in `src/BooleanCircuit.cpp` must treat
   "no kcmcp, no cli" as "use the in-process tree-decomposition compiler".
-- **`graph-easy` render** — `src/DotCircuit.cpp:147-199` `render()`
+- **`graph-easy` render** – `src/DotCircuit.cpp:147-199` `render()`
   (`ScopedTempDir`+`exec`) compiled out; DOT *generation* stays. Studio
   renders DOT client-side.
-- **WMC forks** — `src/probability_evaluate.cpp:420-551`: the external
+- **WMC forks** – `src/probability_evaluate.cpp:420-551`: the external
   weighted-model-count branch guarded out; the in-process tree-dec / MC /
   safe-query paths remain the only routes.
 
 Net surviving probability surface in-browser: tree-decomposition
 knowledge compiler (`dDNNFTreeDecompositionBuilder`, `TreeDecomposition`,
-`dDNNF` — the `tdkc` engine, no OS deps), Monte Carlo (`MonteCarloSampler`),
+`dDNNF` – the `tdkc` engine, no OS deps), Monte Carlo (`MonteCarloSampler`),
 safe-query rewriting, analytic continuous-RV evaluators
 (`AnalyticEvaluator`, `Expectation`, `HybridEvaluator`), Shapley/Banzhaf.
 All pure C++. Only externally-compiled exact `#SAT` (d4/c2d/…) is absent,
 with the well-understood trade-off (cf. `bounded-treewidth-data.md`: d4
 only overtakes the in-process compiler around treewidth ≈ 8–9, so the
 in-process path covers the common case). No `std::thread`/`pthread`
-anywhere in ProvSQL — one fewer WASM headache.
+anywhere in ProvSQL – one fewer WASM headache.
 
 ### 5. Phase-1 validation on native (the safety net)
 
@@ -413,7 +413,7 @@ deleting the serialize→FIFO→deserialize round-trip for `'g'`/`'j'`. That
 removes the *only* compiled-Boost dependency → no `b2` build needed at
 all. Worth doing once phase 1 is green (also a latency win), but not on
 the critical path. Note the Boost-over-pipe layer existed *only* because
-of the worker/backend split — it has no reason to exist in one process.
+of the worker/backend split – it has no reason to exist in one process.
 
 ### 7. Optional: remote KCMCP over WebSocket (deferred, additive)
 
@@ -429,9 +429,9 @@ plane (circuits) stays client-side; only the NP-hard compile is offloaded.
 
 - Add a `wasm` goal that builds `provsql` with Emscripten against the
   **same Postgres WASM headers/ABI PGlite uses** (mirror PGlite's Docker
-  SDK; pin a PGlite version — its extension API is explicitly unstable).
+  SDK; pin a PGlite version – its extension API is explicitly unstable).
   Concretely (PGlite 0.4.6): the target is **PostgreSQL 17.5,
-  `wasm32-unknown-linux-gnu`** — *not* the local PG18 dev cluster, so
+  `wasm32-unknown-linux-gnu`** – *not* the local PG18 dev cluster, so
   the extension must build against PG17 server headers as patched for
   WASM. The build is **Docker-based**: add the extension as a submodule
   under `postgres-pglite/pglite/other_extensions`, append its folder to
@@ -440,7 +440,7 @@ plane (circuits) stays client-side; only the NP-hard compile is offloaded.
   the documented "unhappy path" (Boost must be compiled for WASM; some
   symbols may need explicit exporting), so expect iteration there.
 - Toolchain: `em++`, `-std=c++17` (already required), `with_llvm=no`
-  (already forced — correct for WASM). `-fPIC` stays.
+  (already forced – correct for WASM). `-fPIC` stays.
 - No `-pthread` needed (ProvSQL uses no threads); PGlite itself may want a
   Web Worker for the OPFS backend, independent of ProvSQL.
 - Output the PGlite extension bundle: `.tar.gz` of `provsql.wasm` +
@@ -448,12 +448,12 @@ plane (circuits) stays client-side; only the NP-hard compile is offloaded.
   `provsql.14.sql`) + `provsql.control`, with `module_pathname` pointing
   at the `.wasm`. PGlite stages control+SQL under `$sharedir` and fetches
   the `.wasm` on `CREATE EXTENSION provsql`.
-- **Planner-hook timing — resolved (M0).** ProvSQL installs
+- **Planner-hook timing – resolved (M0).** ProvSQL installs
   `prev_planner` (the transparent-rewrite hook) in `_PG_init`; it must be
   live before the first provenance query. Confirmed: PGlite's loader
   (`extensionUtils.ts`) untars the bundle into the WASM sharedir,
   preloads each `.so` for `dlopen`, and `CREATE EXTENSION` then loads the
-  library — running `_PG_init`, which sets the global `planner_hook`
+  library – running `_PG_init`, which sets the global `planner_hook`
   pointer that covers *every subsequent query* in the (single) backend.
   No `shared_preload_libraries` is needed, which is fortunate because
   (a) PGlite's loader has no `shared_preload_libraries` plumbing and
@@ -471,7 +471,7 @@ Studio's server is thin: `db.py` (psycopg connect + `pg.query`),
 the user query, e.g. `provsql.where_provenance(...)`). Port the
 query-wrapping + circuit-shaping logic to `db.ts` / `circuit.ts` calling
 `pg.query(...)` on an in-page PGlite instance; keep `studio/static/`
-JS essentially unchanged (it already consumes JSON over `fetch` — point
+JS essentially unchanged (it already consumes JSON over `fetch` – point
 it at the in-page PGlite instead of an HTTP endpoint). Result: a fully
 static Studio servable from `file://` or a CDN, no Python at runtime.
 
@@ -481,7 +481,7 @@ static Studio servable from `file://` or a CDN, no Python at runtime.
   build (use the `PLAYWRIGHT_HOST_PLATFORM_OVERRIDE` note in
   `CLAUDE.local.md`).
 - Flask-under-Pyodide is rejected: Pyodide cannot speak libpq to PGlite
-  (no socket), so `db.py` would still need a JS bridge — you end up
+  (no socket), so `db.py` would still need a JS bridge – you end up
   writing the TS bridge anyway, plus a multi-MB Pyodide download.
 - The PyPI `provsql-studio` package stays the canonical server product;
   the browser build is a **second distribution target** sharing
@@ -491,13 +491,13 @@ static Studio servable from `file://` or a CDN, no Python at runtime.
 
 Ship-when ordering; each milestone is independently demonstrable.
 
-- [x] **M0 — host spike: done.** A trivial planner-hook C extension was
+- [x] **M0 – host spike: done.** A trivial planner-hook C extension was
       built to WASM and loaded live into PGlite; its `_PG_init` hook fires
       for subsequent queries and returns correct results. Both M0
       questions are now settled end-to-end (see Implementation
       observations for the build recipe and the ABI-compatibility result
       that informs M4).
-- [x] **M1 — in-process transport (native): done.** §1 + §2 behind
+- [x] **M1 – in-process transport (native): done.** §1 + §2 behind
       `PROVSQL_INPROCESS_STORE` (FIFO loopback + synchronous dispatch,
       bgworker/shmem/LWLock compiled out). Built with
       `make PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g'`; native build
@@ -506,47 +506,47 @@ Ship-when ordering; each milestone is independently demonstrable.
       preloaded by absolute path) **when run serially**
       (`--max-connections=1`); see Implementation observations for why
       serial is required and the validation recipe.
-- [x] **M2 — buffer storage (native): done.** §3 `MappedRegion`
+- [x] **M2 – buffer storage (native): done.** §3 `MappedRegion`
       abstraction (shared-mmap backend native; `malloc`+`pread`/`pwrite`
       heap-buffer backend under the flag); `MMappedVector` and
       `MMappedUUIDHashTable` compose it. Per-backend `on_proc_exit`
       write-back persists the buffer so a later backend (and PGlite
       reload) sees it. Native build unchanged: 176/176 in parallel. Flag
       build: 176/176 with a **fully-serial schedule** (see Implementation
-      observations — the heap-buffer store is single-backend, and
+      observations – the heap-buffer store is single-backend, and
       `--max-connections=1` alone does not serialise pg_regress parallel
       groups tightly enough; one test per line does).
-- [x] **M3 — guards: done.** §4 process/socket paths compiled out under
+- [x] **M3 – guards: done.** §4 process/socket paths compiled out under
       `PROVSQL_NO_SUBPROCESS` (auto under `__EMSCRIPTEN__`): the
       `run_in_own_pgroup` fork/exec, the KCMCP supervisor fork/exec, and
       the KCMCP `connect_endpoint` socket. Guards compile both natively
       and under the full WASM flag combo. With the combo forced on native,
       only the 12 external-tool-specific tests fail (d4/c2d/minic2d/
       dsharp/weightmc + their timeouts, compile-to-ddnnf-via-tool,
-      probability_benchmark, graph-easy view_circuit, tool_search_path) —
+      probability_benchmark, graph-easy view_circuit, tool_search_path) –
       all 164 others pass, confirming probability falls back to the
       in-process tree-decomposition compiler / Monte Carlo / safe-query.
-- [x] **M4 — first WASM build: done — ProvSQL runs in PGlite.** All 58
+- [x] **M4 – first WASM build: done – ProvSQL runs in PGlite.** All 58
       extension objects compile to WASM and link into a `provsql.so` side
       module (no `libboost_serialization`, thanks to §6). A *matched*
       `pglite.wasm` (built `MAIN_MODULE=2` with provsql's `.imports` added
       to the export list) loads it: `CREATE EXTENSION provsql` installs,
       the planner hook rewrites queries (provenance tokens appear), the
       in-process store answers (`get_nb_gates`), the counting semiring
-      evaluates, and `probability_evaluate` returns correct values — all
+      evaluates, and `probability_evaluate` returns correct values – all
       client-side. See Implementation observations for the full recipe.
-- [x] **M5 — probability in-browser: demonstrated.** In the M4 PGlite
+- [x] **M5 – probability in-browser: demonstrated.** In the M4 PGlite
       run, `probability_evaluate(provenance())` over a 0.5-probability
       table returned 0.75 for a two-tuple OR-group and 0.5 for a singleton
       via the in-process tree-decomposition compiler (no external solver).
       Broader coverage (Monte Carlo, Shapley, continuous RVs in-browser)
       remains to be exercised explicitly.
-- [~] **M6 — Studio web build (Pyodide route): approach validated.**
+- [~] **M6 – Studio web build (Pyodide route): approach validated.**
       Goal: the *full* Studio client-side with **no parallel JS/TS port to
-      maintain** — run the unmodified `provsql_studio` Python in Pyodide
+      maintain** – run the unmodified `provsql_studio` Python in Pyodide
       beside PGlite, shimming `psycopg` onto PGlite and routing `/api/*`
       into Flask's in-process `test_client` (see `studio/web/README.md`).
-      The one hard part — synchronous Python awaiting async PGlite — is
+      The one hard part – synchronous Python awaiting async PGlite – is
       **proven** (`run_sync` + `PyProxy.callPromising`, JSPI). Remaining:
       build the psycopg shim + bridge, mount the Studio package, wire the
       page. Caveat: JSPI ⇒ Chromium-only for now. Working seed
@@ -556,16 +556,16 @@ Ship-when ordering; each milestone is independently demonstrable.
       end-to-end. Remaining increments: transaction support in the shim
       (`BEGIN`/`SAVEPOINT`/`SET LOCAL` → PGlite, for `exec_batch`), load
       provsql into the PGlite instance, the Flask `test_client` bridge for
-      `/api/*`, and serve the `static/` UI — each is shim/wiring work, not
+      `/api/*`, and serve the `static/` UI – each is shim/wiring work, not
       a port.
 - [x] **CI/CD foundation.** `wasm/` holds the reproducible build
       (scripts + libc++ patch + headless Node smoke test + README);
       `.github/workflows/wasm.yml` runs a cheap per-PR job (in-process
-      store built natively, suite run serially — guards M1/M2/M3) and an
+      store built natively, suite run serially – guards M1/M2/M3) and an
       opt-in heavy job (full WASM build + headless assertion of correct
       provenance/probability). Studio-web e2e = Playwright over the static
       `demo.html` (headless Chromium, no Postgres service).
-- [x] **§6 phase 2 — Boost-drop: done (brought forward).** Under the
+- [x] **§6 phase 2 – Boost-drop: done (brought forward).** Under the
       flag, `getGenericCircuit`/`getJointCircuit` call
       `provsql_inproc_generic_circuit`/`provsql_inproc_joint_circuit`
       (direct `createGenericCircuit` on this process's store) instead of
@@ -575,11 +575,11 @@ Ship-when ordering; each milestone is independently demonstrable.
       compiled `libboost_serialization`), is smaller, and the serial
       suite is unchanged (same 12 external-tool failures, all probability/
       semiring readback green). Native keeps the Boost round-trip.
-- [ ] **M7 (optional)** — WS-KCMCP (§7).
+- [ ] **M7 (optional)** – WS-KCMCP (§7).
 
 A compelling public demo exists at M5: one static HTML page that boots
 Postgres+ProvSQL and computes provenance + probabilities entirely
-client-side, no server — already a teaching artefact before Studio lands.
+client-side, no server – already a teaching artefact before Studio lands.
 
 ## Risks / watch-list
 
@@ -588,28 +588,28 @@ client-side, no server — already a teaching artefact before Studio lands.
   multi-backend coordination* with no reason to exist in PGlite's
   one-process world. They are deletions behind one flag, not emulations.
   The genuinely new code is the §3 storage backend and the §8 build.
-- **PGlite extension API instability** — pin the version; budget for
+- **PGlite extension API instability** – pin the version; budget for
   re-pinning on PGlite minor bumps.
-- **Planner-hook preload timing** (M0) — highest-uncertainty unknown;
+- **Planner-hook preload timing** (M0) – highest-uncertainty unknown;
   spike before committing to the full port.
-- **`mmap(MAP_SHARED)` is the one true Emscripten wall** — do not try to
+- **`mmap(MAP_SHARED)` is the one true Emscripten wall** – do not try to
   make it write back; use buffer + explicit `write()`/`fsync` and let
   PGlite's file-level flush persist it (§3).
-- **`sync()` cost** — whole-region write-back may dominate on large
+- **`sync()` cost** – whole-region write-back may dominate on large
   circuits; have the dirty-range fallback ready.
-- **MEMFS 2 GB/file cap** — bounds circuit size in the default FS; OPFS is
+- **MEMFS 2 GB/file cap** – bounds circuit size in the default FS; OPFS is
   the path for large circuits.
-- **Boost-for-WASM build friction** (M4) — if `b2 toolset=emscripten`
+- **Boost-for-WASM build friction** (M4) – if `b2 toolset=emscripten`
   fights back, jump straight to §6 phase 2 (direct in-process circuit
   build, no compiled Boost) rather than fighting the toolchain.
-- **Don't oversell exact probability** — in-browser exact `#SAT` is
+- **Don't oversell exact probability** – in-browser exact `#SAT` is
   bounded by the in-process tree-decomposition compiler's reach
   (d4 only wins ≈ treewidth 8–9, per `bounded-treewidth-data.md`); be
   explicit in docs about exact-vs-Monte-Carlo and the WS-KCMCP escape.
 
 ## Implementation observations
 
-### M4 WASM build — what was established (and the remaining blocker)
+### M4 WASM build – what was established (and the remaining blocker)
 
 The full extension **compiles and links to WebAssembly**. Recipe (rootless
 podman, the pinned `pglite-builder` image, the M0-built WASM Postgres tree
@@ -630,7 +630,7 @@ Three fixes were required to get there:
    `c.h` does `#define inline` (empty). For C that is harmless; for C++ it
    turns libc++'s `inline namespace __2` into a plain namespace, so
    `std::__declval` / `std::filesystem` / … resolve wrong and every C++
-   TU fails. Fix in `c.h`: scope the disable to C —
+   TU fails. Fix in `c.h`: scope the disable to C –
    `#if defined(PG_FORCE_DISABLE_INLINE) && !defined(__cplusplus)`. This
    belongs upstream in `postgres-pglite`'s emscripten template (it blocks
    *any* C++ extension), but for the build it is a one-line patch to the
@@ -649,12 +649,12 @@ Three fixes were required to get there:
 **Matched pglite build (the path that worked).** Stock npm `@electric-sql/
 pglite` is linked `MAIN_MODULE=2` with an export set sized for *its* own
 bundled extensions, so it does not export PG internals provsql uses in live
-code (e.g. `DataDir`). The fix is pglite's own mechanism — its main-module
+code (e.g. `DataDir`). The fix is pglite's own mechanism – its main-module
 export list is `included.pglite.exports` ∪ every extension's `.imports`,
 minus the excluded libs. Recipe that loaded and ran provsql:
 
-1. Generate `provsql.imports` exactly as PGXS does for an extension —
-   `comm -23 <undefined symbols over the .o> <defined over .o + .so>` —
+1. Generate `provsql.imports` exactly as PGXS does for an extension –
+   `comm -23 <undefined symbols over the .o> <defined over .o + .so>` –
    then **drop C++ mangled (`^_Z`) names**: the main module is pure C, so
    provsql needs no C++ symbol from it (libc++ is whole-archived into
    `provsql.so`); the leftover undefined `_Z*` are provsql-internal,
@@ -664,8 +664,8 @@ minus the excluded libs. Recipe that loaded and ran provsql:
 2. `make -C src/backend pglite-exported-functions` regenerates
    `exported_functions.txt` (now including provsql's ~240 symbols, e.g.
    `_DataDir`).
-3. Relink **exactly as upstream** — `MAIN_MODULE=2`,
-   `-sEXPORTED_FUNCTIONS=@exported_functions.txt`, the same preloads — via
+3. Relink **exactly as upstream** – `MAIN_MODULE=2`,
+   `-sEXPORTED_FUNCTIONS=@exported_functions.txt`, the same preloads – via
    `make -C src/backend pglite install-pglite`. **Do not use
    `MAIN_MODULE=1`**: export-all links but breaks `initdb` (PGlite's
    bootstrap fails with "child terminated by signal 1"); and keep the full
@@ -674,11 +674,11 @@ minus the excluded libs. Recipe that loaded and ran provsql:
 4. Rebuild the PGlite TS package against the new `pglite.wasm`/`.data`/`.js`
    (`pnpm --filter @electric-sql/pglite-utils build` then the pglite
    package's `build:js` = `tsup` + `bundle-wasm.ts`); copy the contrib
-   `*.tar.gz` (uuid-ossp, …) into `release/` so `CREATE EXTENSION provsql
+   `*.tar.gz` (uuid-ossp…) into `release/` so `CREATE EXTENSION provsql
    CASCADE` finds its `uuid-ossp` dependency.
 
 One last provsql fix: `_PG_init` aborts unless
-`process_shared_preload_libraries_in_progress` — true only under
+`process_shared_preload_libraries_in_progress` – true only under
 `shared_preload_libraries`, which PGlite lacks. Guarded that check out
 under `PROVSQL_INPROCESS_STORE` (the hook installs at `CREATE EXTENSION`
 load and covers the single backend; no preload needed). With that, the
@@ -689,7 +689,7 @@ This produces the shippable "PGlite-with-ProvSQL" pair (`pglite.wasm` +
 `provsql.tar.gz`); loading the compiled `provsql.so` into *stock* npm
 pglite is not possible without rebuilding its main module.
 
-### M2 buffer storage — what was established
+### M2 buffer storage – what was established
 
 - **One storage primitive, two backends.** `src/MappedRegion.h` owns the
   file descriptor + base pointer + length, with `map`/`remap`/`sync`/
@@ -698,12 +698,12 @@ pglite is not possible without rebuilding its main module.
   written back with `pwrite`.  `MMappedVector` and `MMappedUUIDHashTable`
   hold a `MappedRegion` and a typed view of `region.base()`, refreshed
   after each `remap` (the mmap backend already moved the pointer on grow,
-  so neither class held stale pointers — the realloc backend is safe for
+  so neither class held stale pointers – the realloc backend is safe for
   the same reason).
-- **`resizeFile` is a no-op under the flag — and that matters.** The
+- **`resizeFile` is a no-op under the flag – and that matters.** The
   mmap backend must `ftruncate` the file to the mapped size; the buffer
   backend must NOT.  If it pre-sized the file, a fresh file that is never
-  synced (a backend that `abort()`s before write-back — e.g. an uncaught
+  synced (a backend that `abort()`s before write-back – e.g. an uncaught
   C++ exception, which skips `on_proc_exit`) would persist full-size with
   a zero header and fail magic validation on the next open, cascading
   aborts.  Leaving the file unsized until the first `sync()` means an
@@ -729,7 +729,7 @@ pglite is not possible without rebuilding its main module.
   (some tests `\c` to it by name).  This is a native-test artifact only:
   the single-process WASM target never has a second backend.
 
-### M1 in-process transport — what was established
+### M1 in-process transport – what was established
 
 - **The transport swap is correct.** With `PROVSQL_INPROCESS_STORE`, the
   whole backend↔worker pipe layer is replaced by two in-memory FIFOs
@@ -753,7 +753,7 @@ pglite is not possible without rebuilding its main module.
   still M2 to-do). pg_regress *parallel groups* (e.g. schedule line with
   `probability_having` and five siblings) then run several backends that
   grow and read the same mmap files concurrently, and a grow in one
-  backend leaves another's mapping stale — surfacing as a sporadic
+  backend leaves another's mapping stale – surfacing as a sporadic
   failure such as `probability_having`'s "semiring does not support
   value gates". This is the documented single-backend limitation, not a
   transport bug: the same suite is 176/176 green serially, and 176/176
@@ -771,7 +771,7 @@ pglite is not possible without rebuilding its main module.
   because its `_PG_init` only installs hooks + `provsql_inproc_init`
   (no worker/shmem), and it arms the planner hook in every backend.
 
-### M0 host spike — what was established (and what is blocked)
+### M0 host spike – what was established (and what is blocked)
 
 Findings from the M0 spike, recorded so the next attempt does not
 re-derive them:
@@ -802,7 +802,7 @@ re-derive them:
   builder image `electricsql/pglite-builder:3.1.74-5-postgis-libicu-min`
   (pinned Emscripten 3.1.74 + zlib/libxml2/libxslt/openssl/ossp-uuid/ICU
   pre-compiled to WASM under `/install/libs`). It runs fine under
-  **rootless `podman`** as the unprivileged sandbox user — no daemon, no
+  **rootless `podman`** as the unprivileged sandbox user – no daemon, no
   `docker` group. Recipe that worked:
   1. clone `pglite` + init the `postgres-pglite` submodule (pinned
      commit; ~150 MB);
@@ -826,13 +826,13 @@ re-derive them:
   EXTENSION` + one call to the module's C function force-loads the `.so`
   (running `_PG_init`); and every query afterwards fires the planner hook
   and returns correct rows. `onNotice` (constructor or per-query) is how
-  the JS side observes server `NOTICE`s — relevant for Studio surfacing
+  the JS side observes server `NOTICE`s – relevant for Studio surfacing
   ProvSQL notices.
 - **ABI compatibility → M4 simplification.** The extension was built
   against the `postgres-pglite` **submodule HEAD** yet loaded cleanly into
   the **prebuilt npm `@electric-sql/pglite` 0.4.6** (both PostgreSQL 17.5
   / `wasm32`). So M4 can likely ship ProvSQL as a standalone extension
-  bundle against stock PGlite, without rebuilding `pglite.wasm` itself —
+  bundle against stock PGlite, without rebuilding `pglite.wasm` itself –
   provided the symbols ProvSQL needs are in PGlite's exported set (verify
   per-symbol during M4; `-sERROR_ON_UNDEFINED_SYMBOLS=0` means missing
   ones surface only at `dlopen`/run time).
