@@ -5979,9 +5979,18 @@ static void provsql_ProcessUtility(
  * Must be loaded via @c shared_preload_libraries; raises an error otherwise.
  */
 void _PG_init(void) {
+#ifndef PROVSQL_INPROCESS_STORE
+  /* The multi-process build registers background workers and a shared
+     memory segment, which only works when loaded at postmaster start via
+     shared_preload_libraries.  The single-process build has neither: the
+     planner hook is installed here at CREATE EXTENSION / dlopen time and
+     covers every subsequent query in the one backend, so no preload (and
+     no shared_preload_libraries, which the WASM host does not support) is
+     required. */
   if (!process_shared_preload_libraries_in_progress)
     provsql_error("provsql needs to be added to the shared_preload_libraries "
                   "configuration variable");
+#endif
 
   DefineCustomBoolVariable("provsql.active",
                            "Should ProvSQL track provenance?",

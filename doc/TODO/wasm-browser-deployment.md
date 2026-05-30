@@ -526,17 +526,21 @@ Ship-when ordering; each milestone is independently demonstrable.
       probability_benchmark, graph-easy view_circuit, tool_search_path) —
       all 164 others pass, confirming probability falls back to the
       in-process tree-decomposition compiler / Monte Carlo / safe-query.
-- [~] **M4 — first WASM build:** *compiles + links* (done); *loads* needs
-      a matched pglite build (in progress). All 58 extension objects
-      compile to WASM and link into a `provsql.so` side module (no
-      `libboost_serialization` thanks to the §6 boost-drop). Loading into
-      *stock npm* PGlite is blocked because that build (`MAIN_MODULE=2`,
-      fixed export set) does not export the PG internals provsql imports
-      (first blocker after the fixes below: `DataDir`). See Implementation
-      observations for the build recipe, the fixes found, and the
-      matched-build requirement.
-- [ ] **M5 — probability in-browser:** tree-dec compiler + Monte Carlo +
-      Shapley + continuous-RV evaluators verified client-side.
+- [x] **M4 — first WASM build: done — ProvSQL runs in PGlite.** All 58
+      extension objects compile to WASM and link into a `provsql.so` side
+      module (no `libboost_serialization`, thanks to §6). A *matched*
+      `pglite.wasm` (built `MAIN_MODULE=2` with provsql's `.imports` added
+      to the export list) loads it: `CREATE EXTENSION provsql` installs,
+      the planner hook rewrites queries (provenance tokens appear), the
+      in-process store answers (`get_nb_gates`), the counting semiring
+      evaluates, and `probability_evaluate` returns correct values — all
+      client-side. See Implementation observations for the full recipe.
+- [x] **M5 — probability in-browser: demonstrated.** In the M4 PGlite
+      run, `probability_evaluate(provenance())` over a 0.5-probability
+      table returned 0.75 for a two-tuple OR-group and 0.5 for a singleton
+      via the in-process tree-decomposition compiler (no external solver).
+      Broader coverage (Monte Carlo, Shapley, continuous RVs in-browser)
+      remains to be exercised explicitly.
 - [ ] **M6 — Studio web build:** §9 static Studio over in-page PGlite;
       Playwright e2e green.
 - [x] **§6 phase 2 — Boost-drop: done (brought forward).** Under the
@@ -620,20 +624,48 @@ Three fixes were required to get there:
    `RegisterProvSQLKCMCPWorker` under `PROVSQL_INPROCESS_STORE` (never
    registered there anyway); the static helpers then dead-code-eliminate.
 
-**Remaining blocker — matched pglite build.** Stock npm `@electric-sql/
+**Matched pglite build (the path that worked).** Stock npm `@electric-sql/
 pglite` is linked `MAIN_MODULE=2` with an export set sized for *its* own
-bundled extensions, so it does not export PG internals that provsql uses
-in live code (currently `DataDir`, used to place the per-database mmap
-files; likely a few more behind it). The designed pglite mechanism handles
-this: its build collects each bundled extension's imports and adds them to
-the main module's export list. So the path to a loadable provsql is to
-build provsql **inside** the pglite build (under
-`postgres-pglite/.../other_extensions`, via the PGXS `dist` rule that emits
-the imports file) and run the full `build-pglite.sh`, producing a matched
-`pglite.wasm` + `provsql.tar.gz`. That is the natural "ship a
-pglite-with-provsql" artifact and the next step for M4. (Loading the
-already-compiled `provsql.so` into *stock* npm pglite is not possible
-without rebuilding its main module.)
+bundled extensions, so it does not export PG internals provsql uses in live
+code (e.g. `DataDir`). The fix is pglite's own mechanism — its main-module
+export list is `included.pglite.exports` ∪ every extension's `.imports`,
+minus the excluded libs. Recipe that loaded and ran provsql:
+
+1. Generate `provsql.imports` exactly as PGXS does for an extension —
+   `comm -23 <undefined symbols over the .o> <defined over .o + .so>` —
+   then **drop C++ mangled (`^_Z`) names**: the main module is pure C, so
+   provsql needs no C++ symbol from it (libc++ is whole-archived into
+   `provsql.so`); the leftover undefined `_Z*` are provsql-internal,
+   never-called template instantiations that the main module cannot
+   export. Place the result in
+   `dist/include/postgresql/emscripten/extension/imports/provsql.imports`.
+2. `make -C src/backend pglite-exported-functions` regenerates
+   `exported_functions.txt` (now including provsql's ~240 symbols, e.g.
+   `_DataDir`).
+3. Relink **exactly as upstream** — `MAIN_MODULE=2`,
+   `-sEXPORTED_FUNCTIONS=@exported_functions.txt`, the same preloads — via
+   `make -C src/backend pglite install-pglite`. **Do not use
+   `MAIN_MODULE=1`**: export-all links but breaks `initdb` (PGlite's
+   bootstrap fails with "child terminated by signal 1"); and keep the full
+   `EXPORTED_FUNCTIONS` list (a stray `=_main` drops `_fopen`/`_fgets`…
+   that PGlite's JS calls).
+4. Rebuild the PGlite TS package against the new `pglite.wasm`/`.data`/`.js`
+   (`pnpm --filter @electric-sql/pglite-utils build` then the pglite
+   package's `build:js` = `tsup` + `bundle-wasm.ts`); copy the contrib
+   `*.tar.gz` (uuid-ossp, …) into `release/` so `CREATE EXTENSION provsql
+   CASCADE` finds its `uuid-ossp` dependency.
+
+One last provsql fix: `_PG_init` aborts unless
+`process_shared_preload_libraries_in_progress` — true only under
+`shared_preload_libraries`, which PGlite lacks. Guarded that check out
+under `PROVSQL_INPROCESS_STORE` (the hook installs at `CREATE EXTENSION`
+load and covers the single backend; no preload needed). With that, the
+full stack runs client-side: provenance rewriting, the in-process store,
+the counting semiring, and correct `probability_evaluate`.
+
+This produces the shippable "PGlite-with-ProvSQL" pair (`pglite.wasm` +
+`provsql.tar.gz`); loading the compiled `provsql.so` into *stock* npm
+pglite is not possible without rebuilding its main module.
 
 ### M2 buffer storage — what was established
 
