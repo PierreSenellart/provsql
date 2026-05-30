@@ -2,12 +2,16 @@ name: WASM / in-process store
 
 # Two jobs:
 #  - inprocess-store: cheap, per-PR. Builds the extension with the
-#    single-process store forced on and runs the regression suite serially
-#    (the in-process store is single-backend; pg_regress parallel groups
-#    are not its target). Guards M1/M2/M3 against drift.
+#    single-process store forced on and runs a single-session functional smoke
+#    -- the model the in-process store is built for (PGlite: one backend, the
+#    extension loaded at CREATE EXTENSION, no preload). The full pg_regress
+#    suite is deliberately NOT used: it is multi-backend (one backend per test
+#    file) and would need the hook preloaded, but the in-process build is not
+#    preloadable. Thorough runtime coverage lives in the wasm job's e2e.
 #  - wasm: heavy, opt-in (workflow_dispatch). Reproduces the full
-#    browser/PGlite build (provsql.so + a matched pglite.wasm) and runs the
-#    headless Node smoke test asserting correct provenance + probability.
+#    browser/PGlite build (provsql.so + a matched pglite.wasm), runs the
+#    headless Node smoke test, then assembles the doc-root and runs the
+#    browser (Playwright) e2e.
 
 on:
   push:
@@ -19,7 +23,7 @@ on:
 jobs:
   inprocess-store:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-    name: in-process store (serial)
+    name: in-process store (single-session smoke)
     runs-on: ubuntu-latest
     # Same PostgreSQL-install path as the main build_and_test Linux job: the
     # pgxn-tools image + pg-start handle the PGDG apt setup cleanly (a raw
@@ -33,26 +37,28 @@ jobs:
           fetch-depth: 0
       - name: Build with PROVSQL_INPROCESS_STORE and install
         run: make -j$(nproc) PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g' && make install
-      # Preload provsql so the planner hook is present in every pg_regress
-      # backend. The in-process store doesn't *require* preloading (PGlite
-      # installs the hook at CREATE EXTENSION in its single backend), but
-      # pg_regress uses many backends, and without the hook provenance() is the
-      # unrewritten stub ("called on a table without provenance").
-      - name: Preload provsql and restart
+      # Exercise the store the way PGlite does: a single psql session where
+      # CREATE EXTENSION loads provsql and installs the planner hook (no
+      # preload). Covers add_provenance, provenance() rewriting, a compiled
+      # semiring, and in-process probability. ON_ERROR_STOP fails on any error;
+      # the grep pins the probability (NY = 1 - 0.5^2 = 0.75).
+      - name: Single-session functional smoke
         run: |
-          echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/17/test/postgresql.conf
-          service postgresql restart
-          pg_isready -t 30
-      - name: Run the suite serially (the in-process store is single-backend)
-        run: |
-          make test/schedule
-          awk '/^test:/{$1="";n=split($0,a," ");for(i=1;i<=n;i++)if(a[i]!="")print "test: "a[i];next}{print}' \
-            test/schedule > /tmp/schedule.serial
-          OUT=$(mktemp -d /tmp/tmp.provsqlXXXX)
-          PGUSER=postgres make installcheck PGUSER=postgres \
-            REGRESS_OPTS="--load-extension=plpgsql --inputdir=test --outputdir=$OUT --schedule /tmp/schedule.serial" \
-            EXTRA_REGRESS_OPTS="--max-connections=1" \
-          || { cat "$OUT"/regression.diffs; exit 1; }
+          out=$(PGUSER=postgres psql -X -v ON_ERROR_STOP=1 -d postgres <<'SQL'
+          CREATE EXTENSION provsql CASCADE;
+          SET search_path TO public, provsql;
+          CREATE TABLE t(id int, city text);
+          INSERT INTO t VALUES (1, 'NY'), (2, 'NY'), (3, 'Paris');
+          SELECT add_provenance('t');
+          SELECT set_prob(provenance(), 0.5) FROM t;
+          SELECT city, sr_counting(provenance()) AS n
+            FROM (SELECT city, provenance() FROM t GROUP BY city) q ORDER BY city;
+          SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
+            FROM (SELECT provenance() FROM t WHERE city = 'NY' GROUP BY city) q;
+          SQL
+          )
+          echo "$out"
+          echo "$out" | grep -q '0.7500' || { echo "unexpected probability"; exit 1; }
 
   # Heavy and opt-in. Reproduces the browser build end to end; the exact
   # PGlite-core build invocation may need first-run tuning (it offloads to
