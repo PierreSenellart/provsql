@@ -551,6 +551,13 @@ Ship-when ordering; each milestone is independently demonstrable.
       build the psycopg shim + bridge, mount the Studio package, wire the
       page. Caveat: JSPI ⇒ Chromium-only for now. Working seed
       `studio/web/demo.html` (plain PGlite, no Pyodide) needs no JSPI.
+      **Proven with real code:** the *unmodified* `db.py`, mounted in
+      Pyodide with the fake psycopg over PGlite, ran `list_databases()`
+      end-to-end. Remaining increments: transaction support in the shim
+      (`BEGIN`/`SAVEPOINT`/`SET LOCAL` → PGlite, for `exec_batch`), load
+      provsql into the PGlite instance, the Flask `test_client` bridge for
+      `/api/*`, and serve the `static/` UI — each is shim/wiring work, not
+      a port.
 - [x] **CI/CD foundation.** `wasm/` holds the reproducible build
       (scripts + libc++ patch + headless Node smoke test + README);
       `.github/workflows/wasm.yml` runs a cheap per-PR job (in-process
