@@ -6,6 +6,13 @@ This case study, extending the scenario introduced in
 real-world GTFS dataset for Île-de-France public transit, demonstrating
 Boolean provenance at scale for wheelchair accessibility reasoning.
 
+.. note::
+
+   Unlike the other case studies, this one is **not available in the ProvSQL
+   Playground**: it loads the large Île-de-France GTFS dataset, which is
+   fetched separately rather than bundled (see the :ref:`Playground note
+   <playground-note>`). Run it against a local ProvSQL installation.
+
 The Scenario
 ------------
 

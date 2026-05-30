@@ -34,6 +34,17 @@ power of provenance management and probabilistic databases.
    evaluation strip that drives the semiring and probability calls
    the tutorial introduces.
 
+.. tip::
+
+   **Follow along in your browser, no install.** Open the `tutorial database
+   in the ProvSQL Playground <https://provsql.org/playground/?db=tutorial>`_
+   and run these queries as you read. The Playground bundles no external
+   tools, so a step that explicitly calls an external knowledge compiler
+   (``d4``, ``c2d``, …) or the ``graph-easy`` ASCII renderer will not run
+   there; the default probability methods still work (they use the built-in
+   tree-decomposition compiler), as does everything else. See the
+   :ref:`Playground note <playground-note>`.
+
 Setup
 -----
 

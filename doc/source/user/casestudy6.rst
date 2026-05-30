@@ -12,6 +12,14 @@ below makes the rewriter, the simplifier, the analytic and
 Monte-Carlo paths, and conditional inference all visible in the
 canvas.
 
+.. tip::
+
+   **Follow along in your browser, no install.** This Studio-driven case study
+   runs in full in the `cs6 database in the ProvSQL Playground
+   <https://provsql.org/playground/?db=cs6>`_: the continuous-distribution
+   surface (analytic moments and Monte Carlo) needs no external tools. See the
+   :ref:`Playground note <playground-note>`.
+
 The Scenario
 ------------
 

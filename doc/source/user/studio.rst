@@ -17,6 +17,8 @@ through two complementary inspection modes:
 A schema panel, a configuration panel, and a mode-switcher round out
 the UI; all three are described below.
 
+.. _playground-note:
+
 .. tip::
 
    **Try it in your browser, no install:** the same Studio UI, with
