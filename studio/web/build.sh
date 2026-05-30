@@ -94,5 +94,9 @@ rm -rf pglite
 cp -RL "$PGLITE_DIST" pglite
 cp "$PROVSQL_TARGZ" provsql.tar.gz
 
+# 6. The tutorial / case-study databases (converted from doc/*/setup.sql to
+#    statement lists studio-boot.js loads into one PGlite database each).
+python3 build-casestudies.py
+
 echo "build.sh: assembled doc-root in $HERE"
 echo "  serve with:  python3 serve.py    (then open http://localhost:8089/)"

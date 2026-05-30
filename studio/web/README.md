@@ -87,8 +87,23 @@ studio/web/                  # this dir is itself the doc-root
   provsql.tar.gz             # the extension bundle
   static/circuit.js          # app.js loads /static/circuit.js  (hard-coded path)
   static/app.css             # circuit.js loads /static/app.css  (hard-coded path)
+  casestudies/               # one DB per tutorial / case study + manifest.json
+  build-casestudies.py       # converts doc/*/setup.sql into the above (tracked)
   demo.html                  # standalone plain-PGlite demo (no Pyodide)
 ```
+
+### Tutorial and case-study databases
+
+The one IndexedDB-persisted cluster holds a database per tutorial / case
+study (`tutorial`, `cs1`, `cs2`, `cs4`, `cs5`, `cs6`, `cs7`), switchable from
+the connection chip. `build-casestudies.py` derives them from the canonical
+`doc/{tutorial,casestudyN}/setup.sql` scripts, rewriting the psql-only
+`COPY … FROM stdin` / `\copy … CSV` constructs into INSERTs and splitting each
+script into individual statements (PGlite runs a whole `exec()` as one
+transaction, which breaks the `ON COMMIT DROP` temp table
+`create_provenance_mapping` uses). studio-boot.js creates the databases up
+front and seeds each lazily on first switch. `casestudy3` is omitted: it loads
+a multi-megabyte GTFS dataset that must be downloaded separately.
 
 ### Designed for a dumb static host
 

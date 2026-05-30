@@ -51,48 +51,74 @@ const provsql = {
   name: 'provsql',
   setup: async (_p, o) => ({ emscriptenOpts: o, bundlePath: new URL('./provsql.tar.gz', import.meta.url) }),
 }
-// Persist to IndexedDB: mode switching is a full-page navigation (/circuit
-// vs /where) that reboots this tab, so the DB — and its provenance circuit —
-// must survive the reload, otherwise tokens carried across a switch (e.g.
-// jump-to-circuit) would reference a wiped store.
-const pg = await PGlite.create({ dataDir: 'idb://provsql-studio-demo', extensions: { uuid_ossp, provsql } })
-await pg.exec('CREATE EXTENSION IF NOT EXISTS provsql CASCADE')
-await pg.exec('SET search_path TO provsql, public')
-// External knowledge-compiler tools (d4, c2d, weightmc, …) need subprocesses
-// the browser cannot spawn, so disable every registry entry: they then never
-// appear as eval-strip options. The always-available in-process compilers
-// (tree-decomposition, interpret-as-dd, the fallback chain) are unaffected.
-await pg.exec(`DO $$ DECLARE r record; BEGIN
-  IF to_regclass('provsql.tools') IS NOT NULL THEN
-    FOR r IN SELECT name FROM provsql.tools WHERE enabled LOOP
-      PERFORM provsql.set_tool_enabled(r.name, false);
-    END LOOP;
-  END IF;
-END $$;`)
-// provsql.tool_available probes the OS PATH for a binary; in the browser that
-// is empty. Graphviz is the one tool actually present (compiled to WASM and
-// reached through the subprocess shim), so report just `dot` as available —
-// this is what the tree-decomposition and d-DNNF image endpoints gate on.
-await pg.exec(`CREATE OR REPLACE FUNCTION provsql.tool_available(name TEXT)
-  RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT lower(name) = 'dot' $$;`)
-// Seed the demo once. The table lives in the public schema: created in the
-// provsql schema it would be invisible to where_provenance's identify_token
-// (which deliberately skips that schema), so Where-mode tracing would fail.
-const fresh = await pg.query("SELECT to_regclass('public.personnel') IS NULL AS e")
-if (fresh.rows[0].e) {
-  await pg.exec(`CREATE TABLE public.personnel(id int, name text, city text, classification text);
-    INSERT INTO public.personnel VALUES (1,'John','New York','unclassified'),(2,'Paul','New York','restricted'),
-    (3,'Dave','Paris','confidential'),(4,'Ellen','Berlin','secret'),(5,'Magdalen','Paris','top_secret'),
-    (6,'Nancy','Paris','restricted'),(7,'Susan','Berlin','secret');`)
-  await pg.query("SELECT add_provenance('public.personnel'::regclass)")
-  await pg.query('SELECT set_prob(provenance(), 0.5) FROM public.personnel')
-}
+const EXT = { uuid_ossp, provsql }
+// One IndexedDB-persisted cluster holds every tutorial / case-study database
+// (manifest below). Persistence matters because mode switching is a full-page
+// navigation that reboots the tab; the DBs and their provenance circuits must
+// survive the reload (a token carried across a switch must still resolve).
+const DATADIR = 'idb://provsql-studio'
+const DEFAULT_DB = 'tutorial'
+const manifest = await (await fetch(asset('./casestudies/manifest.json'))).json()
 
-// async PGlite bridge (the shim's run_sync target), with NOTICE capture.
+// Per-database preparation, idempotent, re-run on every open: the extension,
+// the session search_path, and the browser-specific tool handling. External
+// knowledge compilers (d4, c2d, …) need subprocesses the browser cannot spawn,
+// so every registry entry is disabled (they never appear as eval-strip
+// options); tool_available is redefined to report only `dot`, which is real
+// here — supplied as WASM Graphviz through the subprocess shim, and gated on
+// by the tree-decomposition / d-DNNF image endpoints.
+const PREP = [
+  'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"',
+  'CREATE EXTENSION IF NOT EXISTS provsql CASCADE',
+  'SET search_path TO public, provsql',
+  `DO $$ DECLARE r record; BEGIN
+     IF to_regclass('provsql.tools') IS NOT NULL THEN
+       FOR r IN SELECT name FROM provsql.tools WHERE enabled LOOP
+         PERFORM provsql.set_tool_enabled(r.name, false);
+       END LOOP;
+     END IF;
+   END $$`,
+  `CREATE OR REPLACE FUNCTION provsql.tool_available(name TEXT)
+     RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT lower(name) = 'dot' $$`,
+]
+
+// Create every database once (cheap, metadata only); seeding is lazy, on first
+// open. PGlite is single-database per connection, so each database is a real
+// database in the shared cluster, reached by reopening with {database}.
+let _bootstrap = await PGlite.create({ dataDir: DATADIR, extensions: EXT })
+const _have = (await _bootstrap.query('SELECT datname FROM pg_database')).rows.map((r) => r.datname)
+for (const m of manifest) {
+  if (!_have.includes(m.name)) await _bootstrap.exec(`CREATE DATABASE ${m.name}`)
+}
+await _bootstrap.close()
+
+// The currently-open database. PGlite holds one connection at a time, so
+// switching closes the active instance and reopens on the target.
+let activeDb = null
+let activePg = null
+async function switchDb(name) {
+  if (name === activeDb) return
+  if (activePg) { await activePg.close(); activePg = null }
+  const inst = await PGlite.create({ dataDir: DATADIR, database: name, extensions: EXT })
+  for (const s of PREP) await inst.exec(s)
+  const seeded = await inst.query("SELECT to_regclass('public.__provsql_seeded') IS NOT NULL AS e")
+  if (!seeded.rows[0].e) {
+    say(`loading ${name}…`)
+    const entry = manifest.find((m) => m.name === name)
+    const stmts = await (await fetch(asset(`./casestudies/${entry.file}`))).json()
+    for (const s of stmts) await inst.exec(s)         // one stmt per exec: see build-casestudies.py
+    await inst.exec('CREATE TABLE public.__provsql_seeded()')
+  }
+  activeDb = name
+  activePg = inst
+}
+await switchDb(DEFAULT_DB)
+
+// async PGlite bridge (the shim's run_sync target) -> the active database.
 globalThis.pgQuery = async (sql, params) => {
   const notices = []
   try {
-    const r = await pg.query(sql, params ? Array.from(params) : [],
+    const r = await activePg.query(sql, params ? Array.from(params) : [],
       { onNotice: n => notices.push({ severity: n.severity || 'NOTICE', message_primary: n.message || '',
                                       message_detail: n.detail || '', message_hint: n.hint || '' }) })
     return { ok: true, rows: r.rows, fields: r.fields, affected: r.affectedRows ?? 0, notices }
@@ -146,13 +172,14 @@ const handle = py.globals.get('handle')
 // another is mid-way through -> "SET LOCAL can only be used in transaction
 // blocks". Running them one at a time makes the shared connection behave like
 // the dedicated one the backend expects.
-let _backendChain = Promise.resolve()
-const callBackend = (method, path, body) => {
-  const run = () => handle.callPromising(method, path, body)
-  const r = _backendChain.then(run, run)
-  _backendChain = r.then(() => {}, () => {})
+let _chain = Promise.resolve()
+const enqueue = (task) => {
+  const r = _chain.then(task, task)
+  _chain = r.then(() => {}, () => {})
   return r
 }
+const callBackend = (method, path, body) => enqueue(() => handle.callPromising(method, path, body))
+const reply = (out) => new Response(out.body, { status: out.status, headers: { 'Content-Type': out.ctype } })
 
 // Route the real frontend's /api/* fetches into the in-page Flask app.
 const realFetch = window.fetch.bind(window)
@@ -162,8 +189,23 @@ window.fetch = async (input, init = {}) => {
   if (path.startsWith('/api/')) {
     const method = (init.method || (typeof input !== 'string' && input.method) || 'GET').toUpperCase()
     const body = init.body || null
-    const out = JSON.parse(await callBackend(method, path, body ? String(body) : ''))
-    return new Response(out.body, { status: out.status, headers: { 'Content-Type': out.ctype } })
+    // Database list / switch are JS-layer concerns: each tutorial / case study
+    // is a real database in the one cluster, reached by reopening the active
+    // PGlite connection. The backend's DSN-based switching does not apply.
+    if (path === '/api/databases' && method === 'GET') {
+      return new Response(JSON.stringify(manifest.map((m) => m.name)),
+                          { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (path.split('?')[0] === '/api/conn' && method === 'POST') {
+      let target = null
+      try { target = JSON.parse(String(body) || '{}').database } catch (_e) { /* ignore */ }
+      const out = JSON.parse(await enqueue(async () => {
+        if (target && manifest.some((m) => m.name === target)) await switchDb(target)
+        return handle.callPromising('GET', '/api/conn', '')   // conn_info for the now-active db
+      }))
+      return reply(out)
+    }
+    return reply(JSON.parse(await callBackend(method, path, body ? String(body) : '')))
   }
   return realFetch(input, init)
 }
