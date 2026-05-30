@@ -33,6 +33,16 @@ jobs:
           fetch-depth: 0
       - name: Build with PROVSQL_INPROCESS_STORE and install
         run: make -j$(nproc) PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g' && make install
+      # Preload provsql so the planner hook is present in every pg_regress
+      # backend. The in-process store doesn't *require* preloading (PGlite
+      # installs the hook at CREATE EXTENSION in its single backend), but
+      # pg_regress uses many backends, and without the hook provenance() is the
+      # unrewritten stub ("called on a table without provenance").
+      - name: Preload provsql and restart
+        run: |
+          echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/17/test/postgresql.conf
+          service postgresql restart
+          pg_isready -t 30
       - name: Run the suite serially (the in-process store is single-backend)
         run: |
           make test/schedule

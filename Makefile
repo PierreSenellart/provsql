@@ -77,7 +77,9 @@ studio-lint:
 	cd studio && ruff check .
 
 studio-test: studio-lint
-	cd studio && python3 -m pytest tests
+	# tests/web (browser/PGlite e2e) needs the assembled doc-root + headless
+	# Chromium; run it separately with `cd studio && pytest tests/web`.
+	cd studio && python3 -m pytest tests --ignore=tests/web
 
 .PHONY: default test docs website deploy playground deploy-playground studio studio-lint studio-test tdkc provsql_migrate_mmap
 

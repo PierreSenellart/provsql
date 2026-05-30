@@ -109,7 +109,9 @@ jobs:
       # below, which adds the chromium download + system deps step. Keeping
       # them separate makes triage easier when one set fails and the other
       # doesn't.
-      - run: python -m pytest studio/tests --ignore=studio/tests/e2e
+      # tests/web (the browser/PGlite build e2e) needs the assembled doc-root
+      # + a headless Chromium; it runs in the wasm workflow, not this matrix.
+      - run: python -m pytest studio/tests --ignore=studio/tests/e2e --ignore=studio/tests/web
         env:
           PGUSER: postgres
 
