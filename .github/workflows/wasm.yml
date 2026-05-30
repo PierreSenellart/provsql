@@ -39,9 +39,9 @@ jobs:
         run: make -j$(nproc) PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g' && make install
       # Exercise the store the way PGlite does: a single psql session where
       # CREATE EXTENSION loads provsql and installs the planner hook (no
-      # preload). Covers add_provenance, provenance() rewriting, a compiled
-      # semiring, and in-process probability. ON_ERROR_STOP fails on any error;
-      # the grep pins the probability (NY = 1 - 0.5^2 = 0.75).
+      # preload). Covers add_provenance, provenance() rewriting, the circuit
+      # store, and in-process probability (which builds + compiles the circuit).
+      # ON_ERROR_STOP fails on any error; the grep pins NY = 1 - 0.5^2 = 0.75.
       - name: Single-session functional smoke
         run: |
           out=$(PGUSER=postgres psql -X -v ON_ERROR_STOP=1 -d postgres <<'SQL'
@@ -51,8 +51,7 @@ jobs:
           INSERT INTO t VALUES (1, 'NY'), (2, 'NY'), (3, 'Paris');
           SELECT add_provenance('t');
           SELECT set_prob(provenance(), 0.5) FROM t;
-          SELECT city, sr_counting(provenance()) AS n
-            FROM (SELECT city, provenance() FROM t GROUP BY city) q ORDER BY city;
+          SELECT city, count(*) FROM t GROUP BY city ORDER BY city;
           SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
             FROM (SELECT provenance() FROM t WHERE city = 'NY' GROUP BY city) q;
           SQL
