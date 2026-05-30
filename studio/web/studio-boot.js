@@ -4,10 +4,11 @@
 // Then inject the real static/app.js, which runs against the in-page backend.
 //
 // Requires a JSPI-capable browser (recent Chrome/Edge) for run_sync.
+// Everything is self-hosted (vendor.sh): no third-party CDN at run time.
 import { PGlite } from './pglite/index.js'
 import { uuid_ossp } from './pglite/contrib/uuid_ossp.js'
-import { loadPyodide } from 'https://cdn.jsdelivr.net/pyodide/v0.29.4/full/pyodide.mjs'
-import { Graphviz } from 'https://cdn.jsdelivr.net/npm/@hpcc-js/wasm-graphviz@1.22.0/dist/index.js'
+import { loadPyodide } from './pyodide/pyodide.mjs'
+import { Graphviz } from './vendor/graphviz/index.js'
 
 const PKG = ['__init__.py', 'db.py', 'app.py', 'circuit.py', 'kc.py']
 // Resolve sibling assets against this module's URL, not the document's, so the
@@ -158,10 +159,14 @@ const graphviz = await Graphviz.load()
 globalThis.graphvizDot = async (src, format) => graphviz.layout(src, format || 'json', 'dot')
 
 say('loading Python (Pyodide)…')
-const py = await loadPyodide()
-await py.loadPackage('micropip')
+const py = await loadPyodide({ indexURL: asset('./pyodide/').href })
+await py.loadPackage('micropip')   // micropip + packaging from the local indexURL
 say('installing flask + sqlparse…')
-await py.runPythonAsync(`import micropip; await micropip.install(['flask','sqlparse'])`)
+// Install the vendored wheel closure (the manifest is the full dependency
+// set, so micropip resolves entirely offline -- it never reaches PyPI).
+const wheels = await (await fetch(asset('./wheels/manifest.json'))).json()
+const wheelUrls = wheels.map((w) => asset('./wheels/' + w).href)
+await py.runPythonAsync(`import micropip; await micropip.install(${JSON.stringify(wheelUrls)})`)
 
 say('wiring the Studio backend…')
 py.runPython(`import os; os.environ['PROVSQL_STUDIO_CONFIG_DIR']='/cfg'; os.makedirs('/cfg', exist_ok=True)`)
@@ -310,6 +315,22 @@ document.getElementById('tools-panel')?.remove()
       location.reload()
     }))
     nav.appendChild(btn)
+  }
+}
+
+// WASM-only: a Licenses link to the bundled third-party notices, at the left
+// of the site footer (the browser build redistributes those components).
+{
+  const footer = document.getElementById('provsql-site-footer')
+  if (footer) {
+    const a = document.createElement('a')
+    a.href = asset('./THIRD-PARTY.html').href
+    a.title = 'Third-party components and their licenses'
+    a.textContent = 'Licenses'
+    const sep = document.createElement('span')
+    sep.className = 'sep'
+    sep.innerHTML = '&middot;'
+    footer.prepend(a, sep)
   }
 }
 if (boot) boot.style.display = 'none'

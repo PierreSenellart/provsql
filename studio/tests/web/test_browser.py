@@ -26,6 +26,31 @@ def _api(page: Page, method: str, path: str, body=None):
     )
 
 
+def test_fully_self_hosted(browser, web_server) -> None:
+    """Boot with every off-origin request blocked: the build must load nothing
+    from a CDN (Pyodide, wheels, Graphviz, Font Awesome are all vendored)."""
+    ctx = browser.new_context()
+    blocked: list[str] = []
+
+    def handle(route):
+        url = route.request.url
+        if url.startswith("http") and not url.startswith(web_server):
+            blocked.append(url)
+            route.abort()
+        else:
+            route.continue_()
+
+    ctx.route("**/*", handle)
+    page = ctx.new_page()
+    try:
+        page.goto(web_server + "/", wait_until="domcontentloaded")
+        page.wait_for_selector("#studio-boot-status", state="hidden", timeout=240000)
+        assert page.locator("#request").count() == 1   # the UI booted
+        assert not blocked, f"unexpected off-origin requests: {blocked[:8]}"
+    finally:
+        ctx.close()
+
+
 def test_jspi_available(cs7_page: Page) -> None:
     """The whole approach relies on JSPI (Pyodide run_sync over async PGlite)."""
     assert cs7_page.evaluate("typeof WebAssembly.Suspending") == "function"

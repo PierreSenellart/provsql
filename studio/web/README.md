@@ -1,10 +1,10 @@
-# ProvSQL Studio — browser (PGlite) build
+# ProvSQL Playground — ProvSQL Studio in the browser
 
-A second distribution target for Studio: the same UI running **fully
-client-side** over an in-page PGlite (PostgreSQL + ProvSQL in WebAssembly),
-with no Flask server and no database connection. The PyPI `provsql-studio`
-package remains the canonical server product; this build shares its
-frontend assets.
+**ProvSQL Playground** is a second distribution target for Studio: the same UI
+running **fully client-side** over an in-page PGlite (PostgreSQL + ProvSQL in
+WebAssembly), with no Flask server and no database connection. The PyPI
+`provsql-studio` package remains the canonical server product; this build
+shares its frontend assets and rebrands the wordmark to "ProvSQL Playground".
 
 Status: **scaffold + working seed; full-Studio approach validated.**
 `demo.html` is a self-contained page that boots PGlite + ProvSQL and runs
@@ -39,7 +39,8 @@ static/app.js ─fetch('/api/exec')→ shim (window.fetch override, JS)
   `psycopg.Error`; SAVEPOINT / `SET LOCAL` / rollback. Each maps onto
   PGlite; the pool/PID-cancel/`subprocess`(kc)/`threading` parts collapse
   (single connection, no external tools).
-- **`flask` + `sqlparse`** install via micropip (pure-Python).
+- **`flask` + `sqlparse`** are installed by micropip from the **vendored**
+  wheel closure (`wheels/`), not PyPI.
 - **Sync→async bridge (validated):** `db.py` is synchronous; PGlite is
   async. The shim's `cursor.execute` does `run_sync(pg.query(...))`. This
   needs JSPI (WASM stack-switching) and a JSPI-aware entry: the fetch-shim
@@ -52,6 +53,15 @@ The Pyodide-Studio demo is therefore Chromium-only for now (acceptable for
 a demo; an Atomics+worker bridge would lift that at the cost of COOP/COEP +
 a worker). `demo.html` itself (plain PGlite, no Pyodide) has no such
 constraint.
+
+**Self-hosted:** the build loads **nothing from a CDN at run time**.
+`vendor.sh` fetches Pyodide, the wheel closure, Graphviz
+(`@hpcc-js/wasm-graphviz`) and Font Awesome into the doc-root at build time,
+and `studio-boot.js` / `index.html` reference only local paths. The
+`test_fully_self_hosted` e2e boots with every off-origin request blocked to
+guarantee it. Because these are now redistributed, `build.sh` bundles their
+license texts under `licenses/` and writes `THIRD-PARTY.html` (linked from the
+footer); see the licensing summary there.
 
 `/api/kc/*` (external knowledge-compiler tools) return "no tools" in the
 browser — the registry-driven pickers already tolerate an empty CLI set.
