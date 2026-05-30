@@ -58,14 +58,28 @@ browser — the registry-driven pickers already tolerate an empty CLI set.
 
 ## Build & serve
 
-The browser build needs the matched `pglite.wasm` + `provsql.tar.gz` from
-[`../../wasm/`](../../wasm/README.md). Assembled doc-root:
+`build.sh` assembles the doc-root reproducibly. It copies the unmodified
+Studio frontend + backend from `../provsql_studio/`, derives the boot-shell
+`index.html`, and pulls in the two WebAssembly artifacts built by
+[`../../wasm/`](../../wasm/README.md) (the matched `@electric-sql/pglite`
+dist and `provsql.tar.gz`):
+
+```
+./build.sh --pglite <pglite-dist-dir> --provsql <provsql.tar.gz>
+# or:  PGLITE_DIST=<dir> PROVSQL_TARGZ=<file> ./build.sh
+python3 serve.py            # then open http://localhost:8089/
+```
+
+Tracked inputs are `studio-boot.js`, `psycopg_pglite.py`, `serve.py` and
+`build.sh`; everything `build.sh` writes is git-ignored. The assembled
+doc-root:
 
 ```
 studio/web/                  # this dir is itself the doc-root
-  index.html                 # entry: the shell + a <script> for studio-boot.js
+  index.html                 # GENERATED entry: boot-status bar + studio-boot.js
   studio-boot.js             # boots PGlite + Pyodide + the shims, injects app.js
   psycopg_pglite.py          # the fake psycopg / psycopg_pool / subprocess module
+  build.sh serve.py          # assembler + dev static server (tracked)
   app.js circuit.js          # copied from ../provsql_studio/static (unmodified)
   app.css colors_and_type.css fonts-face.css fonts/ img/
   pkg/                       # copy of ../provsql_studio/*.py (the unmodified backend)
