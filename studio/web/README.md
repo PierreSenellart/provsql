@@ -135,15 +135,20 @@ jump-to-circuit — must still resolve).
 
 ## CI/CD
 
-- The WASM artifacts are built and smoke-tested by
-  [`.github/workflows/wasm.yml`](../../.github/workflows/wasm.yml)
-  (`wasm` job, `workflow_dispatch`).
-- The web build's e2e is **Playwright against the static `demo.html`/UI**,
-  headless Chromium — a natural extension of the existing
-  `studio/tests/e2e/` suite (note the
-  `PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64` workaround for this
-  host, per `CLAUDE.local.md`). It runs against the served static dir, no
-  Postgres service required.
+- The `wasm` job in [`.github/workflows/wasm.yml`](../../.github/workflows/wasm.yml)
+  (`workflow_dispatch`) builds the WASM artifacts, then runs `build.sh` and
+  the **browser e2e** (`studio/tests/web/`) in headless Chromium, and uploads
+  the assembled `studio/web/` as an artifact.
+- The e2e is **pytest-playwright** driving the real frontend + Python backend
+  against the in-page PGlite (no PostgreSQL): it covers boot + JSPI, the
+  query → circuit → semiring path, the `/api` surface (where-provenance,
+  `/api/circuit`, `/api/kc/td`), the database list/switch, and Reset. The
+  fixtures skip if the doc-root isn't assembled. Run locally with:
+  ```
+  cd studio && pytest tests/web/        # needs build.sh to have run
+  ```
+  On this host add `PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64`
+  (Ubuntu 26.04 isn't an official Playwright platform; see `CLAUDE.local.md`).
 - Studio's own version stream and the PyPI release are unchanged; the
   browser build is published as static assets (e.g. alongside the docs
   site), pinned to a PGlite/ProvSQL pair.

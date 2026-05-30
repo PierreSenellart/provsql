@@ -98,3 +98,21 @@ jobs:
           PGLITE_DIST=$PWD/packages/pglite/dist \
           PROVSQL_TARBALL=$PG/provsql-wasm/provsql.tar.gz \
             node "$GITHUB_WORKSPACE/provsql/wasm/test-node.mjs"
+      - name: Assemble the browser doc-root
+        run: |
+          "$GITHUB_WORKSPACE/provsql/studio/web/build.sh" \
+            --pglite "$GITHUB_WORKSPACE/pglite/packages/pglite/dist" \
+            --provsql "$GITHUB_WORKSPACE/pglite/postgres-pglite/provsql-wasm/provsql.tar.gz"
+      - name: Browser e2e (headless Chromium, JSPI)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pytest pytest-playwright
+          python3 -m playwright install --with-deps chromium
+          cd "$GITHUB_WORKSPACE/provsql/studio"
+          python3 -m pytest tests/web/ -q
+      - name: Upload the assembled browser build
+        uses: actions/upload-artifact@v4
+        with:
+          name: provsql-studio-web
+          path: provsql/studio/web
+          retention-days: 7
