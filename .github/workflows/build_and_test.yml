@@ -118,3 +118,16 @@ jobs:
             }}
           build-args: |
             PROVSQL_VERSION=${{ steps.version.outputs.provsql_version }}
+      # Keep the Docker Hub overview in sync with docker/README.md. No extra
+      # gate: this runs whenever the image is pushed (master + tags), so the
+      # overview always describes the :latest that was just published.
+      # NOTE: editing the description needs a token allowed to do so; the
+      # push-scoped DOCKERHUB_TOKEN may 403 here, in which case use an
+      # org-admin / account PAT (a separate secret).
+      - uses: peter-evans/dockerhub-description@v4
+        with:
+          username: inriavalda
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: inriavalda/provsql
+          short-description: "(m-)semiring provenance & uncertainty management for PostgreSQL"
+          readme-filepath: ./docker/README.md
