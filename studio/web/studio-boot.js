@@ -236,4 +236,34 @@ await new Promise((resolve) => {
 // tool-backed methods on its own (every tool reports available:false).
 document.getElementById('tools-btn')?.remove()
 document.getElementById('tools-panel')?.remove()
+
+// WASM-only: a Reset button (the browser build persists every edit to
+// IndexedDB, so without this the only way back to the pristine data is the
+// browser's "clear site data"). It drops every tutorial / case-study database
+// and reloads; boot then re-creates and re-seeds them from casestudies/.
+{
+  const nav = document.querySelector('.wp-nav__meta')
+  if (nav) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.id = 'reset-data-btn'
+    btn.className = 'wp-nav__link'
+    btn.title = 'Reset every database to its original tutorial / case-study data (discards your changes)'
+    btn.innerHTML = '<i class="fas fa-eraser"></i> Reset'
+    btn.addEventListener('click', () => enqueue(async () => {
+      if (!confirm('Reset all databases to their original demo data? This discards every change you have made in the browser.')) return
+      btn.disabled = true
+      say('resetting databases…')
+      if (boot) boot.style.display = 'block'
+      try { if (activePg) await activePg.close() } catch (_e) { /* ignore */ }
+      activePg = null
+      const admin = await PGlite.create({ dataDir: DATADIR, extensions: EXT })
+      for (const m of manifest) await admin.exec(`DROP DATABASE IF EXISTS ${m.name}`)
+      await admin.close()                 // flush the drops before the reload
+      localStorage.removeItem('ps.activeDb')
+      location.reload()
+    }))
+    nav.appendChild(btn)
+  }
+}
 if (boot) boot.style.display = 'none'
