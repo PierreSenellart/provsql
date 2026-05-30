@@ -55,6 +55,24 @@ rm -rf fonts img
 cp -RL "$STATIC/fonts" ./fonts
 cp -RL "$STATIC/img"   ./img
 
+# 1b. Make the copied frontend path-portable. The canonical app.js uses two
+#     root-absolute paths that only resolve when the app is at the server
+#     root; rewrite the copies to be relative to the page so the build works
+#     unchanged under a sub-path (e.g. https://host/playground/) with no
+#     server rewriting. (index.html's mode anchors are handled in step 2.)
+python3 - app.js <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+subs = [("s.src = '/static/circuit.js'", "s.src = 'static/circuit.js'"),
+        ("window.location.href = '/circuit'", "window.location.href = '?mode=circuit'")]
+for old, new in subs:
+    if old not in s:
+        sys.exit("build.sh: app.js no longer contains %r (path-portability rewrite)" % old)
+    s = s.replace(old, new)
+open(p, "w", encoding="utf-8").write(s)
+PY
+
 # 2. Boot-shell index.html: swap the canonical direct <script src="app.js">
 #    (which would run before the in-page backend exists) for the boot-status
 #    bar plus the studio-boot module that brings PGlite + Pyodide up and then
@@ -75,6 +93,11 @@ boot = (
 )
 html = html.replace(needle, boot)
 html = html.replace('<body class="mode-where">', '<body class="mode-circuit">')
+# Path-portability: the mode-switch anchors are root-absolute (/circuit,
+# /where); make them relative ?mode= queries so they resolve under any base
+# path and need no server redirect.
+html = html.replace('href="/circuit"', 'href="?mode=circuit"')
+html = html.replace('href="/where"', 'href="?mode=where"')
 # The in-browser build is branded "ProvSQL Playground" (vs the installable
 # "ProvSQL Studio"); rebrand the title and the nav wordmark.
 html = html.replace("<title>ProvSQL Studio</title>", "<title>ProvSQL Playground</title>")
@@ -207,6 +230,26 @@ time. The components below are redistributed with it; full license texts are in
             "licenses apply.</p>\n</body></html>\n")
 print("  THIRD-PARTY.html +", len(licenses), "license texts")
 PY
+
+# 9. .htaccess for Apache static hosting (e.g. provsql.org/playground/). The
+#    build is path-portable, so no rewriting is required to function; this
+#    supplies (1) the WASM MIME type Apache does not serve by default (a wrong
+#    type breaks WebAssembly instantiation) and a couple of related types, and
+#    (2) belt-and-suspenders redirects for path-style mode URLs (internal
+#    navigation already uses ?mode=). RewriteRule paths are relative to this
+#    directory, so it works at any deploy prefix. Needs AllowOverride FileInfo.
+cat > .htaccess <<'HT'
+AddType application/wasm .wasm
+AddType text/javascript .mjs
+AddType application/octet-stream .data
+AddType application/gzip .tar.gz
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^circuit$ ?mode=circuit [R=302,L,QSA]
+  RewriteRule ^where$   ?mode=where   [R=302,L,QSA]
+</IfModule>
+HT
 
 echo "build.sh: assembled doc-root in $HERE"
 echo "  serve with:  python3 serve.py    (then open http://localhost:8089/)"

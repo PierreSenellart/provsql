@@ -84,6 +84,34 @@ def web_server() -> str:
     httpd.shutdown()
 
 
+@pytest.fixture(scope="session")
+def subpath_server() -> str:
+    """Serve the doc-root under /playground/ (root replies 404), so a test can
+    prove the build is path-portable: any leftover root-absolute dependency
+    would 404 and fail the boot. Mirrors a provsql.org/playground/ deploy."""
+    if not (WEB_ROOT / "index.html").exists() or not (WEB_ROOT / "pglite").is_dir():
+        pytest.skip("browser build not assembled; run studio/web/build.sh first")
+    prefix = "/playground"
+
+    class _Sub(_Handler):
+        def do_GET(self):
+            if self.path == prefix:
+                self.send_response(301)
+                self.send_header("Location", prefix + "/")
+                self.end_headers()
+                return
+            if self.path.startswith(prefix + "/") or self.path.startswith(prefix + "?"):
+                self.path = self.path[len(prefix):] or "/"
+                return super().do_GET()
+            self.send_error(404)   # outside the sub-tree: nothing should leak to root
+
+    port = _free_port()
+    httpd = _Server(("127.0.0.1", port), functools.partial(_Sub, directory=str(WEB_ROOT)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{port}{prefix}"
+    httpd.shutdown()
+
+
 def _boot(page, url: str) -> None:
     """Wait until studio-boot.js finishes (it hides the status bar) or fails
     (it turns the bar red and leaves it visible)."""

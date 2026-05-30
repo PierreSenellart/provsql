@@ -51,6 +51,30 @@ def test_fully_self_hosted(browser, web_server) -> None:
         ctx.close()
 
 
+def test_portable_under_subpath(browser, subpath_server) -> None:
+    """The build works unchanged under a sub-path (provsql.org/playground/):
+    boots with the root served as 404, loads circuit.js via its relative path,
+    and the mode anchors resolve under the sub-path."""
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    responses: dict[str, int] = {}
+    page.on("response", lambda r: responses.__setitem__(r.url, r.status))
+    try:
+        page.goto(subpath_server + "/", wait_until="domcontentloaded")
+        page.wait_for_selector("#studio-boot-status", state="hidden", timeout=240000)
+        # circuit.js was loaded from /playground/static/ (the relativised path).
+        circ = [u for u, s in responses.items()
+                if u.endswith("/static/circuit.js") and s == 200]
+        assert circ and "/playground/static/circuit.js" in circ[0], \
+            f"circuit.js not loaded under the sub-path: {circ}"
+        # The mode anchor is relative and resolves under /playground/.
+        where = page.locator("#modeswitch [data-mode='where']")
+        assert where.get_attribute("href") == "?mode=where"
+        assert "/playground/?mode=where" in where.evaluate("e => e.href")
+    finally:
+        ctx.close()
+
+
 def test_jspi_available(cs7_page: Page) -> None:
     """The whole approach relies on JSPI (Pyodide run_sync over async PGlite)."""
     assert cs7_page.evaluate("typeof WebAssembly.Suspending") == "function"

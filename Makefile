@@ -47,6 +47,19 @@ deploy: website
 	# -c hashes content so Jekyll's fresh mtimes don't trigger spurious transfers
 	rsync -avzcP website/_site/ provsql:/var/www/provsql/
 
+# Deploy ProvSQL Playground (the in-browser build) to provsql.org/playground/.
+# Assemble the doc-root first with studio/web/build.sh (it needs the wasm/
+# artifacts; see studio/web/README.md). The build is path-portable, so it
+# needs no server configuration beyond serving the files (the shipped
+# .htaccess adds the WASM MIME type and belt-and-suspenders mode redirects).
+deploy-playground:
+	@test -f studio/web/index.html && test -d studio/web/pglite || \
+	  { echo "studio/web is not assembled; run studio/web/build.sh first"; exit 1; }
+	rsync -avzcP --delete \
+	  --exclude=build.sh --exclude=vendor.sh --exclude=build-casestudies.py \
+	  --exclude=serve.py --exclude=README.md --exclude=.gitignore \
+	  studio/web/ provsql:/var/www/provsql/playground/
+
 studio:
 	cd studio && python3 -m provsql_studio
 
@@ -56,7 +69,7 @@ studio-lint:
 studio-test: studio-lint
 	cd studio && python3 -m pytest tests
 
-.PHONY: default test docs website deploy studio studio-lint studio-test tdkc provsql_migrate_mmap
+.PHONY: default test docs website deploy deploy-playground studio studio-lint studio-test tdkc provsql_migrate_mmap
 
 tdkc provsql_migrate_mmap:
 	$(MAKE) -f $(INTERNAL) $@ $(ARGS)
