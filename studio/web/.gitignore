@@ -1,5 +1,6 @@
-# Built/copied assets assembled for serving (see studio-boot.js + README) –
-# large binaries or copies of provsql_studio/static and the package sources.
+# Built/copied assets assembled for serving (see shell-boot.js / child-boot.js
+# + README) – large binaries or copies of provsql_studio/static and the
+# package sources.
 /pglite/
 /provsql.tar.gz
 /pkg/
@@ -23,3 +24,4 @@
 /THIRD-PARTY.html
 /.htaccess
 /app.html
+/ui.html

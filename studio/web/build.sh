@@ -5,13 +5,18 @@
 #
 #   1. the in-repo Studio frontend + backend (studio/provsql_studio/), copied
 #      unmodified -- the browser build shares the canonical assets; only
-#      index.html is transformed into the boot shell, and
+#      index.html is transformed into the UI page (ui.html), and
 #   2. the two WebAssembly artifacts produced by ../../wasm/: the matched
 #      @electric-sql/pglite dist (carrying the provsql-aware pglite.wasm) and
 #      provsql.tar.gz (the extension bundle).
 #
+# The UI runs inside an iframe owned by a tiny shell page (app.html) that holds
+# the warm WASM backend, so a mode / database switch does not re-initialise
+# PGlite + Pyodide; see README.md and shell-boot.js / child-boot.js.
+#
 # Everything this writes is git-ignored (see .gitignore); the tracked inputs
-# are studio-boot.js, psycopg_pglite.py, serve.py and this script.
+# are shell-boot.js, child-boot.js, landing.html, psycopg_pglite.py, serve.py
+# and this script.
 #
 # Usage:
 #   ./build.sh --pglite <pglite-dist-dir> --provsql <provsql.tar.gz>
@@ -81,27 +86,21 @@ for old, new in subs:
 open(p, "w", encoding="utf-8").write(s)
 PY
 
-# 2. Boot shell (app.html): swap the canonical direct <script src="app.js">
-#    (which would run before the in-page backend exists) for the boot-status
-#    bar plus the studio-boot module that brings PGlite + Pyodide up and then
-#    injects app.js. Default the body to circuit mode (studio-boot overrides
-#    it from ?mode= anyway, but this avoids a flash of the wrong mode). The
-#    landing page (index.html, below) is what bare visits hit; it gates on JSPI
-#    and links here.
-python3 - "$STATIC/index.html" app.html <<'PY'
+# 2. The UI page (ui.html): the canonical Studio frontend, transformed for the
+#    browser build. Swap the direct <script src="app.js"> (which would run
+#    before the bridged backend exists) for the child-boot module, which sets
+#    up the /api/* -> shell postMessage bridge and then injects app.js. Default
+#    the body to circuit mode (child-boot overrides it from ?mode= anyway, but
+#    this avoids a flash of the wrong mode). This page runs inside the shell's
+#    iframe; the boot-status bar lives in the shell (step 2c), not here.
+python3 - "$STATIC/index.html" ui.html <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 html = open(src, encoding="utf-8").read()
 needle = '<script src="app.js"></script>'
 if needle not in html:
     sys.exit("build.sh: canonical index.html no longer contains %r" % needle)
-boot = (
-    '<div id="studio-boot-status" style="position:fixed;top:0;left:0;right:0;'
-    'background:#0f1115;color:#d7dae0;font:13px ui-monospace,monospace;'
-    'padding:6px 12px;z-index:99999">loading ProvSQL Studio (WASM)…</div>\n'
-    '<script type="module" src="studio-boot.js"></script>'
-)
-html = html.replace(needle, boot)
+html = html.replace(needle, '<script type="module" src="child-boot.js"></script>')
 html = html.replace('<body class="mode-where">', '<body class="mode-circuit">')
 # Path-portability: the mode-switch anchors are root-absolute (/circuit,
 # /where); make them relative ?mode= queries so they resolve under any base
@@ -119,6 +118,32 @@ html = re.sub(r'https://use\.fontawesome\.com/releases/v[0-9.]+/css/all\.css',
               'fontawesome/css/all.min.css', html)
 open(dst, "w", encoding="utf-8").write(html)
 PY
+
+# 2c. The shell page (app.html): a tiny document that owns the warm WASM backend
+#     (shell-boot.js) and mounts ui.html in a full-viewport iframe. It never
+#     reloads, so a mode / database switch reloads only the iframe and keeps
+#     PGlite + Pyodide live. The landing page (index.html, below) is what bare
+#     visits hit; it gates on JSPI and links here. Static content, written
+#     verbatim.
+cat > app.html <<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProvSQL Playground</title>
+<link rel="icon" href="img/favicon.ico">
+<style>
+  html, body { margin: 0; height: 100%; background: #0f1115 }
+  #studio-ui { position: fixed; inset: 0; width: 100%; height: 100%; border: 0 }
+</style>
+</head>
+<body>
+<div id="studio-boot-status" style="position:fixed;top:0;left:0;right:0;background:#0f1115;color:#d7dae0;font:13px ui-monospace,monospace;padding:6px 12px;z-index:99999">loading ProvSQL Studio (WASM)…</div>
+<script type="module" src="shell-boot.js"></script>
+</body>
+</html>
+HTML
 
 # 2b. The landing page (index.html, what bare visits hit): explains the JSPI
 #     requirement + browser support, and forwards shared deep links to app.html

@@ -26,15 +26,30 @@ stable:
   backed by an in-page PGlite;
 * a fake ``subprocess`` (in the same file) that routes ``dot`` to a WASM
   Graphviz;
-* a ``fetch`` → Flask ``test_client`` bridge and the boot sequence
-  (``studio-boot.js``).
+* a ``fetch`` → Flask ``test_client`` bridge, split across the shell /
+  iframe boot pair (``shell-boot.js`` / ``child-boot.js``, below).
+
+Shell + iframe (keeping the backend warm)
+-----------------------------------------
+
+The backend (PGlite + Pyodide) is expensive to instantiate, and the
+unmodified frontend reloads the page to switch mode or database. So the
+page is two same-origin documents: a **shell** (``app.html``) that owns the
+warm backend and never reloads, and an **iframe** (``ui.html``) that runs
+the unmodified Studio UI. The UI's ``/api/*`` fetches are forwarded to the
+shell over ``postMessage``. A **mode switch** then reloads only the iframe
+(≈140 KB of JS) and a **database switch** reopens just PGlite (the shell
+handles ``POST /api/conn`` in place), leaving Pyodide and Flask live across
+both. JSPI runs only in the shell (the top frame); the iframe needs none.
+Each iframe load tags its messages with an epoch, so a reply that straddles
+a reload cannot resolve the wrong request in the fresh child.
 
 Architecture
 ------------
 
 .. code-block:: text
 
-   static/app.js ─fetch('/api/*')→ window.fetch override (JS)
+   ui.html app.js ─fetch('/api/*')→ child-boot bridge ─postMessage→ shell
                                     │  enters Python via PyProxy.callPromising()
                                     ▼
       Pyodide:  app.py (Flask app.test_client) → db.py → fake psycopg
@@ -57,10 +72,11 @@ Architecture
   closure.
 * **JSPI** (WebAssembly JavaScript Promise Integration) bridges the
   synchronous ``db.py`` to the asynchronous PGlite: the shim's
-  ``cursor.execute`` does ``run_sync(pg.query(...))``, and the fetch
-  bridge enters Python via ``PyProxy.callPromising()``. Backend calls are
-  serialised, because the whole app shares one PGlite connection while
-  the Flask code assumes a private connection per request.
+  ``cursor.execute`` does ``run_sync(pg.query(...))``, and the shell
+  enters Python via ``PyProxy.callPromising()``. Backend calls are
+  serialised on one chain, because the whole app shares one PGlite
+  connection while the Flask code assumes a private one per request;
+  ``switchDb`` and Reset run on that same chain.
 * **Graphviz** (``@hpcc-js/wasm-graphviz``) replaces the ``dot``
   subprocess the circuit/tree-decomposition renderers shell out to.
 * External knowledge compilers (d4, c2d, weightmc…) cannot run (no
@@ -86,12 +102,13 @@ Self-hosted and path-portable
 The build loads **nothing from a CDN at run time**: ``vendor.sh`` fetches
 Pyodide, the wheels, Graphviz and Font Awesome into the doc-root at build
 time, and ``build.sh`` rewrites the few root-absolute paths in the copied
-``app.js`` to relative ones. The result is a pure static bundle that runs
-unchanged at a server root or under a sub-path (``/playground/``), needs
-no rewrite rules, and works over ``file://``. A small ``index.html``
-landing page gates on JSPI (browser support, the Firefox flag) and links
-to the app (``app.html``); shared deep links
-(``?mode=`` / ``?db=`` / ``?q=``) forward straight to the app.
+``app.js`` to relative ones. The boot modules resolve sibling assets
+against their own module URL and the shell mounts ``ui.html`` by a relative
+URL, so the result is a pure static bundle that runs unchanged at a server
+root or under a sub-path (``/playground/``), needs no rewrite rules, and
+works over ``file://``. A small ``index.html`` landing page gates on JSPI
+(browser support, the Firefox flag) and links to the shell (``app.html``);
+shared deep links (``?mode=`` / ``?db=`` / ``?q=``) forward straight to it.
 
 Build, test, deploy
 -------------------

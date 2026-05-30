@@ -68,15 +68,3 @@ Each plan document follows a consistent layout:
   alongside or after the first PyPI release (`studio-v1.0.0`):
   release plumbing, CI, Docker swap-over, in-app polish, and the
   Contributions / Time-travel modes scheduled for later versions.
-- [`playground-warm-backend.md`](playground-warm-backend.md) : design
-  for keeping the browser Playground's WASM backend (PGlite + Pyodide)
-  alive across mode / database switches, which today each reload the
-  whole page and re-initialise everything. Splits the single document
-  into a shell page that owns the warm backend and an iframe running the
-  unmodified Studio UI, bridging `/api/*` over `postMessage`; a mode
-  switch then reloads only the iframe and a DB switch reopens just
-  PGlite, keeping Pyodide / Flask warm (and retiring the `/api/conn`
-  IndexedDB flush-race workaround). Includes the file-by-file touch
-  list, the e2e iframe refactor, risks, and why the shell beats a
-  SharedWorker or an SPA-intercept. Composes with the shipped cheap win
-  (manifest-signature skip of the bootstrap PGlite open).
