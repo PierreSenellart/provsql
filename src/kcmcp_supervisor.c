@@ -159,6 +159,14 @@ PGDLLEXPORT void provsql_kcmcp_worker(Datum ignored);
 
 void provsql_kcmcp_worker(Datum ignored)
 {
+#ifdef PROVSQL_INPROCESS_STORE
+  /* No background workers in the single-process build; this entry point is
+     never registered (see RegisterProvSQLKCMCPWorker).  Kept as an empty
+     symbol so nothing here imports postmaster-only globals
+     (PostPortNumber, the latch/bgworker API) that the WASM host does not
+     export. */
+  (void) ignored;
+#else
   pid_t child = -1;
   char endpoint[256];
 
@@ -246,10 +254,12 @@ void provsql_kcmcp_worker(Datum ignored)
   if (child > 0)
     kill_server(child);
   publish_endpoint("");
+#endif /* PROVSQL_INPROCESS_STORE */
 }
 
 void RegisterProvSQLKCMCPWorker(void)
 {
+#ifndef PROVSQL_INPROCESS_STORE
   BackgroundWorker worker;
   memset(&worker, 0, sizeof(worker));
   snprintf(worker.bgw_name, BGW_MAXLEN, "ProvSQL KCMCP Supervisor");
@@ -264,4 +274,5 @@ void RegisterProvSQLKCMCPWorker(void)
   worker.bgw_main_arg = (Datum) 0;
   worker.bgw_notify_pid = 0;
   RegisterBackgroundWorker(&worker);
+#endif /* PROVSQL_INPROCESS_STORE */
 }

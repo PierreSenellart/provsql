@@ -526,9 +526,15 @@ Ship-when ordering; each milestone is independently demonstrable.
       probability_benchmark, graph-easy view_circuit, tool_search_path) —
       all 164 others pass, confirming probability falls back to the
       in-process tree-decomposition compiler / Monte Carlo / safe-query.
-- [ ] **M4 — first WASM build:** §8 + §6-phase1 (Boost built for WASM);
-      `CREATE EXTENSION provsql` in PGlite; `add_provenance`, a
-      provenance SELECT, `sr_boolean`/`sr_counting`, `view_circuit` DOT.
+- [~] **M4 — first WASM build:** *compiles + links* (done); *loads* needs
+      a matched pglite build (in progress). All 58 extension objects
+      compile to WASM and link into a `provsql.so` side module (no
+      `libboost_serialization` thanks to the §6 boost-drop). Loading into
+      *stock npm* PGlite is blocked because that build (`MAIN_MODULE=2`,
+      fixed export set) does not export the PG internals provsql imports
+      (first blocker after the fixes below: `DataDir`). See Implementation
+      observations for the build recipe, the fixes found, and the
+      matched-build requirement.
 - [ ] **M5 — probability in-browser:** tree-dec compiler + Monte Carlo +
       Shapley + continuous-RV evaluators verified client-side.
 - [ ] **M6 — Studio web build:** §9 static Studio over in-page PGlite;
@@ -576,6 +582,58 @@ client-side, no server — already a teaching artefact before Studio lands.
   explicit in docs about exact-vs-Monte-Carlo and the WS-KCMCP escape.
 
 ## Implementation observations
+
+### M4 WASM build — what was established (and the remaining blocker)
+
+The full extension **compiles and links to WebAssembly**. Recipe (rootless
+podman, the pinned `pglite-builder` image, the M0-built WASM Postgres tree
+in `dist/`, host Boost headers mounted at `/boostinc/boost`):
+
+- compile each `src/*.c` with `emcc` and each `src/*.cpp` (minus the four
+  tdkc/migrate-only files) with `em++ -std=c++17`, using the same
+  `PGLITE_CFLAGS` the Postgres core was built with, plus
+  `-I<dist server headers> -I/boostinc -I. -Isrc`;
+- link the side module: `em++ <PGLITE_CFLAGS> -sSIDE_MODULE=1
+  -sSUPPORT_LONGJMP=emscripten -Wl,--whole-archive -lc++ -lc++abi
+  -Wl,--no-whole-archive *.o -o provsql.so`.
+
+Three fixes were required to get there:
+
+1. **`pglite` Postgres disables `inline` for C, which breaks libc++.**
+   Its emscripten `pg_config_os.h` defines `PG_FORCE_DISABLE_INLINE`, so
+   `c.h` does `#define inline` (empty). For C that is harmless; for C++ it
+   turns libc++'s `inline namespace __2` into a plain namespace, so
+   `std::__declval` / `std::filesystem` / … resolve wrong and every C++
+   TU fails. Fix in `c.h`: scope the disable to C —
+   `#if defined(PG_FORCE_DISABLE_INLINE) && !defined(__cplusplus)`. This
+   belongs upstream in `postgres-pglite`'s emscripten template (it blocks
+   *any* C++ extension), but for the build it is a one-line patch to the
+   installed header.
+2. **The C++ runtime must be bundled into the side module.** pglite's main
+   module is pure C (no libc++), so C++ runtime symbols (e.g. the
+   `std::bad_variant_access` vtable) cannot be deferred to it; whole-archive
+   `-lc++ -lc++abi` into `provsql.so` (≈ 2.3 MB).
+3. **The KCMCP supervisor imported postmaster-only globals.** Its bgworker
+   entry (`PostPortNumber`, the latch/bgworker API) is dead under the flag
+   but was still compiled, so the side module imported symbols the host
+   does not export. Stubbed `provsql_kcmcp_worker` /
+   `RegisterProvSQLKCMCPWorker` under `PROVSQL_INPROCESS_STORE` (never
+   registered there anyway); the static helpers then dead-code-eliminate.
+
+**Remaining blocker — matched pglite build.** Stock npm `@electric-sql/
+pglite` is linked `MAIN_MODULE=2` with an export set sized for *its* own
+bundled extensions, so it does not export PG internals that provsql uses
+in live code (currently `DataDir`, used to place the per-database mmap
+files; likely a few more behind it). The designed pglite mechanism handles
+this: its build collects each bundled extension's imports and adds them to
+the main module's export list. So the path to a loadable provsql is to
+build provsql **inside** the pglite build (under
+`postgres-pglite/.../other_extensions`, via the PGXS `dist` rule that emits
+the imports file) and run the full `build-pglite.sh`, producing a matched
+`pglite.wasm` + `provsql.tar.gz`. That is the natural "ship a
+pglite-with-provsql" artifact and the next step for M4. (Loading the
+already-compiled `provsql.so` into *stock* npm pglite is not possible
+without rebuilding its main module.)
 
 ### M2 buffer storage — what was established
 
