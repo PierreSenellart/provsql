@@ -91,7 +91,10 @@ def split_statements(sql):
         elif bc:
             buf.append(c)
             if two == "*/":
-                buf.append("/"); i += 2; bc = False; continue
+                buf.append("/")
+                i += 2
+                bc = False
+                continue
         elif sq:
             buf.append(c)
             if c == "'":
@@ -102,20 +105,34 @@ def split_statements(sql):
                 dq = False
         elif dollar is not None:
             if sql.startswith(dollar, i):
-                buf.append(dollar); i += len(dollar); dollar = None; continue
+                buf.append(dollar)
+                i += len(dollar)
+                dollar = None
+                continue
             buf.append(c)
         elif two == "--":
-            buf.append(two); i += 2; lc = True; continue
+            buf.append(two)
+            i += 2
+            lc = True
+            continue
         elif two == "/*":
-            buf.append(two); i += 2; bc = True; continue
+            buf.append(two)
+            i += 2
+            bc = True
+            continue
         elif c == "'":
-            buf.append(c); sq = True
+            buf.append(c)
+            sq = True
         elif c == '"':
-            buf.append(c); dq = True
+            buf.append(c)
+            dq = True
         elif c == "$":
             m = re.match(r"\$[A-Za-z_0-9]*\$", sql[i:])
             if m:
-                dollar = m.group(0); buf.append(dollar); i += len(dollar); continue
+                dollar = m.group(0)
+                buf.append(dollar)
+                i += len(dollar)
+                continue
             buf.append(c)
         elif c == ";":
             s = "".join(buf).strip()

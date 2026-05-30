@@ -18,37 +18,30 @@ on:
 
 jobs:
   inprocess-store:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    name: in-process store (serial)
     runs-on: ubuntu-latest
+    # Same PostgreSQL-install path as the main build_and_test Linux job: the
+    # pgxn-tools image + pg-start handle the PGDG apt setup cleanly (a raw
+    # apt-get install hits a postgresql-common version conflict on the runner).
+    container: pgxn/pgxn-tools
     steps:
-      - uses: actions/checkout@v4
-      - name: Install PostgreSQL + Boost
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql postgresql-server-dev-all \
-            libboost-dev libboost-serialization-dev uuid-dev
+      - run: pg-start 17 libboost-dev libboost-serialization-dev unzip uuid-dev
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+          fetch-depth: 0
       - name: Build with PROVSQL_INPROCESS_STORE and install
-        run: |
-          make -j$(nproc) PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g'
-          sudo make install
-      - name: Configure a cluster (preloaded; no shared memory / bgworker)
-        run: |
-          PGBIN=$(pg_config --bindir)
-          sudo -u postgres "$PGBIN/initdb" -D "$RUNNER_TEMP/pgdata" -U runner --locale=C --encoding=UTF8
-          {
-            echo "lc_messages='C'"
-            echo "shared_preload_libraries='provsql'"
-          } | sudo -u postgres tee -a "$RUNNER_TEMP/pgdata/postgresql.conf"
-          sudo -u postgres "$PGBIN/pg_ctl" -D "$RUNNER_TEMP/pgdata" \
-            -o "-p 55432 -k /tmp -c listen_addresses=''" -l "$RUNNER_TEMP/pg.log" -w start
-      - name: Run the suite serially (one test per line)
+        run: make -j$(nproc) PG_CPPFLAGS='-DPROVSQL_INPROCESS_STORE -O0 -g' && make install
+      - name: Run the suite serially (the in-process store is single-backend)
         run: |
           make test/schedule
           awk '/^test:/{$1="";n=split($0,a," ");for(i=1;i<=n;i++)if(a[i]!="")print "test: "a[i];next}{print}' \
             test/schedule > /tmp/schedule.serial
-          OUT=$(mktemp -d)
-          make installcheck \
-            REGRESS_OPTS="--load-extension=plpgsql --inputdir=test --outputdir=$OUT --schedule /tmp/schedule.serial --dbname=contrib_regression" \
-            EXTRA_REGRESS_OPTS="--host=/tmp --port=55432 --user=runner --max-connections=1" \
+          OUT=$(mktemp -d /tmp/tmp.provsqlXXXX)
+          PGUSER=postgres make installcheck PGUSER=postgres \
+            REGRESS_OPTS="--load-extension=plpgsql --inputdir=test --outputdir=$OUT --schedule /tmp/schedule.serial" \
+            EXTRA_REGRESS_OPTS="--max-connections=1" \
           || { cat "$OUT"/regression.diffs; exit 1; }
 
   # Heavy and opt-in. Reproduces the browser build end to end; the exact

@@ -1,4 +1,5 @@
-import http.server, socketserver
+import http.server
+import socketserver
 
 # Dev server for the static browser build. It does nothing a plain static
 # host (e.g. Apache, no CGI) could not: it serves files and issues two fixed
@@ -38,4 +39,5 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 with Server(('0.0.0.0', 8089), H) as httpd:
-    print('serving on 0.0.0.0:8089'); httpd.serve_forever()
+    print('serving on 0.0.0.0:8089')
+    httpd.serve_forever()
