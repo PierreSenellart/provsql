@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "MappedRegion.h"
+
 extern "C" {
 #include "provsql_utils.h"
 }
@@ -50,19 +52,13 @@ struct data_t {
   T d[];                      ///< Flexible array of elements
 };
 
-int fd;        ///< File descriptor of the backing mmap file
-data_t *data;  ///< Pointer to the memory-mapped data header
+MappedRegion region;  ///< Backing storage (shared mmap, or heap buffer)
+data_t *data;         ///< Typed view of @c region.base()
 
 /** @brief Initial number of element slots allocated. */
 static constexpr unsigned STARTING_CAPACITY=(1u << 16);
 
-/**
- * @brief Map @p length bytes from the backing file.
- * @param length     Number of bytes to map.
- * @param read_only  If @c true, map read-only.
- */
-void mmap(size_t length, bool read_only);
-/** @brief Double the backing file and remap. */
+/** @brief Double the backing region and refresh @c data. */
 void grow();
 /**
  * @brief Unused overload kept for interface compatibility.
@@ -115,7 +111,7 @@ inline unsigned long nbElements() const {
   return data->nb_elements;
 }
 
-/** @brief Flush dirty pages to the backing file with @c msync(). */
+/** @brief Flush the backing region to its file (@c MappedRegion::sync()). */
 void sync();
 };
 

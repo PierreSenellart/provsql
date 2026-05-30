@@ -8,10 +8,9 @@
  * - @c ~MMappedUUIDHashTable(): sync and unmap.
  * - @c add(): insert a UUID and assign the next sequential integer.
  * - @c operator[](): look up an integer by UUID.
- * - @c sync(): flush dirty pages with @c msync().
+ * - @c sync(): flush the backing region (@c MappedRegion::sync()).
  *
  * Internal helpers:
- * - @c mmap(): map (or remap) @p length bytes of the backing file.
  * - @c grow(): double the table size and rehash.
  * - @c find(): locate the slot index for a UUID (or @c NOTHING if absent).
  * - @c set(): write a key-value pair into the table.
@@ -34,23 +33,16 @@
 
 MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename, bool read_only, uint64_t magic_value)
 {
-  fd=open(filename, O_CREAT|(read_only?O_RDONLY:O_RDWR), 0600); // flawfinder: ignore
-  if(fd==-1)
-    throw std::runtime_error(strerror(errno));
+  auto size = region.openFile(filename, read_only);
+  bool empty = (size == 0);
 
-  auto size = lseek(fd, 0, SEEK_END);
-  lseek(fd, 0, SEEK_SET);
-
-  bool empty=false;
-
-  if(size==0) {
-    empty=true;
-    size=table_t::sizeForLogSize(STARTING_LOG_SIZE);
-    if(ftruncate(fd, size))
-      throw std::runtime_error(strerror(errno));
+  if(empty) {
+    size = table_t::sizeForLogSize(STARTING_LOG_SIZE);
+    region.resizeFile(size);
   }
 
-  mmap(size, read_only);
+  region.map(size);
+  table = reinterpret_cast<table_t *>(region.base());
 
   if(empty) {
     table->magic     = magic_value;
@@ -74,23 +66,8 @@ MMappedUUIDHashTable::MMappedUUIDHashTable(const char *filename, bool read_only,
   }
 }
 
-void MMappedUUIDHashTable::mmap(size_t length, bool read_only)
-{
-  table = reinterpret_cast<table_t *>(::mmap(
-                                        NULL,
-                                        length,
-                                        PROT_READ|(read_only?0:PROT_WRITE),
-                                        MAP_SHARED,
-                                        fd,
-                                        0));
-  if(table == MAP_FAILED)
-    throw std::runtime_error(strerror(errno));
-}
-
 void MMappedUUIDHashTable::grow()
 {
-  sync();
-
   std::vector<value_t> elements;
   elements.reserve(table->nb_elements);
   for(unsigned long i=0; i<table->capacity(); ++i)
@@ -98,12 +75,8 @@ void MMappedUUIDHashTable::grow()
       elements.push_back(table->t[i]);
 
   auto new_log_size = table->log_size+1;
-  munmap(table, table_t::sizeForLogSize(table->log_size));
-
-  auto new_size = table_t::sizeForLogSize(new_log_size);
-  if(ftruncate(fd, new_size))
-    throw std::runtime_error(strerror(errno));
-  mmap(new_size, false);
+  region.remap(table_t::sizeForLogSize(new_log_size));
+  table = reinterpret_cast<table_t *>(region.base());
 
   table->log_size = new_log_size;
   for(unsigned long i=0; i<table->capacity(); ++i) {
@@ -115,8 +88,7 @@ void MMappedUUIDHashTable::grow()
 
 MMappedUUIDHashTable::~MMappedUUIDHashTable()
 {
-  munmap(table, table_t::sizeForLogSize(table->log_size));
-  close(fd);
+  region.close();
 }
 
 unsigned long MMappedUUIDHashTable::find(pg_uuid_t u) const
@@ -161,5 +133,5 @@ void MMappedUUIDHashTable::set(pg_uuid_t u, unsigned long i)
 
 void MMappedUUIDHashTable::sync()
 {
-  msync(table, table_t::sizeForLogSize(table->log_size), MS_SYNC);
+  region.sync();
 }

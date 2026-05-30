@@ -28,6 +28,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "MappedRegion.h"
+
 extern "C" {
 #include "provsql_utils.h"
 }
@@ -91,8 +93,8 @@ struct table_t {
   value_t t[];                ///< Flexible array of hash-table slots
 };
 
-int fd;          ///< File descriptor of the backing mmap file
-table_t *table;  ///< Pointer to the memory-mapped table header
+MappedRegion region;  ///< Backing storage (shared mmap, or heap buffer)
+table_t *table;       ///< Typed view of @c region.base()
 
 /** @brief Initial log2 capacity (65 536 slots). */
 static constexpr unsigned STARTING_LOG_SIZE=16;
@@ -117,12 +119,6 @@ inline unsigned long hash(pg_uuid_t u) const {
  * @return   Slot index, or @c NOTHING if @p u is not in the table.
  */
 unsigned long find(pg_uuid_t u) const;
-/**
- * @brief Map @p length bytes from the backing file (read-write or read-only).
- * @param length     Number of bytes to map.
- * @param read_only  If @c true, map read-only.
- */
-void mmap(size_t length, bool read_only);
 /** @brief Double the table capacity and rehash all existing entries. */
 void grow();
 /**
@@ -177,7 +173,7 @@ inline unsigned long nbElements() const {
 }
 
 /**
- * @brief Flush dirty pages to the backing file with @c msync().
+ * @brief Flush the backing region to its file (@c MappedRegion::sync()).
  */
 void sync();
 };

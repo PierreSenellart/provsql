@@ -500,8 +500,16 @@ Ship-when ordering; each milestone is independently demonstrable.
       preloaded by absolute path) **when run serially**
       (`--max-connections=1`); see Implementation observations for why
       serial is required and the validation recipe.
-- [ ] **M2 — buffer storage (native):** §3 buffer+write-back backend;
-      re-run `make test` green; add CI job for the variant (§5).
+- [x] **M2 — buffer storage (native): done.** §3 `MappedRegion`
+      abstraction (shared-mmap backend native; `malloc`+`pread`/`pwrite`
+      heap-buffer backend under the flag); `MMappedVector` and
+      `MMappedUUIDHashTable` compose it. Per-backend `on_proc_exit`
+      write-back persists the buffer so a later backend (and PGlite
+      reload) sees it. Native build unchanged: 176/176 in parallel. Flag
+      build: 176/176 with a **fully-serial schedule** (see Implementation
+      observations — the heap-buffer store is single-backend, and
+      `--max-connections=1` alone does not serialise pg_regress parallel
+      groups tightly enough; one test per line does).
 - [ ] **M3 — guards:** §4 process/socket paths compiled out; confirm
       probability via tree-dec / MC / safe-query still green natively.
 - [ ] **M4 — first WASM build:** §8 + §6-phase1 (Boost built for WASM);
@@ -544,6 +552,46 @@ client-side, no server — already a teaching artefact before Studio lands.
   explicit in docs about exact-vs-Monte-Carlo and the WS-KCMCP escape.
 
 ## Implementation observations
+
+### M2 buffer storage — what was established
+
+- **One storage primitive, two backends.** `src/MappedRegion.h` owns the
+  file descriptor + base pointer + length, with `map`/`remap`/`sync`/
+  `close`.  Native: `mmap(MAP_SHARED)` + `msync` (unchanged behaviour,
+  176/176 in parallel).  Flag: a `malloc` buffer loaded with `pread` and
+  written back with `pwrite`.  `MMappedVector` and `MMappedUUIDHashTable`
+  hold a `MappedRegion` and a typed view of `region.base()`, refreshed
+  after each `remap` (the mmap backend already moved the pointer on grow,
+  so neither class held stale pointers — the realloc backend is safe for
+  the same reason).
+- **`resizeFile` is a no-op under the flag — and that matters.** The
+  mmap backend must `ftruncate` the file to the mapped size; the buffer
+  backend must NOT.  If it pre-sized the file, a fresh file that is never
+  synced (a backend that `abort()`s before write-back — e.g. an uncaught
+  C++ exception, which skips `on_proc_exit`) would persist full-size with
+  a zero header and fail magic validation on the next open, cascading
+  aborts.  Leaving the file unsized until the first `sync()` means an
+  unsynced fresh file stays empty on disk and is re-initialised cleanly.
+- **Write-back must be armed per-backend, not at `_PG_init`.** The store
+  syncs to its files from an `on_proc_exit` hook so a later backend (and
+  PGlite reload-from-IndexedDB) sees the data.  Registering that hook in
+  `_PG_init` does NOT work under `shared_preload_libraries`: `_PG_init`
+  runs in the postmaster and a forked backend resets the inherited
+  `on_proc_exit` list.  It is registered lazily in `provsql_inproc_send`
+  on the backend's first store access instead.
+- **Native flag testing requires a fully-serial schedule.** The
+  heap-buffer store is per-backend and single-writer; it cannot tolerate
+  concurrent backends (each would read/grow/write its own copy and lose
+  the others' updates).  pg_regress parallel groups break it, and
+  `--max-connections=1` does not serialise them tightly enough.  Run with
+  a schedule that has one test per line:
+  `awk '/^test:/{$1="";n=split($0,a," ");for(i=1;i<=n;i++)if(a[i]!="")print "test: "a[i];next}{print}' test/schedule > schedule.serial`
+  then `make installcheck REGRESS_OPTS="--load-extension=plpgsql
+  --inputdir=test --outputdir=<dir> --schedule schedule.serial
+  --dbname=contrib_regression" EXTRA_REGRESS_OPTS="--host=… --port=…
+  --user=… --max-connections=1"`.  Keep `--dbname=contrib_regression`
+  (some tests `\c` to it by name).  This is a native-test artifact only:
+  the single-process WASM target never has a second backend.
 
 ### M1 in-process transport — what was established
 

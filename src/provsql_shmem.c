@@ -36,10 +36,24 @@ provsqlSharedState *provsql_shared_state = NULL;
 
 static provsqlSharedState inproc_state;
 
+/* Write the heap-backed circuit store back to its files before the backend
+   exits, so a later backend (and PGlite's persistence) sees the data.  The
+   shared-mmap build does not need this: the kernel flushes the mapping. */
+static void provsql_inproc_atexit(int code, Datum arg)
+{
+  (void) code;
+  (void) arg;
+  destroy_provsql_mmap();
+}
+
 void provsql_inproc_init(void)
 {
   memset(&inproc_state, 0, sizeof(inproc_state));
   provsql_shared_state = &inproc_state;
+  /* The write-back hook is registered lazily in provsql_inproc_send, not
+     here: _PG_init runs in the postmaster under shared_preload_libraries,
+     and a forked backend resets the inherited on_proc_exit list, so a hook
+     registered now would never fire in the backend that owns the data. */
 }
 
 bool provsql_fifo_push(provsql_fifo *f, const void *src, size_t n)
@@ -79,8 +93,16 @@ bool provsql_fifo_pop(provsql_fifo *f, void *dst, size_t n)
 
 bool provsql_inproc_send(const char *buf, size_t len)
 {
+  static bool atexit_registered = false;
   char c;
   Oid db_oid;
+
+  /* Arm the write-back hook in this backend on its first store access
+     (see provsql_inproc_init for why this cannot be done at _PG_init). */
+  if(!atexit_registered) {
+    on_proc_exit(provsql_inproc_atexit, (Datum) 0);
+    atexit_registered = true;
+  }
 
   provsql_fifo_push(&provsql_shared_state->req, buf, len);
 
