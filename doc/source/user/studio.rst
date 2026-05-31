@@ -374,10 +374,12 @@ as ``(no compatible mappings : expected …)`` in the picker.
 
 :guilabel:`Run` reports the result inline along with the runtime. For an
 approximate method the strip also shows the ``(ε, δ)`` error bound ProvSQL
-reports for that run: *relative* (a ``1 ± ε`` factor) for ``karp-luby`` and the
-weighted counters, *additive* (a ``Hoeffding`` absolute bound,
+reports for that run: a *relative* error bound (the estimate is within a factor
+``1 ± ε`` of the true probability) for ``karp-luby`` and the weighted counters,
+shown as ``relative error ≤ 10%, prob ≥ 95%``; and an *additive* bound (a
+``Hoeffding`` absolute error,
 `<https://en.wikipedia.org/wiki/Hoeffding%27s_inequality>`_) for
-``monte-carlo``; for example ``± 10% relative, prob ≥ 95%``.
+``monte-carlo``, shown as ``± 0.0136 absolute, prob ≥ 95%``.
 :guilabel:`Clear` wipes the result so a verbose Why or Formula output does
 not obscure the canvas; :guilabel:`Copy` writes the just-rendered payload
 (with full precision for probability, regardless of the rounded

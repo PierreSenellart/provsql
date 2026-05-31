@@ -4110,10 +4110,12 @@
   }
 
   // Render a parsed guarantee as a short bound string for the #eval-bound
-  // slot, e.g. "(± 10% relative, prob ≥ 95%)" or "(± 0.0136 absolute,
-  // prob ≥ 95%)". 'relative' is a multiplicative (1±ε) factor on the true
-  // probability; 'additive' is an absolute error. δ (when present) gives the
-  // confidence 1−δ; the optional tool name is appended for the wmc counters.
+  // slot, e.g. "(relative error ≤ 10%, prob ≥ 95%)" or "(± 0.0136 absolute,
+  // prob ≥ 95%)". 'relative' is a multiplicative guarantee (the estimate is
+  // within a factor 1±ε of the true probability), so it reads as a relative
+  // error bound, not a "± value"; 'additive' is an absolute error. δ (when
+  // present) gives the confidence 1−δ; the optional tool name is appended for
+  // the wmc counters.
   function renderGuarantee(kv) {
     if (!kv) return '';
     const eps = parseFloat(kv.eps);
@@ -4124,7 +4126,7 @@
       : '';
     let body;
     if (kv.kind === 'relative')
-      body = `± ${(100 * eps).toFixed(eps < 0.01 ? 2 : 1)}% relative`;
+      body = `relative error ≤ ${(100 * eps).toFixed(eps < 0.01 ? 2 : 1)}%`;
     else if (kv.kind === 'additive')
       body = `± ${eps.toFixed(eps < 0.01 ? 4 : 3)} absolute`;
     else return '';
