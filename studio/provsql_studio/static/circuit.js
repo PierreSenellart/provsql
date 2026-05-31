@@ -2339,16 +2339,20 @@
       ?.addEventListener('change', syncControls);
     run.addEventListener('click', runEvaluation);
     // Enter inside a text / number argument field fires Run, matching
-    // the form-submit convention.  Skip <select> controls (e.g. the
-    // compilation method picker) where Enter natively confirms the
-    // current option rather than committing the surrounding form.
+    // the form-submit convention.  Descend into container controls (e.g.
+    // the approximate-options group and the "Condition on" group) so their
+    // inner inputs are covered too.  Skip <select> controls where Enter
+    // natively confirms the current option rather than committing the form.
     for (const ctrl of argControls) {
-      if (ctrl.tagName !== 'INPUT') continue;
-      ctrl.addEventListener('keydown', (ev) => {
-        if (ev.key !== 'Enter') return;
-        ev.preventDefault();
-        if (!run.disabled) runEvaluation();
-      });
+      const inputs = ctrl.tagName === 'INPUT'
+        ? [ctrl] : ctrl.querySelectorAll('input');
+      for (const inp of inputs) {
+        inp.addEventListener('keydown', (ev) => {
+          if (ev.key !== 'Enter') return;
+          ev.preventDefault();
+          if (!run.disabled) runEvaluation();
+        });
+      }
     }
     // Drop the auto-preset marker as soon as the user types into the
     // "Condition on" input so a subsequent pin change within the same
