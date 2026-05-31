@@ -172,6 +172,26 @@ bool parse_double_full(const string &v, double &out)
 }
 
 /**
+ * @brief Validate and read @c epsilon / @c delta from the parsed args.
+ *
+ * Shared by every approximate method (@c monte-carlo, @c karp-luby,
+ * @c weightmc / @c wmc) so the keys, the @c eps alias, and the
+ * @c epsilon in (0,1] / @c delta in (0,1) range checks are uniform.  @p eps and
+ * @p delta carry the caller's defaults on entry and are overwritten only when
+ * the corresponding key is present.
+ */
+void parse_eps_delta(const MethodArgs &a, const char *method,
+                     double &eps, double &delta)
+{
+  if(a.has("epsilon") && (!parse_double_full(a.get("epsilon"), eps)
+                          || eps <= 0. || eps > 1.))
+    provsql_error("method '%s': epsilon must be in (0, 1]", method);
+  if(a.has("delta") && (!parse_double_full(a.get("delta"), delta)
+                        || delta <= 0. || delta >= 1.))
+    provsql_error("method '%s': delta must be in (0, 1)", method);
+}
+
+/**
  * @brief A resolved sampling request: a fixed count, or an @c (eps,delta) target.
  *
  * @c fixed selects @c samples; otherwise the caller turns @c (eps,delta) into a
@@ -225,12 +245,7 @@ SampleSpec parse_sample_spec(const MethodArgs &a, const char *method)
     return s;
   }
 
-  if(a.has("epsilon") && (!parse_double_full(a.get("epsilon"), s.eps)
-                          || s.eps <= 0. || s.eps > 1.))
-    provsql_error("method '%s': epsilon must be in (0, 1]", method);
-  if(a.has("delta") && (!parse_double_full(a.get("delta"), s.delta)
-                        || s.delta <= 0. || s.delta >= 1.))
-    provsql_error("method '%s': delta must be in (0, 1)", method);
+  parse_eps_delta(a, method, s.eps, s.delta);
   if(a.has("max_samples")) {
     s.has_max = true;
     if(!parse_ulong_full(a.get("max_samples"), s.max_samples) || s.max_samples == 0)
@@ -276,19 +291,30 @@ unsigned long monte_carlo_samples(const MethodArgs &a)
 /**
  * @brief Build the @c wmcCount opt string (@c "delta;epsilon") from the args.
  *
- * Accepts the canonical @c epsilon=E[,delta=D] or the historical positional
- * @c 'delta;epsilon'; @c wmcCount itself reads only @c epsilon (it drives the
- * @c {pivotAC} approximation tolerance) but the legacy two-field order is
- * preserved.
+ * Canonical form @c epsilon=E[,delta=D], validated through the same
+ * @c parse_eps_delta as the sampling methods; the positional @c 'delta;epsilon'
+ * is accepted as a documented legacy alias (forwarded verbatim).  @c wmcCount
+ * reads only @c epsilon (it drives the @c {pivotAC} approximation tolerance), so
+ * @c delta is carried for the legacy two-field order but is presently inert for
+ * the tool.
  */
 string wmc_opt_from_args(const MethodArgs &a, const char *method)
 {
-  reject_unknown_keys(a, {"epsilon", "delta"}, method);
-  if(a.has("epsilon") || a.has("delta"))
-    return a.get("delta") + ";" + a.get("epsilon");
-  if(!a.positional.empty())
+  if(!a.positional.empty()) {
+    if(a.has("epsilon") || a.has("delta"))
+      provsql_error("method '%s': give either the legacy 'delta;epsilon' or "
+                    "epsilon=/delta=, not both", method);
+    if(a.positional.size() > 1)
+      provsql_error("method '%s': too many positional arguments", method);
     return a.positional[0];
-  return string();
+  }
+  reject_unknown_keys(a, {"epsilon", "delta"}, method);
+  // weightmc's own epsilon default (0.8) applies when epsilon is omitted, so
+  // validate but emit only the fields the user gave.
+  double eps = 0.8, delta = 0.5;
+  parse_eps_delta(a, method, eps, delta);
+  return (a.has("delta") ? a.get("delta") : string()) + ";"
+       + (a.has("epsilon") ? a.get("epsilon") : string());
 }
 
 /**
@@ -791,8 +817,11 @@ static Datum probability_evaluate_internal
               tool = a.positional[0];
             if(tool.empty())
               provsql_error("method 'wmc' requires a tool (tool=<name>)");
-            if(a.has("epsilon") || a.has("delta"))
+            if(a.has("epsilon") || a.has("delta")) {
+              double eps = 0.8, delta = 0.5;  // validate ranges uniformly
+              parse_eps_delta(a, "wmc", eps, delta);
               tool_args = a.get("delta") + ";" + a.get("epsilon");
+            }
           } else {
             auto sep = args.find(';');
             tool = (sep == std::string::npos) ? args : args.substr(0, sep);

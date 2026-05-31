@@ -200,10 +200,10 @@ Computation Methods
 
 ``'wmc'``
     Exact (umbrella for weighted model counters) computation. The third
-    argument selects the counter and its options, either as
-    ``tool[;tool_args]`` or as ``tool=<name>[,epsilon=E][,delta=D]``:
-    ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`, ``'sharpsat-td'``
-    :cite:`DBLP:conf/cp/KorhonenJ21`, ``'dpmc'``
+    argument selects the counter and its options as
+    ``tool=<name>[,epsilon=E][,delta=D]`` (the legacy ``tool[;tool_args]`` form
+    is still accepted): ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`,
+    ``'sharpsat-td'`` :cite:`DBLP:conf/cp/KorhonenJ21`, ``'dpmc'``
     :cite:`DBLP:conf/cp/DudekPV20`, or ``'weightmc'``. Same PATH /
     ``provsql.tool_search_path`` considerations as ``'compilation'``:
 
@@ -214,9 +214,11 @@ Computation Methods
 
 ``'weightmc'``
     Approximate weighted model counting using the external ``weightmc``
-    tool (alias for ``'wmc'`` with that tool). The third argument carries
-    the approximation tolerance, as ``epsilon=E[,delta=D]`` or the
-    historical ``delta;epsilon`` pair:
+    tool (alias for ``'wmc'`` with that tool). The third argument carries the
+    approximation tolerance as ``epsilon=E[,delta=D]`` (validated as for the
+    other approximate methods; the legacy ``delta;epsilon`` pair is still
+    accepted). Only ``epsilon`` currently affects the run; ``delta`` is
+    accepted for argument uniformity:
 
     .. code-block:: postgresql
 

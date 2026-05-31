@@ -295,8 +295,9 @@ Currently Supported Methods
        named it selects the highest-preference available counter.
    * - ``"weightmc"``
      - Backward-compatible alias for ``"wmc"`` with the ``weightmc``
-       tool; takes ``epsilon=E[,delta=D]`` or the historical
-       ``delta;epsilon`` pair as argument.
+       tool.  Takes ``epsilon=E[,delta=D]`` (validated through the same
+       ``parse_eps_delta`` as the sampling methods) or, as a legacy alias,
+       the ``delta;epsilon`` pair.
    * - ``"tree-decomposition"``
      - Builds a :cfunc:`TreeDecomposition` (bounded by
        :cfunc:`TreeDecomposition::MAX_TREEWIDTH`) and uses
