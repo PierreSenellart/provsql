@@ -36,7 +36,7 @@ provsql-studio \
     --host 0.0.0.0 \
     --port 8000 \
     --dsn 'dbname=test user=test' \
-    --search-path provsql_test 2>&1 \
+    --search-path public,provsql_test 2>&1 \
     | grep -v --line-buffered 'This is a development server' \
     > /tmp/studio.log &
 
@@ -61,6 +61,11 @@ cat <<EOF
   then reach them on those host ports:
       psql shell:     psql -h localhost -p 5433 test test
       Studio web UI:  http://localhost:8001
+
+  Databases: 'test' (a small smoke fixture) plus the tutorial and case
+  studies from the ProvSQL Playground -- tutorial, cs1, cs2, cs4, cs5,
+  cs6, cs7. Switch between them from Studio's connection chip, or connect
+  psql directly, e.g. psql -h localhost -p 5433 cs1 test.
 
   (On a native-Linux Docker bridge the container is also reachable
    directly at IP ${IP}; under Docker Desktop or rootless podman, use
