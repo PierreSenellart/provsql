@@ -1728,6 +1728,33 @@
   // guarantee; for these the eval strip shows the epsilon field.
   const _APPROX_WMC_TOOLS = new Set(['weightmc', 'approxmc']);
 
+  // Assemble the key=value `arguments` string for a probability method from
+  // its dedicated eval-strip control(s); empty means "send no arguments".
+  // Module-level (not inside initEvalStrip) so runEvaluation can call it.
+  function buildProbArgs(method) {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    if (method === 'monte-carlo' || method === 'karp-luby') {
+      if (document.getElementById('eval-approx-mode')?.value === 'epsdelta') {
+        const parts = [];
+        if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
+        if (val('eval-approx-delta')) parts.push('delta=' + val('eval-approx-delta'));
+        return parts.join(',');
+      }
+      const n = val('eval-args-mc');
+      return n ? 'samples=' + n : '';
+    }
+    if (method === 'wmc') {
+      const tool = val('eval-args-wmc-tool');
+      const parts = [];
+      if (tool) parts.push('tool=' + tool);
+      if (_APPROX_WMC_TOOLS.has(tool) && val('eval-args-wmc-eps'))
+        parts.push('epsilon=' + val('eval-args-wmc-eps'));
+      return parts.join(',');
+    }
+    if (method === 'compilation') return val('eval-args-compiler');
+    return '';
+  }
+
   // Build the "Compiled Semirings" sub-optgroups from the registry and
   // splice them into the <select> ahead of "Custom Semirings" / "Other".
   // Idempotent: calling twice is a no-op (the anchor div is checked).
@@ -2012,32 +2039,6 @@
         else if (meth.value === 'monte-carlo') mode.value = 'samples';
       }
       syncControls();
-    }
-
-    // Assemble the key=value `arguments` string for a probability method from
-    // its dedicated control(s); empty means "send no arguments".
-    function buildProbArgs(method) {
-      const val = id => (document.getElementById(id)?.value || '').trim();
-      if (method === 'monte-carlo' || method === 'karp-luby') {
-        if (document.getElementById('eval-approx-mode')?.value === 'epsdelta') {
-          const parts = [];
-          if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
-          if (val('eval-approx-delta')) parts.push('delta=' + val('eval-approx-delta'));
-          return parts.join(',');
-        }
-        const n = val('eval-args-mc');
-        return n ? 'samples=' + n : '';
-      }
-      if (method === 'wmc') {
-        const tool = val('eval-args-wmc-tool');
-        const parts = [];
-        if (tool) parts.push('tool=' + tool);
-        if (_APPROX_WMC_TOOLS.has(tool) && val('eval-args-wmc-eps'))
-          parts.push('epsilon=' + val('eval-args-wmc-eps'));
-        return parts.join(',');
-      }
-      if (method === 'compilation') return val('eval-args-compiler');
-      return '';
     }
 
     function syncControls() {
