@@ -48,11 +48,12 @@ ProvSQL and ProvSQL Studio are licensed under the **MIT License**.
 For convenience the image also bundles optional external knowledge compilers,
 model counters and renderers that ProvSQL can invoke as **separate
 subprocesses** (never linked into the extension): **d4** and **dsharp**
-(knowledge compilers), **weightmc** (a weighted model counter), **Graphviz**
-(`dot`), and **graph-easy**. Each is distributed under **its own upstream
-license** (for instance Graphviz under EPL, graph-easy under the Perl license;
-the compilers and counter under their respective licenses, some
-research-only). The exact upstream sources, versions and build steps are
+(knowledge compilers), **ganak**, **sharpsat-td** and **weightmc** (weighted
+model counters), **Graphviz** (`dot`), and **graph-easy**. Each is distributed
+under **its own upstream license** (for instance Graphviz under EPL, graph-easy
+under the Perl license; the compilers and counters under their respective
+licenses, some research-only). The exact upstream sources, versions and build
+steps are
 recorded in
 [`docker/Dockerfile`](https://github.com/PierreSenellart/provsql/blob/master/docker/Dockerfile);
 refer to each project for its license terms.

@@ -26,8 +26,8 @@ RUN apt-get update &&\
     apt-get -y install postgresql-common ca-certificates curl gnupg &&\
     /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y &&\
     apt-get -y install \
-        build-essential git mercurial unzip \
-        libc6-i386 libgmp-dev libboost-dev libboost-serialization-dev \
+        build-essential cmake git mercurial unzip \
+        libc6-i386 libgmp-dev libmpfr-dev libboost-dev libboost-serialization-dev \
         zlib1g-dev iproute2 \
         postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION} \
         python3 python3-pip python3-venv \
@@ -63,6 +63,27 @@ RUN cd /tmp &&\
     make &&\
     mv weightmc /tmp/tools &&\
     chmod a+x /tmp/tools/weightmc
+
+# TOOL ganak (modern weighted/projected model counter). The full from-source
+# build pulls in CryptoMiniSat / Arjun / SBVA / cadical, so we use the
+# upstream prebuilt static binary instead.
+RUN cd /tmp &&\
+    curl -L -o ganak.tar.gz \
+      https://github.com/meelgroup/ganak/releases/download/release/v2.6.2/ganak-v2.6.2-linux-amd64.tar.gz &&\
+    tar xzf ganak.tar.gz &&\
+    find . -type f -name ganak -exec mv {} /tmp/tools/ \; &&\
+    chmod a+x /tmp/tools/ganak
+
+# TOOL sharpsat-td (+ its flow_cutter_pace17 helper). setupdev.sh builds both
+# into bin/; the registry invokes the counter as `sharpsat-td`, so rename the
+# `sharpSAT` binary accordingly. Needs cmake + GMP + MPFR (installed above).
+RUN cd /tmp &&\
+    git clone https://github.com/Laakeri/sharpsat-td.git &&\
+    cd sharpsat-td &&\
+    ./setupdev.sh static &&\
+    mv bin/sharpSAT /tmp/tools/sharpsat-td &&\
+    mv bin/flow_cutter_pace17 /tmp/tools/ &&\
+    chmod a+x /tmp/tools/sharpsat-td /tmp/tools/flow_cutter_pace17
 
 # mv the additional tools
 RUN bash -c "mv /tmp/tools/* /usr/local/bin"
