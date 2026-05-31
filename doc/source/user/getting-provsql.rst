@@ -314,6 +314,11 @@ Connect with a PostgreSQL client (``psql -h localhost -p 5433 test test``) or
 open Studio at ``http://localhost:8001`` (matching the host ports you chose);
 the container also prints these instructions on startup.
 
+The image is seeded with the same tutorial and case-study databases as the
+ProvSQL Playground (``tutorial``, ``cs1``, ``cs2``, ``cs4``–``cs7``), alongside
+a small ``test`` fixture. Switch between them from Studio's connection chip, or
+point ``psql`` at any of them (e.g. ``psql -h localhost -p 5433 cs1 test``).
+
 ProvSQL Studio
 --------------
 
