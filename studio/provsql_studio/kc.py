@@ -463,6 +463,10 @@ _INPROCESS_METHODS: tuple[tuple[str, str | None], ...] = (
     ("possible-worlds",    None),
     ("tree-decomposition", None),
     ("monte-carlo",        None),
+    # karp-luby applies only to DNF-shaped circuits (it errors otherwise,
+    # recorded per row like independent / inversion-free); on those it shares
+    # the same sample budget as monte-carlo for an equal-effort comparison.
+    ("karp-luby",          None),
 )
 
 # In-process meta-routes offered in the compilation dropdown beyond the
@@ -786,7 +790,11 @@ def probability_benchmark(
                         "true)::int)::text, true)"
                     )
                 for method, args in runnable:
-                    call_args = str(samples) if method == "monte-carlo" else args
+                    # The sampling methods take the shared sample count; the
+                    # rest take their own (tool name, or none).
+                    call_args = (str(samples)
+                                 if method in ("monte-carlo", "karp-luby")
+                                 else args)
                     t0 = time.perf_counter()
                     probability: float | None = None
                     error: str | None = None

@@ -2224,8 +2224,8 @@
             </span>
           </span>
           <input type="number" class="cv-eval__args" id="eval-args-bench-samples" hidden
-                 min="1" step="1" placeholder="MC samples" value="10000"
-                 autocomplete="off" title="Monte-Carlo sample count used by the benchmark">
+                 min="1" step="1" placeholder="samples" value="10000"
+                 autocomplete="off" title="Sample count used by the benchmark's sampling methods (monte-carlo and karp-luby)">
           <select class="cv-eval__args" id="eval-args-compiler" hidden
                   title="How to obtain the d-D circuit: a registered external compiler, the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → fallback compiler). The external compilers are populated from the live tool registry; the in-process routes below always apply.">
             <option value="tree-decomposition">tree-decomposition</option>
