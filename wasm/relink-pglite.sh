@@ -16,11 +16,22 @@ NM=/emsdk/upstream/bin/llvm-nm
 # defined by them.  Drop C++ mangled (_Z*) names: the pure-C main module
 # cannot export them, and the leftover undefined ones are provsql-internal,
 # never-called template instantiations (libc++ is bundled in provsql.so).
+# Also drop _GLOBAL_OFFSET_TABLE_: it is the linker-synthesized GOT base,
+# undefined in provsql's -fpic C++ objects and provided per-module by the
+# runtime rather than imported.  The export list builder (src/backend/Makefile
+# pglite-exported-functions) prepends a '_' to every import, so it would be
+# exported as __GLOBAL_OFFSET_TABLE_, which emscripten rejects ("undefined
+# exported symbol", fatal under -Werror).  Other synthetic globals
+# (__memory_base, __stack_pointer, ...) appear in every bundled extension's
+# imports and the build tolerates them, so only the GOT base needs dropping.
 IMPDIR=dist/include/postgresql/emscripten/extension/imports
 ( cd provsql-wasm
   $NM --undefined-only src/*.o | awk '{print $2}' | sed '/^$/d' | sort -u > provsql.undef.txt
   $NM --defined-only src/*.o provsql.so | awk '$2 ~ /^[TDB]$/ {print $3}' | sed '/^$/d' | sort -u > provsql.defs.txt
-  comm -23 provsql.undef.txt provsql.defs.txt | grep -v '^_Z' > "../$IMPDIR/provsql.imports" )
+  comm -23 provsql.undef.txt provsql.defs.txt \
+    | grep -v '^_Z' \
+    | grep -vxF '_GLOBAL_OFFSET_TABLE_' \
+    > "../$IMPDIR/provsql.imports" )
 echo "provsql.imports: $(wc -l < $IMPDIR/provsql.imports) symbols"
 
 PGLITE_CFLAGS="-m32 -sWASM_BIGINT -fpic -sENVIRONMENT=node,web,worker -sSUPPORT_LONGJMP=emscripten \
