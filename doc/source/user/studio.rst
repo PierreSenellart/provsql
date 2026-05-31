@@ -351,8 +351,9 @@ custom and "Other" entries below:
 * **Other**: ``probability`` and ``PROV-XML export``. The
   probability method picker (see :doc:`probabilities`) groups exact
   methods (``(default)``, ``independent``, ``possible-worlds``,
-  ``tree-decomposition``, ``compilation``) and approximate methods
-  (``monte-carlo``, ``weightmc``). PROV-XML export uses
+  ``tree-decomposition``, ``compilation``), weighted model counting
+  (``wmc``, with a tool picker), and approximate methods
+  (``monte-carlo``, ``karp-luby``). PROV-XML export uses
   :sqlfunc:`to_provxml`; see :doc:`export`.
 
 The mapping picker filters on the selected semiring's expected value
@@ -371,10 +372,12 @@ semiring entries filter to mappings whose value type matches the
 wrapper's return type. Mismatches are surfaced before the round-trip
 as ``(no compatible mappings : expected …)`` in the picker.
 
-:guilabel:`Run` reports the result inline along with the runtime; Monte-Carlo
-runs additionally show a ± confidence band (`Hoeffding bound
-<https://en.wikipedia.org/wiki/Hoeffding%27s_inequality>`_, 95 %
-probability).
+:guilabel:`Run` reports the result inline along with the runtime. For an
+approximate method the strip also shows the ``(ε, δ)`` error bound ProvSQL
+reports for that run: *relative* (a ``1 ± ε`` factor) for ``karp-luby`` and the
+weighted counters, *additive* (a ``Hoeffding`` absolute bound,
+`<https://en.wikipedia.org/wiki/Hoeffding%27s_inequality>`_) for
+``monte-carlo`` — for example ``± 10% relative, prob ≥ 95%``.
 :guilabel:`Clear` wipes the result so a verbose Why or Formula output does
 not obscure the canvas; :guilabel:`Copy` writes the just-rendered payload
 (with full precision for probability, regardless of the rounded
