@@ -2239,6 +2239,62 @@ body.mode-where #sidebar {
   -webkit-appearance: none;
   margin: 0;
 }
+/* Approximate-options group (monte-carlo / karp-luby): a mode select and the
+   samples or (eps, delta) number fields, laid out inline. Like
+   .cv-eval__args-group, the inline-flex display must be undone explicitly for
+   the [hidden] state the arg-control dispatch toggles. */
+.cv-eval__approx {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.cv-eval__approx[hidden] {
+  display: none;
+}
+.cv-eval__approx-mode {
+  min-width: 0;
+}
+.cv-eval__approx-ed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.cv-eval__approx-ed[hidden] {
+  display: none;
+}
+.cv-eval__approx-lbl {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--purple-700, var(--purple-900));
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.cv-eval__approx-ed input {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  width: 4.5ch;
+  box-sizing: content-box;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--purple-900);
+  -moz-appearance: textfield;
+  text-align: right;
+}
+.cv-eval__approx-ed input::-webkit-outer-spin-button,
+.cv-eval__approx-ed input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+#eval-args-wmc-eps {
+  min-width: 5ch;
+  width: 5ch;
+  box-sizing: content-box;
+  -moz-appearance: textfield;
+  text-align: right;
+}
 /* "Condition on" group: badge + input rendered inline so the badge
    reads as a left-side label on the input rather than a separate
    floating chip.  The whole group is hidden/shown by the eval-strip's

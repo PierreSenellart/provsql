@@ -1711,18 +1711,22 @@
     return String(value);
   }
 
-  // For each probability method that takes an `arguments` value, point
-  // at the dedicated control. Each control keeps its own state (so the
-  // user's MC sample count survives a round-trip through compilation
-  // and back) and offers an input shape that matches the expected value:
-  // a number field for samples, a dropdown of ProvSQL-known compilers,
-  // a free-form text field pre-filled with the WeightMC defaults.
+  // For each probability method that takes an `arguments` value, point at
+  // the dedicated control. monte-carlo and karp-luby share the approximate-
+  // options group (a samples/(eps,delta) mode toggle and the matching number
+  // fields); compilation uses the compiler dropdown; wmc uses the tool
+  // dropdown (plus an epsilon field, shown only for approximate counters).
+  // buildProbArgs assembles the key=value `arguments` string from whichever
+  // group is in play.
   const _PROB_ARG_CONTROL = {
-    'monte-carlo': 'eval-args-mc',
-    'karp-luby':   'eval-args-kl',
+    'monte-carlo': 'eval-args-approx',
+    'karp-luby':   'eval-args-approx',
     'compilation': 'eval-args-compiler',
     'wmc':         'eval-args-wmc-tool',
   };
+  // Weighted-model-counting tools whose estimate carries a relative (eps)
+  // guarantee; for these the eval strip shows the epsilon field.
+  const _APPROX_WMC_TOOLS = new Set(['weightmc', 'approxmc']);
 
   // Build the "Compiled Semirings" sub-optgroups from the registry and
   // splice them into the <select> ahead of "Custom Semirings" / "Other".
@@ -1813,6 +1817,8 @@
     // unhides whichever the current semiring needs.
     const argControls = [
       ...Object.values(_PROB_ARG_CONTROL),
+      'eval-args-wmc-eps',
+      'eval-args-bench-samples',
       'eval-args-bins',
       'eval-args-moment-k',
       'eval-args-moment-central',
@@ -1984,6 +1990,56 @@
     window.ProvsqlStudio = window.ProvsqlStudio || {};
     window.ProvsqlStudio.refilterForTarget = refilterForTarget;
 
+    // Within the approximate-options group, show the samples field or the
+    // (eps, delta) fields according to the mode toggle.
+    function syncApproxMode() {
+      const mode = document.getElementById('eval-approx-mode');
+      const mc   = document.getElementById('eval-args-mc');
+      const ed   = document.getElementById('eval-approx-ed');
+      if (!mode) return;
+      const eps = mode.value === 'epsdelta';
+      if (mc) mc.hidden = eps;
+      if (ed) ed.hidden = !eps;
+    }
+
+    // On a probability-method change, pick the mode that suits the method
+    // (a fixed count for monte-carlo, the (eps, delta) guarantee for
+    // karp-luby), then re-sync the controls.
+    function onMethodChange() {
+      const mode = document.getElementById('eval-approx-mode');
+      if (mode) {
+        if (meth.value === 'karp-luby') mode.value = 'epsdelta';
+        else if (meth.value === 'monte-carlo') mode.value = 'samples';
+      }
+      syncControls();
+    }
+
+    // Assemble the key=value `arguments` string for a probability method from
+    // its dedicated control(s); empty means "send no arguments".
+    function buildProbArgs(method) {
+      const val = id => (document.getElementById(id)?.value || '').trim();
+      if (method === 'monte-carlo' || method === 'karp-luby') {
+        if (document.getElementById('eval-approx-mode')?.value === 'epsdelta') {
+          const parts = [];
+          if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
+          if (val('eval-approx-delta')) parts.push('delta=' + val('eval-approx-delta'));
+          return parts.join(',');
+        }
+        const n = val('eval-args-mc');
+        return n ? 'samples=' + n : '';
+      }
+      if (method === 'wmc') {
+        const tool = val('eval-args-wmc-tool');
+        const parts = [];
+        if (tool) parts.push('tool=' + tool);
+        if (_APPROX_WMC_TOOLS.has(tool) && val('eval-args-wmc-eps'))
+          parts.push('epsilon=' + val('eval-args-wmc-eps'));
+        return parts.join(',');
+      }
+      if (method === 'compilation') return val('eval-args-compiler');
+      return '';
+    }
+
     function syncControls() {
       syncDropdownVisibility();
       const v = sel.value;
@@ -1999,6 +2055,16 @@
       if (v === 'probability') {
         const id = _PROB_ARG_CONTROL[meth.value];
         if (id) wantedIds.add(id);
+        // wmc: reveal the epsilon field only when the chosen tool is an
+        // approximate counter (weightmc / approxmc).
+        if (meth.value === 'wmc') {
+          const tool = document.getElementById('eval-args-wmc-tool');
+          if (tool && _APPROX_WMC_TOOLS.has(tool.value))
+            wantedIds.add('eval-args-wmc-eps');
+        }
+        // Keep the approximate-options group's samples vs (eps,delta) fields
+        // consistent with its mode toggle whenever the group is shown.
+        syncApproxMode();
       } else if (v === 'distribution-profile') {
         wantedIds.add('eval-args-bins');
       } else if (v === 'moment') {
@@ -2019,7 +2085,7 @@
       if (v === 'kc-ddnnf' || v === 'kc-nnf') {
         wantedIds.add('eval-args-compiler');
       } else if (v === 'kc-benchmark') {
-        wantedIds.add('eval-args-mc');
+        wantedIds.add('eval-args-bench-samples');
       }
       // Compiler dropdown: kc-ddnnf and kc-nnf accept the three
       // in-process routes (tree-decomposition / interpret-as-dd /
@@ -2263,7 +2329,13 @@
     });
     // Method change also affects whether the args input is shown / what
     // its placeholder reads.
-    meth.addEventListener('change', syncControls);
+    meth.addEventListener('change', onMethodChange);
+    document.getElementById('eval-approx-mode')
+      ?.addEventListener('change', syncApproxMode);
+    // The wmc epsilon field appears only for approximate tools, so a tool
+    // change must re-run the control sweep.
+    document.getElementById('eval-args-wmc-tool')
+      ?.addEventListener('change', syncControls);
     run.addEventListener('click', runEvaluation);
     // Enter inside a text / number argument field fires Run, matching
     // the form-submit convention.  Skip <select> controls (e.g. the
@@ -2340,7 +2412,7 @@
   //   * kc-cnf       : no args, weighted=true.
   //   * kc-ddnnf     : eval-args-compiler.
   //   * kc-td        : no args.
-  //   * kc-benchmark : eval-args-mc (samples) + eval-args-compiler.
+  //   * kc-benchmark : eval-args-bench-samples (Monte-Carlo sample count).
 
   // Swap the main canvas to a KC-built scene (compiled d-DNNF / TD).
   // Save the existing scene + drag offsets so restoreKcScene can put
@@ -2395,7 +2467,7 @@
       return `/api/kc/td?token=${enc(token)}`;
     }
     if (kind === 'kc-benchmark') {
-      const samples = document.getElementById('eval-args-mc')?.value || '10000';
+      const samples = document.getElementById('eval-args-bench-samples')?.value || '10000';
       return `/api/kc/benchmark?token=${enc(token)}&samples=${enc(samples)}`;
     }
     return null;
@@ -2891,17 +2963,14 @@
     }
     if (!isKc && semiring === 'probability') {
       body.method = meth.value || '';
-      // Pull the argument from whichever per-method control is wired up
-      // (number field for monte-carlo, compiler dropdown for
-      // compilation, text field for weightmc). Methods that ignore args
-      // (independent / tree-decomposition / possible-worlds / default)
-      // have no entry here, so we just don't send `arguments`.
-      const ctrlId = _PROB_ARG_CONTROL[meth.value];
-      if (ctrlId) {
-        const ctrl = document.getElementById(ctrlId);
-        const a = (ctrl?.value || '').trim();
-        if (a) body.arguments = a;
-      }
+      // Assemble the key=value `arguments` from the method's dedicated
+      // control(s): the approximate-options group (samples or eps,delta) for
+      // monte-carlo / karp-luby, the tool (+ optional epsilon) for wmc, the
+      // compiler for compilation. Exact methods (independent /
+      // tree-decomposition / possible-worlds / default) return '' and send no
+      // arguments.
+      const a = buildProbArgs(meth.value);
+      if (a) body.arguments = a;
     } else if (semiring === 'distribution-profile') {
       // The backend reads `arguments` as the histogram bin count.
       const bins = (document.getElementById('eval-args-bins')?.value || '').trim();

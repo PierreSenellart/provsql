@@ -2203,13 +2203,29 @@
               <option value="karp-luby" title="Karp-Luby FPRAS for DNF-shaped (monotone OR-of-ANDs) circuits: a relative (eps, delta) guarantee whose sample count is independent of the probability, so it stays accurate on rare events. Errors on non-DNF circuits.">karp-luby</option>
             </optgroup>
           </select>
-          <input type="number" class="cv-eval__args" id="eval-args-mc" hidden
-                 min="1" step="1" placeholder="samples" value="10000"
-                 autocomplete="off" title="Monte-Carlo sample count">
-          <input type="text" class="cv-eval__args" id="eval-args-kl" hidden
-                 placeholder="eps=0.1,delta=0.05" value="eps=0.1,delta=0.05"
-                 autocomplete="off" spellcheck="false"
-                 title="Karp-Luby arguments: a relative (eps, delta) target (e.g. eps=0.05,delta=0.01) or a fixed sample count (samples=N or a bare integer).">
+          <span class="cv-eval__approx" id="eval-args-approx" hidden>
+            <select class="cv-eval__method cv-eval__approx-mode" id="eval-approx-mode"
+                    title="Accuracy target: a fixed sample count, or an (eps, delta) error guarantee (relative for karp-luby, additive for monte-carlo).">
+              <option value="samples">samples</option>
+              <option value="epsdelta">ε, δ</option>
+            </select>
+            <input type="number" class="cv-eval__args" id="eval-args-mc"
+                   min="1" step="1" placeholder="samples" value="10000"
+                   autocomplete="off" title="Number of samples">
+            <span class="cv-eval__approx-ed" id="eval-approx-ed" hidden>
+              <label class="cv-eval__approx-lbl">ε
+                <input type="number" id="eval-approx-eps" min="0" max="1"
+                       step="0.01" value="0.1" autocomplete="off"
+                       title="Error target ε, in (0, 1]"></label>
+              <label class="cv-eval__approx-lbl">δ
+                <input type="number" id="eval-approx-delta" min="0" max="1"
+                       step="0.01" value="0.05" autocomplete="off"
+                       title="Failure probability δ, in (0, 1)"></label>
+            </span>
+          </span>
+          <input type="number" class="cv-eval__args" id="eval-args-bench-samples" hidden
+                 min="1" step="1" placeholder="MC samples" value="10000"
+                 autocomplete="off" title="Monte-Carlo sample count used by the benchmark">
           <select class="cv-eval__args" id="eval-args-compiler" hidden
                   title="How to obtain the d-D circuit: a registered external compiler, the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → fallback compiler). The external compilers are populated from the live tool registry; the in-process routes below always apply.">
             <option value="tree-decomposition">tree-decomposition</option>
