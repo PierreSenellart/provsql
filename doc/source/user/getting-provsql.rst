@@ -303,7 +303,7 @@ The ``-p host:container`` flags publish the container's PostgreSQL (5432) and
 ProvSQL Studio (8000) on host ports of your choice, which works uniformly
 across native Docker, Docker Desktop, and rootless podman. The example maps
 them to ``5433`` and ``8001`` to avoid clashing with a PostgreSQL or Studio
-you may already run locally on the default ``5432`` / ``8000`` — pick whatever
+you may already run locally on the default ``5432`` / ``8000``; pick whatever
 free host ports you like. To use a specific release version:
 
 .. code-block:: bash

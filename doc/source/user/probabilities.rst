@@ -53,7 +53,7 @@ The function accepts an optional second argument specifying the computation
 method, and an optional third argument for method-specific parameters. That
 third argument is a comma-separated ``key=value`` list (the keys accepted
 depend on the method); each method also keeps its historical shorthand (a bare
-sample count, a ``delta;epsilon`` pair, …) as documented below.
+sample count, a ``delta;epsilon`` pair …) as documented below.
 
 ProvSQL Studio's :ref:`evaluation strip <studio-circuit-eval-strip>`
 exposes :sqlfunc:`probability_evaluate` interactively, with method

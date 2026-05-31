@@ -377,7 +377,7 @@ approximate method the strip also shows the ``(ε, δ)`` error bound ProvSQL
 reports for that run: *relative* (a ``1 ± ε`` factor) for ``karp-luby`` and the
 weighted counters, *additive* (a ``Hoeffding`` absolute bound,
 `<https://en.wikipedia.org/wiki/Hoeffding%27s_inequality>`_) for
-``monte-carlo`` — for example ``± 10% relative, prob ≥ 95%``.
+``monte-carlo``; for example ``± 10% relative, prob ≥ 95%``.
 :guilabel:`Clear` wipes the result so a verbose Why or Formula output does
 not obscure the canvas; :guilabel:`Copy` writes the just-rendered payload
 (with full precision for probability, regardless of the rounded

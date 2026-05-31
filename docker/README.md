@@ -20,13 +20,13 @@ docker run --rm -p 5433:5432 -p 8001:8000 inriavalda/provsql
 ```
 
 The published host ports (`5433`, `8001`) are chosen to avoid clashing with a
-PostgreSQL or Studio you may already run locally on `5432` / `8000` — adjust
+PostgreSQL or Studio you may already run locally on `5432` / `8000`; adjust
 the left-hand side of each `-p` as you like.
 
 - **ProvSQL Studio**: open <http://localhost:8001> – inspect provenance
   circuits, run semiring/probability evaluations, explore where-provenance,
   and switch between the seeded databases from the connection chip.
-- **psql**: connect to any seeded database (`tutorial`, `cs1`, …) as user
+- **psql**: connect to any seeded database (`tutorial`, `cs1` …) as user
   `test` on the published port, e.g.
   `psql -h localhost -p 5433 -U test tutorial`.
 
