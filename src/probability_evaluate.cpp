@@ -269,6 +269,61 @@ unsigned long finalize_adaptive(double nd, const SampleSpec &s)
   return n;
 }
 
+/// Format a double compactly for the approximation-guarantee notice.
+string fmt_num(double x)
+{
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%.6g", x);
+  return string(buf);
+}
+
+/**
+ * @brief Emit the machine-readable approximation-guarantee NOTICE (verbose>=5).
+ *
+ * An approximate method's estimate carries an @c (eps,delta) error guarantee;
+ * we surface it as a structured NOTICE that downstream UIs (Studio floors
+ * @c verbose_level at 5 for evaluation) parse and render.  @p kind is
+ * @c "additive" (@c |est-p| <= eps) or @c "relative" (@c est within a
+ * @c 1±eps factor of @c p), each holding with probability @c >= 1-delta.
+ * Optional fields are omitted when not applicable: @p delta @c < 0,
+ * @p samples @c == 0, @p clauses @c < 0, @p tool empty.  Gated on
+ * @c verbose_level>=5 so plain SQL evaluation (and the regression suite) stay
+ * quiet by default.
+ */
+void emit_guarantee(const char *kind, double eps, double delta,
+                    unsigned long samples, long clauses, const char *tool)
+{
+  if(provsql_verbose < 5)
+    return;
+  string msg = "approximation-guarantee: kind=" + string(kind)
+             + " eps=" + fmt_num(eps);
+  if(delta >= 0.)
+    msg += " delta=" + fmt_num(delta);
+  if(samples > 0)
+    msg += " samples=" + std::to_string(samples);
+  if(clauses >= 0)
+    msg += " clauses=" + std::to_string(clauses);
+  if(tool && *tool)
+    msg += " tool=" + string(tool);
+  provsql_notice("%s", msg.c_str());
+}
+
+/// Whether a @c wmc tool is an approximate (multiplicative-guarantee) counter.
+bool is_approx_wmc_tool(const string &tool)
+{
+  return tool == "weightmc" || tool == "approxmc";
+}
+
+/// Extract weightmc's epsilon from a @c wmcCount opt string (@c "delta;epsilon").
+double eps_from_wmc_opt(const string &opt)
+{
+  auto semi = opt.find(';');
+  if(semi == string::npos)
+    return 0.8;   // no epsilon field: wmcCount's own default tolerance
+  double e;
+  return (parse_double_full(opt.substr(semi + 1), e) && e > 0.) ? e : 0.8;
+}
+
 /**
  * @brief Resolve the @c monte-carlo sample count from the parsed args.
  *
@@ -278,14 +333,21 @@ unsigned long finalize_adaptive(double nd, const SampleSpec &s)
  * @c N = ceil(ln(2/delta) / (2*eps^2)) samples (Hoeffding's inequality, so the
  * count is independent of the probability being estimated).  This is an
  * *absolute* error bound; @c karp-luby provides the *relative* one needed on
- * rare-event outputs.
+ * rare-event outputs.  Also emits the additive guarantee NOTICE.
  */
 unsigned long monte_carlo_samples(const MethodArgs &a)
 {
   SampleSpec s = parse_sample_spec(a, "monte-carlo");
-  if(s.fixed)
-    return s.samples;
-  return finalize_adaptive(ceil(log(2.0 / s.delta) / (2.0 * s.eps * s.eps)), s);
+  unsigned long n = s.fixed
+    ? s.samples
+    : finalize_adaptive(ceil(log(2.0 / s.delta) / (2.0 * s.eps * s.eps)), s);
+  // For a fixed N, report the additive eps achieved at the conventional
+  // delta=0.05; for the adaptive path, report the requested (eps,delta).
+  const double eps = s.fixed
+    ? sqrt(log(2.0 / 0.05) / (2.0 * static_cast<double>(n))) : s.eps;
+  const double delta = s.fixed ? 0.05 : s.delta;
+  emit_guarantee("additive", eps, delta, n, -1, nullptr);
+  return n;
 }
 
 /**
@@ -330,12 +392,20 @@ string wmc_opt_from_args(const MethodArgs &a, const char *method)
 unsigned long karp_luby_samples(const MethodArgs &a, size_t m)
 {
   SampleSpec s = parse_sample_spec(a, "karp-luby");
-  if(s.fixed)
-    return s.samples;
   const double e = exp(1.0);
   const double mm = (m == 0) ? 1. : static_cast<double>(m);
-  return finalize_adaptive(
-    ceil(4.0 * (e - 2.0) * mm * log(2.0 / s.delta) / (s.eps * s.eps)), s);
+  unsigned long n = s.fixed
+    ? s.samples
+    : finalize_adaptive(
+        ceil(4.0 * (e - 2.0) * mm * log(2.0 / s.delta) / (s.eps * s.eps)), s);
+  // For a fixed N, report the relative eps achieved at delta=0.05 over these
+  // m clauses; for the adaptive path, report the requested (eps,delta).
+  const double eps = s.fixed
+    ? sqrt(4.0 * (e - 2.0) * mm * log(2.0 / 0.05) / static_cast<double>(n))
+    : s.eps;
+  const double delta = s.fixed ? 0.05 : s.delta;
+  emit_guarantee("relative", eps, delta, n, static_cast<long>(m), nullptr);
+  return n;
 }
 
 } // anonymous namespace
@@ -798,9 +868,11 @@ static Datum probability_evaluate_internal
           // Backward-compatible alias for the wmc/weightmc path.  The args
           // accept the canonical epsilon=/delta= or the historical
           // 'delta;epsilon' positional, normalised by wmc_opt_from_args.
-          result = c.wmcCount(gate, "weightmc",
-                              wmc_opt_from_args(parse_method_args(args),
-                                                "weightmc"));
+          std::string opt = wmc_opt_from_args(parse_method_args(args), "weightmc");
+          // weightmc is an approximate (multiplicative) counter; surface its
+          // tolerance as the relative guarantee.
+          emit_guarantee("relative", eps_from_wmc_opt(opt), -1., 0, -1, "weightmc");
+          result = c.wmcCount(gate, "weightmc", opt);
         } else if(method=="wmc") {
           // 'tool' selects which weighted model counter to invoke (any
           // registered wmc tool); the tool options are forwarded to
@@ -827,6 +899,11 @@ static Datum probability_evaluate_internal
             tool = (sep == std::string::npos) ? args : args.substr(0, sep);
             tool_args = (sep == std::string::npos) ? std::string() : args.substr(sep + 1);
           }
+          // Approximate counters (weightmc / approxmc) carry a multiplicative
+          // tolerance; surface it as the relative guarantee.
+          if(is_approx_wmc_tool(tool))
+            emit_guarantee("relative", eps_from_wmc_opt(tool_args), -1., 0, -1,
+                           tool.c_str());
           result = c.wmcCount(gate, tool, tool_args);
         } else if(method=="compilation" || method=="tree-decomposition"
                   || method=="interpret-as-dd" || method=="default"

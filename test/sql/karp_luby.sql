@@ -90,6 +90,14 @@ SELECT probability_evaluate(:shared,'karp-luby','samples=100,max_samples=50'); -
 SELECT probability_evaluate(:shared,'karp-luby','foo=1');                   -- unknown key
 SELECT probability_evaluate(:shared,'karp-luby','not_a_number');            -- bad sample count
 
+-- The (eps, delta) approximation guarantee is surfaced as a machine-readable
+-- NOTICE at verbose_level >= 5 (the level Studio sets for evaluation), so a UI
+-- can render it; plain evaluation at the default level stays quiet.  Relative
+-- guarantee for karp-luby, over m clauses.
+SET provsql.verbose_level = 5;
+SELECT round(probability_evaluate(:shared,'karp-luby','eps=0.1,delta=0.05')::numeric,2) AS with_guarantee;
+RESET provsql.verbose_level;
+
 DROP TABLE kl_in;
 RESET provsql.boolean_provenance;
 RESET provsql.monte_carlo_seed;

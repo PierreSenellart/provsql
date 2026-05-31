@@ -20,3 +20,7 @@ ERROR:  ProvSQL: method 'karp-luby': delta requires epsilon
 ERROR:  ProvSQL: method 'karp-luby': max_samples applies only to the adaptive epsilon/delta path
 ERROR:  ProvSQL: method 'karp-luby': unknown argument key 'foo'
 ERROR:  ProvSQL: method 'karp-luby': invalid sample count 'not_a_number'
+NOTICE:  ProvSQL: approximation-guarantee: kind=relative eps=0.1 delta=0.05 samples=2120 clauses=2
+with_guarantee
+0.29
+(1 row)
