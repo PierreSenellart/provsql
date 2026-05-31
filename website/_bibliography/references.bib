@@ -282,6 +282,29 @@
     query-level analysis exposes.},
 }
 
+@article{DBLP:journals/jal/KarpLM89,
+  author       = {Richard M. Karp and
+                  Michael Luby and
+                  Neal Madras},
+  title        = {Monte-Carlo Approximation Algorithms for Enumeration Problems},
+  journal      = {J. Algorithms},
+  volume       = {10},
+  number       = {3},
+  pages        = {429--448},
+  year         = {1989},
+  doi          = {10.1016/0196-6774(89)90038-2},
+  annote       = {The fully-polynomial randomised approximation scheme (FPRAS) for
+    {\#}DNF -- estimating the probability that a positive DNF formula holds under
+    independent inputs -- with the tight O(m/eps^2 log 1/delta) sample-complexity
+    analysis (m clauses). Each round draws a clause with probability proportional to
+    its own probability, samples a satisfying assignment, and accepts only if the
+    clause is the first the assignment covers; the acceptance probability is
+    Pr[F]/S in [1/m, 1], so the sample count is independent of Pr[F]. ProvSQL's
+    'karp-luby' probability method applies it to DNF-shaped provenance circuits (the
+    lineage of a union of conjunctive queries over a tuple-independent database),
+    where it stays accurate on rare-event outputs that defeat naive Monte Carlo.},
+}
+
 @inproceedings{DBLP:conf/ecai/Darwiche04,
   author       = {Adnan Darwiche},
   title        = {New Advances in Compiling {CNF} into Decomposable Negation Normal

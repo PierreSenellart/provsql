@@ -271,7 +271,22 @@ Currently Supported Methods
        of all :math:`2^n` worlds; capped at 64 inputs.
    * - ``"monte-carlo"``
      - :cfunc:`BooleanCircuit::monteCarlo` -- approximate via random
-       sampling; takes sample count as argument.
+       sampling.  The argument is a fixed count (``samples=N`` or a bare
+       integer) or an *additive* ``(eps,delta)`` target, for which
+       ``N = ceil(ln(2/delta)/(2*eps^2))`` (Hoeffding, independent of the
+       estimated probability).
+   * - ``"karp-luby"``
+     - :cfunc:`BooleanCircuit::karpLuby` -- the Karp-Luby ``#DNF`` FPRAS,
+       whose sample complexity is independent of the estimated
+       probability (accurate on rare events, unlike naive Monte Carlo).
+       :cfunc:`BooleanCircuit::dnfShape` first checks the circuit is a
+       monotone OR-of-ANDs over input leaves (cross-clause leaf sharing
+       allowed) and extracts the clause supports; the dispatcher errors,
+       rather than falling back, on any other shape.  The argument is a
+       fixed ``samples=N`` or an adaptive ``epsilon=E[,delta=D][,max_samples=M]``
+       target (default ``epsilon=0.1, delta=0.05``), with the
+       :math:`(\epsilon,\delta) \to N` Chernoff-bound conversion done in
+       the dispatcher so the C++ method stays a plain sampler.
    * - ``"wmc"``
      - :cfunc:`BooleanCircuit::wmcCount` -- weighted model counting
        via the registered counter named in the argument
@@ -280,7 +295,8 @@ Currently Supported Methods
        named it selects the highest-preference available counter.
    * - ``"weightmc"``
      - Backward-compatible alias for ``"wmc"`` with the ``weightmc``
-       tool; takes ``delta;epsilon`` as argument.
+       tool; takes ``epsilon=E[,delta=D]`` or the historical
+       ``delta;epsilon`` pair as argument.
    * - ``"tree-decomposition"``
      - Builds a :cfunc:`TreeDecomposition` (bounded by
        :cfunc:`TreeDecomposition::MAX_TREEWIDTH`) and uses

@@ -5,3 +5,11 @@ remove_provenance
 city|round
 Paris|0.4
 (1 row)
+add_provenance
+
+(1 row)
+exact|bare|samples_kw|eps_additive
+0.70|0.70|0.70|0.70
+(1 row)
+ERROR:  ProvSQL: method 'monte-carlo': samples is mutually exclusive with epsilon/delta
+ERROR:  ProvSQL: method 'monte-carlo': unknown argument key 'foo'

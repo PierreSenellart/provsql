@@ -270,6 +270,61 @@ dDNNF parseDDNNF(std::istream &in,
 double monteCarlo(gate_t g, unsigned samples) const;
 
 /**
+ * @brief Detect the DNF shape the Karp-Luby FPRAS requires.
+ *
+ * Recognises the two tractable regimes: (a) a single AND-of-leaves
+ * clause, or (b) a top-level @c OR whose every child is an AND-only
+ * sub-circuit over @c IN leaves (no @c OR below the root, no @c NOT, no
+ * multivalued input).  Cross-clause leaf sharing is allowed and is the
+ * normal Karp-Luby setting.
+ *
+ * On success, @p clauses receives one root per top-level disjunct (or the
+ * singleton root @p g in regime (a)) and @p supports[i] the set of @c IN
+ * leaves reachable from @p clauses[i] through its AND-only stratum -- the
+ * support determines @c Pr[C_i] (the product of leaf marginals) and the
+ * conditional sampler.
+ *
+ * @param g         Root gate.
+ * @param clauses   Output: the top-level clause roots.
+ * @param supports  Output: per-clause set of reachable @c IN leaves.
+ * @return          @c true iff the circuit is DNF-shaped (regime (a)/(b)).
+ */
+bool dnfShape(gate_t g,
+              std::vector<gate_t> &clauses,
+              std::vector<std::set<gate_t> > &supports) const;
+
+/**
+ * @brief Karp-Luby FPRAS estimate of a DNF-shaped circuit's probability.
+ *
+ * Implements the Karp-Luby coverage estimator for the DNF-counting problem
+ * (@c \#DNF) under
+ * tuple-independent inputs: with @c p_i the product of the marginals of
+ * @p supports[i] and @c S the sum of the @c p_i (so @c S in
+ * @c [Pr[F], m*Pr[F]]), each round draws a clause @c i with probability
+ * @c p_i/S, samples a satisfying assignment of @c C_i (its support forced
+ * true, every other leaf drawn from its marginal), finds the smallest
+ * clause index @c j the assignment satisfies, and accepts iff @c j == i.
+ * Returns @c S times the acceptance ratio, unbiased with acceptance
+ * probability @c Pr[F]/S in @c [1/m, 1] -- so the sample count for an
+ * @c (eps,delta) guarantee is independent of @c Pr[F], unlike naive Monte
+ * Carlo.
+ *
+ * The @p clauses / @p supports are those returned by @c dnfShape; the
+ * caller supplies them (and resolves the sample count from an
+ * @c (eps,delta) target if asked) so this method stays a plain sampler.
+ * The @c mt19937_64 is seeded from @c provsql.monte_carlo_seed exactly as
+ * @c monteCarlo, so the estimate is reproducible under a pinned seed.
+ *
+ * @param clauses   Top-level clause roots (from @c dnfShape).
+ * @param supports  Per-clause reachable @c IN leaves (from @c dnfShape).
+ * @param samples   Resolved number of sampling rounds.
+ * @return          The Karp-Luby probability estimate.
+ */
+double karpLuby(const std::vector<gate_t> &clauses,
+                const std::vector<std::set<gate_t> > &supports,
+                unsigned long samples) const;
+
+/**
  * @brief Weighted model counting through a registered external counter.
  *
  * Generic over the counter: @p tool names a registry record with the @c "wmc"

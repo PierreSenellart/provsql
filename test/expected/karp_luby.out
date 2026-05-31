@@ -1,0 +1,22 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+circuit|exact|karp_luby
+flat|0.18|0.18
+shared|0.29|0.29
+subsume|0.50|0.50
+(3 rows)
+reproducible
+t
+(1 row)
+samples_kw|samples_bare|eps_only|eps_delta_cap
+0.29|0.29|0.29|0.29
+(1 row)
+WARNING:  ProvSQL: method 'karp-luby' applies only to a DNF-shaped circuit (a monotone OR-of-ANDs over input leaves); negation, comparison, aggregation, random-variable and multivalued-input gates are not supported
+ERROR:  ProvSQL: method 'karp-luby' requires a DNF-shaped provenance circuit
+ERROR:  ProvSQL: method 'karp-luby': samples is mutually exclusive with epsilon/delta
+ERROR:  ProvSQL: method 'karp-luby': delta requires epsilon
+ERROR:  ProvSQL: method 'karp-luby': max_samples applies only to the adaptive epsilon/delta path
+ERROR:  ProvSQL: method 'karp-luby': unknown argument key 'foo'
+ERROR:  ProvSQL: method 'karp-luby': invalid sample count 'not_a_number'

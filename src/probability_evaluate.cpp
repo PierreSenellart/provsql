@@ -44,6 +44,9 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include <algorithm>
 #include <cmath>
 #include <csignal>
+#include <string>
+#include <sstream>
+#include <cctype>
 
 #include "BooleanCircuit.h"
 #include "CircuitFromMMap.h"
@@ -63,6 +66,253 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "semiring/BoolExpr.h"
 
 using namespace std;
+
+namespace {
+
+/// Trim leading/trailing ASCII spaces and tabs.
+string trim_arg(const string &s)
+{
+  size_t a = s.find_first_not_of(" \t");
+  if(a == string::npos)
+    return string();
+  size_t b = s.find_last_not_of(" \t");
+  return s.substr(a, b - a + 1);
+}
+
+/**
+ * @brief Parsed probability-method argument string.
+ *
+ * @c kv holds the @c key=value pairs (key lower-cased, @c eps folded to
+ * @c epsilon); @c positional holds the comma-separated tokens that carry no
+ * @c '=' -- the historical bare-number (@c monte-carlo) and
+ * @c 'delta;epsilon' / @c 'tool;args' (@c weightmc / @c wmc) shortcuts.
+ */
+struct MethodArgs {
+  map<string, string> kv;
+  vector<string> positional;
+  bool has(const string &k) const { return kv.find(k) != kv.end(); }
+  string get(const string &k) const {
+    auto it = kv.find(k);
+    return it == kv.end() ? string() : it->second;
+  }
+};
+
+/**
+ * @brief Tokenise a probability-method argument string.
+ *
+ * The grammar is shared by every method: a comma-separated list whose
+ * @c key=value items populate @c MethodArgs::kv and whose bare items (no
+ * @c '=') go verbatim into @c MethodArgs::positional.  None of the historical
+ * shortcuts used a comma, so each survives as a single positional token (a
+ * bare integer for @c monte-carlo, @c 'delta;epsilon' for @c weightmc,
+ * @c 'tool;args' for @c wmc), letting the canonical @c key=value form and the
+ * old form coexist.
+ */
+MethodArgs parse_method_args(const string &args)
+{
+  MethodArgs out;
+  stringstream ss(args);
+  string tok;
+  while(getline(ss, tok, ',')) {
+    string t = trim_arg(tok);
+    if(t.empty())
+      continue;
+    auto eq = t.find('=');
+    if(eq == string::npos) {
+      out.positional.push_back(t);
+    } else {
+      string key = trim_arg(t.substr(0, eq));
+      string val = trim_arg(t.substr(eq + 1));
+      transform(key.begin(), key.end(), key.begin(),
+                [](unsigned char c){ return tolower(c); });
+      if(key == "eps")
+        key = "epsilon";
+      out.kv[key] = val;
+    }
+  }
+  return out;
+}
+
+/// Raise if any kv key lies outside @p allowed, naming the method.
+void reject_unknown_keys(const MethodArgs &a, const set<string> &allowed,
+                         const char *method)
+{
+  for(const auto &p : a.kv)
+    if(allowed.find(p.first) == allowed.end())
+      provsql_error("method '%s': unknown argument key '%s'",
+                    method, p.first.c_str());
+}
+
+/// Parse a non-negative integer that consumes the whole string.
+bool parse_ulong_full(const string &v, unsigned long &out)
+{
+  if(v.empty() || v.find_first_not_of("0123456789") != string::npos)
+    return false;
+  try {
+    size_t pos = 0;
+    out = stoul(v, &pos);
+    return pos == v.size();
+  } catch(const std::exception &) {
+    return false;
+  }
+}
+
+/// Parse a finite double that consumes the whole string.
+bool parse_double_full(const string &v, double &out)
+{
+  if(v.empty())
+    return false;
+  try {
+    size_t pos = 0;
+    out = stod(v, &pos);
+    return pos == v.size();
+  } catch(const std::exception &) {
+    return false;
+  }
+}
+
+/**
+ * @brief A resolved sampling request: a fixed count, or an @c (eps,delta) target.
+ *
+ * @c fixed selects @c samples; otherwise the caller turns @c (eps,delta) into a
+ * sample count with its own bound (additive for @c monte-carlo, relative for
+ * @c karp-luby).
+ */
+struct SampleSpec {
+  bool fixed = false;
+  unsigned long samples = 0;
+  double eps = 0.1, delta = 0.05;
+  bool has_max = false;
+  unsigned long max_samples = 0;
+};
+
+/**
+ * @brief Parse and validate the argument grammar shared by the sampling methods.
+ *
+ * The grammar is @c samples=N | a bare integer | @c
+ * epsilon=E[,delta=D][,max_samples=M].  This routine only resolves *which* path
+ * the user asked for and validates the keys / ranges; the @c (eps,delta) -> N
+ * conversion is method-specific and applied by the caller.  An empty argument
+ * selects the adaptive path with the default @c (eps=0.1, delta=0.05).
+ */
+SampleSpec parse_sample_spec(const MethodArgs &a, const char *method)
+{
+  reject_unknown_keys(a, {"samples", "epsilon", "delta", "max_samples"}, method);
+
+  const bool has_samples = a.has("samples") || !a.positional.empty();
+  const bool has_adaptive = a.has("epsilon") || a.has("delta");
+
+  if(a.positional.size() > 1)
+    provsql_error("method '%s': too many positional arguments", method);
+  if(a.has("samples") && !a.positional.empty())
+    provsql_error("method '%s': give either samples= or a bare integer, "
+                  "not both", method);
+  if(has_samples && has_adaptive)
+    provsql_error("method '%s': samples is mutually exclusive with "
+                  "epsilon/delta", method);
+  if(a.has("max_samples") && !has_adaptive)
+    provsql_error("method '%s': max_samples applies only to the adaptive "
+                  "epsilon/delta path", method);
+  if(a.has("delta") && !a.has("epsilon"))
+    provsql_error("method '%s': delta requires epsilon", method);
+
+  SampleSpec s;
+  if(has_samples) {
+    s.fixed = true;
+    const string v = a.has("samples") ? a.get("samples") : a.positional[0];
+    if(!parse_ulong_full(v, s.samples) || s.samples == 0)
+      provsql_error("method '%s': invalid sample count '%s'", method, v.c_str());
+    return s;
+  }
+
+  if(a.has("epsilon") && (!parse_double_full(a.get("epsilon"), s.eps)
+                          || s.eps <= 0. || s.eps > 1.))
+    provsql_error("method '%s': epsilon must be in (0, 1]", method);
+  if(a.has("delta") && (!parse_double_full(a.get("delta"), s.delta)
+                        || s.delta <= 0. || s.delta >= 1.))
+    provsql_error("method '%s': delta must be in (0, 1)", method);
+  if(a.has("max_samples")) {
+    s.has_max = true;
+    if(!parse_ulong_full(a.get("max_samples"), s.max_samples) || s.max_samples == 0)
+      provsql_error("method '%s': invalid max_samples '%s'", method,
+                    a.get("max_samples").c_str());
+  }
+  return s;
+}
+
+/// Clamp a real sample count into @c unsigned @c long, honouring @c max_samples.
+unsigned long finalize_adaptive(double nd, const SampleSpec &s)
+{
+  // Clamp only to stay within unsigned long; the count is otherwise honest,
+  // and max_samples / query cancel bound the runtime.
+  unsigned long n = (nd >= 9e18) ? static_cast<unsigned long>(9e18)
+                                 : static_cast<unsigned long>(nd);
+  if(n == 0)
+    n = 1;
+  if(s.has_max && n > s.max_samples)
+    n = s.max_samples;
+  return n;
+}
+
+/**
+ * @brief Resolve the @c monte-carlo sample count from the parsed args.
+ *
+ * A fixed @c samples=N (or bare integer), or an *additive* @c (eps,delta)
+ * guarantee: the sample mean of the Bernoulli circuit indicator is within
+ * @c eps of the true probability with probability at least @c 1-delta after
+ * @c N = ceil(ln(2/delta) / (2*eps^2)) samples (Hoeffding's inequality, so the
+ * count is independent of the probability being estimated).  This is an
+ * *absolute* error bound; @c karp-luby provides the *relative* one needed on
+ * rare-event outputs.
+ */
+unsigned long monte_carlo_samples(const MethodArgs &a)
+{
+  SampleSpec s = parse_sample_spec(a, "monte-carlo");
+  if(s.fixed)
+    return s.samples;
+  return finalize_adaptive(ceil(log(2.0 / s.delta) / (2.0 * s.eps * s.eps)), s);
+}
+
+/**
+ * @brief Build the @c wmcCount opt string (@c "delta;epsilon") from the args.
+ *
+ * Accepts the canonical @c epsilon=E[,delta=D] or the historical positional
+ * @c 'delta;epsilon'; @c wmcCount itself reads only @c epsilon (it drives the
+ * @c {pivotAC} approximation tolerance) but the legacy two-field order is
+ * preserved.
+ */
+string wmc_opt_from_args(const MethodArgs &a, const char *method)
+{
+  reject_unknown_keys(a, {"epsilon", "delta"}, method);
+  if(a.has("epsilon") || a.has("delta"))
+    return a.get("delta") + ";" + a.get("epsilon");
+  if(!a.positional.empty())
+    return a.positional[0];
+  return string();
+}
+
+/**
+ * @brief Resolve the Karp-Luby sampling-round count from the parsed args.
+ *
+ * A fixed @c samples=N (or bare integer), or a *relative* @c (eps,delta) FPRAS
+ * guarantee, in which case @c N = ceil(4*(e-2)*m*ln(2/delta)/eps^2) (the KLM
+ * Chernoff bound over @p m clauses), capped by @c max_samples when given.  With
+ * no argument the adaptive default @c (epsilon=0.1, delta=0.05) applies.  Unlike
+ * @c monte-carlo's additive bound, this controls the *relative* error, which is
+ * what stays meaningful on rare-event outputs.
+ */
+unsigned long karp_luby_samples(const MethodArgs &a, size_t m)
+{
+  SampleSpec s = parse_sample_spec(a, "karp-luby");
+  if(s.fixed)
+    return s.samples;
+  const double e = exp(1.0);
+  const double mm = (m == 0) ? 1. : static_cast<double>(m);
+  return finalize_adaptive(
+    ceil(4.0 * (e - 2.0) * mm * log(2.0 / s.delta) / (s.eps * s.eps)), s);
+}
+
+} // anonymous namespace
 
 /**
  * @brief SIGINT handler that sets the global interrupted flag.
@@ -431,15 +681,8 @@ static Datum probability_evaluate_internal
     // GenericCircuit instead.  Other probability methods are not
     // (yet) defined over RV circuits.
     if(method == "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
-      int samples = 0;
-      try {
-        samples = stoi(args);
-      } catch(const std::invalid_argument &) {
-      }
-      if(samples <= 0)
-        provsql_error("Invalid number of samples: '%s'", args.c_str());
-
-      result = provsql::monteCarloRV(gc, gc_root, samples);
+      unsigned long samples = monte_carlo_samples(parse_method_args(args));
+      result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
     } else {
       // Existing Boolean-circuit path: applies HAVING semantics and
       // BoolExpr translation, then dispatches across the legacy
@@ -469,6 +712,28 @@ static Datum probability_evaluate_internal
         result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
                    .probability();
         processed = true;
+      } else if(method=="karp-luby") {
+        // Karp-Luby FPRAS for rare-event probability on a DNF-shaped
+        // (regime (a)/(b)) monotone circuit.  Runs before the multivalued
+        // rewrite below: that rewrite would introduce OR/NOT and take the
+        // circuit out of the DNF shape, and the detector already rejects
+        // multivalued inputs.  The (eps,delta)->N conversion happens in
+        // karp_luby_samples so BooleanCircuit::karpLuby stays a plain
+        // sampler.
+        std::vector<gate_t> clauses;
+        std::vector<std::set<gate_t> > supports;
+        if(!c.dnfShape(gate, clauses, supports)) {
+          provsql_warning("method 'karp-luby' applies only to a DNF-shaped "
+                          "circuit (a monotone OR-of-ANDs over input leaves); "
+                          "negation, comparison, aggregation, random-variable "
+                          "and multivalued-input gates are not supported");
+          provsql_error("method 'karp-luby' requires a DNF-shaped provenance "
+                        "circuit");
+        }
+        unsigned long n =
+          karp_luby_samples(parse_method_args(args), clauses.size());
+        result = c.karpLuby(clauses, supports, n);
+        processed = true;
       } else if(method=="") {
         // Default evaluation: independent, then (when an inversion-free
         // certificate is present) the structured-d-DNNF builder, then
@@ -496,33 +761,43 @@ static Datum probability_evaluate_internal
         c.rewriteMultivaluedGates();
 
         if(method=="monte-carlo") {
-          int samples=0;
-
-          try {
-            samples = stoi(args);
-          } catch(const std::invalid_argument &e) {
-          }
-
-          if(samples<=0)
-            provsql_error("Invalid number of samples: '%s'", args.c_str());
-
-          result = c.monteCarlo(gate, samples);
+          unsigned long samples = monte_carlo_samples(parse_method_args(args));
+          result = c.monteCarlo(gate, static_cast<unsigned>(samples));
         } else if(method=="possible-worlds") {
           if(!args.empty())
             provsql_warning("Argument '%s' ignored for method possible-worlds", args.c_str());
 
           result = c.possibleWorlds(gate);
         } else if(method=="weightmc") {
-          // Backward-compatible alias for the wmc/weightmc path.
-          result = c.wmcCount(gate, "weightmc", args);
+          // Backward-compatible alias for the wmc/weightmc path.  The args
+          // accept the canonical epsilon=/delta= or the historical
+          // 'delta;epsilon' positional, normalised by wmc_opt_from_args.
+          result = c.wmcCount(gate, "weightmc",
+                              wmc_opt_from_args(parse_method_args(args),
+                                                "weightmc"));
         } else if(method=="wmc") {
-          // 'args' = "tool[;tool_args]". 'tool' selects which weighted model
-          // counter to invoke (any registered wmc tool); 'tool_args'
-          // (optional, ';'-prefixed) is forwarded.  wmcCount validates the
-          // tool against the registry, so there is no per-tool branch here.
-          auto sep = args.find(';');
-          std::string tool = (sep == std::string::npos) ? args : args.substr(0, sep);
-          std::string tool_args = (sep == std::string::npos) ? std::string() : args.substr(sep + 1);
+          // 'tool' selects which weighted model counter to invoke (any
+          // registered wmc tool); the tool options are forwarded to
+          // wmcCount, which validates the tool against the registry (no
+          // per-tool branch here).  Two argument forms are accepted: the
+          // canonical 'tool=<name>[,epsilon=E][,delta=D]', and the historical
+          // positional 'tool[;tool_args]'.
+          MethodArgs a = parse_method_args(args);
+          std::string tool, tool_args;
+          if(a.has("tool") || a.has("epsilon") || a.has("delta")) {
+            reject_unknown_keys(a, {"tool", "epsilon", "delta"}, "wmc");
+            tool = a.get("tool");
+            if(tool.empty() && !a.positional.empty())
+              tool = a.positional[0];
+            if(tool.empty())
+              provsql_error("method 'wmc' requires a tool (tool=<name>)");
+            if(a.has("epsilon") || a.has("delta"))
+              tool_args = a.get("delta") + ";" + a.get("epsilon");
+          } else {
+            auto sep = args.find(';');
+            tool = (sep == std::string::npos) ? args : args.substr(0, sep);
+            tool_args = (sep == std::string::npos) ? std::string() : args.substr(sep + 1);
+          }
           result = c.wmcCount(gate, tool, tool_args);
         } else if(method=="compilation" || method=="tree-decomposition"
                   || method=="interpret-as-dd" || method=="default"

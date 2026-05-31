@@ -50,7 +50,10 @@ result holds, given the assigned input probabilities:
     FROM suspects;
 
 The function accepts an optional second argument specifying the computation
-method, and an optional third argument for method-specific parameters.
+method, and an optional third argument for method-specific parameters. That
+third argument is a comma-separated ``key=value`` list (the keys accepted
+depend on the method); each method also keeps its historical shorthand (a bare
+sample count, a ``delta;epsilon`` pair, …) as documented below.
 
 ProvSQL Studio's :ref:`evaluation strip <studio-circuit-eval-strip>`
 exposes :sqlfunc:`probability_evaluate` interactively, with method
@@ -77,13 +80,66 @@ Computation Methods
         SELECT probability_evaluate(provenance(), 'possible-worlds') FROM suspects;
 
 ``'monte-carlo'``
-    Approximate computation by random sampling. The third argument sets the
-    number of samples (default: 1000):
+    Approximate computation by random sampling. The third argument is either a
+    fixed sample count (a bare integer or ``samples=N``) or an **additive**
+    ``(ε, δ)`` target ``epsilon=E[,delta=D][,max_samples=M]`` (default
+    ``eps=0.1, delta=0.05`` when omitted):
 
     .. code-block:: postgresql
 
         SELECT probability_evaluate(provenance(), 'monte-carlo', '10000')
         FROM suspects;
+        SELECT probability_evaluate(provenance(), 'monte-carlo', 'eps=0.01')
+        FROM suspects;
+
+    The ``(ε, δ)`` form guarantees that the estimate is within ``ε`` of the
+    true probability ``p`` (in **absolute** terms) with probability at least
+    ``1 − δ``, drawing ``N = ⌈ln(2/δ)/(2ε²)⌉`` samples (Hoeffding's
+    inequality); the count is independent of ``p``. Because the error is
+    *absolute*, an ``ε`` of, say, ``0.1`` is uninformative on a rare-event
+    output with ``p ≪ ε``; for a **relative**-error guarantee in that regime
+    use ``'karp-luby'``. Pin ``provsql.monte_carlo_seed`` for a reproducible
+    estimate.
+
+``'karp-luby'``
+    Approximate computation by the Karp-Luby fully-polynomial randomised
+    approximation scheme (FPRAS) for ``#DNF`` :cite:`DBLP:journals/jal/KarpLM89`.
+    It delivers a **relative** ``(ε, δ)`` guarantee -- the estimate is within a
+    *factor* ``1 ± ε`` of the true probability with probability at least
+    ``1 − δ`` -- at a sample count independent of that probability. This is the
+    guarantee that stays meaningful on rare-event outputs, where naive Monte
+    Carlo's *absolute* ``ε`` (see ``'monte-carlo'`` above) says nothing. It
+    applies to **DNF-shaped** circuits:
+    a monotone disjunction (top-level ``OR``) of conjunctions (``AND``) of
+    input leaves -- the lineage shape of a union of conjunctive queries over a
+    tuple-independent database. Leaves may be shared across clauses. The
+    method errors (it does not silently fall back) on any other shape:
+    negation (``EXCEPT``/``monus``), comparison (``HAVING``), aggregation,
+    random-variable, or multivalued (BID) gates.
+
+    The third argument selects a fixed sample count or an ``(ε, δ)`` accuracy
+    target (default ``epsilon=0.1, delta=0.05`` when omitted):
+
+    - ``samples=N`` (or a bare integer ``N``) -- a fixed number of sampling
+      rounds; deterministic runtime.
+    - ``epsilon=E`` (alias ``eps=E``) -- relative-error target. The sample
+      count is derived from the Chernoff bound
+      ``N = ⌈4(e−2)·m·ln(2/δ)/ε²⌉`` over the ``m`` clauses.
+    - ``delta=D`` -- failure-probability target (only with ``epsilon``).
+    - ``max_samples=N`` -- caps the derived count (only with the adaptive
+      path), bounding the runtime for very small ``ε`` or large ``m``.
+
+    .. code-block:: postgresql
+
+        -- fixed budget
+        SELECT probability_evaluate(provenance(), 'karp-luby', '100000')
+        FROM suspects;
+        -- (ε, δ) guarantee
+        SELECT probability_evaluate(provenance(), 'karp-luby', 'eps=0.05,delta=0.01')
+        FROM suspects;
+
+    ``samples`` is mutually exclusive with ``epsilon``/``delta``. Pin
+    ``provsql.monte_carlo_seed`` for a reproducible estimate.
 
 ``'tree-decomposition'``
     Exact computation via a tree decomposition of the Boolean circuit
@@ -144,7 +200,8 @@ Computation Methods
 
 ``'wmc'``
     Exact (umbrella for weighted model counters) computation. The third
-    argument is ``tool[;tool_args]`` and selects the counter:
+    argument selects the counter and its options, either as
+    ``tool[;tool_args]`` or as ``tool=<name>[,epsilon=E][,delta=D]``:
     ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`, ``'sharpsat-td'``
     :cite:`DBLP:conf/cp/KorhonenJ21`, ``'dpmc'``
     :cite:`DBLP:conf/cp/DudekPV20`, or ``'weightmc'``. Same PATH /
@@ -157,11 +214,13 @@ Computation Methods
 
 ``'weightmc'``
     Approximate weighted model counting using the external ``weightmc``
-    tool (alias for ``'wmc'``, ``'weightmc;...'``):
+    tool (alias for ``'wmc'`` with that tool). The third argument carries
+    the approximation tolerance, as ``epsilon=E[,delta=D]`` or the
+    historical ``delta;epsilon`` pair:
 
     .. code-block:: postgresql
 
-        SELECT probability_evaluate(provenance(), 'weightmc')
+        SELECT probability_evaluate(provenance(), 'weightmc', 'epsilon=0.8')
         FROM suspects;
 
     Same PATH / ``provsql.tool_search_path`` considerations as

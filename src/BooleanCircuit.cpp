@@ -39,6 +39,7 @@ extern "C" {
 #include <vector>
 #include <stack>
 #include <functional>
+#include <algorithm>
 
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
@@ -385,6 +386,145 @@ double BooleanCircuit::monteCarlo(gate_t g, unsigned samples) const
   }
 
   return success*1./samples;
+}
+
+bool BooleanCircuit::dnfShape(
+  gate_t g,
+  std::vector<gate_t> &clauses,
+  std::vector<std::set<gate_t> > &supports) const
+{
+  clauses.clear();
+  supports.clear();
+
+  // A top-level OR exposes one clause per child; anything else is a single
+  // clause rooted at g itself (regime (a): a bare AND-of-leaves or a lone
+  // input).
+  std::vector<gate_t> clause_roots;
+  if(getGateType(g)==BooleanGate::OR) {
+    for(auto c: getWires(g))
+      clause_roots.push_back(c);
+  } else {
+    clause_roots.push_back(g);
+  }
+
+  for(auto root: clause_roots) {
+    // Sweep the AND-only stratum below this clause root, collecting the
+    // reachable input leaves.  Any OR (nested disjunction), NOT
+    // (negation), or multivalued input below the root takes the circuit
+    // out of regimes (a)/(b): bail.
+    std::set<gate_t> support;
+    std::unordered_set<gate_t> seen;
+    std::stack<gate_t> st;
+    st.push(root);
+    while(!st.empty()) {
+      gate_t cur = st.top();
+      st.pop();
+      if(!seen.insert(cur).second)
+        continue;
+      switch(getGateType(cur)) {
+      case BooleanGate::IN:
+        support.insert(cur);
+        break;
+      case BooleanGate::AND:
+        for(auto s: getWires(cur))
+          st.push(s);
+        break;
+      default:
+        return false;
+      }
+    }
+    clauses.push_back(root);
+    supports.push_back(std::move(support));
+  }
+
+  return true;
+}
+
+double BooleanCircuit::karpLuby(
+  const std::vector<gate_t> &clauses,
+  const std::vector<std::set<gate_t> > &supports,
+  unsigned long samples) const
+{
+  const size_t m = clauses.size();
+  if(m==0 || samples==0)
+    return 0.;
+
+  // Per-clause probability p_i = product of the marginals of its support
+  // leaves (an AND-of-leaves clause holds iff every support leaf is true),
+  // and the union-bound total S = sum p_i, with Pr[F] <= S <= m*Pr[F].
+  // cumulative[] is the prefix-sum used to draw a clause index in O(log m).
+  std::vector<double> cumulative(m);
+  double S = 0.;
+  for(size_t i=0; i<m; ++i) {
+    double pi = 1.;
+    for(gate_t leaf: supports[i])
+      pi *= getProb(leaf);
+    S += pi;
+    cumulative[i] = S;
+  }
+  if(S<=0.)
+    return 0.;
+
+  // Seed mt19937_64 from provsql.monte_carlo_seed exactly as monteCarlo, so
+  // a pinned seed makes the estimate reproducible for the regression tests.
+  std::mt19937_64 rng;
+  if(provsql_monte_carlo_seed != -1) {
+    rng.seed(static_cast<uint64_t>(provsql_monte_carlo_seed));
+  } else {
+    std::random_device rd;
+    rng.seed((static_cast<uint64_t>(rd()) << 32) | rd());
+  }
+  std::uniform_real_distribution<double> uniform01(0.0, 1.0);
+
+  // Only leaves appearing in some clause support can affect clause
+  // membership, so we draw just those each round.
+  std::set<gate_t> relevant;
+  for(const auto &sup: supports)
+    relevant.insert(sup.begin(), sup.end());
+
+  unsigned long accepts = 0;
+  std::unordered_set<gate_t> trueLeaves;
+
+  for(unsigned long s=0; s<samples; ++s) {
+    // Step 1: draw a clause i with probability p_i / S.
+    double u = uniform01(rng) * S;
+    size_t i = static_cast<size_t>(
+      std::upper_bound(cumulative.begin(), cumulative.end(), u)
+      - cumulative.begin());
+    if(i>=m)
+      i = m-1;   // guard against u == S from rounding
+
+    // Step 2: sample an assignment satisfying C_i -- force its support
+    // true, draw every other relevant leaf from its marginal.
+    trueLeaves.clear();
+    for(gate_t leaf: relevant) {
+      if(supports[i].count(leaf) || uniform01(rng) < getProb(leaf))
+        trueLeaves.insert(leaf);
+    }
+
+    // Step 3: find the smallest clause index j the assignment satisfies;
+    // accept iff j == i (the Karp-Luby coverage rejection that divides the
+    // over-count S by the number of clauses covering each sampled world).
+    for(size_t j=0; j<m; ++j) {
+      bool sat = true;
+      for(gate_t leaf: supports[j]) {
+        if(trueLeaves.find(leaf)==trueLeaves.end()) {
+          sat = false;
+          break;
+        }
+      }
+      if(sat) {
+        if(j==i)
+          ++accepts;
+        break;
+      }
+    }
+
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted after "+std::to_string(s+1)+" samples");
+  }
+
+  return S * accepts / static_cast<double>(samples);
 }
 
 double BooleanCircuit::possibleWorlds(gate_t g) const

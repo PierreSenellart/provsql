@@ -170,9 +170,21 @@ exactly the unsafe / non-hierarchical UCQ fragment.
 
 ## Proposed implementation
 
-### Tier 1 -- minimum viable Karp-Luby
+### Tier 1 -- minimum viable Karp-Luby -- IMPLEMENTED
 
-A new probability method named `'karp-luby'` (clearer to users than `'klm'` or
+Shipped as the `'karp-luby'` probability method. `BooleanCircuit::dnfShape`
+(in `src/BooleanCircuit.cpp`) is the shape detector and `BooleanCircuit::karpLuby`
+the coverage-estimator sampler; the dispatch, argument parser and
+`(eps, delta) -> N` conversion live in `src/probability_evaluate.cpp`. The
+argument grammar landed as a *shared* `key=value` tokeniser also wired into
+`'monte-carlo'` (now accepts `samples=`) and `'weightmc'` / `'wmc'` (now accept
+`epsilon=`/`delta=`/`tool=`), with every method keeping its historical
+shorthand. Tests: `test/sql/karp_luby.sql`. Docs:
+`doc/source/user/probabilities.rst` and `doc/source/dev/probability-evaluation.rst`.
+The empirical probe below (step 1 of the suggested ordering) was *not* run
+first; Tier 1 was implemented on request. The original design follows.
+
+A probability method named `'karp-luby'` (clearer to users than `'klm'` or
 `'dnf-fpras'`; aliases at the SQL level fine).
 
 1. **Shape detector**, somewhere alongside `safe_query_cert`. Returns true
@@ -261,12 +273,17 @@ including the validation of conflicting keys.
   `p_i`, the importance-sampling step (categorical draw of clause index)
   has variance dominated by the largest clauses. Standard stratification
   cuts the constant by a factor up to `m`. Worth the ~20 lines.
-- **Surface the same `key=value` parser from `'monte-carlo'`**: once the
-  parser exists for Karp-Luby, extending `'monte-carlo'` to accept
-  `samples=N` (with the bare integer still meaning `samples=`) is a
-  one-line dispatch change and improves uniformity. (Naive MC cannot offer
-  the adaptive `(eps, delta)` path -- its sample complexity depends on
-  `p`, which is what we are estimating -- so it stays `samples=`-only.)
+- **Surface the same `key=value` parser from `'monte-carlo'`** -- **DONE**
+  in Tier 1. The tokeniser and `(eps, delta)` grammar are shared
+  (`parse_sample_spec` in `src/probability_evaluate.cpp`); `'monte-carlo'`
+  accepts `samples=N` (bare integer still a shortcut) and an `(eps, delta)`
+  target, and `'weightmc'` / `'wmc'` accept `epsilon=`/`delta=`/`tool=`,
+  each keeping its historical shorthand. Note the `(eps, delta)` for
+  `'monte-carlo'` is the **additive** Hoeffding bound
+  `N = ceil(ln(2/delta)/(2*eps^2))` (sample count independent of `p`), a
+  *different and weaker* guarantee than Karp-Luby's **relative** FPRAS: an
+  additive `eps` is uninformative once `p` is far below it, which is exactly
+  the rare-event regime where the relative guarantee earns its keep.
 
 ### Tier 3 -- research direction (positive-DAG generalisation)
 
@@ -342,12 +359,16 @@ Suggested ordering:
    ProvSQL-typical UCQs over a TPC-H-style probabilistic instance with
    skewed-low source-tuple probabilities; tabulate output-tuple
    probabilities; observe what fraction of outputs fall in the `m * p << 1`
-   regime where Karp-Luby is asymptotically necessary. If the fraction is
-   negligible, **stop**: file the study under "settled, decided against,
-   kept for the rationale". If the fraction is material, proceed.
-2. **Tier 1** -- minimum-viable Karp-Luby, plus tests and docs.
-3. **Tier 2** -- adaptive-`(eps, delta)` API and KLM variant; ship as
-   incremental polish.
+   regime where Karp-Luby is asymptotically necessary. *(Not run: Tier 1
+   was implemented on request without the probe; it remains the right way
+   to decide where Karp-Luby actually helps on real workloads.)*
+2. **Tier 1** -- minimum-viable Karp-Luby, plus tests and docs. **DONE**,
+   including the adaptive `(eps, delta)` argument path (originally slated
+   for Tier 2) and surfacing the shared `key=value` parser to
+   `'monte-carlo'` / `'weightmc'` / `'wmc'`.
+3. **Tier 2** -- remaining polish: the KLM self-adjusting stopping rule and
+   per-clause stratified sampling (both internal to
+   `BooleanCircuit::karpLuby`).
 4. **Tier 3** -- general positive-DAG extension; research-shaped, not on a
    schedule.
 
