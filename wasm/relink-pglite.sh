@@ -2,6 +2,11 @@
 # Relink PGlite's main module so it exports the PG internals ProvSQL needs,
 # producing a matched pglite.wasm that can load provsql.so.
 #
+# Named distinctly from the upstream postgres-pglite `build-pglite.sh` (the
+# core configure+make+install script) on purpose: the orchestration copies
+# this file into the tree, and sharing the upstream name would clobber the
+# core builder and break re-runs.
+#
 # Runs INSIDE the electricsql/pglite-builder container, from the
 # postgres-pglite tree root, AFTER:
 #   - the WASM Postgres core has been built+installed into dist/ (the
@@ -13,24 +18,32 @@ set -u
 NM=/emsdk/upstream/bin/llvm-nm
 
 # (1) provsql.imports = symbols undefined across provsql's objects but not
-# defined by them.  Drop C++ mangled (_Z*) names: the pure-C main module
-# cannot export them, and the leftover undefined ones are provsql-internal,
-# never-called template instantiations (libc++ is bundled in provsql.so).
-# Also drop _GLOBAL_OFFSET_TABLE_: it is the linker-synthesized GOT base,
-# undefined in provsql's -fpic C++ objects and provided per-module by the
-# runtime rather than imported.  The export list builder (src/backend/Makefile
-# pglite-exported-functions) prepends a '_' to every import, so it would be
-# exported as __GLOBAL_OFFSET_TABLE_, which emscripten rejects ("undefined
-# exported symbol", fatal under -Werror).  Other synthetic globals
-# (__memory_base, __stack_pointer, ...) appear in every bundled extension's
-# imports and the build tolerates them, so only the GOT base needs dropping.
+# defined by them: the PG-core symbols the main module must export so the
+# side module resolves.  Three classes are filtered out, none of which is a
+# PG-core import:
+#   - C++ mangled (_Z*) names: the pure-C main module cannot export them, and
+#     the leftover undefined ones are provsql-internal, never-called template
+#     instantiations (libc++ is bundled in provsql.so).
+#   - symbols already in included.pglite.exports: the upstream curated C++
+#     runtime export set (__cxa_*, typeinfo helpers, ...) that the Makefile's
+#     pglite-exported-functions target adds independently, so listing them
+#     again is redundant.
+#   - emscripten / unwinder / linker intrinsics (_Unwind_*, emscripten_*, the
+#     setjmp/longjmp helpers, _GLOBAL_OFFSET_TABLE_): these are provided by the
+#     emscripten JS runtime / per module by the linker, not exported by the
+#     main module.  Left in, the export-list builder (which prepends a '_' to
+#     every import) would ask emscripten to export e.g. __Unwind_Resume or
+#     __GLOBAL_OFFSET_TABLE_, which it rejects ("undefined exported symbol",
+#     fatal under -Werror).
+INCLUDED="$PWD/pglite/static/included.pglite.exports"
 IMPDIR=dist/include/postgresql/emscripten/extension/imports
 ( cd provsql-wasm
   $NM --undefined-only src/*.o | awk '{print $2}' | sed '/^$/d' | sort -u > provsql.undef.txt
   $NM --defined-only src/*.o provsql.so | awk '$2 ~ /^[TDB]$/ {print $3}' | sed '/^$/d' | sort -u > provsql.defs.txt
   comm -23 provsql.undef.txt provsql.defs.txt \
     | grep -v '^_Z' \
-    | grep -vxF '_GLOBAL_OFFSET_TABLE_' \
+    | { [ -f "$INCLUDED" ] && grep -vxF -f "$INCLUDED" || cat; } \
+    | grep -vxE '_GLOBAL_OFFSET_TABLE_|_Unwind_.*|emscripten_.*|setThrew|__threwValue|saveSetjmp|testSetjmp|getTempRet0|setTempRet0' \
     > "../$IMPDIR/provsql.imports" )
 echo "provsql.imports: $(wc -l < $IMPDIR/provsql.imports) symbols"
 
