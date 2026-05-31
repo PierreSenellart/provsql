@@ -334,6 +334,35 @@ single linear-time pass
 (:cfunc:`dDNNF::probabilityEvaluation`), because the d-DNNF
 structure guarantees decomposability and determinism.
 
+Approximation-guarantee NOTICE
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The approximate methods (``monte-carlo``, ``karp-luby``, and ``weightmc`` /
+``wmc`` with an approximate counter) return an estimate that carries an
+``(eps, delta)`` error guarantee.  ``probability_evaluate.cpp`` surfaces it as a
+single machine-readable NOTICE so a UI can render it without re-deriving the
+bound:
+
+.. code-block:: text
+
+   ProvSQL: approximation-guarantee: kind=<relative|additive> eps=<E> \
+       [delta=<D>] [samples=<N>] [clauses=<M>] [tool=<name>]
+
+emitted by the ``emit_guarantee`` helper.  ``kind=relative`` is a
+multiplicative guarantee (the estimate is within a factor ``1 ± eps`` of the
+true probability with probability at least ``1 - delta``), used by
+``karp-luby`` (over ``M`` clauses) and the approximate weighted counters;
+``kind=additive`` is the absolute Hoeffding bound (``|estimate - p| <= eps``)
+used by ``monte-carlo``.  ``samples`` is the actual sample count (on the
+adaptive ``(eps, delta)`` path it is the count ``emit_guarantee``'s caller
+derived).  The fields are omitted when not applicable (no ``delta`` for the
+weighted counters, no ``samples`` / ``clauses`` for the external tools).
+
+The NOTICE is gated on ``provsql.verbose_level >= 5`` so plain SQL evaluation
+and the regression suite stay quiet; ProvSQL Studio raises the level to 5 for
+evaluation and parses the NOTICE into the eval-strip bound, but its probability
+benchmark drops it (it is per-method UI metadata, not a benchmark row).
+
 Cmp-Probability Pre-Passes
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
