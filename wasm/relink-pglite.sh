@@ -28,22 +28,32 @@ NM=/emsdk/upstream/bin/llvm-nm
 #     runtime export set (__cxa_*, typeinfo helpers, ...) that the Makefile's
 #     pglite-exported-functions target adds independently, so listing them
 #     again is redundant.
-#   - emscripten / unwinder / linker intrinsics (_Unwind_*, emscripten_*, the
-#     setjmp/longjmp helpers, _GLOBAL_OFFSET_TABLE_): these are provided by the
-#     emscripten JS runtime / per module by the linker, not exported by the
-#     main module.  Left in, the export-list builder (which prepends a '_' to
-#     every import) would ask emscripten to export e.g. __Unwind_Resume or
-#     __GLOBAL_OFFSET_TABLE_, which it rejects ("undefined exported symbol",
-#     fatal under -Werror).
+#   - emscripten / compiler / linker intrinsics: the C++ exception personality
+#     and unwinder (__gxx_personality_v0, _Unwind_*), the GOT base
+#     (_GLOBAL_OFFSET_TABLE_), the wasm dynamic-linking globals (__memory_base,
+#     __stack_pointer, __table_base, __dso_handle, __indirect_function_table),
+#     the emscripten setjmp/longjmp + invoke helpers (emscripten_*, invoke_*,
+#     setThrew, __threwValue, save/testSetjmp, get/setTempRet0).  These are
+#     provided per module by the emscripten runtime / dynamic linker, not
+#     exported by the pure-C main module; left in, the export-list builder
+#     (which prepends a '_' to every import) asks emscripten to export e.g.
+#     __gxx_personality_v0 or __GLOBAL_OFFSET_TABLE_, which it rejects
+#     ("undefined exported symbol", fatal under -Werror).  (Filtering by
+#     pattern, not by "absent from the base pglite.wasm symbol table": dead-code
+#     elimination drops many genuine PG-core symbols provsql does need exported,
+#     e.g. SearchSysCache4 / SetLatch, so the base symbol table is not a usable
+#     allowlist.  __wasm_setjmp / __THREW__ are defined by the main module and
+#     are kept.)
 INCLUDED="$PWD/pglite/static/included.pglite.exports"
 IMPDIR=dist/include/postgresql/emscripten/extension/imports
+INTRINSICS='_GLOBAL_OFFSET_TABLE_|_Unwind_.*|__gxx_personality_v0|emscripten_.*|invoke_.*|__dso_handle|__memory_base|__stack_pointer|__table_base|__indirect_function_table|setThrew|__threwValue|saveSetjmp|testSetjmp|getTempRet0|setTempRet0'
 ( cd provsql-wasm
   $NM --undefined-only src/*.o | awk '{print $2}' | sed '/^$/d' | sort -u > provsql.undef.txt
   $NM --defined-only src/*.o provsql.so | awk '$2 ~ /^[TDB]$/ {print $3}' | sed '/^$/d' | sort -u > provsql.defs.txt
   comm -23 provsql.undef.txt provsql.defs.txt \
     | grep -v '^_Z' \
     | { [ -f "$INCLUDED" ] && grep -vxF -f "$INCLUDED" || cat; } \
-    | grep -vxE '_GLOBAL_OFFSET_TABLE_|_Unwind_.*|emscripten_.*|setThrew|__threwValue|saveSetjmp|testSetjmp|getTempRet0|setTempRet0' \
+    | grep -vxE "$INTRINSICS" \
     > "../$IMPDIR/provsql.imports" )
 echo "provsql.imports: $(wc -l < $IMPDIR/provsql.imports) symbols"
 
