@@ -117,6 +117,43 @@ def test_circuit_eval_strip_runs_boolexpr(
     expect(page.locator("#eval-result")).not_to_be_empty(timeout=8000)
 
 
+def test_circuit_eval_strip_karp_luby_options_and_bound(
+    page: Page, studio_url: str
+) -> None:
+    """Circuit mode, probability semiring, karp-luby: the dedicated
+    approximate-options control appears (defaulting to the (eps, delta) mode
+    for karp-luby), its samples/(eps,delta) toggle swaps the fields, and a run
+    reports a result plus the relative-error guarantee bound with the sample
+    count.  A single-row personnel provenance is a trivial DNF, so karp-luby
+    applies."""
+    page.goto(studio_url + "/circuit")
+    _run_query_and_wait(page, "SELECT name FROM personnel LIMIT 3;", 3)
+    page.locator("#result-body tr").first.locator("td").last.click()
+    expect(page.locator("#eval-strip")).to_be_visible(timeout=8000)
+
+    page.locator("#eval-semiring").select_option(value="probability")
+    page.locator("#eval-method").select_option(value="karp-luby")
+
+    # karp-luby defaults to the (eps, delta) mode: epsilon shows, samples hidden.
+    expect(page.locator("#eval-approx-eps")).to_be_visible(timeout=8000)
+    expect(page.locator("#eval-args-mc")).to_be_hidden()
+    # The mode toggle swaps to a fixed sample count and back.
+    page.locator("#eval-approx-mode").select_option(value="samples")
+    expect(page.locator("#eval-args-mc")).to_be_visible()
+    expect(page.locator("#eval-approx-eps")).to_be_hidden()
+    page.locator("#eval-approx-mode").select_option(value="epsdelta")
+    expect(page.locator("#eval-approx-eps")).to_be_visible()
+
+    page.locator("#eval-run").click()
+    expect(page.locator("#eval-result")).to_have_attribute(
+        "data-kind", "ok", timeout=15000
+    )
+    # The bound slot carries the relative-error guarantee + the sample count.
+    bound = page.locator("#eval-bound")
+    expect(bound).to_contain_text("relative error", timeout=8000)
+    expect(bound).to_contain_text("samples")
+
+
 def test_schema_panel_column_click_prefills_query(
     page: Page, studio_url: str
 ) -> None:
