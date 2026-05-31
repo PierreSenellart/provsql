@@ -12,7 +12,7 @@ IP=$(ip addr | grep -v 127.0.0 | sed -n 's_^.*inet \(.*\)/.* brd.*$_\1_p')
 echo "===== Starting PostgreSQL..."
 /etc/init.d/postgresql start
 echo -n "Waiting for PostgreSQL..."
-while [[ $(psql -c "SELECT md5('Hello');" test test 2>/dev/null \
+while [[ $(psql -c "SELECT md5('Hello');" postgres test 2>/dev/null \
             | grep -c '8b1a9953c4611296a827abf8c47804d7') -ne 1 ]]; do
     echo -n "."
     sleep 1
@@ -21,10 +21,10 @@ echo " ready."
 echo
 
 echo "===== Starting ProvSQL Studio..."
-# `--search-path provsql_test` makes the demo `personnel` fixture (set
-# up at image-build time from `test/sql/setup.sql`) reachable without
-# the user having to type schema-qualified names. Studio appends
-# `provsql` itself.
+# Studio lands on the `tutorial` database; the connection chip switches to the
+# case studies (cs1, cs2, cs4..cs7). The case-study schemas live in `public`,
+# so `--search-path public` lets unqualified table names resolve (Studio
+# appends `provsql` itself).
 #
 # Studio's stdout/stderr is piped through `grep -v` to drop Werkzeug's
 # stock "development server" warning, then accumulated in a small
@@ -35,8 +35,8 @@ echo "===== Starting ProvSQL Studio..."
 provsql-studio \
     --host 0.0.0.0 \
     --port 8000 \
-    --dsn 'dbname=test user=test' \
-    --search-path public,provsql_test 2>&1 \
+    --dsn 'dbname=tutorial user=test' \
+    --search-path public 2>&1 \
     | grep -v --line-buffered 'This is a development server' \
     > /tmp/studio.log &
 
@@ -59,13 +59,13 @@ cat <<EOF
       docker run -p 5433:5432 -p 8001:8000 inriavalda/provsql
 
   then reach them on those host ports:
-      psql shell:     psql -h localhost -p 5433 test test
+      psql shell:     psql -h localhost -p 5433 tutorial test
       Studio web UI:  http://localhost:8001
 
-  Databases: 'test' (a small smoke fixture) plus the tutorial and case
-  studies from the ProvSQL Playground -- tutorial, cs1, cs2, cs4, cs5,
-  cs6, cs7. Switch between them from Studio's connection chip, or connect
-  psql directly, e.g. psql -h localhost -p 5433 cs1 test.
+  Databases (the same set as the ProvSQL Playground): tutorial, cs1, cs2,
+  cs4, cs5, cs6, cs7. Studio lands on 'tutorial'; switch between them from
+  its connection chip, or connect psql directly, e.g.
+  psql -h localhost -p 5433 cs1 test.
 
   (On a native-Linux Docker bridge the container is also reachable
    directly at IP ${IP}; under Docker Desktop or rootless podman, use

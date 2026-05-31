@@ -10,8 +10,8 @@ continuous random variables.
 
 This image is a **ready-to-run demo**: PostgreSQL with ProvSQL preloaded,
 seeded with the ProvSQL Playground's tutorial and case-study databases
-(`tutorial`, `cs1`, `cs2`, `cs4`–`cs7`) plus a small `test` fixture, and
-**ProvSQL Studio** (the web UI) started for you.
+(`tutorial`, `cs1`, `cs2`, `cs4`–`cs7`), and **ProvSQL Studio** (the web UI)
+started for you.
 
 ## Quick start
 
@@ -26,8 +26,8 @@ the left-hand side of each `-p` as you like.
 - **ProvSQL Studio**: open <http://localhost:8001> – inspect provenance
   circuits, run semiring/probability evaluations, explore where-provenance,
   and switch between the seeded databases from the connection chip.
-- **psql**: connect to any seeded database (`tutorial`, `cs1`, …, or `test`)
-  as user `test` on the published port, e.g.
+- **psql**: connect to any seeded database (`tutorial`, `cs1`, …) as user
+  `test` on the published port, e.g.
   `psql -h localhost -p 5433 -U test tutorial`.
 
 No install needed for a pure-browser taste of ProvSQL – try **ProvSQL

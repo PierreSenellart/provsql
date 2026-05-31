@@ -115,21 +115,16 @@ EXPOSE 5432
 RUN make install
 
 USER postgres
-# Create the demo databases: the `test` smoke fixture (exercises provenance +
-# a couple of semirings at build time), plus the tutorial and case-study
-# databases that the ProvSQL Playground ships, so Studio's database switcher
-# offers the same set. casestudy3 is omitted (its GTFS data is a large
-# separate download). Each doc/<dir>/setup.sql self-installs provsql and loads
-# its data; casestudy4 reads CSVs via \copy relative to its data/ directory,
-# so psql is run with the study's data dir (when present) as the CWD.
+# Create the demo databases: the tutorial and case-study databases that the
+# ProvSQL Playground ships, so Studio's database switcher offers the same set
+# (and `CREATE EXTENSION provsql` in each is the build-time check that the
+# extension loads). casestudy3 is omitted (its GTFS data is a large separate
+# download). Each doc/<dir>/setup.sql self-installs provsql and loads its data;
+# casestudy4 reads CSVs via \copy relative to its data/ directory, so psql is
+# run with the study's data dir (when present) as the CWD.
 RUN /etc/init.d/postgresql start &&\
     pg_isready -t 30 &&\
     createuser -s test &&\
-    createdb test &&\
-    psql -f /opt/provsql/test/sql/setup.sql test test  &&\
-    psql -f /opt/provsql/test/sql/add_provenance.sql test test &&\
-    psql -f /opt/provsql/test/sql/formula.sql test test  &&\
-    psql -f /opt/provsql/test/sql/sr_minmax.sql test test &&\
     psql -c "ALTER ROLE test SET search_path TO public, provsql" &&\
     for s in tutorial:tutorial cs1:casestudy1 cs2:casestudy2 cs4:casestudy4 \
              cs5:casestudy5 cs6:casestudy6 cs7:casestudy7; do \
