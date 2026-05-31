@@ -52,14 +52,15 @@ cat <<EOF
 ================================================================
   ProvSQL container ready
 
-  PostgreSQL listens on port 5432 and ProvSQL Studio on port 8000.
-  If you started the container with those ports published, e.g.
+  PostgreSQL listens on port 5432 and ProvSQL Studio on port 8000 inside
+  the container. Publish them to free host ports of your choice with -p,
+  e.g. (5433/8001 avoid clashing with a local PostgreSQL/Studio):
 
-      docker run -p 5432:5432 -p 8000:8000 inriavalda/provsql
+      docker run -p 5433:5432 -p 8001:8000 inriavalda/provsql
 
-  reach them from the host at:
-      psql shell:     psql -h localhost -p 5432 test test
-      Studio web UI:  http://localhost:8000
+  then reach them on those host ports:
+      psql shell:     psql -h localhost -p 5433 test test
+      Studio web UI:  http://localhost:8001
 
   (On a native-Linux Docker bridge the container is also reachable
    directly at IP ${IP}; under Docker Desktop or rootless podman, use
