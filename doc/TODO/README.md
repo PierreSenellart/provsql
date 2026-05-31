@@ -59,17 +59,6 @@ Each plan document follows a consistent layout:
   the new karp-luby method; and independence certification via the
   safe-query rewriter to extend the closed forms to joins. Grounds the
   Tier-1 HAVING items in [`safe-query-followups.md`](safe-query-followups.md).
-- [`karp-luby-fpras.md`](karp-luby-fpras.md) : feasibility study for
-  adding a Karp-Luby FPRAS for `#DNF` (Karp-Luby 1985; KLM 1989; modern
-  hashing- and streaming-DNF variants) as an in-process probability
-  method. Closes a real gap -- the existing `'monte-carlo'` needs
-  `~ 1/p` samples for rare events and `'weightmc'` requires an external
-  SAT-based binary -- on positive UCQ-shaped lineage. Tier 1 covers
-  top-OR-over-AND-only sub-circuits (cross-clause leaf sharing fine,
-  no internal ORs in a clause; ~300 LOC): shape detector, dispatcher
-  branch, default `(eps, delta)` policy, tests, docs. Conditioned on a
-  short empirical probe of how often real ProvSQL outputs land in the
-  `m * p << 1` regime.
 - [`safe-query-followups.md`](safe-query-followups.md) : deferred
   ideas surfaced during the `provsql.boolean_provenance` work --
   further Boolean-only optimisations beyond the hierarchical-CQ
