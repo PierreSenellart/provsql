@@ -1,11 +1,10 @@
 """Backend for the Knowledge-Compilation demo helpers.
 
-Wraps the four SQL surfaces added in extension 1.7.0:
+Wraps the knowledge-compilation SQL surfaces added in extension 1.7.0:
 
 * ``provsql.tseytin_cnf(token, weighted)``
 * ``provsql.compile_to_ddnnf_dot(token, compiler)``
 * ``provsql.tree_decomposition_dot(token)``
-* ``provsql.probability_benchmark(token, samples, compilers)``
 
 For the two functions that emit GraphViz DOT we also render it to SVG
 through a local ``dot`` subprocess (the same binary Studio already uses
@@ -707,14 +706,13 @@ def probability_benchmark(
 ) -> dict:
     """Time every probability-evaluation method and return rows + notices.
 
-    Mirrors the surface of ``provsql.probability_benchmark`` (see
-    ``sql/provsql.common.sql``) but drives the loop from Python so each
-    method gets its own ``SET LOCAL statement_timeout`` budget.  Two
-    PL/pgSQL limitations make per-row enforcement impossible from the
-    SQL helper: ``SET LOCAL statement_timeout`` inside a function does
-    not reset PG's per-statement timer, and ``EXCEPTION WHEN OTHERS``
-    does not catch ``query_canceled`` (57014), so the SQL version
-    aborts the whole table instead of recording one timeout row.
+    Drives the loop from Python so each method gets its own ``SET LOCAL
+    statement_timeout`` budget.  Two PL/pgSQL limitations make per-row
+    enforcement impossible in a SQL function: ``SET LOCAL
+    statement_timeout`` inside a function does not reset PG's
+    per-statement timer, and ``EXCEPTION WHEN OTHERS`` does not catch
+    ``query_canceled`` (57014), so a SQL version would abort the whole
+    table instead of recording one timeout row.
 
     Each method runs inside its own savepoint so a per-method
     ``SET LOCAL statement_timeout`` and any error (timeout, missing
