@@ -731,6 +731,12 @@ def probability_benchmark(
         msg = diag.message_primary or ""
         if "__prov" in msg or "__wprov" in msg:
             return
+        # The extension emits a machine-readable approximation-guarantee
+        # NOTICE for each approximate method (rendered as a bound by the
+        # eval strip); it is noise in the benchmark's shared notice list,
+        # so drop it here.
+        if "approximation-guarantee:" in msg:
+            return
         notices.append(msg)
 
     # The benchmark lists every available tool: the in-process methods
