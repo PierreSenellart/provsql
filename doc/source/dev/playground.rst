@@ -117,7 +117,10 @@ Build, test, deploy
   job locally (``wasm/build-wasm.sh``): it builds the matched PGlite core +
   the ProvSQL extension against the Emscripten builder image (podman or
   docker), runs the headless Node smoke test, and assembles the doc-root
-  from the freshly built artifacts.
+  from the freshly built artifacts. The (slow) WASM Postgres core build runs
+  only once -- it is skipped when ``wasm/.build`` already has it; pass
+  ``WASM_REBUILD_CORE=1`` to force a clean core rebuild. Iterating on the
+  extension therefore re-runs only the extension compile + relink.
 * **Assemble** the doc-root with ``studio/web/build.sh`` (it needs the WASM
   artifacts from ``wasm/``: the matched PGlite dist and
   ``provsql.tar.gz``). ``make playground`` reuses the in-place artifacts;
