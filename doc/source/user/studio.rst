@@ -391,8 +391,8 @@ CNF (:sqlfunc:`tseytin_cnf`), the compiled d-D circuit
 (:sqlfunc:`compile_to_ddnnf_dot`), the same d-D in NNF text form, and
 the tree decomposition with its treewidth
 (:sqlfunc:`tree_decomposition_dot`); the *Probability* group adds a
-:guilabel:`Probability benchmark` that times every method
-(:sqlfunc:`probability_benchmark`). Selecting one and pressing
+:guilabel:`Probability benchmark` that times every method (with a
+per-method timeout, skipping unavailable tools). Selecting one and pressing
 :guilabel:`Run` produces the artifact directly: the d-D circuit and the
 tree decomposition take over the main canvas (a toolbar :guilabel:`back`
 button restores the original provenance circuit), while the CNF and NNF
@@ -901,7 +901,7 @@ extension version.
        compiler / counter pickers. Backed by the knowledge-compilation
        SQL surface (:sqlfunc:`tseytin_cnf`, :sqlfunc:`compile_to_ddnnf`,
        :sqlfunc:`ddnnf_stats`, :sqlfunc:`tree_decomposition_dot`,
-       :sqlfunc:`probability_benchmark`, :sqlfunc:`tool_available`) and
+       :sqlfunc:`tool_available`) and
        the ``provsql.fallback_compiler`` GUC introduced in 1.7.0.
        See :doc:`knowledge-compilation`.
    * - ``1.4.x``

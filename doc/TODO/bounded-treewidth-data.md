@@ -191,7 +191,7 @@ treewidth 0-3, because the reachability lineage is itself essentially a chain.)
 Result (c) -- **in-process tree-decomposition vs d4 as a function of
 treewidth.** Pathological `costar` circuits of controlled treewidth `t`
 (`~600`-`900` gates), timing only `tree-decomposition` and `compilation,d4`
-via `_probability_benchmark_one` (both probabilities agree to `1e-6`):
+with a per-method `clock_timestamp()` harness (both probabilities agree to `1e-6`):
 
 | treewidth | gates | tree-decomposition (ms) | d4 (ms) |
 |-----------|-------|-------------------------|---------|

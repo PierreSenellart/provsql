@@ -212,22 +212,6 @@ Computation Methods
         SELECT probability_evaluate(provenance(), 'wmc', 'ganak')
         FROM suspects;
 
-``'weightmc'``
-    Approximate weighted model counting using the external ``weightmc``
-    tool (alias for ``'wmc'`` with that tool). The third argument carries the
-    approximation tolerance as ``epsilon=E[,delta=D]`` (validated as for the
-    other approximate methods; the legacy ``delta;epsilon`` pair is still
-    accepted). Only ``epsilon`` currently affects the run; ``delta`` is
-    accepted for argument uniformity:
-
-    .. code-block:: postgresql
-
-        SELECT probability_evaluate(provenance(), 'weightmc', 'epsilon=0.8')
-        FROM suspects;
-
-    Same PATH / ``provsql.tool_search_path`` considerations as
-    ``'compilation'``.
-
 Default strategy (no second argument)
     ProvSQL tries each method in order until one succeeds:
 
@@ -243,7 +227,7 @@ Default strategy (no second argument)
        :doc:`configuration`.
 
 To time every method on one circuit and compare results side by side,
-use :sqlfunc:`probability_benchmark`; see :doc:`knowledge-compilation`.
+use ProvSQL Studio's benchmark panel; see :doc:`studio`.
 
 Expected Values of Aggregates
 -------------------------------

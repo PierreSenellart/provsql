@@ -175,12 +175,6 @@ INTERNAL_FUNCTIONS = {
     # URLs, 'c' from `@c provsql.c` / `@c src/provsql.c` filename references
     # in the recursive-CTE lowering doc comments.
     'org', 'sql', 'html', 'c',
-    # Internal per-method timing helper behind probability_benchmark
-    # (the user-facing helpers compile_to_ddnnf_dot, tseytin_cnf,
-    # tree_decomposition_dot, probability_benchmark, tool_available are
-    # now in _SQL_FUNC_MAP, referenced from the knowledge-compilation
-    # user-manual page).
-    '_probability_benchmark_one',
     # @param names from the knowledge-compilation helpers that Doxygen
     # surfaces as 'provsql.<name>' anchors. Not callable.
     'compilers', 'monte_carlo_samples', 'in_args', 'in_method', 'in_token',

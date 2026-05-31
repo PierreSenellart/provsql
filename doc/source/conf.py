@@ -170,7 +170,6 @@ _SQL_FUNC_MAP = {
     'set_tool_enabled':         '/doxygen-sql/html/group__provenance__output.html#ga64d2d1cecb8ea3dfbb24cad224c8c017',
     'set_tool_preference':      '/doxygen-sql/html/group__provenance__output.html#ga8dc5a0956b0f64ae75a74130a73075f9',
     'tree_decomposition_dot':   '/doxygen-sql/html/group__provenance__output.html#gafecf32e35b73af9cc4070973bcd98ead',
-    'probability_benchmark':    '/doxygen-sql/html/group__provenance__output.html#ga783a429f186c72359a9bddfc18311862',
     'tool_available':           '/doxygen-sql/html/group__provenance__output.html#ga4ae4f9f7a08be9333e78028fe10bd6cc',
     # Per-table provenance metadata + base-ancestor registry
     'set_ancestors':            '/doxygen-sql/html/group__table__management.html#ga003841a8da4d0184f7f0bc885fb6418b',
