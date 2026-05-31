@@ -40,6 +40,12 @@ cd "$BUILD/pglite"
 git submodule update --init --depth 1 postgres-pglite
 PG="$PWD/postgres-pglite"
 
+# The `dist/` install tree is the bind-mount target shared into every
+# container run (it is what the extension links against).  Pre-create it on
+# the host: rootless podman `statfs`-checks a bind source and aborts if it is
+# missing, whereas the directory is only created inside the container.
+mkdir -p "$PG/dist"
+
 # 3. Build the PGlite Postgres tree, compile the extension against it, then
 #    relink pglite.wasm so it exports ProvSQL's symbols (MAIN_MODULE=2).
 "$CONTAINER" run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" ./build-pglite.sh
