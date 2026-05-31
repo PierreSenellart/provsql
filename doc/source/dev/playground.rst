@@ -130,8 +130,10 @@ Build, test, deploy
   Chromium) driving the real frontend + Python backend against the in-page
   PGlite. It covers boot, the query → circuit → semiring path, the ``/api``
   surface, database switching, Reset, deep links, sub-path portability, and
-  a fully off-line boot. It is wired into the ``wasm`` CI job
-  (``.github/workflows/wasm.yml``).
+  a fully off-line boot. The browser build and this e2e run locally only (via
+  ``make wasm`` / ``make playground-test``), not in CI; the per-PR
+  ``.github/workflows/wasm.yml`` job covers just the cheaper in-process-store
+  single-session smoke.
 * **Deploy** with ``make deploy-playground`` (rsync to
   ``provsql.org/playground/``). The only server requirement is the
   ``application/wasm`` MIME type, supplied by the shipped ``.htaccess``.

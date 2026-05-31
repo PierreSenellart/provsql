@@ -185,10 +185,12 @@ mode + query box as one of these URLs, pointing at the shell (the top frame).
 
 ## CI/CD
 
-- The `wasm` job in [`.github/workflows/wasm.yml`](../../.github/workflows/wasm.yml)
-  (`workflow_dispatch`) builds the WASM artifacts, then runs `build.sh` and
-  the **browser e2e** (`studio/tests/web/`) in headless Chromium, and uploads
-  the assembled `studio/web/` as an artifact.
+- The WASM artifacts, `build.sh`, and the **browser e2e** (`studio/tests/web/`)
+  are built and run **locally** via `make wasm` / `make playground-test`
+  (`wasm/build-wasm.sh`), not in CI -- that build is heavy and was only ever
+  opt-in, so the local script is the single source of truth.
+  [`.github/workflows/wasm.yml`](../../.github/workflows/wasm.yml) keeps just
+  the cheap per-PR in-process-store single-session smoke.
 - The e2e is **pytest-playwright** driving the real frontend + Python backend
   against the in-page PGlite (no PostgreSQL): it covers boot + JSPI, the
   query → circuit → semiring path, the `/api` surface (where-provenance,
