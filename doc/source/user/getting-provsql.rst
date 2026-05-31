@@ -290,11 +290,10 @@ Docker Container
 
 For a quick trial without any local installation, a demonstration Docker
 container is available. Alongside the extension and a pre-installed ProvSQL
-Studio it bundles several of the optional external tools: the ``d4`` and
+Studio it bundles a set of the optional external tools: the ``d4`` and
 ``dsharp`` knowledge compilers, the ``ganak``, ``sharpsat-td`` and
 ``weightmc`` weighted model counters, and ``graph-easy`` for ASCII circuit
-rendering. The license-restricted ``c2d`` and ``minic2d`` are not included
-(install them locally if you need them; see the optional-tools list above).
+rendering.
 
 .. code-block:: bash
 
