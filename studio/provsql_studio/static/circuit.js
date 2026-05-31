@@ -1719,6 +1719,7 @@
   // a free-form text field pre-filled with the WeightMC defaults.
   const _PROB_ARG_CONTROL = {
     'monte-carlo': 'eval-args-mc',
+    'karp-luby':   'eval-args-kl',
     'compilation': 'eval-args-compiler',
     'wmc':         'eval-args-wmc-tool',
   };
@@ -3104,31 +3105,34 @@
           : `${data.kind} value`;
       }
       }
-      // Surface any NOTICE messages the backend captured during this
-      // evaluation. ProvSQL emits one when its probability-side
-      // pre-pass shortcuts a gate_cmp before the requested method's
-      // tool ever sees it (so the reported method may have run on a
-      // pre-decided circuit). The notice block uses the same ProvSQL
-      // badge as error banners but with a warning icon + goldenrod
-      // background; rendered inline under the result chip.
-      if (!isKc && Array.isArray(data.notices) && data.notices.length) {
-        const notice = document.getElementById('eval-notice');
+      // Surface the NOTICE messages the backend captured during this
+      // evaluation. Two kinds matter here:
+      //   * the structured "approximation-guarantee" NOTICE the extension
+      //     emits for every approximate method (karp-luby / monte-carlo /
+      //     weightmc); we pull it out and render the (eps, delta) bound in
+      //     the dedicated #eval-bound slot;
+      //   * everything else (e.g. the gate_cmp-shortcut warning), shown in
+      //     the notice banner with the ProvSQL badge + warning icon.
+      const notice = document.getElementById('eval-notice');
+      if (!isKc && semiring === 'probability') {
+        const guar = parseGuaranteeNotice(data.notices);
+        if (bound) bound.textContent = guar ? renderGuarantee(guar) : '';
+        const rest = Array.isArray(data.notices)
+          ? data.notices.filter(m => !/approximation-guarantee:/.test(m || ''))
+          : [];
+        if (notice) {
+          if (rest.length) {
+            notice.innerHTML = renderEvalNotice(rest);
+            notice.hidden = false;
+          } else {
+            notice.innerHTML = '';
+            notice.hidden = true;
+          }
+        }
+      } else if (!isKc && Array.isArray(data.notices) && data.notices.length) {
         if (notice) {
           notice.innerHTML = renderEvalNotice(data.notices);
           notice.hidden = false;
-        }
-      }
-      // Monte-Carlo: append a Hoeffding-style 95% absolute-error bound
-      // ε = sqrt(ln(2/α) / (2N))  (α = 0.05)
-      // The bound is distribution-free and only depends on the sample
-      // count, so we read it back from the args input. Other methods are
-      // exact (or have their own internal bounds), so no annotation.
-      if (!isKc && semiring === 'probability' && body.method === 'monte-carlo') {
-        const n = parseInt(body.arguments || '', 10);
-        if (Number.isFinite(n) && n > 0) {
-          const eps = Math.sqrt(Math.log(40) / (2 * n));
-          if (bound) bound.textContent =
-            `(± ${eps.toFixed(eps < 0.01 ? 4 : 3)} with 95% probability)`;
         }
       }
     } catch (e) {
@@ -4014,6 +4018,48 @@
          + `<i class="fas fa-exclamation-triangle"></i> `
          + `${formatted}`
          + `</div>`;
+  }
+
+  // Parse the extension's machine-readable approximation-guarantee NOTICE
+  // ("ProvSQL: approximation-guarantee: kind=... eps=... delta=... [samples=]
+  // [clauses=] [tool=]"), emitted for every approximate method at
+  // verbose_level >= 5 (which Studio sets for evaluation). Returns the parsed
+  // key/value object, or null if no such notice is present.
+  function parseGuaranteeNotice(messages) {
+    for (const raw of (Array.isArray(messages) ? messages : [])) {
+      const m = (raw || '').match(/approximation-guarantee:\s*(.*)$/);
+      if (!m) continue;
+      const kv = {};
+      m[1].trim().split(/\s+/).forEach(tok => {
+        const i = tok.indexOf('=');
+        if (i > 0) kv[tok.slice(0, i)] = tok.slice(i + 1);
+      });
+      return kv;
+    }
+    return null;
+  }
+
+  // Render a parsed guarantee as a short bound string for the #eval-bound
+  // slot, e.g. "(± 10% relative, prob ≥ 95%)" or "(± 0.0136 absolute,
+  // prob ≥ 95%)". 'relative' is a multiplicative (1±ε) factor on the true
+  // probability; 'additive' is an absolute error. δ (when present) gives the
+  // confidence 1−δ; the optional tool name is appended for the wmc counters.
+  function renderGuarantee(kv) {
+    if (!kv) return '';
+    const eps = parseFloat(kv.eps);
+    if (!Number.isFinite(eps)) return '';
+    const delta = kv.delta != null ? parseFloat(kv.delta) : NaN;
+    const conf = Number.isFinite(delta)
+      ? `, prob ≥ ${(100 * (1 - delta)).toFixed(delta < 0.01 ? 1 : 0)}%`
+      : '';
+    let body;
+    if (kv.kind === 'relative')
+      body = `± ${(100 * eps).toFixed(eps < 0.01 ? 2 : 1)}% relative`;
+    else if (kv.kind === 'additive')
+      body = `± ${eps.toFixed(eps < 0.01 ? 4 : 3)} absolute`;
+    else return '';
+    const tool = kv.tool ? ` [${kv.tool}]` : '';
+    return `(${body}${conf})${tool}`;
   }
 
   function shortUuid(u) {

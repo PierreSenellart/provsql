@@ -986,6 +986,7 @@ _PROBABILITY_METHODS = {
     "tree-decomposition",
     "possible-worlds",
     "monte-carlo",
+    "karp-luby",          # FPRAS for DNF-shaped circuits (relative (eps,delta))
     "compilation",
     "wmc",
     "weightmc",           # legacy alias for wmc/weightmc
