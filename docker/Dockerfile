@@ -70,8 +70,9 @@ RUN cd /tmp &&\
 RUN cd /tmp &&\
     curl -L -o ganak.tar.gz \
       https://github.com/meelgroup/ganak/releases/download/release/v2.6.2/ganak-v2.6.2-linux-amd64.tar.gz &&\
-    tar xzf ganak.tar.gz &&\
-    find . -type f -name ganak -exec mv {} /tmp/tools/ \; &&\
+    mkdir ganak-dl &&\
+    tar xzf ganak.tar.gz -C ganak-dl &&\
+    find ganak-dl -type f -name ganak -exec mv {} /tmp/tools/ganak \; &&\
     chmod a+x /tmp/tools/ganak
 
 # TOOL sharpsat-td (+ its flow_cutter_pace17 helper). setupdev.sh builds both
