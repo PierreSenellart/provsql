@@ -88,6 +88,9 @@ cp "$REPO/wasm/build-extension.sh" "$REPO/wasm/relink-pglite.sh" "$PG/"
 "$CONTAINER" run --rm -w "$PG" -v "$PG:$PG" -v "$PG/dist:/pglite" "$IMG" ./relink-pglite.sh
 
 # 4. Build the matched PGlite TS package and run the headless Node smoke test.
+#    release/ holds the prebuilt core the TS package links against; PGlite's own
+#    full build would create it, but we build only the core, so ensure it exists.
+mkdir -p packages/pglite/release
 cp "$PG"/dist/bin/pglite.wasm "$PG"/dist/bin/pglite.data "$PG"/dist/bin/pglite.js \
    packages/pglite/release/
 cp "$PG"/dist/extensions/*.tar.gz packages/pglite/release/ 2>/dev/null || true
