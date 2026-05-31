@@ -52,9 +52,18 @@ cat <<EOF
 ================================================================
   ProvSQL container ready
 
-    Both services are reachable at IP ${IP}:
-      psql shell:     psql -h ${IP} -p 5432 test test
-      Studio web UI:  http://${IP}:8000
+  PostgreSQL listens on port 5432 and ProvSQL Studio on port 8000.
+  If you started the container with those ports published, e.g.
+
+      docker run -p 5432:5432 -p 8000:8000 inriavalda/provsql
+
+  reach them from the host at:
+      psql shell:     psql -h localhost -p 5432 test test
+      Studio web UI:  http://localhost:8000
+
+  (On a native-Linux Docker bridge the container is also reachable
+   directly at IP ${IP}; under Docker Desktop or rootless podman, use
+   the published localhost ports above.)
 ================================================================
 
 EOF
@@ -62,7 +71,12 @@ EOF
 echo "Docker fully started" >> /messages
 
 # Stream the buffered Studio log + ongoing output to the container's
-# stdout, so `docker logs` shows everything Studio writes from here
-# on. `exec` replaces this shell so PID 1 becomes `tail`, which gives
-# clean signal handling on `docker stop`.
-exec tail -F /tmp/studio.log
+# stdout, so `docker logs` shows everything Studio writes from here on.
+# We must NOT `exec tail` here: as PID 1 `tail` installs no signal handler
+# and the kernel applies no default action to PID 1, so SIGINT (Ctrl-C) and
+# SIGTERM (`docker stop`) would be ignored and only SIGKILL could stop the
+# container. Instead keep the shell as PID 1 with a trap, so Ctrl-C / stop
+# shut PostgreSQL down cleanly and exit promptly.
+trap 'echo; /etc/init.d/postgresql stop >/dev/null 2>&1; exit 0' INT TERM
+tail -F /tmp/studio.log &
+wait $!

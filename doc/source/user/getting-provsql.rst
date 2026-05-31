@@ -297,16 +297,20 @@ rendering.
 
 .. code-block:: bash
 
-    docker run inriavalda/provsql
+    docker run -p 5432:5432 -p 8000:8000 inriavalda/provsql
 
-To use a specific release version:
+Publishing the ports (``-p``) exposes PostgreSQL on ``localhost:5432`` and
+ProvSQL Studio on ``http://localhost:8000`` on the host, which works
+uniformly across native Docker, Docker Desktop, and rootless podman. To use
+a specific release version:
 
 .. code-block:: bash
 
-    docker run inriavalda/provsql:X.Y.Z
+    docker run -p 5432:5432 -p 8000:8000 inriavalda/provsql:X.Y.Z
 
-Follow the on-screen instructions to connect to the PostgreSQL server
-inside the container with a PostgreSQL client.
+Connect with a PostgreSQL client (``psql -h localhost -p 5432 test test``)
+or open Studio at ``http://localhost:8000``; the container also prints these
+instructions on startup.
 
 ProvSQL Studio
 --------------
