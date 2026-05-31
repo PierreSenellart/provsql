@@ -294,25 +294,32 @@ bool dnfShape(gate_t g,
               std::vector<std::set<gate_t> > &supports) const;
 
 /**
- * @brief Karp-Luby FPRAS estimate of a DNF-shaped circuit's probability.
+ * @brief Karp-Luby FPRAS estimate of a DNF-shaped circuit's probability
+ *        (fixed sample budget, stratified).
  *
  * Implements the Karp-Luby coverage estimator for the DNF-counting problem
- * (@c \#DNF) under
- * tuple-independent inputs: with @c p_i the product of the marginals of
- * @p supports[i] and @c S the sum of the @c p_i (so @c S in
- * @c [Pr[F], m*Pr[F]]), each round draws a clause @c i with probability
- * @c p_i/S, samples a satisfying assignment of @c C_i (its support forced
- * true, every other leaf drawn from its marginal), finds the smallest
- * clause index @c j the assignment satisfies, and accepts iff @c j == i.
- * Returns @c S times the acceptance ratio, unbiased with acceptance
- * probability @c Pr[F]/S in @c [1/m, 1] -- so the sample count for an
- * @c (eps,delta) guarantee is independent of @c Pr[F], unlike naive Monte
- * Carlo.
+ * (@c \#DNF) under tuple-independent inputs: with @c p_i the product of the
+ * marginals of @p supports[i] and @c S the sum of the @c p_i (so @c S in
+ * @c [Pr[F], m*Pr[F]]), the estimator over clause @c i samples a satisfying
+ * assignment of @c C_i (its support forced true, every other leaf drawn from
+ * its marginal), finds the smallest clause index @c j the assignment
+ * satisfies, and accepts iff @c j == i; @c Pr[F] is then @c sum_i p_i times
+ * the per-clause acceptance rate.  The acceptance probability is @c Pr[F]/S in
+ * @c [1/m, 1], so the sample count for an @c (eps,delta) guarantee is
+ * independent of @c Pr[F], unlike naive Monte Carlo.
  *
- * The @p clauses / @p supports are those returned by @c dnfShape; the
- * caller supplies them (and resolves the sample count from an
- * @c (eps,delta) target if asked) so this method stays a plain sampler.
- * The @c mt19937_64 is seeded from @c provsql.monte_carlo_seed exactly as
+ * The @p samples rounds are spread across clauses by *stratified* allocation
+ * (@c n_i proportional to @c p_i/S, every clause sampled at least once),
+ * estimating each clause's acceptance rate separately and combining
+ * @c sum_i p_i * acceptRate_i.  This removes the variance of the categorical
+ * clause draw used by the textbook estimator (between-strata variance),
+ * tightening the estimate at the same budget by up to a factor @c m.  When
+ * @p samples @c < @c m there are too few rounds for one per clause, so the
+ * method falls back to the unstratified categorical-draw estimator (still
+ * unbiased for any budget).
+ *
+ * The @p clauses / @p supports are those returned by @c dnfShape.  The
+ * @c mt19937_64 is seeded from @c provsql.monte_carlo_seed exactly as
  * @c monteCarlo, so the estimate is reproducible under a pinned seed.
  *
  * @param clauses   Top-level clause roots (from @c dnfShape).
@@ -323,6 +330,45 @@ bool dnfShape(gate_t g,
 double karpLuby(const std::vector<gate_t> &clauses,
                 const std::vector<std::set<gate_t> > &supports,
                 unsigned long samples) const;
+
+/**
+ * @brief Karp-Luby FPRAS with the self-adjusting stopping rule (adaptive
+ *        sample count for a relative @c (eps,delta) guarantee).
+ *
+ * The Dagum-Karp-Luby-Ross stopping rule (SICOMP 2000, the optimal form of
+ * the Karp-Luby-Madras 1989 self-adjusting rule): rather than fixing the
+ * number of rounds from the worst-case acceptance probability @c 1/m, draw
+ * coverage trials (clause @c i with probability @c p_i/S, then the
+ * smallest-index coverage test of @c karpLuby) until the *accept count*
+ * reaches the deterministic threshold
+ * @c Y1 = 1 + (1+eps) * 4*(e-2)*ln(2/delta)/eps^2, then return
+ * @c S * Y1 / N over the @c N rounds actually run.  That estimate is a
+ * relative @c (eps,delta) approximation of @c Pr[F], and @c N adapts to the
+ * true acceptance probability @c Pr[F]/S (expected @c N is @c Y1*S/Pr[F],
+ * i.e. up to @c m times fewer rounds than the fixed bound when the clauses
+ * barely overlap).
+ *
+ * Sampling stops early at @p max_samples rounds; @p reached_target is then
+ * @c false and the return is the plain unbiased @c S*accepts/N estimate over
+ * the spent budget (the @c (eps,delta) target was not met -- the caller
+ * reports the weaker guarantee actually achieved).
+ *
+ * @param clauses         Top-level clause roots (from @c dnfShape).
+ * @param supports        Per-clause reachable @c IN leaves (from @c dnfShape).
+ * @param eps             Target relative error (in @c (0,1]).
+ * @param delta           Target failure probability (in @c (0,1)).
+ * @param max_samples     Hard cap on the number of rounds.
+ * @param samples_used    Output: rounds actually run.
+ * @param reached_target  Output: whether the stopping threshold was reached
+ *                        before @p max_samples (i.e. the guarantee holds).
+ * @return                The Karp-Luby probability estimate.
+ */
+double karpLubyStopping(const std::vector<gate_t> &clauses,
+                        const std::vector<std::set<gate_t> > &supports,
+                        double eps, double delta,
+                        unsigned long max_samples,
+                        unsigned long &samples_used,
+                        bool &reached_target) const;
 
 /**
  * @brief Weighted model counting through a registered external counter.

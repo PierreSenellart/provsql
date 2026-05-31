@@ -440,6 +440,108 @@ bool BooleanCircuit::dnfShape(
   return true;
 }
 
+namespace {
+
+/**
+ * Shared Karp-Luby sampler state derived from the per-clause supports:
+ * the per-clause probability @c p_i = product of its support-leaf marginals,
+ * the prefix sums for the O(log m) categorical clause draw, the union-bound
+ * total @c S = sum p_i (with @c Pr[F] <= S <= m*Pr[F]), and the set of leaves
+ * that can affect clause membership (only those need to be drawn each round).
+ */
+struct KarpLubyState {
+  std::vector<double> p;
+  std::vector<double> cumulative;
+  double S = 0.;
+  std::vector<gate_t> relevant;
+};
+
+KarpLubyState karpLubyState(
+  const BooleanCircuit &c,
+  const std::vector<std::set<gate_t> > &supports)
+{
+  KarpLubyState st;
+  const size_t m = supports.size();
+  st.p.resize(m);
+  st.cumulative.resize(m);
+  std::set<gate_t> rel;
+  for(size_t i=0; i<m; ++i) {
+    double pi = 1.;
+    for(gate_t leaf: supports[i]) {
+      pi *= c.getProb(leaf);
+      rel.insert(leaf);
+    }
+    st.p[i] = pi;
+    st.S += pi;
+    st.cumulative[i] = st.S;
+  }
+  st.relevant.assign(rel.begin(), rel.end());
+  return st;
+}
+
+/// Seed mt19937_64 from provsql.monte_carlo_seed exactly as monteCarlo, so a
+/// pinned seed makes the estimate reproducible for the regression tests.
+std::mt19937_64 karpLubySeededRNG()
+{
+  std::mt19937_64 rng;
+  if(provsql_monte_carlo_seed != -1) {
+    rng.seed(static_cast<uint64_t>(provsql_monte_carlo_seed));
+  } else {
+    std::random_device rd;
+    rng.seed((static_cast<uint64_t>(rd()) << 32) | rd());
+  }
+  return rng;
+}
+
+/// Draw a clause index with probability @c p_i / S using the prefix sums.
+size_t karpLubyDrawClause(const KarpLubyState &st,
+                          std::mt19937_64 &rng,
+                          std::uniform_real_distribution<double> &u01)
+{
+  double u = u01(rng) * st.S;
+  size_t i = static_cast<size_t>(
+    std::upper_bound(st.cumulative.begin(), st.cumulative.end(), u)
+    - st.cumulative.begin());
+  if(i >= st.cumulative.size())
+    i = st.cumulative.size() - 1;   // guard against u == S from rounding
+  return i;
+}
+
+/**
+ * One Karp-Luby coverage trial in clause @p i: sample an assignment of
+ * @c C_i (its support forced true, every other relevant leaf drawn from its
+ * marginal), then return whether @p i is the smallest-index clause the
+ * assignment satisfies -- the coverage rejection that divides the over-count
+ * @c S by the number of clauses covering each sampled world.  @p trueLeaves is
+ * reused across calls to avoid reallocating.
+ */
+bool karpLubyCovers(
+  const BooleanCircuit &c,
+  const std::vector<std::set<gate_t> > &supports,
+  const KarpLubyState &st, size_t i,
+  std::mt19937_64 &rng,
+  std::uniform_real_distribution<double> &u01,
+  std::unordered_set<gate_t> &trueLeaves)
+{
+  trueLeaves.clear();
+  for(gate_t leaf: st.relevant) {
+    if(supports[i].count(leaf) || u01(rng) < c.getProb(leaf))
+      trueLeaves.insert(leaf);
+  }
+  const size_t m = supports.size();
+  for(size_t j=0; j<m; ++j) {
+    bool sat = true;
+    for(gate_t leaf: supports[j]) {
+      if(trueLeaves.find(leaf)==trueLeaves.end()) { sat = false; break; }
+    }
+    if(sat)
+      return j==i;
+  }
+  return false;   // unreachable: clause i always covers its own forced support
+}
+
+} // anonymous namespace
+
 double BooleanCircuit::karpLuby(
   const std::vector<gate_t> &clauses,
   const std::vector<std::set<gate_t> > &supports,
@@ -449,82 +551,125 @@ double BooleanCircuit::karpLuby(
   if(m==0 || samples==0)
     return 0.;
 
-  // Per-clause probability p_i = product of the marginals of its support
-  // leaves (an AND-of-leaves clause holds iff every support leaf is true),
-  // and the union-bound total S = sum p_i, with Pr[F] <= S <= m*Pr[F].
-  // cumulative[] is the prefix-sum used to draw a clause index in O(log m).
-  std::vector<double> cumulative(m);
-  double S = 0.;
-  for(size_t i=0; i<m; ++i) {
-    double pi = 1.;
-    for(gate_t leaf: supports[i])
-      pi *= getProb(leaf);
-    S += pi;
-    cumulative[i] = S;
-  }
-  if(S<=0.)
+  KarpLubyState st = karpLubyState(*this, supports);
+  if(st.S<=0.)
     return 0.;
 
-  // Seed mt19937_64 from provsql.monte_carlo_seed exactly as monteCarlo, so
-  // a pinned seed makes the estimate reproducible for the regression tests.
-  std::mt19937_64 rng;
-  if(provsql_monte_carlo_seed != -1) {
-    rng.seed(static_cast<uint64_t>(provsql_monte_carlo_seed));
-  } else {
-    std::random_device rd;
-    rng.seed((static_cast<uint64_t>(rd()) << 32) | rd());
-  }
-  std::uniform_real_distribution<double> uniform01(0.0, 1.0);
-
-  // Only leaves appearing in some clause support can affect clause
-  // membership, so we draw just those each round.
-  std::set<gate_t> relevant;
-  for(const auto &sup: supports)
-    relevant.insert(sup.begin(), sup.end());
-
-  unsigned long accepts = 0;
+  std::mt19937_64 rng = karpLubySeededRNG();
+  std::uniform_real_distribution<double> u01(0.0, 1.0);
   std::unordered_set<gate_t> trueLeaves;
 
-  for(unsigned long s=0; s<samples; ++s) {
-    // Step 1: draw a clause i with probability p_i / S.
-    double u = uniform01(rng) * S;
-    size_t i = static_cast<size_t>(
-      std::upper_bound(cumulative.begin(), cumulative.end(), u)
-      - cumulative.begin());
-    if(i>=m)
-      i = m-1;   // guard against u == S from rounding
-
-    // Step 2: sample an assignment satisfying C_i -- force its support
-    // true, draw every other relevant leaf from its marginal.
-    trueLeaves.clear();
-    for(gate_t leaf: relevant) {
-      if(supports[i].count(leaf) || uniform01(rng) < getProb(leaf))
-        trueLeaves.insert(leaf);
+  // Fewer rounds than clauses: too few to stratify (every clause needs at
+  // least one sample for its per-clause acceptance rate to be defined), so
+  // fall back to the unstratified categorical-draw estimator -- S times the
+  // overall acceptance ratio, still unbiased for any budget.
+  if(samples < m) {
+    unsigned long accepts = 0;
+    for(unsigned long s=0; s<samples; ++s) {
+      size_t i = karpLubyDrawClause(st, rng, u01);
+      if(karpLubyCovers(*this, supports, st, i, rng, u01, trueLeaves))
+        ++accepts;
+      if(provsql_interrupted)
+        throw CircuitException("Interrupted after "+std::to_string(s+1)+" samples");
     }
+    return st.S * accepts / static_cast<double>(samples);
+  }
 
-    // Step 3: find the smallest clause index j the assignment satisfies;
-    // accept iff j == i (the Karp-Luby coverage rejection that divides the
-    // over-count S by the number of clauses covering each sampled world).
-    for(size_t j=0; j<m; ++j) {
-      bool sat = true;
-      for(gate_t leaf: supports[j]) {
-        if(trueLeaves.find(leaf)==trueLeaves.end()) {
-          sat = false;
-          break;
-        }
-      }
-      if(sat) {
-        if(j==i)
-          ++accepts;
-        break;
+  // Stratified allocation: n_i = 1 + proportional share of (samples - m) by
+  // p_i / S, with the leftover rounds handed to the largest fractional parts
+  // (largest-remainder rounding) so the n_i stay proportional and sum to
+  // exactly `samples`.  Estimating each clause's acceptance rate separately
+  // and combining sum_i p_i * rate_i removes the categorical-draw
+  // (between-strata) variance of the textbook estimator, tightening the
+  // estimate at the same budget by up to a factor m.
+  std::vector<unsigned long> n(m, 1);
+  const unsigned long rest = samples - m;
+  std::vector<double> frac(m);
+  unsigned long base_sum = 0;
+  for(size_t i=0; i<m; ++i) {
+    double want = static_cast<double>(rest) * st.p[i] / st.S;
+    unsigned long fl = static_cast<unsigned long>(want);
+    n[i] += fl;
+    base_sum += fl;
+    frac[i] = want - static_cast<double>(fl);
+  }
+  unsigned long leftover = rest - base_sum;
+  if(leftover > 0) {
+    std::vector<size_t> idx(m);
+    for(size_t i=0; i<m; ++i) idx[i] = i;
+    std::partial_sort(idx.begin(), idx.begin()+leftover, idx.end(),
+      [&](size_t a, size_t b){ return frac[a] > frac[b]; });
+    for(unsigned long k=0; k<leftover; ++k)
+      ++n[idx[k]];
+  }
+
+  double est = 0.;
+  for(size_t i=0; i<m; ++i) {
+    unsigned long accepts = 0;
+    for(unsigned long k=0; k<n[i]; ++k) {
+      if(karpLubyCovers(*this, supports, st, i, rng, u01, trueLeaves))
+        ++accepts;
+      if(provsql_interrupted)
+        throw CircuitException("Interrupted while sampling clause "
+                               +std::to_string(i));
+    }
+    est += st.p[i] * static_cast<double>(accepts) / static_cast<double>(n[i]);
+  }
+  return est;
+}
+
+double BooleanCircuit::karpLubyStopping(
+  const std::vector<gate_t> &clauses,
+  const std::vector<std::set<gate_t> > &supports,
+  double eps, double delta,
+  unsigned long max_samples,
+  unsigned long &samples_used,
+  bool &reached_target) const
+{
+  samples_used = 0;
+  reached_target = false;
+  const size_t m = clauses.size();
+  if(m==0 || max_samples==0)
+    return 0.;
+
+  KarpLubyState st = karpLubyState(*this, supports);
+  if(st.S<=0.)
+    return 0.;
+
+  // DKLR stopping threshold on the accept count: Y1 = 1 + (1+eps)*Y with
+  // Y = 4*(e-2)*ln(2/delta)/eps^2.  Sample coverage trials until the accept
+  // count reaches Y1 and return S*Y1/N (a relative (eps,delta) estimate of
+  // Pr[F]); the number of rounds N then adapts to the true acceptance
+  // probability Pr[F]/S in [1/m, 1] -- up to m times fewer rounds than the
+  // fixed bound when the clauses barely overlap.
+  const double e  = exp(1.0);
+  const double Y  = 4.0 * (e - 2.0) * log(2.0/delta) / (eps*eps);
+  const double Y1 = 1.0 + (1.0 + eps) * Y;
+
+  std::mt19937_64 rng = karpLubySeededRNG();
+  std::uniform_real_distribution<double> u01(0.0, 1.0);
+  std::unordered_set<gate_t> trueLeaves;
+
+  unsigned long accepts = 0;
+  for(unsigned long s=0; s<max_samples; ++s) {
+    size_t i = karpLubyDrawClause(st, rng, u01);
+    if(karpLubyCovers(*this, supports, st, i, rng, u01, trueLeaves)) {
+      ++accepts;
+      if(static_cast<double>(accepts) >= Y1) {
+        samples_used = s + 1;
+        reached_target = true;
+        return st.S * Y1 / static_cast<double>(samples_used);
       }
     }
-
     if(provsql_interrupted)
       throw CircuitException("Interrupted after "+std::to_string(s+1)+" samples");
   }
 
-  return S * accepts / static_cast<double>(samples);
+  // Cap reached before the threshold: the (eps,delta) target is not met, so
+  // return the plain unbiased S*accepts/N estimate over the spent budget (the
+  // caller reports the weaker guarantee actually achieved).
+  samples_used = max_samples;
+  return st.S * static_cast<double>(accepts) / static_cast<double>(max_samples);
 }
 
 double BooleanCircuit::possibleWorlds(gate_t g) const

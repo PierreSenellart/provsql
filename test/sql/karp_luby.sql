@@ -94,8 +94,15 @@ SELECT probability_evaluate(:shared,'karp-luby','not_a_number');            -- b
 -- NOTICE at verbose_level >= 5 (the level Studio sets for evaluation), so a UI
 -- can render it; plain evaluation at the default level stays quiet.  Relative
 -- guarantee for karp-luby, over m clauses.
+-- The reported sample count is the number of rounds the self-adjusting
+-- stopping rule actually ran (it stops once the estimate provably meets the
+-- target), which here is below the fixed worst-case bound over m clauses.
 SET provsql.verbose_level = 5;
 SELECT round(probability_evaluate(:shared,'karp-luby','eps=0.1,delta=0.05')::numeric,2) AS with_guarantee;
+-- A max_samples below the stopping rule's threshold is hit before the
+-- (eps, delta) target: a warning fires and the surfaced guarantee is
+-- downgraded to the relative error achieved over the samples actually spent.
+SELECT probability_evaluate(:shared,'karp-luby','eps=0.1,delta=0.05,max_samples=100') IS NOT NULL AS capped;
 RESET provsql.verbose_level;
 
 DROP TABLE kl_in;

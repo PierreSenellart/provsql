@@ -121,13 +121,20 @@ Computation Methods
     target (default ``epsilon=0.1, delta=0.05`` when omitted):
 
     - ``samples=N`` (or a bare integer ``N``) -- a fixed number of sampling
-      rounds; deterministic runtime.
-    - ``epsilon=E`` (alias ``eps=E``) -- relative-error target. The sample
-      count is derived from the Chernoff bound
-      ``N = ⌈4(e−2)·m·ln(2/δ)/ε²⌉`` over the ``m`` clauses.
+      rounds; deterministic runtime. The rounds are spread across the clauses
+      by *stratified* sampling (each clause gets a share proportional to its
+      probability), which tightens the estimate at a given budget compared with
+      drawing a clause at random each round.
+    - ``epsilon=E`` (alias ``eps=E``) -- relative-error target, served by a
+      *self-adjusting stopping rule*: the method samples only until the
+      estimate is provably within the target, so on outputs whose clauses
+      barely overlap it stops far short of the worst-case
+      ``⌈4(e−2)·m·ln(2/δ)/ε²⌉`` rounds over the ``m`` clauses.
     - ``delta=D`` -- failure-probability target (only with ``epsilon``).
-    - ``max_samples=N`` -- caps the derived count (only with the adaptive
-      path), bounding the runtime for very small ``ε`` or large ``m``.
+    - ``max_samples=N`` -- caps the number of rounds (only with the adaptive
+      path), bounding the runtime for very small ``ε`` or large ``m``; if the
+      cap is hit before the target, the reported guarantee is downgraded to the
+      accuracy actually achieved.
 
     .. code-block:: postgresql
 

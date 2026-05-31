@@ -276,17 +276,27 @@ Currently Supported Methods
        ``N = ceil(ln(2/delta)/(2*eps^2))`` (Hoeffding, independent of the
        estimated probability).
    * - ``"karp-luby"``
-     - :cfunc:`BooleanCircuit::karpLuby` -- the Karp-Luby ``#DNF`` FPRAS,
-       whose sample complexity is independent of the estimated
-       probability (accurate on rare events, unlike naive Monte Carlo).
-       :cfunc:`BooleanCircuit::dnfShape` first checks the circuit is a
-       monotone OR-of-ANDs over input leaves (cross-clause leaf sharing
-       allowed) and extracts the clause supports; the dispatcher errors,
-       rather than falling back, on any other shape.  The argument is a
-       fixed ``samples=N`` or an adaptive ``epsilon=E[,delta=D][,max_samples=M]``
-       target (default ``epsilon=0.1, delta=0.05``), with the
-       :math:`(\epsilon,\delta) \to N` Chernoff-bound conversion done in
-       the dispatcher so the C++ method stays a plain sampler.
+     - The Karp-Luby ``#DNF`` FPRAS, whose sample complexity is independent
+       of the estimated probability (accurate on rare events, unlike naive
+       Monte Carlo).  :cfunc:`BooleanCircuit::dnfShape` first checks the
+       circuit is a monotone OR-of-ANDs over input leaves (cross-clause leaf
+       sharing allowed) and extracts the clause supports; the dispatcher
+       errors, rather than falling back, on any other shape.  Two estimators,
+       selected by the argument (``evaluate_karp_luby`` does the routing):
+       a fixed ``samples=N`` runs the *stratified* fixed-budget estimator
+       :cfunc:`BooleanCircuit::karpLuby` (rounds allocated across clauses
+       proportionally to :math:`p_i/S`, removing the categorical clause-draw
+       variance); an adaptive ``epsilon=E[,delta=D][,max_samples=M]`` target
+       (default ``epsilon=0.1, delta=0.05``) runs the Dagum-Karp-Luby-Ross
+       self-adjusting *stopping rule* :cfunc:`BooleanCircuit::karpLubyStopping`
+       (sample until the accept count reaches
+       :math:`\Upsilon_1 = 1+(1+\epsilon)\,4(e-2)\ln(2/\delta)/\epsilon^2`,
+       so the round count adapts to the true acceptance probability
+       :math:`\Pr[F]/S \in [1/m,1]` -- up to ``m`` times fewer rounds than the
+       fixed worst-case bound).  The cap defaults to that fixed bound
+       (:math:`\lceil\Upsilon_1 m\rceil`); reaching it before the target
+       downgrades the guarantee to the relative ``eps`` achieved at the spent
+       budget.
    * - ``"wmc"``
      - :cfunc:`BooleanCircuit::wmcCount` -- weighted model counting
        via the registered counter named in the argument
@@ -353,10 +363,12 @@ multiplicative guarantee (the estimate is within a factor ``1 ± eps`` of the
 true probability with probability at least ``1 - delta``), used by
 ``karp-luby`` (over ``M`` clauses) and the approximate weighted counters;
 ``kind=additive`` is the absolute Hoeffding bound (``|estimate - p| <= eps``)
-used by ``monte-carlo``.  ``samples`` is the actual sample count (on the
-adaptive ``(eps, delta)`` path it is the count ``emit_guarantee``'s caller
-derived).  The fields are omitted when not applicable (no ``delta`` for the
-weighted counters, no ``samples`` / ``clauses`` for the external tools).
+used by ``monte-carlo``.  ``samples`` is the actual sample count: a fixed
+budget, the Hoeffding count on ``monte-carlo``'s adaptive path, or -- for
+``karp-luby``'s stopping rule -- the number of rounds the run actually took
+before the accept count crossed the threshold.  The fields are omitted when
+not applicable (no ``delta`` for the weighted counters, no ``samples`` /
+``clauses`` for the external tools).
 
 The NOTICE is gated on ``provsql.verbose_level >= 5`` so plain SQL evaluation
 and the regression suite stay quiet; ProvSQL Studio raises the level to 5 for

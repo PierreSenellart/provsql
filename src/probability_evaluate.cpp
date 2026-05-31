@@ -380,32 +380,65 @@ string wmc_opt_from_args(const MethodArgs &a, const char *method)
 }
 
 /**
- * @brief Resolve the Karp-Luby sampling-round count from the parsed args.
+ * @brief Run Karp-Luby on a DNF-shaped circuit and surface its guarantee.
  *
- * A fixed @c samples=N (or bare integer), or a *relative* @c (eps,delta) FPRAS
- * guarantee, in which case @c N = ceil(4*(e-2)*m*ln(2/delta)/eps^2) (the KLM
- * Chernoff bound over @p m clauses), capped by @c max_samples when given.  With
- * no argument the adaptive default @c (epsilon=0.1, delta=0.05) applies.  Unlike
- * @c monte-carlo's additive bound, this controls the *relative* error, which is
- * what stays meaningful on rare-event outputs.
+ * Two paths, selected by the shared argument grammar:
+ *
+ * - A fixed @c samples=N (or bare integer): the *stratified* fixed-budget
+ *   estimator (@c BooleanCircuit::karpLuby).  Reports the relative @c eps that
+ *   @c N rounds deliver over @p m clauses at the conventional @c delta=0.05.
+ * - An adaptive @c (eps,delta) target (the default @c eps=0.1, @c delta=0.05):
+ *   the Dagum-Karp-Luby-Ross self-adjusting *stopping rule*
+ *   (@c BooleanCircuit::karpLubyStopping), which samples until the accept
+ *   count reaches @c Y1 = 1+(1+eps)*4*(e-2)*ln(2/delta)/eps^2 and reports the
+ *   exact @c (eps,delta) over the rounds actually run.  The cap defaults to the
+ *   fixed worst-case round count @c ceil(Y1*m) (so the adaptive run never costs
+ *   more than ~(1+eps) times the old fixed bound) and is overridden by
+ *   @c max_samples; hitting it before the target downgrades the guarantee to
+ *   the relative @c eps achieved at the spent budget (with a warning).
+ *
+ * Unlike @c monte-carlo's additive bound, this controls the *relative* error,
+ * which is what stays meaningful on rare-event outputs.
  */
-unsigned long karp_luby_samples(const MethodArgs &a, size_t m)
+double evaluate_karp_luby(const BooleanCircuit &c,
+                          const std::vector<gate_t> &clauses,
+                          const std::vector<std::set<gate_t> > &supports,
+                          const MethodArgs &a)
 {
-  SampleSpec s = parse_sample_spec(a, "karp-luby");
-  const double e = exp(1.0);
+  const size_t m = clauses.size();
+  const double e  = exp(1.0);
   const double mm = (m == 0) ? 1. : static_cast<double>(m);
-  unsigned long n = s.fixed
-    ? s.samples
-    : finalize_adaptive(
-        ceil(4.0 * (e - 2.0) * mm * log(2.0 / s.delta) / (s.eps * s.eps)), s);
-  // For a fixed N, report the relative eps achieved at delta=0.05 over these
-  // m clauses; for the adaptive path, report the requested (eps,delta).
-  const double eps = s.fixed
-    ? sqrt(4.0 * (e - 2.0) * mm * log(2.0 / 0.05) / static_cast<double>(n))
-    : s.eps;
-  const double delta = s.fixed ? 0.05 : s.delta;
-  emit_guarantee("relative", eps, delta, n, static_cast<long>(m), nullptr);
-  return n;
+  SampleSpec s = parse_sample_spec(a, "karp-luby");
+
+  if(s.fixed) {
+    double r = c.karpLuby(clauses, supports, s.samples);
+    const double eps =
+      sqrt(4.0 * (e - 2.0) * mm * log(2.0 / 0.05) / static_cast<double>(s.samples));
+    emit_guarantee("relative", eps, 0.05, s.samples, static_cast<long>(m), nullptr);
+    return r;
+  }
+
+  // Adaptive: the self-adjusting stopping rule, capped at ceil(Y1*m) by default.
+  const double Y  = 4.0 * (e - 2.0) * log(2.0 / s.delta) / (s.eps * s.eps);
+  const double Y1 = 1.0 + (1.0 + s.eps) * Y;
+  const unsigned long cap =
+    s.has_max ? s.max_samples : finalize_adaptive(ceil(Y1 * mm), s);
+  unsigned long used = 0;
+  bool reached = false;
+  double r = c.karpLubyStopping(clauses, supports, s.eps, s.delta,
+                                cap, used, reached);
+  if(reached || used == 0) {
+    emit_guarantee("relative", s.eps, s.delta, used, static_cast<long>(m), nullptr);
+  } else {
+    const double eps =
+      sqrt(4.0 * (e - 2.0) * mm * log(2.0 / 0.05) / static_cast<double>(used));
+    provsql_warning("method 'karp-luby': the stopping rule reached its "
+                    "%lu-sample cap before the (epsilon=%g, delta=%g) target; "
+                    "reporting the relative guarantee achieved at the samples "
+                    "spent", cap, s.eps, s.delta);
+    emit_guarantee("relative", eps, 0.05, used, static_cast<long>(m), nullptr);
+  }
+  return r;
 }
 
 } // anonymous namespace
@@ -813,9 +846,9 @@ static Datum probability_evaluate_internal
         // (regime (a)/(b)) monotone circuit.  Runs before the multivalued
         // rewrite below: that rewrite would introduce OR/NOT and take the
         // circuit out of the DNF shape, and the detector already rejects
-        // multivalued inputs.  The (eps,delta)->N conversion happens in
-        // karp_luby_samples so BooleanCircuit::karpLuby stays a plain
-        // sampler.
+        // multivalued inputs.  The argument grammar and the fixed-vs-stopping
+        // routing live in evaluate_karp_luby; BooleanCircuit's samplers stay
+        // plain.
         std::vector<gate_t> clauses;
         std::vector<std::set<gate_t> > supports;
         if(!c.dnfShape(gate, clauses, supports)) {
@@ -826,9 +859,7 @@ static Datum probability_evaluate_internal
           provsql_error("method 'karp-luby' requires a DNF-shaped provenance "
                         "circuit");
         }
-        unsigned long n =
-          karp_luby_samples(parse_method_args(args), clauses.size());
-        result = c.karpLuby(clauses, supports, n);
+        result = evaluate_karp_luby(c, clauses, supports, parse_method_args(args));
         processed = true;
       } else if(method=="") {
         // Default evaluation: independent, then (when an inversion-free

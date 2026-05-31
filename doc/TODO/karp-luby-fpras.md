@@ -43,17 +43,34 @@ sharper per-sample costs; the Vinodchandran-Meel streaming-DNF line (2020+).
   `doc/source/user/probabilities.rst`,
   `doc/source/dev/probability-evaluation.rst`.
 
+## Implemented (Tier 2 -- sampler polish)
+
+Both improvements stay behind the same SQL surface (`evaluate_karp_luby` in
+`src/probability_evaluate.cpp` routes between them on the argument grammar);
+the shared per-trial sampler (`karpLubyState` / `karpLubyDrawClause` /
+`karpLubyCovers`) is factored out in `src/BooleanCircuit.cpp`.
+
+- **Self-adjusting stopping rule** on the adaptive `(eps, delta)` path
+  (`BooleanCircuit::karpLubyStopping`): the Dagum-Karp-Luby-Ross optimal form
+  of the KLM 1989 rule. Instead of fixing `N` from the worst-case acceptance
+  probability `1/m`, it samples until the accept count reaches the threshold
+  `Y1 = 1+(1+eps)*4*(e-2)*ln(2/delta)/eps^2`, then returns `S*Y1/N`. `N` then
+  adapts to the true `Pr[F]/S in [1/m, 1]` -- up to `m` times fewer rounds when
+  the clauses barely overlap (the `karp_luby` test's two-clause example stops
+  at ~1411 rounds vs the old fixed 2120). The run is capped at `ceil(Y1*m)` by
+  default (so it never costs more than ~`(1+eps)` times the old fixed bound)
+  and by `max_samples=` when given; hitting the cap downgrades the surfaced
+  guarantee to the relative error achieved at the spent budget, with a warning.
+- **Stratified sampling** on the fixed-`samples=N` path
+  (`BooleanCircuit::karpLuby`): the `N` rounds are allocated across clauses
+  proportionally to `p_i/S` (largest-remainder rounding, at least one per
+  clause) and each clause's acceptance rate is estimated separately, combining
+  `sum_i p_i * rate_i`. This removes the categorical clause-draw (between-strata)
+  variance, tightening the estimate at a fixed budget by up to a factor `m`
+  (e.g. the disjoint-clause and subsumption test circuits become near-exact).
+  Falls back to the unstratified categorical-draw estimator when `N < m`.
+
 ## Remaining
-
-### Tier 2 -- sampler polish (internal to `BooleanCircuit::karpLuby`, same API)
-
-- **KLM self-adjusting stopping rule** (KLM 1989): replace the fixed-`N` loop
-  with sampling until the *accept* count reaches a deterministic threshold,
-  then return the unbiased ratio. Same `(eps, delta)` surface; smaller hidden
-  constants; fewer wasted samples when `Pr[F]/S` is close to 1.
-- **Per-clause stratified sampling**: when the `p_i` differ widely, the
-  categorical clause draw's variance is dominated by the largest clauses;
-  standard stratification cuts the constant by up to a factor `m`.
 
 ### Tier 3 -- positive-DAG generalisation (regime (c), research)
 

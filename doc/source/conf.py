@@ -307,6 +307,7 @@ _C_FUNC_MAP = {
     'BooleanCircuit::possibleWorlds':        '/doxygen-c/html/classBooleanCircuit.html#a211a22d87946d2c2878f5da2cd28109c',
     'BooleanCircuit::monteCarlo':            '/doxygen-c/html/classBooleanCircuit.html#a85ca1a4d91d62aa1b4660c42b31ceadd',
     'BooleanCircuit::karpLuby':              '/doxygen-c/html/classBooleanCircuit.html#a655b427b6fec576d3085d36071d774b9',
+    'BooleanCircuit::karpLubyStopping':      '/doxygen-c/html/classBooleanCircuit.html#a2eab13cfe78e93d4e19e45de9bc79bdb',
     'BooleanCircuit::dnfShape':              '/doxygen-c/html/classBooleanCircuit.html#ab7ce0b72211e82719f8dbdef7747daf4',
     'BooleanCircuit::wmcCount':              '/doxygen-c/html/classBooleanCircuit.html#a82366627e2e907cf56ae4b6d28812eb6',
     'BooleanCircuit::compilation':           '/doxygen-c/html/classBooleanCircuit.html#ad3bc6b4c5643a25d46083bb72e1fb485',
