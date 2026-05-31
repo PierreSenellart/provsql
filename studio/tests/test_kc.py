@@ -113,6 +113,27 @@ def test_benchmark_filters_missing_tools(app, monkeypatch):
     assert ind["nodes"] is None and ind["edges"] is None
 
 
+def test_benchmark_includes_karp_luby_and_suppresses_guarantee_notices(app):
+    """karp-luby is a benchmark row (sharing the sample count), and the
+    per-method approximation-guarantee NOTICE the extension emits for the
+    sampling methods is the eval-strip bound, not a benchmark row, so the
+    benchmark must drop it from its notice list."""
+    pool = app.extensions["provsql_pool"]
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.provenance() FROM personnel WHERE id = 1")
+        token = str(cur.fetchone()[0])
+
+    out = kc.probability_benchmark(pool, token, samples=100,
+                                   statement_timeout="10s")
+    method_args = {(r["method"], r["args"]) for r in out["rows"]}
+    # karp-luby runs with the same sample budget as monte-carlo.
+    assert ("karp-luby", "100") in method_args
+    # monte-carlo / karp-luby emit the guarantee NOTICE at the verbose level
+    # the benchmark floors; none of it must leak into the notice list.
+    notices = " ".join(out.get("notices") or [])
+    assert "approximation-guarantee" not in notices, notices
+
+
 def test_benchmark_includes_inversion_free_only_when_certified(app):
     """The 'inversion-free' row is offered only when the root carries the
     inversion-free certificate; a plain (uncertified) token omits it."""

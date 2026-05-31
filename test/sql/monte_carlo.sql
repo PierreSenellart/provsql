@@ -45,5 +45,14 @@ SELECT round(probability_evaluate(:root,'independent')::numeric,2)              
 -- samples is mutually exclusive with the (eps,delta) path; unknown keys raise.
 SELECT probability_evaluate(:root,'monte-carlo','samples=100,eps=0.1');  -- conflict
 SELECT probability_evaluate(:root,'monte-carlo','foo=1');                -- unknown key
+
+-- The *additive* (eps,delta) guarantee is surfaced as a machine-readable
+-- NOTICE at verbose_level >= 5 (the level Studio sets); kind=additive, with
+-- the derived sample count.  (karp-luby's relative guarantee is checked in the
+-- karp_luby test.)
+SET provsql.verbose_level = 5;
+SELECT round(probability_evaluate(:root,'monte-carlo','eps=0.005,delta=0.01')::numeric,1) AS with_guarantee;
+RESET provsql.verbose_level;
+
 DROP TABLE mc_arg_in;
 RESET provsql.monte_carlo_seed;

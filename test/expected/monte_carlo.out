@@ -13,3 +13,7 @@ exact|bare|samples_kw|eps_additive
 (1 row)
 ERROR:  ProvSQL: method 'monte-carlo': samples is mutually exclusive with epsilon/delta
 ERROR:  ProvSQL: method 'monte-carlo': unknown argument key 'foo'
+NOTICE:  ProvSQL: approximation-guarantee: kind=additive eps=0.005 delta=0.01 samples=105967
+with_guarantee
+0.7
+(1 row)
