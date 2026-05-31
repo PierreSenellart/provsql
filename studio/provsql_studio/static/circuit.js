@@ -4110,8 +4110,9 @@
   }
 
   // Render a parsed guarantee as a short bound string for the #eval-bound
-  // slot, e.g. "(relative error ≤ 10%, prob ≥ 95%)" or "(± 0.0136 absolute,
-  // prob ≥ 95%)". 'relative' is a multiplicative guarantee (the estimate is
+  // slot, e.g. "(relative error ≤ 10%, prob ≥ 95%, 2,120 samples)" or
+  // "(± 0.0136 absolute, prob ≥ 95%, 10,000 samples)". 'relative' is a
+  // multiplicative guarantee (the estimate is
   // within a factor 1±ε of the true probability), so it reads as a relative
   // error bound, not a "± value"; 'additive' is an absolute error. δ (when
   // present) gives the confidence 1−δ; the optional tool name is appended for
@@ -4130,8 +4131,13 @@
     else if (kv.kind === 'additive')
       body = `± ${eps.toFixed(eps < 0.01 ? 4 : 3)} absolute`;
     else return '';
+    // Report the actual sample count when the method is sample-based (the
+    // adaptive (eps, delta) path derives it, so it is informative); weighted
+    // counters carry no sample count.
+    const n = kv.samples != null ? parseInt(kv.samples, 10) : NaN;
+    const smp = Number.isFinite(n) && n > 0 ? `, ${n.toLocaleString()} samples` : '';
     const tool = kv.tool ? ` [${kv.tool}]` : '';
-    return `(${body}${conf})${tool}`;
+    return `(${body}${conf}${smp})${tool}`;
   }
 
   function shortUuid(u) {

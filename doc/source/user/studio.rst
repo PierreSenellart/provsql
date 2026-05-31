@@ -379,7 +379,9 @@ reports for that run: a *relative* error bound (the estimate is within a factor
 shown as ``relative error ≤ 10%, prob ≥ 95%``; and an *additive* bound (a
 ``Hoeffding`` absolute error,
 `<https://en.wikipedia.org/wiki/Hoeffding%27s_inequality>`_) for
-``monte-carlo``, shown as ``± 0.0136 absolute, prob ≥ 95%``.
+``monte-carlo``, shown as ``± 0.0136 absolute, prob ≥ 95%``. The sample-based
+methods also report the actual sample count (informative on the adaptive
+``(ε, δ)`` path, where ProvSQL derives it), e.g. ``…, 2,120 samples``.
 :guilabel:`Clear` wipes the result so a verbose Why or Formula output does
 not obscure the canvas; :guilabel:`Copy` writes the just-rendered payload
 (with full precision for probability, regardless of the rounded
