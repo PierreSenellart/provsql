@@ -23,6 +23,11 @@ compiled `libboost_serialization`.
 
 ## Recipe
 
+`make wasm` (from the repo root) runs this whole recipe via
+[`build-wasm.sh`](build-wasm.sh) -- it builds the artifacts and assembles the
+Playground doc-root -- so the manual steps below are mainly for reference and
+debugging. The browser e2e is then `make playground-test`.
+
 ```bash
 ROOT=$PWD                      # the provsql repo
 IMG=docker.io/electricsql/pglite-builder:3.1.74-5-postgis-libicu-min

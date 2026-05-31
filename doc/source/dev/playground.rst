@@ -113,16 +113,21 @@ shared deep links (``?mode=`` / ``?db=`` / ``?q=``) forward straight to it.
 Build, test, deploy
 -------------------
 
-* **Build** the doc-root with ``studio/web/build.sh`` (it needs the WASM
+* **Build the WASM artifacts**: ``make wasm`` reproduces the ``wasm`` CI
+  job locally (``wasm/build-wasm.sh``): it builds the matched PGlite core +
+  the ProvSQL extension against the Emscripten builder image (podman or
+  docker), runs the headless Node smoke test, and assembles the doc-root
+  from the freshly built artifacts.
+* **Assemble** the doc-root with ``studio/web/build.sh`` (it needs the WASM
   artifacts from ``wasm/``: the matched PGlite dist and
   ``provsql.tar.gz``). ``make playground`` reuses the in-place artifacts;
-  the first build passes ``--pglite``/``--provsql``.
-* **Test**: ``studio/tests/web/`` is a headless-Chromium Playwright suite
-  (JSPI is on by default in current Chromium) driving the real frontend +
-  Python backend against the in-page PGlite. It covers boot, the
-  query → circuit → semiring path, the ``/api`` surface, database
-  switching, Reset, deep links, sub-path portability, and a fully
-  off-line boot. It is wired into the ``wasm`` CI job
+  ``make wasm`` and the first build pass ``--pglite``/``--provsql``.
+* **Test**: ``make playground-test`` runs ``studio/tests/web/``, a
+  headless-Chromium Playwright suite (JSPI is on by default in current
+  Chromium) driving the real frontend + Python backend against the in-page
+  PGlite. It covers boot, the query → circuit → semiring path, the ``/api``
+  surface, database switching, Reset, deep links, sub-path portability, and
+  a fully off-line boot. It is wired into the ``wasm`` CI job
   (``.github/workflows/wasm.yml``).
 * **Deploy** with ``make deploy-playground`` (rsync to
   ``provsql.org/playground/``). The only server requirement is the
