@@ -1,0 +1,122 @@
+/**
+ * @file ProbabilityMethod.h
+ * @brief Catalog of probability-evaluation methods (Strategy + registry).
+ *
+ * Each probability-evaluation algorithm is a first-class @c ProbabilityMethod
+ * object that declares its own guarantee, applicability and (eventually) cost,
+ * instead of that knowledge being smeared across a string-switch dispatcher.
+ * The @c MethodCatalog is the registry the dispatcher in
+ * @c probability_evaluate.cpp consults: a named request resolves through
+ * @c byName(); the default (empty-method) request runs @c chooseAndRun(), which
+ * reproduces the historical independent -> inversion-free -> compilation ladder
+ * as the @c Exact-tolerance instance of the chooser.
+ *
+ * This header carries only the public interface.  The concrete method classes,
+ * the @c EvalContext that threads the per-evaluation circuit state, and the
+ * catalog registration all live in @c probability_evaluate.cpp, where the
+ * file-local evaluation helpers they need are in scope.
+ *
+ * The design is documented at length in
+ * @c doc/TODO/having-trichotomy.md (the method-catalog / three-path chooser
+ * section).
+ */
+#ifndef PROVSQL_PROBABILITY_METHOD_H
+#define PROVSQL_PROBABILITY_METHOD_H
+
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace provsql {
+
+/**
+ * @brief The contract the user grants -- the "path".
+ *
+ * @c Exact is tolerance @c (0,0); @c Relative promises @c (1±epsilon) with
+ * confidence @c 1-delta; @c Additive promises @c |p̂-p| <= epsilon with the same
+ * confidence.  Admissible method sets nest @c Exact ⊂ @c Relative ⊂ @c Additive.
+ *
+ * Phase 1 plumbs the tolerance but does not yet drive selection: named methods
+ * dispatch by name and the empty method runs the exact ladder.  Tolerance-driven
+ * selection across the approximate members arrives with the relative/additive
+ * paths (later phases).
+ */
+enum class ToleranceKind { Exact, Relative, Additive };
+
+struct Tolerance {
+  ToleranceKind kind = ToleranceKind::Exact;
+  double epsilon = 0.;
+  double delta = 0.;
+};
+
+/// Per-evaluation circuit state threaded to a method's @c evaluate (defined in
+/// @c probability_evaluate.cpp, where the Boolean/Generic circuit machinery is
+/// in scope).
+struct EvalContext;
+
+/**
+ * @brief Strategy interface: one concrete subclass per probability method.
+ *
+ * @c evaluate throws @c CircuitException when the method cannot be applied to
+ * the circuit; @c chooseAndRun relies on that to fall through the default
+ * ladder, while @c byName lets it propagate (matching the historical explicit
+ * method behaviour).
+ */
+class ProbabilityMethod {
+public:
+  virtual ~ProbabilityMethod() = default;
+
+  /// Stable identifier used for @c byName lookup and the
+  /// @c provsql.last_eval_method report.
+  virtual std::string name() const = 0;
+
+  /// Which user-facing path this method can serve.
+  virtual ToleranceKind guaranteeKind() const = 0;
+
+  /// True iff this method participates in the default exact ladder (the
+  /// historical independent -> inversion-free -> compilation chain).
+  virtual bool inDefaultChain() const { return false; }
+
+  /// Position in the default ladder (lower runs first).  Ignored unless
+  /// @c inDefaultChain().
+  virtual int chainOrder() const { return 0; }
+
+  /// Cheap admissibility check for the default ladder (e.g. an inversion-free
+  /// certificate must be present).  @c byName ignores it.
+  virtual bool applicable(const EvalContext &, const Tolerance &) const
+  { return true; }
+
+  /// Run the method, returning the probability.  May mutate @p ctx (build the
+  /// Boolean view lazily, trigger the multivalued rewrite, set the reported
+  /// method name).
+  virtual double evaluate(EvalContext &ctx, const Tolerance &tol) const = 0;
+};
+
+/**
+ * @brief Registry of @c ProbabilityMethod objects.
+ *
+ * Mirrors the external-tool registry: adding a method is a new subclass plus one
+ * @c registerMethod call -- the dispatcher never changes (open/closed).
+ */
+class MethodCatalog {
+public:
+  /// The process-wide catalog, lazily populated with the built-in methods.
+  static const MethodCatalog &instance();
+
+  void registerMethod(std::unique_ptr<ProbabilityMethod> m);
+
+  /// Exact match on @c name(); nullptr if absent.
+  const ProbabilityMethod *byName(const std::string &name) const;
+
+  /// Run the default ladder for @p tol: the @c inDefaultChain() methods that are
+  /// @c applicable, in @c chainOrder, each tried until one succeeds.  The
+  /// terminal method's exception propagates (the chain is exhausted).
+  double chooseAndRun(EvalContext &ctx, const Tolerance &tol) const;
+
+private:
+  std::vector<std::unique_ptr<ProbabilityMethod>> methods_;
+};
+
+}  // namespace provsql
+
+#endif  // PROVSQL_PROBABILITY_METHOD_H

@@ -41,6 +41,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include <set>
 #include <stack>
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -62,6 +63,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "MonteCarloSampler.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "StructuredDNNF.h"
+#include "ProbabilityMethod.h"
 #include "having_semantics.hpp"
 #include "provsql_mmap.h"
 #include "safe_query_cert.h"
@@ -594,6 +596,297 @@ dDNNF buildInversionFreeDDNNF(pg_uuid_t token)
   return StructuredDNNFBuilder(c, root, inversion_free_rank(keys)).dnnf();
 }
 
+// ---------------------------------------------------------------------------
+// Probability-method catalog (see ProbabilityMethod.h).
+//
+// Each historical dispatch branch becomes a ProbabilityMethod object.  Phase 1
+// is a behaviour-preserving refactor: chooseAndRun reproduces the
+// independent -> inversion-free -> compilation default ladder exactly, and
+// byName reproduces each explicit method.  The RV+monte-carlo special case and
+// every probability-side pre-pass stay where they are in
+// probability_evaluate_internal.
+// ---------------------------------------------------------------------------
+namespace provsql {
+
+/// Per-evaluation circuit state threaded to a method's evaluate().  The Boolean
+/// view @c c is built once in probability_evaluate_internal; methods that need
+/// the multivalued rewrite trigger it (idempotently) through this context, so
+/// the rewrite fires exactly when the historical post-rewrite branch did.
+struct EvalContext {
+  GenericCircuit &gc;
+  gate_t gc_root;
+  pg_uuid_t token;
+  BooleanCircuit &c;
+  gate_t gate;
+  std::unordered_map<gate_t, gate_t> &gc_to_bc;
+  bool inv_free_cert;
+  const std::string &args;
+  bool explicitly_named;            ///< invoked via byName (vs the default chain)
+  bool multivalued_rewritten = false;
+  std::string actual_method;
+
+  void ensureMultivaluedRewritten() {
+    if(!multivalued_rewritten) {
+      c.rewriteMultivaluedGates();
+      multivalued_rewritten = true;
+    }
+  }
+};
+
+namespace {
+
+/// Exact, decomposition of disconnected circuits.  Throws when the circuit is
+/// not independent, which the default ladder catches to fall through.
+class IndependentMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "independent"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return true; }
+  int chainOrder() const override { return 0; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    double r = ctx.c.independentEvaluation(ctx.gate);
+    ctx.actual_method = "independent";
+    return r;
+  }
+};
+
+/// Exact, structured d-DNNF over an inversion-free certificate.
+class InversionFreeMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "inversion-free"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return true; }
+  int chainOrder() const override { return 1; }
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    // In the default ladder: only when the certificate is present and the
+    // kill-switch is on.  byName ignores applicable() and enforces the explicit
+    // rules (hard errors) in evaluate().
+    return ctx.inv_free_cert && provsql_inversion_free;
+  }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    if(ctx.explicitly_named && !ctx.inv_free_cert)
+      provsql_error("method 'inversion-free' requires an inversion-free "
+                    "certificate on the provenance root");
+    std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
+    if(!collect_inversion_free_keys(ctx.gc, ctx.gc_root, ctx.gc_to_bc, ctx.c,
+                                    ctx.gate, keys)) {
+      if(ctx.explicitly_named)
+        provsql_error("method 'inversion-free': the provenance root carries a "
+                      "certificate but its inputs lack per-input order markers");
+      // Default-ladder mode: fall through to the next method.
+      throw CircuitException("inversion-free: inputs lack per-input order "
+                             "markers");
+    }
+    double r = StructuredDNNFBuilder(ctx.c, ctx.gate, inversion_free_rank(keys))
+                 .probability();
+    ctx.actual_method = "inversion-free";
+    return r;
+  }
+};
+
+/// Exact, generic d-DNNF construction (tree-decomposition / interpret-as-dd /
+/// external compiler), parameterised by the makeDD method string and the name
+/// reported through provsql.last_eval_method.  One instance per invocation
+/// spelling; the chain terminal is the "default" instance.
+class CompilationMethod : public ProbabilityMethod {
+  std::string name_, makedd_arg_, report_as_;
+  bool in_chain_;
+  int chain_order_;
+public:
+  CompilationMethod(std::string n, std::string makedd_arg, std::string report_as,
+                    bool in_chain = false, int order = 0)
+    : name_(std::move(n)), makedd_arg_(std::move(makedd_arg)),
+      report_as_(std::move(report_as)), in_chain_(in_chain), chain_order_(order)
+  {}
+  std::string name() const override { return name_; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return in_chain_; }
+  int chainOrder() const override { return chain_order_; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    ctx.ensureMultivaluedRewritten();
+    dDNNF dd = ctx.c.makeDD(ctx.gate, makedd_arg_, ctx.args);
+    double r = dd.probabilityEvaluation();
+    ctx.actual_method = report_as_;
+    return r;
+  }
+};
+
+/// Exact, naive 2^N enumeration.  By-name only (not in the default ladder).
+class PossibleWorldsMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "possible-worlds"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    ctx.ensureMultivaluedRewritten();
+    if(!ctx.args.empty())
+      provsql_warning("Argument '%s' ignored for method possible-worlds",
+                      ctx.args.c_str());
+    double r = ctx.c.possibleWorlds(ctx.gate);
+    ctx.actual_method = "possible-worlds";
+    return r;
+  }
+};
+
+/// Additive Monte Carlo (the non-RV path; the RV path is handled directly on
+/// the GenericCircuit in probability_evaluate_internal before the catalog).
+class MonteCarloMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "monte-carlo"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Additive; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    unsigned long samples = monte_carlo_samples(parse_method_args(ctx.args));
+    ctx.ensureMultivaluedRewritten();
+    double r = ctx.c.monteCarlo(ctx.gate, static_cast<unsigned>(samples));
+    ctx.actual_method = "monte-carlo";
+    return r;
+  }
+};
+
+/// Karp-Luby FPRAS over a DNF-shaped monotone circuit.  By-name only; runs
+/// before the multivalued rewrite (it rejects multivalued inputs anyway).
+class KarpLubyMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "karp-luby"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Relative; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    std::vector<gate_t> clauses;
+    std::vector<std::set<gate_t> > supports;
+    if(!ctx.c.dnfShape(ctx.gate, clauses, supports)) {
+      provsql_warning("method 'karp-luby' applies only to a DNF-shaped circuit "
+                      "(a monotone OR-of-ANDs over input leaves); negation, "
+                      "comparison, aggregation, random-variable and "
+                      "multivalued-input gates are not supported");
+      provsql_error("method 'karp-luby' requires a DNF-shaped provenance "
+                    "circuit");
+    }
+    double r = evaluate_karp_luby(ctx.c, clauses, supports,
+                                  parse_method_args(ctx.args));
+    ctx.actual_method = "karp-luby";
+    return r;
+  }
+};
+
+/// weightmc: backward-compatible alias for the weighted-model-counter path.
+class WeightmcMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "weightmc"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Relative; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    std::string opt = wmc_opt_from_args(parse_method_args(ctx.args), "weightmc");
+    emit_guarantee("relative", eps_from_wmc_opt(opt), -1., 0, -1, "weightmc");
+    ctx.ensureMultivaluedRewritten();
+    double r = ctx.c.wmcCount(ctx.gate, "weightmc", opt);
+    ctx.actual_method = "weightmc";
+    return r;
+  }
+};
+
+/// wmc: any registered weighted model counter, selected by tool=<name>.
+class WmcMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "wmc"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Relative; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    MethodArgs a = parse_method_args(ctx.args);
+    std::string tool, tool_args;
+    if(a.has("tool") || a.has("epsilon") || a.has("delta")) {
+      reject_unknown_keys(a, {"tool", "epsilon", "delta"}, "wmc");
+      tool = a.get("tool");
+      if(tool.empty() && !a.positional.empty())
+        tool = a.positional[0];
+      if(tool.empty())
+        provsql_error("method 'wmc' requires a tool (tool=<name>)");
+      if(a.has("epsilon") || a.has("delta")) {
+        double eps = 0.8, delta = 0.5;  // validate ranges uniformly
+        parse_eps_delta(a, "wmc", eps, delta);
+        tool_args = a.get("delta") + ";" + a.get("epsilon");
+      }
+    } else {
+      auto sep = ctx.args.find(';');
+      tool = (sep == std::string::npos) ? ctx.args : ctx.args.substr(0, sep);
+      tool_args = (sep == std::string::npos) ? std::string()
+                                             : ctx.args.substr(sep + 1);
+    }
+    if(is_approx_wmc_tool(tool))
+      emit_guarantee("relative", eps_from_wmc_opt(tool_args), -1., 0, -1,
+                     tool.c_str());
+    ctx.ensureMultivaluedRewritten();
+    double r = ctx.c.wmcCount(ctx.gate, tool, tool_args);
+    ctx.actual_method = "wmc";
+    return r;
+  }
+};
+
+}  // anonymous namespace
+
+void MethodCatalog::registerMethod(std::unique_ptr<ProbabilityMethod> m)
+{
+  methods_.push_back(std::move(m));
+}
+
+const ProbabilityMethod *MethodCatalog::byName(const std::string &n) const
+{
+  for(const auto &m : methods_)
+    if(m->name() == n)
+      return m.get();
+  return nullptr;
+}
+
+double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
+{
+  std::vector<const ProbabilityMethod *> chain;
+  for(const auto &m : methods_)
+    if(m->inDefaultChain() && m->applicable(ctx, tol))
+      chain.push_back(m.get());
+  std::sort(chain.begin(), chain.end(),
+            [](const ProbabilityMethod *a, const ProbabilityMethod *b) {
+              return a->chainOrder() < b->chainOrder();
+            });
+  if(chain.empty())
+    throw CircuitException("no applicable probability method in the default "
+                           "chain");
+  // Try each in order; the terminal method's exception propagates (the chain is
+  // exhausted), reproducing the historical "compilation runs uncaught" tail.
+  for(size_t i = 0; i + 1 < chain.size(); ++i) {
+    try {
+      return chain[i]->evaluate(ctx, tol);
+    } catch(CircuitException &) { /* fall through to the next ladder method */ }
+  }
+  return chain.back()->evaluate(ctx, tol);
+}
+
+const MethodCatalog &MethodCatalog::instance()
+{
+  static const MethodCatalog cat = [] {
+    MethodCatalog c;
+    // Default exact ladder, in chainOrder: independent -> inversion-free ->
+    // compilation (the "default" CompilationMethod is the terminal, == the
+    // historical empty-method makeDD(gate, "", args)).
+    c.registerMethod(std::make_unique<IndependentMethod>());
+    c.registerMethod(std::make_unique<InversionFreeMethod>());
+    c.registerMethod(std::make_unique<CompilationMethod>(
+                       "default", "", "tree-decomposition", true, 2));
+    // By-name-only compilation spellings.
+    c.registerMethod(std::make_unique<CompilationMethod>(
+                       "compilation", "compilation", "compilation"));
+    c.registerMethod(std::make_unique<CompilationMethod>(
+                       "tree-decomposition", "tree-decomposition",
+                       "tree-decomposition"));
+    c.registerMethod(std::make_unique<CompilationMethod>(
+                       "interpret-as-dd", "interpret-as-dd", "interpret-as-dd"));
+    // By-name-only methods.
+    c.registerMethod(std::make_unique<PossibleWorldsMethod>());
+    c.registerMethod(std::make_unique<MonteCarloMethod>());
+    c.registerMethod(std::make_unique<KarpLubyMethod>());
+    c.registerMethod(std::make_unique<WeightmcMethod>());
+    c.registerMethod(std::make_unique<WmcMethod>());
+    return c;
+  }();
+  return cat;
+}
+
+}  // namespace provsql
+
 /**
  * @brief Core implementation of probability evaluation for a circuit token.
  * @param token   UUID of the root provenance gate.
@@ -845,147 +1138,24 @@ static Datum probability_evaluate_internal
       std::unordered_map<gate_t, gate_t> gc_to_bc;
       BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
 
-      bool processed = false;
-
-      if(method=="independent") {
-        result = c.independentEvaluation(gate);
-        actual_method = "independent";
-        processed = true;
-      } else if(method=="inversion-free") {
-        // Explicit inversion-free method: requires the certificate, errors
-        // otherwise (and ignores the provsql.inversion_free kill-switch).  The
-        // structured builder throws on multivalued inputs (BID) and on a
-        // variable left unordered by collect_inversion_free_keys.
-        if(!inv_free_cert)
-          provsql_error("method 'inversion-free' requires an inversion-free "
-                        "certificate on the provenance root");
-        std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
-        if(!collect_inversion_free_keys(gc, gc_root, gc_to_bc, c, gate, keys))
-          provsql_error("method 'inversion-free': the provenance root carries "
-                        "a certificate but its inputs lack per-input order "
-                        "markers");
-        result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
-                   .probability();
-        actual_method = "inversion-free";
-        processed = true;
-      } else if(method=="karp-luby") {
-        // Karp-Luby FPRAS for rare-event probability on a DNF-shaped
-        // (regime (a)/(b)) monotone circuit.  Runs before the multivalued
-        // rewrite below: that rewrite would introduce OR/NOT and take the
-        // circuit out of the DNF shape, and the detector already rejects
-        // multivalued inputs.  The argument grammar and the fixed-vs-stopping
-        // routing live in evaluate_karp_luby; BooleanCircuit's samplers stay
-        // plain.
-        std::vector<gate_t> clauses;
-        std::vector<std::set<gate_t> > supports;
-        if(!c.dnfShape(gate, clauses, supports)) {
-          provsql_warning("method 'karp-luby' applies only to a DNF-shaped "
-                          "circuit (a monotone OR-of-ANDs over input leaves); "
-                          "negation, comparison, aggregation, random-variable "
-                          "and multivalued-input gates are not supported");
-          provsql_error("method 'karp-luby' requires a DNF-shaped provenance "
-                        "circuit");
-        }
-        result = evaluate_karp_luby(c, clauses, supports, parse_method_args(args));
-        actual_method = "karp-luby";
-        processed = true;
-      } else if(method=="") {
-        // Default evaluation: independent, then (when an inversion-free
-        // certificate is present) the structured-d-DNNF builder, then
-        // tree-decomposition / compilation, in order until one works.
-        try {
-          result = c.independentEvaluation(gate);
-          actual_method = "independent";
-          processed = true;
-        } catch(CircuitException &) {}
-
-        if(!processed && inv_free_cert && provsql_inversion_free) {
-          try {
-            std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
-            if(collect_inversion_free_keys(gc, gc_root, gc_to_bc, c, gate, keys)) {
-              result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
-                         .probability();
-              actual_method = "inversion-free";
-              processed = true;
-            }
-          } catch(CircuitException &) {}   // fall through to tree-decomposition
-        }
+      // Method-catalog dispatch (see ProbabilityMethod.h): the empty method
+      // runs the default exact ladder; a named method dispatches by name.  The
+      // ladder and the per-method behaviour are a 1:1 port of the historical
+      // if/else chain (Phase 1, behaviour-preserving).
+      provsql::EvalContext ctx{gc, gc_root, token, c, gate, gc_to_bc,
+                               inv_free_cert, args,
+                               /*explicitly_named=*/!method.empty()};
+      const provsql::MethodCatalog &catalog = provsql::MethodCatalog::instance();
+      if(method.empty()) {
+        result = catalog.chooseAndRun(ctx, provsql::Tolerance{});
+      } else {
+        const provsql::ProbabilityMethod *m = catalog.byName(method);
+        if(m == nullptr)
+          provsql_error("Wrong method '%s' for probability evaluation",
+                        method.c_str());
+        result = m->evaluate(ctx, provsql::Tolerance{});
       }
-
-      if(!processed) {
-        // Other methods do not deal with multivalued input gates, they
-        // need to be rewritten
-        c.rewriteMultivaluedGates();
-
-        if(method=="monte-carlo") {
-          unsigned long samples = monte_carlo_samples(parse_method_args(args));
-          result = c.monteCarlo(gate, static_cast<unsigned>(samples));
-          actual_method = "monte-carlo";
-        } else if(method=="possible-worlds") {
-          if(!args.empty())
-            provsql_warning("Argument '%s' ignored for method possible-worlds", args.c_str());
-
-          result = c.possibleWorlds(gate);
-          actual_method = "possible-worlds";
-        } else if(method=="weightmc") {
-          // Backward-compatible alias for the wmc/weightmc path.  The args
-          // accept the canonical epsilon=/delta= or the historical
-          // 'delta;epsilon' positional, normalised by wmc_opt_from_args.
-          std::string opt = wmc_opt_from_args(parse_method_args(args), "weightmc");
-          // weightmc is an approximate (multiplicative) counter; surface its
-          // tolerance as the relative guarantee.
-          emit_guarantee("relative", eps_from_wmc_opt(opt), -1., 0, -1, "weightmc");
-          result = c.wmcCount(gate, "weightmc", opt);
-          actual_method = "weightmc";
-        } else if(method=="wmc") {
-          // 'tool' selects which weighted model counter to invoke (any
-          // registered wmc tool); the tool options are forwarded to
-          // wmcCount, which validates the tool against the registry (no
-          // per-tool branch here).  Two argument forms are accepted: the
-          // canonical 'tool=<name>[,epsilon=E][,delta=D]', and the historical
-          // positional 'tool[;tool_args]'.
-          MethodArgs a = parse_method_args(args);
-          std::string tool, tool_args;
-          if(a.has("tool") || a.has("epsilon") || a.has("delta")) {
-            reject_unknown_keys(a, {"tool", "epsilon", "delta"}, "wmc");
-            tool = a.get("tool");
-            if(tool.empty() && !a.positional.empty())
-              tool = a.positional[0];
-            if(tool.empty())
-              provsql_error("method 'wmc' requires a tool (tool=<name>)");
-            if(a.has("epsilon") || a.has("delta")) {
-              double eps = 0.8, delta = 0.5;  // validate ranges uniformly
-              parse_eps_delta(a, "wmc", eps, delta);
-              tool_args = a.get("delta") + ";" + a.get("epsilon");
-            }
-          } else {
-            auto sep = args.find(';');
-            tool = (sep == std::string::npos) ? args : args.substr(0, sep);
-            tool_args = (sep == std::string::npos) ? std::string() : args.substr(sep + 1);
-          }
-          // Approximate counters (weightmc / approxmc) carry a multiplicative
-          // tolerance; surface it as the relative guarantee.
-          if(is_approx_wmc_tool(tool))
-            emit_guarantee("relative", eps_from_wmc_opt(tool_args), -1., 0, -1,
-                           tool.c_str());
-          result = c.wmcCount(gate, tool, tool_args);
-          actual_method = "wmc";
-        } else if(method=="compilation" || method=="tree-decomposition"
-                  || method=="interpret-as-dd" || method=="default"
-                  || method=="") {
-          auto dd = c.makeDD(gate,
-                             method=="default" ? std::string() : method,
-                             args);
-          result = dd.probabilityEvaluation();
-          // makeDD auto-selects between tree-decomposition and a compiler
-          // fallback when no explicit method is given; report the requested
-          // method, defaulting the empty/"default" case to tree-decomposition.
-          actual_method = (method.empty() || method=="default")
-                            ? "tree-decomposition" : method;
-        } else {
-          provsql_error("Wrong method '%s' for probability evaluation", method.c_str());
-        }
-      }
+      actual_method = ctx.actual_method;
     }
   } catch(CircuitException &e) {
     // If the exception was raised because a query cancel or statement
