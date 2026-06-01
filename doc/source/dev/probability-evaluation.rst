@@ -496,8 +496,8 @@ The classification is best read as **two layers**.
 ``Pr(α < k) = Pr(nonempty) − Pr(α ≥ k)``,
 ``Pr(α ≤ k) = Pr(nonempty) − Pr(α > k)`` -- with ``Pr(nonempty)``
 trivially poly -- each operator has the *same exact complexity as its
-complement* (:cite:`DBLP:journals/vldb/ReS09`, p. 1102).  So ``=``≡``≠``,
-``<``≡``≥``, ``≤``≡``>``, and the exact verdict depends only on the
+complement* (:cite:`DBLP:journals/vldb/ReS09`, p. 1102).  So ``=`` ≡ ``≠``,
+``<`` ≡ ``≥``, ``≤`` ≡ ``>``, and the exact verdict depends only on the
 aggregate's safety, not on ``θ``:
 
 .. list-table:: Layer 1 -- exact evaluation (all six operators, including ``≠``)
@@ -537,25 +537,25 @@ approximation verdicts.  This is the trichotomy proper -- *safe* /
    * - ``EXISTS`` (third class empty)
      - apx-safe (always; karp-luby)
      - p. 1093
-   * - ``MIN`` ``<``,``≤`` · ``MAX`` ``>``,``≥``
+   * - ``MIN`` ``<,≤`` · ``MAX`` ``>,≥``
      - apx-safe (any unsafe ``sk``)
      - Thm 8
-   * - ``MIN`` ``>``,``≥``,``=`` · ``MAX`` ``<``,``≤``,``=``
+   * - ``MIN`` ``>,≥,=`` · ``MAX`` ``<,≤,=``
      - hazardous
      - Lemma 8 / Thm 11
-   * - ``COUNT`` ``<``,``≤``,``=``
+   * - ``COUNT`` ``<,≤,=``
      - apx-safe / hazardous (decidable)
      - Thm 11
-   * - ``COUNT`` ``>``,``≥``
+   * - ``COUNT`` ``>,≥``
      - open
      - pp. 1094, 1111
-   * - ``SUM`` ``<``,``≤``,``>``,``≥`` (``sk`` safe, not SUM-safe)
+   * - ``SUM`` ``<,≤,>,≥`` (``sk`` safe, not SUM-safe)
      - apx-safe
      - Thm 10
-   * - ``SUM`` ``<``,``≤`` (``sk`` unsafe)
+   * - ``SUM`` ``<,≤`` (``sk`` unsafe)
      - hazardous
      - Thm 11
-   * - ``SUM`` ``>``,``≥`` (``sk`` unsafe)
+   * - ``SUM`` ``>,≥`` (``sk`` unsafe)
      - open
      - p. 1094
    * - ``SUM`` ``=``
