@@ -76,7 +76,7 @@ unsigned runSumCmpEvaluator(GenericCircuit &gc)
      * (done before the independence walk : a too-wide range is rejected
      * regardless of soundness). */
     long lo = 0, hi = 0;
-    for (int m : match.ms) {
+    for (long m : match.ms) {
       if (m < 0) lo += m; else hi += m;
     }
     const long range = hi - lo + 1;

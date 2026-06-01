@@ -42,10 +42,10 @@ struct AggCmpMatch {
   gate_t agg{};                    ///< the @c gate_agg operand of the cmp
   std::vector<gate_t> semimods;    ///< the per-child @c gate_semimod parents
   std::vector<gate_t> ks;          ///< the K side of each semimod (contributor root)
-  std::vector<int> ms;             ///< the M side of each semimod (per-row value)
+  std::vector<long> ms;            ///< the M side of each semimod (per-row value), scaled to a common integer grid (numeric / decimal-float domains; see @c matchAggCmp)
   AggregationOperator agg_kind{};  ///< effective aggregate (SUM-of-1s remapped to COUNT)
   ComparisonOperator op{};         ///< comparator, flipped if the agg sits on the right
-  int C{};                         ///< the constant threshold
+  long C{};                        ///< the constant threshold, on the same integer grid as @c ms
 };
 
 /**

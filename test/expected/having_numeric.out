@@ -37,3 +37,31 @@ flt MAX>=4.25|2|0.5000
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+join SUM(b)>=6|1|0.2947|0.2947|0.000000
+join SUM(b)>=6|2|0.0993|0.0993|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+join SUM(b)>=5.5|1|0.3595|0.3595|0.000000
+join SUM(b)>=5.5|2|0.2114|0.2114|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+join MAX(b)>=3.25|1|0.6612|0.6612|0.000000
+join MAX(b)>=3.25|2|0.3843|0.3843|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+join AVG(b)>=2.5|1|0.4258|0.4258|0.000000
+join AVG(b)>=2.5|2|0.2753|0.2753|0.000000
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

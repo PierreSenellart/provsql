@@ -213,7 +213,7 @@ unsigned runCountCmpEvaluator(GenericCircuit &gc)
     if (match.agg_kind != AggregationOperator::COUNT) continue;
     {
       bool all_one = true;
-      for (int m : match.ms) if (m != 1) { all_one = false; break; }
+      for (long m : match.ms) if (m != 1) { all_one = false; break; }
       if (!all_one) continue;
     }
 
@@ -221,7 +221,7 @@ unsigned runCountCmpEvaluator(GenericCircuit &gc)
     const auto &semimods = match.semimods;
     const auto &ks = match.ks;
     const ComparisonOperator op = match.op;
-    const int C = match.C;
+    const int C = static_cast<int>(match.C);
 
     /* Independence certification.  The contributors are independent
      * Bernoulli trials -- the precondition for the Poisson-binomial --

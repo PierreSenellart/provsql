@@ -46,3 +46,44 @@ SELECT * FROM hn_p('flt MAX>=4.25','SELECT g, probability_evaluate(provenance())
 DROP FUNCTION hn_p(text, text);
 SELECT remove_provenance('hn');
 DROP TABLE hn;
+
+-- Closed-form vs enumeration on a numeric safe-join (fan-out): the
+-- marginal-vector engine fires for numeric just as for integer (values
+-- scaled to a common integer grid), so off (enumeration) and on
+-- (closed-form) must agree exactly.
+CREATE TABLE hnr(k int, a int);
+CREATE TABLE hns(a int, b numeric(10,2));
+INSERT INTO hnr VALUES (1,10),(1,20),(2,10);
+INSERT INTO hns VALUES (10,1.50),(10,2.50),(10,3.25),(20,4.00),(20,0.75);
+SELECT add_provenance('hnr');
+SELECT add_provenance('hns');
+DO $$ BEGIN PERFORM set_prob(provenance(), (0.40 + 0.05*k + 0.013*a)) FROM hnr; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), (0.35 + 0.02*(b*4)::int)) FROM hns; END $$;
+
+CREATE FUNCTION hn_par(opname text, q text)
+  RETURNS TABLE(shape text, g int, p_off numeric, p_on numeric, diff numeric)
+AS $$
+BEGIN
+  EXECUTE 'SET provsql.cmp_probability_evaluation = off';
+  EXECUTE format('CREATE TEMP TABLE hn_o AS %s', q);
+  PERFORM remove_provenance('hn_o');
+  EXECUTE 'SET provsql.cmp_probability_evaluation = on';
+  EXECUTE format('CREATE TEMP TABLE hn_n AS %s', q);
+  PERFORM remove_provenance('hn_n');
+  RETURN QUERY
+    SELECT opname, o.g, round(o.p::numeric, 4), round(n.p::numeric, 4),
+           round(abs(o.p - n.p)::numeric, 6)
+    FROM hn_o o JOIN hn_n n USING (g) ORDER BY o.g;
+  DROP TABLE hn_o, hn_n;
+END
+$$ LANGUAGE plpgsql;
+
+SELECT * FROM hn_par('join SUM(b)>=6',   'SELECT k g, probability_evaluate(provenance()) p FROM hnr JOIN hns ON hnr.a=hns.a GROUP BY k HAVING sum(b) >= 6');
+SELECT * FROM hn_par('join SUM(b)>=5.5', 'SELECT k g, probability_evaluate(provenance()) p FROM hnr JOIN hns ON hnr.a=hns.a GROUP BY k HAVING sum(b) >= 5.5');
+SELECT * FROM hn_par('join MAX(b)>=3.25','SELECT k g, probability_evaluate(provenance()) p FROM hnr JOIN hns ON hnr.a=hns.a GROUP BY k HAVING max(b) >= 3.25');
+SELECT * FROM hn_par('join AVG(b)>=2.5', 'SELECT k g, probability_evaluate(provenance()) p FROM hnr JOIN hns ON hnr.a=hns.a GROUP BY k HAVING avg(b) >= 2.5');
+
+DROP FUNCTION hn_par(text, text);
+SELECT remove_provenance('hnr');
+SELECT remove_provenance('hns');
+DROP TABLE hnr, hns;

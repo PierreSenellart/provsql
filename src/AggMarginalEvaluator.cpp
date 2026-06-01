@@ -418,7 +418,7 @@ static std::vector<double> countPMF(GenericCircuit &gc,
  * @c c op C true.  Mirrors CountCmpEvaluator::cdfForOperator exactly,
  * but driven by the materialised PMF rather than a Poisson-binomial. */
 static double prFromPMF(const std::vector<double> &pmf,
-                        ComparisonOperator op, int C)
+                        ComparisonOperator op, long C)
 {
   double pr = 0.0;
   for (int c = 1; c < static_cast<int>(pmf.size()); ++c) {
@@ -498,9 +498,9 @@ static double pAllAbsent(GenericCircuit &gc,
  * of the independent-only qprod, so it is exact on safe joins too. */
 static double minMaxProb(GenericCircuit &gc,
                          const std::vector<std::vector<gate_t>> &leaves,
-                         const std::vector<int> &vals,
+                         const std::vector<long> &vals,
                          AggregationOperator agg, ComparisonOperator op,
-                         int C, bool &ok)
+                         long C, bool &ok)
 {
   /* P(all contributors whose value satisfies @p pred are absent). */
   auto pAbsentWhere = [&](auto pred) -> double {
@@ -515,27 +515,27 @@ static double minMaxProb(GenericCircuit &gc,
 
   if (agg == AggregationOperator::MAX) {
     switch (op) {
-      case ComparisonOperator::GE: pr = 1.0 - pAbsentWhere([&](int v){return v >= C;}); break;
-      case ComparisonOperator::GT: pr = 1.0 - pAbsentWhere([&](int v){return v >  C;}); break;
-      case ComparisonOperator::LE: pr = pAbsentWhere([&](int v){return v >  C;}) - allAbsent; break;
-      case ComparisonOperator::LT: pr = pAbsentWhere([&](int v){return v >= C;}) - allAbsent; break;
-      case ComparisonOperator::EQ: pr = pAbsentWhere([&](int v){return v >  C;})
-                                      - pAbsentWhere([&](int v){return v >= C;}); break;
+      case ComparisonOperator::GE: pr = 1.0 - pAbsentWhere([&](long v){return v >= C;}); break;
+      case ComparisonOperator::GT: pr = 1.0 - pAbsentWhere([&](long v){return v >  C;}); break;
+      case ComparisonOperator::LE: pr = pAbsentWhere([&](long v){return v >  C;}) - allAbsent; break;
+      case ComparisonOperator::LT: pr = pAbsentWhere([&](long v){return v >= C;}) - allAbsent; break;
+      case ComparisonOperator::EQ: pr = pAbsentWhere([&](long v){return v >  C;})
+                                      - pAbsentWhere([&](long v){return v >= C;}); break;
       case ComparisonOperator::NE: pr = (1.0 - allAbsent)
-                                      - (pAbsentWhere([&](int v){return v >  C;})
-                                       - pAbsentWhere([&](int v){return v >= C;})); break;
+                                      - (pAbsentWhere([&](long v){return v >  C;})
+                                       - pAbsentWhere([&](long v){return v >= C;})); break;
     }
   } else {  /* MIN */
     switch (op) {
-      case ComparisonOperator::LE: pr = 1.0 - pAbsentWhere([&](int v){return v <= C;}); break;
-      case ComparisonOperator::LT: pr = 1.0 - pAbsentWhere([&](int v){return v <  C;}); break;
-      case ComparisonOperator::GE: pr = pAbsentWhere([&](int v){return v <  C;}) - allAbsent; break;
-      case ComparisonOperator::GT: pr = pAbsentWhere([&](int v){return v <= C;}) - allAbsent; break;
-      case ComparisonOperator::EQ: pr = pAbsentWhere([&](int v){return v <  C;})
-                                      - pAbsentWhere([&](int v){return v <= C;}); break;
+      case ComparisonOperator::LE: pr = 1.0 - pAbsentWhere([&](long v){return v <= C;}); break;
+      case ComparisonOperator::LT: pr = 1.0 - pAbsentWhere([&](long v){return v <  C;}); break;
+      case ComparisonOperator::GE: pr = pAbsentWhere([&](long v){return v <  C;}) - allAbsent; break;
+      case ComparisonOperator::GT: pr = pAbsentWhere([&](long v){return v <= C;}) - allAbsent; break;
+      case ComparisonOperator::EQ: pr = pAbsentWhere([&](long v){return v <  C;})
+                                      - pAbsentWhere([&](long v){return v <= C;}); break;
       case ComparisonOperator::NE: pr = (1.0 - allAbsent)
-                                      - (pAbsentWhere([&](int v){return v <  C;})
-                                       - pAbsentWhere([&](int v){return v <= C;})); break;
+                                      - (pAbsentWhere([&](long v){return v <  C;})
+                                       - pAbsentWhere([&](long v){return v <= C;})); break;
     }
   }
   return pr;

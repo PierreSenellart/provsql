@@ -19,7 +19,7 @@ namespace {
  * value satisfies @p pred is absent.  An empty product is 1.0. */
 template <typename Pred>
 static double qprod(const std::vector<double> &p,
-                    const std::vector<int> &m,
+                    const std::vector<long> &m,
                     Pred pred)
 {
   double q = 1.0;
@@ -33,15 +33,15 @@ static double qprod(const std::vector<double> &p,
  * MIN = C : no child < C present, at least one child = C present. */
 static double probEqual(AggregationOperator agg,
                         const std::vector<double> &p,
-                        const std::vector<int> &m, int C)
+                        const std::vector<long> &m, int C)
 {
   if (agg == AggregationOperator::MAX) {
-    double no_above   = qprod(p, m, [&](int v) { return v > C; });
-    double some_equal = 1.0 - qprod(p, m, [&](int v) { return v == C; });
+    double no_above   = qprod(p, m, [&](long v) { return v > C; });
+    double some_equal = 1.0 - qprod(p, m, [&](long v) { return v == C; });
     return no_above * some_equal;
   } else {  // MIN
-    double no_below   = qprod(p, m, [&](int v) { return v < C; });
-    double some_equal = 1.0 - qprod(p, m, [&](int v) { return v == C; });
+    double no_below   = qprod(p, m, [&](long v) { return v < C; });
+    double some_equal = 1.0 - qprod(p, m, [&](long v) { return v == C; });
     return no_below * some_equal;
   }
 }
@@ -52,45 +52,45 @@ static double probEqual(AggregationOperator agg,
 static double cdfForOperator(AggregationOperator agg,
                              ComparisonOperator op,
                              const std::vector<double> &p,
-                             const std::vector<int> &m,
-                             int C)
+                             const std::vector<long> &m,
+                             long C)
 {
   auto atLeastOne = [&](auto pred) { return 1.0 - qprod(p, m, pred); };
 
   if (agg == AggregationOperator::MAX) {
     switch (op) {
       case ComparisonOperator::GE:
-        return atLeastOne([&](int v) { return v >= C; });
+        return atLeastOne([&](long v) { return v >= C; });
       case ComparisonOperator::GT:
-        return atLeastOne([&](int v) { return v >  C; });
+        return atLeastOne([&](long v) { return v >  C; });
       case ComparisonOperator::LE:
-        return qprod(p, m, [&](int v) { return v >  C; })
-             * atLeastOne([&](int v) { return v <= C; });
+        return qprod(p, m, [&](long v) { return v >  C; })
+             * atLeastOne([&](long v) { return v <= C; });
       case ComparisonOperator::LT:
-        return qprod(p, m, [&](int v) { return v >= C; })
-             * atLeastOne([&](int v) { return v <  C; });
+        return qprod(p, m, [&](long v) { return v >= C; })
+             * atLeastOne([&](long v) { return v <  C; });
       case ComparisonOperator::EQ:
         return probEqual(agg, p, m, C);
       case ComparisonOperator::NE:
-        return (1.0 - qprod(p, m, [](int) { return true; }))
+        return (1.0 - qprod(p, m, [](long) { return true; }))
              - probEqual(agg, p, m, C);
     }
   } else {  // MIN
     switch (op) {
       case ComparisonOperator::LE:
-        return atLeastOne([&](int v) { return v <= C; });
+        return atLeastOne([&](long v) { return v <= C; });
       case ComparisonOperator::LT:
-        return atLeastOne([&](int v) { return v <  C; });
+        return atLeastOne([&](long v) { return v <  C; });
       case ComparisonOperator::GE:
-        return qprod(p, m, [&](int v) { return v <  C; })
-             * atLeastOne([&](int v) { return v >= C; });
+        return qprod(p, m, [&](long v) { return v <  C; })
+             * atLeastOne([&](long v) { return v >= C; });
       case ComparisonOperator::GT:
-        return qprod(p, m, [&](int v) { return v <= C; })
-             * atLeastOne([&](int v) { return v >  C; });
+        return qprod(p, m, [&](long v) { return v <= C; })
+             * atLeastOne([&](long v) { return v >  C; });
       case ComparisonOperator::EQ:
         return probEqual(agg, p, m, C);
       case ComparisonOperator::NE:
-        return (1.0 - qprod(p, m, [](int) { return true; }))
+        return (1.0 - qprod(p, m, [](long) { return true; }))
              - probEqual(agg, p, m, C);
     }
   }
