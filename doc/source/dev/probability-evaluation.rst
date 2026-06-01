@@ -421,11 +421,26 @@ The chain (in order) :
   dispatches on the smaller side of ``C`` (lower tail directly,
   or upper tail via inverted Bernoullis) for ``O(N x min(C, N -
   C))`` total cost per cmp.  See ``src/CountCmpEvaluator.{h,cpp}``.
+- :cfunc:`runMinMaxCmpEvaluator` (same gate
+  ``provsql.cmp_probability_evaluation``) : recognises HAVING
+  ``gate_cmp(gate_agg(MIN|MAX, semimod children), gate_value(C))`` and
+  replaces the cmp with a Bernoulli carrying the closed-form
+  ``Pr(MIN/MAX(a) op C)``.  Where the COUNT path needs a Poisson-binomial
+  DP, MIN / MAX need none : partition the children on their per-row value
+  ``m_i`` against ``C``, and the answer is a product of ``(1 - p_i)``
+  factors (``MAX >= C`` is ``1 - prod(1 - p_i)`` over ``m_i >= C``,
+  ``MIN >= C`` is ``prod(1 - p_i)`` over ``m_i < C`` times the non-empty
+  factor, and so on for all twelve ``(MIN|MAX, op)`` combinations, the
+  empty group excluded as in COUNT).  Same shape match and independence
+  certification as :cfunc:`runCountCmpEvaluator` -- both share
+  ``src/CmpEvaluatorCommon.{h,cpp}`` (``matchAggCmp`` /
+  ``computeRefCounts`` / ``contributorProb``).  See
+  ``src/MinMaxCmpEvaluator.{h,cpp}``.
 
-Adding another closed-form cmp resolver (MIN / MAX / SUM, future
-discrete-RV distributions…) follows the same shape : a
-``runXxxEvaluator`` function that walks ``gate_cmp`` gates, checks
-shape + independence, computes the probability, calls
+Adding another closed-form cmp resolver (SUM, future discrete-RV
+distributions…) follows the same shape : a ``runXxxEvaluator`` function
+that walks ``gate_cmp`` gates, checks shape + independence (reusing
+``CmpEvaluatorCommon``), computes the probability, calls
 :cfunc:`GenericCircuit::resolveCmpToBernoulli`.  Gate it on
 ``provsql.cmp_probability_evaluation`` so all such evaluators
 share one diagnostic switch.

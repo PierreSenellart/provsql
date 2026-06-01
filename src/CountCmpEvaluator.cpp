@@ -6,14 +6,10 @@
 #include "CountCmpEvaluator.h"
 
 #include <algorithm>
-#include <unordered_set>
 #include <vector>
 
-#include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid + getAggregationOperator
-#include "having_semantics.hpp" // extract_constant_C, semimod_extract_M_and_K, flip_op
-extern "C" {
-#include "provsql_utils.h"      // gate_type enum
-}
+#include "Aggregation.h"          // ComparisonOperator + getAggregationOperator
+#include "CmpEvaluatorCommon.h"   // matchAggCmp, computeRefCounts, contributorProb
 
 namespace provsql {
 
@@ -177,174 +173,6 @@ static double cdfForOperator(const std::vector<double> &p,
   return 0.0;
 }
 
-/* Try to match @c cmp against the first-slice scope.  On success,
- * fill @p agg_out (the gate_agg child, exposed to the caller for the
- * downstream "no shared gate_agg across cmps" check), @p children
- * (the K side of each semimod : the per-row contributor sub-circuit
- * root, single leaf or product), @p op (already flipped if the agg
- * sits on the right), and @p C.  Returns @c false (and leaves outputs untouched)
- * for any shape mismatch.  Cheap to call : no allocation beyond the
- * @p children push_back. */
-static bool matchCountCmp(GenericCircuit &gc,
-                          gate_t cmp,
-                          gate_t &agg_out,
-                          std::vector<gate_t> &semimods_out,
-                          std::vector<gate_t> &children,
-                          ComparisonOperator &op,
-                          int &C)
-{
-  const auto &cw = gc.getWires(cmp);
-  if (cw.size() != 2) return false;
-
-  bool okop = false;
-  op = provsql_having_detail::map_cmp_op(gc, cmp, okop);
-  if (!okop) return false;
-
-  /* Identify which side is the gate_agg and which is the constant
-   * wrapper.  Mirror collect_sp_cmp_gates : both orderings are
-   * legitimate (R compared to L, or L compared to R), and the second
-   * case calls for op flipping. */
-  gate_t agg_side = cw[0], const_side = cw[1];
-  if (gc.getGateType(agg_side) != gate_agg ||
-      !provsql_having_detail::extract_constant_C(gc, const_side, C)) {
-    agg_side = cw[1]; const_side = cw[0];
-    if (gc.getGateType(agg_side) != gate_agg ||
-        !provsql_having_detail::extract_constant_C(gc, const_side, C)) {
-      return false;
-    }
-    op = provsql_having_detail::flip_op(op);
-  }
-
-  /* Aggregation must be COUNT, either directly or via the SUM-of-1s
-   * encoding the planner emits for COUNT(*).  Mirror the dispatch in
-   * pw_from_cmp_gate's build_from. */
-  AggregationOperator agg_kind =
-    getAggregationOperator(gc.getInfos(agg_side).first);
-  if (agg_kind != AggregationOperator::COUNT &&
-      agg_kind != AggregationOperator::SUM) {
-    return false;
-  }
-
-  const auto &agg_children = gc.getWires(agg_side);
-  if (agg_children.empty()) return false;
-
-  /* Side-channel the semimod parents back to the caller so it can
-   * check their ref counts ; the chain k_i -> semimod -> gate_agg
-   * is the path the soundness argument follows up to cmp. */
-  semimods_out.clear();
-  semimods_out.reserve(agg_children.size());
-
-  std::vector<gate_t> ks;
-  ks.reserve(agg_children.size());
-
-  for (gate_t ch : agg_children) {
-    if (gc.getGateType(ch) != gate_semimod) return false;
-    int m = 0;
-    gate_t k_gate{};
-    if (!provsql_having_detail::semimod_extract_M_and_K(gc, ch, m, k_gate))
-      return false;
-    /* COUNT(*) requires unit weights ; under the SUM encoding any
-     * non-unit weight means the aggregate is a real SUM and this
-     * pre-pass should not fire. */
-    if (m != 1) return false;
-    /* The K side is the per-row contributor sub-circuit root.  It need
-     * not be a single gate_input : a SELECT-FROM-WHERE group row is
-     * typically a @c times of the joined tuples' leaves.  The caller
-     * certifies independence and computes the contributor's marginal. */
-    semimods_out.push_back(ch);
-    ks.push_back(k_gate);
-  }
-
-  agg_out = agg_side;
-  children = std::move(ks);
-  return true;
-}
-
-/* Compute the reference count of every gate as a wire-target across
- * the whole circuit.  One pass over all gates' wire lists ;
- * @c O(total wires) time, @c O(nb_gates) space. */
-static std::vector<unsigned> computeRefCounts(const GenericCircuit &gc)
-{
-  const auto nb = gc.getNbGates();
-  std::vector<unsigned> ref(nb, 0);
-  for (std::size_t i = 0; i < nb; ++i) {
-    auto g = static_cast<gate_t>(i);
-    for (gate_t w : gc.getWires(g)) {
-      const auto idx = static_cast<std::size_t>(w);
-      if (idx < ref.size()) ++ref[idx];
-    }
-  }
-  return ref;
-}
-
-/* Marginal probability of one count contributor (the K side of a
- * semimod), computed by a read-once recursion over the contributor's
- * sub-circuit.  This is exact precisely when the sub-circuit is a
- * private read-once tree, which is what the caller certifies: every
- * structural (randomness-bearing) gate it visits must have reference
- * count 1, so it has a single parent inside this contributor and is
- * shared neither with another contributor nor with the rest of the
- * circuit.  That single condition gives all three properties the
- * Poisson-binomial needs -- pairwise-disjoint leaf sets across
- * contributors, no reuse outside the cmp, and read-once-ness within a
- * contributor -- so the contributors are independent and each marginal
- * is its read-once probability.
- *
- * Supported gate types are the ones a SELECT-FROM-WHERE (-EXCEPT) group
- * row can carry: @c input (Bernoulli leaf), @c times (independent AND),
- * @c plus (independent OR over alternative derivations), @c monus
- * (@c a @c AND @c NOT @c b, i.e. Pr(a)(1-Pr(b)) for independent a, b),
- * and the constants @c one / @c zero.  Constants bear no randomness, so
- * their reference counts are not constrained (they may be
- * cached/shared).  Any other gate type (@c value, @c mulinput, @c agg,
- * @c cmp, @c rv, ...) means the contributor is outside this pre-pass's
- * scope; @p ok is cleared and the caller skips the whole cmp. */
-static double contributorProb(const GenericCircuit &gc, gate_t g,
-                              const std::vector<unsigned> &ref, bool &ok)
-{
-  switch (gc.getGateType(g)) {
-    case gate_one:  return 1.0;
-    case gate_zero: return 0.0;
-    case gate_input:
-      if (ref[static_cast<std::size_t>(g)] != 1) { ok = false; return 0.0; }
-      return gc.getProb(g);
-    case gate_times: {
-      if (ref[static_cast<std::size_t>(g)] != 1) { ok = false; return 0.0; }
-      double pr = 1.0;
-      for (gate_t c : gc.getWires(g)) {
-        pr *= contributorProb(gc, c, ref, ok);
-        if (!ok) return 0.0;
-      }
-      return pr;
-    }
-    case gate_plus: {
-      if (ref[static_cast<std::size_t>(g)] != 1) { ok = false; return 0.0; }
-      double q = 1.0;
-      for (gate_t c : gc.getWires(g)) {
-        q *= (1.0 - contributorProb(gc, c, ref, ok));
-        if (!ok) return 0.0;
-      }
-      return 1.0 - q;
-    }
-    case gate_monus: {
-      /* a (-) b = a AND NOT b ; with disjoint private leaves a and b
-       * are independent, so Pr = Pr(a) * (1 - Pr(b)).  Children are
-       * [minuend, subtrahend] (see GenericCircuit evaluate<S>). */
-      if (ref[static_cast<std::size_t>(g)] != 1) { ok = false; return 0.0; }
-      const auto &w = gc.getWires(g);
-      if (w.size() != 2) { ok = false; return 0.0; }
-      double pa = contributorProb(gc, w[0], ref, ok);
-      if (!ok) return 0.0;
-      double pb = contributorProb(gc, w[1], ref, ok);
-      if (!ok) return 0.0;
-      return pa * (1.0 - pb);
-    }
-    default:
-      ok = false;
-      return 0.0;
-  }
-}
-
 }  // namespace
 
 unsigned runCountCmpEvaluator(GenericCircuit &gc)
@@ -373,12 +201,27 @@ unsigned runCountCmpEvaluator(GenericCircuit &gc)
   for (gate_t cmp : cmps) {
     if (gc.getGateType(cmp) != gate_cmp) continue;  /* defensive */
 
-    gate_t agg{};
-    std::vector<gate_t> semimods, ks;
-    ComparisonOperator op;
-    int C = 0;
-    if (!matchCountCmp(gc, cmp, agg, semimods, ks, op, C))
+    AggCmpMatch match;
+    if (!matchAggCmp(gc, cmp, match))
       continue;
+
+    /* COUNT(*) over unit-weighted contributors only.  matchAggCmp has
+     * already remapped SUM-of-1s to COUNT; a genuine COUNT with a
+     * non-unit weight, or a SUM / MIN / MAX / AVG aggregate, is out of
+     * this pre-pass's scope and is left for its own evaluator or for
+     * provsql_having. */
+    if (match.agg_kind != AggregationOperator::COUNT) continue;
+    {
+      bool all_one = true;
+      for (int m : match.ms) if (m != 1) { all_one = false; break; }
+      if (!all_one) continue;
+    }
+
+    const gate_t agg = match.agg;
+    const auto &semimods = match.semimods;
+    const auto &ks = match.ks;
+    const ComparisonOperator op = match.op;
+    const int C = match.C;
 
     /* Independence certification.  The contributors are independent
      * Bernoulli trials -- the precondition for the Poisson-binomial --

@@ -82,6 +82,16 @@ convolution `⊛^+`, disjoint (same BID block) children by `⊥` (Prop. 1, each
   constant), matching Layers A and C of `safe-query-followups.md`. On the
   probability path: `MAX ≥ c` ⟹ `1 − ∏(1−p_i)` over the satisfying children,
   `MIN > c` ⟹ `∏ p̄_i` over the bad children, etc.
+  **Landed** as `src/MinMaxCmpEvaluator.{h,cpp}`: a probability-side pre-pass
+  (gated on `provsql.cmp_probability_evaluation`, same slot as
+  `runCountCmpEvaluator`) covering all twelve `(MIN|MAX, {≥,>,≤,<,=,≠})`
+  combinations with the empty-group exclusion, reusing the shared
+  independence-certification machinery now factored into
+  `src/CmpEvaluatorCommon.{h,cpp}`. Pinned by
+  `test/sql/min_max_cmp_optimisation.sql` (off-vs-on parity, exact to four
+  decimals) and benchmarked by `test/bench/min_max_cmp_bench.sql` (the off
+  path is the `enumerate_exhaustive` `2^N` enumeration, so the speedup is
+  unbounded past per-group `N ≈ 15`).
 - **COUNT** — `S_k = (Z_{k+1}, +_k, ·_k, 0, 1)`, marginal size `≤ n`; `⊛^+`
   is the Poisson-binomial convolution **already implemented** in
   `CountCmpEvaluator` (`runCountCmpEvaluator`, the pre-pass slotted in
@@ -176,6 +186,7 @@ hierarchical."
 1. **Gain 1, MIN/MAX arm** — constant-size, closed forms already specified in
    `safe-query-followups.md` Layer A/C; smallest, highest-confidence win, and
    it kills the `2^N` path for the most common non-COUNT aggregates.
+   **Done** — see `src/MinMaxCmpEvaluator.{h,cpp}` and the note under Gain 1.
 2. **Gain 1, SUM arm** — weighted-sum DP; ship with the explicit pseudo-poly
    caveat (Remark 3) and a sane `k` bound.
 3. **Gain 2, classifier** — needed to make Gains 1/3 self-selecting and to stop

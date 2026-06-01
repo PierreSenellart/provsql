@@ -332,6 +332,7 @@ _C_FUNC_MAP = {
     'runRangeCheck':                         '/doxygen-c/html/namespaceprovsql.html#a56791cfa12bc119d18cfe076800b7631',
     'runAnalyticEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#af6f2f8cf7272ec6aea45225c8ce24658',
     'runCountCmpEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#a202da174e018e993ce6e351f6c7119a1',
+    'runMinMaxCmpEvaluator':                 '/doxygen-c/html/namespaceprovsql.html#ab2bf8867a429b145000af10a18f4a88f',
     'GenericCircuit::resolveCmpToBernoulli': '/doxygen-c/html/classGenericCircuit.html#aaeee2a77e24f089ef526797f4b1daff1',
     'BooleanCircuit::interpretAsDD':         '/doxygen-c/html/classBooleanCircuit.html#a16a0f5a4e7b3c65afd2cee3747cb1c9e',
     'BooleanCircuit::parsePaniniDD':         '/doxygen-c/html/classBooleanCircuit.html#a6193c5268eb21297ff2ffb7681e16580',

@@ -387,10 +387,26 @@ The shortcut fires automatically when its soundness preconditions
 are met: each per-row provenance must be a single ``gate_input``
 leaf and the group-level aggregate must not be shared with any
 other comparator.  It is transparent to the user; no GUC needs to
-be set.  Queries outside the supported shape (HAVING-SUM,
-HAVING-MIN/MAX, multi-cmp HAVING such as
-``COUNT(*) >= a AND COUNT(*) <= b``, or non-trivial per-row
-provenance from joins) fall through to the general HAVING path.
+be set.  Queries outside the supported shape (HAVING-SUM, or
+multi-cmp HAVING such as ``COUNT(*) >= a AND COUNT(*) <= b``) fall
+through to the general HAVING path.
+
+HAVING-MIN / MAX closed-form shortcut
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The same mechanism handles
+``GROUP BY g HAVING MIN(a) op c`` and ``MAX(a) op c`` (same six
+operators).  Here no Poisson-binomial DP is needed: ProvSQL
+partitions the group's rows on whether their value ``a`` satisfies the
+comparison against ``c`` and computes the probability as a product of
+the rows' presence probabilities, in ``O(N)`` per group.  For example
+``MAX(a) >= c`` holds iff at least one row with ``a >= c`` is present,
+with probability ``1 - ∏ (1 - p_i)`` over those rows; ``MIN(a) >= c``
+holds iff no row with ``a < c`` is present and the group is non-empty;
+all twelve ``(MIN|MAX, op)`` cases have analogous closed forms.  Like
+the COUNT shortcut it fires automatically and replaces the
+exponential possible-worlds enumeration the general path would
+otherwise run for these aggregates.
 
 Continuous Random Variables
 ----------------------------

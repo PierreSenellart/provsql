@@ -22,8 +22,7 @@ SET search_path TO provsql_test, provsql;
 -- the canonical motivating case -- the triangle CQ with two PKs on
 -- different relations.  An FD-induced nested rewrite
 -- (function/free split) is required to compose constant-pinning
--- with a PK on the same relation; that is documented in
--- @c doc/TODO/safe-query-followups.md and deferred.
+-- with a PK on the same relation; that is deferred.
 --
 -- This file regression-tests the canonical triangle example to
 -- confirm the cumulative passes deliver the closure guarantee:

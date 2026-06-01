@@ -53,6 +53,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "GenericCircuit.h"
 #include "AnalyticEvaluator.h"
 #include "CountCmpEvaluator.h"
+#include "MinMaxCmpEvaluator.h"
 #include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
@@ -711,9 +712,9 @@ static Datum probability_evaluate_internal
   size_t gates_before = count_reachable(gc_root);
   unsigned analytic_resolved = provsql::runAnalyticEvaluator(gc);
 
-  /* Closed-form cmp-probability evaluators.  First implementation
-   * is the Poisson-binomial pre-pass for HAVING COUNT(*) op C over
-   * distinct gate_input leaves ; future MIN / MAX / SUM resolvers
+  /* Closed-form cmp-probability evaluators : the Poisson-binomial
+   * pre-pass for HAVING COUNT(*) op C, then the MIN / MAX closed forms,
+   * both over independent private contributors ; a future SUM resolver
    * will run from the same hook.  Each replaces a matched gate_cmp
    * with a Bernoulli gate_input carrying the closed-form probability,
    * so the surrounding circuit can skip the DNF that
@@ -724,8 +725,10 @@ static Datum probability_evaluate_internal
    * provsql.cmp_probability_evaluation for developer A/B testing ;
    * on by default. */
   unsigned count_cmp_resolved = 0;
+  unsigned minmax_cmp_resolved = 0;
   if (provsql_cmp_probability_evaluation) {
     count_cmp_resolved = provsql::runCountCmpEvaluator(gc);
+    minmax_cmp_resolved = provsql::runMinMaxCmpEvaluator(gc);
   }
 
   /* Always-true HAVING rewrite (runs regardless of the Poisson-binomial
@@ -746,7 +749,8 @@ static Datum probability_evaluate_internal
    * provsql.verbose_level >= 5) so the user knows the requested
    * method's reported timing and structure may not reflect work on
    * the original formula. */
-  if (analytic_resolved + count_cmp_resolved + always_true_resolved > 0
+  if (analytic_resolved + count_cmp_resolved + minmax_cmp_resolved
+        + always_true_resolved > 0
       && provsql_verbose >= 5) {
     size_t gates_after = count_reachable(gc_root);
     std::vector<std::string> parts;
@@ -754,6 +758,8 @@ static Datum probability_evaluate_internal
       parts.push_back(std::to_string(analytic_resolved) + " analytic");
     if (count_cmp_resolved > 0)
       parts.push_back(std::to_string(count_cmp_resolved) + " Poisson-binomial");
+    if (minmax_cmp_resolved > 0)
+      parts.push_back(std::to_string(minmax_cmp_resolved) + " min/max");
     if (always_true_resolved > 0)
       parts.push_back(std::to_string(always_true_resolved) + " always-true");
     std::string breakdown;
