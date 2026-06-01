@@ -56,6 +56,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "CountCmpEvaluator.h"
 #include "MinMaxCmpEvaluator.h"
 #include "SumCmpEvaluator.h"
+#include "AggMarginalEvaluator.h"
 #include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
@@ -729,10 +730,16 @@ static Datum probability_evaluate_internal
   unsigned count_cmp_resolved = 0;
   unsigned minmax_cmp_resolved = 0;
   unsigned sum_cmp_resolved = 0;
+  unsigned agg_marginal_resolved = 0;
   if (provsql_cmp_probability_evaluation) {
     count_cmp_resolved = provsql::runCountCmpEvaluator(gc);
     minmax_cmp_resolved = provsql::runMinMaxCmpEvaluator(gc);
     sum_cmp_resolved = provsql::runSumCmpEvaluator(gc);
+    /* Safe-join COUNT: the marginal-vector engine for the fan-out shapes
+     * the flat Poisson-binomial above cannot certify independent.  Runs
+     * last so it only ever sees the join-shaped cmps the flat pass left
+     * behind. */
+    agg_marginal_resolved = provsql::runAggMarginalCountEvaluator(gc);
   }
 
   /* Always-true HAVING rewrite (runs regardless of the Poisson-binomial
@@ -754,7 +761,7 @@ static Datum probability_evaluate_internal
    * method's reported timing and structure may not reflect work on
    * the original formula. */
   if (analytic_resolved + count_cmp_resolved + minmax_cmp_resolved
-        + sum_cmp_resolved + always_true_resolved > 0
+        + sum_cmp_resolved + agg_marginal_resolved + always_true_resolved > 0
       && provsql_verbose >= 5) {
     size_t gates_after = count_reachable(gc_root);
     std::vector<std::string> parts;
@@ -766,6 +773,8 @@ static Datum probability_evaluate_internal
       parts.push_back(std::to_string(minmax_cmp_resolved) + " min/max");
     if (sum_cmp_resolved > 0)
       parts.push_back(std::to_string(sum_cmp_resolved) + " weighted-sum");
+    if (agg_marginal_resolved > 0)
+      parts.push_back(std::to_string(agg_marginal_resolved) + " safe-join COUNT");
     if (always_true_resolved > 0)
       parts.push_back(std::to_string(always_true_resolved) + " always-true");
     std::string breakdown;

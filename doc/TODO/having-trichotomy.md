@@ -196,6 +196,61 @@ rewriter currently bails on `hasAggs` and needs a one-level descent into the
 HAVING subquery to certify "the FROM/WHERE/GROUP-BY feeding this aggregate is
 hierarchical."
 
+**This is a new engine, not a `ref_count` relaxation.** The flat check does
+triple duty: read-once *within* a contributor, leaf-disjointness *across*
+contributors, and no reuse outside the cmp. A join breaks the middle one (two
+aggregate-input rows sharing a base tuple — fan-out, e.g. `R(k,a),S(a,b)` with
+two `b` per `a`). The tempting fix — run the `boolean_provenance` read-once
+rewriter (`try_safe_query_rewrite`) on the skeleton so the lineage becomes
+read-once — **does not work**: that rewrite makes *Boolean existence*
+read-once via `SELECT DISTINCT` wraps, which is exactly why
+`is_safe_query_candidate` bails on `hasAggs` (the wraps collapse the multiset
+the aggregate must count). Existence-read-once is the wrong semantics for
+COUNT/SUM. What the paper actually requires is a **recursive marginal-vector
+evaluator**: carry `m[s] = Pr[agg = s]` and combine sub-blocks by convolution
+`⊛^+` (independent root-variable values) or disjoint sum `⊥` (same BID block),
+descending the hierarchy. The flat Poisson-binomial in `CountCmpEvaluator` is
+the degenerate single-level case (all contributors independent). The skeleton
+certificate gates this engine; it does not produce it.
+
+**Architecture: bake at planner time, evaluate at probability time.** The
+CmpEvaluators run on a circuit reloaded from the mmap store with no access to
+the original `Query`, so they cannot call
+`safe_query_skeleton_is_hierarchical` (which needs the parse tree at
+planner-hook time). Follow the inversion-free precedent: analyse `sk(Q)` at
+planner time and bake a `CERT_SAFE_AGG_PLAN` blob — the root-variable nesting /
+block structure from `find_hierarchical_root_atoms`, currently discarded —
+onto the `gate_agg` via `src/safe_query_cert.{c,h}` (append-only); the
+probability-time engine consumes it. For the *independent-blocks* case the
+circuit-level footprint oracle below substitutes for the certificate, so the
+common star-schema shape may need no planner baking at all.
+
+**Reusing the RV distribution algebra.** The continuous-RV path already has the
+two combinators this engine needs, but not in reusable exact form, and the
+distinction matters:
+
+- Its "convolution" is **family-specific closed form** (Normal sum → Normal,
+  i.i.d. Exponential sum → Erlang, in `runHybridSimplifier`) plus a bounded
+  **2^k joint table** (`runHybridDecomposer`, `JOINT_TABLE_K_MAX = 8`, else
+  MC); `Expectation` carries **moments, not distributions**. So modelling an
+  aggregate as `gate_mixture` + `gate_arith PLUS` and routing it through the RV
+  evaluator yields **Monte Carlo, not exact PTIME** — the very fallback this
+  gain replaces. The exact discrete-convolution primitive is missing on *both*
+  sides; P4 must build it.
+- What *is* reusable: (a) the **independence oracle** `FootprintCache` /
+  `getJointCircuit`, which decides leaf-set disjointness on the *circuit* (the
+  probability-time view), giving the `⊛^+` independence test without a
+  certificate; (b) **`gate_mixture` as the `⊥` primitive** — a BID block of
+  size n is one categorical factor, not 2^n enumerated outcomes.
+- So build the engine as a small **discrete distribution-factor algebra**: a
+  marginal vector combined by `⊛^+` (convolution) and `⊥` (categorical
+  mixture). Factor the two combinators into a shared util so a later RV lift is
+  mechanical — the same `⊥` combinator dropped into `runHybridDecomposer` would
+  let its dependent-comparator case scale past `JOINT_TABLE_K_MAX` when the
+  correlation graph is tree-structured (a real but secondary RV win). Keep two
+  carriers: discrete + bounded for HAVING (exact), the existing closed-form / MC
+  machinery for continuous RVs (which has no exact general convolution).
+
 ## Priorities
 
 1. **Gain 1, MIN/MAX arm** — constant-size, closed forms already specified in
@@ -211,13 +266,52 @@ hierarchical."
    read-only `NOTICE` per HAVING aggregate comparison giving the
    safe / apx-safe / #P-hard / open verdict from the `(α, θ)` overlay × the
    skeleton-safety bit. Pinned by `test/sql/classify_having.sql`.
-4. **Gain 4, independence certification** — unlocks joins for all of Gain 1;
-   depends on the safe-query rewriter's one-level HAVING descent.
-   **Read-only half done** — `safe_query_skeleton_is_hierarchical`
+4. **Gain 4, safe-join marginal-vector engine** — unlocks joins for all of
+   Gain 1. **Read-only half done** — `safe_query_skeleton_is_hierarchical`
    (`src/safe_query.c`) certifies skeleton safety read-only (the classifier's
-   missing axis); `test/sql/skeleton_safety.sql` pins it. The riskier half
-   (extending the closed-form evaluators to *shared-leaf* safe joins, which
-   touches evaluation soundness) is still open.
+   missing axis); `test/sql/skeleton_safety.sql` pins it. The recursive
+   marginal-vector engine described under Gain 4 above (the riskier half: it
+   touches evaluation soundness) has **landed for COUNT on single-level
+   fan-out** (Phase 2 below); SUM/MIN/MAX arms, deeper nesting and the
+   certificate path remain. Phased:
+   1. *Certificate plumbing* — `safe_query_extract_aggregate_plan` exposes the
+      `find_hierarchical_root_atoms` block structure; bake `CERT_SAFE_AGG_PLAN`
+      onto the `gate_agg` at the HAVING-lift site in `src/provsql.c`
+      (`having_Expr_to_provenance_cmp`), carry it through `CircuitFromMMap`.
+   2. *Engine, COUNT first* — **Done (single-level fan-out)** —
+      `src/AggMarginalEvaluator.cpp` (`runAggMarginalCountEvaluator`): the
+      `⊛^+` (convolution) / `⊥` (block mixture) distribution-factor algebra,
+      a new pre-pass arm after `runCountCmpEvaluator` in
+      `probability_evaluate.cpp`, same `provsql.cmp_probability_evaluation`
+      GUC and Bernoulli-`gate_input` rewrite contract. Pinned by
+      `test/sql/having_safe_join_count.sql` (off-vs-on parity to 4 decimals
+      vs exact enumeration: fan-out `R(k,a),S(a,b)` over all six operators,
+      3-way star, the non-hierarchical triangle declining, and the flat
+      degenerate no-op). **Realisation that simplified the start: for
+      single-level fan-out no planner certificate is needed** — the engine
+      gates *circuit-only* (each contributor a product of leaves; one leaf
+      common to every block member; per-member privates pairwise disjoint;
+      every leaf private to the cmp subtree), which is self-gating because
+      the non-hierarchical triangle has no leaf common to all members and so
+      bails. Still open here: contributors with `gate_plus`/`gate_monus`
+      (UNION/EXCEPT lineage), multi-level nesting, and the
+      `FootprintCache`/baked-certificate paths for shapes the circuit cannot
+      self-certify (Phase 1 above).
+   3. *MIN/MAX/SUM arms* — constant-size / weighted-sum marginals over the same
+      recursion; carry SUM's Remark-3 `k`-cap.
+   4. *Validation* — `test/sql/having_safe_join_{count,minmax,sum}.sql`
+      off-vs-on parity against `possible-worlds` on the `R(k,a),S(a,b)`
+      fan-out, star-schema, and BID-`⊥` shapes; a **negative** test that the
+      `R(x,y),S(y,z),T(z,x)` triangle does *not* fire the fast path;
+      degenerate-equivalence guard (flat skeleton ⇒ bitwise-identical to
+      today's `runCountCmpEvaluator`). Benchmark + `references.bib`
+      (Ré-Suciu 2009, Dalvi-Suciu J.ACM 2012) + `probability-evaluation.rst`.
+
+   Open spikes before Phase 2: how BID-`⊥` block membership surfaces in the
+   loaded circuit (repair_key / mutually-exclusive inputs), and confirming
+   `FootprintCache` / `getJointCircuit` are callable from the CmpEvaluator
+   pre-pass slot. First shippable slice: Phases 1–2 for COUNT on single-level
+   fan-out, validated against `possible-worlds`.
 5. **Gain 3, principled apx-safe routing** — mostly classifier wiring on top of
    the existing karp-luby method; the paper's specialized FPTRAS is a later,
    research-grade slice.  **Next open item** — the classifier (3) now produces
