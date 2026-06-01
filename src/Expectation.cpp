@@ -197,6 +197,17 @@ unsigned mc_samples_or_throw(const std::string &what)
       what + " could not be decomposed analytically and "
       "provsql.rv_mc_samples = 0 disables the Monte Carlo fallback");
   }
+  // Transparency: the analytic moment surface is about to return a Monte Carlo
+  // ESTIMATE, not a closed-form moment.  Signal it (at the same verbose>=5
+  // evaluation tier as the probability-side approximation NOTICEs, so Studio
+  // and verbose users can tell an estimate from an exact value) -- the
+  // continuous-RV surface is approximate by nature, but never *silently* so.
+  // Set provsql.rv_mc_samples = 0 to require an exact result instead.
+  if (provsql_verbose >= 5)
+    provsql_notice(
+      "%s: no closed form found; estimating by Monte Carlo over %d samples "
+      "(an approximation, not an exact moment) -- set provsql.rv_mc_samples = 0 "
+      "to require an exact result instead", what.c_str(), n);
   return static_cast<unsigned>(n);
 }
 

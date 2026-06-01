@@ -1,0 +1,11 @@
+\set ECHO none
+closed_form_mean
+2.5
+(1 row)
+NOTICE:  ProvSQL: Expectation of gate_arith TIMES with shared random variables: no closed form found; estimating by Monte Carlo over 20000 samples (an approximation, not an exact moment) -- set provsql.rv_mc_samples = 0 to require an exact result instead
+mc_estimate_in_range
+t
+(1 row)
+mc_estimate_quiet
+t
+(1 row)
