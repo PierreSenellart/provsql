@@ -227,14 +227,20 @@ static std::vector<double> productConvolve(const std::vector<double> &a,
   return r;
 }
 
+/* Result of a Cartesian-product decomposition (see @c decomposeProduct). */
+struct ProductDecomp {
+  bool ok = false;                                  /* a complete leaf-disjoint product? */
+  std::map<gate_t, int> leafFactor;                 /* leaf -> factor index */
+  std::vector<std::vector<std::vector<gate_t>>> parts;  /* per factor: distinct parts */
+};
+
 /* Try to decompose a connected, common-less block into independent
  * Cartesian-product factors.  Two leaves share a factor iff they NEVER
  * co-occur in a contributor (united below); the factors are those
- * classes.  On success the block's contributors are exactly the complete
- * Cartesian product of the per-factor distinct parts, so the block count
- * is the product of the per-factor counts.  Returns one entry per factor
- * (its distinct parts, each a sorted sub-contributor leaf set), or an
- * empty vector when the block is not a complete leaf-disjoint product.
+ * classes.  On success (@c ok) the block's contributors are exactly the
+ * complete Cartesian product of the per-factor distinct parts, so the
+ * block count is the product of the per-factor counts.  @c ok is false
+ * when the block is not a complete leaf-disjoint product.
  *
  * This is what separates the safe cross-product (R(a),S(a,b),T(a,c) →
  * count = N_S·N_T) from the #P-hard h0 / triangle: h0 carries a private
@@ -248,10 +254,12 @@ static std::vector<double> productConvolve(const std::vector<double> &a,
  * leaf-disjoint product means each contributor is one part per factor,
  * present iff all its parts are; parts of distinct factors are
  * leaf-disjoint hence independent, so count = ∏ N_i exactly. */
-static std::vector<std::vector<std::vector<gate_t>>> tryProductFactors(
+static ProductDecomp decomposeProduct(
     const std::vector<std::vector<gate_t>> &contribs,
     const std::vector<int> &members)
 {
+  ProductDecomp out;
+
   /* Index the block's leaves. */
   std::vector<gate_t> L;
   for (int m : members) for (gate_t l : contribs[m]) L.push_back(l);
@@ -281,7 +289,9 @@ static std::vector<std::vector<std::vector<gate_t>>> tryProductFactors(
   for (int u = 0; u < nl; ++u)
     factorId.emplace(uf.find(u), static_cast<int>(factorId.size()));
   const int nf = static_cast<int>(factorId.size());
-  if (nf < 2) return {};                /* single class: not a product */
+  if (nf < 2) return out;               /* single class: not a product */
+
+  for (gate_t l : L) out.leafFactor[l] = factorId[uf.find(idx[l])];
 
   /* Project each member onto each factor; collect distinct parts.  A
    * member missing a factor is not a clean product. */
@@ -289,9 +299,9 @@ static std::vector<std::vector<std::vector<gate_t>>> tryProductFactors(
   for (int m : members) {
     std::vector<std::vector<gate_t>> proj(nf);
     for (gate_t l : contribs[m])               /* member leaves are sorted */
-      proj[factorId[uf.find(idx[l])]].push_back(l);
+      proj[out.leafFactor[l]].push_back(l);
     for (int f = 0; f < nf; ++f) {
-      if (proj[f].empty()) return {};
+      if (proj[f].empty()) return out;
       parts[f].insert(std::move(proj[f]));
     }
   }
@@ -301,12 +311,13 @@ static std::vector<std::vector<std::vector<gate_t>>> tryProductFactors(
    * forces a bijection onto the full Cartesian product. */
   std::size_t prod = 1;
   for (int f = 0; f < nf; ++f) prod *= parts[f].size();
-  if (prod != members.size()) return {};
+  if (prod != members.size()) return out;
 
-  std::vector<std::vector<std::vector<gate_t>>> result(nf);
+  out.parts.resize(nf);
   for (int f = 0; f < nf; ++f)
-    result[f].assign(parts[f].begin(), parts[f].end());
-  return result;
+    out.parts[f].assign(parts[f].begin(), parts[f].end());
+  out.ok = true;
+  return out;
 }
 
 /* Recursive count distribution over a set of product-of-leaves
@@ -385,12 +396,12 @@ static std::vector<double> countPMF(GenericCircuit &gc,
         /* No shared root: the block is either a Cartesian product of
          * independent factors (the join node, count = ∏ N_i) or a
          * genuinely non-laminar tangle (h0 / triangle).
-         * tryProductFactors distinguishes them on the circuit. */
-        auto factors = tryProductFactors(contribs, members);
-        if (factors.empty()) { ok = false; return {}; }  /* non-hierarchical */
+         * decomposeProduct distinguishes them on the circuit. */
+        ProductDecomp pd = decomposeProduct(contribs, members);
+        if (!pd.ok) { ok = false; return {}; }            /* non-hierarchical */
         std::vector<double> acc;
-        for (std::size_t f = 0; f < factors.size(); ++f) {
-          std::vector<double> fp = countPMF(gc, std::move(factors[f]), ok);
+        for (std::size_t f = 0; f < pd.parts.size(); ++f) {
+          std::vector<double> fp = countPMF(gc, std::move(pd.parts[f]), ok);
           if (!ok) return {};
           acc = (f == 0) ? std::move(fp) : productConvolve(acc, fp);
         }
@@ -450,12 +461,29 @@ static double pAllAbsent(GenericCircuit &gc,
       block_absent = 1.0 - q;
     } else {
       std::vector<gate_t> common = commonLeaves(contribs, members);
-      if (common.empty()) { ok = false; return 0.0; }    /* non-hierarchical */
-      double p_root = 1.0;
-      for (gate_t l : common) p_root *= gc.getProb(l);
-      double inner = pAllAbsent(gc, residualsOf(contribs, members, common), ok);
-      if (!ok) return 0.0;
-      block_absent = (1.0 - p_root) + p_root * inner;
+      if (!common.empty()) {
+        double p_root = 1.0;
+        for (gate_t l : common) p_root *= gc.getProb(l);
+        double inner = pAllAbsent(gc, residualsOf(contribs, members, common), ok);
+        if (!ok) return 0.0;
+        block_absent = (1.0 - p_root) + p_root * inner;
+      } else {
+        /* Cartesian product: all contributors absent iff some factor is
+         * entirely absent.  P = 1 - ∏_f (1 - pAllAbsent(factor_f)).  (When
+         * a value-thresholded subset from minMaxProb is a sub-product this
+         * is exactly the right combine; a non-product subset fails
+         * decomposeProduct and bails, which is the sound action for the
+         * #P-hard bipartite case.) */
+        ProductDecomp pd = decomposeProduct(contribs, members);
+        if (!pd.ok) { ok = false; return 0.0; }          /* non-hierarchical */
+        double prodPresent = 1.0;
+        for (auto &fparts : pd.parts) {
+          double fa = pAllAbsent(gc, fparts, ok);
+          if (!ok) return 0.0;
+          prodPresent *= (1.0 - fa);
+        }
+        block_absent = 1.0 - prodPresent;
+      }
     }
     result *= block_absent;
   }
@@ -559,21 +587,74 @@ static std::map<long, double> sumPMF(GenericCircuit &gc,
       blockPMF[weights[members[0]]] += q;           /* present: contributes w */
     } else {
       std::vector<gate_t> common = commonLeaves(contribs, members);
-      if (common.empty()) { ok = false; return {}; }
-      double p_root = 1.0;
-      for (gate_t l : common) p_root *= gc.getProb(l);
+      if (!common.empty()) {
+        double p_root = 1.0;
+        for (gate_t l : common) p_root *= gc.getProb(l);
 
-      std::vector<std::vector<gate_t>> residuals =
-        residualsOf(contribs, members, common);
-      std::vector<long> rweights;
-      rweights.reserve(members.size());
-      for (int m : members) rweights.push_back(weights[m]);
+        std::vector<std::vector<gate_t>> residuals =
+          residualsOf(contribs, members, common);
+        std::vector<long> rweights;
+        rweights.reserve(members.size());
+        for (int m : members) rweights.push_back(weights[m]);
 
-      std::map<long, double> inner =
-        sumPMF(gc, std::move(residuals), std::move(rweights), ok);
-      if (!ok) return {};
-      for (const auto &kv : inner) blockPMF[kv.first] += p_root * kv.second;
-      blockPMF[0] += (1.0 - p_root);                /* root absent: sum 0 */
+        std::map<long, double> inner =
+          sumPMF(gc, std::move(residuals), std::move(rweights), ok);
+        if (!ok) return {};
+        for (const auto &kv : inner) blockPMF[kv.first] += p_root * kv.second;
+        blockPMF[0] += (1.0 - p_root);              /* root absent: sum 0 */
+      } else {
+        /* Cartesian product.  SUM factors only when the value depends on a
+         * single factor f: SUM = S_f · M, with S_f the weighted sum over
+         * factor f and M = ∏_{i≠f} N_i the count-product of the others
+         * (independent).  Detect such an f (weight constant within each
+         * f-part group); otherwise the value couples factors and the case
+         * may be #P-hard, so bail. */
+        ProductDecomp pd = decomposeProduct(contribs, members);
+        if (!pd.ok) { ok = false; return {}; }
+        const int nf = static_cast<int>(pd.parts.size());
+
+        int chosen = -1;
+        std::map<std::vector<gate_t>, long> partVal;
+        for (int f = 0; f < nf && chosen < 0; ++f) {
+          std::map<std::vector<gate_t>, long> pv;
+          bool consistent = true;
+          for (int m : members) {
+            std::vector<gate_t> partf;
+            for (gate_t l : contribs[m])
+              if (pd.leafFactor[l] == f) partf.push_back(l);
+            auto it = pv.find(partf);
+            if (it == pv.end()) pv[partf] = weights[m];
+            else if (it->second != weights[m]) { consistent = false; break; }
+          }
+          if (consistent) { chosen = f; partVal = std::move(pv); }
+        }
+        if (chosen < 0) { ok = false; return {}; }   /* value spans factors */
+
+        /* S_f: weighted-sum distribution over the chosen factor's parts. */
+        std::vector<long> partValues;
+        partValues.reserve(pd.parts[chosen].size());
+        for (const auto &part : pd.parts[chosen])
+          partValues.push_back(partVal[part]);
+        std::map<long, double> Sf =
+          sumPMF(gc, pd.parts[chosen], std::move(partValues), ok);
+        if (!ok) return {};
+
+        /* M: count-product distribution over the other factors. */
+        std::vector<double> M;
+        for (int f = 0; f < nf; ++f) {
+          if (f == chosen) continue;
+          std::vector<double> cf = countPMF(gc, pd.parts[f], ok);
+          if (!ok) return {};
+          M = M.empty() ? std::move(cf) : productConvolve(M, cf);
+        }
+
+        /* blockPMF = distribution of S_f · M (independent factors). */
+        for (const auto &skv : Sf)
+          for (std::size_t mm = 0; mm < M.size(); ++mm)
+            if (M[mm] != 0.0)
+              blockPMF[skv.first * static_cast<long>(mm)] += skv.second * M[mm];
+        if (blockPMF.size() > kMaxSumSupport) { ok = false; return {}; }
+      }
     }
     std::map<long, double> ntotal;
     for (const auto &a : total)

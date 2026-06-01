@@ -320,12 +320,19 @@ distinction matters:
       `S(x,y)` tuple — collapses the factor partition / breaks completeness),
       as does any branch-linking predicate (the incomplete bipartite case).
       Pinned by the `xprod` / `3factor` / `xprod filtered` rows in
-      `having_safe_join_count.sql`. Still open: contributors with
-      `gate_plus`/`gate_monus` (UNION/EXCEPT lineage), AVG, the product node
-      for SUM/MIN/MAX (value-structure dependent), and the genuinely
-      certificate-only **BID disjoint-block `⊥`** structure (mutual exclusion
-      from a key constraint is a semantic fact that need not surface as
-      circuit leaf-sharing).
+      `having_safe_join_count.sql`. The product node also covers
+      **SUM/MIN/MAX** (`having_safe_join_agg.sql` `xprod …` rows): MIN/MAX
+      need only the value-agnostic `pAllAbsent` product node
+      (`1 - ∏(1-pAllAbsent(factor))`), since `minMaxProb`'s value-thresholded
+      subsets are sub-products when the value is single-branch (and bail when
+      genuinely non-rectangular); SUM factors as `S_f · M` only when the
+      value depends on a single factor (detected: weight constant within each
+      `f`-part group), else it bails (a branch-spanning value may be #P-hard).
+      Still open: contributors with `gate_plus`/`gate_monus` (UNION/EXCEPT
+      lineage), AVG, branch-spanning SUM via per-factor joint (sum,count)
+      distributions, and the genuinely certificate-only **BID disjoint-block
+      `⊥`** structure (mutual exclusion from a key constraint is a semantic
+      fact that need not surface as circuit leaf-sharing).
    4. *Validation* — `test/sql/having_safe_join_{count,minmax,sum}.sql`
       off-vs-on parity against `possible-worlds` on the `R(k,a),S(a,b)`
       fan-out, star-schema, and BID-`⊥` shapes; a **negative** test that the

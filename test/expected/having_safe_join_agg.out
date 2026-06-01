@@ -77,6 +77,44 @@ tri SUM >= 20|1|0.1484|0.1484|0.000000
 shape|g|p_off|p_on|diff
 tri MAX >= 15|1|0.1250|0.1250|0.000000
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+xprod SUM(b) >= 10|1|0.1250|0.1250|0.000000
+xprod SUM(b) >= 10|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+xprod MAX(b) >= 7|1|0.1875|0.1875|0.000000
+xprod MAX(b) >= 7|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+xprod MIN(b) <= 3|1|0.1875|0.1875|0.000000
+xprod MIN(b) <= 3|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+xprod MAX(c) >= 9|1|0.1875|0.1875|0.000000
+xprod MAX(c) >= 9|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+xprod SUM(b+c) span|1|0.0938|0.0938|0.000000
+xprod SUM(b+c) span|2|0.0000|0.0000|0.000000
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

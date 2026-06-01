@@ -90,6 +90,32 @@ DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sja_tt; END $$;
 SELECT * FROM sja_parity('tri SUM >= 20', 'SELECT 1 g, probability_evaluate(provenance()) p FROM sja_tr, sja_ts, sja_tt WHERE sja_tr.x=sja_ts.x AND sja_ts.y=sja_tt.y GROUP BY 1 HAVING sum(sja_ts.y) >= 20');
 SELECT * FROM sja_parity('tri MAX >= 15', 'SELECT 1 g, probability_evaluate(provenance()) p FROM sja_tr, sja_ts, sja_tt WHERE sja_tr.x=sja_ts.x AND sja_ts.y=sja_tt.y GROUP BY 1 HAVING max(sja_ts.y) >= 15');
 
+-- Cross-product / product-join R(a),S(a,b),T(a,c) with the aggregated
+-- value on ONE branch: SUM = S_b · N_T (count-product of the other
+-- factor); MIN / MAX reduce to pAllAbsent over the product (a
+-- value-thresholded subset on a single branch is itself a sub-product).
+-- These fire.  A value spanning both branches (b+c) couples the factors;
+-- SUM bails (and MIN/MAX bail unless the threshold subset happens to be a
+-- product) -- either way off and on agree.
+CREATE TABLE sja_pr(a int);
+CREATE TABLE sja_ps(a int, b int);
+CREATE TABLE sja_pt(a int, c int);
+INSERT INTO sja_pr VALUES (1),(2);
+INSERT INTO sja_ps VALUES (1,3),(1,7),(2,5);
+INSERT INTO sja_pt VALUES (1,4),(1,9),(2,6);
+SELECT add_provenance('sja_pr');
+SELECT add_provenance('sja_ps');
+SELECT add_provenance('sja_pt');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sja_pr; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sja_ps; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sja_pt; END $$;
+
+SELECT * FROM sja_parity('xprod SUM(b) >= 10', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING sum(sja_ps.b) >= 10');
+SELECT * FROM sja_parity('xprod MAX(b) >= 7', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING max(sja_ps.b) >= 7');
+SELECT * FROM sja_parity('xprod MIN(b) <= 3', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING min(sja_ps.b) <= 3');
+SELECT * FROM sja_parity('xprod MAX(c) >= 9', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING max(sja_pt.c) >= 9');
+SELECT * FROM sja_parity('xprod SUM(b+c) span', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING sum(sja_ps.b + sja_pt.c) >= 20');
+
 DROP FUNCTION sja_parity(text, text);
 SELECT remove_provenance('sja_r');
 SELECT remove_provenance('sja_s');
@@ -99,4 +125,7 @@ SELECT remove_provenance('sja_item');
 SELECT remove_provenance('sja_tr');
 SELECT remove_provenance('sja_ts');
 SELECT remove_provenance('sja_tt');
-DROP TABLE sja_r, sja_s, sja_acct, sja_ord, sja_item, sja_tr, sja_ts, sja_tt;
+SELECT remove_provenance('sja_pr');
+SELECT remove_provenance('sja_ps');
+SELECT remove_provenance('sja_pt');
+DROP TABLE sja_r, sja_s, sja_acct, sja_ord, sja_item, sja_tr, sja_ts, sja_tt, sja_pr, sja_ps, sja_pt;
