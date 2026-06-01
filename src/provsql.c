@@ -4762,7 +4762,9 @@ static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
   src_rte->subquery    = inner;
   src_rte->relid       = InvalidOid;
   src_rte->relkind     = 0;
-  src_rte->rellockmode = 0;
+#if PG_VERSION_NUM >= 120000
+  src_rte->rellockmode = 0; /* field added in PG 12 */
+#endif
   src_rte->inh         = false;
   src_rte->lateral     = false;
 #if PG_VERSION_NUM >= 160000
