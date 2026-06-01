@@ -47,7 +47,7 @@ using mask_t=std::vector<bool>;
  */
 std::vector<mask_t> enumerate_valid_worlds(
   const std::vector<long> &values,
-  int constant,
+  long constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
   bool enumerate,

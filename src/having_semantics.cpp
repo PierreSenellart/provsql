@@ -9,9 +9,11 @@
  */
 extern "C" {
 #include "postgres.h"
+#include "catalog/pg_type.h"
 #include "utils/lsyscache.h"
 }
 
+#include <climits>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -19,6 +21,72 @@ extern "C" {
 #include "having_semantics.hpp"
 
 namespace provsql_having_detail {
+
+// The comparison-domain type of a HAVING aggregate is the aggregate's
+// result type, stored in info2 of the gate_agg (set by
+// provenance_aggregate as set_infos(agg, aggfnoid, aggtype)).  This
+// classifies it so the cmp can be evaluated in the right domain.
+bool aggtype_is_text(unsigned oid) {
+  switch (oid) {
+    case TEXTOID: case VARCHAROID: case BPCHAROID: case CHAROID: case NAMEOID:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Parse a plain decimal literal ("-12.340", "6", "6.5") into a scaled
+// integer: the value is @c mantissa * 10^(-scale).  Returns false on
+// exponential notation, inf / nan, or anything that is not a plain
+// decimal -- those fall back to the existing (string / error) handling.
+bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale) {
+  if (s.empty()) return false;
+  std::size_t i = 0;
+  bool neg = false;
+  if (s[i] == '+' || s[i] == '-') { neg = (s[i] == '-'); ++i; }
+  std::string digits;
+  int sc = 0;
+  bool seen_dot = false, seen_digit = false;
+  for (; i < s.size(); ++i) {
+    char ch = s[i];
+    if (ch == '.') {
+      if (seen_dot) return false;
+      seen_dot = true;
+    } else if (ch >= '0' && ch <= '9') {
+      digits.push_back(ch);
+      if (seen_dot) ++sc;
+      seen_digit = true;
+    } else {
+      return false;                 // 'e'/'E', inf, nan, separators, ...
+    }
+  }
+  if (!seen_digit) return false;
+  try {
+    std::size_t pos = 0;
+    long long val = std::stoll(digits, &pos);
+    if (pos != digits.size()) return false;
+    mantissa = neg ? -static_cast<long>(val) : static_cast<long>(val);
+    scale = sc;
+    return true;
+  } catch (...) {                    // out_of_range / invalid
+    return false;
+  }
+}
+
+// Rescale a (mantissa, scale) decimal to a common target scale, i.e.
+// mantissa * 10^(target_scale - scale).  Returns false on overflow.
+bool rescale_to(long mantissa, int scale, int target_scale, long &out) {
+  long factor = 1;
+  for (int k = 0; k < target_scale - scale; ++k) {
+    if (factor > (LONG_MAX / 10)) return false;
+    factor *= 10;
+  }
+  if (mantissa != 0 &&
+      (mantissa > LONG_MAX / factor || mantissa < LONG_MIN / factor))
+    return false;
+  out = mantissa * factor;
+  return true;
+}
 
 namespace {
 // Parse int from string

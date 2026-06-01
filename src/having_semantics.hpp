@@ -16,6 +16,7 @@
 #ifndef PROVSQL_HAVING_SEMANTICS_HPP
 #define PROVSQL_HAVING_SEMANTICS_HPP
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -31,6 +32,9 @@ bool extract_constant_double(GenericCircuit &c, gate_t x, double &C_out);
 bool extract_constant_string(GenericCircuit &c, gate_t x, std::string &C_out);
 bool semimod_extract_M_and_K(GenericCircuit &c, gate_t semimod_gate, int &m_out, gate_t &k_gate_out);
 bool semimod_extract_string_and_K(GenericCircuit &c, gate_t semimod_gate, std::string &m_out, gate_t &k_gate_out);
+bool aggtype_is_text(unsigned oid);
+bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale);
+bool rescale_to(long mantissa, int scale, int target_scale, long &out);
 ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok);
 ComparisonOperator flip_op(ComparisonOperator op);
 }
@@ -72,57 +76,35 @@ void provsql_having(
     if (!okop) return false;
 
     auto build_from = [&](gate_t agg_side, gate_t const_side, ComparisonOperator effective_op) -> bool {
-      int C = 0;
-      std::string C_str;
-      bool is_string = false;
-
-      if (!extract_constant_C(c, const_side, C)) {
-        // The constant may instead be a text value (agg_token = text).
-        if (!extract_constant_string(c, const_side, C_str)) return false;
-        is_string = true;
-      }
-
       if (c.getGateType(agg_side) != gate_agg) return false;
 
+      // info2 of the gate_agg is the aggregate's result type -- the
+      // comparison domain (int / numeric / float / text).
+      const unsigned aggtype = c.getInfos(agg_side).second;
+      AggregationOperator agg_kind = getAggregationOperator(c.getInfos(agg_side).first);
       const auto &children = c.getWires(agg_side);
 
-      std::vector<long> mvals;
-      mvals.reserve(children.size());
+      // ---- Text comparison domain: choose() over a text constant. ----
+      if (aggtype_is_text(aggtype)) {
+        std::string C_str;
+        if (!extract_constant_string(c, const_side, C_str)) return false;
 
-      std::vector<std::string> mvals_str;
-      mvals_str.reserve(children.size());
-
-      std::vector<typename SemiringT::value_type> kvals;
-      kvals.reserve(children.size());
-
-      for (gate_t ch : children) {
-        if (c.getGateType(ch) != gate_semimod) return false;
-
-        gate_t k_gate{};
-
-        if (is_string) {
+        std::vector<std::string> mvals_str;
+        std::vector<typename SemiringT::value_type> kvals;
+        mvals_str.reserve(children.size());
+        kvals.reserve(children.size());
+        for (gate_t ch : children) {
+          if (c.getGateType(ch) != gate_semimod) return false;
           std::string m_str;
+          gate_t k_gate{};
           if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
           mvals_str.push_back(m_str);
-        } else {
-          int m = 0;
-          if (!semimod_extract_M_and_K(c, ch, m, k_gate)) return false;
-          mvals.push_back(m);
+          kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
         }
 
-        auto kval = c.evaluate<SemiringT>(k_gate, mapping, S);
-
-        kvals.push_back(std::move(kval));
-      }
-
-      AggregationOperator agg_kind = getAggregationOperator(c.getInfos(agg_side).first);
-
-      if (is_string) {
-        // Comparison of an aggregate against a text constant.  Only choose()
-        // is supported (it is the only text-valued aggregate whose
-        // possible-world value is decided occurrence-by-occurrence), and only
-        // = / <> are exposed for text.  Other aggregates would need their own
-        // text semantics and are refused.
+        // Only choose() is supported (the only text-valued aggregate whose
+        // possible-world value is decided occurrence-by-occurrence), and
+        // only = / <> are exposed for text.
         if (agg_kind != AggregationOperator::CHOOSE)
           throw std::runtime_error(
             "comparing an aggregate with a text constant in HAVING "
@@ -135,19 +117,12 @@ void provsql_having(
 
         // choose() is PICKFIRST: in a world W its value is that of the
         // lowest-index present element.  So choose(W) op C holds iff the
-        // first present element matches.  Summing the annotations of all such
-        // worlds telescopes (the free suffix of later elements sums to one),
-        // giving the exact possible-worlds provenance in a single O(N) scan,
-        // valid even when the group's elements are not mutually exclusive:
-        //
+        // first present element matches; summing the annotations of all such
+        // worlds telescopes (free suffix sums to one):
         //   pw = ⊕_{i : vᵢ matches} kᵢ ⊗ (⊗_{j<i} (1 ⊖ kⱼ))
-        //
-        // where (⊗_{j<i} (1 ⊖ kⱼ)) ("no earlier element present") is carried
-        // in @c prefix.
         const auto one  = S.one();
         std::vector<typename SemiringT::value_type> disjuncts;
         auto prefix = one;
-
         for (size_t i = 0; i < kvals.size(); ++i) {
           bool match = (effective_op == ComparisonOperator::EQ)
                          ? (mvals_str[i] == C_str)
@@ -161,27 +136,60 @@ void provsql_having(
               disjuncts.push_back(S.times(
                 std::vector<typename SemiringT::value_type>{kvals[i], prefix}));
           }
-
-          // prefix ⊗= (1 ⊖ kᵢ): condition that element i is absent.
           auto absent = S.monus(one, kvals[i]);
           prefix = (prefix == one)
                      ? absent
                      : S.times(std::vector<typename SemiringT::value_type>{
                          prefix, absent});
         }
-
         pw_out = disjuncts.empty() ? S.zero() : S.plus(disjuncts);
         return true;
       }
 
-      if(agg_kind==AggregationOperator::SUM) {
-        // COUNT(*) is simulated by SUM of 1s
-        bool all_one_mvals = true;
-        for (int m : mvals) {
-          if (m != 1) { all_one_mvals = false; break; }
-        }
-        agg_kind = all_one_mvals ? AggregationOperator::COUNT : AggregationOperator::SUM;
+      // ---- Numeric comparison domain (int / numeric / float): unify by
+      //      scaling every value and the threshold to a common integer
+      //      grid by their decimal text, so a numeric(p,d) / finite-decimal
+      //      float column is evaluated exactly and fractional thresholds
+      //      work.  Integer is the scale-0 case. ----
+      std::string C_str;
+      if (!extract_constant_string(c, const_side, C_str)) return false;
+      long C_mant = 0; int C_scale = 0;
+      if (!parse_decimal_scaled(C_str, C_mant, C_scale)) return false;
+
+      std::vector<long> m_mant;
+      std::vector<int> m_scale;
+      std::vector<typename SemiringT::value_type> kvals;
+      m_mant.reserve(children.size());
+      m_scale.reserve(children.size());
+      kvals.reserve(children.size());
+      for (gate_t ch : children) {
+        if (c.getGateType(ch) != gate_semimod) return false;
+        std::string m_str;
+        gate_t k_gate{};
+        if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
+        long mm = 0; int ms = 0;
+        if (!parse_decimal_scaled(m_str, mm, ms)) return false;
+        m_mant.push_back(mm);
+        m_scale.push_back(ms);
+        kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
       }
+
+      // COUNT(*) is SUM of unit 1s; detect on the unscaled values.
+      if (agg_kind == AggregationOperator::SUM) {
+        bool all_one = true;
+        for (size_t i = 0; i < m_mant.size(); ++i)
+          if (!(m_mant[i] == 1 && m_scale[i] == 0)) { all_one = false; break; }
+        if (all_one) agg_kind = AggregationOperator::COUNT;
+      }
+
+      // Common scale: rescale every value and the threshold to integers.
+      int target_scale = C_scale;
+      for (int ms : m_scale) target_scale = std::max(target_scale, ms);
+      long C = 0;
+      if (!rescale_to(C_mant, C_scale, target_scale, C)) return false;
+      std::vector<long> mvals(m_mant.size());
+      for (size_t i = 0; i < m_mant.size(); ++i)
+        if (!rescale_to(m_mant[i], m_scale[i], target_scale, mvals[i])) return false;
 
       bool upset = false;
       auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind, S.absorptive(), upset);

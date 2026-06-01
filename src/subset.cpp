@@ -72,7 +72,7 @@ class DPException : public std::exception {};
 /** @brief Return the minimum of two values. */
 #define MIN(x,y) ((x)<(y)?(x):(y))
 
-static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, ComparisonOperator op, bool absorptive, bool &upset)
+static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, ComparisonOperator op, bool absorptive, bool &upset)
 {
   const std::size_t n = values.size();
 
@@ -198,7 +198,7 @@ static void combinations(std::size_t start,
   combinations(start + 1, k_left - 1, mask, out);
 }
 
-static std::vector<mask_t> count_enum(const std::vector<long> &values, int m, ComparisonOperator op, bool absorptive, bool &upset)
+static std::vector<mask_t> count_enum(const std::vector<long> &values, long m, ComparisonOperator op, bool absorptive, bool &upset)
 {
   const int n = static_cast<int>(values.size());
   std::vector<mask_t> out;
@@ -287,7 +287,7 @@ static bool compare(I a, ComparisonOperator op, J b) {
  */
 bool evaluate(const std::vector<long>& values,
               const std::vector<bool>& mask,
-              int constant, ComparisonOperator op,
+              long constant, ComparisonOperator op,
               std::unique_ptr<Aggregator> aggregator)
 {
   for (std::size_t i = 0; i < values.size(); ++i) {
@@ -318,7 +318,7 @@ bool evaluate(const std::vector<long>& values,
  */
 std::vector<mask_t> enumerate_exhaustive(
   const std::vector<long> &values,
-  int constant,
+  long constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
   bool absorptive,
@@ -355,7 +355,7 @@ std::vector<mask_t> enumerate_exhaustive(
 
 std::vector<mask_t> enumerate_valid_worlds(
   const std::vector<long> &values,
-  int constant,
+  long constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
   bool absorptive,
