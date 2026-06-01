@@ -157,26 +157,38 @@ polynomial time in the size of `Q` if `Q` is `α`-safe").
 
 ### Gain 3 — Relative approximation for the apx-safe class
 
-This section records the **design conclusions** reached while studying the
-approximation half of the paper (`~senellar/s00778-009-0151-4.pdf`, §5–6).
-The concrete build is in *Implementation plan: the relative-approximation
-surface* below.
+This section records the **theory** of the approximation half of the paper
+(`~senellar/s00778-009-0151-4.pdf`, §5–6). The *architecture* that consumes it
+(the three user-facing paths, the method catalog, the chooser) is
+[Architecture: the probability method catalog and the three-path chooser](#architecture-the-probability-method-catalog-and-the-three-path-chooser)
+below.
 
-**The user-facing contract = two surfaces.**
-- *Exact surface* (`possible-worlds`, `tree-decomposition`, `independent`,
-  `d4`/`c2d`/…, default chain): promises the true probability; may be slow or
-  give up, but **must never silently return an estimate**. *Caveat — this
-  applies to the discrete probability surface.* The continuous-RV moment /
-  probability functions are a separate, **approximate-by-nature** surface
-  (continuous distributions usually have no closed form, so MC is unavoidable):
-  their contract is not "never approximate" but "the user can always tell
-  whether the answer is closed-form or MC." Today the RV path falls back to
-  `monteCarloScalarSamples` *silently* (`provsql.rv_mc_samples` opt-out); the
-  fix is **transparency** (signal the fallback), not refusal — see Phase E.
-- *Approximate surface*: promises a **relative** `(1±ε)` result with
-  confidence `1−δ`. The user states `(ε,δ)` and that is the whole contract;
-  **which mechanism delivers it is internal** and invisible (the method names
-  `karp-luby` / `monte-carlo` are implementation detail leaking into the API).
+**Three user-facing paths, each a tolerance the user grants.** The user does not
+pick an algorithm (a DBMS does not ask you to pick a join implementation); the
+user grants a *tolerance* and the chooser selects the method. Named methods stay
+available as an `EXPLAIN`-level escape hatch for debugging / benchmarking.
+
+- *exact* — tolerance `(0,0)`, the true probability.
+- *relative* — `(1±ε)p` with confidence `1−δ`.
+- *additive* — `|p̂−p| ≤ ε` with confidence `1−δ`; cheaper (Hoeffding `N =
+  O(ln(1/δ)/ε²)`, **independent of `p`**, bounded as `p→0`), so it is the
+  *robust* choice for rare events where relative is hopeless. A legitimate
+  informed choice, not a downgrade.
+
+A relative `(1±ε)p` result has `|p̂−p| ≤ εp ≤ ε`, and an exact result satisfies
+every tolerance, so the admissible method sets nest: **exact ⊂ relative ⊂
+additive**. The path fixes the admissible set; the chooser returns the cheapest
+member — so *every* path can return exact when exact is cheapest, and the
+relative path can return an additive-tight relative result, etc.
+
+*Continuous-RV caveat.* The continuous-RV moment / probability functions
+(`expected`, `variance`, `rv_sample`, …) are an **approximate-by-nature**
+surface: continuous distributions usually have no closed form, so MC is
+unavoidable. Their contract is not "never approximate" but "the user can always
+tell whether the answer is closed-form or MC." Today the RV path falls back to
+`monteCarloScalarSamples` *silently* (`provsql.rv_mc_samples` opt-out); the fix
+is **transparency** (signal the fallback), not refusal — see *RV transparency*
+in the phased build.
 
 **Additive is not an FPRAS — relative is the promise.** Fixed-sample MC gives
 *additive* `|p̂−p| ≤ ε` (Hoeffding, `N = O(ln(1/δ)/ε²)`, independent of `p`),
@@ -462,183 +474,335 @@ distinction matters:
    `FootprintCache` / `getJointCircuit` are callable from the CmpEvaluator
    pre-pass slot. First shippable slice: Phases 1–2 for COUNT on single-level
    fan-out, validated against `possible-worlds`.
-5. **Gain 3, the relative-approximation surface** — the conceptual conclusions
-   are recorded under *Gain 3* above (two-surface contract; relative-not-
-   additive; whole-query-not-per-cmp; the shared per-world cmp primitive; the
-   paper's safe-plan FPTRAS; safe-plan = the safe-query detection half). The
-   concrete build is the *Implementation plan* section below. **This is now the
-   main open item.** Supersedes the earlier "auto-route to karp-luby" framing,
-   which was wrong: karp-luby cannot consume a threshold DNF.
+5. **The method catalog + three-path chooser** — **the main open item.** The
+   theory is *Gain 3* (three paths; relative-not-additive; whole-query via the
+   propagation calculus; the shared per-world cmp primitive; the safe-plan
+   FPTRAS); the build is *Architecture: the probability method catalog and the
+   three-path chooser* below — one cost-aware chooser over a catalog of method
+   objects, replacing both the rigid exact `try/catch` ladder and the
+   `if/else if` method dispatch, with exact / additive / relative as user-granted
+   tolerances. **Phase 1 (catalog skeleton + port the existing exact methods, a
+   behavior-preserving refactor) is the natural starting point — it is shared
+   infrastructure that improves the exact path before any FPRAS exists.**
+   Supersedes the earlier "auto-route to karp-luby" framing, which was wrong on
+   two counts: karp-luby cannot consume a threshold DNF, and a static
+   trichotomy-class switch is the wrong shape (admissibility from the trichotomy,
+   *selection* from a cost heuristic).
 6. **Gain 1, COUNT(DISTINCT) arm** — **closed**: already realised by the
    `COUNT(DISTINCT)` GROUP-BY rewrite + `runCountCmpEvaluator` (see the
    COUNT(DISTINCT) note under Gain 1); the HAVING gap was fixed. No dedicated
    arm needed.
 
-## Implementation plan: the relative-approximation surface
+## Architecture: the probability method catalog and the three-path chooser
 
-Concrete, phased build of the *approximate surface* described under *Gain 3*.
-The contract is: the user asks for `(ε, δ)`; ProvSQL returns a value within a
-**relative** `(1±ε)` factor of the true probability with confidence `1−δ`,
-choosing the internal mechanism itself. "All bells and whistles" = the
-stopping-rule estimator, the safe-plan FPTRAS, the MIN/MAX karp-luby shortcut,
-the closed-form pre-pass as variance reduction, and the skeleton-safety gate —
-all behind one surface.
+The realization that reorganizes everything below: **the exact default chain and
+the relative/additive surfaces are one problem.** Today `probability_evaluate`'s
+`method==""` default is a hardcoded `try/catch` ladder (independent →
+inversion-free → `makeDD`, with `possible-worlds` / `monte-carlo` reachable only
+by name), and the method dispatch is a ~150-line `if/else if` chain on
+method-name strings. Both are degenerate, rigid portfolios. The design here
+replaces them with **one cost-aware chooser over a catalog of method objects**,
+parameterized by the user-granted tolerance.
 
-**Design invariants (do not violate):**
-- *Exact never approximates.* Approximation only ever happens because the user
-  selected the approximate surface (an explicit `(ε,δ)` request). No *discrete*
-  exact method silently estimates. (The continuous-RV surface is approximate by
-  nature — see the *Gain 3* caveat and Phase E — so the rule there is "never
-  estimate *silently*," not "never estimate.")
-- *Relative, not additive.* Every mechanism on this surface must deliver a
-  relative bound. Fixed-sample additive MC is **not** admissible here; it stays
-  available only under an explicit `monte-carlo` method request, which is a
-  *different*, additive contract the user opts into by name.
-- *Whole query, not per cmp.* The `(ε,δ)` is on `P(root)`. We sample / bound the
-  whole circuit root; cmp gates are resolved exactly by the pre-pass where
-  independent, and sampled jointly with the rest otherwise.
+The portfolio + cost-model principle is ProApproX (Souihli & Senellart,
+*"Optimizing Approximations of DNF Query Lineage in Probabilistic XML,"* ICDE
+2013): no single algorithm wins; the best one is a function of the formula's
+features; different methods can evaluate different parts. **But ProApproX is
+DNF-era** — flat formulas, simpler blocks — and several of its specifics are
+*wrong* on circuits; the principles survive, the feature vector and cost
+expressions are rebuilt circuit-native (below).
 
-### Phase A — the shared per-world cmp primitive (prerequisite, no new surface)
+### Three paths, one admissibility lattice
 
-The blocker for any sampler-based cmp handling: today the "value of `agg θ k` in
-one world" lives in two places that can disagree (`pw_from_cmp_gate`'s
-expansion vs `MonteCarloSampler`'s `gate_agg`/`gate_cmp` arms). Unify them.
+The three user-facing paths (*exact* / *relative* / *additive*, see Gain 3) are
+tolerance grants, not algorithm picks. They nest: **exact ⊂ relative ⊂
+additive** as admissible method sets. The path constructs a
+`Tolerance{kind, ε, δ}`; admissibility filtering does the rest. A user on the
+exact path therefore *never* receives an estimate (only ε=0 members are
+admissible); approximation happens only when the user grants tolerance > 0.
+Named-method requests bypass the chooser entirely (`by_name`) — the
+`EXPLAIN`-level escape hatch for debugging / benchmarking.
 
-- Extract a single function `eval_cmp_in_world(cmp_gate, present: predicate over
-  leaves) -> bool` that: gathers the `gate_agg`'s contributor tuples, keeps the
-  ones `present` selects, applies the aggregate (COUNT/SUM/MIN/MAX/AVG), applies
-  the comparison from `info1`, and reproduces **exactly** the expansion's edge
-  conventions — the **empty-group exclusion** (no present tuple ⇒ predicate
-  false, even for `sum(x) ≥ −5` or `min(x) ≤ k`) and the **numeric/float
-  scaled-integer domain** (reuse `parse_decimal_scaled` / `rescale_to`, dispatch
-  on `info2`).
-- Re-express both callers in terms of it: `pw_from_cmp_gate` = `eval_cmp_in_world`
-  applied over the enumerated worlds (the DNF); `MonteCarloSampler` = the same
-  applied to the one sampled world. Lives in `CmpEvaluatorCommon.{h,cpp}`
-  alongside `matchAggCmp` (which already centralised the typed parsing).
-- Tests (parity, exact, both surfaces irrelevant — this is semantics): empty
-  group under every `(agg,θ)`; `sum(x) ≥ negative`; `min/max` boundary `=`;
-  numeric fractional threshold; a world where sampler and full expansion must
-  return the identical bit. This is the regression that pins "sample = expand".
+### The method catalog (Strategy + registry)
 
-### Phase B — relative stopping-rule whole-query MC (the universal fallback)
+Mirror the existing tool registry (`tool_registry_sync.h`, the `kind='kcmcp'`
+entries): each method is a first-class object that **declares its own** guarantee
+/ applicability / cost, instead of that knowledge being smeared across inline
+conditionals (the `karp-luby` DNF-shape check, the RV guard, the monotonicity
+assumptions) and a string-switch dispatcher.
 
-The always-correct (when `p ≥ 1/poly`) relative estimator, behind the
-approximate surface.
+```cpp
+struct Tolerance { enum class Kind { Exact, Relative, Additive };
+                   Kind kind; double epsilon, delta; };   // exact ⇒ (0,0)
 
-- Add a `Sampler`-driven whole-circuit Boolean estimator that runs the
-  **Dagum–Karp-Luby-Mihail-Ross `(ε,δ)`-relative stopping rule** — reuse the
-  existing `BooleanCircuit::karpLubyStopping` loop logic, but driven by
-  `MonteCarloSampler::evalBool(root)` (so RV leaves, `gate_cmp`, `gate_agg` are
-  all in scope via Phase A) rather than DNF clauses. One sampled world fixes
-  every `gate_input`/`gate_rv` once; `eval_cmp_in_world` decides each cmp on
-  that world; the surrounding plus/times/monus compose as usual.
-- Wire it as the **default mechanism of the approximate surface**: when the user
-  supplies `(ε,δ)` and no more specific FPTRAS applies, this runs. It also is the
-  *correctness oracle* the later phases are diffed against.
-- Honest limit, logged not hidden: cost `∝ 1/p`. If the stopping rule has not
-  converged within a budget, emit a NOTICE that `p` is too small for a relative
-  guarantee at this `(ε,δ)` (do **not** silently return an additive-ish value).
-- Reuse `parse_eps_delta` / `parse_sample_spec` for the grammar; surface the
-  request as a method name on `probability_evaluate` (e.g. `approximate` /
-  `relative`, taking `(ε,δ)`), distinct from the additive `monte-carlo`.
+struct CircuitFeatures {                  // computed once, tiered/lazy
+  size_t n_inputs;
+  bool decomposable, dnf_shaped, monotone, inv_free_cert,
+       aggregate_shaped, safe_skeleton;
+  std::optional<int>    treewidth_proxy;      // tier-2: only when amortized
+  std::optional<double> prob_lower_bound;     // MulMC vs coverage
+};
 
-### Phase C — MIN/MAX easy direction → karp-luby (nearly free, any skeleton)
+class ProbabilityMethod {                 // Strategy: one subclass per method
+public:
+  virtual std::string name() const = 0;
+  virtual bool      applicable(const CircuitFeatures&, const Tolerance&) const = 0; // correctness gate
+  virtual Guarantee guarantee (const Tolerance&) const = 0;                          // exact ⇒ ε=0
+  virtual double    estimated_cost(const CircuitFeatures&, const Tolerance&) const = 0; // selection
+  virtual double    evaluate(BooleanCircuit&, gate_t, const Tolerance&,
+                             std::optional<Budget> = {}) const = 0;                  // may honour a soft budget
+};
 
-`MAX(y) ≥ k` / `MIN(y) ≤ k` reduce to `P(∃ present tuple with y θ k)` = a
-monotone UCQ over the qualifying tuples — exactly what `evaluate_karp_luby`
-already approximates with a relative guarantee, on **any** skeleton (Thm 8).
+class MethodCatalog {                     // registry, mirrors the tool registry
+  std::vector<std::unique_ptr<ProbabilityMethod>> methods_;
+public:
+  static MethodCatalog& instance();
+  void register_method(std::unique_ptr<ProbabilityMethod>);
+  Result choose_and_run(BooleanCircuit&, gate_t, const Tolerance&) const;  // the chooser
+  const ProbabilityMethod* by_name(const std::string&) const;             // debug escape hatch
+};
+```
 
-- Detect this `(α,θ)` shape on the matched `gate_cmp` (reuse `matchAggCmp`;
-  the direction test is `info1` ∈ {≥,>} for MAX, {≤,<} for MIN).
-- Build the threshold UCQ (the disjunction over contributors with `y θ k`,
-  filtered by the scaled-integer domain) and hand it to the **existing**
-  karp-luby DNF FPRAS. No new estimator. This is the cheapest win and covers the
-  gate-independent column of the `(α,θ)` table.
+SE payoff:
 
-### Phase D — SUM-safe FPTRAS (rounding + guided sampling, gated on safe skeleton)
+- **Open/closed** — a new method = a new class + one `register_method`; the
+  dispatcher never changes again. Kills the `if/else if` chain and `makeDD`'s
+  nested sub-ladder.
+- **Single source of truth** — each method owns its guarantee / applicability /
+  cost; the scattered inline checks move into the one class that cares.
+- **Separation** of the three concerns we kept circling — admissibility
+  (correctness), cost (selection), execution — as distinct members, not tangled
+  `try/catch` control flow.
+- **Composition over catalogs** — `CompilationMethod` is parameterized by a
+  tool-registry entry, so a `d4` / `c2d` / KCMCP tool *becomes* a method by
+  wrapping; the two catalogs compose instead of `wmc` / `weightmc` /
+  `compilation` special-cases.
+- **Testability** — each method's predicate / cost / evaluate is unit-testable;
+  the chooser tests against mock methods; the current ladder becomes the baseline
+  assertion (chooser at `(0,0)` must reproduce it).
+- Optional, consistent with "a catalog like the tools": expose `provsql.methods`
+  as a SQL-visible view (name, guarantee kind, applicability summary) for Studio
+  and for users to *see* the portfolio without choosing from it.
 
-The research-grade slice: SUM (and MIN/MAX hard direction) over a **safe
-skeleton**, Thm 9 / Alg 6.3.1. Gated by
-`safe_query_skeleton_is_hierarchical` — *only* fires when the skeleton is
-certified safe; otherwise the predicate is **hazardous** → Phase F warns.
+### Circuit-native features (ProApproX rebuilt)
 
-1. *Rounding.* `τ^R(y) = ⌊(n²/k)·y⌋`, rounded-sum semiring `S_{n²+1}` (domain
-   size `n²+1`, polynomial). Compute the rounded-sum PMF **exactly** with the
-   safe-plan recursion already built — `sumPMF` / `countPMF` over the small
-   rounded domain (well under `kMaxSumSupport`), driven by the **query-level**
-   safe plan from `find_hierarchical_root_atoms`, not the per-instance circuit
-   sniffing.
+ProApproX keyed on `(N vars, m clauses, L size, ℓ = max clause prob)`. On a
+*shared circuit DAG* those are the wrong axes — and using them would actively
+mislead:
+
+- The `2^N` / `2^m` cost formulas reject the cheapest method on low-**treewidth**
+  circuits (1000 vars, treewidth 3 = linear exact). Treewidth (min-fill proxy),
+  not var / clause count, is the exact-tractability axis — and ProvSQL *has* it
+  (d-DNNF / tree-decomposition) where ProApproX deliberately disallowed Shannon
+  expansion.
+- ProApproX *recovered* independence structure from a flat DNF (§V). A circuit
+  *already is* that tree (plus / times / monus = `⊽ / ⊼ / ⊕`). The hard part
+  inverts: not "how to factor" but **"where can I certify a gate is genuinely
+  independent"** (children leaf-disjoint across the DAG) — the read-once /
+  safe-query / `commonLeaves`-`independenceBlocks` question, where ProvSQL's
+  tooling is richer than anything ProApproX had.
+- coverage / Karp-Luby assumes **monotonicity**; a circuit with **monus** is
+  non-monotone, so monotonicity is an *applicability condition*, not a magnitude.
+- `ℓ = max clause prob` presupposes clauses; on an unexpanded circuit MulMC needs
+  a **structural** lower bound on `p`, or it is confined to the DNF-shaped track.
+
+| axis | role | ProApproX had it? |
+|---|---|---|
+| treewidth (min-fill proxy) | exact-compilation gate | no |
+| independence-certifiability (read-once / leaf-sharing) | where decomposition + propagation are valid | partially |
+| monotonicity (monus present?) | coverage-FPRAS applicability | no (monotone-only) |
+| `p` lower bound (structural) | MulMC vs coverage | yes (clause-based) |
+| aggregate-shape + skeleton-safe | aggregate-track / FPTRAS gate | no |
+| small `N` | naïve fallback | yes |
+
+Features are **tiered**: tier-1 cheap (`n_inputs`, connectivity, dnf-shape,
+cert-bit) computed always; tier-2 expensive (treewidth proxy, independence
+certificates) only when the circuit is large enough that planning amortizes.
+
+### The chooser, and the planning-cost discipline
+
+`choose_and_run` is generic:
+
+```
+features   = compute_tier1(circuit)
+admissible = methods_ | filter(.applicable(features, tol))       // correctness ∧ guarantee ≥ tol
+ranked     = admissible | sort_by(.estimated_cost(features,tol)) // realize tier-2 features lazily if ranking needs them
+return speculative_run(ranked, budget = estimated_cost(cheapest GUARANTEED fallback))
+```
+
+Principles that shape it:
+
+- **Minimize planning + execution, not just execution.** The optimizer is not
+  free. Hence: tiered features; *below a size threshold, do not plan* — run the
+  cheapest exact method directly (a DBMS does not optimize `SELECT 1`); a bounded
+  deterministic heuristic, never a plan search (ProApproX itself rejected its own
+  sampling-based plan exploration on exactly this ground).
+- **Speculative execution as planning.** Rather than *predict* whether exact is
+  cheap (pay prediction cost, risk misprediction), spend a bounded slice
+  *attempting* it. Finishes within budget ⇒ planning cost = execution cost, zero
+  waste, the attempt *was* the plan. Times out ⇒ only the budget is spent. The
+  rigid ladder's `try/catch` already half-does this; formalize it with a budget.
+- **Speculation budget = cost of the guaranteed fallback.** On the
+  relative / additive paths the exact-attempt timeout = the (cheaper, bounded)
+  cost of the approximate method you would otherwise run. Then total ≤ ~2× the
+  pure-approximate cost worst-case, and you win outright when exact finishes
+  inside the window. Cheap tier-1 features *prune* obviously-doomed attempts
+  (skip tree-decomposition when the treewidth proxy is clearly huge) so the
+  budget is not wasted.
+- **Exact is the ε=0 portfolio member.** It satisfies every tolerance, so it is
+  admissible on every path and wins purely on cost when the circuit is easy —
+  "the relative method returns exact when that is cheaper" is not a special case,
+  it is the lattice.
+- **Behavior-preserving baseline.** The current ladder is battle-tested; the
+  chooser must reproduce it at `(0,0)` (the ladder is a known-good *lower bound*)
+  and improve only by *adding* cheaper-when-certified options (small-N
+  possible-worlds, treewidth-gated tree-decomposition), with the timeout guard as
+  the safety net against a feature heuristic that guesses wrong.
+
+### Guarantee propagation (decompose at certified-independent gates only)
+
+The whole-query `(ε,δ)` decomposes soundly across the circuit using ProApproX's
+propagation calculus (§VI) — but **only at independence-certified gates**:
+
+- independent-OR (`⊽`, a `gate_plus` whose children are leaf-disjoint):
+  `ε = ε₁+ε₂+ε₁ε₂ ≈ max`; mutex-OR (`⊕`): `max(ε₁,ε₂)`; independent-AND (`⊼`):
+  `ε₁`. `δ` composes as `1−δ = (1−δ₁)(1−δ₂)`.
+- A `gate_plus` whose children **share leaves** is *not* `⊽`; the rule is invalid
+  there. So the unit of guarantee is a **maximal correlated component** (the
+  circuit-native "leaf"), and the rules glue components only at certified
+  boundaries. This is the precise form of "whole query, not per cmp": correlated
+  cmps stay in one component and are sampled jointly; independent structure is
+  composed exactly. It reconciles with the earlier worry — a cmp correlated with
+  the surrounding lineage is never split off, so it stays consistent.
+- **Exact components loosen the budget.** A component cleared exactly contributes
+  `ε=0`, so propagation reallocates its budget to approximate siblings (larger ε
+  ⇒ fewer samples ⇒ cheaper). This is the per-part payoff and the natural home of
+  the *cost-model-later* upgrade (per-node optimization of the ε-split); the
+  heuristic-now version applies one method per component.
+- **monus propagation is not in the paper.** ProApproX's `⊕` is restricted
+  mutex-OR, not general set difference. `Pr(monus(a,b)) = Pr(a)(1−Pr(b))` under
+  independence has its own ε-propagation (and an unsound-under-sharing caveat)
+  that must be derived — a genuine TODO the DNF-era paper does not cover.
+
+### The portfolio members
+
+Method classes mapped to existing code (✓ exists) and new work (∆):
+
+*Exact (ε=0; admissible on every path):*
+
+- `PossibleWorldsMethod` ✓ (`possibleWorlds`) — applicable when `n_inputs` small.
+- `IndependentMethod` ✓ (`independentEvaluation`) — decomposable circuits.
+- `InversionFreeMethod` ✓ (`StructuredDNNFBuilder`) — `inv_free_cert`.
+- `CompilationMethod` ✓ (`makeDD` / tree-decomposition / compiler tools) —
+  parameterized by a tool-registry entry; cost keyed on the treewidth proxy.
+- `AggMarginalExactMethod` ✓ (`runAggMarginalEvaluator` et al.) — the HAVING
+  marginal-vector engine; the front-running exact arm for aggregate-shaped
+  circuits, already self-gating on circuit-level laminarity.
+
+*Relative (admissible on relative + additive paths):*
+
+- `StoppingRuleMcMethod` ∆ — Dagum–KLMR `(ε,δ)`-relative whole-circuit MC; the
+  universal relative fallback (when `p ≥ 1/poly`). Reuses
+  `BooleanCircuit::karpLubyStopping`, driven by `MonteCarloSampler::evalBool` so
+  RV / `gate_cmp` / `gate_agg` are in scope. The correctness oracle the other
+  relative members are diffed against.
+- `CoverageFprasMethod` ✓-ish (`evaluate_karp_luby`) — monotone DNF only.
+- `MinMaxKarpLubyMethod` ∆ (thin) — MIN/MAX easy direction (`MAX≥k` / `MIN≤k`)
+  reduces to `P(∃ present tuple with y θ k)` = a monotone UCQ → hand the existing
+  coverage FPRAS that small DNF, on **any** skeleton (Thm 8). Cheapest relative
+  win.
+- `MulMcMethod` ∆ (enrichment) — additive MC made multiplicative via a lower
+  bound `ℓ` (`ε_add = ℓε`); cheaper than coverage when `p≈1`. Needs a structural
+  `ℓ`.
+- `AggFptrasMethod` ∆ (research slice) — SUM / MIN-MAX-hard over a **safe
+  skeleton**; see *The SUM-safe FPTRAS* below.
+
+*Additive (admissible only on the additive path):*
+
+- `MonteCarloAdditiveMethod` ✓ (`monteCarlo`) — Hoeffding, `p`-independent.
+
+*Sieve enrichment:*
+
+- `SieveMethod` ∆ — exact inclusion-exclusion, `2^m` cost, best when the clause
+  count `m` is tiny; DNF-shaped track only.
+
+### Prerequisite: the shared per-world cmp primitive
+
+Any sampler that touches a `gate_cmp` (`StoppingRuleMc`, `AggFptras`) needs
+**one** definition of "value of `agg θ k` in a world," or it drifts from the
+exact expansion. Today there are two — `pw_from_cmp_gate` (the canonical
+expansion, with the numeric/float scaled-integer domain and the empty-group
+exclusion) and `MonteCarloSampler`'s `gate_agg` / `gate_cmp` arms. They can
+disagree (`HAVING sum(x) >= -5` on an all-absent group: expansion excludes the
+empty group = false; a naive sampler computes `0 ≥ −5` = true). Extract:
+
+```cpp
+bool eval_cmp_in_world(cmp_gate, /*present:*/ predicate-over-leaves);
+```
+
+reproducing the expansion's edge conventions exactly (empty-group exclusion,
+`info2`-typed scaled-integer domain via `parse_decimal_scaled` / `rescale_to`),
+and re-express both callers in terms of it (`pw_from_cmp_gate` = over all worlds
+= the DNF; the sampler = over the one sampled world). Lives in
+`CmpEvaluatorCommon.{h,cpp}` next to `matchAggCmp`. **This is the gating
+prerequisite for every sampler member.**
+
+### The SUM-safe FPTRAS (AggFptrasMethod, the research slice)
+
+SUM (and MIN/MAX hard direction) over a **safe skeleton** — gated by
+`safe_query_skeleton_is_hierarchical` (the read-only detector built under Gain 4,
+currently unused; this is what makes it load-bearing); unsafe skeleton ⇒
+hazardous. Thm 9 / Alg 6.3.1:
+
+1. *Rounding.* `τ^R(y) = ⌊(n²/k)·y⌋`, rounded-sum semiring `S_{n²+1}` (size
+   `n²+1`, polynomial). Compute the rounded-sum PMF **exactly** with the
+   marginal-vector recursion already built (`sumPMF` / `countPMF`, well under
+   `kMaxSumSupport`), driven by the **query-level** safe plan from
+   `find_hierarchical_root_atoms`.
 2. *Random-world generator* (Alg 5.2.1, the one genuinely new subroutine):
-   `sampleWorldWithValue(plan_node, target_s)` walks the safe-plan parse tree
-   **top-down**, splitting `target_s` among children proportional to the
-   marginal-vector entries (`⊕`: choose `s₁+s₂=s` w.p.
-   `m^φ₁[s₁]·m^φ₂[s₂]/m^φ[s]`; `⊗`: `s₁·s₂=s`; `⊔`: route all to one branch).
-   This is the existing bottom-up `countPMF`/`sumPMF`/`decomposeProduct`
-   recursion **run in reverse** — same parse tree, same marginal vectors, the
-   draw just descends instead of folding up. Then Alg 5.2.2 fills off-plan
-   tuples consistent with the chosen value.
-3. *Accept-test* (Lemma 7): sample a rounded value `∝ μ(rounded)`, draw a world
-   with `sampleWorldWithValue`, accept iff it is an *original* (un-rounded)
-   solution; the accepted fraction estimates the correction. `m = O(n·β⁻¹·
-   ε⁻²·log δ⁻¹)` samples → relative `(ε,δ)`. Diff against Phase B on small
-   instances where both run (Phase B is the oracle).
-- New code: `src/AggFptras.{h,cpp}` — the rounding semiring, the top-down world
-  generator over the safe plan, the accept loop. Consumes the marginal-vector
-  helpers from `AggMarginalEvaluator` and the safe plan from `safe_query.c`.
+   `sampleWorldWithValue(plan_node, target_s)` walks the safe-plan tree
+   **top-down**, splitting `target_s` among children ∝ marginal-vector entries
+   (`⊕`: `s₁+s₂=s` w.p. `m^φ₁[s₁]·m^φ₂[s₂]/m^φ[s]`; `⊗`: `s₁·s₂=s`; `⊔`: route
+   all to one branch). **This is the bottom-up
+   `countPMF` / `sumPMF` / `decomposeProduct` recursion run in reverse** — same
+   tree, same vectors, the draw descends instead of folding up. Alg 5.2.2 fills
+   off-plan tuples.
+3. *Accept-test* (Lemma 7): draw a rounded value `∝ μ(rounded)`, draw a world,
+   accept iff it is an *original* solution; `m = O(n·β⁻¹·ε⁻²·log δ⁻¹)` samples →
+   relative `(ε,δ)`. This is exactly the regime the exact engine *bails on*
+   (`kMaxSumSupport`, Remark-3 pseudo-poly), so the FPTRAS is its principled
+   replacement. New code `src/AggFptras.{h,cpp}`, consuming `AggMarginalEvaluator`
+   + `safe_query.c`. (The `(α,θ)` × skeleton admissibility map is the table at
+   the end of Gain 3.)
 
-### Phase E — continuous-RV transparency (NOT a GUC flip)
+### Phased build (behavior-preserving)
 
-Independent of HAVING, and the subtlest of the phases because the obvious move
-is wrong. The continuous-RV moment / probability functions (`expected`,
-`variance`, `moment`, cmp-event probabilities, `rv_sample`, `rv_histogram`)
-fall back to `monteCarloScalarSamples` by default (`provsql.rv_mc_samples`
-opt-out). It is tempting to "fix the exact-surface leak" by flipping the
-default to opt-in (error when no closed form) — **do not**. Continuous
-distributions are intrinsically approximate: for an arbitrary arithmetic
-composite or conditioned expression there *is* no closed form, so refusing to
-sample does not make the surface exact, it makes it useless. These functions
-are **an approximate-by-nature surface**, not part of the discrete exact
-surface; the *Gain 3* contract for them is "analytic when a closed form exists,
-MC otherwise, and the user can always tell which." The real defect is
-**silence**, not sampling.
+1. **Catalog skeleton + port exact methods.** Introduce `ProbabilityMethod` /
+   `MethodCatalog`, port the existing exact branches as classes, replace the
+   `if/else if` dispatch with `choose_and_run` on the exact path. Invariant:
+   reproduce today's ladder at `(0,0)`, *adding* only small-N `PossibleWorlds`
+   and treewidth-gated `Compilation`. **Shared infrastructure — pays off on the
+   exact path every probability call hits, before any FPRAS exists.** Baseline
+   regression: chooser output ≡ old ladder over the existing test corpus.
+2. **Shared per-world cmp primitive** (`eval_cmp_in_world`) — the sampler
+   prerequisite. Parity tests pin "sample = expand."
+3. **Relative path, core.** `StoppingRuleMcMethod` (universal relative fallback)
+   + `MinMaxKarpLubyMethod` (the near-free MIN/MAX-easy win). A complete relative
+   surface for everything except SUM-hard-but-safe.
+4. **Additive path.** Register `MonteCarloAdditiveMethod` (already exists as
+   `monteCarlo`) and wire the `additive` tolerance.
+5. **`AggFptrasMethod`** — the SUM-safe FPTRAS; closes the SUM-hard-but-safe cell.
+6. **RV transparency.** Signal the continuous-RV MC fallback (verbose-gated
+   NOTICE / distinguishable result); route the *probability* RV case (`P(X<c)`)
+   through `StoppingRuleMc` for a real relative bound; leave moments best-effort
+   but labeled. NOT a `rv_mc_samples` opt-in flip.
+7. **Enrichments + cost-model-later.** `SieveMethod`, `MulMcMethod`; replace the
+   heuristic `estimated_cost` bodies with calibrated cost (measured constants)
+   and the per-node ε-split via the propagation tree — the seam is already there,
+   callers do not change.
 
-- *Transparency, not refusal.* When the MC fallback fires, signal it — a
-  verbose-gated NOTICE and/or a distinguishable result — so an estimate is
-  never mistaken for a closed-form value. MC stays the default; usefulness is
-  preserved. `rv_mc_samples` stays an opt-out budget, just no longer silent.
-- *Upgrade the probability case to a real guarantee.* Where the quantity is a
-  **probability** (a `gate_cmp` event such as `P(X < c)`), route the MC
-  fallback through Phase B's relative stopping rule so it inherits a relative
-  `(ε,δ)` bound instead of a fixed, opaque sample budget. This is the genuine
-  improvement and the natural reuse of B on the continuous surface.
-- *Leave moments best-effort.* A moment can be ≈ 0 or negative, where a
-  *relative* bound is ill-posed; keep best-effort fixed-budget MC there, but
-  labeled (per the first bullet) and with a user-tunable budget. Do not pretend
-  a relative guarantee the estimator cannot honour.
-
-### Phase F — routing + hazardous warning (ties it together)
-
-The dispatcher that reads the Gain-2 classifier and the skeleton-safety bit and
-picks the mechanism — the user never names it.
-
-- On the approximate surface, for each HAVING cmp / query verdict:
-  `MIN/MAX-easy` → Phase C; `SUM/MIN-MAX-hard` **and** safe skeleton → Phase D;
-  everything else with `p ≥ 1/poly` → Phase B; `hazardous` (unsafe skeleton +
-  SUM/AVG/COUNT(DISTINCT), or `SUM =`/`≠`) → `provsql_warning` "no FPRAS exists;
-  returning a best-effort estimate / refuse" (decide refuse-vs-best-effort —
-  leaning refuse, to keep the surface honest).
-- The skeleton-safety gate (`safe_query_skeleton_is_hierarchical`, built under
-  Gain 4, currently unused) becomes load-bearing here. The closed-form pre-pass
-  (`runAggMarginalEvaluator` et al.) runs **first** on every surface as exact
-  variance reduction: independent cmps resolve exactly and never reach the
-  sampler.
-
-**Dependency order:** A → B (B needs the shared primitive) → {C, F} → D → E.
-A + B + C + F is a complete, shippable relative surface for everything except
-SUM-hard-but-safe; D is the research slice that closes that cell; E is a small
-independent transparency change on the continuous surface (and reuses B for the
-probability case).
+Phases 1–4 are a complete, shippable three-path surface for everything except
+SUM-hard-but-safe; 5 closes that cell; 6–7 are independent improvements.
 
 ## Implementation observations
 
@@ -657,3 +821,6 @@ probability case).
   `GatterbauerS15`, the 2011 Suciu et al. textbook) but **not** this HAVING
   paper. Add `Re/Suciu 2009 (VLDB J.)` — and optionally the DBPL 2007
   conference version — when any of the above lands, so the docs can cite it.
+  Also add `Souihli/Senellart 2013 (ICDE)` (ProApproX), the source of the
+  portfolio + cost-model principle behind the method catalog, when the chooser
+  lands.
