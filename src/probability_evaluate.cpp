@@ -32,6 +32,7 @@ extern "C" {
 #include "executor/spi.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
+#include "utils/guc.h"
 
 PG_FUNCTION_INFO_V1(probability_evaluate);
 }
@@ -418,6 +419,10 @@ static Datum probability_evaluate_internal
   }
 
   double result;
+  // Records which probability method actually produced the result, so it can
+  // be exposed through the provsql.last_eval_method GUC (useful when method
+  // is left empty and the default auto-selection picks one).
+  string actual_method;
 
   provsql_interrupted = false;
 
@@ -452,6 +457,7 @@ static Datum probability_evaluate_internal
 
       if(method=="independent") {
         result = c.independentEvaluation(gate);
+        actual_method = "independent";
         processed = true;
       } else if(method=="inversion-free") {
         // Explicit inversion-free method: requires the certificate, errors
@@ -468,6 +474,7 @@ static Datum probability_evaluate_internal
                         "markers");
         result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
                    .probability();
+        actual_method = "inversion-free";
         processed = true;
       } else if(method=="") {
         // Default evaluation: independent, then (when an inversion-free
@@ -475,6 +482,7 @@ static Datum probability_evaluate_internal
         // tree-decomposition / compilation, in order until one works.
         try {
           result = c.independentEvaluation(gate);
+          actual_method = "independent";
           processed = true;
         } catch(CircuitException &) {}
 
@@ -484,6 +492,7 @@ static Datum probability_evaluate_internal
             if(collect_inversion_free_keys(gc, gc_root, gc_to_bc, c, gate, keys)) {
               result = StructuredDNNFBuilder(c, gate, inversion_free_rank(keys))
                          .probability();
+              actual_method = "inversion-free";
               processed = true;
             }
           } catch(CircuitException &) {}   // fall through to tree-decomposition
@@ -507,14 +516,17 @@ static Datum probability_evaluate_internal
             provsql_error("Invalid number of samples: '%s'", args.c_str());
 
           result = c.monteCarlo(gate, samples);
+          actual_method = "monte-carlo";
         } else if(method=="possible-worlds") {
           if(!args.empty())
             provsql_warning("Argument '%s' ignored for method possible-worlds", args.c_str());
 
           result = c.possibleWorlds(gate);
+          actual_method = "possible-worlds";
         } else if(method=="weightmc") {
           // Backward-compatible alias for the wmc/weightmc path.
           result = c.wmcCount(gate, "weightmc", args);
+          actual_method = "weightmc";
         } else if(method=="wmc") {
           // 'args' = "tool[;tool_args]". 'tool' selects which weighted model
           // counter to invoke (any registered wmc tool); 'tool_args'
@@ -524,6 +536,7 @@ static Datum probability_evaluate_internal
           std::string tool = (sep == std::string::npos) ? args : args.substr(0, sep);
           std::string tool_args = (sep == std::string::npos) ? std::string() : args.substr(sep + 1);
           result = c.wmcCount(gate, tool, tool_args);
+          actual_method = "wmc";
         } else if(method=="compilation" || method=="tree-decomposition"
                   || method=="interpret-as-dd" || method=="default"
                   || method=="") {
@@ -531,6 +544,11 @@ static Datum probability_evaluate_internal
                              method=="default" ? std::string() : method,
                              args);
           result = dd.probabilityEvaluation();
+          // makeDD auto-selects between tree-decomposition and a compiler
+          // fallback when no explicit method is given; report the requested
+          // method, defaulting the empty/"default" case to tree-decomposition.
+          actual_method = (method.empty() || method=="default")
+                            ? "tree-decomposition" : method;
         } else {
           provsql_error("Wrong method '%s' for probability evaluation", method.c_str());
         }
@@ -545,6 +563,19 @@ static Datum probability_evaluate_internal
     // pending, so CHECK_FOR_INTERRUPTS is a no-op and we report it as-is.
     CHECK_FOR_INTERRUPTS();
     provsql_error("%s", e.what());
+  }
+
+  // Record the method just used in provsql.last_eval_method (comma-separated,
+  // deduplicated across calls in the session) so callers can inspect which
+  // evaluation strategy the default auto-selection settled on.
+  if(!actual_method.empty()) {
+    string current = provsql_last_eval_method ? provsql_last_eval_method : "";
+    if(current.find(actual_method) == string::npos) {
+      if(!current.empty()) current += ",";
+      current += actual_method;
+      SetConfigOption("provsql.last_eval_method", current.c_str(),
+                      PGC_USERSET, PGC_S_SESSION);
+    }
   }
 
   provsql_interrupted = false;

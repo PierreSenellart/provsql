@@ -234,6 +234,11 @@ extern bool provsql_where_provenance;
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
 
+/** Global variable holding the probability evaluation method(s) used by the
+ * most recent probability_evaluate call, exposed via the
+ * provsql.last_eval_method run-time configuration parameter. */
+extern char *provsql_last_eval_method;
+
 /** Global flag controlling agg_token text output: when true,
  * agg_token_out emits the underlying provenance UUID instead of the
  * default "value (*)" display string. Driven by the

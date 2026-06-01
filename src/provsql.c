@@ -78,6 +78,7 @@ static bool provsql_active = true; ///< @c true while ProvSQL query rewriting is
 bool provsql_where_provenance = false;
 static bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
+char *provsql_last_eval_method = NULL; ///< Last probability evaluation method(s) used; exposed via @c provsql.last_eval_method
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC. Superuser-only (@c PGC_SUSET): it dictates which directories the postgres OS user searches for executables, so a non-privileged role must not be able to point it at an attacker-controlled binary.
 char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit::makeDD as the final fallback after @c interpretAsDD and tree-decomposition both fail; controlled by the @c provsql.fallback_compiler GUC (default @c "d4")
@@ -6725,6 +6726,21 @@ void _PG_init(void) {
                              &provsql_kcmcp_server,
                              "",
                              PGC_SIGHUP,
+                             0,
+                             NULL,
+                             NULL,
+                             NULL);
+  DefineCustomStringVariable("provsql.last_eval_method",
+                             "Probability evaluation method(s) used by the most "
+                             "recent probability_evaluate call.",
+                             "Set automatically after each probability_evaluate "
+                             "call to the method that produced the result "
+                             "(comma-separated and deduplicated across calls in "
+                             "the session).  Useful to see which strategy the "
+                             "default auto-selection settled on.",
+                             &provsql_last_eval_method,
+                             "",
+                             PGC_USERSET,
                              0,
                              NULL,
                              NULL,
