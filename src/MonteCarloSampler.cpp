@@ -418,6 +418,50 @@ double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples)
   return success * 1.0 / samples;
 }
 
+double monteCarloRVStopping(const GenericCircuit &gc, gate_t root,
+                            double eps, double delta,
+                            unsigned long max_samples,
+                            unsigned long &samples_used,
+                            bool &reached_target)
+{
+  samples_used = 0;
+  reached_target = false;
+  if(max_samples == 0)
+    return 0.;
+
+  // DKLR stopping threshold on the success count -- the S=1 Bernoulli case of
+  // BooleanCircuit::karpLubyStopping: draw whole-circuit worlds until the
+  // success count reaches Y1 and return Y1/N, a relative (eps,delta) estimate
+  // of Pr[root]; N adapts to the true Pr[root] (expected Y1/Pr[root]).
+  const double e  = std::exp(1.0);
+  const double Y  = 4.0 * (e - 2.0) * std::log(2.0 / delta) / (eps * eps);
+  const double Y1 = 1.0 + (1.0 + eps) * Y;
+
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  unsigned long success = 0;
+  for(unsigned long s = 0; s < max_samples; ++s) {
+    sampler.resetIteration();
+    if(sampler.evalBool(root)) {
+      ++success;
+      if(static_cast<double>(success) >= Y1) {
+        samples_used = s + 1;
+        reached_target = true;
+        return Y1 / static_cast<double>(samples_used);
+      }
+    }
+    if(provsql_interrupted)
+      throw CircuitException(
+              "Interrupted after " + std::to_string(s + 1) + " samples");
+  }
+
+  // Cap reached before the threshold: the relative target is not met, so return
+  // the plain unbiased mean over the spent budget.
+  samples_used = max_samples;
+  return static_cast<double>(success) / static_cast<double>(max_samples);
+}
+
 std::vector<double> monteCarloJointDistribution(
   const GenericCircuit &gc,
   const std::vector<gate_t> &cmps,

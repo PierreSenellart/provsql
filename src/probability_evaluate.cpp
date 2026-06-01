@@ -1093,7 +1093,8 @@ static Datum probability_evaluate_internal
    * wasn't able to close the gap.  HAVING-style cmps over gate_agg
    * don't contain gate_rv, so this check leaves them for
    * provsql_having. */
-  if (method != "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
+  if (method != "monte-carlo" && method != "stopping-rule"
+      && provsql::circuitHasRV(gc, gc_root)) {
     if (provsql_rv_mc_samples <= 0) {
       provsql_error(
         "probability_evaluate: a comparison over random variables "
@@ -1122,12 +1123,43 @@ static Datum probability_evaluate_internal
   prev_sigint_handler = signal(SIGINT, provsql_sigint_handler);
 
   try {
-    // RV-aware Monte Carlo: when the circuit contains continuous
-    // random-variable leaves, the BoolExpr translation in
-    // getBooleanCircuit drops them, so we sample directly on the
-    // GenericCircuit instead.  Other probability methods are not
-    // (yet) defined over RV circuits.
-    if(method == "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
+    // GenericCircuit-level samplers run before the BoolExpr translation in
+    // getBooleanCircuit (which drops gate_rv and rejects RV gate_cmp), so they
+    // sit at the top here rather than in the BooleanCircuit method catalog.
+    //
+    // stopping-rule: whole-circuit (eps,delta)-RELATIVE probability via the
+    // Dagum-Karp-Luby-Ross stopping rule, driven by the RV-aware sampler's
+    // evalBool -- the universal relative estimator (any circuit the sampler can
+    // evaluate: plain Boolean, continuous RV, HAVING agg/cmp).  Reuses the
+    // (eps,delta,max_samples) grammar shared with karp-luby.
+    if(method == "stopping-rule") {
+      SampleSpec s = parse_sample_spec(parse_method_args(args), "stopping-rule");
+      if(s.fixed)
+        provsql_error("method 'stopping-rule' is adaptive: give "
+                      "epsilon=E[,delta=D][,max_samples=M], not a fixed sample "
+                      "count");
+      // Default cap is a runtime budget (no clause count to bound it by, as
+      // karp-luby has): rare events below it report the additive guarantee
+      // achieved.  Raise max_samples for rarer events.
+      const unsigned long cap = s.has_max ? s.max_samples : 10000000UL;
+      unsigned long used = 0;
+      bool reached = false;
+      result = provsql::monteCarloRVStopping(gc, gc_root, s.eps, s.delta,
+                                             cap, used, reached);
+      if(reached || used == 0) {
+        emit_guarantee("relative", s.eps, s.delta, used, -1, "stopping-rule");
+      } else {
+        const double eps_add = sqrt(log(2.0 / 0.05) / (2.0 * used));
+        provsql_warning("method 'stopping-rule': reached the %lu-sample cap "
+                        "before the (epsilon=%g, delta=%g) relative target; "
+                        "reporting the additive guarantee at the samples spent "
+                        "(the event is likely rarer than this budget resolves -- "
+                        "raise max_samples)", cap, s.eps, s.delta);
+        emit_guarantee("additive", eps_add, 0.05, used, -1, "stopping-rule");
+      }
+      actual_method = "stopping-rule";
+    } else if(method == "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
+      // RV-aware (fixed-sample, additive) Monte Carlo.
       unsigned long samples = monte_carlo_samples(parse_method_args(args));
       result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
     } else {

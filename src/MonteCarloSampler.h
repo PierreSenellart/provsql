@@ -65,6 +65,41 @@ namespace provsql {
 double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples);
 
 /**
+ * @brief Whole-circuit @c (eps,delta)-relative probability via the
+ *        Dagum-Karp-Luby-Ross stopping rule.
+ *
+ * The general-Bernoulli case of @c BooleanCircuit::karpLubyStopping, driven by
+ * the RV-aware @c Sampler's @c evalBool rather than by DNF coverage trials, so
+ * it applies to ANY circuit the sampler can evaluate (plain Boolean, continuous
+ * @c gate_rv, and HAVING @c gate_cmp / @c gate_agg) -- the universal relative
+ * estimator.  Draws whole-circuit worlds until the success count reaches the
+ * threshold @c Y1 = 1 + (1+eps)*4*(e-2)*ln(2/delta)/eps^2, then returns
+ * @c Y1/N: a relative @c (eps,delta) approximation of @c Pr[root].  The sample
+ * count @c N adapts to the true @c Pr[root] (expected @c Y1/Pr[root]), so the
+ * cost is polynomial precisely when @c Pr[root] is at least @c 1/poly.
+ *
+ * Sampling stops early at @p max_samples worlds; @p reached_target is then
+ * @c false and the return is the plain unbiased @c success/N mean over the
+ * spent budget (the relative target was not met -- the caller reports the
+ * weaker, additive guarantee actually achieved).
+ *
+ * @param gc              The circuit.
+ * @param root            Gate to evaluate as a Boolean event.
+ * @param eps             Target relative error (in @c (0,1]).
+ * @param delta           Target failure probability (in @c (0,1)).
+ * @param max_samples     Hard cap on the number of worlds drawn.
+ * @param samples_used    Output: worlds actually drawn.
+ * @param reached_target  Output: whether the threshold was reached before the
+ *                        cap (i.e. the relative guarantee holds).
+ * @return                The probability estimate.
+ */
+double monteCarloRVStopping(const GenericCircuit &gc, gate_t root,
+                            double eps, double delta,
+                            unsigned long max_samples,
+                            unsigned long &samples_used,
+                            bool &reached_target);
+
+/**
  * @brief Walk the circuit reachable from @p root looking for any @c gate_rv.
  *
  * Used by @c probability_evaluate to dispatch between the existing
