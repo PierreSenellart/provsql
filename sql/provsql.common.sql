@@ -2001,6 +2001,73 @@ CREATE OPERATOR > (
   NEGATOR    = <=
 );
 
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
 /** @} */
 
 /** @defgroup random_variable_type Type for continuous random variables
@@ -4606,6 +4673,49 @@ CREATE AGGREGATE choose(ANYELEMENT) (
   SFUNC = choose_function,
   STYPE = ANYELEMENT
 );
+
+/** @brief Explodes a table column containing aggregated provenance into multiple rows.
+ *
+ *  For each row in the input table, this function unnests the children of the
+ *  specified aggregate token column and produces one output row per child.
+ *  It reconstructs the corresponding value and provenance (`provsql`) for
+ *  each resulting row.
+ *
+ *  The original table is replaced by the transformed table.
+ *
+ *  @param _tbl Name of the table to transform.
+ *  @param agg_token Name of the column containing the aggregate to explode.
+ */
+CREATE OR REPLACE FUNCTION explode_table(_tbl text, agg_token text)
+RETURNS void AS $$
+DECLARE
+  _nsp text;
+BEGIN
+    -- Resolve the schema actually holding _tbl so the rebuilt table is
+    -- recreated in place (the provsql helper functions are schema-qualified
+    -- so this works whatever the caller's search_path is).
+    SELECT n.nspname INTO _nsp
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.oid = _tbl::regclass;
+
+    EXECUTE format('
+    CREATE TABLE %1$I.temp_exploded AS
+    SELECT
+        %2$I.*,
+        provsql.get_extra(children[2]) AS new_t,
+        provsql.provenance_times(children[1], provsql) AS new_provsql
+    FROM %1$I.%2$I,
+    LATERAL (
+        SELECT provsql.get_children(sm) AS children
+        FROM UNNEST(provsql.get_children(%3$I)) AS sm
+    ) AS sub', _nsp, _tbl, agg_token);
+    EXECUTE format('DROP TABLE %I.%I', _nsp, _tbl);
+    EXECUTE format('ALTER TABLE %I.temp_exploded DROP COLUMN %I, DROP COLUMN provsql', _nsp, agg_token);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME COLUMN new_t TO %I', _nsp, agg_token);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME COLUMN new_provsql TO provsql', _nsp);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME TO %I', _nsp, _tbl);
+END;
+$$ LANGUAGE plpgsql;
 
 /** @} */
 

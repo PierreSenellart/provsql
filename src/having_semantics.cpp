@@ -90,6 +90,27 @@ bool semimod_extract_M_and_K(
   return true;
 }
 
+// String sibling of semimod_extract_M_and_K: extracts the gate_value's
+// extra as a raw string instead of parsing it as an int.  Used by the
+// agg_token-to-text comparison path.
+bool semimod_extract_string_and_K(
+  GenericCircuit &c,
+  gate_t semimod_gate,
+  std::string &m_out,
+  gate_t &k_gate_out)
+{
+  if (c.getGateType(semimod_gate) != gate_semimod) return false;
+
+  const auto &w = c.getWires(semimod_gate);
+  if (w.size() != 2) return false;
+
+  if (c.getGateType(w[1]) != gate_value) return false;
+  m_out = c.getExtra(w[1]);
+
+  k_gate_out = w[0];
+  return true;
+}
+
 // Extract constant C from possible encodings:
 // - gate_value("C")
 // - gate_semimod(C, gate_one)
@@ -133,6 +154,27 @@ bool extract_constant_double(GenericCircuit &c, gate_t x, double &C_out) {
   return true;
 }
 
+// String sibling of extract_constant_C: returns the gate_value's extra as a
+// raw string instead of parsing it as an int.  Used by the agg_token-to-text
+// comparison path.
+bool extract_constant_string(GenericCircuit &c, gate_t x, std::string &C_out) {
+  if (c.getGateType(x) != gate_semimod)
+    return false;
+
+  const auto &w = c.getWires(x);
+  if (w.size() != 2)
+    return false;
+
+  if (c.getGateType(w[0]) != gate_one)
+    return false;
+
+  if (c.getGateType(w[1]) != gate_value)
+    return false;
+
+  C_out = c.getExtra(w[1]);
+  return true;
+}
+
 // Collect cmp gates in the prov circuit
 std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start) {
   std::vector<gate_t> out;
@@ -154,9 +196,12 @@ std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start) {
         gate_t R = cw[1];
 
         int tmpC = 0;
+        std::string tmpC_str;
         bool is_candidate =
           (c.getGateType(L) == gate_agg && extract_constant_C(c, R, tmpC)) ||
-          (c.getGateType(R) == gate_agg && extract_constant_C(c, L, tmpC));
+          (c.getGateType(R) == gate_agg && extract_constant_C(c, L, tmpC)) ||
+          (c.getGateType(L) == gate_agg && extract_constant_string(c, R, tmpC_str)) ||
+          (c.getGateType(R) == gate_agg && extract_constant_string(c, L, tmpC_str));
 
         if (is_candidate)
           out.push_back(cur);

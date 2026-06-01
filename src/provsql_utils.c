@@ -422,6 +422,23 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_AGG_TOKEN_UUID = get_provsql_func_oid("agg_token_uuid");
   CheckOid(OID_FUNCTION_AGG_TOKEN_UUID);
 
+  /* The next two are used by the agg_token JOIN query rewriting. */
+  constants.OID_FUNCTION_GET_CHILDREN = get_provsql_func_oid("get_children");
+  CheckOid(OID_FUNCTION_GET_CHILDREN);
+
+  constants.OID_FUNCTION_GET_EXTRA = get_provsql_func_oid("get_extra");
+  CheckOid(OID_FUNCTION_GET_EXTRA);
+
+  /* Pick the unnest(anyarray) overload explicitly; PG 14+ also has
+   * unnest(anymultirange), which get_func_oid would pick up first on
+   * some versions. */
+  {
+    Oid argtypes[1] = { ANYARRAYOID };
+    constants.OID_UNNEST = LookupFuncName(list_make1(makeString("unnest")),
+                                          1, argtypes, true);
+  }
+  CheckOid(OID_UNNEST);
+
   /* random_variable type and its operator procedures will ship in
    * 1.5.0.  Older schemas (notably the 1.0.0 baseline used by
    * extension_upgrade) do not have them.  Treat each lookup as

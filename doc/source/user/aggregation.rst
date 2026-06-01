@@ -120,6 +120,74 @@ over the choice.
     FROM employees
     GROUP BY city;
 
+Comparing an aggregate with a text constant
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A ``HAVING`` clause may compare a text-valued aggregate with a text
+constant using ``=`` or ``<>``:
+
+.. code-block:: postgresql
+
+    SELECT city, provenance()
+    FROM employees
+    GROUP BY city
+    HAVING choose(position ORDER BY name) = 'Analyst';
+
+This is supported **only for** :sqlfunc:`choose`, which is *PICKFIRST*: in
+any possible world its value is the first surviving occurrence of the
+group. Because "first" depends on the order of the group's occurrences,
+make the result deterministic with an explicit in-aggregate ordering,
+``choose(col ORDER BY key)``; otherwise the physical scan order decides
+which occurrence wins. ProvSQL tracks exactly the worlds whose first
+occurrence (in that order) matches the constant. The provenance is
+computed in a single linear scan of the group, as
+
+.. math::
+
+    \bigoplus_{i\,:\,v_i \text{ matches}} k_i \otimes
+      \bigotimes_{j<i} (\mathbf{1} \ominus k_j),
+
+i.e. occurrence :math:`i` is present and every earlier occurrence is
+absent. This is exact even when the group's elements are **not** mutually
+exclusive, and runs in :math:`O(N)` time per group (:math:`N` the group
+size) for any m-semiring.
+
+Comparing any other aggregate (``min``, ``max``, ``sum``, …) with a text
+constant is **not** implemented and raises an error, since its
+possible-world value is not decided occurrence by occurrence.
+
+Joining and exploding aggregated provenance
+--------------------------------------------
+
+A column produced by an aggregate has the internal ``agg_token`` type.
+Two facilities let such a column take part in further provenance-aware
+processing.
+
+A ``JOIN`` whose condition equates an ``agg_token`` column with an
+ordinary (non-aggregate) column is rewritten automatically at plan time:
+the aggregated relation is replaced by a subquery that *explodes* the
+aggregate into one row per contributing child, recombining the child's
+value and provenance, so the join then runs as a plain ``text = text``
+comparison with provenance correctly propagated.
+
+.. code-block:: postgresql
+
+    -- agg.sample is an aggregate (agg_token) column; lookup.name is text
+    SELECT agg.city, lookup.name, provenance()
+    FROM (SELECT city, choose(position ORDER BY name) AS sample FROM employees GROUP BY city) agg
+    JOIN lookup ON agg.sample = lookup.name;
+
+The same explosion is available explicitly through the
+:sqlfunc:`explode_table` function, which rewrites a stored table in place,
+turning its ``agg_token`` column into one row per child with the matching
+value and provenance:
+
+.. code-block:: postgresql
+
+    CREATE TABLE grouped AS
+      SELECT city, choose(position ORDER BY name) AS sample FROM employees GROUP BY city;
+    SELECT explode_table('grouped', 'sample');
+
 Grouping Sets
 --------------
 

@@ -144,6 +144,9 @@ typedef struct constants_t {
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION
   Oid OID_FUNCTION_NOT_EQUAL_UUID; ///< OID of the = operator on UUIDs FUNCTION
   Oid OID_FUNCTION_AGG_TOKEN_UUID; ///< OID of the agg_token_uuid FUNCTION
+  Oid OID_FUNCTION_GET_CHILDREN; ///< OID of the get_children FUNCTION
+  Oid OID_FUNCTION_GET_EXTRA;    ///< OID of the get_extra FUNCTION
+  Oid OID_UNNEST; ///< OID of the unnest(anyarray) FUNCTION
   Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
   /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.

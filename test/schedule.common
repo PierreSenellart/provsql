@@ -40,6 +40,7 @@ test: having_on_aggregation
 test: formula_on_having
 test: where_on_aggregation
 test: choose
+test: agg_token_text
 test: empty_count
 
 # Adding probabilities

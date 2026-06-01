@@ -110,7 +110,15 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
 
   switch (type) {
     case gate_value:
-      result = Interval::point(parseDoubleStrict(gc.getExtra(g)));
+      /* A value RangeCheck cannot read as a double (e.g. a text constant
+       * from an agg_token = text comparison) carries no numeric interval
+       * constraint: leave it unconstrained rather than aborting the whole
+       * load-time pass.  Mirrors the "undecidable -> all()" default. */
+      try {
+        result = Interval::point(parseDoubleStrict(gc.getExtra(g)));
+      } catch (const CircuitException &) {
+        result = Interval::all();
+      }
       break;
     case gate_rv: {
       auto spec = parse_distribution_spec(gc.getExtra(g));
