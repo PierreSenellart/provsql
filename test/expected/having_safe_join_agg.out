@@ -1,0 +1,103 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+SUM >= 15|1|0.1945|0.1945|0.000000
+SUM >= 15|2|0.0570|0.0570|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+SUM <= 10|1|0.3766|0.3766|0.000000
+SUM <= 10|2|0.3868|0.3868|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+SUM = 7|1|0.0539|0.0539|0.000000
+SUM = 7|2|0.1002|0.1002|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+MAX >= 7|1|0.5536|0.5536|0.000000
+MAX >= 7|2|0.3087|0.3087|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+MAX <= 5|1|0.1987|0.1987|0.000000
+MAX <= 5|2|0.2170|0.2170|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+MAX = 7|1|0.1773|0.1773|0.000000
+MAX = 7|2|0.3087|0.3087|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+MIN <= 4|1|0.4705|0.4705|0.000000
+MIN <= 4|2|0.2583|0.2583|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+MIN >= 5|1|0.2817|0.2817|0.000000
+MIN >= 5|2|0.2674|0.2674|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+MIN <> 3|1|0.5144|0.5144|0.000000
+MIN <> 3|2|0.2674|0.2674|0.000000
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+d2 SUM >= 12|1|0.0184|0.0184|0.000000
+d2 SUM >= 12|2|0.0657|0.0657|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+d2 MAX >= 8|1|0.0920|0.0920|0.000000
+d2 MAX >= 8|2|0.1728|0.1728|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+d2 MIN <= 4|1|0.0720|0.0720|0.000000
+d2 MIN <= 4|2|0.1368|0.1368|0.000000
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+tri SUM >= 20|1|0.1484|0.1484|0.000000
+(1 row)
+shape|g|p_off|p_on|diff
+tri MAX >= 15|1|0.1250|0.1250|0.000000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

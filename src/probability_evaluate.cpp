@@ -735,11 +735,11 @@ static Datum probability_evaluate_internal
     count_cmp_resolved = provsql::runCountCmpEvaluator(gc);
     minmax_cmp_resolved = provsql::runMinMaxCmpEvaluator(gc);
     sum_cmp_resolved = provsql::runSumCmpEvaluator(gc);
-    /* Safe-join COUNT: the marginal-vector engine for the fan-out shapes
-     * the flat Poisson-binomial above cannot certify independent.  Runs
-     * last so it only ever sees the join-shaped cmps the flat pass left
-     * behind. */
-    agg_marginal_resolved = provsql::runAggMarginalCountEvaluator(gc);
+    /* Safe-join COUNT / SUM / MIN / MAX: the hierarchical marginal-vector
+     * engine for the join shapes the flat pre-passes above cannot certify
+     * independent.  Runs last so it only ever sees the join-shaped cmps
+     * the flat passes left behind. */
+    agg_marginal_resolved = provsql::runAggMarginalEvaluator(gc);
   }
 
   /* Always-true HAVING rewrite (runs regardless of the Poisson-binomial
@@ -774,7 +774,7 @@ static Datum probability_evaluate_internal
     if (sum_cmp_resolved > 0)
       parts.push_back(std::to_string(sum_cmp_resolved) + " weighted-sum");
     if (agg_marginal_resolved > 0)
-      parts.push_back(std::to_string(agg_marginal_resolved) + " safe-join COUNT");
+      parts.push_back(std::to_string(agg_marginal_resolved) + " safe-join aggregate");
     if (always_true_resolved > 0)
       parts.push_back(std::to_string(always_true_resolved) + " always-true");
     std::string breakdown;

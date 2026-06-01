@@ -1,8 +1,8 @@
 /**
  * @file AggMarginalEvaluator.cpp
- * @brief Implementation of the safe-join COUNT marginal-vector pre-pass.
- *        See @c AggMarginalEvaluator.h for the full docstring and the
- *        soundness argument.
+ * @brief Implementation of the safe-join aggregate marginal-vector pre-pass
+ *        (COUNT / SUM / MIN / MAX).  See @c AggMarginalEvaluator.h for the
+ *        full docstring and the soundness argument.
  */
 #include "AggMarginalEvaluator.h"
 
@@ -81,6 +81,67 @@ struct UnionFind {
   }
   void unite(int a, int b) { parent[find(a)] = find(b); }
 };
+
+/* Partition contributor indices into independence blocks: two
+ * contributors are in the same block iff they (transitively) share a
+ * leaf.  Independent blocks are combined by the aggregate's monoid; the
+ * sharing inside a block is resolved by recursion. */
+static std::vector<std::vector<int>> independenceBlocks(
+    const std::vector<std::vector<gate_t>> &contribs)
+{
+  const std::size_t n = contribs.size();
+  UnionFind uf(static_cast<int>(n));
+  std::map<gate_t, int> first_owner;
+  for (std::size_t i = 0; i < n; ++i)
+    for (gate_t l : contribs[i]) {
+      auto it = first_owner.find(l);
+      if (it == first_owner.end()) first_owner[l] = static_cast<int>(i);
+      else uf.unite(static_cast<int>(i), it->second);
+    }
+  std::map<int, std::vector<int>> bmap;
+  for (std::size_t i = 0; i < n; ++i)
+    bmap[uf.find(static_cast<int>(i))].push_back(static_cast<int>(i));
+  std::vector<std::vector<int>> blocks;
+  blocks.reserve(bmap.size());
+  for (auto &kv : bmap) blocks.push_back(std::move(kv.second));
+  return blocks;
+}
+
+/* Leaves common to *every* member of a block (this hierarchy level's
+ * shared root event); empty when the members have no leaf in common,
+ * which marks a non-laminar (non-hierarchical) structure. */
+static std::vector<gate_t> commonLeaves(
+    const std::vector<std::vector<gate_t>> &contribs,
+    const std::vector<int> &members)
+{
+  std::vector<gate_t> common = contribs[members[0]];
+  for (std::size_t mi = 1; mi < members.size() && !common.empty(); ++mi) {
+    std::vector<gate_t> tmp;
+    std::set_intersection(common.begin(), common.end(),
+                          contribs[members[mi]].begin(),
+                          contribs[members[mi]].end(),
+                          std::back_inserter(tmp));
+    common.swap(tmp);
+  }
+  return common;
+}
+
+/* Per-member residual leaf sets after removing this level's common root
+ * leaves -- the structure one hierarchy level deeper. */
+static std::vector<std::vector<gate_t>> residualsOf(
+    const std::vector<std::vector<gate_t>> &contribs,
+    const std::vector<int> &members, const std::vector<gate_t> &common)
+{
+  std::vector<std::vector<gate_t>> residuals;
+  residuals.reserve(members.size());
+  for (int m : members) {
+    std::vector<gate_t> r;
+    std::set_difference(contribs[m].begin(), contribs[m].end(),
+                        common.begin(), common.end(), std::back_inserter(r));
+    residuals.push_back(std::move(r));
+  }
+  return residuals;
+}
 
 /* Convolution of two count PMFs (independent sum of the two counts). */
 static std::vector<double> convolve(const std::vector<double> &a,
@@ -214,9 +275,169 @@ static double prFromPMF(const std::vector<double> &pmf,
   return pr;
 }
 
+/* ------------------------------------------------------------------ *
+ * MIN / MAX
+ * ------------------------------------------------------------------ *
+ * P(every contributor's lineage is false) over a hierarchical set --
+ * the scalar version of countPMF[0].  Independent blocks multiply; a
+ * singleton block contributes (1 - product of its leaves); a
+ * multi-member block is absent iff its shared root is absent, or the
+ * root is present and all residuals are absent.  Clears @p ok on a
+ * non-laminar block (no common leaf).  Every MIN/MAX HAVING predicate
+ * reduces to a few calls of this on value-thresholded subsets, which is
+ * the hierarchical generalisation of MinMaxCmpEvaluator's @c qprod
+ * (product of @c 1-p_i over the matching independent children). */
+static double pAllAbsent(GenericCircuit &gc,
+                         std::vector<std::vector<gate_t>> contribs, bool &ok)
+{
+  if (contribs.empty()) return 1.0;
+  double result = 1.0;
+  for (const auto &members : independenceBlocks(contribs)) {
+    double block_absent;
+    if (members.size() == 1) {
+      double q = 1.0;
+      for (gate_t l : contribs[members[0]]) q *= gc.getProb(l);
+      block_absent = 1.0 - q;
+    } else {
+      std::vector<gate_t> common = commonLeaves(contribs, members);
+      if (common.empty()) { ok = false; return 0.0; }    /* non-hierarchical */
+      double p_root = 1.0;
+      for (gate_t l : common) p_root *= gc.getProb(l);
+      double inner = pAllAbsent(gc, residualsOf(contribs, members, common), ok);
+      if (!ok) return 0.0;
+      block_absent = (1.0 - p_root) + p_root * inner;
+    }
+    result *= block_absent;
+  }
+  return result;
+}
+
+/* P(MIN/MAX(value) op C) over a hierarchical contributor set, empty
+ * group excluded (a group with no present contributor has no min/max).
+ * Each operator is a small combination of pAllAbsent over the subset of
+ * contributors whose value satisfies a threshold predicate -- exactly
+ * the decomposition in MinMaxCmpEvaluator, but with pAllAbsent in place
+ * of the independent-only qprod, so it is exact on safe joins too. */
+static double minMaxProb(GenericCircuit &gc,
+                         const std::vector<std::vector<gate_t>> &leaves,
+                         const std::vector<int> &vals,
+                         AggregationOperator agg, ComparisonOperator op,
+                         int C, bool &ok)
+{
+  /* P(all contributors whose value satisfies @p pred are absent). */
+  auto pAbsentWhere = [&](auto pred) -> double {
+    std::vector<std::vector<gate_t>> sub;
+    for (std::size_t i = 0; i < leaves.size(); ++i)
+      if (pred(vals[i])) sub.push_back(leaves[i]);
+    return pAllAbsent(gc, std::move(sub), ok);
+  };
+
+  const double allAbsent = pAbsentWhere([](int) { return true; });
+  double pr = 0.0;
+
+  if (agg == AggregationOperator::MAX) {
+    switch (op) {
+      case ComparisonOperator::GE: pr = 1.0 - pAbsentWhere([&](int v){return v >= C;}); break;
+      case ComparisonOperator::GT: pr = 1.0 - pAbsentWhere([&](int v){return v >  C;}); break;
+      case ComparisonOperator::LE: pr = pAbsentWhere([&](int v){return v >  C;}) - allAbsent; break;
+      case ComparisonOperator::LT: pr = pAbsentWhere([&](int v){return v >= C;}) - allAbsent; break;
+      case ComparisonOperator::EQ: pr = pAbsentWhere([&](int v){return v >  C;})
+                                      - pAbsentWhere([&](int v){return v >= C;}); break;
+      case ComparisonOperator::NE: pr = (1.0 - allAbsent)
+                                      - (pAbsentWhere([&](int v){return v >  C;})
+                                       - pAbsentWhere([&](int v){return v >= C;})); break;
+    }
+  } else {  /* MIN */
+    switch (op) {
+      case ComparisonOperator::LE: pr = 1.0 - pAbsentWhere([&](int v){return v <= C;}); break;
+      case ComparisonOperator::LT: pr = 1.0 - pAbsentWhere([&](int v){return v <  C;}); break;
+      case ComparisonOperator::GE: pr = pAbsentWhere([&](int v){return v <  C;}) - allAbsent; break;
+      case ComparisonOperator::GT: pr = pAbsentWhere([&](int v){return v <= C;}) - allAbsent; break;
+      case ComparisonOperator::EQ: pr = pAbsentWhere([&](int v){return v <  C;})
+                                      - pAbsentWhere([&](int v){return v <= C;}); break;
+      case ComparisonOperator::NE: pr = (1.0 - allAbsent)
+                                      - (pAbsentWhere([&](int v){return v <  C;})
+                                       - pAbsentWhere([&](int v){return v <= C;})); break;
+    }
+  }
+  return pr;
+}
+
+/* ------------------------------------------------------------------ *
+ * SUM
+ * ------------------------------------------------------------------ *
+ * Reachable-sum support cap (Remark 3 pseudo-polynomial caveat): bail
+ * when the sparse sum distribution would exceed this many distinct
+ * values. */
+constexpr std::size_t kMaxSumSupport = 1u << 20;
+
+/* Does integer sum @p s satisfy @p s op C ?  Mirrors SumCmpEvaluator. */
+static bool sumSatisfies(long s, ComparisonOperator op, long C)
+{
+  switch (op) {
+    case ComparisonOperator::EQ: return s == C;
+    case ComparisonOperator::NE: return s != C;
+    case ComparisonOperator::LE: return s <= C;
+    case ComparisonOperator::LT: return s <  C;
+    case ComparisonOperator::GE: return s >= C;
+    case ComparisonOperator::GT: return s >  C;
+  }
+  return false;
+}
+
+/* Distribution of SUM(value) over a hierarchical contributor set, as a
+ * sparse map sum -> probability.  Same recursion as countPMF, but a
+ * present contributor adds its weight @p weights[i] (not 1), so blocks
+ * combine by additive convolution over the (possibly negative) integer
+ * sum domain.  COUNT is the all-weights-1 instance; this carries the
+ * weighted case.  Clears @p ok on a non-laminar block or when the
+ * support exceeds @c kMaxSumSupport. */
+static std::map<long, double> sumPMF(GenericCircuit &gc,
+                                     std::vector<std::vector<gate_t>> contribs,
+                                     std::vector<long> weights, bool &ok)
+{
+  std::map<long, double> total;
+  total[0] = 1.0;                                  /* δ_0 */
+  if (contribs.empty()) return total;
+
+  for (const auto &members : independenceBlocks(contribs)) {
+    std::map<long, double> blockPMF;
+    if (members.size() == 1) {
+      double q = 1.0;
+      for (gate_t l : contribs[members[0]]) q *= gc.getProb(l);
+      blockPMF[0]                += 1.0 - q;        /* absent: contributes 0 */
+      blockPMF[weights[members[0]]] += q;           /* present: contributes w */
+    } else {
+      std::vector<gate_t> common = commonLeaves(contribs, members);
+      if (common.empty()) { ok = false; return {}; }
+      double p_root = 1.0;
+      for (gate_t l : common) p_root *= gc.getProb(l);
+
+      std::vector<std::vector<gate_t>> residuals =
+        residualsOf(contribs, members, common);
+      std::vector<long> rweights;
+      rweights.reserve(members.size());
+      for (int m : members) rweights.push_back(weights[m]);
+
+      std::map<long, double> inner =
+        sumPMF(gc, std::move(residuals), std::move(rweights), ok);
+      if (!ok) return {};
+      for (const auto &kv : inner) blockPMF[kv.first] += p_root * kv.second;
+      blockPMF[0] += (1.0 - p_root);                /* root absent: sum 0 */
+    }
+    std::map<long, double> ntotal;
+    for (const auto &a : total)
+      for (const auto &b : blockPMF)
+        ntotal[a.first + b.first] += a.second * b.second;
+    if (ntotal.size() > kMaxSumSupport) { ok = false; return {}; }
+    total.swap(ntotal);
+  }
+  return total;
+}
+
 }  // namespace
 
-unsigned runAggMarginalCountEvaluator(GenericCircuit &gc)
+unsigned runAggMarginalEvaluator(GenericCircuit &gc)
 {
   unsigned resolved = 0;
   const auto nb = gc.getNbGates();
@@ -237,13 +458,12 @@ unsigned runAggMarginalCountEvaluator(GenericCircuit &gc)
     AggCmpMatch match;
     if (!matchAggCmp(gc, cmp, match))
       continue;
-    if (match.agg_kind != AggregationOperator::COUNT)
-      continue;
-    {
-      bool all_one = true;
-      for (int m : match.ms) if (m != 1) { all_one = false; break; }
-      if (!all_one) continue;            /* weighted COUNT: SUM's job */
-    }
+    const AggregationOperator agg_kind = match.agg_kind;
+    if (agg_kind != AggregationOperator::COUNT &&
+        agg_kind != AggregationOperator::SUM   &&
+        agg_kind != AggregationOperator::MIN   &&
+        agg_kind != AggregationOperator::MAX)
+      continue;                          /* AVG and others: out of scope */
 
     const gate_t agg = match.agg;
     const auto &semimods = match.semimods;
@@ -252,7 +472,7 @@ unsigned runAggMarginalCountEvaluator(GenericCircuit &gc)
 
     /* The aggregate and each wrapper must be consumed by this cmp / agg
      * alone, exactly as in CountCmpEvaluator: a shared agg would couple
-     * two HAVING comparators over the same count. */
+     * two HAVING comparators over the same aggregate. */
     if (ref[static_cast<std::size_t>(agg)] != 1) continue;
     bool ok = true;
     for (gate_t sm : semimods)
@@ -278,18 +498,42 @@ unsigned runAggMarginalCountEvaluator(GenericCircuit &gc)
       if (ref[static_cast<std::size_t>(kv.first)] != kv.second) { ok = false; break; }
     if (!ok) continue;
 
-    /* Recursively compute the count PMF over the contributors.  Handles
-     * arbitrary hierarchical (laminar) depth: each independence block
-     * factors out the leaves common to every member (this level's shared
-     * root event) and recurses on the per-member residuals, combining
-     * independent blocks by convolution.  A multi-member block with no
-     * common leaf is non-hierarchical and clears @c ok, bailing the whole
-     * cmp to exact enumeration. */
-    std::vector<double> total = countPMF(gc, leaves, ok);
-    if (!ok) continue;
-    if (total.empty()) continue;        /* defensive: no contributors */
+    /* Dispatch on the aggregate; each arm computes the exact probability
+     * over the hierarchical (laminar) contributor structure, recursing
+     * through shared root events.  A non-laminar shape clears @c ok and
+     * the cmp falls back to exact enumeration. */
+    double pr;
+    if (agg_kind == AggregationOperator::COUNT) {
+      std::vector<double> total = countPMF(gc, leaves, ok);
+      if (!ok) continue;
+      pr = prFromPMF(total, match.op, match.C);
+    } else if (agg_kind == AggregationOperator::SUM) {
+      /* Reachable-sum range cap (Remark 3 pseudo-polynomial caveat):
+       * reject up front when the weight span is too wide for a closed
+       * form, regardless of structure. */
+      long lo = 0, hi = 0;
+      for (int m : match.ms) { if (m < 0) lo += m; else hi += m; }
+      if (hi - lo + 1 > static_cast<long>(kMaxSumSupport)) continue;
 
-    double pr = prFromPMF(total, match.op, match.C);
+      std::vector<long> weights(match.ms.begin(), match.ms.end());
+      std::map<long, double> dist = sumPMF(gc, leaves, std::move(weights), ok);
+      if (!ok) continue;
+      pr = 0.0;
+      for (const auto &kv : dist)
+        if (sumSatisfies(kv.first, match.op, match.C)) pr += kv.second;
+      /* Exclude the empty group: its sum is 0, so subtract its mass when
+       * 0 satisfies the predicate (a non-empty group that happens to sum
+       * to 0 stays). */
+      if (sumSatisfies(0, match.op, match.C)) {
+        double emptyMass = pAllAbsent(gc, leaves, ok);
+        if (!ok) continue;
+        pr -= emptyMass;
+      }
+    } else {  /* MIN or MAX */
+      pr = minMaxProb(gc, leaves, match.ms, agg_kind, match.op, match.C, ok);
+      if (!ok) continue;
+    }
+
     if (pr < 0.0) pr = 0.0;
     if (pr > 1.0) pr = 1.0;
 

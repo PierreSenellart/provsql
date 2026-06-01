@@ -55,18 +55,22 @@
 namespace provsql {
 
 /**
- * @brief Run the safe-join COUNT marginal-vector pre-pass over @p gc.
+ * @brief Run the safe-join aggregate marginal-vector pre-pass over @p gc.
  *
- * For every @c gate_cmp matching the hierarchical-join COUNT shape (see file
- * docstring) computes the comparator's exact probability by the recursive
- * block mixture + convolution and replaces the cmp by a Bernoulli
- * @c gate_input via @c GenericCircuit::resolveCmpToBernoulli.  Leaves every
- * other cmp untouched.
+ * For every @c gate_cmp matching the hierarchical-join shape (see file
+ * docstring) over @c COUNT / @c SUM / @c MIN / @c MAX, computes the
+ * comparator's exact probability through the recursive hierarchical engine
+ * and replaces the cmp by a Bernoulli @c gate_input via
+ * @c GenericCircuit::resolveCmpToBernoulli.  Leaves every other cmp
+ * untouched.  COUNT / SUM use the count/weighted-sum distribution
+ * (block mixture + additive convolution); MIN / MAX reduce to a handful of
+ * "all of a value-thresholded subset absent" probabilities over the same
+ * hierarchical recursion.
  *
  * @param gc  Circuit to mutate in place.
  * @return    Number of comparators resolved by this pass.
  */
-unsigned runAggMarginalCountEvaluator(GenericCircuit &gc);
+unsigned runAggMarginalEvaluator(GenericCircuit &gc);
 
 }  // namespace provsql
 
