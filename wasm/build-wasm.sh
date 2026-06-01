@@ -28,8 +28,18 @@ fi
 echo "==> container=$CONTAINER  image=$IMG"
 echo "==> build dir=$BUILD"
 
-# 1. Generate the extension SQL the WASM build packages (native make).
-make -C "$REPO" sql/provsql.sql
+# 1. Build natively first.  This is both a fast "does it still compile on the
+#    host" gate before the expensive WASM round AND, crucially, what brings the
+#    *packaged* generated artifacts up to date: build-extension.sh ships
+#    provsql.control and sql/provsql--<version>.sql, which are generated
+#    (gitignored) from provsql.common.control / provsql.*.sql.  A bare
+#    `make sql/provsql.sql` regenerates only provsql.sql and leaves a stale
+#    control + per-version install script on disk (e.g. after a default_version
+#    bump), so the bundle would ship SQL predating recent additions.  The
+#    default target regenerates the whole DATA set (control, per-version install
+#    script, upgrade scripts) plus the native .so.  The PGXS build is
+#    parallel-safe, so build it with -j (nproc on Linux, hw.ncpu on macOS).
+make -C "$REPO" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
 # 2. Pull the pinned Emscripten builder image and the matched PGlite tree.
 "$CONTAINER" pull "$IMG"
