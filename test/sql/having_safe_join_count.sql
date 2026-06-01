@@ -112,6 +112,40 @@ DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sj_jt; END $$;
 SELECT * FROM sj_parity('subquery >= 2', 'SELECT k g, probability_evaluate(provenance()) p FROM (SELECT sj_r.k, sj_s.b FROM sj_r JOIN sj_s ON sj_r.a=sj_s.a) sub JOIN sj_jt ON sub.b=sj_jt.b GROUP BY k HAVING count(*) >= 2');
 SELECT * FROM sj_parity('subquery <= 3', 'SELECT k g, probability_evaluate(provenance()) p FROM (SELECT sj_r.k, sj_s.b FROM sj_r JOIN sj_s ON sj_r.a=sj_s.a) sub JOIN sj_jt ON sub.b=sj_jt.b GROUP BY k HAVING count(*) <= 3');
 
+-- Cross-product / product-join R(a),S(a,b),T(a,c): safe but NOT laminar --
+-- after factoring the shared R(a), the residuals form a complete
+-- leaf-disjoint product, so count = N_S * N_T.  The engine must recognise
+-- this on the circuit (no S-S-style middle leaf links the two branches)
+-- and fire, unlike the h0 case below.  sj_pu adds a third independent
+-- branch (count = N_S * N_T * N_U).
+CREATE TABLE sj_pr(a int);
+CREATE TABLE sj_ps(a int, b int);
+CREATE TABLE sj_pt(a int, c int);
+CREATE TABLE sj_pu(a int, d int);
+INSERT INTO sj_pr VALUES (1),(2);
+INSERT INTO sj_ps VALUES (1,10),(1,20),(2,30);
+INSERT INTO sj_pt VALUES (1,100),(1,200),(2,300);
+INSERT INTO sj_pu VALUES (1,7),(1,8),(2,9);
+SELECT add_provenance('sj_pr');
+SELECT add_provenance('sj_ps');
+SELECT add_provenance('sj_pt');
+SELECT add_provenance('sj_pu');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sj_pr; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sj_ps; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sj_pt; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sj_pu; END $$;
+
+SELECT * FROM sj_parity('xprod >= 2', 'SELECT sj_pr.a g, probability_evaluate(provenance()) p FROM sj_pr, sj_ps, sj_pt WHERE sj_pr.a=sj_ps.a AND sj_pr.a=sj_pt.a GROUP BY sj_pr.a HAVING count(*) >= 2');
+SELECT * FROM sj_parity('xprod = 4',  'SELECT sj_pr.a g, probability_evaluate(provenance()) p FROM sj_pr, sj_ps, sj_pt WHERE sj_pr.a=sj_ps.a AND sj_pr.a=sj_pt.a GROUP BY sj_pr.a HAVING count(*) = 4');
+SELECT * FROM sj_parity('xprod <= 2', 'SELECT sj_pr.a g, probability_evaluate(provenance()) p FROM sj_pr, sj_ps, sj_pt WHERE sj_pr.a=sj_ps.a AND sj_pr.a=sj_pt.a GROUP BY sj_pr.a HAVING count(*) <= 2');
+SELECT * FROM sj_parity('3factor >= 4', 'SELECT sj_pr.a g, probability_evaluate(provenance()) p FROM sj_pr, sj_ps, sj_pt, sj_pu WHERE sj_pr.a=sj_ps.a AND sj_pr.a=sj_pt.a AND sj_pr.a=sj_pu.a GROUP BY sj_pr.a HAVING count(*) >= 4');
+
+-- Incomplete product: a predicate that drops one (b,c) combination links
+-- the two branches, so the contributors are NOT a complete product (the
+-- #P-hard bipartite case).  The completeness check must fail and the
+-- engine decline -- off and on still agree (via enumeration).
+SELECT * FROM sj_parity('xprod filtered', 'SELECT sj_pr.a g, probability_evaluate(provenance()) p FROM sj_pr, sj_ps, sj_pt WHERE sj_pr.a=sj_ps.a AND sj_pr.a=sj_pt.a AND NOT (sj_ps.b = 10 AND sj_pt.c = 100) GROUP BY sj_pr.a HAVING count(*) >= 2');
+
 -- Non-hierarchical triangle R(x),S(x,y),T(y): the engine must DECLINE
 -- (no leaf common to all members of the block) and fall back to exact
 -- enumeration, so off and on still agree.
@@ -151,8 +185,12 @@ SELECT remove_provenance('sj_acct');
 SELECT remove_provenance('sj_ord');
 SELECT remove_provenance('sj_item');
 SELECT remove_provenance('sj_jt');
+SELECT remove_provenance('sj_pr');
+SELECT remove_provenance('sj_ps');
+SELECT remove_provenance('sj_pt');
+SELECT remove_provenance('sj_pu');
 SELECT remove_provenance('sj_rr');
 SELECT remove_provenance('sj_ss');
 SELECT remove_provenance('sj_tt');
 SELECT remove_provenance('sj_flat');
-DROP TABLE sj_r, sj_s, sj_f, sj_d1, sj_d2, sj_acct, sj_ord, sj_item, sj_jt, sj_rr, sj_ss, sj_tt, sj_flat;
+DROP TABLE sj_r, sj_s, sj_f, sj_d1, sj_d2, sj_acct, sj_ord, sj_item, sj_jt, sj_pr, sj_ps, sj_pt, sj_pu, sj_rr, sj_ss, sj_tt, sj_flat;

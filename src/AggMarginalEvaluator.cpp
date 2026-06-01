@@ -210,6 +210,105 @@ static std::vector<double> convolve(const std::vector<double> &a,
   return r;
 }
 
+/* Distribution of the product of two independent non-negative integer
+ * counts: r[a*b] += A[a]*B[b].  Combines the per-factor count PMFs of a
+ * Cartesian-product block (count = N_1 · N_2 · ...). */
+static std::vector<double> productConvolve(const std::vector<double> &a,
+                                           const std::vector<double> &b)
+{
+  if (a.empty() || b.empty()) return {};
+  const std::size_t amax = a.size() - 1, bmax = b.size() - 1;
+  std::vector<double> r(amax * bmax + 1, 0.0);
+  for (std::size_t i = 0; i <= amax; ++i) {
+    if (a[i] == 0.0) continue;
+    for (std::size_t j = 0; j <= bmax; ++j)
+      r[i * j] += a[i] * b[j];
+  }
+  return r;
+}
+
+/* Try to decompose a connected, common-less block into independent
+ * Cartesian-product factors.  Two leaves share a factor iff they NEVER
+ * co-occur in a contributor (united below); the factors are those
+ * classes.  On success the block's contributors are exactly the complete
+ * Cartesian product of the per-factor distinct parts, so the block count
+ * is the product of the per-factor counts.  Returns one entry per factor
+ * (its distinct parts, each a sorted sub-contributor leaf set), or an
+ * empty vector when the block is not a complete leaf-disjoint product.
+ *
+ * This is what separates the safe cross-product (R(a),S(a,b),T(a,c) →
+ * count = N_S·N_T) from the #P-hard h0 / triangle: h0 carries a private
+ * "middle" leaf (the S(x,y) tuple, in exactly one contributor) that makes
+ * leaves of different branches never co-occur, collapsing the factor
+ * partition to one class and/or breaking |contributors| = ∏|parts|.  The
+ * cross-product has no middle relation, so its branch leaves always
+ * co-occur (completeness) and stay in separate factors.
+ *
+ * Soundness is a circuit-level fact independent of the query: a complete
+ * leaf-disjoint product means each contributor is one part per factor,
+ * present iff all its parts are; parts of distinct factors are
+ * leaf-disjoint hence independent, so count = ∏ N_i exactly. */
+static std::vector<std::vector<std::vector<gate_t>>> tryProductFactors(
+    const std::vector<std::vector<gate_t>> &contribs,
+    const std::vector<int> &members)
+{
+  /* Index the block's leaves. */
+  std::vector<gate_t> L;
+  for (int m : members) for (gate_t l : contribs[m]) L.push_back(l);
+  std::sort(L.begin(), L.end());
+  L.erase(std::unique(L.begin(), L.end()), L.end());
+  std::map<gate_t, int> idx;
+  for (std::size_t i = 0; i < L.size(); ++i) idx[L[i]] = static_cast<int>(i);
+  const int nl = static_cast<int>(L.size());
+
+  /* Co-occurrence: cooc[u][v] iff some member contains both leaves. */
+  std::vector<std::vector<char>> cooc(nl, std::vector<char>(nl, 0));
+  for (int m : members) {
+    const auto &cl = contribs[m];
+    for (std::size_t i = 0; i < cl.size(); ++i)
+      for (std::size_t j = i + 1; j < cl.size(); ++j) {
+        int a = idx[cl[i]], b = idx[cl[j]];
+        cooc[a][b] = cooc[b][a] = 1;
+      }
+  }
+
+  /* Factors = connected components under "never co-occur". */
+  UnionFind uf(nl);
+  for (int u = 0; u < nl; ++u)
+    for (int v = u + 1; v < nl; ++v)
+      if (!cooc[u][v]) uf.unite(u, v);
+  std::map<int, int> factorId;
+  for (int u = 0; u < nl; ++u)
+    factorId.emplace(uf.find(u), static_cast<int>(factorId.size()));
+  const int nf = static_cast<int>(factorId.size());
+  if (nf < 2) return {};                /* single class: not a product */
+
+  /* Project each member onto each factor; collect distinct parts.  A
+   * member missing a factor is not a clean product. */
+  std::vector<std::set<std::vector<gate_t>>> parts(nf);
+  for (int m : members) {
+    std::vector<std::vector<gate_t>> proj(nf);
+    for (gate_t l : contribs[m])               /* member leaves are sorted */
+      proj[factorId[uf.find(idx[l])]].push_back(l);
+    for (int f = 0; f < nf; ++f) {
+      if (proj[f].empty()) return {};
+      parts[f].insert(std::move(proj[f]));
+    }
+  }
+
+  /* Completeness: |contributors| == product of per-factor part counts.
+   * With the projection map injective (member = union of its parts), this
+   * forces a bijection onto the full Cartesian product. */
+  std::size_t prod = 1;
+  for (int f = 0; f < nf; ++f) prod *= parts[f].size();
+  if (prod != members.size()) return {};
+
+  std::vector<std::vector<std::vector<gate_t>>> result(nf);
+  for (int f = 0; f < nf; ++f)
+    result[f].assign(parts[f].begin(), parts[f].end());
+  return result;
+}
+
 /* Recursive count distribution over a set of product-of-leaves
  * contributors coupled only through a laminar (hierarchical) leaf-sharing
  * structure.  Returns the PMF @c m[c] = Pr(exactly c contributors present),
@@ -223,11 +322,14 @@ static std::vector<double> convolve(const std::vector<double> &a,
  *    (union-find); independent blocks combine by convolution (the ⊛^+
  *    combinator);
  *  - a singleton block is a Bernoulli over the product of its leaves;
- *  - a multi-member block factors out the leaves common to EVERY member
- *    (the shared root event of this hierarchy level); the block count is
- *    then the disjoint mixture  (1-p_root)·δ_0 + p_root·inner  (the ⊥
- *    combinator), where @c inner is countPMF applied recursively to the
- *    per-member residual leaf sets (one level deeper).
+ *  - a multi-member block with a leaf common to EVERY member factors out
+ *    that shared root event: the block count is the disjoint mixture
+ *    (1-p_root)·δ_0 + p_root·inner  (the ⊥ combinator), with @c inner the
+ *    recursion on the per-member residual leaf sets (one level deeper);
+ *  - a multi-member block with no common leaf is either a Cartesian
+ *    product of independent factors (the join node: count = ∏ N_i,
+ *    @c tryProductFactors + @c productConvolve) or a genuinely non-laminar
+ *    tangle (h0 / triangle), which clears @p ok and bails.
  * Each recursion strips at least the common leaves, so the total leaf
  * count strictly decreases and the recursion terminates.  Depth-1 fan-out
  * is the case where every residual is a single leaf (inner becomes the
@@ -267,37 +369,33 @@ static std::vector<double> countPMF(GenericCircuit &gc,
       for (gate_t l : contribs[members[0]]) q *= gc.getProb(l);
       blockPMF = std::vector<double>{1.0 - q, q};
     } else {
-      /* Factor out the leaves common to every member (this level's root). */
-      std::vector<gate_t> common = contribs[members[0]];
-      for (std::size_t mi = 1; mi < members.size() && !common.empty(); ++mi) {
-        std::vector<gate_t> tmp;
-        std::set_intersection(common.begin(), common.end(),
-                              contribs[members[mi]].begin(),
-                              contribs[members[mi]].end(),
-                              std::back_inserter(tmp));
-        common.swap(tmp);
+      std::vector<gate_t> common = commonLeaves(contribs, members);
+      if (!common.empty()) {
+        /* Laminar: factor this level's shared root (the ⊥ mixture) and
+         * recurse on the per-member residuals one level deeper. */
+        double p_root = 1.0;
+        for (gate_t l : common) p_root *= gc.getProb(l);
+        std::vector<double> inner =
+          countPMF(gc, residualsOf(contribs, members, common), ok);
+        if (!ok) return {};
+        blockPMF = std::move(inner);
+        for (double &x : blockPMF) x *= p_root;        /* root-present arm */
+        blockPMF[0] += (1.0 - p_root);                 /* root-absent: count 0 */
+      } else {
+        /* No shared root: the block is either a Cartesian product of
+         * independent factors (the join node, count = ∏ N_i) or a
+         * genuinely non-laminar tangle (h0 / triangle).
+         * tryProductFactors distinguishes them on the circuit. */
+        auto factors = tryProductFactors(contribs, members);
+        if (factors.empty()) { ok = false; return {}; }  /* non-hierarchical */
+        std::vector<double> acc;
+        for (std::size_t f = 0; f < factors.size(); ++f) {
+          std::vector<double> fp = countPMF(gc, std::move(factors[f]), ok);
+          if (!ok) return {};
+          acc = (f == 0) ? std::move(fp) : productConvolve(acc, fp);
+        }
+        blockPMF = std::move(acc);
       }
-      if (common.empty()) { ok = false; return {}; }  /* non-hierarchical */
-
-      double p_root = 1.0;
-      for (gate_t l : common) p_root *= gc.getProb(l);
-
-      /* Per-member residuals: the structure one hierarchy level deeper. */
-      std::vector<std::vector<gate_t>> residuals;
-      residuals.reserve(members.size());
-      for (int m : members) {
-        std::vector<gate_t> r;
-        std::set_difference(contribs[m].begin(), contribs[m].end(),
-                            common.begin(), common.end(),
-                            std::back_inserter(r));
-        residuals.push_back(std::move(r));
-      }
-      std::vector<double> inner = countPMF(gc, std::move(residuals), ok);
-      if (!ok) return {};
-
-      blockPMF = std::move(inner);
-      for (double &x : blockPMF) x *= p_root;         /* root-present arm */
-      blockPMF[0] += (1.0 - p_root);                  /* root-absent: count 0 */
     }
     total = convolve(total, blockPMF);
   }

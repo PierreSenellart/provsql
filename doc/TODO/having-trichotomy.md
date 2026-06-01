@@ -309,19 +309,23 @@ distinction matters:
       privacy check (`aggSubtreePrivate`) walks the whole product-DAG so a
       shared subquery-tuple gate is handled. This is why the circuit-level
       recogniser is preferable to a query-level rewrite, which *would* be
-      order-sensitive. Still open: contributors with `gate_plus`/`gate_monus`
-      (UNION/EXCEPT lineage), AVG, and the **cross-product / product-join**
-      node (safe-but-non-laminar, e.g. `R(a),S(a,b),T(a,c)` whose count is
-      `N_S·N_T`). The product node is **circuit-detectable, no certificate
-      needed**: after factoring the shared root, a genuine cross-product is a
-      *complete leaf-disjoint* multipartite set (factors = non-co-occurrence
-      components; verify `|contributors| = ∏|factor|`), whereas the #P-hard
-      `h0`/triangle always carries a *private middle leaf* (the `S(x,y)`
-      tuple) that collapses the factor partition and fails completeness — so
-      it bails. It needs a product combine (`count = ∏ N_i`) in the engine,
-      not the planner. The genuinely certificate-only case is the **BID
-      disjoint-block `⊥`** structure: mutual exclusion from a key constraint
-      is a semantic fact that need not surface as circuit leaf-sharing.
+      order-sensitive. The **cross-product / product-join** node (safe-but-non-laminar COUNT,
+      e.g. `R(a),S(a,b),T(a,c)` whose count is `N_S·N_T`) is **done for
+      COUNT** — `tryProductFactors` + `productConvolve` in `countPMF`. It is
+      circuit-detectable, no certificate: a multi-member block with no common
+      leaf is a genuine product iff it is a *complete leaf-disjoint*
+      multipartite set (factors = non-co-occurrence components; verify
+      `|contributors| = ∏|factor|`), which the safe cross-product passes and
+      the #P-hard `h0`/triangle fails (its private *middle* leaf — the
+      `S(x,y)` tuple — collapses the factor partition / breaks completeness),
+      as does any branch-linking predicate (the incomplete bipartite case).
+      Pinned by the `xprod` / `3factor` / `xprod filtered` rows in
+      `having_safe_join_count.sql`. Still open: contributors with
+      `gate_plus`/`gate_monus` (UNION/EXCEPT lineage), AVG, the product node
+      for SUM/MIN/MAX (value-structure dependent), and the genuinely
+      certificate-only **BID disjoint-block `⊥`** structure (mutual exclusion
+      from a key constraint is a semantic fact that need not surface as
+      circuit leaf-sharing).
    4. *Validation* — `test/sql/having_safe_join_{count,minmax,sum}.sql`
       off-vs-on parity against `possible-worlds` on the `R(k,a),S(a,b)`
       fan-out, star-schema, and BID-`⊥` shapes; a **negative** test that the
