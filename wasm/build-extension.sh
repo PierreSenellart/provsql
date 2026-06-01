@@ -44,9 +44,18 @@ INC="-I$SRV -I$INT -I/boostinc -I. -Isrc"  # -I. for the few <src/X.h> angle inc
 CFILES=$(ls src/*.c)
 CPPFILES=$(ls src/*.cpp | grep -vE 'provsql_migrate_mmap|TreeDecompositionKnowledgeCompiler|kcmcp_server|dimacs_cnf')
 
+# Boost <= ~1.78 derives boost::hash_detail::hash_base from std::unary_function
+# unless BOOST_NO_CXX98_FUNCTION_BASE is set, but only auto-defines that macro
+# for the MSVC stdlib -- never for libc++.  emscripten's libc++ removed
+# std::unary_function in C++17, so CircuitCache.h (boost/multi_index hashed
+# index -> boost/functional/hash) fails to compile against an old host Boost.
+# Define it ourselves to select Boost's C++17-safe hash_base; harmless on
+# newer Boost (already set) and on the C files (they pull in no Boost).
+BOOST_CXX17_COMPAT="-DBOOST_NO_CXX98_FUNCTION_BASE"
+
 OBJS=""; FAIL=""
 for f in $CFILES;   do o="${f%.c}.o";   emcc            $PGLITE_CFLAGS $INC -c "$f" -o "$o" 2>"$o.err" && OBJS="$OBJS $o" || { FAIL="$FAIL $f"; echo "CC FAIL $f"; head -5 "$o.err"; }; done
-for f in $CPPFILES; do o="${f%.cpp}.o"; em++ -std=c++17 $PGLITE_CFLAGS $INC -c "$f" -o "$o" 2>"$o.err" && OBJS="$OBJS $o" || { FAIL="$FAIL $f"; echo "CXX FAIL $f"; head -5 "$o.err"; }; done
+for f in $CPPFILES; do o="${f%.cpp}.o"; em++ -std=c++17 $BOOST_CXX17_COMPAT $PGLITE_CFLAGS $INC -c "$f" -o "$o" 2>"$o.err" && OBJS="$OBJS $o" || { FAIL="$FAIL $f"; echo "CXX FAIL $f"; head -5 "$o.err"; }; done
 [ -n "$FAIL" ] && { echo "COMPILE FAILURES:$FAIL"; exit 1; }
 
 # Whole-archive libc++/libc++abi: the PGlite main module is pure C and
