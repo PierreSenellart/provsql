@@ -60,6 +60,27 @@ add_provenance
 
 (1 row)
 shape|g|p_off|p_on|diff
+depth2 >= 2|1|0.0492|0.0492|0.000000
+depth2 >= 2|2|0.0990|0.0990|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+depth2 = 2|1|0.0429|0.0429|0.000000
+depth2 = 2|2|0.0990|0.0990|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+depth2 <= 2|1|0.2008|0.2008|0.000000
+depth2 <= 2|2|0.2790|0.2790|0.000000
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
 triangle >= 2|1|0.0499|0.0499|0.000000
 (1 row)
 shape|g|p_off|p_on|diff
@@ -72,6 +93,15 @@ shape|g|p_off|p_on|diff
 flat >= 2|1|0.5000|0.5000|0.000000
 flat >= 2|2|0.0000|0.0000|0.000000
 (2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

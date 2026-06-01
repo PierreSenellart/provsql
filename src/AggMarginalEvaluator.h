@@ -12,25 +12,33 @@
  * contributors stop being independent Bernoulli trials and
  * @c CountCmpEvaluator bails to @c provsql_having's exponential enumeration.
  *
- * This pass generalises the flat case to the *single-level fan-out* shape:
+ * This pass generalises the flat case to any *hierarchical* (laminar) join:
  * each contributor is a product (conjunction) of @c gate_input leaves, and
- * the contributors partition into independent **blocks** that share a common
- * "root" leaf.  Per block the count distribution is the disjoint mixture
- * @f$(1-p_{\text{root}})\,\delta_0 + p_{\text{root}}\,\mathrm{PB}(\text{private})@f$
- * (the @c ⊥ combinator); independent blocks combine by **convolution** (the
- * @c ⊛^+ combinator).  The answer is @f$\sum_{c\ge 1,\;c\,\theta\,C} m[c]@f$
- * over the resulting count PMF @c m, with the empty group (@c c = 0) excluded
- * exactly as in @c CountCmpEvaluator / SQL @c HAVING semantics.
+ * the count distribution is computed **recursively** down the hierarchy.  At
+ * each level the contributors partition into independent **blocks** (by shared
+ * leaf); a block factors out the leaves common to *every* member (this level's
+ * shared "root" event) and the block count is the disjoint mixture
+ * @f$(1-p_{\text{root}})\,\delta_0 + p_{\text{root}}\,m_{\text{inner}}@f$ (the
+ * @c ⊥ combinator), where @f$m_{\text{inner}}@f$ is the same construction
+ * applied to the per-member residual leaf sets one level deeper; independent
+ * blocks combine by **convolution** (the @c ⊛^+ combinator).  Single-level
+ * fan-out (@c R(k,a),S(a,b)) is the case where every residual is one leaf and
+ * @f$m_{\text{inner}}@f$ is a Poisson-binomial; deeper nesting (orders→items
+ * under a user) recurses further.  The answer is
+ * @f$\sum_{c\ge 1,\;c\,\theta\,C} m[c]@f$ over the resulting count PMF @c m,
+ * with the empty group (@c c = 0) excluded exactly as in
+ * @c CountCmpEvaluator / SQL @c HAVING semantics.
  *
  * **Soundness is circuit-only and self-gating.**  No planner-time skeleton
- * certificate is consulted yet: the pass fires only when the circuit exhibits
- * the clean factored shape (one leaf common to *every* member of a block, the
- * per-member private leaves pairwise disjoint, every involved leaf private to
- * the cmp subtree).  A non-hierarchical skeleton -- e.g. the triangle
- * @c R(x,y),S(y,z),T(z,x) -- has no leaf common to all members of its block,
- * so the structural check rejects it and the cmp falls through to exact
- * enumeration.  Multi-level nesting and shapes the circuit cannot self-certify
- * are the job of the later @c CERT_SAFE_AGG_PLAN planner certificate.
+ * certificate is consulted: the recursion is exact iff at every level each
+ * multi-member block has a leaf common to *all* its members (and every
+ * involved leaf is private to the cmp subtree).  A non-laminar shape -- e.g.
+ * the triangle @c R(x,y),S(y,z),T(z,x) -- produces a multi-member block with
+ * no common leaf at some level, which clears the soundness flag and falls the
+ * cmp through to exact enumeration.  This circuit-only recursion already
+ * covers the tuple-independent hierarchical class at any depth; a planner
+ * @c CERT_SAFE_AGG_PLAN certificate is still needed only for shapes the
+ * circuit cannot self-certify (e.g. BID disjoint-block @c ⊥ structure).
  *
  * Runs as a probability-side pre-pass in @c probability_evaluate.cpp, *after*
  * @c runCountCmpEvaluator (so the cheap flat path still wins where it
@@ -49,10 +57,11 @@ namespace provsql {
 /**
  * @brief Run the safe-join COUNT marginal-vector pre-pass over @p gc.
  *
- * For every @c gate_cmp matching the single-level fan-out COUNT shape (see
- * file docstring) computes the comparator's exact probability by block
- * mixture + convolution and replaces the cmp by a Bernoulli @c gate_input via
- * @c GenericCircuit::resolveCmpToBernoulli.  Leaves every other cmp untouched.
+ * For every @c gate_cmp matching the hierarchical-join COUNT shape (see file
+ * docstring) computes the comparator's exact probability by the recursive
+ * block mixture + convolution and replaces the cmp by a Bernoulli
+ * @c gate_input via @c GenericCircuit::resolveCmpToBernoulli.  Leaves every
+ * other cmp untouched.
  *
  * @param gc  Circuit to mutate in place.
  * @return    Number of comparators resolved by this pass.

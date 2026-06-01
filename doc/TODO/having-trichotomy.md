@@ -271,32 +271,35 @@ distinction matters:
    (`src/safe_query.c`) certifies skeleton safety read-only (the classifier's
    missing axis); `test/sql/skeleton_safety.sql` pins it. The recursive
    marginal-vector engine described under Gain 4 above (the riskier half: it
-   touches evaluation soundness) has **landed for COUNT on single-level
-   fan-out** (Phase 2 below); SUM/MIN/MAX arms, deeper nesting and the
-   certificate path remain. Phased:
+   touches evaluation soundness) has **landed for COUNT at arbitrary
+   hierarchical depth** (Phase 2 below, recursive `countPMF`); the SUM/MIN/MAX
+   arms, UNION/EXCEPT contributors, and the BID disjoint-block certificate
+   path remain. Phased:
    1. *Certificate plumbing* — `safe_query_extract_aggregate_plan` exposes the
       `find_hierarchical_root_atoms` block structure; bake `CERT_SAFE_AGG_PLAN`
       onto the `gate_agg` at the HAVING-lift site in `src/provsql.c`
       (`having_Expr_to_provenance_cmp`), carry it through `CircuitFromMMap`.
-   2. *Engine, COUNT first* — **Done (single-level fan-out)** —
+   2. *Engine, COUNT* — **Done (arbitrary hierarchical depth)** —
       `src/AggMarginalEvaluator.cpp` (`runAggMarginalCountEvaluator`): the
       `⊛^+` (convolution) / `⊥` (block mixture) distribution-factor algebra,
-      a new pre-pass arm after `runCountCmpEvaluator` in
-      `probability_evaluate.cpp`, same `provsql.cmp_probability_evaluation`
-      GUC and Bernoulli-`gate_input` rewrite contract. Pinned by
-      `test/sql/having_safe_join_count.sql` (off-vs-on parity to 4 decimals
-      vs exact enumeration: fan-out `R(k,a),S(a,b)` over all six operators,
-      3-way star, the non-hierarchical triangle declining, and the flat
-      degenerate no-op). **Realisation that simplified the start: for
-      single-level fan-out no planner certificate is needed** — the engine
-      gates *circuit-only* (each contributor a product of leaves; one leaf
-      common to every block member; per-member privates pairwise disjoint;
-      every leaf private to the cmp subtree), which is self-gating because
-      the non-hierarchical triangle has no leaf common to all members and so
-      bails. Still open here: contributors with `gate_plus`/`gate_monus`
-      (UNION/EXCEPT lineage), multi-level nesting, and the
+      applied **recursively** down the join hierarchy (`countPMF`), a new
+      pre-pass arm after `runCountCmpEvaluator` in `probability_evaluate.cpp`,
+      same `provsql.cmp_probability_evaluation` GUC and Bernoulli-`gate_input`
+      rewrite contract. Pinned by `test/sql/having_safe_join_count.sql`
+      (off-vs-on parity to 4 decimals vs exact enumeration: fan-out
+      `R(k,a),S(a,b)` over all six operators, 3-way star, depth-2 nesting
+      `acct(u),ord(u,o),item(u,o,i)`, the non-hierarchical triangle
+      declining, and the flat degenerate no-op). Benchmarked by
+      `test/bench/having_safe_join_count_bench.sql` (≈276× at per-group
+      N=12; off-path TIMEOUT past N=15 while the engine stays ~10 ms to
+      N=100). **No planner certificate is needed for this whole class** —
+      the engine gates *circuit-only* and self-gates: at every recursion
+      level each multi-member block must have a leaf common to all its
+      members (and every leaf private to the cmp subtree), which the
+      non-laminar triangle fails. Still open here: contributors with
+      `gate_plus`/`gate_monus` (UNION/EXCEPT lineage), and the
       `FootprintCache`/baked-certificate paths for shapes the circuit cannot
-      self-certify (Phase 1 above).
+      self-certify, e.g. BID disjoint-block `⊥` structure (Phase 1 above).
    3. *MIN/MAX/SUM arms* — constant-size / weighted-sum marginals over the same
       recursion; carry SUM's Remark-3 `k`-cap.
    4. *Validation* — `test/sql/having_safe_join_{count,minmax,sum}.sql`

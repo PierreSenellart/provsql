@@ -76,6 +76,29 @@ DO $$ BEGIN PERFORM set_prob(provenance(), (0.50 + 0.002*a)) FROM sj_d2; END $$;
 SELECT * FROM sj_parity('star >= 2', 'SELECT k g, probability_evaluate(provenance()) p FROM sj_f,sj_d1,sj_d2 WHERE sj_f.a=sj_d1.a AND sj_f.a=sj_d2.a GROUP BY k HAVING count(*) >= 2');
 SELECT * FROM sj_parity('star = 1',  'SELECT k g, probability_evaluate(provenance()) p FROM sj_f,sj_d1,sj_d2 WHERE sj_f.a=sj_d1.a AND sj_f.a=sj_d2.a GROUP BY k HAVING count(*) = 1');
 
+-- Depth-2 hierarchical nesting: acct(u), ord(u,o), item(u,o,i) -- the
+-- aggregated rows nest items inside orders inside a user.  A group's
+-- contributors share acct(u) at the top level and ord(u,o) one level
+-- down, so the engine must recurse (mixture over the user root, then a
+-- nested mixture/convolution over orders and items) rather than treat the
+-- order leaves as flat private fan-out.
+CREATE TABLE sj_acct(u int);
+CREATE TABLE sj_ord(u int, o int);
+CREATE TABLE sj_item(u int, o int, i int);
+INSERT INTO sj_acct VALUES (1),(2);
+INSERT INTO sj_ord VALUES (1,10),(1,20),(2,30);
+INSERT INTO sj_item VALUES (1,10,100),(1,10,200),(1,20,300),(2,30,400),(2,30,500);
+SELECT add_provenance('sj_acct');
+SELECT add_provenance('sj_ord');
+SELECT add_provenance('sj_item');
+DO $$ BEGIN PERFORM set_prob(provenance(), (0.40 + 0.10*u)) FROM sj_acct; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), (0.30 + 0.01*o)) FROM sj_ord; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), (0.30 + 0.0005*i)) FROM sj_item; END $$;
+
+SELECT * FROM sj_parity('depth2 >= 2', 'SELECT a.u g, probability_evaluate(provenance()) p FROM sj_acct a, sj_ord o, sj_item t WHERE a.u=o.u AND o.u=t.u AND o.o=t.o GROUP BY a.u HAVING count(*) >= 2');
+SELECT * FROM sj_parity('depth2 = 2',  'SELECT a.u g, probability_evaluate(provenance()) p FROM sj_acct a, sj_ord o, sj_item t WHERE a.u=o.u AND o.u=t.u AND o.o=t.o GROUP BY a.u HAVING count(*) = 2');
+SELECT * FROM sj_parity('depth2 <= 2', 'SELECT a.u g, probability_evaluate(provenance()) p FROM sj_acct a, sj_ord o, sj_item t WHERE a.u=o.u AND o.u=t.u AND o.o=t.o GROUP BY a.u HAVING count(*) <= 2');
+
 -- Non-hierarchical triangle R(x),S(x,y),T(y): the engine must DECLINE
 -- (no leaf common to all members of the block) and fall back to exact
 -- enumeration, so off and on still agree.
@@ -111,8 +134,11 @@ SELECT remove_provenance('sj_s');
 SELECT remove_provenance('sj_f');
 SELECT remove_provenance('sj_d1');
 SELECT remove_provenance('sj_d2');
+SELECT remove_provenance('sj_acct');
+SELECT remove_provenance('sj_ord');
+SELECT remove_provenance('sj_item');
 SELECT remove_provenance('sj_rr');
 SELECT remove_provenance('sj_ss');
 SELECT remove_provenance('sj_tt');
 SELECT remove_provenance('sj_flat');
-DROP TABLE sj_r, sj_s, sj_f, sj_d1, sj_d2, sj_rr, sj_ss, sj_tt, sj_flat;
+DROP TABLE sj_r, sj_s, sj_f, sj_d1, sj_d2, sj_acct, sj_ord, sj_item, sj_rr, sj_ss, sj_tt, sj_flat;

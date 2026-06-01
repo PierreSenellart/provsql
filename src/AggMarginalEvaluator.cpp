@@ -82,29 +82,6 @@ struct UnionFind {
   void unite(int a, int b) { parent[find(a)] = find(b); }
 };
 
-/* Poisson-binomial PMF over the marginals @p p : full vector
- * @c pmf[j] = Pr(exactly j of the |p| Bernoullis succeed), j in [0,|p|].
- * O(|p|^2); the block sizes here are small. */
-static std::vector<double> poissonBinomialPMF(const std::vector<double> &p)
-{
-  std::vector<double> pmf(p.size() + 1, 0.0);
-  pmf[0] = 1.0;
-  std::size_t filled = 0;
-  for (double pi : p) {
-    const double qi = 1.0 - pi;
-    /* Single-pass downward recurrence (mirrors
-     * CountCmpEvaluator::partialPMF): iterate j high-to-low so each
-     * read of pmf[j-1] sees the not-yet-updated previous row.  A
-     * split add-then-scale would wrongly multiply the success arm
-     * pmf[j-1]*pi by qi as well. */
-    for (std::size_t j = filled + 1; j >= 1; --j)
-      pmf[j] = pmf[j] * qi + pmf[j - 1] * pi;
-    pmf[0] *= qi;
-    ++filled;
-  }
-  return pmf;
-}
-
 /* Convolution of two count PMFs (independent sum of the two counts). */
 static std::vector<double> convolve(const std::vector<double> &a,
                                     const std::vector<double> &b)
@@ -118,6 +95,100 @@ static std::vector<double> convolve(const std::vector<double> &a,
       r[i + j] += a[i] * b[j];
   }
   return r;
+}
+
+/* Recursive count distribution over a set of product-of-leaves
+ * contributors coupled only through a laminar (hierarchical) leaf-sharing
+ * structure.  Returns the PMF @c m[c] = Pr(exactly c contributors present),
+ * or clears @p ok (returning {}) when the sharing is non-laminar -- a
+ * multi-member independence block with no leaf common to every member
+ * (e.g. the triangle) -- which is outside the exact safe-plan class.
+ *
+ * This is the marginal-vector safe-plan engine, handling arbitrary
+ * hierarchical depth:
+ *  - partition the contributors into independent blocks by shared leaf
+ *    (union-find); independent blocks combine by convolution (the ⊛^+
+ *    combinator);
+ *  - a singleton block is a Bernoulli over the product of its leaves;
+ *  - a multi-member block factors out the leaves common to EVERY member
+ *    (the shared root event of this hierarchy level); the block count is
+ *    then the disjoint mixture  (1-p_root)·δ_0 + p_root·inner  (the ⊥
+ *    combinator), where @c inner is countPMF applied recursively to the
+ *    per-member residual leaf sets (one level deeper).
+ * Each recursion strips at least the common leaves, so the total leaf
+ * count strictly decreases and the recursion terminates.  Depth-1 fan-out
+ * is the case where every residual is a single leaf (inner becomes the
+ * Poisson-binomial); deeper nesting (e.g. orders→items under a user)
+ * recurses further. */
+static std::vector<double> countPMF(GenericCircuit &gc,
+                                    std::vector<std::vector<gate_t>> contribs,
+                                    bool &ok)
+{
+  const std::size_t n = contribs.size();
+  if (n == 0) return std::vector<double>{1.0};     /* δ_0 */
+
+  /* Independence blocks: contributors sharing any leaf are coupled. */
+  UnionFind uf(static_cast<int>(n));
+  {
+    std::map<gate_t, int> first_owner;
+    for (std::size_t i = 0; i < n; ++i)
+      for (gate_t l : contribs[i]) {
+        auto it = first_owner.find(l);
+        if (it == first_owner.end()) first_owner[l] = static_cast<int>(i);
+        else uf.unite(static_cast<int>(i), it->second);
+      }
+  }
+  std::map<int, std::vector<int>> blocks;
+  for (std::size_t i = 0; i < n; ++i)
+    blocks[uf.find(static_cast<int>(i))].push_back(static_cast<int>(i));
+
+  std::vector<double> total{1.0};                  /* δ_0, convolution identity */
+  for (const auto &be : blocks) {
+    const std::vector<int> &members = be.second;
+    std::vector<double> blockPMF;
+
+    if (members.size() == 1) {
+      /* One contributor: present iff all its leaves are -- a Bernoulli
+       * over the product of the (independent) leaf marginals. */
+      double q = 1.0;
+      for (gate_t l : contribs[members[0]]) q *= gc.getProb(l);
+      blockPMF = std::vector<double>{1.0 - q, q};
+    } else {
+      /* Factor out the leaves common to every member (this level's root). */
+      std::vector<gate_t> common = contribs[members[0]];
+      for (std::size_t mi = 1; mi < members.size() && !common.empty(); ++mi) {
+        std::vector<gate_t> tmp;
+        std::set_intersection(common.begin(), common.end(),
+                              contribs[members[mi]].begin(),
+                              contribs[members[mi]].end(),
+                              std::back_inserter(tmp));
+        common.swap(tmp);
+      }
+      if (common.empty()) { ok = false; return {}; }  /* non-hierarchical */
+
+      double p_root = 1.0;
+      for (gate_t l : common) p_root *= gc.getProb(l);
+
+      /* Per-member residuals: the structure one hierarchy level deeper. */
+      std::vector<std::vector<gate_t>> residuals;
+      residuals.reserve(members.size());
+      for (int m : members) {
+        std::vector<gate_t> r;
+        std::set_difference(contribs[m].begin(), contribs[m].end(),
+                            common.begin(), common.end(),
+                            std::back_inserter(r));
+        residuals.push_back(std::move(r));
+      }
+      std::vector<double> inner = countPMF(gc, std::move(residuals), ok);
+      if (!ok) return {};
+
+      blockPMF = std::move(inner);
+      for (double &x : blockPMF) x *= p_root;         /* root-present arm */
+      blockPMF[0] += (1.0 - p_root);                  /* root-absent: count 0 */
+    }
+    total = convolve(total, blockPMF);
+  }
+  return total;
 }
 
 /* Tail-sum over the final count PMF under SQL HAVING semantics: sum the
@@ -207,81 +278,16 @@ unsigned runAggMarginalCountEvaluator(GenericCircuit &gc)
       if (ref[static_cast<std::size_t>(kv.first)] != kv.second) { ok = false; break; }
     if (!ok) continue;
 
-    /* Union contributors that share any leaf into independence blocks. */
-    UnionFind uf(static_cast<int>(n));
-    {
-      std::map<gate_t, int> first_owner;
-      for (std::size_t i = 0; i < n; ++i)
-        for (gate_t l : leaves[i]) {
-          auto it = first_owner.find(l);
-          if (it == first_owner.end()) first_owner[l] = static_cast<int>(i);
-          else uf.unite(static_cast<int>(i), it->second);
-        }
-    }
-    std::map<int, std::vector<int>> blocks;
-    for (std::size_t i = 0; i < n; ++i)
-      blocks[uf.find(static_cast<int>(i))].push_back(static_cast<int>(i));
-
-    /* Per block: factor out the leaves common to *every* member (the
-     * shared root event), require the per-member private leaf sets to be
-     * pairwise disjoint, and build the block's count PMF as the disjoint
-     * mixture  (1 - p_root) delta_0 + p_root * PB(private marginals). */
-    std::vector<double> total;          /* running convolution; empty = delta_0 implicit */
-    for (const auto &be : blocks) {
-      const std::vector<int> &members = be.second;
-
-      /* common = intersection of all members' leaf sets (sorted vectors). */
-      std::vector<gate_t> common = leaves[members[0]];
-      for (std::size_t mi = 1; mi < members.size() && !common.empty(); ++mi) {
-        std::vector<gate_t> tmp;
-        std::set_intersection(common.begin(), common.end(),
-                              leaves[members[mi]].begin(),
-                              leaves[members[mi]].end(),
-                              std::back_inserter(tmp));
-        common.swap(tmp);
-      }
-      /* A multi-member block unioned with no leaf common to all members is
-       * a chain / non-hierarchical shape (e.g. the triangle): out of
-       * scope, bail the whole cmp to exact enumeration. */
-      if (members.size() > 1 && common.empty()) { ok = false; break; }
-
-      double p_root = 1.0;
-      for (gate_t l : common) p_root *= gc.getProb(l);
-
-      /* Private marginals, checking pairwise disjointness across members. */
-      std::vector<double> priv_p;
-      std::vector<gate_t> seen_private;
-      priv_p.reserve(members.size());
-      for (int m : members) {
-        std::vector<gate_t> priv;
-        std::set_difference(leaves[m].begin(), leaves[m].end(),
-                            common.begin(), common.end(),
-                            std::back_inserter(priv));
-        for (gate_t l : priv) {
-          if (std::binary_search(seen_private.begin(), seen_private.end(), l)) {
-            ok = false;                  /* a private leaf shared by two members */
-            break;
-          }
-        }
-        if (!ok) break;
-        for (gate_t l : priv) {
-          seen_private.insert(
-            std::lower_bound(seen_private.begin(), seen_private.end(), l), l);
-        }
-        double pp = 1.0;
-        for (gate_t l : priv) pp *= gc.getProb(l);
-        priv_p.push_back(pp);
-      }
-      if (!ok) break;
-
-      std::vector<double> blockPMF = poissonBinomialPMF(priv_p);
-      for (double &m : blockPMF) m *= p_root;     /* root-present arm */
-      blockPMF[0] += (1.0 - p_root);              /* root-absent arm: count 0 */
-
-      total = convolve(total, blockPMF);
-    }
+    /* Recursively compute the count PMF over the contributors.  Handles
+     * arbitrary hierarchical (laminar) depth: each independence block
+     * factors out the leaves common to every member (this level's shared
+     * root event) and recurses on the per-member residuals, combining
+     * independent blocks by convolution.  A multi-member block with no
+     * common leaf is non-hierarchical and clears @c ok, bailing the whole
+     * cmp to exact enumeration. */
+    std::vector<double> total = countPMF(gc, leaves, ok);
     if (!ok) continue;
-    if (total.empty()) continue;        /* no contributors: leave to enumeration */
+    if (total.empty()) continue;        /* defensive: no contributors */
 
     double pr = prFromPMF(total, match.op, match.C);
     if (pr < 0.0) pr = 0.0;
