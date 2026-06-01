@@ -56,10 +56,13 @@ em++ $PGLITE_CFLAGS -sSIDE_MODULE=1 -sSUPPORT_LONGJMP=emscripten \
   $OBJS -o provsql.so 2>link.err || { echo "LINK FAILED"; tail -15 link.err; exit 1; }
 echo "built provsql.so: $(stat -c%s provsql.so) bytes"
 
-# Package the PGlite bundle (layout relative to WASM_PREFIX=/pglite).
-SQL=$(ls provsql--*.sql | head -1)
+# Package the PGlite bundle (layout relative to WASM_PREFIX=/pglite).  Ship ALL
+# provsql--*.sql: the base install script for the control's default_version plus
+# the cross-version upgrade paths.  (Packaging only the first alphabetically --
+# provsql--1.0.0.sql -- left CREATE EXTENSION with no script for the default
+# version, e.g. 1.9.0-dev.)
 rm -rf stage && mkdir -p stage/lib/postgresql stage/share/postgresql/extension
 cp provsql.so stage/lib/postgresql/provsql.so
-cp provsql.control "$SQL" stage/share/postgresql/extension/
+cp provsql.control provsql--*.sql stage/share/postgresql/extension/
 ( cd stage && tar -czf ../provsql.tar.gz $(find . -type f | sed 's|^\./||') )
 echo "packaged provsql.tar.gz:"; tar tzf provsql.tar.gz
