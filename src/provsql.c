@@ -2320,6 +2320,65 @@ static Query *build_outer_for_distinct_key(TargetEntry *orig_agg_te,
   return outer;
 }
 
+/** @brief Collector for @c AGG(DISTINCT) Aggrefs inside a HAVING clause. */
+typedef struct having_distinct_ctx {
+  List *aggs;   ///< Aggref* nodes carrying @c aggdistinct, in traversal order
+} having_distinct_ctx;
+
+/**
+ * @brief Walker that collects @c AGG(DISTINCT) Aggrefs from an expression.
+ *
+ * Does not descend into an @c Aggref's own arguments, so the traversal order
+ * matches @c replace_having_distinct_mutator below (both stop at every
+ * @c Aggref), keeping the per-aggregate outer-subquery indices aligned.
+ */
+static bool collect_having_distinct_walker(Node *node, void *ctx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Aggref)) {
+    Aggref *ar = (Aggref *) node;
+    if (list_length(ar->aggdistinct) > 0)
+      ((having_distinct_ctx *) ctx)->aggs =
+        lappend(((having_distinct_ctx *) ctx)->aggs, ar);
+    return false;  /* don't recurse into aggregate arguments */
+  }
+  return expression_tree_walker(node, collect_having_distinct_walker, ctx);
+}
+
+/** @brief Context for @c replace_having_distinct_mutator: next outer RT index. */
+typedef struct having_replace_ctx {
+  int next_rtindex;
+} having_replace_ctx;
+
+/**
+ * @brief Mutator that replaces each @c AGG(DISTINCT) Aggref in a HAVING
+ *        clause with @c Var(next_rtindex++, 1) -- the deduped count column of
+ *        its outer subquery (built in the same order by
+ *        @c rewrite_agg_distinct).  The @c Var is typed as the aggregate's
+ *        result so the surrounding comparison is intercepted by the HAVING
+ *        provenance path exactly as a non-DISTINCT count would be.
+ */
+static Node *replace_having_distinct_mutator(Node *node, void *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Aggref)) {
+    Aggref *ar = (Aggref *) node;
+    if (list_length(ar->aggdistinct) > 0) {
+      having_replace_ctx *c = (having_replace_ctx *) ctx;
+      Var *v = makeNode(Var);
+      v->varno     = c->next_rtindex++;
+      v->varattno  = 1;            /* agg result is col 1 of each outer */
+      v->vartype   = ar->aggtype;
+      v->vartypmod = -1;
+      v->varcollid = ar->aggcollid;
+      v->location  = -1;
+      return (Node *) v;
+    }
+    return node;  /* non-DISTINCT aggregate: leave for the normal HAVING path */
+  }
+  return expression_tree_mutator(node, replace_having_distinct_mutator, ctx);
+}
+
 /**
  * @brief Rewrite every @c AGG(DISTINCT key) in @p q using independent subqueries.
  *
@@ -2331,6 +2390,12 @@ static Query *build_outer_for_distinct_key(TargetEntry *orig_agg_te,
  * of one such subquery per aggregate, joined on the GROUP BY columns.
  * Non-DISTINCT aggregates are left untouched.
  *
+ * @c AGG(DISTINCT) aggregates appearing in the @c HAVING clause are handled
+ * the same way (one deduped outer per aggregate) and the @c HAVING Aggref is
+ * replaced by a @c Var to its outer's count column, so the comparison's
+ * provenance is built over the per-distinct-value rows rather than the raw
+ * tuples.
+ *
  * @param q            Query to inspect and possibly rewrite.
  * @param constants    Extension OID cache.
  * @return   Rewritten query, or @c NULL if no @c AGG(DISTINCT) was found.
@@ -2339,6 +2404,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
   List *distinct_agg_tes = NIL;
   List *groupby_tes = NIL;
   ListCell *lc;
+  having_distinct_ctx hctx = { NIL };
 
 #if PG_VERSION_NUM >= 180000
   /* In PostgreSQL 18, parseCheckAggregates() injects a virtual RTE_GROUP
@@ -2378,11 +2444,18 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
     }
   }
 
-  if (distinct_agg_tes == NIL)
+  /* Also collect AGG(DISTINCT) aggregates from the HAVING clause; they are
+   * not TargetEntries, so they get their own list and a Var-replacement
+   * mutator below. */
+  if (q->havingQual != NULL)
+    collect_having_distinct_walker(q->havingQual, &hctx);
+
+  if (distinct_agg_tes == NIL && hctx.aggs == NIL)
     return NULL;
 
   {
-    int n_aggs = list_length(distinct_agg_tes);
+    int n_having = list_length(hctx.aggs);
+    int n_aggs = list_length(distinct_agg_tes) + n_having;
     int n_gb   = list_length(groupby_tes);
     List *outer_queries = NIL;
 
@@ -2410,6 +2483,25 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
         Expr *key_expr = (Expr *)((TargetEntry *)linitial(ar->args))->expr;
         Query *inner = build_inner_for_distinct_key(q, key_expr, groupby_tes);
         Query *outer = build_outer_for_distinct_key(agg_te, inner, n_gb, constants);
+        outer_queries = lappend(outer_queries, outer);
+      }
+    }
+
+    /* Build one inner + one outer query per HAVING-clause DISTINCT aggregate,
+     * appended after the target-list ones so their RT indices are the last
+     * n_having entries of the final from-list (matched by the mutator below). */
+    foreach (lc, hctx.aggs) {
+      Aggref *ar = lfirst(lc);
+      if(list_length(ar->args) != 1)
+        provsql_error("AGG(DISTINCT) with more than one argument is not supported");
+      else {
+        TargetEntry *syn = makeNode(TargetEntry);
+        Expr *key_expr = (Expr *)((TargetEntry *)linitial(ar->args))->expr;
+        Query *inner = build_inner_for_distinct_key(q, key_expr, groupby_tes);
+        Query *outer;
+        syn->expr  = (Expr *) copyObject(ar);
+        syn->resno = 1;
+        outer = build_outer_for_distinct_key(syn, inner, n_gb, constants);
         outer_queries = lappend(outer_queries, outer);
       }
     }
@@ -2527,6 +2619,16 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
             te->expr = (Expr*)v;
           }
         }
+      }
+
+      /* Replace HAVING-clause DISTINCT aggregates with Vars to their outer
+       * subqueries -- the last n_having entries of the from-list, in the same
+       * order collect_having_distinct_walker visited them. */
+      if (n_having > 0) {
+        having_replace_ctx hrc;
+        hrc.next_rtindex =
+          list_length(q->jointree->fromlist) - n_having + 1;
+        q->havingQual = replace_having_distinct_mutator(q->havingQual, &hrc);
       }
 
       return q;
