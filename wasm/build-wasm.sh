@@ -91,7 +91,11 @@ cp "$REPO/wasm/build-extension.sh" "$REPO/wasm/relink-pglite.sh" "$PG/"
 #    release/ holds the prebuilt core the TS package links against; PGlite's own
 #    full build would create it, but we build only the core, so ensure it exists.
 mkdir -p packages/pglite/release
+# pglite.* is the server module; initdb.* is the separate first-boot module the
+# TS package imports (src/initdbModFactory.ts -> ../release/initdb).  Both come
+# from the core build's dist/bin and are needed for the TS bundle to resolve.
 cp "$PG"/dist/bin/pglite.wasm "$PG"/dist/bin/pglite.data "$PG"/dist/bin/pglite.js \
+   "$PG"/dist/bin/initdb.wasm "$PG"/dist/bin/initdb.js \
    packages/pglite/release/
 cp "$PG"/dist/extensions/*.tar.gz packages/pglite/release/ 2>/dev/null || true
 corepack pnpm install --filter "@electric-sql/pglite..."
