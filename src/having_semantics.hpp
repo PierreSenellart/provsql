@@ -16,6 +16,8 @@
 #ifndef PROVSQL_HAVING_SEMANTICS_HPP
 #define PROVSQL_HAVING_SEMANTICS_HPP
 
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "GenericCircuit.hpp"
@@ -26,7 +28,9 @@ namespace provsql_having_detail {
 std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start);
 bool extract_constant_C(GenericCircuit &c, gate_t x, int &C_out);
 bool extract_constant_double(GenericCircuit &c, gate_t x, double &C_out);
+bool extract_constant_string(GenericCircuit &c, gate_t x, std::string &C_out);
 bool semimod_extract_M_and_K(GenericCircuit &c, gate_t semimod_gate, int &m_out, gate_t &k_gate_out);
+bool semimod_extract_string_and_K(GenericCircuit &c, gate_t semimod_gate, std::string &m_out, gate_t &k_gate_out);
 ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok);
 ComparisonOperator flip_op(ComparisonOperator op);
 }
@@ -69,7 +73,14 @@ void provsql_having(
 
     auto build_from = [&](gate_t agg_side, gate_t const_side, ComparisonOperator effective_op) -> bool {
       int C = 0;
-      if (!extract_constant_C(c, const_side, C)) return false;
+      std::string C_str;
+      bool is_string = false;
+
+      if (!extract_constant_C(c, const_side, C)) {
+        // The constant may instead be a text value (agg_token = text).
+        if (!extract_constant_string(c, const_side, C_str)) return false;
+        is_string = true;
+      }
 
       if (c.getGateType(agg_side) != gate_agg) return false;
 
@@ -78,23 +89,90 @@ void provsql_having(
       std::vector<long> mvals;
       mvals.reserve(children.size());
 
+      std::vector<std::string> mvals_str;
+      mvals_str.reserve(children.size());
+
       std::vector<typename SemiringT::value_type> kvals;
       kvals.reserve(children.size());
 
       for (gate_t ch : children) {
         if (c.getGateType(ch) != gate_semimod) return false;
 
-        int m = 0;
         gate_t k_gate{};
-        if (!semimod_extract_M_and_K(c, ch, m, k_gate)) return false;
+
+        if (is_string) {
+          std::string m_str;
+          if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
+          mvals_str.push_back(m_str);
+        } else {
+          int m = 0;
+          if (!semimod_extract_M_and_K(c, ch, m, k_gate)) return false;
+          mvals.push_back(m);
+        }
 
         auto kval = c.evaluate<SemiringT>(k_gate, mapping, S);
 
-        mvals.push_back(m);
         kvals.push_back(std::move(kval));
       }
 
       AggregationOperator agg_kind = getAggregationOperator(c.getInfos(agg_side).first);
+
+      if (is_string) {
+        // Comparison of an aggregate against a text constant.  Only choose()
+        // is supported (it is the only text-valued aggregate whose
+        // possible-world value is decided occurrence-by-occurrence), and only
+        // = / <> are exposed for text.  Other aggregates would need their own
+        // text semantics and are refused.
+        if (agg_kind != AggregationOperator::CHOOSE)
+          throw std::runtime_error(
+            "comparing an aggregate with a text constant in HAVING "
+            "is only implemented for choose()");
+        if (effective_op != ComparisonOperator::EQ &&
+            effective_op != ComparisonOperator::NE)
+          throw std::runtime_error(
+            "only = and <> are supported when comparing choose() "
+            "with a text constant");
+
+        // choose() is PICKFIRST: in a world W its value is that of the
+        // lowest-index present element.  So choose(W) op C holds iff the
+        // first present element matches.  Summing the annotations of all such
+        // worlds telescopes (the free suffix of later elements sums to one),
+        // giving the exact possible-worlds provenance in a single O(N) scan,
+        // valid even when the group's elements are not mutually exclusive:
+        //
+        //   pw = ⊕_{i : vᵢ matches} kᵢ ⊗ (⊗_{j<i} (1 ⊖ kⱼ))
+        //
+        // where (⊗_{j<i} (1 ⊖ kⱼ)) ("no earlier element present") is carried
+        // in @c prefix.
+        const auto one  = S.one();
+        std::vector<typename SemiringT::value_type> disjuncts;
+        auto prefix = one;
+
+        for (size_t i = 0; i < kvals.size(); ++i) {
+          bool match = (effective_op == ComparisonOperator::EQ)
+                         ? (mvals_str[i] == C_str)
+                         : (mvals_str[i] != C_str);
+          if (match) {
+            if (prefix == one)
+              disjuncts.push_back(kvals[i]);
+            else if (kvals[i] == one)
+              disjuncts.push_back(prefix);
+            else
+              disjuncts.push_back(S.times(
+                std::vector<typename SemiringT::value_type>{kvals[i], prefix}));
+          }
+
+          // prefix ⊗= (1 ⊖ kᵢ): condition that element i is absent.
+          auto absent = S.monus(one, kvals[i]);
+          prefix = (prefix == one)
+                     ? absent
+                     : S.times(std::vector<typename SemiringT::value_type>{
+                         prefix, absent});
+        }
+
+        pw_out = disjuncts.empty() ? S.zero() : S.plus(disjuncts);
+        return true;
+      }
 
       if(agg_kind==AggregationOperator::SUM) {
         // COUNT(*) is simulated by SUM of 1s

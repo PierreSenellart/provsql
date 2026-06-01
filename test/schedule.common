@@ -45,6 +45,7 @@ test: having_on_aggregation
 test: formula_on_having
 test: where_on_aggregation
 test: choose
+test: agg_token_text
 test: empty_count
 
 # Adding probabilities
@@ -62,6 +63,7 @@ test: agg_uuid_aggfnoid
 
 # Complex test relying on probabilities
 test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation min_max_cmp_optimisation sum_cmp_optimisation having_always_true
+test: last_eval_method
 
 # Probability computation using external software
 test: d4 dsharp weightmc c2d minic2d

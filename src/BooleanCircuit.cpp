@@ -1812,7 +1812,7 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
         TreeDecomposition td(*this);
         dd = dDNNFTreeDecompositionBuilder{
           *this, g, td}.build();
-        if(provsql_verbose>=20)
+        if(provsql_verbose>=25)
           provsql_notice("dD obtained by tree decomposition, %ld gates", dd.getNbGates());
       } catch(TreeDecompositionException &) {
         // Last-resort fallback: chooseCompiler() prefers

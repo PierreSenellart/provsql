@@ -37,6 +37,7 @@
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_oper.h"
+#include "parser/parse_relation.h"
 #include "utils/builtins.h"
 #include "parser/parsetree.h"
 #include "storage/lwlock.h"
@@ -77,6 +78,7 @@ static bool provsql_active = true; ///< @c true while ProvSQL query rewriting is
 bool provsql_where_provenance = false;
 static bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
+char *provsql_last_eval_method = NULL; ///< Last probability evaluation method(s) used; exposed via @c provsql.last_eval_method
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC. Superuser-only (@c PGC_SUSET): it dictates which directories the postgres OS user searches for executables, so a non-privileged role must not be able to point it at an attacker-controlled binary.
 char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit::makeDD as the final fallback after @c interpretAsDD and tree-decomposition both fail; controlled by the @c provsql.fallback_compiler GUC (default @c "d4")
@@ -4202,6 +4204,617 @@ static void insert_agg_token_casts(const constants_t *constants, Query *q) {
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
 }
 
+/** @brief Context for @c join_qual_has_agg_token_walker. */
+typedef struct join_qual_agg_token_ctx {
+  const constants_t *constants; ///< Extension OID cache
+  Index *rteid;                 ///< Out: varno of the agg_token Var
+  AttrNumber *join_attno;       ///< Out: attno of the agg_token Var
+} join_qual_agg_token_ctx;
+
+static bool join_qual_has_agg_token_walker(Node *node,
+                                           join_qual_agg_token_ctx *ctx)
+{
+  if (node == NULL)
+    return false;
+  if (IsA(node, OpExpr)) {
+    OpExpr *oe = (OpExpr *) node;
+    Node *left = (Node *) linitial(oe->args);
+    Node *right = (Node *) lsecond(oe->args);
+
+    /* Unwrap casts */
+    if (IsA(left, FuncExpr) &&
+        (((FuncExpr *)left)->funcformat == COERCE_IMPLICIT_CAST ||
+         ((FuncExpr *)left)->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(((FuncExpr *)left)->args) == 1)
+      left = linitial(((FuncExpr *)left)->args);
+    if (IsA(right, FuncExpr) &&
+        (((FuncExpr *)right)->funcformat == COERCE_IMPLICIT_CAST ||
+         ((FuncExpr *)right)->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(((FuncExpr *)right)->args) == 1)
+      right = linitial(((FuncExpr *)right)->args);
+
+    if (IsA(left, Var) && IsA(right, Var)) {
+      Var *left_var = (Var *)left;
+      Var *right_var = (Var *)right;
+      if (left_var->vartype == ctx->constants->OID_TYPE_AGG_TOKEN &&
+          right_var->vartype != ctx->constants->OID_TYPE_AGG_TOKEN) {
+        *ctx->rteid = left_var->varno;
+        *ctx->join_attno = left_var->varattno;
+        return true;
+      }
+      if (right_var->vartype == ctx->constants->OID_TYPE_AGG_TOKEN &&
+          left_var->vartype != ctx->constants->OID_TYPE_AGG_TOKEN) {
+        *ctx->rteid = right_var->varno;
+        *ctx->join_attno = right_var->varattno;
+        return true;
+      }
+    }
+  }
+  return expression_tree_walker(node, join_qual_has_agg_token_walker,
+                                (void *) ctx);
+}
+
+/**
+ * @brief Return true if @p node contains an @c OpExpr that equates an
+ *        @c agg_token @c Var with a non-@c agg_token @c Var.
+ *
+ * On a match, writes the agg_token Var's @c varno and @c varattno to
+ * @p *rteid and @p *join_attno.  Used to detect JOIN conditions that
+ * require the @c rewrite_join_agg_token rewrite.
+ *
+ * @param node        Expression tree to inspect.
+ * @param constants   Extension OID cache.
+ * @param rteid       Out: varno of the agg_token Var (unchanged on miss).
+ * @param join_attno  Out: attno of the agg_token Var (unchanged on miss).
+ * @return            True iff such an @c OpExpr was found.
+ */
+static bool join_qual_has_agg_token(Node *node, const constants_t *constants,
+                                    Index *rteid, AttrNumber *join_attno)
+{
+  join_qual_agg_token_ctx ctx;
+  ctx.constants   = constants;
+  ctx.rteid       = rteid;
+  ctx.join_attno  = join_attno;
+  return join_qual_has_agg_token_walker(node, &ctx);
+}
+
+/**
+ * @brief Build an AST node for <tt>arr[idx]</tt> on a uuid[] expression.
+ *
+ * Wraps the version rename between @c ArrayRef (PG < 12) and
+ * @c SubscriptingRef (PG 12+), and the addition of @c refrestype (PG 14+).
+ *
+ * @param arr_expr   Expression evaluating to @c uuid[].
+ * @param index      1-based element position.
+ * @param constants  Extension OID cache.
+ * @return           Subscripting node with result type @c uuid.
+ */
+static Node *make_uuid_array_subscript(Node *arr_expr, int index,
+                                       const constants_t *constants)
+{
+  Const *idx = makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                         Int32GetDatum(index), false, true);
+#if PG_VERSION_NUM >= 120000
+  SubscriptingRef *sub = makeNode(SubscriptingRef);
+  sub->refcontainertype = constants->OID_TYPE_UUID_ARRAY;
+  sub->refelemtype      = constants->OID_TYPE_UUID;
+#if PG_VERSION_NUM >= 140000
+  sub->refrestype       = constants->OID_TYPE_UUID;
+#endif
+  sub->reftypmod        = -1;
+  sub->refcollid        = InvalidOid;
+  sub->refupperindexpr  = list_make1(idx);
+  sub->reflowerindexpr  = NIL;
+  sub->refexpr          = (Expr *)arr_expr;
+  sub->refassgnexpr     = NULL;
+  return (Node *)sub;
+#else
+  ArrayRef *sub = makeNode(ArrayRef);
+  sub->refarraytype     = constants->OID_TYPE_UUID_ARRAY;
+  sub->refelemtype      = constants->OID_TYPE_UUID;
+  sub->reftypmod        = -1;
+  sub->refcollid        = InvalidOid;
+  sub->refupperindexpr  = list_make1(idx);
+  sub->reflowerindexpr  = NIL;
+  sub->refexpr          = (Expr *)arr_expr;
+  sub->refassgnexpr     = NULL;
+  return (Node *)sub;
+#endif
+}
+
+/**
+ * @brief Context for @c retype_agg_var_walker.
+ *
+ * Identifies the Var location whose type must flip from @c agg_token
+ * to @c text after the source relation has been replaced by an
+ * explode-style subquery.
+ */
+typedef struct retype_agg_var_ctx {
+  Index rteid;                 ///< Varno of the replaced RTE
+  AttrNumber join_attno;       ///< Attno of the former agg_token column
+  const constants_t *constants;///< Extension OID cache
+} retype_agg_var_ctx;
+
+/**
+ * @brief Walker that retypes agg_token Vars to text and rewrites the
+ *        equality OpExpr to @c text = text with the non-agg side cast via I/O.
+ *
+ * Only affects Vars with @c varlevelsup == 0 matching @c (rteid, join_attno).
+ * Sibling-query subqueries are left untouched via @c QTW_IGNORE_RT_SUBQUERIES
+ * at the top-level call.
+ */
+static bool retype_agg_var_walker(Node *node, retype_agg_var_ctx *ctx)
+{
+  if (node == NULL)
+    return false;
+
+  if (IsA(node, OpExpr)) {
+    OpExpr *oe = (OpExpr *)node;
+    if (list_length(oe->args) == 2) {
+      Node *left  = (Node *)linitial(oe->args);
+      Node *right = (Node *)lsecond(oe->args);
+      Var  *agg_v = NULL;
+      bool agg_on_left = false;
+
+      if (IsA(left, Var)) {
+        Var *v = (Var *)left;
+        if (v->varlevelsup == 0 && v->varno == ctx->rteid &&
+            v->varattno == ctx->join_attno &&
+            v->vartype == ctx->constants->OID_TYPE_AGG_TOKEN) {
+          agg_v = v;
+          agg_on_left = true;
+        }
+      }
+      if (agg_v == NULL && IsA(right, Var)) {
+        Var *v = (Var *)right;
+        if (v->varlevelsup == 0 && v->varno == ctx->rteid &&
+            v->varattno == ctx->join_attno &&
+            v->vartype == ctx->constants->OID_TYPE_AGG_TOKEN) {
+          agg_v = v;
+        }
+      }
+
+      if (agg_v != NULL) {
+        Node *other = agg_on_left ? right : left;
+        Oid text_eq;
+        Operator opInfo;
+        Form_pg_operator opform;
+
+        agg_v->vartype   = TEXTOID;
+        agg_v->varcollid = DEFAULT_COLLATION_OID;
+
+        if (exprType(other) != TEXTOID) {
+          CoerceViaIO *c = makeNode(CoerceViaIO);
+          c->arg          = (Expr *)other;
+          c->resulttype   = TEXTOID;
+          c->resultcollid = DEFAULT_COLLATION_OID;
+          c->coerceformat = COERCE_EXPLICIT_CAST;
+          c->location     = -1;
+          other = (Node *)c;
+        }
+
+        if (agg_on_left)
+          oe->args = list_make2(agg_v, other);
+        else
+          oe->args = list_make2(other, agg_v);
+
+        text_eq = find_equality_operator(TEXTOID, TEXTOID);
+        if (!OidIsValid(text_eq))
+          provsql_error("rewrite_join_agg_token: text = text operator "
+                        "not found");
+        opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(text_eq));
+        if (!HeapTupleIsValid(opInfo))
+          provsql_error("rewrite_join_agg_token: could not look up "
+                        "text equality operator");
+        opform = (Form_pg_operator)GETSTRUCT(opInfo);
+        oe->opno         = text_eq;
+        oe->opfuncid     = opform->oprcode;
+        oe->opresulttype = opform->oprresult;
+        oe->inputcollid  = DEFAULT_COLLATION_OID;
+        ReleaseSysCache(opInfo);
+
+        /* Args handled; skip their subtree walk */
+        return false;
+      }
+    }
+  }
+
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0 && v->varno == ctx->rteid &&
+        v->varattno == ctx->join_attno &&
+        v->vartype == ctx->constants->OID_TYPE_AGG_TOKEN) {
+      v->vartype   = TEXTOID;
+      v->varcollid = DEFAULT_COLLATION_OID;
+    }
+    return false;
+  }
+
+  if (IsA(node, Query)) {
+    /* Nested queries address a different rtable; do not descend. */
+    return false;
+  }
+
+  return expression_tree_walker(node, retype_agg_var_walker, (void *)ctx);
+}
+
+/**
+ * @brief Replace the source relation of an agg_token JOIN with an
+ *        explode-style subquery.
+ *
+ * Given a JOIN qual of the form @c rteid.join_attno = other where
+ * @c rteid.join_attno is of type @c agg_token, replaces the RTE at @p rteid
+ * in place with a subquery:
+ *
+ * @code{.sql}
+ *   SELECT t.col_1, ..., t.col_{join_attno-1},
+ *          get_extra(get_children(sm)[2])              AS <agg_col>,
+ *          ...,
+ *          provenance_times(get_children(sm)[1], t.provsql) AS provsql
+ *   FROM <t>, LATERAL unnest(get_children(t.<agg_col>)) AS sm
+ * @endcode
+ *
+ * The subquery preserves the original column order, so outer Vars still
+ * address the same attnos.  The outer query is then walked to retype Vars
+ * at (@p rteid, @p join_attno) from @c agg_token to @c text and rewrite the
+ * equality @c OpExpr to @c text = text (casting the other side via I/O).
+ *
+ * The copy of the source RTE inside the subquery has its @c provsql column
+ * renamed so the recursive @c process_query pass does not re-detect it as a
+ * provenance source — the combined provenance is already captured by the
+ * subquery's exposed @c provsql target entry.
+ *
+ * @param q          Query to rewrite (modified in place).
+ * @param constants  Extension OID cache.
+ * @param rteid      1-based varno of the RTE owning the agg_token column.
+ * @param join_attno 1-based attno of the agg_token column in that RTE.
+ * @return           The modified query.
+ */
+static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
+                                     Index rteid, AttrNumber join_attno)
+{
+  RangeTblEntry *src_rte = (RangeTblEntry *)list_nth(q->rtable, rteid - 1);
+  AttrNumber provsql_attno = 0;
+  AttrNumber attno;
+  ListCell *lc;
+  Query *inner;
+  RangeTblEntry *inner_src, *sm_rte;
+  RangeTblFunction *rtfunc;
+  FuncExpr *unnest_call, *get_children_of_agg, *agg_to_uuid;
+  Var *agg_var_in_inner;
+  Alias *sm_alias, *sm_eref;
+  RangeTblRef *inner_rtr1, *inner_rtr2;
+  FromExpr *inner_jt;
+  List *inner_tl = NIL;
+
+  if (src_rte->rtekind != RTE_RELATION && src_rte->rtekind != RTE_SUBQUERY)
+    provsql_error("rewrite_join_agg_token: source RTE kind %d not supported",
+                  (int)src_rte->rtekind);
+
+  /* Locate the provsql column of the source RTE. */
+  attno = 1;
+  foreach (lc, src_rte->eref->colnames) {
+    if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME)) {
+      provsql_attno = attno;
+      break;
+    }
+    ++attno;
+  }
+  if (provsql_attno == 0)
+    provsql_error("rewrite_join_agg_token: source relation has no "
+                  "provsql column");
+
+  /* --- Build the lateral RTE: unnest(get_children(agg_token_uuid(agg_var))) --- */
+
+  agg_var_in_inner = makeNode(Var);
+  agg_var_in_inner->varno     = 1;
+  agg_var_in_inner->varattno  = join_attno;
+  agg_var_in_inner->vartype   = constants->OID_TYPE_AGG_TOKEN;
+  agg_var_in_inner->varcollid = InvalidOid;
+  agg_var_in_inner->vartypmod = -1;
+  agg_var_in_inner->location  = -1;
+
+  agg_to_uuid = makeNode(FuncExpr);
+  agg_to_uuid->funcid         = constants->OID_FUNCTION_AGG_TOKEN_UUID;
+  agg_to_uuid->funcresulttype = constants->OID_TYPE_UUID;
+  agg_to_uuid->funcretset     = false;
+  agg_to_uuid->funcvariadic   = false;
+  agg_to_uuid->funcformat     = COERCE_IMPLICIT_CAST;
+  agg_to_uuid->funccollid     = InvalidOid;
+  agg_to_uuid->inputcollid    = InvalidOid;
+  agg_to_uuid->args           = list_make1(agg_var_in_inner);
+  agg_to_uuid->location       = -1;
+
+  get_children_of_agg = makeNode(FuncExpr);
+  get_children_of_agg->funcid         = constants->OID_FUNCTION_GET_CHILDREN;
+  get_children_of_agg->funcresulttype = constants->OID_TYPE_UUID_ARRAY;
+  get_children_of_agg->funcretset     = false;
+  get_children_of_agg->funcvariadic   = false;
+  get_children_of_agg->funcformat     = COERCE_EXPLICIT_CALL;
+  get_children_of_agg->funccollid     = InvalidOid;
+  get_children_of_agg->inputcollid    = InvalidOid;
+  get_children_of_agg->args           = list_make1(agg_to_uuid);
+  get_children_of_agg->location       = -1;
+
+  unnest_call = makeNode(FuncExpr);
+  unnest_call->funcid         = constants->OID_UNNEST;
+  unnest_call->funcresulttype = constants->OID_TYPE_UUID;
+  unnest_call->funcretset     = true;
+  unnest_call->funcvariadic   = false;
+  unnest_call->funcformat     = COERCE_EXPLICIT_CALL;
+  unnest_call->funccollid     = InvalidOid;
+  unnest_call->inputcollid    = InvalidOid;
+  unnest_call->args           = list_make1(get_children_of_agg);
+  unnest_call->location       = -1;
+
+  rtfunc = makeNode(RangeTblFunction);
+  rtfunc->funcexpr          = (Node *)unnest_call;
+  rtfunc->funccolcount      = 1;
+  rtfunc->funccolnames      = NIL;
+  rtfunc->funccoltypes      = NIL;
+  rtfunc->funccoltypmods    = NIL;
+  rtfunc->funccolcollations = NIL;
+  rtfunc->funcparams        = NULL;
+
+  sm_alias = makeNode(Alias);
+  sm_eref  = makeNode(Alias);
+  sm_alias->aliasname = "sm";
+  sm_eref->aliasname  = "sm";
+  sm_eref->colnames   = list_make1(makeString("sm"));
+
+  sm_rte = makeNode(RangeTblEntry);
+  sm_rte->rtekind        = RTE_FUNCTION;
+  sm_rte->functions      = list_make1(rtfunc);
+  sm_rte->funcordinality = false;
+  sm_rte->alias          = sm_alias;
+  sm_rte->eref           = sm_eref;
+  sm_rte->lateral        = true;
+  sm_rte->inFromCl       = true;
+#if PG_VERSION_NUM < 160000
+  sm_rte->requiredPerms = 0;
+#endif
+
+  /* --- Inner rtable RTE 1: the source relation (deep copy). --- */
+
+  inner_src = copyObject(src_rte);
+
+  /* Rename the provsql column in the inner RTE's eref so the recursive
+   * process_query pass does not re-detect it as a provenance source.  The
+   * combined provenance is already captured by the subquery's exposed
+   * provsql TargetEntry below. */
+  {
+    ListCell *lc2;
+    AttrNumber i = 1;
+    foreach (lc2, inner_src->eref->colnames) {
+      if (i == provsql_attno) {
+        lfirst(lc2) = makeString(pstrdup("_provsql_inner"));
+        break;
+      }
+      ++i;
+    }
+  }
+
+  inner_rtr1 = makeNode(RangeTblRef);
+  inner_rtr1->rtindex = 1;
+  inner_rtr2 = makeNode(RangeTblRef);
+  inner_rtr2->rtindex = 2;
+  inner_jt = makeNode(FromExpr);
+  inner_jt->fromlist = list_make2(inner_rtr1, inner_rtr2);
+  inner_jt->quals    = NULL;
+
+  /* --- Target list of the inner subquery, preserving original column order. --- */
+
+  attno = 1;
+  foreach (lc, src_rte->eref->colnames) {
+    const char *colname = strVal(lfirst(lc));
+    TargetEntry *te = makeNode(TargetEntry);
+    te->resno   = attno;
+    te->resname = pstrdup(colname);
+    te->resjunk = false;
+
+    if (attno == join_attno) {
+      /* get_extra(get_children(sm)[2]) */
+      Var *sm_var = makeNode(Var);
+      FuncExpr *gch, *ge;
+      Node *subscript;
+
+      sm_var->varno     = 2;
+      sm_var->varattno  = 1;
+      sm_var->vartype   = constants->OID_TYPE_UUID;
+      sm_var->varcollid = InvalidOid;
+      sm_var->vartypmod = -1;
+      sm_var->location  = -1;
+
+      gch = makeNode(FuncExpr);
+      gch->funcid         = constants->OID_FUNCTION_GET_CHILDREN;
+      gch->funcresulttype = constants->OID_TYPE_UUID_ARRAY;
+      gch->funcretset     = false;
+      gch->funcvariadic   = false;
+      gch->funcformat     = COERCE_EXPLICIT_CALL;
+      gch->funccollid     = InvalidOid;
+      gch->inputcollid    = InvalidOid;
+      gch->args           = list_make1(sm_var);
+      gch->location       = -1;
+
+      subscript = make_uuid_array_subscript((Node *)gch, 2, constants);
+
+      ge = makeNode(FuncExpr);
+      ge->funcid         = constants->OID_FUNCTION_GET_EXTRA;
+      ge->funcresulttype = TEXTOID;
+      ge->funcretset     = false;
+      ge->funcvariadic   = false;
+      ge->funcformat     = COERCE_EXPLICIT_CALL;
+      ge->funccollid     = DEFAULT_COLLATION_OID;
+      ge->inputcollid    = InvalidOid;
+      ge->args           = list_make1(subscript);
+      ge->location       = -1;
+
+      te->expr = (Expr *)ge;
+    } else if (attno == provsql_attno) {
+      /* provenance_times(get_children(sm)[1], t.provsql) — VARIADIC uuid[] */
+      Var *sm_var = makeNode(Var);
+      Var *prov_var = makeNode(Var);
+      FuncExpr *gch, *pt;
+      ArrayExpr *arr;
+      Node *subscript;
+
+      sm_var->varno     = 2;
+      sm_var->varattno  = 1;
+      sm_var->vartype   = constants->OID_TYPE_UUID;
+      sm_var->varcollid = InvalidOid;
+      sm_var->vartypmod = -1;
+      sm_var->location  = -1;
+
+      gch = makeNode(FuncExpr);
+      gch->funcid         = constants->OID_FUNCTION_GET_CHILDREN;
+      gch->funcresulttype = constants->OID_TYPE_UUID_ARRAY;
+      gch->funcretset     = false;
+      gch->funcvariadic   = false;
+      gch->funcformat     = COERCE_EXPLICIT_CALL;
+      gch->funccollid     = InvalidOid;
+      gch->inputcollid    = InvalidOid;
+      gch->args           = list_make1(sm_var);
+      gch->location       = -1;
+
+      subscript = make_uuid_array_subscript((Node *)gch, 1, constants);
+
+      prov_var->varno     = 1;
+      prov_var->varattno  = provsql_attno;
+      prov_var->vartype   = constants->OID_TYPE_UUID;
+      prov_var->varcollid = InvalidOid;
+      prov_var->vartypmod = -1;
+      prov_var->location  = -1;
+
+      arr = makeNode(ArrayExpr);
+      arr->array_typeid   = constants->OID_TYPE_UUID_ARRAY;
+      arr->element_typeid = constants->OID_TYPE_UUID;
+      arr->elements       = list_make2(subscript, prov_var);
+      arr->location       = -1;
+
+      pt = makeNode(FuncExpr);
+      pt->funcid         = constants->OID_FUNCTION_PROVENANCE_TIMES;
+      pt->funcresulttype = constants->OID_TYPE_UUID;
+      pt->funcretset     = false;
+      pt->funcvariadic   = true;
+      pt->funcformat     = COERCE_EXPLICIT_CALL;
+      pt->funccollid     = InvalidOid;
+      pt->inputcollid    = InvalidOid;
+      pt->args           = list_make1(arr);
+      pt->location       = -1;
+
+      te->expr = (Expr *)pt;
+    } else {
+      /* Passthrough Var(1, attno). */
+      Var *v = makeNode(Var);
+      Oid vtype   = InvalidOid;
+      int32 vtypmod = -1;
+      Oid vcoll   = InvalidOid;
+
+      if (src_rte->rtekind == RTE_RELATION) {
+        get_atttypetypmodcoll(src_rte->relid, attno, &vtype, &vtypmod, &vcoll);
+      } else { /* RTE_SUBQUERY */
+        TargetEntry *sub_te =
+          (TargetEntry *)list_nth(src_rte->subquery->targetList, attno - 1);
+        vtype   = exprType((Node *)sub_te->expr);
+        vtypmod = exprTypmod((Node *)sub_te->expr);
+        vcoll   = exprCollation((Node *)sub_te->expr);
+      }
+
+      v->varno     = 1;
+      v->varattno  = attno;
+      v->vartype   = vtype;
+      v->varcollid = vcoll;
+      v->vartypmod = vtypmod;
+      v->location  = -1;
+      te->expr = (Expr *)v;
+    }
+
+    inner_tl = lappend(inner_tl, te);
+    ++attno;
+  }
+
+  inner = makeNode(Query);
+  inner->commandType = CMD_SELECT;
+  inner->canSetTag   = true;
+  inner->rtable      = list_make2(inner_src, sm_rte);
+  inner->jointree    = inner_jt;
+  inner->targetList  = inner_tl;
+  inner->hasAggs     = false;
+  inner->hasSubLinks = false;
+
+#if PG_VERSION_NUM >= 160000
+  /* PG 16+ moved permission info from RangeTblEntry into a separate
+   * Query.rteperminfos list, indexed by RangeTblEntry.perminfoindex.
+   * Our copy of src_rte kept its original perminfoindex, so the inner
+   * query needs a matching rteperminfos entry — without it, perminfoindex
+   * dangles and the planner short-circuits the subquery. */
+  if (inner_src->perminfoindex != 0) {
+    RTEPermissionInfo *perminfo =
+      getRTEPermissionInfo(q->rteperminfos, src_rte);
+    inner->rteperminfos = list_make1(copyObject(perminfo));
+    inner_src->perminfoindex = 1;
+  }
+#endif
+
+  /* --- Replace src_rte in place with the subquery; outer varnos unchanged. --- */
+
+  src_rte->rtekind     = RTE_SUBQUERY;
+  src_rte->subquery    = inner;
+  src_rte->relid       = InvalidOid;
+  src_rte->relkind     = 0;
+#if PG_VERSION_NUM >= 120000
+  src_rte->rellockmode = 0; /* field added in PG 12 */
+#endif
+  src_rte->inh         = false;
+  src_rte->lateral     = false;
+#if PG_VERSION_NUM >= 160000
+  src_rte->perminfoindex = 0;
+#else
+  src_rte->selectedCols  = NULL;
+  src_rte->insertedCols  = NULL;
+  src_rte->updatedCols   = NULL;
+  src_rte->requiredPerms = ACL_SELECT;
+#endif
+
+  /* Drop the "provsql" entry from the outer RTE's eref->colnames.
+   * get_provenance_attributes will scan the subquery's target list for
+   * a "provsql" TE and reinsert the colname at the matching position,
+   * keeping eref->colnames length in sync with the subquery's target
+   * list.  Without this, the pre-existing "provsql" entry (inherited
+   * from the original relation) plus the reinsertion would produce a
+   * 5-colname list for a 4-column subquery, which PostgreSQL rejects. */
+  {
+    ListCell *cell, *prev;
+    AttrNumber i;
+
+    prev = NULL;
+    i = 1;
+    for (cell = list_head(src_rte->eref->colnames); cell != NULL; ) {
+      if (i == provsql_attno) {
+        src_rte->eref->colnames =
+          my_list_delete_cell(src_rte->eref->colnames, cell, prev);
+        break;
+      }
+      prev = cell;
+      cell = my_lnext(src_rte->eref->colnames, cell);
+      ++i;
+    }
+  }
+
+  /* --- Retype outer Vars (rteid, join_attno) from agg_token to text and
+   *     rewrite the equality OpExpr to text = text. --- */
+  {
+    retype_agg_var_ctx ctx;
+    ctx.rteid      = rteid;
+    ctx.join_attno = join_attno;
+    ctx.constants  = constants;
+    query_tree_walker(q, retype_agg_var_walker, (void *)&ctx,
+                      QTW_IGNORE_RT_SUBQUERIES);
+  }
+
+  return q;
+}
+
 /**
  * @brief Wrap @p expr in a @c provsql.assume_boolean FuncExpr.
  *
@@ -4992,6 +5605,23 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (rewritten)
         return process_query(constants, rewritten, removed, wrap_root, top_level,
                              inv_ctx);
+    }
+
+    /* Rewrite any JOIN on an agg_token column before provenance
+     * discovery, so get_provenance_attributes sees the already-correct
+     * subquery with a proper provsql column. */
+    {
+      Index rteid;
+      AttrNumber join_attno;
+
+      if (join_qual_has_agg_token((Node *)q->jointree, constants, &rteid,
+                                  &join_attno))
+      {
+        Query *rewritten = rewrite_join_agg_token(q, constants, rteid, join_attno);
+        if (rewritten)
+          return process_query(constants, rewritten, removed, wrap_root,
+                               top_level, inv_ctx);
+      }
     }
 
     /* Opt-in safe-query optimisation slot: when on, try to rewrite
@@ -6098,6 +6728,21 @@ void _PG_init(void) {
                              &provsql_kcmcp_server,
                              "",
                              PGC_SIGHUP,
+                             0,
+                             NULL,
+                             NULL,
+                             NULL);
+  DefineCustomStringVariable("provsql.last_eval_method",
+                             "Probability evaluation method(s) used by the most "
+                             "recent probability_evaluate call.",
+                             "Set automatically after each probability_evaluate "
+                             "call to the method that produced the result "
+                             "(comma-separated and deduplicated across calls in "
+                             "the session).  Useful to see which strategy the "
+                             "default auto-selection settled on.",
+                             &provsql_last_eval_method,
+                             "",
+                             PGC_USERSET,
                              0,
                              NULL,
                              NULL,
