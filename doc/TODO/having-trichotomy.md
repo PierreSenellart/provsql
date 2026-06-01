@@ -310,11 +310,18 @@ distinction matters:
       shared subquery-tuple gate is handled. This is why the circuit-level
       recogniser is preferable to a query-level rewrite, which *would* be
       order-sensitive. Still open: contributors with `gate_plus`/`gate_monus`
-      (UNION/EXCEPT lineage), AVG, the **cross-product / product-join** node
-      (safe-but-non-laminar, e.g. `R(a),S(a,b),T(a,c)` whose count is
-      `N_S·N_T` — needs a product combine + the skeleton certificate, since
-      the circuit can't distinguish it from `h0` without the query's
-      variable structure), and the BID disjoint-block `⊥` certificate path.
+      (UNION/EXCEPT lineage), AVG, and the **cross-product / product-join**
+      node (safe-but-non-laminar, e.g. `R(a),S(a,b),T(a,c)` whose count is
+      `N_S·N_T`). The product node is **circuit-detectable, no certificate
+      needed**: after factoring the shared root, a genuine cross-product is a
+      *complete leaf-disjoint* multipartite set (factors = non-co-occurrence
+      components; verify `|contributors| = ∏|factor|`), whereas the #P-hard
+      `h0`/triangle always carries a *private middle leaf* (the `S(x,y)`
+      tuple) that collapses the factor partition and fails completeness — so
+      it bails. It needs a product combine (`count = ∏ N_i`) in the engine,
+      not the planner. The genuinely certificate-only case is the **BID
+      disjoint-block `⊥`** structure: mutual exclusion from a key constraint
+      is a semantic fact that need not surface as circuit leaf-sharing.
    4. *Validation* — `test/sql/having_safe_join_{count,minmax,sum}.sql`
       off-vs-on parity against `possible-worlds` on the `R(k,a),S(a,b)`
       fan-out, star-schema, and BID-`⊥` shapes; a **negative** test that the
