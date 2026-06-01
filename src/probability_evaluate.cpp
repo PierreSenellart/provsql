@@ -766,6 +766,32 @@ public:
   }
 };
 
+/// Exact inclusion-exclusion over a monotone DNF.  By-name only; runs before
+/// the multivalued rewrite (dnfShape rejects multivalued inputs).  O(2^m) in
+/// the clause count -- the portfolio member to pick when m is small.
+class SieveMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "sieve"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    if(!ctx.args.empty())
+      provsql_warning("Argument '%s' ignored for method sieve",
+                      ctx.args.c_str());
+    std::vector<gate_t> clauses;
+    std::vector<std::set<gate_t> > supports;
+    if(!ctx.c.dnfShape(ctx.gate, clauses, supports)) {
+      provsql_warning("method 'sieve' applies only to a DNF-shaped circuit "
+                      "(a monotone OR-of-ANDs over input leaves); negation, "
+                      "comparison, aggregation, random-variable and "
+                      "multivalued-input gates are not supported");
+      provsql_error("method 'sieve' requires a DNF-shaped provenance circuit");
+    }
+    double r = ctx.c.sieve(clauses, supports);
+    ctx.actual_method = "sieve";
+    return r;
+  }
+};
+
 /// weightmc: backward-compatible alias for the weighted-model-counter path.
 class WeightmcMethod : public ProbabilityMethod {
 public:
@@ -878,6 +904,7 @@ const MethodCatalog &MethodCatalog::instance()
     c.registerMethod(std::make_unique<PossibleWorldsMethod>());
     c.registerMethod(std::make_unique<MonteCarloMethod>());
     c.registerMethod(std::make_unique<KarpLubyMethod>());
+    c.registerMethod(std::make_unique<SieveMethod>());
     c.registerMethod(std::make_unique<WeightmcMethod>());
     c.registerMethod(std::make_unique<WmcMethod>());
     return c;

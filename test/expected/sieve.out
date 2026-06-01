@@ -1,0 +1,11 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+circuit|sieve|eq_exact
+flat|0.184|t
+shared|0.290|t
+subsume|0.500|t
+(3 rows)
+WARNING:  ProvSQL: method 'sieve' applies only to a DNF-shaped circuit (a monotone OR-of-ANDs over input leaves); negation, comparison, aggregation, random-variable and multivalued-input gates are not supported
+ERROR:  ProvSQL: method 'sieve' requires a DNF-shaped provenance circuit

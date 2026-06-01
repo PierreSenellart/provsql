@@ -672,6 +672,45 @@ double BooleanCircuit::karpLubyStopping(
   return st.S * static_cast<double>(accepts) / static_cast<double>(max_samples);
 }
 
+/// Largest clause count for which the 2^m sieve enumeration is admitted.
+static const size_t kSieveMaxClauses = 24;
+
+double BooleanCircuit::sieve(
+  const std::vector<gate_t> &clauses,
+  const std::vector<std::set<gate_t> > &supports) const
+{
+  const size_t m = clauses.size();
+  if(m == 0)
+    return 0.;
+  if(m > kSieveMaxClauses)
+    throw CircuitException(
+      "sieve: too many clauses (" + std::to_string(m) + " > "
+      + std::to_string(kSieveMaxClauses)
+      + "); inclusion-exclusion is 2^m -- use another method");
+
+  // Pr[∨ c_i] = Σ_{∅≠S} (-1)^{|S|+1} ∏_{leaf ∈ ∪supports(S)} getProb(leaf).
+  double total = 0.;
+  std::unordered_set<gate_t> u;
+  for(unsigned long long s = 1; s < (1ULL << m); ++s) {
+    u.clear();
+    int bits = 0;
+    for(size_t i = 0; i < m; ++i)
+      if(s & (1ULL << i)) {
+        ++bits;
+        for(gate_t leaf : supports[i])
+          u.insert(leaf);
+      }
+    double p = 1.;
+    for(gate_t leaf : u)
+      p *= getProb(leaf);
+    if(bits & 1) total += p; else total -= p;
+
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted");
+  }
+  return total;
+}
+
 double BooleanCircuit::possibleWorlds(gate_t g) const
 {
   if(inputs.size()>=8*sizeof(unsigned long long))

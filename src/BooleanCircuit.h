@@ -332,6 +332,27 @@ double karpLuby(const std::vector<gate_t> &clauses,
                 unsigned long samples) const;
 
 /**
+ * @brief Exact probability of a monotone DNF by inclusion-exclusion (sieve).
+ *
+ * @c Pr[∨_i c_i] = Σ_{∅≠S⊆clauses} (-1)^{|S|+1} Pr[∧_{i∈S} c_i].  Each clause is
+ * a conjunction of positive input leaves, so the conjunction of a set @c S of
+ * clauses is the AND of the union of their supports, and over independent
+ * inputs @c Pr[∧_{i∈S} c_i] = ∏_{leaf ∈ ∪supports(S)} getProb(leaf).  Exact, and
+ * @c O(2^m) in the clause count @c m -- the portfolio member to pick when @c m
+ * is small (a handful of clauses), where it beats the general compilers.
+ *
+ * @p clauses / @p supports are those returned by @c dnfShape (monotone DNF over
+ * input leaves).  Throws when @c m exceeds @c kSieveMaxClauses (the @c 2^m
+ * enumeration would be impractical) so the caller can pick another method.
+ *
+ * @param clauses   Top-level clause roots (from @c dnfShape).
+ * @param supports  Per-clause reachable @c IN leaves (from @c dnfShape).
+ * @return          The exact probability.
+ */
+double sieve(const std::vector<gate_t> &clauses,
+             const std::vector<std::set<gate_t> > &supports) const;
+
+/**
  * @brief Karp-Luby FPRAS with the self-adjusting stopping rule (adaptive
  *        sample count for a relative @c (eps,delta) guarantee).
  *
