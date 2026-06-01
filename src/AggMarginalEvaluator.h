@@ -13,8 +13,11 @@
  * @c CountCmpEvaluator bails to @c provsql_having's exponential enumeration.
  *
  * This pass generalises the flat case to any *hierarchical* (laminar) join:
- * each contributor is a product (conjunction) of @c gate_input leaves, and
- * the count distribution is computed **recursively** down the hierarchy.  At
+ * each contributor is a product (conjunction) of @c gate_input leaves
+ * (nested @c gate_times from SPJ subqueries / views is flattened, since
+ * @c times is AND on the probability path, so detection is invariant to
+ * join order and subquery nesting), and the count distribution is computed
+ * **recursively** down the hierarchy.  At
  * each level the contributors partition into independent **blocks** (by shared
  * leaf); a block factors out the leaves common to *every* member (this level's
  * shared "root" event) and the block count is the disjoint mixture

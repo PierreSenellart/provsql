@@ -301,10 +301,20 @@ distinction matters:
       class** — the engine gates *circuit-only* and self-gates: at every
       recursion level each multi-member block must have a leaf common to all
       its members (and every leaf private to the cmp subtree), which the
-      non-laminar triangle fails. Still open: contributors with
-      `gate_plus`/`gate_monus` (UNION/EXCEPT lineage), AVG, and the
-      baked-certificate path for BID disjoint-block `⊥` structure the circuit
-      cannot self-certify (Phase 1 above).
+      non-laminar triangle fails. Detection is **join-order- and
+      subquery-invariant**: the lineage is content-addressed and `times` is
+      AND on the probability path, so `parseProductContributor` flattens
+      nested `gate_times` (SPJ subqueries / views, which build
+      `times(times(r,s),t)`) to the same leaf set as the flat join, and the
+      privacy check (`aggSubtreePrivate`) walks the whole product-DAG so a
+      shared subquery-tuple gate is handled. This is why the circuit-level
+      recogniser is preferable to a query-level rewrite, which *would* be
+      order-sensitive. Still open: contributors with `gate_plus`/`gate_monus`
+      (UNION/EXCEPT lineage), AVG, the **cross-product / product-join** node
+      (safe-but-non-laminar, e.g. `R(a),S(a,b),T(a,c)` whose count is
+      `N_S·N_T` — needs a product combine + the skeleton certificate, since
+      the circuit can't distinguish it from `h0` without the query's
+      variable structure), and the BID disjoint-block `⊥` certificate path.
    4. *Validation* — `test/sql/having_safe_join_{count,minmax,sum}.sql`
       off-vs-on parity against `possible-worlds` on the `R(k,a),S(a,b)`
       fan-out, star-schema, and BID-`⊥` shapes; a **negative** test that the

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <map>
 #include <numeric>
+#include <set>
 #include <vector>
 
 #include "Aggregation.h"          // AggregationOperator + ComparisonOperator
@@ -26,47 +27,98 @@ namespace {
  * Contributor parsing
  * ------------------------------------------------------------------ *
  * A contributor (the K side of a semimod) is in scope iff it is a
- * conjunction of distinct @c gate_input leaves: a bare @c gate_input,
- * a @c gate_one (deterministically-present, empty leaf set), or a
- * @c gate_times all of whose children are @c gate_input / @c gate_one.
- * Any other shape (gate_plus from a UNION, gate_monus, gate_mulinput,
- * nested products, a leaf repeated within the contributor) is out of
- * the first-slice scope and makes the whole cmp bail.
+ * conjunction of @c gate_input leaves: a bare @c gate_input, a
+ * @c gate_one (deterministically-present, empty leaf set), or a
+ * @c gate_times -- recursively, so a *nested* product
+ * @c times(times(r,s),t) (e.g. an SPJ subquery / view whose tuple
+ * provenance feeds an outer join) flattens to the same leaf set
+ * @c {r,s,t} as the flat @c times(r,s,t).  This is sound on the
+ * probability path: @c times is logical AND there, so it is
+ * associative and the nesting does not change the conjunction's
+ * probability (the non-commutativity of @c times matters only to the
+ * symbolic semirings, which this pass never touches).  Any other shape
+ * (gate_plus from a UNION, gate_monus, gate_mulinput) makes the cmp
+ * bail.  A leaf repeated within the contributor also bails (the
+ * read-once-within check below), since p^2 != p.
  *
  * On success @p out holds the contributor's leaf set (sorted, unique).
  */
+static bool collectProductLeaves(GenericCircuit &gc, gate_t k,
+                                 std::vector<gate_t> &out)
+{
+  switch (gc.getGateType(k)) {
+    case gate_one:
+      return true;                       /* identity factor: contributes nothing */
+    case gate_input:
+      out.push_back(k);
+      return true;
+    case gate_times:
+      for (gate_t c : gc.getWires(k))
+        if (!collectProductLeaves(gc, c, out)) return false;
+      return true;
+    default:
+      return false;                      /* non-product factor: out of scope */
+  }
+}
+
 static bool parseProductContributor(GenericCircuit &gc, gate_t k,
                                     std::vector<gate_t> &out)
 {
   out.clear();
-  switch (gc.getGateType(k)) {
-    case gate_one:
-      return true;                       /* empty conjunction: always present */
-    case gate_input:
-      out.push_back(k);
-      return true;
-    case gate_times: {
-      for (gate_t c : gc.getWires(k)) {
-        switch (gc.getGateType(c)) {
-          case gate_one:
-            break;                       /* identity factor, skip */
-          case gate_input:
-            out.push_back(c);
-            break;
-          default:
-            return false;                /* non-leaf factor: out of scope */
-        }
-      }
-      /* Read-once within the contributor: a leaf used twice would make
-       * the product probability wrong (p^2 vs the leaf's single mass). */
-      std::sort(out.begin(), out.end());
-      if (std::adjacent_find(out.begin(), out.end()) != out.end())
-        return false;
-      return true;
+  if (!collectProductLeaves(gc, k, out))
+    return false;
+  /* Read-once within the contributor: a leaf used twice would make the
+   * product probability wrong (p^2 vs the leaf's single mass). */
+  std::sort(out.begin(), out.end());
+  if (std::adjacent_find(out.begin(), out.end()) != out.end())
+    return false;
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Privacy of the aggregate subtree
+ * ------------------------------------------------------------------ *
+ * The cmp may be resolved to an independent Bernoulli only if all the
+ * randomness it depends on is private to its own subtree -- i.e. no
+ * gate reachable from the @c gate_agg is also referenced from elsewhere
+ * in the circuit (which would couple the cmp's outcome to that other
+ * use).  Walk the subtree rooted at @p agg and require, for every
+ * non-constant gate in it, that its whole-circuit reference count
+ * equals the number of references it receives from *within* the
+ * subtree.  This subsumes (and generalises to nested / shared product
+ * gates) the per-leaf @c ref==cnt and per-semimod @c ref==1 checks: a
+ * subquery tuple's @c times(r,s) shared across several contributors is
+ * internal (its internal ref count matches its total), so it passes;
+ * any escape to an outside parent fails.  Constants (@c gate_one /
+ * @c gate_zero / @c gate_value) carry no randomness and may be shared
+ * freely, so they are exempt.  The caller separately requires
+ * @c ref[agg]==1 (the agg is consumed by this cmp alone). */
+static bool aggSubtreePrivate(GenericCircuit &gc, gate_t agg,
+                              const std::vector<unsigned> &ref)
+{
+  std::map<gate_t, unsigned> internalRef;
+  std::set<gate_t> visited;
+  std::vector<gate_t> stk{agg};
+  visited.insert(agg);
+  while (!stk.empty()) {
+    gate_t g = stk.back(); stk.pop_back();
+    for (gate_t c : gc.getWires(g)) {
+      ++internalRef[c];
+      if (visited.insert(c).second) stk.push_back(c);
     }
-    default:
-      return false;
   }
+  for (gate_t g : visited) {
+    if (g == agg) continue;
+    switch (gc.getGateType(g)) {
+      case gate_one: case gate_zero: case gate_value:
+        continue;                        /* constants: sharing is harmless */
+      default:
+        break;
+    }
+    if (ref[static_cast<std::size_t>(g)] != internalRef[g])
+      return false;                      /* referenced from outside the subtree */
+  }
+  return true;
 }
 
 /* Disjoint-set forest over contributor indices, union by shared leaf. */
@@ -466,37 +518,26 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
       continue;                          /* AVG and others: out of scope */
 
     const gate_t agg = match.agg;
-    const auto &semimods = match.semimods;
     const auto &ks = match.ks;
     const std::size_t n = ks.size();
 
-    /* The aggregate and each wrapper must be consumed by this cmp / agg
-     * alone, exactly as in CountCmpEvaluator: a shared agg would couple
-     * two HAVING comparators over the same aggregate. */
+    /* The aggregate must be consumed by this cmp alone: a shared agg
+     * would couple two HAVING comparators over the same aggregate. */
     if (ref[static_cast<std::size_t>(agg)] != 1) continue;
     bool ok = true;
-    for (gate_t sm : semimods)
-      if (ref[static_cast<std::size_t>(sm)] != 1) { ok = false; break; }
-    if (!ok) continue;
 
-    /* Parse every contributor into its leaf set; tally per-leaf how many
-     * contributors reference it (the cmp-internal reference count). */
+    /* Parse every contributor into its (flattened) leaf set. */
     std::vector<std::vector<gate_t>> leaves(n);
-    std::map<gate_t, unsigned> cnt;
-    for (std::size_t i = 0; i < n && ok; ++i) {
-      if (!parseProductContributor(gc, ks[i], leaves[i])) { ok = false; break; }
-      for (gate_t l : leaves[i]) ++cnt[l];
-    }
+    for (std::size_t i = 0; i < n && ok; ++i)
+      if (!parseProductContributor(gc, ks[i], leaves[i])) ok = false;
     if (!ok) continue;
 
-    /* No outside reachability: every involved leaf's whole-circuit ref
-     * count must equal its cmp-internal count, so resolving the cmp to an
-     * independent Bernoulli does not sever a correlation with the rest of
-     * the circuit.  Generalises CountCmpEvaluator's ref==1 (which forbids
-     * sharing entirely) to "shared only among these contributors". */
-    for (const auto &kv : cnt)
-      if (ref[static_cast<std::size_t>(kv.first)] != kv.second) { ok = false; break; }
-    if (!ok) continue;
+    /* The cmp's randomness must be private to its agg subtree -- no gate
+     * reachable from the agg referenced from outside it -- the soundness
+     * precondition for resolving the cmp to an independent Bernoulli.
+     * Subsumes the per-semimod ref==1 and per-leaf ref==cnt checks and
+     * extends them to nested / shared product gates (subquery tuples). */
+    if (!aggSubtreePrivate(gc, agg, ref)) continue;
 
     /* Dispatch on the aggregate; each arm computes the exact probability
      * over the hierarchical (laminar) contributor structure, recursing

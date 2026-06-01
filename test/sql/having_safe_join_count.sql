@@ -99,6 +99,19 @@ SELECT * FROM sj_parity('depth2 >= 2', 'SELECT a.u g, probability_evaluate(prove
 SELECT * FROM sj_parity('depth2 = 2',  'SELECT a.u g, probability_evaluate(provenance()) p FROM sj_acct a, sj_ord o, sj_item t WHERE a.u=o.u AND o.u=t.u AND o.o=t.o GROUP BY a.u HAVING count(*) = 2');
 SELECT * FROM sj_parity('depth2 <= 2', 'SELECT a.u g, probability_evaluate(provenance()) p FROM sj_acct a, sj_ord o, sj_item t WHERE a.u=o.u AND o.u=t.u AND o.o=t.o GROUP BY a.u HAVING count(*) <= 2');
 
+-- Nested gate_times via an SPJ subquery: the inner (sj_r JOIN sj_s) tuple
+-- provenance feeds the outer join with sj_jt as times(times(r,s), t).
+-- parseProductContributor must flatten the nesting (times is AND on the
+-- probability path) so the laminar chain is still recognised -- a flat
+-- comma join and this subquery form must give the same probability.
+CREATE TABLE sj_jt(b int, c int);
+INSERT INTO sj_jt VALUES (100,1),(200,1),(300,1);
+SELECT add_provenance('sj_jt');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM sj_jt; END $$;
+
+SELECT * FROM sj_parity('subquery >= 2', 'SELECT k g, probability_evaluate(provenance()) p FROM (SELECT sj_r.k, sj_s.b FROM sj_r JOIN sj_s ON sj_r.a=sj_s.a) sub JOIN sj_jt ON sub.b=sj_jt.b GROUP BY k HAVING count(*) >= 2');
+SELECT * FROM sj_parity('subquery <= 3', 'SELECT k g, probability_evaluate(provenance()) p FROM (SELECT sj_r.k, sj_s.b FROM sj_r JOIN sj_s ON sj_r.a=sj_s.a) sub JOIN sj_jt ON sub.b=sj_jt.b GROUP BY k HAVING count(*) <= 3');
+
 -- Non-hierarchical triangle R(x),S(x,y),T(y): the engine must DECLINE
 -- (no leaf common to all members of the block) and fall back to exact
 -- enumeration, so off and on still agree.
@@ -137,8 +150,9 @@ SELECT remove_provenance('sj_d2');
 SELECT remove_provenance('sj_acct');
 SELECT remove_provenance('sj_ord');
 SELECT remove_provenance('sj_item');
+SELECT remove_provenance('sj_jt');
 SELECT remove_provenance('sj_rr');
 SELECT remove_provenance('sj_ss');
 SELECT remove_provenance('sj_tt');
 SELECT remove_provenance('sj_flat');
-DROP TABLE sj_r, sj_s, sj_f, sj_d1, sj_d2, sj_acct, sj_ord, sj_item, sj_rr, sj_ss, sj_tt, sj_flat;
+DROP TABLE sj_r, sj_s, sj_f, sj_d1, sj_d2, sj_acct, sj_ord, sj_item, sj_jt, sj_rr, sj_ss, sj_tt, sj_flat;
