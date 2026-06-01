@@ -777,32 +777,59 @@ hazardous. Thm 9 / Alg 6.3.1:
 
 ### Phased build (behavior-preserving)
 
-1. **Catalog skeleton + port exact methods.** Introduce `ProbabilityMethod` /
-   `MethodCatalog`, port the existing exact branches as classes, replace the
-   `if/else if` dispatch with `choose_and_run` on the exact path. Invariant:
-   reproduce today's ladder at `(0,0)`, *adding* only small-N `PossibleWorlds`
-   and treewidth-gated `Compilation`. **Shared infrastructure — pays off on the
-   exact path every probability call hits, before any FPRAS exists.** Baseline
-   regression: chooser output ≡ old ladder over the existing test corpus.
-2. **Shared per-world cmp primitive** (`eval_cmp_in_world`) — the sampler
-   prerequisite. Parity tests pin "sample = expand."
-3. **Relative path, core.** `StoppingRuleMcMethod` (universal relative fallback)
-   + `MinMaxKarpLubyMethod` (the near-free MIN/MAX-easy win). A complete relative
-   surface for everything except SUM-hard-but-safe.
-4. **Additive path.** Register `MonteCarloAdditiveMethod` (already exists as
-   `monteCarlo`) and wire the `additive` tolerance.
-5. **`AggFptrasMethod`** — the SUM-safe FPTRAS; closes the SUM-hard-but-safe cell.
-6. **RV transparency.** Signal the continuous-RV MC fallback (verbose-gated
-   NOTICE / distinguishable result); route the *probability* RV case (`P(X<c)`)
-   through `StoppingRuleMc` for a real relative bound; leave moments best-effort
-   but labeled. NOT a `rv_mc_samples` opt-in flip.
-7. **Enrichments + cost-model-later.** `SieveMethod`, `MulMcMethod`; replace the
-   heuristic `estimated_cost` bodies with calibrated cost (measured constants)
-   and the per-node ε-split via the propagation tree — the seam is already there,
-   callers do not change.
+Status legend: ✅ done · ◑ partial · ⏳ deferred (with reason).
 
-Phases 1–4 are a complete, shippable three-path surface for everything except
-SUM-hard-but-safe; 5 closes that cell; 6–7 are independent improvements.
+1. ✅ **Catalog skeleton + port exact methods.** `src/ProbabilityMethod.h` +
+   the catalog machinery in `probability_evaluate.cpp`: `ProbabilityMethod`
+   (Strategy), `MethodCatalog` (registry), `EvalContext`; every historical
+   dispatch branch is now a method class, the empty method runs
+   `chooseAndRun` (the independent → inversion-free → compilation ladder) and a
+   named method runs `byName`. Behaviour-preserving (188 tests green at the
+   refactor). Commit `1f4970a`. *Not yet added: the behaviour-changing small-N
+   `PossibleWorlds` / treewidth-gated `Compilation` chain entries (a separate
+   commit, since they change the reported method).* `CircuitFeatures`, the cost
+   heuristic and the lazy-Boolean-build (so GenericCircuit-level methods fold
+   into the catalog) are still TODO.
+2. ◑ **Shared per-world cmp primitive.** The value-level core
+   `agg_cmp_holds_in_world` (empty-group exclusion centralised) is in
+   `subset.{hpp,cpp}`, with `enumerate_exhaustive` refactored onto it. Commit
+   `f4ee731`. *Deferred:* the gate-level `eval_cmp_in_world` wrapper + wiring
+   the `MonteCarloSampler` agg arm through it (the sampler already has a working
+   agg/cmp arm, so this is a unification/parity hardening, not a blocker).
+3. ◑ **Relative path, core.** ✅ `StoppingRuleMc` shipped as the `stopping-rule`
+   method (`monteCarloRVStopping`, Dagum-KLR over `evalBool`) — the universal
+   relative FPRAS, handles non-DNF / RV / agg circuits karp-luby cannot. Test
+   `stopping_rule.sql`, commit `3af132d`. ⏳ `MinMaxKarpLubyMethod` (MIN/MAX-easy
+   → UCQ → karp-luby) deferred: an efficiency optimisation StoppingRuleMc
+   already covers functionally.
+4. ⏳ **Additive path.** Functionally already served by the existing
+   `monte-carlo` method. The substantive piece is the three-path
+   AUTO-SELECTION surface (a `relative`/`additive`/`exact` tolerance the chooser
+   maps to a method) — design-heavy, changes user-facing surface, overlaps the
+   cost-model chooser. Deferred for review.
+5. ⏳ **`AggFptrasMethod`** — the SUM-safe FPTRAS (Dyer rounding + top-down
+   random-world generator + accept-test). Research-grade; high risk of subtle
+   statistical bias; needs the `AggMarginalEvaluator` internals exposed and the
+   skeleton-safety gate wired. **Deferred for collaborative implementation /
+   review rather than autonomous coding.**
+6. ✅ **RV transparency.** RV moment MC fallback now emits a `verbose>=5`
+   NOTICE (`Expectation.cpp` `mc_samples_or_throw`): closed-form stays quiet, MC
+   fallback announces "an approximation, not an exact moment". Test
+   `continuous_mc_transparency.sql`, commit `5be02aa`. *Deferred enrichments:*
+   route the RV *probability* case `P(X<c)` through `stopping-rule`; decide
+   always-on vs the current verbose-gated signal (one-line change).
+7. ◑ **Enrichments + cost-model-later.** ✅ `SieveMethod` added (exact
+   inclusion-exclusion, `BooleanCircuit::sieve`, demonstrates the catalog's
+   open/closed: new method = one class + one `registerMethod`). Test
+   `sieve.sql`, commit `0ad8f83`. ⏳ `MulMcMethod` (needs a structural `p`
+   lower bound) and the calibrated cost-model / per-node ε-split seam deferred.
+
+**Delivered (autonomous pass):** the method-catalog architecture (1), the shared
+per-world primitive core (2), the universal relative FPRAS (3), RV transparency
+(6), and the sieve exact method (7) — five commits, all behaviour-preserving or
+additive, full regression green throughout (191 tests). **Open for review:** the
+three-path auto-selection surface (4), the SUM-safe FPTRAS (5), and the cost
+heuristic / treewidth features / lazy-Boolean catalog folding (1).
 
 ## Implementation observations
 
