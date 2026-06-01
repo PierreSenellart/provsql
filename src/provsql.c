@@ -2137,6 +2137,16 @@ void strip_group_rte_pg18(Query *q) {
   if (q->jointree && q->jointree->quals)
     q->jointree->quals = resolve_group_rte_vars_mutator(
       q->jointree->quals, &grp_ctx);
+  /* HAVING too: when the GROUP BY key is a constant (e.g. GROUP BY 1, or
+   * any literal grouping expression), PostgreSQL 18 rewrites a matching
+   * literal on the other side of a HAVING comparison (HAVING count(*) = 1)
+   * into a grouped Var referencing the RTE_GROUP entry.  Left unresolved
+   * it reaches having_OpExpr_to_provenance_cmp as a bare Var and trips the
+   * "cannot handle complex HAVING expressions" bail; resolving it back to
+   * the underlying grouping expression restores the Const the converter
+   * expects. */
+  if (q->havingQual)
+    q->havingQual = resolve_group_rte_vars_mutator(q->havingQual, &grp_ctx);
 }
 #endif
 

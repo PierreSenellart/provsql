@@ -62,7 +62,7 @@ test: possible_worlds monte_carlo karp_luby
 test: agg_uuid_aggfnoid
 
 # Complex test relying on probabilities
-test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation min_max_cmp_optimisation sum_cmp_optimisation having_always_true
+test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation min_max_cmp_optimisation sum_cmp_optimisation having_group_by_const having_always_true
 test: having_count_distinct
 test: last_eval_method
 
