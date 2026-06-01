@@ -13,6 +13,7 @@ on:
       - 'branding/**'
       - 'docker/**'
       - 'studio/**'
+      - 'wasm/**'
       - 'test/bench/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
@@ -28,6 +29,7 @@ on:
       - '.github/workflows/pgxn.yml'
       - '.github/workflows/studio.yml'
       - '.github/workflows/studio-release.yml'
+      - '.github/workflows/wasm.yml'
   pull_request:
     paths-ignore:
       - 'doc/**'
@@ -35,6 +37,7 @@ on:
       - 'branding/**'
       - 'docker/**'
       - 'studio/**'
+      - 'wasm/**'
       - 'test/bench/**'
       - '*.md'
       - '.github/ISSUE_TEMPLATE/**'
@@ -50,6 +53,7 @@ on:
       - '.github/workflows/pgxn.yml'
       - '.github/workflows/studio.yml'
       - '.github/workflows/studio-release.yml'
+      - '.github/workflows/wasm.yml'
   workflow_dispatch:
 
 jobs:
