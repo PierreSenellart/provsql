@@ -436,8 +436,23 @@ The chain (in order) :
   ``src/CmpEvaluatorCommon.{h,cpp}`` (``matchAggCmp`` /
   ``computeRefCounts`` / ``contributorProb``).  See
   ``src/MinMaxCmpEvaluator.{h,cpp}``.
+- :cfunc:`runSumCmpEvaluator` (same gate
+  ``provsql.cmp_probability_evaluation``) : recognises HAVING
+  ``gate_cmp(gate_agg(SUM, semimod children), gate_value(C))`` and
+  replaces the cmp with a Bernoulli carrying ``Pr(SUM(a) op C)``.  The
+  running sum of the present rows' integer weights ``m_i`` is a weighted
+  Poisson-binomial ; its full distribution ``dp[s] = Pr(sum = s)`` is
+  built by a subset-sum convolution over the reachable range
+  ``[sum of negative m_i, sum of positive m_i]``, and the answer is
+  ``sum_{s : s op C} dp[s]`` minus the empty-group world (whose empty sum
+  is ``0``).  Cost ``O(N x R)`` with ``R`` the range -- *pseudo*-polynomial
+  (``R`` is linear in the weight magnitudes, hence exponential in their
+  bit-length), so the pass declines above a range cap and falls back to
+  the general path.  Same shape match and independence certification as
+  the COUNT / MIN-MAX evaluators (shared ``CmpEvaluatorCommon``).  See
+  ``src/SumCmpEvaluator.{h,cpp}``.
 
-Adding another closed-form cmp resolver (SUM, future discrete-RV
+Adding another closed-form cmp resolver (future discrete-RV
 distributions…) follows the same shape : a ``runXxxEvaluator`` function
 that walks ``gate_cmp`` gates, checks shape + independence (reusing
 ``CmpEvaluatorCommon``), computes the probability, calls

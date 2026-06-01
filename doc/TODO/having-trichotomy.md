@@ -104,6 +104,12 @@ convolution `⊛^+`, disjoint (same BID block) children by `⊥` (Prop. 1, each
   query-evaluation problem (Def. 4) takes `k` in **binary**. So SUM-safe is not
   "efficient" in the paper's strict sense — this is exactly why SUM bifurcates
   in the trichotomy (Gain 2/3).
+  **Landed** as `src/SumCmpEvaluator.{h,cpp}`: the subset-sum DP over the
+  reachable-sum range, same pre-pass slot and shared
+  `src/CmpEvaluatorCommon.{h,cpp}` independence certification as the COUNT /
+  MIN-MAX arms, with a range cap implementing the Remark 3 pseudo-poly
+  fallback. Pinned by `test/sql/sum_cmp_optimisation.sql`, benchmarked by
+  `test/bench/sum_cmp_bench.sql`.
 - **COUNT(DISTINCT)** — two-stage: per-value `EXISTS` marginal bottom-up, then
   count the distinct present values (Def. 14, Theorem 3). The marginals are
   *lossy* (only the count's distribution survives, not which values), which
@@ -189,6 +195,7 @@ hierarchical."
    **Done** — see `src/MinMaxCmpEvaluator.{h,cpp}` and the note under Gain 1.
 2. **Gain 1, SUM arm** — weighted-sum DP; ship with the explicit pseudo-poly
    caveat (Remark 3) and a sane `k` bound.
+   **Done** — see `src/SumCmpEvaluator.{h,cpp}` and the note under Gain 1.
 3. **Gain 2, classifier** — needed to make Gains 1/3 self-selecting and to stop
    the silent exponential fallback; mirrors `classify_top_level` closely.
 4. **Gain 4, independence certification** — unlocks joins for all of Gain 1;

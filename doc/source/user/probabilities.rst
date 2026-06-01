@@ -387,9 +387,9 @@ The shortcut fires automatically when its soundness preconditions
 are met: each per-row provenance must be a single ``gate_input``
 leaf and the group-level aggregate must not be shared with any
 other comparator.  It is transparent to the user; no GUC needs to
-be set.  Queries outside the supported shape (HAVING-SUM, or
-multi-cmp HAVING such as ``COUNT(*) >= a AND COUNT(*) <= b``) fall
-through to the general HAVING path.
+be set.  Queries outside the supported shape (multi-cmp HAVING such
+as ``COUNT(*) >= a AND COUNT(*) <= b``) fall through to the general
+HAVING path.
 
 HAVING-MIN / MAX closed-form shortcut
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -407,6 +407,20 @@ all twelve ``(MIN|MAX, op)`` cases have analogous closed forms.  Like
 the COUNT shortcut it fires automatically and replaces the
 exponential possible-worlds enumeration the general path would
 otherwise run for these aggregates.
+
+HAVING-SUM closed-form shortcut
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``GROUP BY g HAVING SUM(a) op c`` (same six operators) is handled by a
+weighted-sum dynamic program: the distribution of the group's running
+sum over the present rows is built by convolution, and the probability
+is read off as the mass of the sums satisfying the comparison (with the
+empty group excluded).  This costs ``O(N × R)`` per group, where ``R``
+is the range of reachable sums.  Because ``R`` grows with the
+magnitude of the values, the shortcut is *pseudo*-polynomial and steps
+aside for the general path when the range is too wide; for the usual
+small-integer weights it replaces the exponential enumeration with a
+fast DP.
 
 Continuous Random Variables
 ----------------------------

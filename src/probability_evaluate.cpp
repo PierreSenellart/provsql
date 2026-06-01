@@ -54,6 +54,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "AnalyticEvaluator.h"
 #include "CountCmpEvaluator.h"
 #include "MinMaxCmpEvaluator.h"
+#include "SumCmpEvaluator.h"
 #include "HybridEvaluator.h"
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
@@ -713,9 +714,9 @@ static Datum probability_evaluate_internal
   unsigned analytic_resolved = provsql::runAnalyticEvaluator(gc);
 
   /* Closed-form cmp-probability evaluators : the Poisson-binomial
-   * pre-pass for HAVING COUNT(*) op C, then the MIN / MAX closed forms,
-   * both over independent private contributors ; a future SUM resolver
-   * will run from the same hook.  Each replaces a matched gate_cmp
+   * pre-pass for HAVING COUNT(*) op C, the MIN / MAX closed forms, and
+   * the weighted-sum DP for SUM(a) op C, all over independent private
+   * contributors.  Each replaces a matched gate_cmp
    * with a Bernoulli gate_input carrying the closed-form probability,
    * so the surrounding circuit can skip the DNF that
    * provsql_having's enumerate_valid_worlds would otherwise build.
@@ -726,9 +727,11 @@ static Datum probability_evaluate_internal
    * on by default. */
   unsigned count_cmp_resolved = 0;
   unsigned minmax_cmp_resolved = 0;
+  unsigned sum_cmp_resolved = 0;
   if (provsql_cmp_probability_evaluation) {
     count_cmp_resolved = provsql::runCountCmpEvaluator(gc);
     minmax_cmp_resolved = provsql::runMinMaxCmpEvaluator(gc);
+    sum_cmp_resolved = provsql::runSumCmpEvaluator(gc);
   }
 
   /* Always-true HAVING rewrite (runs regardless of the Poisson-binomial
@@ -750,7 +753,7 @@ static Datum probability_evaluate_internal
    * method's reported timing and structure may not reflect work on
    * the original formula. */
   if (analytic_resolved + count_cmp_resolved + minmax_cmp_resolved
-        + always_true_resolved > 0
+        + sum_cmp_resolved + always_true_resolved > 0
       && provsql_verbose >= 5) {
     size_t gates_after = count_reachable(gc_root);
     std::vector<std::string> parts;
@@ -760,6 +763,8 @@ static Datum probability_evaluate_internal
       parts.push_back(std::to_string(count_cmp_resolved) + " Poisson-binomial");
     if (minmax_cmp_resolved > 0)
       parts.push_back(std::to_string(minmax_cmp_resolved) + " min/max");
+    if (sum_cmp_resolved > 0)
+      parts.push_back(std::to_string(sum_cmp_resolved) + " weighted-sum");
     if (always_true_resolved > 0)
       parts.push_back(std::to_string(always_true_resolved) + " always-true");
     std::string breakdown;
