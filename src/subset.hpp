@@ -54,4 +54,35 @@ std::vector<mask_t> enumerate_valid_worlds(
   bool &upset
   );
 
+/**
+ * @brief Canonical per-world decision: does @c agg(present) @c op @c constant
+ *        hold in the world where exactly the @p present tuples are present?
+ *
+ * The single source of truth for "value of @c agg θ k in one world", shared by
+ * the all-worlds expansion (the exhaustive enumerator builds its world set from
+ * this predicate) and by any sampler that draws one world (so sample and expand
+ * agree by construction).
+ *
+ * Enforces the **empty-group exclusion**: a world with no present tuple makes
+ * the predicate @c false (SQL evaluates HAVING only on groups that exist, so an
+ * all-absent group never satisfies it -- even for e.g. @c sum(x) >= -5 or
+ * @c min(x) <= k).  Otherwise it aggregates the present tuples' @p values with
+ * @p agg_kind and applies @p op against @p constant on the integer grid (the
+ * caller having scaled numeric / decimal-float domains; see @c matchAggCmp).
+ *
+ * @param values    Per-tuple aggregate contribution (scaled to a common grid).
+ * @param present   Which tuples are present in this world (same length).
+ * @param constant  Right-hand side of the comparison, on the same grid.
+ * @param op        Comparison operator.
+ * @param agg_kind  Aggregation function.
+ * @return          @c true iff a non-empty group's aggregate satisfies @p op.
+ */
+bool agg_cmp_holds_in_world(
+  const std::vector<long> &values,
+  const mask_t &present,
+  long constant,
+  ComparisonOperator op,
+  AggregationOperator agg_kind
+  );
+
 #endif /* SUBSET_HPP */

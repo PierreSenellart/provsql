@@ -306,6 +306,26 @@ bool evaluate(const std::vector<long>& values,
   }
 }
 
+bool agg_cmp_holds_in_world(
+  const std::vector<long> &values,
+  const mask_t &present,
+  long constant,
+  ComparisonOperator op,
+  AggregationOperator agg_kind)
+{
+  // Empty-group exclusion: an all-absent group does not exist, so HAVING is
+  // never satisfied on it (the one edge convention a sampler must reproduce to
+  // match the expansion).
+  bool any = false;
+  for (bool b : present)
+    if (b) { any = true; break; }
+  if (!any)
+    return false;
+
+  return evaluate(values, present, constant, op,
+                  makeAggregator(agg_kind, ValueType::INT));
+}
+
 /**
  * @brief Enumerate all subsets satisfying a HAVING predicate by exhaustive search.
  * @param values      Input values.
@@ -331,10 +351,8 @@ std::vector<mask_t> enumerate_exhaustive(
 
   bool all_worlds = true;
 
-  while(increment(mask)) { // Skipping empty world
-    auto aggregator = makeAggregator(agg_kind, ValueType::INT);
-
-    if(evaluate(values, mask, constant, op, std::move(aggregator)))
+  while(increment(mask)) { // Skipping empty world (handled by agg_cmp_holds_in_world too)
+    if(agg_cmp_holds_in_world(values, mask, constant, op, agg_kind))
       worlds.push_back(mask);
     else
       all_worlds=false;
