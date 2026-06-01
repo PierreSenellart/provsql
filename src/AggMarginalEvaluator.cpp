@@ -692,9 +692,10 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
     const AggregationOperator agg_kind = match.agg_kind;
     if (agg_kind != AggregationOperator::COUNT &&
         agg_kind != AggregationOperator::SUM   &&
+        agg_kind != AggregationOperator::AVG   &&
         agg_kind != AggregationOperator::MIN   &&
         agg_kind != AggregationOperator::MAX)
-      continue;                          /* AVG and others: out of scope */
+      continue;                          /* other aggregates: out of scope */
 
     const gate_t agg = match.agg;
     const auto &ks = match.ks;
@@ -727,24 +728,37 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
       std::vector<double> total = countPMF(gc, leaves, ok);
       if (!ok) continue;
       pr = prFromPMF(total, match.op, match.C);
-    } else if (agg_kind == AggregationOperator::SUM) {
-      /* Reachable-sum range cap (Remark 3 pseudo-polynomial caveat):
-       * reject up front when the weight span is too wide for a closed
-       * form, regardless of structure. */
+    } else if (agg_kind == AggregationOperator::SUM ||
+               agg_kind == AggregationOperator::AVG) {
+      /* SUM(v) θ C directly; AVG(v) θ C ⟺ SUM(v_i − C) θ 0 (multiply the
+       * average by the positive group count; the empty group has no
+       * average and is excluded, exactly as the empty group is for SUM).
+       * Both reduce to the weighted-sum distribution, so AVG inherits the
+       * laminar / product machinery for free.  Only integer thresholds
+       * reach here -- a fractional HAVING-AVG constant is rejected upstream
+       * before the cmp is even built. */
+      const bool is_avg = (agg_kind == AggregationOperator::AVG);
+      std::vector<long> weights;
+      weights.reserve(match.ms.size());
       long lo = 0, hi = 0;
-      for (int m : match.ms) { if (m < 0) lo += m; else hi += m; }
+      for (int m : match.ms) {
+        long w = is_avg ? (static_cast<long>(m) - match.C) : static_cast<long>(m);
+        weights.push_back(w);
+        if (w < 0) lo += w; else hi += w;
+      }
+      /* Reachable-sum range cap (Remark 3 pseudo-polynomial caveat). */
       if (hi - lo + 1 > static_cast<long>(kMaxSumSupport)) continue;
+      const long thr = is_avg ? 0 : match.C;
 
-      std::vector<long> weights(match.ms.begin(), match.ms.end());
       std::map<long, double> dist = sumPMF(gc, leaves, std::move(weights), ok);
       if (!ok) continue;
       pr = 0.0;
       for (const auto &kv : dist)
-        if (sumSatisfies(kv.first, match.op, match.C)) pr += kv.second;
-      /* Exclude the empty group: its sum is 0, so subtract its mass when
-       * 0 satisfies the predicate (a non-empty group that happens to sum
-       * to 0 stays). */
-      if (sumSatisfies(0, match.op, match.C)) {
+        if (sumSatisfies(kv.first, match.op, thr)) pr += kv.second;
+      /* Exclude the empty group: its (shifted) sum is 0, so subtract its
+       * mass when 0 satisfies the predicate (a non-empty group that
+       * happens to sum to the threshold stays). */
+      if (sumSatisfies(0, match.op, thr)) {
         double emptyMass = pAllAbsent(gc, leaves, ok);
         if (!ok) continue;
         pr -= emptyMass;

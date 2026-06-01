@@ -116,6 +116,16 @@ SELECT * FROM sja_parity('xprod MIN(b) <= 3', 'SELECT sja_pr.a g, probability_ev
 SELECT * FROM sja_parity('xprod MAX(c) >= 9', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING max(sja_pt.c) >= 9');
 SELECT * FROM sja_parity('xprod SUM(b+c) span', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING sum(sja_ps.b + sja_pt.c) >= 20');
 
+-- AVG: reduces to SUM(v - C) op 0 (empty group excluded), so it inherits
+-- the whole laminar / product machinery -- and is closed-form even on the
+-- flat single table, which no prior pre-pass covered.  Only integer
+-- thresholds reach here (a fractional HAVING-AVG constant is rejected
+-- upstream).  fan-out, depth-2 nesting, and the cross-product all fire.
+SELECT * FROM sja_parity('fanout AVG(b) >= 5', 'SELECT k g, probability_evaluate(provenance()) p FROM sja_r JOIN sja_s ON sja_r.a=sja_s.a GROUP BY k HAVING avg(b) >= 5');
+SELECT * FROM sja_parity('fanout AVG(b) <= 5', 'SELECT k g, probability_evaluate(provenance()) p FROM sja_r JOIN sja_s ON sja_r.a=sja_s.a GROUP BY k HAVING avg(b) <= 5');
+SELECT * FROM sja_parity('depth2 AVG(i) >= 4', 'SELECT a.u g, probability_evaluate(provenance()) p FROM sja_acct a, sja_ord o, sja_item t WHERE a.u=o.u AND o.u=t.u AND o.o=t.o GROUP BY a.u HAVING avg(i) >= 4');
+SELECT * FROM sja_parity('xprod AVG(b) >= 5', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING avg(sja_ps.b) >= 5');
+
 DROP FUNCTION sja_parity(text, text);
 SELECT remove_provenance('sja_r');
 SELECT remove_provenance('sja_s');

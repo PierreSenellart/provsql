@@ -328,11 +328,17 @@ distinction matters:
       genuinely non-rectangular); SUM factors as `S_f · M` only when the
       value depends on a single factor (detected: weight constant within each
       `f`-part group), else it bails (a branch-spanning value may be #P-hard).
-      Still open: contributors with `gate_plus`/`gate_monus` (UNION/EXCEPT
-      lineage), AVG, branch-spanning SUM via per-factor joint (sum,count)
-      distributions, and the genuinely certificate-only **BID disjoint-block
-      `⊥`** structure (mutual exclusion from a key constraint is a semantic
-      fact that need not surface as circuit leaf-sharing).
+      **AVG** is done too (`having_safe_join_agg.sql` `AVG …` rows): it
+      reduces to `SUM(v_i − C) θ 0` with the empty group excluded, so it
+      inherits the entire laminar / product machinery — and is the *first*
+      closed-form AVG path at all, firing even on a flat single table (no
+      prior pre-pass covered AVG; only integer thresholds reach here, a
+      fractional HAVING-AVG constant being rejected upstream). Still open:
+      contributors with `gate_plus`/`gate_monus` (UNION/EXCEPT lineage),
+      branch-spanning SUM via per-factor joint (sum,count) distributions, and
+      the genuinely certificate-only **BID disjoint-block `⊥`** structure
+      (mutual exclusion from a key constraint is a semantic fact that need not
+      surface as circuit leaf-sharing).
    4. *Validation* — `test/sql/having_safe_join_{count,minmax,sum}.sql`
       off-vs-on parity against `possible-worlds` on the `R(k,a),S(a,b)`
       fan-out, star-schema, and BID-`⊥` shapes; a **negative** test that the
