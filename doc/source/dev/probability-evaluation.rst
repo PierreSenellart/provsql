@@ -461,6 +461,134 @@ that walks ``gate_cmp`` gates, checks shape + independence (reusing
 share one diagnostic switch.
 
 
+.. _having-trichotomy-complexity:
+
+HAVING Query Complexity: the Ré–Suciu Trichotomy
+------------------------------------------------
+
+The closed-form HAVING evaluators above
+(:cfunc:`runCountCmpEvaluator`, :cfunc:`runMinMaxCmpEvaluator`,
+:cfunc:`runSumCmpEvaluator`) realise the tractable corner of a complexity
+classification due to Ré and Suciu :cite:`DBLP:journals/vldb/ReS09` for a
+``HAVING`` predicate ``α(y) θ k`` over a tuple-independent probabilistic
+database, with ``α ∈ {MIN, MAX, COUNT, SUM, AVG, COUNT(DISTINCT)}`` and
+``θ ∈ {=, ≠, <, ≤, >, ≥}``.  This section is the standing reference for
+that classification; it outlives any single evaluator.
+
+Two safety properties drive everything:
+
+- **Skeleton safety** -- whether ``sk(Q)``, the conjunctive query feeding
+  the aggregate (the ``FROM`` / ``WHERE`` body with the group-by and
+  aggregated variables as head), is a self-join-free hierarchical CQ
+  (Dalvi–Suciu safe, :cite:`DBLP:journals/jacm/DalviS12`).
+  :cfunc:`safe_query_skeleton_is_hierarchical` (``src/safe_query.c``)
+  decides this read-only.
+- **α-safety** -- a stricter, per-aggregate *plan* property.  For
+  ``MIN`` / ``MAX`` / ``COUNT`` it coincides with skeleton safety; for
+  ``SUM`` / ``AVG`` (Def. 15) and ``COUNT(DISTINCT)`` (Def. 14) it is
+  strictly stronger (e.g. even a single-table ``SUM`` is #P-hard --
+  Prop. 5).
+
+The classification is best read as **two layers**.
+
+**Layer 1 -- exact computation -- is complement-symmetric.**  Because
+``Pr(α ≠ k) = Pr(nonempty) − Pr(α = k)`` and likewise
+``Pr(α < k) = Pr(nonempty) − Pr(α ≥ k)``,
+``Pr(α ≤ k) = Pr(nonempty) − Pr(α > k)`` -- with ``Pr(nonempty)``
+trivially poly -- each operator has the *same exact complexity as its
+complement* (:cite:`DBLP:journals/vldb/ReS09`, p. 1102).  So ``=``≡``≠``,
+``<``≡``≥``, ``≤``≡``>``, and the exact verdict depends only on the
+aggregate's safety, not on ``θ``:
+
+.. list-table:: Layer 1 -- exact evaluation (all six operators, including ``≠``)
+   :header-rows: 1
+   :widths: 30 36 34
+
+   * - Aggregate
+     - ``sk(Q)`` safe
+     - ``sk(Q)`` not safe
+   * - ``MIN`` / ``MAX`` / ``COUNT``
+     - P (Thm 1)
+     - #P-hard (Thm 2)
+   * - ``COUNT(DISTINCT)``
+     - P if CD-safe, else #P-hard (Thm 3/4)
+     - #P-hard (Thm 4)
+   * - ``SUM`` / ``AVG``
+     - P if α-safe, else #P-hard (Thm 5/6, Prop 5)
+     - #P-hard (Thm 6)
+
+**Layer 2 -- approximation -- applies only where exact is #P-hard, and is
+direction-asymmetric.**  An FPTRAS gives *relative* error, and a relative
+approximation of ``p`` is not one of ``1 − p`` (a rare event near 0 is the
+hard one), so complements with identical exact complexity get different
+approximation verdicts.  This is the trichotomy proper -- *safe* /
+*apx-safe* (an FPTRAS exists) / *hazardous* (no FPRAS):
+
+.. list-table:: Layer 2 -- approximation overlay (only when exact is #P-hard)
+   :header-rows: 1
+   :widths: 44 30 26
+
+   * - ``(α, θ)``
+     - verdict
+     - reference
+   * - ``MIN`` ``<``,``≤`` · ``MAX`` ``>``,``≥``
+     - apx-safe (any unsafe ``sk``)
+     - Thm 8
+   * - ``MIN`` ``>``,``≥``,``=`` · ``MAX`` ``<``,``≤``,``=``
+     - hazardous
+     - Lemma 8 / Thm 11
+   * - ``COUNT`` ``<``,``≤``,``=``
+     - apx-safe / hazardous (decidable)
+     - Thm 11
+   * - ``COUNT`` ``>``,``≥``
+     - open
+     - pp. 1094, 1111
+   * - ``SUM`` ``<``,``≤``,``>``,``≥`` (``sk`` safe, not SUM-safe)
+     - apx-safe
+     - Thm 10
+   * - ``SUM`` ``<``,``≤`` (``sk`` unsafe)
+     - hazardous
+     - Thm 11
+   * - ``SUM`` ``>``,``≥`` (``sk`` unsafe)
+     - open
+     - p. 1094
+   * - ``SUM`` ``=``
+     - hazardous
+     - p. 1091
+   * - ``AVG`` (all ``θ``), ``COUNT(DISTINCT)`` (all ``θ``)
+     - open (§6 covers only MIN/MAX/SUM)
+     - p. 1107
+   * - any ``≠``
+     - open (excluded from the approximation analysis)
+     - p. 1110
+
+Reading the two layers together (the source figure is Fig. 7, p. 1111,
+tabulating MIN/MAX/COUNT):
+
+- ``≠`` is **not** open for *exact* computation -- it equals ``=`` -- but
+  *is* unclassified for approximation (the paper omits ``≠`` from §6,
+  p. 1110).
+- ``=`` lies in ``Θ≤ ∩ Θ≥`` (``Θ≤ = {≤,<,=}``, ``Θ≥ = {≥,>,=}``); for
+  ``MIN`` / ``MAX`` it resolves to the hazardous side because Thm 8 (the
+  only *blanket* FPTRAS) lists only the one-sided operators.
+- ``MIN`` / ``MAX`` unsafe verdicts are blanket (Thm 8 / Lemma 8);
+  ``COUNT`` / ``SUM`` with ``Θ≤`` are per-query decidable (Thm 11);
+  ``COUNT`` / ``SUM`` with ``{≥, >}`` and unsafe ``sk`` are open.
+- The trichotomy is proven "for many" -- not all -- ``(α, θ)`` pairs
+  (p. 1093); the open cells above are precisely that gap.
+
+**What ProvSQL implements.**  The closed-form pre-passes
+(:cfunc:`runCountCmpEvaluator` / :cfunc:`runMinMaxCmpEvaluator` /
+:cfunc:`runSumCmpEvaluator`) compute the **P / α-safe** corner *exactly*
+for independent private contributors (the read-once independence
+certification in ``CmpEvaluatorCommon``, a sufficient condition for
+α-safety on a per-instance basis).
+:cfunc:`safe_query_skeleton_is_hierarchical` exposes the skeleton-safety
+axis.  A HAVING classifier combining the two would map each predicate to
+its cell above and route ``apx-safe`` predicates to the karp-luby FPTRAS,
+warning on ``hazardous`` ones.
+
+
 .. _bids-and-multivalued-inputs:
 
 Block-Independent Databases and Multivalued Inputs

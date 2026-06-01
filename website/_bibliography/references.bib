@@ -189,6 +189,32 @@
     hierarchicality check operating on the FD closure.},
 }
 
+@article{DBLP:journals/vldb/ReS09,
+  author       = {Christopher R{\'e} and
+                  Dan Suciu},
+  title        = {The trichotomy of {HAVING} queries on a probabilistic database},
+  journal      = {{VLDB} J.},
+  volume       = {18},
+  number       = {5},
+  pages        = {1091--1116},
+  year         = {2009},
+  doi          = {10.1007/s00778-009-0151-4},
+  keyword      = {provsql-foundation},
+  annote       = {Classifies the complexity of evaluating a HAVING predicate
+    aggregate(y) theta k over a tuple-independent probabilistic database, for
+    aggregate in {EXISTS, MIN, MAX, COUNT, SUM, AVG, COUNT(DISTINCT)} and theta a
+    comparison. Exact evaluation is complement-symmetric and depends only on a
+    per-aggregate "alpha-safety" plan property (equal to skeleton-safety for
+    MIN/MAX/COUNT): PTIME if alpha-safe, else #P-hard. Approximation is direction-
+    asymmetric (relative-error FPTRAS of p is not one of 1-p), yielding the
+    trichotomy safe / apx-safe (an FPTRAS exists) / hazardous (no FPRAS). The
+    conference version (DBPL 2007) covers the exact dichotomy; this journal version
+    adds the approximation results. ProvSQL's closed-form HAVING-COUNT / MIN-MAX / SUM
+    probability evaluators realise the alpha-safe (PTIME-exact) corner for independent
+    contributors, and the skeleton-safety detector exposes the alpha-safety axis. See
+    doc/source/dev/probability-evaluation.rst for the per-(aggregate, theta) table.},
+}
+
 @article{DBLP:journals/pvldb/GatterbauerS15,
   author       = {Wolfgang Gatterbauer and
                   Dan Suciu},

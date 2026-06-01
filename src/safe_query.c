@@ -43,6 +43,7 @@
 #include "optimizer/clauses.h"          /* contain_volatile_functions */
 #endif
 #include "parser/parse_oper.h"
+#include "tcop/tcopprot.h"              /* pg_parse_query, pg_analyze_and_rewrite* */
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
@@ -93,7 +94,8 @@ extern int provsql_verbose;             /* declared in provsql.c */
  * @return @c true iff @p q is a candidate for the safe-query rewrite.
  */
 static bool is_safe_query_candidate(const constants_t *constants, Query *q,
-                                    Bitmapset *approved_self_join_relids) {
+                                    Bitmapset *approved_self_join_relids,
+                                    bool for_skeleton) {
   ListCell *lc, *lc2;
   List *seen_relids = NIL;
 
@@ -120,8 +122,14 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q,
    * one of them so the rewrite is row-count-preserving in the user's
    * eye.  Both are encoded as @c SortGroupClause lists; either is
    * enough -- @c transform_distinct_into_group_by promotes the
-   * outer @c DISTINCT to a @c GROUP @c BY downstream of us. */
-  if (q->groupClause == NIL && q->distinctClause == NIL)
+   * outer @c DISTINCT to a @c GROUP @c BY downstream of us.
+   *
+   * In @p for_skeleton mode the caller is only asking whether the
+   * conjunctive skeleton is hierarchical (it never rewrites), so this
+   * row-count-preservation precondition does not apply: a bare
+   * @c SELECT-FROM-WHERE skeleton with no outer GROUP BY / DISTINCT is
+   * a legitimate question. */
+  if (!for_skeleton && q->groupClause == NIL && q->distinctClause == NIL)
     return false;
 
   /* All FROM entries must be base relations referenced via plain
@@ -5339,7 +5347,7 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
    * candidate gate skips its shared-relid bail for those. */
   {
     Bitmapset *approved = try_disjoint_constant_self_join_split(q);
-    if (!is_safe_query_candidate(constants, q, approved)) {
+    if (!is_safe_query_candidate(constants, q, approved, /*for_skeleton=*/false)) {
       if (approved)
         bms_free(approved);
       /* The read-once candidate gate refused (most often an un-rescued
@@ -5432,4 +5440,169 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
     outer_residual = residual;
 
   return rewrite_hierarchical_cq(constants, q, atoms, groups, outer_residual);
+}
+
+/**
+ * @brief Read-only test: is the conjunctive skeleton of an aggregate /
+ *        @c HAVING query hierarchical (Dalvi-Suciu safe)?
+ *
+ * The skeleton @c sk(Q) of a @c HAVING query @c Q[alpha(y) theta k] is
+ * the conjunctive query feeding the aggregate -- the @c FROM / @c WHERE
+ * body whose head is the group-by columns and the aggregated variable(s)
+ * @c y, with the aggregate, the @c HAVING predicate and the @c GROUP
+ * @c BY stripped.  This predicate answers whether that skeleton is a
+ * self-join-free hierarchical CQ, reusing the same detector
+ * (@c find_hierarchical_root_atoms) and read-only normalisation
+ * pre-passes as @c try_safe_query_rewrite, but performing NO rewrite and
+ * mutating nothing the caller can observe (it works on a deep copy).
+ *
+ * It is the skeleton-safety axis of the Ré-Suciu HAVING trichotomy: for a
+ * given @c (alpha, theta), the safe / apx-safe / hazardous verdict
+ * depends on whether @c sk(Q) is safe.  Consumed by the HAVING
+ * classifier.
+ *
+ * Soundness stance: returns @c true only when a hierarchical structure is
+ * positively certified, never a false "safe".  A single base relation
+ * (@c natoms <= 1, no join) is trivially safe.  Disconnected
+ * multi-component skeletons are conservatively reported @c false (not yet
+ * certified component-wise), as are shapes the detector cannot inspect
+ * (window functions, sublinks, set operations).
+ *
+ * @param constants  OID cache (UUID type, for the detector's
+ *                   deterministic-relation transparency).
+ * @param orig       The aggregate / @c HAVING query.  Not modified.
+ * @return @c true iff @c sk(Q) is certified hierarchical.
+ */
+bool safe_query_skeleton_is_hierarchical(const constants_t *constants,
+                                         Query *orig) {
+  Query    *q;
+  List     *head_vars;
+  List     *new_tlist = NIL;
+  List     *atoms, *groups = NIL;
+  Node     *residual = NULL;
+  List    **per_atom;
+  Bitmapset *approved;
+  int       natoms, resno = 1;
+  bool      cand, safe;
+  ListCell *lc;
+
+  if (orig == NULL || orig->rtable == NIL)
+    return false;
+  /* Shapes the skeleton detector cannot inspect; conservatively unsafe. */
+  if (orig->hasWindowFuncs || orig->hasSubLinks
+      || orig->setOperations != NULL || orig->groupingSets != NIL)
+    return false;
+
+  /* Skeleton view on a private deep copy: head = the base Vars that
+   * appear in the SELECT list and the aggregate arguments (the group-by
+   * columns and the aggregated variable y); body = FROM / WHERE; the
+   * aggregate, the HAVING predicate and the GROUP BY are dropped.
+   * Adding the aggregate-argument Vars as head Vars can only make the
+   * hierarchical test stricter, so it never yields a false "safe". */
+  q = copyObject(orig);
+
+  head_vars = pull_var_clause((Node *) q->targetList,
+                              PVC_RECURSE_AGGREGATES | PVC_RECURSE_WINDOWFUNCS
+                              | PVC_RECURSE_PLACEHOLDERS);
+  if (q->havingQual != NULL)
+    head_vars = list_concat(
+        head_vars,
+        pull_var_clause(q->havingQual,
+                        PVC_RECURSE_AGGREGATES | PVC_RECURSE_WINDOWFUNCS
+                        | PVC_RECURSE_PLACEHOLDERS));
+
+  foreach (lc, head_vars) {
+    Var *v = (Var *) lfirst(lc);
+    new_tlist = lappend(
+        new_tlist,
+        makeTargetEntry((Expr *) copyObject(v), resno++, NULL, false));
+  }
+  q->targetList    = new_tlist;
+  q->havingQual    = NULL;
+  q->groupClause   = NIL;
+  q->groupingSets  = NIL;
+  q->distinctClause = NIL;
+  q->hasDistinctOn = false;
+  q->sortClause    = NIL;
+  q->hasAggs       = false;
+
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(q);
+#endif
+
+  /* Read-only normalisation prefix, mirroring try_safe_query_rewrite:
+   * flatten inner joins, inline simple subqueries, PK-unify self-joins. */
+  { Query *f  = try_flatten_inner_joins(q);       if (f  != NULL) q = f;  }
+  { Query *in = try_inline_simple_subqueries(q);  if (in != NULL) q = in; }
+  { Query *u  = try_pk_self_join_unification(q);  if (u  != NULL) q = u;  }
+
+  approved = try_disjoint_constant_self_join_split(q);
+  cand = is_safe_query_candidate(constants, q, approved, /*for_skeleton=*/true);
+  if (approved)
+    bms_free(approved);
+  if (!cand)
+    return false;
+
+  /* A single base relation is trivially hierarchical: there is no join to
+   * make non-hierarchical.  find_hierarchical_root_atoms returns NIL for
+   * natoms < 2 (nothing to rewrite), which is not an unsafety verdict, so
+   * decide it here. */
+  natoms = list_length(q->rtable);
+  if (natoms <= 1)
+    return true;
+
+  per_atom = palloc0(natoms * sizeof(List *));
+  safe_split_quals(q->jointree ? q->jointree->quals : NULL,
+                   natoms, per_atom, &residual);
+  apply_constant_selection_fd_pass(q, per_atom, &residual);
+
+  /* Connected hierarchical structure?  (A disconnected multi-component
+   * skeleton yields NIL here and is conservatively reported unsafe.) */
+  atoms = find_hierarchical_root_atoms(constants, q, residual, &groups);
+  safe = (atoms != NIL);
+  pfree(per_atom);
+  return safe;
+}
+
+PG_FUNCTION_INFO_V1(skeleton_is_safe);
+/**
+ * @brief SQL introspection: parse @p $1 (a single @c SELECT), analyse it,
+ *        and report whether its aggregate / @c HAVING skeleton @c sk(Q)
+ *        is hierarchical (Dalvi-Suciu safe).
+ *
+ * Thin wrapper over @c safe_query_skeleton_is_hierarchical, used by the
+ * regression suite and as a standalone diagnostic for the HAVING
+ * trichotomy.  Parsing (not planning) the text means the provsql planner
+ * hook does not recurse; the referenced relations must exist.  Errors on
+ * anything but a single analysable query.
+ */
+Datum skeleton_is_safe(PG_FUNCTION_ARGS) {
+  text       *sql_text = PG_GETARG_TEXT_PP(0);
+  char       *sql      = text_to_cstring(sql_text);
+  List       *raw;
+  List       *analyzed;
+  Query      *q;
+  constants_t constants;
+
+  raw = pg_parse_query(sql);
+  if (list_length(raw) != 1)
+    ereport(ERROR,
+            (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+             errmsg("skeleton_is_safe expects exactly one statement")));
+
+#if PG_VERSION_NUM >= 150000
+  analyzed = pg_analyze_and_rewrite_fixedparams(
+               linitial_node(RawStmt, raw), sql, NULL, 0, NULL);
+#else
+  analyzed = pg_analyze_and_rewrite(
+               linitial_node(RawStmt, raw), sql, NULL, 0, NULL);
+#endif
+  if (list_length(analyzed) != 1)
+    ereport(ERROR,
+            (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+             errmsg("skeleton_is_safe expects a single query")));
+
+  q = linitial_node(Query, analyzed);
+  constants = get_constants(true);
+  PG_RETURN_BOOL(safe_query_skeleton_is_hierarchical(&constants, q));
 }
