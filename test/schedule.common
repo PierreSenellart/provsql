@@ -9,7 +9,12 @@ test: add_provenance
 test: remove_add_provenance
 
 # Basic checks
-test: provenance_in_from identify_token subquery create_provenance_mapping
+# identify_token scans every provenance-tracked relation in the database, so it
+# must not run concurrently with tests that create/drop such relations (e.g.
+# subquery's subquery_result): a dropped-but-still-catalogued table makes its
+# dynamic "SELECT * FROM <rel>" fail. Keep it on its own serial line.
+test: provenance_in_from subquery create_provenance_mapping
+test: identify_token
 test: circuit_subgraph
 test: simplify_identities
 test: resolve_input
