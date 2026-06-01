@@ -1,0 +1,49 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+union COUNT>=2|1|0.8398|0.8398|0.000000
+union COUNT>=2|2|0.4290|0.4290|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+union COUNT>=4|1|0.1134|0.1134|0.000000
+union COUNT>=4|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+union SUM>=80|1|0.5873|0.5873|0.000000
+union SUM>=80|2|0.4290|0.4290|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+union MAX>=50|1|0.6400|0.6400|0.000000
+union MAX>=50|2|0.5500|0.5500|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+union MIN<=20|1|0.7972|0.7972|0.000000
+union MIN<=20|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+except COUNT>=1|1|0.5964|0.5964|0.000000
+except COUNT>=1|2|0.6490|0.6490|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+except COUNT>=2|1|0.1619|0.1619|0.000000
+except COUNT>=2|2|0.1210|0.1210|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+except SUM>=60|1|0.0157|0.0157|0.000000
+except SUM>=60|2|0.1210|0.1210|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+except MAX>=50|1|0.0000|0.0000|0.000000
+except MAX>=50|2|0.5500|0.5500|0.000000
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

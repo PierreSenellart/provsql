@@ -333,8 +333,16 @@ distinction matters:
       inherits the entire laminar / product machinery — and is the *first*
       closed-form AVG path at all, firing even on a flat single table (no
       prior pre-pass covered AVG; only integer thresholds reach here, a
-      fractional HAVING-AVG constant being rejected upstream). Still open:
-      contributors with `gate_plus`/`gate_monus` (UNION/EXCEPT lineage),
+      fractional HAVING-AVG constant being rejected upstream). On `gate_plus`/`gate_monus` (UNION/EXCEPT) contributors:
+      **independent read-once unions already work** — the flat
+      `CountCmp`/`SumCmp`/`MinMaxCmp` evaluators resolve them via
+      `contributorProb` (which handles plus/monus), pinned by
+      `test/sql/having_union.sql` (off-vs-on parity, UNION DISTINCT + EXCEPT
+      over COUNT/SUM/MIN/MAX). The genuine residual is **UNION/EXCEPT over a
+      join that re-uses a base tuple** (`(R⋈S) UNION (R⋈T)` → `(r∧s)⊕(r∧t)`,
+      non-read-once on the shared `r`), which needs per-contributor read-once
+      factoring (`r∧(s∨t)`) — the safe-query/read-once-rewriter problem,
+      #P-hard in general. Still open:
       branch-spanning SUM via per-factor joint (sum,count) distributions, and
       the genuinely certificate-only **BID disjoint-block `⊥`** structure
       (mutual exclusion from a key constraint is a semantic fact that need not
