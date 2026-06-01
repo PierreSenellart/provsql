@@ -507,6 +507,9 @@ aggregate's safety, not on ``θ``:
    * - Aggregate
      - ``sk(Q)`` safe
      - ``sk(Q)`` not safe
+   * - ``EXISTS``
+     - P (read-once; safe-query rewriter)
+     - #P-hard
    * - ``MIN`` / ``MAX`` / ``COUNT``
      - P (Thm 1)
      - #P-hard (Thm 2)
@@ -531,6 +534,9 @@ approximation verdicts.  This is the trichotomy proper -- *safe* /
    * - ``(α, θ)``
      - verdict
      - reference
+   * - ``EXISTS`` (third class empty)
+     - apx-safe (always; karp-luby)
+     - p. 1093
    * - ``MIN`` ``<``,``≤`` · ``MAX`` ``>``,``≥``
      - apx-safe (any unsafe ``sk``)
      - Thm 8
@@ -576,6 +582,23 @@ tabulating MIN/MAX/COUNT):
   ``COUNT`` / ``SUM`` with ``{≥, >}`` and unsafe ``sk`` are open.
 - The trichotomy is proven "for many" -- not all -- ``(α, θ)`` pairs
   (p. 1093); the open cells above are precisely that gap.
+
+**EXISTS is the degenerate baseline, and ProvSQL already implements all of
+it.**  The paper's sixth aggregate, ``EXISTS``, only tests group
+non-emptiness -- i.e. the plain Boolean conjunctive query -- so it carries
+no operator at all and its third (hazardous) class is *empty*: every
+Boolean CQ has an FPTRAS (p. 1093).  In ProvSQL this is not a ``gate_cmp``
+case but the **default provenance** of any grouped / projected tuple: the
+``gate_plus`` (OR) over the contributing tuples' tokens, whose probability
+is just ``Pr(lineage is true)``.  Its ``HAVING`` form ``COUNT(*) >= 1`` is
+provably true on any non-empty group and is collapsed straight back to
+that OR by the always-true rewriter (``runHavingAlwaysTrueRewriter`` ->
+``GenericCircuit::resolveCmpToPlusOfKGates``).  So ``EXISTS`` is covered
+end-to-end by the core pipeline -- safe-query rewriter then
+``independentEvaluation`` when ``sk(Q)`` is safe (P), tree-decomposition /
+d4 when it is not (#P-hard exact), and karp-luby for the always-available
+FPTRAS (apx-safe) -- with no dedicated HAVING evaluator.  It is the
+baseline the other five aggregates generalise.
 
 **What ProvSQL implements.**  The closed-form pre-passes
 (:cfunc:`runCountCmpEvaluator` / :cfunc:`runMinMaxCmpEvaluator` /

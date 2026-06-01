@@ -5468,10 +5468,7 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
  * certified component-wise), as are shapes the detector cannot inspect
  * (window functions, sublinks, set operations).
  *
- * @param constants  OID cache (UUID type, for the detector's
- *                   deterministic-relation transparency).
- * @param orig       The aggregate / @c HAVING query.  Not modified.
- * @return @c true iff @c sk(Q) is certified hierarchical.
+ * See @c safe_query.h for the parameter / return documentation.
  */
 bool safe_query_skeleton_is_hierarchical(const constants_t *constants,
                                          Query *orig) {
