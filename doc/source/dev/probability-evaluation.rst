@@ -607,9 +607,14 @@ for independent private contributors (the read-once independence
 certification in ``CmpEvaluatorCommon``, a sufficient condition for
 α-safety on a per-instance basis).
 :cfunc:`safe_query_skeleton_is_hierarchical` exposes the skeleton-safety
-axis.  A HAVING classifier combining the two would map each predicate to
-its cell above and route ``apx-safe`` predicates to the karp-luby FPTRAS,
-warning on ``hazardous`` ones.
+axis.  The **HAVING classifier** (``src/classify_having.c``, GUC
+``provsql.classify_having``, default off) combines the two: for each
+``HAVING`` aggregate comparison it emits a read-only ``NOTICE`` giving the
+cell above -- safe / apx-safe / hazardous / open -- by pairing the static
+``(α, θ)`` overlay with the per-query skeleton-safety bit.  It mirrors
+``provsql.classify_top_level`` (read-only, top-level only) and is the
+diagnostic that tells a user whether a slow ``HAVING`` probability query is
+exactly tractable, approximable (route to karp-luby), or genuinely hard.
 
 
 .. _bids-and-multivalued-inputs:

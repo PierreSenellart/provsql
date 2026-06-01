@@ -115,6 +115,15 @@ convolution `⊛^+`, disjoint (same BID block) children by `⊥` (Prop. 1, each
   *lossy* (only the count's distribution survives, not which values), which
   shrinks the safe class — only plans whose final operation projects away `y`
   with no proper ancestor doing the same are `COUNT(DISTINCT)`-safe.
+  **Already realised by the existing machinery, no dedicated arm needed.**
+  ProvSQL's `COUNT(DISTINCT)` rewrite (`rewrite_agg_distinct` in `src/provsql.c`)
+  *is* this two-stage construction: an inner `GROUP BY (key, group)` computes
+  the per-value `EXISTS` provenance, and the outer plain `COUNT` over those
+  deduped rows is then resolved by `runCountCmpEvaluator` (the per-value
+  `EXISTS` events are leaf-disjoint, so the independence certification fires).
+  The HAVING case was extended to `q->havingQual` (commit "Fix COUNT(DISTINCT)
+  in HAVING"); `test/sql/having_count_distinct.sql` pins it. So Priority 6
+  below is effectively closed.
 
 Implementation home and shape match `CountCmpEvaluator`: a probability-only
 pre-pass that replaces the `gate_cmp` with a Bernoulli `gate_input` carrying
@@ -198,13 +207,27 @@ hierarchical."
    **Done** — see `src/SumCmpEvaluator.{h,cpp}` and the note under Gain 1.
 3. **Gain 2, classifier** — needed to make Gains 1/3 self-selecting and to stop
    the silent exponential fallback; mirrors `classify_top_level` closely.
+   **Done** — `src/classify_having.c`, GUC `provsql.classify_having`: a
+   read-only `NOTICE` per HAVING aggregate comparison giving the
+   safe / apx-safe / #P-hard / open verdict from the `(α, θ)` overlay × the
+   skeleton-safety bit. Pinned by `test/sql/classify_having.sql`.
 4. **Gain 4, independence certification** — unlocks joins for all of Gain 1;
    depends on the safe-query rewriter's one-level HAVING descent.
+   **Read-only half done** — `safe_query_skeleton_is_hierarchical`
+   (`src/safe_query.c`) certifies skeleton safety read-only (the classifier's
+   missing axis); `test/sql/skeleton_safety.sql` pins it. The riskier half
+   (extending the closed-form evaluators to *shared-leaf* safe joins, which
+   touches evaluation soundness) is still open.
 5. **Gain 3, principled apx-safe routing** — mostly classifier wiring on top of
    the existing karp-luby method; the paper's specialized FPTRAS is a later,
-   research-grade slice.
-6. **Gain 1, COUNT(DISTINCT) arm** — two-stage, lossy marginals; most involved,
-   least common; defer until a workload asks.
+   research-grade slice.  **Next open item** — the classifier (3) now produces
+   the `apx-safe` verdict, so this is the natural follow-up: have the
+   probability path auto-route an `apx-safe` HAVING predicate to karp-luby
+   (and warn on `hazardous`) instead of grinding the exponential fallback.
+6. **Gain 1, COUNT(DISTINCT) arm** — **closed**: already realised by the
+   `COUNT(DISTINCT)` GROUP-BY rewrite + `runCountCmpEvaluator` (see the
+   COUNT(DISTINCT) note under Gain 1); the HAVING gap was fixed. No dedicated
+   arm needed.
 
 ## Implementation observations
 
