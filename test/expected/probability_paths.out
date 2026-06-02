@@ -1,0 +1,32 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+exact_alias_default|exact_alias_independent
+t|t
+(1 row)
+relative_is_exact
+t
+(1 row)
+provsql.last_eval_method
+independent
+(1 row)
+additive_is_exact
+t
+(1 row)
+provsql.last_eval_method
+independent
+(1 row)
+relative_in_tol
+t
+(1 row)
+provsql.last_eval_method
+stopping-rule
+(1 row)
+additive_in_tol
+t
+(1 row)
+provsql.last_eval_method
+monte-carlo
+(1 row)
+ERROR:  ProvSQL: Wrong method 'nonsense-method' for probability evaluation

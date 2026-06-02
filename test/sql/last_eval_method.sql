@@ -48,10 +48,11 @@ DO $$ BEGIN
 END $$;
 SHOW provsql.last_eval_method;
 
--- Default method on a NON-independent circuit: 'independent' throws and the
--- chain falls through to the decomposed 'tree-decomposition' member, so
--- last_eval_method reports the route actually taken -- not an umbrella label
--- (the makeDD decomposition).  boolean_provenance off so the load-time folding
+-- Default method on a small NON-independent circuit: 'independent' throws, and
+-- the cost-ordered exact chooser picks 'possible-worlds' (cheap 2^N for small N,
+-- ahead of tree-decomposition / compilation).  last_eval_method reports the
+-- route actually taken -- exercising both the makeDD decomposition and the
+-- small-N cost heuristic.  boolean_provenance off so the load-time folding
 -- leaves the shared-variable shape intact.
 SET provsql.boolean_provenance = off;
 DO $$

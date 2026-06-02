@@ -1,0 +1,70 @@
+\set ECHO none
+-- Three user-facing probability paths: a granted TOLERANCE, not a named
+-- algorithm.  'exact' is an alias for the empty/default method; 'relative'
+-- promises (1±eps); 'additive' promises |p̂-p| <= eps.  Admissibility nests
+-- exact ⊂ relative ⊂ additive, so a relative/additive request returns an EXACT
+-- value when one is cheaply available ("exact when cheaper": a tuple-independent
+-- circuit resolves via 'independent', reported as such).  Only when no cheap
+-- exact applies does the path fall to its estimator (stopping-rule / monte-carlo).
+-- See src/probability_evaluate.cpp (the three-path dispatch).
+\pset format unaligned
+SET search_path TO provsql_test,provsql;
+SET provsql.boolean_provenance = off;
+SET provsql.monte_carlo_seed = 42;
+
+CREATE TABLE pp(id int);
+INSERT INTO pp VALUES (1),(2),(3),(4);
+SELECT add_provenance('pp');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM pp WHERE id=1;
+  PERFORM set_prob(provsql, 0.3) FROM pp WHERE id=2;
+  PERFORM set_prob(provsql, 0.4) FROM pp WHERE id=3;
+  PERFORM set_prob(provsql, 0.1) FROM pp WHERE id=4;
+END $$;
+DO $$
+DECLARE x1 uuid; x2 uuid; x3 uuid; x4 uuid;
+BEGIN
+  SELECT provsql INTO x1 FROM pp WHERE id=1;
+  SELECT provsql INTO x2 FROM pp WHERE id=2;
+  SELECT provsql INTO x3 FROM pp WHERE id=3;
+  SELECT provsql INTO x4 FROM pp WHERE id=4;
+  -- independent (disjoint clauses): (x1&x2)|(x3&x4) = 0.184 -- 'independent'
+  -- resolves it exactly, so every path returns the exact value.
+  PERFORM set_config('pp.indep',  provenance_plus(ARRAY[provenance_times(x1,x2), provenance_times(x3,x4)])::text, false);
+  -- NOT independent (x1 shared): (x1&x2)|(x1&x3) = 0.29 -- the relative/additive
+  -- paths fall to their estimator.
+  PERFORM set_config('pp.shared', provenance_plus(ARRAY[provenance_times(x1,x2), provenance_times(x1,x3)])::text, false);
+END $$;
+\set indep  '(current_setting(''pp.indep'')::uuid)'
+\set shared '(current_setting(''pp.shared'')::uuid)'
+
+-- 'exact' is an alias for the empty/default method.
+SELECT probability_evaluate(:indep, 'exact') = probability_evaluate(:indep)             AS exact_alias_default,
+       probability_evaluate(:indep, 'exact') = probability_evaluate(:indep,'independent') AS exact_alias_independent;
+
+-- Exact-when-cheaper: on the INDEPENDENT circuit, relative and additive both
+-- return the EXACT value (bit-identical to 'independent'), reported as
+-- 'independent' -- no sampling.
+SET provsql.last_eval_method='';
+SELECT probability_evaluate(:indep,'relative','epsilon=0.1') = probability_evaluate(:indep,'independent') AS relative_is_exact;
+SHOW provsql.last_eval_method;
+SET provsql.last_eval_method='';
+SELECT probability_evaluate(:indep,'additive','epsilon=0.1') = probability_evaluate(:indep,'independent') AS additive_is_exact;
+SHOW provsql.last_eval_method;
+
+-- On the NON-independent circuit the paths fall to their estimator, landing
+-- within the granted tolerance of the exact value (0.29), and report it.
+SET provsql.last_eval_method='';
+SELECT abs(probability_evaluate(:shared,'relative','epsilon=0.05,delta=0.01') - 0.29) <= 0.05 AS relative_in_tol;
+SHOW provsql.last_eval_method;
+SET provsql.last_eval_method='';
+SELECT abs(probability_evaluate(:shared,'additive','epsilon=0.02,delta=0.05') - 0.29) <= 0.05 AS additive_in_tol;
+SHOW provsql.last_eval_method;
+
+-- RV guard lets the paths through (a relative/additive request on a circuit the
+-- exact methods cannot touch is allowed); a bad name is still refused.
+SELECT probability_evaluate(:shared,'nonsense-method');
+
+DROP TABLE pp;
+RESET provsql.boolean_provenance;
+RESET provsql.monte_carlo_seed;

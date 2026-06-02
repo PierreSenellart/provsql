@@ -609,6 +609,28 @@ dDNNF buildInversionFreeDDNNF(pg_uuid_t token)
 // ---------------------------------------------------------------------------
 namespace provsql {
 
+/// Above this reachable-input count the 2^N possible-worlds enumeration drops
+/// out of the exact chain (the heavier compilers take over); below it, it is the
+/// cheap exact pick.  A tier-1 heuristic -- the calibrated cost model refines it.
+static const size_t kPossibleWorldsChainMax = 16;
+
+/// Count the @c gate_input leaves reachable from @p root (the tier-1 cost
+/// feature gating the small-N possible-worlds chain member).
+static size_t count_reachable_inputs(const GenericCircuit &gc, gate_t root)
+{
+  std::set<gate_t> seen;
+  std::stack<gate_t> stk;
+  stk.push(root);
+  size_t n = 0;
+  while(!stk.empty()) {
+    gate_t g = stk.top(); stk.pop();
+    if(!seen.insert(g).second) continue;
+    if(gc.getGateType(g) == gate_input) ++n;
+    for(gate_t c : gc.getWires(g)) stk.push(c);
+  }
+  return n;
+}
+
 /// Per-evaluation circuit state threaded to a method's evaluate().  The Boolean
 /// view @c c is built once in probability_evaluate_internal; methods that need
 /// the multivalued rewrite trigger it (idempotently) through this context, so
@@ -623,6 +645,7 @@ struct EvalContext {
   bool inv_free_cert;
   const std::string &args;
   bool explicitly_named;            ///< invoked via byName (vs the default chain)
+  size_t n_inputs = 0;              ///< reachable gate_input count (tier-1 cost feature)
   bool multivalued_rewritten = false;
   std::string actual_method;
 
@@ -724,7 +747,7 @@ public:
   std::string name() const override { return "tree-decomposition"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  int chainOrder() const override { return 2; }
+  int chainOrder() const override { return 3; }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
     try {
@@ -753,7 +776,7 @@ public:
   std::string name() const override { return "compilation"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  int chainOrder() const override { return 3; }
+  int chainOrder() const override { return 4; }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
     dDNNF dd = ctx.c.compilation(ctx.gate, ctx.args);
@@ -763,11 +786,21 @@ public:
   }
 };
 
-/// Exact, naive 2^N enumeration.  By-name only (not in the default ladder).
+/// Exact, naive 2^N enumeration.  In the default chain for small circuits only
+/// (cheap exact, preferred over tree-decomposition / compilation when N is
+/// small); always available by name.
 class PossibleWorldsMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "possible-worlds"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return true; }
+  int chainOrder() const override { return 2; }
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    // Chain admission only when the input count is small (the by-name call
+    // ignores applicable() and runs regardless, up to possibleWorlds' own
+    // 64-input hard limit).
+    return ctx.n_inputs > 0 && ctx.n_inputs <= kPossibleWorldsChainMax;
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
     if(!ctx.args.empty())
@@ -959,6 +992,76 @@ const MethodCatalog &MethodCatalog::instance()
 }
 
 }  // namespace provsql
+
+// ---------------------------------------------------------------------------
+// Three-path tolerance surface (exact / relative / additive).
+//
+// The user grants a tolerance via the method name -- "exact" (alias for the
+// empty/default method), "relative" (a (1±eps) guarantee), "additive"
+// (|p̂-p| <= eps) -- and the system picks the mechanism, rather than naming an
+// algorithm (named methods stay available as the EXPLAIN-level escape hatch).
+// Admissibility nests exact ⊂ relative ⊂ additive, so every path returns an
+// EXACT value when one is cheaply available ("exact when cheaper"): an exact
+// result satisfies any (eps,delta).
+//
+// The relative/additive estimators run on the GenericCircuit (RV-aware), so they
+// live here rather than in the BooleanCircuit catalog; folding them in behind a
+// lazy Boolean build is the clean follow-up.
+// ---------------------------------------------------------------------------
+
+/// "Exact when cheaper" probe for the relative / additive paths: the dominant
+/// cheap-exact case is a tuple-independent (read-once) circuit, which
+/// independentEvaluation resolves in linear time.  Returns true (and sets
+/// @p result / @p actual_method) when it applies; false to fall through to the
+/// path's estimator.  RV circuits have no Boolean view, so they skip straight to
+/// the estimator.
+static bool try_independent_exact(GenericCircuit &gc, pg_uuid_t token,
+                                  gate_t gc_root, double &result,
+                                  std::string &actual_method)
+{
+  if(provsql::circuitHasRV(gc, gc_root))
+    return false;
+  try {
+    gate_t gate{};
+    std::unordered_map<gate_t, gate_t> gc_to_bc;
+    BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
+    result = c.independentEvaluation(gate);
+    actual_method = "independent";
+    return true;
+  } catch(CircuitException &) {
+    return false;
+  }
+}
+
+/// Whole-circuit (eps,delta)-relative estimate via the stopping rule (shared by
+/// the explicit 'stopping-rule' method and the 'relative' path's estimator).
+static void run_stopping_rule(GenericCircuit &gc, gate_t gc_root,
+                              const MethodArgs &a, double &result,
+                              std::string &actual_method)
+{
+  SampleSpec s = parse_sample_spec(a, "stopping-rule");
+  if(s.fixed)
+    provsql_error("the relative / stopping-rule estimator is adaptive: give "
+                  "epsilon=E[,delta=D][,max_samples=M], not a fixed sample "
+                  "count");
+  const unsigned long cap = s.has_max ? s.max_samples : 10000000UL;
+  unsigned long used = 0;
+  bool reached = false;
+  result = provsql::monteCarloRVStopping(gc, gc_root, s.eps, s.delta, cap, used,
+                                         reached);
+  if(reached || used == 0) {
+    emit_guarantee("relative", s.eps, s.delta, used, -1, "stopping-rule");
+  } else {
+    const double eps_add = sqrt(log(2.0 / 0.05) / (2.0 * used));
+    provsql_warning("relative estimate: reached the %lu-sample cap before the "
+                    "(epsilon=%g, delta=%g) relative target; reporting the "
+                    "additive guarantee at the samples spent (the event is "
+                    "likely rarer than this budget resolves -- raise "
+                    "max_samples)", cap, s.eps, s.delta);
+    emit_guarantee("additive", eps_add, 0.05, used, -1, "stopping-rule");
+  }
+  actual_method = "stopping-rule";
+}
 
 /**
  * @brief Core implementation of probability evaluation for a circuit token.
@@ -1167,6 +1270,7 @@ static Datum probability_evaluate_internal
    * don't contain gate_rv, so this check leaves them for
    * provsql_having. */
   if (method != "monte-carlo" && method != "stopping-rule"
+      && method != "relative" && method != "additive"
       && provsql::circuitHasRV(gc, gc_root)) {
     if (provsql_rv_mc_samples <= 0) {
       provsql_error(
@@ -1196,64 +1300,52 @@ static Datum probability_evaluate_internal
   prev_sigint_handler = signal(SIGINT, provsql_sigint_handler);
 
   try {
-    // GenericCircuit-level samplers run before the BoolExpr translation in
+    // GenericCircuit-level estimators (the relative / additive paths and their
+    // explicit-method aliases) run before the BoolExpr translation in
     // getBooleanCircuit (which drops gate_rv and rejects RV gate_cmp), so they
     // sit at the top here rather than in the BooleanCircuit method catalog.
     //
-    // stopping-rule: whole-circuit (eps,delta)-RELATIVE probability via the
-    // Dagum-Karp-Luby-Ross stopping rule, driven by the RV-aware sampler's
-    // evalBool -- the universal relative estimator (any circuit the sampler can
-    // evaluate: plain Boolean, continuous RV, HAVING agg/cmp).  Reuses the
-    // (eps,delta,max_samples) grammar shared with karp-luby.
-    if(method == "stopping-rule") {
-      SampleSpec s = parse_sample_spec(parse_method_args(args), "stopping-rule");
-      if(s.fixed)
-        provsql_error("method 'stopping-rule' is adaptive: give "
-                      "epsilon=E[,delta=D][,max_samples=M], not a fixed sample "
-                      "count");
-      // Default cap is a runtime budget (no clause count to bound it by, as
-      // karp-luby has): rare events below it report the additive guarantee
-      // achieved.  Raise max_samples for rarer events.
-      const unsigned long cap = s.has_max ? s.max_samples : 10000000UL;
-      unsigned long used = 0;
-      bool reached = false;
-      result = provsql::monteCarloRVStopping(gc, gc_root, s.eps, s.delta,
-                                             cap, used, reached);
-      if(reached || used == 0) {
-        emit_guarantee("relative", s.eps, s.delta, used, -1, "stopping-rule");
-      } else {
-        const double eps_add = sqrt(log(2.0 / 0.05) / (2.0 * used));
-        provsql_warning("method 'stopping-rule': reached the %lu-sample cap "
-                        "before the (epsilon=%g, delta=%g) relative target; "
-                        "reporting the additive guarantee at the samples spent "
-                        "(the event is likely rarer than this budget resolves -- "
-                        "raise max_samples)", cap, s.eps, s.delta);
-        emit_guarantee("additive", eps_add, 0.05, used, -1, "stopping-rule");
+    // 'relative' / 'stopping-rule': whole-circuit (eps,delta)-RELATIVE
+    // probability via the Dagum-Karp-Luby-Ross stopping rule (the universal
+    // relative estimator -- plain Boolean / RV / HAVING agg).  The 'relative'
+    // path first tries an exact result when one is cheaply available.
+    if(method == "relative") {
+      if(!try_independent_exact(gc, token, gc_root, result, actual_method))
+        run_stopping_rule(gc, gc_root, parse_method_args(args), result,
+                          actual_method);
+    } else if(method == "stopping-rule") {
+      run_stopping_rule(gc, gc_root, parse_method_args(args), result,
+                        actual_method);
+    } else if(method == "additive") {
+      // 'additive' path: exact when cheaply available, else fixed-sample MC
+      // sized from (eps,delta) by Hoeffding (monte_carlo_samples emits the
+      // additive guarantee NOTICE).
+      if(!try_independent_exact(gc, token, gc_root, result, actual_method)) {
+        unsigned long samples = monte_carlo_samples(parse_method_args(args));
+        result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
+        actual_method = "monte-carlo";
       }
-      actual_method = "stopping-rule";
     } else if(method == "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
       // RV-aware (fixed-sample, additive) Monte Carlo.
       unsigned long samples = monte_carlo_samples(parse_method_args(args));
       result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
     } else {
-      // Existing Boolean-circuit path: applies HAVING semantics and
-      // BoolExpr translation, then dispatches across the legacy
-      // probability methods.
+      // Boolean-circuit path: applies HAVING semantics and BoolExpr translation,
+      // then dispatches through the method catalog.  The empty method (and its
+      // 'exact'/'default' aliases) runs the cost-ordered exact ladder
+      // (chooseAndRun); a named method dispatches by name.
       gate_t gate;
       std::unordered_map<gate_t, gate_t> gc_to_bc;
       BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
 
-      // Method-catalog dispatch (see ProbabilityMethod.h): the empty method
-      // runs the default exact ladder; a named method dispatches by name.  The
-      // ladder and the per-method behaviour are a 1:1 port of the historical
-      // if/else chain (Phase 1, behaviour-preserving).
+      const bool is_path = method.empty() || method == "default"
+                           || method == "exact";
       provsql::EvalContext ctx{gc, gc_root, token, c, gate, gc_to_bc,
                                inv_free_cert, args,
-                               /*explicitly_named=*/!method.empty()};
+                               /*explicitly_named=*/!is_path,
+                               /*n_inputs=*/provsql::count_reachable_inputs(gc, gc_root)};
       const provsql::MethodCatalog &catalog = provsql::MethodCatalog::instance();
-      if(method.empty() || method == "default") {
-        // "default" == the default auto-selection (the exact ladder), same as
-        // the empty method.
+      if(is_path) {
         result = catalog.chooseAndRun(ctx, provsql::Tolerance{});
       } else {
         const provsql::ProbabilityMethod *m = catalog.byName(method);

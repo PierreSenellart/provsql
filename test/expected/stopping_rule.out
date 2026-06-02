@@ -13,14 +13,14 @@ t
 eps_only|eps_delta_cap
 t|t
 (1 row)
-ERROR:  ProvSQL: method 'stopping-rule' is adaptive: give epsilon=E[,delta=D][,max_samples=M], not a fixed sample count
+ERROR:  ProvSQL: the relative / stopping-rule estimator is adaptive: give epsilon=E[,delta=D][,max_samples=M], not a fixed sample count
 ERROR:  ProvSQL: method 'stopping-rule': delta requires epsilon
 ERROR:  ProvSQL: method 'stopping-rule': unknown argument key 'foo'
 NOTICE:  ProvSQL: approximation-guarantee: kind=relative eps=0.1 delta=0.05 samples=4056 tool=stopping-rule
 with_guarantee
 t
 (1 row)
-WARNING:  ProvSQL: method 'stopping-rule': reached the 50-sample cap before the (epsilon=0.001, delta=0.01) relative target; reporting the additive guarantee at the samples spent (the event is likely rarer than this budget resolves -- raise max_samples)
+WARNING:  ProvSQL: relative estimate: reached the 50-sample cap before the (epsilon=0.001, delta=0.01) relative target; reporting the additive guarantee at the samples spent (the event is likely rarer than this budget resolves -- raise max_samples)
 NOTICE:  ProvSQL: approximation-guarantee: kind=additive eps=0.192065 delta=0.05 samples=50 tool=stopping-rule
 capped
 t
