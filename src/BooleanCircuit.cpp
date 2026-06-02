@@ -65,6 +65,9 @@ constexpr const char *provsql_fallback_compiler = "d4";
 enum levels {ERROR, NOTICE};
 #define elog(level, ...) {fprintf(stderr, __VA_ARGS__); if(level==ERROR) exit(EXIT_FAILURE);}
 #define CHECK_FOR_INTERRUPTS() ((void)0)
+// The standalone tool has no PostgreSQL stack-depth governor; its deep
+// recursions (tree decomposition, d-DNNF) already run on heap stacks.
+#define check_stack_depth() ((void)0)
 #else
 extern "C" {
 #include "provsql_utils.h"
@@ -319,6 +322,7 @@ std::string BooleanCircuit::exportCircuit(gate_t root) const
 
 bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const
 {
+  check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
   bool disjunction=false;
 
   switch(getGateType(g)) {
@@ -1603,6 +1607,7 @@ double BooleanCircuit::independentEvaluationInternal(
   gate_t g, std::set<gate_t> &seen,
   std::unordered_map<gate_t, double> &memo) const
 {
+  check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
   // Memoised gates are variable-free (constant-only) -- returning the cached
   // value is sound (it touched nothing in `seen`) and avoids re-traversing a
   // shared constant subgraph.  A variable-bearing gate is never cached, so a
@@ -1806,6 +1811,7 @@ void BooleanCircuit::rewriteMultivaluedGates()
 }
 
 gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const {
+  check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
   gate_t dg{0};
 
   switch(getGateType(g)) {

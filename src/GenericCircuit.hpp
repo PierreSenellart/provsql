@@ -29,11 +29,19 @@
 
 extern "C" {
 #include "utils/lsyscache.h"
+#include "miscadmin.h"        // check_stack_depth
 }
 
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> >
 typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const
 {
+  /* Recurses on circuit wires (depth = circuit depth).  A pathological
+   * provenance circuit -- e.g. a deep times/plus chain from a recursive
+   * query -- would otherwise overflow the C stack and crash the backend;
+   * check_stack_depth() turns that into a clean "stack depth limit
+   * exceeded" ERROR honouring max_stack_depth. */
+  check_stack_depth();
+
   const auto it = provenance_mapping.find(g);
   if(it != provenance_mapping.end())
     return it->second;
