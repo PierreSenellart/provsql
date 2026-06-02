@@ -1738,16 +1738,18 @@
   // Module-level (not inside initEvalStrip) so runEvaluation can call it.
   function buildProbArgs(method) {
     const val = id => (document.getElementById(id)?.value || '').trim();
-    // 'relative' and 'stopping-rule' are adaptive only -- always send (eps, δ),
-    // never a fixed sample count (the extension errors on a fixed count).
-    if (method === 'relative' || method === 'stopping-rule') {
+    // The tolerance paths (relative / additive) and the adaptive relative FPRAS
+    // (stopping-rule) take only an (eps, δ) target -- never a fixed sample count
+    // (the samples toggle is hidden for them; relative / stopping-rule even
+    // error on a fixed count).
+    if (method === 'relative' || method === 'additive'
+        || method === 'stopping-rule') {
       const parts = [];
       if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
       if (val('eval-approx-delta')) parts.push('delta=' + val('eval-approx-delta'));
       return parts.join(',');
     }
-    if (method === 'monte-carlo' || method === 'karp-luby'
-        || method === 'additive') {
+    if (method === 'monte-carlo' || method === 'karp-luby') {
       if (document.getElementById('eval-approx-mode')?.value === 'epsdelta') {
         const parts = [];
         if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
@@ -1993,7 +1995,7 @@
       if (ifOpt) {
         ifOpt.hidden = !sceneIsIf;
         ifOpt.disabled = ifOpt.hidden;
-        if (ifOpt.hidden && meth.value === 'inversion-free') meth.value = '';
+        if (ifOpt.hidden && meth.value === 'inversion-free') meth.value = 'exact';
       }
       const comp = document.getElementById('eval-args-compiler');
       const ifComp = comp && comp.querySelector('option[value="inversion-free"]');
@@ -2038,8 +2040,16 @@
       const mc   = document.getElementById('eval-args-mc');
       const ed   = document.getElementById('eval-approx-ed');
       if (!mode) return;
+      // The tolerance paths (relative / additive) and the adaptive relative
+      // FPRAS (stopping-rule) accept only an (eps, delta) target -- a fixed
+      // sample count is meaningless (relative / stopping-rule even error on
+      // one).  Hide the samples-vs-(eps,delta) toggle and the count input for
+      // them, pinning the (eps, delta) fields.
+      const edOnly = ['relative', 'additive', 'stopping-rule'].includes(meth.value);
+      if (edOnly) mode.value = 'epsdelta';
+      mode.hidden = edOnly;
       const eps = mode.value === 'epsdelta';
-      if (mc) mc.hidden = eps;
+      if (mc) mc.hidden = eps || edOnly;
       if (ed) ed.hidden = !eps;
     }
 
