@@ -682,26 +682,24 @@ static const double kCostCompilation     = 2e-3;  // ~2e-3 * S^1.5 ms ...
 static const double kCostCompilationFloor= 40.0;  // ... but at least ~40 ms (startup + easy compile)
 static const double kCostDnfShapeFeature = 2e-6;  // O(S):                ~2e-6 * S
 static const double kCostTwProxyFeature  = 3e-4;  // O(S):                ~3e-4 * S
-// Approximate portfolio members (relative & additive paths).  Their cost depends
-// on the granted (eps,delta); we model the sample-budget term C = ln(2/delta)/eps^2
-// times the per-sample O(S) work.  stopping-rule's true budget is C/p (the Dagum
-// rule draws ~ 1/p worlds) but p is not a static feature, so we model it
-// OPTIMISTICALLY at p ~ 1 -- a documented heuristic.  Calibrated like the exact
-// constants so the value is ~ the milliseconds on this machine (verbose_level>=50
-// instrumentation, eps=0.1 delta=0.05):
-//   monte-carlo   CNF S=4472 -> 17.5 ms, S=8972 -> 35.3 ms   (cost/ms ~ 1)
-//   stopping-rule CNF S=4472 -> 129  ms, S=8972 -> 290  ms   (~3x MC: adaptive 1/p)
-//   karp-luby     overlapping DNF m=60..200 -> 6.6..13.5 ms  (S*m model pessimistic
-//                 for large m -- fine, it just hands huge-m DNFs to the stopping
-//                 rule sooner).
-// The resulting ordering is the intended trade-off: a cheap exact method
-// (independent ~5e-5*S, a tiny-m sieve) underbids the 1/eps^2 estimators so the
-// path returns EXACT; on a hard/large circuit the bounded-cost estimator underbids
-// exact compilation (~S^1.5) and possible-worlds (2^N) so the path estimates; on a
-// DNF, karp-luby (the FPRAS) underbids the generic stopping rule up to m ~ 400.
-static const double kCostMonteCarlo      = 1e-5;  // additive:     ~1e-5 * S * C
-static const double kCostStoppingRule    = 8e-5;  // relative univ: ~8e-5 * S * C  (>= MC: adaptive 1/p risk)
-static const double kCostKarpLuby        = 2e-7;  // relative DNF:  ~2e-7 * S * m * C
+// Approximate portfolio members (relative & additive paths).  Their cost has the
+// sample-budget term C = ln(2/delta)/eps^2 times per-sample O(S) work, but the
+// CONSTANT is PESSIMISTIC by design: measurement showed the runtimes depend on the
+// result probability p and the clause structure -- NOT static features (the same
+// lesson as the d-tree).  karp-luby moved 14x (4 -> 52 ms on one DNF) purely with
+// p; the stopping rule's Dagum 1/p factor (it draws ~1/p worlds) took a rare-event
+// (p~0.06) circuit to 120-470 ms where a p~1 model predicts ~10.  A single
+// constant cannot be accurate across p, so these are upper bounds.  The chooser
+// then never UNDER-prices a sampler and picks a slow one: it prefers the
+// delta-independent d-tree (no 1/p, deterministic) and exact-when-cheaper, and
+// falls to a sampler only when it is the sole admissible option (non-DNF
+// relative / additive), where it is picked regardless of cost.  Net ordering: a
+// cheap exact method (independent ~5e-5*S, a tiny-m sieve) underbids the
+// estimators so the path returns EXACT; a DNF approximation goes to the d-tree;
+// only a hard non-DNF approximation reaches the samplers.
+static const double kCostMonteCarlo      = 1e-5;  // additive:     ~1e-5 * S * C  (p-independent, the clean one)
+static const double kCostStoppingRule    = 1e-3;  // relative univ: ~1e-3 * S * C  (pessimistic: covers the 1/p rare-event blow-up)
+static const double kCostKarpLuby        = 3e-6;  // relative DNF:  ~3e-6 * S * m * C (pessimistic: covers the p-dependent slow case)
 static const double kCostDTreeExact      = 3e-4;  // d-tree exact:  ~3e-4 * S * m (memoised Shannon; pessimistic vs tree-decomp on low tw)
 static const double kCostDTreeApprox     = 4e-4;  // d-tree approx: ~4e-4 * S / eps, DELTA-INDEPENDENT (deterministic -> overtakes samplers as delta shrinks)
 
@@ -911,13 +909,18 @@ public:
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
     return ctx.tw_proxy_ <= static_cast<unsigned>(TreeDecomposition::MAX_TREEWIDTH);
   }
-  // O(S * (Delta^2 + 2^w)): both terms from the one degeneracy pass -- the
-  // min-fill build's per-step fill-in scales with Delta^2, the d-DNNF is
-  // exponential in the treewidth (lower-bounded by the degeneracy proxy w).
+  // O(S * 2^w): the d-DNNF is exponential in the treewidth (lower-bounded by the
+  // degeneracy proxy w), and the min-fill build is poly and bounded by the S
+  // factor.  NB an earlier model multiplied in the max degree Delta^2 to charge
+  // the build's per-step fill-in -- but for a DNF the root OR's fan-in IS the
+  // clause count, so Delta^2 exploded (a 300-clause DNF -> Delta=300 -> cost
+  // ~90000x too high) and the chooser fled a 7 ms tree-decomposition for a
+  // 1900 ms compilation.  The build is fast even at high fan-in (measured), so
+  // Delta is dropped; 2^w (capped at the MAX_TREEWIDTH applicability bound) is
+  // the real cost driver.
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    const double delta = static_cast<double>(ctx.tw_max_degree_);
     return kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
-           * (delta * delta + pow2_clamped(ctx.tw_proxy_));
+           * pow2_clamped(ctx.tw_proxy_);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
@@ -958,7 +961,16 @@ public:
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
-    dDNNF dd = ctx.c.compilation(ctx.gate, ctx.args);
+    // On a chooser path (exact / relative / additive) ctx.args carries the
+    // path's TOLERANCE string (epsilon=...,delta=...), not a compiler name, so
+    // auto-select the compiler.  Only a by-name 'compilation' call passes an
+    // explicit compiler in ctx.args.  (Without this, a relative/additive request
+    // makes compilation try to use "epsilon=...,delta=..." as a compiler name,
+    // which throws -- silently dropping compilation from the chooser and sending
+    // the request to a worse method.)
+    const std::string compiler =
+      ctx.explicitly_named ? ctx.args : std::string();
+    dDNNF dd = ctx.c.compilation(ctx.gate, compiler);
     double r = dd.probabilityEvaluation();
     ctx.actual_method = "compilation";
     return r;
