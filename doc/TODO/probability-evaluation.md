@@ -196,11 +196,25 @@ arbitrary hierarchical depth. The genuine residuals:
 - **`MulMcMethod`** — additive MC made multiplicative via a structural lower
   bound `ℓ` (`ε_add = ℓ·ε`), cheaper than coverage when `p ≈ 1`. Needs a
   structural `ℓ` on the unexpanded circuit (the missing feature).
-- **Gate-level `eval_cmp_in_world`.** The value-level core
-  `agg_cmp_holds_in_world` is centralised; the gate-level wrapper + wiring the
-  `MonteCarloSampler` agg/cmp arm through it is the remaining parity hardening
-  (the sampler has a working arm, so this prevents future drift from the
-  `pw_from_cmp_gate` expansion, not a correctness blocker today).
+- **Gate-level `eval_cmp_in_world` — resolved as a non-issue (dropped).** This
+  was proposed as parity hardening against drift between the `MonteCarloSampler`
+  agg/cmp arm and the `pw_from_cmp_gate` expansion. Investigation showed there is
+  no live drift to harden against: discrete `gate_cmp`s are **expanded into their
+  threshold lineage by `provsql_having` inside `getBooleanCircuit` before any
+  sampler runs**, so the Boolean-path methods never see a symbolic cmp, and the
+  one sampler that does (`run_stopping_rule` on the `GenericCircuit`) agrees with
+  the expansion empirically. The decisive check (per Senellart): encode the same
+  distribution as a categorical RV and as a `choose()` aggregate over a
+  mutually-exclusive `repair_key` block — they match on every operator, arity and
+  non-uniform mass. So the two cmp paths are consistent and the shared primitive
+  is unnecessary.
+  *The investigation did surface a real, unrelated bug, now fixed:* the SUM
+  world-enumeration (`sum_dp`) dropped the value-`0` worlds along with the empty
+  world for `<` / `<=`, so `HAVING sum(val) < k` over a BID block containing a
+  value-`0` outcome returned the wrong probability (e.g. `0` instead of `0.5`).
+  Fixed by keeping `dp[0]` and removing only the empty mask; pinned by
+  `test/sql/having_sum_zero.sql`. COUNT is structurally immune (no value-`0`
+  contributor).
 - **Cost-model refinements.** The `karp-luby` `S·m` cost is pessimistic for large
   `m`; the calibrated per-node ε-split (guarantee propagation, below) is the
   cost-model-later seam.
