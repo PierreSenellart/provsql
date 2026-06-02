@@ -3408,6 +3408,85 @@ static bool has_provenance(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief Walker: true if @p node (descending through nested queries) contains
+ *        an explicit @c provenance() call.
+ */
+static bool calls_provenance_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid ==
+          ((const constants_t *)data)->OID_FUNCTION_PROVENANCE)
+    return true;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, calls_provenance_walker, data, 0);
+  return expression_tree_walker(node, calls_provenance_walker, data);
+}
+
+/**
+ * @brief Walker: true if a @c SubLink subselect calls @c provenance().
+ *
+ * A @c SubLink subselect (scalar / @c IN / @c EXISTS) is planned standalone, so
+ * it never goes through this hook -- a @c provenance() call inside one is never
+ * rewritten and falls through to its runtime stub (NULL or a misleading error).
+ * ProvSQL does not propagate provenance through a @c SubLink, so we detect the
+ * @c provenance() use up front and raise a clear error instead.
+ *
+ * Only the explicit @c provenance() call is flagged, not a mere read of a
+ * tracked relation's columns: @c (SELECT @c array_agg(provsql) @c FROM @c t) and
+ * other plain column reads inside a @c SubLink are legitimate and must keep
+ * working.  Tracked relations reached through the @c FROM clause
+ * (@c RTE_SUBQUERY) are fully supported and never reach this walker's @c SubLink
+ * arm.
+ */
+static bool provenance_in_sublink_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, provenance_in_sublink_walker, data, 0);
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subselect && IsA(sl->subselect, Query) &&
+        calls_provenance_walker(sl->subselect, data))
+      return true;
+  }
+  return expression_tree_walker(node, provenance_in_sublink_walker, data);
+}
+
+/**
+ * @brief Remove the auto-added @c provsql output column from a rewritten query.
+ *
+ * The inverse of @c add_to_select: drops the @c TargetEntry named
+ * @c PROVSQL_COLUMN_NAME and decrements the @c resno of every later entry, so
+ * the column numbering stays contiguous.  Used when a query was rewritten for
+ * its own provenance semantics (HAVING lifting, @c provenance() resolution) but
+ * the caller cannot store the provenance -- e.g. an @c INSERT @c ... @c SELECT
+ * whose target table has no provsql column.
+ */
+static void remove_provsql_from_select(Query *q) {
+  ListCell *lc;
+  int removed_resno = -1;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME)) {
+      removed_resno = te->resno;
+      q->targetList = list_delete_cell(q->targetList, lc);
+      break;
+    }
+  }
+
+  if (removed_resno < 0)
+    return;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resno > removed_resno)
+      --te->resno;
+  }
+}
+
+/**
  * @brief Tree walker that detects any Var of type agg_token.
  * @param node  Current expression tree node.
  * @param data  Pointer to a @c constants_t (extension OID cache).
@@ -6026,6 +6105,21 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   if (src_rte == NULL)
     return;
 
+  /* Rewrite the source SELECT so its own provenance semantics -- HAVING
+   * lifting, provenance() resolution -- take effect.  This must run whether or
+   * not the target table is provenance-tracked: the old code returned early
+   * (warning, below) when the target had no provsql column, which left the
+   * SELECT's HAVING on the physical rows and provenance() unresolved, so the
+   * INSERT saw zero rows. */
+  {
+    bool *removed = NULL;
+    Query *new_subquery =
+      process_query(constants, src_rte->subquery, &removed, false, false, NULL);
+    if (new_subquery == NULL)
+      return;
+    src_rte->subquery = new_subquery;
+  }
+
   /* Check if the target table has a provsql column */
   tgt_rte = list_nth_node(RangeTblEntry, q->rtable, q->resultRelation - 1);
   if (tgt_rte->rtekind == RTE_RELATION) {
@@ -6039,6 +6133,11 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   }
 
   if (provsql_attno == 0) {
+    /* The target cannot store provenance.  The source SELECT was rewritten
+     * above (so it returns the right rows), but its auto-added provsql column
+     * has no target column to land in -- drop it so the INSERT's column
+     * mapping stays consistent, and warn that provenance is not propagated. */
+    remove_provsql_from_select(src_rte->subquery);
     provsql_warning("INSERT ... SELECT on provenance-tracked "
                     "tables: source provenance is not propagated "
                     "to inserted rows");
@@ -6059,30 +6158,18 @@ static void process_insert_select(const constants_t *constants, Query *q) {
     /* The target's provsql column is not in the INSERT's targetList
      * (no DEFAULT on the column since 1.6.0; the user did not name
      * the column either).  Synthesise a TE so we have something to
-     * substitute the source provsql Var into below.  Do NOT append it
-     * to the targetList yet: its expr is only known once the source
-     * Var has been resolved, and an early return before that point
-     * would leave a NULL-expr TargetEntry the planner later
-     * dereferences (segfault). */
+     * substitute the source provsql Var into below. */
     provsql_te = makeNode(TargetEntry);
     provsql_te->resno = provsql_attno;
     provsql_te->resname = pstrdup(PROVSQL_COLUMN_NAME);
     provsql_te_is_new = true;
   }
 
-  /* Rewrite the source SELECT to carry provenance */
+  /* Map the source's provsql column into the target's provsql column. */
   {
-    bool *removed = NULL;
-    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false, false, NULL);
     AttrNumber src_provsql_attno = 0;
 
-    if (new_subquery == NULL)
-      return;
-
-    src_rte->subquery = new_subquery;
-
-    /* Find the provsql column in the rewritten subquery, verify its type */
-    foreach (lc, new_subquery->targetList) {
+    foreach (lc, src_rte->subquery->targetList) {
       TargetEntry *te = (TargetEntry *)lfirst(lc);
       if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME) &&
           exprType((Node *)te->expr) == constants->OID_TYPE_UUID) {
@@ -6154,8 +6241,13 @@ static PlannedStmt *provsql_planner(Query *q,
                                     ParamListInfo boundParams) {
   if (q->commandType == CMD_INSERT && q->rtable && provsql_active) {
     const constants_t constants = get_constants(false);
-    if (constants.ok)
+    if (constants.ok) {
+      if (provenance_in_sublink_walker((Node *)q, (void *)&constants))
+        provsql_error("a subquery over a provenance-tracked relation cannot be "
+                      "used as a scalar subquery / IN / EXISTS expression; put "
+                      "it in the FROM clause instead");
       process_insert_select(&constants, q);
+    }
   } else if (q->commandType == CMD_SELECT) {
     /* No rtable check here: a FROM-less SELECT (e.g.
      *   SELECT 1 WHERE normal(0,1) > 2)
@@ -6164,6 +6256,16 @@ static PlannedStmt *provsql_planner(Query *q,
      * on FROM-less queries that have neither rv_cmp nor provenance(),
      * so widening the gate costs nothing in the common case. */
     const constants_t constants = get_constants(false);
+
+    /* A subquery over a provenance-tracked relation used in an expression
+     * context (scalar subquery / IN / EXISTS) is not supported -- and would
+     * otherwise slip past has_provenance() (which does not descend into
+     * SubLinks) and leave provenance() to fail at runtime.  Flag it clearly. */
+    if (provsql_active && constants.ok &&
+        provenance_in_sublink_walker((Node *)q, (void *)&constants))
+      provsql_error("a subquery over a provenance-tracked relation cannot be "
+                    "used as a scalar subquery / IN / EXISTS expression; put "
+                    "it in the FROM clause instead");
 
     /* Query-time TID / BID / OPAQUE classifier.  Emits a NOTICE for
      * the user's outermost SELECT when the GUC is on.  Runs on the

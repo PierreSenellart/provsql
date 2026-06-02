@@ -1,0 +1,26 @@
+\set ECHO none
+repair_key
+
+(1 row)
+ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as a scalar subquery / IN / EXISTS expression; put it in the FROM clause instead
+ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as a scalar subquery / IN / EXISTS expression; put it in the FROM clause instead
+reads_col
+2
+(1 row)
+WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
+add_provenance
+
+(1 row)
+pred|p
+sum<5|0.500
+(1 row)
+x|p
+0|0.500
+10|0.500
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
