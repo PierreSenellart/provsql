@@ -282,7 +282,7 @@ std::string toNNF(
 
 friend dDNNFTreeDecompositionBuilder; ///< Allowed to construct and populate this d-DNNF
 friend StructuredDNNFBuilder; ///< Inversion-free structured builder: constructs and populates this d-DNNF
-friend dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const; ///< Allowed to access internal d-DNNF state
+friend dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler, std::string *resolved) const; ///< Allowed to access internal d-DNNF state
 };
 
 #endif /* DDNNF_H */

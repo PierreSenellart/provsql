@@ -245,10 +245,15 @@ double possibleWorlds(gate_t g) const;
  * subprocess, and parses the resulting d-DNNF.
  *
  * @param g         Root gate.
- * @param compiler  Command to invoke (e.g. "d4", "c2d", "minic2d").
+ * @param compiler  Command to invoke (e.g. "d4", "c2d", "minic2d").  Empty
+ *                  auto-selects the highest-preference available tool.
+ * @param resolved  If non-null, set to the tool actually used (after the
+ *                  empty -> auto-select resolution), so callers can report
+ *                  WHICH compiler ran rather than just "compilation".
  * @return          The compiled @c dDNNF.
  */
-dDNNF compilation(gate_t g, std::string compiler) const;
+dDNNF compilation(gate_t g, std::string compiler,
+                  std::string *resolved = nullptr) const;
 
 /**
  * @brief Parse a c2d/d4 NNF stream into a @c dDNNF over this circuit's input

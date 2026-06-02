@@ -8,6 +8,31 @@
 -- by-name timing (their true cost on rare/high-clause circuits is unbounded);
 -- the auto-chooser columns are the point -- it should pick a fast method every
 -- time and never one of the catastrophic by-name cells.
+--
+-- Reference auto-chooser picks (this machine, d4/c2d/dsharp available).  Every
+-- request lands on a fast method; together they exercise the WHOLE portfolio.
+--
+--  circuit          exact           rel eps=.1      rel eps=.3      additive      det delta=0
+--  readonce         independent     independent     independent     independent   independent
+--  triangle         possible-worlds possible-worlds possible-worlds possible-worlds possible-worlds
+--  cycle_common     tree-decomp     tree-decomp     d-tree          tree-decomp   tree-decomp
+--  cycle_rare       tree-decomp     tree-decomp     d-tree          tree-decomp   tree-decomp
+--  clique8          possible-worlds possible-worlds possible-worlds possible-worlds possible-worlds
+--  clique14         d-tree          d-tree          d-tree          monte-carlo   d-tree
+--  big_cycle/rare   tree-decomp     tree-decomp     d-tree          tree-decomp   tree-decomp
+--  cnf              tree-decomp     tree-decomp     tree-decomp     tree-decomp   tree-decomp
+--  nested/monus/cnf12 independent   independent     independent     independent   independent
+--  cliqueCNF14      possible-worlds possible-worlds stopping-rule   monte-carlo   possible-worlds
+--  cliqueCNF18      compilation:d4  compilation:d4  stopping-rule   monte-carlo   compilation:d4
+--  sieve_fav        sieve           sieve           karp-luby       sieve         sieve
+--  kl_fav           d-tree          d-tree          karp-luby       monte-carlo   d-tree
+--  invfree          inversion-free  inversion-free  inversion-free  inversion-free inversion-free
+--
+-- Reachability of every method: independent / possible-worlds / tree-decomp /
+-- d-tree / monte-carlo are common; sieve (sieve_fav), karp-luby + stopping-rule
+-- (loose eps), compilation (cliqueCNF18), inversion-free (invfree).  The
+-- stopping-rule picks at loose eps are the documented 1/p corner (it is cheaper
+-- in the model but slow at runtime); at tight eps the chooser avoids it.
 \timing off
 \set ECHO none
 SET search_path TO provsql_test, provsql;

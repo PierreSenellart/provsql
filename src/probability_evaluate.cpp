@@ -970,9 +970,12 @@ public:
     // the request to a worse method.)
     const std::string compiler =
       ctx.explicitly_named ? ctx.args : std::string();
-    dDNNF dd = ctx.c.compilation(ctx.gate, compiler);
+    std::string used;
+    dDNNF dd = ctx.c.compilation(ctx.gate, compiler, &used);
     double r = dd.probabilityEvaluation();
-    ctx.actual_method = "compilation";
+    // Report WHICH compiler ran (e.g. "compilation:d4"), not just "compilation":
+    // on a chooser path the tool is auto-selected, so the bare label hid it.
+    ctx.actual_method = used.empty() ? "compilation" : "compilation:" + used;
     return r;
   }
 };
