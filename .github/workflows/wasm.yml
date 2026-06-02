@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { path: provsql }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with: { node-version: '20' }
       - name: Generate the extension SQL (native make)
         run: |
