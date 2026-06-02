@@ -1305,7 +1305,8 @@ public:
                      tool.c_str());
     ctx.ensureMultivaluedRewritten();
     double r = ctx.c.wmcCount(ctx.gate, tool, tool_args);
-    ctx.actual_method = "wmc";
+    // Report WHICH counter ran (e.g. "wmc:ganak"), mirroring "compilation:d4".
+    ctx.actual_method = tool.empty() ? "wmc" : "wmc:" + tool;
     return r;
   }
 };
