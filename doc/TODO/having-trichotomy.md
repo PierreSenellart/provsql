@@ -802,11 +802,22 @@ Status legend: ✅ done · ◑ partial · ⏳ deferred (with reason).
    `stopping_rule.sql`, commit `3af132d`. ⏳ `MinMaxKarpLubyMethod` (MIN/MAX-easy
    → UCQ → karp-luby) deferred: an efficiency optimisation StoppingRuleMc
    already covers functionally.
-4. ⏳ **Additive path.** Functionally already served by the existing
-   `monte-carlo` method. The substantive piece is the three-path
-   AUTO-SELECTION surface (a `relative`/`additive`/`exact` tolerance the chooser
-   maps to a method) — design-heavy, changes user-facing surface, overlaps the
-   cost-model chooser. Deferred for review.
+4. ✅ **Three-path tolerance surface.** `exact` (alias for the empty/default
+   method), `relative` (`(1±ε)`), `additive` (`|p̂−p| ≤ ε`) are method names that
+   grant a tolerance; the system picks the mechanism. **Exact-when-cheaper**:
+   admissibility nests exact ⊂ relative ⊂ additive, so relative/additive return
+   the exact value via `independent` when the circuit is tuple-independent, else
+   fall to the estimator (stopping-rule / monte-carlo). Plus the **first cost
+   heuristic**: small-N (≤16 inputs) → `possible-worlds` in the exact chooser,
+   ahead of tree-decomposition/compilation. Tests `probability_paths.sql` +
+   `last_eval_method.sql`, commit `7687932`. *Follow-up:* fold the
+   GenericCircuit estimators into the catalog behind a lazy Boolean build
+   (removes the top-level special-casing); widen exact-when-cheaper to small-N
+   possible-worlds; add a treewidth proxy to rank tree-decomposition vs
+   compilation. The `makeDD` monolith was first decomposed into
+   interpret-as-dd / tree-decomposition / compilation catalog members (commit
+   `4607911`) so the chooser can see and rank them; interpret-as-dd was dropped
+   from the chain as redundant with `independent`.
 5. ⏳ **`AggFptrasMethod`** — the SUM-safe FPTRAS (Dyer rounding + top-down
    random-world generator + accept-test). Research-grade; high risk of subtle
    statistical bias; needs the `AggMarginalEvaluator` internals exposed and the
