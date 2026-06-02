@@ -609,10 +609,20 @@ dDNNF buildInversionFreeDDNNF(pg_uuid_t token)
 // ---------------------------------------------------------------------------
 namespace provsql {
 
-/// Above this reachable-input count the 2^N possible-worlds enumeration drops
-/// out of the exact chain (the heavier compilers take over); below it, it is the
-/// cheap exact pick.  A tier-1 heuristic -- the calibrated cost model refines it.
-static const size_t kPossibleWorldsChainMax = 16;
+/// Sanity bound on the reachable-input count for the auto-chosen 2^N
+/// possible-worlds enumeration: above it the method drops out of the portfolio
+/// so it is never *attempted* (its 2^N cost already deprioritises it, but this
+/// guards against a catastrophic last-resort attempt if every cheaper method
+/// failed).  The by-name call ignores it (up to possibleWorlds' own 64 limit).
+/// The actual small-N-vs-compile crossover is a cost comparison, not this bound.
+static const size_t kPossibleWorldsSanityMax = 30;
+
+/// Heuristic cost of the constant-cost exact compilers (no treewidth proxy yet):
+/// tree-decomposition is the treewidth-bounded compile; its value sets the
+/// possible-worlds crossover at 2^N = 2^16, and compilation (an external
+/// subprocess) is the costlier last resort.
+static const double kTreeDecompositionCost = 65536.0;  // 2^16
+static const double kCompilationCost = 1.0e7;
 
 /// Count the @c gate_input leaves reachable from @p root (the tier-1 cost
 /// feature gating the small-N possible-worlds chain member).
@@ -666,7 +676,10 @@ public:
   std::string name() const override { return "independent"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  int chainOrder() const override { return 0; }
+  // Linear scan of the circuit; the cheapest exact method when it applies.
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    return static_cast<double>(ctx.n_inputs) + 1.0;
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     double r = ctx.c.independentEvaluation(ctx.gate);
     ctx.actual_method = "independent";
@@ -680,7 +693,11 @@ public:
   std::string name() const override { return "inversion-free"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  int chainOrder() const override { return 1; }
+  // Linear over the structured d-DNNF -- about as cheap as independent (and only
+  // applicable with a certificate, so the two rarely compete).
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    return static_cast<double>(ctx.n_inputs) + 2.0;
+  }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
     // In the default ladder: only when the certificate is present and the
     // kill-switch is on.  byName ignores applicable() and enforces the explicit
@@ -747,7 +764,9 @@ public:
   std::string name() const override { return "tree-decomposition"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  int chainOrder() const override { return 3; }
+  double estimatedCost(const EvalContext &, const Tolerance &) const override {
+    return kTreeDecompositionCost;
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
     try {
@@ -776,7 +795,9 @@ public:
   std::string name() const override { return "compilation"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  int chainOrder() const override { return 4; }
+  double estimatedCost(const EvalContext &, const Tolerance &) const override {
+    return kCompilationCost;
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
     dDNNF dd = ctx.c.compilation(ctx.gate, ctx.args);
@@ -794,12 +815,14 @@ public:
   std::string name() const override { return "possible-worlds"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  int chainOrder() const override { return 2; }
+  // 2^N enumeration: cheap for small N (sorts ahead of the compilers), expensive
+  // for large N (sorts behind them) -- the selection threshold is this crossover,
+  // not a hardcoded bound.
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    return std::ldexp(1.0, static_cast<int>(std::min<size_t>(ctx.n_inputs, 63)));
+  }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
-    // Chain admission only when the input count is small (the by-name call
-    // ignores applicable() and runs regardless, up to possibleWorlds' own
-    // 64-input hard limit).
-    return ctx.n_inputs > 0 && ctx.n_inputs <= kPossibleWorldsChainMax;
+    return ctx.n_inputs > 0 && ctx.n_inputs <= kPossibleWorldsSanityMax;
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
@@ -949,15 +972,16 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
   for(const auto &m : methods_)
     if(m->inDefaultChain() && m->applicable(ctx, tol))
       chain.push_back(m.get());
+  // Cheapest estimated cost first -- the order emerges from the estimates, not a
+  // fixed ordinal.
   std::sort(chain.begin(), chain.end(),
-            [](const ProbabilityMethod *a, const ProbabilityMethod *b) {
-              return a->chainOrder() < b->chainOrder();
+            [&](const ProbabilityMethod *a, const ProbabilityMethod *b) {
+              return a->estimatedCost(ctx, tol) < b->estimatedCost(ctx, tol);
             });
   if(chain.empty())
-    throw CircuitException("no applicable probability method in the default "
-                           "chain");
-  // Try each in order; the terminal method's exception propagates (the chain is
-  // exhausted), reproducing the historical "compilation runs uncaught" tail.
+    throw CircuitException("no applicable probability method in the portfolio");
+  // Try each cheapest-first; the costliest method's exception propagates (the
+  // portfolio is exhausted) -- the last-resort tail.
   for(size_t i = 0; i + 1 < chain.size(); ++i) {
     try {
       return chain[i]->evaluate(ctx, tol);
@@ -970,9 +994,10 @@ const MethodCatalog &MethodCatalog::instance()
 {
   static const MethodCatalog cat = [] {
     MethodCatalog c;
-    // Default exact ladder, in chainOrder: independent -> inversion-free ->
-    // tree-decomposition -> compilation (interpret-as-dd is NOT in the chain --
-    // it is redundant with independent, which precedes it; see InterpretAsDd).
+    // Exact portfolio (registration order is irrelevant -- the chooser sorts by
+    // estimatedCost): independent, inversion-free, possible-worlds (2^N),
+    // tree-decomposition, compilation.  interpret-as-dd is NOT in the portfolio
+    // -- it is redundant with independent (see InterpretAsDd).
     c.registerMethod(std::make_unique<IndependentMethod>());
     c.registerMethod(std::make_unique<InversionFreeMethod>());
     c.registerMethod(std::make_unique<TreeDecompositionMethod>());

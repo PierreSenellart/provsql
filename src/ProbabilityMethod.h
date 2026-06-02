@@ -73,16 +73,22 @@ public:
   /// Which user-facing path this method can serve.
   virtual ToleranceKind guaranteeKind() const = 0;
 
-  /// True iff this method participates in the default exact ladder (the
-  /// historical independent -> inversion-free -> compilation chain).
+  /// True iff this method participates in the auto-chooser's portfolio (vs being
+  /// reachable only @c byName).
   virtual bool inDefaultChain() const { return false; }
 
-  /// Position in the default ladder (lower runs first).  Ignored unless
-  /// @c inDefaultChain().
-  virtual int chainOrder() const { return 0; }
+  /// Heuristic estimate of this method's cost on the current circuit (lower is
+  /// cheaper).  The chooser sorts admissible portfolio members by this and tries
+  /// them cheapest-first -- there is deliberately NO fixed ordinal: the order
+  /// emerges from the estimates, and a calibrated cost model can later replace
+  /// the heuristic bodies without touching the chooser.  Only consulted for
+  /// portfolio members; by-name-only methods keep the default.
+  virtual double estimatedCost(const EvalContext &, const Tolerance &) const
+  { return 0.; }
 
-  /// Cheap admissibility check for the default ladder (e.g. an inversion-free
-  /// certificate must be present).  @c byName ignores it.
+  /// Cheap admissibility check for the portfolio (e.g. an inversion-free
+  /// certificate must be present, or a 2^N method's N is within a sanity
+  /// bound).  @c byName ignores it.
   virtual bool applicable(const EvalContext &, const Tolerance &) const
   { return true; }
 
@@ -108,9 +114,10 @@ public:
   /// Exact match on @c name(); nullptr if absent.
   const ProbabilityMethod *byName(const std::string &name) const;
 
-  /// Run the default ladder for @p tol: the @c inDefaultChain() methods that are
-  /// @c applicable, in @c chainOrder, each tried until one succeeds.  The
-  /// terminal method's exception propagates (the chain is exhausted).
+  /// Run the auto-chooser for @p tol: the portfolio methods admissible for the
+  /// tolerance and @c applicable, sorted cheapest-first by @c estimatedCost and
+  /// tried until one succeeds.  The costliest method's exception propagates (the
+  /// portfolio is exhausted).
   double chooseAndRun(EvalContext &ctx, const Tolerance &tol) const;
 
 private:
