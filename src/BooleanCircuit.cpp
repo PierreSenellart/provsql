@@ -753,8 +753,7 @@ double BooleanCircuit::sieve(
 }
 
 void BooleanCircuit::dnfBounds(
-  const std::vector<gate_t> &clauses,
-  const std::vector<std::set<gate_t> > &supports,
+  const std::vector<std::set<gate_t> > &clauses,
   double &lower, double &upper) const
 {
   const size_t m = clauses.size();
@@ -763,12 +762,12 @@ void BooleanCircuit::dnfBounds(
     return;
   }
 
-  // Per-clause probability P(d) = ∏_{leaf ∈ supports[d]} getProb(leaf) (an empty
+  // Per-clause probability P(d) = ∏_{leaf ∈ clauses[d]} getProb(leaf) (an empty
   // support is a constant-true clause, product over the empty set = 1).
   std::vector<double> clause_prob(m);
   for(size_t i = 0; i < m; ++i) {
     double p = 1.;
-    for(gate_t leaf : supports[i])
+    for(gate_t leaf : clauses[i])
       p *= getProb(leaf);
     clause_prob[i] = p;
   }
@@ -790,7 +789,7 @@ void BooleanCircuit::dnfBounds(
   std::vector<std::set<gate_t> > bucket_support;
   std::vector<double> bucket_prob;
   for(size_t idx : order) {
-    const std::set<gate_t> &sup = supports[idx];
+    const std::set<gate_t> &sup = clauses[idx];
     size_t target = bucket_support.size();   // default: open a new bucket
     for(size_t b = 0; b < bucket_support.size(); ++b) {
       bool disjoint = true;

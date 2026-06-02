@@ -397,16 +397,17 @@ double sieve(const std::vector<gate_t> &clauses,
  * @c lower=upper=Pr[Φ], i.e. the interval collapses to the exact value.
  * @c O(m^2) in the clause count @c m.
  *
- * @p clauses / @p supports are those returned by @c dnfShape (monotone DNF over
- * input leaves).
+ * A monotone DNF is fully determined (for probability) by its per-clause input
+ * supports, so this takes only the @c supports (the @c set per clause returned
+ * by @c dnfShape, or a cofactor's residual clause set in the @c DTree engine);
+ * the clause root gates are not needed.
  *
- * @param clauses   Top-level clause roots (from @c dnfShape).
- * @param supports  Per-clause reachable @c IN leaves (from @c dnfShape).
- * @param lower     [out] Certified lower bound on @c Pr[Φ].
- * @param upper     [out] Certified upper bound on @c Pr[Φ].
+ * @param clauses  Per-clause input-leaf supports (a monotone DNF as a set of
+ *                 clauses, each a set of @c IN leaves).
+ * @param lower    [out] Certified lower bound on @c Pr[Φ].
+ * @param upper    [out] Certified upper bound on @c Pr[Φ].
  */
-void dnfBounds(const std::vector<gate_t> &clauses,
-               const std::vector<std::set<gate_t> > &supports,
+void dnfBounds(const std::vector<std::set<gate_t> > &clauses,
                double &lower, double &upper) const;
 
 /**

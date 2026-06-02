@@ -69,6 +69,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "TreeDecomposition.h"
 #include "StructuredDNNF.h"
+#include "DTree.h"
 #include "ProbabilityMethod.h"
 #include "having_semantics.hpp"
 #include "provsql_mmap.h"
@@ -692,6 +693,7 @@ static const double kCostTwProxyFeature  = 3e-4;  // O(S):                ~3e-4 
 static const double kCostMonteCarlo      = 1e-5;  // additive:     ~1e-5 * S * C
 static const double kCostStoppingRule    = 8e-5;  // relative univ: ~8e-5 * S * C  (>= MC: adaptive 1/p risk)
 static const double kCostKarpLuby        = 2e-7;  // relative DNF:  ~2e-7 * S * m * C
+static const double kCostDTree           = 1e-4;  // d-tree: placeholder (byName only, calibrated in Phase 4)
 
 /// 2^k with the exponent clamped to keep the cost finite (a clamped exponent
 /// still sorts the method dead last -- it is then a guaranteed fall-through).
@@ -1131,6 +1133,91 @@ public:
   }
 };
 
+/// d-tree: deterministic anytime interval bounds for a monotone DNF (Olteanu-
+/// Huang).  Refines the cheap leaf bound by independent-or decomposition and
+/// Shannon expansion until the tolerance is met (exact when run to a zero-width
+/// interval), returning a certified interval -- no failure probability.  Phase
+/// 1: reachable by name only (inDefaultChain() == false), so it does not yet
+/// perturb the calibrated auto-chooser; toleranceAdmits still lets an explicit
+/// 'd-tree' serve the exact, relative and additive paths.
+class DTreeBoundsMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "d-tree"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return false; }
+  std::vector<Feature> requiredFeatures() const override {
+    return {Feature::DnfShape};
+  }
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    return ctx.dnf_ok_;
+  }
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    if(!ctx.dnf_ok_)
+      return std::numeric_limits<double>::infinity();
+    // Placeholder: byName-only in Phase 1, so the chooser never reads it.  The
+    // Phase-4 cost must be TOLERANCE-AWARE: pessimistic on the exact path
+    // (Shannon expansion can blow up -- model it via the treewidth proxy w, like
+    // tree-decomposition's S*2^w, so it is picked for exact only when genuinely
+    // cheap) and DECREASING in eps on the approximate paths (the anytime early
+    // stop is the whole point), so it underbids the samplers there.
+    return kCostDTree * static_cast<double>(ctx.circuit_size);
+  }
+  double evaluate(EvalContext &ctx, const Tolerance &tol) const override {
+    std::vector<gate_t> clause_roots;
+    std::vector<std::set<gate_t> > supports;
+    if(!ctx.c.dnfShape(ctx.gate, clause_roots, supports))
+      provsql_error("method 'd-tree' applies only to a DNF-shaped circuit "
+                    "(a monotone OR-of-ANDs over input leaves); negation, "
+                    "comparison, aggregation, random-variable and "
+                    "multivalued-input gates are not supported");
+    ctx.actual_method = "d-tree";
+
+    // Effective tolerance: a relative/additive PATH supplies it via `tol`; an
+    // explicit by-name 'd-tree' is exact, unless an epsilon arg is given, which
+    // is read as an additive interval half-width target.
+    ToleranceKind kind = tol.kind;
+    double eps = tol.epsilon;
+    if(kind == ToleranceKind::Exact) {
+      MethodArgs a = parse_method_args(ctx.args);
+      if(a.has("epsilon")) {
+        double dummy_delta = 0.;
+        parse_eps_delta(a, "d-tree", eps, dummy_delta); // validates eps in (0,1]
+        kind = ToleranceKind::Additive;
+      }
+    }
+
+    // Tolerance -> absolute interval-width target for the recursion.
+    double max_width;
+    if(kind == ToleranceKind::Additive && eps > 0.) {
+      // Additive eps: half-width <= eps means |est - p| <= eps.
+      max_width = 2. * eps;
+    } else if(kind == ToleranceKind::Relative && eps > 0.) {
+      // Relative eps: with p >= L (the cheap lower bound), a half-width <=
+      // eps*L gives |est - p| <= eps*L <= eps*p.
+      double l0, u0;
+      ctx.c.dnfBounds(supports, l0, u0);
+      max_width = 2. * eps * l0;
+    } else {
+      max_width = 0.; // exact
+    }
+
+    provsql::DTreeInterval iv =
+      provsql::dtreeBounds(ctx.c, std::move(supports), max_width);
+    const double est = 0.5 * (iv.lower + iv.upper);
+
+    // Deterministic certificate (delta = 0) whenever an approximation was
+    // actually returned (the interval did not collapse to a point).
+    if(iv.upper > iv.lower) {
+      const double half = 0.5 * (iv.upper - iv.lower);
+      if(kind == ToleranceKind::Relative && est > 0.)
+        emit_guarantee("relative", half / est, 0., 0, -1, nullptr);
+      else
+        emit_guarantee("additive", half, 0., 0, -1, nullptr);
+    }
+    return est;
+  }
+};
+
 /// weightmc: backward-compatible alias for the weighted-model-counter path.
 class WeightmcMethod : public ProbabilityMethod {
 public:
@@ -1322,6 +1409,7 @@ const MethodCatalog &MethodCatalog::instance()
     c.registerMethod(std::make_unique<CompilationMethod>());
     c.registerMethod(std::make_unique<PossibleWorldsMethod>());
     c.registerMethod(std::make_unique<SieveMethod>());
+    c.registerMethod(std::make_unique<DTreeBoundsMethod>());
     // Approximate portfolio members.  Admissibility (toleranceAdmits) keeps them out
     // of the exact path: monte-carlo (additive) serves only 'additive';
     // karp-luby / stopping-rule (relative) serve 'relative' and 'additive'.
@@ -1814,16 +1902,16 @@ Datum probability_bounds(PG_FUNCTION_ARGS)
     gate_t root;
     BooleanCircuit c = getBooleanCircuit(token, root);
 
-    std::vector<gate_t> clauses;
+    std::vector<gate_t> clause_roots;
     std::vector<std::set<gate_t> > supports;
-    if(!c.dnfShape(root, clauses, supports))
+    if(!c.dnfShape(root, clause_roots, supports))
       provsql_error("probability_bounds applies only to a DNF-shaped circuit "
                     "(a monotone OR-of-ANDs over input leaves); negation, "
                     "comparison, aggregation, random-variable and "
                     "multivalued-input gates are not supported");
 
     double lower, upper;
-    c.dnfBounds(clauses, supports, lower, upper);
+    c.dnfBounds(supports, lower, upper);
 
     TupleDesc tupdesc;
     if(get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)

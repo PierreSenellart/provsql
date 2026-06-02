@@ -1,0 +1,14 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+ent_eq_pw|ent_eq_sieve|ro_eq_pw
+t|t|t
+(1 row)
+add_within_eps
+t
+(1 row)
+ERROR:  ProvSQL: method 'd-tree' applies only to a DNF-shaped circuit (a monotone OR-of-ANDs over input leaves); negation, comparison, aggregation, random-variable and multivalued-input gates are not supported
+remove_provenance
+
+(1 row)

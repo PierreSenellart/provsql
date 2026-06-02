@@ -97,35 +97,40 @@ coarser bound).
 
 ## Implementation plan
 
-### Phase 0 — the leaf-bound primitive (low risk, immediately useful)
+### Phase 0 — the leaf-bound primitive (low risk, immediately useful) — **LANDED**
 
-- `BooleanCircuit::dnfBounds(gate_t root, double &L, double &U)` (new), the Fig. 3
-  bucket heuristic. O(m²·clause) in the clause count m.
-- Reuse `dnfShapeInfo` to enumerate clauses; pairwise-independence = disjoint
-  input sets.
-- Expose at SQL as `probability_bounds(token, prov DEFAULT gate_one()) ->
-  (lower, upper)`: a cheap certified interval, useful on its own.
-- Tests: `test/sql/probability_bounds.sql` (validity `L ≤ exact ≤ U` on the
-  read-once and ladder circuits already in `last_eval_method.sql`); a unit check
-  that `L = U = exact` on read-once.
+- `BooleanCircuit::dnfBounds(const vector<set<gate_t>> &clauses, L, U)`, the Fig. 3
+  bucket heuristic. O(m²) in the clause count. Takes the per-clause supports
+  (a monotone DNF is determined by them), so the `DTree` recursion reuses it on
+  cofactor clause sets.
+- Exposed at SQL as `probability_bounds(token) -> (lower, upper)` (the `prov`
+  conditioning arg is deferred — it needs interval division). Clauses enumerated
+  via `dnfShape`.
+- Test `test/sql/probability_bounds.sql`: read-once collapses to exact, shared-
+  variable interval brackets exact, non-DNF errors.
 
-### Phase 1 — the DNF-restricted d-tree engine
+### Phase 1 — the DNF-restricted d-tree engine — **LANDED**
 
-- `src/DTree.{h,cpp}`: `dtreeApprox(const BooleanCircuit&, gate_t root, Tolerance)
-  -> {value, L, U}`. Recursion: try `⊗` (connected components of the clause graph),
-  then `⊙` (independent factors), else `⊕` (Shannon on the most-frequent variable,
-  the paper's general heuristic). Early-stop via the cheap leaf bound before each
-  expansion.
-- Straightforward recursion first (no leaf-closing); correctness over memory.
-- Register `DTreeBoundsMethod : ProbabilityMethod` in `probability_evaluate.cpp`:
-  - `guaranteeKind() = Exact` (run-to-closure is exact, so it is admitted on every
-    tolerance path; its **cost** drops with looser ε — see cost model);
-  - `requiredFeatures() = {Feature::DnfShape}`; `applicable` = `ctx.dnf_ok_` and
-    monotone;
-  - name `"d-tree"` so it is explicitly requestable.
-- Tests: parity vs `possible-worlds` on small circuits; result within ε of exact
-  for additive and relative; bound validity; a non-DNF circuit is correctly
-  declined.
+- `src/DTree.{h,cpp}`: `dtreeBounds(const BooleanCircuit&, vector<set<gate_t>>
+  clauses, double max_width) -> {lower, upper}`. Recursion over clause-support
+  sets: `⊗` (connected components of the clause graph) then `⊕` (Shannon on the
+  most-frequent variable), with subsumption removal and the cheap leaf bound as
+  the early-stop test. The width budget propagates soundly: unchanged through
+  `⊕`, `max_width/k` to each of `k` `⊗` components.
+- **`⊙` (independent-AND factoring) deferred.** On flat clause sets it needs
+  Brayton/world-set factoring; `⊗`+`⊕` is already correct and complete without
+  it, and the fully-factorable (read-once) case is handled by the existing
+  `independent` method. `⊙` is a Phase-3 win (read off `times`-gate structure
+  once the engine works on the circuit directly rather than flat clauses).
+- `DTreeBoundsMethod` registered with `guaranteeKind() = Exact`,
+  `requiredFeatures() = {DnfShape}`, **`inDefaultChain() = false`** (by-name only
+  in Phase 1, so it does not perturb the calibrated auto-chooser). By name
+  `'d-tree'` is exact; an optional `epsilon=` arg runs it additive with a
+  deterministic certificate (`delta = 0`). The relative branch is wired but only
+  reachable once Phase 4 puts it in the relative-path portfolio.
+- Tests `test/sql/dtree.sql`: exact equals `possible-worlds`/`sieve` on an
+  entangled (4-cycle) circuit and on a read-once one; additive `epsilon=0.05`
+  within ε of exact; non-DNF declined.
 
 ### Phase 2 — incremental / memory-efficient form
 
@@ -143,13 +148,23 @@ makes the engine apply to the full Boolean-circuit surface, not just SPJU lineag
 
 ### Phase 4 — cost model + chooser integration
 
-- `estimatedCost(ctx, tol)`: anytime cost is convergence-dependent and hard to
-  predict statically. Model heuristically from features already acquired:
-  cheap when `DnfShape` ∧ low `TreewidthProxy` (independence-rich → fast
-  convergence), pessimistic otherwise; **decreasing in ε** (looser tolerance
-  stops sooner) and benefiting from `p` near 0/1 where bounds converge fast.
-  Calibrate the constant on this machine via the existing
-  `provsql.verbose_level >= 50` instrumentation, as done for the other `kCost*`.
+**Design settled (the hard part):** the d-tree keeps `guaranteeKind() = Exact`
+— that is the *admissibility* role (it can run to `L=U`, so it must be a
+candidate on every path, including exact, where on an independence-rich circuit
+it can beat tree-decomposition). *Whether it is selected* is governed entirely
+by a **tolerance-aware cost**, NOT by a weaker guarantee kind or a flat
+prohibitive cost (either of which would also bar it from the approximate paths
+where it beats the samplers). So `estimatedCost(ctx, tol)` must be:
+
+- **pessimistic on the exact path** (`tol.kind == Exact` / tiny ε): Shannon
+  expansion can blow up, so model it like the other exact compilers, ~`S·2^w`
+  gated on the `TreewidthProxy` `w` (picked for exact only when genuinely cheap);
+- **decreasing in ε on the approximate paths**: the anytime early stop is the
+  point, so it must underbid `stopping-rule` / `karp-luby` as ε loosens, and
+  benefit from `p` near 0/1 where the bounds converge fast.
+
+Calibrate the constant on this machine via the existing
+`provsql.verbose_level >= 50` instrumentation, as done for the other `kCost*`.
 - Wire into `chooseAndRun` so the chooser prefers `d-tree` over `stopping-rule` /
   `karp-luby` / `possible-worlds` when its estimate wins. The exact-when-cheaper
   behaviour falls out: on a tractable circuit the d-tree closes to `L=U` cheaply.

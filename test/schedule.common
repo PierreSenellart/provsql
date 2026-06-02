@@ -55,7 +55,7 @@ test: probability_setup
 test: viewing_setup
 
 # Probability computation using internal methods
-test: possible_worlds monte_carlo karp_luby stopping_rule sieve probability_paths probability_bounds
+test: possible_worlds monte_carlo karp_luby stopping_rule sieve probability_paths probability_bounds dtree
 
 # Regression: SUM and AVG over the same children must produce
 # distinct agg gates (the aggfnoid is part of the gate UUID).
