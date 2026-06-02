@@ -43,6 +43,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include <map>
 #include <unordered_map>
 #include <limits>
+#include <chrono>
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -636,14 +637,26 @@ static const size_t kSieveSanityMaxClauses = 24;
 // (a read-once circuit runs 'independent' before paying for either feature), and
 // C_compilation > C_possibleWorlds (same 2^N, but compilation is the subprocess
 // last resort).
-static const double kCostIndependent     = 1.0;   // O(S)
-static const double kCostInversionFree   = 1.0;   // O(S + N log N)
-static const double kCostPossibleWorlds  = 1.0;   // O(S * 2^N)
-static const double kCostSieve           = 1.0;   // O(S * 2^m)
-static const double kCostTreeDecomp      = 1.0;   // O(S * (Delta^2 + 2^w))
-static const double kCostCompilation     = 4.0;   // exp worst case ~ O(S * 2^N)
-static const double kCostDnfShapeFeature = 2.0;   // O(S)
-static const double kCostTwProxyFeature  = 4.0;   // O(S)
+// Calibrated on this machine so that the value of each cost function is roughly
+// the number of MILLISECONDS the work takes (order-of-magnitude only -- the goal
+// is to know whether a cost is ~1, ~100, ~1e6 ms, not a precise fit).  See the
+// calibration instrumentation (provsql.verbose_level >= 50) and doc.
+static const double kCostIndependent     = 5e-5;  // O(S):                ~5e-5 * S
+static const double kCostInversionFree   = 5e-5;  // O(S + N log N)       (~ independent)
+static const double kCostPossibleWorlds  = 3e-6;  // O(S * 2^N):          ~3e-6 * S*2^N
+static const double kCostSieve           = 1e-5;  // O(S * 2^m): ~1e-5 (rarely optimal)
+// NB: w is the degeneracy LOWER bound, so 2^w under-costs tree-decomposition when
+// the true treewidth exceeds it (a dense, low-degeneracy circuit can run far
+// slower than predicted).  The constant is calibrated where the proxy is tight
+// (tree-like circuits, where tree-decomposition is the right pick anyway).
+static const double kCostTreeDecomp      = 7e-4;  // O(S * (Delta^2+2^w)): ~7e-4 * f
+// compilation is an external subprocess: its time is the d-DNNF compile (the
+// compilers exploit structure -- NOT the 2^N worst case in practice) plus a
+// fixed startup, modelled as ~linear in S with an ~ms floor.
+static const double kCostCompilation     = 0.1;   // ~0.1 * S ms ...
+static const double kCostCompilationFloor= 20.0;  // ... but at least ~20 ms (startup)
+static const double kCostDnfShapeFeature = 2e-6;  // O(S):                ~2e-6 * S
+static const double kCostTwProxyFeature  = 3e-4;  // O(S):                ~3e-4 * S
 // Approximate methods (not yet in the auto-portfolio -- their estimatedCost is
 // for documentation / the future relative & additive paths; they depend on the
 // granted (eps,delta), and stopping-rule additionally on the unknown p, so its
@@ -893,13 +906,14 @@ public:
   std::string name() const override { return "compilation"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  // Worst-case exponential in N (a d-DNNF can have 2^N nodes); no polynomial
-  // bound -- the genuine last resort.  Modelled as O(S * 2^N) with a larger
-  // constant than possible-worlds so the in-process enumerator is preferred at
-  // equal N.
+  // Subprocess: the compilers exploit structure, so the typical cost is the
+  // d-DNNF compile (~linear in the serialized circuit) plus a fixed startup, not
+  // the 2^N worst case.  Modelled as max(startup_floor, slope * S) ms.  (It is
+  // still the last resort: cheaper in-process methods, when they apply, undercut
+  // it; when none does, it is the only candidate and runs regardless.)
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    return kCostCompilation * static_cast<double>(ctx.circuit_size)
-           * pow2_clamped(ctx.n_inputs);
+    return std::max(kCostCompilationFloor,
+                    kCostCompilation * static_cast<double>(ctx.circuit_size));
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
@@ -1161,6 +1175,19 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
       // Run the cheapest method: nothing cheaper could be revealed by acquiring
       // a feature first.
       try {
+        // Calibration (provsql.verbose_level >= 50): emit the raw cost parameters
+        // and elapsed ms so each kCost can be fit so that cost ~ ms.
+        if(provsql_verbose >= 50) {
+          auto t0 = std::chrono::steady_clock::now();
+          double r = best->evaluate(ctx, tol);
+          double ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - t0).count();
+          provsql_notice("calibrate kind=method which=%s S=%zu N=%zu m=%zu w=%u "
+                         "D=%u cost=%g ms=%g", best->name().c_str(),
+                         ctx.circuit_size, ctx.n_inputs, ctx.dnf_num_clauses_,
+                         ctx.tw_proxy_, ctx.tw_max_degree_, best_cost, ms);
+          return r;
+        }
         return best->evaluate(ctx, tol);
       } catch(CircuitException &e) {
         if(provsql_interrupted)
@@ -1171,7 +1198,18 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
                         portfolio.end());
       }
     } else if(have_pending) {
-      ctx.acquireFeature(cheapest_f);
+      if(provsql_verbose >= 50) {
+        auto t0 = std::chrono::steady_clock::now();
+        ctx.acquireFeature(cheapest_f);
+        double ms = std::chrono::duration<double, std::milli>(
+                      std::chrono::steady_clock::now() - t0).count();
+        provsql_notice("calibrate kind=feature which=%s S=%zu cost=%g ms=%g",
+                       cheapest_f == Feature::DnfShape ? "DnfShape"
+                                                       : "TreewidthProxy",
+                       ctx.circuit_size, cheapest_fc, ms);
+      } else {
+        ctx.acquireFeature(cheapest_f);
+      }
       acquired.insert(cheapest_f);
     } else {
       // No ready method and nothing left to acquire: the portfolio is exhausted.

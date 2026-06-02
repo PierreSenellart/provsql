@@ -38,9 +38,13 @@ END $$;
 \set indep  '(current_setting(''pp.indep'')::uuid)'
 \set shared '(current_setting(''pp.shared'')::uuid)'
 
--- 'exact' is an alias for the empty/default method.
+-- 'exact' is an alias for the empty/default method (bit-identical: same chooser).
+-- It agrees with the explicit 'independent' too, but only up to floating-point
+-- round-off -- the calibrated chooser may pick a different exact method
+-- (e.g. possible-worlds, summing over worlds rather than multiplying), so the
+-- value matches to round-off, not bit-for-bit.
 SELECT probability_evaluate(:indep, 'exact') = probability_evaluate(:indep)             AS exact_alias_default,
-       probability_evaluate(:indep, 'exact') = probability_evaluate(:indep,'independent') AS exact_alias_independent;
+       abs(probability_evaluate(:indep, 'exact') - probability_evaluate(:indep,'independent')) < 1e-12 AS exact_alias_independent;
 
 -- Exact-when-cheaper: on the INDEPENDENT circuit, relative and additive both
 -- return the EXACT value (bit-identical to 'independent'), reported as
