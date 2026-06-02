@@ -119,7 +119,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/provsql/studio"
           python3 -m pytest tests/web/ -q
       - name: Upload the assembled browser build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: provsql-studio-web
           path: provsql/studio/web
