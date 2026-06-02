@@ -82,6 +82,15 @@ def test_default_method_reports_resolved_method(client, test_dsn):
     assert data.get("resolved_method") in _EXACT_METHODS, data
 
 
+def test_dtree_method_exact(client, test_dsn):
+    """The 'd-tree' method (deterministic anytime engine) returns the exact
+    probability on a DNF circuit."""
+    root = _dnf_root(test_dsn)
+    data = _evaluate(client, root, "d-tree")
+    assert data["kind"] == "float"
+    assert abs(float(data["result"]) - 0.4375) < 1e-9, data
+
+
 def test_exact_alias_accepted(client, test_dsn):
     """'exact' is accepted as an alias for the default method."""
     root = _dnf_root(test_dsn)

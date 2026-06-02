@@ -462,6 +462,9 @@ _INPROCESS_METHODS: tuple[tuple[str, str | None], ...] = (
     ("independent",        None),
     ("possible-worlds",    None),
     ("tree-decomposition", None),
+    # d-tree is the deterministic anytime engine: exact on DNF circuits (errors
+    # otherwise, recorded per row like independent / sieve / karp-luby).
+    ("d-tree",             None),
     ("monte-carlo",        None),
     # karp-luby applies only to DNF-shaped circuits (it errors otherwise,
     # recorded per row like independent / inversion-free); on those it shares

@@ -2194,6 +2194,7 @@
               <option value="independent">independent</option>
               <option value="possible-worlds">possible-worlds</option>
               <option value="sieve" title="Exact inclusion-exclusion over a monotone DNF (cost 2^m in the clause count m). Errors on non-DNF circuits.">sieve</option>
+              <option value="d-tree" title="Deterministic anytime d-tree (Olteanu-Huang-Koch): exact probability by Shannon decomposition + independence, with memoisation. Also the engine behind the deterministic (δ=0) relative/additive paths, where it returns a CERTIFIED value interval. Monotone-DNF circuits only.">d-tree</option>
               <!-- shown only when the root carries an inversion-free
                    certificate; toggled in syncDropdownVisibility -->
               <option value="inversion-free" hidden>inversion-free</option>
@@ -2243,6 +2244,11 @@
           </select>
           <select class="cv-eval__args" id="eval-args-wmc-tool" hidden
                   title="Which weighted model counter to invoke (populated from the live tool registry); leave unset to let ProvSQL pick the highest-preference available one."></select>
+          <input type="number" class="cv-eval__args" id="eval-args-dtree-eps" hidden
+                 min="0" max="1" step="0.01" placeholder="ε (exact)"
+                 autocomplete="off"
+                 title="Optional additive accuracy target ε for the d-tree: leave empty for the exact probability, or set ε in (0, 1] to stop the anytime recursion early at a CERTIFIED interval of half-width ≤ ε (|estimate − p| ≤ ε, with certainty — no failure probability).">
+
           <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
                  min="1" step="1" placeholder="bins" value="30"
                  autocomplete="off" title="Histogram bin count for the distribution profile">

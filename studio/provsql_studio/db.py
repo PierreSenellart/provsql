@@ -991,6 +991,7 @@ _PROBABILITY_METHODS = {
     "tree-decomposition",
     "possible-worlds",
     "sieve",              # exact inclusion-exclusion over a monotone DNF
+    "d-tree",             # deterministic anytime d-tree (exact; certified interval)
     "monte-carlo",
     "karp-luby",          # FPRAS for DNF-shaped circuits (relative (eps,delta))
     "stopping-rule",      # whole-circuit relative (eps,delta) FPRAS (any circuit)

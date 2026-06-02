@@ -1728,6 +1728,9 @@
     'stopping-rule': 'eval-args-approx',
     'compilation':   'eval-args-compiler',
     'wmc':           'eval-args-wmc-tool',
+    // d-tree takes an optional additive ε (empty = exact); a set ε turns the
+    // anytime recursion into a deterministic certified interval.
+    'd-tree':        'eval-args-dtree-eps',
   };
   // Weighted-model-counting tools whose estimate carries a relative (eps)
   // guarantee; for these the eval strip shows the epsilon field.
@@ -1768,6 +1771,12 @@
       return parts.join(',');
     }
     if (method === 'compilation') return val('eval-args-compiler');
+    // d-tree: an empty ε means the exact probability (no arguments); a set ε
+    // requests an additive certified interval of half-width ε.
+    if (method === 'd-tree') {
+      const e = val('eval-args-dtree-eps');
+      return e ? 'epsilon=' + e : '';
+    }
     return '';
   }
 
@@ -3230,7 +3239,8 @@
             (['', 'exact', 'default', 'relative', 'additive'].includes(requested)
              || resolved !== requested);
           const via = showVia ? `via ${resolved}` : '';
-          const g = guar ? renderGuarantee(guar) : '';
+          const est = typeof data.result === 'number' ? data.result : NaN;
+          const g = guar ? renderGuarantee(guar, est) : '';
           bound.textContent = via && g ? `${via} · ${g}`
                             : via       ? via
                             : g;
@@ -4161,35 +4171,43 @@
     return null;
   }
 
-  // Render a parsed guarantee as a short bound string for the #eval-bound
-  // slot, e.g. "(relative error ≤ 10%, prob ≥ 95%, 2,120 samples)" or
-  // "(± 0.0136 absolute, prob ≥ 95%, 10,000 samples)". 'relative' is a
-  // multiplicative guarantee (the estimate is
-  // within a factor 1±ε of the true probability), so it reads as a relative
-  // error bound, not a "± value"; 'additive' is an absolute error. δ (when
-  // present) gives the confidence 1−δ; the optional tool name is appended for
-  // the wmc counters.
-  function renderGuarantee(kv) {
+  // Render a parsed guarantee UNIFORMLY as the value interval [lo, hi] the true
+  // probability is guaranteed to lie in, given the point estimate -- whether the
+  // guarantee is additive, relative, or the d-tree's deterministic bound.  This
+  // is more intuitive than "± ε" / "relative error ≤ ε%": the user reads the
+  // actual range of possible values directly.
+  //   additive: |est − p| ≤ ε        => p ∈ [est − ε, est + ε]
+  //   relative: |est − p| ≤ ε·p       => p ∈ [est/(1+ε), est/(1−ε)]
+  // δ (when present) gives the confidence 1−δ; δ = 0 is deterministic (certain).
+  // The optional sample count / tool name are appended for context.
+  function renderGuarantee(kv, estimate) {
     if (!kv) return '';
     const eps = parseFloat(kv.eps);
-    if (!Number.isFinite(eps)) return '';
+    if (!Number.isFinite(eps) || !(typeof estimate === 'number')
+        || !Number.isFinite(estimate)) return '';
+    let lo, hi;
+    if (kv.kind === 'additive') { lo = estimate - eps; hi = estimate + eps; }
+    else if (kv.kind === 'relative') {
+      lo = estimate / (1 + eps);
+      hi = eps < 1 ? estimate / (1 - eps) : 1;
+    } else return '';
+    lo = Math.max(0, lo);
+    hi = Math.min(1, hi);
+    const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+      ? window.ProvsqlStudio.getProbDecimals() : 4;
     const delta = kv.delta != null ? parseFloat(kv.delta) : NaN;
-    const conf = Number.isFinite(delta)
-      ? `, prob ≥ ${(100 * (1 - delta)).toFixed(delta < 0.01 ? 1 : 0)}%`
-      : '';
-    let body;
-    if (kv.kind === 'relative')
-      body = `relative error ≤ ${(100 * eps).toFixed(eps < 0.01 ? 2 : 1)}%`;
-    else if (kv.kind === 'additive')
-      body = `± ${eps.toFixed(eps < 0.01 ? 4 : 3)} absolute`;
-    else return '';
+    // delta == 0 is a DETERMINISTIC guarantee (the d-tree's certified interval):
+    // the bound holds with certainty, so say so rather than "prob ≥ 100%".
+    const conf = !Number.isFinite(delta) ? ''
+      : delta <= 0 ? ', certain'
+      : `, prob ≥ ${(100 * (1 - delta)).toFixed(delta < 0.01 ? 1 : 0)}%`;
     // Report the actual sample count when the method is sample-based (the
     // adaptive (eps, delta) path derives it, so it is informative); weighted
     // counters carry no sample count.
     const n = kv.samples != null ? parseInt(kv.samples, 10) : NaN;
     const smp = Number.isFinite(n) && n > 0 ? `, ${n.toLocaleString()} samples` : '';
     const tool = kv.tool ? ` [${kv.tool}]` : '';
-    return `(${body}${conf}${smp})${tool}`;
+    return `(Pr ∈ [${lo.toFixed(dec)}, ${hi.toFixed(dec)}]${conf}${smp})${tool}`;
   }
 
   function shortUuid(u) {

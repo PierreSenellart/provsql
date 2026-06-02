@@ -123,9 +123,9 @@ def test_circuit_eval_strip_karp_luby_options_and_bound(
     """Circuit mode, probability semiring, karp-luby: the dedicated
     approximate-options control appears (defaulting to the (eps, delta) mode
     for karp-luby), its samples/(eps,delta) toggle swaps the fields, and a run
-    reports a result plus the relative-error guarantee bound with the sample
-    count.  A single-row personnel provenance is a trivial DNF, so karp-luby
-    applies."""
+    reports a result plus the guarantee bound, rendered as a value interval
+    with the confidence and sample count.  A single-row personnel provenance is
+    a trivial DNF, so karp-luby applies."""
     page.goto(studio_url + "/circuit")
     _run_query_and_wait(page, "SELECT name FROM personnel LIMIT 3;", 3)
     page.locator("#result-body tr").first.locator("td").last.click()
@@ -148,10 +148,42 @@ def test_circuit_eval_strip_karp_luby_options_and_bound(
     expect(page.locator("#eval-result")).to_have_attribute(
         "data-kind", "ok", timeout=15000
     )
-    # The bound slot carries the relative-error guarantee + the sample count.
+    # The bound slot renders the guarantee as a value interval (Pr ∈ [lo, hi])
+    # with the confidence and the sample count.
     bound = page.locator("#eval-bound")
-    expect(bound).to_contain_text("relative error", timeout=8000)
+    expect(bound).to_contain_text("Pr ∈", timeout=8000)
     expect(bound).to_contain_text("samples")
+
+
+def test_circuit_eval_strip_dtree_epsilon_control(
+    page: Page, studio_url: str
+) -> None:
+    """Circuit mode, probability semiring, d-tree: the dedicated optional
+    epsilon control appears (and is the only arg control shown), and a run with
+    a set epsilon succeeds.  A single-row personnel provenance is a trivial
+    one-variable DNF, so the anytime interval collapses to the exact point
+    regardless of epsilon -- this test just exercises the control wiring (the
+    epsilon reaches buildProbArgs and the backend accepts it)."""
+    page.goto(studio_url + "/circuit")
+    _run_query_and_wait(page, "SELECT name FROM personnel LIMIT 3;", 3)
+    page.locator("#result-body tr").first.locator("td").last.click()
+    expect(page.locator("#eval-strip")).to_be_visible(timeout=8000)
+
+    page.locator("#eval-semiring").select_option(value="probability")
+    page.locator("#eval-method").select_option(value="d-tree")
+
+    # The optional epsilon control is the only arg control shown for d-tree;
+    # the approximate-options group and the compiler/wmc pickers stay hidden.
+    eps = page.locator("#eval-args-dtree-eps")
+    expect(eps).to_be_visible(timeout=8000)
+    expect(page.locator("#eval-args-approx")).to_be_hidden()
+    expect(page.locator("#eval-args-compiler")).to_be_hidden()
+
+    eps.fill("0.2")
+    page.locator("#eval-run").click()
+    expect(page.locator("#eval-result")).to_have_attribute(
+        "data-kind", "ok", timeout=15000
+    )
 
 
 def test_schema_panel_column_click_prefills_query(
