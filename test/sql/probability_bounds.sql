@@ -4,7 +4,7 @@ SET search_path TO provsql_test,provsql;
 
 -- probability_bounds(token) returns a cheap CERTIFIED interval [lower,upper]
 -- with lower <= probability_evaluate(token) <= upper, computed without
--- compiling the circuit (the Olteanu-Huang d-tree leaf bound, ICDE 2010
+-- compiling the circuit (the Olteanu-Huang-Koch d-tree leaf bound, ICDE 2010
 -- Fig. 3).  It is deterministic (no sampling), so the expected values are
 -- exact.  boolean_provenance off so the load-time fold leaves the DNF intact.
 SET provsql.boolean_provenance = off;

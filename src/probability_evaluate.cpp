@@ -1941,7 +1941,7 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
  *
  * Returns a cheap certified interval @c [lower,upper] with @c lower ≤ Pr ≤ upper
  * for the probability of the DNF-shaped circuit rooted at @p token, via
- * @c BooleanCircuit::dnfBounds (Olteanu-Huang Fig. 3).  Errors when the circuit
+ * @c BooleanCircuit::dnfBounds (Olteanu-Huang-Koch Fig. 3).  Errors when the circuit
  * is not a monotone DNF over input leaves (the leaf-bound heuristic is
  * DNF-specific); the future d-tree engine will recurse on non-DNF roots.
  */

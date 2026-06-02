@@ -34,7 +34,7 @@ struct DTreeInterval {
 
 /**
  * @brief Certified probability interval of a monotone DNF, refined to a target
- *        width (Olteanu-Huang d-tree).
+ *        width (Olteanu-Huang-Koch d-tree).
  *
  * Refines @c BooleanCircuit::dnfBounds by independent-or decomposition and
  * Shannon expansion until @c upper-lower <= @p max_width, propagating the width

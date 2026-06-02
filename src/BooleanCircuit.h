@@ -382,7 +382,7 @@ double sieve(const std::vector<gate_t> &clauses,
 
 /**
  * @brief Cheap certified probability interval @c [lower,upper] of a monotone
- *        DNF, without compiling it (Olteanu-Huang d-tree leaf bound).
+ *        DNF, without compiling it (Olteanu-Huang-Koch d-tree leaf bound).
  *
  * Implements the @c Independent heuristic of Olteanu, Huang & Koch,
  * "Approximate Confidence Computation in Probabilistic Databases" (ICDE 2010,
