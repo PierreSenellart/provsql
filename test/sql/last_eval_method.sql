@@ -48,5 +48,27 @@ DO $$ BEGIN
 END $$;
 SHOW provsql.last_eval_method;
 
+-- Default method on a NON-independent circuit: 'independent' throws and the
+-- chain falls through to the decomposed 'tree-decomposition' member, so
+-- last_eval_method reports the route actually taken -- not an umbrella label
+-- (the makeDD decomposition).  boolean_provenance off so the load-time folding
+-- leaves the shared-variable shape intact.
+SET provsql.boolean_provenance = off;
+DO $$
+DECLARE x1 uuid; x2 uuid; x3 uuid;
+BEGIN
+  SELECT provsql INTO x1 FROM lem WHERE id=1;
+  SELECT provsql INTO x2 FROM lem WHERE id=2;
+  SELECT provsql INTO x3 FROM lem WHERE id=3;
+  -- (x1 AND x2) OR (x1 AND x3): x1 is shared, so the circuit is not read-once;
+  -- 'independent' throws and tree-decomposition resolves it.
+  PERFORM set_config('lem.shared', provenance_plus(ARRAY[
+            provenance_times(x1,x2), provenance_times(x1,x3)])::text, false);
+END $$;
+SET provsql.last_eval_method = '';
+SELECT probability_evaluate(current_setting('lem.shared')::uuid) IS NOT NULL AS ran;
+SHOW provsql.last_eval_method;
+RESET provsql.boolean_provenance;
+
 SELECT remove_provenance('lem');
 DROP TABLE lem;

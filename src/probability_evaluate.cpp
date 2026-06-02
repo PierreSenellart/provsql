@@ -62,6 +62,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include "RangeCheck.h"
 #include "MonteCarloSampler.h"
 #include "dDNNFTreeDecompositionBuilder.h"
+#include "TreeDecomposition.h"
 #include "StructuredDNNF.h"
 #include "ProbabilityMethod.h"
 #include "having_semantics.hpp"
@@ -684,29 +685,80 @@ public:
   }
 };
 
-/// Exact, generic d-DNNF construction (tree-decomposition / interpret-as-dd /
-/// external compiler), parameterised by the makeDD method string and the name
-/// reported through provsql.last_eval_method.  One instance per invocation
-/// spelling; the chain terminal is the "default" instance.
-class CompilationMethod : public ProbabilityMethod {
-  std::string name_, makedd_arg_, report_as_;
-  bool in_chain_;
-  int chain_order_;
+// makeDD's internal interpret-as-dd -> tree-decomposition -> compiler ladder is
+// lifted here into three first-class catalog members, so the chooser can see
+// and rank the three most cost-divergent exact compilers (linear / treewidth-
+// bounded / external subprocess) instead of one opaque "compilation" blob, and
+// last_eval_method reports the route actually taken.  makeDD / makeDDByName stay
+// for their dD-artifact callers (shapley, compile_to_ddnnf, ddnnf_stats).
+
+/// Exact, interpret the circuit directly as a d-DNNF and read off the
+/// probability.  By-name only -- deliberately NOT in the default chain: for a
+/// probability *number* this is redundant with (indeed strictly weaker than)
+/// 'independent'.  interpretAsDD treats OR as independent-OR (De Morgan over a
+/// decomposable AND), AND as a product, and throws "Not an independent circuit"
+/// on a shared input -- exactly independentEvaluation's computation -- while
+/// also rejecting the multivalued inputs and 0/1 constants that 'independent'
+/// accepts.  Since 'independent' runs first in the chain it always wins, so this
+/// would be dead there.  Kept as an explicit method for parity with the
+/// dD-artifact surfaces / debugging.
+class InterpretAsDdMethod : public ProbabilityMethod {
 public:
-  CompilationMethod(std::string n, std::string makedd_arg, std::string report_as,
-                    bool in_chain = false, int order = 0)
-    : name_(std::move(n)), makedd_arg_(std::move(makedd_arg)),
-      report_as_(std::move(report_as)), in_chain_(in_chain), chain_order_(order)
-  {}
-  std::string name() const override { return name_; }
+  std::string name() const override { return "interpret-as-dd"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
-  bool inDefaultChain() const override { return in_chain_; }
-  int chainOrder() const override { return chain_order_; }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
-    dDNNF dd = ctx.c.makeDD(ctx.gate, makedd_arg_, ctx.args);
+    dDNNF dd = ctx.c.interpretAsDD(ctx.gate);
     double r = dd.probabilityEvaluation();
-    ctx.actual_method = report_as_;
+    ctx.actual_method = "interpret-as-dd";
+    return r;
+  }
+};
+
+/// Exact d-DNNF via min-fill tree decomposition.  Default-chain member (after
+/// inversion-free) and by-name "tree-decomposition".  Throws above the treewidth
+/// bound: in the chain that falls through to compilation; an explicit call
+/// errors with the treewidth message (mirroring makeDD).
+class TreeDecompositionMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "tree-decomposition"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return true; }
+  int chainOrder() const override { return 2; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    ctx.ensureMultivaluedRewritten();
+    try {
+      TreeDecomposition td(ctx.c);
+      dDNNF dd = dDNNFTreeDecompositionBuilder{ctx.c, ctx.gate, td}.build();
+      double r = dd.probabilityEvaluation();
+      ctx.actual_method = "tree-decomposition";
+      return r;
+    } catch(TreeDecompositionException &) {
+      if(ctx.explicitly_named)
+        provsql_error("Treewidth greater than %u",
+                      TreeDecomposition::MAX_TREEWIDTH);
+      // Default chain: fall through to the compilation terminal.
+      throw CircuitException("tree-decomposition: treewidth above the bound");
+    }
+  }
+};
+
+/// Exact d-DNNF via an external knowledge compiler (d4 / c2d / minic2d / dsharp,
+/// or a KCMCP server).  Default-chain terminal (after tree-decomposition) and
+/// by-name "compilation".  An empty compiler argument auto-selects the
+/// highest-preference available compiler (provsql.fallback_compiler / registry);
+/// a non-empty @c args names the compiler and its options.
+class CompilationMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "compilation"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return true; }
+  int chainOrder() const override { return 3; }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    ctx.ensureMultivaluedRewritten();
+    dDNNF dd = ctx.c.compilation(ctx.gate, ctx.args);
+    double r = dd.probabilityEvaluation();
+    ctx.actual_method = "compilation";
     return r;
   }
 };
@@ -886,20 +938,14 @@ const MethodCatalog &MethodCatalog::instance()
   static const MethodCatalog cat = [] {
     MethodCatalog c;
     // Default exact ladder, in chainOrder: independent -> inversion-free ->
-    // compilation (the "default" CompilationMethod is the terminal, == the
-    // historical empty-method makeDD(gate, "", args)).
+    // tree-decomposition -> compilation (interpret-as-dd is NOT in the chain --
+    // it is redundant with independent, which precedes it; see InterpretAsDd).
     c.registerMethod(std::make_unique<IndependentMethod>());
     c.registerMethod(std::make_unique<InversionFreeMethod>());
-    c.registerMethod(std::make_unique<CompilationMethod>(
-                       "default", "", "tree-decomposition", true, 2));
-    // By-name-only compilation spellings.
-    c.registerMethod(std::make_unique<CompilationMethod>(
-                       "compilation", "compilation", "compilation"));
-    c.registerMethod(std::make_unique<CompilationMethod>(
-                       "tree-decomposition", "tree-decomposition",
-                       "tree-decomposition"));
-    c.registerMethod(std::make_unique<CompilationMethod>(
-                       "interpret-as-dd", "interpret-as-dd", "interpret-as-dd"));
+    c.registerMethod(std::make_unique<TreeDecompositionMethod>());
+    c.registerMethod(std::make_unique<CompilationMethod>());
+    // By-name-only exact method (out of the chain).
+    c.registerMethod(std::make_unique<InterpretAsDdMethod>());
     // By-name-only methods.
     c.registerMethod(std::make_unique<PossibleWorldsMethod>());
     c.registerMethod(std::make_unique<MonteCarloMethod>());
@@ -1205,7 +1251,9 @@ static Datum probability_evaluate_internal
                                inv_free_cert, args,
                                /*explicitly_named=*/!method.empty()};
       const provsql::MethodCatalog &catalog = provsql::MethodCatalog::instance();
-      if(method.empty()) {
+      if(method.empty() || method == "default") {
+        // "default" == the default auto-selection (the exact ladder), same as
+        // the empty method.
         result = catalog.chooseAndRun(ctx, provsql::Tolerance{});
       } else {
         const provsql::ProbabilityMethod *m = catalog.byName(method);
