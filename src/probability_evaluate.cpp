@@ -30,11 +30,14 @@ extern "C" {
 #include "storage/latch.h"
 #include "utils/uuid.h"
 #include "executor/spi.h"
+#include "funcapi.h"               // get_call_result_type, BlessTupleDesc
+#include "access/htup_details.h"   // heap_form_tuple
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
 #include "utils/guc.h"
 
 PG_FUNCTION_INFO_V1(probability_evaluate);
+PG_FUNCTION_INFO_V1(probability_bounds);
 }
 
 #include "c_cpp_compatibility.h"
@@ -1785,6 +1788,55 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
     provsql_error("probability_evaluate: %s", e.what());
   } catch(...) {
     provsql_error("probability_evaluate: Unknown exception");
+  }
+
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief PostgreSQL-callable wrapper for the d-tree leaf bound:
+ *        @c probability_bounds(token uuid, OUT lower float8, OUT upper float8).
+ *
+ * Returns a cheap certified interval @c [lower,upper] with @c lower ≤ Pr ≤ upper
+ * for the probability of the DNF-shaped circuit rooted at @p token, via
+ * @c BooleanCircuit::dnfBounds (Olteanu-Huang Fig. 3).  Errors when the circuit
+ * is not a monotone DNF over input leaves (the leaf-bound heuristic is
+ * DNF-specific); the future d-tree engine will recurse on non-DNF roots.
+ */
+Datum probability_bounds(PG_FUNCTION_ARGS)
+{
+  provsql_sync_tool_registry();
+  try {
+    if(PG_ARGISNULL(0))
+      PG_RETURN_NULL();
+    pg_uuid_t token = *DatumGetUUIDP(PG_GETARG_DATUM(0));
+
+    gate_t root;
+    BooleanCircuit c = getBooleanCircuit(token, root);
+
+    std::vector<gate_t> clauses;
+    std::vector<std::set<gate_t> > supports;
+    if(!c.dnfShape(root, clauses, supports))
+      provsql_error("probability_bounds applies only to a DNF-shaped circuit "
+                    "(a monotone OR-of-ANDs over input leaves); negation, "
+                    "comparison, aggregation, random-variable and "
+                    "multivalued-input gates are not supported");
+
+    double lower, upper;
+    c.dnfBounds(clauses, supports, lower, upper);
+
+    TupleDesc tupdesc;
+    if(get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+      provsql_error("probability_bounds: expected composite return type");
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    Datum values[2] = { Float8GetDatum(lower), Float8GetDatum(upper) };
+    bool nulls[2] = { false, false };
+    PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+  } catch(const std::exception &e) {
+    provsql_error("probability_bounds: %s", e.what());
+  } catch(...) {
+    provsql_error("probability_bounds: Unknown exception");
   }
 
   PG_RETURN_NULL();

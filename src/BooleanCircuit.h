@@ -376,6 +376,40 @@ double sieve(const std::vector<gate_t> &clauses,
              const std::vector<std::set<gate_t> > &supports) const;
 
 /**
+ * @brief Cheap certified probability interval @c [lower,upper] of a monotone
+ *        DNF, without compiling it (Olteanu-Huang d-tree leaf bound).
+ *
+ * Implements the @c Independent heuristic of Olteanu, Huang & Koch,
+ * "Approximate Confidence Computation in Probabilistic Databases" (ICDE 2010,
+ * Fig. 3).  The clauses are greedily partitioned into @e buckets of pairwise
+ * independent clauses (disjoint supports), clauses taken in descending
+ * marginal-probability order so the most probable clauses anchor the buckets.
+ * Each bucket's clauses are mutually independent, so its probability is the
+ * independent-or @c 1-∏(1-P(d)) with @c P(d)=∏_{leaf∈supports[d]} getProb(leaf).
+ * Then, since @c Φ is the disjunction of all buckets:
+ *
+ * - @c lower = max_i P(B_i): a sub-disjunction is a lower bound;
+ * - @c upper = min(1, Σ_i P(B_i)): the union bound.
+ *
+ * Both bounds are sound for @e any partition (the greedy one only affects
+ * tightness), so @c lower ≤ Pr[Φ] ≤ upper always holds.  When the clauses are
+ * mutually independent (disjoint supports) they all land in a single bucket and
+ * @c lower=upper=Pr[Φ], i.e. the interval collapses to the exact value.
+ * @c O(m^2) in the clause count @c m.
+ *
+ * @p clauses / @p supports are those returned by @c dnfShape (monotone DNF over
+ * input leaves).
+ *
+ * @param clauses   Top-level clause roots (from @c dnfShape).
+ * @param supports  Per-clause reachable @c IN leaves (from @c dnfShape).
+ * @param lower     [out] Certified lower bound on @c Pr[Φ].
+ * @param upper     [out] Certified upper bound on @c Pr[Φ].
+ */
+void dnfBounds(const std::vector<gate_t> &clauses,
+               const std::vector<std::set<gate_t> > &supports,
+               double &lower, double &upper) const;
+
+/**
  * @brief Karp-Luby FPRAS with the self-adjusting stopping rule (adaptive
  *        sample count for a relative @c (eps,delta) guarantee).
  *

@@ -752,6 +752,82 @@ double BooleanCircuit::sieve(
   return total;
 }
 
+void BooleanCircuit::dnfBounds(
+  const std::vector<gate_t> &clauses,
+  const std::vector<std::set<gate_t> > &supports,
+  double &lower, double &upper) const
+{
+  const size_t m = clauses.size();
+  if(m == 0) {
+    lower = upper = 0.;
+    return;
+  }
+
+  // Per-clause probability P(d) = ∏_{leaf ∈ supports[d]} getProb(leaf) (an empty
+  // support is a constant-true clause, product over the empty set = 1).
+  std::vector<double> clause_prob(m);
+  for(size_t i = 0; i < m; ++i) {
+    double p = 1.;
+    for(gate_t leaf : supports[i])
+      p *= getProb(leaf);
+    clause_prob[i] = p;
+  }
+
+  // Greedy partition into buckets of pairwise-independent clauses, clauses taken
+  // in descending marginal-probability order (the paper's improved heuristic).
+  std::vector<size_t> order(m);
+  for(size_t i = 0; i < m; ++i)
+    order[i] = i;
+  std::sort(order.begin(), order.end(),
+            [&](size_t a, size_t b) {
+              return clause_prob[a] > clause_prob[b];
+            });
+
+  // For each bucket: the union of its clauses' supports (to test independence in
+  // O(|support|) against the whole bucket at once -- disjoint from the union iff
+  // independent of every clause already in it) and its running independent-or
+  // probability 1 - ∏(1 - P(d)).
+  std::vector<std::set<gate_t> > bucket_support;
+  std::vector<double> bucket_prob;
+  for(size_t idx : order) {
+    const std::set<gate_t> &sup = supports[idx];
+    size_t target = bucket_support.size();   // default: open a new bucket
+    for(size_t b = 0; b < bucket_support.size(); ++b) {
+      bool disjoint = true;
+      for(gate_t leaf : sup)
+        if(bucket_support[b].count(leaf)) {
+          disjoint = false;
+          break;
+        }
+      if(disjoint) {
+        target = b;
+        break;
+      }
+    }
+    if(target == bucket_support.size()) {
+      bucket_support.emplace_back();
+      bucket_prob.push_back(0.);
+    }
+    bucket_prob[target] =
+      1. - (1. - bucket_prob[target]) * (1. - clause_prob[idx]);
+    bucket_support[target].insert(sup.begin(), sup.end());
+
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted");
+  }
+
+  // lower = max bucket probability (each bucket is a sub-disjunction of Φ);
+  // upper = min(1, Σ bucket probabilities) (union bound over the buckets).
+  double L = 0., U = 0.;
+  for(double bp : bucket_prob) {
+    if(bp > L)
+      L = bp;
+    U += bp;
+  }
+  lower = L;
+  upper = (U > 1.) ? 1. : U;
+}
+
 double BooleanCircuit::possibleWorlds(gate_t g) const
 {
   if(inputs.size()>=8*sizeof(unsigned long long))

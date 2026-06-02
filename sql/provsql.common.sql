@@ -3378,6 +3378,19 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   'provsql','probability_evaluate' LANGUAGE C STABLE;
 
 /**
+ * @brief Cheap certified probability interval of a DNF-shaped circuit.
+ *
+ * Returns @c [lower,upper] with @c lower <= probability_evaluate(token) <=
+ * @c upper, computed without compiling the circuit (the Olteanu-Huang d-tree
+ * leaf bound).  Errors when @p token is not a monotone DNF over input leaves.
+ */
+CREATE OR REPLACE FUNCTION probability_bounds(
+  token UUID,
+  OUT lower DOUBLE PRECISION,
+  OUT upper DOUBLE PRECISION) AS
+  'provsql','probability_bounds' LANGUAGE C STABLE;
+
+/**
  * @brief Compute the expected value of a probabilistic scalar
  *
  * Computes E[input | prov] for either an @c agg_token (discrete
