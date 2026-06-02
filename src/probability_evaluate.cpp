@@ -609,6 +609,16 @@ dDNNF buildInversionFreeDDNNF(pg_uuid_t token)
 // every probability-side pre-pass stay where they are in
 // probability_evaluate_internal.
 // ---------------------------------------------------------------------------
+
+// Forward declaration: the whole-circuit (eps,delta)-relative stopping-rule
+// estimator (defined below probability_evaluate_internal) is delegated to by the
+// portfolio's StoppingRuleMethod, which is defined earlier (in the method-catalog
+// block).  It operates on the GenericCircuit so it serves Boolean, RV and HAVING
+// circuits uniformly.
+static void run_stopping_rule(GenericCircuit &gc, gate_t gc_root,
+                              const MethodArgs &a, double &result,
+                              std::string &actual_method);
+
 namespace provsql {
 
 /// Sanity bound on the reachable-input count for the auto-chosen 2^N
@@ -659,12 +669,26 @@ static const double kCostCompilation     = 2e-3;  // ~2e-3 * S^1.5 ms ...
 static const double kCostCompilationFloor= 40.0;  // ... but at least ~40 ms (startup + easy compile)
 static const double kCostDnfShapeFeature = 2e-6;  // O(S):                ~2e-6 * S
 static const double kCostTwProxyFeature  = 3e-4;  // O(S):                ~3e-4 * S
-// Approximate methods (not yet in the auto-portfolio -- their estimatedCost is
-// for documentation / the future relative & additive paths; they depend on the
-// granted (eps,delta), and stopping-rule additionally on the unknown p, so its
-// cost needs a p-lower-bound feature to be a priori computable).
-static const double kCostMonteCarlo      = 1.0;   // additive: O(S / eps^2 * ln(1/delta))
-static const double kCostKarpLuby        = 1.0;   // relative DNF: O(S*m / eps^2 * ln(1/delta))
+// Approximate portfolio members (relative & additive paths).  Their cost depends
+// on the granted (eps,delta); we model the sample-budget term C = ln(2/delta)/eps^2
+// times the per-sample O(S) work.  stopping-rule's true budget is C/p (the Dagum
+// rule draws ~ 1/p worlds) but p is not a static feature, so we model it
+// OPTIMISTICALLY at p ~ 1 -- a documented heuristic.  Calibrated like the exact
+// constants so the value is ~ the milliseconds on this machine (verbose_level>=50
+// instrumentation, eps=0.1 delta=0.05):
+//   monte-carlo   CNF S=4472 -> 17.5 ms, S=8972 -> 35.3 ms   (cost/ms ~ 1)
+//   stopping-rule CNF S=4472 -> 129  ms, S=8972 -> 290  ms   (~3x MC: adaptive 1/p)
+//   karp-luby     overlapping DNF m=60..200 -> 6.6..13.5 ms  (S*m model pessimistic
+//                 for large m -- fine, it just hands huge-m DNFs to the stopping
+//                 rule sooner).
+// The resulting ordering is the intended trade-off: a cheap exact method
+// (independent ~5e-5*S, a tiny-m sieve) underbids the 1/eps^2 estimators so the
+// path returns EXACT; on a hard/large circuit the bounded-cost estimator underbids
+// exact compilation (~S^1.5) and possible-worlds (2^N) so the path estimates; on a
+// DNF, karp-luby (the FPRAS) underbids the generic stopping rule up to m ~ 400.
+static const double kCostMonteCarlo      = 1e-5;  // additive:     ~1e-5 * S * C
+static const double kCostStoppingRule    = 8e-5;  // relative univ: ~8e-5 * S * C  (>= MC: adaptive 1/p risk)
+static const double kCostKarpLuby        = 2e-7;  // relative DNF:  ~2e-7 * S * m * C
 
 /// 2^k with the exponent clamped to keep the cost finite (a clamped exponent
 /// still sorts the method dead last -- it is then a guaranteed fall-through).
@@ -944,7 +968,10 @@ public:
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
-    if(!ctx.args.empty())
+    // Only flag ignored args for an EXPLICIT `possible-worlds` request; when the
+    // chooser auto-picks it on a relative/additive path, the args carry the path's
+    // (eps,delta) tolerance, which an exact method legitimately ignores.
+    if(ctx.explicitly_named && !ctx.args.empty())
       provsql_warning("Argument '%s' ignored for method possible-worlds",
                       ctx.args.c_str());
     double r = ctx.c.possibleWorlds(ctx.gate);
@@ -959,8 +986,10 @@ class MonteCarloMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "monte-carlo"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Additive; }
-  // O(S / eps^2 * ln(1/delta)) -- Hoeffding, p-independent.  (Not auto-chosen
-  // yet; defined for the additive path.)
+  // Additive portfolio member: the universal fixed-sample estimator on the Boolean
+  // view, serving the 'additive' path (and any-name).
+  bool inDefaultChain() const override { return true; }
+  // O(S / eps^2 * ln(1/delta)) -- Hoeffding, p-independent.
   double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
     if(tol.epsilon <= 0.) return std::numeric_limits<double>::infinity();
     return kCostMonteCarlo * static_cast<double>(ctx.circuit_size)
@@ -976,18 +1005,24 @@ public:
   }
 };
 
-/// Karp-Luby FPRAS over a DNF-shaped monotone circuit.  By-name only; runs
-/// before the multivalued rewrite (it rejects multivalued inputs anyway).
+/// Karp-Luby FPRAS over a DNF-shaped monotone circuit.  Relative portfolio member
+/// (chosen on DNFs the cheap exact methods do not resolve) and by-name; runs before
+/// the multivalued rewrite (it rejects multivalued inputs anyway).
 class KarpLubyMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "karp-luby"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Relative; }
-  // O(S*m / eps^2 * ln(1/delta)) -- relative, p-independent (the m clauses
-  // replace the 1/p of plain MC).  (Not auto-chosen yet; defined for the
-  // relative path.)
+  bool inDefaultChain() const override { return true; }
+  // Cost / applicability need the DNF-shape feature; the chooser acquires it
+  // (lazily) before calling them, so a read-once circuit never pays the walk.
   std::vector<Feature> requiredFeatures() const override {
     return {Feature::DnfShape};
   }
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    return ctx.dnf_ok_;
+  }
+  // O(S*m / eps^2 * ln(1/delta)) -- relative, p-independent (the m clauses
+  // replace the 1/p of plain MC).
   double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
     if(tol.epsilon <= 0.) return std::numeric_limits<double>::infinity();
     const double m = static_cast<double>(ctx.dnf_num_clauses_ > 0
@@ -1010,6 +1045,34 @@ public:
     double r = evaluate_karp_luby(ctx.c, clauses, supports,
                                   parse_method_args(ctx.args));
     ctx.actual_method = "karp-luby";
+    return r;
+  }
+};
+
+/// Whole-circuit (eps,delta)-RELATIVE estimate via the Dagum-Karp-Luby-Ross stopping
+/// rule -- the universal relative fallback (plain Boolean / RV / HAVING agg alike).
+/// Relative portfolio member and by-name ('stopping-rule').  Operates on the
+/// GenericCircuit (ctx.gc / ctx.gc_root), so it applies to every circuit regardless
+/// of whether the Boolean view built; delegates to run_stopping_rule for the
+/// max_samples cap, the relative->additive degradation, and the guarantee NOTICE.
+class StoppingRuleMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "stopping-rule"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Relative; }
+  bool inDefaultChain() const override { return true; }
+  // O(S / (p*eps^2) * ln(1/delta)); p is not a static feature, modelled
+  // optimistically at p ~ 1 (see the kCost block).  Above karp-luby on DNFs and
+  // above plain MC, but below the cheap exact methods so "exact when cheaper" wins.
+  double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
+    if(tol.epsilon <= 0.) return std::numeric_limits<double>::infinity();
+    return kCostStoppingRule * static_cast<double>(ctx.circuit_size)
+           * std::log(2.0 / (tol.delta > 0. ? tol.delta : 0.5))
+           / (tol.epsilon * tol.epsilon);
+  }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    double r = 0.;
+    run_stopping_rule(ctx.gc, ctx.gc_root, parse_method_args(ctx.args), r,
+                      ctx.actual_method);
     return r;
   }
 };
@@ -1042,7 +1105,10 @@ public:
            * pow2_clamped(ctx.dnf_num_clauses_);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    if(!ctx.args.empty())
+    // Auto-chosen on a relative/additive path, the args are the path's (eps,delta)
+    // tolerance, legitimately ignored by an exact method -- only warn when sieve was
+    // requested explicitly.
+    if(ctx.explicitly_named && !ctx.args.empty())
       provsql_warning("Argument '%s' ignored for method sieve",
                       ctx.args.c_str());
     // Build the full clauses + supports now (only paid because sieve was
@@ -1128,6 +1194,23 @@ const ProbabilityMethod *MethodCatalog::byName(const std::string &n) const
   return nullptr;
 }
 
+/// Admissibility of a method's guarantee under a requested tolerance.  The paths
+/// nest Exact ⊂ Relative ⊂ Additive: a method is admissible iff its guarantee is at
+/// least as tight as the request (an exact method serves any path -- "exact when
+/// cheaper"; a relative method serves relative & additive; an additive method serves
+/// only additive).  This both widens the relative/additive portfolios to the
+/// approximate members AND keeps the exact path (which calls chooseAndRun with an
+/// Exact tolerance) from ever selecting an approximate method.
+static bool toleranceAdmits(ToleranceKind request, ToleranceKind method)
+{
+  switch(request) {
+  case ToleranceKind::Exact:    return method == ToleranceKind::Exact;
+  case ToleranceKind::Relative: return method != ToleranceKind::Additive;
+  case ToleranceKind::Additive: return true;
+  }
+  return false;
+}
+
 double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
 {
   // Uniform-cost search interleaving feature acquisition and method execution.
@@ -1141,7 +1224,7 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
   // independent); the last such error propagates if the portfolio is exhausted.
   std::vector<const ProbabilityMethod *> portfolio;
   for(const auto &m : methods_)
-    if(m->inDefaultChain())
+    if(m->inDefaultChain() && toleranceAdmits(tol.kind, m->guaranteeKind()))
       portfolio.push_back(m.get());
 
   std::set<Feature> acquired;
@@ -1234,13 +1317,18 @@ const MethodCatalog &MethodCatalog::instance()
     c.registerMethod(std::make_unique<InversionFreeMethod>());
     c.registerMethod(std::make_unique<TreeDecompositionMethod>());
     c.registerMethod(std::make_unique<CompilationMethod>());
-    // By-name-only exact method (out of the chain).
-    c.registerMethod(std::make_unique<InterpretAsDdMethod>());
-    // By-name-only methods.
     c.registerMethod(std::make_unique<PossibleWorldsMethod>());
+    c.registerMethod(std::make_unique<SieveMethod>());
+    // Approximate portfolio members.  Admissibility (toleranceAdmits) keeps them out
+    // of the exact path: monte-carlo (additive) serves only 'additive';
+    // karp-luby / stopping-rule (relative) serve 'relative' and 'additive'.
     c.registerMethod(std::make_unique<MonteCarloMethod>());
     c.registerMethod(std::make_unique<KarpLubyMethod>());
-    c.registerMethod(std::make_unique<SieveMethod>());
+    c.registerMethod(std::make_unique<StoppingRuleMethod>());
+    // By-name-only methods (out of the auto-chooser): interpret-as-dd is redundant
+    // with independent; weightmc / wmc are external subprocess counters needing a
+    // tool argument, so they are not auto-spawned on a relative request.
+    c.registerMethod(std::make_unique<InterpretAsDdMethod>());
     c.registerMethod(std::make_unique<WeightmcMethod>());
     c.registerMethod(std::make_unique<WmcMethod>());
     return c;
@@ -1265,30 +1353,6 @@ const MethodCatalog &MethodCatalog::instance()
 // live here rather than in the BooleanCircuit catalog; folding them in behind a
 // lazy Boolean build is the clean follow-up.
 // ---------------------------------------------------------------------------
-
-/// "Exact when cheaper" probe for the relative / additive paths: the dominant
-/// cheap-exact case is a tuple-independent (read-once) circuit, which
-/// independentEvaluation resolves in linear time.  Returns true (and sets
-/// @p result / @p actual_method) when it applies; false to fall through to the
-/// path's estimator.  RV circuits have no Boolean view, so they skip straight to
-/// the estimator.
-static bool try_independent_exact(GenericCircuit &gc, pg_uuid_t token,
-                                  gate_t gc_root, double &result,
-                                  std::string &actual_method)
-{
-  if(provsql::circuitHasRV(gc, gc_root))
-    return false;
-  try {
-    gate_t gate{};
-    std::unordered_map<gate_t, gate_t> gc_to_bc;
-    BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
-    result = c.independentEvaluation(gate);
-    actual_method = "independent";
-    return true;
-  } catch(CircuitException &) {
-    return false;
-  }
-}
 
 /// Whole-circuit (eps,delta)-relative estimate via the stopping rule (shared by
 /// the explicit 'stopping-rule' method and the 'relative' path's estimator).
@@ -1572,22 +1636,60 @@ static Datum probability_evaluate_internal
     // probability via the Dagum-Karp-Luby-Ross stopping rule (the universal
     // relative estimator -- plain Boolean / RV / HAVING agg).  The 'relative'
     // path first tries an exact result when one is cheaply available.
-    if(method == "relative") {
-      if(!try_independent_exact(gc, token, gc_root, result, actual_method))
+    if(method == "relative" || method == "additive") {
+      // Three-path tolerance request, routed through the SAME cost chooser as the
+      // exact path -- just with a wider admissible set (toleranceAdmits): a
+      // 'relative' request's portfolio is the exact methods (exact when cheaper) +
+      // the relative estimators (karp-luby on a DNF, the universal stopping rule);
+      // 'additive' additionally admits fixed-sample monte-carlo.  The chooser picks
+      // the cheapest, so a tuple-independent circuit resolves exactly via
+      // 'independent', a small DNF exactly via 'sieve', and a hard/large circuit
+      // falls to the bounded-cost estimator -- generalising the old
+      // independent-only "exact when cheaper" to the whole exact portfolio.
+      const provsql::ToleranceKind tk = (method == "relative")
+          ? provsql::ToleranceKind::Relative
+          : provsql::ToleranceKind::Additive;
+      SampleSpec s = parse_sample_spec(parse_method_args(args), method.c_str());
+      provsql::Tolerance tol{tk, s.eps, s.delta};
+
+      // The estimators (and the Boolean exact methods) need the Boolean view; it
+      // drops gate_rv and rejects RV gate_cmp, so it cannot build on an RV / HAVING
+      // circuit.  Build it when possible and run the unified portfolio; otherwise
+      // fall back to the generic GenericCircuit estimator (the only option there),
+      // exactly as before -- the stopping rule for 'relative', fixed-sample
+      // monteCarloRV for 'additive'.
+      bool boolean_built = false;
+      gate_t gate{};
+      std::unordered_map<gate_t, gate_t> gc_to_bc;
+      BooleanCircuit c;
+      if(!provsql::circuitHasRV(gc, gc_root)) {
+        try {
+          c = getBooleanCircuit(gc, token, gate, gc_to_bc);
+          boolean_built = true;
+        } catch(CircuitException &) {
+          boolean_built = false;
+        }
+      }
+
+      if(boolean_built) {
+        provsql::EvalContext ctx{gc, gc_root, token, c, gate, gc_to_bc,
+                                 inv_free_cert, args,
+                                 /*explicitly_named=*/false,
+                                 /*n_inputs=*/c.getInputs().size(),
+                                 /*circuit_size=*/c.getNbGates()};
+        result = provsql::MethodCatalog::instance().chooseAndRun(ctx, tol);
+        actual_method = ctx.actual_method;
+      } else if(method == "relative") {
         run_stopping_rule(gc, gc_root, parse_method_args(args), result,
                           actual_method);
-    } else if(method == "stopping-rule") {
-      run_stopping_rule(gc, gc_root, parse_method_args(args), result,
-                        actual_method);
-    } else if(method == "additive") {
-      // 'additive' path: exact when cheaply available, else fixed-sample MC
-      // sized from (eps,delta) by Hoeffding (monte_carlo_samples emits the
-      // additive guarantee NOTICE).
-      if(!try_independent_exact(gc, token, gc_root, result, actual_method)) {
+      } else {
         unsigned long samples = monte_carlo_samples(parse_method_args(args));
         result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
         actual_method = "monte-carlo";
       }
+    } else if(method == "stopping-rule") {
+      run_stopping_rule(gc, gc_root, parse_method_args(args), result,
+                        actual_method);
     } else if(method == "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
       // RV-aware (fixed-sample, additive) Monte Carlo.
       unsigned long samples = monte_carlo_samples(parse_method_args(args));

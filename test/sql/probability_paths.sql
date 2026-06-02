@@ -46,24 +46,60 @@ END $$;
 SELECT probability_evaluate(:indep, 'exact') = probability_evaluate(:indep)             AS exact_alias_default,
        abs(probability_evaluate(:indep, 'exact') - probability_evaluate(:indep,'independent')) < 1e-12 AS exact_alias_independent;
 
--- Exact-when-cheaper: on the INDEPENDENT circuit, relative and additive both
--- return the EXACT value (bit-identical to 'independent'), reported as
--- 'independent' -- no sampling.
+-- Exact-when-cheaper, now generalised to the whole exact portfolio (not just
+-- 'independent'): on a circuit a cheap EXACT method resolves, the relative and
+-- additive paths return the EXACT value (within FP tolerance of 'independent'),
+-- reported as the cost-ranked exact method -- no sampling.  Here :indep is a tiny
+-- 2-clause DNF, cheapest under 'sieve'; the value differs from 'independent' only
+-- at round-off (inclusion-exclusion vs multiplication), so this is a tolerance test.
 SET provsql.last_eval_method='';
-SELECT probability_evaluate(:indep,'relative','epsilon=0.1') = probability_evaluate(:indep,'independent') AS relative_is_exact;
+SELECT abs(probability_evaluate(:indep,'relative','epsilon=0.1') - probability_evaluate(:indep,'independent')) < 1e-12 AS relative_is_exact;
 SHOW provsql.last_eval_method;
 SET provsql.last_eval_method='';
-SELECT probability_evaluate(:indep,'additive','epsilon=0.1') = probability_evaluate(:indep,'independent') AS additive_is_exact;
+SELECT abs(probability_evaluate(:indep,'additive','epsilon=0.1') - probability_evaluate(:indep,'independent')) < 1e-12 AS additive_is_exact;
 SHOW provsql.last_eval_method;
 
--- On the NON-independent circuit the paths fall to their estimator, landing
--- within the granted tolerance of the exact value (0.29), and report it.
+-- :shared is a non-read-once 2-clause DNF over 3 inputs: 'independent' is
+-- inapplicable, but the cheapest admissible method is still EXACT possible-worlds
+-- (2^3 worlds, cheaper than sampling at this size), comfortably within the granted
+-- tolerance of the exact value (0.29).
 SET provsql.last_eval_method='';
 SELECT abs(probability_evaluate(:shared,'relative','epsilon=0.05,delta=0.01') - 0.29) <= 0.05 AS relative_in_tol;
 SHOW provsql.last_eval_method;
 SET provsql.last_eval_method='';
 SELECT abs(probability_evaluate(:shared,'additive','epsilon=0.02,delta=0.05') - 0.29) <= 0.05 AS additive_in_tol;
 SHOW provsql.last_eval_method;
+
+-- Estimator fallback: when NO cheap exact method applies, the relative path falls
+-- to the universal stopping rule and the additive path to fixed-sample monte-carlo.
+-- Build a monotone CNF (AND of overlapping 4-var OR windows) over 24 inputs:
+-- 'independent' throws (shared vars), 'sieve' does not apply (CNF, not DNF), and
+-- 2^24 possible-worlds is dearer than sampling -- so the cost chooser samples.
+CREATE TABLE ppcnf(id int);
+INSERT INTO ppcnf SELECT generate_series(1,24);
+SELECT add_provenance('ppcnf');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM ppcnf; END $$;
+SET provsql.active = off;
+DO $$
+DECLARE v uuid[]; cl uuid; acc uuid; i int;
+BEGIN
+  SELECT array_agg(provsql::uuid ORDER BY id) INTO v FROM ppcnf;
+  acc := NULL;
+  FOR i IN 1..21 LOOP
+    cl := provenance_plus(ARRAY[v[i],v[i+1],v[i+2],v[i+3]]);
+    IF acc IS NULL THEN acc := cl; ELSE acc := provenance_times(acc, cl); END IF;
+  END LOOP;
+  PERFORM set_config('pp.cnf', acc::text, false);
+END $$;
+RESET provsql.active;
+\set cnf '(current_setting(''pp.cnf'')::uuid)'
+SET provsql.last_eval_method='';
+SELECT probability_evaluate(:cnf,'relative','epsilon=0.2,delta=0.1') BETWEEN 0 AND 1 AS relative_estimates;
+SHOW provsql.last_eval_method;
+SET provsql.last_eval_method='';
+SELECT probability_evaluate(:cnf,'additive','epsilon=0.2,delta=0.1') BETWEEN 0 AND 1 AS additive_estimates;
+SHOW provsql.last_eval_method;
+DROP TABLE ppcnf;
 
 -- RV guard lets the paths through (a relative/additive request on a circuit the
 -- exact methods cannot touch is allowed); a bad name is still refused.

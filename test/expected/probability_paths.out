@@ -9,21 +9,36 @@ relative_is_exact
 t
 (1 row)
 provsql.last_eval_method
-independent
+sieve,independent
 (1 row)
 additive_is_exact
 t
 (1 row)
 provsql.last_eval_method
-independent
+sieve,independent
 (1 row)
 relative_in_tol
 t
 (1 row)
 provsql.last_eval_method
-stopping-rule
+possible-worlds
 (1 row)
 additive_in_tol
+t
+(1 row)
+provsql.last_eval_method
+possible-worlds
+(1 row)
+add_provenance
+
+(1 row)
+relative_estimates
+t
+(1 row)
+provsql.last_eval_method
+stopping-rule
+(1 row)
+additive_estimates
 t
 (1 row)
 provsql.last_eval_method

@@ -802,22 +802,33 @@ Status legend: ✅ done · ◑ partial · ⏳ deferred (with reason).
    `stopping_rule.sql`, commit `3af132d`. ⏳ `MinMaxKarpLubyMethod` (MIN/MAX-easy
    → UCQ → karp-luby) deferred: an efficiency optimisation StoppingRuleMc
    already covers functionally.
-4. ✅ **Three-path tolerance surface.** `exact` (alias for the empty/default
-   method), `relative` (`(1±ε)`), `additive` (`|p̂−p| ≤ ε`) are method names that
-   grant a tolerance; the system picks the mechanism. **Exact-when-cheaper**:
-   admissibility nests exact ⊂ relative ⊂ additive, so relative/additive return
-   the exact value via `independent` when the circuit is tuple-independent, else
-   fall to the estimator (stopping-rule / monte-carlo). Plus the **first cost
-   heuristic**: small-N (≤16 inputs) → `possible-worlds` in the exact chooser,
-   ahead of tree-decomposition/compilation. Tests `probability_paths.sql` +
-   `last_eval_method.sql`, commit `7687932`. *Follow-up:* fold the
-   GenericCircuit estimators into the catalog behind a lazy Boolean build
-   (removes the top-level special-casing); widen exact-when-cheaper to small-N
-   possible-worlds; add a treewidth proxy to rank tree-decomposition vs
-   compilation. The `makeDD` monolith was first decomposed into
-   interpret-as-dd / tree-decomposition / compilation catalog members (commit
-   `4607911`) so the chooser can see and rank them; interpret-as-dd was dropped
-   from the chain as redundant with `independent`.
+4. ✅ **Three-path tolerance surface — all three paths now driven by the one
+   cost chooser.** `exact` / `relative` / `additive` grant a tolerance; the
+   system picks the mechanism. `chooseAndRun` gained a `toleranceAdmits`
+   filter so a single chooser serves every path: the portfolio is the methods
+   whose guarantee is at least as tight as the request (exact ⊂ relative ⊂
+   additive), sorted by `estimatedCost`. The approximate methods are now
+   first-class **portfolio members** (`inDefaultChain`): `MonteCarloMethod`
+   (additive), `KarpLubyMethod` (relative, DNF), and `StoppingRuleMethod`
+   (relative, universal — delegates to `run_stopping_rule` on the
+   GenericCircuit). The relative/additive dispatch builds the Boolean view and
+   calls `chooseAndRun(ctx, {kind, ε, δ})`; only an RV/HAVING circuit (no Boolean
+   view) falls back to the bare GenericCircuit estimator. This **generalises
+   exact-when-cheaper from `independent`-only to the whole exact portfolio**: a
+   tiny independent DNF resolves via `sieve`, a small shared DNF via
+   `possible-worlds`, a hard/large circuit falls to `stopping-rule` /
+   `monte-carlo` — all chosen by cost. The estimator constants are
+   **benchmarked** (verbose≥50 instrumentation, `cost ≈ ms` on this machine):
+   `kCostMonteCarlo 1e-5·S·C`, `kCostStoppingRule 8e-5·S·C`,
+   `kCostKarpLuby 2e-7·S·m·C` with `C = ln(2/δ)/ε²`. Tests
+   `probability_paths.sql` (exact-when-cheaper + estimator-fallback cases) +
+   `last_eval_method.sql`. The old bespoke `try_independent_exact` probe is
+   removed (subsumed). *Remaining follow-up:* a true lazy Boolean build so even
+   the RV/HAVING estimators fold into the catalog (currently a small top-level
+   fallback), and refining the karp-luby `S·m` cost (pessimistic for large `m`).
+   The `makeDD` monolith was first decomposed into interpret-as-dd /
+   tree-decomposition / compilation catalog members (commit `4607911`);
+   interpret-as-dd was dropped from the chain as redundant with `independent`.
 5. ⏳ **`AggFptrasMethod`** — the SUM-safe FPTRAS (Dyer rounding + top-down
    random-world generator + accept-test). Research-grade; high risk of subtle
    statistical bias; needs the `AggMarginalEvaluator` internals exposed and the
