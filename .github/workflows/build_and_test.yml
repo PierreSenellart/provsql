@@ -128,7 +128,7 @@ jobs:
       # NOTE: editing the description needs a token allowed to do so; the
       # push-scoped DOCKERHUB_TOKEN may 403 here, in which case use an
       # org-admin / account PAT (a separate secret).
-      - uses: peter-evans/dockerhub-description@v4
+      - uses: peter-evans/dockerhub-description@v5
         with:
           username: inriavalda
           password: ${{ secrets.DOCKERHUB_TOKEN }}
