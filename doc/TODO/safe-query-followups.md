@@ -50,8 +50,9 @@ chosen HAVING semantics; the layering below matches that
 semantics directly.  For the *probability-complexity* theory behind
 these layers (the marginal-vector / monoid-convolution PTIME engine,
 the safe / apx-safe / hazardous trichotomy, and how it maps onto
-ProvSQL's gates) see [`having-trichotomy.md`](having-trichotomy.md),
-anchored on Ré & Suciu's HAVING-trichotomy paper.
+ProvSQL's gates) see
+[`probability-evaluation.md`](probability-evaluation.md), anchored on
+Ré & Suciu's HAVING-trichotomy paper.
 
 The natural home for the new dispatch is `pw_from_cmp_gate` in
 `src/having_semantics.hpp`, which already has `mvals[]` and `kvals[]`

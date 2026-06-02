@@ -12,7 +12,7 @@
 # Output: provsql-wasm/provsql.so (WASM side module) and provsql.tar.gz
 # (the PGlite extension bundle).  No libboost_serialization is needed: the
 # Boost-serialized circuit round-trip is compiled out under
-# PROVSQL_INPROCESS_STORE (see doc/TODO/wasm-browser-deployment.md §6).
+# PROVSQL_INPROCESS_STORE.
 set -u
 emcc --clear-cache >/dev/null 2>&1 || true
 

@@ -2,8 +2,8 @@
  * @file AggMarginalEvaluator.h
  * @brief Exact closed-form HAVING @c COUNT(*) @c op @c C probability over
  *        *safe-join* lineage -- the recursive marginal-vector engine of the
- *        Ré-Suciu HAVING trichotomy (see @c doc/TODO/having-trichotomy.md,
- *        Gain 4 / Priority 4).
+ *        Ré-Suciu HAVING trichotomy (see
+ *        @c doc/source/dev/probability-evaluation.rst).
  *
  * @c CountCmpEvaluator (the flat Poisson-binomial pre-pass) is exact only
  * when the @c gate_agg children are pairwise leaf-disjoint, i.e. flat

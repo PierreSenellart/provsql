@@ -45,20 +45,18 @@ Each plan document follows a consistent layout:
   for adding continuous probability distributions (Gaussian, uniform,
   exponential, ...) to ProvSQL's pc-table model, anchored on Timothy
   Leong's 2022 BSc thesis (NUS).
-- [`having-trichotomy.md`](having-trichotomy.md) : assessment of what
-  ProvSQL gains from Ré & Suciu's HAVING-trichotomy paper (VLDB J.
-  2009 / DBPL 2007). Finds the paper's framework (semiring annotation
-  + recovery function + safe plan) maps almost one-to-one onto
-  ProvSQL's `gate_cmp(gate_agg(gate_semimod …), gate_value)`, and that
-  its **marginal-vector + monoid-convolution** algorithm is the PTIME
-  replacement for the exponential possible-worlds enumeration in
-  `provsql_having`. Four gains: exact PTIME evaluators generalising
-  `CountCmpEvaluator` to MIN/MAX/SUM/COUNT(DISTINCT); a safe /
-  apx-safe / hazardous classifier (à la `classify_top_level`) to drive
-  method selection; principled FPRAS routing for apx-safe queries onto
-  the new karp-luby method; and independence certification via the
-  safe-query rewriter to extend the closed forms to joins. Grounds the
-  Tier-1 HAVING items in [`safe-query-followups.md`](safe-query-followups.md).
+- [`probability-evaluation.md`](probability-evaluation.md) : the
+  **remaining** work on probability-method selection, consolidating two
+  now-mostly-landed plans (the Olteanu-Huang-Koch anytime d-tree, ICDE
+  2010; the Ré & Suciu HAVING trichotomy, VLDB J. 2009 / DBPL 2007),
+  both feeding the method catalog + three-path (exact / relative /
+  additive) chooser. A short "what has landed" pointer section, then the
+  open items: the d-tree on arbitrary (non-DNF) circuits, the SUM-safe
+  FPTRAS, the residual HAVING marginal-vector shapes (branch-spanning
+  SUM, BID disjoint blocks, UNION/EXCEPT over a shared-tuple join),
+  method-catalog follow-ups (lazy Boolean build, guarantee propagation,
+  cost-model calibration), RV-probability transparency, and the
+  bibliography additions. Borders [`safe-query-followups.md`](safe-query-followups.md).
 - [`safe-query-followups.md`](safe-query-followups.md) : deferred
   ideas surfaced during the `provsql.boolean_provenance` work --
   further Boolean-only optimisations beyond the hierarchical-CQ

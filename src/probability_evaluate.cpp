@@ -1192,8 +1192,8 @@ public:
     const double S = static_cast<double>(ctx.circuit_size);
     // Approximate: the anytime early stop caps the work (and it is delta-
     // independent); grows as eps tightens.  NB the treewidth proxy is NOT used
-    // -- the Phase-4 measurement showed it mispredicts this engine (cliques
-    // collapse fast, low-w cycles do not); see doc/TODO/dtree-anytime-bounds.md.
+    // -- it mispredicts this engine (cliques collapse fast under Shannon +
+    // subsumption, low-w cycles do not).
     if(tol.kind != ToleranceKind::Exact && tol.epsilon > 0.)
       return kCostDTreeApprox * S / tol.epsilon;
     // Exact: memoised Shannon compilation, ~S*m.  Pessimistic vs tree-

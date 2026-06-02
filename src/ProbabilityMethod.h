@@ -16,9 +16,8 @@
  * catalog registration all live in @c probability_evaluate.cpp, where the
  * file-local evaluation helpers they need are in scope.
  *
- * The design is documented at length in
- * @c doc/TODO/having-trichotomy.md (the method-catalog / three-path chooser
- * section).
+ * The design (the method-catalog / three-path chooser) is documented at
+ * length in @c doc/source/dev/probability-evaluation.rst.
  */
 #ifndef PROVSQL_PROBABILITY_METHOD_H
 #define PROVSQL_PROBABILITY_METHOD_H

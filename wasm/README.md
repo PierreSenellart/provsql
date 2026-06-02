@@ -5,8 +5,8 @@ This directory builds ProvSQL as a WebAssembly extension that loads into
 whole stack – provenance rewriting, the circuit store, semirings, and
 probability – runs **client-side in a browser**, with no server.
 
-See [`doc/TODO/wasm-browser-deployment.md`](../doc/TODO/wasm-browser-deployment.md)
-for the design and milestones. The extension itself builds from the normal
+See [`doc/source/dev/playground.rst`](../doc/source/dev/playground.rst)
+for the design. The extension itself builds from the normal
 `src/` tree under the `PROVSQL_INPROCESS_STORE` / `PROVSQL_NO_SUBPROCESS`
 flags (auto-defined under `__EMSCRIPTEN__`): a single-process in-memory
 circuit store, no background worker, no `fork`/`exec`/sockets, and no
