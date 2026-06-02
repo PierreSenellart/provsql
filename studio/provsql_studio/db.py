@@ -980,13 +980,20 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
 # "weightmc[;ε;δ]"); legacy `weightmc` takes "ε;δ". The rest ignore
 # `arguments` (and warn on `possible-worlds` if one is given).
 _PROBABILITY_METHODS = {
-    "",                   # let provsql pick (independent → tree-decomposition → d4)
+    "",                   # let provsql pick (the cost-ordered exact chooser)
+    "exact",              # alias for the empty/default method (the exact chooser)
+    "relative",           # granted tolerance: (1±eps) guarantee, conf 1-delta;
+                          # returns exact when cheaply available, else an FPRAS
+    "additive",           # granted tolerance: |est-p| <= eps, conf 1-delta;
+                          # returns exact when cheaply available, else MC
     "independent",
     "inversion-free",     # exact, requires an inversion-free certificate on the root
     "tree-decomposition",
     "possible-worlds",
+    "sieve",              # exact inclusion-exclusion over a monotone DNF
     "monte-carlo",
     "karp-luby",          # FPRAS for DNF-shaped circuits (relative (eps,delta))
+    "stopping-rule",      # whole-circuit relative (eps,delta) FPRAS (any circuit)
     "compilation",
     "wmc",
     "weightmc",           # legacy alias for wmc/weightmc
@@ -1472,6 +1479,7 @@ def evaluate_circuit(
         raise ValueError(f"unknown semiring: {semiring!r}")
 
     notices: list[str] = []
+    resolved_method: str | None = None
     def _on_notice(diag):
         msg = diag.message_primary or ""
         if "__prov" in msg or "__wprov" in msg:
@@ -1532,8 +1540,25 @@ def evaluate_circuit(
                 "SELECT set_config('provsql.verbose_level', "
                 "GREATEST(5, current_setting('provsql.verbose_level', true)::int)::text, true)"
             )
+            # Clear provsql.last_eval_method so that, after the call, it holds
+            # exactly the method the chooser settled on for THIS evaluation
+            # (the extension appends to it; it accumulates across a session).
+            # Session-level (is_local=false) to match how the extension records
+            # it, so we read back the value the call set rather than a shadowing
+            # SET LOCAL.  The next eval resets it again, so the pooled
+            # connection does not accumulate.
+            if semiring == "probability":
+                cur.execute(
+                    "SELECT set_config('provsql.last_eval_method', '', false)"
+                )
             cur.execute(sql_stmt, params)
             row = cur.fetchone()
+            if semiring == "probability":
+                cur.execute(
+                    "SELECT current_setting('provsql.last_eval_method', true)"
+                )
+                rm = cur.fetchone()
+                resolved_method = (rm[0] or None) if rm else None
         finally:
             try:
                 conn.remove_notice_handler(_on_notice)
@@ -1544,6 +1569,11 @@ def evaluate_circuit(
         "result": _to_jsonable(value),
         "kind": _result_kind(semiring),
     }
+    # The method the chooser actually used (e.g. a 'relative'/'additive'/default
+    # request that resolved to an exact method when one was cheap, or to an
+    # estimator otherwise).  Surfaced by the eval strip next to the result.
+    if resolved_method:
+        out["resolved_method"] = resolved_method
     if notices:
         out["notices"] = notices
     if semiring == "custom":

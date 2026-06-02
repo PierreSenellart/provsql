@@ -2221,6 +2221,12 @@ body.mode-where #sidebar {
   font-family: var(--font-mono);
   min-width: 14ch;
 }
+/* The tolerance paths (relative / additive) are the recommended way to ask for
+   an approximation -- the user grants a guarantee and the chooser picks the
+   mechanism -- so they are emphasised in the method dropdown. */
+.cv-eval__opt-strong {
+  font-weight: 700;
+}
 /* The monte-carlo / benchmark sample-count input only ever holds a
    short integer (10000 by default; users sometimes bump to 1000000
    but never past 8 chars), so tighten its min-width override to keep

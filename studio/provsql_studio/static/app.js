@@ -2185,10 +2185,15 @@
           </select>
           <span class="cv-eval__hint" id="eval-mapping-hint" hidden></span>
           <select class="cv-eval__method" id="eval-method" hidden>
+            <optgroup label="By guarantee">
+              <option value="relative" class="cv-eval__opt-strong" title="Granted tolerance: a (1±ε) RELATIVE guarantee with confidence 1−δ. The system picks the mechanism — it returns an exact value when one is cheap, otherwise an FPRAS estimate. The method actually used is shown next to the result.">relative (1±ε)</option>
+              <option value="additive" class="cv-eval__opt-strong" title="Granted tolerance: |estimate − p| ≤ ε ADDITIVE, confidence 1−δ. The sample count is independent of p, so it stays robust on rare events. Returns an exact value when one is cheap, otherwise Monte-Carlo.">additive (±ε)</option>
+            </optgroup>
             <optgroup label="Exact">
               <option value="">(default)</option>
               <option value="independent">independent</option>
               <option value="possible-worlds">possible-worlds</option>
+              <option value="sieve" title="Exact inclusion-exclusion over a monotone DNF (cost 2^m in the clause count m). Errors on non-DNF circuits.">sieve</option>
               <!-- shown only when the root carries an inversion-free
                    certificate; toggled in syncDropdownVisibility -->
               <option value="inversion-free" hidden>inversion-free</option>
@@ -2201,6 +2206,7 @@
             <optgroup label="Approximate">
               <option value="monte-carlo">monte-carlo</option>
               <option value="karp-luby" title="Karp-Luby FPRAS for DNF-shaped (monotone OR-of-ANDs) circuits: a relative (eps, delta) guarantee whose sample count is independent of the probability, so it stays accurate on rare events. Errors on non-DNF circuits.">karp-luby</option>
+              <option value="stopping-rule" title="Whole-circuit relative (ε, δ) FPRAS (Dagum–Karp-Luby-Ross stopping rule). Unlike karp-luby it works on ANY circuit, not just DNF; its sample count grows as 1/p.">stopping-rule</option>
             </optgroup>
           </select>
           <span class="cv-eval__approx" id="eval-args-approx" hidden>

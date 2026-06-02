@@ -1719,10 +1719,15 @@
   // buildProbArgs assembles the key=value `arguments` string from whichever
   // group is in play.
   const _PROB_ARG_CONTROL = {
-    'monte-carlo': 'eval-args-approx',
-    'karp-luby':   'eval-args-approx',
-    'compilation': 'eval-args-compiler',
-    'wmc':         'eval-args-wmc-tool',
+    'monte-carlo':   'eval-args-approx',
+    'karp-luby':     'eval-args-approx',
+    // The tolerance paths take the same (eps, delta) target as the approximate
+    // methods (the chooser decides the mechanism).
+    'relative':      'eval-args-approx',
+    'additive':      'eval-args-approx',
+    'stopping-rule': 'eval-args-approx',
+    'compilation':   'eval-args-compiler',
+    'wmc':           'eval-args-wmc-tool',
   };
   // Weighted-model-counting tools whose estimate carries a relative (eps)
   // guarantee; for these the eval strip shows the epsilon field.
@@ -1733,7 +1738,16 @@
   // Module-level (not inside initEvalStrip) so runEvaluation can call it.
   function buildProbArgs(method) {
     const val = id => (document.getElementById(id)?.value || '').trim();
-    if (method === 'monte-carlo' || method === 'karp-luby') {
+    // 'relative' and 'stopping-rule' are adaptive only -- always send (eps, δ),
+    // never a fixed sample count (the extension errors on a fixed count).
+    if (method === 'relative' || method === 'stopping-rule') {
+      const parts = [];
+      if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
+      if (val('eval-approx-delta')) parts.push('delta=' + val('eval-approx-delta'));
+      return parts.join(',');
+    }
+    if (method === 'monte-carlo' || method === 'karp-luby'
+        || method === 'additive') {
       if (document.getElementById('eval-approx-mode')?.value === 'epsdelta') {
         const parts = [];
         if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
@@ -2035,7 +2049,11 @@
     function onMethodChange() {
       const mode = document.getElementById('eval-approx-mode');
       if (mode) {
-        if (meth.value === 'karp-luby') mode.value = 'epsdelta';
+        // The tolerance paths and the relative FPRASes are naturally expressed
+        // as an (eps, delta) target; monte-carlo defaults to a fixed count.
+        if (meth.value === 'karp-luby' || meth.value === 'relative'
+            || meth.value === 'additive' || meth.value === 'stopping-rule')
+          mode.value = 'epsdelta';
         else if (meth.value === 'monte-carlo') mode.value = 'samples';
       }
       syncControls();
@@ -3190,7 +3208,27 @@
       const notice = document.getElementById('eval-notice');
       if (!isKc && semiring === 'probability') {
         const guar = parseGuaranteeNotice(data.notices);
-        if (bound) bound.textContent = guar ? renderGuarantee(guar) : '';
+        // Show the method the chooser actually used when it is informative:
+        // for the tolerance paths / default the request names no algorithm, and
+        // any time the resolved method differs from the one requested (e.g. a
+        // 'relative' request that resolved to an exact method when one was
+        // cheap -> shown as exact, with no approximation bound).
+        if (bound) {
+          const requested = body.method || '';
+          const resolved = data.resolved_method || '';
+          const showVia = resolved &&
+            (['', 'exact', 'default', 'relative', 'additive'].includes(requested)
+             || resolved !== requested);
+          const via = showVia ? `via ${resolved}` : '';
+          const g = guar ? renderGuarantee(guar) : '';
+          bound.textContent = via && g ? `${via} · ${g}`
+                            : via       ? via
+                            : g;
+          bound.title = showVia && !g
+            ? 'Exact value: the requested tolerance was met exactly because an '
+              + 'exact method was cheap enough'
+            : '';
+        }
         const rest = Array.isArray(data.notices)
           ? data.notices.filter(m => !/approximation-guarantee:/.test(m || ''))
           : [];
