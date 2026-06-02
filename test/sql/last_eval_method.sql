@@ -71,9 +71,11 @@ SELECT probability_evaluate(current_setting('lem.shared')::uuid) IS NOT NULL AS 
 SHOW provsql.last_eval_method;
 
 -- Non-read-once AND non-DNF circuit -- (x1 OR x2) AND (x1 OR x3), x1 shared:
--- 'independent' throws, sieve does not apply (not DNF), and the chooser acquires
--- the cheap treewidth-proxy (a degeneracy lower bound) before settling on
--- 'tree-decomposition'.  Exercises the TreewidthProxy feature end to end.
+-- 'independent' throws and sieve does not apply (not DNF).  The chooser still
+-- acquires the cheap treewidth-proxy (a degeneracy lower bound) to RANK
+-- tree-decomposition (exercising the TreewidthProxy feature end to end), but for
+-- this tiny circuit the cost model correctly finds possible-worlds (2^3 worlds)
+-- cheaper than building a tree decomposition -- so it reports 'possible-worlds'.
 DO $$
 DECLARE x1 uuid; x2 uuid; x3 uuid;
 BEGIN

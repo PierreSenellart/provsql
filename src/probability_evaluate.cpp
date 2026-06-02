@@ -623,11 +623,40 @@ static const size_t kPossibleWorldsSanityMax = 30;
 /// is unaffected.
 static const size_t kSieveSanityMaxClauses = 24;
 
-/// Heuristic cost of the external-compiler last resort (a subprocess): a large
-/// constant that dominates the in-process exact methods so it is tried only when
-/// nothing else applies.  (tree-decomposition is no longer a constant -- its
-/// cost is 2^treewidth-proxy * n; see TreeDecompositionMethod.)
-static const double kCompilationCost = 1.0e8;
+// ---------------------------------------------------------------------------
+// Cost-function constants.  Each method's / feature's estimatedCost models its
+// actual asymptotic complexity (see doc / the complexity table) times one of
+// these constants -- ARBITRARY placeholders for now, to be replaced by measured
+// values in the calibration pass.  Parameters (all O(1) on the EvalContext):
+// S = circuit_size (gates), N = n_inputs, m = dnf_num_clauses_, w = tw_proxy_,
+// Delta = tw_max_degree_.  Constraints the values must keep (so the lazy chooser
+// stays correct): a cheap method must be tried before acquiring the feature that
+// would only reveal a costlier one, hence
+//   C_independent <= C_dnfShape <= C_twProxy
+// (a read-once circuit runs 'independent' before paying for either feature), and
+// C_compilation > C_possibleWorlds (same 2^N, but compilation is the subprocess
+// last resort).
+static const double kCostIndependent     = 1.0;   // O(S)
+static const double kCostInversionFree   = 1.0;   // O(S + N log N)
+static const double kCostPossibleWorlds  = 1.0;   // O(S * 2^N)
+static const double kCostSieve           = 1.0;   // O(S * 2^m)
+static const double kCostTreeDecomp      = 1.0;   // O(S * (Delta^2 + 2^w))
+static const double kCostCompilation     = 4.0;   // exp worst case ~ O(S * 2^N)
+static const double kCostDnfShapeFeature = 2.0;   // O(S)
+static const double kCostTwProxyFeature  = 4.0;   // O(S)
+// Approximate methods (not yet in the auto-portfolio -- their estimatedCost is
+// for documentation / the future relative & additive paths; they depend on the
+// granted (eps,delta), and stopping-rule additionally on the unknown p, so its
+// cost needs a p-lower-bound feature to be a priori computable).
+static const double kCostMonteCarlo      = 1.0;   // additive: O(S / eps^2 * ln(1/delta))
+static const double kCostKarpLuby        = 1.0;   // relative DNF: O(S*m / eps^2 * ln(1/delta))
+
+/// 2^k with the exponent clamped to keep the cost finite (a clamped exponent
+/// still sorts the method dead last -- it is then a guaranteed fall-through).
+static double pow2_clamped(size_t k)
+{
+  return std::ldexp(1.0, static_cast<int>(std::min<size_t>(k, 60)));
+}
 
 /// Per-evaluation circuit state threaded to a method's evaluate().  The Boolean
 /// view @c c is built once in probability_evaluate_internal; methods that need
@@ -643,7 +672,8 @@ struct EvalContext {
   bool inv_free_cert;
   const std::string &args;
   bool explicitly_named;            ///< invoked via byName (vs the default chain)
-  size_t n_inputs = 0;              ///< reachable gate_input count (tier-1 cost feature)
+  size_t n_inputs = 0;              ///< input count N (O(1) cost feature)
+  size_t circuit_size = 0;          ///< gate count S, the circuit-size parameter (O(1))
   bool multivalued_rewritten = false;
   std::string actual_method;
 
@@ -693,13 +723,9 @@ struct EvalContext {
   double featureCost(Feature f) const {
     switch(f) {
     case Feature::DnfShape:
-      // A linear dnfShape walk -- deliberately above 'independent's n+1 cost, so
-      // a read-once circuit runs 'independent' before this is ever acquired.
-      return 2.0 * static_cast<double>(n_inputs) + 2.0;
+      return kCostDnfShapeFeature * static_cast<double>(circuit_size);  // O(S)
     case Feature::TreewidthProxy:
-      // A primal-graph build + linear degeneracy peel -- a few passes over the
-      // circuit, so above dnfShape; still far below any compile.
-      return 4.0 * static_cast<double>(n_inputs) + 4.0;
+      return kCostTwProxyFeature * static_cast<double>(circuit_size);   // O(S)
     }
     return 0.;
   }
@@ -729,9 +755,9 @@ public:
   std::string name() const override { return "independent"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  // Linear scan of the circuit; the cheapest exact method when it applies.
+  // O(S): one memoised linear pass over the circuit.
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    return static_cast<double>(ctx.n_inputs) + 1.0;
+    return kCostIndependent * static_cast<double>(ctx.circuit_size);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     double r = ctx.c.independentEvaluation(ctx.gate);
@@ -746,10 +772,11 @@ public:
   std::string name() const override { return "inversion-free"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  // Linear over the structured d-DNNF -- about as cheap as independent (and only
-  // applicable with a certificate, so the two rarely compete).
+  // O(S + N log N): linear structured-d-DNNF build + sorting the per-input keys.
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    return static_cast<double>(ctx.n_inputs) + 2.0;
+    const double N = static_cast<double>(ctx.n_inputs);
+    return kCostInversionFree
+           * (static_cast<double>(ctx.circuit_size) + N * std::log2(N < 2 ? 2. : N));
   }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
     // In the default ladder: only when the certificate is present and the
@@ -830,13 +857,13 @@ public:
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
     return ctx.tw_proxy_ <= static_cast<unsigned>(TreeDecomposition::MAX_TREEWIDTH);
   }
+  // O(S * (Delta^2 + 2^w)): both terms from the one degeneracy pass -- the
+  // min-fill build's per-step fill-in scales with Delta^2, the d-DNNF is
+  // exponential in the treewidth (lower-bounded by the degeneracy proxy w).
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    // Two terms from the one degeneracy pass: the min-fill build scales with the
-    // graph (~ n * max_degree edges), the d-DNNF is exponential in the treewidth
-    // (lower-bounded by the proxy): 2^tw_proxy per node.
-    return static_cast<double>(ctx.n_inputs)
-           * (static_cast<double>(ctx.tw_max_degree_)
-              + std::ldexp(1.0, static_cast<int>(ctx.tw_proxy_)));
+    const double delta = static_cast<double>(ctx.tw_max_degree_);
+    return kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
+           * (delta * delta + pow2_clamped(ctx.tw_proxy_));
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
@@ -866,8 +893,13 @@ public:
   std::string name() const override { return "compilation"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  double estimatedCost(const EvalContext &, const Tolerance &) const override {
-    return kCompilationCost;
+  // Worst-case exponential in N (a d-DNNF can have 2^N nodes); no polynomial
+  // bound -- the genuine last resort.  Modelled as O(S * 2^N) with a larger
+  // constant than possible-worlds so the in-process enumerator is preferred at
+  // equal N.
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    return kCostCompilation * static_cast<double>(ctx.circuit_size)
+           * pow2_clamped(ctx.n_inputs);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
@@ -886,12 +918,10 @@ public:
   std::string name() const override { return "possible-worlds"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  // Work-weighted 2^N enumeration (N worlds-work each): cheap for small N (sorts
-  // ahead of the compilers), expensive for large N (sorts behind them) -- the
-  // selection threshold is this crossover, not a hardcoded bound.
+  // O(S * 2^N): enumerate 2^N worlds, evaluate the circuit (O(S)) in each.
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    return static_cast<double>(ctx.n_inputs)
-           * std::ldexp(1.0, static_cast<int>(std::min<size_t>(ctx.n_inputs, 60)));
+    return kCostPossibleWorlds * static_cast<double>(ctx.circuit_size)
+           * pow2_clamped(ctx.n_inputs);
   }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
     return ctx.n_inputs > 0 && ctx.n_inputs <= kPossibleWorldsSanityMax;
@@ -913,6 +943,14 @@ class MonteCarloMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "monte-carlo"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Additive; }
+  // O(S / eps^2 * ln(1/delta)) -- Hoeffding, p-independent.  (Not auto-chosen
+  // yet; defined for the additive path.)
+  double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
+    if(tol.epsilon <= 0.) return std::numeric_limits<double>::infinity();
+    return kCostMonteCarlo * static_cast<double>(ctx.circuit_size)
+           * std::log(2.0 / (tol.delta > 0. ? tol.delta : 0.5))
+           / (tol.epsilon * tol.epsilon);
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     unsigned long samples = monte_carlo_samples(parse_method_args(ctx.args));
     ctx.ensureMultivaluedRewritten();
@@ -928,6 +966,20 @@ class KarpLubyMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "karp-luby"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Relative; }
+  // O(S*m / eps^2 * ln(1/delta)) -- relative, p-independent (the m clauses
+  // replace the 1/p of plain MC).  (Not auto-chosen yet; defined for the
+  // relative path.)
+  std::vector<Feature> requiredFeatures() const override {
+    return {Feature::DnfShape};
+  }
+  double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
+    if(tol.epsilon <= 0.) return std::numeric_limits<double>::infinity();
+    const double m = static_cast<double>(ctx.dnf_num_clauses_ > 0
+                                         ? ctx.dnf_num_clauses_ : 1);
+    return kCostKarpLuby * static_cast<double>(ctx.circuit_size) * m
+           * std::log(2.0 / (tol.delta > 0. ? tol.delta : 0.5))
+           / (tol.epsilon * tol.epsilon);
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     std::vector<gate_t> clauses;
     std::vector<std::set<gate_t> > supports;
@@ -965,12 +1017,13 @@ public:
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
     return ctx.dnf_ok_ && ctx.dnf_num_clauses_ <= kSieveSanityMaxClauses;
   }
+  // O(S * 2^m): inclusion-exclusion over 2^m clause subsets, each a product over
+  // the union of supports (bounded by the circuit).
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
     if(!ctx.dnf_ok_)
       return std::numeric_limits<double>::infinity();
-    return static_cast<double>(ctx.n_inputs)
-           * std::ldexp(1.0, static_cast<int>(
-                               std::min<std::size_t>(ctx.dnf_num_clauses_, 60)));
+    return kCostSieve * static_cast<double>(ctx.circuit_size)
+           * pow2_clamped(ctx.dnf_num_clauses_);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     if(!ctx.args.empty())
@@ -1199,6 +1252,12 @@ static bool try_independent_exact(GenericCircuit &gc, pg_uuid_t token,
 
 /// Whole-circuit (eps,delta)-relative estimate via the stopping rule (shared by
 /// the explicit 'stopping-rule' method and the 'relative' path's estimator).
+///
+/// Complexity O(S / (p * eps^2) * ln(1/delta)): the Dagum rule draws ~Y1/p
+/// whole-circuit worlds, each an O(S) evalBool.  The 1/p factor makes the cost
+/// NOT a priori computable from static features -- a precise cost needs a
+/// p-lower-bound feature -- which is why this estimator stays a path fallback
+/// rather than a cost-ranked portfolio member for now.
 static void run_stopping_rule(GenericCircuit &gc, gate_t gc_root,
                               const MethodArgs &a, double &result,
                               std::string &actual_method)
@@ -1507,7 +1566,8 @@ static Datum probability_evaluate_internal
       provsql::EvalContext ctx{gc, gc_root, token, c, gate, gc_to_bc,
                                inv_free_cert, args,
                                /*explicitly_named=*/!is_path,
-                               /*n_inputs=*/c.getInputs().size()};
+                               /*n_inputs=*/c.getInputs().size(),
+                               /*circuit_size=*/c.getNbGates()};
       const provsql::MethodCatalog &catalog = provsql::MethodCatalog::instance();
       if(is_path) {
         result = catalog.chooseAndRun(ctx, provsql::Tolerance{});
