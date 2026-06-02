@@ -623,12 +623,10 @@ static const size_t kPossibleWorldsSanityMax = 30;
 /// is unaffected.
 static const size_t kSieveSanityMaxClauses = 24;
 
-/// Heuristic cost of the constant-cost exact compilers (no treewidth proxy yet):
-/// tree-decomposition is the treewidth-bounded compile; its value sets the
-/// crossover with the work-weighted enumerators (possible-worlds N*2^N at N~16,
-/// sieve N*2^m), and compilation (an external subprocess) is the costlier last
-/// resort.
-static const double kTreeDecompositionCost = 1.0e6;
+/// Heuristic cost of the external-compiler last resort (a subprocess): a large
+/// constant that dominates the in-process exact methods so it is tried only when
+/// nothing else applies.  (tree-decomposition is no longer a constant -- its
+/// cost is 2^treewidth-proxy * n; see TreeDecompositionMethod.)
 static const double kCompilationCost = 1.0e8;
 
 /// Count the @c gate_input leaves reachable from @p root (the tier-1 cost
@@ -689,6 +687,19 @@ struct EvalContext {
     }
   }
 
+  // Cached treewidth proxy: a cheap degeneracy lower bound (see TreeDecomposition
+  // ::degeneracyLowerBound), computed once when the chooser is about to consider
+  // tree-decomposition.
+  mutable bool tw_computed_ = false;
+  mutable unsigned tw_proxy_ = 0;
+
+  void ensureTreewidthProxy() const {
+    if(!tw_computed_) {
+      tw_proxy_ = TreeDecomposition::degeneracyLowerBound(c);
+      tw_computed_ = true;
+    }
+  }
+
   // --- Feature framework (see ProbabilityMethod.h) ---------------------------
   // The chooser acquires non-free features lazily; these model their cost and
   // perform the acquisition.
@@ -702,6 +713,10 @@ struct EvalContext {
       // A linear dnfShape walk -- deliberately above 'independent's n+1 cost, so
       // a read-once circuit runs 'independent' before this is ever acquired.
       return 2.0 * static_cast<double>(n_inputs) + 2.0;
+    case Feature::TreewidthProxy:
+      // A primal-graph build + linear degeneracy peel -- a few passes over the
+      // circuit, so above dnfShape; still far below any compile.
+      return 4.0 * static_cast<double>(n_inputs) + 4.0;
     }
     return 0.;
   }
@@ -709,6 +724,7 @@ struct EvalContext {
   bool hasFeature(Feature f) const {
     switch(f) {
     case Feature::DnfShape: return dnf_computed_;
+    case Feature::TreewidthProxy: return tw_computed_;
     }
     return true;
   }
@@ -716,6 +732,7 @@ struct EvalContext {
   void acquireFeature(Feature f) {
     switch(f) {
     case Feature::DnfShape: ensureDnfShape(); break;
+    case Feature::TreewidthProxy: ensureTreewidthProxy(); break;
     }
   }
 };
@@ -817,8 +834,22 @@ public:
   std::string name() const override { return "tree-decomposition"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  double estimatedCost(const EvalContext &, const Tolerance &) const override {
-    return kTreeDecompositionCost;
+  // Cost/applicability are gated by a cheap degeneracy lower bound on the
+  // treewidth: if it already exceeds the build's MAX_TREEWIDTH, the bounded
+  // min-fill build would certainly fail, so the method is ruled out (skipped
+  // before the costly attempt).  Otherwise the d-DNNF cost is exponential in the
+  // treewidth; tw_proxy_ is a lower bound, so 2^tw_proxy * n is an optimistic
+  // lower bound on the real cost (the build can still fail if the true treewidth
+  // turns out above the bound -- the implicit half of the feature).
+  std::vector<Feature> requiredFeatures() const override {
+    return {Feature::TreewidthProxy};
+  }
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    return ctx.tw_proxy_ <= static_cast<unsigned>(TreeDecomposition::MAX_TREEWIDTH);
+  }
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    return static_cast<double>(ctx.n_inputs)
+           * std::ldexp(1.0, static_cast<int>(ctx.tw_proxy_));
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();

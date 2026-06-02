@@ -26,6 +26,12 @@ t
 provsql.last_eval_method
 sieve
 (1 row)
+ran
+t
+(1 row)
+provsql.last_eval_method
+tree-decomposition
+(1 row)
 remove_provenance
 
 (1 row)

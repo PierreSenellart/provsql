@@ -69,6 +69,23 @@ END $$;
 SET provsql.last_eval_method = '';
 SELECT probability_evaluate(current_setting('lem.shared')::uuid) IS NOT NULL AS ran;
 SHOW provsql.last_eval_method;
+
+-- Non-read-once AND non-DNF circuit -- (x1 OR x2) AND (x1 OR x3), x1 shared:
+-- 'independent' throws, sieve does not apply (not DNF), and the chooser acquires
+-- the cheap treewidth-proxy (a degeneracy lower bound) before settling on
+-- 'tree-decomposition'.  Exercises the TreewidthProxy feature end to end.
+DO $$
+DECLARE x1 uuid; x2 uuid; x3 uuid;
+BEGIN
+  SELECT provsql INTO x1 FROM lem WHERE id=1;
+  SELECT provsql INTO x2 FROM lem WHERE id=2;
+  SELECT provsql INTO x3 FROM lem WHERE id=3;
+  PERFORM set_config('lem.td', provenance_times(
+            provenance_plus(ARRAY[x1,x2]), provenance_plus(ARRAY[x1,x3]))::text, false);
+END $$;
+SET provsql.last_eval_method = '';
+SELECT probability_evaluate(current_setting('lem.td')::uuid) IS NOT NULL AS ran;
+SHOW provsql.last_eval_method;
 RESET provsql.boolean_provenance;
 
 SELECT remove_provenance('lem');

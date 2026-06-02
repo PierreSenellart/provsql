@@ -198,6 +198,22 @@ unsigned getTreewidth() const {
 }
 
 /**
+ * @brief Cheap degeneracy lower bound on the treewidth of @p bc's primal graph.
+ *
+ * Computes the degeneracy @f$\delta D(G)@f$ (Maximum Minimum Degree) by a
+ * linear-time min-degree peel (Matula-Beck): repeatedly remove a
+ * minimum-degree node, the bound being the largest degree any node has at its
+ * own removal.  @f$\delta D(G) \le \mathrm{tw}(G)@f$ (Maniu, Senellart, Jog,
+ * ICDT 2019, the fastest and best-behaved cheap lower bound there), so a value
+ * above @c MAX_TREEWIDTH proves the full @c min-fill build would fail -- letting
+ * a caller skip the (costlier) attempt.  @c O(V+E), no decomposition built.
+ *
+ * @param bc  The Boolean circuit.
+ * @return    A lower bound on the circuit primal graph's treewidth.
+ */
+static unsigned degeneracyLowerBound(const BooleanCircuit &bc);
+
+/**
  * @brief Restructure the tree into the friendly normal form.
  *
  * Reroots the tree at the bag that covers the circuit's root gate

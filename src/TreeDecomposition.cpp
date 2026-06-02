@@ -25,9 +25,13 @@
 #include <algorithm>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "TreeDecomposition.h"
 #include "BooleanCircuit.h"
+#include "Graph.h"
 #include "PermutationStrategy.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 
@@ -49,6 +53,64 @@ extern "C" {
 #include "miscadmin.h"
 }
 #endif
+
+unsigned TreeDecomposition::degeneracyLowerBound(const BooleanCircuit &bc)
+{
+  Graph graph(bc);
+  const auto &nodes = graph.get_nodes();
+  if(nodes.empty())
+    return 0;
+
+  // Initial degrees and degree buckets.  An isolated node (a disconnected
+  // constant/gate) has no adjacency entry -- get_neighbours would dereference a
+  // missing key -- so guard with has_neighbours and treat it as degree 0.
+  std::unordered_map<unsigned long, unsigned> deg;
+  deg.reserve(nodes.size());
+  unsigned max_deg = 0;
+  for(unsigned long n : nodes) {
+    unsigned d = graph.has_neighbours(n)
+                   ? static_cast<unsigned>(graph.get_neighbours(n).size()) : 0;
+    deg[n] = d;
+    max_deg = std::max(max_deg, d);
+  }
+  std::vector<std::unordered_set<unsigned long> > bucket(max_deg + 1);
+  for(const auto &kv : deg)
+    bucket[kv.second].insert(kv.first);
+
+  // Matula-Beck peel: repeatedly remove a minimum-degree node; the degeneracy
+  // is the largest degree a node has at its own removal.  The graph itself is
+  // not mutated -- removed nodes are tracked in a set and skipped -- so
+  // get_neighbours stays the original adjacency.  O(V+E).
+  unsigned degeneracy = 0;
+  std::unordered_set<unsigned long> removed;
+  removed.reserve(nodes.size());
+  unsigned scan = 0;
+  const size_t n_nodes = nodes.size();
+  for(size_t processed = 0; processed < n_nodes; ++processed) {
+    while(scan <= max_deg && bucket[scan].empty())
+      ++scan;
+    if(scan > max_deg)
+      break;
+    unsigned long v = *bucket[scan].begin();
+    bucket[scan].erase(bucket[scan].begin());
+    degeneracy = std::max(degeneracy, scan);
+    removed.insert(v);
+    if(graph.has_neighbours(v)) {
+      for(unsigned long u : graph.get_neighbours(v)) {
+        if(removed.find(u) != removed.end())
+          continue;
+        unsigned d = deg[u];
+        bucket[d].erase(u);
+        deg[u] = d - 1;
+        bucket[d - 1].insert(u);
+        if(d - 1 < scan)
+          scan = d - 1;
+      }
+    }
+    CHECK_FOR_INTERRUPTS();
+  }
+  return degeneracy;
+}
 
 TreeDecomposition::TreeDecomposition(std::istream &in)
 {

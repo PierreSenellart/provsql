@@ -60,12 +60,13 @@ struct Tolerance {
  * could not change the decision.  Free/O(1) features (#inputs, an inversion-free
  * certificate) are not modelled here -- they are read eagerly.
  *
- * @c DnfShape is the worked example (a linear @c dnfShape walk).  A treewidth
- * proxy is the natural next feature (a cheap width estimate gating
- * @c tree-decomposition's cost, with the bounded-treewidth build still able to
- * fail implicitly).
+ * @c DnfShape is a linear @c dnfShape walk.  @c TreewidthProxy is a cheap
+ * (@c O(V+E)) degeneracy lower bound on the circuit's treewidth that gates
+ * @c tree-decomposition's cost -- it rules the method out when the bound already
+ * exceeds the build's limit, while the bounded-treewidth build can still fail
+ * implicitly when the bound is inconclusive.
  */
-enum class Feature { DnfShape };
+enum class Feature { DnfShape, TreewidthProxy };
 
 /// Per-evaluation circuit state threaded to a method's @c evaluate (defined in
 /// @c probability_evaluate.cpp, where the Boolean/Generic circuit machinery is
