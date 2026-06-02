@@ -156,7 +156,7 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, Compa
 
 
   case ComparisonOperator::LT:
-    append_range(R,dp,1,C-1);
+    append_range(R,dp,0,C-1);
     break;
 
   case ComparisonOperator::GE:
@@ -164,12 +164,28 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, Compa
     break;
 
   case ComparisonOperator::LE:
-    append_range(R,dp,1,C);
+    append_range(R,dp,0,C);
     break;
 
   case ComparisonOperator::NE: // case already processed
     assert(false);
   }
+
+  // dp[0] holds the empty world together with every non-empty world whose
+  // present tuples all sum to 0 (value 0 being SUM's additive identity).  A
+  // HAVING predicate is never satisfied by the empty group, but those value-0
+  // worlds are legitimate non-empty worlds and must be kept -- cf. the ValidSum
+  // proof, which removes only the single world {emptyset} from the selected
+  // range.  So the <, <= (and =, when C=0) ranges above include dp[0], and we
+  // drop only the all-absent mask here.  Skipping all of dp[0] instead (the old
+  // `lo=1`) silently dropped, e.g., a BID-block choice of a value-0 tuple under
+  // `sum < k`.
+  R.erase(std::remove_if(R.begin(), R.end(),
+            [](const mask_t &m) {
+              for(size_t i=0; i<m.size(); ++i) if(m[i]) return false;
+              return true;
+            }),
+          R.end());
 
   return R;
 }
