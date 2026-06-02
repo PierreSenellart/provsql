@@ -48,12 +48,12 @@ DO $$ BEGIN
 END $$;
 SHOW provsql.last_eval_method;
 
--- Default method on a small NON-independent circuit: 'independent' throws, and
--- the cost-ordered exact chooser picks 'possible-worlds' (cheap 2^N for small N,
--- ahead of tree-decomposition / compilation).  last_eval_method reports the
--- route actually taken -- exercising both the makeDD decomposition and the
--- small-N cost heuristic.  boolean_provenance off so the load-time folding
--- leaves the shared-variable shape intact.
+-- Default method on a small NON-independent DNF circuit: 'independent' throws,
+-- and the cost-ordered exact chooser picks 'sieve' -- its work-weighted cost
+-- N*2^m (m=2 clauses) undercuts possible-worlds' N*2^N and the compilers.
+-- last_eval_method reports the route actually taken -- exercising the makeDD
+-- decomposition and the estimatedCost-driven chooser (no fixed order).
+-- boolean_provenance off so the load-time folding leaves the shape intact.
 SET provsql.boolean_provenance = off;
 DO $$
 DECLARE x1 uuid; x2 uuid; x3 uuid;

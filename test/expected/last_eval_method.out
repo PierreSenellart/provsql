@@ -24,7 +24,7 @@ ran
 t
 (1 row)
 provsql.last_eval_method
-possible-worlds
+sieve
 (1 row)
 remove_provenance
 

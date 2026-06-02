@@ -42,6 +42,7 @@ PG_FUNCTION_INFO_V1(probability_evaluate);
 #include <stack>
 #include <map>
 #include <unordered_map>
+#include <limits>
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -617,12 +618,18 @@ namespace provsql {
 /// The actual small-N-vs-compile crossover is a cost comparison, not this bound.
 static const size_t kPossibleWorldsSanityMax = 30;
 
+/// Largest clause count for which the auto-chosen sieve (2^m inclusion-exclusion)
+/// is admitted (matches BooleanCircuit::sieve's internal cap).  The by-name call
+/// is unaffected.
+static const size_t kSieveSanityMaxClauses = 24;
+
 /// Heuristic cost of the constant-cost exact compilers (no treewidth proxy yet):
 /// tree-decomposition is the treewidth-bounded compile; its value sets the
-/// possible-worlds crossover at 2^N = 2^16, and compilation (an external
-/// subprocess) is the costlier last resort.
-static const double kTreeDecompositionCost = 65536.0;  // 2^16
-static const double kCompilationCost = 1.0e7;
+/// crossover with the work-weighted enumerators (possible-worlds N*2^N at N~16,
+/// sieve N*2^m), and compilation (an external subprocess) is the costlier last
+/// resort.
+static const double kTreeDecompositionCost = 1.0e6;
+static const double kCompilationCost = 1.0e8;
 
 /// Count the @c gate_input leaves reachable from @p root (the tier-1 cost
 /// feature gating the small-N possible-worlds chain member).
@@ -663,6 +670,22 @@ struct EvalContext {
     if(!multivalued_rewritten) {
       c.rewriteMultivaluedGates();
       multivalued_rewritten = true;
+    }
+  }
+
+  // Cached DNF-shape analysis (tier-2 feature): computed once on the pre-rewrite
+  // circuit when first needed (sieve's applicability / cost / evaluate), so the
+  // chooser pays at most one dnfShape walk per exact evaluation and sieve reuses
+  // the clauses it found.
+  mutable bool dnf_computed_ = false;
+  mutable bool dnf_ok_ = false;
+  mutable std::vector<gate_t> dnf_clauses_;
+  mutable std::vector<std::set<gate_t> > dnf_supports_;
+
+  void ensureDnfShape() const {
+    if(!dnf_computed_) {
+      dnf_ok_ = c.dnfShape(gate, dnf_clauses_, dnf_supports_);
+      dnf_computed_ = true;
     }
   }
 };
@@ -815,11 +838,12 @@ public:
   std::string name() const override { return "possible-worlds"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
-  // 2^N enumeration: cheap for small N (sorts ahead of the compilers), expensive
-  // for large N (sorts behind them) -- the selection threshold is this crossover,
-  // not a hardcoded bound.
+  // Work-weighted 2^N enumeration (N worlds-work each): cheap for small N (sorts
+  // ahead of the compilers), expensive for large N (sorts behind them) -- the
+  // selection threshold is this crossover, not a hardcoded bound.
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    return std::ldexp(1.0, static_cast<int>(std::min<size_t>(ctx.n_inputs, 63)));
+    return static_cast<double>(ctx.n_inputs)
+           * std::ldexp(1.0, static_cast<int>(std::min<size_t>(ctx.n_inputs, 60)));
   }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
     return ctx.n_inputs > 0 && ctx.n_inputs <= kPossibleWorldsSanityMax;
@@ -874,27 +898,42 @@ public:
   }
 };
 
-/// Exact inclusion-exclusion over a monotone DNF.  By-name only; runs before
-/// the multivalued rewrite (dnfShape rejects multivalued inputs).  O(2^m) in
-/// the clause count -- the portfolio member to pick when m is small.
+/// Exact inclusion-exclusion over a monotone DNF.  Portfolio member (runs before
+/// the multivalued rewrite, like karp-luby; dnfShape rejects multivalued inputs)
+/// and by-name.  Work-weighted cost N*2^m in the clause count m: the chooser
+/// picks it over possible-worlds when there are fewer clauses than inputs
+/// (m < N), and over the compilers when m is small -- yet it stays behind
+/// linear-exact 'independent' on a read-once DNF.
 class SieveMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "sieve"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return true; }
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    ctx.ensureDnfShape();
+    return ctx.dnf_ok_ && ctx.dnf_clauses_.size() <= kSieveSanityMaxClauses;
+  }
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    ctx.ensureDnfShape();
+    if(!ctx.dnf_ok_)
+      return std::numeric_limits<double>::infinity();
+    return static_cast<double>(ctx.n_inputs)
+           * std::ldexp(1.0, static_cast<int>(
+                               std::min<size_t>(ctx.dnf_clauses_.size(), 60)));
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     if(!ctx.args.empty())
       provsql_warning("Argument '%s' ignored for method sieve",
                       ctx.args.c_str());
-    std::vector<gate_t> clauses;
-    std::vector<std::set<gate_t> > supports;
-    if(!ctx.c.dnfShape(ctx.gate, clauses, supports)) {
+    ctx.ensureDnfShape();
+    if(!ctx.dnf_ok_) {
       provsql_warning("method 'sieve' applies only to a DNF-shaped circuit "
                       "(a monotone OR-of-ANDs over input leaves); negation, "
                       "comparison, aggregation, random-variable and "
                       "multivalued-input gates are not supported");
       provsql_error("method 'sieve' requires a DNF-shaped provenance circuit");
     }
-    double r = ctx.c.sieve(clauses, supports);
+    double r = ctx.c.sieve(ctx.dnf_clauses_, ctx.dnf_supports_);
     ctx.actual_method = "sieve";
     return r;
   }
