@@ -49,6 +49,24 @@ struct Tolerance {
   double delta = 0.;
 };
 
+/**
+ * @brief A circuit feature a method's cost/applicability estimate depends on,
+ *        but that is not free to acquire.
+ *
+ * Acquiring a feature has a cost (modelled by @c EvalContext::featureCost), and
+ * the chooser acquires one lazily only when no already-known method is cheaper
+ * than acquiring it -- so a circuit the cheap methods resolve (read-once via
+ * @c independent, certified via @c inversion-free) never pays for analysis that
+ * could not change the decision.  Free/O(1) features (#inputs, an inversion-free
+ * certificate) are not modelled here -- they are read eagerly.
+ *
+ * @c DnfShape is the worked example (a linear @c dnfShape walk).  A treewidth
+ * proxy is the natural next feature (a cheap width estimate gating
+ * @c tree-decomposition's cost, with the bounded-treewidth build still able to
+ * fail implicitly).
+ */
+enum class Feature { DnfShape };
+
 /// Per-evaluation circuit state threaded to a method's @c evaluate (defined in
 /// @c probability_evaluate.cpp, where the Boolean/Generic circuit machinery is
 /// in scope).
@@ -77,8 +95,14 @@ public:
   /// reachable only @c byName).
   virtual bool inDefaultChain() const { return false; }
 
+  /// Features the method's @c estimatedCost / @c applicable need acquired before
+  /// they are meaningful (empty = a free estimate).  The chooser will not call
+  /// @c estimatedCost / @c applicable until these are acquired, and acquires
+  /// them lazily per the cost rule above.
+  virtual std::vector<Feature> requiredFeatures() const { return {}; }
+
   /// Heuristic estimate of this method's cost on the current circuit (lower is
-  /// cheaper).  The chooser sorts admissible portfolio members by this and tries
+  /// cheaper).  Only called once @c requiredFeatures are acquired.  The chooser sorts admissible portfolio members by this and tries
   /// them cheapest-first -- there is deliberately NO fixed ordinal: the order
   /// emerges from the estimates, and a calibrated cost model can later replace
   /// the heuristic bodies without touching the chooser.  Only consulted for

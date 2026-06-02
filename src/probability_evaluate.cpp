@@ -688,6 +688,36 @@ struct EvalContext {
       dnf_computed_ = true;
     }
   }
+
+  // --- Feature framework (see ProbabilityMethod.h) ---------------------------
+  // The chooser acquires non-free features lazily; these model their cost and
+  // perform the acquisition.
+
+  /// Heuristic acquisition cost of @p f, in the same work units as a method's
+  /// estimatedCost (so the chooser can compare "run this method" against
+  /// "acquire this feature").
+  double featureCost(Feature f) const {
+    switch(f) {
+    case Feature::DnfShape:
+      // A linear dnfShape walk -- deliberately above 'independent's n+1 cost, so
+      // a read-once circuit runs 'independent' before this is ever acquired.
+      return 2.0 * static_cast<double>(n_inputs) + 2.0;
+    }
+    return 0.;
+  }
+
+  bool hasFeature(Feature f) const {
+    switch(f) {
+    case Feature::DnfShape: return dnf_computed_;
+    }
+    return true;
+  }
+
+  void acquireFeature(Feature f) {
+    switch(f) {
+    case Feature::DnfShape: ensureDnfShape(); break;
+    }
+  }
 };
 
 namespace {
@@ -909,12 +939,15 @@ public:
   std::string name() const override { return "sieve"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
+  // Cost / applicability need the DNF-shape feature; the chooser acquires it
+  // (lazily) before calling them, so a read-once circuit never pays the walk.
+  std::vector<Feature> requiredFeatures() const override {
+    return {Feature::DnfShape};
+  }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
-    ctx.ensureDnfShape();
     return ctx.dnf_ok_ && ctx.dnf_clauses_.size() <= kSieveSanityMaxClauses;
   }
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
-    ctx.ensureDnfShape();
     if(!ctx.dnf_ok_)
       return std::numeric_limits<double>::infinity();
     return static_cast<double>(ctx.n_inputs)
@@ -1007,26 +1040,72 @@ const ProbabilityMethod *MethodCatalog::byName(const std::string &n) const
 
 double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
 {
-  std::vector<const ProbabilityMethod *> chain;
+  // Uniform-cost search interleaving feature acquisition and method execution.
+  // Each step either RUNS the cheapest ready method or ACQUIRES the cheapest
+  // pending feature -- and we acquire a feature only when no ready method is
+  // already cheaper than acquiring it (a feature-gated method then costs at
+  // least that much anyway).  So a circuit the cheap methods resolve never pays
+  // to compute features (dnfShape, later a treewidth proxy) that could not have
+  // changed the decision.  A method that throws when attempted is dropped (its
+  // implicit feature -- e.g. 'independent' learning the circuit is not
+  // independent); the last such error propagates if the portfolio is exhausted.
+  std::vector<const ProbabilityMethod *> portfolio;
   for(const auto &m : methods_)
-    if(m->inDefaultChain() && m->applicable(ctx, tol))
-      chain.push_back(m.get());
-  // Cheapest estimated cost first -- the order emerges from the estimates, not a
-  // fixed ordinal.
-  std::sort(chain.begin(), chain.end(),
-            [&](const ProbabilityMethod *a, const ProbabilityMethod *b) {
-              return a->estimatedCost(ctx, tol) < b->estimatedCost(ctx, tol);
-            });
-  if(chain.empty())
-    throw CircuitException("no applicable probability method in the portfolio");
-  // Try each cheapest-first; the costliest method's exception propagates (the
-  // portfolio is exhausted) -- the last-resort tail.
-  for(size_t i = 0; i + 1 < chain.size(); ++i) {
-    try {
-      return chain[i]->evaluate(ctx, tol);
-    } catch(CircuitException &) { /* fall through to the next ladder method */ }
+    if(m->inDefaultChain())
+      portfolio.push_back(m.get());
+
+  std::set<Feature> acquired;
+  std::string last_error;
+  bool have_last_error = false;
+
+  while(true) {
+    // The cheapest ready (all required features acquired) and applicable method,
+    // and the set of features still gating the not-ready ones.
+    const ProbabilityMethod *best = nullptr;
+    double best_cost = std::numeric_limits<double>::infinity();
+    std::set<Feature> pending;
+    for(const ProbabilityMethod *m : portfolio) {
+      bool ready = true;
+      for(Feature f : m->requiredFeatures())
+        if(acquired.find(f) == acquired.end()) { ready = false; pending.insert(f); }
+      if(!ready || !m->applicable(ctx, tol))
+        continue;
+      double cost = m->estimatedCost(ctx, tol);
+      if(cost < best_cost) { best_cost = cost; best = m; }
+    }
+
+    // The cheapest feature we could acquire to reveal more method costs.
+    bool have_pending = false;
+    Feature cheapest_f = Feature::DnfShape;
+    double cheapest_fc = std::numeric_limits<double>::infinity();
+    for(Feature f : pending) {
+      double fc = ctx.featureCost(f);
+      if(fc < cheapest_fc) { cheapest_fc = fc; cheapest_f = f; have_pending = true; }
+    }
+
+    if(best != nullptr && (!have_pending || best_cost <= cheapest_fc)) {
+      // Run the cheapest method: nothing cheaper could be revealed by acquiring
+      // a feature first.
+      try {
+        return best->evaluate(ctx, tol);
+      } catch(CircuitException &e) {
+        if(provsql_interrupted)
+          throw;  // a cancel / timeout -- do not silently try another method
+        last_error = e.what();
+        have_last_error = true;
+        portfolio.erase(std::remove(portfolio.begin(), portfolio.end(), best),
+                        portfolio.end());
+      }
+    } else if(have_pending) {
+      ctx.acquireFeature(cheapest_f);
+      acquired.insert(cheapest_f);
+    } else {
+      // No ready method and nothing left to acquire: the portfolio is exhausted.
+      if(have_last_error)
+        throw CircuitException(last_error);
+      throw CircuitException("no applicable probability method in the portfolio");
+    }
   }
-  return chain.back()->evaluate(ctx, tol);
 }
 
 const MethodCatalog &MethodCatalog::instance()
