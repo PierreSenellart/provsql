@@ -650,11 +650,13 @@ static const double kCostSieve           = 1e-5;  // O(S * 2^m): ~1e-5 (rarely o
 // slower than predicted).  The constant is calibrated where the proxy is tight
 // (tree-like circuits, where tree-decomposition is the right pick anyway).
 static const double kCostTreeDecomp      = 7e-4;  // O(S * (Delta^2+2^w)): ~7e-4 * f
-// compilation is an external subprocess: its time is the d-DNNF compile (the
-// compilers exploit structure -- NOT the 2^N worst case in practice) plus a
-// fixed startup, modelled as ~linear in S with an ~ms floor.
-static const double kCostCompilation     = 0.1;   // ~0.1 * S ms ...
-static const double kCostCompilationFloor= 20.0;  // ... but at least ~20 ms (startup)
+// compilation is an external knowledge compiler: a fixed subprocess startup
+// plus a compile that, while it exploits structure on easy shapes (~tens of ms
+// here), can struggle badly on others (the worst case is exponential).  So we do
+// NOT model it as linear -- that is too optimistic; we use a pessimistic
+// super-linear S^1.5 above a startup floor, keeping it a strong last resort.
+static const double kCostCompilation     = 2e-3;  // ~2e-3 * S^1.5 ms ...
+static const double kCostCompilationFloor= 40.0;  // ... but at least ~40 ms (startup + easy compile)
 static const double kCostDnfShapeFeature = 2e-6;  // O(S):                ~2e-6 * S
 static const double kCostTwProxyFeature  = 3e-4;  // O(S):                ~3e-4 * S
 // Approximate methods (not yet in the auto-portfolio -- their estimatedCost is
