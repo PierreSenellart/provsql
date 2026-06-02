@@ -208,10 +208,15 @@ unsigned getTreewidth() const {
  * above @c MAX_TREEWIDTH proves the full @c min-fill build would fail -- letting
  * a caller skip the (costlier) attempt.  @c O(V+E), no decomposition built.
  *
- * @param bc  The Boolean circuit.
- * @return    A lower bound on the circuit primal graph's treewidth.
+ * The maximum degree @f$\Delta@f$ falls out of the same single pass (it bounds
+ * the per-step fill-in work of the min-fill build), so it is returned alongside.
+ *
+ * @param bc           The Boolean circuit.
+ * @param max_degree   Output: the maximum degree of the primal graph.
+ * @return             A lower bound on the circuit primal graph's treewidth.
  */
-static unsigned degeneracyLowerBound(const BooleanCircuit &bc);
+static unsigned degeneracyLowerBound(const BooleanCircuit &bc,
+                                     unsigned &max_degree);
 
 /**
  * @brief Restructure the tree into the friendly normal form.

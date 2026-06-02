@@ -629,23 +629,6 @@ static const size_t kSieveSanityMaxClauses = 24;
 /// cost is 2^treewidth-proxy * n; see TreeDecompositionMethod.)
 static const double kCompilationCost = 1.0e8;
 
-/// Count the @c gate_input leaves reachable from @p root (the tier-1 cost
-/// feature gating the small-N possible-worlds chain member).
-static size_t count_reachable_inputs(const GenericCircuit &gc, gate_t root)
-{
-  std::set<gate_t> seen;
-  std::stack<gate_t> stk;
-  stk.push(root);
-  size_t n = 0;
-  while(!stk.empty()) {
-    gate_t g = stk.top(); stk.pop();
-    if(!seen.insert(g).second) continue;
-    if(gc.getGateType(g) == gate_input) ++n;
-    for(gate_t c : gc.getWires(g)) stk.push(c);
-  }
-  return n;
-}
-
 /// Per-evaluation circuit state threaded to a method's evaluate().  The Boolean
 /// view @c c is built once in probability_evaluate_internal; methods that need
 /// the multivalued rewrite trigger it (idempotently) through this context, so
@@ -671,31 +654,31 @@ struct EvalContext {
     }
   }
 
-  // Cached DNF-shape analysis (tier-2 feature): computed once on the pre-rewrite
-  // circuit when first needed (sieve's applicability / cost / evaluate), so the
-  // chooser pays at most one dnfShape walk per exact evaluation and sieve reuses
-  // the clauses it found.
+  // Cached DNF-shape feature: just (is-DNF, clause count) via the cheap
+  // dnfShapeInfo -- O(circuit), NO per-clause supports.  The chooser ranks sieve
+  // from this; the supports (potentially O(m*N)) are built only if sieve /
+  // karp-luby actually runs, inside their evaluate().
   mutable bool dnf_computed_ = false;
   mutable bool dnf_ok_ = false;
-  mutable std::vector<gate_t> dnf_clauses_;
-  mutable std::vector<std::set<gate_t> > dnf_supports_;
+  mutable std::size_t dnf_num_clauses_ = 0;
 
   void ensureDnfShape() const {
     if(!dnf_computed_) {
-      dnf_ok_ = c.dnfShape(gate, dnf_clauses_, dnf_supports_);
+      dnf_ok_ = c.dnfShapeInfo(gate, dnf_num_clauses_);
       dnf_computed_ = true;
     }
   }
 
-  // Cached treewidth proxy: a cheap degeneracy lower bound (see TreeDecomposition
-  // ::degeneracyLowerBound), computed once when the chooser is about to consider
-  // tree-decomposition.
+  // Cached treewidth proxy: a cheap degeneracy lower bound and the max degree
+  // (both from one O(V+E) pass; see TreeDecomposition::degeneracyLowerBound),
+  // computed once when the chooser is about to consider tree-decomposition.
   mutable bool tw_computed_ = false;
   mutable unsigned tw_proxy_ = 0;
+  mutable unsigned tw_max_degree_ = 0;
 
   void ensureTreewidthProxy() const {
     if(!tw_computed_) {
-      tw_proxy_ = TreeDecomposition::degeneracyLowerBound(c);
+      tw_proxy_ = TreeDecomposition::degeneracyLowerBound(c, tw_max_degree_);
       tw_computed_ = true;
     }
   }
@@ -848,8 +831,12 @@ public:
     return ctx.tw_proxy_ <= static_cast<unsigned>(TreeDecomposition::MAX_TREEWIDTH);
   }
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    // Two terms from the one degeneracy pass: the min-fill build scales with the
+    // graph (~ n * max_degree edges), the d-DNNF is exponential in the treewidth
+    // (lower-bounded by the proxy): 2^tw_proxy per node.
     return static_cast<double>(ctx.n_inputs)
-           * std::ldexp(1.0, static_cast<int>(ctx.tw_proxy_));
+           * (static_cast<double>(ctx.tw_max_degree_)
+              + std::ldexp(1.0, static_cast<int>(ctx.tw_proxy_)));
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     ctx.ensureMultivaluedRewritten();
@@ -976,28 +963,31 @@ public:
     return {Feature::DnfShape};
   }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
-    return ctx.dnf_ok_ && ctx.dnf_clauses_.size() <= kSieveSanityMaxClauses;
+    return ctx.dnf_ok_ && ctx.dnf_num_clauses_ <= kSieveSanityMaxClauses;
   }
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
     if(!ctx.dnf_ok_)
       return std::numeric_limits<double>::infinity();
     return static_cast<double>(ctx.n_inputs)
            * std::ldexp(1.0, static_cast<int>(
-                               std::min<size_t>(ctx.dnf_clauses_.size(), 60)));
+                               std::min<std::size_t>(ctx.dnf_num_clauses_, 60)));
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     if(!ctx.args.empty())
       provsql_warning("Argument '%s' ignored for method sieve",
                       ctx.args.c_str());
-    ctx.ensureDnfShape();
-    if(!ctx.dnf_ok_) {
+    // Build the full clauses + supports now (only paid because sieve was
+    // chosen); the cheap feature only validated the shape and counted clauses.
+    std::vector<gate_t> clauses;
+    std::vector<std::set<gate_t> > supports;
+    if(!ctx.c.dnfShape(ctx.gate, clauses, supports)) {
       provsql_warning("method 'sieve' applies only to a DNF-shaped circuit "
                       "(a monotone OR-of-ANDs over input leaves); negation, "
                       "comparison, aggregation, random-variable and "
                       "multivalued-input gates are not supported");
       provsql_error("method 'sieve' requires a DNF-shaped provenance circuit");
     }
-    double r = ctx.c.sieve(ctx.dnf_clauses_, ctx.dnf_supports_);
+    double r = ctx.c.sieve(clauses, supports);
     ctx.actual_method = "sieve";
     return r;
   }
@@ -1517,7 +1507,7 @@ static Datum probability_evaluate_internal
       provsql::EvalContext ctx{gc, gc_root, token, c, gate, gc_to_bc,
                                inv_free_cert, args,
                                /*explicitly_named=*/!is_path,
-                               /*n_inputs=*/provsql::count_reachable_inputs(gc, gc_root)};
+                               /*n_inputs=*/c.getInputs().size()};
       const provsql::MethodCatalog &catalog = provsql::MethodCatalog::instance();
       if(is_path) {
         result = catalog.chooseAndRun(ctx, provsql::Tolerance{});

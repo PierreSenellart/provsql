@@ -440,6 +440,43 @@ bool BooleanCircuit::dnfShape(
   return true;
 }
 
+bool BooleanCircuit::dnfShapeInfo(gate_t g, std::size_t &num_clauses) const
+{
+  // Clause count: children of a top-level OR, else a single clause rooted at g.
+  std::vector<gate_t> clause_roots;
+  if(getGateType(g)==BooleanGate::OR)
+    for(auto c: getWires(g))
+      clause_roots.push_back(c);
+  else
+    clause_roots.push_back(g);
+  num_clauses = clause_roots.size();
+
+  // Validate the AND-only strata below every clause root with ONE global
+  // visited-set (each gate's type is path-independent), so a shared subgraph is
+  // checked once and no per-clause supports are materialised.  O(circuit).
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> st;
+  for(auto r: clause_roots)
+    st.push(r);
+  while(!st.empty()) {
+    gate_t cur = st.top();
+    st.pop();
+    if(!seen.insert(cur).second)
+      continue;
+    switch(getGateType(cur)) {
+    case BooleanGate::IN:
+      break;
+    case BooleanGate::AND:
+      for(auto s: getWires(cur))
+        st.push(s);
+      break;
+    default:
+      return false;
+    }
+  }
+  return true;
+}
+
 namespace {
 
 /**
@@ -1563,14 +1600,26 @@ double BooleanCircuit::wmcCount(gate_t g, const std::string &requested,
 #endif // external-tool compilation / counting (excluded from tdkc)
 
 double BooleanCircuit::independentEvaluationInternal(
-  gate_t g, std::set<gate_t> &seen) const
+  gate_t g, std::set<gate_t> &seen,
+  std::unordered_map<gate_t, double> &memo) const
 {
+  // Memoised gates are variable-free (constant-only) -- returning the cached
+  // value is sound (it touched nothing in `seen`) and avoids re-traversing a
+  // shared constant subgraph.  A variable-bearing gate is never cached, so a
+  // second visit re-enters its subtree and throws on the repeated variable.
+  {
+    auto it = memo.find(g);
+    if(it != memo.end())
+      return it->second;
+  }
+  const std::size_t seen_before = seen.size();
+
   double result=1.;
 
   switch(getGateType(g)) {
   case BooleanGate::AND:
     for(const auto &c: getWires(g)) {
-      result*=independentEvaluationInternal(c, seen);
+      result*=independentEvaluationInternal(c, seen, memo);
     }
     break;
 
@@ -1599,7 +1648,7 @@ double BooleanCircuit::independentEvaluationInternal(
           mulin_seen.insert(p);
         }
       } else
-        groups[group] = independentEvaluationInternal(c, seen);
+        groups[group] = independentEvaluationInternal(c, seen, memo);
     }
 
     for(const auto [k, v]: groups)
@@ -1609,7 +1658,7 @@ double BooleanCircuit::independentEvaluationInternal(
   break;
 
   case BooleanGate::NOT:
-    result=1-independentEvaluationInternal(*getWires(g).begin(), seen);
+    result=1-independentEvaluationInternal(*getWires(g).begin(), seen, memo);
     break;
 
   case BooleanGate::IN:
@@ -1650,13 +1699,17 @@ double BooleanCircuit::independentEvaluationInternal(
     throw CircuitException("Bad gate");
   }
 
+  // Cache only if this gate consumed no variable (constant-only subgraph).
+  if(seen.size() == seen_before)
+    memo[g] = result;
   return result;
 }
 
 double BooleanCircuit::independentEvaluation(gate_t g) const
 {
   std::set<gate_t> seen;
-  return independentEvaluationInternal(g, seen);
+  std::unordered_map<gate_t, double> memo;
+  return independentEvaluationInternal(g, seen, memo);
 }
 
 void BooleanCircuit::setInfo(gate_t g, unsigned int i)

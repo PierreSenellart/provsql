@@ -96,10 +96,18 @@ gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const;
 /**
  * @brief Recursive helper for @c independentEvaluation().
  * @param g     Current gate to evaluate.
- * @param seen  Set of gates already evaluated (for memoisation).
+ * @param seen  Set of variable gates (IN / MULVAR) already consumed; a second
+ *              occurrence means the circuit is not read-once.
+ * @param memo  Memoised probability of variable-free (constant-only) gates, so a
+ *              shared constant subgraph is evaluated once -- this is what keeps
+ *              the whole evaluation @c O(circuit) rather than re-traversing
+ *              shared subgraphs.  Variable-bearing gates are never memoised (a
+ *              re-visit must reach @p seen and throw).
  * @return      Probability at gate @p g.
  */
-double independentEvaluationInternal(gate_t g, std::set<gate_t> &seen) const;
+double independentEvaluationInternal(
+  gate_t g, std::set<gate_t> &seen,
+  std::unordered_map<gate_t, double> &memo) const;
 /**
  * @brief Recursive helper for @c rewriteMultivaluedGates().
  * @param muls              Gates in the MULVAR group being rewritten.
@@ -292,6 +300,21 @@ double monteCarlo(gate_t g, unsigned samples) const;
 bool dnfShape(gate_t g,
               std::vector<gate_t> &clauses,
               std::vector<std::set<gate_t> > &supports) const;
+
+/**
+ * @brief Cheap shape test: is the circuit DNF-shaped, and how many clauses?
+ *
+ * The @c O(circuit) half of @c dnfShape -- validates the OR-of-ANDs-of-leaves
+ * shape with a single global visited-set (no per-clause re-walk) and returns the
+ * clause count, WITHOUT materialising the per-clause supports (whose total size
+ * can be @c O(m*N)).  Used by the chooser to rank @c sieve; the supports are
+ * built only if @c sieve / @c karp-luby actually runs (via @c dnfShape).
+ *
+ * @param g            Root gate.
+ * @param num_clauses  Output: number of top-level clauses.
+ * @return             @c true iff DNF-shaped.
+ */
+bool dnfShapeInfo(gate_t g, std::size_t &num_clauses) const;
 
 /**
  * @brief Karp-Luby FPRAS estimate of a DNF-shaped circuit's probability

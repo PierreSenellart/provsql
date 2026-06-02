@@ -54,8 +54,10 @@ extern "C" {
 }
 #endif
 
-unsigned TreeDecomposition::degeneracyLowerBound(const BooleanCircuit &bc)
+unsigned TreeDecomposition::degeneracyLowerBound(const BooleanCircuit &bc,
+                                                 unsigned &max_degree)
 {
+  max_degree = 0;
   Graph graph(bc);
   const auto &nodes = graph.get_nodes();
   if(nodes.empty())
@@ -73,6 +75,7 @@ unsigned TreeDecomposition::degeneracyLowerBound(const BooleanCircuit &bc)
     deg[n] = d;
     max_deg = std::max(max_deg, d);
   }
+  max_degree = max_deg;
   std::vector<std::unordered_set<unsigned long> > bucket(max_deg + 1);
   for(const auto &kv : deg)
     bucket[kv.second].insert(kv.first);
